@@ -491,6 +491,9 @@ fn write_folder(out: &str, items: &[Item]) -> Result<()> {
         return Err(bad(CMD, format!("{out} isn't an empty folder; choose a new one or a .zip file")));
     }
     for i in items {
+        if !cadaddy_geom::filename::is_safe_relative(&i.target) {
+            return Err(bad(CMD, format!("{}: not a safe name inside the package", i.target)));
+        }
         let path = i.target.split('/').fold(root.to_path_buf(), |p, c| p.join(c));
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| bad(CMD, format!("{}: {e}", dir.display())))?;

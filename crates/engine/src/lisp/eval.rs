@@ -93,6 +93,9 @@ pub enum Frame {
         f: Value,
         args: Vec<Value>,
     },
+    /// `start_dialog` waits: each time it comes back here the dialog's next action runs, until
+    /// one ends the dialog.
+    Dialog,
 }
 
 /// Special forms: their arguments are not evaluated first.
@@ -130,6 +133,8 @@ pub enum Flow {
     Wait(Need),
     /// Stop, then call the function with these arguments.
     WaitThen(Need, Value, Vec<Value>),
+    /// `start_dialog`: run the dialog's actions until it ends ([`super::dialog`]).
+    Dialog,
 }
 
 /// Why the machine stopped before finishing.
@@ -141,6 +146,8 @@ pub enum Need {
     Pause,
     /// The step budget ran out: let the interface draw a frame, then carry on.
     Yield,
+    /// `start_dialog`: the user acts on the dialog ([`super::dialog`]).
+    Dialog,
 }
 
 /// How a run ended.
@@ -232,6 +239,10 @@ impl Machine {
             match frame {
                 Frame::Unbind { saved } => restore(ctx.env, saved),
                 Frame::Foreach { var, saved, .. } => restore(ctx.env, vec![(var, saved)]),
+                // An error in a dialog's action closes the dialog.
+                Frame::Dialog => {
+                    ctx.s.lisp.dcl.open.pop();
+                }
                 Frame::Catch if !e.quit => {
                     self.state = State::Ret(super::builtins::catch_all_error(&e.msg));
                     return None;
@@ -244,7 +255,11 @@ impl Machine {
 
     fn eval(&mut self, ctx: &mut Ctx<'_>, expr: Value) -> Result<(), LispError> {
         match expr {
-            Value::Sym(s) => self.state = State::Ret(lookup(ctx.env, &s)),
+            // A keyword (`:vlr-commandEnded`) unbound is itself.
+            Value::Sym(s) => {
+                let v = lookup(ctx.env, &s);
+                self.state = State::Ret(if v.is_nil() && s.name().starts_with(':') { Value::Sym(s) } else { v });
+            }
             Value::Cons(c) => {
                 let (head, args) = (c.car.clone(), c.cdr.clone());
                 let f = match &head {
@@ -380,6 +395,25 @@ impl Machine {
             },
             Frame::Catch => self.state = State::Ret(v),
             Frame::Resume { f, args } => self.state = State::Call(f, args),
+            Frame::Dialog => self.dialog(ctx)?,
+        }
+        Ok(())
+    }
+
+    /// The next step of a dialog `start_dialog` waits in.
+    fn dialog(&mut self, ctx: &mut Ctx<'_>) -> Result<(), LispError> {
+        match super::dialog::step(ctx)? {
+            super::dialog::Step::Done(v) => self.state = State::Ret(v),
+            super::dialog::Step::Run(forms) => {
+                self.stack.push(Frame::Dialog);
+                self.stack.push(Frame::Forms { rest: forms.into_iter().rev().collect() });
+                self.state = State::Ret(Value::Nil);
+            }
+            super::dialog::Step::Wait => {
+                self.stack.push(Frame::Dialog);
+                self.state = State::Ret(Value::Nil);
+                self.need = Some(Need::Dialog);
+            }
         }
         Ok(())
     }
@@ -582,6 +616,10 @@ impl Machine {
                 self.stack.push(Frame::Resume { f, args });
                 self.state = State::Ret(Value::Nil);
                 self.need = Some(need);
+            }
+            Flow::Dialog => {
+                self.stack.push(Frame::Dialog);
+                self.state = State::Ret(Value::Nil);
             }
             Flow::Wait(need) => {
                 // The value the session supplies replaces this call's.

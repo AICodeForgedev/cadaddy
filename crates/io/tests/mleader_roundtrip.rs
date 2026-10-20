@@ -13,7 +13,7 @@ fn roundtrip(d: &Drawing) -> (String, Drawing) {
 }
 
 fn mleaders(d: &Drawing) -> Vec<&MLeader> {
-    d.model.iter().filter_map(|e| if let EntityKind::MLeader(m) = &e.kind { Some(m) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::MLeader(m) = &e.kind { Some(&**m) } else { None }).collect()
 }
 
 fn text_mleader() -> MLeader {
@@ -67,7 +67,7 @@ fn text_multileader_survives_as_multileader() {
     d.text_styles.push(TextStyle { name: "Notes".into(), ..TextStyle::default() });
     d.mleader_styles.push(MLeaderStyle { name: "Callout".into(), arrow_size: 0.3, ..MLeaderStyle::default() });
     let m = text_mleader();
-    d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     let (text, back) = roundtrip(&d);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     assert!(lines.chunks(2).any(|p| p == ["0", "MULTILEADER"]), "a MULTILEADER entity is written");
@@ -98,7 +98,7 @@ fn spline_leader_with_block_content_and_attributes() {
     };
     blk.entities.push(Entity::new(
         Handle(0x201),
-        EntityKind::AttDef(Attrib {
+        EntityKind::AttDef(Box::new(Attrib {
             tag: "NUM".into(),
             text: tag_text,
             invisible: false,
@@ -107,7 +107,7 @@ fn spline_leader_with_block_content_and_attributes() {
             props: Default::default(),
             multiline: None,
             modes: Default::default(),
-        }),
+        })),
     ));
     d.blocks.insert(blk.name.clone(), std::sync::Arc::new(blk));
     let mut ins = insert("BUBBLE", Vec3::new(12.0, 3.0, 0.0));
@@ -144,7 +144,7 @@ fn spline_leader_with_block_content_and_attributes() {
         arrow: None,
         text_frame: false,
     };
-    d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     let (_, back) = roundtrip(&d);
     assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Insert(_) | EntityKind::Leader(_))));
     let got = mleaders(&back);
@@ -176,7 +176,7 @@ fn multileader_without_leader_lines() {
         t.attach = 1;
         t.style = "Standard".into();
     }
-    d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     let (_, back) = roundtrip(&d);
     let got = mleaders(&back);
     assert_eq!(got.len(), 1);
@@ -190,15 +190,15 @@ fn multileader_in_a_block_and_in_paper_space() {
     d.mleader_styles.push(MLeaderStyle { name: "Callout".into(), ..MLeaderStyle::default() });
     let m = text_mleader();
     let mut blk = Block::new("NOTE");
-    blk.entities.push(Entity::new(Handle(0x300), EntityKind::MLeader(m.clone())));
+    blk.entities.push(Entity::new(Handle(0x300), EntityKind::MLeader(Box::new(m.clone()))));
     d.blocks.insert(blk.name.clone(), std::sync::Arc::new(blk));
     let layout = d.layouts[0].name.clone();
-    d.add(&Space::Paper(layout.clone()), Common::default(), EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Paper(layout.clone()), Common::default(), EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     let (_, back) = roundtrip(&d);
-    let in_block = back.block("NOTE").unwrap().entities.iter().filter(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)).count();
+    let in_block = back.block("NOTE").unwrap().entities.iter().filter(|e| matches!(&e.kind, EntityKind::MLeader(x) if **x == m)).count();
     assert_eq!(in_block, 1);
     let l = back.layouts.iter().find(|l| l.name == layout).unwrap();
-    assert_eq!(l.entities.iter().filter(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)).count(), 1);
+    assert_eq!(l.entities.iter().filter(|e| matches!(&e.kind, EntityKind::MLeader(x) if **x == m)).count(), 1);
 }
 
 /// A DXF file with one entity record (`body`: group/value lines) in its ENTITIES section.
@@ -275,7 +275,7 @@ fn multileader_through_dwg() {
     d.text_styles.push(TextStyle { name: "Notes".into(), ..TextStyle::default() });
     d.mleader_styles.push(MLeaderStyle { name: "Callout".into(), arrow_size: 0.3, ..MLeaderStyle::default() });
     let m = text_mleader();
-    d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLeader(Box::new(m.clone()))).unwrap();
     let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
     let back = cadaddy_io::read(&dwg, "x.dwg").unwrap();
     let got = mleaders(&back);

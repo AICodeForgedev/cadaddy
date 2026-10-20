@@ -164,7 +164,7 @@ fn pack(sizes: &[u32]) -> Option<(Vec<Cell>, u32, u32)> {
 /// `lit`. `hashes`: each object's [`object_hash`] now.
 pub fn bake(scene: &Scene, lit: &Lighting, hashes: &HashMap<Handle, u64>, previous: Option<&Lightmap>, o: &BakeOptions) -> (Lightmap, BakeReport) {
     #[cfg(not(target_arch = "wasm32"))]
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let tris = object_tris(scene);
     let light_hash = lighting_hash(lit);
     let prev = previous.filter(|p| p.lighting == light_hash);

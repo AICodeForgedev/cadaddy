@@ -2191,3 +2191,159 @@
 	Use drawing background	Usar o fundo do desenho
 	Regenerate Dimensions	Regenerar cotas
 	Enter layer name for new dimensions (. for the current layer)	Digite o nome da camada para as novas cotas (. para a camada atual)
+	{folder} (folder)	{folder} (pasta)
+	Add drawings or a folder of them.	Adicione desenhos ou uma pasta com eles.
+	Add Files...	Adicionar arquivos...
+	Add Folder...	Adicionar pasta...
+	cancelled	cancelado
+	Choose the output folder, or Next to the originals.	Escolha a pasta de saída, ou Ao lado dos originais.
+	Convert Drawings	Converter desenhos
+	Convert Drawings...	Converter desenhos...
+	Convert drawings...	Converter desenhos...
+	Convert to	Converter para
+	Converted	Convertido
+	Converted, not all kept	Convertido, nem tudo mantido
+	Converting files is not available on the web.	A conversão de arquivos não está disponível na web.
+	Drawings to convert	Desenhos a converter
+	Each drawing's own	A de cada desenho
+	Failed	Falhou
+	Files already there	Arquivos já existentes
+	Folder:	Pasta:
+	Include subfolders	Incluir subpastas
+	Keep a file written over as .bak	Manter um arquivo sobrescrito como .bak
+	Next to the originals	Ao lado dos originais
+	Open Log	Abrir registro
+	Or type a file or folder path	Ou digite o caminho de um arquivo ou pasta
+	Overwrite	Sobrescrever
+	Save to	Salvar em
+	Skip	Pular
+	Skipped	Pulado
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Não há desenhos (.dwg, .dxf, .cdy) para converter.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} convertidos, {skipped} pulados, {failed} com falha de {total}
+	DWG drawing (.dwg)	Desenho DWG (.dwg)
+	DXF drawing (.dxf)	Desenho DXF (.dxf)
+	Require a token for control connections (recommended)	Exigir um token para conexões de controle (recomendado)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Os programas precisam primeiro enviar o token que o CADaddy grava em um arquivo que só você pode ler, para que programas de outros usuários não possam controlá-lo. O conector do Claude o lê para você. Vale a partir da próxima vez que o CADaddy iniciar.
+	Add: Pick points	Adicionar: Selecionar pontos
+	Add: Select objects	Adicionar: Selecionar objetos
+	Associative	Associativa
+	Block to create or edit	Bloco a criar ou editar
+	Bottom left	Inferior esquerdo
+	Boundaries	Contornos
+	Click to set new origin	Clique para definir a nova origem
+	Create separate hatches	Criar hachuras separadas
+	Default to boundary extents	Usar a extensão do contorno como padrão
+	Edit Block Definition	Editar definição de bloco
+	Hatch and Gradient	Hachura e gradiente
+	Hatch origin	Origem da hachura
+	Island detection	Detecção de ilhas
+	Normal	Normal
+	Open in Block Editor	Abrir no Editor de blocos
+	Outer	Externa
+	Specified origin	Origem especificada
+	Use current origin	Usar origem atual
+	Building models (IFC)	Modelos de edificação (IFC)
+	Building model (IFC4)	Modelo de edificação (IFC4)
+	3D printing (3MF)	Impressão 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Incluir o desenho (o desenho ativo como arquivo DXF)
+	Your account, home folder and computer name are always left out.	Sua conta, sua pasta pessoal e o nome do seu computador são sempre omitidos.
+	Files in the report	Arquivos no relatório
+	Send to Redline	Enviar para o Redline
+	Import Redline Markups	Importar marcações do Redline
+	Import Redline Markups...	Importar marcações do Redline...
+	Open a Program?	Abrir um programa?
+	This link opens a program or script, not a document:	Este link abre um programa ou script, não um documento:
+	Open it only if you trust the drawing and know what it runs.	Abra-o somente se confiar no desenho e souber o que ele executa.
+	Open Anyway	Abrir mesmo assim
+	Report a security problem	Relatar um problema de segurança
+	Load This File?	Carregar este arquivo?
+	This file isn't in a trusted folder:	Este arquivo não está em uma pasta confiável:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Rotinas LISP e scripts podem alterar desenhos e arquivos. Carregue-o apenas se confiar na origem.
+	Don't Load	Não carregar
+	Load Once	Carregar uma vez
+	Always Load from This Folder	Sempre carregar desta pasta
+	Adds {folder} to TRUSTEDPATHS	Adiciona {folder} a TRUSTEDPATHS
+	Allow Loading a File	Permitir carregar um arquivo
+	Plot Stamp	Carimbo de plotagem
+	Plot stamp fields	Campos do carimbo
+	Drawing name	Nome do desenho
+	Layout name	Nome do layout
+	Date and Time	Data e hora
+	Device name	Nome do dispositivo
+	Paper size	Tamanho do papel
+	Plot scale	Escala de plotagem
+	No login or computer name is ever stamped.	O nome de login e o nome do computador nunca são carimbados.
+	User defined fields	Campos definidos pelo usuário
+	One per line, up to {n}.	Um por linha, até {n}.
+	Stamp model space plots	Carimbar plotagens do espaço do modelo
+	Stamp this layout's plots	Carimbar plotagens deste layout
+	Location and offset	Local e deslocamento
+	Location	Local
+	Bottom right	Inferior direito
+	Top left	Superior esquerdo
+	Top right	Superior direito
+	Upside-down	De cabeça para baixo
+	X offset	Deslocamento X
+	Y offset	Deslocamento Y
+	Offset relative to	Deslocamento relativo a
+	Printable area	Área imprimível
+	Paper border	Borda do papel
+	Text properties	Propriedades do texto
+	Font	Fonte
+	Single line plot stamp	Carimbo em uma linha
+	Units	Unidades
+	Inches	Polegadas
+	Millimeters	Milímetros
+	Log file location	Local do arquivo de log
+	Create a log file	Criar um arquivo de log
+	The log is kept for this session, never saved with the drawing.	O log vale para esta sessão e nunca é salvo com o desenho.
+	Action Macro Manager...	Gerenciador de macros de ação...
+	Action Macros	Macros de ação
+	Action Recorder	Gravador de ações
+	Insert Base Point	Inserir ponto base
+	Insert Message	Inserir mensagem
+	Play Action Macro	Reproduzir macro de ação
+	Play...	Reproduzir...
+	Record	Gravar
+	Request User Input	Solicitar entrada do usuário
+	Stop	Parar
+	Action Macro Manager	Gerenciador de macros de ação
+	Recording…	Gravando…
+	No action macros yet: Record, do the work, then Stop.	Ainda não há macros de ação: Gravar, fazer o trabalho e Parar.
+	Play	Reproduzir
+	Message: {text}	Mensagem: {text}
+	Base point (asked for)	Ponto base (solicitado)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Pedir esta entrada ao reproduzir a macro
+	Customize Interface	Personalizar interface
+	Customize User Interface...	Personalizar interface do usuário...
+	Interface...	Interface...
+	Customize User Interface	Personalizar interface do usuário
+	Quick Access Toolbar	Barra de ferramentas de acesso rápido
+	Add a command	Adicionar um comando
+	Reset Quick Access Toolbar	Redefinir barra de acesso rápido
+	Built-in panels shown (untick to hide):	Painéis internos exibidos (desmarque para ocultar):
+	Your panels on built-in tabs:	Seus painéis nas guias internas:
+	Tab	Guia
+	New panel name	Nome do novo painel
+	Add Panel	Adicionar painel
+	Your tabs:	Suas guias:
+	Remove Tab	Remover guia
+	New tab name	Nome da nova guia
+	Add Tab	Adicionar guia
+	Edit Keyboard Shortcuts...	Editar atalhos de teclado...
+	Remove Panel	Remover painel
+	Command or LISP macro, e.g. (command "line")	Comando ou macro LISP, p. ex. (command "line")
+	Hatch Editor	Editor de hachura
+	Table Cell	Célula da tabela
+	Rows & Columns	Linhas e colunas
+	Merge	Mesclar
+	Open/Save	Abrir/Salvar
+	Attributes	Atributos
+	Spell Check	Verificar ortografia
+	Formula	Fórmula
+	Edit Source	Editar origem
+	Close Array	Fechar matriz
+	Manage Attributes	Gerenciar atributos
+	Dialog State	Estado da caixa de diálogo
+	Dialog Action	Ação da caixa de diálogo

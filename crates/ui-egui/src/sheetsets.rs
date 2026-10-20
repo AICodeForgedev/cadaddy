@@ -46,6 +46,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     egui::Window::new(crate::tl!("Sheet Set Manager")).id(egui::Id::new("Sheet Set Manager")).open(open).resizable(true).default_width(460.0).show(
         ctx,
         |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             ui.horizontal(|ui| {
                 if ui.button(crate::tl!("New Sheet Set...")).clicked() {
                     pick = Some("new");
@@ -99,15 +102,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             });
             ui.separator();
             if let Some(i) = st.selected.filter(|i| *i < sheets.len()) {
-                egui::Grid::new("sheetset-edit").num_columns(2).show(ui, |ui| {
-                    ui.label(crate::tl!("Number"));
+                crate::rtl::show_grid(egui::Grid::new("sheetset-edit").num_columns(2), ui, |ui| {
+                    crate::rtl::lead(ui, crate::tl!("Number"));
                     ui.text_edit_singleline(&mut st.number);
+                    crate::rtl::trail(ui, crate::tl!("Number"));
                     ui.end_row();
-                    ui.label(crate::tl!("Title"));
+                    crate::rtl::lead(ui, crate::tl!("Title"));
                     ui.text_edit_singleline(&mut st.title);
+                    crate::rtl::trail(ui, crate::tl!("Title"));
                     ui.end_row();
-                    ui.label(crate::tl!("Subset"));
+                    crate::rtl::lead(ui, crate::tl!("Subset"));
                     ui.text_edit_singleline(&mut st.subset);
+                    crate::rtl::trail(ui, crate::tl!("Subset"));
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {

@@ -34,7 +34,7 @@ fn dim() -> (Session, Handle) {
 
 fn dimension(s: &Session, h: Handle) -> cadaddy_engine::doc::Dimension {
     match kind(s, h) {
-        EntityKind::Dimension(d) => d,
+        EntityKind::Dimension(d) => *d,
         k => panic!("not a dimension: {k:?}"),
     }
 }
@@ -109,7 +109,7 @@ fn mleader() -> (Session, Handle) {
 
 fn ml(s: &Session, h: Handle) -> cadaddy_engine::doc::MLeader {
     match kind(s, h) {
-        EntityKind::MLeader(m) => m,
+        EntityKind::MLeader(m) => *m,
         k => panic!("not a multileader: {k:?}"),
     }
 }

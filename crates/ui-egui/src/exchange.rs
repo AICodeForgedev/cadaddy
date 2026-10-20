@@ -132,6 +132,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .resizable(false)
         .fixed_rect(screen.shrink(24.0))
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             ui.horizontal(|ui| {
                 print = ui.button(crate::tl!("Print...")).clicked();
                 fit = ui.button(crate::tl!("Zoom to Fit")).clicked();

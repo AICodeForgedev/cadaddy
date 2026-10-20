@@ -96,3 +96,35 @@ fn the_first_lossy_save_leaves_a_notice_for_the_app() {
     assert!(s.state().unwrap().exchange_notice.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A made-up drawing with another program's data: a custom class's object in the named object
+/// dictionary reacting to a line (which has an extension dictionary), and a custom entity.
+const ACME: &str = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$HANDSEED\n5\n400\n0\nENDSEC\n\
+0\nSECTION\n2\nCLASSES\n0\nCLASS\n1\nACME_WIDGET\n2\nAcmeWidget\n3\nAcmeApp\n90\n0\n280\n0\n281\n0\n0\nCLASS\n1\nACME_GADGET\n2\nAcmeGadget\n3\nAcmeApp\n90\n0\n280\n0\n281\n1\n0\nENDSEC\n\
+0\nSECTION\n2\nENTITIES\n0\nLINE\n5\n100\n102\n{ACAD_XDICTIONARY\n360\n200\n102\n}\n102\n{ACAD_REACTORS\n330\n300\n102\n}\n100\nAcDbEntity\n8\n0\n100\nAcDbLine\n10\n0\n20\n0\n30\n0\n11\n10\n21\n5\n31\n0\n\
+0\nACME_GADGET\n5\n110\n100\nAcDbEntity\n8\n0\n100\nAcmeGadget\n10\n3\n20\n4\n30\n0\n1\ngadget label\n0\nENDSEC\n\
+0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n3\nACME_WIDGETS\n350\n300\n0\n\
+DICTIONARY\n5\n200\n330\n100\n100\nAcDbDictionary\n3\nACME_DATA\n350\n202\n0\n\
+XRECORD\n5\n202\n330\n200\n100\nAcDbXrecord\n1\nper-line payload\n0\n\
+ACME_WIDGET\n5\n300\n102\n{ACAD_REACTORS\n330\n100\n102\n}\n330\nC\n100\nAcmeWidget\n1\nspinner\n90\n7\n0\nENDSEC\n0\nEOF\n";
+
+#[test]
+fn other_programs_data_goes_through_dwg_and_its_loss_is_listed() {
+    hooks();
+    let mut s = Session::new();
+    s.open_drawing(cadaddy_io::read(ACME.as_bytes(), "acme.dxf").unwrap(), "acme", None);
+    // DWG keeps it all: nothing of it to tell. (It is saved as 2004 DWG, which has no fixed
+    // extension lines, so the dimension style is listed: a version loss, not this drawing's data.)
+    let r = s.execute("checkexchange", &json!({"format": "dwg"})).unwrap();
+    let custom = ["other programs", "classes", "dictionary entries", "reactors", "extension dictionaries", "acme"];
+    let listed: Vec<&str> = r["losses"].as_array().unwrap().iter().filter_map(|l| l["feature"].as_str()).collect();
+    assert!(!listed.iter().any(|f| custom.iter().any(|c| f.contains(c))), "{r}");
+    // Release 12 DXF has no objects or classes: each part of it is listed.
+    let r = s.execute("checkexchange", &json!({"format": "dxf", "version": 12})).unwrap();
+    assert_eq!(r["kept"], false);
+    assert_eq!(loss(&r, "acme_widget objects of other programs").map(|l| &l["what"]), Some(&json!("dropped")), "{r}");
+    assert!(loss(&r, "classes of other programs' objects").is_some_and(|l| l["names"].as_array().unwrap().len() == 2), "{r}");
+    assert!(loss(&r, "named dictionary entries").is_some_and(|l| l["names"] == json!(["ACME_WIDGETS"])), "{r}");
+    assert_eq!(loss(&r, "reactors").map(|l| &l["handles"]), Some(&json!(["100"])), "{r}");
+    assert_eq!(loss(&r, "acme_gadget objects").map(|l| &l["what"]), Some(&json!("dropped")), "{r}");
+}

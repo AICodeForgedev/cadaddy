@@ -1964,3 +1964,168 @@
 	Use drawing background	Использовать фон чертежа
 	Regenerate Dimensions	Восстановить размеры
 	Enter layer name for new dimensions (. for the current layer)	Введите имя слоя для новых размеров (. — текущий слой)
+	{folder} (folder)	{folder} (папка)
+	Add drawings or a folder of them.	Добавьте чертежи или папку с ними.
+	Add Files...	Добавить файлы...
+	Add Folder...	Добавить папку...
+	cancelled	отменено
+	Choose the output folder, or Next to the originals.	Выберите папку для результата или «Рядом с оригиналами».
+	Convert Drawings	Преобразовать чертежи
+	Convert Drawings...	Преобразовать чертежи...
+	Convert drawings...	Преобразовать чертежи...
+	Convert to	Преобразовать в
+	Converted	Преобразован
+	Converted, not all kept	Преобразован, сохранено не всё
+	Converting files is not available on the web.	Преобразование файлов недоступно в веб-версии.
+	Drawings to convert	Чертежи для преобразования
+	Each drawing's own	Версия каждого чертежа
+	Failed	Ошибка
+	Files already there	Уже существующие файлы
+	Folder:	Папка:
+	Include subfolders	Включая вложенные папки
+	Keep a file written over as .bak	Сохранять перезаписанный файл как .bak
+	Next to the originals	Рядом с оригиналами
+	Open Log	Открыть журнал
+	Or type a file or folder path	Или введите путь к файлу или папке
+	Overwrite	Перезаписать
+	Save to	Сохранить в
+	Skip	Пропустить
+	Skipped	Пропущен
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Нет чертежей (.dwg, .dxf, .cdy) для преобразования.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	Преобразовано: {converted}, пропущено: {skipped}, ошибок: {failed} из {total}
+	DWG drawing (.dwg)	Чертёж DWG (.dwg)
+	DXF drawing (.dxf)	Чертёж DXF (.dxf)
+	Require a token for control connections (recommended)	Требовать токен для управляющих подключений (рекомендуется)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Программы сначала должны отправить токен, который CADaddy записывает в файл, доступный только вам, чтобы программы других пользователей не могли им управлять. Коннектор Claude читает его сам. Вступает в силу при следующем запуске CADaddy.
+	Add: Pick points	Добавить: точки выбора
+	Add: Select objects	Добавить: выбрать объекты
+	Associative	Ассоциативная
+	Block to create or edit	Блок для создания или редактирования
+	Bottom left	Внизу слева
+	Boundaries	Границы
+	Click to set new origin	Щёлкните, чтобы задать новое начало
+	Create separate hatches	Создавать отдельные штриховки
+	Default to boundary extents	По умолчанию — по границам контура
+	Edit Block Definition	Редактировать определение блока
+	Grid snap	Привязка к сетке
+	Hatch and Gradient	Штриховка и градиент
+	Hatch origin	Исходная точка штриховки
+	Island detection	Распознавание островков
+	Isometric snap	Изометрическая привязка
+	Normal	Нормальный
+	Open in Block Editor	Открыть в редакторе блоков
+	Options	Параметры
+	Outer	Внешний
+	Polar distance	Полярное расстояние
+	PolarSnap	Полярная привязка
+	Rectangular snap	Прямоугольная привязка
+	Reinitialize	Повторная инициализация
+	Run Script...	Выполнить скрипт...
+	Snap type	Тип привязки
+	Specified origin	Указанная исходная точка
+	Use current origin	Использовать текущее начало
+	Building models (IFC)	Модели зданий (IFC)
+	Building model (IFC4)	Модель здания (IFC4)
+	3D printing (3MF)	3D-печать (3MF)
+	Include the drawing (the active drawing as a DXF file)	Приложить чертёж (активный чертёж в виде файла DXF)
+	Your account, home folder and computer name are always left out.	Ваша учётная запись, домашняя папка и имя компьютера всегда исключаются.
+	Files in the report	Файлы в отчёте
+	Send to Redline	Отправить в Redline
+	Import Redline Markups	Импортировать пометки Redline
+	Import Redline Markups...	Импортировать пометки Redline...
+	Open a Program?	Открыть программу?
+	This link opens a program or script, not a document:	Эта ссылка открывает программу или сценарий, а не документ:
+	Open it only if you trust the drawing and know what it runs.	Открывайте её, только если доверяете чертежу и знаете, что она запускает.
+	Open Anyway	Всё равно открыть
+	Report a security problem	Сообщить о проблеме безопасности
+	Load This File?	Загрузить этот файл?
+	This file isn't in a trusted folder:	Этот файл находится не в доверенной папке:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Программы LISP и сценарии могут изменять чертежи и файлы. Загружайте его, только если доверяете источнику.
+	Don't Load	Не загружать
+	Load Once	Загрузить один раз
+	Always Load from This Folder	Всегда загружать из этой папки
+	Adds {folder} to TRUSTEDPATHS	Добавляет {folder} в TRUSTEDPATHS
+	Allow Loading a File	Разрешить загрузку файла
+	Plot Stamp	Штамп печати
+	Plot stamp fields	Поля штампа
+	Drawing name	Имя чертежа
+	Layout name	Имя листа
+	Date and Time	Дата и время
+	Device name	Имя устройства
+	Paper size	Размер бумаги
+	Plot scale	Масштаб печати
+	No login or computer name is ever stamped.	Имя пользователя и имя компьютера никогда не печатаются.
+	User defined fields	Пользовательские поля
+	One per line, up to {n}.	По одному в строке, не более {n}.
+	Stamp model space plots	Ставить штамп на печать пространства модели
+	Stamp this layout's plots	Ставить штамп на печать этого листа
+	Location and offset	Положение и смещение
+	Location	Положение
+	Bottom right	Справа внизу
+	Top left	Слева вверху
+	Top right	Справа вверху
+	Upside-down	Вверх ногами
+	X offset	Смещение по X
+	Y offset	Смещение по Y
+	Offset relative to	Смещение относительно
+	Printable area	Область печати
+	Paper border	Край бумаги
+	Text properties	Свойства текста
+	Font	Шрифт
+	Single line plot stamp	Штамп в одну строку
+	Units	Единицы
+	Inches	Дюймы
+	Millimeters	Миллиметры
+	Log file location	Расположение файла журнала
+	Create a log file	Создавать файл журнала
+	The log is kept for this session, never saved with the drawing.	Журнал действует в этом сеансе и никогда не сохраняется с чертежом.
+	Action Macro Manager...	Диспетчер макросов действий...
+	Action Macros	Макросы действий
+	Action Recorder	Запись действий
+	Insert Base Point	Вставить базовую точку
+	Insert Message	Вставить сообщение
+	Play Action Macro	Воспроизвести макрос действий
+	Play...	Воспроизвести...
+	Record	Записать
+	Request User Input	Запросить ввод пользователя
+	Stop	Остановить
+	Action Macro Manager	Диспетчер макросов действий
+	Recording…	Запись…
+	No action macros yet: Record, do the work, then Stop.	Макросов действий пока нет: нажмите «Записать», выполните работу, затем «Остановить».
+	Play	Воспроизвести
+	Message: {text}	Сообщение: {text}
+	Base point (asked for)	Базовая точка (запрашивается)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Запрашивать этот ввод при воспроизведении макроса
+	Customize Interface	Настроить интерфейс
+	Customize User Interface...	Настроить пользовательский интерфейс...
+	Interface...	Интерфейс...
+	Customize User Interface	Настройка пользовательского интерфейса
+	Quick Access Toolbar	Панель быстрого доступа
+	Add a command	Добавить команду
+	Reset Quick Access Toolbar	Сбросить панель быстрого доступа
+	Built-in panels shown (untick to hide):	Показываемые встроенные панели (снимите флажок, чтобы скрыть):
+	Your panels on built-in tabs:	Ваши панели на встроенных вкладках:
+	Tab	Вкладка
+	New panel name	Имя новой панели
+	Add Panel	Добавить панель
+	Your tabs:	Ваши вкладки:
+	Remove Tab	Удалить вкладку
+	New tab name	Имя новой вкладки
+	Add Tab	Добавить вкладку
+	Edit Keyboard Shortcuts...	Изменить сочетания клавиш...
+	Remove Panel	Удалить панель
+	Command or LISP macro, e.g. (command "line")	Команда или макрос LISP, например (command "line")
+	Hatch Editor	Редактор штриховки
+	Table Cell	Ячейка таблицы
+	Rows & Columns	Строки и столбцы
+	Merge	Объединить
+	Open/Save	Открыть/сохранить
+	Attributes	Атрибуты
+	Spell Check	Проверка орфографии
+	Formula	Формула
+	Edit Source	Редактировать источник
+	Close Array	Закрыть массив
+	Manage Attributes	Управление атрибутами
+	Dialog State	Состояние диалога
+	Dialog Action	Действие диалога

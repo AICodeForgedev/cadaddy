@@ -99,7 +99,7 @@ fn annoreset_brings_every_representation_to_the_current_one() {
 fn multileaders_and_dimensions_move_their_content() {
     let mut e = Entity::new(
         Handle(0x50),
-        EntityKind::Dimension(cadaddy_engine::doc::Dimension {
+        EntityKind::Dimension(Box::new(cadaddy_engine::doc::Dimension {
             kind: cadaddy_engine::doc::DimKind::Linear { rotation: 0.0 },
             defpt: cadaddy_engine::doc::geom::Vec3::new(0.0, 2.0, 0.0),
             text_mid: cadaddy_engine::doc::geom::Vec3::ZERO,
@@ -116,7 +116,7 @@ fn multileaders_and_dimensions_move_their_content() {
             overrides: Default::default(),
             assoc: Vec::new(),
             marks: Default::default(),
-        }),
+        })),
     );
     let mut sc = AnnoScale::new("1:2", 1.0, 2.0);
     sc.offset = Vec2::new(0.0, 3.0);

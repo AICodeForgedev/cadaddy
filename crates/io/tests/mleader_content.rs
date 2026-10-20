@@ -36,7 +36,7 @@ fn spline_leader_and_block_content_are_written() {
         arrow: None,
         text_frame: false,
     };
-    d.add(&Space::Model, Common::default(), EntityKind::MLeader(m)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLeader(Box::new(m))).unwrap();
     let bytes = cadaddy_io::write(&d, "a.dxf").unwrap();
     let back = cadaddy_io::read(&bytes, "a.dxf").unwrap();
     assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(m) if m.spline

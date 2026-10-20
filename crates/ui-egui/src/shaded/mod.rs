@@ -31,7 +31,7 @@ struct Pending {
     key: SceneKey,
     progress: Arc<AtomicUsize>,
     total: Arc<AtomicUsize>,
-    started: std::time::Instant,
+    started: web_time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
     handle: std::thread::JoinHandle<Model3>,
 }
@@ -72,13 +72,13 @@ struct Bench {
     left: u32,
     azimuth: f64,
     frames: u32,
-    start: std::time::Instant,
+    start: web_time::Instant,
 }
 
 /// Start an orbit benchmark of `frames` frames: each turns the view 2° about Z (at 30° up), as
 /// fast as frames are drawn; [`Stats::bench_fps`] holds the result once done.
 pub fn bench(app: &mut CadApp, frames: u32) {
-    app.canvas.shade.bench = Some(Bench { left: frames.clamp(1, 100_000), azimuth: 0.0, frames: 0, start: std::time::Instant::now() });
+    app.canvas.shade.bench = Some(Bench { left: frames.clamp(1, 100_000), azimuth: 0.0, frames: 0, start: web_time::Instant::now() });
     app.canvas.shade.stats.bench_fps = None;
 }
 
@@ -96,7 +96,7 @@ pub struct State {
     /// The CPU path's last image and what it showed.
     cpu: Option<(String, egui::TextureHandle)>,
     pub stats: Stats,
-    last_frame: Option<std::time::Instant>,
+    last_frame: Option<web_time::Instant>,
     bench: Option<Bench>,
 }
 
@@ -136,7 +136,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         building_note(app, ui, painter, xf);
         return false;
     };
-    let now = std::time::Instant::now();
+    let now = web_time::Instant::now();
     let st = &mut app.canvas.shade;
     if let Some(last) = st.last_frame {
         let dt = now.duration_since(last).as_secs_f64() * 1000.0;
@@ -165,7 +165,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             g.upload(&rs.device, &rs.queue, &model, style, bg);
             st.uploaded = up;
         }
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let vis = g.render(&rs.device, &rs.queue, &view, style, bg);
         st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         st.stats.tris_drawn = vis.tris;
@@ -272,11 +272,11 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
                 .spawn(move || model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2))
                 .ok();
             match handle {
-                Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: std::time::Instant::now(), handle }),
+                Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: web_time::Instant::now(), handle }),
                 // No thread: build here.
                 None => {
                     let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
-                    let started = std::time::Instant::now();
+                    let started = web_time::Instant::now();
                     let m = Arc::new(model3::build(&*st_doc(app)?, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
                     return Some(finish(app, key, m, started));
                 }
@@ -298,7 +298,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     #[cfg(target_arch = "wasm32")]
     {
         let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let m = Arc::new(model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
         Some(finish(app, key, m, started))
     }
@@ -310,7 +310,7 @@ fn st_doc(app: &CadApp) -> Option<Arc<cadaddy_doc::Drawing>> {
 }
 
 /// Keep a finished model and its numbers.
-fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: std::time::Instant) -> (SceneKey, Arc<Model3>) {
+fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: web_time::Instant) -> (SceneKey, Arc<Model3>) {
     // The baked light for the base geometry's objects (instances keep the sky's).
     let mut m = Arc::unwrap_or_clone(m);
     m.base.baked = cadaddy_engine::cmd::lightbake::baked_for(&mut app.session, &m.base);

@@ -407,7 +407,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             if let Some(m) = &multiline {
                 text.value.clone_from(&m.read_as);
             }
-            EntityKind::AttDef(Attrib {
+            EntityKind::AttDef(Box::new(Attrib {
                 tag: own.s(2).unwrap_or_default(),
                 text,
                 invisible: own.i(70).unwrap_or(0) & 1 != 0,
@@ -416,7 +416,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 props: Default::default(),
                 multiline,
                 modes: attrib_modes(own.0),
-            })
+            }))
         }
         "INSERT" => {
             // A mirrored block reference comes with extrusion (0,0,-1): its insertion point, scale,
@@ -463,7 +463,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 8 => DimKind::ArcLength,
                 _ => DimKind::Aligned,
             };
-            EntityKind::Dimension(Dimension {
+            EntityKind::Dimension(Box::new(Dimension {
                 kind,
                 defpt: t.p(10),
                 // The text midpoint is the one OCS point of a DIMENSION.
@@ -481,7 +481,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 overrides: Default::default(),
                 assoc: Vec::new(),
                 marks: Default::default(),
-            })
+            }))
         }
         "LEADER" => EntityKind::Leader(Leader {
             vertices: t.pts(10).into_iter().map(|p| p.to3(0.0)).collect(),
@@ -490,7 +490,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
         }),
         // Names behind handles follow in `entity_extras` and `Objects::apply`.
-        "MULTILEADER" | "MLEADER" => EntityKind::MLeader(crate::dxf_mleader::read(tags)),
+        "MULTILEADER" | "MLEADER" => EntityKind::MLeader(Box::new(crate::dxf_mleader::read(tags))),
         "SOLID" | "TRACE" => {
             let corners = [t.p(10), t.p(11), t.p(12), if t.f(13).is_some() { t.p(13) } else { t.p(12) }];
             let corners = corners.map(|p| ocs(&c, p));
@@ -516,7 +516,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }
             k
         }
-        "ACAD_TABLE" => EntityKind::Table(acad_table(tags)),
+        "ACAD_TABLE" => EntityKind::Table(Box::new(acad_table(tags))),
         "VIEWPORT" => EntityKind::Viewport(Viewport {
             center: t.p(10),
             width: t.fd(40, 1.0),
@@ -548,7 +548,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let u = t.p(11);
             let v = t.p(12);
             // Clip vertices are in pixel space: origin at the image's top-left corner, y pointing down.
-            let pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
+            let mut pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
+            // A polygon's closing vertex (the first one repeated, as files write it) isn't a corner.
+            if pts.len() > 3
+                && let (Some(f), Some(l)) = (pts.first(), pts.last())
+                && (*f - *l).len() <= 1e-9 * (1.0 + f.len())
+            {
+                pts.pop();
+            }
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
@@ -2325,6 +2332,10 @@ impl Objects {
                     }
                 }
             });
+        }
+        // Table styles' cell styles that came without their xdata (through DWG).
+        if let Some(json) = self.xrecord_text(crate::dxf_ext::CELL_STYLES_KEY) {
+            crate::dxf_table::apply_cell_styles_json(&mut d.table_styles, &json);
         }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {

@@ -147,21 +147,21 @@ impl Sketch {
     /// A visible attribute the user fills in when placing the symbol.
     fn attdef(&mut self, tag: &str, prompt: &str, default: &str, at: (f64, f64), height: f64) {
         let a = Self::attrib(tag, prompt, default, Vec2::new(at.0, at.1), height);
-        self.add(EntityKind::AttDef(a));
+        self.add(EntityKind::AttDef(Box::new(a)));
     }
     /// An attribute the user fills in that doesn't show on the plan (PANEL, MOUNT_HT): for
     /// schedules, counts and extraction.
     fn attdef_hidden(&mut self, tag: &str, prompt: &str, default: &str, at: (f64, f64), height: f64) {
         let mut a = Self::attrib(tag, prompt, default, Vec2::new(at.0, at.1), height);
         a.invisible = true;
-        self.add(EntityKind::AttDef(a));
+        self.add(EntityKind::AttDef(Box::new(a)));
     }
     /// A constant, hidden attribute (not asked for): what counts and schedules group by.
     fn attdef_constant(&mut self, tag: &str, value: &str, at: Vec2, height: f64) {
         let mut a = Self::attrib(tag, "", value, at, height);
         a.invisible = true;
         a.constant = true;
-        self.add(EntityKind::AttDef(a));
+        self.add(EntityKind::AttDef(Box::new(a)));
     }
 }
 

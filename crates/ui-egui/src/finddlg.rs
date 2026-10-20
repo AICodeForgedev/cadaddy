@@ -99,14 +99,25 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            egui::Grid::new("find_grid").num_columns(2).spacing(egui::vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label(crate::tl!("Find what:"));
-                ui.add(egui::TextEdit::singleline(&mut st.what).desired_width(280.0));
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
+            crate::rtl::show_grid(egui::Grid::new("find_grid").num_columns(2).spacing(egui::vec2(10.0, 6.0)), ui, |ui| {
+                crate::rtl::lead(ui, crate::tl!("Find what:"));
+                // Named by its label (in either reading order), so screen readers and agents find it.
+                let name = crate::tl!("Find what:");
+                ui.add(egui::TextEdit::singleline(&mut st.what).desired_width(280.0))
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, name.trim_end_matches(':')));
+                crate::rtl::trail(ui, crate::tl!("Find what:"));
                 ui.end_row();
-                ui.label(crate::tl!("Replace with:"));
-                ui.add(egui::TextEdit::singleline(&mut st.with).desired_width(280.0));
+                crate::rtl::lead(ui, crate::tl!("Replace with:"));
+                // Named by its label (in either reading order), so screen readers and agents find it.
+                let name = crate::tl!("Replace with:");
+                ui.add(egui::TextEdit::singleline(&mut st.with).desired_width(280.0))
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, name.trim_end_matches(':')));
+                crate::rtl::trail(ui, crate::tl!("Replace with:"));
                 ui.end_row();
-                ui.label(crate::tl!("Find where:"));
+                crate::rtl::lead(ui, crate::tl!("Find where:"));
                 egui::ComboBox::from_id_salt("find_scope")
                     .selected_text(crate::i18n::t(["Entire drawing", "Current space", "Selected objects"][st.scope.min(2)]))
                     .show_ui(ui, |ui| {
@@ -114,6 +125,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             ui.selectable_value(&mut st.scope, i, crate::i18n::t(l));
                         }
                     });
+                crate::rtl::trail(ui, crate::tl!("Find where:"));
                 ui.end_row();
             });
             ui.horizontal(|ui| {
@@ -138,7 +150,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             if !st.results.is_empty() {
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("find_results").max_height(200.0).show(ui, |ui| {
-                    egui::Grid::new("find_results_grid").striped(true).num_columns(4).show(ui, |ui| {
+                    crate::rtl::show_grid(egui::Grid::new("find_results_grid").striped(true).num_columns(4), ui, |ui| {
                         for m in st.results.clone() {
                             ui.label(RichText::new(m["space"].as_str().unwrap_or("—")).small().color(t.text_dim));
                             ui.label(crate::i18n::t(m["type"].as_str().unwrap_or_default()));

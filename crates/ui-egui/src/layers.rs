@@ -185,7 +185,7 @@ fn true_color(ui: &mut egui::Ui, id: egui::Id, current: Color) -> Option<Color> 
         ui.radio_value(&mut hsl_model, false, "RGB");
     });
     let mut from_rgb = false;
-    egui::Grid::new(id.with("tc_grid")).num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+    crate::rtl::show_grid(egui::Grid::new(id.with("tc_grid")).num_columns(2).spacing(vec2(8.0, 4.0)), ui, |ui| {
         if hsl_model {
             let mut changed = false;
             for (i, (label, max)) in [("Hue", 360.0), ("Saturation", 100.0), ("Luminance", 100.0)].iter().enumerate() {
@@ -418,6 +418,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             // ----- tool row -----
             ui.horizontal(|ui| {
                 if icons::button(ui, Icon::Plus, 24.0, "New Layer", false).clicked() {
@@ -661,7 +664,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             cols.extend(["VP Freeze", "VP Color", "VP Linetype", "VP Lineweight"]);
                         }
                         cols.extend(["New VP Freeze", "Description"]);
-                        egui::Grid::new("lpm_grid").striped(true).num_columns(cols.len()).spacing(vec2(10.0, 3.0)).min_row_height(22.0).show(
+                        crate::rtl::show_grid(
+                            egui::Grid::new("lpm_grid").striped(true).num_columns(cols.len()).spacing(vec2(10.0, 3.0)).min_row_height(22.0),
                             ui,
                             |ui| {
                                 for h in &cols {
@@ -753,9 +757,13 @@ fn filter_form(ctx: &egui::Context, f: &mut FilterForm) -> (bool, bool) {
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            egui::Grid::new("lpm_filter_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-                ui.label(crate::tl!("Filter name"));
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
+            crate::rtl::show_grid(egui::Grid::new("lpm_filter_grid").num_columns(2).spacing(vec2(8.0, 4.0)), ui, |ui| {
+                crate::rtl::lead(ui, crate::tl!("Filter name"));
                 ui.text_edit_singleline(&mut f.name);
+                crate::rtl::trail(ui, crate::tl!("Filter name"));
                 ui.end_row();
                 if let Some(p) = &f.parent {
                     ui.label(crate::tl!("Within"));

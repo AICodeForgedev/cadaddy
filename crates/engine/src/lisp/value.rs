@@ -189,6 +189,25 @@ pub enum BuiltinKind {
     Special(super::eval::Special),
 }
 
+/// The kinds of reactor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReactorKind {
+    Command,
+    Editor,
+    Object,
+}
+
+impl ReactorKind {
+    /// What `type` and `vlr-type` call it.
+    pub fn type_name(self) -> &'static str {
+        match self {
+            ReactorKind::Command => "VLR-COMMAND-REACTOR",
+            ReactorKind::Editor => "VLR-EDITOR-REACTOR",
+            ReactorKind::Object => "VLR-OBJECT-REACTOR",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub enum Value {
     #[default]
@@ -201,6 +220,8 @@ pub enum Value {
     Ename(Handle),
     PickSet(PickSet),
     File(u32),
+    /// A reactor (`vlr-command-reactor` …): its id in the drawing's environment.
+    Reactor(u32, ReactorKind),
     Subr(&'static Builtin),
     Func(Arc<Func>),
 }
@@ -292,6 +313,7 @@ impl Value {
             Value::Ename(_) => "ENAME",
             Value::PickSet(_) => "PICKSET",
             Value::File(_) => "FILE",
+            Value::Reactor(_, k) => k.type_name(),
             Value::Subr(_) => "SUBR",
             Value::Func(_) => "USUBR",
         })
@@ -374,6 +396,7 @@ fn atom_equal(a: &Value, b: &Value, fuzz: f64) -> bool {
         (Value::Sym(x), Value::Sym(y)) => x == y,
         (Value::Ename(x), Value::Ename(y)) => x == y,
         (Value::File(x), Value::File(y)) => x == y,
+        (Value::Reactor(x, _), Value::Reactor(y, _)) => x == y,
         (Value::PickSet(x), Value::PickSet(y)) => x.id == y.id,
         (Value::Subr(x), Value::Subr(y)) => std::ptr::eq(*x, *y),
         (Value::Func(x), Value::Func(y)) => Arc::ptr_eq(x, y),
@@ -515,6 +538,7 @@ fn write_value(out: &mut String, v: &Value, escape: bool, depth: usize) {
         Value::Ename(h) => out.push_str(&format!("<Entity name: {:x}>", h.0)),
         Value::PickSet(p) => out.push_str(&format!("<Selection set: {:x}>", p.id)),
         Value::File(f) => out.push_str(&format!("#<FILE {f:x}>")),
+        Value::Reactor(id, k) => out.push_str(&format!("#<{} {id:x}>", k.type_name())),
         Value::Subr(b) => out.push_str(&format!("#<SUBR @{} {}>", "0", b.name)),
         Value::Func(f) => out.push_str(&format!("#<USUBR {}>", f.name.as_ref().map_or("-lambda-", |s| s.name()))),
     }

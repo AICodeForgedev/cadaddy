@@ -58,6 +58,8 @@ pub const PROFILE_VARS: &[&str] = &[
     "MAXARRAY",
     "DWGCOPY",
     "ACTIVITYLOG",
+    "SECURELOAD",
+    "TRUSTEDPATHS",
 ];
 
 /// The most profile entries [`restore`] reads (a saved profile is untrusted input).

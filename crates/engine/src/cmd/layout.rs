@@ -1013,7 +1013,13 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 let tmp = format!("{path}.cadaddy-tmp");
                 crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
+                let mut r = json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages });
+                match super::plotstamp::log_plot(s, &space, &opts, path) {
+                    Some(Ok(log)) => r["stampLog"] = json!(log),
+                    Some(Err(e)) => r["stampLogError"] = json!(e),
+                    None => {}
+                }
+                Ok(r)
             }
             // On the web the file is handed to the browser as a download (the host's deliver hook).
             #[cfg(target_arch = "wasm32")]

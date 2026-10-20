@@ -142,6 +142,15 @@ if has appimage; then
   fi
 fi
 
+# ---- signatures ---------------------------------------------------------------------------------
+# The release GPG key (LINUX_GPG_KEY) signs each package (sign.sh); without it, it says so and the
+# packages stay unsigned.
+made=()
+for ext in tar.gz deb rpm AppImage; do
+  if [ -f "$DIST/$BASENAME.$ext" ]; then made+=("$DIST/$BASENAME.$ext"); fi
+done
+if [ "${#made[@]}" -gt 0 ]; then "$HERE/sign.sh" "${made[@]}"; fi
+
 if [ -z "${CROSS_TARGET:-}" ]; then
   "$STAGE/usr/bin/cadaddy-cli" --version
 elif [ -n "${EMULATOR:-}" ]; then

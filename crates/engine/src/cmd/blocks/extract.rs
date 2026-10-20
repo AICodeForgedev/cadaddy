@@ -449,7 +449,7 @@ fn build_table(
 /// Insert the rows as a table at `at`; the caller checks the size against the table limits.
 pub(crate) fn insert_table(s: &mut Session, at: Vec2, title: Option<&str>, columns: &[String], rows: &[Vec<Cell>]) -> Result<String> {
     let t = build_table(s, at, title, columns, rows, None)?;
-    Ok(s.add_entity(EntityKind::Table(t))?.hex())
+    Ok(s.add_entity(EntityKind::Table(Box::new(t)))?.hex())
 }
 
 fn check_table_size(columns: &[String], rows: &[Vec<Cell>]) -> Result<()> {
@@ -503,7 +503,7 @@ fn update_tables(s: &mut Session, only: Option<Vec<cadaddy_doc::Handle>>) -> Res
         .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
         .filter(|e| only.as_ref().is_none_or(|hs| hs.contains(&e.handle)))
         .filter_map(|e| match &e.kind {
-            EntityKind::Table(t) => Settings::from_xdata(&e.common.xdata).map(|st| (e.handle, st, t.clone())),
+            EntityKind::Table(t) => Settings::from_xdata(&e.common.xdata).map(|st| (e.handle, st, (**t).clone())),
             _ => None,
         })
         .collect();
@@ -518,7 +518,7 @@ fn update_tables(s: &mut Session, only: Option<Vec<cadaddy_doc::Handle>>) -> Res
         check_table_size(&columns, &rows)?;
         let t = build_table(s, old.insert.xy(), o.st.title.as_deref(), &columns, &rows, Some(&old.style))?;
         let t = cadaddy_doc::Table { insert: old.insert, ..t };
-        s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Table(t))?;
+        s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Table(Box::new(t)))?;
         updated.push(h.hex());
     }
     Ok(json!({ "updated": updated }))

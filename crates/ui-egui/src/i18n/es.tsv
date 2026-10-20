@@ -2190,3 +2190,160 @@
 	Use drawing background	Usar el fondo del dibujo
 	Regenerate Dimensions	Regenerar cotas
 	Enter layer name for new dimensions (. for the current layer)	Escriba el nombre de capa para las cotas nuevas (. para la capa actual)
+	{folder} (folder)	{folder} (carpeta)
+	Add drawings or a folder of them.	Añada dibujos o una carpeta con ellos.
+	Add Files...	Añadir archivos...
+	Add Folder...	Añadir carpeta...
+	cancelled	cancelado
+	Choose the output folder, or Next to the originals.	Elija la carpeta de salida, o Junto a los originales.
+	Convert Drawings	Convertir dibujos
+	Convert Drawings...	Convertir dibujos...
+	Convert drawings...	Convertir dibujos...
+	Convert to	Convertir a
+	Converted	Convertido
+	Converted, not all kept	Convertido, no se conservó todo
+	Converting files is not available on the web.	La conversión de archivos no está disponible en la web.
+	Drawings to convert	Dibujos para convertir
+	Each drawing's own	La de cada dibujo
+	Failed	Error
+	Files already there	Archivos ya existentes
+	Folder:	Carpeta:
+	Include subfolders	Incluir subcarpetas
+	Keep a file written over as .bak	Conservar un archivo sobrescrito como .bak
+	Next to the originals	Junto a los originales
+	Open Log	Abrir registro
+	Or type a file or folder path	O escriba la ruta de un archivo o carpeta
+	Overwrite	Sobrescribir
+	Save to	Guardar en
+	Skip	Omitir
+	Skipped	Omitido
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	No hay dibujos (.dwg, .dxf, .cdy) para convertir.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} convertidos, {skipped} omitidos, {failed} con error de {total}
+	DWG drawing (.dwg)	Dibujo DWG (.dwg)
+	DXF drawing (.dxf)	Dibujo DXF (.dxf)
+	Require a token for control connections (recommended)	Exigir un token para las conexiones de control (recomendado)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Los programas deben enviar primero el token que CADaddy escribe en un archivo que solo usted puede leer, para que los programas de otros usuarios no puedan controlarlo. El conector de Claude lo lee por usted. Se aplica la próxima vez que se inicie CADaddy.
+	Add: Pick points	Añadir: Designar puntos
+	Add: Select objects	Añadir: Seleccionar objetos
+	Associative	Asociativo
+	Block to create or edit	Bloque que crear o editar
+	Bottom left	Inferior izquierda
+	Boundaries	Contornos
+	Click to set new origin	Haga clic para definir un nuevo origen
+	Create separate hatches	Crear sombreados independientes
+	Default to boundary extents	Usar por defecto la extensión del contorno
+	Edit Block Definition	Editar definición de bloque
+	Hatch and Gradient	Sombreado y degradado
+	Hatch origin	Origen del sombreado
+	Island detection	Detección de islas
+	Normal	Normal
+	Open in Block Editor	Abrir en el Editor de bloques
+	Outer	Exterior
+	Run Script...	Ejecutar script...
+	Specified origin	Origen especificado
+	Use current origin	Usar origen actual
+	Building models (IFC)	Modelos de edificio (IFC)
+	Building model (IFC4)	Modelo de edificio (IFC4)
+	3D printing (3MF)	Impresión 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Incluir el dibujo (el dibujo activo como archivo DXF)
+	Your account, home folder and computer name are always left out.	Su cuenta, su carpeta personal y el nombre de su equipo siempre se omiten.
+	Files in the report	Archivos del informe
+	Send to Redline	Enviar a Redline
+	Import Redline Markups	Importar marcas de Redline
+	Import Redline Markups...	Importar marcas de Redline...
+	Open a Program?	¿Abrir un programa?
+	This link opens a program or script, not a document:	Este vínculo abre un programa o script, no un documento:
+	Open it only if you trust the drawing and know what it runs.	Ábralo solo si confía en el dibujo y sabe lo que ejecuta.
+	Open Anyway	Abrir de todos modos
+	Report a security problem	Informar de un problema de seguridad
+	Load This File?	¿Cargar este archivo?
+	This file isn't in a trusted folder:	Este archivo no está en una carpeta de confianza:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Las rutinas LISP y los scripts pueden cambiar dibujos y archivos. Cárguelo solo si confía en su procedencia.
+	Don't Load	No cargar
+	Load Once	Cargar una vez
+	Always Load from This Folder	Cargar siempre desde esta carpeta
+	Adds {folder} to TRUSTEDPATHS	Añade {folder} a TRUSTEDPATHS
+	Allow Loading a File	Permitir cargar un archivo
+	Plot Stamp	Sello de trazado
+	Plot stamp fields	Campos del sello
+	Drawing name	Nombre del dibujo
+	Layout name	Nombre de presentación
+	Date and Time	Fecha y hora
+	Device name	Nombre del dispositivo
+	Paper size	Tamaño de papel
+	Plot scale	Escala de trazado
+	No login or computer name is ever stamped.	Nunca se sella el nombre de usuario ni el del equipo.
+	User defined fields	Campos definidos por el usuario
+	One per line, up to {n}.	Uno por línea, hasta {n}.
+	Stamp model space plots	Sellar los trazados del espacio modelo
+	Stamp this layout's plots	Sellar los trazados de esta presentación
+	Location and offset	Ubicación y desfase
+	Location	Ubicación
+	Bottom right	Abajo a la derecha
+	Top left	Arriba a la izquierda
+	Top right	Arriba a la derecha
+	Upside-down	Invertido
+	X offset	Desfase X
+	Y offset	Desfase Y
+	Offset relative to	Desfase relativo a
+	Printable area	Área imprimible
+	Paper border	Borde del papel
+	Text properties	Propiedades del texto
+	Font	Fuente
+	Single line plot stamp	Sello en una sola línea
+	Units	Unidades
+	Inches	Pulgadas
+	Millimeters	Milímetros
+	Log file location	Ubicación del archivo de registro
+	Create a log file	Crear un archivo de registro
+	The log is kept for this session, never saved with the drawing.	El registro se mantiene en esta sesión y nunca se guarda con el dibujo.
+	Action Macro Manager...	Administrador de macros de acción...
+	Action Macros	Macros de acción
+	Action Recorder	Grabadora de acciones
+	Insert Base Point	Insertar punto base
+	Insert Message	Insertar mensaje
+	Play Action Macro	Reproducir macro de acción
+	Play...	Reproducir...
+	Record	Grabar
+	Request User Input	Solicitar entrada del usuario
+	Stop	Detener
+	Action Macro Manager	Administrador de macros de acción
+	Recording…	Grabando…
+	No action macros yet: Record, do the work, then Stop.	Aún no hay macros de acción: Grabar, hacer el trabajo y luego Detener.
+	Play	Reproducir
+	Message: {text}	Mensaje: {text}
+	Base point (asked for)	Punto base (se solicita)
+	(Enter)	(Intro)
+	Ask for this input when the macro plays	Pedir esta entrada al reproducir la macro
+	Customize Interface	Personalizar interfaz
+	Customize User Interface...	Personalizar interfaz de usuario...
+	Interface...	Interfaz...
+	Customize User Interface	Personalizar interfaz de usuario
+	Quick Access Toolbar	Barra de herramientas de acceso rápido
+	Add a command	Añadir un comando
+	Reset Quick Access Toolbar	Restablecer barra de acceso rápido
+	Built-in panels shown (untick to hide):	Grupos integrados visibles (desmarcar para ocultar):
+	Your panels on built-in tabs:	Sus grupos en fichas integradas:
+	Tab	Ficha
+	New panel name	Nombre del nuevo grupo
+	Add Panel	Añadir grupo
+	Your tabs:	Sus fichas:
+	Remove Tab	Eliminar ficha
+	New tab name	Nombre de la nueva ficha
+	Add Tab	Añadir ficha
+	Edit Keyboard Shortcuts...	Editar métodos abreviados de teclado...
+	Remove Panel	Eliminar grupo
+	Command or LISP macro, e.g. (command "line")	Comando o macro LISP, p. ej. (command "line")
+	Hatch Editor	Editor de sombreado
+	Table Cell	Celda de tabla
+	Rows & Columns	Filas y columnas
+	Merge	Combinar
+	Open/Save	Abrir/Guardar
+	Attributes	Atributos
+	Spell Check	Revisar ortografía
+	Formula	Fórmula
+	Edit Source	Editar origen
+	Close Array	Cerrar matriz
+	Manage Attributes	Administrar atributos
+	Dialog State	Estado del cuadro de diálogo
+	Dialog Action	Acción del cuadro de diálogo

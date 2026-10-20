@@ -176,6 +176,12 @@ fn copy_symbols(x: &mut Drawing, host: &Drawing, syms: BTreeSet<(Sym, String)>, 
 /// as it was loaded (before the edit), `edited` the block after it, `host` the host drawing.
 pub(crate) fn write_back(file: &Path, key: &str, loaded: &Block, edited: &Block, host: &Drawing) -> Result<(), String> {
     let name = file.to_string_lossy().into_owned();
+    // The path came from the drawing: only a drawing file outside the system folders is written.
+    let ext = file.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !matches!(ext.as_str(), "dwg" | "dxf" | "cdy") {
+        return Err(format!("{name} isn't a drawing file (.dwg, .dxf or .cdy), so the xref isn't written back there"));
+    }
+    crate::writefile::protected(file).map_err(|e| e.to_string())?;
     let mut x = read(file).map_err(|e| format!("{name}: {e}"))?;
     // The file must still be what the xref shows.
     let current: Vec<Entity> = x.model.iter().map(|e| (**e).clone()).collect();
@@ -210,4 +216,23 @@ pub(crate) fn write_back(file: &Path, key: &str, loaded: &Block, edited: &Block,
     let hooks = crate::cmd::file::io().ok_or("file formats are not available in this build")?;
     let bytes = (hooks.write)(&x, &name).map_err(|e| format!("{name}: {e}"))?;
     crate::cmd::file::store(&name, &bytes).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_drawing_files_outside_system_folders_are_written_back() {
+        let (b, d) = (Block::new("X"), Drawing::default());
+        for (path, why) in [
+            ("/Users/x/.zshrc", "isn't a drawing"),
+            ("/tmp/notes.txt", "isn't a drawing"),
+            ("/etc/evil.dwg", "system folder"),
+            ("C:\\Windows\\x.dxf", "system folder"),
+        ] {
+            let e = write_back(Path::new(path), "X", &b, &b, &d).unwrap_err();
+            assert!(e.contains(why), "{path}: {e}");
+        }
+    }
 }

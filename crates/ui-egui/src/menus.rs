@@ -24,6 +24,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
+    ("actmanager", "Action Macro Manager...", &["Tools", "Action Recorder", "Action Macro Manager..."], None),
+    ("cui", "Customize User Interface...", &["Tools", "Customize", "Interface..."], None),
+    ("ui.customize", "Customize Interface", &[], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
     ("ui.gpu", "3D Graphics Limits", &[], None),
     ("ui.bench3d", "3D View Benchmark", &[], None),
@@ -245,6 +248,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Convert PDF to DWG (application menu) and PDF Import (Insert tab; PDFIMPORT typed
         // without a path, as AutoCAD asks for the file): pick the PDF, then the options dialog.
         "ui.convertpdf" => crate::pdfdlg::begin(app, true),
+        "actmanager" => {
+            app.ui.dialog = Some(crate::actionsdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "cui" => {
+            app.ui.dialog = Some(crate::customui::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "ui.customize" => crate::customui::command(app, params),
         // FILEDIA 0: PDFIMPORT asks for the file on the command line instead.
         "ui.pdfimport" if file_dialogs_off(app) => {
             app.start("pdfimport");
@@ -675,11 +687,25 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
+        // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.
+        "redline.import" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
+            Some(Some(path)) => app.run("redline.import", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
+            Some(None) => Ok(Value::Null),
+            None => {
+                Err("IMPORT REDLINE MARKUPS: there is no file dialog here; run it with parameters, e.g. redline.import {\"path\": \"review.pdf\"}"
+                    .into())
+            }
+        },
         "markupimport" if params.is_null() => match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
             Some(Some(path)) => app.run("markupimport", json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
             Some(None) => Ok(Value::Null),
             None => Err("MARKUPIMPORT: there is no file dialog here; run it with parameters, e.g. markupimport {\"path\": \"review.pdf\"}".into()),
         },
+        // From the menu or the Start page: the Convert Drawings window.
+        "dwgconvert" | "cdyconvert" if params.is_null() => {
+            app.ui.dialog = Some(crate::convertdlg::DIALOG.into());
+            Ok(Value::Null)
+        }
         "etransmit" if params.is_null() => {
             app.ui.dialog = Some("etransmit".into());
             Ok(Value::Null)
@@ -704,6 +730,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         // Typed or from the menu: the Materials Browser (its layer row is MATERIALATTACH's dialog).
         "materials" | "mat" | "rmat" | "materialattach" if params.is_null() => {
             app.ui.dialog = Some(crate::materials::DIALOG.into());
+            Ok(Value::Null)
+        }
+        // Typed or from the menu: the Plot Stamp dialog. JSON calls keep running the command.
+        "plotstamp" if params.is_null() && app.session.state().is_ok() => {
+            crate::plotstampdlg::open(app);
             Ok(Value::Null)
         }
         "units" | "un" if params.is_null() => {

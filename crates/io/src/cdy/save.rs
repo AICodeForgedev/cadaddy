@@ -147,21 +147,37 @@ impl<'a> Earlier<'a> {
 }
 
 /// Write `d`'s parts: each unchanged one listed where `earlier` has it, each other one written.
+/// A chunk's payload: as encoded, or already compressed ([`container::pack`]).
+enum Payload {
+    Raw(u16, Vec<u8>),
+    Packed(u16, usize, container::Packed),
+}
+
 fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bool) -> Result<Vec<Saved>, String> {
+    let parts = parts(d);
+    let reused_objects = |c: &ChunkRef| earlier.objects.get(&c.key()).filter(|(old, _)| old.same(c)).map(|(_, e)| *e);
+    // The object chunks to write, encoded and compressed on all cores: most of a large drawing's
+    // save. Only the compressed bytes are kept until they are written.
+    let fresh: Vec<&ChunkRef> =
+        parts.iter().filter_map(|p| if let Part::Objects(c) = p { Some(c) } else { None }).filter(|c| reused_objects(c).is_none()).collect();
+    let packed: Vec<Result<(usize, u16, usize, container::Packed), String>> =
+        crate::par_map(&fresh, |c| model::entities(c.items()).map(|(v, raw)| (c.key(), v, raw.len(), container::pack(&raw, true))));
+    let mut packed: HashMap<usize, (u16, usize, container::Packed)> =
+        packed.into_iter().map(|r| r.map(|(k, v, n, p)| (k, (v, n, p)))).collect::<Result<_, _>>()?;
     let mut saved = Vec::new();
     let mut put = |w: &mut Writer,
                    source: Source,
                    reused: Option<&IndexEntry>,
                    tag: [u8; 4],
                    deflate: bool,
-                   data: &dyn Fn() -> Result<(u16, Vec<u8>), String>|
+                   data: &dyn Fn() -> Result<Payload, String>|
      -> Result<(), String> {
         match reused {
             Some(e) => w.reuse(e),
-            None => {
-                let (version, bytes) = data()?;
-                w.chunk(tag, version, &bytes, deflate);
-            }
+            None => match data()? {
+                Payload::Raw(version, bytes) => w.chunk(tag, version, &bytes, deflate),
+                Payload::Packed(version, raw_len, p) => w.chunk_packed(tag, version, raw_len, &p),
+            },
         }
         if let Some(entry) = w.entries().last() {
             saved.push(Saved { source, entry: entry.clone() });
@@ -170,13 +186,13 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
     };
     // A small part: encoded every save, rewritten only when its bytes changed.
     type Put<'p> =
-        dyn FnMut(&mut Writer, Source, Option<&IndexEntry>, [u8; 4], bool, &dyn Fn() -> Result<(u16, Vec<u8>), String>) -> Result<(), String> + 'p;
+        dyn FnMut(&mut Writer, Source, Option<&IndexEntry>, [u8; 4], bool, &dyn Fn() -> Result<Payload, String>) -> Result<(), String> + 'p;
     let small = |w: &mut Writer, put: &mut Put<'_>, tag: [u8; 4], bytes: Vec<u8>| {
         let key = (tag, crc32fast::hash(&bytes), bytes.len() as u64);
         let reused = earlier.bytes.get(&key).copied();
-        put(w, Source::Bytes(key.0, key.1, key.2), reused, tag, true, &|| Ok((V1, bytes.clone())))
+        put(w, Source::Bytes(key.0, key.1, key.2), reused, tag, true, &|| Ok(Payload::Raw(V1, bytes.clone())))
     };
-    for part in parts(d) {
+    for part in parts {
         match part {
             Part::Manifest => small(w, &mut put, *b"MANI", model::manifest(d, thumbnail))?,
             Part::Header => small(w, &mut put, *b"HEAD", model::header(d)?)?,
@@ -186,21 +202,25 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
             Part::Embedded(name, b) => {
                 let reused = earlier.embedded.get(name).filter(|(old, _)| Arc::ptr_eq(old, b)).map(|(_, e)| *e);
                 put(w, Source::Embedded(name.to_string(), b.clone()), reused, *b"EMBD", !model::packed(name), &|| {
-                    Ok((V1, model::embedded(name, b)))
+                    Ok(Payload::Raw(V1, model::embedded(name, b)))
                 })?;
             }
             Part::Block(name, b) => {
                 let reused = earlier.blocks.get(name).filter(|(old, _)| Arc::ptr_eq(old, b)).map(|(_, e)| *e);
-                put(w, Source::Block(name.to_string(), b.clone()), reused, *b"BLKS", true, &|| Ok((V1, model::block(name, b)?)))?;
+                put(w, Source::Block(name.to_string(), b.clone()), reused, *b"BLKS", true, &|| Ok(Payload::Raw(V1, model::block(name, b)?)))?;
             }
             Part::Objects(c) => {
-                let reused = earlier.objects.get(&c.key()).filter(|(old, _)| old.same(&c)).map(|(_, e)| *e);
+                let reused = reused_objects(&c);
+                let pre = std::cell::RefCell::new(packed.remove(&c.key()));
                 let items = c.clone();
-                put(w, Source::Objects(c), reused, *b"ENTS", true, &|| model::entities(items.items()))?;
+                put(w, Source::Objects(c), reused, *b"ENTS", true, &|| match pre.borrow_mut().take() {
+                    Some((version, raw_len, p)) => Ok(Payload::Packed(version, raw_len, p)),
+                    None => model::entities(items.items()).map(|(v, b)| Payload::Raw(v, b)),
+                })?;
             }
             Part::Foreign(f) => {
                 let reused = earlier.foreign.filter(|(old, _)| Arc::ptr_eq(old, f)).map(|(_, e)| e);
-                put(w, Source::Foreign(f.clone()), reused, *b"FRGN", true, &|| Ok((V1, model::foreign(f)?)))?;
+                put(w, Source::Foreign(f.clone()), reused, *b"FRGN", true, &|| Ok(Payload::Raw(V1, model::foreign(f)?)))?;
             }
         }
     }

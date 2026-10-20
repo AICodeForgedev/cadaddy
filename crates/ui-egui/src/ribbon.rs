@@ -30,6 +30,21 @@ const fn b(icon: Icon, cmd: &'static str, label: &'static str) -> Btn {
     Btn { icon, cmd, label, flyout: &[] }
 }
 
+/// A plain button (for tabs defined elsewhere: the contextual ones, [`crate::customui`]).
+pub const fn b_btn(icon: Icon, cmd: &'static str, label: &'static str) -> Btn {
+    b(icon, cmd, label)
+}
+
+/// A tab (for tabs defined elsewhere).
+pub const fn ctx_tab(name: &'static str, panels: &'static [Panel]) -> Tab {
+    Tab { name, panels }
+}
+
+/// The default Quick Access Toolbar.
+pub fn qat_default() -> &'static [(Icon, &'static str, &'static str)] {
+    QAT
+}
+
 const fn f(icon: Icon, cmd: &'static str, label: &'static str, flyout: &'static [Fly]) -> Btn {
     Btn { icon, cmd, label, flyout }
 }
@@ -980,7 +995,7 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
         app.open_path(&path);
     }
     let mut x = ab.right() + 10.0;
-    for (icon, cmd, tip) in QAT {
+    for (icon, cmd, tip) in &crate::customui::qat(&app.custom_ui) {
         let br = Rect::from_min_size(pos2(x, row.center().y - 11.0), vec2(22.0, 22.0));
         let resp = ui.interact(br, ui.id().with(("rb_qat", *cmd)), Sense::click());
         if resp.hovered() {
@@ -1057,8 +1072,9 @@ fn tabs_and_body(app: &mut CadApp, ui: &mut egui::Ui, area: Rect, clicks: &mut C
     let rtl = app.rtl();
     let place = |x: f32, w: f32| if rtl { area.left() + area.right() - x - w } else { x };
     let mut x = tabs_r.left() + 8.0;
-    // The current workspace's tabs.
-    let shown: Vec<&Tab> = TABS.iter().filter(|tb| crate::workspaces::tab_shown(app, tb.name)).collect();
+    // The current workspace's tabs, the user's own (Customize User Interface), then the
+    // contextual tab of what is being edited or selected, chosen when it appears.
+    let shown = shown_tabs(app, ui.ctx());
     let Some(active) = shown.iter().copied().find(|tb| tb.name == app.ui.ribbon_tab).or(shown.first().copied()) else { return };
     for tab in shown {
         let w = label_w(ui, tab.name, crate::theme::body()) + 22.0;
@@ -1147,8 +1163,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, title_h: f32, content_left: f32
         title_row(app, ui, row, r.left() + content_left, &mut clicks);
         tabs_and_body(app, ui, Rect::from_min_max(pos2(r.left(), row.bottom()), r.max), &mut clicks);
         // Key tips (Alt): letters over the tabs and Quick Access buttons, then over the buttons.
-        let names: Vec<&str> = TABS.iter().map(|t| t.name).collect();
-        let qat: Vec<&str> = QAT.iter().map(|(_, c, _)| *c).collect();
+        let names: Vec<&str> = shown_tabs(app, ui.ctx()).iter().map(|t| t.name).collect();
+        let qat_list = crate::customui::qat(&app.custom_ui);
+        let qat: Vec<&str> = qat_list.iter().map(|(_, c, _)| *c).collect();
         let buttons: Vec<(&str, &str)> = clicks.buttons.iter().map(|(_, l, c)| (*l, *c)).collect();
         let asked = crate::keytips::input(ui.ctx(), &names, &qat, &buttons);
         match crate::keytips::level(ui.ctx()) {
@@ -1188,9 +1205,34 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, title_h: f32, content_left: f32
             crate::layers::set_flag(app, &n, k, v);
         }
         if let Some(cmd) = clicks.cmd {
-            app.start(&cmd);
+            crate::customui::run_button(app, &cmd);
         }
     });
+}
+
+/// The tabs shown: the workspace's built-in ones (with the user's panels), the user's tabs, and
+/// the contextual tab while there is one (selected the first frame it appears).
+fn shown_tabs(app: &mut CadApp, ctx: &egui::Context) -> Vec<&'static Tab> {
+    let all = crate::customui::effective(&app.custom_ui);
+    let builtin = TABS.len();
+    let mut shown: Vec<&'static Tab> =
+        all.iter().enumerate().filter(|(i, tb)| *i >= builtin || crate::workspaces::tab_shown(app, tb.name)).map(|(_, tb)| tb).collect();
+    let context = crate::customui::contextual(app, ctx);
+    let id = egui::Id::new("rb contextual");
+    let before: Option<&'static str> = ctx.data(|d| d.get_temp(id)).flatten();
+    if let Some(tab) = context {
+        shown.push(tab);
+        if before != Some(tab.name) {
+            app.ui.ribbon_tab = tab.name.to_string();
+        }
+    } else if let Some(name) = before
+        && app.ui.ribbon_tab == name
+    {
+        // The editor closed or the selection changed: back to the first tab.
+        app.ui.ribbon_tab = shown.first().map(|t| t.name.to_string()).unwrap_or_default();
+    }
+    ctx.data_mut(|d| d.insert_temp(id, context.map(|t| t.name)));
+    shown
 }
 
 #[cfg(test)]

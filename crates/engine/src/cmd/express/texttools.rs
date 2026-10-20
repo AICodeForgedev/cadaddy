@@ -289,8 +289,12 @@ fn anchor(d: &cadaddy_doc::Drawing, kind: &EntityKind, attrib: Option<usize>, h:
             let dir = Vec2::from_angle(m.rotation);
             Some(at(c[0], dir, dir.perp(), c[0].dist(c[1]), c[1].dist(c[2])))
         }
-        (EntityKind::Text(t) | EntityKind::AttDef(cadaddy_doc::Attrib { text: t, .. }), None) => {
+        (EntityKind::Text(t), None) => {
             let f = frame(d, t);
+            Some(at(f.start, f.dir, f.up, f.width, f.height))
+        }
+        (EntityKind::AttDef(a), None) => {
+            let f = frame(d, &a.text);
             Some(at(f.start, f.dir, f.up, f.width, f.height))
         }
         (EntityKind::Insert(i), Some(k)) => {
@@ -907,7 +911,14 @@ fn run_tcircle(s: &mut Session, p: &Value) -> Result<Value> {
                 let k = mtext_corners(d, m, 0.0);
                 ((k[0] + k[2]) * 0.5, Vec2::from_angle(m.rotation), k[0].dist(k[1]) / 2.0, k[1].dist(k[2]) / 2.0, offset * m.height)
             }
-            EntityKind::Text(t) | EntityKind::AttDef(cadaddy_doc::Attrib { text: t, .. }) => {
+            EntityKind::Text(_) | EntityKind::AttDef(_) => {
+                let Some(t) = (match &e.kind {
+                    EntityKind::Text(t) => Some(t),
+                    EntityKind::AttDef(a) => Some(&a.text),
+                    _ => None,
+                }) else {
+                    continue;
+                };
                 let f = frame(d, t);
                 let lo = -f.height / 3.0;
                 (f.at(f.width / 2.0, (lo + f.height) / 2.0), f.dir, f.width / 2.0, (f.height - lo) / 2.0, offset * f.height)

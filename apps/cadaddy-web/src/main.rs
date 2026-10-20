@@ -7,7 +7,8 @@
 //! the drawing through the browser (`download.rs`). With `?host=parent` (inside an `<iframe>`), a
 //! same-origin parent page sends the drawing to open and stores what CADaddy saves instead
 //! (`host.rs`). `?walk=URL` fetches a walkthrough package (`.cdywalk`, PUBLISH WALKTHROUGH) and
-//! opens it in Walk, so a link is all someone needs to walk a building.
+//! opens it in Walk, so a link is all someone needs to walk a building. `?selftest` runs the
+//! browser self-test (`selftest.rs`, driven by `cargo xtask webtest`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -16,6 +17,8 @@ mod autosave;
 pub mod download;
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod selftest;
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -29,12 +32,21 @@ mod web {
     /// The app, the files File > Open… and drag and drop read for it in the background, the
     /// page embedding it (`?host=parent`), and the browser's `prefers-reduced-motion` (it stays
     /// live, so View ▸ Accessibility ▸ Animation Effects ▸ Use System Setting follows a change).
-    struct Shell(CadApp, crate::upload::Inbox, Option<(crate::host::Bridge, crate::host::DirtyReport)>, Option<web_sys::MediaQueryList>);
+    struct Shell(
+        CadApp,
+        crate::upload::Inbox,
+        Option<(crate::host::Bridge, crate::host::DirtyReport)>,
+        Option<web_sys::MediaQueryList>,
+        Option<crate::selftest::SelfTest>,
+    );
 
     impl eframe::App for Shell {
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.1.take_dropped(ctx);
             self.1.drain(&mut self.0);
+            if let Some(t) = &mut self.4 {
+                t.tick(&mut self.0, &self.1, ctx);
+            }
             self.0.system_animations = self.3.as_ref().map(|reduced| !reduced.matches());
             self.0.logic(ctx);
             if let Some((bridge, reported)) = &self.2 {
@@ -103,6 +115,7 @@ mod web {
                 bridge.install();
                 cadaddy_engine::cmd::file::set_deliver(crate::host::deliver);
             }
+            None if query().contains("selftest") => cadaddy_engine::cmd::file::set_deliver(crate::selftest::deliver),
             None => cadaddy_engine::cmd::file::set_deliver(crate::download::download),
         }
         let app_bridge = bridge.clone();
@@ -168,7 +181,8 @@ mod web {
                             (bridge, crate::host::DirtyReport::default())
                         });
                         let reduced_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                        Ok(Box::new(Shell(app, inbox, host, reduced_motion)))
+                        let selftest = (host.is_none() && query().contains("selftest")).then(crate::selftest::SelfTest::new);
+                        Ok(Box::new(Shell(app, inbox, host, reduced_motion, selftest)))
                     }),
                 )
                 .await;

@@ -663,7 +663,13 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     );
     let mut y = left.top() + 140.0;
     let mut action = None;
-    for (label, cmd) in [("Open...", "open"), ("New", "new"), ("New (metric)", "new.metric"), ("Open sample drawing", "sample")] {
+    for (label, cmd) in [
+        ("Open...", "open"),
+        ("New", "new"),
+        ("New (metric)", "new.metric"),
+        ("Open sample drawing", "sample"),
+        ("Convert drawings...", "dwgconvert"),
+    ] {
         let br = Rect::from_min_size(pos2(left.left() + 34.0, y), vec2(220.0, 34.0));
         let resp = ui.interact(br, ui.id().with(("start", cmd)), Sense::click());
         crate::icons::describe_control(ui, &resp, label, None, false);
@@ -737,6 +743,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
         Some("sample") => {
             app.start("ui.sample");
         }
+        Some("dwgconvert") => app.start("dwgconvert"),
         _ => {}
     }
 }

@@ -2180,3 +2180,159 @@ menu	View	عرض
 	Use drawing background	استخدام خلفية الرسم
 	Regenerate Dimensions	إعادة توليد الأبعاد
 	Enter layer name for new dimensions (. for the current layer)	أدخل اسم الطبقة للأبعاد الجديدة (. للطبقة الحالية)
+	{folder} (folder)	{folder} (مجلد)
+	Add drawings or a folder of them.	أضف رسومات أو مجلدًا يحتويها.
+	Add Files...	إضافة ملفات...
+	Add Folder...	إضافة مجلد...
+	cancelled	أُلغي
+	Choose the output folder, or Next to the originals.	اختر مجلد الإخراج، أو بجانب الأصول.
+	Convert Drawings	تحويل الرسومات
+	Convert Drawings...	تحويل الرسومات...
+	Convert drawings...	تحويل الرسومات...
+	Convert to	التحويل إلى
+	Converted	حُوِّل
+	Converted, not all kept	حُوِّل، ولم يُحفظ كل شيء
+	Converting files is not available on the web.	تحويل الملفات غير متاح على الويب.
+	Drawings to convert	الرسومات المراد تحويلها
+	Each drawing's own	إصدار كل رسم
+	Failed	فشل
+	Files already there	الملفات الموجودة مسبقًا
+	Folder:	المجلد:
+	Include subfolders	تضمين المجلدات الفرعية
+	Keep a file written over as .bak	الاحتفاظ بالملف المستبدل بامتداد .bak
+	Next to the originals	بجانب الأصول
+	Open Log	فتح السجل
+	Or type a file or folder path	أو اكتب مسار ملف أو مجلد
+	Overwrite	استبدال
+	Save to	الحفظ في
+	Skip	تخطٍّ
+	Skipped	تم تخطيه
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	لا توجد رسومات (.dwg, .dxf, .cdy) لتحويلها.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	حُوِّل {converted}، وتُخطّي {skipped}، وفشل {failed} من {total}
+	DWG drawing (.dwg)	رسم DWG (.dwg)
+	DXF drawing (.dxf)	رسم DXF (.dxf)
+	Require a token for control connections (recommended)	طلب رمز مميز لاتصالات التحكم (موصى به)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	يجب على البرامج أولًا إرسال الرمز المميز الذي يكتبه CADaddy في ملف لا يقرؤه سواك، حتى لا تتمكن برامج المستخدمين الآخرين من التحكم فيه. موصل Claude يقرؤه نيابةً عنك. يسري عند بدء تشغيل CADaddy في المرة القادمة.
+	Add: Pick points	إضافة: انتقاء نقاط
+	Add: Select objects	إضافة: تحديد كائنات
+	Associative	ترابطي
+	Block to create or edit	الكتلة المراد إنشاؤها أو تحريرها
+	Bottom left	أسفل اليسار
+	Boundaries	الحدود
+	Click to set new origin	انقر لتعيين نقطة أصل جديدة
+	Create separate hatches	إنشاء تهشيرات منفصلة
+	Default to boundary extents	افتراضياً إلى امتداد الحدود
+	Edit Block Definition	تحرير تعريف الكتلة
+	Hatch and Gradient	التهشير والتدرج
+	Hatch origin	أصل التهشير
+	Island detection	اكتشاف الجزر
+	Normal	عادي
+	Open in Block Editor	فتح في محرر الكتل
+	Outer	خارجي
+	Specified origin	أصل محدد
+	Use current origin	استخدام الأصل الحالي
+	Building models (IFC)	نماذج المباني (IFC)
+	Building model (IFC4)	نموذج مبنى (IFC4)
+	3D printing (3MF)	الطباعة ثلاثية الأبعاد (3MF)
+	Include the drawing (the active drawing as a DXF file)	تضمين الرسم (الرسم النشط كملف DXF)
+	Your account, home folder and computer name are always left out.	يُستبعد دائمًا حسابك ومجلدك الرئيسي واسم حاسوبك.
+	Files in the report	الملفات في التقرير
+	Send to Redline	إرسال إلى Redline
+	Import Redline Markups	استيراد ملاحظات Redline
+	Import Redline Markups...	استيراد ملاحظات Redline...
+	Open a Program?	فتح برنامج؟
+	This link opens a program or script, not a document:	يفتح هذا الارتباط برنامجًا أو نصًا برمجيًا، وليس مستندًا:
+	Open it only if you trust the drawing and know what it runs.	لا تفتحه إلا إذا كنت تثق بالرسم وتعرف ما الذي يشغّله.
+	Open Anyway	فتح على أي حال
+	Report a security problem	الإبلاغ عن مشكلة أمنية
+	Load This File?	تحميل هذا الملف؟
+	This file isn't in a trusted folder:	هذا الملف ليس في مجلد موثوق:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	يمكن لروتينات LISP والنصوص البرمجية تغيير الرسومات والملفات. لا تحمّله إلا إذا كنت تثق بمصدره.
+	Don't Load	عدم التحميل
+	Load Once	تحميل مرة واحدة
+	Always Load from This Folder	التحميل دائمًا من هذا المجلد
+	Adds {folder} to TRUSTEDPATHS	يضيف {folder} إلى TRUSTEDPATHS
+	Allow Loading a File	السماح بتحميل ملف
+	Plot Stamp	ختم الطباعة
+	Plot stamp fields	حقول ختم الطباعة
+	Drawing name	اسم الرسم
+	Layout name	اسم التخطيط
+	Date and Time	التاريخ والوقت
+	Device name	اسم الجهاز
+	Paper size	حجم الورق
+	Plot scale	مقياس الطباعة
+	No login or computer name is ever stamped.	لا يُختم أبدًا اسم تسجيل الدخول أو اسم الحاسوب.
+	User defined fields	حقول يحددها المستخدم
+	One per line, up to {n}.	واحد في كل سطر، حتى {n}.
+	Stamp model space plots	ختم مطبوعات فضاء النموذج
+	Stamp this layout's plots	ختم مطبوعات هذا التخطيط
+	Location and offset	الموضع والإزاحة
+	Location	الموضع
+	Bottom right	أسفل اليمين
+	Top left	أعلى اليسار
+	Top right	أعلى اليمين
+	Upside-down	مقلوب
+	X offset	إزاحة X
+	Y offset	إزاحة Y
+	Offset relative to	الإزاحة بالنسبة إلى
+	Printable area	المنطقة القابلة للطباعة
+	Paper border	حافة الورق
+	Text properties	خصائص النص
+	Font	الخط
+	Single line plot stamp	ختم طباعة في سطر واحد
+	Units	الوحدات
+	Inches	بوصات
+	Millimeters	مليمترات
+	Log file location	موقع ملف السجل
+	Create a log file	إنشاء ملف سجل
+	The log is kept for this session, never saved with the drawing.	يُحفظ السجل لهذه الجلسة فقط ولا يُحفظ أبدًا مع الرسم.
+	Action Macro Manager...	مدير وحدات الماكرو للإجراءات...
+	Action Macros	وحدات ماكرو الإجراءات
+	Action Recorder	مسجّل الإجراءات
+	Insert Base Point	إدراج نقطة أساس
+	Insert Message	إدراج رسالة
+	Play Action Macro	تشغيل ماكرو إجراء
+	Play...	تشغيل...
+	Record	تسجيل
+	Request User Input	طلب إدخال من المستخدم
+	Stop	إيقاف
+	Action Macro Manager	مدير وحدات الماكرو للإجراءات
+	Recording…	جارٍ التسجيل…
+	No action macros yet: Record, do the work, then Stop.	لا توجد وحدات ماكرو بعد: سجّل، أنجز العمل، ثم أوقف.
+	Play	تشغيل
+	Message: {text}	رسالة: {text}
+	Base point (asked for)	نقطة الأساس (تُطلب)
+	(Enter)	(إدخال)
+	Ask for this input when the macro plays	طلب هذا الإدخال عند تشغيل الماكرو
+	Customize Interface	تخصيص الواجهة
+	Customize User Interface...	تخصيص واجهة المستخدم...
+	Interface...	الواجهة...
+	Customize User Interface	تخصيص واجهة المستخدم
+	Quick Access Toolbar	شريط أدوات الوصول السريع
+	Add a command	إضافة أمر
+	Reset Quick Access Toolbar	إعادة تعيين شريط الوصول السريع
+	Built-in panels shown (untick to hide):	اللوحات المضمنة المعروضة (ألغِ التحديد للإخفاء):
+	Your panels on built-in tabs:	لوحاتك على علامات التبويب المضمنة:
+	Tab	علامة التبويب
+	New panel name	اسم اللوحة الجديدة
+	Add Panel	إضافة لوحة
+	Your tabs:	علامات تبويبك:
+	Remove Tab	إزالة علامة التبويب
+	New tab name	اسم علامة التبويب الجديدة
+	Add Tab	إضافة علامة تبويب
+	Edit Keyboard Shortcuts...	تحرير اختصارات لوحة المفاتيح...
+	Remove Panel	إزالة اللوحة
+	Command or LISP macro, e.g. (command "line")	أمر أو ماكرو LISP، مثل (command "line")
+	Hatch Editor	محرر التهشير
+	Table Cell	خلية جدول
+	Rows & Columns	الصفوف والأعمدة
+	Merge	دمج
+	Open/Save	فتح/حفظ
+	Attributes	السمات
+	Spell Check	التدقيق الإملائي
+	Formula	صيغة
+	Edit Source	تحرير المصدر
+	Close Array	إغلاق المصفوفة
+	Manage Attributes	إدارة السمات
+	Dialog State	حالة مربع الحوار
+	Dialog Action	إجراء مربع الحوار

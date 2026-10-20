@@ -227,7 +227,7 @@ fn now() -> Option<(f64, f64)> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis();
+        let ms = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).ok()?.as_millis();
         let ms = i64::try_from(ms).ok()?;
         let (days, rest) = (ms.div_euclid(86_400_000), ms.rem_euclid(86_400_000));
         // Civil date from days since 1970-01-01 (proleptic Gregorian, UTC).

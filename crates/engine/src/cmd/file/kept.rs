@@ -115,7 +115,7 @@ pub fn not_kept(
 ) -> Vec<&'static str> {
     let Ok(bytes) = write(d, name) else { return Vec::new() };
     let Ok(back) = read(&bytes, name) else { return Vec::new() };
-    lost_parts(d, &back)
+    lost_parts(d, &opened(back))
 }
 
 /// The parts of `d` that `back` (`d` written and read back) no longer holds.
@@ -267,7 +267,7 @@ pub fn losses(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<Vec<Loss>, String> {
     let bytes = write(d, name)?;
-    let back = read(&bytes, name)?;
+    let back = opened(read(&bytes, name)?);
     Ok(losses_of(d, &back))
 }
 
@@ -278,13 +278,20 @@ pub fn check_written(
     bytes: &[u8],
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
-    let back = read(bytes, name)?;
+    let back = opened(read(bytes, name)?);
     Ok((lost_parts(d, &back), losses_of(d, &back)))
+}
+
+/// A drawing read back as opening it gives it: table formulas whose values the file didn't keep
+/// worked out again ([`crate::cmd::table::cells::fill_missing_values`]).
+fn opened(mut back: Drawing) -> Drawing {
+    crate::cmd::table::cells::fill_missing_values(&mut back);
+    back
 }
 
 /// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
 pub fn losses_between(d: &Drawing, back: &Drawing) -> Vec<Loss> {
-    losses_of(d, back)
+    losses_of(d, &opened(back.clone()))
 }
 
 fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
@@ -343,9 +350,72 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
             l.count = count;
         }
     }
+    compare_foreign(&d.foreign, &back.foreign, &mut out);
     let mut list: Vec<Loss> = out.0.into_values().collect();
     list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.feature.cmp(&b.feature)));
     list
+}
+
+/// Whether group `code` holds a handle (the object's own, or a reference to another), which a
+/// writer renumbers.
+fn handle_group(code: i32) -> bool {
+    matches!(code, 5 | 105 | 320..=369 | 390..=399 | 480 | 481 | 1005) || code == 102
+}
+
+/// Other programs' data CADaddy keeps without modelling it (`Drawing::foreign`): their objects
+/// (matched by type and content, since a writer renumbers their handles: every group of the
+/// original but its handles must still be there), their CLASS records, the named object
+/// dictionary's entries, and the reactors and extension dictionaries of objects.
+fn compare_foreign(a: &cadaddy_doc::foreign::Foreign, b: &cadaddy_doc::foreign::Foreign, out: &mut Losses) {
+    type Content = Vec<(i32, String)>;
+    let content = |o: &cadaddy_doc::foreign::ForeignObject| -> Content {
+        o.tags.iter().filter(|t| !handle_group(t.code)).map(|t| (t.code, t.value.trim().to_string())).collect()
+    };
+    // Every group of `x`, as many times, is in `y`.
+    let holds = |x: &Content, y: &Content| {
+        let mut rest = y.clone();
+        x.iter().all(|g| match rest.iter().position(|h| h == g) {
+            Some(i) => {
+                rest.swap_remove(i);
+                true
+            }
+            None => false,
+        })
+    };
+    let mut unused: Vec<(String, Content)> = b.objects.iter().map(|o| (o.kind.to_ascii_uppercase(), content(o))).collect();
+    let step = a.objects.len().div_ceil(DETAIL_SAMPLE).max(1);
+    for o in a.objects.iter().step_by(step) {
+        let (kind, c) = (o.kind.to_ascii_uppercase(), content(o));
+        let feature = format!("{} objects of other programs", o.kind.to_ascii_lowercase());
+        if let Some(i) = unused.iter().position(|(k, d)| *k == kind && holds(&c, d)) {
+            unused.swap_remove(i);
+        } else if let Some(i) = unused.iter().position(|(k, _)| *k == kind) {
+            // There, but not as it was.
+            unused.swap_remove(i);
+            out.add(feature, "changed", Some(o.handle.hex()), None);
+        } else {
+            out.add(feature, "dropped", Some(o.handle.hex()), None);
+        }
+    }
+    let class_name = |c: &Vec<cadaddy_doc::RawTag>| c.iter().find(|t| t.code == 1).map(|t| t.value.trim().to_ascii_uppercase());
+    let classes: std::collections::HashSet<String> = b.classes.iter().filter_map(class_name).collect();
+    for name in a.classes.iter().filter_map(class_name).filter(|n| !classes.contains(n)) {
+        out.add("classes of other programs' objects".into(), "dropped", None, Some(name));
+    }
+    let keys: std::collections::HashSet<String> = b.dictionary.iter().map(|(k, _)| k.to_ascii_uppercase()).collect();
+    for (key, _) in a.dictionary.iter().filter(|(k, _)| !keys.contains(&k.to_ascii_uppercase())) {
+        out.add("named dictionary entries".into(), "dropped", None, Some(key.clone()));
+    }
+    for (h, x) in &a.entities {
+        let y = b.entities.get(h);
+        if x.xdict.is_some() && y.is_none_or(|y| y.xdict.is_none()) {
+            out.add("extension dictionaries".into(), "dropped", Some(h.hex()), None);
+        }
+        let kept_reactors = y.map_or(0, |y| y.reactors.len());
+        for _ in kept_reactors..x.reactors.len() {
+            out.add("reactors".into(), "dropped", Some(h.hex()), None);
+        }
+    }
 }
 
 /// The losses in a line for the command line: "12 mesh objects dropped, 3 line thickness changed".

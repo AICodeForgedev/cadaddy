@@ -6,11 +6,20 @@
 mod assets;
 mod casefs;
 mod ico;
+mod installtest;
 mod layers;
+mod mcptest;
 mod parity;
+mod perf;
+mod release;
+mod secrets;
+mod signing;
 mod smoke;
+mod soak;
 mod stats;
+mod supplychain;
 mod version;
+mod webtest;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -22,9 +31,14 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, perf, web, soak (2 min
+                  headless), supplychain, advisories, corpus (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
+  corpus synthetic [--sizes 10000,100000] [--seed N] [--out DIR] [--keep]
+                  made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
+                  and .cdy: exact differences and save/open/regen times against budgets (warnings);
+                  report in target/corpus/report.md
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
@@ -35,9 +49,47 @@ commands:
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
+  mcptest [--port 47820] [--cli PATH] [--mcpb PATH]
+                  the MCP suite against the running app (start it with --control 47820): every
+                  tool normal and bad, the app's tools, the agent guard, and the .mcpb's server
+  perf [--full] [--update-budget]
+                  performance budgets (perf/budget.json): open/save DWG/DXF/.cdy, regen, select and
+                  move all, zoom extents, 3D build, plot PDF on 1k/10k objects (--full: 100k, 500k
+                  too); warns over budget, fails over 2x; trend in target/perf/history.jsonl
+  webtest         the web build in a headless browser (open DXF/DWG, draw, undo, save, recovery,
+                  Walk, autosave); skipped without a Chromium-family browser or a matching wasm-bindgen
+  installtest --new DIR [--old DIR]
+                  install, upgrade and uninstall checks of release files: MSI tables (msitools in
+                  Docker), the DMG (Mac), the .deb and AppImage (Docker); --old for the upgrade
+  soak [--minutes N] [--mode headless|window|both] [--app PATH] [--cli PATH] [--out DIR] [--profile release|dev]
+                  long-session soak: a mixed workload for N minutes (default 2, headless); memory,
+                  handles, GPU buffers and frame times sampled; fails on a leak or a stall;
+                  report in target/soak/report.md
+  supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
+                  (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
+  advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
+  sbom [--out FILE]
+                  CycloneDX 1.5 SBOM of the shipped crates (default target/sbom/cadaddy-<version>.cdx.json),
+                  to attach to the release
+  secrets         scan the tree for credentials (keys, tokens, private keys); exceptions in .secrets-allow
+  signing [--require]
+                  what a release built now would be signed with on each platform (Windows Authenticode,
+                  macOS Developer ID + notarization, Linux GPG, the updater's SHA256SUMS.sig);
+                  --require fails if any would ship unsigned (docs/code-signing.md)
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
+  fuzz [TARGET|all] [seconds]
+                  mutation-fuzz the readers (default all, 60 s each): dxf dwg pdf svg image cdy shx
+                  las pts xyz cdywalk markups stl obj gltf xlsx zip lisp; crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
+  release-key --out FILE
+                  make a release signing key: the secret to FILE (keep it off the repository), the
+                  public key line for apps/cadaddy/src/release_keys.txt printed
+  sign-release DIR [--version X.Y.Z]
+                  write SHA256SUMS and SHA256SUMS.sig for the installers in DIR, signed with the key
+                  file named by CADADDY_RELEASE_KEY (the updater refuses unsigned releases)
+  verify-release DIR [--version X.Y.Z]
+                  check DIR's signature and hashes as the updater will
 ";
 
 fn main() -> ExitCode {
@@ -48,6 +100,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
         Some("ci") => cmd_ci(),
+        Some("corpus") if rest.first() == Some(&"synthetic") => cmd_corpus_synthetic(rest.get(1..).unwrap_or_default()),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
@@ -56,6 +109,19 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("mcptest") => mcptest::run(&root(), &rest),
+        Some("perf") => perf::run(&root(), &rest),
+        Some("webtest") => webtest::run(&root(), &rest),
+        Some("installtest") => installtest::run(&root(), &rest),
+        Some("release-key") => release::key_cmd(&rest),
+        Some("sign-release") => release::sign_cmd(&root(), &rest),
+        Some("verify-release") => release::verify_cmd(&root(), &rest),
+        Some("soak") => soak::run(&root(), &rest),
+        Some("supplychain") => supplychain::run(&root()),
+        Some("advisories") => supplychain::advisories(&root()),
+        Some("sbom") => supplychain::sbom(&root(), &rest),
+        Some("secrets") => secrets::run(&root()),
+        Some("signing") => signing::run(&rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -99,13 +165,24 @@ pub fn metadata() -> Result<serde_json::Value, String> {
 /// `fuzz [target|all] [seconds]`: the stable mutation fuzzer over the file readers
 /// (crates/io/examples/fuzz.rs); findings land in target/fuzz-findings/<target>/. The
 /// coverage-guided cargo-fuzz targets are in fuzz/ (nightly: `cargo +nightly fuzz run dxf`).
+/// The engine's own readers; every other target is a file format `cadaddy-io` reads.
+const ENGINE_FUZZ: [&str; 3] = ["xlsx", "zip", "lisp"];
+
 fn cmd_fuzz(rest: &[&str]) -> Result<(), String> {
     let target = rest.first().copied().unwrap_or("all");
     let secs = rest.get(1).copied().unwrap_or("60");
     let out = root().join("target").join("fuzz-findings");
-    let mut c = cargo();
-    c.args(["run", "--release", "-p", "cadaddy-io", "--example", "fuzz", "--", target, secs]).arg(&out);
-    run(c, &format!("cargo run --release -p cadaddy-io --example fuzz -- {target} {secs}"))
+    let crates: &[&str] = match target {
+        "all" => &["cadaddy-io", "cadaddy-engine"],
+        t if ENGINE_FUZZ.contains(&t) => &["cadaddy-engine"],
+        _ => &["cadaddy-io"],
+    };
+    for krate in crates {
+        let mut c = cargo();
+        c.args(["run", "--release", "-p", krate, "--example", "fuzz", "--", target, secs]).arg(&out);
+        run(c, &format!("cargo run --release -p {krate} --example fuzz -- {target} {secs}"))?;
+    }
+    Ok(())
 }
 
 fn cmd_layers() -> Result<(), String> {
@@ -204,6 +281,13 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("perf", Box::new(|| perf::run(&root(), &[]))),
+        // The web build in a headless browser (skipped where there is none).
+        ("web", Box::new(|| webtest::run(&root(), &[]))),
+        // Two minutes of the headless app under a mixed workload: a leak or a stall fails.
+        ("soak", Box::new(|| soak::run(&root(), &["--minutes", "2", "--profile", "dev"]))),
+        ("supplychain", Box::new(|| supplychain::run(&root()))),
+        ("advisories", Box::new(|| supplychain::advisories(&root()))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {
@@ -223,6 +307,27 @@ fn cmd_ci() -> Result<(), String> {
     }
     println!("\nCI summary: all {} steps passed ({})", done.len(), done.join(", "));
     Ok(())
+}
+
+/// The synthetic corpus (`crates/engine/examples/corpus.rs`), built and run in release.
+fn cmd_corpus_synthetic(args: &[&str]) -> Result<(), String> {
+    const FLAGS: &[&str] = &["--sizes", "--seed", "--out", "--keep"];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if !FLAGS.contains(a) {
+            return Err(format!("corpus synthetic: unknown option {a}\n{USAGE}"));
+        }
+        if *a != "--keep" && it.next().is_none() {
+            return Err(format!("corpus synthetic: {a} needs a value"));
+        }
+    }
+    let status = Command::new(env!("CARGO"))
+        .current_dir(root())
+        .args(["run", "--release", "-p", "cadaddy-engine", "--example", "corpus", "--"])
+        .args(args)
+        .status()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("corpus synthetic: {status}")) }
 }
 
 fn cmd_corpus(_download: bool) -> Result<(), String> {

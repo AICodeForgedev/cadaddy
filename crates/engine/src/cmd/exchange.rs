@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl"];
+pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl", "ifc", "3mf"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|glb|gltf|obj|stl (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it)")
+            .params("{path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|eps|wmf|glb|gltf|obj|stl|ifc|3mf (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it; IFC4: the WALLGEN building with storeys and room spaces; 3MF: solids and meshes)")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -269,7 +269,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     if !EXPORT_FORMATS.contains(&format.as_str()) {
         return Err(bad(
             "export",
-            "`format` must be cdy, dxf, dwg, svg, png, pdf, eps, wmf, glb, gltf, obj or stl (or give a `path` with one of those extensions)",
+            "`format` must be cdy, dxf, dwg, svg, png, pdf, eps, wmf, glb, gltf, obj, stl, ifc or 3mf (or give a `path` with one of those extensions)",
         ));
     }
     // A PNG of model space shown in 3D or in a visual style: the shaded view, fitted.
@@ -291,7 +291,14 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let shaded = if format == "png" { super::view::view3d::shaded_png(s, 2400, 1600) } else { None };
     let bytes = match shaded {
         Some(b) => b,
-        None => (hooks.write)(s.doc()?, &format!("export.{format}")).map_err(|e| bad("export", e))?,
+        None => {
+            // IFC names its project after the file.
+            let name = match path.and_then(|p| std::path::Path::new(p).file_name()) {
+                Some(n) if format == "ifc" => n.to_string_lossy().into_owned(),
+                _ => format!("export.{format}"),
+            };
+            (hooks.write)(s.doc()?, &name).map_err(|e| bad("export", e))?
+        }
     };
     match path {
         Some(path) => {

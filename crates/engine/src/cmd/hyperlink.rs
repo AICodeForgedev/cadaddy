@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(PickM::default()))),
         CommandSpec::new("hyperlink.open", "Open Hyperlink", run_open)
-            .params("{handle} → {url?: what to open (resolved against HYPERLINKBASE, else the drawing's folder), target?, label} — a named location in this drawing (a layout or view) is gone to here; a URL is the host's to open")
+            .params("{handle} → {url?: what to open (resolved against HYPERLINKBASE, else the drawing's folder), target?, label, confirm?: why a link to a program or script must be confirmed before opening} — a named location in this drawing (a layout or view) is gone to here; a URL is the host's to open (only http, https, mailto and file links; others are refused)")
             .noundo(),
     ]
 }
@@ -131,7 +131,15 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let url = hyperlink::resolve(&link, &base, folder(s).as_deref());
     let mut r = json!({ "label": link.label() });
     match url {
-        Some(u) => r["url"] = json!(u),
+        // Web, email and documents open; a program or script asks first; other schemes never.
+        Some(u) => match hyperlink::follow_check(&u) {
+            hyperlink::Follow::Open => r["url"] = json!(u),
+            hyperlink::Follow::Ask(why) => {
+                r["url"] = json!(u);
+                r["confirm"] = json!(why);
+            }
+            hyperlink::Follow::Refuse(why) => return Err(crate::EngineError::Other(format!("The link wasn't followed: {why}."))),
+        },
         None => {
             if !go_to(s, &link.target) {
                 return Err(bad("hyperlink.open", format!("this drawing has no layout or view named \"{}\"", link.target)));

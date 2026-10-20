@@ -33,7 +33,7 @@ People trust CADaddy with their drawings; a crash loses their work. **This outra
 
 ## Running and looking at the app
 - `cargo run --release -p cadaddy -- --sample --control PORT` (sample drawing + control channel). Pick a free port; other crafting apps use control ports too.
-- Drive it with JSON lines on `127.0.0.1:PORT`:
+- Drive it with JSON lines on `127.0.0.1:PORT`. First send the token the app writes each start to `control/PORT.token` in its settings folder (`CADADDY_CONFIG_DIR` when set): `{"id":0,"method":"auth","params":{"token":"…"}}` (docs/control-protocol.md, "The token"). Then:
   - `{"id":1,"method":"cmdline.input","params":{"text":"circle 0,0 5"}}` — type at the command line exactly like a user (prompts, keywords, `@dx,dy`, `@d<a`, direct distance entry).
   - `{"id":2,"method":"engine.execute","params":{"command":"line","params":{"points":[[0,0],[10,0]]}}}` — JSON form.
   - `{"id":3,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}` then read the PNG.

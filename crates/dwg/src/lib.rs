@@ -83,8 +83,9 @@ mod native {
             let why = outcome.stats.diagnostics.first().map(|d| d.message.trim_start_matches("Failsafe: ").to_string());
             return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
         }
-        let notes = read_notes(&outcome.stats);
+        let mut notes = read_notes(&outcome.stats);
         let mut doc = outcome.document;
+        notes.extend(unkept_note(&doc));
         names_by_current(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
@@ -264,6 +265,78 @@ mod native {
                 }
             }
         }
+    }
+
+    /// Other programs' custom entities and objects read from a DWG that a DXF can't hold (they
+    /// have only their own DWG encoding): left out of the drawing, so the note says so, by type.
+    pub(crate) fn unkept_note(doc: &acadrust::CadDocument) -> Option<String> {
+        let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for e in doc.entities() {
+            if let acadrust::entities::EntityType::Unknown(u) = e
+                && u.raw_dxf_codes.is_none()
+            {
+                *by_type.entry(u.dxf_name.clone()).or_default() += 1;
+            }
+        }
+        for o in doc.objects.values() {
+            if let acadrust::objects::ObjectType::Unknown { type_name, raw_dxf_codes: None, .. } = o {
+                *by_type.entry(type_name.clone()).or_default() += 1;
+            }
+        }
+        let total: usize = by_type.values().sum();
+        if total == 0 {
+            return None;
+        }
+        let mut types: Vec<(String, usize)> = by_type.into_iter().collect();
+        types.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut list: Vec<String> = types.iter().take(NOTE_TYPES).map(|(t, n)| format!("{t} × {n}")).collect();
+        if types.len() > NOTE_TYPES {
+            list.push(format!("{} more types", types.len() - NOTE_TYPES));
+        }
+        let (were, them) = if total == 1 { ("was", "it") } else { ("were", "them") };
+        Some(format!(
+            "DWG: {total} objects of other programs ({}) exist only in that program's DWG encoding and {were} left out; saving over the original file would lose {them}",
+            list.join(", ")
+        ))
+    }
+
+    /// The handles of a DXF's custom records (other programs' entities and objects, with their
+    /// DXF groups) that the DWG writer can't write: CADaddy keeps them another way (cadaddy-io's
+    /// `dwg_keep`). Empty when there are none or the DXF can't be read.
+    pub fn custom_records(dxf: &[u8]) -> std::collections::HashSet<u64> {
+        let data = dxf.to_vec();
+        match std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read())) {
+            Ok(Ok(mut doc)) => {
+                if doc.version < MIN_DWG_VERSION {
+                    doc.version = MIN_DWG_VERSION;
+                }
+                keepable(&doc)
+            }
+            _ => std::collections::HashSet::new(),
+        }
+    }
+
+    /// The custom records of `doc` (read from a DXF) that acadrust can't write as its DWG version
+    /// but have their DXF groups.
+    fn keepable(doc: &acadrust::CadDocument) -> std::collections::HashSet<u64> {
+        let version = doc.version;
+        let mut out = std::collections::HashSet::new();
+        for e in doc.entities() {
+            if let acadrust::entities::EntityType::Unknown(u) = e
+                && u.raw_dxf_codes.is_some()
+                && (u.raw_dwg_data.is_none() || u.dwg_source_version.is_some_and(|v| v != version))
+            {
+                out.insert(u.common.handle.value());
+            }
+        }
+        for (h, o) in &doc.objects {
+            if let acadrust::objects::ObjectType::Unknown { raw_dxf_codes: Some(_), raw_dwg_data, raw_dwg_version, .. } = o
+                && (raw_dwg_data.is_none() || raw_dwg_version.is_some_and(|v| v != version))
+            {
+                out.insert(h.value());
+            }
+        }
+        out
     }
 
     /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
@@ -604,10 +677,13 @@ mod native {
     /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
     /// from the (ASCII) DXF.
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, linetypes: Option<&[String]>) -> Result<Vec<u8>, String> {
-        let data = dxf.to_vec();
-        let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
-            .map_err(|_| "the DXF→DWG conversion failed".to_string())?
-            .map_err(|e| format!("DXF: {e}"))?;
+        let read = |dxf: &[u8]| {
+            let data = dxf.to_vec();
+            std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
+                .map_err(|_| "the DXF→DWG conversion failed".to_string())?
+                .map_err(|e| format!("DXF: {e}"))
+        };
+        let mut doc = read(dxf)?;
         match version {
             Some(v) => doc.version = v,
             // Without a version asked for, write at least AutoCAD 2004 (AC1018) DWG: R2000 DWG
@@ -632,13 +708,18 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
+pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
 
 /// The error for a DWG version CADaddy can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn unsupported(version: &str) -> String {
     let list: Vec<&str> = VERSIONS.iter().map(|(_, year)| *year).collect();
     format!("DWG version `{version}` can't be written (CADaddy writes {})", list.join(", "))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn custom_records(_dxf: &[u8]) -> std::collections::HashSet<u64> {
+    std::collections::HashSet::new()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -669,6 +750,30 @@ pub fn dxf_to_dwg_named(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn other_programs_dwg_only_objects_are_noted() {
+        let mut doc = acadrust::CadDocument::new();
+        assert_eq!(native::unkept_note(&doc), None);
+        for i in 0..2u64 {
+            let h = acadrust::Handle::from(0x900 + i);
+            doc.objects.insert(
+                h,
+                acadrust::objects::ObjectType::Unknown {
+                    type_name: "ACME_WIDGET".into(),
+                    handle: h,
+                    owner: acadrust::Handle::from(0xCu64),
+                    raw_dxf_codes: None,
+                    raw_dwg_data: Some(vec![1, 2, 3]),
+                    raw_dwg_handle_bits: 0,
+                    raw_dwg_version: None,
+                },
+            );
+        }
+        let note = native::unkept_note(&doc).unwrap();
+        assert!(note.starts_with("DWG: 2 objects of other programs (ACME_WIDGET × 2)") && note.contains("would lose them"), "{note}");
+    }
 
     #[test]
     fn detects_magic() {

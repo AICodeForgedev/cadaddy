@@ -245,14 +245,20 @@ pub fn offset_spline(c: &CurveRef, t0: f64, t1: f64, dist: f64, closed: bool, to
             refine_closest(&CurveRef::Spline(&sp), p, Some(lo + (hi - lo) * i as f64 / n as f64)).1
         };
         let us: Vec<f64> = pts.iter().enumerate().map(|(i, p)| fit_param(i, *p)).collect();
+        // At the quarter points of each span, how far is the spline from the true offset (its
+        // distance from `c` less |dist|)? Fitting through exact offset points and refining until
+        // the deviation is within tolerance is the offset approximation of W. Tiller and E. G.
+        // Hanson, "Offsets of two-dimensional profiles", IEEE CG&A 4(9) (1984), and of L. Piegl and
+        // W. Tiller, "Computing offsets of NURBS curves and surfaces", CAD 31(2) (1999).
         let mut worst: f64 = 0.0;
         for i in 0..n {
-            let (Some(&ua), Some(&tm)) = (us.get(i), ts.get(i).zip(ts.get(i + 1)).map(|(a, b)| (a + b) / 2.0).as_ref()) else { continue };
+            let (Some(&ua), Some(&ta), Some(&tb)) = (us.get(i), ts.get(i), ts.get(i + 1)) else { continue };
             let ub = us.get(i + 1).copied().unwrap_or_else(|| sp.domain().1);
-            let q = sp.eval((ua + ub) / 2.0);
-            // The distance from q to the offset curve: its distance from `c` less |dist|.
-            let (on_c, _) = refine_closest(c, q, Some(tm));
-            worst = worst.max((on_c.dist(q) - dist.abs()).abs());
+            for f in [0.25, 0.5, 0.75] {
+                let q = sp.eval(ua + (ub - ua) * f);
+                let (on_c, _) = refine_closest(c, q, Some(ta + (tb - ta) * f));
+                worst = worst.max((on_c.dist(q) - dist.abs()).abs());
+            }
         }
         if worst <= tol || n >= 1024 {
             return Some(sp);
@@ -390,7 +396,7 @@ mod tests {
         for i in 0..400 {
             let q = sp.eval(lo + (hi - lo) * i as f64 / 400.0);
             let (on, _) = refine_closest(&CurveRef::Ellipse(e), q, None);
-            assert!((on.dist(q) - 1.5).abs() < 2e-5, "{} at {i}", on.dist(q));
+            assert!((on.dist(q) - 1.5).abs() < 2.0 * 1e-6 * e.major.len(), "{} at {i}", on.dist(q));
             assert!(off_ellipse(&e, q) > 1.0);
         }
         assert!(sp.closed);
@@ -405,7 +411,25 @@ mod tests {
         for i in 0..=300 {
             let q = sp.eval(a + (b - a) * i as f64 / 300.0);
             let (on, _) = refine_closest(&CurveRef::Spline(&s), q, None);
-            assert!((on.dist(q) - 0.4).abs() < 1e-4, "{} at {i}", on.dist(q));
+            assert!((on.dist(q) - 0.4).abs() < 2e-6, "{} at {i}", on.dist(q));
+        }
+    }
+
+    #[test]
+    fn huge_and_tiny_ellipses_offset_alike() {
+        // The same ellipse and distance in a drawing a million times smaller, larger, and far from
+        // the origin: the same relative accuracy.
+        for (scale, shift) in [(1e-6, 0.0), (1.0, 0.0), (1e6, 0.0), (1.0, 1e7)] {
+            let e = Ellipse::full(Vec2::new(3.0, -2.0) * scale + Vec2::new(shift, shift), Vec2::new(8.0, 3.0) * scale, 0.45);
+            let d = 1.5 * scale;
+            let tol = 1e-6 * e.major.len();
+            let sp = offset_spline(&CurveRef::Ellipse(e), 0.0, TAU, d, true, tol).unwrap();
+            let (lo, hi) = sp.domain();
+            for i in 0..400 {
+                let q = sp.eval(lo + (hi - lo) * i as f64 / 400.0);
+                let (on, _) = refine_closest(&CurveRef::Ellipse(e), q, None);
+                assert!((on.dist(q) - d).abs() < 2.0 * tol + 1e-15 * shift, "scale {scale}: {} at {i}", (on.dist(q) - d).abs() / scale);
+            }
         }
     }
 }

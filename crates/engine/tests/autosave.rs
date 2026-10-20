@@ -11,7 +11,7 @@ use serde_json::json;
 fn writes(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|j| match j {
-            Job::Write { path, .. } => Some(path.clone()),
+            Job::Write { path, .. } | Job::Append { path, .. } => Some(path.clone()),
             Job::Delete { .. } => None,
         })
         .collect()
@@ -21,7 +21,7 @@ fn deletes(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|j| match j {
             Job::Delete { path } => Some(path.clone()),
-            Job::Write { .. } => None,
+            Job::Write { .. } | Job::Append { .. } => None,
         })
         .collect()
 }

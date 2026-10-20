@@ -10,7 +10,7 @@ fn h(r: &Value) -> String {
 
 fn dim(s: &Session, x: &str) -> Dimension {
     match &s.doc().unwrap().entity(Handle::parse_hex(x).unwrap()).unwrap().kind {
-        EntityKind::Dimension(d) => d.clone(),
+        EntityKind::Dimension(d) => (**d).clone(),
         k => panic!("not a dimension: {k:?}"),
     }
 }
@@ -20,7 +20,7 @@ fn last_dim(s: &Session) -> (String, Dimension) {
     (
         e.handle.hex(),
         match &e.kind {
-            EntityKind::Dimension(d) => d.clone(),
+            EntityKind::Dimension(d) => (**d).clone(),
             _ => unreachable!(),
         },
     )

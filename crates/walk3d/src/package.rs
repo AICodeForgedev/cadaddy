@@ -97,6 +97,10 @@ impl Package {
                 return Err("a file in the walkthrough package has a bad name".into());
             }
             let name = String::from_utf8(take(&mut rest, nl)?).map_err(|_| "a file in the walkthrough package has a bad name")?;
+            // Names stay inside the package: no absolute paths, drives or `..` (zip-slip).
+            if !cadaddy_geom::filename::is_safe_relative(&name) {
+                return Err("a file in the walkthrough package has a name that leaves the package".into());
+            }
             let dl = len(&mut rest)?;
             let data = take(&mut rest, dl)?;
             files.push((name, data));
@@ -141,5 +145,15 @@ mod tests {
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(Package::decode(&trailing).is_err());
+    }
+
+    #[test]
+    fn names_that_leave_the_package_are_refused() {
+        for bad in ["../evil.sh", "/etc/x", "C:\\Windows\\x.dll", "a/../../x"] {
+            let mut p = Package::default();
+            p.put(bad, b"x".to_vec());
+            let e = Package::decode(&p.encode().unwrap()).unwrap_err();
+            assert!(e.contains("leaves the package"), "{bad}: {e}");
+        }
     }
 }

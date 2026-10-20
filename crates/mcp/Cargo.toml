@@ -14,3 +14,7 @@ cadaddy-render = { workspace = true }
 cadaddy-io = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+# The real file formats for the MCP suite (tests/suite.rs), installed as the app does.
+cadaddy-io = { workspace = true }

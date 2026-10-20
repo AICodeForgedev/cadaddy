@@ -98,6 +98,8 @@ fn opening_scripts_and_lisp_find_files_ignoring_case() {
     std::fs::write(dir.join("plans/tools.lsp"), "(defun pathcase-ok () 42)").unwrap();
     let mixed = |rel: &str| format!("{}{}{}", dir.to_string_lossy(), std::path::MAIN_SEPARATOR, rel);
     let mut s = Session::new();
+    // Scripts and LISP load from trusted folders (SECURELOAD): this one and its subfolders.
+    s.settings.trustedpaths = format!("{}{}...", dir.to_string_lossy(), std::path::MAIN_SEPARATOR);
     s.execute("open", &json!({ "path": mixed(r"PLANS\Level1.DXF") })).unwrap();
     assert_eq!(s.doc().unwrap().model.len(), 1);
     s.execute("script", &json!({ "path": mixed("Plans/DRAW.SCR") })).unwrap();

@@ -55,6 +55,7 @@ fn hidden_command_line_keyboard() {
         call(&mut app, &ctx, "ui.key", json!({"key": "enter"}));
         pump(&mut app, &ctx);
         assert_eq!(call(&mut app, &ctx, "cmdline.state", json!({}))["running"], "line", "typed LINE, visible={visible}");
-        assert_eq!(app.cmd.history, ["LINE"], "visible={visible}");
+        // The agent's `cmdline.input` LINE and the typed one: both are command lines in the history.
+        assert_eq!(app.cmd.history, ["LINE", "LINE"], "visible={visible}");
     }
 }

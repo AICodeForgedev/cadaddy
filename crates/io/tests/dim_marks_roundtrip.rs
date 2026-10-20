@@ -7,7 +7,7 @@ use cadaddy_geom::Vec3;
 use cadaddy_io::{read_dxf, write_dxf};
 
 fn dim(kind: DimKind, marks: DimMarks) -> EntityKind {
-    EntityKind::Dimension(Dimension {
+    EntityKind::Dimension(Box::new(Dimension {
         kind,
         defpt: Vec3::new(0.0, 3.0, 0.0),
         text_mid: Vec3::ZERO,
@@ -24,7 +24,7 @@ fn dim(kind: DimKind, marks: DimMarks) -> EntityKind {
         overrides: Default::default(),
         assoc: Vec::new(),
         marks,
-    })
+    }))
 }
 
 fn marks_of(d: &Drawing) -> Vec<DimMarks> {

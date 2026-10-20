@@ -66,6 +66,10 @@ fn items(p: &PickSet) -> Vec<Handle> {
 /// selection set picks objects, and `pause` waits for the user. A command not finished by the
 /// arguments stays active for the next `command` call. No arguments: cancel the active command.
 pub fn command(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
+    // A reactor's callback runs between commands: one it started would set off reactors itself.
+    if ctx.s.lisp.in_reactor {
+        return Err(LispError::new("command: not allowed in a reactor callback"));
+    }
     if a.is_empty() {
         if ctx.s.running.is_some() {
             ctx.s.cancel();
@@ -1325,15 +1329,16 @@ pub fn trans(_ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 }
 
 /// What `(load name)` reads: a file loaded through APPLOAD (the web), or one on disk, with
-/// `.lsp` added when the name has no extension.
-pub fn load_source(s: &Session, name: &str) -> Option<String> {
+/// `.lsp` added when the name has no extension; with the file it came from (`None`: a file
+/// APPLOAD already loaded).
+pub fn load_file(s: &Session, name: &str) -> Option<(Option<std::path::PathBuf>, String)> {
     if let Some(t) = s.lisp_file(name) {
-        return Some(t);
+        return Some((None, t));
     }
     let candidates =
         if std::path::Path::new(name).extension().is_none() { vec![format!("{name}.lsp"), name.to_string()] } else { vec![name.to_string()] };
     // As given (a path, or relative to the working folder), then in the support folder.
     let support =
         s.lisp_support_dir().map(|d| candidates.iter().map(|c| d.join(c).to_string_lossy().into_owned()).collect::<Vec<_>>()).unwrap_or_default();
-    candidates.iter().chain(&support).find_map(|c| super::builtins::read_text_file(c))
+    candidates.iter().chain(&support).find_map(|c| super::builtins::read_text_file(c).map(|t| (Some(std::path::PathBuf::from(c)), t)))
 }

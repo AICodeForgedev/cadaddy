@@ -1,7 +1,9 @@
 //! The desktop updater ([`cadaddy_ui_egui::update::Updater`]): asks GitHub's API for the latest
 //! release, downloads this platform's installer with the system `curl` (Windows 10+, macOS and
-//! Linux all have it; no TLS stack in CADaddy), checks it against the SHA-256 GitHub lists for it,
-//! and installs it after CADaddy exits:
+//! Linux all have it; no TLS stack in CADaddy), checks it against the SHA-256 in the release's
+//! signed SHA256SUMS (relsig.rs: an ed25519 signature with a key compiled into CADaddy, over the
+//! release's version and sums; GitHub's own digest must agree too), refuses anything not newer
+//! than this version, and installs it after CADaddy exits:
 //! - Windows: the per-user MSI (`msiexec /passive`), once this process has ended;
 //! - macOS: the app from the DMG replaces this `.app` (kept as `.old` until the copy is in place);
 //! - Linux: a new AppImage replaces this one (`$APPIMAGE`). A .deb or a source build can't update
@@ -76,12 +78,30 @@ fn curl() -> Command {
     c
 }
 
-/// The latest release: its version, page, and this platform's installer (url, sha256).
-fn latest() -> Result<(Release, Option<(String, String)>), String> {
+/// Where a release's installer for this platform and its signed sums are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Installer {
+    url: String,
+    /// GitHub's SHA-256 for it (checked against the signed one when present).
+    digest: Option<String>,
+    sums: Option<String>,
+    sig: Option<String>,
+}
+
+/// Where release downloads come from.
+const DOWNLOADS: &str = "https://github.com/AICodeForgedev/cadaddy/releases/download/";
+
+/// The latest release: its version, page, and this platform's installer.
+fn latest() -> Result<(Release, Option<Installer>), String> {
+    latest_from(API)
+}
+
+/// [`latest`] from the release feed at `url` (GitHub's API; a stand-in in tests).
+fn latest_from(url: &str) -> Result<(Release, Option<Installer>), String> {
     let out = curl()
         .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-A"])
         .arg(format!("CADaddy/{VERSION}"))
-        .arg(API)
+        .arg(url)
         .output()
         .map_err(|e| format!("curl isn't available ({e})"))?;
     if !out.status.success() {
@@ -94,7 +114,7 @@ fn latest() -> Result<(Release, Option<(String, String)>), String> {
     parse(&out.stdout)
 }
 
-fn parse(json: &[u8]) -> Result<(Release, Option<(String, String)>), String> {
+fn parse(json: &[u8]) -> Result<(Release, Option<Installer>), String> {
     let v: Value = serde_json::from_slice(json).map_err(|e| format!("GitHub's answer wasn't readable ({e})"))?;
     let tag = v.get("tag_name").and_then(Value::as_str).ok_or("no version in GitHub's answer")?;
     let version = tag.trim_start_matches(['v', 'V']).to_string();
@@ -103,16 +123,59 @@ fn parse(json: &[u8]) -> Result<(Release, Option<(String, String)>), String> {
         .and_then(Value::as_str)
         .filter(|u| u.starts_with("https://github.com/AICodeForgedev/cadaddy/"))
         .map_or_else(|| format!("{}/latest", cadaddy_ui_egui::update::RELEASES), str::to_string);
-    let asset = asset_name().and_then(|name| {
+    // An asset's download address, only from this project's releases.
+    let url_of = |name: &str| -> Option<String> {
         let a = v.get("assets")?.as_array()?.iter().find(|a| a.get("name").and_then(Value::as_str) == Some(name))?;
         let url = a.get("browser_download_url")?.as_str()?;
-        let sha = a.get("digest")?.as_str()?.strip_prefix("sha256:")?;
-        let ok = url.starts_with("https://github.com/AICodeForgedev/cadaddy/releases/download/")
-            && sha.len() == 64
-            && sha.bytes().all(|b| b.is_ascii_hexdigit());
-        ok.then(|| (url.to_string(), sha.to_ascii_lowercase()))
+        url.starts_with(DOWNLOADS).then(|| url.to_string())
+    };
+    let asset = asset_name().and_then(|name| {
+        let url = url_of(name)?;
+        let a = v.get("assets")?.as_array()?.iter().find(|a| a.get("name").and_then(Value::as_str) == Some(name))?;
+        let digest = a
+            .get("digest")
+            .and_then(Value::as_str)
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .filter(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_ascii_lowercase);
+        Some(Installer { url, digest, sums: url_of(crate::relsig::SUMS), sig: url_of(crate::relsig::SIG) })
     });
     Ok((Release { version, page }, asset))
+}
+
+/// A small release file (the sums or the signature) as text.
+fn fetch_text(url: &str) -> Result<String, String> {
+    let out = curl()
+        .args(["-fsSL", "--max-time", "60", "--max-filesize"])
+        .arg(crate::relsig::MAX_FILE.to_string())
+        .arg(url)
+        .output()
+        .map_err(|e| format!("curl isn't available ({e})"))?;
+    if !out.status.success() {
+        return Err(format!("Couldn't download the release's signature: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    String::from_utf8(out.stdout).map_err(|_| "The release's signature files aren't text".to_string())
+}
+
+/// The installer's SHA-256 from the release's signed sums, checked with `keys`: `Err` (nothing
+/// is downloaded) when the release isn't signed, the signature doesn't verify, the sums don't
+/// list the installer or GitHub's digest disagrees, or the release isn't newer than this one.
+fn signed_sha(version: &str, a: &Installer, name: &str, keys: &[[u8; 32]], get: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
+    const NOT: &str = "so it wasn't downloaded. Download it from the release page instead.";
+    if !newer(version, VERSION) {
+        return Err(format!("Version {version} isn't newer than this one ({VERSION}), {NOT}"));
+    }
+    let (Some(sums_url), Some(sig_url)) = (&a.sums, &a.sig) else {
+        return Err(format!("This release isn't signed, {NOT}"));
+    };
+    let sums = get(sums_url)?;
+    let sig = get(sig_url)?;
+    crate::relsig::verify(version, sums.as_bytes(), &sig, keys).map_err(|e| format!("The release failed its check ({e}), {NOT}"))?;
+    let sha = crate::relsig::sum_for(&sums, name).ok_or_else(|| format!("The signed release doesn't list {name}, {NOT}"))?;
+    if a.digest.as_ref().is_some_and(|d| *d != sha) {
+        return Err(format!("GitHub's fingerprint for {name} differs from the signed one, {NOT}"));
+    }
+    Ok(sha)
 }
 
 fn sha256_file(p: &Path) -> std::io::Result<String> {
@@ -158,8 +221,8 @@ fn fetch(url: &str, sha: &str, to: &Path) -> Result<(), String> {
 
 #[derive(Default)]
 struct Pending {
-    /// The latest release's installer (url, sha256), from the last check.
-    asset: Option<(String, String)>,
+    /// The latest release's installer, from the last check.
+    asset: Option<Installer>,
     /// The checked download, waiting for exit.
     ready: Option<PathBuf>,
     relaunch: bool,
@@ -206,9 +269,10 @@ impl Updater for DesktopUpdater {
         std::thread::spawn(move || {
             let asset = pending.lock().ok().and_then(|p| p.asset.clone());
             let event = match (asset, asset_name()) {
-                (Some((url, sha)), Some(name)) => {
+                (Some(a), Some(name)) => {
                     let to = download_dir(&target).join(format!(".{version}-{name}.download"));
-                    match fetch(&url, &sha, &to) {
+                    let checked = signed_sha(&version, &a, name, &crate::relsig::trusted_keys(), &fetch_text);
+                    match checked.and_then(|sha| fetch(&a.url, &sha, &to)) {
                         Ok(()) => {
                             if let Ok(mut p) = pending.lock() {
                                 p.ready = Some(to);
@@ -339,6 +403,8 @@ mod tests {
             "assets": [
                 {"name": "CADaddy.mcpb", "browser_download_url": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/CADaddy.mcpb", "digest": format!("sha256:{}", "1".repeat(64))},
                 {"name": name, "browser_download_url": url, "digest": digest},
+                {"name": "SHA256SUMS", "browser_download_url": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/SHA256SUMS"},
+                {"name": "SHA256SUMS.sig", "browser_download_url": "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/SHA256SUMS.sig"},
             ]
         })
         .to_string()
@@ -353,17 +419,117 @@ mod tests {
         assert_eq!(r.version, "0.9.0");
         assert_eq!(r.page, "https://github.com/AICodeForgedev/cadaddy/releases/tag/v0.9.0");
         if asset_name().is_some() {
-            assert_eq!(asset, Some((url.to_string(), sha.to_ascii_lowercase())));
+            let a = asset.unwrap();
+            assert_eq!((a.url.as_str(), a.digest), (url, Some(sha.to_ascii_lowercase())));
+            assert_eq!(a.sums.as_deref(), Some("https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/SHA256SUMS"));
+            assert!(a.sig.is_some());
         }
     }
 
     #[test]
-    fn installers_from_elsewhere_or_without_a_fingerprint_are_refused() {
+    fn installers_from_elsewhere_are_refused() {
         let good = "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/x";
         assert_eq!(parse(&release_json(&format!("sha256:{}", "a".repeat(64)), "https://example.com/x")).unwrap().1, None);
-        assert_eq!(parse(&release_json("", good)).unwrap().1, None);
-        assert_eq!(parse(&release_json("sha256:abc", good)).unwrap().1, None);
+        // No (or a bad) GitHub digest: the signed sums decide alone.
+        if asset_name().is_some() {
+            assert_eq!(parse(&release_json("", good)).unwrap().1.unwrap().digest, None);
+            assert_eq!(parse(&release_json("sha256:abc", good)).unwrap().1.unwrap().digest, None);
+        }
         assert!(parse(b"not json").is_err());
+    }
+
+    /// A stand-in for GitHub's release feed on a local port: answers every request with `body`.
+    fn feed(body: Vec<u8>, status: &'static str) -> String {
+        use std::io::{BufRead, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/repos/AICodeForgedev/cadaddy/releases/latest", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for c in l.incoming().flatten() {
+                let mut r = std::io::BufReader::new(c.try_clone().unwrap());
+                let mut line = String::new();
+                while r.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let mut w = c;
+                let _ = write!(w, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = w.write_all(&body);
+            }
+        });
+        url
+    }
+
+    /// The version check end to end against a mocked feed (through the system curl, as the app
+    /// does): a newer release is offered with this platform's installer, this version is up to
+    /// date, and a broken or failing feed is an error, never an offer.
+    #[test]
+    fn the_version_check_against_a_mocked_release_feed() {
+        if Command::new("curl").arg("--version").output().is_err() {
+            return;
+        }
+        let url = "https://github.com/AICodeForgedev/cadaddy/releases/download/v0.9.0/x";
+        let (r, asset) = latest_from(&feed(release_json(&format!("sha256:{}", "c".repeat(64)), url), "200 OK")).unwrap();
+        assert_eq!(r.version, "0.9.0");
+        assert!(cadaddy_ui_egui::update::newer(&r.version, VERSION), "0.9.0 is newer than {VERSION}");
+        assert_eq!(asset.is_some(), asset_name().is_some());
+        let same = serde_json::json!({ "tag_name": format!("v{VERSION}"), "assets": [] }).to_string().into_bytes();
+        let (r, _) = latest_from(&feed(same, "200 OK")).unwrap();
+        assert!(!cadaddy_ui_egui::update::newer(&r.version, VERSION), "this version is up to date");
+        assert!(latest_from(&feed(b"<html>rate limited</html>".to_vec(), "200 OK")).is_err());
+        assert!(latest_from(&feed(b"{}".to_vec(), "403 Forbidden")).is_err());
+    }
+
+    /// A release `version` whose sums list `name` with `sha`, signed with key `seed`.
+    fn signed_release(seed: u8, version: &str, name: &str, sha: &str) -> ([u8; 32], String, String) {
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let sums = format!("{sha}  {name}\n{}  CADaddy.mcpb\n", "1".repeat(64));
+        let sig = sk.sign(&crate::relsig::message(version, sums.as_bytes())).to_bytes();
+        (pk, sums, crate::relsig::sig_file(version, &pk, &sig))
+    }
+
+    fn installer(digest: Option<&str>) -> Installer {
+        Installer {
+            url: format!("{DOWNLOADS}v99.0.0/x"),
+            digest: digest.map(str::to_string),
+            sums: Some(format!("{DOWNLOADS}v99.0.0/SHA256SUMS")),
+            sig: Some(format!("{DOWNLOADS}v99.0.0/SHA256SUMS.sig")),
+        }
+    }
+
+    #[test]
+    fn only_a_newer_validly_signed_release_is_downloaded() {
+        let name = "CADaddy-Test.bin";
+        let sha = "ab".repeat(32);
+        let (pk, sums, sig) = signed_release(5, "99.0.0", name, &sha);
+        let served = |sums: String, sig: String| move |u: &str| Ok::<_, String>(if u.ends_with(".sig") { sig.clone() } else { sums.clone() });
+        let get = served(sums.clone(), sig.clone());
+        assert_eq!(signed_sha("99.0.0", &installer(None), name, &[pk], &get), Ok(sha.clone()));
+        assert_eq!(signed_sha("99.0.0", &installer(Some(&sha)), name, &[pk], &get), Ok(sha.clone()));
+        // GitHub's digest disagrees with the signed sums.
+        assert!(signed_sha("99.0.0", &installer(Some(&"cd".repeat(32))), name, &[pk], &get).unwrap_err().contains("differs"));
+        // Tampered sums (installer and sums swapped together).
+        let tampered = served(sums.replace(&sha, &"cd".repeat(32)), sig.clone());
+        assert!(signed_sha("99.0.0", &installer(None), name, &[pk], &tampered).unwrap_err().contains("failed its check"));
+        // Signed with another key.
+        let (other, ..) = signed_release(6, "99.0.0", name, &sha);
+        assert!(signed_sha("99.0.0", &installer(None), name, &[other], &get).unwrap_err().contains("doesn't trust"));
+        // No signature on the release.
+        let unsigned = Installer { sig: None, ..installer(None) };
+        assert!(signed_sha("99.0.0", &unsigned, name, &[pk], &get).unwrap_err().contains("isn't signed"));
+        // A downgrade (or the same version) is refused before anything is fetched.
+        let (opk, osums, osig) = signed_release(5, "0.0.1", name, &sha);
+        let never = |_: &str| -> Result<String, String> { panic!("nothing is fetched for a downgrade") };
+        assert!(signed_sha("0.0.1", &installer(None), name, &[opk], &never).unwrap_err().contains("isn't newer"));
+        assert!(signed_sha(VERSION, &installer(None), name, &[opk], &never).is_err());
+        // An old release's signed files presented as a newer release.
+        let replay = served(osums, osig);
+        assert!(signed_sha("99.0.0", &installer(None), name, &[opk], &replay).unwrap_err().contains("another version"));
+        // Sums that don't list this platform's installer.
+        assert!(signed_sha("99.0.0", &installer(None), "CADaddy-Other.bin", &[pk], &get).unwrap_err().contains("doesn't list"));
+        // A failed fetch is reported.
+        let down = |_: &str| -> Result<String, String> { Err("offline".into()) };
+        assert_eq!(signed_sha("99.0.0", &installer(None), name, &[pk], &down), Err("offline".into()));
     }
 
     #[test]

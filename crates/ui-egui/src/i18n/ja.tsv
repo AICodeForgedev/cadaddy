@@ -1843,3 +1843,250 @@
 	Use drawing background	図面の背景を使用
 	Regenerate Dimensions	寸法を再作成
 	Enter layer name for new dimensions (. for the current layer)	新しい寸法の画層名を入力 (. で現在の画層)
+	{folder} (folder)	{folder} (フォルダ)
+	Add drawings or a folder of them.	図面または図面のフォルダを追加してください。
+	Add Files...	ファイルを追加...
+	Add Folder...	フォルダを追加...
+	cancelled	キャンセルしました
+	Choose the output folder, or Next to the originals.	出力フォルダを選ぶか、「元のファイルと同じ場所」を選んでください。
+	Convert Drawings	図面を変換
+	Convert Drawings...	図面を変換...
+	Convert drawings...	図面を変換...
+	Convert to	変換先
+	Converted	変換済み
+	Converted, not all kept	変換済み (一部保持されず)
+	Converting files is not available on the web.	Web 版ではファイルを変換できません。
+	Drawings to convert	変換する図面
+	Each drawing's own	各図面のバージョン
+	Failed	失敗
+	Files already there	既にあるファイル
+	Folder:	フォルダ:
+	Include subfolders	サブフォルダを含める
+	Keep a file written over as .bak	上書きしたファイルを .bak として残す
+	Next to the originals	元のファイルと同じ場所
+	Open Log	ログを開く
+	Or type a file or folder path	またはファイルやフォルダのパスを入力
+	Overwrite	上書き
+	Save to	保存先
+	Skip	スキップ
+	Skipped	スキップ済み
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	変換する図面 (.dwg, .dxf, .cdy) がありません。
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{total} 件中 変換 {converted}、スキップ {skipped}、失敗 {failed}
+	DWG drawing (.dwg)	DWG 図面 (.dwg)
+	DXF drawing (.dxf)	DXF 図面 (.dxf)
+	Require a token for control connections (recommended)	制御接続にトークンを要求する (推奨)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	プログラムはまず、CADaddy があなただけが読めるファイルに書き込むトークンを送る必要があります。これにより他のユーザーのプログラムは CADaddy を操作できません。Claude コネクタは自動で読み取ります。次回 CADaddy の起動時に有効になります。
+	(sheet name)	(シート名)
+	(Start)	(開始)
+	3D Modeling	3D モデリング
+	A summary of the open drawings (counts only, no geometry)	開いている図面の概要 (件数のみ、図形データは含みません)
+	Add or Change	追加または変更
+	Add Selected	選択項目を追加
+	Add Sheets from Drawing...	図面からシートを追加...
+	Add...	追加...
+	Alias	エイリアス
+	Always included	常に含める
+	Angle tolerance (degrees)	角度の許容差 (度)
+	Auto-rotate (follow the current UCS)	自動回転 (現在の UCS に合わせる)
+	Bookmark	ブックマーク
+	Built-in	組み込み
+	Check Standards	標準仕様をチェック
+	Check Standards...	標準仕様をチェック...
+	Choose a drawing to see what it holds.	図面を選択すると内容が表示されます。
+	Click a step to undo or redo to it.	ステップをクリックすると、その時点まで元に戻すかやり直します。
+	Close All Drawings	すべての図面を閉じる
+	Close Drawing	図面を閉じる
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	問題の特定に役立つ情報を、このコンピューター上の ZIP ファイルにまとめます。何も送信されません。報告する場合は、このファイルをメールに添付してください。
+	Command	コマンド
+	Command Aliases and Shortcuts	コマンドエイリアスとショートカット
+	Configure Standards	標準仕様を設定
+	Confirm each item to be purged	名前削除する項目ごとに確認
+	Constraint bar transparency (%)	拘束バーの透過性 (%)
+	Constraint types AUTOCONSTRAIN applies, in order of priority	AUTOCONSTRAIN が適用する拘束の種類 (優先順)
+	Copy as Script	スクリプトとしてコピー
+	Create Folder...	フォルダを作成...
+	Create Selection Set	選択セットを作成
+	Create Transmittal	送信パッケージを作成
+	Create ZIP...	ZIP を作成...
+	Current Drawing	現在の図面
+	Dimension name format	寸法名の形式
+	Dimensional	寸法
+	Distance tolerance	距離の許容差
+	Drafting & Annotation	製図と注釈
+	Drag objects from the drawing here to make tools.	図面からオブジェクトをここにドラッグするとツールを作成できます。
+	Drag to pan, scroll to zoom	ドラッグで画面移動、スクロールでズーム
+	Electrical	電気
+	eTransmit...	eTransmit...
+	Favourites	お気に入り
+	Filter:	フィルタ:
+	Find Non-Purgeable Items	名前削除できない項目を検索
+	Find where:	検索場所:
+	Geometric	幾何
+	Import Markups...	マークアップを読み込み...
+	Include a transmittal report	送信レポートを含める
+	Infer geometric constraints	幾何拘束を推測
+	Inherit Properties	プロパティを継承
+	Insertion Options	挿入オプション
+	Invert filter	フィルタを反転
+	Keyboard Shortcuts	キーボード ショートカット
+	Landscape	横
+	Layer Translation Mappings	レイヤー変換の対応付け
+	Layer Translator	レイヤー変換
+	LayerWalk	LayerWalk
+	Layouts	レイアウト
+	Libraries	ライブラリ
+	Load a drawing whose layers to translate to.	変換先のレイヤーを持つ図面を読み込みます。
+	Load List...	リストを読み込み...
+	Load Map...	対応付けを読み込み...
+	Look in	検索場所
+	Map	対応付け
+	Markups	マークアップ
+	Name and Expression	名前と式
+	Names are replaced by placeholders, also in the log.	名前はプレースホルダーに置き換えられます (ログ内も同様)。
+	Names: file paths, layer and block names, typed text	名前: ファイル パス、レイヤー名とブロック名、入力した文字
+	Navigation Bar	ナビゲーション バー
+	New Group Filter	新規グループ フィルタ
+	New palette	新規パレット
+	New Property Filter...	新規プロパティ フィルタ...
+	New Sheet Set...	新規シート セット...
+	No blocks here.	ブロックがありません。
+	No markups. Import them from a reviewed PDF.	マークアップがありません。レビュー済みの PDF から読み込んでください。
+	No sheet set is open.	シート セットが開かれていません。
+	Nothing yet.	まだ何もありません。
+	One folder	1 つのフォルダ
+	Open Drawings	開いている図面
+	Open Sheet Set...	シート セットを開く...
+	Organized folders	整理されたフォルダ
+	Orientation	方向
+	Page setup	ページ設定
+	Paper	用紙
+	Perpendicular objects must share an intersection point	垂直なオブジェクトは交点を共有する必要がある
+	Plain text	プレーン テキスト
+	Portrait	縦
+	Publish	パブリッシュ
+	Publish to PDF...	PDF にパブリッシュ...
+	Purge nested items	ネストされた項目を名前削除
+	Purgeable Items	名前削除できる項目
+	Regular expressions	正規表現
+	Repeat Placement	配置を繰り返す
+	Report a Problem	問題を報告
+	Restore on exit	終了時に復元
+	Save List...	リストを保存...
+	Save Map...	対応付けを保存...
+	Save Report...	レポートを保存...
+	Save Session as Script...	セッションをスクリプトとして保存...
+	Save Workspace	ワークスペースを保存
+	Sheet	シート
+	Sheet Set Manager	シート セット マネージャ
+	Sheets to publish, in order	パブリッシュするシート (順番どおり)
+	Show constraint bars	拘束バーを表示
+	Show dynamic constraints	ダイナミック拘束を表示
+	Standards files associated with the current drawing	現在の図面に関連付けられた標準仕様ファイル
+	Tangent objects must share an intersection point	正接するオブジェクトは交点を共有する必要がある
+	Title	タイトル
+	Tool Palettes	ツール パレット
+	Translate	変換
+	Translate From	変換元
+	Translate To	変換先
+	Undo History	元に戻す履歴
+	Use wildcards	ワイルドカードを使用
+	Workspace Settings	ワークスペースの設定
+	Workspaces	ワークスペース
+	Zoom to Fit	全体表示
+	Building models (IFC)	建物モデル (IFC)
+	Building model (IFC4)	建物モデル (IFC4)
+	3D printing (3MF)	3D プリント (3MF)
+	Send to Redline	Redline に送信
+	Import Redline Markups	Redline のマークアップを読み込み
+	Import Redline Markups...	Redline のマークアップを読み込み...
+	Open a Program?	プログラムを開きますか?
+	This link opens a program or script, not a document:	このリンクは文書ではなく、プログラムまたはスクリプトを開きます:
+	Open it only if you trust the drawing and know what it runs.	図面を信頼し、何が実行されるか分かっている場合にのみ開いてください。
+	Open Anyway	それでも開く
+	Load This File?	このファイルを読み込みますか?
+	This file isn't in a trusted folder:	このファイルは信頼できるフォルダにありません:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP ルーチンやスクリプトは図面やファイルを変更できます。入手元を信頼できる場合にのみ読み込んでください。
+	Don't Load	読み込まない
+	Load Once	1 回だけ読み込む
+	Always Load from This Folder	このフォルダから常に読み込む
+	Adds {folder} to TRUSTEDPATHS	{folder} を TRUSTEDPATHS に追加します
+	Allow Loading a File	ファイルの読み込みを許可
+	Plot Stamp	印刷スタンプ
+	Plot stamp fields	スタンプのフィールド
+	Drawing name	図面名
+	Layout name	レイアウト名
+	Date and Time	日付と時刻
+	Device name	デバイス名
+	Paper size	用紙サイズ
+	Plot scale	印刷尺度
+	No login or computer name is ever stamped.	ログイン名やコンピューター名は決してスタンプされません。
+	User defined fields	ユーザー定義フィールド
+	One per line, up to {n}.	1 行に 1 つ、最大 {n} 個。
+	Stamp model space plots	モデル空間の印刷にスタンプ
+	Stamp this layout's plots	このレイアウトの印刷にスタンプ
+	Location and offset	位置とオフセット
+	Location	位置
+	Upside-down	上下反転
+	X offset	X オフセット
+	Y offset	Y オフセット
+	Offset relative to	オフセットの基準
+	Printable area	印刷可能領域
+	Paper border	用紙の端
+	Text properties	文字のプロパティ
+	Font	フォント
+	Single line plot stamp	1 行の印刷スタンプ
+	Units	単位
+	Inches	インチ
+	Millimeters	ミリメートル
+	Log file location	ログ ファイルの場所
+	Create a log file	ログ ファイルを作成
+	The log is kept for this session, never saved with the drawing.	ログはこのセッションだけのもので、図面とともに保存されることはありません。
+	Browse...	参照...
+	Action Macro Manager...	アクション マクロ マネージャ...
+	Action Macros	アクション マクロ
+	Action Recorder	アクション レコーダ
+	Insert Base Point	基点を挿入
+	Insert Message	メッセージを挿入
+	Play Action Macro	アクション マクロを再生
+	Play...	再生...
+	Record	記録
+	Request User Input	ユーザ入力を要求
+	Stop	停止
+	Action Macro Manager	アクション マクロ マネージャ
+	Recording…	記録中…
+	No action macros yet: Record, do the work, then Stop.	アクション マクロはまだありません: 記録して作業し、停止します。
+	Play	再生
+	Message: {text}	メッセージ: {text}
+	Base point (asked for)	基点 (再生時に指定)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	マクロの再生時にこの入力を求める
+	Customize Interface	インタフェースをカスタマイズ
+	Customize User Interface...	ユーザ インタフェースをカスタマイズ...
+	Interface...	インタフェース...
+	Customize User Interface	ユーザ インタフェースのカスタマイズ
+	Quick Access Toolbar	クイック アクセス ツールバー
+	Add a command	コマンドを追加
+	Reset Quick Access Toolbar	クイック アクセス ツールバーをリセット
+	Built-in panels shown (untick to hide):	表示する標準パネル (チェックを外すと非表示):
+	Your panels on built-in tabs:	標準タブ上のユーザ パネル:
+	Tab	タブ
+	New panel name	新しいパネルの名前
+	Add Panel	パネルを追加
+	Your tabs:	ユーザ タブ:
+	Remove Tab	タブを削除
+	New tab name	新しいタブの名前
+	Add Tab	タブを追加
+	Edit Keyboard Shortcuts...	キーボード ショートカットを編集...
+	Remove Panel	パネルを削除
+	Command or LISP macro, e.g. (command "line")	コマンドまたは LISP マクロ (例: (command "line"))
+	Hatch Editor	ハッチング エディタ
+	Table Cell	テーブル セル
+	Rows & Columns	行と列
+	Merge	結合
+	Open/Save	開く/保存
+	Attributes	属性
+	Spell Check	スペル チェック
+	Formula	計算式
+	Edit Source	ソースを編集
+	Close Array	配列複写を閉じる
+	Manage Attributes	属性を管理

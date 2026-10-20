@@ -86,7 +86,7 @@ fn sample() -> Drawing {
     d.add(&m, Common::default(), EntityKind::Mesh(mesh)).unwrap();
     let mut tag = Block::new("TAG");
     tag.entities.push(Entity::new(Handle(0x40), EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1.0 })));
-    tag.entities.push(Entity::new(Handle(0x41), EntityKind::AttDef(attrib("NUM", "?", "Number"))));
+    tag.entities.push(Entity::new(Handle(0x41), EntityKind::AttDef(Box::new(attrib("NUM", "?", "Number")))));
     d.blocks.insert("TAG".into(), std::sync::Arc::new(tag));
     let ins = Insert {
         block: "TAG".into(),

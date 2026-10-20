@@ -88,7 +88,7 @@ fn defs(b: &Block) -> Vec<(Handle, &Attrib, &str)> {
     b.entities
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::AttDef(a) => Some((e.handle, a, e.common.layer.as_str())),
+            EntityKind::AttDef(a) => Some((e.handle, &**a, e.common.layer.as_str())),
             _ => None,
         })
         .collect()
@@ -319,7 +319,7 @@ fn add(s: &mut Session, name: &str, tag: &str, c: &Change, at: Option<cadaddy_ge
             multiline,
             modes: Default::default(),
         };
-        b.entities.push(Entity { handle, common: Common { layer, ..Common::default() }, kind: EntityKind::AttDef(def) });
+        b.entities.push(Entity { handle, common: Common { layer, ..Common::default() }, kind: EntityKind::AttDef(Box::new(def)) });
         Ok(())
     })?;
     Ok(tag)

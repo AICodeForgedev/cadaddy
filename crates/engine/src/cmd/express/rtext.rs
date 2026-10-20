@@ -217,7 +217,7 @@ fn getvar(s: &Session, name: &str) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn julian_now() -> Option<f64> {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64();
+    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).ok()?.as_secs_f64();
     Some(2_440_587.5 + secs / 86_400.0)
 }
 

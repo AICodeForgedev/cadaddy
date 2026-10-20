@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# A clock that works in the browser too (std::time::Instant panics on wasm32).
+web-time = "1.1"
 # Deflate for binary plot style tables (.ctb/.stb); MIT OR Zlib OR Apache-2.0, already used by cadaddy-io.
 miniz_oxide = "0.8"
 cadaddy-geom = { workspace = true }

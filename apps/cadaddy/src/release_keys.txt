@@ -1,0 +1,6 @@
+# Public keys CADaddy releases are signed with (relsig.rs): 64 hex digits per line, `#` comments.
+# The updater refuses an installer unless SHA256SUMS.sig verifies with one of these. Add a new key
+# before retiring an old one, so builds out there keep updating. Made by `cargo xtask release-key`;
+# the secret keys are never in this repository.
+93634ab740889e629fe49b644c78a05711e85d9fe82486743c59950f4b4b2a2b  # key 3f26aaf859c96932 (2026-10-19)
+7e2b09ef2ee91843bcc48d05a77da17f411fb84ca6538b03c79583184c22da3a  # key 2eedd3d49d67611d (2026-10-19, backup)

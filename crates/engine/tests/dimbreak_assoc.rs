@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 fn dim(s: &Session, h: &str) -> Dimension {
     match &s.doc().unwrap().entity(Handle::parse_hex(h).unwrap()).unwrap().kind {
-        EntityKind::Dimension(dm) => dm.clone(),
+        EntityKind::Dimension(dm) => (**dm).clone(),
         k => panic!("not a dimension: {k:?}"),
     }
 }

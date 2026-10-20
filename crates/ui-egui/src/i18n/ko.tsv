@@ -2185,3 +2185,159 @@ menu	Modify	수정
 	Use drawing background	도면 배경 사용
 	Regenerate Dimensions	치수 재생성
 	Enter layer name for new dimensions (. for the current layer)	새 치수의 도면층 이름 입력(. 현재 도면층)
+	{folder} (folder)	{folder} (폴더)
+	Add drawings or a folder of them.	도면이나 도면 폴더를 추가하세요.
+	Add Files...	파일 추가...
+	Add Folder...	폴더 추가...
+	cancelled	취소됨
+	Choose the output folder, or Next to the originals.	출력 폴더를 선택하거나 원본 옆을 선택하세요.
+	Convert Drawings	도면 변환
+	Convert Drawings...	도면 변환...
+	Convert drawings...	도면 변환...
+	Convert to	변환 형식
+	Converted	변환됨
+	Converted, not all kept	변환됨, 일부 유지 안 됨
+	Converting files is not available on the web.	웹에서는 파일 변환을 사용할 수 없습니다.
+	Drawings to convert	변환할 도면
+	Each drawing's own	각 도면의 버전
+	Failed	실패
+	Files already there	이미 있는 파일
+	Folder:	폴더:
+	Include subfolders	하위 폴더 포함
+	Keep a file written over as .bak	덮어쓴 파일을 .bak으로 보관
+	Next to the originals	원본 옆
+	Open Log	로그 열기
+	Or type a file or folder path	또는 파일이나 폴더 경로 입력
+	Overwrite	덮어쓰기
+	Save to	저장 위치
+	Skip	건너뛰기
+	Skipped	건너뜀
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	변환할 도면(.dwg, .dxf, .cdy)이 없습니다.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{total}개 중 변환 {converted}, 건너뜀 {skipped}, 실패 {failed}
+	DWG drawing (.dwg)	DWG 도면 (.dwg)
+	DXF drawing (.dxf)	DXF 도면 (.dxf)
+	Require a token for control connections (recommended)	제어 연결에 토큰 요구 (권장)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	프로그램은 먼저 CADaddy가 사용자만 읽을 수 있는 파일에 기록한 토큰을 보내야 하므로 다른 사용자의 프로그램은 CADaddy를 제어할 수 없습니다. Claude 커넥터는 이를 자동으로 읽습니다. 다음에 CADaddy를 시작할 때 적용됩니다.
+	Add: Pick points	추가: 점 선택
+	Add: Select objects	추가: 객체 선택
+	Associative	연관
+	Block to create or edit	작성하거나 편집할 블록
+	Bottom left	왼쪽 아래
+	Boundaries	경계
+	Click to set new origin	클릭하여 새 원점 설정
+	Create separate hatches	개별 해치 작성
+	Default to boundary extents	기본값을 경계 범위로
+	Edit Block Definition	블록 정의 편집
+	Hatch and Gradient	해치 및 그라데이션
+	Hatch origin	해치 원점
+	Island detection	고립 영역 탐지
+	Normal	일반
+	Open in Block Editor	블록 편집기에서 열기
+	Outer	외부
+	Specified origin	지정된 원점
+	Use current origin	현재 원점 사용
+	Building models (IFC)	건물 모델 (IFC)
+	Building model (IFC4)	건물 모델 (IFC4)
+	3D printing (3MF)	3D 프린팅 (3MF)
+	Include the drawing (the active drawing as a DXF file)	도면 포함 (활성 도면을 DXF 파일로)
+	Your account, home folder and computer name are always left out.	계정, 홈 폴더 및 컴퓨터 이름은 항상 제외됩니다.
+	Files in the report	보고서의 파일
+	Send to Redline	Redline으로 보내기
+	Import Redline Markups	Redline 마크업 가져오기
+	Import Redline Markups...	Redline 마크업 가져오기...
+	Open a Program?	프로그램을 여시겠습니까?
+	This link opens a program or script, not a document:	이 링크는 문서가 아니라 프로그램이나 스크립트를 엽니다:
+	Open it only if you trust the drawing and know what it runs.	도면을 신뢰하고 무엇이 실행되는지 알 때만 여세요.
+	Open Anyway	그래도 열기
+	Report a security problem	보안 문제 신고
+	Load This File?	이 파일을 로드하시겠습니까?
+	This file isn't in a trusted folder:	이 파일은 신뢰할 수 있는 폴더에 있지 않습니다:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP 루틴과 스크립트는 도면과 파일을 변경할 수 있습니다. 출처를 신뢰하는 경우에만 로드하세요.
+	Don't Load	로드 안 함
+	Load Once	한 번 로드
+	Always Load from This Folder	이 폴더에서 항상 로드
+	Adds {folder} to TRUSTEDPATHS	{folder}을(를) TRUSTEDPATHS에 추가합니다
+	Allow Loading a File	파일 로드 허용
+	Plot Stamp	플롯 스탬프
+	Plot stamp fields	스탬프 필드
+	Drawing name	도면 이름
+	Layout name	배치 이름
+	Date and Time	날짜 및 시간
+	Device name	장치 이름
+	Paper size	용지 크기
+	Plot scale	플롯 축척
+	No login or computer name is ever stamped.	로그인 이름이나 컴퓨터 이름은 절대 스탬프되지 않습니다.
+	User defined fields	사용자 정의 필드
+	One per line, up to {n}.	한 줄에 하나씩, 최대 {n}개.
+	Stamp model space plots	모형 공간 플롯에 스탬프
+	Stamp this layout's plots	이 배치의 플롯에 스탬프
+	Location and offset	위치 및 간격띄우기
+	Location	위치
+	Bottom right	오른쪽 아래
+	Top left	왼쪽 위
+	Top right	오른쪽 위
+	Upside-down	거꾸로
+	X offset	X 간격띄우기
+	Y offset	Y 간격띄우기
+	Offset relative to	간격띄우기 기준
+	Printable area	인쇄 가능 영역
+	Paper border	용지 경계
+	Text properties	문자 특성
+	Font	글꼴
+	Single line plot stamp	한 줄 플롯 스탬프
+	Units	단위
+	Inches	인치
+	Millimeters	밀리미터
+	Log file location	로그 파일 위치
+	Create a log file	로그 파일 작성
+	The log is kept for this session, never saved with the drawing.	로그는 이 세션에만 유지되며 도면과 함께 저장되지 않습니다.
+	Action Macro Manager...	작업 매크로 관리자...
+	Action Macros	작업 매크로
+	Action Recorder	작업 기록기
+	Insert Base Point	기준점 삽입
+	Insert Message	메시지 삽입
+	Play Action Macro	작업 매크로 재생
+	Play...	재생...
+	Record	기록
+	Request User Input	사용자 입력 요청
+	Stop	중지
+	Action Macro Manager	작업 매크로 관리자
+	Recording…	기록 중…
+	No action macros yet: Record, do the work, then Stop.	아직 작업 매크로가 없습니다: 기록하고 작업한 다음 중지하세요.
+	Play	재생
+	Message: {text}	메시지: {text}
+	Base point (asked for)	기준점 (재생 시 요청)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	매크로를 재생할 때 이 입력을 요청
+	Customize Interface	인터페이스 사용자화
+	Customize User Interface...	사용자 인터페이스 사용자화...
+	Interface...	인터페이스...
+	Customize User Interface	사용자 인터페이스 사용자화
+	Quick Access Toolbar	신속 접근 도구막대
+	Add a command	명령 추가
+	Reset Quick Access Toolbar	신속 접근 도구막대 재설정
+	Built-in panels shown (untick to hide):	표시할 기본 패널 (숨기려면 선택 해제):
+	Your panels on built-in tabs:	기본 탭의 내 패널:
+	Tab	탭
+	New panel name	새 패널 이름
+	Add Panel	패널 추가
+	Your tabs:	내 탭:
+	Remove Tab	탭 제거
+	New tab name	새 탭 이름
+	Add Tab	탭 추가
+	Edit Keyboard Shortcuts...	바로 가기 키 편집...
+	Remove Panel	패널 제거
+	Command or LISP macro, e.g. (command "line")	명령 또는 LISP 매크로, 예: (command "line")
+	Hatch Editor	해치 편집기
+	Table Cell	표 셀
+	Rows & Columns	행 및 열
+	Merge	병합
+	Open/Save	열기/저장
+	Attributes	속성
+	Spell Check	맞춤법 검사
+	Formula	수식
+	Edit Source	원본 편집
+	Close Array	배열 닫기
+	Manage Attributes	속성 관리
+	Dialog State	대화 상자 상태
+	Dialog Action	대화 상자 동작

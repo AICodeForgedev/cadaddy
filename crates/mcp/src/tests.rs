@@ -567,3 +567,78 @@ fn agent_reads_a_drawing_summary_then_queries_handles() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn execute_many_places_many_objects_in_one_call() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let cmds: Vec<Value> = (0..150).map(|i| json!({"command": "circle", "params": {"center": [i * 3, 0], "radius": 1}})).collect();
+    let r = tool(&mut s, "execute_many", json!({"commands": cmds}));
+    assert_eq!(r["ran"], 150, "{r}");
+    let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    assert_eq!(d["counts"]["Circle"], 150);
+    // One undo takes them all away.
+    tool(&mut s, "execute", json!({"command": "undo", "params": {}}));
+    let d = tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    assert!(d["counts"].get("Circle").is_none(), "{d}");
+    // stopOnError: the failure named, nothing kept.
+    let r = tool(
+        &mut s,
+        "execute_many",
+        json!({"commands": [{"command": "circle", "params": {"center": [0, 0], "radius": 1}}, {"command": "nope"}], "stopOnError": true}),
+    );
+    assert_eq!(r["error"]["index"], 1);
+    assert_eq!(r["undone"], 1);
+    let r = call(&mut s, 9, "tools/call", json!({"name": "execute_many", "arguments": {}}));
+    assert!(r["error"].is_object() || r["result"]["isError"] == true, "commands are required: {r}");
+}
+
+#[test]
+fn watched_events_follow_tool_calls_as_notifications() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
+    assert!(s.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    tool(&mut s, "watch_events", json!({}));
+    let _ = s.take_notifications();
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [0, 0], "radius": 2}}));
+    let notes: Vec<Value> = s.take_notifications().iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let events: Vec<&Value> = notes.iter().filter(|n| n["method"] == "notifications/cadaddy/event").collect();
+    let kinds: Vec<&str> = events.iter().map(|n| n["params"]["type"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"command.run") && kinds.contains(&"drawing.changed"), "{kinds:?}");
+    // Not sent again after the next call.
+    tool(&mut s, "inspect_drawing", json!({"entities": false}));
+    let again: Vec<String> = s.take_notifications();
+    assert!(!again.iter().any(|l| l.contains("drawing.changed")), "{again:?}");
+    // Off: no more.
+    tool(&mut s, "watch_events", json!({"on": false}));
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [9, 0], "radius": 2}}));
+    assert!(!s.take_notifications().iter().any(|l| l.contains("cadaddy/event")));
+}
+
+/// The MCP client presents the control token first; a refused token is a clear error.
+#[test]
+fn remote_presents_the_control_token_first() {
+    use std::io::{BufRead, BufReader, Write};
+    for (token, answer, ok) in
+        [("good", r#"{"id":0,"ok":true,"result":{"authenticated":true}}"#, true), ("bad", r#"{"id":0,"ok":false,"error":"unauthorized: no"}"#, false)]
+    {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            let mut w = s;
+            writeln!(w, "{answer}").unwrap();
+            line
+        });
+        let s = std::net::TcpStream::connect(addr).unwrap();
+        let mut reader = BufReader::new(s.try_clone().unwrap());
+        let mut writer = s;
+        let r = crate::backend::authenticate_with(&mut reader, &mut writer, Some(token.to_string()));
+        assert_eq!(r.is_ok(), ok, "{r:?}");
+        let first: serde_json::Value = serde_json::from_str(server.join().unwrap().trim()).unwrap();
+        assert_eq!(first["method"], "auth");
+        assert_eq!(first["params"]["token"], token);
+    }
+}

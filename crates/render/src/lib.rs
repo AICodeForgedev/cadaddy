@@ -7,6 +7,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod cache;
+pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
 mod dim;

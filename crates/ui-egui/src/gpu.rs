@@ -68,7 +68,7 @@ pub fn surface_config(vsync: Option<&str>, low_latency: bool) -> egui_wgpu::Surf
 #[derive(Clone, Copy, Debug)]
 pub struct FrameCap {
     min: std::time::Duration,
-    next: Option<std::time::Instant>,
+    next: Option<web_time::Instant>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,7 +79,7 @@ impl FrameCap {
     }
 
     /// How long a frame starting at `now` waits; records when the following one may start.
-    pub fn wait_at(&mut self, now: std::time::Instant) -> std::time::Duration {
+    pub fn wait_at(&mut self, now: web_time::Instant) -> std::time::Duration {
         let wait = self.next.map_or(std::time::Duration::ZERO, |n| n.saturating_duration_since(now));
         self.next = now.checked_add(wait.saturating_add(self.min));
         wait
@@ -87,7 +87,7 @@ impl FrameCap {
 
     /// Block until this frame may start (call once per frame, at its start).
     pub fn wait(&mut self) {
-        let wait = self.wait_at(std::time::Instant::now());
+        let wait = self.wait_at(web_time::Instant::now());
         if !wait.is_zero() {
             std::thread::sleep(wait);
         }
@@ -436,15 +436,46 @@ fn translucent(c: [u8; 4], alpha: f32) -> [u8; 4] {
 }
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+/// Bytes of the canvas's GPU buffers alive now (vertex batches and view uniforms): what
+/// `ui.inspect` reports as `perf.gpuBytes`, and what the soak test watches for a leak.
+static GPU_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn gpu_bytes() -> u64 {
+    GPU_BYTES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A GPU buffer counted in [`GPU_BYTES`] while it lives.
+struct Tracked(wgpu::Buffer);
+
+impl Tracked {
+    fn new(buffer: wgpu::Buffer) -> Tracked {
+        GPU_BYTES.fetch_add(buffer.size(), std::sync::atomic::Ordering::Relaxed);
+        Tracked(buffer)
+    }
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        GPU_BYTES.fetch_sub(self.0.size(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl std::ops::Deref for Tracked {
+    type Target = wgpu::Buffer;
+    fn deref(&self) -> &wgpu::Buffer {
+        &self.0
+    }
+}
+
 #[derive(Clone)]
 struct Batch {
-    buffer: wgpu::Buffer,
+    buffer: Arc<Tracked>,
     count: u32,
 }
 
 /// One uploaded mesh with its own view uniform (each callback's transform differs).
 struct Layer {
-    uniform: wgpu::Buffer,
+    uniform: Tracked,
     bind_group: wgpu::BindGroup,
     key: Option<u64>,
     lines: Vec<Batch>,
@@ -475,12 +506,12 @@ struct Resources {
 
 /// One canvas layer's buffers.
 fn new_layer(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Layer {
-    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+    let uniform = Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("cad_canvas_view"),
         size: UNIFORM_SIZE,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    });
+    }));
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cad_canvas"),
         layout: bgl,
@@ -805,7 +836,7 @@ impl Resources {
 static SLOWEST_PREPARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Records how long a `prepare` took when it ends.
-struct PrepareTimer(std::time::Instant);
+struct PrepareTimer(web_time::Instant);
 
 impl Drop for PrepareTimer {
     fn drop(&mut self) {
@@ -850,7 +881,11 @@ fn upload(device: &wgpu::Device, label: &'static str, bytes: &[u8], stride: usiz
         .map(|c| {
             let key = piece_key(label, c);
             let batch = previous.as_mut().and_then(|p| p.remove(&key)).unwrap_or_else(|| Batch {
-                buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: c, usage }),
+                buffer: Arc::new(Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: c,
+                    usage,
+                }))),
                 count: u32::try_from(c.len() / stride).unwrap_or(0),
             });
             made.push((key, batch.clone()));
@@ -958,7 +993,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let _timed = PrepareTimer(t0);
         let Some(shared) = resources.get_mut::<Resources>() else { return Vec::new() };
         // A drawing window's layers are made the first time it draws.

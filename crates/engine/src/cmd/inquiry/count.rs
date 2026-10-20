@@ -515,7 +515,7 @@ pub(super) fn run_counttable(s: &mut Session, p: &Value) -> Result<Value> {
     let header = Some(vec!["Name".to_string(), "Count".to_string()]);
     let mut table = super::super::table::make_table(&table_style(s), at, cells.len(), 2, None, None, Some("Block Count"), header, &cells);
     table.count = scope.link(nested);
-    let h = s.add_entity(EntityKind::Table(table))?;
+    let h = s.add_entity(EntityKind::Table(Box::new(table)))?;
     Ok(
         json!({ "handle": h.hex(), "rows": cells.len(), "linked": scope.link(nested).is_some(), "message": format!("Table of {} block(s) inserted.", cells.len()) }),
     )
@@ -559,7 +559,7 @@ pub(crate) fn update_tables(s: &mut Session, only: Option<Vec<Handle>>) -> Resul
     }
     let d = s.doc_mut()?;
     for (h, t) in changes {
-        d.modify_entity(h, |e| e.kind = EntityKind::Table(t)).map_err(|e| bad("counttable", e.to_string()))?;
+        d.modify_entity(h, |e| e.kind = EntityKind::Table(Box::new(t))).map_err(|e| bad("counttable", e.to_string()))?;
     }
     Ok(n)
 }

@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("markupimport", "Import Markups", run_import)
             .menu(&["Insert", "Markup Import..."])
             .params(
-                "{path: PDF, page?: 1, layer?: \"MARKUP\", placement: sheet (default in a layout: the page onto the layout's sheet) | \
+                "{path: PDF, page?: 1, layer?: \"MARKUP\", byAuthor?: bool (a layer per author: <layer>-<author>), placement: sheet (default in a layout: the page onto the layout's sheet) | \
                  from: [[px,py],[px,py]] (page points, from the bottom left) + to: [[x,y],[x,y]] (where they go) | \
                  scale?: drawing units per inch (default 1) + at?: [x,y] (the page's corner)} → {placed: [{id, kind, handles}], skipped}",
             )
@@ -45,6 +45,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc),
         CommandSpec::new("markupstatus", "Markup Status", run_status).params("{id, status: open|done}").enabled(has_doc),
     ]
+}
+
+/// An author's name as part of a layer name: characters layer names can't hold become `_`,
+/// at most 60 of them ("" for none).
+pub(crate) fn author_layer_part(author: &str) -> String {
+    author
+        .trim()
+        .chars()
+        .take(60)
+        .map(|c| if "<>/\\\":;?*|,=`".contains(c) || c.is_control() { '_' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// Where page points go: a similarity (rotation, uniform scale, move).
@@ -224,13 +237,25 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let page = reader(&bytes, page_no).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let at = placement(s, p, &page)?;
     let layer = str_param(p, "layer").map(str::trim).filter(|x| !x.is_empty()).unwrap_or("MARKUP").to_string();
+    let by_author = super::bool_or(p, "byAuthor", false);
+    // The layer a markup goes on: the markup layer, or with `byAuthor` one per author.
+    let layer_of = |m: &Markup| -> String {
+        let author = author_layer_part(&m.author);
+        if by_author && !author.is_empty() { format!("{layer}-{author}") } else { layer.clone() }
+    };
+    let mut layers: Vec<String> = page.markups.iter().take(MAX_MARKUPS).map(layer_of).collect();
+    layers.push(layer.clone());
+    layers.sort();
+    layers.dedup();
     {
         let d = s.doc_mut()?;
-        if d.layer(&layer).is_none() {
-            let mut l = cadaddy_doc::Layer::new(&layer);
-            l.color = cadaddy_color::Color::Index(1);
-            l.plot = false;
-            d.layers.push(l);
+        for name in &layers {
+            if d.layer(name).is_none() {
+                let mut l = cadaddy_doc::Layer::new(name);
+                l.color = cadaddy_color::Color::Index(1);
+                l.plot = false;
+                d.layers.push(l);
+            }
         }
     }
     // Ids continue after the drawing's markups.
@@ -247,10 +272,11 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         next += 1;
         let xd = record(&id, "open", m);
         let color = m.color.map(|[r, g, b]| cadaddy_color::Color::True(cadaddy_color::Rgb(r, g, b)));
+        let on = layer_of(m);
         let d = s.doc_mut()?;
         for h in &hs {
             d.modify_entity(*h, |e| {
-                e.common.layer = layer.clone();
+                e.common.layer = on.clone();
                 if let Some(c) = color {
                     e.common.color = c;
                 }
@@ -258,7 +284,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             })?;
         }
         let kind = serde_json::to_value(m.kind).unwrap_or(Value::Null);
-        placed.push(json!({ "id": id, "kind": kind, "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }));
+        placed.push(json!({ "id": id, "kind": kind, "layer": on, "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }));
     }
     skipped += page.markups.len().saturating_sub(MAX_MARKUPS);
     let msg =

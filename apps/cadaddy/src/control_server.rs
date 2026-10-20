@@ -4,22 +4,30 @@
 //! The server only reads requests: a line that is not a JSON object with a string `method` (an
 //! HTTP request line, a stray `nc`, binary data) gets one error reply and the connection is
 //! closed, so nothing sent after it runs. Every resource a client can hold is bounded
-//! ([`Limits`]): simultaneous connections, request line length, queued requests, and how long a
-//! socket may sit idle or blocked on a write.
+//! ([`Limits`]): simultaneous connections, request line length (much shorter until the client
+//! has authenticated), queued requests, requests per second, and how long a socket may sit idle
+//! or blocked on a write.
+//!
+//! With a token (the default; `cadaddy_engine::control_auth`), a connection's first request must
+//! be `{"method": "auth", "params": {"token": …}}` or carry a top-level `"token"`; anything else
+//! is refused, logged, and the connection closed. The token is random per start and written to a
+//! file only the user can read, so other users' programs can't drive the app.
 
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cadaddy_ui_egui::ControlRequest;
 use serde_json::{Value, json};
 
 /// Resource bounds for the control server.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Limits {
+    /// The token clients must present first (`None`: none needed).
+    token: Option<Arc<str>>,
     /// Connections served at once; more get an error line and are closed.
     max_clients: usize,
     /// Longest request line in bytes (newline excluded); a longer one closes the connection.
@@ -32,11 +40,18 @@ struct Limits {
     write_timeout: Duration,
     /// How long a request waits for the app's answer.
     reply_timeout: Duration,
+    /// Longest line before the connection has authenticated.
+    pre_auth_line: usize,
+    /// Requests a connection may send per second on average, and in one burst; more are
+    /// answered `rate limited` (not run) without closing the connection.
+    rate: f64,
+    burst: f64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            token: None,
             max_clients: 16,
             // Generous, so requests that carry whole drawings or images as base64 still fit.
             max_line: 256 * 1024 * 1024,
@@ -44,16 +59,27 @@ impl Default for Limits {
             idle_timeout: Duration::from_secs(600),
             write_timeout: Duration::from_secs(30),
             reply_timeout: Duration::from_secs(60),
+            pre_auth_line: 64 * 1024,
+            rate: 500.0,
+            burst: 2000.0,
         }
     }
 }
 
+/// A new random token (32 hex digits); `None` when the system has no randomness to give.
+pub fn new_token() -> Option<String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).ok()?;
+    Some(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
 /// Listen on every port of `ports` (127.0.0.1 only), all feeding one stream of requests: an
 /// explicit `--control` port and the agent port together. A port that can't be bound (another
-/// window has it) is logged and skipped.
-pub fn start_ports(ports: &[u16], ctx: egui::Context) -> Receiver<ControlRequest> {
-    let limits = Limits::default();
-    let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
+/// window has it) is logged and skipped. With `token`, clients must present it; it is written
+/// for each port bound to its file under the settings folder `config`.
+pub fn start_ports(ports: &[u16], ctx: egui::Context, token: Option<String>, config: Option<&std::path::Path>) -> Receiver<ControlRequest> {
+    let token: Option<Arc<str>> = token.map(Arc::from);
+    let (tx, rx) = sync_channel::<ControlRequest>(Limits::default().queue.max(1));
     let mut seen = Vec::new();
     for &port in ports {
         if seen.contains(&port) {
@@ -62,7 +88,14 @@ pub fn start_ports(ports: &[u16], ctx: egui::Context) -> Receiver<ControlRequest
         seen.push(port);
         match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => {
-                log::info!("control server listening on 127.0.0.1:{port}");
+                log::info!("control server listening on 127.0.0.1:{port}{}", if token.is_some() { " (token required)" } else { "" });
+                if let (Some(t), Some(dir)) = (&token, config) {
+                    let path = cadaddy_engine::control_auth::token_path(dir, port);
+                    if let Err(e) = cadaddy_engine::control_auth::write_token(&path, t) {
+                        log::error!("control server: couldn't write the token to {}: {e} (clients can set CADADDY_CONTROL_TOKEN)", path.display());
+                    }
+                }
+                let limits = Limits { token: token.clone(), ..Limits::default() };
                 let (tx, ctx) = (tx.clone(), ctx.clone());
                 std::thread::spawn(move || accept_loop(l, tx, ctx, limits));
             }
@@ -96,15 +129,17 @@ fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui:
         let _ = stream.set_write_timeout(Some(limits.write_timeout));
         if open.fetch_add(1, Ordering::SeqCst) >= limits.max_clients {
             open.fetch_sub(1, Ordering::SeqCst);
+            log::warn!("control server: refused a connection from {}: too many connections", peer(&stream));
             let _ = writeln!(stream, "{}", json!({"ok": false, "error": "too many control connections"}));
             continue;
         }
         let slot = Slot(Arc::clone(&open));
         let tx = tx.clone();
         let ctx = ctx.clone();
+        let limits = limits.clone();
         let _ = std::thread::Builder::new().spawn(move || {
             let _slot = slot;
-            serve(stream, &tx, &ctx, limits);
+            serve(stream, &tx, &ctx, &limits);
         });
     }
 }
@@ -143,6 +178,8 @@ enum Line {
         id: Value,
         method: String,
         params: Value,
+        /// A `token` sent with the request itself.
+        token: Option<String>,
     },
     Blank,
     /// Not a request: reply with this error and close the connection.
@@ -174,6 +211,35 @@ fn parse_line(bytes: &[u8]) -> Line {
         id: obj.get("id").cloned().unwrap_or(Value::Null),
         method: method.to_string(),
         params: obj.get("params").cloned().unwrap_or(json!({})),
+        token: obj.get("token").and_then(Value::as_str).map(str::to_string),
+    }
+}
+
+fn peer(s: &TcpStream) -> String {
+    s.peer_addr().map_or_else(|_| "an unknown address".into(), |a| a.to_string())
+}
+
+/// Requests a connection may send now ([`Limits::rate`], [`Limits::burst`]).
+struct Bucket {
+    level: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new(limits: &Limits) -> Self {
+        Self { level: limits.burst, at: Instant::now() }
+    }
+    /// Take one request's allowance; `false` when the connection is over its rate.
+    fn take(&mut self, limits: &Limits) -> bool {
+        let now = Instant::now();
+        self.level = (self.level + now.duration_since(self.at).as_secs_f64() * limits.rate).min(limits.burst);
+        self.at = now;
+        if self.level >= 1.0 {
+            self.level -= 1.0;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -195,7 +261,7 @@ fn send_line(out: &mut impl Write, line: &str) -> std::io::Result<()> {
     out.flush()
 }
 
-fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: Limits) {
+fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: &Limits) {
     // Replies go out at once instead of waiting to be combined with more (Nagle).
     let _ = stream.set_nodelay(true);
     if stream.set_read_timeout(Some(limits.idle_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
@@ -205,8 +271,12 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
     let mut out = stream;
     let mut reader = BufReader::new(read);
     let mut buf = Vec::new();
+    let who = peer(&out);
+    let mut authed = limits.token.is_none();
+    let mut bucket = Bucket::new(limits);
     loop {
-        let reject = match read_bounded_line(&mut reader, &mut buf, limits.max_line) {
+        let max = if authed { limits.max_line } else { limits.pre_auth_line };
+        let reject = match read_bounded_line(&mut reader, &mut buf, max) {
             Ok(false) => break,
             // Nothing of a line arrived (idle timeout, or the peer is gone): close without a word.
             // A line nobody asked for would be read as the reply to the client's next request.
@@ -215,7 +285,35 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
             Ok(true) => match parse_line(&buf) {
                 Line::Blank => continue,
                 Line::Reject(e) => e,
-                Line::Request { id, method, params } => {
+                Line::Request { id, method, params, token } => {
+                    if let Some(want) = &limits.token
+                        && !authed
+                    {
+                        let given = if method == "auth" { params.get("token").and_then(Value::as_str).map(str::to_string) } else { token };
+                        if !given.is_some_and(|g| cadaddy_engine::control_auth::same(&g, want)) {
+                            log::warn!("control server: refused {who}: no valid token");
+                            let _ = send_line(
+                                &mut out,
+                                &json!({"id": id, "ok": false, "error": "unauthorized: send {\"method\": \"auth\", \"params\": {\"token\": …}} first; the token is in the CADaddy settings folder, control/<port>.token (or CADADDY_CONTROL_TOKEN)"}).to_string(),
+                            );
+                            break;
+                        }
+                        authed = true;
+                    }
+                    if method == "auth" {
+                        authed = true;
+                        if send_line(&mut out, &json!({"id": id, "ok": true, "result": {"authenticated": true}}).to_string()).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    if !bucket.take(limits) {
+                        let r = json!({"id": id, "ok": false, "error": "rate limited: too many requests; slow down", "state": "not-run"});
+                        if send_line(&mut out, &r.to_string()).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     let (req, pending) = ControlRequest::new(method, params);
                     let mut r = match tx.try_send(req) {
                         Ok(()) => {
@@ -238,6 +336,7 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
             },
         };
         // The connection closes either way; a peer that can't read the reason loses nothing.
+        log::warn!("control server: closed {who}: {reject}");
         let _ = send_line(&mut out, &json!({"ok": false, "error": reject}).to_string());
         break;
     }
@@ -310,6 +409,103 @@ mod tests {
             replies.push(serde_json::from_str(&line).unwrap());
         }
         replies
+    }
+
+    /// The echo server under `limits`.
+    fn echo_with(limits: Limits) -> (std::net::SocketAddr, std::sync::mpsc::Receiver<String>) {
+        let (addr, rx) = serve_with(limits);
+        let (fwd, seen) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for req in rx {
+                let _ = fwd.send(req.method.clone());
+                let _ = req.reply.send(json!({"ok": true, "method": req.method}));
+            }
+        });
+        (addr, seen)
+    }
+
+    /// Send `input`, close our side, and read every reply until the server closes too.
+    fn send_all(addr: std::net::SocketAddr, input: &[u8]) -> Vec<Value> {
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(input).unwrap();
+        c.shutdown(std::net::Shutdown::Write).unwrap();
+        BufReader::new(c).lines().map(|l| serde_json::from_str(&l.unwrap()).unwrap()).collect()
+    }
+
+    fn with_token() -> Limits {
+        Limits { token: Some(Arc::from("s3cret")), ..short() }
+    }
+
+    #[test]
+    fn without_the_token_nothing_runs_and_the_connection_closes() {
+        let (addr, seen) = echo_with(with_token());
+        for first in [
+            &b"{\"id\":1,\"method\":\"cmdline.input\",\"params\":{\"text\":\"erase all\"}}\n{\"id\":2,\"method\":\"ping\"}\n"[..],
+            b"{\"id\":1,\"method\":\"auth\",\"params\":{\"token\":\"wrong\"}}\n{\"id\":2,\"method\":\"ping\"}\n",
+            b"{\"id\":1,\"method\":\"ping\",\"token\":\"s3cre\"}\n",
+            b"{\"id\":1,\"method\":\"auth\"}\n",
+        ] {
+            let r = send_all(addr, first);
+            assert_eq!(r.len(), 1, "{r:?}");
+            assert!(r[0]["error"].as_str().unwrap().starts_with("unauthorized"), "{r:?}");
+            assert_eq!(r[0]["id"], 1);
+        }
+        assert!(seen.recv_timeout(Duration::from_millis(200)).is_err(), "nothing reached the app");
+    }
+
+    #[test]
+    fn the_token_by_auth_or_on_the_first_request_opens_the_connection() {
+        let (addr, seen) = echo_with(with_token());
+        let r = send_all(addr, b"{\"id\":1,\"method\":\"auth\",\"params\":{\"token\":\"s3cret\"}}\n{\"id\":2,\"method\":\"ping\"}\n");
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!(r[0]["result"]["authenticated"], true);
+        assert_eq!((r[1]["id"].clone(), r[1]["method"].clone()), (json!(2), json!("ping")));
+        let r = send_all(addr, b"{\"id\":7,\"method\":\"ping\",\"token\":\"s3cret\"}\n{\"id\":8,\"method\":\"ping\"}\n");
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(r.iter().all(|x| x["ok"] == true), "{r:?}");
+        assert_eq!(seen.iter().take(3).count(), 3);
+    }
+
+    #[test]
+    fn before_the_token_only_short_lines_are_read() {
+        let (addr, _seen) = echo_with(Limits { pre_auth_line: 100, ..with_token() });
+        let long = format!("{{\"id\":1,\"method\":\"auth\",\"params\":{{\"token\":\"{}\"}}}}\n", "x".repeat(200));
+        let r = send_all(addr, long.as_bytes());
+        assert!(r[0]["error"].as_str().unwrap().contains("longer than 100"), "{r:?}");
+        // After it, the usual limit.
+        let ok = format!(
+            "{{\"id\":1,\"method\":\"auth\",\"params\":{{\"token\":\"s3cret\"}}}}\n{{\"id\":2,\"method\":\"x\",\"params\":{{\"t\":\"{}\"}}}}\n",
+            "y".repeat(500)
+        );
+        let r = send_all(addr, ok.as_bytes());
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!(r[1]["ok"], true);
+    }
+
+    #[test]
+    fn a_flood_of_requests_is_rate_limited_without_closing() {
+        let (addr, _seen) = echo_with(Limits { rate: 0.5, burst: 2.0, ..short() });
+        let r = send_all(addr, b"{\"id\":1,\"method\":\"a\"}\n{\"id\":2,\"method\":\"b\"}\n{\"id\":3,\"method\":\"c\"}\n");
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!((r[0]["ok"].clone(), r[1]["ok"].clone()), (json!(true), json!(true)));
+        assert!(r[2]["error"].as_str().unwrap().starts_with("rate limited"), "{r:?}");
+        assert_eq!(r[2]["state"], "not-run");
+    }
+
+    #[test]
+    fn without_a_token_auth_still_answers() {
+        let (addr, _seen) = echo_with(short());
+        let r = send_all(addr, b"{\"id\":1,\"method\":\"auth\",\"params\":{\"token\":\"anything\"}}\n{\"id\":2,\"method\":\"ping\"}\n");
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(r.iter().all(|x| x["ok"] == true));
+    }
+
+    #[test]
+    fn tokens_are_random() {
+        let (a, b) = (new_token().unwrap(), new_token().unwrap());
+        assert_eq!(a.len(), 32);
+        assert_ne!(a, b);
     }
 
     /// A browser can POST to the port: its request line closes the connection before the JSON

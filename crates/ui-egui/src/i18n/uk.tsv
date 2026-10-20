@@ -2272,3 +2272,138 @@
 	Use drawing background	Використати фон креслення
 	Regenerate Dimensions	Відновити розміри
 	Enter layer name for new dimensions (. for the current layer)	Введіть ім'я шару для нових розмірів (. — поточний шар)
+	{folder} (folder)	{folder} (тека)
+	Add drawings or a folder of them.	Додайте креслення або теку з ними.
+	Add Files...	Додати файли...
+	Add Folder...	Додати теку...
+	cancelled	скасовано
+	Choose the output folder, or Next to the originals.	Виберіть теку для результату або «Поруч з оригіналами».
+	Convert Drawings	Перетворити креслення
+	Convert Drawings...	Перетворити креслення...
+	Convert drawings...	Перетворити креслення...
+	Convert to	Перетворити на
+	Converted	Перетворено
+	Converted, not all kept	Перетворено, збережено не все
+	Converting files is not available on the web.	Перетворення файлів недоступне у веб-версії.
+	Drawings to convert	Креслення для перетворення
+	Each drawing's own	Версія кожного креслення
+	Failed	Помилка
+	Files already there	Файли, що вже існують
+	Folder:	Тека:
+	Include subfolders	Включно з вкладеними теками
+	Keep a file written over as .bak	Зберігати перезаписаний файл як .bak
+	Next to the originals	Поруч з оригіналами
+	Open Log	Відкрити журнал
+	Or type a file or folder path	Або введіть шлях до файлу чи теки
+	Overwrite	Перезаписати
+	Save to	Зберегти в
+	Skip	Пропустити
+	Skipped	Пропущено
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Немає креслень (.dwg, .dxf, .cdy) для перетворення.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	Перетворено: {converted}, пропущено: {skipped}, помилок: {failed} з {total}
+	DWG drawing (.dwg)	Креслення DWG (.dwg)
+	DXF drawing (.dxf)	Креслення DXF (.dxf)
+	Require a token for control connections (recommended)	Вимагати токен для керувальних підключень (рекомендовано)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Програми спершу мають надіслати токен, який CADaddy записує у файл, доступний лише вам, щоб програми інших користувачів не могли ним керувати. Конектор Claude читає його сам. Набуває чинності під час наступного запуску CADaddy.
+	Building models (IFC)	Моделі будівель (IFC)
+	Building model (IFC4)	Модель будівлі (IFC4)
+	3D printing (3MF)	3D-друк (3MF)
+	Include the drawing (the active drawing as a DXF file)	Додати креслення (активне креслення як файл DXF)
+	Your account, home folder and computer name are always left out.	Ваш обліковий запис, домашню папку та ім'я комп'ютера завжди вилучено.
+	Files in the report	Файли у звіті
+	Send to Redline	Надіслати в Redline
+	Import Redline Markups	Імпортувати позначки Redline
+	Import Redline Markups...	Імпортувати позначки Redline...
+	Open a Program?	Відкрити програму?
+	This link opens a program or script, not a document:	Це посилання відкриває програму або сценарій, а не документ:
+	Open it only if you trust the drawing and know what it runs.	Відкривайте його, лише якщо довіряєте кресленню і знаєте, що воно запускає.
+	Open Anyway	Усе одно відкрити
+	Report a security problem	Повідомити про проблему безпеки
+	Load This File?	Завантажити цей файл?
+	This file isn't in a trusted folder:	Цей файл не в довіреній теці:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Програми LISP і сценарії можуть змінювати креслення та файли. Завантажуйте його, лише якщо довіряєте джерелу.
+	Don't Load	Не завантажувати
+	Load Once	Завантажити один раз
+	Always Load from This Folder	Завжди завантажувати з цієї теки
+	Adds {folder} to TRUSTEDPATHS	Додає {folder} до TRUSTEDPATHS
+	Allow Loading a File	Дозволити завантаження файлу
+	Plot Stamp	Штамп друку
+	Plot stamp fields	Поля штампа
+	Drawing name	Назва креслення
+	Layout name	Назва аркуша
+	Date and Time	Дата і час
+	Device name	Назва пристрою
+	Paper size	Розмір паперу
+	Plot scale	Масштаб друку
+	No login or computer name is ever stamped.	Ім'я користувача та ім'я комп'ютера ніколи не друкуються.
+	User defined fields	Користувацькі поля
+	One per line, up to {n}.	По одному в рядку, не більше {n}.
+	Stamp model space plots	Ставити штамп на друк простору моделі
+	Stamp this layout's plots	Ставити штамп на друк цього аркуша
+	Location and offset	Положення та зміщення
+	Location	Положення
+	Upside-down	Догори дриґом
+	X offset	Зміщення по X
+	Y offset	Зміщення по Y
+	Offset relative to	Зміщення відносно
+	Printable area	Область друку
+	Paper border	Край паперу
+	Text properties	Властивості тексту
+	Font	Шрифт
+	Single line plot stamp	Штамп в один рядок
+	Units	Одиниці
+	Inches	Дюйми
+	Millimeters	Міліметри
+	Log file location	Розташування файлу журналу
+	Create a log file	Створювати файл журналу
+	The log is kept for this session, never saved with the drawing.	Журнал діє в цьому сеансі й ніколи не зберігається з кресленням.
+	Action Macro Manager...	Диспетчер макросів дій...
+	Action Macros	Макроси дій
+	Action Recorder	Записування дій
+	Insert Base Point	Вставити базову точку
+	Insert Message	Вставити повідомлення
+	Play Action Macro	Відтворити макрос дій
+	Play...	Відтворити...
+	Record	Записати
+	Request User Input	Запитати введення користувача
+	Stop	Зупинити
+	Action Macro Manager	Диспетчер макросів дій
+	Recording…	Запис…
+	No action macros yet: Record, do the work, then Stop.	Макросів дій ще немає: натисніть «Записати», виконайте роботу, потім «Зупинити».
+	Play	Відтворити
+	Message: {text}	Повідомлення: {text}
+	Base point (asked for)	Базова точка (запитується)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Запитувати це введення під час відтворення макросу
+	Customize Interface	Налаштувати інтерфейс
+	Customize User Interface...	Налаштувати інтерфейс користувача...
+	Interface...	Інтерфейс...
+	Customize User Interface	Налаштування інтерфейсу користувача
+	Quick Access Toolbar	Панель швидкого доступу
+	Add a command	Додати команду
+	Reset Quick Access Toolbar	Скинути панель швидкого доступу
+	Built-in panels shown (untick to hide):	Показані вбудовані панелі (зніміть позначку, щоб приховати):
+	Your panels on built-in tabs:	Ваші панелі на вбудованих вкладках:
+	Tab	Вкладка
+	New panel name	Назва нової панелі
+	Add Panel	Додати панель
+	Your tabs:	Ваші вкладки:
+	Remove Tab	Видалити вкладку
+	New tab name	Назва нової вкладки
+	Add Tab	Додати вкладку
+	Edit Keyboard Shortcuts...	Змінити сполучення клавіш...
+	Remove Panel	Видалити панель
+	Command or LISP macro, e.g. (command "line")	Команда або макрос LISP, напр. (command "line")
+	Hatch Editor	Редактор штрихування
+	Table Cell	Клітинка таблиці
+	Rows & Columns	Рядки й стовпці
+	Merge	Об'єднати
+	Open/Save	Відкрити/зберегти
+	Attributes	Атрибути
+	Spell Check	Перевірка орфографії
+	Formula	Формула
+	Edit Source	Редагувати джерело
+	Close Array	Закрити масив
+	Manage Attributes	Керувати атрибутами
+	Dialog State	Стан діалогу
+	Dialog Action	Дія діалогу

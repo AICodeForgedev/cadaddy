@@ -2227,8 +2227,66 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
     let uses_materials = !d.materials.is_empty()
         || d.layers.iter().any(|l| l.material.is_some())
         || d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).any(|e| e.common.material.is_some());
-    let dxf = if uses_materials { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() } else { cadaddy_dxf::write_binary(&tags, false) };
+    let write =
+        |tags: &[Tag]| if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary(tags, false) };
+    let dxf = write(&tags);
+    // Other programs' custom entities and objects, which the DWG writer can't write from their
+    // DXF groups, go in a kept dictionary of XRECORDs instead (`dwg_keep`; reading the DWG back
+    // puts them where they were). Only a drawing with such data is checked.
+    if has_custom(d) {
+        let take = cadaddy_dwg::custom_records(&dxf);
+        if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take) {
+            return (write(&kept), names);
+        }
+    }
     (dxf, names)
+}
+
+/// The object types the DWG writer reads from a DXF itself (acadrust 0.6's DXF reader).
+const DWG_NATIVE_OBJECTS: &[&str] = &[
+    "ACAD_PROXY_OBJECT",
+    "ACDBDICTIONARYWDFLT",
+    "ACDBFIELD",
+    "ACDBFIELDLIST",
+    "ACDBPLACEHOLDER",
+    "DBCOLOR",
+    "DGNDEFINITION",
+    "DICTIONARY",
+    "DICTIONARYVAR",
+    "DWFDEFINITION",
+    "FIELD",
+    "FIELDLIST",
+    "GEODATA",
+    "GROUP",
+    "IMAGEDEF",
+    "IMAGEDEF_REACTOR",
+    "LAYOUT",
+    "MATERIAL",
+    "MLEADERSTYLE",
+    "MLINESTYLE",
+    "PDFDEFINITION",
+    "PLOTSETTINGS",
+    "RASTERVARIABLES",
+    "SCALE",
+    "SORTENTSTABLE",
+    "SPATIAL_FILTER",
+    "TABLECONTENT",
+    "TABLESTYLE",
+    "VISUALSTYLE",
+    "WIPEOUTVARIABLES",
+    "XRECORD",
+];
+
+/// Whether `d` has other programs' custom data the DWG writer may not write itself: entities of
+/// types outside the DXF Reference's, or kept objects of types it doesn't read. Only then is the
+/// bridge DXF checked record by record (a second read of it).
+fn has_custom(d: &Drawing) -> bool {
+    let custom =
+        |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(&e.kind, EntityKind::Unknown(u) if !cadaddy_dxf::is_entity_type(&u.dxf_type)));
+    d.foreign.objects.iter().any(|o| !DWG_NATIVE_OBJECTS.iter().any(|n| n.eq_ignore_ascii_case(o.kind.trim())))
+        || custom(&d.model)
+        || d.layouts.iter().any(|l| custom(&l.entities))
+        || d.blocks.values().any(|b| custom(&b.entities))
 }
 
 /// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
@@ -2489,6 +2547,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // The drawing's own next handle: table records and objects are numbered above it, so
     // reading it back (instead of $HANDSEED) keeps their handles across saves (#495).
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
+    if let Some(json) = crate::dxf_table::all_cell_styles_json(&d.table_styles) {
+        xrecords.push((dxf_ext::CELL_STYLES_KEY, w.h(), dxf_ext::json_chunks(&json)));
+    }
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
     }

@@ -53,6 +53,19 @@ impl Bounds2 {
         }
         Bounds2 { min: self.min.max(o.min), max: self.max.min(o.max) }
     }
+    /// The distance below which two points of geometry this size count as one: a billionth of
+    /// its size, and never less than some thousand steps of a double's precision at its distance
+    /// from the origin. Relative, so a drawing in millimetres, in miles, tiny or far from the
+    /// origin behaves the same.
+    pub fn fuzz(&self) -> f64 {
+        if self.is_empty() {
+            return 0.0;
+        }
+        let size = self.width().hypot(self.height());
+        let far = self.min.x.abs().max(self.min.y.abs()).max(self.max.x.abs()).max(self.max.y.abs());
+        (size * 1e-9).max(far * 1e-13)
+    }
+
     pub fn width(&self) -> f64 {
         if self.is_empty() { 0.0 } else { self.max.x - self.min.x }
     }

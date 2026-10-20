@@ -81,6 +81,9 @@ pub struct CanvasState {
     /// The Model tab in a 3D visual style (VSCURRENT).
     pub shade: crate::shaded::State,
     pub list: Option<DisplayList>,
+    /// Model space's list kept per store chunk: an edit rebuilds only the chunks it changed
+    /// ([`cadaddy_render::build_cached`]).
+    pub chunk_cache: cadaddy_render::ChunkCache,
     key: ListKey,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
@@ -394,7 +397,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         }
     }
     let space = st.space.clone();
-    app.canvas.list = Some(cadaddy_render::build(&st.doc, &space, &opts));
+    // The list it replaces goes back to the cache: an edit that changed objects in place is
+    // written into it instead of joining every part again.
+    let prev = app.canvas.list.take();
+    app.canvas.list = Some(cadaddy_render::build_cached_into(&st.doc, &space, &opts, &mut app.canvas.chunk_cache, prev));
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);

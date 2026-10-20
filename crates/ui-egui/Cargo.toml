@@ -10,6 +10,9 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+# std::time::Instant panics in the browser (wasm32-unknown-unknown has no clock); this is the
+# same Instant on native and the page's clock on the web (MIT OR Apache-2.0; egui uses it too).
+web-time = "1.1"
 craft-ui = { workspace = true }
 cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
@@ -29,6 +32,9 @@ log = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+# The real file formats for the end-to-end tests (tests/e2e_*.rs), installed as the app does.
+# The million-object test opens and saves real DXF and .cdy files.
+cadaddy-io = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 # Validates the canvas WGSL and its GLSL ES 3.0 (WebGL2) translation in tests (same naga wgpu uses).
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }

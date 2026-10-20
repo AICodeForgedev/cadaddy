@@ -55,6 +55,8 @@ const SESSION_VARS: &[&str] = &[
     "APERTURE",
     "PICKFIRST",
     "ACADLSPASDOC",
+    "SECURELOAD",
+    "TRUSTEDPATHS",
     "PICKADD",
     "FILEDIA",
     "CMDECHO",
@@ -138,6 +140,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "ACADLSPASDOC" => json!(i32::from(st.acadlspasdoc)),
+        "SECURELOAD" => json!(st.secureload),
+        "TRUSTEDPATHS" => json!(st.trustedpaths),
         "PICKADD" => json!(i32::from(st.pickadd)),
         "FILEDIA" => json!(st.filedia),
         "CMDECHO" => json!(st.cmdecho),
@@ -427,6 +431,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     if is_read_only(&n) {
         return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") });
     }
+    // A routine or script can't loosen what loads routines and scripts.
+    if matches!(n.as_str(), "SECURELOAD" | "TRUSTEDPATHS") && s.running_code() {
+        return Err(EngineError::Other(format!("{n} can't be changed from LISP or a script")));
+    }
     let bad = || EngineError::BadParams { cmd: "setvar".into(), msg: format!("invalid value for {n}") };
     let st = &mut s.settings;
     match n.as_str() {
@@ -508,6 +516,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "ACADLSPASDOC" => st.acadlspasdoc = as_bool(v).ok_or_else(bad)?,
+        "SECURELOAD" => st.secureload = small(v, 2).ok_or_else(bad)?,
+        "TRUSTEDPATHS" => {
+            st.trustedpaths = v.as_str().ok_or_else(bad)?.chars().take(8192).collect();
+        }
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
         "FILEDIA" => st.filedia = as_i(v).filter(|i| (0..=1).contains(i)).ok_or_else(bad)? as u8,
         "CMDECHO" => st.cmdecho = as_i(v).filter(|i| (0..=1).contains(i)).ok_or_else(bad)? as u8,

@@ -40,6 +40,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(center)
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             ui.set_width(WIDTH);
             ui.horizontal_wrapped(|ui| {
                 for (id, label) in TABS {
@@ -86,7 +89,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool
 }
 
 fn grid(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(id).num_columns(2).spacing(vec2(14.0, 8.0)).show(ui, add);
+    crate::rtl::show_grid(egui::Grid::new(id).num_columns(2).spacing(vec2(14.0, 8.0)), ui, add);
 }
 
 fn hint(ui: &mut egui::Ui, text: &str) {
@@ -159,7 +162,7 @@ fn preview_square(ui: &mut egui::Ui, side: f32, color: Color32) {
 
 fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
     grid(ui, "options_display", |ui| {
-        ui.label(crate::tl!("Interface theme"));
+        crate::rtl::lead(ui, crate::tl!("Interface theme"));
         let mut theme = app.ui.theme;
         egui::ComboBox::from_id_salt("options_theme").selected_text(theme_label(theme)).show_ui(ui, |ui| {
             for t in ThemePref::ALL {
@@ -169,19 +172,21 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         if theme != app.ui.theme {
             changes.insert("theme".into(), json!(theme.as_str()));
         }
+        crate::rtl::trail(ui, crate::tl!("Interface theme"));
         ui.end_row();
 
         // Interface size apart from the operating system's display scaling.
-        ui.label(crate::tl!("Interface size"));
+        crate::rtl::lead(ui, crate::tl!("Interface size"));
         let mut pct = (crate::clamp_ui_scale(app.ui.ui_scale) * 100.0).round();
         let r = named_slider(ui, egui::Slider::new(&mut pct, 50.0..=300.0).step_by(5.0).integer().suffix(" %"), "Interface size");
         // On release of a drag (the window rescales), or at once from the keyboard.
         if r.drag_stopped() || (r.changed() && !r.dragged()) {
             changes.insert("uiScale".into(), json!(pct / 100.0));
         }
+        crate::rtl::trail(ui, crate::tl!("Interface size"));
         ui.end_row();
 
-        ui.label(crate::tl!("Animation effects"));
+        crate::rtl::lead(ui, crate::tl!("Animation effects"));
         let mut animations = app.ui.animations;
         egui::ComboBox::from_id_salt("options_animations").selected_text(animations_label(animations)).show_ui(ui, |ui| {
             for a in AnimationPref::ALL {
@@ -191,28 +196,33 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         if animations != app.ui.animations {
             changes.insert("animations".into(), json!(animations.as_str()));
         }
+        crate::rtl::trail(ui, crate::tl!("Animation effects"));
         ui.end_row();
 
-        ui.label(crate::tl!("Model background"));
+        crate::rtl::lead(ui, crate::tl!("Model background"));
         color_row(ui, app.options.model_background, Tokens::DARK.canvas, "modelBackground", changes);
+        crate::rtl::trail(ui, crate::tl!("Model background"));
         ui.end_row();
 
-        ui.label(crate::tl!("Layout paper"));
+        crate::rtl::lead(ui, crate::tl!("Layout paper"));
         color_row(ui, app.options.paper_background, Tokens::DARK.paper, "paperBackground", changes);
+        crate::rtl::trail(ui, crate::tl!("Layout paper"));
         ui.end_row();
 
-        ui.label(crate::tl!("Crosshair size"));
+        crate::rtl::lead(ui, crate::tl!("Crosshair size"));
         let mut size = app.session.settings.cursorsize;
         if named_slider(ui, egui::Slider::new(&mut size, 1.0..=100.0).integer().suffix(" %"), "Crosshair size").changed() {
             changes.insert("CURSORSIZE".into(), json!(size));
         }
+        crate::rtl::trail(ui, crate::tl!("Crosshair size"));
         ui.end_row();
 
-        ui.label(crate::tl!("Command line history"));
+        crate::rtl::lead(ui, crate::tl!("Command line history"));
         let mut lines = app.ui.history_lines;
         if ui.add(egui::DragValue::new(&mut lines).range(0..=crate::cmdline::MAX_LINES)).changed() {
             changes.insert("historyLines".into(), json!(lines));
         }
+        crate::rtl::trail(ui, crate::tl!("Command line history"));
         ui.end_row();
     });
     ui.add_space(6.0);
@@ -225,7 +235,7 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
 
 fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
     grid(ui, "options_files", |ui| {
-        ui.label(crate::tl!("Save new drawings as"));
+        crate::rtl::lead(ui, crate::tl!("Save new drawings as"));
         ui.horizontal(|ui| {
             for f in crate::SaveFormat::ALL {
                 let label = match f {
@@ -238,23 +248,26 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
                 }
             }
         });
+        crate::rtl::trail(ui, crate::tl!("Save new drawings as"));
         ui.end_row();
 
-        ui.label("");
+        crate::rtl::lead(ui, "");
         let mut copy = cadaddy_engine::cmd::file::dwg_copy();
         if ui.checkbox(&mut copy, crate::tl!("Also save a DWG copy when saving a CADaddy drawing (.cdy)")).changed() {
             changes.insert("DWGCOPY".into(), json!(i32::from(copy)));
         }
+        crate::rtl::trail(ui, "");
         ui.end_row();
 
-        ui.label("");
+        crate::rtl::lead(ui, "");
         let mut log = cadaddy_engine::activity::enabled();
         if ui.checkbox(&mut log, crate::tl!("Keep an activity history beside each drawing (private, on this computer)")).changed() {
             changes.insert("ACTIVITYLOG".into(), json!(i32::from(log)));
         }
+        crate::rtl::trail(ui, "");
         ui.end_row();
 
-        ui.label(crate::tl!("Default save version"));
+        crate::rtl::lead(ui, crate::tl!("Default save version"));
         let current = crate::SaveVersion::parse(&app.ui.save_version).unwrap_or_default();
         let mut version = current;
         egui::ComboBox::from_id_salt("options_save_version").selected_text(version.year()).show_ui(ui, |ui| {
@@ -265,17 +278,19 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         if version != current {
             changes.insert("saveVersion".into(), json!(version.year()));
         }
+        crate::rtl::trail(ui, crate::tl!("Default save version"));
         ui.end_row();
 
-        ui.label(crate::tl!("Automatic save every"));
+        crate::rtl::lead(ui, crate::tl!("Automatic save every"));
         let mut minutes = cadaddy_engine::autosave::savetime();
         let max = cadaddy_engine::autosave::MAX_SAVETIME;
         if ui.add(egui::DragValue::new(&mut minutes).range(0..=max).suffix(format!(" {}", crate::tl!("min")))).changed() {
             changes.insert("SAVETIME".into(), json!(minutes));
         }
+        crate::rtl::trail(ui, crate::tl!("Automatic save every"));
         ui.end_row();
 
-        ui.label(crate::tl!("Automatic save file location"));
+        crate::rtl::lead(ui, crate::tl!("Automatic save file location"));
         // Edited as text; the folder changes when the field loses focus.
         let id = egui::Id::new("cc_options_savefilepath");
         let current = cadaddy_engine::autosave::savefilepath();
@@ -290,6 +305,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
                 changes.insert("SAVEFILEPATH".into(), json!(path.trim()));
             }
         }
+        crate::rtl::trail(ui, crate::tl!("Automatic save file location"));
         ui.end_row();
     });
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
@@ -300,7 +316,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
 fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, start: &mut Option<&'static str>) {
     let t = Tokens::get();
     grid(ui, "options_drafting", |ui| {
-        ui.label(crate::tl!("Object snap marker size"));
+        crate::rtl::lead(ui, crate::tl!("Object snap marker size"));
         ui.horizontal(|ui| {
             let mut size = app.options.snap_marker_size;
             if named_slider(ui, egui::Slider::new(&mut size, super::SNAP_MARKER_SIZES).integer(), "Object snap marker size").changed() {
@@ -308,9 +324,10 @@ fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, s
             }
             preview_square(ui, size, t.snap);
         });
+        crate::rtl::trail(ui, crate::tl!("Object snap marker size"));
         ui.end_row();
 
-        ui.label(crate::tl!("Object snap aperture"));
+        crate::rtl::lead(ui, crate::tl!("Object snap aperture"));
         ui.horizontal(|ui| {
             let mut aperture = app.session.settings.aperture;
             if named_slider(ui, egui::Slider::new(&mut aperture, 1.0..=50.0).integer().suffix(" px"), "Object snap aperture").changed() {
@@ -318,6 +335,7 @@ fn drafting(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>, s
             }
             preview_square(ui, aperture as f32, t.crosshair);
         });
+        crate::rtl::trail(ui, crate::tl!("Object snap aperture"));
         ui.end_row();
     });
     hint(ui, crate::tl!("The aperture is how near the cursor must come to a point for an object snap to find it."));
@@ -427,6 +445,9 @@ fn visual_effects(ctx: &egui::Context, st: &cadaddy_engine::Settings, open: &mut
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
+            // Right to left in Arabic (rtl.rs).
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
             ui.columns(2, |cols| {
                 let [left, right] = cols else { return };
                 heading(left, crate::tl!("Selection Area Effect"));
@@ -491,7 +512,7 @@ fn aci_row(ui: &mut egui::Ui, current: u8, key: &str, changes: &mut Map<String, 
 
 fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
     grid(ui, "options_preferences", |ui| {
-        ui.label(crate::tl!("Interface language"));
+        crate::rtl::lead(ui, crate::tl!("Interface language"));
         let mut lang = app.ui.interface_language;
         egui::ComboBox::from_id_salt("options_language").selected_text(lang.name()).show_ui(ui, |ui| {
             for p in crate::i18n::Preference::ALL {
@@ -501,13 +522,15 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         if lang != app.ui.interface_language {
             changes.insert("interfaceLanguage".into(), json!(lang.code()));
         }
+        crate::rtl::trail(ui, crate::tl!("Interface language"));
         ui.end_row();
 
-        ui.label(crate::tl!("Largest array"));
+        crate::rtl::lead(ui, crate::tl!("Largest array"));
         let mut max = app.session.settings.maxarray;
         if ui.add(egui::DragValue::new(&mut max).range(100..=10_000_000).speed(1000.0).suffix(format!(" {}", crate::tl!("objects")))).changed() {
             changes.insert("MAXARRAY".into(), json!(max));
         }
+        crate::rtl::trail(ui, crate::tl!("Largest array"));
         ui.end_row();
     });
     hint(ui, crate::tl!("An array that would create more objects than this is refused."));
@@ -532,6 +555,17 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         ui,
         crate::tl!(
             "The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts."
+        ),
+    );
+    ui.add_space(6.0);
+    let mut token = app.ui.control_token;
+    if ui.checkbox(&mut token, crate::tl!("Require a token for control connections (recommended)")).changed() {
+        changes.insert("controlToken".into(), json!(token));
+    }
+    hint(
+        ui,
+        crate::tl!(
+            "Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts."
         ),
     );
 }

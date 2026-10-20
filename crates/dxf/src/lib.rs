@@ -615,6 +615,78 @@ pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
     out
 }
 
+/// The entity types of the DXF Reference (its ENTITIES section). An entity of another type is
+/// another program's custom entity, declared in the file's CLASSES section.
+pub const ENTITY_TYPES: &[&str] = &[
+    "3DFACE",
+    "3DSOLID",
+    "ACAD_PROXY_ENTITY",
+    "ACAD_TABLE",
+    "ARC",
+    "ARC_DIMENSION",
+    "ATTDEF",
+    "ATTRIB",
+    "BODY",
+    "CAMERA",
+    "CIRCLE",
+    "DGNUNDERLAY",
+    "DIMENSION",
+    "DWFUNDERLAY",
+    "ELLIPSE",
+    "EXTRUDEDSURFACE",
+    "GEOPOSITIONMARKER",
+    "HATCH",
+    "HELIX",
+    "IMAGE",
+    "INSERT",
+    "LARGE_RADIAL_DIMENSION",
+    "LEADER",
+    "LIGHT",
+    "LINE",
+    "LOFTEDSURFACE",
+    "LWPOLYLINE",
+    "MESH",
+    "MLINE",
+    "MPOLYGON",
+    "MTEXT",
+    "MULTILEADER",
+    "NAVISWORKSMODEL",
+    "NURBSURFACE",
+    "OLE2FRAME",
+    "OLEFRAME",
+    "PDFUNDERLAY",
+    "PLANESURFACE",
+    "POINT",
+    "POINTCLOUD",
+    "POINTCLOUDEX",
+    "POLYLINE",
+    "RAY",
+    "REGION",
+    "REVOLVEDSURFACE",
+    "SECTION",
+    "SEQEND",
+    "SHAPE",
+    "SOLID",
+    "SPLINE",
+    "SUN",
+    "SURFACE",
+    "SWEPTSURFACE",
+    "TABLE",
+    "TEXT",
+    "TOLERANCE",
+    "TRACE",
+    "UNDERLAY",
+    "VERTEX",
+    "VIEWPORT",
+    "WIPEOUT",
+    "XLINE",
+];
+
+/// Whether `name` is one of the DXF Reference's entity types ([`ENTITY_TYPES`]), in any case.
+pub fn is_entity_type(name: &str) -> bool {
+    ENTITY_TYPES.iter().any(|t| t.eq_ignore_ascii_case(name.trim()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

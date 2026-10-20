@@ -80,6 +80,17 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
     let vis = view.world_bounds();
     // each image's pixels as a premultiplied pixmap, made once per render
     let mut pixmaps: std::collections::HashMap<*const crate::images::Raster, Option<Pixmap>> = std::collections::HashMap::new();
+    // Opaque polylines of one colour and width in a row are stroked as one path: one stroke per
+    // object made a large drawing's thumbnail cost a microsecond per object.
+    let mut run: Option<(Paint, f32, PathBuilder)> = None;
+    let flush = |pm: &mut Pixmap, run: &mut Option<(Paint<'static>, f32, PathBuilder)>| {
+        if let Some((paint, w, pb)) = run.take()
+            && let Some(path) = pb.finish()
+        {
+            let stroke = Stroke { width: w, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
+            pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
+    };
     for p in &list.prims {
         let c = p.display_rgb(o.background);
         let mut paint = Paint::default();
@@ -87,25 +98,34 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
         paint.set_color_rgba8(c.0, c.1, c.2, p.alpha());
         paint.anti_alias = o.antialias;
         let pts = list.points(p);
+        if p.kind != Kind::Polyline {
+            flush(&mut pm, &mut run);
+        }
         match p.kind {
             Kind::Polyline => {
                 let bb = Bounds2::from_points(pts.iter().copied());
                 if !bb.intersects(&vis) {
                     continue;
                 }
-                let mut pb = PathBuilder::new();
+                let w = if o.px_per_mm > 0.0 && p.lw > 0.0 { (p.lw * o.px_per_mm).max(o.hairline) } else { o.hairline };
+                let joins = p.alpha() == 255 && run.as_ref().is_some_and(|(rp, rw, _)| *rw == w && same_paint(rp, &paint));
+                if !joins {
+                    flush(&mut pm, &mut run);
+                }
+                let (_, _, pb) = run.get_or_insert_with(|| (paint, w, PathBuilder::new()));
+                // Points closer than a quarter pixel to the last one drawn add nothing.
+                let mut last: Option<(f32, f32)> = None;
                 for (i, q) in pts.iter().enumerate() {
                     let (x, y) = view.to_screen(*q);
-                    if i == 0 {
-                        pb.move_to(x, y);
-                    } else {
-                        pb.line_to(x, y);
+                    match last {
+                        None => pb.move_to(x, y),
+                        Some((lx, ly)) if i + 1 < pts.len() && (x - lx).abs() < 0.25 && (y - ly).abs() < 0.25 => continue,
+                        Some(_) => pb.line_to(x, y),
                     }
+                    last = Some((x, y));
                 }
-                if let Some(path) = pb.finish() {
-                    let w = if o.px_per_mm > 0.0 && p.lw > 0.0 { (p.lw * o.px_per_mm).max(o.hairline) } else { o.hairline };
-                    let stroke = Stroke { width: w, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
-                    pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                if p.alpha() != 255 {
+                    flush(&mut pm, &mut run);
                 }
             }
             Kind::Tris | Kind::Mask => {
@@ -180,7 +200,16 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
             }
         }
     }
+    flush(&mut pm, &mut run);
     Some(pm)
+}
+
+/// Whether two solid paints draw alike.
+fn same_paint(a: &Paint, b: &Paint) -> bool {
+    match (&a.shader, &b.shader) {
+        (tiny_skia::Shader::SolidColor(x), tiny_skia::Shader::SolidColor(y)) => x == y && a.anti_alias == b.anti_alias,
+        _ => false,
+    }
 }
 
 /// The triangles `pts` (three points each) on screen as one path.

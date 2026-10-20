@@ -1,5 +1,6 @@
-//! Every command in the menus, started from its menu item and typed at the command line in a
-//! headless app on the sample drawing: whatever it asks first is cancelled with Escape (dialogs
+//! Every command in the menus and on the ribbon (buttons, their flyouts and the panels'
+//! slide-outs), started from its menu item and typed at the command line in a headless app on the
+//! sample drawing: whatever it asks first is cancelled with Escape (dialogs
 //! close the same way). Afterwards nothing has panicked, no dialog is open and the command line is
 //! back at "Command:" (no prompt, dialog, mode or question waiting, and no panic the engine's
 //! guard caught). Problems are collected and reported together; `CADADDY_SMOKE_ONLY=a,b` runs
@@ -8,7 +9,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use cadaddy_engine::Session;
-use cadaddy_ui_egui::{CadApp, Services, menus};
+use cadaddy_ui_egui::{CadApp, Services, menus, ribbon};
 use egui::vec2;
 use egui_kittest::Harness;
 use serde_json::json;
@@ -102,6 +103,37 @@ fn check(id: &str, how: &str) -> Option<String> {
     }
 }
 
+/// The commands on the ribbon: every button, its flyout's variants and the panels' slide-outs.
+fn ribbon_commands() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for tab in ribbon::TABS {
+        for panel in tab.panels {
+            out.extend(panel.more.iter().map(|f| f.1));
+            for item in panel.items {
+                let btns: &[ribbon::Btn] = match item {
+                    ribbon::Item::Large(b) => std::slice::from_ref(b),
+                    ribbon::Item::Smalls(bs) => bs,
+                    ribbon::Item::Layers => &[],
+                };
+                for b in btns {
+                    out.push(b.cmd);
+                    out.extend(b.flyout.iter().map(|f| f.1));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn ribbon_commands_are_known() {
+    let ribbon = ribbon_commands();
+    assert!(ribbon.len() > 100, "only {} ribbon commands", ribbon.len());
+    let unknown: Vec<&str> =
+        ribbon.iter().copied().filter(|id| cadaddy_engine::find_command(id).is_none() && !menus::UI_COMMANDS.iter().any(|c| c.0 == *id)).collect();
+    assert!(unknown.is_empty(), "ribbon buttons that run no command: {unknown:?}");
+}
+
 #[test]
 fn every_menu_command_starts_and_cancels_cleanly() {
     // Commands may write files next to the drawing (or the working folder): keep them out of the
@@ -111,6 +143,7 @@ fn every_menu_command_starts_and_cancels_cleanly() {
     std::env::set_current_dir(&dir).unwrap();
     let mut ids: Vec<&str> = cadaddy_engine::command_specs().iter().filter(|s| !s.menu.is_empty()).map(|s| s.id).collect();
     ids.extend(menus::UI_COMMANDS.iter().filter(|c| !c.2.is_empty()).map(|c| c.0));
+    ids.extend(ribbon_commands());
     ids.sort_unstable();
     ids.dedup();
     let only = std::env::var("CADADDY_SMOKE_ONLY").ok();
