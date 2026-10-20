@@ -23,6 +23,8 @@ use crate::{Result, Session};
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
 const SLAB_FT: f64 = 0.5;
+/// A door leaf's thickness, inches.
+const LEAF_IN: f64 = 1.75;
 /// Most objects one WALLGEN makes.
 const MAX_OBJECTS: usize = 200_000;
 
@@ -287,6 +289,16 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         let base = level.base;
         let to_sheet = |p: [f32; 3]| Vec3::new(base.x + f64::from(p[0]) * upf, base.y + f64::from(p[1]) * upf, f64::from(p[2]) * upf);
         let Some(mut m) = mesh(&grp.tris, &to_sheet) else { continue };
+        // Walk mode pads its floors and ceilings 2' past the walls (room to walk round); a level
+        // built from its plan ends them at the walls' outside faces.
+        if matches!(grp.part, Part::Floor | Part::Ceiling)
+            && let Some((lo, hi)) = planned.iter().find(|(si, _)| *si == grp.level).and_then(|(_, pl)| pl.footprint())
+        {
+            for v in &mut m.vertices {
+                v.x = v.x.clamp(lo.x, hi.x);
+                v.y = v.y.clamp(lo.y, hi.y);
+            }
+        }
         if grp.part == Part::Floor {
             m = slab(&m, g.slab_ft.max(0.0) * upf);
         }
@@ -445,6 +457,23 @@ pub(crate) fn empty_mesh() -> Mesh {
 }
 
 impl PlanLevel {
+    /// The extents of the walls' faces (their outside faces), when it has walls.
+    fn footprint(&self) -> Option<(Vec2, Vec2)> {
+        let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+        for w in &self.walls {
+            let len = w.a.dist(w.b);
+            if !(len > 1e-9 && w.thickness.is_finite()) {
+                continue;
+            }
+            let n = ((w.b - w.a) * (1.0 / len)).perp() * (w.thickness / 2.0);
+            for p in [w.a - n, w.a + n, w.b - n, w.b + n] {
+                lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+                hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+            }
+        }
+        (lo.x.is_finite() && lo.y.is_finite() && hi.x > lo.x && hi.y > lo.y).then_some((lo, hi))
+    }
+
     /// The level's meshes: one per wall (its pieces, headers and sills), one per door leaf and
     /// window pane.
     fn meshes(&self) -> Vec<(Part, Mesh, Handle)> {
@@ -491,7 +520,7 @@ impl PlanLevel {
                 add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), self.z0 + sill, self.z0 + head);
                 out.push((Part::Glass, m, l.source));
             } else {
-                add_box(&mut m, l.a, l.b, 1.75 * self.k, self.z0, self.z0 + l.head.unwrap_or(self.door_head));
+                add_box(&mut m, l.a, l.b, LEAF_IN * self.k, self.z0, self.z0 + l.head.unwrap_or(self.door_head));
                 out.push((Part::Door, m, l.source));
             }
         }
@@ -536,6 +565,33 @@ fn wall_type<'a>(g: &'a WallGen, layer: &str) -> Option<&'a cadaddy_walk3d::Wall
 /// A length in inches from an attribute value: `36`, `3'-0"`, `36"`.
 fn inches(v: &str) -> Option<f64> {
     v.trim().parse::<f64>().ok().or_else(|| super::perceive::feet_inches(v)).filter(|x| x.is_finite() && *x > 0.0)
+}
+
+/// A door block's swing: the first door-sized arc (60°–100°, 16"–54") of its block as the insert
+/// places it: the hinge (the arc's centre), the degrees, the arc's two ends and its radius.
+fn block_swing(d: &Drawing, e: &Entity, k: f64) -> Option<(Vec2, f64, [Vec2; 2], f64)> {
+    let EntityKind::Insert(ins) = &e.kind else { return None };
+    let blk = d.block(&ins.block)?;
+    let m = ins.transform(blk.base.xy());
+    blk.entities.iter().take(10_000).find_map(|be| {
+        if !matches!(be.kind, EntityKind::Arc(_)) {
+            return None;
+        }
+        let mut kind = be.kind.clone();
+        kind.transform(&m);
+        // A non-uniform scale turns the arc into an ellipse: not a swing.
+        let EntityKind::Arc(a) = kind else { return None };
+        let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
+        if sweep < 1e-9 {
+            sweep = std::f64::consts::TAU;
+        }
+        let deg = sweep.to_degrees();
+        if !(60.0..=100.0).contains(&deg) || !(16.0 * k..=54.0 * k).contains(&a.radius) {
+            return None;
+        }
+        let c = a.center.xy();
+        Some((c, deg, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius], a.radius))
+    })
 }
 
 /// Door and window blocks by the spec's families (and its door and window layers): their kind,
@@ -770,6 +826,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         // Tagged openings take their schedule row's size and heights.
         super::schedules::size_openings(sp, &mut ops, &mut fitted, upf);
     }
+    // A door block hangs from its hinge, the centre of the swing it draws (most door blocks are
+    // inserted at the hinge): cut and placed as that swing, not centred on the insertion point.
+    for o in ops.iter_mut().filter(|o| o.kind == "door" && o.swing.is_none() && o.block.is_some()) {
+        let Some(e) = ents.iter().find(|e| e.handle == o.handle) else { continue };
+        if let Some((hinge, deg, ends, radius)) = block_swing(d, e, k) {
+            o.at = hinge;
+            o.swing = Some((deg, ends));
+            o.width = radius;
+        }
+    }
     let (mut doors, mut windows) = (0, 0);
     for o in ops.iter().take(MAX_OBJECTS) {
         // The wall it is in: the hinge (or the block) on its centreline within its thickness.
@@ -799,8 +865,11 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let along = |e: Vec2| u.dot(e - o.at).abs();
                 let (closed, open) = if along(ends[0]) >= along(ends[1]) { (ends[0], ends[1]) } else { (ends[1], ends[0]) };
                 let s_end = u.dot(closed - w.a);
-                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false, head: None, sill: None });
-                pl.leaves.push(Leaf { a: o.at, b: open, window: false, thickness: w.thickness, source: o.handle, head: None, sill: None });
+                let (head, _) = fitted.get(&o.handle).copied().unwrap_or((None, None));
+                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false, head, sill: None });
+                // The leaf stands open at the jamb, its face on the opening's edge (not in the wall).
+                let inset = u * (LEAF_IN * k / 2.0 * (s_end - s_at).signum());
+                pl.leaves.push(Leaf { a: o.at + inset, b: open + inset, window: false, thickness: w.thickness, source: o.handle, head, sill: None });
                 doors += 1;
             }
             (kind, _) => {
@@ -894,7 +963,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     // The open end: the point farthest from the wall line.
                     let open =
                         pts.iter().copied().max_by(|a, b| u.perp().dot(*a - jamb).abs().total_cmp(&u.perp().dot(*b - jamb).abs())).unwrap_or(jamb);
-                    leaf = Some((jamb, jamb + (open - jamb) * (width / open.dist(jamb).max(1e-12)), e.handle));
+                    let inset = (if jamb == g0 { u } else { -u }) * (LEAF_IN * k / 2.0);
+                    leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (width / open.dist(jamb).max(1e-12)), e.handle));
                 }
             }
         }
