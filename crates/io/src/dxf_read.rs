@@ -2336,6 +2336,11 @@ impl Objects {
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
         }
+        if let Some(data) =
+            self.xrecord_text(crate::dxf_ext::SHEET_SET_KEY).filter(|s| serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| v.is_object()))
+        {
+            d.header.set_str(crate::dxf_ext::SHEET_SET_KEY, &data);
+        }
         if let Some(json) = self.xrecord_text(crate::dxf_ext::LAYER_EVAL_KEY) {
             crate::dxf_ext::apply_layer_eval(d, &json);
         }

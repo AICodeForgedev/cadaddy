@@ -20,6 +20,8 @@ pub enum Panel {
     Symbols,
     /// The building spec and the model built from it (PLANSTOMODEL).
     PlansToModel,
+    /// The Sheet Set Manager (SHEETSET).
+    SheetSets,
 }
 
 impl Panel {
@@ -34,6 +36,7 @@ impl Panel {
             Self::ExternalRefs => "externalReferences",
             Self::Symbols => "symbols",
             Self::PlansToModel => "plansToModel",
+            Self::SheetSets => "sheetSets",
         }
     }
     fn label(self) -> &'static str {
@@ -46,6 +49,7 @@ impl Panel {
             Self::ExternalRefs => "External References",
             Self::Symbols => "Symbols",
             Self::PlansToModel => "Plans to Model",
+            Self::SheetSets => "Sheet Set Manager",
         }
     }
     fn default_side(self) -> Zone {
@@ -58,10 +62,11 @@ impl Panel {
             Self::ExternalRefs => Zone::Right,
             Self::Symbols => Zone::Right,
             Self::PlansToModel => Zone::Right,
+            Self::SheetSets => Zone::Right,
         }
     }
     /// Palettes outside the default arrangement, opened on request (QUICKCALC).
-    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel];
+    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets];
     pub fn parse(id: &str) -> Result<Self, String> {
         Self::ALL.iter().chain(Self::ON_DEMAND).copied().find(|panel| panel.id() == id).ok_or_else(|| format!("Unknown panel: {id}"))
     }
@@ -551,6 +556,7 @@ fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
             egui::ScrollArea::both().id_salt("dock-xrefs").auto_shrink([false, false]).show(ui, |ui| crate::xrefs::section(app, ui));
         }
         Panel::PlansToModel => crate::planstomodel::show(app, ui),
+        Panel::SheetSets => crate::sheetsets::show(app, ui),
         Panel::Symbols => {
             egui::ScrollArea::vertical()
                 .id_salt("dock-symbols")
@@ -738,6 +744,7 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Canvas => (egui::vec2(300.0, 180.0), 1_000_000.0),
         Panel::QuickCalc => (egui::vec2(240.0, 160.0), 600.0),
         Panel::PlansToModel => (egui::vec2(280.0, 200.0), 900.0),
+        Panel::SheetSets => (egui::vec2(280.0, 220.0), 600.0),
         Panel::ToolSets => (egui::vec2(220.0, 150.0), 480.0),
         // Properties is the palette used most: it keeps room for its fields (it shrank to one
         // row beside an open External References panel). External References and Symbols need
