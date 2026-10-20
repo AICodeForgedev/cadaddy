@@ -284,11 +284,12 @@ impl Interactive for DviewM {
             Stage::Zoom => Prompt::new("Specify zoom scale factor", Accept::NUMBER).default("1"),
         }
     }
-    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        if matches!(i, Input::Cancel) {
-            self.end(s)?;
-            return Ok(Step::Cancel);
+    fn cancelled(&mut self, s: &mut Session) {
+        if let Err(e) = self.end(s) {
+            s.echo(e.to_string());
         }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match self.stage {
             Stage::Select => match self.sel.feed(s, &i)? {
                 SelOutcome::More => Ok(Step::Continue),

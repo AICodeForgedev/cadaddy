@@ -238,6 +238,22 @@ fn inside_an_active_viewport_it_twists_that_viewport_as_one_undo_step() {
 }
 
 #[test]
+fn escape_inside_an_active_viewport_keeps_the_twist_as_one_undo_step() {
+    let (mut s, h) = layout_session();
+    s.execute("mspace", &json!({ "handle": h.hex() })).unwrap();
+    let undo = s.state().unwrap().undo.len();
+    for l in ["dview", "", "tw", "30"] {
+        s.cmdline(l).unwrap();
+    }
+    s.input(Input::Cancel).unwrap();
+    assert!(s.current_prompt().is_none());
+    assert!(near(vp(&s, h).twist.to_degrees(), 30.0));
+    assert_eq!(s.state().unwrap().undo.len(), undo + 1);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(vp(&s, h).twist, 0.0);
+}
+
+#[test]
 fn the_view_inside_a_twisted_viewport_maps_the_screen_like_the_sheet() {
     let (mut s, h) = layout_session();
     s.execute("mspace", &json!({ "handle": h.hex() })).unwrap();
