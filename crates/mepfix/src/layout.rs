@@ -103,10 +103,6 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     for l in ["1", "2"] {
         v.push((format!("E-20{l}"), format!("LEVEL {l} POWER PLAN"), "E".into(), Kind::Power(l.into())));
     }
-    // Architectural detail/elevation/section sheets (non-plan, for callout targets)
-    v.push(("A-201".into(), "EXTERIOR ELEVATIONS".into(), "A".into(), Kind::Schedules("A".into())));
-    v.push(("A-301".into(), "BUILDING SECTIONS".into(), "A".into(), Kind::Schedules("A".into())));
-    v.push(("A-501".into(), "WALL SECTIONS AND DETAILS".into(), "A".into(), Kind::Schedules("A".into())));
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
     v.push(("E-601".into(), "ELECTRICAL SCHEDULES".into(), "E".into(), Kind::Schedules("E".into())));
@@ -117,8 +113,16 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     v.push(("A-501".into(), "WALL TYPES AND PARTITION SCHEDULE".into(), "A".into(), Kind::WallTypes));
     v.push((crate::ceilings::DETAILS_SHEET.into(), "CEILING TYPES, SOFFIT AND HEAD OF WALL DETAILS".into(), "A".into(), Kind::CeilingDetails));
     v.push(("A-601".into(), "ROOM FINISH SCHEDULE".into(), "A".into(), Kind::FinishSchedule));
+    // Architectural detail/elevation/section sheets (non-plan, for callout targets)
+    v.push(("A-201".into(), "EXTERIOR ELEVATIONS".into(), "A".into(), Kind::Schedules("A".into())));
+    v.push(("A-301".into(), "BUILDING SECTIONS".into(), "A".into(), Kind::Schedules("A".into())));
+    v.push((WALL_DETAILS_SHEET.into(), "WALL SECTIONS AND DETAILS".into(), "A".into(), Kind::Schedules("A".into())));
     v
 }
+
+/// The wall sections and details sheet the enlarged plans' detail bubbles point at (A-501 is the
+/// wall types sheet, A-502 the ceiling details).
+pub const WALL_DETAILS_SHEET: &str = "A-503";
 
 /// The building's plan extents with what is drawn outside it (grid bubbles, the meter, the
 /// sewer), feet.
@@ -741,7 +745,7 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
         }
     }
 
-    // --- Detail bubbles on enlarged plumbing plans pointing to A-501 ---
+    // --- Detail bubbles on enlarged plumbing plans pointing to the wall details sheet ---
     for sh in t.sheets.clone() {
         if sh.window_ft.is_none() {
             continue;
@@ -755,7 +759,7 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
             kind: "detail_bubble".into(),
             on_sheet: sh.number.clone(),
             detail: format!("{detail_num}"),
-            target_sheet: "A-501".into(),
+            target_sheet: WALL_DETAILS_SHEET.into(),
             at_ft: [round(cx), round(cy)],
             cut_from_ft: None,
             cut_to_ft: None,
