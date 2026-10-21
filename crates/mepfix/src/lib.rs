@@ -30,6 +30,8 @@ pub mod sheet_reader;
 pub mod struct_reader;
 pub mod style;
 pub mod truth;
+pub mod wall_reader;
+pub mod walls;
 
 use cadaddy_doc::Space;
 use cadaddy_geom::{Bounds2, Vec2};
@@ -64,22 +66,32 @@ impl FixtureSet {
 /// building and systems themselves.
 pub fn truth_for(seed: u64) -> Truth {
     let mut r = Rng::new(seed);
-    let st = style::Style::new(&mut r.fork(1));
+    let mut st = style::Style::new(&mut r.fork(1));
     let d = design::design(seed, &st, &mut r.fork(2));
     let mut t = d.truth;
     t.clashes = clash::clashes(&t, &d.planted);
+    add_walls(&mut t, &mut st);
     t
+}
+
+/// The wall types and walls, from a random stream of their own (so the rest of a set stays as
+/// it was before walls were added, and [`truth_for`] gives the same walls as [`generate`]).
+fn add_walls(t: &mut Truth, st: &mut style::Style) {
+    let mut r = Rng::new(t.seed ^ 0x5741_4C4C_5459_5045).fork(5);
+    st.walls = walls::WallStyle::new(&mut r);
+    walls::design_walls(t, &st.walls, &mut r);
 }
 
 /// The fixture set for a seed.
 pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     let mut r = Rng::new(seed);
-    let st = style::Style::new(&mut r.fork(1));
+    let mut st = style::Style::new(&mut r.fork(1));
     let d = design::design(seed, &st, &mut r.fork(2));
     let mut t = d.truth;
     layout::plan_sheets(&mut t, &st, &mut r.fork(3));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
     t.clashes = clash::clashes(&t, &d.planted);
+    add_walls(&mut t, &mut st);
     let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();
