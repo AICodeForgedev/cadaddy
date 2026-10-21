@@ -290,3 +290,139 @@ fn the_scorer_scores() {
     assert!(s.precision < 1.0 && s.size_accuracy < 0.01);
     assert!((s.height_mae_ft.unwrap() - 2.0).abs() < 1e-6);
 }
+
+// ---- Electrical fixture tests -------------------------------------------------------------------
+
+#[test]
+fn electrical_devices_exist_for_every_seed() {
+    for seed in 1..=20 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        assert!(!t.elec_devices.is_empty(), "{ctx}: no electrical devices");
+        assert!(!t.elec_panels.is_empty(), "{ctx}: no electrical panels");
+        assert!(!t.elec_circuits.is_empty(), "{ctx}: no electrical circuits");
+        assert!(!t.elec_conduits.is_empty(), "{ctx}: no electrical conduits");
+    }
+}
+
+#[test]
+fn all_electrical_device_kinds_present() {
+    let t = truth_for(5);
+    let kinds: BTreeSet<&str> = t.elec_devices.iter().map(|d| d.kind.as_str()).collect();
+    for k in ["light_fixture", "switch", "exit_sign", "emergency_light", "receptacle", "data_outlet", "disconnect", "junction_box"] {
+        assert!(kinds.contains(k), "missing device kind: {k}, have: {kinds:?}");
+    }
+    // Floor boxes appear for rooms > 400 sq ft; at least one seed has them.
+    let any_fb = (1..=20).any(|s| truth_for(s).elec_devices.iter().any(|d| d.kind == "floor_box"));
+    assert!(any_fb, "no floor_box in any seed 1..20");
+}
+
+#[test]
+fn panels_have_schedules() {
+    let t = truth_for(3);
+    for p in &t.elec_panels {
+        if p.kind == "panel" {
+            assert!(!p.schedule.is_empty(), "panel {} has empty schedule", p.tag);
+        }
+    }
+    // Transformer exists on level 1.
+    assert!(t.elec_panels.iter().any(|p| p.kind == "transformer" && p.level == "1"), "no transformer");
+}
+
+#[test]
+fn circuits_link_devices_to_panels() {
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        for ckt in &t.elec_circuits {
+            assert!(!ckt.devices.is_empty(), "{ctx}: circuit {} has no devices", ckt.id);
+            assert!(!ckt.panel.is_empty(), "{ctx}: circuit {} has no panel", ckt.id);
+            // Every device id in the circuit exists.
+            for did in &ckt.devices {
+                assert!(t.elec_devices.iter().any(|d| &d.id == did), "{ctx}: circuit {} references nonexistent device {did}", ckt.id);
+            }
+        }
+        // Every device with a circuit is in that circuit's device list.
+        for d in &t.elec_devices {
+            if !d.circuit.is_empty() {
+                let ckt = t.elec_circuits.iter().find(|c| c.id == d.circuit);
+                assert!(ckt.is_some(), "{ctx}: device {} references nonexistent circuit {}", d.id, d.circuit);
+                assert!(ckt.is_some_and(|c| c.devices.contains(&d.id)), "{ctx}: device {} not in circuit {}'s list", d.id, d.circuit);
+            }
+        }
+    }
+}
+
+#[test]
+fn electrical_sheets_are_generated() {
+    let set = generate(1).unwrap();
+    let t = &set.truth;
+    // E-sheets exist.
+    for num in ["E-101", "E-102", "E-201", "E-202", "E-601"] {
+        let sh = t.sheets.iter().find(|s| s.number == num);
+        assert!(sh.is_some(), "missing sheet {num}");
+        let sh = sh.unwrap();
+        assert!(set.file(&sh.pdf).is_some_and(|b| b.starts_with(b"%PDF")), "{num} has no PDF");
+        assert!(set.file(&sh.dxf).is_some_and(|b| !b.is_empty()), "{num} has no DXF");
+    }
+    // Lighting plans show the right level.
+    assert_eq!(t.sheets.iter().find(|s| s.number == "E-101").unwrap().level.as_deref(), Some("1"));
+    assert_eq!(t.sheets.iter().find(|s| s.number == "E-201").unwrap().level.as_deref(), Some("1"));
+}
+
+#[test]
+fn devices_have_diagrammatic_offsets() {
+    let t = truth_for(7);
+    let mut any_offset = false;
+    for d in &t.elec_devices {
+        let dx = (d.drawn_ft[0] - d.at_ft[0]).abs();
+        let dy = (d.drawn_ft[1] - d.at_ft[1]).abs();
+        if dx > 0.01 || dy > 0.01 {
+            any_offset = true;
+        }
+        // Diagrammatic offset is bounded (not more than ~2 ft).
+        assert!(dx < 2.0 && dy < 2.0, "device {} offset too large: dx={dx}, dy={dy}", d.id);
+    }
+    assert!(any_offset, "no device has a diagrammatic offset");
+}
+
+#[test]
+fn mounting_heights_are_realistic() {
+    let t = truth_for(2);
+    for d in &t.elec_devices {
+        match d.kind.as_str() {
+            "receptacle" | "data_outlet" => assert_eq!(d.mounting_in, 18.0, "device {} should be at 18\" AFF", d.id),
+            "switch" => assert_eq!(d.mounting_in, 46.0, "switch {} should be at 46\" AFF", d.id),
+            "disconnect" => assert_eq!(d.mounting_in, 60.0, "disconnect {} should be at 60\" AFF", d.id),
+            "light_fixture" if d.mounting_note.as_deref() == Some("CLG") => {
+                assert!(d.mounting_in > 70.0, "ceiling fixture {} mounting too low: {}", d.id, d.mounting_in);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn conduits_have_tags_and_sizes() {
+    let t = truth_for(4);
+    for c in &t.elec_conduits {
+        assert!(c.size_in > 0.0, "conduit {} has zero size", c.id);
+        assert!(!c.conduit_type.is_empty(), "conduit {} has no type", c.id);
+        let dx = c.to_ft[0] - c.from_ft[0];
+        let dy = c.to_ft[1] - c.from_ft[1];
+        assert!((dx * dx + dy * dy).sqrt() > 0.1, "conduit {} is too short", c.id);
+    }
+}
+
+#[test]
+fn electrical_schedule_sheet_has_content() {
+    let set = generate(2).unwrap();
+    let t = &set.truth;
+    let sh = t.sheets.iter().find(|s| s.number == "E-601").unwrap();
+    let dxf_bytes = set.file(&sh.dxf).unwrap();
+    let dxf = cadaddy_io::read_dxf(dxf_bytes).unwrap();
+    let dt = texts(&dxf);
+    // The schedule sheet should contain panel tags and fixture types.
+    assert!(dt.iter().any(|(s, _)| s.contains("LIGHT FIXTURE SCHEDULE")), "no light fixture schedule on E-601");
+    assert!(dt.iter().any(|(s, _)| s.contains("PANEL")), "no panel schedule on E-601");
+}

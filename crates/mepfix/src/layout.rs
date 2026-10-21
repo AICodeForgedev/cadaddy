@@ -17,6 +17,10 @@ pub enum Kind {
     Fire(String),
     /// An enlarged plumbing plan of a level: `TOILET` rooms or `MECH` room.
     Enlarged(String, String),
+    /// Electrical lighting plan for a level.
+    Lighting(String),
+    /// Electrical power plan for a level.
+    Power(String),
     Schedules(String),
 }
 
@@ -24,6 +28,11 @@ impl Kind {
     pub fn plan(&self) -> bool {
         !matches!(self, Kind::Cover | Kind::Schedules(_))
     }
+}
+
+/// Electrical conduit size label: `3/4"C`, `1"C`.
+pub fn conduit_label(size_in: f64) -> String {
+    format!("{}\"C", crate::truth::pipe_size(size_in))
 }
 
 /// Where the title block goes and the room left for the drawing, paper inches.
@@ -70,8 +79,15 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     for l in ["1", "2"] {
         v.push((format!("FP-10{l}"), format!("LEVEL {l} FIRE PROTECTION PLAN"), "FP".into(), Kind::Fire(l.into())));
     }
+    for l in ["1", "2"] {
+        v.push((format!("E-10{l}"), format!("LEVEL {l} LIGHTING PLAN"), "E".into(), Kind::Lighting(l.into())));
+    }
+    for l in ["1", "2"] {
+        v.push((format!("E-20{l}"), format!("LEVEL {l} POWER PLAN"), "E".into(), Kind::Power(l.into())));
+    }
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
+    v.push(("E-601".into(), "ELECTRICAL SCHEDULES".into(), "E".into(), Kind::Schedules("E".into())));
     v
 }
 
@@ -120,7 +136,8 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in sheet_list() {
         let level = match &kind {
-            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l) | Kind::Enlarged(l, _) => Some(l.clone()),
+            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l)
+            | Kind::Enlarged(l, _) | Kind::Lighting(l) | Kind::Power(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();

@@ -1164,6 +1164,9 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let vt = net.node("vtr", "V", "R", [vx, vy, roof + 1.0]);
     net.link(vb, vt, "V", "pipe", [3.0, 3.0], "1", "P-101");
 
+    // ---- Electrical -----------------------------------------------------------------------
+    elec_design(&mut t, &floors, &xs, y1, y2, y3, cw, r);
+
     // ---- Node kinds, risers ----------------------------------------------------------------
     finish_kinds(&mut net);
     t.nodes = net.nodes;
@@ -1214,6 +1217,573 @@ fn finish_kinds(net: &mut Net) {
             _ => "cross".into(),
         };
     }
+}
+
+/// The electrical systems: lighting fixtures, switches, receptacles, data outlets, panels,
+/// circuits, conduit runs and homerun arrows. Positions are diagrammatic on the E-sheets
+/// (symbols near, not at, the true position) while A-sheets carry the real positions.
+#[allow(clippy::too_many_arguments)]
+fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y3: f64, _cw: f64, r: &mut Rng) {
+    let mut er = r.fork(99);
+    let width = xs.last().copied().unwrap_or(0.0);
+
+    // Fixture type definitions (tag, description, mounting, lamp/wattage as text).
+    let light_types = [
+        ("A", "2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
+        ("B", "2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
+        ("C", "RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
+        ("D", "WALL SCONCE", "WALL MOUNT", "LED 9W"),
+        ("E", "PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
+    ];
+    let exit_types = [("ES-1", "EXIT SIGN, LED", "WALL/CEILING", "LED 2W")];
+    let emerg_types = [("EM-1", "EMERGENCY LIGHT, DUAL HEAD", "WALL MOUNT", "LED 2X3W")];
+
+    // Panel sizes per floor: one lighting panel, one power panel.
+    let panel_tags_l = |lv: &str| format!("L{lv}");
+    let panel_tags_p = |lv: &str| format!("P{lv}");
+
+    // Diagrammatic offset: the E-sheets show symbols randomly offset from the true position.
+    let jitter = |r: &mut Rng, x: f64, y: f64| -> [f64; 2] {
+        let dx = (r.range(0, 30) as f64 - 15.0) / 12.0; // up to 1.25 ft
+        let dy = (r.range(0, 30) as f64 - 15.0) / 12.0;
+        [x + dx, y + dy]
+    };
+
+    let mut dev_n = 0usize;
+    let mut _ckt_n = 0usize;
+    let mut conduit_n = 0usize;
+
+    for f in floors {
+        let lv = f.code.as_str();
+        let e = f.elev;
+        let lsheet = format!("E-10{lv}");
+        let psheet = format!("E-20{lv}");
+
+        let lp_tag = panel_tags_l(lv);
+        let pp_tag = panel_tags_p(lv);
+        // Panels in the electrical room (first bay, south side)
+        let panel_x = xs.first().copied().unwrap_or(0.0) + 2.0;
+        let panel_y = 2.0;
+        let lp_id = format!("EP{:02}", t.elec_panels.len() + 1);
+        t.elec_panels.push(ElecPanel {
+            id: lp_id.clone(),
+            tag: lp_tag.clone(),
+            kind: "panel".into(),
+            level: lv.into(),
+            room: format!("ELEC-{lv}"),
+            at_ft: [panel_x, panel_y, e],
+            min_ft: [panel_x - 0.75, panel_y - 0.25],
+            max_ft: [panel_x + 0.75, panel_y + 0.25],
+            schedule: Vec::new(),
+            sheet: lsheet.clone(),
+        });
+        let pp_id = format!("EP{:02}", t.elec_panels.len() + 1);
+        t.elec_panels.push(ElecPanel {
+            id: pp_id.clone(),
+            tag: pp_tag.clone(),
+            kind: "panel".into(),
+            level: lv.into(),
+            room: format!("ELEC-{lv}"),
+            at_ft: [panel_x + 3.0, panel_y, e],
+            min_ft: [panel_x + 2.25, panel_y - 0.25],
+            max_ft: [panel_x + 3.75, panel_y + 0.25],
+            schedule: Vec::new(),
+            sheet: psheet.clone(),
+        });
+
+        // A transformer on level 1 only.
+        if lv == "1" {
+            let tx_id = format!("EP{:02}", t.elec_panels.len() + 1);
+            t.elec_panels.push(ElecPanel {
+                id: tx_id,
+                tag: "TX-1".into(),
+                kind: "transformer".into(),
+                level: "1".into(),
+                room: format!("ELEC-{lv}"),
+                at_ft: [panel_x + 6.0, panel_y, e],
+                min_ft: [panel_x + 5.25, panel_y - 0.5],
+                max_ft: [panel_x + 6.75, panel_y + 0.5],
+                schedule: Vec::new(),
+                sheet: psheet.clone(),
+            });
+        }
+
+        let mut light_ckt = 1u32;
+        let mut power_ckt = 1u32;
+        let mut light_schedule_rows: Vec<PanelCircuitRow> = Vec::new();
+        let mut power_schedule_rows: Vec<PanelCircuitRow> = Vec::new();
+
+        // ---- Lighting: office rooms get 2x4 troffers, corridor gets 2x2, toilets get downlights.
+        // Switches at the door of each room.
+        let rooms: Vec<Room> = t.building.rooms.iter().filter(|rm| rm.level == lv).cloned().collect();
+        for rm in &rooms {
+            let (rx0, ry0) = (rm.min_ft[0], rm.min_ft[1]);
+            let (rx1, ry1) = (rm.max_ft[0], rm.max_ft[1]);
+            let rw = rx1 - rx0;
+            let rh = ry1 - ry0;
+            let clg = rm.ceiling.as_ref().map(|c| c.height_ft).unwrap_or(9.0);
+            let clg_in = clg * 12.0;
+
+            // Pick fixture type based on room.
+            let is_corridor = rm.name.contains("CORRIDOR") || rm.name.contains("HALL");
+            let is_toilet = rm.name.contains("TOILET") || rm.name.contains("REST");
+            let is_mech = rm.name.contains("MECH") || rm.name.contains("ELEC");
+            let (fix_tag, _fix_desc, _fix_mount, _fix_watt) = if is_corridor {
+                light_types[1] // 2x2
+            } else if is_toilet {
+                light_types[2] // downlight
+            } else if is_mech {
+                light_types[1] // 2x2
+            } else {
+                light_types[0] // 2x4
+            };
+
+            // How many fixtures: roughly one per 80 sq ft for offices, 60 for corridors.
+            let area = rw * rh;
+            let per_fix = if is_corridor { 60.0 } else { 80.0 };
+            let count = ((area / per_fix).round() as usize).clamp(1, 12);
+            let cols = if rw > rh { ((rw / 8.0).ceil() as usize).clamp(1, 4) } else { 1 };
+            let rows_n = ((count as f64 / cols as f64).ceil() as usize).max(1);
+
+            let ckt_label = format!("{lp_tag}/{light_ckt}");
+            let ckt_id = format!("CK{:03}", t.elec_circuits.len() + 1);
+            _ckt_n += 1;
+            let mut ckt_devices: Vec<String> = Vec::new();
+
+            for row in 0..rows_n {
+                for col in 0..cols {
+                    if row * cols + col >= count {
+                        break;
+                    }
+                    dev_n += 1;
+                    let fx = rx0 + (col as f64 + 0.5) * rw / cols as f64;
+                    let fy = ry0 + (row as f64 + 0.5) * rh / rows_n as f64;
+                    let drawn = jitter(&mut er, fx, fy);
+                    let arch_pos = !is_corridor && !is_mech; // offices get exact architectural positioning
+                    let dev_id = format!("ED{dev_n:04}");
+                    t.elec_devices.push(ElecDevice {
+                        id: dev_id.clone(),
+                        tag: fix_tag.into(),
+                        kind: "light_fixture".into(),
+                        type_tag: fix_tag.into(),
+                        level: lv.into(),
+                        room: rm.number.clone(),
+                        at_ft: [fx, fy, e + clg],
+                        drawn_ft: drawn,
+                        mounting_in: clg_in,
+                        mounting_note: Some("CLG".into()),
+                        arch_positioned: arch_pos,
+                        circuit: ckt_id.clone(),
+                        panel: lp_id.clone(),
+                        sheet: lsheet.clone(),
+                    });
+                    ckt_devices.push(dev_id);
+                }
+            }
+
+            // Switch at the door (south-west corner of the room for offices, corridor side).
+            dev_n += 1;
+            let sw_x = rx0 + 0.5;
+            let sw_y = if ry0 <= y1 { ry1 - 0.5 } else { ry0 + 0.5 };
+            let sw_drawn = jitter(&mut er, sw_x, sw_y);
+            let sw_id = format!("ED{dev_n:04}");
+            t.elec_devices.push(ElecDevice {
+                id: sw_id.clone(),
+                tag: "S".into(),
+                kind: "switch".into(),
+                type_tag: "S".into(),
+                level: lv.into(),
+                room: rm.number.clone(),
+                at_ft: [sw_x, sw_y, e + 46.0 / 12.0],
+                drawn_ft: sw_drawn,
+                mounting_in: 46.0,
+                mounting_note: Some("+46\"".into()),
+                arch_positioned: false,
+                circuit: ckt_id.clone(),
+                panel: lp_id.clone(),
+                sheet: lsheet.clone(),
+            });
+            ckt_devices.push(sw_id);
+
+            // Homerun arrow from the last fixture in the room.
+            let hr_x = rx0 + rw * 0.5;
+            let hr_y = ry0 + rh * 0.8;
+            t.elec_circuits.push(ElecCircuit {
+                id: ckt_id.clone(),
+                label: ckt_label.clone(),
+                panel: lp_id.clone(),
+                number: format!("{light_ckt}"),
+                level: lv.into(),
+                devices: ckt_devices,
+                homerun_ft: [hr_x, hr_y],
+                sheet: lsheet.clone(),
+            });
+            light_schedule_rows.push(PanelCircuitRow {
+                circuit: format!("{light_ckt}"),
+                description: format!("LIGHTING - {}", rm.name),
+                breaker_amps: "20".into(),
+                poles: "1".into(),
+            });
+            light_ckt += 1;
+        }
+
+        // Exit signs at corridor ends and emergency lights every ~75 ft of corridor.
+        let corr_rooms: Vec<&Room> = rooms.iter().filter(|rm| rm.name.contains("CORRIDOR") || rm.name.contains("HALL")).collect();
+        for crm in &corr_rooms {
+            let (cx0, cy0) = (crm.min_ft[0], crm.min_ft[1]);
+            let (cx1, cy1) = (crm.max_ft[0], crm.max_ft[1]);
+            let corr_len = cx1 - cx0;
+            let clg = crm.ceiling.as_ref().map(|c| c.height_ft).unwrap_or(9.0);
+
+            // Exit signs at each end.
+            for ex in [cx0 + 1.0, cx1 - 1.0] {
+                dev_n += 1;
+                let ey = (cy0 + cy1) / 2.0;
+                let dev_id = format!("ED{dev_n:04}");
+                t.elec_devices.push(ElecDevice {
+                    id: dev_id.clone(),
+                    tag: "ES-1".into(),
+                    kind: "exit_sign".into(),
+                    type_tag: exit_types[0].0.into(),
+                    level: lv.into(),
+                    room: crm.number.clone(),
+                    at_ft: [ex, ey, e + clg],
+                    drawn_ft: jitter(&mut er, ex, ey),
+                    mounting_in: clg * 12.0,
+                    mounting_note: Some("CLG".into()),
+                    arch_positioned: false,
+                    circuit: String::new(), // emergency circuit, filled below
+                    panel: lp_id.clone(),
+                    sheet: lsheet.clone(),
+                });
+            }
+
+            // Emergency lights every 75 ft.
+            let n_em = ((corr_len / 75.0).ceil() as usize).max(1);
+            for k in 0..n_em {
+                dev_n += 1;
+                let emx = cx0 + (k as f64 + 0.5) * corr_len / n_em as f64;
+                let emy = (cy0 + cy1) / 2.0;
+                let dev_id = format!("ED{dev_n:04}");
+                t.elec_devices.push(ElecDevice {
+                    id: dev_id.clone(),
+                    tag: "EM-1".into(),
+                    kind: "emergency_light".into(),
+                    type_tag: emerg_types[0].0.into(),
+                    level: lv.into(),
+                    room: crm.number.clone(),
+                    at_ft: [emx, emy, e + 7.0],
+                    drawn_ft: jitter(&mut er, emx, emy),
+                    mounting_in: 84.0, // 7' AFF
+                    mounting_note: Some("+84\"".into()),
+                    arch_positioned: false,
+                    circuit: String::new(),
+                    panel: lp_id.clone(),
+                    sheet: lsheet.clone(),
+                });
+            }
+        }
+
+        // Emergency circuit: gather all exit signs and emergency lights.
+        let em_devs: Vec<String> = t
+            .elec_devices
+            .iter()
+            .filter(|d| d.level == lv && (d.kind == "exit_sign" || d.kind == "emergency_light") && d.circuit.is_empty())
+            .map(|d| d.id.clone())
+            .collect();
+        if !em_devs.is_empty() {
+            let em_ckt_id = format!("CK{:03}", t.elec_circuits.len() + 1);
+            let em_label = format!("{lp_tag}/{light_ckt}");
+            for d in t.elec_devices.iter_mut().filter(|d| em_devs.contains(&d.id)) {
+                d.circuit = em_ckt_id.clone();
+            }
+            let hr = t
+                .elec_devices
+                .iter()
+                .rfind(|d| em_devs.contains(&d.id))
+                .map(|d| d.drawn_ft)
+                .unwrap_or([panel_x, panel_y]);
+            t.elec_circuits.push(ElecCircuit {
+                id: em_ckt_id,
+                label: em_label,
+                panel: lp_id.clone(),
+                number: format!("{light_ckt}"),
+                level: lv.into(),
+                devices: em_devs,
+                homerun_ft: hr,
+                sheet: lsheet.clone(),
+            });
+            light_schedule_rows.push(PanelCircuitRow {
+                circuit: format!("{light_ckt}"),
+                description: "EMERGENCY/EXIT LIGHTING".into(),
+                breaker_amps: "20".into(),
+                poles: "1".into(),
+            });
+            light_ckt += 1;
+        }
+
+        // ---- Power plan: receptacles, data outlets, floor boxes -----------------------
+        for rm in &rooms {
+            let (rx0, ry0) = (rm.min_ft[0], rm.min_ft[1]);
+            let (rx1, ry1) = (rm.max_ft[0], rm.max_ft[1]);
+            let rw = rx1 - rx0;
+            let rh = ry1 - ry0;
+            let is_corridor = rm.name.contains("CORRIDOR") || rm.name.contains("HALL");
+            let is_toilet = rm.name.contains("TOILET") || rm.name.contains("REST");
+            let is_mech = rm.name.contains("MECH") || rm.name.contains("ELEC");
+
+            let ckt_label = format!("{pp_tag}/{power_ckt}");
+            let ckt_id = format!("CK{:03}", t.elec_circuits.len() + 1);
+            let mut ckt_devices: Vec<String> = Vec::new();
+
+            // Receptacles along walls: one every 12 ft (code), at 18" AFF.
+            let perimeter = 2.0 * (rw + rh);
+            let n_recep = if is_corridor { 2 } else { ((perimeter / 12.0).ceil() as usize).clamp(2, 8) };
+            // Place receptacles around the perimeter.
+            for k in 0..n_recep {
+                dev_n += 1;
+                let frac = k as f64 / n_recep as f64;
+                let perim_at = frac * perimeter;
+                let (rx, ry) = if perim_at < rw {
+                    (rx0 + perim_at, ry0)
+                } else if perim_at < rw + rh {
+                    (rx1, ry0 + (perim_at - rw))
+                } else if perim_at < 2.0 * rw + rh {
+                    (rx1 - (perim_at - rw - rh), ry1)
+                } else {
+                    (rx0, ry1 - (perim_at - 2.0 * rw - rh))
+                };
+                let drawn = jitter(&mut er, rx, ry);
+                let dev_id = format!("ED{dev_n:04}");
+                t.elec_devices.push(ElecDevice {
+                    id: dev_id.clone(),
+                    tag: "R".into(),
+                    kind: "receptacle".into(),
+                    type_tag: "R".into(),
+                    level: lv.into(),
+                    room: rm.number.clone(),
+                    at_ft: [rx, ry, e + 18.0 / 12.0],
+                    drawn_ft: drawn,
+                    mounting_in: 18.0,
+                    mounting_note: Some("+18\" AFF".into()),
+                    arch_positioned: false,
+                    circuit: ckt_id.clone(),
+                    panel: pp_id.clone(),
+                    sheet: psheet.clone(),
+                });
+                ckt_devices.push(dev_id);
+            }
+
+            // Data/telecom outlets: 1-2 per office room.
+            if !is_corridor && !is_toilet && !is_mech {
+                let n_data = er.range(1, 2);
+                for k in 0..n_data {
+                    dev_n += 1;
+                    let dx = rx0 + (k as f64 + 0.5) * rw / n_data as f64;
+                    let dy = ry0 + 0.3;
+                    let drawn = jitter(&mut er, dx, dy);
+                    let dev_id = format!("ED{dev_n:04}");
+                    t.elec_devices.push(ElecDevice {
+                        id: dev_id.clone(),
+                        tag: "D".into(),
+                        kind: "data_outlet".into(),
+                        type_tag: "D".into(),
+                        level: lv.into(),
+                        room: rm.number.clone(),
+                        at_ft: [dx, dy, e + 18.0 / 12.0],
+                        drawn_ft: drawn,
+                        mounting_in: 18.0,
+                        mounting_note: Some("+18\" AFF".into()),
+                        arch_positioned: false,
+                        circuit: ckt_id.clone(),
+                        panel: pp_id.clone(),
+                        sheet: psheet.clone(),
+                    });
+                    ckt_devices.push(dev_id);
+                }
+            }
+
+            // Floor box in large rooms (> 400 sq ft).
+            if !is_corridor && !is_toilet && rw * rh > 400.0 {
+                dev_n += 1;
+                let fbx = (rx0 + rx1) / 2.0;
+                let fby = (ry0 + ry1) / 2.0;
+                let drawn = jitter(&mut er, fbx, fby);
+                let dev_id = format!("ED{dev_n:04}");
+                t.elec_devices.push(ElecDevice {
+                    id: dev_id.clone(),
+                    tag: "FB".into(),
+                    kind: "floor_box".into(),
+                    type_tag: "FB".into(),
+                    level: lv.into(),
+                    room: rm.number.clone(),
+                    at_ft: [fbx, fby, e],
+                    drawn_ft: drawn,
+                    mounting_in: 0.0,
+                    mounting_note: Some("FLOOR".into()),
+                    arch_positioned: true,
+                    circuit: ckt_id.clone(),
+                    panel: pp_id.clone(),
+                    sheet: psheet.clone(),
+                });
+                ckt_devices.push(dev_id);
+            }
+
+            // Homerun arrow.
+            let hr_x = (rx0 + rx1) / 2.0;
+            let hr_y = ry0 + rh * 0.3;
+            t.elec_circuits.push(ElecCircuit {
+                id: ckt_id.clone(),
+                label: ckt_label,
+                panel: pp_id.clone(),
+                number: format!("{power_ckt}"),
+                level: lv.into(),
+                devices: ckt_devices,
+                homerun_ft: [hr_x, hr_y],
+                sheet: psheet.clone(),
+            });
+            power_schedule_rows.push(PanelCircuitRow {
+                circuit: format!("{power_ckt}"),
+                description: format!("RECEP/DATA - {}", rm.name),
+                breaker_amps: "20".into(),
+                poles: "1".into(),
+            });
+            power_ckt += 1;
+        }
+
+        // Disconnects near mechanical equipment (one per floor, near the AHU).
+        {
+            dev_n += 1;
+            let disc_x = xs.first().copied().unwrap_or(0.0) + 2.0;
+            let disc_y = 4.0;
+            let disc_id = format!("ED{dev_n:04}");
+            let ckt_id = format!("CK{:03}", t.elec_circuits.len() + 1);
+            t.elec_devices.push(ElecDevice {
+                id: disc_id.clone(),
+                tag: format!("DS-{lv}"),
+                kind: "disconnect".into(),
+                type_tag: "DS".into(),
+                level: lv.into(),
+                room: format!("MECH-{lv}"),
+                at_ft: [disc_x, disc_y, e + 60.0 / 12.0],
+                drawn_ft: jitter(&mut er, disc_x, disc_y),
+                mounting_in: 60.0,
+                mounting_note: Some("+60\"".into()),
+                arch_positioned: true,
+                circuit: ckt_id.clone(),
+                panel: pp_id.clone(),
+                sheet: psheet.clone(),
+            });
+            t.elec_circuits.push(ElecCircuit {
+                id: ckt_id,
+                label: format!("{pp_tag}/{power_ckt}"),
+                panel: pp_id.clone(),
+                number: format!("{power_ckt}"),
+                level: lv.into(),
+                devices: vec![disc_id],
+                homerun_ft: [disc_x, disc_y],
+                sheet: psheet.clone(),
+            });
+            power_schedule_rows.push(PanelCircuitRow {
+                circuit: format!("{power_ckt}"),
+                description: format!("AHU-{lv} DISCONNECT"),
+                breaker_amps: "30".into(),
+                poles: "2".into(),
+            });
+            power_ckt += 1;
+        }
+
+        // Junction boxes near the panels (one per floor).
+        {
+            dev_n += 1;
+            let jb_x = panel_x + 1.5;
+            let jb_y = panel_y + 2.0;
+            let jb_id = format!("ED{dev_n:04}");
+            t.elec_devices.push(ElecDevice {
+                id: jb_id,
+                tag: format!("JB-{lv}"),
+                kind: "junction_box".into(),
+                type_tag: "JB".into(),
+                level: lv.into(),
+                room: format!("ELEC-{lv}"),
+                at_ft: [jb_x, jb_y, e + 10.0],
+                drawn_ft: jitter(&mut er, jb_x, jb_y),
+                mounting_in: 120.0,
+                mounting_note: Some("CLG".into()),
+                arch_positioned: true,
+                circuit: String::new(),
+                panel: lp_id.clone(),
+                sheet: lsheet.clone(),
+            });
+        }
+
+        // Conduit runs: from panels to the corridor, then branching to rooms.
+        // Only draw a few representative conduit runs (not every one).
+        let corr_y = (y1 + y2) / 2.0;
+        // Main conduit from lighting panel to corridor.
+        {
+            conduit_n += 1;
+            let cid = format!("EC{conduit_n:03}");
+            let size_in = 1.0;
+            t.elec_conduits.push(ElecConduit {
+                id: cid,
+                conduit_type: er.pick(&["EMT", "EMT", "MC"]).into(),
+                size: "1".into(),
+                size_in,
+                level: lv.into(),
+                from_ft: [panel_x, panel_y],
+                to_ft: [panel_x, corr_y],
+                tag: Some(Tag { text: vec!["1\"C".into()], at_ft: [panel_x + 0.5, (panel_y + corr_y) / 2.0], leader: false }),
+                sheet: lsheet.clone(),
+            });
+        }
+        // Branch conduits along corridor on the lighting sheet.
+        let corr_x0 = xs.first().copied().unwrap_or(0.0);
+        let corr_x1 = width;
+        {
+            conduit_n += 1;
+            let cid = format!("EC{conduit_n:03}");
+            t.elec_conduits.push(ElecConduit {
+                id: cid,
+                conduit_type: "EMT".into(),
+                size: "3/4".into(),
+                size_in: 0.75,
+                level: lv.into(),
+                from_ft: [corr_x0, corr_y],
+                to_ft: [corr_x1, corr_y],
+                tag: Some(Tag { text: vec!["3/4\"C".into()], at_ft: [(corr_x0 + corr_x1) / 2.0, corr_y + 0.5], leader: false }),
+                sheet: lsheet.clone(),
+            });
+        }
+        // Power panel to corridor conduit.
+        {
+            conduit_n += 1;
+            let cid = format!("EC{conduit_n:03}");
+            t.elec_conduits.push(ElecConduit {
+                id: cid,
+                conduit_type: "EMT".into(),
+                size: "1-1/4".into(),
+                size_in: 1.25,
+                level: lv.into(),
+                from_ft: [panel_x + 3.0, panel_y],
+                to_ft: [panel_x + 3.0, corr_y],
+                tag: Some(Tag { text: vec!["1-1/4\"C".into()], at_ft: [panel_x + 3.5, (panel_y + corr_y) / 2.0], leader: false }),
+                sheet: psheet.clone(),
+            });
+        }
+
+        let _ = (light_ckt, power_ckt); // last values unused after the loop
+        // Fill panel schedules.
+        if let Some(lp) = t.elec_panels.iter_mut().find(|p| p.id == lp_id) {
+            lp.schedule = light_schedule_rows;
+        }
+        if let Some(pp) = t.elec_panels.iter_mut().find(|p| p.id == pp_id) {
+            pp.schedule = power_schedule_rows;
+        }
+    }
+
+    // Light fixture schedule as a general note on the drawing (truth only, drawn separately).
+    // The schedule exists in the truth for the E-601 sheet.
 }
 
 fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {

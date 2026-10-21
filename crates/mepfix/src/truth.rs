@@ -29,6 +29,10 @@ pub struct Truth {
     pub terminals: Vec<Terminal>,
     pub equipment: Vec<Equipment>,
     pub fixtures: Vec<Fixture>,
+    pub elec_devices: Vec<ElecDevice>,
+    pub elec_panels: Vec<ElecPanel>,
+    pub elec_circuits: Vec<ElecCircuit>,
+    pub elec_conduits: Vec<ElecConduit>,
     pub risers: Vec<Riser>,
     pub sheets: Vec<Sheet>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
@@ -254,6 +258,102 @@ pub struct Fixture {
     pub room: String,
     pub at_ft: [f64; 3],
     pub nodes: Vec<String>,
+}
+
+/// An electrical device on a plan: light fixture, receptacle, switch, data outlet, etc.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElecDevice {
+    pub id: String,
+    pub tag: String,
+    /// `light_fixture`, `receptacle`, `switch`, `data_outlet`, `floor_box`, `junction_box`,
+    /// `disconnect`, `exit_sign`, `emergency_light`.
+    pub kind: String,
+    /// The fixture type from the schedule (`A`, `B`, `C`, `ES-1`, `EM-1`, `R`, `S`…).
+    pub type_tag: String,
+    pub level: String,
+    pub room: String,
+    /// True building position (from the architectural plan).
+    pub at_ft: [f64; 3],
+    /// Where the symbol is drawn on the E-sheet (diagrammatic: near, not at, the true position).
+    pub drawn_ft: [f64; 2],
+    /// Mounting height above the floor, inches. `0` means on the ceiling.
+    pub mounting_in: f64,
+    /// Mounting label as printed: `+18" AFF`, `+46"`, `CLG`, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mounting_note: Option<String>,
+    /// `true`: the A-sheets (architectural plans with dimensions) fix the exact position.
+    /// `false`: the position is a zone / field decision.
+    pub arch_positioned: bool,
+    /// The circuit this device is on.
+    pub circuit: String,
+    /// The panel this device is fed from.
+    pub panel: String,
+    /// The sheet it is drawn on.
+    pub sheet: String,
+}
+
+/// An electrical panel or transformer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElecPanel {
+    pub id: String,
+    pub tag: String,
+    /// `panel`, `transformer`.
+    pub kind: String,
+    pub level: String,
+    pub room: String,
+    pub at_ft: [f64; 3],
+    /// Box on the plan.
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// The panel schedule's columns as printed (circuit → description, load, breaker).
+    pub schedule: Vec<PanelCircuitRow>,
+    /// The sheet it is drawn on.
+    pub sheet: String,
+}
+
+/// One row in a panel schedule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelCircuitRow {
+    pub circuit: String,
+    pub description: String,
+    pub breaker_amps: String,
+    pub poles: String,
+}
+
+/// An electrical circuit from a panel to devices, shown as a homerun arrow.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElecCircuit {
+    pub id: String,
+    /// `L1/1` — panel tag, circuit number.
+    pub label: String,
+    pub panel: String,
+    pub number: String,
+    pub level: String,
+    /// Device ids on this circuit.
+    pub devices: Vec<String>,
+    /// Homerun arrow origin (near the last device), building feet.
+    pub homerun_ft: [f64; 2],
+    /// The sheet the homerun is drawn on.
+    pub sheet: String,
+}
+
+/// A conduit run drawn on the electrical plan (where shown).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElecConduit {
+    pub id: String,
+    /// `EMT`, `RGS`, `PVC`, `MC` (metal clad cable, drawn as a run but not rigid conduit).
+    pub conduit_type: String,
+    /// Trade size: `3/4`, `1`, `1-1/4`, etc.
+    pub size: String,
+    /// Size in inches (for geometric purposes).
+    pub size_in: f64,
+    pub level: String,
+    pub from_ft: [f64; 2],
+    pub to_ft: [f64; 2],
+    /// The tag as printed (`3/4"C`, `1"C`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<Tag>,
+    pub sheet: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

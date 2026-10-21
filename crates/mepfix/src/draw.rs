@@ -383,6 +383,43 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             abbr.push(abbrev(&format!("{} = {}", st.sys("FP"), "FIRE PROTECTION")));
             abbr.extend(["BOP = BOTTOM OF PIPE", "CL = CENTERLINE", "AFF = ABOVE FINISHED FLOOR"].map(abbrev));
         }
+        Kind::Lighting(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            elec_devices(&mut pen, t, st, l, &format!("E-10{l}"), true);
+            legend.push(item("light_2x4", "2X4 RECESSED TROFFER"));
+            legend.push(item("light_2x2", "2X2 RECESSED TROFFER"));
+            legend.push(item("light_down", "RECESSED DOWNLIGHT"));
+            legend.push(item("elec_switch", "LIGHT SWITCH"));
+            legend.push(item("exit_sign", "EXIT SIGN"));
+            legend.push(item("emergency_light", "EMERGENCY LIGHT"));
+            legend.push(item("junction_box", "JUNCTION BOX"));
+            legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
+            legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
+            legend.push(item("elec_panel", "PANELBOARD"));
+            abbr.extend([
+                "CLG = CEILING", "AFF = ABOVE FINISHED FLOOR",
+                "C = CONDUIT", "EMT = ELECTRICAL METALLIC TUBING",
+                "MC = METAL CLAD CABLE",
+            ].map(abbrev));
+        }
+        Kind::Power(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            elec_devices(&mut pen, t, st, l, &format!("E-20{l}"), false);
+            legend.push(item("receptacle", "DUPLEX RECEPTACLE"));
+            legend.push(item("data_outlet", "DATA/TELECOM OUTLET"));
+            legend.push(item("floor_box", "FLOOR BOX"));
+            legend.push(item("disconnect", "DISCONNECT SWITCH"));
+            legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
+            legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
+            legend.push(item("elec_panel", "PANELBOARD"));
+            abbr.extend([
+                "AFF = ABOVE FINISHED FLOOR", "C = CONDUIT",
+                "EMT = ELECTRICAL METALLIC TUBING", "R = RECEPTACLE",
+                "D = DATA/TELECOM", "FB = FLOOR BOX", "DS = DISCONNECT",
+            ].map(abbrev));
+        }
     }
     if kind.plan() {
         plan_title(&mut pen, t, sh);
@@ -422,6 +459,7 @@ fn title_block(pen: &mut Pen, t: &Truth, st: &Style, sh: &Sheet, level: &str, le
         "FP" => "FIRE PROTECTION",
         "S" => "STRUCTURAL",
         "A" => "ARCHITECTURAL",
+        "E" => "ELECTRICAL",
         _ => "GENERAL",
     };
     let lvl = t.level(level).map(|l| l.name.clone()).unwrap_or_default();
@@ -586,6 +624,68 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
         }
         "size_tag" | "height_note" => {
             pen.pline("TEXT", [x - 0.25, y - 0.06], [x + 0.25, y - 0.06]);
+        }
+        // Electrical symbols (legend)
+        "light_2x4" => pen.prect("DEVICE", [x - 0.2, y - 0.08], [x + 0.2, y + 0.08]),
+        "light_2x2" => pen.prect("DEVICE", [x - s, y - s], [x + s, y + s]),
+        "light_down" => {
+            let cv = pen.p([x, y]);
+            pen.circle("DEVICE", cv, pen.pl(0.06));
+        }
+        "elec_switch" => {
+            let cv = pen.p([x, y]);
+            pen.circle("DEVICE", cv, pen.pl(0.05));
+            pen.ptext("DEVICE", [x, y - 0.025], 0.04, "S", HAlign::Center);
+        }
+        "exit_sign" => {
+            let hs = 0.07;
+            pen.prect("DEVICE", [x - hs, y - hs * 0.5], [x + hs, y + hs * 0.5]);
+            pen.pline("DEVICE", [x - hs, y - hs * 0.5], [x + hs, y + hs * 0.5]);
+            pen.pline("DEVICE", [x - hs, y + hs * 0.5], [x + hs, y - hs * 0.5]);
+        }
+        "emergency_light" => {
+            let cv = pen.p([x, y]);
+            pen.circle("DEVICE", cv, pen.pl(0.06));
+            pen.ptext("DEVICE", [x, y - 0.025], 0.03, "EM", HAlign::Center);
+        }
+        "junction_box" => {
+            let hs = 0.04;
+            let (av, bv) = (pen.p([x - hs, y - hs]), pen.p([x + hs, y + hs]));
+            pen.fill("DEVICE", [av, Vec2::new(bv.x, av.y), bv, Vec2::new(av.x, bv.y)]);
+        }
+        "receptacle" => {
+            let cv = pen.p([x, y]);
+            pen.circle("DEVICE", cv, pen.pl(0.05));
+            let hs = pen.pl(0.03);
+            pen.line("DEVICE", Vec2::new(cv.x - hs, cv.y + hs * 0.4), Vec2::new(cv.x + hs, cv.y + hs * 0.4));
+            pen.line("DEVICE", Vec2::new(cv.x - hs, cv.y - hs * 0.4), Vec2::new(cv.x + hs, cv.y - hs * 0.4));
+        }
+        "data_outlet" => {
+            let cv = pen.p([x, y]);
+            let hs = pen.pl(0.05);
+            pen.poly("DEVICE", &[cv + Vec2::new(0.0, hs), cv + Vec2::new(-hs, -hs), cv + Vec2::new(hs, -hs)], true);
+        }
+        "floor_box" => {
+            let cv = pen.p([x, y]);
+            pen.circle("DEVICE", cv, pen.pl(0.05));
+            let hs = pen.pl(0.04);
+            pen.line("DEVICE", Vec2::new(cv.x - hs, cv.y), Vec2::new(cv.x + hs, cv.y));
+            pen.line("DEVICE", Vec2::new(cv.x, cv.y - hs), Vec2::new(cv.x, cv.y + hs));
+        }
+        "disconnect" => {
+            pen.prect("DEVICE", [x - 0.1, y - 0.06], [x + 0.1, y + 0.06]);
+            pen.ptext("DEVICE", [x, y - 0.025], 0.04, "DS", HAlign::Center);
+        }
+        "homerun" => {
+            pen.pline("DEVICE", [x - 0.15, y - 0.08], [x + 0.15, y + 0.08]);
+            pen.pline("DEVICE", [x + 0.15, y + 0.08], [x + 0.08, y + 0.08]);
+            pen.pline("DEVICE", [x + 0.15, y + 0.08], [x + 0.15, y + 0.01]);
+            pen.pline("DEVICE", [x - 0.03, y + 0.03], [x + 0.03, y - 0.03]);
+        }
+        "conduit" => pen.pline("DEVICE", [x - 0.3, y], [x + 0.3, y]),
+        "elec_panel" => {
+            let (av, bv) = (pen.p([x - 0.08, y - 0.1]), pen.p([x + 0.08, y + 0.1]));
+            pen.fill("DEVICE", [av, Vec2::new(bv.x, av.y), bv, Vec2::new(av.x, bv.y)]);
         }
         _ => {}
     }
@@ -1199,6 +1299,129 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
     terminals(pen, t, level, &["SA", "RA", "EA", "FP"], false);
 }
 
+// ---- Electrical ---------------------------------------------------------------------------------
+
+/// Draw electrical devices, conduit runs, homerun arrows and panels for a level.
+fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, _lighting: bool) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+
+    // Conduit runs on this sheet.
+    for cd in t.elec_conduits.iter().filter(|c| c.level == level && c.sheet == sheet) {
+        let a = pen.b(cd.from_ft);
+        let b = pen.b(cd.to_ft);
+        pen.line("DEVICE", a, b);
+        if let Some(tag) = &cd.tag {
+            let tp = pen.b(tag.at_ft);
+            pen.text("TEXT", tp, st.text_in, &tag.text.join(" "), rot, HAlign::Left, VAlign::Bottom);
+        }
+    }
+
+    // Panels on this sheet.
+    for p in t.elec_panels.iter().filter(|p| p.level == level && p.sheet == sheet) {
+        let a = pen.b(p.min_ft);
+        let b = pen.b(p.max_ft);
+        pen.rect("DEVICE", a, b);
+        pen.fill("DEVICE", [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]);
+        let tp = pen.b([p.at_ft[0], p.at_ft[1] + 0.5]);
+        pen.text("TEXT", tp, st.text_in, &p.tag, rot, HAlign::Center, VAlign::Bottom);
+    }
+
+    // Devices on this sheet.
+    let devs: Vec<&crate::truth::ElecDevice> = t.elec_devices.iter().filter(|d| d.level == level && d.sheet == sheet).collect();
+    for d in &devs {
+        let c = pen.b(d.drawn_ft);
+        let s = th * 0.8; // symbol radius in model units
+        let v = |dx: f64, dy: f64| Vec2::new(c.x + dx, c.y + dy);
+        match d.kind.as_str() {
+            "light_fixture" => {
+                match d.type_tag.as_str() {
+                    "A" => {
+                        // 2x4 troffer: rectangle
+                        let (hw, hh) = (s * 2.0, s);
+                        pen.rect("DEVICE", v(-hw, -hh), v(hw, hh));
+                    }
+                    "B" => pen.rect("DEVICE", v(-s, -s), v(s, s)),
+                    "C" => pen.circle("DEVICE", c, s * 0.7),
+                    "D" => pen.arc("DEVICE", c, s * 0.6, 0.0, PI),
+                    "E" => {
+                        let w = s * 2.0;
+                        pen.line("DEVICE", v(-w, 0.0), v(w, 0.0));
+                        let t = s * 0.3;
+                        pen.line("DEVICE", v(-w, -t), v(-w, t));
+                        pen.line("DEVICE", v(w, -t), v(w, t));
+                    }
+                    _ => pen.circle("DEVICE", c, s * 0.7),
+                }
+                pen.text("TEXT", v(0.0, -s * 1.5), st.text_in, &d.tag, rot, HAlign::Center, VAlign::Top);
+            }
+            "switch" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                pen.text("DEVICE", c, st.text_in * 0.7, "S", rot, HAlign::Center, VAlign::Middle);
+            }
+            "exit_sign" => {
+                let hs = s * 0.6;
+                pen.rect("DEVICE", v(-hs, -hs * 0.5), v(hs, hs * 0.5));
+                pen.line("DEVICE", v(-hs, -hs * 0.5), v(hs, hs * 0.5));
+                pen.line("DEVICE", v(-hs, hs * 0.5), v(hs, -hs * 0.5));
+            }
+            "emergency_light" => {
+                pen.circle("DEVICE", c, s * 0.6);
+                pen.text("DEVICE", c, st.text_in * 0.5, "EM", rot, HAlign::Center, VAlign::Middle);
+            }
+            "junction_box" => {
+                let hs = s * 0.4;
+                pen.rect("DEVICE", v(-hs, -hs), v(hs, hs));
+                pen.fill("DEVICE", [v(-hs, -hs), v(hs, -hs), v(hs, hs), v(-hs, hs)]);
+            }
+            "receptacle" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                let hs = s * 0.3;
+                pen.line("DEVICE", v(-hs, hs * 0.3), v(hs, hs * 0.3));
+                pen.line("DEVICE", v(-hs, -hs * 0.3), v(hs, -hs * 0.3));
+            }
+            "data_outlet" => {
+                let hs = s * 0.5;
+                pen.poly("DEVICE", &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+            }
+            "floor_box" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                let hs = s * 0.4;
+                pen.line("DEVICE", v(-hs, 0.0), v(hs, 0.0));
+                pen.line("DEVICE", v(0.0, -hs), v(0.0, hs));
+            }
+            "disconnect" => {
+                let (hw, hh) = (s * 0.8, s * 0.5);
+                pen.rect("DEVICE", v(-hw, -hh), v(hw, hh));
+                pen.text("DEVICE", c, st.text_in * 0.7, "DS", rot, HAlign::Center, VAlign::Middle);
+            }
+            _ => pen.circle("DEVICE", c, s * 0.5),
+        }
+
+        // Mounting note beside the device (for non-ceiling mountings).
+        if let Some(note) = &d.mounting_note && note != "CLG" {
+            pen.text("TEXT", v(s * 2.0, 0.0), st.text_in * 0.8, note, rot, HAlign::Left, VAlign::Middle);
+        }
+    }
+
+    // Homerun arrows.
+    for ckt in t.elec_circuits.iter().filter(|ck| ck.level == level && ck.sheet == sheet) {
+        let hr = pen.b(ckt.homerun_ft);
+        let tip = Vec2::new(hr.x + th * 3.0, hr.y + th * 3.0);
+        pen.line("DEVICE", hr, tip);
+        let al = th * 0.8;
+        pen.line("DEVICE", tip, Vec2::new(tip.x - al, tip.y));
+        pen.line("DEVICE", tip, Vec2::new(tip.x, tip.y - al));
+        let mid = Vec2::new((hr.x + tip.x) / 2.0, (hr.y + tip.y) / 2.0);
+        pen.line("DEVICE", Vec2::new(mid.x - th * 0.3, mid.y + th * 0.3), Vec2::new(mid.x + th * 0.3, mid.y - th * 0.3));
+        pen.text("TEXT", Vec2::new(tip.x + th * 0.5, tip.y), st.text_in, &ckt.label, rot, HAlign::Left, VAlign::Middle);
+    }
+
+    // "DO NOT SCALE" note.
+    let note_at = pen.b([3.0, -2.0]);
+    pen.text("TEXT", note_at, st.text_in, "DO NOT SCALE - LOCATIONS PER ARCHITECTURAL", rot, HAlign::Left, VAlign::Top);
+}
+
 // ---- Structure ----------------------------------------------------------------------------------
 
 fn framing(pen: &mut Pen, t: &Truth, level: &str) {
@@ -1254,7 +1477,7 @@ fn cover(pen: &mut Pen, t: &Truth, st: &Style) {
     let fr = frame(st);
     let [[x0, _], [x1, y1]] = fr.area;
     pen.ptext("TITLE", [(x0 + x1) / 2.0, y1 - 1.5], 0.5, &t.project, HAlign::Center);
-    pen.ptext("TITLE", [(x0 + x1) / 2.0, y1 - 2.2], 0.2, "MECHANICAL, PLUMBING AND FIRE PROTECTION - COORDINATION SET", HAlign::Center);
+    pen.ptext("TITLE", [(x0 + x1) / 2.0, y1 - 2.2], 0.2, "MEP AND ELECTRICAL - COORDINATION SET", HAlign::Center);
     pen.ptext("TITLE", [(x0 + x1) / 2.0, y1 - 2.6], 0.14, "A MADE-UP BUILDING FOR TESTING PRINT READERS. NOT A REAL PROJECT.", HAlign::Center);
     let mut rows = vec![vec!["SHEET".to_string(), "TITLE".to_string()]];
     for (n, title, _, _) in crate::layout::sheet_list() {
@@ -1267,6 +1490,8 @@ fn cover(pen: &mut Pen, t: &Truth, st: &Style) {
         "2. DUCT SIZES ARE WIDTH x DEPTH, INCHES. ROUND DUCT SIZES ARE DIAMETERS.",
         "3. COORDINATE ALL TRADES IN THE CEILING SPACE BEFORE INSTALLATION.",
         "4. DUCT HEIGHTS NOT NOTED: HANG TIGHT TO STRUCTURE, CENTERLINES ALIGNED.",
+        "5. ELECTRICAL DEVICE LOCATIONS ON E-SHEETS ARE DIAGRAMMATIC.",
+        "6. REFER TO ARCHITECTURAL PLANS FOR EXACT DEVICE LOCATIONS.",
     ];
     let mut y = y1 - 3.5;
     for n in notes {
@@ -1336,6 +1561,46 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
             rows.push(vec![tm.type_tag.clone(), ty.into(), face, neck, mount.into()]);
         }
         table(pen, [x, y], "AIR DEVICE SCHEDULE", &rows);
+    } else if disc == "E" {
+        // Light fixture schedule.
+        let mut lt_rows = vec![vec![
+            "TYPE".to_string(), "DESCRIPTION".to_string(), "MOUNTING".to_string(), "LAMP/WATTAGE".to_string(),
+        ]];
+        let mut seen_lt: Vec<String> = Vec::new();
+        let mut devs: Vec<&crate::truth::ElecDevice> = t.elec_devices.iter().filter(|d| d.kind == "light_fixture").collect();
+        devs.sort_by(|a, b| a.type_tag.cmp(&b.type_tag));
+        for d in &devs {
+            if seen_lt.contains(&d.type_tag) { continue; }
+            seen_lt.push(d.type_tag.clone());
+            let (desc, mount, watt) = match d.type_tag.as_str() {
+                "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
+                "B" => ("2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
+                "C" => ("RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
+                "D" => ("WALL SCONCE", "WALL MOUNT", "LED 9W"),
+                "E" => ("PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
+                _ => ("LIGHT FIXTURE", "SURFACE", "LED"),
+            };
+            lt_rows.push(vec![d.type_tag.clone(), desc.into(), mount.into(), watt.into()]);
+        }
+        let h1 = table(pen, [x, y], "LIGHT FIXTURE SCHEDULE", &lt_rows);
+        y -= h1 + 0.6;
+
+        // Panel schedules.
+        for panel in &t.elec_panels {
+            if panel.kind != "panel" || panel.schedule.is_empty() { continue; }
+            let mut rows = vec![vec![
+                "CKT".to_string(), "DESCRIPTION".to_string(), "BKR".to_string(), "POLES".to_string(),
+            ]];
+            for row in &panel.schedule {
+                rows.push(vec![row.circuit.clone(), row.description.clone(), row.breaker_amps.clone(), row.poles.clone()]);
+            }
+            let h2 = table(pen, [x, y], &format!("PANEL {} SCHEDULE", panel.tag), &rows);
+            y -= h2 + 0.6;
+            if y < fr.area[0][1] + 3.0 {
+                y = y1 - 0.5;
+                x += 13.0;
+            }
+        }
     } else {
         let rows = vec![
             vec!["TAG".to_string(), "FIXTURE".to_string(), "CW".to_string(), "HW".to_string(), "SAN".to_string(), "V".to_string()],
