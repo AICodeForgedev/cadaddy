@@ -569,10 +569,7 @@ fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
                 .show(ui, |ui| crate::palettes::symbols::symbols_section(app, ui));
         }
         Panel::Coordination => {
-            egui::ScrollArea::vertical()
-                .id_salt("dock-coordination")
-                .auto_shrink([false, false])
-                .show(ui, |ui| crate::bimpalette::show(app, ui));
+            egui::ScrollArea::vertical().id_salt("dock-coordination").auto_shrink([false, false]).show(ui, |ui| crate::bimpalette::show(app, ui));
         }
     }
 }

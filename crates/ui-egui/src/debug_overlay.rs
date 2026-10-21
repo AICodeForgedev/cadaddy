@@ -21,9 +21,7 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new(format!("memory: {rss:.0} MB")).text_style(mono.clone()).color(egui::Color32::WHITE));
             }
 
-            ui.label(
-                egui::RichText::new(format!("drawings: {}", app.session.docs.len())).text_style(mono.clone()).color(egui::Color32::WHITE),
-            );
+            ui.label(egui::RichText::new(format!("drawings: {}", app.session.docs.len())).text_style(mono.clone()).color(egui::Color32::WHITE));
             let cmd = app.session.running.as_ref().map_or("-", |r| r.id.as_str());
             ui.label(egui::RichText::new(format!("command: {cmd}")).text_style(mono.clone()).color(egui::Color32::WHITE));
             if let Ok(doc) = app.session.doc() {
@@ -39,10 +37,7 @@ pub fn show(app: &CadApp, ctx: &egui::Context) {
 #[cfg(target_os = "macos")]
 fn process_rss_mb() -> Option<f64> {
     // `ps -o rss= -p <pid>` gives RSS in kilobytes without unsafe FFI.
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-        .output()
-        .ok()?;
+    let out = std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output().ok()?;
     let kb: f64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
     Some(kb / 1024.0)
 }

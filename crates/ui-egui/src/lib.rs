@@ -73,8 +73,8 @@ pub mod xrefs;
 
 pub mod actionsdlg;
 pub mod activitypalette;
-pub mod bimpalette;
 pub mod agentdlg;
+pub mod bimpalette;
 pub mod clashpalette;
 pub mod convertdlg;
 pub mod countpalette;

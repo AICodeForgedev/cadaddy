@@ -542,8 +542,14 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
         "IFCCABLECARRIERSEGMENT",
         element(&["CABLELADDERSEGMENT", "CABLETRAYSEGMENT", "CABLETRUNKINGSEGMENT", "CONDUITSEGMENT", "USERDEFINED", "NOTDEFINED"]),
     );
-    m.insert("IFCDUCTFITTING", element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]));
-    m.insert("IFCPIPEFITTING", element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]));
+    m.insert(
+        "IFCDUCTFITTING",
+        element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]),
+    );
+    m.insert(
+        "IFCPIPEFITTING",
+        element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]),
+    );
     m.insert("IFCCABLECARRIERFITTING", element(&["BEND", "CROSS", "REDUCER", "TEE", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCAIRTERMINAL", element(&["DIFFUSER", "GRILLE", "LOUVRE", "REGISTER", "USERDEFINED", "NOTDEFINED"]));
     // IfcDistributionSystem: IfcRoot (4) + ObjectType + LongName + PredefinedType.
@@ -552,17 +558,62 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
         ds.extend([
             A::Text { opt: true }, // ObjectType
             A::Text { opt: true }, // LongName
-            A::Enum { opt: true, of: &["AIRCONDITIONING", "AUDIOVISUAL", "CHEMICAL", "CHILLEDWATER", "COMMUNICATION", "COMPRESSEDAIR", "CONDENSERWATER", "CONTROL", "CONVEYING", "DATA", "DISPOSAL", "DOMESTICCOLDWATER", "DOMESTICHOTWATER", "DRAINAGE", "EARTHING", "ELECTRICAL", "ELECTROACOUSTIC", "EXHAUST", "FIREPROTECTION", "FUEL", "GAS", "HAZARDOUS", "HEATING", "LIGHTING", "LIGHTNINGPROTECTION", "MUNICIPALSOLIDWASTE", "OIL", "OPERATIONAL", "POWERGENERATION", "RAINWATER", "REFRIGERATION", "SECURITY", "SEWAGE", "SIGNAL", "STORMWATER", "TELEPHONE", "TV", "VACUUM", "VENT", "VENTILATION", "WASTEWATER", "WATERSUPPLY", "USERDEFINED", "NOTDEFINED"] },
+            A::Enum {
+                opt: true,
+                of: &[
+                    "AIRCONDITIONING",
+                    "AUDIOVISUAL",
+                    "CHEMICAL",
+                    "CHILLEDWATER",
+                    "COMMUNICATION",
+                    "COMPRESSEDAIR",
+                    "CONDENSERWATER",
+                    "CONTROL",
+                    "CONVEYING",
+                    "DATA",
+                    "DISPOSAL",
+                    "DOMESTICCOLDWATER",
+                    "DOMESTICHOTWATER",
+                    "DRAINAGE",
+                    "EARTHING",
+                    "ELECTRICAL",
+                    "ELECTROACOUSTIC",
+                    "EXHAUST",
+                    "FIREPROTECTION",
+                    "FUEL",
+                    "GAS",
+                    "HAZARDOUS",
+                    "HEATING",
+                    "LIGHTING",
+                    "LIGHTNINGPROTECTION",
+                    "MUNICIPALSOLIDWASTE",
+                    "OIL",
+                    "OPERATIONAL",
+                    "POWERGENERATION",
+                    "RAINWATER",
+                    "REFRIGERATION",
+                    "SECURITY",
+                    "SEWAGE",
+                    "SIGNAL",
+                    "STORMWATER",
+                    "TELEPHONE",
+                    "TV",
+                    "VACUUM",
+                    "VENT",
+                    "VENTILATION",
+                    "WASTEWATER",
+                    "WATERSUPPLY",
+                    "USERDEFINED",
+                    "NOTDEFINED",
+                ],
+            },
         ]);
         m.insert("IFCDISTRIBUTIONSYSTEM", ds);
     }
     // IfcRelAssignsToGroup: IfcRoot (4) + RelatedObjects (list) + RelatedObjectsType (opt enum) + RelatingGroup.
     {
         let mut ag = ROOT.to_vec();
-        ag.extend([
-            A::Refs { opt: false, min: 1, to: ELEMENTS },
-            A::Ref { opt: false, to: &["IFCDISTRIBUTIONSYSTEM"] },
-        ]);
+        ag.extend([A::Refs { opt: false, min: 1, to: ELEMENTS }, A::Ref { opt: false, to: &["IFCDISTRIBUTIONSYSTEM"] }]);
         m.insert("IFCRELASSIGNSTOGROUP", ag);
     }
     for (door, of, part) in [

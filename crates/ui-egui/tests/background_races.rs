@@ -43,12 +43,8 @@ fn app_with(titles: &[&str]) -> CadApp {
 }
 
 fn dirty(app: &mut CadApp, i: usize) {
-    app.session
-        .execute("document.switch", &json!({ "index": i }))
-        .unwrap();
-    app.session
-        .execute("circle", &json!({ "center": [0, 0], "radius": 1 }))
-        .unwrap();
+    app.session.execute("document.switch", &json!({ "index": i })).unwrap();
+    app.session.execute("circle", &json!({ "center": [0, 0], "radius": 1 })).unwrap();
     assert!(app.session.docs[i].is_dirty());
 }
 
@@ -117,11 +113,7 @@ fn open_two_different_files_on_workers() {
     }
     app.finish_opening();
     assert!(!app.opening.busy());
-    assert_eq!(
-        app.session.docs.len(),
-        before + 2,
-        "both files should produce a drawing"
-    );
+    assert_eq!(app.session.docs.len(), before + 2, "both files should produce a drawing");
 
     let uids: Vec<u64> = app.session.docs.iter().map(|d| d.uid).collect();
     let unique: std::collections::HashSet<u64> = uids.iter().copied().collect();
@@ -190,11 +182,7 @@ fn open_mix_of_good_and_bad_files() {
     app.finish_opening();
     assert!(!app.opening.busy());
     // Two good opens (different paths), one bad.
-    assert_eq!(
-        app.session.docs.len(),
-        before + 2,
-        "two good files should add drawings"
-    );
+    assert_eq!(app.session.docs.len(), before + 2, "two good files should add drawings");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

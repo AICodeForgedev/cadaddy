@@ -33,24 +33,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("coordination.trades", "Trade Visibility", run_trades)
             .params("{set?: [{system, visible?}]} → {trades: [{system, kind, layer, visible, count}]}")
             .noundo(),
-        CommandSpec::new("coordination.sectionbox", "Section Box", run_sectionbox)
-            .params("{on?, min?, max?, fit?} → {on, min, max}")
-            .noundo(),
+        CommandSpec::new("coordination.sectionbox", "Section Box", run_sectionbox).params("{on?, min?, max?, fit?} → {on, min, max}").noundo(),
         CommandSpec::new("coordination.viewpoints", "Coordination Viewpoints", run_viewpoints)
             .params("{save?: {name}, restore?, delete?} → {viewpoints}")
             .noundo(),
         CommandSpec::new("coordination.measure3d", "3D Measure", run_measure3d)
             .params("{from: [x,y,z], to: [x,y,z]} → {distance, dx, dy, dz}")
             .noundo(),
-        CommandSpec::new("coordination.clashlist", "Clash List", run_clashlist)
-            .params("{tolerance_in?, group_by?} → {groups, total}")
-            .noundo(),
-        CommandSpec::new("coordination.clashstatus", "Clash Status", run_clashstatus)
-            .params("{id, status}")
-            .noundo(),
-        CommandSpec::new("coordination.bcf", "BCF Export", run_bcf)
-            .params("{path, tolerance_in?} → {topics, path}")
-            .noundo(),
+        CommandSpec::new("coordination.clashlist", "Clash List", run_clashlist).params("{tolerance_in?, group_by?} → {groups, total}").noundo(),
+        CommandSpec::new("coordination.clashstatus", "Clash Status", run_clashstatus).params("{id, status}").noundo(),
+        CommandSpec::new("coordination.bcf", "BCF Export", run_bcf).params("{path, tolerance_in?} → {topics, path}").noundo(),
     ]
 }
 
@@ -58,21 +50,13 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Read a coordination-specific key from the building spec JSON.
 fn coord_get(d: &Drawing, key: &str) -> Value {
-    d.building_spec
-        .as_deref()
-        .and_then(|t| serde_json::from_str::<Value>(t).ok())
-        .and_then(|v| v.get(key).cloned())
-        .unwrap_or(Value::Null)
+    d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| v.get(key).cloned()).unwrap_or(Value::Null)
 }
 
 /// Write a coordination-specific key into the building spec JSON.
 fn coord_set(s: &mut Session, key: &str, val: &Value) -> Result<()> {
     let d = s.doc()?;
-    let mut spec: Value = d
-        .building_spec
-        .as_deref()
-        .and_then(|t| serde_json::from_str(t).ok())
-        .unwrap_or(json!({}));
+    let mut spec: Value = d.building_spec.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
     if let Some(obj) = spec.as_object_mut() {
         obj.insert(key.into(), val.clone());
     }
@@ -106,36 +90,23 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|r| json!({ "name": r.name, "ceiling_ft": r.ceiling_ft.unwrap_or(level.ceiling_ft) }))
             .collect();
 
-        let mut sys_counts: std::collections::BTreeMap<String, (String, usize)> =
-            std::collections::BTreeMap::new();
+        let mut sys_counts: std::collections::BTreeMap<String, (String, usize)> = std::collections::BTreeMap::new();
         for run in &sp.mep.runs {
             if run.level.eq_ignore_ascii_case(&level.name) {
                 let entry = sys_counts.entry(run.system.clone()).or_insert_with(|| {
-                    let kind = sp
-                        .mep
-                        .systems
-                        .iter()
-                        .find(|sy| sy.name == run.system)
-                        .map_or("unknown", |sy| kind_str(sy.kind));
+                    let kind = sp.mep.systems.iter().find(|sy| sy.name == run.system).map_or("unknown", |sy| kind_str(sy.kind));
                     (kind.to_string(), 0)
                 });
                 entry.1 += 1;
             }
         }
-        let systems: Vec<Value> = sys_counts
-            .iter()
-            .map(|(name, (kind, count))| json!({ "name": name, "kind": kind, "count": count }))
-            .collect();
+        let systems: Vec<Value> = sys_counts.iter().map(|(name, (kind, count))| json!({ "name": name, "kind": kind, "count": count })).collect();
 
         let element_count = d
             .model
             .iter()
             .filter(|e| d.is_visible(e))
-            .filter(|e| {
-                super::bspec::made_level(e)
-                    .as_deref()
-                    .is_some_and(|l| l.eq_ignore_ascii_case(&level.name))
-            })
+            .filter(|e| super::bspec::made_level(e).as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&level.name)))
             .take(50_000)
             .count();
 
@@ -284,12 +255,10 @@ fn run_viewpoints(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(restore) = p.get("restore").and_then(Value::as_str)
         && let Some(vp) = vps.iter().find(|v| v.get("name").and_then(Value::as_str) == Some(restore))
     {
-        let center = vp.get("center").and_then(Value::as_array).map(|a| {
-            [
-                a.first().and_then(Value::as_f64).unwrap_or(0.0),
-                a.get(1).and_then(Value::as_f64).unwrap_or(0.0),
-            ]
-        });
+        let center = vp
+            .get("center")
+            .and_then(Value::as_array)
+            .map(|a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
         let height = vp.get("height").and_then(Value::as_f64);
         if let (Some(c), Some(h)) = (center, height) {
             s.execute("zoom", &json!({ "mode": "center", "center": c, "height": h }))?;
@@ -340,22 +309,13 @@ fn run_clashlist(s: &mut Session, p: &Value) -> Result<Value> {
     let mut groups: std::collections::BTreeMap<String, Vec<Value>> = std::collections::BTreeMap::new();
     for item in &items {
         let key = match group_by {
-            "trade" => item
-                .get("systems")
-                .and_then(Value::as_array)
-                .and_then(|a| a.first())
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown")
-                .to_string(),
+            "trade" => item.get("systems").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("Unknown").to_string(),
             "level" => "All".into(),
             _ => item.get("kind").and_then(Value::as_str).unwrap_or("unknown").to_string(),
         };
         groups.entry(key).or_default().push(item.clone());
     }
-    let grouped: Vec<Value> = groups
-        .into_iter()
-        .map(|(key, clashes)| json!({ "key": key, "clashes": clashes }))
-        .collect();
+    let grouped: Vec<Value> = groups.into_iter().map(|(key, clashes)| json!({ "key": key, "clashes": clashes })).collect();
     let total = items.len();
     Ok(json!({ "groups": grouped, "total": total }))
 }
@@ -383,14 +343,22 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
         let mut zip = zip_mini::ZipWriter::new(&mut buf);
 
         zip.start_file("bcf.version").map_err(io)?;
-        write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-            <Version VersionId=\"2.1\"><DetailedVersion>2.1</DetailedVersion></Version>").map_err(io)?;
+        write!(
+            zip,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Version VersionId=\"2.1\"><DetailedVersion>2.1</DetailedVersion></Version>"
+        )
+        .map_err(io)?;
 
         let project_id = uuid_v4();
         zip.start_file("project.bcfp").map_err(io)?;
-        write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        write!(
+            zip,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
             <ProjectExtension><Project ProjectId=\"{project_id}\">\
-            <Name>CADaddy Coordination</Name></Project></ProjectExtension>").map_err(io)?;
+            <Name>CADaddy Coordination</Name></Project></ProjectExtension>"
+        )
+        .map_err(io)?;
 
         for (i, clash) in clashes.iter().enumerate().take(1000) {
             let guid = uuid_v4();
@@ -400,11 +368,15 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
             let date = iso_date();
 
             zip.start_file(&format!("{guid}/markup.bcf")).map_err(io)?;
-            write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            write!(
+                zip,
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
                 <Markup><Topic Guid=\"{guid}\" TopicType=\"Clash\" TopicStatus=\"New\">\
                 <Title>{title}</Title><Description>{msg}</Description>\
                 <CreationDate>{date}</CreationDate><CreationAuthor>CADaddy</CreationAuthor>\
-                </Topic></Markup>").map_err(io)?;
+                </Topic></Markup>"
+            )
+            .map_err(io)?;
         }
         zip.finish().map_err(io)?;
     }
@@ -418,10 +390,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 fn iso_date() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let days = now / 86400;
     let secs = now % 86400;
     let (mut y, mut m, mut day) = (1970u64, 1u64, 1u64);
@@ -429,13 +398,18 @@ fn iso_date() -> String {
     loop {
         let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
         let yd = if leap { 366 } else { 365 };
-        if rem < yd { break; }
+        if rem < yd {
+            break;
+        }
         rem -= yd;
         y += 1;
     }
     let md = [31, if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     for d in md {
-        if rem < d { day = rem + 1; break; }
+        if rem < d {
+            day = rem + 1;
+            break;
+        }
         rem -= d;
         m += 1;
     }
@@ -453,8 +427,12 @@ fn uuid_v4() -> String {
     let b = h.finish();
     format!(
         "{:08x}-{:04x}-4{:03x}-{:x}{:03x}-{:012x}",
-        a as u32, (a >> 32) as u16, (a >> 48) & 0xfff,
-        8 | ((b >> 60) & 3), (b >> 48) & 0xfff, b & 0xffffffffffff
+        a as u32,
+        (a >> 32) as u16,
+        (a >> 48) & 0xfff,
+        8 | ((b >> 60) & 3),
+        (b >> 48) & 0xfff,
+        b & 0xffffffffffff
     )
 }
 
@@ -468,7 +446,12 @@ mod zip_mini {
         data_start: usize,
     }
 
-    struct Entry { name: String, offset: u32, size: u32, crc: u32 }
+    struct Entry {
+        name: String,
+        offset: u32,
+        size: u32,
+        crc: u32,
+    }
 
     impl<'a> ZipWriter<'a> {
         pub fn new(buf: &'a mut Vec<u8>) -> Self {
@@ -497,7 +480,8 @@ mod zip_mini {
 
         fn flush_pending(&mut self) {
             if let Some(entry) = self.entries.last_mut()
-                && entry.size == 0 && self.data_start > 0
+                && entry.size == 0
+                && self.data_start > 0
             {
                 let data = &self.buf[self.data_start..];
                 let size = data.len() as u32;
@@ -553,7 +537,9 @@ mod zip_mini {
             self.buf.extend_from_slice(data);
             Ok(data.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     fn crc32(data: &[u8]) -> u32 {

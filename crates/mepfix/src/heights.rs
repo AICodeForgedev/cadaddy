@@ -101,11 +101,7 @@ pub fn parse_feet_inches(s: &str) -> Option<f64> {
         })?;
         let neg = feet_part.trim().starts_with('-');
         let inches_part = rest.trim().trim_start_matches('-').trim_end_matches('"').trim();
-        let inches = if inches_part.is_empty() {
-            0.0
-        } else {
-            parse_inches_value(inches_part)?
-        };
+        let inches = if inches_part.is_empty() { 0.0 } else { parse_inches_value(inches_part)? };
         let total = feet + inches / 12.0;
         return Some(if neg { -total } else { total });
     }
@@ -189,14 +185,8 @@ impl TradeRules {
         TradeRules {
             layers: vec![
                 TradeLayer { systems: vec!["SA", "RA", "EA", "OA"].into_iter().map(Into::into).collect(), name: "Ductwork".into() },
-                TradeLayer {
-                    systems: vec!["FP"].into_iter().map(Into::into).collect(),
-                    name: "Fire protection".into(),
-                },
-                TradeLayer {
-                    systems: vec!["CW", "HW", "HWR", "SAN", "V", "G"].into_iter().map(Into::into).collect(),
-                    name: "Plumbing".into(),
-                },
+                TradeLayer { systems: vec!["FP"].into_iter().map(Into::into).collect(), name: "Fire protection".into() },
+                TradeLayer { systems: vec!["CW", "HW", "HWR", "SAN", "V", "G"].into_iter().map(Into::into).collect(), name: "Plumbing".into() },
             ],
             gap_in: 2.0,
             ceiling_gap_in: 3.0,
@@ -254,11 +244,7 @@ pub struct LevelContext {
 /// Resolve heights for a set of segments on one level.
 ///
 /// Returns a `ResolvedHeight` for every non-vertical input segment.
-pub fn resolve_heights(
-    segments: &[SegmentInput],
-    ctx: &LevelContext,
-    rules: &TradeRules,
-) -> Vec<ResolvedHeight> {
+pub fn resolve_heights(segments: &[SegmentInput], ctx: &LevelContext, rules: &TradeRules) -> Vec<ResolvedHeight> {
     let mut results = Vec::new();
 
     // Phase 1: resolve segments that have notes.
@@ -303,12 +289,7 @@ pub fn resolve_heights(
     results
 }
 
-fn resolve_from_note(
-    parsed: &ParsedHeight,
-    seg: &SegmentInput,
-    depth_ft: f64,
-    ctx: &LevelContext,
-) -> Option<ResolvedHeight> {
+fn resolve_from_note(parsed: &ParsedHeight, seg: &SegmentInput, depth_ft: f64, ctx: &LevelContext) -> Option<ResolvedHeight> {
     match parsed.reference {
         HeightRef::TightToStruct => {
             // Place the top of the run flush under the lowest beam at the segment's location.
@@ -344,12 +325,7 @@ fn resolve_from_note(
     }
 }
 
-fn resolve_from_ceiling(
-    seg: &SegmentInput,
-    depth_ft: f64,
-    ctx: &LevelContext,
-    rules: &TradeRules,
-) -> Option<ResolvedHeight> {
+fn resolve_from_ceiling(seg: &SegmentInput, depth_ft: f64, ctx: &LevelContext, rules: &TradeRules) -> Option<ResolvedHeight> {
     let room = find_room(seg.midpoint_ft, &seg.level, &ctx.rooms)?;
     let ceiling = room.ceiling.as_ref()?;
     let ceiling_ft = ceiling.height_ft;
@@ -371,12 +347,7 @@ fn resolve_from_ceiling(
     })
 }
 
-fn resolve_from_rules(
-    rule_segments: &[(usize, usize)],
-    segments: &[SegmentInput],
-    ctx: &LevelContext,
-    rules: &TradeRules,
-) -> Vec<ResolvedHeight> {
+fn resolve_from_rules(rule_segments: &[(usize, usize)], segments: &[SegmentInput], ctx: &LevelContext, rules: &TradeRules) -> Vec<ResolvedHeight> {
     if rule_segments.is_empty() {
         return Vec::new();
     }
@@ -393,11 +364,7 @@ fn resolve_from_rules(
 
     for seg_indices in by_layer.values() {
         // Find the deepest segment in this layer to set the band.
-        let max_depth: f64 = seg_indices
-            .iter()
-            .filter_map(|&i| segments.get(i))
-            .map(|s| depth_in(&s.shape, s.size_in) / 12.0)
-            .fold(0.0, f64::max);
+        let max_depth: f64 = seg_indices.iter().filter_map(|&i| segments.get(i)).map(|s| depth_in(&s.shape, s.size_in) / 12.0).fold(0.0, f64::max);
 
         if max_depth < 1e-9 {
             continue;
@@ -460,11 +427,7 @@ fn point_near_line(pt: [f64; 2], a: [f64; 2], b: [f64; 2], tol: f64) -> bool {
 /// Find the room a plan point sits in.
 fn find_room<'a>(pt: [f64; 2], level: &str, rooms: &'a [Room]) -> Option<&'a Room> {
     rooms.iter().find(|r| {
-        r.level == level
-            && pt[0] >= r.min_ft[0] - 1e-9
-            && pt[0] <= r.max_ft[0] + 1e-9
-            && pt[1] >= r.min_ft[1] - 1e-9
-            && pt[1] <= r.max_ft[1] + 1e-9
+        r.level == level && pt[0] >= r.min_ft[0] - 1e-9 && pt[0] <= r.max_ft[0] + 1e-9 && pt[1] >= r.min_ft[1] - 1e-9 && pt[1] <= r.max_ft[1] + 1e-9
     })
 }
 
@@ -479,10 +442,7 @@ pub fn inputs_from_truth(truth: &crate::truth::Truth) -> Vec<SegmentInput> {
         .segments
         .iter()
         .map(|s| {
-            let mid = [
-                (s.path_ft[0][0] + s.path_ft[1][0]) / 2.0,
-                (s.path_ft[0][1] + s.path_ft[1][1]) / 2.0,
-            ];
+            let mid = [(s.path_ft[0][0] + s.path_ft[1][0]) / 2.0, (s.path_ft[0][1] + s.path_ft[1][1]) / 2.0];
             SegmentInput {
                 id: s.id.clone(),
                 system: s.system.clone(),
@@ -513,13 +473,7 @@ pub fn level_context(truth: &crate::truth::Truth, level_code: &str) -> Option<Le
     let tos = beams.first().map(|b| b.tos_ft).unwrap_or(elev + 13.0);
     let underside = tos - deepest / 12.0 - elev;
     let rooms: Vec<Room> = truth.building.rooms.iter().filter(|r| r.level == level_code).cloned().collect();
-    Some(LevelContext {
-        level_code: level_code.to_string(),
-        elevation_ft: elev,
-        structure_underside_ft: underside,
-        rooms,
-        beams,
-    })
+    Some(LevelContext { level_code: level_code.to_string(), elevation_ft: elev, structure_underside_ft: underside, rooms, beams })
 }
 
 // ---- Scoring resolved heights -------------------------------------------------------
@@ -549,13 +503,9 @@ impl HeightScore {
 }
 
 /// Score resolved heights against the truth's heights.
-pub fn score_heights(
-    resolved: &[ResolvedHeight],
-    truth: &crate::truth::Truth,
-) -> HeightScore {
+pub fn score_heights(resolved: &[ResolvedHeight], truth: &crate::truth::Truth) -> HeightScore {
     let mut sc = HeightScore::default();
-    let resolved_map: BTreeMap<&str, &ResolvedHeight> =
-        resolved.iter().map(|r| (r.segment_id.as_str(), r)).collect();
+    let resolved_map: BTreeMap<&str, &ResolvedHeight> = resolved.iter().map(|r| (r.segment_id.as_str(), r)).collect();
 
     for seg in &truth.segments {
         let Some(h) = &seg.height else { continue };
@@ -693,22 +643,13 @@ mod tests {
 
         for lv in ["1", "2"] {
             let Some(ctx) = level_context(&truth, lv) else { continue };
-            let level_inputs: Vec<SegmentInput> =
-                inputs.iter().filter(|s| s.level == lv).cloned().collect();
+            let level_inputs: Vec<SegmentInput> = inputs.iter().filter(|s| s.level == lv).cloned().collect();
             let resolved = resolve_heights(&level_inputs, &ctx, &rules);
             let sc = score_heights(&resolved, &truth);
 
             // Every horizontal segment with a truth height should be resolved.
-            let expected_count = truth
-                .segments
-                .iter()
-                .filter(|s| s.level == lv && !s.vertical && s.height.is_some())
-                .count();
-            assert_eq!(
-                sc.resolved, expected_count,
-                "level {lv}: resolved {} of {} expected",
-                sc.resolved, expected_count
-            );
+            let expected_count = truth.segments.iter().filter(|s| s.level == lv && !s.vertical && s.height.is_some()).count();
+            assert_eq!(sc.resolved, expected_count, "level {lv}: resolved {} of {} expected", sc.resolved, expected_count);
 
             // Note-sourced heights should be exact (they come from the truth's own notes).
             if let Some(mae) = sc.mae("note") {
@@ -726,21 +667,12 @@ mod tests {
 
             for lv in ["1", "2"] {
                 let Some(ctx) = level_context(&truth, lv) else { continue };
-                let level_inputs: Vec<SegmentInput> =
-                    inputs.iter().filter(|s| s.level == lv).cloned().collect();
+                let level_inputs: Vec<SegmentInput> = inputs.iter().filter(|s| s.level == lv).cloned().collect();
                 let resolved = resolve_heights(&level_inputs, &ctx, &rules);
 
                 // Check that we resolve every non-vertical segment with a height.
-                let expected = truth
-                    .segments
-                    .iter()
-                    .filter(|s| s.level == lv && !s.vertical && s.height.is_some())
-                    .count();
-                assert!(
-                    resolved.len() >= expected,
-                    "seed {seed} level {lv}: resolved {} but expected at least {expected}",
-                    resolved.len()
-                );
+                let expected = truth.segments.iter().filter(|s| s.level == lv && !s.vertical && s.height.is_some()).count();
+                assert!(resolved.len() >= expected, "seed {seed} level {lv}: resolved {} but expected at least {expected}", resolved.len());
 
                 // Note-sourced should be exact.
                 let sc = score_heights(&resolved, &truth);

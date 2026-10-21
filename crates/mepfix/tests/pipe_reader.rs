@@ -64,11 +64,7 @@ fn pipe_reader_finds_risers() {
             eprintln!("seed {seed}: {} risers, {} with system", risers.len(), with_system);
             for r in &risers {
                 eprintln!("  riser at {:?} sys='{}' dir='{}' note='{}'", r.at_ft, r.system, r.direction, r.note);
-                assert!(
-                    ["up", "down", "through"].contains(&r.direction.as_str()),
-                    "riser direction: {}",
-                    r.direction
-                );
+                assert!(["up", "down", "through"].contains(&r.direction.as_str()), "riser direction: {}", r.direction);
             }
             assert!(with_system > 0, "no risers with identified system");
             break;
@@ -125,10 +121,7 @@ fn perfect_pipe_score() {
     for run in perfect.iter().take(3) {
         eprintln!("  found run: shape={} size={:?} sys={}", run.shape, run.size_in, run.system);
     }
-    assert!(
-        (s.precision - 1.0).abs() < 1e-9 && (s.recall - 1.0).abs() < 1e-9,
-        "perfect pipe score: {s:?}"
-    );
+    assert!((s.precision - 1.0).abs() < 1e-9 && (s.recall - 1.0).abs() < 1e-9, "perfect pipe score: {s:?}");
     // Size accuracy may be slightly under 1.0 if parallel runs at different sizes
     // cause the best-overlap matching to pair a segment with a differently-sized found run.
     assert!(s.size_accuracy > 0.98, "size_acc={}", s.size_accuracy);
@@ -140,10 +133,7 @@ fn pipe_reader_handles_multiple_seeds() {
     // The reader should work across varied styles (different seeds vary layout, tags, etc.).
     for seed in [1, 5, 10, 20, 30] {
         let (runs, _) = read_all_pipes(seed);
-        assert!(
-            !runs.is_empty(),
-            "seed {seed}: pipe reader found no runs"
-        );
+        assert!(!runs.is_empty(), "seed {seed}: pipe reader found no runs");
     }
 }
 
@@ -162,10 +152,7 @@ fn system_identification_coverage() {
     // We should find at least CW, HW, SAN, and either FP or V.
     let expected = ["CW", "HW", "SAN"];
     for sys in expected {
-        assert!(
-            all_systems.contains(sys),
-            "never found system {sys} across seeds 1-15; found: {all_systems:?}"
-        );
+        assert!(all_systems.contains(sys), "never found system {sys} across seeds 1-15; found: {all_systems:?}");
     }
 }
 
@@ -173,11 +160,6 @@ fn system_identification_coverage() {
 fn sizes_are_plausible() {
     let (runs, _) = read_all_pipes(5);
     for r in &runs {
-        assert!(
-            r.size_in[0] > 0.0 && r.size_in[0] <= 24.0,
-            "implausible pipe size: {:?} for system {}",
-            r.size_in,
-            r.system
-        );
+        assert!(r.size_in[0] > 0.0 && r.size_in[0] <= 24.0, "implausible pipe size: {:?} for system {}", r.size_in, r.system);
     }
 }

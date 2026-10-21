@@ -112,49 +112,104 @@ const MODIFY_COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// View/navigation commands.
-const VIEW_COMMANDS: &[&str] = &[
-    "zoom extents", "zoom all", "zoom window 0,0 100,100", "zoom previous",
-    "pan", "regen", "regenall",
-];
+const VIEW_COMMANDS: &[&str] = &["zoom extents", "zoom all", "zoom window 0,0 100,100", "zoom previous", "pan", "regen", "regenall"];
 
 /// Utility commands.
 const UTIL_COMMANDS: &[&str] = &[
-    "undo", "undo", "undo", "redo", "oops",
-    "selectall", "deselect",
-    "layer new Torture-A", "layer set 0",
-    "grid on", "grid off", "snap on", "snap off",
-    "ortho on", "ortho off", "osnap on", "osnap off",
+    "undo",
+    "undo",
+    "undo",
+    "redo",
+    "oops",
+    "selectall",
+    "deselect",
+    "layer new Torture-A",
+    "layer set 0",
+    "grid on",
+    "grid off",
+    "snap on",
+    "snap off",
+    "ortho on",
+    "ortho off",
+    "osnap on",
+    "osnap off",
 ];
 
 /// Dialog ids (safe to open/close).
 const DIALOG_IDS: &[&str] = &[
-    "layers", "dsettings", "units", "about", "color", "options",
-    "qselect", "hatch", "linetype", "textstyle", "dimstyle", "pagesetup",
-    "blocks", "find", "commands", "dwgprops", "spell", "purge",
-    "toolpalettes", "undohistory", "commandhistory", "materials",
-    "aliasedit", "standards", "publish", "layerstates",
-    "plotstamp", "tolerance", "rooms", "secureload",
-    "adcenter", "actmanager", "laywalk", "exchangeloss",
+    "layers",
+    "dsettings",
+    "units",
+    "about",
+    "color",
+    "options",
+    "qselect",
+    "hatch",
+    "linetype",
+    "textstyle",
+    "dimstyle",
+    "pagesetup",
+    "blocks",
+    "find",
+    "commands",
+    "dwgprops",
+    "spell",
+    "purge",
+    "toolpalettes",
+    "undohistory",
+    "commandhistory",
+    "materials",
+    "aliasedit",
+    "standards",
+    "publish",
+    "layerstates",
+    "plotstamp",
+    "tolerance",
+    "rooms",
+    "secureload",
+    "adcenter",
+    "actmanager",
+    "laywalk",
+    "exchangeloss",
 ];
 
 /// Ribbon tabs.
-const RIBBON_TABS: &[&str] = &[
-    "Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output",
-    "Express Tools", "Collaborate", "Featured Apps",
-];
+const RIBBON_TABS: &[&str] =
+    &["Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output", "Express Tools", "Collaborate", "Featured Apps"];
 
 /// Keys to press randomly.
 const KEYS: &[&str] = &[
-    "escape", "enter", "delete", "backspace", "space", "tab",
-    "A", "B", "C", "D", "F", "L", "M", "O", "P", "R", "S", "T", "U", "Z",
-    "F1", "F2", "F3", "F5", "F7", "F8", "F9",
+    "escape",
+    "enter",
+    "delete",
+    "backspace",
+    "space",
+    "tab",
+    "A",
+    "B",
+    "C",
+    "D",
+    "F",
+    "L",
+    "M",
+    "O",
+    "P",
+    "R",
+    "S",
+    "T",
+    "U",
+    "Z",
+    "F1",
+    "F2",
+    "F3",
+    "F5",
+    "F7",
+    "F8",
+    "F9",
 ];
 
 /// Window sizes to resize to.
-const SIZES: &[(f64, f64)] = &[
-    (1280.0, 800.0), (1024.0, 640.0), (1920.0, 1080.0),
-    (800.0, 600.0), (1600.0, 900.0), (2560.0, 1440.0),
-];
+const SIZES: &[(f64, f64)] = &[(1280.0, 800.0), (1024.0, 640.0), (1920.0, 1080.0), (800.0, 600.0), (1600.0, 900.0), (2560.0, 1440.0)];
 
 // ---------------------------------------------------------------------------
 // Findings tracker
@@ -211,7 +266,10 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
             e.pump();
             if e.dialog().as_deref() == Some(d.as_str()) {
                 findings.push(Finding {
-                    seed, lang, step, action: last_action.clone(),
+                    seed,
+                    lang,
+                    step,
+                    action: last_action.clone(),
                     kind: "stuck-dialog",
                     detail: format!("dialog '{}' stayed open after Escape", d),
                 });
@@ -347,9 +405,15 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
             // 90..94: toggle UI panels
             90..94 => {
                 let toggles = [
-                    "show_palettes", "show_toolbar", "show_file_tabs",
-                    "show_status_bar", "show_command_line", "show_viewcube",
-                    "show_ucs_icon", "ribbon", "show_toolsets",
+                    "show_palettes",
+                    "show_toolbar",
+                    "show_file_tabs",
+                    "show_status_bar",
+                    "show_command_line",
+                    "show_viewcube",
+                    "show_ucs_icon",
+                    "ribbon",
+                    "show_toolsets",
                 ];
                 let field = rng.pick(&toggles);
                 let val = rng.gen_range(2) == 0;
@@ -371,9 +435,22 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
             // 97..100: menu invoke (random from the available menu items)
             _ => {
                 let menu_commands = [
-                    "line", "circle", "arc", "pline", "move", "copy", "erase",
-                    "undo", "redo", "zoom.extents", "zoom.all", "regen",
-                    "selectall", "deselect", "grid", "ortho",
+                    "line",
+                    "circle",
+                    "arc",
+                    "pline",
+                    "move",
+                    "copy",
+                    "erase",
+                    "undo",
+                    "redo",
+                    "zoom.extents",
+                    "zoom.all",
+                    "regen",
+                    "selectall",
+                    "deselect",
+                    "grid",
+                    "ortho",
                 ];
                 let cmd = rng.pick(&menu_commands);
                 action_desc = format!("menu:{cmd}");
@@ -392,11 +469,7 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
 
         // Hang detection: any single action+pump cycle taking >5 s.
         if elapsed_ms > 5000 {
-            findings.push(Finding {
-                seed, lang, step, action: action_desc.clone(),
-                kind: "hang",
-                detail: format!("action took {} ms", elapsed_ms),
-            });
+            findings.push(Finding { seed, lang, step, action: action_desc.clone(), kind: "hang", detail: format!("action took {} ms", elapsed_ms) });
         }
 
         // Check the session log for "Internal error" (guard panic reports).
@@ -404,11 +477,7 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
         for line in &history {
             let lower = line.to_ascii_lowercase();
             if lower.contains("internal error") || lower.contains("panicked") {
-                findings.push(Finding {
-                    seed, lang, step, action: action_desc.clone(),
-                    kind: "panic",
-                    detail: line.clone(),
-                });
+                findings.push(Finding { seed, lang, step, action: action_desc.clone(), kind: "panic", detail: line.clone() });
             }
         }
 
@@ -422,7 +491,10 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
         // Safety valve: if >20 consecutive errors, something is deeply wrong.
         if consecutive_errors > 20 {
             findings.push(Finding {
-                seed, lang, step, action: last_action.clone(),
+                seed,
+                lang,
+                step,
+                action: last_action.clone(),
                 kind: "error-storm",
                 detail: format!("{consecutive_errors} consecutive errors"),
             });
@@ -447,23 +519,11 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> Vec<Finding> {
     findings
 }
 
-fn check_error(
-    err: &str,
-    findings: &mut Vec<Finding>,
-    seed: u64,
-    lang: &'static str,
-    step: usize,
-    action: &str,
-    consecutive_errors: &mut usize,
-) {
+fn check_error(err: &str, findings: &mut Vec<Finding>, seed: u64, lang: &'static str, step: usize, action: &str, consecutive_errors: &mut usize) {
     let lower = err.to_ascii_lowercase();
     // Guard-reported panics.
     if lower.contains("internal error") || lower.contains("panicked") || lower.contains("panic") {
-        findings.push(Finding {
-            seed, lang, step, action: action.to_string(),
-            kind: "panic",
-            detail: err.to_string(),
-        });
+        findings.push(Finding { seed, lang, step, action: action.to_string(), kind: "panic", detail: err.to_string() });
     }
     *consecutive_errors += 1;
 }

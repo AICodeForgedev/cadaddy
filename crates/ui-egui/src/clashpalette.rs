@@ -94,19 +94,12 @@ fn detect(app: &mut CadApp, tolerance_in: f64) -> Vec<ClashItem> {
         let systems: Vec<String> =
             c.get("systems").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         let at_arr = c.get("at").and_then(Value::as_array).unwrap_or(&Vec::new()).clone();
-        let at = [
-            at_arr.first().and_then(Value::as_f64).unwrap_or(0.0),
-            at_arr.get(1).and_then(Value::as_f64).unwrap_or(0.0),
-        ];
+        let at = [at_arr.first().and_then(Value::as_f64).unwrap_or(0.0), at_arr.get(1).and_then(Value::as_f64).unwrap_or(0.0)];
         let by_in = c.get("by_in").and_then(Value::as_f64).unwrap_or(0.0);
         let handles: Vec<String> =
             c.get("handles").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         // Group key: for column/structure clashes, use the last handle (the structural element).
-        let group_key = if kind == "column" || kind == "into_structure" {
-            handles.last().cloned().unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let group_key = if kind == "column" || kind == "into_structure" { handles.last().cloned().unwrap_or_default() } else { String::new() };
         items.push(ClashItem {
             id: format!("C{:04}", i + 1),
             kind,
@@ -374,15 +367,17 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             let new_count = st.clashes.iter().filter(|c| c.status == ClashStatus::New).count();
             let active_count = st.clashes.iter().filter(|c| c.status == ClashStatus::Active).count();
             let resolved_count = st.clashes.iter().filter(|c| c.status == ClashStatus::Resolved).count();
-            ui.label(RichText::new(crate::tf!(
-                "Total: {total} | New: {new} | Active: {active} | Resolved: {resolved}",
-                total = total,
-                new = new_count,
-                active = active_count,
-                resolved = resolved_count,
-            ))
-            .small()
-            .color(t.text_dim));
+            ui.label(
+                RichText::new(crate::tf!(
+                    "Total: {total} | New: {new} | Active: {active} | Resolved: {resolved}",
+                    total = total,
+                    new = new_count,
+                    active = active_count,
+                    resolved = resolved_count,
+                ))
+                .small()
+                .color(t.text_dim),
+            );
 
             // Grouped clash list.
             let groups = group_clashes(&st.clashes);
@@ -414,23 +409,20 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     } else {
                         // Group header.
                         let header_id = egui::Id::new(&group.label);
-                        egui::CollapsingHeader::new(RichText::new(&group.label).strong())
-                            .id_salt(header_id)
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for &idx in &group_visible {
-                                    if let Some(c) = st.clashes.get(idx) {
-                                        let sel = st.selected == Some(idx);
-                                        let color = status_color(c.status, &t);
-                                        let label = format!("{} {}", c.id, c.message);
-                                        let resp = ui.selectable_label(sel, RichText::new(&label).color(color));
-                                        if resp.clicked() {
-                                            st.selected = Some(idx);
-                                            action = Some(Action::Goto(idx));
-                                        }
+                        egui::CollapsingHeader::new(RichText::new(&group.label).strong()).id_salt(header_id).default_open(true).show(ui, |ui| {
+                            for &idx in &group_visible {
+                                if let Some(c) = st.clashes.get(idx) {
+                                    let sel = st.selected == Some(idx);
+                                    let color = status_color(c.status, &t);
+                                    let label = format!("{} {}", c.id, c.message);
+                                    let resp = ui.selectable_label(sel, RichText::new(&label).color(color));
+                                    if resp.clicked() {
+                                        st.selected = Some(idx);
+                                        action = Some(Action::Goto(idx));
                                     }
                                 }
-                            });
+                            }
+                        });
                     }
                 }
                 if st.clashes.is_empty() {
@@ -444,33 +436,33 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             if let Some(idx) = st.selected
                 && let Some(c) = st.clashes.get_mut(idx)
             {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&c.id).strong());
-                        ui.label(kind_label(&c.kind));
-                    });
-                    ui.label(&c.message);
-                    ui.horizontal(|ui| {
-                        ui.label(crate::tl!("Status:"));
-                        for &status in ClashStatus::all() {
-                            if ui.selectable_label(c.status == status, status.label()).clicked() {
-                                c.status = status;
-                            }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&c.id).strong());
+                    ui.label(kind_label(&c.kind));
+                });
+                ui.label(&c.message);
+                ui.horizontal(|ui| {
+                    ui.label(crate::tl!("Status:"));
+                    for &status in ClashStatus::all() {
+                        if ui.selectable_label(c.status == status, status.label()).clicked() {
+                            c.status = status;
                         }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(crate::tl!("Trade:"));
-                        ui.text_edit_singleline(&mut c.trade);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(crate::tl!("Notes:"));
-                    });
-                    ui.text_edit_multiline(&mut c.notes);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(crate::tl!("Trade:"));
+                    ui.text_edit_singleline(&mut c.trade);
+                });
+                ui.horizontal(|ui| {
+                    ui.label(crate::tl!("Notes:"));
+                });
+                ui.text_edit_multiline(&mut c.notes);
 
-                    ui.horizontal(|ui| {
-                        if ui.button(crate::tl!("Go To")).on_hover_text(crate::tl!("Zoom to clash")).clicked() {
-                            action = Some(Action::Goto(idx));
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    if ui.button(crate::tl!("Go To")).on_hover_text(crate::tl!("Zoom to clash")).clicked() {
+                        action = Some(Action::Goto(idx));
+                    }
+                });
             }
 
             ui.separator();
@@ -607,10 +599,7 @@ mod bcf {
             if !notes.is_empty() {
                 markup.push_str(&format!("<Description>{notes}</Description>\n"));
             }
-            markup.push_str(&format!(
-                "<Labels><Label>{}</Label></Labels>\n",
-                xml_escape(&clash.kind)
-            ));
+            markup.push_str(&format!("<Labels><Label>{}</Label></Labels>\n", xml_escape(&clash.kind)));
             markup.push_str("</Topic>\n</Markup>\n");
             entries.push((format!("{dir}/markup.bcf"), markup.into_bytes()));
 
@@ -829,8 +818,7 @@ mod tests {
     #[test]
     fn rerun_preserves_statuses() {
         let st = State {
-            clashes: vec![
-                ClashItem {
+            clashes: vec![ClashItem {
                 id: "C0001".into(),
                 kind: "crossing".into(),
                 message: "A crosses B".into(),
@@ -842,8 +830,7 @@ mod tests {
                 trade: "Mechanical".into(),
                 notes: "Reviewed".into(),
                 group_key: String::new(),
-            },
-        ],
+            }],
             ..State::default()
         };
         // Simulate re-run: same key should match.

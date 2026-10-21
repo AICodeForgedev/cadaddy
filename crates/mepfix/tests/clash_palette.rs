@@ -235,12 +235,5 @@ fn clash_guid(id: &str) -> String {
         h = h.wrapping_mul(0x0100_0000_01B3).wrapping_add(u64::from(*b));
     }
     let h2 = h.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        h >> 32,
-        (h >> 16) & 0xFFFF,
-        h & 0x0FFF,
-        0x8000 | ((h2 >> 48) & 0x3FFF),
-        h2 & 0xFFFF_FFFF_FFFF,
-    )
+    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", h >> 32, (h >> 16) & 0xFFFF, h & 0x0FFF, 0x8000 | ((h2 >> 48) & 0x3FFF), h2 & 0xFFFF_FFFF_FFFF,)
 }

@@ -157,8 +157,15 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
 }
 
 fn class_of(e: &Entity) -> Kind {
-    let kind =
-        |class: Class, level: Option<String>, name: String, long: String| Kind { class, predefined: class.ifc().1, level, name, long, read_id: None, system_name: None };
+    let kind = |class: Class, level: Option<String>, name: String, long: String| Kind {
+        class,
+        predefined: class.ifc().1,
+        level,
+        name,
+        long,
+        read_id: None,
+        system_name: None,
+    };
     if let Some(t) = tag_strings(e, "CADADDY_WALLGEN") {
         let part = t.first().map(String::as_str).unwrap_or_default();
         // model.build's MEP runs: `system:<name>` and `kind:duct|pipe|conduit` after the source.
@@ -203,7 +210,7 @@ fn class_of(e: &Entity) -> Kind {
                         _ => Class::Proxy,
                     }
                 }
-            },
+            }
             _ => Class::Proxy,
         };
         let sys_name = extra("system:");
@@ -663,16 +670,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         }
         let sys_id = hash(sys_name);
         // IfcDistributionSystem: GlobalId, OwnerHistory, Name, Description, ObjectType, LongName, PredefinedType.
-        let ds = o.add(format!(
-            "IFCDISTRIBUTIONSYSTEM('{}',$,{},$,$,$,.NOTDEFINED.)",
-            id(sys_id, 20),
-            step_str(sys_name),
-        ));
-        o.add(format!(
-            "IFCRELASSIGNSTOGROUP('{}',$,$,$,{},#{ds})",
-            id(sys_id, 21),
-            refs(products),
-        ));
+        let ds = o.add(format!("IFCDISTRIBUTIONSYSTEM('{}',$,{},$,$,$,.NOTDEFINED.)", id(sys_id, 20), step_str(sys_name),));
+        o.add(format!("IFCRELASSIGNSTOGROUP('{}',$,$,$,{},#{ds})", id(sys_id, 21), refs(products),));
     }
 
     let mut s = String::with_capacity(o.lines.iter().map(|l| l.len() + 10).sum::<usize>() + 512);

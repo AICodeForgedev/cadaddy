@@ -45,10 +45,7 @@ pub fn install_hook() {
         if !in_hook {
             // Store the panic location (cheap) — a full `Backtrace::force_capture` is expensive
             // and can overflow a small test-thread stack. The location is enough to find the site.
-            let loc = info
-                .location()
-                .map(|l| format!("panicked at {}:{}:{}", l.file(), l.line(), l.column()))
-                .unwrap_or_default();
+            let loc = info.location().map(|l| format!("panicked at {}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_default();
             LAST_BT.with(|cell| *cell.borrow_mut() = Some(loc));
             IN_HOOK.with(|c| c.set(false));
         }

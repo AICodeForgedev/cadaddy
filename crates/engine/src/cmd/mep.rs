@@ -62,11 +62,7 @@ fn draft_system(layer: &str) -> Option<MepSystem> {
         return None;
     };
     // Infer duct type from layer name tokens.
-    let duct_type = if kind == MepKind::Duct {
-        Some(infer_duct_type(&parts))
-    } else {
-        None
-    };
+    let duct_type = if kind == MepKind::Duct { Some(infer_duct_type(&parts)) } else { None };
     Some(MepSystem {
         name: layer.to_string(),
         layer: layer.to_string(),
@@ -742,11 +738,7 @@ fn sanitise(name: &str, max: usize) -> String {
 fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
     if d.layer(layer).is_none() {
         let ci = u8::try_from(color.clamp(1, 255)).unwrap_or(7);
-        d.layers.push(cadaddy_doc::Layer {
-            name: layer.to_string(),
-            color: cadaddy_doc::color::Color::Index(ci),
-            ..cadaddy_doc::Layer::default()
-        });
+        d.layers.push(cadaddy_doc::Layer { name: layer.to_string(), color: cadaddy_doc::color::Color::Index(ci), ..cadaddy_doc::Layer::default() });
     }
 }
 

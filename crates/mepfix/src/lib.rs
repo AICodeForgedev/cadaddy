@@ -19,8 +19,8 @@ pub mod draw;
 pub mod duct_reader;
 pub mod elec_reader;
 
-pub mod hotel;
 pub mod heights;
+pub mod hotel;
 pub mod layout;
 pub mod pipe_reader;
 pub mod rng;

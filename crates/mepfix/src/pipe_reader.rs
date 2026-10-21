@@ -8,7 +8,7 @@
 //! `BOP @ 10'-0"` or `CL @ 9'-6"`. Slopes come from `@ 1/4"/FT`. Risers are circles on the
 //! PIPE layer with fill or mark symbols, annotated with notes like `3/4" CW UP`.
 
-use crate::score::{building_from_model, FoundRun};
+use crate::score::{FoundRun, building_from_model};
 use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_geom::Vec2;
@@ -353,10 +353,7 @@ fn parse_feet_inches(s: &str) -> Option<f64> {
             0.0
         } else {
             // Strip trailing non-numeric text (like " AFF"), the inch mark, and leading/trailing spaces.
-            let inch_str = rest
-                .trim_end_matches(|c: char| c != '"')
-                .trim_end_matches('"')
-                .trim();
+            let inch_str = rest.trim_end_matches(|c: char| c != '"').trim_end_matches('"').trim();
             parse_inch_value(inch_str)?
         };
         Some(sign * (ft * 12.0 + inches))
@@ -515,14 +512,7 @@ fn detect_risers(circles: &[(Vec2, f64, String)], texts: &[TextItem], sh: &Sheet
 
         let at_ft = building_from_model(sh, [center.x, center.y]);
 
-        out.push(DetectedRiser {
-            at_model: *center,
-            at_ft,
-            system,
-            size_in: size,
-            direction: direction.to_string(),
-            note: note.text.clone(),
-        });
+        out.push(DetectedRiser { at_model: *center, at_ft, system, size_in: size, direction: direction.to_string(), note: note.text.clone() });
     }
 
     out
@@ -538,7 +528,8 @@ fn parse_riser_size(s: &str) -> f64 {
         let digits: String = w.chars().take_while(|c| c.is_ascii_digit() || *c == '/' || *c == '.').collect();
         if let Some(v) = parse_pipe_num(&digits) {
             // Check for whole part: `1 1/2"`
-            if i > 0 && digits.contains('/')
+            if i > 0
+                && digits.contains('/')
                 && let Ok(whole) = words[i - 1].parse::<f64>()
             {
                 return whole + v;

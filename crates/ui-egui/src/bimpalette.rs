@@ -71,11 +71,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ];
         for (tab, label) in tabs {
             let selected = st.tab == tab;
-            let text = if selected {
-                RichText::new(crate::i18n::t(label)).color(t.accent)
-            } else {
-                RichText::new(crate::i18n::t(label)).color(t.text_dim)
-            };
+            let text =
+                if selected { RichText::new(crate::i18n::t(label)).color(t.accent) } else { RichText::new(crate::i18n::t(label)).color(t.text_dim) };
             if ui.selectable_label(selected, text).clicked() {
                 st.tab = tab;
             }
@@ -216,10 +213,7 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             ui.horizontal(|ui| {
                 let mut vis = visible;
                 if ui.checkbox(&mut vis, "").changed() {
-                    st.trades_data = app
-                        .session
-                        .execute("coordination.trades", &json!({ "set": [{ "system": system, "visible": vis }] }))
-                        .ok();
+                    st.trades_data = app.session.execute("coordination.trades", &json!({ "set": [{ "system": system, "visible": vis }] })).ok();
                 }
                 let color = if visible { t.text } else { t.text_faint };
                 ui.label(RichText::new(format!("{system} ({kind}, {count} runs)")).color(color));
@@ -292,10 +286,8 @@ fn clashes_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
                     }
                     // Select the clashing elements.
                     if let Some(handles) = clash.get("handles").and_then(Value::as_array) {
-                        let hs: Vec<cadaddy_engine::doc::Handle> = handles
-                            .iter()
-                            .filter_map(|h| h.as_str().and_then(cadaddy_engine::doc::Handle::parse_hex))
-                            .collect();
+                        let hs: Vec<cadaddy_engine::doc::Handle> =
+                            handles.iter().filter_map(|h| h.as_str().and_then(cadaddy_engine::doc::Handle::parse_hex)).collect();
                         app.session.set_selection(hs);
                     }
                 }
@@ -317,21 +309,12 @@ fn viewpoints_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         ui.label(crate::i18n::t("Name:"));
         ui.text_edit_singleline(&mut st.vp_name);
         if ui.button(crate::i18n::t("Save")).clicked() && !st.vp_name.is_empty() {
-            st.viewpoints_data = app
-                .session
-                .execute("coordination.viewpoints", &json!({ "save": { "name": st.vp_name } }))
-                .ok();
+            st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "save": { "name": st.vp_name } })).ok();
         }
     });
     ui.separator();
 
-    let vps = st
-        .viewpoints_data
-        .as_ref()
-        .and_then(|d| d.get("viewpoints"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let vps = st.viewpoints_data.as_ref().and_then(|d| d.get("viewpoints")).and_then(Value::as_array).cloned().unwrap_or_default();
 
     if vps.is_empty() {
         ui.label(crate::i18n::t("No saved viewpoints."));
@@ -343,16 +326,10 @@ fn viewpoints_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             let name = vp.get("name").and_then(Value::as_str).unwrap_or("?");
             ui.horizontal(|ui| {
                 if ui.button(name).clicked() {
-                    st.viewpoints_data = app
-                        .session
-                        .execute("coordination.viewpoints", &json!({ "restore": name }))
-                        .ok();
+                    st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "restore": name })).ok();
                 }
                 if ui.small_button("X").clicked() {
-                    st.viewpoints_data = app
-                        .session
-                        .execute("coordination.viewpoints", &json!({ "delete": name }))
-                        .ok();
+                    st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "delete": name })).ok();
                 }
             });
         }
@@ -372,16 +349,10 @@ fn sectionbox_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     ui.horizontal(|ui| {
         let label = if on { "Section Box: ON" } else { "Section Box: OFF" };
         if ui.button(crate::i18n::t(label)).clicked() {
-            st.sectionbox = app
-                .session
-                .execute("coordination.sectionbox", &json!({ "on": !on }))
-                .ok();
+            st.sectionbox = app.session.execute("coordination.sectionbox", &json!({ "on": !on })).ok();
         }
         if ui.button(crate::i18n::t("Fit to Model")).clicked() {
-            st.sectionbox = app
-                .session
-                .execute("coordination.sectionbox", &json!({ "fit": true }))
-                .ok();
+            st.sectionbox = app.session.execute("coordination.sectionbox", &json!({ "fit": true })).ok();
         }
     });
 

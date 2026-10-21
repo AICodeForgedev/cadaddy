@@ -7,9 +7,9 @@
 
 use std::time::{Duration, Instant};
 
+use cadaddy_engine::Session;
 use cadaddy_engine::autosave::{self, Autosaver, Job};
 use cadaddy_engine::cmd::file::{IoHooks, set_io};
-use cadaddy_engine::Session;
 use serde_json::json;
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -22,8 +22,7 @@ fn hooks() {
         read_pdf: None,
     });
     cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
-        cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary })
-            .map_err(|e| e.to_string())
+        cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
 }
 
@@ -169,12 +168,8 @@ fn shutdown_during_autosave_joins_all_threads() {
     // All autosave files must be deleted.
     assert!(a.files().is_empty());
     // The lock file must be deleted too.
-    let locks: Vec<_> = std::fs::read_dir(&dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".lock"))
-        .collect();
+    let locks: Vec<_> =
+        std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".lock")).collect();
     assert!(locks.is_empty(), "lock file not cleaned up: {locks:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -294,12 +289,7 @@ fn kept_result_does_not_leak_to_another_drawing() {
         std::thread::sleep(Duration::from_millis(10));
     }
     for st in &s.docs {
-        assert!(
-            st.exchange_notice.is_none(),
-            "drawing {} (uid {}) got an exchange_notice it shouldn't have",
-            st.title,
-            st.uid
-        );
+        assert!(st.exchange_notice.is_none(), "drawing {} (uid {}) got an exchange_notice it shouldn't have", st.title, st.uid);
     }
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -506,10 +496,7 @@ fn autosave_does_not_confuse_closed_and_reopened_drawings() {
     // The new drawing's autosave file must exist and not be the same as the old one.
     let files = a.files();
     for f in &files {
-        assert!(
-            !f.contains(&format!("_{uid1}.")),
-            "file name must not contain closed drawing's uid: {f}"
-        );
+        assert!(!f.contains(&format!("_{uid1}.")), "file name must not contain closed drawing's uid: {f}");
     }
 
     a.shutdown();
@@ -537,10 +524,7 @@ fn second_change_during_write_does_not_duplicate_writes() {
     draw(&mut s);
     let jobs = a.plan(&s, 61.0, 1, &dir.to_string_lossy());
     // The drawing is busy: no write should be emitted.
-    assert!(
-        writes(&jobs).is_empty(),
-        "a busy drawing must not get a second write"
-    );
+    assert!(writes(&jobs).is_empty(), "a busy drawing must not get a second write");
 
     // After the write finishes, the new change is picked up.
     wait_idle(&mut a, Duration::from_secs(30));
