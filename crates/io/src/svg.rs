@@ -47,6 +47,9 @@ fn opacity(p: &cadaddy_render::DPrim) -> String {
 }
 
 /// Write a display list (as [`export_window`] does for a space's own).
+/// Most segments (moves and lines) of one path element (an SVG reader takes up to 100 000).
+const PATH_SEGMENTS: usize = 20_000;
+
 pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) -> String {
     let window = window.filter(|w| !w.is_empty());
     let b = window.unwrap_or(list.bounds);
@@ -67,10 +70,49 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
     let tx = |x: f64| x - x0;
     let ty = |y: f64| y1 - y;
     let mut images = 0usize;
-    for p in &list.prims {
+    let mut i = 0;
+    while let Some(p) = list.prims.get(i) {
+        i += 1;
         let c = p.display_rgb(white).hex();
         let op = opacity(p);
         let pts = list.points(p);
+        // The lines of one object drawn alike (a hatch's pattern, a text's strokes) as paths of up
+        // to PATH_SEGMENTS segments: a dense hatch was a million elements, more than an SVG reader
+        // takes (savefuzz). Points (a DOTS hatch) as zero-length round-capped subpaths: the same
+        // dots.
+        let same = |q: &cadaddy_render::DPrim| q.kind == p.kind && q.handle == p.handle && q.display_rgb(white).hex() == c && opacity(q) == op;
+        if matches!(p.kind, Kind::Polyline | Kind::Point) && list.prims.get(i).is_some_and(same) {
+            let dots = p.kind == Kind::Point;
+            let width = if dots { stroke * 2.0 } else { stroke };
+            let head = format!(r#"<path fill="none" stroke="{c}"{op} stroke-width="{width:.6}" stroke-linecap="round" stroke-linejoin="round" d=""#);
+            s.push_str(&head);
+            let mut segments = 0usize;
+            let mut sub = |s: &mut String, pts: &[cadaddy_geom::Vec2]| {
+                let n = if dots { 2 } else { pts.len() };
+                if segments > 0 && segments + n > PATH_SEGMENTS {
+                    s.push_str(r#""/>"#);
+                    s.push_str(&head);
+                    segments = 0;
+                }
+                segments += n;
+                if dots {
+                    if let Some(q) = pts.first() {
+                        let _ = write!(s, "M{:.6} {:.6}h0", tx(q.x), ty(q.y));
+                    }
+                    return;
+                }
+                for (k, q) in pts.iter().enumerate() {
+                    let _ = write!(s, "{}{:.6} {:.6}", if k == 0 { 'M' } else { 'L' }, tx(q.x), ty(q.y));
+                }
+            };
+            sub(&mut s, pts);
+            while let Some(q) = list.prims.get(i).filter(|q| same(q)) {
+                sub(&mut s, list.points(q));
+                i += 1;
+            }
+            s.push_str(r#""/>"#);
+            continue;
+        }
         match p.kind {
             Kind::Polyline => {
                 let _ = write!(

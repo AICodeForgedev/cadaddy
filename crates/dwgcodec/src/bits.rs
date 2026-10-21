@@ -36,6 +36,70 @@ pub enum Text {
     Wide(Vec<u16>),
 }
 
+/// Windows-1252's characters at 0x80–0x9F (`None`: unused), the rest of it being Latin-1.
+const CP1252_HIGH: [Option<char>; 32] = [
+    Some('€'),
+    None,
+    Some('‚'),
+    Some('ƒ'),
+    Some('„'),
+    Some('…'),
+    Some('†'),
+    Some('‡'),
+    Some('ˆ'),
+    Some('‰'),
+    Some('Š'),
+    Some('‹'),
+    Some('Œ'),
+    None,
+    Some('Ž'),
+    None,
+    None,
+    Some('‘'),
+    Some('’'),
+    Some('“'),
+    Some('”'),
+    Some('•'),
+    Some('–'),
+    Some('—'),
+    Some('˜'),
+    Some('™'),
+    Some('š'),
+    Some('›'),
+    Some('œ'),
+    None,
+    Some('ž'),
+    Some('Ÿ'),
+];
+
+/// The Windows-1252 byte for `c`, if it has one.
+fn cp1252(c: char) -> Option<u8> {
+    match u32::from(c) {
+        0..=0x7F | 0xA0..=0xFF => u8::try_from(u32::from(c)).ok(),
+        _ => CP1252_HIGH.iter().position(|&h| h == Some(c)).and_then(|i| u8::try_from(0x80 + i).ok()),
+    }
+}
+
+/// A string as a code-page string (T, before 2007) stores it, in the code page CADaddy's writer
+/// declares (30, ANSI 1252): its characters in Windows-1252, every other one as a `\U+XXXX`
+/// escape (a surrogate pair of escapes above U+FFFF), as AutoCAD writes them. (Writing Latin-1
+/// bytes, and `?` for the rest, lost every character outside Latin-1: a layer "Δ fläche" came
+/// back "? fläche".)
+pub fn code_page_bytes(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if let Some(b) = cp1252(c) {
+            out.push(b);
+        } else {
+            let mut units = [0u16; 2];
+            for u in c.encode_utf16(&mut units) {
+                out.extend_from_slice(format!("\\U+{u:04X}").as_bytes());
+            }
+        }
+    }
+    out
+}
+
 impl Text {
     /// The string, decoding code-page bytes as Latin-1 (code pages are mapped by a later layer).
     pub fn to_string_lossy(&self) -> String {
@@ -686,8 +750,8 @@ impl BitWriter {
                 self.bytes(&b[..b.len().min(u16::MAX as usize)]);
             }
             Text::Wide(w) => {
-                // A UTF-16 string in a code-page slot: write its Latin-1 bytes.
-                let b: Vec<u8> = String::from_utf16_lossy(w).chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+                // A UTF-16 string in a code-page slot.
+                let b = code_page_bytes(&String::from_utf16_lossy(w));
                 self.t(&Text::Bytes(b));
             }
             Text::Empty => self.bs(0),
@@ -903,6 +967,19 @@ mod tests {
         }
         assert_eq!(r.ot(false).unwrap(), 500);
         assert_eq!(r.rd3().unwrap(), [1.0, -2.0, 3.5]);
+    }
+
+    /// Code-page strings: Windows-1252 bytes for its characters, `\U+XXXX` for the rest.
+    #[test]
+    fn code_page_strings_escape_what_1252_lacks() {
+        assert_eq!(code_page_bytes("Abc \u{e4} \u{20ac}"), b"Abc \xE4 \x80".to_vec());
+        assert_eq!(code_page_bytes("\u{394}\u{5c64}"), br"\U+0394\U+5C64".to_vec());
+        assert_eq!(code_page_bytes("\u{1f642}"), br"\U+D83D\U+DE42".to_vec());
+        let mut w = BitWriter::new();
+        w.t(&Text::Wide("\u{f1}\u{394}".encode_utf16().collect()));
+        let bytes = w.into_bytes();
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(r.t().unwrap(), Text::Bytes([&[0xF1u8][..], br"\U+0394"].concat()));
     }
 
     #[test]

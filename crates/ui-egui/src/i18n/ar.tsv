@@ -2430,3 +2430,75 @@ menu	View	عرض
 	Dictionaries are read from:	تُقرأ القواميس من:
 	Published to {path}	نُشر إلى {path}
 	Sheet Set (.sheetset.json)	مجموعة الأوراق (.sheetset.json)
+	Resolution	الدقة
+	Colour depth	عمق اللون
+	Colour (24-bit)	ألوان (24 بت)
+	Greys (8-bit)	تدرج رمادي (8 بت)
+	Black and white (1-bit)	أبيض وأسود (1 بت)
+	PNG Out	إخراج PNG
+	JPEG Out	إخراج JPEG
+	BMP Out	إخراج BMP
+	TIFF Out	إخراج TIFF
+	Enter image file name	أدخل اسم ملف الصورة
+	Nothing selected: no image written.	لم يُحدَّد شيء: لم تُكتب أي صورة.
+	{} object(s) written to {} ({} × {} pixels).	كُتب {} من العناصر إلى {} ({} × {} بكسل).
+	Set to ByLayer	تعيين إلى حسب الطبقة
+	Explode and Set Properties	تفجير وتعيين الخصائص
+	Edit Attribute in Place	تحرير السمة في مكانها
+	Frame	إطار
+	Setup	الإعداد
+	Setup View	إعداد العرض
+	Setup Drawing	إعداد الرسم
+	Setup Profile	إعداد المقطع الجانبي
+	Enter view scale	أدخل مقياس العرض
+	Specify view center	حدد مركز العرض
+	Enter view name	أدخل اسم العرض
+	Specify side of viewport to project	حدد جانب إطار العرض للإسقاط
+	Specify first point of cutting plane	حدد النقطة الأولى لمستوى القطع
+	Specify second point of cutting plane	حدد النقطة الثانية لمستوى القطع
+	Specify first point of inclined plane	حدد النقطة الأولى للمستوى المائل
+	Specify second point of inclined plane	حدد النقطة الثانية للمستوى المائل
+	Specify side to view from	حدد الجانب الذي يُنظر منه
+	Specify first corner of viewport	حدد الزاوية الأولى لإطار العرض
+	Specify opposite corner of viewport	حدد الزاوية المقابلة لإطار العرض
+	Display hidden profile lines on separate layer?	عرض خطوط المقطع الجانبي المخفية على طبقة منفصلة؟
+	Project profile lines onto a plane?	إسقاط خطوط المقطع الجانبي على مستوى؟
+	Delete tangential edges?	حذف الحواف المماسية؟
+	None (PDF file)	بلا (ملف PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	نص البعد بارتفاع {} أصغر من أن يُقرأ في هذا الرسم. اكتب DIMSCALE {} لتكبير الأبعاد الجديدة {} مرة.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	النص بارتفاع {} أصغر من أن يُقرأ في هذا الرسم. جرّب ارتفاع {} (يضبط TEXTSIZE القيمة الافتراضية).
+	(each layout's own)	(الخاص بكل تخطيط)
+	A callout on the selected sheet pointing at the selected view	رمز إشارة على الورقة المحددة يشير إلى العرض المحدد
+	A page setup copied from the selected sheet's layout	إعداد صفحة منسوخ من تخطيط الورقة المحددة
+	Add Callout	إضافة رمز إشارة
+	Callouts: {}	رموز الإشارة: {}
+	From Selected Sheet	من الورقة المحددة
+	Insert on Selected Sheet	إدراج في الورقة المحددة
+	Named view	عرض مسمى
+	Page Setup Override	تجاوز إعداد الصفحة
+	Place View	وضع العرض
+	Position on sheet	الموضع على الورقة
+	Remove Property	إزالة الخاصية
+	Sheet Properties	خصائص الورقة
+	Sheet Set Fields	حقول مجموعة الأوراق
+	Sheet Set Properties	خصائص مجموعة الأوراق
+	Sync Drawings	مزامنة الرسومات
+	Text holding the field, at the position on sheet	نص يحمل الحقل، في الموضع على الورقة
+	Views and Callouts	العروض ورموز الإشارة
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	يصبح تخطيط كل ورقة "الرقم العنوان"؛ وتأخذ حقول مجموعة الأوراق وتسميات العروض ورموز الإشارة القيم الحالية للمجموعة
+	3 Point	3 نقاط
+	Origin	نقطة الأصل
+	Z	Z
+	Named UCS...	أنظمة إحداثيات المستخدم المسماة...
+	Center Mark (DIMCEN)	علامة المركز (DIMCEN)
+	Copy Objects to New Layer	نسخ الكائنات إلى طبقة جديدة
+	Cut with Base Point	قص من نقطة أساس
+	DXF In	استيراد DXF
+	DXF Out	حفظ بصيغة DXF
+	Fill	تعبئة
+	Maximize Viewport	تكبير منفذ العرض
+	Minimize Viewport	تصغير منفذ العرض
+	Object Selection Filters	مرشحات تحديد الكائنات
+	Oops	استرجاع المحذوف
+	Quick Text	نص سريع
+	Redefine Attributes	إعادة تعريف السمات

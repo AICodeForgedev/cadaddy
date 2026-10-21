@@ -729,8 +729,11 @@ fn page_rows(
 ) -> Option<(&'static str, Value)> {
     let mut change = None;
     crate::rtl::lead(ui, "Printer/plotter");
-    egui::ComboBox::from_id_salt(salt.with("device")).selected_text(device_label(page)).width(190.0).show_ui(ui, |ui| {
-        if ui.selectable_label(device_label(page) == "None", "None").on_hover_text("PDF on the paper chosen below").clicked()
+    // "None" plots to a PDF file: say so, a first-time user doesn't know it (Q234).
+    let none = crate::tl!("None (PDF file)");
+    let shown = if device_label(page) == "None" { none.to_string() } else { device_label(page).to_string() };
+    egui::ComboBox::from_id_salt(salt.with("device")).selected_text(shown).width(190.0).show_ui(ui, |ui| {
+        if ui.selectable_label(device_label(page) == "None", none).on_hover_text("PDF on the paper chosen below").clicked()
             && device_label(page) != "None"
         {
             change = Some(("device", json!("None")));
@@ -961,6 +964,10 @@ struct PlotState {
     /// Model-space placement; stays outside PageSetup so layouts keep their existing behavior.
     center: bool,
     offset_mm: [f64; 2],
+    /// A raster device's resolution (dpi) and colour depth (24, 8, 1) for this plot; `None`: the
+    /// device's own.
+    raster_dpi: Option<u32>,
+    color_depth: Option<u8>,
 }
 
 /// The page setup a plot of `target` starts from: the layout's, or model-space defaults (fitted
@@ -1009,6 +1016,12 @@ fn plot_params(st: &PlotState, preview_dpi: Option<f64>) -> Value {
             None if device => {
                 o.insert("device".into(), json!(page.device));
                 o.insert("paper".into(), json!(page.paper));
+                if let Some(dpi) = st.raster_dpi {
+                    o.insert("resolution".into(), json!(dpi));
+                }
+                if let Some(d) = st.color_depth {
+                    o.insert("colorDepth".into(), json!(d));
+                }
             }
             None if cadaddy_render::paper_size(&page.paper).is_some() => {
                 o.insert("device".into(), json!("None"));
@@ -1069,6 +1082,8 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
             window: [ext.min.x, ext.min.y, ext.max.x, ext.max.y],
             center: true,
             offset_mm: [0.0, 0.0],
+            raster_dpi: None,
+            color_depth: None,
         }
     });
     let model = st.target == "Model";
@@ -1108,6 +1123,33 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 let placement = model.then_some((&mut st.center, &mut st.offset_mm, offset_supported));
                 if let Some((k, v)) = page_rows(ui, egui::Id::new(("plot", st.target.as_str())), &st.page, &rows, &choices, placement) {
                     apply_page_change(&mut st.page, k, &v);
+                }
+                // A raster device: its resolution and colour depth for this plot.
+                if let Some(dev) = choices.devices.iter().find(|dv| dv.name.eq_ignore_ascii_case(&st.page.device)).filter(|dv| dv.output.is_raster())
+                {
+                    crate::rtl::lead(ui, "Resolution");
+                    let mut dpi = st.raster_dpi.unwrap_or(dev.resolution);
+                    if ui.add(egui::DragValue::new(&mut dpi).range(50..=2400).suffix(" dpi")).changed() {
+                        st.raster_dpi = Some(dpi);
+                    }
+                    crate::rtl::trail(ui, "Resolution");
+                    ui.end_row();
+                    crate::rtl::lead(ui, "Colour depth");
+                    let depth = st.color_depth.unwrap_or(dev.color_depth);
+                    let name = |d: u8| match d {
+                        8 => crate::tl!("Greys (8-bit)"),
+                        1 => crate::tl!("Black and white (1-bit)"),
+                        _ => crate::tl!("Colour (24-bit)"),
+                    };
+                    egui::ComboBox::from_id_salt("plot_depth").selected_text(name(depth)).width(190.0).show_ui(ui, |ui| {
+                        for d in [24u8, 8, 1] {
+                            if ui.selectable_label(d == depth, name(d)).clicked() {
+                                st.color_depth = Some(d);
+                            }
+                        }
+                    });
+                    crate::rtl::trail(ui, "Colour depth");
+                    ui.end_row();
                 }
                 if model && st.page.plot_area == "window" {
                     for (i, label) in [(0, "First corner"), (2, "Opposite corner")] {
@@ -1360,7 +1402,22 @@ mod plot_dialog_tests {
             window: [0.0, 0.0, 10.0, 10.0],
             center: true,
             offset_mm: [0.0, 0.0],
+            raster_dpi: None,
+            color_depth: None,
         }
+    }
+
+    #[test]
+    fn a_raster_device_plots_at_the_chosen_resolution_and_depth() {
+        let mut st = state("Model");
+        apply_page_change(&mut st.page, "device", &json!("CADaddy TIFF"));
+        // The device's own unless chosen here.
+        let p = plot_params(&st, None);
+        assert!(p.get("resolution").is_none() && p.get("colorDepth").is_none(), "{p}");
+        st.raster_dpi = Some(150);
+        st.color_depth = Some(1);
+        let p = plot_params(&st, None);
+        assert_eq!((p["device"].as_str(), p["resolution"].as_u64(), p["colorDepth"].as_u64()), (Some("CADaddy TIFF"), Some(150), Some(1)), "{p}");
     }
 
     #[test]

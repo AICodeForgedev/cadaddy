@@ -15,9 +15,9 @@ use cadaddy_engine::{EngineError, Session, command_specs, sample};
 
 /// Commands that end the session or quit; started, they are not walked.
 const SKIP: &[&str] = &["quit", "exit", "close", "closeall", "qquit"];
-/// Commands that change the drawing on purpose without an undo step: SAVEAS records the save
+/// Commands that change the drawing on purpose without an undo step: SAVEAS and DXFOUT record the save
 /// (date, fields, version) and LIGHTBAKE keeps its baked light, as AutoCAD keeps a render.
-const NOT_UNDOABLE: &[&str] = &["saveas", "lightbake"];
+const NOT_UNDOABLE: &[&str] = &["saveas", "dxfout", "lightbake"];
 /// Walks per command (each answers at least one new keyword, or stops).
 const MAX_WALKS: usize = 64;
 /// Inputs per walk before Escape.

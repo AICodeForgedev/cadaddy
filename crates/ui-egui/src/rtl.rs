@@ -254,7 +254,6 @@ mod tests {
             "find",
             "adcenter",
             "publish",
-            "sheetset",
             "color",
             "textstyle",
             "dimstyle",

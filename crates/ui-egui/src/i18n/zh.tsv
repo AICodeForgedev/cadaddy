@@ -2318,3 +2318,75 @@
 	Dictionaries are read from:	词典读取位置：
 	Published to {path}	已发布到 {path}
 	Sheet Set (.sheetset.json)	图纸集 (.sheetset.json)
+	Resolution	分辨率
+	Colour depth	颜色深度
+	Colour (24-bit)	彩色 (24 位)
+	Greys (8-bit)	灰度 (8 位)
+	Black and white (1-bit)	黑白 (1 位)
+	PNG Out	PNG 输出
+	JPEG Out	JPEG 输出
+	BMP Out	BMP 输出
+	TIFF Out	TIFF 输出
+	Enter image file name	输入图像文件名
+	Nothing selected: no image written.	未选择任何对象：未写入图像。
+	{} object(s) written to {} ({} × {} pixels).	已将 {} 个对象写入 {}（{} × {} 像素）。
+	Set to ByLayer	设置为 ByLayer
+	Explode and Set Properties	分解并设置特性
+	Edit Attribute in Place	在位编辑属性
+	Frame	边框
+	Setup	设置
+	Setup View	设置视图
+	Setup Drawing	设置图形
+	Setup Profile	设置轮廓
+	Enter view scale	输入视图比例
+	Specify view center	指定视图中心
+	Enter view name	输入视图名称
+	Specify side of viewport to project	指定要投影的视口边
+	Specify first point of cutting plane	指定剖切平面的第一点
+	Specify second point of cutting plane	指定剖切平面的第二点
+	Specify first point of inclined plane	指定倾斜平面的第一点
+	Specify second point of inclined plane	指定倾斜平面的第二点
+	Specify side to view from	指定观察方向的一侧
+	Specify first corner of viewport	指定视口的第一个角点
+	Specify opposite corner of viewport	指定视口的对角点
+	Display hidden profile lines on separate layer?	是否在单独的图层上显示隐藏的轮廓线?
+	Project profile lines onto a plane?	是否将轮廓线投影到平面上?
+	Delete tangential edges?	是否删除相切的边?
+	None (PDF file)	无（PDF 文件）
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	高度为 {} 的标注文字在此图形中太小，无法阅读。输入 DIMSCALE {} 可使新标注放大 {} 倍。
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	高度为 {} 的文字在此图形中太小，无法阅读。请尝试高度 {}（TEXTSIZE 设置默认值）。
+	(each layout's own)	(各布局自身的)
+	A callout on the selected sheet pointing at the selected view	所选图纸上指向所选视图的标注
+	A page setup copied from the selected sheet's layout	从所选图纸的布局复制的页面设置
+	Add Callout	添加标注
+	Callouts: {}	标注：{}
+	From Selected Sheet	来自所选图纸
+	Insert on Selected Sheet	插入到所选图纸
+	Named view	命名视图
+	Page Setup Override	页面设置替代
+	Place View	放置视图
+	Position on sheet	图纸上的位置
+	Remove Property	删除特性
+	Sheet Properties	图纸特性
+	Sheet Set Fields	图纸集字段
+	Sheet Set Properties	图纸集特性
+	Sync Drawings	同步图形
+	Text holding the field, at the position on sheet	包含该字段的文字，位于图纸上的位置
+	Views and Callouts	视图和标注
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	每个图纸的布局名变为“编号 标题”；图纸集字段、视图标签和标注采用图纸集的当前值
+	3 Point	三点
+	Origin	原点
+	Z	Z
+	Named UCS...	命名 UCS...
+	Center Mark (DIMCEN)	中心标记 (DIMCEN)
+	Copy Objects to New Layer	将对象复制到新图层
+	Cut with Base Point	带基点剪切
+	DXF In	DXF 输入
+	DXF Out	DXF 输出
+	Fill	填充
+	Maximize Viewport	最大化视口
+	Minimize Viewport	最小化视口
+	Object Selection Filters	对象选择过滤器
+	Oops	恢复删除
+	Quick Text	快速文字
+	Redefine Attributes	重定义属性

@@ -26,6 +26,7 @@ pub mod grips;
 mod guard;
 pub mod i18n;
 pub mod journal;
+pub mod legibility;
 pub mod lisp;
 pub mod mtext_edit;
 pub mod pointmod;
@@ -250,6 +251,10 @@ pub struct DocState {
     pub view_background: Option<cadaddy_color::Color>,
     /// The UCSs UCS Previous goes back to, the latest last.
     pub ucs_previous: Vec<ucs::Frame>,
+    /// What the last ERASE removed, with the spaces it was in, for OOPS.
+    pub oops: Vec<(Space, Arc<Entity>)>,
+    /// VPMAX's maximized viewport and what VPMIN puts back.
+    pub vpmax: Option<cmd::classic::VpMax>,
     /// Model space's visual style (VSCURRENT): how 3D objects show on the Model tab.
     pub visual_style: cadaddy_render::shade::VisualStyle,
     pub uid: u64,
@@ -294,6 +299,24 @@ pub struct DocState {
     /// The layouts read from the file with nothing on them and not opened since: each gets a
     /// viewport zoomed to the drawing's extents when it is first opened.
     pub bare_layouts: Vec<String>,
+    /// Which kinds of new annotation were found too small to read and hinted about
+    /// ([`legibility`]), so the hint shows once per drawing.
+    pub legibility_hinted: u8,
+}
+
+/// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
+/// between the `inset` pixels covered at its top and bottom (each at most 40% of it). `aspect`
+/// turns the free area's width/height into the one to fit (tiled viewports adjust it).
+fn framed(ext: cadaddy_geom::Bounds2, px: (f64, f64), inset: (f64, f64), aspect: impl Fn(f64) -> f64, margin: f64) -> View {
+    let (w, h) = (px.0.max(1.0), px.1.max(1.0));
+    let clamp = |v: f64| if v.is_finite() { v.clamp(0.0, h * 0.4) } else { 0.0 };
+    let (top, bottom) = (clamp(inset.0), clamp(inset.1));
+    let free = (h - top - bottom).max(1.0);
+    let fit = ext.height().max(ext.width() / aspect(w / free).max(1e-6)).max(1e-6) * margin;
+    let height = fit * h / free;
+    // The free area's middle is (bottom - top) / 2 pixels above the viewport's.
+    let shift = (bottom - top) / 2.0 * height / h;
+    View { center: ext.center() - Vec2::new(0.0, shift), height }
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -322,6 +345,8 @@ impl DocState {
             view_twist: 0.0,
             view_background: None,
             ucs_previous: Vec::new(),
+            oops: Vec::new(),
+            vpmax: None,
             visual_style: cadaddy_render::shade::VisualStyle::Wireframe2d,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
@@ -340,6 +365,7 @@ impl DocState {
             lightmap_tried: false,
             walkthrough: false,
             bare_layouts: Vec::new(),
+            legibility_hinted: 0,
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
@@ -972,6 +998,8 @@ pub struct Session {
     pub running: Option<Running>,
     /// See [`Session::keep_undo_step`].
     keep_undo_step: bool,
+    /// MULTIPLE: the command started again each time it ends, until it is cancelled.
+    pub(crate) multiple: Option<String>,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     in_script: bool,
     /// The last script run (RSCRIPT at the command line runs it again).
@@ -1025,6 +1053,9 @@ pub struct Session {
     pub tracking: snap::tracking::Tracker,
     /// Viewport size in pixels (from the UI; used for zoom and pick apertures).
     pub viewport_px: (f64, f64),
+    /// Pixels at the top and bottom of the viewport that the interface covers (the floating
+    /// command line and its history): zooming to the extents fits the drawing between them.
+    pub viewport_inset_px: (f64, f64),
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
     pub pending_window: Option<PendingWindow>,
@@ -1119,6 +1150,7 @@ impl Session {
             settings: Settings::default(),
             running: None,
             keep_undo_step: false,
+            multiple: None,
             in_script: false,
             script_last: None,
             script_interrupted: None,
@@ -1142,6 +1174,7 @@ impl Session {
             compare: None,
             tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
+            viewport_inset_px: (0.0, 0.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
@@ -1208,10 +1241,7 @@ impl Session {
         st.bare_layouts = bare;
         let ext = st.doc.extents(&Space::Model);
         if !ext.is_empty() {
-            st.set_view_quiet(View {
-                center: ext.center(),
-                height: (ext.height().max(ext.width() * self.viewport_px.1 / self.viewport_px.0.max(1.0)) * 1.1).max(1e-6),
-            });
+            st.set_view_quiet(framed(ext, self.viewport_px, self.viewport_inset_px, |a| a, 1.1));
         }
         self.end_running();
         self.docs.push(st);
@@ -1436,14 +1466,28 @@ impl Session {
             (Some(m), Ok(_)) => Err(EngineError::Other(m)),
             (_, r) => r,
         };
-        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed.
-        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing {
+        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed. Undo
+        // and redo restore a drawing as it was, already consistent: the follow-ups (associative
+        // dimensions, groups, tables…) would take the restored objects for moved ones and "fix"
+        // them (redo dropped an associative dimension's links: undofuzz).
+        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing && !moves_through_history(spec.id) {
             self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
         }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
         };
+        // A refused command that took the drawing for writing (copy on write) without changing it
+        // gets the very same drawing back, so it leaves no undo step: an empty step made the
+        // next U do nothing (layer.delete of layer 0, layer.new of a name in use: undofuzz).
+        if result.is_err()
+            && let Some((doc, _, uid)) = &before
+            && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
+            && !Arc::ptr_eq(doc, &st.doc)
+            && **doc == *st.doc
+        {
+            st.doc = Arc::clone(doc);
+        }
         let grouped = self.lisp_groups_undo();
         if spec.undoable
             && let Some((doc, sel, uid)) = before
@@ -1828,6 +1872,8 @@ impl Session {
 
     fn feed(&mut self, input: Option<Input>) -> Result<()> {
         let base = if matches!(input, Some(Input::Point(_))) { self.current_prompt().and_then(|p| p.base) } else { None };
+        let enter = matches!(input, Some(Input::Enter));
+        let beginning = input.is_none();
         let Some(mut run) = self.running.take() else { return Ok(()) };
         let step = match input {
             Some(Input::Cancel) => Ok(Step::Cancel),
@@ -1864,17 +1910,21 @@ impl Session {
                 Ok(())
             }
             Ok(Step::Done) => {
+                let id = run.id.clone();
                 self.finish(run, false);
                 self.resume_suspended();
+                self.repeat_multiple(&id, beginning);
                 Ok(())
             }
             Ok(Step::Cancel) => {
+                self.multiple = None;
                 self.echo("*Cancel*");
                 self.finish(run, true);
                 self.resume_suspended();
                 Ok(())
             }
             Err(EngineError::Internal(id, m)) => {
+                self.multiple = None;
                 // Restore and end the command.
                 if let Ok(st) = self.state_mut() {
                     st.doc = run.before.clone();
@@ -1883,12 +1933,40 @@ impl Session {
                 self.resume_suspended();
                 Err(EngineError::Internal(id, m))
             }
+            Err(e) if enter => {
+                // Enter the command can't take ends it, keeping what it did so far: asking again
+                // left Esc as the only way out, and what was typed next went to the command
+                // (battle test 0.7.8 #1, the stuck prompts sweep).
+                self.echo(e.user_message());
+                let id = run.id.clone();
+                self.finish(run, false);
+                self.resume_suspended();
+                self.repeat_multiple(&id, beginning);
+                Ok(())
+            }
             Err(e) => {
                 // Invalid input: report and keep prompting (AutoCAD re-prompts).
                 self.echo(e.user_message());
                 self.running = Some(run);
                 Ok(())
             }
+        }
+    }
+
+    /// MULTIPLE: once the command it repeats (or MULTIPLE itself) has ended, start it again. A
+    /// command that ended as it began (nothing to ask) stops the repeating instead of spinning.
+    fn repeat_multiple(&mut self, finished: &str, beginning: bool) {
+        let Some(target) = self.multiple.clone() else { return };
+        if self.running.is_some() || self.suspended.is_some() || (finished != target && finished != "multiple") {
+            return;
+        }
+        if finished == target && beginning {
+            self.multiple = None;
+            return;
+        }
+        if let Err(e) = self.start(&target) {
+            self.multiple = None;
+            self.echo(e.user_message());
         }
     }
 
@@ -1927,7 +2005,9 @@ impl Session {
         if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
             self.echo(m);
         }
-        self.after_command(Some(&run.before), None, true);
+        if !moves_through_history(&run.id) {
+            self.after_command(Some(&run.before), None, true);
+        }
         // A transparent command's changes belong to the command it ran inside, and a command a
         // LISP routine ran belongs to the routine's single undo step.
         if self.suspended.is_some() || self.lisp_groups_undo() {
@@ -2239,7 +2319,17 @@ impl Session {
                 return self.input(Input::Point(base + dir * dist));
             }
         }
-        self.input(Input::Text(tt.to_string()))
+        // Text the prompt can't take that the command passed over without a word: say what the
+        // prompt wants, as AutoCAD does (the stuck prompts sweep found hundreds of silent ones).
+        let before = (self.log.len(), self.state().ok().map(|st| Arc::as_ptr(&st.doc)));
+        let r = self.input(Input::Text(tt.to_string()));
+        let unchanged = self.log.len() == before.0
+            && self.state().ok().map(|st| Arc::as_ptr(&st.doc)) == before.1
+            && self.current_prompt().is_some_and(|p| p.message == prompt.message && p.keywords == prompt.keywords);
+        if r.is_ok() && !prompt.accept.text && self.running.is_some() && unchanged {
+            self.echo(not_taken(&prompt));
+        }
+        r
     }
 
     /// Run a script, as AutoCAD reads one: a space or a line end ends an input, and an empty
@@ -2521,10 +2611,10 @@ impl Session {
         let ext = self.view_extents()?;
         let (w, h) = self.viewport_px;
         let ext = if ext.is_empty() { self.zoom_limits()? } else { ext };
+        let inset = self.viewport_inset_px;
         let st = self.state_mut()?;
-        let aspect = st.zoom_aspect(w / h.max(1.0));
-        let height = ext.height().max(ext.width() / aspect.max(1e-6)).max(1e-6) * 1.05;
-        st.set_zoom_frame(View { center: ext.center(), height });
+        let view = framed(ext, (w, h), inset, |a| st.zoom_aspect(a), 1.05);
+        st.set_zoom_frame(view);
         Ok(())
     }
 
@@ -2566,7 +2656,26 @@ impl Session {
     }
 }
 
+/// The commands that move through the undo history (they restore drawings as they were).
+fn moves_through_history(id: &str) -> bool {
+    matches!(id, "undo" | "u" | "redo" | "mredo")
+}
+
 /// Typed text that is LISP: `(expression)` or `!variable`.
+/// What a prompt wants, for text it can't take.
+fn not_taken(p: &Prompt) -> &'static str {
+    let keywords = !p.keywords.is_empty();
+    match (p.accept.select, p.accept.point, p.accept.number) {
+        (true, _, _) => "*Invalid selection*",
+        (false, true, _) if keywords => "Point or option keyword required.",
+        (false, true, _) => "Invalid point.",
+        (false, false, true) if keywords => "Requires a number or option keyword.",
+        (false, false, true) => "Requires a number.",
+        _ if keywords => "Invalid option keyword.",
+        _ => "Invalid input.",
+    }
+}
+
 fn lisp_expression(t: &str) -> bool {
     let t = t.trim();
     t.starts_with('(') || (t.starts_with('!') && t.len() > 1)

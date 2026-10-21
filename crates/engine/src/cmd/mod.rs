@@ -6,12 +6,14 @@ pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
 pub(crate) mod ask;
+mod attipedit;
 mod audit;
 pub mod autospec;
 pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bspec;
 pub mod ceilings;
+pub mod classic;
 pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod colorbook;
@@ -30,6 +32,7 @@ pub mod exterior;
 mod field;
 pub mod file;
 pub mod find;
+mod frames;
 pub mod grids;
 mod gripcmds;
 mod griphot;
@@ -43,7 +46,11 @@ pub(crate) mod inquiry;
 mod layer;
 pub mod markup;
 pub mod pointcloud;
+mod rasterout;
 pub mod schedules;
+mod setbylayer;
+mod vpsync;
+mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
@@ -94,6 +101,7 @@ mod sections;
 mod selecttools;
 mod settings;
 mod solids;
+mod solview;
 mod spline_opts;
 pub mod standards;
 pub(crate) mod table;
@@ -243,6 +251,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(file::alias_specs());
         v.extend(audit::specs());
         v.extend(edit::specs());
+        v.extend(classic::specs());
         v.extend(qselect::specs());
         v.extend(selecttools::specs());
         v.extend(view::specs());
@@ -312,6 +321,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(dwgprops::specs());
         v.extend(crate::script_tools::specs());
         v.extend(exchange::specs());
+        v.extend(rasterout::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
@@ -332,9 +342,15 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::secureload::specs());
         v.extend(solids::specs());
         v.extend(sections::specs());
+        v.extend(solview::specs());
         v.extend(render::specs());
         v.extend(actions::specs());
         v.extend(edit3d::specs());
+        v.extend(setbylayer::specs());
+        v.extend(xplode::specs());
+        v.extend(vpsync::specs());
+        v.extend(attipedit::specs());
+        v.extend(frames::specs());
         v
     })
 }

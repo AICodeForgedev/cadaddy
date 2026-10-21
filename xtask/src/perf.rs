@@ -11,6 +11,11 @@
 //! (timer noise). With `--full`, a step whose million-object time is over twice ten times its
 //! 100k time grows faster than the drawing: reported, and a failure. Every run is appended to
 //! `target/perf/history.jsonl` (the trend).
+//!
+//! `cargo xtask perf --vs [--sizes 10000,100000,1000000]`: CADaddy's side of the comparison with
+//! other programs (`docs/perf-vs.md`): writes the 2D plans (`target/perf/vs/plan-<n>.dxf`), then
+//! opens each in a fresh process (`perfbench --file`) and prints open, select-all, zoom-extents
+//! and save times with the process's peak memory, as the table's rows.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -72,10 +77,13 @@ pub fn platform() -> String {
 }
 
 pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
+    if rest.contains(&"--vs") {
+        return run_vs(root, rest);
+    }
     let full = rest.contains(&"--full");
     let update = rest.contains(&"--update-budget");
     if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget"].contains(*a)) {
-        return Err(format!("unknown option `{bad}` (perf [--full] [--update-budget])"));
+        return Err(format!("unknown option `{bad}` (perf [--full] [--update-budget] | perf --vs [--sizes N,…])"));
     }
     let sizes = if full { "1000,10000,100000,500000,1000000" } else { "1000,10000" };
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
@@ -150,9 +158,62 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     if fail.is_empty() { Ok(()) } else { Err(format!("over twice the budget: {}", fail.join(", "))) }
 }
 
+/// The peak resident memory (MB) in `/usr/bin/time`'s report: `-l` on macOS and the BSDs prints
+/// bytes ("maximum resident set size"), GNU `-v` kilobytes ("Maximum resident set size (kbytes)").
+pub fn peak_mb(report: &str) -> Option<f64> {
+    report.lines().find_map(|l| {
+        let l = l.trim();
+        if let Some(kb) = l.strip_prefix("Maximum resident set size (kbytes):") {
+            return kb.trim().parse::<f64>().ok().map(|k| k / 1024.0);
+        }
+        let n = l.strip_suffix("maximum resident set size")?;
+        n.trim().parse::<f64>().ok().map(|b| b / 1_048_576.0)
+    })
+}
+
+fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
+    let sizes = rest.iter().position(|a| *a == "--sizes").and_then(|i| rest.get(i + 1)).copied().unwrap_or("10000,100000,1000000");
+    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
+    let dir = target.join("perf").join("vs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut c = crate::cargo();
+    c.args(["build", "-q", "--release", "-p", "cadaddy-engine", "--example", "perfbench"]);
+    crate::run(c, "build perfbench")?;
+    let bench = target.join("release").join("examples").join(if cfg!(windows) { "perfbench.exe" } else { "perfbench" });
+    let mut c = std::process::Command::new(&bench);
+    c.args(["--sizes", sizes, "--plans"]).arg(&dir);
+    crate::run(c, "perfbench --plans")?;
+    let flag = if cfg!(target_os = "linux") { "-v" } else { "-l" };
+    println!("\n| objects | open (ms) | select all (ms) | zoom extents (ms) | save DXF (ms) | peak MB |\n|---|---|---|---|---|---|");
+    for n in sizes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let plan = dir.join(format!("plan-{n}.dxf"));
+        let out = std::process::Command::new("/usr/bin/time")
+            .arg(flag)
+            .arg(&bench)
+            .arg("--file")
+            .arg(&plan)
+            .output()
+            .map_err(|e| format!("/usr/bin/time: {e}"))?;
+        let r: Value = serde_json::from_slice(String::from_utf8_lossy(&out.stdout).trim().as_bytes()).unwrap_or(Value::Null);
+        let ms = |k: &str| r[k].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));
+        let peak = peak_mb(&String::from_utf8_lossy(&out.stderr)).map_or_else(|| "-".into(), |m| format!("{m:.0}"));
+        println!("| {n} | {} | {} | {} | {} | {peak} |", ms("open"), ms("select_all"), ms("zoom_extents"), ms("save_dxf"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peak_memory_from_both_time_reports() {
+        let bsd = "        7.21 real         6.10 user\n          3116335104  maximum resident set size\n";
+        assert_eq!(peak_mb(bsd).map(f64::round), Some(2972.0));
+        let gnu = "\tMaximum resident set size (kbytes): 524288\n";
+        assert_eq!(peak_mb(gnu), Some(512.0));
+        assert_eq!(peak_mb("nothing"), None);
+    }
 
     #[test]
     fn verdicts() {

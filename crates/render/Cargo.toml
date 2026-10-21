@@ -27,4 +27,6 @@ lyon_tessellation = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+# Reads the BMP and TIFF files `encode` writes back, in tests only.
+image = { workspace = true, features = ["bmp", "tiff"] }
 serde_json = { workspace = true }

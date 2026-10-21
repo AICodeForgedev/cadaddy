@@ -253,3 +253,30 @@ pub fn render_png_turned(list: &DisplayList, view: &View, o: &RasterOptions, ups
     }
     pm.encode_png().ok()
 }
+
+/// Render as an image file of `format` at colour `depth` (`dpi` written where the format keeps
+/// it), turned 180° when `upside_down`. The background is opaque, so the pixels are straight RGBA.
+pub fn render_image(
+    list: &DisplayList,
+    view: &View,
+    o: &RasterOptions,
+    upside_down: bool,
+    format: crate::encode::Format,
+    depth: crate::encode::Depth,
+    dpi: f64,
+) -> Option<Vec<u8>> {
+    let mut pm = render(list, view, o)?;
+    if upside_down {
+        pm.data_mut().as_chunks_mut::<4>().0.reverse();
+    }
+    // Un-premultiplied: identical for the opaque pixels a plot has.
+    let rgba: Vec<u8> = pm
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    crate::encode::encode(&rgba, pm.width(), pm.height(), format, depth, dpi)
+}

@@ -121,7 +121,8 @@ fn lisp_and_scripts_outside_trusted_folders_do_not_run() {
     let r = session(&[
         exec(8, "drawing.inspect", json!({ "entities": false })),
         exec(1, "appload", json!({ "path": lsp })),
-        exec(2, "lisp", json!({ "code": format!("(load \"{}\")", lsp.display()) })),
+        // `\` escapes in a LISP string: a Windows path doubles its separators.
+        exec(2, "lisp", json!({ "code": format!("(load \"{}\")", lsp.display().to_string().replace('\\', "\\\\")) })),
         exec(3, "script", json!({ "path": scr })),
         exec(4, "lisp", json!({ "code": "untrusted-marker" })),
         exec(5, "drawing.inspect", json!({ "entities": false })),

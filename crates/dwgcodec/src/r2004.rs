@@ -742,12 +742,12 @@ pub(crate) fn write(dwg: &Dwg, l: &Layout) -> Result<Vec<u8>> {
 
 /// The layout of a new file (no pages yet): the plain header, the file header data's constants,
 /// the section map's sections and the two system pages, so [`write`] lays out everything. Every
-/// section counts as changed. The maintenance version is 0 (no second size field in the header
-/// and classes sections up to R2013), and 4 for R2018 (which always has it).
+/// section counts as changed. The maintenance version is [`fresh_maintenance`]'s (R2010 on: the
+/// header and classes sections have the second size field).
 pub(crate) fn fresh(version: Version) -> Layout {
     let mut head = vec![0u8; 0x80];
     head[..6].copy_from_slice(version.id().as_bytes());
-    head[0x0B] = if version >= Version::R2018 { 4 } else { 0 };
+    head[0x0B] = fresh_maintenance(version);
     head[0x0C] = 3;
     head[0x11] = 0x21;
     // Code page 30 (ANSI 1252).
@@ -797,7 +797,20 @@ pub(crate) fn fresh(version: Version) -> Layout {
     }
 }
 
+/// The maintenance version a new file of `version` states: the ones AutoCAD 2010 and 2013 files
+/// carry (6, 105), 4 for R2018, none before. Readers other than the ODA's (LibreCAD's) take the
+/// R2010 and R2013 header and classes sections to have the second size field whatever the
+/// maintenance version says, and couldn't read the classes of a file stating 0.
+pub(crate) fn fresh_maintenance(version: Version) -> u8 {
+    match version {
+        Version::R2010 => 6,
+        Version::R2013 => 105,
+        v if v >= Version::R2018 => 4,
+        _ => 0,
+    }
+}
+
 /// Whether a new file of `version` has the second size field in its header and classes sections.
 pub(crate) fn fresh_has_hi(version: Version) -> bool {
-    has_hi(version, if version >= Version::R2018 { 4 } else { 0 })
+    has_hi(version, fresh_maintenance(version))
 }

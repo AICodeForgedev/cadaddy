@@ -10,6 +10,11 @@
 //! sizes up to 10 000) is printed and written as JSON `{"op@size": ms}`, with the process's peak
 //! resident memory while that size ran as `peak_mb@size` (sampled after each step with `ps`;
 //! sizes run smallest first, so each size's peak is its own).
+//!
+//! For comparing with other programs (`docs/perf-vs.md`): `--plans DIR` writes the 2D plan of
+//! each size as `plan-<n>.dxf` (the same grid without the 3D faces, which not every program
+//! reads), and `--file PLAN.dxf` times one file as a user meets it in a fresh process: open
+//! (read and display list), select all, zoom extents, save as DXF.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
@@ -71,6 +76,55 @@ fn drawing(n: usize) -> Drawing {
     d
 }
 
+/// The 2D plan of `n` objects for other programs: the bench drawing without its 3D faces (lines
+/// in their place).
+fn plan(n: usize) -> Drawing {
+    let mut d = drawing(n);
+    let faces: Vec<_> = d.model.iter().filter(|e| matches!(e.kind, EntityKind::Face3d(_))).map(|e| e.handle).collect();
+    for h in faces {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Face3d(f) = &e.kind {
+                let [a, _, c, _] = f.corners;
+                e.kind = EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(c.x, c.y, 0.0) });
+            }
+        });
+    }
+    d
+}
+
+/// Time one plan file as a user meets it, each step once, in this fresh process: printed as JSON
+/// `{"open": ms, "select_all": ms, "zoom_extents": ms, "save_dxf": ms, "objects": n}`.
+fn one_file(path: &str) {
+    let t = Instant::now();
+    let mut s = Session::new();
+    // PERF_STAGE=tags|read|open: stop after that stage (its peak memory, measured outside).
+    let stage = std::env::var("PERF_STAGE").unwrap_or_default();
+    if stage == "tags" || stage == "read" {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        if stage == "tags" {
+            println!("{}", cadaddy_dxf::parse(&bytes).map(|t| t.len()).unwrap_or(0));
+        } else {
+            println!("{}", cadaddy_io::read(&bytes, path).map(|d| d.model.len()).unwrap_or(0));
+        }
+        return;
+    }
+    if let Err(e) = s.execute("open", &json!({ "path": path })) {
+        eprintln!("{path}: {e}");
+        return;
+    }
+    if stage == "open" {
+        return;
+    }
+    let d = s.doc().cloned().unwrap_or_default();
+    drop(cadaddy_engine::render::build(&d, &Space::Model, &Default::default()));
+    let open = t.elapsed().as_secs_f64() * 1000.0;
+    let select = time(1, || drop(s.execute("selectall", &json!({}))));
+    let zoom = time(1, || drop(s.execute("zoom", &json!({ "mode": "extents" }))));
+    let save = time(1, || drop(cadaddy_io::write(&d, "out.dxf")));
+    let r = json!({ "open": open, "select_all": select, "zoom_extents": zoom, "save_dxf": save, "objects": d.model.len() });
+    println!("{r}");
+}
+
 /// The process's resident memory now, in MB (`ps`; `None` where it can't be read).
 fn rss_mb() -> Option<f64> {
     let out = std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output().ok()?;
@@ -94,6 +148,25 @@ fn main() {
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let sizes: Vec<usize> = arg("--sizes").unwrap_or_else(|| "1000,10000".into()).split(',').filter_map(|s| s.trim().parse().ok()).collect();
     let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    if let Some(dir) = arg("--plans") {
+        let _ = std::fs::create_dir_all(&dir);
+        for &n in &sizes {
+            let path = std::path::Path::new(&dir).join(format!("plan-{n}.dxf"));
+            let name = path.to_string_lossy().into_owned();
+            match cadaddy_io::write(&plan(n), &name) {
+                Ok(bytes) => {
+                    let _ = std::fs::write(&path, bytes);
+                    println!("wrote {name}");
+                }
+                Err(e) => eprintln!("{name}: {e}"),
+            }
+        }
+        return;
+    }
+    if let Some(path) = arg("--file") {
+        one_file(&path);
+        return;
+    }
     for n in sizes {
         let runs = if n <= 10_000 { 3 } else { 1 };
         let d = drawing(n);

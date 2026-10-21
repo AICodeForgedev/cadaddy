@@ -202,10 +202,13 @@ impl Interactive for CropM {
                 Ok(Step::Continue)
             }
             (Some(a), Input::Point(b)) if !a.near(b, 1e-12) => {
-                run_rendercrop(s, &json!({ "corner1": [a.x, a.y], "corner2": [b.x, b.y], "preset": "draft" }))?;
+                // Nothing to render, or a region off the view: said, and the command ends.
+                if let Err(e) = run_rendercrop(s, &json!({ "corner1": [a.x, a.y], "corner2": [b.x, b.y], "preset": "draft" })) {
+                    return super::machines::end_with(s, &e);
+                }
                 Ok(Step::Done)
             }
-            (None, Input::Enter) => Ok(Step::Done),
+            (_, Input::Enter) => Ok(Step::Done),
             _ => Ok(Step::Continue),
         }
     }

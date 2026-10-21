@@ -9,7 +9,6 @@
 //! The name questions (layout, device, paper, plot style table, shade plot, file) take the whole line, as
 //! names have spaces; their `?` lists the choices.
 
-use cadaddy_doc::PlotOutput;
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -167,11 +166,7 @@ impl DashPlotM {
     }
 
     fn extension(&self) -> &'static str {
-        match self.device_config().map(|c| c.output) {
-            Some(PlotOutput::Png) => "png",
-            Some(PlotOutput::Svg) => "svg",
-            _ => "pdf",
-        }
+        self.device_config().map_or("pdf", |c| c.output.as_str())
     }
 
     /// The plot's file name when none is typed: the drawing's name and the layout's, by the

@@ -2223,3 +2223,75 @@
 	Dictionaries are read from:	Словари читаются из:
 	Published to {path}	Опубликовано в {path}
 	Sheet Set (.sheetset.json)	Подшивка (.sheetset.json)
+	Resolution	Разрешение
+	Colour depth	Глубина цвета
+	Colour (24-bit)	Цвет (24 бита)
+	Greys (8-bit)	Оттенки серого (8 бит)
+	Black and white (1-bit)	Чёрно-белое (1 бит)
+	PNG Out	Вывод PNG
+	JPEG Out	Вывод JPEG
+	BMP Out	Вывод BMP
+	TIFF Out	Вывод TIFF
+	Enter image file name	Введите имя файла изображения
+	Nothing selected: no image written.	Ничего не выбрано: изображение не записано.
+	{} object(s) written to {} ({} × {} pixels).	Объектов записано: {} в {} ({} × {} пикселей).
+	Set to ByLayer	Установить Послою
+	Explode and Set Properties	Расчленить и задать свойства
+	Edit Attribute in Place	Редактировать атрибут на месте
+	Frame	Рамка
+	Setup	Настройка
+	Setup View	Настроить вид
+	Setup Drawing	Настроить чертёж
+	Setup Profile	Настроить профиль
+	Enter view scale	Введите масштаб вида
+	Specify view center	Укажите центр вида
+	Enter view name	Введите имя вида
+	Specify side of viewport to project	Укажите сторону видового экрана для проецирования
+	Specify first point of cutting plane	Укажите первую точку секущей плоскости
+	Specify second point of cutting plane	Укажите вторую точку секущей плоскости
+	Specify first point of inclined plane	Укажите первую точку наклонной плоскости
+	Specify second point of inclined plane	Укажите вторую точку наклонной плоскости
+	Specify side to view from	Укажите сторону взгляда
+	Specify first corner of viewport	Укажите первый угол видового экрана
+	Specify opposite corner of viewport	Укажите противоположный угол видового экрана
+	Display hidden profile lines on separate layer?	Показывать скрытые линии профиля на отдельном слое?
+	Project profile lines onto a plane?	Проецировать линии профиля на плоскость?
+	Delete tangential edges?	Удалить касательные рёбра?
+	None (PDF file)	Нет (файл PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Размерный текст высотой {} слишком мал для чтения в этом чертеже. Введите DIMSCALE {}, чтобы новые размеры стали в {} раз больше.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Текст высотой {} слишком мал для чтения в этом чертеже. Попробуйте высоту {} (значение по умолчанию задаёт TEXTSIZE).
+	(each layout's own)	(собственные у каждого листа)
+	A callout on the selected sheet pointing at the selected view	Выноска на выбранном листе, указывающая на выбранный вид
+	A page setup copied from the selected sheet's layout	Параметры страницы, скопированные с листа выбранного чертежа
+	Add Callout	Добавить выноску
+	Callouts: {}	Выноски: {}
+	From Selected Sheet	С выбранного листа
+	Insert on Selected Sheet	Вставить на выбранный лист
+	Named view	Именованный вид
+	Page Setup Override	Переопределение параметров страницы
+	Place View	Разместить вид
+	Position on sheet	Положение на листе
+	Remove Property	Удалить свойство
+	Sheet Properties	Свойства листа
+	Sheet Set Fields	Поля подшивки
+	Sheet Set Properties	Свойства подшивки
+	Sync Drawings	Синхронизировать чертежи
+	Text holding the field, at the position on sheet	Текст с полем в положении на листе
+	Views and Callouts	Виды и выноски
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Лист каждого чертежа получает имя «номер название»; поля подшивки, метки видов и выноски принимают текущие значения подшивки
+	3 Point	3 точки
+	Origin	Начало координат
+	Z	Z
+	Named UCS...	Именованные ПСК...
+	Center Mark (DIMCEN)	Знак центра (DIMCEN)
+	Copy Objects to New Layer	Копировать объекты на новый слой
+	Cut with Base Point	Вырезать с базовой точкой
+	DXF In	Открыть DXF
+	DXF Out	Сохранить в DXF
+	Fill	Заливка
+	Maximize Viewport	Развернуть видовой экран
+	Minimize Viewport	Свернуть видовой экран
+	Object Selection Filters	Фильтры выбора объектов
+	Oops	Восстановить стёртое
+	Quick Text	Быстрый текст
+	Redefine Attributes	Переопределить атрибуты

@@ -1,0 +1,33 @@
+{
+  "about": "What aicodeforge.dev (the compare page and llms.txt) says about CADaddy, each with the fact in docs/compare-facts.json that backs it ('check'), or why no code can ('manual': kept true by hand). apps/cadaddy-cli/tests/compare_facts.rs fails when a checked claim stops being true. Change a claim here when the site changes.",
+  "claims": [
+    { "claim": "Current version: 0.7.8", "source": "llms.txt, compare page", "check": { "fact": "version", "equals": "0.7.8" } },
+    { "claim": "400+ commands, each callable as JSON", "source": "llms.txt", "check": { "fact": "commands.typed", "atLeast": 400 } },
+    { "claim": "Opens and saves DWG and DXF (and its own lossless .cdy format)", "source": "compare page", "check": { "fact": "formats.open", "includes": ["dwg", "dxf", "cdy"] } },
+    { "claim": "Opens and saves DWG and DXF (and its own lossless .cdy format) — saving", "source": "compare page", "check": { "fact": "formats.save", "includes": ["dwg", "dxf", "cdy"] } },
+    { "claim": "plots to PDF", "source": "compare page", "check": { "fact": "formats.save", "includes": ["pdf"] } },
+    { "claim": "publishes sheet sets to one PDF", "source": "compare page", "check": { "fact": "features.sheetSetPublish", "equals": true } },
+    { "claim": "turns PDF drawings into editable DWG", "source": "compare page, llms.txt", "check": { "fact": "features.pdfToDwg", "equals": true } },
+    { "claim": "imports a reviewer's PDF markups", "source": "compare page", "check": { "fact": "features.pdfMarkups", "equals": true } },
+    { "claim": "3D: solids", "source": "compare page", "check": { "fact": "features.solids3d", "equals": true } },
+    { "claim": "3D: materials, rendering", "source": "compare page", "check": { "fact": "features.rendering", "equals": true } },
+    { "claim": "walking through the building", "source": "compare page, llms.txt", "check": { "fact": "features.walk", "equals": true } },
+    { "claim": "IFC export", "source": "compare page", "check": { "fact": "formats.save", "includes": ["ifc"] } },
+    { "claim": "takeoff tools (block counts, areas)", "source": "compare page", "check": { "fact": "features.takeoff", "equals": true } },
+    { "claim": "raster plans traced to lines", "source": "compare page", "check": { "fact": "features.imageTrace", "equals": true } },
+    { "claim": "signed updates", "source": "compare page", "check": { "fact": "signedUpdates", "equals": true } },
+    { "claim": "one-click installers for Windows, Mac and Linux (AppImage, or .deb)", "source": "compare page", "check": { "fact": "installers.kinds", "includes": ["windows-msi", "macos-dmg", "linux-appimage", "linux-deb"] } },
+    { "claim": "Updates itself (release files the updater looks for)", "source": "llms.txt", "check": { "fact": "installers.releaseAssets", "includes": ["CADaddy-Linux.AppImage", "CADaddy-Mac.dmg", "CADaddy-Windows.msi"] } },
+    { "claim": "macOS 11 or newer", "source": "compare page, llms.txt", "check": { "fact": "installers.macosMinimum", "equals": "11.0" } },
+    { "claim": "source-available under FSL-1.1-ALv2", "source": "llms.txt, compare page", "check": { "fact": "license", "equals": "FSL-1.1-ALv2" } },
+    { "claim": "MCP tools: command_line, script, execute, list_commands, inspect_drawing, query_entities, render, find_text, new_drawing, open, save, cancel", "source": "llms.txt", "check": { "fact": "mcp.tools", "includes": ["cancel", "command_line", "execute", "find_text", "inspect_drawing", "list_commands", "new_drawing", "open", "query_entities", "render", "save", "script"] } },
+    { "claim": "every command is callable by AI agents through MCP (the execute tool)", "source": "compare page", "check": { "fact": "mcp.tools", "includes": ["execute", "list_commands"] } },
+    { "claim": "Windows 10 and 11, 64-bit", "source": "compare page, llms.txt", "manual": "the installer enforces no minimum Windows version; tested by hand on the releases" },
+    { "claim": "any 64-bit distro with glibc 2.35 or newer", "source": "llms.txt", "manual": "follows from the build host (packaging/linux/package.sh), not from code" },
+    { "claim": "Includes electrical and plumbing symbol libraries", "source": "llms.txt", "manual": "content, not a fact the code proves" },
+    { "claim": "listed in the official MCP Registry as io.github.AICodeForgedev/cadaddy", "source": "compare page, llms.txt", "manual": "the registry entry lives outside this repository" },
+    { "claim": "a one-click Claude Desktop extension", "source": "compare page", "manual": "the .mcpb is built by the release scripts outside this repository" },
+    { "claim": "installers aren't code-signed yet", "source": "compare page, llms.txt", "manual": "a fact about the release process" },
+    { "claim": "Free, no account, no subscription, no ads", "source": "compare page, llms.txt", "manual": "policy" }
+  ]
+}

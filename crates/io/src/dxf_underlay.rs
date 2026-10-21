@@ -103,7 +103,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     let mut refs: HashMap<Handle, String> = HashMap::new();
     for s in secs.iter().filter(|s| s.name == "ENTITIES" || s.name == "BLOCKS") {
         each_record(&s.tags, |kind, tags| {
-            if kind != "PDFUNDERLAY" {
+            if !matches!(kind, "PDFUNDERLAY" | "PDFREFERENCE") {
                 return;
             }
             let h = tags.iter().find(|t| t.code == 5).and_then(|t| Handle::parse_hex(&t.str()));

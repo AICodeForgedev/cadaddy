@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~2 points (38% → 40% ready for real work) and ~125–190 Opus 5.5 hours away (the four failing core workflows of the [alpha gate](docs/roadmap.md#alpha-gate))
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (0.7.6: breadth re-measured, alpha-gate facts refreshed; readiness and hour estimates not re-estimated since 2026-10-10) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (Q233: breadth re-measured after the everyday-commands pass; readiness and hour estimates not re-estimated since 2026-10-10) · **Target:** Autodesk AutoCAD 2027
 
 CADaddy targets full parity with AutoCAD (2D drafting first, then annotation, layouts and
 plotting, DWG, parametrics and 3D), plus what AutoCAD doesn't have: agent control over MCP, a
@@ -20,7 +20,7 @@ it has not been re-estimated. Beta was ≈ 600–930 h away on that estimate.
 
 | Number | Value | Kind |
 |---|---|---|
-| Feature breadth (AutoCAD for Mac menu items with a live command) | **60%** (293 / 491; 450 registered commands; 2026-10-18) | measured ([parity-checklist.md](docs/parity-checklist.md), `cargo xtask parity`) |
+| Feature breadth (AutoCAD for Mac menu items with a live command) | **74%** (364 / 491; 744 registered commands; 2026-10-21) | measured ([parity-checklist.md](docs/parity-checklist.md), `cargo xtask parity`) |
 | Ready for real work | **≈ 38%** | estimated ([target-app-parity.md](docs/target-app-parity.md)) |
 | Mainstream practitioner (2D drafter) | **≈ 28%** (lower than the full number: file exchange, stability and interaction discounts multiply) | estimated ([target-app-parity.md](docs/target-app-parity.md#mainstream-practitioner)) |
 | Essentials user | **≈ 46%** | estimated ([target-app-parity.md](docs/target-app-parity.md#essentials-user)) |
@@ -134,6 +134,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Breadth re-measured: 364 / 491 menu items (74%), 744 registered commands, after Q233 (everyday commands) |
 | 2026-10-12 | trivial | Progress log: closed-polyline TRIM (#726) |
 | 2026-10-12 | trivial | Progress log: HATCHEDIT numeric validation (#724) |
 | 2026-10-10 | minor | Merged main's changes (Ukrainian catalog, dynamic input pointer boxes, DXF fixes); UI/UX and localization numbers updated |

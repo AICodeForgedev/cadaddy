@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (CADaddy's own .cdy format) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (save/reopen differential fuzzing) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADaddy's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -151,10 +151,18 @@ external validator runs in CI (ezdxf's audit was run by hand once, 2026-10-06). 
 a licensed real-file corpus with an open → save → re-open → compare test per file, and checking
 our output in AutoCAD black-box.
 
+`crates/engine/tests/savefuzz.rs` (Q239) fuzzes save → reopen: seeded drawings with odd but valid
+values (huge and tiny coordinates, unicode names and text, empty and deeply nested blocks, every
+entity and table type) through DXF 2000–2018 ASCII and binary, DWG 2000–2018 with both engines and
+across them, and .cdy, compared strictly with the original; every difference the exchange notes
+don't report fails it (R12, SVG and PDF are smoke-checked). `SAVEFUZZ_SEEDS=a..b` runs more seeds;
+1 000 ran clean on 2026-10-21.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Save/reopen differential fuzzing (Q239): CADaddy's DWG codec keeps characters outside Latin-1 in 2000/2004 files (Windows-1252 bytes and U+XXXX escapes, was `?`), block descriptions (were empty) and true-coloured layers that are off; reading a 2000/2004 DWG with kept records through the bridge no longer turns non-ASCII text into U+FFFD; the exchange notes compare numbers relatively, report a false that came back true and block definitions' own properties (DWG 2000/2004 have no insert units or explodability); Defpoints stays non-plotting through R12; SVG writes an object's lines as a few paths (a dense hatch was a million elements) |
 | 2026-10-12 | minor | PDF output: object transparency plotted as PDF alpha (`/ExtGState` `/ca` `/CA`) when the page setup's or the plot's "Plot transparency" is on; PNG plots blend it, SVG uses `opacity`; plots without it are unchanged byte for byte |
 | 2026-10-12 | minor | DXF/DWG save: the Model layout's plot settings are written as CADaddy plots model space, drawing extents scaled to fit (PLOTSETTINGS 74 = 1, 75 = 0), instead of plot type 5 "Layout information", which other programs' Plot dialogs can't use for model space |
 | 2026-10-18 | minor | The native .cdy format: lossless round trip of everything CADaddy models, default for new drawings, DWG copy, loss notice on DWG/DXF saves, previews, file associations |

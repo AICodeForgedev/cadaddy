@@ -185,6 +185,14 @@ impl Interactive for SelectRun {
     }
 }
 
+/// End a command whose last step failed for a reason another answer can't change (nothing to
+/// act on, a file format that isn't there): the message is shown and the command ends, instead
+/// of asking the same question again and taking whatever is typed next as the answer.
+pub(crate) fn end_with(s: &mut Session, e: &crate::EngineError) -> Result<Step> {
+    s.echo(e.user_message());
+    Ok(Step::Done)
+}
+
 /// Parse a number from text input.
 pub fn number(t: &str) -> Option<f64> {
     crate::units::parse_distance(t)

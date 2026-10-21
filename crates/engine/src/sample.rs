@@ -241,6 +241,12 @@ pub fn floor_plan() -> Drawing {
     ]);
     d.header.set_i64("LUNITS", 4);
     d.header.set_i64("LUPREC", 4);
+    // Annotation sized for plotting at 1/2" = 1'-0" (24): dimension text 0.18 x 24, notes 4.5".
+    d.header.set_f64("DIMSCALE", 24.0);
+    d.header.set_f64("TEXTSIZE", 4.5);
+    for st in &mut d.dim_styles {
+        st.scale = 24.0;
+    }
     let m = Space::Model;
     let mut add = |c: Common, k: EntityKind| {
         let _ = d.add(&m, c, k);

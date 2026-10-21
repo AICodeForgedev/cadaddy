@@ -5,7 +5,7 @@
 mod etransmit;
 pub mod kept;
 mod pgp;
-mod sheetset;
+pub(crate) mod sheetset;
 mod template;
 
 use std::sync::OnceLock;

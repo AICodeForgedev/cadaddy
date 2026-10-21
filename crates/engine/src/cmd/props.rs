@@ -187,7 +187,7 @@ fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "count": ents.len(), "objects": ents }))
 }
 
-fn parse_color(v: &Value) -> Option<Color> {
+pub(crate) fn parse_color(v: &Value) -> Option<Color> {
     v.as_str().and_then(Color::parse).or_else(|| v.as_i64().and_then(|i| i16::try_from(i).ok()).map(Color::from_aci))
 }
 

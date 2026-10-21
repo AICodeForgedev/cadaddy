@@ -474,7 +474,9 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 p16: t.p(16),
                 text: t.s(1).unwrap_or_default(),
                 style: t.s(3).unwrap_or_else(|| "Standard".into()),
-                measurement: t.fd(42, 0.0),
+                // Missing or negative (a file that doesn't keep it): worked out once the drawing
+                // is read (`fill_measurements`).
+                measurement: t.fd(42, -1.0),
                 text_rotation: t.fd(53, 0.0).to_radians(),
                 user_text_pos: t.i(70).unwrap_or(0) & 128 != 0,
                 block: t.s(2).filter(|s| !s.is_empty()),
@@ -561,7 +563,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
         // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
-        "PDFUNDERLAY" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
+        // PDFREFERENCE: the name the ODA's converter writes for it.
+        "PDFUNDERLAY" | "PDFREFERENCE" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
@@ -1466,6 +1469,7 @@ fn style_font(tags: &[Tag], file: String) -> String {
 }
 
 fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
+    let r12 = d.header.str("ACADVER", "").eq_ignore_ascii_case("AC1009");
     let recs = records(tags);
     // STYLE handle → name, or the shape file of an unnamed shape style (linetype elements).
     let ltype_styles: HashMap<String, String> = recs
@@ -1524,7 +1528,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     frozen: flags & 1 != 0,
                     locked: flags & 4 != 0,
                     vp_freeze_new: flags & 2 != 0,
-                    plot: t.i(290).unwrap_or(1) != 0,
+                    // Defpoints never plots; a file without the flag (Release 12) gets it as a new
+                    // drawing has it.
+                    plot: t.i(290).map_or(!name.eq_ignore_ascii_case("Defpoints"), |p| p != 0),
                     ..Layer::default()
                 };
                 if let Some(tc) = t.i(420) {
@@ -1574,9 +1580,15 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 }
                 // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.
                 let gen_flags = t.i(71).unwrap_or(0);
+                let mut font = style_font(&tg, t.s(3).unwrap_or_default());
+                // R12 keeps no xdata, so CADaddy's built-in font goes out there as plain `txt`
+                // (which it draws with that font anyway): read it back as itself.
+                if r12 && matches!(font.trim().to_ascii_lowercase().as_str(), "txt" | "txt.shx") {
+                    font = "CADaddy Stroke".into();
+                }
                 let st = TextStyle {
                     name: name.clone(),
-                    font: style_font(&tg, t.s(3).unwrap_or_default()),
+                    font,
                     big_font: t.s(4).unwrap_or_default(),
                     height: t.fd(40, 0.0),
                     width_factor: t.fd(41, 1.0),
@@ -1873,6 +1885,34 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
 
 /// [`read`] from groups already parsed (or made from another format's data, as the DWG reader
 /// does for the entities it decodes).
+/// A dimension's measurement where the file didn't keep it: other programs write `42` as -1 (or
+/// leave it out) and draw from the definition points; so does CADaddy, but the measurement is
+/// also what LIST, properties and agents read. Worked out from the geometry with the
+/// dimension's style, as the writer does.
+fn fill_measurements(d: &mut Drawing) {
+    let scale = d.header.f64("DIMSCALE", 1.0);
+    let todo: Vec<(Handle, f64)> = d
+        .model
+        .iter()
+        .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Dimension(dm) if dm.measurement.is_nan() || dm.measurement < 0.0 => {
+                let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
+                let m = cadaddy_render::dimension_geometry(dm, &style, scale).measurement;
+                (m.is_finite() && m >= 0.0).then_some((e.handle, m))
+            }
+            _ => None,
+        })
+        .collect();
+    for (h, m) in todo {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Dimension(dm) = &mut e.kind {
+                dm.measurement = m;
+            }
+        });
+    }
+}
+
 pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     // Every DXF ends with `0 EOF`: without it the file was cut off (a failed copy or download),
     // and whatever came after the cut is missing.
@@ -2090,6 +2130,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     crate::dxf_raw::read(&secs, &mut d);
+    fill_measurements(&mut d);
     d.skipped_records = skipped;
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
@@ -2296,6 +2337,11 @@ impl Objects {
         }
         if let Some(files) = self.xrecord_text(crate::dxf_ext::STANDARDS_KEY).filter(|s| serde_json::from_str::<Vec<String>>(s).is_ok()) {
             d.header.set_str(crate::dxf_ext::STANDARDS_KEY, &files);
+        }
+        if let Some(data) =
+            self.xrecord_text(crate::dxf_ext::SHEET_SET_KEY).filter(|s| serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| v.is_object()))
+        {
+            d.header.set_str(crate::dxf_ext::SHEET_SET_KEY, &data);
         }
         if let Some(json) = self.xrecord_text(crate::dxf_ext::LAYER_EVAL_KEY) {
             crate::dxf_ext::apply_layer_eval(d, &json);

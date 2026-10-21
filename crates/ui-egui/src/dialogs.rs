@@ -64,7 +64,6 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "standards" => crate::standardsdlg::configure(app, ctx, &mut open),
         "checkstandards" => crate::standardsdlg::check(app, ctx, &mut open),
         "laytrans" => crate::standardsdlg::laytrans(app, ctx, &mut open),
-        "sheetset" => crate::sheetsets::dialog(app, ctx, &mut open),
         "publish" => crate::publishdlg::dialog(app, ctx, &mut open),
         crate::roomsdlg::DIALOG => crate::roomsdlg::dialog(app, ctx, &mut open),
         crate::exchangeloss::DIALOG => crate::exchangeloss::dialog(app, ctx, &mut open),

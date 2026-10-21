@@ -245,3 +245,139 @@ fn a_drawings_empty_layouts_are_set_up_for_publishing_and_blank_sheets_warned_ab
     assert_eq!(w.len(), 1, "{w:?}");
     assert!(w[0].starts_with("Sheet 9 Spare"), "{w:?}");
 }
+
+/// A drawing with layouts and a model space named view "Detail" (40 × 20 at 50,50).
+fn drawing_with_view(path: &Path, layouts: &[&str]) {
+    let mut d = Drawing::new_metric();
+    d.layouts = layouts.iter().enumerate().map(|(i, n)| Layout::new(n, i as u32 + 1)).collect();
+    d.views.push(cadaddy_engine::doc::NamedView {
+        name: "Detail".into(),
+        center: cadaddy_engine::doc::geom::Vec2::new(50.0, 50.0),
+        height: 20.0,
+        width: 40.0,
+        ..Default::default()
+    });
+    std::fs::write(path, cadaddy_io::write(&d, &path.to_string_lossy()).unwrap()).unwrap();
+}
+
+fn text_of(d: &Drawing, hex: &str) -> String {
+    let h = u64::from_str_radix(hex, 16).unwrap();
+    match &d.entity(cadaddy_engine::doc::Handle(h)).unwrap().kind {
+        EntityKind::MText(m) => m.contents.clone(),
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn views_callouts_and_fields_follow_renumbering() {
+    hooks();
+    let dir = folder("views");
+    drawing_with_view(&dir.join("a.dxf"), &["Plan", "Details"]);
+    let set = dir.join("v.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let mut ss = |p: Value| {
+        let mut p = p;
+        p["set"] = json!(set);
+        s.execute("sheetset", &p)
+    };
+    ss(json!({ "action": "new", "name": "Clinic", "description": "New clinic" })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("a.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "renumber", "prefix": "A-", "start": 1 })).unwrap();
+    // Custom properties of the set and a sheet.
+    ss(json!({ "action": "properties", "values": { "Client": "City" } })).unwrap();
+    let r = ss(json!({ "action": "properties", "sheet": "A-1", "values": { "Checked": "JD" }, "description": "Ground floor" })).unwrap();
+    assert_eq!(r["properties"]["Client"], "City");
+    assert_eq!(r["sheets"][0]["properties"]["Checked"], "JD");
+    assert!(ss(json!({ "action": "properties", "values": { "a.b": "x" } })).is_err(), "no dots in names");
+
+    // The detail view on the second sheet, a callout to it on the first.
+    let r = ss(json!({ "action": "view", "sheet": "A-2", "view": "Detail", "at": [100, 100], "scale": 0.5 })).unwrap();
+    assert_eq!(r["views"][0]["number"], "1");
+    assert_eq!(r["views"][0]["sheet"], "A-2");
+    let r = ss(json!({ "action": "callout", "sheet": "A-1", "view": "1/A-2", "at": [10, 10] })).unwrap();
+    assert_eq!(r["callouts"][0]["target"], "A-2");
+    let r = ss(json!({ "action": "fields" })).unwrap();
+    let names: Vec<&str> = r["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"SheetSet.Client") && names.contains(&"Sheet.Checked"), "{names:?}");
+    ss(json!({ "action": "insertField", "sheet": "A-1", "field": "SheetSet.Client", "at": [5, 5] })).unwrap();
+    assert!(ss(json!({ "action": "insertField", "sheet": "A-1", "field": "SheetSet.Nope", "at": [5, 5] })).is_err());
+
+    let d = cadaddy_io::read(&std::fs::read(dir.join("a.dxf")).unwrap(), "a.dxf").unwrap();
+    let vps = d.space(&Space::Paper("Details".into())).unwrap().iter().filter(|e| matches!(e.kind, EntityKind::Viewport(_))).count();
+    assert!(vps >= 1, "the view's viewport is on the sheet");
+
+    // Renumbered and synced: the label and the callout follow, and the fields read the set.
+    ss(json!({ "action": "set", "sheet": "A-2", "number": "A-5" })).unwrap();
+    let r = ss(json!({ "action": "sync" })).unwrap();
+    let callout = r["callouts"][0]["handle"].as_str().unwrap().to_string();
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
+    let label = v["views"][0]["label"].as_str().unwrap().to_string();
+    let d = cadaddy_io::read(&std::fs::read(dir.join("a.dxf")).unwrap(), "a.dxf").unwrap();
+    assert_eq!(text_of(&d, &callout), "1/A-5");
+    assert_eq!(text_of(&d, &label), "1 Detail");
+
+    s.execute("open", &json!({ "path": dir.join("a.dxf").to_string_lossy() })).unwrap();
+    s.execute("layout", &json!({ "option": "set", "name": "A-1 Plan" })).unwrap();
+    let f = |s: &mut Session, code: &str| {
+        s.execute("field", &json!({ "field": "code", "code": code, "at": [0, 0] })).unwrap()["value"].as_str().unwrap().to_string()
+    };
+    assert_eq!(f(&mut s, "\\AcSm SheetSet.Name"), "Clinic");
+    assert_eq!(f(&mut s, "\\AcSm SheetSet.Description"), "New clinic");
+    assert_eq!(f(&mut s, "\\AcSm SheetSet.Client"), "City");
+    assert_eq!(f(&mut s, "\\AcSm Sheet.Description"), "Ground floor");
+    assert_eq!(f(&mut s, "\\AcSm Sheet.Checked"), "JD");
+    assert_eq!(f(&mut s, "\\AcSm Sheet.Number"), "A-1");
+
+    // Removing the sheet with the view drops the view and the callout pointing at it.
+    let r = s.execute("sheetset", &json!({ "set": set, "action": "remove", "sheets": ["A-5"] })).unwrap();
+    assert_eq!((r["views"].as_array().unwrap().len(), r["callouts"].as_array().unwrap().len()), (0, 0));
+}
+
+/// The page sizes (points) of a PDF's pages, from their MediaBox entries.
+fn page_sizes(pdf: &[u8]) -> Vec<(i64, i64)> {
+    let text = String::from_utf8_lossy(pdf);
+    text.split("/MediaBox")
+        .skip(1)
+        .filter_map(|t| {
+            let inner = t.split_once('[')?.1.split_once(']')?.0;
+            let n: Vec<f64> = inner.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            Some(((n.get(2)? - n.first()?).round() as i64, (n.get(3)? - n.get(1)?).round() as i64))
+        })
+        .collect()
+}
+
+#[test]
+fn a_page_setup_override_changes_the_published_paper() {
+    hooks();
+    let dir = folder("pages");
+    drawing(&dir.join("a.dxf"), &["L1", "L2"]);
+    let set = dir.join("p.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    s.execute("sheetset", &json!({ "set": set, "action": "new" })).unwrap();
+    s.execute("sheetset", &json!({ "set": set, "action": "add", "drawing": dir.join("a.dxf").to_string_lossy() })).unwrap();
+    let out = dir.join("own.pdf");
+    s.execute("sheetset", &json!({ "set": set, "action": "publish", "path": out.to_string_lossy() })).unwrap();
+    let own = page_sizes(&std::fs::read(&out).unwrap());
+    assert_eq!(own.len(), 2, "{own:?}");
+
+    // An A1 landscape setup for every sheet.
+    let r = s
+        .execute(
+            "sheetset",
+            &json!({ "set": set, "action": "pagesetup", "name": "A1", "page": { "paper": "ISO A1", "widthMm": 841.0, "heightMm": 594.0, "landscape": false }, "use": "A1" }),
+        )
+        .unwrap();
+    assert_eq!(r["pageSetup"], "A1");
+    let out2 = dir.join("a1.pdf");
+    s.execute("sheetset", &json!({ "set": set, "action": "publish", "path": out2.to_string_lossy() })).unwrap();
+    let a1 = page_sizes(&std::fs::read(&out2).unwrap());
+    assert_eq!(a1.len(), 2);
+    assert_ne!(a1, own);
+    // 841 mm ≈ 2384 pt on one side.
+    assert!(a1.iter().all(|(w, h)| (*w - 2384).abs() <= 2 || (*h - 2384).abs() <= 2), "{a1:?}");
+    // Unknown setups and setups without paper are refused; removing the one used clears it.
+    assert!(s.execute("sheetset", &json!({ "set": set, "action": "pagesetup", "use": "Nope" })).is_err());
+    assert!(s.execute("sheetset", &json!({ "set": set, "action": "pagesetup", "name": "Z", "page": { "widthMm": 0 } })).is_err());
+    let r = s.execute("sheetset", &json!({ "set": set, "action": "pagesetup", "remove": "A1" })).unwrap();
+    assert_eq!(r["pageSetup"], "");
+}

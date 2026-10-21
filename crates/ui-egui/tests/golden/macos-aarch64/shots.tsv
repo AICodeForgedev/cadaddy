@@ -35,7 +35,6 @@ de-dark-1024x640	dialog-publish	20	202	657	289
 de-dark-1024x640	dialog-purge	322	92	397	482
 de-dark-1024x640	dialog-qselect	322	95	397	478
 de-dark-1024x640	dialog-rooms	20	202	537	140
-de-dark-1024x640	dialog-sheetset	20	202	477	115
 de-dark-1024x640	dialog-spacemouse	335	188	372	291
 de-dark-1024x640	dialog-standards	20	202	477	144
 de-dark-1024x640	dialog-stylesmanager	132	109	777	448
@@ -89,7 +88,6 @@ de-dark-1600x1000	dialog-publish	20	202	657	289
 de-dark-1600x1000	dialog-purge	610	272	397	482
 de-dark-1600x1000	dialog-qselect	610	275	397	478
 de-dark-1600x1000	dialog-rooms	20	202	537	140
-de-dark-1600x1000	dialog-sheetset	20	202	477	115
 de-dark-1600x1000	dialog-spacemouse	623	368	372	291
 de-dark-1600x1000	dialog-standards	20	202	477	144
 de-dark-1600x1000	dialog-stylesmanager	420	289	777	448
@@ -143,7 +141,6 @@ de-light-1024x640	dialog-publish	20	202	657	289
 de-light-1024x640	dialog-purge	322	92	397	482
 de-light-1024x640	dialog-qselect	322	95	397	478
 de-light-1024x640	dialog-rooms	20	202	537	140
-de-light-1024x640	dialog-sheetset	20	202	477	115
 de-light-1024x640	dialog-spacemouse	335	188	371	291
 de-light-1024x640	dialog-standards	20	202	477	144
 de-light-1024x640	dialog-stylesmanager	132	109	777	448
@@ -197,7 +194,6 @@ de-light-1600x1000	dialog-publish	20	202	657	289
 de-light-1600x1000	dialog-purge	610	272	397	482
 de-light-1600x1000	dialog-qselect	610	275	397	478
 de-light-1600x1000	dialog-rooms	20	202	537	139
-de-light-1600x1000	dialog-sheetset	20	202	476	114
 de-light-1600x1000	dialog-spacemouse	623	368	371	291
 de-light-1600x1000	dialog-standards	20	202	477	143
 de-light-1600x1000	dialog-stylesmanager	420	289	777	448
@@ -251,7 +247,6 @@ en-dark-1024x640	dialog-publish	20	202	657	289
 en-dark-1024x640	dialog-purge	322	92	397	482
 en-dark-1024x640	dialog-qselect	322	95	397	478
 en-dark-1024x640	dialog-rooms	20	202	537	125
-en-dark-1024x640	dialog-sheetset	20	202	477	115
 en-dark-1024x640	dialog-spacemouse	342	195	357	276
 en-dark-1024x640	dialog-standards	20	202	477	144
 en-dark-1024x640	dialog-stylesmanager	132	109	777	448
@@ -305,7 +300,6 @@ en-dark-1600x1000	dialog-publish	20	202	657	289
 en-dark-1600x1000	dialog-purge	610	272	397	482
 en-dark-1600x1000	dialog-qselect	610	275	397	478
 en-dark-1600x1000	dialog-rooms	20	202	537	125
-en-dark-1600x1000	dialog-sheetset	20	202	477	115
 en-dark-1600x1000	dialog-spacemouse	630	375	357	276
 en-dark-1600x1000	dialog-standards	20	202	477	144
 en-dark-1600x1000	dialog-stylesmanager	420	289	777	448
@@ -359,7 +353,6 @@ en-light-1024x640	dialog-publish	20	202	657	289
 en-light-1024x640	dialog-purge	322	92	397	482
 en-light-1024x640	dialog-qselect	322	95	397	478
 en-light-1024x640	dialog-rooms	20	202	537	125
-en-light-1024x640	dialog-sheetset	20	202	477	115
 en-light-1024x640	dialog-spacemouse	342	195	357	276
 en-light-1024x640	dialog-standards	20	202	477	144
 en-light-1024x640	dialog-stylesmanager	132	109	777	448
@@ -413,7 +406,6 @@ en-light-1600x1000	dialog-publish	20	202	657	289
 en-light-1600x1000	dialog-purge	610	272	397	482
 en-light-1600x1000	dialog-qselect	610	275	397	478
 en-light-1600x1000	dialog-rooms	20	202	536	124
-en-light-1600x1000	dialog-sheetset	20	202	476	114
 en-light-1600x1000	dialog-spacemouse	630	375	356	276
 en-light-1600x1000	dialog-standards	20	202	477	143
 en-light-1600x1000	dialog-stylesmanager	420	289	777	448
@@ -467,7 +459,6 @@ fr-dark-1024x640	dialog-publish	20	202	657	289
 fr-dark-1024x640	dialog-purge	293	92	455	482
 fr-dark-1024x640	dialog-qselect	322	95	397	478
 fr-dark-1024x640	dialog-rooms	20	202	537	140
-fr-dark-1024x640	dialog-sheetset	20	202	477	115
 fr-dark-1024x640	dialog-spacemouse	342	195	357	276
 fr-dark-1024x640	dialog-standards	20	202	477	144
 fr-dark-1024x640	dialog-stylesmanager	124	109	793	448
@@ -521,7 +512,6 @@ fr-dark-1600x1000	dialog-publish	20	202	657	289
 fr-dark-1600x1000	dialog-purge	581	272	455	482
 fr-dark-1600x1000	dialog-qselect	610	275	397	478
 fr-dark-1600x1000	dialog-rooms	20	202	537	140
-fr-dark-1600x1000	dialog-sheetset	20	202	477	115
 fr-dark-1600x1000	dialog-spacemouse	630	375	357	276
 fr-dark-1600x1000	dialog-standards	20	202	477	144
 fr-dark-1600x1000	dialog-stylesmanager	412	289	793	448
@@ -575,7 +565,6 @@ fr-light-1024x640	dialog-publish	20	202	657	289
 fr-light-1024x640	dialog-purge	293	92	455	482
 fr-light-1024x640	dialog-qselect	322	95	397	478
 fr-light-1024x640	dialog-rooms	20	202	537	140
-fr-light-1024x640	dialog-sheetset	20	202	477	115
 fr-light-1024x640	dialog-spacemouse	342	195	357	276
 fr-light-1024x640	dialog-standards	20	202	477	144
 fr-light-1024x640	dialog-stylesmanager	124	109	793	448
@@ -629,7 +618,6 @@ fr-light-1600x1000	dialog-publish	20	202	657	289
 fr-light-1600x1000	dialog-purge	581	272	455	482
 fr-light-1600x1000	dialog-qselect	610	275	397	478
 fr-light-1600x1000	dialog-rooms	20	202	537	139
-fr-light-1600x1000	dialog-sheetset	20	202	476	114
 fr-light-1600x1000	dialog-spacemouse	630	375	356	276
 fr-light-1600x1000	dialog-standards	20	202	477	143
 fr-light-1600x1000	dialog-stylesmanager	412	289	793	448

@@ -606,9 +606,9 @@ impl InsertM {
 
     /// Block `name` chosen: collect its attribute prompts and ask for the insertion point.
     fn choose(&mut self, s: &mut Session, name: &str) -> Result<()> {
+        // Not found: asked again for a typed name; Enter (INSNAME gone) ends the command.
         let Some(b) = s.doc()?.block(name).cloned() else {
-            s.echo(format!("Block \"{name}\" not found."));
-            return Ok(());
+            return Err(EngineError::Other(format!("Block \"{name}\" not found.")));
         };
         // ATTREQ 0: no attribute prompts, every attribute takes its default (scripts placing many).
         let attreq = s.doc()?.header.i64("ATTREQ", 1) != 0;
@@ -702,7 +702,11 @@ impl Interactive for InsertM {
             InsStage::Name => {
                 let n = match i {
                     Input::Text(t) => t.trim().to_string(),
-                    Input::Enter => s.doc()?.header.str("INSNAME", ""),
+                    // Enter takes the last block inserted; with none, it ends the command.
+                    Input::Enter => match s.doc()?.header.str("INSNAME", "") {
+                        n if n.trim().is_empty() => return Ok(Step::Done),
+                        n => n,
+                    },
                     _ => return Ok(Step::Continue),
                 };
                 if n == "?" {

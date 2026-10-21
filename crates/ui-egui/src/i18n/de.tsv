@@ -2251,3 +2251,75 @@
 	Dictionaries are read from:	Wörterbücher werden gelesen aus:
 	Published to {path}	Veröffentlicht nach {path}
 	Sheet Set (.sheetset.json)	Plansatz (.sheetset.json)
+	Resolution	Auflösung
+	Colour depth	Farbtiefe
+	Colour (24-bit)	Farbe (24 Bit)
+	Greys (8-bit)	Graustufen (8 Bit)
+	Black and white (1-bit)	Schwarzweiß (1 Bit)
+	PNG Out	PNG-Ausgabe
+	JPEG Out	JPEG-Ausgabe
+	BMP Out	BMP-Ausgabe
+	TIFF Out	TIFF-Ausgabe
+	Enter image file name	Bilddateinamen eingeben
+	Nothing selected: no image written.	Nichts gewählt: kein Bild geschrieben.
+	{} object(s) written to {} ({} × {} pixels).	{} Objekt(e) in {} geschrieben ({} × {} Pixel).
+	Set to ByLayer	Auf VonLayer setzen
+	Explode and Set Properties	Auflösen und Eigenschaften festlegen
+	Edit Attribute in Place	Attribut direkt bearbeiten
+	Frame	Rahmen
+	Setup	Einrichten
+	Setup View	Ansicht einrichten
+	Setup Drawing	Zeichnung einrichten
+	Setup Profile	Profil einrichten
+	Enter view scale	Ansichtsmaßstab eingeben
+	Specify view center	Ansichtsmittelpunkt angeben
+	Enter view name	Ansichtsnamen eingeben
+	Specify side of viewport to project	Seite des Ansichtsfensters für die Projektion angeben
+	Specify first point of cutting plane	Ersten Punkt der Schnittebene angeben
+	Specify second point of cutting plane	Zweiten Punkt der Schnittebene angeben
+	Specify first point of inclined plane	Ersten Punkt der geneigten Ebene angeben
+	Specify second point of inclined plane	Zweiten Punkt der geneigten Ebene angeben
+	Specify side to view from	Blickseite angeben
+	Specify first corner of viewport	Erste Ecke des Ansichtsfensters angeben
+	Specify opposite corner of viewport	Gegenüberliegende Ecke des Ansichtsfensters angeben
+	Display hidden profile lines on separate layer?	Verdeckte Profillinien auf separatem Layer anzeigen?
+	Project profile lines onto a plane?	Profillinien auf eine Ebene projizieren?
+	Delete tangential edges?	Tangentiale Kanten löschen?
+	None (PDF file)	Keiner (PDF-Datei)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Bemaßungstext mit {} Höhe ist in dieser Zeichnung zu klein zum Lesen. Geben Sie DIMSCALE {} ein, um neue Bemaßungen {}-mal größer zu machen.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Text mit {} Höhe ist in dieser Zeichnung zu klein zum Lesen. Versuchen Sie eine Höhe von {} (TEXTSIZE legt den Vorgabewert fest).
+	(each layout's own)	(die des jeweiligen Layouts)
+	A callout on the selected sheet pointing at the selected view	Ein Verweis auf dem gewählten Plan, der auf die gewählte Ansicht zeigt
+	A page setup copied from the selected sheet's layout	Eine Seiteneinrichtung, kopiert aus dem Layout des gewählten Plans
+	Add Callout	Verweis hinzufügen
+	Callouts: {}	Verweise: {}
+	From Selected Sheet	Aus gewähltem Plan
+	Insert on Selected Sheet	Auf gewähltem Plan einfügen
+	Named view	Benannte Ansicht
+	Page Setup Override	Seiteneinrichtung überschreiben
+	Place View	Ansicht platzieren
+	Position on sheet	Position auf dem Plan
+	Remove Property	Eigenschaft entfernen
+	Sheet Properties	Planeigenschaften
+	Sheet Set Fields	Felder der Planungsunterlagen
+	Sheet Set Properties	Eigenschaften der Planungsunterlagen
+	Sync Drawings	Zeichnungen abgleichen
+	Text holding the field, at the position on sheet	Text mit dem Feld, an der Position auf dem Plan
+	Views and Callouts	Ansichten und Verweise
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Das Layout jedes Plans heißt dann „Nummer Titel“; die Felder der Planungsunterlagen, Ansichtsbeschriftungen und Verweise übernehmen deren aktuelle Werte
+	3 Point	3 Punkte
+	Origin	Ursprung
+	Z	Z
+	Named UCS...	Benanntes BKS...
+	Center Mark (DIMCEN)	Zentrumsmarke (DIMCEN)
+	Copy Objects to New Layer	Objekte auf neuen Layer kopieren
+	Cut with Base Point	Mit Basispunkt ausschneiden
+	DXF In	DXF einlesen
+	DXF Out	Als DXF speichern
+	Fill	Füllung
+	Maximize Viewport	Ansichtsfenster maximieren
+	Minimize Viewport	Ansichtsfenster minimieren
+	Object Selection Filters	Objektauswahlfilter
+	Oops	Hoppla
+	Quick Text	Schnelltext
+	Redefine Attributes	Attribute neu definieren

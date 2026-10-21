@@ -5,6 +5,11 @@
 //! the byte just written). Pages written by other programs decode to the sizes their headers
 //! state, and pass their checksums, only this way.
 //!
+//! The far copies (opcodes 0x10–0x1F) keep the length in their low three bits (0: a "Long
+//! Compression Offset" + 9 follows) and the distance's bit 14 in bit 3; 0x11 (length 3, bit 14
+//! clear) is the end. Reading bit 3 as length makes copies of 10 to 17 bytes come from 16 KB
+//! too near, which the ODA's reader rejects.
+//!
 //! The encoder is greedy, with hash chains over 3-byte prefixes. It never starts a match in the
 //! first four bytes, because the leading literal run can only be 0 or at least 4 bytes long.
 
@@ -106,14 +111,13 @@ pub fn decompress(data: &[u8], max_out: usize) -> Result<Vec<u8>> {
         r.p += 1;
         let (count, offset, lit) = match op {
             END => return Ok(out),
-            0x10 => {
-                let count = r.long_count()? + 9;
+            0x10 | 0x12..=0x1F => {
+                let count = match op & 7 {
+                    0 => r.long_count()? + 9,
+                    n => usize::from(n) + 2,
+                };
                 let (o, l) = r.two_byte()?;
-                (count, o + 0x3FFF, l)
-            }
-            0x12..=0x1F => {
-                let (o, l) = r.two_byte()?;
-                (usize::from(op & 0x0F) + 2, o + 0x3FFF, l)
+                (count, o + 0x3FFF + (usize::from(op & 8) << 11), l)
             }
             0x20 => {
                 let count = r.long_count()? + 0x21;
@@ -199,8 +203,9 @@ fn push_match(out: &mut Vec<u8>, count: usize, distance: usize, lit: usize) {
         }
         push_two_byte(out, off, lit);
     } else {
+        // Distances up to 0x7FFF: bit 14 of the stored offset (opcode bit 3) stays clear.
         let off = off - 0x3FFF;
-        if count <= 0x11 {
+        if count <= 9 {
             out.push(0x10 | (count - 2) as u8);
         } else {
             out.push(0x10);
@@ -345,6 +350,36 @@ mod tests {
         }
         assert!(compress(b"ab").is_err());
         assert!(compress(&[0; 100_000]).unwrap().len() < 1000, "zeros compress");
+    }
+
+    #[test]
+    fn far_copies_keep_the_length_in_three_bits() {
+        // A far copy (distance over 0x4000) of 12 bytes: 0x10 with an extended length (12 - 9),
+        // never 0x1A, which other readers take as length 2 + 2 with distance bit 14 set.
+        let mut seed = 3u32;
+        let block: Vec<u8> = (0..0x5000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 24) as u8
+            })
+            .collect();
+        let mut data = block.clone();
+        data.extend_from_slice(&block[..12]);
+        let c = compress(&data).unwrap();
+        // 0x10, length 12 - 9, offset 0x5000 - 1 - 0x3FFF as a two-byte offset, the end.
+        assert_eq!(c.get(c.len() - 5..), Some(&[0x10, 0x03, 0x00, 0x40, END][..]));
+        assert_eq!(decompress(&c, data.len()).unwrap(), data);
+        // Decoding: 0x1A is a copy of (2 + 2) bytes from 0x3FFF + 0x4000 + offset + 1 back.
+        let mut want: Vec<u8> = (0..0x8100u32).map(|i| (i % 251) as u8).collect();
+        let mut lit = Vec::new();
+        push_literal_length(&mut lit, want.len());
+        lit.extend_from_slice(&want);
+        // Offset 1: distance 1 + 0x3FFF + 0x4000 + 1.
+        lit.extend_from_slice(&[0x1A, 0x04, 0x00, END]);
+        let from = want.len() - 0x8001;
+        let copied: Vec<u8> = want[from..from + 4].to_vec();
+        want.extend_from_slice(&copied);
+        assert_eq!(decompress(&lit, want.len()).unwrap(), want);
     }
 
     #[test]

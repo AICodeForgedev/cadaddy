@@ -522,6 +522,32 @@ fn zoom_extents_fits_drawing() {
 }
 
 #[test]
+fn zoom_extents_keeps_the_drawing_clear_of_the_covered_bottom() {
+    // A first-run finding: the floating command line hid the bottom of a freshly opened plan.
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 800.0);
+    s.viewport_inset_px = (0.0, 200.0);
+    s.execute("rectang", &json!({"p1": [0, 0], "p2": [100, 100]})).unwrap();
+    s.execute("zoom.extents", &json!({})).unwrap();
+    let v = s.state().unwrap().view();
+    let screen_y = |y: f64| 400.0 - (y - v.center.y) * 800.0 / v.height;
+    assert!(screen_y(0.0) < 600.0, "the bottom edge is above the covered 200 px: {}", screen_y(0.0));
+    assert!(screen_y(100.0) > 0.0, "the top edge is on screen: {}", screen_y(100.0));
+    // Centred in the free 600 px with the 5% margin, as without the cover.
+    assert!(((screen_y(0.0) + screen_y(100.0)) / 2.0 - 300.0).abs() < 1e-6);
+    assert!((screen_y(0.0) - screen_y(100.0) - 600.0 / 1.05).abs() < 1e-6);
+    // Opening a drawing frames it the same way; hostile insets are clamped.
+    for inset in [(0.0, 200.0), (f64::NAN, f64::INFINITY), (-50.0, 1e12)] {
+        s.viewport_inset_px = inset;
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        let _ = d.add(&Space::Model, cadaddy_doc::Common::default(), crate::cmd::helpers::line(Vec2::ZERO, Vec2::new(100.0, 100.0)));
+        s.open_drawing(d, "plan", None);
+        let v = s.state().unwrap().view();
+        assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0, "{inset:?}: {v:?}");
+    }
+}
+
+#[test]
 fn setvar_point_variables_take_point_objects() {
     let mut s = Session::new();
     for name in ["SNAPBASE", "LIMMIN", "LIMMAX", "INSBASE"] {

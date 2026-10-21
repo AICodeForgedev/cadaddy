@@ -771,6 +771,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadaddy-mepfix"
+version = "0.7.8"
+dependencies = [
+ "cadaddy-color",
+ "cadaddy-doc",
+ "cadaddy-dxf",
+ "cadaddy-geom",
+ "cadaddy-io",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cadaddy-render"
 version = "0.7.8"
 dependencies = [

@@ -2415,3 +2415,75 @@ menu	Modify	Modifikace
 	Dictionaries are read from:	Slovníky se čtou z:
 	Published to {path}	Publikováno do {path}
 	Sheet Set (.sheetset.json)	Sada výkresů (.sheetset.json)
+	Resolution	Rozlišení
+	Colour depth	Barevná hloubka
+	Colour (24-bit)	Barevně (24 bitů)
+	Greys (8-bit)	Odstíny šedi (8 bitů)
+	Black and white (1-bit)	Černobíle (1 bit)
+	PNG Out	Výstup PNG
+	JPEG Out	Výstup JPEG
+	BMP Out	Výstup BMP
+	TIFF Out	Výstup TIFF
+	Enter image file name	Zadejte název souboru obrázku
+	Nothing selected: no image written.	Nic nevybráno: obrázek nebyl zapsán.
+	{} object(s) written to {} ({} × {} pixels).	Objekty ({}) zapsány do {} ({} × {} pixelů).
+	Set to ByLayer	Nastavit na Dle hladiny
+	Explode and Set Properties	Rozložit a nastavit vlastnosti
+	Edit Attribute in Place	Upravit atribut na místě
+	Frame	Rámeček
+	Setup	Nastavení
+	Setup View	Nastavit pohled
+	Setup Drawing	Nastavit výkres
+	Setup Profile	Nastavit profil
+	Enter view scale	Zadejte měřítko pohledu
+	Specify view center	Určete střed pohledu
+	Enter view name	Zadejte název pohledu
+	Specify side of viewport to project	Určete stranu výřezu pro promítnutí
+	Specify first point of cutting plane	Určete první bod roviny řezu
+	Specify second point of cutting plane	Určete druhý bod roviny řezu
+	Specify first point of inclined plane	Určete první bod šikmé roviny
+	Specify second point of inclined plane	Určete druhý bod šikmé roviny
+	Specify side to view from	Určete stranu, ze které se díváte
+	Specify first corner of viewport	Určete první roh výřezu
+	Specify opposite corner of viewport	Určete protější roh výřezu
+	Display hidden profile lines on separate layer?	Zobrazit skryté čáry profilu v samostatné hladině?
+	Project profile lines onto a plane?	Promítnout čáry profilu do roviny?
+	Delete tangential edges?	Odstranit tečné hrany?
+	None (PDF file)	Žádné (soubor PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Kótovací text o výšce {} je v tomto výkresu příliš malý na čtení. Zadejte DIMSCALE {} a nové kóty budou {}krát větší.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Text o výšce {} je v tomto výkresu příliš malý na čtení. Zkuste výšku {} (výchozí nastavuje TEXTSIZE).
+	(each layout's own)	(vlastní u každého rozvržení)
+	A callout on the selected sheet pointing at the selected view	Odkaz na vybraném listu ukazující na vybraný pohled
+	A page setup copied from the selected sheet's layout	Nastavení stránky zkopírované z rozvržení vybraného listu
+	Add Callout	Přidat odkaz
+	Callouts: {}	Odkazy: {}
+	From Selected Sheet	Z vybraného listu
+	Insert on Selected Sheet	Vložit na vybraný list
+	Named view	Pojmenovaný pohled
+	Page Setup Override	Přepsání nastavení stránky
+	Place View	Umístit pohled
+	Position on sheet	Poloha na listu
+	Remove Property	Odebrat vlastnost
+	Sheet Properties	Vlastnosti listu
+	Sheet Set Fields	Pole sady listů
+	Sheet Set Properties	Vlastnosti sady listů
+	Sync Drawings	Synchronizovat výkresy
+	Text holding the field, at the position on sheet	Text obsahující pole, na poloze na listu
+	Views and Callouts	Pohledy a odkazy
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Rozvržení každého listu se jmenuje „číslo název“; pole sady listů, popisky pohledů a odkazy převezmou aktuální hodnoty sady
+	3 Point	3 body
+	Origin	Počátek
+	Z	Z
+	Named UCS...	Pojmenované USS...
+	Center Mark (DIMCEN)	Středová značka (DIMCEN)
+	Copy Objects to New Layer	Kopírovat objekty do nové hladiny
+	Cut with Base Point	Vyjmout se základním bodem
+	DXF In	Načíst DXF
+	DXF Out	Uložit jako DXF
+	Fill	Výplň
+	Maximize Viewport	Maximalizovat výřez
+	Minimize Viewport	Minimalizovat výřez
+	Object Selection Filters	Filtry výběru objektů
+	Oops	Obnovit vymazané
+	Quick Text	Rychlý text
+	Redefine Attributes	Předefinovat atributy

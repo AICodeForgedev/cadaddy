@@ -158,7 +158,12 @@ impl Interactive for HatchPickM {
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let Some(mode) = self.mode else {
             match &i {
-                Input::Keyword(t) | Input::Text(t) => self.mode = mode_named(t),
+                Input::Keyword(t) | Input::Text(t) => {
+                    self.mode = mode_named(t);
+                    if self.mode.is_none() {
+                        s.echo("Invalid option keyword.");
+                    }
+                }
                 Input::Enter | Input::Cancel => return Ok(Step::Cancel),
                 _ => {}
             }
@@ -214,6 +219,7 @@ impl Interactive for HatchPickM {
                 if self.removed.len() < MAX_PICKS {
                     self.removed.push(q);
                 }
+                s.echo(format!("{} boundary pick(s) to remove.", self.removed.len()));
                 Ok(Step::Continue)
             }
             (PickMode::Remove, Input::Enter) => {

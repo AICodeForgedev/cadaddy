@@ -871,6 +871,7 @@ impl Interactive for InspectM {
                 })
             }
             (None, _, Input::Enter) => self.shape = Some("round"),
+            (None, _, Input::Text(_)) => s.echo("Invalid option keyword."),
             (Some(_), None, Input::Text(t)) => self.label = Some(t),
             (Some(_), None, Input::Enter) => self.label = Some(String::new()),
             (Some(shape), Some(label), Input::Text(t)) => {

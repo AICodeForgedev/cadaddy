@@ -1496,9 +1496,10 @@ impl Interactive for TextM {
         let anno = if d.text_style(&style).is_some_and(|st| st.annotative) { "Yes" } else { "No" };
         // A fixed-height style's height is the one TEXT uses.
         let h = d.text_style(&style).map(|st| st.height).filter(|h| h.is_finite() && *h > 0.0).unwrap_or_else(|| d.header.f64("TEXTSIZE", 0.2));
-        let h = crate::units::dist(s, h);
-        let msg = format!("Current text style:  \"{style}\"  Text height:  {h}  Annotative:  {anno}  Justify:  Left");
+        let hs = crate::units::dist(s, h);
+        let msg = format!("Current text style:  \"{style}\"  Text height:  {hs}  Annotative:  {anno}  Justify:  Left");
         s.echo(msg);
+        crate::legibility::check_text_style_height(s, &style, h);
         Ok(Step::Continue)
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -1538,7 +1539,8 @@ impl Interactive for TextM {
             (Some(a), Some(h), Some(r), Input::Text(t)) => {
                 let at = a + Vec2::from_angle(r - std::f64::consts::FRAC_PI_2) * (h * 5.0 / 3.0 * self.line as f64);
                 let k = make_text(s, at, &t, h, r, self.justify);
-                s.add_entity(k)?;
+                let added = s.add_entity(k)?;
+                crate::legibility::check_new(s, added);
                 self.line += 1;
                 if self.single_line {
                     return Ok(Step::Done);
@@ -1584,6 +1586,8 @@ impl Interactive for MTextM {
             crate::units::dist(s, self.opts.height),
             if anno { "Yes" } else { "No" }
         ));
+        let (style, height) = (self.opts.style.clone(), self.opts.height);
+        crate::legibility::check_text_style_height(s, &style, height);
         Ok(Step::Continue)
     }
     fn prompt(&self, _s: &Session) -> Prompt {
@@ -1620,7 +1624,8 @@ impl Interactive for MTextM {
                 if self.lines.is_empty() {
                     return Ok(Step::Done);
                 }
-                s.add_entity(EntityKind::MText(self.opts.mtext(a, self.second, self.lines.join("\\P"))))?;
+                let added = s.add_entity(EntityKind::MText(self.opts.mtext(a, self.second, self.lines.join("\\P"))))?;
+                crate::legibility::check_new(s, added);
                 return Ok(Step::Done);
             }
             (_, _, Input::Enter) => return Ok(Step::Done),

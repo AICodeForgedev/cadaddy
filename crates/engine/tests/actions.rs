@@ -34,7 +34,7 @@ fn record(s: &mut Session, lines: &[&str]) {
 fn a_recorded_macro_plays_back_the_same_drawing() {
     let mut s = Session::new();
     record(&mut s, &["circle", "*10,10", "5", "line", "*0,0", "*20,0", "*20,20", ""]);
-    let r = s.execute("actstop", &json!({ "name": "Frame" })).unwrap();
+    let r = s.execute("actstop", &json!({ "name": "Outline" })).unwrap();
     assert_eq!(r["asks"], 0, "{r}");
     let before = shapes(&s);
     assert_eq!(before.len(), 3, "{before:?}");
@@ -44,11 +44,11 @@ fn a_recorded_macro_plays_back_the_same_drawing() {
     );
     // Played into a new drawing: the same objects.
     s.execute("new", &json!({})).unwrap();
-    s.execute("actplay", &json!({ "name": "frame" })).unwrap();
+    s.execute("actplay", &json!({ "name": "outline" })).unwrap();
     assert_eq!(shapes(&s), before);
     // Typing its name plays it too.
     s.execute("new", &json!({})).unwrap();
-    s.cmdline("FRAME").unwrap();
+    s.cmdline("OUTLINE").unwrap();
     assert_eq!(shapes(&s), before);
 }
 

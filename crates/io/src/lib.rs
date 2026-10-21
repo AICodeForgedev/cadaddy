@@ -4,6 +4,7 @@
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
+mod dwg_fixup;
 mod dwg_keep;
 pub mod dwg_native;
 pub mod dwg_read;
@@ -152,17 +153,39 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
         return Ok(bytes);
     }
     let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
-    cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)
+    let bytes = cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
+    if version <= Version::R2004 && has_images(d) {
+        return Ok(dwg_fixup::image_def_reactors(&bytes).unwrap_or(bytes));
+    }
+    Ok(bytes)
+}
+
+/// Whether the drawing has a raster image anywhere.
+fn has_images(d: &Drawing) -> bool {
+    let any = |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(e.kind, cadaddy_doc::EntityKind::Image(_)));
+    any(&d.model) || d.layouts.iter().any(|l| any(&l.entities)) || d.blocks.values().any(|b| any(&b.entities))
 }
 
 /// A DWG read through the bridge (acadrust).
 fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
+    let renamed = dwg_fixup::underlay_classes_renamed(bytes);
+    let bytes = renamed.as_deref().unwrap_or(bytes);
     let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
     // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
     let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
     d.read_notes = notes;
     Ok(d)
+}
+
+/// A DXF with the records CADaddy's DWG writers kept in their `CADADDY_KEEP` dictionary put
+/// back: one of our DWGs saved as DXF by another program, which carries the dictionary along.
+fn kept_back(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let key = dwg_keep::KEY.as_bytes();
+    match bytes.windows(key.len()).any(|w| w == key).then(|| dwg_keep::unstash(bytes)).flatten() {
+        Some(d) => std::borrow::Cow::Owned(d),
+        None => std::borrow::Cow::Borrowed(bytes),
+    }
 }
 
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
@@ -185,7 +208,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
             d.read_notes.extend(r.notes);
             Ok(d)
         }
-        "dxf" | "" => dxf_read::read(bytes),
+        "dxf" | "" => dxf_read::read(&kept_back(bytes)),
         "obj" => mesh3d_io::read_obj(bytes, name),
         "stl" => mesh3d_io::read_stl(bytes),
         "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),

@@ -136,10 +136,13 @@ fn store() -> PlotterStore {
 const MAX_DEVICES: usize = 1000;
 
 /// The built-in devices: name, output, description.
-const BUILTIN: [(&str, PlotOutput, &str); 3] = [
+const BUILTIN: [(&str, PlotOutput, &str); 6] = [
     ("CADaddy PDF", PlotOutput::Pdf, "Vector PDF"),
     ("CADaddy PNG", PlotOutput::Png, "Raster PNG image"),
     ("CADaddy SVG", PlotOutput::Svg, "Vector SVG image"),
+    ("CADaddy JPEG", PlotOutput::Jpg, "Raster JPEG image"),
+    ("CADaddy TIFF", PlotOutput::Tif, "Raster TIFF image (uncompressed)"),
+    ("CADaddy BMP", PlotOutput::Bmp, "Raster BMP image"),
 ];
 
 /// A page setup's "no device" name.
@@ -156,6 +159,7 @@ fn builtin(name: &str, output: PlotOutput, description: &str) -> PlotterConfig {
         description: description.into(),
         output,
         resolution: 300,
+        color_depth: 24,
         orientation: Orientation::Landscape,
         default_paper,
         papers,
@@ -301,7 +305,13 @@ pub(crate) fn plot_options(s: &Session, p: &Value, cmd: &str) -> Result<Value> {
     o.remove("device");
     let output = if cmd == "exportpdf" { PlotOutput::Pdf } else { dev.output };
     o.insert("output".into(), json!(output.as_str()));
-    o.insert("resolution".into(), json!(dev.resolution));
+    // The device's resolution unless the plot names its own.
+    if !o.get("resolution").is_some_and(Value::is_number) {
+        o.insert("resolution".into(), json!(dev.resolution));
+    }
+    if dev.output.is_raster() && !o.contains_key("colorDepth") {
+        o.insert("colorDepth".into(), json!(dev.color_depth));
+    }
     let paper = match str_param(p, "paper") {
         Some(name) => match device_paper(&dev, name) {
             Some(pp) => Some(pp),
@@ -459,7 +469,7 @@ fn edit_device(cmd: &str, c: &mut PlotterConfig, p: &Value) -> Result<()> {
         c.description = d.chars().take(1000).collect();
     }
     if let Some(o) = p.get("output") {
-        c.output = o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png or svg"))?;
+        c.output = o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif or bmp"))?;
     }
     if let Some(r) = p.get("resolution") {
         let r = r.as_u64().filter(|r| (50..=2400).contains(r)).ok_or_else(|| bad(cmd, "`resolution` must be 50-2400 dpi"))?;
@@ -547,7 +557,9 @@ fn run_plottermanager(_s: &mut Session, p: &Value) -> Result<Value> {
                 None => {
                     // A copy of the built-in device for the output: the standard papers.
                     let output = match p.get("output") {
-                        Some(o) => o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png or svg"))?,
+                        Some(o) => {
+                            o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif or bmp"))?
+                        }
                         None => PlotOutput::Pdf,
                     };
                     let (b, o, _) = BUILTIN.iter().find(|(_, o, _)| *o == output).copied().unwrap_or(("CADaddy PDF", PlotOutput::Pdf, ""));

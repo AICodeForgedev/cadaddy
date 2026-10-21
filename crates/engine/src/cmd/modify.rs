@@ -272,14 +272,21 @@ fn erase(s: &mut Session, hs: &[Handle]) -> Result<usize> {
     let hs = &super::clip_partners::with_partners(s.doc()?, hs);
     let d = s.doc_mut()?;
     let (mut n, mut locked_n) = (0, 0);
+    let mut gone = Vec::new();
     for h in hs {
         let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
+        let space = d.space_of(*h);
         if locked {
             locked_n += 1;
-        } else if d.remove_entity(*h).is_some() {
+        } else if let Some(e) = d.remove_entity(*h) {
             n += 1;
+            if let Some(sp) = space {
+                gone.push((sp, e));
+            }
         }
     }
+    // OOPS brings them back.
+    super::classic::remember_erased(s, gone);
     s.set_selection(Vec::new());
     // As AutoCAD says it: the objects left alone are not a silent surprise.
     match locked_n {
@@ -1589,7 +1596,7 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
 
 /// Explode `hs`: the new objects, and how many of `hs` couldn't be exploded (a line, a circle,
 /// one on a locked layer).
-fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
+pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
     let space = s.space();
     let mut out = Vec::new();
     let mut not = 0;

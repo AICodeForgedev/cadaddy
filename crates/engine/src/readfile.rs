@@ -25,10 +25,14 @@ pub fn open(path: impl AsRef<std::path::Path>) -> std::io::Result<std::fs::File>
 
 fn read_max(path: &std::path::Path, max: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind};
-    let file = open(path)?;
+    let not_a_file = || Error::new(ErrorKind::InvalidInput, "not a regular file");
+    let resolved = cadaddy_geom::filename::resolve(path);
+    // Windows refuses to open a folder ("access denied"): report it as not a regular file, as
+    // the other platforms do.
+    let file = std::fs::File::open(&resolved).map_err(|e| if std::fs::metadata(&resolved).is_ok_and(|m| !m.is_file()) { not_a_file() } else { e })?;
     let meta = file.metadata()?;
     if !meta.is_file() {
-        return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
+        return Err(not_a_file());
     }
     let too_big = || Error::new(ErrorKind::InvalidData, format!("larger than {} MB", max >> 20));
     if meta.len() > max {

@@ -45,6 +45,9 @@ pub(crate) const HANDSEED_KEY: &str = "CADADDY_HANDSEED";
 /// Named-object-dictionary key of the XRECORD holding the standards files associated with the
 /// drawing (STANDARDS): the `CADADDY_STANDARDS` header variable, a JSON list of paths.
 pub(crate) const STANDARDS_KEY: &str = "CADADDY_STANDARDS";
+/// Named-object-dictionary key of the XRECORD holding the sheet set data the `\AcSm` fields read
+/// (SHEETSET sync): the `CADADDY_SHEETSET` header variable, a JSON object.
+pub(crate) const SHEET_SET_KEY: &str = "CADADDY_SHEETSET";
 /// Named-object-dictionary key of the XRECORD holding layer notification (LAYEREVAL): JSON
 /// `{known: [reconciled layer names], eval, notify}`.
 pub(crate) const LAYER_EVAL_KEY: &str = "CADADDY_LAYEREVAL";

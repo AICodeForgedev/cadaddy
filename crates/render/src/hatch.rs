@@ -31,6 +31,18 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     let stretch = max_scale(&ctx.xf);
     let px = if stretch > 1e-12 { b.opts.min_dash / 2.0 / stretch } else { 0.0 };
     let dense = b.opts.fill && reads_solid(ctx.d, h, px);
+    let fill_on = ctx.d.header.i64("FILLMODE", 1) != 0;
+    if (h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some()) && b.opts.fill && !fill_on {
+        // FILL off (FILLMODE 0): a solid fill shows as its outline.
+        for l in &loops {
+            if let Some(f) = l.first() {
+                let mut pts = l.clone();
+                pts.push(*f);
+                b.polyline(ctx, rgb, lw, &pts);
+            }
+        }
+        return;
+    }
     if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() || dense {
         if b.opts.fill {
             let tris = fill::triangulate_evenodd(&loops);

@@ -183,6 +183,7 @@ fn add_dim(s: &mut Session, k: EntityKind) -> Result<Handle> {
     }
     let h = s.add_entity(k)?;
     s.last_dim = Some(h);
+    crate::legibility::check_new(s, h);
     Ok(h)
 }
 
@@ -1109,6 +1110,10 @@ impl Interactive for LinearM {
             return Ok(Step::Continue);
         }
         if self.selecting {
+            // Enter with no object ends the command.
+            if i == Input::Enter {
+                return Ok(Step::Done);
+            }
             if let Input::Point(p) = i {
                 let Some(h) = pick_at(s, p) else {
                     s.echo("*Invalid selection*");

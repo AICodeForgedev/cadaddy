@@ -593,3 +593,36 @@ fn native_reading_matches_the_bridge() {
     report.dedup();
     assert!(report.is_empty(), "{} differences:\n{}", report.len(), report.join("\n"));
 }
+
+/// Complex linetypes keep their text through the native writer: the text, its style, scale,
+/// rotation and offset (the writer used to keep only the dash lengths, so a fence line lost its
+/// marks). Both the narrow (R2004) and the wide (R2007+) strings area.
+#[test]
+fn complex_linetype_text_survives_the_native_writer() {
+    let mut d = Drawing::new_metric();
+    d.text_styles.push(TextStyle { name: "Marks".into(), ..TextStyle::default() });
+    let mark = DashElement {
+        text: Some("GAS".into()),
+        style: Some("Marks".into()),
+        scale: 0.1,
+        rotation: 0.25,
+        offset: Vec2::new(-0.1, -0.05),
+        ..DashElement::dash(-0.25)
+    };
+    d.linetypes.push(Linetype {
+        name: "MADEUP_GAS".into(),
+        description: "Gas line ---- GAS ----".into(),
+        pattern: vec![DashElement::dash(0.5), mark],
+    });
+    for v in ["AC1018", "AC1024", "AC1032"] {
+        let (ours, _) = cadaddy_io::dwg_write::write(&d, v).unwrap();
+        let back = cadaddy_io::read(&ours, "made-up.dwg").unwrap();
+        let lt = back.linetypes.iter().find(|l| l.name == "MADEUP_GAS").unwrap_or_else(|| panic!("{v}: linetype missing"));
+        let t = lt.pattern.iter().find(|e| e.text.is_some()).unwrap_or_else(|| panic!("{v}: the text dash was lost: {:?}", lt.pattern));
+        assert_eq!(t.text.as_deref(), Some("GAS"), "{v}");
+        assert_eq!(t.style.as_deref().map(str::to_ascii_uppercase).as_deref(), Some("MARKS"), "{v}");
+        assert!((t.scale - 0.1).abs() < 1e-9 && (t.rotation - 0.25).abs() < 1e-9, "{v}: {t:?}");
+        assert!((t.offset.x + 0.1).abs() < 1e-9 && (t.offset.y + 0.05).abs() < 1e-9, "{v}: {t:?}");
+        assert!((t.length + 0.25).abs() < 1e-9, "{v}: {t:?}");
+    }
+}

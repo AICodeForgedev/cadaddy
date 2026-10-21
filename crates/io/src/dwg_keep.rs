@@ -27,12 +27,22 @@ const MAX_KEPT: usize = 200_000;
 /// A DXF's groups, as (code, value) with the value as written.
 type Pairs = Vec<(i32, String)>;
 
+/// Whether DXF text is in a code page (not UTF-8): an older file's text (the DWG bridge's DXF of
+/// an R2000/R2004 DWG is Windows-1252). [`parse`] then reads each byte as the character of the
+/// same number and [`write`] writes them back as those bytes, so the text goes through
+/// unchanged. (Read as UTF-8 every non-ASCII character became U+FFFD: a layer "fläche" of a
+/// DWG with CADaddy's kept records came back "fl�che", savefuzz.)
+fn code_page_text(dxf: &[u8]) -> bool {
+    std::str::from_utf8(dxf).is_err()
+}
+
 /// The groups of ASCII DXF text, or `None` for binary DXF or text that isn't pairs.
 fn parse(dxf: &[u8]) -> Option<Pairs> {
     if dxf.starts_with(b"AutoCAD Binary DXF") {
         return None;
     }
-    let text = String::from_utf8_lossy(dxf);
+    let text: std::borrow::Cow<'_, str> =
+        if code_page_text(dxf) { dxf.iter().map(|&b| char::from(b)).collect::<String>().into() } else { String::from_utf8_lossy(dxf) };
     let mut lines = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l));
     let mut out = Vec::new();
     while let Some(code) = lines.next() {
@@ -46,13 +56,25 @@ fn parse(dxf: &[u8]) -> Option<Pairs> {
     Some(out)
 }
 
-fn write(pairs: &[(i32, String)], crlf: bool) -> Vec<u8> {
+/// DXF text of `pairs`, in UTF-8 or (`code_page`, see [`code_page_text`]) each character as the
+/// byte of the same number.
+fn write(pairs: &[(i32, String)], crlf: bool, code_page: bool) -> Vec<u8> {
     let nl = if crlf { "\r\n" } else { "\n" };
     let mut s = String::with_capacity(pairs.len() * 12);
     for (c, v) in pairs {
         s.push_str(&format!("{c:>3}{nl}{v}{nl}"));
     }
-    s.into_bytes()
+    if !code_page {
+        return s.into_bytes();
+    }
+    let mut out = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        match u8::try_from(u32::from(c)) {
+            Ok(b) => out.push(b),
+            Err(_) => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
+        }
+    }
+    out
 }
 
 /// Records: each from a `0` group to the next.
@@ -110,7 +132,7 @@ struct Kept {
 pub fn stash(dxf: &[u8], take: &HashSet<u64>) -> Option<(Vec<u8>, usize)> {
     let crlf = dxf.windows(2).any(|w| w == b"\r\n");
     let (out, n) = stash_pairs(&parse(dxf)?, take)?;
-    Some((write(&out, crlf), n))
+    Some((write(&out, crlf, code_page_text(dxf)), n))
 }
 
 /// [`stash`] on a DXF's tags (the DWG bridge's binary DXF).
@@ -282,7 +304,7 @@ fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>) -> Option<(Pairs, u
 pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
     let pairs = parse(dxf)?;
     let crlf = dxf.windows(2).any(|w| w == b"\r\n");
-    Some(write(&unstash_pairs(&pairs)?, crlf))
+    Some(write(&unstash_pairs(&pairs)?, crlf, code_page_text(dxf)))
 }
 
 /// [`unstash`] on a DXF's tags (the DWG read natively).
@@ -503,6 +525,26 @@ ACME_WIDGET\n5\n300\n102\n{ACAD_REACTORS\n330\n100\n102\n}\n330\nC\n100\nAcmeWid
             first.map(|i| &a[i.saturating_sub(3)..(i + 3).min(a.len())]),
             first.map(|i| &b[i.saturating_sub(3)..(i + 3).min(b.len())])
         );
+    }
+
+    /// A Windows-1252 DXF (the bridge's DXF of an R2000 DWG) with kept records: its other text
+    /// comes back byte for byte (it came back as U+FFFD, savefuzz).
+    #[test]
+    fn code_page_text_goes_through_unchanged() {
+        let latin = DXF.replace("gadget label", "fl\u{e4}che \u{20ac}").replace("in a block", "\u{d6}l");
+        let bytes: Vec<u8> = latin
+            .chars()
+            .map(|c| match c {
+                '\u{20ac}' => 0x80,
+                c => u8::try_from(u32::from(c)).unwrap(),
+            })
+            .collect();
+        let (stashed, _) = stash(&bytes, &take()).unwrap();
+        let back = unstash(&stashed).unwrap();
+        let want: &[u8] = &[b'f', b'l', 0xE4, b'c', b'h', b'e', b' ', 0x80];
+        assert!(back.windows(want.len()).any(|w| w == want), "{}", String::from_utf8_lossy(&back));
+        assert!(back.windows(3).any(|w| w == b"\xD6l\n"));
+        assert!(std::str::from_utf8(&back).is_err(), "still Windows-1252");
     }
 
     #[test]

@@ -1,0 +1,26 @@
+[package]
+name = "cadaddy-mepfix"
+description = "CADaddy MEP print fixtures: made-up mechanical, plumbing, fire protection, ceiling and structural sheets (vector PDF + DXF) with a JSON ground truth to score print readers against"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mep-fixtures"
+path = "src/bin/mep-fixtures.rs"
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+cadaddy-color = { workspace = true }
+cadaddy-doc = { workspace = true }
+cadaddy-io = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+cadaddy-dxf = { workspace = true }

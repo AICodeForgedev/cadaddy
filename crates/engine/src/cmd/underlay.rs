@@ -296,7 +296,12 @@ impl Interactive for AttachM {
             return Ok(Step::Cancel);
         }
         if self.path.is_none() {
-            let Input::Text(t) = i else { return Ok(Step::Continue) };
+            // Enter with no file ends the command.
+            let t = match i {
+                Input::Text(t) => t,
+                Input::Enter => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
             let t = t.trim().trim_matches('"').to_string();
             if t.is_empty() {
                 return Ok(Step::Cancel);

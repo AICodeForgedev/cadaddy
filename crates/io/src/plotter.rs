@@ -18,8 +18,8 @@ use crate::{IoError, PdfOptions, Result, pdf};
 /// Largest PNG plot (pixels); larger sheets are drawn at a lower resolution.
 pub const MAX_PNG_PIXELS: f64 = 40.0e6;
 
-/// Plot `space` with JSON options (the engine's `plot` hook): PDF unless `output` is `png` or
-/// `svg`. `margins: [l, b, r, t]` (mm) bound the printable area of this plot (model space or a
+/// Plot `space` with JSON options (the engine's `plot` hook): PDF unless `output` is `svg` or a
+/// raster image (`png`, `jpg`, `tif`, `bmp`; `colorDepth`: 24, 8 or 1, `resolution` in dpi). `margins: [l, b, r, t]` (mm) bound the printable area of this plot (model space or a
 /// layout).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     pdf::validate_plot_offset_json(opts)?;
@@ -50,7 +50,7 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     }
     match opts.get("output").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
         None | Some("pdf") => pdf::plot(d, space, opts),
-        Some("png") => png(d, space, opts),
+        Some(f) if cadaddy_render::encode::Format::parse(f).is_some() => png(d, space, opts),
         Some("svg") => svg(d, space, opts),
         Some(other) => Err(IoError::Unsupported(other.to_string())),
     }
@@ -109,7 +109,13 @@ fn png(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     };
     let px_per_mm = if lineweights { (k / sheet.unit_mm) as f32 } else { 0.0 };
     let ro = raster::RasterOptions { background: Rgb(255, 255, 255), hairline: 1.0, px_per_mm, antialias: true };
-    raster::render_png_turned(&list, &view, &ro, o.upside_down).ok_or_else(|| IoError::Format("render failed".into()))
+    let output = opts.get("output").and_then(Value::as_str).unwrap_or("png");
+    let format = cadaddy_render::encode::Format::parse(output).unwrap_or(cadaddy_render::encode::Format::Png);
+    let depth = cadaddy_render::encode::Depth::from_bits(opts.get("colorDepth").and_then(Value::as_u64).unwrap_or(24));
+    if format == cadaddy_render::encode::Format::Png && depth == cadaddy_render::encode::Depth::Color {
+        return raster::render_png_turned(&list, &view, &ro, o.upside_down).ok_or_else(|| IoError::Format("render failed".into()));
+    }
+    raster::render_image(&list, &view, &ro, o.upside_down, format, depth, dpi).ok_or_else(|| IoError::Format("render failed".into()))
 }
 
 fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {

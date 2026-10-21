@@ -2222,3 +2222,75 @@
 	Dictionaries are read from:	Les dictionnaires sont lus depuis :
 	Published to {path}	Publié dans {path}
 	Sheet Set (.sheetset.json)	Jeu de feuilles (.sheetset.json)
+	Resolution	Résolution
+	Colour depth	Profondeur de couleur
+	Colour (24-bit)	Couleur (24 bits)
+	Greys (8-bit)	Niveaux de gris (8 bits)
+	Black and white (1-bit)	Noir et blanc (1 bit)
+	PNG Out	Sortie PNG
+	JPEG Out	Sortie JPEG
+	BMP Out	Sortie BMP
+	TIFF Out	Sortie TIFF
+	Enter image file name	Entrez le nom du fichier image
+	Nothing selected: no image written.	Rien de sélectionné : aucune image écrite.
+	{} object(s) written to {} ({} × {} pixels).	{} objet(s) écrit(s) dans {} ({} × {} pixels).
+	Set to ByLayer	Définir sur DuCalque
+	Explode and Set Properties	Décomposer et définir les propriétés
+	Edit Attribute in Place	Modifier l'attribut sur place
+	Frame	Cadre
+	Setup	Configuration
+	Setup View	Configurer une vue
+	Setup Drawing	Configurer un dessin
+	Setup Profile	Configurer un profil
+	Enter view scale	Entrez l'échelle de la vue
+	Specify view center	Spécifiez le centre de la vue
+	Enter view name	Entrez le nom de la vue
+	Specify side of viewport to project	Spécifiez le côté de la fenêtre à projeter
+	Specify first point of cutting plane	Spécifiez le premier point du plan de coupe
+	Specify second point of cutting plane	Spécifiez le second point du plan de coupe
+	Specify first point of inclined plane	Spécifiez le premier point du plan incliné
+	Specify second point of inclined plane	Spécifiez le second point du plan incliné
+	Specify side to view from	Spécifiez le côté d'où regarder
+	Specify first corner of viewport	Spécifiez le premier coin de la fenêtre
+	Specify opposite corner of viewport	Spécifiez le coin opposé de la fenêtre
+	Display hidden profile lines on separate layer?	Afficher les lignes de profil cachées sur un calque séparé ?
+	Project profile lines onto a plane?	Projeter les lignes de profil sur un plan ?
+	Delete tangential edges?	Supprimer les arêtes tangentes ?
+	None (PDF file)	Aucun (fichier PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Le texte de cote de {} de haut est trop petit pour être lu dans ce dessin. Tapez DIMSCALE {} pour agrandir {} fois les nouvelles cotes.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Le texte de {} de haut est trop petit pour être lu dans ce dessin. Essayez une hauteur de {} (TEXTSIZE définit la valeur par défaut).
+	(each layout's own)	(celle de chaque présentation)
+	A callout on the selected sheet pointing at the selected view	Un renvoi sur la feuille sélectionnée pointant vers la vue sélectionnée
+	A page setup copied from the selected sheet's layout	Une mise en page copiée de la présentation de la feuille sélectionnée
+	Add Callout	Ajouter un renvoi
+	Callouts: {}	Renvois : {}
+	From Selected Sheet	De la feuille sélectionnée
+	Insert on Selected Sheet	Insérer sur la feuille sélectionnée
+	Named view	Vue nommée
+	Page Setup Override	Remplacement de la mise en page
+	Place View	Placer la vue
+	Position on sheet	Position sur la feuille
+	Remove Property	Supprimer la propriété
+	Sheet Properties	Propriétés de la feuille
+	Sheet Set Fields	Champs du jeu de feuilles
+	Sheet Set Properties	Propriétés du jeu de feuilles
+	Sync Drawings	Synchroniser les dessins
+	Text holding the field, at the position on sheet	Texte contenant le champ, à la position sur la feuille
+	Views and Callouts	Vues et renvois
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	La présentation de chaque feuille devient « numéro titre » ; les champs du jeu, les étiquettes de vue et les renvois prennent les valeurs actuelles du jeu
+	3 Point	3 points
+	Origin	Origine
+	Z	Z
+	Named UCS...	SCU nommés...
+	Center Mark (DIMCEN)	Marque de centre (DIMCEN)
+	Copy Objects to New Layer	Copier des objets sur un nouveau calque
+	Cut with Base Point	Couper avec point de base
+	DXF In	Ouvrir un DXF
+	DXF Out	Enregistrer en DXF
+	Fill	Remplissage
+	Maximize Viewport	Agrandir la fenêtre
+	Minimize Viewport	Réduire la fenêtre
+	Object Selection Filters	Filtres de sélection d'objets
+	Oops	Oups
+	Quick Text	Texte rapide
+	Redefine Attributes	Redéfinir les attributs

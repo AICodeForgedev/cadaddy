@@ -881,6 +881,28 @@ fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
 }
 
 #[test]
+fn english_ui_fonts_cover_the_symbols_the_interface_shows() {
+    // Every non-ASCII character of the English strings (menu paths' ▸, ×, °, …): a face the
+    // English interface loads has it, so none shows as a missing-glyph box (Windows lacked ▸).
+    let letters: BTreeSet<_> = include_str!("ko.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split('\t').nth(1))
+        .flat_map(str::chars)
+        .filter(|c| !c.is_ascii())
+        .collect();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx, "en", false);
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let missing = ctx.fonts_mut(|view| {
+        let mut font = view.fonts.font(&egui::FontFamily::Proportional);
+        letters.iter().filter(|c| !font.characters().contains_key(c)).map(|c| format!("{c} (U+{:04X})", u32::from(*c))).collect::<Vec<_>>()
+    });
+    assert!(missing.is_empty(), "missing English UI glyphs: {}", missing.join(", "));
+}
+
+#[test]
 fn swedish_locales_preferences_and_plural_forms() {
     for tag in ["sv", "sv-SE", "sv_SE.UTF-8", "SV-se", " sv-SE ", "sv-FI"] {
         assert_eq!(locale_language(tag), Some("sv"), "{tag}");

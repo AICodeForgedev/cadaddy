@@ -101,6 +101,20 @@ fn the_file_name_in_its_formats() {
     assert_eq!(f(&mut s, "%fn6%tc1"), "PLAN A.DWG");
     // The default is the file name with its extension.
     assert_eq!(field(&mut s, json!({ "field": "filename", "at": [0, 0] })).1, "Plan A.dwg");
+    // A path from Windows splits the same on every platform and keeps its separators.
+    s.state_mut().unwrap().path = Some(r"D:\jobs\site.v2\Plan B.dxf".into());
+    assert_eq!(f(&mut s, "%fn2"), r"D:\jobs\site.v2\Plan B.dxf");
+    assert_eq!(f(&mut s, "%fn0"), r"D:\jobs\site.v2\Plan B");
+    assert_eq!(f(&mut s, "%fn1"), r"D:\jobs\site.v2");
+    assert_eq!(f(&mut s, "%fn4"), "Plan B");
+    // No extension, a dot in the folder, a name that starts with a dot, the root folder.
+    s.state_mut().unwrap().path = Some("/jobs/site.v2/Plan".into());
+    assert_eq!(f(&mut s, "%fn0"), "/jobs/site.v2/Plan");
+    s.state_mut().unwrap().path = Some("/jobs/.plan".into());
+    assert_eq!(f(&mut s, "%fn4"), ".plan");
+    s.state_mut().unwrap().path = Some("/Plan.dwg".into());
+    assert_eq!(f(&mut s, "%fn1"), "/");
+    assert_eq!(f(&mut s, "%fn0"), "/Plan");
 }
 
 #[test]

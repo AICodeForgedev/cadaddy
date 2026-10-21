@@ -190,7 +190,10 @@ fn tables(w: &mut W, d: &Drawing) {
         w.f(50, s.oblique.to_degrees());
         w.i(71, (i64::from(s.backwards) * 2) | (i64::from(s.upside_down) * 4));
         w.f(42, if s.height > 0.0 { s.height } else { 2.5 });
-        w.s(3, if s.font.is_empty() { "txt" } else { s.font.as_str() });
+        // The built-in font goes out as `txt`, which every reader has (as in the other DXF
+        // versions); R12 keeps no xdata to carry CADaddy's own name.
+        let builtin = s.font.is_empty() || s.font.eq_ignore_ascii_case("CADaddy Stroke");
+        w.s(3, if builtin { "txt" } else { s.font.as_str() });
         w.s(4, &s.big_font);
     }
     w.s(0, "ENDTAB");
@@ -247,7 +250,7 @@ fn valign(a: VAlign) -> i64 {
 fn text_body(w: &mut W, t: &Text, value: &str) -> (i64, i64) {
     w.p(10, t.insert);
     w.f(40, t.height);
-    w.s(1, value);
+    w.s(1, control_codes(value));
     if t.rotation != 0.0 {
         w.f(50, t.rotation.to_degrees());
     }
@@ -259,6 +262,22 @@ fn text_body(w: &mut W, t: &Text, value: &str) -> (i64, i64) {
     }
     w.s(7, &t.style);
     (halign(t.halign), valign(t.valign))
+}
+
+/// The degree, plus/minus and diameter signs as R12's `%%d`, `%%p` and `%%c` (R12 DXF Reference,
+/// TEXT): a dimension's text brought down to TEXT holds the characters, which R12 programs would
+/// otherwise get as `\U+` escapes they don't read.
+fn control_codes(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\u{00B0}' => out.push_str("%%d"),
+            '\u{00B1}' => out.push_str("%%p"),
+            '\u{2300}' | '\u{2205}' => out.push_str("%%c"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The alignment groups; the vertical one is 73 for TEXT and 74 for ATTDEF and ATTRIB (R12 DXF

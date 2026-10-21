@@ -12,6 +12,7 @@ pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
 mod dim;
+pub mod encode;
 mod fill;
 mod hatch;
 pub mod hlr;
@@ -1384,6 +1385,10 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 None => t.value.clone(),
             };
             let (sh, _) = place_text_entity(ctx.d, t, &text);
+            if qtext(ctx.d) {
+                qtext_box(b, ctx, rgb, lw, &[&sh], t.rotation);
+                return;
+            }
             let at = b.list.prims.len();
             b.shaped(ctx, rgb, lw, &sh);
             if !sh.strokes.is_empty() {
@@ -1392,7 +1397,11 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::AttDef(a) => {
             let (sh, _) = place_text_entity(ctx.d, &a.text, &a.tag);
-            b.shaped(ctx, rgb, lw, &sh);
+            if qtext(ctx.d) {
+                qtext_box(b, ctx, rgb, lw, &[&sh], a.text.rotation);
+            } else {
+                b.shaped(ctx, rgb, lw, &sh);
+            }
         }
         EntityKind::MText(t) => {
             if !b.opts.text {
@@ -1807,8 +1816,43 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_d
     }
 }
 
+/// QTEXT (QTEXTMODE 1): text is shown and plotted as the box round it.
+fn qtext(d: &Drawing) -> bool {
+    d.header.i64("QTEXTMODE", 0) != 0
+}
+
+/// The box round placed text, along its rotation: the outline QTEXT draws instead of the text.
+pub fn qtext_outline(shapes: &[&cadaddy_fonts::Shaped], rotation: f64) -> Option<[Vec2; 4]> {
+    let (c, s) = if rotation.is_finite() { (rotation.cos(), rotation.sin()) } else { (1.0, 0.0) };
+    let local = |p: &Vec2| Vec2::new(p.x * c + p.y * s, -p.x * s + p.y * c);
+    let mut bx = Bounds2::EMPTY;
+    for sh in shapes {
+        for p in sh.strokes.iter().flatten().chain(sh.glyphs.iter().flatten().flatten()) {
+            if p.is_finite() {
+                bx.add(local(p));
+            }
+        }
+    }
+    if bx.is_empty() {
+        return None;
+    }
+    let world = |p: Vec2| Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c);
+    Some([world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))])
+}
+
+fn qtext_box(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, shapes: &[&cadaddy_fonts::Shaped], rotation: f64) {
+    if let Some([p0, p1, p2, p3]) = qtext_outline(shapes, rotation) {
+        b.polyline(ctx, rgb, lw, &[p0, p1, p2, p3, p0]);
+    }
+}
+
 fn mtext(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, rgb: Ink, lw: f32) {
     let l = layout_mtext_entity(ctx.d, t);
+    if qtext(ctx.d) {
+        let shapes: Vec<&cadaddy_fonts::Shaped> = l.pieces.iter().map(|p| &p.shaped).collect();
+        qtext_box(b, ctx, rgb, lw, &shapes, t.rotation);
+        return;
+    }
     for q in &l.fields {
         b.tris(ctx, FIELD_INK, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
     }
@@ -2286,6 +2330,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                 let lw = if b.opts.lineweights { lw } else { 0.0 };
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
+                    (None, Some(sh)) if qtext(ctx.d) => qtext_box(b, ctx, ink, lw, &[sh], a.text.rotation),
                     (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
                     (None, None) => {}
                 }

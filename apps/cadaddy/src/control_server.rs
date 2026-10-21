@@ -405,10 +405,19 @@ mod tests {
         let mut replies = Vec::new();
         for line in BufReader::new(c).lines() {
             // A read timeout here means the server kept the connection open.
-            let line = line.unwrap();
+            let Some(line) = closed_or(line) else { break };
             replies.push(serde_json::from_str(&line).unwrap());
         }
         replies
+    }
+
+    /// `r`, or `None` when the server reset the connection: Windows aborts a connection whose
+    /// read ran into its timeout (the idle close), where Unix ends it cleanly.
+    fn closed_or<T>(r: std::io::Result<T>) -> Option<T> {
+        match r {
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => None,
+            r => Some(r.unwrap()),
+        }
     }
 
     /// The echo server under `limits`.
@@ -596,7 +605,7 @@ mod tests {
         c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let t = std::time::Instant::now();
         let mut got = Vec::new();
-        c.read_to_end(&mut got).unwrap();
+        closed_or(c.read_to_end(&mut got));
         assert!(got.is_empty(), "{}", String::from_utf8_lossy(&got));
         assert!(t.elapsed() < Duration::from_secs(4));
     }

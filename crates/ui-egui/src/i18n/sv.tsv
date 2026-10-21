@@ -2442,3 +2442,75 @@ menu	Modify	Ändra
 	Dictionaries are read from:	Ordlistor läses från:
 	Published to {path}	Publicerat till {path}
 	Sheet Set (.sheetset.json)	Arkuppsättning (.sheetset.json)
+	Resolution	Upplösning
+	Colour depth	Färgdjup
+	Colour (24-bit)	Färg (24 bitar)
+	Greys (8-bit)	Gråskala (8 bitar)
+	Black and white (1-bit)	Svartvitt (1 bit)
+	PNG Out	PNG-utdata
+	JPEG Out	JPEG-utdata
+	BMP Out	BMP-utdata
+	TIFF Out	TIFF-utdata
+	Enter image file name	Ange bildfilens namn
+	Nothing selected: no image written.	Inget markerat: ingen bild skrevs.
+	{} object(s) written to {} ({} × {} pixels).	{} objekt skrivna till {} ({} × {} pixlar).
+	Set to ByLayer	Ange till Enligt lager
+	Explode and Set Properties	Lös upp och ange egenskaper
+	Edit Attribute in Place	Redigera attribut på plats
+	Frame	Ram
+	Setup	Inställning
+	Setup View	Ställ in vy
+	Setup Drawing	Ställ in ritning
+	Setup Profile	Ställ in profil
+	Enter view scale	Ange vyns skala
+	Specify view center	Ange vyns mittpunkt
+	Enter view name	Ange vyns namn
+	Specify side of viewport to project	Ange den sida av visningsområdet som ska projiceras
+	Specify first point of cutting plane	Ange snittplanets första punkt
+	Specify second point of cutting plane	Ange snittplanets andra punkt
+	Specify first point of inclined plane	Ange det lutande planets första punkt
+	Specify second point of inclined plane	Ange det lutande planets andra punkt
+	Specify side to view from	Ange sidan att se från
+	Specify first corner of viewport	Ange visningsområdets första hörn
+	Specify opposite corner of viewport	Ange visningsområdets motsatta hörn
+	Display hidden profile lines on separate layer?	Visa dolda profillinjer på ett eget lager?
+	Project profile lines onto a plane?	Projicera profillinjerna på ett plan?
+	Delete tangential edges?	Ta bort tangentiella kanter?
+	None (PDF file)	Ingen (PDF-fil)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Måttext som är {} hög är för liten för att läsas i den här ritningen. Skriv DIMSCALE {} så blir nya mått {} gånger större.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Text som är {} hög är för liten för att läsas i den här ritningen. Prova höjden {} (TEXTSIZE anger standardvärdet).
+	(each layout's own)	(varje layouts egen)
+	A callout on the selected sheet pointing at the selected view	En hänvisning på det valda bladet som pekar på den valda vyn
+	A page setup copied from the selected sheet's layout	Ett utskriftsformat kopierat från det valda bladets layout
+	Add Callout	Lägg till hänvisning
+	Callouts: {}	Hänvisningar: {}
+	From Selected Sheet	Från valt blad
+	Insert on Selected Sheet	Infoga på valt blad
+	Named view	Namngiven vy
+	Page Setup Override	Åsidosätt utskriftsformat
+	Place View	Placera vy
+	Position on sheet	Position på bladet
+	Remove Property	Ta bort egenskap
+	Sheet Properties	Bladegenskaper
+	Sheet Set Fields	Bladuppsättningsfält
+	Sheet Set Properties	Bladuppsättningsegenskaper
+	Sync Drawings	Synkronisera ritningar
+	Text holding the field, at the position on sheet	Text med fältet, på positionen på bladet
+	Views and Callouts	Vyer och hänvisningar
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Varje blads layout får namnet "nummer titel"; bladuppsättningens fält, vyetiketter och hänvisningar får uppsättningens aktuella värden
+	3 Point	3 punkter
+	Origin	Origo
+	Z	Z
+	Named UCS...	Namngivna UCS...
+	Center Mark (DIMCEN)	Centrummarkering (DIMCEN)
+	Copy Objects to New Layer	Kopiera objekt till nytt lager
+	Cut with Base Point	Klipp ut med baspunkt
+	DXF In	Läs in DXF
+	DXF Out	Spara som DXF
+	Fill	Fyllning
+	Maximize Viewport	Maximera vyfönster
+	Minimize Viewport	Minimera vyfönster
+	Object Selection Filters	Objektmarkeringsfilter
+	Oops	Hoppsan
+	Quick Text	Snabbtext
+	Redefine Attributes	Omdefiniera attribut

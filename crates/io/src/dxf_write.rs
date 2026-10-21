@@ -2561,6 +2561,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(files) = d.header.get(dxf_ext::STANDARDS_KEY).and_then(HVal::as_str).filter(|s| !s.is_empty()) {
         xrecords.push((dxf_ext::STANDARDS_KEY, w.h(), dxf_ext::json_chunks(files)));
     }
+    if let Some(data) = d.header.get(dxf_ext::SHEET_SET_KEY).and_then(HVal::as_str).filter(|s| !s.is_empty()) {
+        xrecords.push((dxf_ext::SHEET_SET_KEY, w.h(), dxf_ext::json_chunks(data)));
+    }
     if let Some(json) = dxf_ext::layer_eval_json(d) {
         xrecords.push((dxf_ext::LAYER_EVAL_KEY, w.h(), dxf_ext::json_chunks(&json)));
     }
