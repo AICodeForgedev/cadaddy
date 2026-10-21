@@ -8,7 +8,10 @@
 //! - **layer roles**: what each layer's objects are (wall, door, window, curtain wall, column,
 //!   stair, ceiling grid, fixture, room tag, device, run, ignore), a wall layer naming its type;
 //! - **wall types**: height, thickness, and whether the plan draws both faces (line pairs) or the
-//!   centreline;
+//!   centreline; a type read from a wall type legend also carries its **assembly** (each board,
+//!   stud, insulation… layer with its material, thickness and side; height rule; fire and sound
+//!   ratings);
+//! - **walls**: the type and height of each wall read off the plans (its tag, or a flagged guess);
 //! - **rooms**: per-room ceiling heights and materials, found by their room tag text;
 //! - **door and window families**: blocks by name pattern, sized from the block or its
 //!   attributes, with head and sill heights;
@@ -21,6 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use crate::rules::{DeviceRules, LayerKind, LayerRule, Level, Openings, Rules, layer_match};
 
@@ -69,6 +73,9 @@ pub struct BuildingSpec {
     /// Door and window schedules: their rows, and the tags on the plans that name them.
     #[serde(default, skip_serializing_if = "Schedule::is_empty")]
     pub schedule: Schedule,
+    /// Walls whose type (and height) the plans give: the wall built on each centreline gets them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<WallMark>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -163,6 +170,122 @@ pub struct WallType {
     pub thickness_in: f64,
     #[serde(default)]
     pub from: WallFrom,
+    /// What the wall is made of, from the wall type legend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<Assembly>,
+}
+
+/// Most layers one wall assembly has (hostile input).
+pub const MAX_ASSEMBLY_LAYERS: usize = 64;
+
+/// A wall type's build-up as the wall type legend (partition schedule) gives it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Assembly {
+    /// The tag the plans print on the walls (`1B`, `P3`, `W-4`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    /// The legend's title for it (`1 HOUR RATED CORRIDOR PARTITION`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The layers from side 1's face to side 2's (cavity insulation where the studs are).
+    #[serde(default)]
+    pub layers: Vec<AssemblyLayer>,
+    /// How high the wall goes; none = the wall type's height (or floor to floor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<HeightRule>,
+    /// How far past the ceiling an [`HeightRule::AboveCeiling`] wall goes, inches.
+    #[serde(default = "six", skip_serializing_if = "is_six")]
+    pub above_ceiling_in: f64,
+    /// `1 HR`, `2 HR`; none = not rated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+    /// Sound rating as printed: `STC 50`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acoustic_rating: Option<String>,
+    /// An exterior wall.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl Assembly {
+    /// The overall thickness, inches: every layer but the insulation inside the stud cavity.
+    pub fn thickness_in(&self) -> f64 {
+        self.layers.iter().filter(|l| !l.in_cavity).map(|l| l.thickness_in).sum()
+    }
+}
+
+/// One layer of a wall assembly.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyLayer {
+    /// What it is, in plain words: `5/8" Type X gypsum board`, `3 5/8" 20 ga metal studs @ 16" o.c.`.
+    pub material: String,
+    pub thickness_in: f64,
+    #[serde(default)]
+    pub side: LayerSide,
+    /// `board`, `framing`, `insulation`, `furring`, `masonry`, `sheathing`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// Insulation filling the stud cavity: it takes no thickness of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_cavity: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerSide {
+    /// Side 1's finish (the exterior side of an exterior wall).
+    Side1,
+    /// The studs, masonry or cavity.
+    #[default]
+    Core,
+    Side2,
+}
+
+/// How high a wall type goes, as the legend says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeightRule {
+    /// To the ceiling.
+    Ceiling,
+    /// Past the ceiling by [`Assembly::above_ceiling_in`] (6" usually).
+    AboveCeiling,
+    /// To the underside of the deck or structure above.
+    Deck,
+    /// Full height: floor to the structure above.
+    Full,
+}
+
+impl HeightRule {
+    pub fn text(self, above_in: f64) -> String {
+        match self {
+            HeightRule::Ceiling => "to the ceiling".into(),
+            HeightRule::AboveCeiling => format!("{} above the ceiling", inches(above_in)),
+            HeightRule::Deck => "to the underside of the deck".into(),
+            HeightRule::Full => "full height".into(),
+        }
+    }
+}
+
+/// A wall the plans give the type of: its centreline on the level's plan (drawing units), the
+/// wall type ([`WallType::name`]) and the height its rule gives there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WallMark {
+    pub level: String,
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub wall_type: String,
+    /// Height above the floor, feet; none = the wall type's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+    /// Why the type is a guess (no tag on the wall), when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guess: Option<String>,
+}
+
+fn is_six(v: &f64) -> bool {
+    (*v - 6.0).abs() < 1e-9
 }
 
 /// A room, found by its tag text (`name`, or `number`) on the plan.
@@ -858,7 +981,27 @@ impl BuildingSpec {
         for t in &self.wall_types {
             let height = t.height_ft.map_or("floor to floor".to_string(), |h| format!("{} high", feet(h)));
             let from = if t.from == WallFrom::Centerline { "drawn as centrelines" } else { "drawn as line pairs" };
-            put("wall_types", format!("wall_types/{}", t.name), format!("{}: {} thick, {height}, {from}", t.name, inches(t.thickness_in)));
+            let mut text = format!("{}: {} thick, {height}, {from}", t.name, inches(t.thickness_in));
+            if let Some(a) = &t.assembly {
+                if let Some(h) = a.height {
+                    let _ = write!(text, ", {}", h.text(a.above_ceiling_in));
+                }
+                if !a.layers.is_empty() {
+                    let parts: Vec<&str> = a.layers.iter().map(|l| l.material.as_str()).collect();
+                    let _ = write!(text, "; {}", parts.join(" + "));
+                }
+                for r in [&a.fire_rating, &a.acoustic_rating].into_iter().flatten() {
+                    let _ = write!(text, "; {r}");
+                }
+                if a.external {
+                    text.push_str("; exterior");
+                }
+            }
+            put("wall_types", format!("wall_types/{}", t.name), text);
+        }
+        if !self.walls.is_empty() {
+            let guessed = self.walls.iter().filter(|w| w.guess.is_some()).count();
+            put("walls", "walls".into(), format!("{} walls typed from their tags on the plans, {guessed} guessed (no tag)", self.walls.len()));
         }
         for r in &self.rooms {
             let name = if r.name.trim().is_empty() { r.number.clone().unwrap_or_default() } else { r.name.clone() };
@@ -1053,7 +1196,7 @@ impl BuildingSpec {
             if let LayerKind::Wall { height_ft: Some(h), .. } = rule.kind {
                 let name = format!("Walls {h}'");
                 if !wall_types.iter().any(|t| t.name == name) {
-                    wall_types.push(WallType { name: name.clone(), height_ft: Some(h), thickness_in: 6.0, from: WallFrom::Pairs });
+                    wall_types.push(WallType { name: name.clone(), height_ft: Some(h), thickness_in: 6.0, from: WallFrom::Pairs, assembly: None });
                 }
                 role.wall_type = Some(name);
             }
@@ -1074,6 +1217,7 @@ impl BuildingSpec {
             mep: Mep::default(),
             columns: Vec::new(),
             schedule: Schedule::default(),
+            walls: Vec::new(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -1202,6 +1346,7 @@ impl BuildingSpec {
             ("levels", self.levels.len()),
             ("layers", self.layers.len()),
             ("wall_types", self.wall_types.len()),
+            ("walls", self.walls.len()),
             ("rooms", self.rooms.len()),
             ("families", self.families.len()),
         ] {
@@ -1268,6 +1413,44 @@ impl BuildingSpec {
                 out.push(Issue::error(format!("{at}.thickness_in"), "the thickness must be more than 0 and at most 120 inches"));
             }
             if t.height_ft.is_some_and(|h| !(fin(h) && h > 0.0 && h <= 1000.0)) {
+                out.push(Issue::error(format!("{at}.height_ft"), "the wall height must be more than 0 feet"));
+            }
+            if let Some(a) = &t.assembly {
+                if a.layers.len() > MAX_ASSEMBLY_LAYERS {
+                    out.push(Issue::error(format!("{at}.assembly.layers"), format!("at most {MAX_ASSEMBLY_LAYERS} layers")));
+                }
+                for (j, l) in a.layers.iter().enumerate().take(MAX_ASSEMBLY_LAYERS) {
+                    if !(fin(l.thickness_in) && l.thickness_in > 0.0 && l.thickness_in <= 48.0) {
+                        out.push(Issue::error(
+                            format!("{at}.assembly.layers[{j}].thickness_in"),
+                            "a layer is more than 0 and at most 48 inches thick",
+                        ));
+                    }
+                }
+                if !(fin(a.above_ceiling_in) && (0.0..=120.0).contains(&a.above_ceiling_in)) {
+                    out.push(Issue::error(format!("{at}.assembly.above_ceiling_in"), "from 0 to 120 inches above the ceiling"));
+                }
+                let sum = a.thickness_in();
+                if !a.layers.is_empty() && fin(sum) && (sum - t.thickness_in).abs() > 0.125 {
+                    out.push(Issue::warning(
+                        format!("{at}.assembly"),
+                        format!("its layers add up to {}, the wall type is {} thick", inches(sum), inches(t.thickness_in)),
+                    ));
+                }
+            }
+        }
+        for (i, w) in self.walls.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("walls[{i}]");
+            if self.level(&w.level).is_none() {
+                out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", w.level)));
+            }
+            if !self.wall_types.iter().any(|t| t.name.eq_ignore_ascii_case(&w.wall_type)) {
+                out.push(Issue::error(format!("{at}.wall_type"), format!("there is no wall type named {}", w.wall_type)));
+            }
+            if w.a.iter().chain(&w.b).any(|v| !fin(*v)) || (w.a[0] - w.b[0]).hypot(w.a[1] - w.b[1]) < 1e-9 {
+                out.push(Issue::error(at.clone(), "a wall needs two different ends"));
+            }
+            if w.height_ft.is_some_and(|h| !(fin(h) && h > 0.0 && h <= 1000.0)) {
                 out.push(Issue::error(format!("{at}.height_ft"), "the wall height must be more than 0 feet"));
             }
         }
@@ -1645,7 +1828,7 @@ mod tests {
         let mut s = BuildingSpec::from_rules(&Rules::fallback());
         s.levels[0].sheet = Some("A112".into());
         s.levels[0].elevation_ft = 10.0;
-        s.wall_types.push(WallType { name: "W".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs });
+        s.wall_types.push(WallType { name: "W".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs, assembly: None });
         s.layers[0].wall_type = Some("w".into());
         s.approved.push("LEVELS/level 1".into());
         let d = s.describe();
@@ -1653,6 +1836,53 @@ mod tests {
         assert!(d[0].approved);
         assert_eq!(d[1].text, "*WALL* = full height walls 4 7/8\" thick (line pairs)");
         assert!(!d[1].approved);
+    }
+
+    #[test]
+    fn wall_assemblies_and_marks() {
+        let mut s = BuildingSpec::from_rules(&Rules::fallback());
+        let layer = |material: &str, thickness_in: f64, side: LayerSide, in_cavity: bool| AssemblyLayer {
+            material: material.into(),
+            thickness_in,
+            side,
+            category: String::new(),
+            in_cavity,
+        };
+        let a = Assembly {
+            tag: "1B".into(),
+            layers: vec![
+                layer("5/8\" Type X gypsum board", 0.625, LayerSide::Side1, false),
+                layer("3 5/8\" metal studs", 3.625, LayerSide::Core, false),
+                layer("3 1/2\" batt insulation", 3.5, LayerSide::Core, true),
+                layer("5/8\" Type X gypsum board", 0.625, LayerSide::Side2, false),
+            ],
+            height: Some(HeightRule::AboveCeiling),
+            above_ceiling_in: 6.0,
+            fire_rating: Some("1 HR".into()),
+            acoustic_rating: Some("STC 45".into()),
+            ..Assembly::default()
+        };
+        assert!((a.thickness_in() - 4.875).abs() < 1e-12);
+        s.wall_types.push(WallType { name: "1B".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs, assembly: Some(a) });
+        let level = s.levels[0].name.clone();
+        s.walls.push(WallMark { level: level.clone(), a: [0.0, 0.0], b: [120.0, 0.0], wall_type: "1b".into(), height_ft: Some(9.5), guess: None });
+        assert!(s.check().iter().all(|i| !i.error), "{:?}", s.check());
+        assert_eq!(BuildingSpec::from_json(&s.to_json()), Ok(s.clone()));
+        let d = s.describe();
+        let t = d.iter().find(|x| x.key == "wall_types/1B").map(|x| x.text.clone()).unwrap_or_default();
+        assert!(t.contains("6\" above the ceiling") && t.contains("1 HR") && t.contains("STC 45"), "{t}");
+        // A thickness the layers don't make, a mark on no type, a bad layer: said.
+        s.wall_types[0].thickness_in = 6.0;
+        s.walls.push(WallMark { level, a: [0.0, 0.0], b: [0.0, 0.0], wall_type: "nope".into(), height_ft: Some(f64::NAN), guess: None });
+        if let Some(a) = s.wall_types[0].assembly.as_mut() {
+            a.layers[0].thickness_in = -1.0;
+        }
+        let issues = s.check();
+        for path in
+            ["wall_types[0].assembly", "walls[1].wall_type", "walls[1]", "walls[1].height_ft", "wall_types[0].assembly.layers[0].thickness_in"]
+        {
+            assert!(issues.iter().any(|i| i.path == path), "{path}: {issues:?}");
+        }
     }
 
     #[test]

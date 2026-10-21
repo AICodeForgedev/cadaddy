@@ -5,7 +5,10 @@
 //! (IfcCovering), doors (IfcDoor), windows (IfcWindow), room volumes (IfcSpace) and other meshes
 //! (IfcBuildingElementProxy) — in a project, site, building and one storey per level, each body a
 //! tessellated IfcPolygonalFaceSet in metres. GlobalIds come from the objects' handles, so the
-//! same drawing gives the same ids.
+//! same drawing gives the same ids. A wall whose building spec type has an assembly (from a wall
+//! type legend) carries it: an IfcMaterialLayerSetUsage with one IfcMaterialLayer per board,
+//! stud, insulation… layer, and Pset_WallCommon (Reference, FireRating, AcousticRating,
+//! IsExternal).
 //!
 //! In: every product with a body (walls, slabs, spaces, doors… whatever the file has) as a MESH on
 //! a layer per IFC class (`IFC-Wall`, `IFC-Space`…), tagged with its class, GlobalId and name. The
@@ -504,12 +507,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     levels.sort_by(|a, b| a.1.total_cmp(&b.1));
     // Where each storey's objects are on the sheet: plans drawn side by side (L2's beside L1's)
     // are built over their own plans, and their building spec's base points stack them.
-    let bases: Vec<(String, cadaddy_geom::Vec2)> = d
-        .building_spec
-        .as_deref()
-        .and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok())
-        .map(|sp| cadaddy_walk3d::level_bases(d, &sp.to_rules()))
-        .unwrap_or_default();
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    let bases: Vec<(String, cadaddy_geom::Vec2)> = spec.as_ref().map(|sp| cadaddy_walk3d::level_bases(d, &sp.to_rules())).unwrap_or_default();
     let base_of = |level: &str| bases.iter().find(|(n, _)| n == level).map_or(cadaddy_geom::Vec2::ZERO, |(_, b)| *b);
     let storey_of = |it: &Item| -> usize {
         if let Some(l) = &it.kind.level
@@ -578,6 +577,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let mut schedules: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
+    // Walls by their spec wall type (its index), for their materials and properties.
+    let mut typed: Vec<(usize, usize)> = Vec::new();
     for it in &items {
         let si = storey_of(it);
         let Some(&(_, place_parent, sz, _, base)) = storeys.get(si) else { continue };
@@ -625,6 +626,12 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             }
         };
         let product = o.add(line);
+        if kd.class == Class::Wall
+            && let Some(sp) = &spec
+            && let Some(i) = wall_type_of(it.e).and_then(|n| sp.wall_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n)))
+        {
+            typed.push((i, product));
+        }
         if matches!(kd.class, Class::Wall | Class::Door | Class::Window) {
             let (lo, hi) = it.mesh.vertices.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(lo, hi), v| {
                 let p = [(v.x - base.x) * k, (v.y - base.y) * k, (v.z - sz) * k];
@@ -724,6 +731,11 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         o.add(format!("IFCRELVOIDSELEMENT('{}',$,$,$,#{},#{opening})", id(fill.handle, 11), wall.product));
         o.add(format!("IFCRELFILLSELEMENT('{}',$,$,$,#{opening},#{})", id(fill.handle, 12), fill.product));
     }
+    if let Some(sp) = &spec {
+        // Inches → the file's length unit.
+        let inch = sp.units_per_foot / 12.0 * k;
+        wall_materials(&mut o, sp, &typed, inch, &|n, salt| id(n, salt));
+    }
     for (product, set_name, qs, handle) in quantities {
         let ids: Vec<usize> = qs.into_iter().map(|q| o.add(q)).collect();
         let set = o.add(format!("IFCELEMENTQUANTITY('{}',$,'{set_name}',$,'BaseQuantities',{})", id(handle, 8), refs(&ids)));
@@ -763,6 +775,87 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     }
     s.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
     Ok(s.into_bytes())
+}
+
+/// The wall type WALLGEN gave a wall (`type:<name>` after its source).
+fn wall_type_of(e: &Entity) -> Option<String> {
+    tag_strings(e, "CADADDY_WALLGEN")?.iter().skip(3).find_map(|v| v.strip_prefix("type:")).map(str::to_string)
+}
+
+/// Each wall type with an assembly that walls were written with: its materials, its layer set
+/// (one IfcMaterialLayer per layer, cavity insulation inside the studs' thickness), the usage
+/// (centred on the wall's axis) its walls are associated with, and Pset_WallCommon. `typed`: (wall
+/// type index, wall product); `inch`: the file's length unit per inch.
+fn wall_materials(o: &mut Out, sp: &cadaddy_walk3d::BuildingSpec, typed: &[(usize, usize)], inch: f64, id: &dyn Fn(u64, u64) -> String) {
+    let mut materials: HashMap<String, usize> = HashMap::new();
+    let mut types: Vec<usize> = typed.iter().map(|(t, _)| *t).collect();
+    types.sort_unstable();
+    types.dedup();
+    for ti in types {
+        let Some(t) = sp.wall_types.get(ti) else { continue };
+        let Some(a) = &t.assembly else { continue };
+        let walls: Vec<usize> = typed.iter().filter(|(i, _)| *i == ti).map(|(_, p)| *p).collect();
+        let key = hash(&format!("walltype:{}", t.name));
+        let layers = a.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).filter(|l| l.thickness_in.is_finite() && l.thickness_in > 0.0);
+        // Cavity insulation shares the studs' thickness: the studs keep what it leaves.
+        let mut stack: Vec<(&cadaddy_walk3d::AssemblyLayer, f64)> = Vec::new();
+        for l in layers {
+            if l.in_cavity {
+                if let Some(studs) = stack.iter_mut().rev().find(|(s, _)| s.side == cadaddy_walk3d::LayerSide::Core && !s.in_cavity) {
+                    let take = l.thickness_in.min(studs.1);
+                    studs.1 -= take;
+                    stack.push((l, take));
+                }
+                continue;
+            }
+            stack.push((l, l.thickness_in));
+        }
+        let mut ids = Vec::new();
+        // Every layer is written, even studs a batt fills (IFC allows a layer no thickness).
+        for (l, th) in stack {
+            let m = match materials.get(&l.material) {
+                Some(m) => *m,
+                None => {
+                    let cat = if l.category.is_empty() { "$".to_string() } else { step_str(&l.category) };
+                    let m = o.add(format!("IFCMATERIAL({},$,{cat})", step_str(&l.material)));
+                    materials.insert(l.material.clone(), m);
+                    m
+                }
+            };
+            let side = match l.side {
+                cadaddy_walk3d::LayerSide::Side1 => "Side 1",
+                cadaddy_walk3d::LayerSide::Core => "Core",
+                cadaddy_walk3d::LayerSide::Side2 => "Side 2",
+            };
+            let cat = if l.category.is_empty() { "$".to_string() } else { step_str(&l.category) };
+            ids.push(o.add(format!("IFCMATERIALLAYER(#{m},{},.F.,{},'{side}',{cat},$)", real(th * inch), step_str(&l.material))));
+        }
+        if ids.is_empty() || walls.is_empty() {
+            continue;
+        }
+        let total: f64 = a.layers.iter().filter(|l| !l.in_cavity && l.thickness_in.is_finite()).map(|l| l.thickness_in).sum();
+        let label = if a.tag.is_empty() { t.name.clone() } else { a.tag.clone() };
+        let set = o.add(format!(
+            "IFCMATERIALLAYERSET({},{},{})",
+            refs(&ids),
+            step_str(&format!("Wall type {label}")),
+            if a.description.is_empty() { "$".to_string() } else { step_str(&a.description) }
+        ));
+        let usage = o.add(format!("IFCMATERIALLAYERSETUSAGE(#{set},.AXIS2.,.POSITIVE.,{},$)", real(-total * inch / 2.0)));
+        o.add(format!("IFCRELASSOCIATESMATERIAL('{}',$,$,$,{},#{usage})", id(key, 13), refs(&walls)));
+        // Pset_WallCommon: what the legend says about the type.
+        let mut props = vec![o.add(format!("IFCPROPERTYSINGLEVALUE('Reference',$,IFCIDENTIFIER({}),$)", step_str(&label)))];
+        if let Some(r) = &a.fire_rating {
+            props.push(o.add(format!("IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL({}),$)", step_str(r))));
+        }
+        if let Some(r) = &a.acoustic_rating {
+            props.push(o.add(format!("IFCPROPERTYSINGLEVALUE('AcousticRating',$,IFCLABEL({}),$)", step_str(r))));
+        }
+        let ext = if a.external { ".T." } else { ".F." };
+        props.push(o.add(format!("IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN({ext}),$)")));
+        let pset = o.add(format!("IFCPROPERTYSET('{}',$,'Pset_WallCommon',$,{})", id(key, 14), refs(&props)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,{},#{pset})", id(key, 15), refs(&walls)));
+    }
 }
 
 // ---------------- what comes in ----------------
