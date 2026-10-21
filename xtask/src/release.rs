@@ -13,7 +13,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 
 #[path = "../../apps/cadaddy/src/relsig.rs"]
-mod relsig;
+pub mod relsig;
 
 /// The environment variable naming the secret key file.
 pub const KEY_ENV: &str = "CADADDY_RELEASE_KEY";
