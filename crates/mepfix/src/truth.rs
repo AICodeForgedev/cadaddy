@@ -64,6 +64,7 @@ pub struct Truth {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
     pub sheets: Vec<Sheet>,
+    pub soffits: Vec<Soffit>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure), computed from the geometry; `planted` ones were put there on purpose.
     pub clashes: Vec<Clash>,
@@ -124,6 +125,10 @@ pub struct Room {
     pub max_ft: [f64; 2],
     /// `None`: open to structure.
     pub ceiling: Option<Ceiling>,
+    /// Depth of the plenum (space between the ceiling and the structure above), feet.
+    /// Only meaningful when `ceiling` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plenum_ft: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -133,6 +138,28 @@ pub struct Ceiling {
     /// `ACT` (acoustic tile in a grid) or `GYP` (gypsum board).
     pub kind: String,
     /// The tag as the reflected ceiling plan prints it.
+    pub tag: String,
+    /// ACT grid tile size: `[across, along]` in feet (e.g. `[2.0, 4.0]` for 2×4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_ft: Option<[f64; 2]>,
+}
+
+/// A soffit or bulkhead: a dropped section of ceiling (lower than the room's main ceiling),
+/// typically concealing ductwork or structure.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Soffit {
+    pub id: String,
+    pub level: String,
+    pub room: String,
+    /// Bottom of the soffit above the floor, feet.
+    pub height_ft: f64,
+    /// Width (across the run) and length (along it), feet.
+    pub width_ft: f64,
+    pub length_ft: f64,
+    /// Min/max corners in building feet.
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// The tag on the RCP.
     pub tag: String,
 }
 
