@@ -349,6 +349,7 @@ pub fn design_walls(t: &mut Truth, ws: &WallStyle, r: &mut Rng) {
                 rooms: beside.iter().map(|rm| rm.number.clone()).collect(),
                 openings: Vec::new(),
                 tags: Vec::new(),
+                layout_from: None,
             });
         }
         // Doors: one into each room from the corridor (two toilet rooms share a bay), and the

@@ -14,12 +14,14 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bore;
 pub mod ceilasm_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
 pub mod clash;
 pub mod design;
 pub mod draw;
+pub mod framing;
 pub mod layout;
 pub mod rng;
 pub mod score;
@@ -78,6 +80,7 @@ fn add_walls(t: &mut Truth, st: &mut style::Style) {
     let mut r = Rng::new(t.seed ^ 0x5741_4C4C_5459_5045).fork(5);
     st.walls = walls::WallStyle::new(&mut r);
     walls::design_walls(t, &st.walls, &mut r);
+    framing::choose_layouts(t);
 }
 
 /// The ceiling types, soffit and head of wall details and the soffits they detail, from a random
