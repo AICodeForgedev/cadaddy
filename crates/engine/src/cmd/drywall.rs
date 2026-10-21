@@ -669,10 +669,10 @@ mod tests {
     fn board_layer_count_works() {
         let asm = Assembly {
             layers: vec![
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false },
-                AssemblyLayer { material: "3 5/8\" metal studs".into(), thickness_in: 3.625, side: LayerSide::Core, category: "framing".into(), in_cavity: false },
-                AssemblyLayer { material: "batt insulation".into(), thickness_in: 3.5, side: LayerSide::Core, category: "insulation".into(), in_cavity: true },
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side2, category: "board".into(), in_cavity: false },
+                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false, spacing_in: None },
+                AssemblyLayer { material: "3 5/8\" metal studs".into(), thickness_in: 3.625, side: LayerSide::Core, category: "framing".into(), in_cavity: false, spacing_in: None },
+                AssemblyLayer { material: "batt insulation".into(), thickness_in: 3.5, side: LayerSide::Core, category: "insulation".into(), in_cavity: true, spacing_in: None },
+                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side2, category: "board".into(), in_cavity: false, spacing_in: None },
             ],
             ..Assembly::default()
         };
@@ -685,7 +685,7 @@ mod tests {
             tag: "A".into(),
             description: "1 Hour Rated Partition".into(),
             layers: vec![
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false },
+                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false, spacing_in: None },
             ],
             fire_rating: Some("1 HR".into()),
             ..Assembly::default()
