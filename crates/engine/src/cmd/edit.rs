@@ -162,7 +162,12 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({ "undone": labels, "message": labels.join(", ").to_string() }))
         }
         UndoMode::Mark => {
-            s.state_mut()?.undo_mark();
+            // A mark inside an open group would name a state the group is about to merge away
+            // (UNDO Back then found no mark and undid everything): the group ends first, as it
+            // does for UNDO and Back.
+            let st = s.state_mut()?;
+            st.end_undo_group();
+            st.undo_mark();
             undo_state(s, "Mark set")
         }
         UndoMode::Back => undo_back(s, on_param(p, "confirm").unwrap_or(true)),

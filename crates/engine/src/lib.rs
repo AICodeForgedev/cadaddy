@@ -1436,14 +1436,28 @@ impl Session {
             (Some(m), Ok(_)) => Err(EngineError::Other(m)),
             (_, r) => r,
         };
-        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed.
-        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing {
+        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed. Undo
+        // and redo restore a drawing as it was, already consistent: the follow-ups (associative
+        // dimensions, groups, tables…) would take the restored objects for moved ones and "fix"
+        // them (redo dropped an associative dimension's links: undofuzz).
+        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing && !moves_through_history(spec.id) {
             self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
         }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
         };
+        // A refused command that took the drawing for writing (copy on write) without changing it
+        // gets the very same drawing back, so it leaves no undo step: an empty step made the
+        // next U do nothing (layer.delete of layer 0, layer.new of a name in use: undofuzz).
+        if result.is_err()
+            && let Some((doc, _, uid)) = &before
+            && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
+            && !Arc::ptr_eq(doc, &st.doc)
+            && **doc == *st.doc
+        {
+            st.doc = Arc::clone(doc);
+        }
         let grouped = self.lisp_groups_undo();
         if spec.undoable
             && let Some((doc, sel, uid)) = before
@@ -1927,7 +1941,9 @@ impl Session {
         if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
             self.echo(m);
         }
-        self.after_command(Some(&run.before), None, true);
+        if !moves_through_history(&run.id) {
+            self.after_command(Some(&run.before), None, true);
+        }
         // A transparent command's changes belong to the command it ran inside, and a command a
         // LISP routine ran belongs to the routine's single undo step.
         if self.suspended.is_some() || self.lisp_groups_undo() {
@@ -2564,6 +2580,11 @@ impl Session {
             "settings": self.drafting_settings(),
         })
     }
+}
+
+/// The commands that move through the undo history (they restore drawings as they were).
+fn moves_through_history(id: &str) -> bool {
+    matches!(id, "undo" | "u" | "redo" | "mredo")
 }
 
 /// Typed text that is LISP: `(expression)` or `!variable`.
