@@ -426,3 +426,155 @@ fn electrical_schedule_sheet_has_content() {
     assert!(dt.iter().any(|(s, _)| s.contains("LIGHT FIXTURE SCHEDULE")), "no light fixture schedule on E-601");
     assert!(dt.iter().any(|(s, _)| s.contains("PANEL")), "no panel schedule on E-601");
 }
+
+// ---- Electrical device reader tests ---------------------------------------------------------
+
+use cadaddy_mepfix::elec_reader;
+use cadaddy_mepfix::sheet_reader;
+
+#[test]
+fn elec_reader_perfect_scorer_round_trips() {
+    // A perfect reader should score perfectly.
+    let t = truth_for(5);
+    let perfect = elec_reader::perfect_devices(&t);
+    let s = elec_reader::score_devices(&t, &perfect, 5.0);
+    assert_eq!(s.true_positives, t.elec_devices.len(), "TP should match truth device count");
+    assert_eq!(s.false_positives, 0, "no FP for perfect reader");
+    assert_eq!(s.false_negatives, 0, "no FN for perfect reader");
+    assert!((s.precision - 1.0).abs() < 1e-9, "perfect precision: {}", s.precision);
+    assert!((s.recall - 1.0).abs() < 1e-9, "perfect recall: {}", s.recall);
+    assert!(s.height_mae_in < 1e-9, "perfect height MAE: {}", s.height_mae_in);
+    assert!((s.kind_accuracy - 1.0).abs() < 1e-9, "perfect kind accuracy: {}", s.kind_accuracy);
+}
+
+#[test]
+fn elec_reader_scores_degraded_input() {
+    // Half the devices missing, the rest offset — precision and recall should reflect this.
+    let t = truth_for(4);
+    let mut half: Vec<_> = elec_reader::perfect_devices(&t).into_iter().step_by(2).collect();
+    // Offset their heights.
+    for d in &mut half {
+        d.mounting_in += 6.0;
+    }
+    // Add a ghost device.
+    let mut ghost = half[0].clone();
+    ghost.at_ft = [500.0, 500.0, 10.0];
+    half.push(ghost);
+
+    let s = elec_reader::score_devices(&t, &half, 5.0);
+    assert!(s.recall < 0.8 && s.recall > 0.2, "degraded recall: {}", s.recall);
+    assert!(s.precision < 1.0, "degraded precision: {}", s.precision);
+    // Height MAE should be at least 6 (some matched pairs are offset, some may not match at all).
+    assert!(s.height_mae_in >= 5.9, "height MAE should be ~6: {}", s.height_mae_in);
+}
+
+#[test]
+fn elec_reader_reads_fixture_set_dxf() {
+    // Generate a fixture set, read the DXFs through the reader pipeline.
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+
+    // Collect E-sheet DXF data.
+    let dxf_data: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter(|s| s.discipline == "E" && s.level.is_some())
+        .filter_map(|s| {
+            set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))
+        })
+        .collect();
+    assert!(!dxf_data.is_empty(), "no E-sheet DXFs");
+
+    // Build the sheet map for alignment.
+    let all_dxf: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
+        .collect();
+    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
+
+    // Read devices.
+    let (found, _found_panels) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
+
+    // We should find some devices (not perfect, but nonzero).
+    assert!(!found.is_empty(), "no devices found from E-sheets");
+
+    // Score against truth.
+    let s = elec_reader::score_devices(t, &found, 8.0); // generous tolerance for diagrammatic offsets
+    // The reader should find at least some devices (recall > 0).
+    assert!(s.recall > 0.0, "recall is zero: {:?}", s);
+    // Precision should be nonzero.
+    assert!(s.precision > 0.0, "precision is zero: {:?}", s);
+
+    // Report.
+    eprintln!(
+        "elec_reader seed=3: TP={}, FP={}, FN={}, P={:.2}, R={:.2}, H_MAE={:.1}in, kind={:.2}",
+        s.true_positives, s.false_positives, s.false_negatives,
+        s.precision, s.recall, s.height_mae_in, s.kind_accuracy
+    );
+}
+
+#[test]
+fn elec_reader_3d_output_covers_all_kinds() {
+    let t = truth_for(5);
+    let perfect = elec_reader::perfect_devices(&t);
+    let shapes = elec_reader::build_3d(&perfect);
+    assert_eq!(shapes.len(), perfect.len());
+
+    let layers: BTreeSet<String> = shapes.iter().map(|s| s.layer.clone()).collect();
+    // We should have layers for multiple device kinds.
+    assert!(layers.len() >= 3, "too few 3D layers: {layers:?}");
+    // Every shape has nonzero dimensions.
+    for s in &shapes {
+        assert!(s.box_in[0] > 0.0 && s.box_in[1] > 0.0 && s.box_in[2] > 0.0, "{} has zero box", s.kind);
+    }
+}
+
+#[test]
+fn elec_reader_zone_containment_for_non_arch_devices() {
+    let t = truth_for(5);
+    let perfect = elec_reader::perfect_devices(&t);
+    let s = elec_reader::score_devices(&t, &perfect, 5.0);
+    // For perfect devices, zone containment should be 1.0 (the zone contains the truth).
+    let non_arch = t.elec_devices.iter().filter(|d| !d.arch_positioned).count();
+    if non_arch > 0 {
+        assert!(
+            (s.zone_containment - 1.0).abs() < 1e-9,
+            "zone containment should be 1.0 for perfect devices: {}",
+            s.zone_containment
+        );
+    }
+}
+
+#[test]
+fn elec_reader_classify_legend_works() {
+    assert_eq!(elec_reader::classify_legend("A", "2X4 RECESSED TROFFER").as_deref(), Some("light_fixture"));
+    assert_eq!(elec_reader::classify_legend("S", "LIGHT SWITCH").as_deref(), Some("switch"));
+    assert_eq!(elec_reader::classify_legend("R", "RECEPTACLE").as_deref(), Some("receptacle"));
+    assert_eq!(elec_reader::classify_legend("D", "DATA/TELECOM OUTLET").as_deref(), Some("data_outlet"));
+    assert_eq!(elec_reader::classify_legend("ES-1", "EXIT SIGN, LED").as_deref(), Some("exit_sign"));
+    assert_eq!(elec_reader::classify_legend("EM-1", "EMERGENCY LIGHT").as_deref(), Some("emergency_light"));
+    assert_eq!(elec_reader::classify_legend("FB", "FLOOR BOX").as_deref(), Some("floor_box"));
+    assert_eq!(elec_reader::classify_legend("JB", "JUNCTION BOX").as_deref(), Some("junction_box"));
+    assert_eq!(elec_reader::classify_legend("DS", "DISCONNECT SWITCH").as_deref(), Some("disconnect"));
+}
+
+#[test]
+fn elec_reader_default_heights_are_correct() {
+    // Verify the default mounting rules match what the fixture generator produces.
+    let t = truth_for(2);
+    for d in &t.elec_devices {
+        match d.kind.as_str() {
+            "receptacle" | "data_outlet" => {
+                assert_eq!(d.mounting_in, 18.0, "{} {} should be 18\" AFF", d.kind, d.id);
+            }
+            "switch" => {
+                assert_eq!(d.mounting_in, 46.0, "switch {} should be 46\"", d.id);
+            }
+            "disconnect" => {
+                assert_eq!(d.mounting_in, 60.0, "disconnect {} should be 60\"", d.id);
+            }
+            _ => {}
+        }
+    }
+}

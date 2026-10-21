@@ -56,6 +56,11 @@ enum Class {
     Duct,
     Pipe,
     Conduit,
+    LightFixture,
+    Outlet,
+    SwitchingDevice,
+    JunctionBox,
+    ElectricDistributionBoard,
 }
 
 impl Class {
@@ -80,6 +85,11 @@ impl Class {
             Class::Duct => ("IfcDuctSegment", "RIGIDSEGMENT"),
             Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
             Class::Conduit => ("IfcCableCarrierSegment", "CONDUITSEGMENT"),
+            Class::LightFixture => ("IfcLightFixture", "NOTDEFINED"),
+            Class::Outlet => ("IfcOutlet", "POWEROUTLET"),
+            Class::SwitchingDevice => ("IfcSwitchingDevice", "TOGGLESWITCH"),
+            Class::JunctionBox => ("IfcJunctionBox", "NOTDEFINED"),
+            Class::ElectricDistributionBoard => ("IfcElectricDistributionBoard", "DISTRIBUTIONBOARD"),
         }
     }
 
@@ -104,6 +114,11 @@ impl Class {
             "DuctSegment" => Class::Duct,
             "PipeSegment" => Class::Pipe,
             "CableCarrierSegment" => Class::Conduit,
+            "LightFixture" => Class::LightFixture,
+            "Outlet" => Class::Outlet,
+            "SwitchingDevice" => Class::SwitchingDevice,
+            "JunctionBox" => Class::JunctionBox,
+            "ElectricDistributionBoard" => Class::ElectricDistributionBoard,
             _ => return None,
         })
     }
@@ -151,6 +166,11 @@ fn class_of(e: &Entity) -> Kind {
                 Some("duct") => Class::Duct,
                 Some("pipe") => Class::Pipe,
                 Some("conduit") => Class::Conduit,
+                Some("light_fixture") => Class::LightFixture,
+                Some("outlet") | Some("receptacle") | Some("data_outlet") | Some("floor_box") => Class::Outlet,
+                Some("switch") | Some("disconnect") => Class::SwitchingDevice,
+                Some("junction_box") => Class::JunctionBox,
+                Some("panel") | Some("transformer") => Class::ElectricDistributionBoard,
                 _ => Class::Proxy,
             },
             _ => Class::Proxy,
