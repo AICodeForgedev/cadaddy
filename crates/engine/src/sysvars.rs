@@ -308,6 +308,7 @@ const READ_HEADER_VARS: &[&str] = &[
     "PROJMODE",
     "PSLTSCALE",
     "REVCLOUDARCLEN",
+    "SETBYLAYERMODE",
     "SNAPANG",
     "SNAPBASE",
     "SNAPSTYL",
@@ -330,6 +331,9 @@ const READ_HEADER_VARS: &[&str] = &[
 fn header_default(n: &str) -> Option<Value> {
     match n {
         "HPGAPTOL" => Some(json!(0.0)),
+        // What SETBYLAYER changes: 1 linetype, 2 lineweight, 4 material, 8 colour, 16 plot style,
+        // 32 ByBlock to ByLayer too, 64 inside blocks, 128 transparency (default: all).
+        "SETBYLAYERMODE" => Some(json!(255)),
         // 3DWALK / 3DFLY: drawing units a step takes, and steps a second.
         "STEPSIZE" => Some(json!(6.0)),
         "STEPSPERSEC" => Some(json!(2.0)),

@@ -234,10 +234,12 @@ pub fn entity_common(w: &mut ObjWriter, r: &Rec, head: &EntityHead, names: &Hand
     if w.at_least(Version::R2013) {
         w.d.b(false);
     }
-    // R2000: no links when the previous and next entities are the handles just below and above
-    // (spec §20.4.1), which a lone entity's are taken to be.
+    // R2000: no links only when the previous and next entities are the handles just below and
+    // above (spec §20.4.1). The first, last or only entity of a block stores its null links:
+    // readers take "no links" to mean handle − 1 and handle + 1, and the ODA's rejects the file
+    // when those are other objects.
     let h = w.handle;
-    let links = head.links.filter(|(p, n)| p.is_some_and(|p| p.checked_add(1) != Some(h)) || n.is_some_and(|n| h.checked_add(1) != Some(n)));
+    let links = head.links.filter(|(p, n)| p.and_then(|p| p.checked_add(1)) != Some(h) || h.checked_add(1) != *n);
     if !w.at_least(Version::R2004) {
         w.d.b(links.is_none());
     }

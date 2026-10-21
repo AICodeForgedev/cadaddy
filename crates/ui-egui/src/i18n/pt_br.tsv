@@ -2441,3 +2441,75 @@
 	Dictionaries are read from:	Os dicionários são lidos de:
 	Published to {path}	Publicado em {path}
 	Sheet Set (.sheetset.json)	Conjunto de folhas (.sheetset.json)
+	Resolution	Resolução
+	Colour depth	Profundidade de cor
+	Colour (24-bit)	Cor (24 bits)
+	Greys (8-bit)	Tons de cinza (8 bits)
+	Black and white (1-bit)	Preto e branco (1 bit)
+	PNG Out	Saída PNG
+	JPEG Out	Saída JPEG
+	BMP Out	Saída BMP
+	TIFF Out	Saída TIFF
+	Enter image file name	Digite o nome do arquivo de imagem
+	Nothing selected: no image written.	Nada selecionado: nenhuma imagem gravada.
+	{} object(s) written to {} ({} × {} pixels).	{} objeto(s) gravado(s) em {} ({} × {} pixels).
+	Set to ByLayer	Definir como PorCamada
+	Explode and Set Properties	Decompor e definir propriedades
+	Edit Attribute in Place	Editar atributo no local
+	Frame	Moldura
+	Setup	Configurar
+	Setup View	Configurar vista
+	Setup Drawing	Configurar desenho
+	Setup Profile	Configurar perfil
+	Enter view scale	Informe a escala da vista
+	Specify view center	Especifique o centro da vista
+	Enter view name	Informe o nome da vista
+	Specify side of viewport to project	Especifique o lado da viewport a projetar
+	Specify first point of cutting plane	Especifique o primeiro ponto do plano de corte
+	Specify second point of cutting plane	Especifique o segundo ponto do plano de corte
+	Specify first point of inclined plane	Especifique o primeiro ponto do plano inclinado
+	Specify second point of inclined plane	Especifique o segundo ponto do plano inclinado
+	Specify side to view from	Especifique o lado de onde olhar
+	Specify first corner of viewport	Especifique o primeiro canto da viewport
+	Specify opposite corner of viewport	Especifique o canto oposto da viewport
+	Display hidden profile lines on separate layer?	Exibir as linhas de perfil ocultas em uma camada separada?
+	Project profile lines onto a plane?	Projetar as linhas de perfil em um plano?
+	Delete tangential edges?	Excluir as arestas tangentes?
+	None (PDF file)	Nenhum (arquivo PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	O texto da cota com {} de altura é pequeno demais para ser lido neste desenho. Digite DIMSCALE {} para deixar as novas cotas {} vezes maiores.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	O texto com {} de altura é pequeno demais para ser lido neste desenho. Experimente uma altura de {} (TEXTSIZE define o padrão).
+	(each layout's own)	(a própria de cada layout)
+	A callout on the selected sheet pointing at the selected view	Um chamado na folha selecionada apontando para a vista selecionada
+	A page setup copied from the selected sheet's layout	Uma configuração de página copiada do layout da folha selecionada
+	Add Callout	Adicionar chamado
+	Callouts: {}	Chamados: {}
+	From Selected Sheet	Da folha selecionada
+	Insert on Selected Sheet	Inserir na folha selecionada
+	Named view	Vista nomeada
+	Page Setup Override	Substituição da configuração de página
+	Place View	Posicionar vista
+	Position on sheet	Posição na folha
+	Remove Property	Remover propriedade
+	Sheet Properties	Propriedades da folha
+	Sheet Set Fields	Campos do conjunto de folhas
+	Sheet Set Properties	Propriedades do conjunto de folhas
+	Sync Drawings	Sincronizar desenhos
+	Text holding the field, at the position on sheet	Texto contendo o campo, na posição na folha
+	Views and Callouts	Vistas e chamados
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	O layout de cada folha passa a ser "número título"; os campos do conjunto, os rótulos de vista e os chamados assumem os valores atuais do conjunto
+	3 Point	3 pontos
+	Origin	Origem
+	Z	Z
+	Named UCS...	UCS nomeados...
+	Center Mark (DIMCEN)	Marca de centro (DIMCEN)
+	Copy Objects to New Layer	Copiar objetos para nova camada
+	Cut with Base Point	Recortar com ponto base
+	DXF In	Abrir DXF
+	DXF Out	Salvar como DXF
+	Fill	Preenchimento
+	Maximize Viewport	Maximizar viewport
+	Minimize Viewport	Minimizar viewport
+	Object Selection Filters	Filtros de seleção de objetos
+	Oops	Restaurar apagados
+	Quick Text	Texto rápido
+	Redefine Attributes	Redefinir atributos

@@ -1,23 +1,23 @@
 # Parity checklist
 
-> **Generated:** 2026-10-18 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-21 by `cargo xtask parity`. Do not edit by hand.
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 298 / 491 items (61%)** · 465 registered commands.
+**Menu breadth: 364 / 491 items (74%)** · 744 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
-| File | 22 | 13 | 59% |
-| Edit | 13 | 11 | 85% |
-| View | 75 | 40 | 53% |
-| Insert | 11 | 6 | 55% |
-| Format | 27 | 25 | 93% |
-| Tools | 85 | 62 | 73% |
-| Draw | 87 | 55 | 63% |
+| File | 22 | 14 | 64% |
+| Edit | 13 | 12 | 92% |
+| View | 75 | 54 | 72% |
+| Insert | 11 | 8 | 73% |
+| Format | 27 | 26 | 96% |
+| Tools | 85 | 70 | 82% |
+| Draw | 87 | 77 | 89% |
 | Dimension | 28 | 28 | 100% |
-| Modify | 113 | 55 | 49% |
-| Window | 22 | 3 | 14% |
+| Modify | 113 | 71 | 63% |
+| Window | 22 | 4 | 18% |
 | Help | 8 | 0 | 0% |
 
 ## Not yet covered
@@ -29,27 +29,17 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - File > Export Layout to Model...
 - File > Package Drawing...
 - File > DWG Compare...
-- File > Markup Import...
 - File > Share...
 - Edit > Undo Group of commands
-- Edit > Cut with Base Point
-- View > Pan > Point
 - View > Orbit > Constrained Orbit
 - View > Orbit > Free Orbit
 - View > Camera > Adjust Distance
 - View > Camera > Swivel
 - View > Viewports > Named Viewports...
 - View > 3D Views > Viewpoint
-- View > 3D Views > Plan View > Current UCS
 - View > 3D Views > Plan View > Named UCS
 - View > Hide
-- View > Visual Styles > 2D Wireframe
-- View > Visual Styles > Wireframe
-- View > Visual Styles > Hidden
-- View > Visual Styles > Realistic
 - View > Visual Styles > Conceptual
-- View > Visual Styles > Shaded
-- View > Visual Styles > Shaded with Edges
 - View > Visual Styles > Shades of Gray
 - View > Visual Styles > Sketchy
 - View > Visual Styles > X-Ray
@@ -58,37 +48,20 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - View > Render > Light > New Distant Light
 - View > Render > Light > Light Glyphs
 - View > Render > Materials Browser
-- View > UCS Icon > On
-- View > UCS Icon > Origin
 - View > UCS Icon > Properties...
-- View > ViewCube > On
 - View > ViewCube > Settings
-- View > Attribute Display > Normal
-- View > Attribute Display > On
-- View > Attribute Display > Off
 - View > Lights
 - View > Enter Full Screen
-- Insert > PDF Underlay...
-- Insert > Field...
 - Insert > Layout > Layout from Template...
 - Insert > ACIS File...
 - Insert > Drawing Exchange Binary...
-- Format > Transparency
 - Format > Thickness
-- Tools > Spelling
 - Tools > Inquiry > Volume
-- Tools > Update Fields
 - Tools > Edit Xref in Place
-- Tools > New UCS > World
 - Tools > New UCS > Face
-- Tools > New UCS > View
-- Tools > New UCS > Origin
 - Tools > New UCS > Z Axis Vector
-- Tools > New UCS > 3 Point
 - Tools > New UCS > X
 - Tools > New UCS > Y
-- Tools > New UCS > Z
-- Tools > Named UCS...
 - Tools > Customize > Interface (CUI)...
 - Tools > Customize > Edit Command Aliases (PGP)...
 - Tools > Import Settings
@@ -99,70 +72,32 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Tools > Express Tools > Super Hatch > Xref...
 - Tools > Express Tools > Super Hatch > Select Existing Object
 - Draw > 3D Modeling > Polysolid
-- Draw > 3D Modeling > Box
-- Draw > 3D Modeling > Wedge
-- Draw > 3D Modeling > Cone
-- Draw > 3D Modeling > Sphere
-- Draw > 3D Modeling > Cylinder
-- Draw > 3D Modeling > Torus
-- Draw > 3D Modeling > Pyramid
-- Draw > 3D Modeling > Extrude
-- Draw > 3D Modeling > Revolve
-- Draw > 3D Modeling > Sweep
-- Draw > 3D Modeling > Loft
-- Draw > 3D Modeling > Section Plane
 - Draw > 3D Modeling > Surfaces > Planar
 - Draw > 3D Modeling > Surfaces > Network
 - Draw > 3D Modeling > Surfaces > Patch
-- Draw > 3D Modeling > Meshes > Primitives > Box
-- Draw > 3D Modeling > Meshes > Primitives > Wedge
-- Draw > 3D Modeling > Meshes > Primitives > Cone
-- Draw > 3D Modeling > Meshes > Primitives > Sphere
-- Draw > 3D Modeling > Meshes > Primitives > Cylinder
-- Draw > 3D Modeling > Meshes > Primitives > Torus
-- Draw > 3D Modeling > Meshes > Primitives > Pyramid
 - Draw > 3D Modeling > Meshes > Smooth Mesh
 - Draw > 3D Modeling > Meshes > 3D Face
 - Draw > 3D Modeling > Meshes > Meshes, Revolved Surface
 - Draw > 3D Modeling > Meshes > Meshes, Tabulated Surface
 - Draw > 3D Modeling > Meshes > Meshes, Ruled Surface
 - Draw > 3D Modeling > Meshes > Meshes, Edge Surface
-- Draw > 3D Modeling > Setup > Drawing
-- Draw > 3D Modeling > Setup > View
-- Draw > 3D Modeling > Setup > Profile
-- Modify > Object > External Reference > Frame
 - Modify > Object > Image > Quality
-- Modify > Object > Image > Transparency
-- Modify > Object > Image > Frame
 - Modify > Object > Block Description...
-- Modify > 3D Operations > 3D Move
-- Modify > 3D Operations > 3D Rotate
-- Modify > 3D Operations > 3D Align
-- Modify > 3D Operations > 3D Mirror
-- Modify > 3D Operations > 3D Array
 - Modify > 3D Operations > Interference Checking
-- Modify > 3D Operations > Slice
-- Modify > 3D Operations > Thicken
 - Modify > 3D Operations > Convert to Solid
 - Modify > 3D Operations > Convert to Surface
 - Modify > 3D Operations > Extract Edges
 - Modify > 3D Operations > Extract Isolines
 - Modify > Solid Editing > Imprint Edges
-- Modify > Solid Editing > Fillet edges
-- Modify > Solid Editing > Chamfer edges
 - Modify > Solid Editing > Color edges
 - Modify > Solid Editing > Copy edges
 - Modify > Solid Editing > Extrude faces
-- Modify > Solid Editing > Move faces
-- Modify > Solid Editing > Offset faces
-- Modify > Solid Editing > Delete faces
 - Modify > Solid Editing > Rotate faces
 - Modify > Solid Editing > Taper faces
 - Modify > Solid Editing > Color faces
 - Modify > Solid Editing > Copy faces
 - Modify > Solid Editing > Clean
 - Modify > Solid Editing > Separate
-- Modify > Solid Editing > Shell
 - Modify > Solid Editing > Check
 - Modify > Surface Editing > Untrim
 - Modify > Surface Editing > Sculpt
@@ -199,7 +134,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Window > Blocks
 - Window > Properties Inspector
 - Window > Traces
-- Window > Sheet Set Manager
 - Window > Materials Browser
 - Window > Activity Insights
 - Window > Geometry Cleanup

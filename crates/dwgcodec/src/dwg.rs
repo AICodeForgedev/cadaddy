@@ -90,8 +90,18 @@ impl Dwg {
         let mut aux = vec![0xFF, 0x77, 0x01];
         let rs = |a: &mut Vec<u8>, v: u16| a.extend_from_slice(&v.to_le_bytes());
         let rl = |a: &mut Vec<u8>, v: u32| a.extend_from_slice(&v.to_le_bytes());
+        // Each version code is followed by the maintenance version (the file header's): an RS,
+        // from R2018 an RL; the ODA's reader finds an R2018 file with RS ones cut short.
+        let maint = r2004::fresh_maintenance(version);
+        let maintenance = |a: &mut Vec<u8>| {
+            if version >= Version::R2018 {
+                rl(a, u32::from(maint));
+            } else {
+                rs(a, u16::from(maint));
+            }
+        };
         rs(&mut aux, code);
-        rs(&mut aux, 0);
+        maintenance(&mut aux);
         rl(&mut aux, 1);
         rl(&mut aux, u32::MAX);
         rs(&mut aux, 1);
@@ -99,7 +109,7 @@ impl Dwg {
         rl(&mut aux, 0);
         for _ in 0..2 {
             rs(&mut aux, code);
-            rs(&mut aux, 0);
+            maintenance(&mut aux);
         }
         for _ in 0..2 {
             rs(&mut aux, 0x0005);
@@ -116,7 +126,7 @@ impl Dwg {
         rs(&mut aux, 0);
         rl(&mut aux, 0);
         rl(&mut aux, 1);
-        aux.resize(123, 0);
+        aux.resize(if version >= Version::R2018 { 129 } else { 123 }, 0);
         let mut preview = r2000::PREVIEW_START.to_vec();
         preview.extend_from_slice(&1u32.to_le_bytes());
         preview.push(0);

@@ -2500,3 +2500,77 @@
 	Dictionaries are read from:	Словники читаються з:
 	Published to {path}	Опубліковано в {path}
 	Sheet Set (.sheetset.json)	Підшивка (.sheetset.json)
+	Resolution	Роздільність
+	Colour depth	Глибина кольору
+	Colour (24-bit)	Колір (24 біти)
+	Greys (8-bit)	Відтінки сірого (8 біт)
+	Black and white (1-bit)	Чорно-біле (1 біт)
+	PNG Out	Виведення PNG
+	JPEG Out	Виведення JPEG
+	BMP Out	Виведення BMP
+	TIFF Out	Виведення TIFF
+	Enter image file name	Введіть назву файлу зображення
+	Nothing selected: no image written.	Нічого не вибрано: зображення не записано.
+	{} object(s) written to {} ({} × {} pixels).	Об'єктів записано: {} у {} ({} × {} пікселів).
+	Set to ByLayer	Встановити За шаром
+	Explode and Set Properties	Розчленувати й задати властивості
+	Edit Attribute in Place	Редагувати атрибут на місці
+	Frame	Рамка
+	Setup	Налаштування
+	Setup View	Налаштувати вигляд
+	Setup Drawing	Налаштувати креслення
+	Setup Profile	Налаштувати профіль
+	Enter view scale	Введіть масштаб вигляду
+	Specify view center	Вкажіть центр вигляду
+	Enter view name	Введіть назву вигляду
+	Specify side of viewport to project	Вкажіть сторону видового екрана для проєкції
+	Specify first point of cutting plane	Вкажіть першу точку січної площини
+	Specify second point of cutting plane	Вкажіть другу точку січної площини
+	Specify first point of inclined plane	Вкажіть першу точку похилої площини
+	Specify second point of inclined plane	Вкажіть другу точку похилої площини
+	Specify side to view from	Вкажіть сторону погляду
+	Specify first corner of viewport	Вкажіть перший кут видового екрана
+	Specify opposite corner of viewport	Вкажіть протилежний кут видового екрана
+	Display hidden profile lines on separate layer?	Показувати приховані лінії профілю на окремому шарі?
+	Project profile lines onto a plane?	Проєктувати лінії профілю на площину?
+	Delete tangential edges?	Видалити дотичні ребра?
+	None (PDF file)	Немає (файл PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Розмірний текст заввишки {} замалий для читання в цьому кресленні. Введіть DIMSCALE {}, щоб нові розміри стали в {} разів більшими.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Текст заввишки {} замалий для читання в цьому кресленні. Спробуйте висоту {} (типове значення задає TEXTSIZE).
+	(each layout's own)	(власні для кожного аркуша)
+	A callout on the selected sheet pointing at the selected view	Виноска на вибраному аркуші, що вказує на вибраний вид
+	A page setup copied from the selected sheet's layout	Параметри сторінки, скопійовані з аркуша вибраного креслення
+	Add Callout	Додати виноску
+	Callouts: {}	Виноски: {}
+	From Selected Sheet	З вибраного аркуша
+	Insert on Selected Sheet	Вставити на вибраний аркуш
+	Named view	Іменований вид
+	Page Setup Override	Перевизначення параметрів сторінки
+	Place View	Розмістити вид
+	Position on sheet	Положення на аркуші
+	Remove Property	Видалити властивість
+	Sheet Properties	Властивості аркуша
+	Sheet Set Fields	Поля підшивки
+	Sheet Set Properties	Властивості підшивки
+	Sync Drawings	Синхронізувати креслення
+	Text holding the field, at the position on sheet	Текст із полем у положенні на аркуші
+	Views and Callouts	Види та виноски
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Аркуш кожного креслення отримує назву «номер назва»; поля підшивки, мітки видів і виноски набувають поточних значень підшивки
+	3 Point	3 точки
+	Origin	Початок координат
+	Z	Z
+	Named UCS...	Іменовані ПСК...
+	Center Mark (DIMCEN)	Позначка центра (DIMCEN)
+	Copy Objects to New Layer	Копіювати об'єкти на новий шар
+	Cut with Base Point	Вирізати з базовою точкою
+	DXF In	Відкрити DXF
+	DXF Out	Зберегти в DXF
+	Fill	Заливка
+	Maximize Viewport	Розгорнути видовий екран
+	Minimize Viewport	Згорнути видовий екран
+	Object Selection Filters	Фільтри вибору об'єктів
+	Oops	Відновити стерте
+	Quick Text	Швидкий текст
+	Redefine Attributes	Перевизначити атрибути
+	Drawing	Креслення
+	Profile	Профіль

@@ -149,9 +149,11 @@ pub fn decompress(src: &[u8], size: usize) -> Result<Vec<u8>> {
     let mut r = Reader { src, at: 0 };
     let mut op = r.byte()?;
     let mut length = 0;
+    // A first opcode 0x20–0x2F is laid out as a copy's (two offset bytes, then the byte whose
+    // low three bits are the literal count), with nothing to copy yet: the literals start at 4.
     if op >> 4 == 2 {
-        r.at = 3;
-        length = usize::from(*src.get(2).ok_or(Error::Truncated("compressed data"))? & 7);
+        r.at = 4;
+        length = usize::from(*src.get(3).ok_or(Error::Truncated("compressed data"))? & 7);
     }
     while !r.done() {
         if length == 0 {
@@ -258,6 +260,15 @@ mod tests {
             let c = literal_run(&data).unwrap();
             assert_eq!(decompress(&c, n).unwrap(), data, "{n}");
         }
+    }
+
+    #[test]
+    fn a_leading_0x2x_opcode_counts_literals_from_its_fourth_byte() {
+        // 0x20, two (unused) offset bytes, 0x02: two literals (a 2-byte run is stored
+        // reversed); then 0x30 0x02: copy 3 bytes from 1 back. The ODA's converter starts its
+        // R2007 file headers this way.
+        let src = [0x20, 0x00, 0x00, 0x02, b'b', b'a', 0x30, 0x02];
+        assert_eq!(decompress(&src, 5).unwrap(), b"abbbb");
     }
 
     #[test]
