@@ -1093,6 +1093,8 @@ pub struct Session {
     /// comes later ([`Self::poll_background`]). Off (scripts, the CLI, tests), the save's result
     /// holds it.
     pub background_checks: bool,
+    /// Drywall view mode: walls coloured by type, fire rating, board layers or height rule.
+    pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1194,6 +1196,7 @@ impl Session {
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
             background_checks: false,
+            drywall_viewmode: None,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't

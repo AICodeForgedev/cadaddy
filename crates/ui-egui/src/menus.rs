@@ -706,6 +706,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some(crate::meppalette::DIALOG.into());
             Ok(Value::Null)
         }
+        "drywallpalette" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::drywallpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
         "markups" if params.is_null() => {
             app.ui.dialog = Some("markups".into());
             Ok(Value::Null)
