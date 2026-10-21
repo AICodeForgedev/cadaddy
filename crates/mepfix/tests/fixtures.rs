@@ -2,8 +2,9 @@
 //! what the truth says they carry (read back through our own PDF and DXF readers), styles varied,
 //! and the scorer scoring.
 
+use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::truth::Truth;
-use cadaddy_mepfix::{generate, layout, score, truth_for};
+use cadaddy_mepfix::{generate, generate_hotel, hotel_truth_for, layout, score, truth_for};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
@@ -479,18 +480,12 @@ fn elec_reader_reads_fixture_set_dxf() {
         .sheets
         .iter()
         .filter(|s| s.discipline == "E" && s.level.is_some())
-        .filter_map(|s| {
-            set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))
-        })
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
         .collect();
     assert!(!dxf_data.is_empty(), "no E-sheet DXFs");
 
     // Build the sheet map for alignment.
-    let all_dxf: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
+    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
     let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
 
     // Read devices.
@@ -510,8 +505,7 @@ fn elec_reader_reads_fixture_set_dxf() {
     // Report.
     eprintln!(
         "elec_reader seed=3: TP={}, FP={}, FN={}, P={:.2}, R={:.2}, H_MAE={:.1}in, kind={:.2}",
-        s.true_positives, s.false_positives, s.false_negatives,
-        s.precision, s.recall, s.height_mae_in, s.kind_accuracy
+        s.true_positives, s.false_positives, s.false_negatives, s.precision, s.recall, s.height_mae_in, s.kind_accuracy
     );
 }
 
@@ -539,11 +533,7 @@ fn elec_reader_zone_containment_for_non_arch_devices() {
     // For perfect devices, zone containment should be 1.0 (the zone contains the truth).
     let non_arch = t.elec_devices.iter().filter(|d| !d.arch_positioned).count();
     if non_arch > 0 {
-        assert!(
-            (s.zone_containment - 1.0).abs() < 1e-9,
-            "zone containment should be 1.0 for perfect devices: {}",
-            s.zone_containment
-        );
+        assert!((s.zone_containment - 1.0).abs() < 1e-9, "zone containment should be 1.0 for perfect devices: {}", s.zone_containment);
     }
 }
 
@@ -589,11 +579,7 @@ fn elec_reader_esheet_offsets_do_not_move_model_devices() {
     let set = generate(3).unwrap();
     let t = &set.truth;
 
-    let all_dxf: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
+    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
     let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
     let dxf_data: Vec<(String, Vec<u8>)> = t
         .sheets
@@ -610,18 +596,14 @@ fn elec_reader_esheet_offsets_do_not_move_model_devices() {
             continue;
         }
         // Find the closest truth device of the same kind and level.
-        let td = t.elec_devices.iter()
-            .filter(|d| d.level == fd.level && d.kind == fd.kind && d.arch_positioned)
-            .min_by(|a, b| {
-                let da = (a.at_ft[0] - fd.at_ft[0]).powi(2) + (a.at_ft[1] - fd.at_ft[1]).powi(2);
-                let db = (b.at_ft[0] - fd.at_ft[0]).powi(2) + (b.at_ft[1] - fd.at_ft[1]).powi(2);
-                da.total_cmp(&db)
-            });
+        let td = t.elec_devices.iter().filter(|d| d.level == fd.level && d.kind == fd.kind && d.arch_positioned).min_by(|a, b| {
+            let da = (a.at_ft[0] - fd.at_ft[0]).powi(2) + (a.at_ft[1] - fd.at_ft[1]).powi(2);
+            let db = (b.at_ft[0] - fd.at_ft[0]).powi(2) + (b.at_ft[1] - fd.at_ft[1]).powi(2);
+            da.total_cmp(&db)
+        });
         let Some(td) = td else { continue };
 
-        let dist_truth = ((fd.at_ft[0] - td.at_ft[0]).powi(2)
-            + (fd.at_ft[1] - td.at_ft[1]).powi(2))
-        .sqrt();
+        let dist_truth = ((fd.at_ft[0] - td.at_ft[0]).powi(2) + (fd.at_ft[1] - td.at_ft[1]).powi(2)).sqrt();
 
         // Only verify devices that actually matched (within scoring tolerance).
         // Devices placed in the wrong room due to alignment/jitter are false positives
@@ -630,16 +612,17 @@ fn elec_reader_esheet_offsets_do_not_move_model_devices() {
             continue;
         }
 
-        let dist_drawn = ((fd.at_ft[0] - td.drawn_ft[0]).powi(2)
-            + (fd.at_ft[1] - td.drawn_ft[1]).powi(2))
-        .sqrt();
+        let dist_drawn = ((fd.at_ft[0] - td.drawn_ft[0]).powi(2) + (fd.at_ft[1] - td.drawn_ft[1]).powi(2)).sqrt();
 
         // The reader's position must be at least as close to the true position as to the
         // diagrammatic E-sheet position (i.e. it derived position from rules, not E-sheet).
         assert!(
             dist_truth <= dist_drawn + 0.01 || dist_truth < 0.5,
             "arch {} in {} closer to drawn ({:.2} ft) than truth ({:.2} ft)",
-            td.kind, td.room, dist_drawn, dist_truth
+            td.kind,
+            td.room,
+            dist_drawn,
+            dist_truth
         );
         checked += 1;
     }
@@ -653,11 +636,7 @@ fn elec_reader_zones_contain_truth_positions() {
     let set = generate(3).unwrap();
     let t = &set.truth;
 
-    let all_dxf: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
+    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
     let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
     let dxf_data: Vec<(String, Vec<u8>)> = t
         .sheets
@@ -675,11 +654,215 @@ fn elec_reader_zones_contain_truth_positions() {
         assert!(
             s.zone_containment >= 0.8,
             "zone containment {:.2} too low (expected >= 0.8); non-arch truth devices: {}",
-            s.zone_containment, non_arch_count
+            s.zone_containment,
+            non_arch_count
         );
     }
     eprintln!(
         "zones_contain_truth: containment={:.2}, non-arch={}, TP={}, FP={}, FN={}",
         s.zone_containment, non_arch_count, s.true_positives, s.false_positives, s.false_negatives
     );
+}
+
+// ===== Hotel tests (Q304) =====
+
+#[test]
+fn hotel_deterministic_small() {
+    let (a, b) = (generate_hotel(7, HotelSize::Small).unwrap(), generate_hotel(7, HotelSize::Small).unwrap());
+    assert_eq!(a.files.len(), b.files.len());
+    for ((na, ba), (nb, bb)) in a.files.iter().zip(&b.files) {
+        assert_eq!(na, nb);
+        assert!(ba == bb, "hotel {na} differs between runs");
+    }
+    // Different seed gives different output.
+    let c = generate_hotel(8, HotelSize::Small).unwrap();
+    assert_ne!(a.file("truth.json"), c.file("truth.json"));
+}
+
+#[test]
+fn hotel_has_four_levels_and_roof() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert_eq!(t.building.levels.len(), 5);
+    let codes: Vec<&str> = t.building.levels.iter().map(|l| l.code.as_str()).collect();
+    assert_eq!(codes, vec!["1", "2", "3", "4", "R"]);
+    assert_eq!(t.kind, "hotel");
+}
+
+#[test]
+fn hotel_has_guest_rooms_on_upper_floors() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+    for lv in ["2", "3", "4"] {
+        let rooms: Vec<&str> = t.building.rooms.iter().filter(|r| r.level == lv && r.name != "CORRIDOR").map(|r| r.name.as_str()).collect();
+        assert!(!rooms.is_empty(), "level {lv} has no guest rooms");
+        assert!(
+            rooms.iter().any(|n| n.contains("KING") || n.contains("QUEEN") || n.contains("SUITE")),
+            "level {lv} has no recognizable guest room types: {rooms:?}"
+        );
+    }
+}
+
+#[test]
+fn hotel_has_public_spaces_on_ground_floor() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let ground: Vec<String> = t.building.rooms.iter().filter(|r| r.level == "1").map(|r| r.name.clone()).collect();
+    assert!(ground.contains(&"LOBBY".to_string()), "no lobby on L1");
+    assert!(ground.contains(&"FRONT DESK".to_string()), "no front desk on L1");
+    assert!(ground.contains(&"MECHANICAL".to_string()), "no mechanical room on L1");
+}
+
+#[test]
+fn hotel_has_ada_rooms() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+    let ada: Vec<&str> = t.building.rooms.iter().filter(|r| r.name.contains("ADA")).map(|r| r.name.as_str()).collect();
+    assert!(!ada.is_empty(), "no ADA rooms in the hotel");
+}
+
+#[test]
+fn hotel_has_stairs_and_elevator() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.building.stairs.len() >= 2, "need at least 2 stairs");
+    assert!(!t.building.elevators.is_empty(), "need at least 1 elevator");
+}
+
+#[test]
+fn hotel_has_wall_assemblies() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.wall_assemblies.len() >= 5, "need at least 5 wall types, got {}", t.wall_assemblies.len());
+    assert!(!t.walls.is_empty(), "no wall instances");
+    // Every wall references a valid assembly.
+    let assembly_ids: BTreeSet<String> = t.wall_assemblies.iter().map(|a| a.id.clone()).collect();
+    for w in &t.walls {
+        assert!(assembly_ids.contains(&w.assembly), "wall {} references unknown assembly {}", w.id, w.assembly);
+    }
+    // At least one fire-rated wall.
+    assert!(t.wall_assemblies.iter().any(|a| !a.fire_rating.is_empty()), "no fire-rated wall assemblies");
+}
+
+#[test]
+fn hotel_has_ceiling_assemblies_and_soffits() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.ceiling_assemblies.is_empty(), "no ceiling assemblies");
+    assert!(!t.soffits.is_empty(), "no soffits (expected in guest room bathrooms)");
+}
+
+#[test]
+fn hotel_has_casework() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+    assert!(t.casework.len() >= 10, "too few casework items: {}", t.casework.len());
+    let kinds: BTreeSet<&str> = t.casework.iter().map(|c| c.kind.as_str()).collect();
+    assert!(kinds.contains("vanity"), "no vanities");
+    assert!(kinds.contains("wardrobe"), "no wardrobes");
+}
+
+#[test]
+fn hotel_has_spec_book() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.spec_items.len() >= 10, "too few spec items: {}", t.spec_items.len());
+    // Each spec item has a manufacturer and model.
+    for s in &t.spec_items {
+        assert!(!s.manufacturer.is_empty(), "spec {} has no manufacturer", s.id);
+        assert!(!s.model.is_empty(), "spec {} has no model", s.id);
+    }
+    // Multiple CSI divisions.
+    let divs: BTreeSet<&str> = t.spec_items.iter().map(|s| s.division.as_str()).collect();
+    assert!(divs.len() >= 5, "too few CSI divisions: {divs:?}");
+}
+
+#[test]
+fn hotel_has_fire_alarm_devices() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.fire_alarm_devices.is_empty(), "no fire alarm devices");
+    let kinds: BTreeSet<&str> = t.fire_alarm_devices.iter().map(|d| d.kind.as_str()).collect();
+    assert!(kinds.contains("smoke_detector"), "no smoke detectors");
+    assert!(kinds.contains("horn_strobe"), "no horn/strobes");
+    assert!(kinds.contains("pull_station"), "no pull stations");
+    assert!(kinds.contains("facp"), "no FACP");
+}
+
+#[test]
+fn hotel_has_telecom_devices() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.telecom_devices.is_empty(), "no telecom devices");
+    let kinds: BTreeSet<&str> = t.telecom_devices.iter().map(|d| d.kind.as_str()).collect();
+    assert!(kinds.contains("data_outlet"), "no data outlets");
+    assert!(kinds.contains("wifi_ap"), "no WiFi APs");
+}
+
+#[test]
+fn hotel_has_site_elements() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.site_elements.is_empty(), "no site elements");
+    let kinds: BTreeSet<&str> = t.site_elements.iter().map(|s| s.kind.as_str()).collect();
+    assert!(kinds.contains("parking_space"), "no parking spaces");
+    assert!(kinds.contains("light_pole"), "no light poles");
+    assert!(kinds.contains("transformer_pad"), "no transformer pad");
+    assert!(kinds.contains("fire_hydrant"), "no fire hydrant");
+    assert!(kinds.iter().any(|k| k.starts_with("underground_")), "no underground utilities");
+}
+
+#[test]
+fn hotel_has_gaps_for_q296() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.gaps.len() >= 5, "too few planted gaps: {}", t.gaps.len());
+    let kinds: BTreeSet<&str> = t.gaps.iter().map(|g| g.kind.as_str()).collect();
+    assert!(kinds.contains("wall_no_tag"), "no wall_no_tag gap");
+    assert!(kinds.contains("rated_wall_stops_at_ceiling"), "no rated_wall_stops_at_ceiling gap");
+    assert!(kinds.contains("head_not_specified"), "no head_not_specified gap");
+}
+
+#[test]
+fn hotel_has_mep_systems() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.systems.len() >= 10, "too few MEP systems: {}", t.systems.len());
+    assert!(!t.segments.is_empty(), "no MEP segments");
+    assert!(!t.terminals.is_empty(), "no terminals");
+    assert!(!t.equipment.is_empty(), "no equipment");
+    assert!(!t.risers.is_empty(), "no risers");
+}
+
+#[test]
+fn hotel_has_plumbing_fixtures() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+    let kinds: BTreeSet<&str> = t.fixtures.iter().map(|f| f.kind.as_str()).collect();
+    assert!(kinds.contains("water_closet"), "no water closets");
+    assert!(kinds.contains("lavatory"), "no lavatories");
+    assert!(kinds.contains("bathtub"), "no bathtubs");
+}
+
+#[test]
+fn hotel_sheets_cover_all_disciplines() {
+    let set = generate_hotel(1, HotelSize::Small).unwrap();
+    let t = &set.truth;
+    let discs: BTreeSet<&str> = t.sheets.iter().map(|s| s.discipline.as_str()).collect();
+    for d in ["G", "A", "S", "M", "P", "FP", "E", "FA", "T", "C"] {
+        assert!(discs.contains(d), "missing discipline {d} in hotel sheets");
+    }
+}
+
+#[test]
+fn hotel_full_has_more_rooms_than_small() {
+    let small = hotel_truth_for(1, HotelSize::Small);
+    let full = hotel_truth_for(1, HotelSize::Full);
+    assert!(
+        full.building.rooms.len() > small.building.rooms.len(),
+        "full ({}) should have more rooms than small ({})",
+        full.building.rooms.len(),
+        small.building.rooms.len()
+    );
+}
+
+#[test]
+fn hotel_elevations_and_sections_exist() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.elevations.len() >= 4, "need 4 building elevations, got {}", t.elevations.len());
+    assert!(t.sections.len() >= 2, "need at least 2 sections, got {}", t.sections.len());
+    // Interior elevation exists.
+    assert!(t.elevations.iter().any(|e| e.direction == "interior"), "no interior elevation");
+}
+
+#[test]
+fn hotel_clashes_include_planted() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let planted = t.clashes.iter().filter(|c| c.planted).count();
+    assert!(planted >= 1, "no planted clashes in hotel");
 }

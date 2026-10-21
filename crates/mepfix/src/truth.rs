@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The truth file's format; bumped when a field changes meaning.
-pub const SCHEMA: &str = "cadaddy-mepfix/1";
+pub const SCHEMA: &str = "cadaddy-mepfix/2";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Truth {
@@ -21,6 +21,9 @@ pub struct Truth {
     pub seed: u64,
     /// The made-up project's name, as the title blocks print it.
     pub project: String,
+    /// `"office"` or `"hotel"`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
     pub building: Building,
     /// The systems on the sheets, with the abbreviation the prints use for each.
     pub systems: Vec<System>,
@@ -34,6 +37,32 @@ pub struct Truth {
     pub elec_circuits: Vec<ElecCircuit>,
     pub elec_conduits: Vec<ElecConduit>,
     pub risers: Vec<Riser>,
+    // --- Hotel extensions (Q304) ---
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_assemblies: Vec<WallAssembly>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<WallInstance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ceiling_assemblies: Vec<CeilingAssembly>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soffits: Vec<SoffitInstance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub casework: Vec<CaseworkItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_items: Vec<SpecItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub site_elements: Vec<SiteElement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fire_alarm_devices: Vec<FireAlarmDevice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub telecom_devices: Vec<TelecomDevice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevations: Vec<ElevationView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<SectionView>,
+    /// Planted gaps and conflicts for the RFI helper (Q296).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<Gap>,
     pub sheets: Vec<Sheet>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure), computed from the geometry; `planted` ones were put there on purpose.
@@ -50,6 +79,16 @@ pub struct Building {
     pub beams: Vec<Beam>,
     /// Concrete slab on deck, inches (top of slab = the level's elevation).
     pub slab_in: f64,
+    // --- Hotel extensions ---
+    /// Stairs (bounding box per stair per level).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stairs: Vec<Stair>,
+    /// Elevator shafts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevators: Vec<Elevator>,
+    /// Vertical shafts (plumbing, electrical, duct).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shafts: Vec<Shaft>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -335,6 +374,270 @@ pub struct ElecCircuit {
     pub homerun_ft: [f64; 2],
     /// The sheet the homerun is drawn on.
     pub sheet: String,
+}
+
+/// A stair core.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Stair {
+    pub id: String,
+    pub tag: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Levels this stair serves (level codes).
+    pub levels: Vec<String>,
+}
+
+/// An elevator shaft.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Elevator {
+    pub id: String,
+    pub tag: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub levels: Vec<String>,
+}
+
+/// A vertical shaft (plumbing chase, duct shaft, electrical shaft).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Shaft {
+    pub id: String,
+    pub tag: String,
+    /// `plumbing`, `duct`, `electrical`.
+    pub kind: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub levels: Vec<String>,
+}
+
+// --- Wall assemblies (Q293) ---
+
+/// A wall assembly type from the wall type legend.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallAssembly {
+    pub id: String,
+    /// Type tag printed on the plans: `WT-1`, `WT-2`, etc.
+    pub type_tag: String,
+    pub name: String,
+    /// Layers from finish face to finish face.
+    pub layers: Vec<WallLayer>,
+    /// Overall thickness, inches.
+    pub thickness_in: f64,
+    /// Fire rating: `""`, `1-HR`, `2-HR`.
+    pub fire_rating: String,
+    /// `SLAB TO SLAB`, `FLOOR TO CLG`, `FLOOR TO DECK`.
+    pub height_rule: String,
+    /// STC rating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stc: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallLayer {
+    pub material: String,
+    pub thickness_in: f64,
+}
+
+/// A wall placed in the building.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallInstance {
+    pub id: String,
+    pub assembly: String,
+    pub level: String,
+    /// Centreline endpoints, building feet.
+    pub from_ft: [f64; 2],
+    pub to_ft: [f64; 2],
+    pub height_ft: f64,
+    /// Which sheet shows the wall type tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+}
+
+// --- Ceiling / soffit assemblies (Q295) ---
+
+/// A ceiling assembly type.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CeilingAssembly {
+    pub id: String,
+    pub type_tag: String,
+    pub name: String,
+    pub layers: Vec<CeilingLayer>,
+    pub total_depth_in: f64,
+    /// Fire rating of the assembly.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fire_rating: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CeilingLayer {
+    pub material: String,
+    pub thickness_in: f64,
+}
+
+/// A soffit (dropped ceiling area, bulkhead) placed in the building.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SoffitInstance {
+    pub id: String,
+    pub assembly: String,
+    pub level: String,
+    pub room: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Bottom of soffit elevation above the level floor, feet.
+    pub bottom_ft: f64,
+    /// Shown on this RCP sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+}
+
+// --- Casework (Q301) ---
+
+/// A casework item: cabinet, counter, appliance.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CaseworkItem {
+    pub id: String,
+    /// `base_cabinet`, `upper_cabinet`, `counter`, `vanity`, `appliance`, `wardrobe`.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    pub room: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub height_in: f64,
+    pub depth_in: f64,
+    /// The spec section it comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_section: Option<String>,
+}
+
+// --- Spec book (Q298) ---
+
+/// A specification item from the spec book.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpecItem {
+    pub id: String,
+    /// CSI division: `06`, `09`, `22`, `23`, `26`.
+    pub division: String,
+    /// Section number: `06 41 16`.
+    pub section: String,
+    pub title: String,
+    /// Invented manufacturer name.
+    pub manufacturer: String,
+    /// Invented model number.
+    pub model: String,
+    /// `"or equal"` flag.
+    #[serde(default)]
+    pub or_equal: bool,
+    /// Schedule or equipment tags that reference this.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub referenced_by: Vec<String>,
+}
+
+// --- Site / civil (C sheets) ---
+
+/// A site element for the civil plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteElement {
+    pub id: String,
+    /// `parking_space`, `light_pole`, `transformer_pad`, `dumpster_enclosure`, `fire_hydrant`,
+    /// `bollard`, `sign`, `curb`, `sidewalk`, `driveway`, `underground_electric`,
+    /// `underground_water`, `underground_sewer`, `underground_storm`, `underground_gas`,
+    /// `underground_telecom`.
+    pub kind: String,
+    pub tag: String,
+    /// Position, building feet.
+    pub at_ft: [f64; 2],
+    /// For area elements: bounding box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_ft: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ft: Option<[f64; 2]>,
+    /// For underground: depth below grade, feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_ft: Option<f64>,
+}
+
+// --- Fire alarm (FA sheets) ---
+
+/// A fire alarm device.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FireAlarmDevice {
+    pub id: String,
+    /// `smoke_detector`, `heat_detector`, `pull_station`, `horn_strobe`, `duct_detector`,
+    /// `sprinkler_flow_switch`, `tamper_switch`, `annunciator`, `facp`.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    pub room: String,
+    pub at_ft: [f64; 3],
+    /// Mounting: `CLG` (ceiling), `WALL` (wall).
+    pub mounting: String,
+    /// FA circuit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit: String,
+    pub sheet: String,
+}
+
+// --- Telecom (T sheets) ---
+
+/// A telecom device or outlet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TelecomDevice {
+    pub id: String,
+    /// `data_outlet`, `wifi_ap`, `camera`, `door_access`, `tv_outlet`, `telephone`.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    pub room: String,
+    pub at_ft: [f64; 3],
+    /// Mounting height, inches above floor.
+    pub mounting_in: f64,
+    pub sheet: String,
+}
+
+// --- Architectural views (elevations, sections) ---
+
+/// An elevation view drawn on an A-sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElevationView {
+    pub id: String,
+    pub name: String,
+    /// `north`, `south`, `east`, `west`, or `interior`.
+    pub direction: String,
+    pub sheet: String,
+    /// For interior elevations: which room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+}
+
+/// A building section drawn on an A-sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SectionView {
+    pub id: String,
+    pub name: String,
+    /// Section cut line endpoints, building feet.
+    pub cut_from_ft: [f64; 2],
+    pub cut_to_ft: [f64; 2],
+    /// Looking direction: `north`, `south`, `east`, `west`.
+    pub looking: String,
+    pub sheet: String,
+}
+
+// --- Gaps / conflicts for Q296 ---
+
+/// A planted gap or conflict the RFI helper should find.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gap {
+    pub id: String,
+    /// `wall_no_tag`, `wall_tag_not_in_legend`, `wall_type_conflict`, `ceiling_no_type`,
+    /// `ceiling_no_height`, `soffit_missing_from_section`, `rated_wall_stops_at_ceiling`,
+    /// `head_not_specified`, `height_assembly_conflict`.
+    pub kind: String,
+    pub description: String,
+    /// The element ids involved.
+    pub elements: Vec<String>,
+    pub level: String,
+    /// Where on the plan, building feet.
+    pub at_ft: [f64; 2],
 }
 
 /// A conduit run drawn on the electrical plan (where shown).
