@@ -281,7 +281,8 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             framing(&mut pen, t, l);
             legend.push(item("column", "STEEL COLUMN"));
             legend.push(item("beam", "STEEL BEAM / GIRDER, SIZE AT MIDSPAN"));
-            abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE"].map(abbrev));
+            legend.push(item("opening", "FLOOR OPENING / SHAFT"));
+            abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE", "EL = ELEVATION"].map(abbrev));
         }
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
@@ -608,6 +609,7 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             pen.fill("STRUCT", [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]);
         }
         "beam" => pen.pline("HEAVY", [x - 0.3, y], [x + 0.3, y]),
+        "opening" => pen.prect("DASHED", [x - 0.15, y - 0.1], [x + 0.15, y + 0.1]),
         "act" => {
             pen.prect("LIGHT", [x - 0.3, y - 0.1], [x + 0.3, y + 0.1]);
             for k in [-0.15, 0.0, 0.15] {
@@ -1490,6 +1492,15 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
         ];
         pen.fill("STRUCT", pts);
     }
+    // Openings / shafts on this level: dashed rectangle with a label.
+    for op in t.building.openings.iter().filter(|o| o.level == level) {
+        pen.brect("DASHED", op.min_ft, op.max_ft);
+        if let Some(lbl) = &op.label {
+            let mid = [(op.min_ft[0] + op.max_ft[0]) / 2.0, (op.min_ft[1] + op.max_ft[1]) / 2.0];
+            let p = pen.b(mid);
+            pen.text("TEXT", p, st.text_in, lbl, rot, HAlign::Center, VAlign::Middle);
+        }
+    }
     // General notes under the plan's corner.
     let tos = t.building.beams.iter().find(|b| b.level == level).map_or(0.0, |b| b.tos_ft);
     let col = t.building.columns.first().map(|c| c.size.clone()).unwrap_or_default();
@@ -1497,10 +1508,13 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
     if level == "R" {
         notes.push("3. 1-1/2\" METAL ROOF DECK.".into());
     } else {
+        let slab = t.building.slabs.iter().find(|s| s.level == level);
+        let conc = slab.map_or(t.building.slab_in, |s| s.concrete_in);
+        let elev = t.level(level).map_or(0.0, |l| l.elevation_ft);
         notes.push(format!(
             "3. {}\" CONC SLAB ON 1-1/2\" COMPOSITE DECK; TOP OF SLAB = EL {}.",
-            fmt_in(t.building.slab_in),
-            feet_inches(t.level(level).map_or(0.0, |l| l.elevation_ft))
+            fmt_in(conc),
+            feet_inches(elev)
         ));
     }
     let fr = frame(st);

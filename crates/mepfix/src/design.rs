@@ -306,6 +306,37 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         }
     }
 
+    // ---- Slabs and openings ----------------------------------------------------------------
+    let deck_in = 1.5;
+    for lv in ["2", "R"] {
+        let is_roof = lv == "R";
+        let (kind, conc) = if is_roof { ("roof", 0.0) } else { ("composite", t.building.slab_in) };
+        let top = elev(lv);
+        t.building.slabs.push(Slab {
+            id: format!("SL-{lv}"),
+            level: lv.into(),
+            kind: kind.into(),
+            concrete_in: conc,
+            deck_in,
+            top_ft: r6(top),
+        });
+    }
+    // A plumbing chase / shaft at the east end of the building.
+    let shaft_x0 = xs.get(nb.saturating_sub(1)).copied().unwrap_or(0.0) + 1.0;
+    let shaft_x1 = xs.get(nb).copied().unwrap_or(shaft_x0 + 3.0);
+    let shaft_y0 = ys.get(1).copied().unwrap_or(0.0);
+    let shaft_y1 = ys.get(2).copied().unwrap_or(shaft_y0 + 4.0);
+    for lv in ["2", "R"] {
+        t.building.openings.push(Opening {
+            id: format!("OP-{lv}-SHAFT"),
+            level: lv.into(),
+            kind: "shaft".into(),
+            min_ft: [r6(shaft_x0), r6(shaft_y0)],
+            max_ft: [r6(shaft_x1), r6(shaft_y1)],
+            label: Some("PLUMBING CHASE".into()),
+        });
+    }
+
     // ---- Loads and duct sizes (they set the bands) ---------------------------------------
     let cfm_sf = r.pick::<f64>(&[0.9, 1.0, 1.1, 1.2]);
     let h_main = r.pick::<f64>(&[12.0, 14.0]);
