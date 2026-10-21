@@ -2507,3 +2507,36 @@ menu	Modify	수정
 	Oops	지운 객체 복원
 	Quick Text	빠른 문자
 	Redefine Attributes	속성 재정의
+	Clashes	충돌
+	Run	실행
+	Re-run	재실행
+	Run clash detection	충돌 감지 실행
+	Re-run keeping statuses	상태 유지하며 재실행
+	Tolerance:	공차:
+	in	인치
+	Show:	표시:
+	No clashes. Run detection first.	충돌 없음. 먼저 감지를 실행하세요.
+	Status:	상태:
+	Trade:	직종:
+	Notes:	메모:
+	Go To	이동
+	Zoom to clash	충돌로 확대
+	Export BCF	BCF 내보내기
+	Export CSV	CSV 내보내기
+	Export to BCF 2.1 (ZIP)	BCF 2.1(ZIP)로 내보내기
+	Export clash report to CSV	충돌 보고서를 CSV로 내보내기
+	MEP Review	MEP 검토
+	Guessed only	추정값만
+	{n} items	{n}개 항목
+	No MEP items found. Run mep.read first.	MEP 항목을 찾을 수 없습니다. 먼저 mep.read를 실행하세요.
+	Mark reviewed	검토됨으로 표시
+	Size: {ss}, Height: {hs}	크기: {ss}, 높이: {hs}
+	Edit size, height or system	크기, 높이 또는 시스템 편집
+	Size W:	너비:
+	Bottom ft:	하단 (피트):
+	Rebuild 3D model keeping hand edits	수동 편집을 유지하면서 3D 모델 다시 빌드
+	Zoomed to {sys} run on {lvl}.	{lvl}의 {sys} 배관으로 확대했습니다.
+	Marked as reviewed.	검토됨으로 표시했습니다.
+	Unmarked.	표시 해제됨.
+	Edit applied.	편집이 적용되었습니다.
+	Rebuilt: {n} MEP runs.	다시 빌드됨: {n}개의 MEP 배관.

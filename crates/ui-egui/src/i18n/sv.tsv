@@ -2514,3 +2514,36 @@ menu	Modify	Ändra
 	Oops	Hoppsan
 	Quick Text	Snabbtext
 	Redefine Attributes	Omdefiniera attribut
+	Clashes	Kollisioner
+	Run	Kör
+	Re-run	Kör igen
+	Run clash detection	Kör kollisionskontroll
+	Re-run keeping statuses	Kör igen, behåll statusar
+	Tolerance:	Tolerans:
+	in	tum
+	Show:	Visa:
+	No clashes. Run detection first.	Inga kollisioner. Kör kontrollen först.
+	Status:	Status:
+	Trade:	Fack:
+	Notes:	Anteckningar:
+	Go To	Gå till
+	Zoom to clash	Zooma till kollision
+	Export BCF	Exportera BCF
+	Export CSV	Exportera CSV
+	Export to BCF 2.1 (ZIP)	Exportera till BCF 2.1 (ZIP)
+	Export clash report to CSV	Exportera kollisionsrapport till CSV
+	MEP Review	MEP-granskning
+	Guessed only	Endast gissade
+	{n} items	{n} objekt
+	No MEP items found. Run mep.read first.	Inga MEP-objekt hittades. Kör mep.read först.
+	Mark reviewed	Markera som granskad
+	Size: {ss}, Height: {hs}	Storlek: {ss}, Höjd: {hs}
+	Edit size, height or system	Redigera storlek, höjd eller system
+	Size W:	Bredd:
+	Bottom ft:	Underkant (fot):
+	Rebuild 3D model keeping hand edits	Bygg om 3D-modell och behåll manuella ändringar
+	Zoomed to {sys} run on {lvl}.	Zoomade till {sys}-sträckning på {lvl}.
+	Marked as reviewed.	Markerad som granskad.
+	Unmarked.	Avmarkerad.
+	Edit applied.	Ändring tillämpad.
+	Rebuilt: {n} MEP runs.	Ombyggt: {n} MEP-sträckningar.

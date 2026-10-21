@@ -2323,3 +2323,36 @@
 	Oops	Hoppla
 	Quick Text	Schnelltext
 	Redefine Attributes	Attribute neu definieren
+	Clashes	Kollisionen
+	Run	Ausführen
+	Re-run	Erneut ausführen
+	Run clash detection	Kollisionserkennung ausführen
+	Re-run keeping statuses	Erneut ausführen, Status beibehalten
+	Tolerance:	Toleranz:
+	in	Zoll
+	Show:	Anzeigen:
+	No clashes. Run detection first.	Keine Kollisionen. Führen Sie zuerst die Erkennung aus.
+	Status:	Status:
+	Trade:	Gewerk:
+	Notes:	Notizen:
+	Go To	Gehe zu
+	Zoom to clash	Zur Kollision zoomen
+	Export BCF	BCF exportieren
+	Export CSV	CSV exportieren
+	Export to BCF 2.1 (ZIP)	Export nach BCF 2.1 (ZIP)
+	Export clash report to CSV	Kollisionsbericht als CSV exportieren
+	MEP Review	MEP-Prüfung
+	Guessed only	Nur geschätzte
+	{n} items	{n} Elemente
+	No MEP items found. Run mep.read first.	Keine MEP-Elemente gefunden. Führen Sie zuerst mep.read aus.
+	Mark reviewed	Als geprüft markieren
+	Size: {ss}, Height: {hs}	Größe: {ss}, Höhe: {hs}
+	Edit size, height or system	Größe, Höhe oder System bearbeiten
+	Size W:	Breite:
+	Bottom ft:	Unterkante (Fuß):
+	Rebuild 3D model keeping hand edits	3D-Modell neu erstellen, manuelle Änderungen beibehalten
+	Zoomed to {sys} run on {lvl}.	Auf {sys}-Strang in {lvl} gezoomt.
+	Marked as reviewed.	Als geprüft markiert.
+	Unmarked.	Markierung entfernt.
+	Edit applied.	Änderung angewendet.
+	Rebuilt: {n} MEP runs.	Neu erstellt: {n} MEP-Stränge.

@@ -2390,3 +2390,36 @@
 	Oops	恢复删除
 	Quick Text	快速文字
 	Redefine Attributes	重定义属性
+	Clashes	碰撞
+	Run	运行
+	Re-run	重新运行
+	Run clash detection	运行碰撞检测
+	Re-run keeping statuses	重新运行并保留状态
+	Tolerance:	公差:
+	in	英寸
+	Show:	显示:
+	No clashes. Run detection first.	无碰撞。请先运行检测。
+	Status:	状态:
+	Trade:	专业:
+	Notes:	备注:
+	Go To	前往
+	Zoom to clash	缩放到碰撞
+	Export BCF	导出BCF
+	Export CSV	导出CSV
+	Export to BCF 2.1 (ZIP)	导出为BCF 2.1 (ZIP)
+	Export clash report to CSV	导出碰撞报告为CSV
+	MEP Review	MEP 审查
+	Guessed only	仅显示猜测项
+	{n} items	{n} 个项目
+	No MEP items found. Run mep.read first.	未找到 MEP 项目。请先运行 mep.read。
+	Mark reviewed	标记为已审查
+	Size: {ss}, Height: {hs}	尺寸：{ss}，高度：{hs}
+	Edit size, height or system	编辑尺寸、高度或系统
+	Size W:	宽度：
+	Bottom ft:	底部（英尺）：
+	Rebuild 3D model keeping hand edits	重建 3D 模型，保留手动编辑
+	Zoomed to {sys} run on {lvl}.	已缩放到 {lvl} 上的 {sys} 管段。
+	Marked as reviewed.	已标记为已审查。
+	Unmarked.	已取消标记。
+	Edit applied.	编辑已应用。
+	Rebuilt: {n} MEP runs.	已重建：{n} 条 MEP 管段。

@@ -2295,3 +2295,36 @@
 	Oops	Восстановить стёртое
 	Quick Text	Быстрый текст
 	Redefine Attributes	Переопределить атрибуты
+	Clashes	Коллизии
+	Run	Запустить
+	Re-run	Перезапустить
+	Run clash detection	Запустить обнаружение коллизий
+	Re-run keeping statuses	Перезапустить, сохраняя статусы
+	Tolerance:	Допуск:
+	in	дюйм
+	Show:	Показать:
+	No clashes. Run detection first.	Коллизий нет. Сначала запустите обнаружение.
+	Status:	Статус:
+	Trade:	Раздел:
+	Notes:	Примечания:
+	Go To	Перейти
+	Zoom to clash	Приблизить к коллизии
+	Export BCF	Экспорт BCF
+	Export CSV	Экспорт CSV
+	Export to BCF 2.1 (ZIP)	Экспорт в BCF 2.1 (ZIP)
+	Export clash report to CSV	Экспорт отчёта о коллизиях в CSV
+	MEP Review	Обзор MEP
+	Guessed only	Только предполагаемые
+	{n} items	{n} элементов
+	No MEP items found. Run mep.read first.	Элементы MEP не найдены. Сначала запустите mep.read.
+	Mark reviewed	Отметить как проверено
+	Size: {ss}, Height: {hs}	Размер: {ss}, Высота: {hs}
+	Edit size, height or system	Изменить размер, высоту или систему
+	Size W:	Ширина:
+	Bottom ft:	Низ (футы):
+	Rebuild 3D model keeping hand edits	Перестроить 3D-модель, сохраняя ручные правки
+	Zoomed to {sys} run on {lvl}.	Приближено к участку {sys} на {lvl}.
+	Marked as reviewed.	Отмечено как проверено.
+	Unmarked.	Отметка снята.
+	Edit applied.	Изменение применено.
+	Rebuilt: {n} MEP runs.	Перестроено: {n} участков MEP.

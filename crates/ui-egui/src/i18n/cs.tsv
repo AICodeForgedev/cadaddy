@@ -2487,3 +2487,36 @@ menu	Modify	Modifikace
 	Oops	Obnovit vymazané
 	Quick Text	Rychlý text
 	Redefine Attributes	Předefinovat atributy
+	Clashes	Kolize
+	Run	Spustit
+	Re-run	Znovu spustit
+	Run clash detection	Spustit detekci kolizí
+	Re-run keeping statuses	Znovu spustit se zachováním stavů
+	Tolerance:	Tolerance:
+	in	palce
+	Show:	Zobrazit:
+	No clashes. Run detection first.	Žádné kolize. Nejprve spusťte detekci.
+	Status:	Stav:
+	Trade:	Obor:
+	Notes:	Poznámky:
+	Go To	Přejít na
+	Zoom to clash	Přiblížit na kolizi
+	Export BCF	Exportovat BCF
+	Export CSV	Exportovat CSV
+	Export to BCF 2.1 (ZIP)	Exportovat do BCF 2.1 (ZIP)
+	Export clash report to CSV	Exportovat zprávu o kolizích do CSV
+	MEP Review	Revize MEP
+	Guessed only	Pouze odhadnuté
+	{n} items	{n} položek
+	No MEP items found. Run mep.read first.	Nebyly nalezeny žádné MEP položky. Nejprve spusťte mep.read.
+	Mark reviewed	Označit jako zkontrolováno
+	Size: {ss}, Height: {hs}	Rozměr: {ss}, Výška: {hs}
+	Edit size, height or system	Upravit rozměr, výšku nebo systém
+	Size W:	Šířka:
+	Bottom ft:	Spodek (stopy):
+	Rebuild 3D model keeping hand edits	Přestavět 3D model se zachováním ručních úprav
+	Zoomed to {sys} run on {lvl}.	Přiblíženo na trasu {sys} na {lvl}.
+	Marked as reviewed.	Označeno jako zkontrolováno.
+	Unmarked.	Odznačeno.
+	Edit applied.	Úprava použita.
+	Rebuilt: {n} MEP runs.	Přestavěno: {n} MEP tras.

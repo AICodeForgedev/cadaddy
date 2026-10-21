@@ -2574,3 +2574,36 @@
 	Redefine Attributes	Перевизначити атрибути
 	Drawing	Креслення
 	Profile	Профіль
+	Clashes	Колізії
+	Run	Запустити
+	Re-run	Перезапустити
+	Run clash detection	Запустити виявлення колізій
+	Re-run keeping statuses	Перезапустити зі збереженням статусів
+	Tolerance:	Допуск:
+	in	дюйм
+	Show:	Показати:
+	No clashes. Run detection first.	Колізій немає. Спочатку запустіть виявлення.
+	Status:	Статус:
+	Trade:	Фах:
+	Notes:	Примітки:
+	Go To	Перейти
+	Zoom to clash	Наблизити до колізії
+	Export BCF	Експорт BCF
+	Export CSV	Експорт CSV
+	Export to BCF 2.1 (ZIP)	Експорт до BCF 2.1 (ZIP)
+	Export clash report to CSV	Експорт звіту про колізії до CSV
+	MEP Review	Перегляд MEP
+	Guessed only	Лише здогадки
+	{n} items	{n} елементів
+	No MEP items found. Run mep.read first.	Елементи MEP не знайдені. Спершу запустіть mep.read.
+	Mark reviewed	Позначити як переглянуто
+	Size: {ss}, Height: {hs}	Розмір: {ss}, Висота: {hs}
+	Edit size, height or system	Редагувати розмір, висоту або систему
+	Size W:	Ширина:
+	Bottom ft:	Низ (фути):
+	Rebuild 3D model keeping hand edits	Перебудувати 3D-модель зі збереженням ручних правок
+	Zoomed to {sys} run on {lvl}.	Наближено до ділянки {sys} на {lvl}.
+	Marked as reviewed.	Позначено як переглянуто.
+	Unmarked.	Позначку знято.
+	Edit applied.	Редагування застосовано.
+	Rebuilt: {n} MEP runs.	Перебудовано: {n} ділянок MEP.

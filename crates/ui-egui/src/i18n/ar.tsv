@@ -2502,3 +2502,36 @@ menu	View	عرض
 	Oops	استرجاع المحذوف
 	Quick Text	نص سريع
 	Redefine Attributes	إعادة تعريف السمات
+	Clashes	تعارضات
+	Run	تشغيل
+	Re-run	إعادة التشغيل
+	Run clash detection	تشغيل كشف التعارضات
+	Re-run keeping statuses	إعادة التشغيل مع الاحتفاظ بالحالات
+	Tolerance:	التسامح:
+	in	بوصة
+	Show:	عرض:
+	No clashes. Run detection first.	لا توجد تعارضات. قم بتشغيل الكشف أولاً.
+	Status:	الحالة:
+	Trade:	التخصص:
+	Notes:	ملاحظات:
+	Go To	انتقال إلى
+	Zoom to clash	تكبير إلى التعارض
+	Export BCF	تصدير BCF
+	Export CSV	تصدير CSV
+	Export to BCF 2.1 (ZIP)	تصدير إلى BCF 2.1 (ZIP)
+	Export clash report to CSV	تصدير تقرير التعارضات إلى CSV
+	MEP Review	مراجعة MEP
+	Guessed only	التخمينات فقط
+	{n} items	{n} عنصر
+	No MEP items found. Run mep.read first.	لم يتم العثور على عناصر MEP. قم بتشغيل mep.read أولاً.
+	Mark reviewed	تعليم كمراجع
+	Size: {ss}, Height: {hs}	الحجم: {ss}، الارتفاع: {hs}
+	Edit size, height or system	تعديل الحجم أو الارتفاع أو النظام
+	Size W:	العرض:
+	Bottom ft:	الارتفاع السفلي (قدم):
+	Rebuild 3D model keeping hand edits	إعادة بناء النموذج ثلاثي الأبعاد مع الحفاظ على التعديلات اليدوية
+	Zoomed to {sys} run on {lvl}.	تم التكبير إلى مسار {sys} على {lvl}.
+	Marked as reviewed.	تم تعليمه كمراجع.
+	Unmarked.	تم إلغاء التعليم.
+	Edit applied.	تم تطبيق التعديل.
+	Rebuilt: {n} MEP runs.	تم إعادة البناء: {n} مسارات MEP.

@@ -2506,3 +2506,36 @@ menu	Modify	Edita
 	Oops	Ripristina cancellati
 	Quick Text	Testo rapido
 	Redefine Attributes	Ridefinisci attributi
+	Clashes	Conflitti
+	Run	Esegui
+	Re-run	Riesegui
+	Run clash detection	Esegui rilevamento conflitti
+	Re-run keeping statuses	Riesegui mantenendo gli stati
+	Tolerance:	Tolleranza:
+	in	poll
+	Show:	Mostra:
+	No clashes. Run detection first.	Nessun conflitto. Eseguire prima il rilevamento.
+	Status:	Stato:
+	Trade:	Disciplina:
+	Notes:	Note:
+	Go To	Vai a
+	Zoom to clash	Zoom sul conflitto
+	Export BCF	Esporta BCF
+	Export CSV	Esporta CSV
+	Export to BCF 2.1 (ZIP)	Esporta in BCF 2.1 (ZIP)
+	Export clash report to CSV	Esporta report conflitti in CSV
+	MEP Review	Revisione MEP
+	Guessed only	Solo stimati
+	{n} items	{n} elementi
+	No MEP items found. Run mep.read first.	Nessun elemento MEP trovato. Esegui prima mep.read.
+	Mark reviewed	Segna come revisionato
+	Size: {ss}, Height: {hs}	Dimensione: {ss}, Altezza: {hs}
+	Edit size, height or system	Modifica dimensione, altezza o sistema
+	Size W:	Larghezza:
+	Bottom ft:	Base (piedi):
+	Rebuild 3D model keeping hand edits	Ricostruisci modello 3D mantenendo le modifiche manuali
+	Zoomed to {sys} run on {lvl}.	Zoom sulla tratta {sys} su {lvl}.
+	Marked as reviewed.	Segnato come revisionato.
+	Unmarked.	Deselezionato.
+	Edit applied.	Modifica applicata.
+	Rebuilt: {n} MEP runs.	Ricostruiti: {n} tratti MEP.
