@@ -84,20 +84,20 @@ fn r6(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
 }
 
-fn layer(material: &str, thickness_in: f64, side: &str) -> WallLayer {
-    WallLayer { material: material.into(), thickness_in, side: side.into(), gauge: None, spacing_in: None, in_cavity: false }
+fn layer(material: &str, thickness_in: f64, side: &str) -> WallTypeLayer {
+    WallTypeLayer { material: material.into(), thickness_in, side: side.into(), gauge: None, spacing_in: None, in_cavity: false }
 }
 
-fn spaced(material: &str, thickness_in: f64, spacing_in: f64) -> WallLayer {
-    WallLayer { spacing_in: Some(spacing_in), ..layer(material, thickness_in, "framing") }
+fn spaced(material: &str, thickness_in: f64, spacing_in: f64) -> WallTypeLayer {
+    WallTypeLayer { spacing_in: Some(spacing_in), ..layer(material, thickness_in, "framing") }
 }
 
-fn studs() -> WallLayer {
-    WallLayer { gauge: Some(20), ..spaced("stud", 3.625, 16.0) }
+fn studs() -> WallTypeLayer {
+    WallTypeLayer { gauge: Some(20), ..spaced("stud", 3.625, 16.0) }
 }
 
 /// Gypsum ceilings' framing for a style.
-fn gyp_framing(cs: &CeilStyle) -> Vec<WallLayer> {
+fn gyp_framing(cs: &CeilStyle) -> Vec<WallTypeLayer> {
     match cs.framing {
         1 => vec![spaced("furring", 0.875, 16.0), spaced("main_runner", 1.5, 48.0)],
         2 => vec![spaced("wood_furring", 1.5, 16.0)],
@@ -129,7 +129,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
     wet_all.extend(if cs.double_wet { vec![spaced("furring", 0.875, 16.0), spaced("main_runner", 1.5, 48.0)] } else { gyp_framing(cs) });
     let mut plain = vec![layer("gyp", 0.625, "finish")];
     plain.extend(gyp_framing(cs));
-    let defs: Vec<(&str, &str, String, Vec<WallLayer>, Option<[f64; 2]>, Option<String>)> = vec![
+    let defs: Vec<(&str, &str, String, Vec<WallTypeLayer>, Option<[f64; 2]>, Option<String>)> = vec![
         (
             "act",
             "ACT-1",
@@ -215,21 +215,21 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
         t.building.rooms.iter().find(|rm| rm.level == level && rm.number == room).and_then(|rm| rm.ceiling.as_ref()).map(|c| c.height_ft)
     };
     // The corridor soffits (where the main duct runs): hung beside the tile ceiling.
-    let corridor: Vec<usize> = (0..t.soffits.len()).collect();
+    let corridor: Vec<usize> = (0..t.rcp_soffits.len()).collect();
     for i in corridor {
         let c = r.chance(cs.callouts);
-        let Some(sf) = t.soffits.get(i).cloned() else { continue };
+        let Some(sf) = t.rcp_soffits.get(i).cloned() else { continue };
         let clg = ceiling_of(t, &sf.level, &sf.room).unwrap_or(sf.height_ft);
         // Mid-corridor both long sides show, and its west end; its east end meets the end wall.
         let sides = 2.0 * sf.length_ft + sf.width_ft;
-        if let Some(s) = t.soffits.get_mut(i) {
+        if let Some(s) = t.rcp_soffits.get_mut(i) {
             s.soffit_type = Some(hung.tag.clone());
             s.depth_ft = Some(r6(clg - sf.height_ft));
             s.sides_ft = Some(r6(sides));
             s.called_out = c;
         }
     }
-    let mut k = t.soffits.len();
+    let mut k = t.rcp_soffits.len();
     let words = |h: f64| match cs.soffit_words {
         1 => format!("GYP. BD. SOFFIT @ {}", feet_inches(h)),
         2 => format!("BULKHEAD @ {}", feet_inches(h)),
@@ -257,7 +257,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
                 k += 1;
                 let h = c.height_ft - drop;
                 let called = callout(r);
-                t.soffits.push(Soffit {
+                t.rcp_soffits.push(Soffit {
                     id: format!("SF{k:03}"),
                     level: lv.into(),
                     room: rm.number.clone(),
@@ -296,7 +296,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
             k += 1;
             let h = c.height_ft - drop;
             let called = callout(r);
-            t.soffits.push(Soffit {
+            t.rcp_soffits.push(Soffit {
                 id: format!("SF{k:03}"),
                 level: lv.into(),
                 room: rm.number.clone(),
@@ -371,7 +371,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
 // ---- How the sheet words it --------------------------------------------------------------------
 
 /// A ceiling layer in the legend's words.
-fn ceiling_layer_words(l: &WallLayer, ws: &WallStyle, grid: Option<[f64; 2]>) -> String {
+fn ceiling_layer_words(l: &WallTypeLayer, ws: &WallStyle, grid: Option<[f64; 2]>) -> String {
     let d = frac(l.thickness_in, ws.dash);
     let o = l.spacing_in.map(|s| frac(s, ws.dash)).unwrap_or_default();
     match l.material.as_str() {
@@ -390,7 +390,7 @@ fn ceiling_layer_words(l: &WallLayer, ws: &WallStyle, grid: Option<[f64; 2]>) ->
 }
 
 /// Boards in the legend's words: `(2) LAYERS 5/8" TYPE X GYP. BD.`, runs of one kind grouped.
-fn boards_words(layers: &[WallLayer], ws: &WallStyle) -> String {
+fn boards_words(layers: &[WallTypeLayer], ws: &WallStyle) -> String {
     let mut parts = Vec::new();
     let mut i = 0;
     while let Some(l) = layers.get(i) {
@@ -422,7 +422,7 @@ pub fn ceiling_lines(ct: &CeilingType, ws: &WallStyle) -> Vec<String> {
         out.push("NO CEILING - OPEN TO STRUCTURE ABOVE".into());
         return out;
     }
-    let boards: Vec<WallLayer> = ct.layers.iter().filter(|l| l.side == "finish" && l.material.starts_with("gyp")).cloned().collect();
+    let boards: Vec<WallTypeLayer> = ct.layers.iter().filter(|l| l.side == "finish" && l.material.starts_with("gyp")).cloned().collect();
     if !boards.is_empty() {
         out.push(boards_words(&boards, ws));
     }
@@ -492,7 +492,7 @@ pub fn callout_words(tag: &str, cs: &CeilStyle) -> String {
 pub fn draw_callouts(pen: &mut Pen, t: &Truth, cs: &CeilStyle, level: &str) {
     let rot = crate::draw::readable(pen.rot());
     let th = pen.st.text_in;
-    for sf in t.soffits.iter().filter(|s| s.level == level && s.called_out) {
+    for sf in t.rcp_soffits.iter().filter(|s| s.level == level && s.called_out) {
         let Some(tag) = &sf.soffit_type else { continue };
         let c = [(sf.min_ft[0] + sf.max_ft[0]) / 2.0, (sf.min_ft[1] + sf.max_ft[1]) / 2.0];
         let line = th * 1.5 / pen.sh.scale;
@@ -599,7 +599,7 @@ pub fn draw_schedule(pen: &mut Pen, t: &Truth, cs: &CeilStyle, area: [[f64; 2]; 
                 None => String::new(),
             };
             let height = rm.ceiling.as_ref().map_or("--".to_string(), |c| feet_inches(c.height_ft));
-            let soffit = t.soffits.iter().any(|s| s.level == rm.level && s.room == rm.number);
+            let soffit = t.rcp_soffits.iter().any(|s| s.level == rm.level && s.room == rm.number);
             let [f, b, w] = finishes(&rm.name);
             rows.push(vec![
                 rm.number.clone(),

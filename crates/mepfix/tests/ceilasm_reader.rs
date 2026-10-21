@@ -27,7 +27,7 @@ fn the_truth_is_consistent() {
         assert_eq!(t.soffit_types, g.soffit_types, "seed {seed}");
         assert_eq!(t.head_details, g.head_details, "seed {seed}");
         assert_eq!(t.room_ceilings, g.room_ceilings, "seed {seed}");
-        assert_eq!(t.soffits, g.soffits, "seed {seed}");
+        assert_eq!(t.rcp_soffits, g.rcp_soffits, "seed {seed}");
         assert_eq!(t.wall_types, g.wall_types, "seed {seed}");
         let tags: Vec<&str> = t.ceiling_types.iter().map(|c| c.tag.as_str()).collect();
         for rc in &t.room_ceilings {
@@ -40,7 +40,7 @@ fn the_truth_is_consistent() {
             }
         }
         assert_eq!(t.room_ceilings.len(), t.building.rooms.len());
-        for sf in &t.soffits {
+        for sf in &t.rcp_soffits {
             let st = t.soffit_types.iter().find(|s| Some(&s.tag) == sf.soffit_type.as_ref()).unwrap();
             let rm = t.building.rooms.iter().find(|r| r.level == sf.level && r.number == sf.room).unwrap();
             let clg = rm.ceiling.as_ref().unwrap();
@@ -78,10 +78,10 @@ fn seeds_mix_assemblies_and_heads() {
     }
     let under = ts
         .iter()
-        .flat_map(|t| t.soffits.iter().map(move |s| (t, s)))
+        .flat_map(|t| t.rcp_soffits.iter().map(move |s| (t, s)))
         .filter(|(t, s)| t.soffit_types.iter().any(|x| Some(&x.tag) == s.soffit_type.as_ref() && x.hangs_from == "ceiling"));
     assert!(under.count() > 10, "few soffits built under a ceiling");
-    assert!(ts.iter().any(|t| t.soffits.iter().any(|s| !s.called_out)));
+    assert!(ts.iter().any(|t| t.rcp_soffits.iter().any(|s| !s.called_out)));
     assert!(ts.iter().any(|t| t.room_ceilings.iter().any(|r| !r.scheduled)));
 }
 

@@ -225,10 +225,10 @@ pub struct CeilingType {
     /// `ACT`, `GYP` or `OPEN` (exposed structure).
     pub kind: String,
     /// From the room's face up: the boards (or tiles), then their framing. Material names as
-    /// [`WallLayer::material`] plus `act_tile`, `act_grid`, `hat_channel`, `furring`,
+    /// [`WallTypeLayer::material`] plus `act_tile`, `act_grid`, `hat_channel`, `furring`,
     /// `main_runner` (suspended framing's carrying channels), `wood_furring`; side `finish` or
     /// `framing`.
-    pub layers: Vec<WallLayer>,
+    pub layers: Vec<WallTypeLayer>,
     /// ACT tile size, feet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_ft: Option<[f64; 2]>,
@@ -255,11 +255,11 @@ pub struct SoffitType {
     pub tag: String,
     pub name: String,
     /// The bottom's boards, room face first.
-    pub bottom: Vec<WallLayer>,
+    pub bottom: Vec<WallTypeLayer>,
     /// The vertical faces' boards, room face first.
-    pub sides: Vec<WallLayer>,
+    pub sides: Vec<WallTypeLayer>,
     /// Its framing (studs for the sides, joists or channels for the bottom).
-    pub framing: Vec<WallLayer>,
+    pub framing: Vec<WallTypeLayer>,
     /// `ceiling`: built under the ceiling, which runs on above it; `structure`: hung from the
     /// structure, the ceiling stops at its sides.
     pub hangs_from: String,

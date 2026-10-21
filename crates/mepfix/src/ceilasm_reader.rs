@@ -20,7 +20,7 @@
 
 use crate::ceiling_reader::{CeilingResult, FoundRoom};
 use crate::sheet_reader::{self, SheetMap};
-use crate::truth::{CeilingType, HeadDetail, SoffitType, Truth, WallLayer};
+use crate::truth::{CeilingType, HeadDetail, SoffitType, Truth, WallTypeLayer};
 use crate::wall_reader::{WallResult, dist, feet_inches, inch_values, side_item, symbol_centres};
 use cadaddy_doc::{Drawing, EntityKind};
 use serde_json::{Value, json};
@@ -125,12 +125,12 @@ fn spacing(u: &str) -> Option<f64> {
     inch_values(u).into_iter().find(|(i, _)| *i > at).map(|(_, v)| v)
 }
 
-fn spaced(material: &str, thickness_in: f64, spacing_in: Option<f64>) -> WallLayer {
-    WallLayer { material: material.into(), thickness_in, side: "framing".into(), spacing_in, ..WallLayer::default() }
+fn spaced(material: &str, thickness_in: f64, spacing_in: Option<f64>) -> WallTypeLayer {
+    WallTypeLayer { material: material.into(), thickness_in, side: "framing".into(), spacing_in, ..WallTypeLayer::default() }
 }
 
 /// A framing line → its layer.
-fn framing(u: &str) -> Option<WallLayer> {
+fn framing(u: &str) -> Option<WallTypeLayer> {
     let th = inch_values(u).first().map(|x| x.1);
     let o = spacing(u);
     if u.contains("WOOD") {
@@ -140,7 +140,7 @@ fn framing(u: &str) -> Option<WallLayer> {
             [n, g] if g.starts_with("GA") => n.parse::<u32>().ok(),
             _ => None,
         });
-        Some(WallLayer { gauge, ..spaced("stud", th.unwrap_or(3.625), o) })
+        Some(WallTypeLayer { gauge, ..spaced("stud", th.unwrap_or(3.625), o) })
     } else if u.contains("MAIN RUNNER") || u.contains("COLD-ROLLED") || u.contains("CARRYING") {
         Some(spaced("main_runner", th.unwrap_or(1.5), o))
     } else if u.contains("HAT CHANNEL") {
@@ -156,7 +156,7 @@ fn framing(u: &str) -> Option<WallLayer> {
 }
 
 /// Boards: `(2) LAYERS 5/8" TYPE X GYP. BD.` or several joined with `+`, face first.
-fn boards(u: &str) -> Vec<WallLayer> {
+fn boards(u: &str) -> Vec<WallTypeLayer> {
     u.split('+')
         .flat_map(|p| side_item(p.trim()))
         .map(|mut l| {
@@ -201,7 +201,7 @@ pub fn parse_ceiling(tag: &str, lines: &[String]) -> CeilingType {
         }
         if u.contains("TILE") || u.contains("LAY-IN") {
             let th = inch_values(u).first().map_or(0.625, |x| x.1);
-            finish.push(WallLayer { material: "act_tile".into(), thickness_in: th, side: "finish".into(), ..WallLayer::default() });
+            finish.push(WallTypeLayer { material: "act_tile".into(), thickness_in: th, side: "finish".into(), ..WallTypeLayer::default() });
             // `2'x4'`
             let feet: Vec<f64> = u
                 .split(['X', 'x'])
@@ -663,7 +663,7 @@ pub fn result_from_truth(t: &Truth) -> AsmResult {
             guess: None,
         });
     }
-    for sf in &t.soffits {
+    for sf in &t.rcp_soffits {
         r.soffits.push(SoffitRead {
             level: sf.level.clone(),
             room: sf.room.clone(),
@@ -718,7 +718,7 @@ pub struct AsmScore {
     pub soffit_sides_correct: usize,
 }
 
-fn same_layers(a: &[WallLayer], b: &[WallLayer]) -> bool {
+fn same_layers(a: &[WallTypeLayer], b: &[WallTypeLayer]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
             x.material == y.material
@@ -733,7 +733,7 @@ pub fn score_assemblies(t: &Truth, r: &AsmResult) -> AsmScore {
         soffit_types_total: t.soffit_types.len(),
         heads_total: t.head_details.len(),
         wall_heads_total: t.wall_types.len(),
-        soffits_total: t.soffits.len(),
+        soffits_total: t.rcp_soffits.len(),
         ..AsmScore::default()
     };
     for c in &t.ceiling_types {
@@ -777,7 +777,7 @@ pub fn score_assemblies(t: &Truth, r: &AsmResult) -> AsmScore {
             sc.rooms_unscheduled_correct += usize::from(right);
         }
     }
-    for s in &t.soffits {
+    for s in &t.rcp_soffits {
         let overlap = |f: &SoffitRead| {
             let w = (s.max_ft[0].min(f.max_ft[0]) - s.min_ft[0].max(f.min_ft[0])).max(0.0);
             let h = (s.max_ft[1].min(f.max_ft[1]) - s.min_ft[1].max(f.min_ft[1])).max(0.0);
@@ -814,7 +814,7 @@ fn category(m: &str) -> &'static str {
 }
 
 /// A ceiling or soffit layer in plain words.
-pub fn layer_words(l: &WallLayer) -> String {
+pub fn layer_words(l: &WallTypeLayer) -> String {
     let d = crate::walls::frac(l.thickness_in, false);
     let o = l.spacing_in.map(|s| format!(" @ {} o.c.", crate::walls::frac(s, false))).unwrap_or_default();
     match l.material.as_str() {
@@ -828,7 +828,7 @@ pub fn layer_words(l: &WallLayer) -> String {
     }
 }
 
-fn layers_json(ls: &[WallLayer]) -> Value {
+fn layers_json(ls: &[WallTypeLayer]) -> Value {
     Value::Array(
         ls.iter()
             .map(|l| {
