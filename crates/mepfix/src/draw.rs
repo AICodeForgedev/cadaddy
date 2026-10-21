@@ -290,6 +290,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
+            legend.push(item("soffit", "SOFFIT / BULKHEAD (DASHED)"));
             legend.extend(device_legend());
             abbr.extend(["ACT = ACOUSTIC CEILING TILE", "GYP = GYPSUM BOARD", "AFF = ABOVE FINISHED FLOOR", "CLG = CEILING"].map(abbrev));
         }
@@ -1197,6 +1198,13 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         }
     }
     terminals(pen, t, level, &["SA", "RA", "EA", "FP"], false);
+    // Soffits: dashed rectangle with a tag.
+    for sf in t.soffits.iter().filter(|s| s.level == level) {
+        pen.brect("DASHED", sf.min_ft, sf.max_ft);
+        let c = [(sf.min_ft[0] + sf.max_ft[0]) / 2.0, (sf.min_ft[1] + sf.max_ft[1]) / 2.0];
+        let p = pen.b(c);
+        pen.text("TEXT", p, st.text_in * 0.9, &sf.tag, rot, HAlign::Center, VAlign::Middle);
+    }
 }
 
 // ---- Structure ----------------------------------------------------------------------------------

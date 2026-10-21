@@ -339,14 +339,30 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     // ---- Rooms --------------------------------------------------------------------------
     let pool = ["OFFICE", "OFFICE", "OPEN OFFICE", "CONFERENCE", "BREAK ROOM", "WORK ROOM", "TRAINING", "STORAGE", "FILES", "COPY"];
     let toilets = r.pick(&[("MEN", "WOMEN"), ("TOILET", "TOILET"), ("RESTROOM", "RESTROOM")]);
+    let two_by_two = seed.is_multiple_of(3);
+    let act_grid: [f64; 2] = if two_by_two { [2.0, 2.0] } else { [2.0, 4.0] };
+    // Soffits: a dropped GYP section along the corridor where the main duct runs, on some seeds.
+    let has_soffits = r.chance(0.4);
+    let soffit_drop: f64 = r.pick(&[0.5, 1.0, 1.5]); // how far below the corridor ceiling
+    let mut soffit_n = 0usize;
     for f in &floors {
         let n0: usize = if f.code == "1" { 100 } else { 200 };
-        let act = |h: f64| Some(Ceiling { height_ft: h, kind: "ACT".into(), tag: String::new() });
+        let act = |h: f64| Some(Ceiling {
+            height_ft: h,
+            kind: "ACT".into(),
+            tag: String::new(),
+            grid_ft: Some(act_grid),
+        });
+        let plenum = |h: f64| -> Option<f64> {
+            let p = f.girder_bob - h;
+            if p > 0.01 { Some(r6(p)) } else { None }
+        };
         let add = |t: &mut Truth, num: usize, name: &str, min: [f64; 2], max: [f64; 2], ceiling: Option<Ceiling>| {
             let mut ceiling = ceiling;
             if let Some(c) = ceiling.as_mut() {
                 c.tag = st.ceiling_text(c.height_ft, &c.kind).join(" ");
             }
+            let plenum_ft = ceiling.as_ref().and_then(|c| plenum(c.height_ft));
             t.building.rooms.push(Room {
                 id: format!("R{num}"),
                 level: f.code.clone(),
@@ -355,9 +371,30 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 min_ft: min,
                 max_ft: max,
                 ceiling,
+                plenum_ft,
             });
         };
         add(&mut t, n0, "CORRIDOR", [0.0, y1], [width, y2], act(f.corr_clg));
+        // Soffits in the corridor (one per floor) where the main duct runs.
+        if has_soffits {
+            soffit_n += 1;
+            let sh = f.corr_clg - soffit_drop;
+            let sw = cw * 0.6; // a bit narrower than the corridor
+            let sy0 = y1 + (y2 - y1 - sw) / 2.0;
+            let sx0 = xs.get(1).copied().unwrap_or(0.0); // starts past the mech room
+            let sx1 = xs.last().copied().unwrap_or(width); // to the far end
+            t.soffits.push(Soffit {
+                id: format!("SF{soffit_n:03}"),
+                level: f.code.clone(),
+                room: format!("{n0}"),
+                height_ft: r6(sh),
+                width_ft: r6(sw),
+                length_ft: r6(sx1 - sx0),
+                min_ft: [r6(sx0), r6(sy0)],
+                max_ft: [r6(sx1), r6(sy0 + sw)],
+                tag: format!("SOFFIT @ {}", feet_inches(sh)),
+            });
+        }
         for i in 0..nb {
             let (x0, x1) = (xs.get(i).copied().unwrap_or(0.0), xs.get(i + 1).copied().unwrap_or(0.0));
             let south = n0 + 1 + i;
@@ -366,7 +403,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             } else {
                 let name = r.pick(&pool);
                 let c = if name == "STORAGE" || name == "FILES" {
-                    Some(Ceiling { height_ft: f.office_clg, kind: "GYP".into(), tag: String::new() })
+                    Some(Ceiling { height_ft: f.office_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None })
                 } else {
                     act(f.office_clg)
                 };
@@ -375,7 +412,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             let north = n0 + 1 + nb + i;
             if i + 1 == nb {
                 let mid = (x0 + x1) / 2.0;
-                let gyp = Some(Ceiling { height_ft: f.toilet_clg, kind: "GYP".into(), tag: String::new() });
+                let gyp = Some(Ceiling { height_ft: f.toilet_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None });
                 add(&mut t, north, toilets.0, [x0, y2], [mid, y3], gyp.clone());
                 add(&mut t, north + 1, toilets.1, [mid, y2], [x1, y3], gyp);
             } else {
