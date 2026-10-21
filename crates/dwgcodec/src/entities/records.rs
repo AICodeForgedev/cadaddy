@@ -1037,6 +1037,363 @@ fn group(o: &mut Obj, g: &mut G) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Objects added by Q249 (dwgwrite2): SORTENTSTABLE, MATERIAL, TABLESTYLE,
+// VISUALSTYLE, FIELD. Not in KNOWN yet — the binary format needs to be verified
+// against the ODA specification's exact layout before these decode acadrust-written
+// files. The encoders in encode_kinds.rs write them; the decoders here are the
+// inverse, ready for when reading is verified.
+// ---------------------------------------------------------------------------
+
+/// SORTENTSTABLE (spec §20.4.90): draw-order table for a block space.
+#[allow(dead_code)]
+fn decode_sortentstable(o: &mut Obj, g: &mut G) -> Result<()> {
+    let n_sort = count(o.d.bl()?, "sort handles")?;
+    let mut sorts = Vec::with_capacity(n_sort);
+    for _ in 0..n_sort {
+        sorts.push(o.href()?.unwrap_or(0));
+    }
+    let n_ent = count(o.d.bl()?, "entity handles")?;
+    let n = n_ent.min(n_sort);
+    let mut entities = Vec::with_capacity(n);
+    for _ in 0..n_ent {
+        entities.push(o.href()?.unwrap_or(0));
+    }
+    let block_owner = o.href()?.unwrap_or(0);
+    g.s(100, "AcDbSortentsTable");
+    g.h(330, block_owner);
+    for (ent, sort) in entities.iter().zip(sorts.iter()) {
+        g.h(331, *ent);
+        g.h(5, *sort);
+    }
+    Ok(())
+}
+
+/// A colour (CMC) read the same way as `color_number` but returning just the ACI index.
+#[allow(dead_code)]
+fn cmc_aci(o: &mut Obj) -> Result<i64> {
+    let index = o.d.bs()?;
+    if !o.at_least(Version::R2004) {
+        return Ok(i64::from(index));
+    }
+    let _raw = o.d.bl()?;
+    o.d.rc()?;
+    Ok(i64::from(index))
+}
+
+/// MATERIAL (spec §20.4.83): a material definition.
+#[allow(dead_code)]
+fn decode_material(o: &mut Obj, g: &mut G) -> Result<()> {
+    let name = o.text()?;
+    let description = o.text()?;
+    g.s(100, "AcDbMaterial");
+    g.s(1, name);
+    if !description.is_empty() {
+        g.s(2, description);
+    }
+    // Ambient channel.
+    let _amb_method = o.d.bl()?;
+    let _amb_factor = o.d.bl()?;
+    let _amb_value = o.d.bl()?;
+    // Diffuse channel.
+    let diff_method = o.d.bl()?;
+    let diff_value = o.d.bl()?;
+    let diff_factor = o.d.bd()?;
+    if diff_method != 0 {
+        g.i(71, 1);
+    }
+    g.f(41, diff_factor);
+    g.i(91, i64::from(diff_value));
+    g.f(42, diff_factor);
+    // Diffuse map.
+    let has_diff_map = o.d.bl()? != 0;
+    if has_diff_map {
+        let _blend = o.d.bd()?;
+        let file = o.text()?;
+        let proj = o.d.bl()?;
+        let _tiling = o.d.bl()?;
+        let _auto_xform = o.d.bl()?;
+        let mut mx = [0.0f64; 16];
+        for v in &mut mx {
+            *v = o.d.bd()?;
+        }
+        g.i(72, 1);
+        if !file.is_empty() {
+            g.s(3, file);
+        }
+        g.i(73, i64::from(proj));
+        g.i(74, 1);
+        g.i(75, 1);
+        for v in mx {
+            g.f(43, v);
+        }
+    }
+    // Specular.
+    let glossiness = o.d.bd()?;
+    let _spec_method = o.d.bl()?;
+    let _spec_value = o.d.bl()?;
+    let _spec_factor = o.d.bd()?;
+    let _has_spec_map = o.d.bl()?;
+    g.f(44, glossiness);
+    // Reflection.
+    let _reflect_factor = o.d.bd()?;
+    let _has_reflect_map = o.d.bl()?;
+    // Opacity.
+    let opacity = o.d.bd()?;
+    let _has_opacity_map = o.d.bl()?;
+    g.f(140, opacity);
+    // Bump.
+    let has_bump_map = o.d.bl()? != 0;
+    if has_bump_map {
+        let normal_strength = o.d.bd()?;
+        let bump_file = o.text()?;
+        let _bump_proj = o.d.bl()?;
+        let _bump_tiling = o.d.bl()?;
+        let _bump_auto = o.d.bl()?;
+        for _ in 0..16 {
+            o.d.bd()?;
+        }
+        g.f(143, normal_strength);
+        g.i(179, 1);
+        if !bump_file.is_empty() {
+            g.s(8, bump_file);
+        }
+    }
+    // Refraction.
+    let refraction = o.d.bd()?;
+    let _has_refract_map = o.d.bl()?;
+    g.f(145, refraction);
+    // From R2007: genproc fields (skip).
+    if o.at_least(Version::R2007) {
+        o.d.bl()?; // genproc val bool
+        o.d.bl()?; // genproc val int
+        o.text()?; // genproc val text
+        o.d.b()?; // genproc table flag
+        o.d.b()?; // genproc color flag
+        o.d.bl()?; // genproc color index
+        o.d.bl()?; // genproc color value
+    }
+    Ok(())
+}
+
+/// TABLESTYLE (spec §20.4.89): table cell style definition.
+#[allow(dead_code)]
+fn decode_tablestyle(o: &mut Obj, g: &mut G) -> Result<()> {
+    let description = o.text()?;
+    let flags = o.d.bl()?;
+    let flow = o.d.bl()?;
+    let h_margin = o.d.bd()?;
+    let v_margin = o.d.bd()?;
+    let suppress_title = o.d.b()?;
+    let suppress_header = o.d.b()?;
+    g.s(100, "AcDbTableStyle");
+    g.s(3, description);
+    g.i(70, i64::from(flags));
+    g.i(71, i64::from(flow));
+    g.f(40, h_margin);
+    g.f(41, v_margin);
+    g.i(280, i64::from(suppress_title));
+    g.i(281, i64::from(suppress_header));
+    // Three cell styles: Data, Header, Title.
+    for _ in 0..3 {
+        let style_name = o.text()?;
+        let height = o.d.bd()?;
+        let align = o.d.bs()?;
+        let text_color = cmc_aci(o)?;
+        let fill_color = cmc_aci(o)?;
+        let filled = o.d.b()?;
+        g.s(7, style_name);
+        g.f(140, height);
+        g.i(170, i64::from(align));
+        g.i(62, text_color);
+        g.i(63, fill_color);
+        g.i(283, i64::from(filled));
+        // Six borders per cell style.
+        for bi in 0..6 {
+            let _border_type = o.d.bl()?;
+            let border_color = cmc_aci(o)?;
+            let border_lw = o.d.bs()?;
+            let border_vis = o.d.b()?;
+            g.i(274 + bi, i64::from(border_lw));
+            g.i(284 + bi, i64::from(border_vis));
+            g.i(64 + bi, border_color);
+        }
+    }
+    Ok(())
+}
+
+/// VISUALSTYLE (spec §20.4.84): rendering style definition.
+#[allow(dead_code)]
+fn decode_visualstyle(o: &mut Obj, g: &mut G) -> Result<()> {
+    let description = o.text()?;
+    let vtype = o.d.bl()?;
+    // Face settings.
+    let face_lighting_model = o.d.bl()?;
+    let face_lighting_quality = o.d.bl()?;
+    let face_color_mode = o.d.bl()?;
+    let face_opacity = o.d.bd()?;
+    let face_specular = o.d.bd()?;
+    let mono_color = cmc_aci(o)?;
+    let face_mono_color = cmc_aci(o)?;
+    let face_modifier = o.d.bl()?;
+    // Edge settings.
+    let edge_model = o.d.bl()?;
+    let edge_style = o.d.bl()?;
+    let edge_intersection_color = cmc_aci(o)?;
+    let edge_obscured_color = cmc_aci(o)?;
+    let edge_intersection_lp = o.d.bl()?;
+    let edge_obscured_lp = o.d.bl()?;
+    let edge_crease_angle = o.d.bl()?;
+    // Edge modifiers.
+    let edge_modifier = o.d.bl()?;
+    let edge_color = cmc_aci(o)?;
+    let edge_opacity = o.d.bd()?;
+    let edge_width = o.d.bl()?;
+    let edge_overhang = o.d.bl()?;
+    let edge_jitter = o.d.bl()?;
+    let edge_sil_color = cmc_aci(o)?;
+    let edge_sil_width = o.d.bl()?;
+    // Display settings.
+    let display = o.d.bl()?;
+    let brightness = o.d.bd()?;
+    let shadow_type = o.d.bl()?;
+    g.s(100, "AcDbVisualStyle");
+    g.s(2, description);
+    g.i(70, i64::from(vtype));
+    g.i(71, i64::from(face_lighting_model));
+    g.i(72, i64::from(face_lighting_quality));
+    g.i(73, i64::from(face_color_mode));
+    g.f(40, face_opacity);
+    g.f(41, face_specular);
+    g.i(62, mono_color);
+    g.i(63, face_mono_color);
+    g.i(90, i64::from(face_modifier));
+    g.i(74, i64::from(edge_model));
+    g.i(91, i64::from(edge_style));
+    g.i(64, edge_intersection_color);
+    g.i(65, edge_obscured_color);
+    g.i(75, i64::from(edge_intersection_lp));
+    g.i(175, i64::from(edge_obscured_lp));
+    g.i(92, i64::from(edge_crease_angle));
+    g.i(174, i64::from(edge_modifier));
+    g.i(66, edge_color);
+    g.f(43, edge_opacity);
+    g.i(76, i64::from(edge_width));
+    g.i(77, i64::from(edge_overhang));
+    g.i(78, i64::from(edge_jitter));
+    g.i(67, edge_sil_color);
+    g.i(79, i64::from(edge_sil_width));
+    g.i(170, i64::from(display));
+    g.f(44, brightness);
+    g.i(171, i64::from(shadow_type));
+    // From R2010.
+    if o.at_least(Version::R2010) {
+        g.f(45, o.d.bd()?);
+        g.i(176, i64::from(o.d.bl()?));
+        g.i(93, i64::from(o.d.bl()?));
+        g.i(172, i64::from(o.d.bl()?));
+        g.i(94, i64::from(o.d.bl()?));
+        g.i(68, cmc_aci(o)?);
+    }
+    // From R2013.
+    if o.at_least(Version::R2013) {
+        g.i(177, i64::from(o.d.bl()?));
+        g.i(95, i64::from(o.d.bl()?));
+        g.i(69, cmc_aci(o)?);
+        g.f(46, o.d.bd()?);
+        g.f(47, o.d.bd()?);
+        g.f(48, o.d.bd()?);
+    }
+    Ok(())
+}
+
+/// FIELD (spec §20.4.85): a calculated field expression.
+#[allow(dead_code)]
+fn decode_field(o: &mut Obj, g: &mut G) -> Result<()> {
+    let evaluator = o.text()?;
+    let code = o.text()?;
+    // Child fields.
+    let n_children = count(o.d.bl()?, "field children")?;
+    let mut children = Vec::with_capacity(n_children);
+    for _ in 0..n_children {
+        children.push(o.href()?.unwrap_or(0));
+    }
+    // Object references.
+    let n_refs = count(o.d.bl()?, "field references")?;
+    let mut refs = Vec::with_capacity(n_refs);
+    for _ in 0..n_refs {
+        refs.push(o.href()?.unwrap_or(0));
+    }
+    let format = o.text()?;
+    let eval_option = o.d.bl()?;
+    let filing_option = o.d.bl()?;
+    let field_state = o.d.bl()?;
+    let eval_status = o.d.bl()?;
+    let eval_error = o.d.bl()?;
+    let vtype = o.d.bl()?;
+    // Read value based on type.
+    let mut value_str = String::new();
+    let mut value_long: i32 = 0;
+    let mut value_double: f64 = 0.0;
+    let mut value_len: i32 = 0;
+    match vtype {
+        0 => {}
+        1 => value_long = o.d.bl()?,
+        2 => value_double = o.d.bd()?,
+        4 => {
+            value_str = o.text()?;
+            value_len = o.d.bl()?;
+        }
+        _ => {}
+    }
+    g.s(100, "AcDbField");
+    g.s(1, evaluator);
+    // Write field code — split into 2 (first chunk) and 3 (continuations) at 250 bytes.
+    if code.len() <= 250 {
+        g.s(2, &code);
+    } else {
+        let mut at = 0;
+        let mut first = true;
+        for (i, ch) in code.char_indices() {
+            if i - at >= 250 {
+                let chunk = &code[at..i];
+                g.s(if first { 2 } else { 3 }, chunk);
+                first = false;
+                at = i;
+            }
+            let _ = ch;
+        }
+        if at < code.len() {
+            g.s(if first { 2 } else { 3 }, &code[at..]);
+        }
+    }
+    g.i(90, n_children as i64);
+    for ch in &children {
+        g.h(360, *ch);
+    }
+    g.i(97, n_refs as i64);
+    for r in &refs {
+        g.h(331, *r);
+    }
+    g.i(91, i64::from(eval_option));
+    g.i(92, i64::from(filing_option));
+    g.i(94, i64::from(field_state));
+    g.i(95, i64::from(eval_status));
+    g.i(96, i64::from(eval_error));
+    g.s(300, format);
+    g.i(93, i64::from(vtype));
+    match vtype {
+        1 => g.i(90, i64::from(value_long)),
+        2 => g.f(140, value_double),
+        4 => {
+            g.s(301, &value_str);
+            g.i(98, i64::from(value_len));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// XRECORD (spec §20.4.79): the data is a list of DXF groups (a 16-bit code, then the value in
 /// the code's type), then the cloning flag.
 fn xrecord(o: &mut Obj, g: &mut G) -> Result<()> {
