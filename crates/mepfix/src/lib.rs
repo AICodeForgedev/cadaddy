@@ -17,6 +17,7 @@ pub mod draw;
 pub mod layout;
 pub mod rng;
 pub mod score;
+pub mod sheet_reader;
 pub mod style;
 pub mod truth;
 
