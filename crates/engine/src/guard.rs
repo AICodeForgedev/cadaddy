@@ -29,7 +29,11 @@ pub(crate) fn message(p: &(dyn Any + Send)) -> String {
 impl Guarded {
     /// Create the machine of command `id` and wrap it.
     pub(crate) fn create(id: &str, factory: Factory, s: &Session) -> Result<Box<dyn Interactive>> {
-        let inner = catch_unwind(AssertUnwindSafe(|| factory(s))).map_err(|p| EngineError::Internal(id.into(), message(&*p)))??;
+        let inner = catch_unwind(AssertUnwindSafe(|| factory(s))).map_err(|p| {
+            let msg = message(&*p);
+            crate::crash_report::record(s, id, &msg);
+            EngineError::Internal(id.into(), msg)
+        })??;
         Ok(Box::new(Guarded { inner, broken: Cell::new(None) }))
     }
 
@@ -52,7 +56,10 @@ impl Interactive for Guarded {
             match catch_unwind(AssertUnwindSafe(|| self.inner.prompt(s))) {
                 // Pending point modifiers (FROM, M2P…) ask for their points in its place.
                 Ok(p) => return s.overlay_prompt(p),
-                Err(_) => self.broken.set(Some("panic in prompt")),
+                Err(p) => {
+                    crate::crash_report::record(s, self.inner.name(), &message(&*p));
+                    self.broken.set(Some("panic in prompt"));
+                }
             }
         }
         Prompt::new("Internal error; press Enter to end the command", Accept::TEXT)
@@ -61,10 +68,18 @@ impl Interactive for Guarded {
         if let Some(m) = self.broken.get() {
             return Err(EngineError::Internal(self.inner.name().to_ascii_lowercase(), m.into()));
         }
-        catch_unwind(AssertUnwindSafe(|| self.inner.input(s, i))).unwrap_or_else(|p| Err(self.internal(&*p)))
+        catch_unwind(AssertUnwindSafe(|| self.inner.input(s, i))).unwrap_or_else(|p| {
+            let e = self.internal(&*p);
+            crate::crash_report::record(s, self.inner.name(), &message(&*p));
+            Err(e)
+        })
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        catch_unwind(AssertUnwindSafe(|| self.inner.begin(s))).unwrap_or_else(|p| Err(self.internal(&*p)))
+        catch_unwind(AssertUnwindSafe(|| self.inner.begin(s))).unwrap_or_else(|p| {
+            let e = self.internal(&*p);
+            crate::crash_report::record(s, self.inner.name(), &message(&*p));
+            Err(e)
+        })
     }
     fn preview(&self, s: &Session, cursor: Vec2) -> Vec<EntityKind> {
         if self.broken.get().is_some() {

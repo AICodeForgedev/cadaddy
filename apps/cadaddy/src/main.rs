@@ -404,9 +404,13 @@ fn open_in_redline(path: &str) -> Result<bool, String> {
 }
 
 fn main() -> eframe::Result {
+    cadaddy_engine::crash_report::install_hook();
+    // --debug: verbose logging (set before the logger installs so it reads the right level).
+    let debug = std::env::args().any(|a| a == "--debug");
     cadaddy_ui_egui::startup::begin();
     // First, so every start-up record is captured; see `logging`.
-    let logger = logging::install();
+    let debug_filter = if debug { Some("debug,cadaddy*=debug") } else { None };
+    let logger = logging::install(debug_filter);
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let mut control_port =
         control_port_from("CADADDY_CONTROL_PORT", std::env::var_os("CADADDY_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
@@ -417,6 +421,7 @@ fn main() -> eframe::Result {
         match a.as_str() {
             "--control" => control_port = control_flag(control_port, args.next()),
             "--sample" => sample = true,
+            "--debug" => {}
             "--version" | "-V" => {
                 println!("{}", version_string());
                 return Ok(());
@@ -504,6 +509,7 @@ fn main() -> eframe::Result {
                 let mut app = CadApp::new(Session::empty(), services());
                 // The first DWG save returns once written; its "not kept" check follows.
                 app.session.background_checks = true;
+                app.debug_overlay = debug;
                 cadaddy_ui_egui::startup::mark("app state");
                 if let Some(note) = fallback {
                     log::warn!("{note}");
