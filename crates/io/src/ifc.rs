@@ -655,6 +655,29 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         let set = o.add(format!("IFCELEMENTQUANTITY('{}',$,'{set_name}',$,'BaseQuantities',{})", id(handle, 8), refs(&ids)));
         o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 9)));
     }
+    // BIM spec property sets (CaDaddy_Spec): entities with a type mark → IfcPropertySet with the
+    // type's fields as IfcPropertySingleValue (all text). Attached via IfcRelDefinesByProperties.
+    for p in &placed {
+        let ent = d.entity(cadaddy_doc::Handle(p.handle));
+        let mark = ent.and_then(|e| cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata));
+        let ty = mark.and_then(|m| d.bim_types.get(m));
+        if let (Some(mark), Some(ty)) = (mark, ty) {
+            let mut prop_ids = Vec::new();
+            // Type mark itself.
+            let mk_val = o.add(format!("IFCPROPERTYSINGLEVALUE('TypeMark',$,IFCTEXT({}),$)", step_str(mark)));
+            prop_ids.push(mk_val);
+            if !ty.category.is_empty() {
+                let cat = o.add(format!("IFCPROPERTYSINGLEVALUE('Category',$,IFCTEXT({}),$)", step_str(&ty.category)));
+                prop_ids.push(cat);
+            }
+            for (key, field) in ty.fields.iter().take(200) {
+                let prop = o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)", step_str(key), step_str(&field.value)));
+                prop_ids.push(prop);
+            }
+            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_Spec',$,{})", id(p.handle, 20), refs(&prop_ids)));
+            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{}),#{pset})", id(p.handle, 21), p.product));
+        }
+    }
     for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {
         if !inside.is_empty() {
             o.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE('{}',$,$,$,{},#{st})", id(*h, 3), refs(inside)));
