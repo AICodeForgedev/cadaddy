@@ -133,6 +133,109 @@ pub fn score_runs(t: &Truth, level: &str, kind: &str, found: &[FoundRun], tol_ft
     }
 }
 
+// ---- Casework scoring ------------------------------------------------------------------
+
+/// A casework item a reader found (building feet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FoundCaseworkItem {
+    pub level: String,
+    pub kind: String,
+    pub tag: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub height_in: f64,
+}
+
+/// Score for the casework reader.
+#[derive(Clone, Debug, Default)]
+pub struct CaseworkScore {
+    /// Items in the truth matched by a found item.
+    pub true_positives: usize,
+    /// Found items with no truth match.
+    pub false_positives: usize,
+    /// Truth items with no found match.
+    pub false_negatives: usize,
+    pub precision: f64,
+    pub recall: f64,
+    /// Of matched items, share with the right kind.
+    pub kind_accuracy: f64,
+    /// Mean absolute error of height (inches) over matched items.
+    pub height_mae_in: f64,
+    /// Mean absolute error of centre position (feet) over matched items.
+    pub position_mae_ft: f64,
+}
+
+/// Score found casework against the truth on one level.
+pub fn score_casework(t: &Truth, level: &str, found: &[FoundCaseworkItem], tol_ft: f64) -> CaseworkScore {
+    let truth: Vec<&crate::truth::CaseworkItem> = t.casework.iter().filter(|c| c.level == level).collect();
+    let mut matched_truth = vec![false; truth.len()];
+    let mut matched_found = vec![false; found.len()];
+    let mut kind_ok = 0usize;
+    let mut h_err = 0.0f64;
+    let mut pos_err = 0.0f64;
+
+    // Greedy closest-centre matching.
+    for (fi, f) in found.iter().enumerate() {
+        if f.level != level {
+            continue;
+        }
+        let fc = [(f.min_ft[0] + f.max_ft[0]) / 2.0, (f.min_ft[1] + f.max_ft[1]) / 2.0];
+        let mut best_dist = f64::MAX;
+        let mut best_ti = None;
+        for (ti, tr) in truth.iter().enumerate() {
+            if matched_truth[ti] {
+                continue;
+            }
+            let tc = [(tr.min_ft[0] + tr.max_ft[0]) / 2.0, (tr.min_ft[1] + tr.max_ft[1]) / 2.0];
+            let d = ((fc[0] - tc[0]).powi(2) + (fc[1] - tc[1]).powi(2)).sqrt();
+            if d < tol_ft && d < best_dist {
+                best_dist = d;
+                best_ti = Some(ti);
+            }
+        }
+        if let Some(ti) = best_ti {
+            matched_truth[ti] = true;
+            matched_found[fi] = true;
+            if f.kind == truth[ti].kind {
+                kind_ok += 1;
+            }
+            h_err += (f.height_in - truth[ti].height_in).abs();
+            pos_err += best_dist;
+        }
+    }
+
+    let tp = matched_truth.iter().filter(|&&m| m).count();
+    let fp = found.iter().enumerate().filter(|(i, f)| f.level == level && !matched_found[*i]).count();
+    let fn_ = truth.len() - tp;
+    let ratio = |a: usize, b: usize| if b > 0 { a as f64 / b as f64 } else { 0.0 };
+    let ftp = tp.max(1) as f64;
+    CaseworkScore {
+        true_positives: tp,
+        false_positives: fp,
+        false_negatives: fn_,
+        precision: ratio(tp, tp + fp),
+        recall: ratio(tp, tp + fn_),
+        kind_accuracy: ratio(kind_ok, tp),
+        height_mae_in: if tp > 0 { h_err / ftp } else { 0.0 },
+        position_mae_ft: if tp > 0 { pos_err / ftp } else { 0.0 },
+    }
+}
+
+/// The truth's casework as found items: a perfect reader.
+pub fn perfect_casework(t: &Truth) -> Vec<FoundCaseworkItem> {
+    t.casework
+        .iter()
+        .map(|c| FoundCaseworkItem {
+            level: c.level.clone(),
+            kind: c.kind.clone(),
+            tag: c.tag.clone(),
+            min_ft: c.min_ft,
+            max_ft: c.max_ft,
+            height_in: c.height_in,
+        })
+        .collect()
+}
+
 /// The truth's own runs as found runs: a perfect reader (for testing a scorer, or as a baseline).
 pub fn perfect(t: &Truth, level: &str, kind: &str) -> Vec<FoundRun> {
     expected(t, level, kind)
