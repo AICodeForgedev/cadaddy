@@ -103,7 +103,8 @@ fn runs_build_per_system_and_clash() {
     // Combine all meshes for the duct system (segments + fittings) for height check.
     let duct_meshes: Vec<&Mesh> = m.iter().filter(|(l, _)| l.starts_with("3D-MEP-M-DUCT-SUPP")).map(|(_, m)| m).collect();
     assert!(!duct_meshes.is_empty(), "duct meshes exist");
-    let (z0, z1) = duct_meshes.iter().flat_map(|m| m.vertices.iter()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
+    let (z0, z1) =
+        duct_meshes.iter().flat_map(|m| m.vertices.iter()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
     assert_eq!((z0, z1), (96.0, 132.0), "8' to 11'");
     let pipe = &m.iter().find(|(l, _)| l.starts_with("3D-MEP-P-DOMW-CW")).unwrap().1;
     let r_pipe = pipe.vertices.iter().map(|v| v.x).fold(f64::NEG_INFINITY, f64::max) - 100.0;
@@ -139,9 +140,7 @@ fn xdata_tag(s: &Session, prefix: &str) -> Vec<String> {
         .model
         .iter()
         .filter(|e| made_as(e).as_deref() == Some("mep"))
-        .flat_map(|e| {
-            e.common.xdata.iter().filter(|t| t.code == 1000 && t.value.starts_with(prefix)).map(|t| t.value.clone()).collect::<Vec<_>>()
-        })
+        .flat_map(|e| e.common.xdata.iter().filter(|t| t.code == 1000 && t.value.starts_with(prefix)).map(|t| t.value.clone()).collect::<Vec<_>>())
         .collect()
 }
 
@@ -176,9 +175,9 @@ fn per_system_per_level_layers() {
     let m = meshes(&s);
     let layers: Vec<&str> = m.iter().map(|(l, _)| l.as_str()).collect();
     // The duct is on L1, so its layer is 3D-MEP-M-DUCT-SUPP-L1.
-    assert!(layers.iter().any(|l| *l == "3D-MEP-M-DUCT-SUPP-L1"), "duct layer has level: {layers:?}");
-    assert!(layers.iter().any(|l| *l == "3D-MEP-P-DOMW-CW-L1"), "pipe layer has level: {layers:?}");
-    assert!(layers.iter().any(|l| *l == "3D-MEP-E-COND-L1"), "conduit layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-M-DUCT-SUPP-L1"), "duct layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-P-DOMW-CW-L1"), "pipe layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-E-COND-L1"), "conduit layer has level: {layers:?}");
 }
 
 #[test]
@@ -194,9 +193,13 @@ fn duct_type_inference_and_configurable_colors() {
     s.execute("mep.read", &json!({"apply": true})).unwrap();
 
     // Set a custom colour for the duct system.
-    s.execute("bspec.set", &json!({"spec": {"mep": {"systems": [
-        {"name": "M-DUCT-SUPP", "color_index": 1}
-    ]}}})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"spec": {"mep": {"systems": [
+            {"name": "M-DUCT-SUPP", "color_index": 1}
+        ]}}}),
+    )
+    .unwrap();
     s.execute("model.build", &json!({})).unwrap();
 
     // The duct layer should exist with the custom colour (red = ACI 1).
@@ -238,7 +241,8 @@ fn terminals_build_as_simple_shapes() {
 
     // The terminal mesh geometry: it should be at x~144, z starts at 9' = 108 inches.
     let m = meshes(&s);
-    let term_meshes: Vec<&Mesh> = m.iter()
+    let term_meshes: Vec<&Mesh> = m
+        .iter()
         .filter(|(l, _)| l.starts_with("3D-MEP-M-DUCT-SUPP"))
         .filter(|(_, mesh)| {
             let center_x = mesh.vertices.iter().map(|v| v.x).sum::<f64>() / mesh.vertices.len().max(1) as f64;
@@ -262,10 +266,14 @@ fn geometry_truth_rectangular_duct_dimensions() {
     // A straight 24x12 duct at 10' along y=60.
     s.execute("line", &json!({"points": [[24, 60], [264, 60]]})).unwrap();
     text(&mut s, [144.0, 70.0], "24x12 BOT @ 10'-0\"");
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
-        "layers": [{"layer": "A-WALL", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
     s.execute("mep.read", &json!({"apply": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
 

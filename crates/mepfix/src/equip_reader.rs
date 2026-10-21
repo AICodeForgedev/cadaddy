@@ -18,9 +18,9 @@
 //! in-line pumps and fans) are centred on the run's height when the reader of that run knows it,
 //! else on a rule height. Coordinates are building feet (see [`crate::truth`]); z is the elevation.
 
+use crate::duct_reader;
 use crate::score::{self, FoundRun};
 use crate::truth::{Level, Sheet, Truth};
-use crate::duct_reader;
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_geom::Vec2;
 use serde::Serialize;
@@ -267,10 +267,9 @@ pub fn read_tables(d: &Drawing, sheet: &str) -> Vec<Table> {
         }
         while cols.len() < MAX_COLS {
             let Some(last) = cols.last() else { break };
-            let next = headers
-                .iter()
-                .enumerate()
-                .find(|(j, (lo, hi, _))| !used.get(*j).copied().unwrap_or(true) && near(lo.x, last.1.x, eps) && near(lo.y, last.0.y, eps) && near(hi.y, last.1.y, eps));
+            let next = headers.iter().enumerate().find(|(j, (lo, hi, _))| {
+                !used.get(*j).copied().unwrap_or(true) && near(lo.x, last.1.x, eps) && near(lo.y, last.0.y, eps) && near(hi.y, last.1.y, eps)
+            });
             let Some((j, c)) = next else { break };
             cols.push(c.clone());
             if let Some(u) = used.get_mut(j) {
@@ -410,10 +409,8 @@ pub fn parse_length_ft(s: &str, inches_default: bool) -> Option<f64> {
 pub fn parse_size(column: &str, cell: &str) -> Option<([f64; 3], bool)> {
     let col = column.to_ascii_uppercase();
     let inches = col.contains("(IN)") || col.contains("INCH");
-    let labels: Vec<String> = col
-        .split_once('(')
-        .map(|(_, r)| r.trim_end_matches(')').split(['x', 'X', '×']).map(|p| p.trim().to_string()).collect())
-        .unwrap_or_default();
+    let labels: Vec<String> =
+        col.split_once('(').map(|(_, r)| r.trim_end_matches(')').split(['x', 'X', '×']).map(|p| p.trim().to_string()).collect()).unwrap_or_default();
     let parts: Vec<f64> = cell.split(['x', 'X', '×']).map(|p| parse_length_ft(p, inches)).collect::<Option<Vec<_>>>()?;
     let round = labels.first().is_some_and(|l| l.starts_with("DIA") || l == "D" || l == "Ø");
     match (round, parts.as_slice()) {
@@ -642,7 +639,8 @@ fn place_on_sheet(s: &SheetIn, todo: &[&Scheduled], levels: &[Level]) -> Vec<Pla
     let sh = s.sheet;
     let level = sh.level.clone().unwrap_or_default();
     let txt = texts(d);
-    let mut outlines: Vec<Outline> = boxes(d).into_iter().filter(|(_, _, l)| l.eq_ignore_ascii_case("EQUIP")).map(|(lo, hi, _)| Outline::Box(lo, hi)).collect();
+    let mut outlines: Vec<Outline> =
+        boxes(d).into_iter().filter(|(_, _, l)| l.eq_ignore_ascii_case("EQUIP")).map(|(lo, hi, _)| Outline::Box(lo, hi)).collect();
     let mut leaders: Vec<(Vec2, Vec2)> = Vec::new();
     for e in d.model.iter().take(MAX_ITEMS) {
         match &e.kind {
@@ -728,7 +726,12 @@ fn place_on_sheet(s: &SheetIn, todo: &[&Scheduled], levels: &[Level]) -> Vec<Pla
 fn make(x: &Scheduled, level: &str, sheet: &str, min: [f64; 2], max: [f64; 2], footprint_from: &str, round: bool, el: f64) -> Placed {
     let mut flags = Vec::new();
     let mut confidence: f64 = 0.9;
-    let inlet = x.properties.iter().find(|(k, _)| k.to_ascii_uppercase().contains("INLET")).and_then(|(_, v)| v.trim().trim_end_matches('"').parse::<f64>().ok()).filter(|v| *v > 0.0 && *v < 60.0);
+    let inlet = x
+        .properties
+        .iter()
+        .find(|(k, _)| k.to_ascii_uppercase().contains("INLET"))
+        .and_then(|(_, v)| v.trim().trim_end_matches('"').parse::<f64>().ok())
+        .filter(|v| *v > 0.0 && *v < 60.0);
     let (h, height_from) = match (x.size_ft, inlet) {
         (Some(s), _) if s[2] > 0.0 => (s[2], "schedule"),
         (_, Some(i)) if x.kind == "vav" => {
@@ -929,7 +932,13 @@ fn in_line(p: [f64; 2], a: [f64; 2], b: [f64; 2], across: f64, past: f64) -> Opt
     if off > across || along < -past || along > len + past {
         return None;
     }
-    Some(if along < 0.0 { -along } else if along > len { along - len } else { 0.0 })
+    Some(if along < 0.0 {
+        -along
+    } else if along > len {
+        along - len
+    } else {
+        0.0
+    })
 }
 
 /// The runs of one plan sheet as pieces and system marks: ducts from the duct reader (marked by
@@ -945,7 +954,14 @@ pub fn run_graph(d: &Drawing, sh: &Sheet) -> RunGraph {
             let net = duct_reader::read_ducts(d, sh);
             for r in net.to_found_runs(sh).into_iter().take(MAX_PIECES) {
                 let half = r.size_in[0].max(0.0) / 24.0;
-                g.pieces.push(Piece { kind: "duct".into(), a: r.from_ft, b: r.to_ft, half_ft: half, system: r.system.clone(), centre_ft: centre_of(&r) });
+                g.pieces.push(Piece {
+                    kind: "duct".into(),
+                    a: r.from_ft,
+                    b: r.to_ft,
+                    half_ft: half,
+                    system: r.system.clone(),
+                    centre_ft: centre_of(&r),
+                });
             }
             for (at, code) in air_devices(d) {
                 g.marks.push(Mark { at: bf(at), system: code.to_string(), kind: "duct".into(), reach: 2.0, in_line: false, rot: None });
@@ -995,11 +1011,19 @@ pub fn run_graph(d: &Drawing, sh: &Sheet) -> RunGraph {
                     // Letters in a break of the line.
                     g.marks.push(Mark { at: bf(t.at), system: code.to_string(), kind: "pipe".into(), reach: h * 0.75, in_line: true, rot: None });
                 } else if up.contains('"')
-                    && let Some(code) = up.split_whitespace().nth(1).and_then(|w| PIPE_ABBR.iter().find(|(a, _)| a.eq_ignore_ascii_case(w)).map(|(_, c)| *c))
+                    && let Some(code) =
+                        up.split_whitespace().nth(1).and_then(|w| PIPE_ABBR.iter().find(|(a, _)| a.eq_ignore_ascii_case(w)).map(|(_, c)| *c))
                 {
                     // A size tag beside the run (`1" CW`).
                     let rot = t.rot - sh.model_from_building.rotation_deg.to_radians();
-                    g.marks.push(Mark { at: bf(t.at), system: code.to_string(), kind: "pipe".into(), reach: h * 3.0, in_line: false, rot: Some(rot) });
+                    g.marks.push(Mark {
+                        at: bf(t.at),
+                        system: code.to_string(),
+                        kind: "pipe".into(),
+                        reach: h * 3.0,
+                        in_line: false,
+                        rot: Some(rot),
+                    });
                 }
             }
         }
@@ -1053,7 +1077,13 @@ pub fn size_depth_in(s: &str) -> Option<f64> {
     let up = s.trim().to_ascii_uppercase();
     let first = up.split_whitespace().next()?;
     // `24x14`, `24"x14"`; `24/14` when there is no inch mark (`3/4"` is a pipe size).
-    let seps: &[char] = if first.contains('X') { &['X'] } else if first.contains('"') { &[] } else { &['/'] };
+    let seps: &[char] = if first.contains('X') {
+        &['X']
+    } else if first.contains('"') {
+        &[]
+    } else {
+        &['/']
+    };
     for sep in seps {
         if let Some((a, b)) = first.split_once(*sep) {
             let (a, b) = (a.trim_end_matches('"'), b.trim_end_matches('"'));
@@ -1196,9 +1226,10 @@ fn trace(g: &RunGraph, start: usize, min: [f64; 3], max: [f64; 3]) -> (Vec<usize
             }
             let join = (pc.half_ft.max(q.half_ft) * 1.5).max(0.05);
             let outside = |e: &[f64; 2]| rect_dist(*e, min, max) > 1e-6;
-            let touches = [pc.a, pc.b].iter().filter(|e| outside(e)).any(|e| {
-                [q.a, q.b].iter().any(|f| dist2(*e, *f) <= join || (pc.kind == "duct" && to_segment(*e, q.a, q.b) <= join * 0.5))
-            });
+            let touches = [pc.a, pc.b]
+                .iter()
+                .filter(|e| outside(e))
+                .any(|e| [q.a, q.b].iter().any(|f| dist2(*e, *f) <= join || (pc.kind == "duct" && to_segment(*e, q.a, q.b) <= join * 0.5)));
             // A pipe broken for its letters (or a crossing): the next piece on the same line, a
             // short gap on, the gap clear of the outline.
             let across_break = pc.kind == "pipe"
@@ -1271,7 +1302,8 @@ fn set_hung_height(p: &mut Placed, levels: &[Level]) {
 /// from the truth, as the cover sheet lists them).
 pub fn read_fixture_set(set: &crate::FixtureSet) -> EquipmentRead {
     let t = &set.truth;
-    let drawings: Vec<(&Sheet, Drawing)> = t.sheets.iter().filter_map(|sh| set.file(&sh.dxf).and_then(|b| cadaddy_io::read_dxf(b).ok()).map(|d| (sh, d))).collect();
+    let drawings: Vec<(&Sheet, Drawing)> =
+        t.sheets.iter().filter_map(|sh| set.file(&sh.dxf).and_then(|b| cadaddy_io::read_dxf(b).ok()).map(|d| (sh, d))).collect();
     let ins: Vec<SheetIn> = drawings.iter().map(|(sheet, drawing)| SheetIn { sheet, drawing }).collect();
     read_equipment(&ins, &t.building.levels)
 }
@@ -1389,7 +1421,8 @@ pub fn score(read: &EquipmentRead, t: &Truth) -> EquipScore {
 
 /// A vertical segment (a drop into a unit) whose other end meets a horizontal run a plan shows.
 fn reaches_plan_run(t: &Truth, s: &crate::truth::Segment) -> bool {
-    [&s.from, &s.to].iter().filter_map(|n| t.node(n)).any(|n| {
-        n.segments.iter().filter(|id| **id != s.id).filter_map(|id| t.segment(id)).any(|o| !o.vertical && !o.below_floor)
-    })
+    [&s.from, &s.to]
+        .iter()
+        .filter_map(|n| t.node(n))
+        .any(|n| n.segments.iter().filter(|id| **id != s.id).filter_map(|id| t.segment(id)).any(|o| !o.vertical && !o.below_floor))
 }

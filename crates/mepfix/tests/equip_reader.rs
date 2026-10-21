@@ -6,8 +6,8 @@
 use cadaddy_doc::{Common, Drawing, EntityKind, HAlign, Line, LwPolyline, Space, Text, VAlign};
 use cadaddy_geom::{PolyVertex, Vec2, Vec3};
 use cadaddy_mepfix::equip_reader::{
-    self, EquipmentRead, SheetIn, kind_from_tag, kind_from_title, parse_height_note, parse_length_ft, parse_size, read_tables, score,
-    scheduled, size_depth_in,
+    self, EquipmentRead, SheetIn, kind_from_tag, kind_from_title, parse_height_note, parse_length_ft, parse_size, read_tables, scheduled, score,
+    size_depth_in,
 };
 use cadaddy_mepfix::generate;
 use cadaddy_mepfix::truth::{Level, Sheet, Truth};
@@ -30,7 +30,10 @@ fn schedules_are_read_cell_for_cell() {
         assert!(sc.cell_accuracy >= 0.99, "seed {seed}: cells {:.3}", sc.cell_accuracy);
         // Tables of things that aren't equipment are read but give no equipment.
         assert!(r.tables.iter().any(|t| t.title.contains("AIR DEVICE")), "seed {seed}: the air device schedule is a table");
-        assert!(!r.scheduled.iter().any(|s| s.tag.starts_with("CD-") || s.tag.starts_with("WC-")), "seed {seed}: devices and fixtures aren't equipment");
+        assert!(
+            !r.scheduled.iter().any(|s| s.tag.starts_with("CD-") || s.tag.starts_with("WC-")),
+            "seed {seed}: devices and fixtures aren't equipment"
+        );
         // Every kind the set has, from its schedule's title.
         for k in ["ahu", "vav", "exhaust_fan", "condensing_unit", "water_heater", "gas_meter"] {
             assert!(r.scheduled.iter().any(|s| s.kind == k && s.kind_from == "title"), "seed {seed}: no {k}");
@@ -39,7 +42,10 @@ fn schedules_are_read_cell_for_cell() {
         let truth = t.equipment.iter().find(|e| e.tag == "AHU-1").unwrap();
         let [l, w, h] = ahu.size_ft.unwrap();
         let size = [truth.max_ft[0] - truth.min_ft[0], truth.max_ft[1] - truth.min_ft[1], truth.max_ft[2] - truth.min_ft[2]];
-        assert!((l - size[0]).abs() < 0.05 && (w - size[1]).abs() < 0.05 && (h - size[2]).abs() < 0.05, "seed {seed}: AHU size {l} {w} {h} vs {size:?}");
+        assert!(
+            (l - size[0]).abs() < 0.05 && (w - size[1]).abs() < 0.05 && (h - size[2]).abs() < 0.05,
+            "seed {seed}: AHU size {l} {w} {h} vs {size:?}"
+        );
         assert_eq!(ahu.cfm, truth.cfm, "seed {seed}: AHU CFM");
         let wh = r.scheduled.iter().find(|s| s.kind == "water_heater").unwrap();
         assert!(wh.round && wh.size_ft.is_some_and(|s| (s[2] - 5.0).abs() < 1e-9), "seed {seed}: the heater is a 5' tall cylinder");
@@ -59,8 +65,19 @@ fn equipment_is_placed_at_its_tag_at_size() {
         // Standing kinds stand on their level, at their printed height.
         for p in r.placed.iter().filter(|p| ["ahu", "water_heater", "condensing_unit"].contains(&p.kind.as_str())) {
             let e = t.equipment.iter().find(|e| e.tag == p.tag).unwrap();
-            assert!((p.min_ft[2] - e.min_ft[2]).abs() < 1e-6 && (p.max_ft[2] - e.max_ft[2]).abs() < 0.05, "seed {seed}: {} z {:?} vs {:?}", p.tag, p.min_ft, e.min_ft);
-            assert_eq!((p.footprint_from.as_str(), p.height_from.as_str(), p.elevation_from.as_str()), ("outline", "schedule", "floor"), "seed {seed}: {}", p.tag);
+            assert!(
+                (p.min_ft[2] - e.min_ft[2]).abs() < 1e-6 && (p.max_ft[2] - e.max_ft[2]).abs() < 0.05,
+                "seed {seed}: {} z {:?} vs {:?}",
+                p.tag,
+                p.min_ft,
+                e.min_ft
+            );
+            assert_eq!(
+                (p.footprint_from.as_str(), p.height_from.as_str(), p.elevation_from.as_str()),
+                ("outline", "schedule", "floor"),
+                "seed {seed}: {}",
+                p.tag
+            );
         }
         // The roof fan has no plan in the set: it is reported, not guessed.
         assert!(r.unplaced.iter().any(|(tag, why)| tag == "EF-1" && why.contains("plan")), "seed {seed}: {:?}", r.unplaced);
@@ -235,10 +252,19 @@ fn a_rooftop_unit_fans_and_pumps_from_hand_made_sheets() {
         &mut sch,
         [0.0, 100.0],
         "PACKAGED ROOFTOP UNIT SCHEDULE",
-        &[&["MARK", "CFM", "TONS", "DIMENSIONS (IN)", "WEIGHT (LB)"], &["RTU-1", "4,000", "10", "120 x 72 x 54", "1850"], &["RTU-2", "2000", "5", "", "900"]],
+        &[
+            &["MARK", "CFM", "TONS", "DIMENSIONS (IN)", "WEIGHT (LB)"],
+            &["RTU-1", "4,000", "10", "120 x 72 x 54", "1850"],
+            &["RTU-2", "2000", "5", "", "900"],
+        ],
     );
     table(&mut sch, [0.0, 70.0], "FAN SCHEDULE", &[&["TAG", "TYPE", "CFM"], &["SF-1", "IN-LINE CABINET", "800"], &["EF-3", "ROOF UPBLAST", "350"]]);
-    table(&mut sch, [0.0, 45.0], "PUMP SCHEDULE", &[&["TAG", "TYPE", "GPM", "SIZE (L x W x H)"], &["HWP-1", "BASE MOUNTED END SUCTION", "40", "3'-0\" x 1'-6\" x 2'-0\""]]);
+    table(
+        &mut sch,
+        [0.0, 45.0],
+        "PUMP SCHEDULE",
+        &[&["TAG", "TYPE", "GPM", "SIZE (L x W x H)"], &["HWP-1", "BASE MOUNTED END SUCTION", "40", "3'-0\" x 1'-6\" x 2'-0\""]],
+    );
     table(&mut sch, [80.0, 100.0], "AIR DEVICE SCHEDULE", &[&["TAG", "TYPE"], &["CD-1", "SQUARE DIFFUSER"]]);
     // Something that looks like a table but has no tag column.
     table(&mut sch, [80.0, 70.0], "NOTES", &[&["NO.", "NOTE"], &["1", "SEE SPECIFICATIONS"]]);

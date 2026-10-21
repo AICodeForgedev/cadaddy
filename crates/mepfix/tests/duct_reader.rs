@@ -214,12 +214,7 @@ fn size_accuracy_when_tags_are_found() {
         };
 
         let sc = duct_reader::read_and_score(&drawing, t, sh);
-        eprintln!(
-            "seed=4 {}: size_accuracy={:.1}% system_accuracy={:.1}%",
-            sh.number,
-            sc.size_accuracy * 100.0,
-            sc.system_accuracy * 100.0,
-        );
+        eprintln!("seed=4 {}: size_accuracy={:.1}% system_accuracy={:.1}%", sh.number, sc.size_accuracy * 100.0, sc.system_accuracy * 100.0,);
         // Size accuracy of matched runs should be reasonable.
         // (Not all runs have tags, so some may use defaults.)
     }
