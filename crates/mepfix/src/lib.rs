@@ -23,6 +23,7 @@ pub mod arch;
 pub mod arch_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
+pub mod asbuilt;
 pub mod clash;
 pub mod design;
 pub mod draw;
