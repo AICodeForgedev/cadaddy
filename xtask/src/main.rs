@@ -20,6 +20,7 @@ mod smoke;
 mod soak;
 mod stats;
 mod supplychain;
+mod updategate;
 mod version;
 mod webtest;
 
@@ -101,6 +102,11 @@ commands:
                   file named by CADADDY_RELEASE_KEY (the updater refuses unsigned releases)
   verify-release DIR [--version X.Y.Z]
                   check DIR's signature and hashes as the updater will
+  update-gate --from <old installer> --to <new installer>
+                  the real update path as a release gate: install the old release, serve the new
+                  one from a local fake server, launch, update via Restart Now, verify the new
+                  version runs, files replaced, temp clean, settings kept; must fail on 0.7.8's
+                  updater bugs (run before every release; docs/releasing.md)
 ";
 
 fn main() -> ExitCode {
@@ -136,6 +142,7 @@ fn main() -> ExitCode {
         Some("sbom") => supplychain::sbom(&root(), &rest),
         Some("secrets") => secrets::run(&root()),
         Some("signing") => signing::run(&rest),
+        Some("update-gate") => updategate::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
