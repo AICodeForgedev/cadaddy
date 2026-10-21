@@ -1002,11 +1002,20 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     // --- Telecom ---
     hotel_telecom(&mut t, r);
 
+    // --- Equipment connections ---
+    hotel_equip_connections(&mut t);
+
+    // --- Sleeves and cable pathways ---
+    hotel_sleeves_and_pathways(&mut t);
+
     // --- Site elements ---
     hotel_site(&mut t, building_width_ft, building_depth_ft, r);
 
     // --- Spec book ---
     t.spec_items = spec_book();
+
+    // --- LV BOM (after spec book so spec IDs are available) ---
+    hotel_lv_bom(&mut t);
 
     // --- Elevations and sections ---
     t.elevations = vec![
@@ -1655,6 +1664,7 @@ fn hotel_electrical(
 
 fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, corr_width: f64) {
     let mut fa_id = 0;
+    let mut addr = 1u32;
 
     // FACP in electrical room on L1
     let elec_room = t.building.rooms.iter().find(|rm| rm.level == "1" && rm.name == "ELECTRICAL");
@@ -1668,8 +1678,28 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
         room: elec_room.map(|r| r.id.clone()).unwrap_or_default(),
         at_ft: [ex, ey, 5.0],
         mounting: "WALL".into(),
+        mounting_in: 60.0,
+        slc: "SLC-1".into(),
         circuit: "SLC-1".into(),
         sheet: String::new(),
+        ..FireAlarmDevice::default()
+    });
+    fa_id += 1;
+
+    // NAC power supply next to FACP
+    t.fire_alarm_devices.push(FireAlarmDevice {
+        id: format!("fa-{fa_id}"),
+        kind: "nac_panel".into(),
+        tag: "NAC-PS-1".into(),
+        level: "1".into(),
+        room: elec_room.map(|r| r.id.clone()).unwrap_or_default(),
+        at_ft: [ex + 2.0, ey, 5.0],
+        mounting: "WALL".into(),
+        mounting_in: 60.0,
+        nac: "NAC-1".into(),
+        circuit: "NAC-1".into(),
+        sheet: String::new(),
+        ..FireAlarmDevice::default()
     });
     fa_id += 1;
 
@@ -1682,10 +1712,60 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
         room: "rm-1-FD".into(),
         at_ft: [20.0, 2.0, 5.0],
         mounting: "WALL".into(),
+        mounting_in: 60.0,
+        slc: "SLC-1".into(),
         circuit: "SLC-1".into(),
         sheet: String::new(),
+        ..FireAlarmDevice::default()
     });
     fa_id += 1;
+
+    // Elevator recall module on L1
+    for elev in &t.building.elevators.clone() {
+        t.fire_alarm_devices.push(FireAlarmDevice {
+            id: format!("fa-{fa_id}"),
+            kind: "elevator_recall".into(),
+            tag: format!("ER-{}", fa_id + 1),
+            level: "1".into(),
+            room: "rm-1-CORR".to_string(),
+            at_ft: [elev.min_ft[0] + 1.0, elev.min_ft[1] - 0.5, 7.0],
+            mounting: "WALL".into(),
+            mounting_in: 84.0,
+            slc: "SLC-1".into(),
+            address: Some(format!("SLC1-A{addr}")),
+            interface: Some("elevator_recall".into()),
+            circuit: "SLC-1".into(),
+            sheet: String::new(),
+            ..FireAlarmDevice::default()
+        });
+        fa_id += 1;
+        addr += 1;
+    }
+
+    // Door holders at stair doors (mag-release)
+    for stair in &t.building.stairs.clone() {
+        for lv in &stair.levels {
+            let elev = t.building.levels.iter().find(|l| l.code.as_str() == lv.as_str()).map(|l| l.elevation_ft).unwrap_or(0.0);
+            t.fire_alarm_devices.push(FireAlarmDevice {
+                id: format!("fa-{fa_id}"),
+                kind: "mag_door_holder".into(),
+                tag: format!("DH-{}", fa_id + 1),
+                level: lv.clone(),
+                room: format!("rm-{lv}-CORR"),
+                at_ft: [stair.min_ft[0] + 0.5, stair.min_ft[1] - 0.5, elev + 7.0],
+                mounting: "WALL".into(),
+                mounting_in: 84.0,
+                slc: "SLC-1".into(),
+                address: Some(format!("SLC1-A{addr}")),
+                interface: Some("door_holder".into()),
+                circuit: "SLC-1".into(),
+                sheet: String::new(),
+                ..FireAlarmDevice::default()
+            });
+            fa_id += 1;
+            addr += 1;
+        }
+    }
 
     for lv in ["1", "2", "3", "4"] {
         let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
@@ -1703,11 +1783,37 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
                 room: format!("rm-{lv}-CORR"),
                 at_ft: [sx, corr_y, elev + ceil_h],
                 mounting: "CLG".into(),
+                mounting_in: 0.0,
+                slc: "SLC-1".into(),
+                address: Some(format!("SLC1-A{addr}")),
                 circuit: "SLC-1".into(),
                 sheet: String::new(),
+                ..FireAlarmDevice::default()
             });
             fa_id += 1;
+            addr += 1;
             sx += 30.0;
+        }
+
+        // Duct detector at RTU on roof
+        if lv == "1" {
+            t.fire_alarm_devices.push(FireAlarmDevice {
+                id: format!("fa-{fa_id}"),
+                kind: "duct_detector".into(),
+                tag: format!("DD-{}", fa_id + 1),
+                level: "R".into(),
+                room: String::new(),
+                at_ft: [bldg_w / 2.0, room_depth + corr_width / 2.0, 40.0],
+                mounting: "CLG".into(),
+                mounting_in: 0.0,
+                slc: "SLC-1".into(),
+                address: Some(format!("SLC1-A{addr}")),
+                circuit: "SLC-1".into(),
+                sheet: String::new(),
+                ..FireAlarmDevice::default()
+            });
+            fa_id += 1;
+            addr += 1;
         }
 
         // Smoke detectors in guest rooms
@@ -1727,14 +1833,19 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
                     room: rm.id.clone(),
                     at_ft: [cx, cy, elev + ch],
                     mounting: "CLG".into(),
+                    mounting_in: 0.0,
+                    slc: "SLC-1".into(),
+                    address: Some(format!("SLC1-A{addr}")),
                     circuit: "SLC-1".into(),
                     sheet: String::new(),
+                    ..FireAlarmDevice::default()
                 });
                 fa_id += 1;
+                addr += 1;
             }
         }
 
-        // Horn/strobe in corridor
+        // Horn/strobe in corridor with candela
         let mut hx = 15.0;
         while hx < bldg_w - 10.0 {
             t.fire_alarm_devices.push(FireAlarmDevice {
@@ -1745,11 +1856,40 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
                 room: format!("rm-{lv}-CORR"),
                 at_ft: [hx, room_depth + 0.5, elev + 7.0],
                 mounting: "WALL".into(),
+                mounting_in: 84.0,
+                candela: Some(75),
+                nac: "NAC-1".into(),
                 circuit: "NAC-1".into(),
                 sheet: String::new(),
+                ..FireAlarmDevice::default()
             });
             fa_id += 1;
             hx += 75.0;
+        }
+
+        // Strobes in guest rooms (15 cd wall mount)
+        for rm in &t.building.rooms.clone() {
+            if rm.level != lv {
+                continue;
+            }
+            if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") || rm.name.contains("ADA") {
+                t.fire_alarm_devices.push(FireAlarmDevice {
+                    id: format!("fa-{fa_id}"),
+                    kind: "strobe".into(),
+                    tag: format!("ST-{}", fa_id + 1),
+                    level: lv.into(),
+                    room: rm.id.clone(),
+                    at_ft: [rm.min_ft[0] + 1.0, rm.min_ft[1] + 0.5, elev + 7.0],
+                    mounting: "WALL".into(),
+                    mounting_in: 84.0,
+                    candela: Some(15),
+                    nac: "NAC-1".into(),
+                    circuit: "NAC-1".into(),
+                    sheet: String::new(),
+                    ..FireAlarmDevice::default()
+                });
+                fa_id += 1;
+            }
         }
 
         // Pull stations at stairs
@@ -1765,11 +1905,36 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
                 room: format!("rm-{lv}-CORR"),
                 at_ft: [stair.min_ft[0] + 1.0, stair.min_ft[1] + 0.5, elev + 4.0],
                 mounting: "WALL".into(),
+                mounting_in: 48.0,
+                slc: "SLC-1".into(),
+                address: Some(format!("SLC1-A{addr}")),
                 circuit: "SLC-1".into(),
                 sheet: String::new(),
+                ..FireAlarmDevice::default()
             });
             fa_id += 1;
+            addr += 1;
         }
+
+        // Monitor module for sprinkler flow/tamper on each floor
+        t.fire_alarm_devices.push(FireAlarmDevice {
+            id: format!("fa-{fa_id}"),
+            kind: "monitor_module".into(),
+            tag: format!("MM-{}", fa_id + 1),
+            level: lv.into(),
+            room: String::new(),
+            at_ft: [5.0, room_depth + corr_width + 1.0, elev + 8.0],
+            mounting: "WALL".into(),
+            mounting_in: 96.0,
+            slc: "SLC-1".into(),
+            address: Some(format!("SLC1-A{addr}")),
+            interface: Some("sprinkler_flow_tamper".into()),
+            circuit: "SLC-1".into(),
+            sheet: String::new(),
+            ..FireAlarmDevice::default()
+        });
+        fa_id += 1;
+        addr += 1;
     }
 }
 
@@ -1778,15 +1943,107 @@ fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, c
 fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
     let mut tc_id = 0;
 
+    // MDF on L1 in telecom room
+    let telecom_room = t.building.rooms.iter().find(|rm| rm.level == "1" && (rm.name == "TELECOM" || rm.name == "ELECTRICAL"));
+    let tr_x = telecom_room.map(|r| r.min_ft[0] + 1.0).unwrap_or(8.0);
+    let tr_y = telecom_room.map(|r| r.min_ft[1] + 1.0).unwrap_or(8.0);
+    let mdf_room_id = telecom_room.map(|r| r.id.clone()).unwrap_or_default();
+
+    t.telecom_devices.push(TelecomDevice {
+        id: format!("tc-{tc_id}"),
+        kind: "mdf".into(),
+        tag: "MDF".into(),
+        level: "1".into(),
+        room: mdf_room_id.clone(),
+        at_ft: [tr_x, tr_y, 0.0],
+        mounting_in: 0.0,
+        lv_system: "data".into(),
+        sheet: String::new(),
+        ..TelecomDevice::default()
+    });
+    let mdf_tag = format!("tc-{tc_id}");
+    tc_id += 1;
+
+    // Backboard in MDF
+    t.telecom_devices.push(TelecomDevice {
+        id: format!("tc-{tc_id}"),
+        kind: "backboard".into(),
+        tag: "BB-MDF".into(),
+        level: "1".into(),
+        room: mdf_room_id.clone(),
+        at_ft: [tr_x + 1.0, tr_y, 4.0],
+        mounting_in: 48.0,
+        lv_system: "data".into(),
+        sheet: String::new(),
+        ..TelecomDevice::default()
+    });
+    tc_id += 1;
+
+    // Rack in MDF
+    t.telecom_devices.push(TelecomDevice {
+        id: format!("tc-{tc_id}"),
+        kind: "rack".into(),
+        tag: "RACK-MDF".into(),
+        level: "1".into(),
+        room: mdf_room_id,
+        at_ft: [tr_x + 3.0, tr_y, 0.0],
+        mounting_in: 0.0,
+        lv_system: "data".into(),
+        sheet: String::new(),
+        ..TelecomDevice::default()
+    });
+    tc_id += 1;
+
+    // IDF per upper floor
+    for lv in ["2", "3", "4"] {
+        let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
+        let idf_room = t.building.rooms.iter().find(|rm| rm.level == lv && (rm.name == "TELECOM" || rm.name == "ELECTRICAL"));
+        let ix = idf_room.map(|r| r.min_ft[0] + 1.0).unwrap_or(8.0);
+        let iy = idf_room.map(|r| r.min_ft[1] + 1.0).unwrap_or(8.0);
+        let idf_room_id = idf_room.map(|r| r.id.clone()).unwrap_or_default();
+
+        t.telecom_devices.push(TelecomDevice {
+            id: format!("tc-{tc_id}"),
+            kind: "idf".into(),
+            tag: format!("IDF-{lv}"),
+            level: lv.into(),
+            room: idf_room_id.clone(),
+            at_ft: [ix, iy, elev],
+            mounting_in: 0.0,
+            lv_system: "data".into(),
+            home_panel: Some(mdf_tag.clone()),
+            sheet: String::new(),
+            ..TelecomDevice::default()
+        });
+        tc_id += 1;
+
+        // Patch panel in IDF
+        t.telecom_devices.push(TelecomDevice {
+            id: format!("tc-{tc_id}"),
+            kind: "patch_panel".into(),
+            tag: format!("PP-{lv}"),
+            level: lv.into(),
+            room: idf_room_id,
+            at_ft: [ix + 1.0, iy, elev + 4.0],
+            mounting_in: 48.0,
+            lv_system: "data".into(),
+            home_panel: Some(mdf_tag.clone()),
+            sheet: String::new(),
+            ..TelecomDevice::default()
+        });
+        tc_id += 1;
+    }
+
     for lv in ["1", "2", "3", "4"] {
         let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
+        let idf_tag = if lv == "1" { "MDF".to_string() } else { format!("IDF-{lv}") };
 
         for rm in &t.building.rooms.clone() {
             if rm.level != lv {
                 continue;
             }
 
-            // Data outlet in every room
+            // Data outlet in every room (2 × Cat6)
             t.telecom_devices.push(TelecomDevice {
                 id: format!("tc-{tc_id}"),
                 kind: "data_outlet".into(),
@@ -1795,11 +2052,16 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
                 room: rm.id.clone(),
                 at_ft: [rm.min_ft[0] + 2.0, rm.min_ft[1] + 0.5, elev + 1.5],
                 mounting_in: 18.0,
+                lv_system: "data".into(),
+                cable_spec: Some("2 x Cat6".into()),
+                box_type: Some("lv_bracket".into()),
+                faceplate: Some("double".into()),
+                home_panel: Some(idf_tag.clone()),
                 sheet: String::new(),
             });
             tc_id += 1;
 
-            // TV outlet in guest rooms
+            // TV outlet in guest rooms (1 × RG6)
             if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") {
                 t.telecom_devices.push(TelecomDevice {
                     id: format!("tc-{tc_id}"),
@@ -1809,6 +2071,11 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
                     room: rm.id.clone(),
                     at_ft: [(rm.min_ft[0] + rm.max_ft[0]) / 2.0, rm.max_ft[1] - 0.5, elev + 4.0],
                     mounting_in: 48.0,
+                    lv_system: "tv".into(),
+                    cable_spec: Some("1 x RG6".into()),
+                    box_type: Some("lv_bracket".into()),
+                    faceplate: Some("single".into()),
+                    home_panel: Some(idf_tag.clone()),
                     sheet: String::new(),
                 });
                 tc_id += 1;
@@ -1822,6 +2089,11 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
                     room: rm.id.clone(),
                     at_ft: [rm.max_ft[0] - 2.0, rm.min_ft[1] + 1.0, elev + 2.5],
                     mounting_in: 18.0,
+                    lv_system: "telephone".into(),
+                    cable_spec: Some("1 x Cat6".into()),
+                    box_type: Some("lv_bracket".into()),
+                    faceplate: Some("single".into()),
+                    home_panel: Some(idf_tag.clone()),
                     sheet: String::new(),
                 });
                 tc_id += 1;
@@ -1843,13 +2115,17 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
                 room: format!("rm-{lv}-CORR"),
                 at_ft: [ax, corr_y, elev + ceil_h],
                 mounting_in: 0.0,
+                lv_system: "data".into(),
+                cable_spec: Some("2 x Cat6".into()),
+                home_panel: Some(idf_tag.clone()),
                 sheet: String::new(),
+                ..TelecomDevice::default()
             });
             tc_id += 1;
             ax += 50.0;
         }
 
-        // Cameras in lobby and corridors
+        // Cameras at corridor ends and lobby
         if lv == "1" || r.chance(0.5) {
             t.telecom_devices.push(TelecomDevice {
                 id: format!("tc-{tc_id}"),
@@ -1859,11 +2135,578 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
                 room: format!("rm-{lv}-CORR"),
                 at_ft: [10.0, corr_y, elev + ceil_h],
                 mounting_in: 0.0,
+                lv_system: "security".into(),
+                cable_spec: Some("1 x Cat6".into()),
+                home_panel: Some(idf_tag.clone()),
                 sheet: String::new(),
+                ..TelecomDevice::default()
             });
             tc_id += 1;
         }
+
+        // Access control at stairs and elevator
+        for stair in &t.building.stairs.clone() {
+            if !stair.levels.contains(&lv.to_string()) {
+                continue;
+            }
+            // Card reader
+            t.telecom_devices.push(TelecomDevice {
+                id: format!("tc-{tc_id}"),
+                kind: "card_reader".into(),
+                tag: format!("CR-{}", tc_id + 1),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
+                at_ft: [stair.min_ft[0] + 0.5, stair.min_ft[1] - 0.5, elev + 4.0],
+                mounting_in: 48.0,
+                lv_system: "access_control".into(),
+                cable_spec: Some("1 x Cat6".into()),
+                home_panel: Some(idf_tag.clone()),
+                sheet: String::new(),
+                ..TelecomDevice::default()
+            });
+            tc_id += 1;
+
+            // Door contact
+            t.telecom_devices.push(TelecomDevice {
+                id: format!("tc-{tc_id}"),
+                kind: "door_contact".into(),
+                tag: format!("DC-{}", tc_id + 1),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
+                at_ft: [stair.min_ft[0] + 0.5, stair.min_ft[1] - 0.2, elev + 7.0],
+                mounting_in: 84.0,
+                lv_system: "access_control".into(),
+                home_panel: Some(idf_tag.clone()),
+                sheet: String::new(),
+                ..TelecomDevice::default()
+            });
+            tc_id += 1;
+
+            // REX (request to exit)
+            t.telecom_devices.push(TelecomDevice {
+                id: format!("tc-{tc_id}"),
+                kind: "rex".into(),
+                tag: format!("REX-{}", tc_id + 1),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
+                at_ft: [stair.min_ft[0] + 2.0, stair.min_ft[1] - 0.5, elev + 4.0],
+                mounting_in: 48.0,
+                lv_system: "access_control".into(),
+                home_panel: Some(idf_tag.clone()),
+                sheet: String::new(),
+                ..TelecomDevice::default()
+            });
+            tc_id += 1;
+        }
+
+        // Nurse call / ADA pull cords in ADA rooms
+        for rm in &t.building.rooms.clone() {
+            if rm.level != lv || !rm.name.contains("ADA") {
+                continue;
+            }
+            t.telecom_devices.push(TelecomDevice {
+                id: format!("tc-{tc_id}"),
+                kind: "ada_pull_cord".into(),
+                tag: format!("ADA-{}", tc_id + 1),
+                level: lv.into(),
+                room: rm.id.clone(),
+                at_ft: [rm.min_ft[0] + 3.0, rm.min_ft[1] + 1.0, elev + 1.0],
+                mounting_in: 12.0,
+                lv_system: "nurse_call".into(),
+                home_panel: Some(idf_tag.clone()),
+                sheet: String::new(),
+                ..TelecomDevice::default()
+            });
+            tc_id += 1;
+        }
+
+        // Speakers in corridor (sound system)
+        let mut spx = 25.0;
+        while spx < bldg_w - 10.0 {
+            t.telecom_devices.push(TelecomDevice {
+                id: format!("tc-{tc_id}"),
+                kind: "speaker".into(),
+                tag: format!("SPK-{}", tc_id + 1),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
+                at_ft: [spx, corr_y, elev + ceil_h],
+                mounting_in: 0.0,
+                lv_system: "sound".into(),
+                cable_spec: Some("1 x 18/2".into()),
+                home_panel: Some(idf_tag.clone()),
+                sheet: String::new(),
+                ..TelecomDevice::default()
+            });
+            tc_id += 1;
+            spx += 40.0;
+        }
     }
+}
+
+// --- Equipment connections (Q308) ---
+
+fn hotel_equip_connections(t: &mut Truth) {
+    let mut ec_id = 0;
+
+    for lv in ["1", "2", "3", "4"] {
+        let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
+
+        // PTAC/VTAC in every guest room
+        for rm in &t.building.rooms.clone() {
+            if rm.level != lv {
+                continue;
+            }
+            if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") || rm.name.contains("ADA") {
+                let mut sched = BTreeMap::new();
+                sched.insert("voltage".into(), "208V".into());
+                sched.insert("phase".into(), "1".into());
+                sched.insert("MCA".into(), "12.5".into());
+                sched.insert("MOCP".into(), "20".into());
+                t.equip_connections.push(EquipConnection {
+                    id: format!("ec-{ec_id}"),
+                    kind: "ptac".into(),
+                    tag: format!("PTAC-{}", ec_id + 1),
+                    level: lv.into(),
+                    room: rm.id.clone(),
+                    at_ft: [rm.max_ft[0] - 1.0, rm.min_ft[1] + 0.5, elev + 1.0],
+                    circuit: format!("P{lv}/{}",  (ec_id % 42) + 1),
+                    panel: format!("P{lv}"),
+                    connection_type: "receptacle".into(),
+                    disconnect_tag: None,
+                    schedule: sched,
+                    sheet: String::new(),
+                });
+                ec_id += 1;
+            }
+        }
+
+        // Water heater on L1
+        if lv == "1" {
+            let mech = t.building.rooms.iter().find(|rm| rm.level == "1" && rm.name == "MECHANICAL");
+            let mx = mech.map(|r| r.min_ft[0] + 2.0).unwrap_or(15.0);
+            let my = mech.map(|r| r.min_ft[1] + 2.0).unwrap_or(15.0);
+            let mut sched = BTreeMap::new();
+            sched.insert("voltage".into(), "208V".into());
+            sched.insert("phase".into(), "3".into());
+            sched.insert("MCA".into(), "36".into());
+            sched.insert("MOCP".into(), "45".into());
+            t.equip_connections.push(EquipConnection {
+                id: format!("ec-{ec_id}"),
+                kind: "water_heater".into(),
+                tag: "WH-1".into(),
+                level: "1".into(),
+                room: mech.map(|r| r.id.clone()).unwrap_or_default(),
+                at_ft: [mx, my, 0.0],
+                circuit: "P1/25".into(),
+                panel: "P1".into(),
+                connection_type: "disconnect".into(),
+                disconnect_tag: Some("DS-WH1".into()),
+                schedule: sched,
+                sheet: String::new(),
+            });
+            ec_id += 1;
+        }
+    }
+
+    // Elevator on L1
+    for elev_shaft in &t.building.elevators.clone() {
+        let mut sched = BTreeMap::new();
+        sched.insert("voltage".into(), "208V".into());
+        sched.insert("phase".into(), "3".into());
+        sched.insert("MCA".into(), "50".into());
+        sched.insert("MOCP".into(), "60".into());
+        t.equip_connections.push(EquipConnection {
+            id: format!("ec-{ec_id}"),
+            kind: "elevator".into(),
+            tag: format!("ELEV-{}", elev_shaft.tag),
+            level: "1".into(),
+            room: String::new(),
+            at_ft: [(elev_shaft.min_ft[0] + elev_shaft.max_ft[0]) / 2.0, (elev_shaft.min_ft[1] + elev_shaft.max_ft[1]) / 2.0, 0.0],
+            circuit: "MDP/1".into(),
+            panel: "MDP".into(),
+            connection_type: "disconnect".into(),
+            disconnect_tag: Some(format!("DS-ELEV-{}", elev_shaft.tag)),
+            schedule: sched,
+            sheet: String::new(),
+        });
+        ec_id += 1;
+    }
+
+    // RTU on roof
+    let bldg_w = t.building.grid.x.last().map(|g| g.at_ft).unwrap_or(100.0);
+    let room_depth = 24.0;
+    let corr_w = 6.0;
+    let mut sched = BTreeMap::new();
+    sched.insert("voltage".into(), "208V".into());
+    sched.insert("phase".into(), "3".into());
+    sched.insert("MCA".into(), "72".into());
+    sched.insert("MOCP".into(), "90".into());
+    t.equip_connections.push(EquipConnection {
+        id: format!("ec-{ec_id}"),
+        kind: "rtu".into(),
+        tag: "RTU-1".into(),
+        level: "R".into(),
+        room: String::new(),
+        at_ft: [bldg_w / 2.0, room_depth + corr_w / 2.0, 40.0],
+        circuit: "MDP/3".into(),
+        panel: "MDP".into(),
+        connection_type: "disconnect".into(),
+        disconnect_tag: Some("DS-RTU1".into()),
+        schedule: sched,
+        sheet: String::new(),
+    });
+    ec_id += 1;
+
+    // Signage at entrance
+    let mut sched = BTreeMap::new();
+    sched.insert("voltage".into(), "120V".into());
+    sched.insert("phase".into(), "1".into());
+    t.equip_connections.push(EquipConnection {
+        id: format!("ec-{ec_id}"),
+        kind: "signage".into(),
+        tag: "SIGN-1".into(),
+        level: "1".into(),
+        room: String::new(),
+        at_ft: [bldg_w / 2.0, -2.0, 10.0],
+        circuit: "L1/15".into(),
+        panel: "L1".into(),
+        connection_type: "junction_box".into(),
+        disconnect_tag: None,
+        schedule: sched,
+        sheet: String::new(),
+    });
+    let _ = ec_id;
+}
+
+// --- Sleeves and cable pathways (Q308) ---
+
+fn hotel_sleeves_and_pathways(t: &mut Truth) {
+    let mut sl_id = 0;
+    let mut cp_id = 0;
+    let bldg_w = t.building.grid.x.last().map(|g| g.at_ft).unwrap_or(100.0);
+    let room_depth = 24.0;
+    let corr_w = 6.0;
+    let corr_y = room_depth + corr_w / 2.0;
+
+    // J-hook pathway along corridor on each floor (data + FA + security)
+    for lv in ["1", "2", "3", "4"] {
+        let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
+        let ceil_h = if lv == "1" { 10.0 } else { 8.5 };
+        let pathway_elev = ceil_h - 0.5;
+
+        t.cable_pathways.push(CablePathway {
+            id: format!("cp-{cp_id}"),
+            kind: "j_hook".into(),
+            systems: vec!["data".into(), "fire_alarm".into(), "security".into(), "access_control".into()],
+            level: lv.into(),
+            from_ft: [5.0, corr_y],
+            to_ft: [bldg_w - 5.0, corr_y],
+            elevation_ft: pathway_elev,
+            spacing_in: Some(48.0),
+            sheet: String::new(),
+            ..CablePathway::default()
+        });
+        cp_id += 1;
+
+        // ENT stubs from corridor to rooms (4 × 2in ENT per BOH room)
+        for rm in &t.building.rooms.clone() {
+            if rm.level != lv {
+                continue;
+            }
+            // One ENT stub per room for LV
+            let rx = (rm.min_ft[0] + rm.max_ft[0]) / 2.0;
+            let ry = if rm.min_ft[1] < room_depth { rm.max_ft[1] } else { rm.min_ft[1] };
+            t.cable_pathways.push(CablePathway {
+                id: format!("cp-{cp_id}"),
+                kind: "ent".into(),
+                systems: vec!["data".into(), "tv".into()],
+                level: lv.into(),
+                from_ft: [rx, corr_y],
+                to_ft: [rx, ry],
+                elevation_ft: pathway_elev,
+                size_in: Some(2.0),
+                sheet: String::new(),
+                ..CablePathway::default()
+            });
+            cp_id += 1;
+        }
+
+        // Sleeves: corridor crosses rated walls at stair doors
+        for wall in &t.walls.clone() {
+            if wall.level != lv {
+                continue;
+            }
+            // Check if this wall's assembly is rated
+            let assembly = t.wall_assemblies.iter().find(|a| a.id == wall.assembly);
+            let fire_rating = assembly.map(|a| a.fire_rating.clone()).unwrap_or_default();
+            if fire_rating.is_empty() {
+                continue;
+            }
+            let thickness = assembly.map(|a| a.thickness_in).unwrap_or(6.0);
+
+            // If the wall crosses the corridor path roughly, add a sleeve
+            let wall_cx = (wall.from_ft[0] + wall.to_ft[0]) / 2.0;
+            let wall_cy = (wall.from_ft[1] + wall.to_ft[1]) / 2.0;
+            let in_corridor_x = wall_cx > 5.0 && wall_cx < bldg_w - 5.0;
+            let near_corridor_y = (wall_cy - corr_y).abs() < corr_w;
+            if !in_corridor_x || !near_corridor_y {
+                continue;
+            }
+
+            t.sleeves.push(Sleeve {
+                id: format!("sl-{sl_id}"),
+                systems: vec!["data".into(), "fire_alarm".into()],
+                level: lv.into(),
+                at_ft: [wall_cx, wall_cy, elev + pathway_elev],
+                penetrates: "rated_wall".into(),
+                element_id: Some(wall.id.clone()),
+                material: "EMT".into(),
+                size_in: 2.0,
+                length_in: thickness,
+                fire_rating: fire_rating.clone(),
+                firestop_system: Some("3M Fire Barrier CP 25WB+".into()),
+                cables: vec!["4 x Cat6".into(), "2 x 18/2 FPLR".into()],
+                sheet: String::new(),
+            });
+            sl_id += 1;
+        }
+
+        // Floor sleeve for riser between levels (data + FA)
+        if lv != "1" {
+            let riser_x = t.building.shafts.iter().find(|s| s.kind == "electrical").map(|s| (s.min_ft[0] + s.max_ft[0]) / 2.0).unwrap_or(bldg_w / 2.0);
+            let riser_y = t.building.shafts.iter().find(|s| s.kind == "electrical").map(|s| (s.min_ft[1] + s.max_ft[1]) / 2.0).unwrap_or(corr_y);
+            t.sleeves.push(Sleeve {
+                id: format!("sl-{sl_id}"),
+                systems: vec!["data".into(), "fire_alarm".into(), "security".into()],
+                level: lv.into(),
+                at_ft: [riser_x, riser_y, elev],
+                penetrates: "floor".into(),
+                element_id: None,
+                material: "EMT".into(),
+                size_in: 4.0,
+                length_in: 6.0,
+                fire_rating: "2-HR".into(),
+                firestop_system: Some("3M Fire Barrier CP 25WB+".into()),
+                cables: vec!["24 x Cat6".into(), "4 x 18/2 FPLR".into(), "2 x RG6".into()],
+                sheet: String::new(),
+            });
+            sl_id += 1;
+        }
+    }
+}
+
+// --- Low-voltage BOM (Q308) ---
+
+fn hotel_lv_bom(t: &mut Truth) {
+    let mut bom_id = 0;
+
+    // Count FA devices by kind
+    let mut fa_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for d in &t.fire_alarm_devices {
+        *fa_counts.entry(d.kind.clone()).or_default() += 1;
+    }
+    for (kind, count) in &fa_counts {
+        let desc = match kind.as_str() {
+            "facp" => "Fire Alarm Control Panel",
+            "nac_panel" => "NAC Power Supply",
+            "annunciator" => "Remote Annunciator",
+            "smoke_detector" => "Photoelectric Smoke Detector",
+            "heat_detector" => "Rate-of-Rise Heat Detector",
+            "horn_strobe" => "Horn/Strobe, Wall Mount",
+            "strobe" => "Strobe, Wall Mount",
+            "pull_station" => "Manual Pull Station",
+            "duct_detector" => "Duct Smoke Detector",
+            "monitor_module" => "Monitor Module",
+            "relay_module" => "Relay Module",
+            "elevator_recall" => "Elevator Recall Interface",
+            "mag_door_holder" => "Magnetic Door Holder",
+            _ => "Fire Alarm Device",
+        };
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "fire_alarm".into(),
+            category: "device".into(),
+            description: desc.into(),
+            quantity: f64::from(*count),
+            unit: "EA".into(),
+            scope: "ours".into(),
+            spec_id: Some("spec-12".into()),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // Count telecom devices by kind
+    let mut tc_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for d in &t.telecom_devices {
+        *tc_counts.entry(d.kind.clone()).or_default() += 1;
+    }
+    for (kind, count) in &tc_counts {
+        let (sys, desc) = match kind.as_str() {
+            "data_outlet" => ("data", "Data Outlet, Cat6"),
+            "tv_outlet" => ("tv", "TV Outlet, RG6"),
+            "telephone" => ("telephone", "Telephone Outlet, Cat6"),
+            "wifi_ap" => ("data", "Wireless Access Point"),
+            "camera" => ("security", "IP Camera, PoE"),
+            "card_reader" => ("access_control", "Card Reader"),
+            "door_contact" => ("access_control", "Door Contact Sensor"),
+            "rex" => ("access_control", "Request-to-Exit Sensor"),
+            "ada_pull_cord" => ("nurse_call", "ADA Pull Cord Station"),
+            "speaker" => ("sound", "Ceiling Speaker"),
+            "mdf" => ("data", "Main Distribution Frame"),
+            "idf" => ("data", "Intermediate Distribution Frame"),
+            "patch_panel" => ("data", "48-Port Patch Panel"),
+            "backboard" => ("data", "Plywood Backboard"),
+            "rack" => ("data", "19in Equipment Rack"),
+            _ => ("data", "Telecom Device"),
+        };
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: sys.into(),
+            category: "device".into(),
+            description: desc.into(),
+            quantity: f64::from(*count),
+            unit: "EA".into(),
+            scope: if sys == "security" || sys == "access_control" { "lv_vendor" } else { "ours" }.into(),
+            spec_id: if sys == "data" || sys == "telephone" { Some("spec-13".into()) } else { None },
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // LV brackets/faceplates from telecom devices
+    let lv_brackets = t.telecom_devices.iter().filter(|d| d.box_type.is_some()).count();
+    if lv_brackets > 0 {
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "data".into(),
+            category: "box".into(),
+            description: "Low-Voltage Mounting Bracket".into(),
+            quantity: lv_brackets as f64,
+            unit: "EA".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    let faceplates = t.telecom_devices.iter().filter(|d| d.faceplate.is_some()).count();
+    if faceplates > 0 {
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "data".into(),
+            category: "faceplate".into(),
+            description: "Faceplate".into(),
+            quantity: faceplates as f64,
+            unit: "EA".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // Estimate cable footage: each device gets ~75 ft average run to IDF
+    let data_devices = t.telecom_devices.iter().filter(|d| d.cable_spec.is_some()).count();
+    if data_devices > 0 {
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "data".into(),
+            category: "cable".into(),
+            description: "Cat6 Cable".into(),
+            quantity: (data_devices as f64) * 75.0,
+            unit: "LF".into(),
+            scope: "ours".into(),
+            spec_id: Some("spec-13".into()),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // FA cable estimate: SLC loop + NAC runs
+    let fa_device_count = t.fire_alarm_devices.len();
+    if fa_device_count > 0 {
+        // SLC loop: avg 50 ft per device
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "fire_alarm".into(),
+            category: "cable".into(),
+            description: "18/2 FPLR SLC Cable".into(),
+            quantity: (fa_device_count as f64) * 50.0,
+            unit: "LF".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+
+        // NAC cable
+        let nac_devices = t.fire_alarm_devices.iter().filter(|d| !d.nac.is_empty()).count();
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "fire_alarm".into(),
+            category: "cable".into(),
+            description: "14/2 FPLR NAC Cable".into(),
+            quantity: (nac_devices as f64) * 60.0,
+            unit: "LF".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // Sleeves
+    let sleeve_count = t.sleeves.len();
+    if sleeve_count > 0 {
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "data".into(),
+            category: "sleeve".into(),
+            description: "EMT Sleeve".into(),
+            quantity: sleeve_count as f64,
+            unit: "EA".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // Firestop
+    let firestop_count = t.sleeves.iter().filter(|s| s.firestop_system.is_some()).count();
+    if firestop_count > 0 {
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: "data".into(),
+            category: "firestop".into(),
+            description: "Firestop Sealant at Rated Penetration".into(),
+            quantity: firestop_count as f64,
+            unit: "EA".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    // J-hooks from pathways
+    for pw in &t.cable_pathways.clone() {
+        if pw.kind != "j_hook" {
+            continue;
+        }
+        let run_len_ft = ((pw.to_ft[0] - pw.from_ft[0]).powi(2) + (pw.to_ft[1] - pw.from_ft[1]).powi(2)).sqrt();
+        let spacing_ft = pw.spacing_in.unwrap_or(48.0) / 12.0;
+        let hook_count = if spacing_ft > 0.0 { (run_len_ft / spacing_ft).ceil() } else { 1.0 };
+        t.lv_bom.push(LvBomLine {
+            id: format!("bom-{bom_id}"),
+            system: pw.systems.first().cloned().unwrap_or_default(),
+            category: "support".into(),
+            description: "J-Hook Cable Support".into(),
+            quantity: hook_count,
+            unit: "EA".into(),
+            scope: "ours".into(),
+            ..LvBomLine::default()
+        });
+        bom_id += 1;
+    }
+
+    let _ = bom_id;
 }
 
 // --- Site ---
@@ -2146,6 +2989,109 @@ fn spec_book() -> Vec<SpecItem> {
             title: "TOILET ACCESSORIES".into(),
             manufacturer: "Bobrick".into(),
             model: "B-Series".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        // --- Division 27: Communications (Q308) ---
+        SpecItem {
+            id: "spec-16".into(),
+            division: "27".into(),
+            section: "27 11 00".into(),
+            title: "COMMUNICATIONS EQUIPMENT ROOM FITTINGS".into(),
+            manufacturer: "Panduit".into(),
+            model: "WMP1E Horizontal Cable Manager".into(),
+            or_equal: true,
+            referenced_by: vec!["MDF".into(), "IDF-2".into(), "IDF-3".into(), "IDF-4".into()],
+        },
+        SpecItem {
+            id: "spec-17".into(),
+            division: "27".into(),
+            section: "27 13 23".into(),
+            title: "COMMUNICATIONS OPTICAL FIBER BACKBONE CABLING".into(),
+            manufacturer: "Corning".into(),
+            model: "ALTOS Gel-Free Single-Mode".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-18".into(),
+            division: "27".into(),
+            section: "27 41 16".into(),
+            title: "INTEGRATED AUDIO-VIDEO SYSTEMS".into(),
+            manufacturer: "Atlas Sound".into(),
+            model: "FAP42T Ceiling Speaker".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        // --- Division 28: Electronic Safety and Security (Q308) ---
+        SpecItem {
+            id: "spec-19".into(),
+            division: "28".into(),
+            section: "28 31 43".into(),
+            title: "FIRE DETECTION AND ALARM NOTIFICATION APPLIANCES".into(),
+            manufacturer: "System Sensor".into(),
+            model: "P2RH Horn/Strobe, P2R Strobe".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-20".into(),
+            division: "28".into(),
+            section: "28 31 46".into(),
+            title: "SMOKE DETECTION SENSORS".into(),
+            manufacturer: "System Sensor".into(),
+            model: "2WTA-B Photoelectric Smoke Detector".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-21".into(),
+            division: "28".into(),
+            section: "28 13 00".into(),
+            title: "ACCESS CONTROL".into(),
+            manufacturer: "HID Global".into(),
+            model: "iCLASS SE R10".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-22".into(),
+            division: "28".into(),
+            section: "28 23 00".into(),
+            title: "VIDEO SURVEILLANCE".into(),
+            manufacturer: "Axis Communications".into(),
+            model: "M3075-V".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-23".into(),
+            division: "27".into(),
+            section: "27 52 23".into(),
+            title: "NURSE CALL AND CODE BLUE SYSTEMS".into(),
+            manufacturer: "Rauland-Borg".into(),
+            model: "Responder 5".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        // --- Division 26: Equipment connections (Q308) ---
+        SpecItem {
+            id: "spec-24".into(),
+            division: "26".into(),
+            section: "26 28 16".into(),
+            title: "ENCLOSED SWITCHES AND CIRCUIT BREAKERS".into(),
+            manufacturer: "Eaton".into(),
+            model: "DH Series Safety Switch".into(),
+            or_equal: true,
+            referenced_by: vec!["DS-WH1".into(), "DS-RTU1".into()],
+        },
+        SpecItem {
+            id: "spec-25".into(),
+            division: "26".into(),
+            section: "26 27 26".into(),
+            title: "WIRING DEVICES".into(),
+            manufacturer: "Leviton".into(),
+            model: "5362 Duplex Receptacle".into(),
             or_equal: true,
             referenced_by: vec![],
         },
