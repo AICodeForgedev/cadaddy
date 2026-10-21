@@ -48,6 +48,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "bim_spec_import", "description": "Read a spec book, schedule or submittal into proposed BIM types for the drawing. action \"import\" reads a PDF or text file and returns proposals with citations; \"accept\" merges chosen proposals into the type catalog. Nothing is applied silently — the agent reviews first. Spec-vs-schedule disagreements produce RFI items. Approved submittals override the spec's \"or equal\"; rejected ones are recorded but not applied.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["import", "accept"]},
+                "file": {"type": "string", "description": "path to PDF or text file (for import)"},
+                "text": {"type": "string", "description": "inline text instead of file (for import)"},
+                "format": {"type": "string", "enum": ["spec", "schedule", "submittal", "auto"], "description": "auto-detected if omitted"},
+                "proposals": {"type": "array", "description": "proposals to accept (for accept action)"},
+                "overwrite": {"type": "boolean", "description": "replace existing fields instead of merging (for accept)"}
+            }, "required": ["action"]}}),
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
@@ -218,6 +226,17 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("set_spec") => "bim.set_spec",
                 Some("unset_spec") => "bim.unset_spec",
                 _ => "bim.types",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
+        }
+        "bim_spec_import" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("accept") => "bim.spec_accept",
+                _ => "bim.spec_import",
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
