@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     Cover,
+    /// Architectural floor plan for a level.
+    Floor(String),
     Framing(String),
     Rcp(String),
     Mech(String),
@@ -27,6 +29,10 @@ pub enum Kind {
 impl Kind {
     pub fn plan(&self) -> bool {
         !matches!(self, Kind::Cover | Kind::Schedules(_))
+    }
+    /// Whether this is an architectural floor plan sheet.
+    pub fn is_floor(&self) -> bool {
+        matches!(self, Kind::Floor(_))
     }
 }
 
@@ -62,6 +68,9 @@ pub fn frame(st: &Style) -> Frame {
 /// The sheets of a set: number, title, discipline, what it shows.
 pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     let mut v = vec![("G-001".to_string(), "COVER SHEET".to_string(), "G".to_string(), Kind::Cover)];
+    for l in ["1", "2"] {
+        v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Floor(l.into())));
+    }
     v.push(("S-102".into(), "LEVEL 2 FRAMING PLAN".into(), "S".into(), Kind::Framing("2".into())));
     v.push(("S-103".into(), "ROOF FRAMING PLAN".into(), "S".into(), Kind::Framing("R".into())));
     for l in ["1", "2"] {
@@ -136,7 +145,8 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in sheet_list() {
         let level = match &kind {
-            Kind::Framing(l)
+            Kind::Floor(l)
+            | Kind::Framing(l)
             | Kind::Rcp(l)
             | Kind::Mech(l)
             | Kind::Plumb(l)
@@ -350,7 +360,8 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in hotel_sheet_list() {
         let level = match &kind {
-            Kind::Framing(l)
+            Kind::Floor(l)
+            | Kind::Framing(l)
             | Kind::Rcp(l)
             | Kind::Mech(l)
             | Kind::Plumb(l)
