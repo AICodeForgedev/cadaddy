@@ -39,14 +39,14 @@ fn every_stud_wall_has_a_true_layout_end_and_stacks_share_it() {
         let t = truth_for(seed);
         let fr = frame(&walls_from_truth(&t), &[], &[], &[]);
         assert!(!fr.stacks.is_empty(), "seed {seed}: walls stack storey over storey");
-        for w in &t.walls {
+        for w in &t.plan_walls {
             assert!(w.layout_from.as_deref().and_then(End::parse).is_some(), "seed {seed} {}", w.id);
         }
         for g in &fr.stacks {
             let pulled: Vec<[f64; 2]> = g
                 .iter()
                 .map(|i| {
-                    let w = &t.walls[*i];
+                    let w = &t.plan_walls[*i];
                     if w.layout_from.as_deref() == Some("a") { w.a_ft } else { w.b_ft }
                 })
                 .collect();
@@ -54,12 +54,12 @@ fn every_stud_wall_has_a_true_layout_end_and_stacks_share_it() {
                 assert!((p[0] - pulled[0][0]).hypot(p[1] - pulled[0][1]) < 0.25, "seed {seed}: stack {g:?} pulled from one place");
             }
         }
-        assert_eq!(truth_for(seed).walls, t.walls, "deterministic");
+        assert_eq!(truth_for(seed).plan_walls, t.plan_walls, "deterministic");
     }
     // Both ends occur.
     let t = truth_for(1);
-    assert!(t.walls.iter().any(|w| w.layout_from.as_deref() == Some("a")) && t.walls.iter().any(|w| w.layout_from.as_deref() == Some("b")));
-    assert_eq!(cadaddy_mepfix::generate(3).unwrap().truth.walls, truth_for(3).walls, "a generated set carries the same layouts");
+    assert!(t.plan_walls.iter().any(|w| w.layout_from.as_deref() == Some("a")) && t.plan_walls.iter().any(|w| w.layout_from.as_deref() == Some("b")));
+    assert_eq!(cadaddy_mepfix::generate(3).unwrap().truth.plan_walls, truth_for(3).plan_walls, "a generated set carries the same layouts");
 }
 
 fn read(seed: u64) -> (Truth, Framing, Framing) {
@@ -96,7 +96,7 @@ fn fixed_members_are_exact_and_rule_members_match_under_the_right_layout() {
         assert!(fr.walls.iter().any(|w| w.wall.stud_in.is_none() && w.members.is_empty() && w.flags.iter().any(|f| f.contains("masonry"))));
         assert!(!fr.stacks.is_empty(), "seed {seed}: read walls stack too");
         // Untagged walls say their framing follows a guessed type.
-        let untagged = t.walls.iter().filter(|w| !w.tagged).count();
+        let untagged = t.plan_walls.iter().filter(|w| !w.tagged).count();
         let flagged = fr.walls.iter().filter(|w| w.flags.iter().any(|f| f.starts_with("untagged wall, type guessed"))).count();
         assert_eq!(flagged, untagged, "seed {seed}");
     }
@@ -221,7 +221,7 @@ fn a_field_point_snaps_the_run_and_the_walls_stacked_with_it() {
             let Some(true_stud) = tw.members.iter().find(|m| m.kind == Kind::FieldStud) else { continue };
             let s = rw.local(tw.wall.at(true_stud.s_in)).0;
             let snap = fr.field_point(i, s).unwrap();
-            let pulled = t.walls[ti].layout_from.as_deref().and_then(End::parse).unwrap();
+            let pulled = t.plan_walls[ti].layout_from.as_deref().and_then(End::parse).unwrap();
             let world = tw.wall.at(if pulled == End::A { 0.0 } else { tw.wall.len_in() });
             let want = if rw.local(world).0.abs() < 1.0 { End::A } else { End::B };
             assert_eq!(snap.matches, Some(want), "seed {seed} {}: the measured stud tells the end", rw.id);

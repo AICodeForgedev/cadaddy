@@ -23,7 +23,7 @@
 
 use crate::bore::{self, BoreCheck, HoleAt, Raceway};
 use crate::rng::Rng;
-use crate::truth::{Truth, WallLayer};
+use crate::truth::{Truth, WallTypeLayer};
 use crate::wall_reader::WallResult;
 use cadaddy_color::Color;
 use cadaddy_doc::{Common, Drawing, EntityKind, HAlign, Layer, Line, Lineweight, LwPolyline, Space, Text, VAlign};
@@ -250,7 +250,7 @@ impl FrameWall {
     }
 }
 
-fn stud_of(layers: &[WallLayer]) -> Option<(f64, f64)> {
+fn stud_of(layers: &[WallTypeLayer]) -> Option<(f64, f64)> {
     layers.iter().find(|l| l.material == "stud").map(|l| (l.thickness_in, l.spacing_in.unwrap_or(16.0)))
 }
 
@@ -265,7 +265,7 @@ fn frame_wall(
     b: [f64; 2],
     th: f64,
     tag: &str,
-    layers: &[WallLayer],
+    layers: &[WallTypeLayer],
     h: f64,
     openings: &[[f64; 2]],
     rooms: &[String],
@@ -291,7 +291,7 @@ fn frame_wall(
 
 /// The truth's walls.
 pub fn walls_from_truth(t: &Truth) -> Vec<FrameWall> {
-    t.walls
+    t.plan_walls
         .iter()
         .take(MAX_WALLS)
         .map(|w| {
@@ -1356,8 +1356,8 @@ pub fn choose_layouts(t: &mut Truth) {
     let mut r = Rng::new(t.seed ^ 0x4652_414D_494E_4721).fork(6);
     let fw = walls_from_truth(t);
     let fr = frame(&fw, &[], &[], &[]);
-    let mut done = vec![false; t.walls.len()];
-    let groups: Vec<Vec<usize>> = (0..t.walls.len()).map(|i| fr.stacks.iter().find(|g| g.contains(&i)).cloned().unwrap_or_else(|| vec![i])).collect();
+    let mut done = vec![false; t.plan_walls.len()];
+    let groups: Vec<Vec<usize>> = (0..t.plan_walls.len()).map(|i| fr.stacks.iter().find(|g| g.contains(&i)).cloned().unwrap_or_else(|| vec![i])).collect();
     for (i, g) in groups.iter().enumerate() {
         if done.get(i).copied().unwrap_or(true) {
             continue;
@@ -1372,7 +1372,7 @@ pub fn choose_layouts(t: &mut Truth) {
             } else {
                 End::B
             };
-            if let Some(w) = t.walls.get_mut(*j) {
+            if let Some(w) = t.plan_walls.get_mut(*j) {
                 w.layout_from = Some(e.letter().into());
             }
             if let Some(d) = done.get_mut(*j) {
@@ -1385,7 +1385,7 @@ pub fn choose_layouts(t: &mut Truth) {
 /// The true framing of a fixture set: every wall resolved to the layout it was pulled from.
 pub fn truth_framing(t: &Truth) -> Framing {
     let mut fr = frame(&walls_from_truth(t), &posts_from_truth(t), &[], &[]);
-    for (wf, w) in fr.walls.iter_mut().zip(&t.walls) {
+    for (wf, w) in fr.walls.iter_mut().zip(&t.plan_walls) {
         if let Some(e) = w.layout_from.as_deref().and_then(End::parse) {
             wf.members.retain(|m| m.in_layout(e));
             for m in wf.members.iter_mut().filter(|m| m.layout.is_some()) {
@@ -1437,7 +1437,7 @@ pub struct FramingScore {
 pub fn score_framing(t: &Truth, truth: &Framing, read: &Framing) -> FramingScore {
     const TOL: f64 = 0.125;
     let mut sc = FramingScore::default();
-    for (tw, w) in truth.walls.iter().zip(&t.walls) {
+    for (tw, w) in truth.walls.iter().zip(&t.plan_walls) {
         if tw.wall.stud_in.is_none() {
             continue;
         }
