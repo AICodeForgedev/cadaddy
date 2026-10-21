@@ -117,7 +117,7 @@ impl ObjWriter {
             let t = if s.is_empty() { Text::Empty } else { Text::Wide(s.encode_utf16().collect()) };
             self.s.tv(&t, true);
         } else {
-            let t = if s.is_empty() { Text::Empty } else { Text::Bytes(s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect()) };
+            let t = if s.is_empty() { Text::Empty } else { Text::Bytes(crate::bits::code_page_bytes(s)) };
             self.d.tv(&t, false);
         }
     }
@@ -344,7 +344,7 @@ pub fn eed(w: &mut ObjWriter, r: &Rec, names: &Handles) {
                             data.extend_from_slice(&c.to_le_bytes());
                         }
                     } else {
-                        let b: Vec<u8> = s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).take(255).collect();
+                        let b: Vec<u8> = crate::bits::code_page_bytes(s).into_iter().take(255).collect();
                         data.push(b.len() as u8);
                         // The code page (ANSI 1252), high byte first (as the files we've seen
                         // store it).

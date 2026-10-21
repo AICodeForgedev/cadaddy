@@ -273,7 +273,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
     let mut pass = entity_pass(v, blocks, entities, &names, (model_br, paper_br), &HashMap::new());
     if v < Version::R2004 {
         let mut links: Links = HashMap::new();
-        for list in pass.block_parts.values().map(|p| &p.2).chain(&pass.kid_lists) {
+        for list in pass.block_parts.values().map(|p| &p.ents).chain(&pass.kid_lists) {
             for (k, h) in list.iter().enumerate() {
                 let prev = k.checked_sub(1).and_then(|j| list.get(j)).copied();
                 links.insert(*h, (prev, list.get(k + 1).copied()));
@@ -296,22 +296,18 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
         let owner = r.owner();
         match table.as_str() {
             "BLOCK_RECORD" => {
-                let (block, endblk, ents, flags, base, xref_path) =
-                    block_parts.remove(h).unwrap_or((None, None, Vec::new(), 0, [0.0; 3], String::new()));
-                out.push(ek::block_header(
-                    v,
-                    *h,
-                    owner,
-                    &r.rec(),
-                    block,
-                    endblk,
-                    &ents,
-                    layout_of.get(h).copied().or(r.rec().h(340)),
-                    flags,
-                    base,
-                    &xref_path,
-                    &names,
-                ));
+                let b = block_parts.remove(h).unwrap_or_default();
+                let head = ek::BlockHead {
+                    block: b.block,
+                    endblk: b.endblk,
+                    entities: &b.ents,
+                    layout: layout_of.get(h).copied().or(r.rec().h(340)),
+                    flags70: b.flags,
+                    base: b.base,
+                    xref_path: &b.xref_path,
+                    description: &b.description,
+                };
+                out.push(ek::block_header(v, *h, owner, &r.rec(), head, &names));
             }
             _ => match ek::table_record(v, &r.name, *h, owner, &r.rec(), &names) {
                 Some(o) => out.push(o),
@@ -469,8 +465,18 @@ fn handle_value(v: &Value) -> Option<u64> {
 /// Each entity's previous and next entity (R2000).
 type Links = HashMap<u64, (Option<u64>, Option<u64>)>;
 
-/// What a block record holds: its BLOCK and ENDBLK, its entities, flags and base point.
-type BlockParts = (Option<u64>, Option<u64>, Vec<u64>, i64, [f64; 3], String);
+/// What a block record holds: its BLOCK and ENDBLK, its entities, and its BLOCK's flags, base
+/// point, xref path and description.
+#[derive(Default)]
+struct BlockParts {
+    block: Option<u64>,
+    endblk: Option<u64>,
+    ents: Vec<u64>,
+    flags: i64,
+    base: [f64; 3],
+    xref_path: String,
+    description: String,
+}
 
 /// The encoded entities.
 struct EntityPass {
@@ -494,7 +500,7 @@ fn entity_pass(
 ) -> EntityPass {
     let mut p =
         EntityPass { out: Vec::new(), block_parts: HashMap::new(), viewports_of: HashMap::new(), kid_lists: Vec::new(), skipped: HashMap::new() };
-    let new_parts = || (None, None, Vec::new(), 0, [0.0; 3], String::new());
+    let new_parts = BlockParts::default;
     let mut owner_now: Option<u64> = None;
     let mut i = 0;
     while let Some(r) = blocks.get(i) {
@@ -510,12 +516,13 @@ fn entity_pass(
                 }
                 if let Some(e) = owner_now.map(|o| p.block_parts.entry(o).or_insert_with(new_parts)) {
                     if r.name == "BLOCK" {
-                        e.0 = Some(h);
-                        e.3 = r.rec().id(70, 0);
-                        e.4 = r.rec().p(10);
-                        e.5 = r.rec().s(1).unwrap_or("").to_string();
+                        e.block = Some(h);
+                        e.flags = r.rec().id(70, 0);
+                        e.base = r.rec().p(10);
+                        e.xref_path = r.rec().s(1).unwrap_or("").to_string();
+                        e.description = r.rec().s(4).unwrap_or("").to_string();
                     } else {
-                        e.1 = Some(h);
+                        e.endblk = Some(h);
                     }
                 }
                 let head = EntityHead {
@@ -539,7 +546,7 @@ fn entity_pass(
                 let owner = owner.or(owner_now);
                 let (next, top) = entity(v, blocks, i, 0, owner, names, links, &mut p);
                 if let (Some(t), Some(o)) = (top, owner) {
-                    p.block_parts.entry(o).or_insert_with(new_parts).2.push(t);
+                    p.block_parts.entry(o).or_insert_with(new_parts).ents.push(t);
                     if r.name == "VIEWPORT" {
                         p.viewports_of.entry(o).or_default().push(t);
                     }
@@ -554,7 +561,7 @@ fn entity_pass(
         let space = if paper { paper_br } else { model_br };
         let (next, top) = entity(v, entities, i, if paper { 1 } else { 2 }, None, names, links, &mut p);
         if let (Some(t), Some(s)) = (top, space) {
-            p.block_parts.entry(s).or_insert_with(new_parts).2.push(t);
+            p.block_parts.entry(s).or_insert_with(new_parts).ents.push(t);
             if r.name == "VIEWPORT" {
                 p.viewports_of.entry(s).or_default().push(t);
             }
@@ -845,10 +852,7 @@ fn set_header(hv: &mut HeaderVars, r: &Record, names: &Handles, dicts: &HashMap<
     }
 }
 
+/// A string as `v` stores it: UTF-16 from 2007, else ASCII with `\U+XXXX` escapes.
 pub(crate) fn text(v: Version, s: &str) -> Text {
-    if v.unicode() {
-        Text::Wide(s.encode_utf16().collect())
-    } else {
-        Text::Bytes(s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect())
-    }
+    if v.unicode() { Text::Wide(s.encode_utf16().collect()) } else { Text::Bytes(cadaddy_dwgcodec::bits::code_page_bytes(s)) }
 }

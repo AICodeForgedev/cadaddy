@@ -1528,7 +1528,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     frozen: flags & 1 != 0,
                     locked: flags & 4 != 0,
                     vp_freeze_new: flags & 2 != 0,
-                    plot: t.i(290).unwrap_or(1) != 0,
+                    // Defpoints never plots; a file without the flag (Release 12) gets it as a new
+                    // drawing has it.
+                    plot: t.i(290).map_or(!name.eq_ignore_ascii_case("Defpoints"), |p| p != 0),
                     ..Layer::default()
                 };
                 if let Some(tc) = t.i(420) {

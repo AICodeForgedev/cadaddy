@@ -57,6 +57,8 @@ fn convert(s: &mut Session, from: &Path, to: &str, version: Option<&str>, out: &
 /// zero, empty) are things a file may fill in, not losses.
 fn holds(a: &Value, b: &Value) -> bool {
     match (a, b) {
+        // As the notes compare (`kept::kept`): a false that came back true is a change.
+        (Value::Bool(false), Value::Bool(true)) => false,
         (Value::Null, _) | (Value::Bool(false), _) => true,
         (Value::String(x), _) if x.is_empty() => true,
         (Value::Array(x), _) if x.is_empty() => true,

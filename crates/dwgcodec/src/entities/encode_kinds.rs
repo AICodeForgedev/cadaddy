@@ -1559,7 +1559,7 @@ pub fn table_record(v: Version, name: &str, handle: u64, owner: Option<u64>, r: 
             for d in dashes.iter_mut().filter(|d| d.flags & 2 != 0) {
                 let bytes: Vec<u8> = match &d.text {
                     Some(t) if wide => t.encode_utf16().flat_map(u16::to_le_bytes).collect(),
-                    Some(t) => t.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }).collect(),
+                    Some(t) => crate::bits::code_page_bytes(t),
                     None => Vec::new(),
                 };
                 let end = at + bytes.len() + if wide { 2 } else { 1 };
@@ -1809,22 +1809,22 @@ fn view(w: &mut ObjWriter, r: &Rec) {
     }
 }
 
-/// A BLOCK_HEADER (spec §20.4.49) for a block record, with its BLOCK and ENDBLK entities and the
-/// entities it holds.
-pub fn block_header(
-    v: Version,
-    handle: u64,
-    owner: Option<u64>,
-    r: &Rec,
-    block: Option<u64>,
-    endblk: Option<u64>,
-    entities: &[u64],
-    layout: Option<u64>,
-    flags70: i64,
-    base: [f64; 3],
-    xref_path: &str,
-    names: &Handles,
-) -> RawObject {
+/// What a BLOCK_HEADER holds besides its record's groups: its BLOCK and ENDBLK entities, the
+/// entities it holds, its layout, and its BLOCK's flags, base point, xref path and description.
+pub struct BlockHead<'a> {
+    pub block: Option<u64>,
+    pub endblk: Option<u64>,
+    pub entities: &'a [u64],
+    pub layout: Option<u64>,
+    pub flags70: i64,
+    pub base: [f64; 3],
+    pub xref_path: &'a str,
+    pub description: &'a str,
+}
+
+/// A BLOCK_HEADER (spec §20.4.49) for a block record.
+pub fn block_header(v: Version, handle: u64, owner: Option<u64>, r: &Rec, b: BlockHead, names: &Handles) -> RawObject {
+    let BlockHead { block, endblk, entities, layout, flags70, base, xref_path, description } = b;
     let mut w = ObjWriter::new(v, types::BLOCK_HEADER, handle);
     object_common(&mut w, owner, &[], None, r, names);
     table_entry(&mut w, r.s(2).unwrap_or(""), 0);
@@ -1842,7 +1842,7 @@ pub fn block_header(
     w.text(xref_path);
     // No insert counts.
     w.d.rc(0);
-    w.text("");
+    w.text(description);
     // No preview.
     w.d.bl(0);
     if w.at_least(Version::R2007) {
@@ -2170,7 +2170,7 @@ fn xrecord(w: &mut ObjWriter, r: &Rec) {
                         d.extend_from_slice(&c.to_le_bytes());
                     }
                 } else {
-                    let b: Vec<u8> = s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).take(u16::MAX as usize).collect();
+                    let b: Vec<u8> = crate::bits::code_page_bytes(&s).into_iter().take(u16::MAX as usize).collect();
                     d.extend_from_slice(&(b.len() as u16).to_le_bytes());
                     d.push(0);
                     d.extend_from_slice(&b);
