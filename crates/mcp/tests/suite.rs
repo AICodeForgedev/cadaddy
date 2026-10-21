@@ -59,6 +59,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("render", json!({ "width": 64, "height": 64 }), json!({ "width": 3 })),
         ("stairs", json!({ "action": "list" }), json!({})),
         ("rooms", json!({ "action": "list" }), json!({})),
+        ("mep", json!({ "action": "list" }), json!({ "id": "abc" })),
         ("select", json!({ "all": true }), json!({ "handles": "1A" })),
         ("get_variable", json!({ "name": "CLAYER" }), json!({})),
         ("set_variable", json!({ "name": "LTSCALE", "value": 2 }), json!({ "name": "LTSCALE" })),

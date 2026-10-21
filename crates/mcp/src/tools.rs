@@ -71,6 +71,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}, "inputs": {"type": "array"}}, "required": ["code"]}}),
         json!({"name": "plot", "description": "Plot a layout (or Model) to a PDF file with its page setup, as PLOT does, without the dialog.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "layout": {"type": "string"}}, "required": ["path"]}}),
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
+            "inputSchema": {"type": "object", "properties": {
+                "action": {"type": "string"},
+                "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
+                "id": {"type": "integer", "minimum": 0},
+                "size_in": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                "bottom_ft": {"type": "number"}, "reviewed": {"type": "boolean"}, "rebuild": {"type": "boolean"}
+            }}}),
     ];
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
@@ -250,6 +258,17 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             None => Ok(r),
         }),
         "plot" => exec(b, "exportpdf", a),
+        "mep" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("edit") => "mep.edit",
+                _ => "mep.list",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            exec(b, command, params)
+        }
         "answer_close_prompt" => b.call("app.answerClose", a),
         "quit_app" => {
             // Refuse before quitting rather than lose work: the app's own quit discards.
