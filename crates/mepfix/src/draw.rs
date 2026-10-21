@@ -405,6 +405,17 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("opening", "FLOOR OPENING / SHAFT"));
             abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE", "EL = ELEVATION"].map(abbrev));
         }
+        Kind::Floor(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            casework_plan(&mut pen, t, st, l);
+            legend.push(item("base_cabinet", "BASE CABINET"));
+            legend.push(item("upper_cabinet", "UPPER CABINET"));
+            legend.push(item("counter", "COUNTERTOP"));
+            legend.push(item("vanity", "VANITY"));
+            legend.push(item("appliance", "APPLIANCE"));
+            abbr.extend(["AFF = ABOVE FINISHED FLOOR", "TYP = TYPICAL", "U.N.O. = UNLESS NOTED OTHERWISE"].map(abbrev));
+        }
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
@@ -951,6 +962,61 @@ fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
 }
 
 /// Walls (rooms inset 3", so neighbours make 6" walls), room names and numbers.
+/// Draw casework items on an architectural floor plan: rectangles on `CASEWORK` layer with tags.
+fn casework_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
+    let rot = readable(pen.rot());
+    for cw in t.casework.iter().filter(|c| c.level == level) {
+        // Draw the casework rectangle on the CASEWORK layer.
+        pen.brect("CASEWORK", cw.min_ft, cw.max_ft);
+
+        // A hatch pattern to distinguish the kind.
+        match cw.kind.as_str() {
+            "base_cabinet" | "vanity" => {
+                // Diagonal hatch lines inside the rectangle.
+                let n_lines = 4usize;
+                let dx = cw.max_ft[0] - cw.min_ft[0];
+                let dy = cw.max_ft[1] - cw.min_ft[1];
+                for k in 1..=n_lines {
+                    let frac = k as f64 / (n_lines + 1) as f64;
+                    let a = pen.b([cw.min_ft[0] + frac * dx, cw.min_ft[1]]);
+                    let b = pen.b([cw.min_ft[0], cw.min_ft[1] + frac * dy]);
+                    pen.line("CASEWORK", a, b);
+                }
+            }
+            "upper_cabinet" => {
+                // Inner dashed rectangle.
+                let inset = 0.15;
+                let inner_min = [cw.min_ft[0] + inset, cw.min_ft[1] + inset];
+                let inner_max = [cw.max_ft[0] - inset, cw.max_ft[1] - inset];
+                if inner_max[0] > inner_min[0] && inner_max[1] > inner_min[1] {
+                    pen.brect("CASEWORK", inner_min, inner_max);
+                }
+            }
+            "appliance" => {
+                // X mark inside.
+                let a1 = pen.b(cw.min_ft);
+                let b1 = pen.b(cw.max_ft);
+                pen.line("CASEWORK", a1, b1);
+                let a2 = pen.b([cw.min_ft[0], cw.max_ft[1]]);
+                let b2 = pen.b([cw.max_ft[0], cw.min_ft[1]]);
+                pen.line("CASEWORK", a2, b2);
+            }
+            _ => {} // counter, backsplash: just the rectangle
+        }
+
+        // Tag text centred on the casework item.
+        let cx = (cw.min_ft[0] + cw.max_ft[0]) / 2.0;
+        let cy = (cw.min_ft[1] + cw.max_ft[1]) / 2.0;
+        let p = pen.b([cx, cy]);
+        pen.text("CASEWORK", p, st.text_in * 0.8, &cw.tag, rot, HAlign::Center, VAlign::Middle);
+
+        // Height note below the tag.
+        let height_text = format!("{:.0}\" AFF", cw.height_in);
+        let p2 = pen.b([cx, cy - 0.6]);
+        pen.text("TEXT", p2, st.text_in * 0.6, &height_text, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
 fn background(pen: &mut Pen, t: &Truth, level: &str, names: bool) {
     let w = 0.25;
     for rm in t.building.rooms.iter().filter(|r| r.level == level) {
