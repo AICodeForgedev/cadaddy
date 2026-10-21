@@ -14,6 +14,7 @@
 pub mod clash;
 pub mod design;
 pub mod draw;
+pub mod heights;
 pub mod layout;
 pub mod rng;
 pub mod score;

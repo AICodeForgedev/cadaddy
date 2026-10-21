@@ -130,7 +130,7 @@ impl Net {
         let d = depth_in(shape, size) / 12.0;
         let height = (!vertical).then(|| {
             let c = (pa[2] + pb[2]) / 2.0 - elev;
-            Height { bottom_ft: r6(c - d / 2.0), top_ft: r6(c + d / 2.0), centre_ft: r6(c), note: None }
+            Height { bottom_ft: r6(c - d / 2.0), top_ft: r6(c + d / 2.0), centre_ft: r6(c), note: None, source: HeightSource::Rule }
         });
         let i = self.segs.len();
         let id = format!("S{:04}", i + 1);

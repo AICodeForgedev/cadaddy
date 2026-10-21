@@ -185,6 +185,20 @@ pub struct Segment {
     pub sheet: String,
 }
 
+/// Where a segment's height came from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HeightSource {
+    /// Parsed from a height note on the run (BOD, TOD, CL, AFF, BOP, etc.).
+    Note,
+    /// Derived from the room's reflected ceiling height plus clearance.
+    Ceiling,
+    /// Assigned by trade stacking rules (ducts highest, then FP, then plumbing).
+    #[default]
+    Rule,
+    /// Tight to structure (flush against the underside of a beam or slab).
+    Structure,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Height {
     /// Bottom of the duct or pipe above the level's floor, feet.
@@ -195,6 +209,10 @@ pub struct Height {
     /// work out the others (ceilings, structure, rules).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Where this height came from: a note on the run, the room's ceiling, trade rules, or
+    /// structure clearance.
+    #[serde(default)]
+    pub source: HeightSource,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

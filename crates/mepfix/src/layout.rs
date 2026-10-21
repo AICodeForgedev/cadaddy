@@ -393,6 +393,9 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
         for s in t.segments.iter_mut().filter(|s| ids.contains(&s.id)) {
             if let Some(h) = s.height.as_mut() {
                 h.note = note.clone();
+                if note.is_some() {
+                    h.source = crate::truth::HeightSource::Note;
+                }
             }
             if slope.is_some() {
                 s.slope = slope.clone();
