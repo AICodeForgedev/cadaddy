@@ -11,6 +11,7 @@
 
 mod derive;
 mod doors;
+pub mod fixtures;
 mod ground;
 mod math;
 mod measure;

@@ -1,5 +1,6 @@
 //! Drawing + rules → 3D scene.
 
+use crate::fixtures::{self, Lod};
 use crate::math::{V3, v3};
 use crate::rules::{LayerKind, Level, Rules};
 use cadaddy_color::{Color, Rgb};
@@ -500,7 +501,16 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             };
             let across = if mount.ceiling { w } else { dp };
             let src16 = u16::try_from(src).unwrap_or(u16::MAX);
-            boxed(&mut s, pos, dir, w, across, h, c, Owner { src: src16, handle: e.handle });
+            let own = Owner { src: src16, handle: e.handle };
+            // Try real fixture geometry; fall back to a box if unrecognised.
+            // Pass the clamped dimensions so hostile input stays finite.
+            let block_lower = ins.block.to_ascii_lowercase();
+            let clamped = [w, dp, h];
+            let used_fixture = fixtures::classify(&block_lower, ty, clamped)
+                .is_some_and(|family| fixtures::generate(&mut s, &family, pos, dir, c, own, Lod::Detailed));
+            if !used_fixture {
+                boxed(&mut s, pos, dir, w, across, h, c, own);
+            }
             s.devices.push(DeviceInfo {
                 handle: e.handle,
                 src: src16,
