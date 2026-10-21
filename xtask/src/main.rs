@@ -14,6 +14,7 @@ mod mepfix;
 mod parity;
 mod perf;
 mod release;
+mod release_cmd;
 mod repro;
 mod secrets;
 mod signing;
@@ -96,6 +97,9 @@ commands:
   repro FILE [--save OUT]
                   replay a recorded journal (.scr) or action macro (.actm) headless through
                   cadaddy-cli, to reproduce a crash or verify a workflow
+  release <version> [--dry-run] [--skip-build] [--skip-smoke] [--skip-sign]
+                  one-command release: version bump, platform build, .mcpb, sign, smoke, release
+                  notes, human checklist; stops at first failure; no network writes
   release-key --out FILE
                   make a release signing key: the secret to FILE (keep it off the repository), the
                   public key line for apps/cadaddy/src/release_keys.txt printed
@@ -136,6 +140,7 @@ fn main() -> ExitCode {
         Some("mep-fixtures") => mepfix::run(&root(), &rest),
         Some("webtest" | "web") => webtest::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),
+        Some("release") => release_cmd::run(&root(), &rest),
         Some("release-key") => release::key_cmd(&rest),
         Some("sign-release") => release::sign_cmd(&root(), &rest),
         Some("verify-release") => release::verify_cmd(&root(), &rest),
