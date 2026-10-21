@@ -32,6 +32,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::plotstampdlg::DIALOG => crate::plotstampdlg::dialog(app, ctx, &mut open),
         crate::dwgpropsdlg::DIALOG => crate::dwgpropsdlg::dialog(app, ctx, &mut open),
         crate::dwgpropsdlg::MONITOR => crate::dwgpropsdlg::monitor(app, ctx, &mut open),
+        crate::clashpalette::DIALOG => crate::clashpalette::dialog(app, ctx, &mut open),
         crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
         crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         "color" => crate::cmddlgs::color(app, ctx, &mut open),
