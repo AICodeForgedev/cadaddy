@@ -36,6 +36,7 @@ fn layer_def(name: &str, st: &Style) -> (u8, u16, &'static str) {
         "DASHED" => (7, st.lw_run, "DASHED"),
         "HEAVY" => (7, st.lw_run + 20, "Continuous"),
         "LIGHT" => (7, st.lw_background, "Continuous"),
+        "A-SLAB-EDGE" => (8, st.lw_background, "DASHED"),
         _ => (7, st.lw_run, "Continuous"),
     }
 }
@@ -297,8 +298,31 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         Kind::Floor(l) => {
             grid(&mut pen, t);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
+            crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
             legend.push(item("door", "DOOR"));
+            if t.arch.is_some() {
+                legend.push(item("door_tag", "DOOR MARK, SEE DOOR SCHEDULE"));
+                legend.push(item("window_tag", "WINDOW TYPE, SEE WINDOW SCHEDULE"));
+                legend.push(item("slab_edge", "SLAB EDGE"));
+            }
+        }
+        Kind::Roof => {
+            grid(&mut pen, t);
+            crate::arch::draw_roof(&mut pen, t, &st.arch);
+            legend.push(item("roof_drain", "ROOF DRAIN"));
+            legend.push(item("curb", "EQUIPMENT CURB"));
+            abbr.extend(["RD = ROOF DRAIN", "EF = EXHAUST FAN", "ELEV. = ELEVATOR"].map(abbrev));
+        }
+        Kind::DoorSchedule => {
+            let fr = frame(st);
+            crate::arch::draw_door_schedule(&mut pen, t, &st.arch, fr.area);
+            abbr.extend(["HM = HOLLOW METAL", "WD = WOOD", "AL = ALUMINUM", "MIN = MINUTES", "INSUL. = INSULATED"].map(abbrev));
+        }
+        Kind::FinishSchedule => {
+            let fr = frame(st);
+            crate::arch::draw_finish_schedule(&mut pen, t, &st.arch, fr.area);
+            abbr.extend(["CLG. = CEILING", "HT. = HEIGHT", "ACT = ACOUSTIC CEILING TILE", "GYP = GYPSUM BOARD"].map(abbrev));
         }
         Kind::Schedules(d) => schedules(&mut pen, t, d),
         Kind::Framing(l) => {
@@ -1673,7 +1697,7 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
 }
 
 /// A table with a title, top-left at paper `at`; returns its height, inches.
-fn table(pen: &mut Pen, at: [f64; 2], title: &str, rows: &[Vec<String>]) -> f64 {
+pub(crate) fn table(pen: &mut Pen, at: [f64; 2], title: &str, rows: &[Vec<String>]) -> f64 {
     let h = 0.09;
     let row_h = 0.24;
     let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);

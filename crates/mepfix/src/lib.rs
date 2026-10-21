@@ -13,6 +13,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod arch;
+pub mod arch_reader;
 pub mod ceiling_reader;
 pub mod clash;
 pub mod design;
@@ -71,6 +73,7 @@ pub fn truth_for(seed: u64) -> Truth {
     let mut t = d.truth;
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
     t
 }
 
@@ -80,6 +83,15 @@ fn add_walls(t: &mut Truth, st: &mut style::Style) {
     let mut r = Rng::new(t.seed ^ 0x5741_4C4C_5459_5045).fork(5);
     st.walls = walls::WallStyle::new(&mut r);
     walls::design_walls(t, &st.walls, &mut r);
+}
+
+/// Doors, windows, the stair and elevator, slab edges, the roof and room finishes, from a random
+/// stream of their own (after the walls: the doors are the walls' openings).
+fn add_arch(t: &mut Truth, st: &mut style::Style) {
+    let mut r = Rng::new(t.seed ^ 0x4152_4348_5245_4144).fork(6);
+    let nb = t.building.grid.x.len().saturating_sub(1);
+    st.arch = arch::ArchStyle::new(&mut r, st.walls.symbol, nb);
+    arch::design_arch(t, &st.arch, &mut r);
 }
 
 /// The fixture set for a seed.
@@ -92,6 +104,7 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
     let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();

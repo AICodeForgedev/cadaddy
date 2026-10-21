@@ -26,11 +26,17 @@ pub enum Kind {
     Floor(String),
     /// The wall type legend.
     WallTypes,
+    /// The roof plan.
+    Roof,
+    /// The door, hardware and window schedules.
+    DoorSchedule,
+    /// The room finish schedule and finish legend.
+    FinishSchedule,
 }
 
 impl Kind {
     pub fn plan(&self) -> bool {
-        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes)
+        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes | Kind::DoorSchedule | Kind::FinishSchedule)
     }
 }
 
@@ -97,6 +103,10 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
         v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Floor(l.into())));
     }
     v.push(("A-501".into(), "WALL TYPES AND PARTITION SCHEDULE".into(), "A".into(), Kind::WallTypes));
+    // Added after the walls' sheets, so every sheet above keeps its random draws.
+    v.push(("A-103".into(), "ROOF PLAN".into(), "A".into(), Kind::Roof));
+    v.push(("A-601".into(), "DOOR AND WINDOW SCHEDULES".into(), "A".into(), Kind::DoorSchedule));
+    v.push(("A-602".into(), "ROOM FINISH SCHEDULE".into(), "A".into(), Kind::FinishSchedule));
     v
 }
 
@@ -154,6 +164,7 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Lighting(l)
             | Kind::Power(l)
             | Kind::Floor(l) => Some(l.clone()),
+            Kind::Roof => Some("R".to_string()),
             _ => None,
         };
         let plan = kind.plan();
