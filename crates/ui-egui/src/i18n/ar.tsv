@@ -2551,3 +2551,25 @@ menu	View	عرض
 	Remove BIM Type	إزالة نوع BIM
 	Set BIM Spec on Entities	تعيين مواصفات BIM للكائنات
 	Set BIM Type	تعيين نوع BIM
+	Ceiling and Soffit Takeoff	حصر كميات الأسقف والسوفيت
+	Colour by Assembly	تلوين حسب التجميعة
+	RFI List	قائمة طلبات المعلومات
+	Zoom to RFI	تكبير إلى طلب المعلومات
+	Update RFI	تحديث طلب المعلومات
+	Export RFI List	تصدير قائمة طلبات المعلومات
+	Sent	مُرسَل
+	Answered	تمت الإجابة
+	Not sent	غير مُرسَل
+	High	عالية
+	Medium	متوسطة
+	Low	منخفضة
+	All levels	كل المستويات
+	Open items only	البنود المفتوحة فقط
+	{high} high, {medium} medium, {low} low	{high} عالية، {medium} متوسطة، {low} منخفضة
+	No gaps or conflicts in the building spec.	لا توجد ثغرات أو تعارضات في مواصفات المبنى.
+	Assumed meanwhile:	الافتراض المؤقت:
+	Proposed fix:	الحل المقترح:
+	Sheets:	الأوراق:
+	Walk to It	السير إليه
+	Export XLSX...	تصدير XLSX...
+	Export PDF...	تصدير PDF...

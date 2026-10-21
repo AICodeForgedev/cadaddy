@@ -2556,3 +2556,25 @@ menu	Modify	수정
 	Remove BIM Type	BIM 유형 제거
 	Set BIM Spec on Entities	객체에 BIM 사양 설정
 	Set BIM Type	BIM 유형 설정
+	Ceiling and Soffit Takeoff	천장 및 소핏 물량 산출
+	Colour by Assembly	구성별 색상 지정
+	RFI List	RFI 목록
+	Zoom to RFI	RFI로 확대
+	Update RFI	RFI 업데이트
+	Export RFI List	RFI 목록 내보내기
+	Sent	보냄
+	Answered	답변됨
+	Not sent	보내지 않음
+	High	높음
+	Medium	중간
+	Low	낮음
+	All levels	모든 층
+	Open items only	열린 항목만
+	{high} high, {medium} medium, {low} low	높음 {high}, 중간 {medium}, 낮음 {low}
+	No gaps or conflicts in the building spec.	건물 사양에 누락이나 충돌이 없습니다.
+	Assumed meanwhile:	임시 가정:
+	Proposed fix:	제안된 해결책:
+	Sheets:	시트:
+	Walk to It	걸어가기
+	Export XLSX...	XLSX 내보내기...
+	Export PDF...	PDF 내보내기...

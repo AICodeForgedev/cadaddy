@@ -2562,3 +2562,25 @@
 	Remove BIM Type	Remover tipo BIM
 	Set BIM Spec on Entities	Definir especificação BIM nas entidades
 	Set BIM Type	Definir tipo BIM
+	Ceiling and Soffit Takeoff	Levantamento de forros e sancas
+	Colour by Assembly	Colorir por composição
+	RFI List	Lista de RFIs
+	Zoom to RFI	Zoom na RFI
+	Update RFI	Atualizar RFI
+	Export RFI List	Exportar lista de RFIs
+	Sent	Enviada
+	Answered	Respondida
+	Not sent	Não enviada
+	High	Alta
+	Medium	Média
+	Low	Baixa
+	All levels	Todos os níveis
+	Open items only	Somente itens abertos
+	{high} high, {medium} medium, {low} low	{high} alta, {medium} média, {low} baixa
+	No gaps or conflicts in the building spec.	Não há lacunas nem conflitos na especificação do edifício.
+	Assumed meanwhile:	Suposição provisória:
+	Proposed fix:	Solução proposta:
+	Sheets:	Folhas:
+	Walk to It	Ir até lá
+	Export XLSX...	Exportar XLSX...
+	Export PDF...	Exportar PDF...

@@ -2439,3 +2439,25 @@
 	Remove BIM Type	移除 BIM 类型
 	Set BIM Spec on Entities	为对象设置 BIM 规格
 	Set BIM Type	设置 BIM 类型
+	Ceiling and Soffit Takeoff	吊顶与跌级工程量
+	Colour by Assembly	按构造着色
+	RFI List	RFI 列表
+	Zoom to RFI	缩放到 RFI
+	Update RFI	更新 RFI
+	Export RFI List	导出 RFI 列表
+	Sent	已发送
+	Answered	已答复
+	Not sent	未发送
+	High	高
+	Medium	中
+	Low	低
+	All levels	所有楼层
+	Open items only	仅未关闭项
+	{high} high, {medium} medium, {low} low	高 {high}，中 {medium}，低 {low}
+	No gaps or conflicts in the building spec.	建筑规格中没有缺漏或冲突。
+	Assumed meanwhile:	暂时假定：
+	Proposed fix:	建议的解决办法：
+	Sheets:	图纸：
+	Walk to It	走到此处
+	Export XLSX...	导出 XLSX...
+	Export PDF...	导出 PDF...

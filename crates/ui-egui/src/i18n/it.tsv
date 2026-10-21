@@ -2555,3 +2555,25 @@ menu	Modify	Edita
 	Remove BIM Type	Rimuovi tipo BIM
 	Set BIM Spec on Entities	Imposta specifica BIM sulle entità
 	Set BIM Type	Imposta tipo BIM
+	Ceiling and Soffit Takeoff	Computo controsoffitti e ribassamenti
+	Colour by Assembly	Colora per stratigrafia
+	RFI List	Elenco RFI
+	Zoom to RFI	Zoom sulla RFI
+	Update RFI	Aggiorna RFI
+	Export RFI List	Esporta elenco RFI
+	Sent	Inviata
+	Answered	Risposta
+	Not sent	Non inviata
+	High	Alta
+	Medium	Media
+	Low	Bassa
+	All levels	Tutti i livelli
+	Open items only	Solo voci aperte
+	{high} high, {medium} medium, {low} low	{high} alta, {medium} media, {low} bassa
+	No gaps or conflicts in the building spec.	Nessuna lacuna o conflitto nella specifica dell'edificio.
+	Assumed meanwhile:	Ipotesi nel frattempo:
+	Proposed fix:	Soluzione proposta:
+	Sheets:	Tavole:
+	Walk to It	Vai lì
+	Export XLSX...	Esporta XLSX...
+	Export PDF...	Esporta PDF...

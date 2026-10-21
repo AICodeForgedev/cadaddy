@@ -2536,3 +2536,25 @@ menu	Modify	Modifikace
 	Remove BIM Type	Odebrat typ BIM
 	Set BIM Spec on Entities	Nastavit specifikaci BIM objektům
 	Set BIM Type	Nastavit typ BIM
+	Ceiling and Soffit Takeoff	Výkaz podhledů a sníženin
+	Colour by Assembly	Obarvit podle skladby
+	RFI List	Seznam RFI
+	Zoom to RFI	Přiblížit na RFI
+	Update RFI	Aktualizovat RFI
+	Export RFI List	Exportovat seznam RFI
+	Sent	Odesláno
+	Answered	Zodpovězeno
+	Not sent	Neodesláno
+	High	Vysoká
+	Medium	Střední
+	Low	Nízká
+	All levels	Všechna podlaží
+	Open items only	Jen otevřené položky
+	{high} high, {medium} medium, {low} low	{high} vysoká, {medium} střední, {low} nízká
+	No gaps or conflicts in the building spec.	Ve specifikaci budovy nejsou mezery ani rozpory.
+	Assumed meanwhile:	Mezitím předpokládáno:
+	Proposed fix:	Navržené řešení:
+	Sheets:	Listy:
+	Walk to It	Projít se k místu
+	Export XLSX...	Exportovat XLSX...
+	Export PDF...	Exportovat PDF...

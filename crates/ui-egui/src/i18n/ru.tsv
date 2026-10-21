@@ -2344,3 +2344,25 @@
 	Remove BIM Type	Удалить тип BIM
 	Set BIM Spec on Entities	Задать спецификацию BIM объектам
 	Set BIM Type	Задать тип BIM
+	Ceiling and Soffit Takeoff	Ведомость потолков и коробов
+	Colour by Assembly	Раскрасить по составу
+	RFI List	Список RFI
+	Zoom to RFI	Показать RFI
+	Update RFI	Обновить RFI
+	Export RFI List	Экспорт списка RFI
+	Sent	Отправлен
+	Answered	Получен ответ
+	Not sent	Не отправлен
+	High	Высокая
+	Medium	Средняя
+	Low	Низкая
+	All levels	Все уровни
+	Open items only	Только открытые
+	{high} high, {medium} medium, {low} low	высокая: {high}, средняя: {medium}, низкая: {low}
+	No gaps or conflicts in the building spec.	В спецификации здания нет пробелов и противоречий.
+	Assumed meanwhile:	Временно принято:
+	Proposed fix:	Предлагаемое решение:
+	Sheets:	Листы:
+	Walk to It	Пройти туда
+	Export XLSX...	Экспорт XLSX...
+	Export PDF...	Экспорт PDF...

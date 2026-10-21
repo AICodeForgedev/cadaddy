@@ -2372,3 +2372,25 @@
 	Remove BIM Type	BIM-Typ entfernen
 	Set BIM Spec on Entities	BIM-Spezifikation für Objekte festlegen
 	Set BIM Type	BIM-Typ festlegen
+	Ceiling and Soffit Takeoff	Mengenermittlung Decken und Abhängungen
+	Colour by Assembly	Nach Aufbau einfärben
+	RFI List	RFI-Liste
+	Zoom to RFI	Auf RFI zoomen
+	Update RFI	RFI aktualisieren
+	Export RFI List	RFI-Liste exportieren
+	Sent	Gesendet
+	Answered	Beantwortet
+	Not sent	Nicht gesendet
+	High	Hoch
+	Medium	Mittel
+	Low	Niedrig
+	All levels	Alle Geschosse
+	Open items only	Nur offene Punkte
+	{high} high, {medium} medium, {low} low	{high} hoch, {medium} mittel, {low} niedrig
+	No gaps or conflicts in the building spec.	Keine Lücken oder Widersprüche in der Gebäudespezifikation.
+	Assumed meanwhile:	Bis dahin angenommen:
+	Proposed fix:	Vorgeschlagene Lösung:
+	Sheets:	Blätter:
+	Walk to It	Hingehen
+	Export XLSX...	XLSX exportieren...
+	Export PDF...	PDF exportieren...

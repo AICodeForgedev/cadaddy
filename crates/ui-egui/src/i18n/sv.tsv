@@ -2563,3 +2563,25 @@ menu	Modify	Ändra
 	Remove BIM Type	Ta bort BIM-typ
 	Set BIM Spec on Entities	Ange BIM-specifikation för objekt
 	Set BIM Type	Ange BIM-typ
+	Ceiling and Soffit Takeoff	Mängdavtagning av undertak och nedsänkningar
+	Colour by Assembly	Färglägg efter uppbyggnad
+	RFI List	RFI-lista
+	Zoom to RFI	Zooma till RFI
+	Update RFI	Uppdatera RFI
+	Export RFI List	Exportera RFI-lista
+	Sent	Skickad
+	Answered	Besvarad
+	Not sent	Inte skickad
+	High	Hög
+	Medium	Medel
+	Low	Låg
+	All levels	Alla plan
+	Open items only	Endast öppna punkter
+	{high} high, {medium} medium, {low} low	{high} hög, {medium} medel, {low} låg
+	No gaps or conflicts in the building spec.	Inga luckor eller konflikter i byggnadsspecifikationen.
+	Assumed meanwhile:	Antaget tills vidare:
+	Proposed fix:	Föreslagen lösning:
+	Sheets:	Ritningar:
+	Walk to It	Gå dit
+	Export XLSX...	Exportera XLSX...
+	Export PDF...	Exportera PDF...
