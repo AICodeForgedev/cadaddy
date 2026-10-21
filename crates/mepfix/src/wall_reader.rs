@@ -265,13 +265,26 @@ pub fn parse_type(tag: &str, lines: &[String]) -> ReadType {
                 [n, g] if g.starts_with("GA") => n.parse::<u32>().ok(),
                 _ => None,
             });
-            core.push(WallTypeLayer { material: "stud".into(), thickness_in: depth, side: "core".into(), gauge, spacing_in: spacing, in_cavity: false });
+            core.push(WallTypeLayer {
+                material: "stud".into(),
+                thickness_in: depth,
+                side: "core".into(),
+                gauge,
+                spacing_in: spacing,
+                in_cavity: false,
+            });
         } else if u.contains("CMU") || u.contains("MASONRY") {
             let th = inch_values(u).first().map_or(8.0, |x| x.1);
             core.push(WallTypeLayer { material: "cmu".into(), thickness_in: th, side: "core".into(), ..WallTypeLayer::default() });
         } else if u.contains("BATT") || u.contains("INSUL") {
             let th = inch_values(u).first().map_or(3.5, |x| x.1);
-            core.push(WallTypeLayer { material: "insulation".into(), thickness_in: th, side: "core".into(), in_cavity: true, ..WallTypeLayer::default() });
+            core.push(WallTypeLayer {
+                material: "insulation".into(),
+                thickness_in: th,
+                side: "core".into(),
+                in_cavity: true,
+                ..WallTypeLayer::default()
+            });
         } else if u.contains("FULL HEIGHT") {
             t.height = Some("full".into());
         } else if u.contains("CEILING") || u.contains("CLG") {

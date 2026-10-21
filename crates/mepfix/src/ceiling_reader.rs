@@ -182,7 +182,13 @@ fn parse_ceiling_tag(text: &str) -> Option<(String, f64)> {
 
     // Single line: try to extract any height and kind from it
     if let Some(h) = extract_height(text) {
-        let kind = if text.contains("ACT") { "ACT" } else if text.contains("GYP") { "GYP" } else { "" };
+        let kind = if text.contains("ACT") {
+            "ACT"
+        } else if text.contains("GYP") {
+            "GYP"
+        } else {
+            ""
+        };
         return Some((kind.to_string(), h));
     }
 
@@ -604,7 +610,10 @@ fn detect_soffits(d: &Drawing, alignment: &Alignment, level: &str, rooms: &[Foun
                 _ => continue,
             };
             let b = to_building(alignment, pt);
-            if b[0] >= rmin[0] - 0.5 && b[0] <= rmax[0] + 0.5 && b[1] >= rmin[1] - 0.5 && b[1] <= rmax[1] + 0.5
+            if b[0] >= rmin[0] - 0.5
+                && b[0] <= rmax[0] + 0.5
+                && b[1] >= rmin[1] - 0.5
+                && b[1] <= rmax[1] + 0.5
                 && let Some(h) = parse_soffit_tag(&text)
             {
                 height = Some(h);
@@ -613,19 +622,12 @@ fn detect_soffits(d: &Drawing, alignment: &Alignment, level: &str, rooms: &[Foun
             }
         }
         // Find which room contains this soffit
-        let room = rooms.iter().find(|r| {
-            mid[0] >= r.min_ft[0] - 0.5 && mid[0] <= r.max_ft[0] + 0.5 && mid[1] >= r.min_ft[1] - 0.5 && mid[1] <= r.max_ft[1] + 0.5
-        });
+        let room = rooms
+            .iter()
+            .find(|r| mid[0] >= r.min_ft[0] - 0.5 && mid[0] <= r.max_ft[0] + 0.5 && mid[1] >= r.min_ft[1] - 0.5 && mid[1] <= r.max_ft[1] + 0.5);
         let room_number = room.map(|r| r.number.clone()).unwrap_or_default();
         if height.is_some() || tag.is_some() {
-            soffits.push(FoundSoffit {
-                level: level.to_string(),
-                room_number,
-                height_ft: height,
-                min_ft: *rmin,
-                max_ft: *rmax,
-                tag_text: tag,
-            });
+            soffits.push(FoundSoffit { level: level.to_string(), room_number, height_ft: height, min_ft: *rmin, max_ft: *rmax, tag_text: tag });
         }
     }
     soffits
@@ -673,9 +675,10 @@ fn detect_ceiling_items(d: &Drawing, alignment: &Alignment, level: &str, rooms: 
         if let Some(pt) = center {
             let b = to_building(alignment, pt);
             // Find the room containing this point
-            if let Some(room) = rooms.iter().find(|r| {
-                b[0] >= r.min_ft[0] - 0.1 && b[0] <= r.max_ft[0] + 0.1 && b[1] >= r.min_ft[1] - 0.1 && b[1] <= r.max_ft[1] + 0.1
-            }) {
+            if let Some(room) = rooms
+                .iter()
+                .find(|r| b[0] >= r.min_ft[0] - 0.1 && b[0] <= r.max_ft[0] + 0.1 && b[1] >= r.min_ft[1] - 0.1 && b[1] <= r.max_ft[1] + 0.1)
+            {
                 items.push(FoundCeilingItem { level: level.to_string(), room_number: room.number.clone(), kind: kind.to_string(), at_ft: b });
             }
         }
@@ -703,9 +706,7 @@ pub fn read_ceilings(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap) -> Ce
 
         // Find the recognised sheet for this DXF.
         let file_stem = name.trim_end_matches(".dxf");
-        let sheet = sheet_map.sheets.iter().find(|s| {
-            s.number == file_stem || name.starts_with(&s.number)
-        });
+        let sheet = sheet_map.sheets.iter().find(|s| s.number == file_stem || name.starts_with(&s.number));
         let Some(sheet) = sheet else { continue };
 
         // Only process RCP sheets (discipline A, title contains "CEILING")
@@ -822,7 +823,8 @@ pub fn score_ceilings(truth: &Truth, result: &CeilingResult) -> CeilingScore {
                 if tc.kind == "ACT" {
                     sc.grid_total += 1;
                     if let (Some(fg), Some(tg)) = (&fc.grid_ft, &tc.grid_ft)
-                        && (fg[0] - tg[0]).abs() < 0.5 && (fg[1] - tg[1]).abs() < 0.5
+                        && (fg[0] - tg[0]).abs() < 0.5
+                        && (fg[1] - tg[1]).abs() < 0.5
                     {
                         sc.grid_correct += 1;
                     }

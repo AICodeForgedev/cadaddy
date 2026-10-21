@@ -235,7 +235,8 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             name: "CORRIDOR".into(),
             min_ft: [0.0, room_depth_ft],
             max_ft: [building_width_ft, room_depth_ft + corridor_width_ft],
-            ceiling: Some(Ceiling { height_ft: 8.5, kind: "GYP".into(), tag: "GYP @ 8'-6\"".into(), grid_ft: None, }), plenum_ft: None,
+            ceiling: Some(Ceiling { height_ft: 8.5, kind: "GYP".into(), tag: "GYP @ 8'-6\"".into(), grid_ft: None }),
+            plenum_ft: None,
         });
 
         // South side rooms
@@ -265,8 +266,10 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                 ceiling: Some(Ceiling {
                     height_ft: ceil_h,
                     kind: if rt.is_suite() { "GYP".into() } else { "ACT".into() },
-                    tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)), grid_ft: None,
-                }), plenum_ft: None,
+                    tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)),
+                    grid_ft: None,
+                }),
+                plenum_ft: None,
             });
             x += w;
             room_num += 1;
@@ -296,8 +299,10 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                 ceiling: Some(Ceiling {
                     height_ft: ceil_h,
                     kind: if rt.is_suite() { "GYP" } else { "ACT" }.into(),
-                    tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)), grid_ft: None,
-                }), plenum_ft: None,
+                    tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)),
+                    grid_ft: None,
+                }),
+                plenum_ft: None,
             });
             x += w;
             room_num += 1;
@@ -1123,7 +1128,8 @@ fn ground_floor_rooms(
         name: "CORRIDOR".into(),
         min_ft: [0.0, corr_y0],
         max_ft: [bldg_width, corr_y1],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
 
     // South side: Lobby, Front desk, Breakfast, Kitchen
@@ -1137,7 +1143,8 @@ fn ground_floor_rooms(
         name: "LOBBY".into(),
         min_ft: [x, south_y],
         max_ft: [x + lobby_w, corr_y0],
-        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += lobby_w;
 
@@ -1149,7 +1156,8 @@ fn ground_floor_rooms(
         name: "FRONT DESK".into(),
         min_ft: [x, south_y],
         max_ft: [x + fd_w, corr_y0],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += fd_w;
 
@@ -1166,7 +1174,8 @@ fn ground_floor_rooms(
         name: "BREAKFAST AREA".into(),
         min_ft: [x, south_y],
         max_ft: [(x + bk_w).min(stair_e), corr_y0],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x = (x + bk_w).min(stair_e);
 
@@ -1178,7 +1187,8 @@ fn ground_floor_rooms(
             name: "KITCHEN".into(),
             min_ft: [x, south_y],
             max_ft: [stair_e, corr_y0],
-            ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+            ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None }),
+            plenum_ft: None,
         });
     }
 
@@ -1192,7 +1202,8 @@ fn ground_floor_rooms(
         name: "FITNESS CENTER".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + fitness_w, north_y],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += fitness_w;
 
@@ -1204,7 +1215,8 @@ fn ground_floor_rooms(
         name: "LAUNDRY".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + laundry_w, north_y],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += laundry_w;
 
@@ -1221,7 +1233,8 @@ fn ground_floor_rooms(
         name: "POOL".into(),
         min_ft: [x, corr_y1],
         max_ft: [(x + pool_w).min(stair_e - 30.0), north_y],
-        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None, }), plenum_ft: None,
+        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x = (x + pool_w).min(stair_e - 30.0);
 
@@ -1247,7 +1260,8 @@ fn ground_floor_rooms(
         name: "MECHANICAL".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + mech_w, north_y],
-        ceiling: None, plenum_ft: None,
+        ceiling: None,
+        plenum_ft: None,
     });
     x += mech_w;
 
@@ -1260,7 +1274,8 @@ fn ground_floor_rooms(
         name: "ELECTRICAL".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + elec_w, north_y],
-        ceiling: None, plenum_ft: None,
+        ceiling: None,
+        plenum_ft: None,
     });
     x += elec_w;
 
@@ -1272,7 +1287,8 @@ fn ground_floor_rooms(
             name: "IDF".into(),
             min_ft: [x, corr_y1],
             max_ft: [stair_e, north_y],
-            ceiling: None, plenum_ft: None,
+            ceiling: None,
+            plenum_ft: None,
         });
     }
 

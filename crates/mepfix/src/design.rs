@@ -312,14 +312,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         let is_roof = lv == "R";
         let (kind, conc) = if is_roof { ("roof", 0.0) } else { ("composite", t.building.slab_in) };
         let top = elev(lv);
-        t.building.slabs.push(Slab {
-            id: format!("SL-{lv}"),
-            level: lv.into(),
-            kind: kind.into(),
-            concrete_in: conc,
-            deck_in,
-            top_ft: r6(top),
-        });
+        t.building.slabs.push(Slab { id: format!("SL-{lv}"), level: lv.into(), kind: kind.into(), concrete_in: conc, deck_in, top_ft: r6(top) });
     }
     // A plumbing chase / shaft at the east end of the building.
     let shaft_x0 = xs.get(nb.saturating_sub(1)).copied().unwrap_or(0.0) + 1.0;
@@ -378,12 +371,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let mut soffit_n = 0usize;
     for f in &floors {
         let n0: usize = if f.code == "1" { 100 } else { 200 };
-        let act = |h: f64| Some(Ceiling {
-            height_ft: h,
-            kind: "ACT".into(),
-            tag: String::new(),
-            grid_ft: Some(act_grid),
-        });
+        let act = |h: f64| Some(Ceiling { height_ft: h, kind: "ACT".into(), tag: String::new(), grid_ft: Some(act_grid) });
         let plenum = |h: f64| -> Option<f64> {
             let p = f.girder_bob - h;
             if p > 0.01 { Some(r6(p)) } else { None }
@@ -1348,20 +1336,13 @@ fn generate_walls(t: &mut Truth) {
             ];
             for (from, to) in &edges {
                 // Canonical key: sorted endpoints to avoid duplicates.
-                let key = format!(
-                    "{lv_code}:{:.4},{:.4}-{:.4},{:.4}",
-                    from[0].min(to[0]),
-                    from[1].min(to[1]),
-                    from[0].max(to[0]),
-                    from[1].max(to[1]),
-                );
+                let key =
+                    format!("{lv_code}:{:.4},{:.4}-{:.4},{:.4}", from[0].min(to[0]), from[1].min(to[1]), from[0].max(to[0]), from[1].max(to[1]),);
                 if !seen.insert(key) {
                     // Already created this wall from the other room's perspective: update its
                     // second side.
-                    if let Some(w) = walls.iter_mut().filter(|w: &&mut Wall| {
-                        w.level == lv_code
-                            && edge_matches(w.from_ft, w.to_ft, *from, *to)
-                    }).last()
+                    if let Some(w) =
+                        walls.iter_mut().filter(|w: &&mut Wall| w.level == lv_code && edge_matches(w.from_ft, w.to_ft, *from, *to)).last()
                         && w.sides[1] == "EXT"
                     {
                         w.sides[1] = rm.id.clone();
@@ -1398,10 +1379,7 @@ fn shares_edge(rm: &Room, from: [f64; 2], to: [f64; 2]) -> bool {
     if (from[1] - to[1]).abs() < eps {
         let y = from[1];
         let (x0, x1) = (from[0].min(to[0]), from[0].max(to[0]));
-        if ((y - rm.min_ft[1]).abs() < eps || (y - rm.max_ft[1]).abs() < eps)
-            && x0 < rm.max_ft[0] - eps
-            && x1 > rm.min_ft[0] + eps
-        {
+        if ((y - rm.min_ft[1]).abs() < eps || (y - rm.max_ft[1]).abs() < eps) && x0 < rm.max_ft[0] - eps && x1 > rm.min_ft[0] + eps {
             return true;
         }
     }
@@ -1409,10 +1387,7 @@ fn shares_edge(rm: &Room, from: [f64; 2], to: [f64; 2]) -> bool {
     if (from[0] - to[0]).abs() < eps {
         let x = from[0];
         let (y0, y1) = (from[1].min(to[1]), from[1].max(to[1]));
-        if ((x - rm.min_ft[0]).abs() < eps || (x - rm.max_ft[0]).abs() < eps)
-            && y0 < rm.max_ft[1] - eps
-            && y1 > rm.min_ft[1] + eps
-        {
+        if ((x - rm.min_ft[0]).abs() < eps || (x - rm.max_ft[0]).abs() < eps) && y0 < rm.max_ft[1] - eps && y1 > rm.min_ft[1] + eps {
             return true;
         }
     }
@@ -1510,11 +1485,7 @@ fn generate_rough_ins(t: &mut Truth) {
             let dy = wall.to_ft[1] - wall.from_ft[1];
             let len = (dx * dx + dy * dy).sqrt();
             let frac = if len > 1e-12 { offset_along / (len * 12.0) } else { 0.0 };
-            let at = [
-                wall.from_ft[0] + frac * dx,
-                wall.from_ft[1] + frac * dy,
-                z,
-            ];
+            let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy, z];
 
             let id = format!("RI{:03}", rough_ins.len() + 1);
             rough_ins.push(RoughIn {
@@ -1540,13 +1511,7 @@ fn generate_rough_ins(t: &mut Truth) {
 /// and a switch near each door (we place one per room).
 /// When `plant_inwall` is true, one device on `plant_level` is placed deliberately behind a
 /// plumbing fixture so it shares a stud cavity with a rough-in (planted in-wall clash).
-fn generate_devices(
-    t: &mut Truth,
-    planted: &mut Vec<String>,
-    plant_inwall: bool,
-    plant_level: &str,
-    r: &mut Rng,
-) {
+fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool, plant_level: &str, r: &mut Rng) {
     let walls = t.building.walls.clone();
     let mut devices = Vec::new();
     let mut dev_n = 0usize;
@@ -1562,10 +1527,7 @@ fn generate_devices(
                 continue;
             }
             // Get all walls of this room.
-            let room_walls: Vec<&Wall> = walls
-                .iter()
-                .filter(|w| w.level == lv_code && (w.sides[0] == rm.id || w.sides[1] == rm.id))
-                .collect();
+            let room_walls: Vec<&Wall> = walls.iter().filter(|w| w.level == lv_code && (w.sides[0] == rm.id || w.sides[1] == rm.id)).collect();
 
             // Place a switch on the first interior wall (near the corridor side).
             if let Some(sw_wall) = room_walls.iter().find(|w| w.sides[0] != "EXT" && w.sides[1] != "EXT") {
@@ -1574,10 +1536,7 @@ fn generate_devices(
                 let frac = along / wall_length_in(sw_wall).max(1.0);
                 let dx = sw_wall.to_ft[0] - sw_wall.from_ft[0];
                 let dy = sw_wall.to_ft[1] - sw_wall.from_ft[1];
-                let at = [
-                    sw_wall.from_ft[0] + frac * dx,
-                    sw_wall.from_ft[1] + frac * dy,
-                ];
+                let at = [sw_wall.from_ft[0] + frac * dx, sw_wall.from_ft[1] + frac * dy];
                 devices.push(Device {
                     id: format!("D{dev_n:03}"),
                     tag: format!("S-{lv_code}-{dev_n:02}"),
@@ -1629,10 +1588,7 @@ fn generate_devices(
                         let frac = new_along / len;
                         let dx = wall.to_ft[0] - wall.from_ft[0];
                         let dy = wall.to_ft[1] - wall.from_ft[1];
-                        let at = [
-                            wall.from_ft[0] + frac * dx,
-                            wall.from_ft[1] + frac * dy,
-                        ];
+                        let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
                         dev_n += 1;
                         let id = format!("D{dev_n:03}");
                         let fixed = r.chance(0.7);
@@ -1656,10 +1612,7 @@ fn generate_devices(
                     let frac = along / len;
                     let dx = wall.to_ft[0] - wall.from_ft[0];
                     let dy = wall.to_ft[1] - wall.from_ft[1];
-                    let at = [
-                        wall.from_ft[0] + frac * dx,
-                        wall.from_ft[1] + frac * dy,
-                    ];
+                    let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
 
                     dev_n += 1;
                     let id = format!("D{dev_n:03}");
@@ -1703,11 +1656,7 @@ fn has_roughin_in_cavity(t: &Truth, wall_id: &str, cavity: usize) -> bool {
 
 /// Check whether a cavity (or within `margin` cavities) has a rough-in stub.
 fn is_near_roughin(t: &Truth, wall_id: &str, cavity: usize, margin: usize) -> bool {
-    t.rough_ins.iter().any(|ri| {
-        ri.wall == wall_id && {
-            ri.stud_cavity.abs_diff(cavity) <= margin
-        }
-    })
+    t.rough_ins.iter().any(|ri| ri.wall == wall_id && { ri.stud_cavity.abs_diff(cavity) <= margin })
 }
 
 /// Find the nearest clear cavity (no rough-in within 1 cavity) starting from `start`.

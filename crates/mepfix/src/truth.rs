@@ -963,24 +963,24 @@ impl RoughInRules {
                 RoughInRule {
                     fixture_kind: "water_closet".into(),
                     stubs: vec![
-                        s("CW", "supply", 6.0, -8.0, 0.5),  // left of centre, 6" AFF
-                        s("SAN", "waste", 0.0, 0.0, 3.0),    // centreline, at floor
-                        s("V", "vent", 20.0, -6.0, 2.0),     // left of waste, 20" AFF
+                        s("CW", "supply", 6.0, -8.0, 0.5), // left of centre, 6" AFF
+                        s("SAN", "waste", 0.0, 0.0, 3.0),  // centreline, at floor
+                        s("V", "vent", 20.0, -6.0, 2.0),   // left of waste, 20" AFF
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "lavatory".into(),
                     stubs: vec![
-                        s("CW", "supply", 20.0, -4.0, 0.5),  // left, 20" AFF
-                        s("HW", "supply", 20.0, 4.0, 0.5),   // right, 20" AFF
-                        s("SAN", "waste", 18.0, 0.0, 1.5),    // centreline, 18" AFF
-                        s("V", "vent", 24.0, 4.0, 1.5),       // right of waste, 24" AFF
+                        s("CW", "supply", 20.0, -4.0, 0.5), // left, 20" AFF
+                        s("HW", "supply", 20.0, 4.0, 0.5),  // right, 20" AFF
+                        s("SAN", "waste", 18.0, 0.0, 1.5),  // centreline, 18" AFF
+                        s("V", "vent", 24.0, 4.0, 1.5),     // right of waste, 24" AFF
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "urinal".into(),
                     stubs: vec![
-                        s("CW", "supply", 42.0, 0.0, 0.75),   // centreline, 42" AFF
+                        s("CW", "supply", 42.0, 0.0, 0.75), // centreline, 42" AFF
                         s("SAN", "waste", 0.0, 0.0, 2.0),
                         s("V", "vent", 24.0, 4.0, 1.5),
                     ],
@@ -1003,12 +1003,7 @@ impl RoughInRules {
                         s("V", "vent", 30.0, 6.0, 2.0),
                     ],
                 },
-                RoughInRule {
-                    fixture_kind: "floor_drain".into(),
-                    stubs: vec![
-                        s("SAN", "waste", 0.0, 0.0, 2.0),
-                    ],
-                },
+                RoughInRule { fixture_kind: "floor_drain".into(), stubs: vec![s("SAN", "waste", 0.0, 0.0, 2.0)] },
                 RoughInRule {
                     fixture_kind: "sink".into(),
                     stubs: vec![

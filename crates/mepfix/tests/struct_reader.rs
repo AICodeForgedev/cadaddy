@@ -11,8 +11,7 @@ use cadaddy_mepfix::{generate, truth_for};
 /// Generate a fixture set, read back the DXFs, and return (truth, structural model).
 fn fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, struct_reader::StructuralModel) {
     let set = generate(seed).unwrap_or_else(|e| panic!("generate({seed}): {e}"));
-    let dxf_files: Vec<(String, Vec<u8>)> =
-        set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+    let dxf_files: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
 
     // Build sheet map (needed for alignment).
     let sheet_map = sheet_reader::recognise_fixture_set(&dxf_files);
@@ -25,8 +24,7 @@ fn fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, struct_reader::Structura
             cadaddy_io::read_dxf(bytes).ok().map(|d| (num.to_string(), d))
         })
         .collect();
-    let refs: Vec<(String, &cadaddy_doc::Drawing)> =
-        drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
+    let refs: Vec<(String, &cadaddy_doc::Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
 
     let model = struct_reader::read_structure(&sheet_map, &refs);
     (set.truth, model)
@@ -37,21 +35,10 @@ fn truth_has_slabs_and_openings() {
     // Verify the fixture generator now produces slabs and openings.
     for seed in 1..=5 {
         let t = truth_for(seed);
-        assert!(
-            !t.building.slabs.is_empty(),
-            "seed {seed}: truth should have slabs"
-        );
-        assert!(
-            !t.building.openings.is_empty(),
-            "seed {seed}: truth should have openings"
-        );
+        assert!(!t.building.slabs.is_empty(), "seed {seed}: truth should have slabs");
+        assert!(!t.building.openings.is_empty(), "seed {seed}: truth should have openings");
         // Two slabs: level 2 (composite) and roof.
-        assert_eq!(
-            t.building.slabs.len(),
-            2,
-            "seed {seed}: expected 2 slabs, got {}",
-            t.building.slabs.len()
-        );
+        assert_eq!(t.building.slabs.len(), 2, "seed {seed}: expected 2 slabs, got {}", t.building.slabs.len());
         let composite = t.building.slabs.iter().find(|s| s.kind == "composite");
         let roof = t.building.slabs.iter().find(|s| s.kind == "roof");
         assert!(composite.is_some(), "seed {seed}: no composite slab");
@@ -67,11 +54,7 @@ fn columns_are_detected() {
     for seed in 1..=5 {
         let (truth, model) = fixture(seed);
         let ctx = format!("seed {seed}");
-        assert!(
-            !model.columns.is_empty(),
-            "{ctx}: no columns detected (truth has {})",
-            truth.building.columns.len()
-        );
+        assert!(!model.columns.is_empty(), "{ctx}: no columns detected (truth has {})", truth.building.columns.len());
         // Every truth column should be found by grid intersection.
         let mut found = 0;
         for tc in &truth.building.columns {
@@ -80,11 +63,7 @@ fn columns_are_detected() {
             }
         }
         let recall = found as f64 / truth.building.columns.len() as f64;
-        assert!(
-            recall >= 0.8,
-            "{ctx}: column recall {recall:.2} ({found}/{}) is too low",
-            truth.building.columns.len()
-        );
+        assert!(recall >= 0.8, "{ctx}: column recall {recall:.2} ({found}/{}) is too low", truth.building.columns.len());
     }
 }
 
@@ -111,10 +90,7 @@ fn column_footprints_are_reasonable() {
         }
         if total > 0 {
             let acc = reasonable as f64 / total as f64;
-            assert!(
-                acc >= 0.8,
-                "{ctx}: column footprint reasonableness {acc:.2} ({reasonable}/{total}) is too low"
-            );
+            assert!(acc >= 0.8, "{ctx}: column footprint reasonableness {acc:.2} ({reasonable}/{total}) is too low");
         }
     }
 }
@@ -126,10 +102,7 @@ fn column_size_is_read_from_notes() {
         let ctx = format!("seed {seed}");
         let truth_size = &truth.building.columns[0].size;
         if let Some(det_size) = &model.column_size {
-            assert!(
-                det_size.eq_ignore_ascii_case(truth_size),
-                "{ctx}: column size {det_size:?} vs truth {truth_size:?}"
-            );
+            assert!(det_size.eq_ignore_ascii_case(truth_size), "{ctx}: column size {det_size:?} vs truth {truth_size:?}");
         }
     }
 }
@@ -141,29 +114,14 @@ fn beams_are_detected() {
         let ctx = format!("seed {seed}");
         // Structural sheets are for levels 2 and R (the framing above).
         for level in truth.building.levels.iter().filter(|l| l.code != "1") {
-            let truth_beams: Vec<_> = truth
-                .building
-                .beams
-                .iter()
-                .filter(|b| b.level == level.code)
-                .collect();
+            let truth_beams: Vec<_> = truth.building.beams.iter().filter(|b| b.level == level.code).collect();
             if truth_beams.is_empty() {
                 continue;
             }
             let detected = model.beams.get(&level.code);
-            assert!(
-                detected.is_some(),
-                "{ctx}: no beams detected for level {} (truth has {})",
-                level.code,
-                truth_beams.len()
-            );
+            assert!(detected.is_some(), "{ctx}: no beams detected for level {} (truth has {})", level.code, truth_beams.len());
             let det = detected.unwrap();
-            assert!(
-                !det.is_empty(),
-                "{ctx}: level {} has 0 detected beams (truth has {})",
-                level.code,
-                truth_beams.len()
-            );
+            assert!(!det.is_empty(), "{ctx}: level {} has 0 detected beams (truth has {})", level.code, truth_beams.len());
         }
     }
 }
@@ -176,12 +134,7 @@ fn beam_sizes_are_read() {
         let score = struct_reader::score_structure(&model, &truth);
         if score.beams_found > 0 {
             let acc = score.beam_size_correct as f64 / score.beams_found as f64;
-            assert!(
-                acc >= 0.5,
-                "{ctx}: beam size accuracy {acc:.2} ({}/{})",
-                score.beam_size_correct,
-                score.beams_found
-            );
+            assert!(acc >= 0.5, "{ctx}: beam size accuracy {acc:.2} ({}/{})", score.beam_size_correct, score.beams_found);
         }
     }
 }
@@ -193,18 +146,9 @@ fn tos_is_read_from_notes() {
         let ctx = format!("seed {seed}");
         // Each structural sheet should have a TOS note.
         for level in truth.building.levels.iter().filter(|l| l.code != "1") {
-            let truth_tos = truth
-                .building
-                .beams
-                .iter()
-                .find(|b| b.level == level.code)
-                .map(|b| b.tos_ft);
+            let truth_tos = truth.building.beams.iter().find(|b| b.level == level.code).map(|b| b.tos_ft);
             if let (Some(tt), Some(dt)) = (truth_tos, model.tos_ft.get(&level.code)) {
-                assert!(
-                    (tt - dt).abs() < 0.2,
-                    "{ctx}: level {} TOS {dt:.3} vs truth {tt:.3}",
-                    level.code
-                );
+                assert!((tt - dt).abs() < 0.2, "{ctx}: level {} TOS {dt:.3} vs truth {tt:.3}", level.code);
             }
         }
     }
@@ -217,19 +161,10 @@ fn slab_notes_are_read() {
         let ctx = format!("seed {seed}");
         // The reader should find at least the composite slab from the level 2 sheet.
         let composite = model.slabs.iter().find(|s| s.kind == "composite");
-        assert!(
-            composite.is_some(),
-            "{ctx}: no composite slab detected from notes (truth has {} slabs)",
-            truth.building.slabs.len()
-        );
+        assert!(composite.is_some(), "{ctx}: no composite slab detected from notes (truth has {} slabs)", truth.building.slabs.len());
         if let Some(ds) = composite {
             let ts = truth.building.slabs.iter().find(|s| s.kind == "composite").unwrap();
-            assert!(
-                (ds.concrete_in - ts.concrete_in).abs() < 1.0,
-                "{ctx}: slab concrete {} vs truth {}",
-                ds.concrete_in,
-                ts.concrete_in
-            );
+            assert!((ds.concrete_in - ts.concrete_in).abs() < 1.0, "{ctx}: slab concrete {} vs truth {}", ds.concrete_in, ts.concrete_in);
         }
     }
 }
@@ -244,11 +179,7 @@ fn openings_are_detected() {
         }
         // At least some openings should be found.
         let total_detected: usize = model.openings.values().map(|v| v.len()).sum();
-        assert!(
-            total_detected > 0,
-            "{ctx}: no openings detected (truth has {})",
-            truth.building.openings.len()
-        );
+        assert!(total_detected > 0, "{ctx}: no openings detected (truth has {})", truth.building.openings.len());
     }
 }
 
@@ -262,11 +193,16 @@ fn overall_score_is_reasonable() {
         assert!(
             recall >= 0.3,
             "{ctx}: overall structural recall {recall:.2} is too low\n  columns: {}/{}\n  beams: {}/{}\n  tos: {}/{}\n  slabs: {}/{}\n  openings: {}/{}",
-            score.columns_found, score.columns_total,
-            score.beams_found, score.beams_total,
-            score.tos_correct, score.tos_total,
-            score.slabs_found, score.slabs_total,
-            score.openings_found, score.openings_total,
+            score.columns_found,
+            score.columns_total,
+            score.beams_found,
+            score.beams_total,
+            score.tos_correct,
+            score.tos_total,
+            score.slabs_found,
+            score.slabs_total,
+            score.openings_found,
+            score.openings_total,
         );
     }
 }
@@ -275,19 +211,7 @@ fn overall_score_is_reasonable() {
 fn score_structure_matches_truth_counts() {
     let (truth, model) = fixture(3);
     let score = struct_reader::score_structure(&model, &truth);
-    assert_eq!(
-        score.columns_total,
-        truth.building.columns.len(),
-        "columns_total mismatch"
-    );
-    assert_eq!(
-        score.slabs_total,
-        truth.building.slabs.len(),
-        "slabs_total mismatch"
-    );
-    assert_eq!(
-        score.openings_total,
-        truth.building.openings.len(),
-        "openings_total mismatch"
-    );
+    assert_eq!(score.columns_total, truth.building.columns.len(), "columns_total mismatch");
+    assert_eq!(score.slabs_total, truth.building.slabs.len(), "slabs_total mismatch");
+    assert_eq!(score.openings_total, truth.building.openings.len(), "openings_total mismatch");
 }

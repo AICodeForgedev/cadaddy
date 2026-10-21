@@ -883,11 +883,7 @@ fn walls_are_generated_for_every_room_edge() {
         // Every wall must have valid sides (either a room id or "EXT").
         for w in &t.building.walls {
             for side in &w.sides {
-                assert!(
-                    side == "EXT" || t.building.rooms.iter().any(|r| &r.id == side),
-                    "{ctx}: wall {} side {side} is not a room or EXT",
-                    w.id,
-                );
+                assert!(side == "EXT" || t.building.rooms.iter().any(|r| &r.id == side), "{ctx}: wall {} side {side} is not a room or EXT", w.id,);
             }
             assert!(w.thickness_in > 0.0, "{ctx}: wall {} has zero thickness", w.id);
             assert!(w.stud_spacing_in > 0.0, "{ctx}: wall {} has zero stud spacing", w.id);
@@ -929,26 +925,13 @@ fn devices_are_placed_and_avoid_rough_ins_by_default() {
         assert!(!t.devices.is_empty(), "{ctx}: no devices generated");
         // Devices that are not planted should not share a stud cavity with any rough-in
         // (the planted ones are the in_wall clashes).
-        let planted: BTreeSet<String> = t
-            .clashes
-            .iter()
-            .filter(|c| c.kind == "in_wall" && c.planted)
-            .map(|c| c.a.clone())
-            .collect();
+        let planted: BTreeSet<String> = t.clashes.iter().filter(|c| c.kind == "in_wall" && c.planted).map(|c| c.a.clone()).collect();
         for dev in &t.devices {
             if planted.contains(&dev.id) {
                 continue;
             }
-            let shared = t
-                .rough_ins
-                .iter()
-                .filter(|ri| ri.wall == dev.wall && ri.stud_cavity == dev.stud_cavity)
-                .count();
-            assert_eq!(
-                shared, 0,
-                "{ctx}: device {} (cavity {}) shares a stud cavity with a rough-in on wall {}",
-                dev.id, dev.stud_cavity, dev.wall,
-            );
+            let shared = t.rough_ins.iter().filter(|ri| ri.wall == dev.wall && ri.stud_cavity == dev.stud_cavity).count();
+            assert_eq!(shared, 0, "{ctx}: device {} (cavity {}) shares a stud cavity with a rough-in on wall {}", dev.id, dev.stud_cavity, dev.wall,);
         }
     }
 }
@@ -982,11 +965,7 @@ fn placement_zones_exist_for_unfixed_devices() {
         let unfixed: Vec<_> = t.devices.iter().filter(|d| !d.fixed).collect();
         for dev in &unfixed {
             let zone = t.placement_zones.iter().find(|z| z.device == dev.id);
-            assert!(
-                zone.is_some(),
-                "seed {seed}: unfixed device {} has no placement zone",
-                dev.id,
-            );
+            assert!(zone.is_some(), "seed {seed}: unfixed device {} has no placement zone", dev.id,);
             let z = zone.unwrap();
             assert!(z.zone_in[1] > z.zone_in[0], "seed {seed}: zone for {} is empty", dev.id);
             assert!(

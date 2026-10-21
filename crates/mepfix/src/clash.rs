@@ -4,7 +4,7 @@
 //! stud cavity (or are within clearance) with plumbing rough-in stubs or risers.
 
 use crate::design::{depth_in, pipe_od, width_in};
-use crate::truth::{Clash, PlacementZone, ClearRange, Truth};
+use crate::truth::{Clash, ClearRange, PlacementZone, Truth};
 use std::collections::BTreeSet;
 
 /// Overlaps smaller than this (feet) are touching, not clashing.
@@ -303,10 +303,7 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
                     clear_ranges.push(ClearRange {
                         from_in: r2(cs),
                         to_in: r2(ce),
-                        description: format!(
-                            "keep {} between {:.0}\" and {:.0}\" from the wall start",
-                            dev.tag, cs, ce,
-                        ),
+                        description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, ce,),
                     });
                 }
             }
@@ -318,10 +315,7 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
                 clear_ranges.push(ClearRange {
                     from_in: r2(cs),
                     to_in: r2(zone_end),
-                    description: format!(
-                        "keep {} between {:.0}\" and {:.0}\" from the wall start",
-                        dev.tag, cs, zone_end,
-                    ),
+                    description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, zone_end,),
                 });
             }
         }
@@ -344,13 +338,7 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
             "clear"
         };
 
-        zones.push(PlacementZone {
-            device: dev.id.clone(),
-            zone_in: [r2(zone_start), r2(zone_end)],
-            status: status.into(),
-            clear_ranges,
-            conflicts,
-        });
+        zones.push(PlacementZone { device: dev.id.clone(), zone_in: [r2(zone_start), r2(zone_end)], status: status.into(), clear_ranges, conflicts });
     }
     zones
 }

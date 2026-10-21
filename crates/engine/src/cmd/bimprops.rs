@@ -7,8 +7,8 @@
 //! - `bim.set_spec` — assign a type mark to entities (optionally creating the type).
 //! - `bim.unset_spec` — remove the BIM spec assignment from entities.
 
-use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
 use cadaddy_doc::Handle;
+use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
 use serde_json::{Value, json};
 
 use super::*;
@@ -47,7 +47,10 @@ fn run_types(s: &mut Session, p: &Value) -> Result<Value> {
     let mark_filter = p.get("mark").and_then(Value::as_str);
     let cat_filter = p.get("category").and_then(Value::as_str);
 
-    let types: Vec<Value> = d.bim_types.types.iter()
+    let types: Vec<Value> = d
+        .bim_types
+        .types
+        .iter()
         .filter(|t| mark_filter.is_none_or(|m| t.mark.eq_ignore_ascii_case(m)))
         .filter(|t| cat_filter.is_none_or(|c| t.category.eq_ignore_ascii_case(c)))
         .map(type_to_json)
@@ -59,8 +62,7 @@ fn run_types(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.set_type ────────────────────────────────────────────────────────────
 
 fn run_set_type(s: &mut Session, p: &Value) -> Result<Value> {
-    let mark = p.get("mark").and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_SET_TYPE, "`mark` (string) is required"))?;
+    let mark = p.get("mark").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET_TYPE, "`mark` (string) is required"))?;
     if mark.trim().is_empty() {
         return Err(bad(CMD_SET_TYPE, "`mark` must not be empty"));
     }
@@ -94,8 +96,7 @@ fn run_set_type(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.remove_type ─────────────────────────────────────────────────────────
 
 fn run_remove_type(s: &mut Session, p: &Value) -> Result<Value> {
-    let mark = p.get("mark").and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_REMOVE_TYPE, "`mark` (string) is required"))?;
+    let mark = p.get("mark").and_then(Value::as_str).ok_or_else(|| bad(CMD_REMOVE_TYPE, "`mark` (string) is required"))?;
     let d = s.doc_mut()?;
     let removed = d.bim_types.remove(mark).is_some();
     Ok(json!({ "removed": removed }))
@@ -104,8 +105,7 @@ fn run_remove_type(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.get_spec ────────────────────────────────────────────────────────────
 
 fn run_get_spec(s: &mut Session, p: &Value) -> Result<Value> {
-    let handles = p.get("handles").and_then(Value::as_array)
-        .ok_or_else(|| bad(CMD_GET_SPEC, "`handles` (array of handle strings) is required"))?;
+    let handles = p.get("handles").and_then(Value::as_array).ok_or_else(|| bad(CMD_GET_SPEC, "`handles` (array of handle strings) is required"))?;
     let d = s.doc()?;
 
     let mut specs = Vec::with_capacity(handles.len().min(100_000));
@@ -132,10 +132,8 @@ fn run_get_spec(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.set_spec ────────────────────────────────────────────────────────────
 
 fn run_set_spec(s: &mut Session, p: &Value) -> Result<Value> {
-    let handles = p.get("handles").and_then(Value::as_array)
-        .ok_or_else(|| bad(CMD_SET_SPEC, "`handles` (array) is required"))?;
-    let mark = p.get("mark").and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_SET_SPEC, "`mark` (string) is required"))?;
+    let handles = p.get("handles").and_then(Value::as_array).ok_or_else(|| bad(CMD_SET_SPEC, "`handles` (array) is required"))?;
+    let mark = p.get("mark").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET_SPEC, "`mark` (string) is required"))?;
     if mark.trim().is_empty() {
         return Err(bad(CMD_SET_SPEC, "`mark` must not be empty"));
     }
@@ -173,7 +171,9 @@ fn run_set_spec(s: &mut Session, p: &Value) -> Result<Value> {
         if d.modify_entity(h, |ent| {
             ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata);
             ent.common.xdata.extend(tags);
-        }).is_ok() {
+        })
+        .is_ok()
+        {
             assigned = assigned.saturating_add(1);
         }
     }
@@ -185,8 +185,7 @@ fn run_set_spec(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.unset_spec ──────────────────────────────────────────────────────────
 
 fn run_unset_spec(s: &mut Session, p: &Value) -> Result<Value> {
-    let handles = p.get("handles").and_then(Value::as_array)
-        .ok_or_else(|| bad(CMD_UNSET_SPEC, "`handles` (array) is required"))?;
+    let handles = p.get("handles").and_then(Value::as_array).ok_or_else(|| bad(CMD_UNSET_SPEC, "`handles` (array) is required"))?;
     let handle_strs: Vec<&str> = handles.iter().take(100_000).filter_map(Value::as_str).collect();
     let d = s.doc_mut()?;
 
@@ -195,9 +194,12 @@ fn run_unset_spec(s: &mut Session, p: &Value) -> Result<Value> {
         let h = Handle::parse_hex(h_str).unwrap_or_default();
         // Check if entity has BIM xdata before modifying.
         let has_bim = d.entity(h).is_some_and(|e| bimspec::entity_type_mark(&e.common.xdata).is_some());
-        if has_bim && d.modify_entity(h, |ent| {
-            ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata);
-        }).is_ok() {
+        if has_bim
+            && d.modify_entity(h, |ent| {
+                ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata);
+            })
+            .is_ok()
+        {
             cleared = cleared.saturating_add(1);
         }
     }
@@ -211,11 +213,9 @@ fn parse_spec_field(cmd: &str, val: &Value) -> Result<SpecField> {
     match val {
         Value::String(s) => Ok(SpecField::new(s.clone())),
         Value::Object(obj) => {
-            let value = obj.get("value").and_then(Value::as_str)
-                .ok_or_else(|| bad(cmd, "field object must have a `value` string"))?;
+            let value = obj.get("value").and_then(Value::as_str).ok_or_else(|| bad(cmd, "field object must have a `value` string"))?;
             let source = obj.get("source").and_then(Value::as_str).unwrap_or_default();
-            let confidence = obj.get("confidence").and_then(Value::as_str)
-                .map(Confidence::parse).unwrap_or_default();
+            let confidence = obj.get("confidence").and_then(Value::as_str).map(Confidence::parse).unwrap_or_default();
             Ok(SpecField::new(value).with_source(source).with_confidence(confidence))
         }
         _ => Err(bad(cmd, "each field must be a string or {value, source?, confidence?}")),
@@ -262,18 +262,23 @@ mod tests {
         let mut s = session();
 
         // Create a type.
-        let r = s.execute("bim.set_type", &json!({
-            "mark": "H",
-            "category": "luminaire",
-            "fields": {
-                "description": {"value": "recessed 2x4 LED troffer", "source": "E-1 schedule row 3"},
-                "manufacturer": "Lithonia",
-                "catalogNumber": {"value": "2GTL4 4400LM", "confidence": "stated"},
-                "specSection": "26 51 13",
-                "volts": {"value": "120/277", "confidence": "inferred"},
-                "mounting": "recessed"
-            }
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.set_type",
+                &json!({
+                    "mark": "H",
+                    "category": "luminaire",
+                    "fields": {
+                        "description": {"value": "recessed 2x4 LED troffer", "source": "E-1 schedule row 3"},
+                        "manufacturer": "Lithonia",
+                        "catalogNumber": {"value": "2GTL4 4400LM", "confidence": "stated"},
+                        "specSection": "26 51 13",
+                        "volts": {"value": "120/277", "confidence": "inferred"},
+                        "mounting": "recessed"
+                    }
+                }),
+            )
+            .unwrap_or_default();
         assert_eq!(r["type"]["mark"], "H");
         assert_eq!(r["type"]["fields"]["description"]["value"], "recessed 2x4 LED troffer");
         assert_eq!(r["type"]["fields"]["description"]["source"], "E-1 schedule row 3");
@@ -341,11 +346,16 @@ mod tests {
         assert!(s.execute("bim.set_spec", &json!({"handles": [&h], "mark": "NEW"})).is_err());
 
         // With create: auto-creates.
-        let r = s.execute("bim.set_spec", &json!({
-            "handles": [&h],
-            "mark": "NEW",
-            "create": {"category": "receptacle", "fields": {"amps": "20"}}
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.set_spec",
+                &json!({
+                    "handles": [&h],
+                    "mark": "NEW",
+                    "create": {"category": "receptacle", "fields": {"amps": "20"}}
+                }),
+            )
+            .unwrap_or_default();
         assert_eq!(r["assigned"], 1);
         assert_eq!(r["type"]["category"], "receptacle");
     }
@@ -353,20 +363,25 @@ mod tests {
     #[test]
     fn raceway_and_cable_fields() {
         let mut s = session();
-        let r = s.execute("bim.set_type", &json!({
-            "mark": "C1",
-            "category": "conduit",
-            "fields": {
-                "racewayMaterial": {"value": "PVC", "source": "spec 26 05 33 p.4"},
-                "racewaySchedule": "Sch 40",
-                "tradeSize": {"value": "3/4\"", "confidence": "stated"},
-                "conductorCount": "3",
-                "conductorSize": "#12 AWG",
-                "conductorMaterial": "Cu",
-                "insulation": "THHN",
-                "groundSize": "#12 AWG"
-            }
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.set_type",
+                &json!({
+                    "mark": "C1",
+                    "category": "conduit",
+                    "fields": {
+                        "racewayMaterial": {"value": "PVC", "source": "spec 26 05 33 p.4"},
+                        "racewaySchedule": "Sch 40",
+                        "tradeSize": {"value": "3/4\"", "confidence": "stated"},
+                        "conductorCount": "3",
+                        "conductorSize": "#12 AWG",
+                        "conductorMaterial": "Cu",
+                        "insulation": "THHN",
+                        "groundSize": "#12 AWG"
+                    }
+                }),
+            )
+            .unwrap_or_default();
         assert_eq!(r["type"]["fields"]["racewayMaterial"]["value"], "PVC");
         assert_eq!(r["type"]["fields"]["insulation"]["value"], "THHN");
     }
@@ -374,17 +389,22 @@ mod tests {
     #[test]
     fn cable_assembly_fields() {
         let mut s = session();
-        let r = s.execute("bim.set_type", &json!({
-            "mark": "SER-1",
-            "category": "cable",
-            "fields": {
-                "cableType": "SER",
-                "conductorCount": "4",
-                "conductorSize": "#4 AWG",
-                "conductorMaterial": "Al",
-                "description": {"value": "4/0-4/0-4/0-2/0 SER aluminum", "source": "panel schedule E-2"}
-            }
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.set_type",
+                &json!({
+                    "mark": "SER-1",
+                    "category": "cable",
+                    "fields": {
+                        "cableType": "SER",
+                        "conductorCount": "4",
+                        "conductorSize": "#4 AWG",
+                        "conductorMaterial": "Al",
+                        "description": {"value": "4/0-4/0-4/0-2/0 SER aluminum", "source": "panel schedule E-2"}
+                    }
+                }),
+            )
+            .unwrap_or_default();
         assert_eq!(r["type"]["fields"]["cableType"]["value"], "SER");
     }
 

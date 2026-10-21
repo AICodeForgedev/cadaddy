@@ -1277,7 +1277,7 @@ fn bim_types_roundtrip_in_dxf() {
 
 #[test]
 fn bim_spec_xdata_survives_dxf_roundtrip() {
-    use cadaddy_doc::{bimspec, Entity, EntityKind, Circle, Space, Common};
+    use cadaddy_doc::{Circle, Common, Entity, EntityKind, Space, bimspec};
     use cadaddy_geom::Vec3;
     let mut d = Drawing::new_imperial();
     let mut ty = cadaddy_doc::bimspec::BimType::new("A");

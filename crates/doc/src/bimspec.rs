@@ -217,11 +217,7 @@ impl BimTypes {
 
     /// Remove a type by mark.
     pub fn remove(&mut self, mark: &str) -> Option<BimType> {
-        if let Some(pos) = self.types.iter().position(|t| t.mark.eq_ignore_ascii_case(mark)) {
-            Some(self.types.remove(pos))
-        } else {
-            None
-        }
+        if let Some(pos) = self.types.iter().position(|t| t.mark.eq_ignore_ascii_case(mark)) { Some(self.types.remove(pos)) } else { None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -256,10 +252,7 @@ pub fn entity_type_mark(xdata: &[crate::RawTag]) -> Option<&str> {
 
 /// Build the XDATA tags to assign a type mark to an entity.
 pub fn type_mark_xdata(mark: &str) -> Vec<crate::RawTag> {
-    vec![
-        crate::RawTag { code: 1001, value: BIM_SPEC_APP.to_string() },
-        crate::RawTag { code: 1000, value: mark.to_string() },
-    ]
+    vec![crate::RawTag { code: 1001, value: BIM_SPEC_APP.to_string() }, crate::RawTag { code: 1000, value: mark.to_string() }]
 }
 
 /// Remove the BIM spec xdata from a tag list, returning the rest.
@@ -340,10 +333,7 @@ mod tests {
     #[test]
     fn xdata_preserves_other_apps() {
         use crate::RawTag;
-        let mut tags = vec![
-            RawTag { code: 1001, value: "OTHER_APP".into() },
-            RawTag { code: 1000, value: "some data".into() },
-        ];
+        let mut tags = vec![RawTag { code: 1001, value: "OTHER_APP".into() }, RawTag { code: 1000, value: "some data".into() }];
         tags.extend(type_mark_xdata("J2"));
         tags.push(RawTag { code: 1001, value: "ANOTHER".into() });
         tags.push(RawTag { code: 1000, value: "more".into() });
