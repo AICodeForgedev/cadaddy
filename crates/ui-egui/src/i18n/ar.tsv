@@ -2535,3 +2535,13 @@ menu	View	عرض
 	Unmarked.	تم إلغاء التعليم.
 	Edit applied.	تم تطبيق التعديل.
 	Rebuilt: {n} MEP runs.	تم إعادة البناء: {n} مسارات MEP.
+	3D Measure	قياس ثلاثي الأبعاد
+	BCF Export	تصدير BCF
+	Clash List	قائمة التعارضات
+	Clash Status	حالة التعارض
+	Coordination Tree	شجرة التنسيق
+	Coordination Viewpoints	نقاط عرض التنسيق
+	Edit MEP Item	تحرير عنصر MEP
+	List MEP Items	سرد عناصر MEP
+	Section Box	صندوق المقطع
+	Trade Visibility	إظهار التخصصات

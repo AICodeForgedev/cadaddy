@@ -2540,3 +2540,13 @@ menu	Modify	수정
 	Unmarked.	표시 해제됨.
 	Edit applied.	편집이 적용되었습니다.
 	Rebuilt: {n} MEP runs.	다시 빌드됨: {n}개의 MEP 배관.
+	3D Measure	3D 측정
+	BCF Export	BCF 내보내기
+	Clash List	충돌 목록
+	Clash Status	충돌 상태
+	Coordination Tree	조정 트리
+	Coordination Viewpoints	조정 뷰포인트
+	Edit MEP Item	MEP 항목 편집
+	List MEP Items	MEP 항목 나열
+	Section Box	단면 상자
+	Trade Visibility	공종 표시

@@ -2520,3 +2520,13 @@ menu	Modify	Modifikace
 	Unmarked.	Odznačeno.
 	Edit applied.	Úprava použita.
 	Rebuilt: {n} MEP runs.	Přestavěno: {n} MEP tras.
+	3D Measure	3D měření
+	BCF Export	Export BCF
+	Clash List	Seznam kolizí
+	Clash Status	Stav kolize
+	Coordination Tree	Strom koordinace
+	Coordination Viewpoints	Pohledy koordinace
+	Edit MEP Item	Upravit prvek MEP
+	List MEP Items	Vypsat prvky MEP
+	Section Box	Řezový kvádr
+	Trade Visibility	Viditelnost profesí

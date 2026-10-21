@@ -2328,3 +2328,13 @@
 	Unmarked.	Отметка снята.
 	Edit applied.	Изменение применено.
 	Rebuilt: {n} MEP runs.	Перестроено: {n} участков MEP.
+	3D Measure	3D-измерение
+	BCF Export	Экспорт BCF
+	Clash List	Список коллизий
+	Clash Status	Статус коллизии
+	Coordination Tree	Дерево координации
+	Coordination Viewpoints	Точки обзора координации
+	Edit MEP Item	Изменить элемент MEP
+	List MEP Items	Список элементов MEP
+	Section Box	Секущий параллелепипед
+	Trade Visibility	Видимость разделов
