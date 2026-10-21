@@ -27,10 +27,12 @@ pub mod duct_reader;
 pub mod elec_reader;
 pub mod equip_reader;
 pub mod framing;
+pub mod gaps;
 pub mod heights;
 pub mod hotel;
 pub mod layout;
 pub mod pipe_reader;
+pub mod rfi;
 pub mod rng;
 pub mod score;
 pub mod sheet_reader;
@@ -102,6 +104,23 @@ fn add_ceilings(t: &mut Truth, st: &mut style::Style) {
 
 /// The fixture set for a seed.
 pub fn generate(seed: u64) -> Result<FixtureSet, String> {
+    generate_set(seed, false)
+}
+
+/// The fixture set for a seed with gaps and conflicts planted in its prints ([`gaps`]): the
+/// same set plus the planted gaps, sleeve notes and an enlarged architectural plan (`A-401`).
+pub fn generate_with_gaps(seed: u64) -> Result<FixtureSet, String> {
+    generate_set(seed, true)
+}
+
+/// The truth of [`generate_with_gaps`] without drawing anything.
+pub fn truth_with_gaps(seed: u64) -> Truth {
+    let mut t = truth_for(seed);
+    gaps::plant(&mut t);
+    t
+}
+
+fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
     let mut r = Rng::new(seed);
     let mut st = style::Style::new(&mut r.fork(1));
     let d = design::design(seed, &st, &mut r.fork(2));
@@ -112,7 +131,14 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     t.placement_zones = clash::placement_zones(&t);
     add_walls(&mut t, &mut st);
     add_ceilings(&mut t, &mut st);
-    let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
+    let mut kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
+    if with_gaps {
+        gaps::plant(&mut t);
+        if let Some(sh) = gaps::enlarged_sheet(&t) {
+            t.sheets.push(sh);
+            kinds.push((gaps::ENLARGED_SHEET.into(), layout::Kind::EnlargedFloor("1".into(), "TOILET".into())));
+        }
+    }
     let mut files = Vec::new();
     let mut set = Vec::new();
     let sheets = t.sheets.clone();

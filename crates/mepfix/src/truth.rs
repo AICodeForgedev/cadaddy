@@ -96,6 +96,13 @@ pub struct Truth {
     /// The head of wall details: how each wall type meets what is above it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub head_details: Vec<HeadDetail>,
+    /// Sleeve and pathway notes on the floor plans (sets with planted gaps only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleeves: Vec<SleeveNote>,
+    /// Gaps and conflicts put into the prints on purpose (sets with planted gaps only): what an
+    /// RFI list should say besides the gaps every set has (untagged walls, unscheduled rooms…).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planted: Vec<PlantedGap>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure, in-wall device-vs-pipe), computed from the geometry; `planted` ones were put
     /// there on purpose.
@@ -183,6 +190,9 @@ pub struct Ceiling {
     /// ACT grid tile size: `[across, along]` in feet (e.g. `[2.0, 4.0]` for 2×4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_ft: Option<[f64; 2]>,
+    /// The RCP tag and the finish schedule leave its height out (a planted gap).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub height_hidden: bool,
 }
 
 /// A soffit or bulkhead: a dropped section of ceiling (lower than the room's main ceiling),
@@ -214,6 +224,10 @@ pub struct Soffit {
     /// Whether the RCP calls out its detail (otherwise the reader has to work it out).
     #[serde(default)]
     pub called_out: bool,
+    /// The detail number its callout points to when that isn't its type's (a planted gap: a
+    /// callout to a detail the details sheet doesn't have).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callout_detail: Option<String>,
 }
 
 /// A ceiling type as the ceiling legend gives it.
@@ -359,6 +373,42 @@ pub struct PlanWall {
     /// one): what a print reader can't know until a shop drawing or a field point says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_from: Option<String>,
+    /// The tag the floor plan prints when it isn't `wall_type` (a planted gap: a tag the legend
+    /// doesn't have).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_tag: Option<String>,
+    /// The tag an enlarged plan prints for it when that differs from the floor plan's (a planted
+    /// conflict between sheets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enlarged_tag: Option<String>,
+}
+
+/// A sleeve or pathway note on a floor plan: `count` × `size_in` sleeves at `at_ft`, and the
+/// route (where to) and method (through what, how) the note gives, if any.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SleeveNote {
+    pub id: String,
+    pub level: String,
+    pub at_ft: [f64; 2],
+    /// The note as printed.
+    pub text: String,
+    pub count: usize,
+    pub size_in: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// Cored through the slab onto a beam below it: it won't fit where it is drawn.
+    #[serde(default)]
+    pub on_beam: bool,
+}
+
+/// A gap or conflict planted in a set: its kind (an [`crate::rfi::RfiKind`] name) and what it
+/// is about (a wall id, a wall type tag, a room `level/number`, a soffit id, a sleeve id…).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlantedGap {
+    pub kind: String,
+    pub about: String,
 }
 
 /// A wall type tag on a plan: `s_ft` along the wall from `a_ft` where it is (or where its leader

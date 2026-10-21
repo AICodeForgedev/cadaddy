@@ -114,6 +114,7 @@ pub mod plotstampdlg;
 pub mod plotstyles;
 pub mod quick;
 pub mod renderwin;
+pub mod rfipalette;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod spelldlg;

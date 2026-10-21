@@ -31,6 +31,9 @@ pub enum Kind {
     CeilingDetails,
     /// The room finish schedule.
     FinishSchedule,
+    /// An enlarged architectural plan of a level's `TOILET` rooms (sets with planted gaps only):
+    /// walls and their tags again, bigger.
+    EnlargedFloor(String, String),
 }
 
 impl Kind {

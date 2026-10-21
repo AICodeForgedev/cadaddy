@@ -373,7 +373,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let mut soffit_n = 0usize;
     for f in &floors {
         let n0: usize = if f.code == "1" { 100 } else { 200 };
-        let act = |h: f64| Some(Ceiling { height_ft: h, kind: "ACT".into(), tag: String::new(), grid_ft: Some(act_grid) });
+        let act = |h: f64| Some(Ceiling { height_ft: h, kind: "ACT".into(), tag: String::new(), grid_ft: Some(act_grid), height_hidden: false });
         let plenum = |h: f64| -> Option<f64> {
             let p = f.girder_bob - h;
             if p > 0.01 { Some(r6(p)) } else { None }
@@ -425,7 +425,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             } else {
                 let name = r.pick(&pool);
                 let c = if name == "STORAGE" || name == "FILES" {
-                    Some(Ceiling { height_ft: f.office_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None })
+                    Some(Ceiling { height_ft: f.office_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None, height_hidden: false })
                 } else {
                     act(f.office_clg)
                 };
@@ -434,7 +434,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             let north = n0 + 1 + nb + i;
             if i + 1 == nb {
                 let mid = (x0 + x1) / 2.0;
-                let gyp = Some(Ceiling { height_ft: f.toilet_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None });
+                let gyp = Some(Ceiling { height_ft: f.toilet_clg, kind: "GYP".into(), tag: String::new(), grid_ft: None, height_hidden: false });
                 add(&mut t, north, toilets.0, [x0, y2], [mid, y3], gyp.clone());
                 add(&mut t, north + 1, toilets.1, [mid, y2], [x1, y3], gyp);
             } else {

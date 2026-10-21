@@ -448,6 +448,27 @@ pub fn open(app: &mut CadApp) -> Result<(), String> {
     Ok(())
 }
 
+/// Open Walk (if it isn't) standing 12' south-west of a plan point (drawing units) on a level,
+/// looking at it: where an RFI item is.
+pub fn look_at(app: &mut CadApp, level: &str, at: [f64; 2]) -> Result<(), String> {
+    if app.walk.is_none() {
+        open(app)?;
+    }
+    let Some(walk) = app.walk.as_mut() else { return Err("Walk didn't open".into()) };
+    let scene = &walk.building.scene;
+    let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
+    let i = scene.levels.iter().position(|l| l.name.eq_ignore_ascii_case(level)).unwrap_or(0);
+    let Some(l) = scene.levels.get(i) else { return Err("Walk has no levels".into()) };
+    if !(at[0].is_finite() && at[1].is_finite()) {
+        return Err("the item has no place on the plan".into());
+    }
+    let p = [(at[0] - l.base.x) / upf, (at[1] - l.base.y) / upf];
+    let (dx, dy) = (8.5, 8.5);
+    let pose = Pose { eye: cadaddy_walk3d::V3 { x: p[0] - dx, y: p[1] - dy, z: l.elevation_ft + 5.5 }, yaw: dy.atan2(dx), pitch: -0.15, level: i };
+    put_pose(&mut walk.walker, scene, pose);
+    Ok(())
+}
+
 /// A drawing opened from a walkthrough package (`.cdywalk`) opens in Walk, once: Esc goes back to
 /// the drawing and it stays there.
 pub fn open_walkthrough(app: &mut CadApp) {

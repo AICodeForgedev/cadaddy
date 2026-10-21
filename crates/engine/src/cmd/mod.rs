@@ -49,6 +49,7 @@ mod layer;
 pub mod markup;
 pub mod pointcloud;
 mod rasterout;
+pub mod rfi;
 pub mod schedules;
 mod setbylayer;
 mod vpsync;
@@ -283,6 +284,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(ceilings::specs());
+        v.extend(rfi::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
         v.extend(autospec::specs());

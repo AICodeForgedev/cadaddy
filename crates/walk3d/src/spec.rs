@@ -82,6 +82,10 @@ pub struct BuildingSpec {
     /// Walls whose type (and height) the plans give: the wall built on each centreline gets them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<WallMark>,
+    /// Gaps and conflicts in the prints the readers found (with the sheets involved), and their
+    /// status and answers: see [`crate::rfi`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rfis: Vec<crate::rfi::Rfi>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -1406,6 +1410,7 @@ impl BuildingSpec {
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
+            rfis: Vec::new(),
             ceiling_types: Vec::new(),
             soffit_types: Vec::new(),
             devices: r.devices.clone(),
@@ -1537,6 +1542,7 @@ impl BuildingSpec {
             ("layers", self.layers.len()),
             ("wall_types", self.wall_types.len()),
             ("walls", self.walls.len()),
+            ("rfis", self.rfis.len()),
             ("rooms", self.rooms.len()),
             ("families", self.families.len()),
         ] {

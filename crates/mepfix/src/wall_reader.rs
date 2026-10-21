@@ -74,6 +74,8 @@ pub struct FoundWall {
     pub openings: Vec<[f64; 2]>,
     /// Room numbers either side.
     pub rooms: Vec<String>,
+    /// A tag on it the legend doesn't have (its type is then a guess, as for an untagged wall).
+    pub stray_tag: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -531,8 +533,9 @@ fn overlap(p: &FoundWall, q: &FoundWall) -> f64 {
     (o / len.min(q1 - q0).max(1e-9)).max(0.0)
 }
 
-/// Tags on a plan: each legend tag's text, landing where its leader ends (or at the text).
-fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f64; 2], bool)> {
+/// Tags on a plan: each legend tag's text (and tag-like text in a tag symbol the legend doesn't
+/// have), landing where its leader ends (or at the text): (text, where, leader, in the legend).
+fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f64; 2], bool, bool)> {
     let leaders: Vec<Seg> = d
         .model
         .iter()
@@ -543,10 +546,17 @@ fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f
         })
         .take(MAX_LINES)
         .collect();
+    let symbols = symbol_centres(d);
     let mut out = Vec::new();
     for t in texts(d) {
         // Grid bubbles' labels can look like tags (`A`, `B`…): not those.
-        if t.grid || !types.iter().any(|x| x.tag == t.s) {
+        if t.grid {
+            continue;
+        }
+        let known = types.iter().any(|x| x.tag == t.s);
+        // A tag the legend doesn't have: tag-like text centred in a tag symbol.
+        let in_symbol = || symbols.iter().any(|(c, r)| dist(*c, t.at) < 0.4 * t.h && *r > 0.8 * t.h && *r < 4.0 * t.h);
+        if !(known || (tag_like(&t.s) && in_symbol())) {
             continue;
         }
         let h = t.h.max(1e-9);
@@ -561,9 +571,65 @@ fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, far)| far);
         let p = leader.unwrap_or(t.at);
-        out.push((t.s.clone(), sheet_reader::building_from_model(al, p), leader.is_some()));
+        out.push((t.s.clone(), sheet_reader::building_from_model(al, p), leader.is_some(), known));
     }
     out
+}
+
+/// The walls on one plan drawing (a floor plan or an enlarged plan) with the tags on them: a
+/// legend tag types its wall; a tag the legend doesn't have is kept in [`FoundWall::stray_tag`].
+/// No guesses or heights (see [`read_walls`]).
+pub fn read_plan_walls(d: &Drawing, al: &Alignment, level: &str, types: &[ReadType]) -> Vec<FoundWall> {
+    let lines: Vec<Seg> = d
+        .model
+        .iter()
+        .filter(|e| {
+            let l = e.common.layer.to_ascii_uppercase();
+            l.contains("WALL") && !l.contains("TAG")
+        })
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) => {
+                Some(Seg { a: sheet_reader::building_from_model(al, [l.a.x, l.a.y]), b: sheet_reader::building_from_model(al, [l.b.x, l.b.y]) })
+            }
+            _ => None,
+        })
+        .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()))
+        .take(MAX_LINES)
+        .collect();
+    let hinges: Vec<[f64; 2]> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Arc(a) => Some(sheet_reader::building_from_model(al, [a.center.x, a.center.y])),
+            _ => None,
+        })
+        .filter(|p| p.iter().all(|v| v.is_finite()))
+        .take(MAX_LINES)
+        .collect();
+    let mut walls = find_walls(&lines, &hinges, level);
+    for (tag, p, leader, known) in plan_tags(d, al, types) {
+        let reach = if leader { 1.0 } else { 3.0 };
+        let best = walls
+            .iter_mut()
+            .map(|w| (to_seg(p, w.a_ft, w.b_ft).0 - w.thickness_in / 24.0, w))
+            .filter(|(dd, _)| *dd < reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, w)) = best {
+            if known {
+                w.wall_type = Some(tag);
+                w.tagged = true;
+            } else {
+                w.stray_tag = Some(tag);
+            }
+        }
+    }
+    walls
+}
+
+/// Whether two walls found on different sheets are the same wall: in line and overlapping by at
+/// least half the shorter one.
+pub fn same_wall(p: &FoundWall, q: &FoundWall) -> bool {
+    p.level == q.level && same_line(p, q) && overlap(p, q) >= 0.5
 }
 
 /// Rooms either side of a wall (numbers), from the ceiling reader's rooms on its level.
@@ -749,45 +815,7 @@ pub fn read_walls(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingR
     }
     let decks = deck_heights(&framing, structure);
     for (level, al, d) in &plans {
-        let lines: Vec<Seg> = d
-            .model
-            .iter()
-            .filter(|e| {
-                let l = e.common.layer.to_ascii_uppercase();
-                l.contains("WALL") && !l.contains("TAG")
-            })
-            .filter_map(|e| match &e.kind {
-                EntityKind::Line(l) => {
-                    Some(Seg { a: sheet_reader::building_from_model(al, [l.a.x, l.a.y]), b: sheet_reader::building_from_model(al, [l.b.x, l.b.y]) })
-                }
-                _ => None,
-            })
-            .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()))
-            .take(MAX_LINES)
-            .collect();
-        let hinges: Vec<[f64; 2]> = d
-            .model
-            .iter()
-            .filter_map(|e| match &e.kind {
-                EntityKind::Arc(a) => Some(sheet_reader::building_from_model(al, [a.center.x, a.center.y])),
-                _ => None,
-            })
-            .filter(|p| p.iter().all(|v| v.is_finite()))
-            .take(MAX_LINES)
-            .collect();
-        let mut walls = find_walls(&lines, &hinges, level);
-        for (tag, p, leader) in plan_tags(d, al, &res.types) {
-            let reach = if leader { 1.0 } else { 3.0 };
-            let best = walls
-                .iter_mut()
-                .map(|w| (to_seg(p, w.a_ft, w.b_ft).0 - w.thickness_in / 24.0, w))
-                .filter(|(dd, _)| *dd < reach)
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((_, w)) = best {
-                w.wall_type = Some(tag);
-                w.tagged = true;
-            }
-        }
+        let mut walls = read_plan_walls(d, al, level, &res.types);
         let tagged: Vec<FoundWall> = walls.iter().filter(|w| w.tagged).cloned().collect();
         let (lo, hi) = walls
             .iter()
