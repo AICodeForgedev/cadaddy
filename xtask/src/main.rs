@@ -9,6 +9,7 @@ mod ico;
 mod installtest;
 mod layers;
 mod mcptest;
+mod mepfix;
 mod parity;
 mod perf;
 mod release;
@@ -54,6 +55,10 @@ commands:
   mcptest [--port 47820] [--cli PATH] [--mcpb PATH]
                   the MCP suite against the running app (start it with --control 47820): every
                   tool normal and bad, the app's tools, the agent guard, and the .mcpb's server
+  mep-fixtures [--seed N] [--count K] [--out DIR]
+                  made-up MEP print sets (M/P/FP/RCP/S sheets as vector PDF + DXF, set.pdf) with a
+                  JSON ground truth of every run, size, height, fitting, terminal and piece of
+                  equipment, for scoring print readers; default out target/mep-fixtures/seed-N
   perf [--full] [--update-budget]
                   performance budgets (perf/budget.json): open/save DWG/DXF/.cdy, regen, select and
                   move all, zoom extents, 3D build, plot PDF on 1k/10k objects (--full: 100k, 500k
@@ -114,6 +119,7 @@ fn main() -> ExitCode {
         Some("compare-facts") => cmd_compare_facts(),
         Some("mcptest") => mcptest::run(&root(), &rest),
         Some("perf") => perf::run(&root(), &rest),
+        Some("mep-fixtures") => mepfix::run(&root(), &rest),
         Some("webtest") => webtest::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),
         Some("release-key") => release::key_cmd(&rest),

@@ -48,6 +48,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     ("testkit", Class::Testkit),
+    // MEP print fixtures (made-up sheets + ground truth) that print-reader tests score against.
+    ("mepfix", Class::Testkit),
     // apps and tooling
     ("cadaddy", Class::Exempt),
     ("cli", Class::Exempt),
