@@ -568,4 +568,18 @@ mod tests {
         assert!(text.starts_with("Layer,Objects,") && text.contains("Total,1,10,0.8333,0.875"), "{text}");
         let _ = std::fs::remove_file(csv_path);
     }
+
+    /// TAKEOFF with `at` inserts a table; U must remove it (cmdcover #1 / promptfuzz #2: it
+    /// used to be `.noundo()`).
+    #[test]
+    fn takeoff_table_is_undoable() {
+        let mut s = Session::new();
+        s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let before = s.doc().unwrap().model.len();
+        s.execute("takeoff", &json!({"at": [50, 50]})).unwrap();
+        let after = s.doc().unwrap().model.len();
+        assert!(after > before, "TAKEOFF with `at` should insert a table");
+        s.undo().unwrap();
+        assert_eq!(s.doc().unwrap().model.len(), before, "U should remove the takeoff table");
+    }
 }
