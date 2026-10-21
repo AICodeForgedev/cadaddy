@@ -1,7 +1,9 @@
-//! MEP print fixtures: a made-up two-storey building's mechanical, plumbing, fire protection,
-//! reflected ceiling and structural sheets, drawn as vector PDF and DXF the way consulting
-//! engineers draw them, with the ground truth (every run, size, height, fitting, terminal and
-//! piece of equipment) as JSON. Deterministic by seed; drafting style varies by seed.
+//! MEP print fixtures: made-up buildings — a two-storey office and a four-storey hotel — with
+//! mechanical, plumbing, fire protection, electrical, fire alarm, telecom, structural and
+//! architectural sheets, drawn as vector PDF and DXF the way consulting engineers draw them,
+//! with the ground truth (every run, size, height, fitting, terminal, device, wall assembly,
+//! ceiling assembly, casework, spec item, site element) as JSON. Deterministic by seed; drafting
+//! style varies by seed.
 //!
 //! Print readers (sheet recognition, ductwork, piping, heights, clashes…) are scored against the
 //! truth: see [`score`].
@@ -14,6 +16,7 @@
 pub mod clash;
 pub mod design;
 pub mod draw;
+pub mod hotel;
 pub mod layout;
 pub mod rng;
 pub mod score;
@@ -90,6 +93,53 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     files.push(("set.pdf".into(), cadaddy_io::pdf_merge::merge(&set).map_err(|e| format!("set.pdf: {e}"))?));
     let json = serde_json::to_vec_pretty(&t).map_err(|e| e.to_string())?;
     files.push(("truth.json".into(), json));
+    Ok(FixtureSet { truth: t, files })
+}
+
+/// The truth for a hotel seed without drawing anything.
+pub fn hotel_truth_for(seed: u64, size: hotel::HotelSize) -> Truth {
+    let mut r = Rng::new(seed);
+    let st = style::Style::new(&mut r.fork(1));
+    let d = hotel::hotel_design(seed, &st, size, &mut r.fork(10));
+    let mut t = d.truth;
+    t.clashes = clash::clashes(&t, &d.planted);
+    t
+}
+
+/// The hotel fixture set for a seed.
+pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, String> {
+    let mut r = Rng::new(seed);
+    let st = style::Style::new(&mut r.fork(1));
+    let d = hotel::hotel_design(seed, &st, size, &mut r.fork(10));
+    let mut t = d.truth;
+    layout::plan_hotel_sheets(&mut t, &st, &mut r.fork(11));
+    layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(12));
+    t.clashes = clash::clashes(&t, &d.planted);
+    let kinds: Vec<(String, layout::Kind)> = layout::hotel_sheet_list()
+        .into_iter().map(|(n, _, _, k)| (n, k)).collect();
+    let mut files = Vec::new();
+    let mut set = Vec::new();
+    let sheets = t.sheets.clone();
+    for (i, sh) in sheets.iter().enumerate() {
+        let Some((_, kind)) = kinds.iter().find(|(n, _)| *n == sh.number) else { continue };
+        let (drawing, legend, abbr) = draw::draw(&t, &st, sh, kind);
+        if let Some(s) = t.sheets.get_mut(i) {
+            s.legend = legend;
+            s.abbreviations = abbr;
+        }
+        let pdf = cadaddy_io::pdf::pdf(&drawing, &Space::Model, &pdf_options(sh, &st))
+            .map_err(|e| format!("{}: {e}", sh.number))?;
+        let dxf = cadaddy_io::write_dxf(&drawing);
+        set.push((pdf.clone(), format!("{} {}", sh.number, sh.title), String::new()));
+        files.push((sh.pdf.clone(), pdf));
+        files.push((sh.dxf.clone(), dxf.into_bytes()));
+    }
+    files.push(("set.pdf".into(), cadaddy_io::pdf_merge::merge(&set).map_err(|e| format!("set.pdf: {e}"))?));
+    let json = serde_json::to_vec_pretty(&t).map_err(|e| e.to_string())?;
+    files.push(("truth.json".into(), json));
+    // Spec book as a separate JSON
+    let spec_json = serde_json::to_vec_pretty(&t.spec_items).map_err(|e| e.to_string())?;
+    files.push(("spec-book.json".into(), spec_json));
     Ok(FixtureSet { truth: t, files })
 }
 
