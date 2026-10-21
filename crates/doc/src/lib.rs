@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod array;
+pub mod bimspec;
 mod constraint;
 mod entity;
 mod extents;
@@ -148,6 +149,10 @@ pub struct Drawing {
     pub sun: lighting::Sun,
     /// Where the drawing is on the earth (GEOGRAPHICLOCATION), if set.
     pub geo: Option<geo::GeoLocation>,
+    /// BIM element types (type marks → spec records). Shared: every entity referencing the same
+    /// mark inherits the type's fields. Persisted as `CADADDY_BIMTYPES` in the named-object
+    /// dictionary.
+    pub bim_types: bimspec::BimTypes,
     /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
     /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
     pub building_spec: Option<String>,
@@ -258,6 +263,7 @@ impl Drawing {
             materials: Vec::new(),
             sun: lighting::Sun::default(),
             geo: None,
+            bim_types: bimspec::BimTypes::new(),
             building_spec: None,
             tours: None,
             embedded: BTreeMap::new(),

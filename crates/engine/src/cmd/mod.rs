@@ -11,7 +11,9 @@ mod audit;
 pub mod autospec;
 pub mod blockdetect;
 pub(crate) mod blocks;
+pub mod bimprops;
 pub mod bspec;
+pub mod spec_import;
 pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;
@@ -307,6 +309,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(furnish::specs());
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
+        v.extend(bimprops::specs());
+        v.extend(spec_import::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());

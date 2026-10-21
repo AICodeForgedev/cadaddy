@@ -1299,6 +1299,25 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             _ => {}
         }
+        // BIM Spec: show the entity's type mark and its shared fields (read-only).
+        if let Some(mark) = cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata) {
+            group(ui, "BIM Spec");
+            prop_row(ui, "Type Mark", |ui| read_only(ui, mark));
+            if let Some(ty) = d.bim_types.get(mark) {
+                if !ty.category.is_empty() {
+                    prop_row(ui, "Category", |ui| read_only(ui, &ty.category));
+                }
+                for (key, field) in ty.fields.iter().take(50) {
+                    // Display key in a readable form: camelCase → "Camel Case".
+                    let label = camel_to_label(key);
+                    let mut text = field.value.clone();
+                    if field.confidence != cadaddy_doc::bimspec::Confidence::Stated {
+                        text.push_str(&format!(" ({})", field.confidence.as_str()));
+                    }
+                    prop_row(ui, &label, |ui| read_only(ui, &text));
+                }
+            }
+        }
     }
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
@@ -1307,6 +1326,22 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
     }
+}
+
+/// Convert a camelCase key to a human-readable label: "camelCase" → "Camel Case".
+fn camel_to_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if i == 0 {
+            out.extend(c.to_uppercase());
+        } else if c.is_uppercase() {
+            out.push(' ');
+            out.push(c);
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

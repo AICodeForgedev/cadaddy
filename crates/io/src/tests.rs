@@ -1241,6 +1241,60 @@ fn building_spec_roundtrips_in_dxf_and_dwg() {
 }
 
 #[test]
+fn bim_types_roundtrip_in_dxf() {
+    use cadaddy_doc::bimspec::{BimType, BimTypes, Confidence, SpecField};
+    let mut d = Drawing::new_imperial();
+    let mut ty = BimType::new("H");
+    ty.category = "luminaire".into();
+    ty.set_field("description", SpecField::new("recessed 2x4 LED troffer").with_source("E-1 schedule row 3"));
+    ty.set_field("manufacturer", SpecField::new("Lithonia"));
+    ty.set_field("volts", SpecField::new("120/277").with_confidence(Confidence::Inferred));
+    d.bim_types.set(ty);
+    let mut c1 = BimType::new("C1");
+    c1.category = "conduit".into();
+    c1.set_field("racewayMaterial", SpecField::new("PVC Sch 40"));
+    c1.set_field("tradeSize", SpecField::new("3/4\""));
+    c1.set_field("insulation", SpecField::new("THHN"));
+    d.bim_types.set(c1);
+    let text = write_dxf(&d);
+    assert!(text.contains("CADADDY_BIMTYPES"));
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(back.bim_types.len(), 2);
+    let h = back.bim_types.get("H").unwrap();
+    assert_eq!(h.category, "luminaire");
+    assert_eq!(h.get_field("description").map(|f| f.value.as_str()), Some("recessed 2x4 LED troffer"));
+    assert_eq!(h.get_field("description").map(|f| f.source.as_str()), Some("E-1 schedule row 3"));
+    assert_eq!(h.get_field("volts").map(|f| f.confidence), Some(Confidence::Inferred));
+    let c = back.bim_types.get("C1").unwrap();
+    assert_eq!(c.get_field("insulation").map(|f| f.value.as_str()), Some("THHN"));
+    // No types → no record written.
+    assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_BIMTYPES"));
+    // DXF → DXF round-trip.
+    let rt = roundtrip(&back);
+    assert_eq!(rt.bim_types.len(), 2);
+    assert_eq!(rt.bim_types.get("H").map(|t| t.category.as_str()), Some("luminaire"));
+}
+
+#[test]
+fn bim_spec_xdata_survives_dxf_roundtrip() {
+    use cadaddy_doc::{bimspec, Entity, EntityKind, Circle, Space, Common};
+    use cadaddy_geom::Vec3;
+    let mut d = Drawing::new_imperial();
+    let mut ty = cadaddy_doc::bimspec::BimType::new("A");
+    ty.category = "receptacle".into();
+    ty.set_field("amps", bimspec::SpecField::new("20"));
+    d.bim_types.set(ty);
+    let xdata = bimspec::type_mark_xdata("A");
+    let c = Common { xdata, ..Common::default() };
+    let h = d.add(&Space::Model, c, EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1.0 })).unwrap();
+    let text = write_dxf(&d);
+    let back = read_dxf(text.as_bytes()).unwrap();
+    let ent = back.entity(h).unwrap();
+    assert_eq!(bimspec::entity_type_mark(&ent.common.xdata), Some("A"));
+    assert_eq!(back.bim_types.get("A").map(|t| t.category.as_str()), Some("receptacle"));
+}
+
+#[test]
 fn tours_roundtrip_in_dxf_dwg_and_cdy() {
     let mut d = Drawing::new_imperial();
     let tours = r#"{"version":1,"views":[{"name":"Lobby","room":"Lobby","level":0,"eye":[10.5,20,5.5],"yaw":90,"pitch":-5}],"tours":[{"name":"In","stops":["Lobby"],"speed":4.5,"look":"path","pause":1}]}"#;
