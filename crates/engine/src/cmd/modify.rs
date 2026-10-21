@@ -1589,7 +1589,7 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
 
 /// Explode `hs`: the new objects, and how many of `hs` couldn't be exploded (a line, a circle,
 /// one on a locked layer).
-fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
+pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, usize)> {
     let space = s.space();
     let mut out = Vec::new();
     let mut not = 0;

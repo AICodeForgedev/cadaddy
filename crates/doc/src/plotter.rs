@@ -29,24 +29,40 @@ pub enum PlotOutput {
     Pdf,
     Png,
     Svg,
+    #[serde(alias = "jpeg")]
+    Jpg,
+    #[serde(alias = "tiff")]
+    Tif,
+    Bmp,
 }
 
 impl PlotOutput {
+    /// Its name, which is also the plot file's extension.
     pub fn as_str(self) -> &'static str {
         match self {
             PlotOutput::Pdf => "pdf",
             PlotOutput::Png => "png",
             PlotOutput::Svg => "svg",
+            PlotOutput::Jpg => "jpg",
+            PlotOutput::Tif => "tif",
+            PlotOutput::Bmp => "bmp",
         }
     }
-    /// Parse `pdf`, `png` or `svg` (any case).
+    /// Parse `pdf`, `png`, `svg`, `jpg`/`jpeg`, `tif`/`tiff` or `bmp` (any case).
     pub fn parse(s: &str) -> Option<PlotOutput> {
         match s.trim().to_ascii_lowercase().as_str() {
             "pdf" => Some(PlotOutput::Pdf),
             "png" => Some(PlotOutput::Png),
             "svg" => Some(PlotOutput::Svg),
+            "jpg" | "jpeg" => Some(PlotOutput::Jpg),
+            "tif" | "tiff" => Some(PlotOutput::Tif),
+            "bmp" => Some(PlotOutput::Bmp),
             _ => None,
         }
+    }
+    /// A raster image (drawn at the device's resolution and colour depth).
+    pub fn is_raster(self) -> bool {
+        matches!(self, PlotOutput::Png | PlotOutput::Jpg | PlotOutput::Tif | PlotOutput::Bmp)
     }
 }
 
@@ -107,8 +123,10 @@ pub struct PlotterConfig {
     pub name: String,
     pub description: String,
     pub output: PlotOutput,
-    /// Raster resolution (dots per inch) for PNG output.
+    /// Raster resolution (dots per inch) for raster output.
     pub resolution: u32,
+    /// Raster colour depth: 24 (colour), 8 (greys) or 1 (black and white).
+    pub color_depth: u8,
     pub orientation: Orientation,
     /// Name of the paper chosen when a page setup switches to this device.
     pub default_paper: String,
@@ -122,6 +140,7 @@ impl Default for PlotterConfig {
             description: String::new(),
             output: PlotOutput::Pdf,
             resolution: 300,
+            color_depth: 24,
             orientation: Orientation::Landscape,
             default_paper: String::new(),
             papers: Vec::new(),
@@ -147,6 +166,9 @@ impl PlotterConfig {
         self.name = clean_name(&self.name);
         self.description = self.description.chars().filter(|c| !c.is_control() || *c == '\n').take(1000).collect();
         self.resolution = self.resolution.clamp(50, 2400);
+        if ![1, 8, 24].contains(&self.color_depth) {
+            self.color_depth = 24;
+        }
         let mut papers: Vec<DevicePaper> = Vec::new();
         for p in std::mem::take(&mut self.papers).into_iter().take(MAX_DEVICE_PAPERS) {
             let p = p.sanitized();

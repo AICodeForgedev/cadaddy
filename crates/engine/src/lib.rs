@@ -1828,6 +1828,7 @@ impl Session {
 
     fn feed(&mut self, input: Option<Input>) -> Result<()> {
         let base = if matches!(input, Some(Input::Point(_))) { self.current_prompt().and_then(|p| p.base) } else { None };
+        let enter = matches!(input, Some(Input::Enter));
         let Some(mut run) = self.running.take() else { return Ok(()) };
         let step = match input {
             Some(Input::Cancel) => Ok(Step::Cancel),
@@ -1882,6 +1883,15 @@ impl Session {
                 self.echo(format!("Internal error in {id}: {m}"));
                 self.resume_suspended();
                 Err(EngineError::Internal(id, m))
+            }
+            Err(e) if enter => {
+                // Enter the command can't take ends it, keeping what it did so far: asking again
+                // left Esc as the only way out, and what was typed next went to the command
+                // (battle test 0.7.8 #1, the stuck prompts sweep).
+                self.echo(e.user_message());
+                self.finish(run, false);
+                self.resume_suspended();
+                Ok(())
             }
             Err(e) => {
                 // Invalid input: report and keep prompting (AutoCAD re-prompts).
@@ -2239,7 +2249,17 @@ impl Session {
                 return self.input(Input::Point(base + dir * dist));
             }
         }
-        self.input(Input::Text(tt.to_string()))
+        // Text the prompt can't take that the command passed over without a word: say what the
+        // prompt wants, as AutoCAD does (the stuck prompts sweep found hundreds of silent ones).
+        let before = (self.log.len(), self.state().ok().map(|st| Arc::as_ptr(&st.doc)));
+        let r = self.input(Input::Text(tt.to_string()));
+        let unchanged = self.log.len() == before.0
+            && self.state().ok().map(|st| Arc::as_ptr(&st.doc)) == before.1
+            && self.current_prompt().is_some_and(|p| p.message == prompt.message && p.keywords == prompt.keywords);
+        if r.is_ok() && !prompt.accept.text && self.running.is_some() && unchanged {
+            self.echo(not_taken(&prompt));
+        }
+        r
     }
 
     /// Run a script, as AutoCAD reads one: a space or a line end ends an input, and an empty
@@ -2567,6 +2587,20 @@ impl Session {
 }
 
 /// Typed text that is LISP: `(expression)` or `!variable`.
+/// What a prompt wants, for text it can't take.
+fn not_taken(p: &Prompt) -> &'static str {
+    let keywords = !p.keywords.is_empty();
+    match (p.accept.select, p.accept.point, p.accept.number) {
+        (true, _, _) => "*Invalid selection*",
+        (false, true, _) if keywords => "Point or option keyword required.",
+        (false, true, _) => "Invalid point.",
+        (false, false, true) if keywords => "Requires a number or option keyword.",
+        (false, false, true) => "Requires a number.",
+        _ if keywords => "Invalid option keyword.",
+        _ => "Invalid input.",
+    }
+}
+
 fn lisp_expression(t: &str) -> bool {
     let t = t.trim();
     t.starts_with('(') || (t.starts_with('!') && t.len() > 1)

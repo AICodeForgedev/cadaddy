@@ -2251,3 +2251,37 @@
 	Dictionaries are read from:	Wörterbücher werden gelesen aus:
 	Published to {path}	Veröffentlicht nach {path}
 	Sheet Set (.sheetset.json)	Plansatz (.sheetset.json)
+	Resolution	Auflösung
+	Colour depth	Farbtiefe
+	Colour (24-bit)	Farbe (24 Bit)
+	Greys (8-bit)	Graustufen (8 Bit)
+	Black and white (1-bit)	Schwarzweiß (1 Bit)
+	PNG Out	PNG-Ausgabe
+	JPEG Out	JPEG-Ausgabe
+	BMP Out	BMP-Ausgabe
+	TIFF Out	TIFF-Ausgabe
+	Enter image file name	Bilddateinamen eingeben
+	Nothing selected: no image written.	Nichts gewählt: kein Bild geschrieben.
+	{} object(s) written to {} ({} × {} pixels).	{} Objekt(e) in {} geschrieben ({} × {} Pixel).
+	Set to ByLayer	Auf VonLayer setzen
+	Explode and Set Properties	Auflösen und Eigenschaften festlegen
+	Edit Attribute in Place	Attribut direkt bearbeiten
+	Frame	Rahmen
+	Setup	Einrichten
+	Setup View	Ansicht einrichten
+	Setup Drawing	Zeichnung einrichten
+	Setup Profile	Profil einrichten
+	Enter view scale	Ansichtsmaßstab eingeben
+	Specify view center	Ansichtsmittelpunkt angeben
+	Enter view name	Ansichtsnamen eingeben
+	Specify side of viewport to project	Seite des Ansichtsfensters für die Projektion angeben
+	Specify first point of cutting plane	Ersten Punkt der Schnittebene angeben
+	Specify second point of cutting plane	Zweiten Punkt der Schnittebene angeben
+	Specify first point of inclined plane	Ersten Punkt der geneigten Ebene angeben
+	Specify second point of inclined plane	Zweiten Punkt der geneigten Ebene angeben
+	Specify side to view from	Blickseite angeben
+	Specify first corner of viewport	Erste Ecke des Ansichtsfensters angeben
+	Specify opposite corner of viewport	Gegenüberliegende Ecke des Ansichtsfensters angeben
+	Display hidden profile lines on separate layer?	Verdeckte Profillinien auf separatem Layer anzeigen?
+	Project profile lines onto a plane?	Profillinien auf eine Ebene projizieren?
+	Delete tangential edges?	Tangentiale Kanten löschen?

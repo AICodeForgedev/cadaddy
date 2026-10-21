@@ -2415,3 +2415,37 @@ menu	Modify	Modifikace
 	Dictionaries are read from:	Slovníky se čtou z:
 	Published to {path}	Publikováno do {path}
 	Sheet Set (.sheetset.json)	Sada výkresů (.sheetset.json)
+	Resolution	Rozlišení
+	Colour depth	Barevná hloubka
+	Colour (24-bit)	Barevně (24 bitů)
+	Greys (8-bit)	Odstíny šedi (8 bitů)
+	Black and white (1-bit)	Černobíle (1 bit)
+	PNG Out	Výstup PNG
+	JPEG Out	Výstup JPEG
+	BMP Out	Výstup BMP
+	TIFF Out	Výstup TIFF
+	Enter image file name	Zadejte název souboru obrázku
+	Nothing selected: no image written.	Nic nevybráno: obrázek nebyl zapsán.
+	{} object(s) written to {} ({} × {} pixels).	Objekty ({}) zapsány do {} ({} × {} pixelů).
+	Set to ByLayer	Nastavit na Dle hladiny
+	Explode and Set Properties	Rozložit a nastavit vlastnosti
+	Edit Attribute in Place	Upravit atribut na místě
+	Frame	Rámeček
+	Setup	Nastavení
+	Setup View	Nastavit pohled
+	Setup Drawing	Nastavit výkres
+	Setup Profile	Nastavit profil
+	Enter view scale	Zadejte měřítko pohledu
+	Specify view center	Určete střed pohledu
+	Enter view name	Zadejte název pohledu
+	Specify side of viewport to project	Určete stranu výřezu pro promítnutí
+	Specify first point of cutting plane	Určete první bod roviny řezu
+	Specify second point of cutting plane	Určete druhý bod roviny řezu
+	Specify first point of inclined plane	Určete první bod šikmé roviny
+	Specify second point of inclined plane	Určete druhý bod šikmé roviny
+	Specify side to view from	Určete stranu, ze které se díváte
+	Specify first corner of viewport	Určete první roh výřezu
+	Specify opposite corner of viewport	Určete protější roh výřezu
+	Display hidden profile lines on separate layer?	Zobrazit skryté čáry profilu v samostatné hladině?
+	Project profile lines onto a plane?	Promítnout čáry profilu do roviny?
+	Delete tangential edges?	Odstranit tečné hrany?

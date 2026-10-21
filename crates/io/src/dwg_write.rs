@@ -435,6 +435,13 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
     hv.set("LTYPE_BYLAYER", soft(names.get("LTYPE", "ByLayer")));
     hv.set("LTYPE_BYBLOCK", soft(names.get("LTYPE", "ByBlock")));
     hv.set("LTYPE_CONTINUOUS", soft(names.get("LTYPE", "Continuous")));
+    // R2000: the viewport entity header control (empty), which readers look up for every
+    // viewport; without it the ODA's reader rejects a file with a paper space viewport.
+    if v == Version::R2000 {
+        let h = out.iter().map(|o| o.handle).max().unwrap_or(0) + 1;
+        out.push(ek::control(v, types::VX_CONTROL, h, &[], &[]));
+        hv.set("VIEWPORT_ENTITY_HEADER_CONTROL", soft(Some(h)));
+    }
     let seed = out.iter().map(|o| o.handle).max().unwrap_or(0) + 1;
     hv.set("HANDSEED", HV::Handle(HandleRef { code: 0, value: seed }));
     let _ = href;
@@ -838,7 +845,7 @@ fn set_header(hv: &mut HeaderVars, r: &Record, names: &Handles, dicts: &HashMap<
     }
 }
 
-fn text(v: Version, s: &str) -> Text {
+pub(crate) fn text(v: Version, s: &str) -> Text {
     if v.unicode() {
         Text::Wide(s.encode_utf16().collect())
     } else {

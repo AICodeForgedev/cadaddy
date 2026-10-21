@@ -2441,3 +2441,37 @@
 	Dictionaries are read from:	Los diccionarios se leen de:
 	Published to {path}	Publicado en {path}
 	Sheet Set (.sheetset.json)	Conjunto de planos (.sheetset.json)
+	Resolution	Resolución
+	Colour depth	Profundidad de color
+	Colour (24-bit)	Color (24 bits)
+	Greys (8-bit)	Escala de grises (8 bits)
+	Black and white (1-bit)	Blanco y negro (1 bit)
+	PNG Out	Salida PNG
+	JPEG Out	Salida JPEG
+	BMP Out	Salida BMP
+	TIFF Out	Salida TIFF
+	Enter image file name	Escriba el nombre del archivo de imagen
+	Nothing selected: no image written.	No hay nada seleccionado: no se escribió ninguna imagen.
+	{} object(s) written to {} ({} × {} pixels).	{} objeto(s) escrito(s) en {} ({} × {} píxeles).
+	Set to ByLayer	Establecer en PorCapa
+	Explode and Set Properties	Descomponer y definir propiedades
+	Edit Attribute in Place	Editar atributo in situ
+	Frame	Marco
+	Setup	Configurar
+	Setup View	Configurar vista
+	Setup Drawing	Configurar dibujo
+	Setup Profile	Configurar perfil
+	Enter view scale	Indique la escala de la vista
+	Specify view center	Precise el centro de la vista
+	Enter view name	Indique el nombre de la vista
+	Specify side of viewport to project	Precise el lado de la ventana gráfica que se proyecta
+	Specify first point of cutting plane	Precise el primer punto del plano de corte
+	Specify second point of cutting plane	Precise el segundo punto del plano de corte
+	Specify first point of inclined plane	Precise el primer punto del plano inclinado
+	Specify second point of inclined plane	Precise el segundo punto del plano inclinado
+	Specify side to view from	Precise el lado desde el que se mira
+	Specify first corner of viewport	Precise la primera esquina de la ventana gráfica
+	Specify opposite corner of viewport	Precise la esquina opuesta de la ventana gráfica
+	Display hidden profile lines on separate layer?	¿Mostrar las líneas de perfil ocultas en una capa aparte?
+	Project profile lines onto a plane?	¿Proyectar las líneas de perfil sobre un plano?
+	Delete tangential edges?	¿Suprimir las aristas tangentes?

@@ -1,6 +1,6 @@
 # Where CADaddy falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-19 · **Change:** minor (Q154: IME composition at the command line and in the MTEXT editor; vertical text styles) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-20 · **Change:** minor (Q151: 2D drawings from solids — SOLVIEW, SOLDRAW, SOLPROF) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -45,7 +45,7 @@ do them first.
 | F21 | MLINE, REGION and HELIX are objects since #510, with gaps: MLEDIT has no Merged Tee and tees trim square; UNION/SUBTRACT/INTERSECT only combine regions whose boundaries don't meet; regions are saved as closed polylines (no ACIS data); PURGE skips multiline styles | `draw2/mline.rs`, `inquiry/regions.rs`, `dxf_region.rs` | Low | 6–10 |
 | F22 | Inquiry leftovers (COUNT across spaces and nested blocks, the QuickCalc palette and COMPARE landed, #563; MASSPROP on regions, #510): COMPARE compares the tab shown, not every layout at once, and has no COMPAREEXPORT report; QuickCalc keeps its history and variables for the session only | `file/compare.rs`, `palettes/quickcalc.rs` | Low | 3–5 |
 | F23 | No Sheet Set Manager, eTransmit, Share, Traces, Markup Import, Activity Insights | menu items uncovered | Low-medium (team workflows) | 40–70 |
-| F24 | No 3D modelling: UCS, solids, surfaces, meshes, sections, visual styles, materials, lights, rendering. Viewing landed (2026-10-14): preset and named 3D views, PLAN, the 3D ViewCube, orbit (3DORBIT, Shift+middle drag), orthographic projection of planar objects, 3D polylines and 3D faces; Walk mode (View ▸ Walk) builds a walkable 3D model from the 2D plans. Picks, snaps and the grid work on the XY plane only | [parity-checklist](parity-checklist.md) | Medium (3D users) | 280–420 |
+| F24 | No 3D modelling: UCS, solids, surfaces, meshes, sections, visual styles, materials, lights, rendering. Viewing landed (2026-10-14): preset and named 3D views, PLAN, the 3D ViewCube, orbit (3DORBIT, Shift+middle drag), orthographic projection of planar objects, 3D polylines and 3D faces; Walk mode (View ▸ Walk) builds a walkable 3D model from the 2D plans. 2D drawings from solids landed (2026-10-20): SOLVIEW (Ucs, Ortho, Auxiliary, Section viewports with their -VIS/-HID/-DIM/-HAT layers), SOLDRAW and SOLPROF; layout viewports still show model space in plan only, so SOLDRAW lays each view's drawing flat in model space. Picks, snaps and the grid work on the XY plane only | [parity-checklist](parity-checklist.md) | Medium (3D users) | 280–420 |
 
 ## UI/UX
 
@@ -145,6 +145,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Q151: 2D drawings from solids — SOLVIEW (Ucs, Ortho, Auxiliary and Section viewports on a layout, each view's -VIS/-HID/-DIM/-HAT layers frozen in the other viewports, kept through DXF), SOLDRAW (visible and hidden profile lines, section outlines and ANSI31 hatches; edges seen edge-on joined), SOLPROF (PV-/PH- profile blocks in the current view) (F24) |
 | 2026-10-19 | minor | Q154: IME composition (Chinese, Japanese, Korean) at the command line and in the MTEXT editor, candidate window at the caret, CJK interface fonts loaded when CJK is typed, `ui.ime` control method; vertical text styles drawn and plotted top to bottom (L4) |
 | 2026-10-18 | minor | 0.7.7 batch 8: 3D solids (primitives, EXTRUDE, REVOLVE, SWEEP, LOFT, PRESSPULL; UNION/SUBTRACT/INTERSECT, SLICE, THICKEN, FILLETEDGE, CHAMFEREDGE, SOLIDEDIT); sections and drawing views (SECTIONPLANE, LIVESECTION, FLATSHOT, VIEWBASE, VIEWSECTION); lights, sun and physically lit Realistic style; dynamic block authoring (BPARAMETER, BACTIONTOOL, BVSTATE; F3); xrefs edited in place and XCLIP Clipdepth (F2); DWG throughput measured (FF6); 0.7.7f fixes: Layers keeps 120 points in the palette stack, agents' requests never open file dialogs (FILEDIA 0 too), registered images survive a folder change |
 | 2026-10-18 | minor | 0.7.7e review fixes: materials, layer filters and field values kept in .cdy, and materials (colours, assignments) through DWG; Properties gets most of the palette stack; U after an EXPLODE that exploded nothing undoes the EXPLODE; a plot scale means that scale (Fit only without one; "1:20" read); LISP entmakex, getenv, setenv, menucmd; LIST shows dimensions and other objects readably; unknown JSON parameters are reported in `warnings`; agent replies sent at once (Nagle on the control socket caused the 0.3 s "stalls"); WALLGEN builds walls, doors, windows, slabs and ceilings as 3D objects from the plan (F24) |

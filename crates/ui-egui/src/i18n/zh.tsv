@@ -2318,3 +2318,37 @@
 	Dictionaries are read from:	词典读取位置：
 	Published to {path}	已发布到 {path}
 	Sheet Set (.sheetset.json)	图纸集 (.sheetset.json)
+	Resolution	分辨率
+	Colour depth	颜色深度
+	Colour (24-bit)	彩色 (24 位)
+	Greys (8-bit)	灰度 (8 位)
+	Black and white (1-bit)	黑白 (1 位)
+	PNG Out	PNG 输出
+	JPEG Out	JPEG 输出
+	BMP Out	BMP 输出
+	TIFF Out	TIFF 输出
+	Enter image file name	输入图像文件名
+	Nothing selected: no image written.	未选择任何对象：未写入图像。
+	{} object(s) written to {} ({} × {} pixels).	已将 {} 个对象写入 {}（{} × {} 像素）。
+	Set to ByLayer	设置为 ByLayer
+	Explode and Set Properties	分解并设置特性
+	Edit Attribute in Place	在位编辑属性
+	Frame	边框
+	Setup	设置
+	Setup View	设置视图
+	Setup Drawing	设置图形
+	Setup Profile	设置轮廓
+	Enter view scale	输入视图比例
+	Specify view center	指定视图中心
+	Enter view name	输入视图名称
+	Specify side of viewport to project	指定要投影的视口边
+	Specify first point of cutting plane	指定剖切平面的第一点
+	Specify second point of cutting plane	指定剖切平面的第二点
+	Specify first point of inclined plane	指定倾斜平面的第一点
+	Specify second point of inclined plane	指定倾斜平面的第二点
+	Specify side to view from	指定观察方向的一侧
+	Specify first corner of viewport	指定视口的第一个角点
+	Specify opposite corner of viewport	指定视口的对角点
+	Display hidden profile lines on separate layer?	是否在单独的图层上显示隐藏的轮廓线?
+	Project profile lines onto a plane?	是否将轮廓线投影到平面上?
+	Delete tangential edges?	是否删除相切的边?

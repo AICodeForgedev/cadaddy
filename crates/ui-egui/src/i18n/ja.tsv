@@ -2112,3 +2112,37 @@
 	Specify insertion point or	挿入点を指定 または
 	Specify table scale	表の尺度を指定
 	{} dimension(s) updated to the current settings.	{} 個の寸法を現在の設定に更新しました。
+	Resolution	解像度
+	Colour depth	色深度
+	Colour (24-bit)	カラー (24 ビット)
+	Greys (8-bit)	グレースケール (8 ビット)
+	Black and white (1-bit)	白黒 (1 ビット)
+	PNG Out	PNG 書き出し
+	JPEG Out	JPEG 書き出し
+	BMP Out	BMP 書き出し
+	TIFF Out	TIFF 書き出し
+	Enter image file name	画像ファイル名を入力
+	Nothing selected: no image written.	何も選択されていません: 画像は書き出されませんでした。
+	{} object(s) written to {} ({} × {} pixels).	{} 個のオブジェクトを {} に書き出しました ({} × {} ピクセル)。
+	Set to ByLayer	ByLayer に設定
+	Explode and Set Properties	分解してプロパティを設定
+	Edit Attribute in Place	属性をその場で編集
+	Frame	フレーム
+	Setup	設定
+	Setup View	ビューを設定
+	Setup Drawing	図面を設定
+	Setup Profile	プロファイルを設定
+	Enter view scale	ビューの尺度を入力
+	Specify view center	ビューの中心を指定
+	Enter view name	ビュー名を入力
+	Specify side of viewport to project	投影するビューポートの辺を指定
+	Specify first point of cutting plane	切断面の 1 点目を指定
+	Specify second point of cutting plane	切断面の 2 点目を指定
+	Specify first point of inclined plane	傾斜面の 1 点目を指定
+	Specify second point of inclined plane	傾斜面の 2 点目を指定
+	Specify side to view from	見る側を指定
+	Specify first corner of viewport	ビューポートの一方のコーナーを指定
+	Specify opposite corner of viewport	ビューポートの対角コーナーを指定
+	Display hidden profile lines on separate layer?	隠れたプロファイル線を別の画層に表示しますか?
+	Project profile lines onto a plane?	プロファイル線を平面に投影しますか?
+	Delete tangential edges?	接線エッジを削除しますか?

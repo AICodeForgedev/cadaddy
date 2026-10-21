@@ -52,7 +52,7 @@ fn other(m: impl Into<String>) -> EngineError {
 }
 
 /// The model's 3D extents (solids and meshes; everything else at its plan extents).
-fn model_box(s: &Session) -> Result<(Vec3, Vec3)> {
+pub(super) fn model_box(s: &Session) -> Result<(Vec3, Vec3)> {
     let d = s.doc()?;
     let (mut lo, mut hi) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
     let mut grow = |p: Vec3| {
@@ -80,7 +80,7 @@ fn model_box(s: &Session) -> Result<(Vec3, Vec3)> {
     Ok((lo, hi))
 }
 
-fn next_name(s: &Session, prefix: &str) -> Result<String> {
+pub(super) fn next_name(s: &Session, prefix: &str) -> Result<String> {
     let d = s.doc()?;
     Ok((1..100_000)
         .map(|i| format!("{prefix}{i}"))
@@ -135,7 +135,7 @@ fn place_block(
     Ok(d.add(space, common, EntityKind::Insert(ins))?)
 }
 
-fn line2(a: Vec2, b: Vec2) -> EntityKind {
+pub(super) fn line2(a: Vec2, b: Vec2) -> EntityKind {
     EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) })
 }
 
@@ -155,7 +155,7 @@ fn edge_entities(s: &Session, vis: Vec<[Vec2; 2]>, hid: Vec<[Vec2; 2]>, hidden: 
 }
 
 /// A view from its name, a direction, or the current 3D view.
-fn view_param(s: &Session, v: Option<&Value>, default: &str) -> Result<View> {
+pub(super) fn view_param(s: &Session, v: Option<&Value>, default: &str) -> Result<View> {
     let dir = match v {
         Some(Value::String(n)) if n.eq_ignore_ascii_case("current") => s.state()?.projection().map(|p| p.dir).unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
         Some(Value::String(n)) => cadaddy_geom::view3::preset(&n.to_ascii_lowercase()).ok_or_else(|| other(format!("Unknown view \"{n}\".")))?,
@@ -174,77 +174,99 @@ fn drawing_of(s: &Session, view: &View) -> Result<(Vec<[Vec2; 2]>, Vec<[Vec2; 2]
 
 /// A section through the model: its cut faces (outlined and hatched) and, behind them, the model
 /// it leaves (hidden lines removed); in the plane's drawing coordinates.
-fn section_drawing(s: &Session, sp: &SectionPlane, background: bool, hidden: bool, label_scale: f64) -> Result<Vec<(Common, EntityKind)>> {
-    let d = s.doc()?;
+fn section_drawing(s: &Session, sp: &SectionPlane, background: bool, hidden: bool) -> Result<Vec<(Common, EntityKind)>> {
     let (h, v) = sp.axes();
     let view = View { dir: sp.normal * -1.0, right: h, up: v };
-    let to2 = |p: Vec3| view.project(p);
+    let parts = section_parts(s, sp.origin, sp.normal, &view, background)?;
     let mut out = Vec::new();
-    let mut loops2: Vec<Vec<Vec2>> = Vec::new();
+    if background {
+        out.extend(edge_entities(s, parts.visible, parts.hidden, hidden));
+    }
+    let (outlines, hatch) = section_faces(s.doc()?, &parts.cut);
+    out.extend(outlines.into_iter().map(|k| (Common::default(), k)));
+    out.push((Common::default(), hatch));
+    Ok(out)
+}
+
+/// What a section is drawn from, in `view`'s 2D coordinates.
+pub(super) struct SectionParts {
+    /// The cut faces' outlines.
+    pub cut: Vec<Vec<Vec2>>,
+    /// The model beyond the cut (empty without a background): visible and hidden lines.
+    pub visible: Vec<[Vec2; 2]>,
+    pub hidden: Vec<[Vec2; 2]>,
+}
+
+/// The model's solids cut by the plane through `origin` facing `normal` (the side `normal` points
+/// to is cut away), seen from `view`.
+pub(super) fn section_parts(s: &Session, origin: Vec3, normal: Vec3, view: &View, background: bool) -> Result<SectionParts> {
+    let d = s.doc()?;
+    let mut cut: Vec<Vec<Vec2>> = Vec::new();
     let mut kept = Scene3::default();
     for e in d.model.iter().filter(|e| d.is_visible(e)) {
         let EntityKind::Solid3d(so) = &e.kind else { continue };
         let tol = so.mesh_tol();
-        for l in section_loops(&so.polys(tol), sp.origin, sp.normal) {
-            let pts: Vec<Vec2> = l.iter().map(|p| to2(*p)).collect();
+        for l in section_loops(&so.polys(tol), origin, normal) {
+            let pts: Vec<Vec2> = l.iter().map(|p| view.project(*p)).collect();
             if pts.len() >= 3 {
-                loops2.push(pts);
+                cut.push(pts);
             }
         }
         if background {
             let pr = so.props(tol);
-            let size = (pr.max - pr.min).len() + (sp.origin - pr.min).len() + 1.0;
-            let cut = combine((**so).clone(), half_space(sp.origin, sp.normal * -1.0, size), BoolOp::Intersect);
-            if !cut.polys(tol).is_empty() {
-                kept.add_solid(&cut, tol, &view);
+            let size = (pr.max - pr.min).len() + (origin - pr.min).len() + 1.0;
+            let part = combine((**so).clone(), half_space(origin, normal * -1.0, size), BoolOp::Intersect);
+            if !part.polys(tol).is_empty() {
+                kept.add_solid(&part, tol, view);
             }
         }
     }
-    if loops2.is_empty() {
+    if cut.is_empty() {
         return Err(other("The section plane doesn't cut any solid."));
     }
-    if background {
-        let (vis, hid) = hidden_lines(&kept, &view);
-        out.extend(edge_entities(s, vis, hid, hidden));
-    }
-    // The cut faces: outlined and hatched.
+    let (visible, hidden) = if background { hidden_lines(&kept, view) } else { (Vec::new(), Vec::new()) };
+    Ok(SectionParts { cut, visible, hidden })
+}
+
+/// The cut faces as closed outlines and one ANSI31 hatch of them all.
+pub(super) fn section_faces(d: &cadaddy_doc::Drawing, loops: &[Vec<Vec2>]) -> (Vec<EntityKind>, EntityKind) {
+    let mut outlines = Vec::new();
     let mut hatch_loops = Vec::new();
-    for l in &loops2 {
+    for l in loops {
         let mut pts = l.clone();
         if pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.near(*b, 1e-9)) {
             pts.pop();
         }
         let vertices: Vec<PolyVertex> = pts.iter().map(|p| PolyVertex::new(*p)).collect();
-        out.push((
-            Common::default(),
-            EntityKind::LwPolyline(LwPolyline { vertices: vertices.clone(), closed: true, const_width: 0.0, elevation: 0.0, plinegen: false }),
-        ));
+        outlines.push(EntityKind::LwPolyline(LwPolyline {
+            vertices: vertices.clone(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        }));
         hatch_loops.push(HatchLoop { vertices, outer: true, sources: Vec::new(), curves: Vec::new() });
     }
     let spacing =
         cadaddy_doc::library::pattern_for(d, "ANSI31").and_then(|p| p.lines.first().map(|l| l.delta.1.abs())).filter(|x| *x > 0.0).unwrap_or(0.125);
-    let b = cadaddy_geom::Bounds2::from_points(loops2.iter().flatten().copied());
+    let b = cadaddy_geom::Bounds2::from_points(loops.iter().flatten().copied());
     let size = b.width().max(b.height()).max(1e-9);
-    let _ = label_scale;
     let scale = (size / 40.0 / spacing).max(1e-6);
-    out.push((
-        Common::default(),
-        EntityKind::Hatch(Hatch {
-            pattern: "ANSI31".into(),
-            solid: false,
-            loops: hatch_loops,
-            scale,
-            angle: 0.0,
-            associative: false,
-            style: 0,
-            elevation: 0.0,
-            gradient: None,
-            origin: Vec2::ZERO,
-            background: None,
-            pattern_lines: Vec::new(),
-        }),
-    ));
-    Ok(out)
+    let hatch = EntityKind::Hatch(Hatch {
+        pattern: "ANSI31".into(),
+        solid: false,
+        loops: hatch_loops,
+        scale,
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+        pattern_lines: Vec::new(),
+    });
+    (outlines, hatch)
 }
 
 fn section_of(s: &Session, h: Handle) -> Option<SectionPlane> {
@@ -313,7 +335,7 @@ fn run_livesection(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Where a generated drawing goes when no point is given: right of the model.
-fn beside_model(s: &Session) -> Result<Vec2> {
+pub(super) fn beside_model(s: &Session) -> Result<Vec2> {
     let (lo, hi) = model_box(s)?;
     Ok(Vec2::new(hi.x + (hi.x - lo.x).max(1.0) * 0.25, lo.y))
 }
@@ -324,7 +346,7 @@ fn run_sectionplanetoblock(s: &mut Session, p: &Value) -> Result<Value> {
         .find(|h| section_of(s, *h).is_some())
         .ok_or_else(|| bad("sectionplanetoblock", "select a section plane (`handle`)"))?;
     let sp = section_of(s, h).ok_or_else(|| bad("sectionplanetoblock", "not a section plane"))?;
-    let ents = section_drawing(s, &sp, bool_or(p, "background", true), bool_or(p, "hidden", false), 1.0)?;
+    let ents = section_drawing(s, &sp, bool_or(p, "background", true), bool_or(p, "hidden", false))?;
     let name = match str_param(p, "name") {
         Some(n) if !n.trim().is_empty() && n.len() <= 255 => n.trim().to_string(),
         _ => next_name(s, "Section")?,
@@ -443,7 +465,7 @@ fn run_viewsection(s: &mut Session, p: &Value) -> Result<Value> {
     let (lo, hi) = model_box(s)?;
     let span = (hi - lo).len().max(1.0) * 1.2;
     let sp = SectionPlane { origin: (ma + mb) * 0.5, normal, width: span, height: span, live: false, name: label.clone() };
-    let ents = section_drawing(s, &sp, true, false, scale)?;
+    let ents = section_drawing(s, &sp, true, false)?;
     let name = next_name(s, "VIEW-")?;
     let (h, vv) = sp.axes();
     let info = ViewInfo { dir: [-normal.x, -normal.y, -normal.z], right: [h.x, h.y, h.z], up: [vv.x, vv.y, vv.z] };
@@ -584,12 +606,21 @@ impl Interactive for PlaceM {
             }
             return Ok(Step::Continue);
         }
-        let Input::Point(at) = i else { return Ok(Step::Continue) };
-        match self.what {
-            Place::Section => run_sectionplanetoblock(s, &json!({ "handle": self.picked.map(|h| h.hex()), "at": [at.x, at.y] }))?,
-            Place::Flatshot => run_flatshot(s, &json!({ "at": [at.x, at.y] }))?,
-            Place::Base => run_viewbase(s, &json!({ "at": [at.x, at.y] }))?,
+        let at = match i {
+            Input::Point(at) => at,
+            // Enter places nothing and ends the command.
+            Input::Enter => return Ok(Step::Done),
+            _ => return Ok(Step::Continue),
         };
+        let r = match self.what {
+            Place::Section => run_sectionplanetoblock(s, &json!({ "handle": self.picked.map(|h| h.hex()), "at": [at.x, at.y] })),
+            Place::Flatshot => run_flatshot(s, &json!({ "at": [at.x, at.y] })),
+            Place::Base => run_viewbase(s, &json!({ "at": [at.x, at.y] })),
+        };
+        // What can't be drawn here can't be drawn elsewhere either.
+        if let Err(e) = r {
+            return super::machines::end_with(s, &e);
+        }
         s.set_selection(Vec::new());
         Ok(Step::Done)
     }
@@ -633,6 +664,10 @@ impl Interactive for ViewSectionM {
             return Ok(Step::Continue);
         }
         let Input::Point(p) = i else {
+            // Enter ends the command.
+            if i == Input::Enter {
+                return Ok(Step::Done);
+            }
             if let Input::Text(t) = &i
                 && number(t).is_some()
             {
@@ -645,7 +680,11 @@ impl Interactive for ViewSectionM {
             (Some(_), None) => self.to = Some(p),
             (Some(f), Some(t)) => {
                 let base = self.base.map(|h| h.hex());
-                run_viewsection(s, &json!({ "base": base, "from": [f.x, f.y], "to": [t.x, t.y], "at": [p.x, p.y] }))?;
+                // A base that isn't a drawing view, or a cut through nothing, stays so wherever
+                // the view goes.
+                if let Err(e) = run_viewsection(s, &json!({ "base": base, "from": [f.x, f.y], "to": [t.x, t.y], "at": [p.x, p.y] })) {
+                    return super::machines::end_with(s, &e);
+                }
                 s.set_selection(Vec::new());
                 return Ok(Step::Done);
             }

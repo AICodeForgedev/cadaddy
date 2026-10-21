@@ -2435,3 +2435,37 @@ menu	Modify	수정
 	Dictionaries are read from:	사전을 읽는 위치:
 	Published to {path}	{path}(으)로 게시됨
 	Sheet Set (.sheetset.json)	시트 세트(.sheetset.json)
+	Resolution	해상도
+	Colour depth	색상 깊이
+	Colour (24-bit)	컬러 (24비트)
+	Greys (8-bit)	회색조 (8비트)
+	Black and white (1-bit)	흑백 (1비트)
+	PNG Out	PNG 내보내기
+	JPEG Out	JPEG 내보내기
+	BMP Out	BMP 내보내기
+	TIFF Out	TIFF 내보내기
+	Enter image file name	이미지 파일 이름 입력
+	Nothing selected: no image written.	선택한 항목이 없음: 이미지를 쓰지 않았습니다.
+	{} object(s) written to {} ({} × {} pixels).	개체 {}개를 {}에 썼습니다({} × {} 픽셀).
+	Set to ByLayer	도면층별로 설정
+	Explode and Set Properties	분해 및 특성 설정
+	Edit Attribute in Place	속성 내부 편집
+	Frame	프레임
+	Setup	설정
+	Setup View	뷰 설정
+	Setup Drawing	도면 설정
+	Setup Profile	프로파일 설정
+	Enter view scale	뷰 축척 입력
+	Specify view center	뷰 중심 지정
+	Enter view name	뷰 이름 입력
+	Specify side of viewport to project	투영할 뷰포트의 변 지정
+	Specify first point of cutting plane	절단 평면의 첫 번째 점 지정
+	Specify second point of cutting plane	절단 평면의 두 번째 점 지정
+	Specify first point of inclined plane	경사 평면의 첫 번째 점 지정
+	Specify second point of inclined plane	경사 평면의 두 번째 점 지정
+	Specify side to view from	바라볼 방향 지정
+	Specify first corner of viewport	뷰포트의 첫 번째 구석 지정
+	Specify opposite corner of viewport	뷰포트의 반대 구석 지정
+	Display hidden profile lines on separate layer?	숨은 프로파일 선을 별도 도면층에 표시하시겠습니까?
+	Project profile lines onto a plane?	프로파일 선을 평면에 투영하시겠습니까?
+	Delete tangential edges?	접하는 모서리를 삭제하시겠습니까?

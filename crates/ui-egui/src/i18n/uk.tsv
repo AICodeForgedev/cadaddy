@@ -2500,3 +2500,37 @@
 	Dictionaries are read from:	Словники читаються з:
 	Published to {path}	Опубліковано в {path}
 	Sheet Set (.sheetset.json)	Підшивка (.sheetset.json)
+	Resolution	Роздільність
+	Colour depth	Глибина кольору
+	Colour (24-bit)	Колір (24 біти)
+	Greys (8-bit)	Відтінки сірого (8 біт)
+	Black and white (1-bit)	Чорно-біле (1 біт)
+	PNG Out	Виведення PNG
+	JPEG Out	Виведення JPEG
+	BMP Out	Виведення BMP
+	TIFF Out	Виведення TIFF
+	Enter image file name	Введіть назву файлу зображення
+	Nothing selected: no image written.	Нічого не вибрано: зображення не записано.
+	{} object(s) written to {} ({} × {} pixels).	Об'єктів записано: {} у {} ({} × {} пікселів).
+	Set to ByLayer	Встановити За шаром
+	Explode and Set Properties	Розчленувати й задати властивості
+	Edit Attribute in Place	Редагувати атрибут на місці
+	Frame	Рамка
+	Setup	Налаштування
+	Setup View	Налаштувати вигляд
+	Setup Drawing	Налаштувати креслення
+	Setup Profile	Налаштувати профіль
+	Enter view scale	Введіть масштаб вигляду
+	Specify view center	Вкажіть центр вигляду
+	Enter view name	Введіть назву вигляду
+	Specify side of viewport to project	Вкажіть сторону видового екрана для проєкції
+	Specify first point of cutting plane	Вкажіть першу точку січної площини
+	Specify second point of cutting plane	Вкажіть другу точку січної площини
+	Specify first point of inclined plane	Вкажіть першу точку похилої площини
+	Specify second point of inclined plane	Вкажіть другу точку похилої площини
+	Specify side to view from	Вкажіть сторону погляду
+	Specify first corner of viewport	Вкажіть перший кут видового екрана
+	Specify opposite corner of viewport	Вкажіть протилежний кут видового екрана
+	Display hidden profile lines on separate layer?	Показувати приховані лінії профілю на окремому шарі?
+	Project profile lines onto a plane?	Проєктувати лінії профілю на площину?
+	Delete tangential edges?	Видалити дотичні ребра?

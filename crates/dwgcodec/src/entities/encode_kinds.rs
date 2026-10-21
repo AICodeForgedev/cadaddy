@@ -607,7 +607,9 @@ fn spline(w: &mut ObjWriter, r: &Rec) {
     let scenario = if by_fit { 2 } else { 1 };
     w.d.bl(scenario);
     if w.at_least(Version::R2013) {
-        w.d.bl(if by_fit { 1 } else { 0 });
+        // Spline flags: by fit points (1) using the knot parameterization that follows (8, 0:
+        // chord). The ODA's reader rejects a fit spline without 8.
+        w.d.bl(if by_fit { 1 | 8 } else { 0 });
         w.d.bl(0);
     }
     w.d.bl(r.id(71, 3) as i32);
@@ -1039,6 +1041,10 @@ fn viewport(w: &mut ObjWriter, r: &Rec) {
         w.href(4, Some(h));
     }
     w.href(5, r.h(340).filter(|h| *h != 0));
+    // R2000 only: the viewport entity header (none).
+    if !w.at_least(Version::R2004) {
+        w.href(5, None);
+    }
     // Named and base UCS; R2007+ background, visual style, shade plot and sun.
     w.href(5, None);
     w.href(5, None);

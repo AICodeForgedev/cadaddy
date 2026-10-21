@@ -2430,3 +2430,37 @@ menu	View	عرض
 	Dictionaries are read from:	تُقرأ القواميس من:
 	Published to {path}	نُشر إلى {path}
 	Sheet Set (.sheetset.json)	مجموعة الأوراق (.sheetset.json)
+	Resolution	الدقة
+	Colour depth	عمق اللون
+	Colour (24-bit)	ألوان (24 بت)
+	Greys (8-bit)	تدرج رمادي (8 بت)
+	Black and white (1-bit)	أبيض وأسود (1 بت)
+	PNG Out	إخراج PNG
+	JPEG Out	إخراج JPEG
+	BMP Out	إخراج BMP
+	TIFF Out	إخراج TIFF
+	Enter image file name	أدخل اسم ملف الصورة
+	Nothing selected: no image written.	لم يُحدَّد شيء: لم تُكتب أي صورة.
+	{} object(s) written to {} ({} × {} pixels).	كُتب {} من العناصر إلى {} ({} × {} بكسل).
+	Set to ByLayer	تعيين إلى حسب الطبقة
+	Explode and Set Properties	تفجير وتعيين الخصائص
+	Edit Attribute in Place	تحرير السمة في مكانها
+	Frame	إطار
+	Setup	الإعداد
+	Setup View	إعداد العرض
+	Setup Drawing	إعداد الرسم
+	Setup Profile	إعداد المقطع الجانبي
+	Enter view scale	أدخل مقياس العرض
+	Specify view center	حدد مركز العرض
+	Enter view name	أدخل اسم العرض
+	Specify side of viewport to project	حدد جانب إطار العرض للإسقاط
+	Specify first point of cutting plane	حدد النقطة الأولى لمستوى القطع
+	Specify second point of cutting plane	حدد النقطة الثانية لمستوى القطع
+	Specify first point of inclined plane	حدد النقطة الأولى للمستوى المائل
+	Specify second point of inclined plane	حدد النقطة الثانية للمستوى المائل
+	Specify side to view from	حدد الجانب الذي يُنظر منه
+	Specify first corner of viewport	حدد الزاوية الأولى لإطار العرض
+	Specify opposite corner of viewport	حدد الزاوية المقابلة لإطار العرض
+	Display hidden profile lines on separate layer?	عرض خطوط المقطع الجانبي المخفية على طبقة منفصلة؟
+	Project profile lines onto a plane?	إسقاط خطوط المقطع الجانبي على مستوى؟
+	Delete tangential edges?	حذف الحواف المماسية؟

@@ -2434,3 +2434,37 @@ menu	Modify	Edita
 	Dictionaries are read from:	I dizionari vengono letti da:
 	Published to {path}	Pubblicato in {path}
 	Sheet Set (.sheetset.json)	Gruppo di fogli (.sheetset.json)
+	Resolution	Risoluzione
+	Colour depth	Profondità colore
+	Colour (24-bit)	Colore (24 bit)
+	Greys (8-bit)	Scala di grigi (8 bit)
+	Black and white (1-bit)	Bianco e nero (1 bit)
+	PNG Out	Uscita PNG
+	JPEG Out	Uscita JPEG
+	BMP Out	Uscita BMP
+	TIFF Out	Uscita TIFF
+	Enter image file name	Immettere il nome del file immagine
+	Nothing selected: no image written.	Nessuna selezione: nessuna immagine scritta.
+	{} object(s) written to {} ({} × {} pixels).	{} oggetto/i scritto/i in {} ({} × {} pixel).
+	Set to ByLayer	Imposta su DaLayer
+	Explode and Set Properties	Esplodi e imposta proprietà
+	Edit Attribute in Place	Modifica attributo sul posto
+	Frame	Cornice
+	Setup	Imposta
+	Setup View	Imposta vista
+	Setup Drawing	Imposta disegno
+	Setup Profile	Imposta profilo
+	Enter view scale	Immettere la scala della vista
+	Specify view center	Specificare il centro della vista
+	Enter view name	Immettere il nome della vista
+	Specify side of viewport to project	Specificare il lato della finestra da proiettare
+	Specify first point of cutting plane	Specificare il primo punto del piano di taglio
+	Specify second point of cutting plane	Specificare il secondo punto del piano di taglio
+	Specify first point of inclined plane	Specificare il primo punto del piano inclinato
+	Specify second point of inclined plane	Specificare il secondo punto del piano inclinato
+	Specify side to view from	Specificare il lato da cui guardare
+	Specify first corner of viewport	Specificare il primo angolo della finestra
+	Specify opposite corner of viewport	Specificare l'angolo opposto della finestra
+	Display hidden profile lines on separate layer?	Visualizzare le linee di profilo nascoste su un layer separato?
+	Project profile lines onto a plane?	Proiettare le linee di profilo su un piano?
+	Delete tangential edges?	Eliminare gli spigoli tangenti?

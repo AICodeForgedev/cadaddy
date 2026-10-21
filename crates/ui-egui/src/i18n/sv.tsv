@@ -2442,3 +2442,37 @@ menu	Modify	Ändra
 	Dictionaries are read from:	Ordlistor läses från:
 	Published to {path}	Publicerat till {path}
 	Sheet Set (.sheetset.json)	Arkuppsättning (.sheetset.json)
+	Resolution	Upplösning
+	Colour depth	Färgdjup
+	Colour (24-bit)	Färg (24 bitar)
+	Greys (8-bit)	Gråskala (8 bitar)
+	Black and white (1-bit)	Svartvitt (1 bit)
+	PNG Out	PNG-utdata
+	JPEG Out	JPEG-utdata
+	BMP Out	BMP-utdata
+	TIFF Out	TIFF-utdata
+	Enter image file name	Ange bildfilens namn
+	Nothing selected: no image written.	Inget markerat: ingen bild skrevs.
+	{} object(s) written to {} ({} × {} pixels).	{} objekt skrivna till {} ({} × {} pixlar).
+	Set to ByLayer	Ange till Enligt lager
+	Explode and Set Properties	Lös upp och ange egenskaper
+	Edit Attribute in Place	Redigera attribut på plats
+	Frame	Ram
+	Setup	Inställning
+	Setup View	Ställ in vy
+	Setup Drawing	Ställ in ritning
+	Setup Profile	Ställ in profil
+	Enter view scale	Ange vyns skala
+	Specify view center	Ange vyns mittpunkt
+	Enter view name	Ange vyns namn
+	Specify side of viewport to project	Ange den sida av visningsområdet som ska projiceras
+	Specify first point of cutting plane	Ange snittplanets första punkt
+	Specify second point of cutting plane	Ange snittplanets andra punkt
+	Specify first point of inclined plane	Ange det lutande planets första punkt
+	Specify second point of inclined plane	Ange det lutande planets andra punkt
+	Specify side to view from	Ange sidan att se från
+	Specify first corner of viewport	Ange visningsområdets första hörn
+	Specify opposite corner of viewport	Ange visningsområdets motsatta hörn
+	Display hidden profile lines on separate layer?	Visa dolda profillinjer på ett eget lager?
+	Project profile lines onto a plane?	Projicera profillinjerna på ett plan?
+	Delete tangential edges?	Ta bort tangentiella kanter?
