@@ -73,10 +73,10 @@ fn a_gap_set_is_the_set_plus_its_gaps() {
     // The truth without drawing anything plants the same gaps.
     let t = truth_with_gaps(seed);
     assert_eq!(t.planted, gaps.truth.planted);
-    assert_eq!(t.walls, gaps.truth.walls);
+    assert_eq!(t.plan_walls, gaps.truth.plan_walls);
     assert_eq!(t.wall_types, gaps.truth.wall_types);
     assert_eq!(t.head_details, gaps.truth.head_details);
-    assert_eq!(t.soffits, gaps.truth.soffits);
+    assert_eq!(t.rcp_soffits, gaps.truth.rcp_soffits);
     assert_eq!(t.soffit_types, gaps.truth.soffit_types);
     assert_eq!(t.sleeves, gaps.truth.sleeves);
     assert_eq!(t.building.rooms, gaps.truth.building.rooms);

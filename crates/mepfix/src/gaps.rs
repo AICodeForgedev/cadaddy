@@ -50,11 +50,11 @@ fn room<'a>(t: &'a Truth, level: &str, number: &str) -> Option<&'a Room> {
 
 /// A wall's height again after its type (or the ceilings) changed.
 fn rewall(t: &mut Truth, i: usize) {
-    let Some(w) = t.walls.get(i) else { return };
+    let Some(w) = t.plan_walls.get(i) else { return };
     let rule = t.wall_types.iter().find(|x| x.tag == w.wall_type).map(|x| x.height.clone()).unwrap_or_default();
     let ceiling = w.rooms.iter().filter_map(|n| room(t, &w.level, n)).filter_map(|r| r.ceiling.as_ref().map(|c| c.height_ft)).reduce(f64::max);
     let h = rule_height(&rule, ceiling, deck_ft(t, &w.level));
-    if let Some(w) = t.walls.get_mut(i) {
+    if let Some(w) = t.plan_walls.get_mut(i) {
         w.height_ft = (h * 1e6).round() / 1e6;
     }
 }
@@ -77,7 +77,7 @@ fn stray_tag(t: &Truth) -> String {
 }
 
 /// The point a wall's tag lands on (where its leader ends), feet.
-fn tag_point(w: &Wall, tag: &WallTag) -> [f64; 2] {
+fn tag_point(w: &PlanWall, tag: &WallTag) -> [f64; 2] {
     let len = dist(w.a_ft, w.b_ft).max(1e-9);
     let u = [(w.b_ft[0] - w.a_ft[0]) / len, (w.b_ft[1] - w.a_ft[1]) / len];
     [w.a_ft[0] + u[0] * tag.s_ft, w.a_ft[1] + u[1] * tag.s_ft]
@@ -92,7 +92,7 @@ pub fn plant(t: &mut Truth) {
     let mut r = Rng::new(t.seed ^ 0x5246_495F_4741_5053).fork(7);
     let mut used: Vec<String> = Vec::new();
     let tagged = |t: &Truth, used: &[String]| -> Vec<usize> {
-        t.walls.iter().enumerate().filter(|(_, w)| w.tagged && !w.tags.is_empty() && !used.contains(&w.id)).map(|(i, _)| i).collect()
+        t.plan_walls.iter().enumerate().filter(|(_, w)| w.tagged && !w.tags.is_empty() && !used.contains(&w.id)).map(|(i, _)| i).collect()
     };
 
     // The same wall, another type on the enlarged plan: a tagged level 1 wall whose tags are all
@@ -101,7 +101,7 @@ pub fn plant(t: &mut Truth) {
     let in_window: Vec<usize> = tagged(t, &used)
         .into_iter()
         .filter(|i| {
-            t.walls.get(*i).is_some_and(|w| {
+            t.plan_walls.get(*i).is_some_and(|w| {
                 w.level == "1"
                     && inside(w.a_ft, lo, hi, -0.01)
                     && inside(w.b_ft, lo, hi, -0.01)
@@ -111,11 +111,11 @@ pub fn plant(t: &mut Truth) {
         .collect();
     if !in_window.is_empty() {
         let i = r.pick(&in_window);
-        let (id, ty) = t.walls.get(i).map(|w| (w.id.clone(), w.wall_type.clone())).unwrap_or_default();
+        let (id, ty) = t.plan_walls.get(i).map(|w| (w.id.clone(), w.wall_type.clone())).unwrap_or_default();
         let others: Vec<String> = t.wall_types.iter().filter(|x| x.tag != ty && !x.external).map(|x| x.tag.clone()).collect();
         let other = r.pick(&others);
         if !other.is_empty()
-            && let Some(w) = t.walls.get_mut(i)
+            && let Some(w) = t.plan_walls.get_mut(i)
         {
             w.enlarged_tag = Some(other);
             used.push(id.clone());
@@ -128,7 +128,7 @@ pub fn plant(t: &mut Truth) {
     if !cands.is_empty() {
         let i = r.pick(&cands);
         let tag = stray_tag(t);
-        if let Some(w) = t.walls.get_mut(i) {
+        if let Some(w) = t.plan_walls.get_mut(i) {
             w.plan_tag = Some(tag);
             let id = w.id.clone();
             used.push(id.clone());
@@ -156,7 +156,7 @@ pub fn plant(t: &mut Truth) {
             let cands: Vec<usize> = tagged(t, &used)
                 .into_iter()
                 .filter(|i| {
-                    t.walls.get(*i).is_some_and(|w| {
+                    t.plan_walls.get(*i).is_some_and(|w| {
                         let [a, b] = [w.rooms.first(), w.rooms.get(1)];
                         let (Some(a), Some(b)) = (a, b) else { return false };
                         match kind {
@@ -177,7 +177,7 @@ pub fn plant(t: &mut Truth) {
                 continue;
             }
             let i = r.pick(&cands);
-            let Some(w) = t.walls.get_mut(i) else { continue };
+            let Some(w) = t.plan_walls.get_mut(i) else { continue };
             w.wall_type = p.clone();
             let id = w.id.clone();
             used.push(id.clone());
@@ -207,8 +207,8 @@ pub fn plant(t: &mut Truth) {
             wt.height = "above_ceiling".into();
             wt.head = ceiling_head;
         }
-        for i in 0..t.walls.len() {
-            if t.walls.get(i).is_some_and(|w| w.wall_type == tag) {
+        for i in 0..t.plan_walls.len() {
+            if t.plan_walls.get(i).is_some_and(|w| w.wall_type == tag) {
                 rewall(t, i);
             }
         }
@@ -243,7 +243,7 @@ pub fn plant(t: &mut Truth) {
         .iter()
         .enumerate()
         .filter(|(_, rm)| {
-            rm.ceiling.is_some() && rm.name != "CORRIDOR" && !wet(&rm.name) && !t.soffits.iter().any(|s| s.level == rm.level && s.room == rm.number)
+            rm.ceiling.is_some() && rm.name != "CORRIDOR" && !wet(&rm.name) && !t.rcp_soffits.iter().any(|s| s.level == rm.level && s.room == rm.number)
         })
         .map(|(i, _)| i)
         .collect();
@@ -264,10 +264,10 @@ pub fn plant(t: &mut Truth) {
     let next = numbers.iter().copied().max().unwrap_or(0) + 1;
 
     // A callout to a detail that isn't there.
-    let called: Vec<usize> = t.soffits.iter().enumerate().filter(|(_, s)| s.called_out).map(|(i, _)| i).collect();
+    let called: Vec<usize> = t.rcp_soffits.iter().enumerate().filter(|(_, s)| s.called_out).map(|(i, _)| i).collect();
     if !called.is_empty() {
         let i = r.pick(&called);
-        if let Some(s) = t.soffits.get_mut(i) {
+        if let Some(s) = t.rcp_soffits.get_mut(i) {
             s.callout_detail = Some((next + 1).to_string());
             let id = s.id.clone();
             plant_gap(t, RfiKind::DetailMissing, &id);
@@ -292,11 +292,11 @@ fn plant_sleeves(t: &mut Truth, r: &mut Rng) {
     let below = t.building.levels.iter().filter(|l| l.code != level && l.code != "R").map(|l| l.code.clone()).max();
     let below_words = below.map_or("THE LEVEL BELOW".to_string(), |b| format!("LEVEL {b}"));
     let beams: Vec<([f64; 2], [f64; 2])> = t.building.beams.iter().filter(|b| b.level == level).map(|b| (b.from_ft, b.to_ft)).collect();
-    let walls: Vec<([f64; 2], [f64; 2])> = t.walls.iter().filter(|w| w.level == level).map(|w| (w.a_ft, w.b_ft)).collect();
+    let walls: Vec<([f64; 2], [f64; 2])> = t.plan_walls.iter().filter(|w| w.level == level).map(|w| (w.a_ft, w.b_ft)).collect();
     // The note runs up and right of its sleeve: keep wall tags out of that box (a tag's leader
     // mustn't meet the note's), the note about 0.07" a letter at the plan's scale.
     let scale = t.sheets.iter().find(|s| s.level.as_deref() == Some(level.as_str()) && s.title.contains("FLOOR PLAN")).map_or(0.125, |s| s.scale);
-    let tags: Vec<[f64; 2]> = t.walls.iter().filter(|w| w.level == level).flat_map(|w| w.tags.iter().map(|tg| tag_point(w, tg))).collect();
+    let tags: Vec<[f64; 2]> = t.plan_walls.iter().filter(|w| w.level == level).flat_map(|w| w.tags.iter().map(|tg| tag_point(w, tg))).collect();
     // A note's box: the sleeve, its leader and the text, feet.
     let k = 1.0 / scale.max(1e-6);
     let note_box = |p: [f64; 2], chars: usize| [p[0] - 1.0, p[1] - 1.0, p[0] + (0.5 + chars as f64 * 0.07) * k, p[1] + 0.45 * k + 0.5];

@@ -350,7 +350,7 @@ pub fn design_walls(t: &mut Truth, ws: &WallStyle, r: &mut Rng) {
                 openings: Vec::new(),
                 tags: Vec::new(),
                 layout_from: None,
-                ..Wall::default()
+                ..PlanWall::default()
             });
         }
         // Doors: one into each room from the corridor (two toilet rooms share a bay), and the

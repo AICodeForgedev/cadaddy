@@ -329,7 +329,7 @@ fn about_wall(w: &FoundWall) -> String {
     }
 }
 
-fn boards(layers: &[crate::truth::WallLayer]) -> usize {
+fn boards(layers: &[crate::truth::WallTypeLayer]) -> usize {
     layers.iter().filter(|l| l.material.starts_with("gyp") || l.material == "shaft_liner").count()
 }
 
@@ -815,7 +815,7 @@ pub fn expected(t: &Truth) -> Vec<Expected> {
         out.push(Expected { kind, level: level.into(), at, about, truth: truth.into() })
     };
     let room = |lv: &str, n: &str| t.building.rooms.iter().find(|r| r.level == lv && r.number == n);
-    for w in &t.walls {
+    for w in &t.plan_walls {
         let at = Some([w.a_ft, w.b_ft]);
         if w.plan_tag.is_some() {
             add(RfiKind::UnknownTag, &w.level, at, String::new(), &w.id);
@@ -858,7 +858,7 @@ pub fn expected(t: &Truth) -> Vec<Expected> {
             add(RfiKind::CeilingUnspecified, &rc.level, None, format!("room {}", rc.room), &format!("{}/{}", rc.level, rc.room));
         }
     }
-    for s in &t.soffits {
+    for s in &t.rcp_soffits {
         let c = mid(s.min_ft, s.max_ft);
         let at = Some([c, c]);
         if s.callout_detail.is_some() {
@@ -868,7 +868,7 @@ pub fn expected(t: &Truth) -> Vec<Expected> {
         }
     }
     for st in &t.soffit_types {
-        if !t.soffits.iter().any(|s| s.called_out && s.callout_detail.is_none() && s.soffit_type.as_ref() == Some(&st.tag)) {
+        if !t.rcp_soffits.iter().any(|s| s.called_out && s.callout_detail.is_none() && s.soffit_type.as_ref() == Some(&st.tag)) {
             add(RfiKind::DetailUnused, "", None, format!("soffit detail {}", st.tag), &st.tag);
         }
     }
@@ -924,7 +924,7 @@ pub fn score_rfis(t: &Truth, found: &[Rfi]) -> RfiScore {
         s.missed.extend(mine.into_iter().filter(|e| !found.iter().any(|r| matches(e, r))).cloned());
     }
     // An untagged wall's type is a guess, so what follows from its type isn't scored.
-    let untagged: Vec<[[f64; 2]; 2]> = t.walls.iter().filter(|w| !w.tagged || w.plan_tag.is_some()).map(|w| [w.a_ft, w.b_ft]).collect();
+    let untagged: Vec<[[f64; 2]; 2]> = t.plan_walls.iter().filter(|w| !w.tagged || w.plan_tag.is_some()).map(|w| [w.a_ft, w.b_ft]).collect();
     for r in found {
         if exp.iter().any(|e| matches(e, r)) {
             continue;
