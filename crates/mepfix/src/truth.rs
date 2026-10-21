@@ -60,6 +60,9 @@ pub struct Truth {
     pub elevations: Vec<ElevationView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<SectionView>,
+    /// Callout symbols drawn on the sheets, each linking to a target sheet/detail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub callouts: Vec<CalloutEntry>,
     /// Planted gaps and conflicts for the RFI helper (Q296).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
@@ -620,6 +623,35 @@ pub struct SectionView {
     /// Looking direction: `north`, `south`, `east`, `west`.
     pub looking: String,
     pub sheet: String,
+}
+
+// --- Callouts (Q306) ---
+
+/// A callout symbol drawn on a sheet, pointing at a detail/view on another sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalloutEntry {
+    pub id: String,
+    /// `section_mark`, `elevation_tag`, `detail_bubble`, `enlarged_plan`, `match_line`, `key_plan`.
+    pub kind: String,
+    /// The sheet the callout is drawn on (its number, e.g. `A-101`).
+    pub on_sheet: String,
+    /// The detail/view number shown in the bubble (top half), e.g. `1`, `A`.
+    pub detail: String,
+    /// The target sheet number shown in the bubble (bottom half), e.g. `A-501`.
+    pub target_sheet: String,
+    /// Position on the plan, building feet.
+    pub at_ft: [f64; 2],
+    /// For section marks: the cut line endpoints, building feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_from_ft: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_to_ft: Option<[f64; 2]>,
+    /// For section/elevation marks: the looking direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub looking: Option<String>,
+    /// Whether this callout is a planted broken reference (target doesn't exist).
+    #[serde(default)]
+    pub broken: bool,
 }
 
 // --- Gaps / conflicts for Q296 ---

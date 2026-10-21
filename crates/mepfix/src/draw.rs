@@ -36,6 +36,7 @@ fn layer_def(name: &str, st: &Style) -> (u8, u16, &'static str) {
         "DASHED" => (7, st.lw_run, "DASHED"),
         "HEAVY" => (7, st.lw_run + 20, "Continuous"),
         "LIGHT" => (7, st.lw_background, "Continuous"),
+        "CALLOUT" => (7, st.lw_text, "Continuous"),
         _ => (7, st.lw_run, "Continuous"),
     }
 }
@@ -430,6 +431,8 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
     if kind.plan() {
         plan_title(&mut pen, t, sh);
     }
+    // Draw callout symbols on plan sheets.
+    draw_callouts(&mut pen, t, sh);
     title_block(&mut pen, t, st, sh, &level, &legend, &abbr);
     (pen.d, legend, abbr)
 }
@@ -1641,4 +1644,169 @@ fn table(pen: &mut Pen, at: [f64; 2], title: &str, rows: &[Vec<String>]) -> f64 
     }
     let _ = total;
     at[1] - y + 0.2
+}
+
+// ---- Callout symbols (Q306) -------------------------------------------------------------------
+
+use crate::layout::CALLOUT_LAYER;
+
+/// Draw all callout symbols that belong to this sheet.
+fn draw_callouts(pen: &mut Pen, t: &Truth, sh: &Sheet) {
+    for co in &t.callouts {
+        if co.on_sheet != sh.number {
+            continue;
+        }
+        match co.kind.as_str() {
+            "section_mark" => draw_section_mark(pen, co),
+            "elevation_tag" => draw_elevation_tag(pen, co),
+            "detail_bubble" => draw_detail_bubble(pen, co),
+            "enlarged_plan" => draw_enlarged_plan_callout(pen, co),
+            "key_plan" => draw_key_plan(pen, t, sh),
+            _ => {}
+        }
+    }
+}
+
+/// A section mark: a circle with the detail number on top and the sheet number on bottom,
+/// separated by a horizontal line. A cut line (dashed) extends from the circle, with small
+/// arrows showing the looking direction.
+///
+/// On the CALLOUT layer, text recognizable by the reader.
+fn draw_section_mark(pen: &mut Pen, co: &CalloutEntry) {
+    let center = pen.b(co.at_ft);
+    let r = pen.pl(0.25);
+    pen.circle(CALLOUT_LAYER, center, r);
+    // Horizontal divider
+    pen.line(CALLOUT_LAYER, center + Vec2::new(-r, 0.0), center + Vec2::new(r, 0.0));
+    // Detail number (top half)
+    pen.text(CALLOUT_LAYER, center + Vec2::new(0.0, r * 0.45), 0.1, &co.detail, 0.0, HAlign::Center, VAlign::Middle);
+    // Target sheet (bottom half)
+    pen.text(CALLOUT_LAYER, center - Vec2::new(0.0, r * 0.45), 0.1, &co.target_sheet, 0.0, HAlign::Center, VAlign::Middle);
+
+    // Cut line: dashed line through the section cut
+    if let (Some(from), Some(to)) = (co.cut_from_ft, co.cut_to_ft) {
+        let a = pen.b(from);
+        let b = pen.b(to);
+        // Only draw the parts beyond the bubble radius
+        let dir = (b - a).normalized();
+        // Line from `a` end to the near edge of the bubble
+        let near_a = center - dir * r;
+        let near_b = center + dir * r;
+        if (a - near_a).len() > r {
+            pen.line("DASHED", a, near_a);
+        }
+        if (b - near_b).len() > r {
+            pen.line("DASHED", near_b, b);
+        }
+        // Small arrows at the ends showing looking direction
+        if let Some(looking) = &co.looking {
+            let arrow_len = pen.pl(0.15);
+            let perp = match looking.as_str() {
+                "north" => Vec2::new(0.0, 1.0),
+                "south" => Vec2::new(0.0, -1.0),
+                "east" => Vec2::new(1.0, 0.0),
+                "west" => Vec2::new(-1.0, 0.0),
+                _ => Vec2::new(0.0, 1.0),
+            };
+            let perp_m = Vec2::new(perp.x * 12.0 * arrow_len / pen.pl(1.0), perp.y * 12.0 * arrow_len / pen.pl(1.0));
+            // Arrow at end `a`
+            let arr_a = a + perp_m;
+            pen.line(CALLOUT_LAYER, a, arr_a);
+            // Arrow at end `b`
+            let arr_b = b + perp_m;
+            pen.line(CALLOUT_LAYER, b, arr_b);
+        }
+    }
+}
+
+/// An elevation tag: a circle with the detail number on top and the sheet number on bottom,
+/// with an arrow pointing in the looking direction.
+fn draw_elevation_tag(pen: &mut Pen, co: &CalloutEntry) {
+    let center = pen.b(co.at_ft);
+    let r = pen.pl(0.25);
+    pen.circle(CALLOUT_LAYER, center, r);
+    // Horizontal divider
+    pen.line(CALLOUT_LAYER, center + Vec2::new(-r, 0.0), center + Vec2::new(r, 0.0));
+    // Detail number (top)
+    pen.text(CALLOUT_LAYER, center + Vec2::new(0.0, r * 0.45), 0.1, &co.detail, 0.0, HAlign::Center, VAlign::Middle);
+    // Target sheet (bottom)
+    pen.text(CALLOUT_LAYER, center - Vec2::new(0.0, r * 0.45), 0.1, &co.target_sheet, 0.0, HAlign::Center, VAlign::Middle);
+    // Arrow from the circle edge in the looking direction
+    if let Some(looking) = &co.looking {
+        let dir = match looking.as_str() {
+            "north" => Vec2::new(0.0, 1.0),
+            "south" => Vec2::new(0.0, -1.0),
+            "east" => Vec2::new(1.0, 0.0),
+            "west" => Vec2::new(-1.0, 0.0),
+            _ => Vec2::new(0.0, 1.0),
+        };
+        let arrow_start = center + dir * r;
+        let arrow_end = center + dir * (r + pen.pl(0.2));
+        pen.line(CALLOUT_LAYER, arrow_start, arrow_end);
+    }
+}
+
+/// A detail bubble: a circle with the detail number on top and the sheet number on bottom.
+fn draw_detail_bubble(pen: &mut Pen, co: &CalloutEntry) {
+    let center = pen.b(co.at_ft);
+    let r = pen.pl(0.25);
+    pen.circle(CALLOUT_LAYER, center, r);
+    // Horizontal divider
+    pen.line(CALLOUT_LAYER, center + Vec2::new(-r, 0.0), center + Vec2::new(r, 0.0));
+    // Detail number (top)
+    pen.text(CALLOUT_LAYER, center + Vec2::new(0.0, r * 0.45), 0.1, &co.detail, 0.0, HAlign::Center, VAlign::Middle);
+    // Target sheet (bottom)
+    pen.text(CALLOUT_LAYER, center - Vec2::new(0.0, r * 0.45), 0.1, &co.target_sheet, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// An enlarged-plan boundary callout: a dashed rectangle around the area with a callout bubble
+/// at the corner pointing to the enlarged plan sheet.
+fn draw_enlarged_plan_callout(pen: &mut Pen, co: &CalloutEntry) {
+    if let (Some(_from), Some(to)) = (co.cut_from_ft, co.cut_to_ft) {
+        // The dashed rectangle is already drawn by the main plumbing draw code.
+        // Add a callout bubble offset from the upper-right corner, with a leader back to it.
+        let corner = pen.b([to[0], to[1]]);
+        let r = pen.pl(0.25);
+        let offset = r * 4.0;
+        let bub = corner + Vec2::new(offset, offset);
+        pen.circle(CALLOUT_LAYER, bub, r);
+        pen.line(CALLOUT_LAYER, bub + Vec2::new(-r, 0.0), bub + Vec2::new(r, 0.0));
+        pen.text(CALLOUT_LAYER, bub + Vec2::new(0.0, r * 0.45), 0.1, &co.detail, 0.0, HAlign::Center, VAlign::Middle);
+        pen.text(CALLOUT_LAYER, bub - Vec2::new(0.0, r * 0.45), 0.1, &co.target_sheet, 0.0, HAlign::Center, VAlign::Middle);
+        // Leader from the corner to the bubble edge
+        let dir = (corner - bub).normalized();
+        let edge = bub + dir * r;
+        pen.line(CALLOUT_LAYER, corner, edge);
+    }
+}
+
+/// A key plan: a small outline of the building grid with the current sheet's area highlighted,
+/// drawn in the title block area.
+fn draw_key_plan(pen: &mut Pen, t: &Truth, _sh: &Sheet) {
+    let fr = frame(pen.st);
+    // Place the key plan in the top-right of the title block.
+    let kp_size = 1.2; // paper inches
+    let margin = 0.2;
+    let kp_x = fr.title[1][0] - kp_size - margin;
+    let kp_y = fr.title[1][1] - kp_size - margin;
+
+    let xs: Vec<f64> = t.building.grid.x.iter().map(|g| g.at_ft).collect();
+    let ys: Vec<f64> = t.building.grid.y.iter().map(|g| g.at_ft).collect();
+    let x_min = xs.first().copied().unwrap_or(0.0);
+    let y_min = ys.first().copied().unwrap_or(0.0);
+    let x_max = xs.last().copied().unwrap_or(100.0);
+    let y_max = ys.last().copied().unwrap_or(60.0);
+    let bw = (x_max - x_min).max(1.0);
+    let bh = (y_max - y_min).max(1.0);
+    let s = kp_size / bw.max(bh);
+
+    // Map building coords to key plan paper coords.
+    let kp = |x: f64, y: f64| -> [f64; 2] { [kp_x + (x - x_min) * s, kp_y + (y - y_min) * s] };
+
+    // Draw building outline
+    let a = kp(x_min, y_min);
+    let b = kp(x_max, y_max);
+    pen.prect(CALLOUT_LAYER, a, b);
+    // Label "KEY PLAN"
+    pen.ptext(CALLOUT_LAYER, [kp_x, kp_y - 0.15], 0.08, "KEY PLAN", HAlign::Left);
 }
