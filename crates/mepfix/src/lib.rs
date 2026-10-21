@@ -16,6 +16,7 @@
 pub mod asbuilt;
 pub mod bore;
 pub mod ceiling_reader;
+pub mod covercheck;
 pub mod clash;
 pub mod design;
 pub mod draw;
