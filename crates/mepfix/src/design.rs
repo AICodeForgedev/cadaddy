@@ -1310,6 +1310,33 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let plant_inwall = r.chance(0.7);
     let plant_inwall_level = r.pick(&["1", "2"]);
     generate_devices(&mut t, &mut planted, plant_inwall, plant_inwall_level, r);
+    // ---- Architectural sections and elevations (for callouts, Q306) -------------------------
+    let mid_bay = width / 2.0;
+    let mid_depth = y3 / 2.0;
+    t.sections = vec![
+        SectionView {
+            id: "sect-1".into(),
+            name: "BUILDING SECTION A".into(),
+            cut_from_ft: [mid_bay, 0.0],
+            cut_to_ft: [mid_bay, y3],
+            looking: "west".into(),
+            sheet: String::new(),
+        },
+        SectionView {
+            id: "sect-2".into(),
+            name: "BUILDING SECTION B".into(),
+            cut_from_ft: [0.0, mid_depth],
+            cut_to_ft: [width, mid_depth],
+            looking: "north".into(),
+            sheet: String::new(),
+        },
+    ];
+    t.elevations = vec![
+        ElevationView { id: "elev-north".into(), name: "NORTH ELEVATION".into(), direction: "north".into(), sheet: String::new(), room: None },
+        ElevationView { id: "elev-south".into(), name: "SOUTH ELEVATION".into(), direction: "south".into(), sheet: String::new(), room: None },
+        ElevationView { id: "elev-east".into(), name: "EAST ELEVATION".into(), direction: "east".into(), sheet: String::new(), room: None },
+        ElevationView { id: "elev-west".into(), name: "WEST ELEVATION".into(), direction: "west".into(), sheet: String::new(), room: None },
+    ];
 
     Design { truth: t, planted }
 }

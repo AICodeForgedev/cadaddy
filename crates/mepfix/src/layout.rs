@@ -6,6 +6,9 @@ use crate::style::{SCALES, Style};
 use crate::truth::*;
 use std::collections::BTreeMap;
 
+/// The layer name used for callout symbols on the sheets.
+pub const CALLOUT_LAYER: &str = "CALLOUT";
+
 /// What a sheet shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -100,6 +103,10 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     for l in ["1", "2"] {
         v.push((format!("E-20{l}"), format!("LEVEL {l} POWER PLAN"), "E".into(), Kind::Power(l.into())));
     }
+    // Architectural detail/elevation/section sheets (non-plan, for callout targets)
+    v.push(("A-201".into(), "EXTERIOR ELEVATIONS".into(), "A".into(), Kind::Schedules("A".into())));
+    v.push(("A-301".into(), "BUILDING SECTIONS".into(), "A".into(), Kind::Schedules("A".into())));
+    v.push(("A-501".into(), "WALL SECTIONS AND DETAILS".into(), "A".into(), Kind::Schedules("A".into())));
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
     v.push(("E-601".into(), "ELECTRICAL SCHEDULES".into(), "E".into(), Kind::Schedules("E".into())));
@@ -648,4 +655,203 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
             s.tag = Some(Tag { text: lines, at_ft: [round(at[0]), round(at[1])], leader });
         }
     }
+}
+
+/// Generate callout entries for the office fixture set.
+///
+/// Creates section marks, elevation tags, detail bubbles and enlarged-plan boundary callouts
+/// on plan sheets, each pointing at a target sheet. One or two broken callouts are planted
+/// (pointing at sheets that don't exist in the set).
+pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
+    let mut callouts = Vec::new();
+    let mut next_id = 0u32;
+    let mut id = || {
+        next_id += 1;
+        format!("co-{next_id:03}")
+    };
+    let xs: Vec<f64> = t.building.grid.x.iter().map(|g| g.at_ft).collect();
+    let ys: Vec<f64> = t.building.grid.y.iter().map(|g| g.at_ft).collect();
+    let x_max = xs.last().copied().unwrap_or(100.0);
+    let y_max = ys.last().copied().unwrap_or(60.0);
+
+    // The A-sheets in the set for callout targets.
+    let has_sheet = |n: &str| t.sheets.iter().any(|s| s.number == n);
+
+    // --- Section marks on A-RCP sheets (reflected ceiling plans) ---
+    // For each section in the truth, put a section mark on each RCP sheet for that level.
+    let mut detail_num = 0u32;
+    for sect in t.sections.clone() {
+        detail_num += 1;
+        let detail_label = format!("{detail_num}");
+        let target = "A-301".to_string();
+        // Put section marks on every plan sheet that has a level.
+        for sh in t.sheets.clone() {
+            if sh.level.is_none() || sh.window_ft.is_some() {
+                continue;
+            }
+            let mid_ft = [
+                (sect.cut_from_ft[0] + sect.cut_to_ft[0]) / 2.0,
+                (sect.cut_from_ft[1] + sect.cut_to_ft[1]) / 2.0,
+            ];
+            callouts.push(CalloutEntry {
+                id: id(),
+                kind: "section_mark".into(),
+                on_sheet: sh.number.clone(),
+                detail: detail_label.clone(),
+                target_sheet: target.clone(),
+                at_ft: [round(mid_ft[0]), round(mid_ft[1])],
+                cut_from_ft: Some(sect.cut_from_ft),
+                cut_to_ft: Some(sect.cut_to_ft),
+                looking: Some(sect.looking.clone()),
+                broken: false,
+            });
+        }
+    }
+
+    // --- Elevation tags on A-RCP sheets ---
+    // Put elevation callouts along the building edges on A-RCP sheets.
+    let elev_positions: Vec<([f64; 2], &str)> = vec![
+        ([x_max / 2.0, y_max + 2.0], "north"),
+        ([x_max / 2.0, -2.0], "south"),
+        ([x_max + 2.0, y_max / 2.0], "east"),
+        ([-2.0, y_max / 2.0], "west"),
+    ];
+    let mut elev_detail = 0u32;
+    for (pos, dir) in &elev_positions {
+        elev_detail += 1;
+        let detail_label = format!("{elev_detail}");
+        let target = "A-201".to_string();
+        // Place on level 1 A-RCP
+        for sh in t.sheets.clone() {
+            if sh.discipline != "A" || sh.level.as_deref() != Some("1") || sh.window_ft.is_some() {
+                continue;
+            }
+            callouts.push(CalloutEntry {
+                id: id(),
+                kind: "elevation_tag".into(),
+                on_sheet: sh.number.clone(),
+                detail: detail_label.clone(),
+                target_sheet: target.clone(),
+                at_ft: [round(pos[0]), round(pos[1])],
+                cut_from_ft: None,
+                cut_to_ft: None,
+                looking: Some((*dir).to_string()),
+                broken: false,
+            });
+        }
+    }
+
+    // --- Detail bubbles on enlarged plumbing plans pointing to A-501 ---
+    for sh in t.sheets.clone() {
+        if sh.window_ft.is_none() {
+            continue;
+        }
+        let win = sh.window_ft.unwrap_or_default();
+        let cx = (win[0][0] + win[1][0]) / 2.0;
+        let cy = (win[0][1] + win[1][1]) / 2.0;
+        detail_num += 1;
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "detail_bubble".into(),
+            on_sheet: sh.number.clone(),
+            detail: format!("{detail_num}"),
+            target_sheet: "A-501".into(),
+            at_ft: [round(cx), round(cy)],
+            cut_from_ft: None,
+            cut_to_ft: None,
+            looking: None,
+            broken: false,
+        });
+    }
+
+    // --- Enlarged-plan boundary callouts on base plumbing plans ---
+    let enlarged_sheets: Vec<(String, String, [[f64; 2]; 2])> = t
+        .sheets
+        .iter()
+        .filter_map(|s| s.window_ft.map(|w| (s.number.clone(), s.level.clone().unwrap_or_default(), w)))
+        .collect();
+    for (en_number, en_level, _win) in &enlarged_sheets {
+        for sh in t.sheets.clone() {
+            if sh.discipline != "P" || sh.level.as_deref() != Some(en_level.as_str()) || sh.window_ft.is_some() {
+                continue;
+            }
+            let win = _win;
+            let cx = (win[0][0] + win[1][0]) / 2.0;
+            let cy = (win[0][1] + win[1][1]) / 2.0;
+            callouts.push(CalloutEntry {
+                id: id(),
+                kind: "enlarged_plan".into(),
+                on_sheet: sh.number.clone(),
+                detail: en_number.clone(),
+                target_sheet: en_number.clone(),
+                at_ft: [round(cx), round(cy)],
+                cut_from_ft: Some(win[0]),
+                cut_to_ft: Some(win[1]),
+                looking: None,
+                broken: false,
+            });
+        }
+    }
+
+    // --- Key plans on mechanical sheets ---
+    // Key plans go in the title block area, not at building coordinates.
+    // We record them with position [0, 0] (the reader identifies them by kind + layer).
+    for sh in t.sheets.clone() {
+        if sh.discipline == "M" && sh.level.is_some() && sh.window_ft.is_none() {
+            callouts.push(CalloutEntry {
+                id: id(),
+                kind: "key_plan".into(),
+                on_sheet: sh.number.clone(),
+                detail: sh.number.clone(),
+                target_sheet: sh.number.clone(),
+                at_ft: [0.0, 0.0],
+                cut_from_ft: None,
+                cut_to_ft: None,
+                looking: None,
+                broken: false,
+            });
+        }
+    }
+
+    // --- Planted broken callouts ---
+    // A section mark on level 1 RCP pointing to a nonexistent sheet.
+    if let Some(rcp) = t.sheets.iter().find(|s| s.number == "A-121") {
+        let mid_x = x_max * 0.75;
+        let mid_y = y_max * 0.75;
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "section_mark".into(),
+            on_sheet: rcp.number.clone(),
+            detail: "99".into(),
+            target_sheet: "A-999".into(),
+            at_ft: [round(mid_x), round(mid_y)],
+            cut_from_ft: Some([mid_x, 0.0]),
+            cut_to_ft: Some([mid_x, y_max]),
+            looking: Some("east".into()),
+            broken: true,
+        });
+    }
+    // A detail bubble on P-401 pointing to nonexistent detail sheet.
+    if has_sheet("P-401") {
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "detail_bubble".into(),
+            on_sheet: "P-401".into(),
+            detail: "77".into(),
+            target_sheet: "P-777".into(),
+            at_ft: [round(xs.first().copied().unwrap_or(0.0) + 1.0), round(ys.get(1).copied().unwrap_or(20.0) + 1.0)],
+            cut_from_ft: None,
+            cut_to_ft: None,
+            looking: None,
+            broken: true,
+        });
+    }
+
+    t.callouts = callouts;
+}
+
+/// Generate callout entries for the hotel fixture set.
+pub fn plan_hotel_callouts(t: &mut Truth, r: &mut Rng) {
+    // Reuse the same logic — the hotel has more sheets but the callout structure is the same.
+    plan_callouts(t, r);
 }

@@ -17,6 +17,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bore;
+pub mod callout_reader;
 pub mod ceilasm_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
@@ -127,6 +128,7 @@ fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
     let mut t = d.truth;
     layout::plan_sheets(&mut t, &st, &mut r.fork(3));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
+    layout::plan_callouts(&mut t, &mut r.fork(5));
     t.clashes = clash::clashes(&t, &d.planted);
     t.placement_zones = clash::placement_zones(&t);
     add_walls(&mut t, &mut st);
@@ -179,6 +181,7 @@ pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, S
     let mut t = d.truth;
     layout::plan_hotel_sheets(&mut t, &st, &mut r.fork(11));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(12));
+    layout::plan_hotel_callouts(&mut t, &mut r.fork(13));
     t.clashes = clash::clashes(&t, &d.planted);
     let kinds: Vec<(String, layout::Kind)> = layout::hotel_sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();

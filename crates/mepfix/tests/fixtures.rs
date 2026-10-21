@@ -168,7 +168,13 @@ fn the_sheets_say_what_the_truth_says() {
         assert!(set.file(&sh.pdf).is_some_and(|b| b.starts_with(b"%PDF")), "{}", sh.pdf);
         assert!(set.file(&sh.dxf).is_some_and(|b| !b.is_empty()), "{}", sh.dxf);
         assert!(
-            !sh.legend.is_empty() || !sh.number.ends_with("01") || sh.number == "G-001" || sh.number.contains("60"),
+            !sh.legend.is_empty()
+                || !sh.number.ends_with("01")
+                || sh.number == "G-001"
+                || sh.number.contains("60")
+                || sh.number.starts_with("A-2")
+                || sh.number.starts_with("A-3")
+                || sh.number.starts_with("A-5"),
             "{} has no legend",
             sh.number
         );
