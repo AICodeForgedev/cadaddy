@@ -22,6 +22,8 @@ pub enum Panel {
     PlansToModel,
     /// The Sheet Set Manager (SHEETSET).
     SheetSets,
+    /// The BIM coordination palette (COORDINATION).
+    Coordination,
 }
 
 impl Panel {
@@ -37,6 +39,7 @@ impl Panel {
             Self::Symbols => "symbols",
             Self::PlansToModel => "plansToModel",
             Self::SheetSets => "sheetSets",
+            Self::Coordination => "coordination",
         }
     }
     fn label(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Panel {
             Self::Symbols => "Symbols",
             Self::PlansToModel => "Plans to Model",
             Self::SheetSets => "Sheet Set Manager",
+            Self::Coordination => "Coordination",
         }
     }
     fn default_side(self) -> Zone {
@@ -63,10 +67,11 @@ impl Panel {
             Self::Symbols => Zone::Right,
             Self::PlansToModel => Zone::Right,
             Self::SheetSets => Zone::Right,
+            Self::Coordination => Zone::Right,
         }
     }
     /// Palettes outside the default arrangement, opened on request (QUICKCALC).
-    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets];
+    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets, Self::Coordination];
     pub fn parse(id: &str) -> Result<Self, String> {
         Self::ALL.iter().chain(Self::ON_DEMAND).copied().find(|panel| panel.id() == id).ok_or_else(|| format!("Unknown panel: {id}"))
     }
@@ -563,6 +568,12 @@ fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| crate::palettes::symbols::symbols_section(app, ui));
         }
+        Panel::Coordination => {
+            egui::ScrollArea::vertical()
+                .id_salt("dock-coordination")
+                .auto_shrink([false, false])
+                .show(ui, |ui| crate::bimpalette::show(app, ui));
+        }
     }
 }
 
@@ -752,6 +763,7 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Properties => (egui::vec2(220.0, 220.0), 720.0),
         Panel::Layers => (egui::vec2(220.0, 120.0), 720.0),
         Panel::ExternalRefs | Panel::Symbols => (egui::vec2(220.0, 80.0), 720.0),
+        Panel::Coordination => (egui::vec2(280.0, 240.0), 900.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

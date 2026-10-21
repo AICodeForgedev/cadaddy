@@ -18,6 +18,7 @@ pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod colorbook;
 pub mod constraints;
+pub mod coordination;
 mod dash_styles;
 mod draw;
 mod draw2;
@@ -351,6 +352,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(vpsync::specs());
         v.extend(attipedit::specs());
         v.extend(frames::specs());
+        v.extend(coordination::specs());
         v
     })
 }
