@@ -1242,7 +1242,7 @@ fn building_spec_roundtrips_in_dxf_and_dwg() {
 
 #[test]
 fn bim_types_roundtrip_in_dxf() {
-    use cadaddy_doc::bimspec::{BimType, BimTypes, Confidence, SpecField};
+    use cadaddy_doc::bimspec::{BimType, Confidence, SpecField};
     let mut d = Drawing::new_imperial();
     let mut ty = BimType::new("H");
     ty.category = "luminaire".into();
@@ -1277,7 +1277,7 @@ fn bim_types_roundtrip_in_dxf() {
 
 #[test]
 fn bim_spec_xdata_survives_dxf_roundtrip() {
-    use cadaddy_doc::{Circle, Common, Entity, EntityKind, Space, bimspec};
+    use cadaddy_doc::{Circle, Common, EntityKind, Space, bimspec};
     use cadaddy_geom::Vec3;
     let mut d = Drawing::new_imperial();
     let mut ty = cadaddy_doc::bimspec::BimType::new("A");
