@@ -74,6 +74,13 @@ pub struct Truth {
     /// Planted gaps and conflicts for the RFI helper (Q296).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
+    // --- Unit types (Q305) ---
+    /// Typical unit types: room templates that repeat across floors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unit_types: Vec<UnitType>,
+    /// Placed instances of unit types on each floor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unit_instances: Vec<UnitInstance>,
     pub sheets: Vec<Sheet>,
     /// In-wall rough-in stubs behind plumbing fixtures (supply, waste, vent).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1191,6 +1198,73 @@ pub struct Gap {
     pub level: String,
     /// Where on the plan, building feet.
     pub at_ft: [f64; 2],
+}
+
+// --- Unit types (Q305) ---
+
+/// A typical unit type: a room template (geometry, devices, finishes) that repeats across floors.
+/// Hotels are mostly repeats: a King room, a Double Queen, an ADA King, a Suite. Each type
+/// defines the canonical layout; instances on the floor plans mirror and/or override it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnitType {
+    pub id: String,
+    /// Human-readable name: `"KING ROOM"`, `"SUITE"`.
+    pub name: String,
+    /// Width along the corridor (x), feet.
+    pub width_ft: f64,
+    /// Depth into the building (y), feet.
+    pub depth_ft: f64,
+    /// Ceiling height, feet.
+    pub ceiling_height_ft: f64,
+    /// Ceiling kind: `ACT` or `GYP`.
+    pub ceiling_kind: String,
+    /// Wall assembly tag for the room's perimeter: `WT-3`.
+    pub wall_assembly: String,
+    /// Whether the type is ADA-accessible.
+    #[serde(default)]
+    pub ada: bool,
+    /// Expected electrical devices per room, by kind and count. Kind matches `ElecDevice::kind`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub devices: BTreeMap<String, u32>,
+    /// Expected terminals per room, by kind and count. Kind matches `Terminal::kind`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub terminals: BTreeMap<String, u32>,
+    /// Expected plumbing fixtures per room, by kind and count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fixtures: BTreeMap<String, u32>,
+    /// Expected casework per room, by kind and count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub casework: BTreeMap<String, u32>,
+    /// The PTAC/VTAC sleeve side in the canonical (un-mirrored) orientation: `left` or `right`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hvac_sleeve_side: String,
+    /// The wet wall side in the canonical orientation: `left` or `right`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wet_wall_side: String,
+}
+
+/// A placed instance of a unit type on a floor.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnitInstance {
+    pub id: String,
+    /// References `UnitType::id`.
+    pub unit_type: String,
+    /// The room id this instance occupies.
+    pub room: String,
+    /// Level code.
+    pub level: String,
+    /// Room number as printed on the plans.
+    pub number: String,
+    /// Handing: `normal` (same as the type's canonical layout) or `mirrored` (flipped across
+    /// the room's long axis — north-side rooms in a double-loaded corridor).
+    pub hand: String,
+    /// Position of the room's south-west corner (or the canonical corner), building feet.
+    pub at_ft: [f64; 2],
+    /// Override fields: keys are field names (`ceiling_height_ft`, `ada`, `wall_assembly`…),
+    /// values are the overridden value as a string. An empty map means the instance matches the
+    /// type exactly.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, String>,
 }
 
 /// A conduit run drawn on the electrical plan (where shown).

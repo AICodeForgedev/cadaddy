@@ -1052,6 +1052,20 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         },
     ];
 
+    // --- Unit types (Q305) ---
+    t.unit_types = unit_type_defs(room_depth_ft);
+    t.unit_instances = unit_instances(
+        &t,
+        &room_types,
+        west_stair_max_x,
+        east_stair_min_x,
+        elev_bay_start,
+        elev_bay_end,
+        room_depth_ft,
+        corridor_width_ft,
+        building_depth_ft,
+    );
+
     // --- Gaps for Q296 ---
     t.gaps = plant_gaps(&t, r);
 
@@ -3214,6 +3228,174 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     gaps
 }
 
+// --- Unit types (Q305) ---
+
+/// Build the unit type definitions from the room types. Each `RoomType` variant becomes a
+/// `UnitType` with the canonical device/fixture/casework counts that `hotel_design` places.
+fn unit_type_defs(room_depth_ft: f64) -> Vec<UnitType> {
+    use std::collections::BTreeMap;
+    let mut types = Vec::new();
+
+    for rt in [RoomType::King, RoomType::DoubleQueen, RoomType::AdaKing, RoomType::Suite] {
+        let w = rt.width_ft();
+        let ceil_h = if rt.is_ada() { 9.0 } else { 8.5 };
+        let ceil_kind = if rt.is_suite() { "GYP" } else { "ACT" };
+        let n_lights = ((w / 10.0).ceil() as u32).max(1);
+        let n_recep = ((w / 12.0).ceil() as u32).max(1);
+
+        let mut devices = BTreeMap::new();
+        devices.insert("light_fixture".into(), n_lights);
+        devices.insert("switch".into(), 1);
+        devices.insert("receptacle".into(), n_recep);
+
+        let mut terminals = BTreeMap::new();
+        terminals.insert("supply_diffuser".into(), 1);
+        terminals.insert("return_grille".into(), 1);
+
+        let mut fixtures = BTreeMap::new();
+        fixtures.insert("water_closet".into(), 1);
+        fixtures.insert("lavatory".into(), 1);
+        fixtures.insert("bathtub".into(), 1);
+
+        let mut casework = BTreeMap::new();
+        casework.insert("vanity".into(), 1);
+        casework.insert("wardrobe".into(), 1);
+
+        let id = match rt {
+            RoomType::King => "ut-king",
+            RoomType::DoubleQueen => "ut-dblqueen",
+            RoomType::AdaKing => "ut-adaking",
+            RoomType::Suite => "ut-suite",
+        };
+
+        types.push(UnitType {
+            id: id.into(),
+            name: rt.name().into(),
+            width_ft: w,
+            depth_ft: room_depth_ft,
+            ceiling_height_ft: ceil_h,
+            ceiling_kind: ceil_kind.into(),
+            wall_assembly: "wa-1".into(),
+            ada: rt.is_ada(),
+            devices,
+            terminals,
+            fixtures,
+            casework,
+            hvac_sleeve_side: "left".into(),
+            wet_wall_side: "left".into(),
+        });
+    }
+    types
+}
+
+/// Create unit instances for every guest room on floors 2–4. South-side rooms keep the
+/// canonical hand; north-side rooms are mirrored (the wet wall and PTAC sleeve swap sides).
+fn unit_instances(
+    _t: &Truth,
+    room_types: &[RoomType],
+    west_stair_max_x: f64,
+    east_stair_min_x: f64,
+    elev_bay_start: f64,
+    elev_bay_end: f64,
+    room_depth_ft: f64,
+    corridor_width_ft: f64,
+    building_depth_ft: f64,
+) -> Vec<UnitInstance> {
+    let mut instances = Vec::new();
+    let mut inst_id = 0;
+
+    for lv in ["2", "3", "4"] {
+        let floor_num: usize = lv.parse().unwrap_or(2);
+
+        // South side
+        let mut x = west_stair_max_x;
+        let mut room_num = 1;
+        for rt in room_types {
+            if x >= east_stair_min_x - 1.0 {
+                break;
+            }
+            if (x - elev_bay_start).abs() < 1.0 {
+                x = elev_bay_end;
+            }
+            let w = rt.width_ft();
+            if x + w > east_stair_min_x + 0.1 {
+                break;
+            }
+            let num = format!("{}{:02}", floor_num, room_num);
+            let ut_id = match rt {
+                RoomType::King => "ut-king",
+                RoomType::DoubleQueen => "ut-dblqueen",
+                RoomType::AdaKing => "ut-adaking",
+                RoomType::Suite => "ut-suite",
+            };
+            let room_id = format!("rm-{lv}-S{room_num}");
+            instances.push(UnitInstance {
+                id: format!("ui-{inst_id}"),
+                unit_type: ut_id.into(),
+                room: room_id,
+                level: lv.into(),
+                number: num,
+                hand: "normal".into(),
+                at_ft: [x, 0.0],
+                overrides: BTreeMap::new(),
+            });
+            inst_id += 1;
+            x += w;
+            room_num += 1;
+        }
+
+        // North side (mirrored)
+        x = west_stair_max_x;
+        let rooms_per_side = room_types.len();
+        for rt in room_types {
+            if x >= east_stair_min_x - 1.0 {
+                break;
+            }
+            if (x - elev_bay_start).abs() < 1.0 {
+                x = elev_bay_end;
+            }
+            let w = rt.width_ft();
+            if x + w > east_stair_min_x + 0.1 {
+                break;
+            }
+            let num = format!("{}{:02}", floor_num, room_num);
+            let ut_id = match rt {
+                RoomType::King => "ut-king",
+                RoomType::DoubleQueen => "ut-dblqueen",
+                RoomType::AdaKing => "ut-adaking",
+                RoomType::Suite => "ut-suite",
+            };
+            let north_idx = room_num - rooms_per_side;
+            let room_id = format!("rm-{lv}-N{north_idx}");
+            instances.push(UnitInstance {
+                id: format!("ui-{inst_id}"),
+                unit_type: ut_id.into(),
+                room: room_id,
+                level: lv.into(),
+                number: num,
+                hand: "mirrored".into(),
+                at_ft: [x, room_depth_ft + corridor_width_ft],
+                overrides: BTreeMap::new(),
+            });
+            inst_id += 1;
+            x += w;
+            room_num += 1;
+        }
+    }
+
+    // The first room (ADA) on each floor may have overrides noted
+    for inst in &mut instances {
+        if inst.unit_type == "ut-adaking" {
+            // ADA rooms have a taller ceiling (already in the type), but mark them explicitly
+            // so downstream readers can see the ADA flag.
+            // (No override needed — the ut-adaking type already captures the difference.)
+        }
+    }
+
+    let _ = building_depth_ft; // used indirectly through room ids
+    instances
+}
+
 // --- Project names ---
 
 fn project_name(r: &mut Rng) -> String {
@@ -3228,4 +3410,200 @@ fn project_name(r: &mut Rng) -> String {
         "WINFIELD HOTEL",
     ];
     r.pick(&names).to_string()
+}
+
+// ==========================================================================
+// Tests — Q305: unit types match the synthetic hotel's truth
+// ==========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hotel_truth_for;
+
+    /// Four unit types are generated.
+    #[test]
+    fn hotel_unit_types_exist() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        assert_eq!(t.unit_types.len(), 4, "expected 4 unit types");
+        let ids: Vec<&str> = t.unit_types.iter().map(|u| u.id.as_str()).collect();
+        assert!(ids.contains(&"ut-king"));
+        assert!(ids.contains(&"ut-dblqueen"));
+        assert!(ids.contains(&"ut-adaking"));
+        assert!(ids.contains(&"ut-suite"));
+    }
+
+    /// Every instance references a valid type and room.
+    #[test]
+    fn instances_reference_valid_types_and_rooms() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        let type_ids: Vec<&str> = t.unit_types.iter().map(|u| u.id.as_str()).collect();
+        let room_ids: Vec<&str> = t.building.rooms.iter().map(|r| r.id.as_str()).collect();
+        for inst in &t.unit_instances {
+            assert!(type_ids.contains(&inst.unit_type.as_str()),
+                "instance {} → unknown type {}", inst.id, inst.unit_type);
+            assert!(room_ids.contains(&inst.room.as_str()),
+                "instance {} → unknown room {}", inst.id, inst.room);
+        }
+    }
+
+    /// South-side rooms are `normal`, north-side rooms are `mirrored`.
+    #[test]
+    fn handing_correct() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        for inst in &t.unit_instances {
+            if inst.room.contains("-S") {
+                assert_eq!(inst.hand, "normal", "south room {} should be normal", inst.room);
+            } else if inst.room.contains("-N") {
+                assert_eq!(inst.hand, "mirrored", "north room {} should be mirrored", inst.room);
+            }
+        }
+    }
+
+    /// Each guest room on floors 2–4 has exactly one unit instance.
+    #[test]
+    fn every_guest_room_has_instance() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        let guest_rooms: Vec<&str> = t.building.rooms.iter()
+            .filter(|r| ["2", "3", "4"].contains(&r.level.as_str()))
+            .filter(|r| r.name != "CORRIDOR")
+            .filter(|r| !r.id.contains("MECH") && !r.id.contains("ELEC") && !r.id.contains("IDF")
+                && !r.id.contains("STAIR") && !r.id.contains("ELEV"))
+            .map(|r| r.id.as_str())
+            .collect();
+
+        let instance_rooms: Vec<&str> = t.unit_instances.iter().map(|i| i.room.as_str()).collect();
+        for rm in &guest_rooms {
+            assert!(instance_rooms.contains(rm), "guest room {rm} has no unit instance");
+        }
+    }
+
+    /// The type's device counts match what hotel_design actually placed in each room.
+    #[test]
+    fn device_counts_match_truth() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        for inst in &t.unit_instances {
+            let ut = match t.unit_types.iter().find(|u| u.id == inst.unit_type) {
+                Some(u) => u,
+                None => continue,
+            };
+
+            let dev_count = |kind: &str| t.elec_devices.iter().filter(|d| d.room == inst.room && d.kind == kind).count() as u32;
+            let term_count = |kind: &str| t.terminals.iter().filter(|d| d.room == inst.room && d.kind == kind).count() as u32;
+            let fix_count = |kind: &str| t.fixtures.iter().filter(|f| f.room == inst.room && f.kind == kind).count() as u32;
+            let cw_count = |kind: &str| t.casework.iter().filter(|c| c.room == inst.room && c.kind == kind).count() as u32;
+
+            for (kind, expected) in &ut.devices {
+                assert_eq!(dev_count(kind), *expected,
+                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, dev_count(kind));
+            }
+            for (kind, expected) in &ut.terminals {
+                assert_eq!(term_count(kind), *expected,
+                    "room {} type {}: expected {} terminal {}, found {}", inst.room, inst.unit_type, expected, kind, term_count(kind));
+            }
+            for (kind, expected) in &ut.fixtures {
+                assert_eq!(fix_count(kind), *expected,
+                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, fix_count(kind));
+            }
+            for (kind, expected) in &ut.casework {
+                assert_eq!(cw_count(kind), *expected,
+                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, cw_count(kind));
+            }
+        }
+    }
+
+    /// Types have the correct dimensions per variant.
+    #[test]
+    fn type_dimensions_correct() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+
+        let king = t.unit_types.iter().find(|u| u.id == "ut-king").expect("king");
+        assert!((king.width_ft - 13.0).abs() < 0.01);
+        assert!((king.ceiling_height_ft - 8.5).abs() < 0.01);
+        assert_eq!(king.ceiling_kind, "ACT");
+        assert!(!king.ada);
+
+        let dq = t.unit_types.iter().find(|u| u.id == "ut-dblqueen").expect("dblqueen");
+        assert!((dq.width_ft - 14.0).abs() < 0.01);
+
+        let ada = t.unit_types.iter().find(|u| u.id == "ut-adaking").expect("adaking");
+        assert!((ada.width_ft - 15.0).abs() < 0.01);
+        assert!((ada.ceiling_height_ft - 9.0).abs() < 0.01);
+        assert!(ada.ada);
+
+        let suite = t.unit_types.iter().find(|u| u.id == "ut-suite").expect("suite");
+        assert!((suite.width_ft - 26.0).abs() < 0.01);
+        assert_eq!(suite.ceiling_kind, "GYP");
+    }
+
+    /// Instance position matches the room's corner.
+    #[test]
+    fn instance_position_matches_room() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        for inst in &t.unit_instances {
+            let rm = match t.building.rooms.iter().find(|r| r.id == inst.room) {
+                Some(r) => r,
+                None => continue,
+            };
+            assert!((inst.at_ft[0] - rm.min_ft[0]).abs() < 0.01,
+                "instance {} x={} vs room min_x={}", inst.id, inst.at_ft[0], rm.min_ft[0]);
+        }
+    }
+
+    /// Full-size hotel: many instances, all valid.
+    #[test]
+    fn full_hotel_unit_coverage() {
+        let t = hotel_truth_for(99, HotelSize::Full);
+        assert_eq!(t.unit_types.len(), 4);
+        assert!(t.unit_instances.len() > 20, "full hotel should have many instances, got {}", t.unit_instances.len());
+        let room_ids: Vec<&str> = t.building.rooms.iter().map(|r| r.id.as_str()).collect();
+        for inst in &t.unit_instances {
+            assert!(room_ids.contains(&inst.room.as_str()),
+                "instance {} room {} not found", inst.id, inst.room);
+        }
+    }
+
+    /// Deterministic: same seed → same types and instances.
+    #[test]
+    fn deterministic() {
+        let t1 = hotel_truth_for(42, HotelSize::Small);
+        let t2 = hotel_truth_for(42, HotelSize::Small);
+        assert_eq!(t1.unit_types.len(), t2.unit_types.len());
+        assert_eq!(t1.unit_instances.len(), t2.unit_instances.len());
+        for (a, b) in t1.unit_instances.iter().zip(t2.unit_instances.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.room, b.room);
+            assert_eq!(a.hand, b.hand);
+        }
+    }
+
+    /// Takeoff by type × count: totals are correct.
+    #[test]
+    fn takeoff_by_type() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        for ut in &t.unit_types {
+            let count = t.unit_instances.iter().filter(|i| i.unit_type == ut.id).count() as u32;
+            // Total lights = per-type × count
+            let expected_lights = ut.devices.get("light_fixture").copied().unwrap_or(0) * count;
+            let actual_lights: u32 = t.unit_instances.iter()
+                .filter(|i| i.unit_type == ut.id)
+                .map(|i| t.elec_devices.iter().filter(|d| d.room == i.room && d.kind == "light_fixture").count() as u32)
+                .sum();
+            assert_eq!(actual_lights, expected_lights,
+                "type {}: expected {} total lights, got {}", ut.id, expected_lights, actual_lights);
+        }
+    }
+
+    /// Unit schedule summary matches instance counts.
+    #[test]
+    fn schedule_summary() {
+        let t = hotel_truth_for(42, HotelSize::Small);
+        for ut in &t.unit_types {
+            let total = t.unit_instances.iter().filter(|i| i.unit_type == ut.id).count();
+            let normal = t.unit_instances.iter().filter(|i| i.unit_type == ut.id && i.hand == "normal").count();
+            let mirrored = t.unit_instances.iter().filter(|i| i.unit_type == ut.id && i.hand == "mirrored").count();
+            assert_eq!(total, normal + mirrored,
+                "type {}: total {} != normal {} + mirrored {}", ut.id, total, normal, mirrored);
+        }
+    }
 }
