@@ -981,7 +981,7 @@ fn mech(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         pen.text("TEXT", p, pen.st.text_in, &m.note, rot, HAlign::Right, VAlign::Bottom);
     }
     terminals(pen, t, level, &["SA", "RA", "EA", "OA"], true);
-    for e in t.equipment.iter().filter(|e| e.level == level && ["ahu", "vav"].contains(&e.kind.as_str())) {
+    for e in t.equipment.iter().filter(|e| e.level == level && ["ahu", "vav", "condensing_unit"].contains(&e.kind.as_str())) {
         pen.brect("EQUIP", [e.min_ft[0], e.min_ft[1]], [e.max_ft[0], e.max_ft[1]]);
         let th = st.text_in / pen.sh.scale;
         let rot = readable(pen.rot());
@@ -989,6 +989,13 @@ fn mech(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
             // In the unit's south part, clear of the ducts that rise out of its top.
             let c = pen.b([e.min_ft[0] + 0.3 * (e.max_ft[0] - e.min_ft[0]), e.min_ft[1] + th * 1.2]);
             pen.block("TEXT", c, st.text_in * 1.3, std::slice::from_ref(&e.tag), rot);
+        } else if e.kind == "condensing_unit" {
+            // On its pad: the unit with an X (the fan), the tag beside it.
+            let (a, b) = (pen.b([e.min_ft[0], e.min_ft[1]]), pen.b([e.max_ft[0], e.max_ft[1]]));
+            pen.line("EQUIP", a, b);
+            // Its tag under it (the louver's tag is east of it).
+            let at = pen.b([(e.min_ft[0] + e.max_ft[0]) / 2.0, e.min_ft[1] - th * 1.2]);
+            pen.text("TEXT", at, st.text_in, &e.tag, rot, HAlign::Center, VAlign::Middle);
         } else {
             // VAV tag out to the side on a leader.
             let at = [e.max_ft[0] + th * 6.0, (e.min_ft[1] + e.max_ft[1]) / 2.0];
@@ -1221,7 +1228,7 @@ fn pipes(pen: &mut Pen, t: &Truth, st: &Style, level: &str, fire: bool, source: 
             let at = pen.b([x, y - 1.6 - th]);
             pen.text("TEXT", at, st.text_in * 0.85, &f.tag, rot, HAlign::Center, VAlign::Middle);
         }
-        for e in t.equipment.iter().filter(|e| e.level == level && ["water_heater", "gas_meter"].contains(&e.kind.as_str())) {
+        for e in t.equipment.iter().filter(|e| e.level == level && ["water_heater", "gas_meter", "pump"].contains(&e.kind.as_str())) {
             let rot = readable(pen.rot());
             let c = [(e.min_ft[0] + e.max_ft[0]) / 2.0, (e.min_ft[1] + e.max_ft[1]) / 2.0];
             if e.kind == "water_heater" {
@@ -1230,6 +1237,15 @@ fn pipes(pen: &mut Pen, t: &Truth, st: &Style, level: &str, fire: bool, source: 
                 pen.circle("EQUIP", pc, r);
                 let at = pen.b([c[0] + 1.5 + th * 2.0, c[1] + 1.5]);
                 pen.text("TEXT", at, st.text_in, &e.tag, rot, HAlign::Left, VAlign::Middle);
+            } else if e.kind == "pump" {
+                // In line on its pipe; the tag south of it on a leader, past the pipes beside it
+                // (the pipe's own tags are north of it).
+                pen.brect("EQUIP", [e.min_ft[0], e.min_ft[1]], [e.max_ft[0], e.max_ft[1]]);
+                let at = [c[0], e.min_ft[1] - 3.2 - th];
+                let (p, q) = (pen.b([c[0], e.min_ft[1]]), pen.b([c[0], at[1] + th * 0.6]));
+                pen.line("TEXT", p, q);
+                let a = pen.b(at);
+                pen.text("TEXT", a, st.text_in, &e.tag, rot, HAlign::Center, VAlign::Middle);
             } else {
                 pen.brect("EQUIP", [e.min_ft[0], e.min_ft[1]], [e.max_ft[0], e.max_ft[1]]);
                 let at = pen.b([e.max_ft[0] + th, c[1] - th * 1.5]);
@@ -1569,9 +1585,14 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
     let mut y = y1 - 0.5;
     let mut x = x0 + 0.3;
     let groups: Vec<(&str, Vec<&str>)> = if disc == "M" {
-        vec![("AIR HANDLING UNIT SCHEDULE", vec!["ahu"]), ("VAV TERMINAL UNIT SCHEDULE", vec!["vav"]), ("EXHAUST FAN SCHEDULE", vec!["exhaust_fan"])]
+        vec![
+            ("AIR HANDLING UNIT SCHEDULE", vec!["ahu"]),
+            ("VAV TERMINAL UNIT SCHEDULE", vec!["vav"]),
+            ("EXHAUST FAN SCHEDULE", vec!["exhaust_fan"]),
+            ("CONDENSING UNIT SCHEDULE", vec!["condensing_unit"]),
+        ]
     } else {
-        vec![("WATER HEATER SCHEDULE", vec!["water_heater"]), ("GAS METER", vec!["gas_meter"])]
+        vec![("WATER HEATER SCHEDULE", vec!["water_heater"]), ("PUMP SCHEDULE", vec!["pump"]), ("GAS METER", vec!["gas_meter"])]
     };
     for (title, kinds) in groups {
         let eq: Vec<&Equipment> = t.equipment.iter().filter(|e| kinds.contains(&e.kind.as_str())).collect();

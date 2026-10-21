@@ -342,7 +342,7 @@ pub struct Terminal {
 pub struct Equipment {
     pub id: String,
     pub tag: String,
-    /// `ahu`, `vav`, `exhaust_fan`, `water_heater`, `gas_meter`.
+    /// `ahu`, `vav`, `exhaust_fan`, `condensing_unit`, `water_heater`, `pump`, `gas_meter`.
     pub kind: String,
     pub level: String,
     /// Box: minimum and maximum corners, building feet.
