@@ -275,13 +275,39 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
     let level = sh.level.clone().unwrap_or_default();
     match kind {
         Kind::Cover => cover(&mut pen, t, st),
+        Kind::WallTypes => {
+            let fr = frame(st);
+            crate::walls::draw_legend(&mut pen, t, &st.walls, fr.area);
+            legend.push(item("wall_tag", "WALL TYPE TAG"));
+            abbr.extend(
+                [
+                    "GYP. BD. = GYPSUM BOARD",
+                    "GWB = GYPSUM WALLBOARD",
+                    "MR = MOISTURE-RESISTANT",
+                    "AR = ABUSE-RESISTANT",
+                    "CMU = CONCRETE MASONRY UNIT",
+                    "GA. = GAUGE",
+                    "O.C. = ON CENTER",
+                    "U/S = UNDERSIDE",
+                    "STC = SOUND TRANSMISSION CLASS",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::Floor(l) => {
+            grid(&mut pen, t);
+            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
+            legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
+            legend.push(item("door", "DOOR"));
+        }
         Kind::Schedules(d) => schedules(&mut pen, t, d),
         Kind::Framing(l) => {
             grid(&mut pen, t);
             framing(&mut pen, t, l);
             legend.push(item("column", "STEEL COLUMN"));
             legend.push(item("beam", "STEEL BEAM / GIRDER, SIZE AT MIDSPAN"));
-            abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE"].map(abbrev));
+            legend.push(item("opening", "FLOOR OPENING / SHAFT"));
+            abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE", "EL = ELEVATION"].map(abbrev));
         }
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
@@ -290,6 +316,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
+            legend.push(item("soffit", "SOFFIT / BULKHEAD (DASHED)"));
             legend.extend(device_legend());
             abbr.extend(["ACT = ACOUSTIC CEILING TILE", "GYP = GYPSUM BOARD", "AFF = ABOVE FINISHED FLOOR", "CLG = CEILING"].map(abbrev));
         }
@@ -514,6 +541,16 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             let label = st.sys(&k.trim_start_matches("duct_").to_uppercase());
             pen.ptext("LEGEND", [x, y - 0.03], 0.05, &label, HAlign::Center);
         }
+        "wall_tag" => {
+            let (c, r) = (pen.p([x, y]), pen.pl(0.09));
+            crate::walls::tag_symbol(pen, "LEGEND", c, r, st.walls.symbol);
+            pen.ptext("LEGEND", [x, y - 0.03], 0.06, "X", HAlign::Center);
+        }
+        "door" => {
+            pen.pline("A-DOOR", [x - 0.15, y - 0.1], [x - 0.15, y + 0.15]);
+            let (c, r) = (pen.p([x - 0.15, y - 0.1]), pen.pl(0.25));
+            pen.arc("A-DOOR", c, r, 0.0, FRAC_PI_2);
+        }
         "duct_riser" => {
             pen.prect("DUCT", [x - s, y - s], [x + s, y + s]);
             pen.pline("DUCT", [x - s, y - s], [x + s, y + s]);
@@ -556,6 +593,7 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             pen.fill("STRUCT", [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]);
         }
         "beam" => pen.pline("HEAVY", [x - 0.3, y], [x + 0.3, y]),
+        "opening" => pen.prect("DASHED", [x - 0.15, y - 0.1], [x + 0.15, y + 0.1]),
         "act" => {
             pen.prect("LIGHT", [x - 0.3, y - 0.1], [x + 0.3, y + 0.1]);
             for k in [-0.15, 0.0, 0.15] {
@@ -1197,6 +1235,13 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         }
     }
     terminals(pen, t, level, &["SA", "RA", "EA", "FP"], false);
+    // Soffits: dashed rectangle with a tag.
+    for sf in t.soffits.iter().filter(|s| s.level == level) {
+        pen.brect("DASHED", sf.min_ft, sf.max_ft);
+        let c = [(sf.min_ft[0] + sf.max_ft[0]) / 2.0, (sf.min_ft[1] + sf.max_ft[1]) / 2.0];
+        let p = pen.b(c);
+        pen.text("TEXT", p, st.text_in * 0.9, &sf.tag, rot, HAlign::Center, VAlign::Middle);
+    }
 }
 
 // ---- Structure ----------------------------------------------------------------------------------
@@ -1225,6 +1270,15 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
         ];
         pen.fill("STRUCT", pts);
     }
+    // Openings / shafts on this level: dashed rectangle with a label.
+    for op in t.building.openings.iter().filter(|o| o.level == level) {
+        pen.brect("DASHED", op.min_ft, op.max_ft);
+        if let Some(lbl) = &op.label {
+            let mid = [(op.min_ft[0] + op.max_ft[0]) / 2.0, (op.min_ft[1] + op.max_ft[1]) / 2.0];
+            let p = pen.b(mid);
+            pen.text("TEXT", p, st.text_in, lbl, rot, HAlign::Center, VAlign::Middle);
+        }
+    }
     // General notes under the plan's corner.
     let tos = t.building.beams.iter().find(|b| b.level == level).map_or(0.0, |b| b.tos_ft);
     let col = t.building.columns.first().map(|c| c.size.clone()).unwrap_or_default();
@@ -1232,11 +1286,10 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
     if level == "R" {
         notes.push("3. 1-1/2\" METAL ROOF DECK.".into());
     } else {
-        notes.push(format!(
-            "3. {}\" CONC SLAB ON 1-1/2\" COMPOSITE DECK; TOP OF SLAB = EL {}.",
-            fmt_in(t.building.slab_in),
-            feet_inches(t.level(level).map_or(0.0, |l| l.elevation_ft))
-        ));
+        let slab = t.building.slabs.iter().find(|s| s.level == level);
+        let conc = slab.map_or(t.building.slab_in, |s| s.concrete_in);
+        let elev = t.level(level).map_or(0.0, |l| l.elevation_ft);
+        notes.push(format!("3. {}\" CONC SLAB ON 1-1/2\" COMPOSITE DECK; TOP OF SLAB = EL {}.", fmt_in(conc), feet_inches(elev)));
     }
     let fr = frame(st);
     let x = fr.area[1][0] - 5.2;

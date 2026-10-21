@@ -31,6 +31,13 @@ pub struct Truth {
     pub fixtures: Vec<Fixture>,
     pub risers: Vec<Riser>,
     pub sheets: Vec<Sheet>,
+    pub soffits: Vec<Soffit>,
+    /// The wall type legend (partition types sheet), every type in it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_types: Vec<WallType>,
+    /// The walls on the architectural floor plans, with their type and height.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<Wall>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure), computed from the geometry; `planted` ones were put there on purpose.
     pub clashes: Vec<Clash>,
@@ -46,6 +53,12 @@ pub struct Building {
     pub beams: Vec<Beam>,
     /// Concrete slab on deck, inches (top of slab = the level's elevation).
     pub slab_in: f64,
+    /// Per-level slab descriptions (composite deck, roof deck, slab-on-grade).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slabs: Vec<Slab>,
+    /// Openings and shafts through the floor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<Opening>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -81,6 +94,10 @@ pub struct Room {
     pub max_ft: [f64; 2],
     /// `None`: open to structure.
     pub ceiling: Option<Ceiling>,
+    /// Depth of the plenum (space between the ceiling and the structure above), feet.
+    /// Only meaningful when `ceiling` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plenum_ft: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -91,6 +108,105 @@ pub struct Ceiling {
     pub kind: String,
     /// The tag as the reflected ceiling plan prints it.
     pub tag: String,
+    /// ACT grid tile size: `[across, along]` in feet (e.g. `[2.0, 4.0]` for 2×4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_ft: Option<[f64; 2]>,
+}
+
+/// A soffit or bulkhead: a dropped section of ceiling (lower than the room's main ceiling),
+/// typically concealing ductwork or structure.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Soffit {
+    pub id: String,
+    pub level: String,
+    pub room: String,
+    /// Bottom of the soffit above the floor, feet.
+    pub height_ft: f64,
+    /// Width (across the run) and length (along it), feet.
+    pub width_ft: f64,
+    pub length_ft: f64,
+    /// Min/max corners in building feet.
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// The tag on the RCP.
+    pub tag: String,
+}
+
+/// A wall type as the wall type legend (partition schedule) gives it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallType {
+    /// The tag printed on the plans (`B`, `1B`, `P3`, `W-4`).
+    pub tag: String,
+    /// The legend's title (`1 HOUR RATED CORRIDOR PARTITION`).
+    pub name: String,
+    /// From side 1's face to side 2's; cavity insulation right after its studs.
+    pub layers: Vec<WallLayer>,
+    /// Overall, inches (cavity insulation takes none).
+    pub thickness_in: f64,
+    /// `ceiling`, `above_ceiling` (6" past it), `deck` (underside of the structure) or `full`.
+    pub height: String,
+    /// `1 HR`, `2 HR`; none = not rated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stc: Option<u32>,
+    #[serde(default)]
+    pub external: bool,
+}
+
+/// One layer of a wall type.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallLayer {
+    /// `gyp`, `gyp_x` (Type X), `gyp_mr` (moisture-resistant), `gyp_ar` (abuse-resistant),
+    /// `shaftliner`, `sheathing`, `stud`, `insulation`, `resilient_channel`, `furring`, `cmu`.
+    pub material: String,
+    pub thickness_in: f64,
+    /// `1`, `core` or `2`.
+    pub side: String,
+    /// Studs: gauge and spacing, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gauge: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_in: Option<f64>,
+    /// Insulation in the stud cavity.
+    #[serde(default)]
+    pub in_cavity: bool,
+}
+
+/// A wall on an architectural floor plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Wall {
+    pub id: String,
+    pub level: String,
+    /// Centreline ends as drawn, building feet.
+    pub a_ft: [f64; 2],
+    pub b_ft: [f64; 2],
+    /// Its type's tag.
+    pub wall_type: String,
+    /// Whether the plan tags it (an untagged wall's type has to be guessed).
+    pub tagged: bool,
+    /// Above its floor, from its type's height rule and the ceilings and structure there.
+    pub height_ft: f64,
+    /// The rooms either side (numbers); an exterior wall has rooms on one side.
+    pub rooms: Vec<String>,
+    /// Door openings: from and to, feet along the wall from `a_ft`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<[f64; 2]>,
+    /// Where its tags are (none when untagged).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<WallTag>,
+}
+
+/// A wall type tag on a plan: `s_ft` along the wall from `a_ft` where it is (or where its leader
+/// lands), on the wall or beside it (`side` +1 left of a→b, -1 right) `gap_ft` clear, shifted
+/// `shift_ft` along.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WallTag {
+    pub s_ft: f64,
+    pub on_wall: bool,
+    pub side: f64,
+    pub shift_ft: f64,
+    pub gap_ft: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -120,6 +236,36 @@ pub struct Beam {
     pub to_ft: [f64; 2],
     /// Top of steel, elevation.
     pub tos_ft: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Slab {
+    pub id: String,
+    /// The level whose floor it forms.
+    pub level: String,
+    /// `composite` (concrete on metal deck) or `roof` (metal roof deck only).
+    pub kind: String,
+    /// Concrete thickness, inches (0 for bare roof deck).
+    pub concrete_in: f64,
+    /// Metal deck depth, inches.
+    pub deck_in: f64,
+    /// Top of slab elevation, feet.
+    pub top_ft: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Opening {
+    pub id: String,
+    /// The level the opening is on.
+    pub level: String,
+    /// `shaft` (extends through multiple levels) or `opening` (single floor).
+    pub kind: String,
+    /// Minimum and maximum corners, building feet (plan).
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Size label as printed on the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -87,6 +87,15 @@ pub(crate) fn tag(part: Part, level: &str, source: Handle) -> Vec<RawTag> {
     vec![t(1001, APP.into()), t(1000, part_name(part).into()), t(1000, level.chars().take(255).collect()), t(1000, source.hex())]
 }
 
+/// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
+fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
+    let mut x = tag(Part::Wall, level, source);
+    if let Some(n) = wall_type {
+        x.push(RawTag { code: 1000, value: format!("type:{}", n.chars().take(250).collect::<String>()) });
+    }
+    x
+}
+
 /// The rules: given, from a file, beside the drawing, from the last WALLGEN, else Walk mode's
 /// defaults.
 pub(crate) fn rules_for(s: &Session, p: &Value) -> Result<Rules> {
@@ -273,8 +282,9 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
     }
     for (si, pl) in &planned {
         let Some(level) = scene.levels.get(*si) else { continue };
-        for (part, m, source) in pl.meshes() {
-            let common = Common { layer: layer_of(part).into(), xdata: tag(part, &level.name, source), ..Common::default() };
+        for (part, m, source, wall_type) in pl.meshes() {
+            let xdata = if part == Part::Wall { wall_tag(&level.name, source, wall_type.as_deref()) } else { tag(part, &level.name, source) };
+            let common = Common { layer: layer_of(part).into(), xdata, ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
             }
@@ -405,6 +415,8 @@ struct PlanWall {
     cuts: Vec<Cut>,
     /// Boxes across the gaps after it (headers, sills): centreline ends, bottom, top.
     extra: Vec<(Vec2, Vec2, f64, f64)>,
+    /// Its wall type's name: from the spec's wall marks (the tags on the plans), else its layer's.
+    wall_type: Option<String>,
 }
 
 /// A door leaf (hinge to its open end) or a window pane, with what it came from.
@@ -474,9 +486,9 @@ impl PlanLevel {
         (lo.x.is_finite() && lo.y.is_finite() && hi.x > lo.x && hi.y > lo.y).then_some((lo, hi))
     }
 
-    /// The level's meshes: one per wall (its pieces, headers and sills), one per door leaf and
-    /// window pane.
-    fn meshes(&self) -> Vec<(Part, Mesh, Handle)> {
+    /// The level's meshes: one per wall (its pieces, headers and sills, with its wall type), one
+    /// per door leaf and window pane.
+    fn meshes(&self) -> Vec<(Part, Mesh, Handle, Option<String>)> {
         let mut out = Vec::new();
         for w in &self.walls {
             let len = w.a.dist(w.b);
@@ -510,7 +522,7 @@ impl PlanLevel {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
             }
             if !m.faces.is_empty() {
-                out.push((Part::Wall, m, w.source));
+                out.push((Part::Wall, m, w.source, w.wall_type.clone()));
             }
         }
         for l in &self.leaves {
@@ -518,10 +530,10 @@ impl PlanLevel {
             if l.window {
                 let (sill, head) = (l.sill.unwrap_or(self.sill), l.head.unwrap_or(self.head));
                 add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), self.z0 + sill, self.z0 + head);
-                out.push((Part::Glass, m, l.source));
+                out.push((Part::Glass, m, l.source, None));
             } else {
                 add_box(&mut m, l.a, l.b, LEAF_IN * self.k, self.z0, self.z0 + l.head.unwrap_or(self.door_head));
-                out.push((Part::Door, m, l.source));
+                out.push((Part::Door, m, l.source, None));
             }
         }
         out
@@ -553,6 +565,48 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let l2 = d.dot(d);
     let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
     p.dist(a + d * t)
+}
+
+/// Give each wall the spec's wall mark on its centreline (on this level, along it and within its
+/// thickness, overlapping most of the shorter): the mark's wall type, and its height when it has
+/// one (else its type's).
+fn mark_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, z0: f64, upf: f64, walls: &mut [PlanWall]) {
+    let marks: Vec<&cadaddy_walk3d::WallMark> = sp.walls.iter().filter(|m| m.level.eq_ignore_ascii_case(level)).take(MAX_OBJECTS).collect();
+    if marks.is_empty() {
+        return;
+    }
+    for w in walls.iter_mut() {
+        let len = w.a.dist(w.b);
+        if len <= 1e-9 {
+            continue;
+        }
+        let u = (w.b - w.a) * (1.0 / len);
+        let best = marks
+            .iter()
+            .filter_map(|m| {
+                let (a, b) = (Vec2::new(m.a[0], m.a[1]), Vec2::new(m.b[0], m.b[1]));
+                let ml = a.dist(b);
+                if ml.is_nan() || ml <= 1e-9 || u.cross((b - a) * (1.0 / ml)).abs() > 0.05 {
+                    return None;
+                }
+                // Across: the mark's centreline within the wall's thickness (or 6").
+                let off = u.perp().dot((a + b) * 0.5 - w.a).abs();
+                if off > (w.thickness / 2.0).max(6.0 * upf / 12.0) {
+                    return None;
+                }
+                let (s0, s1) = (u.dot(a - w.a), u.dot(b - w.a));
+                let overlap = s0.max(s1).min(len) - s0.min(s1).max(0.0);
+                (overlap >= 0.5 * len.min(ml)).then_some((*m, overlap))
+            })
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(m, _)| m);
+        let Some(m) = best else { continue };
+        let Some(t) = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(&m.wall_type)) else { continue };
+        w.wall_type = Some(t.name.clone());
+        if let Some(h) = m.height_ft.or(t.height_ft).filter(|h| h.is_finite() && *h > 0.0) {
+            w.top = z0 + h * upf;
+        }
+    }
 }
 
 /// The spec's wall type of a wall layer.
@@ -761,7 +815,16 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let level_top = pl.top;
     let top_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).map_or(level_top, |h| z0 + h * upf);
     for p in &found {
-        let w = PlanWall { a: p.c0, b: p.c1, thickness: p.thickness, top: top_of(&p.layer), source, cuts: Vec::new(), extra: Vec::new() };
+        let w = PlanWall {
+            a: p.c0,
+            b: p.c1,
+            thickness: p.thickness,
+            top: top_of(&p.layer),
+            source,
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
+        };
         if !pl.walls.iter().any(|x| same_wall(x, &w)) {
             pl.walls.push(w);
         }
@@ -792,9 +855,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     source: e.handle,
                     cuts: Vec::new(),
                     extra: Vec::new(),
+                    wall_type: wall_type(g, &sg.layer).map(|t| t.name.clone()),
                 });
             }
         }
+    }
+    // Walls the plans tag: their type, and the height its rule gives there.
+    if let Some(sp) = &g.spec {
+        mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
     }
     // Ends that meet another wall run on into it by its thickness (closing corners and tees).
     let snapshot = pl.walls.clone();
