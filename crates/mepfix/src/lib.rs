@@ -20,6 +20,7 @@ pub mod duct_reader;
 pub mod elec_reader;
 
 pub mod hotel;
+pub mod heights;
 pub mod layout;
 pub mod rng;
 pub mod score;
