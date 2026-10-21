@@ -10,10 +10,7 @@ use std::process::Command;
 
 /// Today's UTC date as `YYYY-MM-DD`.
 fn today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
     format!("{y:04}-{m:02}-{d:02}")
 }
@@ -51,15 +48,10 @@ fn parse_entries(json: &serde_json::Value) -> Vec<CmdEntry> {
     for v in arr {
         let id = v["id"].as_str().unwrap_or("").to_string();
         let label = v["label"].as_str().unwrap_or("").to_string();
-        let menu: Vec<String> = v["menu"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
-            .unwrap_or_default();
+        let menu: Vec<String> = v["menu"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect()).unwrap_or_default();
         let shortcut = v["shortcut"].as_str().map(str::to_string);
-        let aliases: Vec<String> = v["aliases"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
-            .unwrap_or_default();
+        let aliases: Vec<String> =
+            v["aliases"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect()).unwrap_or_default();
         let params = v["params"].as_str().unwrap_or("").to_string();
         let interactive = v["interactive"].as_bool().unwrap_or(false);
         out.push(CmdEntry { id, label, menu, shortcut, aliases, params, interactive });
@@ -131,22 +123,10 @@ fn write_table(md: &mut String, cmds: &[&CmdEntry]) {
     md.push_str("| ID | Label | Menu Path | Aliases | Shortcut | Params |\n");
     md.push_str("|:---|:------|:----------|:--------|:---------|:-------|\n");
     for c in cmds {
-        let menu_path = if c.menu.len() > 1 {
-            c.menu[1..].join(" > ")
-        } else {
-            String::new()
-        };
-        let aliases = if c.aliases.is_empty() {
-            String::new()
-        } else {
-            c.aliases.iter().map(|a| format!("`{a}`")).collect::<Vec<_>>().join(", ")
-        };
+        let menu_path = if c.menu.len() > 1 { c.menu[1..].join(" > ") } else { String::new() };
+        let aliases = if c.aliases.is_empty() { String::new() } else { c.aliases.iter().map(|a| format!("`{a}`")).collect::<Vec<_>>().join(", ") };
         let shortcut = c.shortcut.as_deref().unwrap_or("");
-        let label = if c.interactive {
-            format!("{}*", c.label)
-        } else {
-            c.label.clone()
-        };
+        let label = if c.interactive { format!("{}*", c.label) } else { c.label.clone() };
         // Escape pipes in params
         let params = c.params.replace('|', "\\|");
         let params_display = if params.len() > 80 {
@@ -158,10 +138,7 @@ fn write_table(md: &mut String, cmds: &[&CmdEntry]) {
         } else {
             params
         };
-        md.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} | {} |\n",
-            c.id, label, menu_path, aliases, shortcut, params_display
-        ));
+        md.push_str(&format!("| `{}` | {} | {} | {} | {} | {} |\n", c.id, label, menu_path, aliases, shortcut, params_display));
     }
 }
 
@@ -180,14 +157,10 @@ pub fn run(root: &Path) -> Result<(), String> {
         .output()
         .map_err(|e| format!("cadaddy-cli: {e}"))?;
     if !output.status.success() {
-        return Err(format!(
-            "cadaddy-cli commands failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(format!("cadaddy-cli commands failed:\n{}", String::from_utf8_lossy(&output.stderr)));
     }
 
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("commands JSON: {e}"))?;
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| format!("commands JSON: {e}"))?;
     let entries = parse_entries(&json);
     if entries.is_empty() {
         return Err("no commands found in cadaddy-cli output".to_string());

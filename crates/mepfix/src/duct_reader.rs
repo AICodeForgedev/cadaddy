@@ -138,11 +138,7 @@ impl DuctNetwork {
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
                 let af = score::building_from_model(sh, [a.x, a.y]);
                 let bf = score::building_from_model(sh, [b.x, b.y]);
-                let size = if run.shape == "rect" {
-                    [run.width_in, run.depth_in]
-                } else {
-                    [run.width_in, 0.0]
-                };
+                let size = if run.shape == "rect" { [run.width_in, run.depth_in] } else { [run.width_in, 0.0] };
                 out.push(FoundRun {
                     level: sh.level.clone().unwrap_or_default(),
                     kind: "duct".into(),
@@ -241,18 +237,14 @@ fn rectangles(d: &Drawing, layer_filter: &str) -> Vec<(Vec2, Vec2, String)> {
             continue;
         }
         if let EntityKind::LwPolyline(p) = &e.kind
-            && p.closed && p.vertices.len() == 4
+            && p.closed
+            && p.vertices.len() == 4
         {
             let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
             if pts.iter().all(|p| p.is_finite()) {
-                let min = Vec2::new(
-                    pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
-                    pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
-                );
-                let max = Vec2::new(
-                    pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max),
-                    pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max),
-                );
+                let min = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
+                let max =
+                    Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
                 out.push((min, max, e.common.layer.clone()));
             }
         }
@@ -348,11 +340,7 @@ fn duct_pairs(segs: &[LineSeg]) -> Vec<DuctPair> {
                 let mid_n = (n.dot(s1.a) + n.dot(s2.a)) / 2.0;
                 let lo = a0.max(b0);
                 let hi = a1.min(b1);
-                out.push(DuctPair {
-                    c0: u * lo + n * mid_n,
-                    c1: u * hi + n * mid_n,
-                    half_w: half,
-                });
+                out.push(DuctPair { c0: u * lo + n * mid_n, c1: u * hi + n * mid_n, half_w: half });
                 if out.len() >= MAX_PAIRS {
                     return out;
                 }
@@ -386,9 +374,10 @@ fn chain_runs(pairs: &[DuctPair]) -> Vec<DuctRun> {
 
         // Extend forward from the tail.
         while let Some(&tail) = pts.last() {
-            let next = pairs.iter().enumerate().find(|(i, q)| {
-                !used[*i] && (q.c0.dist(tail) < tol || q.c1.dist(tail) < tol) && (q.half_w - p.half_w).abs() < p.half_w * 0.3 + 1.0
-            });
+            let next = pairs
+                .iter()
+                .enumerate()
+                .find(|(i, q)| !used[*i] && (q.c0.dist(tail) < tol || q.c1.dist(tail) < tol) && (q.half_w - p.half_w).abs() < p.half_w * 0.3 + 1.0);
             if let Some((i, q)) = next {
                 used[i] = true;
                 if q.c0.dist(tail) < tol {
@@ -405,9 +394,10 @@ fn chain_runs(pairs: &[DuctPair]) -> Vec<DuctRun> {
 
         // Extend backward from the head.
         while let Some(&head) = pts.first() {
-            let next = pairs.iter().enumerate().find(|(i, q)| {
-                !used[*i] && (q.c0.dist(head) < tol || q.c1.dist(head) < tol) && (q.half_w - p.half_w).abs() < p.half_w * 0.3 + 1.0
-            });
+            let next = pairs
+                .iter()
+                .enumerate()
+                .find(|(i, q)| !used[*i] && (q.c0.dist(head) < tol || q.c1.dist(head) < tol) && (q.half_w - p.half_w).abs() < p.half_w * 0.3 + 1.0);
             if let Some((i, q)) = next {
                 used[i] = true;
                 if q.c1.dist(head) < tol {
@@ -635,14 +625,9 @@ fn detect_terminals(d: &Drawing) -> Vec<DetectedTerminal> {
 
         let kind = if has_diag && internal.len() >= 2 {
             // Check for inner rectangle (supply diffuser has one).
-            let inner_rects = device_rects.iter().filter(|(mi, ma, _)| {
-                mi.x > min.x + 0.5 && ma.x < max.x - 0.5 && mi.y > min.y + 0.5 && ma.y < max.y - 0.5
-            });
-            if inner_rects.count() > 0 {
-                "supply_diffuser"
-            } else {
-                "exhaust_grille"
-            }
+            let inner_rects =
+                device_rects.iter().filter(|(mi, ma, _)| mi.x > min.x + 0.5 && ma.x < max.x - 0.5 && mi.y > min.y + 0.5 && ma.y < max.y - 0.5);
+            if inner_rects.count() > 0 { "supply_diffuser" } else { "exhaust_grille" }
         } else if has_horiz && internal.len() >= 2 {
             "return_grille"
         } else {
@@ -674,9 +659,7 @@ fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
         let center = (*min + *max) * 0.5;
         let tag = texts
             .iter()
-            .filter(|(_, at, layer, _)| {
-                (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP")) && at.dist(center) < reach
-            })
+            .filter(|(_, at, layer, _)| (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP")) && at.dist(center) < reach)
             .min_by(|(_, a, _, _), (_, b, _, _)| a.dist(center).total_cmp(&b.dist(center)));
 
         let (tag_text, kind) = match tag {
@@ -706,8 +689,7 @@ fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
 /// Read legend entries from the LEGEND layer.
 fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
     let texts = text_entities(d);
-    let legend_texts: Vec<&(String, Vec2, String, f64)> =
-        texts.iter().filter(|(_, _, layer, _)| layer.eq_ignore_ascii_case("LEGEND")).collect();
+    let legend_texts: Vec<&(String, Vec2, String, f64)> = texts.iter().filter(|(_, _, layer, _)| layer.eq_ignore_ascii_case("LEGEND")).collect();
 
     let mut legend = Vec::new();
     let mut abbr_map = BTreeMap::new();
@@ -735,8 +717,7 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
     }
 
     // Also look at TEXT layer for abbreviation blocks.
-    let text_layer: Vec<&(String, Vec2, String, f64)> =
-        texts.iter().filter(|(_, _, layer, _)| layer.eq_ignore_ascii_case("TEXT")).collect();
+    let text_layer: Vec<&(String, Vec2, String, f64)> = texts.iter().filter(|(_, _, layer, _)| layer.eq_ignore_ascii_case("TEXT")).collect();
 
     for (text, _, _, _) in &text_layer {
         if let Some((left, right)) = text.split_once('=') {
@@ -776,9 +757,7 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
         if size.is_none() && system.is_none() {
             // Check for height tag.
             let up = text.to_ascii_uppercase();
-            let is_height = ["BOT", "BOD", "CL ", "CL@", "TOP", "TOD", "EL", "AFF", "@"]
-                .iter()
-                .any(|k| up.contains(k));
+            let is_height = ["BOT", "BOD", "CL ", "CL@", "TOP", "TOD", "EL", "AFF", "@"].iter().any(|k| up.contains(k));
             if !is_height {
                 continue;
             }
@@ -787,13 +766,7 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
         // Check for leader line to a run.
         let has_leader = text_lines.iter().any(|l| l.a.dist(*at) < 5.0 || l.b.dist(*at) < 5.0);
 
-        detected_tags.push(DetectedTag {
-            text: text.clone(),
-            at: *at,
-            size_in: size,
-            system: system.clone(),
-            has_leader,
-        });
+        detected_tags.push(DetectedTag { text: text.clone(), at: *at, size_in: size, system: system.clone(), has_leader });
 
         // Find the nearest run.
         let leader_target = if has_leader {
@@ -874,11 +847,7 @@ fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTree
         }
         let up = text.trim().to_ascii_uppercase();
         // System label: short text (1–3 chars, or a known abbreviation) near a run.
-        let sys = if ["SA", "RA", "EA", "OA"].contains(&up.as_str()) {
-            Some(up.clone())
-        } else {
-            abbr_map.get(&up).cloned()
-        };
+        let sys = if ["SA", "RA", "EA", "OA"].contains(&up.as_str()) { Some(up.clone()) } else { abbr_map.get(&up).cloned() };
 
         if let Some(code) = sys {
             // Find the nearest run.
@@ -915,10 +884,8 @@ fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTree
 /// Standard round duct diameters: 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 22, 24.
 fn snap_width(w: f64) -> f64 {
     // Standard widths.
-    let standards: &[f64] = &[
-        4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0,
-        34.0, 36.0, 40.0, 44.0, 48.0, 52.0, 56.0, 60.0,
-    ];
+    let standards: &[f64] =
+        &[4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 40.0, 44.0, 48.0, 52.0, 56.0, 60.0];
     let mut best = standards[0];
     let mut best_d = (w - best).abs();
     for &s in &standards[1..] {
@@ -1019,8 +986,7 @@ fn infer_systems_from_equipment(runs: &mut [DuctRun], equip: &[DetectedEquipment
                 continue;
             }
             for (p, sys) in &known {
-                let near = run.points.first().is_some_and(|f| f.dist(*p) < tol)
-                    || run.points.last().is_some_and(|l| l.dist(*p) < tol);
+                let near = run.points.first().is_some_and(|f| f.dist(*p) < tol) || run.points.last().is_some_and(|l| l.dist(*p) < tol);
                 if near {
                     run.system = Some(sys.clone());
                     changed = true;
@@ -1035,10 +1001,8 @@ fn infer_systems_from_equipment(runs: &mut [DuctRun], equip: &[DetectedEquipment
 
 /// Add runs from CENTRE-layer lines not already covered by a parallel-pair run.
 fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
-    let centre_segs: Vec<&LineSeg> = segs
-        .iter()
-        .filter(|s| s.layer.eq_ignore_ascii_case("CENTRE") || s.layer.eq_ignore_ascii_case("CENTER"))
-        .collect();
+    let centre_segs: Vec<&LineSeg> =
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("CENTRE") || s.layer.eq_ignore_ascii_case("CENTER")).collect();
     if centre_segs.is_empty() {
         return;
     }
@@ -1048,13 +1012,7 @@ fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
         // Skip if this centreline is already covered by an existing run.
         let mid = (cs.a + cs.b) * 0.5;
         let covered = runs.iter().any(|r| {
-            r.points.windows(2).any(|w| {
-                if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
-                    seg_dist(mid, *a, *b) < cover_tol
-                } else {
-                    false
-                }
-            })
+            r.points.windows(2).any(|w| if let (Some(a), Some(b)) = (w.first(), w.get(1)) { seg_dist(mid, *a, *b) < cover_tol } else { false })
         });
         if covered {
             continue;

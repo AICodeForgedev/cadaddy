@@ -12,11 +12,7 @@ fn render_source_does_not_use_std_time_instant() {
 }
 
 fn check_crate(name: &str) {
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join(name)
-        .join("src");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join(name).join("src");
     let mut bad = Vec::new();
     walk(&src, &mut bad);
     assert!(bad.is_empty(), "std::time::Instant in production source (use web_time instead):\n{}", bad.join("\n"));
