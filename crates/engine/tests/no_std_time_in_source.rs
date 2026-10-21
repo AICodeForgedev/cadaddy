@@ -30,7 +30,7 @@ fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
             walk(&path, bad);
         } else if path.extension().is_some_and(|e| e == "rs")
             // tests.rs files are #[cfg(test)] modules: they never run on wasm.
-            && !path.file_name().is_some_and(|n| n == "tests.rs")
+            && path.file_name().is_none_or(|n| n != "tests.rs")
         {
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
             for (i, line) in text.lines().enumerate() {
