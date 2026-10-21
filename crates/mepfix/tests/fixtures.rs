@@ -1014,9 +1014,17 @@ fn hotel_fire_alarm_has_enriched_fields() {
 
     // All expected FA device kinds present.
     for k in [
-        "facp", "nac_panel", "annunciator", "smoke_detector", "horn_strobe",
-        "strobe", "pull_station", "duct_detector", "monitor_module",
-        "elevator_recall", "mag_door_holder",
+        "facp",
+        "nac_panel",
+        "annunciator",
+        "smoke_detector",
+        "horn_strobe",
+        "strobe",
+        "pull_station",
+        "duct_detector",
+        "monitor_module",
+        "elevator_recall",
+        "mag_door_holder",
     ] {
         assert!(kinds.contains(k), "missing FA kind: {k}");
     }
@@ -1068,9 +1076,20 @@ fn hotel_telecom_has_enriched_fields() {
 
     // All expected telecom device kinds present.
     for k in [
-        "data_outlet", "tv_outlet", "telephone", "wifi_ap", "camera",
-        "card_reader", "door_contact", "rex", "speaker",
-        "mdf", "idf", "patch_panel", "backboard", "rack",
+        "data_outlet",
+        "tv_outlet",
+        "telephone",
+        "wifi_ap",
+        "camera",
+        "card_reader",
+        "door_contact",
+        "rex",
+        "speaker",
+        "mdf",
+        "idf",
+        "patch_panel",
+        "backboard",
+        "rack",
     ] {
         assert!(kinds.contains(k), "missing telecom kind: {k}");
     }
@@ -1101,10 +1120,7 @@ fn hotel_telecom_has_enriched_fields() {
     // MDF exists on L1, IDF on upper floors.
     assert!(t.telecom_devices.iter().any(|d| d.kind == "mdf" && d.level == "1"), "no MDF on L1");
     for lv in ["2", "3", "4"] {
-        assert!(
-            t.telecom_devices.iter().any(|d| d.kind == "idf" && d.level == lv),
-            "no IDF on level {lv}"
-        );
+        assert!(t.telecom_devices.iter().any(|d| d.kind == "idf" && d.level == lv), "no IDF on level {lv}");
     }
 }
 
@@ -1300,15 +1316,13 @@ fn hotel_fa_devices_per_floor() {
 #[test]
 fn hotel_equip_ptac_per_guest_room() {
     let t = hotel_truth_for(1, HotelSize::Small);
-    let guest_rooms: Vec<_> = t.building.rooms.iter().filter(|r| {
-        r.name.contains("KING") || r.name.contains("QUEEN") || r.name.contains("SUITE") || r.name.contains("ADA")
-    }).collect();
+    let guest_rooms: Vec<_> = t
+        .building
+        .rooms
+        .iter()
+        .filter(|r| r.name.contains("KING") || r.name.contains("QUEEN") || r.name.contains("SUITE") || r.name.contains("ADA"))
+        .collect();
     let ptacs: Vec<_> = t.equip_connections.iter().filter(|c| c.kind == "ptac").collect();
     // At least one PTAC per guest room.
-    assert!(
-        ptacs.len() >= guest_rooms.len(),
-        "fewer PTACs ({}) than guest rooms ({})",
-        ptacs.len(),
-        guest_rooms.len()
-    );
+    assert!(ptacs.len() >= guest_rooms.len(), "fewer PTACs ({}) than guest rooms ({})", ptacs.len(), guest_rooms.len());
 }

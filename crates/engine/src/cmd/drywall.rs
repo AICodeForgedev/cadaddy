@@ -93,18 +93,22 @@ fn wall_info_json(e: &Entity, sp: &Option<BuildingSpec>) -> Value {
 }
 
 fn assembly_json(asm: &Assembly) -> Value {
-    let layers: Vec<Value> = asm.layers.iter().map(|l| {
-        let mut v = json!({
-            "material": l.material,
-            "thicknessIn": l.thickness_in,
-            "side": side_str(l.side),
-            "category": l.category,
-        });
-        if l.in_cavity {
-            v["inCavity"] = json!(true);
-        }
-        v
-    }).collect();
+    let layers: Vec<Value> = asm
+        .layers
+        .iter()
+        .map(|l| {
+            let mut v = json!({
+                "material": l.material,
+                "thicknessIn": l.thickness_in,
+                "side": side_str(l.side),
+                "category": l.category,
+            });
+            if l.in_cavity {
+                v["inCavity"] = json!(true);
+            }
+            v
+        })
+        .collect();
 
     let mut v = json!({
         "tag": asm.tag,
@@ -310,14 +314,14 @@ fn layer_spacing_in(layer: &AssemblyLayer) -> Option<f64> {
 
 /// Colours for the view mode legend. Eight distinct colours for visibility.
 const VIEW_COLORS: &[[u8; 3]] = &[
-    [65, 105, 225],   // royal blue
-    [220, 20, 60],    // crimson
-    [34, 139, 34],    // forest green
-    [255, 165, 0],    // orange
-    [148, 103, 189],  // purple
-    [0, 191, 255],    // deep sky blue
-    [255, 215, 0],    // gold
-    [199, 21, 133],   // medium violet red
+    [65, 105, 225],  // royal blue
+    [220, 20, 60],   // crimson
+    [34, 139, 34],   // forest green
+    [255, 165, 0],   // orange
+    [148, 103, 189], // purple
+    [0, 191, 255],   // deep sky blue
+    [255, 215, 0],   // gold
+    [199, 21, 133],  // medium violet red
 ];
 
 fn run_viewmode(s: &mut Session, p: &Value) -> Result<Value> {
@@ -336,9 +340,7 @@ fn run_viewmode(s: &mut Session, p: &Value) -> Result<Value> {
             let sp = sp.ok_or_else(|| bad(cmd, "no building spec"))?;
             let legend = build_legend(mode, &sp, d);
             s.drywall_viewmode = Some(ViewMode { mode: mode.into(), legend: legend.clone() });
-            let legend_json: Vec<Value> = legend.iter().map(|(label, [r, g, b])| {
-                json!({ "label": label, "color": [r, g, b] })
-            }).collect();
+            let legend_json: Vec<Value> = legend.iter().map(|(label, [r, g, b])| json!({ "label": label, "color": [r, g, b] })).collect();
             Ok(json!({ "mode": mode, "legend": legend_json }))
         }
         _ => Err(bad(cmd, "mode must be type, rating, boardLayers, heightRule or off")),
@@ -356,22 +358,34 @@ fn build_legend(mode: &str, sp: &BuildingSpec, _d: &Drawing) -> Vec<(String, [u8
                 let count = wt.assembly.as_ref().map(board_layer_count).unwrap_or(0);
                 format!("{count} board layer{}", if count == 1 { "" } else { "s" })
             }
-            "heightRule" => wt.assembly.as_ref().and_then(|a| a.height).map(|h| match h {
-                HeightRule::Ceiling => "To ceiling",
-                HeightRule::AboveCeiling => "Above ceiling",
-                HeightRule::Deck => "To deck",
-                HeightRule::Full => "Full height",
-            }.into()).unwrap_or_else(|| "Default".into()),
+            "heightRule" => wt
+                .assembly
+                .as_ref()
+                .and_then(|a| a.height)
+                .map(|h| {
+                    match h {
+                        HeightRule::Ceiling => "To ceiling",
+                        HeightRule::AboveCeiling => "Above ceiling",
+                        HeightRule::Deck => "To deck",
+                        HeightRule::Full => "Full height",
+                    }
+                    .into()
+                })
+                .unwrap_or_else(|| "Default".into()),
             _ => wt.name.clone(),
         };
         if !labels.contains(&label) {
             labels.push(label);
         }
     }
-    labels.iter().enumerate().map(|(i, label)| {
-        let color = VIEW_COLORS.get(i % VIEW_COLORS.len()).copied().unwrap_or([128, 128, 128]);
-        (label.clone(), color)
-    }).collect()
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let color = VIEW_COLORS.get(i % VIEW_COLORS.len()).copied().unwrap_or([128, 128, 128]);
+            (label.clone(), color)
+        })
+        .collect()
 }
 
 /// How many board layers (non-cavity, category "board" or category empty) a wall assembly has.
@@ -394,12 +408,20 @@ pub fn viewmode_color(e: &Entity, sp: &Option<BuildingSpec>, vm: &ViewMode) -> O
             let count = wt.assembly.as_ref().map(board_layer_count).unwrap_or(0);
             format!("{count} board layer{}", if count == 1 { "" } else { "s" })
         }
-        "heightRule" => wt.assembly.as_ref().and_then(|a| a.height).map(|h| match h {
-            HeightRule::Ceiling => "To ceiling",
-            HeightRule::AboveCeiling => "Above ceiling",
-            HeightRule::Deck => "To deck",
-            HeightRule::Full => "Full height",
-        }.into()).unwrap_or_else(|| "Default".into()),
+        "heightRule" => wt
+            .assembly
+            .as_ref()
+            .and_then(|a| a.height)
+            .map(|h| {
+                match h {
+                    HeightRule::Ceiling => "To ceiling",
+                    HeightRule::AboveCeiling => "Above ceiling",
+                    HeightRule::Deck => "To deck",
+                    HeightRule::Full => "Full height",
+                }
+                .into()
+            })
+            .unwrap_or_else(|| "Default".into()),
         _ => return None,
     };
     vm.legend.iter().find(|(l, _)| l == &label).map(|(_, c)| *c)
@@ -463,9 +485,7 @@ fn run_finishfaces(s: &mut Session, _p: &Value) -> Result<Value> {
 /// The building spec from the drawing, if any.
 fn spec_if_any(s: &Session) -> Option<BuildingSpec> {
     let d = s.doc().ok()?;
-    d.building_spec.as_deref()
-        .filter(|t| !t.trim().is_empty())
-        .and_then(|t| BuildingSpec::from_json(t).ok())
+    d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| BuildingSpec::from_json(t).ok())
 }
 
 /// Read the xdata tag strings for CADADDY_WALLGEN on an entity.
@@ -530,9 +550,9 @@ fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
         1 => 12.0,
         2 => 1.0,
         4 => 304.8,  // mm
-        5 => 30.48,   // cm
-        6 => 0.3048,  // m
-        _ => 12.0,    // default inches
+        5 => 30.48,  // cm
+        6 => 0.3048, // m
+        _ => 12.0,   // default inches
     };
 
     for e in d.model.iter().take(MAX_WALLS) {
@@ -543,9 +563,8 @@ fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
         let level = tags.get(1).cloned().unwrap_or_default();
         let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:").map(str::to_string));
 
-        let assembly = type_name.as_ref().and_then(|tn| {
-            sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(tn)).and_then(|wt| wt.assembly.clone())
-        });
+        let assembly =
+            type_name.as_ref().and_then(|tn| sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(tn)).and_then(|wt| wt.assembly.clone()));
 
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
         let gross = wall_face_area_sqft(mesh);
@@ -580,12 +599,24 @@ fn mesh_wall_dims(mesh: &Mesh, units_per_ft: f64) -> (f64, f64) {
     let mut min = mesh.vertices[0];
     let mut max = mesh.vertices[0];
     for v in &mesh.vertices {
-        if v.x < min.x { min.x = v.x; }
-        if v.y < min.y { min.y = v.y; }
-        if v.z < min.z { min.z = v.z; }
-        if v.x > max.x { max.x = v.x; }
-        if v.y > max.y { max.y = v.y; }
-        if v.z > max.z { max.z = v.z; }
+        if v.x < min.x {
+            min.x = v.x;
+        }
+        if v.y < min.y {
+            min.y = v.y;
+        }
+        if v.z < min.z {
+            min.z = v.z;
+        }
+        if v.x > max.x {
+            max.x = v.x;
+        }
+        if v.y > max.y {
+            max.y = v.y;
+        }
+        if v.z > max.z {
+            max.z = v.z;
+        }
     }
     let dx = (max.x - min.x) / units_per_ft;
     let dy = (max.y - min.y) / units_per_ft;
@@ -610,7 +641,10 @@ fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
                 let side = board["side"].as_str().unwrap_or("");
                 let area = board["areaSqFt"].as_f64().unwrap_or(0.0);
                 let sheets = board["sheets"].as_u64().unwrap_or(0);
-                let ss = board["sheetSize"].as_array().map(|a| format!("{}x{}", a.first().and_then(Value::as_f64).unwrap_or(4.0), a.get(1).and_then(Value::as_f64).unwrap_or(8.0))).unwrap_or_default();
+                let ss = board["sheetSize"]
+                    .as_array()
+                    .map(|a| format!("{}x{}", a.first().and_then(Value::as_f64).unwrap_or(4.0), a.get(1).and_then(Value::as_f64).unwrap_or(8.0)))
+                    .unwrap_or_default();
                 writeln!(f, "\"{group}\",\"{mat}\",{thick:.3},{side},{area:.2},{sheets},{ss},,,,{waste:.1}")
                     .map_err(|e| bad("drywall.takeoff", e.to_string()))?;
             }
@@ -620,8 +654,7 @@ fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
         let insul = row["insulation"]["areaSqFt"].as_f64().unwrap_or(0.0);
         let trim = row["trim"]["lengthFt"].as_f64().unwrap_or(0.0);
         if stud_ft > 0.0 || track_ft > 0.0 || insul > 0.0 || trim > 0.0 {
-            writeln!(f, "\"{group}\",,,,,,,,{stud_ft:.2},{track_ft:.2},{insul:.2},{trim:.2}")
-                .map_err(|e| bad("drywall.takeoff", e.to_string()))?;
+            writeln!(f, "\"{group}\",,,,,,,,{stud_ft:.2},{track_ft:.2},{insul:.2},{trim:.2}").map_err(|e| bad("drywall.takeoff", e.to_string()))?;
         }
     }
     Ok(())
@@ -640,23 +673,14 @@ mod tests {
 
     #[test]
     fn polygon_area_triangle() {
-        let pts = vec![
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(10.0, 0.0, 0.0),
-            Vec3::new(0.0, 10.0, 0.0),
-        ];
+        let pts = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 10.0, 0.0)];
         let area = polygon_area_3d(&pts);
         assert!((area - 50.0).abs() < 0.01, "triangle area should be 50, got {area}");
     }
 
     #[test]
     fn polygon_area_quad() {
-        let pts = vec![
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(120.0, 0.0, 0.0),
-            Vec3::new(120.0, 0.0, 96.0),
-            Vec3::new(0.0, 0.0, 96.0),
-        ];
+        let pts = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 96.0), Vec3::new(0.0, 0.0, 96.0)];
         let area = polygon_area_3d(&pts);
         // 120" x 96" = 11520 sq in
         assert!((area - 11520.0).abs() < 0.1, "quad area should be 11520, got {area}");
@@ -669,10 +693,38 @@ mod tests {
     fn board_layer_count_works() {
         let asm = Assembly {
             layers: vec![
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false, spacing_in: None },
-                AssemblyLayer { material: "3 5/8\" metal studs".into(), thickness_in: 3.625, side: LayerSide::Core, category: "framing".into(), in_cavity: false, spacing_in: None },
-                AssemblyLayer { material: "batt insulation".into(), thickness_in: 3.5, side: LayerSide::Core, category: "insulation".into(), in_cavity: true, spacing_in: None },
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side2, category: "board".into(), in_cavity: false, spacing_in: None },
+                AssemblyLayer {
+                    material: "5/8\" Type X gypsum board".into(),
+                    thickness_in: 0.625,
+                    side: LayerSide::Side1,
+                    category: "board".into(),
+                    in_cavity: false,
+                    spacing_in: None,
+                },
+                AssemblyLayer {
+                    material: "3 5/8\" metal studs".into(),
+                    thickness_in: 3.625,
+                    side: LayerSide::Core,
+                    category: "framing".into(),
+                    in_cavity: false,
+                    spacing_in: None,
+                },
+                AssemblyLayer {
+                    material: "batt insulation".into(),
+                    thickness_in: 3.5,
+                    side: LayerSide::Core,
+                    category: "insulation".into(),
+                    in_cavity: true,
+                    spacing_in: None,
+                },
+                AssemblyLayer {
+                    material: "5/8\" Type X gypsum board".into(),
+                    thickness_in: 0.625,
+                    side: LayerSide::Side2,
+                    category: "board".into(),
+                    in_cavity: false,
+                    spacing_in: None,
+                },
             ],
             ..Assembly::default()
         };
@@ -684,9 +736,14 @@ mod tests {
         let asm = Assembly {
             tag: "A".into(),
             description: "1 Hour Rated Partition".into(),
-            layers: vec![
-                AssemblyLayer { material: "5/8\" Type X gypsum board".into(), thickness_in: 0.625, side: LayerSide::Side1, category: "board".into(), in_cavity: false, spacing_in: None },
-            ],
+            layers: vec![AssemblyLayer {
+                material: "5/8\" Type X gypsum board".into(),
+                thickness_in: 0.625,
+                side: LayerSide::Side1,
+                category: "board".into(),
+                in_cavity: false,
+                spacing_in: None,
+            }],
             fire_rating: Some("1 HR".into()),
             ..Assembly::default()
         };

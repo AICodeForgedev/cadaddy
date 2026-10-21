@@ -2269,7 +2269,7 @@ fn hotel_equip_connections(t: &mut Truth) {
                     level: lv.into(),
                     room: rm.id.clone(),
                     at_ft: [rm.max_ft[0] - 1.0, rm.min_ft[1] + 0.5, elev + 1.0],
-                    circuit: format!("P{lv}/{}",  (ec_id % 42) + 1),
+                    circuit: format!("P{lv}/{}", (ec_id % 42) + 1),
                     panel: format!("P{lv}"),
                     connection_type: "receptacle".into(),
                     disconnect_tag: None,
@@ -2473,7 +2473,8 @@ fn hotel_sleeves_and_pathways(t: &mut Truth) {
 
         // Floor sleeve for riser between levels (data + FA)
         if lv != "1" {
-            let riser_x = t.building.shafts.iter().find(|s| s.kind == "electrical").map(|s| (s.min_ft[0] + s.max_ft[0]) / 2.0).unwrap_or(bldg_w / 2.0);
+            let riser_x =
+                t.building.shafts.iter().find(|s| s.kind == "electrical").map(|s| (s.min_ft[0] + s.max_ft[0]) / 2.0).unwrap_or(bldg_w / 2.0);
             let riser_y = t.building.shafts.iter().find(|s| s.kind == "electrical").map(|s| (s.min_ft[1] + s.max_ft[1]) / 2.0).unwrap_or(corr_y);
             t.sleeves.push(Sleeve {
                 id: format!("sl-{sl_id}"),

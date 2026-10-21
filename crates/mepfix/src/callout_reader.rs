@@ -226,10 +226,7 @@ fn has_leader_line(callout_lines: &[([f64; 2], [f64; 2])], center: [f64; 2], rad
 /// Read callouts from all DXF files in a fixture set and resolve them against the sheet set.
 ///
 /// Returns (resolved, broken) where `broken` are callouts whose target sheet doesn't exist.
-pub fn resolve_callouts(
-    dxf_files: &[(String, Vec<u8>)],
-    sheet_numbers: &[String],
-) -> (Vec<ResolvedCallout>, Vec<ResolvedCallout>) {
+pub fn resolve_callouts(dxf_files: &[(String, Vec<u8>)], sheet_numbers: &[String]) -> (Vec<ResolvedCallout>, Vec<ResolvedCallout>) {
     let mut resolved = Vec::new();
     let mut broken = Vec::new();
 
@@ -241,9 +238,7 @@ pub fn resolve_callouts(
         };
         let callouts = read_callouts(&drawing);
         for co in callouts {
-            let target_exists = co.target_sheet.is_empty()
-                || sheet_numbers.contains(&co.target_sheet)
-                || co.kind == "key_plan";
+            let target_exists = co.target_sheet.is_empty() || sheet_numbers.contains(&co.target_sheet) || co.kind == "key_plan";
             let rc = ResolvedCallout { callout: co, on_sheet: sheet_number.clone(), resolved: target_exists };
             if target_exists {
                 resolved.push(rc);

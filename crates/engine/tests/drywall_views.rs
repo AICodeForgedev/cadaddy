@@ -78,10 +78,8 @@ fn building() -> Session {
 /// Select all wall entities.
 fn select_walls(s: &mut Session) -> Vec<String> {
     let d = s.doc().unwrap();
-    let handles: Vec<String> = d.model.iter()
-        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("wall"))
-        .map(|e| e.handle.hex())
-        .collect();
+    let handles: Vec<String> =
+        d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("wall")).map(|e| e.handle.hex()).collect();
     handles
 }
 

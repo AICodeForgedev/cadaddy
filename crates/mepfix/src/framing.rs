@@ -1357,7 +1357,8 @@ pub fn choose_layouts(t: &mut Truth) {
     let fw = walls_from_truth(t);
     let fr = frame(&fw, &[], &[], &[]);
     let mut done = vec![false; t.plan_walls.len()];
-    let groups: Vec<Vec<usize>> = (0..t.plan_walls.len()).map(|i| fr.stacks.iter().find(|g| g.contains(&i)).cloned().unwrap_or_else(|| vec![i])).collect();
+    let groups: Vec<Vec<usize>> =
+        (0..t.plan_walls.len()).map(|i| fr.stacks.iter().find(|g| g.contains(&i)).cloned().unwrap_or_else(|| vec![i])).collect();
     for (i, g) in groups.iter().enumerate() {
         if done.get(i).copied().unwrap_or(true) {
             continue;

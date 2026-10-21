@@ -693,10 +693,7 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
             if sh.level.is_none() || sh.window_ft.is_some() {
                 continue;
             }
-            let mid_ft = [
-                (sect.cut_from_ft[0] + sect.cut_to_ft[0]) / 2.0,
-                (sect.cut_from_ft[1] + sect.cut_to_ft[1]) / 2.0,
-            ];
+            let mid_ft = [(sect.cut_from_ft[0] + sect.cut_to_ft[0]) / 2.0, (sect.cut_from_ft[1] + sect.cut_to_ft[1]) / 2.0];
             callouts.push(CalloutEntry {
                 id: id(),
                 kind: "section_mark".into(),
@@ -769,11 +766,8 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
     }
 
     // --- Enlarged-plan boundary callouts on base plumbing plans ---
-    let enlarged_sheets: Vec<(String, String, [[f64; 2]; 2])> = t
-        .sheets
-        .iter()
-        .filter_map(|s| s.window_ft.map(|w| (s.number.clone(), s.level.clone().unwrap_or_default(), w)))
-        .collect();
+    let enlarged_sheets: Vec<(String, String, [[f64; 2]; 2])> =
+        t.sheets.iter().filter_map(|s| s.window_ft.map(|w| (s.number.clone(), s.level.clone().unwrap_or_default(), w))).collect();
     for (en_number, en_level, _win) in &enlarged_sheets {
         for sh in t.sheets.clone() {
             if sh.discipline != "P" || sh.level.as_deref() != Some(en_level.as_str()) || sh.window_ft.is_some() {

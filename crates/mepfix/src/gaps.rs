@@ -243,7 +243,10 @@ pub fn plant(t: &mut Truth) {
         .iter()
         .enumerate()
         .filter(|(_, rm)| {
-            rm.ceiling.is_some() && rm.name != "CORRIDOR" && !wet(&rm.name) && !t.rcp_soffits.iter().any(|s| s.level == rm.level && s.room == rm.number)
+            rm.ceiling.is_some()
+                && rm.name != "CORRIDOR"
+                && !wet(&rm.name)
+                && !t.rcp_soffits.iter().any(|s| s.level == rm.level && s.room == rm.number)
         })
         .map(|(i, _)| i)
         .collect();

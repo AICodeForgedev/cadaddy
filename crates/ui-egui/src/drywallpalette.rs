@@ -69,8 +69,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             // ---------- View mode section ----------
             ui.heading(RichText::new(crate::tl!("View Mode")).strong());
             ui.add_space(4.0);
-            let modes = [("off", "Off"), ("type", "By Type"), ("rating", "By Rating"),
-                         ("boardLayers", "By Board Layers"), ("heightRule", "By Height Rule")];
+            let modes =
+                [("off", "Off"), ("type", "By Type"), ("rating", "By Rating"), ("boardLayers", "By Board Layers"), ("heightRule", "By Height Rule")];
             ui.horizontal_wrapped(|ui| {
                 for (mode, label) in &modes {
                     let is_current = st.viewmode == *mode;
@@ -106,9 +106,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 let total_area = r["totals"]["boardAreaSqFt"].as_f64().unwrap_or(0.0);
                 let total_sheets = r["totals"]["sheets"].as_u64().unwrap_or(0);
                 let stud_ft = r["totals"]["studLengthFt"].as_f64().unwrap_or(0.0);
-                app.session.log.push(format!(
-                    "Drywall takeoff: {total_area:.0} sq ft board, {total_sheets} sheets, {stud_ft:.0} ft studs"
-                ));
+                app.session.log.push(format!("Drywall takeoff: {total_area:.0} sq ft board, {total_sheets} sheets, {stud_ft:.0} ft studs"));
             }
             if ui.button(crate::tl!("Export CSV...")).clicked() {
                 let path = std::env::temp_dir().join("cadaddy-drywall-takeoff.csv");
