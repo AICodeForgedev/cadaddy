@@ -161,9 +161,7 @@ fn get_project() -> Result<PrintSetProject> {
 }
 
 fn set_project(p: PrintSetProject) -> Result<()> {
-    *PROJECT
-        .lock()
-        .map_err(|_| EngineError::Other("project lock poisoned".into()))? = Some(p);
+    *PROJECT.lock().map_err(|_| EngineError::Other("project lock poisoned".into()))? = Some(p);
     Ok(())
 }
 
@@ -171,10 +169,9 @@ fn set_project(p: PrintSetProject) -> Result<()> {
 
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
-    for &(prefix, code) in &[
-        ("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"),
-        ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C"),
-    ] {
+    for &(prefix, code) in
+        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
+    {
         if up.starts_with(prefix) {
             return code.into();
         }
@@ -184,15 +181,33 @@ fn infer_discipline(number: &str) -> String {
 
 fn classify_sheet_type(number: &str, title: &str) -> String {
     let up = title.to_ascii_uppercase();
-    if up.contains("COVER") || up.contains("INDEX") { return "cover".into(); }
-    if up.contains("SCHEDULE") { return "schedule".into(); }
-    if up.contains("DETAIL") { return "detail".into(); }
-    if up.contains("SECTION") { return "section".into(); }
-    if up.contains("ELEVATION") { return "elevation".into(); }
-    if up.contains("DIAGRAM") || up.contains("RISER") { return "diagram".into(); }
-    if up.contains("ENLARGED") { return "enlarged_plan".into(); }
-    if up.contains("REFLECTED CEILING") || up.contains("RCP") { return "rcp".into(); }
-    if up.contains("PLAN") { return "plan".into(); }
+    if up.contains("COVER") || up.contains("INDEX") {
+        return "cover".into();
+    }
+    if up.contains("SCHEDULE") {
+        return "schedule".into();
+    }
+    if up.contains("DETAIL") {
+        return "detail".into();
+    }
+    if up.contains("SECTION") {
+        return "section".into();
+    }
+    if up.contains("ELEVATION") {
+        return "elevation".into();
+    }
+    if up.contains("DIAGRAM") || up.contains("RISER") {
+        return "diagram".into();
+    }
+    if up.contains("ENLARGED") {
+        return "enlarged_plan".into();
+    }
+    if up.contains("REFLECTED CEILING") || up.contains("RCP") {
+        return "rcp".into();
+    }
+    if up.contains("PLAN") {
+        return "plan".into();
+    }
     let num_part = number.split('-').next_back().unwrap_or("");
     if let Ok(n) = num_part.parse::<u32>() {
         if (100..500).contains(&n) {
@@ -216,8 +231,12 @@ fn infer_level(title: &str) -> String {
             }
         }
     }
-    if up.contains("ROOF") { return "R".into(); }
-    if up.contains("SITE") { return "SITE".into(); }
+    if up.contains("ROOF") {
+        return "R".into();
+    }
+    if up.contains("SITE") {
+        return "SITE".into();
+    }
     String::new()
 }
 
@@ -280,13 +299,17 @@ fn discover_sheets(dir: &Path) -> std::result::Result<Vec<(String, PathBuf)>, St
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() { continue; }
+        if !path.is_file() {
+            continue;
+        }
         let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
         if ext == "dxf" || ext == "pdf" || ext == "dwg" {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
             files.push((name, path));
         }
-        if files.len() >= MAX_SHEETS { break; }
+        if files.len() >= MAX_SHEETS {
+            break;
+        }
     }
     files.sort_by(|(a, _), (b, _)| a.cmp(b));
     Ok(files)
@@ -300,14 +323,11 @@ fn create_project(name: &str, dir: &Path) -> std::result::Result<PrintSetProject
     let mut sheets = Vec::new();
     for (filename, path) in &files {
         let meta = path.metadata().map_err(|e| format!("{filename}: {e}"))?;
-        if meta.len() > MAX_FILE_BYTES { continue; }
+        if meta.len() > MAX_FILE_BYTES {
+            continue;
+        }
         let hash = file_hash(path).unwrap_or_default();
-        sheets.push(SheetEntry {
-            file: filename.clone(),
-            content_hash: hash,
-            dirty: true,
-            ..SheetEntry::default()
-        });
+        sheets.push(SheetEntry { file: filename.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
     }
     let n = sheets.len();
     Ok(PrintSetProject {
@@ -333,15 +353,13 @@ fn update_dashboard(project: &mut PrintSetProject) {
             d.classified_sheets += 1;
         }
         if !sheet.level.is_empty() {
-            let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary {
-                level: sheet.level.clone(), ..LevelSummary::default()
-            });
+            let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary { level: sheet.level.clone(), ..LevelSummary::default() });
             ls.sheets += 1;
         }
         if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
-            let ds = disciplines.entry(sheet.discipline.clone()).or_insert_with(|| DisciplineSummary {
-                discipline: sheet.discipline.clone(), ..DisciplineSummary::default()
-            });
+            let ds = disciplines
+                .entry(sheet.discipline.clone())
+                .or_insert_with(|| DisciplineSummary { discipline: sheet.discipline.clone(), ..DisciplineSummary::default() });
             ds.sheets += 1;
         }
         for (stage_name, result) in &sheet.stage_results {
@@ -350,25 +368,31 @@ fn update_dashboard(project: &mut PrintSetProject) {
                 total_confidence += result.confidence;
                 confidence_count += 1;
                 if !sheet.level.is_empty()
-                    && let Some(ls) = levels.get_mut(&sheet.level) {
-                        ls.items += result.items_found;
-                    }
+                    && let Some(ls) = levels.get_mut(&sheet.level)
+                {
+                    ls.items += result.items_found;
+                }
                 if !sheet.discipline.is_empty()
-                    && let Some(ds) = disciplines.get_mut(&sheet.discipline) {
-                        ds.items += result.items_found;
-                        if !ds.stages_done.contains(stage_name) {
-                            ds.stages_done.push(stage_name.clone());
-                        }
+                    && let Some(ds) = disciplines.get_mut(&sheet.discipline)
+                {
+                    ds.items += result.items_found;
+                    if !ds.stages_done.contains(stage_name) {
+                        ds.stages_done.push(stage_name.clone());
                     }
+                }
                 for f in &result.findings {
                     match f.kind.as_str() {
                         "gap" | "guessed" | "missing_tag" | "unreadable" => {
                             d.open_gaps += 1;
-                            if let Some(ls) = levels.get_mut(&sheet.level) { ls.gaps += 1; }
+                            if let Some(ls) = levels.get_mut(&sheet.level) {
+                                ls.gaps += 1;
+                            }
                         }
                         "rfi" | "conflict" => {
                             d.open_rfis += 1;
-                            if let Some(ls) = levels.get_mut(&sheet.level) { ls.rfis += 1; }
+                            if let Some(ls) = levels.get_mut(&sheet.level) {
+                                ls.rfis += 1;
+                            }
                         }
                         _ => {}
                     }
@@ -418,9 +442,12 @@ struct RevisionDelta {
 fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathBuf)], label: &str) -> std::result::Result<RevisionDelta, String> {
     let delta = compute_delta(project, new_files)?;
     project.revisions.push(RevisionRecord {
-        revision: label.into(), label: label.into(),
-        sheets_total: new_files.len(), sheets_changed: delta.changed.len(),
-        sheets_added: delta.added.len(), sheets_removed: delta.removed.len(),
+        revision: label.into(),
+        label: label.into(),
+        sheets_total: new_files.len(),
+        sheets_changed: delta.changed.len(),
+        sheets_added: delta.added.len(),
+        sheets_removed: delta.removed.len(),
     });
     let removed_set: std::collections::HashSet<&str> = delta.removed.iter().map(|s| s.as_str()).collect();
     project.sheets.retain(|s| !removed_set.contains(s.file.as_str()));
@@ -470,10 +497,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {classified, total, elapsed_ms}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard)
-            .params("{} → {dashboard}")
-            .enabled(always)
-            .noundo(),
+        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).params("{} → {dashboard}").enabled(always).noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
             .params("{discipline?, level?} → {sheets, total}")
             .enabled(always)
@@ -482,26 +506,20 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path: folder, revision?: label} → {delta, sheets}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.save", "Save Print Set", run_save)
-            .params("{path?} → {saved}")
-            .enabled(always)
-            .noundo(),
+        CommandSpec::new("printset.save", "Save Print Set", run_save).params("{path?} → {saved}").enabled(always).noundo(),
     ]
 }
 
 // ─── printset.open ───────────────────────────────────────────────────────────
 
 fn run_open(_s: &mut Session, p: &Value) -> Result<Value> {
-    let path_str = str_param(p, "path")
-        .ok_or_else(|| EngineError::Other("path is required".into()))?;
+    let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let path = PathBuf::from(path_str);
 
     let project = if path.extension().and_then(|e| e.to_str()) == Some("json") && path.is_file() {
         load_project(&path).map_err(EngineError::Other)?
     } else if path.is_dir() {
-        let name = str_param(p, "name").unwrap_or_else(|| {
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set")
-        });
+        let name = str_param(p, "name").unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set"));
         create_project(name, &path).map_err(EngineError::Other)?
     } else {
         return Err(EngineError::Other(format!("{path_str} is not a folder or .json project file")));
@@ -547,11 +565,23 @@ fn run_classify(_s: &mut Session, _p: &Value) -> Result<Value> {
             sheet.sheet_type = classify_sheet_type(&sheet.number, &sheet.title);
             sheet.level = infer_level(&sheet.title);
             sheet.dirty = false;
-            let conf = if sheet.discipline != "unknown" && !sheet.title.is_empty() { 0.7 } else if sheet.discipline != "unknown" { 0.5 } else { 0.1 };
-            sheet.stage_results.insert("classify".into(), SheetStageResult {
-                stage: "classify".into(), status: "completed".into(),
-                items_found: 1, confidence: conf, ..SheetStageResult::default()
-            });
+            let conf = if sheet.discipline != "unknown" && !sheet.title.is_empty() {
+                0.7
+            } else if sheet.discipline != "unknown" {
+                0.5
+            } else {
+                0.1
+            };
+            sheet.stage_results.insert(
+                "classify".into(),
+                SheetStageResult {
+                    stage: "classify".into(),
+                    status: "completed".into(),
+                    items_found: 1,
+                    confidence: conf,
+                    ..SheetStageResult::default()
+                },
+            );
             classified += 1;
         }
     }
@@ -560,8 +590,11 @@ fn run_classify(_s: &mut Session, _p: &Value) -> Result<Value> {
     project.stages.push(StageRecord {
         stage: "classify".into(),
         status: if classified == total { "completed" } else { "partial" }.into(),
-        sheets_processed: classified, sheets_total: total,
-        items_found: classified, findings: 0, elapsed_ms,
+        sheets_processed: classified,
+        sheets_total: total,
+        items_found: classified,
+        findings: 0,
+        elapsed_ms,
     });
     update_dashboard(&mut project);
     let result = json!({ "classified": classified, "total": total, "elapsed_ms": elapsed_ms });
@@ -588,15 +621,19 @@ fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
     let filter_discipline = str_param(p, "discipline");
     let filter_level = str_param(p, "level");
 
-    let sheets: Vec<Value> = project.sheets.iter()
+    let sheets: Vec<Value> = project
+        .sheets
+        .iter()
         .filter(|s| filter_discipline.is_none_or(|d| s.discipline == d))
         .filter(|s| filter_level.is_none_or(|l| s.level == l))
-        .map(|s| json!({
-            "number": s.number, "title": s.title, "discipline": s.discipline,
-            "type": s.sheet_type, "level": s.level, "scale": s.scale_text,
-            "file": s.file, "dirty": s.dirty,
-            "stages": s.stage_results.keys().collect::<Vec<_>>(),
-        }))
+        .map(|s| {
+            json!({
+                "number": s.number, "title": s.title, "discipline": s.discipline,
+                "type": s.sheet_type, "level": s.level, "scale": s.scale_text,
+                "file": s.file, "dirty": s.dirty,
+                "stages": s.stage_results.keys().collect::<Vec<_>>(),
+            })
+        })
         .collect();
     let total = sheets.len();
     Ok(json!({ "sheets": sheets, "total": total }))
@@ -605,8 +642,7 @@ fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
 // ─── printset.reimport ───────────────────────────────────────────────────────
 
 fn run_reimport(_s: &mut Session, p: &Value) -> Result<Value> {
-    let path_str = str_param(p, "path")
-        .ok_or_else(|| EngineError::Other("path is required".into()))?;
+    let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let dir = PathBuf::from(path_str);
     if !dir.is_dir() {
         return Err(EngineError::Other(format!("{path_str} is not a directory")));
