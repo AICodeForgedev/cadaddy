@@ -3,9 +3,7 @@
 //! Verifies quantities by room and trade from the architecture truth, with waste and pattern
 //! rules, per-trade takeoff ready for pricing.
 
-use cadaddy_mepfix::finishes::{
-    aggregate_by_description, aggregate_by_trade, compute_takeoff, room_area_sf, FinishTakeoff,
-};
+use cadaddy_mepfix::finishes::{FinishTakeoff, aggregate_by_description, aggregate_by_trade, compute_takeoff, room_area_sf};
 use cadaddy_mepfix::truth::Truth;
 use cadaddy_mepfix::truth_for;
 use std::collections::BTreeSet;
@@ -65,10 +63,7 @@ fn floor_areas_are_positive_and_reasonable() {
             }
         }
         // Total floor area should roughly equal sum of room areas.
-        let total_from_items: f64 = tk.items.iter()
-            .filter(|i| i.trade == "flooring" && i.unit == "SF")
-            .map(|i| i.quantity)
-            .sum();
+        let total_from_items: f64 = tk.items.iter().filter(|i| i.trade == "flooring" && i.unit == "SF").map(|i| i.quantity).sum();
         let total_from_rooms: f64 = t.building.rooms.iter().map(room_area_sf).sum();
         assert!(
             (total_from_items - total_from_rooms).abs() < 1.0,
@@ -121,16 +116,9 @@ fn window_glazing_items_match_types() {
         // One window-count item + one glazing-area item per window type that has instances.
         let types_with_windows: BTreeSet<_> = arch.windows.iter().map(|w| w.mark.as_str()).collect();
         let expected = types_with_windows.len() * 2;
-        assert_eq!(
-            glazing_items.len(), expected,
-            "seed {seed}: expected {expected} glazing items, got {}",
-            glazing_items.len()
-        );
+        assert_eq!(glazing_items.len(), expected, "seed {seed}: expected {expected} glazing items, got {}", glazing_items.len());
         // Total window count matches.
-        let total_windows: f64 = glazing_items.iter()
-            .filter(|i| i.category == "window")
-            .map(|i| i.quantity)
-            .sum();
+        let total_windows: f64 = glazing_items.iter().filter(|i| i.category == "window").map(|i| i.quantity).sum();
         assert_eq!(total_windows as usize, arch.windows.len(), "seed {seed}");
     }
 }
@@ -140,32 +128,15 @@ fn wet_rooms_get_partitions_and_accessories() {
     for seed in SEEDS {
         let (t, tk) = takeoff_for(seed);
         let arch = t.arch.as_ref().expect("arch truth");
-        let wet: Vec<_> = arch.finishes.iter()
-            .filter(|f| matches!(f.name.as_str(), "MEN" | "WOMEN" | "TOILET" | "RESTROOM"))
-            .collect();
+        let wet: Vec<_> = arch.finishes.iter().filter(|f| matches!(f.name.as_str(), "MEN" | "WOMEN" | "TOILET" | "RESTROOM")).collect();
         for rf in &wet {
             let key = format!("{}-{}", rf.level, rf.number);
             let items = tk.by_room.get(&key).expect(&key);
-            assert!(
-                items.iter().any(|i| i.description.contains("TOILET PARTITION")),
-                "seed {seed}: wet room {key} missing toilet partitions"
-            );
-            assert!(
-                items.iter().any(|i| i.description.contains("GRAB BAR")),
-                "seed {seed}: wet room {key} missing grab bars"
-            );
-            assert!(
-                items.iter().any(|i| i.description.contains("SOAP DISPENSER")),
-                "seed {seed}: wet room {key} missing soap dispensers"
-            );
-            assert!(
-                items.iter().any(|i| i.description.contains("PAPER TOWEL")),
-                "seed {seed}: wet room {key} missing paper towels"
-            );
-            assert!(
-                items.iter().any(|i| i.description.contains("MIRROR")),
-                "seed {seed}: wet room {key} missing mirror"
-            );
+            assert!(items.iter().any(|i| i.description.contains("TOILET PARTITION")), "seed {seed}: wet room {key} missing toilet partitions");
+            assert!(items.iter().any(|i| i.description.contains("GRAB BAR")), "seed {seed}: wet room {key} missing grab bars");
+            assert!(items.iter().any(|i| i.description.contains("SOAP DISPENSER")), "seed {seed}: wet room {key} missing soap dispensers");
+            assert!(items.iter().any(|i| i.description.contains("PAPER TOWEL")), "seed {seed}: wet room {key} missing paper towels");
+            assert!(items.iter().any(|i| i.description.contains("MIRROR")), "seed {seed}: wet room {key} missing mirror");
         }
     }
 }
@@ -193,10 +164,10 @@ fn rooms_with_doors_get_signage() {
         let (t, tk) = takeoff_for(seed);
         let arch = t.arch.as_ref().expect("arch truth");
         for rf in &arch.finishes {
-            let has_door = arch.doors.iter().any(|d| {
-                d.level == rf.level
-                    && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number))
-            });
+            let has_door = arch
+                .doors
+                .iter()
+                .any(|d| d.level == rf.level && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number)));
             if has_door {
                 let key = format!("{}-{}", rf.level, rf.number);
                 let items = tk.by_room.get(&key).expect(&key);
@@ -221,7 +192,9 @@ fn waste_factors_applied_correctly() {
                 assert!(
                     (item.with_waste - expected).abs() < tol,
                     "seed {seed}: {}: waste mismatch: {} vs expected {}",
-                    item.description, item.with_waste, expected
+                    item.description,
+                    item.with_waste,
+                    expected
                 );
                 assert!(item.with_waste >= item.quantity, "seed {seed}: {}: with_waste < quantity", item.description);
             } else {
@@ -229,7 +202,9 @@ fn waste_factors_applied_correctly() {
                 assert!(
                     (item.with_waste - item.quantity).abs() < 0.02,
                     "seed {seed}: {}: zero waste but with_waste {} != quantity {}",
-                    item.description, item.with_waste, item.quantity
+                    item.description,
+                    item.with_waste,
+                    item.quantity
                 );
             }
         }
@@ -277,18 +252,9 @@ fn act_ceilings_get_grid_and_wire() {
             if is_act {
                 let key = format!("{}-{}", rf.level, rf.number);
                 let items = tk.by_room.get(&key).expect(&key);
-                assert!(
-                    items.iter().any(|i| i.description.contains("CEILING GRID")),
-                    "seed {seed}: ACT room {key} missing grid"
-                );
-                assert!(
-                    items.iter().any(|i| i.description.contains("WALL ANGLE")),
-                    "seed {seed}: ACT room {key} missing wall angle"
-                );
-                assert!(
-                    items.iter().any(|i| i.description.contains("SUSPENSION WIRE")),
-                    "seed {seed}: ACT room {key} missing wire"
-                );
+                assert!(items.iter().any(|i| i.description.contains("CEILING GRID")), "seed {seed}: ACT room {key} missing grid");
+                assert!(items.iter().any(|i| i.description.contains("WALL ANGLE")), "seed {seed}: ACT room {key} missing wall angle");
+                assert!(items.iter().any(|i| i.description.contains("SUSPENSION WIRE")), "seed {seed}: ACT room {key} missing wire");
             }
         }
     }
@@ -308,10 +274,7 @@ fn tile_height_rooms_get_split_wall_items() {
             {
                 let key = format!("{}-{}", rf.level, rf.number);
                 let items = tk.by_room.get(&key).expect(&key);
-                assert!(
-                    items.iter().any(|i| i.description.contains("WALL TILE")),
-                    "seed {seed}: wet room {key} should have wall tile item"
-                );
+                assert!(items.iter().any(|i| i.description.contains("WALL TILE")), "seed {seed}: wet room {key} should have wall tile item");
             }
         }
     }

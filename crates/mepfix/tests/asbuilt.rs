@@ -6,9 +6,7 @@ use cadaddy_mepfix::asbuilt::*;
 use cadaddy_mepfix::truth::Truth;
 
 fn fixture_truth() -> Truth {
-    cadaddy_mepfix::generate(1)
-        .map(|fs| fs.truth)
-        .unwrap_or_else(|_| cadaddy_mepfix::truth_for(1))
+    cadaddy_mepfix::generate(1).map(|fs| fs.truth).unwrap_or_else(|_| cadaddy_mepfix::truth_for(1))
 }
 
 /// Build a set of synthetic markups placed on known elements of a generated fixture set.
@@ -22,10 +20,7 @@ fn synthetic_markups_on_truth(t: &Truth) -> Vec<(String, Vec<SyntheticMarkup>)> 
         let mut markups = Vec::new();
         // Cloud on the first segment of this level
         if let Some(seg) = t.segments.iter().find(|s| s.level == level) {
-            let bldg = [
-                (seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5,
-                (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5,
-            ];
+            let bldg = [(seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5, (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5];
             let paper = building_to_paper(sh, bldg);
             markups.push(SyntheticMarkup {
                 kind: "cloud".into(),
@@ -33,10 +28,7 @@ fn synthetic_markups_on_truth(t: &Truth) -> Vec<(String, Vec<SyntheticMarkup>)> 
                 author: "Foreman A".into(),
                 date: "2026-10-20".into(),
                 paper_in: paper,
-                paper_rect_in: [
-                    [paper[0] - 1.0, paper[1] - 1.0],
-                    [paper[0] + 1.0, paper[1] + 1.0],
-                ],
+                paper_rect_in: [[paper[0] - 1.0, paper[1] - 1.0], [paper[0] + 1.0, paper[1] + 1.0]],
             });
         }
         // Arrow on the first electrical device of this level
@@ -48,10 +40,7 @@ fn synthetic_markups_on_truth(t: &Truth) -> Vec<(String, Vec<SyntheticMarkup>)> 
                 author: "Electrician B".into(),
                 date: "2026-10-20".into(),
                 paper_in: paper,
-                paper_rect_in: [
-                    [paper[0] - 0.5, paper[1] - 0.5],
-                    [paper[0] + 0.5, paper[1] + 0.5],
-                ],
+                paper_rect_in: [[paper[0] - 0.5, paper[1] - 0.5], [paper[0] + 0.5, paper[1] + 0.5]],
             });
         }
         // Callout on the first terminal of this level
@@ -63,18 +52,12 @@ fn synthetic_markups_on_truth(t: &Truth) -> Vec<(String, Vec<SyntheticMarkup>)> 
                 author: "Inspector C".into(),
                 date: "2026-10-21".into(),
                 paper_in: paper,
-                paper_rect_in: [
-                    [paper[0] - 0.3, paper[1] - 0.3],
-                    [paper[0] + 0.3, paper[1] + 0.3],
-                ],
+                paper_rect_in: [[paper[0] - 0.3, paper[1] - 0.3], [paper[0] + 0.3, paper[1] + 0.3]],
             });
         }
         // Note on a conduit
         if let Some(cond) = t.elec_conduits.iter().find(|c| c.level == level) {
-            let mid = [
-                (cond.from_ft[0] + cond.to_ft[0]) * 0.5,
-                (cond.from_ft[1] + cond.to_ft[1]) * 0.5,
-            ];
+            let mid = [(cond.from_ft[0] + cond.to_ft[0]) * 0.5, (cond.from_ft[1] + cond.to_ft[1]) * 0.5];
             let paper = building_to_paper(sh, mid);
             markups.push(SyntheticMarkup {
                 kind: "note".into(),
@@ -82,10 +65,7 @@ fn synthetic_markups_on_truth(t: &Truth) -> Vec<(String, Vec<SyntheticMarkup>)> 
                 author: "Engineer D".into(),
                 date: "2026-10-21".into(),
                 paper_in: paper,
-                paper_rect_in: [
-                    [paper[0] - 0.3, paper[1] - 0.3],
-                    [paper[0] + 0.3, paper[1] + 0.3],
-                ],
+                paper_rect_in: [[paper[0] - 0.3, paper[1] - 0.3], [paper[0] + 0.3, paper[1] + 0.3]],
             });
         }
         if !markups.is_empty() {
@@ -135,10 +115,7 @@ fn full_workflow_synthetic_markups() {
 
     // Compare design vs as-built
     let deviations = compare_design_vs_asbuilt(&t, &record);
-    assert_eq!(
-        deviations.len(),
-        record.changes.iter().filter(|c| c.status != ChangeStatus::Rejected).count()
-    );
+    assert_eq!(deviations.len(), record.changes.iter().filter(|c| c.status != ChangeStatus::Rejected).count());
 
     // Apply changes to produce as-built truth
     let ab = asbuilt_truth(&t, &record);
@@ -204,10 +181,7 @@ fn markups_on_multiple_seeds() {
         }
         // Every seed with plan sheets should produce some changes
         if !markup_sets.is_empty() {
-            assert!(
-                !record.changes.is_empty(),
-                "seed {seed}: expected changes from markups"
-            );
+            assert!(!record.changes.is_empty(), "seed {seed}: expected changes from markups");
         }
         // As-built truth should not panic
         let _ = asbuilt_truth(&t, &record);
@@ -224,10 +198,7 @@ fn cloud_on_segment_produces_move() {
     let Some(seg) = t.segments.iter().find(|s| s.level == level) else {
         return;
     };
-    let bldg = [
-        (seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5,
-        (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5,
-    ];
+    let bldg = [(seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5, (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5];
     let paper = building_to_paper(sh, bldg);
     let markup = SyntheticMarkup {
         kind: "cloud".into(),
@@ -373,10 +344,7 @@ fn asbuilt_record_json_round_trip_full() {
     // Add various change types
     let changes = [
         ChangeKind::Moved { from_ft: [10.0, 20.0, 8.0], to_ft: [12.0, 20.0, 8.0] },
-        ChangeKind::Rerouted {
-            design_path_ft: [[5.0, 5.0, 8.0], [15.0, 5.0, 8.0]],
-            asbuilt_path_ft: [[5.0, 7.0, 8.0], [15.0, 7.0, 8.0]],
-        },
+        ChangeKind::Rerouted { design_path_ft: [[5.0, 5.0, 8.0], [15.0, 5.0, 8.0]], asbuilt_path_ft: [[5.0, 7.0, 8.0], [15.0, 7.0, 8.0]] },
         ChangeKind::TypeChanged { design_type: "EMT".into(), asbuilt_type: "RGS".into() },
         ChangeKind::SizeChanged { design_size: "3/4\"".into(), asbuilt_size: "1\"".into() },
         ChangeKind::Added,
@@ -391,13 +359,8 @@ fn asbuilt_record_json_round_trip_full() {
             element_id: format!("e-{i}"),
             element_kind: "segment".into(),
             kind,
-            status: [
-                ChangeStatus::Pending,
-                ChangeStatus::FieldDecision,
-                ChangeStatus::RfiAnswer,
-                ChangeStatus::ChangeOrder,
-                ChangeStatus::Rejected,
-            ][i % 5],
+            status: [ChangeStatus::Pending, ChangeStatus::FieldDecision, ChangeStatus::RfiAnswer, ChangeStatus::ChangeOrder, ChangeStatus::Rejected]
+                [i % 5],
             author: format!("Author {i}"),
             date: "2026-10-21".into(),
             reason: format!("Reason {i}"),
@@ -422,18 +385,11 @@ fn coordinate_transform_consistency() {
         }
         let level = sh.level.as_deref().unwrap_or("1");
         for seg in t.segments.iter().filter(|s| s.level == level).take(5) {
-            let bldg = [
-                (seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5,
-                (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5,
-            ];
+            let bldg = [(seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5, (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5];
             let paper = building_to_paper(sh, bldg);
             let back = paper_to_building(sh, paper);
             let err = ((back[0] - bldg[0]).powi(2) + (back[1] - bldg[1]).powi(2)).sqrt();
-            assert!(
-                err < 0.01,
-                "sheet {}: round trip error {err:.4} for bldg {bldg:?}",
-                sh.number
-            );
+            assert!(err < 0.01, "sheet {}: round trip error {err:.4} for bldg {bldg:?}", sh.number);
         }
     }
 }
@@ -443,13 +399,7 @@ fn mixed_statuses_in_comparison() {
     let t = fixture_truth();
     let mut rec = AsBuiltRecord::new(&t.project);
     // Add changes with different statuses
-    let statuses = [
-        ChangeStatus::FieldDecision,
-        ChangeStatus::Rejected,
-        ChangeStatus::RfiAnswer,
-        ChangeStatus::ChangeOrder,
-        ChangeStatus::Pending,
-    ];
+    let statuses = [ChangeStatus::FieldDecision, ChangeStatus::Rejected, ChangeStatus::RfiAnswer, ChangeStatus::ChangeOrder, ChangeStatus::Pending];
     for (i, status) in statuses.iter().enumerate() {
         rec.add_change(AsBuiltChange {
             id: format!("C-{i}"),

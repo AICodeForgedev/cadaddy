@@ -1,16 +1,12 @@
 //! Tests for pre-cover hold points and in-wall photos (Q334).
 
 use cadaddy_mepfix::covercheck::*;
-use cadaddy_mepfix::truth::{PlanWall, Room, Ceiling};
+use cadaddy_mepfix::truth::{Ceiling, PlanWall, Room};
 
 /// A minimal truth with two walls and one room with a ceiling, for testing.
 fn test_truth() -> cadaddy_mepfix::truth::Truth {
     let mut t = cadaddy_mepfix::truth::Truth::default();
-    t.building.levels.push(cadaddy_mepfix::truth::Level {
-        name: "1".into(),
-        code: "1".into(),
-        elevation_ft: 0.0,
-    });
+    t.building.levels.push(cadaddy_mepfix::truth::Level { name: "1".into(), code: "1".into(), elevation_ft: 0.0 });
     t.building.rooms.push(Room {
         id: "R1".into(),
         level: "1".into(),
@@ -18,11 +14,7 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
         name: "OFFICE".into(),
         min_ft: [0.0, 0.0],
         max_ft: [20.0, 15.0],
-        ceiling: Some(Ceiling {
-            height_ft: 9.0,
-            kind: "ACT".into(),
-            ..Ceiling::default()
-        }),
+        ceiling: Some(Ceiling { height_ft: 9.0, kind: "ACT".into(), ..Ceiling::default() }),
         plenum_ft: Some(3.0),
     });
     t.building.rooms.push(Room {
@@ -40,12 +32,7 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
         tag: "1A".into(),
         name: "Interior Partition".into(),
         layers: vec![
-            cadaddy_mepfix::truth::WallTypeLayer {
-                material: "gyp".into(),
-                thickness_in: 0.625,
-                side: "1".into(),
-                ..Default::default()
-            },
+            cadaddy_mepfix::truth::WallTypeLayer { material: "gyp".into(), thickness_in: 0.625, side: "1".into(), ..Default::default() },
             cadaddy_mepfix::truth::WallTypeLayer {
                 material: "stud".into(),
                 thickness_in: 3.625,
@@ -53,12 +40,7 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
                 spacing_in: Some(16.0),
                 ..Default::default()
             },
-            cadaddy_mepfix::truth::WallTypeLayer {
-                material: "gyp".into(),
-                thickness_in: 0.625,
-                side: "2".into(),
-                ..Default::default()
-            },
+            cadaddy_mepfix::truth::WallTypeLayer { material: "gyp".into(), thickness_in: 0.625, side: "2".into(), ..Default::default() },
         ],
         thickness_in: 4.875,
         height: "ceiling".into(),
@@ -385,12 +367,7 @@ fn fixture_set_cover_record() {
     // Should have areas for every plan wall (2 faces each) plus ceilings.
     let wall_count = t.plan_walls.len() * 2;
     let ceiling_count = t.building.rooms.iter().filter(|r| r.ceiling.is_some()).count();
-    assert_eq!(
-        record.areas.len(),
-        wall_count + ceiling_count,
-        "wall faces={wall_count}, ceilings={ceiling_count}, areas={}",
-        record.areas.len()
-    );
+    assert_eq!(record.areas.len(), wall_count + ceiling_count, "wall faces={wall_count}, ceilings={ceiling_count}, areas={}", record.areas.len());
     // Every area has a non-empty checklist.
     for a in &record.areas {
         assert!(!a.checklist.is_empty(), "area {} has empty checklist", a.id);

@@ -339,12 +339,7 @@ pub struct CoverRecord {
 
 impl CoverRecord {
     pub fn new(project: &str) -> Self {
-        Self {
-            schema: "cadaddy-covercheck/1".into(),
-            project: project.into(),
-            areas: Vec::new(),
-            phases: Vec::new(),
-        }
+        Self { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas: Vec::new(), phases: Vec::new() }
     }
 
     /// Find an area by id.
@@ -368,18 +363,12 @@ impl CoverRecord {
 
     /// Areas for a specific wall (both faces).
     pub fn wall_areas(&self, wall_id: &str) -> Vec<&CoverArea> {
-        self.areas
-            .iter()
-            .filter(|a| a.kind == AreaKind::WallFace && a.element_id == wall_id)
-            .collect()
+        self.areas.iter().filter(|a| a.kind == AreaKind::WallFace && a.element_id == wall_id).collect()
     }
 
     /// Areas for a specific ceiling.
     pub fn ceiling_areas(&self, ceiling_id: &str) -> Vec<&CoverArea> {
-        self.areas
-            .iter()
-            .filter(|a| a.kind == AreaKind::Ceiling && a.element_id == ceiling_id)
-            .collect()
+        self.areas.iter().filter(|a| a.kind == AreaKind::Ceiling && a.element_id == ceiling_id).collect()
     }
 
     /// All areas on a level.
@@ -389,10 +378,7 @@ impl CoverRecord {
 
     /// All photos for a given wall (both faces combined).
     pub fn wall_photos(&self, wall_id: &str) -> Vec<&InWallPhoto> {
-        self.wall_areas(wall_id)
-            .iter()
-            .flat_map(|a| a.photos.iter())
-            .collect()
+        self.wall_areas(wall_id).iter().flat_map(|a| a.photos.iter()).collect()
     }
 
     /// Summary of what's inside a wall: the checklist items, photos, and whether it's ready.
@@ -478,11 +464,8 @@ pub fn areas_from_truth(t: &Truth) -> Vec<CoverArea> {
         let wt = t.wall_types.iter().find(|x| x.tag == w.wall_type);
         let fire_rating = wt.and_then(|x| x.fire_rating.clone());
         for face in ["A", "B"] {
-            let face_rooms: Vec<String> = if face == "A" {
-                w.rooms.first().cloned().into_iter().collect()
-            } else {
-                w.rooms.last().cloned().into_iter().collect()
-            };
+            let face_rooms: Vec<String> =
+                if face == "A" { w.rooms.first().cloned().into_iter().collect() } else { w.rooms.last().cloned().into_iter().collect() };
             let area_id = format!("{}/{face}", w.id);
             areas.push(CoverArea {
                 id: area_id.clone(),
@@ -534,12 +517,7 @@ pub fn record_from_truth(t: &Truth, project: &str) -> CoverRecord {
         lvs.dedup();
         lvs
     };
-    CoverRecord {
-        schema: "cadaddy-covercheck/1".into(),
-        project: project.into(),
-        areas: areas_from_truth(t),
-        phases: default_phases(&levels),
-    }
+    CoverRecord { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas: areas_from_truth(t), phases: default_phases(&levels) }
 }
 
 // ---------------------------------------------------------------------------
@@ -593,21 +571,12 @@ pub fn resolve_wall_tap(
 }
 
 /// Resolve a ceiling tap: given a plan position and level, find the ceiling area the user tapped.
-pub fn resolve_ceiling_tap(
-    record: &CoverRecord,
-    rooms: &[crate::truth::Room],
-    tap_ft: [f64; 2],
-    level: &str,
-) -> Option<String> {
+pub fn resolve_ceiling_tap(record: &CoverRecord, rooms: &[crate::truth::Room], tap_ft: [f64; 2], level: &str) -> Option<String> {
     for rm in rooms {
         if rm.level != level || rm.ceiling.is_none() {
             continue;
         }
-        if tap_ft[0] >= rm.min_ft[0]
-            && tap_ft[0] <= rm.max_ft[0]
-            && tap_ft[1] >= rm.min_ft[1]
-            && tap_ft[1] <= rm.max_ft[1]
-        {
+        if tap_ft[0] >= rm.min_ft[0] && tap_ft[0] <= rm.max_ft[0] && tap_ft[1] >= rm.min_ft[1] && tap_ft[1] <= rm.max_ft[1] {
             let area_id = format!("CLG-{}-{}", rm.level, rm.number);
             if record.area(&area_id).is_some() {
                 return Some(area_id);
@@ -638,10 +607,7 @@ pub struct LevelSummary {
 pub fn summary_by_level(record: &CoverRecord) -> Vec<LevelSummary> {
     let mut map: BTreeMap<String, LevelSummary> = BTreeMap::new();
     for a in &record.areas {
-        let e = map.entry(a.level.clone()).or_insert_with(|| LevelSummary {
-            level: a.level.clone(),
-            ..LevelSummary::default()
-        });
+        let e = map.entry(a.level.clone()).or_insert_with(|| LevelSummary { level: a.level.clone(), ..LevelSummary::default() });
         match a.kind {
             AreaKind::WallFace => {
                 e.walls_total += 1;

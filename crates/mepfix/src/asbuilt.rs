@@ -60,15 +60,9 @@ pub enum ChangeKind {
         asbuilt_path_ft: [[f64; 3]; 2],
     },
     /// An element's type or spec was changed (e.g. fixture type, conduit type).
-    TypeChanged {
-        design_type: String,
-        asbuilt_type: String,
-    },
+    TypeChanged { design_type: String, asbuilt_type: String },
     /// An element's size was changed.
-    SizeChanged {
-        design_size: String,
-        asbuilt_size: String,
-    },
+    SizeChanged { design_size: String, asbuilt_size: String },
     /// A new element was added in the field (not on design drawings).
     Added,
     /// A design element was deleted (not built).
@@ -79,10 +73,7 @@ pub enum ChangeKind {
         at_ft: [f64; 3],
     },
     /// A height change (run raised or lowered).
-    HeightChanged {
-        design_ft: f64,
-        asbuilt_ft: f64,
-    },
+    HeightChanged { design_ft: f64, asbuilt_ft: f64 },
     /// General note or observation without a specific geometric change.
     Note,
 }
@@ -156,12 +147,7 @@ pub struct AsBuiltRecord {
 
 impl AsBuiltRecord {
     pub fn new(project: &str) -> Self {
-        Self {
-            schema: "cadaddy-mepfix-asbuilt/1".into(),
-            project: project.into(),
-            changes: Vec::new(),
-            markups: Vec::new(),
-        }
+        Self { schema: "cadaddy-mepfix-asbuilt/1".into(), project: project.into(), changes: Vec::new(), markups: Vec::new() }
     }
 
     /// Add a change, respecting the cap.
@@ -211,10 +197,7 @@ pub fn paper_to_building(sh: &Sheet, paper_in: [f64; 2]) -> [f64; 2] {
     // Paper → model: model = (paper / paper_from_model.scale) + paper_from_model.origin_in
     let pm = &sh.paper_from_model;
     let scale = if pm.scale.abs() < 1e-12 { 1.0 } else { pm.scale };
-    let model_in = [
-        paper_in[0] / scale + pm.origin_in[0],
-        paper_in[1] / scale + pm.origin_in[1],
-    ];
+    let model_in = [paper_in[0] / scale + pm.origin_in[0], paper_in[1] / scale + pm.origin_in[1]];
     // Model (inches) → building (feet): undo the placement
     let mb = &sh.model_from_building;
     let rot_rad = -mb.rotation_deg.to_radians();
@@ -237,24 +220,14 @@ pub fn building_to_paper(sh: &Sheet, bldg_ft: [f64; 2]) -> [f64; 2] {
     let sin_r = rot_rad.sin();
     let bx = bldg_ft[0] * 12.0;
     let by = bldg_ft[1] * 12.0;
-    let model_in = [
-        bx * cos_r - by * sin_r + mb.offset_in[0],
-        bx * sin_r + by * cos_r + mb.offset_in[1],
-    ];
+    let model_in = [bx * cos_r - by * sin_r + mb.offset_in[0], bx * sin_r + by * cos_r + mb.offset_in[1]];
     let pm = &sh.paper_from_model;
     let scale = if pm.scale.abs() < 1e-12 { 1.0 } else { pm.scale };
-    [
-        (model_in[0] - pm.origin_in[0]) * scale,
-        (model_in[1] - pm.origin_in[1]) * scale,
-    ]
+    [(model_in[0] - pm.origin_in[0]) * scale, (model_in[1] - pm.origin_in[1]) * scale]
 }
 
 /// Import synthetic markups from a sheet and map them to building coordinates and nearby elements.
-pub fn import_markups(
-    truth: &Truth,
-    sheet: &Sheet,
-    markups: &[SyntheticMarkup],
-) -> Vec<MappedMarkup> {
+pub fn import_markups(truth: &Truth, sheet: &Sheet, markups: &[SyntheticMarkup]) -> Vec<MappedMarkup> {
     let level = sheet.level.clone().unwrap_or_default();
     let mut result = Vec::new();
     for (i, m) in markups.iter().take(MAX_MARKUPS_PER_PAGE).enumerate() {
@@ -288,10 +261,7 @@ fn find_near_elements(truth: &Truth, level: &str, at_ft: [f64; 2], radius_ft: f6
         if s.level != level {
             continue;
         }
-        let mid = [
-            (s.path_ft[0][0] + s.path_ft[1][0]) * 0.5,
-            (s.path_ft[0][1] + s.path_ft[1][1]) * 0.5,
-        ];
+        let mid = [(s.path_ft[0][0] + s.path_ft[1][0]) * 0.5, (s.path_ft[0][1] + s.path_ft[1][1]) * 0.5];
         if dist2(at_ft, mid) < r2 || point_seg_dist2(at_ft, s) < r2 {
             ids.push(s.id.clone());
         }
@@ -321,10 +291,7 @@ fn find_near_elements(truth: &Truth, level: &str, at_ft: [f64; 2], radius_ft: f6
         if c.level != level {
             continue;
         }
-        let mid = [
-            (c.from_ft[0] + c.to_ft[0]) * 0.5,
-            (c.from_ft[1] + c.to_ft[1]) * 0.5,
-        ];
+        let mid = [(c.from_ft[0] + c.to_ft[0]) * 0.5, (c.from_ft[1] + c.to_ft[1]) * 0.5];
         if dist2(at_ft, mid) < r2 {
             ids.push(c.id.clone());
         }
@@ -371,11 +338,7 @@ fn point_seg_dist2(p: [f64; 2], seg: &Segment) -> f64 {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        s[..max].to_string()
-    }
+    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,11 +350,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// Cloud markups → area change (moved/rerouted for the nearest element).
 /// Arrow markups → relocation.
 /// Callout/note markups → notes or type changes when text contains keywords.
-pub fn markup_to_change(
-    markup: &MappedMarkup,
-    truth: &Truth,
-    change_id: &str,
-) -> Option<AsBuiltChange> {
+pub fn markup_to_change(markup: &MappedMarkup, truth: &Truth, change_id: &str) -> Option<AsBuiltChange> {
     if markup.near_elements.is_empty() {
         return None;
     }
@@ -403,19 +362,13 @@ pub fn markup_to_change(
             // A cloud around an area → the nearest element was changed.
             let ek = element_kind_of(truth, &element_id);
             let ck = if text_lower.contains("move") || text_lower.contains("relocat") {
-                ChangeKind::Moved {
-                    from_ft: element_position(truth, &element_id),
-                    to_ft: [markup.building_ft[0], markup.building_ft[1], 0.0],
-                }
+                ChangeKind::Moved { from_ft: element_position(truth, &element_id), to_ft: [markup.building_ft[0], markup.building_ft[1], 0.0] }
             } else if text_lower.contains("delet") || text_lower.contains("remov") {
                 ChangeKind::Deleted
             } else if text_lower.contains("add") || text_lower.contains("new") {
                 ChangeKind::Added
             } else if text_lower.contains("type") || text_lower.contains("change to") {
-                ChangeKind::TypeChanged {
-                    design_type: String::new(),
-                    asbuilt_type: markup.text.clone(),
-                }
+                ChangeKind::TypeChanged { design_type: String::new(), asbuilt_type: markup.text.clone() }
             } else {
                 ChangeKind::Note
             };
@@ -424,30 +377,16 @@ pub fn markup_to_change(
         "arrow" => {
             let ek = element_kind_of(truth, &element_id);
             let pos = element_position(truth, &element_id);
-            (
-                ek,
-                ChangeKind::Moved {
-                    from_ft: pos,
-                    to_ft: [markup.building_ft[0], markup.building_ft[1], pos[2]],
-                },
-            )
+            (ek, ChangeKind::Moved { from_ft: pos, to_ft: [markup.building_ft[0], markup.building_ft[1], pos[2]] })
         }
         "callout" | "note" => {
             let ek = element_kind_of(truth, &element_id);
             let ck = if text_lower.contains("verif") || text_lower.contains("confirmed") {
-                ChangeKind::FieldVerified {
-                    at_ft: element_position(truth, &element_id),
-                }
+                ChangeKind::FieldVerified { at_ft: element_position(truth, &element_id) }
             } else if text_lower.contains("reroute") || text_lower.contains("rerouted") {
-                ChangeKind::Rerouted {
-                    design_path_ft: [[0.0; 3]; 2],
-                    asbuilt_path_ft: [[0.0; 3]; 2],
-                }
+                ChangeKind::Rerouted { design_path_ft: [[0.0; 3]; 2], asbuilt_path_ft: [[0.0; 3]; 2] }
             } else if text_lower.contains("raise") || text_lower.contains("lower") {
-                ChangeKind::HeightChanged {
-                    design_ft: 0.0,
-                    asbuilt_ft: 0.0,
-                }
+                ChangeKind::HeightChanged { design_ft: 0.0, asbuilt_ft: 0.0 }
             } else {
                 ChangeKind::Note
             };
@@ -499,22 +438,14 @@ fn element_kind_of(truth: &Truth, id: &str) -> String {
 /// Get the 3D position of a truth element by id.
 fn element_position(truth: &Truth, id: &str) -> [f64; 3] {
     if let Some(s) = truth.segments.iter().find(|s| s.id == id) {
-        let mid = [
-            (s.path_ft[0][0] + s.path_ft[1][0]) * 0.5,
-            (s.path_ft[0][1] + s.path_ft[1][1]) * 0.5,
-            (s.path_ft[0][2] + s.path_ft[1][2]) * 0.5,
-        ];
+        let mid = [(s.path_ft[0][0] + s.path_ft[1][0]) * 0.5, (s.path_ft[0][1] + s.path_ft[1][1]) * 0.5, (s.path_ft[0][2] + s.path_ft[1][2]) * 0.5];
         return mid;
     }
     if let Some(d) = truth.elec_devices.iter().find(|d| d.id == id) {
         return d.at_ft;
     }
     if let Some(e) = truth.equipment.iter().find(|e| e.id == id) {
-        return [
-            (e.min_ft[0] + e.max_ft[0]) * 0.5,
-            (e.min_ft[1] + e.max_ft[1]) * 0.5,
-            (e.min_ft[2] + e.max_ft[2]) * 0.5,
-        ];
+        return [(e.min_ft[0] + e.max_ft[0]) * 0.5, (e.min_ft[1] + e.max_ft[1]) * 0.5, (e.min_ft[2] + e.max_ft[2]) * 0.5];
     }
     if let Some(c) = truth.elec_conduits.iter().find(|c| c.id == id) {
         return [(c.from_ft[0] + c.to_ft[0]) * 0.5, (c.from_ft[1] + c.to_ft[1]) * 0.5, 0.0];
@@ -559,18 +490,11 @@ pub fn compare_design_vs_asbuilt(_truth: &Truth, record: &AsBuiltRecord) -> Vec<
         }
         let dev = match &change.kind {
             ChangeKind::Moved { from_ft, to_ft } => {
-                let d = ((to_ft[0] - from_ft[0]).powi(2)
-                    + (to_ft[1] - from_ft[1]).powi(2)
-                    + (to_ft[2] - from_ft[2]).powi(2))
-                .sqrt();
+                let d = ((to_ft[0] - from_ft[0]).powi(2) + (to_ft[1] - from_ft[1]).powi(2) + (to_ft[2] - from_ft[2]).powi(2)).sqrt();
                 Deviation {
                     element_id: change.element_id.clone(),
                     element_kind: change.element_kind.clone(),
-                    description: format!(
-                        "Moved {:.1}' from design position ({})",
-                        d,
-                        change.reason
-                    ),
+                    description: format!("Moved {:.1}' from design position ({})", d, change.reason),
                     level: change.level.clone(),
                     at_ft: change.at_ft,
                     magnitude: d,
@@ -578,9 +502,7 @@ pub fn compare_design_vs_asbuilt(_truth: &Truth, record: &AsBuiltRecord) -> Vec<
                 }
             }
             ChangeKind::Rerouted { design_path_ft, asbuilt_path_ft } => {
-                let d = ((asbuilt_path_ft[0][0] - design_path_ft[0][0]).powi(2)
-                    + (asbuilt_path_ft[0][1] - design_path_ft[0][1]).powi(2))
-                .sqrt();
+                let d = ((asbuilt_path_ft[0][0] - design_path_ft[0][0]).powi(2) + (asbuilt_path_ft[0][1] - design_path_ft[0][1]).powi(2)).sqrt();
                 Deviation {
                     element_id: change.element_id.clone(),
                     element_kind: change.element_kind.clone(),
@@ -594,10 +516,7 @@ pub fn compare_design_vs_asbuilt(_truth: &Truth, record: &AsBuiltRecord) -> Vec<
             ChangeKind::TypeChanged { design_type, asbuilt_type } => Deviation {
                 element_id: change.element_id.clone(),
                 element_kind: change.element_kind.clone(),
-                description: format!(
-                    "Type changed: {} -> {} ({})",
-                    design_type, asbuilt_type, change.reason
-                ),
+                description: format!("Type changed: {} -> {} ({})", design_type, asbuilt_type, change.reason),
                 level: change.level.clone(),
                 at_ft: change.at_ft,
                 magnitude: 1.0,
@@ -606,10 +525,7 @@ pub fn compare_design_vs_asbuilt(_truth: &Truth, record: &AsBuiltRecord) -> Vec<
             ChangeKind::SizeChanged { design_size, asbuilt_size } => Deviation {
                 element_id: change.element_id.clone(),
                 element_kind: change.element_kind.clone(),
-                description: format!(
-                    "Size changed: {} -> {} ({})",
-                    design_size, asbuilt_size, change.reason
-                ),
+                description: format!("Size changed: {} -> {} ({})", design_size, asbuilt_size, change.reason),
                 level: change.level.clone(),
                 at_ft: change.at_ft,
                 magnitude: 1.0,
@@ -645,12 +561,7 @@ pub fn compare_design_vs_asbuilt(_truth: &Truth, record: &AsBuiltRecord) -> Vec<
             ChangeKind::HeightChanged { design_ft, asbuilt_ft } => Deviation {
                 element_id: change.element_id.clone(),
                 element_kind: change.element_kind.clone(),
-                description: format!(
-                    "Height changed: {} -> {} ({})",
-                    truth::feet_inches(*design_ft),
-                    truth::feet_inches(*asbuilt_ft),
-                    change.reason
-                ),
+                description: format!("Height changed: {} -> {} ({})", truth::feet_inches(*design_ft), truth::feet_inches(*asbuilt_ft), change.reason),
                 level: change.level.clone(),
                 at_ft: change.at_ft,
                 magnitude: (asbuilt_ft - design_ft).abs(),
@@ -712,9 +623,7 @@ pub fn asbuilt_truth(design: &Truth, record: &AsBuiltRecord) -> Truth {
                     h.centre_ft = *asbuilt_ft;
                 }
             }
-            ChangeKind::FieldVerified { .. }
-            | ChangeKind::Added
-            | ChangeKind::Note => {}
+            ChangeKind::FieldVerified { .. } | ChangeKind::Added | ChangeKind::Note => {}
         }
     }
     t
@@ -832,34 +741,24 @@ fn apply_delete(t: &mut Truth, id: &str, kind: &str) {
 /// - Note: text at position, yellow.
 ///
 /// Returns a `Drawing` with the as-built overlay on layer `ASBUILT-CHANGES`.
-pub fn asbuilt_overlay(
-    record: &AsBuiltRecord,
-    level: &str,
-) -> Vec<AsBuiltMark> {
+pub fn asbuilt_overlay(record: &AsBuiltRecord, level: &str) -> Vec<AsBuiltMark> {
     let mut marks = Vec::new();
     for change in &record.changes {
         if change.level != level || change.status == ChangeStatus::Rejected {
             continue;
         }
         let symbol = match &change.kind {
-            ChangeKind::Moved { from_ft, to_ft } => MarkSymbol::Arrow {
-                from: [from_ft[0], from_ft[1]],
-                to: [to_ft[0], to_ft[1]],
-            },
+            ChangeKind::Moved { from_ft, to_ft } => MarkSymbol::Arrow { from: [from_ft[0], from_ft[1]], to: [to_ft[0], to_ft[1]] },
             ChangeKind::Rerouted { design_path_ft, asbuilt_path_ft } => MarkSymbol::Reroute {
                 old_from: [design_path_ft[0][0], design_path_ft[0][1]],
                 old_to: [design_path_ft[1][0], design_path_ft[1][1]],
                 new_from: [asbuilt_path_ft[0][0], asbuilt_path_ft[0][1]],
                 new_to: [asbuilt_path_ft[1][0], asbuilt_path_ft[1][1]],
             },
-            ChangeKind::TypeChanged { .. } | ChangeKind::SizeChanged { .. } => {
-                MarkSymbol::Diamond(change.at_ft)
-            }
+            ChangeKind::TypeChanged { .. } | ChangeKind::SizeChanged { .. } => MarkSymbol::Diamond(change.at_ft),
             ChangeKind::Added => MarkSymbol::Circle(change.at_ft),
             ChangeKind::Deleted => MarkSymbol::Cross(change.at_ft),
-            ChangeKind::FieldVerified { at_ft } => {
-                MarkSymbol::Check([at_ft[0], at_ft[1]])
-            }
+            ChangeKind::FieldVerified { at_ft } => MarkSymbol::Check([at_ft[0], at_ft[1]]),
             ChangeKind::HeightChanged { .. } => MarkSymbol::Diamond(change.at_ft),
             ChangeKind::Note => MarkSymbol::Text(change.at_ft, change.reason.clone()),
         };
@@ -880,12 +779,7 @@ pub enum MarkSymbol {
     /// Arrow from old position to new, feet.
     Arrow { from: [f64; 2], to: [f64; 2] },
     /// Reroute: old and new paths in plan, feet.
-    Reroute {
-        old_from: [f64; 2],
-        old_to: [f64; 2],
-        new_from: [f64; 2],
-        new_to: [f64; 2],
-    },
+    Reroute { old_from: [f64; 2], old_to: [f64; 2], new_from: [f64; 2], new_to: [f64; 2] },
     /// Diamond at a point (type/size change).
     Diamond([f64; 2]),
     /// Circle at a point (added element).
@@ -967,16 +861,10 @@ pub fn asbuilt_ifc_properties(change: &AsBuiltChange) -> BTreeMap<String, String
             props.insert("AsBuiltDescription".into(), "Run rerouted".into());
         }
         ChangeKind::TypeChanged { design_type, asbuilt_type } => {
-            props.insert(
-                "AsBuiltDescription".into(),
-                format!("Type changed: {} -> {}", design_type, asbuilt_type),
-            );
+            props.insert("AsBuiltDescription".into(), format!("Type changed: {} -> {}", design_type, asbuilt_type));
         }
         ChangeKind::SizeChanged { design_size, asbuilt_size } => {
-            props.insert(
-                "AsBuiltDescription".into(),
-                format!("Size changed: {} -> {}", design_size, asbuilt_size),
-            );
+            props.insert("AsBuiltDescription".into(), format!("Size changed: {} -> {}", design_size, asbuilt_size));
         }
         ChangeKind::Added => {
             props.insert("AsBuiltDescription".into(), "Added in field".into());
@@ -985,19 +873,12 @@ pub fn asbuilt_ifc_properties(change: &AsBuiltChange) -> BTreeMap<String, String
             props.insert("AsBuiltDescription".into(), "Not built (deleted)".into());
         }
         ChangeKind::FieldVerified { at_ft } => {
-            props.insert(
-                "AsBuiltDescription".into(),
-                format!("Field verified at ({:.2}, {:.2}, {:.2})", at_ft[0], at_ft[1], at_ft[2]),
-            );
+            props.insert("AsBuiltDescription".into(), format!("Field verified at ({:.2}, {:.2}, {:.2})", at_ft[0], at_ft[1], at_ft[2]));
         }
         ChangeKind::HeightChanged { design_ft, asbuilt_ft } => {
             props.insert(
                 "AsBuiltDescription".into(),
-                format!(
-                    "Height changed: {} -> {}",
-                    truth::feet_inches(*design_ft),
-                    truth::feet_inches(*asbuilt_ft)
-                ),
+                format!("Height changed: {} -> {}", truth::feet_inches(*design_ft), truth::feet_inches(*asbuilt_ft)),
             );
         }
         ChangeKind::Note => {
@@ -1034,10 +915,7 @@ pub struct AsBuiltSummary {
 
 /// Compute summary statistics.
 pub fn summarize(record: &AsBuiltRecord) -> AsBuiltSummary {
-    let mut s = AsBuiltSummary {
-        total_changes: record.changes.len(),
-        ..Default::default()
-    };
+    let mut s = AsBuiltSummary { total_changes: record.changes.len(), ..Default::default() };
     for c in &record.changes {
         match c.status {
             ChangeStatus::Pending => s.pending += 1,
@@ -1086,10 +964,7 @@ mod tests {
             id: "C-1".into(),
             element_id: "seg-1".into(),
             element_kind: "segment".into(),
-            kind: ChangeKind::Moved {
-                from_ft: [10.0, 20.0, 8.0],
-                to_ft: [12.0, 20.0, 8.0],
-            },
+            kind: ChangeKind::Moved { from_ft: [10.0, 20.0, 8.0], to_ft: [12.0, 20.0, 8.0] },
             status: ChangeStatus::FieldDecision,
             author: "Foreman A".into(),
             date: "2026-10-21".into(),
@@ -1154,16 +1029,10 @@ mod tests {
         };
         let level = sh.level.as_deref().unwrap_or("1");
         if let Some(seg) = t.segments.iter().find(|s| s.level == level) {
-            let bldg = [
-                (seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5,
-                (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5,
-            ];
+            let bldg = [(seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5, (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5];
             let paper = building_to_paper(sh, bldg);
             let back = paper_to_building(sh, paper);
-            assert!(
-                (back[0] - bldg[0]).abs() < 0.01 && (back[1] - bldg[1]).abs() < 0.01,
-                "round trip failed: {bldg:?} -> {paper:?} -> {back:?}"
-            );
+            assert!((back[0] - bldg[0]).abs() < 0.01 && (back[1] - bldg[1]).abs() < 0.01, "round trip failed: {bldg:?} -> {paper:?} -> {back:?}");
         }
     }
 
@@ -1177,10 +1046,7 @@ mod tests {
 
         // Find a real segment on this level and compute its paper position
         if let Some(seg) = t.segments.iter().find(|s| s.level == level) {
-            let bldg = [
-                (seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5,
-                (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5,
-            ];
+            let bldg = [(seg.path_ft[0][0] + seg.path_ft[1][0]) * 0.5, (seg.path_ft[0][1] + seg.path_ft[1][1]) * 0.5];
             let paper = building_to_paper(sh, bldg);
             let markup = SyntheticMarkup {
                 kind: "cloud".into(),
@@ -1198,12 +1064,7 @@ mod tests {
             assert_eq!(m.level, level);
             assert!(!m.near_elements.is_empty(), "should find nearby elements");
             // The segment we targeted should be among the near elements
-            assert!(
-                m.near_elements.contains(&seg.id),
-                "expected {} in near_elements {:?}",
-                seg.id,
-                m.near_elements
-            );
+            assert!(m.near_elements.contains(&seg.id), "expected {} in near_elements {:?}", seg.id, m.near_elements);
         }
     }
 
@@ -1220,9 +1081,7 @@ mod tests {
             paper_pt: [5.0, 5.0],
             building_ft: [20.0, 15.0],
             level: "1".into(),
-            near_elements: vec![
-                t.elec_devices.first().map(|d| d.id.clone()).unwrap_or_else(|| "dev-1".into()),
-            ],
+            near_elements: vec![t.elec_devices.first().map(|d| d.id.clone()).unwrap_or_else(|| "dev-1".into())],
             bounds_ft: [[19.5, 14.5], [20.5, 15.5]],
         };
         let change = markup_to_change(&markup, &t, "C-1");
@@ -1286,10 +1145,7 @@ mod tests {
                 id: "C-1".into(),
                 element_id: dev.id.clone(),
                 element_kind: "elec_device".into(),
-                kind: ChangeKind::Moved {
-                    from_ft: dev.at_ft,
-                    to_ft: [dev.at_ft[0] + 2.0, dev.at_ft[1], dev.at_ft[2]],
-                },
+                kind: ChangeKind::Moved { from_ft: dev.at_ft, to_ft: [dev.at_ft[0] + 2.0, dev.at_ft[1], dev.at_ft[2]] },
                 status: ChangeStatus::FieldDecision,
                 author: "A".into(),
                 date: "2026-10-21".into(),
@@ -1333,10 +1189,7 @@ mod tests {
                 id: "C-1".into(),
                 element_id: dev.id.clone(),
                 element_kind: "elec_device".into(),
-                kind: ChangeKind::Moved {
-                    from_ft: dev.at_ft,
-                    to_ft: new_pos,
-                },
+                kind: ChangeKind::Moved { from_ft: dev.at_ft, to_ft: new_pos },
                 status: ChangeStatus::FieldDecision,
                 author: "A".into(),
                 date: "2026-10-21".into(),
@@ -1411,10 +1264,7 @@ mod tests {
             id: "C-1".into(),
             element_id: "d-1".into(),
             element_kind: "elec_device".into(),
-            kind: ChangeKind::Moved {
-                from_ft: [10.0, 20.0, 4.0],
-                to_ft: [12.0, 20.0, 4.0],
-            },
+            kind: ChangeKind::Moved { from_ft: [10.0, 20.0, 4.0], to_ft: [12.0, 20.0, 4.0] },
             status: ChangeStatus::FieldDecision,
             author: "A".into(),
             date: "2026-10-21".into(),
@@ -1451,10 +1301,7 @@ mod tests {
             id: "C-1".into(),
             element_id: "seg-1".into(),
             element_kind: "segment".into(),
-            kind: ChangeKind::TypeChanged {
-                design_type: "EMT".into(),
-                asbuilt_type: "RGS".into(),
-            },
+            kind: ChangeKind::TypeChanged { design_type: "EMT".into(), asbuilt_type: "RGS".into() },
             status: ChangeStatus::RfiAnswer,
             author: "Engineer".into(),
             date: "2026-10-21".into(),
@@ -1522,10 +1369,7 @@ mod tests {
             id: "C-1".into(),
             element_id: "seg-1".into(),
             element_kind: "segment".into(),
-            kind: ChangeKind::HeightChanged {
-                design_ft: 10.5,
-                asbuilt_ft: 11.0,
-            },
+            kind: ChangeKind::HeightChanged { design_ft: 10.5, asbuilt_ft: 11.0 },
             status: ChangeStatus::RfiAnswer,
             author: "Eng".into(),
             date: "2026-10-21".into(),

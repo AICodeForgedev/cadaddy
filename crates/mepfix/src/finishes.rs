@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::truth::{FinishCode, Room, Truth, PlanWall};
+use crate::truth::{FinishCode, PlanWall, Room, Truth};
 
 // ---- Waste factors (trade standards) --------------------------------------------------------
 
@@ -26,15 +26,15 @@ pub fn waste_factor(category: &str) -> f64 {
         "ceramic_tile" => 0.10,     // 10% — cuts and breakage
         "porcelain_tile" => 0.10,
         "rubber_treads" => 0.05,
-        "sealed_concrete" => 0.0,   // sealer applied per SF, negligible
+        "sealed_concrete" => 0.0, // sealer applied per SF, negligible
         "rubber_base" => 0.05,
         "cove_base" => 0.05,
-        "paint" => 0.05,            // 5% overage
-        "wallcovering" => 0.15,     // 15% — pattern match
+        "paint" => 0.05,        // 5% overage
+        "wallcovering" => 0.15, // 15% — pattern match
         "wall_tile" => 0.10,
-        "act_tile" => 0.03,         // 3% — grid tile
-        "gypsum_board" => 0.10,     // 10% — sheet cuts
-        "door" => 0.0,              // counted, no waste
+        "act_tile" => 0.03,     // 3% — grid tile
+        "gypsum_board" => 0.10, // 10% — sheet cuts
+        "door" => 0.0,          // counted, no waste
         "frame" => 0.0,
         "hardware" => 0.0,
         "window" => 0.0,
@@ -116,11 +116,15 @@ fn room_walls<'a>(room: &Room, walls: &'a [PlanWall]) -> Vec<(&'a PlanWall, f64,
         }
         let len = wall_length(wall);
         // Net area: full height minus openings.
-        let opening_area: f64 = wall.openings.iter().map(|o| {
-            let w = (o[1] - o[0]).abs();
-            // Approximate: full-height opening (door height ≈ 7 ft).
-            w * 7.0_f64.min(wall.height_ft)
-        }).sum();
+        let opening_area: f64 = wall
+            .openings
+            .iter()
+            .map(|o| {
+                let w = (o[1] - o[0]).abs();
+                // Approximate: full-height opening (door height ≈ 7 ft).
+                w * 7.0_f64.min(wall.height_ft)
+            })
+            .sum();
         let gross = len * wall.height_ft;
         let net = (gross - opening_area).max(0.0);
         out.push((wall, len, net));
@@ -232,10 +236,11 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
         });
 
         // Transitions: one per door opening in the room (where flooring meets the adjacent room's).
-        let door_count = arch.doors.iter().filter(|d| {
-            d.level == rf.level
-                && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number))
-        }).count();
+        let door_count = arch
+            .doors
+            .iter()
+            .filter(|d| d.level == rf.level && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number)))
+            .count();
         if door_count > 0 {
             items.push(TakeoffItem {
                 trade: "flooring".into(),
@@ -257,11 +262,10 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
         let base_cat = code_to_category(&base_desc);
         let base_wf = waste_factor(base_cat);
         // Subtract door openings from base perimeter.
-        let door_width_lf: f64 = arch.doors.iter()
-            .filter(|d| {
-                d.level == rf.level
-                    && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number))
-            })
+        let door_width_lf: f64 = arch
+            .doors
+            .iter()
+            .filter(|d| d.level == rf.level && (d.swings_into.as_deref() == Some(&rf.number) || d.from_room.as_deref() == Some(&rf.number)))
             .map(|d| d.width_in / 12.0)
             .sum();
         let base_lf = (perim - door_width_lf).max(0.0);
@@ -519,21 +523,25 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
         }
 
         // Window treatments: one per window in this room.
-        let window_count = arch.windows.iter().filter(|w| {
-            if w.level != rf.level {
-                return false;
-            }
-            // Check if window is in this room's bounds.
-            let wt = arch.window_types.iter().find(|t| t.mark == w.mark);
-            let storefront = wt.is_some_and(|t| t.storefront);
-            if storefront {
-                return false; // storefront gets no treatments
-            }
-            w.at_ft[0] > room.min_ft[0] - 1.0
-                && w.at_ft[0] < room.max_ft[0] + 1.0
-                && w.at_ft[1] > room.min_ft[1] - 1.0
-                && w.at_ft[1] < room.max_ft[1] + 1.0
-        }).count();
+        let window_count = arch
+            .windows
+            .iter()
+            .filter(|w| {
+                if w.level != rf.level {
+                    return false;
+                }
+                // Check if window is in this room's bounds.
+                let wt = arch.window_types.iter().find(|t| t.mark == w.mark);
+                let storefront = wt.is_some_and(|t| t.storefront);
+                if storefront {
+                    return false; // storefront gets no treatments
+                }
+                w.at_ft[0] > room.min_ft[0] - 1.0
+                    && w.at_ft[0] < room.max_ft[0] + 1.0
+                    && w.at_ft[1] > room.min_ft[1] - 1.0
+                    && w.at_ft[1] < room.max_ft[1] + 1.0
+            })
+            .count();
         if window_count > 0 {
             items.push(TakeoffItem {
                 trade: "specialties".into(),
@@ -553,7 +561,9 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
 
     // ---- 5. Doors, frames, hardware sets ----
     for door in &arch.doors {
-        let rm_name = door.swings_into.as_deref()
+        let rm_name = door
+            .swings_into
+            .as_deref()
             .or(door.from_room.as_deref())
             .and_then(|n| finishes.iter().find(|f| f.number == n && f.level == door.level))
             .map_or("", |f| f.name.as_str());
@@ -602,9 +612,7 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
         });
 
         // Hardware set
-        let hw_items = arch.hardware.iter()
-            .find(|g| g.group == door.hardware)
-            .map_or_else(|| door.hardware.clone(), |g| g.items.join(", "));
+        let hw_items = arch.hardware.iter().find(|g| g.group == door.hardware).map_or_else(|| door.hardware.clone(), |g| g.items.join(", "));
         items.push(TakeoffItem {
             trade: "doors_frames_hardware".into(),
             description: format!("HARDWARE SET {}: {}", door.hardware, hw_items),
@@ -682,11 +690,7 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
                 return None;
             }
             let count = trade_items.len();
-            Some(TradeSummary {
-                trade: tn.to_string(),
-                items: trade_items,
-                line_count: count,
-            })
+            Some(TradeSummary { trade: tn.to_string(), items: trade_items, line_count: count })
         })
         .collect();
 
@@ -696,9 +700,7 @@ pub fn compute_takeoff(truth: &Truth) -> FinishTakeoff {
 // ---- Helpers --------------------------------------------------------------------------------
 
 fn code_description(codes: &[FinishCode], code: &str) -> String {
-    codes.iter()
-        .find(|c| c.code == code)
-        .map_or_else(|| code.to_string(), |c| format!("{}: {}", c.code, c.description))
+    codes.iter().find(|c| c.code == code).map_or_else(|| code.to_string(), |c| format!("{}: {}", c.code, c.description))
 }
 
 /// Parse "...TO 7'-0\"..." → Some(7.0).
@@ -730,10 +732,14 @@ fn wall_tile_area(room: &Room, walls: &[PlanWall], tile_height_ft: f64) -> f64 {
         let th = tile_height_ft.min(wall.height_ft);
         let gross = len * th;
         // Subtract openings that are below tile height.
-        let opening_area: f64 = wall.openings.iter().map(|o| {
-            let w = (o[1] - o[0]).abs();
-            w * th.min(7.0)
-        }).sum();
+        let opening_area: f64 = wall
+            .openings
+            .iter()
+            .map(|o| {
+                let w = (o[1] - o[0]).abs();
+                w * th.min(7.0)
+            })
+            .sum();
         area += (gross - opening_area).max(0.0);
     }
     area
@@ -762,11 +768,7 @@ fn toilet_accessories() -> Vec<(&'static str, usize)> {
 fn inches_to_ft_in(inches: f64) -> String {
     let ft = (inches / 12.0).floor() as i64;
     let rem = (inches - ft as f64 * 12.0).round() as i64;
-    if rem == 0 {
-        format!("{ft}'-0\"")
-    } else {
-        format!("{ft}'-{rem}\"")
-    }
+    if rem == 0 { format!("{ft}'-0\"") } else { format!("{ft}'-{rem}\"") }
 }
 
 fn round2(v: f64) -> f64 {
@@ -799,11 +801,31 @@ mod tests {
     #[test]
     fn waste_factors_are_nonnegative() {
         for cat in &[
-            "carpet_tile", "carpet_broadloom", "lvt", "vct", "ceramic_tile",
-            "porcelain_tile", "rubber_treads", "sealed_concrete", "rubber_base",
-            "cove_base", "paint", "wallcovering", "wall_tile", "act_tile",
-            "gypsum_board", "door", "frame", "hardware", "window", "glass",
-            "partition", "accessory", "signage", "corner_guard", "fire_extinguisher",
+            "carpet_tile",
+            "carpet_broadloom",
+            "lvt",
+            "vct",
+            "ceramic_tile",
+            "porcelain_tile",
+            "rubber_treads",
+            "sealed_concrete",
+            "rubber_base",
+            "cove_base",
+            "paint",
+            "wallcovering",
+            "wall_tile",
+            "act_tile",
+            "gypsum_board",
+            "door",
+            "frame",
+            "hardware",
+            "window",
+            "glass",
+            "partition",
+            "accessory",
+            "signage",
+            "corner_guard",
+            "fire_extinguisher",
         ] {
             assert!(waste_factor(cat) >= 0.0, "{cat}");
             assert!(waste_factor(cat) <= 1.0, "{cat}");

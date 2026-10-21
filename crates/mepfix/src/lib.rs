@@ -16,26 +16,26 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod arch;
+pub mod arch_reader;
+pub mod asbuilt;
 pub mod bore;
 pub mod callout_reader;
 pub mod ceilasm_reader;
-pub mod arch;
-pub mod arch_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
-pub mod asbuilt;
-pub mod covercheck;
 pub mod clash;
+pub mod covercheck;
 pub mod design;
 pub mod draw;
 pub mod duct_reader;
 pub mod elec_reader;
-pub mod equip_reader;
-pub mod framing;
-pub mod gaps;
-pub mod finishes;
 pub mod envelope;
 pub mod envelope_reader;
+pub mod equip_reader;
+pub mod finishes;
+pub mod framing;
+pub mod gaps;
 
 pub mod heights;
 pub mod hotel;
