@@ -81,6 +81,7 @@ mod overkill;
 pub mod p2meval;
 pub mod pdfplans;
 mod perceive;
+pub mod printset;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
@@ -283,6 +284,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
+        v.extend(printset::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());
         v.extend(exterior::specs());

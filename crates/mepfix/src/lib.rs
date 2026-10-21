@@ -35,6 +35,7 @@ pub mod heights;
 pub mod hotel;
 pub mod layout;
 pub mod pipe_reader;
+pub mod printset;
 pub mod rfi;
 pub mod rng;
 pub mod score;
