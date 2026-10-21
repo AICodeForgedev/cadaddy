@@ -3,6 +3,9 @@
 //! engineers draw them, with the ground truth (every run, size, height, fitting, terminal and
 //! piece of equipment) as JSON. Deterministic by seed; drafting style varies by seed.
 //!
+//! The architectural sheets add wall types and floor plans ([`walls`]), and ceiling types, soffit
+//! and head of wall details and a room finish schedule ([`ceilings`]).
+//!
 //! Print readers (sheet recognition, ductwork, piping, heights, clashes…) are scored against the
 //! truth: see [`score`].
 //!
@@ -11,7 +14,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod ceilasm_reader;
 pub mod ceiling_reader;
+pub mod ceilings;
 pub mod clash;
 pub mod design;
 pub mod draw;
@@ -63,6 +68,7 @@ pub fn truth_for(seed: u64) -> Truth {
     let mut t = d.truth;
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
+    add_ceilings(&mut t, &mut st);
     t
 }
 
@@ -72,6 +78,14 @@ fn add_walls(t: &mut Truth, st: &mut style::Style) {
     let mut r = Rng::new(t.seed ^ 0x5741_4C4C_5459_5045).fork(5);
     st.walls = walls::WallStyle::new(&mut r);
     walls::design_walls(t, &st.walls, &mut r);
+}
+
+/// The ceiling types, soffit and head of wall details and the soffits they detail, from a random
+/// stream of their own (after the walls: the head details are per wall type).
+fn add_ceilings(t: &mut Truth, st: &mut style::Style) {
+    let mut r = Rng::new(t.seed ^ 0x4345_494C_4153_4D42).fork(6);
+    st.ceilings = ceilings::CeilStyle::new(&mut r);
+    ceilings::design_ceilings(t, &st.ceilings, &mut r);
 }
 
 /// The fixture set for a seed.
@@ -84,6 +98,7 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
+    add_ceilings(&mut t, &mut st);
     let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();

@@ -38,6 +38,19 @@ pub struct Truth {
     /// The walls on the architectural floor plans, with their type and height.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<Wall>,
+    /// The ceiling type legend: every ceiling build-up (boards on their framing, tile in a grid,
+    /// open to structure) the rooms' ceilings are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ceiling_types: Vec<CeilingType>,
+    /// The soffit details: how each kind of soffit is built and what it hangs from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soffit_types: Vec<SoffitType>,
+    /// Each room's ceiling type (open rooms too) and whether the finish schedule names it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_ceilings: Vec<RoomCeiling>,
+    /// The head of wall details: how each wall type meets what is above it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head_details: Vec<HeadDetail>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure), computed from the geometry; `planted` ones were put there on purpose.
     pub clashes: Vec<Clash>,
@@ -130,6 +143,88 @@ pub struct Soffit {
     pub max_ft: [f64; 2],
     /// The tag on the RCP.
     pub tag: String,
+    /// How it is built ([`SoffitType::tag`]); none on soffits from before the soffit details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soffit_type: Option<String>,
+    /// From the ceiling round it down to its bottom, feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_ft: Option<f64>,
+    /// Length of its sides that show (not against a wall), feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sides_ft: Option<f64>,
+    /// Whether the RCP calls out its detail (otherwise the reader has to work it out).
+    #[serde(default)]
+    pub called_out: bool,
+}
+
+/// A ceiling type as the ceiling legend gives it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CeilingType {
+    /// As the legend and the finish schedule print it (`C2`, `CLG-2`, `GYP-1`).
+    pub tag: String,
+    pub name: String,
+    /// `ACT`, `GYP` or `OPEN` (exposed structure).
+    pub kind: String,
+    /// From the room's face up: the boards (or tiles), then their framing. Material names as
+    /// [`WallLayer::material`] plus `act_tile`, `act_grid`, `hat_channel`, `furring`,
+    /// `main_runner` (suspended framing's carrying channels), `wood_furring`; side `finish` or
+    /// `framing`.
+    pub layers: Vec<WallLayer>,
+    /// ACT tile size, feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_ft: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+}
+
+/// A room's ceiling type.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoomCeiling {
+    pub level: String,
+    /// The room's number.
+    pub room: String,
+    /// [`CeilingType::tag`].
+    pub ceiling_type: String,
+    /// The finish schedule names the type (otherwise it says `SEE RCP`).
+    pub scheduled: bool,
+}
+
+/// A soffit build-up as its detail gives it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SoffitType {
+    /// The detail's number on the details sheet (`3`); the RCP calls it out as `3/A-502`.
+    pub tag: String,
+    pub name: String,
+    /// The bottom's boards, room face first.
+    pub bottom: Vec<WallLayer>,
+    /// The vertical faces' boards, room face first.
+    pub sides: Vec<WallLayer>,
+    /// Its framing (studs for the sides, joists or channels for the bottom).
+    pub framing: Vec<WallLayer>,
+    /// `ceiling`: built under the ceiling, which runs on above it; `structure`: hung from the
+    /// structure, the ceiling stops at its sides.
+    pub hangs_from: String,
+    /// How far its side boards go past the ceiling, inches (hung soffits).
+    #[serde(default)]
+    pub above_ceiling_in: f64,
+}
+
+/// A head of wall detail and the wall types it is for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeadDetail {
+    /// The detail's number on the details sheet.
+    pub tag: String,
+    pub name: String,
+    /// `deflection` (slotted deflection track), `double` (nested double track), `single` (top
+    /// track, braced to the structure), `angle` (steel angles each side, masonry).
+    pub track: String,
+    /// `deck` (the underside of the structure) or `ceiling`.
+    pub to: String,
+    /// The deflection the head takes, inches (deflection and double tracks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deflection_in: Option<f64>,
+    /// The wall types it is for (their tags).
+    pub wall_types: Vec<String>,
 }
 
 /// A wall type as the wall type legend (partition schedule) gives it.
@@ -152,6 +247,12 @@ pub struct WallType {
     pub stc: Option<u32>,
     #[serde(default)]
     pub external: bool,
+    /// How its head meets what is above ([`HeadDetail::tag`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// Bottom track (stud walls), none for masonry.
+    #[serde(default)]
+    pub bottom_track: bool,
 }
 
 /// One layer of a wall type.

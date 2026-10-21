@@ -10,6 +10,13 @@
 //! - **light fixtures and diffusers**: blocks on the lighting layers or named like fixtures
 //!   (2X4, LT, LIGHT, FIX) or diffusers (DIFF, SD, RG, GRILLE), centred in their grid tile.
 //!
+//! Ceiling, soffit and wall types (from the ceiling legend, soffit and head of wall details) give
+//! `model.build`'s ceilings and soffits their type (`type:<name>` in their tag; a soffit hung
+//! from the structure goes past the ceiling) and feed:
+//! - `rcp.takeoff {level?}`: board area by type and layer, framing and track lengths;
+//! - `rcp.colour {by}`: the built ceilings, soffits and walls coloured by type, by number of board
+//!   layers, by how soffits hang, or by head of wall condition, with a legend.
+//!
 //! The RCP sits elsewhere on the sheet than the floor plan: `offset` moves it onto the plan;
 //! without one the lower-left corners of the walls on both are lined up.
 
@@ -29,9 +36,115 @@ const MAX_ITEMS: usize = 20_000;
 const MAX_LINES: usize = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("rcp.read", "Read Ceiling Plan", run_read).params(
-        "{region: [x0,y0,x1,y1] (the RCP on the sheet), level: name, offset?: [dx,dy] (RCP → floor plan; default: the walls' lower-left corners lined up), apply?: bool (replace the level's ceilings, soffits and items in the spec; rooms take their ceiling heights)} → {offset, ceilings: [{room?, outline, height_ft, grid?: {spacing_in, origin, angle_deg}}], soffits, items: [{kind, block, at, size_in}], applied}",
-    )]
+    vec![
+        CommandSpec::new("rcp.read", "Read Ceiling Plan", run_read).params(
+            "{region: [x0,y0,x1,y1] (the RCP on the sheet), level: name, offset?: [dx,dy] (RCP → floor plan; default: the walls' lower-left corners lined up), apply?: bool (replace the level's ceilings, soffits and items in the spec; rooms take their ceiling heights)} → {offset, ceilings: [{room?, outline, height_ft, grid?: {spacing_in, origin, angle_deg}}], soffits, items: [{kind, block, at, size_in}], applied}",
+        ),
+        CommandSpec::new("rcp.takeoff", "Ceiling and Soffit Takeoff", run_takeoff)
+            .params(
+                "{level?: name} → {rows: [{level, part (ceiling, ceiling framing, soffit bottom, soffit sides, soffit framing, top track, bottom track), assembly, material, layer (board layer from the room face, 1 first; 0 framing and track), quantity, unit (sf|lf)}], totals: {part: quantity}, csv}: board area by type and layer, framing and track lengths, from the spec's ceiling and soffit types and the wall types' heads",
+            )
+            .noundo(),
+        CommandSpec::new("rcp.colour", "Colour by Assembly", run_colour).params(
+            "{by: type|layers|soffit|head|none} → {legend: [{key, color (ACI)}], coloured}: colours the built ceilings, soffits and walls — by ceiling, soffit and wall type; by number of board layers; soffits built under a ceiling or hung from the structure; walls by head of wall condition — `none` puts them back to their layers' colours",
+        ),
+    ]
+}
+
+fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sp, _) = current(s, "rcp.takeoff")?;
+    let mut t = cadaddy_walk3d::takeoff(&sp);
+    if let Some(l) = str_param(p, "level") {
+        t.rows.retain(|r| r.level.eq_ignore_ascii_case(l));
+    }
+    let mut totals = serde_json::Map::new();
+    for r in &t.rows {
+        let v = totals.get(&r.part).and_then(Value::as_f64).unwrap_or(0.0) + r.quantity;
+        totals.insert(r.part.clone(), json!(v));
+    }
+    let rows: Vec<Value> = t
+        .rows
+        .iter()
+        .map(|r| json!({"level": r.level, "part": r.part, "assembly": r.assembly, "material": r.material, "layer": r.layer, "quantity": r.quantity, "unit": r.unit}))
+        .collect();
+    Ok(json!({ "rows": rows, "totals": totals, "csv": t.csv() }))
+}
+
+/// Colours the view modes hand out, in order (ACI).
+const PALETTE: [u8; 12] = [1, 3, 5, 30, 6, 4, 2, 140, 200, 40, 94, 220];
+
+/// What a built object shows in a view mode, if it takes part.
+fn colour_key(e: &Entity, sp: &BuildingSpec, by: &str) -> Option<String> {
+    let part = super::wallgen::made_as(e)?;
+    let x = &e.common.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))?;
+    let ty = x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix("type:").map(str::to_string));
+    let boards = |ls: &[cadaddy_walk3d::AssemblyLayer]| ls.iter().filter(|l| matches!(l.category.as_str(), "board" | "tile")).count();
+    let n_layers = |n: usize| if n == 1 { "1 board layer".to_string() } else { format!("{n} board layers") };
+    match (part.as_str(), by) {
+        ("ceiling", "type") => Some(format!("ceiling {}", ty?)),
+        ("soffit", "type") => Some(format!("soffit {}", ty?)),
+        ("wall", "type") => Some(format!("wall {}", ty?)),
+        ("ceiling", "layers") => sp.ceiling_types.iter().find(|c| Some(&c.name) == ty.as_ref()).map(|c| n_layers(boards(&c.layers))),
+        ("soffit", "layers") => sp.soffit_types.iter().find(|c| Some(&c.name) == ty.as_ref()).map(|c| n_layers(boards(&c.bottom))),
+        ("wall", "layers") => {
+            let a = sp.wall_types.iter().find(|w| Some(&w.name) == ty.as_ref())?.assembly.as_ref()?;
+            let side = |sd: cadaddy_walk3d::LayerSide| a.layers.iter().filter(|l| l.side == sd && l.category == "board").count();
+            Some(n_layers(side(cadaddy_walk3d::LayerSide::Side1).max(side(cadaddy_walk3d::LayerSide::Side2))))
+        }
+        ("soffit", "soffit") => {
+            let t = sp.soffit_types.iter().find(|c| Some(&c.name) == ty.as_ref());
+            Some(match t.map(|t| t.hangs_from) {
+                Some(cadaddy_walk3d::Hang::Ceiling) => "soffit built under the ceiling".into(),
+                Some(cadaddy_walk3d::Hang::Structure) => "soffit hung from the structure".into(),
+                None => "soffit of no known type".into(),
+            })
+        }
+        ("wall", "head") => {
+            let h = sp.wall_types.iter().find(|w| Some(&w.name) == ty.as_ref())?.assembly.as_ref()?.head.as_ref()?;
+            Some(h.text())
+        }
+        _ => None,
+    }
+}
+
+fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
+    let by = str_param(p, "by").unwrap_or("type").to_ascii_lowercase();
+    if !["type", "layers", "soffit", "head", "none"].contains(&by.as_str()) {
+        return Err(bad("rcp.colour", "`by` is type, layers, soffit, head or none"));
+    }
+    let (sp, _) = current(s, "rcp.colour")?;
+    let parts = ["ceiling", "soffit", "wall"];
+    let mut keys: Vec<String> = Vec::new();
+    let mut set: Vec<(Handle, cadaddy_doc::color::Color)> = Vec::new();
+    for e in s.doc()?.model.iter() {
+        if !super::wallgen::made_as(e).is_some_and(|p| parts.contains(&p.as_str())) {
+            continue;
+        }
+        let colour = match colour_key(e, &sp, &by) {
+            _ if by == "none" => cadaddy_doc::color::Color::ByLayer,
+            Some(k) => {
+                let i = match keys.iter().position(|x| *x == k) {
+                    Some(i) => i,
+                    None => {
+                        keys.push(k);
+                        keys.len() - 1
+                    }
+                };
+                cadaddy_doc::color::Color::Index(PALETTE.get(i % PALETTE.len()).copied().unwrap_or(7))
+            }
+            // Not part of this view: grey.
+            None => cadaddy_doc::color::Color::Index(8),
+        };
+        set.push((e.handle, colour));
+    }
+    let d = s.doc_mut()?;
+    for (h, c) in &set {
+        d.modify_entity(*h, |e| e.common.color = *c)?;
+    }
+    let legend: Vec<Value> =
+        keys.iter().enumerate().map(|(i, k)| json!({"key": k, "color": PALETTE.get(i % PALETTE.len()).copied().unwrap_or(7)})).collect();
+    Ok(json!({ "by": by, "legend": legend, "coloured": set.len() }))
 }
 
 /// A height tag: a ceiling height note.
@@ -206,7 +319,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
                 })
             })
             .map(|r| r.name.clone());
-        ceilings.push((CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid }, q));
+        ceilings.push((CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid, ceiling_type: None, guess: None }, q));
     }
     // Soffits: hatched areas, at the note inside them (else a foot under the ceiling around).
     let mut soffits = Vec::new();
@@ -221,7 +334,15 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|i| i / 12.0)
             .or(around.map(|a| a - 1.0))
             .unwrap_or(level.ceiling_ft - 1.0);
-        soffits.push(Soffit { level: level.name.clone(), outline: moved(q), height_ft: h });
+        soffits.push(Soffit {
+            level: level.name.clone(),
+            outline: moved(q),
+            height_ft: h,
+            soffit_type: None,
+            top_ft: None,
+            sides_ft: None,
+            guess: None,
+        });
     }
     // Fixtures and diffusers, centred in their grid tile.
     let mut items = Vec::new();
@@ -345,15 +466,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             d.layers.push(cadaddy_doc::Layer { name: layer.into(), color: cadaddy_doc::color::Color::Index(color), ..cadaddy_doc::Layer::default() });
         }
     }
-    let tag = |part: &str, level: &str, extra: String| {
+    // After the source: `room:<name>`, `type:<ceiling or soffit type>` (IFC's materials, views).
+    let tag = |part: &str, level: &str, extra: Vec<String>| {
         let t = |code: i32, v: String| RawTag { code, value: v };
-        vec![
-            t(1001, super::wallgen::APP.into()),
-            t(1000, part.into()),
-            t(1000, level.chars().take(255).collect()),
-            t(1000, Handle(0).hex()),
-            t(1000, extra),
-        ]
+        let mut x =
+            vec![t(1001, super::wallgen::APP.into()), t(1000, part.into()), t(1000, level.chars().take(255).collect()), t(1000, Handle(0).hex())];
+        x.extend(extra.into_iter().map(|v| t(1000, v.chars().take(255).collect())));
+        x
     };
     let add = |d: &mut Drawing, layer: &str, xdata: Vec<RawTag>, m: Mesh| {
         !m.faces.is_empty() && d.add(&Space::Model, Common { layer: layer.into(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok()
@@ -363,7 +482,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let Some(level) = sp.level(&c.level) else { continue };
         let z = (level.elevation_ft + c.height_ft) * upf;
         let poly: Vec<Vec2> = c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
-        let extra = c.room.as_ref().map_or(String::new(), |r| format!("room:{r}"));
+        let mut extra: Vec<String> = c.room.iter().map(|r| format!("room:{r}")).collect();
+        extra.extend(c.ceiling_type.iter().map(|t| format!("type:{t}")));
         if let Some(m) = panel(&poly, z)
             && add(d, "3D-Ceilings", tag("ceiling", &level.name, extra), m)
         {
@@ -389,7 +509,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     i += 1.0;
                 }
             }
-            if add(d, "3D-Ceiling-Grid", tag("grid", &level.name, String::new()), m) {
+            if add(d, "3D-Ceiling-Grid", tag("grid", &level.name, Vec::new()), m) {
                 grids += 1;
             }
         }
@@ -398,10 +518,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let Some(level) = sp.level(&sf.level) else { continue };
         let poly: Vec<Vec2> = sf.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let z = (level.elevation_ft + sf.height_ft) * upf;
-        let top = sp.rcp.ceilings.iter().filter(|c| c.level == sf.level).map(|c| c.height_ft).fold(level.ceiling_ft, f64::max);
+        let top = sf
+            .top_ft
+            .filter(|t| t.is_finite() && *t > sf.height_ft)
+            .unwrap_or_else(|| sp.rcp.ceilings.iter().filter(|c| c.level == sf.level).map(|c| c.height_ft).fold(level.ceiling_ft, f64::max));
+        // A soffit hung from the structure goes on past the ceiling.
+        let st = sf.soffit_type.as_ref().and_then(|n| sp.soffit_types.iter().find(|t| t.name.eq_ignore_ascii_case(n)));
+        let past = st.filter(|t| t.hangs_from == cadaddy_walk3d::Hang::Structure).map_or(0.0, |t| t.above_ceiling_in.clamp(0.0, 120.0) / 12.0);
+        let extra: Vec<String> = sf.soffit_type.iter().map(|t| format!("type:{t}")).collect();
         // Its underside and the drop round its edge up to the ceiling.
-        if let Some(m) = super::bspec::prism(&poly, z, (level.elevation_ft + top) * upf)
-            && add(d, "3D-Ceilings", tag("soffit", &level.name, String::new()), m)
+        if let Some(m) = super::bspec::prism(&poly, z, (level.elevation_ft + top + past) * upf)
+            && add(d, "3D-Ceilings", tag("soffit", &level.name, extra), m)
         {
             soffits += 1;
         }
@@ -423,7 +550,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let depth = if it.kind == ItemKind::Fixture { 4.0 * k } else { 2.0 * k };
         super::wallgen::add_box(&mut m, a, b, dpt, z - depth, z);
         let (layer, part) = if it.kind == ItemKind::Fixture { ("3D-Lights", "light") } else { ("3D-Diffusers", "diffuser") };
-        if add(d, layer, tag(part, &level.name, format!("block:{}", it.block)), m) {
+        if add(d, layer, tag(part, &level.name, vec![format!("block:{}", it.block)]), m) {
             if it.kind == ItemKind::Fixture {
                 lights += 1;
             } else {

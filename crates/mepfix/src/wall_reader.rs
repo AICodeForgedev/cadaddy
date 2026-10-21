@@ -126,7 +126,7 @@ fn tag_like(s: &str) -> bool {
 // ---- Numbers -----------------------------------------------------------------------------------
 
 /// `5/8`, `3`, `3-5/8`, `3 5/8` → inches.
-fn number(s: &str) -> Option<f64> {
+pub(crate) fn number(s: &str) -> Option<f64> {
     let s = s.trim();
     let frac = |f: &str| -> Option<f64> {
         let (a, b) = f.split_once('/')?;
@@ -147,7 +147,7 @@ fn number(s: &str) -> Option<f64> {
 }
 
 /// Every inch dimension in a line (`5/8"`, `3-5/8"`, `3 5/8"`, `6"`), with where it starts.
-fn inch_values(s: &str) -> Vec<(usize, f64)> {
+pub(crate) fn inch_values(s: &str) -> Vec<(usize, f64)> {
     let b = s.as_bytes();
     let mut out = Vec::new();
     for (i, c) in s.char_indices() {
@@ -199,7 +199,7 @@ fn count_of(s: &str) -> usize {
 }
 
 /// A side's item → its layers, outer face first.
-fn side_item(item: &str) -> Vec<WallLayer> {
+pub(crate) fn side_item(item: &str) -> Vec<WallLayer> {
     let u = item.to_ascii_uppercase();
     let Some((_, th)) = inch_values(&u).first().copied() else { return Vec::new() };
     let material = if u.contains("SHAFT") {
@@ -350,7 +350,7 @@ fn read_legend(d: &Drawing) -> Vec<ReadType> {
 }
 
 /// Centres and sizes (half-width) of closed polylines and circles: tag symbols.
-fn symbol_centres(d: &Drawing) -> Vec<([f64; 2], f64)> {
+pub(crate) fn symbol_centres(d: &Drawing) -> Vec<([f64; 2], f64)> {
     d.model
         .iter()
         .filter_map(|e| match &e.kind {
@@ -369,7 +369,7 @@ fn symbol_centres(d: &Drawing) -> Vec<([f64; 2], f64)> {
         .collect()
 }
 
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
@@ -585,7 +585,7 @@ fn rooms_beside(w: &FoundWall, cl: &CeilingResult) -> Vec<String> {
 }
 
 /// `13'-6 1/2"` → feet.
-fn feet_inches(s: &str) -> Option<f64> {
+pub(crate) fn feet_inches(s: &str) -> Option<f64> {
     let (f, rest) = s.split_once('\'')?;
     let f: f64 = f.trim().parse().ok()?;
     let rest = rest.trim_start_matches('-').trim();

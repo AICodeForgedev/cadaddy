@@ -8,7 +8,9 @@
 //! same drawing gives the same ids. A wall whose building spec type has an assembly (from a wall
 //! type legend) carries it: an IfcMaterialLayerSetUsage with one IfcMaterialLayer per board,
 //! stud, insulation… layer, and Pset_WallCommon (Reference, FireRating, AcousticRating,
-//! IsExternal).
+//! IsExternal), and its head of wall detail (CADaddy_HeadOfWall: track, what it meets, deflection,
+//! bottom track). A ceiling or soffit whose spec type has layers carries an IfcMaterialLayerSet
+//! from the room's face up (IfcMaterialLayerSetUsage on the third axis) and Pset_CoveringCommon.
 //!
 //! In: every product with a body (walls, slabs, spaces, doors… whatever the file has) as a MESH on
 //! a layer per IFC class (`IFC-Wall`, `IFC-Space`…), tagged with its class, GlobalId and name. The
@@ -445,6 +447,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let mut placed: Vec<Placed> = Vec::new();
     // Walls by their spec wall type (its index), for their materials and properties.
     let mut typed: Vec<(usize, usize)> = Vec::new();
+    // Ceilings and soffits by their spec type: (soffit, type index, covering product).
+    let mut covered: Vec<(bool, usize, usize)> = Vec::new();
     for it in &items {
         let si = storey_of(it);
         let Some(&(_, place_parent, sz, _, base)) = storeys.get(si) else { continue };
@@ -494,6 +498,20 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             && let Some(i) = wall_type_of(it.e).and_then(|n| sp.wall_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n)))
         {
             typed.push((i, product));
+        }
+        if kd.class == Class::Ceiling
+            && let Some(sp) = &spec
+            && let Some(n) = wall_type_of(it.e)
+        {
+            let soffit = kd.predefined == "CLADDING";
+            let i = if soffit {
+                sp.soffit_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n))
+            } else {
+                sp.ceiling_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n))
+            };
+            if let Some(i) = i {
+                covered.push((soffit, i, product));
+            }
         }
         if matches!(kd.class, Class::Wall | Class::Door | Class::Window) {
             let (lo, hi) = it.mesh.vertices.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(lo, hi), v| {
@@ -584,6 +602,7 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         // Inches → the file's length unit.
         let inch = sp.units_per_foot / 12.0 * k;
         wall_materials(&mut o, sp, &typed, inch, &|n, salt| id(n, salt));
+        covering_materials(&mut o, sp, &covered, inch, &|n, salt| id(n, salt));
     }
     for (product, set_name, qs, handle) in quantities {
         let ids: Vec<usize> = qs.into_iter().map(|q| o.add(q)).collect();
@@ -687,6 +706,80 @@ fn wall_materials(o: &mut Out, sp: &cadaddy_walk3d::BuildingSpec, typed: &[(usiz
         props.push(o.add(format!("IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN({ext}),$)")));
         let pset = o.add(format!("IFCPROPERTYSET('{}',$,'Pset_WallCommon',$,{})", id(key, 14), refs(&props)));
         o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,{},#{pset})", id(key, 15), refs(&walls)));
+        // The head of wall detail: how it meets what is above, and its bottom track.
+        if let Some(h) = &a.head {
+            let word = |v: &str| step_str(v);
+            let track = match h.track {
+                cadaddy_walk3d::HeadTrack::Single => "top track",
+                cadaddy_walk3d::HeadTrack::Deflection => "slotted deflection track",
+                cadaddy_walk3d::HeadTrack::Double => "nested double track",
+                cadaddy_walk3d::HeadTrack::Angle => "steel angles",
+            };
+            let to = if h.to == cadaddy_walk3d::HeadTo::Deck { "deck" } else { "ceiling" };
+            let mut hp = vec![
+                o.add(format!("IFCPROPERTYSINGLEVALUE('HeadTrack',$,IFCLABEL({}),$)", word(track))),
+                o.add(format!("IFCPROPERTYSINGLEVALUE('HeadTo',$,IFCLABEL({}),$)", word(to))),
+                o.add(format!("IFCPROPERTYSINGLEVALUE('BottomTrack',$,IFCBOOLEAN({}),$)", if h.bottom_track { ".T." } else { ".F." })),
+            ];
+            if let Some(d) = h.deflection_in.filter(|d| d.is_finite()) {
+                hp.push(o.add(format!("IFCPROPERTYSINGLEVALUE('Deflection',$,IFCLENGTHMEASURE({}),$)", real(d * inch))));
+            }
+            if let Some(det) = &h.detail {
+                hp.push(o.add(format!("IFCPROPERTYSINGLEVALUE('Detail',$,IFCLABEL({}),$)", word(det))));
+            }
+            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_HeadOfWall',$,{})", id(key, 16), refs(&hp)));
+            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,{},#{pset})", id(key, 17), refs(&walls)));
+        }
+    }
+}
+
+/// Each ceiling and soffit type coverings were written with: a layer set from the room's face up
+/// (boards or tile, then framing; a soffit's bottom boards, then its framing), the usage its
+/// coverings are associated with, and Pset_CoveringCommon. `covered`: (soffit, type index,
+/// covering product).
+fn covering_materials(o: &mut Out, sp: &cadaddy_walk3d::BuildingSpec, covered: &[(bool, usize, usize)], inch: f64, id: &dyn Fn(u64, u64) -> String) {
+    let mut materials: HashMap<String, usize> = HashMap::new();
+    let mut keys: Vec<(bool, usize)> = covered.iter().map(|(s, i, _)| (*s, *i)).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    for (soffit, ti) in keys {
+        let products: Vec<usize> = covered.iter().filter(|(s, i, _)| *s == soffit && *i == ti).map(|(_, _, p)| *p).collect();
+        let (name, description, layers, fire): (&str, &str, Vec<&cadaddy_walk3d::AssemblyLayer>, Option<&String>) = if soffit {
+            let Some(t) = sp.soffit_types.get(ti) else { continue };
+            (&t.name, &t.description, t.bottom.iter().chain(&t.framing).collect(), None)
+        } else {
+            let Some(t) = sp.ceiling_types.get(ti) else { continue };
+            (&t.name, &t.description, t.layers.iter().collect(), t.fire_rating.as_ref())
+        };
+        let key = hash(&format!("{}:{name}", if soffit { "soffittype" } else { "ceilingtype" }));
+        let mut ids = Vec::new();
+        for l in layers.into_iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).filter(|l| l.thickness_in.is_finite() && l.thickness_in > 0.0) {
+            let cat = if l.category.is_empty() { "$".to_string() } else { step_str(&l.category) };
+            let m = match materials.get(&l.material) {
+                Some(m) => *m,
+                None => {
+                    let m = o.add(format!("IFCMATERIAL({},$,{cat})", step_str(&l.material)));
+                    materials.insert(l.material.clone(), m);
+                    m
+                }
+            };
+            ids.push(o.add(format!("IFCMATERIALLAYER(#{m},{},.F.,{},$,{cat},$)", real(l.thickness_in * inch), step_str(&l.material))));
+        }
+        if ids.is_empty() || products.is_empty() {
+            continue;
+        }
+        let label = format!("{} type {name}", if soffit { "Soffit" } else { "Ceiling" });
+        let desc = if description.is_empty() { "$".to_string() } else { step_str(description) };
+        let set = o.add(format!("IFCMATERIALLAYERSET({},{},{desc})", refs(&ids), step_str(&label)));
+        // Layers stack up from the covering's underside (the room's face).
+        let usage = o.add(format!("IFCMATERIALLAYERSETUSAGE(#{set},.AXIS3.,.POSITIVE.,0.,$)"));
+        o.add(format!("IFCRELASSOCIATESMATERIAL('{}',$,$,$,{},#{usage})", id(key, 13), refs(&products)));
+        let mut props = vec![o.add(format!("IFCPROPERTYSINGLEVALUE('Reference',$,IFCIDENTIFIER({}),$)", step_str(name)))];
+        if let Some(r) = fire {
+            props.push(o.add(format!("IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL({}),$)", step_str(r))));
+        }
+        let pset = o.add(format!("IFCPROPERTYSET('{}',$,'Pset_CoveringCommon',$,{})", id(key, 14), refs(&props)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,{},#{pset})", id(key, 15), refs(&products)));
     }
 }
 
