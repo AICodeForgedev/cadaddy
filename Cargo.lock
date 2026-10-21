@@ -601,7 +601,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadaddy"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "arboard",
  "cadaddy-engine",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-cli"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
@@ -639,14 +639,14 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-color"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cadaddy-constraints"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-doc",
  "cadaddy-geom",
@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-doc"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-geom",
@@ -667,21 +667,21 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-dwg"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "acadrust",
 ]
 
 [[package]]
 name = "cadaddy-dwgcodec"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "acadrust",
 ]
 
 [[package]]
 name = "cadaddy-dxf"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "encoding_rs",
  "log",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-engine"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-constraints",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-fonts"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-geom",
  "encoding_rs",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-geom"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "craft-docpath",
  "serde",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-io"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-mcp"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-mepfix"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-render"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-ui-egui"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-walk"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-walk3d"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "cadaddy-web"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
@@ -5296,7 +5296,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
