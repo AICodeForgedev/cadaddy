@@ -34,6 +34,8 @@ use serde_json::{Value, json};
 const MAX_ENTITIES: usize = 50_000;
 /// Most rows read from one table.
 const MAX_ROWS: usize = 2_000;
+/// Most vertices of a closed polyline kept as a shape.
+const MAX_POLY: usize = 64;
 
 // ---- Results -----------------------------------------------------------------------------------
 
@@ -158,24 +160,26 @@ pub struct ArchResult {
 // ---- Geometry from a sheet ---------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-struct Txt {
-    s: String,
+pub(crate) struct Txt {
+    pub(crate) s: String,
     /// Building feet (plans) or model inches (schedules).
-    at: [f64; 2],
-    h: f64,
-    grid: bool,
+    pub(crate) at: [f64; 2],
+    pub(crate) h: f64,
+    pub(crate) grid: bool,
 }
 
 #[derive(Clone, Debug)]
-struct Shapes {
-    texts: Vec<Txt>,
+pub(crate) struct Shapes {
+    pub(crate) texts: Vec<Txt>,
     /// (layer, a, b)
-    lines: Vec<(String, [f64; 2], [f64; 2])>,
+    pub(crate) lines: Vec<(String, [f64; 2], [f64; 2])>,
     /// Axis-aligned boxes: (layer, min, max).
-    boxes: Vec<(String, [f64; 2], [f64; 2])>,
+    pub(crate) boxes: Vec<(String, [f64; 2], [f64; 2])>,
     /// (layer, centre, radius, start point, end point)
-    arcs: Vec<(String, [f64; 2], f64, [f64; 2], [f64; 2])>,
-    circles: Vec<(String, [f64; 2], f64)>,
+    pub(crate) arcs: Vec<(String, [f64; 2], f64, [f64; 2], [f64; 2])>,
+    pub(crate) circles: Vec<(String, [f64; 2], f64)>,
+    /// Closed polylines of any shape: (layer, vertices).
+    pub(crate) polys: Vec<(String, Vec<[f64; 2]>)>,
 }
 
 fn finite(p: [f64; 2]) -> bool {
@@ -183,8 +187,8 @@ fn finite(p: [f64; 2]) -> bool {
 }
 
 /// A sheet's entities, through `map` (model → building feet, or kept as model inches).
-fn shapes(d: &Drawing, map: &dyn Fn([f64; 2]) -> [f64; 2], scale: f64) -> Shapes {
-    let mut s = Shapes { texts: Vec::new(), lines: Vec::new(), boxes: Vec::new(), arcs: Vec::new(), circles: Vec::new() };
+pub(crate) fn shapes(d: &Drawing, map: &dyn Fn([f64; 2]) -> [f64; 2], scale: f64) -> Shapes {
+    let mut s = Shapes { texts: Vec::new(), lines: Vec::new(), boxes: Vec::new(), arcs: Vec::new(), circles: Vec::new(), polys: Vec::new() };
     for e in d.model.iter().take(MAX_ENTITIES) {
         let layer = e.common.layer.to_ascii_uppercase();
         let grid = layer.contains("GRID");
@@ -210,8 +214,14 @@ fn shapes(d: &Drawing, map: &dyn Fn([f64; 2]) -> [f64; 2], scale: f64) -> Shapes
                     s.lines.push((layer, a, b));
                 }
             }
-            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4 => {
+            EntityKind::LwPolyline(p) if p.closed && (3..=MAX_POLY).contains(&p.vertices.len()) => {
                 let pts: Vec<[f64; 2]> = p.vertices.iter().map(|v| map([v.p.x, v.p.y])).collect();
+                if pts.iter().all(|p| finite(*p)) {
+                    s.polys.push((layer.clone(), pts.clone()));
+                }
+                if pts.len() != 4 {
+                    continue;
+                }
                 if pts.iter().all(|p| finite(*p)) {
                     let lo = pts.iter().fold([f64::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
                     let hi = pts.iter().fold([f64::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
@@ -246,18 +256,18 @@ fn shapes(d: &Drawing, map: &dyn Fn([f64; 2]) -> [f64; 2], scale: f64) -> Shapes
     s
 }
 
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-fn contains(lo: [f64; 2], hi: [f64; 2], p: [f64; 2], tol: f64) -> bool {
+pub(crate) fn contains(lo: [f64; 2], hi: [f64; 2], p: [f64; 2], tol: f64) -> bool {
     p[0] >= lo[0] - tol && p[0] <= hi[0] + tol && p[1] >= lo[1] - tol && p[1] <= hi[1] + tol
 }
 
 // ---- Words -------------------------------------------------------------------------------------
 
 /// `5/8`, `3-5/8`, `3 5/8`, `7`, `7.09` → a number.
-fn number(s: &str) -> Option<f64> {
+pub(crate) fn number(s: &str) -> Option<f64> {
     let s = s.trim();
     let frac = |f: &str| -> Option<f64> {
         let (a, b) = f.split_once('/')?;
@@ -278,7 +288,7 @@ fn number(s: &str) -> Option<f64> {
 }
 
 /// `3'-0"`, `8'-6 1/2"`, `36"`, `4'` → inches.
-fn length_in(s: &str) -> Option<f64> {
+pub(crate) fn length_in(s: &str) -> Option<f64> {
     let s = s.trim();
     if let Some((f, rest)) = s.split_once('\'') {
         let f: f64 = f.trim().parse().ok()?;
@@ -291,14 +301,14 @@ fn length_in(s: &str) -> Option<f64> {
 }
 
 /// The first number of inches in `s` after `key` (`ON 14" CURB` → 14).
-fn inches_in(s: &str) -> Option<f64> {
+pub(crate) fn inches_in(s: &str) -> Option<f64> {
     let i = s.find('"')?;
     let head = s.get(..i)?;
     let start = head.rfind(|c: char| !(c.is_ascii_digit() || c == '.' || c == '/' || c == '-' || c == '\'' || c == ' ')).map_or(0, |k| k + 1);
     length_in(&format!("{}\"", head.get(start..)?.trim()))
 }
 
-fn upper(s: &str) -> String {
+pub(crate) fn upper(s: &str) -> String {
     s.to_ascii_uppercase()
 }
 
@@ -313,13 +323,13 @@ pub struct ReadTable {
 }
 
 impl ReadTable {
-    fn col(&self, f: &dyn Fn(&str) -> bool) -> Option<usize> {
+    pub(crate) fn col(&self, f: &dyn Fn(&str) -> bool) -> Option<usize> {
         self.header.iter().position(|h| f(&upper(h)))
     }
 }
 
 /// Every table on a sheet whose title has one of `titles` in it.
-fn tables(s: &Shapes, titles: &[&str]) -> Vec<ReadTable> {
+pub(crate) fn tables(s: &Shapes, titles: &[&str]) -> Vec<ReadTable> {
     let mut out = Vec::new();
     for t in s.texts.iter().filter(|t| titles.iter().any(|k| upper(&t.s).contains(k))) {
         // A title sits above its table, not in a cell of one.
@@ -394,7 +404,7 @@ fn tables(s: &Shapes, titles: &[&str]) -> Vec<ReadTable> {
     out
 }
 
-fn cell(row: &[String], k: Option<usize>) -> String {
+pub(crate) fn cell(row: &[String], k: Option<usize>) -> String {
     k.and_then(|k| row.get(k)).map(|s| s.trim().to_string()).unwrap_or_default()
 }
 

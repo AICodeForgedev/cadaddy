@@ -117,6 +117,10 @@ pub struct Truth {
     /// Doors, windows, the stair and elevator, slab edges, the roof and room finishes (Q307).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<Arch>,
+    /// The roof and wall envelope: assemblies, drainage and flashing, details, spec, takeoff and
+    /// coordination flags (Q337).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<Envelope>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure, in-wall device-vs-pipe), computed from the geometry; `planted` ones were put
     /// there on purpose.
@@ -1767,4 +1771,174 @@ pub struct FinishCode {
     /// Device plate colour on walls with this finish (`WHITE`, `GRAY`, `STAINLESS`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plates: Option<String>,
+}
+
+// --- Roofing and building envelope (Q337) ---
+
+/// The roof and wall envelope as the roof drainage and flashing plan, the assemblies sheet and
+/// the spec give it, with the takeoff and the coordination flags they lead to.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Envelope {
+    pub roof: RoofAssembly,
+    /// Exterior wall assemblies outboard of the backup wall, by zone.
+    pub claddings: Vec<Cladding>,
+    /// The roof edge: `coping` (on the parapet) or `edge_metal`.
+    pub edge: String,
+    pub overflows: Vec<Overflow>,
+    /// Pipes through the roof (vents).
+    pub pipes: Vec<RoofPipe>,
+    /// Crickets behind the curbs and saddles between the drains.
+    pub ridges: Vec<RoofRidge>,
+    pub walkways: Vec<Walkway>,
+    /// The details on the assemblies sheet.
+    pub details: Vec<Detail>,
+    /// Detail callouts on the roof drainage plan.
+    pub callouts: Vec<Callout>,
+    /// The wall section's datums: `1`, `2`, `R`, `P` (top of parapet or roof edge), feet.
+    pub datums: Vec<Datum>,
+    pub spec: EnvSpec,
+    pub takeoff: Vec<QtyItem>,
+    pub flags: Vec<EnvFlag>,
+    /// Gaps put there on purpose: `no_curb_detail`, `missing_detail`, `no_overflow`, `spec_mil`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planted: Vec<String>,
+}
+
+/// One layer of a roof or exterior wall assembly.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnvLayer {
+    /// Roof: `membrane`, `cover_board`, `tapered`, `insulation`, `vapor_retarder`, `deck`.
+    /// Wall: `cladding`, `air_space`, `furring`, `ci`, `barrier`, `sheathing`.
+    pub component: String,
+    /// As the legend prints it.
+    pub description: String,
+    /// Inches (a tapered layer: its least; a membrane or barrier: 0).
+    pub thickness_in: f64,
+    /// Identical boards stacked (`(2) LAYERS 2"`).
+    #[serde(default = "one_layer")]
+    pub count: u32,
+}
+
+fn one_layer() -> u32 {
+    1
+}
+
+/// The roof assembly, top to bottom.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoofAssembly {
+    pub tag: String,
+    /// `tpo`, `pvc`, `epdm`, `sbs`.
+    pub membrane: String,
+    /// Membrane thickness, mils (none for a built-up sheet system).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mil: Option<f64>,
+    /// `fully adhered`, `mechanically fastened`, `induction welded`, `torch applied`.
+    pub attachment: String,
+    pub layers: Vec<EnvLayer>,
+}
+
+/// An exterior wall assembly over the backup wall: the cladding and what is behind it, outside
+/// to inside, on the levels it covers.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Cladding {
+    pub tag: String,
+    /// `brick`, `siding`, `eifs`, `panel`.
+    pub kind: String,
+    /// Level codes, bottom up.
+    pub levels: Vec<String>,
+    /// Goes on up the parapet (or the roof edge fascia).
+    pub to_top: bool,
+    pub layers: Vec<EnvLayer>,
+}
+
+/// A secondary (overflow) outlet: a `scupper` through the parapet or an overflow `drain`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Overflow {
+    pub kind: String,
+    pub at_ft: [f64; 2],
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoofPipe {
+    pub tag: String,
+    pub at_ft: [f64; 2],
+    pub size_in: f64,
+}
+
+/// A cricket (behind a curb, `at` = the curb's tag) or a saddle (between two drains).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoofRidge {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    pub outline: Vec<[f64; 2]>,
+    pub height_in: f64,
+}
+
+/// A strip of walkway pads, building feet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Walkway {
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+}
+
+/// A detail on the assemblies sheet: its number, title and what it details (a curb's tag,
+/// `edge`, `drain`, `pipe`, `cricket`, `window`, `storefront`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Detail {
+    pub number: u32,
+    pub title: String,
+    pub subject: String,
+}
+
+/// A detail callout on the roof drainage plan: detail `number` on `sheet`, pointing at `at_ft`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Callout {
+    pub number: u32,
+    pub sheet: String,
+    pub at_ft: [f64; 2],
+    pub subject: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Datum {
+    pub code: String,
+    pub elevation_ft: f64,
+}
+
+/// What the spec (Division 07) requires.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnvSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membrane_mil: Option<f64>,
+    /// Least average thermal resistance of the roof insulation.
+    pub min_r: f64,
+    /// Insulation's thermal resistance per inch.
+    pub r_per_in: f64,
+    /// Sheet metal coping or edge gauge.
+    pub metal_ga: u32,
+}
+
+/// A takeoff line: net quantity from the model, waste, and what to order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QtyItem {
+    /// Stable key (`roof.membrane`, `wall.EW-1.cladding`, `pen.pipe_boot`).
+    pub code: String,
+    pub description: String,
+    /// `SQ`, `SF`, `LF`, `EA`, `BF`.
+    pub unit: String,
+    pub net: f64,
+    pub waste_pct: f64,
+    /// Net plus waste, rounded up.
+    pub order: f64,
+}
+
+/// A coordination flag: `no_curb_detail`, `drain_structure`, `no_overflow`, `spec_mil`,
+/// `r_value`, `no_cricket`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnvFlag {
+    pub kind: String,
+    /// What it is about (a curb's tag, a drain's place `RD@x,y`).
+    pub subject: String,
+    pub message: String,
 }

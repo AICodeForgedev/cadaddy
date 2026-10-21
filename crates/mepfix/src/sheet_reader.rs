@@ -167,7 +167,8 @@ fn detect_level(title: &str) -> Option<String> {
             return Some(code.to_string());
         }
     }
-    if upper.contains("ROOF") {
+    // A roof plan (framing, drainage…), not a sheet of roof assemblies or details.
+    if upper.contains("ROOF") && upper.contains("PLAN") {
         return Some("R".to_string());
     }
     None
@@ -192,7 +193,12 @@ fn detect_title(d: &Drawing, number: &str) -> String {
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, val) in &candidates {
         let upper = val.to_uppercase();
-        if upper.contains("PLAN") || upper.contains("SCHEDULE") || upper.contains("COVER") || upper.contains("FRAMING") || upper.contains("CEILING") {
+        if upper.contains("PLAN") || upper.contains("SCHEDULE") || upper.contains("COVER") || upper.contains("FRAMING") || upper.contains("CEILING")
+            // Assembly, detail and wall section sheets (Q337).
+            || upper.contains("ASSEMBLIES")
+            || upper.contains("DETAILS")
+            || upper.contains("SECTIONS")
+        {
             return val.clone();
         }
     }

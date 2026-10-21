@@ -57,6 +57,8 @@ pub struct Style {
     pub ceilings: crate::ceilings::CeilStyle,
     /// Doors, windows, the core, the roof and the finish schedule (their own random stream).
     pub arch: crate::arch::ArchStyle,
+    /// The roof and wall envelope (its own random stream).
+    pub envelope: crate::envelope::EnvStyle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -141,6 +143,7 @@ impl Style {
             walls: crate::walls::WallStyle::default(),
             ceilings: crate::ceilings::CeilStyle::default(),
             arch: crate::arch::ArchStyle::default(),
+            envelope: crate::envelope::EnvStyle::default(),
         }
     }
 
