@@ -13,7 +13,7 @@ use web_sys::js_sys;
 /// The hidden file input (one at a time; a cancelled pick leaves it until the next one).
 const INPUT_ID: &str = "cadaddy_open_input";
 /// What the picker offers: the formats OPEN reads (and walkthrough packages, opened in Walk).
-const ACCEPT: &str = ".dxf,.dwg,.cdy,.cdywalk";
+const ACCEPT: &str = ".dxf,.dwg,.cdy,.cdywalk,.json";
 
 /// A file read in the browser (name, contents), or why it couldn't be read.
 type Upload = Result<(String, Vec<u8>), String>;
@@ -139,6 +139,13 @@ impl Inbox {
         files.push(upload);
         self.files.set(files);
         self.ctx.request_repaint();
+    }
+
+    /// Hand what arrived since the last frame to `f` (the field viewer opens packages itself).
+    pub fn drain_with(&self, mut f: impl FnMut(Upload)) {
+        for upload in self.files.take() {
+            f(upload);
+        }
     }
 
     /// Open what arrived since the last frame (or report why it couldn't be read).

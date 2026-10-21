@@ -8,13 +8,17 @@
 //! same-origin parent page sends the drawing to open and stores what CADaddy saves instead
 //! (`host.rs`). `?walk=URL` fetches a walkthrough package (`.cdywalk`, PUBLISH WALKTHROUGH) and
 //! opens it in Walk, so a link is all someone needs to walk a building. `?selftest` runs the
-//! browser self-test (`selftest.rs`, driven by `cargo xtask webtest`).
+//! browser self-test (`selftest.rs`, driven by `cargo xtask webtest`). `?field` starts the field
+//! viewer instead (`field.rs`: the model on a tablet or phone, offline), `?field=URL` with that
+//! package.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
 mod autosave;
 #[cfg(target_arch = "wasm32")]
 pub mod download;
+#[cfg(target_arch = "wasm32")]
+mod field;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
@@ -89,6 +93,9 @@ mod web {
 
     pub fn start() {
         eframe::WebLogger::init(log::LevelFilter::Info).ok();
+        if crate::wants_field(&query()) {
+            return crate::field::start(CANVAS_ID, LOADING_ID, query_param("field").filter(|u| !u.trim().is_empty()));
+        }
         cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
             read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
             write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
@@ -205,6 +212,12 @@ fn wants_cpu(query: &str) -> bool {
     query.trim_start_matches('?').split('&').any(|p| p == "cpu" || p.starts_with("cpu="))
 }
 
+/// True when the URL query asks for the field viewer (`?field` or `?field=URL`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn wants_field(query: &str) -> bool {
+    query.trim_start_matches('?').split('&').any(|p| p == "field" || p.starts_with("field="))
+}
+
 /// The file name a fetched URL opens under: its last path segment (no query or fragment), as a
 /// walkthrough package when it has no extension.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -233,7 +246,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_name_of, wants_cpu};
+    use super::{file_name_of, wants_cpu, wants_field};
+
+    #[test]
+    fn field_flag_is_detected() {
+        assert!(wants_field("?field"));
+        assert!(wants_field("?field=packages/hotel.field.json"));
+        assert!(wants_field("?webgl&field"));
+        assert!(!wants_field("?fields"));
+        assert!(!wants_field("?walk=x"));
+    }
 
     #[test]
     fn a_walk_link_opens_under_its_file_name() {

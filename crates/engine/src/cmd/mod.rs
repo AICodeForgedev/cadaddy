@@ -91,6 +91,7 @@ pub mod stairs;
 pub mod symbol;
 mod takeoff;
 pub mod tours;
+pub mod fieldview;
 mod unittypes;
 pub(crate) mod underlay;
 pub mod verify;
@@ -313,6 +314,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(unittypes::specs());
+    v.extend(fieldview::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
         v.extend(modify2::specs());
