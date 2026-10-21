@@ -57,6 +57,14 @@ pub struct Truth {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub telecom_devices: Vec<TelecomDevice>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equip_connections: Vec<EquipConnection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleeves: Vec<Sleeve>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cable_pathways: Vec<CablePathway>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lv_bom: Vec<LvBomLine>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevations: Vec<ElevationView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<SectionView>,
@@ -580,8 +588,11 @@ pub struct SiteElement {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FireAlarmDevice {
     pub id: String,
-    /// `smoke_detector`, `heat_detector`, `pull_station`, `horn_strobe`, `duct_detector`,
-    /// `sprinkler_flow_switch`, `tamper_switch`, `annunciator`, `facp`.
+    /// `smoke_detector`, `heat_detector`, `pull_station`, `horn_strobe`, `strobe`,
+    /// `speaker`, `speaker_strobe`, `duct_detector`, `co_detector`,
+    /// `sprinkler_flow_switch`, `tamper_switch`, `annunciator`, `facp`,
+    /// `nac_panel`, `monitor_module`, `relay_module`,
+    /// `elevator_recall`, `door_holder`, `mag_door_holder`.
     pub kind: String,
     pub tag: String,
     pub level: String,
@@ -589,9 +600,31 @@ pub struct FireAlarmDevice {
     pub at_ft: [f64; 3],
     /// Mounting: `CLG` (ceiling), `WALL` (wall).
     pub mounting: String,
-    /// FA circuit.
+    /// Mounting height above floor, inches. `0` = ceiling.
+    #[serde(default)]
+    pub mounting_in: f64,
+    /// Candela rating for notification appliances (horn/strobe, strobe, speaker/strobe):
+    /// 15, 30, 75, 110, 177 cd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candela: Option<u32>,
+    /// Address or zone tag on the device (addressable systems).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// SLC (signalling line circuit) tag: `SLC-1`, `SLC-2`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub slc: String,
+    /// NAC (notification appliance circuit) tag: `NAC-1`, `NAC-2`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub nac: String,
+    /// FA circuit (legacy field kept for backward compat; prefer slc/nac).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub circuit: String,
+    /// NAC panel or power supply feeding this device, when separate from the FACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nac_panel: Option<String>,
+    /// Interface notes: `elevator_recall`, `door_holder`, `sprinkler_flow_tamper`, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
     pub sheet: String,
 }
 
@@ -601,15 +634,158 @@ pub struct FireAlarmDevice {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TelecomDevice {
     pub id: String,
-    /// `data_outlet`, `wifi_ap`, `camera`, `door_access`, `tv_outlet`, `telephone`.
+    /// `data_outlet`, `wifi_ap`, `camera`, `door_access`, `card_reader`, `rex`,
+    /// `mag_lock`, `door_contact`, `door_ajar`, `tv_outlet`, `telephone`,
+    /// `nurse_call_station`, `nurse_call_display`, `ada_pull_cord`,
+    /// `speaker`, `pool_alarm`, `door_alarm`, `idf`, `mdf`, `patch_panel`,
+    /// `backboard`, `rack`.
     pub kind: String,
     pub tag: String,
     pub level: String,
     pub room: String,
     pub at_ft: [f64; 3],
-    /// Mounting height, inches above floor.
+    /// Mounting height, inches above floor. `0` = ceiling.
     pub mounting_in: f64,
+    /// LV system: `data`, `tv`, `telephone`, `security`, `access_control`,
+    /// `nurse_call`, `sound`, `fire_alarm`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lv_system: String,
+    /// Cable count and type per outlet (e.g. `"2 × Cat6"`, `"1 × RG6"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cable_spec: Option<String>,
+    /// Box or bracket type: `"single_gang"`, `"double_gang"`, `"lv_bracket"`, `"4S"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_type: Option<String>,
+    /// Faceplate type: `"single"`, `"double"`, `"quad"`, `"blank"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faceplate: Option<String>,
+    /// The IDF/MDF/head-end this device homes to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_panel: Option<String>,
     pub sheet: String,
+}
+
+// --- Equipment connections (Q308) ---
+
+/// An equipment connection: a piece of equipment with its electrical feed (disconnect,
+/// receptacle, junction box) as shown on schedules and enlarged plans.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EquipConnection {
+    pub id: String,
+    /// `ptac`, `vtac`, `rtu`, `water_heater`, `kitchen_equip`, `washer`, `dryer`,
+    /// `pool_pump`, `pool_heater`, `elevator`, `fire_pump`, `signage`, `exhaust_fan`,
+    /// `garbage_disposal`, `dishwasher`, `ice_machine`, `vending`.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    pub room: String,
+    pub at_ft: [f64; 3],
+    /// The circuit feeding this connection.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit: String,
+    /// The panel feeding this connection.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub panel: String,
+    /// Connection hardware: `disconnect`, `receptacle`, `junction_box`, `whip`.
+    pub connection_type: String,
+    /// The disconnect or receptacle tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disconnect_tag: Option<String>,
+    /// Notes from the schedule (voltage, phase, MCA, MOCP, etc.).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub schedule: BTreeMap<String, String>,
+    pub sheet: String,
+}
+
+// --- Sleeves (Q308) ---
+
+/// A sleeve (penetration) where a cable pathway crosses a wall, floor, rated assembly,
+/// or framing member.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Sleeve {
+    pub id: String,
+    /// LV system(s) passing through: `data`, `fire_alarm`, `security`, etc.
+    pub systems: Vec<String>,
+    pub level: String,
+    /// Centre of the sleeve, building feet.
+    pub at_ft: [f64; 3],
+    /// What it penetrates: `wall`, `floor`, `rated_wall`, `rated_floor`, `beam`.
+    pub penetrates: String,
+    /// ID of the wall or floor element it crosses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
+    /// Material: `EMT`, `ENT`, `firestop_device`.
+    pub material: String,
+    /// Trade size, inches.
+    pub size_in: f64,
+    /// Length through the assembly, inches.
+    pub length_in: f64,
+    /// Fire rating of the assembly crossed: `""`, `1-HR`, `2-HR`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fire_rating: String,
+    /// Firestop system for rated assemblies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firestop_system: Option<String>,
+    /// Cables through this sleeve (count × type).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cables: Vec<String>,
+    pub sheet: String,
+}
+
+// --- Cable pathways (Q308) ---
+
+/// A low-voltage cable pathway segment (J-hook, cable tray, conduit stub, ENT).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CablePathway {
+    pub id: String,
+    /// `j_hook`, `cable_tray`, `conduit`, `ent`, `d_ring`.
+    pub kind: String,
+    /// The LV system(s) this pathway carries.
+    pub systems: Vec<String>,
+    pub level: String,
+    pub from_ft: [f64; 2],
+    pub to_ft: [f64; 2],
+    /// Elevation of the pathway, feet above level floor.
+    pub elevation_ft: f64,
+    /// For conduit/ENT: trade size, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<f64>,
+    /// For J-hooks: spacing along the run, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_in: Option<f64>,
+    /// For cable tray: width × depth, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_size_in: Option<[f64; 2]>,
+    pub sheet: String,
+}
+
+// --- Low-voltage BOM line (Q308) ---
+
+/// A bill of materials line item for low-voltage systems.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LvBomLine {
+    pub id: String,
+    /// LV system: `data`, `fire_alarm`, `security`, `access_control`, `nurse_call`,
+    /// `tv`, `sound`, `telephone`.
+    pub system: String,
+    /// Item category: `device`, `cable`, `pathway`, `sleeve`, `firestop`, `support`,
+    /// `faceplate`, `box`, `panel`, `rack`, `misc`.
+    pub category: String,
+    /// Description.
+    pub description: String,
+    /// Quantity (count for devices, linear feet for cable/conduit).
+    pub quantity: f64,
+    /// Unit: `EA`, `LF`, `LOT`.
+    pub unit: String,
+    /// Whether this is from actual documents or assumed from rules.
+    #[serde(default)]
+    pub assumed: bool,
+    /// Scope flag: `ours`, `lv_vendor`, `gc`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    /// Spec item reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_id: Option<String>,
 }
 
 // --- Architectural views (elevations, sections) ---

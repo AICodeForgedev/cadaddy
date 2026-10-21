@@ -866,3 +866,311 @@ fn hotel_clashes_include_planted() {
     let planted = t.clashes.iter().filter(|c| c.planted).count();
     assert!(planted >= 1, "no planted clashes in hotel");
 }
+
+// --- Q308: Low-voltage, fire alarm, equipment connections ---
+
+#[test]
+fn hotel_fire_alarm_has_enriched_fields() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let kinds: BTreeSet<&str> = t.fire_alarm_devices.iter().map(|d| d.kind.as_str()).collect();
+
+    // All expected FA device kinds present.
+    for k in [
+        "facp", "nac_panel", "annunciator", "smoke_detector", "horn_strobe",
+        "strobe", "pull_station", "duct_detector", "monitor_module",
+        "elevator_recall", "mag_door_holder",
+    ] {
+        assert!(kinds.contains(k), "missing FA kind: {k}");
+    }
+
+    // Horn/strobes have candela ratings.
+    let hs: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.kind == "horn_strobe").collect();
+    assert!(!hs.is_empty(), "no horn/strobes");
+    for d in &hs {
+        assert!(d.candela.is_some(), "horn/strobe {} has no candela", d.id);
+        assert!(d.mounting_in > 0.0, "horn/strobe {} has no mounting height", d.id);
+    }
+
+    // Strobes in guest rooms have 15 cd.
+    let strobes: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.kind == "strobe").collect();
+    assert!(!strobes.is_empty(), "no strobes");
+    for d in &strobes {
+        assert_eq!(d.candela, Some(15), "guest room strobe should be 15 cd");
+    }
+
+    // Smoke detectors have addresses.
+    let sds: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.kind == "smoke_detector").collect();
+    assert!(!sds.is_empty(), "no smoke detectors");
+    for d in &sds {
+        assert!(d.address.is_some(), "smoke detector {} has no address", d.id);
+        assert!(!d.slc.is_empty(), "smoke detector {} has no SLC", d.id);
+    }
+
+    // Pull stations have addresses and mounting height.
+    let ps: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.kind == "pull_station").collect();
+    assert!(!ps.is_empty(), "no pull stations");
+    for d in &ps {
+        assert!(d.address.is_some(), "pull station {} has no address", d.id);
+        assert_eq!(d.mounting_in, 48.0, "pull station should be at 48in AFF");
+    }
+
+    // Interfaces exist.
+    let interfaces: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.interface.is_some()).collect();
+    assert!(interfaces.len() >= 2, "too few FA interface devices: {}", interfaces.len());
+
+    // NAC devices reference NAC circuit.
+    let nac_devs: Vec<_> = t.fire_alarm_devices.iter().filter(|d| !d.nac.is_empty()).collect();
+    assert!(!nac_devs.is_empty(), "no NAC circuit devices");
+}
+
+#[test]
+fn hotel_telecom_has_enriched_fields() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let kinds: BTreeSet<&str> = t.telecom_devices.iter().map(|d| d.kind.as_str()).collect();
+
+    // All expected telecom device kinds present.
+    for k in [
+        "data_outlet", "tv_outlet", "telephone", "wifi_ap", "camera",
+        "card_reader", "door_contact", "rex", "speaker",
+        "mdf", "idf", "patch_panel", "backboard", "rack",
+    ] {
+        assert!(kinds.contains(k), "missing telecom kind: {k}");
+    }
+
+    // Data outlets have cable specs.
+    let data: Vec<_> = t.telecom_devices.iter().filter(|d| d.kind == "data_outlet").collect();
+    assert!(!data.is_empty(), "no data outlets");
+    for d in &data {
+        assert!(d.cable_spec.is_some(), "data outlet {} has no cable_spec", d.id);
+        assert!(d.box_type.is_some(), "data outlet {} has no box_type", d.id);
+        assert!(d.faceplate.is_some(), "data outlet {} has no faceplate", d.id);
+        assert!(d.home_panel.is_some(), "data outlet {} has no home_panel", d.id);
+        assert!(!d.lv_system.is_empty(), "data outlet {} has no lv_system", d.id);
+    }
+
+    // Cameras are security system.
+    for cam in t.telecom_devices.iter().filter(|d| d.kind == "camera") {
+        assert_eq!(cam.lv_system, "security", "camera should be security system");
+    }
+
+    // Access control devices present at stairs.
+    let cr: Vec<_> = t.telecom_devices.iter().filter(|d| d.kind == "card_reader").collect();
+    assert!(!cr.is_empty(), "no card readers");
+    for d in &cr {
+        assert_eq!(d.lv_system, "access_control", "card reader should be access_control system");
+    }
+
+    // MDF exists on L1, IDF on upper floors.
+    assert!(t.telecom_devices.iter().any(|d| d.kind == "mdf" && d.level == "1"), "no MDF on L1");
+    for lv in ["2", "3", "4"] {
+        assert!(
+            t.telecom_devices.iter().any(|d| d.kind == "idf" && d.level == lv),
+            "no IDF on level {lv}"
+        );
+    }
+}
+
+#[test]
+fn hotel_has_equip_connections() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.equip_connections.is_empty(), "no equipment connections");
+
+    let kinds: BTreeSet<&str> = t.equip_connections.iter().map(|c| c.kind.as_str()).collect();
+    assert!(kinds.contains("ptac"), "no PTAC connections");
+    assert!(kinds.contains("water_heater"), "no water heater connection");
+    assert!(kinds.contains("elevator"), "no elevator connection");
+    assert!(kinds.contains("rtu"), "no RTU connection");
+    assert!(kinds.contains("signage"), "no signage connection");
+
+    // Each connection has a circuit and panel.
+    for ec in &t.equip_connections {
+        assert!(!ec.circuit.is_empty(), "equip connection {} has no circuit", ec.id);
+        assert!(!ec.panel.is_empty(), "equip connection {} has no panel", ec.id);
+        assert!(!ec.connection_type.is_empty(), "equip connection {} has no connection_type", ec.id);
+    }
+
+    // Disconnects have a tag.
+    let disconnects: Vec<_> = t.equip_connections.iter().filter(|c| c.connection_type == "disconnect").collect();
+    assert!(!disconnects.is_empty(), "no disconnect connections");
+    for d in &disconnects {
+        assert!(d.disconnect_tag.is_some(), "disconnect {} has no tag", d.id);
+    }
+
+    // Schedules have voltage info.
+    for ec in &t.equip_connections {
+        assert!(ec.schedule.contains_key("voltage"), "equip connection {} has no voltage", ec.id);
+    }
+}
+
+#[test]
+fn hotel_has_sleeves() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.sleeves.is_empty(), "no sleeves");
+
+    // At least one rated wall sleeve with firestop.
+    let rated: Vec<_> = t.sleeves.iter().filter(|s| !s.fire_rating.is_empty()).collect();
+    assert!(!rated.is_empty(), "no rated sleeves");
+    for s in &rated {
+        assert!(s.firestop_system.is_some(), "rated sleeve {} has no firestop", s.id);
+    }
+
+    // Floor sleeves for riser exist on upper floors.
+    let floor_sleeves: Vec<_> = t.sleeves.iter().filter(|s| s.penetrates == "floor").collect();
+    assert!(!floor_sleeves.is_empty(), "no floor sleeves");
+
+    // Sleeves have cables.
+    for s in &t.sleeves {
+        assert!(!s.cables.is_empty(), "sleeve {} has no cables", s.id);
+        assert!(s.size_in > 0.0, "sleeve {} has no size", s.id);
+        assert!(s.length_in > 0.0, "sleeve {} has no length", s.id);
+    }
+
+    // Sleeves carry systems.
+    for s in &t.sleeves {
+        assert!(!s.systems.is_empty(), "sleeve {} has no systems", s.id);
+    }
+}
+
+#[test]
+fn hotel_has_cable_pathways() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.cable_pathways.is_empty(), "no cable pathways");
+
+    let kinds: BTreeSet<&str> = t.cable_pathways.iter().map(|p| p.kind.as_str()).collect();
+    assert!(kinds.contains("j_hook"), "no J-hook pathways");
+    assert!(kinds.contains("ent"), "no ENT stub pathways");
+
+    // J-hooks have spacing.
+    for pw in t.cable_pathways.iter().filter(|p| p.kind == "j_hook") {
+        assert!(pw.spacing_in.is_some(), "J-hook {} has no spacing", pw.id);
+    }
+
+    // ENT stubs have size.
+    for pw in t.cable_pathways.iter().filter(|p| p.kind == "ent") {
+        assert!(pw.size_in.is_some(), "ENT stub {} has no size", pw.id);
+    }
+
+    // Pathways carry systems.
+    for pw in &t.cable_pathways {
+        assert!(!pw.systems.is_empty(), "pathway {} has no systems", pw.id);
+    }
+}
+
+#[test]
+fn hotel_has_lv_bom() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(!t.lv_bom.is_empty(), "no LV BOM lines");
+
+    let systems: BTreeSet<&str> = t.lv_bom.iter().map(|b| b.system.as_str()).collect();
+    assert!(systems.contains("fire_alarm"), "no fire alarm BOM");
+    assert!(systems.contains("data"), "no data BOM");
+
+    let categories: BTreeSet<&str> = t.lv_bom.iter().map(|b| b.category.as_str()).collect();
+    assert!(categories.contains("device"), "no device BOM lines");
+    assert!(categories.contains("cable"), "no cable BOM lines");
+    assert!(categories.contains("support"), "no support BOM lines");
+
+    // All BOM lines have positive quantities.
+    for line in &t.lv_bom {
+        assert!(line.quantity > 0.0, "BOM line {} has zero quantity: {}", line.id, line.description);
+        assert!(!line.unit.is_empty(), "BOM line {} has no unit", line.id);
+        assert!(!line.description.is_empty(), "BOM line {} has no description", line.id);
+    }
+
+    // Some lines reference specs.
+    let with_spec: Vec<_> = t.lv_bom.iter().filter(|b| b.spec_id.is_some()).collect();
+    assert!(!with_spec.is_empty(), "no BOM lines reference specs");
+
+    // Scope flags are populated.
+    let with_scope: Vec<_> = t.lv_bom.iter().filter(|b| !b.scope.is_empty()).collect();
+    assert!(!with_scope.is_empty(), "no BOM lines have scope flags");
+}
+
+#[test]
+fn hotel_spec_book_has_lv_divisions() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let divs: BTreeSet<&str> = t.spec_items.iter().map(|s| s.division.as_str()).collect();
+    // Divisions 27 (communications) and 28 (fire alarm / security) should both be present.
+    assert!(divs.contains("27"), "no division 27 (communications) specs");
+    assert!(divs.contains("28"), "no division 28 (fire alarm/security) specs");
+
+    // Division 27 should have more than one spec.
+    let d27 = t.spec_items.iter().filter(|s| s.division == "27").count();
+    assert!(d27 >= 3, "too few division 27 specs: {d27}");
+
+    // Division 28 should have more than the original one.
+    let d28 = t.spec_items.iter().filter(|s| s.division == "28").count();
+    assert!(d28 >= 3, "too few division 28 specs: {d28}");
+}
+
+#[test]
+fn hotel_lv_full_has_more_devices_than_small() {
+    let small = hotel_truth_for(1, HotelSize::Small);
+    let full = hotel_truth_for(1, HotelSize::Full);
+    assert!(
+        full.fire_alarm_devices.len() > small.fire_alarm_devices.len(),
+        "full ({}) should have more FA devices than small ({})",
+        full.fire_alarm_devices.len(),
+        small.fire_alarm_devices.len()
+    );
+    assert!(
+        full.telecom_devices.len() > small.telecom_devices.len(),
+        "full ({}) should have more telecom devices than small ({})",
+        full.telecom_devices.len(),
+        small.telecom_devices.len()
+    );
+    assert!(
+        full.equip_connections.len() > small.equip_connections.len(),
+        "full ({}) should have more equip connections than small ({})",
+        full.equip_connections.len(),
+        small.equip_connections.len()
+    );
+}
+
+#[test]
+fn hotel_lv_ids_are_unique() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+
+    let fa_ids: BTreeSet<&str> = t.fire_alarm_devices.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(fa_ids.len(), t.fire_alarm_devices.len(), "duplicate FA device IDs");
+
+    let tc_ids: BTreeSet<&str> = t.telecom_devices.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(tc_ids.len(), t.telecom_devices.len(), "duplicate telecom device IDs");
+
+    let ec_ids: BTreeSet<&str> = t.equip_connections.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ec_ids.len(), t.equip_connections.len(), "duplicate equip connection IDs");
+
+    let sl_ids: BTreeSet<&str> = t.sleeves.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(sl_ids.len(), t.sleeves.len(), "duplicate sleeve IDs");
+
+    let cp_ids: BTreeSet<&str> = t.cable_pathways.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(cp_ids.len(), t.cable_pathways.len(), "duplicate cable pathway IDs");
+
+    let bom_ids: BTreeSet<&str> = t.lv_bom.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(bom_ids.len(), t.lv_bom.len(), "duplicate BOM line IDs");
+}
+
+#[test]
+fn hotel_fa_devices_per_floor() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    for lv in ["1", "2", "3", "4"] {
+        let on_level: Vec<_> = t.fire_alarm_devices.iter().filter(|d| d.level == lv).collect();
+        assert!(on_level.len() >= 3, "too few FA devices on level {lv}: {}", on_level.len());
+    }
+}
+
+#[test]
+fn hotel_equip_ptac_per_guest_room() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    let guest_rooms: Vec<_> = t.building.rooms.iter().filter(|r| {
+        r.name.contains("KING") || r.name.contains("QUEEN") || r.name.contains("SUITE") || r.name.contains("ADA")
+    }).collect();
+    let ptacs: Vec<_> = t.equip_connections.iter().filter(|c| c.kind == "ptac").collect();
+    // At least one PTAC per guest room.
+    assert!(
+        ptacs.len() >= guest_rooms.len(),
+        "fewer PTACs ({}) than guest rooms ({})",
+        ptacs.len(),
+        guest_rooms.len()
+    );
+}
