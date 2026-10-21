@@ -24,3 +24,5 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
+# The wall reader's building spec patch is checked against the spec itself.
+cadaddy-walk3d = { path = "../walk3d" }

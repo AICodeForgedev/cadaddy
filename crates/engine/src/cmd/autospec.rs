@@ -166,9 +166,12 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
             let (ty, measured) = match median(found.iter().map(|p| p.thickness / k).collect()) {
                 Some(t) => {
                     let t = (t * 8.0).round() / 8.0;
-                    (WallType { name: format!("{} walls", inches(t)), height_ft: None, thickness_in: t, from: WallFrom::Pairs }, true)
+                    (WallType { name: format!("{} walls", inches(t)), height_ft: None, thickness_in: t, from: WallFrom::Pairs, assembly: None }, true)
                 }
-                None => (WallType { name: "Centreline walls".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Centerline }, false),
+                None => (
+                    WallType { name: "Centreline walls".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Centerline, assembly: None },
+                    false,
+                ),
             };
             if !measured {
                 guess.insert(format!("wall_types/{}", ty.name), "no face pairs: drawn as centrelines, a 4 7/8\" partition assumed".into());

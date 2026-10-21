@@ -779,6 +779,7 @@ dependencies = [
  "cadaddy-dxf",
  "cadaddy-geom",
  "cadaddy-io",
+ "cadaddy-walk3d",
  "serde",
  "serde_json",
 ]

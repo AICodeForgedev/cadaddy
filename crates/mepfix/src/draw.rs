@@ -275,6 +275,31 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
     let level = sh.level.clone().unwrap_or_default();
     match kind {
         Kind::Cover => cover(&mut pen, t, st),
+        Kind::WallTypes => {
+            let fr = frame(st);
+            crate::walls::draw_legend(&mut pen, t, &st.walls, fr.area);
+            legend.push(item("wall_tag", "WALL TYPE TAG"));
+            abbr.extend(
+                [
+                    "GYP. BD. = GYPSUM BOARD",
+                    "GWB = GYPSUM WALLBOARD",
+                    "MR = MOISTURE-RESISTANT",
+                    "AR = ABUSE-RESISTANT",
+                    "CMU = CONCRETE MASONRY UNIT",
+                    "GA. = GAUGE",
+                    "O.C. = ON CENTER",
+                    "U/S = UNDERSIDE",
+                    "STC = SOUND TRANSMISSION CLASS",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::Floor(l) => {
+            grid(&mut pen, t);
+            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
+            legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
+            legend.push(item("door", "DOOR"));
+        }
         Kind::Schedules(d) => schedules(&mut pen, t, d),
         Kind::Framing(l) => {
             grid(&mut pen, t);
@@ -515,6 +540,16 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             pen.pline(layer, [x - 0.3, y - 0.05], [x + 0.3, y - 0.05]);
             let label = st.sys(&k.trim_start_matches("duct_").to_uppercase());
             pen.ptext("LEGEND", [x, y - 0.03], 0.05, &label, HAlign::Center);
+        }
+        "wall_tag" => {
+            let (c, r) = (pen.p([x, y]), pen.pl(0.09));
+            crate::walls::tag_symbol(pen, "LEGEND", c, r, st.walls.symbol);
+            pen.ptext("LEGEND", [x, y - 0.03], 0.06, "X", HAlign::Center);
+        }
+        "door" => {
+            pen.pline("A-DOOR", [x - 0.15, y - 0.1], [x - 0.15, y + 0.15]);
+            let (c, r) = (pen.p([x - 0.15, y - 0.1]), pen.pl(0.25));
+            pen.arc("A-DOOR", c, r, 0.0, FRAC_PI_2);
         }
         "duct_riser" => {
             pen.prect("DUCT", [x - s, y - s], [x + s, y + s]);
@@ -1254,11 +1289,7 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
         let slab = t.building.slabs.iter().find(|s| s.level == level);
         let conc = slab.map_or(t.building.slab_in, |s| s.concrete_in);
         let elev = t.level(level).map_or(0.0, |l| l.elevation_ft);
-        notes.push(format!(
-            "3. {}\" CONC SLAB ON 1-1/2\" COMPOSITE DECK; TOP OF SLAB = EL {}.",
-            fmt_in(conc),
-            feet_inches(elev)
-        ));
+        notes.push(format!("3. {}\" CONC SLAB ON 1-1/2\" COMPOSITE DECK; TOP OF SLAB = EL {}.", fmt_in(conc), feet_inches(elev)));
     }
     let fr = frame(st);
     let x = fr.area[1][0] - 5.2;

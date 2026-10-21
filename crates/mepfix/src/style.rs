@@ -51,6 +51,8 @@ pub struct Style {
     pub world_offsets: bool,
     /// The PDFs keep the drawing's layers (optional content); most printed sets don't.
     pub pdf_layers: bool,
+    /// The wall type legend and wall tags (drawn from their own random stream).
+    pub walls: crate::walls::WallStyle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -132,6 +134,7 @@ impl Style {
             slope: r.pick(&[0, 1, 2]),
             world_offsets: r.chance(0.5),
             pdf_layers: r.chance(0.3),
+            walls: crate::walls::WallStyle::default(),
         }
     }
 

@@ -18,11 +18,15 @@ pub enum Kind {
     /// An enlarged plumbing plan of a level: `TOILET` rooms or `MECH` room.
     Enlarged(String, String),
     Schedules(String),
+    /// An architectural floor plan: walls, doors, wall type tags.
+    Floor(String),
+    /// The wall type legend.
+    WallTypes,
 }
 
 impl Kind {
     pub fn plan(&self) -> bool {
-        !matches!(self, Kind::Cover | Kind::Schedules(_))
+        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes)
     }
 }
 
@@ -72,6 +76,11 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     }
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
+    // Added after the others, so the sheets above keep their random draws.
+    for l in ["1", "2"] {
+        v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Floor(l.into())));
+    }
+    v.push(("A-501".into(), "WALL TYPES AND PARTITION SCHEDULE".into(), "A".into(), Kind::WallTypes));
     v
 }
 
@@ -120,7 +129,9 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in sheet_list() {
         let level = match &kind {
-            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l) | Kind::Enlarged(l, _) => Some(l.clone()),
+            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l) | Kind::Enlarged(l, _) | Kind::Floor(l) => {
+                Some(l.clone())
+            }
             _ => None,
         };
         let plan = kind.plan();
