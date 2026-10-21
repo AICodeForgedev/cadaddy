@@ -46,6 +46,12 @@ pub struct Building {
     pub beams: Vec<Beam>,
     /// Concrete slab on deck, inches (top of slab = the level's elevation).
     pub slab_in: f64,
+    /// Per-level slab descriptions (composite deck, roof deck, slab-on-grade).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slabs: Vec<Slab>,
+    /// Openings and shafts through the floor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<Opening>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -120,6 +126,36 @@ pub struct Beam {
     pub to_ft: [f64; 2],
     /// Top of steel, elevation.
     pub tos_ft: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Slab {
+    pub id: String,
+    /// The level whose floor it forms.
+    pub level: String,
+    /// `composite` (concrete on metal deck) or `roof` (metal roof deck only).
+    pub kind: String,
+    /// Concrete thickness, inches (0 for bare roof deck).
+    pub concrete_in: f64,
+    /// Metal deck depth, inches.
+    pub deck_in: f64,
+    /// Top of slab elevation, feet.
+    pub top_ft: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Opening {
+    pub id: String,
+    /// The level the opening is on.
+    pub level: String,
+    /// `shaft` (extends through multiple levels) or `opening` (single floor).
+    pub kind: String,
+    /// Minimum and maximum corners, building feet (plan).
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Size label as printed on the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
