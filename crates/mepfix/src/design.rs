@@ -1070,8 +1070,52 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         // Hot water return from the chase back to the heater.
         let (rx, _) = chase(2);
         if let Some(&foot) = feet.get("HWR") {
-            let (rn, _) =
-                net.run(foot, &[[rx, y_hwr, pz], [x_wh - 0.8, y_hwr, pz], [x_wh - 0.8, y_wh, pz]], "HWR", "pipe", [0.75, 0.75], "1", "P-101");
+            // An in-line recirculation pump on the return, a few feet before the corner to the
+            // heater (when the run along the corridor is long enough to hold it).
+            let corner = x_wh - 0.8;
+            let dir = if rx >= corner { 1.0 } else { -1.0 };
+            let (rn, _) = if (rx - corner).abs() > 6.0 {
+                let (x_in, x_out) = (corner + dir * 3.5, corner + dir * 2.5);
+                let (pn, _) = net.run(foot, &[[rx, y_hwr, pz], [x_in, y_hwr, pz]], "HWR", "pipe", [0.75, 0.75], "1", "P-101");
+                let p_in = pn.last().copied().unwrap_or(foot);
+                equip_n += 1;
+                let cp_id = format!("E{equip_n:02}");
+                if let Some(n) = net.nodes.get_mut(p_in) {
+                    n.kind = "equipment".into();
+                    n.connects = Some(cp_id.clone());
+                }
+                let p_out = net.node("equipment", "HWR", "1", [x_out, y_hwr, pz]);
+                if let Some(n) = net.nodes.get_mut(p_out) {
+                    n.connects = Some(cp_id.clone());
+                }
+                // A small body round the pipe (the band between the sprinklers and the ceilings
+                // is tight).
+                let (zl, zh) = (pz - 2.5 / 12.0, pz + 2.5 / 12.0);
+                t.equipment.push(Equipment {
+                    id: cp_id,
+                    tag: "CP-1".into(),
+                    kind: "pump".into(),
+                    level: "1".into(),
+                    min_ft: [r6(x_in.min(x_out)), r6(y_hwr - 0.25), r6(zl)],
+                    max_ft: [r6(x_in.max(x_out)), r6(y_hwr + 0.25), r6(zh)],
+                    cfm: None,
+                    schedule: [
+                        ("TAG", "CP-1".to_string()),
+                        ("TYPE", "IN-LINE CIRCULATOR".into()),
+                        ("SERVICE", "HOT WATER RECIRC".into()),
+                        ("GPM", "4".into()),
+                        ("HEAD (FT)", "10".into()),
+                        ("SIZE (L x W x H)", "1'-0\" x 0'-6\" x 0'-5\"".into()),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+                    nodes: [p_in, p_out].iter().filter_map(|n| net.nodes.get(*n).map(|n| n.id.clone())).collect(),
+                });
+                net.run(p_out, &[[corner, y_hwr, pz], [corner, y_wh, pz]], "HWR", "pipe", [0.75, 0.75], "1", "P-101")
+            } else {
+                net.run(foot, &[[rx, y_hwr, pz], [corner, y_hwr, pz], [corner, y_wh, pz]], "HWR", "pipe", [0.75, 0.75], "1", "P-101")
+            };
             let rc = conn(&mut net, &mut t, "HWR", [x_wh - 0.8, y_wh, 4.0]);
             if let Some(&end) = rn.last() {
                 net.link(end, rc, "HWR", "pipe", [0.75, 0.75], "1", "P-101");
@@ -1120,6 +1164,32 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             net.link(end, gc, "G", "pipe", [0.75, 0.75], "1", "P-101");
         }
         let _ = (cws, hws);
+
+        // The condensing unit for level 2's air handler (DX cooling), on a pad outside the south
+        // wall, west of the intake louver (clear of its tag). Its refrigerant lines aren't drawn.
+        equip_n += 1;
+        let cu_x = 0.1 * w0;
+        t.equipment.push(Equipment {
+            id: format!("E{equip_n:02}"),
+            tag: "CU-1".into(),
+            kind: "condensing_unit".into(),
+            level: "1".into(),
+            min_ft: [r6(cu_x - 1.5), -3.75, 0.0],
+            max_ft: [r6(cu_x + 1.5), -1.25, 2.75],
+            cfm: None,
+            schedule: [
+                ("TAG", "CU-1".to_string()),
+                ("SERVES", "AHU-2".into()),
+                ("TONS", format!("{:.1}", total_cfm.get("2").copied().unwrap_or(4000.0) / 400.0)),
+                ("REFRIGERANT", "R-454B".into()),
+                ("SIZE (L x W x H)", "3'-0\" x 2'-6\" x 2'-9\"".into()),
+                ("WEIGHT (LB)", "310".into()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            nodes: Vec::new(),
+        });
     }
 
     // ---- Roof: exhaust fan on the riser, vent through the roof ----------------------------

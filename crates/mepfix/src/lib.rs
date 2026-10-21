@@ -15,6 +15,7 @@ pub mod clash;
 pub mod design;
 pub mod draw;
 pub mod duct_reader;
+pub mod equip_reader;
 pub mod layout;
 pub mod pipe_reader;
 pub mod rng;
