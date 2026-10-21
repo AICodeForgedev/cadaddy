@@ -547,7 +547,7 @@ pub fn resolve_wall_tap(
         }
         // Parameter along the wall.
         let t = ((tap_ft[0] - w.a_ft[0]) * dx + (tap_ft[1] - w.a_ft[1]) * dy) / len_sq;
-        if t < -0.05 || t > 1.05 {
+        if !(-0.05..=1.05).contains(&t) {
             continue;
         }
         let t_clamped = t.clamp(0.0, 1.0);
