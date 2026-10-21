@@ -731,6 +731,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     room: rm.id.clone(),
                     at_ft: [rm.min_ft[0] + 2.5, rm.min_ft[1] + 1.0, elev],
                     nodes: vec![],
+                    wall: None,
                 });
                 fix_id += 1;
                 // Lavatory
@@ -742,6 +743,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     room: rm.id.clone(),
                     at_ft: [rm.min_ft[0] + 1.5, rm.min_ft[1] + 1.0, elev + 2.83],
                     nodes: vec![],
+                    wall: None,
                 });
                 fix_id += 1;
                 // Tub/shower
@@ -753,6 +755,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     room: rm.id.clone(),
                     at_ft: [rm.min_ft[0] + 4.5, rm.min_ft[1] + 1.0, elev],
                     nodes: vec![],
+                    wall: None,
                 });
                 fix_id += 1;
             }

@@ -14,6 +14,7 @@ pub enum Kind {
     Rcp(String),
     Mech(String),
     Plumb(String),
+    Elec(String),
     Fire(String),
     /// An enlarged plumbing plan of a level: `TOILET` rooms or `MECH` room.
     Enlarged(String, String),
@@ -76,6 +77,9 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     v.push(("P-401".into(), "ENLARGED TOILET ROOM PLUMBING PLAN - LEVEL 1".into(), "P".into(), Kind::Enlarged("1".into(), "TOILET".into())));
     v.push(("P-402".into(), "ENLARGED TOILET ROOM PLUMBING PLAN - LEVEL 2".into(), "P".into(), Kind::Enlarged("2".into(), "TOILET".into())));
     v.push(("P-403".into(), "ENLARGED MECHANICAL ROOM PLUMBING PLAN - LEVEL 1".into(), "P".into(), Kind::Enlarged("1".into(), "MECH".into())));
+    for l in ["1", "2"] {
+        v.push((format!("E-30{l}"), format!("LEVEL {l} IN-WALL DEVICE PLAN"), "E".into(), Kind::Elec(l.into())));
+    }
     for l in ["1", "2"] {
         v.push((format!("FP-10{l}"), format!("LEVEL {l} FIRE PROTECTION PLAN"), "FP".into(), Kind::Fire(l.into())));
     }
@@ -140,6 +144,7 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Rcp(l)
             | Kind::Mech(l)
             | Kind::Plumb(l)
+            | Kind::Elec(l)
             | Kind::Fire(l)
             | Kind::Enlarged(l, _)
             | Kind::Lighting(l)

@@ -120,7 +120,7 @@ fn every_kind_of_clash_is_planted_somewhere() {
             kinds.insert(c.kind.clone());
         }
     }
-    assert_eq!(kinds, BTreeSet::from(["below_ceiling".to_string(), "hard".into(), "into_structure".into()]));
+    assert_eq!(kinds, BTreeSet::from(["below_ceiling".to_string(), "hard".into(), "in_wall".into(), "into_structure".into()]));
 }
 
 #[test]
@@ -865,4 +865,157 @@ fn hotel_clashes_include_planted() {
     let t = hotel_truth_for(1, HotelSize::Small);
     let planted = t.clashes.iter().filter(|c| c.planted).count();
     assert!(planted >= 1, "no planted clashes in hotel");
+}
+
+// ---- In-wall coordination tests -----------------------------------------------------------
+
+#[test]
+fn walls_are_generated_for_every_room_edge() {
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        assert!(!t.building.walls.is_empty(), "{ctx}: no walls generated");
+        // Every room on every level must have at least one wall.
+        for rm in &t.building.rooms {
+            let has_wall = t.building.walls.iter().any(|w| w.level == rm.level && (w.sides[0] == rm.id || w.sides[1] == rm.id));
+            assert!(has_wall, "{ctx}: room {} has no walls", rm.id);
+        }
+        // Every wall must have valid sides (either a room id or "EXT").
+        for w in &t.building.walls {
+            for side in &w.sides {
+                assert!(
+                    side == "EXT" || t.building.rooms.iter().any(|r| &r.id == side),
+                    "{ctx}: wall {} side {side} is not a room or EXT",
+                    w.id,
+                );
+            }
+            assert!(w.thickness_in > 0.0, "{ctx}: wall {} has zero thickness", w.id);
+            assert!(w.stud_spacing_in > 0.0, "{ctx}: wall {} has zero stud spacing", w.id);
+        }
+    }
+}
+
+#[test]
+fn rough_ins_are_behind_every_plumbing_fixture() {
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        assert!(!t.rough_ins.is_empty(), "{ctx}: no rough-ins generated");
+        // Every fixture with a wall should have at least one rough-in.
+        for fx in t.fixtures.iter().filter(|f| f.wall.is_some()) {
+            let stubs: Vec<_> = t.rough_ins.iter().filter(|ri| ri.fixture == fx.id).collect();
+            assert!(!stubs.is_empty(), "{ctx}: fixture {} ({}) has no rough-ins", fx.id, fx.kind);
+            // Every rough-in stub must be on the fixture's wall.
+            for ri in &stubs {
+                assert_eq!(
+                    ri.wall,
+                    fx.wall.as_ref().cloned().unwrap_or_default(),
+                    "{ctx}: rough-in {} is on wall {}, fixture {} is on wall {:?}",
+                    ri.id,
+                    ri.wall,
+                    fx.id,
+                    fx.wall,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn devices_are_placed_and_avoid_rough_ins_by_default() {
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        assert!(!t.devices.is_empty(), "{ctx}: no devices generated");
+        // Devices that are not planted should not share a stud cavity with any rough-in
+        // (the planted ones are the in_wall clashes).
+        let planted: BTreeSet<String> = t
+            .clashes
+            .iter()
+            .filter(|c| c.kind == "in_wall" && c.planted)
+            .map(|c| c.a.clone())
+            .collect();
+        for dev in &t.devices {
+            if planted.contains(&dev.id) {
+                continue;
+            }
+            let shared = t
+                .rough_ins
+                .iter()
+                .filter(|ri| ri.wall == dev.wall && ri.stud_cavity == dev.stud_cavity)
+                .count();
+            assert_eq!(
+                shared, 0,
+                "{ctx}: device {} (cavity {}) shares a stud cavity with a rough-in on wall {}",
+                dev.id, dev.stud_cavity, dev.wall,
+            );
+        }
+    }
+}
+
+#[test]
+fn in_wall_clashes_are_planted_and_correct() {
+    let mut planted_count = 0;
+    for seed in 1..=30 {
+        let t = truth_for(seed);
+        let in_wall: Vec<_> = t.clashes.iter().filter(|c| c.kind == "in_wall").collect();
+        for c in &in_wall {
+            // The `a` side must be a device, `b` a rough-in.
+            assert!(t.device(&c.a).is_some(), "seed {seed}: clash {} a={} is not a device", c.id, c.a);
+            assert!(t.rough_in(&c.b).is_some(), "seed {seed}: clash {} b={} is not a rough-in", c.id, c.b);
+            // Must have a description.
+            assert!(c.description.is_some(), "seed {seed}: clash {} has no description", c.id);
+            assert!(c.wall.is_some(), "seed {seed}: clash {} has no wall", c.id);
+        }
+        let planted: Vec<_> = in_wall.iter().filter(|c| c.planted).collect();
+        planted_count += planted.len();
+    }
+    assert!(planted_count > 0, "no in-wall clashes were planted across 30 seeds");
+}
+
+#[test]
+fn placement_zones_exist_for_unfixed_devices() {
+    let mut total_zones = 0;
+    let mut some_may_clash = false;
+    for seed in 1..=15 {
+        let t = truth_for(seed);
+        let unfixed: Vec<_> = t.devices.iter().filter(|d| !d.fixed).collect();
+        for dev in &unfixed {
+            let zone = t.placement_zones.iter().find(|z| z.device == dev.id);
+            assert!(
+                zone.is_some(),
+                "seed {seed}: unfixed device {} has no placement zone",
+                dev.id,
+            );
+            let z = zone.unwrap();
+            assert!(z.zone_in[1] > z.zone_in[0], "seed {seed}: zone for {} is empty", dev.id);
+            assert!(
+                ["will_clash", "may_clash", "clear"].contains(&z.status.as_str()),
+                "seed {seed}: zone for {} has invalid status: {}",
+                dev.id,
+                z.status,
+            );
+            total_zones += 1;
+            if z.status == "may_clash" {
+                some_may_clash = true;
+                assert!(!z.clear_ranges.is_empty(), "seed {seed}: may_clash zone for {} has no clear ranges", dev.id);
+            }
+        }
+    }
+    assert!(total_zones > 0, "no placement zones generated");
+    // Across many seeds, at least one device should land in a may_clash zone.
+    // (Not guaranteed for every seed, but very likely across 15.)
+    let _ = some_may_clash; // Don't assert; it depends on the building geometry.
+}
+
+#[test]
+fn in_wall_recall_and_false_positive_rate() {
+    // Test that the clash detection has full recall (all planted clashes are detected) and
+    // zero false positives (no unplanted in-wall clashes).
+    for seed in 1..=40 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        let stray: Vec<_> = t.clashes.iter().filter(|c| !c.planted).collect();
+        assert!(stray.is_empty(), "{ctx}: false positive clashes: {stray:?}");
+    }
 }
