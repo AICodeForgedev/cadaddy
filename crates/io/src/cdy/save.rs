@@ -85,7 +85,7 @@ enum Part<'a> {
     Objects(ChunkRef),
     Layout(&'a cadaddy_doc::Layout),
     Foreign(&'a Arc<Foreign>),
-    /// The building spec (BSPC) or the camera tours (TOUR).
+    /// The building spec (BSPC), the camera tours (TOUR) or the overrides (OVRD).
     Text([u8; 4], &'a str),
     Embedded(&'a str, &'a Arc<Vec<u8>>),
 }
@@ -103,6 +103,9 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     }
     if let Some(t) = &d.tours {
         out.push(Part::Text(*b"TOUR", t));
+    }
+    if let Some(t) = &d.overrides {
+        out.push(Part::Text(*b"OVRD", t));
     }
     out.extend(d.embedded.iter().map(|(n, b)| Part::Embedded(n, b)));
     out
@@ -310,7 +313,7 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
                 Source::Embedded(name, b)
             }
             b"THMB" => Source::Thumbnail,
-            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" => {
+            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" | b"OVRD" => {
                 let (container::Read::Ok(c), _) = container::chunk_at(bytes, usize::try_from(e.offset).ok()?)? else { return None };
                 Source::Bytes(e.tag, crc32fast::hash(&c.data), c.data.len() as u64)
             }
