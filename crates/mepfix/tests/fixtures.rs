@@ -499,8 +499,9 @@ fn elec_reader_reads_fixture_set_dxf() {
     // We should find some devices (not perfect, but nonzero).
     assert!(!found.is_empty(), "no devices found from E-sheets");
 
-    // Score against truth.
-    let s = elec_reader::score_devices(t, &found, 8.0); // generous tolerance for diagrammatic offsets
+    // Score against truth — positions come from placement rules, not E-sheet offsets,
+    // so we can use a tighter tolerance than the old diagrammatic-offset reader.
+    let s = elec_reader::score_devices(t, &found, 5.0);
     // The reader should find at least some devices (recall > 0).
     assert!(s.recall > 0.0, "recall is zero: {:?}", s);
     // Precision should be nonzero.
@@ -577,4 +578,108 @@ fn elec_reader_default_heights_are_correct() {
             _ => {}
         }
     }
+}
+
+#[test]
+fn elec_reader_esheet_offsets_do_not_move_model_devices() {
+    // The CORRECTION: positions come from architectural sheets / placement rules, not from
+    // where the symbol sits on the diagrammatic E-sheet. Verify that for arch-positioned
+    // devices, the reader's output position is closer to the truth's true position (at_ft)
+    // than to the truth's diagrammatic drawn position (drawn_ft).
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+
+    let all_dxf: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
+        .collect();
+    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
+    let dxf_data: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter(|s| s.discipline == "E" && s.level.is_some())
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
+        .collect();
+
+    let (found, _) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
+
+    let mut checked = 0usize;
+    for fd in &found {
+        if fd.room.is_empty() || !fd.arch_positioned {
+            continue;
+        }
+        // Find the closest truth device of the same kind and level.
+        let td = t.elec_devices.iter()
+            .filter(|d| d.level == fd.level && d.kind == fd.kind && d.arch_positioned)
+            .min_by(|a, b| {
+                let da = (a.at_ft[0] - fd.at_ft[0]).powi(2) + (a.at_ft[1] - fd.at_ft[1]).powi(2);
+                let db = (b.at_ft[0] - fd.at_ft[0]).powi(2) + (b.at_ft[1] - fd.at_ft[1]).powi(2);
+                da.total_cmp(&db)
+            });
+        let Some(td) = td else { continue };
+
+        let dist_truth = ((fd.at_ft[0] - td.at_ft[0]).powi(2)
+            + (fd.at_ft[1] - td.at_ft[1]).powi(2))
+        .sqrt();
+
+        // Only verify devices that actually matched (within scoring tolerance).
+        // Devices placed in the wrong room due to alignment/jitter are false positives
+        // handled by the scorer, not a test of whether positions come from rules.
+        if dist_truth > 5.0 {
+            continue;
+        }
+
+        let dist_drawn = ((fd.at_ft[0] - td.drawn_ft[0]).powi(2)
+            + (fd.at_ft[1] - td.drawn_ft[1]).powi(2))
+        .sqrt();
+
+        // The reader's position must be at least as close to the true position as to the
+        // diagrammatic E-sheet position (i.e. it derived position from rules, not E-sheet).
+        assert!(
+            dist_truth <= dist_drawn + 0.01 || dist_truth < 0.5,
+            "arch {} in {} closer to drawn ({:.2} ft) than truth ({:.2} ft)",
+            td.kind, td.room, dist_drawn, dist_truth
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no arch-positioned devices to verify");
+    eprintln!("esheet_offsets: verified {checked} arch-positioned devices derive from rules, not E-sheet");
+}
+
+#[test]
+fn elec_reader_zones_contain_truth_positions() {
+    // For zone (field-decision) devices, the reader's zone must contain the truth position.
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+
+    let all_dxf: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
+        .collect();
+    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
+    let dxf_data: Vec<(String, Vec<u8>)> = t
+        .sheets
+        .iter()
+        .filter(|s| s.discipline == "E" && s.level.is_some())
+        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
+        .collect();
+
+    let (found, _) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
+    let s = elec_reader::score_devices(t, &found, 5.0);
+
+    // Zone containment for matched zone devices should be high.
+    let non_arch_count = t.elec_devices.iter().filter(|d| !d.arch_positioned).count();
+    if non_arch_count > 0 {
+        assert!(
+            s.zone_containment >= 0.8,
+            "zone containment {:.2} too low (expected >= 0.8); non-arch truth devices: {}",
+            s.zone_containment, non_arch_count
+        );
+    }
+    eprintln!(
+        "zones_contain_truth: containment={:.2}, non-arch={}, TP={}, FP={}, FN={}",
+        s.zone_containment, non_arch_count, s.true_positives, s.false_positives, s.false_negatives
+    );
 }
