@@ -65,6 +65,8 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
         fire_rating: Some("1 HR".into()),
         stc: Some(45),
         external: false,
+        head: None,
+        bottom_track: true,
     });
     // Two plan walls along y=15 (separating room 101 from corridor 102).
     t.plan_walls.push(PlanWall {
@@ -79,6 +81,8 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
         openings: vec![[3.0, 6.0]],
         tags: Vec::new(),
         layout_from: None,
+        plan_tag: None,
+        enlarged_tag: None,
     });
     t.plan_walls.push(PlanWall {
         id: "W1-002".into(),
@@ -92,6 +96,8 @@ fn test_truth() -> cadaddy_mepfix::truth::Truth {
         openings: Vec::new(),
         tags: Vec::new(),
         layout_from: None,
+        plan_tag: None,
+        enlarged_tag: None,
     });
     t
 }
