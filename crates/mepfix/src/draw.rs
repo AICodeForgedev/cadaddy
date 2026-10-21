@@ -370,6 +370,14 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                 .map(abbrev),
             );
         }
+        Kind::Elec(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            draw_devices(&mut pen, t, l);
+            legend.push(item("receptacle", "DUPLEX RECEPTACLE"));
+            legend.push(item("switch", "SWITCH"));
+            abbr.extend(["AFF = ABOVE FINISHED FLOOR", "R = RECEPTACLE", "S = SWITCH"].map(abbrev));
+        }
         Kind::Fire(l) => {
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
@@ -636,6 +644,32 @@ fn plan_title(pen: &mut Pen, t: &Truth, sh: &Sheet) {
     pen.poly("TEXT", &[tip, base + side * (r * 0.4), base - side * (r * 0.4)], true);
     pen.text("TEXT", c + up * (r * 1.4), 0.1, "N", rot, HAlign::Center, VAlign::Middle);
     let _ = t;
+}
+
+/// Electrical devices (receptacles, switches) as small symbols on the architectural background.
+fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
+    let th = pen.st.text_in;
+    for dev in t.devices.iter().filter(|d| d.level == level) {
+        let c = pen.b(dev.at_ft);
+        let r = pen.bl(0.25); // symbol radius in model units
+        // Receptacle: small circle with two parallel lines; switch: circle with S.
+        match dev.kind.as_str() {
+            "receptacle" => {
+                pen.circle("ELEC", c, r);
+                pen.line("ELEC", Vec2::new(c.x - r * 0.5, c.y - r * 0.7), Vec2::new(c.x - r * 0.5, c.y + r * 0.7));
+                pen.line("ELEC", Vec2::new(c.x + r * 0.5, c.y - r * 0.7), Vec2::new(c.x + r * 0.5, c.y + r * 0.7));
+            }
+            "switch" => {
+                pen.circle("ELEC", c, r);
+                pen.text("ELEC", c, th * 0.8, "S", 0.0, HAlign::Center, VAlign::Middle);
+            }
+            _ => {
+                pen.circle("ELEC", c, r * 0.7);
+            }
+        }
+        // Tag text beside the symbol.
+        pen.text("ELEC-TEXT", Vec2::new(c.x + r * 1.5, c.y), th * 0.7, &dev.tag, 0.0, HAlign::Left, VAlign::Middle);
+    }
 }
 
 /// Walls (rooms inset 3", so neighbours make 6" walls), room names and numbers.

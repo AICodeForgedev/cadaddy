@@ -14,6 +14,7 @@ pub enum Kind {
     Rcp(String),
     Mech(String),
     Plumb(String),
+    Elec(String),
     Fire(String),
     /// An enlarged plumbing plan of a level: `TOILET` rooms or `MECH` room.
     Enlarged(String, String),
@@ -68,6 +69,9 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     v.push(("P-402".into(), "ENLARGED TOILET ROOM PLUMBING PLAN - LEVEL 2".into(), "P".into(), Kind::Enlarged("2".into(), "TOILET".into())));
     v.push(("P-403".into(), "ENLARGED MECHANICAL ROOM PLUMBING PLAN - LEVEL 1".into(), "P".into(), Kind::Enlarged("1".into(), "MECH".into())));
     for l in ["1", "2"] {
+        v.push((format!("E-10{l}"), format!("LEVEL {l} ELECTRICAL PLAN"), "E".into(), Kind::Elec(l.into())));
+    }
+    for l in ["1", "2"] {
         v.push((format!("FP-10{l}"), format!("LEVEL {l} FIRE PROTECTION PLAN"), "FP".into(), Kind::Fire(l.into())));
     }
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
@@ -120,7 +124,7 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in sheet_list() {
         let level = match &kind {
-            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l) | Kind::Enlarged(l, _) => Some(l.clone()),
+            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Elec(l) | Kind::Fire(l) | Kind::Enlarged(l, _) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();

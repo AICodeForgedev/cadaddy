@@ -58,6 +58,7 @@ pub fn truth_for(seed: u64) -> Truth {
     let d = design::design(seed, &st, &mut r.fork(2));
     let mut t = d.truth;
     t.clashes = clash::clashes(&t, &d.planted);
+    t.placement_zones = clash::placement_zones(&t);
     t
 }
 
@@ -70,6 +71,7 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     layout::plan_sheets(&mut t, &st, &mut r.fork(3));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
     t.clashes = clash::clashes(&t, &d.planted);
+    t.placement_zones = clash::placement_zones(&t);
     let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();

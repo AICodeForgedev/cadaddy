@@ -31,8 +31,22 @@ pub struct Truth {
     pub fixtures: Vec<Fixture>,
     pub risers: Vec<Riser>,
     pub sheets: Vec<Sheet>,
+    /// Architectural walls inferred from the room geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<Wall>,
+    /// In-wall rough-in stubs behind plumbing fixtures (supply, waste, vent).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rough_ins: Vec<RoughIn>,
+    /// Electrical devices placed on walls (receptacles, switches, junction boxes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<Device>,
+    /// Placement zones for devices with unfixed positions (where in-wall conflicts may/will/won't
+    /// occur).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placement_zones: Vec<PlacementZone>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
-    /// structure), computed from the geometry; `planted` ones were put there on purpose.
+    /// structure, in-wall device-vs-pipe), computed from the geometry; `planted` ones were put
+    /// there on purpose.
     pub clashes: Vec<Clash>,
 }
 
@@ -42,6 +56,9 @@ pub struct Building {
     pub levels: Vec<Level>,
     pub grid: Grid,
     pub rooms: Vec<Room>,
+    /// Architectural walls derived from the room geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<Wall>,
     pub columns: Vec<Column>,
     pub beams: Vec<Beam>,
     /// Concrete slab on deck, inches (top of slab = the level's elevation).
@@ -248,12 +265,15 @@ pub struct Equipment {
 pub struct Fixture {
     pub id: String,
     pub tag: String,
-    /// `water_closet`, `lavatory`.
+    /// `water_closet`, `lavatory`, `urinal`, `shower`, `mop_sink`, `floor_drain`, `sink`.
     pub kind: String,
     pub level: String,
     pub room: String,
     pub at_ft: [f64; 3],
     pub nodes: Vec<String>,
+    /// The wall this fixture is against (its back wall).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -276,6 +296,214 @@ pub struct RiserMark {
     pub level: String,
     pub symbol: String,
     pub note: String,
+}
+
+/// An architectural wall segment between or around rooms.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Wall {
+    pub id: String,
+    pub level: String,
+    /// Wall start point, building feet (plan).
+    pub from_ft: [f64; 2],
+    /// Wall end point, building feet (plan).
+    pub to_ft: [f64; 2],
+    /// Wall thickness, inches (stud + finish).
+    pub thickness_in: f64,
+    /// Stud spacing, inches on centre.
+    pub stud_spacing_in: f64,
+    /// Room ids on either side (exterior side is `"EXT"`).
+    pub sides: [String; 2],
+}
+
+/// An in-wall rough-in stub behind a plumbing fixture.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoughIn {
+    pub id: String,
+    /// The fixture this rough-in serves.
+    pub fixture: String,
+    /// The wall the stub is inside.
+    pub wall: String,
+    /// `CW`, `HW`, `SAN`, `V`.
+    pub system: String,
+    /// `supply`, `waste`, `vent`.
+    pub kind: String,
+    /// Centre of the stub, building feet.
+    pub at_ft: [f64; 3],
+    /// Pipe size, nominal inches.
+    pub size_in: f64,
+    /// Height above finished floor, inches.
+    pub aff_in: f64,
+    /// Offset from the fixture centreline along the wall, inches.
+    pub offset_in: f64,
+    /// The stud cavity this stub occupies (0-based from the wall start).
+    pub stud_cavity: usize,
+    /// Whether this rough-in is assumed from rules (true) or explicitly shown on drawings (false).
+    pub assumed: bool,
+}
+
+/// An electrical device placed on a wall.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Device {
+    pub id: String,
+    pub tag: String,
+    /// `receptacle`, `switch`, `junction_box`.
+    pub kind: String,
+    pub level: String,
+    pub room: String,
+    /// The wall the device is mounted on.
+    pub wall: String,
+    /// Position on the plan, building feet.
+    pub at_ft: [f64; 2],
+    /// Mounting height above finished floor, inches.
+    pub aff_in: f64,
+    /// Box width × height × depth, inches.
+    pub box_in: [f64; 3],
+    /// The stud cavity this box occupies (0-based from the wall start).
+    pub stud_cavity: usize,
+    /// Whether the device position is fixed by the drawings or has a placement zone.
+    pub fixed: bool,
+    /// The sheet this device appears on.
+    pub sheet: String,
+}
+
+/// Rough-in rules: per fixture type, the expected stubs at standard positions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoughInRules {
+    pub rules: Vec<RoughInRule>,
+}
+
+/// One fixture type's rough-in stub positions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoughInRule {
+    /// `water_closet`, `lavatory`, `urinal`, `shower`, `bathtub`, `mop_sink`,
+    /// `floor_drain`, `floor_sink`, `drinking_fountain`, `sink`.
+    pub fixture_kind: String,
+    /// The stubs this fixture type generates.
+    pub stubs: Vec<StubRule>,
+}
+
+impl RoughInRules {
+    /// Standard rough-in positions from common plumbing practice (IPC / UPC).
+    pub fn default_rules() -> Self {
+        let s = |sys: &str, kind: &str, aff: f64, off: f64, size: f64| StubRule {
+            system: sys.into(),
+            kind: kind.into(),
+            aff_in: aff,
+            offset_in: off,
+            size_in: size,
+        };
+        Self {
+            rules: vec![
+                RoughInRule {
+                    fixture_kind: "water_closet".into(),
+                    stubs: vec![
+                        s("CW", "supply", 6.0, -8.0, 0.5),  // left of centre, 6" AFF
+                        s("SAN", "waste", 0.0, 0.0, 3.0),    // centreline, at floor
+                        s("V", "vent", 20.0, -6.0, 2.0),     // left of waste, 20" AFF
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "lavatory".into(),
+                    stubs: vec![
+                        s("CW", "supply", 20.0, -4.0, 0.5),  // left, 20" AFF
+                        s("HW", "supply", 20.0, 4.0, 0.5),   // right, 20" AFF
+                        s("SAN", "waste", 18.0, 0.0, 1.5),    // centreline, 18" AFF
+                        s("V", "vent", 24.0, 4.0, 1.5),       // right of waste, 24" AFF
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "urinal".into(),
+                    stubs: vec![
+                        s("CW", "supply", 42.0, 0.0, 0.75),   // centreline, 42" AFF
+                        s("SAN", "waste", 0.0, 0.0, 2.0),
+                        s("V", "vent", 24.0, 4.0, 1.5),
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "shower".into(),
+                    stubs: vec![
+                        s("CW", "supply", 48.0, -3.0, 0.5),
+                        s("HW", "supply", 48.0, 3.0, 0.5),
+                        s("SAN", "waste", 0.0, 0.0, 2.0),
+                        s("V", "vent", 24.0, 6.0, 1.5),
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "mop_sink".into(),
+                    stubs: vec![
+                        s("CW", "supply", 24.0, -4.0, 0.75),
+                        s("HW", "supply", 24.0, 4.0, 0.75),
+                        s("SAN", "waste", 0.0, 0.0, 3.0),
+                        s("V", "vent", 30.0, 6.0, 2.0),
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "floor_drain".into(),
+                    stubs: vec![
+                        s("SAN", "waste", 0.0, 0.0, 2.0),
+                    ],
+                },
+                RoughInRule {
+                    fixture_kind: "sink".into(),
+                    stubs: vec![
+                        s("CW", "supply", 20.0, -4.0, 0.5),
+                        s("HW", "supply", 20.0, 4.0, 0.5),
+                        s("SAN", "waste", 18.0, 0.0, 1.5),
+                        s("V", "vent", 24.0, 4.0, 1.5),
+                    ],
+                },
+            ],
+        }
+    }
+
+    /// Get the rule for a fixture kind.
+    pub fn for_kind(&self, kind: &str) -> Option<&RoughInRule> {
+        self.rules.iter().find(|r| r.fixture_kind == kind)
+    }
+}
+
+/// Where one rough-in stub sits relative to the fixture.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StubRule {
+    /// `CW`, `HW`, `SAN`, `V`.
+    pub system: String,
+    /// `supply`, `waste`, `vent`.
+    pub kind: String,
+    /// Height above finished floor, inches.
+    pub aff_in: f64,
+    /// Offset from fixture centreline along the wall, inches (positive = right facing the wall).
+    pub offset_in: f64,
+    /// Nominal pipe size, inches.
+    pub size_in: f64,
+}
+
+/// A placement zone for a device whose position is not fixed on the drawings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlacementZone {
+    /// The device id.
+    pub device: String,
+    /// Zone limits along the wall from its start, inches.
+    pub zone_in: [f64; 2],
+    /// `will_clash` (every position conflicts), `may_clash` (some positions conflict),
+    /// `clear` (no conflicts).
+    pub status: String,
+    /// Ranges within the zone that are free of in-wall conflicts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clear_ranges: Vec<ClearRange>,
+    /// Description of the conflicts for reporting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+}
+
+/// A range along a wall where a device can be placed without in-wall conflicts.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClearRange {
+    /// Start of the clear range, inches from wall start.
+    pub from_in: f64,
+    /// End of the clear range, inches from wall start.
+    pub to_in: f64,
+    /// Human-readable description.
+    pub description: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -334,9 +562,10 @@ pub struct LegendItem {
 pub struct Clash {
     pub id: String,
     /// `hard` (two elements overlap), `below_ceiling` (a run hangs below the room's ceiling),
-    /// `into_structure` (a run reaches into a beam).
+    /// `into_structure` (a run reaches into a beam), `in_wall` (a device shares a stud cavity
+    /// or is within clearance of a pipe/stub/stack inside the same wall).
     pub kind: String,
-    /// Element ids (segments, equipment, beams, rooms).
+    /// Element ids (segments, equipment, beams, rooms, devices, rough-ins).
     pub a: String,
     pub b: String,
     /// The middle of the overlap.
@@ -344,6 +573,12 @@ pub struct Clash {
     /// How far they overlap, inches (the smallest of the overlap's sizes).
     pub depth_in: f64,
     pub planted: bool,
+    /// For `in_wall` clashes: human-readable description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// For `in_wall` clashes: the wall the clash is inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall: Option<String>,
 }
 
 impl Truth {
@@ -362,6 +597,15 @@ impl Truth {
     /// The segments of one system kind (`duct` / `pipe`).
     pub fn segments_of<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Segment> + 'a {
         self.segments.iter().filter(move |s| s.kind == kind)
+    }
+    pub fn wall(&self, id: &str) -> Option<&Wall> {
+        self.building.walls.iter().find(|w| w.id == id)
+    }
+    pub fn device(&self, id: &str) -> Option<&Device> {
+        self.devices.iter().find(|d| d.id == id)
+    }
+    pub fn rough_in(&self, id: &str) -> Option<&RoughIn> {
+        self.rough_ins.iter().find(|r| r.id == id)
     }
 }
 
