@@ -2556,3 +2556,9 @@
 	List MEP Items	Listar itens MEP
 	Section Box	Caixa de corte
 	Trade Visibility	Visibilidade das disciplinas
+	BIM Types	Tipos BIM
+	Get BIM Spec	Obter especificação BIM
+	Remove BIM Spec from Entities	Remover especificação BIM das entidades
+	Remove BIM Type	Remover tipo BIM
+	Set BIM Spec on Entities	Definir especificação BIM nas entidades
+	Set BIM Type	Definir tipo BIM

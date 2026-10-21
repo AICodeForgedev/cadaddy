@@ -2337,3 +2337,9 @@
 	List MEP Items	Lister les éléments MEP
 	Section Box	Boîte de coupe
 	Trade Visibility	Visibilité des corps d'état
+	BIM Types	Types BIM
+	Get BIM Spec	Obtenir la spécification BIM
+	Remove BIM Spec from Entities	Retirer la spécification BIM des entités
+	Remove BIM Type	Supprimer le type BIM
+	Set BIM Spec on Entities	Appliquer la spécification BIM aux entités
+	Set BIM Type	Définir le type BIM

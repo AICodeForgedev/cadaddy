@@ -2530,3 +2530,9 @@ menu	Modify	Modifikace
 	List MEP Items	Vypsat prvky MEP
 	Section Box	Řezový kvádr
 	Trade Visibility	Viditelnost profesí
+	BIM Types	Typy BIM
+	Get BIM Spec	Zobrazit specifikaci BIM
+	Remove BIM Spec from Entities	Odebrat specifikaci BIM z objektů
+	Remove BIM Type	Odebrat typ BIM
+	Set BIM Spec on Entities	Nastavit specifikaci BIM objektům
+	Set BIM Type	Nastavit typ BIM

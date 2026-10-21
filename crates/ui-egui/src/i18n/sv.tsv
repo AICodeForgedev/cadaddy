@@ -2557,3 +2557,9 @@ menu	Modify	Ändra
 	List MEP Items	Lista MEP-objekt
 	Section Box	Snittlåda
 	Trade Visibility	Synlighet per fack
+	BIM Types	BIM-typer
+	Get BIM Spec	Hämta BIM-specifikation
+	Remove BIM Spec from Entities	Ta bort BIM-specifikation från objekt
+	Remove BIM Type	Ta bort BIM-typ
+	Set BIM Spec on Entities	Ange BIM-specifikation för objekt
+	Set BIM Type	Ange BIM-typ

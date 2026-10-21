@@ -2338,3 +2338,9 @@
 	List MEP Items	Список элементов MEP
 	Section Box	Секущий параллелепипед
 	Trade Visibility	Видимость разделов
+	BIM Types	Типы BIM
+	Get BIM Spec	Получить спецификацию BIM
+	Remove BIM Spec from Entities	Удалить спецификацию BIM у объектов
+	Remove BIM Type	Удалить тип BIM
+	Set BIM Spec on Entities	Задать спецификацию BIM объектам
+	Set BIM Type	Задать тип BIM

@@ -2433,3 +2433,9 @@
 	List MEP Items	列出 MEP 项目
 	Section Box	剖切框
 	Trade Visibility	专业可见性
+	BIM Types	BIM 类型
+	Get BIM Spec	获取 BIM 规格
+	Remove BIM Spec from Entities	从对象移除 BIM 规格
+	Remove BIM Type	移除 BIM 类型
+	Set BIM Spec on Entities	为对象设置 BIM 规格
+	Set BIM Type	设置 BIM 类型

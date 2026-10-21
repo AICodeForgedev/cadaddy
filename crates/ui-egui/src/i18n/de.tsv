@@ -2366,3 +2366,9 @@
 	List MEP Items	MEP-Elemente auflisten
 	Section Box	Schnittbox
 	Trade Visibility	Gewerkesichtbarkeit
+	BIM Types	BIM-Typen
+	Get BIM Spec	BIM-Spezifikation abrufen
+	Remove BIM Spec from Entities	BIM-Spezifikation von Objekten entfernen
+	Remove BIM Type	BIM-Typ entfernen
+	Set BIM Spec on Entities	BIM-Spezifikation für Objekte festlegen
+	Set BIM Type	BIM-Typ festlegen

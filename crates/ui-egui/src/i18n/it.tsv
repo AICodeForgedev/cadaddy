@@ -2549,3 +2549,9 @@ menu	Modify	Edita
 	List MEP Items	Elenca elementi MEP
 	Section Box	Riquadro di sezione
 	Trade Visibility	Visibilità discipline
+	BIM Types	Tipi BIM
+	Get BIM Spec	Ottieni specifica BIM
+	Remove BIM Spec from Entities	Rimuovi specifica BIM dalle entità
+	Remove BIM Type	Rimuovi tipo BIM
+	Set BIM Spec on Entities	Imposta specifica BIM sulle entità
+	Set BIM Type	Imposta tipo BIM
