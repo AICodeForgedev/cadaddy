@@ -2415,6 +2415,9 @@ impl Objects {
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.tours = Some(tours);
         }
+        if let Some(bt) = self.xrecord_text(crate::dxf_ext::BIM_TYPES_KEY).and_then(|t| crate::dxf_ext::parse_bim_types(&t)) {
+            d.bim_types = bt;
+        }
         // Drawing properties: AutoCAD's DWGPROPS XRECORD.
         if let Some(h) = self.names.iter().find(|(_, n)| n.eq_ignore_ascii_case(cadaddy_doc::dwgprops::KEY)).map(|(h, _)| h)
             && let Some(tags) = self.xrecords.get(h)

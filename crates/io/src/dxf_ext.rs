@@ -89,6 +89,8 @@ pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
 /// Named-object-dictionary key of the XRECORD holding the plot stamp's settings and the layouts
 /// whose page setups plot it.
 pub(crate) const PLOT_STAMP_KEY: &str = "CADADDY_PLOTSTAMP";
+/// Named-object-dictionary key of the XRECORD holding the BIM element types (JSON).
+pub(crate) const BIM_TYPES_KEY: &str = "CADADDY_BIMTYPES";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -919,6 +921,22 @@ pub(crate) fn parse_building_spec(text: &str) -> Option<String> {
     }
     let v: Value = serde_json::from_str(text).ok()?;
     v.is_object().then(|| text.to_string())
+}
+
+/// JSON chunks for the BIM types XRECORD, or `None` without any types.
+pub(crate) fn bim_types_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    if d.bim_types.is_empty() {
+        return None;
+    }
+    d.bim_types.to_json().ok().map(|s| json_chunks(&s))
+}
+
+/// Parse the BIM types XRECORD text.
+pub(crate) fn parse_bim_types(text: &str) -> Option<cadaddy_doc::bimspec::BimTypes> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    cadaddy_doc::bimspec::BimTypes::from_json(text).ok()
 }
 
 /// The plot stamp XRECORD's payload.
