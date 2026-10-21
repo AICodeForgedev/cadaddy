@@ -610,7 +610,7 @@ pub fn tag_symbol(pen: &mut Pen, layer: &str, c: Vec2, r: f64, kind: u8) {
 }
 
 /// Text that reads upright: an angle turned into (-90°, 90°].
-fn readable(a: f64) -> f64 {
+pub(crate) fn readable(a: f64) -> f64 {
     let mut a = a.rem_euclid(2.0 * PI);
     if a > FRAC_PI_2 + 1e-9 && a <= 3.0 * FRAC_PI_2 + 1e-9 {
         a -= PI;
@@ -668,12 +668,17 @@ pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f
             // where the rooms are north; right for the south one).
             let into = if wall.rooms.len() <= 1 { -1.0 } else { door_side(t, wall, level) };
             let w = o[1] - o[0];
-            let hinge = at(o[0], into * th / 2.0);
-            let tip = at(o[0], into * (th / 2.0 + w));
+            // Hinged at the start unless the set's door schedule says the other jamb.
+            let (sh, sl) = match crate::arch::door_at(t, wall, *o) {
+                Some(d) if (d.hinge_ft[0] - at(o[1], into * th / 2.0)[0]).hypot(d.hinge_ft[1] - at(o[1], into * th / 2.0)[1]) < 0.1 => (o[1], o[0]),
+                _ => (o[0], o[1]),
+            };
+            let hinge = at(sh, into * th / 2.0);
+            let tip = at(sh, into * (th / 2.0 + w));
             let (ph, pt) = (pen.b(hinge), pen.b(tip));
             pen.line("A-DOOR", ph, pt);
             let a0 = (pt.y - ph.y).atan2(pt.x - ph.x);
-            let close = pen.b(at(o[1], into * th / 2.0));
+            let close = pen.b(at(sl, into * th / 2.0));
             let a1 = (close.y - ph.y).atan2(close.x - ph.x);
             let (s, e) = if (a1 - a0).rem_euclid(2.0 * PI) <= PI { (a0, a1) } else { (a1, a0) };
             pen.arc("A-DOOR", ph, pen.bl(w), s, e);
@@ -723,7 +728,7 @@ fn draw_sleeves(pen: &mut Pen, t: &Truth, level: &str, scale: f64) {
 }
 
 /// Which side of a corridor wall its doors swing to: away from the corridor.
-fn door_side(t: &Truth, wall: &PlanWall, level: &str) -> f64 {
+pub(crate) fn door_side(t: &Truth, wall: &PlanWall, level: &str) -> f64 {
     let corridor = t.building.rooms.iter().find(|r| r.level == level && r.name == "CORRIDOR");
     let (a, b) = (wall.a_ft, wall.b_ft);
     let len = (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-9);

@@ -19,6 +19,8 @@
 pub mod bore;
 pub mod callout_reader;
 pub mod ceilasm_reader;
+pub mod arch;
+pub mod arch_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
 pub mod clash;
@@ -83,6 +85,7 @@ pub fn truth_for(seed: u64) -> Truth {
     t.placement_zones = clash::placement_zones(&t);
     add_walls(&mut t, &mut st);
     add_ceilings(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
     t
 }
 
@@ -101,6 +104,15 @@ fn add_ceilings(t: &mut Truth, st: &mut style::Style) {
     let mut r = Rng::new(t.seed ^ 0x4345_494C_4153_4D42).fork(6);
     st.ceilings = ceilings::CeilStyle::new(&mut r);
     ceilings::design_ceilings(t, &st.ceilings, &mut r);
+}
+
+/// Doors, windows, the stair and elevator, slab edges, the roof and room finishes, from a random
+/// stream of their own (after the walls: the doors are the walls' openings).
+fn add_arch(t: &mut Truth, st: &mut style::Style) {
+    let mut r = Rng::new(t.seed ^ 0x4152_4348_5245_4144).fork(6);
+    let nb = t.building.grid.x.len().saturating_sub(1);
+    st.arch = arch::ArchStyle::new(&mut r, st.walls.symbol, nb);
+    arch::design_arch(t, &st.arch, &mut r);
 }
 
 /// The fixture set for a seed.
@@ -133,6 +145,7 @@ fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
     t.placement_zones = clash::placement_zones(&t);
     add_walls(&mut t, &mut st);
     add_ceilings(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
     let mut kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     if with_gaps {
         gaps::plant(&mut t);

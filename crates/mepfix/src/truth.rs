@@ -114,6 +114,9 @@ pub struct Truth {
     /// RFI list should say besides the gaps every set has (untagged walls, unscheduled rooms…).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planted: Vec<PlantedGap>,
+    /// Doors, windows, the stair and elevator, slab edges, the roof and room finishes (Q307).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<Arch>,
     /// Every clash between the modelled elements (hard clashes, runs below a ceiling, runs into
     /// structure, in-wall device-vs-pipe), computed from the geometry; `planted` ones were put
     /// there on purpose.
@@ -1574,4 +1577,194 @@ pub fn feet_inches(ft: f64) -> String {
     let inches = total - feet * 12.0;
     let i = if (inches - inches.round()).abs() < 1e-9 { format!("{}", inches.round() as i64) } else { format!("{} 1/2", inches.floor() as i64) };
     format!("{}{}'-{}\"", if neg { "-" } else { "" }, feet as i64, i)
+}
+
+// --- The rest of the architecture (Q307) ---
+
+/// What the architectural sheets show besides walls: doors and their schedule, windows,
+/// the stair and elevator with their shafts, slab edges, the roof and the room finish schedule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Arch {
+    pub doors: Vec<Door>,
+    /// The hardware groups the door schedule refers to.
+    pub hardware: Vec<HardwareGroup>,
+    pub windows: Vec<Window>,
+    /// Window types as the window schedule lists them.
+    pub window_types: Vec<WindowType>,
+    pub stairs: Vec<ArchStair>,
+    pub elevators: Vec<ArchElevator>,
+    pub slab_edges: Vec<SlabEdge>,
+    pub roof: Roof,
+    pub finishes: Vec<RoomFinish>,
+    /// The finish legend: every code the finish schedule uses.
+    pub finish_codes: Vec<FinishCode>,
+}
+
+/// A door: its schedule row and where it is on the plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Door {
+    /// The mark on the plan and in the schedule (`103`, `103A`, `D103`).
+    pub mark: String,
+    pub level: String,
+    /// The wall it is in.
+    pub wall: String,
+    /// Middle of the opening on the wall's centreline, building feet.
+    pub at_ft: [f64; 2],
+    /// Hinge and latch jambs, on the face it swings from, building feet.
+    pub hinge_ft: [f64; 2],
+    pub latch_ft: [f64; 2],
+    pub width_in: f64,
+    pub height_in: f64,
+    /// Door type letter in the schedule (`A` flush, `B` half lite, `C` narrow lite, `D` full glass).
+    pub door_type: String,
+    /// `WD`, `HM`, `AL`.
+    pub material: String,
+    /// Frame: `HM`, `AL`, `WD`.
+    pub frame: String,
+    /// `20 MIN`, `60 MIN`, `90 MIN`; none = not rated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+    /// Hardware group (`HW-3`).
+    pub hardware: String,
+    /// The room it swings into (none: out of the building).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swings_into: Option<String>,
+    /// The room on its other side (none: outside).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_room: Option<String>,
+    /// Handing seen from the outside (the exterior, else the corridor): `LH`, `RH`, `LHR`, `RHR`.
+    pub hand: String,
+}
+
+/// A hardware group: what a door with it gets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HardwareGroup {
+    pub group: String,
+    /// The schedule's words, e.g. `STOREROOM LOCK, CLOSER`.
+    pub items: Vec<String>,
+    /// An electrified lock and card reader (the electrician's box and conduit).
+    pub card_reader: bool,
+}
+
+/// A window type in the window schedule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WindowType {
+    pub mark: String,
+    pub description: String,
+    pub width_in: f64,
+    pub height_in: f64,
+    /// Above the floor, inches (a storefront's is 0).
+    pub sill_in: f64,
+    pub frame: String,
+    pub glazing: String,
+    pub storefront: bool,
+}
+
+/// A window on a plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Window {
+    pub mark: String,
+    pub level: String,
+    pub wall: String,
+    /// Middle of it on the wall's centreline, building feet.
+    pub at_ft: [f64; 2],
+    /// From and to along the wall from its `a_ft`, feet.
+    pub along_ft: [f64; 2],
+}
+
+/// A stair with its shaft: the flights as drawn on each level it serves.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArchStair {
+    pub tag: String,
+    /// The room (shaft) it is in, by level: the room number on each level.
+    pub rooms: Vec<String>,
+    /// Levels from the bottom one up.
+    pub levels: Vec<String>,
+    /// The flights' and landing's outline, building feet.
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Clear width of a flight, inches.
+    pub width_in: f64,
+    /// Risers per storey, riser height and tread depth, inches.
+    pub risers: u32,
+    pub riser_in: f64,
+    pub tread_in: f64,
+}
+
+/// An elevator: its hoistway (shaft), pit and overrun.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArchElevator {
+    pub tag: String,
+    pub levels: Vec<String>,
+    /// Hoistway inside, building feet.
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Pit below the lowest floor, feet.
+    pub pit_ft: f64,
+    /// Capacity, pounds.
+    pub capacity_lb: u32,
+}
+
+/// The edge of a level's slab (the roof's for `R`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlabEdge {
+    pub level: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Beyond the exterior walls' outer face, inches.
+    pub beyond_face_in: f64,
+}
+
+/// The roof plan: its edge, slope, drains and what stands on it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Roof {
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Parapet height above the roof, inches (none: no parapet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_in: Option<f64>,
+    /// Slope, inches per foot.
+    pub slope_in_ft: f64,
+    pub drains: Vec<[f64; 2]>,
+    pub curbs: Vec<Curb>,
+}
+
+/// An equipment curb, roof hatch or elevator overrun on the roof.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Curb {
+    /// The equipment's tag (`EF-1`), `ROOF HATCH` or `ELEV. OVERRUN`.
+    pub tag: String,
+    /// `equipment`, `hatch` or `overrun`.
+    pub kind: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    /// Above the roof, inches.
+    pub height_in: f64,
+}
+
+/// A room's row in the room finish schedule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoomFinish {
+    pub level: String,
+    pub number: String,
+    pub name: String,
+    pub floor: String,
+    pub base: String,
+    pub wall: String,
+    pub ceiling: String,
+    /// As the schedule prints it, feet (none: open to structure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_ft: Option<f64>,
+}
+
+/// A finish code in the finish legend.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FinishCode {
+    pub code: String,
+    /// `floor`, `base`, `wall`, `ceiling`.
+    pub kind: String,
+    pub description: String,
+    /// Device plate colour on walls with this finish (`WHITE`, `GRAY`, `STAINLESS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plates: Option<String>,
 }

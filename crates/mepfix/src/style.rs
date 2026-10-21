@@ -55,6 +55,8 @@ pub struct Style {
     pub walls: crate::walls::WallStyle,
     /// The ceiling legend, soffit and head details, finish schedule (their own random stream).
     pub ceilings: crate::ceilings::CeilStyle,
+    /// Doors, windows, the core, the roof and the finish schedule (their own random stream).
+    pub arch: crate::arch::ArchStyle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -138,6 +140,7 @@ impl Style {
             pdf_layers: r.chance(0.3),
             walls: crate::walls::WallStyle::default(),
             ceilings: crate::ceilings::CeilStyle::default(),
+            arch: crate::arch::ArchStyle::default(),
         }
     }
 

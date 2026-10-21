@@ -37,6 +37,7 @@ fn layer_def(name: &str, st: &Style) -> (u8, u16, &'static str) {
         "HEAVY" => (7, st.lw_run + 20, "Continuous"),
         "LIGHT" => (7, st.lw_background, "Continuous"),
         "CALLOUT" => (7, st.lw_text, "Continuous"),
+        "A-SLAB-EDGE" => (8, st.lw_background, "DASHED"),
         _ => (7, st.lw_run, "Continuous"),
     }
 }
@@ -332,8 +333,14 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         Kind::Floor(l) => {
             grid(&mut pen, t);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
+            crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
             legend.push(item("door", "DOOR"));
+            if t.arch.is_some() {
+                legend.push(item("door_tag", "DOOR MARK, SEE DOOR SCHEDULE"));
+                legend.push(item("window_tag", "WINDOW TYPE, SEE WINDOW SCHEDULE"));
+                legend.push(item("slab_edge", "SLAB EDGE"));
+            }
         }
         Kind::EnlargedFloor(l, area) => {
             let (lo, hi) = crate::layout::window(t, area);
@@ -344,6 +351,23 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             pen.clip = None;
             legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
             legend.push(item("door", "DOOR"));
+        }
+        Kind::Roof => {
+            grid(&mut pen, t);
+            crate::arch::draw_roof(&mut pen, t, &st.arch);
+            legend.push(item("roof_drain", "ROOF DRAIN"));
+            legend.push(item("curb", "EQUIPMENT CURB"));
+            abbr.extend(["RD = ROOF DRAIN", "EF = EXHAUST FAN", "ELEV. = ELEVATOR"].map(abbrev));
+        }
+        Kind::DoorSchedule => {
+            let fr = frame(st);
+            crate::arch::draw_door_schedule(&mut pen, t, &st.arch, fr.area);
+            abbr.extend(["HM = HOLLOW METAL", "WD = WOOD", "AL = ALUMINUM", "MIN = MINUTES", "INSUL. = INSULATED"].map(abbrev));
+        }
+        Kind::ArchFinishes => {
+            let fr = frame(st);
+            crate::arch::draw_finish_schedule(&mut pen, t, &st.arch, fr.area);
+            abbr.extend(["CLG. = CEILING", "HT. = HEIGHT", "ACT = ACOUSTIC CEILING TILE", "GYP = GYPSUM BOARD"].map(abbrev));
         }
         Kind::Schedules(d) => schedules(&mut pen, t, d),
         Kind::Framing(l) => {
