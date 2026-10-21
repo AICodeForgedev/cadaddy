@@ -5,6 +5,7 @@
 
 mod assets;
 mod casefs;
+mod commanddocs;
 mod ico;
 mod installtest;
 mod layers;
@@ -77,6 +78,7 @@ commands:
   supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
                   (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
   advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
+  command-docs    generate docs/guide/command-reference.md from the live command registry
   sbom [--out FILE]
                   CycloneDX 1.5 SBOM of the shipped crates (default target/sbom/cadaddy-<version>.cdx.json),
                   to attach to the release
@@ -121,6 +123,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
+        Some("command-docs") => commanddocs::run(&root()),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
