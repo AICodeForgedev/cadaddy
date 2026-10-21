@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built} → {issues: [{kind, message, level?, at?, handles}], total, byKind}")
             .noundo(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: realistic|shaded|conceptual|hidden|wireframe, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer)} → {path?|png, width, height, triangles}")
+            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: realistic|shaded|conceptual|hidden|wireframe, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{path?: PNG file (else base64), width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -610,6 +610,20 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), None) | (None, Some(_)) => return Err(bad("model.render", "a camera pose needs both `eye` and `target`")),
         _ => vec3(p, "dir")?.unwrap_or(Vec3::new(-1.0, -1.0, 1.0)),
     };
+    // A plan box round a place: only the model inside it.
+    if let Some(a) = p.get("around").filter(|v| !v.is_null()) {
+        let n: Vec<f64> = a.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let [x0, y0, x1, y1] = n[..] else { return Err(bad("model.render", "`around` must be [x0, y0, x1, y1]")) };
+        if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+            return Err(bad("model.render", "`around` must be [x0, y0, x1, y1]"));
+        }
+        keep_in.extend([
+            (Vec3::new(1.0, 0.0, 0.0), x0.min(x1)),
+            (Vec3::new(-1.0, 0.0, 0.0), -x0.max(x1)),
+            (Vec3::new(0.0, 1.0, 0.0), y0.min(y1)),
+            (Vec3::new(0.0, -1.0, 0.0), -y0.max(y1)),
+        ]);
+    }
     if !keep_in.is_empty() {
         let tris = std::mem::take(&mut sc.tris);
         for t in tris {
@@ -630,6 +644,23 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let proj = Projection::new(dir);
     if sc.tris.is_empty() && sc.lines.is_empty() {
         return Err(bad("model.render", "nothing of the model is in view"));
+    }
+    // A red post where something is (an RFI's place): 8" square, 10' up from the level's floor.
+    if let Some(m) = point_param(p, "mark").filter(|m| m.x.is_finite() && m.y.is_finite()) {
+        let z0 = level.as_ref().and_then(|l| sp.level(l)).map_or(0.0, |l| l.elevation_ft * upf);
+        let (r, top) = (4.0 / 12.0 * upf, z0 + 10.0 * upf);
+        let red = cadaddy_color::Rgb(220, 30, 30);
+        let c =
+            [Vec3::new(m.x - r, m.y - r, 0.0), Vec3::new(m.x + r, m.y - r, 0.0), Vec3::new(m.x + r, m.y + r, 0.0), Vec3::new(m.x - r, m.y + r, 0.0)];
+        let at = |v: Vec3, z: f64| Vec3::new(v.x, v.y, z);
+        for k in 0..4 {
+            let (Some(a), Some(b)) = (c.get(k), c.get((k + 1) % 4)) else { continue };
+            sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, z0), at(*b, top)], red));
+            sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, top), at(*a, top)], red));
+        }
+        let [a, b, cc, d] = c;
+        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(b, top), at(cc, top)], red));
+        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(d, top)], red));
     }
     let view = fit(&sc, proj, w, h).ok_or_else(|| bad("model.render", "nothing to fit in the view"))?;
     let raster = rasterize(&sc, &view, style, bg);

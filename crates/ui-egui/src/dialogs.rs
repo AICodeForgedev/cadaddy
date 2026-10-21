@@ -55,6 +55,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "etransmit" => crate::etransmit::dialog(app, ctx, &mut open),
         "diag" => crate::diag::dialog(app, ctx, &mut open),
         "markups" => crate::markuppalette::dialog(app, ctx, &mut open),
+        crate::rfipalette::DIALOG => crate::rfipalette::dialog(app, ctx, &mut open),
         "undohistory" => crate::historypalettes::undo_dialog(app, ctx, &mut open),
         "commandhistory" => crate::historypalettes::commands_dialog(app, ctx, &mut open),
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),

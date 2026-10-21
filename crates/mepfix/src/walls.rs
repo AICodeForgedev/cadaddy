@@ -350,6 +350,7 @@ pub fn design_walls(t: &mut Truth, ws: &WallStyle, r: &mut Rng) {
                 openings: Vec::new(),
                 tags: Vec::new(),
                 layout_from: None,
+                ..Wall::default()
             });
         }
         // Doors: one into each room from the corridor (two toilet rooms share a bay), and the
@@ -621,7 +622,9 @@ fn readable(a: f64) -> f64 {
 }
 
 /// A level's floor plan: walls as face pairs with door openings and swings, room names, tags.
-pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f64) {
+/// `enlarged`: an enlarged plan's tags (a planted conflict may print another type there); the
+/// floor plan also carries the sleeve notes.
+pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f64, enlarged: bool) {
     let rot = readable(pen.rot());
     for rm in t.building.rooms.iter().filter(|r| r.level == level) {
         let c = [(rm.min_ft[0] + rm.max_ft[0]) / 2.0, (rm.min_ft[1] + rm.max_ft[1]) / 2.0];
@@ -675,19 +678,21 @@ pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f
             let (s, e) = if (a1 - a0).rem_euclid(2.0 * PI) <= PI { (a0, a1) } else { (a1, a0) };
             pen.arc("A-DOOR", ph, pen.bl(w), s, e);
         }
+        let printed = if enlarged { wall.enlarged_tag.as_ref().or(wall.plan_tag.as_ref()) } else { wall.plan_tag.as_ref() };
+        let printed = printed.unwrap_or(&wall.wall_type);
         for tp in &wall.tags {
             let r = pen.bl(r_ft);
             if tp.on_wall {
                 let c = pen.b(at(tp.s_ft, 0.0));
                 tag_symbol(pen, "A-ANNO-WTAG", c, r, ws.symbol);
-                pen.text("A-ANNO-WTAG", c, 0.09, &wall.wall_type, rot, HAlign::Center, VAlign::Middle);
+                pen.text("A-ANNO-WTAG", c, 0.09, printed, rot, HAlign::Center, VAlign::Middle);
             } else {
                 let d = th / 2.0 + r_ft * 1.6 + tp.gap_ft;
                 let c = at(tp.s_ft + tp.shift_ft, tp.side * d);
                 let land = at(tp.s_ft, tp.side * th / 2.0);
                 let (pc, pl) = (pen.b(c), pen.b(land));
                 tag_symbol(pen, "A-ANNO-WTAG", pc, r, ws.symbol);
-                pen.text("A-ANNO-WTAG", pc, 0.09, &wall.wall_type, rot, HAlign::Center, VAlign::Middle);
+                pen.text("A-ANNO-WTAG", pc, 0.09, printed, rot, HAlign::Center, VAlign::Middle);
                 let dir = pl - pc;
                 let l = dir.len();
                 if l > r * 1.3 {
@@ -696,6 +701,24 @@ pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f
                 }
             }
         }
+    }
+    if !enlarged {
+        draw_sleeves(pen, t, level, scale);
+    }
+}
+
+/// Sleeve notes: a small circle where the sleeve is, a leader up and right to the note.
+fn draw_sleeves(pen: &mut Pen, t: &Truth, level: &str, scale: f64) {
+    let rot = readable(pen.rot());
+    let r_ft = 0.05 / scale.max(1e-6);
+    for sl in t.sleeves.iter().filter(|s| s.level == level) {
+        let c = pen.b(sl.at_ft);
+        pen.circle("A-ANNO-NOTE", c, pen.bl(r_ft));
+        let to = [sl.at_ft[0] + 0.45 / scale.max(1e-6), sl.at_ft[1] + 0.3 / scale.max(1e-6)];
+        let (p, q) = (pen.b([sl.at_ft[0] + r_ft * 0.83, sl.at_ft[1] + r_ft * 0.55]), pen.b(to));
+        pen.line("A-ANNO-NOTE", p, q);
+        let at = pen.b([to[0] + 0.04 / scale.max(1e-6), to[1]]);
+        pen.text("A-ANNO-NOTE", at, 0.08, &sl.text, rot, HAlign::Left, VAlign::Middle);
     }
 }
 

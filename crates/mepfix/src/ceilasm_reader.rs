@@ -79,6 +79,20 @@ pub struct AsmResult {
     pub walls: Vec<WallHead>,
     /// The details sheet's note gives stud walls a bottom track.
     pub bottom_track_note: bool,
+    /// Every detail callout on the RCPs, whether the details sheet has the detail or not.
+    pub callouts: Vec<CalloutRead>,
+}
+
+/// A detail callout on an RCP (`SEE 3/A-502`): the detail number, where, and the soffit it is
+/// beside (an index into [`AsmResult::soffits`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CalloutRead {
+    pub level: String,
+    pub detail: String,
+    /// The sheet it points to (`A-502`).
+    pub sheet: String,
+    pub at_ft: [f64; 2],
+    pub soffit: Option<usize>,
 }
 
 // ---- Text --------------------------------------------------------------------------------------
@@ -466,6 +480,13 @@ fn common_type(schedule: &[(String, String, String)], types: &[CeilingType]) -> 
         .map(|(_, t)| t.tag.clone())
 }
 
+/// The sheet a callout points to: `3/A-502` → `A-502`.
+fn callout_sheet(s: &str) -> String {
+    let u = s.to_ascii_uppercase();
+    let Some(at) = u.find("/A-") else { return String::new() };
+    u.get(at + 1..).unwrap_or_default().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.').collect()
+}
+
 /// A soffit callout: `3/A-502` somewhere in the text → `3`.
 fn callout(s: &str) -> Option<String> {
     let u = s.to_ascii_uppercase();
@@ -502,6 +523,7 @@ pub fn read_assemblies(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &Cei
     let mut r = AsmResult::default();
     let mut schedule: Vec<(String, String, String)> = Vec::new();
     let mut callouts: Vec<(String, String, [f64; 2])> = Vec::new();
+    let mut callout_sheets: Vec<String> = Vec::new();
     for (name, bytes) in dxf {
         let stem = name.trim_end_matches(".dxf");
         let Some(sh) = map.sheets.iter().find(|s| s.number == stem) else { continue };
@@ -524,6 +546,7 @@ pub fn read_assemblies(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &Cei
             for t in texts(&d) {
                 if let Some(n) = callout(&t.s) {
                     callouts.push((level.clone(), n, sheet_reader::building_from_model(al, t.at)));
+                    callout_sheets.push(callout_sheet(&t.s));
                 }
             }
         }
@@ -616,6 +639,31 @@ pub fn read_assemblies(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &Cei
             guess,
             depth_ft: depth,
             sides_ft: sides_showing(sf.min_ft, sf.max_ft, room),
+        });
+    }
+    // Every callout, with the soffit it is nearest (within a few feet).
+    for (i, (lv, n, p)) in callouts.iter().enumerate().take(MAX_ROWS) {
+        let gap = |sf: &SoffitRead| {
+            let dx = (sf.min_ft[0] - p[0]).max(p[0] - sf.max_ft[0]).max(0.0);
+            let dy = (sf.min_ft[1] - p[1]).max(p[1] - sf.max_ft[1]).max(0.0);
+            dx.hypot(dy)
+        };
+        // Of the soffits it is beside, the one whose middle is nearest (a callout sits under its
+        // soffit's middle; a soffit next door may be as close to it).
+        let centre = |sf: &SoffitRead| ((sf.min_ft[0] + sf.max_ft[0]) / 2.0 - p[0]).hypot((sf.min_ft[1] + sf.max_ft[1]) / 2.0 - p[1]);
+        let soffit = r
+            .soffits
+            .iter()
+            .enumerate()
+            .filter(|(_, sf)| sf.level == *lv && gap(sf) < 2.5)
+            .min_by(|a, b| centre(a.1).total_cmp(&centre(b.1)))
+            .map(|(k, _)| k);
+        r.callouts.push(CalloutRead {
+            level: lv.clone(),
+            detail: n.clone(),
+            sheet: callout_sheets.get(i).cloned().unwrap_or_default(),
+            at_ft: *p,
+            soffit,
         });
     }
     // Wall types: the head detail listing each, the bottom track note for stud walls.

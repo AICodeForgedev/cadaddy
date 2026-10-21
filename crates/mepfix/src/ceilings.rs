@@ -272,6 +272,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
                     // Only its long face shows; the rest meets walls.
                     sides_ft: Some(r6(x1 - x0)),
                     called_out: called,
+                    callout_detail: None,
                 });
             }
         }
@@ -310,6 +311,7 @@ pub fn design_ceilings(t: &mut Truth, cs: &CeilStyle, r: &mut Rng) {
                 depth_ft: Some(r6(drop)),
                 sides_ft: Some(r6(x1 - x0)),
                 called_out: called,
+                callout_detail: None,
             });
         }
     }
@@ -493,7 +495,7 @@ pub fn draw_callouts(pen: &mut Pen, t: &Truth, cs: &CeilStyle, level: &str) {
     let rot = crate::draw::readable(pen.rot());
     let th = pen.st.text_in;
     for sf in t.soffits.iter().filter(|s| s.level == level && s.called_out) {
-        let Some(tag) = &sf.soffit_type else { continue };
+        let Some(tag) = sf.callout_detail.as_ref().or(sf.soffit_type.as_ref()) else { continue };
         let c = [(sf.min_ft[0] + sf.max_ft[0]) / 2.0, (sf.min_ft[1] + sf.max_ft[1]) / 2.0];
         let line = th * 1.5 / pen.sh.scale;
         let words = callout_words(tag, cs);
@@ -593,12 +595,17 @@ pub fn draw_schedule(pen: &mut Pen, t: &Truth, cs: &CeilStyle, area: [[f64; 2]; 
         let mut rows = vec![head.clone()];
         for rm in chunk {
             let rc = t.room_ceilings.iter().find(|c| c.level == rm.level && c.room == rm.number);
+            let hidden = rm.ceiling.as_ref().is_some_and(|c| c.height_hidden);
             let ctype = match rc {
-                Some(c) if c.scheduled => c.ceiling_type.clone(),
+                Some(c) if c.scheduled && !hidden => c.ceiling_type.clone(),
                 Some(_) => "SEE RCP".into(),
                 None => String::new(),
             };
-            let height = rm.ceiling.as_ref().map_or("--".to_string(), |c| feet_inches(c.height_ft));
+            let height = match &rm.ceiling {
+                Some(c) if c.height_hidden => String::new(),
+                Some(c) => feet_inches(c.height_ft),
+                None => "--".to_string(),
+            };
             let soffit = t.soffits.iter().any(|s| s.level == rm.level && s.room == rm.number);
             let [f, b, w] = finishes(&rm.name);
             rows.push(vec![

@@ -21,8 +21,8 @@ cadaddy-doc = { workspace = true }
 cadaddy-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The RFI list's items (shared with the building spec).
+cadaddy-walk3d = { path = "../walk3d" }
 
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
-# The wall reader's building spec patch is checked against the spec itself.
-cadaddy-walk3d = { path = "../walk3d" }

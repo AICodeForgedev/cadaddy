@@ -330,7 +330,17 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         }
         Kind::Floor(l) => {
             grid(&mut pen, t);
-            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
+            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
+            legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
+            legend.push(item("door", "DOOR"));
+        }
+        Kind::EnlargedFloor(l, area) => {
+            let (lo, hi) = crate::layout::window(t, area);
+            let corners = [pen.b(lo), pen.b([hi[0], lo[1]]), pen.b(hi), pen.b([lo[0], hi[1]])];
+            pen.clip = Some(cadaddy_geom::Bounds2::from_points(corners));
+            grid(&mut pen, t);
+            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, true);
+            pen.clip = None;
             legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
             legend.push(item("door", "DOOR"));
         }
@@ -1269,8 +1279,9 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
             }
         }
         if let Some(cl) = &rm.ceiling {
-            // The ceiling tag: in a box, a little off the room's centre.
-            let lines = st.ceiling_text(cl.height_ft, &cl.kind);
+            // The ceiling tag: in a box, a little off the room's centre (its kind alone when the
+            // height is left out).
+            let lines = if cl.height_hidden { vec![cl.kind.clone()] } else { st.ceiling_text(cl.height_ft, &cl.kind) };
             let at = [c[0] + 2.0, c[1] - 2.5];
             let p = pen.b(at);
             pen.block("TEXT", p, st.text_in, &lines, rot);

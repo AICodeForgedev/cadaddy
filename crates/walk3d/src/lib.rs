@@ -17,6 +17,7 @@ mod measure;
 mod openings;
 pub mod package;
 mod pick;
+pub mod rfi;
 mod rules;
 mod spec;
 pub mod stairs;
@@ -30,6 +31,7 @@ pub use ground::Ground;
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
+pub use rfi::{Rfi, RfiKind, RfiStatus, Severity};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use spec::{
