@@ -52,6 +52,7 @@ pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
 pub mod material;
+pub mod overrides;
 pub mod plotstamp;
 pub mod pointcloud;
 
@@ -159,6 +160,10 @@ pub struct Drawing {
     /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
     /// Kept in the named-object dictionary (`CADADDY_TOURS`).
     pub tours: Option<String>,
+    /// Overrides of generated elements (`overrides::Overrides` as JSON text, `override.*`): the
+    /// edits a person, an agent or an import made to what a build generated, put back after every
+    /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
+    pub overrides: Option<String>,
     /// Files the drawing carries inside itself, by name: texture images its materials name
     /// (`texture:<path>`, see [`Drawing::embedded_texture`]) and the baked lightmap
     /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
@@ -266,6 +271,7 @@ impl Drawing {
             bim_types: bimspec::BimTypes::new(),
             building_spec: None,
             tours: None,
+            overrides: None,
             embedded: BTreeMap::new(),
             plot_stamp: None,
             properties: dwgprops::DwgProps::default(),

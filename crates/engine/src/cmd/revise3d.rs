@@ -168,6 +168,8 @@ fn room_items(s: &mut Session) -> Vec<PlanItem> {
 
 /// Record what the build just made (and the plan it made it from).
 pub(crate) fn record(s: &mut Session, g: &WallGen) {
+    // The overrides go back on the regenerated model first: what they change is no hand edit.
+    super::overrides::after_build(s);
     let Ok(d) = s.doc() else { return };
     let mut plan = plan_items(d, g);
     let made: HashMap<Handle, (u64, Option<TagKey>)> =
@@ -175,6 +177,29 @@ pub(crate) fn record(s: &mut Session, g: &WallGen) {
     plan.extend(room_items(s));
     if let Ok(st) = s.state_mut() {
         st.model_record = Some(ModelRecord { plan, made });
+    }
+}
+
+/// After an override changed generated objects outside a build: record them as they are now, so
+/// a rebuild doesn't take the override's change for a hand edit (or a deletion by hand).
+pub(crate) fn resync(s: &mut Session, touched: &[Handle]) {
+    if touched.is_empty() {
+        return;
+    }
+    let Ok(d) = s.doc() else { return };
+    let now: Vec<(Handle, Option<(u64, Option<TagKey>)>)> =
+        touched.iter().map(|h| (*h, d.model.get(*h).filter(|e| wallgen::made_as(e).is_some()).map(|e| (fingerprint(e), tag_key(e))))).collect();
+    let Ok(st) = s.state_mut() else { return };
+    let Some(rec) = st.model_record.as_mut() else { return };
+    for (h, v) in now {
+        match v {
+            Some(v) => {
+                rec.made.insert(h, v);
+            }
+            None => {
+                rec.made.remove(&h);
+            }
+        }
     }
 }
 
@@ -244,7 +269,7 @@ fn source_of(e: &Entity) -> Option<Handle> {
 }
 
 /// A generated object's (part, level, source) tag: what the rebuilt counterpart shares.
-fn tag_key(e: &Entity) -> Option<TagKey> {
+pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone());
