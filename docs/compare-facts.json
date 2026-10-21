@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 743,
-    "count": 743,
+    "callableAsJson": 753,
+    "count": 753,
     "ids": [
       "-attedit",
       "-block",
@@ -157,6 +157,14 @@
       "constraints.inspect",
       "constraintsettings",
       "convert",
+      "coordination.bcf",
+      "coordination.clashlist",
+      "coordination.clashstatus",
+      "coordination.measure3d",
+      "coordination.sectionbox",
+      "coordination.trades",
+      "coordination.tree",
+      "coordination.viewpoints",
       "copy",
       "copybase",
       "copyclip",
@@ -410,6 +418,8 @@
       "materials",
       "measure",
       "measuregeom",
+      "mep.edit",
+      "mep.list",
       "mep.read",
       "mirror",
       "mleader",
@@ -830,7 +840,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 31,
+    "count": 32,
     "tools": [
       "cancel",
       "close_all",
@@ -846,6 +856,7 @@
       "inspect_drawing",
       "list_commands",
       "list_drawings",
+      "mep",
       "new_drawing",
       "open",
       "plot",
