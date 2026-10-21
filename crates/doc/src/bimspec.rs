@@ -126,6 +126,17 @@ pub mod keys {
     // Conductors in raceway
     pub const INSULATION: &str = "insulation";
     pub const GROUND_SIZE: &str = "groundSize";
+
+    // Spec / submittal
+    pub const OR_EQUAL: &str = "orEqual";
+    pub const CCT: &str = "cct";
+    pub const LUMENS: &str = "lumens";
+    pub const WATTAGE: &str = "wattage";
+    pub const SIZE: &str = "size";
+    pub const WEIGHT: &str = "weight";
+    pub const DIMENSIONS: &str = "dimensions";
+    pub const REVIEW_STATUS: &str = "reviewStatus";
+    pub const SUBMITTAL_SOURCE: &str = "submittalSource";
 }
 
 // ── BIM type ────────────────────────────────────────────────────────────────
@@ -237,6 +248,134 @@ impl BimTypes {
     pub fn from_json(s: &str) -> std::result::Result<Self, serde_json::Error> {
         serde_json::from_str(s)
     }
+}
+
+// ── spec proposal (from spec_import) ───────────────────────────────────────
+
+/// A proposed BIM type extracted from a spec book, schedule or submittal, not yet applied to the
+/// drawing. The agent reviews these and calls `bim.spec_accept` to merge chosen ones.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecProposal {
+    /// The type to create or merge.
+    #[serde(flatten)]
+    pub bim_type: BimType,
+    /// Where this was read from: "spec", "schedule", "submittal", "general_notes".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
+    /// File or sheet that was the source (e.g. "Project Specs.pdf p.42").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub file_source: String,
+    /// Wiring-method or location rules extracted alongside this type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub location_rules: Vec<LocationRule>,
+}
+
+/// A wiring-method or location rule extracted from spec text or general notes: "MC cable
+/// permitted concealed in walls above accessible ceilings", "EMT exposed", "PVC below slab".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationRule {
+    /// The rule text as stated in the source.
+    pub rule: String,
+    /// Where it applies (e.g. "concealed in walls above accessible ceilings", "exposed").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub location: String,
+    /// Material or method (e.g. "MC cable", "EMT", "PVC").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material: String,
+    /// Source citation (e.g. "spec 26 05 33 §2.1", "general note 5 on E-1").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+// ── RFI items ──────────────────────────────────────────────────────────────
+
+/// Maximum RFI items per import.
+pub const MAX_RFI_ITEMS: usize = 10_000;
+
+/// A disagreement found between spec, schedule and/or submittal that needs resolution.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RfiItem {
+    /// Sequential ID within the import ("RFI-001").
+    pub id: String,
+    /// The type mark or element this concerns.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mark: String,
+    /// Field that disagrees (e.g. "cct", "catalogNumber", "manufacturer").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub field: String,
+    /// What the spec says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spec_value: String,
+    /// What the schedule says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub schedule_value: String,
+    /// What the submittal says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submittal_value: String,
+    /// Human-readable description of the disagreement.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Source citations for each side.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    /// Severity: "high" (safety/code), "medium" (cost/schedule), "low" (cosmetic).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub severity: String,
+}
+
+// ── submittal record ───────────────────────────────────────────────────────
+
+/// A submittal document parsed from a PDF, tracking its review status and what it covers.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmittalRecord {
+    /// Spec section it covers (e.g. "26 51 13").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spec_section: String,
+    /// Type marks it covers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_marks: Vec<String>,
+    /// Manufacturer from the submittal.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub manufacturer: String,
+    /// Exact model/catalog number with options.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub catalog_number: String,
+    /// Product dimensions (for family sizing).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dimensions: String,
+    /// Mounting method.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mounting: String,
+    /// Finish.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub finish: String,
+    /// Ratings (volts, amps, etc.) as free text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ratings: String,
+    /// Review status: "approved", "approved_as_noted", "revise", "rejected", "not_reviewed".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub review_status: String,
+    /// Reviewer notes (for "approved as noted").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// Source file (e.g. "submittal-luminaires.pdf p.3").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub file_source: String,
+}
+
+/// The result of a `bim.spec_import` call: proposed types, RFIs, rules, and submittal records.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecImportResult {
+    pub proposals: Vec<SpecProposal>,
+    pub rfis: Vec<RfiItem>,
+    pub location_rules: Vec<LocationRule>,
+    pub submittals: Vec<SubmittalRecord>,
+    pub notes: Vec<String>,
 }
 
 // ── entity-level helpers ────────────────────────────────────────────────────
