@@ -709,6 +709,28 @@ fn add_terminal_mesh(m: &mut Mesh, center: Vec2, size_in: [f64; 2], z0: f64, upf
     }
 }
 
+/// An upright 16-sided cylinder (a tank) from z0 to z1.
+fn add_upright_cylinder(m: &mut Mesh, c: Vec2, r: f64, z0: f64, z1: f64) {
+    if !(r > 1e-9 && z1 > z0) {
+        return;
+    }
+    const N: u32 = 16;
+    let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+    for z in [z0, z1] {
+        for i in 0..N {
+            let a = f64::from(i) * std::f64::consts::TAU / f64::from(N);
+            m.vertices.push(Vec3::new(c.x + r * a.cos(), c.y + r * a.sin(), z));
+        }
+    }
+    let f = |v: Vec<u32>| MeshFace { v: v.iter().map(|i| base + i).collect(), hidden: 0 };
+    m.faces.push(f((0..N).rev().collect()));
+    m.faces.push(f((N..2 * N).collect()));
+    for i in 0..N {
+        let j = (i + 1) % N;
+        m.faces.push(f(vec![i, j, N + j, N + i]));
+    }
+}
+
 /// A piece as a mesh: a box (rectangular), an octagonal tube (round), or a fitting.
 fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
     let w = p.size_a[0] / 12.0 * upf;
@@ -887,9 +909,60 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
+    // tag, systems and schedule row for IFC. --
+    let mut total_equipment = 0usize;
+    for e in sp.mep.equipment.iter().take(MAX_RUNS) {
+        let Some(level) = sp.level(&e.level) else { continue };
+        let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
+        if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
+            continue;
+        }
+        let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
+        ensure_layer(d, &layer, 30);
+        let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+        let z0 = (level.elevation_ft + e.bottom_ft) * upf;
+        let z1 = z0 + e.height_ft * upf;
+        let mut m = super::wallgen::empty_mesh();
+        if e.round {
+            add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
+        } else {
+            let cy = (lo.y + hi.y) / 2.0;
+            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
+        }
+        if m.faces.is_empty() {
+            continue;
+        }
+        let cap = |v: String| -> String { v.chars().take(250).collect() };
+        let mut xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, level.name.clone()),
+            t(1000, Handle(0).hex()),
+            t(1000, "kind:equipment".into()),
+            t(1000, cap(format!("part:equipment:{}", sanitise(&e.kind, 40)))),
+            t(1000, cap(format!("tag:{}", e.tag))),
+        ];
+        for sy in e.systems.iter().take(32) {
+            xdata.push(t(1000, cap(format!("system:{sy}"))));
+        }
+        if !e.title.is_empty() {
+            xdata.push(t(1000, cap(format!("title:{}", e.title))));
+        }
+        for (k, v) in e.properties.iter().take(64) {
+            xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
+        }
+        for (k, v) in e.sources.iter().take(8) {
+            xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
+        }
+        if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            total_equipment += 1;
+        }
+    }
+
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
-        "fittings": total_fittings, "terminals": total_terminals,
+        "fittings": total_fittings, "terminals": total_terminals, "equipment": total_equipment,
     })
 }
 

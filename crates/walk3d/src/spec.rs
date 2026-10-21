@@ -438,12 +438,49 @@ pub struct Mep {
     /// Air terminals (diffusers, registers, grilles) connected to duct systems.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub terminals: Vec<MepTerminal>,
+    /// Equipment from the schedules (air handlers, rooftop units, VAV boxes, fans, pumps, water
+    /// heaters, condensing units, meters), each a box at its tag on the plan.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equipment: Vec<MepEquipment>,
 }
 
 impl Mep {
     pub fn is_empty(&self) -> bool {
-        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty()
+        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty()
     }
+}
+
+/// A piece of scheduled equipment: a box (or upright cylinder) on a level, with the schedule's
+/// row as its properties and where each of its numbers came from.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepEquipment {
+    /// The schedule's tag: `AHU-1`, `VAV-2-03`.
+    pub tag: String,
+    /// `ahu`, `rtu`, `vav`, `exhaust_fan`, `fan`, `pump`, `water_heater`, `condensing_unit`,
+    /// `gas_meter` (anything else is written to IFC as a proxy).
+    pub kind: String,
+    pub level: String,
+    /// Plan corners (sheet units).
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    /// Bottom above the level's floor and height, feet.
+    pub bottom_ft: f64,
+    pub height_ft: f64,
+    /// An upright cylinder (a tank) in the plan box.
+    pub round: bool,
+    /// The systems joined to it (names or codes).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub systems: Vec<String>,
+    /// The schedule it came from and its row (column → value as printed).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+    /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, String>,
+    pub confidence: f64,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
@@ -964,6 +1001,21 @@ impl BuildingSpec {
                 format!("{}: {kind} on {}, {n} runs, usually {size} with its bottom at {}{hidden}", sy.name, sy.layer, feet(sy.bottom_ft)),
             );
         }
+        for e in &self.mep.equipment {
+            let guessed = e.sources.values().any(|v| v == "rule");
+            put(
+                "mep",
+                format!("equipment/{}", e.tag),
+                format!(
+                    "{}: {} on {}, {} high{}",
+                    e.tag,
+                    e.kind.replace('_', " "),
+                    e.level,
+                    feet(e.height_ft),
+                    if guessed { ", partly guessed" } else { "" }
+                ),
+            );
+        }
         for e in &self.exterior.equipment {
             put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
         }
@@ -1361,6 +1413,16 @@ impl BuildingSpec {
                 || r.size_in[0] <= 0.0
             {
                 out.push(Issue::error(at, "a run needs 2 points or more, a size and one bottom height per segment"));
+            }
+        }
+        for (i, e) in self.mep.equipment.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("mep.equipment[{i}]");
+            if self.level(&e.level).is_none() {
+                out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", e.level)));
+            }
+            let corners = e.min.iter().chain(&e.max).all(|v| fin(*v)) && e.max[0] > e.min[0] && e.max[1] > e.min[1];
+            if e.tag.trim().is_empty() || !corners || !(fin(e.bottom_ft) && fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
+                out.push(Issue::error(at, "equipment needs a tag, a plan box and a height from 0 to 100 feet"));
             }
         }
         for (i, c) in self.rcp.ceilings.iter().enumerate().take(MAX_ITEMS) {

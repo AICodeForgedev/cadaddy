@@ -179,6 +179,8 @@ enum P {
     List(Vec<P>),
     Null,
     Derived,
+    /// A typed value: `IFCLABEL('x')`.
+    Typed(String, Box<P>),
 }
 
 struct Lex<'a> {
@@ -272,6 +274,24 @@ impl Lex<'_> {
                     P::Int(t.parse().map_err(|_| format!("`{t}` is not an integer"))?)
                 }
             }
+            c if c.is_ascii_uppercase() => {
+                while self.b.get(self.at).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
+                    self.at += 1;
+                }
+                let name = String::from_utf8(self.b[start..self.at].to_vec()).unwrap();
+                self.ws();
+                if self.b.get(self.at) != Some(&b'(') {
+                    return Err(format!("`{name}` without its value"));
+                }
+                self.at += 1;
+                let v = self.param()?;
+                self.ws();
+                if self.b.get(self.at) != Some(&b')') {
+                    return Err(format!("`{name}(` holds more than one value"));
+                }
+                self.at += 1;
+                P::Typed(name, Box::new(v))
+            }
             _ => return Err(format!("unexpected `{}`", c as char)),
         })
     }
@@ -345,20 +365,51 @@ fn split_instances(t: &str) -> Vec<String> {
 #[derive(Clone, Copy)]
 enum A {
     Guid,
-    Text { opt: bool },
-    Real { opt: bool },
+    Text {
+        opt: bool,
+    },
+    Real {
+        opt: bool,
+    },
     Int,
-    Bool { opt: bool },
-    Ref { opt: bool, to: &'static [&'static str] },
-    Refs { opt: bool, min: usize, to: &'static [&'static str] },
-    Enum { opt: bool, of: &'static [&'static str] },
-    Reals { min: usize, max: usize },
+    Bool {
+        opt: bool,
+    },
+    Ref {
+        opt: bool,
+        to: &'static [&'static str],
+    },
+    Refs {
+        opt: bool,
+        min: usize,
+        to: &'static [&'static str],
+    },
+    Enum {
+        opt: bool,
+        of: &'static [&'static str],
+    },
+    Reals {
+        min: usize,
+        max: usize,
+    },
     Points3,
     Index,
     Derived,
+    /// A typed value of one of these types, holding a string.
+    Label {
+        opt: bool,
+        of: &'static [&'static str],
+    },
 }
 
 const ELEMENTS: &[&str] = &[
+    "IFCUNITARYEQUIPMENT",
+    "IFCAIRTERMINALBOX",
+    "IFCFAN",
+    "IFCPUMP",
+    "IFCBOILER",
+    "IFCCONDENSER",
+    "IFCFLOWMETER",
     "IFCWALL",
     "IFCSLAB",
     "IFCCOVERING",
@@ -409,6 +460,13 @@ const OBJECTS: &[&str] = &[
     "IFCPIPEFITTING",
     "IFCCABLECARRIERFITTING",
     "IFCAIRTERMINAL",
+    "IFCUNITARYEQUIPMENT",
+    "IFCAIRTERMINALBOX",
+    "IFCFAN",
+    "IFCPUMP",
+    "IFCBOILER",
+    "IFCCONDENSER",
+    "IFCFLOWMETER",
     "IFCDISTRIBUTIONSYSTEM",
 ];
 const PLACEMENT: &[&str] = &["IFCLOCALPLACEMENT"];
@@ -552,6 +610,73 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     );
     m.insert("IFCCABLECARRIERFITTING", element(&["BEND", "CROSS", "REDUCER", "TEE", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCAIRTERMINAL", element(&["DIFFUSER", "GRILLE", "LOUVRE", "REGISTER", "USERDEFINED", "NOTDEFINED"]));
+    // IFC4's predefined types of the equipment classes.
+    m.insert(
+        "IFCUNITARYEQUIPMENT",
+        element(&["AIRHANDLER", "AIRCONDITIONINGUNIT", "DEHUMIDIFIER", "SPLITSYSTEM", "ROOFTOPUNIT", "USERDEFINED", "NOTDEFINED"]),
+    );
+    m.insert(
+        "IFCAIRTERMINALBOX",
+        element(&["CONSTANTFLOW", "VARIABLEFLOWPRESSUREDEPENDANT", "VARIABLEFLOWPRESSUREINDEPENDANT", "USERDEFINED", "NOTDEFINED"]),
+    );
+    m.insert(
+        "IFCFAN",
+        element(&[
+            "CENTRIFUGALFORWARDCURVED",
+            "CENTRIFUGALRADIAL",
+            "CENTRIFUGALBACKWARDINCLINEDCURVED",
+            "CENTRIFUGALAIRFOIL",
+            "TUBEAXIAL",
+            "VANEAXIAL",
+            "PROPELLORAXIAL",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ]),
+    );
+    m.insert(
+        "IFCPUMP",
+        element(&[
+            "CIRCULATOR",
+            "ENDSUCTION",
+            "SPLITCASE",
+            "SUBMERSIBLEPUMP",
+            "SUMPPUMP",
+            "VERTICALINLINE",
+            "VERTICALTURBINE",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ]),
+    );
+    m.insert("IFCBOILER", element(&["WATER", "STEAM", "USERDEFINED", "NOTDEFINED"]));
+    m.insert(
+        "IFCCONDENSER",
+        element(&[
+            "AIRCOOLED",
+            "EVAPORATIVECOOLED",
+            "WATERCOOLED",
+            "WATERCOOLEDBRAZEDPLATE",
+            "WATERCOOLEDSHELLCOIL",
+            "WATERCOOLEDSHELLTUBE",
+            "WATERCOOLEDTUBEINTUBE",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ]),
+    );
+    m.insert("IFCFLOWMETER", element(&["ENERGYMETER", "GASMETER", "OILMETER", "WATERMETER", "USERDEFINED", "NOTDEFINED"]));
+    // IfcPropertySet: IfcRoot + HasProperties; IfcPropertySingleValue: Name, Description,
+    // NominalValue, Unit.
+    let mut pset = ROOT.to_vec();
+    pset.push(A::Refs { opt: false, min: 1, to: &["IFCPROPERTYSINGLEVALUE"] });
+    m.insert("IFCPROPERTYSET", pset);
+    m.insert(
+        "IFCPROPERTYSINGLEVALUE",
+        vec![
+            A::Text { opt: false },
+            A::Text { opt: true },
+            A::Label { opt: true, of: &["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"] },
+            A::Ref { opt: true, to: &["IFCSIUNIT"] },
+        ],
+    );
     // IfcDistributionSystem: IfcRoot (4) + ObjectType + LongName + PredefinedType.
     {
         let mut ds = ROOT.to_vec();
@@ -613,7 +738,11 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     // IfcRelAssignsToGroup: IfcRoot (4) + RelatedObjects (list) + RelatedObjectsType (opt enum) + RelatingGroup.
     {
         let mut ag = ROOT.to_vec();
-        ag.extend([A::Refs { opt: false, min: 1, to: ELEMENTS }, A::Ref { opt: false, to: &["IFCDISTRIBUTIONSYSTEM"] }]);
+        ag.extend([
+            A::Refs { opt: false, min: 1, to: ELEMENTS },
+            A::Enum { opt: true, of: &["PRODUCT", "PROCESS", "CONTROL", "RESOURCE", "ACTOR", "GROUP", "PROJECT", "NOTDEFINED"] },
+            A::Ref { opt: false, to: &["IFCDISTRIBUTIONSYSTEM"] },
+        ]);
         m.insert("IFCRELASSIGNSTOGROUP", ag);
     }
     for (door, of, part) in [
@@ -700,7 +829,7 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     contained.extend([A::Refs { opt: false, min: 1, to: ELEMENTS }, A::Ref { opt: false, to: SPATIAL }]);
     m.insert("IFCRELCONTAINEDINSPATIALSTRUCTURE", contained);
     let mut defines = ROOT.to_vec();
-    defines.extend([A::Refs { opt: false, min: 1, to: OBJECTS }, A::Ref { opt: false, to: &["IFCELEMENTQUANTITY"] }]);
+    defines.extend([A::Refs { opt: false, min: 1, to: OBJECTS }, A::Ref { opt: false, to: &["IFCELEMENTQUANTITY", "IFCPROPERTYSET"] }]);
     m.insert("IFCRELDEFINESBYPROPERTIES", defines);
     m.insert("IFCOPENINGELEMENT", element(&["OPENING", "RECESS", "USERDEFINED", "NOTDEFINED"]));
     let mut voids = ROOT.to_vec();
@@ -880,6 +1009,8 @@ fn matches(p: &P, a: A, types: &BTreeMap<u64, (String, Vec<P>)>) -> Result<(), S
         }
         (A::Index, P::List(v)) if v.len() >= 3 && v.iter().all(|x| matches!(x, P::Int(i) if *i > 0)) => Ok(()),
         (A::Derived, P::Derived) => Ok(()),
+        (A::Label { opt: true, .. }, P::Null) => Ok(()),
+        (A::Label { of, .. }, P::Typed(t, v)) if of.contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
         _ => Err(format!("{p:?} where the schema has {}", describe(a))),
     }
 }
@@ -898,6 +1029,7 @@ fn describe(a: A) -> &'static str {
         A::Points3 => "a list of 3D points",
         A::Index => "a list of at least 3 positive indices",
         A::Derived => "a derived attribute (*)",
+        A::Label { .. } => "a typed string value",
     }
 }
 
@@ -1565,4 +1697,128 @@ fn new_drawings_have_their_own_fingerprint() {
     let (ia, ib) = (ids(&export(&mut a, "A.ifc")), ids(&export(&mut b, "B.ifc")));
     assert!(!ia.is_empty() && ia.is_disjoint(&ib), "two drawings share GlobalIds: {:?}", ia.intersection(&ib).collect::<Vec<_>>());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Scheduled equipment (Q262) as the equipment reader puts it in the spec: each item as its
+/// IFC4 distribution element class with its predefined type, its schedule row as a property set,
+/// in its storey and in its systems' groups.
+#[test]
+fn scheduled_equipment_exports_as_its_distribution_element_class() {
+    hooks();
+    let mut s = building();
+    let equipment = json!([
+        {"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [24, 24], "max": [120, 84], "bottom_ft": 0, "height_ft": 6,
+         "systems": ["M-DUCT-SUPP"], "title": "AIR HANDLING UNIT SCHEDULE",
+         "properties": {"TAG": "AHU-1", "CFM": "2400", "SIZE (L x W x H)": "8'-0\" x 5'-0\" x 6'-0\"", "SERVES": "LEVEL 1 – OFFICE"},
+         "sources": {"footprint": "outline", "height": "schedule", "elevation": "floor"}, "confidence": 0.9},
+        {"tag": "VAV-1-01", "kind": "vav", "level": "L1", "min": [200, 100], "max": [222, 142], "bottom_ft": 9.5, "height_ft": 1.25,
+         "systems": ["M-DUCT-SUPP"], "properties": {"TAG": "VAV-1-01", "INLET (IN)": "8"},
+         "sources": {"height": "rule"}, "confidence": 0.6},
+        {"tag": "WH-1", "kind": "water_heater", "level": "L1", "min": [300, 200], "max": [324, 224], "bottom_ft": 0, "height_ft": 5, "round": true,
+         "systems": ["P-DOMW-CW", "P-DOMW-HW"], "properties": {"TAG": "WH-1", "CAPACITY (GAL)": "50"}, "confidence": 0.9},
+        {"tag": "CP-1", "kind": "pump", "level": "L1", "min": [330, 200], "max": [342, 206], "bottom_ft": 9, "height_ft": 0.5, "properties": {"TAG": "CP-1"}},
+        {"tag": "EF-1", "kind": "exhaust_fan", "level": "L2", "min": [2420, 20], "max": [2444, 44], "bottom_ft": 0, "height_ft": 2.5, "properties": {"TAG": "EF-1"}},
+        {"tag": "CU-1", "kind": "condensing_unit", "level": "L1", "min": [12, -40], "max": [48, -10], "bottom_ft": 0, "height_ft": 2.75},
+        {"tag": "GM-1", "kind": "gas_meter", "level": "L1", "min": [60, -30], "max": [78, -18], "bottom_ft": 0, "height_ft": 3},
+        {"tag": "RTU-1", "kind": "rtu", "level": "L2", "min": [2500, 100], "max": [2620, 172], "bottom_ft": 0, "height_ft": 4.5},
+        {"tag": "X-1", "kind": "humidifier", "level": "L2", "min": [2700, 100], "max": [2712, 112], "bottom_ft": 0, "height_ft": 1}
+    ]);
+    let issues = s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": equipment}}})).unwrap();
+    assert!(!issues.to_string().contains("mep.equipment"), "{issues}");
+    let built = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(built["mep"]["equipment"].as_u64().or(built["equipment"].as_u64()).or_else(|| find_count(&built)), Some(9), "{built}");
+    let text = export(&mut s, "Sample Equipment.ifc");
+    let p = problems(&text);
+    assert!(p.is_empty(), "{}", p.join("\n"));
+    let c = census(&text);
+    let n = |t: &str| c.get(t).copied().unwrap_or(0);
+    assert_eq!((n("IFCUNITARYEQUIPMENT"), n("IFCAIRTERMINALBOX"), n("IFCFAN"), n("IFCPUMP")), (2, 1, 1, 1));
+    assert_eq!((n("IFCBOILER"), n("IFCCONDENSER"), n("IFCFLOWMETER")), (1, 1, 1));
+    assert_eq!(n("IFCPROPERTYSET"), 5, "one schedule row per item that has one");
+    let f = read_step(&text).unwrap();
+    let find = |name: &str| f.data.values().find(|(_, p)| p.get(2) == Some(&P::Str(name.into()))).cloned().unwrap();
+    let (t, ahu) = find("AHU-1");
+    assert_eq!((t.as_str(), &ahu[8], &ahu[3]), ("IFCUNITARYEQUIPMENT", &P::Enum("AIRHANDLER".into()), &P::Str("AIR HANDLING UNIT SCHEDULE".into())));
+    assert_eq!(find("RTU-1").1[8], P::Enum("ROOFTOPUNIT".into()));
+    assert_eq!(find("WH-1").1[8], P::Enum("WATER".into()));
+    assert_eq!(find("CU-1").1[8], P::Enum("AIRCOOLED".into()));
+    assert_eq!(find("GM-1").1[8], P::Enum("GASMETER".into()));
+    assert_eq!(find("X-1").0, "IFCBUILDINGELEMENTPROXY", "an unknown kind is a proxy");
+    // The schedule's cells as labels, the non-ASCII dash escaped.
+    assert!(text.contains("IFCPROPERTYSINGLEVALUE('CFM',$,IFCLABEL('2400'),$)"), "CFM");
+    assert!(text.contains("IFCLABEL('8''-0\" x 5''-0\" x 6''-0\"')"), "size with its quotes");
+    assert!(text.contains("\\X2\\2013\\X0\\"), "the en dash");
+    assert!(text.contains("'SOURCE height'"), "where its numbers came from");
+    // The heater is in both its systems' groups; the AHU and VAV box in supply's.
+    let groups: Vec<(String, Vec<u64>)> = f
+        .data
+        .values()
+        .filter(|(t, _)| t == "IFCRELASSIGNSTOGROUP")
+        .filter_map(|(_, p)| {
+            let g = refs(&p[6]).first().copied()?;
+            let name = match f.data.get(&g)?.1.get(2)? {
+                P::Str(s) => s.clone(),
+                _ => return None,
+            };
+            Some((name, refs(&p[4])))
+        })
+        .collect();
+    let id_of = |name: &str| f.data.iter().find(|(_, (_, p))| p.get(2) == Some(&P::Str(name.into()))).map(|(k, _)| *k).unwrap();
+    let in_group = |g: &str, e: &str| groups.iter().any(|(n, m)| n == g && m.contains(&id_of(e)));
+    assert!(in_group("P-DOMW-CW", "WH-1") && in_group("P-DOMW-HW", "WH-1"));
+    assert!(in_group("M-DUCT-SUPP", "AHU-1") && in_group("M-DUCT-SUPP", "VAV-1-01"));
+    // Boxes at size: the AHU 8' x 5' x 6' (in metres), the heater an upright cylinder 5' tall.
+    let mesh_of = |tag: &str| {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .find(|e| e.common.xdata.iter().any(|x| x.value == format!("tag:{tag}")))
+            .and_then(|e| if let EntityKind::Mesh(m) = &e.kind { Some(m.clone()) } else { None })
+            .unwrap()
+    };
+    let span = |m: &Mesh, k: usize| {
+        let v: Vec<f64> = m.vertices.iter().map(|p| [p.x, p.y, p.z][k]).collect();
+        v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let ahu = mesh_of("AHU-1");
+    assert!((span(&ahu, 0) - 96.0).abs() < 1e-6 && (span(&ahu, 1) - 60.0).abs() < 1e-6 && (span(&ahu, 2) - 72.0).abs() < 1e-6);
+    let wh = mesh_of("WH-1");
+    assert!(wh.vertices.len() == 32 && (span(&wh, 2) - 60.0).abs() < 1e-6 && (span(&wh, 0) - 24.0).abs() < 1e-6);
+    // Read back, each keeps its class.
+    let back = cadaddy_io::read(text.as_bytes(), "Sample Equipment.ifc").unwrap();
+    for class in ["UnitaryEquipment", "AirTerminalBox", "Fan", "Pump", "Boiler", "Condenser", "FlowMeter"] {
+        assert!(back.layers.iter().any(|l| l.name == format!("IFC-{class}")), "{class} read back");
+    }
+    let vav = mesh_of("VAV-1-01");
+    let z0 = vav.vertices.iter().map(|p| p.z).fold(f64::MAX, f64::min);
+    assert!((z0 - 114.0).abs() < 1e-6, "hung 9'-6\" up: {z0}");
+}
+
+/// The equipment count in model.build's result, wherever it sits.
+fn find_count(v: &serde_json::Value) -> Option<u64> {
+    match v {
+        serde_json::Value::Object(m) => m.get("equipment").and_then(|x| x.as_u64()).or_else(|| m.values().find_map(find_count)),
+        _ => None,
+    }
+}
+
+#[test]
+fn bad_equipment_is_an_issue_not_a_crash() {
+    hooks();
+    let mut s = building();
+    let bad = json!([
+        {"tag": "", "kind": "ahu", "level": "L1", "min": [0, 0], "max": [10, 10], "height_ft": 5},
+        {"tag": "A", "kind": "ahu", "level": "NOWHERE", "min": [0, 0], "max": [10, 10], "height_ft": 5},
+        {"tag": "B", "kind": "ahu", "level": "L1", "min": [10, 10], "max": [0, 0], "height_ft": 5},
+        {"tag": "C", "kind": "ahu", "level": "L1", "min": [0, 0], "max": [10, 10], "height_ft": 1e9}
+    ]);
+    let r = s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": bad}}}));
+    let text = match &r {
+        Ok(v) => v.to_string(),
+        Err(e) => e.to_string(),
+    };
+    assert!(text.contains("mep.equipment"), "{text}");
+    // Whatever was stored, building skips what it can't make.
+    let _ = s.execute("model.build", &json!({}));
 }
