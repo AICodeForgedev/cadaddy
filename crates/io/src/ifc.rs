@@ -56,6 +56,10 @@ enum Class {
     Duct,
     Pipe,
     Conduit,
+    DuctFitting,
+    PipeFitting,
+    ConduitFitting,
+    AirTerminal,
 }
 
 impl Class {
@@ -80,6 +84,10 @@ impl Class {
             Class::Duct => ("IfcDuctSegment", "RIGIDSEGMENT"),
             Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
             Class::Conduit => ("IfcCableCarrierSegment", "CONDUITSEGMENT"),
+            Class::DuctFitting => ("IfcDuctFitting", "NOTDEFINED"),
+            Class::PipeFitting => ("IfcPipeFitting", "NOTDEFINED"),
+            Class::ConduitFitting => ("IfcCableCarrierFitting", "NOTDEFINED"),
+            Class::AirTerminal => ("IfcAirTerminal", "NOTDEFINED"),
         }
     }
 
@@ -104,6 +112,10 @@ impl Class {
             "DuctSegment" => Class::Duct,
             "PipeSegment" => Class::Pipe,
             "CableCarrierSegment" => Class::Conduit,
+            "DuctFitting" => Class::DuctFitting,
+            "PipeFitting" => Class::PipeFitting,
+            "CableCarrierFitting" => Class::ConduitFitting,
+            "AirTerminal" => Class::AirTerminal,
             _ => return None,
         })
     }
@@ -118,6 +130,8 @@ struct Kind {
     name: String,
     long: String,
     read_id: Option<String>,
+    /// For MEP objects: the system name for IfcDistributionSystem grouping.
+    system_name: Option<String>,
 }
 
 /// The tag `app`'s first strings on `e` (WALLGEN: part, level; ROOMS: name, number).
@@ -129,11 +143,13 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
 
 fn class_of(e: &Entity) -> Kind {
     let kind =
-        |class: Class, level: Option<String>, name: String, long: String| Kind { class, predefined: class.ifc().1, level, name, long, read_id: None };
+        |class: Class, level: Option<String>, name: String, long: String| Kind { class, predefined: class.ifc().1, level, name, long, read_id: None, system_name: None };
     if let Some(t) = tag_strings(e, "CADADDY_WALLGEN") {
         let part = t.first().map(String::as_str).unwrap_or_default();
         // model.build's MEP runs: `system:<name>` and `kind:duct|pipe|conduit` after the source.
+        // Part tags: `part:segment`, `part:fitting:elbow`, `part:terminal:diffuser`.
         let extra = |key: &str| t.iter().skip(3).find_map(|v| v.strip_prefix(key)).map(str::to_string);
+        let mep_part = extra("part:");
         let class = match part {
             "wall" | "parapet" => Class::Wall,
             "floor" => Class::Slab,
@@ -147,19 +163,47 @@ fn class_of(e: &Entity) -> Kind {
             "ramp" => Class::Ramp,
             "roof" => Class::Roof,
             "ground" => Class::Terrain,
-            "mep" => match extra("kind:").as_deref() {
-                Some("duct") => Class::Duct,
-                Some("pipe") => Class::Pipe,
-                Some("conduit") => Class::Conduit,
-                _ => Class::Proxy,
+            "mep" => {
+                let is_fitting = mep_part.as_deref().is_some_and(|p| p.starts_with("fitting:"));
+                let is_terminal = mep_part.as_deref().is_some_and(|p| p.starts_with("terminal:"));
+                if is_terminal {
+                    Class::AirTerminal
+                } else if is_fitting {
+                    match extra("kind:").as_deref() {
+                        Some("duct") => Class::DuctFitting,
+                        Some("pipe") => Class::PipeFitting,
+                        Some("conduit") => Class::ConduitFitting,
+                        _ => Class::DuctFitting,
+                    }
+                } else {
+                    match extra("kind:").as_deref() {
+                        Some("duct") => Class::Duct,
+                        Some("pipe") => Class::Pipe,
+                        Some("conduit") => Class::Conduit,
+                        _ => Class::Proxy,
+                    }
+                }
             },
             _ => Class::Proxy,
         };
-        let mut k = kind(class, t.get(1).cloned(), extra("system:").unwrap_or_else(|| part.to_string()), String::new());
+        let sys_name = extra("system:");
+        let mut k = kind(class, t.get(1).cloned(), sys_name.clone().unwrap_or_else(|| part.to_string()), String::new());
+        k.system_name = sys_name;
         match part {
             "parapet" => k.predefined = "PARAPET",
             "soffit" => k.predefined = "CLADDING",
             _ => {}
+        }
+        // Fitting predefined types from the part tag.
+        if let Some(p) = mep_part.as_deref()
+            && let Some(sub) = p.strip_prefix("fitting:")
+        {
+            k.predefined = match sub {
+                "elbow" => "BEND",
+                "tee" => "JUNCTION",
+                "transition" | "reducer" => "TRANSITION",
+                _ => "NOTDEFINED",
+            };
         }
         return k;
     }
@@ -442,6 +486,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let mut contained: Vec<Vec<usize>> = vec![Vec::new(); storeys.len()];
     let mut spaces: Vec<Vec<usize>> = vec![Vec::new(); storeys.len()];
     let mut quantities: Vec<(usize, String, Vec<String>, u64)> = Vec::new();
+    // MEP products grouped by system name for IfcDistributionSystem.
+    let mut system_products: HashMap<String, Vec<usize>> = HashMap::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
     for it in &items {
@@ -497,6 +543,10 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         }
         if let Some(list) = if kd.class == Class::Space { spaces.get_mut(si) } else { contained.get_mut(si) } {
             list.push(product);
+        }
+        // Track MEP products by system name for IfcDistributionSystem grouping.
+        if let Some(sys) = &kd.system_name {
+            system_products.entry(sys.clone()).or_default().push(product);
         }
         // Base quantities (IFC4's Qto_…BaseQuantities): lengths in the length unit, areas in m², volumes in m³.
         let m = measures(it.mesh);
@@ -586,6 +636,25 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             o.add(format!("IFCRELAGGREGATES('{}',$,$,$,#{st},{})", id(*h, 4), refs(rooms)));
         }
     }
+    // IfcDistributionSystem for each MEP system, grouping its products.
+    for (sys_name, products) in &system_products {
+        if products.is_empty() {
+            continue;
+        }
+        let sys_id = hash(sys_name);
+        // IfcDistributionSystem: GlobalId, OwnerHistory, Name, Description, ObjectType, LongName, PredefinedType.
+        let ds = o.add(format!(
+            "IFCDISTRIBUTIONSYSTEM('{}',$,{},$,$,$,.NOTDEFINED.)",
+            id(sys_id, 20),
+            step_str(sys_name),
+        ));
+        o.add(format!(
+            "IFCRELASSIGNSTOGROUP('{}',$,$,$,{},#{ds})",
+            id(sys_id, 21),
+            refs(products),
+        ));
+    }
+
     let mut s = String::with_capacity(o.lines.iter().map(|l| l.len() + 10).sum::<usize>() + 512);
     s.push_str("ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [ReferenceView]'),'2;1');\n");
     let _ = writeln!(s, "FILE_NAME({},'',(''),(''),'CADaddy','CADaddy','');", step_str(&format!("{title}.ifc")));
@@ -1205,7 +1274,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 28] = [
+    const KNOWN: [&str; 32] = [
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -1234,6 +1303,10 @@ fn class_name(upper: &str) -> String {
         "PipeSegment",
         "CableCarrierSegment",
         "GeographicElement",
+        "DuctFitting",
+        "PipeFitting",
+        "CableCarrierFitting",
+        "AirTerminal",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(

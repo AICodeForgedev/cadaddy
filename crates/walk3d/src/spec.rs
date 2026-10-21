@@ -435,12 +435,39 @@ pub struct Mep {
     pub systems: Vec<MepSystem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<MepRun>,
+    /// Air terminals (diffusers, registers, grilles) connected to duct systems.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<MepTerminal>,
 }
 
 impl Mep {
     pub fn is_empty(&self) -> bool {
-        self.systems.is_empty() && self.runs.is_empty()
+        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty()
     }
+}
+
+/// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MepTerminal {
+    /// The system it belongs to.
+    pub system: String,
+    pub level: String,
+    /// Plan position (sheet units).
+    pub at: [f64; 2],
+    /// Size, inches: `[width, height]` for rectangular; `[diameter, 0]` for round.
+    pub size_in: [f64; 2],
+    /// Bottom elevation above the floor, feet.
+    pub bottom_ft: f64,
+    /// What it is: `diffuser`, `register`, `grille`, `vav_box`, `mixing_box`.
+    #[serde(default = "default_terminal_kind")]
+    pub terminal_kind: String,
+    /// The plan objects it was read from (hex handles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<String>,
+}
+
+fn default_terminal_kind() -> String {
+    "diffuser".into()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -449,6 +476,49 @@ pub enum MepKind {
     Duct,
     Pipe,
     Conduit,
+}
+
+/// What a duct system carries — determines the default colour when none is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DuctType {
+    Supply,
+    Return,
+    Exhaust,
+    OutsideAir,
+    Other,
+}
+
+impl DuctType {
+    /// The default ACI colour index for this duct type (supply=blue 5, return=magenta 6,
+    /// exhaust=green 3, outside air=cyan 4, other=white 7).
+    pub fn default_color(self) -> i16 {
+        match self {
+            DuctType::Supply => 5,
+            DuctType::Return => 6,
+            DuctType::Exhaust => 3,
+            DuctType::OutsideAir => 4,
+            DuctType::Other => 7,
+        }
+    }
+}
+
+impl MepSystem {
+    /// The ACI colour index to use for this system's 3D layer: the explicit `color_index` when
+    /// set, else the duct type's default for ducts, else the MEP kind's default.
+    pub fn aci_color(&self) -> i16 {
+        if self.color_index > 0 {
+            return self.color_index;
+        }
+        if let Some(dt) = self.duct_type {
+            return dt.default_color();
+        }
+        match self.kind {
+            MepKind::Duct => 4,    // cyan (generic duct, no type set)
+            MepKind::Pipe => 3,    // green
+            MepKind::Conduit => 6, // magenta
+        }
+    }
 }
 
 /// A system: the layers its runs are drawn on, what they are, their usual size and height, and
@@ -464,10 +534,22 @@ pub struct MepSystem {
     pub bottom_ft: f64,
     #[serde(default = "yes")]
     pub show: bool,
+    /// For duct systems: supply, return, exhaust, outside_air or other (determines the default
+    /// colour). Pipes and conduits leave this at the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duct_type: Option<DuctType>,
+    /// ACI colour index for the system's 3D layer; 0 means "use the default for the duct type
+    /// or MEP kind".
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub color_index: i16,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_zero_i16(v: &i16) -> bool {
+    *v == 0
 }
 
 /// A run: its plan path (sheet units), its size, and the bottom height of each segment (a change
