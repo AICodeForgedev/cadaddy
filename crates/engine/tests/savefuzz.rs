@@ -8,7 +8,7 @@
 //! the test unless it is in [`KNOWN`]. SVG and PDF are written and read back too (they keep
 //! geometry only): neither may fail or come back empty.
 //!
-//! `SAVEFUZZ_SEEDS=n` runs n seeds (default 4), `SAVEFUZZ_SEED=s` only seed s, and
+//! `SAVEFUZZ_SEEDS=n` runs seeds 0..n (default 4) and `SAVEFUZZ_SEEDS=a..b` seeds a..b, `SAVEFUZZ_SEED=s` only seed s, and
 //! `SAVEFUZZ_REPORT=1` prints every difference found (`target/tmp/savefuzz.md`).
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -29,6 +29,10 @@ const KNOWN: &[&str] = &[
     // DWG doesn't store a viewport's number: readers number them by their order in the layout
     // (the notes leave the number out on purpose, `kept::content`).
     "DWG|layout viewport|kind.id",
+    // A hatch dense enough for a million dashes (the most a hatch draws, as AutoCAD's HPMAXLINES)
+    // is a million objects when its SVG is imported: more than the SVG reader's limit for
+    // hostile files.
+    "SVG|file|error: read: SVG: more than*",
 ];
 
 fn hooks() {
@@ -82,6 +86,10 @@ const TEXTS: &[&str] = &[
     "x²+y³",
     "emoji 🙂 here",
     "ﬁ ligature",
+    "  spaced at both ends  ",
+    "%%uunderlined%%u and %%o",
+    r"caret ^ and backslash \ here",
+    "a long line of text, long enough to need more than one DXF group when it is written out as a value: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 end",
 ];
 
 /// A drawing generated from `seed`, and the commands that refused (for the report).
@@ -247,7 +255,15 @@ fn drawing(seed: u64, dir: &std::path::Path) -> (Drawing, Vec<String>) {
     }
     // Layouts, viewports, views, groups.
     if r.chance(60) {
-        run(&mut s, "mview", json!({ "layout": "Layout1", "p1": [1, 1], "p2": [8, 6] }));
+        let vp = run(&mut s, "mview", json!({ "layout": "Layout1", "p1": [1, 1], "p2": [8, 6] }))
+            .and_then(|v| v["viewports"].get(0).and_then(Value::as_str).map(str::to_string));
+        // Layers frozen and overridden in the viewport.
+        if let Some(vp) = vp
+            && layers.len() > 1
+        {
+            let l = layers[1].clone();
+            run(&mut s, "vplayer", json!({ "handle": vp, "freeze": [l.clone()], "colors": { l: "10,20,30" } }));
+        }
     }
     if r.chance(50) {
         run(&mut s, "layout", json!({ "option": "new", "name": format!("Sheet {}", r.pick(NAMES)) }));
@@ -273,6 +289,66 @@ fn drawing(seed: u64, dir: &std::path::Path) -> (Drawing, Vec<String>) {
         }
         run(&mut s, "imageattach", json!({ "path": png, "at": [c(&mut r), c(&mut r)], "scale": scale * 5.0 }));
     }
+    // A block made of some of the objects, inserted.
+    let handles: Vec<String> = s
+        .doc()
+        .map(|d| {
+            d.model
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.kind,
+                        EntityKind::Line(_)
+                            | EntityKind::Circle(_)
+                            | EntityKind::Text(_)
+                            | EntityKind::MText(_)
+                            | EntityKind::LwPolyline(_)
+                            | EntityKind::Hatch(_)
+                            | EntityKind::Spline(_)
+                    )
+                })
+                .map(|e| e.handle.hex())
+                .collect()
+        })
+        .unwrap_or_default();
+    let some: Vec<&String> = handles.iter().filter(|_| r.chance(30)).take(8).collect();
+    let made = format!("{} parts", r.pick(NAMES));
+    if !some.is_empty() && run(&mut s, "block", json!({ "name": made, "base": [c(&mut r), c(&mut r)], "handles": some, "keep": "delete" })).is_some()
+    {
+        let at = [c(&mut r), c(&mut r)];
+        let ins = run(&mut s, "insert", json!({ "name": made, "at": at, "scale": [2, 2], "rotation": -30 }))
+            .and_then(|v| v["handle"].as_str().map(str::to_string));
+        if let Some(h) = ins
+            && r.chance(50)
+        {
+            let k = scale * 5.0;
+            run(&mut s, "xclip", json!({ "handles": [h], "boundary": [[at[0] - k, at[1] - k], [at[0] + k, at[1] + k]], "invert": r.chance(30) }));
+        }
+    }
+    // A gradient, a layer state, groups with descriptions and without names.
+    if r.chance(40) {
+        let (x, y) = (c(&mut r), c(&mut r));
+        run(&mut s, "rectang", json!({ "p1": [x, y], "p2": [x + scale, y + scale] }));
+        let name = r.pick(&["LINEAR", "CYLINDER", "SPHERICAL", "INVCURVED"]).to_string();
+        run(
+            &mut s,
+            "gradient",
+            json!({ "points": [[x + scale * 0.5, y + scale * 0.5]], "name": name, "color1": "red", "color2": "10,200,30", "angle": 30 }),
+        );
+    }
+    if r.chance(40) {
+        run(&mut s, "layerstate.save", json!({ "name": format!("{} state", r.pick(NAMES)), "description": r.pick(TEXTS).to_string() }));
+    }
+    let some: Vec<String> = s.doc().map(|d| d.model.iter().skip(2).take(3).map(|e| e.handle.hex()).collect()).unwrap_or_default();
+    if !some.is_empty() && r.chance(50) {
+        run(&mut s, "group", json!({ "handles": some, "description": r.pick(TEXTS).to_string(), "selectable": r.chance(50) }));
+    }
+    // A polyline of thousands of vertices.
+    if r.chance(30) {
+        let n = 500 + r.below(3000);
+        let pts: Vec<[f64; 2]> = (0..n).map(|i| [scale * i as f64 * 0.01, scale * (i as f64 * 0.1).sin()]).collect();
+        run(&mut s, "pline", json!({ "vertices": pts, "closed": false }));
+    }
     let mut d = s.doc().map_or_else(|_| Drawing::new_metric(), |d| d.clone());
     // What no command makes: solids, traces, 3D faces, an empty block, blocks nested deep,
     // an array insert.
@@ -285,6 +361,16 @@ fn drawing(seed: u64, dir: &std::path::Path) -> (Drawing, Vec<String>) {
     let _ = d.add(&Space::Model, common(), EntityKind::Trace(Solid { corners: q(y, x, k) }));
     let _ =
         d.add(&Space::Model, common(), EntityKind::Face3d(Face3d { corners: q(x, x, k).map(|v| Vec3::new(v.x, v.y, v.x * 0.1)), hidden_edges: 5 }));
+    let (x, y) = (c(&mut r), c(&mut r));
+    let mesh = cadaddy_engine::doc::Mesh {
+        vertices: vec![Vec3::new(x, y, 0.0), Vec3::new(x + k, y, 0.0), Vec3::new(x, y + k, k * 0.1), Vec3::new(x + k, y + k, -k)],
+        faces: vec![
+            cadaddy_engine::doc::MeshFace { v: vec![0, 1, 2], ..Default::default() },
+            cadaddy_engine::doc::MeshFace { v: vec![1, 3, 2], ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let _ = d.add(&Space::Model, common(), EntityKind::Mesh(mesh));
     let empty = format!("Empty {}", r.pick(NAMES));
     d.blocks.insert(empty.clone(), Arc::new(Block::new(&empty)));
     if r.chance(70) {
@@ -360,6 +446,27 @@ fn twist(d: &mut Drawing, r: &mut Rng, scale: f64) {
             if r.chance(20) {
                 b.explodable = false;
             }
+        }
+    }
+    for ds in d.dim_styles.iter_mut().filter(|s| !s.name.eq_ignore_ascii_case("Standard")) {
+        ds.scale = *r.pick(&[1.0, 0.001, 48.0]);
+        ds.arrow_size = scale * 0.2;
+        ds.text_height = scale * 0.25;
+        ds.linear_factor = *r.pick(&[1.0, 25.4, 0.5]);
+        ds.round = *r.pick(&[0.0, 0.25, 5.0]);
+        ds.tol_plus = scale * 0.01;
+        ds.tol_minus = scale * 0.02;
+    }
+    // Copies of some objects on a layout's paper.
+    if let Some(l) = d.layouts.first().map(|l| l.name.clone()) {
+        let copies: Vec<(Common, EntityKind)> = d
+            .model
+            .iter()
+            .filter(|e| !matches!(e.kind, EntityKind::Viewport(_)) && r.chance(15))
+            .map(|e| (e.common.clone(), e.kind.clone()))
+            .collect();
+        for (common, kind) in copies {
+            let _ = d.add(&Space::Paper(l.clone()), common, kind);
         }
     }
     // Objects on a layout's paper, not only its viewports.
@@ -788,7 +895,12 @@ fn save_reopen_differential_fuzz() {
     std::fs::create_dir_all(&dir).expect("a folder");
     let seeds: Vec<u64> = match std::env::var("SAVEFUZZ_SEED").ok().and_then(|s| s.parse().ok()) {
         Some(s) => vec![s],
-        None => (0..std::env::var("SAVEFUZZ_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4)).collect(),
+        // `n` (seeds 0..n) or `a..b`.
+        None => {
+            let v = std::env::var("SAVEFUZZ_SEEDS").unwrap_or_default();
+            let (a, b) = v.split_once("..").map_or((Some(0), v.parse().ok()), |(a, b)| (a.parse().ok(), b.parse().ok()));
+            (a.unwrap_or(0)..b.unwrap_or(4)).collect()
+        }
     };
     let fmts = formats();
     // (format, what, path) → (seed, example).
@@ -805,7 +917,9 @@ fn save_reopen_differential_fuzz() {
             let back = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (f.run)(&d, &dir))) {
                 Ok(Ok(b)) => b,
                 Ok(Err(e)) => {
-                    found.entry((f.name.clone(), "file".into(), "error".into())).or_insert((seed, e));
+                    // The error's words (its numbers left out) tell one kind from another.
+                    let kind: String = e.chars().filter(|c| !c.is_ascii_digit()).take(60).collect();
+                    found.entry((f.name.clone(), "file".into(), format!("error: {kind}"))).or_insert((seed, e));
                     continue;
                 }
                 Err(_) => {
@@ -836,6 +950,7 @@ fn save_reopen_differential_fuzz() {
         let k = if known(f, w, p) { " (known)" } else { "" };
         md.push_str(&format!("- {f} · {w} · {p}{k}: seed {seed}, {ex}\n"));
     }
+    md.push_str(&format!("\n## Model-space objects generated ({} seeds)\n\n{types:?}\n", seeds.len()));
     md.push_str(&format!("\n## Commands that refused\n\n- {}\n", refused.into_iter().collect::<Vec<_>>().join("\n- ")));
     let out = option_env!("CARGO_TARGET_TMPDIR").map_or_else(std::env::temp_dir, std::path::PathBuf::from).join("savefuzz.md");
     let _ = std::fs::write(&out, &md);
@@ -845,4 +960,76 @@ fn save_reopen_differential_fuzz() {
     let new: Vec<String> =
         found.iter().filter(|((f, w, p), _)| !known(f, w, p)).map(|((f, w, p), (s, ex))| format!("{f}|{w}|{p} (seed {s}: {ex})")).collect();
     assert!(new.is_empty(), "{} difference(s) the exchange notes don't report (see {}):\n{}", new.len(), out.display(), new.join("\n"));
+}
+
+/// The comparison itself: what the notes leave out (a zero coordinate that became something, a
+/// description emptied, a block's base moved) is found; what they report (a coordinate changed)
+/// is not.
+#[test]
+fn the_comparison_finds_what_the_notes_leave_out() {
+    let mut d = Drawing::new_metric();
+    let line = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(5.0, 5.0, 0.0) })).expect("a line");
+    d.layers.push(cadaddy_engine::doc::Layer { name: "Walls".into(), description: "outer".into(), ..Default::default() });
+    let mut b = Block::new("B");
+    b.base = Vec3::new(1.0, 2.0, 0.0);
+    d.blocks.insert("B".into(), Arc::new(b));
+    let mut back = d.clone();
+    if let Some(e) = back.model.get(line) {
+        let mut e = (**e).clone();
+        if let EntityKind::Line(l) = &mut e.kind {
+            l.a = Vec3::new(0.0, 3.0, 0.0);
+            l.b = Vec3::new(6.0, 5.0, 0.0);
+        }
+        back.model.replace(e);
+    }
+    if let Some(l) = back.layers.iter_mut().find(|l| l.name == "Walls") {
+        l.description.clear();
+    }
+    if let Some(b) = back.blocks.get_mut("B") {
+        Arc::make_mut(b).base = Vec3::ZERO;
+    }
+    let notes = losses_between(&d, &back);
+    let found = unreported(&d, &back, &notes);
+    let paths: BTreeSet<String> = found.keys().map(|(w, p)| format!("{w}|{p}")).collect();
+    assert!(paths.contains("model line|kind.a.y"), "the zero that became 3: {paths:?}");
+    assert!(!paths.contains("model line|kind.b.x"), "the notes report b: {paths:?} {notes:?}");
+    assert!(notes.iter().any(|l| l.feature == "line b"), "{notes:?}");
+    // Reported by the notes now (block properties and descriptions): not left out.
+    assert!(notes.iter().any(|l| l.feature == "blocks: base"), "{notes:?}");
+    assert!(!paths.iter().any(|p| p.starts_with("block|base")), "{paths:?}");
+    assert!(notes.iter().any(|l| l.feature == "layers: description"), "{notes:?}");
+}
+
+/// What the notes now report (savefuzz): a thickness of 1e-10 a format drops (rays have none in
+/// DXF; the notes compared numbers to an absolute 1e-9), and a block's insert units and
+/// explodability in a DWG older than 2007 (the notes didn't compare block definitions' own
+/// properties, and took a false that came back true as unchanged).
+#[test]
+fn notes_report_tiny_numbers_and_block_properties() {
+    let mut d = Drawing::new_metric();
+    let ray = d
+        .add(
+            &Space::Model,
+            Common { thickness: 1e-10, ..Common::default() },
+            EntityKind::Ray(cadaddy_engine::doc::RayLine { base: Vec3::ZERO, dir: Vec3::new(1.0, 0.0, 0.0) }),
+        )
+        .expect("a ray");
+    let mut b = Block::new("Unit block");
+    b.units = 4;
+    b.explodable = false;
+    d.blocks.insert(b.name.clone(), Arc::new(b));
+    let opts = |v| SaveOptions { version: Some(v), binary: false };
+    let back = cadaddy_io::read(&cadaddy_io::write_with(&d, "x.dxf", &opts(Version::R2018)).expect("DXF"), "x.dxf").expect("read");
+    let notes = losses_between(&d, &back);
+    assert!(notes.iter().any(|l| l.feature == "object thickness" && l.handles.contains(&ray.hex())), "{notes:?}");
+    for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+        let old = cadaddy_io::read_dwg(&cadaddy_io::write_dwg(&d, Version::R2000, engine).expect("DWG"), engine).expect("read");
+        let notes = losses_between(&d, &old);
+        for f in ["blocks: units", "blocks: explodable"] {
+            assert!(notes.iter().any(|l| l.feature == f && l.names == ["Unit block"]), "{engine:?} {f}: {notes:?}");
+        }
+        let new = cadaddy_io::read_dwg(&cadaddy_io::write_dwg(&d, Version::R2018, engine).expect("DWG"), engine).expect("read");
+        let notes = losses_between(&d, &new);
+        assert!(!notes.iter().any(|l| l.feature.starts_with("blocks")), "{engine:?} 2018 keeps them: {notes:?}");
+    }
 }

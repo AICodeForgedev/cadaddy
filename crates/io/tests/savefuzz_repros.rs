@@ -80,3 +80,37 @@ fn defpoints_does_not_plot_after_release_12() {
     assert!(!def.plot);
     assert!(back.layers.iter().find(|l| l.name == "0").unwrap().plot);
 }
+
+/// A dense hatch's pattern in SVG: its lines as a few paths, not an element per dash (a DOTS
+/// hatch was a million `<circle>`s, 92 MB, more elements than an SVG reader takes).
+#[test]
+fn svg_writes_a_dense_hatch_as_few_paths() {
+    use cadaddy_geom::{LoopEdge, Vec2};
+    for pattern in ["ANSI31", "DOTS"] {
+        let mut d = Drawing::new_metric();
+        let (a, b, c, e) = (Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 100.0), Vec2::new(0.0, 100.0));
+        let edges = vec![LoopEdge::Line { a, b }, LoopEdge::Line { a: b, b: c }, LoopEdge::Line { a: c, b: e }, LoopEdge::Line { a: e, b: a }];
+        let hatch = Hatch {
+            pattern: pattern.into(),
+            solid: false,
+            loops: vec![HatchLoop::from_curves(edges, true, Vec::new())],
+            scale: if pattern == "DOTS" { 0.5 } else { 0.01 },
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        let svg = String::from_utf8(cadaddy_io::write(&d, "x.svg").unwrap()).unwrap();
+        let elements = svg.matches("<path").count() + svg.matches("<polyline").count() + svg.matches("<circle").count();
+        let segments = svg.matches('M').count();
+        assert!(segments > 2_000, "{pattern}: a dense pattern ({segments} subpaths)");
+        assert!(elements < 10, "{pattern}: {elements} elements");
+        let back = cadaddy_io::read(svg.as_bytes(), "x.svg").unwrap();
+        assert!(back.model.len() > 1_000, "{pattern}: read back ({} objects)", back.model.len());
+    }
+}
