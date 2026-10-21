@@ -73,9 +73,13 @@ commands:
                   install, upgrade and uninstall checks of release files: MSI tables (msitools in
                   Docker), the DMG (Mac), the .deb and AppImage (Docker); --old for the upgrade
   soak [--minutes N] [--mode headless|window|both] [--app PATH] [--cli PATH] [--out DIR] [--profile release|dev]
+       [--leak [--passes N]]
                   long-session soak: a mixed workload for N minutes (default 2, headless); memory,
                   handles, GPU buffers and frame times sampled; fails on a leak or a stall;
-                  report in target/soak/report.md
+                  report in target/soak/report.md. --leak: fixed counts instead (200 drawings
+                  opened and closed, 10,000 commands, 50 sheets published; in the window Walk
+                  toggled 100 times and every language and theme), memory after each phase, which
+                  must end within a margin of the warm-up's; --passes repeats the phases
   supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
                   (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
   advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)

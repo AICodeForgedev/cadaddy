@@ -85,22 +85,55 @@ pub fn is_dark_stencil(r: &Raster) -> bool {
     clear
 }
 
-/// `r` with every pixel's colour replaced by white (its alpha kept), made once per image.
+type White = HashMap<usize, (std::sync::Weak<Raster>, Arc<Raster>)>;
+
+fn white() -> &'static Mutex<White> {
+    static WHITE: OnceLock<Mutex<White>> = OnceLock::new();
+    WHITE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `r` with every pixel's colour replaced by white (its alpha kept), made once per image. Only
+/// the source's weak reference is held, so an image dropped from the cache (its drawing closed)
+/// frees its white copy too; the copies kept every image ever drawn on a dark background alive.
 pub fn white_version(r: &Arc<Raster>) -> Arc<Raster> {
-    static WHITE: OnceLock<Mutex<HashMap<usize, (Arc<Raster>, Arc<Raster>)>>> = OnceLock::new();
     let key = Arc::as_ptr(r) as usize;
-    let map = WHITE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(m) = map.lock()
-        && let Some((_, w)) = m.get(&key)
+    if let Ok(m) = white().lock()
+        && let Some((src, w)) = m.get(&key)
+        && src.upgrade().is_some_and(|s| Arc::ptr_eq(&s, r))
     {
         return Arc::clone(w);
     }
     let rgba = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [255, 255, 255, p[3]]).collect();
     let w = Arc::new(Raster { width: r.width, height: r.height, rgba });
-    if let Ok(mut m) = map.lock() {
-        m.insert(key, (Arc::clone(r), Arc::clone(&w)));
+    if let Ok(mut m) = white().lock() {
+        m.retain(|_, (src, _)| src.strong_count() > 0);
+        m.insert(key, (Arc::downgrade(r), Arc::clone(&w)));
     }
     w
+}
+
+/// Drop the white and adjusted copies of images no longer alive (dropped from the cache and
+/// drawn no more), as the cache lets images go.
+fn prune_copies() {
+    if let Ok(mut m) = white().lock() {
+        m.retain(|_, (src, _)| src.strong_count() > 0);
+    }
+    if let Ok(mut m) = adjusted_map().lock() {
+        m.retain(|_, (src, _)| src.strong_count() > 0);
+    }
+}
+
+/// White and adjusted copies held: for the memory tests.
+#[doc(hidden)]
+pub fn copies_held() -> usize {
+    white().lock().map(|m| m.len()).unwrap_or(0) + adjusted_map().lock().map(|m| m.len()).unwrap_or(0)
+}
+
+type Adjusted = HashMap<(usize, u8, u8), (std::sync::Weak<Raster>, Arc<Raster>)>;
+
+fn adjusted_map() -> &'static Mutex<Adjusted> {
+    static ADJUSTED: OnceLock<Mutex<Adjusted>> = OnceLock::new();
+    ADJUSTED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// `r` with an IMAGE's brightness and contrast (0..=100, 50 leaves it as it is) applied, made once
@@ -108,14 +141,12 @@ pub fn white_version(r: &Arc<Raster>) -> Arc<Raster> {
 /// steep), then brightness shifts it (0 black, 100 white); alpha is kept. Only the source's weak
 /// reference is held, so an image dropped from the cache frees its adjusted copies too.
 pub fn adjusted(r: &Arc<Raster>, brightness: u8, contrast: u8) -> Arc<Raster> {
-    type Adjusted = HashMap<(usize, u8, u8), (std::sync::Weak<Raster>, Arc<Raster>)>;
-    static ADJUSTED: OnceLock<Mutex<Adjusted>> = OnceLock::new();
     let (b, c) = (brightness.min(100), contrast.min(100));
     if (b, c) == (50, 50) {
         return Arc::clone(r);
     }
     let key = (Arc::as_ptr(r) as usize, b, c);
-    let map = ADJUSTED.get_or_init(|| Mutex::new(HashMap::new()));
+    let map = adjusted_map();
     if let Ok(m) = map.lock()
         && let Some((src, a)) = m.get(&key)
         && src.upgrade().is_some_and(|s| Arc::ptr_eq(&s, r))
@@ -219,11 +250,14 @@ pub fn insert(path: &str, raster: impl Into<Arc<Raster>>) {
 
 /// Drop what is cached for `path` (pixels or "missing"), so the next use reads the file again.
 pub fn forget(path: &str) {
-    let Ok(mut c) = cache().lock() else { return };
-    if let Some(Some(old)) = c.map.remove(path) {
-        c.bytes = c.bytes.saturating_sub(old.rgba.len());
+    {
+        let Ok(mut c) = cache().lock() else { return };
+        if let Some(Some(old)) = c.map.remove(path) {
+            c.bytes = c.bytes.saturating_sub(old.rgba.len());
+        }
+        c.generation += 1;
     }
-    c.generation += 1;
+    prune_copies();
 }
 
 /// Take relative image paths from `dir`, the current drawing's folder (as it is opened, saved or
@@ -232,41 +266,47 @@ pub fn forget(path: &str) {
 /// again, looks every relative path and every missing image up again (an images folder copied in
 /// after the drawing was opened is found).
 pub fn add_search_dir(dir: &Path) {
-    let Ok(mut c) = cache().lock() else { return };
-    c.dir = Some(dir.to_path_buf());
-    let mut freed = 0usize;
-    c.map.retain(|k, v| {
-        // Relative paths are looked up again in the new folder; full paths and registered pixels
-        // (`mem://…` and other URL-like keys, no file behind them) stay. Registered pixels were
-        // dropped here, a drawing's in-memory images going with a change of folder.
-        let keep = v.is_some() && (Path::new(k).is_absolute() || k.contains("://"));
-        if !keep {
-            freed += v.as_ref().map_or(0, |r| r.rgba.len());
-        }
-        keep
-    });
-    c.bytes = c.bytes.saturating_sub(freed);
-    c.generation += 1;
+    {
+        let Ok(mut c) = cache().lock() else { return };
+        c.dir = Some(dir.to_path_buf());
+        let mut freed = 0usize;
+        c.map.retain(|k, v| {
+            // Relative paths are looked up again in the new folder; full paths and registered pixels
+            // (`mem://…` and other URL-like keys, no file behind them) stay. Registered pixels were
+            // dropped here, a drawing's in-memory images going with a change of folder.
+            let keep = v.is_some() && (Path::new(k).is_absolute() || k.contains("://"));
+            if !keep {
+                freed += v.as_ref().map_or(0, |r| r.rgba.len());
+            }
+            keep
+        });
+        c.bytes = c.bytes.saturating_sub(freed);
+        c.generation += 1;
+    }
+    prune_copies();
 }
 
 /// Drop the cached pixels of images no open drawing names (`used`: the paths their IMAGEs
 /// give), as drawings close. A closed drawing's images stayed decoded until the program exited:
 /// hundreds of megabytes after a sheet full of them.
 pub fn keep_only(used: &std::collections::HashSet<&str>) {
-    let Ok(mut c) = cache().lock() else { return };
-    let mut freed = 0usize;
-    let before = c.map.len();
-    c.map.retain(|k, v| {
-        let keep = used.contains(k.as_str());
-        if !keep {
-            freed += v.as_ref().map_or(0, |r| r.rgba.len());
+    {
+        let Ok(mut c) = cache().lock() else { return };
+        let mut freed = 0usize;
+        let before = c.map.len();
+        c.map.retain(|k, v| {
+            let keep = used.contains(k.as_str());
+            if !keep {
+                freed += v.as_ref().map_or(0, |r| r.rgba.len());
+            }
+            keep
+        });
+        if c.map.len() != before {
+            c.bytes = c.bytes.saturating_sub(freed);
+            c.generation += 1;
         }
-        keep
-    });
-    if c.map.len() != before {
-        c.bytes = c.bytes.saturating_sub(freed);
-        c.generation += 1;
     }
+    prune_copies();
 }
 
 /// Look image files up again where they may have changed on disk: cached pixels whose file path
@@ -274,24 +314,27 @@ pub fn keep_only(used: &std::collections::HashSet<&str>) {
 /// are forgotten, so the next draw reads the files afresh. Registered pixels (no file behind
 /// them) are kept. REGEN and opening a drawing call this.
 pub fn revalidate() {
-    let Ok(mut c) = cache().lock() else { return };
-    let mut freed = 0usize;
-    let before = c.map.len();
-    c.map.retain(|k, v| match v {
-        None => false,
-        // An absolute path whose file is gone (moved, renamed, deleted). Relative paths follow the
-        // drawing's folder (`add_search_dir`), and keys with no file behind them hold registered
-        // pixels; both are left alone.
-        Some(r) if Path::new(k).is_absolute() && !Path::new(k).is_file() => {
-            freed += r.rgba.len();
-            false
+    {
+        let Ok(mut c) = cache().lock() else { return };
+        let mut freed = 0usize;
+        let before = c.map.len();
+        c.map.retain(|k, v| match v {
+            None => false,
+            // An absolute path whose file is gone (moved, renamed, deleted). Relative paths follow the
+            // drawing's folder (`add_search_dir`), and keys with no file behind them hold registered
+            // pixels; both are left alone.
+            Some(r) if Path::new(k).is_absolute() && !Path::new(k).is_file() => {
+                freed += r.rgba.len();
+                false
+            }
+            Some(_) => true,
+        });
+        if c.map.len() != before {
+            c.bytes = c.bytes.saturating_sub(freed);
+            c.generation += 1;
         }
-        Some(_) => true,
-    });
-    if c.map.len() != before {
-        c.bytes = c.bytes.saturating_sub(freed);
-        c.generation += 1;
     }
+    prune_copies();
 }
 
 /// Changes whenever cached pixels change (loaded, registered or dropped).
@@ -365,6 +408,25 @@ mod tests {
             assert_eq!(resolve(no, Some(&dir)), None, "{no}");
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn white_and_adjusted_copies_go_with_their_image() {
+        let _g = folder_lock();
+        let r = Arc::new(Raster::new(64, 64, vec![10; 64 * 64 * 4]).unwrap());
+        let w = white_version(&r);
+        assert_eq!(w.pixel(0, 0), Some([255, 255, 255, 10]));
+        assert!(Arc::ptr_eq(&w, &white_version(&r)), "made once per image");
+        let a = adjusted(&r, 70, 50);
+        assert!(Arc::ptr_eq(&a, &adjusted(&r, 70, 50)));
+        let held = copies_held();
+        assert!(held >= 2);
+        let weak = Arc::downgrade(&w);
+        drop((r, w, a));
+        // The cache letting images go (a drawing closed) frees their copies.
+        forget("\u{1}no such image");
+        assert!(weak.upgrade().is_none(), "the white copy outlived its image");
+        assert!(copies_held() <= held - 2);
     }
 
     /// The image folder is process-wide: tests that set it take turns.

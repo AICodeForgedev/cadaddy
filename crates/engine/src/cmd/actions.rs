@@ -72,9 +72,9 @@ impl Macro {
 /// A recording in progress.
 #[derive(Clone, Debug, Default)]
 pub struct Recording {
-    /// Where in the journal it began.
+    /// Where in the journal it began ([`crate::journal::Journal::position`]).
     start: usize,
-    /// Journal lengths at each ACTUSERINPUT: the first input after each is asked for (with the
+    /// Journal positions at each ACTUSERINPUT: the first input after each is asked for (with the
     /// prompt then showing).
     asks: Vec<(usize, String)>,
     /// Steps inserted before journal line `at` (messages, base points).
@@ -144,7 +144,7 @@ fn run_record(s: &mut Session, _p: &Value) -> Result<Value> {
     if s.actions.recording.is_some() {
         return Err(EngineError::Other("ACTRECORD: already recording; ACTSTOP ends it".into()));
     }
-    let start = s.journal.lines().len();
+    let start = s.journal.position();
     s.actions.recording = Some(Recording { start, ..Recording::default() });
     s.echo("Recording an action macro. ACTSTOP saves it; ACTUSERINPUT asks for the next input when it plays.");
     Ok(json!({ "recording": true }))
@@ -152,11 +152,13 @@ fn run_record(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// The recorded lines and marks as macro steps.
 fn steps_of(s: &Session, rec: &Recording) -> Vec<MacroStep> {
-    let lines = s.journal.lines();
-    let start = rec.start.min(lines.len());
+    // Positions, not indexes: the journal lets its oldest lines go.
+    let first = s.journal.first_position().max(rec.start);
+    let lines = s.journal.lines_from(first);
+    let end = s.journal.position();
     let mut steps = Vec::new();
     let mut asks = rec.asks.clone();
-    for (i, line) in lines.iter().enumerate().skip(start) {
+    for (i, line) in (first..).zip(lines) {
         for (_, st) in rec.inserted.iter().filter(|(at, _)| *at == i) {
             steps.push(st.clone());
         }
@@ -178,7 +180,7 @@ fn steps_of(s: &Session, rec: &Recording) -> Vec<MacroStep> {
         }
     }
     for (at, st) in &rec.inserted {
-        if *at >= lines.len() {
+        if *at >= end {
             steps.push(st.clone());
         }
     }
@@ -231,7 +233,7 @@ fn recording<'a>(s: &'a mut Session, cmd: &str) -> Result<&'a mut Recording> {
 
 fn run_user_input(s: &mut Session, _p: &Value) -> Result<Value> {
     let prompt = if s.running.is_some() { s.prompt_text() } else { String::new() };
-    let at = s.journal.lines().len();
+    let at = s.journal.position();
     recording(s, "ACTUSERINPUT")?.asks.push((at, prompt));
     s.echo("The next input will be asked for when the macro plays.");
     Ok(json!({ "ask": true }))
@@ -239,7 +241,7 @@ fn run_user_input(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_user_message(s: &mut Session, p: &Value) -> Result<Value> {
     let text = str_param(p, "text").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("actusermessage", "`text` is required"))?;
-    let at = s.journal.lines().len();
+    let at = s.journal.position();
     let text: String = text.chars().take(2000).collect();
     recording(s, "ACTUSERMESSAGE")?
         .inserted
@@ -254,7 +256,7 @@ fn run_base_point(s: &mut Session, p: &Value) -> Result<Value> {
         (c.len() >= 2 && c.iter().all(|x| x.is_finite())).then(|| [c[0], c[1], c.get(2).copied().unwrap_or(0.0)])
     });
     let pt = pt.ok_or_else(|| bad("actbasepoint", "`point` [x, y(, z)] is required"))?;
-    let at = s.journal.lines().len();
+    let at = s.journal.position();
     recording(s, "ACTBASEPOINT")?
         .inserted
         .push((at, MacroStep { input: None, ask: true, prompt: "Specify base point".into(), message: None, basepoint: Some(pt) }));
