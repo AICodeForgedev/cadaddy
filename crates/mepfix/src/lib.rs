@@ -21,6 +21,7 @@ pub mod design;
 pub mod draw;
 pub mod duct_reader;
 pub mod elec_reader;
+pub mod finishes;
 
 pub mod heights;
 pub mod hotel;
