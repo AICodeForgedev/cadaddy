@@ -243,7 +243,12 @@ fn layer(o: &mut Obj, names: &Names, g: &mut G) -> Result<()> {
         flags |= 4;
     }
     let off = values & 2 != 0;
-    let color = i64::from(index.unsigned_abs() as i16).max(0);
+    let mut color = i64::from(index.unsigned_abs() as i16).max(0);
+    // A true colour's index is 0, which can't carry the sign that says the layer is off (group
+    // 62 negative): 7 stands in, and group 420 gives the colour.
+    if color == 0 && rgb.is_some() {
+        color = 7;
+    }
     g.s(100, "AcDbSymbolTableRecord");
     g.s(100, "AcDbLayerTableRecord");
     g.s(2, name);

@@ -46,27 +46,39 @@ fn named(var: &str) -> Option<i32> {
     })
 }
 
+/// The file's code page by its DXF name (a DWG gives it by number).
+fn code_page(dwg: &Dwg) -> Option<&'static str> {
+    Some(match dwg.code_page() {
+        28 => "ANSI_1250",
+        29 => "ANSI_1251",
+        30 => "ANSI_1252",
+        31 => "ANSI_1253",
+        32 => "ANSI_1254",
+        33 => "ANSI_1255",
+        34 => "ANSI_1256",
+        35 => "ANSI_1257",
+        36 => "ANSI_874",
+        37 => "ANSI_932",
+        38 => "ANSI_936",
+        39 => "ANSI_949",
+        40 => "ANSI_950",
+        _ => return None,
+    })
+}
+
+/// A string of a DWG older than 2007, as the codec read it (its code-page bytes as Latin-1),
+/// decoded with the file's code page and its `\U+XXXX` / `\M+nXXXX` escapes resolved. `None`
+/// when there is nothing to decode (ASCII without escapes).
+fn decode_pre2007(v: &str, page: Option<&str>) -> Option<String> {
+    let bytes: Vec<u8> = v.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect::<Option<_>>()?;
+    let escaped = v.contains("\\U+") || v.contains("\\u+") || v.contains("\\M+") || v.contains("\\m+");
+    (!bytes.is_ascii() || escaped).then(|| cadaddy_dxf::decode_text(&bytes, page))
+}
+
 /// The header variables as DXF's HEADER groups.
 fn header(dwg: &Dwg, hv: &HeaderVars, name_of: &HashMap<u64, String>) -> Vec<Tag> {
     let mut out = vec![s(9, "$ACADVER"), s(1, dwg.version.id())];
-    // The code page by its DXF name (the ones a DWG gives by number).
-    let page = match dwg.code_page() {
-        28 => Some("ANSI_1250"),
-        29 => Some("ANSI_1251"),
-        30 => Some("ANSI_1252"),
-        31 => Some("ANSI_1253"),
-        32 => Some("ANSI_1254"),
-        33 => Some("ANSI_1255"),
-        34 => Some("ANSI_1256"),
-        35 => Some("ANSI_1257"),
-        36 => Some("ANSI_874"),
-        37 => Some("ANSI_932"),
-        38 => Some("ANSI_936"),
-        39 => Some("ANSI_949"),
-        40 => Some("ANSI_950"),
-        _ => None,
-    };
-    if let Some(p) = page {
+    if let Some(p) = code_page(dwg) {
         out.extend([s(9, "$DWGCODEPAGE"), s(3, p)]);
     }
     let var = |out: &mut Vec<Tag>, name: &str| out.push(s(9, format!("${name}")));
@@ -357,6 +369,16 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     end(&mut tags);
     tags.push(s(0, "EOF"));
 
+    if dwg.version < cadaddy_dwgcodec::Version::R2007 {
+        let page = code_page(&dwg);
+        for t in &mut tags {
+            if let cadaddy_dxf::Value::Str(v) = &mut t.value
+                && let Some(text) = decode_pre2007(v, page)
+            {
+                *v = text;
+            }
+        }
+    }
     let tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
     let mut d = crate::dxf_read::read_tags(tags)?;
     if !failed.is_empty() {

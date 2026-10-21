@@ -2434,3 +2434,75 @@ menu	Modify	Edita
 	Dictionaries are read from:	I dizionari vengono letti da:
 	Published to {path}	Pubblicato in {path}
 	Sheet Set (.sheetset.json)	Gruppo di fogli (.sheetset.json)
+	Resolution	Risoluzione
+	Colour depth	Profondità colore
+	Colour (24-bit)	Colore (24 bit)
+	Greys (8-bit)	Scala di grigi (8 bit)
+	Black and white (1-bit)	Bianco e nero (1 bit)
+	PNG Out	Uscita PNG
+	JPEG Out	Uscita JPEG
+	BMP Out	Uscita BMP
+	TIFF Out	Uscita TIFF
+	Enter image file name	Immettere il nome del file immagine
+	Nothing selected: no image written.	Nessuna selezione: nessuna immagine scritta.
+	{} object(s) written to {} ({} × {} pixels).	{} oggetto/i scritto/i in {} ({} × {} pixel).
+	Set to ByLayer	Imposta su DaLayer
+	Explode and Set Properties	Esplodi e imposta proprietà
+	Edit Attribute in Place	Modifica attributo sul posto
+	Frame	Cornice
+	Setup	Imposta
+	Setup View	Imposta vista
+	Setup Drawing	Imposta disegno
+	Setup Profile	Imposta profilo
+	Enter view scale	Immettere la scala della vista
+	Specify view center	Specificare il centro della vista
+	Enter view name	Immettere il nome della vista
+	Specify side of viewport to project	Specificare il lato della finestra da proiettare
+	Specify first point of cutting plane	Specificare il primo punto del piano di taglio
+	Specify second point of cutting plane	Specificare il secondo punto del piano di taglio
+	Specify first point of inclined plane	Specificare il primo punto del piano inclinato
+	Specify second point of inclined plane	Specificare il secondo punto del piano inclinato
+	Specify side to view from	Specificare il lato da cui guardare
+	Specify first corner of viewport	Specificare il primo angolo della finestra
+	Specify opposite corner of viewport	Specificare l'angolo opposto della finestra
+	Display hidden profile lines on separate layer?	Visualizzare le linee di profilo nascoste su un layer separato?
+	Project profile lines onto a plane?	Proiettare le linee di profilo su un piano?
+	Delete tangential edges?	Eliminare gli spigoli tangenti?
+	None (PDF file)	Nessuno (file PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Il testo di quota alto {} è troppo piccolo per essere letto in questo disegno. Digitare DIMSCALE {} per rendere le nuove quote {} volte più grandi.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Il testo alto {} è troppo piccolo per essere letto in questo disegno. Provare un'altezza di {} (TEXTSIZE imposta il valore predefinito).
+	(each layout's own)	(quella di ciascun layout)
+	A callout on the selected sheet pointing at the selected view	Un richiamo sul foglio selezionato che punta alla vista selezionata
+	A page setup copied from the selected sheet's layout	Un'impostazione pagina copiata dal layout del foglio selezionato
+	Add Callout	Aggiungi richiamo
+	Callouts: {}	Richiami: {}
+	From Selected Sheet	Dal foglio selezionato
+	Insert on Selected Sheet	Inserisci nel foglio selezionato
+	Named view	Vista con nome
+	Page Setup Override	Sostituzione impostazione pagina
+	Place View	Posiziona vista
+	Position on sheet	Posizione sul foglio
+	Remove Property	Rimuovi proprietà
+	Sheet Properties	Proprietà del foglio
+	Sheet Set Fields	Campi del gruppo di fogli
+	Sheet Set Properties	Proprietà del gruppo di fogli
+	Sync Drawings	Sincronizza disegni
+	Text holding the field, at the position on sheet	Testo contenente il campo, nella posizione sul foglio
+	Views and Callouts	Viste e richiami
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Il layout di ogni foglio diventa "numero titolo"; i campi del gruppo, le etichette delle viste e i richiami assumono i valori attuali del gruppo
+	3 Point	3 punti
+	Origin	Origine
+	Z	Z
+	Named UCS...	UCS con nome...
+	Center Mark (DIMCEN)	Segno di centro (DIMCEN)
+	Copy Objects to New Layer	Copia oggetti su nuovo layer
+	Cut with Base Point	Taglia con punto base
+	DXF In	Apri DXF
+	DXF Out	Salva come DXF
+	Fill	Riempimento
+	Maximize Viewport	Ingrandisci finestra
+	Minimize Viewport	Riduci finestra
+	Object Selection Filters	Filtri di selezione oggetti
+	Oops	Ripristina cancellati
+	Quick Text	Testo rapido
+	Redefine Attributes	Ridefinisci attributi

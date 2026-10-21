@@ -2435,3 +2435,75 @@ menu	Modify	수정
 	Dictionaries are read from:	사전을 읽는 위치:
 	Published to {path}	{path}(으)로 게시됨
 	Sheet Set (.sheetset.json)	시트 세트(.sheetset.json)
+	Resolution	해상도
+	Colour depth	색상 깊이
+	Colour (24-bit)	컬러 (24비트)
+	Greys (8-bit)	회색조 (8비트)
+	Black and white (1-bit)	흑백 (1비트)
+	PNG Out	PNG 내보내기
+	JPEG Out	JPEG 내보내기
+	BMP Out	BMP 내보내기
+	TIFF Out	TIFF 내보내기
+	Enter image file name	이미지 파일 이름 입력
+	Nothing selected: no image written.	선택한 항목이 없음: 이미지를 쓰지 않았습니다.
+	{} object(s) written to {} ({} × {} pixels).	개체 {}개를 {}에 썼습니다({} × {} 픽셀).
+	Set to ByLayer	도면층별로 설정
+	Explode and Set Properties	분해 및 특성 설정
+	Edit Attribute in Place	속성 내부 편집
+	Frame	프레임
+	Setup	설정
+	Setup View	뷰 설정
+	Setup Drawing	도면 설정
+	Setup Profile	프로파일 설정
+	Enter view scale	뷰 축척 입력
+	Specify view center	뷰 중심 지정
+	Enter view name	뷰 이름 입력
+	Specify side of viewport to project	투영할 뷰포트의 변 지정
+	Specify first point of cutting plane	절단 평면의 첫 번째 점 지정
+	Specify second point of cutting plane	절단 평면의 두 번째 점 지정
+	Specify first point of inclined plane	경사 평면의 첫 번째 점 지정
+	Specify second point of inclined plane	경사 평면의 두 번째 점 지정
+	Specify side to view from	바라볼 방향 지정
+	Specify first corner of viewport	뷰포트의 첫 번째 구석 지정
+	Specify opposite corner of viewport	뷰포트의 반대 구석 지정
+	Display hidden profile lines on separate layer?	숨은 프로파일 선을 별도 도면층에 표시하시겠습니까?
+	Project profile lines onto a plane?	프로파일 선을 평면에 투영하시겠습니까?
+	Delete tangential edges?	접하는 모서리를 삭제하시겠습니까?
+	None (PDF file)	없음(PDF 파일)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	높이 {}의 치수 문자는 이 도면에서 너무 작아 읽을 수 없습니다. DIMSCALE {}을(를) 입력하면 새 치수가 {}배 커집니다.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	높이 {}의 문자는 이 도면에서 너무 작아 읽을 수 없습니다. 높이 {}을(를) 사용해 보십시오(기본값은 TEXTSIZE로 설정).
+	(each layout's own)	(각 배치 자체 설정)
+	A callout on the selected sheet pointing at the selected view	선택한 시트에서 선택한 뷰를 가리키는 콜아웃
+	A page setup copied from the selected sheet's layout	선택한 시트의 배치에서 복사한 페이지 설정
+	Add Callout	콜아웃 추가
+	Callouts: {}	콜아웃: {}
+	From Selected Sheet	선택한 시트에서
+	Insert on Selected Sheet	선택한 시트에 삽입
+	Named view	명명된 뷰
+	Page Setup Override	페이지 설정 재지정
+	Place View	뷰 배치
+	Position on sheet	시트상의 위치
+	Remove Property	속성 제거
+	Sheet Properties	시트 속성
+	Sheet Set Fields	시트 세트 필드
+	Sheet Set Properties	시트 세트 속성
+	Sync Drawings	도면 동기화
+	Text holding the field, at the position on sheet	필드를 담은 문자 (시트상의 위치에 배치)
+	Views and Callouts	뷰 및 콜아웃
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	각 시트의 배치 이름이 "번호 제목"이 되고, 시트 세트 필드, 뷰 레이블, 콜아웃이 세트의 현재 값을 갖습니다
+	3 Point	3점
+	Origin	원점
+	Z	Z
+	Named UCS...	명명된 UCS...
+	Center Mark (DIMCEN)	중심 표식 (DIMCEN)
+	Copy Objects to New Layer	새 도면층에 객체 복사
+	Cut with Base Point	기준점을 지정하여 잘라내기
+	DXF In	DXF 열기
+	DXF Out	DXF로 저장
+	Fill	채우기
+	Maximize Viewport	뷰포트 최대화
+	Minimize Viewport	뷰포트 최소화
+	Object Selection Filters	객체 선택 필터
+	Oops	지운 객체 복원
+	Quick Text	빠른 문자
+	Redefine Attributes	속성 재정의

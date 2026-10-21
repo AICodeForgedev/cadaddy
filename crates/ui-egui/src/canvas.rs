@@ -1364,6 +1364,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let painter = ui.painter_at(rect);
     app.canvas.rect = Some(rect);
     app.session.viewport_px = (f64::from(rect.width()).max(1.0), f64::from(rect.height()).max(1.0));
+    // The floating command line covers the bottom of the whole drawing area (one tile of many
+    // is left alone: it may not reach down there).
+    let covered = if tiles.len() > 1 { 0.0 } else { crate::cmdline::covered_bottom(app, full) };
+    app.session.viewport_inset_px = (0.0, f64::from(covered));
     if app.canvas.zoom_pending {
         app.canvas.zoom_pending = false;
         let _ = app.session.zoom_extents();
@@ -2119,6 +2123,20 @@ fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
         && app.session.doc().ok().and_then(|d| d.entity(h)).is_some_and(|e| matches!(e.kind, EntityKind::Tolerance(_)))
     {
         return crate::toldlg::open_edit(app, h);
+    }
+    // An attribute of a block reference: its value is edited in place (ATTIPEDIT).
+    let on_attribute = cadaddy_engine::cmd::curves::pick_at(&app.session, p).is_some_and(|h| {
+        app.session.doc().ok().and_then(|d| d.entity(h).map(|e| (d, e))).is_some_and(|(d, e)| match &e.kind {
+            EntityKind::Insert(i) => cadaddy_engine::select::attrib_at(d, i, p).is_some(),
+            _ => false,
+        })
+    });
+    if on_attribute {
+        app.start("attipedit");
+        if let Err(e) = app.session.input(Input::Point(p)) {
+            app.session.echo(e.to_string());
+        }
+        return true;
     }
     let is_text = cadaddy_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
@@ -3122,6 +3140,37 @@ mod hatch_pick_tests {
         assert_eq!(app.hatch_dlg.as_ref().map(|s| s.edit.iter().map(|h| h.hex()).collect::<Vec<_>>()), Some(vec![hx]));
         // The double-click (at the hatch's centre grip) only opens the dialog: no grip edit.
         assert!(app.session.running.is_none(), "{:?}", app.session.running.as_ref().map(|r| r.machine.name()));
+    }
+
+    #[test]
+    fn double_clicking_an_attribute_edits_it_in_place() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.session.execute("attdef", &json!({ "tag": "ROOM", "default": "101", "at": [0, 0], "height": 2 })).unwrap();
+        app.session.execute("line", &json!({ "points": [[-20, -20], [20, -20]] })).unwrap();
+        let hs: Vec<String> = app.session.doc().unwrap().model.iter().map(|e| e.handle.hex()).collect();
+        app.session.execute("block", &json!({ "name": "TAG", "base": [0, 0], "handles": hs, "keep": "delete" })).unwrap();
+        app.session.execute("insert", &json!({ "name": "TAG", "at": [0, 0] })).unwrap();
+        app.session.set_selection(Vec::new());
+        let _ = app.session.zoom_extents();
+        let ctx = egui::Context::default();
+        let screen = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0)));
+        let frame = |app: &mut CadApp, events: Vec<egui::Event>, time: f64| {
+            app.logic(&ctx);
+            let input = egui::RawInput { screen_rect: screen, events, time: Some(time), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.ui(ui));
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new(), 0.0);
+        let at = app.canvas.xf.unwrap().to_screen(Vec2::new(1.0, 1.0));
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() };
+        frame(&mut app, vec![egui::Event::PointerMoved(at)], 0.1);
+        frame(&mut app, vec![button(true), button(false)], 0.2);
+        frame(&mut app, vec![button(true), button(false)], 0.3);
+        frame(&mut app, Vec::new(), 0.4);
+        assert_eq!(app.session.running.as_ref().map(|r| r.machine.name()), Some("ATTIPEDIT"));
+        let p = app.session.current_prompt().unwrap();
+        assert_eq!((p.message.as_str(), p.default.as_deref()), ("Enter attribute value", Some("101")));
     }
 }
 

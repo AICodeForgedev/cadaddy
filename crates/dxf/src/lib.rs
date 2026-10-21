@@ -169,6 +169,16 @@ pub const MAX_TAGS: usize = 50_000_000;
 mod codepage;
 pub use codepage::decode_code_page;
 
+/// A string as a file older than 2007 stores it (DWG or DXF): `bytes` in the code page
+/// `code_page` names (Windows-1252 when it is `None` or unknown), with its `\U+XXXX` and
+/// `\M+nXXXX` escapes for characters outside that code page resolved.
+pub fn decode_text(bytes: &[u8], code_page: Option<&str>) -> String {
+    let text = code_page
+        .and_then(|p| decode_code_page(bytes, p))
+        .unwrap_or_else(|| encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes).0.into_owned());
+    unescape_unicode(&text)
+}
+
 /// Parse a DXF file (ASCII or binary).
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, MAX_TAGS)

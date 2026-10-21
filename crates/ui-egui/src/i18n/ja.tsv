@@ -2112,3 +2112,75 @@
 	Specify insertion point or	挿入点を指定 または
 	Specify table scale	表の尺度を指定
 	{} dimension(s) updated to the current settings.	{} 個の寸法を現在の設定に更新しました。
+	Resolution	解像度
+	Colour depth	色深度
+	Colour (24-bit)	カラー (24 ビット)
+	Greys (8-bit)	グレースケール (8 ビット)
+	Black and white (1-bit)	白黒 (1 ビット)
+	PNG Out	PNG 書き出し
+	JPEG Out	JPEG 書き出し
+	BMP Out	BMP 書き出し
+	TIFF Out	TIFF 書き出し
+	Enter image file name	画像ファイル名を入力
+	Nothing selected: no image written.	何も選択されていません: 画像は書き出されませんでした。
+	{} object(s) written to {} ({} × {} pixels).	{} 個のオブジェクトを {} に書き出しました ({} × {} ピクセル)。
+	Set to ByLayer	ByLayer に設定
+	Explode and Set Properties	分解してプロパティを設定
+	Edit Attribute in Place	属性をその場で編集
+	Frame	フレーム
+	Setup	設定
+	Setup View	ビューを設定
+	Setup Drawing	図面を設定
+	Setup Profile	プロファイルを設定
+	Enter view scale	ビューの尺度を入力
+	Specify view center	ビューの中心を指定
+	Enter view name	ビュー名を入力
+	Specify side of viewport to project	投影するビューポートの辺を指定
+	Specify first point of cutting plane	切断面の 1 点目を指定
+	Specify second point of cutting plane	切断面の 2 点目を指定
+	Specify first point of inclined plane	傾斜面の 1 点目を指定
+	Specify second point of inclined plane	傾斜面の 2 点目を指定
+	Specify side to view from	見る側を指定
+	Specify first corner of viewport	ビューポートの一方のコーナーを指定
+	Specify opposite corner of viewport	ビューポートの対角コーナーを指定
+	Display hidden profile lines on separate layer?	隠れたプロファイル線を別の画層に表示しますか?
+	Project profile lines onto a plane?	プロファイル線を平面に投影しますか?
+	Delete tangential edges?	接線エッジを削除しますか?
+	None (PDF file)	なし (PDF ファイル)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	高さ {} の寸法値はこの図面では小さすぎて読めません。DIMSCALE {} と入力すると、新しい寸法が {} 倍の大きさになります。
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	高さ {} の文字はこの図面では小さすぎて読めません。高さ {} を試してください (既定値は TEXTSIZE で設定)。
+	(each layout's own)	(各レイアウト固有)
+	A callout on the selected sheet pointing at the selected view	選択したシート上の、選択したビューを指す吹き出し
+	A page setup copied from the selected sheet's layout	選択したシートのレイアウトからコピーしたページ設定
+	Add Callout	吹き出しを追加
+	Callouts: {}	吹き出し: {}
+	From Selected Sheet	選択したシートから
+	Insert on Selected Sheet	選択したシートに挿入
+	Named view	名前の付いたビュー
+	Page Setup Override	ページ設定の優先
+	Place View	ビューを配置
+	Position on sheet	シート上の位置
+	Remove Property	プロパティを削除
+	Sheet Properties	シートのプロパティ
+	Sheet Set Fields	シート セットのフィールド
+	Sheet Set Properties	シート セットのプロパティ
+	Sync Drawings	図面を同期
+	Text holding the field, at the position on sheet	フィールドを含む文字 (シート上の位置に配置)
+	Views and Callouts	ビューと吹き出し
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	各シートのレイアウト名は「番号 タイトル」になり、シート セットのフィールド、ビュー ラベル、吹き出しはセットの現在の値になります
+	3 Point	3 点
+	Origin	原点
+	Z	Z
+	Named UCS...	名前の付いた UCS...
+	Center Mark (DIMCEN)	中心マーク (DIMCEN)
+	Copy Objects to New Layer	オブジェクトを新しいレイヤーにコピー
+	Cut with Base Point	基点を指定して切り取り
+	DXF In	DXF 読み込み
+	DXF Out	DXF 書き出し
+	Fill	塗り潰し
+	Maximize Viewport	ビューポートを最大化
+	Minimize Viewport	ビューポートを最小化
+	Object Selection Filters	オブジェクト選択フィルタ
+	Oops	元に戻す (OOPS)
+	Quick Text	クイック文字
+	Redefine Attributes	属性を再定義

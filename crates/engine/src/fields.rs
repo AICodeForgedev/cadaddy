@@ -306,11 +306,11 @@ fn value(d: &Drawing, env: &Env, code: &str, sheet: &str, prev: Option<&str>) ->
     let c = Code::parse(code);
     let raw = match c.evaluator.to_ascii_lowercase().as_str() {
         "acvar" => var(d, env, &c, sheet, prev),
-        "acsm" => match c.expr.to_ascii_lowercase().as_str() {
+        "acsm" => sheet_set_field(d, &c.expr, sheet).or_else(|| match c.expr.to_ascii_lowercase().as_str() {
             "sheet.number" => Some(sheet_parts(sheet).0),
             "sheet.title" => Some(sheet_parts(sheet).1),
             _ => prev.map(str::to_string),
-        },
+        }),
         "acobjprop" => object_property(d, &c),
         _ => prev.map(str::to_string),
     };
@@ -319,6 +319,30 @@ fn value(d: &Drawing, env: &Env, code: &str, sheet: &str, prev: Option<&str>) ->
         Some(v) => text_case(&v, c.format.as_deref()),
         None => field::NO_VALUE.into(),
     }
+}
+
+/// An `\AcSm` field from the sheet set data SHEETSET sync wrote into the drawing: `SheetSet.Name`,
+/// `.Description` or a custom property of the set, `Sheet.Number`, `.Title`, `.Description` or a
+/// custom property of the sheet whose layout is `sheet`. None when the drawing has no such data.
+fn sheet_set_field(d: &Drawing, expr: &str, sheet: &str) -> Option<String> {
+    let data: serde_json::Value =
+        d.header.get(crate::cmd::file::sheetset::SHEET_SET_VAR).and_then(cadaddy_doc::HVal::as_str).and_then(|t| serde_json::from_str(t).ok())?;
+    let (scope, name) = expr.trim().split_once('.')?;
+    let lookup = |o: &serde_json::Value, keys: &[&str]| -> Option<String> {
+        let found = keys.iter().find_map(|k| o.get(*k).and_then(serde_json::Value::as_str).filter(|_| name.eq_ignore_ascii_case(k)));
+        found.map(str::to_string).or_else(|| {
+            o.get("properties")?.as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).and_then(|(_, v)| v.as_str()).map(str::to_string)
+        })
+    };
+    if scope.eq_ignore_ascii_case("sheetset") {
+        return lookup(&data, &["name", "description"]);
+    }
+    if !scope.eq_ignore_ascii_case("sheet") {
+        return None;
+    }
+    let sheets = data.get("sheets")?.as_object()?;
+    let this = sheets.iter().find(|(k, _)| k.eq_ignore_ascii_case(sheet.trim())).map(|(_, v)| v)?;
+    lookup(this, &["number", "title", "description"])
 }
 
 /// A sheet's number and title from its layout name: "A-101 Floor Plan" → ("A-101", "Floor
@@ -374,17 +398,28 @@ fn login() -> String {
 }
 
 /// The drawing's file name as `%fnN` asks: bit 1 the folder only, bit 2 with the extension,
-/// bit 4 without the folder (`%fn2`, the default: the whole path).
+/// bit 4 without the folder (`%fn2`, the default: the whole path). `/` and `\` both separate
+/// folders, whatever the platform, and the path keeps its own separators.
 fn filename(env: &Env, fmt: Option<&str>) -> String {
     let full = env.path.clone().unwrap_or_else(|| env.title.clone());
     let n = fmt.and_then(|f| f.trim().strip_prefix("%fn")).and_then(|d| d.chars().next()).and_then(|c| c.to_digit(10)).unwrap_or(2);
-    let p = std::path::Path::new(&full);
-    let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+    let (dir, file) = match full.rfind(['/', '\\']) {
+        // The root folder is the separator itself.
+        Some(0) => (full.get(..1).unwrap_or_default(), full.get(1..).unwrap_or_default()),
+        Some(i) => (full.get(..i).unwrap_or_default(), full.get(i + 1..).unwrap_or_default()),
+        None => ("", full.as_str()),
+    };
     if n & 1 != 0 {
-        return dir;
+        return dir.to_string();
     }
-    let name = if n & 2 != 0 { p.file_name() } else { p.file_stem() }.map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    if n & 4 != 0 || dir.is_empty() { name } else { p.with_file_name(&name).to_string_lossy().to_string() }
+    // The extension starts at the last dot, unless the name starts there (".plan").
+    let ext_len = match file.rfind('.') {
+        Some(i) if i > 0 => file.len() - i,
+        _ => 0,
+    };
+    let keep = if n & 2 != 0 { 0 } else { ext_len };
+    let shown = if n & 4 != 0 { file } else { full.as_str() };
+    shown.get(..shown.len() - keep).unwrap_or_default().to_string()
 }
 
 /// `%tc1` upper case, `%tc2` lower case, `%tc3` the first letter capital, `%tc4` each word's first

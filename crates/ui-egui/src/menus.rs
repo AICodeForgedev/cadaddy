@@ -722,10 +722,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some(id.to_ascii_lowercase());
             Ok(Value::Null)
         }
-        "sheetset" | "ssm" if params.is_null() => {
-            app.ui.dialog = Some("sheetset".into());
-            Ok(Value::Null)
-        }
+        "sheetset" | "ssm" if params.is_null() => crate::sheetsets::open(app),
         "qselect" | "qs" if params.is_null() => {
             app.ui.dialog = Some("qselect".into());
             Ok(Value::Null)

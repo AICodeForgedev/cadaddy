@@ -192,7 +192,12 @@ impl Interactive for SubtractM {
                     Ok(Step::Continue)
                 }
                 Some(from) => {
-                    let r = subtract(s, &from, &hs)?;
+                    // Refused (nothing that can be subtracted): the first set is already used, so
+                    // asking again would start over without it.
+                    let r = match subtract(s, &from, &hs) {
+                        Ok(r) => r,
+                        Err(e) => return super::super::machines::end_with(s, &e),
+                    };
                     if let Some(m) = r.get("message").and_then(Value::as_str).filter(|m| !m.is_empty()) {
                         s.echo(m.to_string());
                     }

@@ -682,12 +682,20 @@ fn command_known(id: &str) -> bool {
     cadaddy_engine::find_command(id).is_some() || crate::menus::is_ui_command(id) || id.starts_with("ui.dialog.")
 }
 
+/// A menu's width: its widest label after the icon (`text_x`), never under `min`. Measured,
+/// because rows as wide as the space available make a popup as wide as the screen on the pass
+/// that sizes it, and it keeps that size.
+fn menu_width<'a>(ui: &egui::Ui, labels: impl Iterator<Item = &'a str>, text_x: f32, min: f32) -> f32 {
+    labels.map(|l| text_x + label_w(ui, l, crate::theme::body()) + 16.0).fold(min, f32::max)
+}
+
 /// The flyout list under a split button's arrow.
 fn flyout_menu(resp: &egui::Response, key: &'static str, list: &'static [Fly], clicks: &mut Clicks) {
     egui::Popup::from_toggle_button_response(resp).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
-        ui.set_min_width(180.0);
+        let w = menu_width(ui, list.iter().filter(|(_, c, _)| command_known(c)).map(|(_, _, l)| *l), 28.0, 180.0);
+        ui.set_width(w);
         for (icon, cmd, label) in list.iter().filter(|(_, c, _)| command_known(c)) {
-            let (r, row) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+            let (r, row) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
             if row.hovered() {
                 ui.painter().rect_filled(r, 3.0, Tokens::get().control_hover);
             }
@@ -983,8 +991,9 @@ fn title_row(app: &mut CadApp, ui: &mut egui::Ui, row: Rect, left: f32, clicks: 
             }
             ui.separator();
         }
+        let w = menu_width(ui, APP_MENU.iter().filter(|(_, c, _)| command_known(c)).map(|(_, _, l)| *l), 32.0, 230.0);
         for (icon, cmd, label) in APP_MENU.iter().filter(|(_, c, _)| command_known(c)) {
-            let (r, row) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+            let (r, row) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
             if row.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.control_hover);
             }

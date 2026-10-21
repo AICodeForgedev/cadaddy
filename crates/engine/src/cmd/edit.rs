@@ -38,6 +38,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?, base: [x,y]}")
             .noundo()
             .interactive(|_| Ok(Box::new(CopyBaseM::default()))),
+        CommandSpec::new("cutbase", "Cut with Base Point", run_cutbase)
+            .menu(&["Edit", "Cut with Base Point"])
+            .params("{handles?, base: [x,y]} (the objects go to the clipboard with that base point, and from the drawing)")
+            .interactive(|_| Ok(Box::new(CopyBaseM { cut: true, ..CopyBaseM::default() }))),
         CommandSpec::new("pasteclip", "Paste", run_paste)
             .menu(&["Edit", "Paste"])
             .key("Cmd+V")
@@ -162,7 +166,12 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({ "undone": labels, "message": labels.join(", ").to_string() }))
         }
         UndoMode::Mark => {
-            s.state_mut()?.undo_mark();
+            // A mark inside an open group would name a state the group is about to merge away
+            // (UNDO Back then found no mark and undid everything): the group ends first, as it
+            // does for UNDO and Back.
+            let st = s.state_mut()?;
+            st.end_undo_group();
+            st.undo_mark();
             undo_state(s, "Mark set")
         }
         UndoMode::Back => undo_back(s, on_param(p, "confirm").unwrap_or(true)),
@@ -471,14 +480,27 @@ fn run_copybase(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut hs = targets(s, p)?;
+    let hs = targets(s, p)?;
+    let n = cut(s, hs, None)?;
+    Ok(json!({ "cut": n }))
+}
+
+/// CUTCLIP / CUTBASE: the objects not on locked layers go to the clipboard and leave the drawing.
+fn cut(s: &mut Session, mut hs: Vec<Handle>, base: Option<Vec2>) -> Result<usize> {
     hs.retain(|h| !super::curves::is_locked(s, *h));
-    let n = copy_to_clip(s, &hs, None)?;
+    let n = copy_to_clip(s, &hs, base)?;
     let d = s.doc_mut()?;
     for h in &hs {
         d.remove_entity(*h);
     }
     s.set_selection(Vec::new());
+    Ok(n)
+}
+
+fn run_cutbase(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let base = point_req("cutbase", p, "base")?;
+    let n = cut(s, hs, Some(base))?;
     Ok(json!({ "cut": n }))
 }
 
@@ -691,12 +713,16 @@ fn run_clear(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut hs = s.selection();
     hs.retain(|h| !super::curves::is_locked(s, *h));
     let d = s.doc_mut()?;
-    let mut n = 0;
+    let mut gone = Vec::new();
     for h in hs {
-        if d.remove_entity(h).is_some() {
-            n += 1;
+        let space = d.space_of(h);
+        if let (Some(e), Some(sp)) = (d.remove_entity(h), space) {
+            gone.push((sp, e));
         }
     }
+    let n = gone.len();
+    // OOPS brings them back, as after ERASE.
+    super::classic::remember_erased(s, gone);
     s.set_selection(Vec::new());
     Ok(json!({ "erased": n }))
 }
@@ -881,23 +907,30 @@ impl Interactive for SelectM {
     }
 }
 
-/// COPYBASE: base point first, then "Select objects:" (skipped with a pickfirst selection).
+/// COPYBASE / CUTBASE: base point first, then "Select objects:" (skipped with a pickfirst
+/// selection).
 #[derive(Default)]
 struct CopyBaseM {
     base: Option<Vec2>,
     sel: SelectPhase,
+    /// CUTBASE: the objects leave the drawing.
+    cut: bool,
 }
 
 impl CopyBaseM {
     fn copy(&self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
-        copy_to_clip(s, hs, self.base)?;
+        if self.cut {
+            cut(s, hs.to_vec(), self.base)?;
+        } else {
+            copy_to_clip(s, hs, self.base)?;
+        }
         Ok(Step::Done)
     }
 }
 
 impl Interactive for CopyBaseM {
     fn name(&self) -> &'static str {
-        "COPYBASE"
+        if self.cut { "CUTBASE" } else { "COPYBASE" }
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         self.sel = SelectPhase::begin(s);

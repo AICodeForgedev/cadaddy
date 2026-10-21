@@ -607,7 +607,9 @@ fn spline(w: &mut ObjWriter, r: &Rec) {
     let scenario = if by_fit { 2 } else { 1 };
     w.d.bl(scenario);
     if w.at_least(Version::R2013) {
-        w.d.bl(if by_fit { 1 } else { 0 });
+        // Spline flags: by fit points (1) using the knot parameterization that follows (8, 0:
+        // chord). The ODA's reader rejects a fit spline without 8.
+        w.d.bl(if by_fit { 1 | 8 } else { 0 });
         w.d.bl(0);
     }
     w.d.bl(r.id(71, 3) as i32);
@@ -1039,6 +1041,10 @@ fn viewport(w: &mut ObjWriter, r: &Rec) {
         w.href(4, Some(h));
     }
     w.href(5, r.h(340).filter(|h| *h != 0));
+    // R2000 only: the viewport entity header (none).
+    if !w.at_least(Version::R2004) {
+        w.href(5, None);
+    }
     // Named and base UCS; R2007+ background, visual style, shade plot and sun.
     w.href(5, None);
     w.href(5, None);
@@ -1519,22 +1525,70 @@ pub fn table_record(v: Version, name: &str, handle: u64, owner: Option<u64>, r: 
             w.text(r.s(3).unwrap_or(""));
             w.d.bd(r.fd(40, 0.0));
             w.d.rc(r.id(72, 65) as u8);
-            let dashes: Vec<f64> = r.all(49).filter_map(|g| num(&g.value)).collect();
-            w.d.rc(dashes.len().min(255) as u8);
-            for d in dashes.iter().take(255) {
-                w.d.bd(*d);
-                w.d.bs(0);
-                w.d.rd(0.0);
-                w.d.rd(0.0);
-                w.d.bd(1.0);
-                w.d.bd(0.0);
-                w.d.bs(0);
+            // Complex dashes carry a shape or text (spec §20.4.56): the groups after each 49 up to the next.
+            let wide = w.at_least(Version::R2007);
+            let mut dashes: Vec<Dash> = Vec::new();
+            for g in r.0 {
+                if g.code == 49 {
+                    if dashes.len() == 255 {
+                        break;
+                    }
+                    dashes.push(Dash { length: num(&g.value).unwrap_or(0.0), scale: 1.0, ..Dash::default() });
+                    continue;
+                }
+                let Some(d) = dashes.last_mut() else { continue };
+                match g.code {
+                    74 => d.flags = num(&g.value).map_or(0, |f| f as i16),
+                    75 => d.shape = num(&g.value).map_or(0, |f| f as i16),
+                    340 => d.style = handle_of(&g.value),
+                    46 => d.scale = num(&g.value).filter(|f| f.is_finite()).unwrap_or(1.0),
+                    50 => d.rotation = num(&g.value).filter(|f| f.is_finite()).map_or(0.0, f64::to_radians),
+                    44 => d.offset[0] = num(&g.value).filter(|f| f.is_finite()).unwrap_or(0.0),
+                    45 => d.offset[1] = num(&g.value).filter(|f| f.is_finite()).unwrap_or(0.0),
+                    9 => {
+                        if let super::Value::Str(s) = &g.value {
+                            d.text = Some(s.clone());
+                        }
+                    }
+                    _ => {}
+                }
             }
-            if !w.at_least(Version::R2007) {
-                w.d.bytes(&[0u8; 256]);
+            // The strings area: each text dash's text at a byte offset, kept in the dash's shape field.
+            let mut area = vec![0u8; if wide { 512 } else { 256 }];
+            let mut at = 0usize;
+            for d in dashes.iter_mut().filter(|d| d.flags & 2 != 0) {
+                let bytes: Vec<u8> = match &d.text {
+                    Some(t) if wide => t.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+                    Some(t) => crate::bits::code_page_bytes(t),
+                    None => Vec::new(),
+                };
+                let end = at + bytes.len() + if wide { 2 } else { 1 };
+                let fits = end <= area.len() && i16::try_from(at).is_ok();
+                match area.get_mut(at..at + bytes.len()).filter(|_| fits) {
+                    Some(slot) => {
+                        slot.copy_from_slice(&bytes);
+                        d.shape = at as i16;
+                        at = end;
+                    }
+                    // No room left: the dash stays a plain dash rather than pointing at someone else's text.
+                    None => d.flags &= !2,
+                }
             }
-            for _ in dashes.iter().take(255) {
-                w.href(5, None);
+            w.d.rc(dashes.len() as u8);
+            for d in &dashes {
+                w.d.bd(d.length);
+                w.d.bs(d.shape);
+                w.d.rd(d.offset[0]);
+                w.d.rd(d.offset[1]);
+                w.d.bd(d.scale);
+                w.d.bd(d.rotation);
+                w.d.bs(d.flags);
+            }
+            if !wide || dashes.iter().any(|d| d.flags & 2 != 0) {
+                w.d.bytes(&area);
+            }
+            for d in &dashes {
+                w.href(5, if d.flags & 6 != 0 { d.style } else { None });
             }
         }
         "STYLE" => {
@@ -1755,22 +1809,22 @@ fn view(w: &mut ObjWriter, r: &Rec) {
     }
 }
 
-/// A BLOCK_HEADER (spec §20.4.49) for a block record, with its BLOCK and ENDBLK entities and the
-/// entities it holds.
-pub fn block_header(
-    v: Version,
-    handle: u64,
-    owner: Option<u64>,
-    r: &Rec,
-    block: Option<u64>,
-    endblk: Option<u64>,
-    entities: &[u64],
-    layout: Option<u64>,
-    flags70: i64,
-    base: [f64; 3],
-    xref_path: &str,
-    names: &Handles,
-) -> RawObject {
+/// What a BLOCK_HEADER holds besides its record's groups: its BLOCK and ENDBLK entities, the
+/// entities it holds, its layout, and its BLOCK's flags, base point, xref path and description.
+pub struct BlockHead<'a> {
+    pub block: Option<u64>,
+    pub endblk: Option<u64>,
+    pub entities: &'a [u64],
+    pub layout: Option<u64>,
+    pub flags70: i64,
+    pub base: [f64; 3],
+    pub xref_path: &'a str,
+    pub description: &'a str,
+}
+
+/// A BLOCK_HEADER (spec §20.4.49) for a block record.
+pub fn block_header(v: Version, handle: u64, owner: Option<u64>, r: &Rec, b: BlockHead, names: &Handles) -> RawObject {
+    let BlockHead { block, endblk, entities, layout, flags70, base, xref_path, description } = b;
     let mut w = ObjWriter::new(v, types::BLOCK_HEADER, handle);
     object_common(&mut w, owner, &[], None, r, names);
     table_entry(&mut w, r.s(2).unwrap_or(""), 0);
@@ -1788,7 +1842,7 @@ pub fn block_header(
     w.text(xref_path);
     // No insert counts.
     w.d.rc(0);
-    w.text("");
+    w.text(description);
     // No preview.
     w.d.bl(0);
     if w.at_least(Version::R2007) {
@@ -2116,7 +2170,7 @@ fn xrecord(w: &mut ObjWriter, r: &Rec) {
                         d.extend_from_slice(&c.to_le_bytes());
                     }
                 } else {
-                    let b: Vec<u8> = s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).take(u16::MAX as usize).collect();
+                    let b: Vec<u8> = crate::bits::code_page_bytes(&s).into_iter().take(u16::MAX as usize).collect();
                     d.extend_from_slice(&(b.len() as u16).to_le_bytes());
                     d.push(0);
                     d.extend_from_slice(&b);
@@ -2244,4 +2298,17 @@ fn layout_data(w: &mut ObjWriter, r: &Rec, block: Option<u64>, viewports: &[u64]
             w.href(4, Some(*vp));
         }
     }
+}
+
+/// One linetype dash as written: a plain dash, or one carrying a shape or text.
+#[derive(Default)]
+struct Dash {
+    length: f64,
+    flags: i16,
+    shape: i16,
+    style: Option<u64>,
+    scale: f64,
+    rotation: f64,
+    offset: [f64; 2],
+    text: Option<String>,
 }
