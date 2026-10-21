@@ -711,10 +711,10 @@ mod tests {
         let set = crate::generate(42).expect("generate");
         let mut note_count = 0;
         for s in &set.truth.segments {
-            if let Some(h) = &s.height {
-                if h.source == HeightSource::Note {
-                    note_count += 1;
-                }
+            if let Some(h) = &s.height
+                && h.source == HeightSource::Note
+            {
+                note_count += 1;
             }
         }
         assert!(note_count > 0, "generated set should have note-sourced heights");

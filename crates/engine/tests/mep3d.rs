@@ -175,9 +175,9 @@ fn per_system_per_level_layers() {
     let m = meshes(&s);
     let layers: Vec<&str> = m.iter().map(|(l, _)| l.as_str()).collect();
     // The duct is on L1, so its layer is 3D-MEP-M-DUCT-SUPP-L1.
-    assert!(layers.iter().any(|l| *l == "3D-MEP-M-DUCT-SUPP-L1"), "duct layer has level: {layers:?}");
-    assert!(layers.iter().any(|l| *l == "3D-MEP-P-DOMW-CW-L1"), "pipe layer has level: {layers:?}");
-    assert!(layers.iter().any(|l| *l == "3D-MEP-E-COND-L1"), "conduit layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-M-DUCT-SUPP-L1"), "duct layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-P-DOMW-CW-L1"), "pipe layer has level: {layers:?}");
+    assert!(layers.contains(&"3D-MEP-E-COND-L1"), "conduit layer has level: {layers:?}");
 }
 
 #[test]
