@@ -41,11 +41,11 @@ pub struct Truth {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wall_assemblies: Vec<WallAssembly>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub walls: Vec<WallInstance>,
+    pub wall_instances: Vec<WallInstance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ceiling_assemblies: Vec<CeilingAssembly>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub soffits: Vec<SoffitInstance>,
+    pub soffit_instances: Vec<SoffitInstance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub casework: Vec<CaseworkItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -583,7 +583,7 @@ pub struct WallAssembly {
     pub type_tag: String,
     pub name: String,
     /// Layers from finish face to finish face.
-    pub layers: Vec<WallLayer>,
+    pub layers: Vec<AssemblyLayer>,
     /// Overall thickness, inches.
     pub thickness_in: f64,
     /// Fire rating: `""`, `1-HR`, `2-HR`.
@@ -595,8 +595,9 @@ pub struct WallAssembly {
     pub stc: Option<u32>,
 }
 
+/// One layer of a hotel wall assembly.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WallLayer {
+pub struct AssemblyLayer {
     pub material: String,
     pub thickness_in: f64,
 }
@@ -974,3 +975,4 @@ pub fn feet_inches(ft: f64) -> String {
     let i = if (inches - inches.round()).abs() < 1e-9 { format!("{}", inches.round() as i64) } else { format!("{} 1/2", inches.floor() as i64) };
     format!("{}{}'-{}\"", if neg { "-" } else { "" }, feet as i64, i)
 }
+

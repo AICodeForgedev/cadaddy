@@ -312,14 +312,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         let is_roof = lv == "R";
         let (kind, conc) = if is_roof { ("roof", 0.0) } else { ("composite", t.building.slab_in) };
         let top = elev(lv);
-        t.building.slabs.push(Slab {
-            id: format!("SL-{lv}"),
-            level: lv.into(),
-            kind: kind.into(),
-            concrete_in: conc,
-            deck_in,
-            top_ft: r6(top),
-        });
+        t.building.slabs.push(Slab { id: format!("SL-{lv}"), level: lv.into(), kind: kind.into(), concrete_in: conc, deck_in, top_ft: r6(top) });
     }
     // A plumbing chase / shaft at the east end of the building.
     let shaft_x0 = xs.get(nb.saturating_sub(1)).copied().unwrap_or(0.0) + 1.0;
@@ -373,17 +366,14 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let two_by_two = seed.is_multiple_of(3);
     let act_grid: [f64; 2] = if two_by_two { [2.0, 2.0] } else { [2.0, 4.0] };
     // Soffits: a dropped GYP section along the corridor where the main duct runs, on some seeds.
-    let has_soffits = r.chance(0.4);
-    let soffit_drop: f64 = r.pick(&[0.5, 1.0, 1.5]); // how far below the corridor ceiling
+    // From a stream of their own, so the draws after them (the electrical design) stay as they were.
+    let mut rs = Rng::new(seed ^ 0x534F_4646_4954_5300);
+    let has_soffits = rs.chance(0.4);
+    let soffit_drop: f64 = rs.pick(&[0.5, 1.0, 1.5]); // how far below the corridor ceiling
     let mut soffit_n = 0usize;
     for f in &floors {
         let n0: usize = if f.code == "1" { 100 } else { 200 };
-        let act = |h: f64| Some(Ceiling {
-            height_ft: h,
-            kind: "ACT".into(),
-            tag: String::new(),
-            grid_ft: Some(act_grid),
-        });
+        let act = |h: f64| Some(Ceiling { height_ft: h, kind: "ACT".into(), tag: String::new(), grid_ft: Some(act_grid) });
         let plenum = |h: f64| -> Option<f64> {
             let p = f.girder_bob - h;
             if p > 0.01 { Some(r6(p)) } else { None }

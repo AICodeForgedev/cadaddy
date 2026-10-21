@@ -9,7 +9,7 @@
 //!
 //! Everything is converted to building coordinates (feet) using the sheet's alignment.
 
-use crate::sheet_reader::{building_from_model, Alignment, RecognisedSheet, SheetMap};
+use crate::sheet_reader::{Alignment, RecognisedSheet, SheetMap, building_from_model};
 use crate::truth::{self, GridLine};
 use cadaddy_doc::{Drawing, EntityKind};
 use serde::{Deserialize, Serialize};
@@ -84,10 +84,7 @@ pub struct StructuralModel {
 // ---- Reading ---------------------------------------------------------------------------
 
 /// Read all structural sheets from a sheet map and drawings, producing a structural model.
-pub fn read_structure(
-    sheet_map: &SheetMap,
-    drawings: &[(String, &Drawing)],
-) -> StructuralModel {
+pub fn read_structure(sheet_map: &SheetMap, drawings: &[(String, &Drawing)]) -> StructuralModel {
     let mut model = StructuralModel::default();
 
     for sh in &sheet_map.sheets {
@@ -139,12 +136,7 @@ pub fn read_structure(
 // ---- Column detection ------------------------------------------------------------------
 
 /// Find filled solids on the STRUCT layer: these are column representations.
-fn detect_columns(
-    d: &Drawing,
-    alignment: &Alignment,
-    grid_x: &[GridLine],
-    grid_y: &[GridLine],
-) -> Vec<DetectedColumn> {
+fn detect_columns(d: &Drawing, alignment: &Alignment, grid_x: &[GridLine], grid_y: &[GridLine]) -> Vec<DetectedColumn> {
     let mut columns = Vec::new();
 
     for e in d.model.iter() {
@@ -184,11 +176,7 @@ fn detect_columns(
 
         let grid = nearest_grid_intersection(centre, grid_x, grid_y);
 
-        columns.push(DetectedColumn {
-            grid,
-            at_ft: [r6(centre[0]), r6(centre[1])],
-            footprint_in: [r6(width_in), r6(height_in)],
-        });
+        columns.push(DetectedColumn { grid, at_ft: [r6(centre[0]), r6(centre[1])], footprint_in: [r6(width_in), r6(height_in)] });
     }
 
     columns
@@ -218,12 +206,7 @@ fn nearest_grid_intersection(pt: [f64; 2], grid_x: &[GridLine], grid_y: &[GridLi
 // ---- Beam detection --------------------------------------------------------------------
 
 /// Find lines on the HEAVY layer and match them with size texts on TEXT.
-fn detect_beams(
-    d: &Drawing,
-    alignment: &Alignment,
-    grid_x: &[GridLine],
-    grid_y: &[GridLine],
-) -> Vec<DetectedBeam> {
+fn detect_beams(d: &Drawing, alignment: &Alignment, grid_x: &[GridLine], grid_y: &[GridLine]) -> Vec<DetectedBeam> {
     // Collect heavy lines (beams).
     let mut lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
     for e in d.model.iter() {
@@ -282,12 +265,7 @@ fn detect_beams(
         // Find nearest grid line.
         let grid = nearest_grid_line([from, to], grid_x, grid_y);
 
-        beams.push(DetectedBeam {
-            size,
-            from_ft: [r6(from[0]), r6(from[1])],
-            to_ft: [r6(to[0]), r6(to[1])],
-            grid,
-        });
+        beams.push(DetectedBeam { size, from_ft: [r6(from[0]), r6(from[1])], to_ft: [r6(to[0]), r6(to[1])], grid });
     }
 
     beams
@@ -310,11 +288,7 @@ fn is_steel_size(s: &str) -> bool {
 }
 
 /// Find the grid line nearest to a beam segment.
-fn nearest_grid_line(
-    endpoints: [[f64; 2]; 2],
-    grid_x: &[GridLine],
-    grid_y: &[GridLine],
-) -> String {
+fn nearest_grid_line(endpoints: [[f64; 2]; 2], grid_x: &[GridLine], grid_y: &[GridLine]) -> String {
     let [a, b] = endpoints;
     let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
     let dx = (b[0] - a[0]).abs();
@@ -351,7 +325,8 @@ fn detect_openings(d: &Drawing, alignment: &Alignment) -> Vec<DetectedOpening> {
             continue;
         }
         if let EntityKind::LwPolyline(p) = &e.kind
-            && p.closed && p.vertices.len() >= 4
+            && p.closed
+            && p.vertices.len() >= 4
         {
             let xs: Vec<f64> = p.vertices.iter().map(|v| v.p.x).collect();
             let ys: Vec<f64> = p.vertices.iter().map(|v| v.p.y).collect();
@@ -394,24 +369,14 @@ fn detect_openings(d: &Drawing, alignment: &Alignment) -> Vec<DetectedOpening> {
         let cy = (lo[1] + hi[1]) / 2.0;
         let w = hi[0] - lo[0];
         let h = hi[1] - lo[1];
-        let label = texts
-            .iter()
-            .filter(|(_, pos)| {
-                (pos[0] - cx).abs() < w * 0.8 && (pos[1] - cy).abs() < h * 0.8
-            })
-            .map(|(val, _)| val.clone())
-            .next();
+        let label = texts.iter().filter(|(_, pos)| (pos[0] - cx).abs() < w * 0.8 && (pos[1] - cy).abs() < h * 0.8).map(|(val, _)| val.clone()).next();
 
         // Skip very small rectangles (legend symbols).
         if w < 10.0 || h < 10.0 {
             continue;
         }
 
-        openings.push(DetectedOpening {
-            min_ft: [r6(bmin[0]), r6(bmin[1])],
-            max_ft: [r6(bmax[0]), r6(bmax[1])],
-            label,
-        });
+        openings.push(DetectedOpening { min_ft: [r6(bmin[0]), r6(bmin[1])], max_ft: [r6(bmax[0]), r6(bmax[1])], label });
     }
 
     openings
@@ -469,18 +434,9 @@ fn read_general_notes(d: &Drawing, sh: &RecognisedSheet) -> NotesResult {
             // The concrete thickness is the number immediately before "CONC".
             let concrete = parse_inches_before(&upper, "CONC");
             let deck = 1.5; // standard composite metal deck depth
-            let top = if let Some(idx) = upper.find("TOP OF SLAB") {
-                parse_elevation(&upper[idx..])
-            } else {
-                None
-            };
+            let top = if let Some(idx) = upper.find("TOP OF SLAB") { parse_elevation(&upper[idx..]) } else { None };
             if let Some(top_ft) = top {
-                result.slab = Some(SlabNote {
-                    kind: "composite".into(),
-                    concrete_in: concrete.unwrap_or(0.0),
-                    deck_in: deck,
-                    top_ft,
-                });
+                result.slab = Some(SlabNote { kind: "composite".into(), concrete_in: concrete.unwrap_or(0.0), deck_in: deck, top_ft });
             }
         }
 
@@ -490,12 +446,7 @@ fn read_general_notes(d: &Drawing, sh: &RecognisedSheet) -> NotesResult {
             && let Some(tos) = result.tos_ft
         {
             let deck = 1.5; // standard metal roof deck depth
-            result.slab = Some(SlabNote {
-                kind: "roof".into(),
-                concrete_in: 0.0,
-                deck_in: deck,
-                top_ft: tos + deck / 12.0,
-            });
+            result.slab = Some(SlabNote { kind: "roof".into(), concrete_in: 0.0, deck_in: deck, top_ft: tos + deck / 12.0 });
         }
     }
 
@@ -605,14 +556,8 @@ impl StructuralScore {
 }
 
 /// Score the detected structural model against the truth.
-pub fn score_structure(
-    model: &StructuralModel,
-    truth: &truth::Truth,
-) -> StructuralScore {
-    let mut sc = StructuralScore {
-        columns_total: truth.building.columns.len(),
-        ..StructuralScore::default()
-    };
+pub fn score_structure(model: &StructuralModel, truth: &truth::Truth) -> StructuralScore {
+    let mut sc = StructuralScore { columns_total: truth.building.columns.len(), ..StructuralScore::default() };
     for tc in &truth.building.columns {
         if let Some(dc) = model.columns.iter().find(|c| c.grid == tc.grid) {
             sc.columns_found += 1;
@@ -637,10 +582,7 @@ pub fn score_structure(
                 if found {
                     sc.beams_found += 1;
                     // Check size.
-                    let size_match = det_beams
-                        .iter()
-                        .filter(|db| beam_overlaps(tb, db))
-                        .any(|db| db.size.eq_ignore_ascii_case(&tb.size));
+                    let size_match = det_beams.iter().filter(|db| beam_overlaps(tb, db)).any(|db| db.size.eq_ignore_ascii_case(&tb.size));
                     if size_match {
                         sc.beam_size_correct += 1;
                     }
@@ -676,10 +618,10 @@ pub fn score_structure(
     }
 
     // ---- Openings ----
-    let openings_by_level = truth.building.openings.iter().fold(
-        BTreeMap::<&String, Vec<&truth::Opening>>::new(),
-        |mut m, o| { m.entry(&o.level).or_default().push(o); m },
-    );
+    let openings_by_level = truth.building.openings.iter().fold(BTreeMap::<&String, Vec<&truth::Opening>>::new(), |mut m, o| {
+        m.entry(&o.level).or_default().push(o);
+        m
+    });
     for (level, truth_openings) in &openings_by_level {
         sc.openings_total += truth_openings.len();
         let detected = model.openings.get(*level);

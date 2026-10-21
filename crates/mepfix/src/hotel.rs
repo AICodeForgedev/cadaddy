@@ -235,7 +235,8 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             name: "CORRIDOR".into(),
             min_ft: [0.0, room_depth_ft],
             max_ft: [building_width_ft, room_depth_ft + corridor_width_ft],
-            ceiling: Some(Ceiling { height_ft: 8.5, kind: "GYP".into(), tag: "GYP @ 8'-6\"".into() }),
+            ceiling: Some(Ceiling { height_ft: 8.5, kind: "GYP".into(), tag: "GYP @ 8'-6\"".into(), grid_ft: None }),
+            plenum_ft: None,
         });
 
         // South side rooms
@@ -266,7 +267,9 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     height_ft: ceil_h,
                     kind: if rt.is_suite() { "GYP".into() } else { "ACT".into() },
                     tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)),
+                    grid_ft: None,
                 }),
+                plenum_ft: None,
             });
             x += w;
             room_num += 1;
@@ -297,7 +300,9 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     height_ft: ceil_h,
                     kind: if rt.is_suite() { "GYP" } else { "ACT" }.into(),
                     tag: format!("{} @ {}", if rt.is_suite() { "GYP" } else { "ACT" }, feet_inches(ceil_h)),
+                    grid_ft: None,
                 }),
+                plenum_ft: None,
             });
             x += w;
             room_num += 1;
@@ -321,7 +326,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         ] {
             let asm = wall_for_room(&rm.name, &rm.level);
             let h = rm.ceiling.as_ref().map(|c| c.height_ft + 2.5).unwrap_or(11.0);
-            t.walls.push(WallInstance {
+            t.wall_instances.push(WallInstance {
                 id: format!("wall-{wall_id}"),
                 assembly: asm.into(),
                 level: rm.level.clone(),
@@ -342,7 +347,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     for rm in &t.building.rooms {
         if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") {
             let vanity_depth = 2.5;
-            t.soffits.push(SoffitInstance {
+            t.soffit_instances.push(SoffitInstance {
                 id: format!("soffit-{soffit_id}"),
                 assembly: "CA-2".into(),
                 level: rm.level.clone(),
@@ -1120,7 +1125,8 @@ fn ground_floor_rooms(
         name: "CORRIDOR".into(),
         min_ft: [0.0, corr_y0],
         max_ft: [bldg_width, corr_y1],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
 
     // South side: Lobby, Front desk, Breakfast, Kitchen
@@ -1134,7 +1140,8 @@ fn ground_floor_rooms(
         name: "LOBBY".into(),
         min_ft: [x, south_y],
         max_ft: [x + lobby_w, corr_y0],
-        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += lobby_w;
 
@@ -1146,7 +1153,8 @@ fn ground_floor_rooms(
         name: "FRONT DESK".into(),
         min_ft: [x, south_y],
         max_ft: [x + fd_w, corr_y0],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += fd_w;
 
@@ -1163,7 +1171,8 @@ fn ground_floor_rooms(
         name: "BREAKFAST AREA".into(),
         min_ft: [x, south_y],
         max_ft: [(x + bk_w).min(stair_e), corr_y0],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x = (x + bk_w).min(stair_e);
 
@@ -1175,7 +1184,8 @@ fn ground_floor_rooms(
             name: "KITCHEN".into(),
             min_ft: [x, south_y],
             max_ft: [stair_e, corr_y0],
-            ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into() }),
+            ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into(), grid_ft: None }),
+            plenum_ft: None,
         });
     }
 
@@ -1189,7 +1199,8 @@ fn ground_floor_rooms(
         name: "FITNESS CENTER".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + fitness_w, north_y],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += fitness_w;
 
@@ -1201,7 +1212,8 @@ fn ground_floor_rooms(
         name: "LAUNDRY".into(),
         min_ft: [x, corr_y1],
         max_ft: [x + laundry_w, north_y],
-        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x += laundry_w;
 
@@ -1218,7 +1230,8 @@ fn ground_floor_rooms(
         name: "POOL".into(),
         min_ft: [x, corr_y1],
         max_ft: [(x + pool_w).min(stair_e - 30.0), north_y],
-        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into() }),
+        ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into(), grid_ft: None }),
+        plenum_ft: None,
     });
     x = (x + pool_w).min(stair_e - 30.0);
 
@@ -1231,6 +1244,7 @@ fn ground_floor_rooms(
         min_ft: [x, corr_y1],
         max_ft: [x + pe_w, north_y],
         ceiling: None, // open to structure
+        plenum_ft: None,
     });
     x += pe_w;
 
@@ -1244,6 +1258,7 @@ fn ground_floor_rooms(
         min_ft: [x, corr_y1],
         max_ft: [x + mech_w, north_y],
         ceiling: None,
+        plenum_ft: None,
     });
     x += mech_w;
 
@@ -1257,6 +1272,7 @@ fn ground_floor_rooms(
         min_ft: [x, corr_y1],
         max_ft: [x + elec_w, north_y],
         ceiling: None,
+        plenum_ft: None,
     });
     x += elec_w;
 
@@ -1269,6 +1285,7 @@ fn ground_floor_rooms(
             min_ft: [x, corr_y1],
             max_ft: [stair_e, north_y],
             ceiling: None,
+            plenum_ft: None,
         });
     }
 
@@ -1284,10 +1301,10 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-1".into(),
             name: "GUEST ROOM DEMISING".into(),
             layers: vec![
-                WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
-                WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
-                WallLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
-                WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
             thickness_in: 4.875,
             fire_rating: "1-HR".into(),
@@ -1299,10 +1316,10 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-2".into(),
             name: "CORRIDOR WALL".into(),
             layers: vec![
-                WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
-                WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
-                WallLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
-                WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
+                AssemblyLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
+                AssemblyLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
             ],
             thickness_in: 6.125,
             fire_rating: "1-HR".into(),
@@ -1314,9 +1331,9 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-3".into(),
             name: "WET WALL (STACKED)".into(),
             layers: vec![
-                WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
-                WallLayer { material: "6\" MTL STUD".into(), thickness_in: 6.0 },
-                WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "6\" MTL STUD".into(), thickness_in: 6.0 },
+                AssemblyLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
             thickness_in: 7.25,
             fire_rating: "".into(),
@@ -1328,9 +1345,9 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-4".into(),
             name: "SHAFT WALL".into(),
             layers: vec![
-                WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
-                WallLayer { material: "2-1/2\" C-H STUD".into(), thickness_in: 2.5 },
-                WallLayer { material: "1\" GYP LINER".into(), thickness_in: 1.0 },
+                AssemblyLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
+                AssemblyLayer { material: "2-1/2\" C-H STUD".into(), thickness_in: 2.5 },
+                AssemblyLayer { material: "1\" GYP LINER".into(), thickness_in: 1.0 },
             ],
             thickness_in: 4.75,
             fire_rating: "2-HR".into(),
@@ -1342,13 +1359,13 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-5".into(),
             name: "EXTERIOR WALL".into(),
             layers: vec![
-                WallLayer { material: "FACE BRICK".into(), thickness_in: 3.625 },
-                WallLayer { material: "AIR SPACE".into(), thickness_in: 1.0 },
-                WallLayer { material: "RIGID INSULATION".into(), thickness_in: 2.0 },
-                WallLayer { material: "5/8\" GYP SHEATHING".into(), thickness_in: 0.625 },
-                WallLayer { material: "6\" MTL STUD".into(), thickness_in: 6.0 },
-                WallLayer { material: "BATT INSULATION".into(), thickness_in: 6.0 },
-                WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "FACE BRICK".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "AIR SPACE".into(), thickness_in: 1.0 },
+                AssemblyLayer { material: "RIGID INSULATION".into(), thickness_in: 2.0 },
+                AssemblyLayer { material: "5/8\" GYP SHEATHING".into(), thickness_in: 0.625 },
+                AssemblyLayer { material: "6\" MTL STUD".into(), thickness_in: 6.0 },
+                AssemblyLayer { material: "BATT INSULATION".into(), thickness_in: 6.0 },
+                AssemblyLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
             thickness_in: 13.875,
             fire_rating: "".into(),
@@ -1360,9 +1377,9 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             type_tag: "WT-6".into(),
             name: "BATHROOM PARTITION".into(),
             layers: vec![
-                WallLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
-                WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
-                WallLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
+                AssemblyLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
+                AssemblyLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
+                AssemblyLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
             ],
             thickness_in: 4.625,
             fire_rating: "".into(),
@@ -2137,7 +2154,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     let mut gid = 0;
 
     // 1. A wall with no type tag: pick a wall on level 2 and leave its assembly blank
-    if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-1") {
+    if let Some(w) = t.wall_instances.iter().find(|w| w.level == "2" && w.assembly == "wa-1") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_no_tag".into(),
@@ -2150,7 +2167,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 2. A wall tag not in the legend: reference a non-existent assembly
-    if let Some(w) = t.walls.iter().find(|w| w.level == "3" && w.assembly == "wa-1") {
+    if let Some(w) = t.wall_instances.iter().find(|w| w.level == "3" && w.assembly == "wa-1") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_tag_not_in_legend".into(),
@@ -2163,8 +2180,8 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 3. Same wall shown with different types on two sheets
-    if t.walls.len() > 20 {
-        let w = &t.walls[10];
+    if t.wall_instances.len() > 20 {
+        let w = &t.wall_instances[10];
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_type_conflict".into(),
@@ -2190,7 +2207,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 5. Rated wall stops at ceiling (should go slab to slab)
-    if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-2") {
+    if let Some(w) = t.wall_instances.iter().find(|w| w.level == "2" && w.assembly == "wa-2") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "rated_wall_stops_at_ceiling".into(),
@@ -2203,7 +2220,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 6. Soffit shown on RCP but missing from section
-    if let Some(s) = t.soffits.first() {
+    if let Some(s) = t.soffit_instances.first() {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "soffit_missing_from_section".into(),
@@ -2216,7 +2233,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 7. Head condition not specified at rated wall / ceiling intersection
-    if let Some(w) = t.walls.iter().find(|w| w.assembly == "wa-4") {
+    if let Some(w) = t.wall_instances.iter().find(|w| w.assembly == "wa-4") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "head_not_specified".into(),
@@ -2229,7 +2246,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     }
 
     // 8. Height/assembly conflict: wall height rule says SLAB TO SLAB but drawn to ceiling
-    if let Some(w) = t.walls.iter().find(|w| w.level == "4" && w.assembly == "wa-1") {
+    if let Some(w) = t.wall_instances.iter().find(|w| w.level == "4" && w.assembly == "wa-1") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "height_assembly_conflict".into(),

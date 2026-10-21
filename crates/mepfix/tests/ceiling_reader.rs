@@ -1,7 +1,7 @@
 //! Tests for the ceiling reader: room detection, ceiling type/height/grid, soffits, and
 //! ceiling-mounted items, scored against the fixture generator's ground truth.
 
-use cadaddy_mepfix::ceiling_reader::{self, read_fixture_ceilings, score_ceilings, CeilingScore};
+use cadaddy_mepfix::ceiling_reader::{self, CeilingScore, read_fixture_ceilings, score_ceilings};
 use cadaddy_mepfix::truth_for;
 
 /// Helper: read ceilings for a seed and score them.
@@ -36,19 +36,11 @@ fn ceiling_types_are_detected() {
         let (truth, _result, score) = scored(seed);
         let rooms_with_ceilings = truth.building.rooms.iter().filter(|r| r.ceiling.is_some()).count();
         // We should find ceilings for at least 30% of rooms with ceilings
-        assert!(
-            score.rooms_found > 0,
-            "seed {seed}: found no ceilings (truth has {rooms_with_ceilings})"
-        );
+        assert!(score.rooms_found > 0, "seed {seed}: found no ceilings (truth has {rooms_with_ceilings})");
         // Kind accuracy should be reasonable when we do find ceilings
         if score.rooms_found >= 3 {
             let kind_rate = score.kind_correct as f64 / score.rooms_found as f64;
-            assert!(
-                kind_rate >= 0.3,
-                "seed {seed}: kind accuracy {kind_rate:.2} ({}/{}) too low",
-                score.kind_correct,
-                score.rooms_found
-            );
+            assert!(kind_rate >= 0.3, "seed {seed}: kind accuracy {kind_rate:.2} ({}/{}) too low", score.kind_correct, score.rooms_found);
         }
     }
 }
@@ -61,11 +53,7 @@ fn act_ceilings_have_grid_lines() {
         let act_rooms: Vec<_> = truth.building.rooms.iter().filter(|r| r.ceiling.as_ref().is_some_and(|c| c.kind == "ACT")).collect();
         let found_act: Vec<_> = result.ceilings.iter().filter(|c| c.kind == "ACT" && c.grid_ft.is_some()).collect();
         // At least some ACT rooms should have grid detected
-        assert!(
-            !found_act.is_empty() || act_rooms.is_empty(),
-            "seed {seed}: no ACT grids found but truth has {} ACT rooms",
-            act_rooms.len()
-        );
+        assert!(!found_act.is_empty() || act_rooms.is_empty(), "seed {seed}: no ACT grids found but truth has {} ACT rooms", act_rooms.len());
     }
 }
 
@@ -77,11 +65,7 @@ fn ceiling_heights_are_read() {
         let (_, _, score) = scored(seed);
         if score.rooms_found >= 3 {
             // At least some heights should be within tolerance
-            assert!(
-                score.height_correct > 0,
-                "seed {seed}: no correct heights ({} rooms found)",
-                score.rooms_found
-            );
+            assert!(score.height_correct > 0, "seed {seed}: no correct heights ({} rooms found)", score.rooms_found);
         }
     }
 }
@@ -99,10 +83,7 @@ fn height_error_is_reasonable() {
     }
     if count > 0 {
         let avg_mae = total_mae / count as f64;
-        assert!(
-            avg_mae < 1.5,
-            "average height MAE {avg_mae:.2} ft is too high (> 1.5 ft)"
-        );
+        assert!(avg_mae < 1.5, "average height MAE {avg_mae:.2} ft is too high (> 1.5 ft)");
     }
 }
 
@@ -120,10 +101,7 @@ fn open_to_structure_rooms_are_detected() {
     }
     assert!(total_open > 0, "no open-to-structure rooms in truth");
     // At least some open-to-structure rooms should be detected
-    assert!(
-        found_open > 0,
-        "no open-to-structure rooms detected ({total_open} in truth)"
-    );
+    assert!(found_open > 0, "no open-to-structure rooms detected ({total_open} in truth)");
 }
 
 // ---- ACT grid size ------------------------------------------------------------------
@@ -140,10 +118,7 @@ fn act_grid_sizes_are_correct() {
     // We don't require perfection here since grid detection is hard, but when we find a grid
     // it should usually be the right size.
     if total > 0 {
-        assert!(
-            correct > 0 || total <= 5,
-            "no correct grid sizes ({total} ACT rooms total)"
-        );
+        assert!(correct > 0 || total <= 5, "no correct grid sizes ({total} ACT rooms total)");
     }
 }
 
@@ -176,10 +151,7 @@ fn ceiling_items_are_detected() {
         // We should find at least a few ceiling-mounted items
         if !truth_terminals.is_empty() && !result.items.is_empty() {
             // Just verify they exist and are in known rooms
-            assert!(
-                result.items.iter().all(|i| i.level == "1" || i.level == "2"),
-                "seed {seed}: items on unexpected levels"
-            );
+            assert!(result.items.iter().all(|i| i.level == "1" || i.level == "2"), "seed {seed}: items on unexpected levels");
         }
     }
 }
@@ -192,20 +164,10 @@ fn truth_has_plenum_depth() {
         let t = truth_for(seed);
         let with_plenum: Vec<_> = t.building.rooms.iter().filter(|r| r.plenum_ft.is_some()).collect();
         let with_ceiling: Vec<_> = t.building.rooms.iter().filter(|r| r.ceiling.is_some()).collect();
-        assert_eq!(
-            with_plenum.len(),
-            with_ceiling.len(),
-            "seed {seed}: {}/{} rooms with plenum",
-            with_plenum.len(),
-            with_ceiling.len()
-        );
+        assert_eq!(with_plenum.len(), with_ceiling.len(), "seed {seed}: {}/{} rooms with plenum", with_plenum.len(), with_ceiling.len());
         for r in &with_plenum {
             let p = r.plenum_ft.unwrap_or(0.0);
-            assert!(
-                p > 0.0 && p < 10.0,
-                "seed {seed}: room {} plenum {p:.1} ft out of range",
-                r.id
-            );
+            assert!(p > 0.0 && p < 10.0, "seed {seed}: room {} plenum {p:.1} ft out of range", r.id);
         }
     }
 }

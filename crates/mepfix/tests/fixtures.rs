@@ -728,10 +728,10 @@ fn hotel_has_stairs_and_elevator() {
 fn hotel_has_wall_assemblies() {
     let t = hotel_truth_for(1, HotelSize::Small);
     assert!(t.wall_assemblies.len() >= 5, "need at least 5 wall types, got {}", t.wall_assemblies.len());
-    assert!(!t.walls.is_empty(), "no wall instances");
+    assert!(!t.wall_instances.is_empty(), "no wall instances");
     // Every wall references a valid assembly.
     let assembly_ids: BTreeSet<String> = t.wall_assemblies.iter().map(|a| a.id.clone()).collect();
-    for w in &t.walls {
+    for w in &t.wall_instances {
         assert!(assembly_ids.contains(&w.assembly), "wall {} references unknown assembly {}", w.id, w.assembly);
     }
     // At least one fire-rated wall.
@@ -742,7 +742,7 @@ fn hotel_has_wall_assemblies() {
 fn hotel_has_ceiling_assemblies_and_soffits() {
     let t = hotel_truth_for(1, HotelSize::Small);
     assert!(!t.ceiling_assemblies.is_empty(), "no ceiling assemblies");
-    assert!(!t.soffits.is_empty(), "no soffits (expected in guest room bathrooms)");
+    assert!(!t.soffit_instances.is_empty(), "no soffits (expected in guest room bathrooms)");
 }
 
 #[test]
