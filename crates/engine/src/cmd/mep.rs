@@ -39,6 +39,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
             .params("{tolerance_in?: inches (0)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column, message, systems, at, by_in, handles}], total}")
             .noundo(),
+        CommandSpec::new("mep.list", "List MEP Items", run_list)
+            .params("{level?: name, system?: name, guessed_only?: bool} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed}], systems: [...]}")
+            .noundo(),
+        CommandSpec::new("mep.edit", "Edit MEP Item", run_edit)
+            .params("{id: index, system?: name, size_in?: [w,h], bottom_ft?: feet, reviewed?: bool, rebuild?: bool} → {item, rebuilt?}"),
     ]
 }
 
@@ -339,6 +344,131 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     Ok(out)
+}
+
+// ---------------- list and edit for the review palette ----------------
+
+/// An item in the MEP review list: one run, with the confidence and source of its size and
+/// height, and whether it has been reviewed. `id` is its index in `sp.mep.runs`.
+fn item_json(i: usize, r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
+    let segments = r.points.len().saturating_sub(1);
+    // Confidence: "tag" (size or height came from a tag in the drawing) or "default" (the
+    // system's defaults or the auto-drafted ones). A run whose size differs from the system's
+    // had a tag; a run whose bottoms differ from the system's had a height tag.
+    let size_from_tag = sy.is_some_and(|s| r.size_in != s.size_in);
+    let height_from_tag = sy.is_some_and(|s| r.bottoms_ft.iter().any(|b| (*b - s.bottom_ft).abs() > 1e-6));
+    let confidence = match (size_from_tag, height_from_tag) {
+        (true, true) => "high",
+        (true, false) | (false, true) => "medium",
+        (false, false) => "low",
+    };
+    let size_source = if size_from_tag { "tag" } else { "default" };
+    let height_source = if height_from_tag { "tag" } else { "default" };
+    let kind = sy.map_or("unknown", |s| match s.kind {
+        MepKind::Duct => "duct",
+        MepKind::Pipe => "pipe",
+        MepKind::Conduit => "conduit",
+    });
+    // `reviewed` is stored in xdata on the run's source objects if present, else in
+    // a simple check against a list we keep in memory.  For now we use the building spec's
+    // state: a run is reviewed if it has an `"reviewed": true` marker in its `objects` list
+    // (the last entry being "reviewed" is the convention).
+    let reviewed = r.objects.last().is_some_and(|s| s == "reviewed");
+    let level_elev = sp.level(&r.level).map_or(0.0, |l| l.elevation_ft);
+    json!({
+        "id": i,
+        "system": r.system,
+        "level": r.level,
+        "kind": kind,
+        "segments": segments,
+        "size_in": r.size_in,
+        "bottoms_ft": r.bottoms_ft,
+        "objects": r.objects.iter().filter(|s| s.as_str() != "reviewed").collect::<Vec<_>>(),
+        "confidence": confidence,
+        "size_source": size_source,
+        "height_source": height_source,
+        "reviewed": reviewed,
+        "level_elevation_ft": level_elev,
+    })
+}
+
+fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sp, _) = current(s, "mep.list")?;
+    let only_level = str_param(p, "level").map(str::to_string);
+    let only_system = str_param(p, "system").map(str::to_string);
+    let guessed_only = bool_or(p, "guessed_only", false);
+    let mut items = Vec::new();
+    for (i, r) in sp.mep.runs.iter().enumerate() {
+        if only_level.as_deref().is_some_and(|l| !l.eq_ignore_ascii_case(&r.level)) {
+            continue;
+        }
+        if only_system.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case(&r.system)) {
+            continue;
+        }
+        let sy = sp.mep.systems.iter().find(|s| s.name == r.system);
+        if guessed_only {
+            let size_from_tag = sy.is_some_and(|s| r.size_in != s.size_in);
+            let height_from_tag = sy.is_some_and(|s| r.bottoms_ft.iter().any(|b| (*b - s.bottom_ft).abs() > 1e-6));
+            if size_from_tag || height_from_tag {
+                continue;
+            }
+        }
+        items.push(item_json(i, r, sy, &sp));
+    }
+    let systems = serde_json::to_value(&sp.mep.systems).unwrap_or(Value::Null);
+    Ok(json!({ "items": items, "systems": systems, "total": items.len() }))
+}
+
+fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
+    let (mut sp, _) = current(s, "mep.edit")?;
+    let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("mep.edit", "id is required"))? as usize;
+
+    // Validate system name before mutating.
+    let new_system = str_param(p, "system").map(str::to_string);
+    if let Some(sys) = &new_system
+        && !sp.mep.systems.iter().any(|s| s.name.eq_ignore_ascii_case(sys))
+    {
+        return Err(bad("mep.edit", format!("unknown system {sys}")));
+    }
+
+    // Apply mutations via get_mut (no panics).
+    {
+        let run = sp.mep.runs.get_mut(id).ok_or_else(|| bad("mep.edit", format!("no run at index {id}")))?;
+        if let Some(sys) = &new_system {
+            run.system = sys.clone();
+        }
+        if let Some(sz) = p.get("size_in").and_then(Value::as_array) {
+            let w = sz.first().and_then(Value::as_f64).unwrap_or(0.0);
+            let h = sz.get(1).and_then(Value::as_f64).unwrap_or(0.0);
+            if w > 0.0 {
+                run.size_in = [w, h];
+            }
+        }
+        if let Some(b) = p.get("bottom_ft").and_then(Value::as_f64).filter(|v| v.is_finite()) {
+            run.bottoms_ft.fill(b);
+        }
+        if let Some(reviewed) = p.get("reviewed").and_then(Value::as_bool) {
+            run.objects.retain(|s| s.as_str() != "reviewed");
+            if reviewed {
+                run.objects.push("reviewed".to_string());
+            }
+        }
+    }
+
+    // Build the item JSON from the (now immutable) spec.
+    let run = sp.mep.runs.get(id).ok_or_else(|| bad("mep.edit", format!("no run at index {id}")))?;
+    let sy = sp.mep.systems.iter().find(|sy| sy.name == run.system);
+    let item = item_json(id, run, sy, &sp);
+
+    let do_rebuild = bool_or(p, "rebuild", false);
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+
+    if do_rebuild {
+        let _ = s.execute("model.build", &json!({}));
+        Ok(json!({ "item": item, "rebuilt": true }))
+    } else {
+        Ok(json!({ "item": item }))
+    }
 }
 
 // ---------------- in 3D ----------------

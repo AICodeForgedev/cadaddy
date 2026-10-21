@@ -25,6 +25,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.convertpdf", "Convert PDF to DWG...", &["File", "Convert PDF to DWG..."], None),
     ("actmanager", "Action Macro Manager...", &["Tools", "Action Recorder", "Action Macro Manager..."], None),
+    ("mepreview", "MEP Review", &["Draw", "Modeling", "MEP Review"], None),
     ("cui", "Customize User Interface...", &["Tools", "Customize", "Interface..."], None),
     ("ui.customize", "Customize Interface", &[], None),
     ("ui.walk", "Walk", &["View", "Walk"], None),
@@ -699,6 +700,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "countlist" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some(crate::countpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "mepreview" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::meppalette::DIALOG.into());
             Ok(Value::Null)
         }
         "markups" if params.is_null() => {

@@ -101,6 +101,7 @@ pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
+pub mod meppalette;
 pub mod multiprops;
 pub mod opening;
 pub mod options;
