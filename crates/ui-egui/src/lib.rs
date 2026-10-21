@@ -77,6 +77,7 @@ pub mod agentdlg;
 pub mod convertdlg;
 pub mod countpalette;
 pub mod customui;
+pub mod drywallpalette;
 pub mod dwgpropsdlg;
 pub mod dyngrips;
 pub mod dyninput;

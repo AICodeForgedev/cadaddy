@@ -88,6 +88,7 @@ pub mod spell;
 pub mod stairs;
 pub mod symbol;
 mod takeoff;
+pub mod drywall;
 pub mod tours;
 pub(crate) mod underlay;
 pub mod verify;
@@ -308,6 +309,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rooms3d::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
+        v.extend(drywall::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
         v.extend(modify2::specs());
