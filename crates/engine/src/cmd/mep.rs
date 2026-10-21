@@ -8,7 +8,7 @@
 //!   `TOP @ 11'-0"` top, `EL 10'-0"`); a segment without one takes its neighbour's (else the
 //!   system's). A change of height between two segments is a drop at their corner.
 //! - `model.build` makes each run's segments (rectangular boxes or round tubes), fittings at the
-//!   turns and the drops, on a layer per system (`3D-MEP-<system>`); a system with `show: false`
+//!   turns and the drops, on a layer per system and level (`3D-MEP-<system>-<level>`); a system with `show: false`
 //!   is left out.
 //! - `model.clashes {tolerance_in?}`: runs hanging below their room's ceiling, reaching into the
 //!   floor structure above (the next level's slab), crossing another system's run, or running
@@ -16,7 +16,7 @@
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, RawTag, Space};
 use cadaddy_geom::{Vec2, Vec3};
-use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun, MepSystem, level_at};
+use cadaddy_walk3d::{BuildingSpec, DuctType, MepKind, MepRun, MepSystem, level_at};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -47,7 +47,7 @@ fn draft_system(layer: &str) -> Option<MepSystem> {
     let up = layer.to_ascii_uppercase();
     let parts: Vec<&str> = up.split(['-', '_', ' ']).collect();
     let has = |w: &str| parts.contains(&w);
-    let (kind, size, bottom) = if up.starts_with("M-") && (has("DUCT") || has("SUPP") || has("RETN") || has("EXHS") || has("HVAC")) {
+    let (kind, size, bottom) = if up.starts_with("M-") && (has("DUCT") || has("SUPP") || has("RETN") || has("EXHS") || has("HVAC") || has("OA")) {
         (MepKind::Duct, [12.0, 12.0], 10.0)
     } else if up.starts_with("P-") || (up.starts_with("M-") && (has("PIPE") || has("HWS") || has("CHWS") || has("CHWR") || has("STEM"))) {
         (MepKind::Pipe, [2.0, 0.0], 10.0)
@@ -56,7 +56,37 @@ fn draft_system(layer: &str) -> Option<MepSystem> {
     } else {
         return None;
     };
-    Some(MepSystem { name: layer.to_string(), layer: layer.to_string(), kind, size_in: size, bottom_ft: bottom, show: true })
+    // Infer duct type from layer name tokens.
+    let duct_type = if kind == MepKind::Duct {
+        Some(infer_duct_type(&parts))
+    } else {
+        None
+    };
+    Some(MepSystem {
+        name: layer.to_string(),
+        layer: layer.to_string(),
+        kind,
+        size_in: size,
+        bottom_ft: bottom,
+        show: true,
+        duct_type,
+        color_index: 0,
+    })
+}
+
+/// Infer the duct type from layer-name tokens (supply, return, exhaust, outside air).
+fn infer_duct_type(parts: &[&str]) -> DuctType {
+    if parts.iter().any(|p| *p == "SUPP" || *p == "SUPPLY" || *p == "SA") {
+        DuctType::Supply
+    } else if parts.iter().any(|p| *p == "RETN" || *p == "RETURN" || *p == "RA" || *p == "RTN") {
+        DuctType::Return
+    } else if parts.iter().any(|p| *p == "EXHS" || *p == "EXHAUST" || *p == "EA" || *p == "EXH") {
+        DuctType::Exhaust
+    } else if parts.iter().any(|p| *p == "OA" || *p == "OUTSIDE" || *p == "FRESH" || *p == "OAIR") {
+        DuctType::OutsideAir
+    } else {
+        DuctType::Other
+    }
 }
 
 /// A size tag, inches: `24x12` → [24, 12]; `10"Ø`, `10" DIA`, `2" CW`, `3/4" C` → [d, 0].
@@ -313,6 +343,14 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- in 3D ----------------
 
+/// What kind of piece a segment of a run is (straight duct or a fitting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FittingKind {
+    Segment,
+    Elbow,
+    Drop,
+}
+
 /// A run's pieces, sheet units: straight segments and fittings, each `(a, b, z0)` along the
 /// plan with its bottom (risers: a == b, with `z1`).
 #[derive(Clone, Copy, Debug)]
@@ -321,129 +359,416 @@ struct Piece {
     b: Vec2,
     z0: f64,
     z1: f64,
-    fitting: bool,
+    kind: FittingKind,
+    /// The size, inches `[w, h]`.
+    size_a: [f64; 2],
+    /// For elbows: the incoming and outgoing directions (unit vectors) at the turn.
+    dir_in: Vec2,
+    dir_out: Vec2,
+}
+
+impl Piece {
+    fn segment(a: Vec2, b: Vec2, z0: f64, z1: f64, size: [f64; 2]) -> Self {
+        let d = if a.dist(b) > 1e-9 { (b - a) * (1.0 / a.dist(b)) } else { Vec2::new(1.0, 0.0) };
+        Piece { a, b, z0, z1, kind: FittingKind::Segment, size_a: size, dir_in: d, dir_out: d }
+    }
+    fn fitting(center: Vec2, z0: f64, z1: f64, kind: FittingKind, size: [f64; 2], dir_in: Vec2, dir_out: Vec2) -> Self {
+        Piece { a: center, b: center, z0, z1, kind, size_a: size, dir_in, dir_out }
+    }
+    fn is_fitting(&self) -> bool {
+        self.kind != FittingKind::Segment
+    }
+    fn is_round(&self) -> bool {
+        self.size_a[1] <= 0.0
+    }
 }
 
 /// The run as pieces: its segments (and, at a drop, the riser between their heights; at each
-/// turn or drop a fitting the size of the section).
-fn pieces(run: &MepRun, base_z: f64, upf: f64) -> (Vec<Piece>, usize, usize) {
+/// turn or drop a fitting the size of the section). Returns `(pieces, counts)`.
+fn pieces(run: &MepRun, base_z: f64, upf: f64) -> (Vec<Piece>, PieceCounts) {
     let h = if run.size_in[1] > 0.0 { run.size_in[1] } else { run.size_in[0] } / 12.0 * upf;
     let pts: Vec<Vec2> = run.points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
     let mut out = Vec::new();
-    let (mut elbows, mut drops) = (0, 0);
+    let mut counts = PieceCounts::default();
     for (i, w2) in pts.windows(2).enumerate() {
         let [a, b] = [w2[0], w2[1]];
         let z = base_z + run.bottoms_ft.get(i).copied().unwrap_or(0.0) * upf;
-        out.push(Piece { a, b, z0: z, z1: z + h, fitting: false });
+        out.push(Piece::segment(a, b, z, z + h, run.size_in));
         // The corner to the next segment.
         if let Some(c) = pts.get(i + 2) {
             let (u, v) = (b - a, *c - b);
             let turn = u.len() > 1e-9 && v.len() > 1e-9 && (u.cross(v) / (u.len() * v.len())).abs() > 0.09;
             let z2 = base_z + run.bottoms_ft.get(i + 1).copied().unwrap_or(0.0) * upf;
+            let dir_in = if u.len() > 1e-9 { u * (1.0 / u.len()) } else { Vec2::new(1.0, 0.0) };
+            let dir_out = if v.len() > 1e-9 { v * (1.0 / v.len()) } else { Vec2::new(1.0, 0.0) };
             if (z2 - z).abs() > 1e-9 {
-                drops += 1;
-                out.push(Piece { a: b, b, z0: z.min(z2), z1: z.max(z2) + h, fitting: true });
+                counts.drops += 1;
+                out.push(Piece::fitting(b, z.min(z2), z.max(z2) + h, FittingKind::Drop, run.size_in, dir_in, dir_out));
             } else if turn {
-                elbows += 1;
-                out.push(Piece { a: b, b, z0: z, z1: z + h, fitting: true });
+                counts.elbows += 1;
+                out.push(Piece::fitting(b, z, z + h, FittingKind::Elbow, run.size_in, dir_in, dir_out));
             }
         }
     }
-    (out, elbows, drops)
+    (out, counts)
 }
 
-/// A piece as a mesh: a box (rectangular, or a corner), or an octagonal tube (round).
-fn piece_mesh(m: &mut Mesh, p: &Piece, w: f64, round: bool) {
-    if p.a.dist(p.b) <= 1e-9 {
-        // A fitting or riser: a square post the section's width.
-        let half = Vec2::new(w / 2.0, 0.0);
-        super::wallgen::add_box(m, p.a - half, p.a + half, w, p.z0, p.z1);
+#[derive(Clone, Copy, Debug, Default)]
+struct PieceCounts {
+    elbows: usize,
+    drops: usize,
+}
+
+// ---- mesh generation for pieces ----
+
+/// The number of subdivisions for round duct cross-sections.
+const ROUND_SIDES: u32 = 12;
+
+/// Add a straight rectangular duct segment to the mesh. `w` is the section width in sheet
+/// units (the perpendicular spread of the box); `z0→z1` span the section height.
+fn add_rect_segment(m: &mut Mesh, a: Vec2, b: Vec2, w: f64, _h_in: f64, z0: f64, z1: f64, _upf: f64) {
+    if a.dist(b) <= 1e-9 {
         return;
     }
-    if !round {
-        super::wallgen::add_box(m, p.a, p.b, w, p.z0, p.z1);
+    super::wallgen::add_box(m, a, b, w, z0, z1);
+}
+
+/// Add a straight round duct/pipe segment to the mesh (n-sided tube).
+fn add_round_segment(m: &mut Mesh, a: Vec2, b: Vec2, radius: f64, z0: f64, z1: f64) {
+    let len = a.dist(b);
+    if len <= 1e-9 || radius <= 1e-9 {
         return;
     }
-    let len = p.a.dist(p.b);
-    let u = (p.b - p.a) * (1.0 / len);
+    let u = (b - a) * (1.0 / len);
     let n = Vec2::new(-u.y, u.x);
-    let r = w / 2.0;
-    let zc = (p.z0 + p.z1) / 2.0;
+    let zc = (z0 + z1) / 2.0;
     let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
-    for end in [p.a, p.b] {
-        for k in 0..8 {
-            let t = f64::from(k) * std::f64::consts::TAU / 8.0;
-            let q = end + n * (r * t.cos());
-            m.vertices.push(Vec3::new(q.x, q.y, zc + r * t.sin()));
+    let sides = ROUND_SIDES;
+    for end in [a, b] {
+        for k in 0..sides {
+            let t = f64::from(k) * std::f64::consts::TAU / f64::from(sides);
+            let q = end + n * (radius * t.cos());
+            m.vertices.push(Vec3::new(q.x, q.y, zc + radius * t.sin()));
         }
     }
-    for k in 0..8u32 {
-        let j = (k + 1) % 8;
-        m.faces.push(MeshFace { v: vec![base + k, base + j, base + 8 + j, base + 8 + k], hidden: 0 });
+    for k in 0..sides {
+        let j = (k + 1) % sides;
+        m.faces.push(MeshFace { v: vec![base + k, base + j, base + sides + j, base + sides + k], hidden: 0 });
     }
-    // The ends: fans of triangles, facing out.
-    for k in 1..7u32 {
+    // End caps.
+    for k in 1..sides.saturating_sub(1) {
         m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![base + 8, base + 8 + k, base + 8 + k + 1], hidden: 0 });
+        m.faces.push(MeshFace { v: vec![base + sides, base + sides + k, base + sides + k + 1], hidden: 0 });
     }
+}
+
+/// Add an elbow fitting: a curved bend at the corner with `n_arc` subdivisions along the
+/// turn radius (the duct's width, clamped to a reasonable range).
+fn add_elbow(m: &mut Mesh, center: Vec2, w: f64, h_in: f64, z0: f64, z1: f64, upf: f64, dir_in: Vec2, dir_out: Vec2, round: bool) {
+    let n_arc: u32 = 6;
+    let half_w = w / 2.0;
+    let half_t = if h_in > 0.0 { h_in / 12.0 * upf / 2.0 } else { half_w };
+    // The turn radius: half-width for tight elbows, more natural geometry.
+    let _radius = half_w;
+    // Find the angle of the turn.
+    let cross = dir_in.cross(dir_out);
+    let dot = dir_in.dot(dir_out);
+    let angle = cross.atan2(dot);
+    if angle.abs() < 0.01 {
+        return; // nearly straight, no elbow needed
+    }
+    // The centre of the arc is offset from the corner towards the inside.
+    let bisector = dir_in + dir_out;
+    let blen = bisector.len();
+    if blen < 1e-9 {
+        // 180 degree turn: just a post
+        let half = Vec2::new(half_w, 0.0);
+        super::wallgen::add_box(m, center - half, center + half, half_w * 2.0, z0, z1);
+        return;
+    }
+    if round {
+        add_elbow_round(m, center, half_w, z0, z1, dir_in, dir_out, angle, n_arc);
+    } else {
+        add_elbow_rect(m, center, half_w, half_t, z0, z1, dir_in, dir_out, angle, n_arc);
+    }
+}
+
+/// A rectangular elbow: a sequence of short boxes along the arc.
+fn add_elbow_rect(m: &mut Mesh, center: Vec2, half_w: f64, half_t: f64, z0: f64, z1: f64, dir_in: Vec2, _dir_out: Vec2, angle: f64, n_arc: u32) {
+    let sign = if angle > 0.0 { 1.0 } else { -1.0 };
+    let perp_in = Vec2::new(-dir_in.y, dir_in.x) * sign;
+    let arc_center = center + perp_in * half_w;
+    let start_angle = dir_in.y.atan2(dir_in.x);
+    for k in 0..n_arc {
+        let t0 = f64::from(k) / f64::from(n_arc);
+        let t1 = f64::from(k + 1) / f64::from(n_arc);
+        let a0 = start_angle + angle * t0;
+        let a1 = start_angle + angle * t1;
+        let d0 = Vec2::new(a0.cos(), a0.sin());
+        let d1 = Vec2::new(a1.cos(), a1.sin());
+        let p0 = arc_center - Vec2::new(-d0.y, d0.x) * sign * half_w;
+        let p1 = arc_center - Vec2::new(-d1.y, d1.x) * sign * half_w;
+        super::wallgen::add_box(m, p0, p1, half_t * 2.0, z0, z1);
+    }
+}
+
+/// A round elbow: a torus section using ring cross-sections.
+fn add_elbow_round(m: &mut Mesh, center: Vec2, radius: f64, z0: f64, z1: f64, dir_in: Vec2, _dir_out: Vec2, angle: f64, n_arc: u32) {
+    let sign = if angle > 0.0 { 1.0 } else { -1.0 };
+    let perp_in = Vec2::new(-dir_in.y, dir_in.x) * sign;
+    let arc_center = center + perp_in * radius;
+    let start_angle = dir_in.y.atan2(dir_in.x);
+    let zc = (z0 + z1) / 2.0;
+    let sides = ROUND_SIDES;
+    let rings = n_arc + 1;
+    let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+
+    // Generate ring vertices along the arc.
+    for r in 0..rings {
+        let t = f64::from(r) / f64::from(n_arc);
+        let a = start_angle + angle * t;
+        let d = Vec2::new(a.cos(), a.sin());
+        let ring_center = arc_center - Vec2::new(-d.y, d.x) * sign * radius;
+        let n = Vec2::new(-d.y, d.x);
+        for k in 0..sides {
+            let theta = f64::from(k) * std::f64::consts::TAU / f64::from(sides);
+            let q = ring_center + n * (radius * theta.cos());
+            m.vertices.push(Vec3::new(q.x, q.y, zc + radius * theta.sin()));
+        }
+    }
+
+    // Connect rings with quads.
+    for r in 0..n_arc {
+        for k in 0..sides {
+            let j = (k + 1) % sides;
+            let r0 = base + r * sides;
+            let r1 = base + (r + 1) * sides;
+            m.faces.push(MeshFace { v: vec![r0 + k, r0 + j, r1 + j, r1 + k], hidden: 0 });
+        }
+    }
+
+    // End caps.
+    for k in 1..sides.saturating_sub(1) {
+        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
+        let last_ring = base + n_arc * sides;
+        m.faces.push(MeshFace { v: vec![last_ring, last_ring + k, last_ring + k + 1], hidden: 0 });
+    }
+}
+
+/// Add a drop/riser fitting: a vertical transition between two heights.
+fn add_drop_fitting(m: &mut Mesh, center: Vec2, w: f64, h_in: f64, z0: f64, z1: f64, upf: f64, round: bool) {
+    if round {
+        let r = w / 2.0;
+        let half = Vec2::new(r, 0.0);
+        add_round_segment(m, center - half * 0.01, center + half * 0.01, r, z0, z1);
+    } else {
+        let half = Vec2::new(w / 2.0, 0.0);
+        let t = if h_in > 0.0 { h_in / 12.0 * upf } else { w };
+        super::wallgen::add_box(m, center - half, center + half, t, z0, z1);
+    }
+}
+
+/// Add a terminal or box as a simple shape: rectangular box or squat cylinder.
+fn add_terminal_mesh(m: &mut Mesh, center: Vec2, size_in: [f64; 2], z0: f64, upf: f64) {
+    let w = size_in[0] / 12.0 * upf;
+    let round = size_in[1] <= 0.0;
+    // Terminal height: 6 inches (a small box or disk).
+    let h = 6.0 / 12.0 * upf;
+    if round {
+        add_round_segment(m, center - Vec2::new(0.01, 0.0), center + Vec2::new(0.01, 0.0), w / 2.0, z0, z0 + h);
+    } else {
+        let d = if size_in[1] > 0.0 { size_in[1] / 12.0 * upf } else { w };
+        let half = Vec2::new(w / 2.0, 0.0);
+        super::wallgen::add_box(m, center - half, center + half, d, z0, z0 + h);
+    }
+}
+
+/// A piece as a mesh: a box (rectangular), an octagonal tube (round), or a fitting.
+fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
+    let w = p.size_a[0] / 12.0 * upf;
+    match p.kind {
+        FittingKind::Segment => {
+            if p.is_round() {
+                add_round_segment(m, p.a, p.b, w / 2.0, p.z0, p.z1);
+            } else {
+                add_rect_segment(m, p.a, p.b, w, p.size_a[1], p.z0, p.z1, upf);
+            }
+        }
+        FittingKind::Elbow => {
+            add_elbow(m, p.a, w, p.size_a[1], p.z0, p.z1, upf, p.dir_in, p.dir_out, p.is_round());
+        }
+        FittingKind::Drop => {
+            add_drop_fitting(m, p.a, w, p.size_a[1], p.z0, p.z1, upf, p.is_round());
+        }
+    }
+}
+
+/// Sanitise a name for use in a layer name (alphanumeric, dash, underscore only).
+fn sanitise(name: &str, max: usize) -> String {
+    name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(max).collect()
+}
+
+/// Ensure the layer exists; create it with the given ACI colour if not.
+fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
+    if d.layer(layer).is_none() {
+        let ci = u8::try_from(color.clamp(1, 255)).unwrap_or(7);
+        d.layers.push(cadaddy_doc::Layer {
+            name: layer.to_string(),
+            color: cadaddy_doc::color::Color::Index(ci),
+            ..cadaddy_doc::Layer::default()
+        });
+    }
+}
+
+/// The xdata kind string for IFC export.
+fn kind_str(kind: MepKind) -> &'static str {
+    match kind {
+        MepKind::Duct => "duct",
+        MepKind::Pipe => "pipe",
+        MepKind::Conduit => "conduit",
+    }
+}
+
+/// The xdata tag for a fitting's type (for IFC: IfcDuctFitting, etc).
+fn fitting_kind_str(fk: FittingKind) -> &'static str {
+    match fk {
+        FittingKind::Segment => "segment",
+        FittingKind::Elbow => "elbow",
+        FittingKind::Drop => "drop",
+    }
+}
+
+/// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
+fn mep_layer_name(system: &str, level: &str) -> String {
+    let sys = sanitise(system, 40);
+    let lvl = sanitise(level, 16);
+    format!("3D-MEP-{sys}-{lvl}")
 }
 
 /// The shown systems' runs into model space (sheet units), one mesh per run on its system's
-/// layer. The counts.
+/// layer per level. The counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let (mut runs, mut elbows, mut drops) = (0, 0, 0);
+    let mut total_runs = 0usize;
+    let mut total_elbows = 0usize;
+    let mut total_drops = 0usize;
+    let mut total_fittings = 0usize;
+    let mut total_terminals = 0usize;
+    let t = |code: i32, v: String| RawTag { code, value: v };
+
+    // -- Runs --
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show) else { continue };
         let Some(level) = sp.level(&r.level) else { continue };
-        let layer =
-            format!("3D-MEP-{}", sy.name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(60).collect::<String>());
-        if d.layer(&layer).is_none() {
-            let color = match sy.kind {
-                MepKind::Duct => 4,
-                MepKind::Pipe => 3,
-                MepKind::Conduit => 6,
-            };
-            d.layers.push(cadaddy_doc::Layer {
-                name: layer.clone(),
-                color: cadaddy_doc::color::Color::Index(color),
-                ..cadaddy_doc::Layer::default()
-            });
-        }
-        let (ps, e, dr) = pieces(r, level.elevation_ft * upf, upf);
-        let w = r.size_in[0] / 12.0 * upf;
-        let mut m = super::wallgen::empty_mesh();
+        let layer = mep_layer_name(&sy.name, &level.name);
+        ensure_layer(d, &layer, sy.aci_color());
+        let (ps, counts) = pieces(r, level.elevation_ft * upf, upf);
+
+        // Separate segment meshes and fitting meshes for distinct IFC mapping.
+        let mut seg_mesh = super::wallgen::empty_mesh();
+        let mut fit_mesh = super::wallgen::empty_mesh();
+        let mut fit_kinds: Vec<FittingKind> = Vec::new();
         for p in &ps {
-            piece_mesh(&mut m, p, w, r.size_in[1] <= 0.0 && !p.fitting);
+            if p.is_fitting() {
+                piece_mesh(&mut fit_mesh, p, upf);
+                fit_kinds.push(p.kind);
+            } else {
+                piece_mesh(&mut seg_mesh, p, upf);
+            }
         }
-        let t = |code: i32, v: String| RawTag { code, value: v };
+
         let source = r.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
-        let xdata = vec![
-            t(1001, super::wallgen::APP.into()),
-            t(1000, "mep".into()),
-            t(1000, level.name.clone()),
-            t(1000, source.hex()),
-            t(1000, format!("system:{}", sy.name)),
-            // What IFC writes it as (a duct, pipe or cable carrier segment).
-            t(
-                1000,
-                format!(
-                    "kind:{}",
-                    match sy.kind {
-                        MepKind::Duct => "duct",
-                        MepKind::Pipe => "pipe",
-                        MepKind::Conduit => "conduit",
-                    }
-                ),
-            ),
-        ];
-        if !m.faces.is_empty() && d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
-            runs += 1;
-            elbows += e;
-            drops += dr;
+        let duct_type_str = sy.duct_type.map(|dt| match dt {
+            DuctType::Supply => "supply",
+            DuctType::Return => "return",
+            DuctType::Exhaust => "exhaust",
+            DuctType::OutsideAir => "outside_air",
+            DuctType::Other => "other",
+        });
+
+        // Add segment mesh.
+        if !seg_mesh.faces.is_empty() {
+            let mut xdata = vec![
+                t(1001, super::wallgen::APP.into()),
+                t(1000, "mep".into()),
+                t(1000, level.name.clone()),
+                t(1000, source.hex()),
+                t(1000, format!("system:{}", sy.name)),
+                t(1000, format!("kind:{}", kind_str(sy.kind))),
+                t(1000, "part:segment".into()),
+            ];
+            if let Some(dt) = duct_type_str {
+                xdata.push(t(1000, format!("duct_type:{dt}")));
+            }
+            if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok() {
+                total_runs += 1;
+            }
+        }
+
+        // Add fitting mesh (one combined mesh per run's fittings, tagged distinctly).
+        if !fit_mesh.faces.is_empty() {
+            // Use the most common fitting kind for the tag; elbows dominate.
+            let dominant_fitting = if counts.elbows > 0 {
+                FittingKind::Elbow
+            } else if counts.drops > 0 {
+                FittingKind::Drop
+            } else {
+                fit_kinds.first().copied().unwrap_or(FittingKind::Elbow)
+            };
+            let mut xdata = vec![
+                t(1001, super::wallgen::APP.into()),
+                t(1000, "mep".into()),
+                t(1000, level.name.clone()),
+                t(1000, source.hex()),
+                t(1000, format!("system:{}", sy.name)),
+                t(1000, format!("kind:{}", kind_str(sy.kind))),
+                t(1000, format!("part:fitting:{}", fitting_kind_str(dominant_fitting))),
+            ];
+            if let Some(dt) = duct_type_str {
+                xdata.push(t(1000, format!("duct_type:{dt}")));
+            }
+            if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(fit_mesh)).is_ok() {
+                total_fittings += 1;
+            }
+        }
+
+        total_elbows += counts.elbows;
+        total_drops += counts.drops;
+    }
+
+    // -- Terminals --
+    for term in sp.mep.terminals.iter().take(MAX_RUNS) {
+        let Some(sy) = sp.mep.systems.iter().find(|s| s.name == term.system).filter(|s| s.show) else { continue };
+        let Some(level) = sp.level(&term.level) else { continue };
+        let layer = mep_layer_name(&sy.name, &level.name);
+        ensure_layer(d, &layer, sy.aci_color());
+
+        let center = Vec2::new(term.at[0], term.at[1]);
+        let z0 = (level.elevation_ft + term.bottom_ft) * upf;
+        let mut m = super::wallgen::empty_mesh();
+        add_terminal_mesh(&mut m, center, term.size_in, z0, upf);
+
+        if !m.faces.is_empty() {
+            let source = term.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
+            let xdata = vec![
+                t(1001, super::wallgen::APP.into()),
+                t(1000, "mep".into()),
+                t(1000, level.name.clone()),
+                t(1000, source.hex()),
+                t(1000, format!("system:{}", sy.name)),
+                t(1000, format!("kind:{}", kind_str(sy.kind))),
+                t(1000, format!("part:terminal:{}", term.terminal_kind)),
+            ];
+            if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+                total_terminals += 1;
+            }
         }
     }
-    json!({ "mepRuns": runs, "elbows": elbows, "drops": drops })
+
+    json!({
+        "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
+        "fittings": total_fittings, "terminals": total_terminals,
+    })
 }
 
 // ---------------- clashes ----------------
@@ -464,9 +789,9 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
-        let (ps, _, _) = pieces(r, level.elevation_ft * upf, upf);
+        let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
         let w = r.size_in[0] / 12.0 * upf;
-        items.extend(ps.into_iter().filter(|p| !p.fitting).map(|piece| Item { run: r, piece, w }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
     // Below the ceiling of the room it passes through (else the level's), into the slab above.

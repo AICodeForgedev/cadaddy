@@ -376,6 +376,10 @@ const ELEMENTS: &[&str] = &[
     "IFCDUCTSEGMENT",
     "IFCPIPESEGMENT",
     "IFCCABLECARRIERSEGMENT",
+    "IFCDUCTFITTING",
+    "IFCPIPEFITTING",
+    "IFCCABLECARRIERFITTING",
+    "IFCAIRTERMINAL",
 ];
 const SPATIAL: &[&str] = &["IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCSPACE"];
 const OBJECTS: &[&str] = &[
@@ -401,6 +405,11 @@ const OBJECTS: &[&str] = &[
     "IFCDUCTSEGMENT",
     "IFCPIPESEGMENT",
     "IFCCABLECARRIERSEGMENT",
+    "IFCDUCTFITTING",
+    "IFCPIPEFITTING",
+    "IFCCABLECARRIERFITTING",
+    "IFCAIRTERMINAL",
+    "IFCDISTRIBUTIONSYSTEM",
 ];
 const PLACEMENT: &[&str] = &["IFCLOCALPLACEMENT"];
 const QUANTITIES: &[&str] = &["IFCQUANTITYLENGTH", "IFCQUANTITYAREA", "IFCQUANTITYVOLUME"];
@@ -533,6 +542,29 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
         "IFCCABLECARRIERSEGMENT",
         element(&["CABLELADDERSEGMENT", "CABLETRAYSEGMENT", "CABLETRUNKINGSEGMENT", "CONDUITSEGMENT", "USERDEFINED", "NOTDEFINED"]),
     );
+    m.insert("IFCDUCTFITTING", element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]));
+    m.insert("IFCPIPEFITTING", element(&["BEND", "CONNECTOR", "ENTRY", "EXIT", "JUNCTION", "OBSTRUCTION", "TRANSITION", "USERDEFINED", "NOTDEFINED"]));
+    m.insert("IFCCABLECARRIERFITTING", element(&["BEND", "CROSS", "REDUCER", "TEE", "USERDEFINED", "NOTDEFINED"]));
+    m.insert("IFCAIRTERMINAL", element(&["DIFFUSER", "GRILLE", "LOUVRE", "REGISTER", "USERDEFINED", "NOTDEFINED"]));
+    // IfcDistributionSystem: IfcRoot (4) + ObjectType + LongName + PredefinedType.
+    {
+        let mut ds = ROOT.to_vec();
+        ds.extend([
+            A::Text { opt: true }, // ObjectType
+            A::Text { opt: true }, // LongName
+            A::Enum { opt: true, of: &["AIRCONDITIONING", "AUDIOVISUAL", "CHEMICAL", "CHILLEDWATER", "COMMUNICATION", "COMPRESSEDAIR", "CONDENSERWATER", "CONTROL", "CONVEYING", "DATA", "DISPOSAL", "DOMESTICCOLDWATER", "DOMESTICHOTWATER", "DRAINAGE", "EARTHING", "ELECTRICAL", "ELECTROACOUSTIC", "EXHAUST", "FIREPROTECTION", "FUEL", "GAS", "HAZARDOUS", "HEATING", "LIGHTING", "LIGHTNINGPROTECTION", "MUNICIPALSOLIDWASTE", "OIL", "OPERATIONAL", "POWERGENERATION", "RAINWATER", "REFRIGERATION", "SECURITY", "SEWAGE", "SIGNAL", "STORMWATER", "TELEPHONE", "TV", "VACUUM", "VENT", "VENTILATION", "WASTEWATER", "WATERSUPPLY", "USERDEFINED", "NOTDEFINED"] },
+        ]);
+        m.insert("IFCDISTRIBUTIONSYSTEM", ds);
+    }
+    // IfcRelAssignsToGroup: IfcRoot (4) + RelatedObjects (list) + RelatedObjectsType (opt enum) + RelatingGroup.
+    {
+        let mut ag = ROOT.to_vec();
+        ag.extend([
+            A::Refs { opt: false, min: 1, to: ELEMENTS },
+            A::Ref { opt: false, to: &["IFCDISTRIBUTIONSYSTEM"] },
+        ]);
+        m.insert("IFCRELASSIGNSTOGROUP", ag);
+    }
     for (door, of, part) in [
         ("IFCDOOR", &["DOOR", "GATE", "TRAPDOOR", "USERDEFINED", "NOTDEFINED"][..], "door"),
         ("IFCWINDOW", &["WINDOW", "SKYLIGHT", "LIGHTDOME", "USERDEFINED", "NOTDEFINED"][..], "window"),
@@ -1072,7 +1104,14 @@ fn the_export_is_valid_ifc4_with_every_part_as_its_class() {
     assert_eq!(n("IFCCOVERING"), parts["ceiling"]);
     assert_eq!((n("IFCDOOR"), n("IFCWINDOW"), n("IFCCOLUMN"), n("IFCCURTAINWALL")), (1, 1, 1, 1));
     assert_eq!((n("IFCSTAIR"), n("IFCRAILING")), (parts["stair"], parts["railing"]));
-    assert_eq!((n("IFCDUCTSEGMENT"), n("IFCPIPESEGMENT"), n("IFCCABLECARRIERSEGMENT")), (1, 1, 1), "MEP runs as their IFC classes");
+    // MEP: segments + fittings as their IFC classes. The duct run has a corner → 1 segment + 1 fitting.
+    assert_eq!(n("IFCDUCTSEGMENT"), 1, "duct segment");
+    assert_eq!(n("IFCDUCTFITTING"), 1, "duct fitting (the elbow)");
+    assert_eq!(n("IFCPIPESEGMENT"), 1, "pipe segment");
+    assert_eq!(n("IFCCABLECARRIERSEGMENT"), 1, "conduit segment");
+    // Distribution systems group MEP objects by system name.
+    assert!(n("IFCDISTRIBUTIONSYSTEM") >= 3, "one IfcDistributionSystem per MEP system: {}", n("IFCDISTRIBUTIONSYSTEM"));
+    assert!(n("IFCRELASSIGNSTOGROUP") >= 3, "one IfcRelAssignsToGroup per system: {}", n("IFCRELASSIGNSTOGROUP"));
     assert_eq!(n("IFCSPACE"), 3);
     assert_eq!(n("IFCBUILDINGELEMENTPROXY"), 0, "nothing left as a proxy: {c:?}");
     assert_eq!(n("IFCBUILDINGSTOREY"), 2);
