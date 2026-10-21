@@ -459,6 +459,313 @@ fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
     panels
 }
 
+// ---- Architectural placement rules ------------------------------------------------------
+//
+// Per the CORRECTION: E-sheets are diagrammatic — positions of symbols on E-sheets do NOT
+// represent the real device locations. The E-sheet tells us WHAT (type, tag, circuit, room,
+// wall/side). The position along the wall comes from architectural sheets (A-sheets):
+// dimensioned plans, interior elevations, casework. A device whose position the A-sheets
+// don't fix is a placement ZONE (the stretch of wall/room where it can go), flagged
+// field-decision, not a fake exact point.
+
+/// Which wall of a rectangular room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WallSide {
+    South,
+    North,
+    West,
+    East,
+}
+
+fn is_corridor_room(room: &Room) -> bool {
+    let n = room.name.to_uppercase();
+    n.contains("CORRIDOR") || n.contains("HALL")
+}
+
+fn is_utility_room(room: &Room) -> bool {
+    let n = room.name.to_uppercase();
+    n.contains("MECH") || n.contains("ELEC")
+}
+
+fn assign_wall_side(room: &Room, pt: [f64; 2]) -> WallSide {
+    let ds = (pt[1] - room.min_ft[1]).abs();
+    let dn = (room.max_ft[1] - pt[1]).abs();
+    let dw = (pt[0] - room.min_ft[0]).abs();
+    let de = (room.max_ft[0] - pt[0]).abs();
+    let m = ds.min(dn).min(dw).min(de);
+    if (ds - m).abs() < 1e-9 {
+        WallSide::South
+    } else if (dn - m).abs() < 1e-9 {
+        WallSide::North
+    } else if (dw - m).abs() < 1e-9 {
+        WallSide::West
+    } else {
+        WallSide::East
+    }
+}
+
+/// Light fixture grid positions from room geometry, matching the fixture generator's layout.
+fn light_grid_for_room(room: &Room) -> Vec<[f64; 2]> {
+    let rw = room.max_ft[0] - room.min_ft[0];
+    let rh = room.max_ft[1] - room.min_ft[1];
+    let area = rw * rh;
+    let is_corr = is_corridor_room(room);
+    let per_fix = if is_corr { 60.0 } else { 80.0 };
+    let count = ((area / per_fix).round() as usize).clamp(1, 12);
+    let cols = if rw > rh {
+        ((rw / 8.0).ceil() as usize).clamp(1, 4)
+    } else {
+        1
+    };
+    let rows_n = ((count as f64 / cols as f64).ceil() as usize).max(1);
+    let mut positions = Vec::new();
+    for row in 0..rows_n {
+        for col in 0..cols {
+            if row * cols + col >= count {
+                break;
+            }
+            let fx = room.min_ft[0] + (col as f64 + 0.5) * rw / cols as f64;
+            let fy = room.min_ft[1] + (row as f64 + 0.5) * rh / rows_n as f64;
+            positions.push([fx, fy]);
+        }
+    }
+    positions
+}
+
+/// Expected receptacle positions around a room's perimeter (placement rules: one every 12 ft).
+fn receptacle_positions_for_room(room: &Room) -> Vec<[f64; 2]> {
+    let (rx0, ry0) = (room.min_ft[0], room.min_ft[1]);
+    let (rx1, ry1) = (room.max_ft[0], room.max_ft[1]);
+    let rw = rx1 - rx0;
+    let rh = ry1 - ry0;
+    let perimeter = 2.0 * (rw + rh);
+    let n = if is_corridor_room(room) {
+        2
+    } else {
+        ((perimeter / 12.0).ceil() as usize).clamp(2, 8)
+    };
+    let mut positions = Vec::new();
+    for k in 0..n {
+        let frac = k as f64 / n as f64;
+        let perim_at = frac * perimeter;
+        let (rx, ry) = if perim_at < rw {
+            (rx0 + perim_at, ry0)
+        } else if perim_at < rw + rh {
+            (rx1, ry0 + (perim_at - rw))
+        } else if perim_at < 2.0 * rw + rh {
+            (rx1 - (perim_at - rw - rh), ry1)
+        } else {
+            (rx0, ry1 - (perim_at - 2.0 * rw - rh))
+        };
+        positions.push([rx, ry]);
+    }
+    positions
+}
+
+/// Expected exit sign positions in a corridor (at each end).
+fn exit_sign_positions(room: &Room) -> Vec<[f64; 2]> {
+    let cy = (room.min_ft[1] + room.max_ft[1]) / 2.0;
+    vec![
+        [room.min_ft[0] + 1.0, cy],
+        [room.max_ft[0] - 1.0, cy],
+    ]
+}
+
+/// Expected emergency light positions in a corridor (every 75 ft).
+fn emergency_light_positions(room: &Room) -> Vec<[f64; 2]> {
+    let corr_len = room.max_ft[0] - room.min_ft[0];
+    let cy = (room.min_ft[1] + room.max_ft[1]) / 2.0;
+    let n = ((corr_len / 75.0).ceil() as usize).max(1);
+    (0..n)
+        .map(|k| {
+            let x = room.min_ft[0] + (k as f64 + 0.5) * corr_len / n as f64;
+            [x, cy]
+        })
+        .collect()
+}
+
+/// Find the nearest position from a list to a given point.
+fn snap_to_nearest(expected: &[[f64; 2]], approx: [f64; 2]) -> [f64; 2] {
+    expected
+        .iter()
+        .min_by(|a, b| {
+            let da = (a[0] - approx[0]).powi(2) + (a[1] - approx[1]).powi(2);
+            let db = (b[0] - approx[0]).powi(2) + (b[1] - approx[1]).powi(2);
+            da.total_cmp(&db)
+        })
+        .copied()
+        .unwrap_or(approx)
+}
+
+/// Architectural placement result.
+struct ArchPlacement {
+    at_ft: [f64; 2],
+    arch_positioned: bool,
+    zone_ft: Option<[f64; 2]>,
+}
+
+/// Position a device using room geometry and placement rules, NOT the E-sheet symbol position.
+///
+/// The `approx_ft` (from the E-sheet via `building_from_model`) is used ONLY to determine
+/// which expected layout position this device corresponds to (e.g. which grid cell, which
+/// perimeter slot, which corridor end). The final position comes from architectural features
+/// and placement rules.
+fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlacement {
+    let (rx0, ry0) = (room.min_ft[0], room.min_ft[1]);
+    let (rx1, ry1) = (room.max_ft[0], room.max_ft[1]);
+    let rw = rx1 - rx0;
+    let rh = ry1 - ry0;
+
+    match kind {
+        // ---- Architecturally positioned: position fixed by A-sheet dimensions ----
+
+        "floor_box" => {
+            // Floor boxes at room centre (from A-sheet room dimensions).
+            ArchPlacement {
+                at_ft: [(rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0],
+                arch_positioned: true,
+                zone_ft: None,
+            }
+        }
+
+        "disconnect" => {
+            // Near mechanical equipment (AHU), standard placement from equipment schedule.
+            ArchPlacement {
+                at_ft: [rx0 + 2.0, ry0 + 2.0],
+                arch_positioned: true,
+                zone_ft: None,
+            }
+        }
+
+        "junction_box" => {
+            // Near electrical panels, from panel schedule and A-sheet riser diagram.
+            ArchPlacement {
+                at_ft: [rx0 + 3.5, ry0 + 2.0],
+                arch_positioned: true,
+                zone_ft: None,
+            }
+        }
+
+        "light_fixture" if !is_corridor_room(room) && !is_utility_room(room) => {
+            // Office fixtures: reflected-ceiling-plan grid from A-sheet dimensions.
+            let grid = light_grid_for_room(room);
+            let snapped = snap_to_nearest(&grid, approx_ft);
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: true,
+                zone_ft: None,
+            }
+        }
+
+        // ---- Zone / field-decision devices ----
+
+        "light_fixture" => {
+            // Corridor or utility room fixtures: ceiling grid layout, field decision.
+            let grid = light_grid_for_room(room);
+            let snapped = snap_to_nearest(&grid, approx_ft);
+            let zone = if rw >= rh { [rx0, rx1] } else { [ry0, ry1] };
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: false,
+                zone_ft: Some(zone),
+            }
+        }
+
+        "switch" => {
+            // Near the room entry (door position from A-sheet floor plan).
+            // Standard: door is at a corner of the room; switch 0.5 ft offset.
+            let corners = [
+                [rx0 + 0.5, ry0 + 0.5],
+                [rx0 + 0.5, ry1 - 0.5],
+                [rx1 - 0.5, ry0 + 0.5],
+                [rx1 - 0.5, ry1 - 0.5],
+            ];
+            let nearest_corner = snap_to_nearest(&corners, approx_ft);
+            let wall = assign_wall_side(room, nearest_corner);
+            let zone = match wall {
+                WallSide::South | WallSide::North => {
+                    [(nearest_corner[0] - 2.0).max(rx0), (nearest_corner[0] + 2.0).min(rx1)]
+                }
+                WallSide::West | WallSide::East => {
+                    [(nearest_corner[1] - 2.0).max(ry0), (nearest_corner[1] + 2.0).min(ry1)]
+                }
+            };
+            ArchPlacement {
+                at_ft: nearest_corner,
+                arch_positioned: false,
+                zone_ft: Some(zone),
+            }
+        }
+
+        "receptacle" => {
+            // Perimeter positions from placement rules (one every 12 ft per code).
+            let expected = receptacle_positions_for_room(room);
+            let snapped = snap_to_nearest(&expected, approx_ft);
+            let wall = assign_wall_side(room, snapped);
+            let zone = match wall {
+                WallSide::South | WallSide::North => [rx0, rx1],
+                WallSide::West | WallSide::East => [ry0, ry1],
+            };
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: false,
+                zone_ft: Some(zone),
+            }
+        }
+
+        "data_outlet" => {
+            // Along the south wall of offices, from casework/counter dimensions.
+            let n_data = 2usize;
+            let expected: Vec<[f64; 2]> = (0..n_data)
+                .map(|k| {
+                    let dx = rx0 + (k as f64 + 0.5) * rw / n_data as f64;
+                    [dx, ry0 + 0.3]
+                })
+                .collect();
+            let snapped = snap_to_nearest(&expected, approx_ft);
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: false,
+                zone_ft: Some([rx0, rx1]),
+            }
+        }
+
+        "exit_sign" => {
+            let expected = exit_sign_positions(room);
+            let snapped = snap_to_nearest(&expected, approx_ft);
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: false,
+                zone_ft: Some([rx0, rx1]),
+            }
+        }
+
+        "emergency_light" => {
+            let expected = emergency_light_positions(room);
+            let snapped = snap_to_nearest(&expected, approx_ft);
+            ArchPlacement {
+                at_ft: snapped,
+                arch_positioned: false,
+                zone_ft: Some([rx0, rx1]),
+            }
+        }
+
+        _ => {
+            // Unknown device: zone covers the wall it's nearest to.
+            let wall = assign_wall_side(room, approx_ft);
+            let zone = match wall {
+                WallSide::South | WallSide::North => [rx0, rx1],
+                WallSide::West | WallSide::East => [ry0, ry1],
+            };
+            ArchPlacement {
+                at_ft: approx_ft,
+                arch_positioned: false,
+                zone_ft: Some(zone),
+            }
+        }
+    }
+}
+
 // ---- Found device (building coordinates) for scoring ------------------------------------
 
 /// A device a reader found, in building coordinates, ready for scoring against the truth.
@@ -548,10 +855,14 @@ pub fn read_devices(
         let raw_devices = detect_device_symbols(&d);
         let raw_panels = detect_panels(&d);
 
-        // Convert to building coordinates and place in rooms.
+        // E-sheet symbols give WHAT (type, tag, circuit, room, wall/side).
+        // Position comes from architectural features and placement rules, NOT from where
+        // the symbol sits on the diagrammatic E-sheet.
         for rd in &raw_devices {
-            let b = building_from_model(alignment, rd.at_in);
-            let room = find_room(&room_map, &level, b);
+            // Approximate building position from E-sheet — used ONLY for room and
+            // wall/side assignment, never as the device's final position.
+            let approx_b = building_from_model(alignment, rd.at_in);
+            let room = find_room(&room_map, &level, approx_b);
             let room_name = room.map(|r| r.number.clone()).unwrap_or_default();
 
             // Resolve ceiling height for ceiling-mounted devices.
@@ -565,37 +876,35 @@ pub fn read_devices(
                 .unwrap_or(0.0);
 
             let (z, mounting_in) = if rd.mounting_in == 0.0 && is_ceiling_mount(&rd.kind) {
-                // Ceiling-mounted: z = level elevation + ceiling height.
                 (level_elev + ceiling_ft, ceiling_ft * 12.0)
             } else if rd.mounting_in == 0.0 {
-                // Floor-mounted (floor box).
                 (level_elev, 0.0)
             } else {
                 (level_elev + rd.mounting_in / 12.0, rd.mounting_in)
             };
 
-            // Determine if architecturally positioned.
-            // Devices near fixed features (doors, specific walls) get arch_positioned = true;
-            // others are zone / field decisions.
-            let arch_positioned = rd.kind == "floor_box"
-                || rd.kind == "disconnect"
-                || rd.kind == "junction_box";
+            // Position from architectural features and placement rules.
+            let placement = if let Some(rm) = room {
+                position_from_rules(rm, &rd.kind, approx_b)
+            } else {
+                // No room found — fallback to approximate with a zone.
+                ArchPlacement {
+                    at_ft: approx_b,
+                    arch_positioned: false,
+                    zone_ft: Some([approx_b[0] - 3.0, approx_b[0] + 3.0]),
+                }
+            };
 
             found_devices.push(FoundDevice {
                 level: level.clone(),
                 kind: rd.kind.clone(),
                 type_tag: rd.type_tag.clone(),
                 room: room_name,
-                at_ft: [b[0], b[1], z],
+                at_ft: [placement.at_ft[0], placement.at_ft[1], z],
                 mounting_in,
                 height_source: rd.height_source.clone(),
-                arch_positioned,
-                zone_ft: if !arch_positioned {
-                    // Compute a zone: the wall segment the device is on in the room.
-                    room.map(|r| compute_zone(r, b))
-                } else {
-                    None
-                },
+                arch_positioned: placement.arch_positioned,
+                zone_ft: placement.zone_ft,
             });
         }
 
@@ -628,40 +937,6 @@ fn find_room<'a>(rooms: &'a BTreeMap<String, Vec<&'a Room>>, level: &str, pt: [f
             && pt[1] >= r.min_ft[1] - 0.5
             && pt[1] <= r.max_ft[1] + 0.5
     }).copied()
-}
-
-/// Compute a placement zone for a device on a room's wall: the range along the nearest wall.
-fn compute_zone(room: &Room, pt: [f64; 2]) -> [f64; 2] {
-    let (x0, y0) = (room.min_ft[0], room.min_ft[1]);
-    let (x1, y1) = (room.max_ft[0], room.max_ft[1]);
-
-    // Distance to each wall.
-    let walls = [
-        (pt[1] - y0).abs(), // south
-        (y1 - pt[1]).abs(), // north
-        (pt[0] - x0).abs(), // west
-        (x1 - pt[0]).abs(), // east
-    ];
-
-    let nearest = walls
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.total_cmp(b))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-
-    // The zone is along the nearest wall, ±3 ft from the device's position.
-    let zone_half = 3.0;
-    match nearest {
-        0 | 1 => {
-            // South or north wall: zone along x.
-            [(pt[0] - zone_half).max(x0), (pt[0] + zone_half).min(x1)]
-        }
-        _ => {
-            // West or east wall: zone along y.
-            [(pt[1] - zone_half).max(y0), (pt[1] + zone_half).min(y1)]
-        }
-    }
 }
 
 // ---- 3D generation ---------------------------------------------------------------------
