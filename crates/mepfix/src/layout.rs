@@ -32,11 +32,15 @@ pub enum Kind {
     DoorSchedule,
     /// The room finish schedule and finish legend.
     FinishSchedule,
+    /// The roof drainage and flashing plan (Q337).
+    RoofDrainage,
+    /// The roof and exterior wall assemblies, wall section and detail index (Q337).
+    Assemblies,
 }
 
 impl Kind {
     pub fn plan(&self) -> bool {
-        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes | Kind::DoorSchedule | Kind::FinishSchedule)
+        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes | Kind::DoorSchedule | Kind::FinishSchedule | Kind::Assemblies)
     }
 }
 
@@ -107,6 +111,9 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     v.push(("A-103".into(), "ROOF PLAN".into(), "A".into(), Kind::Roof));
     v.push(("A-601".into(), "DOOR AND WINDOW SCHEDULES".into(), "A".into(), Kind::DoorSchedule));
     v.push(("A-602".into(), "ROOM FINISH SCHEDULE".into(), "A".into(), Kind::FinishSchedule));
+    // Added after the architecture's sheets, so every sheet above keeps its random draws.
+    v.push(("A-104".into(), "ROOF DRAINAGE AND FLASHING PLAN".into(), "A".into(), Kind::RoofDrainage));
+    v.push(("A-502".into(), "ROOF AND EXTERIOR WALL ASSEMBLIES".into(), "A".into(), Kind::Assemblies));
     v
 }
 
@@ -164,7 +171,7 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Lighting(l)
             | Kind::Power(l)
             | Kind::Floor(l) => Some(l.clone()),
-            Kind::Roof => Some("R".to_string()),
+            Kind::Roof | Kind::RoofDrainage => Some("R".to_string()),
             _ => None,
         };
         let plan = kind.plan();

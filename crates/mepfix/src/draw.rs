@@ -314,6 +314,33 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("curb", "EQUIPMENT CURB"));
             abbr.extend(["RD = ROOF DRAIN", "EF = EXHAUST FAN", "ELEV. = ELEVATOR"].map(abbrev));
         }
+        Kind::RoofDrainage => {
+            grid(&mut pen, t);
+            crate::envelope::draw_drainage(&mut pen, t);
+            legend.push(item("roof_drain", "ROOF DRAIN"));
+            legend.push(item("overflow", "OVERFLOW SCUPPER / DRAIN"));
+            legend.push(item("cricket", "TAPERED CRICKET / SADDLE"));
+            legend.push(item("walkway", "WALKWAY PADS"));
+            abbr.extend(
+                ["RD = ROOF DRAIN", "OS = OVERFLOW SCUPPER", "OD = OVERFLOW DRAIN", "VTR = VENT THROUGH ROOF", "MIN. = MINIMUM", "GA. = GAUGE"]
+                    .map(abbrev),
+            );
+        }
+        Kind::Assemblies => {
+            let fr = frame(st);
+            crate::envelope::draw_assemblies(&mut pen, t, &st.envelope, fr.area);
+            abbr.extend(
+                [
+                    "EW = EXTERIOR WALL",
+                    "CI = CONTINUOUS INSULATION",
+                    "EIFS = EXTERIOR INSULATION AND FINISH SYSTEM",
+                    "TPO = THERMOPLASTIC POLYOLEFIN",
+                    "EL. = ELEVATION",
+                    "THK. = THICKNESS",
+                ]
+                .map(abbrev),
+            );
+        }
         Kind::DoorSchedule => {
             let fr = frame(st);
             crate::arch::draw_door_schedule(&mut pen, t, &st.arch, fr.area);

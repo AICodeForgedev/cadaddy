@@ -420,6 +420,9 @@ pub struct Band {
     pub end_ft: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
+    /// What the band is built of, outside in (an exterior wall assembly over the backup wall).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<Assembly>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,6 +445,9 @@ pub struct Roof {
     /// Parapet height above the roof's high point, feet; none = no parapet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parapet_ft: Option<f64>,
+    /// What the roof is built of, top down (membrane, cover board, insulation, deck).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<Assembly>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1024,7 +1030,10 @@ impl BuildingSpec {
                         (BandKind::Material, Some(m)) => m.clone(),
                         (BandKind::Material, None) => "material".to_string(),
                     };
-                    format!("{what} {} to {}", feet(b.from_ft), feet(b.to_ft))
+                    let asm = b.assembly.as_ref().map_or(String::new(), |a| {
+                        format!(" ({}{} layers)", if a.tag.is_empty() { String::new() } else { format!("{}, ", a.tag) }, a.layers.len())
+                    });
+                    format!("{what} {} to {}{asm}", feet(b.from_ft), feet(b.to_ft))
                 })
                 .collect();
             put(
@@ -1036,7 +1045,11 @@ impl BuildingSpec {
         for r in &self.exterior.roofs {
             let slope = r.slope.map_or("flat".to_string(), |s| format!("sloping {}", pitch_text(s.rise_per_ft)));
             let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet", feet(p)));
-            put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}", r.name, r.level));
+            let asm = r.assembly.as_ref().map_or(String::new(), |a| {
+                let words: Vec<&str> = a.layers.iter().map(|l| l.material.as_str()).collect();
+                format!("; {} top down: {}", if a.tag.is_empty() { "built" } else { a.tag.as_str() }, words.join(", "))
+            });
+            put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}{asm}", r.name, r.level));
         }
         for (i, c) in self.exterior.crickets.iter().enumerate() {
             put("exterior", format!("crickets/{}", i + 1), format!("Cricket {} on {}, {} high", i + 1, c.level, feet(c.height_ft)));
@@ -1487,6 +1500,9 @@ impl BuildingSpec {
             if r.parapet_ft.is_some_and(|p| !(fin(p) && (0.0..=50.0).contains(&p))) {
                 out.push(Issue::error(format!("{at}.parapet_ft"), "the parapet must be from 0 to 50 feet"));
             }
+            if let Some(a) = &r.assembly {
+                envelope_assembly_issues(&format!("{at}.assembly"), a, &mut out);
+            }
         }
         for (i, c) in self.exterior.crickets.iter().enumerate().take(MAX_ITEMS) {
             if self.level(&c.level).is_none() || !outline_ok(&c.outline) || !(fin(c.height_ft) && c.height_ft > 0.0 && c.height_ft <= 20.0) {
@@ -1579,6 +1595,9 @@ impl BuildingSpec {
             for (j, b) in f.bands.iter().enumerate().take(MAX_ITEMS) {
                 if !(fin(b.from_ft) && fin(b.to_ft) && b.to_ft > b.from_ft) {
                     out.push(Issue::error(format!("exterior.facades[{i}].bands[{j}]"), "a band runs from a height up to a higher one"));
+                }
+                if let Some(a) = &b.assembly {
+                    envelope_assembly_issues(&format!("exterior.facades[{i}].bands[{j}].assembly"), a, &mut out);
                 }
             }
         }
@@ -1676,6 +1695,19 @@ fn materials_text(m: &Surfaces) -> String {
 /// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
 /// list of named items (levels, wall types, rooms, families by `name`; layers by `layer`) merges
 /// item by item, an item with `"remove": true` removing it; other lists are replaced.
+/// A roof's or a facade band's assembly: at most [`MAX_ASSEMBLY_LAYERS`] layers, each from 0
+/// (a membrane or a barrier) to 48 inches thick.
+fn envelope_assembly_issues(at: &str, a: &Assembly, out: &mut Vec<Issue>) {
+    if a.layers.len() > MAX_ASSEMBLY_LAYERS {
+        out.push(Issue::error(format!("{at}.layers"), format!("at most {MAX_ASSEMBLY_LAYERS} layers")));
+    }
+    for (j, l) in a.layers.iter().enumerate().take(MAX_ASSEMBLY_LAYERS) {
+        if !(l.thickness_in.is_finite() && (0.0..=48.0).contains(&l.thickness_in)) {
+            out.push(Issue::error(format!("{at}.layers[{j}].thickness_in"), "a layer is from 0 to 48 inches thick"));
+        }
+    }
+}
+
 pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
     use serde_json::Value;
     match (base, patch) {
@@ -1831,5 +1863,51 @@ mod tests {
             &serde_json::json!({"levels": [{"name": "l2", "height_ft": 12}, {"name": "L1", "remove": true}, {"name": "L3", "height_ft": 9}], "site": null}),
         );
         assert_eq!(base, serde_json::json!({"levels": [{"name": "L2", "height_ft": 12}, {"name": "L3", "height_ft": 9}]}));
+    }
+
+    #[test]
+    fn roof_and_band_assemblies() {
+        let mut s = BuildingSpec::from_rules(&Rules::fallback());
+        let level = s.levels.first().map(|l| l.name.clone()).unwrap_or_default();
+        let layer = |material: &str, thickness_in: f64| AssemblyLayer { material: material.into(), thickness_in, ..AssemblyLayer::default() };
+        let asm = Assembly {
+            tag: "R-1".into(),
+            layers: vec![layer("60 mil TPO membrane", 0.0), layer("1/2\" cover board", 0.5), layer("(2) 2\" polyiso", 4.0)],
+            ..Assembly::default()
+        };
+        s.exterior.roofs.push(Roof {
+            name: "R-1".into(),
+            level: level.clone(),
+            outline: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0]],
+            slope: None,
+            parapet_ft: Some(3.0),
+            assembly: Some(asm.clone()),
+        });
+        s.exterior.facades.push(Facade {
+            side: Side::North,
+            bands: vec![Band {
+                kind: BandKind::Material,
+                from_ft: 0.0,
+                to_ft: 14.0,
+                start_ft: None,
+                end_ft: None,
+                material: Some("Brick".into()),
+                assembly: Some(Assembly { tag: "EW-1".into(), ..asm.clone() }),
+            }],
+        });
+        assert!(s.check().iter().all(|i| !i.error), "{:?}", s.check());
+        let back = BuildingSpec::from_json(&s.to_json()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back, s);
+        let d = s.describe();
+        assert!(d.iter().any(|x| x.text.contains("R-1 top down: 60 mil TPO membrane, 1/2\" cover board")), "{d:?}");
+        assert!(d.iter().any(|x| x.text.contains("(EW-1, 3 layers)")), "{d:?}");
+        // Hostile layers are refused.
+        if let Some(a) = s.exterior.roofs.first_mut().and_then(|r| r.assembly.as_mut()) {
+            a.layers.push(layer("bad", f64::NAN));
+            a.layers.extend((0..100).map(|_| layer("x", 1.0)));
+        }
+        let issues = s.check();
+        assert!(issues.iter().any(|i| i.error && i.path.ends_with("layers")), "{issues:?}");
+        assert!(issues.iter().any(|i| i.error && i.path.contains("thickness_in")), "{issues:?}");
     }
 }

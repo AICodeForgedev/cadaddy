@@ -21,6 +21,8 @@ pub mod design;
 pub mod draw;
 pub mod duct_reader;
 pub mod elec_reader;
+pub mod envelope;
+pub mod envelope_reader;
 
 pub mod heights;
 pub mod hotel;
@@ -74,6 +76,7 @@ pub fn truth_for(seed: u64) -> Truth {
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
     add_arch(&mut t, &mut st);
+    add_envelope(&mut t, &mut st);
     t
 }
 
@@ -94,6 +97,14 @@ fn add_arch(t: &mut Truth, st: &mut style::Style) {
     arch::design_arch(t, &st.arch, &mut r);
 }
 
+/// The roof and wall envelope, from a random stream of its own (after the architecture: it
+/// builds on the roof, the exterior walls and the openings).
+fn add_envelope(t: &mut Truth, st: &mut style::Style) {
+    let mut r = Rng::new(t.seed ^ 0x454E_5645_4C4F_5045).fork(7);
+    st.envelope = envelope::EnvStyle::new(&mut r);
+    envelope::design_envelope(t, &st.envelope);
+}
+
 /// The fixture set for a seed.
 pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     let mut r = Rng::new(seed);
@@ -105,6 +116,7 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     t.clashes = clash::clashes(&t, &d.planted);
     add_walls(&mut t, &mut st);
     add_arch(&mut t, &mut st);
+    add_envelope(&mut t, &mut st);
     let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();
@@ -125,6 +137,8 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     files.push(("set.pdf".into(), cadaddy_io::pdf_merge::merge(&set).map_err(|e| format!("set.pdf: {e}"))?));
     let json = serde_json::to_vec_pretty(&t).map_err(|e| e.to_string())?;
     files.push(("truth.json".into(), json));
+    // The Division 07 spec (Q337), as text.
+    files.push(("specs.txt".into(), envelope::spec_text(&t, &st.envelope).into_bytes()));
     Ok(FixtureSet { truth: t, files })
 }
 

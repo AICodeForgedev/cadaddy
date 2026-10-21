@@ -285,6 +285,7 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
                 start_ft: Some((b.min.x - left) / upf),
                 end_ft: Some((b.max.x - left) / upf),
                 material: None,
+                assembly: None,
             });
         } else {
             sills.push(sill);
@@ -307,6 +308,7 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
             start_ft: Some((b.min.x - left) / upf),
             end_ft: Some((b.max.x - left) / upf),
             material,
+            assembly: None,
         });
     }
     let round = |v: f64| (v * 96.0).round() / 96.0;
@@ -477,7 +479,7 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             Some(RoofSlope { down: [dir.x / len, dir.y / len], rise_per_ft: rise })
         });
         let name = format!("Roof {}", roofs.len() + 1);
-        roofs.push(Roof { name, level: level.clone(), outline: q.iter().map(|p| [p.x, p.y]).collect(), slope, parapet_ft: parapet });
+        roofs.push(Roof { name, level: level.clone(), outline: q.iter().map(|p| [p.x, p.y]).collect(), slope, parapet_ft: parapet, assembly: None });
     }
     if roofs.is_empty() {
         return Err(bad("roof.read", "no roof outline found in the region (a closed outline of 100 sq ft or more)"));
