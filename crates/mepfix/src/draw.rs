@@ -334,6 +334,13 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             grid(&mut pen, t);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
+            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
+            casework_plan(&mut pen, t, st, l);
+            legend.push(item("base_cabinet", "BASE CABINET"));
+            legend.push(item("upper_cabinet", "UPPER CABINET"));
+            legend.push(item("counter", "COUNTERTOP"));
+            legend.push(item("vanity", "VANITY"));
+            legend.push(item("appliance", "APPLIANCE"));
             legend.push(item("wall_tag", "WALL TYPE TAG, SEE PARTITION TYPES"));
             legend.push(item("door", "DOOR"));
             if t.arch.is_some() {
@@ -404,17 +411,6 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("beam", "STEEL BEAM / GIRDER, SIZE AT MIDSPAN"));
             legend.push(item("opening", "FLOOR OPENING / SHAFT"));
             abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE", "EL = ELEVATION"].map(abbrev));
-        }
-        Kind::Floor(l) => {
-            background(&mut pen, t, l, true);
-            grid(&mut pen, t);
-            casework_plan(&mut pen, t, st, l);
-            legend.push(item("base_cabinet", "BASE CABINET"));
-            legend.push(item("upper_cabinet", "UPPER CABINET"));
-            legend.push(item("counter", "COUNTERTOP"));
-            legend.push(item("vanity", "VANITY"));
-            legend.push(item("appliance", "APPLIANCE"));
-            abbr.extend(["AFF = ABOVE FINISHED FLOOR", "TYP = TYPICAL", "U.N.O. = UNLESS NOTED OTHERWISE"].map(abbrev));
         }
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
