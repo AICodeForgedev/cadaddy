@@ -420,7 +420,7 @@ fn uuid_v4() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
-    std::time::Instant::now().hash(&mut h);
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_nanos()).hash(&mut h);
     std::thread::current().id().hash(&mut h);
     let a = h.finish();
     h.write_u64(a.wrapping_mul(6364136223846793005));
