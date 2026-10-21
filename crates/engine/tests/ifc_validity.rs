@@ -1726,7 +1726,7 @@ fn scheduled_equipment_exports_as_its_distribution_element_class() {
     let issues = s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": equipment}}})).unwrap();
     assert!(!issues.to_string().contains("mep.equipment"), "{issues}");
     let built = s.execute("model.build", &json!({})).unwrap();
-    assert_eq!(built["mep"]["equipment"].as_u64().or(built["equipment"].as_u64()).or_else(|| find_count(&built)), Some(9), "{built}");
+    assert_eq!(built["mepEquipment"].as_u64().or_else(|| find_count(&built)), Some(9), "{built}");
     let text = export(&mut s, "Sample Equipment.ifc");
     let p = problems(&text);
     assert!(p.is_empty(), "{}", p.join("\n"));

@@ -962,7 +962,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
 
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
-        "fittings": total_fittings, "terminals": total_terminals, "equipment": total_equipment,
+        "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment,
     })
 }
 
