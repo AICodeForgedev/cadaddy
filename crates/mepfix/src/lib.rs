@@ -22,6 +22,7 @@ pub mod elec_reader;
 pub mod hotel;
 pub mod heights;
 pub mod layout;
+pub mod pipe_reader;
 pub mod rng;
 pub mod score;
 pub mod sheet_reader;
