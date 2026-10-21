@@ -86,6 +86,8 @@ pub(crate) const DCTMAIN_KEY: &str = "CADADDY_DCTMAIN";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
+/// Named-object-dictionary key of the XRECORD holding the overrides of generated elements (JSON).
+pub(crate) const OVERRIDES_KEY: &str = "CADADDY_OVERRIDES";
 /// Named-object-dictionary key of the XRECORD holding the plot stamp's settings and the layouts
 /// whose page setups plot it.
 pub(crate) const PLOT_STAMP_KEY: &str = "CADADDY_PLOTSTAMP";
@@ -978,6 +980,19 @@ pub(crate) fn apply_plot_stamp(d: &mut cadaddy_doc::Drawing, text: &str) {
 /// JSON chunks for the tours XRECORD, or `None` without saved viewpoints or tours.
 pub(crate) fn tours_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
     d.tours.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
+}
+
+/// JSON chunks for the overrides XRECORD, or `None` without overrides.
+pub(crate) fn overrides_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.overrides.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
+}
+
+/// The overrides XRECORD's text, when it parses as overrides (capped; a newer version is left out).
+pub(crate) fn parse_overrides(text: &str) -> Option<String> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    cadaddy_doc::overrides::Overrides::from_json(text).ok().and_then(|o| o.to_json().ok())
 }
 
 /// The hidden objects stored in the `CADADDY_HIDDENOBJECTS` XRECORD (hex handles).
