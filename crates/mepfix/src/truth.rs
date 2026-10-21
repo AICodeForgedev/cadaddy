@@ -195,6 +195,10 @@ pub struct Wall {
     /// Where its tags are (none when untagged).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<WallTag>,
+    /// The end its studs were laid out from (`a` or `b`; walls stacked storey over storey share
+    /// one): what a print reader can't know until a shop drawing or a field point says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_from: Option<String>,
 }
 
 /// A wall type tag on a plan: `s_ft` along the wall from `a_ft` where it is (or where its leader
