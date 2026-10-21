@@ -49,6 +49,12 @@ fn tool(s: &mut Server, name: &str, args: Value) -> Result<String, (i64, String)
 fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
     vec![
         ("new_drawing", json!({ "metric": true }), json!({ "metric": "yes" })),
+        ("bim_types", json!({ "action": "list" }), json!({ "action": "explode" })),
+        (
+            "bim_spec_import",
+            json!({ "action": "import", "text": "LUMINAIRE SCHEDULE\nTYPE A  2X4 LED TROFFER  ACME LT-24  120V" }),
+            json!({ "action": "import" }),
+        ),
         ("command_line", json!({ "text": "circle 0,0 5" }), json!({ "text": 5 })),
         ("script", json!({ "text": "LINE 0,0 10,10\n\n" }), json!({})),
         ("execute", json!({ "command": "rectang", "params": { "p1": [20, 0], "p2": [30, 10] } }), json!({ "command": ["line"] })),

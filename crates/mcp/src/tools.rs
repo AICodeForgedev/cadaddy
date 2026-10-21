@@ -157,6 +157,7 @@ fn fits(v: &Value, schema: &Value) -> bool {
         && schema["minItems"].as_u64().is_none_or(|m| len.is_none_or(|n| n as u64 >= m))
         && schema["maxItems"].as_u64().is_none_or(|m| len.is_none_or(|n| n as u64 <= m))
         && (schema["items"].is_null() || v.as_array().is_none_or(|a| a.iter().all(|i| fits(i, &schema["items"]))))
+        && schema["enum"].as_array().is_none_or(|e| e.contains(v))
 }
 
 /// Arguments checked against the tool's input schema: an object, required properties present and
