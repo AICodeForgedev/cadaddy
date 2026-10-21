@@ -49,7 +49,7 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
 fn clean_sets_have_only_the_usual_gaps() {
     for seed in 1..=3 {
         let (t, read, rfis) = rfi::read_fixture_rfis(seed, false).unwrap();
-        assert!(t.planted.is_empty() && t.sleeves.is_empty());
+        assert!(t.planted.is_empty() && t.sleeve_notes.is_empty());
         assert!(read.enlarged.is_empty() && read.sleeves.is_empty());
         let s = rfi::score_rfis(&t, &rfis);
         assert!(s.missed.is_empty() && s.extra.is_empty(), "seed {seed}: {:?} {:?}", s.missed, s.extra);
@@ -78,7 +78,7 @@ fn a_gap_set_is_the_set_plus_its_gaps() {
     assert_eq!(t.head_details, gaps.truth.head_details);
     assert_eq!(t.rcp_soffits, gaps.truth.rcp_soffits);
     assert_eq!(t.soffit_types, gaps.truth.soffit_types);
-    assert_eq!(t.sleeves, gaps.truth.sleeves);
+    assert_eq!(t.sleeve_notes, gaps.truth.sleeve_notes);
     assert_eq!(t.building.rooms, gaps.truth.building.rooms);
     // Unplanted parts are as in the clean set.
     assert_eq!(gaps.truth.segments, clean.truth.segments);

@@ -349,7 +349,7 @@ fn plant_sleeves(t: &mut Truth, r: &mut Rng) {
             (Some(_), Some(_)) => None,
             _ => Some(RfiKind::SleeveNoRoute),
         };
-        t.sleeves.push(SleeveNote {
+        t.sleeve_notes.push(SleeveNote {
             id: id.clone(),
             level: level.clone(),
             at_ft: p,
@@ -376,7 +376,7 @@ fn plant_sleeves(t: &mut Truth, r: &mut Rng) {
         let p = r.pick(&on);
         n += 1;
         let id = format!("SL{n:02}");
-        t.sleeves.push(SleeveNote {
+        t.sleeve_notes.push(SleeveNote {
             id: id.clone(),
             level: level.clone(),
             at_ft: p,

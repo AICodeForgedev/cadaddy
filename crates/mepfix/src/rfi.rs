@@ -872,7 +872,7 @@ pub fn expected(t: &Truth) -> Vec<Expected> {
             add(RfiKind::DetailUnused, "", None, format!("soffit detail {}", st.tag), &st.tag);
         }
     }
-    for s in &t.sleeves {
+    for s in &t.sleeve_notes {
         if s.route.is_none() || s.method.is_none() {
             add(RfiKind::SleeveNoRoute, &s.level, Some([s.at_ft, s.at_ft]), String::new(), &s.id);
         }

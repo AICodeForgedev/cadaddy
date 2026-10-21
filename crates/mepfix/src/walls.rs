@@ -711,7 +711,7 @@ pub fn draw_plan(pen: &mut Pen, t: &Truth, ws: &WallStyle, level: &str, scale: f
 fn draw_sleeves(pen: &mut Pen, t: &Truth, level: &str, scale: f64) {
     let rot = readable(pen.rot());
     let r_ft = 0.05 / scale.max(1e-6);
-    for sl in t.sleeves.iter().filter(|s| s.level == level) {
+    for sl in t.sleeve_notes.iter().filter(|s| s.level == level) {
         let c = pen.b(sl.at_ft);
         pen.circle("A-ANNO-NOTE", c, pen.bl(r_ft));
         let to = [sl.at_ft[0] + 0.45 / scale.max(1e-6), sl.at_ft[1] + 0.3 / scale.max(1e-6)];

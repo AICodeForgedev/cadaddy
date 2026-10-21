@@ -109,7 +109,7 @@ pub struct Truth {
     pub head_details: Vec<HeadDetail>,
     /// Sleeve and pathway notes on the floor plans (sets with planted gaps only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sleeves: Vec<SleeveNote>,
+    pub sleeve_notes: Vec<SleeveNote>,
     /// Gaps and conflicts put into the prints on purpose (sets with planted gaps only): what an
     /// RFI list should say besides the gaps every set has (untagged walls, unscheduled rooms…).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
