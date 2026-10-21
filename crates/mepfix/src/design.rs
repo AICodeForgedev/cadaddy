@@ -366,8 +366,10 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     let two_by_two = seed.is_multiple_of(3);
     let act_grid: [f64; 2] = if two_by_two { [2.0, 2.0] } else { [2.0, 4.0] };
     // Soffits: a dropped GYP section along the corridor where the main duct runs, on some seeds.
-    let has_soffits = r.chance(0.4);
-    let soffit_drop: f64 = r.pick(&[0.5, 1.0, 1.5]); // how far below the corridor ceiling
+    // From a random stream of their own, so the rest of a set stays as it was before soffits.
+    let mut sr = Rng::new(seed ^ 0x534F_4646_4954_5300).fork(6);
+    let has_soffits = sr.chance(0.4);
+    let soffit_drop: f64 = sr.pick(&[0.5, 1.0, 1.5]); // how far below the corridor ceiling
     let mut soffit_n = 0usize;
     for f in &floors {
         let n0: usize = if f.code == "1" { 100 } else { 200 };
