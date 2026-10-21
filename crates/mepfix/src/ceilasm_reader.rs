@@ -651,12 +651,15 @@ pub fn read_assemblies(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &Cei
         // Of the soffits it is beside, the one whose middle is nearest (a callout sits under its
         // soffit's middle; a soffit next door may be as close to it).
         let centre = |sf: &SoffitRead| ((sf.min_ft[0] + sf.max_ft[0]) / 2.0 - p[0]).hypot((sf.min_ft[1] + sf.max_ft[1]) / 2.0 - p[1]);
+        // A callout sits just outside its soffit's south side, so a soffit it is under beats one
+        // it is above (a bulkhead across the aisle may have the nearer middle).
+        let under = |sf: &SoffitRead| p[1] <= sf.min_ft[1];
         let soffit = r
             .soffits
             .iter()
             .enumerate()
             .filter(|(_, sf)| sf.level == *lv && gap(sf) < 2.5)
-            .min_by(|a, b| centre(a.1).total_cmp(&centre(b.1)))
+            .min_by(|a, b| under(b.1).cmp(&under(a.1)).then(centre(a.1).total_cmp(&centre(b.1))))
             .map(|(k, _)| k);
         r.callouts.push(CalloutRead {
             level: lv.clone(),
