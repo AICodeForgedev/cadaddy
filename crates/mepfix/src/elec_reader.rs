@@ -52,8 +52,7 @@ pub fn classify_legend(sym: &str, desc: &str) -> Option<String> {
     if upper.contains("DISCONNECT") || su == "DS" || su.starts_with("DS-") {
         return Some("disconnect".into());
     }
-    if upper.contains("TROFFER") || upper.contains("DOWNLIGHT") || upper.contains("SCONCE")
-        || upper.contains("PENDANT") || upper.contains("FIXTURE")
+    if upper.contains("TROFFER") || upper.contains("DOWNLIGHT") || upper.contains("SCONCE") || upper.contains("PENDANT") || upper.contains("FIXTURE")
     {
         return Some("light_fixture".into());
     }
@@ -156,9 +155,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
     // Collect all TEXT-layer text with positions.
     let mut texts: Vec<(String, [f64; 2])> = Vec::new();
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("TEXT")
-            && !e.common.layer.eq_ignore_ascii_case("DEVICE")
-        {
+        if !e.common.layer.eq_ignore_ascii_case("TEXT") && !e.common.layer.eq_ignore_ascii_case("DEVICE") {
             continue;
         }
         match &e.kind {
@@ -240,11 +237,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
         let text_up: Vec<String> = nearby.iter().map(|(t, _)| t.to_uppercase()).collect();
 
         // Skip if this looks like a panel (large filled rectangle with a tag).
-        let is_panel_text = text_up.iter().any(|t| {
-            t.starts_with('L') && t.len() <= 3
-                || t.starts_with('P') && t.len() <= 3
-                || t.starts_with("TX-")
-        });
+        let is_panel_text = text_up.iter().any(|t| t.starts_with('L') && t.len() <= 3 || t.starts_with('P') && t.len() <= 3 || t.starts_with("TX-"));
         if is_panel_text && !has_circle && !has_arc {
             continue; // Panels are detected separately.
         }
@@ -276,18 +269,10 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
         };
 
         // Look for exit sign shapes (rectangle with X crossing lines).
-        let kind = if text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 {
-            "exit_sign"
-        } else {
-            kind
-        };
+        let kind = if text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 { "exit_sign" } else { kind };
 
         // Junction box: small filled rectangle.
-        let kind = if text_up.iter().any(|t| t.starts_with("JB")) {
-            "junction_box"
-        } else {
-            kind
-        };
+        let kind = if text_up.iter().any(|t| t.starts_with("JB")) { "junction_box" } else { kind };
 
         // Get the type tag from the closest text.
         let type_tag = nearby
@@ -295,8 +280,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
             .filter(|(t, _)| {
                 let u = t.trim().to_uppercase();
                 // Short tags: A, B, C, D, E, S, R, FB, ES-1, EM-1, DS-1, JB-1, etc.
-                u.len() <= 6 && !u.contains('@') && !u.contains('\'') && !u.contains('"')
-                    && !u.starts_with("DO ") && !u.starts_with("SCALE")
+                u.len() <= 6 && !u.contains('@') && !u.contains('\'') && !u.contains('"') && !u.starts_with("DO ") && !u.starts_with("SCALE")
             })
             .min_by(|(_, a), (_, b)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -436,9 +420,7 @@ fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
                 let dx = (p[0] - cx).abs();
                 let dy = p[1] - cy; // above
                 let u = t.trim().to_uppercase();
-                dx < 80.0 && dy > 0.0 && dy < 120.0
-                    && (u.starts_with('L') || u.starts_with('P') || u.starts_with("TX-"))
-                    && u.len() <= 6
+                dx < 80.0 && dy > 0.0 && dy < 120.0 && (u.starts_with('L') || u.starts_with('P') || u.starts_with("TX-")) && u.len() <= 6
             })
             .min_by(|(_, a), (_, b)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -449,11 +431,7 @@ fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
 
         if let Some(tag) = tag {
             let kind = if tag.starts_with("TX") { "transformer" } else { "panel" };
-            panels.push(DetectedPanel {
-                at_in: [cx, cy],
-                tag,
-                kind: kind.to_string(),
-            });
+            panels.push(DetectedPanel { at_in: [cx, cy], tag, kind: kind.to_string() });
         }
     }
     panels
@@ -512,11 +490,7 @@ fn light_grid_for_room(room: &Room) -> Vec<[f64; 2]> {
     let is_corr = is_corridor_room(room);
     let per_fix = if is_corr { 60.0 } else { 80.0 };
     let count = ((area / per_fix).round() as usize).clamp(1, 12);
-    let cols = if rw > rh {
-        ((rw / 8.0).ceil() as usize).clamp(1, 4)
-    } else {
-        1
-    };
+    let cols = if rw > rh { ((rw / 8.0).ceil() as usize).clamp(1, 4) } else { 1 };
     let rows_n = ((count as f64 / cols as f64).ceil() as usize).max(1);
     let mut positions = Vec::new();
     for row in 0..rows_n {
@@ -539,11 +513,7 @@ fn receptacle_positions_for_room(room: &Room) -> Vec<[f64; 2]> {
     let rw = rx1 - rx0;
     let rh = ry1 - ry0;
     let perimeter = 2.0 * (rw + rh);
-    let n = if is_corridor_room(room) {
-        2
-    } else {
-        ((perimeter / 12.0).ceil() as usize).clamp(2, 8)
-    };
+    let n = if is_corridor_room(room) { 2 } else { ((perimeter / 12.0).ceil() as usize).clamp(2, 8) };
     let mut positions = Vec::new();
     for k in 0..n {
         let frac = k as f64 / n as f64;
@@ -565,10 +535,7 @@ fn receptacle_positions_for_room(room: &Room) -> Vec<[f64; 2]> {
 /// Expected exit sign positions in a corridor (at each end).
 fn exit_sign_positions(room: &Room) -> Vec<[f64; 2]> {
     let cy = (room.min_ft[1] + room.max_ft[1]) / 2.0;
-    vec![
-        [room.min_ft[0] + 1.0, cy],
-        [room.max_ft[0] - 1.0, cy],
-    ]
+    vec![[room.min_ft[0] + 1.0, cy], [room.max_ft[0] - 1.0, cy]]
 }
 
 /// Expected emergency light positions in a corridor (every 75 ft).
@@ -618,83 +585,48 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
 
     match kind {
         // ---- Architecturally positioned: position fixed by A-sheet dimensions ----
-
         "floor_box" => {
             // Floor boxes at room centre (from A-sheet room dimensions).
-            ArchPlacement {
-                at_ft: [(rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0],
-                arch_positioned: true,
-                zone_ft: None,
-            }
+            ArchPlacement { at_ft: [(rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0], arch_positioned: true, zone_ft: None }
         }
 
         "disconnect" => {
             // Near mechanical equipment (AHU), standard placement from equipment schedule.
-            ArchPlacement {
-                at_ft: [rx0 + 2.0, ry0 + 2.0],
-                arch_positioned: true,
-                zone_ft: None,
-            }
+            ArchPlacement { at_ft: [rx0 + 2.0, ry0 + 2.0], arch_positioned: true, zone_ft: None }
         }
 
         "junction_box" => {
             // Near electrical panels, from panel schedule and A-sheet riser diagram.
-            ArchPlacement {
-                at_ft: [rx0 + 3.5, ry0 + 2.0],
-                arch_positioned: true,
-                zone_ft: None,
-            }
+            ArchPlacement { at_ft: [rx0 + 3.5, ry0 + 2.0], arch_positioned: true, zone_ft: None }
         }
 
         "light_fixture" if !is_corridor_room(room) && !is_utility_room(room) => {
             // Office fixtures: reflected-ceiling-plan grid from A-sheet dimensions.
             let grid = light_grid_for_room(room);
             let snapped = snap_to_nearest(&grid, approx_ft);
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: true,
-                zone_ft: None,
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: true, zone_ft: None }
         }
 
         // ---- Zone / field-decision devices ----
-
         "light_fixture" => {
             // Corridor or utility room fixtures: ceiling grid layout, field decision.
             let grid = light_grid_for_room(room);
             let snapped = snap_to_nearest(&grid, approx_ft);
             let zone = if rw >= rh { [rx0, rx1] } else { [ry0, ry1] };
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: false,
-                zone_ft: Some(zone),
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some(zone) }
         }
 
         "switch" => {
             // Near the room entry (door position from A-sheet floor plan).
             // Standard: door is at a corner of the room; switch 0.5 ft offset.
-            let corners = [
-                [rx0 + 0.5, ry0 + 0.5],
-                [rx0 + 0.5, ry1 - 0.5],
-                [rx1 - 0.5, ry0 + 0.5],
-                [rx1 - 0.5, ry1 - 0.5],
-            ];
+            let corners = [[rx0 + 0.5, ry0 + 0.5], [rx0 + 0.5, ry1 - 0.5], [rx1 - 0.5, ry0 + 0.5], [rx1 - 0.5, ry1 - 0.5]];
             let nearest_corner = snap_to_nearest(&corners, approx_ft);
             let wall = assign_wall_side(room, nearest_corner);
             let zone = match wall {
-                WallSide::South | WallSide::North => {
-                    [(nearest_corner[0] - 2.0).max(rx0), (nearest_corner[0] + 2.0).min(rx1)]
-                }
-                WallSide::West | WallSide::East => {
-                    [(nearest_corner[1] - 2.0).max(ry0), (nearest_corner[1] + 2.0).min(ry1)]
-                }
+                WallSide::South | WallSide::North => [(nearest_corner[0] - 2.0).max(rx0), (nearest_corner[0] + 2.0).min(rx1)],
+                WallSide::West | WallSide::East => [(nearest_corner[1] - 2.0).max(ry0), (nearest_corner[1] + 2.0).min(ry1)],
             };
-            ArchPlacement {
-                at_ft: nearest_corner,
-                arch_positioned: false,
-                zone_ft: Some(zone),
-            }
+            ArchPlacement { at_ft: nearest_corner, arch_positioned: false, zone_ft: Some(zone) }
         }
 
         "receptacle" => {
@@ -706,11 +638,7 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
                 WallSide::South | WallSide::North => [rx0, rx1],
                 WallSide::West | WallSide::East => [ry0, ry1],
             };
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: false,
-                zone_ft: Some(zone),
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some(zone) }
         }
 
         "data_outlet" => {
@@ -723,31 +651,19 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
                 })
                 .collect();
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: false,
-                zone_ft: Some([rx0, rx1]),
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
         }
 
         "exit_sign" => {
             let expected = exit_sign_positions(room);
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: false,
-                zone_ft: Some([rx0, rx1]),
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
         }
 
         "emergency_light" => {
             let expected = emergency_light_positions(room);
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement {
-                at_ft: snapped,
-                arch_positioned: false,
-                zone_ft: Some([rx0, rx1]),
-            }
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
         }
 
         _ => {
@@ -757,11 +673,7 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
                 WallSide::South | WallSide::North => [rx0, rx1],
                 WallSide::West | WallSide::East => [ry0, ry1],
             };
-            ArchPlacement {
-                at_ft: approx_ft,
-                arch_positioned: false,
-                zone_ft: Some(zone),
-            }
+            ArchPlacement { at_ft: approx_ft, arch_positioned: false, zone_ft: Some(zone) }
         }
     }
 }
@@ -804,11 +716,7 @@ pub struct FoundPanel {
 const DEFAULT_CEILING_FT: f64 = 9.0;
 
 /// Read electrical devices from the fixture set's DXF files using the sheet map for alignment.
-pub fn read_devices(
-    dxf_data: &[(String, Vec<u8>)],
-    sheet_map: &SheetMap,
-    truth: &Truth,
-) -> (Vec<FoundDevice>, Vec<FoundPanel>) {
+pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth: &Truth) -> (Vec<FoundDevice>, Vec<FoundPanel>) {
     let mut found_devices = Vec::new();
     let mut found_panels = Vec::new();
 
@@ -828,10 +736,7 @@ pub fn read_devices(
             continue; // Skip schedule sheets.
         }
 
-        let recognised = sheet_map
-            .sheets
-            .iter()
-            .find(|s| s.number == sheet_num);
+        let recognised = sheet_map.sheets.iter().find(|s| s.number == sheet_num);
         let Some(rs) = recognised else { continue };
         if rs.discipline != "E" {
             continue;
@@ -866,14 +771,8 @@ pub fn read_devices(
             let room_name = room.map(|r| r.number.clone()).unwrap_or_default();
 
             // Resolve ceiling height for ceiling-mounted devices.
-            let ceiling_ft = room
-                .and_then(|r| r.ceiling.as_ref())
-                .map(|c| c.height_ft)
-                .unwrap_or(DEFAULT_CEILING_FT);
-            let level_elev = truth
-                .level(&level)
-                .map(|l| l.elevation_ft)
-                .unwrap_or(0.0);
+            let ceiling_ft = room.and_then(|r| r.ceiling.as_ref()).map(|c| c.height_ft).unwrap_or(DEFAULT_CEILING_FT);
+            let level_elev = truth.level(&level).map(|l| l.elevation_ft).unwrap_or(0.0);
 
             let (z, mounting_in) = if rd.mounting_in == 0.0 && is_ceiling_mount(&rd.kind) {
                 (level_elev + ceiling_ft, ceiling_ft * 12.0)
@@ -888,11 +787,7 @@ pub fn read_devices(
                 position_from_rules(rm, &rd.kind, approx_b)
             } else {
                 // No room found — fallback to approximate with a zone.
-                ArchPlacement {
-                    at_ft: approx_b,
-                    arch_positioned: false,
-                    zone_ft: Some([approx_b[0] - 3.0, approx_b[0] + 3.0]),
-                }
+                ArchPlacement { at_ft: approx_b, arch_positioned: false, zone_ft: Some([approx_b[0] - 3.0, approx_b[0] + 3.0]) }
             };
 
             found_devices.push(FoundDevice {
@@ -910,12 +805,7 @@ pub fn read_devices(
 
         for rp in &raw_panels {
             let b = building_from_model(alignment, rp.at_in);
-            found_panels.push(FoundPanel {
-                level: level.clone(),
-                tag: rp.tag.clone(),
-                kind: rp.kind.clone(),
-                at_ft: b,
-            });
+            found_panels.push(FoundPanel { level: level.clone(), tag: rp.tag.clone(), kind: rp.kind.clone(), at_ft: b });
         }
     }
 
@@ -931,12 +821,11 @@ fn building_from_model(alignment: &Alignment, m: [f64; 2]) -> [f64; 2] {
 
 /// Find which room a point (building feet) is in.
 fn find_room<'a>(rooms: &'a BTreeMap<String, Vec<&'a Room>>, level: &str, pt: [f64; 2]) -> Option<&'a Room> {
-    rooms.get(level)?.iter().find(|r| {
-        pt[0] >= r.min_ft[0] - 0.5
-            && pt[0] <= r.max_ft[0] + 0.5
-            && pt[1] >= r.min_ft[1] - 0.5
-            && pt[1] <= r.max_ft[1] + 0.5
-    }).copied()
+    rooms
+        .get(level)?
+        .iter()
+        .find(|r| pt[0] >= r.min_ft[0] - 0.5 && pt[0] <= r.max_ft[0] + 0.5 && pt[1] >= r.min_ft[1] - 0.5 && pt[1] <= r.max_ft[1] + 0.5)
+        .copied()
 }
 
 // ---- 3D generation ---------------------------------------------------------------------

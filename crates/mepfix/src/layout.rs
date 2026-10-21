@@ -136,8 +136,14 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in sheet_list() {
         let level = match &kind {
-            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l)
-            | Kind::Enlarged(l, _) | Kind::Lighting(l) | Kind::Power(l) => Some(l.clone()),
+            Kind::Framing(l)
+            | Kind::Rcp(l)
+            | Kind::Mech(l)
+            | Kind::Plumb(l)
+            | Kind::Fire(l)
+            | Kind::Enlarged(l, _)
+            | Kind::Lighting(l)
+            | Kind::Power(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();
@@ -285,8 +291,12 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
         v.push((format!("A-20{l}"), format!("LEVEL {l} REFLECTED CEILING PLAN"), "A".into(), Kind::Rcp(l.into())));
     }
     // Structural framing
-    for (num, title, code) in [("S-102", "LEVEL 2 FRAMING PLAN", "2"), ("S-103", "LEVEL 3 FRAMING PLAN", "3"),
-                                ("S-104", "LEVEL 4 FRAMING PLAN", "4"), ("S-105", "ROOF FRAMING PLAN", "R")] {
+    for (num, title, code) in [
+        ("S-102", "LEVEL 2 FRAMING PLAN", "2"),
+        ("S-103", "LEVEL 3 FRAMING PLAN", "3"),
+        ("S-104", "LEVEL 4 FRAMING PLAN", "4"),
+        ("S-105", "ROOF FRAMING PLAN", "R"),
+    ] {
         v.push((num.into(), title.into(), "S".into(), Kind::Framing(code.into())));
     }
     // Mechanical
@@ -340,8 +350,14 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in hotel_sheet_list() {
         let level = match &kind {
-            Kind::Framing(l) | Kind::Rcp(l) | Kind::Mech(l) | Kind::Plumb(l) | Kind::Fire(l)
-            | Kind::Enlarged(l, _) | Kind::Lighting(l) | Kind::Power(l) => Some(l.clone()),
+            Kind::Framing(l)
+            | Kind::Rcp(l)
+            | Kind::Mech(l)
+            | Kind::Plumb(l)
+            | Kind::Fire(l)
+            | Kind::Enlarged(l, _)
+            | Kind::Lighting(l)
+            | Kind::Power(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();
@@ -361,14 +377,20 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
         let rc = rotate(centre_b, 0.0);
         let offset = [origin[0] + centre_paper[0] * k - rc[0], origin[1] + centre_paper[1] * k - rc[1]];
         t.sheets.push(Sheet {
-            number: number.clone(), title, discipline: disc, level,
-            pdf: format!("{number}.pdf"), dxf: format!("{number}.dxf"),
+            number: number.clone(),
+            title,
+            discipline: disc,
+            level,
+            pdf: format!("{number}.pdf"),
+            dxf: format!("{number}.dxf"),
             paper_in: fr.paper,
             scale_text: plan.then(|| scale_text.to_string()),
-            window_ft: None, scale,
+            window_ft: None,
+            scale,
             model_from_building: Placement { rotation_deg: 0.0, offset_in: [round(offset[0]), round(offset[1])] },
             paper_from_model: PaperMap { origin_in: origin, scale: 1.0 / k },
-            legend: Vec::new(), abbreviations: Vec::new(),
+            legend: Vec::new(),
+            abbreviations: Vec::new(),
         });
     }
     // Assign segments to sheets
@@ -379,12 +401,13 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
 
 /// Assign each segment to the sheet it should appear on (hotel).
 fn assign_segments_to_hotel_sheets(t: &mut Truth) {
-    let sheet_map: BTreeMap<(String, String), String> = t.sheets.iter().filter_map(|sh| {
-        sh.level.as_ref().map(|lv| ((sh.discipline.clone(), lv.clone()), sh.number.clone()))
-    }).collect();
+    let sheet_map: BTreeMap<(String, String), String> =
+        t.sheets.iter().filter_map(|sh| sh.level.as_ref().map(|lv| ((sh.discipline.clone(), lv.clone()), sh.number.clone()))).collect();
 
     for seg in &mut t.segments {
-        if !seg.sheet.is_empty() { continue; }
+        if !seg.sheet.is_empty() {
+            continue;
+        }
         let disc = match seg.system.as_str() {
             "SA" | "RA" | "EA" | "OA" => "M",
             "CW" | "HW" | "HWR" | "SAN" | "V" | "G" => "P",
@@ -399,42 +422,53 @@ fn assign_segments_to_hotel_sheets(t: &mut Truth) {
 
 /// Assign electrical and fire alarm devices to their sheets.
 fn assign_devices_to_hotel_sheets(t: &mut Truth) {
-    let sheet_map: BTreeMap<(String, String), String> = t.sheets.iter().filter_map(|sh| {
-        sh.level.as_ref().map(|lv| ((sh.discipline.clone(), lv.clone()), sh.number.clone()))
-    }).collect();
+    let sheet_map: BTreeMap<(String, String), String> =
+        t.sheets.iter().filter_map(|sh| sh.level.as_ref().map(|lv| ((sh.discipline.clone(), lv.clone()), sh.number.clone()))).collect();
 
     for dev in &mut t.elec_devices {
-        if !dev.sheet.is_empty() { continue; }
+        if !dev.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("E".to_string(), dev.level.clone())) {
             dev.sheet = num.clone();
         }
     }
     for panel in &mut t.elec_panels {
-        if !panel.sheet.is_empty() { continue; }
+        if !panel.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("E".to_string(), panel.level.clone())) {
             panel.sheet = num.clone();
         }
     }
     for ckt in &mut t.elec_circuits {
-        if !ckt.sheet.is_empty() { continue; }
+        if !ckt.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("E".to_string(), ckt.level.clone())) {
             ckt.sheet = num.clone();
         }
     }
     for cond in &mut t.elec_conduits {
-        if !cond.sheet.is_empty() { continue; }
+        if !cond.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("E".to_string(), cond.level.clone())) {
             cond.sheet = num.clone();
         }
     }
     for fa in &mut t.fire_alarm_devices {
-        if !fa.sheet.is_empty() { continue; }
+        if !fa.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("FA".to_string(), fa.level.clone())) {
             fa.sheet = num.clone();
         }
     }
     for tc in &mut t.telecom_devices {
-        if !tc.sheet.is_empty() { continue; }
+        if !tc.sheet.is_empty() {
+            continue;
+        }
         if let Some(num) = sheet_map.get(&("T".to_string(), tc.level.clone())) {
             tc.sheet = num.clone();
         }

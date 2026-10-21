@@ -1497,12 +1497,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             for d in t.elec_devices.iter_mut().filter(|d| em_devs.contains(&d.id)) {
                 d.circuit = em_ckt_id.clone();
             }
-            let hr = t
-                .elec_devices
-                .iter()
-                .rfind(|d| em_devs.contains(&d.id))
-                .map(|d| d.drawn_ft)
-                .unwrap_or([panel_x, panel_y]);
+            let hr = t.elec_devices.iter().rfind(|d| em_devs.contains(&d.id)).map(|d| d.drawn_ft).unwrap_or([panel_x, panel_y]);
             t.elec_circuits.push(ElecCircuit {
                 id: em_ckt_id,
                 label: em_label,

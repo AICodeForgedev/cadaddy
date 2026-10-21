@@ -117,8 +117,7 @@ pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, S
     layout::plan_hotel_sheets(&mut t, &st, &mut r.fork(11));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(12));
     t.clashes = clash::clashes(&t, &d.planted);
-    let kinds: Vec<(String, layout::Kind)> = layout::hotel_sheet_list()
-        .into_iter().map(|(n, _, _, k)| (n, k)).collect();
+    let kinds: Vec<(String, layout::Kind)> = layout::hotel_sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();
     let sheets = t.sheets.clone();
@@ -129,8 +128,7 @@ pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, S
             s.legend = legend;
             s.abbreviations = abbr;
         }
-        let pdf = cadaddy_io::pdf::pdf(&drawing, &Space::Model, &pdf_options(sh, &st))
-            .map_err(|e| format!("{}: {e}", sh.number))?;
+        let pdf = cadaddy_io::pdf::pdf(&drawing, &Space::Model, &pdf_options(sh, &st)).map_err(|e| format!("{}: {e}", sh.number))?;
         let dxf = cadaddy_io::write_dxf(&drawing);
         set.push((pdf.clone(), format!("{} {}", sh.number, sh.title), String::new()));
         files.push((sh.pdf.clone(), pdf));

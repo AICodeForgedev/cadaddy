@@ -37,13 +37,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         HotelSize::Full => 10,
     };
 
-    let mut t = Truth {
-        schema: SCHEMA.to_string(),
-        seed,
-        project: project_name(r),
-        kind: "hotel".into(),
-        ..Truth::default()
-    };
+    let mut t = Truth { schema: SCHEMA.to_string(), seed, project: project_name(r), kind: "hotel".into(), ..Truth::default() };
 
     // --- Grid ---
     let room_width_ft = 13.0;
@@ -60,11 +54,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     let mut x_vals = Vec::new();
     let mut x = 0.0;
     for i in 0..=n_x {
-        let label = if st.numbers_on_x {
-            format!("{}", i + 1)
-        } else {
-            ((b'A' + i as u8) as char).to_string()
-        };
+        let label = if st.numbers_on_x { format!("{}", i + 1) } else { ((b'A' + i as u8) as char).to_string() };
         x_labels.push(label);
         x_vals.push(x);
         if i == 0 {
@@ -218,9 +208,15 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     // --- Rooms ---
     // Ground floor: public spaces
     let ground_rooms = ground_floor_rooms(
-        rooms_per_side, west_stair_max_x, east_stair_min_x,
-        elev_bay_start, elev_bay_end, room_depth_ft,
-        corridor_width_ft, building_depth_ft, building_width_ft,
+        rooms_per_side,
+        west_stair_max_x,
+        east_stair_min_x,
+        elev_bay_start,
+        elev_bay_end,
+        room_depth_ft,
+        corridor_width_ft,
+        building_depth_ft,
+        building_width_ft,
     );
     for rm in &ground_rooms {
         t.building.rooms.push(rm.clone());
@@ -601,12 +597,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             level: lv.into(),
             path_ft: [[main_start_x, main_y, main_z], [main_end_x, main_y, main_z]],
             vertical: false,
-            height: Some(Height {
-                bottom_ft: main_z - main_size[1] / 24.0,
-                top_ft: main_z + main_size[1] / 24.0,
-                centre_ft: main_z,
-                note: None,
-            }),
+            height: Some(Height { bottom_ft: main_z - main_size[1] / 24.0, top_ft: main_z + main_size[1] / 24.0, centre_ft: main_z, note: None }),
             tag: None,
             slope: None,
             below_floor: false,
@@ -665,20 +656,39 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         let fp_seg = format!("seg-{seg_id}");
         seg_id += 1;
         t.nodes.push(Node {
-            id: fp_from.clone(), kind: "open_end".into(), system: "FP".into(), level: lv.into(),
-            at_ft: [main_start_x, main_y - 1.5, fp_z], segments: vec![fp_seg.clone()], connects: None,
+            id: fp_from.clone(),
+            kind: "open_end".into(),
+            system: "FP".into(),
+            level: lv.into(),
+            at_ft: [main_start_x, main_y - 1.5, fp_z],
+            segments: vec![fp_seg.clone()],
+            connects: None,
         });
         t.nodes.push(Node {
-            id: fp_to.clone(), kind: "open_end".into(), system: "FP".into(), level: lv.into(),
-            at_ft: [main_end_x, main_y - 1.5, fp_z], segments: vec![fp_seg.clone()], connects: None,
+            id: fp_to.clone(),
+            kind: "open_end".into(),
+            system: "FP".into(),
+            level: lv.into(),
+            at_ft: [main_end_x, main_y - 1.5, fp_z],
+            segments: vec![fp_seg.clone()],
+            connects: None,
         });
         t.segments.push(Segment {
-            id: fp_seg, system: "FP".into(), kind: "pipe".into(), shape: "pipe".into(),
-            size_in: [2.0, 2.0], from: fp_from, to: fp_to, level: lv.into(),
+            id: fp_seg,
+            system: "FP".into(),
+            kind: "pipe".into(),
+            shape: "pipe".into(),
+            size_in: [2.0, 2.0],
+            from: fp_from,
+            to: fp_to,
+            level: lv.into(),
             path_ft: [[main_start_x, main_y - 1.5, fp_z], [main_end_x, main_y - 1.5, fp_z]],
             vertical: false,
             height: Some(Height { bottom_ft: fp_z - 1.0 / 12.0, top_ft: fp_z + 1.0 / 12.0, centre_ft: fp_z, note: None }),
-            tag: None, slope: None, below_floor: false, sheet: String::new(),
+            tag: None,
+            slope: None,
+            below_floor: false,
+            sheet: String::new(),
         });
 
         // Sprinkler heads in corridor
@@ -753,17 +763,37 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             node_id += 1;
             let pipe_y = main_y + 1.5 + off;
             t.nodes.push(Node {
-                id: pf.clone(), kind: "open_end".into(), system: sys.into(), level: lv.into(),
-                at_ft: [main_start_x, pipe_y, pipe_z], segments: vec![ps.clone()], connects: None,
+                id: pf.clone(),
+                kind: "open_end".into(),
+                system: sys.into(),
+                level: lv.into(),
+                at_ft: [main_start_x, pipe_y, pipe_z],
+                segments: vec![ps.clone()],
+                connects: None,
             });
             t.nodes.push(Node {
-                id: pt.clone(), kind: "open_end".into(), system: sys.into(), level: lv.into(),
-                at_ft: [main_end_x, pipe_y, pipe_z], segments: vec![ps.clone()], connects: None,
+                id: pt.clone(),
+                kind: "open_end".into(),
+                system: sys.into(),
+                level: lv.into(),
+                at_ft: [main_end_x, pipe_y, pipe_z],
+                segments: vec![ps.clone()],
+                connects: None,
             });
-            let nominal = match sys { "CW" => 2.0, "HW" => 1.5, _ => 1.0 };
+            let nominal = match sys {
+                "CW" => 2.0,
+                "HW" => 1.5,
+                _ => 1.0,
+            };
             t.segments.push(Segment {
-                id: ps, system: sys.into(), kind: "pipe".into(), shape: "pipe".into(),
-                size_in: [nominal, nominal], from: pf, to: pt, level: lv.into(),
+                id: ps,
+                system: sys.into(),
+                kind: "pipe".into(),
+                shape: "pipe".into(),
+                size_in: [nominal, nominal],
+                from: pf,
+                to: pt,
+                level: lv.into(),
                 path_ft: [[main_start_x, pipe_y, pipe_z], [main_end_x, pipe_y, pipe_z]],
                 vertical: false,
                 height: Some(Height {
@@ -772,7 +802,10 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     centre_ft: pipe_z,
                     note: None,
                 }),
-                tag: None, slope: None, below_floor: false, sheet: String::new(),
+                tag: None,
+                slope: None,
+                below_floor: false,
+                sheet: String::new(),
             });
         }
 
@@ -785,21 +818,39 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         node_id += 1;
         let san_z = elev - 0.5;
         t.nodes.push(Node {
-            id: san_f.clone(), kind: "open_end".into(), system: "SAN".into(), level: lv.into(),
-            at_ft: [main_start_x, main_y + 2.5, san_z], segments: vec![san_seg.clone()], connects: None,
+            id: san_f.clone(),
+            kind: "open_end".into(),
+            system: "SAN".into(),
+            level: lv.into(),
+            at_ft: [main_start_x, main_y + 2.5, san_z],
+            segments: vec![san_seg.clone()],
+            connects: None,
         });
         t.nodes.push(Node {
-            id: san_t.clone(), kind: "open_end".into(), system: "SAN".into(), level: lv.into(),
+            id: san_t.clone(),
+            kind: "open_end".into(),
+            system: "SAN".into(),
+            level: lv.into(),
             at_ft: [main_end_x, main_y + 2.5, san_z - (main_end_x - main_start_x) / 48.0],
-            segments: vec![san_seg.clone()], connects: None,
+            segments: vec![san_seg.clone()],
+            connects: None,
         });
         t.segments.push(Segment {
-            id: san_seg, system: "SAN".into(), kind: "pipe".into(), shape: "pipe".into(),
-            size_in: [4.0, 4.0], from: san_f, to: san_t, level: lv.into(),
+            id: san_seg,
+            system: "SAN".into(),
+            kind: "pipe".into(),
+            shape: "pipe".into(),
+            size_in: [4.0, 4.0],
+            from: san_f,
+            to: san_t,
+            level: lv.into(),
             path_ft: [[main_start_x, main_y + 2.5, san_z], [main_end_x, main_y + 2.5, san_z - (main_end_x - main_start_x) / 48.0]],
             vertical: false,
             height: Some(Height { bottom_ft: san_z - 2.0 / 12.0, top_ft: san_z + 2.0 / 12.0, centre_ft: san_z, note: None }),
-            tag: None, slope: Some("1/4\"/FT".into()), below_floor: true, sheet: String::new(),
+            tag: None,
+            slope: Some("1/4\"/FT".into()),
+            below_floor: true,
+            sheet: String::new(),
         });
 
         // Plant a clash: on level 2, push one supply branch through the FP main
@@ -812,20 +863,39 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             let ct = format!("n-{node_id}");
             node_id += 1;
             t.nodes.push(Node {
-                id: cf.clone(), kind: "tee".into(), system: "SA".into(), level: "2".into(),
-                at_ft: [clash_x, main_y, main_z], segments: vec![clash_seg.clone()], connects: None,
+                id: cf.clone(),
+                kind: "tee".into(),
+                system: "SA".into(),
+                level: "2".into(),
+                at_ft: [clash_x, main_y, main_z],
+                segments: vec![clash_seg.clone()],
+                connects: None,
             });
             t.nodes.push(Node {
-                id: ct.clone(), kind: "open_end".into(), system: "SA".into(), level: "2".into(),
-                at_ft: [clash_x, main_y - 2.5, fp_z], segments: vec![clash_seg.clone()], connects: None,
+                id: ct.clone(),
+                kind: "open_end".into(),
+                system: "SA".into(),
+                level: "2".into(),
+                at_ft: [clash_x, main_y - 2.5, fp_z],
+                segments: vec![clash_seg.clone()],
+                connects: None,
             });
             t.segments.push(Segment {
-                id: clash_seg.clone(), system: "SA".into(), kind: "duct".into(), shape: "round".into(),
-                size_in: [10.0, 10.0], from: cf, to: ct, level: "2".into(),
+                id: clash_seg.clone(),
+                system: "SA".into(),
+                kind: "duct".into(),
+                shape: "round".into(),
+                size_in: [10.0, 10.0],
+                from: cf,
+                to: ct,
+                level: "2".into(),
                 path_ft: [[clash_x, main_y, fp_z], [clash_x, main_y - 2.5, fp_z]],
                 vertical: false,
                 height: Some(Height { bottom_ft: fp_z - 5.0 / 12.0, top_ft: fp_z + 5.0 / 12.0, centre_ft: fp_z, note: None }),
-                tag: None, slope: None, below_floor: false, sheet: String::new(),
+                tag: None,
+                slope: None,
+                below_floor: false,
+                sheet: String::new(),
             });
             planted.push(clash_seg);
         }
@@ -836,7 +906,11 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     for (sys, x_off) in [("CW", 0.0), ("HW", 0.3), ("SAN", 0.6)] {
         let rx = west_stair_max_x + room_width_ft + 0.5;
         let ry = room_depth_ft + 0.2 + x_off;
-        let nominal = match sys { "CW" => 2.0, "SAN" => 4.0, _ => 1.5 };
+        let nominal = match sys {
+            "CW" => 2.0,
+            "SAN" => 4.0,
+            _ => 1.5,
+        };
         t.risers.push(Riser {
             id: format!("riser-{riser_id}"),
             system: sys.into(),
@@ -845,11 +919,14 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             bottom_ft: 0.0,
             top_ft: ground_height_ft + 3.0 * floor_to_floor_ft,
             segments: vec![],
-            shown: ["1", "2", "3", "4"].iter().map(|l| RiserMark {
-                level: l.to_string(),
-                symbol: if *l == "1" { "up" } else { "through" }.into(),
-                note: format!("{}\" {}", pipe_size(nominal), st.sys(sys)),
-            }).collect(),
+            shown: ["1", "2", "3", "4"]
+                .iter()
+                .map(|l| RiserMark {
+                    level: l.to_string(),
+                    symbol: if *l == "1" { "up" } else { "through" }.into(),
+                    note: format!("{}\" {}", pipe_size(nominal), st.sys(sys)),
+                })
+                .collect(),
         });
         riser_id += 1;
     }
@@ -863,22 +940,35 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         bottom_ft: 0.0,
         top_ft: ground_height_ft + 3.0 * floor_to_floor_ft,
         segments: vec![],
-        shown: ["1", "2", "3", "4"].iter().map(|l| RiserMark {
-            level: l.to_string(),
-            symbol: if *l == "1" { "up" } else { "through" }.into(),
-            note: format!("4\" {}", st.sys("FP")),
-        }).collect(),
+        shown: ["1", "2", "3", "4"]
+            .iter()
+            .map(|l| RiserMark {
+                level: l.to_string(),
+                symbol: if *l == "1" { "up" } else { "through" }.into(),
+                note: format!("4\" {}", st.sys("FP")),
+            })
+            .collect(),
     });
     riser_id += 1;
 
     // --- Electrical (reuse Q287 approach, extended for the hotel) ---
-    hotel_electrical(&mut t, st, rooms_per_side, building_width_ft, building_depth_ft,
-                     room_depth_ft, corridor_width_ft, west_stair_max_x, east_stair_min_x,
-                     elev_bay_start, elev_bay_end, r);
+    hotel_electrical(
+        &mut t,
+        st,
+        rooms_per_side,
+        building_width_ft,
+        building_depth_ft,
+        room_depth_ft,
+        corridor_width_ft,
+        west_stair_max_x,
+        east_stair_min_x,
+        elev_bay_start,
+        elev_bay_end,
+        r,
+    );
 
     // --- Fire alarm ---
-    hotel_fire_alarm(&mut t, building_width_ft, building_depth_ft,
-                     room_depth_ft, corridor_width_ft);
+    hotel_fire_alarm(&mut t, building_width_ft, building_depth_ft, room_depth_ft, corridor_width_ft);
 
     // --- Telecom ---
     hotel_telecom(&mut t, r);
@@ -898,22 +988,29 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     ];
     // Interior elevations for a typical guest room
     t.elevations.push(ElevationView {
-        id: "elev-int-bath".into(), name: "TYPICAL BATH INTERIOR ELEVATIONS".into(),
-        direction: "interior".into(), sheet: String::new(), room: Some("rm-2-S1".into()),
+        id: "elev-int-bath".into(),
+        name: "TYPICAL BATH INTERIOR ELEVATIONS".into(),
+        direction: "interior".into(),
+        sheet: String::new(),
+        room: Some("rm-2-S1".into()),
     });
 
     t.sections = vec![
         SectionView {
-            id: "sect-1".into(), name: "BUILDING SECTION A".into(),
+            id: "sect-1".into(),
+            name: "BUILDING SECTION A".into(),
             cut_from_ft: [building_width_ft / 3.0, 0.0],
             cut_to_ft: [building_width_ft / 3.0, building_depth_ft],
-            looking: "west".into(), sheet: String::new(),
+            looking: "west".into(),
+            sheet: String::new(),
         },
         SectionView {
-            id: "sect-2".into(), name: "BUILDING SECTION B".into(),
+            id: "sect-2".into(),
+            name: "BUILDING SECTION B".into(),
             cut_from_ft: [0.0, building_depth_ft / 2.0],
             cut_to_ft: [building_width_ft, building_depth_ft / 2.0],
-            looking: "north".into(), sheet: String::new(),
+            looking: "north".into(),
+            sheet: String::new(),
         },
     ];
 
@@ -952,8 +1049,12 @@ impl RoomType {
             Self::Suite => "SUITE",
         }
     }
-    fn is_ada(self) -> bool { matches!(self, Self::AdaKing) }
-    fn is_suite(self) -> bool { matches!(self, Self::Suite) }
+    fn is_ada(self) -> bool {
+        matches!(self, Self::AdaKing)
+    }
+    fn is_suite(self) -> bool {
+        matches!(self, Self::Suite)
+    }
 }
 
 fn guest_room_sequence(count: usize, r: &mut Rng) -> Vec<RoomType> {
@@ -977,9 +1078,14 @@ fn guest_room_sequence(count: usize, r: &mut Rng) -> Vec<RoomType> {
 
 fn ground_floor_rooms(
     _rooms_per_side: usize,
-    stair_w: f64, stair_e: f64,
-    elev_start: f64, elev_end: f64,
-    room_depth: f64, corr_width: f64, bldg_depth: f64, bldg_width: f64,
+    stair_w: f64,
+    stair_e: f64,
+    elev_start: f64,
+    elev_end: f64,
+    room_depth: f64,
+    corr_width: f64,
+    bldg_depth: f64,
+    bldg_width: f64,
 ) -> Vec<Room> {
     let mut rooms = Vec::new();
     let south_y = 0.0;
@@ -989,8 +1095,12 @@ fn ground_floor_rooms(
 
     // Corridor on level 1
     rooms.push(Room {
-        id: "rm-1-CORR".into(), level: "1".into(), number: "100".into(), name: "CORRIDOR".into(),
-        min_ft: [0.0, corr_y0], max_ft: [bldg_width, corr_y1],
+        id: "rm-1-CORR".into(),
+        level: "1".into(),
+        number: "100".into(),
+        name: "CORRIDOR".into(),
+        min_ft: [0.0, corr_y0],
+        max_ft: [bldg_width, corr_y1],
         ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
     });
 
@@ -999,16 +1109,24 @@ fn ground_floor_rooms(
     let lobby_w = (stair_e - stair_w - elev_end + elev_start) * 0.35;
     let lobby_w = lobby_w.max(20.0);
     rooms.push(Room {
-        id: "rm-1-LOBBY".into(), level: "1".into(), number: "101".into(), name: "LOBBY".into(),
-        min_ft: [x, south_y], max_ft: [x + lobby_w, corr_y0],
+        id: "rm-1-LOBBY".into(),
+        level: "1".into(),
+        number: "101".into(),
+        name: "LOBBY".into(),
+        min_ft: [x, south_y],
+        max_ft: [x + lobby_w, corr_y0],
         ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into() }),
     });
     x += lobby_w;
 
     let fd_w = 15.0;
     rooms.push(Room {
-        id: "rm-1-FD".into(), level: "1".into(), number: "102".into(), name: "FRONT DESK".into(),
-        min_ft: [x, south_y], max_ft: [x + fd_w, corr_y0],
+        id: "rm-1-FD".into(),
+        level: "1".into(),
+        number: "102".into(),
+        name: "FRONT DESK".into(),
+        min_ft: [x, south_y],
+        max_ft: [x + fd_w, corr_y0],
         ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
     });
     x += fd_w;
@@ -1020,16 +1138,24 @@ fn ground_floor_rooms(
 
     let bk_w = 20.0;
     rooms.push(Room {
-        id: "rm-1-BRKFST".into(), level: "1".into(), number: "103".into(), name: "BREAKFAST AREA".into(),
-        min_ft: [x, south_y], max_ft: [(x + bk_w).min(stair_e), corr_y0],
+        id: "rm-1-BRKFST".into(),
+        level: "1".into(),
+        number: "103".into(),
+        name: "BREAKFAST AREA".into(),
+        min_ft: [x, south_y],
+        max_ft: [(x + bk_w).min(stair_e), corr_y0],
         ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into() }),
     });
     x = (x + bk_w).min(stair_e);
 
     if x < stair_e - 5.0 {
         rooms.push(Room {
-            id: "rm-1-KITCHEN".into(), level: "1".into(), number: "104".into(), name: "KITCHEN".into(),
-            min_ft: [x, south_y], max_ft: [stair_e, corr_y0],
+            id: "rm-1-KITCHEN".into(),
+            level: "1".into(),
+            number: "104".into(),
+            name: "KITCHEN".into(),
+            min_ft: [x, south_y],
+            max_ft: [stair_e, corr_y0],
             ceiling: Some(Ceiling { height_ft: 10.0, kind: "ACT".into(), tag: "ACT @ 10'-0\"".into() }),
         });
     }
@@ -1038,16 +1164,24 @@ fn ground_floor_rooms(
     x = stair_w;
     let fitness_w = 20.0;
     rooms.push(Room {
-        id: "rm-1-FIT".into(), level: "1".into(), number: "110".into(), name: "FITNESS CENTER".into(),
-        min_ft: [x, corr_y1], max_ft: [x + fitness_w, north_y],
+        id: "rm-1-FIT".into(),
+        level: "1".into(),
+        number: "110".into(),
+        name: "FITNESS CENTER".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [x + fitness_w, north_y],
         ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
     });
     x += fitness_w;
 
     let laundry_w = 15.0;
     rooms.push(Room {
-        id: "rm-1-LAUNDRY".into(), level: "1".into(), number: "111".into(), name: "LAUNDRY".into(),
-        min_ft: [x, corr_y1], max_ft: [x + laundry_w, north_y],
+        id: "rm-1-LAUNDRY".into(),
+        level: "1".into(),
+        number: "111".into(),
+        name: "LAUNDRY".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [x + laundry_w, north_y],
         ceiling: Some(Ceiling { height_ft: 10.0, kind: "GYP".into(), tag: "GYP @ 10'-0\"".into() }),
     });
     x += laundry_w;
@@ -1059,16 +1193,24 @@ fn ground_floor_rooms(
 
     let pool_w = 30.0;
     rooms.push(Room {
-        id: "rm-1-POOL".into(), level: "1".into(), number: "112".into(), name: "POOL".into(),
-        min_ft: [x, corr_y1], max_ft: [(x + pool_w).min(stair_e - 30.0), north_y],
+        id: "rm-1-POOL".into(),
+        level: "1".into(),
+        number: "112".into(),
+        name: "POOL".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [(x + pool_w).min(stair_e - 30.0), north_y],
         ceiling: Some(Ceiling { height_ft: 12.0, kind: "GYP".into(), tag: "GYP @ 12'-0\"".into() }),
     });
     x = (x + pool_w).min(stair_e - 30.0);
 
     let pe_w = 10.0;
     rooms.push(Room {
-        id: "rm-1-PE".into(), level: "1".into(), number: "113".into(), name: "POOL EQUIPMENT".into(),
-        min_ft: [x, corr_y1], max_ft: [x + pe_w, north_y],
+        id: "rm-1-PE".into(),
+        level: "1".into(),
+        number: "113".into(),
+        name: "POOL EQUIPMENT".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [x + pe_w, north_y],
         ceiling: None, // open to structure
     });
     x += pe_w;
@@ -1076,8 +1218,12 @@ fn ground_floor_rooms(
     let mech_w = (stair_e - x) * 0.5;
     let mech_w = mech_w.max(12.0);
     rooms.push(Room {
-        id: "rm-1-MECH".into(), level: "1".into(), number: "114".into(), name: "MECHANICAL".into(),
-        min_ft: [x, corr_y1], max_ft: [x + mech_w, north_y],
+        id: "rm-1-MECH".into(),
+        level: "1".into(),
+        number: "114".into(),
+        name: "MECHANICAL".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [x + mech_w, north_y],
         ceiling: None,
     });
     x += mech_w;
@@ -1085,16 +1231,24 @@ fn ground_floor_rooms(
     let elec_w = (stair_e - x) * 0.5;
     let elec_w = elec_w.max(8.0);
     rooms.push(Room {
-        id: "rm-1-ELEC".into(), level: "1".into(), number: "115".into(), name: "ELECTRICAL".into(),
-        min_ft: [x, corr_y1], max_ft: [x + elec_w, north_y],
+        id: "rm-1-ELEC".into(),
+        level: "1".into(),
+        number: "115".into(),
+        name: "ELECTRICAL".into(),
+        min_ft: [x, corr_y1],
+        max_ft: [x + elec_w, north_y],
         ceiling: None,
     });
     x += elec_w;
 
     if stair_e - x > 5.0 {
         rooms.push(Room {
-            id: "rm-1-IDF".into(), level: "1".into(), number: "116".into(), name: "IDF".into(),
-            min_ft: [x, corr_y1], max_ft: [stair_e, north_y],
+            id: "rm-1-IDF".into(),
+            level: "1".into(),
+            number: "116".into(),
+            name: "IDF".into(),
+            min_ft: [x, corr_y1],
+            max_ft: [stair_e, north_y],
             ceiling: None,
         });
     }
@@ -1107,45 +1261,67 @@ fn ground_floor_rooms(
 fn wall_assemblies() -> Vec<WallAssembly> {
     vec![
         WallAssembly {
-            id: "wa-1".into(), type_tag: "WT-1".into(), name: "GUEST ROOM DEMISING".into(),
+            id: "wa-1".into(),
+            type_tag: "WT-1".into(),
+            name: "GUEST ROOM DEMISING".into(),
             layers: vec![
                 WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
                 WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
                 WallLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
                 WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
-            thickness_in: 4.875, fire_rating: "1-HR".into(), height_rule: "SLAB TO SLAB".into(), stc: Some(50),
+            thickness_in: 4.875,
+            fire_rating: "1-HR".into(),
+            height_rule: "SLAB TO SLAB".into(),
+            stc: Some(50),
         },
         WallAssembly {
-            id: "wa-2".into(), type_tag: "WT-2".into(), name: "CORRIDOR WALL".into(),
+            id: "wa-2".into(),
+            type_tag: "WT-2".into(),
+            name: "CORRIDOR WALL".into(),
             layers: vec![
                 WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
                 WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
                 WallLayer { material: "BATT INSULATION".into(), thickness_in: 3.625 },
                 WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
             ],
-            thickness_in: 6.125, fire_rating: "1-HR".into(), height_rule: "SLAB TO SLAB".into(), stc: Some(55),
+            thickness_in: 6.125,
+            fire_rating: "1-HR".into(),
+            height_rule: "SLAB TO SLAB".into(),
+            stc: Some(55),
         },
         WallAssembly {
-            id: "wa-3".into(), type_tag: "WT-3".into(), name: "WET WALL (STACKED)".into(),
+            id: "wa-3".into(),
+            type_tag: "WT-3".into(),
+            name: "WET WALL (STACKED)".into(),
             layers: vec![
                 WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
                 WallLayer { material: "6\" MTL STUD".into(), thickness_in: 6.0 },
                 WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
-            thickness_in: 7.25, fire_rating: "".into(), height_rule: "SLAB TO SLAB".into(), stc: Some(45),
+            thickness_in: 7.25,
+            fire_rating: "".into(),
+            height_rule: "SLAB TO SLAB".into(),
+            stc: Some(45),
         },
         WallAssembly {
-            id: "wa-4".into(), type_tag: "WT-4".into(), name: "SHAFT WALL".into(),
+            id: "wa-4".into(),
+            type_tag: "WT-4".into(),
+            name: "SHAFT WALL".into(),
             layers: vec![
                 WallLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
                 WallLayer { material: "2-1/2\" C-H STUD".into(), thickness_in: 2.5 },
                 WallLayer { material: "1\" GYP LINER".into(), thickness_in: 1.0 },
             ],
-            thickness_in: 4.75, fire_rating: "2-HR".into(), height_rule: "SLAB TO SLAB".into(), stc: Some(50),
+            thickness_in: 4.75,
+            fire_rating: "2-HR".into(),
+            height_rule: "SLAB TO SLAB".into(),
+            stc: Some(50),
         },
         WallAssembly {
-            id: "wa-5".into(), type_tag: "WT-5".into(), name: "EXTERIOR WALL".into(),
+            id: "wa-5".into(),
+            type_tag: "WT-5".into(),
+            name: "EXTERIOR WALL".into(),
             layers: vec![
                 WallLayer { material: "FACE BRICK".into(), thickness_in: 3.625 },
                 WallLayer { material: "AIR SPACE".into(), thickness_in: 1.0 },
@@ -1155,16 +1331,24 @@ fn wall_assemblies() -> Vec<WallAssembly> {
                 WallLayer { material: "BATT INSULATION".into(), thickness_in: 6.0 },
                 WallLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
             ],
-            thickness_in: 13.875, fire_rating: "".into(), height_rule: "FLOOR TO DECK".into(), stc: Some(55),
+            thickness_in: 13.875,
+            fire_rating: "".into(),
+            height_rule: "FLOOR TO DECK".into(),
+            stc: Some(55),
         },
         WallAssembly {
-            id: "wa-6".into(), type_tag: "WT-6".into(), name: "BATHROOM PARTITION".into(),
+            id: "wa-6".into(),
+            type_tag: "WT-6".into(),
+            name: "BATHROOM PARTITION".into(),
             layers: vec![
                 WallLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
                 WallLayer { material: "3-5/8\" MTL STUD".into(), thickness_in: 3.625 },
                 WallLayer { material: "1/2\" CEMENT BD".into(), thickness_in: 0.5 },
             ],
-            thickness_in: 4.625, fire_rating: "".into(), height_rule: "FLOOR TO CLG".into(), stc: None,
+            thickness_in: 4.625,
+            fire_rating: "".into(),
+            height_rule: "FLOOR TO CLG".into(),
+            stc: None,
         },
     ]
 }
@@ -1173,7 +1357,11 @@ fn wall_for_room(name: &str, level: &str) -> &'static str {
     match name {
         "CORRIDOR" => "wa-2",
         "KING ROOM" | "DOUBLE QUEEN ROOM" | "ADA KING ROOM" | "SUITE" => {
-            if level != "1" { "wa-1" } else { "wa-2" }
+            if level != "1" {
+                "wa-1"
+            } else {
+                "wa-2"
+            }
         }
         "MECHANICAL" | "ELECTRICAL" | "IDF" => "wa-4",
         "LOBBY" | "FRONT DESK" | "BREAKFAST AREA" | "KITCHEN" | "FITNESS CENTER" | "POOL" => "wa-2",
@@ -1186,25 +1374,34 @@ fn wall_for_room(name: &str, level: &str) -> &'static str {
 fn ceiling_assemblies() -> Vec<CeilingAssembly> {
     vec![
         CeilingAssembly {
-            id: "CA-1".into(), type_tag: "CT-1".into(), name: "ACT CEILING".into(),
+            id: "CA-1".into(),
+            type_tag: "CT-1".into(),
+            name: "ACT CEILING".into(),
             layers: vec![CeilingLayer { material: "2x2 ACOUSTICAL TILE".into(), thickness_in: 0.75 }],
-            total_depth_in: 0.75, fire_rating: String::new(),
+            total_depth_in: 0.75,
+            fire_rating: String::new(),
         },
         CeilingAssembly {
-            id: "CA-2".into(), type_tag: "CT-2".into(), name: "GYP BD CEILING".into(),
+            id: "CA-2".into(),
+            type_tag: "CT-2".into(),
+            name: "GYP BD CEILING".into(),
             layers: vec![
                 CeilingLayer { material: "5/8\" GYP BD".into(), thickness_in: 0.625 },
                 CeilingLayer { material: "HAT CHANNEL".into(), thickness_in: 1.5 },
             ],
-            total_depth_in: 2.125, fire_rating: String::new(),
+            total_depth_in: 2.125,
+            fire_rating: String::new(),
         },
         CeilingAssembly {
-            id: "CA-3".into(), type_tag: "CT-3".into(), name: "1-HR RATED CEILING".into(),
+            id: "CA-3".into(),
+            type_tag: "CT-3".into(),
+            name: "1-HR RATED CEILING".into(),
             layers: vec![
                 CeilingLayer { material: "5/8\" TYPE X GYP BD (2 LAYERS)".into(), thickness_in: 1.25 },
                 CeilingLayer { material: "HAT CHANNEL".into(), thickness_in: 1.5 },
             ],
-            total_depth_in: 2.75, fire_rating: "1-HR".into(),
+            total_depth_in: 2.75,
+            fire_rating: "1-HR".into(),
         },
     ]
 }
@@ -1230,11 +1427,17 @@ fn mep_systems(st: &Style) -> Vec<System> {
 // --- Electrical (hotel scale) ---
 
 fn hotel_electrical(
-    t: &mut Truth, _st: &Style,
-    _rooms_per_side: usize, _bldg_w: f64, _bldg_d: f64,
-    room_depth: f64, corr_width: f64,
-    stair_w: f64, stair_e: f64,
-    _elev_start: f64, _elev_end: f64,
+    t: &mut Truth,
+    _st: &Style,
+    _rooms_per_side: usize,
+    _bldg_w: f64,
+    _bldg_d: f64,
+    room_depth: f64,
+    corr_width: f64,
+    stair_w: f64,
+    stair_e: f64,
+    _elev_start: f64,
+    _elev_end: f64,
     r: &mut Rng,
 ) {
     let mut dev_id = 0;
@@ -1318,14 +1521,20 @@ fn hotel_electrical(
             // Switch at door
             let did = format!("ed-{dev_id}");
             t.elec_devices.push(ElecDevice {
-                id: did.clone(), tag: format!("SW-{}", dev_id + 1),
-                kind: "switch".into(), type_tag: "S".into(),
-                level: lv.into(), room: rm.id.clone(),
+                id: did.clone(),
+                tag: format!("SW-{}", dev_id + 1),
+                kind: "switch".into(),
+                type_tag: "S".into(),
+                level: lv.into(),
+                room: rm.id.clone(),
                 at_ft: [rm.min_ft[0] + 0.5, rm.max_ft[1] - 0.5, elev + 4.0],
                 drawn_ft: [rm.min_ft[0] + 0.5 + r.below(2) as f64 * 0.3, rm.max_ft[1] - 0.5],
-                mounting_in: 48.0, mounting_note: Some("+48\" AFF".into()),
+                mounting_in: 48.0,
+                mounting_note: Some("+48\" AFF".into()),
                 arch_positioned: true,
-                circuit: format!("{lp_tag}/{ckt_num}"), panel: lp_tag.clone(), sheet: String::new(),
+                circuit: format!("{lp_tag}/{ckt_num}"),
+                panel: lp_tag.clone(),
+                sheet: String::new(),
             });
             ckt_devices.push(did);
             dev_id += 1;
@@ -1334,9 +1543,12 @@ fn hotel_electrical(
             t.elec_circuits.push(ElecCircuit {
                 id: format!("ec-{circuit_id}"),
                 label: format!("{lp_tag}/{ckt_num}"),
-                panel: lp_tag.clone(), number: format!("{ckt_num}"),
-                level: lv.into(), devices: ckt_devices,
-                homerun_ft: [cx, cy], sheet: String::new(),
+                panel: lp_tag.clone(),
+                number: format!("{ckt_num}"),
+                level: lv.into(),
+                devices: ckt_devices,
+                homerun_ft: [cx, cy],
+                sheet: String::new(),
             });
             circuit_id += 1;
             ckt_num += 1;
@@ -1348,14 +1560,20 @@ fn hotel_electrical(
                 let rx = rm.min_ft[0] + (i as f64 + 0.5) * w / n_recep as f64;
                 let did = format!("ed-{dev_id}");
                 t.elec_devices.push(ElecDevice {
-                    id: did.clone(), tag: format!("R-{}", dev_id + 1),
-                    kind: "receptacle".into(), type_tag: "R".into(),
-                    level: lv.into(), room: rm.id.clone(),
+                    id: did.clone(),
+                    tag: format!("R-{}", dev_id + 1),
+                    kind: "receptacle".into(),
+                    type_tag: "R".into(),
+                    level: lv.into(),
+                    room: rm.id.clone(),
                     at_ft: [rx, rm.min_ft[1] + 0.5, elev + 1.5],
                     drawn_ft: [rx + r.below(2) as f64 * 0.3, rm.min_ft[1] + 0.5],
-                    mounting_in: 18.0, mounting_note: Some("+18\" AFF".into()),
+                    mounting_in: 18.0,
+                    mounting_note: Some("+18\" AFF".into()),
                     arch_positioned: true,
-                    circuit: format!("{pp_tag}/{ckt_num}"), panel: pp_tag.clone(), sheet: String::new(),
+                    circuit: format!("{pp_tag}/{ckt_num}"),
+                    panel: pp_tag.clone(),
+                    sheet: String::new(),
                 });
                 pwr_devices.push(did);
                 dev_id += 1;
@@ -1365,9 +1583,12 @@ fn hotel_electrical(
             t.elec_circuits.push(ElecCircuit {
                 id: format!("ec-{circuit_id}"),
                 label: format!("{pp_tag}/{ckt_num}"),
-                panel: pp_tag.clone(), number: format!("{ckt_num}"),
-                level: lv.into(), devices: pwr_devices,
-                homerun_ft: [cx, cy], sheet: String::new(),
+                panel: pp_tag.clone(),
+                number: format!("{ckt_num}"),
+                level: lv.into(),
+                devices: pwr_devices,
+                homerun_ft: [cx, cy],
+                sheet: String::new(),
             });
             circuit_id += 1;
             ckt_num += 1;
@@ -1378,21 +1599,20 @@ fn hotel_electrical(
         t.elec_conduits.push(ElecConduit {
             id: format!("econd-{floor_idx}"),
             conduit_type: if r.chance(0.5) { "EMT" } else { "MC" }.into(),
-            size: "1".into(), size_in: 1.0,
+            size: "1".into(),
+            size_in: 1.0,
             level: lv.into(),
             from_ft: [stair_w, corr_y],
             to_ft: [stair_e, corr_y],
-            tag: None, sheet: String::new(),
+            tag: None,
+            sheet: String::new(),
         });
     }
 }
 
 // --- Fire alarm ---
 
-fn hotel_fire_alarm(
-    t: &mut Truth, bldg_w: f64, _bldg_d: f64,
-    room_depth: f64, corr_width: f64,
-) {
+fn hotel_fire_alarm(t: &mut Truth, bldg_w: f64, _bldg_d: f64, room_depth: f64, corr_width: f64) {
     let mut fa_id = 0;
 
     // FACP in electrical room on L1
@@ -1400,19 +1620,29 @@ fn hotel_fire_alarm(
     let ex = elec_room.map(|r| r.min_ft[0] + 3.0).unwrap_or(10.0);
     let ey = elec_room.map(|r| r.min_ft[1] + 1.0).unwrap_or(10.0);
     t.fire_alarm_devices.push(FireAlarmDevice {
-        id: format!("fa-{fa_id}"), kind: "facp".into(), tag: "FACP".into(),
-        level: "1".into(), room: elec_room.map(|r| r.id.clone()).unwrap_or_default(),
-        at_ft: [ex, ey, 5.0], mounting: "WALL".into(),
-        circuit: "SLC-1".into(), sheet: String::new(),
+        id: format!("fa-{fa_id}"),
+        kind: "facp".into(),
+        tag: "FACP".into(),
+        level: "1".into(),
+        room: elec_room.map(|r| r.id.clone()).unwrap_or_default(),
+        at_ft: [ex, ey, 5.0],
+        mounting: "WALL".into(),
+        circuit: "SLC-1".into(),
+        sheet: String::new(),
     });
     fa_id += 1;
 
     // Annunciator at front desk
     t.fire_alarm_devices.push(FireAlarmDevice {
-        id: format!("fa-{fa_id}"), kind: "annunciator".into(), tag: "ANN".into(),
-        level: "1".into(), room: "rm-1-FD".into(),
-        at_ft: [20.0, 2.0, 5.0], mounting: "WALL".into(),
-        circuit: "SLC-1".into(), sheet: String::new(),
+        id: format!("fa-{fa_id}"),
+        kind: "annunciator".into(),
+        tag: "ANN".into(),
+        level: "1".into(),
+        room: "rm-1-FD".into(),
+        at_ft: [20.0, 2.0, 5.0],
+        mounting: "WALL".into(),
+        circuit: "SLC-1".into(),
+        sheet: String::new(),
     });
     fa_id += 1;
 
@@ -1425,11 +1655,15 @@ fn hotel_fire_alarm(
         let mut sx = 10.0;
         while sx < bldg_w - 5.0 {
             t.fire_alarm_devices.push(FireAlarmDevice {
-                id: format!("fa-{fa_id}"), kind: "smoke_detector".into(),
+                id: format!("fa-{fa_id}"),
+                kind: "smoke_detector".into(),
                 tag: format!("SD-{}", fa_id + 1),
-                level: lv.into(), room: format!("rm-{lv}-CORR"),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
                 at_ft: [sx, corr_y, elev + ceil_h],
-                mounting: "CLG".into(), circuit: "SLC-1".into(), sheet: String::new(),
+                mounting: "CLG".into(),
+                circuit: "SLC-1".into(),
+                sheet: String::new(),
             });
             fa_id += 1;
             sx += 30.0;
@@ -1437,17 +1671,23 @@ fn hotel_fire_alarm(
 
         // Smoke detectors in guest rooms
         for rm in &t.building.rooms.clone() {
-            if rm.level != lv { continue; }
+            if rm.level != lv {
+                continue;
+            }
             if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") || rm.name.contains("ADA") {
                 let cx = (rm.min_ft[0] + rm.max_ft[0]) / 2.0;
                 let cy = (rm.min_ft[1] + rm.max_ft[1]) / 2.0;
                 let ch = rm.ceiling.as_ref().map(|c| c.height_ft).unwrap_or(8.5);
                 t.fire_alarm_devices.push(FireAlarmDevice {
-                    id: format!("fa-{fa_id}"), kind: "smoke_detector".into(),
+                    id: format!("fa-{fa_id}"),
+                    kind: "smoke_detector".into(),
                     tag: format!("SD-{}", fa_id + 1),
-                    level: lv.into(), room: rm.id.clone(),
+                    level: lv.into(),
+                    room: rm.id.clone(),
                     at_ft: [cx, cy, elev + ch],
-                    mounting: "CLG".into(), circuit: "SLC-1".into(), sheet: String::new(),
+                    mounting: "CLG".into(),
+                    circuit: "SLC-1".into(),
+                    sheet: String::new(),
                 });
                 fa_id += 1;
             }
@@ -1457,11 +1697,15 @@ fn hotel_fire_alarm(
         let mut hx = 15.0;
         while hx < bldg_w - 10.0 {
             t.fire_alarm_devices.push(FireAlarmDevice {
-                id: format!("fa-{fa_id}"), kind: "horn_strobe".into(),
+                id: format!("fa-{fa_id}"),
+                kind: "horn_strobe".into(),
                 tag: format!("HS-{}", fa_id + 1),
-                level: lv.into(), room: format!("rm-{lv}-CORR"),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
                 at_ft: [hx, room_depth + 0.5, elev + 7.0],
-                mounting: "WALL".into(), circuit: "NAC-1".into(), sheet: String::new(),
+                mounting: "WALL".into(),
+                circuit: "NAC-1".into(),
+                sheet: String::new(),
             });
             fa_id += 1;
             hx += 75.0;
@@ -1469,13 +1713,19 @@ fn hotel_fire_alarm(
 
         // Pull stations at stairs
         for stair in &t.building.stairs.clone() {
-            if !stair.levels.contains(&lv.to_string()) { continue; }
+            if !stair.levels.contains(&lv.to_string()) {
+                continue;
+            }
             t.fire_alarm_devices.push(FireAlarmDevice {
-                id: format!("fa-{fa_id}"), kind: "pull_station".into(),
+                id: format!("fa-{fa_id}"),
+                kind: "pull_station".into(),
                 tag: format!("PS-{}", fa_id + 1),
-                level: lv.into(), room: format!("rm-{lv}-CORR"),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
                 at_ft: [stair.min_ft[0] + 1.0, stair.min_ft[1] + 0.5, elev + 4.0],
-                mounting: "WALL".into(), circuit: "SLC-1".into(), sheet: String::new(),
+                mounting: "WALL".into(),
+                circuit: "SLC-1".into(),
+                sheet: String::new(),
             });
             fa_id += 1;
         }
@@ -1491,56 +1741,68 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
         let elev = t.building.levels.iter().find(|l| l.code == lv).map(|l| l.elevation_ft).unwrap_or(0.0);
 
         for rm in &t.building.rooms.clone() {
-            if rm.level != lv { continue; }
+            if rm.level != lv {
+                continue;
+            }
 
             // Data outlet in every room
             t.telecom_devices.push(TelecomDevice {
-                id: format!("tc-{tc_id}"), kind: "data_outlet".into(),
+                id: format!("tc-{tc_id}"),
+                kind: "data_outlet".into(),
                 tag: format!("D-{}", tc_id + 1),
-                level: lv.into(), room: rm.id.clone(),
+                level: lv.into(),
+                room: rm.id.clone(),
                 at_ft: [rm.min_ft[0] + 2.0, rm.min_ft[1] + 0.5, elev + 1.5],
-                mounting_in: 18.0, sheet: String::new(),
+                mounting_in: 18.0,
+                sheet: String::new(),
             });
             tc_id += 1;
 
             // TV outlet in guest rooms
             if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") {
                 t.telecom_devices.push(TelecomDevice {
-                    id: format!("tc-{tc_id}"), kind: "tv_outlet".into(),
+                    id: format!("tc-{tc_id}"),
+                    kind: "tv_outlet".into(),
                     tag: format!("TV-{}", tc_id + 1),
-                    level: lv.into(), room: rm.id.clone(),
+                    level: lv.into(),
+                    room: rm.id.clone(),
                     at_ft: [(rm.min_ft[0] + rm.max_ft[0]) / 2.0, rm.max_ft[1] - 0.5, elev + 4.0],
-                    mounting_in: 48.0, sheet: String::new(),
+                    mounting_in: 48.0,
+                    sheet: String::new(),
                 });
                 tc_id += 1;
 
                 // Telephone
                 t.telecom_devices.push(TelecomDevice {
-                    id: format!("tc-{tc_id}"), kind: "telephone".into(),
+                    id: format!("tc-{tc_id}"),
+                    kind: "telephone".into(),
                     tag: format!("TEL-{}", tc_id + 1),
-                    level: lv.into(), room: rm.id.clone(),
+                    level: lv.into(),
+                    room: rm.id.clone(),
                     at_ft: [rm.max_ft[0] - 2.0, rm.min_ft[1] + 1.0, elev + 2.5],
-                    mounting_in: 18.0, sheet: String::new(),
+                    mounting_in: 18.0,
+                    sheet: String::new(),
                 });
                 tc_id += 1;
             }
         }
 
         // WiFi APs in corridor
-        let corr_y = t.building.rooms.iter()
-            .find(|rm| rm.level == lv && rm.name == "CORRIDOR")
-            .map(|r| (r.min_ft[1] + r.max_ft[1]) / 2.0)
-            .unwrap_or(27.0);
+        let corr_y =
+            t.building.rooms.iter().find(|rm| rm.level == lv && rm.name == "CORRIDOR").map(|r| (r.min_ft[1] + r.max_ft[1]) / 2.0).unwrap_or(27.0);
         let ceil_h = if lv == "1" { 10.0 } else { 8.5 };
         let bldg_w = t.building.grid.x.last().map(|g| g.at_ft).unwrap_or(100.0);
         let mut ax = 20.0;
         while ax < bldg_w - 10.0 {
             t.telecom_devices.push(TelecomDevice {
-                id: format!("tc-{tc_id}"), kind: "wifi_ap".into(),
+                id: format!("tc-{tc_id}"),
+                kind: "wifi_ap".into(),
                 tag: format!("WAP-{}", tc_id + 1),
-                level: lv.into(), room: format!("rm-{lv}-CORR"),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
                 at_ft: [ax, corr_y, elev + ceil_h],
-                mounting_in: 0.0, sheet: String::new(),
+                mounting_in: 0.0,
+                sheet: String::new(),
             });
             tc_id += 1;
             ax += 50.0;
@@ -1549,11 +1811,14 @@ fn hotel_telecom(t: &mut Truth, r: &mut Rng) {
         // Cameras in lobby and corridors
         if lv == "1" || r.chance(0.5) {
             t.telecom_devices.push(TelecomDevice {
-                id: format!("tc-{tc_id}"), kind: "camera".into(),
+                id: format!("tc-{tc_id}"),
+                kind: "camera".into(),
                 tag: format!("CAM-{}", tc_id + 1),
-                level: lv.into(), room: format!("rm-{lv}-CORR"),
+                level: lv.into(),
+                room: format!("rm-{lv}-CORR"),
                 at_ft: [10.0, corr_y, elev + ceil_h],
-                mounting_in: 0.0, sheet: String::new(),
+                mounting_in: 0.0,
+                sheet: String::new(),
             });
             tc_id += 1;
         }
@@ -1569,10 +1834,12 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
     let setback = 30.0;
 
     // Parking lot to the south
-    let parking_min = [- setback, -setback - 60.0];
+    let parking_min = [-setback, -setback - 60.0];
     let parking_max = [bldg_w + setback, -setback];
     t.site_elements.push(SiteElement {
-        id: format!("se-{se_id}"), kind: "driveway".into(), tag: "MAIN ENTRY".into(),
+        id: format!("se-{se_id}"),
+        kind: "driveway".into(),
+        tag: "MAIN ENTRY".into(),
         at_ft: [bldg_w / 2.0, parking_min[1]],
         min_ft: Some([bldg_w / 2.0 - 12.0, parking_min[1]]),
         max_ft: Some([bldg_w / 2.0 + 12.0, -setback]),
@@ -1586,7 +1853,8 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
     let mut px = parking_min[0] + 5.0;
     while px + space_width < parking_max[0] - 5.0 {
         t.site_elements.push(SiteElement {
-            id: format!("se-{se_id}"), kind: "parking_space".into(),
+            id: format!("se-{se_id}"),
+            kind: "parking_space".into(),
             tag: format!("P{}", se_id),
             at_ft: [px + space_width / 2.0, parking_min[1] + space_depth / 2.0 + 5.0],
             min_ft: Some([px, parking_min[1] + 5.0]),
@@ -1601,10 +1869,13 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
     for i in 0..4 {
         let lx = parking_min[0] + 20.0 + i as f64 * (parking_max[0] - parking_min[0] - 40.0) / 3.0;
         t.site_elements.push(SiteElement {
-            id: format!("se-{se_id}"), kind: "light_pole".into(),
+            id: format!("se-{se_id}"),
+            kind: "light_pole".into(),
             tag: format!("LP-{}", i + 1),
             at_ft: [lx, parking_min[1] + 30.0],
-            min_ft: None, max_ft: None, depth_ft: None,
+            min_ft: None,
+            max_ft: None,
+            depth_ft: None,
         });
         se_id += 1;
     }
@@ -1612,17 +1883,21 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
     for i in 0..6 {
         let lx = -setback + 10.0 + i as f64 * (bldg_w + 2.0 * setback - 20.0) / 5.0;
         t.site_elements.push(SiteElement {
-            id: format!("se-{se_id}"), kind: "light_pole".into(),
+            id: format!("se-{se_id}"),
+            kind: "light_pole".into(),
             tag: format!("LP-{}", 5 + i),
             at_ft: [lx, bldg_d + setback - 5.0],
-            min_ft: None, max_ft: None, depth_ft: None,
+            min_ft: None,
+            max_ft: None,
+            depth_ft: None,
         });
         se_id += 1;
     }
 
     // Transformer pad
     t.site_elements.push(SiteElement {
-        id: format!("se-{se_id}"), kind: "transformer_pad".into(),
+        id: format!("se-{se_id}"),
+        kind: "transformer_pad".into(),
         tag: "XFMR-PAD".into(),
         at_ft: [bldg_w + 10.0, bldg_d / 2.0],
         min_ft: Some([bldg_w + 5.0, bldg_d / 2.0 - 5.0]),
@@ -1633,7 +1908,8 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
 
     // Dumpster enclosure
     t.site_elements.push(SiteElement {
-        id: format!("se-{se_id}"), kind: "dumpster_enclosure".into(),
+        id: format!("se-{se_id}"),
+        kind: "dumpster_enclosure".into(),
         tag: "DUMPSTER".into(),
         at_ft: [bldg_w + 10.0, 10.0],
         min_ft: Some([bldg_w + 5.0, 5.0]),
@@ -1644,10 +1920,13 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
 
     // Fire hydrant
     t.site_elements.push(SiteElement {
-        id: format!("se-{se_id}"), kind: "fire_hydrant".into(),
+        id: format!("se-{se_id}"),
+        kind: "fire_hydrant".into(),
         tag: "FH".into(),
         at_ft: [-setback + 5.0, -setback + 5.0],
-        min_ft: None, max_ft: None, depth_ft: None,
+        min_ft: None,
+        max_ft: None,
+        depth_ft: None,
     });
     se_id += 1;
 
@@ -1661,7 +1940,8 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
         ("underground_telecom", 3.0, 15.0),
     ] {
         t.site_elements.push(SiteElement {
-            id: format!("se-{se_id}"), kind: kind.into(),
+            id: format!("se-{se_id}"),
+            kind: kind.into(),
             tag: kind.replace("underground_", "").to_uppercase(),
             at_ft: [bldg_w / 2.0 + x_off, -setback - 30.0],
             min_ft: Some([bldg_w / 2.0 + x_off - 0.5, -setback - 60.0]),
@@ -1678,66 +1958,156 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
 
 fn spec_book() -> Vec<SpecItem> {
     vec![
-        SpecItem { id: "spec-1".into(), division: "06".into(), section: "06 41 16".into(),
+        SpecItem {
+            id: "spec-1".into(),
+            division: "06".into(),
+            section: "06 41 16".into(),
             title: "PLASTIC-LAMINATE-CLAD ARCHITECTURAL CABINETS".into(),
-            manufacturer: "Clearwater Millwork".into(), model: "CWM-400 Series".into(),
-            or_equal: true, referenced_by: vec!["V-1".into(), "V-2".into(), "WR-1".into()] },
-        SpecItem { id: "spec-2".into(), division: "09".into(), section: "09 29 00".into(),
+            manufacturer: "Clearwater Millwork".into(),
+            model: "CWM-400 Series".into(),
+            or_equal: true,
+            referenced_by: vec!["V-1".into(), "V-2".into(), "WR-1".into()],
+        },
+        SpecItem {
+            id: "spec-2".into(),
+            division: "09".into(),
+            section: "09 29 00".into(),
             title: "GYPSUM BOARD".into(),
-            manufacturer: "National Gypsum".into(), model: "Gold Bond XP".into(),
-            or_equal: true, referenced_by: vec!["wa-1".into(), "wa-2".into()] },
-        SpecItem { id: "spec-3".into(), division: "09".into(), section: "09 51 13".into(),
+            manufacturer: "National Gypsum".into(),
+            model: "Gold Bond XP".into(),
+            or_equal: true,
+            referenced_by: vec!["wa-1".into(), "wa-2".into()],
+        },
+        SpecItem {
+            id: "spec-3".into(),
+            division: "09".into(),
+            section: "09 51 13".into(),
             title: "ACOUSTICAL PANEL CEILINGS".into(),
-            manufacturer: "Armstrong Ceiling Solutions".into(), model: "Cortega 770".into(),
-            or_equal: true, referenced_by: vec!["CA-1".into()] },
-        SpecItem { id: "spec-4".into(), division: "22".into(), section: "22 11 16".into(),
+            manufacturer: "Armstrong Ceiling Solutions".into(),
+            model: "Cortega 770".into(),
+            or_equal: true,
+            referenced_by: vec!["CA-1".into()],
+        },
+        SpecItem {
+            id: "spec-4".into(),
+            division: "22".into(),
+            section: "22 11 16".into(),
             title: "DOMESTIC WATER PIPING".into(),
-            manufacturer: "Viega".into(), model: "ProPress CTS".into(),
-            or_equal: true, referenced_by: vec![] },
-        SpecItem { id: "spec-5".into(), division: "22".into(), section: "22 42 00".into(),
+            manufacturer: "Viega".into(),
+            model: "ProPress CTS".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-5".into(),
+            division: "22".into(),
+            section: "22 42 00".into(),
             title: "COMMERCIAL PLUMBING FIXTURES".into(),
-            manufacturer: "Kohler".into(), model: "Highline K-25224".into(),
-            or_equal: true, referenced_by: vec!["WC".into(), "LAV".into()] },
-        SpecItem { id: "spec-6".into(), division: "23".into(), section: "23 05 93".into(),
+            manufacturer: "Kohler".into(),
+            model: "Highline K-25224".into(),
+            or_equal: true,
+            referenced_by: vec!["WC".into(), "LAV".into()],
+        },
+        SpecItem {
+            id: "spec-6".into(),
+            division: "23".into(),
+            section: "23 05 93".into(),
             title: "TESTING, ADJUSTING AND BALANCING FOR HVAC".into(),
-            manufacturer: "N/A".into(), model: "N/A".into(),
-            or_equal: false, referenced_by: vec![] },
-        SpecItem { id: "spec-7".into(), division: "23".into(), section: "23 31 13".into(),
+            manufacturer: "N/A".into(),
+            model: "N/A".into(),
+            or_equal: false,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-7".into(),
+            division: "23".into(),
+            section: "23 31 13".into(),
             title: "METAL DUCTS".into(),
-            manufacturer: "Lindab".into(), model: "Safe Click".into(),
-            or_equal: true, referenced_by: vec![] },
-        SpecItem { id: "spec-8".into(), division: "23".into(), section: "23 74 13".into(),
+            manufacturer: "Lindab".into(),
+            model: "Safe Click".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-8".into(),
+            division: "23".into(),
+            section: "23 74 13".into(),
             title: "PACKAGED ROOFTOP UNITS".into(),
-            manufacturer: "Trane".into(), model: "Voyager YCD120".into(),
-            or_equal: true, referenced_by: vec!["RTU-1".into(), "RTU-2".into()] },
-        SpecItem { id: "spec-9".into(), division: "26".into(), section: "26 24 16".into(),
+            manufacturer: "Trane".into(),
+            model: "Voyager YCD120".into(),
+            or_equal: true,
+            referenced_by: vec!["RTU-1".into(), "RTU-2".into()],
+        },
+        SpecItem {
+            id: "spec-9".into(),
+            division: "26".into(),
+            section: "26 24 16".into(),
             title: "PANELBOARDS".into(),
-            manufacturer: "Eaton".into(), model: "PRL1A".into(),
-            or_equal: true, referenced_by: vec!["L1".into(), "L2".into(), "P1".into(), "P2".into()] },
-        SpecItem { id: "spec-10".into(), division: "26".into(), section: "26 51 13".into(),
+            manufacturer: "Eaton".into(),
+            model: "PRL1A".into(),
+            or_equal: true,
+            referenced_by: vec!["L1".into(), "L2".into(), "P1".into(), "P2".into()],
+        },
+        SpecItem {
+            id: "spec-10".into(),
+            division: "26".into(),
+            section: "26 51 13".into(),
             title: "INTERIOR LIGHTING".into(),
-            manufacturer: "Lithonia Lighting".into(), model: "BLT4 Series".into(),
-            or_equal: true, referenced_by: vec!["A".into(), "B".into()] },
-        SpecItem { id: "spec-11".into(), division: "21".into(), section: "21 13 13".into(),
+            manufacturer: "Lithonia Lighting".into(),
+            model: "BLT4 Series".into(),
+            or_equal: true,
+            referenced_by: vec!["A".into(), "B".into()],
+        },
+        SpecItem {
+            id: "spec-11".into(),
+            division: "21".into(),
+            section: "21 13 13".into(),
             title: "WET-PIPE SPRINKLER SYSTEMS".into(),
-            manufacturer: "Viking".into(), model: "VK302 Pendent".into(),
-            or_equal: true, referenced_by: vec!["SH-1".into()] },
-        SpecItem { id: "spec-12".into(), division: "28".into(), section: "28 31 11".into(),
+            manufacturer: "Viking".into(),
+            model: "VK302 Pendent".into(),
+            or_equal: true,
+            referenced_by: vec!["SH-1".into()],
+        },
+        SpecItem {
+            id: "spec-12".into(),
+            division: "28".into(),
+            section: "28 31 11".into(),
             title: "DIGITAL ADDRESSABLE FIRE ALARM SYSTEM".into(),
-            manufacturer: "Notifier by Honeywell".into(), model: "NFS2-3030".into(),
-            or_equal: true, referenced_by: vec!["FACP".into()] },
-        SpecItem { id: "spec-13".into(), division: "27".into(), section: "27 15 13".into(),
+            manufacturer: "Notifier by Honeywell".into(),
+            model: "NFS2-3030".into(),
+            or_equal: true,
+            referenced_by: vec!["FACP".into()],
+        },
+        SpecItem {
+            id: "spec-13".into(),
+            division: "27".into(),
+            section: "27 15 13".into(),
             title: "COMMUNICATIONS COPPER HORIZONTAL CABLING".into(),
-            manufacturer: "Belden".into(), model: "CAT6A 10GXS13".into(),
-            or_equal: true, referenced_by: vec![] },
-        SpecItem { id: "spec-14".into(), division: "11".into(), section: "11 40 00".into(),
+            manufacturer: "Belden".into(),
+            model: "CAT6A 10GXS13".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
+        SpecItem {
+            id: "spec-14".into(),
+            division: "11".into(),
+            section: "11 40 00".into(),
             title: "FOODSERVICE EQUIPMENT".into(),
-            manufacturer: "Hobart".into(), model: "AM16 Series".into(),
-            or_equal: true, referenced_by: vec!["BC-1".into()] },
-        SpecItem { id: "spec-15".into(), division: "10".into(), section: "10 28 13".into(),
+            manufacturer: "Hobart".into(),
+            model: "AM16 Series".into(),
+            or_equal: true,
+            referenced_by: vec!["BC-1".into()],
+        },
+        SpecItem {
+            id: "spec-15".into(),
+            division: "10".into(),
+            section: "10 28 13".into(),
             title: "TOILET ACCESSORIES".into(),
-            manufacturer: "Bobrick".into(), model: "B-Series".into(),
-            or_equal: true, referenced_by: vec![] },
+            manufacturer: "Bobrick".into(),
+            model: "B-Series".into(),
+            or_equal: true,
+            referenced_by: vec![],
+        },
     ]
 }
 
@@ -1750,10 +2120,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 1. A wall with no type tag: pick a wall on level 2 and leave its assembly blank
     if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-1") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "wall_no_tag".into(),
+            id: format!("gap-{gid}"),
+            kind: "wall_no_tag".into(),
             description: "Guest room demising wall has no wall type tag on the plan".into(),
             elements: vec![w.id.clone()],
-            level: "2".into(), at_ft: w.from_ft,
+            level: "2".into(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }
@@ -1761,10 +2133,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 2. A wall tag not in the legend: reference a non-existent assembly
     if let Some(w) = t.walls.iter().find(|w| w.level == "3" && w.assembly == "wa-1") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "wall_tag_not_in_legend".into(),
+            id: format!("gap-{gid}"),
+            kind: "wall_tag_not_in_legend".into(),
             description: "Wall references type WT-7 which is not in the wall type legend".into(),
             elements: vec![w.id.clone()],
-            level: "3".into(), at_ft: w.from_ft,
+            level: "3".into(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }
@@ -1773,10 +2147,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     if t.walls.len() > 20 {
         let w = &t.walls[10];
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "wall_type_conflict".into(),
+            id: format!("gap-{gid}"),
+            kind: "wall_type_conflict".into(),
             description: "Corridor wall shown as WT-2 on A-201 and WT-1 on A-301".into(),
             elements: vec![w.id.clone()],
-            level: w.level.clone(), at_ft: w.from_ft,
+            level: w.level.clone(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }
@@ -1784,10 +2160,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 4. Ceiling with no height
     if let Some(rm) = t.building.rooms.iter().find(|r| r.level == "3" && r.name == "CORRIDOR") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "ceiling_no_height".into(),
+            id: format!("gap-{gid}"),
+            kind: "ceiling_no_height".into(),
             description: "Level 3 corridor RCP shows ceiling type but no height note".into(),
             elements: vec![rm.id.clone()],
-            level: "3".into(), at_ft: rm.min_ft,
+            level: "3".into(),
+            at_ft: rm.min_ft,
         });
         gid += 1;
     }
@@ -1795,10 +2173,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 5. Rated wall stops at ceiling (should go slab to slab)
     if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-2") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "rated_wall_stops_at_ceiling".into(),
+            id: format!("gap-{gid}"),
+            kind: "rated_wall_stops_at_ceiling".into(),
             description: "1-HR rated corridor wall (WT-2) terminates at ceiling instead of continuing to structure above".into(),
             elements: vec![w.id.clone()],
-            level: "2".into(), at_ft: w.from_ft,
+            level: "2".into(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }
@@ -1806,10 +2186,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 6. Soffit shown on RCP but missing from section
     if let Some(s) = t.soffits.first() {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "soffit_missing_from_section".into(),
+            id: format!("gap-{gid}"),
+            kind: "soffit_missing_from_section".into(),
             description: "Bathroom soffit shown on RCP but not visible in building section".into(),
             elements: vec![s.id.clone()],
-            level: s.level.clone(), at_ft: s.min_ft,
+            level: s.level.clone(),
+            at_ft: s.min_ft,
         });
         gid += 1;
     }
@@ -1817,10 +2199,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 7. Head condition not specified at rated wall / ceiling intersection
     if let Some(w) = t.walls.iter().find(|w| w.assembly == "wa-4") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "head_not_specified".into(),
+            id: format!("gap-{gid}"),
+            kind: "head_not_specified".into(),
             description: "Shaft wall (WT-4, 2-HR) meets ACT ceiling with no head-of-wall detail specified".into(),
             elements: vec![w.id.clone()],
-            level: w.level.clone(), at_ft: w.from_ft,
+            level: w.level.clone(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }
@@ -1828,10 +2212,12 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
     // 8. Height/assembly conflict: wall height rule says SLAB TO SLAB but drawn to ceiling
     if let Some(w) = t.walls.iter().find(|w| w.level == "4" && w.assembly == "wa-1") {
         gaps.push(Gap {
-            id: format!("gap-{gid}"), kind: "height_assembly_conflict".into(),
+            id: format!("gap-{gid}"),
+            kind: "height_assembly_conflict".into(),
             description: "Guest room wall WT-1 (height rule: SLAB TO SLAB) is drawn only to ceiling height on level 4".into(),
             elements: vec![w.id.clone()],
-            level: "4".into(), at_ft: w.from_ft,
+            level: "4".into(),
+            at_ft: w.from_ft,
         });
         gid += 1;
     }

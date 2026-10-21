@@ -397,11 +397,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
             legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
             legend.push(item("elec_panel", "PANELBOARD"));
-            abbr.extend([
-                "CLG = CEILING", "AFF = ABOVE FINISHED FLOOR",
-                "C = CONDUIT", "EMT = ELECTRICAL METALLIC TUBING",
-                "MC = METAL CLAD CABLE",
-            ].map(abbrev));
+            abbr.extend(
+                ["CLG = CEILING", "AFF = ABOVE FINISHED FLOOR", "C = CONDUIT", "EMT = ELECTRICAL METALLIC TUBING", "MC = METAL CLAD CABLE"]
+                    .map(abbrev),
+            );
         }
         Kind::Power(l) => {
             background(&mut pen, t, l, true);
@@ -414,11 +413,18 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
             legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
             legend.push(item("elec_panel", "PANELBOARD"));
-            abbr.extend([
-                "AFF = ABOVE FINISHED FLOOR", "C = CONDUIT",
-                "EMT = ELECTRICAL METALLIC TUBING", "R = RECEPTACLE",
-                "D = DATA/TELECOM", "FB = FLOOR BOX", "DS = DISCONNECT",
-            ].map(abbrev));
+            abbr.extend(
+                [
+                    "AFF = ABOVE FINISHED FLOOR",
+                    "C = CONDUIT",
+                    "EMT = ELECTRICAL METALLIC TUBING",
+                    "R = RECEPTACLE",
+                    "D = DATA/TELECOM",
+                    "FB = FLOOR BOX",
+                    "DS = DISCONNECT",
+                ]
+                .map(abbrev),
+            );
         }
     }
     if kind.plan() {
@@ -1399,7 +1405,9 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
         }
 
         // Mounting note beside the device (for non-ceiling mountings).
-        if let Some(note) = &d.mounting_note && note != "CLG" {
+        if let Some(note) = &d.mounting_note
+            && note != "CLG"
+        {
             pen.text("TEXT", v(s * 2.0, 0.0), st.text_in * 0.8, note, rot, HAlign::Left, VAlign::Middle);
         }
     }
@@ -1563,14 +1571,14 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
         table(pen, [x, y], "AIR DEVICE SCHEDULE", &rows);
     } else if disc == "E" {
         // Light fixture schedule.
-        let mut lt_rows = vec![vec![
-            "TYPE".to_string(), "DESCRIPTION".to_string(), "MOUNTING".to_string(), "LAMP/WATTAGE".to_string(),
-        ]];
+        let mut lt_rows = vec![vec!["TYPE".to_string(), "DESCRIPTION".to_string(), "MOUNTING".to_string(), "LAMP/WATTAGE".to_string()]];
         let mut seen_lt: Vec<String> = Vec::new();
         let mut devs: Vec<&crate::truth::ElecDevice> = t.elec_devices.iter().filter(|d| d.kind == "light_fixture").collect();
         devs.sort_by(|a, b| a.type_tag.cmp(&b.type_tag));
         for d in &devs {
-            if seen_lt.contains(&d.type_tag) { continue; }
+            if seen_lt.contains(&d.type_tag) {
+                continue;
+            }
             seen_lt.push(d.type_tag.clone());
             let (desc, mount, watt) = match d.type_tag.as_str() {
                 "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
@@ -1587,10 +1595,10 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
 
         // Panel schedules.
         for panel in &t.elec_panels {
-            if panel.kind != "panel" || panel.schedule.is_empty() { continue; }
-            let mut rows = vec![vec![
-                "CKT".to_string(), "DESCRIPTION".to_string(), "BKR".to_string(), "POLES".to_string(),
-            ]];
+            if panel.kind != "panel" || panel.schedule.is_empty() {
+                continue;
+            }
+            let mut rows = vec![vec!["CKT".to_string(), "DESCRIPTION".to_string(), "BKR".to_string(), "POLES".to_string()]];
             for row in &panel.schedule {
                 rows.push(vec![row.circuit.clone(), row.description.clone(), row.breaker_amps.clone(), row.poles.clone()]);
             }

@@ -30,11 +30,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let size = if small {
-        cadaddy_mepfix::hotel::HotelSize::Small
-    } else {
-        cadaddy_mepfix::hotel::HotelSize::Full
-    };
+    let size = if small { cadaddy_mepfix::hotel::HotelSize::Small } else { cadaddy_mepfix::hotel::HotelSize::Full };
     for s in seed..seed.saturating_add(count) {
         let set = if hotel {
             match cadaddy_mepfix::generate_hotel(s, size) {
@@ -65,11 +61,21 @@ fn main() -> ExitCode {
                  {} elec devices, {} FA devices, {} telecom, {} casework, {} spec items, {} site elements, \
                  {} gaps, {} clashes ({} planted) -> {}",
                 if small { "small" } else { "full" },
-                t.sheets.len(), t.building.rooms.len(), t.walls.len(),
-                t.segments.len(), t.terminals.len(), t.equipment.len(),
-                t.elec_devices.len(), t.fire_alarm_devices.len(), t.telecom_devices.len(),
-                t.casework.len(), t.spec_items.len(), t.site_elements.len(),
-                t.gaps.len(), t.clashes.len(), t.clashes.iter().filter(|c| c.planted).count(),
+                t.sheets.len(),
+                t.building.rooms.len(),
+                t.walls.len(),
+                t.segments.len(),
+                t.terminals.len(),
+                t.equipment.len(),
+                t.elec_devices.len(),
+                t.fire_alarm_devices.len(),
+                t.telecom_devices.len(),
+                t.casework.len(),
+                t.spec_items.len(),
+                t.site_elements.len(),
+                t.gaps.len(),
+                t.clashes.len(),
+                t.clashes.iter().filter(|c| c.planted).count(),
                 dir.display()
             );
         } else {
@@ -80,9 +86,13 @@ fn main() -> ExitCode {
                 t.segments_of("duct").count(),
                 t.segments_of("pipe").count(),
                 t.nodes.iter().filter(|n| ["elbow", "tee", "cross", "transition", "reducer"].contains(&n.kind.as_str())).count(),
-                t.terminals.len(), t.equipment.len(),
-                t.elec_devices.len(), t.elec_panels.len(), t.elec_circuits.len(),
-                t.clashes.len(), t.clashes.iter().filter(|c| c.planted).count(),
+                t.terminals.len(),
+                t.equipment.len(),
+                t.elec_devices.len(),
+                t.elec_panels.len(),
+                t.elec_circuits.len(),
+                t.clashes.len(),
+                t.clashes.iter().filter(|c| c.planted).count(),
                 dir.display()
             );
         }
