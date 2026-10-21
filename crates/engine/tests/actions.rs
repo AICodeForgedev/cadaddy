@@ -150,3 +150,25 @@ fn mistakes_are_errors() {
     }
     assert!(s.execute("actbasepoint", &json!({ "point": "x" })).is_err());
 }
+
+#[test]
+fn a_recording_survives_the_journal_letting_its_oldest_lines_go() {
+    let mut s = Session::new();
+    // Calls with megabytes of parameters before the recording fill the session journal…
+    let pad = |mb: usize| json!({ "pad": "x".repeat(mb << 20) });
+    for _ in 0..15 {
+        s.execute("redraw", &pad(1)).unwrap();
+    }
+    record(&mut s, &["circle", "*10,10", "5"]);
+    // …and one during it takes the journal past its budget: its oldest lines go.
+    s.execute("redraw", &pad(2)).unwrap();
+    assert!(s.journal.first_position() > 0, "the journal let lines go");
+    let r = s.execute("actstop", &json!({ "name": "Survivor" })).unwrap();
+    let inputs: Vec<String> =
+        r["steps"].as_array().unwrap().iter().filter_map(|st| st["input"].as_str()).map(|i| i.chars().take(40).collect()).collect();
+    assert_eq!(inputs.first().map(String::as_str), Some("circle"), "the recording starts where it started: {inputs:?}");
+    let before = shapes(&s);
+    s.execute("new", &json!({})).unwrap();
+    s.execute("actplay", &json!({ "name": "survivor" })).unwrap();
+    assert_eq!(shapes(&s), before);
+}

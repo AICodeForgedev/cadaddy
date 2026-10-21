@@ -12,6 +12,13 @@
 //! slack) or a stall (a call or a frame over 15 s). The report goes to `--out` (default
 //! `target/soak`) as `report.md` and `samples.json`. CI runs the headless mode for 2 minutes; longer
 //! runs and the window are manual.
+//!
+//! `--leak` runs fixed counts instead of a timed workload: 200 drawings opened and closed, 10,000
+//! commands, 50 sheets published, and in the window Walk toggled 100 times and every interface
+//! language and theme switched to. After a warm-up the memory is taken as the baseline; after each
+//! phase it is taken again, and at the end it must be back within a margin of the baseline
+//! (`LEAK_MARGIN_MB` or a quarter of the baseline, the larger). On Windows the memory is the
+//! process's private bytes (its working set is trimmed by the system and hides growth).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -36,10 +43,14 @@ pub struct Opts {
     /// The cargo profile the app is built with when not given: release, or dev (CI's: it reuses
     /// the test build's dependencies).
     pub release: bool,
+    /// Fixed-count leak phases instead of a timed workload.
+    pub leak: bool,
+    /// Times the leak phases run after the warm-up.
+    pub passes: u32,
 }
 
 pub fn parse(rest: &[&str]) -> Result<Opts, String> {
-    let mut o = Opts { minutes: 2.0, headless: true, window: false, app: None, cli: None, out: None, release: true };
+    let mut o = Opts { minutes: 2.0, headless: true, window: false, app: None, cli: None, out: None, release: true, leak: false, passes: 1 };
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().copied().ok_or_else(|| format!("{a} needs a value"));
@@ -61,6 +72,13 @@ pub fn parse(rest: &[&str]) -> Result<Opts, String> {
             "--app" => o.app = Some(PathBuf::from(value()?)),
             "--cli" => o.cli = Some(PathBuf::from(value()?)),
             "--out" => o.out = Some(PathBuf::from(value()?)),
+            "--leak" => o.leak = true,
+            "--passes" => {
+                o.passes = value()?.parse().map_err(|_| "--passes needs a number".to_string())?;
+                if !(1..=20).contains(&o.passes) {
+                    return Err("--passes: 1 to 20".into());
+                }
+            }
             "--profile" => {
                 o.release = match value()? {
                     "release" => true,
@@ -86,8 +104,18 @@ pub struct Sample {
     pub slowest_call_ms: f64,
 }
 
-/// A process's resident memory (MB) and open file descriptors.
+/// A process's resident memory (MB) and open handles (file descriptors; on Windows its private
+/// bytes and handle count: the working set is trimmed by the system and would hide a leak).
 fn process(pid: u32) -> (f64, u64) {
+    if cfg!(windows) {
+        let script = format!("$p = Get-Process -Id {pid}; \"$($p.PrivateMemorySize64) $($p.HandleCount)\"");
+        let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).stderr(Stdio::null()).output().ok();
+        let text = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        let mut it = text.split_whitespace();
+        let bytes = it.next().and_then(|b| b.parse::<f64>().ok()).unwrap_or(0.0);
+        let handles = it.next().and_then(|h| h.parse::<u64>().ok()).unwrap_or(0);
+        return (bytes / 1_048_576.0, handles);
+    }
     let rss = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
@@ -137,6 +165,10 @@ trait Driver {
     fn gpu(&mut self) -> (Option<f64>, Option<f64>) {
         (None, None)
     }
+    /// Whether this is the window (Walk, languages and themes exist only there).
+    fn is_window(&self) -> bool {
+        false
+    }
     fn pid(&self) -> u32;
 }
 
@@ -175,6 +207,9 @@ impl Driver for Window {
     fn gpu(&mut self) -> (Option<f64>, Option<f64>) {
         let perf = self.c.call("ui.inspect", json!({})).map(|v| v["perf"].clone()).unwrap_or(Value::Null);
         (perf["gpuBytes"].as_f64().map(|b| b / 1_048_576.0), perf["frameMs"].as_f64())
+    }
+    fn is_window(&self) -> bool {
+        true
     }
     fn pid(&self) -> u32 {
         self.pid
@@ -262,6 +297,222 @@ fn round(d: &mut dyn Driver, n: u64, dir: &Path, slowest: &mut Duration) -> Resu
     Ok(())
 }
 
+/// Margin a leak run's memory may end above its baseline, in MB (or a quarter of the baseline).
+const LEAK_MARGIN_MB: f64 = 64.0;
+
+/// One leak phase: what ran, and the memory, handles and GPU bytes after it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Phase {
+    pub name: String,
+    pub mb: f64,
+    pub handles: u64,
+    pub gpu_mb: Option<f64>,
+    pub seconds: f64,
+}
+
+/// A drawing with something in it, saved to `file`, closed, opened again and closed.
+fn open_close(d: &mut dyn Driver, n: u64, file: &Path) -> Result<(), String> {
+    d.exec("new", json!({}))?;
+    for i in 0..10 {
+        let x = f64::from(i) * 12.0;
+        d.exec("line", json!({ "points": [[x, 0.0], [x + 10.0, 0.0], [x + 10.0, 6.0]] }))?;
+        d.exec("circle", json!({ "center": [x + 5.0, 3.0], "radius": 2 }))?;
+    }
+    d.exec("text", json!({ "at": [0, -5], "text": format!("Leak cycle {n}"), "height": 1.5 }))?;
+    d.save(file)?;
+    d.exec("close", json!({}))?;
+    d.open(file)?;
+    d.exec("close", json!({}))?;
+    let _ = std::fs::remove_file(file);
+    Ok(())
+}
+
+/// Save the drawing (an agent closing unsaved changes waits for the person at the window), close
+/// it and delete the file.
+fn close_saved(d: &mut dyn Driver, file: &Path) -> Result<(), String> {
+    d.save(file)?;
+    d.exec("close", json!({}))?;
+    let _ = std::fs::remove_file(file);
+    Ok(())
+}
+
+/// `count` commands in one drawing (drawing, editing, undoing), then the drawing closed.
+fn commands(d: &mut dyn Driver, count: u64, dir: &Path) -> Result<(), String> {
+    d.exec("new", json!({}))?;
+    for i in 1..count {
+        let (x, y) = ((i % 50) as f64 * 3.0, (i / 50 % 50) as f64 * 3.0);
+        match i % 5 {
+            0 | 1 => d.exec("line", json!({ "points": [[x, y], [x + 2.0, y + 1.0]] })).map(|_| ())?,
+            2 => d.exec("circle", json!({ "center": [x, y], "radius": 1 })).map(|_| ())?,
+            3 => d.typed("MOVE L  0,0 0.5,0")?,
+            _ => d.typed("U")?,
+        }
+    }
+    close_saved(d, &dir.join("leak-commands.dxf"))
+}
+
+/// `sheets` sheets of a small drawing published to one PDF.
+fn publish(d: &mut dyn Driver, sheets: usize, dir: &Path) -> Result<(), String> {
+    d.exec("new", json!({}))?;
+    d.exec("circle", json!({ "center": [0, 0], "radius": 5 }))?;
+    d.exec("text", json!({ "at": [-4, 0], "text": "Sheet", "height": 1 }))?;
+    let pdf = dir.join("leak-publish.pdf");
+    let list: Vec<Value> = (0..sheets).map(|_| json!({ "layout": "Model" })).collect();
+    d.exec("publish", json!({ "path": pdf, "single": true, "sheets": list }))?;
+    let _ = std::fs::remove_file(&pdf);
+    close_saved(d, &dir.join("leak-publish.dxf"))
+}
+
+const LANGUAGES: [&str; 18] = ["en", "uk", "pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja", "zh-TW", "pl", "hu", "tr"];
+const THEMES: [&str; 3] = ["ui.theme.dark", "ui.theme.light", "ui.theme.system"];
+
+/// Every interface language and theme switched to, `times` times over; English and dark after.
+fn languages_and_themes(d: &mut dyn Driver, times: usize) -> Result<(), String> {
+    for _ in 0..times {
+        for (i, lang) in LANGUAGES.iter().enumerate() {
+            d.exec("ui.language", json!({ "lang": lang }))?;
+            // A frame in each language, so its fonts are loaded and its text laid out.
+            d.gpu();
+            if let Some(theme) = THEMES.get(i % THEMES.len()) {
+                d.exec(theme, json!({}))?;
+            }
+        }
+    }
+    d.exec("ui.language", json!({ "lang": "en" }))?;
+    d.exec("ui.theme.dark", json!({}))?;
+    Ok(())
+}
+
+/// Walk on and off `times` times, in a drawing with something to walk through.
+fn walk(d: &mut dyn Driver, times: usize, dir: &Path) -> Result<(), String> {
+    d.exec("new", json!({}))?;
+    for i in 0..4 {
+        let x = f64::from(i) * 4.0;
+        d.exec("line", json!({ "points": [[x, 0.0], [x, 10.0]] }))?;
+    }
+    for _ in 0..times {
+        d.exec("ui.walk", json!({}))?;
+        d.gpu();
+        d.exec("ui.walk", json!({}))?;
+        d.gpu();
+    }
+    close_saved(d, &dir.join("leak-walk.dxf"))
+}
+
+/// The counts of a leak run.
+pub struct Counts {
+    pub drawings: u64,
+    pub commands: u64,
+    pub sheets: usize,
+    pub walks: usize,
+    pub switches: usize,
+}
+
+/// `scale` 1: the full run (200 drawings, 10,000 commands, 50 sheets, 100 Walks, every language
+/// three times); less for the warm-up, at least one of each.
+pub fn counts(scale: f64) -> Counts {
+    let n = |full: f64| (full * scale).round().max(1.0);
+    Counts { drawings: n(200.0) as u64, commands: n(10_000.0) as u64, sheets: n(50.0) as usize, walks: n(100.0) as usize, switches: n(3.0) as usize }
+}
+
+/// The memory, handles and GPU bytes after the phase `name` that started at `t`.
+fn measure(d: &mut dyn Driver, name: String, t: Instant) -> Phase {
+    let seconds = t.elapsed().as_secs_f64();
+    // Let background work (autosave, index builds) settle first.
+    std::thread::sleep(Duration::from_millis(1500));
+    let (gpu_mb, _) = d.gpu();
+    let (mb, handles) = process(d.pid());
+    eprintln!("soak --leak: {name}: {mb:.1} MB, {handles} handles");
+    Phase { name, mb, handles, gpu_mb, seconds }
+}
+
+/// The leak run's phases with the counts `c`, each measured into `out`.
+fn phases(d: &mut dyn Driver, dir: &Path, c: &Counts, tag: &str, out: &mut Vec<Phase>) -> Result<(), String> {
+    let t = Instant::now();
+    for n in 0..c.drawings {
+        let file = dir.join(format!("leak-{n}.{}", ["dxf", "dwg", "cdy"][(n % 3) as usize]));
+        open_close(d, n, &file).map_err(|e| format!("drawing {n}: {e}"))?;
+    }
+    out.push(measure(d, format!("{tag}{} drawings opened and closed", c.drawings), t));
+    let t = Instant::now();
+    commands(d, c.commands, dir).map_err(|e| format!("commands: {e}"))?;
+    out.push(measure(d, format!("{tag}{} commands", c.commands), t));
+    let t = Instant::now();
+    publish(d, c.sheets, dir).map_err(|e| format!("publish: {e}"))?;
+    out.push(measure(d, format!("{tag}{} sheets published", c.sheets), t));
+    if d.is_window() {
+        let t = Instant::now();
+        walk(d, c.walks, dir).map_err(|e| format!("walk: {e}"))?;
+        out.push(measure(d, format!("{tag}Walk toggled {} times", c.walks), t));
+        let t = Instant::now();
+        languages_and_themes(d, c.switches).map_err(|e| format!("languages: {e}"))?;
+        out.push(measure(d, format!("{tag}every language and theme, {} times", c.switches), t));
+    }
+    Ok(())
+}
+
+/// Whether memory ending at `end` MB, from a baseline of `base` MB, is a leak.
+pub fn leaked(base: f64, end: f64) -> Option<String> {
+    let margin = (base * 0.25).max(LEAK_MARGIN_MB);
+    (end - base > margin).then(|| format!("memory ended {:.1} MB above its baseline of {base:.1} MB (margin {margin:.0} MB): a leak", end - base))
+}
+
+/// The leak run: a warm-up, the baseline, the phases; the memory after each and what went wrong.
+fn leak(d: &mut dyn Driver, dir: &Path, passes: u32) -> (Vec<Phase>, Vec<String>) {
+    let mut warm = Vec::new();
+    // The warm-up: every cache and pool filled once.
+    if let Err(e) = phases(d, dir, &counts(0.1), "warm-up: ", &mut warm) {
+        return (warm, vec![e]);
+    }
+    let Some(base) = warm.pop() else {
+        return (warm, vec!["the warm-up measured nothing".into()]);
+    };
+    let mut out = vec![Phase { name: "baseline (after a warm-up of a tenth)".into(), seconds: 0.0, ..base.clone() }];
+    let mut problems = Vec::new();
+    for pass in 1..=passes {
+        let tag = if passes > 1 { format!("pass {pass}: ") } else { String::new() };
+        if let Err(e) = phases(d, dir, &counts(1.0), &tag, &mut out) {
+            problems.push(e);
+            break;
+        }
+    }
+    if let Some(end) = out.last().filter(|_| out.len() > 1) {
+        problems.extend(leaked(base.mb, end.mb));
+        if end.handles > base.handles + 64 {
+            problems.push(format!("open handles ended at {} from {}: a leak", end.handles, base.handles));
+        }
+        if let (Some(g), Some(b)) = (end.gpu_mb, base.gpu_mb)
+            && g - b > 32.0
+        {
+            problems.push(format!("GPU buffers ended {:.1} MB above the baseline: a leak", g - b));
+        }
+    }
+    (out, problems)
+}
+
+fn leak_table(name: &str, phases: &[Phase], problems: &[String]) -> String {
+    let mut s = format!("## {name}, leak run\n\n");
+    let _ = writeln!(s, "{}\n", if problems.is_empty() { "PASS".to_string() } else { format!("FAIL: {}", problems.join("; ")) });
+    s.push_str("| after | memory MB | change MB | handles | GPU MB | seconds |\n|---|---|---|---|---|---|\n");
+    let mut last = phases.first().map_or(0.0, |p| p.mb);
+    for p in phases {
+        let gpu = p.gpu_mb.map_or("-".to_string(), |g| format!("{g:.1}"));
+        let _ = writeln!(s, "| {} | {:.1} | {:+.1} | {} | {gpu} | {:.0} |", p.name, p.mb, p.mb - last, p.handles, p.seconds);
+        last = p.mb;
+    }
+    s.push('\n');
+    s
+}
+
+fn phases_json(phases: &[Phase], problems: &[String]) -> Value {
+    json!({
+        "problems": problems,
+        "phases": phases.iter().map(|p| json!({
+            "after": p.name, "memoryMb": p.mb, "handles": p.handles, "gpuMb": p.gpu_mb, "seconds": p.seconds,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// Runs the workload against `d` for `minutes`, sampling; the samples and what went wrong.
 fn soak(d: &mut dyn Driver, minutes: f64, dir: &Path) -> (Vec<Sample>, Vec<String>) {
     let start = Instant::now();
@@ -337,6 +588,17 @@ fn table(name: &str, samples: &[Sample], problems: &[String]) -> String {
     s
 }
 
+/// The timed workload or the leak run against `d`: the report's section, its JSON and the problems.
+fn workload(d: &mut dyn Driver, o: &Opts, files: &Path, name: &str) -> (String, Value, Vec<String>) {
+    if o.leak {
+        let (phases, problems) = leak(d, files, o.passes);
+        (leak_table(name, &phases, &problems), phases_json(&phases, &problems), problems)
+    } else {
+        let (samples, problems) = soak(d, o.minutes, files);
+        (table(name, &samples, &problems), samples_json(&samples, &problems), problems)
+    }
+}
+
 /// A release build of `package`'s binary `bin`, made when not given.
 fn built(root: &Path, given: &Option<PathBuf>, release: bool, package: &str, bin: &str) -> Result<PathBuf, String> {
     if let Some(p) = given {
@@ -361,7 +623,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&out);
     let files = out.join("files");
     std::fs::create_dir_all(&files).map_err(|e| format!("{}: {e}", files.display()))?;
-    let mut report = format!("# Soak, {} minute(s)\n\n", o.minutes);
+    let mut report = if o.leak { "# Soak, leak run\n\n".to_string() } else { format!("# Soak, {} minute(s)\n\n", o.minutes) };
     let mut all = json!({});
     let mut failed = Vec::new();
     if o.headless {
@@ -371,10 +633,10 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         let mut m = Mcp::start(&exe, &cfg)?;
         m.send("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "xtask-soak", "version": "1" } }))?;
         let mut d = Headless(m);
-        eprintln!("soak: headless ({}) for {} minute(s)…", exe.display(), o.minutes);
-        let (samples, problems) = soak(&mut d, o.minutes, &files);
-        report.push_str(&table("Headless (cadaddy-cli mcp)", &samples, &problems));
-        all["headless"] = samples_json(&samples, &problems);
+        eprintln!("soak: headless ({})…", exe.display());
+        let (text, json, problems) = workload(&mut d, &o, &files, "Headless (cadaddy-cli mcp)");
+        report.push_str(&text);
+        all["headless"] = json;
         failed.extend(problems.into_iter().map(|p| format!("headless: {p}")));
     }
     if o.window {
@@ -393,14 +655,15 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             .map_err(|e| format!("{}: {e}", exe.display()))?;
         let result = Control::connect(port, &cfg, &mut child, Duration::from_secs(90)).map(|c| {
             let mut d = Window { c, pid: child.id() };
-            eprintln!("soak: window ({}) for {} minute(s)…", exe.display(), o.minutes);
-            soak(&mut d, o.minutes, &files)
+            eprintln!("soak: window ({})…", exe.display());
+            workload(&mut d, &o, &files, "Window (cadaddy --control)")
         });
         let _ = child.kill();
         let _ = child.wait();
-        let (samples, problems) = result.unwrap_or_else(|e| (Vec::new(), vec![e]));
-        report.push_str(&table("Window (cadaddy --control)", &samples, &problems));
-        all["window"] = samples_json(&samples, &problems);
+        let (text, json, problems) = result
+            .unwrap_or_else(|e| (table("Window (cadaddy --control)", &[], std::slice::from_ref(&e)), json!({ "problems": [e.clone()] }), vec![e]));
+        report.push_str(&text);
+        all["window"] = json;
         failed.extend(problems.into_iter().map(|p| format!("window: {p}")));
     }
     let _ = std::fs::write(out.join("report.md"), &report);
@@ -426,7 +689,12 @@ mod tests {
 
     #[test]
     fn options() {
-        assert_eq!(parse(&[]).unwrap(), Opts { minutes: 2.0, headless: true, window: false, app: None, cli: None, out: None, release: true });
+        assert_eq!(
+            parse(&[]).unwrap(),
+            Opts { minutes: 2.0, headless: true, window: false, app: None, cli: None, out: None, release: true, leak: false, passes: 1 }
+        );
+        assert!(parse(&["--leak"]).unwrap().leak && parse(&["--passes", "3"]).unwrap().passes == 3);
+        assert!(parse(&["--passes", "0"]).is_err());
         assert!(!parse(&["--profile", "dev"]).unwrap().release && parse(&["--profile", "x"]).is_err());
         let o = parse(&["--minutes", "30", "--mode", "both"]).unwrap();
         assert!(o.minutes == 30.0 && o.headless && o.window);
@@ -444,5 +712,17 @@ mod tests {
         let small: Vec<f64> = (0..12).map(|i| 200.0 + f64::from(i)).collect();
         assert!(grows(&small, 64.0).is_none());
         assert!(grows(&[1.0, 500.0], 1.0).is_none(), "too few samples to say");
+    }
+
+    #[test]
+    fn leak_run_counts_and_margin() {
+        let full = counts(1.0);
+        assert_eq!((full.drawings, full.commands, full.sheets, full.walks), (200, 10_000, 50, 100));
+        let warm = counts(0.001);
+        assert_eq!((warm.drawings, warm.commands, warm.sheets, warm.walks, warm.switches), (1, 10, 1, 1, 1));
+        // 64 MB, or a quarter of a large baseline.
+        assert!(leaked(300.0, 360.0).is_none() && leaked(300.0, 380.0).is_some());
+        assert!(leaked(1000.0, 1240.0).is_none() && leaked(1000.0, 1260.0).is_some());
+        assert!(leaked(300.0, 200.0).is_none(), "less than the baseline is no leak");
     }
 }
