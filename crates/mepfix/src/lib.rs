@@ -16,6 +16,7 @@ pub mod design;
 pub mod draw;
 pub mod duct_reader;
 pub mod layout;
+pub mod pipe_reader;
 pub mod rng;
 pub mod score;
 pub mod sheet_reader;
