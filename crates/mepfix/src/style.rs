@@ -53,6 +53,8 @@ pub struct Style {
     pub pdf_layers: bool,
     /// The wall type legend and wall tags (drawn from their own random stream).
     pub walls: crate::walls::WallStyle,
+    /// The ceiling legend, soffit and head details, finish schedule (their own random stream).
+    pub ceilings: crate::ceilings::CeilStyle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -135,6 +137,7 @@ impl Style {
             world_offsets: r.chance(0.5),
             pdf_layers: r.chance(0.3),
             walls: crate::walls::WallStyle::default(),
+            ceilings: crate::ceilings::CeilStyle::default(),
         }
     }
 

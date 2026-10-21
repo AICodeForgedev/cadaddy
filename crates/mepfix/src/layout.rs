@@ -27,11 +27,15 @@ pub enum Kind {
     Floor(String),
     /// The wall type legend.
     WallTypes,
+    /// Ceiling types, soffit and head of wall details.
+    CeilingDetails,
+    /// The room finish schedule.
+    FinishSchedule,
 }
 
 impl Kind {
     pub fn plan(&self) -> bool {
-        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes)
+        !matches!(self, Kind::Cover | Kind::Schedules(_) | Kind::WallTypes | Kind::CeilingDetails | Kind::FinishSchedule)
     }
 }
 
@@ -101,6 +105,8 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
         v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Floor(l.into())));
     }
     v.push(("A-501".into(), "WALL TYPES AND PARTITION SCHEDULE".into(), "A".into(), Kind::WallTypes));
+    v.push((crate::ceilings::DETAILS_SHEET.into(), "CEILING TYPES, SOFFIT AND HEAD OF WALL DETAILS".into(), "A".into(), Kind::CeilingDetails));
+    v.push(("A-601".into(), "ROOM FINISH SCHEDULE".into(), "A".into(), Kind::FinishSchedule));
     v
 }
 

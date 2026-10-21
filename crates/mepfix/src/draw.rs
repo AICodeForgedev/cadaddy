@@ -14,8 +14,8 @@ use std::f64::consts::{FRAC_PI_2, PI};
 /// A sheet being drawn.
 pub struct Pen<'a> {
     pub d: Drawing,
-    sh: &'a Sheet,
-    st: &'a Style,
+    pub(crate) sh: &'a Sheet,
+    pub(crate) st: &'a Style,
     /// Model inches per paper inch.
     k: f64,
     /// While set (enlarged plans): only what lies in this model rectangle is drawn, lines cut at
@@ -247,7 +247,7 @@ fn v3(p: Vec2) -> Vec3 {
 }
 
 /// Text that reads upright: an angle turned into (-90°, 90°].
-fn readable(a: f64) -> f64 {
+pub(crate) fn readable(a: f64) -> f64 {
     let mut a = a.rem_euclid(2.0 * PI);
     if a > FRAC_PI_2 + 1e-9 && a <= 3.0 * FRAC_PI_2 + 1e-9 {
         a -= PI;
@@ -294,6 +294,40 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                 .map(abbrev),
             );
         }
+        Kind::CeilingDetails => {
+            let fr = frame(st);
+            crate::ceilings::draw_details(&mut pen, t, &st.walls, &st.ceilings, fr.area);
+            legend.push(item("ceiling_type", "CEILING TYPE TAG"));
+            legend.push(item("detail", "DETAIL NUMBER"));
+            abbr.extend(
+                [
+                    "ACT = ACOUSTIC CEILING TILE",
+                    "GYP. BD. = GYPSUM BOARD",
+                    "GWB = GYPSUM WALLBOARD",
+                    "MR = MOISTURE-RESISTANT",
+                    "GA. = GAUGE",
+                    "O.C. = ON CENTER",
+                    "CLG = CEILING",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::FinishSchedule => {
+            let fr = frame(st);
+            crate::ceilings::draw_schedule(&mut pen, t, &st.ceilings, fr.area);
+            abbr.extend(
+                [
+                    "CPT = CARPET",
+                    "VCT = VINYL COMPOSITION TILE",
+                    "CT = CERAMIC TILE",
+                    "SC = SEALED CONCRETE",
+                    "RB = RUBBER BASE",
+                    "PT = PAINT",
+                    "EPX = EPOXY PAINT",
+                ]
+                .map(abbrev),
+            );
+        }
         Kind::Floor(l) => {
             grid(&mut pen, t);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
@@ -313,6 +347,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
             rcp(&mut pen, t, st, l);
+            crate::ceilings::draw_callouts(&mut pen, t, &st.ceilings, l);
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
@@ -597,6 +632,16 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             let (c, r) = (pen.p([x, y]), pen.pl(0.09));
             crate::walls::tag_symbol(pen, "LEGEND", c, r, st.walls.symbol);
             pen.ptext("LEGEND", [x, y - 0.03], 0.06, "X", HAlign::Center);
+        }
+        "ceiling_type" => {
+            let (c, r) = (pen.p([x, y]), pen.pl(0.09));
+            crate::walls::tag_symbol(pen, "LEGEND", c, r, (st.walls.symbol + 1) % 4);
+            pen.ptext("LEGEND", [x, y - 0.03], 0.06, "C", HAlign::Center);
+        }
+        "detail" => {
+            let (c, r) = (pen.p([x, y]), pen.pl(0.09));
+            pen.circle("LEGEND", c, r);
+            pen.ptext("LEGEND", [x, y - 0.03], 0.06, "1", HAlign::Center);
         }
         "door" => {
             pen.pline("A-DOOR", [x - 0.15, y - 0.1], [x - 0.15, y + 0.15]);
@@ -1396,7 +1441,9 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         pen.brect("DASHED", sf.min_ft, sf.max_ft);
         let c = [(sf.min_ft[0] + sf.max_ft[0]) / 2.0, (sf.min_ft[1] + sf.max_ft[1]) / 2.0];
         let p = pen.b(c);
-        pen.text("TEXT", p, st.text_in * 0.9, &sf.tag, rot, HAlign::Center, VAlign::Middle);
+        // Small enough to fit along the soffit.
+        let fit = sf.length_ft.max(sf.width_ft) * pen.sh.scale * 0.8 / (sf.tag.chars().count().max(1) as f64 * 1.1);
+        pen.text("TEXT", p, (st.text_in * 0.9).min(fit), &sf.tag, rot, HAlign::Center, VAlign::Middle);
     }
 }
 
@@ -1728,7 +1775,7 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
 }
 
 /// A table with a title, top-left at paper `at`; returns its height, inches.
-fn table(pen: &mut Pen, at: [f64; 2], title: &str, rows: &[Vec<String>]) -> f64 {
+pub(crate) fn table(pen: &mut Pen, at: [f64; 2], title: &str, rows: &[Vec<String>]) -> f64 {
     let h = 0.09;
     let row_h = 0.24;
     let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);

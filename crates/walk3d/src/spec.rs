@@ -64,6 +64,12 @@ pub struct BuildingSpec {
     /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
     #[serde(default, skip_serializing_if = "Rcp::is_empty")]
     pub rcp: Rcp,
+    /// Ceiling build-ups from the ceiling legend: what an RCP ceiling of each type is made of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ceiling_types: Vec<CeilingType>,
+    /// Soffit build-ups from their details.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soffit_types: Vec<SoffitType>,
     /// Duct, pipe and conduit systems and their runs.
     #[serde(default, skip_serializing_if = "Mep::is_empty")]
     pub mep: Mep,
@@ -207,6 +213,133 @@ pub struct Assembly {
     pub external: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// How its head meets what is above, and its bottom track (head of wall details).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<Head>,
+}
+
+/// A wall type's head and bottom, as its head of wall detail gives them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Head {
+    pub track: HeadTrack,
+    /// What the head goes up to.
+    pub to: HeadTo,
+    /// The movement the head takes (deflection and double tracks), inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deflection_in: Option<f64>,
+    /// The wall stands on a bottom track (stud walls).
+    #[serde(default)]
+    pub bottom_track: bool,
+    /// The detail it comes from (`5`, `5/A-502`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadTrack {
+    /// A top track, the wall braced to the structure above.
+    Single,
+    /// A slotted deflection track.
+    Deflection,
+    /// A nested double track.
+    Double,
+    /// Steel angles each side (masonry).
+    Angle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadTo {
+    /// The underside of the deck or structure.
+    Deck,
+    Ceiling,
+}
+
+impl Head {
+    pub fn text(&self) -> String {
+        let track = match self.track {
+            HeadTrack::Single => "top track",
+            HeadTrack::Deflection => "slotted deflection track",
+            HeadTrack::Double => "double (nested) track",
+            HeadTrack::Angle => "steel angles each side",
+        };
+        let to = match self.to {
+            HeadTo::Deck => "at the deck",
+            HeadTo::Ceiling => "at the ceiling",
+        };
+        let d = self.deflection_in.map(|d| format!(", {} deflection", inches(d))).unwrap_or_default();
+        let b = if self.bottom_track { ", bottom track" } else { "" };
+        format!("head: {track} {to}{d}{b}")
+    }
+}
+
+/// A ceiling build-up from the ceiling legend.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CeilingType {
+    /// Its tag (`C2`, `GYP-1`): RCP ceilings name it.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub kind: CeilingKind,
+    /// From the room's face up: boards or tile, then their framing (with its spacing).
+    #[serde(default)]
+    pub layers: Vec<AssemblyLayer>,
+    /// Tile size, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_in: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_rating: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CeilingKind {
+    /// Gypsum board on framing.
+    #[default]
+    Gypsum,
+    /// Tile in a suspended grid.
+    Grid,
+    /// No ceiling: the structure exposed.
+    Open,
+}
+
+/// A soffit build-up from its detail.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SoffitType {
+    /// Its tag (the detail number): RCP soffits name it.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The bottom's boards, room face first.
+    #[serde(default)]
+    pub bottom: Vec<AssemblyLayer>,
+    /// The vertical faces' boards, room face first.
+    #[serde(default)]
+    pub sides: Vec<AssemblyLayer>,
+    /// Studs (vertical, on its sides) and channels or runners (across its bottom).
+    #[serde(default)]
+    pub framing: Vec<AssemblyLayer>,
+    #[serde(default)]
+    pub hangs_from: Hang,
+    /// How far the side boards go past the ceiling, inches (soffits hung from the structure).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub above_ceiling_in: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Hang {
+    /// Built under the ceiling, which runs on above it.
+    #[default]
+    Ceiling,
+    /// Hung from the structure: the ceiling stops at its sides.
+    Structure,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Assembly {
@@ -230,6 +363,9 @@ pub struct AssemblyLayer {
     /// Insulation filling the stud cavity: it takes no thickness of its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub in_cavity: bool,
+    /// Framing's spacing, inches (`@ 16" o.c.`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_in: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -755,6 +891,12 @@ pub struct CeilingArea {
     pub height_ft: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<CeilingGrid>,
+    /// Its build-up ([`CeilingType::name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type: Option<String>,
+    /// Why the type is a guess, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guess: Option<String>,
 }
 
 /// A suspended ceiling grid: tile size (inches, along and across `angle_deg`) and a line
@@ -773,6 +915,18 @@ pub struct Soffit {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+    /// Its build-up ([`SoffitType::name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soffit_type: Option<String>,
+    /// The ceiling round it (where its sides meet it), feet above the floor; none = the highest
+    /// ceiling on its level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_ft: Option<f64>,
+    /// The length of its sides that show (not against a wall), feet; none = its whole outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sides_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guess: Option<String>,
 }
 
 /// A light fixture or air diffuser set in the ceiling: its block, centre, size (inches) and
@@ -996,6 +1150,9 @@ impl BuildingSpec {
                 if a.external {
                     text.push_str("; exterior");
                 }
+                if let Some(h) = &a.head {
+                    let _ = write!(text, "; {}", h.text());
+                }
             }
             put("wall_types", format!("wall_types/{}", t.name), text);
         }
@@ -1084,10 +1241,41 @@ impl BuildingSpec {
                 None => "gypsum".into(),
             };
             let room = c.room.as_ref().map_or(String::new(), |r| format!(" ({r})"));
-            put("rcp", format!("ceilings/{}", i + 1), format!("Ceiling {}{room} on {}: {what} at {}", i + 1, c.level, feet(c.height_ft)));
+            let what = c.ceiling_type.as_ref().map_or(what.clone(), |t| format!("type {t}, {what}"));
+            let guess = c.guess.as_ref().map_or(String::new(), |g| format!(" (guess: {g})"));
+            put("rcp", format!("ceilings/{}", i + 1), format!("Ceiling {}{room} on {}: {what} at {}{guess}", i + 1, c.level, feet(c.height_ft)));
         }
         for (i, sf) in self.rcp.soffits.iter().enumerate() {
-            put("rcp", format!("soffits/{}", i + 1), format!("Soffit {} on {} at {}", i + 1, sf.level, feet(sf.height_ft)));
+            let what = sf.soffit_type.as_ref().map_or(String::new(), |t| format!(", type {t}"));
+            let guess = sf.guess.as_ref().map_or(String::new(), |g| format!(" (guess: {g})"));
+            put("rcp", format!("soffits/{}", i + 1), format!("Soffit {} on {} at {}{what}{guess}", i + 1, sf.level, feet(sf.height_ft)));
+        }
+        let words = |ls: &[AssemblyLayer]| ls.iter().map(|l| l.material.as_str()).collect::<Vec<_>>().join(" + ");
+        for c in &self.ceiling_types {
+            let kind = match c.kind {
+                CeilingKind::Gypsum => "gypsum board",
+                CeilingKind::Grid => "tile in a grid",
+                CeilingKind::Open => "open to the structure",
+            };
+            let mut text = format!("{}: {kind}", c.name);
+            if !c.layers.is_empty() {
+                let _ = write!(text, "; {}", words(&c.layers));
+            }
+            if let Some(r) = &c.fire_rating {
+                let _ = write!(text, "; {r}");
+            }
+            put("ceiling_types", format!("ceiling_types/{}", c.name), text);
+        }
+        for t in &self.soffit_types {
+            let hang = match t.hangs_from {
+                Hang::Ceiling => "built under the ceiling".to_string(),
+                Hang::Structure => format!("hung from the structure, sides {} past the ceiling", inches(t.above_ceiling_in)),
+            };
+            put(
+                "soffit_types",
+                format!("soffit_types/{}", t.name),
+                format!("{}: {hang}; bottom {}; sides {}; framing {}", t.name, words(&t.bottom), words(&t.sides), words(&t.framing)),
+            );
         }
         if !self.rcp.items.is_empty() {
             let n = |k: ItemKind| self.rcp.items.iter().filter(|x| x.kind == k).count();
@@ -1218,6 +1406,8 @@ impl BuildingSpec {
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
+            ceiling_types: Vec::new(),
+            soffit_types: Vec::new(),
             devices: r.devices.clone(),
             device_sheets: r.device_sheets.clone(),
             openings: r.openings.clone(),
@@ -1427,6 +1617,9 @@ impl BuildingSpec {
                         ));
                     }
                 }
+                if a.head.as_ref().and_then(|h| h.deflection_in).is_some_and(|d| !(fin(d) && (0.0..=12.0).contains(&d))) {
+                    out.push(Issue::error(format!("{at}.assembly.head.deflection_in"), "a head's deflection is 0 to 12 inches"));
+                }
                 if !(fin(a.above_ceiling_in) && (0.0..=120.0).contains(&a.above_ceiling_in)) {
                     out.push(Issue::error(format!("{at}.assembly.above_ceiling_in"), "from 0 to 120 inches above the ceiling"));
                 }
@@ -1630,6 +1823,51 @@ impl BuildingSpec {
         for (i, sf) in self.rcp.soffits.iter().enumerate().take(MAX_ITEMS) {
             if self.level(&sf.level).is_none() || !outline_ok(&sf.outline) || !(fin(sf.height_ft) && sf.height_ft > 0.0) {
                 out.push(Issue::error(format!("rcp.soffits[{i}]"), "a soffit needs a level, an outline and a height"));
+            }
+            if let Some(t) = &sf.soffit_type
+                && !self.soffit_types.iter().any(|x| x.name.eq_ignore_ascii_case(t))
+            {
+                out.push(Issue::error(format!("rcp.soffits[{i}].soffit_type"), format!("there is no soffit type named {t}")));
+            }
+            if sf.top_ft.is_some_and(|v| !(fin(v) && v > sf.height_ft && v <= 100.0)) {
+                out.push(Issue::error(format!("rcp.soffits[{i}].top_ft"), "a soffit's top is above its bottom"));
+            }
+            if sf.sides_ft.is_some_and(|v| !(fin(v) && (0.0..=100_000.0).contains(&v))) {
+                out.push(Issue::error(format!("rcp.soffits[{i}].sides_ft"), "its sides are 0 feet long or more"));
+            }
+        }
+        for (i, c) in self.rcp.ceilings.iter().enumerate().take(MAX_ITEMS) {
+            if let Some(t) = &c.ceiling_type
+                && !self.ceiling_types.iter().any(|x| x.name.eq_ignore_ascii_case(t))
+            {
+                out.push(Issue::error(format!("rcp.ceilings[{i}].ceiling_type"), format!("there is no ceiling type named {t}")));
+            }
+        }
+        let layers_ok = |at: String, ls: &[AssemblyLayer], out: &mut Vec<Issue>| {
+            if ls.len() > MAX_ASSEMBLY_LAYERS {
+                out.push(Issue::error(at.clone(), format!("at most {MAX_ASSEMBLY_LAYERS} layers")));
+            }
+            for (j, l) in ls.iter().enumerate().take(MAX_ASSEMBLY_LAYERS) {
+                if !(fin(l.thickness_in) && l.thickness_in > 0.0 && l.thickness_in <= 48.0) {
+                    out.push(Issue::error(format!("{at}[{j}].thickness_in"), "a layer is more than 0 and at most 48 inches thick"));
+                }
+                if l.spacing_in.is_some_and(|v| !(fin(v) && (1.0..=240.0).contains(&v))) {
+                    out.push(Issue::error(format!("{at}[{j}].spacing_in"), "framing is 1\" to 240\" apart"));
+                }
+            }
+        };
+        for (i, c) in self.ceiling_types.iter().enumerate().take(MAX_ITEMS) {
+            layers_ok(format!("ceiling_types[{i}].layers"), &c.layers, &mut out);
+            if c.grid_in.is_some_and(|g| !g.iter().all(|v| fin(*v) && (6.0..=120.0).contains(v))) {
+                out.push(Issue::error(format!("ceiling_types[{i}].grid_in"), "a grid's tiles are 6\" to 120\""));
+            }
+        }
+        for (i, t) in self.soffit_types.iter().enumerate().take(MAX_ITEMS) {
+            layers_ok(format!("soffit_types[{i}].bottom"), &t.bottom, &mut out);
+            layers_ok(format!("soffit_types[{i}].sides"), &t.sides, &mut out);
+            layers_ok(format!("soffit_types[{i}].framing"), &t.framing, &mut out);
+            if !(fin(t.above_ceiling_in) && (0.0..=120.0).contains(&t.above_ceiling_in)) {
+                out.push(Issue::error(format!("soffit_types[{i}].above_ceiling_in"), "from 0 to 120 inches above the ceiling"));
             }
         }
         for (i, it) in self.rcp.items.iter().enumerate().take(100_000) {
@@ -1847,6 +2085,7 @@ mod tests {
             side,
             category: String::new(),
             in_cavity,
+            spacing_in: None,
         };
         let a = Assembly {
             tag: "1B".into(),

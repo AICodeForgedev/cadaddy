@@ -414,6 +414,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 min_ft: [r6(sx0), r6(sy0)],
                 max_ft: [r6(sx1), r6(sy0 + sw)],
                 tag: format!("SOFFIT @ {}", feet_inches(sh)),
+                ..Soffit::default()
             });
         }
         for i in 0..nb {

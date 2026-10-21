@@ -208,6 +208,8 @@ pub fn wall_types(ws: &WallStyle, r: &mut Rng) -> Vec<(Role, WallType)> {
                 fire_rating: fire.map(str::to_string),
                 stc,
                 external: role == Role::Exterior,
+                head: None,
+                bottom_track: false,
             },
         ));
     }
@@ -459,7 +461,7 @@ pub fn frac(v: f64, dash: bool) -> String {
     }
 }
 
-fn count_words(n: usize, ws: &WallStyle) -> String {
+pub(crate) fn count_words(n: usize, ws: &WallStyle) -> String {
     let s = if n == 1 { "LAYER" } else { "LAYERS" };
     match ws.count {
         1 => format!("{n} {s}"),
@@ -468,7 +470,7 @@ fn count_words(n: usize, ws: &WallStyle) -> String {
     }
 }
 
-fn board_words(m: &str, ws: &WallStyle) -> String {
+pub(crate) fn board_words(m: &str, ws: &WallStyle) -> String {
     let gyp = ["GYP. BD.", "GWB", "GYPSUM BOARD"].get(ws.gyp as usize).copied().unwrap_or("GYP. BD.");
     let x = if ws.type_x == 1 { "TYPE 'X'" } else { "TYPE X" };
     match m {
