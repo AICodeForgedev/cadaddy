@@ -17,6 +17,7 @@ pub mod batch;
 pub mod blockedit;
 pub mod cmd;
 pub mod control_auth;
+pub mod crash_report;
 pub mod doc_path;
 pub mod events;
 pub mod fields;
@@ -1262,10 +1263,12 @@ impl Session {
         let n = self.docs.len();
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd::file::finish_open(self, f))) {
             Ok(r) => r,
-            Err(_) => {
+            Err(p) => {
+                let msg = guard::message(&*p);
+                crash_report::record(self, "open", &msg);
                 self.docs.truncate(n);
                 self.active = self.active.min(self.docs.len().saturating_sub(1));
-                Err(EngineError::Internal("open".into(), "panic".into()))
+                Err(EngineError::Internal("open".into(), msg))
             }
         }
     }
@@ -1451,6 +1454,7 @@ impl Session {
             Err(p) => {
                 let msg =
                     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                crash_report::record(self, id, &msg);
                 // Restore the drawing as it was.
                 if let Some((doc, sel, uid)) = &before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
@@ -1889,7 +1893,11 @@ impl Session {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.machine.input(self, i)));
                 match r {
                     Ok(r) => r,
-                    Err(_) => Err(EngineError::Internal(run.id.clone(), "panic".into())),
+                    Err(p) => {
+                        let msg = guard::message(&*p);
+                        crash_report::record(self, &run.id, &msg);
+                        Err(EngineError::Internal(run.id.clone(), msg))
+                    }
                 }
             }
             // A command starts with no modifiers pending.

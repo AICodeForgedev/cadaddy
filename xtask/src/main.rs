@@ -13,6 +13,7 @@ mod mepfix;
 mod parity;
 mod perf;
 mod release;
+mod repro;
 mod secrets;
 mod signing;
 mod smoke;
@@ -89,6 +90,9 @@ commands:
                   mutation-fuzz the readers (default all, 60 s each): dxf dwg pdf svg image cdy shx
                   las pts xyz cdywalk markups stl obj gltf xlsx zip lisp; crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
+  repro FILE [--save OUT]
+                  replay a recorded journal (.scr) or action macro (.actm) headless through
+                  cadaddy-cli, to reproduce a crash or verify a workflow
   release-key --out FILE
                   make a release signing key: the secret to FILE (keep it off the repository), the
                   public key line for apps/cadaddy/src/release_keys.txt printed
@@ -119,6 +123,7 @@ fn main() -> ExitCode {
         Some("compare-facts") => cmd_compare_facts(),
         Some("mcptest") => mcptest::run(&root(), &rest),
         Some("perf") => perf::run(&root(), &rest),
+        Some("repro") => repro::run_repro(&rest),
         Some("mep-fixtures") => mepfix::run(&root(), &rest),
         Some("webtest" | "web") => webtest::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),

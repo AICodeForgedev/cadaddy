@@ -366,7 +366,8 @@ pub fn entries_for(app: &CadApp, choices: Choices, who: &Identity) -> Vec<(Strin
              To report the problem, attach this file to an email to {} and say what happened.\n\n\
              system.txt   versions, operating system, graphics adapter\n\
              commands.txt the last commands{}\n\
-             logs/        the log of this run and the two before it\n{}{}{}",
+             logs/        the log of this run and the two before it\n\
+             diagnostics/ crash reports (command, backtrace, recent history; no file contents)\n{}{}{}",
             crate::support::FEEDBACK_EMAIL,
             if choices.names { " with what was typed" } else { " (command names only)" },
             if choices.drawing { "drawings.txt what the open drawings hold (counts only)\n" } else { "" },
@@ -389,6 +390,10 @@ pub fn entries_for(app: &CadApp, choices: Choices, who: &Identity) -> Vec<(Strin
                 out.push((format!("logs/{name}"), text));
             }
         }
+    }
+    // Crash reports from the diagnostics folder (command, backtrace, recent history).
+    for (name, text) in cadaddy_engine::crash_report::list() {
+        out.push((format!("diagnostics/{name}"), text));
     }
     // What CADaddy wrote itself without names (versions, counts by type) is left as it is: a
     // layer called "Line" mustn't turn the line count into a placeholder. Who the user is goes
@@ -585,7 +590,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         ui.label(crate::tl!("Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it."));
         ui.add_space(6.0);
         ui.label(egui::RichText::new(crate::tl!("Always included")).strong());
-        for l in ["The log of this run and the two before it", "The last commands", "Versions, operating system and graphics adapter"] {
+        for l in ["The log of this run and the two before it", "The last commands", "Versions, operating system and graphics adapter", "Crash reports (command, backtrace, recent history; no file contents)"] {
             ui.label(format!("• {}", crate::i18n::t(l)));
         }
         ui.add_space(6.0);
@@ -681,7 +686,7 @@ mod tests {
         let plain = entries(&app, Choices { drawing: true, names: false, file: false });
         let all = text(&plain);
         assert!(!all.contains("SECRET"), "{all}");
-        let files: Vec<&str> = plain.iter().map(|(n, _)| n.as_str()).collect();
+        let files: Vec<&str> = plain.iter().map(|(n, _)| n.as_str()).filter(|n| !n.starts_with("diagnostics/")).collect();
         assert_eq!(files, ["README.txt", "system.txt", "commands.txt", "drawings.txt", "logs/cadaddy.log"]);
         assert!(all.contains("Test GPU (Metal)") && all.contains("cadaddy test"));
         assert!(all.contains("Line: 1"), "counts are there: {all}");

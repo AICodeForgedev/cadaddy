@@ -124,6 +124,7 @@ pub mod walk;
 pub mod workspaces;
 
 pub mod autocomplete;
+pub mod debug_overlay;
 pub mod designcenter;
 pub mod diag;
 pub mod etransmit;
@@ -509,6 +510,8 @@ pub struct CadApp {
     pub wgpu_rs: Option<egui_wgpu::RenderState>,
     /// What the GPU can do for the 3D views ([`gpucaps::GpuCaps`]); no GPU: the CPU draws.
     pub gpu_caps: gpucaps::GpuCaps,
+    /// `--debug`: show a frame-time and memory overlay on the canvas.
+    pub debug_overlay: bool,
 }
 
 impl CadApp {
@@ -587,6 +590,7 @@ impl CadApp {
             tab_bar: None,
             wgpu_rs: None,
             gpu_caps: gpucaps::GpuCaps::default(),
+            debug_overlay: false,
         }
     }
 
@@ -1253,6 +1257,9 @@ impl CadApp {
         }
         control::observe_drawn(ui.ctx());
         self.frame_ms = now_ms() - t0;
+        if self.debug_overlay {
+            debug_overlay::show(self, ui.ctx());
+        }
         self.note_time("draw", self.frame_ms);
         if startup::frame(self.frame_ms) {
             let report = startup::report();
