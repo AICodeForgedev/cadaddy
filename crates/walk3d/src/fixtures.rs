@@ -201,90 +201,48 @@ pub fn classify(kind: &str, type_tag: &str, size_ft: [f64; 3]) -> Option<Fixture
 
 /// Generate fixture geometry into the scene. Returns `true` if geometry was produced, `false`
 /// if the caller should fall back to `boxed()`.
-pub fn generate(
-    s: &mut Scene,
-    family: &FixtureFamily,
-    centre: V3,
-    dir: Vec2,
-    col: Rgb,
-    owner: Owner,
-    lod: Lod,
-) -> bool {
+pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, col: Rgb, owner: Owner, lod: Lod) -> bool {
     if lod == Lod::Box {
         return false; // Caller uses boxed()
     }
     match family {
         // --- Luminaires ---
-        FixtureFamily::Troffer { width_ft, length_ft, depth_ft } => {
-            troffer(s, centre, dir, *width_ft, *length_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::Downlight { aperture_ft, depth_ft } => {
-            downlight(s, centre, *aperture_ft, *depth_ft, col, owner, lod)
-        }
+        FixtureFamily::Troffer { width_ft, length_ft, depth_ft } => troffer(s, centre, dir, *width_ft, *length_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Downlight { aperture_ft, depth_ft } => downlight(s, centre, *aperture_ft, *depth_ft, col, owner, lod),
         FixtureFamily::LinearPendant { length_ft, width_ft, drop_ft } => {
             linear_pendant(s, centre, dir, *length_ft, *width_ft, *drop_ft, col, owner, lod)
         }
-        FixtureFamily::SlotLight { length_ft, width_ft } => {
-            slot_light(s, centre, dir, *length_ft, *width_ft, col, owner, lod)
-        }
-        FixtureFamily::WallPack { width_ft, height_ft, depth_ft } => {
-            wall_pack(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::Sconce { width_ft, height_ft, depth_ft } => {
-            sconce(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::StripWrap { length_ft, width_ft, depth_ft } => {
-            strip_wrap(s, centre, dir, *length_ft, *width_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::ExitSign { width_ft, height_ft, depth_ft } => {
-            exit_sign(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
+        FixtureFamily::SlotLight { length_ft, width_ft } => slot_light(s, centre, dir, *length_ft, *width_ft, col, owner, lod),
+        FixtureFamily::WallPack { width_ft, height_ft, depth_ft } => wall_pack(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Sconce { width_ft, height_ft, depth_ft } => sconce(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::StripWrap { length_ft, width_ft, depth_ft } => strip_wrap(s, centre, dir, *length_ft, *width_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::ExitSign { width_ft, height_ft, depth_ft } => exit_sign(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
         FixtureFamily::EmergencyLight { width_ft, height_ft, depth_ft } => {
             emergency_light(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
         }
 
         // --- Electrical devices ---
-        FixtureFamily::Receptacle { width_ft, height_ft, depth_ft } => {
-            receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::Switch { width_ft, height_ft, depth_ft } => {
-            switch_device(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::FloorBox { width_ft, depth_ft, height_ft } => {
-            floor_box(s, centre, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
+        FixtureFamily::Receptacle { width_ft, height_ft, depth_ft } => receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Switch { width_ft, height_ft, depth_ft } => switch_device(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::FloorBox { width_ft, depth_ft, height_ft } => floor_box(s, centre, *width_ft, *depth_ft, *height_ft, col, owner, lod),
         FixtureFamily::DataOutlet { width_ft, height_ft, depth_ft } => {
             // Same visual as receptacle
             receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
         }
 
         // --- Panels / disconnects ---
-        FixtureFamily::Panel { width_ft, height_ft, depth_ft } => {
-            panel(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
-        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => {
-            disconnect(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
+        FixtureFamily::Panel { width_ft, height_ft, depth_ft } => panel(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => disconnect(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
 
         // --- Plumbing ---
         FixtureFamily::WaterCloset { width_ft, depth_ft, height_ft } => {
             water_closet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
         }
-        FixtureFamily::Lavatory { width_ft, depth_ft, height_ft } => {
-            lavatory(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
-        FixtureFamily::Urinal { width_ft, depth_ft, height_ft } => {
-            urinal(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
-        FixtureFamily::Shower { width_ft, depth_ft, height_ft } => {
-            shower(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
-        FixtureFamily::MopSink { width_ft, depth_ft, height_ft } => {
-            mop_sink(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
-        FixtureFamily::WaterHeater { diameter_ft, height_ft } => {
-            water_heater(s, centre, *diameter_ft, *height_ft, col, owner, lod)
-        }
+        FixtureFamily::Lavatory { width_ft, depth_ft, height_ft } => lavatory(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
+        FixtureFamily::Urinal { width_ft, depth_ft, height_ft } => urinal(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
+        FixtureFamily::Shower { width_ft, depth_ft, height_ft } => shower(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
+        FixtureFamily::MopSink { width_ft, depth_ft, height_ft } => mop_sink(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
+        FixtureFamily::WaterHeater { diameter_ft, height_ft } => water_heater(s, centre, *diameter_ft, *height_ft, col, owner, lod),
 
         // --- Casework ---
         FixtureFamily::BaseCabinet { width_ft, depth_ft, height_ft } => {
@@ -304,21 +262,11 @@ pub fn generate(
         }
 
         // --- Pipe/conduit fittings ---
-        FixtureFamily::Elbow90 { diameter_ft } => {
-            elbow(s, centre, dir, *diameter_ft, 90.0, col, owner, lod)
-        }
-        FixtureFamily::Elbow45 { diameter_ft } => {
-            elbow(s, centre, dir, *diameter_ft, 45.0, col, owner, lod)
-        }
-        FixtureFamily::Tee { diameter_ft } => {
-            tee_fitting(s, centre, dir, *diameter_ft, col, owner, lod)
-        }
-        FixtureFamily::Reducer { large_ft, small_ft, length_ft } => {
-            reducer(s, centre, dir, *large_ft, *small_ft, *length_ft, col, owner, lod)
-        }
-        FixtureFamily::Coupling { diameter_ft, length_ft } => {
-            coupling(s, centre, dir, *diameter_ft, *length_ft, col, owner, lod)
-        }
+        FixtureFamily::Elbow90 { diameter_ft } => elbow(s, centre, dir, *diameter_ft, 90.0, col, owner, lod),
+        FixtureFamily::Elbow45 { diameter_ft } => elbow(s, centre, dir, *diameter_ft, 45.0, col, owner, lod),
+        FixtureFamily::Tee { diameter_ft } => tee_fitting(s, centre, dir, *diameter_ft, col, owner, lod),
+        FixtureFamily::Reducer { large_ft, small_ft, length_ft } => reducer(s, centre, dir, *large_ft, *small_ft, *length_ft, col, owner, lod),
+        FixtureFamily::Coupling { diameter_ft, length_ft } => coupling(s, centre, dir, *diameter_ft, *length_ft, col, owner, lod),
     }
     true
 }
@@ -361,16 +309,20 @@ fn circle_segs(lod: Lod) -> usize {
 
 /// Generate a ring of points at height z with given radius, in local coordinates.
 fn ring(n: usize, radius: f64, z: f64, to_world: &impl Fn(f64, f64, f64) -> V3) -> Vec<V3> {
-    (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        to_world(a.cos() * radius, a.sin() * radius, z)
-    }).collect()
+    (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            to_world(a.cos() * radius, a.sin() * radius, z)
+        })
+        .collect()
 }
 
 /// Emit a cylinder (side faces only) between two rings of the same length.
 fn cylinder_side(s: &mut Scene, bottom: &[V3], top: &[V3], col: Rgb, owner: Owner) {
     let n = bottom.len();
-    if n < 3 { return; }
+    if n < 3 {
+        return;
+    }
     for i in 0..n {
         let j = (i + 1) % n;
         quad(s, [bottom[i], bottom[j], top[j], top[i]], col, owner);
@@ -380,7 +332,9 @@ fn cylinder_side(s: &mut Scene, bottom: &[V3], top: &[V3], col: Rgb, owner: Owne
 /// Emit a flat fan (disc) from the ring, with given normal direction sign.
 fn disc(s: &mut Scene, centre: V3, pts: &[V3], col: Rgb, owner: Owner) {
     let n = pts.len();
-    if n < 3 { return; }
+    if n < 3 {
+        return;
+    }
     for i in 1..n - 1 {
         let a = pts[0];
         let b = pts[i];
@@ -421,11 +375,7 @@ fn closed_cylinder(s: &mut Scene, centre: V3, dir: Vec2, radius: f64, height: f6
 
 /// 2×4 / 2×2 / 1×4 recessed troffer: a flat rectangular housing with a recessed lens.
 #[allow(clippy::too_many_arguments)]
-fn troffer(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, length: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn troffer(s: &mut Scene, c: V3, dir: Vec2, width: f64, length: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     let tw = local_frame(c, dir);
     let hw = width / 2.0;
     let hl = length / 2.0;
@@ -479,14 +429,18 @@ fn downlight(s: &mut Scene, c: V3, aperture: f64, depth: f64, col: Rgb, owner: O
 
     // Trim ring (flat annulus at ceiling level)
     let trim_col = Rgb(240, 240, 240); // White trim
-    let outer: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * (r + trim_w), a.sin() * (r + trim_w), 0.0)
-    }).collect();
-    let inner: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * r, a.sin() * r, 0.0)
-    }).collect();
+    let outer: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * (r + trim_w), a.sin() * (r + trim_w), 0.0)
+        })
+        .collect();
+    let inner: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * r, a.sin() * r, 0.0)
+        })
+        .collect();
     for i in 0..n {
         let j = (i + 1) % n;
         quad(s, [outer[i], outer[j], inner[j], inner[i]], trim_col, owner);
@@ -494,10 +448,12 @@ fn downlight(s: &mut Scene, c: V3, aperture: f64, depth: f64, col: Rgb, owner: O
 
     // Inner cone (baffle) — tapers slightly
     let inner_r = r * 0.7;
-    let bottom: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * inner_r, a.sin() * inner_r, -depth)
-    }).collect();
+    let bottom: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * inner_r, a.sin() * inner_r, -depth)
+        })
+        .collect();
     cylinder_side(s, &inner, &bottom, darken(col, 0.7), owner);
 
     // Light disc at bottom
@@ -507,11 +463,7 @@ fn downlight(s: &mut Scene, c: V3, aperture: f64, depth: f64, col: Rgb, owner: O
 
 /// Linear pendant luminaire: a long narrow housing suspended on cables.
 #[allow(clippy::too_many_arguments)]
-fn linear_pendant(
-    s: &mut Scene, c: V3, dir: Vec2,
-    length: f64, width: f64, drop: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn linear_pendant(s: &mut Scene, c: V3, dir: Vec2, length: f64, width: f64, drop: f64, col: Rgb, owner: Owner, lod: Lod) {
     // The housing hangs `drop` feet below c
     let body_c = c + v3(0.0, 0.0, -drop);
     let body_h = width; // Square cross-section roughly
@@ -548,11 +500,7 @@ fn linear_pendant(
 
 /// Slot light: a narrow recessed slot in the ceiling.
 #[allow(clippy::too_many_arguments)]
-fn slot_light(
-    s: &mut Scene, c: V3, dir: Vec2,
-    length: f64, width: f64,
-    col: Rgb, owner: Owner, _lod: Lod,
-) {
+fn slot_light(s: &mut Scene, c: V3, dir: Vec2, length: f64, width: f64, col: Rgb, owner: Owner, _lod: Lod) {
     let tw = local_frame(c, dir);
     let hl = length / 2.0;
     let hw = width / 2.0;
@@ -572,11 +520,7 @@ fn slot_light(
 
 /// Wall pack: a squat, wall-mounted outdoor light.
 #[allow(clippy::too_many_arguments)]
-fn wall_pack(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn wall_pack(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -608,11 +552,7 @@ fn wall_pack(
 
 /// Wall sconce: a decorative wall-mounted light.
 #[allow(clippy::too_many_arguments)]
-fn sconce(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn sconce(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -634,24 +574,14 @@ fn sconce(
         let x0_off = a0.cos() * hw * 0.3;
         let x1_off = a1.cos() * hw * 0.3;
         let shade_col = if i < n / 2 { brighten(col, 1.2) } else { col };
-        quad(s, [
-            tw(-hw + x0_off, y0, -hh), tw(-hw + x1_off, y1, -hh),
-            tw(-hw + x1_off, y1, hh), tw(-hw + x0_off, y0, hh),
-        ], shade_col, owner);
-        quad(s, [
-            tw(hw - x1_off, y1, -hh), tw(hw - x0_off, y0, -hh),
-            tw(hw - x0_off, y0, hh), tw(hw - x1_off, y1, hh),
-        ], shade_col, owner);
+        quad(s, [tw(-hw + x0_off, y0, -hh), tw(-hw + x1_off, y1, -hh), tw(-hw + x1_off, y1, hh), tw(-hw + x0_off, y0, hh)], shade_col, owner);
+        quad(s, [tw(hw - x1_off, y1, -hh), tw(hw - x0_off, y0, -hh), tw(hw - x0_off, y0, hh), tw(hw - x1_off, y1, hh)], shade_col, owner);
     }
 }
 
 /// Strip / wrap fluorescent.
 #[allow(clippy::too_many_arguments)]
-fn strip_wrap(
-    s: &mut Scene, c: V3, dir: Vec2,
-    length: f64, width: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn strip_wrap(s: &mut Scene, c: V3, dir: Vec2, length: f64, width: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, length, width, depth, col, owner);
         return;
@@ -675,11 +605,7 @@ fn strip_wrap(
 
 /// Exit sign: rectangular housing with lit EXIT face.
 #[allow(clippy::too_many_arguments)]
-fn exit_sign(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn exit_sign(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -705,11 +631,7 @@ fn exit_sign(
 
 /// Emergency light: two lamp heads on a housing.
 #[allow(clippy::too_many_arguments)]
-fn emergency_light(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn emergency_light(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -740,11 +662,7 @@ fn emergency_light(
 
 /// Receptacle: a wall plate with two outlet slots.
 #[allow(clippy::too_many_arguments)]
-fn receptacle(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn receptacle(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -770,30 +688,36 @@ fn receptacle(
         let slot_w = hw * 0.1;
         let gap = hw * 0.2;
         for x_off in [-gap, gap] {
-            quad(s, [
-                tw(x_off - slot_w, sy, z_off - slot_h),
-                tw(x_off + slot_w, sy, z_off - slot_h),
-                tw(x_off + slot_w, sy, z_off + slot_h),
-                tw(x_off - slot_w, sy, z_off + slot_h),
-            ], slot_col, owner);
+            quad(
+                s,
+                [
+                    tw(x_off - slot_w, sy, z_off - slot_h),
+                    tw(x_off + slot_w, sy, z_off - slot_h),
+                    tw(x_off + slot_w, sy, z_off + slot_h),
+                    tw(x_off - slot_w, sy, z_off + slot_h),
+                ],
+                slot_col,
+                owner,
+            );
         }
         // Ground pin (half-circle → just a small quad below)
-        quad(s, [
-            tw(-slot_w, sy, z_off - slot_h * 1.5),
-            tw(slot_w, sy, z_off - slot_h * 1.5),
-            tw(slot_w, sy, z_off - slot_h * 1.1),
-            tw(-slot_w, sy, z_off - slot_h * 1.1),
-        ], slot_col, owner);
+        quad(
+            s,
+            [
+                tw(-slot_w, sy, z_off - slot_h * 1.5),
+                tw(slot_w, sy, z_off - slot_h * 1.5),
+                tw(slot_w, sy, z_off - slot_h * 1.1),
+                tw(-slot_w, sy, z_off - slot_h * 1.1),
+            ],
+            slot_col,
+            owner,
+        );
     }
 }
 
 /// Switch: a wall plate with a toggle.
 #[allow(clippy::too_many_arguments)]
-fn switch_device(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn switch_device(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -820,11 +744,7 @@ fn switch_device(
 
 /// Floor box: a round or square box flush with the floor.
 #[allow(clippy::too_many_arguments)]
-fn floor_box(
-    s: &mut Scene, c: V3,
-    width: f64, depth: f64, height: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn floor_box(s: &mut Scene, c: V3, width: f64, depth: f64, height: f64, col: Rgb, owner: Owner, lod: Lod) {
     // Floor boxes are cylindrical in practice
     let r = width.max(depth) / 2.0;
     closed_cylinder(s, c, Vec2 { x: 1.0, y: 0.0 }, r, height, darken(col, 0.7), owner, lod);
@@ -842,11 +762,7 @@ fn floor_box(
 
 /// Electrical panel: a metal cabinet mounted on a wall.
 #[allow(clippy::too_many_arguments)]
-fn panel(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn panel(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -875,11 +791,7 @@ fn panel(
 
 /// Disconnect switch: similar to panel but smaller, with a visible handle.
 #[allow(clippy::too_many_arguments)]
-fn disconnect(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, depth: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn disconnect(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, col, owner);
         return;
@@ -905,11 +817,7 @@ fn disconnect(
 
 /// Water closet (toilet): bowl + tank profile.
 #[allow(clippy::too_many_arguments)]
-fn water_closet(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn water_closet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let tw = local_frame(c, dir);
     let porcelain = Rgb(240, 240, 235);
     let hw = width / 2.0;
@@ -928,14 +836,18 @@ fn water_closet(
     let bowl_c = tw(0.0, -depth / 2.0 + bowl_depth / 2.0, -height / 2.0 + bowl_h / 2.0);
     let bowl_rx = hw;
     let bowl_ry = bowl_depth / 2.0;
-    let bot_ring: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, -bowl_h / 2.0)
-    }).collect();
-    let top_ring: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, bowl_h / 2.0)
-    }).collect();
+    let bot_ring: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, -bowl_h / 2.0)
+        })
+        .collect();
+    let top_ring: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, bowl_h / 2.0)
+        })
+        .collect();
     cylinder_side(s, &bot_ring, &top_ring, porcelain, owner);
     disc(s, bowl_c + v3(0.0, 0.0, bowl_h / 2.0), &top_ring, porcelain, owner);
 
@@ -950,10 +862,12 @@ fn water_closet(
     let seat_col = Rgb(250, 250, 245);
     let seat_w = hw * 1.05;
     let seat_d = bowl_depth / 2.0 * 1.05;
-    let seat_ring: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        bowl_c + v3(a.cos() * seat_w, a.sin() * seat_d, bowl_h / 2.0 + 0.02)
-    }).collect();
+    let seat_ring: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            bowl_c + v3(a.cos() * seat_w, a.sin() * seat_d, bowl_h / 2.0 + 0.02)
+        })
+        .collect();
     // Thin annulus for seat
     for i in 0..n {
         let j = (i + 1) % n;
@@ -963,11 +877,7 @@ fn water_closet(
 
 /// Lavatory (bathroom sink): a basin shape.
 #[allow(clippy::too_many_arguments)]
-fn lavatory(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn lavatory(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let porcelain = Rgb(240, 240, 235);
 
     if lod == Lod::Simple {
@@ -987,21 +897,27 @@ fn lavatory(
     let bowl_ry = hd * 0.85;
 
     // Outer rim
-    let outer: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * hw, a.sin() * hd, rim_z)
-    }).collect();
+    let outer: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * hw, a.sin() * hd, rim_z)
+        })
+        .collect();
     // Inner rim (bowl opening)
-    let inner: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z)
-    }).collect();
+    let inner: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z)
+        })
+        .collect();
     // Bowl bottom (smaller)
     let drain_r = 1.0 / 12.0;
-    let bottom: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * drain_r, a.sin() * drain_r, bot_z)
-    }).collect();
+    let bottom: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * drain_r, a.sin() * drain_r, bot_z)
+        })
+        .collect();
 
     // Rim annulus
     for i in 0..n {
@@ -1009,10 +925,12 @@ fn lavatory(
         quad(s, [outer[i], outer[j], inner[j], inner[i]], porcelain, owner);
     }
     // Outer sides (from rim down)
-    let outer_bot: Vec<V3> = (0..n).map(|i| {
-        let a = 2.0 * PI * (i as f64) / (n as f64);
-        c + v3(a.cos() * hw, a.sin() * hd, bot_z)
-    }).collect();
+    let outer_bot: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            c + v3(a.cos() * hw, a.sin() * hd, bot_z)
+        })
+        .collect();
     cylinder_side(s, &outer_bot, &outer, porcelain, owner);
     // Inner bowl surface
     cylinder_side(s, &bottom, &inner, Rgb(230, 230, 225), owner);
@@ -1022,11 +940,7 @@ fn lavatory(
 
 /// Urinal: a wall-hung porcelain fixture.
 #[allow(clippy::too_many_arguments)]
-fn urinal(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn urinal(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let porcelain = Rgb(240, 240, 235);
 
     if lod == Lod::Simple {
@@ -1068,11 +982,7 @@ fn urinal(
 
 /// Shower: a recessed base pan.
 #[allow(clippy::too_many_arguments)]
-fn shower(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn shower(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let tile_col = Rgb(220, 220, 215);
 
     if lod == Lod::Simple {
@@ -1089,9 +999,24 @@ fn shower(
     let pan_depth = height;
 
     // Floor of pan
-    quad(s, [tw(-hw, -hd, -pan_depth / 2.0), tw(hw, -hd, -pan_depth / 2.0), tw(hw, hd, -pan_depth / 2.0), tw(-hw, hd, -pan_depth / 2.0)], tile_col, owner);
+    quad(
+        s,
+        [tw(-hw, -hd, -pan_depth / 2.0), tw(hw, -hd, -pan_depth / 2.0), tw(hw, hd, -pan_depth / 2.0), tw(-hw, hd, -pan_depth / 2.0)],
+        tile_col,
+        owner,
+    );
     // Top rim
-    quad(s, [tw(-hw, -hd, -pan_depth / 2.0 + lip), tw(hw, -hd, -pan_depth / 2.0 + lip), tw(hw, hd, -pan_depth / 2.0 + lip), tw(-hw, hd, -pan_depth / 2.0 + lip)], Rgb(200, 200, 195), owner);
+    quad(
+        s,
+        [
+            tw(-hw, -hd, -pan_depth / 2.0 + lip),
+            tw(hw, -hd, -pan_depth / 2.0 + lip),
+            tw(hw, hd, -pan_depth / 2.0 + lip),
+            tw(-hw, hd, -pan_depth / 2.0 + lip),
+        ],
+        Rgb(200, 200, 195),
+        owner,
+    );
     // Sides of lip
     let lz = -pan_depth / 2.0 + lip;
     let bz = -pan_depth / 2.0;
@@ -1108,11 +1033,7 @@ fn shower(
 
 /// Mop sink: a large floor-mounted basin.
 #[allow(clippy::too_many_arguments)]
-fn mop_sink(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn mop_sink(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let grey = Rgb(180, 180, 175);
 
     if lod == Lod::Simple {
@@ -1138,11 +1059,7 @@ fn mop_sink(
 
 /// Cylindrical water heater.
 #[allow(clippy::too_many_arguments)]
-fn water_heater(
-    s: &mut Scene, c: V3,
-    diameter: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn water_heater(s: &mut Scene, c: V3, diameter: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let body_col = Rgb(220, 220, 215);
     let r = diameter / 2.0;
     closed_cylinder(s, c, Vec2 { x: 1.0, y: 0.0 }, r, height, body_col, owner, lod);
@@ -1154,11 +1071,7 @@ fn water_heater(
 
 /// Base cabinet: box with a recessed toe kick.
 #[allow(clippy::too_many_arguments)]
-fn base_cabinet(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn base_cabinet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let wood = Rgb(180, 140, 100);
 
     if lod == Lod::Simple {
@@ -1182,16 +1095,20 @@ fn base_cabinet(
     let kick_col = Rgb(40, 35, 30);
     let kick_z_bot = -hh;
     let kick_z_top = -hh + toe_h;
-    quad(s, [
-        tw(-hw, hd - toe_d, kick_z_bot), tw(hw, hd - toe_d, kick_z_bot),
-        tw(hw, hd - toe_d, kick_z_top), tw(-hw, hd - toe_d, kick_z_top),
-    ], kick_col, owner);
+    quad(
+        s,
+        [tw(-hw, hd - toe_d, kick_z_bot), tw(hw, hd - toe_d, kick_z_bot), tw(hw, hd - toe_d, kick_z_top), tw(-hw, hd - toe_d, kick_z_top)],
+        kick_col,
+        owner,
+    );
 
     // Bottom of cabinet (horizontal surface at toe kick top)
-    quad(s, [
-        tw(-hw, hd - toe_d, kick_z_top), tw(hw, hd - toe_d, kick_z_top),
-        tw(hw, hd, kick_z_top), tw(-hw, hd, kick_z_top),
-    ], darken(wood, 0.8), owner);
+    quad(
+        s,
+        [tw(-hw, hd - toe_d, kick_z_top), tw(hw, hd - toe_d, kick_z_top), tw(hw, hd, kick_z_top), tw(-hw, hd, kick_z_top)],
+        darken(wood, 0.8),
+        owner,
+    );
 
     // Door lines (vertical groove down the centre front)
     let groove = Rgb(150, 115, 80);
@@ -1204,11 +1121,7 @@ fn base_cabinet(
 
 /// Wall cabinet: a box (no toe kick, narrower depth).
 #[allow(clippy::too_many_arguments)]
-fn wall_cabinet(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    _col: Rgb, owner: Owner, lod: Lod,
-) {
+fn wall_cabinet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let wood = Rgb(180, 140, 100);
     if lod == Lod::Simple {
         boxed(s, c, dir, width, depth, height, wood, owner);
@@ -1231,22 +1144,14 @@ fn wall_cabinet(
 
 /// Tall cabinet (pantry/utility): full height with toe kick.
 #[allow(clippy::too_many_arguments)]
-fn tall_cabinet(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, height: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn tall_cabinet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, col: Rgb, owner: Owner, lod: Lod) {
     // Same construction as base cabinet but taller
     base_cabinet(s, c, dir, width, depth, height, col, owner, lod);
 }
 
 /// Countertop slab.
 #[allow(clippy::too_many_arguments)]
-fn countertop(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, depth: f64, thickness: f64,
-    _col: Rgb, owner: Owner, _lod: Lod,
-) {
+fn countertop(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, thickness: f64, _col: Rgb, owner: Owner, _lod: Lod) {
     let counter_col = Rgb(200, 195, 185); // Stone/quartz color
     boxed(s, c, dir, width, depth, thickness, counter_col, owner);
 
@@ -1261,11 +1166,7 @@ fn countertop(
 
 /// Backsplash: a thin vertical panel behind the counter.
 #[allow(clippy::too_many_arguments)]
-fn backsplash(
-    s: &mut Scene, c: V3, dir: Vec2,
-    width: f64, height: f64, thickness: f64,
-    _col: Rgb, owner: Owner, _lod: Lod,
-) {
+fn backsplash(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, thickness: f64, _col: Rgb, owner: Owner, _lod: Lod) {
     let tile = Rgb(220, 215, 205);
     boxed(s, c, dir, width, thickness, height, tile, owner);
 }
@@ -1276,11 +1177,7 @@ fn backsplash(
 
 /// Elbow fitting (90° or 45°).
 #[allow(clippy::too_many_arguments)]
-fn elbow(
-    s: &mut Scene, c: V3, dir: Vec2,
-    diameter: f64, angle_deg: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn elbow(s: &mut Scene, c: V3, dir: Vec2, diameter: f64, angle_deg: f64, col: Rgb, owner: Owner, lod: Lod) {
     let n = circle_segs(lod);
     let r = diameter / 2.0;
     let bend_r = diameter; // Centre-line bend radius = 1 diameter
@@ -1298,12 +1195,14 @@ fn elbow(
         // Ring normal direction (tangent to bend)
         let nx = t.cos();
         let nz = t.sin();
-        let ring_pts: Vec<V3> = (0..n).map(|j| {
-            let a = 2.0 * PI * (j as f64) / (n as f64);
-            let ly = a.cos() * r;
-            let lr = a.sin() * r;
-            tw(cx + lr * nx, ly, cz + lr * nz)
-        }).collect();
+        let ring_pts: Vec<V3> = (0..n)
+            .map(|j| {
+                let a = 2.0 * PI * (j as f64) / (n as f64);
+                let ly = a.cos() * r;
+                let lr = a.sin() * r;
+                tw(cx + lr * nx, ly, cz + lr * nz)
+            })
+            .collect();
         if !prev_ring.is_empty() {
             cylinder_side(s, &prev_ring, &ring_pts, col, owner);
         }
@@ -1313,11 +1212,7 @@ fn elbow(
 
 /// Tee fitting.
 #[allow(clippy::too_many_arguments)]
-fn tee_fitting(
-    s: &mut Scene, c: V3, dir: Vec2,
-    diameter: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn tee_fitting(s: &mut Scene, c: V3, dir: Vec2, diameter: f64, col: Rgb, owner: Owner, lod: Lod) {
     let r = diameter / 2.0;
     let run_len = diameter * 2.0;
 
@@ -1332,11 +1227,7 @@ fn tee_fitting(
 
 /// Reducer: a cone between two pipe sizes.
 #[allow(clippy::too_many_arguments)]
-fn reducer(
-    s: &mut Scene, c: V3, dir: Vec2,
-    large: f64, small: f64, length: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn reducer(s: &mut Scene, c: V3, dir: Vec2, large: f64, small: f64, length: f64, col: Rgb, owner: Owner, lod: Lod) {
     let tw = local_frame(c, dir);
     let n = circle_segs(lod);
     let r1 = large / 2.0;
@@ -1352,11 +1243,7 @@ fn reducer(
 
 /// Coupling: a short cylinder joining two pipes.
 #[allow(clippy::too_many_arguments)]
-fn coupling(
-    s: &mut Scene, c: V3, dir: Vec2,
-    diameter: f64, length: f64,
-    col: Rgb, owner: Owner, lod: Lod,
-) {
+fn coupling(s: &mut Scene, c: V3, dir: Vec2, diameter: f64, length: f64, col: Rgb, owner: Owner, lod: Lod) {
     closed_cylinder(s, c, dir, diameter / 2.0, length, col, owner, lod);
 }
 
@@ -1365,19 +1252,11 @@ fn coupling(
 // ========================================================================================
 
 fn darken(c: Rgb, factor: f64) -> Rgb {
-    Rgb(
-        (c.0 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.1 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.2 as f64 * factor).clamp(0.0, 255.0) as u8,
-    )
+    Rgb((c.0 as f64 * factor).clamp(0.0, 255.0) as u8, (c.1 as f64 * factor).clamp(0.0, 255.0) as u8, (c.2 as f64 * factor).clamp(0.0, 255.0) as u8)
 }
 
 fn brighten(c: Rgb, factor: f64) -> Rgb {
-    Rgb(
-        (c.0 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.1 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.2 as f64 * factor).clamp(0.0, 255.0) as u8,
-    )
+    Rgb((c.0 as f64 * factor).clamp(0.0, 255.0) as u8, (c.1 as f64 * factor).clamp(0.0, 255.0) as u8, (c.2 as f64 * factor).clamp(0.0, 255.0) as u8)
 }
 
 #[cfg(test)]
@@ -1535,14 +1414,7 @@ mod tests {
             for family in &families {
                 let mut s = empty_scene();
                 s.part = Part::Device;
-                let ok = generate(
-                    &mut s, family,
-                    v3(5.0, 5.0, 5.0),
-                    Vec2 { x: 1.0, y: 0.0 },
-                    Rgb(200, 200, 200),
-                    Owner::default(),
-                    lod,
-                );
+                let ok = generate(&mut s, family, v3(5.0, 5.0, 5.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(200, 200, 200), Owner::default(), lod);
                 assert!(ok, "{family:?} at {lod:?} should generate geometry");
                 assert!(!s.tris.is_empty(), "{family:?} at {lod:?} should produce triangles");
                 // Triangle count must be a multiple of 3

@@ -8,10 +8,7 @@ use cadaddy_mepfix::{casework_reader, generate, score, truth_for};
 fn office_has_casework() {
     for seed in 1..=10 {
         let t = truth_for(seed);
-        assert!(
-            !t.casework.is_empty(),
-            "seed {seed}: office building should have casework"
-        );
+        assert!(!t.casework.is_empty(), "seed {seed}: office building should have casework");
     }
 }
 
@@ -76,9 +73,7 @@ fn reader_finds_casework_on_floor_plans() {
                 continue;
             }
 
-            let dxf_bytes = set
-                .file(&sh.dxf)
-                .unwrap_or_else(|| panic!("seed {seed}: missing DXF {}", sh.dxf));
+            let dxf_bytes = set.file(&sh.dxf).unwrap_or_else(|| panic!("seed {seed}: missing DXF {}", sh.dxf));
             let drawing = cadaddy_io::read_dxf(dxf_bytes).unwrap_or_else(|e| panic!("seed {seed}: read_dxf failed: {e}"));
 
             let s = casework_reader::read_and_score(&drawing, t, sh);
@@ -119,10 +114,7 @@ fn reader_classifies_kinds_correctly() {
 
     if total_tp > 0 {
         let accuracy = total_kind_ok as f64 / total_tp as f64;
-        assert!(
-            accuracy >= 0.5,
-            "kind accuracy {accuracy:.2} < 0.5 ({total_kind_ok}/{total_tp})"
-        );
+        assert!(accuracy >= 0.5, "kind accuracy {accuracy:.2} < 0.5 ({total_kind_ok}/{total_tp})");
     }
 }
 
@@ -138,11 +130,15 @@ fn casework_is_inside_rooms() {
                 let cx = (cw.min_ft[0] + cw.max_ft[0]) / 2.0;
                 let cy = (cw.min_ft[1] + cw.max_ft[1]) / 2.0;
                 assert!(
-                    cx >= rm.min_ft[0] - 1.0 && cx <= rm.max_ft[0] + 1.0
-                        && cy >= rm.min_ft[1] - 1.0 && cy <= rm.max_ft[1] + 1.0,
+                    cx >= rm.min_ft[0] - 1.0 && cx <= rm.max_ft[0] + 1.0 && cy >= rm.min_ft[1] - 1.0 && cy <= rm.max_ft[1] + 1.0,
                     "seed {seed}: casework {} ({}) at ({cx:.1}, {cy:.1}) is outside room {} ({:.1}..{:.1}, {:.1}..{:.1})",
-                    cw.id, cw.kind, cw.room,
-                    rm.min_ft[0], rm.max_ft[0], rm.min_ft[1], rm.max_ft[1]
+                    cw.id,
+                    cw.kind,
+                    cw.room,
+                    rm.min_ft[0],
+                    rm.max_ft[0],
+                    rm.min_ft[1],
+                    rm.max_ft[1]
                 );
             }
         }
@@ -159,16 +155,8 @@ fn break_rooms_have_cabinets_and_counter() {
             let room_cw: Vec<_> = t.casework.iter().filter(|c| c.room == rm.number && c.level == rm.level).collect();
             let has_base = room_cw.iter().any(|c| c.kind == "base_cabinet");
             let has_counter = room_cw.iter().any(|c| c.kind == "counter");
-            assert!(
-                has_base,
-                "seed {seed}: break room {} on level {} has no base cabinet",
-                rm.number, rm.level
-            );
-            assert!(
-                has_counter,
-                "seed {seed}: break room {} on level {} has no counter",
-                rm.number, rm.level
-            );
+            assert!(has_base, "seed {seed}: break room {} on level {} has no base cabinet", rm.number, rm.level);
+            assert!(has_counter, "seed {seed}: break room {} on level {} has no counter", rm.number, rm.level);
         }
     }
 }
@@ -185,15 +173,8 @@ fn toilet_rooms_have_vanities() {
             .filter(|r| r.name.contains("TOILET") || r.name.contains("REST") || r.name.contains("MEN") || r.name.contains("WOMEN"))
             .collect();
         for rm in &toilets {
-            let has_vanity = t
-                .casework
-                .iter()
-                .any(|c| c.room == rm.number && c.level == rm.level && c.kind == "vanity");
-            assert!(
-                has_vanity,
-                "seed {seed}: toilet room {} ({}) on level {} has no vanity",
-                rm.number, rm.name, rm.level
-            );
+            let has_vanity = t.casework.iter().any(|c| c.room == rm.number && c.level == rm.level && c.kind == "vanity");
+            assert!(has_vanity, "seed {seed}: toilet room {} ({}) on level {} has no vanity", rm.number, rm.name, rm.level);
         }
     }
 }
