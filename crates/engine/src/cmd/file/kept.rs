@@ -48,7 +48,7 @@ fn parts(d: &Drawing) -> Vec<(&'static str, serde_json::Value)> {
         let list = s.iter().step_by(step(n)).map(|e| content(v(&e.kind))).collect::<Vec<_>>();
         serde_json::json!({ "count": n, "objects": list })
     };
-    let blocks: Vec<_> = d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.clone(), objects(&b.entities))).collect();
+    let blocks: Vec<_> = d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.clone(), block_head(b), objects(&b.entities))).collect();
     let layouts: Vec<_> = d.layouts.iter().map(|l| (l.name.clone(), objects(&l.entities))).collect();
     vec![
         ("objects", v(&objects(&d.model))),
@@ -74,6 +74,17 @@ fn parts(d: &Drawing) -> Vec<(&'static str, serde_json::Value)> {
     ]
 }
 
+/// A block definition's own properties (base point, description, insert units, explodability…),
+/// without its objects (compared one by one) and the session's xref load state. A DWG older than
+/// 2007 has no insert units or explodability (savefuzz: they were lost unreported).
+fn block_head(b: &cadaddy_doc::Block) -> serde_json::Value {
+    let mut v = serde_json::to_value(b).unwrap_or_default();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("xrefStatus");
+    }
+    v
+}
+
 /// Deepest nesting compared (model data nests a dozen levels).
 const MAX_DEPTH: usize = 64;
 
@@ -87,13 +98,18 @@ fn kept(a: &serde_json::Value, b: &serde_json::Value, depth: usize) -> bool {
         return a == b;
     }
     match (a, b) {
+        // A false that came back true is a change: properties that are true by default (a block's
+        // explodability, a layer's on and plot, an object's visibility) set false (savefuzz).
+        (Value::Bool(false), Value::Bool(true)) => false,
         (Value::Null, _) | (Value::Bool(false), _) => true,
         (Value::String(x), _) if x.is_empty() => true,
         (Value::Array(x), _) if x.is_empty() => true,
         (Value::Object(x), _) if x.is_empty() => true,
         (Value::Number(x), _) if x.as_f64() == Some(0.0) => true,
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0),
+            // Relative only: a drawing in tiny units (or a thickness of 1e-10 a format drops) is
+            // compared as closely as any other (savefuzz found 1e-10 thicknesses dropped unreported).
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()),
             _ => false,
         },
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| kept(a, b, depth + 1)),
@@ -423,7 +439,12 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
     }
     for (n, b) in d.blocks.iter().filter(|(_, b)| !b.anonymous) {
         match back.blocks.get(n) {
-            Some(m) => objects(&b.entities, &m.entities, Some(n), &mut out),
+            Some(m) => {
+                objects(&b.entities, &m.entities, Some(n), &mut out);
+                for field in changed_fields(&block_head(b), &block_head(m)).into_iter().filter(|f| f != "name") {
+                    out.add(format!("blocks: {}", words(&field)), "changed", None, Some(n.clone()));
+                }
+            }
             None => out.add("blocks".into(), "dropped", None, Some(n.clone())),
         }
     }

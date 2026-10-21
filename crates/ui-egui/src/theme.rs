@@ -439,6 +439,14 @@ pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
         data.index = face.index;
         added.push(("korean-ui".into(), std::sync::Arc::new(data)));
     }
+    // Windows: Segoe UI and egui's faces lack some symbols the interface shows (▸ in menu paths);
+    // Segoe UI Symbol has them, last so that every other face keeps its own forms.
+    #[cfg(not(target_arch = "wasm32"))]
+    if cfg!(windows)
+        && let Some(bytes) = read_capped(std::path::Path::new("C:\\Windows\\Fonts\\seguisym.ttf"), MAX_UI_FONT_BYTES)
+    {
+        added.push(("system-symbols".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
+    }
     for (name, data) in added {
         fonts.font_data.insert(name.clone(), data);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {

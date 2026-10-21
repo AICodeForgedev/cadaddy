@@ -54,6 +54,7 @@ enum Def {
 
 /// Header variables: name, kind, the default the commands use while the header has none.
 const HEADER: &[(&str, Kind, Def)] = &[
+    ("QTEXTMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("CENTEREXE", Kind::Real { min: 0.0, strict: false }, Def::Units(0.12, 3.5)),
     ("CHAMFERA", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),
     ("CHAMFERB", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),
@@ -171,7 +172,6 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("PROXYSHOW", Kind::Choice(&[0, 1, 2]), Def::Int(1)),
     ("PSTYLEPOLICY", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("PSVPSCALE", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),
-    ("QTEXTMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("REGENMODE", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("REPORTERROR", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("ROLLOVERTIPS", Kind::Choice(&[0, 1]), Def::Int(1)),

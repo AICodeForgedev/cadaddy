@@ -458,11 +458,29 @@ fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
     app.ui.history_lines.min(MAX_LINES).min(available)
 }
 
-pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
-    let t = Tokens::get();
+/// The command bar's rectangle in a drawing area.
+fn bar_rect(app: &CadApp, canvas: Rect) -> Rect {
     let w = bar_width(app, canvas.width());
     let h = 24.0;
-    let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
+    Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h))
+}
+
+/// How much of the drawing area's bottom the floating command line and its history cover, in
+/// points: zooming to the extents keeps the drawing above it.
+pub fn covered_bottom(app: &CadApp, canvas: Rect) -> f32 {
+    if !app.ui.show_command_line {
+        return 0.0;
+    }
+    let bar = bar_rect(app, canvas);
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar).min(app.session.log.len()) };
+    let history = if n > 0 { 16.0 * n as f32 + 4.0 } else { 0.0 };
+    (canvas.bottom() - bar.top() + history).max(0.0)
+}
+
+pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
+    let t = Tokens::get();
+    let bar = bar_rect(app, canvas);
+    let (w, h) = (bar.width(), bar.height());
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
     // History lines above the bar (the expanded window replaces them).

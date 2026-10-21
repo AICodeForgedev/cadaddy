@@ -6,12 +6,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(unix)]
 use serde_json::Value;
 
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).output().unwrap()
 }
 
+#[cfg(unix)]
 fn ok(args: &[&str]) -> String {
     let out = cli(args);
     assert!(out.status.success(), "{args:?}: {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
@@ -30,6 +32,7 @@ fn s(p: &Path) -> String {
 }
 
 /// The JSON summary a folder conversion printed, and whether it exited 0.
+#[cfg(unix)]
 fn convert(input: &Path, out: &Path, to: &str) -> (Value, bool, String) {
     let o = cli(&["convert", &s(input), &s(out), "--to", to, "--recurse"]);
     let text = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -37,6 +40,7 @@ fn convert(input: &Path, out: &Path, to: &str) -> (Value, bool, String) {
     (v, o.status.success(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
+#[cfg(unix)]
 fn list(v: &Value, key: &str, field: &str) -> Vec<String> {
     let mut l: Vec<String> = v[key].as_array().unwrap().iter().map(|x| x[field].as_str().unwrap_or_default().to_string()).collect();
     l.sort();

@@ -448,7 +448,11 @@ impl Interactive for PickM {
         }
         if !self.picking_done {
             match i {
-                Input::Point(p) => self.points.push([p.x, p.y]),
+                Input::Point(p) => {
+                    self.points.push([p.x, p.y]);
+                    let what = if matches!(self.mode, Mode::Fillet | Mode::Chamfer) { "edge" } else { "face" };
+                    s.echo(format!("{} {what} pick(s); Enter when done.", self.points.len()));
+                }
                 Input::Enter => {
                     self.picking_done = true;
                     if self.mode == Mode::Delete {

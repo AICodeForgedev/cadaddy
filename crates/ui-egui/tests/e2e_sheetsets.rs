@@ -24,7 +24,7 @@ fn a_sheet_set_is_made_published_and_shown() {
     assert!(std::fs::read(&book).unwrap().starts_with(b"%PDF"));
     // The palette from its menu.
     e.menu("sheetset");
-    assert_eq!(e.dialog().as_deref(), Some("sheetset"));
+    assert!(e.ok("ui.inspect", json!({}))["ui"]["docking"].to_string().contains("sheetSets"), "the palette is docked");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

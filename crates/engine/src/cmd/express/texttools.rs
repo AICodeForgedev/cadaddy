@@ -1051,7 +1051,12 @@ impl Interactive for TextFitM {
         }
         match self.text {
             None => {
-                if let SelOutcome::Done(hs) = self.sel.feed(s, &i)? {
+                let outcome = self.sel.feed(s, &i)?;
+                // Enter with nothing picked ends the command.
+                if matches!(outcome, SelOutcome::Empty) {
+                    return Ok(Step::Done);
+                }
+                if let SelOutcome::Done(hs) = outcome {
                     let d = s.doc()?;
                     match hs.iter().copied().find(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Text(_)))) {
                         Some(h) => self.text = Some(h),

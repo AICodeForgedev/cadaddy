@@ -174,3 +174,38 @@ fn r12_keeps_the_code_page_and_is_dxf_only() {
     assert_eq!(Version::parse("AC1009"), Some(Version::R12));
     assert!(!Version::ALL.contains(&Version::R12));
 }
+
+/// Found by opening our R12 files in other programs (Q229): a dimension's text brought down to
+/// TEXT reached them as `45\U+00B0` and `\U+230016`, escapes R12 has no meaning for. The signs
+/// are R12's control codes.
+#[test]
+fn r12_writes_degree_plus_minus_and_diameter_as_control_codes() {
+    let mut d = Drawing::new_metric();
+    for (i, v) in ["45°", "±0.5", "⌀16", "∅8", "Ünïcødé"].iter().enumerate() {
+        let h = d.new_handle();
+        d.model.push(Entity::new(h, EntityKind::Text(text(v, Vec3::new(0.0, i as f64 * 5.0, 0.0)))));
+    }
+    let file = String::from_utf8(r12(&d)).unwrap();
+    for want in ["45%%d", "%%p0.5", "%%c16", "%%c8"] {
+        assert!(file.lines().any(|l| l == want), "{want} missing");
+    }
+    for gone in ["\\U+00B0", "\\U+00B1", "\\U+2300", "\\U+2205"] {
+        assert!(!file.contains(gone), "{gone} written");
+    }
+    // Other characters keep their escapes, and read back.
+    let back = read(file.as_bytes(), "old.dxf").unwrap();
+    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "Ünïcødé")));
+}
+
+/// Found the same way (Q229): R12 files named the built-in font "CADaddy Stroke", which other
+/// programs don't have (QCAD reported it missing); the other DXF versions already write `txt`.
+#[test]
+fn r12_names_the_built_in_font_txt() {
+    let d = Drawing::new_metric();
+    let file = String::from_utf8(r12(&d)).unwrap();
+    assert!(!file.contains("CADaddy Stroke"));
+    let lines: Vec<&str> = file.lines().map(str::trim).collect();
+    let std = lines.windows(2).position(|w| w == ["2", "Standard"] || w == ["2", "STANDARD"]).unwrap();
+    let font = lines[std..].windows(2).find(|w| w[0] == "3").unwrap()[1];
+    assert_eq!(font, "txt");
+}

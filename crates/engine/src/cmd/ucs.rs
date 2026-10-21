@@ -21,8 +21,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("ucs", "UCS", run_ucs)
             .menu(&["Tools", "New UCS", "World"])
             .params(
-                "{option: world|origin|z|object|view|previous|set|save|restore|delete|list, origin?: [x,y] (origin, set; world coordinates), \
-                 xpoint?: [x,y] (origin: a point on the new X axis), angle?: degrees (z: turned by; set: the X axis's angle), handle? (object), \
+                "{option: world|origin|z|3point|object|view|previous|set|save|restore|delete|list, origin?: [x,y] (origin, 3point, set; world coordinates), \
+                 xpoint?: [x,y] (origin, 3point: a point on the new X axis), ypoint?: [x,y] (3point: a point on the +Y side), angle?: degrees (z: turned by; set: the X axis's angle), handle? (object), \
                  pick?: [x,y] (object: near the end or segment that sets it), name? (save, restore; delete/list take names?: \"a,b*\")} \
                  → {origin, angle, name, message} — a 2D UCS in the plan: origin and rotation",
             )
@@ -143,10 +143,28 @@ fn run_ucs(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "delete" | "d" => return delete(s, &patterns(p)),
         "list" | "?" => return list(s, &patterns(p)),
-        "x" | "y" | "za" | "zaxis" | "face" | "f" | "3" | "3point" => {
+        "3point" | "3" => {
+            let origin = point_param(p, "origin").ok_or_else(|| bad("ucs", "`origin` is required"))?;
+            let x = point_param(p, "xpoint").ok_or_else(|| bad("ucs", "`xpoint` (a point on the new X axis) is required"))?;
+            if x.dist(origin) <= 1e-9 {
+                return Err(bad("ucs", "`xpoint` must differ from `origin`"));
+            }
+            // The Y point only says which side +Y is on: the other side would turn the plan over.
+            if let Some(y) = point_param(p, "ypoint") {
+                let side = (x - origin).cross(y - origin);
+                if side.abs() <= 1e-12 * (x - origin).len().max(1.0) * (y - origin).len().max(1.0) {
+                    return Err(EngineError::Other("The three points are in a line: they don't define a UCS.".into()));
+                }
+                if side < 0.0 {
+                    return Err(EngineError::Other("That UCS would look at the plan from below; only UCSs in the plan are available so far.".into()));
+                }
+            }
+            Frame::new(origin, origin.angle_to(x))
+        }
+        "x" | "y" | "za" | "zaxis" | "face" | "f" => {
             return Err(EngineError::Other("Only UCSs in the plan (origin and rotation about Z) are available so far.".into()));
         }
-        _ => return Err(bad("ucs", "option must be world, origin, z, object, view, previous, set, save, restore, delete or list")),
+        _ => return Err(bad("ucs", "option must be world, origin, z, 3point, object, view, previous, set, save, restore, delete or list")),
     };
     let mut r = set_current(s, f)?;
     r["message"] = json!(format!("UCS: {}", r["name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Unnamed")));

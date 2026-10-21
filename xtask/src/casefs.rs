@@ -62,7 +62,8 @@ pub fn split_z(bytes: &[u8]) -> Vec<PathBuf> {
         .split(|b| *b == 0)
         .filter(|p| !p.is_empty())
         .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
-        .filter(|p| p.is_relative() && !p.components().any(|c| matches!(c, std::path::Component::ParentDir)))
+        // Only names below the root: on Windows `/abs` (and `C:x`) is not absolute, yet escapes.
+        .filter(|p| p.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)))
         .collect()
 }
 
@@ -188,7 +189,7 @@ mod tests {
 
     #[test]
     fn file_lists_stay_inside_and_copy_keeps_case() {
-        let list = split_z(b"a/B.rs\0c.txt\0\0../escape\0/abs\0");
+        let list = split_z(b"a/B.rs\0c.txt\0\0../escape\0/abs\0a/../../up\0");
         assert_eq!(list, vec![PathBuf::from("a/B.rs"), PathBuf::from("c.txt")]);
         let dir = std::env::temp_dir().join(format!("cadaddy-casefs-test-{}", std::process::id()));
         let (from, to) = (dir.join("from"), dir.join("to"));

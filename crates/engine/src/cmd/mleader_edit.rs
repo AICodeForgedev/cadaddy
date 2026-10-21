@@ -625,7 +625,12 @@ impl Interactive for AlignM {
         }
         let distribute = self.mode() == Spacing::Distribute;
         if !distribute && self.to.is_none() {
-            if let SelOutcome::Done(hs) = self.pick_to.feed(s, &i)? {
+            let outcome = self.pick_to.feed(s, &i)?;
+            // Enter with nothing picked ends the command.
+            if matches!(outcome, SelOutcome::Empty) {
+                return Ok(Step::Done);
+            }
+            if let SelOutcome::Done(hs) = outcome {
                 s.set_selection(Vec::new());
                 match hs.into_iter().find(|h| get_mleader(s, *h).is_some()) {
                     Some(h) => self.to = Some(h),
@@ -845,11 +850,17 @@ impl Interactive for CollectM {
                 Ok(Step::Continue)
             }
             Input::Point(at) => {
-                let r = collect(s, &self.picked, at, self.layout, None)?;
+                // The multileaders picked can't be collected here or anywhere else.
+                let r = match collect(s, &self.picked, at, self.layout, None) {
+                    Ok(r) => r,
+                    Err(e) => return super::machines::end_with(s, &e),
+                };
                 s.set_selection(Vec::new());
                 s.echo(format!("{} multileader(s) collected.", r.get("collected").and_then(Value::as_u64).unwrap_or(0)));
                 Ok(Step::Done)
             }
+            // Enter places nothing and ends the command.
+            Input::Enter => Ok(Step::Done),
             _ => Ok(Step::Continue),
         }
     }

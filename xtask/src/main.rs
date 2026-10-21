@@ -9,6 +9,7 @@ mod ico;
 mod installtest;
 mod layers;
 mod mcptest;
+mod mepfix;
 mod parity;
 mod perf;
 mod release;
@@ -46,12 +47,18 @@ commands:
   casefs [--size 8g] [-- <cargo test args>]
                   run the workspace tests on a case-sensitive disk image (macOS), so Linux-only
                   failures show up on a Mac; the image is deleted afterwards
+  compare-facts   docs/compare-facts.json (and an llms.txt block) from what the code proves; the
+                  website's claims (docs/website-claims.json) are tested against it
   smoke <CADaddy-Mac.dmg | CADaddy.app | app executable | CADaddy.mcpb | cadaddy-cli> [--version X.Y.Z] [--out DIR] [--keep]
                   release smoke test: version, draw, save DWG/DXF/.cdy, reopen, plot PDF, sheet set
                   publish, Walk on/off and update check (app); report in target/smoke/report.json
   mcptest [--port 47820] [--cli PATH] [--mcpb PATH]
                   the MCP suite against the running app (start it with --control 47820): every
                   tool normal and bad, the app's tools, the agent guard, and the .mcpb's server
+  mep-fixtures [--seed N] [--count K] [--out DIR]
+                  made-up MEP print sets (M/P/FP/RCP/S sheets as vector PDF + DXF, set.pdf) with a
+                  JSON ground truth of every run, size, height, fitting, terminal and piece of
+                  equipment, for scoring print readers; default out target/mep-fixtures/seed-N
   perf [--full] [--update-budget]
                   performance budgets (perf/budget.json): open/save DWG/DXF/.cdy, regen, select and
                   move all, zoom extents, 3D build, plot PDF on 1k/10k objects (--full: 100k, 500k
@@ -109,9 +116,11 @@ fn main() -> ExitCode {
         Some("fuzz") => cmd_fuzz(&rest),
         Some("casefs") => casefs::run(&root(), &rest),
         Some("smoke") => smoke::run(&root(), &rest),
+        Some("compare-facts") => cmd_compare_facts(),
         Some("mcptest") => mcptest::run(&root(), &rest),
         Some("perf") => perf::run(&root(), &rest),
-        Some("webtest") => webtest::run(&root(), &rest),
+        Some("mep-fixtures") => mepfix::run(&root(), &rest),
+        Some("webtest" | "web") => webtest::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),
         Some("release-key") => release::key_cmd(&rest),
         Some("sign-release") => release::sign_cmd(&root(), &rest),
@@ -160,6 +169,15 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+/// `compare-facts`: docs/compare-facts.json and docs/compare-facts-llms.txt from what the code
+/// proves (apps/cadaddy-cli/facts.rs); the claims the website makes are checked against them by
+/// apps/cadaddy-cli/tests/compare_facts.rs.
+fn cmd_compare_facts() -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "-q", "-p", "cadaddy-cli", "--example", "compare_facts", "--"]).arg(root());
+    run(c, "cargo run -p cadaddy-cli --example compare_facts")
 }
 
 /// `fuzz [target|all] [seconds]`: the stable mutation fuzzer over the file readers

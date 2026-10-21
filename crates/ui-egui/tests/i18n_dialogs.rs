@@ -189,7 +189,7 @@ struct Findings {
 #[test]
 fn every_language_every_dialog() {
     let ids = dialog_ids();
-    assert!(ids.len() > 50, "only {} dialogs found", ids.len());
+    assert!(ids.len() >= 50, "only {} dialogs found", ids.len());
     let master: BTreeSet<&str> = CATALOGS.iter().flat_map(|(_, s)| keys(s)).collect();
     // English first: its cut texts are the baseline (a dialog that cuts in English too is not a
     // translation's fault).

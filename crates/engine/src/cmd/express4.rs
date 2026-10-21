@@ -109,10 +109,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Express Tools", "Rotate Blocks"])
             .params("{handles? (block references; default the selection), angle (degrees), relative?: bool (default false: the rotation becomes angle; true: turned by it)} → {handles}: each about its insertion point")
             .interactive(|_| Ok(Box::new(BlockXformM::new(Xform::Rotate)))),
-        CommandSpec::new("vpsync", "Synchronize Viewports", run_vpsync)
-            .menu(&["Tools", "Express Tools", "Synchronize Viewports"])
-            .params("{master (viewport handle), handles (viewports to line up)} → {handles}: each at the master's scale and twist, its view continuing the master's across the sheet")
-            .interactive(|_| Ok(Box::new(VpsyncM::default()))),
         CommandSpec::new("dimreassoc", "Restore Dimension Text", run_dimreassoc)
             .menu(&["Tools", "Express Tools", "Restore Dimension Text"])
             .params("{handles? (dimensions; default the selection)} → {handles}: those whose text override was removed (they show the measurement again)")
@@ -1164,101 +1160,7 @@ impl Interactive for BlockXformM {
     }
 }
 
-// ---------- VPSYNC ----------
-
-fn run_vpsync(s: &mut Session, p: &Value) -> Result<Value> {
-    let master = super::curves::handle_param(p, "master").ok_or_else(|| bad("vpsync", "`master` (a viewport) is required"))?;
-    let hs = targets(s, p)?;
-    let d = s.doc()?;
-    let viewport = |h: Handle| match d.entity(h).map(|e| &e.kind) {
-        Some(EntityKind::Viewport(v)) => Some(v.clone()),
-        _ => None,
-    };
-    let m = viewport(master).ok_or_else(|| other("The master must be a layout viewport."))?;
-    if !(m.view_height > 0.0 && m.view_height.is_finite() && m.height > 0.0) {
-        return Err(other("The master viewport has no view."));
-    }
-    let space = d.space_of(master);
-    // Paper units per model unit, and the master's twist.
-    let scale = m.height / m.view_height;
-    let turn = Mat3::rotate(m.twist);
-    let mut changed = Vec::new();
-    for h in hs.into_iter().filter(|h| *h != master) {
-        let Some(v) = viewport(h) else { continue };
-        if d.space_of(h) != space || v.locked {
-            continue;
-        }
-        // The model point under the slave's centre, seen through the master.
-        let along = (v.center.xy() - m.center.xy()) * (1.0 / scale);
-        let view_center = m.view_center + turn.apply_vec(along);
-        let view_height = v.height / scale;
-        if view_center.is_finite() && view_height.is_finite() && view_height > 0.0 {
-            changed.push((h, view_center, view_height));
-        }
-    }
-    if changed.is_empty() {
-        return Err(other("No other viewports of the master's layout selected (locked ones are left alone)."));
-    }
-    let twist = m.twist;
-    let d = s.doc_mut()?;
-    for (h, c, vh) in &changed {
-        let _ = d.modify_entity(*h, |e| {
-            if let EntityKind::Viewport(v) = &mut e.kind {
-                v.view_center = *c;
-                v.view_height = *vh;
-                v.twist = twist;
-            }
-        });
-    }
-    let hs: Vec<Handle> = changed.iter().map(|c| c.0).collect();
-    Ok(json!({ "handles": hexes(&hs), "message": format!("{} viewport(s) synchronized.", hs.len()) }))
-}
-
-#[derive(Default)]
-struct VpsyncM {
-    master: Option<Handle>,
-    sel: SelectPhase,
-}
-
-impl Interactive for VpsyncM {
-    fn name(&self) -> &'static str {
-        "VPSYNC"
-    }
-    fn prompt(&self, _s: &Session) -> Prompt {
-        match self.master {
-            None => Prompt::new("Select master viewport", Accept::SELECT),
-            Some(_) => Prompt::new("Select viewports to be aligned to master viewport", Accept::SELECT),
-        }
-    }
-    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        let Some(master) = self.master else {
-            let picked = match i {
-                Input::Pick(hs) => hs.first().copied(),
-                Input::Point(p) => super::curves::pick_at(s, p),
-                Input::Enter => return Ok(Step::Cancel),
-                _ => None,
-            };
-            if let Some(h) = picked {
-                if !matches!(s.doc()?.entity(h).map(|e| &e.kind), Some(EntityKind::Viewport(_))) {
-                    return Err(other("Select a layout viewport."));
-                }
-                self.master = Some(h);
-            }
-            return Ok(Step::Continue);
-        };
-        match self.sel.feed(s, &i)? {
-            SelOutcome::More => Ok(Step::Continue),
-            SelOutcome::Done(hs) => {
-                let r = run_vpsync(s, &json!({ "master": master.hex(), "handles": hexes(&hs) }))?;
-                if let Some(m) = r.get("message").and_then(Value::as_str) {
-                    s.echo(m.to_string());
-                }
-                Ok(Step::Done)
-            }
-            SelOutcome::Empty => Ok(Step::Cancel),
-        }
-    }
-}
+// VPSYNC lives in vpsync.rs (one command, registered once).
 
 // ---------- DIMREASSOC ----------
 
