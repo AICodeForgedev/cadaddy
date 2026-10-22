@@ -752,6 +752,8 @@ pub struct PageSetup {
     pub landscape: bool,
     /// "layout" | "extents" | "display" | "window" | "limits".
     pub plot_area: String,
+    /// Plot window corners `[x1, y1, x2, y2]` (DXF plot layout groups 48, 49, 140, 141); used when `plot_area` is "window".
+    pub plot_window: [f64; 4],
     pub scale_to_fit: bool,
     /// Paper units per drawing unit.
     pub scale: f64,
@@ -779,6 +781,7 @@ impl Default for PageSetup {
             margins_mm: [6.35, 6.35, 6.35, 6.35],
             landscape: true,
             plot_area: "layout".into(),
+            plot_window: [0.0; 4],
             scale_to_fit: false,
             scale: 1.0,
             plot_style_table: String::new(),
