@@ -1,22 +1,22 @@
-occupation_code,occupation_title,area_code,area_title,annual_mean_wage,hourly_mean_wage,period,source,licence
-47-2111,Electricians,38060,"Phoenix-Mesa-Chandler AZ",58200,27.98,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,26420,"Houston-The Woodlands-Sugar Land TX",59500,28.61,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,12420,"Austin-Round Rock-Georgetown TX",55800,26.83,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,41700,"San Antonio-New Braunfels TX",52100,25.05,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,35620,"New York-Newark-Jersey City NY-NJ-PA",79800,38.37,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,31080,"Los Angeles-Long Beach-Anaheim CA",75200,36.15,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2111,Electricians,16980,"Chicago-Naperville-Elgin IL-IN-WI",81400,39.13,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2152,"Plumbers, Pipefitters, and Steamfitters",38060,"Phoenix-Mesa-Chandler AZ",59400,28.56,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2152,"Plumbers, Pipefitters, and Steamfitters",26420,"Houston-The Woodlands-Sugar Land TX",58700,28.22,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2152,"Plumbers, Pipefitters, and Steamfitters",35620,"New York-Newark-Jersey City NY-NJ-PA",81300,39.09,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2152,"Plumbers, Pipefitters, and Steamfitters",31080,"Los Angeles-Long Beach-Anaheim CA",69700,33.51,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2152,"Plumbers, Pipefitters, and Steamfitters",16980,"Chicago-Naperville-Elgin IL-IN-WI",84600,40.67,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",38060,"Phoenix-Mesa-Chandler AZ",54800,26.35,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",26420,"Houston-The Woodlands-Sugar Land TX",53600,25.77,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",35620,"New York-Newark-Jersey City NY-NJ-PA",67900,32.64,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2211,Sheet Metal Workers,38060,"Phoenix-Mesa-Chandler AZ",52300,25.14,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2211,Sheet Metal Workers,35620,"New York-Newark-Jersey City NY-NJ-PA",75400,36.25,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2081,"Drywall and Ceiling Tile Installers",38060,"Phoenix-Mesa-Chandler AZ",42800,20.58,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2031,Carpenters,38060,"Phoenix-Mesa-Chandler AZ",49600,23.85,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2061,"Construction Laborers",38060,"Phoenix-Mesa-Chandler AZ",37200,17.88,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
-47-2073,"Operating Engineers and Other Construction Equipment Operators",38060,"Phoenix-Mesa-Chandler AZ",50100,24.09,2025-05,BLS OEWS (bls.gov/oes),US government work (17 USC §105)
+occupation_code,occupation_title,area_code,area_title,annual_mean_wage,hourly_mean_wage,period,source,licence,status,fetched
+47-2111,Electricians,38060,Phoenix-Mesa-Chandler AZ,58200,27.98,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,26420,Houston-The Woodlands-Sugar Land TX,59500,28.61,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,12420,Austin-Round Rock-Georgetown TX,55800,26.83,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,41700,San Antonio-New Braunfels TX,52100,25.05,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,35620,New York-Newark-Jersey City NY-NJ-PA,79800,38.37,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,31080,Los Angeles-Long Beach-Anaheim CA,75200,36.15,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2111,Electricians,16980,Chicago-Naperville-Elgin IL-IN-WI,81400,39.13,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2152,"Plumbers, Pipefitters, and Steamfitters",38060,Phoenix-Mesa-Chandler AZ,59400,28.56,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2152,"Plumbers, Pipefitters, and Steamfitters",26420,Houston-The Woodlands-Sugar Land TX,58700,28.22,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2152,"Plumbers, Pipefitters, and Steamfitters",35620,New York-Newark-Jersey City NY-NJ-PA,81300,39.09,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2152,"Plumbers, Pipefitters, and Steamfitters",31080,Los Angeles-Long Beach-Anaheim CA,69700,33.51,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2152,"Plumbers, Pipefitters, and Steamfitters",16980,Chicago-Naperville-Elgin IL-IN-WI,84600,40.67,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",38060,Phoenix-Mesa-Chandler AZ,54800,26.35,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",26420,Houston-The Woodlands-Sugar Land TX,53600,25.77,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+49-9021,"Heating, Air Conditioning, and Refrigeration Mechanics and Installers",35620,New York-Newark-Jersey City NY-NJ-PA,67900,32.64,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2211,Sheet Metal Workers,38060,Phoenix-Mesa-Chandler AZ,52300,25.14,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2211,Sheet Metal Workers,35620,New York-Newark-Jersey City NY-NJ-PA,75400,36.25,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2081,Drywall and Ceiling Tile Installers,38060,Phoenix-Mesa-Chandler AZ,42800,20.58,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2031,Carpenters,38060,Phoenix-Mesa-Chandler AZ,49600,23.85,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2061,Construction Laborers,38060,Phoenix-Mesa-Chandler AZ,37200,17.88,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+47-2073,Operating Engineers and Other Construction Equipment Operators,38060,Phoenix-Mesa-Chandler AZ,50100,24.09,2025-05,seed placeholder — not from BLS OEWS (bls.gov/oes); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,

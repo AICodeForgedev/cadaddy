@@ -2,7 +2,7 @@
   "name": "CADaddy Public MEP Cost Data",
   "version": "2026.1",
   "generated": "2026-10-21",
-  "description": "Public-domain and openly licensed cost data for MEP estimating. Ships with CADaddy. Every row cites its source, date and licence. ELECTRICAL LABOR IS EXCLUDED (private company pack only).",
+  "description": "Public-domain and openly licensed cost data for MEP estimating. Ships with CADaddy. Every row cites its source, licence and status (seed or fetched); every row today is a seed placeholder. ELECTRICAL LABOR IS EXCLUDED (private company pack only).",
   "sources": {
     "p405": {
       "title": "NAVFAC P-405 Seabee Planner's and Estimator's Handbook",
@@ -35,5 +35,9 @@
     "electrical_labor": "Man-hours, labor units, production rates, crew productivity and labor factors for electrical work. Private company pack only.",
     "commercial_cost_books": "Any source whose terms forbid redistribution (RS Means, Craftsman, etc.).",
     "commodity_feeds": "Exchange or commodity price feeds with redistribution restrictions."
+  },
+  "status": {
+    "seed": "A placeholder written for CADaddy to show the pack's shape: NOT data from the agency the row names. Its source says \"seed placeholder — not from …\" and its licence is CADaddy's.",
+    "fetched": "Fetched from the named public source on the date in the row's `fetched` column (cargo xtask fetch-pubcost)."
   }
 }

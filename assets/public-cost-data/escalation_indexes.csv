@@ -1,11 +1,11 @@
-series_id,series_title,material_family,period,value,base_period,source,licence
-PCU332322332322,Fabricated pipe and pipe fitting manufacturing,pipe_and_fittings,2026-09,148.3,2006-12=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU332913332913,Plumbing fixture fitting and trim manufacturing,plumbing_fixtures,2026-09,131.7,2003-06=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU333415333415,"AC, refrigeration, and warm air heating equipment",hvac_equipment,2026-09,142.5,2003-12=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU332321332321,"Metal window and door manufacturing",ductwork_sheet_metal,2026-09,156.2,2003-06=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU331422331422,Copper wire (except mechanical) manufacturing,wire_and_cable,2026-09,218.6,2003-12=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU331210331210,"Iron and steel pipe and tube manufacturing from purchased steel",conduit,2026-09,164.8,2003-06=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU335313335313,Switchgear and switchboard apparatus manufacturing,switchgear,2026-09,169.1,2003-12=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU321219321219,Reconstituted wood product manufacturing,lumber,2026-09,118.4,2003-12=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-PCU327420327420,Gypsum product manufacturing,gypsum,2026-09,195.3,2006-06=100,BLS PPI (bls.gov/ppi),US government work (17 USC §105)
-CIU2010000000000A,"Employment Cost Index, Construction",construction_labor,2026-Q2,182.4,2005-12=100,BLS ECI (bls.gov/eci),US government work (17 USC §105)
+series_id,series_title,material_family,period,value,base_period,source,licence,status,fetched
+PCU332996332996,Fabricated pipe and pipe fitting manufacturing,pipe_and_fittings,2026-09,148.3,2006-12=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU332913332913,Plumbing fixture fitting and trim manufacturing,plumbing_fixtures,2026-09,131.7,2003-06=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU333415333415,"AC, refrigeration, and warm air heating equipment",hvac_equipment,2026-09,142.5,2003-12=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU332322332322,Sheet metal work manufacturing,ductwork_sheet_metal,2026-09,156.2,2003-06=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU331422331422,Copper wire (except mechanical) manufacturing,wire_and_cable,2026-09,218.6,2003-12=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU331210331210,Iron and steel pipe and tube manufacturing from purchased steel,conduit,2026-09,164.8,2003-06=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU335313335313,Switchgear and switchboard apparatus manufacturing,switchgear,2026-09,169.1,2003-12=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU321219321219,Reconstituted wood product manufacturing,lumber,2026-09,118.4,2003-12=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+PCU327420327420,Gypsum product manufacturing,gypsum,2026-09,195.3,2006-06=100,seed placeholder — not from BLS PPI (bls.gov/ppi); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
+CIU2010000000000A,"Employment Cost Index, Construction",construction_labor,2026-Q2,182.4,2005-12=100,seed placeholder — not from BLS ECI (bls.gov/eci); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),seed,
