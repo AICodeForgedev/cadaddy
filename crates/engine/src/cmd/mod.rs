@@ -52,6 +52,7 @@ pub mod levels;
 pub mod markup;
 pub mod pointcloud;
 pub mod procure;
+pub mod progress;
 pub mod project;
 mod rasterout;
 pub mod rfi;
@@ -310,6 +311,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grids::specs());
         v.extend(levels::specs());
         v.extend(estimate::specs());
+        v.extend(progress::specs());
         v.extend(bom::specs());
         v.extend(procure::specs());
         v.extend(tags::specs());
