@@ -616,15 +616,8 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("building_pad", "BUILDING PAD"));
             legend.push(item("retaining_wall", "RETAINING WALL"));
             abbr.extend(
-                [
-                    "EX = EXISTING",
-                    "PROP = PROPOSED",
-                    "FFE = FINISHED FLOOR ELEVATION",
-                    "TW = TOP OF WALL",
-                    "BW = BOTTOM OF WALL",
-                    "CY = CUBIC YARD",
-                ]
-                .map(abbrev),
+                ["EX = EXISTING", "PROP = PROPOSED", "FFE = FINISHED FLOOR ELEVATION", "TW = TOP OF WALL", "BW = BOTTOM OF WALL", "CY = CUBIC YARD"]
+                    .map(abbrev),
             );
         }
         Kind::SiteUtility => {
@@ -2836,12 +2829,7 @@ fn draw_site_structure(pen: &mut Pen, ss: &SiteStructure) {
         "valve_box" => {
             // Diamond.
             let d = r * 0.7;
-            pen.poly(STRUCTURE_LAYER, &[
-                c + Vec2::new(0.0, d),
-                c + Vec2::new(d, 0.0),
-                c + Vec2::new(0.0, -d),
-                c + Vec2::new(-d, 0.0),
-            ], true);
+            pen.poly(STRUCTURE_LAYER, &[c + Vec2::new(0.0, d), c + Vec2::new(d, 0.0), c + Vec2::new(0.0, -d), c + Vec2::new(-d, 0.0)], true);
         }
         "junction_box" => {
             // Square.
@@ -2850,11 +2838,7 @@ fn draw_site_structure(pen: &mut Pen, ss: &SiteStructure) {
         "meter" | "backflow_preventer" => {
             // Triangle.
             let s = r * 0.8;
-            pen.poly(STRUCTURE_LAYER, &[
-                c + Vec2::new(0.0, s),
-                c + Vec2::new(-s * 0.7, -s * 0.5),
-                c + Vec2::new(s * 0.7, -s * 0.5),
-            ], true);
+            pen.poly(STRUCTURE_LAYER, &[c + Vec2::new(0.0, s), c + Vec2::new(-s * 0.7, -s * 0.5), c + Vec2::new(s * 0.7, -s * 0.5)], true);
         }
         _ => {
             pen.circle(STRUCTURE_LAYER, c, r * 0.5);
@@ -2890,21 +2874,12 @@ fn site_schedules(pen: &mut Pen, t: &Truth) {
 
     // Utility structures table.
     if !t.site_structures.is_empty() {
-        let mut ss_rows: Vec<Vec<String>> = vec![vec![
-            "TAG".into(), "TYPE".into(), "SYSTEM".into(), "RIM".into(), "INV".into(), "SIZE".into(),
-        ]];
+        let mut ss_rows: Vec<Vec<String>> = vec![vec!["TAG".into(), "TYPE".into(), "SYSTEM".into(), "RIM".into(), "INV".into(), "SIZE".into()]];
         for ss in &t.site_structures {
             let rim = ss.rim_ft.map_or("-".into(), |v| format!("{v:.1}"));
             let inv = ss.invert_ft.map_or("-".into(), |v| format!("{v:.1}"));
             let size = ss.size_in.map_or("-".into(), |v| format!("{v:.0}\""));
-            ss_rows.push(vec![
-                ss.tag.clone(),
-                ss.kind.replace('_', " ").to_uppercase(),
-                ss.system.to_uppercase(),
-                rim,
-                inv,
-                size,
-            ]);
+            ss_rows.push(vec![ss.tag.clone(), ss.kind.replace('_', " ").to_uppercase(), ss.system.to_uppercase(), rim, inv, size]);
         }
         let y_start = y1 - 0.5 - h - 1.0;
         if y_start > y0 + 3.0 {

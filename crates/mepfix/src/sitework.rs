@@ -32,27 +32,15 @@ pub fn design_sitework(t: &mut Truth, bldg_w: f64, bldg_d: f64, r: &mut Rng) {
 }
 
 fn next_se_id(t: &Truth) -> usize {
-    t.site_elements
-        .iter()
-        .filter_map(|se| se.id.strip_prefix("se-").and_then(|n| n.parse::<usize>().ok()))
-        .max()
-        .map_or(0, |m| m + 1)
+    t.site_elements.iter().filter_map(|se| se.id.strip_prefix("se-").and_then(|n| n.parse::<usize>().ok())).max().map_or(0, |m| m + 1)
 }
 
 fn next_ss_id(t: &Truth) -> usize {
-    t.site_structures
-        .iter()
-        .filter_map(|s| s.id.strip_prefix("ss-").and_then(|n| n.parse::<usize>().ok()))
-        .max()
-        .map_or(0, |m| m + 1)
+    t.site_structures.iter().filter_map(|s| s.id.strip_prefix("ss-").and_then(|n| n.parse::<usize>().ok())).max().map_or(0, |m| m + 1)
 }
 
 fn next_gc_id(t: &Truth) -> usize {
-    t.grading_contours
-        .iter()
-        .filter_map(|c| c.id.strip_prefix("gc-").and_then(|n| n.parse::<usize>().ok()))
-        .max()
-        .map_or(0, |m| m + 1)
+    t.grading_contours.iter().filter_map(|c| c.id.strip_prefix("gc-").and_then(|n| n.parse::<usize>().ok())).max().map_or(0, |m| m + 1)
 }
 
 // --- Grading ---
@@ -70,8 +58,7 @@ fn design_grading(t: &mut Truth, bldg_w: f64, bldg_d: f64, setback: f64, r: &mut
 
     for elev_offset in -3i32..=3 {
         let elev = base_elev + elev_offset as f64;
-        let y_at_elev = site_lo_y + (elev - (base_elev - existing_slope * (site_hi_y - site_lo_y) / 100.0))
-            * 100.0 / existing_slope;
+        let y_at_elev = site_lo_y + (elev - (base_elev - existing_slope * (site_hi_y - site_lo_y) / 100.0)) * 100.0 / existing_slope;
         if y_at_elev < site_lo_y || y_at_elev > site_hi_y {
             continue;
         }
@@ -581,11 +568,7 @@ fn compute_quantities(t: &mut Truth) {
         // Simplified cut/fill estimate from elevation differences.
         let avg_existing: f64 = existing.iter().map(|c| c.elevation_ft).sum::<f64>() / existing.len() as f64;
         let avg_proposed: f64 = proposed.iter().map(|c| c.elevation_ft).sum::<f64>() / proposed.len() as f64;
-        let site_area: f64 = t.site_elements.iter()
-            .filter(|se| se.kind == "building_pad")
-            .filter_map(|se| se.area_sf)
-            .sum::<f64>()
-            .max(5000.0);
+        let site_area: f64 = t.site_elements.iter().filter(|se| se.kind == "building_pad").filter_map(|se| se.area_sf).sum::<f64>().max(5000.0);
         let diff = avg_proposed - avg_existing;
         let cy = (diff.abs() * site_area / 27.0).max(100.0);
         if diff > 0.0 {
@@ -609,10 +592,7 @@ fn compute_quantities(t: &mut Truth) {
     }
 
     // Paving.
-    let asphalt_sf: f64 = t.site_elements.iter()
-        .filter(|se| se.kind == "paving_asphalt")
-        .filter_map(|se| se.area_sf)
-        .sum();
+    let asphalt_sf: f64 = t.site_elements.iter().filter(|se| se.kind == "paving_asphalt").filter_map(|se| se.area_sf).sum();
     if asphalt_sf > 0.0 {
         // Aggregate base course: 6 inches.
         qs.push(SiteQuantity {
@@ -633,10 +613,8 @@ fn compute_quantities(t: &mut Truth) {
         sq_id += 1;
     }
 
-    let concrete_sf: f64 = t.site_elements.iter()
-        .filter(|se| se.kind == "paving_concrete" || se.kind == "sidewalk")
-        .filter_map(|se| se.area_sf)
-        .sum();
+    let concrete_sf: f64 =
+        t.site_elements.iter().filter(|se| se.kind == "paving_concrete" || se.kind == "sidewalk").filter_map(|se| se.area_sf).sum();
     if concrete_sf > 0.0 {
         qs.push(SiteQuantity {
             id: format!("sq-{sq_id}"),
@@ -649,10 +627,7 @@ fn compute_quantities(t: &mut Truth) {
     }
 
     // Curbs.
-    let curb_lf: f64 = t.site_elements.iter()
-        .filter(|se| se.kind == "curb")
-        .filter_map(|se| se.length_ft)
-        .sum();
+    let curb_lf: f64 = t.site_elements.iter().filter(|se| se.kind == "curb").filter_map(|se| se.length_ft).sum();
     if curb_lf > 0.0 {
         qs.push(SiteQuantity {
             id: format!("sq-{sq_id}"),
@@ -667,11 +642,8 @@ fn compute_quantities(t: &mut Truth) {
     // Striping.
     let stripe_count = t.site_elements.iter().filter(|se| se.kind == "striping").count();
     if stripe_count > 0 {
-        let stripe_lf: f64 = t.site_elements.iter()
-            .filter(|se| se.kind == "striping")
-            .filter_map(|se| se.length_ft)
-            .sum::<f64>()
-            .max(stripe_count as f64 * 18.0);
+        let stripe_lf: f64 =
+            t.site_elements.iter().filter(|se| se.kind == "striping").filter_map(|se| se.length_ft).sum::<f64>().max(stripe_count as f64 * 18.0);
         qs.push(SiteQuantity {
             id: format!("sq-{sq_id}"),
             csi: "32 17 23".into(),
@@ -683,10 +655,7 @@ fn compute_quantities(t: &mut Truth) {
     }
 
     // Fencing.
-    let fence_lf: f64 = t.site_elements.iter()
-        .filter(|se| se.kind == "fence")
-        .filter_map(|se| se.length_ft)
-        .sum();
+    let fence_lf: f64 = t.site_elements.iter().filter(|se| se.kind == "fence").filter_map(|se| se.length_ft).sum();
     if fence_lf > 0.0 {
         qs.push(SiteQuantity {
             id: format!("sq-{sq_id}"),
@@ -711,10 +680,8 @@ fn compute_quantities(t: &mut Truth) {
     }
 
     // Retaining walls.
-    let rw_sf: f64 = t.site_elements.iter()
-        .filter(|se| se.kind == "retaining_wall")
-        .map(|se| se.length_ft.unwrap_or(0.0) * se.height_ft.unwrap_or(0.0))
-        .sum();
+    let rw_sf: f64 =
+        t.site_elements.iter().filter(|se| se.kind == "retaining_wall").map(|se| se.length_ft.unwrap_or(0.0) * se.height_ft.unwrap_or(0.0)).sum();
     if rw_sf > 0.0 {
         qs.push(SiteQuantity {
             id: format!("sq-{sq_id}"),
@@ -810,13 +777,7 @@ fn compute_quantities(t: &mut Truth) {
     ] {
         let count = t.site_structures.iter().filter(|s| s.kind == kind).count();
         if count > 0 {
-            qs.push(SiteQuantity {
-                id: format!("sq-{sq_id}"),
-                csi: csi.into(),
-                description: desc.into(),
-                quantity: count as f64,
-                unit: "EA".into(),
-            });
+            qs.push(SiteQuantity { id: format!("sq-{sq_id}"), csi: csi.into(), description: desc.into(), quantity: count as f64, unit: "EA".into() });
             sq_id += 1;
         }
     }

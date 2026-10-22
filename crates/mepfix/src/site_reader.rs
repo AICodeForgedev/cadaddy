@@ -9,7 +9,7 @@
 
 use crate::layout::{SITE_LAYER, UNDERGROUND_LAYER};
 use crate::score::building_from_model;
-use crate::sitework::{FENCE_LAYER, LANDSCAPE_LAYER, FURNISH_LAYER};
+use crate::sitework::{FENCE_LAYER, FURNISH_LAYER, LANDSCAPE_LAYER};
 use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
 
@@ -133,11 +133,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
             let has_radials = has_radial_lines(&site_lines, center, radius);
             if has_radials {
                 let tag_str = nearby_tag.clone().unwrap_or_default();
-                if tag_str.to_uppercase().starts_with('T') {
-                    ("tree".to_string(), tag_str)
-                } else {
-                    ("light_pole".to_string(), tag_str)
-                }
+                if tag_str.to_uppercase().starts_with('T') { ("tree".to_string(), tag_str) } else { ("light_pole".to_string(), tag_str) }
             } else {
                 ("light_pole".to_string(), nearby_tag.unwrap_or_default())
             }
@@ -549,14 +545,7 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         let rim = parse_elevation_text(&strc_texts, center, radius * 8.0, "RIM");
         let inv = parse_elevation_text(&strc_texts, center, radius * 8.0, "INV");
 
-        result.push(ReadSiteStructure {
-            kind: kind.into(),
-            tag: tag_str,
-            at_ft: at,
-            rim_ft: rim,
-            invert_ft: inv,
-            system: system.into(),
-        });
+        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
     }
 
     // Rectangles with X = catch basins; plain rectangles = junction boxes.
@@ -580,14 +569,7 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         let rim = parse_elevation_text(&strc_texts, [cx, cy], r, "RIM");
         let inv = parse_elevation_text(&strc_texts, [cx, cy], r, "INV");
 
-        result.push(ReadSiteStructure {
-            kind: kind.into(),
-            tag: tag_str,
-            at_ft: at,
-            rim_ft: rim,
-            invert_ft: inv,
-            system: system.into(),
-        });
+        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
     }
 
     // Diamonds/polygons = valve boxes; triangles = meters/BFPs.
@@ -618,14 +600,7 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         let rim = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "RIM");
         let inv = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "INV");
 
-        result.push(ReadSiteStructure {
-            kind: kind.into(),
-            tag: tag_str,
-            at_ft: at,
-            rim_ft: rim,
-            invert_ft: inv,
-            system: system.into(),
-        });
+        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
     }
 
     result

@@ -1,19 +1,17 @@
 //! Tests for Q339 sitework: grading, paving, curbs, sidewalks, striping, utility structures,
 //! retaining walls, landscaping, fencing, site furnishings, and quantity takeoff.
 
-use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::generate_hotel;
+use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::site_reader;
 
 fn hotel_truth(seed: u64) -> cadaddy_mepfix::truth::Truth {
-    let set = generate_hotel(seed, HotelSize::Small)
-        .unwrap_or_else(|e| panic!("generate_hotel({seed}): {e}"));
+    let set = generate_hotel(seed, HotelSize::Small).unwrap_or_else(|e| panic!("generate_hotel({seed}): {e}"));
     set.truth
 }
 
 fn hotel_set(seed: u64) -> cadaddy_mepfix::FixtureSet {
-    generate_hotel(seed, HotelSize::Small)
-        .unwrap_or_else(|e| panic!("generate_hotel({seed}): {e}"))
+    generate_hotel(seed, HotelSize::Small).unwrap_or_else(|e| panic!("generate_hotel({seed}): {e}"))
 }
 
 // --- Grading contours ---
@@ -22,10 +20,7 @@ fn hotel_set(seed: u64) -> cadaddy_mepfix::FixtureSet {
 fn grading_contours_are_generated() {
     for seed in 1..=3 {
         let t = hotel_truth(seed);
-        assert!(
-            !t.grading_contours.is_empty(),
-            "seed {seed}: no grading contours generated"
-        );
+        assert!(!t.grading_contours.is_empty(), "seed {seed}: no grading contours generated");
         let existing = t.grading_contours.iter().filter(|c| c.surface == "existing").count();
         let proposed = t.grading_contours.iter().filter(|c| c.surface == "proposed").count();
         assert!(existing > 0, "seed {seed}: no existing contours");
