@@ -737,6 +737,54 @@ pub struct Mep {
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gear_rules: Option<serde_json::Value>,
+    /// Electrical devices and the panel circuit each is on (receptacles, switches, fixtures,
+    /// disconnects): what their plates are labelled with.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<ElecDevice>,
+    /// Arc flash study results per piece of gear (from the engineer's study: CADaddy doesn't
+    /// calculate them), for its arc flash label.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub arc_flash: Vec<ArcFlash>,
+    /// Labels as last printed: label id → the text it was printed with (what changed since).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels_printed: BTreeMap<String, String>,
+}
+
+/// An electrical device and the circuit it is on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ElecDevice {
+    /// Its id or tag (`R-101-1`).
+    pub tag: String,
+    /// `receptacle`, `switch`, `light_fixture`, `data_outlet`, `disconnect`, `junction_box`…
+    pub kind: String,
+    pub level: String,
+    /// The room it is in (number or name, as the room schedule has it).
+    pub room: String,
+    /// The panel and circuit number(s): `P1`, `12` (or `1,3,5` for three poles).
+    pub panel: String,
+    pub circuit: String,
+}
+
+/// One piece of gear's arc flash study result.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArcFlash {
+    /// The gear's tag.
+    pub equipment: String,
+    /// Incident energy at the working distance, cal/cm².
+    pub incident_energy: f64,
+    pub working_distance_in: f64,
+    pub arc_flash_boundary_in: f64,
+    /// PPE category or the PPE required, as the study states it.
+    pub ppe: String,
+    /// Nominal voltage and the shock approach boundaries, as stated.
+    pub voltage: String,
+    pub limited_approach: String,
+    pub restricted_approach: String,
+    /// The study it comes from and its date.
+    pub study: String,
+    pub date: String,
 }
 
 impl Mep {
@@ -747,6 +795,8 @@ impl Mep {
             && self.equipment.is_empty()
             && self.revisions.is_empty()
             && self.feeders.is_empty()
+            && self.devices.is_empty()
+            && self.arc_flash.is_empty()
     }
 }
 
@@ -916,6 +966,23 @@ pub struct MepEquipment {
     /// submitted and the takeoff carries the harder installation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub accepted: Vec<String>,
+    /// A panel's schedule: its circuits, what each feeds and where (its directory).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub circuits: Vec<PanelCircuit>,
+}
+
+/// One circuit in a panel schedule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelCircuit {
+    /// Its number (`1`; the first pole of a multi-pole breaker).
+    pub number: String,
+    pub description: String,
+    /// The room or area it serves (number or name).
+    pub room: String,
+    /// Breaker amps and poles, as the schedule prints them.
+    pub breaker: String,
+    pub poles: u32,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.

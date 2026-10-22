@@ -55,10 +55,13 @@ pub enum RfiKind {
     GearLugs,
     /// Gear the field can't install as submitted: entry plates, gutter, bending space.
     GearInstall,
+    /// Labels that need data the documents don't give yet (an arc flash study's results for a
+    /// piece of gear): a document request, so the labels are ordered in time.
+    LabelData,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 15] = [
+    pub const ALL: [RfiKind; 16] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -74,6 +77,7 @@ impl RfiKind {
         RfiKind::SleeveNoFit,
         RfiKind::GearLugs,
         RfiKind::GearInstall,
+        RfiKind::LabelData,
     ];
 
     /// The snake_case name (as in JSON).
@@ -94,6 +98,7 @@ impl RfiKind {
             RfiKind::SleeveNoFit => "sleeve_no_fit",
             RfiKind::GearLugs => "gear_lugs",
             RfiKind::GearInstall => "gear_install",
+            RfiKind::LabelData => "label_data",
         }
     }
 
@@ -119,6 +124,7 @@ impl RfiKind {
             RfiKind::SleeveNoFit => "Sleeve won't fit the framing",
             RfiKind::GearLugs => "Gear lugs don't take the feeders",
             RfiKind::GearInstall => "Gear can't be installed as submitted",
+            RfiKind::LabelData => "Labels need data the documents don't give",
         }
     }
 
