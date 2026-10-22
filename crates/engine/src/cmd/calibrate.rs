@@ -749,17 +749,21 @@ fn census_ratios(r: &Value) -> std::result::Result<(f64, f64, f64), String> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("calibrate.project", "Add Calibration Project", run_project)
+            .files()
             .params("{pack: .jsonl, id: anonymous (re-adding an id replaces it), building_type?, region?, bid_date?: YYYY-MM, delivery?, quantities: {trade: {driver: qty}} | from_wholejob: true, totals?: {trade: $}, total?: $, hours?: {trade: h}} → {pack, id, trades, replaced}")
             .noundo(),
         CommandSpec::new("calibrate.fit", "Fit Rates to Bids", run_fit)
+            .files()
             .enabled(always)
             .params("{packs: [.jsonl], target?: cost|hours, building_type?, region?, priors?: {\"trade/driver\": {rate, sd}}, markups?: {trade: %}, regions?: {region: factor}, index?: {YYYY-MM: value}, base_date?, min_projects?: 3, holdout_every?: 5, out?: .jsonl, private?: bool} → {rates: [{trade, driver, rate, sd, projects, quality}], noise_pct, holdout: {projects, mape_pct}, written, warnings}")
             .noundo(),
         CommandSpec::new("calibrate.payroll", "Certified Payroll Hours", run_payroll)
+            .files()
             .enabled(always)
             .params("{rows: [{classification, hours}] | path: CSV (a total hours column, else ST + OT or per-day columns), map?: {classification: trade}} → {hours: {trade: h}, unmapped, hours_columns}")
             .noundo(),
         CommandSpec::new("calibrate.topdown", "Top-Down Labor Estimate", run_topdown)
+            .files()
             .enabled(always)
             .params("{values: {trade: $}, census: {trade: {value_of_work, subcontracted_out, construction_worker_hours, construction_worker_wages}} | ratios: {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}, wage_escalation?, materials_escalation?, bottom_up_hours?: {trade: h}, gap_pct?: 25} → {trades: [{trade, self_performed, field_hours, wages, ratios, gap_pct, flag}], no_ratios}")
             .noundo(),

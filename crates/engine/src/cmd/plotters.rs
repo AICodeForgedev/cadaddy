@@ -414,11 +414,13 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("printers", "System Printers", run_printers).params("{} → {printers: [name]} (PLOT's `printer` prints on one)").noundo(),
         CommandSpec::new("plotwindow", "Plot Window", run_plotwindow)
+            .files()
             .params("{p1: [x,y], p2: [x,y]} (typed: two corners): the window the Plot dialog's \"Window <\" plots, kept in the session")
             .enabled(has_doc)
             .noundo()
             .interactive(|_| Ok(Box::new(PlotWindowM::default()))),
         CommandSpec::new("plottermanager", "Plotter Manager...", run_plottermanager)
+            .files()
             .menu(&["File", "Plotter Manager..."])
             .params(
                 "{action?: list (default)|get|new|set|delete|load|save, name?: device, from?: device to copy (new), output?: pdf|png|svg, description?, resolution?: dpi, orientation?: portrait|landscape, defaultPaper?, paper?: {name, width, height (mm), margins?: [l,b,r,t] mm} (set: add or replace), removePaper?: name (set), text? (load), path? (save: native only; without it returns `text`)} (typed: option prompts)",
@@ -427,6 +429,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(PlotterManagerM::default()))),
         CommandSpec::new("-plottermanager", "Plotter Manager", run_plottermanager)
+            .files()
             .params("as PLOTTERMANAGER (typed: option prompts)")
             .enabled(always)
             .noundo()

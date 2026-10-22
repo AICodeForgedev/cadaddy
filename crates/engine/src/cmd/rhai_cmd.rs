@@ -18,6 +18,7 @@ const MAX_INPUTS: usize = 10_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rhai", "Evaluate Rhai", run_rhai)
+            .files()
             .menu(&["Tools", "Rhai", "Evaluate"])
             .params(
                 "{code: Rhai source, inputs?: [answers to getpoint/getreal/getstring calls], timeoutMs?: wall-clock budget \
@@ -27,12 +28,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(RhaiEvalM))),
         CommandSpec::new("rhairun", "Run Rhai Script", run_rhairun)
+            .files()
             .menu(&["Tools", "Rhai", "Run Script..."])
             .alias(&["rsr"])
             .params("{path: .rhai file} | {name, text: source}, timeoutMs? → {value, output, error?}")
             .noundo()
             .interactive(|_| Ok(Box::new(RhaiRunM))),
         CommandSpec::new("rhaiedit", "Script Editor", run_rhaiedit)
+            .files()
             .menu(&["Tools", "Rhai", "Script Editor"])
             .params("{} — opens the Script Editor palette")
             .enabled(super::always)

@@ -30,6 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle?, at: [x,y] | row+col, text (=… for a formula)}")
             .interactive(|s| Ok(Box::new(TableEditM { cell: s.tabledit_walk.flatten(), walk: s.tabledit_walk.is_some() }))),
         CommandSpec::new("tableexport", "Export Table", run_export)
+            .files()
             .params("{handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
             .interactive(|_| Ok(Box::new(ExportM::default()))),
     ]

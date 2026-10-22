@@ -11,6 +11,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("audit", "Audit", run_audit)
+            .files()
             .menu(&["File", "Drawing Utilities", "Audit"])
             .params("{fix?: bool} → {errors, fixed, issues: [{kind, location, handle?, message, fix}], message}")
             .interactive(|_| Ok(Box::new(Audit))),

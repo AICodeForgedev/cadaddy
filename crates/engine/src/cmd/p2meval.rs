@@ -36,12 +36,15 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("p2m.bench", "Plans to Model Benchmark", run_bench)
+            .files()
             .params("{cases?: [single|multi|messy|pdf]} → {cases: [{name, steps: [{command, ok, ms, error?}], scores: {walls, openings, rooms, heights, stairs?}, total, issues}], mean}")
             .noundo(),
         CommandSpec::new("p2m.case", "Plans to Model Case", run_case_cmd)
+            .files()
             .params("{name, path?: DXF file to write} → {truth}: a benchmark case opened as a new drawing (or written to a file) for a live agent")
             .noundo(),
         CommandSpec::new("p2m.score", "Plans to Model Score", run_score)
+            .files()
             .params("{case: name} → {scores, total}: the active drawing's built model scored against the case's truth")
             .noundo(),
     ]

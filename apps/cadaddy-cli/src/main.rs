@@ -246,7 +246,7 @@ fn info(path: &str) -> Result<(), String> {
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
         Some(json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() }))
     });
-    let mut s = Session::empty();
+    let mut s = Session::for_app();
     open(&mut s, path)?;
     let mut v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
     if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
@@ -333,7 +333,7 @@ fn convert(args: &[String]) -> Result<(), String> {
 
 fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
-    let mut s = Session::empty();
+    let mut s = Session::for_app();
     open(&mut s, i)?;
     if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
         eprintln!("{m}");
@@ -428,7 +428,7 @@ fn skipped_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<Strin
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let mut s = Session::empty();
+    let mut s = Session::for_app();
     let mut it = args.iter();
     let mut save = None;
     let mut exp: Option<String> = None;
@@ -558,7 +558,7 @@ fn perf_file(path: &str) -> Result<(), String> {
     use cadaddy_engine::render::{Options, build};
     use std::time::Instant;
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
-    let mut s = Session::empty();
+    let mut s = Session::for_app();
     let t = Instant::now();
     open(&mut s, path)?;
     let open_ms = ms(t);

@@ -304,7 +304,8 @@ impl Default for Headless {
     /// A session with one new drawing whose layouts have their viewport, as the app and NEW start
     /// one (so plotting Layout1 shows the drawing, not a blank sheet).
     fn default() -> Self {
-        let mut session = Session::empty();
+        // As the apps start: with the installed plug-ins.
+        let mut session = Session::for_app();
         session.new_drawing_with_viewports(false);
         // No one to ask here: the agent runs the session (dry run and the journal still apply).
         session.agent.confirm = false;

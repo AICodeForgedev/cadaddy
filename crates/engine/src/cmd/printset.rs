@@ -490,23 +490,27 @@ fn load_project(path: &Path) -> std::result::Result<PrintSetProject, String> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("printset.open", "Open Print Set", run_open)
+            .files()
             .params("{path: folder or .printset.json, name?} → {name, sheets, revision, dashboard}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
+            .files()
             .params("{} → {classified, total, elapsed_ms}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).params("{} → {dashboard}").enabled(always).noundo(),
+        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
+            .files()
             .params("{discipline?, level?} → {sheets, total}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport)
+            .files()
             .params("{path: folder, revision?: label} → {delta, sheets}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.save", "Save Print Set", run_save).params("{path?} → {saved}").enabled(always).noundo(),
+        CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
     ]
 }
 

@@ -21,6 +21,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("lightbake", "Bake Lighting", run)
+            .files()
             .menu(&["View", "Render", "Bake Lighting"])
             .params("{quality?: draft|medium|high (32/128/512 paths a texel side, 2/3/4 bounces; default medium), samples?, bounces?, texel? (drawing units; default 15 cm), full?: bool (bake everything again), clear?: true (drop the lightmap)} → {objects, baked, kept, texels, seconds, width, height, saved?}")
             .noundo()

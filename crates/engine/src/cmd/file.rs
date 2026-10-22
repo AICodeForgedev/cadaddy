@@ -376,6 +376,7 @@ fn write_drawing(d: &cadaddy_doc::Drawing, cmd: &str, path: &str, opts: &SaveAs)
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("new", "New Drawing...", run_new)
+            .files()
             .menu(&["File", "New Drawing..."])
             .key("Cmd+N")
             .alias(&["qnew"])
@@ -389,9 +390,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "OPEN", message: "Enter name of drawing to open", run: run_open }))),
-        CommandSpec::new("close", "Close", run_close).menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
-        CommandSpec::new("closeall", "Close All", run_closeall).menu(&["File", "Close All"]).enabled(always).noundo(),
-        CommandSpec::new("qsave", "Save", run_qsave_reporting).menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?}").noundo(),
+        CommandSpec::new("close", "Close", run_close)
+            .files().menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
+        CommandSpec::new("closeall", "Close All", run_closeall)
+            .files().menu(&["File", "Close All"]).enabled(always).noundo(),
+        CommandSpec::new("qsave", "Save", run_qsave_reporting)
+            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?}").noundo(),
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
@@ -399,6 +403,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
+            .files()
             .menu(&["File", "Drawing Utilities", "Check Exchange"])
             .params("{format?: dwg|dxf (default: the drawing's file's, else dwg), version?: 2000|2004|2007|2010|2013|2018} → {format, version, kept: bool, losses: [{feature, what: dropped|changed, count, handles?, names?}], message}: what saving as DWG or DXF wouldn't keep, without saving")
             .noundo(),
@@ -411,10 +416,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         CommandSpec::new("document.close", "Close Drawing", run_close_doc)
+            .files()
             .params("{index? | path? | title? (default the current drawing), save?: bool (save to its file first), saveAs?: path, discard?: bool} → {closed, saved?}. A drawing with unsaved changes is closed only with save, saveAs or discard (CLOSE itself discards)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("document.closeall", "Close All Drawings", run_closeall_docs)
+            .files()
             .params("{save?: bool, discard?: bool} → {closed: [titles], saved: [paths]}. Refused, closing nothing, while a drawing has unsaved changes and neither is given (or a drawing to save has no file name)")
             .enabled(always)
             .noundo(),
@@ -422,6 +429,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{format?: dxf (or cdy, dwg), version?: 2000…2018, binary?: bool} → {data: base64}")
             .noundo(),
         CommandSpec::new("script", "Run Script...", run_script)
+            .files()
             .menu(&["Tools", "Run Script..."])
             .alias(&["scr"])
             .params("{path: script (.scr) file} | {data: base64} → {lines}")

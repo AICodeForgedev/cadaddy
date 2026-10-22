@@ -899,20 +899,24 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("wholejob.estimate", "Whole-Job Estimate", run_estimate)
             .params("{} → {trades: [{trade, division, direct, markup_pct, contract_value, quality, source, priced, unpriced}], by_division, general_conditions, subtotal, total, unpriced_lines}")
             .noundo(),
-        CommandSpec::new("wholejob.package", "Bid Package", run_package).params("{trade, path?: .xlsx|.csv} → {trade, division, spec_sections, scope, quantities}").noundo(),
+        CommandSpec::new("wholejob.package", "Bid Package", run_package)
+            .files().params("{trade, path?: .xlsx|.csv} → {trade, division, spec_sections, scope, quantities}").noundo(),
         CommandSpec::new("wholejob.bid", "Sub Bid", run_bid).params("{trade, bidder, total, lines?: [{item, unit, qty, amount}], exclusions?: [text], alternates?: [text]} → {trade, bidder}"),
         CommandSpec::new("wholejob.level", "Level Bids", run_level)
             .params("{trade} → {bids: [{bidder, total, complete, missing_scope, quantity_gaps, outlier_prices, exclusions, leveled_total}], recommended: the low complete bid}")
             .noundo(),
         CommandSpec::new("wholejob.history", "Add Bid History", run_history)
+            .files()
             .enabled(always)
             .params("{pack: .jsonl (all public or all private, set by its first row), private?: bool (electrical: required), trade, division?, building_type, region, date, sf, amount, source} → {pack, per_sf}")
             .noundo(),
         CommandSpec::new("wholejob.benchmarks", "Bid Benchmarks", run_benchmarks)
+            .files()
             .enabled(always)
             .params("{packs: [.jsonl], building_type?, region?, private?: bool (include private rows; default false)} → {benchmarks: [{trade, count, per_sf_median, per_sf_min, per_sf_max}], private_rows_left_out}")
             .noundo(),
         CommandSpec::new("wholejob.outcome", "Record Outcome", run_outcome)
+            .files()
             .params("{pack: private .jsonl, private: true, trade, award?, final_cost?, change_orders?, sf?, building_type?, date?} → {pack}")
             .noundo(),
     ]
