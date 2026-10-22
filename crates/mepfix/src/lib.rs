@@ -53,6 +53,7 @@ pub mod scan;
 pub mod scan_reader;
 pub mod score;
 pub mod sheet_reader;
+pub mod site_reader;
 pub mod sprinkler_reader;
 pub mod struct_reader;
 pub mod style;

@@ -2,7 +2,7 @@
 //! plotted to PDF through the sheet's window and written as DXF.
 
 use crate::design::width_in;
-use crate::layout::{Kind, PLAN_MARGIN_IN, frame, paper_to_model, to_model};
+use crate::layout::{Kind, PLAN_MARGIN_IN, SITE_LAYER, UNDERGROUND_LAYER, frame, paper_to_model, to_model};
 use crate::style::Style;
 use crate::truth::*;
 use cadaddy_color::Color;
@@ -38,6 +38,8 @@ fn layer_def(name: &str, st: &Style) -> (u8, u16, &'static str) {
         "LIGHT" => (7, st.lw_background, "Continuous"),
         "CALLOUT" => (7, st.lw_text, "Continuous"),
         "A-SLAB-EDGE" => (8, st.lw_background, "DASHED"),
+        "C-SITE" => (7, st.lw_run, "Continuous"),
+        "C-UNDR" => (7, st.lw_run, "DASHED"),
         _ => (7, st.lw_run, "Continuous"),
     }
 }
@@ -574,6 +576,27 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                     "D = DATA/TELECOM",
                     "FB = FLOOR BOX",
                     "DS = DISCONNECT",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::Site => {
+            site_plan(&mut pen, t, st);
+            legend.push(item("building", "BUILDING FOOTPRINT"));
+            legend.push(item("parking", "PARKING SPACE"));
+            legend.push(item("light_pole", "SITE LIGHT POLE"));
+            legend.push(item("transformer", "TRANSFORMER PAD"));
+            legend.push(item("fire_hydrant", "FIRE HYDRANT"));
+            legend.push(item("dumpster", "DUMPSTER ENCLOSURE"));
+            legend.push(item("underground", "UNDERGROUND UTILITY (DASHED)"));
+            abbr.extend(
+                [
+                    "LP = LIGHT POLE",
+                    "FH = FIRE HYDRANT",
+                    "XFMR = TRANSFORMER",
+                    "UG = UNDERGROUND",
+                    "PVC = POLYVINYL CHLORIDE",
+                    "EV = ELECTRIC VEHICLE",
                 ]
                 .map(abbrev),
             );
@@ -2206,4 +2229,170 @@ fn draw_key_plan(pen: &mut Pen, t: &Truth, _sh: &Sheet) {
     pen.prect(CALLOUT_LAYER, a, b);
     // Label "KEY PLAN"
     pen.ptext(CALLOUT_LAYER, [kp_x, kp_y - 0.15], 0.08, "KEY PLAN", HAlign::Left);
+}
+
+// ---- Site plan (C-101) --------------------------------------------------------------------------
+
+/// Draw the site plan: building footprint, parking, light poles, transformer, underground
+/// utilities and other site elements on appropriate layers.
+fn site_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
+    // Building footprint (dashed outline).
+    let xs: Vec<f64> = t.building.grid.x.iter().map(|g| g.at_ft).collect();
+    let ys: Vec<f64> = t.building.grid.y.iter().map(|g| g.at_ft).collect();
+    let x_min = xs.first().copied().unwrap_or(0.0);
+    let y_min = ys.first().copied().unwrap_or(0.0);
+    let x_max = xs.last().copied().unwrap_or(100.0);
+    let y_max = ys.last().copied().unwrap_or(60.0);
+    pen.brect(SITE_LAYER, [x_min, y_min], [x_max, y_max]);
+    // Label the building.
+    let bc = pen.b([(x_min + x_max) / 2.0, (y_min + y_max) / 2.0]);
+    pen.text(SITE_LAYER, bc, 0.12, "BUILDING", 0.0, HAlign::Center, VAlign::Middle);
+
+    // Draw each site element by kind.
+    for se in &t.site_elements {
+        let layer = if se.kind.starts_with("underground_") { UNDERGROUND_LAYER } else { SITE_LAYER };
+        match se.kind.as_str() {
+            "parking_space" => draw_parking(pen, se, layer),
+            "light_pole" => draw_light_pole(pen, se, layer),
+            "transformer_pad" => draw_transformer_pad(pen, se, layer),
+            "dumpster_enclosure" => draw_dumpster(pen, se, layer),
+            "fire_hydrant" => draw_fire_hydrant(pen, se, layer),
+            "bollard" => draw_bollard(pen, se, layer),
+            "sign" => draw_sign(pen, se, layer),
+            "driveway" => draw_driveway(pen, se, layer),
+            "curb" | "sidewalk" => draw_area_element(pen, se, layer),
+            k if k.starts_with("underground_") => draw_underground(pen, se, layer),
+            _ => draw_generic_site(pen, se, layer),
+        }
+    }
+}
+
+/// Parking space: a rectangle with the tag.
+fn draw_parking(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        let c = pen.b(se.at_ft);
+        pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// Light pole: a filled circle with the tag above.
+fn draw_light_pole(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.08);
+    pen.circle(layer, c, r);
+    // Cross inside the circle for visibility.
+    pen.line(layer, c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0));
+    pen.line(layer, c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r));
+    let label_y = c + Vec2::new(0.0, r * 2.5);
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Transformer pad: a rectangle with X and label.
+fn draw_transformer_pad(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // Diagonal cross inside.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        let c1 = pen.b([mn[0], mx[1]]);
+        let c2 = pen.b([mx[0], mn[1]]);
+        pen.line(layer, a, b);
+        pen.line(layer, c1, c2);
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.15);
+    pen.text(layer, c + Vec2::new(0.0, off), 0.07, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Dumpster enclosure: a rectangle with tag.
+fn draw_dumpster(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// Fire hydrant: a circle with the tag.
+fn draw_fire_hydrant(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.1);
+    pen.circle(layer, c, r);
+    // Small triangle pointing up inside to distinguish from poles.
+    let top = c + Vec2::new(0.0, r * 0.7);
+    let bl = c + Vec2::new(-r * 0.5, -r * 0.3);
+    let br = c + Vec2::new(r * 0.5, -r * 0.3);
+    pen.poly(layer, &[top, bl, br], true);
+    let label_y = c + Vec2::new(0.0, r * 2.0);
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Bollard: small filled circle.
+fn draw_bollard(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.04);
+    pen.circle(layer, c, r);
+}
+
+/// Sign: a small rectangle with tag.
+fn draw_sign(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let s = pen.pl(0.1);
+    pen.rect(layer, c - Vec2::new(s, s * 0.5), c + Vec2::new(s, s * 0.5));
+    let label_y = c + Vec2::new(0.0, s);
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Driveway: a rectangle with tag.
+fn draw_driveway(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.07, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// Generic area element (curb, sidewalk): a rectangle outline with tag.
+fn draw_area_element(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// Underground utility: a line from min to max (along its run) with depth tag and utility label.
+fn draw_underground(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        // Draw the run as a line.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+        // Short tick marks at each end perpendicular to the line.
+        let dir = (b - a).normalized();
+        let perp = Vec2::new(-dir.y, dir.x);
+        let tick = pen.pl(0.08);
+        pen.line(layer, a - perp * tick, a + perp * tick);
+        pen.line(layer, b - perp * tick, b + perp * tick);
+    }
+    let c = pen.b(se.at_ft);
+    // Tag: utility type.
+    let label = &se.tag;
+    let off = pen.pl(0.12);
+    pen.text(layer, c + Vec2::new(off, 0.0), 0.06, label, 0.0, HAlign::Left, VAlign::Middle);
+    // Depth note.
+    if let Some(depth) = se.depth_ft {
+        let depth_str = format!("{depth:.0}' DEEP");
+        pen.text(layer, c + Vec2::new(off, -pen.pl(0.10)), 0.05, &depth_str, 0.0, HAlign::Left, VAlign::Middle);
+    }
+}
+
+/// Generic site element: a point marker with tag.
+fn draw_generic_site(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.06);
+    pen.circle(layer, c, r);
+    let label_y = c + Vec2::new(0.0, r * 2.0);
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
 }
