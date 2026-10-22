@@ -3112,3 +3112,9 @@ menu	Modify	Ändra
 	Make Invisible	Gör osynlig
 	Convert Dimensions to Constraints	Konvertera mått till villkor
 	Convert Constraints to Dimensions	Konvertera villkor till mått
+	Polyhedron	Polyeder
+	Select closed meshes or surfaces to convert	Välj slutna nät eller ytor att konvertera
+	Select first surface	Välj första ytan
+	Pick a point on its edge to fillet	Välj en punkt på kanten att avrunda
+	Select second surface	Välj andra ytan
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Inget slutet nät eller yta valdes. Endast slutna former kan bli solider.

@@ -3104,3 +3104,9 @@ menu	Modify	Edita
 	Make Invisible	Rendi invisibile
 	Convert Dimensions to Constraints	Converti quote in vincoli
 	Convert Constraints to Dimensions	Converti vincoli in quote
+	Polyhedron	Poliedro
+	Select closed meshes or surfaces to convert	Selezionare mesh o superfici chiuse da convertire
+	Select first surface	Selezionare la prima superficie
+	Pick a point on its edge to fillet	Scegliere un punto sul bordo per il raccordo
+	Select second surface	Selezionare la seconda superficie
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Non è stata selezionata alcuna mesh o superficie chiusa. Solo le forme chiuse possono diventare solidi.

@@ -2893,3 +2893,9 @@
 	Make Invisible	Rendre invisible
 	Convert Dimensions to Constraints	Convertir les cotes en contraintes
 	Convert Constraints to Dimensions	Convertir les contraintes en cotes
+	Polyhedron	Polyèdre
+	Select closed meshes or surfaces to convert	Sélectionnez les maillages ou surfaces fermés à convertir
+	Select first surface	Sélectionnez la première surface
+	Pick a point on its edge to fillet	Choisissez un point sur son arête pour le raccordement
+	Select second surface	Sélectionnez la deuxième surface
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Aucun maillage ou surface fermé n'a été sélectionné. Seules les formes fermées peuvent devenir des solides.

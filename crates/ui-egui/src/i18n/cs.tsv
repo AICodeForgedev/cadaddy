@@ -3085,3 +3085,9 @@ menu	Modify	Modifikace
 	Make Invisible	Skrýt
 	Convert Dimensions to Constraints	Převést kóty na vazby
 	Convert Constraints to Dimensions	Převést vazby na kóty
+	Polyhedron	Mnohostěn
+	Select closed meshes or surfaces to convert	Vyberte uzavřené sítě nebo povrchy k převodu
+	Select first surface	Vyberte první povrch
+	Pick a point on its edge to fillet	Vyberte bod na hraně pro zaoblení
+	Select second surface	Vyberte druhý povrch
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Nebyla vybrána žádná uzavřená síť ani povrch. Pouze uzavřené tvary lze převést na tělesa.

@@ -2989,3 +2989,9 @@
 	Make Invisible	使不可见
 	Convert Dimensions to Constraints	将标注转换为约束
 	Convert Constraints to Dimensions	将约束转换为标注
+	Polyhedron	多面体
+	Select closed meshes or surfaces to convert	选择要转换的封闭网格或曲面
+	Select first surface	选择第一个曲面
+	Pick a point on its edge to fillet	在其边缘上选择一个点进行圆角
+	Select second surface	选择第二个曲面
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	未选择封闭的网格或曲面。只有封闭的形状才能成为实体。

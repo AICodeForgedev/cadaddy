@@ -3111,3 +3111,9 @@
 	Make Invisible	Tornar invisível
 	Convert Dimensions to Constraints	Converter cotas em restrições
 	Convert Constraints to Dimensions	Converter restrições em cotas
+	Polyhedron	Poliedro
+	Select closed meshes or surfaces to convert	Selecione malhas ou superfícies fechadas para converter
+	Select first surface	Selecione a primeira superfície
+	Pick a point on its edge to fillet	Escolha um ponto na aresta para concordância
+	Select second surface	Selecione a segunda superfície
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Nenhuma malha ou superfície fechada foi selecionada. Apenas formas fechadas podem se tornar sólidos.

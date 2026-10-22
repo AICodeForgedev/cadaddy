@@ -3105,3 +3105,9 @@ menu	Modify	수정
 	Make Invisible	보이지 않게 하기
 	Convert Dimensions to Constraints	치수를 구속조건으로 변환
 	Convert Constraints to Dimensions	구속조건을 치수로 변환
+	Polyhedron	다면체
+	Select closed meshes or surfaces to convert	변환할 닫힌 메시 또는 표면을 선택하세요
+	Select first surface	첫 번째 표면을 선택하세요
+	Pick a point on its edge to fillet	필렛할 모서리의 점을 선택하세요
+	Select second surface	두 번째 표면을 선택하세요
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	닫힌 메시 또는 표면이 선택되지 않았습니다. 닫힌 형상만 솔리드로 변환할 수 있습니다.

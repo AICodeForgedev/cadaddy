@@ -2922,3 +2922,9 @@
 	Make Invisible	Unsichtbar machen
 	Convert Dimensions to Constraints	Bemaßungen in Abhängigkeiten umwandeln
 	Convert Constraints to Dimensions	Abhängigkeiten in Bemaßungen umwandeln
+	Polyhedron	Polyeder
+	Select closed meshes or surfaces to convert	Geschlossene Netze oder Flächen zum Umwandeln auswählen
+	Select first surface	Erste Fläche auswählen
+	Pick a point on its edge to fillet	Punkt an der Kante zum Abrunden wählen
+	Select second surface	Zweite Fläche auswählen
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Es wurde kein geschlossenes Netz oder keine geschlossene Fläche ausgewählt. Nur geschlossene Formen können Volumenkörper werden.

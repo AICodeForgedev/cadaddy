@@ -3100,3 +3100,9 @@ menu	View	عرض
 	Make Invisible	جعله غير مرئي
 	Convert Dimensions to Constraints	تحويل الأبعاد إلى قيود
 	Convert Constraints to Dimensions	تحويل القيود إلى أبعاد
+	Polyhedron	متعدد السطوح
+	Select closed meshes or surfaces to convert	حدد الشبكات أو الأسطح المغلقة للتحويل
+	Select first surface	حدد السطح الأول
+	Pick a point on its edge to fillet	اختر نقطة على حافته للتقريب
+	Select second surface	حدد السطح الثاني
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	لم يتم تحديد شبكة أو سطح مغلق. فقط الأشكال المغلقة يمكن تحويلها إلى مجسمات.

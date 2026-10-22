@@ -2894,3 +2894,9 @@
 	Make Invisible	Сделать невидимым
 	Convert Dimensions to Constraints	Преобразовать размеры в зависимости
 	Convert Constraints to Dimensions	Преобразовать зависимости в размеры
+	Polyhedron	Многогранник
+	Select closed meshes or surfaces to convert	Выберите замкнутые сетки или поверхности для преобразования
+	Select first surface	Выберите первую поверхность
+	Pick a point on its edge to fillet	Укажите точку на ребре для сопряжения
+	Select second surface	Выберите вторую поверхность
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Не выбрана ни одна замкнутая сетка или поверхность. Только замкнутые формы могут стать телами.
