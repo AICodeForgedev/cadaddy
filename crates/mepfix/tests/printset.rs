@@ -313,3 +313,80 @@ fn discipline_counts_match_hotel() {
     assert!(elec_count >= 4, "expected at least 4 electrical sheets, got {elec_count}");
     assert!(arch_count >= 4, "expected at least 4 architectural sheets, got {arch_count}");
 }
+
+// ─── A real folder: a merged set, a revision folder, a two-level sheet ────────
+
+/// Loads an entry as the project would: a page of a PDF, or a DXF.
+fn load_print(dir: &std::path::Path, e: &printset::SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
+    let bytes = std::fs::read(dir.join(&e.file)).map_err(|err| err.to_string())?;
+    if e.file.ends_with(".dxf") {
+        return cadaddy_io::read_dxf(&bytes).map_err(|err| err.to_string());
+    }
+    let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
+    cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string())
+}
+
+#[test]
+fn a_folder_with_a_merged_set_and_a_revision_folder_classifies_page_by_page() {
+    let set = generate_hotel(42, HotelSize::Small).expect("generate hotel");
+    let truth = &set.truth;
+    let dir = std::env::temp_dir().join("cadaddy_printset_test_folder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let rev = dir.join("Revision 1");
+    std::fs::create_dir_all(&rev).expect("folders");
+    // The set as one merged PDF; the revision folder reissues one sheet and adds a sheet that
+    // prints two levels' plans.
+    std::fs::write(dir.join("Sample Set.pdf"), set.file("set.pdf").expect("set.pdf")).expect("write set");
+    let reissued = truth.sheets.iter().find(|s| s.number == "M-102").expect("M-102");
+    std::fs::write(rev.join("M-102.pdf"), set.file(&reissued.pdf).expect("sheet pdf")).expect("write revision");
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, HotelSize::Small);
+    let two = cadaddy_mepfix::printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    std::fs::write(rev.join("E-1A.dxf"), cadaddy_io::write_dxf(&two.drawing)).expect("write two-view sheet");
+
+    let mut project = printset::create_project("Project A", &dir).expect("create project");
+    let pages = truth.sheets.len();
+    assert_eq!(project.sheets.len(), pages + 2, "one entry per page of the merged set, then the revision folder's files");
+    assert!(project.sheets.iter().take(pages).all(|s| s.page >= 1), "the merged set's entries are its pages");
+    assert!(project.sheets.last().is_some_and(|s| s.file.starts_with("Revision 1/")), "revision folders come after the set");
+
+    let cancel = AtomicBool::new(false);
+    let rec = printset::run_classify_prints(&mut project, &|e| load_print(&dir, e), &cancel, &mut |_| {});
+    assert_eq!(rec.status, StageStatus::Completed);
+
+    let current: Vec<&printset::SheetEntry> = project.sheets.iter().filter(|s| s.superseded_by.is_empty()).collect();
+    for sh in &truth.sheets {
+        assert!(current.iter().any(|s| s.number == sh.number), "{} read from its page", sh.number);
+    }
+    // The reissued sheet replaces the set's page.
+    let replaced: Vec<&printset::SheetEntry> = project.sheets.iter().filter(|s| !s.superseded_by.is_empty()).collect();
+    assert_eq!(replaced.len(), 1);
+    assert_eq!(replaced[0].number, "M-102");
+    assert_eq!(replaced[0].superseded_by, "Revision 1/M-102.pdf#1");
+    assert_eq!(project.dashboard.superseded_sheets, 1);
+    // The two-level sheet is two plans, one per level.
+    for (number, level) in [("E-1A/1", "1"), ("E-1A/2", "2")] {
+        let v = current.iter().find(|s| s.number == number).unwrap_or_else(|| panic!("{number}"));
+        assert_eq!((v.level.as_str(), v.sheet_type.as_str(), v.discipline.as_str()), (level, "plan", "E"));
+    }
+    // Plans carry their level.
+    for sh in truth.sheets.iter().filter(|s| s.level.is_some() && s.title.contains("PLAN")) {
+        let got = current.iter().find(|s| s.number == sh.number).map(|s| s.level.clone());
+        assert_eq!(got, sh.level.clone(), "{} level", sh.number);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_floor_plan_title_without_a_floor_has_no_level() {
+    // "FLOOR PLAN" isn't level "PLAN"; lists and ranges give their first level.
+    for (title, want) in [
+        ("ENLARGED FLOOR PLAN - KITCHEN", ""),
+        ("SHEET NOTES - FLOOR PLAN", ""),
+        ("LEVEL 2 MECHANICAL PLAN", "2"),
+        ("THIRD & FOURTH FLOOR DUCT PLAN", "3"),
+        ("ROOF FRAMING PLAN", "R"),
+        ("GRADING AND EARTHWORK PLAN", "SITE"),
+    ] {
+        assert_eq!(printset::level_of_title(title), want, "{title}");
+    }
+}
