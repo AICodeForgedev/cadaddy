@@ -9,6 +9,12 @@ use std::collections::BTreeMap;
 /// The layer name used for callout symbols on the sheets.
 pub const CALLOUT_LAYER: &str = "CALLOUT";
 
+/// The layer name used for site elements on the civil sheets.
+pub const SITE_LAYER: &str = "C-SITE";
+
+/// The layer name used for underground utilities on the civil sheets.
+pub const UNDERGROUND_LAYER: &str = "C-UNDR";
+
 /// What a sheet shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -48,6 +54,14 @@ pub enum Kind {
     RoofDrainage,
     /// The roof and exterior wall assemblies, wall section and detail index (Q337).
     Assemblies,
+    /// The civil site plan: parking, light poles, transformer pad, underground utilities.
+    Site,
+    /// The grading and earthwork plan (C-102).
+    Grading,
+    /// The site utility plan (C-103): storm, sanitary, water structures.
+    SiteUtility,
+    /// The sitework schedule (C-601): quantities, paving, landscaping, fencing, furnishings.
+    SiteSchedules,
 }
 
 impl Kind {
@@ -62,6 +76,7 @@ impl Kind {
                 | Kind::DoorSchedule
                 | Kind::ArchFinishes
                 | Kind::Assemblies
+                | Kind::SiteSchedules
         )
     }
 }
@@ -160,6 +175,39 @@ fn extents(t: &Truth) -> ([f64; 2], [f64; 2]) {
     let (x0, x1) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
     let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
     ([x0 - 3.0, y0 - 4.0], [x1 + 3.0, y1 + 6.0])
+}
+
+/// Extent that includes the building grid AND all site elements, feet, with margin.
+pub fn site_extents(t: &Truth) -> ([f64; 2], [f64; 2]) {
+    let (mut lo, mut hi) = extents(t);
+    for se in &t.site_elements {
+        lo[0] = lo[0].min(se.at_ft[0]);
+        lo[1] = lo[1].min(se.at_ft[1]);
+        hi[0] = hi[0].max(se.at_ft[0]);
+        hi[1] = hi[1].max(se.at_ft[1]);
+        if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+            lo[0] = lo[0].min(mn[0]);
+            lo[1] = lo[1].min(mn[1]);
+            hi[0] = hi[0].max(mx[0]);
+            hi[1] = hi[1].max(mx[1]);
+        }
+    }
+    for ss in &t.site_structures {
+        lo[0] = lo[0].min(ss.at_ft[0]);
+        lo[1] = lo[1].min(ss.at_ft[1]);
+        hi[0] = hi[0].max(ss.at_ft[0]);
+        hi[1] = hi[1].max(ss.at_ft[1]);
+    }
+    for gc in &t.grading_contours {
+        for pt in &gc.points {
+            lo[0] = lo[0].min(pt[0]);
+            lo[1] = lo[1].min(pt[1]);
+            hi[0] = hi[0].max(pt[0]);
+            hi[1] = hi[1].max(pt[1]);
+        }
+    }
+    // Margin around the site
+    ([lo[0] - 5.0, lo[1] - 5.0], [hi[0] + 5.0, hi[1] + 5.0])
 }
 
 /// The part of a level an enlarged plan shows, feet.
@@ -394,7 +442,10 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
         v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Mech(l.into()))); // reuse Mech kind for layout
     }
     // Civil
-    v.push(("C-101".into(), "SITE PLAN".into(), "C".into(), Kind::Cover)); // reuse Cover for layout
+    v.push(("C-101".into(), "SITE PLAN".into(), "C".into(), Kind::Site));
+    v.push(("C-102".into(), "GRADING AND EARTHWORK PLAN".into(), "C".into(), Kind::Grading));
+    v.push(("C-103".into(), "SITE UTILITY PLAN".into(), "C".into(), Kind::SiteUtility));
+    v.push(("C-601".into(), "SITEWORK SCHEDULES AND QUANTITIES".into(), "C".into(), Kind::SiteSchedules));
     // Schedules
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
@@ -430,8 +481,17 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             _ => None,
         };
         let plan = kind.plan();
+        // Site plans need to fit the wider site extent.
+        let is_site = matches!(kind, Kind::Site | Kind::Grading | Kind::SiteUtility);
+        let (s_lo, s_hi) = if is_site { site_extents(t) } else { (lo, hi) };
+        let (sw, sh_ext) = (s_hi[0] - s_lo[0], s_hi[1] - s_lo[1]);
+        let site_fits = |s: f64| sw * s <= aw && sh_ext * s <= ah;
         let (scale_text, scale) = if !plan {
             ("", 0.125)
+        } else if is_site {
+            let options: Vec<(&str, f64)> = SCALES.iter().copied().filter(|(_, s)| site_fits(*s)).collect();
+            let s = r.pick(&options);
+            if s.1 > 0.0 { s } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) }
         } else if fits(set_scale.1, false) {
             set_scale
         } else {
@@ -442,7 +502,11 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
         let k = 12.0 / scale;
         let origin = if st.world_offsets { [r.range(0, 400) as f64 * 120.0, r.range(0, 200) as f64 * 120.0] } else { [0.0, 0.0] };
         let centre_paper = [(fr.area[0][0] + fr.area[1][0]) / 2.0, (fr.area[0][1] + 1.0 + fr.area[1][1]) / 2.0];
-        let centre_b = [(lo[0] + hi[0]) / 2.0 * 12.0, (lo[1] + hi[1]) / 2.0 * 12.0];
+        let centre_b = if is_site {
+            [(s_lo[0] + s_hi[0]) / 2.0 * 12.0, (s_lo[1] + s_hi[1]) / 2.0 * 12.0]
+        } else {
+            [(lo[0] + hi[0]) / 2.0 * 12.0, (lo[1] + hi[1]) / 2.0 * 12.0]
+        };
         let rc = rotate(centre_b, 0.0);
         let offset = [origin[0] + centre_paper[0] * k - rc[0], origin[1] + centre_paper[1] * k - rc[1]];
         t.sheets.push(Sheet {

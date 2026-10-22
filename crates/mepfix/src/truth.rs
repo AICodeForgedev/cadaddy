@@ -57,6 +57,12 @@ pub struct Truth {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub site_elements: Vec<SiteElement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grading_contours: Vec<GradingContour>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub site_structures: Vec<SiteStructure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub site_quantities: Vec<SiteQuantity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fire_alarm_devices: Vec<FireAlarmDevice>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub telecom_devices: Vec<TelecomDevice>,
@@ -910,9 +916,11 @@ pub struct SpecItem {
 pub struct SiteElement {
     pub id: String,
     /// `parking_space`, `light_pole`, `transformer_pad`, `dumpster_enclosure`, `fire_hydrant`,
-    /// `bollard`, `sign`, `curb`, `sidewalk`, `driveway`, `underground_electric`,
-    /// `underground_water`, `underground_sewer`, `underground_storm`, `underground_gas`,
-    /// `underground_telecom`.
+    /// `bollard`, `sign`, `curb`, `sidewalk`, `driveway`, `striping`, `building_pad`,
+    /// `paving_asphalt`, `paving_concrete`, `underground_electric`, `underground_water`,
+    /// `underground_sewer`, `underground_storm`, `underground_gas`, `underground_telecom`,
+    /// `manhole`, `catch_basin`, `cleanout`, `valve_box`, `bench`, `bike_rack`, `trash_can`,
+    /// `planter`, `tree`, `shrub`, `irrigation_head`, `fence`, `gate`, `retaining_wall`.
     pub kind: String,
     pub tag: String,
     /// Position, building feet.
@@ -925,6 +933,71 @@ pub struct SiteElement {
     /// For underground: depth below grade, feet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth_ft: Option<f64>,
+    /// Height for retaining walls, fencing, feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+    /// Material: `asphalt`, `concrete`, `chain_link`, `wood`, `aluminum`, etc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material: String,
+    /// Length for linear elements (curbs, fences, retaining walls), feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_ft: Option<f64>,
+    /// Area for surface elements (paving, building pad), square feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_sf: Option<f64>,
+    /// Slope in percent for graded surfaces and utility runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slope_pct: Option<f64>,
+}
+
+/// A grading contour on the civil grading plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GradingContour {
+    pub id: String,
+    /// `existing` or `proposed`.
+    pub surface: String,
+    /// Elevation, feet above datum.
+    pub elevation_ft: f64,
+    /// Polyline vertices in plan, building feet.
+    pub points: Vec<[f64; 2]>,
+    /// `major` (every 5 ft) or `minor` (every 1 ft).
+    pub weight: String,
+}
+
+/// A site utility structure (manhole, catch basin, cleanout, valve box).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteStructure {
+    pub id: String,
+    /// `manhole`, `catch_basin`, `cleanout`, `valve_box`, `junction_box`,
+    /// `meter`, `backflow_preventer`.
+    pub kind: String,
+    pub tag: String,
+    /// Position, building feet.
+    pub at_ft: [f64; 2],
+    /// Rim elevation, feet above datum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rim_ft: Option<f64>,
+    /// Invert elevation (pipe bottom), feet above datum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invert_ft: Option<f64>,
+    /// Which utility system: `storm`, `sanitary`, `water`, `electric`, `telecom`, `gas`.
+    pub system: String,
+    /// Diameter or size, inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<f64>,
+}
+
+/// A site quantity for the civil takeoff.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteQuantity {
+    pub id: String,
+    /// CSI section: `31 22 00` (grading), `32 11 23` (aggregate base), `32 12 16` (asphalt),
+    /// `32 13 13` (concrete paving), `32 16 13` (curbs), `32 31 13` (fencing), etc.
+    pub csi: String,
+    pub description: String,
+    pub quantity: f64,
+    /// `SF`, `LF`, `CY`, `EA`, `SY`, `TON`, `GAL`.
+    pub unit: String,
 }
 
 // --- Fire alarm (FA sheets) ---
