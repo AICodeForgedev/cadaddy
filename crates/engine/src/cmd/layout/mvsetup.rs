@@ -213,7 +213,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(k) = scale {
                 vp.view_height = vp.height / k;
             }
-            out.push(d.add(&space, common.clone(), EntityKind::Viewport(vp))?);
+            out.push(d.add(&space, common.clone(), EntityKind::Viewport(Box::new(vp)))?);
         }
     }
     Ok(json!({ "viewports": out.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
@@ -225,7 +225,7 @@ fn chosen(s: &Session, layout: &str, p: &Value) -> Result<Vec<(Handle, Viewport)
     let all: Vec<(Handle, Viewport)> = d
         .space(&Space::Paper(layout.to_string()))
         .map(|st| {
-            st.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id != 1).then(|| (e.handle, v.clone())) } else { None }).collect()
+            st.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { (v.id != 1).then(|| (e.handle, v.as_ref().clone())) } else { None }).collect()
         })
         .unwrap_or_default();
     if p.get("handles").is_none() && p.get("handle").is_none() {

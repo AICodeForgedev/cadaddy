@@ -202,7 +202,7 @@ fn viewports(s: &Session) -> Vec<(cadaddy_engine::doc::Handle, cadaddy_engine::d
         .unwrap()
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Viewport(v) if v.id != 1 => Some((e.handle, v.clone())),
+            EntityKind::Viewport(v) if v.id != 1 => Some((e.handle, v.as_ref().clone())),
             _ => None,
         })
         .collect()
