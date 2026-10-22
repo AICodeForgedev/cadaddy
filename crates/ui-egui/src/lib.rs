@@ -103,6 +103,7 @@ pub mod layouttabs;
 pub mod laywalkdlg;
 pub mod levelspalette;
 pub mod lispdlg;
+pub mod lteditor;
 pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;

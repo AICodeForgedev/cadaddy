@@ -31,9 +31,10 @@ fn embedded_text_scales_with_the_pattern() {
     s.new_drawing(true);
     s.execute("linetype", &json!({ "load": "*" })).unwrap();
     let d = s.doc().unwrap();
+    // FENCELINE1's circle (a shape since Q152) scales with the pattern too.
     let fence = d.linetype("FENCELINE1").unwrap();
-    let text = fence.pattern.iter().find(|e| e.text.is_some()).unwrap();
-    assert!((text.scale - 2.54).abs() < 1e-9 && (text.length + 2.54).abs() < 1e-9, "{text:?}");
+    let shape = fence.pattern.iter().find(|e| e.shape.is_some()).unwrap();
+    assert!((shape.scale - 2.54).abs() < 1e-9 && (shape.length + 2.54).abs() < 1e-9, "{shape:?}");
 }
 
 #[test]

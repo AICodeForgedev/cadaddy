@@ -41,6 +41,12 @@ pub fn specs() -> Vec<CommandSpec> {
             })]))
         }),
         CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\" (with a file: comma-separated names, wildcards), file?: path to a .lin file | text?: its contents, reload?: bool}"),
+        CommandSpec::new("linetype.define", "Define Linetype", linfile::run_define)
+            .params("{name, description?, elements: [{dash: len} | {gap: len} | {dot: true} | {text, style?, scale?, rotation?°, absolute?, x?, y?} | {shape: name, file? (cadaddy.shx), scale?, rotation?°, absolute?, x?, y?}] (a text or shape sits where the element before it ends), save?: .lin path, current?: bool} → {name, added, elements, patternLength, warnings}"),
+        CommandSpec::new("hatch.pattern.define", "Define Hatch Pattern", super::hatch::run_define_pattern)
+            .params("{name, description?, lines: [{angle°, x, y, dx, dy, dashes?: [len…]}], save?: .pat path} → {name, families}")
+            .enabled(always)
+            .noundo(),
         CommandSpec::new("hatch.patterns", "Hatch Patterns", super::hatch::run_patterns)
             .params("{file?: path to a .pat file | text?: its contents, clear?: bool} → {standard, user, added, warnings} (HATCH also takes patternFile | patternText)")
             .enabled(always)

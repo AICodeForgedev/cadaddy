@@ -165,3 +165,94 @@ pub(crate) fn run_patterns(_s: &mut Session, p: &Value) -> Result<Value> {
         "warnings": warnings,
     }))
 }
+
+/// HATCH.PATTERN.DEFINE `{name, description?, lines: [{angle, x, y, dx, dy, dashes?}], save?}`:
+/// a hatch pattern of the given line families (angle in degrees, the origin, the offset between
+/// lines, the dashes: > 0 a dash, < 0 a gap, 0 a dot), offered for new hatches like one a `.pat`
+/// file loads; with `save`, also written into a user `.pat` file (its pattern of the same name
+/// replaced, others kept).
+pub(crate) fn run_define_pattern(_s: &mut Session, p: &Value) -> Result<Value> {
+    use cadaddy_doc::library::files::{MAX_PATTERN_DASHES, MAX_PATTERN_FAMILIES, MAX_VALUE, write_pat};
+    let name = str_param(p, "name")
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && n.len() <= 255)
+        .ok_or_else(|| bad("hatch.pattern.define", "name required"))?;
+    if name.contains([',', '*', ';', '\n']) {
+        return Err(bad("hatch.pattern.define", format!("`{name}` can't be a pattern name")));
+    }
+    if pattern(name).is_some() {
+        return Err(bad("hatch.pattern.define", format!("{name} is a built-in pattern: give yours another name")));
+    }
+    let rows = p
+        .get("lines")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| bad("hatch.pattern.define", "lines required: [{angle, x, y, dx, dy, dashes?}]"))?;
+    if rows.len() > MAX_PATTERN_FAMILIES {
+        return Err(bad("hatch.pattern.define", format!("at most {MAX_PATTERN_FAMILIES} line families")));
+    }
+    let lines = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| -> Result<PatternLine> {
+            let n = |k: &str, default: Option<f64>| -> Result<f64> {
+                match r.get(k) {
+                    None => default.ok_or_else(|| bad("hatch.pattern.define", format!("line {i}: {k} required"))),
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|x| x.is_finite() && x.abs() <= MAX_VALUE)
+                        .ok_or_else(|| bad("hatch.pattern.define", format!("line {i}: {k} must be a number"))),
+                }
+            };
+            let dy = n("dy", None)?;
+            if dy.abs() < 1e-9 {
+                return Err(bad("hatch.pattern.define", format!("line {i}: the lines need a spacing (dy) other than 0")));
+            }
+            let dashes: Vec<f64> = match r.get("dashes") {
+                None => Vec::new(),
+                Some(v) => v
+                    .as_array()
+                    .ok_or_else(|| bad("hatch.pattern.define", format!("line {i}: dashes is a list of lengths")))?
+                    .iter()
+                    .take(MAX_PATTERN_DASHES)
+                    .map(|x| {
+                        x.as_f64()
+                            .filter(|x| x.is_finite() && x.abs() <= MAX_VALUE)
+                            .ok_or_else(|| bad("hatch.pattern.define", format!("line {i}: a dash that isn't a number")))
+                    })
+                    .collect::<Result<_>>()?,
+            };
+            Ok(PatternLine {
+                angle: n("angle", Some(0.0))?,
+                origin: (n("x", Some(0.0))?, n("y", Some(0.0))?),
+                delta: (n("dx", Some(0.0))?, dy),
+                dashes,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let up = UserPattern {
+        name: name.to_ascii_uppercase(),
+        description: str_param(p, "description").unwrap_or("").trim().chars().take(255).collect(),
+        lines,
+    };
+    if let Some(path) = str_param(p, "save").map(str::trim).filter(|x| !x.is_empty()) {
+        let mut all = match crate::readfile::read(path) {
+            Ok(bytes) => parse_pat(&String::from_utf8_lossy(&bytes)).items,
+            Err(_) => Vec::new(),
+        };
+        match all.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&up.name)) {
+            Some(q) => *q = up.clone(),
+            None => all.push(up.clone()),
+        }
+        let text = write_pat(&all).map_err(|e| bad("hatch.pattern.define", e))?;
+        crate::writefile::write(path, text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
+    }
+    let mut user = store();
+    let full = user.len() >= MAX_USER_PATTERNS;
+    match user.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&up.name)) {
+        Some(q) => *q = up.clone(),
+        None if full => return Err(bad("hatch.pattern.define", format!("more than {MAX_USER_PATTERNS} user patterns"))),
+        None => user.push(up.clone()),
+    }
+    Ok(json!({ "name": up.name, "families": up.lines.len() }))
+}

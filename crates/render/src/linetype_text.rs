@@ -11,8 +11,11 @@
 //! - rotation (`50`): relative to the line direction, or absolute (`74` bit 1);
 //! - font, width factor, oblique angle and mirroring from the text style (`340`).
 //!
-//! Shape elements (`74` bit 4) need SHX shape files, which CADaddy does not read: they draw
-//! nothing and leave their gap empty.
+//! A shape element (`74` bit 4, shape number `75`) is drawn the same way from its shape file: the
+//! text style it names (a shape style's file) or the file itself. CADaddy's own shapes
+//! (`cadaddy.shx`) are built in; another file is read from the font search path when it is there,
+//! and without it the shape draws nothing and its gap stays empty. Size: the element's scale
+//! times the linetype scale, over the file's font height (`cadaddy.shx`: a box `S` wide).
 
 use cadaddy_doc::{Drawing, Linetype};
 use cadaddy_fonts::{Shaped, TextFont, TextParams};
@@ -36,7 +39,9 @@ struct Element {
 /// or repeating too often).
 pub fn texts(d: &Drawing, pts: &[Vec2], lt: &Linetype, scale: f64, min_pattern: f64) -> Vec<Shaped> {
     let mut out = Vec::new();
-    if pts.len() < 2 || !lt.pattern.iter().any(|e| e.text.as_deref().is_some_and(|t| !t.trim().is_empty())) {
+    if pts.len() < 2
+        || !lt.pattern.iter().any(|e| e.text.as_deref().is_some_and(|t| !t.trim().is_empty()) || e.shape.is_some() || e.shape_name.is_some())
+    {
         return out;
     }
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
@@ -75,6 +80,19 @@ fn elements(d: &Drawing, lt: &Linetype, scale: f64) -> Vec<Element> {
     let mut at = 0.0;
     for el in &lt.pattern {
         at += el.length.abs() * scale;
+        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+        if el.text.is_none() && (el.shape.is_some() || el.shape_name.is_some()) {
+            if let Some(local) = shape(d, el, scale) {
+                out.push(Element {
+                    at,
+                    local,
+                    rotation: finite(el.rotation),
+                    absolute: el.absolute,
+                    offset: Vec2::new(finite(el.offset.x), finite(el.offset.y)) * scale,
+                });
+            }
+            continue;
+        }
         let Some(text) = el.text.as_deref().filter(|t| !t.trim().is_empty()) else { continue };
         let ts = d.text_style(el.style.as_deref().unwrap_or("Standard")).cloned().unwrap_or_default();
         let k = if el.scale.is_finite() && el.scale > 0.0 { el.scale } else { 1.0 };
@@ -92,7 +110,6 @@ fn elements(d: &Drawing, lt: &Linetype, scale: f64) -> Vec<Element> {
             ..TextParams::new(Vec2::ZERO, height)
         };
         let (local, _) = cadaddy_fonts::place(&font, text, &params);
-        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
         out.push(Element {
             at,
             local,
@@ -102,6 +119,34 @@ fn elements(d: &Drawing, lt: &Linetype, scale: f64) -> Vec<Element> {
         });
     }
     out
+}
+
+/// The file a shape element's shapes come from: the `.shx` font of the text style it names, or
+/// the file it names itself (CADaddy's `cadaddy.shx` when it names none).
+pub fn shape_file(d: &Drawing, el: &cadaddy_doc::DashElement) -> String {
+    let style = el.style.as_deref().unwrap_or(cadaddy_doc::library::SHAPE_FILE);
+    d.text_style(style).map(|ts| ts.font.clone()).filter(|f| cadaddy_fonts::shx::is_shx_name(f)).unwrap_or_else(|| style.to_string())
+}
+
+/// A shape element's shape as its file has it: number and name (by number when it has one, else
+/// by name). `None` when the file isn't found or doesn't have it.
+pub fn resolve_shape(d: &Drawing, el: &cadaddy_doc::DashElement) -> Option<(u16, String)> {
+    let font = cadaddy_fonts::shx::find(&shape_file(d, el))?;
+    let n = el.shape.map(u32::from).filter(|n| font.has(*n)).or_else(|| el.shape_name.as_deref().and_then(|name| font.shape_number(name)))?;
+    Some((u16::try_from(n).ok()?, font.shape_name(n).map(str::to_string).or_else(|| el.shape_name.clone()).unwrap_or_default()))
+}
+
+/// A shape element drawn at the origin, its size scaled: from the shape file its style names (a
+/// text style's `.shx` font, or the file itself), by number or by name.
+fn shape(d: &Drawing, el: &cadaddy_doc::DashElement, scale: f64) -> Option<Shaped> {
+    let font = cadaddy_fonts::shx::find(&shape_file(d, el))?;
+    let n = el.shape.map(u32::from).filter(|n| font.has(*n)).or_else(|| el.shape_name.as_deref().and_then(|name| font.shape_number(name)))?;
+    let g = font.glyph(n, false)?;
+    let k = if el.scale.is_finite() && el.scale > 0.0 { el.scale } else { 1.0 } * scale / font.above.max(1e-9);
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    Some(Shaped { strokes: g.strokes.iter().map(|l| l.iter().map(|p| *p * k).collect()).collect(), ..Shaped::default() })
 }
 
 /// Points along a polyline at increasing distances.

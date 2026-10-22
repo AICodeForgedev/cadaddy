@@ -49,13 +49,29 @@ fn read(text: &str, names: &str, out: &mut Loaded) -> Vec<Linetype> {
 }
 
 /// Put `lt` into `d`: added, or replacing the definition of the same name when `reload`.
-fn put(d: &mut Drawing, lt: Linetype, reload: bool, out: &mut Loaded) {
-    for e in &lt.pattern {
+fn put(d: &mut Drawing, mut lt: Linetype, reload: bool, out: &mut Loaded) {
+    for e in lt.pattern.iter().filter(|e| e.text.is_some()) {
         if let Some(st) = e.style.as_deref()
             && d.text_style(st).is_none()
         {
             out.warnings.push(format!("{}: text style {st} is not in this drawing; its text uses the default style", lt.name));
             break;
+        }
+    }
+    // A shape by name gets its number from its shape file: CADaddy's own (cadaddy.shx, built in)
+    // or a file on the font search path. Without the file the element is kept and draws nothing
+    // until it is there.
+    let resolved: Vec<Option<(u16, String)>> =
+        lt.pattern.iter().map(|e| if e.shape_name.is_some() { cadaddy_render::linetype_text::resolve_shape(d, e) } else { None }).collect();
+    for (e, r) in lt.pattern.iter_mut().zip(resolved) {
+        match (r, &e.shape_name) {
+            (Some((n, _)), _) => e.shape = Some(n),
+            (None, Some(name)) => out.warnings.push(format!(
+                "{}: shape {name} isn't in {} (or the file isn't on the font path): it draws nothing until it is",
+                lt.name,
+                e.style.as_deref().unwrap_or("its shape file")
+            )),
+            (None, None) => {}
         }
     }
     match d.linetypes.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&lt.name)) {
@@ -262,4 +278,118 @@ impl Interactive for DashLinetype {
         }
         Ok(Step::Continue)
     }
+}
+
+/// The elements of a LINETYPE.DEFINE call: `{dash: length}` / `{gap: length}` / `{dot: true}`,
+/// or a text or shape (`{text, style?, …}` / `{shape: name, file?, …}`, with `scale`, `rotation`
+/// in degrees, `absolute`, `x`, `y`) that sits where the element before it ends (as in a `.lin`
+/// file). Lengths are as `.lin` files give them: a dash > 0, a gap < 0 (either sign is taken for
+/// `dash` and `gap`).
+fn elements(p: &Value) -> Result<Vec<cadaddy_doc::DashElement>> {
+    use cadaddy_doc::DashElement;
+    let rows =
+        p.get("elements").and_then(Value::as_array).ok_or_else(|| bad("linetype.define", "elements required: [{dash|gap|dot|text|shape…}]"))?;
+    let num = |v: &Value, k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && x.abs() <= cadaddy_doc::library::files::MAX_VALUE);
+    let mut out: Vec<DashElement> = Vec::new();
+    for (i, r) in rows.iter().enumerate().take(cadaddy_doc::library::files::MAX_LINETYPE_ELEMENTS) {
+        let attach = |e: DashElement, out: &mut Vec<DashElement>| {
+            if out.last().is_none_or(|l| l.text.is_some() || l.shape_name.is_some()) {
+                out.push(DashElement::dash(0.0));
+            }
+            if let Some(last) = out.last_mut() {
+                *last = DashElement { length: last.length, ..e };
+            }
+        };
+        let options = |mut e: DashElement| -> Result<DashElement> {
+            if let Some(s) = r.get("scale") {
+                e.scale = s
+                    .as_f64()
+                    .filter(|s| s.is_finite() && *s > 0.0 && *s <= 1e6)
+                    .ok_or_else(|| bad("linetype.define", format!("element {i}: scale must be more than zero")))?;
+            }
+            e.rotation = num(r, "rotation").unwrap_or(0.0).to_radians();
+            e.absolute = r.get("absolute").and_then(Value::as_bool).unwrap_or(false);
+            e.offset = cadaddy_geom::Vec2::new(num(r, "x").unwrap_or(0.0), num(r, "y").unwrap_or(0.0));
+            Ok(e)
+        };
+        if let Some(d) = num(r, "dash") {
+            out.push(DashElement::dash(d.abs()));
+        } else if let Some(g) = num(r, "gap") {
+            out.push(DashElement::dash(-g.abs()));
+        } else if r.get("dot").is_some() {
+            out.push(DashElement::dash(0.0));
+        } else if let Some(t) = r.get("text").and_then(Value::as_str) {
+            if t.trim().is_empty() || t.contains(['"', '\n', '\r']) || t.chars().count() > 255 {
+                return Err(bad("linetype.define", format!("element {i}: text must be one line without quotes")));
+            }
+            let style = r.get("style").and_then(Value::as_str).unwrap_or("Standard").trim().to_string();
+            attach(options(DashElement { text: Some(t.to_string()), style: Some(style), scale: 0.1, ..DashElement::dash(0.0) })?, &mut out);
+        } else if let Some(sh) = r.get("shape").and_then(Value::as_str) {
+            let name = sh.trim().to_ascii_uppercase();
+            if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_alphanumeric() || "_-$".contains(c)) {
+                return Err(bad("linetype.define", format!("element {i}: bad shape name `{sh}`")));
+            }
+            let file = r.get("file").and_then(Value::as_str).unwrap_or(cadaddy_doc::library::SHAPE_FILE).trim().to_string();
+            attach(options(DashElement { shape_name: Some(name), style: Some(file), scale: 0.1, ..DashElement::dash(0.0) })?, &mut out);
+        } else {
+            return Err(bad("linetype.define", format!("element {i}: give dash, gap, dot, text or shape")));
+        }
+    }
+    if out.iter().all(|e| e.length == 0.0 && e.text.is_none() && e.shape_name.is_none()) {
+        return Err(bad("linetype.define", "a linetype needs a dash, a gap, a text or a shape"));
+    }
+    Ok(out)
+}
+
+/// Write `lt` into the `.lin` file at `path` (its definition of the same name replaced, others
+/// kept; a new file when there is none).
+fn save_lin(path: &str, lt: &Linetype) -> Result<()> {
+    let mut all = match crate::readfile::read(path) {
+        Ok(bytes) => cadaddy_doc::library::files::parse_lin(&String::from_utf8_lossy(&bytes)).items,
+        Err(_) => Vec::new(),
+    };
+    match all.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&lt.name)) {
+        Some(l) => *l = lt.clone(),
+        None => all.push(lt.clone()),
+    }
+    let text = cadaddy_doc::library::files::write_lin(&all).map_err(|e| bad("linetype.define", e))?;
+    crate::writefile::write(path, text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))
+}
+
+/// LINETYPE.DEFINE `{name, description?, elements, save?: .lin path, current?}`: make (or remake)
+/// a linetype from dashes, gaps, dots, texts and shapes; with `save`, also into a user `.lin`
+/// file. Shapes come from CADaddy's `cadaddy.shx` unless an element names another file.
+pub(super) fn run_define(s: &mut Session, p: &Value) -> Result<Value> {
+    let name =
+        str_param(p, "name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 255).ok_or_else(|| bad("linetype.define", "name required"))?;
+    if RESERVED.contains(&name.to_ascii_lowercase().as_str()) || name.contains([',', '*', ';', '\n']) {
+        return Err(bad("linetype.define", format!("`{name}` can't be a linetype name")));
+    }
+    let lt = Linetype {
+        name: name.to_string(),
+        description: str_param(p, "description").unwrap_or("").trim().chars().take(255).collect(),
+        pattern: elements(p)?,
+    };
+    // The file first (with the shapes' numbers looked up as the drawing will have them), so a
+    // file that can't be written leaves the drawing as it was.
+    if let Some(path) = str_param(p, "save").map(str::trim).filter(|x| !x.is_empty()) {
+        let mut scratch = Drawing { linetypes: Vec::new(), ..(*s.doc()?).clone() };
+        put(&mut scratch, lt.clone(), true, &mut Loaded::default());
+        save_lin(path, scratch.linetypes.first().unwrap_or(&lt))?;
+    }
+    let mut out = Loaded::default();
+    put(s.doc_mut()?, lt, true, &mut out);
+    if bool_or(p, "current", false) {
+        super::run_linetype(s, &json!({ "current": name }))?;
+    }
+    let saved = s
+        .doc()?
+        .linetypes
+        .iter()
+        .find(|l| l.name.eq_ignore_ascii_case(name))
+        .cloned()
+        .ok_or_else(|| bad("linetype.define", "the linetype wasn't added"))?;
+    Ok(
+        json!({ "name": saved.name, "added": !out.added.is_empty(), "elements": saved.pattern.len(), "patternLength": saved.pattern_length(), "warnings": out.warnings }),
+    )
 }

@@ -38,11 +38,14 @@ fn simple_and_text_linetypes_are_read() {
     assert!(!text[1].absolute);
     assert!(text[2].text.is_none());
 
-    // Shapes need SHX files: left out with a note, the dashes kept.
+    // A shape is kept by name and file, at the end of the gap before it; its number comes from
+    // the shape file when the linetype is loaded.
     let shape = &r.items[3].pattern;
     assert_eq!(shape.iter().map(|e| e.length).collect::<Vec<_>>(), [0.25, -0.1, -0.1, 1.0]);
-    assert!(shape.iter().all(|e| e.text.is_none() && e.shape.is_none()));
-    assert!(r.warnings.iter().any(|w| w.contains("MYBOX")), "{:?}", r.warnings);
+    assert_eq!(shape[1].shape_name.as_deref(), Some("MYBOX"));
+    assert_eq!(shape[1].style.as_deref(), Some("myshapes.shx"));
+    assert!((shape[1].scale - 0.1).abs() < 1e-12 && shape[1].shape.is_none());
+    assert!(shape.iter().filter(|e| e.shape_name.is_some()).count() == 1);
 }
 
 #[test]

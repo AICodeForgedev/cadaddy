@@ -20,7 +20,7 @@ pub mod images;
 pub mod light;
 pub mod lightmap;
 mod linetype;
-mod linetype_text;
+pub mod linetype_text;
 pub mod live;
 pub mod materials;
 mod mline;
@@ -50,6 +50,8 @@ pub use dim::{
 };
 pub use fill::triangulate_evenodd;
 pub use hatch::{fill_loops as hatch_fill_loops, pattern_lines as hatch_pattern_lines, pattern_swatch};
+/// A linetype's dashes along a polyline (for previews: the linetype editor).
+pub use linetype::apply as linetype_dashes;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
 pub use solid::solid_mesh;
 pub use tolerance::{gdt_points, tolerance_in};
@@ -1362,7 +1364,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     b.polyline(ctx, rgb, lw, &dash);
                 }
             }
-            // Text embedded in the linetype (shapes need SHX files and are not drawn).
+            // Text and shapes embedded in the linetype.
             if b.opts.text {
                 for sh in linetype_text::texts(ctx.d, pts, lt, ltscale, min) {
                     b.shaped(ctx, rgb, lw, &sh);

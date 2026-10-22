@@ -2749,7 +2749,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         for el in &lt.pattern {
             w.f(49, el.length);
             // 74: 2 = text, 4 = shape, + 1 when the rotation is absolute (DXF Reference, LTYPE).
-            let (kind, shape) = match (&el.text, el.shape) {
+            // A shape loaded from a .lin file by name gets its number from its shape file.
+            let number = el.shape.or_else(|| el.shape_name.as_ref().and_then(|_| cadaddy_render::linetype_text::resolve_shape(d, el)).map(|r| r.0));
+            let (kind, shape) = match (&el.text, number) {
                 (Some(_), _) => (2, 0),
                 (None, Some(n)) => (4, n),
                 (None, None) => (0, 0),

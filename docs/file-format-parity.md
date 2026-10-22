@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (save/reopen differential fuzzing) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Q152: linetype shapes kept and drawn; .lin/.pat written) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADaddy's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -133,7 +133,7 @@ and 2000 (AC1015) files; a file cut before its objects start still can't be open
 | DGN import/export/underlay | yes | no (needs a public spec; owner decision) | 25–40 |
 | WMF, EPS, ACIS SAT, STL, FBX, IGES/STEP (Windows), 3DS | various | no; most are 3D and wait for M11 | 20–40 |
 | SHX fonts (`.shx`, big fonts) | read | **not parsed**: our stroke font or FONTALT stands in, so text metrics differ from AutoCAD | 8–12 |
-| Linetype (`.lin`) and hatch pattern (`.pat`) files | load user files | user files load (#552); linetype shape (SHX) elements are skipped | 1–2 |
+| Linetype (`.lin`) and hatch pattern (`.pat`) files | load and write user files | user files load (#552) and are written by the Linetype and Hatch Pattern Editors (Q152); linetype shape elements draw from CADaddy's own `cadaddy.shx` (built in) or a shape file on the font path, and are kept in DXF and DWG | 0.5–1 |
 | Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | plot style tables in our own JSON format ([plot-styles.md](plot-styles.md)) and kept in the drawing; plotter devices with papers and printable areas in our own JSON format ([plotters.md](plotters.md), #564); binary `.ctb`/`.stb`/`.pc3`/`.pmp` not read (no public spec) | 4–8 |
 | Scripts (`.scr`) | SCRIPT | script text through the CLI, MCP and control channel; no SCRIPT command reading a `.scr` file | 1–2 |
 | Aliases (`.pgp`), CUI(x), workspaces | yes | user alias files and ALIASEDIT (#552); no CUI(x) or workspaces | 4–8 |

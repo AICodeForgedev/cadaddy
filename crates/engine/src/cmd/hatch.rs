@@ -2,7 +2,7 @@
 
 mod patfile;
 pub use patfile::{PatternChoice, pattern_choices};
-pub(super) use patfile::{lines_for, run_patterns};
+pub(super) use patfile::{lines_for, run_define_pattern, run_patterns};
 
 use cadaddy_color::Color;
 use cadaddy_doc::{Drawing, Entity, EntityKind, Gradient, Handle, Hatch, HatchLoop, Space, entity_bounds};

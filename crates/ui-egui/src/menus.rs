@@ -100,6 +100,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("rfilist", "RFI List", &["Window", "RFI List"], None),
     ("levels", "Levels", &["Window", "Levels"], None),
     ("ifcmodel", "IFC Model", &["Window", "IFC Model"], None),
+    ("ltypeeditor", "Linetype Editor...", &["Format", "Linetype Editor..."], None),
+    ("pateditor", "Hatch Pattern Editor...", &["Format", "Hatch Pattern Editor..."], None),
     ("fourd", "4D Schedule", &["Window", "4D Schedule"], None),
     ("elementtags", "Element Tags", &["Window", "Element Tags"], None),
     ("parttree", "Model Tree", &["Window", "Model Tree"], None),
@@ -751,6 +753,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "parttree" => {
             app.ui.dialog = Some(crate::partpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "ltypeeditor" => {
+            app.ui.dialog = Some(crate::lteditor::LINETYPE.into());
+            Ok(Value::Null)
+        }
+        "pateditor" => {
+            app.ui.dialog = Some(crate::lteditor::PATTERN.into());
             Ok(Value::Null)
         }
         // From the menu or the palette: the IFC file from the file dialog, then the palette.

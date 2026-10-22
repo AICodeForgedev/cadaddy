@@ -3011,3 +3011,25 @@
 	Rhai	Rhai
 	Run Rhai Script	Запустити сценарій Rhai
 	Script Editor	Редактор сценаріїв
+	Define Linetype	Визначити тип лінії
+	Define Hatch Pattern	Визначити зразок штрихування
+	Linetype Editor...	Редактор типів ліній...
+	Hatch Pattern Editor...	Редактор зразків штрихування...
+	Linetype Editor	Редактор типів ліній
+	Hatch Pattern Editor	Редактор зразків штрихування
+	Start from	Почати з
+	A linetype in this drawing	Тип лінії з цього креслення
+	A pattern	Зразок
+	Add a dash or a gap	Додайте штрих або проміжок
+	Pattern length {n}	Довжина зразка {n}
+	Dash	Штрих
+	Gap	Проміжок
+	Dot	Точка
+	Add Row	Додати рядок
+	Save to .lin File...	Зберегти у файл .lin...
+	Linetype {name} is in the drawing	Тип лінії {name} додано до креслення
+	Dashes	Штрихи
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Штрихи: > 0 штрих, < 0 проміжок, 0 точка
+	Add Line Family	Додати сімейство ліній
+	Save to .pat File...	Зберегти у файл .pat...
+	Pattern {name} is offered for new hatches	Зразок {name} доступний для нових штрихувань

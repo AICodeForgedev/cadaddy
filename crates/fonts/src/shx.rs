@@ -41,6 +41,8 @@ pub struct ShxFont {
     pub above: f64,
     pub below: f64,
     shapes: HashMap<u32, Vec<u8>>,
+    /// Shape numbers by their names (upper case), as `.lin` files and SHAPE name them.
+    names: HashMap<String, u32>,
     /// Big fonts: lead-byte ranges of the double-byte codes.
     escapes: Vec<(u8, u8)>,
 }
@@ -59,6 +61,13 @@ fn u16_at(b: &[u8], i: usize) -> Option<u16> {
 
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_le_bytes([*b.get(i)?, *b.get(i + 1)?, *b.get(i + 2)?, *b.get(i + 3)?]))
+}
+
+/// A definition's name: the bytes before its zero terminator, upper case.
+fn name_of(def: &[u8]) -> Option<String> {
+    let end = def.iter().position(|b| *b == 0)?;
+    let name = String::from_utf8_lossy(def.get(..end)?).trim().to_ascii_uppercase();
+    (!name.is_empty() && name.len() <= 64).then_some(name)
 }
 
 /// A definition's spec: the bytes after its zero-terminated name.
@@ -96,15 +105,21 @@ impl ShxFont {
         let n = usize::from(u16_at(b, 4)?).min(MAX_SHAPES);
         let mut at = 6 + 4 * n;
         let mut shapes = HashMap::new();
+        let mut names = HashMap::new();
         for k in 0..n {
             let num = u16_at(b, 6 + 4 * k)?;
             let len = usize::from(u16_at(b, 8 + 4 * k)?);
             let def = b.get(at..at.checked_add(len)?)?;
+            if num != 0
+                && let Some(name) = name_of(def)
+            {
+                names.entry(name).or_insert(u32::from(num));
+            }
             shapes.insert(u32::from(num), spec_of(def));
             at += len;
         }
         let (above, below) = shapes.get(&0).map_or((1.0, 0.0), |s| font_info(s));
-        Some(ShxFont { kind: Kind::Shapes, above, below, shapes, escapes: Vec::new() })
+        Some(ShxFont { kind: Kind::Shapes, above, below, shapes, names, escapes: Vec::new() })
     }
 
     /// `count` (u32), font information (u16 length, then name and above, below, …), then each
@@ -123,7 +138,7 @@ impl ShxFont {
             shapes.insert(u32::from(num), spec_of(def));
             at += 4 + len;
         }
-        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, escapes: Vec::new() })
+        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, names: HashMap::new(), escapes: Vec::new() })
     }
 
     /// Index size (u16), shape count (u16), escape range count (u16), the lead-byte ranges
@@ -149,7 +164,29 @@ impl ShxFont {
             }
         }
         let (above, below) = shapes.get(&0).map_or((1.0, 0.0), |s| font_info(s));
-        Some(ShxFont { kind: Kind::Bigfont, above, below, shapes, escapes })
+        Some(ShxFont { kind: Kind::Bigfont, above, below, shapes, names: HashMap::new(), escapes })
+    }
+
+    /// A shape file with no shapes.
+    pub fn empty_shapes() -> ShxFont {
+        ShxFont { kind: Kind::Shapes, above: 1.0, below: 0.0, shapes: HashMap::new(), names: HashMap::new(), escapes: Vec::new() }
+    }
+
+    /// The number of the shape called `name` (any case), in a shape file.
+    pub fn shape_number(&self, name: &str) -> Option<u32> {
+        self.names.get(&name.trim().to_ascii_uppercase()).copied()
+    }
+
+    /// The name of shape `code`, in a shape file.
+    pub fn shape_name(&self, code: u32) -> Option<&str> {
+        self.names.iter().find(|(_, n)| **n == code).map(|(k, _)| k.as_str())
+    }
+
+    /// Every named shape, by number.
+    pub fn shape_names(&self) -> Vec<(u32, String)> {
+        let mut v: Vec<(u32, String)> = self.names.iter().map(|(k, n)| (*n, k.clone())).collect();
+        v.sort();
+        v
     }
 
     /// Whether the font has a shape for `code`.
@@ -542,6 +579,10 @@ pub fn find(name: &str) -> Option<Arc<ShxFont>> {
     let n = name.trim();
     if n.is_empty() || !is_shx_name(n) {
         return None;
+    }
+    // CADaddy's own shape file is built in, wherever a drawing says it is.
+    if crate::ltshapes::is_builtin(n) {
+        return Some(crate::ltshapes::builtin());
     }
     let key = n.to_ascii_lowercase();
     if let Ok(c) = CACHE.lock()

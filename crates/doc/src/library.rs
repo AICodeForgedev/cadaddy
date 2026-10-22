@@ -33,26 +33,30 @@ pub fn standard_linetypes() -> Vec<Linetype> {
         s("HIDDENX2", "Hidden (2x) ____ ____ ____", &[0.5, -0.25]),
         s("PHANTOM", "Phantom ______  __  __  ______", &[1.25, -0.25, 0.25, -0.25, 0.25, -0.25]),
         s("PHANTOM2", "Phantom (.5x) ___ _ _ ___", &[0.625, -0.125, 0.125, -0.125, 0.125, -0.125]),
-        Linetype {
-            name: "FENCELINE1".into(),
-            description: "Fenceline circle ----0-----0----".into(),
-            pattern: vec![
-                DashElement::dash(0.25),
-                // The text goes where its element ends: centred between the two gaps.
-                DashElement {
-                    text: Some("o".into()),
-                    style: Some("Standard".into()),
-                    scale: 0.1,
-                    offset: cadaddy_geom::Vec2::new(-0.035, -0.035),
-                    ..DashElement::dash(-0.1)
-                },
-                DashElement::dash(-0.1),
-                DashElement::dash(0.5),
-            ],
-        },
+        // Linetypes with shapes draw them from CADaddy's own shape file (`cadaddy.shx`, built in):
+        // each shape is centred where its element ends.
+        shaped("FENCELINE1", "Fenceline circle ----0-----0----", &[0.25, -0.1], "CIRC", 2, 0.1, &[-0.1, 0.5]),
+        shaped("FENCELINE2", "Fenceline square ----[]-----[]----", &[0.25, -0.1], "BOX", 1, 0.1, &[-0.1, 0.5]),
+        shaped("TRACKS", "Tracks -|-|-|-|-|-|-|-|-|-|-", &[0.15], "TRACK", 3, 0.25, &[0.15]),
+        shaped("BATTING", "Batting SSSSSSSSSSSSSSSSSSSSSSSSSSS", &[0.0001, -0.1], "BAT", 5, 0.2, &[-0.1]),
         s("ZIGZAG", "Zig zag /\\/\\/\\/\\/", &[0.0001, -0.2, 0.0001, -0.2]),
     ]
 }
+
+/// A linetype of dashes, one shape from CADaddy's shape file (number `n` called `shape`, `scale`
+/// wide) where the `before` elements end, then the `after` elements.
+fn shaped(name: &str, description: &str, before: &[f64], shape: &str, n: u16, scale: f64, after: &[f64]) -> Linetype {
+    let mut pattern: Vec<DashElement> = before.iter().map(|d| DashElement::dash(*d)).collect();
+    if let Some(last) = pattern.last_mut() {
+        *last =
+            DashElement { shape: Some(n), shape_name: Some(shape.into()), style: Some(SHAPE_FILE.into()), scale, ..DashElement::dash(last.length) };
+    }
+    pattern.extend(after.iter().map(|d| DashElement::dash(*d)));
+    Linetype { name: name.into(), description: description.into(), pattern }
+}
+
+/// CADaddy's built-in shape file (`cadaddy_fonts::ltshapes`), named in linetype shape elements.
+pub const SHAPE_FILE: &str = "cadaddy.shx";
 
 /// The standard linetypes as loaded into `d`. In a metric drawing (`MEASUREMENT` 1) every length
 /// (dashes, gaps, text and shape size, offsets) is multiplied by 25.4, so the patterns measure

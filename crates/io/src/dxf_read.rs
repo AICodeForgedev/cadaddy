@@ -1712,6 +1712,24 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     }
     // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents).
     d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()));
+    // Linetype shapes are numbers in DXF: their names come from the shape file when it is found
+    // (so a linetype can be written to a .lin file again).
+    let mut names = Vec::new();
+    for (i, lt) in d.linetypes.iter().enumerate() {
+        for (j, el) in lt.pattern.iter().enumerate() {
+            if el.shape.is_some()
+                && el.shape_name.is_none()
+                && let Some((_, name)) = cadaddy_render::linetype_text::resolve_shape(d, el).filter(|r| !r.1.is_empty())
+            {
+                names.push((i, j, name));
+            }
+        }
+    }
+    for (i, j, name) in names {
+        if let Some(el) = d.linetypes.get_mut(i).and_then(|lt| lt.pattern.get_mut(j)) {
+            el.shape_name = Some(name);
+        }
+    }
 }
 
 /// Most tiles a viewport configuration keeps.

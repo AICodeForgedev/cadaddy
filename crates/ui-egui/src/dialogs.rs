@@ -39,6 +39,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::clashpalette::DIALOG => crate::clashpalette::dialog(app, ctx, &mut open),
         crate::ifcpalette::DIALOG => crate::ifcpalette::dialog(app, ctx, &mut open),
         crate::partpalette::DIALOG => crate::partpalette::dialog(app, ctx, &mut open),
+        crate::lteditor::LINETYPE => crate::lteditor::linetype_dialog(app, ctx, &mut open),
+        crate::lteditor::PATTERN => crate::lteditor::pattern_dialog(app, ctx, &mut open),
         crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
         crate::projrulespalette::DIALOG => crate::projrulespalette::dialog(app, ctx, &mut open),
         crate::agentpalette::DIALOG => crate::agentpalette::dialog(app, ctx, &mut open),
