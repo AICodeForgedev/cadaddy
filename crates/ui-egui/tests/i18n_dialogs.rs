@@ -88,6 +88,8 @@ fn dialog_ids() -> Vec<&'static str> {
         .collect();
     ids.extend(["linetype", "ptype", "textstyle", "tablestyle", "dimstyle", "mleaderstyle", "pagesetup", "csettings", "plot", "battman"]);
     ids.extend(["materials", "laywalk", "exchangeloss", "hyperlink", "rooms"]);
+    // Matched with a guard (`commands:<id>` opens a help page), so not found above.
+    ids.push("commands");
     ids.retain(|id| !["spacemouse", "language"].contains(id));
     ids.sort_unstable();
     ids.dedup();
