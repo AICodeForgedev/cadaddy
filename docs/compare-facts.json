@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 820,
-    "count": 820,
+    "callableAsJson": 832,
+    "count": 832,
     "ids": [
       "-attedit",
       "-block",
@@ -100,6 +100,8 @@
       "bim.set_spec",
       "bim.set_type",
       "bim.source",
+      "bim.spec_accept",
+      "bim.spec_import",
       "bim.types",
       "bim.unset_spec",
       "bim.validate",
@@ -170,11 +172,15 @@
       "coordination.bcf",
       "coordination.clashlist",
       "coordination.clashstatus",
+      "coordination.colors",
+      "coordination.isolate",
       "coordination.measure3d",
+      "coordination.mode",
       "coordination.sectionbox",
       "coordination.trades",
       "coordination.tree",
       "coordination.viewpoints",
+      "coordination.views",
       "copy",
       "copybase",
       "copyclip",
@@ -336,6 +342,10 @@
       "hyperlink.open",
       "hyperlink.pick",
       "id",
+      "ifc.attach",
+      "ifc.elements",
+      "ifc.refs",
+      "ifc.reload",
       "image",
       "imageadjust",
       "imageattach",
@@ -536,6 +546,8 @@
       "presspull",
       "preview",
       "printers",
+      "printrev.compare",
+      "printrev.log",
       "printset.classify",
       "printset.dashboard",
       "printset.open",
@@ -824,7 +836,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 464,
+    "inMenus": 465,
     "typed": 496
   },
   "features": {
@@ -907,8 +919,9 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 35,
+    "count": 36,
     "tools": [
+      "bim_spec_import",
       "bim_types",
       "cancel",
       "close_all",
