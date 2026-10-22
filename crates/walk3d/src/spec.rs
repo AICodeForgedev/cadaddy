@@ -56,6 +56,10 @@ pub struct BuildingSpec {
     /// assembly and scope with reasons, and the markup settings.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub estimate: serde_json::Value,
+    /// The whole-job estimate (`wholejob.*`): every trade's quantities and scope, price packs,
+    /// markups, general conditions and sub bids.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub wholejob: serde_json::Value,
     /// Field progress (`progress.*`): the plan's driver quantities, installed-work marks and
     /// timecard hours. Production rates are never kept here: they go to the company's private
     /// field observations.
@@ -1876,6 +1880,7 @@ impl BuildingSpec {
             sheets: Vec::new(),
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
+            wholejob: serde_json::Value::Null,
             progress: serde_json::Value::Null,
             layers,
             wall_types,

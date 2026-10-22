@@ -62,6 +62,7 @@ mod setbylayer;
 pub mod spec_import;
 pub mod tags;
 mod vpsync;
+pub mod wholejob;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
@@ -310,6 +311,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(schedules::specs());
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
+        v.extend(wholejob::specs());
         v.extend(levels::specs());
         v.extend(estimate::specs());
         v.extend(progress::specs());
