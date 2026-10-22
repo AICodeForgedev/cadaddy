@@ -2835,3 +2835,25 @@
 	Check Electrical Gear	Перевірити електричне обладнання
 	Submittal Review of Gear	Перевірка подання обладнання
 	Accept Gear as Submitted	Прийняти обладнання як подано
+	New Part	Нова деталь
+	Part Parameter	Параметр деталі
+	Part Sketch	Ескіз деталі
+	Pad	Видавлювання
+	Pocket	Виріз
+	Revolve Feature	Елемент обертання
+	Fillet Feature	Елемент заокруглення
+	Chamfer Feature	Елемент фаски
+	Edit Feature	Змінити елемент
+	Reorder Feature	Перемістити елемент
+	Delete Feature	Видалити елемент
+	Rebuild Part	Перебудувати деталь
+	Model Tree	Дерево моделі
+	List Parts	Список деталей
+	No part yet: New Part starts one; sketches and features come from the part commands.	Деталі ще немає: «Нова деталь» створює її; ескізи й елементи додають команди деталі.
+	Volume {v}	Об'єм {v}
+	Parameters	Параметри
+	name	ім'я
+	expression	вираз
+	Features	Елементи
+	Suppress	Вимкнути
+	Double-click to rename	Двічі клацніть, щоб перейменувати

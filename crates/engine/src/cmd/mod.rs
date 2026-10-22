@@ -91,6 +91,7 @@ mod mtext_opts;
 mod overkill;
 pub mod overrides;
 pub mod p2meval;
+pub mod part;
 pub mod pdfplans;
 mod perceive;
 mod pline_opts;
@@ -307,6 +308,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(ifcref::specs());
         v.extend(ifcmodel::specs());
         v.extend(bcf::specs());
+        v.extend(part::specs());
         v.extend(cobie::specs());
         v.extend(printset::specs());
         v.extend(validate::specs());

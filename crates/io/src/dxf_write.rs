@@ -2585,6 +2585,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::bcf_chunks(d) {
         xrecords.push((dxf_ext::BCF_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::parts_chunks(d) {
+        xrecords.push((dxf_ext::PARTS_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::overrides_chunks(d) {
         xrecords.push((dxf_ext::OVERRIDES_KEY, w.h(), chunks));
     }

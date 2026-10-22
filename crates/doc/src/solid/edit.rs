@@ -22,6 +22,57 @@ pub fn half_space(p: Vec3, n: Vec3, size: f64) -> Solid3d {
     Solid3d { shape: SolidShape::Box { length: 2.0 * size, width: 2.0 * size, height: 2.0 * size }, xf: placement(o, x, y, n) }
 }
 
+/// The whole straight edge along the feature segment `a`–`b` and its two faces, when both are
+/// flat and not coplanar.
+fn edge_along(polys: &[Poly], segs: &[[Vec3; 2]], a: Vec3, b: Vec3, eps: f64) -> Option<(Edge, [u64; 2])> {
+    let u = (b - a).normalized();
+    if u.len() < 0.5 {
+        return None;
+    }
+    let on_line = |v: Vec3| ((v - a) - u * (v - a).dot(u)).len() <= eps;
+    // The whole edge: every feature segment along this line that touches it.
+    let (mut t0, mut t1) = (0.0f64, (b - a).dot(u));
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for [c, e] in segs {
+            if on_line(*c) && on_line(*e) {
+                let (s0, s1) = ((*c - a).dot(u), (*e - a).dot(u));
+                let (s0, s1) = (s0.min(s1), s0.max(s1));
+                if s0 <= t1 + eps && s1 >= t0 - eps && (s0 < t0 - eps || s1 > t1 + eps) {
+                    t0 = t0.min(s0);
+                    t1 = t1.max(s1);
+                    grew = true;
+                }
+            }
+        }
+    }
+    // The two faces along it, both flat.
+    let mut faces: Vec<(u64, Vec3, Vec3)> = Vec::new();
+    for poly in polys.iter() {
+        let n = poly.pts.len();
+        let touches = (0..n).any(|i| {
+            let (c, e) = (poly.pts[i], poly.pts[(i + 1) % n]);
+            on_line(c) && on_line(e) && (c - e).len() > eps
+        });
+        if touches && !faces.iter().any(|f| f.0 == poly.tag) {
+            let centre = poly.pts.iter().fold(Vec3::ZERO, |s, v| s + *v) * (1.0 / n as f64);
+            faces.push((poly.tag, poly.plane.n, centre));
+        }
+    }
+    let [(t1g, n1, c1), (t2g, n2, c2)] = faces[..] else { return None };
+    let flat = |t: u64, nrm: Vec3| polys.iter().filter(|q| q.tag == t).all(|q| q.plane.n.dot(nrm) > 1.0 - 1e-9);
+    if !flat(t1g, n1) || !flat(t2g, n2) || n1.dot(n2) > 1.0 - 1e-9 {
+        return None;
+    }
+    let e = a + u * t0;
+    let into = |nrm: Vec3, c: Vec3| {
+        let w = nrm.cross(u).normalized();
+        if w.dot(c - e) < 0.0 { w * -1.0 } else { w }
+    };
+    Some((Edge { a: e, b: a + u * t1, n1, n2, w1: into(n1, c1), w2: into(n2, c2) }, [t1g, t2g]))
+}
+
 /// A straight edge between two flat faces of a solid.
 #[derive(Clone, Copy, Debug)]
 pub struct Edge {
@@ -246,54 +297,32 @@ impl Solid3d {
             if dist(*a, *b) > reach {
                 break;
             }
-            let u = (*b - *a).normalized();
-            if u.len() < 0.5 {
-                continue;
+            if let Some((e, _)) = edge_along(&polys, &segs, *a, *b, eps) {
+                return Some(e);
             }
-            let on_line = |v: Vec3| ((v - *a) - u * (v - *a).dot(u)).len() <= eps;
-            // The whole edge: every feature segment along this line that touches it.
-            let (mut t0, mut t1) = (0.0f64, (*b - *a).dot(u));
-            let mut grew = true;
-            while grew {
-                grew = false;
-                for [c, e] in &segs {
-                    if on_line(*c) && on_line(*e) {
-                        let (s0, s1) = ((*c - *a).dot(u), (*e - *a).dot(u));
-                        let (s0, s1) = (s0.min(s1), s0.max(s1));
-                        if s0 <= t1 + eps && s1 >= t0 - eps && (s0 < t0 - eps || s1 > t1 + eps) {
-                            t0 = t0.min(s0);
-                            t1 = t1.max(s1);
-                            grew = true;
-                        }
-                    }
-                }
-            }
-            // The two faces along it, both flat.
-            let mut faces: Vec<(u64, Vec3, Vec3)> = Vec::new();
-            for poly in polys.iter() {
-                let n = poly.pts.len();
-                let touches = (0..n).any(|i| {
-                    let (c, e) = (poly.pts[i], poly.pts[(i + 1) % n]);
-                    on_line(c) && on_line(e) && (c - e).len() > eps
-                });
-                if touches && !faces.iter().any(|f| f.0 == poly.tag) {
-                    let centre = poly.pts.iter().fold(Vec3::ZERO, |s, v| s + *v) * (1.0 / n as f64);
-                    faces.push((poly.tag, poly.plane.n, centre));
-                }
-            }
-            let [(t1g, n1, c1), (t2g, n2, c2)] = faces[..] else { continue };
-            let flat = |t: u64, nrm: Vec3| polys.iter().filter(|q| q.tag == t).all(|q| q.plane.n.dot(nrm) > 1.0 - 1e-9);
-            if !flat(t1g, n1) || !flat(t2g, n2) || n1.dot(n2) > 1.0 - 1e-9 {
-                continue;
-            }
-            let e = *a + u * t0;
-            let into = |nrm: Vec3, c: Vec3| {
-                let w = nrm.cross(u).normalized();
-                if w.dot(c - e) < 0.0 { w * -1.0 } else { w }
-            };
-            return Some(Edge { a: e, b: *a + u * t1, n1, n2, w1: into(n1, c1), w2: into(n2, c2) });
         }
         None
+    }
+
+    /// The straight edge between the two flat faces tagged `faces` (either order), as
+    /// [`Solid3d::edge_near`] would find it: how a feature names an edge so that it survives a
+    /// rebuild with other sizes.
+    pub fn edge_between(&self, faces: [u64; 2], tol: f64) -> Option<Edge> {
+        let polys = self.polys(tol);
+        let segs = super::feature_edges(&polys);
+        let scale = polys.iter().flat_map(|q| q.pts.iter()).fold(1.0f64, |m, v| m.max(v.x.abs()).max(v.y.abs()).max(v.z.abs()));
+        let eps = 1e-7 * scale;
+        let want = |f: [u64; 2]| (f[0] == faces[0] && f[1] == faces[1]) || (f[0] == faces[1] && f[1] == faces[0]);
+        segs.iter().take(100_000).find_map(|[a, b]| edge_along(&polys, &segs, *a, *b, eps).filter(|(_, f)| want(*f)).map(|(e, _)| e))
+    }
+
+    /// The edge nearest `p` (as [`Solid3d::edge_near`]) and the tags of its two faces.
+    pub fn edge_near_tagged(&self, p: Vec3, from_above: bool, tol: f64) -> Option<(Edge, [u64; 2])> {
+        let e = self.edge_near(p, from_above, tol)?;
+        let polys = self.polys(tol);
+        let segs = super::feature_edges(&polys);
+        let scale = polys.iter().flat_map(|q| q.pts.iter()).fold(1.0f64, |m, v| m.max(v.x.abs()).max(v.y.abs()).max(v.z.abs()));
+        edge_along(&polys, &segs, e.a, e.b, 1e-7 * scale)
     }
 
     /// The solid with an edge chamfered: `d` back along both faces.

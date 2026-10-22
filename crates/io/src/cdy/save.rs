@@ -107,6 +107,9 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     if let Some(t) = &d.bcf {
         out.push(Part::Text(*b"BCFI", t));
     }
+    if let Some(t) = &d.parts {
+        out.push(Part::Text(*b"PRTS", t));
+    }
     if let Some(t) = &d.overrides {
         out.push(Part::Text(*b"OVRD", t));
     }

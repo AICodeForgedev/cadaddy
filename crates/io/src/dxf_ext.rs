@@ -88,6 +88,8 @@ pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
 /// Named-object-dictionary key of the XRECORD holding the BCF issues (JSON).
 pub(crate) const BCF_KEY: &str = "CADADDY_BCF";
+/// Named-object-dictionary key of the XRECORD holding the parametric parts (JSON).
+pub(crate) const PARTS_KEY: &str = "CADADDY_PARTS";
 /// Named-object-dictionary key of the XRECORD holding the overrides of generated elements (JSON).
 pub(crate) const OVERRIDES_KEY: &str = "CADADDY_OVERRIDES";
 /// Named-object-dictionary key of the XRECORD holding the agent state (notes, review decisions,
@@ -1013,6 +1015,11 @@ pub(crate) fn agent_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
 /// JSON chunks for the BCF issues XRECORD, or `None` without issues.
 pub(crate) fn bcf_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
     d.bcf.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
+}
+
+/// JSON chunks for the parametric parts XRECORD, or `None` without parts.
+pub(crate) fn parts_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.parts.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
 }
 
 /// JSON chunks for the overrides XRECORD, or `None` without overrides.

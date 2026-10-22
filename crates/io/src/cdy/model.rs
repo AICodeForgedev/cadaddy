@@ -12,6 +12,7 @@
 //! | BSPC | the building spec | JSON text |
 //! | TOUR | the camera tours | JSON text |
 //! | BCFI | the BCF issues | JSON text |
+//! | PRTS | the parametric parts (parameters, feature trees) | JSON text |
 //! | OVRD | the overrides of generated elements | JSON text |
 //! | AGNT | the agent state (notes, review decisions, change log) | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
@@ -37,8 +38,8 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 14] =
-    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 15] =
+    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"PRTS", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -238,6 +239,7 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "buildingSpec": d.building_spec.is_some(),
         "tours": d.tours.is_some(),
         "bcf": d.bcf.is_some(),
+        "parts": d.parts.is_some(),
         "embedded": d.embedded.keys().collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
@@ -450,10 +452,11 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 continue;
             }
-            b"BSPC" | b"TOUR" | b"BCFI" => {
+            b"BSPC" | b"TOUR" | b"BCFI" | b"PRTS" => {
                 let what = match &c.tag {
                     b"BSPC" => "building spec",
                     b"TOUR" => "camera tours",
+                    b"PRTS" => "parametric parts",
                     _ => "BCF issues",
                 };
                 let Ok(text) = String::from_utf8(c.data) else {
@@ -463,6 +466,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 match &c.tag {
                     b"BSPC" => d.building_spec = Some(text),
                     b"TOUR" => d.tours = Some(text),
+                    b"PRTS" => d.parts = Some(text),
                     _ => d.bcf = Some(text),
                 }
                 continue;

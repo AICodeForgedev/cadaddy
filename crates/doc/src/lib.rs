@@ -169,6 +169,10 @@ pub struct Drawing {
     /// model, each with its viewpoint, selection, comments and snapshot. Kept in the named-object
     /// dictionary (`CADADDY_BCF`).
     pub bcf: Option<String>,
+    /// Parametric parts (`cmd::part`'s parts as JSON text, `part.*`): each part's parameters and
+    /// feature tree (sketches, pads, pockets, revolves, fillets, chamfers); its evaluated solid is
+    /// an ordinary 3D solid in the drawing. Kept in the named-object dictionary (`CADADDY_PARTS`).
+    pub parts: Option<String>,
     /// Overrides of generated elements (`overrides::Overrides` as JSON text, `override.*`): the
     /// edits a person, an agent or an import made to what a build generated, put back after every
     /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
@@ -287,6 +291,7 @@ impl Drawing {
             building_spec: None,
             tours: None,
             bcf: None,
+            parts: None,
             overrides: None,
             agent: None,
             embedded: BTreeMap::new(),

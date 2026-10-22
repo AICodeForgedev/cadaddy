@@ -2422,6 +2422,9 @@ impl Objects {
         if let Some(b) = self.xrecord_text(crate::dxf_ext::BCF_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.bcf = Some(b);
         }
+        if let Some(p) = self.xrecord_text(crate::dxf_ext::PARTS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
+            d.parts = Some(p);
+        }
         if let Some(o) = self.xrecord_text(crate::dxf_ext::OVERRIDES_KEY).and_then(|t| crate::dxf_ext::parse_overrides(&t)) {
             d.overrides = Some(o);
         }

@@ -112,6 +112,7 @@ pub mod opening;
 pub mod options;
 pub mod palettes;
 pub mod parametric;
+pub mod partpalette;
 pub mod pdfdlg;
 pub mod planstomodel;
 pub mod plotstampdlg;
