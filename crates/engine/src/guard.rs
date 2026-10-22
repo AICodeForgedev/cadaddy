@@ -99,6 +99,15 @@ impl Interactive for Guarded {
             None
         })
     }
+    fn labels(&self, s: &Session, cursor: Vec2) -> Vec<crate::prompt::LiveLabel> {
+        if self.broken.get().is_some() {
+            return Vec::new();
+        }
+        catch_unwind(AssertUnwindSafe(|| self.inner.labels(s, cursor))).unwrap_or_else(|_| {
+            self.broken.set(Some("panic in preview"));
+            Vec::new()
+        })
+    }
     fn editing_mtext(&self) -> Option<cadaddy_doc::MText> {
         if self.broken.get().is_some() {
             return None;

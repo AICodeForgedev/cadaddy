@@ -1,13 +1,15 @@
 //! MEASUREGEOM at the command line: pick what to measure (Distance by default), then the points or
 //! the object it needs; each result is echoed and the option prompt comes back, as in AutoCAD.
 //! Quick shows the distances to the nearest geometry left, right, below and above the cursor (and
-//! the area of the closed object around it) as the cursor moves; a click echoes them.
+//! the area of the closed object around it) as the cursor moves; a click echoes them. Distance,
+//! Angle and Area label their running result on the drawing while you pick (MEASURELABELS).
 
 use cadaddy_doc::{Drawing, EntityKind, Space};
 use cadaddy_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
-use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+use super::inquiry::live;
+use crate::{Accept, Input, Interactive, LiveLabel, Prompt, Result, Session, Step};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Mode {
@@ -24,12 +26,20 @@ enum Mode {
 pub(super) struct MeasureM {
     mode: Mode,
     points: Vec<Vec2>,
+    /// One measurement and done (the Angle tool: MEASUREGEOM's Angle on its own).
+    once: bool,
 }
 
 const OPTIONS: &[&str] = &["Distance", "Radius", "Angle", "ARea", "Quick", "eXit"];
 
 impl MeasureM {
-    fn show(&mut self, s: &mut Session, cmd: &str, p: Value) -> Result<Step> {
+    /// The Angle tool: the angle at a vertex between two points, then done.
+    pub(super) fn angle() -> Self {
+        Self { mode: Mode::Angle, once: true, ..Default::default() }
+    }
+    /// Run the measurement, echo its result and keep its labels (MEASURELABELS 2); back to the
+    /// option prompt.
+    fn show(&mut self, s: &mut Session, cmd: &str, p: Value, labels: &[LiveLabel]) -> Result<Step> {
         let r = s.execute(cmd, &p);
         self.mode = Mode::Choose;
         self.points.clear();
@@ -38,7 +48,8 @@ impl MeasureM {
             Some(m) => m.lines().for_each(|l| s.echo(l.to_string())),
             None => s.echo(r.to_string()),
         }
-        Ok(Step::Continue)
+        live::keep(s, labels);
+        Ok(if self.once { Step::Done } else { Step::Continue })
     }
     fn pts(&self) -> Vec<[f64; 2]> {
         self.points.iter().map(|p| [p.x, p.y]).collect()
@@ -110,27 +121,29 @@ impl Interactive for MeasureM {
         }
         match (self.mode, i) {
             (Mode::Radius, Input::Pick(hs)) => match hs.first() {
-                Some(h) => self.show(s, "radius.measure", json!({ "handle": h.hex() })),
+                Some(h) => self.show(s, "radius.measure", json!({ "handle": h.hex() }), &[]),
                 None => Ok(Step::Continue),
             },
             (_, Input::Point(p)) => {
                 self.points.push(p);
-                match (self.mode, self.points.len()) {
-                    (Mode::Distance, 2) => {
-                        let pts = self.pts();
-                        self.show(s, "dist", json!({ "p1": pts[0], "p2": pts[1] }))
+                match (self.mode, self.points.as_slice()) {
+                    (Mode::Distance, &[a, b]) => {
+                        let labels = [live::distance(s, a, b, 1.0)];
+                        self.show(s, "dist", json!({ "p1": [a.x, a.y], "p2": [b.x, b.y] }), &labels)
                     }
-                    (Mode::Angle, 3) => {
-                        let pts = self.pts();
-                        self.show(s, "angle.measure", json!({ "vertex": pts[0], "p1": pts[1], "p2": pts[2] }))
+                    (Mode::Angle, &[v, a, b]) => {
+                        let labels = live::angle(s, v, a, b);
+                        self.show(s, "angle.measure", json!({ "vertex": [v.x, v.y], "p1": [a.x, a.y], "p2": [b.x, b.y] }), &labels)
                     }
                     _ => Ok(Step::Continue),
                 }
             }
             (Mode::Area, Input::Enter) if self.points.len() >= 3 => {
+                let labels = live::area(s, &self.points, &[], None);
                 let pts = self.pts();
-                self.show(s, "area", json!({ "points": pts }))
+                self.show(s, "area", json!({ "points": pts }), &labels)
             }
+            (_, Input::Enter) if self.once => Ok(Step::Done),
             (_, Input::Enter) => {
                 self.mode = Mode::Choose;
                 self.points.clear();
@@ -145,11 +158,36 @@ impl Interactive for MeasureM {
     }
 
     fn preview(&self, s: &Session, cursor: Vec2) -> Vec<EntityKind> {
-        if self.mode != Mode::Quick {
-            return Vec::new();
+        let line = super::helpers::line;
+        match (self.mode, self.points.as_slice()) {
+            (Mode::Quick, _) => {
+                let (Ok(st), Some(q)) = (s.state(), quick_at(s, cursor)) else { return Vec::new() };
+                q.preview(st.view().height / 60.0)
+            }
+            (Mode::Distance | Mode::Angle, &[a]) => vec![line(a, cursor)],
+            (Mode::Angle, &[v, a]) => vec![line(v, a), line(v, cursor)],
+            (Mode::Area, [_, ..]) => {
+                let vertices = self.points.iter().chain([&cursor]).map(|p| cadaddy_geom::PolyVertex::new(*p)).collect();
+                vec![super::helpers::lwpoly(vertices, true)]
+            }
+            _ => Vec::new(),
         }
-        let (Ok(st), Some(q)) = (s.state(), quick_at(s, cursor)) else { return Vec::new() };
-        q.preview(s, st.view().height / 60.0)
+    }
+
+    fn labels(&self, s: &Session, cursor: Vec2) -> Vec<LiveLabel> {
+        match (self.mode, self.points.as_slice()) {
+            (Mode::Quick, _) => {
+                let (Ok(st), Some(q)) = (s.state(), quick_at(s, cursor)) else { return Vec::new() };
+                q.labels(s, st.view().height / 60.0)
+            }
+            (Mode::Distance, &[a]) => vec![live::distance(s, a, cursor, 1.0)],
+            (Mode::Angle, &[v, a]) => live::angle(s, v, a, cursor),
+            (Mode::Area, [_, ..]) => {
+                let pts: Vec<Vec2> = self.points.iter().copied().chain([cursor]).collect();
+                live::area(s, &pts, &[], None)
+            }
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -287,38 +325,28 @@ impl Quick {
         }
         t
     }
-    /// Dimension-like lines to each hit with the distances written beside them, `h` tall.
-    fn preview(&self, s: &Session, h: f64) -> Vec<EntityKind> {
+    /// Dimension-like lines to each hit, with ticks `h` long across their ends.
+    fn preview(&self, h: f64) -> Vec<EntityKind> {
         let mut v = Vec::new();
-        let label = |at: Vec2, text: String| {
-            EntityKind::Text(cadaddy_doc::Text {
-                insert: super::helpers::v3(at),
-                align_pt: None,
-                height: h,
-                value: text,
-                rotation: 0.0,
-                width_factor: 1.0,
-                oblique: 0.0,
-                style: "Standard".into(),
-                halign: Default::default(),
-                valign: Default::default(),
-            })
-        };
-        for (hit, off) in [
-            (self.left, Vec2::new(0.0, h * 0.3)),
-            (self.right, Vec2::new(0.0, h * 0.3)),
-            (self.down, Vec2::new(h * 0.3, 0.0)),
-            (self.up, Vec2::new(h * 0.3, 0.0)),
-        ] {
+        for (hit, across) in [(self.left, Vec2::Y), (self.right, Vec2::Y), (self.down, Vec2::X), (self.up, Vec2::X)] {
             let Some(p) = hit else { continue };
             v.push(super::helpers::line(self.at, p));
             // A tick across the end, as a dimension's.
-            let across = Vec2::new(off.y, off.x).normalized() * h * 0.5;
-            v.push(super::helpers::line(p - across, p + across));
-            v.push(label((self.at + p) * 0.5 + off, super::inquiry::fmt_d(s, self.at.dist(p))));
+            v.push(super::helpers::line(p - across * h * 0.5, p + across * h * 0.5));
         }
-        if let Some((a, _)) = self.area {
-            v.push(label(self.at + Vec2::new(h, -2.0 * h), format!("Area = {}", super::inquiry::fmt_area(s, a))));
+        v
+    }
+    /// The distance to each hit at the middle of its line, and the area and perimeter around the
+    /// point below it (`h`: a text height in drawing units, to keep the two apart).
+    fn labels(&self, s: &Session, h: f64) -> Vec<LiveLabel> {
+        let mut v: Vec<LiveLabel> = [self.left, self.right, self.down, self.up]
+            .into_iter()
+            .flatten()
+            .map(|p| LiveLabel::new((self.at + p) * 0.5).line("", super::inquiry::fmt_d(s, self.at.dist(p))))
+            .collect();
+        if let Some((a, per)) = self.area {
+            let below = self.at + Vec2::new(h * 4.0, -h * 3.0);
+            v.push(LiveLabel::new(below).line("Area", super::inquiry::fmt_area(s, a)).line("Perimeter", super::inquiry::fmt_d(s, per)));
         }
         v
     }

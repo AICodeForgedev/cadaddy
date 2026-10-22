@@ -2022,6 +2022,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_list(&painter, &xf, &list, bg, false);
         }
     }
+    // Live measurement labels (DIST, AREA, MEASUREGEOM): the same size on screen at any zoom.
+    if let (Some(c), true) = (app.canvas.cursor, app.session.prompting()) {
+        draw_live_labels(&painter, &xf, rect, hover_pos, &app.session.live_labels(c));
+    }
     // Pending selection window.
     if lasso::dragging(app) {
         if let Some(hp) = hover_pos {
@@ -2391,6 +2395,48 @@ fn options_menu(app: &mut CadApp, p: &egui::Painter, r: Rect, hover: Pos2) {
         p.galley(pos2(row.left() + 20.0, row.center().y - g.size().y / 2.0), g, t.text);
         app.cmd.option_rows.push((row, k.clone()));
     }
+}
+
+/// Live measurement labels: tiles like the Dynamic Input tooltip with an accent edge, under the
+/// point each labels (beside the line it measures), clear of the cursor and the tooltip above it,
+/// and kept inside the drawing area `area`; captions in the interface language.
+fn draw_live_labels(p: &egui::Painter, xf: &Xf, area: Rect, cursor: Option<Pos2>, labels: &[cadaddy_engine::LiveLabel]) {
+    let t = Tokens::get();
+    for l in labels.iter().take(32) {
+        let c = xf.w2s(l.at);
+        if !(c.x.is_finite() && c.y.is_finite()) {
+            continue;
+        }
+        let galley = p.layout_no_wrap(live_label_text(l), crate::theme::small(), t.text);
+        let r = keep_inside(live_label_rect(c, galley.size() + vec2(10.0, 6.0), cursor), area);
+        p.rect_filled(r, 3.0, t.cmd_bg.to_opaque());
+        p.rect_stroke(r, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        p.galley(r.min + vec2(5.0, 3.0), galley, t.text);
+    }
+}
+
+/// A live label's lines, "Caption = value" with the caption translated.
+fn live_label_text(l: &cadaddy_engine::LiveLabel) -> String {
+    let line = |(c, v): &(&str, String)| if c.is_empty() { v.clone() } else { format!("{} = {v}", crate::i18n::t(c)) };
+    l.lines.iter().map(line).collect::<Vec<_>>().join("\n")
+}
+
+/// Where a live label of `size` for the screen point `at` goes: centred just under it, or under the
+/// cursor when that would cover it.
+fn live_label_rect(at: Pos2, size: egui::Vec2, cursor: Option<Pos2>) -> Rect {
+    let r = Rect::from_min_size(pos2(at.x - size.x / 2.0, at.y + 8.0), size);
+    match cursor {
+        Some(c) if r.expand(16.0).contains(c) => r.translate(vec2(0.0, c.y + 24.0 - r.top())),
+        _ => r,
+    }
+}
+
+/// `r` moved the least way to lie inside `area` (left and top win when it is larger).
+fn keep_inside(r: Rect, area: Rect) -> Rect {
+    let dx = (area.right() - r.right()).min(0.0);
+    let dy = (area.bottom() - r.bottom()).min(0.0);
+    let r = r.translate(vec2(dx, dy));
+    r.translate(vec2((area.left() - r.left()).max(0.0), (area.top() - r.top()).max(0.0)))
 }
 
 /// The tooltip background, matching the command line bar; returns its rectangle.
@@ -2891,6 +2937,27 @@ pub(crate) mod tests {
     /// Previews the session rebuilds with the current properties (the rubber band, copies of
     /// objects) stay opaque even when CLAYER is transparent: they were opaque before transparency
     /// was drawn, and CLAYER's transparency isn't the objects'.
+    #[test]
+    fn live_labels_stay_inside_the_drawing_area() {
+        let area = Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 100.0));
+        let inside = Rect::from_center_size(pos2(100.0, 50.0), vec2(40.0, 20.0));
+        assert_eq!(keep_inside(inside, area), inside);
+        let r = keep_inside(Rect::from_center_size(pos2(195.0, -5.0), vec2(40.0, 20.0)), area);
+        assert_eq!((r.right(), r.top()), (200.0, 0.0));
+        let r = keep_inside(Rect::from_center_size(pos2(-50.0, 120.0), vec2(40.0, 20.0)), area);
+        assert_eq!((r.left(), r.bottom()), (0.0, 100.0));
+        // Larger than the area: its top left corner shows.
+        let r = keep_inside(Rect::from_min_size(pos2(-10.0, -10.0), vec2(300.0, 300.0)), area);
+        assert_eq!(r.min, pos2(0.0, 0.0));
+        // Under its point, and under the cursor when the cursor is there.
+        let r = live_label_rect(pos2(100.0, 50.0), vec2(40.0, 20.0), Some(pos2(300.0, 300.0)));
+        assert_eq!((r.center().x, r.top()), (100.0, 58.0));
+        let r = live_label_rect(pos2(100.0, 50.0), vec2(40.0, 20.0), Some(pos2(105.0, 62.0)));
+        assert_eq!(r.top(), 86.0);
+        let l = cadaddy_engine::LiveLabel::new(Vec2::ZERO).line("Area", "12.0000").line("", "3.0000");
+        assert_eq!(live_label_text(&l), "Area = 12.0000\n3.0000");
+    }
+
     #[test]
     fn rebuilt_previews_stay_opaque_on_a_transparent_current_layer() {
         let mut s = cadaddy_engine::Session::new();

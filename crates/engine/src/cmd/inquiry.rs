@@ -8,6 +8,7 @@ use super::*;
 use crate::units::format_angle;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+pub(super) mod live;
 mod regions;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -735,15 +736,17 @@ impl Interactive for DistM {
                 Ok(Step::Continue)
             }
             (Some(a), Input::Point(b)) => {
-                let (a, b) = match (self.first_source, s.picked_viewport) {
-                    (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point),
-                    _ => (a, b),
+                let (paper, scale) = ((a, b), self.first_source.map_or(1.0, |f| f.scale));
+                let (a, b, scale) = match (self.first_source, s.picked_viewport) {
+                    (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point, scale),
+                    _ => (a, b, 1.0),
                 };
                 s.last_used.distance = a.dist(b);
                 let t = dist_text(s, a, b);
                 for l in t.lines() {
                     s.echo(l.to_string());
                 }
+                live::keep(s, &[live::distance(s, paper.0, paper.1, scale)]);
                 Ok(Step::Done)
             }
             (Some(a), Input::Keyword(k)) if k == "Multiple points" => {
@@ -766,6 +769,27 @@ impl Interactive for DistM {
             None => self.first.map(|a| vec![super::helpers::line(a, c)]).unwrap_or_default(),
         }
     }
+    fn labels(&self, s: &Session, c: Vec2) -> Vec<crate::LiveLabel> {
+        if self.length {
+            return Vec::new();
+        }
+        match (&self.multi, self.first) {
+            (Some(pts), _) => {
+                let (mut path, mut bulges) = (pts.clone(), self.bulges.clone());
+                push_point(&mut path, &mut bulges, c, self.arc);
+                // Picked through a layout viewport: the cursor's model point at the same scale.
+                let model = model_points(&self.sources).and_then(|mut m| {
+                    let scale = self.sources.first().copied().flatten()?.scale;
+                    let next = *m.last()? + (c - *pts.last()?) / scale;
+                    m.push(next);
+                    next.is_finite().then_some(m)
+                });
+                live::running(s, &path, &bulges, model.as_deref())
+            }
+            (None, Some(a)) => vec![live::distance(s, a, c, self.first_source.map_or(1.0, |f| f.scale))],
+            (None, None) => Vec::new(),
+        }
+    }
 }
 
 impl DistM {
@@ -773,6 +797,10 @@ impl DistM {
         let model = model_points(&self.sources);
         let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, |p| path_len(p, &self.bulges));
         s.echo(format!("Distance = {}", fmt_d(s, d)));
+        if let Some(pts) = &self.multi {
+            let labels = live::running(s, pts, &self.bulges, model.as_deref());
+            live::keep(s, &labels);
+        }
         Ok(Step::Done)
     }
 }
@@ -896,7 +924,18 @@ impl AreaM {
         }
         let g = path(&pts, &bulges, true);
         let (a, per) = (g.area().abs(), g.len());
-        self.measured(s, a, per)
+        let labels = live::area(s, &pts, &bulges, self.running_total());
+        let step = self.measured(s, a, per);
+        live::keep(s, &labels);
+        step
+    }
+    /// The running total and the sign the next area goes into it with (Add and Subtract modes).
+    fn running_total(&self) -> Option<(f64, f64)> {
+        match self.mode {
+            AreaMode::Single => None,
+            AreaMode::Add => Some((self.total, 1.0)),
+            AreaMode::Subtract => Some((self.total, -1.0)),
+        }
     }
 }
 
@@ -989,5 +1028,13 @@ impl Interactive for AreaM {
         let (mut pts, mut bulges) = (self.pts.clone(), self.bulges.clone());
         push_point(&mut pts, &mut bulges, c, self.arc);
         vec![super::helpers::lwpoly(path(&pts, &bulges, true).vertices, true)]
+    }
+    fn labels(&self, s: &Session, c: Vec2) -> Vec<crate::LiveLabel> {
+        if self.pts.is_empty() || self.object || self.length {
+            return Vec::new();
+        }
+        let (mut pts, mut bulges) = (self.pts.clone(), self.bulges.clone());
+        push_point(&mut pts, &mut bulges, c, self.arc);
+        live::area(s, &pts, &bulges, self.running_total())
     }
 }

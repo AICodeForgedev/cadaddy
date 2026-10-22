@@ -285,6 +285,36 @@ pub trait Interactive: Send {
     fn editing_mtext(&self) -> Option<cadaddy_doc::MText> {
         None
     }
+    /// What the command measures with the cursor where it is, labelled on the drawing beside the
+    /// geometry it measures (DIST, AREA, MEASUREGEOM; MEASURELABELS). The UI draws them at a fixed
+    /// size on screen, so they read the same at any zoom, and they go when the command ends.
+    fn labels(&self, _s: &Session, _cursor: Vec2) -> Vec<LiveLabel> {
+        Vec::new()
+    }
+}
+
+/// A live measurement label (see [`Interactive::labels`]), centred on a point of the drawing: one
+/// line per value, each a caption (English; the UI translates it, empty for a bare value) and the
+/// value in the drawing's units.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveLabel {
+    pub at: Vec2,
+    pub lines: Vec<(&'static str, String)>,
+}
+
+impl LiveLabel {
+    pub fn new(at: Vec2) -> Self {
+        Self { at, lines: Vec::new() }
+    }
+    pub fn line(mut self, caption: &'static str, value: impl Into<String>) -> Self {
+        self.lines.push((caption, value.into()));
+        self
+    }
+    /// The label as text, a line per value: "Area = 12.0000".
+    pub fn text(&self) -> String {
+        let line = |(c, v): &(&str, String)| if c.is_empty() { v.clone() } else { format!("{c} = {v}") };
+        self.lines.iter().map(line).collect::<Vec<_>>().join("\n")
+    }
 }
 
 /// See [`Interactive::drag`].
