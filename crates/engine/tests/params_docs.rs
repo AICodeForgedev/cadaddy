@@ -174,8 +174,7 @@ fn reads(body: &str) -> Vec<String> {
             }
             // `(p, "key"` or `(cmd, p, "key"` / `("id", p, "key"`.
             let args = &body[from..];
-            let Some(i) = args.find(|c: char| c == ')' || c == '"').filter(|&i| args[..i].split(',').any(|a| a.trim() == "p" || a.trim() == "&p"))
-            else {
+            let Some(i) = args.find([')', '"']).filter(|&i| args[..i].split(',').any(|a| a.trim() == "p" || a.trim() == "&p")) else {
                 continue;
             };
             let head: Vec<&str> = args[..i].split(',').map(str::trim).collect();

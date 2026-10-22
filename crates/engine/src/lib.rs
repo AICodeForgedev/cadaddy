@@ -959,7 +959,7 @@ fn with_unknown_param_warnings(mut v: Value, spec: &CommandSpec, params: &Value)
                 a.extend(unknown.iter().map(|k| Value::String(msg(k))));
             }
         }
-        Value::Null => v = serde_json::json!({ "warnings": unknown.iter().map(|k| msg(k)).collect::<Vec<_>>() }),
+        Value::Null => v = serde_json::json!({ "warnings": unknown.iter().map(msg).collect::<Vec<_>>() }),
         _ => {}
     }
     v
