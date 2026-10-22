@@ -115,7 +115,7 @@ fn merge(x: &mut Line, l: Line) {
 }
 
 /// A run's plan length, feet.
-fn run_length_ft(points: &[[f64; 2]], upf: f64) -> f64 {
+pub(super) fn run_length_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     points.windows(2).map(|w| if let [a, b] = w { (b[0] - a[0]).hypot(b[1] - a[1]) } else { 0.0 }).sum::<f64>() / upf
 }
 
@@ -494,6 +494,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 net: 1.0,
                 status: "firm",
                 level: st(&e, "level"),
+                elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
                 ..Line::default()
             },
         );
@@ -673,6 +674,20 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
         out.push(("Temporary power".into(), 1.0, "rental", "the job needs power before the service".into()));
     }
     out
+}
+
+/// The electrical and mechanical lines per floor, before grouping and waste, each with every
+/// element it counts (`bim.bom` lists at most 500): what progress marks resolve against (Q332).
+pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
+    let mut lines: Vec<Line> = Vec::new();
+    electrical(s, &mut lines)?;
+    mechanical(s, &mut lines);
+    Ok(lines
+        .into_iter()
+        .map(|l| {
+            json!({"trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit, "net": l.net, "level": l.level, "elements": l.elements})
+        })
+        .collect())
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {

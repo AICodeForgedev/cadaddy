@@ -79,6 +79,7 @@ fn earned_value_and_production_rates_match_hand_calculations() {
     let phase = |p: &str| st["phases"].as_array().unwrap().iter().find(|x| x["phase"] == p).cloned().unwrap();
     let close = |a: f64, b: f64| (a - b).abs() < 0.011;
     let rough = phase("rough");
+    assert_eq!(rough["budget_source"], "book_rate_assumption", "no estimate: the book rates");
     assert!(close(rough["budget_hours"].as_f64().unwrap(), rough_budget), "{rough}");
     assert!(close(rough["earned_hours"].as_f64().unwrap(), rough_earned), "{rough}");
     assert!(close(rough["actual_hours"].as_f64().unwrap(), h_r1 + h_r2));
@@ -118,7 +119,14 @@ fn earned_value_and_production_rates_match_hand_calculations() {
     let text = std::fs::read_to_string(&obs).unwrap();
     assert_eq!(text.lines().filter(|l| l.starts_with("date,")).count(), 1, "one header");
     assert_eq!(text.lines().count(), 1 + 2 * n);
-    assert!(text.lines().nth(1).unwrap().contains(",hotel,MC,ceiling 9 ft,observed"));
+    // Rough and trim hours were booked to the phase, not a driver: those rates are apportioned;
+    // makeup has one driver, so its rate is observed.
+    assert!(text.lines().nth(1).unwrap().contains(",hotel,MC,ceiling 9 ft,"));
+    let basis = |d: &str| text.lines().find(|l| l.split(',').nth(3) == Some(d)).and_then(|l| l.rsplit(',').next()).unwrap().to_string();
+    assert_eq!(
+        (basis("boxes"), basis("conduit_ft"), basis("devices"), basis("terminations")),
+        ("apportioned".into(), "apportioned".into(), "apportioned".into(), "observed".into())
+    );
     let spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].to_string();
     assert!(!spec.contains("actual_rate") && !spec.contains("field_observations"), "no production rate in the drawing");
 }
