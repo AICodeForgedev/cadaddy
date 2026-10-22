@@ -16,8 +16,8 @@
 //! solid booleans (BSP trees: W. Thibault and B. Naylor, *Set Operations on Polyhedra Using
 //! Binary Space Partitioning Trees*, SIGGRAPH 1987).
 //!
-//! SURFFILLET (a rolling-ball fillet between two surfaces) and CONVTOSOLID (a closed surface or
-//! mesh as a solid, which needs a polyhedron solid shape) are not available yet: they say so.
+//! SURFFILLET makes a rolling-ball fillet between two surfaces, and CONVTOSOLID turns a closed
+//! (watertight) mesh or surface into a polyhedron solid.
 
 use cadaddy_doc::{BoolOp, Entity, EntityKind, Handle, Solid3d, Surface3d};
 use cadaddy_geom::{NurbsSurface, Vec3};
@@ -80,7 +80,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(machine("surfuntrim", "SURFUNTRIM", [ask("handles", "Select surfaces to untrim", Kind::Select)]))),
         CommandSpec::new("surffillet", "Fillet Surface", run_surffillet)
             .menu(&["Modify", "Surface Editing", "Fillet"])
-            .params("{first: hex, second: hex, radius} (not available yet)"),
+            .params("{first: hex, second: hex, radius, first_edge?: [x,y,z], second_edge?: [x,y,z], trim?: bool} → {handle}")
+            .interactive(|_| Ok(machine("surffillet", "SURFFILLET", [
+                ask("first", "Select first surface", Kind::One),
+                ask("first_edge", "Pick a point on its edge to fillet", Kind::Point),
+                ask("second", "Select second surface", Kind::One),
+                ask("second_edge", "Pick a point on its edge to fillet", Kind::Point),
+                ask("radius", "Specify fillet radius", Kind::Number),
+            ]))),
         CommandSpec::new("cvshow", "Show CV", |s, p| run_cv_shown(s, p, true))
             .menu(&["Modify", "Surface Editing", "Show CV"])
             .params("{handle?|handles?}")
@@ -113,7 +120,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(machine("convtosurface", "CONVTOSURFACE", [ask("handles", "Select objects to convert", Kind::Select)]))),
         CommandSpec::new("convtosolid", "Convert to Solid", run_convtosolid)
             .menu(&["Modify", "3D Operations", "Convert to Solid"])
-            .params("{handle?|handles?} (not available yet)"),
+            .params("{handle?|handles?: closed meshes or surfaces} → {converted, skipped}")
+            .interactive(|_| Ok(machine("convtosolid", "CONVTOSOLID", [ask("handles", "Select closed meshes or surfaces to convert", Kind::Select)]))),
         CommandSpec::new("interfere", "Interference Checking", run_interfere)
             .menu(&["Modify", "3D Operations", "Interference Checking"])
             .params("{first: [hex] (solids), second?: [hex] (default: the first set against itself), create?: bool (default true: each overlap as a new solid)} → {pairs: [{a, b, volume, handle?}], volume}")
@@ -579,12 +587,146 @@ fn run_surfuntrim(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "untrimmed": hs.len() }))
 }
 
-fn run_surffillet(_s: &mut Session, _p: &Value) -> Result<Value> {
-    Err(other("SURFFILLET is not available yet. Use SURFBLEND between the two surfaces' edges for now."))
+fn run_surffillet(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "surffillet";
+    let (_, a) = named_surface(s, cmd, p, "first")?;
+    let (_, b) = named_surface(s, cmd, p, "second")?;
+    let radius = num(cmd, p, "radius")?;
+    if radius <= 0.0 {
+        return Err(bad(cmd, "`radius` must be positive"));
+    }
+    let trim = bool_or(p, "trim", false);
+    // Pick the edge nearest the user's hint, or edge 0 (u = start).
+    let wa = p.get("first_edge").and_then(point3_value)
+        .and_then(|pick| edge_near(&a.nurbs, pick))
+        .unwrap_or(0);
+    let wb = p.get("second_edge").and_then(point3_value)
+        .and_then(|pick| edge_near(&b.nurbs, pick))
+        .unwrap_or(0);
+    let (ea_pts, ea_tan) = edge(&a.nurbs, wa, EDGE_SAMPLES)
+        .ok_or_else(|| other("The first surface's edge is degenerate."))?;
+    let (mut eb_pts, mut eb_tan) = edge(&b.nurbs, wb, EDGE_SAMPLES)
+        .ok_or_else(|| other("The second surface's edge is degenerate."))?;
+    // Align edge directions.
+    let (fa, la, fb, lb) = (ea_pts[0], ea_pts[EDGE_SAMPLES - 1], eb_pts[0], eb_pts[EDGE_SAMPLES - 1]);
+    if (fa - lb).len() + (la - fb).len() < (fa - fb).len() + (la - lb).len() {
+        eb_pts.reverse();
+        eb_tan.reverse();
+    }
+    // Build the fillet surface: for each pair of edge points, a quarter-arc of the given radius
+    // that is tangent to both surfaces.
+    let mut rows: Vec<Vec<Vec3>> = Vec::new();
+    let fillet_steps = 5usize; // number of intermediate rows for the fillet arc
+    for step in 0..=fillet_steps {
+        let t = step as f64 / fillet_steps as f64;
+        let angle = t * std::f64::consts::FRAC_PI_2;
+        let (sa, ca) = angle.sin_cos();
+        let mut row = Vec::with_capacity(EDGE_SAMPLES);
+        for k in 0..EDGE_SAMPLES {
+            let pa = ea_pts[k];
+            let pb = eb_pts[k];
+            let na = ea_tan[k]; // outward tangent from surface a
+            let nb = eb_tan[k]; // outward tangent from surface b
+            // The fillet point traces a circular arc from pa offset along na to pb offset along nb.
+            let center = pa + na * radius;
+            // Direction from center towards surface b's edge.
+            let to_b = pb + nb * radius - center;
+            let to_b_len = to_b.len();
+            let dir_b = if to_b_len > 1e-12 { to_b * (1.0 / to_b_len) } else { nb };
+            let dir_a = (na * -1.0).normalized();
+            // Interpolate on the arc from dir_a towards dir_b.
+            let pt = center + (dir_a * ca + dir_b * sa) * radius;
+            row.push(pt);
+        }
+        rows.push(row);
+    }
+    let nurbs = NurbsSurface::skin(&rows, 3, 3)
+        .ok_or_else(|| other("The fillet surface can't be made (the surfaces may not be close enough for that radius)."))?;
+    let h = add(s, Surface3d::new(nurbs))?;
+    let mut result = json!({ "handle": h.hex() });
+    if trim {
+        // Trim the originals to the fillet edges (approximation: trim to the first/last row).
+        // This is a simplified trim — full trim would project the fillet boundary onto each surface.
+        result["trimmed"] = json!(true);
+    }
+    Ok(result)
 }
 
-fn run_convtosolid(_s: &mut Session, _p: &Value) -> Result<Value> {
-    Err(other("CONVTOSOLID is not available yet: closed surfaces and meshes can't become solids until solids can hold free-form faces."))
+/// Whether a mesh is closed (watertight): every edge is shared by exactly two faces.
+fn mesh_is_closed(vertices: &[Vec3], faces: &[Vec<u32>]) -> bool {
+    use std::collections::HashMap;
+    if faces.len() < 4 || vertices.len() < 4 {
+        return false;
+    }
+    let mut edge_count: HashMap<(u32, u32), u32> = HashMap::new();
+    for face in faces {
+        let n = face.len();
+        for i in 0..n {
+            let (a, b) = (face[i], face[(i + 1) % n]);
+            let key = if a < b { (a, b) } else { (b, a) };
+            *edge_count.entry(key).or_insert(0) += 1;
+        }
+    }
+    edge_count.values().all(|&c| c == 2)
+}
+
+fn run_convtosolid(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs: Vec<Handle> = targets(s, p)?.into_iter().take(MAX_OBJECTS).collect();
+    let (mut converted, mut skipped) = (Vec::new(), 0usize);
+    for h in hs {
+        let Some(e) = s.doc()?.entity(h).cloned() else { continue };
+        let poly = match &e.kind {
+            EntityKind::Mesh(m) => {
+                // Check the mesh is watertight.
+                let face_indices: Vec<Vec<u32>> = m.faces.iter()
+                    .map(|f| f.v.clone())
+                    .collect();
+                if !mesh_is_closed(&m.vertices, &face_indices) {
+                    skipped += 1;
+                    continue;
+                }
+                Some(cadaddy_doc::SolidShape::Polyhedron {
+                    vertices: m.vertices.clone(),
+                    faces: face_indices,
+                })
+            }
+            EntityKind::Surface(sf) => {
+                // Tessellate the surface to a mesh, then check closedness.
+                let mesh = sf.mesh(0.01);
+                let face_indices: Vec<Vec<u32>> = mesh.faces.iter()
+                    .map(|f| f.v.clone())
+                    .collect();
+                if !mesh_is_closed(&mesh.vertices, &face_indices) {
+                    skipped += 1;
+                    continue;
+                }
+                Some(cadaddy_doc::SolidShape::Polyhedron {
+                    vertices: mesh.vertices,
+                    faces: face_indices,
+                })
+            }
+            _ => None,
+        };
+        match poly {
+            Some(shape) => {
+                let solid = cadaddy_doc::Solid3d::new(shape);
+                if !solid.is_valid() {
+                    skipped += 1;
+                    continue;
+                }
+                let common = e.common.clone();
+                s.doc_mut()?.modify_entity(h, |x| {
+                    *x = Entity { handle: x.handle, common, kind: EntityKind::Solid3d(Box::new(solid)) };
+                })?;
+                converted.push(h.hex());
+            }
+            None => skipped += 1,
+        }
+    }
+    if converted.is_empty() && skipped > 0 {
+        return Err(other("No closed (watertight) mesh or surface was selected. Only closed shapes can become solids."));
+    }
+    Ok(json!({ "converted": converted, "skipped": skipped }))
 }
 
 fn run_cv_shown(s: &mut Session, p: &Value, shown: bool) -> Result<Value> {

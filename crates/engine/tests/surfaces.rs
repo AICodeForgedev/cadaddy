@@ -216,13 +216,91 @@ fn faces_meshes_and_boundaries_convert_to_surfaces() {
     assert!((disk.area(0.001) - std::f64::consts::PI * 4.0).abs() < 0.6, "{}", disk.area(0.001));
 }
 
+/// A closed cube mesh becomes a solid with volume 1000 (10 × 10 × 10); an open box is refused.
 #[test]
-fn not_yet_available_commands_say_so() {
+fn convtosolid_cube_mesh_and_open_box_refused() {
+    use cadaddy_engine::doc::{Mesh, MeshFace, MeshKind};
     let mut s = Session::new();
-    let e = s.execute("surffillet", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("not available yet"), "{e}");
-    let e = s.execute("convtosolid", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("not available yet"), "{e}");
+    // Build a 10 × 10 × 10 cube mesh (8 vertices, 12 triangular faces).
+    let v = vec![
+        Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 10.0),
+        Vec3::new(10.0, 10.0, 10.0), Vec3::new(0.0, 10.0, 10.0),
+    ];
+    let tri = |a: u32, b: u32, c: u32| MeshFace { v: vec![a, b, c], hidden: 0 };
+    let faces = vec![
+        // Bottom (z = 0)
+        tri(0, 2, 1), tri(0, 3, 2),
+        // Top (z = 10)
+        tri(4, 5, 6), tri(4, 6, 7),
+        // Front (y = 0)
+        tri(0, 1, 5), tri(0, 5, 4),
+        // Back (y = 10)
+        tri(2, 3, 7), tri(2, 7, 6),
+        // Left (x = 0)
+        tri(0, 4, 7), tri(0, 7, 3),
+        // Right (x = 10)
+        tri(1, 2, 6), tri(1, 6, 5),
+    ];
+    let cube = Mesh { vertices: v.clone(), faces, kind: MeshKind::Subd };
+    let h = s.add_entity(EntityKind::Mesh(cube)).unwrap();
+    let r = s.execute("convtosolid", &json!({"handles": [h.hex()]})).unwrap();
+    assert_eq!(r["converted"].as_array().unwrap().len(), 1);
+    // Check volume.
+    let solid = match &s.doc().unwrap().entity(h).unwrap().kind {
+        EntityKind::Solid3d(so) => (**so).clone(),
+        k => panic!("expected solid, got {k:?}"),
+    };
+    let props = solid.props(0.01);
+    assert!((props.volume - 1000.0).abs() < 1.0, "volume should be 1000, got {}", props.volume);
+    // Undo restores the mesh.
+    s.undo().unwrap();
+    assert!(matches!(s.doc().unwrap().entity(h).unwrap().kind, EntityKind::Mesh(_)));
+
+    // An open box (missing the top face) is refused.
+    let open_faces = vec![
+        tri(0, 2, 1), tri(0, 3, 2),       // bottom
+        tri(0, 1, 5), tri(0, 5, 4),       // front
+        tri(2, 3, 7), tri(2, 7, 6),       // back
+        tri(0, 4, 7), tri(0, 7, 3),       // left
+        tri(1, 2, 6), tri(1, 6, 5),       // right
+        // top is missing
+    ];
+    let open = Mesh { vertices: v, faces: open_faces, kind: MeshKind::Subd };
+    let h2 = s.add_entity(EntityKind::Mesh(open)).unwrap();
+    let e = s.execute("convtosolid", &json!({"handles": [h2.hex()]}));
+    assert!(e.is_err(), "an open box should be refused");
+}
+
+/// A fillet between two perpendicular planar surfaces has the right radius and tangency.
+#[test]
+fn surffillet_between_perpendicular_planes() {
+    let mut s = Session::new();
+    // Two flat squares: one in XY at z = 0, one in XZ at y = 0 (perpendicular).
+    let a = handle(&s.execute("planesurf", &json!({"corners": [[0, 0, 0], [10, 10, 0]]})).unwrap());
+    let b = handle(&s.execute("planesurf", &json!({"corners": [[0, -10, 0], [10, 0, 10]]})).unwrap());
+    let r = s.execute("surffillet", &json!({
+        "first": a.hex(), "second": b.hex(), "radius": 2.0,
+        "first_edge": [5, 0, 0], "second_edge": [5, 0, 5]
+    })).unwrap();
+    let fh = handle(&r);
+    let fillet = surface(&s, fh);
+    // The fillet surface should exist and be valid.
+    assert!(fillet.is_valid(), "fillet surface should be valid");
+    // Sample some points on the fillet; they should all be at radius 2 from the edge line.
+    let n = &fillet.nurbs;
+    let (u0, u1) = n.domain_u();
+    let (v0, v1) = n.domain_v();
+    for i in 0..=4 {
+        let u = u0 + (u1 - u0) * i as f64 / 4.0;
+        let p = n.point(u, (v0 + v1) / 2.0).unwrap();
+        // The fillet point should be in the region near the intersection edge (the x-axis at y=0, z=0).
+        assert!(p.y.abs() <= 2.5 && p.z.abs() <= 2.5, "fillet point out of range: {p:?}");
+    }
+    // Undo removes the fillet.
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().entity(fh).is_none());
 }
 
 /// From the menu, SURFOFFSET asks for the surface and the distance (no parameters needed).

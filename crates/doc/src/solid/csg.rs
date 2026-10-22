@@ -127,6 +127,26 @@ impl Solid3d {
     /// A leaf's surfaces as tagged polygons: quads between stations (two triangles where a quad
     /// isn't flat) and the triangulated ends, turned outward.
     fn leaf_polys(&self, tol: f64, leaf: u32) -> Vec<Poly> {
+        if let SolidShape::Polyhedron { vertices, faces } = &self.shape {
+            let mut out = Vec::new();
+            for (fi, face) in faces.iter().enumerate() {
+                let pts: Vec<Vec3> = face.iter()
+                    .filter_map(|&i| vertices.get(i as usize).copied())
+                    .map(|v| self.xf.apply(v))
+                    .collect();
+                if pts.len() >= 3 {
+                    out.extend(Poly::new(pts, tag(leaf, fi as u32)));
+                }
+            }
+            if bsp::mass(&out).0 < 0.0 {
+                for p in &mut out {
+                    p.pts.reverse();
+                    p.plane.n = p.plane.n * -1.0;
+                    p.plane.w = -p.plane.w;
+                }
+            }
+            return out;
+        }
         let r = self.rings(tol);
         let n = r.stations.len();
         let mut out = Vec::new();

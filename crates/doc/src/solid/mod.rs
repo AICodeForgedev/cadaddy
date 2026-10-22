@@ -100,12 +100,21 @@ pub enum SolidShape {
         a: Box<Solid3d>,
         b: Box<Solid3d>,
     },
+    /// A closed polyhedron (CONVTOSOLID): its vertices and the faces pointing outward, each a
+    /// list of vertex indices in counter-clockwise order as seen from outside.
+    Polyhedron {
+        vertices: Vec<Vec3>,
+        faces: Vec<Vec<u32>>,
+    },
 }
 
 /// Most stations, loops and points per loop a solid is drawn with.
 const MAX_STATIONS: usize = 4096;
 const MAX_LOOPS: usize = 256;
 const MAX_LOOP_POINTS: usize = 8192;
+/// Most vertices and faces a polyhedron solid may have (hostile files).
+const MAX_POLY_VERTICES: usize = 500_000;
+const MAX_POLY_FACES: usize = 1_000_000;
 /// The tolerance plan-view curves of a solid are drawn to (snaps, selection, extents).
 pub const SOLID_PRIM_TOL: f64 = 0.01;
 
@@ -286,6 +295,7 @@ impl Solid3d {
             SolidShape::Sweep { .. } => "Sweep",
             SolidShape::Loft { .. } => "Loft",
             SolidShape::Boolean { .. } => "Composite",
+            SolidShape::Polyhedron { .. } => "Polyhedron",
         }
     }
 
@@ -343,6 +353,14 @@ impl Solid3d {
                     sections.len() >= 2
                         && sections.len() <= MAX_STATIONS
                         && sections.iter().all(|s| s.len() >= 3 && s.len() <= MAX_LOOP_POINTS && s.iter().all(|p| p.is_finite()))
+                }
+                SolidShape::Polyhedron { vertices, faces } => {
+                    vertices.len() >= 4
+                        && vertices.len() <= MAX_POLY_VERTICES
+                        && faces.len() >= 4
+                        && faces.len() <= MAX_POLY_FACES
+                        && vertices.iter().all(|v| v.is_finite() && v.x.abs() <= MAX_SOLID_SIZE && v.y.abs() <= MAX_SOLID_SIZE && v.z.abs() <= MAX_SOLID_SIZE)
+                        && faces.iter().all(|f| f.len() >= 3 && f.iter().all(|&i| (i as usize) < vertices.len()))
                 }
             }
     }
@@ -487,14 +505,14 @@ impl Solid3d {
                 Rings { stations, wrap: false, caps: true, section_wires: vec![0, last], long_wires: ls.iter().map(|(_, c)| c.clone()).collect() }
             }
             SolidShape::Loft { sections } => loft_rings(sections),
-            SolidShape::Boolean { .. } => Rings::default(),
+            SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. } => Rings::default(),
         }
     }
 
     /// The display curves (silhouette-free wireframe: section loops and lines along corners), in
     /// drawing coordinates.
     pub fn wires(&self, tol: f64) -> Vec<Vec<Vec3>> {
-        if matches!(self.shape, SolidShape::Boolean { .. }) {
+        if matches!(self.shape, SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. }) {
             return self.feature_edges(tol).into_iter().map(|[a, b]| vec![a, b]).collect();
         }
         let r = self.rings(tol);
@@ -568,7 +586,7 @@ impl Solid3d {
     /// without taper (under rotations, moves and uniform scales); otherwise from the surfaces at
     /// `tol`.
     pub fn props(&self, tol: f64) -> SolidProps {
-        if matches!(self.shape, SolidShape::Boolean { .. }) {
+        if matches!(self.shape, SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. }) {
             let polys = self.polys(tol);
             let (mut min, mut max) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
             for p in polys.iter().flat_map(|p| p.pts.iter()) {
@@ -731,7 +749,7 @@ impl Solid3d {
                 let p = loops.first().and_then(|l| l.first()).map_or(Vec2::ZERO, |v| v.p);
                 g.push((Vec3::new(p.x, p.y, *height), z, Dim::Height));
             }
-            SolidShape::Revolution { .. } | SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } => {}
+            SolidShape::Revolution { .. } | SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. } => {}
         }
         g
     }
@@ -781,12 +799,20 @@ impl Solid3d {
     /// A tolerance for drawing the solid as a whole (a 4000th of its size): what files store
     /// and EXPLODE makes, and what picking and 3D extents use.
     pub fn mesh_tol(&self) -> f64 {
-        let leaves = self.leaves();
-        let rings: Vec<Rings> = leaves.iter().map(|(_, l)| l.rings(f64::MAX)).collect();
         let (mut lo, mut hi) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
-        for q in rings.iter().flat_map(|r| r.stations.iter().flatten().flatten()) {
-            lo = Vec3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
-            hi = Vec3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
+        if let SolidShape::Polyhedron { vertices, .. } = &self.shape {
+            for v in vertices {
+                let q = self.xf.apply(*v);
+                lo = Vec3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
+                hi = Vec3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
+            }
+        } else {
+            let leaves = self.leaves();
+            let rings: Vec<Rings> = leaves.iter().map(|(_, l)| l.rings(f64::MAX)).collect();
+            for q in rings.iter().flat_map(|r| r.stations.iter().flatten().flatten()) {
+                lo = Vec3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
+                hi = Vec3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
+            }
         }
         let diag = (hi - lo).len();
         if diag.is_finite() && diag > 0.0 { diag / 4000.0 } else { 0.01 }
