@@ -215,8 +215,20 @@ pub const MAX_SCENE: usize = 20_000_000;
 pub const CUT_COLOR: Rgb = Rgb(214, 96, 77);
 
 /// The scene of `space`: surfaces and lines in world coordinates, curves tessellated to `tol`
-/// world units, colour 7 as it shows on `bg`.
+/// world units, colour 7 as it shows on `bg`. Extra `clip_planes` (e.g. from a section box) are
+/// appended to the live section planes for clipping.
 pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
+    scene_clipped(d, space, tol, bg, &[])
+}
+
+/// Like [`scene`] but with additional clipping planes (section box faces).
+pub fn scene_clipped(
+    d: &Drawing,
+    space: &Space,
+    tol: f64,
+    bg: Rgb,
+    extra_planes: &[cadaddy_doc::SectionPlane],
+) -> Scene {
     let Some(store) = d.space(space) else { return Scene::default() };
     let list = build(d, space, &Options { tolerance: tol.max(1e-9), ..Options::default() });
     // Each object's colours (its first primitive's): its lines as drawn on `bg` (colour 7 black on
@@ -230,7 +242,8 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
     let mut surfaces = Surfaces::default();
     let mut native: std::collections::HashSet<Handle> = std::collections::HashSet::new();
     let mut elevation: std::collections::HashMap<Handle, f64> = std::collections::HashMap::new();
-    let planes = crate::live::live_sections(d, space);
+    let mut planes = crate::live::live_sections(d, space);
+    planes.extend_from_slice(extra_planes);
     // Clipped by the live sections, if any.
     // A lit triangle (its material and texture coordinates, `material_tri`) clipped by them.
     let tri = |out: &mut Scene, t: Tri| {

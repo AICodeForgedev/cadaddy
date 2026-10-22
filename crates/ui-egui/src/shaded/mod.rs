@@ -258,6 +258,9 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     let tcol = crate::theme::Tokens::get().canvas;
     let bg = Rgb(tcol.r(), tcol.g(), tcol.b());
     let tol = 2f64.powi(band);
+    // Read section box planes from coordination state for 3D clipping.
+    let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
+    let sbox_planes = crs.sbox_planes();
     // A build for another key is dropped (it finishes in the background and is ignored).
     if shade_st.pending.as_ref().is_some_and(|p| p.key != key) {
         shade_st.pending = None;
@@ -267,9 +270,10 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
         if shade_st.pending.is_none() {
             let (progress, total) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(1)));
             let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
+            let planes = sbox_planes.clone();
             let handle = std::thread::Builder::new()
                 .name("cadaddy-3d-model".into())
-                .spawn(move || model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2))
+                .spawn(move || model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
                 .ok();
             match handle {
                 Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: web_time::Instant::now(), handle }),
@@ -277,7 +281,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
                 None => {
                     let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
                     let started = web_time::Instant::now();
-                    let m = Arc::new(model3::build(&*st_doc(app)?, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
+                    let m = Arc::new(model3::build_clipped(&*st_doc(app)?, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
                     return Some(finish(app, key, m, started));
                 }
             }
@@ -299,7 +303,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     {
         let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
         let started = web_time::Instant::now();
-        let m = Arc::new(model3::build(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t));
+        let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
         Some(finish(app, key, m, started))
     }
 }
