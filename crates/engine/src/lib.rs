@@ -47,6 +47,9 @@ pub mod undoctl;
 pub mod units;
 pub mod writefile;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
+
 /// Read `bytes` with one of the engine's own readers, for the fuzzer (`examples/fuzz.rs`):
 /// `xlsx` (TABLE's Excel import), `zip` and `lisp` (the LISP reader, as files are loaded). The
 /// result is dropped; only returning matters.
@@ -1104,6 +1107,9 @@ pub struct Session {
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
+    /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub plugins: plugins::PluginHost,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1207,6 +1213,8 @@ impl Session {
             background_checks: false,
             drywall_viewmode: None,
             project: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            plugins: plugins::PluginHost::new(),
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't
@@ -1457,7 +1465,33 @@ impl Session {
         }
     }
 
+    /// Run a plug-in command with undo support: the drawing before and after are compared, and an
+    /// undo step is created if the plug-in changed anything.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn execute_plugin(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // Extract what we need from the plugin host before the mutable borrow of self.
+        let (engine, module, _plugin_idx) = self.plugins.command_info(id)?;
+        let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let result = plugins::execute_plugin_command(&engine, &module, id, params, self);
+        // Create an undo step if the plug-in changed the drawing.
+        let changed = match (&before, self.state().ok()) {
+            (Some((doc_before, _, uid_before)), Some(st)) if st.uid == *uid_before => {
+                !Arc::ptr_eq(&st.doc, doc_before)
+            }
+            _ => false,
+        };
+        if changed {
+            self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), result.is_ok());
+        }
+        result
+    }
+
     fn execute_inner(&mut self, id: &str, params: &Value) -> Result<Value> {
+        // Try plug-in commands before reporting "unknown command".
+        #[cfg(not(target_arch = "wasm32"))]
+        if find_command(id).is_none() && self.plugins.find_command(id).is_some() {
+            return self.execute_plugin(id, params);
+        }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {

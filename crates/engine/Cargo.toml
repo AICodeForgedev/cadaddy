@@ -39,6 +39,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }
+# WAT-to-WASM for the plug-in fuel-exhaustion test (MIT OR Apache-2.0).
+wat = "1"
 # Made-up print sets and their revisions (Q270 print comparison tests).
 cadaddy-mepfix = { path = "../mepfix" }
 # JPEG artefacts for the IMAGETRACE accuracy tests, and reading back the PNG, JPEG, BMP and TIFF files
@@ -48,3 +50,5 @@ image = { workspace = true, features = ["bmp", "tiff"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Edits of very large selections chunk by chunk on all cores (already used by render and io).
 rayon = { workspace = true }
+# Sandboxed WASM plug-in runtime: a pure-Rust interpreter with fuel metering (MIT OR Apache-2.0).
+wasmi = "0.41"

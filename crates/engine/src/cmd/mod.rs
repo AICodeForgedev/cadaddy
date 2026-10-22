@@ -118,6 +118,7 @@ mod unittypes;
 pub mod validate;
 pub mod verify;
 pub mod walkpub;
+pub mod plugins_cmd;
 pub mod wallgen;
 pub use props::MatchProps;
 pub mod actions;
@@ -403,6 +404,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(frames::specs());
         v.extend(coordination::specs());
         v.extend(project::specs());
+        v.extend(plugins_cmd::specs());
         v
     })
 }
