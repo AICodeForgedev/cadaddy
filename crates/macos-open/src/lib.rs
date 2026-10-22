@@ -152,7 +152,6 @@ mod mac {
         // it serves for the life of the process.
         std::mem::forget(handler);
     }
-
 }
 
 #[cfg(test)]

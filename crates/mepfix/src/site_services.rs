@@ -303,19 +303,11 @@ fn depth_of(words: &str) -> Option<f64> {
         .next()?;
     let (kw_start, kw_len) = kw_pos;
     // Look for a number right after the keyword first, then before it.
-    let after = words.get(kw_start + kw_len..).and_then(|rest| {
-        numbers(rest).into_iter().next().filter(|(n, _)| *n > 0.0 && *n < 100.0)
-    });
-    let before = || {
-        numbers(words.get(..kw_start)?).into_iter().next_back().filter(|(n, _)| *n > 0.0 && *n < 100.0)
-    };
+    let after = words.get(kw_start + kw_len..).and_then(|rest| numbers(rest).into_iter().next().filter(|(n, _)| *n > 0.0 && *n < 100.0));
+    let before = || numbers(words.get(..kw_start)?).into_iter().next_back().filter(|(n, _)| *n > 0.0 && *n < 100.0);
     let (n, rest) = after.or_else(before)?;
     // Unit: inches → feet; feet or bare → feet.
-    if rest.starts_with('"') || rest.starts_with(" IN") || rest.starts_with("IN") {
-        Some(n / 12.0)
-    } else {
-        Some(n)
-    }
+    if rest.starts_with('"') || rest.starts_with(" IN") || rest.starts_with("IN") { Some(n / 12.0) } else { Some(n) }
 }
 
 /// `INV 95.50`, `INV. EL. 95.5`, `IE=95.5`, `INVERT 95.5`.

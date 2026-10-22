@@ -113,17 +113,12 @@ fn ugsheets_builds_from_the_read_services_with_no_manual_input() {
     // Pipe services (water, sewer, storm, gas) must NOT be conduit runs, must have no material,
     // and must not have stub-ups.
     for pipe in ["water", "sewer", "storm", "gas"] {
-        assert!(
-            !service_runs.iter().any(|v| v["system"].as_str() == Some(pipe)),
-            "{pipe} must not be a conduit run"
-        );
+        assert!(!service_runs.iter().any(|v| v["system"].as_str() == Some(pipe)), "{pipe} must not be a conduit run");
     }
     let stubs = r["stubups"].as_array().unwrap();
     for pipe in ["water", "sewer", "storm", "gas"] {
         assert!(
-            !stubs.iter().any(|st| {
-                st["run"].as_str().is_some_and(|r| r.to_ascii_lowercase().contains(pipe))
-            }),
+            !stubs.iter().any(|st| { st["run"].as_str().is_some_and(|r| r.to_ascii_lowercase().contains(pipe)) }),
             "{pipe} must not have a stub-up"
         );
     }
