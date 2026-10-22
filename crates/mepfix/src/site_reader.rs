@@ -475,11 +475,16 @@ pub struct ReadSiteStructure {
 }
 
 /// Read site utility structures from a drawing (the C-103 utility plan).
+///
+/// The symbol's geometry decides first: a circle with a cross is a manhole, a square with an X
+/// a catch basin, a diamond a valve box. A plain circle, square or triangle is only named by its
+/// tag (`CO` cleanout, `JB` junction box, `WM` meter, `BFP` backflow preventer); anything else
+/// stays `unknown` with an empty system, never a guess.
 pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
     let mut result = Vec::new();
 
     let mut strc_circles: Vec<([f64; 2], f64)> = Vec::new();
-    let mut strc_rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut strc_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
     let mut strc_texts: Vec<(String, [f64; 2])> = Vec::new();
     let mut strc_polys: Vec<Vec<[f64; 2]>> = Vec::new();
 
@@ -489,118 +494,96 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
             continue;
         }
         match &e.kind {
-            EntityKind::Circle(c) => {
-                strc_circles.push(([c.center.x, c.center.y], c.radius));
-            }
-            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4 => {
-                let xs: Vec<f64> = p.vertices.iter().map(|v| v.p.x).collect();
-                let ys: Vec<f64> = p.vertices.iter().map(|v| v.p.y).collect();
-                let x_min = xs.iter().copied().fold(f64::INFINITY, f64::min);
-                let y_min = ys.iter().copied().fold(f64::INFINITY, f64::min);
-                let x_max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let y_max = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                // Check if it's a rectangle or a diamond.
-                let is_rect = (xs[0] - xs[1]).abs() < 1.0 || (ys[0] - ys[1]).abs() < 1.0;
-                if is_rect {
-                    strc_rects.push(([x_min, y_min], [x_max, y_max]));
-                } else {
-                    strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect());
-                }
-            }
-            EntityKind::LwPolyline(p) if p.closed => {
-                strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect());
-            }
+            EntityKind::Circle(c) => strc_circles.push(([c.center.x, c.center.y], c.radius)),
+            EntityKind::Line(l) => strc_lines.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() >= 3 => strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect()),
             EntityKind::Text(t) => {
                 let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
                 strc_texts.push((t.value.clone(), pt));
             }
-            EntityKind::MText(t) => {
-                strc_texts.push((t.contents.clone(), [t.insert.x, t.insert.y]));
-            }
+            EntityKind::MText(t) => strc_texts.push((t.contents.clone(), [t.insert.x, t.insert.y])),
             _ => {}
         }
     }
-
-    // Circles with cross lines = manholes; plain circles = cleanouts.
-    for &(center, radius) in &strc_circles {
-        let at = building_from_model(sh, center);
-        let nearby_tag = find_nearest_text(&strc_texts, center, radius * 8.0);
-        let tag_str = nearby_tag.clone().unwrap_or_default();
-        let upper = tag_str.to_uppercase();
-
-        let (kind, system) = if upper.starts_with("STMH") || upper.contains("STORM") {
-            ("manhole", "storm")
-        } else if upper.starts_with("SSMH") || upper.contains("SANITARY") {
-            ("manhole", "sanitary")
-        } else if upper.starts_with("CO") {
-            ("cleanout", "sanitary")
-        } else if upper.starts_with("WM") {
-            ("meter", "water")
-        } else if upper.starts_with("BFP") {
-            ("backflow_preventer", "water")
+    let dist = |a: [f64; 2], b: [f64; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+    // Lines through the symbol's centre about `span` long: a cross or an X inside it.
+    let through = |c: [f64; 2], span: f64| -> Vec<[f64; 2]> {
+        strc_lines
+            .iter()
+            .filter(|(a, b)| dist([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], c) < span * 0.1 && (dist(*a, *b) - span).abs() < span * 0.2)
+            .map(|(a, b)| [b[0] - a[0], b[1] - a[1]])
+            .collect()
+    };
+    let crossed =
+        |dirs: &[[f64; 2]]| dirs.iter().any(|u| dirs.iter().any(|v| (u[0] * v[0] + u[1] * v[1]).abs() < 0.2 * (u[0].hypot(u[1]) * v[0].hypot(v[1]))));
+    let tag_system = |upper: &str| -> &'static str {
+        if upper.starts_with("STMH") || upper.starts_with("SDMH") || upper.contains("STORM") {
+            "storm"
+        } else if upper.starts_with("SSMH") || upper.starts_with("CO") || upper.contains("SANITARY") || upper.contains("SEWER") {
+            "sanitary"
+        } else if upper.starts_with("WM") || upper.starts_with("BFP") || upper.starts_with("VB") || upper.contains("WATER") {
+            "water"
+        } else if upper.starts_with("JB") || upper.contains("ELEC") {
+            "electric"
         } else {
-            ("cleanout", "")
-        };
-
-        let rim = parse_elevation_text(&strc_texts, center, radius * 8.0, "RIM");
-        let inv = parse_elevation_text(&strc_texts, center, radius * 8.0, "INV");
-
-        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
-    }
-
-    // Rectangles with X = catch basins; plain rectangles = junction boxes.
-    for &(mn, mx) in &strc_rects {
-        let cx = (mn[0] + mx[0]) / 2.0;
-        let cy = (mn[1] + mx[1]) / 2.0;
-        let at = building_from_model(sh, [cx, cy]);
-        let nearby_tag = find_nearest_text(&strc_texts, [cx, cy], (mx[0] - mn[0] + mx[1] - mn[1]) * 0.5);
-        let tag_str = nearby_tag.unwrap_or_default();
-        let upper = tag_str.to_uppercase();
-
-        let (kind, system) = if upper.starts_with("CB") {
-            ("catch_basin", "storm")
-        } else if upper.starts_with("JB") {
-            ("junction_box", "electric")
-        } else {
-            ("junction_box", "")
-        };
-
-        let r = (mx[0] - mn[0] + mx[1] - mn[1]) * 0.5;
-        let rim = parse_elevation_text(&strc_texts, [cx, cy], r, "RIM");
-        let inv = parse_elevation_text(&strc_texts, [cx, cy], r, "INV");
-
-        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
-    }
-
-    // Diamonds/polygons = valve boxes; triangles = meters/BFPs.
-    for pts in &strc_polys {
-        if pts.is_empty() {
-            continue;
+            ""
         }
-        let cx: f64 = pts.iter().map(|p| p[0]).sum::<f64>() / pts.len() as f64;
-        let cy: f64 = pts.iter().map(|p| p[1]).sum::<f64>() / pts.len() as f64;
-        let at = building_from_model(sh, [cx, cy]);
-        let r = pts.iter().map(|p| ((p[0] - cx).powi(2) + (p[1] - cy).powi(2)).sqrt()).fold(0.0, f64::max);
-        let nearby_tag = find_nearest_text(&strc_texts, [cx, cy], r * 4.0);
-        let tag_str = nearby_tag.unwrap_or_default();
+    };
+    let tag_texts: Vec<(String, [f64; 2])> = strc_texts.iter().filter(|(t, _)| !t.starts_with("RIM") && !t.starts_with("INV")).cloned().collect();
+    let mut push = |center: [f64; 2], reach: f64, shape: &str| {
+        let tag_str = find_nearest_text(&tag_texts, center, reach).unwrap_or_default();
         let upper = tag_str.to_uppercase();
-
-        let (kind, system) = if upper.starts_with("VB") {
-            ("valve_box", "water")
-        } else if upper.starts_with("WM") {
-            ("meter", "water")
-        } else if upper.starts_with("BFP") {
-            ("backflow_preventer", "water")
-        } else if pts.len() == 4 {
-            ("valve_box", "")
-        } else {
-            ("meter", "")
+        let kind = match shape {
+            "circle_cross" => "manhole",
+            "square_x" => "catch_basin",
+            "diamond" => "valve_box",
+            "circle" if upper.starts_with("CO") => "cleanout",
+            "square" if upper.starts_with("JB") => "junction_box",
+            "triangle" if upper.starts_with("WM") => "meter",
+            "triangle" if upper.starts_with("BFP") => "backflow_preventer",
+            _ => "unknown",
         };
+        let system = match kind {
+            "catch_basin" => "storm",
+            "unknown" => "",
+            _ => tag_system(&upper),
+        };
+        let rim = parse_elevation_text(&strc_texts, center, reach, "RIM");
+        let inv = parse_elevation_text(&strc_texts, center, reach, "INV");
+        result.push(ReadSiteStructure {
+            kind: kind.into(),
+            tag: tag_str,
+            at_ft: building_from_model(sh, center),
+            rim_ft: rim,
+            invert_ft: inv,
+            system: system.into(),
+        });
+    };
 
-        let rim = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "RIM");
-        let inv = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "INV");
-
-        result.push(ReadSiteStructure { kind: kind.into(), tag: tag_str, at_ft: at, rim_ft: rim, invert_ft: inv, system: system.into() });
+    for &(center, radius) in &strc_circles {
+        let shape = if crossed(&through(center, 2.0 * radius)) { "circle_cross" } else { "circle" };
+        push(center, radius.max(1e-9) * 8.0, shape);
+    }
+    for pts in &strc_polys {
+        let n = pts.len() as f64;
+        let c = [pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n];
+        let r = pts.iter().map(|p| dist(*p, c)).fold(0.0, f64::max);
+        let shape = match pts.as_slice() {
+            [_, _, _] => "triangle",
+            [a, b, _, _] => {
+                // An outline with sides along the axes is a square; turned 45° a diamond.
+                let axis = (a[0] - b[0]).abs() < r * 0.05 || (a[1] - b[1]).abs() < r * 0.05;
+                if !axis {
+                    "diamond"
+                } else if through(c, 2.0 * r).len() >= 2 {
+                    "square_x"
+                } else {
+                    "square"
+                }
+            }
+            _ => "other",
+        };
+        push(c, r.max(1e-9) * 6.0, shape);
     }
 
     result

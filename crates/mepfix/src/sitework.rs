@@ -12,6 +12,8 @@ pub const LANDSCAPE_LAYER: &str = "C-LAND";
 pub const FENCE_LAYER: &str = "C-FNCE";
 pub const FURNISH_LAYER: &str = "C-FURN";
 pub const STRUCTURE_LAYER: &str = "C-STRC";
+/// Existing-ground contours on the grading plan (proposed ones stay on [`GRADING_LAYER`]).
+pub const EXISTING_GRADING_LAYER: &str = "C-GRAD-EXST";
 
 /// Design all sitework elements for a hotel.
 pub fn design_sitework(t: &mut Truth, bldg_w: f64, bldg_d: f64, r: &mut Rng) {
@@ -28,6 +30,7 @@ pub fn design_sitework(t: &mut Truth, bldg_w: f64, bldg_d: f64, r: &mut Rng) {
     design_landscaping(t, bldg_w, bldg_d, setback, r);
     design_fencing(t, bldg_w, bldg_d, setback, parking_south);
     design_furnishings(t, bldg_w, setback, parking_south, r);
+    design_utility_piping(t);
     compute_quantities(t);
 }
 
@@ -555,233 +558,198 @@ fn design_furnishings(t: &mut Truth, bldg_w: f64, setback: f64, parking_south: f
     let _ = se_id;
 }
 
+// --- Utility piping ---
+
+/// Size and material of the site utility runs (the underground runs from the site plan): the
+/// pipe a civil utility plan writes beside each run, and its drawn length.
+fn design_utility_piping(t: &mut Truth) {
+    for se in t.site_elements.iter_mut() {
+        let (size, material) = match se.kind.as_str() {
+            "underground_storm" => (12.0, "RCP"),
+            "underground_sewer" => (6.0, "PVC"),
+            "underground_water" => (4.0, "DIP"),
+            _ => continue,
+        };
+        se.size_in = Some(size);
+        se.material = material.into();
+        if let (Some(a), Some(b)) = (se.min_ft, se.max_ft) {
+            se.length_ft = Some(((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt());
+        }
+    }
+}
+
 // --- Quantity takeoff ---
 
-fn compute_quantities(t: &mut Truth) {
-    let mut sq_id = 0;
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+/// A takeoff line whose quantity is the sum of its elements' shares.
+fn line(csi: &str, description: &str, unit: &str, status: &str, sources: &[&str], elements: Vec<SiteQuantityPart>) -> SiteQuantity {
+    SiteQuantity {
+        id: String::new(),
+        csi: csi.into(),
+        description: description.into(),
+        // `+ 0.0`: an empty sum is -0.0.
+        quantity: round2(elements.iter().map(|e| e.quantity).sum::<f64>() + 0.0),
+        unit: unit.into(),
+        sources: sources.iter().map(|s| s.to_string()).collect(),
+        status: status.into(),
+        elements,
+    }
+}
+
+fn parts<'a>(it: impl Iterator<Item = &'a SiteElement>, share: impl Fn(&SiteElement) -> f64) -> Vec<SiteQuantityPart> {
+    it.map(|se| SiteQuantityPart { id: se.id.clone(), quantity: round2(share(se)) }).collect()
+}
+
+/// The site takeoff from the design. Earthwork is the cut and fill between the existing and the
+/// proposed surfaces built from the grading contours (the same computation the `site.takeoff`
+/// command runs on the read C-102); a missing surface gives an `insufficient data` line, never a
+/// number. Every line names its sheets, its status and the elements whose shares make it up.
+pub fn compute_quantities(t: &mut Truth) {
+    use cadaddy_engine::cmd::sitetakeoff::{self as st, Contour, Surface};
     let mut qs = Vec::new();
 
-    // Earthwork: cut/fill from grading contours.
-    let existing: Vec<&GradingContour> = t.grading_contours.iter().filter(|c| c.surface == "existing").collect();
-    let proposed: Vec<&GradingContour> = t.grading_contours.iter().filter(|c| c.surface == "proposed").collect();
-    if !existing.is_empty() && !proposed.is_empty() {
-        // Simplified cut/fill estimate from elevation differences.
-        let avg_existing: f64 = existing.iter().map(|c| c.elevation_ft).sum::<f64>() / existing.len() as f64;
-        let avg_proposed: f64 = proposed.iter().map(|c| c.elevation_ft).sum::<f64>() / proposed.len() as f64;
-        let site_area: f64 = t.site_elements.iter().filter(|se| se.kind == "building_pad").filter_map(|se| se.area_sf).sum::<f64>().max(5000.0);
-        let diff = avg_proposed - avg_existing;
-        let cy = (diff.abs() * site_area / 27.0).max(100.0);
-        if diff > 0.0 {
-            qs.push(SiteQuantity {
-                id: format!("sq-{sq_id}"),
-                csi: "31 22 00".into(),
-                description: "FILL (COMPACTED)".into(),
-                quantity: cy.round(),
-                unit: "CY".into(),
-            });
-        } else {
-            qs.push(SiteQuantity {
-                id: format!("sq-{sq_id}"),
-                csi: "31 22 00".into(),
-                description: "CUT (EXCAVATION)".into(),
-                quantity: cy.round(),
-                unit: "CY".into(),
-            });
+    // Earthwork: cut and fill between the surfaces.
+    let contours: Vec<Contour> = t
+        .grading_contours
+        .iter()
+        .filter_map(|c| {
+            let surface = match c.surface.as_str() {
+                "existing" => Surface::Existing,
+                "proposed" => Surface::Proposed,
+                _ => return None,
+            };
+            Some(Contour { id: c.id.clone(), sheet: "C-102".into(), surface, elevation_ft: c.elevation_ft, points_ft: c.points.clone() })
+        })
+        .collect();
+    let to_parts = |ps: Vec<st::Part>| ps.into_iter().map(|p| SiteQuantityPart { id: p.id, quantity: p.quantity }).collect::<Vec<_>>();
+    match st::earthwork(&contours, &[]) {
+        Ok(e) => {
+            qs.push(line("31 22 00", "EARTHWORK, CUT (EXCAVATION)", "CY", "read", &["C-102"], to_parts(e.cut_parts)));
+            qs.push(line("31 22 00", "EARTHWORK, FILL (COMPACTED)", "CY", "read", &["C-102"], to_parts(e.fill_parts)));
         }
-        sq_id += 1;
+        Err(why) => qs.push(SiteQuantity {
+            csi: "31 22 00".into(),
+            description: format!("EARTHWORK, CUT AND FILL: {why}"),
+            unit: "CY".into(),
+            sources: vec!["C-102".into()],
+            status: "insufficient data".into(),
+            ..SiteQuantity::default()
+        }),
     }
+    let of = |kinds: &[&str]| -> Vec<&SiteElement> { t.site_elements.iter().filter(|se| kinds.contains(&se.kind.as_str())).collect() };
 
     // Paving.
-    let asphalt_sf: f64 = t.site_elements.iter().filter(|se| se.kind == "paving_asphalt").filter_map(|se| se.area_sf).sum();
-    if asphalt_sf > 0.0 {
-        // Aggregate base course: 6 inches.
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 11 23".into(),
-            description: "AGGREGATE BASE COURSE, 6 IN.".into(),
-            quantity: (asphalt_sf / 9.0).round(), // SY
-            unit: "SY".into(),
-        });
-        sq_id += 1;
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 12 16".into(),
-            description: "ASPHALT PAVING, 3 IN. HOT MIX".into(),
-            quantity: (asphalt_sf / 9.0).round(),
-            unit: "SY".into(),
-        });
-        sq_id += 1;
+    let asphalt = of(&["paving_asphalt"]);
+    if !asphalt.is_empty() {
+        let p = parts(asphalt.iter().copied(), |se| se.area_sf.unwrap_or(0.0) / 9.0);
+        qs.push(line("32 11 23", "AGGREGATE BASE COURSE (UNDER ASPHALT)", "SY", "rule", &["C-101"], p.clone()));
+        qs.push(line("32 12 16", "ASPHALT PAVING", "SY", "read", &["C-101"], p));
+    }
+    let concrete = of(&["paving_concrete", "sidewalk"]);
+    if !concrete.is_empty() {
+        qs.push(line("32 13 13", "CONCRETE PAVING AND WALKS", "SF", "read", &["C-101"], parts(concrete.into_iter(), |se| se.area_sf.unwrap_or(0.0))));
     }
 
-    let concrete_sf: f64 =
-        t.site_elements.iter().filter(|se| se.kind == "paving_concrete" || se.kind == "sidewalk").filter_map(|se| se.area_sf).sum();
-    if concrete_sf > 0.0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 13 13".into(),
-            description: "CONCRETE PAVING, 4 IN.".into(),
-            quantity: concrete_sf.round(),
-            unit: "SF".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Curbs.
-    let curb_lf: f64 = t.site_elements.iter().filter(|se| se.kind == "curb").filter_map(|se| se.length_ft).sum();
-    if curb_lf > 0.0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 16 13".into(),
-            description: "CONCRETE CURB AND GUTTER".into(),
-            quantity: curb_lf.round(),
-            unit: "LF".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Striping.
-    let stripe_count = t.site_elements.iter().filter(|se| se.kind == "striping").count();
-    if stripe_count > 0 {
-        let stripe_lf: f64 =
-            t.site_elements.iter().filter(|se| se.kind == "striping").filter_map(|se| se.length_ft).sum::<f64>().max(stripe_count as f64 * 18.0);
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 17 23".into(),
-            description: "PARKING LOT STRIPING".into(),
-            quantity: stripe_lf.round(),
-            unit: "LF".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Fencing.
-    let fence_lf: f64 = t.site_elements.iter().filter(|se| se.kind == "fence").filter_map(|se| se.length_ft).sum();
-    if fence_lf > 0.0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 31 13".into(),
-            description: "CHAIN LINK FENCE, 6 FT".into(),
-            quantity: fence_lf.round(),
-            unit: "LF".into(),
-        });
-        sq_id += 1;
-    }
-
-    let gate_count = t.site_elements.iter().filter(|se| se.kind == "gate").count();
-    if gate_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 31 13".into(),
-            description: "CHAIN LINK GATE, 24 FT DOUBLE SWING".into(),
-            quantity: gate_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Retaining walls.
-    let rw_sf: f64 =
-        t.site_elements.iter().filter(|se| se.kind == "retaining_wall").map(|se| se.length_ft.unwrap_or(0.0) * se.height_ft.unwrap_or(0.0)).sum();
-    if rw_sf > 0.0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 32 23".into(),
-            description: "CONCRETE RETAINING WALL".into(),
-            quantity: rw_sf.round(),
-            unit: "SF".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Landscaping.
-    let tree_count = t.site_elements.iter().filter(|se| se.kind == "tree").count();
-    if tree_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 93 00".into(),
-            description: "SHADE TREE, 3 IN. CALIPER".into(),
-            quantity: tree_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-    let shrub_count = t.site_elements.iter().filter(|se| se.kind == "shrub").count();
-    if shrub_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 93 00".into(),
-            description: "SHRUB, 5 GAL".into(),
-            quantity: shrub_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Irrigation.
-    let irr_count = t.site_elements.iter().filter(|se| se.kind == "irrigation_head").count();
-    if irr_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "32 84 00".into(),
-            description: "IRRIGATION SPRAY HEAD".into(),
-            quantity: irr_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Site furnishings.
-    let bench_count = t.site_elements.iter().filter(|se| se.kind == "bench").count();
-    if bench_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "12 93 13".into(),
-            description: "SITE BENCH".into(),
-            quantity: bench_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-    let rack_count = t.site_elements.iter().filter(|se| se.kind == "bike_rack").count();
-    if rack_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "12 93 13".into(),
-            description: "BIKE RACK".into(),
-            quantity: rack_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-    let tc_count = t.site_elements.iter().filter(|se| se.kind == "trash_can").count();
-    if tc_count > 0 {
-        qs.push(SiteQuantity {
-            id: format!("sq-{sq_id}"),
-            csi: "12 93 13".into(),
-            description: "TRASH RECEPTACLE".into(),
-            quantity: tc_count as f64,
-            unit: "EA".into(),
-        });
-        sq_id += 1;
-    }
-
-    // Utility structures.
-    for (kind, desc, csi) in [
-        ("manhole", "SANITARY/STORM MANHOLE", "33 05 13"),
-        ("catch_basin", "CATCH BASIN", "33 41 13"),
-        ("cleanout", "CLEANOUT", "33 31 13"),
-        ("valve_box", "VALVE BOX", "33 11 13"),
-        ("junction_box", "ELECTRIC JUNCTION BOX", "33 71 00"),
-        ("meter", "WATER METER", "33 11 13"),
-        ("backflow_preventer", "BACKFLOW PREVENTER", "33 11 13"),
+    // Linear and counted site work.
+    for (kind, csi, desc, unit, sheets) in [
+        ("curb", "32 16 13", "CONCRETE CURB AND GUTTER", "LF", &["C-101"][..]),
+        ("striping", "32 17 23", "PARKING LOT STRIPING", "LF", &["C-101"][..]),
+        ("fence", "32 31 13", "FENCE", "LF", &["C-101"][..]),
+        ("gate", "32 31 13", "FENCE GATE", "EA", &["C-101"][..]),
+        ("retaining_wall", "32 32 23", "CONCRETE RETAINING WALL", "SF", &["C-101", "C-102"][..]),
+        ("tree", "32 93 00", "SHADE TREE, 3 IN. CALIPER", "EA", &["C-101"][..]),
+        ("shrub", "32 93 00", "SHRUB, 5 GAL", "EA", &["C-101"][..]),
+        ("irrigation_head", "32 84 00", "IRRIGATION SPRAY HEAD", "EA", &["C-101"][..]),
+        ("bench", "12 93 13", "SITE BENCH", "EA", &["C-101"][..]),
+        ("bike_rack", "12 93 13", "BIKE RACK", "EA", &["C-101"][..]),
+        ("trash_can", "12 93 13", "TRASH RECEPTACLE", "EA", &["C-101"][..]),
     ] {
-        let count = t.site_structures.iter().filter(|s| s.kind == kind).count();
-        if count > 0 {
-            qs.push(SiteQuantity { id: format!("sq-{sq_id}"), csi: csi.into(), description: desc.into(), quantity: count as f64, unit: "EA".into() });
-            sq_id += 1;
+        let es = of(&[kind]);
+        // Striping without a drawn length (the accessible-space hatch) isn't linear.
+        let es: Vec<&SiteElement> = es.into_iter().filter(|se| unit != "LF" || se.length_ft.is_some()).collect();
+        if es.is_empty() {
+            continue;
+        }
+        let share = |se: &SiteElement| match (unit, kind) {
+            ("EA", _) => 1.0,
+            ("SF", _) => se.length_ft.unwrap_or(0.0) * se.height_ft.unwrap_or(0.0),
+            _ => se.length_ft.unwrap_or(0.0),
+        };
+        qs.push(line(csi, desc, unit, "read", sheets, parts(es.into_iter(), share)));
+    }
+
+    // Utility piping by system, size and material, then its trench.
+    let mut systems: Vec<(&str, &str, &str, &str)> = Vec::new();
+    for (kind, system, csi, name) in [
+        ("underground_storm", "storm", "33 41 00", "STORM"),
+        ("underground_sewer", "sanitary", "33 31 00", "SANITARY SEWER"),
+        ("underground_water", "water", "33 11 00", "WATER"),
+    ] {
+        if of(&[kind]).iter().any(|se| se.length_ft.is_some()) {
+            systems.push((kind, system, csi, name));
         }
     }
+    for &(kind, _, csi, name) in &systems {
+        let mut groups: Vec<((Option<u64>, String), Vec<&SiteElement>)> = Vec::new();
+        for se in of(&[kind]).into_iter().filter(|se| se.length_ft.is_some()) {
+            let key = (se.size_in.map(f64::to_bits), se.material.to_ascii_uppercase());
+            match groups.iter_mut().find(|g| g.0 == key) {
+                Some(g) => g.1.push(se),
+                None => groups.push((key, vec![se])),
+            }
+        }
+        for ((size, material), es) in groups {
+            let size = size.map(f64::from_bits);
+            let desc = format!(
+                "{name} PIPE, {}{}",
+                size.map_or("SIZE NOT SHOWN".to_string(), |s| format!("{} IN.", trim_num(s))),
+                if material.is_empty() { String::new() } else { format!(" {material}") }
+            );
+            qs.push(line(csi, &desc, "LF", "read", &["C-101", "C-103"], parts(es.into_iter(), |se| se.length_ft.unwrap_or(0.0))));
+        }
+    }
+    for &(kind, _, _, name) in &systems {
+        let es: Vec<&SiteElement> =
+            of(&[kind]).into_iter().filter(|se| se.length_ft.is_some() && se.size_in.is_some() && se.depth_ft.is_some()).collect();
+        if es.is_empty() {
+            continue;
+        }
+        let tr = |se: &SiteElement| st::trench_cy(se.length_ft.unwrap_or(0.0), se.size_in.unwrap_or(0.0), se.depth_ft.unwrap_or(0.0));
+        qs.push(line(
+            "31 23 16",
+            &format!("TRENCH EXCAVATION, {name} PIPE"),
+            "CY",
+            "rule",
+            &["C-101", "C-103"],
+            parts(es.iter().copied(), |se| tr(se).0),
+        ));
+        qs.push(line("31 23 23", &format!("TRENCH BACKFILL, {name} PIPE"), "CY", "rule", &["C-101", "C-103"], parts(es.into_iter(), |se| tr(se).1)));
+    }
 
-    let _ = sq_id;
+    // Utility structures: storm and sanitary manholes on their own lines.
+    let mut by_line: Vec<((&str, String), Vec<SiteQuantityPart>)> = Vec::new();
+    for s in &t.site_structures {
+        let Some((csi, desc)) = st::structure_line(&s.kind, &s.system) else { continue };
+        let part = SiteQuantityPart { id: s.id.clone(), quantity: 1.0 };
+        match by_line.iter_mut().find(|l| l.0.0 == csi && l.0.1 == desc) {
+            Some(l) => l.1.push(part),
+            None => by_line.push(((csi, desc), vec![part])),
+        }
+    }
+    for ((csi, desc), ps) in by_line {
+        qs.push(line(csi, &desc, "EA", "read", &["C-103"], ps));
+    }
+
+    for (i, q) in qs.iter_mut().enumerate() {
+        q.id = format!("sq-{i}");
+    }
     t.site_quantities = qs;
+}
+
+fn trim_num(v: f64) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
