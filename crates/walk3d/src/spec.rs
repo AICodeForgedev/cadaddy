@@ -715,11 +715,14 @@ pub struct Mep {
     /// heaters, condensing units, meters), each a box at its tag on the plan.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<MepEquipment>,
+    /// What each revision of the prints changed, run by run, oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub revisions: Vec<MepRevision>,
 }
 
 impl Mep {
     pub fn is_empty(&self) -> bool {
-        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty()
+        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty() && self.revisions.is_empty()
     }
 }
 
@@ -776,6 +779,25 @@ pub struct MepTerminal {
     /// The plan objects it was read from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+}
+
+/// One change a revision of the prints made to a run: the revision log.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepRevision {
+    /// The revision (`ASI-01`).
+    pub revision: String,
+    /// The run's [`MepRun::id`].
+    pub item: String,
+    pub system: String,
+    pub level: String,
+    /// `resized`, `raised` (a height changed), `rerouted`, `added` or `removed`.
+    pub change: String,
+    /// As it was and as the revision has it (sizes in inches, heights in feet, as text).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub from: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub to: String,
 }
 
 fn default_terminal_kind() -> String {
@@ -879,6 +901,10 @@ pub struct MepRun {
     /// The plan objects it was read from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+    /// A name that stays with the run from one revision of the prints to the next (`R12`), given
+    /// when a revision first compares it; empty before.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
 }
 
 /// What the reflected ceiling plans say, on the floor plans' coordinates.

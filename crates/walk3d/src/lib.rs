@@ -40,7 +40,7 @@ pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules
 pub use spec::{
     Assembly, AssemblyLayer, Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, CeilingKind, CeilingType, Cricket, Described,
     DuctType, Equipment, Exterior, Facade, Family, FamilyKind, GridColumn, Hang, Head, HeadTo, HeadTrack, HeightRule, Issue, ItemKind, LayerRole,
-    LayerSide, MAX_ASSEMBLY_LAYERS, Mep, MepEquipment, MepKind, MepRun, MepSystem, MepTerminal, OpeningTag, Rcp, Role, Roof, RoofSlope,
+    LayerSide, MAX_ASSEMBLY_LAYERS, Mep, MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, Rcp, Role, Roof, RoofSlope,
     Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Side, Site, Soffit, SoffitType, Stair, Surfaces, WallFrom, WallMark, WallType, feet,
     inches, level_at, merge, pitch_text,
 };

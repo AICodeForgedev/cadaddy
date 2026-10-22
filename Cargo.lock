@@ -699,6 +699,7 @@ dependencies = [
  "cadaddy-fonts",
  "cadaddy-geom",
  "cadaddy-io",
+ "cadaddy-mepfix",
  "cadaddy-render",
  "cadaddy-walk3d",
  "chrono",

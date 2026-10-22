@@ -89,6 +89,7 @@ mod perceive;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
+pub mod printrev;
 pub mod printset;
 pub mod projrules;
 mod props;
@@ -296,6 +297,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mepqty::specs());
         v.extend(printset::specs());
         v.extend(validate::specs());
+        v.extend(printrev::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());
         v.extend(exterior::specs());
