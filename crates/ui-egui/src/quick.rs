@@ -85,8 +85,10 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            egui::Grid::new("qs_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label(crate::tl!("Apply to:"));
+            let mut body = crate::rtl::Body::new(ui);
+            let ui = &mut *body;
+            crate::rtl::show_grid(egui::Grid::new("qs_grid").num_columns(2).spacing(vec2(10.0, 6.0)), ui, |ui| {
+                crate::rtl::lead(ui, crate::tl!("Apply to:"));
                 egui::ComboBox::from_id_salt("qs_apply")
                     .width(220.0)
                     .selected_text(crate::i18n::t(if st.apply_selection { "Current selection" } else { "Entire drawing" }))
@@ -96,8 +98,9 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             ui.selectable_value(&mut st.apply_selection, true, crate::tl!("Current selection"));
                         });
                     });
+                crate::rtl::trail(ui, crate::tl!("Apply to:"));
                 ui.end_row();
-                ui.label(crate::tl!("Object type:"));
+                crate::rtl::lead(ui, crate::tl!("Object type:"));
                 let types: Vec<(String, u64)> = st
                     .info
                     .get("types")
@@ -114,8 +117,9 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.selectable_value(&mut st.ty, n.clone(), format!("{} ({c})", crate::i18n::t(n)));
                     }
                 });
+                crate::rtl::trail(ui, crate::tl!("Object type:"));
                 ui.end_row();
-                ui.label(crate::tl!("Properties:"));
+                crate::rtl::lead(ui, crate::tl!("Properties:"));
                 let props: Vec<String> = st
                     .info
                     .get("properties")
@@ -134,16 +138,18 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         });
                     });
                 });
+                crate::rtl::trail(ui, crate::tl!("Properties:"));
                 ui.end_row();
-                ui.label(crate::tl!("Operator:"));
+                crate::rtl::lead(ui, crate::tl!("Operator:"));
                 let op_label = OPERATORS.iter().find(|o| o.0 == st.operator).map(|o| o.1).unwrap_or("= Equals");
                 egui::ComboBox::from_id_salt("qs_op").width(220.0).selected_text(crate::i18n::t(op_label)).show_ui(ui, |ui| {
                     for (o, l) in OPERATORS {
                         ui.selectable_value(&mut st.operator, o.to_string(), crate::i18n::t(l));
                     }
                 });
+                crate::rtl::trail(ui, crate::tl!("Operator:"));
                 ui.end_row();
-                ui.label(crate::tl!("Value:"));
+                crate::rtl::lead(ui, crate::tl!("Value:"));
                 let choices: Vec<String> = match st.property.as_str() {
                     "color" => {
                         ["ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"].iter().map(|s| s.to_string()).collect()
@@ -175,6 +181,7 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         });
                     }
                 });
+                crate::rtl::trail(ui, crate::tl!("Value:"));
                 ui.end_row();
             });
             ui.separator();
@@ -183,38 +190,36 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.radio_value(&mut st.exclude, true, crate::tl!("Exclude from new selection set"));
             ui.checkbox(&mut st.append, crate::tl!("Append to current selection set"));
             ui.separator();
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(crate::tl!("  OK  ")).clicked() {
-                        let mode = if st.exclude {
-                            "exclude"
-                        } else if st.append {
-                            "append"
-                        } else {
-                            "new"
-                        };
-                        let mut p = json!({
-                            "applyTo": if st.apply_selection { "selection" } else { "drawing" },
-                            "mode": mode,
-                        });
-                        if let Some(o) = p.as_object_mut() {
-                            if st.ty != "Multiple" {
-                                o.insert("type".into(), json!(st.ty));
-                            }
-                            if !st.property.is_empty() && (!st.value.trim().is_empty() || st.operator == "*") {
-                                o.insert("property".into(), json!(st.property));
-                                o.insert("operator".into(), json!(st.operator));
-                                let v = st.value.trim();
-                                o.insert("value".into(), v.parse::<f64>().map(|f| json!(f)).unwrap_or_else(|_| json!(v)));
-                            }
+            crate::rtl::row(ui, |ui| {
+                if ui.button(crate::tl!("  OK  ")).clicked() {
+                    let mode = if st.exclude {
+                        "exclude"
+                    } else if st.append {
+                        "append"
+                    } else {
+                        "new"
+                    };
+                    let mut p = json!({
+                        "applyTo": if st.apply_selection { "selection" } else { "drawing" },
+                        "mode": mode,
+                    });
+                    if let Some(o) = p.as_object_mut() {
+                        if st.ty != "Multiple" {
+                            o.insert("type".into(), json!(st.ty));
                         }
-                        run = Some(p);
-                        close = true;
+                        if !st.property.is_empty() && (!st.value.trim().is_empty() || st.operator == "*") {
+                            o.insert("property".into(), json!(st.property));
+                            o.insert("operator".into(), json!(st.operator));
+                            let v = st.value.trim();
+                            o.insert("value".into(), v.parse::<f64>().map(|f| json!(f)).unwrap_or_else(|_| json!(v)));
+                        }
                     }
-                    if ui.button(crate::tl!("Cancel")).clicked() {
-                        close = true;
-                    }
-                });
+                    run = Some(p);
+                    close = true;
+                }
+                if ui.button(crate::tl!("Cancel")).clicked() {
+                    close = true;
+                }
             });
         });
     ctx.data_mut(|d| d.insert_temp(sid, st));
@@ -235,19 +240,21 @@ struct QpState {
 }
 
 fn num_row(ui: &mut egui::Ui, label: &str, id: egui::Id, v: f64, set: &mut Option<(String, Value)>, key: &str) {
-    ui.label(RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
+    crate::rtl::lead(ui, RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
     let s = format!("{v:.4}");
     if let Some(n) = crate::parametric::expr_field(ui, id, &s)
         && let Some(f) = cadaddy_engine::units::parse_distance(&n).or_else(|| n.parse::<f64>().ok()).filter(|f| f.is_finite())
     {
         *set = Some((key.to_string(), json!(f)));
     }
+    crate::rtl::trail(ui, RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
     ui.end_row();
 }
 
 fn ro_row(ui: &mut egui::Ui, label: &str, v: String) {
-    ui.label(RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
+    crate::rtl::lead(ui, RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
     ui.label(v);
+    crate::rtl::trail(ui, RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
     ui.end_row();
 }
 
@@ -345,17 +352,18 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                     }
                 });
             }
-            egui::Grid::new("qp_grid").num_columns(2).spacing(vec2(10.0, 4.0)).min_col_width(80.0).show(ui, |ui| {
+            crate::rtl::show_grid(egui::Grid::new("qp_grid").num_columns(2).spacing(vec2(10.0, 4.0)).min_col_width(80.0), ui, |ui| {
                 if wants("color") {
-                    ui.label(RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
+                    crate::rtl::lead(ui, RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
                     let cur = color.unwrap_or(cadaddy_color::Color::ByLayer);
                     if let Some(c) = crate::layers::color_button(ui, egui::Id::new(("qp_color", &ids)), cur, true, 150.0) {
                         set = Some(("color".into(), json!(c.name())));
                     }
+                    crate::rtl::trail(ui, RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
                     ui.end_row();
                 }
                 if wants("layer") {
-                    ui.label(RichText::new(crate::tl!("Layer")).color(Tokens::get().text_dim));
+                    crate::rtl::lead(ui, RichText::new(crate::tl!("Layer")).color(Tokens::get().text_dim));
                     egui::ComboBox::from_id_salt("qp_layer").width(150.0).selected_text(layer.clone()).show_ui(ui, |ui| {
                         for l in &layers {
                             if ui.selectable_label(*l == layer, l).clicked() {
@@ -363,6 +371,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                             }
                         }
                     });
+                    crate::rtl::trail(ui, RichText::new(crate::tl!("Layer")).color(Tokens::get().text_dim));
                     ui.end_row();
                 }
                 // Several objects of one type (or a type with its own list): shared values or *VARIES*.
@@ -372,17 +381,18 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         None => "*VARIES*".to_string(),
                     };
                     if fd.edit {
-                        ui.label(RichText::new(crate::i18n::t(fd.label)).color(Tokens::get().text_dim));
+                        crate::rtl::lead(ui, RichText::new(crate::i18n::t(fd.label)).color(Tokens::get().text_dim));
                         if let Some(v) = crate::palettes::edit_number(ui, egui::Id::new(("qp_multi", fd.key, &ids)), &shown) {
                             set = Some((fd.key.to_string(), json!(v)));
                         }
+                        crate::rtl::trail(ui, RichText::new(crate::i18n::t(fd.label)).color(Tokens::get().text_dim));
                         ui.end_row();
                     } else {
                         ro_row(ui, fd.label, shown);
                     }
                 }
                 if wants("linetype") {
-                    ui.label(RichText::new(crate::tl!("Linetype")).color(Tokens::get().text_dim));
+                    crate::rtl::lead(ui, RichText::new(crate::tl!("Linetype")).color(Tokens::get().text_dim));
                     egui::ComboBox::from_id_salt("qp_lt").width(150.0).selected_text(linetype.clone()).show_ui(ui, |ui| {
                         for l in std::iter::once("ByLayer".to_string())
                             .chain(std::iter::once("ByBlock".to_string()))
@@ -393,6 +403,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                             }
                         }
                     });
+                    crate::rtl::trail(ui, RichText::new(crate::tl!("Linetype")).color(Tokens::get().text_dim));
                     ui.end_row();
                 }
                 let id = |k: &str| egui::Id::new(("qp", k, &ids));
@@ -430,19 +441,21 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         num_row(ui, "Global width", id("w"), p.const_width, &mut set, "width");
                     }
                     Some(EntityKind::Text(tx)) => {
-                        ui.label(RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
+                        crate::rtl::lead(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
                         if let Some(v) = crate::parametric::expr_field(ui, id("txt"), &tx.value) {
                             set = Some(("text".into(), json!(v)));
                         }
+                        crate::rtl::trail(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
                         ui.end_row();
                         num_row(ui, "Height", id("h"), tx.height, &mut set, "height");
                         num_row(ui, "Rotation", id("rot"), tx.rotation.to_degrees(), &mut set, "rotation");
                     }
                     Some(EntityKind::MText(tx)) => {
-                        ui.label(RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
+                        crate::rtl::lead(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
                         if let Some(v) = crate::parametric::expr_field(ui, id("mtxt"), &tx.contents) {
                             set = Some(("text".into(), json!(v)));
                         }
+                        crate::rtl::trail(ui, RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
                         ui.end_row();
                         num_row(ui, "Text height", id("h"), tx.height, &mut set, "height");
                     }
@@ -452,21 +465,20 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         num_row(ui, "Scale", id("sc"), i.scale.x, &mut set, "scale");
                     }
                     Some(EntityKind::Dimension(dm)) => {
-                        ui.label(RichText::new(crate::tl!("Text override")).color(Tokens::get().text_dim));
+                        crate::rtl::lead(ui, RichText::new(crate::tl!("Text override")).color(Tokens::get().text_dim));
                         if let Some(v) = crate::parametric::expr_field(ui, id("dt"), &dm.text) {
                             set = Some(("textOverride".into(), json!(v)));
                         }
+                        crate::rtl::trail(ui, RichText::new(crate::tl!("Text override")).color(Tokens::get().text_dim));
                         ui.end_row();
                     }
                     _ => {}
                 }
             });
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(crate::tl!("Close")).on_hover_text(crate::tl!("Turn Quick Properties off (QPMODE)")).clicked() {
-                        close = true;
-                    }
-                });
+            crate::rtl::row(ui, |ui| {
+                if ui.small_button(crate::tl!("Close")).on_hover_text(crate::tl!("Turn Quick Properties off (QPMODE)")).clicked() {
+                    close = true;
+                }
             });
         });
     ctx.data_mut(|dd| dd.insert_temp(sid, st));
@@ -528,5 +540,59 @@ mod tests {
     fn pretty_names() {
         assert_eq!(super::pretty("centerX"), "Center X");
         assert_eq!(super::pretty("layer"), "Layer");
+    }
+
+    /// Quick Select lays out in both Arabic and English without panics (the grid would panic if
+    /// placed inside a right-to-left layout without `rtl::show_grid`).
+    #[test]
+    fn qselect_lays_out_in_arabic_and_english() {
+        for language in ["ar", "en"] {
+            crate::i18n::with_language(language, || {
+                let mut app = crate::CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+                let _ = app.run("new", serde_json::json!({}));
+                let ctx = egui::Context::default();
+                for _ in 0..2 {
+                    app.ui.dialog = Some("qselect".into());
+                    let mut frame = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            crate::dialogs::show(&mut app, ui.ctx());
+                        },
+                    );
+                    frame.textures_delta.clear();
+                }
+            });
+        }
+    }
+
+    /// Quick Properties lays out when objects are selected, in both directions.
+    #[test]
+    fn quick_properties_lays_out_in_arabic_and_english() {
+        for language in ["ar", "en"] {
+            crate::i18n::with_language(language, || {
+                let mut app = crate::CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+                let _ = app.run("new", serde_json::json!({}));
+                let _ = app.run("line", serde_json::json!({"points": [[0, 0], [10, 0]]}));
+                // Select all so Quick Properties has something to show.
+                let _ = app.run("select", serde_json::json!({"all": true}));
+                app.session.settings.qpmode = true;
+                let ctx = egui::Context::default();
+                for _ in 0..2 {
+                    let mut frame = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            super::quick_properties(&mut app, ui.ctx());
+                        },
+                    );
+                    frame.textures_delta.clear();
+                }
+            });
+        }
     }
 }

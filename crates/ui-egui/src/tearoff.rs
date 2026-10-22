@@ -18,6 +18,8 @@ pub struct TornWindow {
     pub rect: [f32; 4],
     /// Its GPU layer set ([`crate::gpu::with_canvas_slot`]); 0 is the main window's.
     pub slot: usize,
+    /// When true the drawing also stays in the main tab (NEWWINDOW): a second view, not a move.
+    pub pinned: bool,
     canvas: CanvasState,
 }
 
@@ -28,9 +30,9 @@ fn index_of(app: &CadApp, uid: u64) -> Option<usize> {
     app.session.docs.iter().position(|d| d.uid == uid)
 }
 
-/// Whether drawing `index` is in a window of its own.
+/// Whether drawing `index` has been moved to a window of its own (not just an extra view).
 pub fn is_torn(app: &CadApp, index: usize) -> bool {
-    app.session.docs.get(index).is_some_and(|d| app.torn.iter().any(|w| w.uid == d.uid))
+    app.session.docs.get(index).is_some_and(|d| app.torn.iter().any(|w| w.uid == d.uid && !w.pinned))
 }
 
 /// The drawing the main window shows: the active one unless it is torn off, else the last one
@@ -46,7 +48,7 @@ pub fn main_index(app: &CadApp) -> Option<usize> {
 /// Move drawing `index` into a window of its own, its top-left at `at` (screen points) if given.
 pub fn tear_off(app: &mut CadApp, index: usize, at: Option<egui::Pos2>) -> Result<(), String> {
     let uid = app.session.docs.get(index).map(|d| d.uid).ok_or("no such drawing")?;
-    if app.torn.iter().any(|w| w.uid == uid) {
+    if app.torn.iter().any(|w| w.uid == uid && !w.pinned) {
         return Ok(());
     }
     let slot = (1..crate::gpu::MAX_CANVASES).find(|s| !app.torn.iter().any(|w| w.slot == *s)).ok_or("too many drawing windows open")?;
@@ -55,7 +57,7 @@ pub fn tear_off(app: &mut CadApp, index: usize, at: Option<egui::Pos2>) -> Resul
     canvas.gpu_device = app.canvas.gpu_device.clone();
     let n = app.torn.len() as f32;
     let at = at.unwrap_or(egui::pos2(120.0 + 30.0 * n, 120.0 + 30.0 * n));
-    app.torn.push(TornWindow { uid, rect: [at.x, at.y, NEW_SIZE[0], NEW_SIZE[1]], slot, canvas });
+    app.torn.push(TornWindow { uid, rect: [at.x, at.y, NEW_SIZE[0], NEW_SIZE[1]], slot, pinned: false, canvas });
     // The main window goes on with another drawing (or the Start tab when none is left).
     if app.session.active == index {
         match main_index(app) {
@@ -63,6 +65,20 @@ pub fn tear_off(app: &mut CadApp, index: usize, at: Option<egui::Pos2>) -> Resul
             None => app.ui.start_tab = true,
         }
     }
+    Ok(())
+}
+
+/// Open a second window on drawing `index`, which stays in the main tab too (NEWWINDOW). Each
+/// call adds another window; edits in any of them go to the same drawing.
+pub fn new_window(app: &mut CadApp, index: usize) -> Result<(), String> {
+    let uid = app.session.docs.get(index).map(|d| d.uid).ok_or("no such drawing")?;
+    let slot = (1..crate::gpu::MAX_CANVASES).find(|s| !app.torn.iter().any(|w| w.slot == *s)).ok_or("too many drawing windows open")?;
+    let mut canvas = CanvasState::default();
+    canvas.gpu = app.canvas.gpu;
+    canvas.gpu_device = app.canvas.gpu_device.clone();
+    let n = app.torn.len() as f32;
+    let at = egui::pos2(120.0 + 30.0 * n, 120.0 + 30.0 * n);
+    app.torn.push(TornWindow { uid, rect: [at.x, at.y, NEW_SIZE[0], NEW_SIZE[1]], slot, pinned: true, canvas });
     Ok(())
 }
 
@@ -227,6 +243,28 @@ mod tests {
         let uid = app.session.docs[1].uid;
         dock(&mut app, uid);
         assert!(app.torn.is_empty() && app.session.active == 1);
+    }
+
+    #[test]
+    fn newwindow_opens_a_second_view_while_the_drawing_stays_in_the_main_tab() {
+        let mut app = app_with_two();
+        // NEWWINDOW on the active drawing: a window opens, but the drawing stays in the main tab.
+        new_window(&mut app, 1).unwrap();
+        assert!(!is_torn(&app, 1), "pinned: not torn — stays in tabs");
+        assert_eq!(app.session.active, 1, "the drawing stays active");
+        assert_eq!(main_index(&app), Some(1), "still the main window's drawing");
+        assert_eq!(app.torn.len(), 1);
+        assert!(app.torn[0].pinned);
+        // A second NEWWINDOW: another window on the same drawing.
+        new_window(&mut app, 1).unwrap();
+        assert_eq!(app.torn.len(), 2);
+        // Edits go to the drawing (both windows share it).
+        app.run("line", json!({"points": [[0, 0], [5, 5]]})).unwrap();
+        assert_eq!(app.session.docs[1].doc.model.len(), 2);
+        // Docking closes all windows for that drawing at once.
+        let uid = app.session.docs[1].uid;
+        dock(&mut app, uid);
+        assert!(app.torn.is_empty());
     }
 
     #[test]
