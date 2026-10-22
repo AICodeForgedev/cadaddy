@@ -2614,3 +2614,54 @@ fn the_spelling_dictionary_choice_survives_saving() {
     // None chosen: nothing written.
     assert!(!write_dxf(&Drawing::new_metric()).contains("CADADDY_DCTMAIN"));
 }
+
+#[test]
+fn project_rules_roundtrip_in_dxf() {
+    use cadaddy_doc::projrules::{RuleDomain, RuleValue, SourceTier};
+    let mut d = Drawing::new_imperial();
+
+    d.project_rules.label = "Sample Tower".to_string();
+    d.project_rules.set(
+        RuleDomain::MountingHeight,
+        "receptacle/general",
+        RuleValue::new("18\"").with_source("NEC 210.52").with_tier(SourceTier::Spec),
+        "standard height",
+    );
+    d.project_rules.set(
+        RuleDomain::WiringMethod,
+        "general",
+        RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule),
+        "project default",
+    );
+    d.project_rules.set(
+        RuleDomain::Clearance,
+        "panel_front",
+        RuleValue::new("36\"").with_source("NEC 110.26").with_tier(SourceTier::Spec),
+        "",
+    );
+
+    let text = write_dxf(&d);
+    assert!(text.contains("CADADDY_PROJRULES"));
+
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(back.project_rules.label, "Sample Tower");
+    assert_eq!(back.project_rules.rules.len(), 3);
+
+    let resolved = back.project_rules.resolve(RuleDomain::MountingHeight, "receptacle/general");
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.value, "18\"");
+    assert_eq!(r.tier, SourceTier::Spec);
+    assert_eq!(r.source, "NEC 210.52");
+
+    let wiring = back.project_rules.resolve(RuleDomain::WiringMethod, "general").unwrap();
+    assert_eq!(wiring.value, "MC cable");
+
+    // No rules → no record written.
+    assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_PROJRULES"));
+
+    // DXF → DXF round-trip.
+    let rt = roundtrip(&back);
+    assert_eq!(rt.project_rules.rules.len(), 3);
+    assert_eq!(rt.project_rules.label, "Sample Tower");
+}

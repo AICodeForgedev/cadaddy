@@ -9,6 +9,7 @@
 mod array;
 pub mod bimspec;
 mod constraint;
+pub mod projrules;
 mod entity;
 mod extents;
 pub mod field;
@@ -154,6 +155,10 @@ pub struct Drawing {
     /// mark inherits the type's fields. Persisted as `CADADDY_BIMTYPES` in the named-object
     /// dictionary.
     pub bim_types: bimspec::BimTypes,
+    /// Project rules: mounting heights, wiring methods, clearances, tolerances, etc., each with
+    /// source provenance and tier-based precedence. Persisted as `CADADDY_PROJRULES` in the
+    /// named-object dictionary.
+    pub project_rules: projrules::ProjectRules,
     /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
     /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
     pub building_spec: Option<String>,
@@ -269,6 +274,7 @@ impl Drawing {
             sun: lighting::Sun::default(),
             geo: None,
             bim_types: bimspec::BimTypes::new(),
+            project_rules: projrules::ProjectRules::new(),
             building_spec: None,
             tours: None,
             overrides: None,

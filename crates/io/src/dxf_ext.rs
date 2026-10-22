@@ -93,6 +93,8 @@ pub(crate) const OVERRIDES_KEY: &str = "CADADDY_OVERRIDES";
 pub(crate) const PLOT_STAMP_KEY: &str = "CADADDY_PLOTSTAMP";
 /// Named-object-dictionary key of the XRECORD holding the BIM element types (JSON).
 pub(crate) const BIM_TYPES_KEY: &str = "CADADDY_BIMTYPES";
+/// Named-object-dictionary key of the XRECORD holding the project rules (JSON).
+pub(crate) const PROJ_RULES_KEY: &str = "CADADDY_PROJRULES";
 /// Named-object-dictionary key of the XRECORD listing the objects hidden by ISOLATEOBJECTS /
 /// HIDEOBJECTS when OBJECTISOLATIONMODE 1 saves them with the drawing.
 pub(crate) const HIDDEN_OBJECTS_KEY: &str = "CADADDY_HIDDENOBJECTS";
@@ -939,6 +941,22 @@ pub(crate) fn parse_bim_types(text: &str) -> Option<cadaddy_doc::bimspec::BimTyp
         return None;
     }
     cadaddy_doc::bimspec::BimTypes::from_json(text).ok()
+}
+
+/// JSON chunks for the project rules XRECORD, or `None` when empty.
+pub(crate) fn proj_rules_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    if d.project_rules.is_empty() {
+        return None;
+    }
+    d.project_rules.to_json().ok().map(|s| json_chunks(&s))
+}
+
+/// Parse the project rules XRECORD text.
+pub(crate) fn parse_proj_rules(text: &str) -> Option<cadaddy_doc::projrules::ProjectRules> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    cadaddy_doc::projrules::ProjectRules::from_json(text).ok()
 }
 
 /// The plot stamp XRECORD's payload.
