@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 775,
-    "count": 775,
+    "callableAsJson": 777,
+    "count": 777,
     "ids": [
       "-attedit",
       "-block",
@@ -521,6 +521,8 @@
       "presspull",
       "preview",
       "printers",
+      "printrev.compare",
+      "printrev.log",
       "printset.classify",
       "printset.dashboard",
       "printset.open",
@@ -779,7 +781,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 459,
+    "inMenus": 460,
     "typed": 496
   },
   "features": {

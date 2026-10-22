@@ -42,6 +42,7 @@ pub mod hotel;
 pub mod layout;
 pub mod pipe_reader;
 pub mod printset;
+pub mod revision;
 pub mod rfi;
 pub mod rng;
 pub mod score;
@@ -150,6 +151,14 @@ pub fn truth_with_gaps(seed: u64) -> Truth {
 }
 
 fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
+    let (mut t, st, kinds) = designed_set(seed, with_gaps);
+    let files = draw_set(&mut t, &st, &kinds)?;
+    Ok(FixtureSet { truth: t, files })
+}
+
+/// The office set's truth (sheets planned and runs tagged), its drafting style and each sheet's
+/// kind, before anything is drawn.
+pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
     let mut r = Rng::new(seed);
     let mut st = style::Style::new(&mut r.fork(1));
     let d = design::design(seed, &st, &mut r.fork(2));
@@ -171,28 +180,46 @@ fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
             kinds.push((gaps::ENLARGED_SHEET.into(), layout::Kind::EnlargedFloor("1".into(), "TOILET".into())));
         }
     }
+    (t, st, kinds)
+}
+
+/// Every sheet of a designed set as PDF and DXF, plus `set.pdf`, `truth.json` and `specs.txt`.
+/// Fills in each sheet's legend and abbreviations.
+pub(crate) fn draw_set(t: &mut Truth, st: &style::Style, kinds: &[(String, layout::Kind)]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    draw_sheets(t, st, kinds, &mut |_, d| d)
+}
+
+/// [`draw_set`], with each sheet's drawing passed through `post` (sheet number, drawing) before
+/// it's written.
+pub(crate) fn draw_sheets(
+    t: &mut Truth,
+    st: &style::Style,
+    kinds: &[(String, layout::Kind)],
+    post: &mut dyn FnMut(&str, cadaddy_doc::Drawing) -> cadaddy_doc::Drawing,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut files = Vec::new();
     let mut set = Vec::new();
     let sheets = t.sheets.clone();
     for (i, sh) in sheets.iter().enumerate() {
         let Some((_, kind)) = kinds.iter().find(|(n, _)| *n == sh.number) else { continue };
-        let (drawing, legend, abbr) = draw::draw(&t, &st, sh, kind);
+        let (drawing, legend, abbr) = draw::draw(t, st, sh, kind);
+        let drawing = post(&sh.number, drawing);
         if let Some(s) = t.sheets.get_mut(i) {
             s.legend = legend;
             s.abbreviations = abbr;
         }
-        let pdf = cadaddy_io::pdf::pdf(&drawing, &Space::Model, &pdf_options(sh, &st)).map_err(|e| format!("{}: {e}", sh.number))?;
+        let pdf = cadaddy_io::pdf::pdf(&drawing, &Space::Model, &pdf_options(sh, st)).map_err(|e| format!("{}: {e}", sh.number))?;
         let dxf = cadaddy_io::write_dxf(&drawing);
         set.push((pdf.clone(), format!("{} {}", sh.number, sh.title), String::new()));
         files.push((sh.pdf.clone(), pdf));
         files.push((sh.dxf.clone(), dxf.into_bytes()));
     }
     files.push(("set.pdf".into(), cadaddy_io::pdf_merge::merge(&set).map_err(|e| format!("set.pdf: {e}"))?));
-    let json = serde_json::to_vec_pretty(&t).map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec_pretty(&*t).map_err(|e| e.to_string())?;
     files.push(("truth.json".into(), json));
     // The Division 07 spec (Q337), as text.
-    files.push(("specs.txt".into(), envelope::spec_text(&t, &st.envelope).into_bytes()));
-    Ok(FixtureSet { truth: t, files })
+    files.push(("specs.txt".into(), envelope::spec_text(t, &st.envelope).into_bytes()));
+    Ok(files)
 }
 
 /// The truth for a hotel seed without drawing anything.

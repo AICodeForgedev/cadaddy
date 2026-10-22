@@ -507,7 +507,7 @@ fn read_file(_path: &str) -> Result<Vec<u8>> {
 
 /// Add the source's layers, linetypes and styles that this drawing doesn't have (a name that
 /// exists keeps this drawing's definition). Returns how many layers and how many other records were added.
-fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
+pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
     fn merge<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) -> usize {
         let mut n = 0;
         for t in theirs {
@@ -530,7 +530,7 @@ fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
 /// Which source blocks to copy, and under which name: new names keep theirs, generated
 /// (anonymous `*…`) blocks that collide get a fresh generated name, and a named block this drawing
 /// already has keeps this drawing's definition (not copied).
-fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
+pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
     for (name, b) in &src.blocks {
@@ -558,7 +558,7 @@ fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
 
 /// A copy of a source entity for this drawing: a fresh handle, block references renamed, and
 /// links to other source objects (associative dimension points) dropped.
-fn adopt(d: &mut Drawing, e: &Entity, renames: &BTreeMap<String, String>) -> Entity {
+pub(crate) fn adopt(d: &mut Drawing, e: &Entity, renames: &BTreeMap<String, String>) -> Entity {
     let mut e = e.clone();
     e.handle = d.new_handle();
     match &mut e.kind {

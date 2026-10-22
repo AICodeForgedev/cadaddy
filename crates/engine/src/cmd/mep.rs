@@ -224,7 +224,7 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 }
 
 /// The runs of the plan: systems (the spec's, else drafted from layer names) and their runs.
-fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
+pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
     let plan = super::verify::plan_session(s)?;
     let d: &Drawing = plan.doc()?;
     let ents = plan_objects(d);
@@ -305,6 +305,7 @@ fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSy
                 size_in: size,
                 bottoms_ft: bottoms.into_iter().map(|b| round(b.unwrap_or(sy.bottom_ft))).collect(),
                 objects: handles.iter().map(|h| h.hex()).collect(),
+                id: String::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -783,7 +784,7 @@ fn fitting_kind_str(fk: FittingKind) -> &'static str {
 }
 
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
-fn mep_layer_name(system: &str, level: &str) -> String {
+pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
     let lvl = sanitise(level, 16);
     format!("3D-MEP-{sys}-{lvl}")
