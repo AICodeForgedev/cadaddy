@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn walk_does_not_follow_directory_symlinks() {
         use std::os::unix::fs::symlink;
-        let base = std::env::temp_dir().join(format!("cadcraft-xtask-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("cadaddy-xtask-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let real = base.join("real");
         std::fs::create_dir_all(&real).unwrap();
@@ -156,7 +156,7 @@ mod tests {
     }
     #[test]
     fn walk_reports_budget_exhaustion() {
-        let base = std::env::temp_dir().join(format!("cadcraft-stats-budget-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("cadaddy-stats-budget-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("a.rs"), "fn a() {}\n").unwrap();
         let error = super::walk_inner(&base, &mut Counts::default(), &mut 0).unwrap_err();
