@@ -354,3 +354,60 @@ fn walls_read_from_merged_prints() {
     // Stairs, the elevator and casework outlines read as walls too; most of what is read is wall.
     assert!(read_on as f64 >= 0.45 * read as f64, "walls read on a truth wall: {read_on}/{read}");
 }
+
+// ---- Two levels on one sheet (the hotel generator's printed two-view sheet) -------------------
+
+#[test]
+fn titles_name_their_levels_lists_and_ranges() {
+    use cadaddy_mepfix::sheet_reader::detect_levels;
+    let cases: [(&str, &[&str]); 12] = [
+        ("SECOND FLOOR PLAN", &["2"]),
+        ("1ST FLOOR LIGHTING PLAN", &["1"]),
+        ("POWER PLANS- FIRST AND SECOND FLOOR", &["1", "2"]),
+        ("THIRD & FOURTH FLOOR DUCT PLAN", &["3", "4"]),
+        ("GAS PIPING - 1ST AND 3RD FLOORS", &["1", "3"]),
+        ("EGRESS - SECOND-FOURTH FLOOR PLAN", &["2", "3", "4"]),
+        ("SIGNAGE PLAN - 2ND THRU 4TH FLOOR", &["2", "3", "4"]),
+        ("LEVELS 2-4 POWER PLAN", &["2", "3", "4"]),
+        ("LEVEL 02 LIGHTING PLAN", &["2"]),
+        ("FOURTH FLOOR AND ROOF PLAN", &["4", "R"]),
+        // A note, not a level.
+        ("LEVEL MARKS ARE TO FINISHED FLOOR.", &[]),
+        ("FLOOR AND ROOF ASSEMBLIES", &[]),
+    ];
+    for (title, want) in cases {
+        assert_eq!(detect_levels(title), want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{title}");
+    }
+}
+
+#[test]
+fn a_sheet_printing_two_levels_splits_into_views_each_aligned() {
+    use cadaddy_mepfix::sheet_reader::{recognise_views, sheet_map_from};
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let sheet = cadaddy_mepfix::printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    let lines = t.building.grid.x.len() + t.building.grid.y.len();
+
+    // Whole, the sheet reads its own title (not the notes heading the title column) and both levels.
+    let whole = recognise_dxf(&sheet.drawing);
+    assert_eq!(whole.number, "E-1A");
+    assert!(!whole.title.contains("NOTES"), "title {:?}", whole.title);
+    assert_eq!(whole.levels, ["1", "2"]);
+
+    // Split, each view is a sheet of its own level with the whole grid read from one bubble per line.
+    let views = recognise_views(&sheet.drawing);
+    assert_eq!(views.iter().map(|v| v.number.as_str()).collect::<Vec<_>>(), ["E-1A/1", "E-1A/2"]);
+    for (v, level) in views.iter().zip(&sheet.levels) {
+        assert_eq!(v.level.as_ref(), Some(level));
+        assert_eq!(v.printed_number, "E-1A");
+        assert_eq!(v.discipline, "E");
+        assert_eq!(v.grid_x.len() + v.grid_y.len(), lines, "{}: grid {}x{}", v.number, v.grid_x.len(), v.grid_y.len());
+    }
+
+    // Both views align, the upper exactly the shift above the lower.
+    let map = sheet_map_from(views);
+    let a: Vec<_> = map.sheets.iter().map(|s| s.alignment.clone().unwrap_or_else(|| panic!("{} not aligned", s.number))).collect();
+    let (lo, up) = (&a[0], &a[1]);
+    assert!(lo.rotation_deg.abs() < 1e-6 && up.rotation_deg.abs() < 1e-6);
+    assert!((up.offset_in[0] - lo.offset_in[0]).abs() < 1.0, "x offsets {:?} {:?}", lo.offset_in, up.offset_in);
+    assert!((up.offset_in[1] - lo.offset_in[1] - sheet.shift).abs() < 1.0, "y offsets {:?} {:?} shift {}", lo.offset_in, up.offset_in, sheet.shift);
+}

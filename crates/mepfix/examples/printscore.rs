@@ -103,39 +103,49 @@ fn main() {
                     *stats.entry("pages").or_default() += 1.0;
                     *stats.entry("entities").or_default() += imp.drawing.model.len() as f64;
                     let t = Instant::now();
-                    let rec = sheet_reader::recognise_dxf(&imp.drawing);
+                    let recs = sheet_reader::recognise_views(&imp.drawing);
                     *stats.entry("recognise_ms").or_default() += t.elapsed().as_secs_f64() * 1000.0;
-                    if detail {
-                        println!(
-                            "  file {fi} page {pg}: {} ents, {:.0} ms, number {}, disc {:?}, level {}, scale {:.4} ({}), grid {}x{}, bubbles {}",
-                            imp.drawing.model.len(),
-                            ms,
-                            if rec.number.is_empty() { "-" } else { "yes" },
-                            rec.discipline,
-                            rec.level.is_some(),
-                            rec.scale,
-                            imp.scale_source.split_whitespace().next().unwrap_or(""),
-                            rec.grid_x.len(),
-                            rec.grid_y.len(),
-                            rec.bubbles.len()
-                        );
+                    if recs.len() > 1 {
+                        *stats.entry("split_pages").or_default() += 1.0;
                     }
-                    pages.push(Page { file: fi, page: pg as u32, rec });
+                    for rec in recs {
+                        if detail {
+                            println!(
+                                "  file {fi} page {pg}: {} ents, {:.0} ms, number {}, disc {:?}, level {}, scale {:.4} ({}), grid {}x{}, bubbles {}",
+                                imp.drawing.model.len(),
+                                ms,
+                                if rec.number.is_empty() { "-" } else { "yes" },
+                                rec.discipline,
+                                rec.level.is_some(),
+                                rec.scale,
+                                imp.scale_source.split_whitespace().next().unwrap_or(""),
+                                rec.grid_x.len(),
+                                rec.grid_y.len(),
+                                rec.bubbles.len()
+                            );
+                        }
+                        pages.push(Page { file: fi, page: pg as u32, rec });
+                    }
                 }
                 Err(e) => *errors.entry(format!("import: {}", class(&e))).or_default() += 1,
             }
         }
     }
-    let n = pages.len().max(1) as f64;
     let count = |f: &dyn Fn(&RecognisedSheet) -> bool| pages.iter().filter(|p| f(&p.rec)).count();
+    let n = stats.get("pages").copied().unwrap_or(0.0).max(1.0);
     println!(
-        "pages imported: {} in {:.1} s ({:.0} ms/page, {:.0} entities/page)",
+        "pages imported: {} ({} sheets once views are split) in {:.1} s ({:.0} ms/page, {:.0} entities/page)",
+        n,
         pages.len(),
         t_all.elapsed().as_secs_f64(),
         stats.get("import_ms").copied().unwrap_or(0.0) / n,
         stats.get("entities").copied().unwrap_or(0.0) / n
     );
-    println!("recognise: {:.0} ms/page", stats.get("recognise_ms").copied().unwrap_or(0.0) / n);
+    println!(
+        "recognise: {:.0} ms/page; pages printing several plan views, split one sheet per view: {}",
+        stats.get("recognise_ms").copied().unwrap_or(0.0) / n,
+        stats.get("split_pages").copied().unwrap_or(0.0)
+    );
     println!("sheet number read: {}/{}", count(&|r| !r.number.is_empty()), pages.len());
     let mut disc: BTreeMap<String, usize> = BTreeMap::new();
     for p in &pages {
@@ -193,13 +203,19 @@ fn main() {
             last = files.get(p.file).and_then(|f| std::fs::read(f).ok()).map(|b| (p.file, b));
         }
         let Some((_, bytes)) = &last else { continue };
-        let imp = match import(bytes, p.page) {
+        let mut imp = match import(bytes, p.page) {
             Ok(imp) => imp,
             Err(e) => {
                 *errors.entry(format!("import: {}", class(&e))).or_default() += 1;
                 continue;
             }
         };
+        // One view of a sheet printing several: that view's part of the page only.
+        if !p.rec.printed_number.is_empty()
+            && let Some(view) = sheet_reader::split_views(&imp.drawing).into_iter().find(|(r, _)| r.number == p.rec.number).and_then(|(_, d)| d)
+        {
+            imp.drawing = view;
+        }
         // Height notes on the MEP plans (BOD @, BOP @, BOC @, AFF…), read from any text.
         if ["M", "P", "FP", "E"].contains(&p.rec.discipline.as_str()) {
             for e in imp.drawing.model.iter() {
