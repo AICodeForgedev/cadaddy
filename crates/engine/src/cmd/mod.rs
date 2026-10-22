@@ -60,6 +60,7 @@ mod xplode;
 pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
+pub mod concrete;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
@@ -296,6 +297,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
+        v.extend(concrete::specs());
         v.extend(gear::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());

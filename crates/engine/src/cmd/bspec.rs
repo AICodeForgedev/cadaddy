@@ -520,6 +520,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rcp = super::ceilings::build(d, &sp);
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
+    let concrete = super::concrete::build(d, &sp);
     // Takeoff tables linked to the model count it again.
     let qty_tables = super::mepqty::refresh(d, &sp);
     // Columns at the grid intersections.
@@ -562,6 +564,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         o.extend(x.clone());
     }
     if let (Some(o), Some(x)) = (r.as_object_mut(), mep.as_object()) {
+        o.extend(x.clone());
+    }
+    if let (Some(o), Some(x)) = (r.as_object_mut(), concrete.as_object()) {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);

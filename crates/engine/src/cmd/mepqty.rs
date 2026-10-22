@@ -37,7 +37,7 @@ const MAX_TABLES: usize = 200;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mep.qty", "MEP Quantities", run_qty).params(
-            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], totals, rows, csv, path?, table?}",
+            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits|concrete} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], concrete: [{category, level, element, item, size, quantity, unit}] (pads, bases, encasement: Concrete when ours, Concrete, by others (owner) otherwise), totals, rows, csv, path?, table?}",
         ),
         CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).params("{} → {tables}: rebuild every linked takeoff table from the model now"),
     ]
@@ -293,6 +293,8 @@ pub struct Takeoff {
     lug_kits: Vec<Value>,
     /// Gear accepted with review failures, and the factor on its installation.
     labor: Vec<Value>,
+    /// Concrete rows (pads, bases, encasement…): ours, or listed as by others.
+    concrete: Vec<Vec<String>>,
 }
 
 /// A run's corner: an elbow (a turn in plan) or a drop (a change of height), with the plan turn
@@ -429,7 +431,7 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 }
 
 /// The takeoff of the spec's MEP model.
-fn takeoff(sp: &BuildingSpec, st: &Settings) -> Takeoff {
+fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTypes) -> Takeoff {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut t = Takeoff::default();
     let mut counted: Vec<(usize, &MepRun, &MepSystem)> = Vec::new();
@@ -530,6 +532,7 @@ fn takeoff(sp: &BuildingSpec, st: &Settings) -> Takeoff {
     if st.system.is_none() {
         t.lug_kits = super::gear::lug_kits(sp).into_iter().filter(|k| on_level(k["gear"].as_str().unwrap_or_default())).collect();
         t.labor = super::gear::labor(sp).into_iter().filter(|k| on_level(k["gear"].as_str().unwrap_or_default())).collect();
+        t.concrete = super::concrete::mep_rows(sp, types, st.level.as_deref());
     }
     t
 }
@@ -570,6 +573,7 @@ impl Takeoff {
         json!({
             "ducts": ducts, "pipes": pipes, "fittings": fittings, "terminals": terminals,
             "equipment": self.equipment, "hangers": hangers, "lug_kits": self.lug_kits, "labor_conditions": self.labor,
+            "concrete": self.concrete.iter().map(|r| json!({"category": r.first(), "level": r.get(1), "element": r.get(2), "item": r.get(3), "size": r.get(4), "quantity": r.get(6).and_then(|q| q.parse::<f64>().ok()), "unit": r.get(7)})).collect::<Vec<_>>(),
             "totals": {
                 "duct_length_ft": r2(self.ducts.values().map(|r| r.length_ft).sum()),
                 "duct_area_sqft": r2(self.ducts.values().map(|r| r.area_sqft).sum()),
@@ -705,6 +709,10 @@ impl Takeoff {
                 line("Belleville washer".into(), &k["belleville_washers"]);
             }
         }
+        if all || part == "concrete" {
+            // Pads, bases and encasement: ours, or listed as by others so nobody assumes them.
+            out.extend(self.concrete.iter().cloned());
+        }
         if all || part == "hangers" {
             for ((l, s, k, size), r) in self.hangers.iter().filter(|(_, r)| r.count > 0) {
                 let item = format!("{k} hanger @ {}' (rod {} ft)", n(r.spacing_ft), n(r.rod_ft));
@@ -748,7 +756,7 @@ fn csv(rows: &[Vec<String>]) -> String {
     out
 }
 
-const PARTS: [&str; 8] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers", "lug_kits"];
+const PARTS: [&str; 9] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers", "lug_kits", "concrete"];
 
 // ---------------- linked tables ----------------
 
@@ -835,7 +843,7 @@ pub(crate) fn refresh(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     let mut n = 0;
     for (h, p, part, at) in linked {
         let Ok(st) = settings("mep.qty", &p) else { continue };
-        let rows = takeoff(sp, &st).rows(&part);
+        let rows = takeoff(sp, &st, &d.bim_types).rows(&part);
         let mut t = make(d, at, &rows, &p);
         if let Some(EntityKind::Table(old)) = d.entity(h).map(|e| &e.kind) {
             t.style = old.style.clone();
@@ -862,7 +870,7 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad("mep.qty", format!("there is no level named {l}")));
     }
-    let t = takeoff(&sp, &st);
+    let t = takeoff(&sp, &st, &s.doc()?.bim_types);
     let rows = t.rows("all");
     let mut out = t.to_json(&st);
     out["rows"] = json!(rows.len().saturating_sub(1));

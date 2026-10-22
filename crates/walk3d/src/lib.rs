@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod concrete;
 mod derive;
 mod doors;
 pub mod field;
@@ -37,6 +38,7 @@ pub use pick::{Hit, pick};
 pub use rfi::{Rfi, RfiKind, RfiStatus, Severity};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
+pub use concrete::{Concrete, ConcreteElement, Depression, Embed, MAX_CONCRETE, PadDecision, Pour, Rebar, Signoff};
 pub use spec::{
     Assembly, AssemblyLayer, Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, CeilingKind, CeilingType, Cricket, Described,
     DuctType, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind, Feeder, GridColumn, Hang, Head, HeadTo, HeadTrack, HeightRule, Issue,

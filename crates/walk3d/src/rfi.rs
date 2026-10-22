@@ -55,10 +55,17 @@ pub enum RfiKind {
     GearLugs,
     /// Gear the field can't install as submitted: entry plates, gutter, bending space.
     GearInstall,
+    /// Floor- or grade-mounted equipment with no pad decision, or a pad nobody owns.
+    PadUndecided,
+    /// An item that must be in or under a pour before concrete (the Ufer electrode, stub-ups,
+    /// sleeves, anchor bolts) not confirmed by the pour date.
+    PourHold,
+    /// Rebar, conduits, sleeves and embeds that clash or lack cover in an element.
+    EmbedConflict,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 15] = [
+    pub const ALL: [RfiKind; 18] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -74,6 +81,9 @@ impl RfiKind {
         RfiKind::SleeveNoFit,
         RfiKind::GearLugs,
         RfiKind::GearInstall,
+        RfiKind::PadUndecided,
+        RfiKind::PourHold,
+        RfiKind::EmbedConflict,
     ];
 
     /// The snake_case name (as in JSON).
@@ -94,6 +104,9 @@ impl RfiKind {
             RfiKind::SleeveNoFit => "sleeve_no_fit",
             RfiKind::GearLugs => "gear_lugs",
             RfiKind::GearInstall => "gear_install",
+            RfiKind::PadUndecided => "pad_undecided",
+            RfiKind::PourHold => "pour_hold",
+            RfiKind::EmbedConflict => "embed_conflict",
         }
     }
 
@@ -119,6 +132,9 @@ impl RfiKind {
             RfiKind::SleeveNoFit => "Sleeve won't fit the framing",
             RfiKind::GearLugs => "Gear lugs don't take the feeders",
             RfiKind::GearInstall => "Gear can't be installed as submitted",
+            RfiKind::PadUndecided => "Equipment pad not decided or not owned",
+            RfiKind::PourHold => "Item to cast in not confirmed before the pour",
+            RfiKind::EmbedConflict => "Rebar and embeds clash or lack cover",
         }
     }
 
@@ -131,7 +147,10 @@ impl RfiKind {
             | RfiKind::SleeveNoRoute
             | RfiKind::SleeveNoFit
             | RfiKind::GearLugs
-            | RfiKind::GearInstall => Severity::High,
+            | RfiKind::GearInstall
+            | RfiKind::PadUndecided
+            | RfiKind::PourHold
+            | RfiKind::EmbedConflict => Severity::High,
             RfiKind::DetailUnused => Severity::Low,
             _ => Severity::Medium,
         }

@@ -86,6 +86,11 @@ enum Class {
     Condenser,
     FlowMeter,
     Transformer,
+    // Concrete.
+    Footing,
+    Pile,
+    ReinforcingBar,
+    MechanicalFastener,
 }
 
 impl Class {
@@ -129,6 +134,10 @@ impl Class {
             Class::Condenser => ("IfcCondenser", "NOTDEFINED"),
             Class::FlowMeter => ("IfcFlowMeter", "NOTDEFINED"),
             Class::Transformer => ("IfcTransformer", "VOLTAGE"),
+            Class::Footing => ("IfcFooting", "NOTDEFINED"),
+            Class::Pile => ("IfcPile", "BORED"),
+            Class::ReinforcingBar => ("IfcReinforcingBar", "MAIN"),
+            Class::MechanicalFastener => ("IfcMechanicalFastener", "ANCHORBOLT"),
         }
     }
 
@@ -171,6 +180,10 @@ impl Class {
             "Condenser" => Class::Condenser,
             "FlowMeter" => Class::FlowMeter,
             "Transformer" => Class::Transformer,
+            "Footing" => Class::Footing,
+            "Pile" => Class::Pile,
+            "ReinforcingBar" => Class::ReinforcingBar,
+            "MechanicalFastener" => Class::MechanicalFastener,
             _ => return None,
         })
     }
@@ -252,6 +265,36 @@ fn class_of(e: &Entity) -> Kind {
             "ramp" => Class::Ramp,
             "roof" => Class::Roof,
             "ground" => Class::Terrain,
+            "concrete" => {
+                // An element by its kind; its rebar and what is cast into it by their part.
+                let ek = extra("kind:").unwrap_or_default();
+                let (class, pre) = match mep_part.as_deref().unwrap_or("element") {
+                    "rebar" => (Class::ReinforcingBar, "MAIN"),
+                    "embed:anchor_bolt" => (Class::MechanicalFastener, "ANCHORBOLT"),
+                    "embed:stub_up" | "embed:conduit" | "embed:sleeve" => (Class::Conduit, "CONDUITSEGMENT"),
+                    "embed:ufer" | "embed:bond" => (Class::ReinforcingBar, "USERDEFINED"),
+                    p if p.starts_with("embed:") => (Class::Proxy, "NOTDEFINED"),
+                    _ => match ek.as_str() {
+                        "slab" => (Class::Slab, "BASESLAB"),
+                        "footing" => (Class::Footing, if t.iter().any(|v| v == "prop:shape=strip") { "STRIP_FOOTING" } else { "PAD_FOOTING" }),
+                        "grade_beam" => (Class::Footing, "FOOTING_BEAM"),
+                        "pier" | "pole_base" => (Class::Pile, "BORED"),
+                        "pad" | "handhole_base" => (Class::Slab, "USERDEFINED"),
+                        _ => (Class::Proxy, "NOTDEFINED"),
+                    },
+                };
+                let mut k = kind(class, t.get(1).cloned(), extra("tag:").unwrap_or_else(|| ek.clone()), String::new());
+                k.predefined = pre;
+                k.description = ek.replace('_', " ");
+                k.properties = t
+                    .iter()
+                    .skip(3)
+                    .filter_map(|v| v.strip_prefix("prop:"))
+                    .filter_map(|v| v.split_once('='))
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .collect();
+                return k;
+            }
             "mep" if extra("kind:").as_deref() == Some("equipment") => {
                 let ek = mep_part.as_deref().and_then(|p| p.strip_prefix("equipment:")).unwrap_or_default();
                 let (class, pre) = equipment_class(ek);
