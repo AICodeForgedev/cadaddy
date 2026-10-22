@@ -1,8 +1,10 @@
 //! G-code generation from a [`ToolpathResult`].
 //!
-//! Three dialects are supported:
+//! Four dialects are supported:
 //! - **Generic** (ISO 6983): the baseline that most controllers understand.
-//! - **LinuxCNC** (also Grbl-compatible): adds `G64 P…` path blending.
+//! - **LinuxCNC**: adds `G64 P…` path blending.
+//! - **Grbl** (Grbl 1.1): no `G64` (Grbl has no path-blending word), no `%` tape marks and no
+//!   `O` program number.
 //! - **Mach3** (Mach3 / Mach4): explicit `G40` cutter-comp cancel.
 //!
 //! All dialects emit the same body; only the header and footer differ.
@@ -21,9 +23,10 @@ pub enum Dialect {
     /// ISO 6983 standard G-code.
     #[default]
     Generic,
-    /// LinuxCNC / Grbl.
-    #[serde(alias = "grbl")]
+    /// LinuxCNC.
     LinuxCnc,
+    /// Grbl 1.1.
+    Grbl,
     /// Mach3 / Mach4.
     Mach3,
 }
@@ -91,8 +94,11 @@ pub fn parse(text: &str) -> Vec<Move> {
 // ── Header / footer ──────────────────────────────────────────────────────────
 
 fn emit_header(out: &mut String, job: &CamJob, opts: &GcodeOptions) -> Result<()> {
-    let _ = writeln!(out, "%");
-    if opts.program_number > 0 {
+    let grbl = opts.dialect == Dialect::Grbl;
+    if !grbl {
+        let _ = writeln!(out, "%");
+    }
+    if opts.program_number > 0 && !grbl {
         let _ = writeln!(out, "O{:04}", opts.program_number);
     }
     let _ = writeln!(out, "(CADaddy CAM 2D Profile)");
@@ -109,7 +115,7 @@ fn emit_header(out: &mut String, job: &CamJob, opts: &GcodeOptions) -> Result<()
     let _ = writeln!(out, "G17");
 
     match opts.dialect {
-        Dialect::Generic => {}
+        Dialect::Generic | Dialect::Grbl => {}
         Dialect::LinuxCnc => {
             let _ = writeln!(out, "G64 P{:.4}", opts.blend_tolerance);
         }
@@ -126,13 +132,15 @@ fn emit_header(out: &mut String, job: &CamJob, opts: &GcodeOptions) -> Result<()
 fn emit_footer(out: &mut String, opts: &GcodeOptions) -> Result<()> {
     let _ = writeln!(out, "M05"); // spindle off
     match opts.dialect {
-        Dialect::Generic | Dialect::LinuxCnc => {}
+        Dialect::Generic | Dialect::LinuxCnc | Dialect::Grbl => {}
         Dialect::Mach3 => {
             let _ = writeln!(out, "G40"); // cancel cutter comp
         }
     }
     let _ = writeln!(out, "M30"); // program end + rewind
-    let _ = writeln!(out, "%");
+    if opts.dialect != Dialect::Grbl {
+        let _ = writeln!(out, "%");
+    }
     Ok(())
 }
 
@@ -231,45 +239,87 @@ mod tests {
         }
     }
 
+    fn compute_ok(job: &CamJob) -> crate::toolpath::ToolpathResult {
+        compute(&[square()], job).expect("toolpath")
+    }
+
+    /// A job that uses every move kind: arc leads, corner arcs, tabs and two passes.
+    fn busy_job() -> CamJob {
+        let mut job = basic_job();
+        job.offset = OffsetSide::Outside;
+        job.tool.depth = 4.0;
+        job.tool.step_down = 2.0;
+        job.lead_in = LeadParams { kind: LeadKind::Arc, length: 2.0 };
+        job.lead_out = LeadParams { kind: LeadKind::Arc, length: 2.0 };
+        job.tabs = TabParams { width: 2.0, height: 1.0, count: 3 };
+        job
+    }
+
     #[test]
     fn generic_gcode_round_trips() {
-        let tp = compute(&[square()], &basic_job());
-        assert!(tp.is_ok());
-        let tp = tp.ok();
-        let gcode = emit(tp.as_ref().unwrap_or_else(|| std::process::abort()), &basic_job(), &GcodeOptions::default());
-        assert!(gcode.is_ok());
-        let text = gcode.ok().unwrap_or_default();
+        let job = busy_job();
+        let tp = compute_ok(&job);
+        let opts = GcodeOptions::default();
+        let text = emit(&tp, &job, &opts).unwrap_or_default();
         assert!(text.contains("G21"), "should have metric");
         assert!(text.contains("G90"), "should have absolute");
         assert!(text.contains("M03"), "should have spindle on");
         assert!(text.contains("M30"), "should have program end");
 
-        // Parse back and verify move count matches.
+        // Parse back: every move matches its source in kind and in X/Y/Z/I/J/F.
         let parsed = parse(&text);
-        let original_moves: Vec<&Move> = tp.iter().flat_map(|t| t.paths.iter().flat_map(|p| &p.moves)).collect();
-        assert_eq!(parsed.len(), original_moves.len(), "parsed {}, original {}", parsed.len(), original_moves.len());
+        let original: Vec<&Move> = tp.paths.iter().flat_map(|p| &p.moves).collect();
+        assert_eq!(parsed.len(), original.len());
+        let tol = 10f64.powi(-(opts.decimals as i32));
+        let words = |m: &Move| -> (u8, [f64; 6]) {
+            match *m {
+                Move::Rapid { x, y, z } => (0, [x, y, z, 0.0, 0.0, f64::NAN]),
+                Move::Feed { x, y, z, f } => (1, [x, y, z, 0.0, 0.0, f]),
+                Move::ArcCw { x, y, z, i, j, f } => (2, [x, y, z, i, j, f]),
+                Move::ArcCcw { x, y, z, i, j, f } => (3, [x, y, z, i, j, f]),
+            }
+        };
+        let mut kinds = [0usize; 4];
+        for (k, (got, want)) in parsed.iter().zip(&original).enumerate() {
+            let ((gk, gw), (wk, ww)) = (words(got), words(want));
+            assert_eq!(gk, wk, "move {k}: G{gk:02} parsed, G{wk:02} emitted");
+            kinds[usize::from(wk)] += 1;
+            for (n, (g, w)) in gw.iter().zip(ww).enumerate() {
+                if w.is_nan() {
+                    continue; // a rapid has no feed word
+                }
+                assert!((g - w).abs() <= tol, "move {k} word {}: parsed {g}, emitted {w}", ["X", "Y", "Z", "I", "J", "F"][n]);
+            }
+        }
+        assert!(kinds.iter().all(|n| *n > 0), "the job uses G00, G01, G02 and G03: {kinds:?}");
     }
 
     #[test]
     fn linuxcnc_has_blend() {
-        let tp = compute(&[square()], &basic_job());
-        let tp_ref = tp.as_ref().ok();
-        if let Some(tp) = tp_ref {
-            let opts = GcodeOptions { dialect: Dialect::LinuxCnc, ..Default::default() };
-            let text = emit(tp, &basic_job(), &opts).unwrap_or_default();
-            assert!(text.contains("G64 P"), "LinuxCNC should have path blending");
-        }
+        let tp = compute_ok(&basic_job());
+        let opts = GcodeOptions { dialect: Dialect::LinuxCnc, ..Default::default() };
+        let text = emit(&tp, &basic_job(), &opts).unwrap_or_default();
+        assert!(text.contains("G64 P"), "LinuxCNC should have path blending");
     }
 
     #[test]
     fn mach3_has_g40() {
-        let tp = compute(&[square()], &basic_job());
-        let tp_ref = tp.as_ref().ok();
-        if let Some(tp) = tp_ref {
-            let opts = GcodeOptions { dialect: Dialect::Mach3, ..Default::default() };
-            let text = emit(tp, &basic_job(), &opts).unwrap_or_default();
-            assert!(text.contains("G40"), "Mach3 should have cutter comp cancel");
-        }
+        let tp = compute_ok(&basic_job());
+        let opts = GcodeOptions { dialect: Dialect::Mach3, ..Default::default() };
+        let text = emit(&tp, &basic_job(), &opts).unwrap_or_default();
+        assert!(text.contains("G40"), "Mach3 should have cutter comp cancel");
+    }
+
+    #[test]
+    fn grbl_has_no_g64_and_no_tape_marks() {
+        let job = busy_job();
+        let tp = compute_ok(&job);
+        let opts = GcodeOptions { dialect: Dialect::Grbl, program_number: 7, ..Default::default() };
+        let text = emit(&tp, &job, &opts).unwrap_or_default();
+        assert!(!text.contains("G64"), "Grbl has no G64");
+        assert!(!text.lines().any(|l| l.trim().starts_with('%')), "no % lines for Grbl");
+        assert!(!text.lines().any(|l| l.trim().starts_with('O')), "no O program number for Grbl");
+        assert!(text.contains("G21") && text.contains("M30") && text.contains("G02"));
     }
 
     #[test]

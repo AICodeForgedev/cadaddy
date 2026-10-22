@@ -58,15 +58,19 @@ fn dist_to(segs: &[Segment], p: Vec2) -> f64 {
 }
 
 /// Join offset segment `a` to `b` around source corner `v`: the point where they meet (extended
-/// as lines or full circles), or an arc about `v` (radius `|d|`) where they don't.
-fn join(a: &Segment, b: &Segment, v: Vec2, d: f64, eps: f64) -> (Segment, Option<Segment>, Segment) {
+/// as lines or full circles), or an arc about `v` (radius `|d|`) where they don't. With `round`,
+/// a corner that opens on the offset side (convex there) always gets the arc.
+fn join(a: &Segment, b: &Segment, v: Vec2, d: f64, eps: f64, round: bool) -> (Segment, Option<Segment>, Segment) {
     if a.end().near(b.start(), eps) {
         return (*a, None, *b);
     }
-    let hits = intersect_segments_ext(a, b, true);
-    let reach = (d.abs() * 1e3).max(a.len().max(b.len()) * 4.0);
-    if let Some(p) = hits.into_iter().filter(|p| p.is_finite() && p.dist(v) <= reach).min_by(|x, y| x.dist(v).total_cmp(&y.dist(v))) {
-        return (sub(a, a.start(), p), None, sub(b, p, b.end()));
+    // A right turn opens a gap on the left (d > 0), a left turn on the right.
+    if !(round && a.tangent(1.0).cross(b.tangent(0.0)) * d < 0.0) {
+        let hits = intersect_segments_ext(a, b, true);
+        let reach = (d.abs() * 1e3).max(a.len().max(b.len()) * 4.0);
+        if let Some(p) = hits.into_iter().filter(|p| p.is_finite() && p.dist(v) <= reach).min_by(|x, y| x.dist(v).total_cmp(&y.dist(v))) {
+            return (sub(a, a.start(), p), None, sub(b, p, b.end()));
+        }
     }
     // Round join: the short way round the corner, at the offset distance.
     let (pa, pb) = (a.end(), b.start());
@@ -80,6 +84,17 @@ fn join(a: &Segment, b: &Segment, v: Vec2, d: f64, eps: f64) -> (Segment, Option
 /// polylines (a shape can split in two when offset inward), empty when nothing is left at that
 /// distance.
 pub fn offset_polyline(pl: &Polyline, d: f64) -> Vec<OffsetPiece> {
+    offset_polyline_joined(pl, d, false)
+}
+
+/// [`offset_polyline`] with round corners: every corner that opens on the offset side is joined
+/// by an arc of radius `|d|` about the source corner (the path a tool's centre takes round it),
+/// never extended to a sharp point.
+pub fn offset_polyline_round(pl: &Polyline, d: f64) -> Vec<OffsetPiece> {
+    offset_polyline_joined(pl, d, true)
+}
+
+fn offset_polyline_joined(pl: &Polyline, d: f64, round: bool) -> Vec<OffsetPiece> {
     let src: Vec<(usize, Segment)> = pl.segments().into_iter().enumerate().filter(|(_, s)| s.len() > 0.0).collect();
     if src.is_empty() || !d.is_finite() || d == 0.0 {
         return Vec::new();
@@ -111,7 +126,7 @@ pub fn offset_polyline(pl: &Polyline, d: f64) -> Vec<OffsetPiece> {
     for k in 0..pairs {
         let (a, b) = (k, (k + 1) % n);
         let v = kept[a].2;
-        let (na, mid, nb) = join(&segs[a], &segs[b], v, d, eps);
+        let (na, mid, nb) = join(&segs[a], &segs[b], v, d, eps, round);
         segs[a] = na;
         segs[b] = nb;
         joins[a] = mid;
@@ -266,8 +281,13 @@ fn simplify(run: Vec<(Segment, Option<usize>)>, closed: bool, eps: f64) -> Vec<(
             let (u, v) = (x.b - x.a, y.b - y.a);
             u.dot(v) > 0.0 && u.cross(v).abs() <= eps * (u.len() + v.len()).max(eps)
         }
+        // Never a half turn or more as one arc: arcs that close a full circle would merge into
+        // one of no sweep (start = end), and a bulge past a half turn loses precision.
         (Segment::Arc { arc: x, ccw: cx }, Segment::Arc { arc: y, ccw: cy }) => {
-            cx == cy && x.center.near(y.center, eps * 10.0) && (x.radius - y.radius).abs() <= eps * 10.0
+            cx == cy
+                && x.center.near(y.center, eps * 10.0)
+                && (x.radius - y.radius).abs() <= eps * 10.0
+                && x.sweep() + y.sweep() < std::f64::consts::PI - 1e-9
         }
         _ => false,
     };
@@ -433,5 +453,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn offset_circle_keeps_its_full_turn() {
+        // A circle as four quarter arcs, offset out and in (plain and round joins): still a full
+        // circle at the new radius, never merged into one arc of no sweep.
+        let b = arc_to_bulge(std::f64::consts::FRAC_PI_2);
+        let circle = poly(&[(10.0, 0.0, b), (0.0, 10.0, b), (-10.0, 0.0, b), (0.0, -10.0, b)], true);
+        for (d, r) in [(-3.0, 13.0), (3.0, 7.0)] {
+            for out in [offset_polyline(&circle, d), offset_polyline_round(&circle, d)] {
+                assert_eq!(out.len(), 1);
+                let pl = &out[0].polyline;
+                assert!(pl.closed);
+                let len: f64 = pl.segments().iter().map(Segment::len).sum();
+                assert!((len - std::f64::consts::TAU * r).abs() < 1e-9, "offset {d}: length {len}");
+                at_distance(&circle, &out, d);
+            }
+        }
+    }
+
+    #[test]
+    fn round_offset_rounds_only_corners_open_on_the_offset_side() {
+        let sq = poly(&[(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)], true);
+        // Outward (right of a CCW square): four lines and four corner arcs of radius 3.
+        let out = offset_polyline_round(&sq, -3.0);
+        assert_eq!(out.len(), 1);
+        let segs = out[0].polyline.segments();
+        let arcs: Vec<Arc> = segs.iter().filter_map(|s| if let Segment::Arc { arc, .. } = s { Some(*arc) } else { None }).collect();
+        assert_eq!((segs.len(), arcs.len()), (8, 4));
+        assert!(arcs.iter().all(|a| (a.radius - 3.0).abs() < 1e-9));
+        at_distance(&sq, &out, -3.0);
+        // Inward the corners close: the same 4 x 4 square as the plain offset.
+        assert_eq!(offset_polyline_round(&sq, 3.0), offset_polyline(&sq, 3.0));
     }
 }

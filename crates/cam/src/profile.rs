@@ -33,6 +33,11 @@ pub fn contains(outer: &Polyline, inner: &Polyline) -> bool {
     winding_number(outer, p) != 0
 }
 
+/// Whether point `p` lies inside the closed polyline `pl` (non-zero winding).
+pub fn contains_point(pl: &Polyline, p: Vec2) -> bool {
+    winding_number(pl, p) != 0
+}
+
 /// Winding number of point `p` with respect to the closed polyline `pl`.  Non-zero means inside
 /// (even-odd parity: odd means inside under the non-zero rule used by most CNC).
 fn winding_number(pl: &Polyline, p: Vec2) -> i32 {

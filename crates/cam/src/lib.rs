@@ -75,7 +75,7 @@ impl Default for LeadParams {
 pub struct TabParams {
     /// Width of each tab along the profile.
     pub width: f64,
-    /// Height the tool lifts for the tab (typically the last pass depth).
+    /// Height of the tab above the bottom of the cut: every pass below it rides over the tab.
     pub height: f64,
     /// Number of tabs around the profile (0 = none).  Distributed evenly by arc length.
     pub count: usize,
