@@ -2912,3 +2912,13 @@
 	Yes (can run inside another command with a leading apostrophe)	Ja (kann innerhalb eines anderen Befehls mit einem führenden Apostroph ausgeführt werden)
 	JSON parameters:	JSON-Parameter:
 	Run this command	Diesen Befehl ausführen
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Diese Bemaßung hat ihre Assoziativität verloren: Ein bemaßtes Objekt wurde gelöscht. Klicken, um sie neu zuzuordnen.
+	Reassociate	Neu zuordnen
+	Disassociate	Assoziativität lösen
+	Hide Action Bar	Aktionsleiste ausblenden
+	Reset Action Bars	Aktionsleisten zurücksetzen
+	Action Bars	Aktionsleisten
+	Make Visible	Sichtbar machen
+	Make Invisible	Unsichtbar machen
+	Convert Dimensions to Constraints	Bemaßungen in Abhängigkeiten umwandeln
+	Convert Constraints to Dimensions	Abhängigkeiten in Bemaßungen umwandeln

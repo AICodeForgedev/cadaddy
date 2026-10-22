@@ -3095,3 +3095,13 @@ menu	Modify	수정
 	Yes (can run inside another command with a leading apostrophe)	예 (선행 아포스트로피로 다른 명령 내에서 실행 가능)
 	JSON parameters:	JSON 매개변수:
 	Run this command	이 명령 실행
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	이 치수는 연관성을 잃었습니다: 측정하던 객체가 지워졌습니다. 클릭하여 다시 연관시키십시오.
+	Reassociate	다시 연관
+	Disassociate	연관 해제
+	Hide Action Bar	동작 막대 숨기기
+	Reset Action Bars	동작 막대 재설정
+	Action Bars	동작 막대
+	Make Visible	보이게 하기
+	Make Invisible	보이지 않게 하기
+	Convert Dimensions to Constraints	치수를 구속조건으로 변환
+	Convert Constraints to Dimensions	구속조건을 치수로 변환

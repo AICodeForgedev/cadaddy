@@ -3102,3 +3102,13 @@ menu	Modify	Ändra
 	Yes (can run inside another command with a leading apostrophe)	Ja (kan köras inuti ett annat kommando med en inledande apostrof)
 	JSON parameters:	JSON-parametrar:
 	Run this command	Kör detta kommando
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Den här måttsättningen har förlorat sin association: ett objekt den mätte har raderats. Klicka för att associera den igen.
+	Reassociate	Associera igen
+	Disassociate	Ta bort association
+	Hide Action Bar	Dölj åtgärdsfält
+	Reset Action Bars	Återställ åtgärdsfält
+	Action Bars	Åtgärdsfält
+	Make Visible	Gör synlig
+	Make Invisible	Gör osynlig
+	Convert Dimensions to Constraints	Konvertera mått till villkor
+	Convert Constraints to Dimensions	Konvertera villkor till mått

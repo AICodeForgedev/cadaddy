@@ -3094,3 +3094,13 @@ menu	Modify	Edita
 	Yes (can run inside another command with a leading apostrophe)	Sì (può essere eseguito all'interno di un altro comando con un apostrofo iniziale)
 	JSON parameters:	Parametri JSON:
 	Run this command	Esegui questo comando
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Questa quota ha perso l'associatività: un oggetto che misurava è stato cancellato. Fare clic per riassociarla.
+	Reassociate	Riassocia
+	Disassociate	Dissocia
+	Hide Action Bar	Nascondi barra delle azioni
+	Reset Action Bars	Reimposta barre delle azioni
+	Action Bars	Barre delle azioni
+	Make Visible	Rendi visibile
+	Make Invisible	Rendi invisibile
+	Convert Dimensions to Constraints	Converti quote in vincoli
+	Convert Constraints to Dimensions	Converti vincoli in quote

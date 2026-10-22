@@ -2883,3 +2883,13 @@
 	Yes (can run inside another command with a leading apostrophe)	Oui (peut s'exécuter dans une autre commande avec une apostrophe initiale)
 	JSON parameters:	Paramètres JSON :
 	Run this command	Exécuter cette commande
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Cette cote a perdu son associativité : un objet qu'elle mesurait a été effacé. Cliquez pour la réassocier.
+	Reassociate	Réassocier
+	Disassociate	Dissocier
+	Hide Action Bar	Masquer la barre d'actions
+	Reset Action Bars	Réinitialiser les barres d'actions
+	Action Bars	Barres d'actions
+	Make Visible	Rendre visible
+	Make Invisible	Rendre invisible
+	Convert Dimensions to Constraints	Convertir les cotes en contraintes
+	Convert Constraints to Dimensions	Convertir les contraintes en cotes

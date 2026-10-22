@@ -3075,3 +3075,13 @@ menu	Modify	Modifikace
 	Yes (can run inside another command with a leading apostrophe)	Ano (lze spustit uvnitř jiného příkazu s úvodním apostrofem)
 	JSON parameters:	Parametry JSON:
 	Run this command	Spustit tento příkaz
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Tato kóta ztratila asociativitu: objekt, který kótovala, byl vymazán. Klepnutím ji znovu přiřadíte.
+	Reassociate	Znovu přiřadit
+	Disassociate	Zrušit asociativitu
+	Hide Action Bar	Skrýt panel akcí
+	Reset Action Bars	Obnovit panely akcí
+	Action Bars	Panely akcí
+	Make Visible	Zviditelnit
+	Make Invisible	Skrýt
+	Convert Dimensions to Constraints	Převést kóty na vazby
+	Convert Constraints to Dimensions	Převést vazby na kóty

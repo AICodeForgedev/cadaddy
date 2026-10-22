@@ -2884,3 +2884,13 @@
 	Yes (can run inside another command with a leading apostrophe)	Да (можно запускать внутри другой команды с начальным апострофом)
 	JSON parameters:	Параметры JSON:
 	Run this command	Выполнить эту команду
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Этот размер потерял ассоциативность: измеряемый им объект был стёрт. Щёлкните, чтобы снова связать его.
+	Reassociate	Связать заново
+	Disassociate	Разорвать связь
+	Hide Action Bar	Скрыть панель операций
+	Reset Action Bars	Сбросить панели операций
+	Action Bars	Панели операций
+	Make Visible	Сделать видимым
+	Make Invisible	Сделать невидимым
+	Convert Dimensions to Constraints	Преобразовать размеры в зависимости
+	Convert Constraints to Dimensions	Преобразовать зависимости в размеры

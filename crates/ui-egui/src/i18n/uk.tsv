@@ -3148,3 +3148,13 @@
 	JSON parameters:	Параметри JSON:
 	Run this command	Виконати цю команду
 	Render Environment	Середовище візуалізації
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Цей розмір втратив асоціативність: об'єкт, який він вимірював, було стерто. Клацніть, щоб знову пов'язати його.
+	Reassociate	Пов'язати знову
+	Disassociate	Розірвати зв'язок
+	Hide Action Bar	Сховати панель операцій
+	Reset Action Bars	Скинути панелі операцій
+	Action Bars	Панелі операцій
+	Make Visible	Зробити видимим
+	Make Invisible	Зробити невидимим
+	Convert Dimensions to Constraints	Перетворити розміри на залежності
+	Convert Constraints to Dimensions	Перетворити залежності на розміри

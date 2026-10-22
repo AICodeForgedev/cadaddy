@@ -2979,3 +2979,13 @@
 	Yes (can run inside another command with a leading apostrophe)	是（可以在另一个命令内以前导撇号运行）
 	JSON parameters:	JSON 参数：
 	Run this command	运行此命令
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	此标注已失去关联：它测量的对象已被删除。单击以重新关联。
+	Reassociate	重新关联
+	Disassociate	解除关联
+	Hide Action Bar	隐藏动作栏
+	Reset Action Bars	重置动作栏
+	Action Bars	动作栏
+	Make Visible	使可见
+	Make Invisible	使不可见
+	Convert Dimensions to Constraints	将标注转换为约束
+	Convert Constraints to Dimensions	将约束转换为标注

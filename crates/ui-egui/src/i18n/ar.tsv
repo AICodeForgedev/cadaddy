@@ -3090,3 +3090,13 @@ menu	View	عرض
 	Yes (can run inside another command with a leading apostrophe)	نعم (يمكن تشغيله داخل أمر آخر بفاصلة عليا بادئة)
 	JSON parameters:	معاملات JSON:
 	Run this command	تشغيل هذا الأمر
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	فقد هذا البعد ارتباطه: تم مسح كائن كان يقيسه. انقر لإعادة ربطه.
+	Reassociate	إعادة الربط
+	Disassociate	فك الارتباط
+	Hide Action Bar	إخفاء شريط الإجراءات
+	Reset Action Bars	إعادة تعيين أشرطة الإجراءات
+	Action Bars	أشرطة الإجراءات
+	Make Visible	جعله مرئيًا
+	Make Invisible	جعله غير مرئي
+	Convert Dimensions to Constraints	تحويل الأبعاد إلى قيود
+	Convert Constraints to Dimensions	تحويل القيود إلى أبعاد
