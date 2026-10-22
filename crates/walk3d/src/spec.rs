@@ -748,6 +748,185 @@ pub struct Mep {
     /// Labels as last printed: label id → the text it was printed with (what changed since).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub labels_printed: BTreeMap<String, String>,
+    /// The grounding electrode system and bonding, as the one-line, the grounding details and
+    /// the notes show them (sizes as drawn: no sizing calculations).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<Grounding>,
+}
+
+/// The grounding electrode system, the bonds and the telecom grounding.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grounding {
+    /// The gear the grounding starts from (its ground bar): default the first switchboard.
+    pub service: String,
+    pub electrodes: Vec<Electrode>,
+    pub bonds: Vec<Bond>,
+    pub busbars: Vec<Busbar>,
+    /// Water and gas points of entry, when given (else found from the cold water and gas runs).
+    pub entries: Vec<PointOfEntry>,
+    /// What the drawings call for (notes, one-line, details): each must be in the model.
+    pub required: Vec<GroundRequirement>,
+    /// The concrete-encased electrode's requirement as the drawings' note states it.
+    pub ufer_note: UferNote,
+}
+
+/// A grounding electrode and its grounding electrode conductor (GEC) from the service.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Electrode {
+    pub tag: String,
+    /// `water_pipe`, `concrete_encased`, `ground_rod`, `ground_ring`, `building_steel`.
+    pub kind: String,
+    pub level: String,
+    /// Where the GEC connects (plan, drawing units) and its elevation (feet, absolute; below
+    /// grade is negative). A water pipe electrode names its point of entry instead (`entry`).
+    pub at: [f64; 2],
+    pub z_ft: f64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub entry: String,
+    /// The GEC: size as drawn, run in conduit, and its route (plan x, y in drawing units, z in
+    /// feet; empty until `grounding.route`).
+    pub gec_size: String,
+    pub in_conduit: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<[f64; 3]>,
+    /// Concrete-encased (Ufer): the conductor's length in the footing, its size and kind
+    /// (`bare_cu` or `rebar`, rebar by diameter in inches), the concrete cover, whether that part
+    /// of the footing is in direct contact with earth, the direction it runs (plan, degrees) and
+    /// whether its stub-up connection is accessible.
+    pub length_ft: f64,
+    pub conductor: String,
+    pub material: String,
+    pub rebar_in: f64,
+    pub cover_in: f64,
+    pub earth_contact: bool,
+    pub angle_deg: f64,
+    pub connection_accessible: bool,
+    /// The footing's pour: `pending` or `poured`, and whether the electrode is documented as
+    /// installed (photos, an inspection) — the pour hold point.
+    pub pour: String,
+    pub documented: bool,
+    /// Rods: how many and how long; a ring: its length.
+    pub count: u32,
+    pub rod_length_ft: f64,
+    pub ring_length_ft: f64,
+    /// Set on an electrode modelled in place of a missed one (its tag).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub alternative_of: String,
+}
+
+impl Default for Electrode {
+    fn default() -> Self {
+        Electrode {
+            tag: String::new(),
+            kind: String::new(),
+            level: String::new(),
+            at: [0.0, 0.0],
+            z_ft: 0.0,
+            entry: String::new(),
+            gec_size: String::new(),
+            in_conduit: false,
+            path: Vec::new(),
+            length_ft: 0.0,
+            conductor: "#4".into(),
+            material: "bare_cu".into(),
+            rebar_in: 0.0,
+            cover_in: 0.0,
+            earth_contact: true,
+            angle_deg: 0.0,
+            connection_accessible: true,
+            pour: "pending".into(),
+            documented: false,
+            count: 1,
+            rod_length_ft: 10.0,
+            ring_length_ft: 0.0,
+            alternative_of: String::new(),
+        }
+    }
+}
+
+/// A bonding conductor or jumper.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Bond {
+    pub tag: String,
+    /// `water`, `gas`, `metal_piping`, `structural_steel`, `main_bonding_jumper`,
+    /// `system_bonding_jumper`, `separately_derived` (a transformer), `telecom`, `rack`, `tray`.
+    pub kind: String,
+    /// From (gear or busbar tag; default the service) to (a point of entry, busbar, gear or
+    /// equipment tag; or a plan point `at` on `level`).
+    pub from: String,
+    pub to: String,
+    pub level: String,
+    pub at: [f64; 2],
+    pub z_ft: f64,
+    pub size: String,
+    pub in_conduit: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<[f64; 3]>,
+}
+
+/// A grounding busbar: the telecom main grounding busbar (TMGB) or a room's (TGB).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Busbar {
+    pub tag: String,
+    /// `tmgb` or `tgb`.
+    pub kind: String,
+    /// The room it is in (name or number, as the room list has it).
+    pub room: String,
+    pub level: String,
+    pub at: [f64; 2],
+    pub z_ft: f64,
+    /// As drawn: `1/4" x 4" x 12"`.
+    pub size: String,
+}
+
+/// Where water or gas piping enters the building: where its bond or electrode clamps on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PointOfEntry {
+    pub tag: String,
+    /// `water` or `gas`.
+    pub kind: String,
+    pub level: String,
+    pub at: [f64; 2],
+    pub z_ft: f64,
+    /// The clamp can be reached (not above a hard ceiling or in a wall), and why not.
+    pub accessible: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why: String,
+}
+
+/// Something the drawings call for: a bond or electrode of `kind` (to `to`, when given).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GroundRequirement {
+    pub kind: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub to: String,
+    /// The note as printed, and the sheet.
+    pub note: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sheet: String,
+}
+
+/// The concrete-encased electrode's requirement (typical values; check the drawings and the
+/// code edition): its length, the smallest bare copper or rebar, the concrete cover.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UferNote {
+    pub length_ft: f64,
+    pub min_conductor: String,
+    pub min_rebar_in: f64,
+    pub cover_in: f64,
+}
+
+impl Default for UferNote {
+    fn default() -> Self {
+        UferNote { length_ft: 20.0, min_conductor: "#4".into(), min_rebar_in: 0.5, cover_in: 2.0 }
+    }
 }
 
 /// An electrical device and the circuit it is on.
@@ -797,6 +976,7 @@ impl Mep {
             && self.feeders.is_empty()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
+            && self.grounding.is_none()
     }
 }
 

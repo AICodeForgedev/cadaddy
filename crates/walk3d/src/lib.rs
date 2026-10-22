@@ -43,11 +43,12 @@ pub use rfi::{Rfi, RfiKind, RfiStatus, Severity};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use spec::{
-    ArcFlash, Assembly, AssemblyLayer, Band, BandKind, BuildingSpec, CeilingArea, CeilingGrid, CeilingItem, CeilingKind, CeilingType, Cricket,
-    Described, DuctType, ElecDevice, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind, Feeder, GridColumn, Hang, Head, HeadTo, HeadTrack,
-    HeightRule, Issue, ItemKind, LayerRole, LayerSide, MAX_ASSEMBLY_LAYERS, Mep, MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag,
-    PanelCircuit, Rcp, Role, Roof, RoofSlope, Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Side, Site, Soffit, SoffitType, Stair, Surfaces,
-    Termination, WallFrom, WallMark, WallType, feet, inches, level_at, merge, pitch_text,
+    ArcFlash, Assembly, AssemblyLayer, Band, BandKind, Bond, BuildingSpec, Busbar, CeilingArea, CeilingGrid, CeilingItem, CeilingKind, CeilingType,
+    Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind, Feeder, GridColumn,
+    GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Issue, ItemKind, LayerRole, LayerSide, MAX_ASSEMBLY_LAYERS, Mep,
+    MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, PanelCircuit, PointOfEntry, Rcp, Role, Roof, RoofSlope, Room as SpecRoom,
+    SPEC_VERSION, Schedule, ScheduleRow, Side, Site, Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, WallFrom, WallMark, WallType, feet,
+    inches, level_at, merge, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};
