@@ -16,6 +16,7 @@ cadaddy-geom = { workspace = true }
 cadaddy-color = { workspace = true }
 cadaddy-doc = { workspace = true }
 cadaddy-dxf = { workspace = true }
+cadaddy-cam = { workspace = true }
 cadaddy-constraints = { workspace = true }
 cadaddy-fonts = { workspace = true }
 cadaddy-render = { workspace = true }
