@@ -68,6 +68,7 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
     let cs: Vec<char> = chars.iter().map(|c| c.0).collect();
     let flags = |i: usize| chars.get(i).map(|c| (c.1, c.2)).unwrap_or((false, false));
     let mut out = Shaped::default();
+    let mut points_left = ttf::MAX_SHAPED_POINTS;
     let mut spans: Vec<(f64, f64, bool, bool)> = Vec::new();
     let mut x = 0.0;
     // Whether the rightmost glyph so far is a stroke-font glyph.
@@ -102,11 +103,10 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                         let outline = ttf::glyph_by_id(face, g.gid);
                         let k = h / outline.cap * wf;
                         let dy = g.dy * h / outline.cap;
-                        let mut contours = ttf::place_glyph(&outline, x + g.dx * k, h, wf, shear);
-                        for p in contours.iter_mut().flatten() {
-                            *p += Vec2::new(dy * shear, dy);
-                        }
-                        if !contours.is_empty() {
+                        if let Some(mut contours) = ttf::place_glyph_budgeted(&outline, x + g.dx * k, h, wf, shear, &mut points_left) {
+                            for p in contours.iter_mut().flatten() {
+                                *p += Vec2::new(dy * shear, dy);
+                            }
                             out.glyphs.push(contours);
                         }
                         let adv = g.advance * k;

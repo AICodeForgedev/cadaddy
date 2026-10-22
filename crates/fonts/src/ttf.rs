@@ -107,6 +107,9 @@ const MAX_FIRST_WORD_FILES: usize = 24;
 const MAX_LOADED_BYTES: usize = 256 << 20;
 const MAX_CACHED_NAMES: usize = 4096;
 const MAX_CACHED_CHARS: usize = 50_000;
+/// Cumulative outline points one shaped line may retain, so an oversized expanded glyph repeated
+/// across a string cannot grow the result without bound (CWE-400).
+pub(crate) const MAX_SHAPED_POINTS: usize = 8_000_000;
 
 /// Fonts known to cover many scripts (CJK first), tried first for missing glyphs. Matched as
 /// substrings of the normalised file stem.
@@ -595,6 +598,7 @@ pub fn fallback_for(c: char) -> Option<Face> {
 #[derive(Default)]
 pub(crate) struct GlyphOutline {
     pub(crate) contours: Arc<[Vec<Vec2>]>,
+    points: usize,
     pub(crate) advance: f64,
     pub(crate) cap: f64,
     /// The font maps the character (false: the missing-glyph shape).
@@ -614,22 +618,46 @@ enum GlyphKey {
 /// Cached glyph outlines keyed by (font bytes address, length, face, glyph). Fonts live for the
 /// whole process in the font table, so the address identifies them. A read-write lock: display
 /// lists are built on all cores and nearly every lookup is a hit, which a mutex serialized.
-type GlyphCache = HashMap<(usize, usize, u32, GlyphKey), Arc<GlyphOutline>>;
+#[derive(Default)]
+struct GlyphCache {
+    glyphs: HashMap<(usize, usize, u32, GlyphKey), Arc<GlyphOutline>>,
+    points: usize,
+}
 
 fn glyph_cache() -> &'static RwLock<GlyphCache> {
     static C: OnceLock<RwLock<GlyphCache>> = OnceLock::new();
-    C.get_or_init(|| RwLock::new(HashMap::new()))
+    C.get_or_init(|| RwLock::new(GlyphCache::default()))
 }
 
 const MAX_CACHED_GLYPHS: usize = 40_000;
 const UPEM: f32 = 1000.0;
 
+#[derive(Default)]
 struct Pen {
     contours: Vec<Vec<Vec2>>,
     cur: Vec<Vec2>,
+    points: usize,
+    truncated: bool,
 }
 
+const MAX_OUTLINE_POINTS: usize = 65_536;
+
 impl Pen {
+    fn push(&mut self, point: Vec2) {
+        if self.truncated {
+            return;
+        }
+        if self.points == MAX_OUTLINE_POINTS {
+            // An incomplete contour is not safe to fill; retain only the advance for this glyph.
+            self.truncated = true;
+            self.cur.clear();
+            self.contours.clear();
+            return;
+        }
+        self.points += 1;
+        self.cur.push(point);
+    }
+
     fn pt(x: f32, y: f32) -> Vec2 {
         Vec2::new(f64::from(x), f64::from(y))
     }
@@ -638,9 +666,11 @@ impl Pen {
             if let (Some(f), Some(l)) = (self.cur.first().copied(), self.cur.last().copied())
                 && f != l
             {
-                self.cur.push(f);
+                self.push(f);
             }
-            self.contours.push(std::mem::take(&mut self.cur));
+            if !self.truncated {
+                self.contours.push(std::mem::take(&mut self.cur));
+            }
         } else {
             self.cur.clear();
         }
@@ -650,10 +680,10 @@ impl Pen {
 impl OutlinePen for Pen {
     fn move_to(&mut self, x: f32, y: f32) {
         self.flush();
-        self.cur.push(Self::pt(x, y));
+        self.push(Self::pt(x, y));
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.cur.push(Self::pt(x, y));
+        self.push(Self::pt(x, y));
     }
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
         let a = self.cur.last().copied().unwrap_or_default();
@@ -662,7 +692,7 @@ impl OutlinePen for Pen {
         for i in 1..=6 {
             let t = f64::from(i) / 6.0;
             let u = 1.0 - t;
-            self.cur.push(a * (u * u) + c * (2.0 * u * t) + b * (t * t));
+            self.push(a * (u * u) + c * (2.0 * u * t) + b * (t * t));
         }
     }
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
@@ -673,7 +703,7 @@ impl OutlinePen for Pen {
         for i in 1..=8 {
             let t = f64::from(i) / 8.0;
             let u = 1.0 - t;
-            self.cur.push(a * (u * u * u) + c0 * (3.0 * u * u * t) + c1 * (3.0 * u * t * t) + b * (t * t * t));
+            self.push(a * (u * u * u) + c0 * (3.0 * u * u * t) + c1 * (3.0 * u * t * t) + b * (t * t * t));
         }
     }
     fn close(&mut self) {
@@ -714,7 +744,7 @@ pub fn glyph_contours(face: &Face, gid: u16) -> Arc<[Vec<Vec2>]> {
 
 fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     let key = (face.bytes.as_ptr() as usize, face.bytes.len(), face.index, k);
-    if let Some(g) = glyph_cache().read().unwrap_or_else(PoisonError::into_inner).get(&key) {
+    if let Some(g) = glyph_cache().read().unwrap_or_else(PoisonError::into_inner).glyphs.get(&key) {
         return g.clone();
     }
     let Some(f) = face.font() else { return Arc::new(GlyphOutline { cap: 1.0, ..Default::default() }) };
@@ -723,19 +753,24 @@ fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
         GlyphKey::Id(id) => Some(GlyphId::new(id)),
     };
     let gid = mapped.unwrap_or_default();
-    let mut pen = Pen { contours: Vec::new(), cur: Vec::new() };
+    let mut pen = Pen::default();
     if let Some(g) = f.outline_glyphs().get(gid) {
         let _ = g.draw(DrawSettings::unhinted(Size::new(UPEM), LocationRef::default()), &mut pen);
         pen.flush();
     }
     let advance = f64::from(f.glyph_metrics(Size::new(UPEM), LocationRef::default()).advance_width(gid).unwrap_or(UPEM * 0.5));
     let (cap, mapped, gid) = (cap_height(&f), mapped.is_some(), gid.to_u32());
-    let g = Arc::new(GlyphOutline { contours: pen.contours.into(), advance, cap, mapped, gid, face: Some(face.clone()) });
+    let points = pen.contours.iter().map(Vec::len).sum();
+    let g = Arc::new(GlyphOutline { points, contours: pen.contours.into(), advance, cap, mapped, gid, face: Some(face.clone()) });
     let mut cache = glyph_cache().write().unwrap_or_else(PoisonError::into_inner);
-    if cache.len() > MAX_CACHED_GLYPHS {
-        cache.clear();
+    if cache.glyphs.len() >= MAX_CACHED_GLYPHS || cache.points.saturating_add(points) > MAX_SHAPED_POINTS {
+        cache.glyphs.clear();
+        cache.points = 0;
     }
-    cache.insert(key, g.clone());
+    if let Some(old) = cache.glyphs.insert(key, g.clone()) {
+        cache.points -= old.points;
+    }
+    cache.points += points;
     g
 }
 
@@ -777,6 +812,11 @@ pub(crate) fn text_glyph_at(g: &GlyphOutline, c: char, origin: Vec2, scale: f64,
     })
 }
 
+pub(crate) fn place_glyph_budgeted(g: &GlyphOutline, x: f64, h: f64, wf: f64, shear: f64, points_left: &mut usize) -> Option<Vec<Vec<Vec2>>> {
+    *points_left = points_left.checked_sub(g.points)?;
+    Some(place_glyph(g, x, h, wf, shear))
+}
+
 /// Contours of a glyph scaled so its font's cap height is `h`, at pen position `x`.
 pub(crate) fn place_glyph(g: &GlyphOutline, x: f64, h: f64, wf: f64, shear: f64) -> Vec<Vec<Vec2>> {
     place_glyph_at(g, Vec2::new(x, 0.0), h / g.cap, wf, shear)
@@ -814,16 +854,20 @@ pub fn shape(face: &Face, s: &str, height: f64, width_factor: f64, oblique: f64)
     let mut out = Shaped::default();
     let mut spans = Vec::new();
     let mut x = 0.0;
+    // Cumulative retained-point budget: a compact CFF/OTF font can expand one glyph into a huge
+    // outline, and a short repeated string copies it per occurrence, so cap the total geometry
+    // kept in the Shaped result (CWE-400). Advances still accumulate so the width stays sensible.
+    let mut points_left: usize = MAX_SHAPED_POINTS;
     for (c, under, over) in crate::decode_controls(s) {
         if crate::bidi::is_format_control(c) {
             continue;
         }
         let g = glyph_or_fallback(face, c);
-        if !c.is_whitespace() {
-            let contours = place_glyph(&g, x, h, wf, shear);
-            if !contours.is_empty() {
-                out.push_glyph(contours, text_glyph(&g, c, x, h, wf, shear));
-            }
+        if !c.is_whitespace()
+            && let Some(contours) = place_glyph_budgeted(&g, x, h, wf, shear, &mut points_left)
+        {
+            // Even an empty mapped glyph needs a valid outline slot for text export.
+            out.push_glyph(contours, text_glyph(&g, c, x, h, wf, shear));
         }
         let adv = g.advance * h / g.cap * wf;
         spans.push((x, x + adv, under, over));
@@ -876,5 +920,66 @@ mod family_tests {
         assert!(family_candidates(&stems, &norm("gost type a"), "go").is_empty(), "too short a word matches nothing");
         let many: Vec<String> = (0..100).map(|i| format!("gost{i:03}")).collect();
         assert!(family_candidates(&many, "gosttypea", "gost").len() <= MAX_FAMILY_FILES + MAX_FIRST_WORD_FILES);
+    }
+}
+
+#[cfg(test)]
+mod geometry_budget_tests {
+    use super::*;
+    #[test]
+    fn placement_checks_source_size_and_accepts_empty_glyphs() {
+        let glyph = GlyphOutline { contours: vec![vec![Vec2::ZERO; 4]].into(), points: 4, cap: 1.0, ..Default::default() };
+        let mut budget = 3;
+        assert!(place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut budget).is_none());
+        assert_eq!(budget, 3);
+        let empty = GlyphOutline { cap: 1.0, ..Default::default() };
+        assert_eq!(place_glyph_budgeted(&empty, 0.0, 1.0, 1.0, 0.0, &mut 0), Some(Vec::new()));
+        let mut budget = 4;
+        assert!(place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut budget).is_some());
+        assert_eq!(budget, 0);
+        assert!(place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut budget).is_none());
+    }
+    #[test]
+    fn flattened_outlines_are_bounded_before_caching() {
+        let mut pen = Pen::default();
+        for _ in 0..MAX_OUTLINE_POINTS {
+            pen.line_to(0.0, 0.0);
+        }
+        pen.line_to(1.0, 1.0);
+        pen.close();
+        assert!(pen.truncated);
+        assert!(pen.contours.is_empty() && pen.cur.is_empty());
+        assert_eq!(pen.points, MAX_OUTLINE_POINTS);
+    }
+    #[test]
+    fn mapped_empty_glyph_keeps_text_and_a_valid_outline_slot() {
+        // Metadata placement does not parse the face; an empty face suffices to check the index contract.
+        let glyph = GlyphOutline { cap: 1.0, mapped: true, gid: 1, face: Some(Face { bytes: Arc::new(Vec::new()), index: 0 }), ..Default::default() };
+        let contours = place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut 0).unwrap();
+        let mut shaped = Shaped::default();
+        shaped.push_glyph(contours, text_glyph(&glyph, 'x', 0.0, 1.0, 1.0, 0.0));
+        assert_eq!(shaped.text.len(), 1);
+        assert_eq!(shaped.text[0].outline, 0);
+        assert!(shaped.glyphs[shaped.text[0].outline].is_empty());
+    }
+
+    #[test]
+    fn unmapped_empty_glyph_does_not_make_the_shape_nonempty() {
+        let glyph = GlyphOutline { cap: 1.0, ..Default::default() };
+        let contours = place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut 0).unwrap();
+        let mut shaped = Shaped::default();
+        shaped.push_glyph(contours, text_glyph(&glyph, 'x', 0.0, 1.0, 1.0, 0.0));
+        assert!(shaped.is_empty());
+        assert!(shaped.text.is_empty());
+    }
+
+    #[test]
+    fn an_unmapped_glyph_with_contours_still_draws() {
+        let mut shaped = Shaped::default();
+        let contours = vec![vec![Vec2::ZERO, Vec2::new(1.0, 1.0)]];
+        shaped.push_glyph(contours.clone(), None);
+        assert!(!shaped.is_empty());
+        assert_eq!(shaped.glyphs, vec![contours]);
+        assert!(shaped.text.is_empty());
     }
 }
