@@ -21,7 +21,7 @@ cadaddy-doc = { workspace = true }
 cadaddy-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# The RFI list's items (shared with the building spec).
+# The RFI list's items (shared with the building spec) and the print validator's inputs.
 cadaddy-walk3d = { path = "../walk3d" }
 
 [dev-dependencies]

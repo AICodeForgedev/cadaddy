@@ -502,7 +502,7 @@ fn size(p: &Value, w: u32, h: u32) -> (u32, u32) {
 }
 
 /// The PNG written to `path`, or returned as base64.
-fn deliver(png: Vec<u8>, p: &Value, out: &mut Value) -> Result<()> {
+pub(crate) fn deliver(png: Vec<u8>, p: &Value, out: &mut Value) -> Result<()> {
     match str_param(p, "path") {
         Some(path) => {
             #[cfg(not(target_arch = "wasm32"))]

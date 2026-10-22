@@ -1397,7 +1397,12 @@ impl Session {
         if react {
             self.lisp_command_event(lisp::reactor::CommandEvent::WillStart, id);
         }
-        let r = self.execute_inner(id, params);
+        // An agent's edit of a drawing whose prints gate edits: re-checked round what it changed.
+        let gate = if outer && self.agent.from_agent && !self.agent.dry_run { cmd::validate::gate_before(self, id) } else { None };
+        let mut r = self.execute_inner(id, params);
+        if let Some(g) = gate {
+            r = cmd::validate::gate_after(self, g, r);
+        }
         if let Some(uid) = uid {
             self.rebase_running(uid);
         }
