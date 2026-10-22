@@ -1,7 +1,7 @@
 //! TABLE: create tables and edit cells, rows, columns and merges; cell styles, formulas
 //! (`formula`), TABLEDIT and TABLEEXPORT (`cells`).
 
-mod breaks;
+pub(crate) mod breaks;
 pub(crate) mod cells;
 pub(crate) mod formula;
 pub mod xlsx;

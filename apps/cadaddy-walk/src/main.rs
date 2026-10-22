@@ -5,7 +5,9 @@
 //! `cadaddy-walk FILE --tour NAME --frames DIR [--fps N] [--mp4 OUT.mp4] [--size WxH] [--cut]`
 //! FILE is a drawing (its `.walk.json` beside it, or a building file listing it) or a building
 //! file (`.walk.json`) itself. `--tour` renders a camera tour saved in the drawing (`tour.*`) as
-//! numbered PNG frames, and with `--mp4` encodes them with ffmpeg when it is installed.
+//! numbered PNG frames, and with `--mp4` encodes them with ffmpeg when it is installed. With
+//! `--4d FROM:TO` the drawing's 4D schedule plays along the tour (dates evenly from FROM to TO,
+//! work not started hidden, or pale with `--ghost`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -18,6 +20,7 @@ struct Args {
     file: PathBuf,
     shot: PathBuf,
     tour: Option<String>,
+    fourd: Option<(i32, i32, bool)>,
     fps: f64,
     mp4: Option<PathBuf>,
     cam: Option<[f64; 5]>,
@@ -29,6 +32,7 @@ struct Args {
 fn args() -> Result<Args, String> {
     let (mut file, mut shot, mut cam, mut size, mut level, mut cut) = (None, None, None, (1600, 900), 0, false);
     let (mut tour, mut fps, mut mp4) = (None, 30.0, None);
+    let (mut fourd, mut ghost) = (None, false);
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut val = || it.next().ok_or(format!("{arg} needs a value"));
@@ -39,6 +43,13 @@ fn args() -> Result<Args, String> {
             "--mp4" => mp4 = Some(PathBuf::from(val()?)),
             "--level" => level = val()?.parse().map_err(|_| "--level N")?,
             "--cut" => cut = true,
+            "--ghost" => ghost = true,
+            "--4d" => {
+                let v = val()?;
+                let (a, b) = v.split_once(':').ok_or("--4d FROM:TO (dates)")?;
+                let day = |s: &str| cadaddy_walk3d::fourd::day(s).ok_or(format!("--4d: `{s}` is not a date"));
+                fourd = Some((day(a)?, day(b)?));
+            }
             "--size" => {
                 let v = val()?;
                 let (w, h) = v.split_once('x').ok_or("--size WxH")?;
@@ -53,11 +64,12 @@ fn args() -> Result<Args, String> {
             _ => return Err(format!("unknown option {arg}")),
         }
     }
-    let usage = "usage: cadaddy-walk FILE --shot OUT.png [--cam x,y,z,yaw,pitch] [--size WxH] [--level N] [--cut]\n       cadaddy-walk FILE --tour NAME --frames DIR [--fps N] [--mp4 OUT.mp4] [--size WxH] [--cut]";
+    let usage = "usage: cadaddy-walk FILE --shot OUT.png [--cam x,y,z,yaw,pitch] [--size WxH] [--level N] [--cut]\n       cadaddy-walk FILE --tour NAME --frames DIR [--fps N] [--mp4 OUT.mp4] [--size WxH] [--cut] [--4d FROM:TO [--ghost]]";
     if size.0 == 0 || size.1 == 0 || size.0 > export::MAX_SIDE || size.1 > export::MAX_SIDE {
         return Err(format!("--size: each side 1 to {}", export::MAX_SIDE));
     }
-    Ok(Args { file: file.ok_or(usage)?, shot: shot.ok_or(usage)?, tour, fps, mp4, cam, size, level, cut })
+    let fourd = fourd.map(|(a, b)| (a, b, ghost));
+    Ok(Args { file: file.ok_or(usage)?, shot: shot.ok_or(usage)?, tour, fourd, fps, mp4, cam, size, level, cut })
 }
 
 /// The drawing readers (what CADaddy installs at startup), so floor sheets can be read.
@@ -89,10 +101,19 @@ fn run(a: &Args) -> Result<(), String> {
     let mut g = gpu::Gpu::new(&device, cadaddy_ui_egui::gpucaps::MSAA_WANTED);
     g.upload(&device, &b.scene);
     if let Some(tour) = &a.tour {
-        let e = export::export_frames(&b, tour, a.fps, &a.shot, |w| {
-            g.render(&device, &queue, a.size, &frame_for(&b.scene, w, a.size, a.cut));
-            g.read_rgba(&device, &queue)
-        })?;
+        let e = match a.fourd {
+            Some(span) => export::export_frames_4d(&b, tour, a.fps, &a.shot, span, |w, scene, fresh| {
+                if fresh {
+                    g.upload(&device, scene);
+                }
+                g.render(&device, &queue, a.size, &frame_for(scene, w, a.size, a.cut));
+                g.read_rgba(&device, &queue)
+            })?,
+            None => export::export_frames(&b, tour, a.fps, &a.shot, |w| {
+                g.render(&device, &queue, a.size, &frame_for(&b.scene, w, a.size, a.cut));
+                g.read_rgba(&device, &queue)
+            })?,
+        };
         println!(
             "{}: tour {tour}: {} frames of {}x{} at {} fps ({:.1} s) -> {}",
             a.file.display(),

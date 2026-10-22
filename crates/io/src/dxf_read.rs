@@ -2415,6 +2415,9 @@ impl Objects {
         if let Some(tours) = self.xrecord_text(crate::dxf_ext::TOURS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
             d.tours = Some(tours);
         }
+        if let Some(s) = self.xrecord_text(crate::dxf_ext::SCHEDULE4D_KEY).and_then(|t| crate::dxf_ext::parse_schedule4d(&t)) {
+            d.schedule4d = Some(s);
+        }
         if let Some(o) = self.xrecord_text(crate::dxf_ext::OVERRIDES_KEY).and_then(|t| crate::dxf_ext::parse_overrides(&t)) {
             d.overrides = Some(o);
         }

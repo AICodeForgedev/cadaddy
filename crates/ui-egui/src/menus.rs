@@ -99,6 +99,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.markups", "Markups", &["Window", "Markups"], None),
     ("rfilist", "RFI List", &["Window", "RFI List"], None),
     ("elementtags", "Element Tags", &["Window", "Element Tags"], None),
+    ("fourd", "4D Schedule", &["Window", "4D Schedule"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -731,6 +732,26 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "elementtags" => {
             app.ui.dialog = Some(crate::tagspalette::DIALOG.into());
             Ok(Value::Null)
+        }
+        "fourd" => {
+            app.ui.dialog = Some(crate::fourdpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        // From the menu: pick the schedule, then show it in the 4D palette.
+        "fourd.import" if params.is_null() => {
+            app.session.echo("Command: FOURD.IMPORT".to_string());
+            match app.services.pick_open.as_ref().map(|p| p()) {
+                Some(Some(path)) => {
+                    app.run("fourd.import", json!({ "path": path })).inspect(|_| app.ui.dialog = Some(crate::fourdpalette::DIALOG.into()))
+                }
+                Some(None) if !file_dialogs_off(app) && !crate::dialog_refused() => Ok(Value::Null),
+                _ => {
+                    let msg = "FOURD.IMPORT: there is no file dialog here; run it with parameters, e.g. fourd.import {\"path\": \"schedule.csv\"}"
+                        .to_string();
+                    app.session.echo(msg.clone());
+                    Err(msg)
+                }
+            }
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
         // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.

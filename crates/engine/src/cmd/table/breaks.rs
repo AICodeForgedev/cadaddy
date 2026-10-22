@@ -225,7 +225,7 @@ pub(crate) fn parse_csv(text: &str, sep: char) -> Vec<Vec<String>> {
 
 /// The separator of a linked file: tab for .txt/.tsv, else `;` when the first line has semicolons
 /// but no commas, else `,`.
-fn separator(path: &str, text: &str) -> char {
+pub(crate) fn separator(path: &str, text: &str) -> char {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if ext == "txt" || ext == "tsv" {
         return '\t';

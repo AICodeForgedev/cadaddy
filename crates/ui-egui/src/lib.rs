@@ -87,6 +87,7 @@ pub mod exchangeloss;
 pub mod extractdlg;
 pub mod fieldview;
 pub mod finddlg;
+pub mod fourdpalette;
 pub mod gpu;
 pub mod gpucaps;
 pub mod grip_dyn;
@@ -499,6 +500,8 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// The date the 3D view and Walk show the model at, from the 4D palette ([`fourdpalette`]).
+    pub fourd: Option<fourdpalette::Shown>,
     /// The dialog open at the last frame (for `dialog.opened` events).
     last_dialog: Option<String>,
     /// Drawings opened from walkthrough packages that Walk has been opened on (once each).
@@ -588,6 +591,7 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            fourd: None,
             last_dialog: None,
             walked: std::collections::BTreeSet::new(),
             exchange_notice: None,

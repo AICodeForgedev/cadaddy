@@ -1312,6 +1312,25 @@ fn tours_roundtrip_in_dxf_dwg_and_cdy() {
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_TOURS"));
 }
 
+#[test]
+fn schedule4d_roundtrips_in_dxf_dwg_and_cdy() {
+    let mut d = Drawing::new_imperial();
+    let sched = r#"{"version":1,"tasks":[{"id":"A10","name":"Level 1 supply duct","start":"2026-03-02","finish":"2026-03-06","filter":{"level":"Level 1","class":"Duct*"},"add":["2F"]}]}"#;
+    d.schedule4d = Some(sched.into());
+    let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let text = write_dxf(&d);
+    assert!(text.contains("CADADDY_4D"));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().schedule4d), same(Some(sched.into())));
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().schedule4d), same(Some(sched.into())));
+    let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
+    assert_eq!(same(cdy.schedule4d), same(Some(sched.into())));
+    assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_4D"));
+    // A schedule from a newer CADaddy, or a broken one, is left out rather than failing the file.
+    d.schedule4d = Some(r#"{"version":99,"tasks":[]}"#.into());
+    assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().schedule4d, None);
+}
+
 fn table_sample() -> Table {
     let cell = |t: &str| TableCell { text: t.into(), ..Default::default() };
     let mut rows = vec![
