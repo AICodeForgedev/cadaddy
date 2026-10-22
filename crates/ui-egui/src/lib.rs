@@ -143,6 +143,7 @@ pub mod keytips;
 pub mod publishdlg;
 mod roomsdlg;
 pub mod rtl;
+pub mod scripteditor;
 pub mod secureloaddlg;
 pub mod sheetsets;
 pub mod standardsdlg;
