@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu", "tr", "el"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "hu", "tr", "el", "ka"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -1171,4 +1171,113 @@ fn default_fonts_cover_all_greek_letters_in_the_catalog() {
             }
         }
     });
+}
+
+#[test]
+fn georgian_locales_preferences_and_single_count_form() {
+    for tag in ["ka", "ka-GE", "ka_GE", "ka_GE.UTF-8", "KA-ge", " ka-GE "] {
+        assert_eq!(locale_language(tag), Some("ka"), "{tag}");
+    }
+    // `kat`/`geo` are the three-letter codes and `kab` is Kabyle; none picks Georgian.
+    for tag in ["kat", "geo", "kab", "kartuli"] {
+        assert_eq!(locale_language(tag), None, "{tag}");
+    }
+    assert_eq!(Preference::parse("ka"), Some(Preference::Georgian));
+    assert_eq!(Preference::Georgian.code(), "ka");
+    assert_eq!(Preference::Georgian.name(), if crate::theme::can_show("ka") { "ქართული" } else { "Georgian" });
+    assert_eq!(Preference::Georgian.resolve(&["en-US".into()]), "ka");
+    assert_eq!(Preference::Auto.resolve(&["pl-PL".into(), "ka-GE".into(), "en-US".into()]), "ka");
+    let saved = serde_json::to_string(&Preference::Georgian).unwrap();
+    assert_eq!(saved, "\"ka\"");
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.interface_language = Preference::Georgian;
+    let mut restored = CadApp::new(Session::new(), Services::default());
+    restored.load_prefs(&app.prefs_json());
+    assert_eq!(restored.ui.interface_language, Preference::Georgian);
+    with_language("ka", || {
+        // A Georgian noun stays singular after a numeral, 1 included.
+        for n in [0, 1, 2, 5, 21, u64::MAX] {
+            assert_eq!(count(n, "{n} contributor", "{n} contributors"), format!("{n} მონაწილე"));
+            assert_eq!(count(n, "{n} commit", "{n} commits"), format!("{n} კომიტი"));
+        }
+        assert_eq!(t("Open"), "გახსნა");
+        assert_eq!(menu("Dimension"), "ზომების დატანა");
+        assert_eq!(t("Dimension"), "ზომა");
+        assert_eq!(menu("Draw"), "ხაზვა");
+        assert_eq!(menu("File"), "ფაილი");
+    });
+    assert_eq!(t("Open"), "Open", "language must not leak outside a render scope");
+}
+
+#[test]
+fn georgian_catalog_covers_marked_ui_literals_without_mtavruli() {
+    assert!(missing_marked_ui_literals("ka").is_empty(), "{:?}", missing_marked_ui_literals("ka"));
+    assert!(missing_commands_menus_tools_and_snap_labels("ka").is_empty(), "{:?}", missing_commands_menus_tools_and_snap_labels("ka"));
+    // Mtavruli (U+1C90–U+1CBF) is a display style, not upper-case Georgian: never in the catalog.
+    let mtavruli: Vec<char> = include_str!("ka.tsv").chars().filter(|c| ('\u{1c90}'..='\u{1cbf}').contains(c)).collect();
+    assert!(mtavruli.is_empty(), "{mtavruli:?}");
+}
+
+#[test]
+fn georgian_live_switch_keeps_drawing_and_falls_back_without_font() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    app.session.state_mut().unwrap().title = "Open".into();
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+    app.start("line");
+    let prompt = crate::control::cmdline_state(&app);
+    let commands = crate::control::all_commands(&app);
+    let result = app.run("ui.language", json!({"lang": "ka"})).unwrap();
+    let supported = crate::theme::can_show("ka");
+    assert_eq!(result["shown"], if supported { "ka" } else { "en" });
+    assert_eq!(app.ui.interface_language, Preference::Georgian);
+    app.logic(&ctx);
+    assert_eq!(app.fonts_language, Some(app.language()));
+    let text = render(&mut app, &ctx);
+    if supported {
+        for label in ["თვისებები", "ფაილი", "ხედი", "ხაზვა", "ზომების დატანა", "მიუთითეთ პირველი წერტილი"]
+        {
+            assert!(text.contains(label), "missing {label}: {text}");
+        }
+    } else {
+        assert!(text.contains("Properties"));
+    }
+    assert_eq!(app.session.state().unwrap().title, "Open");
+    assert_eq!(crate::control::cmdline_state(&app), prompt);
+    assert_eq!(crate::control::all_commands(&app), commands);
+    app.run("ui.language", json!({"lang": "en"})).unwrap();
+    app.logic(&ctx);
+    assert!(render(&mut app, &ctx).contains("Properties"));
+}
+
+#[test]
+fn georgian_dialogs_render_with_stable_ids() {
+    if !crate::theme::can_show("ka") {
+        return; // The fallback path is covered above; do not claim glyph rendering here.
+    }
+    for (dialog, source) in [
+        ("dsettings", "Drafting Settings"),
+        ("about", "About CADCraft"),
+        ("commands", "Command Reference"),
+        ("blocks", "Blocks"),
+        ("layers", "Layer Properties Manager"),
+        ("qselect", "Quick Select"),
+        ("parameters", "Parameters Manager"),
+        ("language", "Interface Language"),
+        ("options:preferences", "User Preferences"),
+    ] {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.ui.interface_language = Preference::Georgian;
+        app.ui.dialog = Some(dialog.into());
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let text = render(&mut app, &ctx);
+        assert!(text.contains(tr("ka", source)), "{dialog}: {text}");
+        if dialog == "language" {
+            assert!(text.contains("ქართული"), "{dialog}: {text}");
+        }
+        assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
+    }
 }
