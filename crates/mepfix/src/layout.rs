@@ -210,10 +210,8 @@ pub fn plan_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Fire(l)
             | Kind::Enlarged(l, _)
             | Kind::Lighting(l)
-            | Kind::Power(l)
-            | Kind::Floor(l) => Some(l.clone()),
+            | Kind::Power(l) => Some(l.clone()),
             Kind::Roof | Kind::RoofDrainage => Some("R".to_string()),
-            Kind::Power(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();
