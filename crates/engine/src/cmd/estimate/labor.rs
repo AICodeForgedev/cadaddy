@@ -213,9 +213,12 @@ pub(super) fn drivers(st: &Map<String, Value>, base: &Value) -> Vec<Driver> {
         let context = e["context"].as_str().unwrap_or_default().to_string();
         let (mut n, mut q, mut h) = (0usize, 0.0, 0.0);
         for o in observations(st, base).filter(|o| {
-            o["driver"].as_str().is_some_and(|d| d.eq_ignore_ascii_case(&name)) && o["context"].as_str().unwrap_or_default().eq_ignore_ascii_case(&context)
+            o["driver"].as_str().is_some_and(|d| d.eq_ignore_ascii_case(&name))
+                && o["context"].as_str().unwrap_or_default().eq_ignore_ascii_case(&context)
         }) {
-            if let (Some(oq), Some(oh)) = (o["qty"].as_f64().filter(|x| x.is_finite() && *x > 0.0), o["hours"].as_f64().filter(|x| x.is_finite() && *x >= 0.0)) {
+            if let (Some(oq), Some(oh)) =
+                (o["qty"].as_f64().filter(|x| x.is_finite() && *x > 0.0), o["hours"].as_f64().filter(|x| x.is_finite() && *x >= 0.0))
+            {
                 n += 1;
                 q += oq;
                 h += oh;
@@ -318,7 +321,14 @@ pub(super) fn line_labor(
 fn factors_for(st: &Map<String, Value>, base: &Value, key: &str, line: &Value) -> Vec<(String, f64, String)> {
     let mut out: Vec<(String, f64, String)> = Vec::new();
     let Some(all) = base["factors"].as_object() else { return out };
-    let describe = |f: &Value, how: &str| format!("{}, {}: {}; {how}", f["kind"].as_str().unwrap_or_default(), f["basis"].as_str().unwrap_or_default(), f["source"].as_str().unwrap_or_default());
+    let describe = |f: &Value, how: &str| {
+        format!(
+            "{}, {}: {}; {how}",
+            f["kind"].as_str().unwrap_or_default(),
+            f["basis"].as_str().unwrap_or_default(),
+            f["source"].as_str().unwrap_or_default()
+        )
+    };
     for (name, f) in all {
         if matches(&f["applies"], line) {
             out.push((name.clone(), f["multiplier"].as_f64().unwrap_or(1.0), describe(f, "by rule")));
@@ -330,7 +340,11 @@ fn factors_for(st: &Map<String, Value>, base: &Value, key: &str, line: &Value) -
             continue;
         }
         if let Some(f) = all.get(name) {
-            out.push((name.to_string(), f["multiplier"].as_f64().unwrap_or(1.0), describe(f, &format!("set: {}", set["reason"].as_str().unwrap_or_default()))));
+            out.push((
+                name.to_string(),
+                f["multiplier"].as_f64().unwrap_or(1.0),
+                describe(f, &format!("set: {}", set["reason"].as_str().unwrap_or_default())),
+            ));
         }
     }
     out
@@ -357,5 +371,6 @@ pub(super) fn off_history(base: &Value, item: &str, size: &str, material: f64) -
     let avg = past.iter().sum::<f64>() / past.len() as f64;
     let tol = base["benchmarks"]["price_tolerance_pct"].as_f64().filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(25.0);
     let off = (material - avg) / avg * 100.0;
-    (off.abs() > tol).then(|| format!("{item} ${material:.2} is {off:+.0}% from ${avg:.2}, the average of {} prior price(s) (tolerance {tol}%)", past.len()))
+    (off.abs() > tol)
+        .then(|| format!("{item} ${material:.2} is {off:+.0}% from ${avg:.2}, the average of {} prior price(s) (tolerance {tol}%)", past.len()))
 }

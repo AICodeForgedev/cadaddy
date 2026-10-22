@@ -6,12 +6,29 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 use super::{Job, Priced, setting, totals};
-use crate::cmd::{bad, str_param};
 use crate::Result;
+use crate::cmd::{bad, str_param};
 
 /// Export columns, in their default order.
-const COLUMNS: [&str; 17] =
-    ["key", "trade", "category", "item", "size", "unit", "qty", "net", "level", "material", "labor_hours", "labor_cost", "cost", "total", "scope", "status", "via"];
+const COLUMNS: [&str; 17] = [
+    "key",
+    "trade",
+    "category",
+    "item",
+    "size",
+    "unit",
+    "qty",
+    "net",
+    "level",
+    "material",
+    "labor_hours",
+    "labor_cost",
+    "cost",
+    "total",
+    "scope",
+    "status",
+    "via",
+];
 
 /// Split `target` cents over `raw` dollar amounts (summing to it but for rounding): each gets
 /// its amount to the cent, the rounding cents going to the largest remainders, so the parts sum
@@ -43,12 +60,7 @@ fn shares(st: &Map<String, Value>, priced: &[Priced]) -> Vec<(usize, f64)> {
     let pct = |k: &str| setting(st, k, 0.0) / 100.0;
     let f = (1.0 + pct("overhead_pct")) * (1.0 + pct("profit_pct")) * (1.0 + pct("contingency_pct")) * (1.0 + pct("bond_pct"));
     let tax = pct("tax_pct");
-    priced
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.scope.as_deref() == Some("in_contract"))
-        .map(|(i, p)| (i, (p.cost + p.material * tax) * f))
-        .collect()
+    priced.iter().enumerate().filter(|(_, p)| p.scope.as_deref() == Some("in_contract")).map(|(i, p)| (i, (p.cost + p.material * tax) * f)).collect()
 }
 
 fn grand_cents(st: &Map<String, Value>, priced: &[Priced]) -> i64 {
@@ -87,11 +99,8 @@ pub(super) fn breakdown(st: &Map<String, Value>, job: &Job) -> Value {
     };
     let s = |k: &'static str| move |p: &Priced| vec![(p.line[k].as_str().unwrap_or("other").to_string(), 1.0)];
     let line_cents = apportion(&sh.iter().map(|(_, m)| *m).collect::<Vec<_>>(), target);
-    let lines: Map<String, Value> = sh
-        .iter()
-        .zip(line_cents)
-        .filter_map(|((i, _), c)| job.priced.get(*i).map(|p| (p.key.clone(), json!(c as f64 / 100.0))))
-        .collect();
+    let lines: Map<String, Value> =
+        sh.iter().zip(line_cents).filter_map(|((i, _), c)| job.priced.get(*i).map(|p| (p.key.clone(), json!(c as f64 / 100.0)))).collect();
     json!({
         "by_level": group(&|p| level_split(job, p)),
         "by_trade": group(&s("trade")),
@@ -148,12 +157,25 @@ pub(super) fn export(st: &Map<String, Value>, job: &Job, p: &Value) -> Result<Va
     for pr in &job.priced {
         rows.push(line_row(job, pr, b["lines"][pr.key.as_str()].as_f64(), &cols));
     }
-    rows.push(cols.iter().map(|c| match c.as_str() { "key" => "TOTAL".to_string(), "total" => format!("{total:.2}"), _ => String::new() }).collect());
+    rows.push(
+        cols.iter()
+            .map(|c| match c.as_str() {
+                "key" => "TOTAL".to_string(),
+                "total" => format!("{total:.2}"),
+                _ => String::new(),
+            })
+            .collect(),
+    );
     let bytes = if format == "xlsx" {
         crate::cmd::table::xlsx::write(&rows, "Estimate").map_err(|e| bad(CMD, e))?
     } else {
         rows.iter()
-            .map(|r| r.iter().map(|c| if c.contains([',', '"', '\n']) { format!("\"{}\"", c.replace('"', "\"\"")) } else { c.clone() }).collect::<Vec<_>>().join(","))
+            .map(|r| {
+                r.iter()
+                    .map(|c| if c.contains([',', '"', '\n']) { format!("\"{}\"", c.replace('"', "\"\"")) } else { c.clone() })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .collect::<Vec<_>>()
             .join("\n")
             .into_bytes()
@@ -209,11 +231,13 @@ pub(super) fn bid_summary(st: &Map<String, Value>, job: &Job, findings: &[Value]
             f["fix"].as_str().unwrap_or_default()
         ));
     }
-    // Assumptions: what the number rests on that the documents don't fix.
+    // Assumptions: what the number rests on that the drawings and specs don't fix.
     let mut assumptions = Vec::new();
     let rule_lines = inc.iter().filter(|p| p.line["status"].as_str() == Some("rule") && p.line["trade"].as_str() != Some("job")).count();
     if rule_lines > 0 {
-        assumptions.push(format!("{rule_lines} quantities come from company takeoff rules (boxes per device, fittings per run, wire makeup), not counted on the drawings."));
+        assumptions.push(format!(
+            "{rule_lines} quantities come from company takeoff rules (boxes per device, fittings per run, wire makeup), not counted on the drawings."
+        ));
     }
     let base = st.get("baseline").cloned().unwrap_or(json!({}));
     for (fname, f) in base["factors"].as_object().into_iter().flatten() {

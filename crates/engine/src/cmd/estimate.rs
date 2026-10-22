@@ -721,7 +721,7 @@ pub(super) fn price_job(s: &mut Session, st: &Map<String, Value>, cmd: &str, wit
     let required = bom["required"].as_array().cloned().unwrap_or_default();
     let (eq, mut findings) = equipment::lines(st, &base, &facts, &required, &priced);
     priced.extend(eq);
-    // The documents' requirements with no line (the BOM's spec check).
+    // The specification's requirements with no line (the BOM's spec check).
     for c in bom["spec_check"].as_array().into_iter().flatten().take(1_000) {
         findings.push(json!({
             "kind": "spec_unmatched",
@@ -1074,9 +1074,12 @@ fn run_set_factor(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "estimate.observe";
     let driver = str_param(p, "driver").filter(|d| !d.trim().is_empty()).ok_or_else(|| bad(CMD, "`driver` is required"))?;
-    let qty = p["qty"].as_f64().filter(|q| q.is_finite() && *q > 0.0 && *q <= 1e9).ok_or_else(|| bad(CMD, "`qty` (units installed) must be above 0"))?;
-    let hours =
-        p["hours"].as_f64().filter(|h| h.is_finite() && *h >= 0.0 && *h <= 1e9).ok_or_else(|| bad(CMD, "`hours` (labor hours they took) must be 0 or more"))?;
+    let qty =
+        p["qty"].as_f64().filter(|q| q.is_finite() && *q > 0.0 && *q <= 1e9).ok_or_else(|| bad(CMD, "`qty` (units installed) must be above 0"))?;
+    let hours = p["hours"]
+        .as_f64()
+        .filter(|h| h.is_finite() && *h >= 0.0 && *h <= 1e9)
+        .ok_or_else(|| bad(CMD, "`hours` (labor hours they took) must be 0 or more"))?;
     let date = str_param(p, "date").filter(|d| parse_date(d).is_some()).ok_or_else(|| bad(CMD, "`date` is YYYY-MM-DD"))?;
     let source = str_param(p, "source").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(CMD, "`source` (whose field report) is required"))?;
     let (sp, mut st) = state(s, CMD)?;
@@ -1094,7 +1097,9 @@ fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
     let after = rate_of(&st).unwrap_or_else(|| before.clone());
     store(s, sp, st)?;
     let r6 = |v: f64| (v * 1e6).round() / 1e6;
-    Ok(json!({ "driver": after.name, "context": after.context, "before": r6(before.rate), "after": r6(after.rate), "observations": after.obs, "math": after.text() }))
+    Ok(
+        json!({ "driver": after.name, "context": after.context, "before": r6(before.rate), "after": r6(after.rate), "observations": after.obs, "math": after.text() }),
+    )
 }
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1241,9 +1246,13 @@ mod tests {
     fn priced_job(s: &mut Session, dir: &std::path::Path) {
         s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
         s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
-        s.execute("estimate.set_assembly", &json!({ "item": "standard duplex receptacle", "assembly": "DUPLEX-MS", "reason": "metal stud walls per A-501" }))
+        s.execute(
+            "estimate.set_assembly",
+            &json!({ "item": "standard duplex receptacle", "assembly": "DUPLEX-MS", "reason": "metal stud walls per A-501" }),
+        )
+        .unwrap();
+        s.execute("estimate.set_assembly", &json!({ "item": "GFCI receptacle", "assembly": "GFCI-MS", "reason": "metal stud walls per A-501" }))
             .unwrap();
-        s.execute("estimate.set_assembly", &json!({ "item": "GFCI receptacle", "assembly": "GFCI-MS", "reason": "metal stud walls per A-501" })).unwrap();
         s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "in_contract", "reason": "Division 26 is ours" })).unwrap();
     }
 
@@ -1281,12 +1290,16 @@ mod tests {
         assert!(math.contains("tier difficult: 0.07 h") && math.contains("× 1.25 Height 12-16 ft") && math.contains("factor 1.2500"), "{math}");
         // A tier with no per-tier hours multiplies the book rate (1.8 for very difficult):
         // duplex 0.6 h × 1.8 = 1.08 h × 2 = 2.16 h × $85 = $183.60.
-        s.execute("estimate.set_factor", &json!({ "item": "standard duplex receptacle", "tier": "very_difficult", "reason": "exposed in a parking deck" }))
-            .unwrap();
+        s.execute(
+            "estimate.set_factor",
+            &json!({ "item": "standard duplex receptacle", "tier": "very_difficult", "reason": "exposed in a parking deck" }),
+        )
+        .unwrap();
         let ex = s.execute("estimate.explain", &json!({ "line": "electrical|devices|standard duplex receptacle|" })).unwrap();
         assert_eq!((ex["labor_hours"].clone(), ex["labor_cost"].clone()), (json!(2.16), json!(183.6)), "{ex}");
         // Removing the factor takes it off; an unknown factor or tier is refused.
-        s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Height 12-16 ft", "reason": "low after all", "remove": true })).unwrap();
+        s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Height 12-16 ft", "reason": "low after all", "remove": true }))
+            .unwrap();
         let ex = s.execute("estimate.explain", &json!({ "line": CONDUIT })).unwrap();
         assert_eq!(ex["labor_hours"], json!(7.0), "{ex}");
         assert!(s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Nope", "reason": "x" })).is_err());
@@ -1327,7 +1340,12 @@ mod tests {
         // 3 × 0.6 h = 1.8 h × $85 = $153.00 labor; 3 × $3.00 material.
         assert_eq!((ex["labor_hours"].clone(), ex["labor_cost"].clone(), ex["value"].clone()), (json!(1.8), json!(153.0), json!(162.0)), "{ex}");
         // A new observation recalibrates: (48 + 20) ÷ (80 + 20) = 0.68 h → 2.04 h of rough-in.
-        let o = s.execute("estimate.observe", &json!({ "driver": "device boxes", "qty": 20, "hours": 20, "date": "2026-10-01", "source": "Invented Job D" })).unwrap();
+        let o = s
+            .execute(
+                "estimate.observe",
+                &json!({ "driver": "device boxes", "qty": 20, "hours": 20, "date": "2026-10-01", "source": "Invented Job D" }),
+            )
+            .unwrap();
         assert_eq!((o["before"].clone(), o["after"].clone(), o["observations"].clone()), (json!(0.6), json!(0.68), json!(4)), "{o}");
         let st = s.execute("estimate.status", &json!({})).unwrap();
         assert_eq!(st["labor_by_phase"]["rough-in"], json!(2.04), "{st}");
@@ -1440,8 +1458,11 @@ mod tests {
             assert!(count(&mut s, k).is_empty(), "{k} before it was planted");
         }
         // A price 50% above the one it replaced.
-        s.execute("estimate.set_price", &json!({ "item": "Duplex device", "unit": "each", "material": 3.0, "date": "2026-10-01", "source": "Invented Quote" }))
-            .unwrap();
+        s.execute(
+            "estimate.set_price",
+            &json!({ "item": "Duplex device", "unit": "each", "material": 3.0, "date": "2026-10-01", "source": "Invented Quote" }),
+        )
+        .unwrap();
         let f = count(&mut s, "price_off_history");
         assert_eq!(f.len(), 1, "{f:?}");
         assert!(f[0]["message"].as_str().unwrap().contains("+50% from $2.00") && f[0]["fix"].is_string(), "{f:?}");
@@ -1486,11 +1507,7 @@ mod tests {
         priced_job(&mut s, &dir);
         s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "nic", "reason": "only the conduit for this check" })).unwrap();
         s.execute("estimate.set_scope", &json!({ "lines": [CONDUIT], "scope": "in_contract", "reason": "Division 26" })).unwrap();
-        s.execute(
-            "estimate.settings",
-            &json!({ "tax_pct": 8, "overhead_pct": 10, "profit_pct": 10, "contingency_pct": 5, "bond_pct": 1 }),
-        )
-        .unwrap();
+        s.execute("estimate.settings", &json!({ "tax_pct": 8, "overhead_pct": 10, "profit_pct": 10, "contingency_pct": 5, "bond_pct": 1 })).unwrap();
         // Direct $546.00 (material $121.00 + labor $425.00). Tax 8% × $121 = $9.68 → $555.68;
         // overhead 10% = $55.568 → $611.248; profit 10% = $61.1248 → $672.3728; contingency 5% =
         // $33.61864 → $705.99144; bond 1% = $7.0599144 → $713.0513544.
