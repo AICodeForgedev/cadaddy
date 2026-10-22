@@ -681,11 +681,19 @@ fn run_reassociate(s: &mut Session, p: &Value) -> Result<Value> {
         n += usize::from(!a.is_empty());
         let _ = d.modify_entity(h, |e| {
             if let EntityKind::Dimension(dm) = &mut e.kind {
+                // A point attached again no longer carries the annotation monitor's badge.
+                dm.marks.orphaned.retain(|o| !a.iter().any(|x| x.point == *o));
                 dm.assoc = a;
             }
         });
     }
-    Ok(json!({ "dimensions": hs.len(), "associated": n, "points": points, "message": format!("{n} of {} dimension(s) associated.", hs.len()) }))
+    let orphaned =
+        hs.iter().filter(|h| matches!(d.entity(**h).map(|e| &e.kind), Some(EntityKind::Dimension(dm)) if crate::assoc::is_orphaned(dm))).count();
+    let mut message = format!("{n} of {} dimension(s) associated.", hs.len());
+    if orphaned > 0 {
+        message.push_str(&format!(" {orphaned} still lost an object: move its points onto objects (grips) and reassociate, or disassociate it."));
+    }
+    Ok(json!({ "dimensions": hs.len(), "associated": n, "points": points, "orphaned": orphaned, "message": message }))
 }
 
 fn run_disassociate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -695,9 +703,11 @@ fn run_disassociate(s: &mut Session, p: &Value) -> Result<Value> {
     for h in &hs {
         let _ = d.modify_entity(*h, |e| {
             if let EntityKind::Dimension(dm) = &mut e.kind
-                && !dm.assoc.is_empty()
+                && !(dm.assoc.is_empty() && dm.marks.orphaned.is_empty())
             {
+                // Disassociating accepts a lost association: the badge goes too.
                 dm.assoc.clear();
+                dm.marks.orphaned.clear();
                 n += 1;
             }
         });

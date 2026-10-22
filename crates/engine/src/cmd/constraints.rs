@@ -323,7 +323,7 @@ fn build_refs(s: &Session, kind: K, picks: &[(Handle, Hint)]) -> std::result::Re
 }
 
 /// Add a constraint to the active drawing; the drawing changes only on success.
-fn add_constraint(s: &mut Session, c: Constraint) -> Result<u32> {
+pub(crate) fn add_constraint(s: &mut Session, c: Constraint) -> Result<u32> {
     let keep: Vec<Handle> = c.refs.first().map(|r| r.handle).into_iter().collect();
     let prefer_move: Vec<Handle> = c.refs.iter().skip(1).map(|r| r.handle).filter(|h| !keep.contains(h)).collect();
     let mut d = s.doc()?.clone();
@@ -332,7 +332,7 @@ fn add_constraint(s: &mut Session, c: Constraint) -> Result<u32> {
     Ok(id)
 }
 
-fn constraint_json(d: &Drawing, id: u32) -> Value {
+pub(crate) fn constraint_json(d: &Drawing, id: u32) -> Value {
     match d.constraints.iter().find(|c| c.id == id) {
         Some(c) => {
             let mut v = json!({ "id": id, "type": c.kind.name(), "refs": c.refs.iter().map(|r| json!({"handle": r.handle.hex(), "sub": r.sub.label()})).collect::<Vec<_>>() });

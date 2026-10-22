@@ -16,6 +16,8 @@ use super::machines::{SelOutcome, SelectPhase, number};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+mod actionbar;
+pub use actionbar::action_bars;
 mod attedit;
 mod dynauthor;
 mod dyngrip;
@@ -88,6 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .chain(refedit::specs())
     .chain(bedit::specs())
     .chain(dynauthor::specs())
+    .chain(actionbar::specs())
     .collect()
 }
 

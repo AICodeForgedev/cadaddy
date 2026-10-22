@@ -106,3 +106,20 @@ fn flipped_arrowheads_roundtrip() {
     assert_eq!(marks_of(&back).iter().map(|m| m.flip_arrows).collect::<Vec<_>>(), vec![[true, false], [false, true], [true, true], [false, false]]);
     assert_eq!(marks_of(&back), marks_of(&d));
 }
+
+#[test]
+fn lost_associations_roundtrip() {
+    // The annotation monitor's flag: the definition points whose object was erased.
+    let mut d = Drawing::new_imperial();
+    let lost = DimMarks { orphaned: vec!["p13".into(), "p14".into()], ..DimMarks::default() };
+    d.add(&Space::Model, Common::default(), dim(DimKind::Linear { rotation: 0.0 }, lost.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), dim(DimKind::Aligned, DimMarks::default())).unwrap();
+    let text = write_dxf(&d);
+    let back = read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(marks_of(&back), vec![lost, DimMarks::default()]);
+    // Unknown point names are dropped.
+    let bad = text.replacen("ORPHAN\r\n1000\r\np14", "ORPHAN\r\n1000\r\nnowhere", 1);
+    assert_ne!(bad, text);
+    let back = read_dxf(bad.as_bytes()).unwrap();
+    assert_eq!(marks_of(&back).first().map(|m| m.orphaned.clone()), Some(vec!["p13".to_string()]));
+}

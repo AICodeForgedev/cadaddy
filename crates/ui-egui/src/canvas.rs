@@ -1956,6 +1956,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let p = painter.with_clip_rect(clip);
         crate::parametric::draw_overlay(app, ui, &p, &xf);
     }
+    // The Block Editor's action bars under its parameters.
+    if sheet.is_none() {
+        crate::actionbars::draw_overlay(app, ui, &painter.with_clip_rect(rect), &xf);
+    }
+    // The annotation monitor's badges on dimensions that lost their association.
+    crate::annomon::draw_overlay(app, ui, &painter.with_clip_rect(rect), if sheet.is_some() && active_vp.is_none() { &xf_paper } else { &xf });
     // Grips on selected objects (when idle or editing grips).
     let grip_edit = app.session.running.as_ref().is_some_and(|r| r.id == "grip");
     if (!grip_edit && (app.canvas.grip_editing || app.session.prompting())) || sel.is_empty() {

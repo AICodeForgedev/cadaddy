@@ -560,10 +560,14 @@ pub(crate) fn arclen_xdata(center: cadaddy_geom::Vec3) -> Vec<Tag> {
     vec![Tag::s(1000, "ARCLEN"), Tag::s(1002, "{"), Tag::f(1010, center.x), Tag::f(1020, center.y), Tag::f(1030, center.z), Tag::s(1002, "}")]
 }
 
+/// The definition points a dimension can lose its association at.
+const ORPHAN_POINTS: [&str; 5] = ["defpt", "p13", "p14", "p15", "p16"];
+
 /// Dimension marks as CADaddy xdata (`1000 MARKS`, `1002 {`, items, `1002 }`): `1000 JOGLINE`
 /// and a point; `1000 JOGGED`, the centre and the jog point; `1000 BREAK`, a point, `1040` size
 /// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate; `1000 FLIP`,
-/// `1070` flipped arrowheads (bit 1 the first, bit 2 the second). Points are
+/// `1070` flipped arrowheads (bit 1 the first, bit 2 the second); `1000 ORPHAN` and `1000` a
+/// definition point that lost its association (the annotation monitor). Points are
 /// `1010/1020/1030`. The oblique angle is the standard group 52 instead.
 pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
     let pt = |v: &mut Vec<Tag>, p: cadaddy_geom::Vec3| v.extend([Tag::f(1010, p.x), Tag::f(1020, p.y), Tag::f(1030, p.z)]);
@@ -593,6 +597,9 @@ pub(crate) fn marks_xdata(m: &cadaddy_doc::DimMarks) -> Vec<Tag> {
     let [f1, f2] = m.flip_arrows;
     if f1 || f2 {
         v.extend([Tag::s(1000, "FLIP"), Tag::i(1070, i64::from(f1) | (i64::from(f2) << 1))]);
+    }
+    for p in m.orphaned.iter().take(ORPHAN_POINTS.len()) {
+        v.extend([Tag::s(1000, "ORPHAN"), Tag::s(1000, p.clone())]);
     }
     if v.is_empty() {
         return v;
@@ -641,6 +648,13 @@ pub(crate) fn read_marks(tags: &[Tag]) -> cadaddy_doc::DimMarks {
                     && !m.break_objects.contains(&h)
                 {
                     m.break_objects.push(h);
+                }
+            }
+            "ORPHAN" => {
+                if let Some(p) = text(i + 1).and_then(|p| ORPHAN_POINTS.iter().find(|n| n.eq_ignore_ascii_case(p.trim())))
+                    && !m.orphaned.iter().any(|o| o == p)
+                {
+                    m.orphaned.push((*p).to_string());
                 }
             }
             "INSPECT" => {
