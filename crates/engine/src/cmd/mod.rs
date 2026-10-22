@@ -121,7 +121,7 @@ pub mod projrules;
 mod props;
 pub mod redline;
 pub mod revise3d;
-mod rhai_cmd;
+pub(crate) mod rhai_cmd;
 pub mod rooms3d;
 pub mod spell;
 pub mod stairs;

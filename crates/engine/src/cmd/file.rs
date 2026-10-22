@@ -572,6 +572,7 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     mark_walkthrough(s, i, walkthrough);
     super::blocks::xref::after_open(s, i);
     crate::activity::after_open(s, i);
+    s.rhai_drawing_opened(i);
     Ok(opened(s, i, true))
 }
 
@@ -718,6 +719,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
             crate::activity::after_open(s, i);
+            s.rhai_drawing_opened(i);
             return Ok(opened(s, i, true));
         }
         #[cfg(target_arch = "wasm32")]
@@ -729,6 +731,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let i = open_bytes(s, &bytes, name, None)?;
     super::blocks::xref::after_open(s, i);
     crate::activity::after_open(s, i);
+    s.rhai_drawing_opened(i);
     Ok(opened(s, i, false))
 }
 

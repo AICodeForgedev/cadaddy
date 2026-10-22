@@ -32,7 +32,7 @@ miniz_oxide = "0.8"
 # Human-readable project rules files (MIT OR Apache-2.0; already used by cadaddy-ui-egui).
 toml = "1"
 # Embedded scripting language (MIT OR Apache-2.0). Sandboxed: Engine::new_raw() + selective packages.
-rhai = { version = "1.27", default-features = false, features = ["std", "serde"] }
+rhai = { version = "1.27", default-features = false, features = ["std", "serde", "sync"] }
 # Bridge for Rhai closures to call back into Session (see rhai-bridge crate).
 cadaddy-rhai-bridge = { path = "../rhai-bridge" }
 

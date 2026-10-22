@@ -1382,7 +1382,13 @@ impl Session {
     pub fn finish_open(&mut self, f: cmd::file::ReadFile) -> Result<Value> {
         let n = self.docs.len();
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd::file::finish_open(self, f))) {
-            Ok(r) => r,
+            Ok(r) => {
+                // Opened from the front end (not a command): `drawing_opened` handlers run now.
+                if r.is_ok() && self.journal.is_outer() && self.rhai_watching() {
+                    self.rhai_dispatch_pending();
+                }
+                r
+            }
             Err(p) => {
                 let msg = guard::message(&*p);
                 crash_report::record(self, "open", &msg);
@@ -1523,6 +1529,9 @@ impl Session {
         }
         // An agent's edit of a drawing whose prints gate edits: re-checked round what it changed.
         let gate = if outer && self.agent.from_agent && !self.agent.dry_run { cmd::validate::gate_before(self, id) } else { None };
+        // Rhai event handlers hear about the command (a script's own calls are told by `command()`).
+        let rhai_watch = outer && self.rhai_watching() && !cmd::rhai_cmd::is_rhai(id);
+        let rhai_before = if rhai_watch { self.rhai_before() } else { None };
         let mut r = self.execute_inner(id, params);
         if let Some(g) = gate {
             r = cmd::validate::gate_after(self, g, r);
@@ -1537,6 +1546,12 @@ impl Session {
         }
         if outer && r.is_ok() {
             self.journal.call(id, params);
+        }
+        if rhai_watch {
+            self.rhai_command_ended(id, rhai_before, r.is_ok());
+        }
+        if outer && self.rhai_watching() {
+            self.rhai_dispatch_pending();
         }
         // Events reads (and subscribing) aren't news themselves, nor is the list of open drawings
         // the MCP server reads after every call to notice drawings opened and closed.
@@ -2137,7 +2152,13 @@ impl Session {
     fn finish(&mut self, run: Running, cancelled: bool) {
         self.event("command.ended", serde_json::json!({ "command": run.id, "cancelled": cancelled }));
         let id = run.id.clone();
+        let rhai_before = (self.rhai_watching() && !cmd::rhai_cmd::is_rhai(&id))
+            .then(|| (self.state().map(|st| st.uid).unwrap_or_default(), Arc::clone(&run.before)));
         self.finish_steps(run, cancelled);
+        if rhai_before.is_some() {
+            self.rhai_command_ended(&id, rhai_before, !cancelled);
+            self.rhai_dispatch_pending();
+        }
         // Reactors react once the command's undo step is in place.
         let event = if cancelled { lisp::reactor::CommandEvent::Cancelled } else { lisp::reactor::CommandEvent::Ended };
         self.lisp_command_event(event, &id);
