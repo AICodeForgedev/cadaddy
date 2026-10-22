@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn black_image_is_all_zeros() {
-        let bytes = encode_hdr(4, 2, &vec![[0.0; 3]; 8]);
+        let bytes = encode_hdr(4, 2, &[[0.0; 3]; 8]);
         let img = decode(&bytes).unwrap();
         assert!(img.data.iter().all(|&v| v == 0.0));
     }
@@ -263,8 +263,8 @@ mod tests {
         let directions = [x, -x, y, -y, Vec3::Z, -Vec3::Z, Vec3::new(1.0, 1.0, 1.0).normalized()];
         for d in directions {
             let s = img.sample(d);
-            for c in 0..3 {
-                assert!((s[c] - 1.0).abs() < 0.05, "dir {d:?} ch {c}: {}", s[c]);
+            for (c, v) in s.iter().enumerate() {
+                assert!((v - 1.0).abs() < 0.05, "dir {d:?} ch {c}: {v}");
             }
         }
     }
