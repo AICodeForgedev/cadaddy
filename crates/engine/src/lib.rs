@@ -892,7 +892,7 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
 }
 
 /// Parameters every command takes: the objects it works on, and the agent rails' own.
-const ALWAYS_PARAMS: [&str; 2] = ["handle", "handles"];
+const ALWAYS_PARAMS: [&str; 3] = ["handle", "handles", "confirmed"];
 
 /// Whether a command's documentation leaves its parameters open: `<style fields or DIM*
 /// variables…>`, `…: any profile variable` or `...the parameters of arrayrect` stand for more
