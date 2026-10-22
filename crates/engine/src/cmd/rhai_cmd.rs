@@ -8,7 +8,9 @@
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, str_param};
+use crate::rhai_engine::MAX_BUDGET;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
+use web_time::Duration;
 
 /// Maximum scripted inputs a single `rhai` call may provide.
 const MAX_INPUTS: usize = 10_000;
@@ -18,15 +20,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("rhai", "Evaluate Rhai", run_rhai)
             .menu(&["Tools", "Rhai", "Evaluate"])
             .params(
-                "{code: Rhai source, inputs?: [answers to getpoint/getreal/getstring calls]} \
-                 → {value, output: [lines printed], error?}",
+                "{code: Rhai source, inputs?: [answers to getpoint/getreal/getstring calls], timeoutMs?: wall-clock budget \
+                 (default 30000, at most 600000)} → {value, output: [lines printed], error?}. Script functions: command(id, params?), \
+                 getvar/setvar, selection(), entity(handle), set_entity(handle, #{props}), on(\"command_ended\"|\"objects_changed\"|\"drawing_opened\", |ev| ...), off(event?)",
             )
             .noundo()
             .interactive(|_| Ok(Box::new(RhaiEvalM))),
         CommandSpec::new("rhairun", "Run Rhai Script", run_rhairun)
             .menu(&["Tools", "Rhai", "Run Script..."])
             .alias(&["rsr"])
-            .params("{path: .rhai file} | {name, text: source} → {value, output, error?}")
+            .params("{path: .rhai file} | {name, text: source}, timeoutMs? → {value, output, error?}")
             .noundo()
             .interactive(|_| Ok(Box::new(RhaiRunM))),
         CommandSpec::new("rhaiedit", "Script Editor", run_rhaiedit)
@@ -37,8 +40,36 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// The Rhai commands themselves (their scripts' own commands tell the event handlers).
+pub(crate) fn is_rhai(id: &str) -> bool {
+    matches!(id, "rhai" | "rhairun" | "rsr" | "rhaiedit")
+}
+
+/// A script is running: a nested one is refused before anything of the outer one is touched.
+fn refuse_nested(s: &Session, id: &str) -> Result<()> {
+    if s.rhai_running() {
+        return Err(bad(
+            id,
+            "a Rhai script is running already: rhai and rhairun can't be called from a script; call the code directly, or define a function and call it",
+        ));
+    }
+    Ok(())
+}
+
+/// `timeoutMs`: the wall-clock budget asked for.
+fn budget(p: &Value, id: &str) -> Result<Option<Duration>> {
+    match p.get("timeoutMs") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_u64() {
+            Some(ms) if ms >= 1 && ms <= MAX_BUDGET.as_millis() as u64 => Ok(Some(Duration::from_millis(ms))),
+            _ => Err(bad(id, format!("`timeoutMs` must be 1..{} milliseconds", MAX_BUDGET.as_millis()))),
+        },
+    }
+}
+
 /// `rhai {code, inputs?}` — evaluate Rhai source inline.
 fn run_rhai(s: &mut Session, p: &Value) -> Result<Value> {
+    refuse_nested(s, "rhai")?;
     let code = str_param(p, "code").ok_or_else(|| bad("rhai", "`code` is required"))?;
     let inputs = match p.get("inputs") {
         None | Some(Value::Null) => Vec::new(),
@@ -46,13 +77,16 @@ fn run_rhai(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Array(_)) => return Err(bad("rhai", format!("`inputs` holds at most {MAX_INPUTS} values"))),
         Some(_) => return Err(bad("rhai", "`inputs` must be an array")),
     };
-    eval_rhai(s, code, inputs)
+    let budget = budget(p, "rhai")?;
+    eval_rhai(s, code, inputs, budget)
 }
 
 /// `rhairun {path} | {name, text}` — load and run a `.rhai` file.
 fn run_rhairun(s: &mut Session, p: &Value) -> Result<Value> {
+    refuse_nested(s, "rhairun")?;
+    let budget = budget(p, "rhairun")?;
     let (_name, text) = rhai_source(s, p)?;
-    eval_rhai(s, &text, Vec::new())
+    eval_rhai(s, &text, Vec::new(), budget)
 }
 
 /// `rhaiedit {}` — the UI opens the Script Editor palette (a dialog name the front end knows).
@@ -62,15 +96,15 @@ fn run_rhaiedit(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 /// Evaluate Rhai code and return the JSON result.
-fn eval_rhai(s: &mut Session, code: &str, inputs: Vec<Value>) -> Result<Value> {
+fn eval_rhai(s: &mut Session, code: &str, inputs: Vec<Value>, budget: Option<Duration>) -> Result<Value> {
     // Mark that a script is running so SECURELOAD changes are blocked.
     let was_in_script = s.in_script;
     s.in_script = true;
-    let result = s.rhai_eval(code, inputs);
+    let result = s.rhai_eval(code, inputs, budget);
     s.in_script = was_in_script;
     match result {
         Ok((val, output)) => Ok(json!({ "value": val, "output": output })),
-        Err(e) => Ok(json!({ "error": e, "output": [] })),
+        Err((e, output)) => Ok(json!({ "error": e, "output": output })),
     }
 }
 
@@ -104,7 +138,7 @@ impl Interactive for RhaiEvalM {
         if code.is_empty() {
             return Ok(Step::Cancel);
         }
-        match eval_rhai(s, &code, Vec::new()) {
+        match eval_rhai(s, &code, Vec::new(), None) {
             Ok(r) => {
                 if let Some(err) = r.get("error").and_then(Value::as_str) {
                     s.echo(format!("Error: {err}"));
@@ -139,7 +173,7 @@ impl Interactive for RhaiRunM {
         }
         match rhai_source(s, &json!({ "path": path })) {
             Ok((_name, text)) => {
-                match eval_rhai(s, &text, Vec::new()) {
+                match eval_rhai(s, &text, Vec::new(), None) {
                     Ok(r) => {
                         if let Some(err) = r.get("error").and_then(Value::as_str) {
                             s.echo(format!("Error: {err}"));
@@ -238,3 +272,6 @@ mod tests {
         assert!(r.is_err());
     }
 }
+
+#[cfg(test)]
+mod rhai_tests;

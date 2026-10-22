@@ -8,14 +8,14 @@ let spacing = 10.0;
 
 // Horizontal lines.
 for r in 0..=rows {
-    let y = r as_decimal * spacing;
-    command("line", #{ points: [[0.0, y], [cols as_decimal * spacing, y]] });
+    let y = r.to_float() * spacing;
+    command("line", #{ points: [[0.0, y], [cols.to_float() * spacing, y]] });
 }
 
 // Vertical lines.
 for c in 0..=cols {
-    let x = c as_decimal * spacing;
-    command("line", #{ points: [[x, 0.0], [x, rows as_decimal * spacing]] });
+    let x = c.to_float() * spacing;
+    command("line", #{ points: [[x, 0.0], [x, rows.to_float() * spacing]] });
 }
 
 print(`Drew a ${cols}x${rows} grid with ${spacing} unit spacing.`);

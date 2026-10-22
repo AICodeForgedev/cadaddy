@@ -34,15 +34,20 @@ impl<T> SlotRef<T> {
         Self { ptr: Cell::new(std::ptr::null_mut()), _not_send: PhantomData }
     }
 
-    /// Install a mutable reference.  Returns a guard that clears the slot on drop.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a reference is already installed (double-install is a logic error).
-    pub fn install<'a>(&'a self, r: &'a mut T) -> SlotGuard<'a, T> {
-        assert!(self.ptr.get().is_null(), "SlotRef: already installed");
+    /// Install a mutable reference.  Returns a guard that clears the slot on drop, or
+    /// [`AlreadyInstalled`] (and leaves the slot as it was) if a reference is installed already:
+    /// a nested evaluation must never replace the outer one's reference.
+    pub fn install<'a>(&'a self, r: &'a mut T) -> Result<SlotGuard<'a, T>, AlreadyInstalled> {
+        if !self.ptr.get().is_null() {
+            return Err(AlreadyInstalled);
+        }
         self.ptr.set(r as *mut T);
-        SlotGuard { slot: self }
+        Ok(SlotGuard { slot: self })
+    }
+
+    /// A reference is installed (an evaluation is running on this thread).
+    pub fn is_installed(&self) -> bool {
+        !self.ptr.get().is_null()
     }
 
     /// Clear the slot.  Safe to call even if already empty.
@@ -75,9 +80,9 @@ impl<T> SlotRef<T> {
     /// Install `r`, run `body`, then clear the slot.  Panic-safe: the slot is always cleared.
     ///
     /// This is the primary entry point for evaluating a scripting engine with session access.
-    pub fn scoped<R>(&self, r: &mut T, body: impl FnOnce() -> R) -> R {
-        let _guard = self.install(r);
-        body()
+    pub fn scoped<R>(&self, r: &mut T, body: impl FnOnce() -> R) -> Result<R, AlreadyInstalled> {
+        let _guard = self.install(r)?;
+        Ok(body())
     }
 }
 
@@ -86,6 +91,18 @@ impl<T> Default for SlotRef<T> {
         Self::new()
     }
 }
+
+/// [`SlotRef::install`] found a reference installed already (a nested evaluation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlreadyInstalled;
+
+impl std::fmt::Display for AlreadyInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a script is already running on this thread")
+    }
+}
+
+impl std::error::Error for AlreadyInstalled {}
 
 /// Clears the [`SlotRef`] when dropped (panic safety).
 pub struct SlotGuard<'a, T> {
@@ -106,7 +123,7 @@ mod tests {
     fn install_and_read() {
         let slot = SlotRef::new();
         let mut value = 42;
-        let _guard = slot.install(&mut value);
+        let _guard = slot.install(&mut value).unwrap();
         let got = slot.with(|v| *v).unwrap();
         assert_eq!(got, 42);
     }
@@ -116,7 +133,7 @@ mod tests {
         let slot = SlotRef::new();
         let mut value = 10;
         {
-            let _guard = slot.install(&mut value);
+            let _guard = slot.install(&mut value).unwrap();
             assert!(slot.with(|_| ()).is_some());
         }
         assert!(slot.with(|_| ()).is_none());
@@ -132,9 +149,22 @@ mod tests {
     fn mutate_through_slot() {
         let slot = SlotRef::new();
         let mut value = 0;
-        let _guard = slot.install(&mut value);
+        let _guard = slot.install(&mut value).unwrap();
         slot.with(|v| *v = 99);
         drop(_guard);
         assert_eq!(value, 99);
+    }
+
+    #[test]
+    fn second_install_is_refused_and_keeps_the_first() {
+        let slot = SlotRef::new();
+        let mut outer = 1;
+        let mut inner = 2;
+        let _guard = slot.install(&mut outer).unwrap();
+        assert!(slot.is_installed());
+        assert_eq!(slot.install(&mut inner).err(), Some(AlreadyInstalled));
+        assert_eq!(slot.scoped(&mut inner, || ()), Err(AlreadyInstalled));
+        // The outer reference is still the one installed.
+        assert_eq!(slot.with(|v| *v), Some(1));
     }
 }

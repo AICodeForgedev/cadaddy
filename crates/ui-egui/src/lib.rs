@@ -1100,6 +1100,10 @@ impl CadApp {
         let _busy = diag::busy("logic");
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
         self.session.poll_background();
+        // A Script Editor script on its worker thread: its calls into the drawing run here.
+        if self.session.rhai_pump(std::time::Duration::from_millis(8)) {
+            ctx.request_repaint();
+        }
         self.follow_data_links();
         workspaces::follow(self);
         self.follow_direction();
