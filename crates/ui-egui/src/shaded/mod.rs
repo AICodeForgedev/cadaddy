@@ -400,9 +400,6 @@ struct Gpu {
     /// The lightmap's: linear, clamped (cells have borders).
     lm_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
-    /// The model's textures and baked light (bound with the target's pre-pass depth).
-    tex_view: Option<wgpu::TextureView>,
-    lm_view: Option<wgpu::TextureView>,
     /// Made for the current target and model.
     bind_group: Option<wgpu::BindGroup>,
     tris: Option<Buffer>,
@@ -424,8 +421,9 @@ struct Gpu {
     origin: Vec3,
     radius: f64,
     lighting: Option<cadaddy_render::light::Lighting>,
-    /// The bind group's textures: the materials', the baked light's and the background image's
-    /// (one white texel without one; `bg_image` the image it holds, by address).
+    /// The bind group's textures (bound with the target's pre-pass depth): the materials', the
+    /// baked light's and the background image's (one white texel without one; `bg_image` the
+    /// image it holds, by address).
     tex_view: Option<wgpu::TextureView>,
     lm_view: Option<wgpu::TextureView>,
     bg_view: wgpu::TextureView,
@@ -658,8 +656,6 @@ impl Gpu {
                 ..Default::default()
             }),
             shadow_view: shadow_tex.create_view(&wgpu::TextureViewDescriptor::default()),
-            tex_view: None,
-            lm_view: None,
             bind_group: None,
             tris: None,
             clear_tris: None,
