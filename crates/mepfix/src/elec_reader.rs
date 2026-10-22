@@ -102,6 +102,27 @@ pub struct DetectedDevice {
     pub mounting_note: Option<String>,
     /// Circuit label from a nearby homerun arrow, if found.
     pub circuit_label: Option<String>,
+    /// Every text near the symbol (subscripts, the circuit beside it, notes), as printed.
+    pub notes: Vec<String>,
+}
+
+/// Words printed beside a device that say what it is or how it's fed, not its type tag:
+/// subscripts (GFCI, WR, USB…) and a circuit (`P1-5`).
+pub fn is_subscript_or_circuit(t: &str) -> bool {
+    let u = t.trim().to_ascii_uppercase();
+    let words: Vec<&str> = u.split_whitespace().collect();
+    let sub = |w: &str| matches!(w, "GFCI" | "GFI" | "WR" | "WP" | "USB" | "IG" | "DED" | "TV" | "CH" | "AFCI" | "TR" | "DATA");
+    if !words.is_empty() && words.iter().all(|w| sub(w)) {
+        return true;
+    }
+    // A circuit: panel tag, dash, numbers (`P1-5`, `LP2-12,14`).
+    u.split_once('-').is_some_and(|(p, c)| {
+        (1..=4).contains(&p.len())
+            && p.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+            && p.chars().any(|ch| ch.is_ascii_digit())
+            && !c.is_empty()
+            && c.chars().all(|ch| ch.is_ascii_digit() || ch == ',')
+    })
 }
 
 /// A detected panel on the sheet.
@@ -111,6 +132,13 @@ pub struct DetectedPanel {
     pub tag: String,
     pub kind: String,
 }
+
+/// Device-layer strokes longer than this (model inches) are runs, not symbol parts.
+const MAX_SYMBOL_STROKE_IN: f64 = 24.0;
+/// Geometry within this distance (model inches) is one symbol.
+const SYMBOL_RADIUS_IN: f64 = 12.0;
+/// A symbol's own texts are within this distance of it (model inches).
+const CLOSE_TEXT_IN: f64 = 12.0;
 
 /// Detect device symbols on a DEVICE layer in the DXF.
 ///
@@ -129,9 +157,21 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
                 centres.push(([c.center.x, c.center.y], "circle"));
             }
             EntityKind::Line(l) => {
+                let (dx, dy) = ((l.b.x - l.a.x).abs(), (l.b.y - l.a.y).abs());
+                // Conduit and other runs are long; a symbol's strokes are short.
+                if dx.hypot(dy) > MAX_SYMBOL_STROKE_IN {
+                    continue;
+                }
                 let cx = (l.a.x + l.b.x) / 2.0;
                 let cy = (l.a.y + l.b.y) / 2.0;
-                centres.push(([cx, cy], "line"));
+                let dir = if dy <= dx * 0.1 {
+                    "line_h"
+                } else if dx <= dy * 0.1 {
+                    "line_v"
+                } else {
+                    "line_d"
+                };
+                centres.push(([cx, cy], dir));
             }
             EntityKind::LwPolyline(p) => {
                 if p.vertices.is_empty() {
@@ -143,7 +183,9 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
                     sy += v.p.y;
                 }
                 let n = p.vertices.len() as f64;
-                centres.push(([sx / n, sy / n], "poly"));
+                // Corners: a closed triangle (data outlet) or rectangle (troffer, box).
+                let corners = if p.closed { p.vertices.len() } else { p.vertices.len().saturating_sub(1) };
+                centres.push(([sx / n, sy / n], if corners == 3 { "poly3" } else if corners == 4 { "poly4" } else { "poly" }));
             }
             EntityKind::Arc(a) => {
                 centres.push(([a.center.x, a.center.y], "arc"));
@@ -188,8 +230,8 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
             let dx = centres[i].0[0] - centres[j].0[0];
             let dy = centres[i].0[1] - centres[j].0[1];
             let dist = (dx * dx + dy * dy).sqrt();
-            // Symbols are compact; a generous radius captures all parts.
-            if dist < 50.0 {
+            // Symbols are compact (a few inches across); neighbouring devices are feet apart.
+            if dist < SYMBOL_RADIUS_IN {
                 // This is in model inches; symbols are small.
                 group.push(j);
                 used[j] = true;
@@ -209,15 +251,39 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
         let mut has_poly = false;
         let mut has_arc = false;
         let count = cluster.len();
+        let (mut n_h, mut n_v, mut tri, mut rect) = (0usize, 0usize, false, false);
+        let mut diag: Vec<[f64; 2]> = Vec::new();
+        let mut rect_at = [0.0, 0.0];
         for &idx in cluster {
-            sx += centres[idx].0[0];
-            sy += centres[idx].0[1];
-            match centres[idx].1 {
+            let Some((at, hint)) = centres.get(idx) else { continue };
+            sx += at[0];
+            sy += at[1];
+            match *hint {
                 "circle" => has_circle = true,
                 "poly" => has_poly = true,
+                "poly3" => {
+                    has_poly = true;
+                    tri = true;
+                }
+                "poly4" => {
+                    has_poly = true;
+                    rect = true;
+                    rect_at = *at;
+                }
                 "arc" => has_arc = true,
+                "line_h" => n_h += 1,
+                "line_v" => n_v += 1,
+                "line_d" => diag.push(*at),
                 _ => {}
             }
+        }
+        // An exit sign's X: two diagonals crossing at its box's middle (a homerun's shaft
+        // starts beside a device, not across it).
+        let crossed = rect && diag.iter().filter(|m| (m[0] - rect_at[0]).hypot(m[1] - rect_at[1]) < 1.0).count() >= 2;
+        // Bare strokes with a diagonal among them (no circle, box or arc): a homerun's arrow
+        // and tick, not a device.
+        if !has_circle && !has_poly && !has_arc && !diag.is_empty() {
+            continue;
         }
         let cx = sx / count as f64;
         let cy = sy / count as f64;
@@ -249,16 +315,16 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
             "emergency_light"
         } else if text_up.iter().any(|t| t == "DS") {
             "disconnect"
-        } else if has_poly && !has_circle && count <= 2 {
+        } else if tri && !has_circle {
             // Triangle = data outlet
             "data_outlet"
         } else if has_arc && !has_circle {
             "light_fixture" // wall sconce (arc)
-        } else if has_circle && count >= 3 {
+        } else if has_circle && n_h >= 1 && n_v >= 1 {
             // Circle + cross lines = floor box
             "floor_box"
-        } else if has_circle && count == 2 {
-            // Circle + two horizontal lines = receptacle
+        } else if has_circle && (n_h >= 2 || n_v >= 2) {
+            // Circle + two parallel lines = receptacle
             "receptacle"
         } else if count == 1 && has_circle {
             // Bare circle, could be a downlight
@@ -269,13 +335,17 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
         };
 
         // Look for exit sign shapes (rectangle with X crossing lines).
-        let kind = if text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 { "exit_sign" } else { kind };
+        let kind = if crossed || (text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 && diag.len() >= 2) { "exit_sign" } else { kind };
 
         // Junction box: small filled rectangle.
         let kind = if text_up.iter().any(|t| t.starts_with("JB")) { "junction_box" } else { kind };
 
+        // The symbol's own texts (its tag, subscripts, circuit): right beside it, nearest first;
+        // a neighbour's are feet away.
+        let mut close: Vec<&(String, [f64; 2])> = nearby.iter().copied().filter(|(_, p)| (p[0] - cx).hypot(p[1] - cy) < CLOSE_TEXT_IN).collect();
+        close.sort_by(|a, b| (a.1[0] - cx).hypot(a.1[1] - cy).total_cmp(&(b.1[0] - cx).hypot(b.1[1] - cy)));
         // Get the type tag from the closest text.
-        let type_tag = nearby
+        let type_tag = close
             .iter()
             .filter(|(t, _)| {
                 let u = t.trim().to_uppercase();
@@ -285,9 +355,10 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
                     && !u.contains('@')
                     && !u.contains('\'')
                     && !u.contains('"')
-                    && !u.contains('/')
                     && !u.starts_with("DO ")
                     && !u.starts_with("SCALE")
+                    && !is_subscript_or_circuit(&u)
+                    && !u.contains('/')
             })
             .min_by(|(_, a), (_, b)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -308,6 +379,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
             height_source: height_source.to_string(),
             mounting_note,
             circuit_label: None,
+            notes: close.iter().map(|(t, _)| t.trim().to_string()).filter(|t| !t.is_empty()).take(16).collect(),
         });
     }
 
@@ -721,6 +793,10 @@ pub struct FoundDevice {
     /// Its type's columns in the light fixture schedule (description, mounting, lamp and
     /// wattage, as text), when the schedule has its type ([`crate::gear_reader::link_fixtures`]).
     pub properties: BTreeMap<String, String>,
+    /// Where the symbol is drawn on the plan, building feet.
+    pub drawn_ft: [f64; 2],
+    /// The texts beside the symbol (subscripts, its circuit), as printed.
+    pub notes: Vec<String>,
 }
 
 /// A found panel, building coordinates.
@@ -823,6 +899,8 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
                 arch_positioned: placement.arch_positioned,
                 zone_ft: placement.zone_ft,
                 properties: BTreeMap::new(),
+                drawn_ft: approx_b,
+                notes: rd.notes.clone(),
             });
         }
 
@@ -1041,6 +1119,12 @@ pub fn perfect_devices(truth: &Truth) -> Vec<FoundDevice> {
                 None
             },
             properties: BTreeMap::new(),
+            drawn_ft: d.drawn_ft,
+            notes: truth
+                .elec_spec
+                .note(&d.id)
+                .map(|n| n.subscripts.iter().cloned().chain((!n.circuit_ref.is_empty()).then(|| n.circuit_ref.clone())).collect())
+                .unwrap_or_default(),
         })
         .collect()
 }

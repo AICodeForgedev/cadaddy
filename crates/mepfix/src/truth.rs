@@ -44,6 +44,10 @@ pub struct Truth {
     /// `entry`, `gutter`, `bending`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gear_problems: Vec<(String, String)>,
+    /// Device subscripts, circuits beside devices, breaker types, homerun conductors and planted
+    /// tagging problems (Q299).
+    #[serde(default, skip_serializing_if = "crate::elecspec::ElecSpec::is_empty")]
+    pub elec_spec: crate::elecspec::ElecSpec,
     pub risers: Vec<Riser>,
     // --- Hotel extensions (Q304) ---
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

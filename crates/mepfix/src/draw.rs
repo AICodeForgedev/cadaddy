@@ -1813,7 +1813,9 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
                     }
                     _ => pen.circle("DEVICE", c, s * 0.7),
                 }
-                pen.text("TEXT", v(0.0, -s * 1.5), st.text_in, &d.tag, rot, HAlign::Center, VAlign::Top);
+                if !t.elec_spec.untagged.contains(&d.id) {
+                    pen.text("TEXT", v(0.0, -s * 1.5), st.text_in, &d.tag, rot, HAlign::Center, VAlign::Top);
+                }
             }
             "switch" => {
                 pen.circle("DEVICE", c, s * 0.5);
@@ -1864,6 +1866,15 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
         {
             pen.text("TEXT", v(s * 2.0, 0.0), st.text_in * 0.8, note, rot, HAlign::Left, VAlign::Middle);
         }
+        // Subscripts (GFCI, USB…) above the symbol and the circuit (P1-5) below it.
+        if let Some(n) = t.elec_spec.note(&d.id) {
+            if !n.subscripts.is_empty() {
+                pen.text("TEXT", v(0.0, s * 1.2), st.text_in * 0.7, &n.subscripts.join(" "), rot, HAlign::Center, VAlign::Bottom);
+            }
+            if !n.circuit_ref.is_empty() {
+                pen.text("TEXT", v(0.0, -s * 1.2), st.text_in * 0.7, &n.circuit_ref, rot, HAlign::Center, VAlign::Top);
+            }
+        }
     }
 
     // Homerun arrows.
@@ -1877,6 +1888,9 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
         let mid = Vec2::new((hr.x + tip.x) / 2.0, (hr.y + tip.y) / 2.0);
         pen.line("DEVICE", Vec2::new(mid.x - th * 0.3, mid.y + th * 0.3), Vec2::new(mid.x + th * 0.3, mid.y - th * 0.3));
         pen.text("TEXT", Vec2::new(tip.x + th * 0.5, tip.y), st.text_in, &ckt.label, rot, HAlign::Left, VAlign::Middle);
+        if let Some((_, note)) = t.elec_spec.conductors.iter().find(|(c, _)| *c == ckt.id) {
+            pen.text("TEXT", Vec2::new(tip.x + th * 0.5, tip.y - th * 1.4), st.text_in * 0.7, note, rot, HAlign::Left, VAlign::Middle);
+        }
     }
 
     // "DO NOT SCALE" note.
@@ -2043,7 +2057,7 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
         let mut devs: Vec<&crate::truth::ElecDevice> = t.elec_devices.iter().filter(|d| d.kind == "light_fixture").collect();
         devs.sort_by(|a, b| a.type_tag.cmp(&b.type_tag));
         for d in &devs {
-            if seen_lt.contains(&d.type_tag) {
+            if seen_lt.contains(&d.type_tag) || t.elec_spec.unscheduled.contains(&d.type_tag) {
                 continue;
             }
             seen_lt.push(d.type_tag.clone());
@@ -2065,9 +2079,10 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
             if panel.kind != "panel" || panel.schedule.is_empty() {
                 continue;
             }
-            let mut rows = vec![vec!["CKT".to_string(), "DESCRIPTION".to_string(), "BKR".to_string(), "POLES".to_string()]];
+            let mut rows = vec![vec!["CKT".to_string(), "DESCRIPTION".to_string(), "BKR".to_string(), "POLES".to_string(), "TYPE".to_string()]];
             for row in &panel.schedule {
-                rows.push(vec![row.circuit.clone(), row.description.clone(), row.breaker_amps.clone(), row.poles.clone()]);
+                let kind = t.elec_spec.breaker(&panel.id, &row.circuit).unwrap_or("-");
+                rows.push(vec![row.circuit.clone(), row.description.clone(), row.breaker_amps.clone(), row.poles.clone(), kind.to_string()]);
             }
             let h2 = table(pen, [x, y], &format!("PANEL {} SCHEDULE", panel.tag), &rows);
             y -= h2 + 0.6;
