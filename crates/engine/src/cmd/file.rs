@@ -19,6 +19,15 @@ pub use pgp::{MAX_ALIASES, alias_name, command_id};
 pub(crate) use pgp::{specs as alias_specs, user_alias};
 pub use template::{qnew_template, set_qnew_template};
 
+/// Largest drawing accepted from a local path, matching the per-file xref limit. A path naming an
+/// endless device must be rejected before it exhausts memory (CWE-400), so native opens read
+/// through [`crate::capped_read`] rather than buffering to EOF.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_DRAWING_BYTES: usize = 512 << 20;
+/// Largest `.scr` script accepted from a local path.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SCRIPT_BYTES: usize = 64 << 20;
+
 /// Plot a space to PDF bytes with JSON options (`{paper?, landscape?, fit?, lineweights?, …}`).
 pub type PlotHook = fn(&Drawing, &cadcraft_doc::Space, &Value) -> std::result::Result<Vec<u8>, String>;
 
@@ -192,7 +201,8 @@ fn run_script(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let bytes = std::fs::read(path).map_err(|e| bad("script", format!("{path}: {e}")))?;
+            let bytes =
+                crate::capped_read::read_capped(std::path::Path::new(path), MAX_SCRIPT_BYTES).map_err(|e| bad("script", format!("{path}: {e}")))?;
             String::from_utf8_lossy(&bytes).into_owned()
         }
         #[cfg(target_arch = "wasm32")]
@@ -265,7 +275,8 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let r = std::panic::catch_unwind(|| {
-            let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            let bytes =
+                crate::capped_read::read_capped(std::path::Path::new(path), MAX_DRAWING_BYTES).map_err(|e| bad("open", format!("{path}: {e}")))?;
             read_bytes(&bytes, path, Some(path.to_string()))
         });
         match r {
@@ -332,7 +343,8 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
         let path = _path;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            let bytes =
+                crate::capped_read::read_capped(std::path::Path::new(path), MAX_DRAWING_BYTES).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
             return Ok(opened(s, i, true));

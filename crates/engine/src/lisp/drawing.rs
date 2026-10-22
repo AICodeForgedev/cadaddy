@@ -151,16 +151,32 @@ pub fn from_json(v: &serde_json::Value) -> Value {
     }
 }
 
-/// A LISP value as JSON (for `setvar`).
-pub fn to_json(v: &Value) -> serde_json::Value {
-    match v {
+/// A LISP value as JSON (for `setvar`), bounded so a shared cons structure cannot expand into
+/// exponentially many owned array elements before the setter can reject it (CWE-400).
+///
+/// Largest number of elements it may expand, and the deepest nesting it follows.
+const TO_JSON_BUDGET: u64 = 2_000_000;
+const TO_JSON_MAX_DEPTH: usize = 256;
+
+fn to_json_bounded(v: &Value, depth: usize, budget: &mut u64) -> Option<serde_json::Value> {
+    if depth > TO_JSON_MAX_DEPTH || *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    Some(match v {
         Value::Nil => serde_json::Value::Null,
         Value::Int(i) => serde_json::json!(i),
         Value::Real(r) => serde_json::json!(r),
         Value::Str(s) => serde_json::json!(&**s),
-        Value::Cons(_) => serde_json::Value::Array(v.iter().map(|x| to_json(&x)).collect()),
+        Value::Cons(_) => {
+            let mut arr = Vec::new();
+            for x in v.iter() {
+                arr.push(to_json_bounded(&x, depth + 1, budget)?);
+            }
+            serde_json::Value::Array(arr)
+        }
         other => serde_json::json!(to_text(other, false)),
-    }
+    })
 }
 
 pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
@@ -172,7 +188,11 @@ pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 2, 2)?;
     let name = string(&a[0])?;
-    match crate::sysvars::set(ctx.s, &name, &to_json(&a[1])) {
+    let mut budget: u64 = TO_JSON_BUDGET;
+    let Some(json) = to_json_bounded(&a[1], 0, &mut budget) else {
+        return Err(LispError::new(format!("AutoCAD variable setting rejected: {} value too large", to_text(&a[0], true))));
+    };
+    match crate::sysvars::set(ctx.s, &name, &json) {
         Ok(()) => Ok(Flow::Value(a[1].clone())),
         Err(_) => Err(LispError::new(format!("AutoCAD variable setting rejected: {} {}", to_text(&a[0], true), to_text(&a[1], true)))),
     }

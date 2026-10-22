@@ -222,6 +222,64 @@ fn runaway_routines_are_errors_not_crashes() {
 }
 
 #[test]
+fn synchronous_callback_loop_is_an_error_not_a_hang() {
+    // A comparator with an infinite loop used to run with u64::MAX fuel and hang the thread; it
+    // now terminates at the synchronous-callback step cap (CWE-400, finding row 2).
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    assert!(eval(&mut s, "(vl-sort '(1 2) (function (lambda (a b) (while t))))").is_err());
+    // A well-behaved comparator still works afterwards.
+    assert_eq!(ok(&mut s, "(vl-sort '(3 1 2) '<)"), "(1 2 3)");
+}
+
+#[test]
+fn a_zero_callback_budget_does_not_run_the_callback() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 0;
+    ok(&mut s, "(setq callback-ran nil)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (setq callback-ran t)) '(1))");
+    assert_eq!(result, Err("callback stopped after 0 steps".into()));
+    assert_eq!(ok(&mut s, "callback-ran"), "nil");
+}
+
+#[test]
+fn a_callback_must_fit_within_a_partial_slice() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    ok(&mut s, "(setq callback-count 0)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (repeat 1000 (setq callback-count (1+ callback-count)))) '(1))");
+    assert_eq!(result, Err("callback stopped after 1000 steps".into()));
+    assert_eq!(ok(&mut s, "(and (> callback-count 0) (< callback-count 1000))"), "T");
+}
+
+#[test]
+fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
+    let counts: Vec<u64> = [399_999, 400_000]
+        .into_iter()
+        .map(|cap| {
+            let mut s = session();
+            s.lisp.limits.callback_steps = cap;
+            ok(&mut s, "(setq callback-count 0)");
+            let result = eval(&mut s, "(vl-remove-if '(lambda (x) (while t (setq callback-count (1+ callback-count)))) '(1))");
+            assert_eq!(result, Err(format!("callback stopped after {cap} steps")));
+            ok(&mut s, "callback-count").parse().unwrap()
+        })
+        .collect();
+    // One additional VM step can perform at most one assignment, even at SYNC_SLICE's boundary.
+    assert!(counts[0] > 0);
+    assert!(counts[1] >= counts[0] && counts[1] - counts[0] <= 1, "{counts:?}");
+}
+
+#[test]
+fn setvar_rejects_an_oversized_shared_structure() {
+    // A list repeatedly sharing its own contents expands exponentially; setvar's bounded JSON
+    // conversion rejects it instead of allocating gigabytes (CWE-400, finding row 39).
+    let mut s = session();
+    let build = "(setq x '(1)) (repeat 40 (setq x (list x x))) (setvar \"GRIDUNIT\" x)";
+    assert!(eval(&mut s, build).is_err());
+}
+
+#[test]
 fn printing() {
     let mut s = session();
     let before = s.log.len();
