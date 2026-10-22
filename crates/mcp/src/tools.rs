@@ -85,6 +85,15 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}, "inputs": {"type": "array"}}, "required": ["code"]}}),
         json!({"name": "plot", "description": "Plot a layout (or Model) to a PDF file with its page setup, as PLOT does, without the dialog.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "layout": {"type": "string"}}, "required": ["path"]}}),
+        json!({"name": "project", "description": "Manage projects (groups of related drawings sharing rules, types and standards). Actions: \"create\" {path, name?, metric?}, \"open\" {path}, \"close\", \"info\", \"list\" {discipline?, status?, kind?}, \"activate\" {name}, \"shelve\" {save?}, \"add\" {path, discipline?, kind?, title?}, \"remove\" {name}, \"disk\", \"shelve_project\", \"restore_project\" {path}, \"import_manifest\" {path}, \"validate_manifest\" {path}, \"standards.list\" {domain?}, \"standards.set\" {domain, key, value, source?}, \"standards.remove\" {domain, key}, \"standards.import\" {from, domain?, keys?}.",
+            "inputSchema": {"type": "object", "properties": {
+                "action": {"type": "string"}, "path": {"type": "string"}, "name": {"type": "string"},
+                "metric": {"type": "boolean"}, "discipline": {"type": "string"}, "kind": {"type": "string"},
+                "status": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"},
+                "domain": {"type": "string"}, "key": {"type": "string"}, "value": {},
+                "source": {"type": "string"}, "from": {"type": "string"},
+                "keys": {"type": "array", "items": {"type": "string"}}
+            }, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -308,6 +317,34 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             let command = match a.get("action").and_then(Value::as_str) {
                 Some("edit") => "mep.edit",
                 _ => "mep.list",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            exec(b, command, params)
+        }
+        "project" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("create") => "project.create",
+                Some("open") => "project.open",
+                Some("close") => "project.close",
+                Some("info") => "project.info",
+                Some("list") => "project.list",
+                Some("activate") => "project.activate",
+                Some("shelve") => "project.shelve",
+                Some("add") => "project.add",
+                Some("remove") => "project.remove",
+                Some("disk") => "project.disk",
+                Some("shelve_project") => "project.shelve_project",
+                Some("restore_project") => "project.restore_project",
+                Some("import_manifest") => "project.import_manifest",
+                Some("validate_manifest") => "project.validate_manifest",
+                Some("standards.list") => "project.standards.list",
+                Some("standards.set") => "project.standards.set",
+                Some("standards.remove") => "project.standards.remove",
+                Some("standards.import") => "project.standards.import",
+                _ => "project.info",
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
