@@ -51,6 +51,8 @@ pub mod pdf_merge;
 pub mod pdf_read;
 pub mod plotter;
 pub mod pointcloud_io;
+/// Open → save → reopen comparison and the real-file corpus harness (gaps FF1, FF5).
+pub mod roundtrip;
 pub mod svg;
 mod svg_read;
 mod svg_style;
@@ -360,6 +362,17 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     }
 }
 
+/// [`read`], also returning the DXF rendition a DWG was read through by the DWG bridge (`None`
+/// for other files and for CADaddy's own DWG reader), which the round-trip harness counts.
+pub(crate) fn read_source(bytes: &[u8], name: &str) -> Result<(Drawing, Option<Vec<u8>>)> {
+    let d = read(bytes, name)?;
+    if cadaddy_dwg::is_dwg(bytes) && dwg_engine(true) == DwgEngine::Bridge {
+        let dxf = cadaddy_dwg::decode(bytes, cadaddy_dwg::Limits::DEFAULT).ok().map(|(dxf, _)| dwg_keep::unstash(&dxf).unwrap_or(dxf));
+        return Ok((d, dxf));
+    }
+    Ok((d, None))
+}
+
 /// Write a drawing in the format chosen by the name's extension. Images (PNG, SVG, PDF) show
 /// model space fitted to its extents. DXF and DWG are written in the drawing's version
 /// ([`save_version`]), DXF as ASCII.
@@ -420,6 +433,22 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         }
         _ => write_framed(d, name, None),
     }
+}
+
+/// [`write_with`], also returning what the file leaves out of the drawing: for a DWG written
+/// through the DWG bridge, how many records of each DXF type the bridge's writer can't write
+/// (other programs' custom entities and objects); for other formats and CADaddy's own DWG
+/// writer, nothing. The bytes are [`write_with`]'s; the list comes from converting the same
+/// bridge DXF in this process (the round-trip harness's use; a save itself doesn't need it).
+pub fn write_noted(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<(Vec<u8>, cadaddy_dwg::Unwritten)> {
+    let bytes = write_with(d, name, opts)?;
+    if ext(name) == "dwg" && !opts.binary && dwg_engine(false) == DwgEngine::Bridge {
+        let version = opts.version.unwrap_or_else(|| save_version(d).max(Version::R2004));
+        let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
+        let (_, unwritten) = cadaddy_dwg::dxf_to_dwg_named_noted(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
+        return Ok((bytes, unwritten));
+    }
+    Ok((bytes, cadaddy_dwg::Unwritten::new()))
 }
 
 /// Like [`write`], but image formats (PNG, SVG, PDF) show `window` (a model-space rectangle in

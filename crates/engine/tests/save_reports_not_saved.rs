@@ -89,3 +89,17 @@ fn solids_whose_geometry_the_data_store_keeps_are_not_reported_from_2013() {
     // Before 2013 a file has no data store: every solid loses its geometry.
     assert_eq!(not_saved_as(&d, Version::R2010), [("3DSOLID".to_string(), 2), ("REGION".to_string(), 1)].into_iter().collect());
 }
+
+/// An OLE2FRAME (an embedded OLE object) is kept by CADaddy as its DXF groups and written to
+/// DWG whole, so saving doesn't report it as not saved (it was: "… 4 OLE2FRAME"). Our list
+/// names DXF Reference entity types only, so another program's custom entity isn't in it either.
+#[test]
+fn ole_frames_are_not_reported_as_not_saved() {
+    use cadaddy_engine::cmd::file::{Version, not_saved_as};
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), unknown("OLE2FRAME")).unwrap();
+    d.add(&Space::Model, Common::default(), unknown("ACME_WIDGET")).unwrap();
+    for v in [Version::R2000, Version::R2018] {
+        assert!(!not_saved_as(&d, v).contains_key("OLE2FRAME"), "{v:?}");
+    }
+}

@@ -15,6 +15,7 @@
 //! cadaddy-cli perf [N]                            timing table on a synthetic N-entity drawing
 //! cadaddy-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadaddy-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
+//! cadaddy-cli roundtrip [FILE|FOLDER] [--out DIR] open → save → reopen report (Markdown + JSON)
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -76,6 +77,11 @@ const USAGE: &str = "usage:
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]
   cadaddy-cli perf [N | FILE]
   cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
+  cadaddy-cli roundtrip [FILE | FOLDER] [--out DIR] [--keep-saved] [--same-format] [--no-census] [--tolerance T]
+                           open each DXF/DWG, save it as DXF and DWG, reopen and compare; writes
+                           report.md and report.json to DIR (default: the folder's `report`).
+                           FOLDER defaults to $CADADDY_CORPUS_DIR. With CADADDY_CORPUS_STRICT=1 it
+                           fails when a file doesn't open, save or reopen, or loses records on save.
   cadaddy-cli --version
 
 image framing (png 2400x1600, svg, pdf; always model space):
@@ -192,6 +198,12 @@ const CLI_COMMANDS: &[CliCommand] = &[
         usage: "cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)",
         summary: "Writes a built-in sample drawing.",
         example: "cadaddy-cli sample floorplan floorplan.dxf",
+    },
+    CliCommand {
+        name: "roundtrip",
+        usage: "cadaddy-cli roundtrip [FILE | FOLDER] [--out DIR] [--keep-saved] [--same-format] [--no-census] [--tolerance T]",
+        summary: "Opens each DXF/DWG, saves it as DXF and DWG, reopens and compares: what was lost, added or changed, in report.md and report.json.",
+        example: "cadaddy-cli roundtrip drawings --out report",
     },
     CliCommand { name: "--version", usage: "cadaddy-cli --version", summary: "The version.", example: "cadaddy-cli --version" },
 ];
@@ -1577,6 +1589,125 @@ mod help_tests {
     }
 }
 
+/// What `roundtrip` was asked to do.
+#[derive(Debug, PartialEq)]
+struct RoundTripArgs {
+    path: Option<std::path::PathBuf>,
+    out: Option<std::path::PathBuf>,
+    keep_saved: bool,
+    opts: cadaddy_io::roundtrip::corpus::CorpusOptions,
+}
+
+fn parse_roundtrip_args(args: &[String]) -> Result<RoundTripArgs, String> {
+    let mut r = RoundTripArgs { path: None, out: None, keep_saved: false, opts: Default::default() };
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--out" => r.out = Some(it.next().filter(|v| !v.starts_with("--")).ok_or("roundtrip: --out needs a folder")?.into()),
+            "--keep-saved" => r.keep_saved = true,
+            "--same-format" => r.opts.cross_format = false,
+            "--no-census" => r.opts.census = false,
+            "--tolerance" => {
+                let v = it.next().ok_or("roundtrip: --tolerance needs a number")?;
+                match v.parse::<f64>() {
+                    Ok(t) if t.is_finite() && t >= 0.0 => r.opts.compare.abs_tol = t,
+                    _ => return Err(format!("roundtrip: --tolerance must be a number >= 0, got `{v}`")),
+                }
+            }
+            s if s.starts_with("--") => return Err(format!("roundtrip: unknown option {s}")),
+            _ if r.path.is_none() => r.path = Some(a.into()),
+            _ => return Err("roundtrip: give one FILE or FOLDER".into()),
+        }
+    }
+    Ok(r)
+}
+
+/// `roundtrip`: the corpus harness of `cadaddy_io::roundtrip::corpus` over a file or folder.
+fn roundtrip(args: &[String]) -> Result<(), String> {
+    use cadaddy_io::roundtrip::corpus;
+    let mut a = parse_roundtrip_args(args)?;
+    let path = a
+        .path
+        .take()
+        .or_else(|| std::env::var_os("CADADDY_CORPUS_DIR").map(Into::into))
+        .ok_or("roundtrip: give a FILE or FOLDER, or set CADADDY_CORPUS_DIR")?;
+    let (root, files, out) = if path.is_dir() {
+        let out = a.out.take().unwrap_or_else(|| path.join("report"));
+        let files = corpus::corpus_files(&path, std::slice::from_ref(&out));
+        (path, files, out)
+    } else if path.is_file() {
+        let root = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let out = a.out.take().unwrap_or_else(|| root.join("report"));
+        (root, vec![path], out)
+    } else {
+        return Err(format!("roundtrip: no such file or folder: {}", path.display()));
+    };
+    if files.is_empty() {
+        return Err(format!("roundtrip: no DXF or DWG files in {}", root.display()));
+    }
+    if a.keep_saved {
+        a.opts.keep_saved = Some(out.join("saved"));
+    }
+    let report = corpus::run(&root, &files, &a.opts, &mut |i, n, rel| eprintln!("[{}/{n}] {rel}", i + 1));
+    for f in &report.files {
+        let routes: Vec<String> = f
+            .routes
+            .iter()
+            .map(|r| match (&r.save_error, &r.reopen_error) {
+                (Some(_), _) => format!("{}: save failed", r.route),
+                (None, Some(_)) => format!("{}: reopen failed", r.route),
+                (None, None) => {
+                    let t = r.comparison.total();
+                    format!("{}: {} lost, {} added, {} changed", r.route, t.lost, t.added, t.changed)
+                }
+            })
+            .collect();
+        match &f.open_error {
+            Some(e) => outln!("{}: open failed: {e}", f.path),
+            None => outln!("{}: opened; {}", f.path, routes.join("; ")),
+        }
+    }
+    let (md, json) = report.write(&out).map_err(|e| format!("roundtrip: can't write the report to {}: {e}", out.display()))?;
+    outln!("report: {}", md.display());
+    outln!("        {}", json.display());
+    // CADADDY_CORPUS_STRICT=1: a file that doesn't open, save or reopen, or records a writer
+    // leaves out, fail the run (the report is written first).
+    if std::env::var("CADADDY_CORPUS_STRICT").is_ok_and(|v| v == "1") {
+        let failed = report.strict_failures();
+        if !failed.is_empty() {
+            return Err(format!("roundtrip: {} strict failures:\n{}", failed.len(), failed.join("\n")));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod roundtrip_args_tests {
+    use super::*;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn roundtrip_options_parse() {
+        let r = parse_roundtrip_args(&args(&["corpus", "--out", "rep", "--keep-saved", "--same-format", "--tolerance", "0.001"])).unwrap();
+        assert_eq!(r.path, Some("corpus".into()));
+        assert_eq!(r.out, Some("rep".into()));
+        assert!(r.keep_saved && !r.opts.cross_format && r.opts.census);
+        assert_eq!(r.opts.compare.abs_tol, 0.001);
+        assert_eq!(parse_roundtrip_args(&args(&[])).unwrap().path, None);
+        for bad in [&["--out"][..], &["--tolerance", "nan"], &["--tolerance", "-1"], &["a", "b"], &["--typo"]] {
+            assert!(parse_roundtrip_args(&args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn roundtrip_reports_a_missing_folder() {
+        assert!(roundtrip(&args(&["no/such/folder/anywhere"])).is_err());
+    }
+}
+
 fn main() -> ExitCode {
     // A copy of this program started to read or write a DWG file does only that.
     if let Some(code) = cadaddy_io::dwg_worker::serve_if_asked() {
@@ -1627,6 +1758,7 @@ fn cli() -> ExitCode {
         Some("bim") => bim(&rest),
         Some("check-import") => check_import(&rest),
         Some("mcp") => mcp(&rest),
+        Some("roundtrip") => roundtrip(&rest),
         Some("--version" | "-V") => {
             outln!("cadaddy-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())

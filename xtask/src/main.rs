@@ -46,6 +46,10 @@ commands:
                   made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
                   and .cdy: exact differences and save/open/regen times against budgets (warnings);
                   report in target/corpus/report.md
+  roundtrip [DIR] [--out DIR] [--keep-saved] [--same-format]
+                  open -> save -> reopen every DXF/DWG of a real-file corpus (DIR, default
+                  $CADADDY_CORPUS_DIR or ../cadaddy-corpus) and write report.md + report.json
+                  (default DIR/report); runs `cadaddy-cli roundtrip` in release mode
   pdfstats FILE.pdf [FILE2.pdf ...]
                   print PDF import statistics: entity counts, scale, layers, quality metrics
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -142,6 +146,7 @@ fn main() -> ExitCode {
         Some("ci") => cmd_ci(),
         Some("corpus") if rest.first() == Some(&"synthetic") => cmd_corpus_synthetic(rest.get(1..).unwrap_or_default()),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("roundtrip") => cmd_roundtrip(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
         Some("command-docs") => commanddocs::run(&root(), rest.contains(&"--check")),
@@ -386,6 +391,47 @@ fn cmd_corpus_synthetic(args: &[&str]) -> Result<(), String> {
         .status()
         .map_err(|e| format!("cargo: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("corpus synthetic: {status}")) }
+}
+
+/// `roundtrip [DIR] [options]`: the round-trip report over a real-file corpus (gaps FF1, FF5).
+/// The corpus lives outside this repo; its files are never committed here.
+fn cmd_roundtrip(args: &[&str]) -> Result<(), String> {
+    // `cadaddy-cli` runs from the repository root: relative paths are made absolute against the
+    // folder `cargo xtask` was run from first, so they mean what the user typed.
+    let here = std::env::current_dir().map_err(|e| format!("current folder: {e}"))?;
+    let mut pass: Vec<String> = Vec::new();
+    let mut dir: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match *a {
+            "--out" => {
+                let v = it.next().ok_or_else(|| format!("{a} needs a value"))?;
+                pass.extend([a.to_string(), here.join(v).display().to_string()]);
+            }
+            "--tolerance" => {
+                let v = it.next().ok_or_else(|| format!("{a} needs a value"))?;
+                pass.extend([a.to_string(), v.to_string()]);
+            }
+            s if s.starts_with("--") => pass.push(s.to_string()),
+            s if dir.is_none() => dir = Some(s.to_string()),
+            _ => return Err("roundtrip takes one DIR".into()),
+        }
+    }
+    let dir = dir
+        .or_else(|| std::env::var("CADADDY_CORPUS_DIR").ok())
+        .unwrap_or_else(|| root().parent().map(|p| p.join("cadaddy-corpus").display().to_string()).unwrap_or_else(|| "../cadaddy-corpus".into()));
+    let dir = here.join(&dir);
+    if !dir.is_dir() {
+        return Err(format!(
+            "no corpus at `{}`: put the corpus next to this repo as cadaddy-corpus, set CADADDY_CORPUS_DIR or pass DIR \
+             (never commit corpus files to this repo)",
+            dir.display()
+        ));
+    }
+    let dir = dir.display().to_string();
+    let mut c = Command::new(env!("CARGO"));
+    c.current_dir(root()).args(["run", "--release", "-q", "-p", "cadaddy-cli", "--", "roundtrip", &dir]).args(&pass);
+    run(c, &format!("cadaddy-cli roundtrip {dir} {}", pass.join(" ")))
 }
 
 fn cmd_corpus(_download: bool) -> Result<(), String> {
