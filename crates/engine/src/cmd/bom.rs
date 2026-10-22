@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{group_by?: job|level|trade, waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, elements}], required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{group_by?: job|level|trade, all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, elements}], required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -587,6 +587,7 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let group = str_param(p, "group_by").unwrap_or("job").to_ascii_lowercase();
+    let all_elements = p.get("all_elements").and_then(Value::as_bool).unwrap_or(false);
     if !matches!(group.as_str(), "job" | "level" | "trade") {
         return Err(bad("bim.bom", "`group_by` is job, level or trade"));
     }
@@ -646,7 +647,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let mut v = json!({
                 "trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit,
                 "net": round(l.net), "waste_pct": pct, "waste": round(waste), "total": round(l.net + waste),
-                "status": l.status, "elements": l.elements.iter().take(500).collect::<Vec<_>>(),
+                "status": l.status, "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
             });
             if let Some(r) = &l.rule {
                 v["rule"] = json!(r);

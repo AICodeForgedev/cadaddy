@@ -26,7 +26,7 @@ use cadaddy_doc::EntityKind;
 use cadaddy_geom::{Bounds2, Vec2};
 use serde_json::{Map, Value, json};
 
-use super::estimate::{obj, price_all, setting, state, store};
+use super::estimate::{key_of, obj, price_all, setting, state, store};
 use super::*;
 use crate::{Result, Session};
 
@@ -39,8 +39,6 @@ const MAX_LOG: usize = 10_000;
 /// The longest number, reference and description kept.
 const MAX_NUMBER: usize = 64;
 const MAX_TEXT: usize = 4_000;
-/// Elements located per line, at most.
-const MAX_ELEMENTS: usize = 500;
 const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -51,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{number: CO number, reference?: RFI/ASI/bulletin number, description?, revision?: printrev label (its changes and clouds are backup), scope?: in_contract|by_others|nic|ofci|alternate:<n> (for lines the change adds that have none), markups?: {tax_pct?, overhead_pct?, profit_pct?, bond_pct?} (default the estimate's), markup_on?: net|adds (default net), clouds?: bool (default true), file?: path (.csv|.md), accept?: bool (default true: the snapshot moves on), replace?: bool (price the latest change order again)} → {number, reference, lines: [{key, change: added|removed|changed, item, size, unit, qty_was, qty_now, qty_delta, material, labor_hours, labor, equipment, cost, math}], adds, credits, net, totals: {material, labor_hours, labor, equipment, direct, tax, overhead, profit, bond, total}, sheets, clouds, backup, findings, ok, cover, csv, path?}",
         ),
         CommandSpec::new("co.log", "Change Order Log", run_log)
-            .params("{number?} → {change_orders: [{number, reference, description, date, total, adds, credits, lines, sheets}], total} | {change_order}")
+            .params("{number?} → {change_orders: [{number, reference, description, date, status: accepted|pending|withdrawn, total, adds, credits, lines, sheets}], total (accepted ones)} | {change_order}")
             .noundo(),
     ]
 }
@@ -78,17 +76,22 @@ fn co_state(st: &mut Map<String, Value>) -> Option<&mut Map<String, Value>> {
 /// Where elements are: (element, level, box in plan drawing units).
 type Where = Vec<(String, String, [f64; 4])>;
 
-fn locate(sp: &cadaddy_walk3d::BuildingSpec, ids: &[Value]) -> Where {
+/// The tags by id, for [`locate`].
+type Tags<'a> = std::collections::HashMap<&'a str, &'a cadaddy_walk3d::tags::ElementTag>;
+
+/// Where each of a line's elements is: every one of them (a line's clouds and what came or went
+/// need them all), tags looked up by id.
+fn locate(sp: &cadaddy_walk3d::BuildingSpec, tags: &Tags, ids: &[Value]) -> Where {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut out = Vec::new();
-    for id in ids.iter().filter_map(Value::as_str).take(MAX_ELEMENTS) {
+    for id in ids.iter().filter_map(Value::as_str) {
         if let Some(i) = id.strip_prefix("run:").and_then(|n| n.parse::<usize>().ok()) {
             let Some(r) = sp.mep.runs.get(i) else { continue };
             let b = Bounds2::from_points(r.points.iter().map(|p| Vec2::new(p[0], p[1])));
             if !b.is_empty() {
                 out.push((id.to_string(), r.level.clone(), [b.min.x, b.min.y, b.max.x, b.max.y]));
             }
-        } else if let Some(t) = sp.tags.iter().find(|t| t.id == id) {
+        } else if let Some(t) = tags.get(id) {
             let (x, y) = (t.at_ft[0] * upf, t.at_ft[1] * upf);
             if x.is_finite() && y.is_finite() {
                 out.push((id.to_string(), t.level.clone(), [x, y, x, y]));
@@ -107,7 +110,6 @@ fn where_of(v: &Value) -> Where {
         .as_array()
         .into_iter()
         .flatten()
-        .take(MAX_ELEMENTS)
         .filter_map(|w| {
             let b = w["box"].as_array()?;
             let n = |i: usize| b.get(i).and_then(Value::as_f64).filter(|x| x.is_finite());
@@ -120,15 +122,20 @@ fn where_of(v: &Value) -> Where {
 fn take(s: &mut Session, st: &Map<String, Value>) -> Result<Vec<Value>> {
     let (sp, _) = current_spec(s)?;
     let (priced, _) = price_all(s, st)?;
+    // Every element of every line (the BOM shows the first 500 of a line).
+    let full = s.execute("bim.bom", &json!({ "all_elements": true }))?;
+    let elements: std::collections::HashMap<String, Value> =
+        full["lines"].as_array().into_iter().flatten().map(|l| (key_of(l), l["elements"].clone())).collect();
+    let tags: Tags = sp.tags.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut out: Vec<Value> = priced
         .iter()
         .map(|p| {
-            let ids = p.line["elements"].as_array().cloned().unwrap_or_default();
+            let ids = elements.get(&p.key).unwrap_or(&p.line["elements"]).as_array().cloned().unwrap_or_default();
             json!({
                 "key": p.key, "kind": "line", "trade": p.line["trade"], "category": p.line["category"], "item": p.line["item"],
                 "size": p.line["size"], "unit": p.unit, "qty": p.qty, "net": p.net,
                 "material_unit": p.material_unit, "labor_unit_hours": p.labor_unit_hours, "scope": p.scope, "via": p.via,
-                "where": where_json(&locate(&sp, &ids)),
+                "where": where_json(&locate(&sp, &tags, &ids)),
             })
         })
         .collect();
@@ -498,6 +505,13 @@ fn run_price(s: &mut Session, p: &Value) -> Result<Value> {
         "markup_on": markup_on, "total": out["totals"]["total"], "adds": out["adds"]["total"], "credits": out["credits"]["total"],
         "totals": out["totals"], "lines": out["lines"], "sheets": out["sheets"], "clouds": clouds.len(), "findings": out["findings"],
         "revision": revision, "accepted": bool_or(p, "accept", true),
+        // Accepted; withdrawn (an accepted one priced again, not accepted); or pending (never
+        // accepted yet). Only accepted ones count in the log's total.
+        "status": match (bool_or(p, "accept", true), reopened) {
+            (true, _) => "accepted",
+            (false, true) => "withdrawn",
+            (false, false) => "pending",
+        },
     });
     if let Some(co) = co_state(&mut st) {
         let mut log = log;
@@ -665,11 +679,18 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
         let e = log.iter().find(|e| e["number"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(n.trim())));
         return e.map(|e| json!({ "change_order": e })).ok_or_else(|| bad("co.log", format!("no change order {n}")));
     }
-    let total: f64 = log.iter().map(|e| f(e, "total")).sum();
+    // An entry's status (older entries: from whether it was accepted).
+    let status = |e: &Value| -> String {
+        e["status"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| if e["accepted"].as_bool().unwrap_or(true) { "accepted".into() } else { "pending".into() })
+    };
+    let total: f64 = log.iter().filter(|e| status(e) == "accepted").map(|e| f(e, "total")).sum();
     let rows: Vec<Value> = log
         .iter()
         .map(|e| {
-            json!({ "number": e["number"], "reference": e["reference"], "description": e["description"], "date": e["date"], "total": e["total"], "adds": e["adds"], "credits": e["credits"], "lines": e["lines"].as_array().map_or(0, Vec::len), "sheets": e["sheets"] })
+            json!({ "number": e["number"], "reference": e["reference"], "description": e["description"], "date": e["date"], "status": status(e), "total": e["total"], "adds": e["adds"], "credits": e["credits"], "lines": e["lines"].as_array().map_or(0, Vec::len), "sheets": e["sheets"] })
         })
         .collect();
     Ok(json!({ "change_orders": rows, "total": r2(total) }))
@@ -860,7 +881,129 @@ mod tests {
         let next = s.execute("co.price", &json!({ "number": "CO-005" })).unwrap();
         assert_eq!(next["totals"], withdrawn["totals"]);
         assert_eq!(next["from"], json!("CO-003"));
+        // The log: CO-004 withdrawn, and the total is the accepted ones', CO-003 + CO-005.
+        let log = s.execute("co.log", &json!({})).unwrap();
+        let row = |n: &str| log["change_orders"].as_array().unwrap().iter().find(|r| r["number"] == json!(n)).cloned().unwrap();
+        assert_eq!(
+            [row("CO-003")["status"].clone(), row("CO-004")["status"].clone(), row("CO-005")["status"].clone()],
+            [json!("accepted"), json!("withdrawn"), json!("accepted")]
+        );
+        let want = r2(f(&row("CO-003"), "total") + f(&row("CO-005"), "total"));
+        assert_eq!(log["total"], json!(want), "{log}");
+        assert!(f(&row("CO-004"), "total").abs() > 0.0, "the withdrawn one has a price that isn't counted");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A line of more devices than the BOM shows (620, 20' apart) where only #550 changes:
+    /// exactly one cloud, round #550 and none of the others.
+    #[test]
+    fn a_long_lines_one_changed_device_is_the_one_clouded() {
+        let (mut s, dir) = job("long");
+        let tags = |changed: bool| {
+            json!(
+                (0..620)
+                    .map(|i| device(
+                        &format!("R{i}"),
+                        20.0 * f64::from(i),
+                        if changed && i == 550 { "GFCI receptacle" } else { "standard duplex receptacle" }
+                    ))
+                    .collect::<Vec<_>>()
+            )
+        };
+        set_tags(&mut s, tags(false));
+        s.execute("co.snapshot", &json!({})).unwrap();
+        set_tags(&mut s, tags(true));
+        let co = s.execute("co.price", &json!({ "number": "CO-L" })).unwrap();
+        assert_eq!(line(&co, "standard duplex receptacle")["qty_delta"], json!(-1.0), "{co}");
+        assert_eq!(co["clouds"].as_array().unwrap().len(), 1, "{}", co["clouds"]);
+        // The cloud (not its label) is round device 550 (at 11000' × 12 = 132000 units, y 12).
+        let d = s.doc().unwrap();
+        let cloud = d
+            .model
+            .iter()
+            .find(|e| super::super::printrev::label_of(e, APP) == Some("CO-L") && !matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_)))
+            .unwrap();
+        let b = cadaddy_doc::entity_bounds(d, cloud, 0);
+        let inside = |x: f64| b.min.x <= x && x <= b.max.x && b.min.y <= 12.0 && 12.0 <= b.max.y;
+        assert!(inside(550.0 * 20.0 * 12.0), "round #550: {b:?}");
+        assert!(!inside(549.0 * 20.0 * 12.0) && !inside(551.0 * 20.0 * 12.0) && !inside(100.0 * 20.0 * 12.0), "nothing else: {b:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A printed sheet: a frame and notes; revised, a 3/4" conduit 120 units (10') long too.
+    fn sheet(s: &mut Session, revised: bool) {
+        let layer = |s: &mut Session, name: &str| {
+            if s.execute("layer.new", &json!({"name": name, "current": true})).is_err() {
+                s.execute("layer.current", &json!({"name": name})).unwrap();
+            }
+        };
+        layer(s, "A-WALL");
+        s.execute("pline", &json!({"vertices": [[-12, -12], [492, -12], [492, 372], [-12, 372]], "closed": true})).unwrap();
+        layer(s, "G-ANNO");
+        for (i, t) in ["LEVEL 1 POWER PLAN", "SHEET E-101", "SCALE 1\" = 1'-0\""].iter().enumerate() {
+            s.execute("text", &json!({"at": [500.0, 300.0 - 20.0 * i as f64], "text": t, "height": 4})).unwrap();
+        }
+        if revised {
+            layer(s, "E-BRANCH-COND");
+            s.execute("line", &json!({"points": [[300, 200], [420, 200]]})).unwrap();
+            s.execute("text", &json!({"at": [340, 206], "text": "3/4\" C BOT @ 9'-0\"", "height": 4})).unwrap();
+        }
+    }
+
+    /// A printed revision is the change order's backup: its run changes and its clouds, and the
+    /// change order prices the run it added.
+    #[test]
+    fn a_printed_revision_is_the_change_orders_backup() {
+        cadaddy_engine_io();
+        let (mut s, dir) = job("rev");
+        sheet(&mut s, false);
+        s.execute("co.snapshot", &json!({})).unwrap();
+        let mut r = Session::new();
+        sheet(&mut r, true);
+        let path = dir.join("rev.dxf");
+        std::fs::write(&path, cadaddy_io::write(r.doc().unwrap(), "rev.dxf").unwrap()).unwrap();
+        let rev = s.execute("printrev.compare", &json!({"against": path.to_string_lossy(), "label": "ASI-09"})).unwrap();
+        let runs = rev["runs"].as_array().unwrap();
+        assert!(runs.iter().any(|x| x["change"] == json!("added")), "{rev}");
+        let clouds = s
+            .doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| {
+                matches!(e.kind, EntityKind::LwPolyline(_)) && super::super::printrev::label_of(e, super::super::printrev::APP) == Some("ASI-09")
+            })
+            .count();
+        assert!(clouds > 0, "{rev}");
+        let co = s.execute("co.price", &json!({ "number": "CO-R", "revision": "ASI-09" })).unwrap();
+        let backup = &co["backup"];
+        let log = s.execute("printrev.log", &json!({"revision": "ASI-09"})).unwrap();
+        let want: Vec<Value> = log["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| json!({ "item": x["item"], "system": x["system"], "level": x["level"], "change": x["change"], "from": x["from"].as_str().unwrap_or("") }))
+            .collect();
+        assert!(!want.is_empty());
+        assert_eq!(backup["revision_changes"], json!(want), "{co}");
+        assert_eq!(backup["revision_clouds"], json!(clouds));
+        assert!(!co["findings"].as_array().unwrap().iter().any(|x| x["kind"] == json!("revision_not_found")), "{co}");
+        // The change prices what the revision added: 10' more 3/4" conduit (11' with its 10% waste).
+        let emt = co["lines"].as_array().unwrap().iter().find(|l| l["item"] == json!("EMT conduit")).unwrap_or_else(|| panic!("{co}"));
+        assert_eq!((emt["change"].clone(), emt["qty_delta"].clone()), (json!("changed"), json!(11.0)), "{emt}");
+        assert!(emt["math"].as_array().unwrap().iter().any(|m| m.as_str().unwrap().contains("+10 ft (net)")), "{emt}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn cadaddy_engine_io() {
+        crate::cmd::file::set_io(crate::cmd::file::IoHooks {
+            read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+            write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+            plot: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
+        });
     }
 
     #[test]
