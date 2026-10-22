@@ -25,9 +25,37 @@ pub fn install(_sink: Sink) {}
 #[cfg(target_os = "macos")]
 pub use mac::install;
 
+/// `file:///Volumes/Projects/Sample%20Plan.dxf` → `/Volumes/Projects/Sample Plan.dxf`; `None` for
+/// another computer's file or another scheme. A `%` not followed by two hex digits stays as it is.
+/// Platform-neutral so its tests run everywhere; only the macOS handler calls it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn local_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let b = path.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |j: usize| b.get(j).and_then(|h| char::from(*h).to_digit(16));
+        if c == b'%'
+            && let (Some(hi), Some(lo)) = (hex(i + 1), hex(i + 2))
+        {
+            out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
+            i += 3;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
-    use super::{MAX_FILES, Sink};
+    use super::{MAX_FILES, Sink, local_path};
     use objc2::rc::Retained;
     use objc2::runtime::NSObject;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -101,31 +129,6 @@ mod mac {
         local_path(&uri)
     }
 
-    /// `file:///Volumes/Projects/Sample%20Plan.dxf` → `/Volumes/Projects/Sample Plan.dxf`.
-    fn local_path(uri: &str) -> Option<String> {
-        let rest = uri.strip_prefix("file://")?;
-        let path = rest.strip_prefix("localhost").unwrap_or(rest);
-        if !path.starts_with('/') {
-            return None;
-        }
-        let b = path.as_bytes();
-        let mut out = Vec::with_capacity(b.len());
-        let mut i = 0;
-        while let Some(&c) = b.get(i) {
-            let hex = |j: usize| b.get(j).and_then(|h| char::from(*h).to_digit(16));
-            if c == b'%'
-                && let (Some(hi), Some(lo)) = (hex(i + 1), hex(i + 2))
-            {
-                out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
-                i += 3;
-            } else {
-                out.push(c);
-                i += 1;
-            }
-        }
-        Some(String::from_utf8_lossy(&out).into_owned())
-    }
-
     /// Register the handler (see the crate docs). Off the main thread it does nothing.
     pub fn install(sink: Sink) {
         let Some(mtm) = MainThreadMarker::new() else {
@@ -150,14 +153,45 @@ mod mac {
         std::mem::forget(handler);
     }
 
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn file_urls_become_paths() {
-            assert_eq!(super::local_path("file:///Volumes/Projects/Sample%20Plan.dxf").as_deref(), Some("/Volumes/Projects/Sample Plan.dxf"));
-            assert_eq!(super::local_path("file://localhost/tmp/b.dwg").as_deref(), Some("/tmp/b.dwg"));
-            assert_eq!(super::local_path("file://server/b.dwg"), None);
-            assert_eq!(super::local_path("http://a/b.dwg"), None);
-        }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_path;
+
+    #[test]
+    fn file_urls_become_paths() {
+        assert_eq!(local_path("file:///Volumes/Projects/Sample%20Plan.dxf").as_deref(), Some("/Volumes/Projects/Sample Plan.dxf"));
+        assert_eq!(local_path("file://localhost/tmp/b.dwg").as_deref(), Some("/tmp/b.dwg"));
+        assert_eq!(local_path("file://server/b.dwg"), None);
+        assert_eq!(local_path("http://a/b.dwg"), None);
+    }
+
+    #[test]
+    fn non_ascii_names_decode_from_utf8_escapes() {
+        assert_eq!(local_path("file:///tmp/Project%20%C3%91o%C3%B1o.dxf").as_deref(), Some("/tmp/Project Ñoño.dxf"));
+        assert_eq!(local_path("file:///tmp/%E5%B9%B3%E9%9D%A2%E5%9B%BE.dwg").as_deref(), Some("/tmp/平面图.dwg"));
+        // Already-decoded text passes through.
+        assert_eq!(local_path("file:///tmp/Ñoño.dxf").as_deref(), Some("/tmp/Ñoño.dxf"));
+    }
+
+    #[test]
+    fn malformed_escapes_stay_literal() {
+        assert_eq!(local_path("file:///tmp/a%zzb.dxf").as_deref(), Some("/tmp/a%zzb.dxf"));
+        assert_eq!(local_path("file:///tmp/a.dxf%").as_deref(), Some("/tmp/a.dxf%"));
+        assert_eq!(local_path("file:///tmp/a.dxf%4").as_deref(), Some("/tmp/a.dxf%4"));
+        assert_eq!(local_path("file:///tmp/%%41.dxf").as_deref(), Some("/tmp/%A.dxf"));
+        // A byte that is not UTF-8 becomes U+FFFD, not a panic.
+        assert_eq!(local_path("file:///tmp/a%FF.dxf").as_deref(), Some("/tmp/a\u{FFFD}.dxf"));
+        assert_eq!(local_path("file:///tmp/%C3.dxf").as_deref(), Some("/tmp/\u{FFFD}.dxf"));
+    }
+
+    #[test]
+    fn hostile_input_does_not_panic() {
+        assert_eq!(local_path(""), None);
+        assert_eq!(local_path("file://"), None);
+        assert_eq!(local_path("file:///").as_deref(), Some("/"));
+        let long = format!("file:///{}", "%".repeat(10_000));
+        assert_eq!(local_path(&long).map(|p| p.len()), Some(10_001));
     }
 }
