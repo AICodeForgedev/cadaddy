@@ -69,20 +69,20 @@ pub fn specs() -> Vec<CommandSpec> {
 // ---------------- state ----------------
 
 /// The estimate's state from the spec (an object with `baseline`, `map`, `scope`, `settings`).
-fn state(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingSpec, Map<String, Value>)> {
+pub(super) fn state(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingSpec, Map<String, Value>)> {
     let (sp, _) = current(s, cmd)?;
     let st = sp.estimate.as_object().cloned().unwrap_or_default();
     Ok((sp, st))
 }
 
-fn store(s: &mut Session, mut sp: cadaddy_walk3d::BuildingSpec, st: Map<String, Value>) -> Result<()> {
+pub(super) fn store(s: &mut Session, mut sp: cadaddy_walk3d::BuildingSpec, st: Map<String, Value>) -> Result<()> {
     sp.estimate = Value::Object(st);
     s.doc_mut()?.building_spec = Some(sp.to_json());
     Ok(())
 }
 
 /// The state's object `k`, made one if it isn't.
-fn obj<'a>(st: &'a mut Map<String, Value>, k: &str) -> Option<&'a mut Map<String, Value>> {
+pub(super) fn obj<'a>(st: &'a mut Map<String, Value>, k: &str) -> Option<&'a mut Map<String, Value>> {
     let v = st.entry(k.to_string()).or_insert_with(|| json!({}));
     if !v.is_object() {
         *v = json!({});
@@ -101,7 +101,7 @@ fn key_of(l: &Value) -> String {
     )
 }
 
-fn setting(st: &Map<String, Value>, k: &str, default: f64) -> f64 {
+pub(super) fn setting(st: &Map<String, Value>, k: &str, default: f64) -> f64 {
     st.get("settings").and_then(|s| s.get(k)).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(default)
 }
 
@@ -396,25 +396,25 @@ fn parse_date(d: &str) -> Option<i64> {
 
 /// One priced line.
 #[derive(Clone, Debug, Default)]
-struct Priced {
-    key: String,
-    line: Value,
-    qty: f64,
-    net: f64,
-    unit: String,
-    material_unit: Option<f64>,
-    labor_unit_hours: Option<f64>,
-    material: f64,
-    labor_hours: f64,
-    labor_cost: f64,
-    cost: f64,
-    scope: Option<String>,
-    via: String,
-    issues: Vec<(&'static str, String, String)>,
+pub(super) struct Priced {
+    pub(super) key: String,
+    pub(super) line: Value,
+    pub(super) qty: f64,
+    pub(super) net: f64,
+    pub(super) unit: String,
+    pub(super) material_unit: Option<f64>,
+    pub(super) labor_unit_hours: Option<f64>,
+    pub(super) material: f64,
+    pub(super) labor_hours: f64,
+    pub(super) labor_cost: f64,
+    pub(super) cost: f64,
+    pub(super) scope: Option<String>,
+    pub(super) via: String,
+    pub(super) issues: Vec<(&'static str, String, String)>,
 }
 
 /// Price every BOM line from the state; `what_if` overrides assemblies, scopes and settings.
-fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec<Priced>, f64)> {
+pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec<Priced>, f64)> {
     let bom = s.execute("bim.bom", &json!({}))?;
     let lines = bom["lines"].as_array().cloned().unwrap_or_default();
     let crew = setting(st, "crew_rate", 0.0);

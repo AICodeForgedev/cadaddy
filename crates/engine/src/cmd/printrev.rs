@@ -37,7 +37,7 @@ const MAX_LOG: usize = 100_000;
 /// The layer the clouds go on.
 pub const CLOUD_LAYER: &str = "REV-CLOUD";
 /// The clouds' xdata application name.
-const APP: &str = "CADADDY_PRINTREV";
+pub(super) const APP: &str = "CADADDY_PRINTREV";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -262,7 +262,7 @@ fn compare(old: &Drawing, new: &[Entity], q: f64) -> SheetDiff {
 // ---------------- regions and clouds ----------------
 
 /// Boxes that come within `gap` of each other, merged.
-fn regions(mut boxes: Vec<(Bounds2, usize)>, gap: f64) -> Vec<(Bounds2, usize)> {
+pub(super) fn regions(mut boxes: Vec<(Bounds2, usize)>, gap: f64) -> Vec<(Bounds2, usize)> {
     if boxes.len() > MAX_BOXES {
         let rest = boxes.split_off(MAX_BOXES);
         let mut all = Bounds2::EMPTY;
@@ -294,28 +294,44 @@ fn regions(mut boxes: Vec<(Bounds2, usize)>, gap: f64) -> Vec<(Bounds2, usize)> 
     }
 }
 
-fn ensure_layer(d: &mut Drawing, name: &str) {
+pub(super) fn ensure_layer(d: &mut Drawing, name: &str) {
     if d.layer(name).is_none() {
         d.layers.push(cadaddy_doc::Layer { name: name.into(), color: cadaddy_doc::color::Color::Index(1), ..cadaddy_doc::Layer::default() });
     }
 }
 
-fn tagged(label: &str) -> Common {
+/// On `layer`, tagged with `app`'s xdata carrying `label`.
+pub(super) fn tagged_as(layer: &str, app: &str, label: &str) -> Common {
     Common {
-        layer: CLOUD_LAYER.into(),
-        xdata: vec![RawTag { code: 1001, value: APP.into() }, RawTag { code: 1000, value: label.into() }],
+        layer: layer.into(),
+        xdata: vec![RawTag { code: 1001, value: app.into() }, RawTag { code: 1000, value: label.into() }],
         ..Common::default()
     }
 }
 
+fn tagged(label: &str) -> Common {
+    tagged_as(CLOUD_LAYER, APP, label)
+}
+
+/// The label an object tagged by `app` carries.
+pub(super) fn label_of<'a>(e: &'a Entity, app: &str) -> Option<&'a str> {
+    let at = e.common.xdata.iter().position(|t| t.code == 1001 && t.value == app)?;
+    e.common.xdata.get(at + 1).filter(|t| t.code == 1000).map(|t| t.value.as_str())
+}
+
 /// A revision cloud round `b` (padded by `pad`) and the revision's label at its top right.
 fn cloud(d: &mut Drawing, b: &Bounds2, pad: f64, label: &str) -> Option<Handle> {
+    cloud_with(d, b, pad, label, &tagged)
+}
+
+/// A cloud round `b` and `label` at its top right, both with the `common` it gives.
+pub(super) fn cloud_with(d: &mut Drawing, b: &Bounds2, pad: f64, label: &str, common: &dyn Fn(&str) -> Common) -> Option<Handle> {
     let (lo, hi) = (b.min - Vec2::new(pad, pad), b.max + Vec2::new(pad, pad));
     let pts = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
     let size = (hi.x - lo.x).max(hi.y - lo.y);
     let arc = (size / 8.0).max(1e-6);
     let vs = super::draw2::cloud_vertices(&pts, arc, false, false)?;
-    let h = d.add(&Space::Model, tagged(label), super::helpers::lwpoly(vs, true)).ok()?;
+    let h = d.add(&Space::Model, common(label), super::helpers::lwpoly(vs, true)).ok()?;
     let th = (size / 12.0).max(1e-6);
     let text = EntityKind::Text(Text {
         insert: Vec3::new(hi.x + th * 0.5, hi.y + th * 0.5, 0.0),
@@ -329,7 +345,7 @@ fn cloud(d: &mut Drawing, b: &Bounds2, pad: f64, label: &str) -> Option<Handle> 
         halign: Default::default(),
         valign: Default::default(),
     });
-    d.add(&Space::Model, tagged(label), text).ok();
+    d.add(&Space::Model, common(label), text).ok();
     Some(h)
 }
 
