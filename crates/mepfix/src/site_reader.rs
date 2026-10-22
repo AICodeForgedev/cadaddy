@@ -152,9 +152,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let cx = (r.0[0] + r.1[0]) / 2.0;
         let cy = (r.0[1] + r.1[1]) / 2.0;
         let has_bldg_text = site_texts.iter().any(|(t, pt)| {
-            t.to_uppercase().contains("BUILDING")
-                && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0
-                && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
+            t.to_uppercase().contains("BUILDING") && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0 && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
         });
         if has_bldg_text { Some(*r) } else { None }
     });
@@ -181,8 +179,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let w = mx[0] - mn[0];
         let h = mx[1] - mn[1];
 
-        let nearby_tag = find_text_inside(&site_texts, mn, mx)
-            .or_else(|| find_nearest_text(&site_texts, [cx, cy], (w + h) / 2.0));
+        let nearby_tag = find_text_inside(&site_texts, mn, mx).or_else(|| find_nearest_text(&site_texts, [cx, cy], (w + h) / 2.0));
 
         // Check for diagonal cross (transformer pad).
         let has_diag = has_diagonal_cross(&site_lines, mn, mx);
@@ -221,8 +218,8 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         // Check if this is a main run line (longer than tick marks).
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         // Tick marks are short; run lines are longer.
-        let avg_len: f64 = undr_lines.iter().map(|(a, b)| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()).sum::<f64>()
-            / undr_lines.len().max(1) as f64;
+        let avg_len: f64 =
+            undr_lines.iter().map(|(a, b)| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()).sum::<f64>() / undr_lines.len().max(1) as f64;
         if len < avg_len * 0.3 {
             continue; // Skip tick marks.
         }
@@ -243,14 +240,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let tag = nearby.clone().unwrap_or_default();
         let kind = classify_underground(&tag);
 
-        result.push(ReadSiteElement {
-            kind,
-            tag,
-            at_ft: at,
-            min_ft: Some(min_ft),
-            max_ft: Some(max_ft),
-            depth_ft: depth,
-        });
+        result.push(ReadSiteElement { kind, tag, at_ft: at, min_ft: Some(min_ft), max_ft: Some(max_ft), depth_ft: depth });
     }
 
     result
@@ -284,9 +274,7 @@ fn has_cross_lines(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64
 
 /// Check if there's a triangle (3 connected short lines) inside the circle.
 fn has_triangle_inside(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64) -> bool {
-    let inside = |p: [f64; 2]| {
-        ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2)).sqrt() < radius * 1.2
-    };
+    let inside = |p: [f64; 2]| ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2)).sqrt() < radius * 1.2;
     let tri_lines = lines
         .iter()
         .filter(|&&(a, b)| {

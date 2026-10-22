@@ -738,7 +738,12 @@ pub struct Mep {
 
 impl Mep {
     pub fn is_empty(&self) -> bool {
-        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty() && self.revisions.is_empty() && self.feeders.is_empty()
+        self.systems.is_empty()
+            && self.runs.is_empty()
+            && self.terminals.is_empty()
+            && self.equipment.is_empty()
+            && self.revisions.is_empty()
+            && self.feeders.is_empty()
     }
 }
 

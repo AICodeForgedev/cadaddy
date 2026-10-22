@@ -4,9 +4,9 @@
 //! poles, transformer pad, fire hydrant, dumpster enclosure, driveways, underground utilities)
 //! on `C-SITE` and `C-UNDR` layers. The site reader must find them and classify them correctly.
 
+use cadaddy_mepfix::generate_hotel;
 use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::site_reader;
-use cadaddy_mepfix::generate_hotel;
 
 /// Generate a hotel fixture set, read the C-101 DXF, and return (truth, found).
 fn fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, Vec<site_reader::ReadSiteElement>) {
@@ -164,10 +164,7 @@ fn position_accuracy() {
             }
         }
         let total = truth.site_elements.len();
-        assert!(
-            matched > total / 3,
-            "seed {seed}: position accuracy too low — matched {matched}/{total} within 5 ft"
-        );
+        assert!(matched > total / 3, "seed {seed}: position accuracy too low — matched {matched}/{total} within 5 ft");
     }
 }
 
