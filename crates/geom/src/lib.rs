@@ -19,10 +19,10 @@ mod nurbs;
 pub mod offset;
 mod refine;
 pub mod region;
-pub mod surface;
 mod similarity;
 mod spline;
 mod spline_fit;
+pub mod surface;
 mod vec;
 pub mod vectorize;
 pub mod view3;
@@ -36,8 +36,8 @@ pub use mat::{Mat3, Mat4};
 pub use refine::{CurveRef, offset_spline, refine_closest, refine_intersection};
 pub use similarity::{Similarity, shape_signature};
 pub use spline::Spline;
-pub use surface::NurbsSurface;
 pub use spline_fit::{FitOptions, KnotParam};
+pub use surface::NurbsSurface;
 pub use vec::{Vec2, Vec3};
 
 /// Geometric tolerance for coincidence tests in drawing units.

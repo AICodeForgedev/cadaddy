@@ -387,6 +387,43 @@ impl NurbsSurface {
         s.is_valid().then_some(s)
     }
 
+    /// A surface whose rows of control vertices across `u` are given (`rows[i]` is row `i`, on
+    /// clamped uniform knots of `degree_u`), each row a curve interpolating its points along `v`
+    /// at parameters shared by all the rows. Interpolation is linear in the points, so the
+    /// derivative across the first edge, `degree_u × (row 1 − row 0)` over the first knot
+    /// interval, interpolates the differences given: SURFBLEND sets them from the tangents of
+    /// the surfaces it joins (A9.1 per row; §10.3, skinning).
+    pub fn skin(rows: &[Vec<Vec3>], degree_u: usize, degree_v: usize) -> Option<NurbsSurface> {
+        let cu = rows.len();
+        let cv = rows.first()?.len();
+        if cu < 2 || cv < 2 || rows.iter().any(|r| r.len() != cv) || cu.checked_mul(cv)? > MAX_CVS {
+            return None;
+        }
+        let (du, dv) = (degree_u.clamp(1, cu - 1).min(MAX_DEGREE), degree_v.clamp(1, cv - 1).min(MAX_DEGREE));
+        let mut tv = vec![0.0; cv];
+        for r in rows {
+            for (a, b) in tv.iter_mut().zip(chord_params(r)) {
+                *a += b / cu as f64;
+            }
+        }
+        let kv = averaged_knots(&tv, dv);
+        let mut control = Vec::with_capacity(cu * cv);
+        for r in rows {
+            control.extend(interpolate_with(r, &tv, &kv, dv)?);
+        }
+        let s = NurbsSurface {
+            degree_u: du,
+            degree_v: dv,
+            count_u: cu,
+            count_v: cv,
+            control,
+            weights: Vec::new(),
+            knots_u: clamped_knots(cu, du),
+            knots_v: kv,
+        };
+        s.is_valid().then_some(s)
+    }
+
     /// The least-squares surface with `count_u × count_v` control vertices through a grid of
     /// points (§9.4.3): its ends interpolated, the inside fitted.
     pub fn fit(rows: &[Vec<Vec3>], degree_u: usize, degree_v: usize, count_u: usize, count_v: usize) -> Option<NurbsSurface> {
