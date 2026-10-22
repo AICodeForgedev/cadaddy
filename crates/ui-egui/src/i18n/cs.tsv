@@ -3091,3 +3091,15 @@ menu	Modify	Modifikace
 	Pick a point on its edge to fillet	Vyberte bod na hraně pro zaoblení
 	Select second surface	Vyberte druhý povrch
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Nebyla vybrána žádná uzavřená síť ani povrch. Pouze uzavřené tvary lze převést na tělesa.
+	Visual Styles Manager	Správce vizuálních stylů
+	Ambient occlusion	Okolní zastínění
+	Soft shadows	Měkké stíny
+	Tone map	Tónové mapování
+	Tone curve	Tónová křivka
+	Ambient occlusion strength (0 off … 2)	Síla okolního zastínění (0 vypnuto … 2)
+	Ambient occlusion reach (0: by the model's size)	Dosah okolního zastínění (0: podle velikosti modelu)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Velikost slunce pro měkké stíny ve stupních (0 ostré … 10)
+	Filmic	Filmový
+	Reinhard	Reinhard
+	Neutral	Neutrální
+	Shade plot "Rendered" plots in the Realistic visual style.	Stínovaný tisk „Rendered“ tiskne ve vizuálním stylu Realistický.

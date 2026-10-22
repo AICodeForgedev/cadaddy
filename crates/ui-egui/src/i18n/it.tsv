@@ -3110,3 +3110,15 @@ menu	Modify	Edita
 	Pick a point on its edge to fillet	Scegliere un punto sul bordo per il raccordo
 	Select second surface	Selezionare la seconda superficie
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Non è stata selezionata alcuna mesh o superficie chiusa. Solo le forme chiuse possono diventare solidi.
+	Visual Styles Manager	Gestione stili di visualizzazione
+	Ambient occlusion	Occlusione ambientale
+	Soft shadows	Ombre morbide
+	Tone map	Mappatura dei toni
+	Tone curve	Curva dei toni
+	Ambient occlusion strength (0 off … 2)	Intensità dell'occlusione ambientale (0 disattivata … 2)
+	Ambient occlusion reach (0: by the model's size)	Raggio dell'occlusione ambientale (0: in base alle dimensioni del modello)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Dimensione del sole per ombre morbide in gradi (0 nette … 10)
+	Filmic	Filmico
+	Reinhard	Reinhard
+	Neutral	Neutro
+	Shade plot "Rendered" plots in the Realistic visual style.	Il plottaggio ombreggiato "Rendered" stampa nello stile di visualizzazione Realistico.

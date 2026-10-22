@@ -2995,3 +2995,15 @@
 	Pick a point on its edge to fillet	在其边缘上选择一个点进行圆角
 	Select second surface	选择第二个曲面
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	未选择封闭的网格或曲面。只有封闭的形状才能成为实体。
+	Visual Styles Manager	视觉样式管理器
+	Ambient occlusion	环境光遮蔽
+	Soft shadows	柔和阴影
+	Tone map	色调映射
+	Tone curve	色调曲线
+	Ambient occlusion strength (0 off … 2)	环境光遮蔽强度（0 关闭 … 2）
+	Ambient occlusion reach (0: by the model's size)	环境光遮蔽范围（0：按模型大小）
+	Sun size for soft shadows in degrees (0 sharp … 10)	柔和阴影的太阳大小（度）（0 锐利 … 10）
+	Filmic	电影感
+	Reinhard	Reinhard
+	Neutral	中性
+	Shade plot "Rendered" plots in the Realistic visual style.	着色打印“Rendered”以真实视觉样式打印。

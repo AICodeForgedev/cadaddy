@@ -3118,3 +3118,15 @@ menu	Modify	Ändra
 	Pick a point on its edge to fillet	Välj en punkt på kanten att avrunda
 	Select second surface	Välj andra ytan
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Inget slutet nät eller yta valdes. Endast slutna former kan bli solider.
+	Visual Styles Manager	Hanterare för visuella stilar
+	Ambient occlusion	Omgivningsocklusion
+	Soft shadows	Mjuka skuggor
+	Tone map	Tonmappning
+	Tone curve	Tonkurva
+	Ambient occlusion strength (0 off … 2)	Styrka för omgivningsocklusion (0 av … 2)
+	Ambient occlusion reach (0: by the model's size)	Räckvidd för omgivningsocklusion (0: efter modellens storlek)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Solens storlek för mjuka skuggor i grader (0 skarpa … 10)
+	Filmic	Filmisk
+	Reinhard	Reinhard
+	Neutral	Neutral
+	Shade plot "Rendered" plots in the Realistic visual style.	Skuggad plott ”Rendered” plottar i den visuella stilen Realistisk.

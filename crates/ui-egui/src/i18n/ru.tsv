@@ -2900,3 +2900,15 @@
 	Pick a point on its edge to fillet	Укажите точку на ребре для сопряжения
 	Select second surface	Выберите вторую поверхность
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Не выбрана ни одна замкнутая сетка или поверхность. Только замкнутые формы могут стать телами.
+	Visual Styles Manager	Диспетчер визуальных стилей
+	Ambient occlusion	Фоновое затенение
+	Soft shadows	Мягкие тени
+	Tone map	Тональное отображение
+	Tone curve	Тональная кривая
+	Ambient occlusion strength (0 off … 2)	Сила фонового затенения (0 выкл. … 2)
+	Ambient occlusion reach (0: by the model's size)	Радиус фонового затенения (0: по размеру модели)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Размер солнца для мягких теней в градусах (0 резкие … 10)
+	Filmic	Кинематографический
+	Reinhard	Рейнхард
+	Neutral	Нейтральный
+	Shade plot "Rendered" plots in the Realistic visual style.	Тонированная печать «Rendered» печатает в визуальном стиле «Реалистичный».

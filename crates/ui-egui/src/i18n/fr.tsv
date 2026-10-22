@@ -2899,3 +2899,15 @@
 	Pick a point on its edge to fillet	Choisissez un point sur son arête pour le raccordement
 	Select second surface	Sélectionnez la deuxième surface
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Aucun maillage ou surface fermé n'a été sélectionné. Seules les formes fermées peuvent devenir des solides.
+	Visual Styles Manager	Gestionnaire des styles visuels
+	Ambient occlusion	Occlusion ambiante
+	Soft shadows	Ombres douces
+	Tone map	Mappage des tons
+	Tone curve	Courbe de tons
+	Ambient occlusion strength (0 off … 2)	Intensité de l'occlusion ambiante (0 désactivée … 2)
+	Ambient occlusion reach (0: by the model's size)	Portée de l'occlusion ambiante (0 : selon la taille du modèle)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Taille du soleil pour les ombres douces en degrés (0 nettes … 10)
+	Filmic	Filmique
+	Reinhard	Reinhard
+	Neutral	Neutre
+	Shade plot "Rendered" plots in the Realistic visual style.	Le tracé ombré « Rendered » trace dans le style visuel Réaliste.

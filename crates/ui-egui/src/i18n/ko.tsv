@@ -3111,3 +3111,15 @@ menu	Modify	수정
 	Pick a point on its edge to fillet	필렛할 모서리의 점을 선택하세요
 	Select second surface	두 번째 표면을 선택하세요
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	닫힌 메시 또는 표면이 선택되지 않았습니다. 닫힌 형상만 솔리드로 변환할 수 있습니다.
+	Visual Styles Manager	비주얼 스타일 관리자
+	Ambient occlusion	앰비언트 오클루전
+	Soft shadows	부드러운 그림자
+	Tone map	톤 매핑
+	Tone curve	톤 곡선
+	Ambient occlusion strength (0 off … 2)	앰비언트 오클루전 강도 (0 끔 … 2)
+	Ambient occlusion reach (0: by the model's size)	앰비언트 오클루전 범위 (0: 모델 크기에 따라)
+	Sun size for soft shadows in degrees (0 sharp … 10)	부드러운 그림자의 태양 크기(도) (0 선명 … 10)
+	Filmic	필름풍
+	Reinhard	Reinhard
+	Neutral	중립
+	Shade plot "Rendered" plots in the Realistic visual style.	음영 플롯 "Rendered"는 사실적 비주얼 스타일로 플롯합니다.

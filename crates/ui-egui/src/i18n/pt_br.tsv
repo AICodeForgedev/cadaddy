@@ -3117,3 +3117,15 @@
 	Pick a point on its edge to fillet	Escolha um ponto na aresta para concordância
 	Select second surface	Selecione a segunda superfície
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Nenhuma malha ou superfície fechada foi selecionada. Apenas formas fechadas podem se tornar sólidos.
+	Visual Styles Manager	Gerenciador de estilos visuais
+	Ambient occlusion	Oclusão ambiente
+	Soft shadows	Sombras suaves
+	Tone map	Mapeamento de tons
+	Tone curve	Curva de tons
+	Ambient occlusion strength (0 off … 2)	Intensidade da oclusão ambiente (0 desligada … 2)
+	Ambient occlusion reach (0: by the model's size)	Alcance da oclusão ambiente (0: pelo tamanho do modelo)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Tamanho do sol para sombras suaves em graus (0 nítidas … 10)
+	Filmic	Fílmico
+	Reinhard	Reinhard
+	Neutral	Neutro
+	Shade plot "Rendered" plots in the Realistic visual style.	A plotagem sombreada "Rendered" plota no estilo visual Realista.

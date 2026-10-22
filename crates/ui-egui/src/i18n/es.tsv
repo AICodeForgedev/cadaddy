@@ -3117,3 +3117,15 @@
 	Pick a point on its edge to fillet	Elija un punto en su borde para empalmar
 	Select second surface	Seleccione la segunda superficie
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	No se seleccionó ninguna malla o superficie cerrada. Solo las formas cerradas pueden convertirse en sólidos.
+	Visual Styles Manager	Administrador de estilos visuales
+	Ambient occlusion	Oclusión ambiental
+	Soft shadows	Sombras suaves
+	Tone map	Mapeo de tonos
+	Tone curve	Curva de tonos
+	Ambient occlusion strength (0 off … 2)	Intensidad de la oclusión ambiental (0 desactivada … 2)
+	Ambient occlusion reach (0: by the model's size)	Alcance de la oclusión ambiental (0: según el tamaño del modelo)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Tamaño del sol para sombras suaves en grados (0 nítidas … 10)
+	Filmic	Fílmico
+	Reinhard	Reinhard
+	Neutral	Neutro
+	Shade plot "Rendered" plots in the Realistic visual style.	El trazado sombreado «Rendered» se traza con el estilo visual Realista.

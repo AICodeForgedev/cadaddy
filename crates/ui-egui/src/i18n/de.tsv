@@ -2928,3 +2928,15 @@
 	Pick a point on its edge to fillet	Punkt an der Kante zum Abrunden wählen
 	Select second surface	Zweite Fläche auswählen
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Es wurde kein geschlossenes Netz oder keine geschlossene Fläche ausgewählt. Nur geschlossene Formen können Volumenkörper werden.
+	Visual Styles Manager	Verwaltung visueller Stile
+	Ambient occlusion	Umgebungsverdeckung
+	Soft shadows	Weiche Schatten
+	Tone map	Tonwertabbildung
+	Tone curve	Tonkurve
+	Ambient occlusion strength (0 off … 2)	Stärke der Umgebungsverdeckung (0 aus … 2)
+	Ambient occlusion reach (0: by the model's size)	Reichweite der Umgebungsverdeckung (0: nach Modellgröße)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Sonnengröße für weiche Schatten in Grad (0 scharf … 10)
+	Filmic	Filmisch
+	Reinhard	Reinhard
+	Neutral	Neutral
+	Shade plot "Rendered" plots in the Realistic visual style.	Schattierter Plot „Rendered“ plottet im visuellen Stil Realistisch.

@@ -3106,3 +3106,15 @@ menu	View	عرض
 	Pick a point on its edge to fillet	اختر نقطة على حافته للتقريب
 	Select second surface	حدد السطح الثاني
 	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	لم يتم تحديد شبكة أو سطح مغلق. فقط الأشكال المغلقة يمكن تحويلها إلى مجسمات.
+	Visual Styles Manager	إدارة الأنماط المرئية
+	Ambient occlusion	الإطباق المحيطي
+	Soft shadows	ظلال ناعمة
+	Tone map	تعيين النغمات
+	Tone curve	منحنى النغمات
+	Ambient occlusion strength (0 off … 2)	شدة الإطباق المحيطي (0 إيقاف … 2)
+	Ambient occlusion reach (0: by the model's size)	مدى الإطباق المحيطي (0: حسب حجم النموذج)
+	Sun size for soft shadows in degrees (0 sharp … 10)	حجم الشمس للظلال الناعمة بالدرجات (0 حادة … 10)
+	Filmic	سينمائي
+	Reinhard	Reinhard
+	Neutral	محايد
+	Shade plot "Rendered" plots in the Realistic visual style.	الطباعة المظللة "Rendered" تطبع بالنمط المرئي الواقعي.
