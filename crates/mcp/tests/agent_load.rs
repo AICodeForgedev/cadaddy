@@ -143,6 +143,11 @@ fn events_arrive_once_in_order_and_a_batch_is_one_change() {
     assert!(seqs.windows(2).all(|w| w[0] < w[1]), "in order, no repeats: {seqs:?}");
     assert_eq!(seqs.iter().collect::<HashSet<_>>().len(), seqs.len());
     // The batch's thousand circles: one coalesced change.
+    // Its commands: one command.run, the batch's, with its count.
+    let runs: Vec<&Value> = batch.iter().filter(|e| e["type"] == "command.run").collect();
+    assert_eq!(runs.len(), 1, "{batch:?}");
+    assert_eq!(runs[0]["command"], "executeMany", "{}", runs[0]);
+    assert_eq!(runs[0]["count"].as_u64(), Some(1000), "{}", runs[0]);
     let changes: Vec<&Value> = batch.iter().filter(|e| e["type"] == "drawing.changed").collect();
     assert_eq!(changes.len(), 1, "{batch:?}");
     assert_eq!(changes[0]["counts"], json!([1000, 0, 0]), "{}", changes[0]);
@@ -163,9 +168,12 @@ fn summary_and_query_page_through_a_large_drawing_within_budgets() {
     let mut s = server();
     // What a new drawing holds already (its layouts' viewports).
     let base = tool(&mut s, "drawing_query", json!({ "limit": 1 })).unwrap()["count"].as_u64().unwrap();
-    // Built as an agent would: 10,000 commands a call, a text every 50th object.
+    // Built as an agent would: 10,000 commands a call, a text every 50th object. Each call is
+    // timed too: the wall-clock budget depends on the machine, the shape of the curve does not.
+    let mut batches: Vec<Duration> = Vec::new();
     timed(&mut report, "build", Duration::from_secs(n as u64 / 4_000 + 20), || {
         for b in 0..n / 10_000 {
+            let t = Instant::now();
             let cmds: Vec<Value> = (0..10_000)
                 .map(|i| {
                     let k = b * 10_000 + i;
@@ -178,8 +186,23 @@ fn summary_and_query_page_through_a_large_drawing_within_budgets() {
                 })
                 .collect();
             tool(&mut s, "execute_many", json!({ "commands": cmds })).unwrap();
+            batches.push(t.elapsed());
         }
     });
+    // Each batch costs about the same however large the drawing already is: a per-command pass
+    // over every object (the O(N²) build, 276 s before Q211) makes the late batches many times the
+    // early ones on any machine.
+    if batches.len() >= 6 {
+        let mut first = batches[..3].to_vec();
+        first.sort();
+        let median = first[1];
+        let slowest = batches[batches.len() - 3..].iter().max().copied().unwrap_or_default();
+        report.push(format!("batches: first three median {median:.2?}, last three slowest {slowest:.2?}"));
+        assert!(
+            slowest <= median * 3,
+            "the build slows as the drawing grows (quadratic?): last batches up to {slowest:?}, first ones {median:?}; all: {batches:?}"
+        );
+    }
     let n = n / 10_000 * 10_000;
     // The summary: capped, its texts paged.
     let sum = timed(&mut report, "drawing_summary", Duration::from_secs(5), || tool(&mut s, "drawing_summary", json!({})).unwrap());
@@ -190,8 +213,13 @@ fn summary_and_query_page_through_a_large_drawing_within_budgets() {
     let page = timed(&mut report, "drawing_summary texts, last page", Duration::from_secs(5), || {
         tool(&mut s, "drawing_summary", json!({ "sections": ["texts"], "textOffset": texts - 100, "textLimit": 5000 })).unwrap()
     });
-    let got = page.pointer("/texts/items").or_else(|| page.pointer("/texts/texts")).or_else(|| page.get("texts")).cloned().unwrap_or(Value::Null);
+    let got = &page["texts"];
     report.push(format!("texts page: {}", got.to_string().chars().take(120).collect::<String>()));
+    assert_eq!(got["count"].as_u64(), Some(texts as u64), "{}", got.to_string().chars().take(300).collect::<String>());
+    assert_eq!(got["returned"].as_u64(), Some(100), "{}", got.to_string().chars().take(300).collect::<String>());
+    let items = got["items"].as_array().expect("texts.items");
+    assert_eq!(items.len(), 100);
+    assert_eq!(items[99]["text"].as_str(), Some(format!("T{}", (texts - 1) * 50).as_str()), "{}", items[99]);
     // The query: every object counted, pages of 1,000, disjoint, the last one short.
     let first =
         timed(&mut report, "drawing_query first page", Duration::from_secs(2), || tool(&mut s, "drawing_query", json!({ "limit": 1000 })).unwrap());
