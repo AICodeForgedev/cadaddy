@@ -103,7 +103,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     let mut refs: HashMap<Handle, String> = HashMap::new();
     for s in secs.iter().filter(|s| s.name == "ENTITIES" || s.name == "BLOCKS") {
         each_record(&s.tags, |kind, tags| {
-            if !matches!(kind, "PDFUNDERLAY" | "PDFREFERENCE") {
+            if !matches!(kind, "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE") {
                 return;
             }
             let h = tags.iter().find(|t| t.code == 5).and_then(|t| Handle::parse_hex(&t.str()));
@@ -117,7 +117,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     let mut names: HashMap<String, String> = HashMap::new();
     for s in secs.iter().filter(|s| s.name == "OBJECTS") {
         each_record(&s.tags, |kind, tags| match kind {
-            "PDFDEFINITION" => {
+            "PDFDEFINITION" | "DGNDEFINITION" => {
                 let Some(h) = tags.iter().find(|t| t.code == 5).map(|t| key(&t.str())) else { return };
                 let start = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbUnderlayDefinition").unwrap_or(0);
                 let body = tags.get(start..).unwrap_or(&[]);
@@ -184,6 +184,8 @@ struct PlannedDef {
     path: String,
     page: u32,
     users: Vec<Handle>,
+    /// A DGNDEFINITION (in `ACAD_DGNDEFINITIONS`), not a PDFDEFINITION.
+    dgn: bool,
 }
 
 /// The objects behind a drawing's underlays, with handles allocated before anything is written.
@@ -194,11 +196,16 @@ pub(crate) struct Plan {
     defs: Vec<PlannedDef>,
     /// The `ACAD_PDFDEFINITIONS` dictionary.
     pub dict: String,
+    /// The `ACAD_DGNDEFINITIONS` dictionary.
+    pub dgn_dict: String,
 }
 
 impl Plan {
-    pub fn is_empty(&self) -> bool {
-        self.defs.is_empty()
+    pub fn has_pdf(&self) -> bool {
+        self.defs.iter().any(|d| !d.dgn)
+    }
+    pub fn has_dgn(&self) -> bool {
+        self.defs.iter().any(|d| d.dgn)
     }
 }
 
@@ -210,6 +217,9 @@ fn def_name(u: &Underlay) -> String {
     }
     let file = u.path.rsplit(['/', '\\']).next().unwrap_or("");
     let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file).trim();
+    if u.is_dgn() {
+        return format!("{} - Default", if stem.is_empty() { "DGN" } else { stem });
+    }
     format!("{} - {}", if stem.is_empty() { "PDF" } else { stem }, u.page.max(1))
 }
 
@@ -234,7 +244,7 @@ pub(crate) fn plan<'a>(entities: impl Iterator<Item = &'a cadaddy_doc::Entity>, 
                     name = format!("{base}_{n}");
                     n = n.saturating_add(1);
                 }
-                p.defs.push(PlannedDef { handle: next(), name, path: u.path.clone(), page: u.page.max(1), users: Vec::new() });
+                p.defs.push(PlannedDef { handle: next(), name, path: u.path.clone(), page: u.page.max(1), users: Vec::new(), dgn: u.is_dgn() });
                 let at = p.defs.len().saturating_sub(1);
                 index.insert(k, at);
                 at
@@ -245,8 +255,11 @@ pub(crate) fn plan<'a>(entities: impl Iterator<Item = &'a cadaddy_doc::Entity>, 
             p.by_entity.insert(e.handle, def.handle.clone());
         }
     }
-    if !p.defs.is_empty() {
+    if p.has_pdf() {
         p.dict = next();
+    }
+    if p.has_dgn() {
+        p.dgn_dict = next();
     }
     p
 }
@@ -278,17 +291,23 @@ pub(crate) fn entity_tags(u: &Underlay, def: &str) -> Vec<Tag> {
 /// dictionary, which lists the dictionary.
 pub(crate) fn objects(p: &Plan, root: &str) -> Vec<Tag> {
     let mut t = Vec::new();
-    if p.is_empty() {
-        return t;
-    }
-    t.extend([Tag::s(0, "DICTIONARY"), Tag::s(5, &p.dict), Tag::s(330, root), Tag::s(100, "AcDbDictionary"), Tag::i(281, 1)]);
-    for d in &p.defs {
-        t.extend([Tag::s(3, &d.name), Tag::s(350, &d.handle)]);
-    }
-    for d in &p.defs {
-        t.extend([Tag::s(0, "PDFDEFINITION"), Tag::s(5, &d.handle), Tag::s(102, "{ACAD_REACTORS")]);
-        t.extend(d.users.iter().map(|h| Tag::s(330, h.hex())));
-        t.extend([Tag::s(102, "}"), Tag::s(330, &p.dict), Tag::s(100, "AcDbUnderlayDefinition"), Tag::s(1, &d.path), Tag::s(2, d.page.to_string())]);
+    for dgn in [false, true] {
+        let dict = if dgn { &p.dgn_dict } else { &p.dict };
+        let defs: Vec<&PlannedDef> = p.defs.iter().filter(|d| d.dgn == dgn).collect();
+        if defs.is_empty() {
+            continue;
+        }
+        t.extend([Tag::s(0, "DICTIONARY"), Tag::s(5, dict), Tag::s(330, root), Tag::s(100, "AcDbDictionary"), Tag::i(281, 1)]);
+        for d in &defs {
+            t.extend([Tag::s(3, &d.name), Tag::s(350, &d.handle)]);
+        }
+        for d in defs {
+            t.extend([Tag::s(0, if dgn { "DGNDEFINITION" } else { "PDFDEFINITION" }), Tag::s(5, &d.handle), Tag::s(102, "{ACAD_REACTORS")]);
+            t.extend(d.users.iter().map(|h| Tag::s(330, h.hex())));
+            // A DGN definition names the design file's model (group 2); a PDF one the page.
+            let sheet = if dgn { "Default".to_string() } else { d.page.to_string() };
+            t.extend([Tag::s(102, "}"), Tag::s(330, dict), Tag::s(100, "AcDbUnderlayDefinition"), Tag::s(1, &d.path), Tag::s(2, sheet)]);
+        }
     }
     t
 }

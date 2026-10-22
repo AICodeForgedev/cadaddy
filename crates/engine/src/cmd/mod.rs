@@ -74,6 +74,7 @@ pub mod agentready;
 pub mod bcf;
 pub mod cobie;
 pub mod concrete;
+pub mod dgn;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
@@ -377,6 +378,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spec_import::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());
+        v.extend(dgn::specs());
         v.extend(takeoff::specs());
         v.extend(drywall::specs());
         v.extend(unittypes::specs());

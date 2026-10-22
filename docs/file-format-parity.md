@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Q152: linetype shapes kept and drawn; .lin/.pat written) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Q152: linetype shapes kept and drawn; .lin/.pat written; Q158: DGN V7 import, export and underlay) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADaddy's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -130,7 +130,7 @@ and 2000 (AC1015) files; a file cut before its objects start still can't be open
 | Raster images attach (PNG, JPEG, TIFF, BMP …) | yes | IMAGE entity exists, no attach/loading/display path | 6–10 |
 | PNG / JPEG / BMP / TIFF export | PNGOUT, JPGOUT, BMPOUT, TIFOUT | PNG; SVG too (AutoCAD doesn't export SVG) | 1–2 |
 | DWF/DWFx export, DWF underlay | yes | no | 10–15 |
-| DGN import/export/underlay | yes | no (needs a public spec; owner decision) | 25–40 |
+| DGN import/export/underlay | yes | DGN V7: DGNIMPORT, DGNEXPORT (2D) and DGNATTACH with DGNCLIP/DGNADJUST/DGNLAYERS, kept in DXF as DGNUNDERLAY (Q158, from GDAL's MIT-licensed DGN library's documented layouts); DGN V8 refused with a clear message (no public specification) | V8: blocked on a public spec |
 | WMF, EPS, ACIS SAT, STL, FBX, IGES/STEP (Windows), 3DS | various | no; most are 3D and wait for M11 | 20–40 |
 | SHX fonts (`.shx`, big fonts) | read | **not parsed**: our stroke font or FONTALT stands in, so text metrics differ from AutoCAD | 8–12 |
 | Linetype (`.lin`) and hatch pattern (`.pat`) files | load and write user files | user files load (#552) and are written by the Linetype and Hatch Pattern Editors (Q152); linetype shape elements draw from CADaddy's own `cadaddy.shx` (built in) or a shape file on the font path, and are kept in DXF and DWG | 0.5–1 |

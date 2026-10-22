@@ -7,6 +7,7 @@
 pub mod cdy;
 /// DWFx (XML Paper Specification / ECMA-388) and DWF 6 export/reading.
 pub mod dwfx;
+pub mod dgn;
 mod dwg_fixup;
 mod dwg_keep;
 pub mod dwg_native;
@@ -216,7 +217,11 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if cadaddy_dwg::is_dwg(bytes) {
         return read_dwg(bytes, dwg_engine(true));
     }
+    if dgn::is_v7(bytes) || (dgn::is_v8(bytes) && ext(name) == "dgn") {
+        return dgn::read(bytes);
+    }
     match ext(name).as_str() {
+        "dgn" => dgn::read(bytes),
         "svg" | "svgz" => svg_read::read(bytes, name),
         "pdf" => {
             let r = pdf_read::read(bytes, &pdf_read::PdfOptions::default())?;
@@ -278,6 +283,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         "cdywalk" => walkpkg::write(d),
         "stl" => Ok(mesh3d_io::write_stl(d)),
         "ifc" => ifc::write_ifc(d, name),
+        "dgn" => dgn::write(d).map(|(b, _)| b),
         "3mf" => threemf::write_3mf(d),
         // The OBJ text; its MTL and textures come from `mesh3d_io::write_obj`.
         "obj" => {
@@ -303,7 +309,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" | "ifc" | "3mf" => {
+        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" | "ifc" | "3mf" | "dgn" => {
             write_with(d, name, &SaveOptions::default())
         }
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
