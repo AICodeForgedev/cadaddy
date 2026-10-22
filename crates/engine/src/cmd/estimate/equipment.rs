@@ -170,9 +170,7 @@ fn job_line(key: &str, category: &str, item: &str, qty: f64, rule: &str, element
 /// with no equipment line.
 pub(super) fn lines(st: &Map<String, Value>, base: &Value, facts: &Facts, required: &[Value], bom: &[Priced]) -> (Vec<Priced>, Vec<Value>) {
     let days = setting(st, "duration_days", 0.0);
-    let scope_of = |key: &str| {
-        Some(st.get("scope").and_then(|m| m.get(key)).and_then(|x| x["scope"].as_str()).unwrap_or("in_contract").to_string())
-    };
+    let scope_of = |key: &str| Some(st.get("scope").and_then(|m| m.get(key)).and_then(|x| x["scope"].as_str()).unwrap_or("in_contract").to_string());
     let mut out: Vec<Priced> = Vec::new();
     for r in base["tool_rules"].as_array().into_iter().flatten() {
         let when = r["when"].as_str().unwrap_or_default();
@@ -252,7 +250,11 @@ pub(super) fn lines(st: &Map<String, Value>, base: &Value, facts: &Facts, requir
     for r in required {
         let item = r["item"].as_str().unwrap_or_default();
         let qty = r["qty"].as_f64().unwrap_or(0.0);
-        if item.is_empty() || qty <= 0.0 || r["waived"].is_string() || out.iter().any(|x| x.line["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item))) {
+        if item.is_empty()
+            || qty <= 0.0
+            || r["waived"].is_string()
+            || out.iter().any(|x| x.line["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)))
+        {
             continue;
         }
         let key = format!("job|required|{item}|");
@@ -288,7 +290,8 @@ pub(super) fn lines(st: &Map<String, Value>, base: &Value, facts: &Facts, requir
     let priced_has = |kw: &str| {
         out.iter().chain(bom).any(|p| p.material_unit.is_some() && p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains(kw)))
     };
-    let flagged = |kw: &str| out.iter().any(|p| p.material_unit.is_none() && p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains(kw)));
+    let flagged =
+        |kw: &str| out.iter().any(|p| p.material_unit.is_none() && p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains(kw)));
     for (fact, kw, why) in IMPLIED {
         let v = facts.values.get(fact).copied().unwrap_or(0.0);
         if v > 0.0 && !priced_has(kw) && !flagged(kw) {
