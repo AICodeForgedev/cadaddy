@@ -1707,6 +1707,15 @@ impl Reader<'_> {
                 _ => {}
             }
         }
+        // The file's records come in hash order: sets by their record number, systems by name,
+        // so the same file always reads the same.
+        for v in r.sets.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+        }
+        for v in r.systems.values_mut() {
+            v.sort();
+        }
         r
     }
 
@@ -1829,7 +1838,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 40] = [
+    const KNOWN: &[&str] = &[
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -1870,6 +1879,67 @@ fn class_name(upper: &str) -> String {
         "Boiler",
         "Condenser",
         "FlowMeter",
+        // IFC4's other products, as the schema spells them (COBie types and schedules show them).
+        "SanitaryTerminal",
+        "WasteTerminal",
+        "StackTerminal",
+        "LightFixture",
+        "Lamp",
+        "Furniture",
+        "SystemFurnitureElement",
+        "ElectricAppliance",
+        "ElectricDistributionBoard",
+        "ElectricMotor",
+        "ElectricGenerator",
+        "ElectricFlowStorageDevice",
+        "ElectricTimeControl",
+        "Outlet",
+        "SwitchingDevice",
+        "ProtectiveDevice",
+        "ProtectiveDeviceTrippingUnit",
+        "Transformer",
+        "CableSegment",
+        "CableFitting",
+        "JunctionBox",
+        "AudioVisualAppliance",
+        "CommunicationsAppliance",
+        "Alarm",
+        "Sensor",
+        "Actuator",
+        "Controller",
+        "UnitaryControlElement",
+        "FlowInstrument",
+        "Valve",
+        "Damper",
+        "Tank",
+        "Chiller",
+        "CoolingTower",
+        "Coil",
+        "Compressor",
+        "HeatExchanger",
+        "Humidifier",
+        "EvaporativeCooler",
+        "Evaporator",
+        "Filter",
+        "Interceptor",
+        "SpaceHeater",
+        "Burner",
+        "Engine",
+        "MedicalDevice",
+        "AirToAirHeatRecovery",
+        "DuctSilencer",
+        "FlowController",
+        "FlowFitting",
+        "FlowMovingDevice",
+        "FlowStorageDevice",
+        "FlowTreatmentDevice",
+        "EnergyConversionDevice",
+        "DistributionChamberElement",
+        "ShadingDevice",
+        "Chimney",
+        "BuildingElementPart",
+        "TransportElement",
+        "VirtualElement",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(

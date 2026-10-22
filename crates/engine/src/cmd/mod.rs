@@ -59,6 +59,7 @@ pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub mod bcf;
+pub mod cobie;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
@@ -295,6 +296,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(ifcref::specs());
         v.extend(ifcmodel::specs());
         v.extend(bcf::specs());
+        v.extend(cobie::specs());
         v.extend(printset::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());

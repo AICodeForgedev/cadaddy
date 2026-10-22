@@ -26,6 +26,8 @@ const DIALOG_OR_STATE: &[&str] = &[
     "ifc.open",
     "bcf.import",
     "bcf.export",
+    "cobie.export",
+    "handover.schedules",
     "markupimport",
     "redline.import",
     "adcenter",

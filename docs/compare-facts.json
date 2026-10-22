@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 816,
-    "count": 816,
+    "callableAsJson": 819,
+    "count": 819,
     "ids": [
       "-attedit",
       "-block",
@@ -154,6 +154,8 @@
       "circle.ttt",
       "close",
       "closeall",
+      "cobie.export",
+      "cobie.validate",
       "color",
       "colorbook",
       "commandhistory",
@@ -329,6 +331,7 @@
       "group",
       "groupedit",
       "groups.list",
+      "handover.schedules",
       "hatch",
       "hatch.patterns",
       "hatchedit",
@@ -820,7 +823,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 467,
+    "inMenus": 469,
     "typed": 496
   },
   "features": {

@@ -614,12 +614,22 @@ impl Workbook {
 
 /// A one-sheet workbook holding `rows` (numbers as numbers, the rest as text).
 pub fn write(rows: &[Vec<String>], sheet: &str) -> Result<Vec<u8>, String> {
-    let sheet = xml_escape(if sheet.trim().is_empty() { "Sheet1" } else { sheet.trim() });
+    write_sheets(&[(sheet.to_string(), rows.to_vec())])
+}
+
+/// One worksheet's XML: `rows` with numbers as numbers and the rest as text; the first row bold
+/// and frozen when `header`.
+fn sheet_xml(rows: &[Vec<String>], header: bool) -> String {
     let mut data = String::from(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
     );
+    if header && !rows.is_empty() {
+        data.push_str(r#"<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>"#);
+    }
+    data.push_str("<sheetData>");
     for (r, row) in rows.iter().enumerate() {
         data.push_str(&format!(r#"<row r="{}">"#, r + 1));
+        let style = if header && r == 0 { r#" s="1""# } else { "" };
         for (c, v) in row.iter().enumerate() {
             if v.is_empty() {
                 continue;
@@ -628,22 +638,68 @@ pub fn write(rows: &[Vec<String>], sheet: &str) -> Result<Vec<u8>, String> {
             // A number stays a number when Excel would show it the same way; text that only looks
             // like one ("99.00", leading zeros, spaces, +) stays text, as the table shows it.
             let numeric = v.parse::<f64>().is_ok_and(|n| n.is_finite() && format_number(n, "General") == *v);
-            if numeric {
+            if numeric && style.is_empty() {
                 data.push_str(&format!(r#"<c r="{at}"><v>{v}</v></c>"#));
             } else {
-                data.push_str(&format!(r#"<c r="{at}" t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, xml_escape(v)));
+                data.push_str(&format!(r#"<c r="{at}"{style} t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, xml_escape(v)));
             }
         }
         data.push_str("</row>");
     }
     data.push_str("</sheetData></worksheet>");
-    let parts: Vec<(String, Vec<u8>)> = vec![
-        ("[Content_Types].xml".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#.into()),
+    data
+}
+
+/// A workbook of named sheets, each `rows` as they are ([`write_sheets_with_headers`] styles the
+/// first rows as headers).
+pub fn write_sheets(sheets: &[(String, Vec<Vec<String>>)]) -> Result<Vec<u8>, String> {
+    write_book(sheets, false)
+}
+
+/// As [`write_sheets`], every sheet's first row a bold header, frozen in view.
+pub fn write_sheets_with_headers(sheets: &[(String, Vec<Vec<String>>)]) -> Result<Vec<u8>, String> {
+    write_book(sheets, true)
+}
+
+fn write_book(sheets: &[(String, Vec<Vec<String>>)], header: bool) -> Result<Vec<u8>, String> {
+    if sheets.is_empty() {
+        return Err("a workbook needs a sheet".into());
+    }
+    // Sheet names: Excel's rules (31 characters, none of []:*?/\, unique).
+    let mut names: Vec<String> = Vec::new();
+    for (n, _) in sheets {
+        let mut base: String = n.trim().chars().filter(|c| !matches!(c, '[' | ']' | ':' | '*' | '?' | '/' | '\\')).take(31).collect();
+        if base.is_empty() {
+            base = format!("Sheet{}", names.len() + 1);
+        }
+        let mut name = base.clone();
+        let mut k = 2;
+        while names.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+            name = format!("{}({k})", base.chars().take(27).collect::<String>());
+            k += 1;
+        }
+        names.push(name);
+    }
+    let overrides: String = (1..=sheets.len())
+        .map(|i| format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#))
+        .collect();
+    let sheet_list: String =
+        names.iter().enumerate().map(|(i, n)| format!(r#"<sheet name="{}" sheetId="{}" r:id="rId{}"/>"#, xml_escape(n), i + 1, i + 1)).collect();
+    let rels: String = (1..=sheets.len())
+        .map(|i| format!(r#"<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>"#))
+        .collect();
+    let styles_rel = sheets.len() + 1;
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        ("[Content_Types].xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>{overrides}</Types>"#).into_bytes()),
         ("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into()),
-        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{sheet}" sheetId="1" r:id="rId1"/></sheets></workbook>"#).into_bytes()),
-        ("xl/_rels/workbook.xml.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#.into()),
-        ("xl/worksheets/sheet1.xml".into(), data.into_bytes()),
+        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheet_list}</sheets></workbook>"#).into_bytes()),
+        ("xl/_rels/workbook.xml.rels".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}<Relationship Id="rId{styles_rel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#).into_bytes()),
+        // Two cell formats: plain, and bold (headers).
+        ("xl/styles.xml".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>"#.into()),
     ];
+    for (i, (_, rows)) in sheets.iter().enumerate() {
+        parts.push((format!("xl/worksheets/sheet{}.xml", i + 1), sheet_xml(rows, header).into_bytes()));
+    }
     zip::write(&parts)
 }
 
@@ -663,6 +719,20 @@ mod tests {
         assert_eq!(cell_ref("1A"), None);
         assert_eq!(col_name(27), "AB");
         assert!(parse_xml("<a><b></a>").is_some(), "unbalanced input still reads");
+    }
+
+    #[test]
+    fn workbooks_of_several_sheets_read_back() {
+        let a = vec![vec!["Name".to_string(), "Count".into()], vec!["Door".into(), "3".into()]];
+        let b = vec![vec!["X".to_string()], vec!["a < b & c".into()]];
+        let bytes = write_sheets_with_headers(&[("Doors".into(), a.clone()), ("Doors".into(), b.clone()), ("bad/name*".into(), vec![])]).unwrap();
+        let wb = open(&bytes).unwrap();
+        assert_eq!(wb.sheets.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["Doors", "Doors(2)", "badname"]);
+        assert_eq!(wb.cells(Some("Doors"), None).unwrap(), a);
+        assert_eq!(wb.cells(Some("Doors(2)"), None).unwrap(), b);
+        assert!(write_sheets(&[]).is_err());
+        // The one-sheet form still writes what it did.
+        assert_eq!(open(&write(&a, "T").unwrap()).unwrap().cells(None, None).unwrap(), a);
     }
 
     #[test]
