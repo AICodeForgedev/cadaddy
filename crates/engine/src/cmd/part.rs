@@ -785,13 +785,30 @@ fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
     if ps.parts.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
         return Err(bad(cmd, format!("there is already a part named {name}")));
     }
-    ps.parts.push(Part { name: name.clone(), ..Part::default() });
-    store(s, &ps)?;
-    if let Some(params) = p.get("parameters").and_then(Value::as_object) {
+    // Its parameters all together, in any order (`depth: "2*thick"` beside `thick`), and all or
+    // nothing: every one must evaluate before the part is stored, so a refused set leaves no
+    // half-made part in the way of a retry.
+    let mut part = Part { name: name.clone(), ..Part::default() };
+    if let Some(params) = p.get("parameters").filter(|v| !v.is_null()) {
+        let params = params.as_object().ok_or_else(|| bad(cmd, "`parameters` is {name: number or expression}"))?;
+        if params.len() > MAX_PARAMETERS {
+            return Err(bad(cmd, "too many parameters"));
+        }
         for (k, v) in params {
-            run_parameter(s, &json!({"part": name, "name": k, "expr": v}))?;
+            let k = k.trim();
+            if !cadaddy_constraints::expr::valid_name(k) {
+                return Err(bad(cmd, format!("parameter `{k}`: a name is a letter, then letters, digits or _")));
+            }
+            let expr = expr_param(cmd, &json!({ "expr": v }), "expr", None)?;
+            part.parameters.push(Param { name: k.to_string(), expr });
+        }
+        let mut e = env(&part);
+        if let Some(err) = part.parameters.iter().find_map(|x| e.value(&x.name).err().map(|er| format!("{}: {er}", x.name))) {
+            return Err(bad(cmd, err));
         }
     }
+    ps.parts.push(part);
+    store(s, &ps)?;
     Ok(json!({"part": name}))
 }
 
