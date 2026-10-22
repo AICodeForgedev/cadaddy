@@ -59,8 +59,11 @@ const KNOWN: &[&str] = &[
     "IMAGEDEF",
     "IMAGEDEF_REACTOR",
     "MLEADERSTYLE",
-    // Not here (stashed, `ek::object` returns None): TABLESTYLE, SORTENTSTABLE, MATERIAL,
-    // VISUALSTYLE and FIELD, until each is proven against an independent reader both ways.
+    // Read side proven against tables another program wrote (tests/records.rs
+    // a_draw_order_table_written_by_another_program_decodes); its encoder stays on the stash path.
+    "SORTENTSTABLE",
+    // Not here (stashed, `ek::object` returns None): TABLESTYLE, MATERIAL, VISUALSTYLE and FIELD,
+    // until each is proven against an independent reader both ways.
 ];
 
 /// The DXF name of a fixed object type that is a table record or object this module decodes.
@@ -183,8 +186,8 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.s(100, "AcDbRasterImageDefReactor");
             g.i(90, i64::from(version));
         }
-        // Not in KNOWN yet (their layouts are unproven against another reader); a failure is an
-        // error like any other type's once they are.
+        // SORTENTSTABLE is in KNOWN; the other three are not yet (their layouts are unproven
+        // against another reader). A failure is an error like any other type's.
         "SORTENTSTABLE" => decode_sortentstable(&mut o, &mut g)?,
         "MATERIAL" => decode_material(&mut o, &mut g)?,
         "VISUALSTYLE" => decode_visualstyle(&mut o, &mut g)?,
