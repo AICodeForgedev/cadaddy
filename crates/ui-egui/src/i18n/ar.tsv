@@ -2696,3 +2696,90 @@ menu	View	عرض
 	Coordination Mode	وضع التنسيق
 	Coordination Views	عروض التنسيق
 	Isolate Trade	عزل التخصص
+	Project Briefing	ملخص المشروع
+	Project Note	ملاحظة المشروع
+	Review Queue	قائمة المراجعة
+	Next Review Item	عنصر المراجعة التالي
+	Resolve Review Item	حل عنصر المراجعة
+	Defer Review Item	تأجيل عنصر المراجعة
+	Draft RFI	مسودة طلب معلومات
+	Batch Resolve	حل جماعي
+	Approve Agent Work	اعتماد عمل الوكيل
+	Agent Work	عمل الوكلاء
+	Build BIM Model	بناء نموذج BIM
+	to accept	بانتظار القبول
+	Accept all	قبول الكل
+	Accept	قبول
+	Cited:	المرجع:
+	Nothing waiting: agents' work is all accepted.	لا شيء بانتظار القبول: تم قبول كل عمل الوكلاء.
+	Read Levels	قراءة المستويات
+	List Levels	سرد المستويات
+	Edit Level	تحرير المستوى
+	Attach Sheets to Levels	ربط الألواح بالمستويات
+	Check Shafts Through Levels	فحص الفتحات الرأسية عبر المستويات
+	Isolate Level	عزل المستوى
+	Read from Prints	قراءة من المخططات
+	Level names and elevations from the sections, elevations and level markers	أسماء المستويات ومناسيبها من المقاطع والواجهات وعلامات المستويات
+	Attach Sheets	ربط الألواح
+	Check Shafts	فحص الفتحات الرأسية
+	Shafts, chases and risers must carry on through the levels between their ends	يجب أن تستمر الفتحات الرأسية والمجاري والصواعد عبر المستويات بين طرفيها
+	No levels in the building spec.	لا توجد مستويات في مواصفات المبنى.
+	Level	المستوى
+	Floor to floor	من طابق إلى طابق
+	Sheets	الألواح
+	Show only this storey in 3D	إظهار هذا الطابق فقط ثلاثي الأبعاد
+	Datums (no plan on this drawing):	مناسيب مرجعية (بلا مسقط في هذا الرسم):
+	Sheets on no level:	ألواح بلا مستوى:
+	Show All Levels	إظهار كل المستويات
+	The levels already match the prints.	المستويات تطابق المخططات بالفعل.
+	{sheets} sheets, {loose} on no level	{sheets} لوحًا، {loose} بلا مستوى
+	{name}: not shown on {levels}	{name}: غير ظاهر في {levels}
+	Every shaft and riser carries on through its levels.	كل فتحة رأسية وصاعد يستمر عبر مستوياته.
+	Not a height: {text}	ليس ارتفاعًا: {text}
+	Open IFC Model	فتح نموذج IFC
+	Open IFC Model...	فتح نموذج IFC...
+	IFC Model	نموذج IFC
+	IFC Model Tree	شجرة نموذج IFC
+	IFC Object Properties	خصائص كائن IFC
+	Filter IFC Objects	تصفية كائنات IFC
+	IFC Section Box	صندوق المقطع IFC
+	Measure in 3D	القياس ثلاثي الأبعاد
+	IFC Camera	كاميرا IFC
+	Render IFC Model	تصيير نموذج IFC
+	New BCF Issue	مشكلة BCF جديدة
+	BCF Issues	مشكلات BCF
+	BCF Issues...	مشكلات BCF...
+	BCF Issue	مشكلة BCF
+	Update BCF Issue	تحديث مشكلة BCF
+	Show BCF Issue	عرض مشكلة BCF
+	Delete BCF Issue	حذف مشكلة BCF
+	Import BCF	استيراد BCF
+	Export BCF...	تصدير BCF...
+	Import BCF...	استيراد BCF...
+	Model tree	شجرة النموذج
+	Section box and measure	صندوق المقطع والقياس
+	Class	الفئة
+	Storey	الطابق
+	Space	الفراغ
+	Systems	الأنظمة
+	System	النظام
+	Box the selection	تحديد صندوق للمحدد
+	Section box off	إيقاف صندوق المقطع
+	Measure the two selected	قياس العنصرين المحددين
+	In Progress	قيد التنفيذ
+	Resolved	تم الحل
+	Add a comment	إضافة تعليق
+	New issue from this view	مشكلة جديدة من هذا العرض
+	Comment	تعليق
+	Assign to	تعيين إلى
+	Create Issue	إنشاء مشكلة
+	Select one object to see its properties.	حدد كائنًا واحدًا لعرض خصائصه.
+	No IFC model is open: File ▸ Open IFC Model...	لا يوجد نموذج IFC مفتوح: ملف ▸ فتح نموذج IFC...
+	More objects: filter to find them	كائنات أخرى: استخدم التصفية للعثور عليها
+	Between centres:	بين المركزين:
+	gap	الفجوة
+	{n} objects	{n} كائنات
+	BCF issues ({n})	مشكلات BCF ({n})
+	Issue #{n} created	تم إنشاء المشكلة رقم {n}
+	BCF: {added} added, {updated} updated	BCF: أُضيف {added}، وحُدّث {updated}
+	{n} of its objects aren't in this model	{n} من كائناته غير موجودة في هذا النموذج

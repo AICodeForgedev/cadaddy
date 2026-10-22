@@ -2700,3 +2700,90 @@ menu	Modify	Edita
 	Coordination Mode	Modalità coordinamento
 	Coordination Views	Viste di coordinamento
 	Isolate Trade	Isola disciplina
+	Project Briefing	Sintesi del progetto
+	Project Note	Nota di progetto
+	Review Queue	Coda di revisione
+	Next Review Item	Elemento successivo da rivedere
+	Resolve Review Item	Risolvi elemento di revisione
+	Defer Review Item	Rinvia elemento di revisione
+	Draft RFI	Bozza RFI
+	Batch Resolve	Risolvi in blocco
+	Approve Agent Work	Approva il lavoro dell'agente
+	Agent Work	Lavoro degli agenti
+	Build BIM Model	Genera modello BIM
+	to accept	da accettare
+	Accept all	Accetta tutto
+	Accept	Accetta
+	Cited:	Fonte:
+	Nothing waiting: agents' work is all accepted.	Niente in attesa: tutto il lavoro degli agenti è accettato.
+	Read Levels	Leggi livelli
+	List Levels	Elenca livelli
+	Edit Level	Modifica livello
+	Attach Sheets to Levels	Associa tavole ai livelli
+	Check Shafts Through Levels	Verifica cavedi tra i livelli
+	Isolate Level	Isola livello
+	Read from Prints	Leggi dalle tavole
+	Level names and elevations from the sections, elevations and level markers	Nomi e quote dei livelli da sezioni, prospetti e indicatori di livello
+	Attach Sheets	Associa tavole
+	Check Shafts	Verifica cavedi
+	Shafts, chases and risers must carry on through the levels between their ends	Cavedi, tracce e colonne montanti devono proseguire attraverso i livelli tra le loro estremità
+	No levels in the building spec.	Nessun livello nella specifica dell'edificio.
+	Level	Livello
+	Floor to floor	Interpiano
+	Sheets	Tavole
+	Show only this storey in 3D	Mostra solo questo piano in 3D
+	Datums (no plan on this drawing):	Quote di riferimento (senza pianta in questo disegno):
+	Sheets on no level:	Tavole senza livello:
+	Show All Levels	Mostra tutti i livelli
+	The levels already match the prints.	I livelli corrispondono già alle tavole.
+	{sheets} sheets, {loose} on no level	{sheets} tavole, {loose} senza livello
+	{name}: not shown on {levels}	{name}: non presente su {levels}
+	Every shaft and riser carries on through its levels.	Ogni cavedio e colonna montante prosegue attraverso i suoi livelli.
+	Not a height: {text}	Non è un'altezza: {text}
+	Open IFC Model	Apri modello IFC
+	Open IFC Model...	Apri modello IFC...
+	IFC Model	Modello IFC
+	IFC Model Tree	Albero del modello IFC
+	IFC Object Properties	Proprietà dell'oggetto IFC
+	Filter IFC Objects	Filtra oggetti IFC
+	IFC Section Box	Box di sezione IFC
+	Measure in 3D	Misura in 3D
+	IFC Camera	Telecamera IFC
+	Render IFC Model	Rendering del modello IFC
+	New BCF Issue	Nuova segnalazione BCF
+	BCF Issues	Segnalazioni BCF
+	BCF Issues...	Segnalazioni BCF...
+	BCF Issue	Segnalazione BCF
+	Update BCF Issue	Aggiorna segnalazione BCF
+	Show BCF Issue	Mostra segnalazione BCF
+	Delete BCF Issue	Elimina segnalazione BCF
+	Import BCF	Importa BCF
+	Export BCF...	Esporta BCF...
+	Import BCF...	Importa BCF...
+	Model tree	Albero del modello
+	Section box and measure	Box di sezione e misura
+	Class	Classe
+	Storey	Piano
+	Space	Spazio
+	Systems	Sistemi
+	System	Sistema
+	Box the selection	Box sulla selezione
+	Section box off	Disattiva box di sezione
+	Measure the two selected	Misura i due selezionati
+	In Progress	In corso
+	Resolved	Risolta
+	Add a comment	Aggiungi un commento
+	New issue from this view	Nuova segnalazione da questa vista
+	Comment	Commento
+	Assign to	Assegna a
+	Create Issue	Crea segnalazione
+	Select one object to see its properties.	Seleziona un oggetto per vederne le proprietà.
+	No IFC model is open: File ▸ Open IFC Model...	Nessun modello IFC aperto: File ▸ Apri modello IFC...
+	More objects: filter to find them	Altri oggetti: filtra per trovarli
+	Between centres:	Tra i centri:
+	gap	distanza
+	{n} objects	{n} oggetti
+	BCF issues ({n})	Segnalazioni BCF ({n})
+	Issue #{n} created	Segnalazione n. {n} creata
+	BCF: {added} added, {updated} updated	BCF: {added} aggiunte, {updated} aggiornate
+	{n} of its objects aren't in this model	{n} dei suoi oggetti non sono in questo modello

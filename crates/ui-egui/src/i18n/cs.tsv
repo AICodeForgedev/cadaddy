@@ -2681,3 +2681,90 @@ menu	Modify	Modifikace
 	Coordination Mode	Režim koordinace
 	Coordination Views	Koordinační pohledy
 	Isolate Trade	Izolovat profesi
+	Project Briefing	Přehled projektu
+	Project Note	Poznámka projektu
+	Review Queue	Fronta kontroly
+	Next Review Item	Další položka ke kontrole
+	Resolve Review Item	Vyřešit položku kontroly
+	Defer Review Item	Odložit položku kontroly
+	Draft RFI	Návrh RFI
+	Batch Resolve	Hromadně vyřešit
+	Approve Agent Work	Schválit práci agenta
+	Agent Work	Práce agentů
+	Build BIM Model	Sestavit model BIM
+	to accept	ke schválení
+	Accept all	Přijmout vše
+	Accept	Přijmout
+	Cited:	Zdroj:
+	Nothing waiting: agents' work is all accepted.	Nic nečeká: veškerá práce agentů je přijata.
+	Read Levels	Načíst podlaží
+	List Levels	Seznam podlaží
+	Edit Level	Upravit podlaží
+	Attach Sheets to Levels	Přiřadit výkresy k podlažím
+	Check Shafts Through Levels	Zkontrolovat šachty přes podlaží
+	Isolate Level	Izolovat podlaží
+	Read from Prints	Načíst z výkresů
+	Level names and elevations from the sections, elevations and level markers	Názvy a výšky podlaží z řezů, pohledů a výškových značek
+	Attach Sheets	Přiřadit výkresy
+	Check Shafts	Zkontrolovat šachty
+	Shafts, chases and risers must carry on through the levels between their ends	Šachty, drážky a stoupačky musí pokračovat přes podlaží mezi svými konci
+	No levels in the building spec.	Specifikace budovy nemá žádná podlaží.
+	Level	Podlaží
+	Floor to floor	Konstrukční výška
+	Sheets	Výkresy
+	Show only this storey in 3D	Zobrazit ve 3D jen toto podlaží
+	Datums (no plan on this drawing):	Výškové úrovně (bez půdorysu v tomto výkresu):
+	Sheets on no level:	Výkresy bez podlaží:
+	Show All Levels	Zobrazit všechna podlaží
+	The levels already match the prints.	Podlaží už odpovídají výkresům.
+	{sheets} sheets, {loose} on no level	Výkresů: {sheets}, bez podlaží: {loose}
+	{name}: not shown on {levels}	{name}: chybí na {levels}
+	Every shaft and riser carries on through its levels.	Každá šachta a stoupačka prochází svými podlažími.
+	Not a height: {text}	Není výška: {text}
+	Open IFC Model	Otevřít model IFC
+	Open IFC Model...	Otevřít model IFC...
+	IFC Model	Model IFC
+	IFC Model Tree	Strom modelu IFC
+	IFC Object Properties	Vlastnosti objektu IFC
+	Filter IFC Objects	Filtrovat objekty IFC
+	IFC Section Box	Řezný kvádr IFC
+	Measure in 3D	Měřit ve 3D
+	IFC Camera	Kamera IFC
+	Render IFC Model	Vykreslit model IFC
+	New BCF Issue	Nová připomínka BCF
+	BCF Issues	Připomínky BCF
+	BCF Issues...	Připomínky BCF...
+	BCF Issue	Připomínka BCF
+	Update BCF Issue	Aktualizovat připomínku BCF
+	Show BCF Issue	Zobrazit připomínku BCF
+	Delete BCF Issue	Odstranit připomínku BCF
+	Import BCF	Importovat BCF
+	Export BCF...	Exportovat BCF...
+	Import BCF...	Importovat BCF...
+	Model tree	Strom modelu
+	Section box and measure	Řezný kvádr a měření
+	Class	Třída
+	Storey	Podlaží
+	Space	Prostor
+	Systems	Systémy
+	System	Systém
+	Box the selection	Ohraničit výběr
+	Section box off	Vypnout řezný kvádr
+	Measure the two selected	Změřit dva vybrané
+	In Progress	Probíhá
+	Resolved	Vyřešená
+	Add a comment	Přidat komentář
+	New issue from this view	Nová připomínka z tohoto pohledu
+	Comment	Komentář
+	Assign to	Přiřadit
+	Create Issue	Vytvořit připomínku
+	Select one object to see its properties.	Vyberte jeden objekt a zobrazí se jeho vlastnosti.
+	No IFC model is open: File ▸ Open IFC Model...	Není otevřen žádný model IFC: Soubor ▸ Otevřít model IFC...
+	More objects: filter to find them	Další objekty: najdete je filtrem
+	Between centres:	Mezi středy:
+	gap	mezera
+	{n} objects	{n} objektů
+	BCF issues ({n})	Připomínky BCF ({n})
+	Issue #{n} created	Připomínka č. {n} vytvořena
+	BCF: {added} added, {updated} updated	BCF: přidáno {added}, aktualizováno {updated}
+	{n} of its objects aren't in this model	{n} jeho objektů v tomto modelu není

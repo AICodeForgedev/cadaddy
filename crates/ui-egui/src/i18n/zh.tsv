@@ -2584,3 +2584,91 @@
 	Coordination Mode	协调模式
 	Coordination Views	协调视图
 	Isolate Trade	隔离专业
+	Project Briefing	项目简报
+	Project Note	项目备注
+	Review Queue	审核队列
+	Next Review Item	下一个审核项
+	Resolve Review Item	解决审核项
+	Defer Review Item	推迟审核项
+	Draft RFI	起草 RFI
+	Batch Resolve	批量解决
+	Approve Agent Work	批准代理的工作
+	Agent Work	代理工作
+	Build BIM Model	生成 BIM 模型
+	to accept	待接受
+	Accept all	全部接受
+	Accept	接受
+	Cited:	依据：
+	Nothing waiting: agents' work is all accepted.	没有待处理项：代理的工作已全部接受。
+	Read Levels	读取标高
+	List Levels	列出标高
+	Edit Level	编辑标高
+	Attach Sheets to Levels	将图纸关联到标高
+	Check Shafts Through Levels	检查竖井贯通各标高
+	Isolate Level	隔离标高
+	Read from Prints	从图纸读取
+	Level names and elevations from the sections, elevations and level markers	从剖面、立面和标高符号读取标高名称和高程
+	Attach Sheets	关联图纸
+	Check Shafts	检查竖井
+	Shafts, chases and risers must carry on through the levels between their ends	竖井、管槽和立管必须贯通其两端之间的各标高
+	No levels in the building spec.	建筑规格中没有标高。
+	Level	标高
+	Floor to floor	层高
+	Sheets	图纸
+	Show only this storey in 3D	在三维中仅显示此楼层
+	Datums (no plan on this drawing):	基准标高（本图中无平面）：
+	Sheets on no level:	无标高的图纸：
+	Show All Levels	显示所有标高
+	The levels already match the prints.	标高已与图纸一致。
+	{sheets} sheets, {loose} on no level	{sheets} 张图纸，{loose} 张无标高
+	{name}: not shown on {levels}	{name}：{levels} 上未显示
+	Every shaft and riser carries on through its levels.	每个竖井和立管都贯通其各标高。
+	Not a height: {text}	不是高度：{text}
+	Open IFC Model	打开 IFC 模型
+	Open IFC Model...	打开 IFC 模型...
+	IFC Model	IFC 模型
+	IFC Model Tree	IFC 模型树
+	IFC Object Properties	IFC 对象特性
+	Filter IFC Objects	筛选 IFC 对象
+	IFC Section Box	IFC 剖切框
+	Measure in 3D	三维测量
+	IFC Camera	IFC 相机
+	Render IFC Model	渲染 IFC 模型
+	New BCF Issue	新建 BCF 问题
+	BCF Issues	BCF 问题
+	BCF Issues...	BCF 问题...
+	BCF Issue	BCF 问题
+	Update BCF Issue	更新 BCF 问题
+	Show BCF Issue	显示 BCF 问题
+	Delete BCF Issue	删除 BCF 问题
+	Import BCF	导入 BCF
+	Export BCF...	导出 BCF...
+	Import BCF...	导入 BCF...
+	Model tree	模型树
+	Section box and measure	剖切框和测量
+	Class	类
+	Storey	楼层
+	Space	空间
+	Systems	系统
+	System	系统
+	Box the selection	框住所选对象
+	Section box off	关闭剖切框
+	Measure the two selected	测量所选的两个
+	Open	打开
+	In Progress	进行中
+	Resolved	已解决
+	Add a comment	添加注释
+	New issue from this view	从此视图新建问题
+	Comment	注释
+	Assign to	分配给
+	Create Issue	创建问题
+	Select one object to see its properties.	选择一个对象以查看其特性。
+	No IFC model is open: File ▸ Open IFC Model...	未打开 IFC 模型：文件 ▸ 打开 IFC 模型...
+	More objects: filter to find them	更多对象：使用筛选查找
+	Between centres:	中心距：
+	gap	间隙
+	{n} objects	{n} 个对象
+	BCF issues ({n})	BCF 问题 ({n})
+	Issue #{n} created	已创建问题 #{n}
+	BCF: {added} added, {updated} updated	BCF：新增 {added}，更新 {updated}
+	{n} of its objects aren't in this model	其中 {n} 个对象不在此模型中

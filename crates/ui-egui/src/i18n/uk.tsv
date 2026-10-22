@@ -2802,3 +2802,27 @@
 	Show BCF Issue	Показати зауваження BCF
 	Delete BCF Issue	Видалити зауваження BCF
 	Import BCF	Імпортувати BCF
+	Read Levels	Прочитати рівні
+	List Levels	Список рівнів
+	Edit Level	Змінити рівень
+	Attach Sheets to Levels	Прив'язати аркуші до рівнів
+	Check Shafts Through Levels	Перевірити шахти через рівні
+	Isolate Level	Ізолювати рівень
+	Read from Prints	Прочитати з креслень
+	Level names and elevations from the sections, elevations and level markers	Назви та позначки рівнів із розрізів, фасадів і висотних позначок
+	Attach Sheets	Прив'язати аркуші
+	Check Shafts	Перевірити шахти
+	Shafts, chases and risers must carry on through the levels between their ends	Шахти, штроби та стояки мають проходити через рівні між своїми кінцями
+	No levels in the building spec.	У специфікації будівлі немає рівнів.
+	Level	Рівень
+	Floor to floor	Висота поверху
+	Sheets	Аркуші
+	Show only this storey in 3D	Показати у 3D лише цей поверх
+	Datums (no plan on this drawing):	Позначки (немає плану в цьому кресленні):
+	Sheets on no level:	Аркуші без рівня:
+	Show All Levels	Показати всі рівні
+	The levels already match the prints.	Рівні вже збігаються з кресленнями.
+	{sheets} sheets, {loose} on no level	Аркушів: {sheets}, без рівня: {loose}
+	{name}: not shown on {levels}	{name}: немає на {levels}
+	Every shaft and riser carries on through its levels.	Кожна шахта і стояк проходить через свої рівні.
+	Not a height: {text}	Не висота: {text}

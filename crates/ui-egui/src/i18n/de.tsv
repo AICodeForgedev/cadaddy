@@ -2517,3 +2517,91 @@
 	Coordination Mode	Koordinationsmodus
 	Coordination Views	Koordinationsansichten
 	Isolate Trade	Gewerk isolieren
+	Project Briefing	Projektübersicht
+	Project Note	Projektnotiz
+	Review Queue	Prüfwarteschlange
+	Next Review Item	Nächster Prüfpunkt
+	Resolve Review Item	Prüfpunkt klären
+	Defer Review Item	Prüfpunkt zurückstellen
+	Draft RFI	RFI-Entwurf
+	Batch Resolve	Gesammelt klären
+	Approve Agent Work	Agentenarbeit freigeben
+	Agent Work	Agentenarbeit
+	Build BIM Model	BIM-Modell erstellen
+	to accept	zu bestätigen
+	Accept all	Alle annehmen
+	Accept	Annehmen
+	Cited:	Beleg:
+	Nothing waiting: agents' work is all accepted.	Nichts offen: Die Arbeit der Agenten ist vollständig angenommen.
+	Read Levels	Geschosse lesen
+	List Levels	Geschosse auflisten
+	Edit Level	Geschoss bearbeiten
+	Attach Sheets to Levels	Blätter Geschossen zuordnen
+	Check Shafts Through Levels	Schächte über Geschosse prüfen
+	Isolate Level	Geschoss isolieren
+	Read from Prints	Aus Plänen lesen
+	Level names and elevations from the sections, elevations and level markers	Geschossnamen und Höhen aus Schnitten, Ansichten und Höhenmarken
+	Attach Sheets	Blätter zuordnen
+	Check Shafts	Schächte prüfen
+	Shafts, chases and risers must carry on through the levels between their ends	Schächte, Schlitze und Steigleitungen müssen durch die Geschosse zwischen ihren Enden durchgehen
+	No levels in the building spec.	Keine Geschosse in der Gebäudespezifikation.
+	Level	Geschoss
+	Floor to floor	Geschosshöhe
+	Sheets	Blätter
+	Show only this storey in 3D	Nur dieses Geschoss in 3D zeigen
+	Datums (no plan on this drawing):	Bezugshöhen (kein Grundriss in dieser Zeichnung):
+	Sheets on no level:	Blätter ohne Geschoss:
+	Show All Levels	Alle Geschosse zeigen
+	The levels already match the prints.	Die Geschosse stimmen bereits mit den Plänen überein.
+	{sheets} sheets, {loose} on no level	{sheets} Blätter, {loose} ohne Geschoss
+	{name}: not shown on {levels}	{name}: fehlt auf {levels}
+	Every shaft and riser carries on through its levels.	Jeder Schacht und jede Steigleitung geht durch ihre Geschosse durch.
+	Not a height: {text}	Keine Höhe: {text}
+	Open IFC Model	IFC-Modell öffnen
+	Open IFC Model...	IFC-Modell öffnen...
+	IFC Model	IFC-Modell
+	IFC Model Tree	IFC-Modellbaum
+	IFC Object Properties	IFC-Objekteigenschaften
+	Filter IFC Objects	IFC-Objekte filtern
+	IFC Section Box	IFC-Schnittquader
+	Measure in 3D	In 3D messen
+	IFC Camera	IFC-Kamera
+	Render IFC Model	IFC-Modell rendern
+	New BCF Issue	Neues BCF-Thema
+	BCF Issues	BCF-Themen
+	BCF Issues...	BCF-Themen...
+	BCF Issue	BCF-Thema
+	Update BCF Issue	BCF-Thema aktualisieren
+	Show BCF Issue	BCF-Thema zeigen
+	Delete BCF Issue	BCF-Thema löschen
+	Import BCF	BCF importieren
+	Export BCF...	BCF exportieren...
+	Import BCF...	BCF importieren...
+	Model tree	Modellbaum
+	Section box and measure	Schnittquader und Messen
+	Class	Klasse
+	Storey	Geschoss
+	Space	Raum
+	Systems	Systeme
+	System	System
+	Box the selection	Auswahl einrahmen
+	Section box off	Schnittquader aus
+	Measure the two selected	Die zwei ausgewählten messen
+	Open	Offen
+	In Progress	In Bearbeitung
+	Resolved	Gelöst
+	Add a comment	Kommentar hinzufügen
+	New issue from this view	Neues Thema aus dieser Ansicht
+	Comment	Kommentar
+	Assign to	Zuweisen an
+	Create Issue	Thema erstellen
+	Select one object to see its properties.	Ein Objekt auswählen, um seine Eigenschaften zu sehen.
+	No IFC model is open: File ▸ Open IFC Model...	Kein IFC-Modell geöffnet: Datei ▸ IFC-Modell öffnen...
+	More objects: filter to find them	Weitere Objekte: zum Finden filtern
+	Between centres:	Zwischen den Mitten:
+	gap	Abstand
+	{n} objects	{n} Objekte
+	BCF issues ({n})	BCF-Themen ({n})
+	Issue #{n} created	Thema Nr. {n} erstellt
+	BCF: {added} added, {updated} updated	BCF: {added} hinzugefügt, {updated} aktualisiert
+	{n} of its objects aren't in this model	{n} seiner Objekte sind nicht in diesem Modell

@@ -2488,3 +2488,91 @@
 	Coordination Mode	Mode coordination
 	Coordination Views	Vues de coordination
 	Isolate Trade	Isoler le corps d'état
+	Project Briefing	Synthèse du projet
+	Project Note	Note du projet
+	Review Queue	File de vérification
+	Next Review Item	Élément suivant à vérifier
+	Resolve Review Item	Résoudre l'élément
+	Defer Review Item	Reporter l'élément
+	Draft RFI	Brouillon de RFI
+	Batch Resolve	Résoudre par lot
+	Approve Agent Work	Approuver le travail de l'agent
+	Agent Work	Travail des agents
+	Build BIM Model	Construire le modèle BIM
+	to accept	à accepter
+	Accept all	Tout accepter
+	Accept	Accepter
+	Cited:	Référence :
+	Nothing waiting: agents' work is all accepted.	Rien en attente : tout le travail des agents est accepté.
+	Read Levels	Lire les niveaux
+	List Levels	Lister les niveaux
+	Edit Level	Modifier le niveau
+	Attach Sheets to Levels	Associer les feuilles aux niveaux
+	Check Shafts Through Levels	Vérifier les gaines entre niveaux
+	Isolate Level	Isoler le niveau
+	Read from Prints	Lire depuis les plans
+	Level names and elevations from the sections, elevations and level markers	Noms et altitudes des niveaux depuis les coupes, élévations et repères de niveau
+	Attach Sheets	Associer les feuilles
+	Check Shafts	Vérifier les gaines
+	Shafts, chases and risers must carry on through the levels between their ends	Les gaines, saignées et colonnes montantes doivent traverser les niveaux entre leurs extrémités
+	No levels in the building spec.	Aucun niveau dans la spécification du bâtiment.
+	Level	Niveau
+	Floor to floor	D'étage à étage
+	Sheets	Feuilles
+	Show only this storey in 3D	Afficher uniquement cet étage en 3D
+	Datums (no plan on this drawing):	Repères (sans plan dans ce dessin) :
+	Sheets on no level:	Feuilles sans niveau :
+	Show All Levels	Afficher tous les niveaux
+	The levels already match the prints.	Les niveaux correspondent déjà aux plans.
+	{sheets} sheets, {loose} on no level	{sheets} feuilles, {loose} sans niveau
+	{name}: not shown on {levels}	{name} : absent sur {levels}
+	Every shaft and riser carries on through its levels.	Chaque gaine et colonne montante traverse ses niveaux.
+	Not a height: {text}	Pas une hauteur : {text}
+	Open IFC Model	Ouvrir un modèle IFC
+	Open IFC Model...	Ouvrir un modèle IFC...
+	IFC Model	Modèle IFC
+	IFC Model Tree	Arborescence du modèle IFC
+	IFC Object Properties	Propriétés de l'objet IFC
+	Filter IFC Objects	Filtrer les objets IFC
+	IFC Section Box	Boîte de coupe IFC
+	Measure in 3D	Mesurer en 3D
+	IFC Camera	Caméra IFC
+	Render IFC Model	Rendu du modèle IFC
+	New BCF Issue	Nouveau sujet BCF
+	BCF Issues	Sujets BCF
+	BCF Issues...	Sujets BCF...
+	BCF Issue	Sujet BCF
+	Update BCF Issue	Mettre à jour le sujet BCF
+	Show BCF Issue	Afficher le sujet BCF
+	Delete BCF Issue	Supprimer le sujet BCF
+	Import BCF	Importer BCF
+	Export BCF...	Exporter BCF...
+	Import BCF...	Importer BCF...
+	Model tree	Arborescence du modèle
+	Section box and measure	Boîte de coupe et mesure
+	Class	Classe
+	Storey	Niveau
+	Space	Espace
+	Systems	Systèmes
+	System	Système
+	Box the selection	Encadrer la sélection
+	Section box off	Désactiver la boîte de coupe
+	Measure the two selected	Mesurer les deux sélectionnés
+	Open	Ouvert
+	In Progress	En cours
+	Resolved	Résolu
+	Add a comment	Ajouter un commentaire
+	New issue from this view	Nouveau sujet depuis cette vue
+	Comment	Commentaire
+	Assign to	Attribuer à
+	Create Issue	Créer le sujet
+	Select one object to see its properties.	Sélectionnez un objet pour voir ses propriétés.
+	No IFC model is open: File ▸ Open IFC Model...	Aucun modèle IFC ouvert : Fichier ▸ Ouvrir un modèle IFC...
+	More objects: filter to find them	Autres objets : filtrez pour les trouver
+	Between centres:	Entre centres :
+	gap	écart
+	{n} objects	{n} objets
+	BCF issues ({n})	Sujets BCF ({n})
+	Issue #{n} created	Sujet n° {n} créé
+	BCF: {added} added, {updated} updated	BCF : {added} ajoutés, {updated} mis à jour
+	{n} of its objects aren't in this model	{n} de ses objets ne sont pas dans ce modèle

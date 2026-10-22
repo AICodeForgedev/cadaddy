@@ -2701,3 +2701,90 @@ menu	Modify	수정
 	Coordination Mode	조정 모드
 	Coordination Views	조정 뷰
 	Isolate Trade	공종 분리
+	Project Briefing	프로젝트 브리핑
+	Project Note	프로젝트 메모
+	Review Queue	검토 대기열
+	Next Review Item	다음 검토 항목
+	Resolve Review Item	검토 항목 해결
+	Defer Review Item	검토 항목 보류
+	Draft RFI	RFI 초안
+	Batch Resolve	일괄 해결
+	Approve Agent Work	에이전트 작업 승인
+	Agent Work	에이전트 작업
+	Build BIM Model	BIM 모델 생성
+	to accept	승인 대기
+	Accept all	모두 승인
+	Accept	승인
+	Cited:	근거:
+	Nothing waiting: agents' work is all accepted.	대기 중인 항목 없음: 에이전트 작업이 모두 승인되었습니다.
+	Read Levels	레벨 읽기
+	List Levels	레벨 목록
+	Edit Level	레벨 편집
+	Attach Sheets to Levels	시트를 레벨에 연결
+	Check Shafts Through Levels	레벨 간 샤프트 확인
+	Isolate Level	레벨 분리 표시
+	Read from Prints	도면에서 읽기
+	Level names and elevations from the sections, elevations and level markers	단면, 입면, 레벨 표시에서 레벨 이름과 표고 읽기
+	Attach Sheets	시트 연결
+	Check Shafts	샤프트 확인
+	Shafts, chases and risers must carry on through the levels between their ends	샤프트, 배관 통로, 입상관은 양 끝 사이의 레벨을 관통해야 합니다
+	No levels in the building spec.	건물 사양에 레벨이 없습니다.
+	Level	레벨
+	Floor to floor	층고
+	Sheets	시트
+	Show only this storey in 3D	3D에서 이 층만 표시
+	Datums (no plan on this drawing):	기준 표고 (이 도면에 평면 없음):
+	Sheets on no level:	레벨 없는 시트:
+	Show All Levels	모든 레벨 표시
+	The levels already match the prints.	레벨이 이미 도면과 일치합니다.
+	{sheets} sheets, {loose} on no level	시트 {sheets}개, 레벨 없음 {loose}개
+	{name}: not shown on {levels}	{name}: {levels}에 표시되지 않음
+	Every shaft and riser carries on through its levels.	모든 샤프트와 입상관이 해당 레벨을 관통합니다.
+	Not a height: {text}	높이가 아님: {text}
+	Open IFC Model	IFC 모델 열기
+	Open IFC Model...	IFC 모델 열기...
+	IFC Model	IFC 모델
+	IFC Model Tree	IFC 모델 트리
+	IFC Object Properties	IFC 객체 특성
+	Filter IFC Objects	IFC 객체 필터
+	IFC Section Box	IFC 단면 상자
+	Measure in 3D	3D로 측정
+	IFC Camera	IFC 카메라
+	Render IFC Model	IFC 모델 렌더링
+	New BCF Issue	새 BCF 이슈
+	BCF Issues	BCF 이슈
+	BCF Issues...	BCF 이슈...
+	BCF Issue	BCF 이슈
+	Update BCF Issue	BCF 이슈 업데이트
+	Show BCF Issue	BCF 이슈 표시
+	Delete BCF Issue	BCF 이슈 삭제
+	Import BCF	BCF 가져오기
+	Export BCF...	BCF 내보내기...
+	Import BCF...	BCF 가져오기...
+	Model tree	모델 트리
+	Section box and measure	단면 상자 및 측정
+	Class	클래스
+	Storey	층
+	Space	공간
+	Systems	시스템
+	System	시스템
+	Box the selection	선택 항목 상자
+	Section box off	단면 상자 끄기
+	Measure the two selected	선택한 두 개 측정
+	In Progress	진행 중
+	Resolved	해결됨
+	Add a comment	댓글 추가
+	New issue from this view	이 뷰에서 새 이슈
+	Comment	댓글
+	Assign to	담당자
+	Create Issue	이슈 만들기
+	Select one object to see its properties.	특성을 보려면 객체 하나를 선택하십시오.
+	No IFC model is open: File ▸ Open IFC Model...	열린 IFC 모델 없음: 파일 ▸ IFC 모델 열기...
+	More objects: filter to find them	더 많은 객체: 필터로 찾으십시오
+	Between centres:	중심 간:
+	gap	간격
+	{n} objects	객체 {n}개
+	BCF issues ({n})	BCF 이슈 ({n})
+	Issue #{n} created	이슈 #{n} 생성됨
+	BCF: {added} added, {updated} updated	BCF: {added}개 추가, {updated}개 업데이트
+	{n} of its objects aren't in this model	해당 객체 중 {n}개가 이 모델에 없습니다
