@@ -21,6 +21,10 @@ cadaddy-doc = { workspace = true }
 cadaddy-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Scanned prints (Q272): printing sheets to images, JPEG artefacts, OCR glyph templates.
+cadaddy-render = { workspace = true }
+cadaddy-fonts = { workspace = true }
+image = { workspace = true }
 # The RFI list's items (shared with the building spec) and the print validator's inputs.
 cadaddy-walk3d = { path = "../walk3d" }
 # Read trays become 3D runs, clash with other trades and export to IFC (tray_reader test).
