@@ -618,7 +618,9 @@ pub struct MepTerminal {
     pub size_in: [f64; 2],
     /// Bottom elevation above the floor, feet.
     pub bottom_ft: f64,
-    /// What it is: `diffuser`, `register`, `grille`, `vav_box`, `mixing_box`.
+    /// What it is: `diffuser`, `register`, `grille`, `vav_box`, `mixing_box`; sprinkler heads
+    /// `sprinkler_pendent`, `sprinkler_upright`, `sprinkler_sidewall` (with `bottom_ft` the
+    /// deflector's height; IFC: IfcFireSuppressionTerminal).
     #[serde(default = "default_terminal_kind")]
     pub terminal_kind: String,
     /// The plan objects it was read from (hex handles).

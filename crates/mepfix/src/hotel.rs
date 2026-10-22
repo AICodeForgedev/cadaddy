@@ -633,6 +633,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                 neck_in: 10.0,
                 cfm: Some(200.0),
                 node: None,
+                mount: None,
             });
             term_id += 1;
         }
@@ -654,6 +655,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                 neck_in: 10.0,
                 cfm: Some(150.0),
                 node: None,
+                mount: None,
             });
             term_id += 1;
         }
@@ -719,6 +721,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                 neck_in: 0.5,
                 cfm: None,
                 node: None,
+                mount: Some("pendent".into()),
             });
             term_id += 1;
             hx += head_spacing;

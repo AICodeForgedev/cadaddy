@@ -448,6 +448,10 @@ pub struct Terminal {
     /// The node it connects to (none for a plenum return grille).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// Sprinkler heads: `pendent` (below a ceiling), `upright` (on a sprig, open to structure),
+    /// `sidewall` (on a wall, under the ceiling).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

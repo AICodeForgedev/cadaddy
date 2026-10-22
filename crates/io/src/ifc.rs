@@ -68,6 +68,8 @@ enum Class {
     PipeFitting,
     ConduitFitting,
     AirTerminal,
+    /// Sprinkler heads.
+    FireSuppressionTerminal,
     // Scheduled equipment.
     UnitaryEquipment,
     AirTerminalBox,
@@ -109,6 +111,7 @@ impl Class {
             Class::PipeFitting => ("IfcPipeFitting", "NOTDEFINED"),
             Class::ConduitFitting => ("IfcCableCarrierFitting", "NOTDEFINED"),
             Class::AirTerminal => ("IfcAirTerminal", "NOTDEFINED"),
+            Class::FireSuppressionTerminal => ("IfcFireSuppressionTerminal", "SPRINKLER"),
             Class::UnitaryEquipment => ("IfcUnitaryEquipment", "NOTDEFINED"),
             Class::AirTerminalBox => ("IfcAirTerminalBox", "NOTDEFINED"),
             Class::Fan => ("IfcFan", "NOTDEFINED"),
@@ -149,6 +152,7 @@ impl Class {
             "PipeFitting" => Class::PipeFitting,
             "CableCarrierFitting" => Class::ConduitFitting,
             "AirTerminal" => Class::AirTerminal,
+            "FireSuppressionTerminal" => Class::FireSuppressionTerminal,
             "UnitaryEquipment" => Class::UnitaryEquipment,
             "AirTerminalBox" => Class::AirTerminalBox,
             "Fan" => Class::Fan,
@@ -251,7 +255,9 @@ fn class_of(e: &Entity) -> Kind {
             "mep" => {
                 let is_fitting = mep_part.as_deref().is_some_and(|p| p.starts_with("fitting:"));
                 let is_terminal = mep_part.as_deref().is_some_and(|p| p.starts_with("terminal:"));
-                if is_terminal {
+                if is_terminal && mep_part.as_deref().is_some_and(|p| p.starts_with("terminal:sprinkler")) {
+                    Class::FireSuppressionTerminal
+                } else if is_terminal {
                     Class::AirTerminal
                 } else if is_fitting {
                     match extra("kind:").as_deref() {
@@ -1489,7 +1495,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 39] = [
+    const KNOWN: [&str; 40] = [
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -1522,6 +1528,7 @@ fn class_name(upper: &str) -> String {
         "PipeFitting",
         "CableCarrierFitting",
         "AirTerminal",
+        "FireSuppressionTerminal",
         "UnitaryEquipment",
         "AirTerminalBox",
         "Fan",

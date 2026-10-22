@@ -26,3 +26,5 @@ serde_json = { workspace = true }
 cadaddy-dxf = { workspace = true }
 # The wall reader's building spec patch is checked against the spec itself.
 cadaddy-walk3d = { path = "../walk3d" }
+# Read sprinklers become a 3D model and IFC (sprinkler_reader's end-to-end test).
+cadaddy-engine = { workspace = true }

@@ -318,6 +318,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
             legend.push(item("soffit", "SOFFIT / BULKHEAD (DASHED)"));
             legend.extend(device_legend());
+            legend.push(item("sprinkler_upright", "UPRIGHT SPRINKLER HEAD (OPEN TO STRUCTURE)"));
+            if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
+                legend.push(item("sprinkler_sidewall", "SIDEWALL SPRINKLER HEAD"));
+            }
             abbr.extend(["ACT = ACOUSTIC CEILING TILE", "GYP = GYPSUM BOARD", "AFF = ABOVE FINISHED FLOOR", "CLG = CEILING"].map(abbrev));
         }
         Kind::Mech(l) => {
@@ -411,10 +415,15 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             pipes(&mut pen, t, st, l, true, &format!("FP-10{l}"));
             legend.push(item("pipe_fp_main", "SPRINKLER MAIN"));
             legend.push(item("pipe_fp", "SPRINKLER BRANCH LINE"));
-            legend.push(item("sprinkler_head", "PENDENT SPRINKLER HEAD"));
+            legend.push(item("sprinkler_head", "PENDENT SPRINKLER HEAD (SH-1)"));
+            legend.push(item("sprinkler_upright", "UPRIGHT SPRINKLER HEAD ON 4\" SPRIG (SH-2)"));
+            if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
+                legend.push(item("sprinkler_sidewall", "SIDEWALL SPRINKLER HEAD, 4\" BELOW CEILING (SH-3)"));
+            }
             legend.push(item("riser_up", "RISER UP"));
             legend.push(item("riser_down", "RISER DOWN"));
             legend.push(item("rise_drop", "RISE / DROP IN PIPE"));
+            fp_schedules(&mut pen, t);
             abbr.push(abbrev(&format!("{} = {}", st.sys("FP"), "FIRE PROTECTION")));
             abbr.extend(["BOP = BOTTOM OF PIPE", "CL = CENTERLINE", "AFF = ABOVE FINISHED FLOOR"].map(abbrev));
         }
@@ -623,11 +632,11 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             pen.prect("DEVICE", [x - s, y - s], [x + s, y + s]);
             pen.pline("DEVICE", [x - s, y - s], [x + s, y + s]);
         }
-        "sprinkler_head" => {
+        "sprinkler_head" | "sprinkler_upright" | "sprinkler_sidewall" => {
             let c = pen.p([x, y]);
             let r = pen.pl(0.05);
-            pen.circle("DEVICE", c, r);
-            head_mark(pen, c, r);
+            let mount = kind.strip_prefix("sprinkler_").filter(|m| *m != "head").unwrap_or("pendent");
+            head_symbol(pen, c, r, mount);
         }
         "vav" => pen.prect("EQUIP", [x - 0.2, y - 0.08], [x + 0.2, y + 0.08]),
         "riser_up" | "riser_down" => {
@@ -1122,10 +1131,32 @@ fn terminals(pen: &mut Pen, t: &Truth, level: &str, systems: &[&str], tagged: bo
             "sprinkler_head" => {
                 let c = pen.b([x, y]);
                 let r = pen.pl(0.045);
-                pen.circle("DEVICE", c, r);
-                head_mark(pen, c, r);
+                head_symbol(pen, c, r, tm.mount.as_deref().unwrap_or("pendent"));
             }
             _ => {}
+        }
+    }
+}
+
+/// A sprinkler head: pendent (circle with the set's mark), upright (circle in a circle),
+/// sidewall (half circle off its wall, flat side to the north wall).
+fn head_symbol(pen: &mut Pen, c: Vec2, r: f64, mount: &str) {
+    match mount {
+        "upright" => {
+            pen.circle("DEVICE", c, r);
+            pen.circle("DEVICE", c, r * 0.45);
+        }
+        "sidewall" => {
+            let rot = pen.rot();
+            let along = Vec2::new(rot.cos(), rot.sin());
+            pen.line("DEVICE", c - along * r, c + along * r);
+            pen.arc("DEVICE", c, r, PI + rot, 2.0 * PI + rot);
+            let down = Vec2::new(rot.sin(), -rot.cos());
+            pen.line("DEVICE", c, c + down * (r * 0.6));
+        }
+        _ => {
+            pen.circle("DEVICE", c, r);
+            head_mark(pen, c, r);
         }
     }
 }
@@ -1382,7 +1413,8 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         if let Some(cl) = &rm.ceiling {
             // The ceiling tag: in a box, a little off the room's centre.
             let lines = st.ceiling_text(cl.height_ft, &cl.kind);
-            let at = [c[0] + 2.0, c[1] - 2.5];
+            // Narrow rooms (corridors) get it on their centreline, well inside their walls.
+            let at = [c[0] + 2.0, c[1] - if y1 - y0 > 12.0 { 2.5 } else { 0.0 }];
             let p = pen.b(at);
             pen.block("TEXT", p, st.text_in, &lines, rot);
             let w = lines.iter().map(|l| text_width(l, st.text_in)).fold(0.0, f64::max) / pen.sh.scale / 2.0 + 0.4;
@@ -1725,6 +1757,30 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
         ];
         table(pen, [x, y], "PLUMBING FIXTURE SCHEDULE", &rows);
     }
+}
+
+/// The sprinkler head schedule and the pipe schedule (heads per branch size), bottom right of the
+/// drawing area.
+fn fp_schedules(pen: &mut Pen, t: &Truth) {
+    let fr = frame(pen.st);
+    let [[_, y0], [x1, _]] = fr.area;
+    let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+    let mut heads = vec![
+        s(&["TAG", "TYPE", "K", "TEMP", "FINISH", "WHERE"]),
+        s(&["SH-1", "PENDENT", "5.6", "155F", "CHROME", "IN CEILINGS"]),
+        s(&["SH-2", "UPRIGHT", "5.6", "155F", "BRASS", "OPEN TO STRUCTURE, 4\" SPRIG"]),
+    ];
+    if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
+        heads.push(s(&["SH-3", "HORIZ SIDEWALL", "5.6", "155F", "WHITE", "4\" BELOW CEILING"]));
+    }
+    let mut pipes = vec![s(&["PIPE", "MAX HEADS"])];
+    for (d, n) in crate::design::PIPE_SCHEDULE {
+        pipes.push(vec![format!("{}\"", pipe_size(*d)), format!("{n}")]);
+    }
+    let top = y0 + 2.2;
+    table(pen, [x1 - 2.6, top], "PIPE SCHEDULE", &pipes);
+    table(pen, [x1 - 10.6, top], "SPRINKLER HEAD SCHEDULE", &heads);
+    pen.ptext("TEXT", [x1 - 10.6, top - 1.4], 0.09, "ARMOVERS, SPRIGS AND DROPS 1\" U.N.O.", HAlign::Left);
 }
 
 /// A table with a title, top-left at paper `at`; returns its height, inches.
