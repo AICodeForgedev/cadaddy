@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(PointM { multiple: false }))),
         CommandSpec::new("point.multiple", "Multiple Point", run_point)
             .menu(&["Draw", "Point", "Multiple Point"])
-            .params("{points: [...]}")
+            .params("{points: [...]} | {at: [x,y]}")
             .interactive(|_| Ok(Box::new(PointM { multiple: true }))),
         CommandSpec::new("xline", "Construction Line", super::draw2::run_xline2)
             .menu(&["Draw", "Construction Line"])

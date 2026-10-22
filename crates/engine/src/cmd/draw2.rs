@@ -100,11 +100,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(RevcloudM::new(s, CloudKind::Rect)))),
         CommandSpec::new("revcloud.polygonal", "Polygonal", run_revcloud)
             .menu(&["Draw", "Revision Cloud", "Polygonal"])
-            .params("{points: [[x,y],...], arcLength?}")
+            .params("{points: [[x,y],...], arcLength?, style?: normal|calligraphy, reverse?} (or another REVCLOUD form: {p1, p2} | {freehand: [...]} | {handle})")
             .interactive(|s| Ok(Box::new(RevcloudM::new(s, CloudKind::Poly)))),
         CommandSpec::new("revcloud.freehand", "Freehand", run_revcloud)
             .menu(&["Draw", "Revision Cloud", "Freehand"])
-            .params("{freehand: [[x,y],...], arcLength?}")
+            .params("{freehand: [[x,y],...], arcLength?, style?: normal|calligraphy, reverse?} (or another REVCLOUD form: {p1, p2} | {points: [...]} | {handle})")
             .interactive(|s| Ok(Box::new(RevcloudM::new(s, CloudKind::Free)))),
         CommandSpec::new("wipeout", "Wipeout", run_wipeout)
             .menu(&["Draw", "Wipeout"])

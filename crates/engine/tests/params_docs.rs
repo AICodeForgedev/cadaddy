@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use cadaddy_engine::{Session, cmd::find_command, cmd::resolve_alias, unknown_params};
-use serde_json::{Value, json};
+use serde_json::json;
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(read) = std::fs::read_dir(dir) else { return };
@@ -288,9 +288,95 @@ fn agents_unknown_parameters_are_refused_and_the_apps_warned() {
     // A misspelt parameter from the app's own code still runs, with a warning.
     let r = s.execute("circle", &json!({ "center": [0, 0], "radius": 2, "raduis": 3 })).unwrap();
     assert!(r["warnings"].to_string().contains("raduis"), "{r}");
-    assert!(s.execute_agent("circle", &json!({ "center": [0, 0], "raduis": 3 })).is_err());
-    // A dry run refuses it too.
-    s.execute("agent.dryrun", &json!({ "on": true })).ok();
-    assert!(s.execute_agent("circle", &json!({ "center": [0, 0], "raduis": 3 })).is_err());
-    let _: Value = Value::Null;
+    // From an agent the same call, which would otherwise draw (it has its radius), is refused
+    // for the misspelt key and draws nothing; under a dry run too.
+    let count = |s: &Session| s.doc().unwrap().model.iter().count();
+    for dry in [false, true] {
+        s.execute("agent.dryrun", &json!({ "on": dry })).unwrap();
+        let before = count(&s);
+        let e = s.execute_agent("circle", &json!({ "center": [0, 0], "radius": 2, "raduis": 3 })).unwrap_err().to_string();
+        assert!(e.contains("`raduis` is not a parameter of circle"), "dry run {dry}: {e}");
+        assert_eq!(count(&s), before, "dry run {dry}: nothing drawn");
+    }
+    s.execute("agent.dryrun", &json!({ "on": false })).unwrap();
+    let before = count(&s);
+    s.execute_agent("circle", &json!({ "center": [0, 0], "radius": 2 })).unwrap();
+    assert_eq!(count(&s), before + 1, "the right call draws");
+}
+
+/// The commands whose documentation leaves their parameters open (agents' unknown keys pass):
+/// exactly these, so that a doc made open by accident (an ellipsis inside a nested value, as
+/// PLOT's `shade?: {…}` was) shows here and a new open one is a deliberate edit.
+#[test]
+fn the_commands_with_open_parameters_are_these() {
+    let open: Vec<&str> = cadaddy_engine::command_specs().iter().filter(|c| cadaddy_engine::takes_open_params(c)).map(|c| c.id).collect();
+    let expected = [
+        "document.bytes",
+        "qselect",
+        "mtext",
+        "spline.cv",
+        "mleader",
+        "dimoverride",
+        "dimedit",
+        "gradient",
+        "overkill",
+        "xbind",
+        "bedit",
+        "blockify",
+        "light.set",
+        "renderexposure",
+        "material.edit",
+        "wallgen",
+        "estimate.set_price",
+        "estimate.set_scope",
+        "co.price",
+        "tags.list",
+        "ifc.elements",
+        "printrev.compare",
+        "rfi.export",
+        "imagetrace",
+        "fourd.link",
+        "imageadjust",
+        "array",
+        "arrayclassic",
+        "symbol",
+        "part",
+        "getsel",
+        "group",
+        "-group",
+        "pagesetup",
+        "-plot",
+        "pdfimport",
+        "publish",
+        "attach",
+        "properties.set",
+        "chprop",
+        "change",
+        "color",
+        "units",
+        "dimstyle",
+        "dimstyle.dimension",
+        "dimstyle.override",
+        "drawing.query",
+        "countlist",
+        "counttable",
+        "count",
+        "options",
+        "measuregeom",
+        "tablestyle.cellstyle",
+        "tabledit",
+        "field",
+        "markupimport",
+        "wedge",
+        "xplode",
+    ];
+    assert_eq!(open, expected, "open parameter docs changed");
+    assert!(!open.contains(&"plot") && !open.contains(&"dim"));
+    // So an agent's misspelt PLOT or DIM key is refused, not run on defaults.
+    let mut s = Session::new();
+    let e = s.execute_agent("plot", &json!({ "papr": "A3" })).unwrap_err().to_string();
+    assert!(e.contains("`papr` is not a parameter of plot"), "{e}");
+    let e = s.execute_agent("dim", &json!({ "mode": "linear", "p1": [0, 0], "p2": [10, 0], "att": [5, 3] })).unwrap_err().to_string();
+    assert!(e.contains("`att` is not a parameter of dim"), "{e}");
+    assert_eq!(s.doc().unwrap().model.iter().count(), 0, "nothing drawn");
 }
