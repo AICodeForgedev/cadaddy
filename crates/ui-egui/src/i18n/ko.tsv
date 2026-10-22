@@ -2988,3 +2988,7 @@ menu	Modify	수정
 	Check Underground	지중 배관 검사
 	Review Underground	지중 배관 검토
 	Underground Sheets	지중 배관 도면
+	DWF Underlay...	DWF 언더레이...
+	DWF Out	DWF 출력
+	DWFx Out	DWFx 출력
+	Enter path of DWF/DWFx file to attach	첨부할 DWF/DWFx 파일 경로 입력

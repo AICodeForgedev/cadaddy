@@ -2987,3 +2987,7 @@ menu	Modify	Edita
 	Check Underground	Verifica impianti interrati
 	Review Underground	Revisione impianti interrati
 	Underground Sheets	Tavole impianti interrati
+	DWF Underlay...	Sottoposto DWF...
+	DWF Out	Output DWF
+	DWFx Out	Output DWFx
+	Enter path of DWF/DWFx file to attach	Inserire il percorso del file DWF/DWFx
