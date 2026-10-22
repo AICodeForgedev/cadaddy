@@ -1298,7 +1298,7 @@ mod tests {
         let r = s.execute("project.validate_manifest", &json!({"path": format!("{dir}/manifest.json")}));
         let v = r.unwrap_or(Value::Null);
         assert_eq!(v["valid"], true);
-        assert!(v["errors"].as_array().map_or(false, |a| a.is_empty()));
+        assert!(v["errors"].as_array().is_some_and(|a| a.is_empty()));
 
         cleanup(&dir);
     }
@@ -1329,7 +1329,7 @@ mod tests {
         let r = s.execute("project.validate_manifest", &json!({"path": format!("{dir}/manifest.json")}));
         let v = r.unwrap_or(Value::Null);
         assert_eq!(v["valid"], false);
-        assert!(v["errors"].as_array().map_or(false, |a| a.iter().any(|e| e.as_str().unwrap_or("").contains("duplicate"))));
+        assert!(v["errors"].as_array().is_some_and(|a| a.iter().any(|e| e.as_str().unwrap_or("").contains("duplicate"))));
 
         cleanup(&dir);
     }
@@ -1355,7 +1355,7 @@ mod tests {
         let r = s.execute("project.import_manifest", &json!({"path": &dir}));
         let v = r.unwrap_or(Value::Null);
         assert_eq!(v["added"], 2);
-        assert!(v["errors"].as_array().map_or(false, |a| a.iter().any(|e| e.as_str().unwrap_or("").contains("missing"))));
+        assert!(v["errors"].as_array().is_some_and(|a| a.iter().any(|e| e.as_str().unwrap_or("").contains("missing"))));
 
         cleanup(&dir);
     }
