@@ -501,8 +501,22 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     if let Some(n) = st.notes.last() {
         text += &format!("Last note ({}): {} ", n.author, cut(&n.text, 300));
     }
+    // The estimate, once there is one (Q327): its total, whether the validator is clean, and how
+    // many findings are open.
+    let has_estimate = has_spec && super::estimate::state(s, "bim_job").is_ok_and(|(_, st)| st.contains_key("baseline"));
+    let estimate = if has_estimate {
+        s.execute("estimate.status", &json!({})).ok().map(|e| {
+            let open = e["findings"].as_array().map_or(0, Vec::len);
+            json!({"total": e["totals"]["total"], "ok": e["ok"], "open_findings": open, "lines": e["summary"]["lines"], "call": "estimate.status {}"})
+        })
+    } else {
+        None
+    };
+    if let Some(e) = &estimate {
+        text += &format!("Estimate: ${} total, {} open finding(s). ", e["total"], e["open_findings"]);
+    }
     text += &format!("Next: {} — {}.", next["call"].as_str().unwrap_or_default(), next["why"].as_str().unwrap_or_default());
-    let v = json!({
+    let mut v = json!({
         "revision": st.revision,
         "built": built,
         "review": {"open": open.len(), "deferred": deferred, "resolved": st.decisions.len().saturating_sub(deferred), "byKind": by_kind, "top": top},
@@ -511,6 +525,9 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
         "next": next,
         "text": cut(&text, 2_000),
     });
+    if let Some(e) = estimate {
+        v["estimate"] = e;
+    }
     // Within the page: trim the lists, longest first.
     let mut v = capped(v, "recent", BRIEFING_MAX);
     v = capped(v, "notes", BRIEFING_MAX);
