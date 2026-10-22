@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 962,
-    "count": 962,
+    "callableAsJson": 971,
+    "count": 971,
     "ids": [
       "-attedit",
       "-block",
@@ -295,6 +295,9 @@
       "drywall.takeoff",
       "drywall.viewmode",
       "dsettings",
+      "dwfattach",
+      "dwfout",
+      "dwfxout",
       "dwgconvert",
       "dwgprops",
       "dxfin",
@@ -386,6 +389,7 @@
       "groups.list",
       "handover.schedules",
       "hatch",
+      "hatch.pattern.define",
       "hatch.patterns",
       "hatchedit",
       "hatchpick",
@@ -491,6 +495,7 @@
       "limits",
       "line",
       "linetype",
+      "linetype.define",
       "lisp",
       "lisp.dialog",
       "lisp.tile",
@@ -623,6 +628,7 @@
       "plotstyle",
       "plottermanager",
       "plotwindow",
+      "plugins",
       "pngout",
       "point",
       "point.multiple",
@@ -880,6 +886,9 @@
       "ucsicon.on",
       "ucsicon.origin",
       "ucsman",
+      "ugsheets.build",
+      "ugsheets.check",
+      "ugsheets.review",
       "undo",
       "undohistory",
       "ungroup",
@@ -966,8 +975,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 478,
-    "typed": 502
+    "inMenus": 482,
+    "typed": 506
   },
   "features": {
     "ifcExport": true,
