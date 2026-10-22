@@ -2636,3 +2636,33 @@
 	Set on Picked	Appliquer aux choisis
 	Accept Picked	Accepter les choisis
 	Pick All Shown	Choisir tout l'affiché
+	Import Estimating Baseline	Importer la base d'estimation
+	Set Estimate Price	Définir un prix
+	Set Estimate Assembly	Définir l'ensemble
+	Set Estimate Scope	Définir le périmètre
+	Estimate Settings	Paramètres d'estimation
+	Query Estimate	Interroger l'estimation
+	Estimate Status	État de l'estimation
+	Explain Estimate Number	Expliquer un montant
+	Compare Estimate What-If	Comparer un scénario
+	New Window	Nouvelle fenêtre
+	New Material Release	Nouvelle libération de matériel
+	Procurement	Approvisionnement
+	Order Status	État de la commande
+	Submittal Log Entry	Entrée du registre des soumissions
+	Submittal Log	Registre des soumissions
+	Lead Times	Délais de livraison
+	Export Release	Exporter la libération
+	Concrete Elements	Éléments en béton
+	Set Concrete	Définir le béton
+	Check Concrete	Vérifier le béton
+	Concrete Coordination Review	Revue de coordination du béton
+	Concrete Quantities	Quantités de béton
+	Pour Hold Points	Points d'arrêt avant coulage
+	Sign Off Hold Point	Valider le point d'arrêt
+	Progress Plan	Plan d'avancement
+	Mark Installed Work	Marquer les travaux posés
+	Import Timecards	Importer les feuilles de temps
+	Progress and Earned Value	Avancement et valeur acquise
+	Actual Production Rates	Cadences de production réelles
+	Add Field Observations	Ajouter des observations de terrain

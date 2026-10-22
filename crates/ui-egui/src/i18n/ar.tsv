@@ -2843,3 +2843,33 @@ menu	View	عرض
 	Set on Picked	تعيين على المحدد
 	Accept Picked	قبول المحدد
 	Pick All Shown	تحديد كل المعروض
+	Import Estimating Baseline	استيراد أساس التقدير
+	Set Estimate Price	تعيين سعر التقدير
+	Set Estimate Assembly	تعيين تجميعة التقدير
+	Set Estimate Scope	تعيين نطاق التقدير
+	Estimate Settings	إعدادات التقدير
+	Query Estimate	الاستعلام عن التقدير
+	Estimate Status	حالة التقدير
+	Explain Estimate Number	شرح رقم التقدير
+	Compare Estimate What-If	مقارنة سيناريو التقدير
+	New Window	نافذة جديدة
+	New Material Release	إصدار مواد جديد
+	Procurement	المشتريات
+	Order Status	حالة الطلب
+	Submittal Log Entry	إدخال سجل التقديمات
+	Submittal Log	سجل التقديمات
+	Lead Times	مهل التوريد
+	Export Release	تصدير الإصدار
+	Concrete Elements	العناصر الخرسانية
+	Set Concrete	تعيين الخرسانة
+	Check Concrete	فحص الخرسانة
+	Concrete Coordination Review	مراجعة تنسيق الخرسانة
+	Concrete Quantities	كميات الخرسانة
+	Pour Hold Points	نقاط التوقف قبل الصب
+	Sign Off Hold Point	اعتماد نقطة التوقف
+	Progress Plan	خطة التقدم
+	Mark Installed Work	تحديد الأعمال المركبة
+	Import Timecards	استيراد بطاقات الوقت
+	Progress and Earned Value	التقدم والقيمة المكتسبة
+	Actual Production Rates	معدلات الإنتاج الفعلية
+	Add Field Observations	إضافة ملاحظات ميدانية

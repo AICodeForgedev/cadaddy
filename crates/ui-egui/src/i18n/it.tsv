@@ -2847,3 +2847,33 @@ menu	Modify	Edita
 	Set on Picked	Imposta sui selezionati
 	Accept Picked	Accetta selezionati
 	Pick All Shown	Seleziona tutti i mostrati
+	Import Estimating Baseline	Importa base di stima
+	Set Estimate Price	Imposta prezzo
+	Set Estimate Assembly	Imposta assieme
+	Set Estimate Scope	Imposta ambito
+	Estimate Settings	Impostazioni stima
+	Query Estimate	Interroga stima
+	Estimate Status	Stato stima
+	Explain Estimate Number	Spiega valore stima
+	Compare Estimate What-If	Confronta scenario
+	New Window	Nuova finestra
+	New Material Release	Nuovo rilascio materiali
+	Procurement	Approvvigionamento
+	Order Status	Stato dell'ordine
+	Submittal Log Entry	Voce del registro delle consegne
+	Submittal Log	Registro delle consegne
+	Lead Times	Tempi di consegna
+	Export Release	Esporta rilascio
+	Concrete Elements	Elementi in calcestruzzo
+	Set Concrete	Imposta calcestruzzo
+	Check Concrete	Verifica calcestruzzo
+	Concrete Coordination Review	Revisione di coordinamento del calcestruzzo
+	Concrete Quantities	Quantità di calcestruzzo
+	Pour Hold Points	Punti di arresto prima del getto
+	Sign Off Hold Point	Approva punto di arresto
+	Progress Plan	Piano di avanzamento
+	Mark Installed Work	Segna lavoro installato
+	Import Timecards	Importa schede ore
+	Progress and Earned Value	Avanzamento e valore guadagnato
+	Actual Production Rates	Rese produttive effettive
+	Add Field Observations	Aggiungi osservazioni di cantiere

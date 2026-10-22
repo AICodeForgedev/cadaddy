@@ -2855,3 +2855,33 @@ menu	Modify	Ändra
 	Set on Picked	Ange för valda
 	Accept Picked	Godkänn valda
 	Pick All Shown	Välj alla visade
+	Import Estimating Baseline	Importera kalkylunderlag
+	Set Estimate Price	Ange pris
+	Set Estimate Assembly	Ange sammansättning
+	Set Estimate Scope	Ange omfattning
+	Estimate Settings	Kalkylinställningar
+	Query Estimate	Fråga kalkyl
+	Estimate Status	Kalkylstatus
+	Explain Estimate Number	Förklara kalkylbelopp
+	Compare Estimate What-If	Jämför kalkylscenario
+	New Window	Nytt fönster
+	New Material Release	Ny materialfrisläppning
+	Procurement	Inköp
+	Order Status	Orderstatus
+	Submittal Log Entry	Post i inlämningsloggen
+	Submittal Log	Inlämningslogg
+	Lead Times	Ledtider
+	Export Release	Exportera frisläppning
+	Concrete Elements	Betongelement
+	Set Concrete	Ange betong
+	Check Concrete	Kontrollera betong
+	Concrete Coordination Review	Samordningsgranskning av betong
+	Concrete Quantities	Betongmängder
+	Pour Hold Points	Kontrollpunkter före gjutning
+	Sign Off Hold Point	Godkänn kontrollpunkt
+	Progress Plan	Framdriftsplan
+	Mark Installed Work	Markera installerat arbete
+	Import Timecards	Importera tidkort
+	Progress and Earned Value	Framdrift och intjänat värde
+	Actual Production Rates	Faktiska produktionstakter
+	Add Field Observations	Lägg till fältobservationer

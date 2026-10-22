@@ -2848,3 +2848,33 @@ menu	Modify	수정
 	Set on Picked	선택 항목에 설정
 	Accept Picked	선택 항목 승인
 	Pick All Shown	표시된 항목 모두 선택
+	Import Estimating Baseline	견적 기준 가져오기
+	Set Estimate Price	견적 단가 설정
+	Set Estimate Assembly	견적 어셈블리 설정
+	Set Estimate Scope	견적 범위 설정
+	Estimate Settings	견적 설정
+	Query Estimate	견적 조회
+	Estimate Status	견적 상태
+	Explain Estimate Number	견적 수치 설명
+	Compare Estimate What-If	견적 가정 비교
+	New Window	새 창
+	New Material Release	새 자재 출고
+	Procurement	조달
+	Order Status	주문 상태
+	Submittal Log Entry	제출 로그 항목
+	Submittal Log	제출 로그
+	Lead Times	리드 타임
+	Export Release	출고 내보내기
+	Concrete Elements	콘크리트 요소
+	Set Concrete	콘크리트 설정
+	Check Concrete	콘크리트 검사
+	Concrete Coordination Review	콘크리트 조정 검토
+	Concrete Quantities	콘크리트 물량
+	Pour Hold Points	타설 전 확인 항목
+	Sign Off Hold Point	확인 항목 승인
+	Progress Plan	진행 계획
+	Mark Installed Work	설치 작업 표시
+	Import Timecards	근무 시간표 가져오기
+	Progress and Earned Value	진행률과 획득 가치
+	Actual Production Rates	실제 생산성
+	Add Field Observations	현장 관측 추가
