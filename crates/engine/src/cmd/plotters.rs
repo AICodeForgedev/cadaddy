@@ -1,7 +1,8 @@
 //! Plotter configurations: PLOTTERMANAGER / -PLOTTERMANAGER, and the device and paper a page
 //! setup or a plot uses.
 //!
-//! The built-in devices (`CADaddy PDF`, `CADaddy PNG`, `CADaddy SVG`) come first. They offer
+//! The built-in devices (`CADaddy PDF`, `CADaddy PNG`, `CADaddy SVG`, the raster images and
+//! `CADaddy DWFx` / `CADaddy DWF`) come first. They offer
 //! the standard ISO and ANSI/ARCH paper sizes with 5 mm (ISO) or quarter-inch (inch sizes)
 //! margins. User devices are `*.plotter.json` files ([`cadaddy_doc::PlotterConfig`],
 //! `docs/plotters.md`) in a folder the host provides through [`set_plotter_store`]. Without
@@ -136,13 +137,15 @@ fn store() -> PlotterStore {
 const MAX_DEVICES: usize = 1000;
 
 /// The built-in devices: name, output, description.
-const BUILTIN: [(&str, PlotOutput, &str); 6] = [
+const BUILTIN: [(&str, PlotOutput, &str); 8] = [
     ("CADaddy PDF", PlotOutput::Pdf, "Vector PDF"),
     ("CADaddy PNG", PlotOutput::Png, "Raster PNG image"),
     ("CADaddy SVG", PlotOutput::Svg, "Vector SVG image"),
     ("CADaddy JPEG", PlotOutput::Jpg, "Raster JPEG image"),
     ("CADaddy TIFF", PlotOutput::Tif, "Raster TIFF image (uncompressed)"),
     ("CADaddy BMP", PlotOutput::Bmp, "Raster BMP image"),
+    ("CADaddy DWFx", PlotOutput::Dwfx, "DWFx ePlot (XPS): named sheets, layers, hyperlinks"),
+    ("CADaddy DWF", PlotOutput::Dwf, "DWF 6 ePlot"),
 ];
 
 /// A page setup's "no device" name.
@@ -469,7 +472,7 @@ fn edit_device(cmd: &str, c: &mut PlotterConfig, p: &Value) -> Result<()> {
         c.description = d.chars().take(1000).collect();
     }
     if let Some(o) = p.get("output") {
-        c.output = o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif or bmp"))?;
+        c.output = o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif, bmp, dwfx or dwf"))?;
     }
     if let Some(r) = p.get("resolution") {
         let r = r.as_u64().filter(|r| (50..=2400).contains(r)).ok_or_else(|| bad(cmd, "`resolution` must be 50-2400 dpi"))?;
@@ -557,9 +560,10 @@ fn run_plottermanager(_s: &mut Session, p: &Value) -> Result<Value> {
                 None => {
                     // A copy of the built-in device for the output: the standard papers.
                     let output = match p.get("output") {
-                        Some(o) => {
-                            o.as_str().and_then(PlotOutput::parse).ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif or bmp"))?
-                        }
+                        Some(o) => o
+                            .as_str()
+                            .and_then(PlotOutput::parse)
+                            .ok_or_else(|| bad(cmd, "`output` must be pdf, png, svg, jpg, tif, bmp, dwfx or dwf"))?,
                         None => PlotOutput::Pdf,
                     };
                     let (b, o, _) = BUILTIN.iter().find(|(_, o, _)| *o == output).copied().unwrap_or(("CADaddy PDF", PlotOutput::Pdf, ""));

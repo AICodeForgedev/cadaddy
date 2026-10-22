@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}; or batch plot {folder: DIR (every .dwg/.dxf/.cdy in it), out?: DIR (default the folder), layouts?: [names], stamp?: bool} → {drawings: [{drawing, path, pages}], failed: [{drawing, error}]}: one PDF per drawing")
+            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), format?: \"pdf\" | \"dwfx\" | \"dwf\" (default from the path's extension, else pdf; DWFx/DWF: one file, one page per sheet named after its layout → {format, pages, sheets, path | data}), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}; or batch plot {folder: DIR (every .dwg/.dxf/.cdy in it), out?: DIR (default the folder), layouts?: [names], stamp?: bool} → {drawings: [{drawing, path, pages}], failed: [{drawing, error}]}: one PDF per drawing")
             .noundo(),
         publish::spec(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
@@ -779,6 +779,33 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if sheets.len() > MAX_SHEETS {
         return Err(bad("publish", format!("at most {MAX_SHEETS} sheets can be published at once")));
+    }
+    // DWFx or DWF: one file holding every sheet, each page named after its layout.
+    let format = match str_param(p, "format").map(str::to_ascii_lowercase) {
+        Some(f) => f,
+        None => str_param(p, "path")
+            .and_then(|path| std::path::Path::new(path).extension())
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .filter(|e| e == "dwfx" || e == "dwf")
+            .unwrap_or_else(|| "pdf".into()),
+    };
+    if format == "dwfx" || format == "dwf" {
+        let write = super::file::io().and_then(|h| h.write_dwfx).ok_or_else(|| bad("publish", "DWF writing is not available in this build"))?;
+        let spaces: Vec<Space> = sheets.iter().map(|n| if n == "Model" { Space::Model } else { Space::Paper(n.clone()) }).collect();
+        let bytes = write(d, &spaces, &json!({ "format": format })).map_err(|e| bad("publish", e))?;
+        let mut r = json!({ "format": format, "pages": spaces.len(), "sheets": sheets, "bytes": bytes.len() });
+        match str_param(p, "path") {
+            Some(path) => {
+                write_file("publish", path, &bytes)?;
+                r["path"] = json!(path);
+                r["message"] = json!(format!("Published {} sheet(s) to {path}", spaces.len()));
+            }
+            None => r["data"] = json!(base64_encode(&bytes)),
+        }
+        return Ok(r);
+    }
+    if format != "pdf" {
+        return Err(bad("publish", format!("`format` must be pdf, dwfx or dwf, not `{format}`")));
     }
     let base = str_param(p, "path").map(|path| {
         let pb = std::path::Path::new(path);

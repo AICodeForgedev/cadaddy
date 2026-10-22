@@ -52,8 +52,8 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
         None | Some("pdf") => pdf::plot(d, space, opts),
         Some(f) if cadaddy_render::encode::Format::parse(f).is_some() => png(d, space, opts),
         Some("svg") => svg(d, space, opts),
-        Some("dwfx") => crate::dwfx::export(d, space),
-        Some("dwf") => crate::dwfx::export_dwf6(d, space),
+        Some("dwfx") => crate::dwfx::plot(d, space, opts, false),
+        Some("dwf") => crate::dwfx::plot(d, space, opts, true),
         Some(other) => Err(IoError::Unsupported(other.to_string())),
     }
 }

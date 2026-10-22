@@ -59,14 +59,24 @@ pub use dxf_read::{attrib_from_groups, entity_from_groups};
 pub use dxf_write::{entity_groups, entity_records};
 pub use pdf::{PdfOptions, pdf, plot};
 
-/// Hook for DWFATTACH: read one page (1-based) of a DWF or DWFx as a drawing in sheet inches.
-pub fn read_dwf_page(bytes: &[u8], page: u32) -> std::result::Result<Drawing, String> {
-    dwfx::read_page(bytes, page).map_err(|e| e.to_string())
+/// Hook for DWFATTACH: one page (1-based) of a DWFx or DWF 6 file as a drawing in sheet inches,
+/// and its report (`{sheet: [w, h], pages, name?, origin?, scale?}`, see [`dwfx::Page::report`]).
+pub fn read_dwf_page(bytes: &[u8], page: u32) -> std::result::Result<(Drawing, serde_json::Value), String> {
+    let p = dwfx::read_page(bytes, page).map_err(|e| e.to_string())?;
+    let report = p.report();
+    Ok((p.drawing, report))
 }
 
-/// Hook for DWFXOUT: export multiple spaces as a DWFx (XPS/ECMA-388) package.
-pub fn write_dwfx_sheets(d: &Drawing, spaces: &[Space]) -> std::result::Result<Vec<u8>, String> {
-    dwfx::export_sheets(d, spaces).map_err(|e| e.to_string())
+/// Hook for DWFXOUT/DWFOUT/PUBLISH: spaces as one DWFx (`format: "dwfx"`, default) or DWF 6
+/// (`"dwf"`) file, one sheet per space; `{scale?, fit?}` as [`dwfx::ExportOptions::from_json`].
+pub fn write_dwfx_sheets(d: &Drawing, spaces: &[Space], opts: &serde_json::Value) -> std::result::Result<Vec<u8>, String> {
+    let o = dwfx::ExportOptions::from_json(opts);
+    let r = if opts.get("format").and_then(serde_json::Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("dwf")) {
+        dwfx::export_dwf6_sheets(d, spaces, &o)
+    } else {
+        dwfx::export_sheets_with(d, spaces, &o)
+    };
+    r.map_err(|e| e.to_string())
 }
 
 /// How a drawing is saved as DXF or DWG.

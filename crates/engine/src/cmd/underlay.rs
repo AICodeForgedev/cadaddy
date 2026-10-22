@@ -3,8 +3,12 @@
 //! turns the page's layers on and off. Snapping to the page's geometry follows PDFOSNAP (a drawing
 //! setting, on by default).
 //!
-//! Pages are read through the io hooks' PDF reader (at 1 drawing unit per sheet inch) and kept in
-//! a cache shared with the renderer ([`load_page`]).
+//! DWF underlays (DWFATTACH) are the same entity on a sheet of a DWFx or DWF 6 file; DWFOUT and
+//! DWFXOUT write those files. DGN underlays (DGNATTACH, `dgn.rs`) are the same entity too.
+//!
+//! Pages are read through the io hooks' PDF, DWF or drawing reader (at 1 drawing unit per sheet
+//! inch) and kept in a cache shared with the renderer ([`load_page`]); after a drawing is opened
+//! again (or the cache is emptied) each page is read again by its file's type.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -53,22 +57,23 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle?, off?: [layer], on?: [layer]} → {layers: [{name, on}]}: the page's layers"),
         CommandSpec::new("dwfattach", "DWF Underlay...", run_dwf_attach)
             .menu(&["Insert", "DWF Underlay..."])
-            .params("{path, page?: 1, at?: [x,y] (default 0,0), scale?: 1 (drawing units per sheet inch), rotation?: degrees, name?} → {handle, size: [w,h] sheet inches, layers}")
+            .params("{path: a .dwfx or .dwf, page?: 1, at?: [x,y] (default 0,0), scale?: 1 (drawing units per sheet inch), rotation?: degrees, name?, trueScale?: bool (a sheet CADaddy wrote: `at` and `scale` default to where it was drawn from, so it lies on the source's coordinates)} → {handle, size: [w,h] sheet inches, layers, pages, sheet?: the sheet's name, origin?, scale?: where the file says the sheet was drawn from}. DWF 6 files are read when they use WHIP!'s readable opcodes (as DWFOUT writes them); others are refused with a message")
             .interactive(|_| Ok(Box::new(DwfAttachM::default()))),
         CommandSpec::new("dwfout", "DWF Out", run_dwfout)
             .menu(&["File", "Export", "DWF..."])
             .alias(&["dwf"])
-            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model)} → {format: \"dwf\", path? | data}")
+            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model; one ePlot section each), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwf\", path? | data, pages}")
             .noundo(),
         CommandSpec::new("dwfxout", "DWFx Out", run_dwfxout)
             .menu(&["File", "Export", "DWFx..."])
             .alias(&["dwfx"])
-            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order)} → {format: \"dwfx\", path? | data, pages}")
+            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units; layouts are always at paper size), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwfx\", path? | data, pages}: one named page per sheet, one Canvas per layer, hyperlinks kept")
             .noundo(),
     ]
 }
 
-/// The page `page` (1-based) of the PDF at `path` as a drawing in sheet inches, read once.
+/// The page `page` (1-based) of the PDF, DWFx or DWF at `path` (a DGN's design) as a drawing in
+/// sheet inches, read once.
 pub fn load_page(path: &str, page: u32) -> Option<Arc<Drawing>> {
     let key = (path.to_string(), page.max(1));
     if let Ok(g) = PAGES.lock()
@@ -76,8 +81,11 @@ pub fn load_page(path: &str, page: u32) -> Option<Arc<Drawing>> {
     {
         return hit.clone();
     }
-    let got = if path.trim().to_ascii_lowercase().ends_with(".dgn") {
+    let lower = path.trim().to_ascii_lowercase();
+    let got = if lower.ends_with(".dgn") {
         read_dgn(path).ok().map(|(d, _, _)| Arc::new(d))
+    } else if lower.ends_with(".dwf") || lower.ends_with(".dwfx") {
+        read_bytes(path).ok().and_then(|b| read_dwf_page(&b, path, page.max(1)).ok()).map(|(d, _)| Arc::new(d))
     } else {
         read_page(path, page.max(1)).ok().map(|(d, _)| Arc::new(d))
     };
@@ -89,6 +97,14 @@ pub fn load_page(path: &str, page: u32) -> Option<Arc<Drawing>> {
         m.insert(key, got.clone());
     }
     got
+}
+
+/// Forget every page read so far: each is read again from its file when next drawn (a file
+/// changed on disk, or a drawing opened again).
+pub fn forget_pages() {
+    if let Ok(mut g) = PAGES.lock() {
+        *g = None;
+    }
 }
 
 /// Keep a page (or a DGN design) just read, for the renderer and snaps.
@@ -190,7 +206,7 @@ fn underlays(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Handle>> {
     let d = s.doc()?;
     let hs: Vec<Handle> = targets(s, p)?.into_iter().filter(|h| d.entity(*h).is_some_and(|e| matches!(e.kind, EntityKind::Underlay(_)))).collect();
     if hs.is_empty() {
-        return Err(bad(cmd, "select an underlay (PDF or DGN)"));
+        return Err(bad(cmd, "select an underlay (PDF, DWF or DGN)"));
     }
     Ok(hs)
 }
@@ -312,9 +328,9 @@ fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
 /// Snapping to underlay geometry (PDFOSNAP, a drawing setting, on unless 0): the underlays of
 /// `space` whose frame is near `cursor`, with the page drawing and its placement.
 pub(crate) fn near(d: &Drawing, space: &cadaddy_doc::Space, cursor: Vec2, aperture: f64) -> Vec<(Arc<Drawing>, Mat3)> {
-    // PDFOSNAP for PDF underlays, DGNOSNAP for DGN ones (each on unless 0).
-    let (pdf, dgn) = (d.header.i64("PDFOSNAP", 1) != 0, d.header.i64("DGNOSNAP", 1) != 0);
-    if !pdf && !dgn {
+    // PDFOSNAP for PDF underlays, DGNOSNAP for DGN ones, DWFOSNAP for DWF ones (each on unless 0).
+    let (pdf, dgn, dwf) = (d.header.i64("PDFOSNAP", 1) != 0, d.header.i64("DGNOSNAP", 1) != 0, d.header.i64("DWFOSNAP", 1) != 0);
+    if !pdf && !dgn && !dwf {
         return Vec::new();
     }
     let Some(store) = d.space(space) else { return Vec::new() };
@@ -322,7 +338,15 @@ pub(crate) fn near(d: &Drawing, space: &cadaddy_doc::Space, cursor: Vec2, apertu
     store
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Underlay(u) if (if u.is_dgn() { dgn } else { pdf }) && Bounds2::from_points(u.corners()).intersects(&probe) => {
+            EntityKind::Underlay(u)
+                if (if u.is_dgn() {
+                    dgn
+                } else if u.is_dwf() {
+                    dwf
+                } else {
+                    pdf
+                }) && Bounds2::from_points(u.corners()).intersects(&probe) =>
+            {
                 Some((load_page(&u.path, u.page)?, u.transform()))
             }
             _ => None,
@@ -421,12 +445,25 @@ impl Interactive for AttachM {
 
 // ---------- DWF/DWFx underlay and export ----------
 
-/// DWFATTACH: place a page of a DWF or DWFx file as an underlay.
+/// DWFATTACH: place a sheet of a DWFx or DWF file as an underlay. With `trueScale`, a sheet
+/// CADaddy wrote is placed where it was drawn from (its recorded origin and scale), so its
+/// geometry lies on the source drawing's coordinates.
 fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").map(|t| t.trim().trim_matches('"').to_string()).ok_or_else(|| bad("dwfattach", "`path` is required"))?;
     let page = p.get("page").and_then(Value::as_u64).map(|n| u32::try_from(n.clamp(1, 100_000)).unwrap_or(1)).unwrap_or(1);
-    let at = point_param(p, "at").unwrap_or(Vec2::ZERO);
-    let scale = f64_or(p, "scale", 1.0);
+    let bytes = read_bytes(&path)?;
+    let (d, report) = read_dwf_page(&bytes, &path, page)?;
+    let recorded = |k: &str| report.get(k).filter(|_| bool_or(p, "trueScale", false));
+    let at = match (point_param(p, "at"), recorded("origin").and_then(|o| Some(Vec2::new(o.get(0)?.as_f64()?, o.get(1)?.as_f64()?)))) {
+        (Some(a), _) => a,
+        (None, Some(o)) => o,
+        (None, None) => Vec2::ZERO,
+    };
+    let scale = match (p.get("scale").and_then(Value::as_f64), recorded("scale").and_then(Value::as_f64)) {
+        (Some(k), _) => k,
+        (None, Some(k)) => k,
+        (None, None) => 1.0,
+    };
     if !(scale.is_finite() && scale > 0.0 && scale < 1e9) {
         return Err(bad("dwfattach", "`scale` must be a positive number"));
     }
@@ -434,17 +471,16 @@ fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
     if !rot.is_finite() || !at.is_finite() {
         return Err(bad("dwfattach", "`at` and `rotation` must be finite"));
     }
-
-    let bytes = read_bytes(&path)?;
-    let d = read_dwf_page(&bytes, &path, page)?;
+    let sheet = report.get("sheet").and_then(Value::as_array);
+    let dim = |i: usize| sheet.and_then(|a| a.get(i)).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0);
     let ext = d.extents(&cadaddy_doc::Space::Model);
-    let size = if !ext.is_empty() { ext.max } else { Vec2::new(8.5, 11.0) };
+    let size = match (dim(0), dim(1)) {
+        (Some(w), Some(h)) => Vec2::new(w, h),
+        _ if !ext.is_empty() => ext.max,
+        _ => Vec2::new(8.5, 11.0),
+    };
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
-
-    // Cache the page like PDF underlays do.
-    if let Ok(mut g) = PAGES.lock() {
-        g.get_or_insert_with(HashMap::new).insert((path.clone(), page), Some(Arc::new(d)));
-    }
+    cache_page(&path, page, d);
 
     let (sn, cs) = rot.sin_cos();
     let u = Underlay {
@@ -463,49 +499,47 @@ fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
         layers_off: Vec::new(),
     };
     let h = s.add_entity(EntityKind::Underlay(Box::new(u)))?;
-    Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "layers": layers }))
+    let mut out = json!({ "handle": h.hex(), "size": [size.x, size.y], "layers": layers, "pages": report.get("pages").cloned().unwrap_or(json!(1)) });
+    if let Some(n) = report.get("name") {
+        out["sheet"] = n.clone();
+    }
+    for k in ["origin", "scale"] {
+        if let Some(v) = report.get(k) {
+            out[k] = v.clone();
+        }
+    }
+    Ok(out)
 }
 
-/// Read a DWF/DWFx page: try DWFx (XPS) first, then DWF6.
-fn read_dwf_page(bytes: &[u8], path: &str, page: u32) -> Result<Drawing> {
+/// A sheet of a DWFx or DWF 6 file, through the io hooks' DWF reader (which tells a DWFx from a
+/// DWF by its content): the drawing and the reader's report.
+fn read_dwf_page(bytes: &[u8], path: &str, page: u32) -> Result<(Drawing, Value)> {
     let hooks = super::file::io().ok_or_else(|| bad("dwfattach", "file formats are not available in this build"))?;
-    // The read_dwf hook decodes a DWFx or DWF page from the raw file bytes.
     let read = hooks.read_dwf.ok_or_else(|| bad("dwfattach", "DWF reading is not available in this build"))?;
     read(bytes, page).map_err(|e| bad("dwfattach", format!("{path}: {e}")))
 }
 
-/// DWFOUT: export model space as DWF 6.
-fn run_dwfout(s: &mut Session, p: &Value) -> Result<Value> {
-    let hooks = super::file::io().ok_or_else(|| bad("dwfout", "file formats are not available in this build"))?;
-    let bytes = (hooks.write)(s.doc()?, "export.dwf").map_err(|e| bad("dwfout", e))?;
-    match str_param(p, "path") {
-        Some(path) => {
-            super::exchange::write_file("dwfout", path, &bytes)?;
-            Ok(json!({ "format": "dwf", "path": path, "bytes": bytes.len() }))
-        }
-        None => Ok(json!({ "format": "dwf", "data": super::file::base64_encode(&bytes), "bytes": bytes.len() })),
-    }
-}
-
-/// DWFXOUT: export as DWFx (multi-sheet).
-fn run_dwfxout(s: &mut Session, p: &Value) -> Result<Value> {
-    let hooks = super::file::io().ok_or_else(|| bad("dwfxout", "file formats are not available in this build"))?;
-    let d = s.doc()?;
-
-    // Collect spaces to export.
-    let spaces: Vec<cadaddy_doc::Space> = match p.get("layouts") {
+/// The sheets DWFOUT/DWFXOUT write: `layouts`, else `default`.
+fn out_spaces(cmd: &str, d: &Drawing, p: &Value, model_only: bool) -> Result<Vec<cadaddy_doc::Space>> {
+    match p.get("layouts") {
         Some(v) => {
-            let a = v.as_array().ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
-            a.iter()
+            let a = v.as_array().ok_or_else(|| bad(cmd, "`layouts` must be a list of layout names"))?;
+            let spaces: Vec<cadaddy_doc::Space> = a
+                .iter()
                 .map(|n| {
-                    let n = n.as_str().ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
+                    let n = n.as_str().ok_or_else(|| bad(cmd, "`layouts` must be a list of layout names"))?;
                     if n.eq_ignore_ascii_case("model") {
                         return Ok(cadaddy_doc::Space::Model);
                     }
-                    d.layout(n).map(|l| cadaddy_doc::Space::Paper(l.name.clone())).ok_or_else(|| bad("dwfxout", format!("no layout `{n}`")))
+                    d.layout(n).map(|l| cadaddy_doc::Space::Paper(l.name.clone())).ok_or_else(|| bad(cmd, format!("no layout `{n}`")))
                 })
-                .collect::<Result<_>>()?
+                .collect::<Result<_>>()?;
+            if spaces.is_empty() {
+                return Err(bad(cmd, "`layouts` names no sheet"));
+            }
+            Ok(spaces)
         }
+        None if model_only => Ok(vec![cadaddy_doc::Space::Model]),
         None => {
             let mut out = Vec::new();
             if !d.model.is_empty() {
@@ -519,21 +553,42 @@ fn run_dwfxout(s: &mut Session, p: &Value) -> Result<Value> {
             if out.is_empty() {
                 out.push(cadaddy_doc::Space::Model);
             }
-            out
+            Ok(out)
         }
-    };
+    }
+}
 
+/// DWFOUT / DWFXOUT: the sheets as one DWF 6 or DWFx file, written or returned.
+fn write_sheets(s: &mut Session, p: &Value, cmd: &str, format: &str, model_only: bool) -> Result<Value> {
+    let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
+    let write = hooks.write_dwfx.ok_or_else(|| bad(cmd, "DWF writing is not available in this build"))?;
+    if let Some(k) = p.get("scale")
+        && !k.as_f64().is_some_and(|k| k.is_finite() && k > 0.0)
+    {
+        return Err(bad(cmd, "`scale` must be a positive number of drawing units per sheet inch"));
+    }
+    let d = s.doc()?;
+    let spaces = out_spaces(cmd, d, p, model_only)?;
+    let opts = json!({ "format": format, "scale": p.get("scale"), "fit": p.get("fit").and_then(Value::as_bool).unwrap_or(false) });
+    let bytes = write(d, &spaces, &opts).map_err(|e| bad(cmd, e))?;
     let pages = spaces.len();
-    let write_dwfx = hooks.write_dwfx.ok_or_else(|| bad("dwfxout", "DWFx writing is not available in this build"))?;
-    let bytes = write_dwfx(d, &spaces).map_err(|e| bad("dwfxout", e))?;
-
     match str_param(p, "path") {
         Some(path) => {
-            super::exchange::write_file("dwfxout", path, &bytes)?;
-            Ok(json!({ "format": "dwfx", "path": path, "pages": pages, "bytes": bytes.len() }))
+            super::exchange::write_file(cmd, path, &bytes)?;
+            Ok(json!({ "format": format, "path": path, "pages": pages, "bytes": bytes.len() }))
         }
-        None => Ok(json!({ "format": "dwfx", "data": super::file::base64_encode(&bytes), "pages": pages, "bytes": bytes.len() })),
+        None => Ok(json!({ "format": format, "data": super::file::base64_encode(&bytes), "pages": pages, "bytes": bytes.len() })),
     }
+}
+
+/// DWFOUT: DWF 6, model space unless `layouts` names the sheets.
+fn run_dwfout(s: &mut Session, p: &Value) -> Result<Value> {
+    write_sheets(s, p, "dwfout", "dwf", true)
+}
+
+/// DWFXOUT: DWFx, one page per sheet.
+fn run_dwfxout(s: &mut Session, p: &Value) -> Result<Value> {
+    write_sheets(s, p, "dwfxout", "dwfx", false)
 }
 
 /// DWFATTACH interactive: file, page, insertion point, scale, rotation.

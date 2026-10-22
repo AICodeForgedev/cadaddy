@@ -286,6 +286,7 @@ const READ_HEADER_VARS: &[&str] = &[
     "DIMTXT",
     "DONUTID",
     "DONUTOD",
+    "DWFOSNAP",
     "DWGCODEPAGE",
     "EDGEMODE",
     "FILLETRAD",

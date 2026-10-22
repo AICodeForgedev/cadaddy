@@ -576,7 +576,9 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         "IMAGE" => EntityKind::Image(Box::new(crate::dxf_image::read_entity(tags))),
         // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
         // PDFREFERENCE: the name the ODA's converter writes for it.
-        "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE" => EntityKind::Underlay(Box::new(crate::dxf_underlay::read_entity(tags))),
+        "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE" | "DWFUNDERLAY" | "DWFREFERENCE" => {
+            EntityKind::Underlay(Box::new(crate::dxf_underlay::read_entity(tags)))
+        }
         // SHAPE (DXF Reference): insertion 10, size 40, name 2, rotation 50, relative X scale
         // 41, oblique 51 (degrees), in its OCS.
         "SHAPE" => EntityKind::Shape(Shape {
