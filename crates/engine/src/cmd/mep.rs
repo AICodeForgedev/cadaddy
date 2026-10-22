@@ -308,6 +308,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 bottoms_ft: bottoms.into_iter().map(|b| round(b.unwrap_or(sy.bottom_ft))).collect(),
                 objects: handles.iter().map(|h| h.hex()).collect(),
                 id: String::new(),
+                encased: false,
             });
             if runs.len() >= MAX_RUNS {
                 break;

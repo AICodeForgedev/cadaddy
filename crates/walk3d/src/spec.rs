@@ -1420,6 +1420,13 @@ pub struct MepRun {
     /// when a revision first compares it; empty before.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
+    /// Buried in a concrete encasement (a duct bank), as the drawings say.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub encased: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// What the reflected ceiling plans say, on the floor plans' coordinates.
