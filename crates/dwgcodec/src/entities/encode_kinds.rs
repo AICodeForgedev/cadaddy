@@ -2366,16 +2366,17 @@ fn sortentstable(w: &mut ObjWriter, r: &Rec) {
             _ => {}
         }
     }
+    // Spec layout: the count and the sort handles in the data stream, then the block record
+    // and the entities in the handle stream.
     let n = sorts.len().min(entities.len());
     w.d.bl(n as i32);
     for s in sorts.iter().take(n) {
-        w.href(5, Some(*s));
+        w.d.h(crate::bits::HandleRef { code: 0, value: *s });
     }
-    w.d.bl(n as i32);
+    w.href(4, block_owner);
     for e in entities.iter().take(n) {
         w.href(4, Some(*e));
     }
-    w.href(4, block_owner);
 }
 
 /// MATERIAL (spec §20.4.83): a material definition.
