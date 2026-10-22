@@ -69,7 +69,47 @@ pub struct SheetMap {
 // ---- Title block parsing ------------------------------------------------------------
 
 /// Known discipline prefixes: sheet number prefix → discipline code.
-const DISCIPLINE_PREFIX: &[(&str, &str)] = &[("FP-", "FP"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E")];
+const DISCIPLINE_PREFIX: &[(&str, &str)] =
+    &[("FP", "FP"), ("FA", "FA"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
+
+/// The discipline a sheet number's letters name: `M-101`, `M101`, `M1.01` and `FP-201` alike.
+fn discipline_of(number: &str) -> Option<&'static str> {
+    let up = number.trim().to_ascii_uppercase();
+    let letters: String = up.chars().take_while(char::is_ascii_alphabetic).collect();
+    let next = up.chars().nth(letters.len())?;
+    if !(next == '-' || next == '.' || next.is_ascii_digit()) {
+        return None;
+    }
+    DISCIPLINE_PREFIX.iter().find(|(p, _)| *p == letters).map(|(_, d)| *d)
+}
+
+/// Whether a text reads as a sheet number: one or two letters, an optional `-` or `.`, then a
+/// number with an optional decimal part and letter (`A-101`, `A101`, `C2.0`, `E-4`, `M-101A`).
+fn looks_like_sheet_number(v: &str) -> bool {
+    let v = v.trim();
+    let b = v.as_bytes();
+    let letters = b.iter().take_while(|c| c.is_ascii_uppercase()).count();
+    if !(1..=2).contains(&letters) || v.len() > 8 {
+        return false;
+    }
+    let mut rest = b.get(letters..).unwrap_or_default();
+    if let Some((&c, r)) = rest.split_first()
+        && (c == b'-' || c == b'.')
+    {
+        rest = r;
+    }
+    let digits = rest.iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 4 {
+        return false;
+    }
+    let tail = rest.get(digits..).unwrap_or_default();
+    match tail {
+        [] => true,
+        [c] => c.is_ascii_uppercase(),
+        [b'.', more @ ..] => (1..=2).contains(&more.len()) && more.iter().all(u8::is_ascii_digit),
+        _ => false,
+    }
+}
 
 /// Parse a scale string like `1/8" = 1'-0"` → paper inches per building foot.
 pub fn parse_scale(s: &str) -> Option<f64> {
@@ -83,10 +123,24 @@ pub fn parse_scale(s: &str) -> Option<f64> {
     if parts.len() == 2 {
         let left = parts[0].trim().trim_end_matches('"').trim();
         if let Some(val) = parse_fraction(left) {
-            return Some(val);
+            // `1" = 20'-0"`: paper inches per however many feet the right side says.
+            let feet = parse_feet(parts[1]).filter(|f| *f > 1e-9).unwrap_or(1.0);
+            return Some(val / feet).filter(|v| v.is_finite() && *v > 0.0);
         }
     }
     None
+}
+
+/// The right side of a scale note in feet: `1'-0"`, `20'`, `20'-0"`, `6"`.
+fn parse_feet(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let (ft, rest) = match s.split_once('\'') {
+        Some((f, r)) => (f.trim().parse::<f64>().ok()?, r.trim().trim_start_matches('-').trim()),
+        None => (0.0, s),
+    };
+    let inches = rest.trim_end_matches('"').trim();
+    let inches = if inches.is_empty() { 0.0 } else { parse_fraction(inches)? };
+    Some(ft + inches / 12.0)
 }
 
 fn parse_fraction(s: &str) -> Option<f64> {
@@ -116,7 +170,56 @@ fn detect_sheet_number(d: &Drawing) -> Option<String> {
             best = Some((h, val));
         }
     }
-    best.map(|(_, v)| v)
+    best.map(|(_, v)| v).or_else(|| sheet_number_in_title_block(d))
+}
+
+/// The texts of a drawing with their heights and where they sit across the sheet's extents
+/// (0 = left or bottom edge, 1 = right or top), for drawings whose layers say nothing (a PDF's
+/// print, where everything comes in on one or a few pen layers).
+fn texts_across(d: &Drawing) -> Vec<(String, f64, [f64; 2], [f64; 2])> {
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    let mut grow = |p: [f64; 2]| {
+        if p[0].is_finite() && p[1].is_finite() {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+    };
+    let mut texts = Vec::new();
+    for e in d.model.iter() {
+        match &e.kind {
+            EntityKind::Line(l) => {
+                grow([l.a.x, l.a.y]);
+                grow([l.b.x, l.b.y]);
+            }
+            EntityKind::LwPolyline(pl) => pl.vertices.iter().for_each(|v| grow([v.p.x, v.p.y])),
+            EntityKind::Text(t) => {
+                grow([t.insert.x, t.insert.y]);
+                texts.push((t.value.trim().to_string(), t.height, [t.insert.x, t.insert.y]));
+            }
+            EntityKind::MText(t) => {
+                grow([t.insert.x, t.insert.y]);
+                texts.push((t.contents.trim().to_string(), t.height, [t.insert.x, t.insert.y]));
+            }
+            _ => {}
+        }
+    }
+    let size = [(hi[0] - lo[0]).max(1e-9), (hi[1] - lo[1]).max(1e-9)];
+    texts.into_iter().map(|(v, h, p)| (v, h, [(p[0] - lo[0]) / size[0], (p[1] - lo[1]) / size[1]], p)).collect()
+}
+
+/// In the title block: along the right edge or the bottom of the sheet.
+fn in_title_block(at: [f64; 2]) -> bool {
+    at[0] > 0.8 || at[1] < 0.15
+}
+
+/// The sheet number without a `TITLE` layer: the largest text in the title block that reads as
+/// one, the one nearest the bottom right corner when two are as large.
+fn sheet_number_in_title_block(d: &Drawing) -> Option<String> {
+    texts_across(d)
+        .into_iter()
+        .filter(|(v, _, at, _)| in_title_block(*at) && looks_like_sheet_number(v))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then((a.2[0] - a.2[1]).total_cmp(&(b.2[0] - b.2[1]))))
+        .map(|(v, _, _, _)| v)
 }
 
 fn detect_scale_text(d: &Drawing) -> Option<(String, f64)> {
@@ -137,14 +240,34 @@ fn detect_scale_text(d: &Drawing) -> Option<(String, f64)> {
             }
         }
     }
-    None
+    scale_note_anywhere(d)
+}
+
+/// The scale without `TITLE`/`TEXT` layers: the most common scale note on the sheet, with or
+/// without a `SCALE:` label (a sheet of several views has one under each; the plan's repeats).
+fn scale_note_anywhere(d: &Drawing) -> Option<(String, f64)> {
+    let mut seen: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+    for e in d.model.iter() {
+        let val = match &e.kind {
+            EntityKind::Text(t) => t.value.as_str(),
+            EntityKind::MText(t) => t.contents.as_str(),
+            _ => continue,
+        };
+        let up = val.trim().to_ascii_uppercase();
+        let note = up.strip_prefix("SCALE").map_or(up.as_str(), |r| r.trim_start_matches([':', ' '])).trim();
+        if !note.contains('=') || !(note.contains('\'') || note.contains('"')) || note.len() > 24 {
+            continue;
+        }
+        if let Some(k) = parse_scale(note) {
+            seen.entry(note.to_string()).or_insert((k, 0)).1 += 1;
+        }
+    }
+    seen.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0))).map(|(t, (k, _))| (t, k))
 }
 
 fn detect_discipline(number: &str, texts: &[(String, [f64; 2])]) -> String {
-    for &(prefix, disc) in DISCIPLINE_PREFIX {
-        if number.starts_with(prefix) {
-            return disc.to_string();
-        }
+    if let Some(disc) = discipline_of(number) {
+        return disc.to_string();
     }
     let keywords =
         [("MECHANICAL", "M"), ("PLUMBING", "P"), ("FIRE PROTECTION", "FP"), ("STRUCTURAL", "S"), ("ARCHITECTURAL", "A"), ("REFLECTED CEILING", "A")];
@@ -159,12 +282,38 @@ fn detect_discipline(number: &str, texts: &[(String, [f64; 2])]) -> String {
     "G".to_string()
 }
 
+/// `FIRST`, `1ST`, `2ND` … as a level number.
+fn ordinal(word: &str) -> Option<u32> {
+    const WORDS: [&str; 10] = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH"];
+    if let Some(i) = WORDS.iter().position(|w| *w == word) {
+        return u32::try_from(i + 1).ok();
+    }
+    let digits: String = word.chars().take_while(char::is_ascii_digit).collect();
+    let suffix = word.get(digits.len()..)?;
+    if matches!(suffix, "ST" | "ND" | "RD" | "TH") { digits.parse().ok().filter(|n| *n > 0 && *n < 200) } else { None }
+}
+
 fn detect_level(title: &str) -> Option<String> {
     let upper = title.to_uppercase();
     if let Some(rest) = upper.strip_prefix("LEVEL ").or_else(|| upper.find("LEVEL ").map(|i| &upper[i + 6..])) {
-        let code = rest.split_whitespace().next().unwrap_or("");
+        let code = rest.split_whitespace().next().unwrap_or("").trim_end_matches([',', ':', '-']);
         if !code.is_empty() {
+            // `LEVEL 02` is level 2.
+            let code = if code.len() > 1 && code.chars().all(|c| c.is_ascii_digit()) { code.trim_start_matches('0') } else { code };
             return Some(code.to_string());
+        }
+    }
+    // `SECOND FLOOR PLAN`, `2ND FLOOR`, `FLOOR 2`.
+    let words: Vec<&str> = upper.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    for (i, w) in words.iter().enumerate() {
+        if *w != "FLOOR" {
+            continue;
+        }
+        if let Some(n) = i.checked_sub(1).and_then(|j| words.get(j)).and_then(|p| ordinal(p)) {
+            return Some(n.to_string());
+        }
+        if let Some(n) = words.get(i + 1).and_then(|n| n.parse::<u32>().ok()).filter(|n| *n > 0 && *n < 200) {
+            return Some(n.to_string());
         }
     }
     // A roof plan (framing, drainage…), not a sheet of roof assemblies or details.
@@ -190,6 +339,19 @@ fn detect_title(d: &Drawing, number: &str) -> String {
         }
         candidates.push((h, val));
     }
+    if candidates.is_empty() {
+        // No TITLE layer: the title block's texts, else the views' titles across the sheet.
+        let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
+        let titled = |v: &str| {
+            let up = v.to_uppercase();
+            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM"]
+                .iter()
+                .any(|k| up.contains(k))
+        };
+        let best = |block: bool| texts.iter().filter(|(v, _, at, _)| in_title_block(*at) == block && titled(v)).max_by(|a, b| a.1.total_cmp(&b.1));
+        let Some(first) = best(true).or_else(|| best(false)) else { return String::new() };
+        return title_lines(&texts, first);
+    }
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, val) in &candidates {
         let upper = val.to_uppercase();
@@ -205,17 +367,43 @@ fn detect_title(d: &Drawing, number: &str) -> String {
     candidates.first().map_or_else(String::new, |(_, v)| v.clone())
 }
 
+/// A title printed over several lines (`SECOND FLOOR` above `POWER PLAN`): the lines of the
+/// same lettering stacked with `first`, top to bottom, joined.
+fn title_lines(texts: &[(String, f64, [f64; 2], [f64; 2])], first: &(String, f64, [f64; 2], [f64; 2])) -> String {
+    let h = first.1.max(1e-9);
+    // A title's lines are short; a note block's are long.
+    let alike = |t: &&(String, f64, [f64; 2], [f64; 2])| (t.1 - h).abs() <= h * 0.25 && (t.3[0] - first.3[0]).abs() <= h * 12.0 && t.0.len() <= 40;
+    let mut lines: Vec<&(String, f64, [f64; 2], [f64; 2])> = vec![first];
+    // Grow the stack a line at a time, up and down (at most a few lines).
+    for _ in 0..4 {
+        let (top, bottom) = lines.iter().fold((f64::NEG_INFINITY, f64::INFINITY), |(t, b), l| (t.max(l.3[1]), b.min(l.3[1])));
+        let next = texts.iter().filter(alike).find(|t| {
+            let y = t.3[1];
+            !lines.iter().any(|l| std::ptr::eq(*l, *t)) && ((y > top && y - top <= h * 2.0) || (y < bottom && bottom - y <= h * 2.0))
+        });
+        match next {
+            Some(t) => lines.push(t),
+            None => break,
+        }
+    }
+    lines.sort_by(|a, b| b.3[1].total_cmp(&a.3[1]));
+    lines.iter().map(|l| l.0.as_str()).collect::<Vec<_>>().join(" ")
+}
+
 // ---- Grid detection -----------------------------------------------------------------
 
 /// Detect grid bubbles: circles on GRID-BUBBLE layer, with text labels inside.
 fn detect_grid_bubbles(d: &Drawing) -> Vec<(String, [f64; 2])> {
+    if !d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("GRID-BUBBLE")) {
+        return bubbles_without_layers(d);
+    }
     let mut circles: Vec<(f64, f64, f64)> = Vec::new();
     for e in d.model.iter() {
         if !e.common.layer.eq_ignore_ascii_case("GRID-BUBBLE") {
             continue;
         }
-        if let EntityKind::Circle(c) = &e.kind {
-            circles.push((c.center.x, c.center.y, c.radius));
+        if let Some((c, r)) = round_shape(&e.kind) {
+            circles.push((c[0], c[1], r));
         }
     }
     let mut texts: Vec<(String, [f64; 2])> = Vec::new();
@@ -252,7 +440,97 @@ fn detect_grid_bubbles(d: &Drawing) -> Vec<(String, [f64; 2])> {
             bubbles.push((label.clone(), centre));
         }
     }
-    bubbles
+    // A print keeps the layer but puts the labels on its text layer.
+    if bubbles.is_empty() { bubbles_without_layers(d) } else { bubbles }
+}
+
+/// Most round shapes and labels looked at on a sheet without layers (hostile input guard).
+const MAX_ROUNDS: usize = 20_000;
+
+/// A circle, or a closed polyline that is one (a PDF's print draws circles as many short
+/// segments or as two arcs): its centre and radius.
+fn round_shape(kind: &EntityKind) -> Option<([f64; 2], f64)> {
+    match kind {
+        EntityKind::Circle(c) => Some(([c.center.x, c.center.y], c.radius)),
+        EntityKind::LwPolyline(pl) => {
+            let n = pl.vertices.len();
+            let arcs = pl.vertices.iter().filter(|v| v.bulge.abs() > 0.3).count();
+            if !(2..=256).contains(&n) || (n < 8 && arcs < 2) {
+                return None;
+            }
+            let pts: Vec<[f64; 2]> = pl.vertices.iter().map(|v| [v.p.x, v.p.y]).collect();
+            let c = [pts.iter().map(|p| p[0]).sum::<f64>() / n as f64, pts.iter().map(|p| p[1]).sum::<f64>() / n as f64];
+            let radii: Vec<f64> = pts.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
+            let r = radii.iter().sum::<f64>() / n as f64;
+            let (first, last) = (pts.first()?, pts.last()?);
+            let closed = pl.closed || (first[0] - last[0]).hypot(first[1] - last[1]) < r * 0.05;
+            (closed && r > 1e-9 && r.is_finite() && radii.iter().all(|q| (q - r).abs() < r * 0.08)).then_some((c, r))
+        }
+        _ => None,
+    }
+}
+
+/// Grid bubbles on a sheet whose layers say nothing: short labels (`1`, `12`, `A`, `C.5`) inside
+/// round shapes, kept when their label is in two bubbles in line (the two ends of a grid line)
+/// and their radius is the bubbles' usual one (not a keynote's or a tag's).
+fn bubbles_without_layers(d: &Drawing) -> Vec<(String, [f64; 2])> {
+    let rounds: Vec<([f64; 2], f64)> = d.model.iter().filter_map(|e| round_shape(&e.kind)).take(MAX_ROUNDS).collect();
+    if rounds.is_empty() {
+        return Vec::new();
+    }
+    let mut found: Vec<(String, [f64; 2], f64)> = Vec::new();
+    for e in d.model.iter() {
+        let (label, at) = match &e.kind {
+            EntityKind::Text(t) => {
+                let v = t.value.trim();
+                // A PDF's text sits on its baseline at its left end: its middle is up and right.
+                let mid = t.align_pt.map_or([t.insert.x + t.height * 0.35 * v.len() as f64, t.insert.y + t.height * 0.5], |p| [p.x, p.y]);
+                (v.to_string(), mid)
+            }
+            EntityKind::MText(t) => (t.contents.trim().to_string(), [t.insert.x, t.insert.y]),
+            _ => continue,
+        };
+        let short = (1..=3).contains(&label.len())
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+            && label.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
+        if !short {
+            continue;
+        }
+        let inside = rounds.iter().filter(|(c, r)| (at[0] - c[0]).hypot(at[1] - c[1]) < r * 1.2).min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((c, r)) = inside {
+            found.push((label, *c, *r));
+        }
+        if found.len() >= MAX_ROUNDS {
+            break;
+        }
+    }
+    // Labels in two bubbles in line, then the radius most of those share.
+    // One bubble per shape (a label drawn twice over itself counts once).
+    let mut by_label: BTreeMap<&str, Vec<([f64; 2], f64)>> = BTreeMap::new();
+    for (l, c, r) in &found {
+        let v = by_label.entry(l.as_str()).or_default();
+        if !v.iter().any(|(p, q)| (p[0] - c[0]).hypot(p[1] - c[1]) < q * 0.5) {
+            v.push((*c, *r));
+        }
+    }
+    let mut paired: Vec<f64> = Vec::new();
+    for v in by_label.values() {
+        if let [(a, ra), (b, _), ..] = v.as_slice() {
+            let (dx, dy) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
+            if dx < dy * 0.3 || dy < dx * 0.3 {
+                paired.push(*ra);
+            }
+        }
+    }
+    if paired.len() < 3 {
+        return Vec::new();
+    }
+    paired.sort_by(f64::total_cmp);
+    let Some(&usual) = paired.get(paired.len() / 2) else { return Vec::new() };
+    by_label
+        .into_iter()
+        .flat_map(|(l, v)| v.into_iter().filter(|(_, r)| (r - usual).abs() <= usual * 0.15).map(move |(c, _)| (l.to_string(), c)))
+        .collect()
 }
 
 /// Detect grid lines on the GRID layer.
@@ -477,7 +755,12 @@ pub fn build_sheet_map(drawings: &[(String, &Drawing)]) -> SheetMap {
         }
         sheets.push(sh);
     }
+    sheet_map_from(sheets)
+}
 
+/// The sheet map of sheets already recognised one at a time ([`recognise_dxf`]), so a large
+/// set needn't hold every drawing at once: the common grid assembled, each sheet aligned.
+pub fn sheet_map_from(mut sheets: Vec<RecognisedSheet>) -> SheetMap {
     // Phase 2: assemble the common grid from all sheets' detected grid lines.
     let (grid_x, grid_y) = assemble_grid(&sheets);
 
