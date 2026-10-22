@@ -12,6 +12,7 @@
 //! | BSPC | the building spec | JSON text |
 //! | TOUR | the camera tours | JSON text |
 //! | BCFI | the BCF issues | JSON text |
+//! | SCH4 | the 4D schedule | JSON text |
 //! | OVRD | the overrides of generated elements | JSON text |
 //! | AGNT | the agent state (notes, review decisions, change log) | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
@@ -37,8 +38,8 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 14] =
-    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 15] =
+    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -238,6 +239,7 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "buildingSpec": d.building_spec.is_some(),
         "tours": d.tours.is_some(),
         "bcf": d.bcf.is_some(),
+        "schedule4d": d.schedule4d.is_some(),
         "embedded": d.embedded.keys().collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
@@ -431,6 +433,14 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
             continue;
         }
         match &c.tag {
+            b"SCH4" => {
+                match String::from_utf8(c.data).ok().filter(|t| t.len() <= MAX_TEXT).map(|t| cadaddy_walk3d::fourd::Schedule4d::from_json(Some(&t))) {
+                    Some(Ok(s)) => d.schedule4d = s.to_json(),
+                    Some(Err(e)) => rep.notes.push(format!("the 4D schedule couldn't be read: {e}")),
+                    None => rep.notes.push("the 4D schedule couldn't be read".into()),
+                }
+                continue;
+            }
             b"OVRD" => {
                 match String::from_utf8(c.data).ok().filter(|t| t.len() <= MAX_TEXT).map(|t| cadaddy_doc::overrides::Overrides::from_json(&t)) {
                     Some(Ok(o)) => d.overrides = o.to_json().ok(),

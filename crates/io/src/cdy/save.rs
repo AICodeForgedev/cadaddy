@@ -85,7 +85,8 @@ enum Part<'a> {
     Objects(ChunkRef),
     Layout(&'a cadaddy_doc::Layout),
     Foreign(&'a Arc<Foreign>),
-    /// The building spec (BSPC), the camera tours (TOUR) or the overrides (OVRD).
+    /// The building spec (BSPC), the camera tours (TOUR), the 4D schedule (SCH4) or the overrides
+    /// (OVRD).
     Text([u8; 4], &'a str),
     Embedded(&'a str, &'a Arc<Vec<u8>>),
 }
@@ -106,6 +107,9 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     }
     if let Some(t) = &d.bcf {
         out.push(Part::Text(*b"BCFI", t));
+    }
+    if let Some(t) = &d.schedule4d {
+        out.push(Part::Text(*b"SCH4", t));
     }
     if let Some(t) = &d.overrides {
         out.push(Part::Text(*b"OVRD", t));
@@ -319,7 +323,7 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
                 Source::Embedded(name, b)
             }
             b"THMB" => Source::Thumbnail,
-            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" | b"OVRD" | b"AGNT" => {
+            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" | b"SCH4" | b"OVRD" | b"AGNT" => {
                 let (container::Read::Ok(c), _) = container::chunk_at(bytes, usize::try_from(e.offset).ok()?)? else { return None };
                 Source::Bytes(e.tag, crc32fast::hash(&c.data), c.data.len() as u64)
             }

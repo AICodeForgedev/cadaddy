@@ -209,6 +209,8 @@ pub struct Walk {
     view_name: String,
     /// A command the panel asked for; it runs on the drawing after the panel is drawn.
     pending: Option<(&'static str, serde_json::Value)>,
+    /// The 4D date the drawn scene shows (see [`crate::fourdpalette`]).
+    fourd: Option<crate::fourdpalette::Shown>,
 }
 
 /// A camera tour being played in Walk.
@@ -270,6 +272,7 @@ impl Walk {
             playing: None,
             view_name: String::new(),
             pending: None,
+            fourd: None,
         };
         w.rebuild_view();
         w.rebuild_ground();
@@ -402,7 +405,20 @@ impl Walk {
         let level = self.only_level.then_some(self.walker.level);
         self.view = visible(b, &self.hidden_types, self.walls_on, level.and_then(|i| level_band(&b.scene, i)));
         self.view_level = level;
+        if let Some(f) = self.fourd
+            && let Some(d) = b.drawings.first()
+        {
+            self.view = crate::fourdpalette::stage_walk(&self.view, d, f);
+        }
         self.uploaded = false;
+    }
+
+    /// Show the model at a 4D date (`None`: as drawn).
+    pub fn set_fourd(&mut self, f: Option<crate::fourdpalette::Shown>) {
+        if self.fourd != f {
+            self.fourd = f;
+            self.rebuild_view();
+        }
     }
 }
 
@@ -539,6 +555,10 @@ pub fn frame_for(scene: &Scene, w: &Walker, size: (u32, u32), cut: bool) -> gpu:
 /// The walk view in place of the drawing canvas: the 3D on the left, its panel on the right.
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     refresh_if_edited(app);
+    let fourd = app.fourd;
+    if let Some(w) = app.walk.as_mut() {
+        w.set_fourd(fourd);
+    }
     // The GPU unless it can't draw the 3D views (see `gpucaps`).
     let rs = app.wgpu_rs.clone().filter(|_| !app.gpu_caps.cpu);
     let samples = app.gpu_caps.msaa;

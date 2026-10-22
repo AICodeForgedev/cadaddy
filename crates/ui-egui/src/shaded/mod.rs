@@ -24,6 +24,8 @@ struct SceneKey {
     band: i32,
     /// The baked lighting's version (LIGHTBAKE): a bake builds the model again.
     lightmap: u64,
+    /// The 4D date shown (the model as it stands then).
+    fourd: Option<crate::fourdpalette::Shown>,
 }
 
 /// A model being built off the UI thread, and how far it has got.
@@ -248,8 +250,8 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     // Looks for a lightmap beside the drawing the first time.
     let _ = cadaddy_engine::cmd::lightbake::current(&mut app.session);
     let st = app.session.state().ok()?;
-    let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band, lightmap: st.lightmap_rev };
-    let doc = Arc::clone(&st.doc);
+    let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band, lightmap: st.lightmap_rev, fourd: app.fourd };
+    let mut doc = Arc::clone(&st.doc);
     let shade_st = &mut app.canvas.shade;
     if shade_st.model.as_ref().is_some_and(|(k, _)| *k == key) {
         shade_st.stats.building = None;
@@ -261,6 +263,11 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     // Read section box planes from coordination state for 3D clipping.
     let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
     let sbox_planes = crs.sbox_planes();
+    if let Some(f) = key.fourd
+        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
+    {
+        doc = Arc::new(staged);
+    }
     // A build for another key is dropped (it finishes in the background and is ignored).
     if shade_st.pending.as_ref().is_some_and(|p| p.key != key) {
         shade_st.pending = None;
@@ -271,9 +278,10 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
             let (progress, total) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(1)));
             let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
             let planes = sbox_planes.clone();
+            let doc_t = Arc::clone(&doc);
             let handle = std::thread::Builder::new()
                 .name("cadaddy-3d-model".into())
-                .spawn(move || model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
+                .spawn(move || model3::build_clipped(&doc_t, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
                 .ok();
             match handle {
                 Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: web_time::Instant::now(), handle }),
@@ -281,7 +289,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
                 None => {
                     let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
                     let started = web_time::Instant::now();
-                    let m = Arc::new(model3::build_clipped(&*st_doc(app)?, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
+                    let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
                     return Some(finish(app, key, m, started));
                 }
             }
@@ -306,11 +314,6 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
         let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
         Some(finish(app, key, m, started))
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn st_doc(app: &CadApp) -> Option<Arc<cadaddy_doc::Drawing>> {
-    app.session.state().ok().map(|st| Arc::clone(&st.doc))
 }
 
 /// Keep a finished model and its numbers.

@@ -169,6 +169,9 @@ pub struct Drawing {
     /// model, each with its viewpoint, selection, comments and snapshot. Kept in the named-object
     /// dictionary (`CADADDY_BCF`).
     pub bcf: Option<String>,
+    /// The 4D construction schedule and its links to the model (`cadaddy-walk3d`'s `Schedule4d` as
+    /// JSON text, `fourd.*`). Kept in the named-object dictionary (`CADADDY_4D`).
+    pub schedule4d: Option<String>,
     /// Overrides of generated elements (`overrides::Overrides` as JSON text, `override.*`): the
     /// edits a person, an agent or an import made to what a build generated, put back after every
     /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
@@ -287,6 +290,7 @@ impl Drawing {
             building_spec: None,
             tours: None,
             bcf: None,
+            schedule4d: None,
             overrides: None,
             agent: None,
             embedded: BTreeMap::new(),
