@@ -134,8 +134,11 @@ impl NewParameter {
 #[derive(Clone, Debug, PartialEq)]
 pub enum NewActionKind {
     /// Moves the vertices inside `frame` (and the whole objects inside it) by the parameter's change.
+    /// `vertices` names, for objects crossing the frame, which of their vertices move (a line's 0
+    /// and 1, a polyline's by index); a selected object not listed moves whole.
     Stretch {
         frame: Vec<Vec2>,
+        vertices: Vec<(Handle, Vec<i32>)>,
     },
     Move,
     Scale,
@@ -504,7 +507,7 @@ pub fn add_action(
     // A distance moves its end point (both from the midpoint): follow the end's X and Y.
     let conns = [(node, "UpdatedEndX"), (node, "UpdatedEndY")];
     match kind {
-        NewActionKind::Stretch { frame } => {
+        NewActionKind::Stretch { frame, vertices } => {
             if frame.len() < 3 || frame.len() > 1000 || frame.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
                 return Err("A stretch needs a frame of at least 3 points.".into());
             }
@@ -515,9 +518,14 @@ pub fn add_action(
                 tags.push(tag(1011, real(f.x)));
                 tags.push(tag(1021, real(f.y)));
             }
-            // Every vertex of the selected objects inside the frame moves (no vertex lists: the
-            // whole object for objects without listed vertices).
-            tags.push(tag(73, "0"));
+            // The listed objects move the vertices named; the other selected objects move whole.
+            let listed: Vec<&(Handle, Vec<i32>)> = vertices.iter().filter(|(h, _)| selection.contains(h)).take(MAX_LIST).collect();
+            tags.push(tag(73, listed.len().to_string()));
+            for (h, idx) in listed {
+                tags.push(tag(331, h.hex()));
+                tags.push(tag(74, idx.len().min(MAX_LIST).to_string()));
+                tags.extend(idx.iter().take(MAX_LIST).map(|i| tag(94, i.to_string())));
+            }
             tags.extend([tag(75, "0"), tag(140, "1"), tag(141, "0")]);
         }
         NewActionKind::Move => {

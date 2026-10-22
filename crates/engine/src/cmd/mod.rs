@@ -91,6 +91,7 @@ mod mtext_opts;
 mod overkill;
 pub mod overrides;
 pub mod p2meval;
+pub mod parts;
 pub mod pdfplans;
 mod perceive;
 mod pline_opts;
@@ -326,6 +327,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(imageclip::specs());
         v.extend(array::specs());
         v.extend(symbol::specs());
+        v.extend(parts::specs());
         v.extend(express::specs());
         v.extend(express4::specs());
         v.push(
