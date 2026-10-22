@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 889,
-    "count": 889,
+    "callableAsJson": 893,
+    "count": 893,
     "ids": [
       "-attedit",
       "-block",
@@ -145,6 +145,10 @@
       "burst",
       "bvstate",
       "cal",
+      "calibrate.fit",
+      "calibrate.payroll",
+      "calibrate.project",
+      "calibrate.topdown",
       "centerline",
       "centermark",
       "chamfer",
