@@ -1095,6 +1095,8 @@ pub struct Session {
     pub background_checks: bool,
     /// Drywall view mode: walls coloured by type, fire rating, board layers or height rule.
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
+    /// The active project (Q325): its manifest, which drawing is open.
+    pub project: Option<cmd::project::ProjectState>,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1197,6 +1199,7 @@ impl Session {
             events: events::EventLog::default(),
             background_checks: false,
             drywall_viewmode: None,
+            project: None,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't

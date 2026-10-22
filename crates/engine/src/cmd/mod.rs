@@ -48,6 +48,7 @@ pub(crate) mod inquiry;
 mod layer;
 pub mod markup;
 pub mod pointcloud;
+pub mod project;
 mod rasterout;
 pub mod rfi;
 pub mod schedules;
@@ -359,6 +360,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(attipedit::specs());
         v.extend(frames::specs());
         v.extend(coordination::specs());
+        v.extend(project::specs());
         v
     })
 }

@@ -22,6 +22,7 @@ fn kind_str(k: MepKind) -> &'static str {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
+        MepKind::Tray => "tray",
     }
 }
 

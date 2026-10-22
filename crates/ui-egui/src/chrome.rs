@@ -665,6 +665,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut action = None;
     for (label, cmd) in [
         ("Open...", "open"),
+        ("Open Project...", "open.project"),
         ("New", "new"),
         ("New (metric)", "new.metric"),
         ("Open sample drawing", "sample"),
@@ -730,8 +731,43 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
             t.text_dim,
         );
     }
+    // Show active project info below the buttons if one is open.
+    if let Some(ref proj) = app.session.project {
+        let py = y + 8.0;
+        let proj_rect = Rect::from_min_size(pos2(left.left() + 34.0, py), vec2(220.0, 60.0));
+        p.rect_filled(proj_rect, 4.0, t.chrome.gamma_multiply(0.8));
+        p.rect_stroke(proj_rect, 4.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        let clip = p.with_clip_rect(proj_rect.shrink(4.0));
+        clip.text(
+            pos2(proj_rect.left() + 8.0, proj_rect.top() + 16.0),
+            egui::Align2::LEFT_CENTER,
+            &proj.manifest.name,
+            crate::theme::body(),
+            t.text,
+        );
+        clip.text(
+            pos2(proj_rect.left() + 8.0, proj_rect.top() + 34.0),
+            egui::Align2::LEFT_CENTER,
+            crate::tf!("{n} drawings", n = proj.manifest.drawings.len()),
+            crate::theme::small(),
+            t.text_faint,
+        );
+        clip.text(
+            pos2(proj_rect.left() + 8.0, proj_rect.top() + 48.0),
+            egui::Align2::LEFT_CENTER,
+            if proj.manifest.shelved { crate::tl!("Shelved") } else { crate::tl!("Active") },
+            crate::theme::small(),
+            if proj.manifest.shelved { t.text_dim } else { t.accent },
+        );
+    }
     match action {
         Some("open") => app.start("ui.open"),
+        Some("open.project") => {
+            // Open a folder as a project: the native folder picker opens, and we call project.open.
+            if let Some(path) = app.services.pick_folder.as_ref().and_then(|f| f()) {
+                let _ = app.run("project.open", json!({ "path": path }));
+            }
+        }
         Some("new") => {
             app.start("new");
             app.ui.start_tab = false;
