@@ -2471,3 +2471,69 @@
 	Print Set Sheets	图纸集图纸
 	Re-import Revised Set	重新导入修订图纸集
 	Save Print Set	保存图纸集
+	Ahead	前进
+	Bottom / top AFF	底部 / 顶部（距完成地面）
+	Clash	碰撞
+	elements	个构件
+	Field Viewer	现场查看器
+	Fit	适应窗口
+	Keep	保留
+	New note	新备注
+	No new notes to send	没有要发送的新备注
+	No room matches	没有匹配的房间
+	Note	备注
+	Note kept	备注已保留
+	Notes	备注
+	notes ready to sync	条备注待同步
+	not typed	未指定类型
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	打开现场包（CADaddy 中的 FIELDVIEW.EXPORT），或拖放到此处
+	Open clashes and RFIs	未解决的碰撞和 RFI
+	RFI	RFI
+	Room number	房间号
+	Search a room number, or tap a room	搜索房间号，或点击一个房间
+	Send Notes	发送备注
+	Tap two points to measure	点击两点进行测量
+	Trades	专业
+	Unit	户型
+	Verified	已核实
+	Verified point	已核实点
+	What is there, as built	现场实际情况（竣工）
+	Plan	平面
+	3D	3D
+	Architectural	建筑
+	Structural	结构
+	Mechanical	暖通
+	Plumbing	给排水
+	Fire protection	消防
+	Other	其他
+	stated	已注明
+	inferred	推断
+	assumed	假定
+	Field Package	现场包
+	Sync Field Notes	同步现场备注
+	Field Notes	现场备注
+	Detect Unit Types	检测户型
+	List Unit Types	户型列表
+	Unit Schedule	户型表
+	Unit Type Takeoff	按户型统计工程量
+	Override Generated Element	覆盖生成的元素
+	List Overrides	列出覆盖
+	Revert Override	撤销覆盖
+	Accept Override After Review	审核后接受覆盖
+	Show or Hide Overrides	显示或隐藏覆盖
+	Re-apply Overrides	重新应用覆盖
+	Overrides	覆盖
+	Select generated element (or an object drawn by hand to add)	选择生成的元素（或要添加的手绘对象）
+	Enter type mark	输入类型标记
+	Enter override to revert	输入要撤销的覆盖
+	Verify	核实
+	review: the drawing changed here	审核：此处图形已更改
+	orphaned: its element is no longer generated	孤立：其元素已不再生成
+	Project Rules	项目规则
+	Domain:	域:
+	No project rules set.	未设置项目规则。
+	Tier:	层级:
+	Source:	来源:
+	Reason:	原因:
+	Overridden values:	被覆盖的值:
+	No drawing open.	没有打开的图形。

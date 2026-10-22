@@ -2404,3 +2404,69 @@
 	Print Set Sheets	Plansatz-Blätter
 	Re-import Revised Set	Überarbeiteten Satz neu importieren
 	Save Print Set	Plansatz speichern
+	Ahead	Vorwärts
+	Bottom / top AFF	Unterkante / Oberkante über FFB
+	Clash	Kollision
+	elements	Elemente
+	Field Viewer	Baustellen-Viewer
+	Fit	Einpassen
+	Keep	Behalten
+	New note	Neue Notiz
+	No new notes to send	Keine neuen Notizen zu senden
+	No room matches	Kein Raum gefunden
+	Note	Notiz
+	Note kept	Notiz behalten
+	Notes	Notizen
+	notes ready to sync	Notizen bereit zum Abgleich
+	not typed	ohne Typ
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Baustellenpaket öffnen (FIELDVIEW.EXPORT in CADaddy) oder hier ablegen
+	Open clashes and RFIs	Offene Kollisionen und RFIs
+	RFI	RFI
+	Room number	Raumnummer
+	Search a room number, or tap a room	Raumnummer suchen oder auf einen Raum tippen
+	Send Notes	Notizen senden
+	Tap two points to measure	Zum Messen zwei Punkte antippen
+	Trades	Gewerke
+	Unit	Einheit
+	Verified	Geprüft
+	Verified point	Geprüfter Punkt
+	What is there, as built	Was dort ist, wie gebaut
+	Plan	Grundriss
+	3D	3D
+	Architectural	Architektur
+	Structural	Tragwerk
+	Mechanical	Lüftung/Heizung
+	Plumbing	Sanitär
+	Fire protection	Brandschutz
+	Other	Sonstige
+	stated	angegeben
+	inferred	abgeleitet
+	assumed	angenommen
+	Field Package	Baustellenpaket
+	Sync Field Notes	Baustellennotizen abgleichen
+	Field Notes	Baustellennotizen
+	Detect Unit Types	Einheitentypen erkennen
+	List Unit Types	Einheitentypen auflisten
+	Unit Schedule	Einheitenliste
+	Unit Type Takeoff	Mengen nach Einheitentyp
+	Override Generated Element	Generiertes Element überschreiben
+	List Overrides	Überschreibungen auflisten
+	Revert Override	Überschreibung zurücknehmen
+	Accept Override After Review	Überschreibung nach Prüfung annehmen
+	Show or Hide Overrides	Überschreibungen ein- oder ausblenden
+	Re-apply Overrides	Überschreibungen erneut anwenden
+	Overrides	Überschreibungen
+	Select generated element (or an object drawn by hand to add)	Generiertes Element wählen (oder ein von Hand gezeichnetes Objekt zum Hinzufügen)
+	Enter type mark	Typkennzeichen eingeben
+	Enter override to revert	Zurückzunehmende Überschreibung eingeben
+	Verify	Prüfen
+	review: the drawing changed here	prüfen: die Zeichnung hat sich hier geändert
+	orphaned: its element is no longer generated	verwaist: sein Element wird nicht mehr erzeugt
+	Project Rules	Projektregeln
+	Domain:	Domäne:
+	No project rules set.	Keine Projektregeln festgelegt.
+	Tier:	Stufe:
+	Source:	Quelle:
+	Reason:	Grund:
+	Overridden values:	Überschriebene Werte:
+	No drawing open.	Keine Zeichnung geöffnet.

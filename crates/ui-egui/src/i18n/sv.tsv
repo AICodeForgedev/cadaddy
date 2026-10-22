@@ -2595,3 +2595,69 @@ menu	Modify	Ändra
 	Print Set Sheets	Blad i ritningsuppsättning
 	Re-import Revised Set	Importera reviderad uppsättning igen
 	Save Print Set	Spara ritningsuppsättning
+	Ahead	Framåt
+	Bottom / top AFF	Under- / överkant över golv
+	Clash	Krock
+	elements	element
+	Field Viewer	Platsvisare
+	Fit	Anpassa
+	Keep	Behåll
+	New note	Ny anteckning
+	No new notes to send	Inga nya anteckningar att skicka
+	No room matches	Inget rum matchar
+	Note	Anteckning
+	Note kept	Anteckningen sparad
+	Notes	Anteckningar
+	notes ready to sync	anteckningar redo att synkas
+	not typed	ingen typ
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Öppna ett platspaket (FIELDVIEW.EXPORT i CADaddy) eller släpp ett här
+	Open clashes and RFIs	Öppna krockar och RFI
+	RFI	RFI
+	Room number	Rumsnummer
+	Search a room number, or tap a room	Sök ett rumsnummer eller tryck på ett rum
+	Send Notes	Skicka anteckningar
+	Tap two points to measure	Tryck på två punkter för att mäta
+	Trades	Yrkesgrupper
+	Unit	Enhet
+	Verified	Kontrollerad
+	Verified point	Kontrollerad punkt
+	What is there, as built	Vad som finns där, som byggt
+	Plan	Plan
+	3D	3D
+	Architectural	Arkitektur
+	Structural	Konstruktion
+	Mechanical	VVS-ventilation
+	Plumbing	Rör
+	Fire protection	Brandskydd
+	Other	Övrigt
+	stated	angivet
+	inferred	härlett
+	assumed	antaget
+	Field Package	Platspaket
+	Sync Field Notes	Synka platsanteckningar
+	Field Notes	Platsanteckningar
+	Detect Unit Types	Identifiera enhetstyper
+	List Unit Types	Lista enhetstyper
+	Unit Schedule	Enhetsförteckning
+	Unit Type Takeoff	Mängder per enhetstyp
+	Override Generated Element	Åsidosätt genererat element
+	List Overrides	Lista åsidosättningar
+	Revert Override	Återställ åsidosättning
+	Accept Override After Review	Godkänn åsidosättning efter granskning
+	Show or Hide Overrides	Visa eller dölj åsidosättningar
+	Re-apply Overrides	Tillämpa åsidosättningar igen
+	Overrides	Åsidosättningar
+	Select generated element (or an object drawn by hand to add)	Välj genererat element (eller ett handritat objekt att lägga till)
+	Enter type mark	Ange typbeteckning
+	Enter override to revert	Ange åsidosättning att återställa
+	Verify	Verifiera
+	review: the drawing changed here	granska: ritningen har ändrats här
+	orphaned: its element is no longer generated	föräldralös: dess element genereras inte längre
+	Project Rules	Projektregler
+	Domain:	Domän:
+	No project rules set.	Inga projektregler har ställts in.
+	Tier:	Nivå:
+	Source:	Källa:
+	Reason:	Anledning:
+	Overridden values:	Åsidosatta värden:
+	No drawing open.	Ingen ritning öppnad.

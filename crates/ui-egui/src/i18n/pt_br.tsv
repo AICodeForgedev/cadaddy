@@ -2594,3 +2594,69 @@
 	Print Set Sheets	Pranchas do conjunto
 	Re-import Revised Set	Reimportar conjunto revisado
 	Save Print Set	Salvar conjunto de pranchas
+	Ahead	Avançar
+	Bottom / top AFF	Base / topo acima do piso
+	Clash	Interferência
+	elements	elementos
+	Field Viewer	Visualizador de obra
+	Fit	Ajustar
+	Keep	Guardar
+	New note	Nova nota
+	No new notes to send	Nenhuma nota nova para enviar
+	No room matches	Nenhum ambiente corresponde
+	Note	Nota
+	Note kept	Nota guardada
+	Notes	Notas
+	notes ready to sync	notas prontas para sincronizar
+	not typed	sem tipo
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Abra um pacote de obra (FIELDVIEW.EXPORT no CADaddy) ou solte-o aqui
+	Open clashes and RFIs	Interferências e RFIs abertas
+	RFI	RFI
+	Room number	Número do ambiente
+	Search a room number, or tap a room	Pesquise um número de ambiente ou toque em um ambiente
+	Send Notes	Enviar notas
+	Tap two points to measure	Toque em dois pontos para medir
+	Trades	Disciplinas
+	Unit	Unidade
+	Verified	Verificado
+	Verified point	Ponto verificado
+	What is there, as built	O que existe, como construído
+	Plan	Planta
+	3D	3D
+	Architectural	Arquitetura
+	Structural	Estrutura
+	Mechanical	Mecânica
+	Plumbing	Hidráulica
+	Fire protection	Proteção contra incêndio
+	Other	Outros
+	stated	declarado
+	inferred	inferido
+	assumed	presumido
+	Field Package	Pacote de obra
+	Sync Field Notes	Sincronizar notas de obra
+	Field Notes	Notas de obra
+	Detect Unit Types	Detectar tipos de unidade
+	List Unit Types	Listar tipos de unidade
+	Unit Schedule	Quadro de unidades
+	Unit Type Takeoff	Levantamento por tipo de unidade
+	Override Generated Element	Substituir elemento gerado
+	List Overrides	Listar substituições
+	Revert Override	Reverter substituição
+	Accept Override After Review	Aceitar substituição após revisão
+	Show or Hide Overrides	Mostrar ou ocultar substituições
+	Re-apply Overrides	Reaplicar substituições
+	Overrides	Substituições
+	Select generated element (or an object drawn by hand to add)	Selecione o elemento gerado (ou um objeto desenhado à mão para adicionar)
+	Enter type mark	Insira a marca do tipo
+	Enter override to revert	Insira a substituição a reverter
+	Verify	Verificar
+	review: the drawing changed here	revisar: o desenho mudou aqui
+	orphaned: its element is no longer generated	órfã: o seu elemento já não é gerado
+	Project Rules	Regras do projeto
+	Domain:	Domínio:
+	No project rules set.	Nenhuma regra de projeto definida.
+	Tier:	Nível:
+	Source:	Fonte:
+	Reason:	Razão:
+	Overridden values:	Valores substituídos:
+	No drawing open.	Nenhum desenho aberto.

@@ -2568,3 +2568,69 @@ menu	Modify	Modifikace
 	Print Set Sheets	Listy tiskové sady
 	Re-import Revised Set	Znovu importovat revidovanou sadu
 	Save Print Set	Uložit tiskovou sadu
+	Ahead	Vpřed
+	Bottom / top AFF	Spodek / vrch nad podlahou
+	Clash	Kolize
+	elements	prvků
+	Field Viewer	Prohlížeč pro stavbu
+	Fit	Přizpůsobit
+	Keep	Uložit
+	New note	Nová poznámka
+	No new notes to send	Žádné nové poznámky k odeslání
+	No room matches	Žádná místnost neodpovídá
+	Note	Poznámka
+	Note kept	Poznámka uložena
+	Notes	Poznámky
+	notes ready to sync	poznámek připraveno k synchronizaci
+	not typed	bez typu
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Otevřete balíček pro stavbu (FIELDVIEW.EXPORT v CADaddy) nebo jej sem přetáhněte
+	Open clashes and RFIs	Otevřené kolize a RFI
+	RFI	RFI
+	Room number	Číslo místnosti
+	Search a room number, or tap a room	Vyhledejte číslo místnosti nebo klepněte na místnost
+	Send Notes	Odeslat poznámky
+	Tap two points to measure	Klepnutím na dva body změříte
+	Trades	Profese
+	Unit	Jednotka
+	Verified	Ověřeno
+	Verified point	Ověřený bod
+	What is there, as built	Co tam je, jak bylo postaveno
+	Plan	Půdorys
+	3D	3D
+	Architectural	Architektura
+	Structural	Statika
+	Mechanical	VZT
+	Plumbing	ZTI
+	Fire protection	Požární ochrana
+	Other	Ostatní
+	stated	uvedeno
+	inferred	odvozeno
+	assumed	předpokládáno
+	Field Package	Balíček pro stavbu
+	Sync Field Notes	Synchronizovat poznámky ze stavby
+	Field Notes	Poznámky ze stavby
+	Detect Unit Types	Rozpoznat typy jednotek
+	List Unit Types	Seznam typů jednotek
+	Unit Schedule	Rozpis jednotek
+	Unit Type Takeoff	Výkaz podle typu jednotky
+	Override Generated Element	Přepsat generovaný prvek
+	List Overrides	Seznam přepsání
+	Revert Override	Vrátit přepsání
+	Accept Override After Review	Přijmout přepsání po kontrole
+	Show or Hide Overrides	Zobrazit nebo skrýt přepsání
+	Re-apply Overrides	Znovu použít přepsání
+	Overrides	Přepsání
+	Select generated element (or an object drawn by hand to add)	Vyberte generovaný prvek (nebo ručně nakreslený objekt k přidání)
+	Enter type mark	Zadejte označení typu
+	Enter override to revert	Zadejte přepsání k vrácení
+	Verify	Ověřit
+	review: the drawing changed here	kontrola: výkres se zde změnil
+	orphaned: its element is no longer generated	osiřelé: jeho prvek se již negeneruje
+	Project Rules	Pravidla projektu
+	Domain:	Doména:
+	No project rules set.	Žádná pravidla projektu nejsou nastavena.
+	Tier:	Úroveň:
+	Source:	Zdroj:
+	Reason:	Důvod:
+	Overridden values:	Přepsané hodnoty:
+	No drawing open.	Žádný výkres není otevřen.

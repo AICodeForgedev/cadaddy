@@ -2587,3 +2587,69 @@ menu	Modify	Edita
 	Print Set Sheets	Tavole del set
 	Re-import Revised Set	Reimporta set revisionato
 	Save Print Set	Salva set di tavole
+	Ahead	Avanti
+	Bottom / top AFF	Fondo / sommità dal pavimento
+	Clash	Interferenza
+	elements	elementi
+	Field Viewer	Visualizzatore di cantiere
+	Fit	Adatta
+	Keep	Conserva
+	New note	Nuova nota
+	No new notes to send	Nessuna nuova nota da inviare
+	No room matches	Nessun locale corrisponde
+	Note	Nota
+	Note kept	Nota conservata
+	Notes	Note
+	notes ready to sync	note pronte da sincronizzare
+	not typed	senza tipo
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Apri un pacchetto di cantiere (FIELDVIEW.EXPORT in CADaddy) o trascinalo qui
+	Open clashes and RFIs	Interferenze e RFI aperte
+	RFI	RFI
+	Room number	Numero locale
+	Search a room number, or tap a room	Cerca un numero di locale o tocca un locale
+	Send Notes	Invia note
+	Tap two points to measure	Tocca due punti per misurare
+	Trades	Discipline
+	Unit	Unità
+	Verified	Verificato
+	Verified point	Punto verificato
+	What is there, as built	Cosa c'è, come costruito
+	Plan	Pianta
+	3D	3D
+	Architectural	Architettonico
+	Structural	Strutturale
+	Mechanical	Meccanico
+	Plumbing	Idraulico
+	Fire protection	Antincendio
+	Other	Altro
+	stated	dichiarato
+	inferred	dedotto
+	assumed	presunto
+	Field Package	Pacchetto di cantiere
+	Sync Field Notes	Sincronizza note di cantiere
+	Field Notes	Note di cantiere
+	Detect Unit Types	Rileva tipi di unità
+	List Unit Types	Elenca tipi di unità
+	Unit Schedule	Abaco delle unità
+	Unit Type Takeoff	Computo per tipo di unità
+	Override Generated Element	Sovrascrivi elemento generato
+	List Overrides	Elenca sovrascritture
+	Revert Override	Annulla sovrascrittura
+	Accept Override After Review	Accetta sovrascrittura dopo la revisione
+	Show or Hide Overrides	Mostra o nascondi sovrascritture
+	Re-apply Overrides	Riapplica sovrascritture
+	Overrides	Sovrascritture
+	Select generated element (or an object drawn by hand to add)	Selezionare l'elemento generato (o un oggetto disegnato a mano da aggiungere)
+	Enter type mark	Immettere il contrassegno del tipo
+	Enter override to revert	Immettere la sovrascrittura da annullare
+	Verify	Verifica
+	review: the drawing changed here	da rivedere: il disegno è cambiato qui
+	orphaned: its element is no longer generated	orfana: il suo elemento non viene più generato
+	Project Rules	Regole del progetto
+	Domain:	Dominio:
+	No project rules set.	Nessuna regola del progetto impostata.
+	Tier:	Livello:
+	Source:	Fonte:
+	Reason:	Motivo:
+	Overridden values:	Valori sovrascritti:
+	No drawing open.	Nessun disegno aperto.
