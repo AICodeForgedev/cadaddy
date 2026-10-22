@@ -195,6 +195,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(fmt)?;
     failed.extend(rec_failed);
     let lists = cadaddy_dwgcodec::entities::block_lists(&dwg, &ents).map_err(fmt)?;
+    let names = cadaddy_dwgcodec::entities::Names::read(&dwg, &classes);
     let space = |name: &str| match hv.get(name) {
         Some(HV::Handle(h)) if h.value != 0 => Some(h.value),
         _ => None,
@@ -229,8 +230,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
         if block_names.contains_key(&r.handle) {
             continue;
         }
-        let stored =
-            r.groups.iter().find(|g| g.code == 2).and_then(|g| if let Value::Str(s) = &g.value { Some(s.clone()) } else { None }).unwrap_or_default();
+        // The codec's name: block references in entities use it (anonymous blocks share a stored name).
+        let stored = names.block(r.handle).map(str::to_string).unwrap_or_else(|| {
+            r.groups.iter().find(|g| g.code == 2).and_then(|g| if let Value::Str(s) = &g.value { Some(s.clone()) } else { None }).unwrap_or_default()
+        });
         let mut name = stored.clone();
         let mut k = 0;
         while taken.contains(&name.to_ascii_uppercase()) {

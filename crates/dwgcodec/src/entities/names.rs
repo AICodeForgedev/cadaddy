@@ -41,6 +41,9 @@ impl Names {
     /// left out (entities pointing at it get the default name).
     pub fn read(dwg: &Dwg, _classes: &Classes) -> Names {
         let mut n = Names::default();
+        // Block names told apart: AutoCAD stores every anonymous block of a kind under the
+        // same name (`*D`, `*U`, `*T`…) and numbers them only when it loads the file.
+        let mut blocks_taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         for raw in &dwg.objects {
             if !matches!(raw.type_code, BLOCK_HEADER | LAYER | STYLE | LTYPE | VIEW | UCS | VPORT | APPID | DIMSTYLE | MLINESTYLE) {
                 continue;
@@ -49,7 +52,15 @@ impl Names {
             if object_common(&mut o).is_err() {
                 continue;
             }
-            if let Ok(name) = o.text() {
+            if let Ok(mut name) = o.text() {
+                if raw.type_code == BLOCK_HEADER {
+                    let stored = name.clone();
+                    let mut k = 0u32;
+                    while !blocks_taken.insert(name.to_ascii_uppercase()) && k < u32::MAX {
+                        name = format!("{stored}{k}");
+                        k += 1;
+                    }
+                }
                 n.kinds.insert(o.handle, raw.type_code);
                 n.names.insert(o.handle, name);
                 if raw.type_code == BLOCK_HEADER
@@ -77,7 +88,8 @@ impl Names {
         self.blocks.iter()
     }
 
-    /// The name of a block record.
+    /// The name of a block record, distinct among the file's block records (a name stored more
+    /// than once, as anonymous blocks' are, numbered from its second record on: `*D`, `*D0`…).
     pub fn block(&self, handle: u64) -> Option<&str> {
         (self.kinds.get(&handle) == Some(&BLOCK_HEADER)).then(|| self.name(handle)).flatten()
     }
