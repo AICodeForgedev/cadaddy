@@ -166,9 +166,35 @@ pub(crate) fn trade_info(trade: &str) -> (&'static str, &'static str, f64) {
     TRADES.iter().find(|x| x.0 == t).map(|x| (x.1, x.2, x.3)).unwrap_or(("00", "Other", 10.0))
 }
 
-/// Electrical work: division 26, 27 or 28, or an electrical trade name.
+/// Division 26/27/28 trade names, as whole words ("av" never matches "paving").
+const ELECTRICAL_NAMES: &[&str] = &[
+    "low voltage",
+    "lighting",
+    "data",
+    "communication",
+    "communications",
+    "telecommunications",
+    "security",
+    "access control",
+    "cctv",
+    "fire alarm",
+    "nurse call",
+    "av",
+    "audio visual",
+    "audiovisual",
+];
+
+/// Electrical work: division 26, 27 or 28, or an electrical trade name (electrical, low
+/// voltage, lighting, data, communications, security, access control, CCTV, fire alarm, nurse
+/// call, AV).
 pub fn is_electrical(trade: &str, division: &str) -> bool {
-    matches!(division.trim(), "26" | "27" | "28") || trade.to_ascii_lowercase().contains("electric")
+    let w = words(trade);
+    matches!(division.trim(), "26" | "27" | "28")
+        || trade.to_ascii_lowercase().contains("electric")
+        || ELECTRICAL_NAMES.iter().any(|n| {
+            let n = words(n);
+            w.windows(n.len()).any(|x| x == n.as_slice())
+        })
 }
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
@@ -196,6 +222,11 @@ pub(crate) fn strings(p: &Value, k: &str) -> Option<Vec<String>> {
 
 pub(crate) fn norm(s: &str) -> String {
     s.trim().to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A name's words: lower-case letters and digits ("CEILING PAINT (GYP)" → ceiling, paint, gyp).
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).take(200).collect()
 }
 
 fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
@@ -529,10 +560,99 @@ fn run_bid(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"trade": trade, "bidder": bidder}))
 }
 
-/// Whether bid text `b` names the model line `m` (either holds the other, ignoring case).
+/// Whether the shorter name's words run, whole, inside the longer one's. The shorter side needs 3
+/// or more letters, so "a" or "x" never names a line.
+fn contains_words(a: &[String], b: &[String]) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    !short.is_empty() && short.iter().map(String::len).sum::<usize>() >= 3 && long.windows(short.len()).any(|w| w == short)
+}
+
+#[cfg(test)]
+/// Whether bid text `b` names the model line `m`: the same words, or one's words inside the other's.
 fn names(b: &str, m: &str) -> bool {
-    let (b, m) = (norm(b), norm(m));
-    !b.is_empty() && (b == m || b.contains(&m) || m.contains(&b))
+    let (b, m) = (words(b), words(m));
+    !b.is_empty() && (b == m || contains_words(&b, &m))
+}
+
+/// The model lines (among the `open` ones) a bid text names: the lines with exactly its words
+/// when `exact`, else the lines whose words hold it or that it holds.
+fn named(text: &str, model: &[Vec<String>], open: &[bool], exact: bool) -> Vec<usize> {
+    let w = words(text);
+    if w.is_empty() {
+        return Vec::new();
+    }
+    model
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| open.get(*i).copied().unwrap_or(false) && if exact { **m == w } else { contains_words(&w, m) })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// How one bid meets the model's lines. A bid line covers at most one model line: exact names
+/// first, then containment only where it names a single open line; a bid line or exclusion that
+/// names 2 or more lines leaves them for review.
+#[derive(Default)]
+struct BidMatch {
+    /// Per model line: the bid line covering it.
+    line: Vec<Option<usize>>,
+    excluded: Vec<bool>,
+    /// Named by a bid line that names several lines (uncovered unless another bid line covers it).
+    ambiguous: Vec<bool>,
+    /// Named by an exclusion that names several lines (it may take the line out of the bid).
+    ambiguous_exclusion: Vec<bool>,
+}
+
+fn match_bid(t: &Trade, b: &Bid) -> BidMatch {
+    let model: Vec<Vec<String>> = t.lines.iter().map(|l| words(&l.item)).collect();
+    let n = model.len();
+    let mut m = BidMatch { line: vec![None; n], excluded: vec![false; n], ambiguous: vec![false; n], ambiguous_exclusion: vec![false; n] };
+    let mut used = vec![false; b.lines.len()];
+    // Exact names: each bid line takes the first open model line with its words.
+    for (i, x) in b.lines.iter().enumerate() {
+        let open: Vec<bool> = m.line.iter().map(Option::is_none).collect();
+        if let Some(&j) = named(&x.item, &model, &open, true).first()
+            && let (Some(slot), Some(u)) = (m.line.get_mut(j), used.get_mut(i))
+        {
+            *slot = Some(i);
+            *u = true;
+        }
+    }
+    // Containment, among the lines no exact name took.
+    let open: Vec<bool> = m.line.iter().map(Option::is_none).collect();
+    for (i, x) in b.lines.iter().enumerate() {
+        if used.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        match named(&x.item, &model, &open, false).as_slice() {
+            [] => {}
+            [j] => {
+                if let Some(slot) = m.line.get_mut(*j)
+                    && slot.is_none()
+                {
+                    *slot = Some(i);
+                }
+            }
+            several => several.iter().for_each(|j| {
+                if let Some(a) = m.ambiguous.get_mut(*j) {
+                    *a = true;
+                }
+            }),
+        }
+    }
+    // Exclusions by the same rule, over every line.
+    let all = vec![true; n];
+    for x in &b.exclusions {
+        let exact = named(x, &model, &all, true);
+        let (hits, flags) = if exact.is_empty() { (named(x, &model, &all, false), true) } else { (exact, false) };
+        let target = if flags && hits.len() > 1 { &mut m.ambiguous_exclusion } else { &mut m.excluded };
+        for j in hits {
+            if let Some(f) = target.get_mut(j) {
+                *f = true;
+            }
+        }
+    }
+    m
 }
 
 pub(crate) fn median(mut v: Vec<f64>) -> Option<f64> {
@@ -556,39 +676,49 @@ fn run_level(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("wholejob.level", format!("no bids for {trade} (wholejob.bid)")));
     }
     let pack = w.prices.get(&trade);
+    let matches: Vec<BidMatch> = bids.iter().map(|b| match_bid(t, b)).collect();
+    // The bid line covering model line `j` in each bid.
+    let covering = |bi: usize, j: usize| -> Option<&BidLine> {
+        let i = matches.get(bi)?.line.get(j).copied().flatten()?;
+        bids.get(bi)?.lines.get(i)
+    };
     // Each model line's unit price per bidder (for outliers).
-    let unit_prices = |l: &QLine| -> Vec<f64> {
-        bids.iter()
-            .filter_map(|b| b.lines.iter().find(|x| names(&x.item, &l.item) && x.qty > 0.0 && x.amount > 0.0).map(|x| x.amount / x.qty))
-            .collect()
+    let unit_prices = |j: usize| -> Vec<f64> {
+        (0..bids.len()).filter_map(|bi| covering(bi, j)).filter(|x| x.qty > 0.0 && x.amount > 0.0).map(|x| x.amount / x.qty).collect()
     };
     let gap_tol = 0.10;
     let price_tol = 0.35;
     let mut out = Vec::new();
-    for b in &bids {
+    for (bi, b) in bids.iter().enumerate() {
         let (mut missing, mut gaps, mut outliers) = (Vec::new(), Vec::new(), Vec::new());
         let mut missing_value = 0.0;
-        for l in &t.lines {
-            let excluded = b.exclusions.iter().any(|x| names(x, &l.item));
-            match b.lines.iter().find(|x| names(&x.item, &l.item)) {
-                Some(_) if excluded => missing.push(json!({"item": l.item, "why": "excluded"})),
-                Some(x) => {
-                    if l.qty > 0.0 && (x.qty - l.qty).abs() / l.qty > gap_tol {
-                        gaps.push(json!({"item": l.item, "model_qty": l.qty, "bid_qty": x.qty, "unit": l.unit}));
-                    }
-                    if x.qty > 0.0
-                        && let Some(m) = median(unit_prices(l))
-                        && m > 0.0
-                        && ((x.amount / x.qty) - m).abs() / m > price_tol
-                    {
-                        outliers.push(json!({"item": l.item, "unit_price": r2(x.amount / x.qty), "median": r2(m)}));
-                    }
-                    continue;
+        let Some(m) = matches.get(bi) else { continue };
+        for (j, l) in t.lines.iter().enumerate() {
+            let flag = |v: &Vec<bool>| v.get(j).copied().unwrap_or(false);
+            let why = if flag(&m.excluded) {
+                "excluded"
+            } else if flag(&m.ambiguous_exclusion) {
+                "ambiguous — review"
+            } else if let Some(x) = covering(bi, j) {
+                if l.qty > 0.0 && (x.qty - l.qty).abs() / l.qty > gap_tol {
+                    gaps.push(json!({"item": l.item, "model_qty": l.qty, "bid_qty": x.qty, "unit": l.unit}));
                 }
-                None => missing.push(json!({"item": l.item, "why": if excluded { "excluded" } else { "not in the bid" }})),
-            }
+                if x.qty > 0.0
+                    && let Some(md) = median(unit_prices(j))
+                    && md > 0.0
+                    && ((x.amount / x.qty) - md).abs() / md > price_tol
+                {
+                    outliers.push(json!({"item": l.item, "unit_price": r2(x.amount / x.qty), "median": r2(md)}));
+                }
+                continue;
+            } else if flag(&m.ambiguous) {
+                "ambiguous — review"
+            } else {
+                "not in the bid"
+            };
+            missing.push(json!({"item": l.item, "why": why}));
             // What the missing scope costs: our price, else the other bidders' median.
-            let unit = price_for(pack, l).map(|p| p.unit_cost).or_else(|| median(unit_prices(l))).unwrap_or(0.0);
+            let unit = price_for(pack, l).map(|p| p.unit_cost).or_else(|| median(unit_prices(j))).unwrap_or(0.0);
             missing_value += unit * l.qty;
         }
         let complete = missing.is_empty();
@@ -636,6 +766,47 @@ pub(crate) fn append(path: &str, rows: &[Value]) -> Result<()> {
     }
 }
 
+/// A history pack's privacy, set by its first row's `private` (a header row
+/// `{"kind": "pack", "private": true}` works too); `None` for a new or empty pack.
+fn pack_privacy(cmd: &str, path: &str) -> Result<Option<bool>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::{BufRead, Read};
+        let f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(crate::EngineError::Other(format!("{path}: {e}"))),
+        };
+        let mut r = std::io::BufReader::new(f.take(1 << 20));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if r.read_line(&mut line).map_err(|e| bad(cmd, format!("{path}: {e}")))? == 0 {
+                return Ok(None);
+            }
+            if !line.trim().is_empty() {
+                break;
+            }
+        }
+        let v: Value = serde_json::from_str(line.trim()).map_err(|_| bad(cmd, format!("{path} isn't a history pack (its first row isn't JSON)")))?;
+        Ok(Some(v.get("private").and_then(Value::as_bool).unwrap_or(false)))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (cmd, path);
+        Ok(None)
+    }
+}
+
+/// Appends rows to a history pack of the same privacy: a pack is all private or all public.
+fn append_to_pack(cmd: &str, path: &str, private: bool, rows: &[Value]) -> Result<()> {
+    match pack_privacy(cmd, path)? {
+        Some(false) if private => Err(bad(cmd, format!("{path} is a public pack: private rows (electrical, outcomes) go only to a private pack"))),
+        Some(true) if !private => Err(bad(cmd, format!("{path} is a private pack: public rows go to a public pack"))),
+        _ => append(path, rows),
+    }
+}
+
 fn run_history(_s: &mut Session, p: &Value) -> Result<Value> {
     let pack = pack_path("wholejob.history", p)?;
     let private = bool_or(p, "private", false);
@@ -651,7 +822,7 @@ fn run_history(_s: &mut Session, p: &Value) -> Result<Value> {
         "kind": "bid", "trade": trade, "division": division, "building_type": str_param(p, "building_type").unwrap_or(""), "region": str_param(p, "region").unwrap_or(""),
         "date": str_param(p, "date").unwrap_or(""), "sf": sf, "amount": amount, "per_sf": r2(amount / sf), "source": str_param(p, "source").unwrap_or(""), "private": private,
     });
-    append(&pack, &[row])?;
+    append_to_pack("wholejob.history", &pack, private, &[row])?;
     Ok(json!({"pack": pack, "per_sf": r2(amount / sf)}))
 }
 
@@ -667,7 +838,7 @@ fn run_outcome(s: &mut Session, p: &Value) -> Result<Value> {
         "kind": "outcome", "trade": trade, "job": job, "award": num("award"), "final_cost": num("final_cost"), "change_orders": num("change_orders"),
         "sf": num("sf"), "building_type": str_param(p, "building_type").unwrap_or(""), "date": str_param(p, "date").unwrap_or(""), "private": true,
     });
-    append(&pack, &[row])?;
+    append_to_pack("wholejob.outcome", &pack, true, &[row])?;
     Ok(json!({"pack": pack}))
 }
 
@@ -675,17 +846,30 @@ fn run_benchmarks(_s: &mut Session, p: &Value) -> Result<Value> {
     let packs: Vec<String> =
         strings(p, "packs").filter(|v| !v.is_empty()).ok_or_else(|| bad("wholejob.benchmarks", "packs required: [.jsonl history files]"))?;
     let (bt, region) = (str_param(p, "building_type").map(norm), str_param(p, "region").map(norm));
+    let with_private = bool_or(p, "private", false);
     let mut by: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut left_out = 0usize;
     for path in &packs {
         let text = crate::readfile::read(path.trim())
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .map_err(|e| bad("wholejob.benchmarks", format!("{path}: {e}")))?;
+        // The pack's privacy comes from its first row; a private pack's rows are all private.
+        let pack_private = text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .and_then(|l| serde_json::from_str::<Value>(l).ok())
+            .and_then(|v| v.get("private").and_then(Value::as_bool))
+            .unwrap_or(false);
         for line in text.lines().take(1_000_000) {
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
             if v["kind"] != "bid"
                 || bt.as_ref().is_some_and(|b| norm(v["building_type"].as_str().unwrap_or("")) != *b)
                 || region.as_ref().is_some_and(|r| norm(v["region"].as_str().unwrap_or("")) != *r)
             {
+                continue;
+            }
+            if !with_private && (pack_private || v["private"] == true) {
+                left_out += 1;
                 continue;
             }
             if let (Some(t), Some(ps)) = (v["trade"].as_str(), v["per_sf"].as_f64()) {
@@ -700,7 +884,7 @@ fn run_benchmarks(_s: &mut Session, p: &Value) -> Result<Value> {
             json!({"trade": t, "count": v.len(), "per_sf_median": median(v.clone()).map(r2), "per_sf_min": r2(lo), "per_sf_max": r2(hi)})
         })
         .collect();
-    Ok(json!({"benchmarks": out}))
+    Ok(json!({"benchmarks": out, "private_rows_left_out": left_out}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -722,11 +906,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("wholejob.history", "Add Bid History", run_history)
             .enabled(always)
-            .params("{pack: .jsonl, private?: bool (electrical: required), trade, division?, building_type, region, date, sf, amount, source} → {pack, per_sf}")
+            .params("{pack: .jsonl (all public or all private, set by its first row), private?: bool (electrical: required), trade, division?, building_type, region, date, sf, amount, source} → {pack, per_sf}")
             .noundo(),
         CommandSpec::new("wholejob.benchmarks", "Bid Benchmarks", run_benchmarks)
             .enabled(always)
-            .params("{packs: [.jsonl], building_type?, region?} → {benchmarks: [{trade, count, per_sf_median, per_sf_min, per_sf_max}]}")
+            .params("{packs: [.jsonl], building_type?, region?, private?: bool (include private rows; default false)} → {benchmarks: [{trade, count, per_sf_median, per_sf_min, per_sf_max}], private_rows_left_out}")
             .noundo(),
         CommandSpec::new("wholejob.outcome", "Record Outcome", run_outcome)
             .params("{pack: private .jsonl, private: true, trade, award?, final_cost?, change_orders?, sf?, building_type?, date?} → {pack}")
@@ -748,5 +932,25 @@ mod tests {
         assert_eq!(median(vec![]), None);
         assert_eq!(trade_info("Painting").0, "09");
         assert!(is_electrical("electrical", "26") && is_electrical("x", "28") && !is_electrical("roofing", "07"));
+        for t in [
+            "low voltage",
+            "Low-Voltage",
+            "lighting",
+            "data",
+            "communications",
+            "security",
+            "access control",
+            "CCTV",
+            "fire alarm",
+            "nurse call",
+            "AV",
+        ] {
+            assert!(is_electrical(t, trade_info(t).0), "{t}");
+        }
+        for t in ["paving", "painting", "database", "site", "flooring"] {
+            assert!(!is_electrical(t, trade_info(t).0), "{t}");
+        }
+        assert!(!names("a", "paint above tile") && !names("x", "x-ray room"));
+        assert!(names("Ceiling paint", "CEILING PAINT (GYP)") && !names("Ceiling paint", "PAINT ABOVE TILE"));
     }
 }
