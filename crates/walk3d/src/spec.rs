@@ -42,6 +42,13 @@ pub struct BuildingSpec {
     pub units_per_foot: f64,
     #[serde(default)]
     pub levels: Vec<Level>,
+    /// Elevations the prints give for levels with no plan here (the roof, a parapet, a penthouse
+    /// drawn elsewhere): they top the floor below and become IFC storeys (`levels.read`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub datums: Vec<crate::levels::Datum>,
+    /// The sheets of the set and the level each shows (`levels.sheets`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheets: Vec<crate::levels::SheetLink>,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -1446,6 +1453,8 @@ impl BuildingSpec {
             version: SPEC_VERSION,
             units_per_foot: r.units_per_foot,
             levels: r.levels.clone(),
+            datums: Vec::new(),
+            sheets: Vec::new(),
             layers,
             wall_types,
             rooms: Vec::new(),
@@ -1593,6 +1602,8 @@ impl BuildingSpec {
             ("wall_types", self.wall_types.len()),
             ("walls", self.walls.len()),
             ("rfis", self.rfis.len()),
+            ("datums", self.datums.len()),
+            ("sheets", self.sheets.len()),
             ("rooms", self.rooms.len()),
             ("families", self.families.len()),
         ] {
@@ -1646,6 +1657,19 @@ impl BuildingSpec {
                     format!("levels[{j}].elevation_ft"),
                     format!("{} starts below the top of {}, on the same plan", hi.name, lo.name),
                 ));
+            }
+        }
+        for (i, d) in self.datums.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("datums[{i}]");
+            if d.name.trim().is_empty() {
+                out.push(Issue::error(format!("{at}.name"), "a datum needs a name"));
+            } else if self.datums.iter().take(i).any(|o| o.name.eq_ignore_ascii_case(&d.name)) {
+                out.push(Issue::error(format!("{at}.name"), format!("two datums are named {}", d.name)));
+            } else if self.levels.iter().any(|l| l.name.eq_ignore_ascii_case(&d.name)) {
+                out.push(Issue::warning(format!("{at}.name"), format!("{} is both a level and a datum; the level wins", d.name)));
+            }
+            if !fin(d.elevation_ft) || d.elevation_ft.abs() > 1e5 {
+                out.push(Issue::error(format!("{at}.elevation_ft"), "the elevation must be a number of feet"));
             }
         }
         for (i, t) in self.wall_types.iter().enumerate().take(MAX_ITEMS) {

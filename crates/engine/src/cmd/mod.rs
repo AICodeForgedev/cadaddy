@@ -46,6 +46,7 @@ mod imageattach;
 mod imageclip;
 pub(crate) mod inquiry;
 mod layer;
+pub mod levels;
 pub mod markup;
 pub mod pointcloud;
 pub mod project;
@@ -295,6 +296,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(schedules::specs());
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
+        v.extend(levels::specs());
         v.extend(mep::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());

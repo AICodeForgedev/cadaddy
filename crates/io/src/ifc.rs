@@ -516,13 +516,23 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             }
         }
     }
+    // The spec's levels and storey datums (the roof, a penthouse drawn elsewhere) are storeys
+    // too, at their elevations, even with nothing built on them.
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    if let Some(sp) = &spec {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        for (name, e) in sp.storeys() {
+            if !levels.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+                levels.push((name, e * upf));
+            }
+        }
+    }
     if levels.is_empty() {
         levels.push(("Level 1".into(), items.iter().map(|i| i.zmin).fold(f64::MAX, f64::min).min(0.0)));
     }
     levels.sort_by(|a, b| a.1.total_cmp(&b.1));
     // Where each storey's objects are on the sheet: plans drawn side by side (L2's beside L1's)
     // are built over their own plans, and their building spec's base points stack them.
-    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
     let bases: Vec<(String, cadaddy_geom::Vec2)> = spec.as_ref().map(|sp| cadaddy_walk3d::level_bases(d, &sp.to_rules())).unwrap_or_default();
     let base_of = |level: &str| bases.iter().find(|(n, _)| n == level).map_or(cadaddy_geom::Vec2::ZERO, |(_, b)| *b);
     let storey_of = |it: &Item| -> usize {
