@@ -75,6 +75,16 @@ fn bulge_quarter_arc() {
 }
 
 #[test]
+fn tiny_bulge_is_not_a_full_circle() {
+    let a = Vec2::new(0.0, 0.0);
+    let b = Vec2::new(10.0, 0.0);
+    let p = Polyline { vertices: vec![PolyVertex::with_bulge(a, 1e-10), PolyVertex::new(b)], closed: false };
+    assert!((p.len() - 10.0).abs() < 1e-6, "len={}", p.len());
+    let bb = p.bounds();
+    assert!(bb.max.x < 10.001 && bb.max.y < 0.001 && bb.min.y > -0.001, "bounds={bb:?}");
+}
+
+#[test]
 fn polyline_area_and_length() {
     let p = Polyline::from_points(&[Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 3.0), Vec2::new(0.0, 3.0)], true);
     assert!(close(p.area(), 12.0));
