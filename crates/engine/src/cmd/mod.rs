@@ -14,6 +14,7 @@ pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bom;
 pub mod bspec;
+pub mod calibrate;
 pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;
@@ -312,6 +313,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(wholejob::specs());
+        v.extend(calibrate::specs());
         v.extend(levels::specs());
         v.extend(estimate::specs());
         v.extend(progress::specs());

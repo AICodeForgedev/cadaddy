@@ -161,7 +161,7 @@ const TRADES: &[(&str, &str, &str, f64)] = &[
     ("utilities", "33", "Utilities", 10.0),
 ];
 
-fn trade_info(trade: &str) -> (&'static str, &'static str, f64) {
+pub(crate) fn trade_info(trade: &str) -> (&'static str, &'static str, f64) {
     let t = trade.trim().to_ascii_lowercase();
     TRADES.iter().find(|x| x.0 == t).map(|x| (x.1, x.2, x.3)).unwrap_or(("00", "Other", 10.0))
 }
@@ -190,11 +190,11 @@ fn trade_param(cmd: &str, p: &Value) -> Result<String> {
     str_param(p, "trade").map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty() && t.len() < 60).ok_or_else(|| bad(cmd, "trade required"))
 }
 
-fn strings(p: &Value, k: &str) -> Option<Vec<String>> {
+pub(crate) fn strings(p: &Value, k: &str) -> Option<Vec<String>> {
     p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(|x| x.trim().chars().take(300).collect()).take(1_000).collect())
 }
 
-fn norm(s: &str) -> String {
+pub(crate) fn norm(s: &str) -> String {
     s.trim().to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -369,7 +369,7 @@ fn price_for<'a>(pack: Option<&'a PricePack>, l: &QLine) -> Option<&'a Price> {
     pack?.rows.iter().find(|r| norm(&r.item) == norm(&l.item) && r.unit.eq_ignore_ascii_case(&l.unit))
 }
 
-fn r2(v: f64) -> f64 {
+pub(crate) fn r2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
 
@@ -535,7 +535,7 @@ fn names(b: &str, m: &str) -> bool {
     !b.is_empty() && (b == m || b.contains(&m) || m.contains(&b))
 }
 
-fn median(mut v: Vec<f64>) -> Option<f64> {
+pub(crate) fn median(mut v: Vec<f64>) -> Option<f64> {
     v.retain(|x| x.is_finite());
     v.sort_by(f64::total_cmp);
     let n = v.len();
@@ -616,7 +616,7 @@ fn pack_path(cmd: &str, p: &Value) -> Result<String> {
         .ok_or_else(|| bad(cmd, "pack required: a .jsonl history file"))
 }
 
-fn append(path: &str, rows: &[Value]) -> Result<()> {
+pub(crate) fn append(path: &str, rows: &[Value]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut text = std::fs::read_to_string(path).unwrap_or_default();
