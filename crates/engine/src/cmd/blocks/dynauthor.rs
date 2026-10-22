@@ -178,7 +178,10 @@ fn run_action(s: &mut Session, p: &Value) -> Result<Value> {
     let node = element(s, cmd, &block, p.get("parameter"))?;
     let selection = handles(cmd, p.get("handles"))?;
     let ak = match kind.as_str() {
-        "stretch" => NewActionKind::Stretch { frame: points_param(p, "frame").ok_or_else(|| bad(cmd, "`frame` [[x, y]…] is required"))? },
+        "stretch" => NewActionKind::Stretch {
+            frame: points_param(p, "frame").ok_or_else(|| bad(cmd, "`frame` [[x, y]…] is required"))?,
+            vertices: Vec::new(),
+        },
         "move" => NewActionKind::Move,
         "scale" => NewActionKind::Scale,
         "rotate" => NewActionKind::Rotate,

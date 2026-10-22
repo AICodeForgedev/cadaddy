@@ -177,35 +177,39 @@ pub struct SymbolPreview {
 
 /// Previews of every library symbol, in palette order.
 pub fn previews() -> Vec<SymbolPreview> {
-    let d = cadaddy_doc::Drawing::new_imperial();
     symbols::symbols()
         .iter()
         .map(|sym| {
             let ents: Vec<cadaddy_doc::Entity> = sym.entities().into_iter().filter(|e| !matches!(e.kind, EntityKind::AttDef(_))).collect();
-            let size = ents.iter().fold(cadaddy_geom::Bounds2::EMPTY, |b, e| b.union(&cadaddy_doc::entity_bounds(&d, e, 1)));
-            let tol = (size.width().max(size.height()) / 200.0).max(1e-6);
-            let list = cadaddy_render::build_entities(
-                &d,
-                ents.iter(),
-                &cadaddy_render::Options { tolerance: tol, text: true, fill: true, ..Default::default() },
-            );
-            let mut lines = Vec::new();
-            let mut fills = Vec::new();
-            let mut bounds = cadaddy_geom::Bounds2::EMPTY;
-            for p in &list.prims {
-                let pts = list.points(p);
-                for q in pts {
-                    bounds.add(*q);
-                }
-                if p.kind.is_fill() {
-                    fills.extend(pts.as_chunks::<3>().0.iter().copied());
-                } else {
-                    lines.push(pts.to_vec());
-                }
-            }
+            let (lines, fills, bounds) = drawn(&ents);
             SymbolPreview { name: sym.name, label: sym.label, category: sym.category, keywords: sym.keywords, lines, fills, bounds }
         })
         .collect()
+}
+
+/// `ents` (block coordinates) drawn for a preview: their lines, their filled triangles and the
+/// bounds of both.
+pub(crate) fn drawn(ents: &[cadaddy_doc::Entity]) -> (Vec<Vec<Vec2>>, Vec<[Vec2; 3]>, cadaddy_geom::Bounds2) {
+    let d = cadaddy_doc::Drawing::new_imperial();
+    let size = ents.iter().fold(cadaddy_geom::Bounds2::EMPTY, |b, e| b.union(&cadaddy_doc::entity_bounds(&d, e, 1)));
+    let tol = (size.width().max(size.height()) / 200.0).max(1e-6);
+    let list =
+        cadaddy_render::build_entities(&d, ents.iter(), &cadaddy_render::Options { tolerance: tol, text: true, fill: true, ..Default::default() });
+    let mut lines = Vec::new();
+    let mut fills = Vec::new();
+    let mut bounds = cadaddy_geom::Bounds2::EMPTY;
+    for p in &list.prims {
+        let pts = list.points(p);
+        for q in pts {
+            bounds.add(*q);
+        }
+        if p.kind.is_fill() {
+            fills.extend(pts.as_chunks::<3>().0.iter().copied());
+        } else {
+            lines.push(pts.to_vec());
+        }
+    }
+    (lines, fills, bounds)
 }
 
 /// SYMBOL at the command line: the symbol's name (or `?` for the list), then INSERT's prompts
