@@ -671,7 +671,7 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The part of a triangle in all the half-spaces (a convex polygon; clipped plane by plane).
-fn clip_tri(t: &[Vec3; 3], planes: &[(Vec3, f64)]) -> Vec<Vec3> {
+pub(crate) fn clip_tri(t: &[Vec3; 3], planes: &[(Vec3, f64)]) -> Vec<Vec3> {
     let mut poly: Vec<Vec3> = t.to_vec();
     for (n, c) in planes {
         if poly.is_empty() {
@@ -693,7 +693,7 @@ fn clip_tri(t: &[Vec3; 3], planes: &[(Vec3, f64)]) -> Vec<Vec3> {
 }
 
 /// The part of a segment in all the half-spaces.
-fn keep_seg(mut a: Vec3, mut b: Vec3, planes: &[(Vec3, f64)]) -> Option<(Vec3, Vec3)> {
+pub(crate) fn keep_seg(mut a: Vec3, mut b: Vec3, planes: &[(Vec3, f64)]) -> Option<(Vec3, Vec3)> {
     for (n, c) in planes {
         let (da, db) = (n.dot(a) - c, n.dot(b) - c);
         match (da >= 0.0, db >= 0.0) {

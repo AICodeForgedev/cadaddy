@@ -306,6 +306,8 @@ pub struct DocState {
     /// The IFC references' files as last loaded (upper-case name → size and time), so a changed
     /// file is reloaded ([`cmd::ifcref::poll`]).
     pub ifc_stamps: std::collections::HashMap<String, cmd::ifcref::Stamp>,
+    /// The IFC model viewer's section box and camera ([`cmd::ifcmodel`]).
+    pub ifc_view: cmd::ifcmodel::ViewState,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -371,6 +373,7 @@ impl DocState {
             bare_layouts: Vec::new(),
             legibility_hinted: 0,
             ifc_stamps: std::collections::HashMap::new(),
+            ifc_view: cmd::ifcmodel::ViewState::default(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet

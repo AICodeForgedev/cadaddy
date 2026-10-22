@@ -11,6 +11,7 @@
 //! | FRGN | file data CADaddy keeps without modelling it | tokens |
 //! | BSPC | the building spec | JSON text |
 //! | TOUR | the camera tours | JSON text |
+//! | BCFI | the BCF issues | JSON text |
 //! | OVRD | the overrides of generated elements | JSON text |
 //! | AGNT | the agent state (notes, review decisions, change log) | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
@@ -36,8 +37,8 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 13] =
-    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 14] =
+    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -236,6 +237,7 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "thumbnail": thumbnail.then_some("THMB"),
         "buildingSpec": d.building_spec.is_some(),
         "tours": d.tours.is_some(),
+        "bcf": d.bcf.is_some(),
         "embedded": d.embedded.keys().collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
@@ -448,15 +450,20 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 }
                 continue;
             }
-            b"BSPC" | b"TOUR" => {
+            b"BSPC" | b"TOUR" | b"BCFI" => {
+                let what = match &c.tag {
+                    b"BSPC" => "building spec",
+                    b"TOUR" => "camera tours",
+                    _ => "BCF issues",
+                };
                 let Ok(text) = String::from_utf8(c.data) else {
-                    rep.notes.push(format!("the {} couldn't be read", if &c.tag == b"BSPC" { "building spec" } else { "camera tours" }));
+                    rep.notes.push(format!("the {what} couldn't be read"));
                     continue;
                 };
-                if &c.tag == b"BSPC" {
-                    d.building_spec = Some(text);
-                } else {
-                    d.tours = Some(text);
+                match &c.tag {
+                    b"BSPC" => d.building_spec = Some(text),
+                    b"TOUR" => d.tours = Some(text),
+                    _ => d.bcf = Some(text),
                 }
                 continue;
             }

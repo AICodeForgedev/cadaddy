@@ -18,8 +18,8 @@
 //! models, extruded rectangle, circle and polyline profiles, mapped items and the first operand of
 //! booleans (openings aren't cut), placed by their local placement chains, in the file's length unit.
 //! Each object's tag also carries what the file says about it: the storey it is in (`level:`, and
-//! `elevation:` in metres), its type (`type:`), the systems it is grouped into (`system:`) and its
-//! property and quantity sets (`prop:Pset_WallCommon.FireRating=1HR`; quantity lengths in metres).
+//! `elevation:` in metres), the space, building and site above it (`space:`, `building:`, `site:`),
+//! its type (`type:`), the systems it is grouped into (`system:`) and its property and quantity sets (`prop:Pset_WallCommon.FireRating=1HR`; quantity lengths in metres).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -1744,6 +1744,33 @@ impl Reader<'_> {
         None
     }
 
+    /// The spatial structure object `id` is in, above its storey: its space, building and site
+    /// (each `(tag, name)`; spaces by their name, else their long name).
+    fn spatial(&self, rel: &Relations, id: u64) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        let mut at = id;
+        for _ in 0..16 {
+            let Some(up) = rel.parent.get(&at) else { break };
+            at = *up;
+            let Some((name, a)) = self.m.get(&at) else { break };
+            let tag = match name.as_str() {
+                "IFCSPACE" => "space",
+                "IFCBUILDING" => "building",
+                "IFCSITE" => "site",
+                "IFCPROJECT" => break,
+                _ => continue,
+            };
+            if out.iter().any(|(t, _)| *t == tag) {
+                continue;
+            }
+            let label = a.get(2).and_then(P::text).filter(|t| !t.is_empty()).or_else(|| a.get(7).and_then(P::text)).unwrap_or_default();
+            if !label.is_empty() {
+                out.push((tag, cap(label, 120)));
+            }
+        }
+        out
+    }
+
     /// `prop:Set.Name=value` strings of the property and quantity sets `sets` (lengths in metres).
     fn properties(&self, sets: &[u64], unit: f64, out: &mut Vec<String>) {
         for id in sets {
@@ -1776,12 +1803,15 @@ impl Reader<'_> {
     }
 
     /// What object `id` carries beyond its class, GlobalId and name, as tag strings: `level:`,
-    /// `elevation:` (metres), `type:`, `system:` and `prop:` ones.
+    /// `elevation:` (metres), `space:`, `building:`, `site:`, `type:`, `system:` and `prop:` ones.
     fn extras(&self, rel: &Relations, id: u64, unit: f64) -> Vec<String> {
         let mut out = Vec::new();
         if let Some((level, z)) = self.storey(rel, id, unit) {
             out.push(format!("level:{level}"));
             out.push(format!("elevation:{}", num_text(z)));
+        }
+        for (tag, name) in self.spatial(rel, id) {
+            out.push(format!("{tag}:{name}"));
         }
         let ty = rel.types.get(&id).and_then(|t| self.m.get(t));
         if let Some(n) = ty.and_then(|(_, a)| a.get(2)).and_then(P::text).filter(|t| !t.is_empty()) {
@@ -2087,6 +2117,9 @@ mod tests {
         assert!(tags("Space").iter().any(|x| x == "level:Level 1"));
         let duct = tags("DuctSegment");
         assert!(duct.iter().any(|x| x == "level:Level 1") && duct.iter().any(|x| x == "system:Supply Air"), "{duct:?}");
+        // The spatial chain above the storey: the duct's space and building, the wall's building.
+        assert!(duct.iter().any(|x| x == "space:101") && duct.iter().any(|x| x == "building:B"), "{duct:?}");
+        assert!(wall.iter().any(|x| x == "building:B") && !wall.iter().any(|x| x.starts_with("space:")), "{wall:?}");
         // Written back, the objects keep the GlobalIds they were read with.
         let out = String::from_utf8(write_ifc(&d, "Round Trip.ifc").unwrap()).unwrap();
         for g in ["1Wal000000000000000001", "1Spc000000000000000001", "1Dct000000000000000001"] {

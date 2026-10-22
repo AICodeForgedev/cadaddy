@@ -66,6 +66,10 @@ pub struct Tag {
     /// The storey's elevation, metres.
     pub elevation: Option<f64>,
     pub ty: Option<String>,
+    /// The space, building and site above the object (the IFC spatial structure).
+    pub space: Option<String>,
+    pub building: Option<String>,
+    pub site: Option<String>,
     pub systems: Vec<String>,
     /// `(Set.Name, value)`, in the file's order.
     pub props: Vec<(String, String)>,
@@ -84,6 +88,12 @@ pub fn tag(e: &Entity) -> Option<Tag> {
             t.level = Some(v.to_string());
         } else if let Some(v) = s.strip_prefix("elevation:") {
             t.elevation = v.parse::<f64>().ok().filter(|z| z.is_finite());
+        } else if let Some(v) = s.strip_prefix("space:") {
+            t.space = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("building:") {
+            t.building = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("site:") {
+            t.site = Some(v.to_string());
         } else if let Some(v) = s.strip_prefix("type:") {
             t.ty = Some(v.to_string());
         } else if let Some(v) = s.strip_prefix("system:") {
@@ -96,7 +106,7 @@ pub fn tag(e: &Entity) -> Option<Tag> {
 }
 
 /// `IfcWallStandardCase`, `IFCWALL` or `wall` → compared as the reader names classes.
-fn class_matches(class: &str, asked: &str) -> bool {
+pub(crate) fn class_matches(class: &str, asked: &str) -> bool {
     let bare = |s: &str| {
         let s = s.trim();
         if s.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("ifc")) { s.get(3..).unwrap_or_default().to_string() } else { s.to_string() }

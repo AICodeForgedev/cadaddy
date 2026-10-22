@@ -73,6 +73,12 @@ impl Building {
     /// building spec when it has one (its stairs and ramps included), else from the rules file.
     /// A sheet that is this drawing's own file uses the open drawing, unsaved edits included.
     pub fn load(doc: Arc<Drawing>, path: Option<&Path>) -> Result<Building, String> {
+        // An IFC model: its own objects, storeys as levels (no plans to read).
+        if doc.building_spec.is_none()
+            && let Some(scene) = cadaddy_engine::cmd::ifcmodel::walk_scene(&doc)
+        {
+            return Ok(Building { drawings: vec![doc], rules: Rules::fallback(), rules_from: "the IFC model".into(), scene, problems: Vec::new() });
+        }
         if let Some(spec) = doc.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) {
             let mut b = Building::with_rules(doc, path, spec.to_rules(), path.map(Path::to_path_buf))?;
             b.rules_from = "the drawing's building spec".into();
