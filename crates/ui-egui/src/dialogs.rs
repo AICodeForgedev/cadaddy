@@ -56,7 +56,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "pdfimport" => crate::pdfdlg::dialog(app, ctx, &mut open),
         "tolerance" => crate::toldlg::dialog(app, ctx, &mut open),
         "preview" => crate::exchange::dialog(app, ctx, &mut open),
-        "commands" => commands(app, ctx, &mut open),
+        d if d == "commands" || d.starts_with("commands:") => commands(app, ctx, &mut open),
         "blocks" => crate::blockspalette::dialog(app, ctx, &mut open),
         "toolpalettes" => crate::toolpalettes::dialog(app, ctx, &mut open),
         "bedit" => crate::bedit::dialog(app, ctx, &mut open),
@@ -450,41 +450,138 @@ fn about(ctx: &egui::Context, open: &mut bool) {
 }
 
 fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let t = Tokens::get();
     let mut start = None;
+    let dialog_id = egui::Id::new("Command Reference");
+    let filter_id = dialog_id.with("cmdfilter");
+    let selected_id = dialog_id.with("cmdselected");
+
+    // If the dialog was opened with "commands:<id>", focus on that command.
+    if let Some(focus) = app.ui.dialog.as_deref().and_then(|d| d.strip_prefix("commands:")) {
+        ctx.data_mut(|d| d.insert_temp(selected_id, focus.to_string()));
+        // Normalise to plain "commands" so this runs only once.
+        app.ui.dialog = Some("commands".into());
+    }
+
     egui::Window::new(crate::tl!("Command Reference"))
-        .id(egui::Id::new("Command Reference"))
+        .id(dialog_id)
         .open(open)
-        .default_size(vec2(640.0, 480.0))
+        .default_size(vec2(780.0, 520.0))
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            let id = ui.id().with("cmdfilter");
-            let mut filter = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
+            let mut filter = ui.data_mut(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
+            let mut selected = ui.data_mut(|d| d.get_temp::<String>(selected_id)).unwrap_or_default();
+
+            // Filter bar at the top.
             ui.horizontal(|ui| {
                 ui.label(crate::tl!("Filter"));
-                ui.text_edit_singleline(&mut filter);
+                if ui.text_edit_singleline(&mut filter).changed() {
+                    selected.clear();
+                }
             });
-            ui.data_mut(|d| d.insert_temp(id, filter.clone()));
+            ui.separator();
+
             let f = filter.to_lowercase();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("cmdref").striped(true).num_columns(3).show(ui, |ui| {
-                    for c in cadaddy_engine::command_specs() {
+            let specs = cadaddy_engine::command_specs();
+
+            // Two-column layout: command list on the left, help page on the right.
+            ui.columns(2, |cols| {
+                // Left column: scrollable command list.
+                egui::ScrollArea::vertical().id_salt("cmdlist").show(&mut cols[0], |ui| {
+                    for c in specs {
                         if !f.is_empty()
                             && !c.id.contains(&f)
                             && !c.label.to_ascii_lowercase().contains(&f)
                             && !crate::i18n::t(c.label).to_lowercase().contains(&f)
+                            && !c.aliases.iter().any(|a| a.contains(&f))
                         {
                             continue;
                         }
-                        if ui.link(c.id.to_ascii_uppercase()).clicked() {
-                            start = Some(c.id);
+                        let is_selected = selected == c.id;
+                        let label = format!("{} — {}", c.id.to_ascii_uppercase(), crate::i18n::t(c.label));
+                        let response = ui.selectable_label(is_selected, &label);
+                        if response.clicked() {
+                            selected = c.id.to_string();
                         }
-                        ui.label(crate::i18n::t(c.label));
-                        ui.label(RichText::new(if c.aliases.is_empty() { String::new() } else { c.aliases.join(", ").to_ascii_uppercase() }).small());
-                        ui.end_row();
+                    }
+                });
+
+                // Right column: help page for the selected command.
+                egui::ScrollArea::vertical().id_salt("cmdhelp").show(&mut cols[1], |ui| {
+                    if selected.is_empty() {
+                        ui.label(RichText::new(crate::tl!("Select a command to see its help page.")).italics().color(t.text_dim));
+                        return;
+                    }
+                    let Some(spec) = cadaddy_engine::find_command(&selected)
+                        .or_else(|| cadaddy_engine::find_by_id_or_alias(&selected))
+                    else {
+                        ui.label(RichText::new(crate::tl!("Command not found.")).color(t.text_dim));
+                        return;
+                    };
+
+                    // Command title.
+                    ui.heading(RichText::new(spec.id.to_ascii_uppercase()).strong());
+                    ui.label(RichText::new(crate::i18n::t(spec.label)).color(t.text_dim));
+                    ui.add_space(4.0);
+
+                    // Aliases.
+                    if !spec.aliases.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(crate::tl!("Aliases:")).strong());
+                            ui.label(spec.aliases.iter().map(|a| a.to_ascii_uppercase()).collect::<Vec<_>>().join(", "));
+                        });
+                    }
+
+                    // Menu path.
+                    if !spec.menu.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(crate::tl!("Menu:")).strong());
+                            ui.label(spec.menu.join(" > "));
+                        });
+                    }
+
+                    // Keyboard shortcut.
+                    if let Some(key) = spec.shortcut {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(crate::tl!("Shortcut:")).strong());
+                            ui.label(key);
+                        });
+                    }
+
+                    // Flags.
+                    if spec.transparent {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(crate::tl!("Transparent:")).strong());
+                            ui.label(crate::tl!("Yes (can run inside another command with a leading apostrophe)"));
+                        });
+                    }
+
+                    ui.add_space(6.0);
+
+                    // Help text.
+                    if !spec.help.is_empty() {
+                        ui.label(spec.help);
+                        ui.add_space(6.0);
+                    }
+
+                    // JSON parameters.
+                    if !spec.params.is_empty() {
+                        ui.label(RichText::new(crate::tl!("JSON parameters:")).strong());
+                        ui.label(RichText::new(spec.params).code());
+                    }
+
+                    ui.add_space(8.0);
+
+                    // Run button.
+                    if ui.button(crate::tl!("Run this command")).clicked() {
+                        start = Some(spec.id);
                     }
                 });
             });
+
+            ui.data_mut(|d| d.insert_temp(filter_id, filter));
+            ui.data_mut(|d| d.insert_temp(selected_id, selected));
         });
     if let Some(c) = start {
         app.ui.dialog = None;
