@@ -1,0 +1,45 @@
+{
+  "source": "NAVFAC P-405 Seabee Planner's and Estimator's Handbook, Chapter 3 (Oct 1996)",
+  "licence": "US government work (17 USC §105)",
+  "note": "The P-405 labor tables assume a NORMAL condition baseline (experienced Seabee crew, moderate weather, standard site access). The difficulty tiers in the labor CSV (normal, difficult, very_difficult) apply these factors. For commercial estimating, further adjust for local crew experience, weather and site conditions using these multipliers.",
+  "difficulty_tiers": {
+    "normal": {
+      "factor": 1.0,
+      "description": "Experienced crew, good weather, standard site access, well-organized project"
+    },
+    "difficult": {
+      "factor": 1.4,
+      "description": "Limited experience, poor weather, restricted access, congested work area, off-hours work"
+    },
+    "very_difficult": {
+      "factor": 1.8,
+      "description": "Inexperienced crew, severe weather, very restricted access, hazardous conditions, night work"
+    }
+  },
+  "adjustment_factors": {
+    "crew_experience": {
+      "highly_experienced": 0.85,
+      "experienced": 1.0,
+      "average": 1.15,
+      "inexperienced": 1.4
+    },
+    "weather": {
+      "ideal": 0.95,
+      "normal": 1.0,
+      "adverse": 1.15,
+      "severe": 1.4
+    },
+    "site_conditions": {
+      "open_access": 0.90,
+      "standard": 1.0,
+      "restricted": 1.20,
+      "very_restricted": 1.50
+    },
+    "supervision": {
+      "strong": 0.90,
+      "adequate": 1.0,
+      "minimal": 1.20
+    }
+  },
+  "calibration_note": "These are military-crew production rates from 1996. Commercial crews typically achieve 85-110% of P-405 normal rates depending on trade, location and project type. Apply a calibration factor based on local field observations before using for commercial bids."
+}

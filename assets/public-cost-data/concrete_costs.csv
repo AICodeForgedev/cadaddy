@@ -1,0 +1,16 @@
+item,unit,material,labor_normal,labor_difficult,labor_very_difficult,source,licence,note
+Ready-mix concrete 3000 psi,cu yd,145.00,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material price only from public bid tabs; labor from P-405
+Ready-mix concrete 4000 psi,cu yd,155.00,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material price only from public bid tabs; labor from P-405
+Ready-mix concrete 5000 psi,cu yd,170.00,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material price only from public bid tabs; labor from P-405
+Rebar #4,ton,1100.00,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material only
+Rebar #5,ton,1080.00,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material only
+Welded wire fabric 6x6-W1.4xW1.4,sq ft,0.25,,,Public bid tabulation average (state DOT 2024-2025),US government work (17 USC §105),material only
+Form lumber 2x4 SPF,mbf,580.00,,,Public bid tabulation average (2024-2025),US government work (17 USC §105),material only
+Form plywood 3/4 in BB,sq ft,1.85,,,Public bid tabulation average (2024-2025),US government work (17 USC §105),material only
+Concrete footing forms erect,sq ft,,0.09,0.126,0.162,NAVFAC P-405 Table 6-1 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Concrete wall forms erect to 8 ft,sq ft,,0.10,0.14,0.18,NAVFAC P-405 Table 6-1 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Concrete place footings direct chute,cu yd,,0.50,0.70,0.90,NAVFAC P-405 Table 6-3 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Concrete place slab on grade,cu yd,,0.40,0.56,0.72,NAVFAC P-405 Table 6-3 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Concrete finish broom,sq ft,,0.012,0.0168,0.0216,NAVFAC P-405 Table 6-4 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Concrete finish trowel smooth,sq ft,,0.016,0.0224,0.0288,NAVFAC P-405 Table 6-4 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996
+Rebar place #3-#5,ton,,20.0,28.0,36.0,NAVFAC P-405 Table 6-2 (Oct 1996),US government work (17 USC §105),military-crew baseline 1996

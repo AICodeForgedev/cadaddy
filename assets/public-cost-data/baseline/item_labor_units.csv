@@ -1,0 +1,146 @@
+item,unit,material,labor_normal,labor_difficult,labor_very_difficult
+Clearing and grubbing light brush,acre,,40.0,56.0,72.0
+Clearing and grubbing medium brush,acre,,80.0,112.0,144.0
+Clearing and grubbing heavy brush,acre,,160.0,224.0,288.0
+Tree removal 6-12 in diameter,each,,2.0,2.8,3.6
+Tree removal 12-24 in diameter,each,,4.0,5.6,7.2
+Tree removal 24-36 in diameter,each,,8.0,11.2,14.4
+Excavation common earth hand,cu yd,,1.5,2.1,2.7
+Excavation common earth machine,cu yd,,0.04,0.056,0.072
+Excavation rock hand,cu yd,,4.0,5.6,7.2
+Excavation rock machine,cu yd,,0.15,0.21,0.27
+Excavation trench 2 ft wide to 4 ft deep,lin ft,,0.15,0.21,0.27
+Excavation trench 3 ft wide to 6 ft deep,lin ft,,0.30,0.42,0.54
+Backfill hand tamped,cu yd,,1.0,1.4,1.8
+Backfill machine compacted,cu yd,,0.06,0.084,0.108
+Grading rough machine,sq yd,,0.005,0.007,0.009
+Grading fine hand,sq yd,,0.06,0.084,0.108
+Concrete footing forms erect,sq ft,,0.09,0.126,0.162
+Concrete footing forms strip,sq ft,,0.03,0.042,0.054
+Concrete wall forms erect to 8 ft,sq ft,,0.10,0.14,0.18
+Concrete wall forms erect 8-16 ft,sq ft,,0.12,0.168,0.216
+Concrete wall forms strip,sq ft,,0.04,0.056,0.072
+Concrete column forms erect,sq ft,,0.15,0.21,0.27
+Concrete column forms strip,sq ft,,0.05,0.07,0.09
+Concrete slab on grade forms erect,lin ft,,0.08,0.112,0.144
+Concrete elevated slab forms erect,sq ft,,0.14,0.196,0.252
+Concrete elevated slab forms strip,sq ft,,0.05,0.07,0.09
+Concrete stair forms erect,sq ft,,0.25,0.35,0.45
+Rebar place #3-#5,ton,,20.0,28.0,36.0
+Rebar place #6-#8,ton,,16.0,22.4,28.8
+Rebar place #9-#11,ton,,14.0,19.6,25.2
+Welded wire fabric place,sq ft,,0.004,0.0056,0.0072
+Concrete place footings direct chute,cu yd,,0.50,0.70,0.90
+Concrete place footings pump,cu yd,,0.35,0.49,0.63
+Concrete place walls pump,cu yd,,0.50,0.70,0.90
+Concrete place slab on grade,cu yd,,0.40,0.56,0.72
+Concrete place elevated slab pump,cu yd,,0.60,0.84,1.08
+Concrete finish broom,sq ft,,0.012,0.0168,0.0216
+Concrete finish trowel smooth,sq ft,,0.016,0.0224,0.0288
+Concrete finish exposed aggregate,sq ft,,0.025,0.035,0.045
+Concrete pad 4 in thick,sq ft,,0.04,0.056,0.072
+Concrete pad 6 in thick,sq ft,,0.05,0.07,0.09
+CMU block 8 in wall,sq ft,,0.10,0.14,0.18
+CMU block 12 in wall,sq ft,,0.12,0.168,0.216
+Brick veneer single wythe,sq ft,,0.14,0.196,0.252
+Mortar joints raking,lin ft,,0.02,0.028,0.036
+Grouting CMU cells,cu ft,,0.20,0.28,0.36
+Wood framing 2x4 wall,lin ft,,0.06,0.084,0.108
+Wood framing 2x6 wall,lin ft,,0.07,0.098,0.126
+Wood framing 2x8 floor joist,lin ft,,0.04,0.056,0.072
+Wood framing 2x10 floor joist,lin ft,,0.05,0.07,0.09
+Wood framing roof rafter 2x6,lin ft,,0.05,0.07,0.09
+Wood framing roof rafter 2x8,lin ft,,0.06,0.084,0.108
+Plywood sheathing wall 1/2 in,sq ft,,0.015,0.021,0.027
+Plywood sheathing roof 5/8 in,sq ft,,0.012,0.0168,0.0216
+Subflooring 3/4 in plywood,sq ft,,0.013,0.0182,0.0234
+Drywall 1/2 in hang walls,sq ft,,0.016,0.0224,0.0288
+Drywall 1/2 in hang ceilings,sq ft,,0.020,0.028,0.036
+Drywall 5/8 in hang walls,sq ft,,0.018,0.0252,0.0324
+Drywall 5/8 in fire rated hang,sq ft,,0.020,0.028,0.036
+Drywall tape and finish level 4,sq ft,,0.018,0.0252,0.0324
+Metal stud framing 3-5/8 in 16 OC,lin ft,,0.04,0.056,0.072
+Metal stud framing 6 in 16 OC,lin ft,,0.05,0.07,0.09
+Acoustic ceiling tile 2x4 lay-in,sq ft,,0.018,0.0252,0.0324
+Acoustic ceiling grid T-bar,sq ft,,0.012,0.0168,0.0216
+Built-up roofing 3-ply,sq ft,,0.012,0.0168,0.0216
+Single-ply membrane EPDM,sq ft,,0.008,0.0112,0.0144
+Asphalt shingles,sq ft,,0.010,0.014,0.018
+Metal roofing standing seam,sq ft,,0.014,0.0196,0.0252
+Roof insulation rigid 2 in,sq ft,,0.006,0.0084,0.0108
+Flashing base metal,lin ft,,0.06,0.084,0.108
+Copper pipe 1/2 in solder,lin ft,,0.08,0.112,0.144
+Copper pipe 3/4 in solder,lin ft,,0.09,0.126,0.162
+Copper pipe 1 in solder,lin ft,,0.10,0.14,0.18
+Copper pipe 1-1/2 in solder,lin ft,,0.12,0.168,0.216
+Copper pipe 2 in solder,lin ft,,0.14,0.196,0.252
+PVC pipe 1-1/2 in DWV,lin ft,,0.06,0.084,0.108
+PVC pipe 2 in DWV,lin ft,,0.07,0.098,0.126
+PVC pipe 3 in DWV,lin ft,,0.08,0.112,0.144
+PVC pipe 4 in DWV,lin ft,,0.09,0.126,0.162
+Cast iron pipe 4 in no-hub,lin ft,,0.15,0.21,0.27
+Water closet floor mount,each,,3.0,4.2,5.4
+Water closet wall mount,each,,4.0,5.6,7.2
+Lavatory wall mount,each,,3.0,4.2,5.4
+Lavatory countertop,each,,2.5,3.5,4.5
+Kitchen sink double bowl,each,,3.5,4.9,6.3
+Urinal wall mount,each,,3.5,4.9,6.3
+Bathtub with shower valve,each,,5.0,7.0,9.0
+Water heater 40 gal,each,,4.0,5.6,7.2
+Floor drain 4 in,each,,2.0,2.8,3.6
+Roof drain 4 in,each,,2.5,3.5,4.5
+Hose bibb,each,,1.0,1.4,1.8
+HVAC ductwork galvanized rectangular,lb,,0.06,0.084,0.108
+HVAC ductwork galvanized round,lin ft,,0.15,0.21,0.27
+HVAC flex duct 6 in,lin ft,,0.08,0.112,0.144
+HVAC flex duct 8 in,lin ft,,0.09,0.126,0.162
+HVAC flex duct 10 in,lin ft,,0.10,0.14,0.18
+Duct insulation fiberglass 1 in,sq ft,,0.012,0.0168,0.0216
+Duct insulation fiberglass 2 in,sq ft,,0.014,0.0196,0.0252
+Pipe insulation fiberglass 1 in,lin ft,,0.06,0.084,0.108
+Diffuser ceiling 2x2,each,,0.50,0.70,0.90
+Diffuser linear 4 ft,each,,0.60,0.84,1.08
+Register wall,each,,0.30,0.42,0.54
+Grille return air,each,,0.30,0.42,0.54
+VAV box with reheat coil,each,,4.0,5.6,7.2
+Fan coil unit,each,,6.0,8.4,10.8
+Split system condenser,each,,8.0,11.2,14.4
+Packaged rooftop unit to 5 ton,each,,12.0,16.8,21.6
+Thermostat programmable,each,,1.0,1.4,1.8
+Exhaust fan ceiling,each,,1.5,2.1,2.7
+Refrigerant piping 3/8 in,lin ft,,0.08,0.112,0.144
+Refrigerant piping 5/8 in,lin ft,,0.10,0.14,0.18
+Refrigerant piping 7/8 in,lin ft,,0.12,0.168,0.216
+Black steel pipe 1/2 in threaded,lin ft,,0.12,0.168,0.216
+Black steel pipe 3/4 in threaded,lin ft,,0.14,0.196,0.252
+Black steel pipe 1 in threaded,lin ft,,0.16,0.224,0.288
+Fire sprinkler head pendant,each,,0.30,0.42,0.54
+Fire sprinkler head sidewall,each,,0.35,0.49,0.63
+Fire sprinkler pipe 1 in,lin ft,,0.07,0.098,0.126
+Fire sprinkler pipe 1-1/2 in,lin ft,,0.08,0.112,0.144
+Fire sprinkler pipe 2 in,lin ft,,0.10,0.14,0.18
+Waterline ductile iron 6 in,lin ft,,0.10,0.14,0.18
+Waterline ductile iron 8 in,lin ft,,0.12,0.168,0.216
+Sewer PVC 6 in,lin ft,,0.08,0.112,0.144
+Sewer PVC 8 in,lin ft,,0.10,0.14,0.18
+Storm drain 12 in RCP,lin ft,,0.15,0.21,0.27
+Manhole precast 4 ft,each,,8.0,11.2,14.4
+Catch basin precast,each,,6.0,8.4,10.8
+Fire hydrant with tee,each,,6.0,8.4,10.8
+Gate valve 6 in buried,each,,2.0,2.8,3.6
+Curb and gutter cast in place,lin ft,,0.12,0.168,0.216
+Asphalt paving 2 in,sq yd,,0.015,0.021,0.027
+Concrete sidewalk 4 in,sq ft,,0.025,0.035,0.045
+Bollard concrete filled pipe,each,,2.0,2.8,3.6
+Chain link fence 6 ft,lin ft,,0.10,0.14,0.18
+Chain link gate 4 ft single,each,,2.0,2.8,3.6
+Painting interior latex walls,sq ft,,0.008,0.0112,0.0144
+Painting interior latex ceilings,sq ft,,0.010,0.014,0.018
+Painting exterior latex,sq ft,,0.010,0.014,0.018
+Concrete footing forms erect,sq ft,,0.09,0.126,0.162
+Concrete wall forms erect to 8 ft,sq ft,,0.10,0.14,0.18
+Concrete place footings direct chute,cu yd,,0.50,0.70,0.90
+Concrete place slab on grade,cu yd,,0.40,0.56,0.72
+Concrete finish broom,sq ft,,0.012,0.0168,0.0216
+Concrete finish trowel smooth,sq ft,,0.016,0.0224,0.0288
+Rebar place #3-#5,ton,,20.0,28.0,36.0
