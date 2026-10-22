@@ -3,7 +3,7 @@
 
 use crate::design::width_in;
 use crate::layout::{Kind, PLAN_MARGIN_IN, SITE_LAYER, UNDERGROUND_LAYER, frame, paper_to_model, to_model};
-use crate::sitework::{FENCE_LAYER, FURNISH_LAYER, GRADING_LAYER, LANDSCAPE_LAYER, STRUCTURE_LAYER};
+use crate::sitework::{EXISTING_GRADING_LAYER, FENCE_LAYER, FURNISH_LAYER, GRADING_LAYER, LANDSCAPE_LAYER, STRUCTURE_LAYER};
 use crate::style::Style;
 use crate::truth::*;
 use cadaddy_color::Color;
@@ -2538,6 +2538,11 @@ fn draw_underground(pen: &mut Pen, se: &SiteElement, layer: &str) {
         let depth_str = format!("{depth:.0}' DEEP");
         pen.text(layer, c + Vec2::new(off, -pen.pl(0.10)), 0.05, &depth_str, 0.0, HAlign::Left, VAlign::Middle);
     }
+    // Pipe size and material.
+    if let Some(size) = se.size_in {
+        let pipe = format!("{size:.0}\" {}", se.material).trim_end().to_string();
+        pen.text(layer, c + Vec2::new(off, pen.pl(0.10)), 0.05, &pipe, 0.0, HAlign::Left, VAlign::Middle);
+    }
 }
 
 /// Generic site element: a point marker with tag.
@@ -2747,7 +2752,7 @@ fn grading_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
         if gc.points.len() < 2 {
             continue;
         }
-        let layer = GRADING_LAYER;
+        let layer = if gc.surface == "existing" { EXISTING_GRADING_LAYER } else { GRADING_LAYER };
         let pts: Vec<Vec2> = gc.points.iter().map(|p| pen.b(*p)).collect();
         for w in pts.windows(2) {
             if let [a, b] = w {
@@ -2757,7 +2762,8 @@ fn grading_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
         // Label at midpoint.
         if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
             let mid = (*first + *last) * 0.5;
-            let label = format!("{:.0}", gc.elevation_ft);
+            // The elevation as built: half-foot contours keep their decimal.
+            let label = if gc.elevation_ft.fract().abs() < 1e-9 { format!("{:.0}", gc.elevation_ft) } else { format!("{:.1}", gc.elevation_ft) };
             let size = if gc.weight == "major" { 0.06 } else { 0.04 };
             pen.text(layer, mid, size, &label, 0.0, HAlign::Center, VAlign::Middle);
         }
@@ -2868,7 +2874,8 @@ fn site_schedules(pen: &mut Pen, t: &Truth) {
     // Quantities table.
     let mut qty_rows: Vec<Vec<String>> = vec![vec!["CSI".into(), "DESCRIPTION".into(), "QTY".into(), "UNIT".into()]];
     for sq in &t.site_quantities {
-        qty_rows.push(vec![sq.csi.clone(), sq.description.clone(), format!("{:.0}", sq.quantity), sq.unit.clone()]);
+        let qty = if sq.status == "insufficient data" { "-".to_string() } else { format!("{:.0}", sq.quantity) };
+        qty_rows.push(vec![sq.csi.clone(), sq.description.clone(), qty, sq.unit.clone()]);
     }
     let h = table(pen, [x0, y1 - 0.5], "SITEWORK QUANTITIES", &qty_rows);
 

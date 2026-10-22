@@ -125,6 +125,7 @@ pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub mod sitetakeoff;
 pub mod spell;
 pub mod stairs;
 pub mod symbol;
@@ -492,6 +493,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     v.extend(ugsheets::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
+        v.extend(sitetakeoff::specs());
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());

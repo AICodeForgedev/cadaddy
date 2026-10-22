@@ -45,10 +45,13 @@ fn the_hotels_underground_services_come_off_the_civil_sheets() {
             assert!(near(first, lo, 0.5) && near(last, hi, 0.5), "seed {seed} {kind}: {:?} vs {lo:?} → {hi:?}", s.route_ft);
             assert!(s.enters, "seed {seed} {kind}");
             assert_eq!(s.depth_ft, e.depth_ft, "seed {seed} {kind}: depth");
-            assert_eq!(s.size_in, None, "seed {seed} {kind}: the fixture prints no size");
+            // The site utility runs (storm, sewer, water) print their pipe size; the others none.
+            assert_eq!(s.size_in, e.size_in, "seed {seed} {kind}: size");
             assert_eq!(s.sheet, "C-101", "seed {seed} {kind}");
             assert!(s.found_in[0][0] <= s.found_in[1][0] && s.found_in[0][1] < s.found_in[1][1], "seed {seed} {kind}: {:?}", s.found_in);
-            assert!((s.confidence - 0.9).abs() < 1e-9, "seed {seed} {kind}: {}", s.confidence);
+            // Full confidence only with the size read too.
+            let want = if e.size_in.is_some() { 1.0 } else { 0.9 };
+            assert!((s.confidence - want).abs() < 1e-9, "seed {seed} {kind}: {}", s.confidence);
         }
         assert!(found.iter().all(|s| s.kind != "unknown"), "seed {seed}");
     }

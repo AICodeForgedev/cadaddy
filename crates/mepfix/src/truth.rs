@@ -969,6 +969,9 @@ pub struct SiteElement {
     /// Slope in percent for graded surfaces and utility runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slope_pct: Option<f64>,
+    /// Pipe size for utility runs, nominal inches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<f64>,
 }
 
 /// A grading contour on the civil grading plan.
@@ -1016,9 +1019,28 @@ pub struct SiteQuantity {
     /// `32 13 13` (concrete paving), `32 16 13` (curbs), `32 31 13` (fencing), etc.
     pub csi: String,
     pub description: String,
+    /// 0 when the status is `insufficient data`.
     pub quantity: f64,
     /// `SF`, `LF`, `CY`, `EA`, `SY`, `TON`, `GAL`.
     pub unit: String,
+    /// The sheets the quantity is measured on (`C-101`, `C-102`, `C-103`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    /// `read` (measured off the drawing), `rule` (derived from read values by a stated rule),
+    /// `assumed`, or `insufficient data` (no number).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
+    /// The elements (site elements, structures, contours) that make up the quantity, each with
+    /// its share; the shares add up to the quantity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<SiteQuantityPart>,
+}
+
+/// One element's share of a [`SiteQuantity`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteQuantityPart {
+    pub id: String,
+    pub quantity: f64,
 }
 
 // --- Fire alarm (FA sheets) ---
