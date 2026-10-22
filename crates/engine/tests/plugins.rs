@@ -15,6 +15,14 @@ use cadaddy_engine::Session;
 use cadaddy_engine::plugins::PluginHost;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
+
+/// The hello plug-in's enabled flag is saved in the user's config dir, and `enable_disable` turns it
+/// off for a moment; tests that load it take this lock so a parallel load never reads it disabled.
+fn hello_lock() -> MutexGuard<'static, ()> {
+    static HELLO: Mutex<()> = Mutex::new(());
+    HELLO.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Path to the pre-built example plugin WASM.
 fn hello_wasm() -> PathBuf {
@@ -58,6 +66,7 @@ fn looping_wasm() -> Vec<u8> {
 
 #[test]
 fn load_hello_plugin() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("load_plugin should succeed");
@@ -72,6 +81,7 @@ fn load_hello_plugin() {
 
 #[test]
 fn duplicate_load_is_error() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("first load");
@@ -81,6 +91,7 @@ fn duplicate_load_is_error() {
 
 #[test]
 fn find_command() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("load");
@@ -91,6 +102,7 @@ fn find_command() {
 
 #[test]
 fn enable_disable() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("load");
@@ -105,6 +117,7 @@ fn enable_disable() {
 
 #[test]
 fn list_plugins() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("load");
@@ -131,6 +144,7 @@ fn plugins_command_commands() {
 
 #[test]
 fn execute_hello_greet() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut s = Session::new();
     s.plugins.load_plugin(&wasm).expect("load");
@@ -147,6 +161,7 @@ fn execute_hello_greet() {
 
 #[test]
 fn execute_hello_count() {
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut s = Session::new();
     s.plugins.load_plugin(&wasm).expect("load");
@@ -194,6 +209,7 @@ fn denied_file_access() {
     // the WASM module imports only `env::host_*` functions. Any attempt to import WASI functions
     // would fail at instantiation (wasmi would report an unresolved import).
     // We verify this by checking that the plugin loaded successfully without WASI.
+    let _hello = hello_lock();
     let wasm = hello_wasm();
     let mut host = PluginHost::new();
     host.load_plugin(&wasm).expect("load should succeed without WASI");
