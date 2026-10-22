@@ -158,6 +158,19 @@ fn execute_hello_count() {
 }
 
 #[test]
+fn module_without_exports_is_refused() {
+    let dir = std::env::temp_dir().join("cadaddy_plugin_test_bad");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("empty.wasm");
+    std::fs::write(&path, bad_wasm()).expect("write temp wasm");
+
+    let mut host = PluginHost::new();
+    assert!(host.load_plugin(&path).is_err(), "a module without plugin_init should not load");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fuel_limit_stops_infinite_loop() {
     // Write the looping WASM to a temp file.
     let dir = std::env::temp_dir().join("cadaddy_plugin_test_fuel");
