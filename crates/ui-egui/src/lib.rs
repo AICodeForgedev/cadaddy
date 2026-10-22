@@ -97,6 +97,7 @@ pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
 pub mod laywalkdlg;
+pub mod levelspalette;
 pub mod lispdlg;
 pub mod managers;
 pub mod markuppalette;

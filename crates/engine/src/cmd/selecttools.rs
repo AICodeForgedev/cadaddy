@@ -200,7 +200,7 @@ impl Interactive for SelectSimilarM {
 // ---------------- isolation ----------------
 
 /// Hide `hs` (objects that exist and aren't hidden yet); returns how many were hidden.
-fn hide(s: &mut Session, hs: Vec<Handle>) -> Result<usize> {
+pub(crate) fn hide(s: &mut Session, hs: Vec<Handle>) -> Result<usize> {
     let d = s.doc()?;
     let hs: Vec<Handle> = hs.into_iter().filter(|h| d.entity(*h).is_some() && !d.is_hidden_object(*h)).collect();
     if !hs.is_empty() {

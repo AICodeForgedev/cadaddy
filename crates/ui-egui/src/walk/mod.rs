@@ -173,6 +173,10 @@ pub struct Walk {
     pub picked: Option<Picked>,
     /// Cut away everything above the walker's level (a dollhouse view from above).
     pub cut: bool,
+    /// Show only the walker's storey (its floor up to the next), one level at a time.
+    pub only_level: bool,
+    /// The storey the drawn scene was cut to (none: every storey).
+    view_level: Option<usize>,
     /// The open drawing's revision the scene was derived from; edits rebuild it.
     revision: u64,
     fps: f32,
@@ -243,6 +247,8 @@ impl Walk {
             uploaded: false,
             picked: None,
             cut: false,
+            only_level: false,
+            view_level: None,
             revision,
             fps: 0.0,
             hidden_types: BTreeSet::new(),
@@ -387,7 +393,9 @@ impl Walk {
         let mut types: Vec<(String, usize, [u8; 3])> = types.into_iter().map(|(t, (n, c))| (t, n, c)).collect();
         types.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
         self.types = types;
-        self.view = visible(b, &self.hidden_types, self.walls_on);
+        let level = self.only_level.then_some(self.walker.level);
+        self.view = visible(b, &self.hidden_types, self.walls_on, level.and_then(|i| level_band(&b.scene, i)));
+        self.view_level = level;
         self.uploaded = false;
     }
 }
@@ -406,9 +414,23 @@ fn device_type(b: &Building, d: &DeviceInfo) -> String {
     d.attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(&b.rules.devices.type_attr)).map(|(_, v)| v.clone()).unwrap_or_else(|| d.block.clone())
 }
 
+/// A storey's heights, feet: from its floor to just under the next floor.
+fn level_band(scene: &Scene, level: usize) -> Option<(f32, f32)> {
+    let l = scene.levels.get(level)?;
+    Some(((l.elevation_ft - 0.05) as f32, (l.elevation_ft + l.height_ft - 0.05) as f32))
+}
+
 /// The building's scene without the hidden device types, and without walls (faces, caps and
-/// outlines) when they are off. Floors, ceilings and shown devices stay.
-fn visible(b: &Building, hidden: &BTreeSet<String>, walls_on: bool) -> Scene {
+/// outlines) when they are off, and only what stands in `band` (feet) when given. Floors,
+/// ceilings and shown devices stay.
+fn visible(b: &Building, hidden: &BTreeSet<String>, walls_on: bool, band: Option<(f32, f32)>) -> Scene {
+    let inside = |vs: &[cadaddy_walk3d::Vertex]| match band {
+        None => true,
+        Some((z0, z1)) => {
+            let z = vs.iter().map(|v| v.p[2]).sum::<f32>() / vs.len().max(1) as f32;
+            z >= z0 && z < z1
+        }
+    };
     let s = &b.scene;
     let device_type_of: std::collections::HashMap<(u16, u64), String> = s.devices.iter().map(|d| ((d.src, d.handle.0), device_type(b, d))).collect();
     let mut v = Scene::default();
@@ -418,13 +440,17 @@ fn visible(b: &Building, hidden: &BTreeSet<String>, walls_on: bool) -> Scene {
             Some(t) => !hidden.contains(t),
             None => walls_on || o.handle == Handle(0),
         };
-        if keep {
+        if keep && inside(tri) {
             v.tris.extend_from_slice(tri);
             v.owners.push(*o);
         }
     }
     if walls_on {
-        v.edges = s.edges.clone();
+        v.edges = if band.is_some() {
+            s.edges.as_chunks::<2>().0.iter().filter(|e| inside(e.as_slice())).flatten().copied().collect()
+        } else {
+            s.edges.clone()
+        };
     }
     v
 }
@@ -522,6 +548,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         egui::Panel::right("walk_panel").default_size(270.0).show(ui, |ui| {
             close_now = egui::ScrollArea::vertical().id_salt("walk_side").show(ui, |ui| side_panel(walk, ui)).inner;
         });
+        // One storey at a time: cut the scene again when the toggle or the walker's level changes.
+        if walk.view_level != walk.only_level.then_some(walk.walker.level) {
+            walk.rebuild_view();
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let (esc, sel) = viewport(walk, ui, rs.as_ref(), samples);
             close_now |= esc;
@@ -605,6 +635,7 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
         w.go_to_level(s, w.level);
     }
     ui.checkbox(&mut walk.cut, "Cut away levels above (H)");
+    ui.checkbox(&mut walk.only_level, "This level only (I)");
     ui.checkbox(&mut walk.minimap, "Plan in the corner (M)");
     ui.small(format!("Speed {}/s{}", ft_in(walk.speed_ft), if w.fly { " (×4 flying)" } else { "" }));
     ui.label(format!(
@@ -695,7 +726,7 @@ fn side_panel(walk: &mut Walk, ui: &mut egui::Ui) -> bool {
         walk.rebuild_view();
     }
     ui.separator();
-    ui.small("Drag: look · WASD/arrows: move · Shift: run\nQ/E: down/up (fly) · PgUp/PgDn: level\nF: fly · H: cut above · M: plan\nclick: pick, or swing a door · Esc: back");
+    ui.small("Drag: look · WASD/arrows: move · Shift: run\nQ/E: down/up (fly) · PgUp/PgDn: level\nF: fly · H: cut above · I: this level only · M: plan\nclick: pick, or swing a door · Esc: back");
     back
 }
 
@@ -842,10 +873,11 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
                 i.key_pressed(egui::Key::PageDown),
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::M),
+                i.key_pressed(egui::Key::I),
             );
             (f64::from(i.stable_dt).min(0.1), (fwd, right, up, run, toggles))
         });
-        let (fwd, right, up, run, (f, h, pgup, pgdn, escape, m)) = keys;
+        let (fwd, right, up, run, (f, h, pgup, pgdn, escape, m, i_key)) = keys;
         minimap_key = m;
         let speed = walk.speed_ft * if w.fly { 4.0 } else { 1.0 } * run * dt;
         if fwd != 0.0 || right != 0.0 || up != 0.0 {
@@ -859,6 +891,9 @@ fn viewport(walk: &mut Walk, ui: &mut egui::Ui, rs: Option<&egui_wgpu::RenderSta
         }
         if h {
             walk.cut = !walk.cut;
+        }
+        if i_key {
+            walk.only_level = !walk.only_level;
         }
         if pgup && w.level + 1 < s.levels.len() {
             w.go_to_level(s, w.level + 1);
@@ -1160,15 +1195,44 @@ mod tests {
         let scene = derive_set(&[&d], &rules);
         let b = Building { drawings: vec![Arc::new(d)], rules, rules_from: String::new(), scene, problems: Vec::new() };
         let tris_of = |s: &Scene, h: u64| s.owners.iter().filter(|o| o.handle == Handle(h)).count();
-        let all = visible(&b, &BTreeSet::new(), true);
+        let all = visible(&b, &BTreeSet::new(), true, None);
         assert!(tris_of(&all, 1) > 0 && tris_of(&all, 2) > 0 && tris_of(&all, 3) > 0);
-        let no_lights = visible(&b, &BTreeSet::from(["light".to_string()]), true);
+        let no_lights = visible(&b, &BTreeSet::from(["light".to_string()]), true, None);
         assert_eq!((tris_of(&no_lights, 2), tris_of(&no_lights, 4)), (0, 0));
         assert_eq!(tris_of(&no_lights, 3), tris_of(&all, 3));
-        let no_walls = visible(&b, &BTreeSet::new(), false);
+        let no_walls = visible(&b, &BTreeSet::new(), false, None);
         assert_eq!((tris_of(&no_walls, 1), tris_of(&no_walls, 5)), (0, 0));
         assert!(no_walls.edges.is_empty() && tris_of(&no_walls, 0) > 0, "floors stay");
         assert_eq!(no_walls.tris.len(), no_walls.owners.len() * 3);
+    }
+
+    /// One storey at a time: only what stands between the walker's floor and the next.
+    #[test]
+    fn this_level_only_keeps_one_storey() {
+        let rules = Rules::from_json(
+            r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"region":[-10,-10,500,500]},
+                          {"name":"L2","elevation_ft":10,"height_ft":10,"region":[990,-10,1500,500],"base":[1000,0]}],
+                "layers":[{"layer":"A-WALL","kind":"wall"}]}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut d = Drawing::default();
+        let v = |x: f64, y: f64| cadaddy_geom::Vec3 { x, y, z: 0.0 };
+        for (h, x0) in [(1u64, 0.0), (2, 1000.0)] {
+            let mut e = cadaddy_doc::Entity::new(Handle(h), EntityKind::Line(cadaddy_doc::Line { a: v(x0, 0.0), b: v(x0 + 240.0, 0.0) }));
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        }
+        let scene = derive_set(&[&d], &rules);
+        let b = Building { drawings: vec![Arc::new(d)], rules, rules_from: String::new(), scene, problems: Vec::new() };
+        let tris_of = |s: &Scene, h: u64| s.owners.iter().filter(|o| o.handle == Handle(h)).count();
+        let all = visible(&b, &BTreeSet::new(), true, None);
+        assert!(tris_of(&all, 1) > 0 && tris_of(&all, 2) > 0);
+        let l1 = visible(&b, &BTreeSet::new(), true, level_band(&b.scene, 0));
+        assert_eq!((tris_of(&l1, 1), tris_of(&l1, 2)), (tris_of(&all, 1), 0));
+        let l2 = visible(&b, &BTreeSet::new(), true, level_band(&b.scene, 1));
+        assert_eq!((tris_of(&l2, 1), tris_of(&l2, 2)), (0, tris_of(&all, 2)));
+        assert!(l2.edges.len() < all.edges.len() && l2.edges.len().is_multiple_of(2));
+        assert_eq!(level_band(&b.scene, 9), None);
     }
 
     /// A building file in the drawing's folder that lists it as a sheet is found, and the open

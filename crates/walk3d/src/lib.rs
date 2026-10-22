@@ -12,6 +12,7 @@
 mod derive;
 mod doors;
 mod ground;
+pub mod levels;
 mod math;
 mod measure;
 mod openings;
@@ -28,6 +29,7 @@ mod walker;
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};
 pub use doors::DoorLeaf;
 pub use ground::Ground;
+pub use levels::{Datum, DatumKind, LevelNote, ShaftMark, ShaftRun, SheetLink};
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
