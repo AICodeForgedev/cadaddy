@@ -171,12 +171,12 @@ impl Settings {
     }
 
     /// Hanger spacing, feet: ducts by shape; pipe by size (up to 1": 6', 2": 8', 4": 10', larger
-    /// 12'); conduit.
+    /// 12'); conduit and cable tray.
     fn spacing(&self, kind: MepKind, size: [f64; 2]) -> f64 {
         match kind {
             MepKind::Duct if size[1] > 0.0 => self.duct_ft,
             MepKind::Duct => self.round_duct_ft,
-            MepKind::Conduit => self.conduit_ft,
+            MepKind::Conduit | MepKind::Tray => self.conduit_ft,
             MepKind::Pipe => self.pipe_ft.unwrap_or(match size[0] {
                 d if d <= 1.0 => 6.0,
                 d if d <= 2.0 => 8.0,
@@ -225,6 +225,7 @@ fn size_label(kind: MepKind, size: [f64; 2]) -> String {
     match kind {
         MepKind::Duct if size[1] > 0.0 => format!("{}x{}", n(size[0]), n(size[1])),
         MepKind::Duct => format!("{}Ø", inches(size[0])),
+        MepKind::Tray => format!("{}x{}", n(size[0]), n(size[1])),
         _ => inches(size[0]),
     }
 }
@@ -243,6 +244,7 @@ fn kind_str(kind: MepKind) -> &'static str {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
+        MepKind::Tray => "tray",
     }
 }
 
@@ -457,7 +459,7 @@ fn takeoff(sp: &BuildingSpec, st: &Settings) -> Takeoff {
                 row.weight_lb += area * g.map_or(0.0, |g| g.lb_per_sqft);
                 row.runs.push(id);
             }
-            MepKind::Pipe | MepKind::Conduit => {
+            MepKind::Pipe | MepKind::Conduit | MepKind::Tray => {
                 let row = t.pipes.entry((lk.clone(), sk.clone(), kind_str(sy.kind), size.clone())).or_default();
                 row.length_ft += length;
                 row.runs.push(id);
