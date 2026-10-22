@@ -8,7 +8,7 @@ use serde_json::json;
 
 #[test]
 fn an_opened_svg_is_not_saved_over() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"exported".to_vec()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"exported".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let dir = std::env::temp_dir().join(format!("cadaddy-open-svg-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let svg = dir.join("Logo.svg");

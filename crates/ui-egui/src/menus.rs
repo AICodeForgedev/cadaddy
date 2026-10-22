@@ -1275,7 +1275,7 @@ mod tests {
             read: |_, _| Err("no reader in tests".into()),
             write: |_, _| Err("no writer in tests".into()),
             plot: Some(fake_plot),
-            read_pdf: None,
+            read_pdf: None, read_dwf: None, write_dwfx: None,
         });
         if io().and_then(|h| h.plot).is_none() {
             return; // another test installed hooks without a plotter first

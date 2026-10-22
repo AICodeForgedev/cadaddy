@@ -178,7 +178,7 @@ mod tests {
             read: |_, _| Err("no reader in tests".into()),
             write: |_, _| Ok(b"drawing".to_vec()),
             plot: None,
-            read_pdf: None,
+            read_pdf: None, read_dwf: None, write_dwfx: None,
         });
         let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
         app.run("line", json!({ "points": [[0, 0], [1, 1]] })).unwrap();

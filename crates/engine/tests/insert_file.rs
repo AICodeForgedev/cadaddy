@@ -42,7 +42,7 @@ fn read(bytes: &[u8], _name: &str) -> Result<Drawing, String> {
 }
 
 fn hooks() {
-    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None, read_pdf: None });
+    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
 }
 
 /// Write a test drawing file with $INSBASE `base`; returns its path.

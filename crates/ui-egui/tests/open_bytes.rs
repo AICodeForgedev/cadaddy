@@ -13,7 +13,7 @@ fn open_bytes_opens_the_named_drawing_and_reports_failures() {
         read: |b, _| if b.starts_with(b"0\nSECTION\n") { Ok(Drawing::new_imperial()) } else { Err("not a drawing".into()) },
         write: |_, _| Ok(Vec::new()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let mut app = CadApp::new(Session::empty(), Services::default());
     app.ui.start_tab = true;

@@ -30,7 +30,7 @@ fn written(s: &mut Session, p: serde_json::Value) -> String {
 
 #[test]
 fn wblock_honours_the_base_point() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write, plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write, plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let mut s = Session::new();
     let h = s.execute("line", &json!({ "points": [[10, 20], [15, 20]] })).unwrap()["handles"][0].as_str().unwrap().to_string();
 

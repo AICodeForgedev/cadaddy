@@ -127,7 +127,7 @@ fn read(bytes: &[u8], _name: &str) -> Result<cadaddy_engine::doc::Drawing, Strin
 #[test]
 fn opening_a_drawing_with_authoring_elements_offers_the_block_editor() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks { read, write: |_, _| Ok(Vec::new()), plot: None, read_pdf: None });
+    set_io(IoHooks { read, write: |_, _| Ok(Vec::new()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let dir = std::env::temp_dir().join(format!("cadaddy-authoring-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let symbol = dir.join("Symbol.dxf");

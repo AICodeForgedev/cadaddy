@@ -100,7 +100,7 @@ mod web {
             read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
             write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
             plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
-            read_pdf: Some(cadaddy_io::pdf_read::read_json),
+            read_pdf: Some(cadaddy_io::pdf_read::read_json), read_dwf: Some(cadaddy_io::read_dwf_page), write_dwfx: Some(cadaddy_io::write_dwfx_sheets),
         });
         cadaddy_engine::cmd::file::set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
         cadaddy_engine::cmd::file::set_write_as(|d, name, o| {

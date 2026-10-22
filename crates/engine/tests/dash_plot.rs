@@ -14,7 +14,7 @@ fn fake_plot(_: &cadaddy_doc::Drawing, space: &cadaddy_doc::Space, opts: &Value)
 }
 
 fn session() -> Session {
-    set_io(IoHooks { read: |_, _| Err("no reader".into()), write: |_, _| Err("no writer".into()), plot: Some(fake_plot), read_pdf: None });
+    set_io(IoHooks { read: |_, _| Err("no reader".into()), write: |_, _| Err("no writer".into()), plot: Some(fake_plot), read_pdf: None, read_dwf: None, write_dwfx: None });
     set_plotter_store(PlotterStore::memory());
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [100, 50]]})).unwrap();

@@ -1,4 +1,5 @@
-//! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
+//! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import,
+//! SVG/PNG/PDF/DWFx/DWF export (plotting), DWFx underlay reading.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -10,6 +11,8 @@ pub mod dwg_native;
 pub mod dwg_read;
 pub mod dwg_write;
 mod dxf_raw;
+/// DWFx (XML Paper Specification / ECMA-388) and DWF 6 export/reading.
+pub mod dwfx;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod ifc;
 pub mod mesh3d_io;
@@ -54,6 +57,16 @@ pub use cadaddy_dxf::Version;
 pub use dxf_read::{attrib_from_groups, entity_from_groups};
 pub use dxf_write::{entity_groups, entity_records};
 pub use pdf::{PdfOptions, pdf, plot};
+
+/// Hook for DWFATTACH: read one page (1-based) of a DWF or DWFx as a drawing in sheet inches.
+pub fn read_dwf_page(bytes: &[u8], page: u32) -> std::result::Result<Drawing, String> {
+    dwfx::read_page(bytes, page).map_err(|e| e.to_string())
+}
+
+/// Hook for DWFXOUT: export multiple spaces as a DWFx (XPS/ECMA-388) package.
+pub fn write_dwfx_sheets(d: &Drawing, spaces: &[Space]) -> std::result::Result<Vec<u8>, String> {
+    dwfx::export_sheets(d, spaces).map_err(|e| e.to_string())
+}
 
 /// How a drawing is saved as DXF or DWG.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -295,6 +308,8 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         "wmf" => Ok(wmf::export(d, &Space::Model, window)),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
+        "dwfx" => dwfx::export(d, &Space::Model),
+        "dwf" => dwfx::export_dwf6(d, &Space::Model),
         e => Err(IoError::Unsupported(e.to_string())),
     }
 }

@@ -21,7 +21,7 @@ fn hooks() {
         },
         write: |_, _| Err("no writer".into()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
 }
 

@@ -75,7 +75,7 @@ fn hooks() {
         read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
-        read_pdf: Some(cadaddy_io::pdf_read::read_json),
+        read_pdf: Some(cadaddy_io::pdf_read::read_json), read_dwf: None, write_dwfx: None,
     });
     cadaddy_engine::cmd::pointcloud::set_reader(cadaddy_io::pointcloud_io::read);
 }

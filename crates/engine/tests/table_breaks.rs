@@ -132,7 +132,7 @@ fn data_links_saved_in_a_drawing_are_read_beside_it_or_on_this_computer_only() {
         read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let base = std::env::temp_dir().join(format!("cadaddy-datalink-saved-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

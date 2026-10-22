@@ -183,7 +183,7 @@ fn run(n: usize, memory_mb: f64) {
         read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     cadaddy_engine::cmd::file::set_dwg_copy(false);
     let dir = std::env::temp_dir().join(format!("cadaddy-million-{}-{n}", std::process::id()));

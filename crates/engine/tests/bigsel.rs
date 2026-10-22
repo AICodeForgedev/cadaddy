@@ -132,7 +132,7 @@ fn bench_e4t() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     for (name, cmd, extra) in [
         ("move", "move", json!({"from": [0, 0], "to": [10, 5]})),
@@ -161,7 +161,7 @@ fn bench_e4t_phases() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let mut s = Session::empty();
     s.execute("open", &json!({"path": path})).unwrap();

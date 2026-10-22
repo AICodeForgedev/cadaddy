@@ -113,7 +113,7 @@ fn compares_a_file_read_through_the_io_hooks() {
         d.add(&Space::Model, Common::default(), line(0.0, 0.0, x, 0.0)).map_err(|e| e.to_string())?;
         Ok(d)
     }
-    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None, read_pdf: None });
+    set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let dir = std::env::temp_dir().join(format!("cadaddy-compare-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("other.dxf");

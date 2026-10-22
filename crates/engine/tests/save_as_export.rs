@@ -8,7 +8,7 @@ use serde_json::json;
 
 #[test]
 fn saveas_to_an_image_keeps_the_drawing_unsaved_under_its_name() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let dir = std::env::temp_dir().join(format!("cadaddy-saveas-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = Session::new();

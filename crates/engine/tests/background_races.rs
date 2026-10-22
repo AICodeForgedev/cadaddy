@@ -19,7 +19,7 @@ fn hooks() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
         cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())

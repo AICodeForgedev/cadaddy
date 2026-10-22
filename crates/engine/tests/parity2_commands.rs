@@ -591,7 +591,7 @@ fn dxfout_writes_dxf_and_dxfin_opens_it() {
         read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let mut s = Session::new();
     circle(&mut s, 1.0, 2.0, 3.0);

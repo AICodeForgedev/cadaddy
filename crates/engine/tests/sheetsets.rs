@@ -14,7 +14,7 @@ fn hooks() {
         read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
 }

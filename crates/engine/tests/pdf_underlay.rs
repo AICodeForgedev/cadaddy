@@ -14,7 +14,7 @@ fn hooks() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: Some(cadaddy_io::pdf_read::read_json),
+        read_pdf: Some(cadaddy_io::pdf_read::read_json), read_dwf: None, write_dwfx: None,
     });
 }
 
