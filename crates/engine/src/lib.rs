@@ -303,6 +303,9 @@ pub struct DocState {
     /// Which kinds of new annotation were found too small to read and hinted about
     /// ([`legibility`]), so the hint shows once per drawing.
     pub legibility_hinted: u8,
+    /// The IFC references' files as last loaded (upper-case name → size and time), so a changed
+    /// file is reloaded ([`cmd::ifcref::poll`]).
+    pub ifc_stamps: std::collections::HashMap<String, cmd::ifcref::Stamp>,
 }
 
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
@@ -367,6 +370,7 @@ impl DocState {
             walkthrough: false,
             bare_layouts: Vec::new(),
             legibility_hinted: 0,
+            ifc_stamps: std::collections::HashMap::new(),
         }
     }
     /// The drawing has changes not saved to its file, or the Block Editor has changes not yet

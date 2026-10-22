@@ -626,6 +626,8 @@ impl CadApp {
             return;
         }
         self.datalink_checked = now;
+        // IFC references whose files changed (another program saved the model) reload.
+        cadaddy_engine::cmd::ifcref::poll(&mut self.session);
         let linked = self.session.doc().is_ok_and(|d| {
             std::iter::once(&d.model)
                 .chain(d.layouts.iter().map(|l| &l.entities))

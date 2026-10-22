@@ -17,6 +17,9 @@
 //! common body kinds are read: polygonal and triangulated face sets, faceted BReps and shell
 //! models, extruded rectangle, circle and polyline profiles, mapped items and the first operand of
 //! booleans (openings aren't cut), placed by their local placement chains, in the file's length unit.
+//! Each object's tag also carries what the file says about it: the storey it is in (`level:`, and
+//! `elevation:` in metres), its type (`type:`), the systems it is grouped into (`system:`) and its
+//! property and quantity sets (`prop:Pset_WallCommon.FireRating=1HR`; quantity lengths in metres).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -1587,6 +1590,214 @@ impl Reader<'_> {
     }
 }
 
+/// Most properties and quantities kept per object read from IFC (hostile files).
+const MAX_PROPS: usize = 96;
+/// Most characters of one tag string (DXF extended data strings hold 255).
+const MAX_TAG: usize = 250;
+
+/// What an IFC file says about its objects beyond their bodies: the spatial structure each sits
+/// in (IfcRelContainedInSpatialStructure, IfcRelAggregates), its property and quantity sets
+/// (IfcRelDefinesByProperties), its type (IfcRelDefinesByType) and the systems it is grouped
+/// into (IfcRelAssignsToGroup).
+#[derive(Default)]
+struct Relations {
+    /// Object → the spatial element or object it is part of.
+    parent: HashMap<u64, u64>,
+    /// Object → its property and quantity sets.
+    sets: HashMap<u64, Vec<u64>>,
+    /// Object → its type object.
+    types: HashMap<u64, u64>,
+    /// Object → the names of the systems it belongs to.
+    systems: HashMap<u64, Vec<String>>,
+}
+
+/// The ids in list parameter `i` of `a`.
+fn ref_list(a: &[P], i: usize) -> Vec<u64> {
+    a.get(i).map(P::list).unwrap_or_default().iter().filter_map(P::reference).collect()
+}
+
+/// A property's value as text: `IFCLABEL('x')` → `x`, `.T.` → `TRUE`, numbers trimmed.
+fn value_text(p: &P) -> Option<String> {
+    match p {
+        P::Typed(_, a) => a.first().and_then(value_text),
+        P::Str(s) => Some(s.clone()),
+        P::Num(v) => Some(num_text(*v)),
+        P::Enum(e) => Some(match e.as_str() {
+            "T" => "TRUE".into(),
+            "F" => "FALSE".into(),
+            "U" => "UNKNOWN".into(),
+            _ => e.clone(),
+        }),
+        P::List(l) => {
+            let parts: Vec<String> = l.iter().take(16).filter_map(value_text).collect();
+            (!parts.is_empty()).then(|| parts.join(", "))
+        }
+        P::Ref(_) | P::Null => None,
+    }
+}
+
+/// A number with at most six decimals and no trailing zeros.
+fn num_text(v: f64) -> String {
+    if !v.is_finite() {
+        return String::new();
+    }
+    let t = format!("{v:.6}");
+    let t = t.trim_end_matches('0').trim_end_matches('.');
+    if t == "-0" { "0".into() } else { t.to_string() }
+}
+
+/// The first `n` characters of `s`.
+fn cap(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+impl Reader<'_> {
+    fn relations(&self) -> Relations {
+        let mut r = Relations::default();
+        for (name, a) in self.m.values() {
+            match name.as_str() {
+                // GlobalId, OwnerHistory, Name, Description, RelatingObject, RelatedObjects.
+                "IFCRELAGGREGATES" | "IFCRELNESTS" => {
+                    if let Some(whole) = a.get(4).and_then(P::reference) {
+                        for part in ref_list(a, 5) {
+                            r.parent.entry(part).or_insert(whole);
+                        }
+                    }
+                }
+                // …, RelatedElements, RelatingStructure.
+                "IFCRELCONTAINEDINSPATIALSTRUCTURE" => {
+                    if let Some(st) = a.get(5).and_then(P::reference) {
+                        for e in ref_list(a, 4) {
+                            r.parent.insert(e, st);
+                        }
+                    }
+                }
+                // …, RelatedObjects, RelatingPropertyDefinition.
+                "IFCRELDEFINESBYPROPERTIES" => {
+                    let sets: Vec<u64> = match a.get(5) {
+                        Some(P::List(l)) => l.iter().filter_map(P::reference).collect(),
+                        Some(p) => p.reference().into_iter().collect(),
+                        None => Vec::new(),
+                    };
+                    for o in ref_list(a, 4) {
+                        let list = r.sets.entry(o).or_default();
+                        if list.len() < MAX_PROPS {
+                            list.extend(sets.iter().copied());
+                        }
+                    }
+                }
+                // …, RelatedObjects, RelatingType.
+                "IFCRELDEFINESBYTYPE" => {
+                    if let Some(t) = a.get(5).and_then(P::reference) {
+                        for o in ref_list(a, 4) {
+                            r.types.insert(o, t);
+                        }
+                    }
+                }
+                // …, RelatedObjects, RelatedObjectsType, RelatingGroup.
+                "IFCRELASSIGNSTOGROUP" => {
+                    let Some((group, ga)) = a.get(6).and_then(|g| self.get(g)) else { continue };
+                    if !group.contains("SYSTEM") {
+                        continue;
+                    }
+                    let Some(sys) = ga.get(2).and_then(P::text).filter(|t| !t.is_empty()) else { continue };
+                    for o in ref_list(a, 4) {
+                        let list = r.systems.entry(o).or_default();
+                        if list.len() < 16 && !list.iter().any(|s| s == sys) {
+                            list.push(cap(sys, 120));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        r
+    }
+
+    /// The storey object `id` is in (through spaces and assemblies): its name and elevation in
+    /// metres (its placement's height; else its Elevation attribute).
+    fn storey(&self, rel: &Relations, id: u64, unit: f64) -> Option<(String, f64)> {
+        let mut at = id;
+        for _ in 0..16 {
+            at = *rel.parent.get(&at)?;
+            let (name, a) = self.m.get(&at)?;
+            if name == "IFCBUILDINGSTOREY" {
+                let label = a.get(2).and_then(P::text).filter(|t| !t.is_empty()).or_else(|| a.get(7).and_then(P::text)).unwrap_or("Storey");
+                let placed = a.get(5).filter(|p| **p != P::Null).map(|p| self.placement(p, 0)[2][3]);
+                let z = placed.filter(|z| z.is_finite() && *z != 0.0).or_else(|| a.get(9).and_then(P::num)).or(placed).unwrap_or(0.0) * unit;
+                return Some((cap(label, 120), if z.is_finite() { z } else { 0.0 }));
+            }
+            if name == "IFCBUILDING" || name == "IFCSITE" || name == "IFCPROJECT" {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// `prop:Set.Name=value` strings of the property and quantity sets `sets` (lengths in metres).
+    fn properties(&self, sets: &[u64], unit: f64, out: &mut Vec<String>) {
+        for id in sets {
+            let Some((name, a)) = self.m.get(id) else { continue };
+            let set = a.get(2).and_then(P::text).unwrap_or_default();
+            let items = match name.as_str() {
+                "IFCPROPERTYSET" => ref_list(a, 4),
+                "IFCELEMENTQUANTITY" => ref_list(a, 5),
+                _ => continue,
+            };
+            for item in items {
+                if out.len() >= MAX_PROPS {
+                    return;
+                }
+                let Some((kind, pa)) = self.m.get(&item) else { continue };
+                let pname = pa.first().and_then(P::text).unwrap_or_default();
+                let value = match kind.as_str() {
+                    "IFCPROPERTYSINGLEVALUE" | "IFCPROPERTYENUMERATEDVALUE" | "IFCPROPERTYLISTVALUE" => pa.get(2).and_then(value_text),
+                    "IFCQUANTITYLENGTH" => pa.get(3).and_then(P::num).map(|v| num_text(v * unit)),
+                    "IFCQUANTITYAREA" | "IFCQUANTITYVOLUME" | "IFCQUANTITYCOUNT" | "IFCQUANTITYWEIGHT" | "IFCQUANTITYTIME" => {
+                        pa.get(3).and_then(P::num).map(num_text)
+                    }
+                    _ => None,
+                };
+                if let Some(v) = value.filter(|_| !pname.is_empty()) {
+                    out.push(cap(&format!("prop:{set}.{pname}={v}"), MAX_TAG));
+                }
+            }
+        }
+    }
+
+    /// What object `id` carries beyond its class, GlobalId and name, as tag strings: `level:`,
+    /// `elevation:` (metres), `type:`, `system:` and `prop:` ones.
+    fn extras(&self, rel: &Relations, id: u64, unit: f64) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some((level, z)) = self.storey(rel, id, unit) {
+            out.push(format!("level:{level}"));
+            out.push(format!("elevation:{}", num_text(z)));
+        }
+        let ty = rel.types.get(&id).and_then(|t| self.m.get(t));
+        if let Some(n) = ty.and_then(|(_, a)| a.get(2)).and_then(P::text).filter(|t| !t.is_empty()) {
+            out.push(cap(&format!("type:{n}"), MAX_TAG));
+        }
+        for s in rel.systems.get(&id).into_iter().flatten() {
+            out.push(format!("system:{s}"));
+        }
+        let mut props = Vec::new();
+        self.properties(rel.sets.get(&id).map(Vec::as_slice).unwrap_or_default(), unit, &mut props);
+        // The type's own sets (IfcTypeObject's HasPropertySets), where the object has none of that name.
+        if let Some((_, ta)) = ty {
+            let mut from_type = Vec::new();
+            self.properties(&ref_list(ta, 5), unit, &mut from_type);
+            for p in from_type {
+                let key = p.split_once('=').map_or(p.as_str(), |(k, _)| k);
+                if props.len() < MAX_PROPS && !props.iter().any(|q| q.split_once('=').is_some_and(|(k, _)| k == key)) {
+                    props.push(p);
+                }
+            }
+        }
+        out.extend(props);
+        out
+    }
+}
+
 /// Spatial structure and openings: not objects of their own.
 const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCOPENINGELEMENT", "IFCANNOTATION"];
 
@@ -1685,6 +1896,7 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
     let scale: M = [[unit, 0.0, 0.0, 0.0], [0.0, unit, 0.0, 0.0], [0.0, 0.0, unit, 0.0]];
     let mut d = Drawing::new_metric();
     d.header.set_i64("INSUNITS", 6);
+    let rel = r.relations();
     let mut ids: Vec<&u64> = model.keys().collect();
     ids.sort_unstable();
     let mut total_faces = 0usize;
@@ -1727,12 +1939,13 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
         }
         let guid = a.first().and_then(P::text).unwrap_or_default();
         let label = a.get(2).and_then(P::text).unwrap_or_default();
-        let xdata = vec![
+        let mut xdata = vec![
             RawTag { code: 1001, value: APP.into() },
             RawTag { code: 1000, value: class.clone() },
             RawTag { code: 1000, value: guid.chars().take(64).collect() },
-            RawTag { code: 1000, value: label.chars().take(250).collect() },
+            RawTag { code: 1000, value: cap(label, MAX_TAG) },
         ];
+        xdata.extend(r.extras(&rel, *id, unit).into_iter().map(|value| RawTag { code: 1000, value }));
         let mut c = Common { layer, xdata, ..Common::default() };
         if class == "Space" {
             c.transparency = cadaddy_doc::Transparency::Percent(80);
@@ -1806,6 +2019,70 @@ mod tests {
         assert!((lo.y - 1.9).abs() < 1e-9 && (hi.z - 5.5).abs() < 1e-9, "{lo:?} {hi:?}");
         assert_eq!(ifc_tag(walls[0]), Some(("Wall".into(), "w1".into())));
         assert_eq!(d.model.iter().filter(|e| e.common.layer == "IFC-Slab").count(), 1);
+    }
+
+    /// Storeys (through a space and directly), property and quantity sets, a type with its own
+    /// set, and a system, carried on each object's tag; written back with the same GlobalIds.
+    #[test]
+    fn storeys_properties_types_and_systems_are_read_and_ids_round_trip() {
+        let ifc = b"ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC2X3'));\nENDSEC;\nDATA;\n\
+            #1=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n#2=IFCUNITASSIGNMENT((#1));\n\
+            #3=IFCPROJECT('0Prj000000000000000001',$,'P',$,$,$,$,$,#2);\n\
+            #4=IFCBUILDING('0Bld000000000000000001',$,'B',$,$,$,$,$,.ELEMENT.,$,$,$);\n\
+            #5=IFCCARTESIANPOINT((0.,0.,3500.));\n#6=IFCAXIS2PLACEMENT3D(#5,$,$);\n#7=IFCLOCALPLACEMENT($,#6);\n\
+            #8=IFCBUILDINGSTOREY('0Sty000000000000000002',$,'Level 2',$,$,#7,$,$,.ELEMENT.,3500.);\n\
+            #9=IFCBUILDINGSTOREY('0Sty000000000000000001',$,'Level 1',$,$,$,$,$,.ELEMENT.,0.);\n\
+            #10=IFCRELAGGREGATES('0Rel000000000000000001',$,$,$,#4,(#9,#8));\n\
+            #20=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1000.,0.,0.),(0.,1000.,0.)));\n\
+            #21=IFCTRIANGULATEDFACESET(#20,$,.T.,((1,2,3)),$);\n#22=IFCSHAPEREPRESENTATION($,'Body','Tessellation',(#21));\n\
+            #23=IFCPRODUCTDEFINITIONSHAPE($,$,(#22));\n\
+            #24=IFCWALLSTANDARDCASE('1Wal000000000000000001',$,'Wall A',$,$,#7,#23,$);\n\
+            #25=IFCSPACE('1Spc000000000000000001',$,'101',$,$,$,#23,'Office',.ELEMENT.,.INTERNAL.,$);\n\
+            #26=IFCDUCTSEGMENT('1Dct000000000000000001',$,'Duct',$,$,$,#23,$,.RIGIDSEGMENT.);\n\
+            #27=IFCRELCONTAINEDINSPATIALSTRUCTURE('0Rel000000000000000002',$,$,$,(#24),#8);\n\
+            #28=IFCRELAGGREGATES('0Rel000000000000000003',$,$,$,#9,(#25));\n\
+            #29=IFCRELCONTAINEDINSPATIALSTRUCTURE('0Rel000000000000000004',$,$,$,(#26),#25);\n\
+            #30=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('2HR'),$);\n\
+            #31=IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN(.F.),$);\n\
+            #32=IFCPROPERTYSET('0Pst000000000000000001',$,'Pset_WallCommon',$,(#30,#31));\n\
+            #33=IFCQUANTITYLENGTH('Height',$,$,3000.,$);\n\
+            #34=IFCELEMENTQUANTITY('0Qto000000000000000001',$,'Qto_WallBaseQuantities',$,$,(#33));\n\
+            #35=IFCRELDEFINESBYPROPERTIES('0Rel000000000000000005',$,$,$,(#24),#32);\n\
+            #36=IFCRELDEFINESBYPROPERTIES('0Rel000000000000000006',$,$,$,(#24),#34);\n\
+            #37=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('1HR'),$);\n\
+            #38=IFCPROPERTYSINGLEVALUE('AcousticRating',$,IFCLABEL('STC 50'),$);\n\
+            #39=IFCPROPERTYSET('0Pst000000000000000002',$,'Pset_WallCommon',$,(#37,#38));\n\
+            #40=IFCWALLTYPE('0Typ000000000000000001',$,'Partition 200',$,$,(#39),$,$,$,.STANDARD.);\n\
+            #41=IFCRELDEFINESBYTYPE('0Rel000000000000000007',$,$,$,(#24),#40);\n\
+            #42=IFCDISTRIBUTIONSYSTEM('0Sys000000000000000001',$,'Supply Air',$,$,$,.SUPPLYAIR.);\n\
+            #43=IFCRELASSIGNSTOGROUP('0Rel000000000000000008',$,$,$,(#26),$,#42);\n\
+            ENDSEC;\nEND-ISO-10303-21;\n";
+        let d = read_ifc(ifc).unwrap();
+        let tags = |class: &str| -> Vec<String> {
+            let e = d.model.iter().find(|e| ifc_tag(e).is_some_and(|(c, _)| c == class)).unwrap();
+            tag_strings(e, APP).unwrap()
+        };
+        let wall = tags("WallStandardCase");
+        assert_eq!(wall.get(..3), Some(&["WallStandardCase".to_string(), "1Wal000000000000000001".into(), "Wall A".into()][..]));
+        for t in
+            ["level:Level 2", "elevation:3.5", "type:Partition 200", "prop:Pset_WallCommon.FireRating=2HR", "prop:Pset_WallCommon.IsExternal=FALSE"]
+        {
+            assert!(wall.iter().any(|x| x == t), "{t} in {wall:?}");
+        }
+        // Quantity lengths in metres; the type's set fills in only what the object lacks.
+        assert!(wall.iter().any(|x| x == "prop:Qto_WallBaseQuantities.Height=3"), "{wall:?}");
+        assert!(wall.iter().any(|x| x == "prop:Pset_WallCommon.AcousticRating=STC 50"), "{wall:?}");
+        assert!(!wall.iter().any(|x| x == "prop:Pset_WallCommon.FireRating=1HR"), "{wall:?}");
+        // The space sits on Level 1 (aggregated), the duct in the space: Level 1 too, in its system.
+        assert!(tags("Space").iter().any(|x| x == "level:Level 1"));
+        let duct = tags("DuctSegment");
+        assert!(duct.iter().any(|x| x == "level:Level 1") && duct.iter().any(|x| x == "system:Supply Air"), "{duct:?}");
+        // Written back, the objects keep the GlobalIds they were read with.
+        let out = String::from_utf8(write_ifc(&d, "Round Trip.ifc").unwrap()).unwrap();
+        for g in ["1Wal000000000000000001", "1Spc000000000000000001", "1Dct000000000000000001"] {
+            assert!(out.contains(&format!("('{g}'")), "{g}");
+        }
+        assert_eq!(read_ifc(out.as_bytes()).unwrap().model.len(), 3);
     }
 
     #[test]
