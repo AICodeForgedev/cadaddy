@@ -61,6 +61,8 @@ enum Class {
     Duct,
     Pipe,
     Conduit,
+    /// Cable tray: IfcCableCarrierSegment, CABLETRAYSEGMENT.
+    CableTray,
     LightFixture,
     Outlet,
     SwitchingDevice,
@@ -104,6 +106,7 @@ impl Class {
             Class::Duct => ("IfcDuctSegment", "RIGIDSEGMENT"),
             Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
             Class::Conduit => ("IfcCableCarrierSegment", "CONDUITSEGMENT"),
+            Class::CableTray => ("IfcCableCarrierSegment", "CABLETRAYSEGMENT"),
             Class::LightFixture => ("IfcLightFixture", "NOTDEFINED"),
             Class::Outlet => ("IfcOutlet", "POWEROUTLET"),
             Class::SwitchingDevice => ("IfcSwitchingDevice", "TOGGLESWITCH"),
@@ -265,7 +268,7 @@ fn class_of(e: &Entity) -> Kind {
                     match extra("kind:").as_deref() {
                         Some("duct") => Class::DuctFitting,
                         Some("pipe") => Class::PipeFitting,
-                        Some("conduit") => Class::ConduitFitting,
+                        Some("conduit") | Some("tray") => Class::ConduitFitting,
                         _ => Class::DuctFitting,
                     }
                 } else {
@@ -273,6 +276,7 @@ fn class_of(e: &Entity) -> Kind {
                         Some("duct") => Class::Duct,
                         Some("pipe") => Class::Pipe,
                         Some("conduit") => Class::Conduit,
+                        Some("tray") => Class::CableTray,
                         Some("light_fixture") => Class::LightFixture,
                         Some("outlet") | Some("receptacle") | Some("data_outlet") | Some("floor_box") => Class::Outlet,
                         Some("switch") | Some("disconnect") => Class::SwitchingDevice,

@@ -547,6 +547,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
             elec_devices(&mut pen, t, st, l, &format!("E-20{l}"), false);
+            trays(&mut pen, t, l);
+            legend.push(item("cable_tray", "CABLE TRAY (WIDTH x DEPTH), LADDER"));
+            legend.push(item("conduit_bank", "FEEDER CONDUIT BANK ((QTY) SIZE)"));
+            legend.push(item("riser_up", "CONDUIT UP / DOWN"));
             legend.push(item("receptacle", "DUPLEX RECEPTACLE"));
             legend.push(item("data_outlet", "DATA/TELECOM OUTLET"));
             legend.push(item("floor_box", "FLOOR BOX"));
@@ -757,6 +761,18 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             let c = pen.p([x, y]);
             let r = pen.pl(0.04);
             pen.circle("PIPE", c, r);
+        }
+        "cable_tray" => {
+            pen.pline("TRAY", [x - 0.3, y + 0.07], [x + 0.3, y + 0.07]);
+            pen.pline("TRAY", [x - 0.3, y - 0.07], [x + 0.3, y - 0.07]);
+            for k in [-0.2, 0.0, 0.2] {
+                pen.pline("TRAY", [x + k, y - 0.07], [x + k, y + 0.07]);
+            }
+        }
+        "conduit_bank" => {
+            for k in [-0.05, 0.0, 0.05] {
+                pen.pline("CONDUIT", [x - 0.3, y + k], [x + 0.3, y + k]);
+            }
         }
         "column" => {
             let (a, b) = (pen.p([x - 0.06, y - 0.06]), pen.p([x + 0.06, y + 0.06]));
@@ -1482,6 +1498,52 @@ fn riser_mark(pen: &mut Pen, c: Vec2, r: f64, kind: &str) {
             down(pen);
         }
     }
+}
+
+/// Cable tray (ladder: both sides, rungs every 2', `CT` at the middle), feeder conduits (a line
+/// each), the conduit riser bank in the mech room (circles and a note), and their tags.
+fn trays(pen: &mut Pen, t: &Truth, level: &str) {
+    let sheet = pen.sh.number.clone();
+    let rot = readable(pen.rot());
+    for s in t.segments.iter().filter(|s| s.sheet == sheet && !s.vertical && (s.kind == "tray" || s.kind == "conduit")) {
+        let [a, b] = s.path_ft;
+        if s.kind == "conduit" {
+            let (p, q) = (pen.b([a[0], a[1]]), pen.b([b[0], b[1]]));
+            pen.line("CONDUIT", p, q);
+            continue;
+        }
+        let hw = s.size_in[0] / 24.0;
+        let len = s.length_ft();
+        let u = [(b[0] - a[0]) / len.max(1e-9), (b[1] - a[1]) / len.max(1e-9)];
+        let n = [-u[1], u[0]];
+        for sg in [1.0, -1.0] {
+            let (p, q) = (pen.b([a[0] + n[0] * hw * sg, a[1] + n[1] * hw * sg]), pen.b([b[0] + n[0] * hw * sg, b[1] + n[1] * hw * sg]));
+            pen.line("TRAY", p, q);
+        }
+        let mut d = 0.0;
+        while d <= len + 1e-9 {
+            let c = [a[0] + u[0] * d, a[1] + u[1] * d];
+            let (p, q) = (pen.b([c[0] + n[0] * hw, c[1] + n[1] * hw]), pen.b([c[0] - n[0] * hw, c[1] - n[1] * hw]));
+            pen.line("TRAY", p, q);
+            d += 2.0;
+        }
+    }
+    // The riser bank: (4) 2" between the levels.
+    let marks: Vec<&Riser> = t.risers.iter().filter(|r| r.system == "EC" && r.shown.iter().any(|m| m.level == level)).collect();
+    for r in &marks {
+        let c = pen.b(r.at_ft);
+        let rad = pen.pl(0.04);
+        let sym = r.shown.iter().find(|m| m.level == level).map_or("up", |m| m.symbol.as_str());
+        riser_mark(pen, c, rad, sym);
+    }
+    if let Some(first) = marks.first() {
+        let th = pen.st.text_in / pen.sh.scale;
+        let up = first.shown.iter().find(|m| m.level == level).is_some_and(|m| m.symbol == "up");
+        let note = if up { format!("({}) 2\"C UP TO LEVEL 2 PANELS", marks.len()) } else { format!("({}) 2\"C FROM LEVEL 1 PANELS", marks.len()) };
+        let at = pen.b([first.at_ft[0], first.at_ft[1] + th * 3.0]);
+        pen.text("TEXT", at, pen.st.text_in, &note, rot, HAlign::Left, VAlign::Bottom);
+    }
+    tags(pen, t, &sheet);
 }
 
 // ---- Ceilings -----------------------------------------------------------------------------------

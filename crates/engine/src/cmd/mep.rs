@@ -56,6 +56,8 @@ fn draft_system(layer: &str) -> Option<MepSystem> {
         (MepKind::Duct, [12.0, 12.0], 10.0)
     } else if up.starts_with("P-") || (up.starts_with("M-") && (has("PIPE") || has("HWS") || has("CHWS") || has("CHWR") || has("STEM"))) {
         (MepKind::Pipe, [2.0, 0.0], 10.0)
+    } else if up.starts_with("E-") && (has("TRAY") || has("CT")) {
+        (MepKind::Tray, [12.0, 4.0], 10.0)
     } else if up.starts_with("E-") && (has("COND") || has("CNDT")) {
         (MepKind::Conduit, [1.0, 0.0], 10.0)
     } else {
@@ -364,6 +366,7 @@ fn item_json(i: usize, r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) ->
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
+        MepKind::Tray => "tray",
     });
     // `reviewed` is stored in xdata on the run's source objects if present, else in
     // a simple check against a list we keep in memory.  For now we use the building spec's
@@ -786,6 +789,7 @@ fn kind_str(kind: MepKind) -> &'static str {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
+        MepKind::Tray => "tray",
     }
 }
 
@@ -1175,6 +1179,7 @@ mod tests {
         assert!(draft_system("M-DUCT-SUPP").is_some_and(|s| s.kind == MepKind::Duct));
         assert!(draft_system("P-DOMW-CW").is_some_and(|s| s.kind == MepKind::Pipe));
         assert!(draft_system("E-COND").is_some_and(|s| s.kind == MepKind::Conduit));
+        assert!(draft_system("E-CABL-TRAY").is_some_and(|s| s.kind == MepKind::Tray && s.size_in == [12.0, 4.0]));
         assert!(draft_system("A-WALL").is_none());
     }
 }

@@ -23,6 +23,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # The RFI list's items (shared with the building spec).
 cadaddy-walk3d = { path = "../walk3d" }
+# Read trays become 3D runs, clash with other trades and export to IFC (tray_reader test).
+cadaddy-engine = { workspace = true }
 
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
