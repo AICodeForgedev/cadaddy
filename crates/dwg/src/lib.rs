@@ -494,6 +494,16 @@ mod native {
         }
     }
 
+    /// The current text style (`$TEXTSTYLE`) by its name, the same way as [`current_dimstyle`]:
+    /// the handle read with the DXF needn't be the style's in the document, in which case the DWG
+    /// writer fell back to Standard and AutoCAD opened the drawing with Standard current (#1650).
+    fn current_text_style(doc: &mut acadrust::CadDocument) {
+        let name = doc.header.current_text_style_name.clone();
+        if let Some(h) = doc.text_styles.iter().find(|ts| ts.name.eq_ignore_ascii_case(&name)).map(|ts| ts.handle) {
+            doc.header.current_text_style_handle = h;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
@@ -512,6 +522,7 @@ mod native {
         dimension_flags(&mut doc, true);
         drop_unwritable(&mut doc);
         current_dimstyle(&mut doc);
+        current_text_style(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -583,6 +594,22 @@ mod tests {
         assert!(is_dwg(b"AC1032\0\0\0\0"));
         assert!(!is_dwg(b"  0\r\nSECTION"));
         assert_eq!(version(b"AC1018xxxx").as_deref(), Some("AC1018"));
+    }
+
+    /// A DXF with ROMANS as `$TEXTSTYLE` gives a DWG whose current text style is ROMANS, not
+    /// Standard: the DXF names the style, and the handle read with it was Standard's (#1650).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn current_text_style_reaches_the_dwg() {
+        let header = "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  9\n$TEXTSTYLE\n  7\nROMANS\n  0\nENDSEC\n";
+        let style = "  0\nSTYLE\n  5\n1F0\n100\nAcDbSymbolTableRecord\n100\nAcDbTextStyleTableRecord\n  2\nROMANS\n 70\n0\n";
+        let style = format!("{style} 40\n0\n 41\n1\n 50\n0\n 71\n0\n 42\n2.5\n  3\nromans.shx\n  4\n\n");
+        let dxf = format!("{header}  0\nSECTION\n  2\nTABLES\n  0\nTABLE\n  2\nSTYLE\n 70\n1\n{style}  0\nENDTAB\n  0\nENDSEC\n  0\nEOF\n");
+        let dwg = dxf_to_dwg(dxf.as_bytes()).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(&dwg)).read().unwrap();
+        let romans = doc.text_styles.iter().find(|ts| ts.name == "ROMANS").map(|ts| ts.handle);
+        assert!(romans.is_some(), "ROMANS is missing from the DWG");
+        assert_eq!(Some(doc.header.current_text_style_handle), romans);
     }
 
     #[test]
