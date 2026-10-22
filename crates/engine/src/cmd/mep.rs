@@ -368,6 +368,7 @@ fn item_json(i: usize, r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) ->
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
         MepKind::Tray => "tray",
+        MepKind::Cable => "cable",
     });
     // `reviewed` is stored in xdata on the run's source objects if present, else in
     // a simple check against a list we keep in memory.  For now we use the building spec's
@@ -791,6 +792,7 @@ fn kind_str(kind: MepKind) -> &'static str {
         MepKind::Pipe => "pipe",
         MepKind::Conduit => "conduit",
         MepKind::Tray => "tray",
+        MepKind::Cable => "cable",
     }
 }
 

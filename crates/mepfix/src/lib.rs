@@ -26,6 +26,7 @@ pub mod ceilasm_reader;
 pub mod ceiling_reader;
 pub mod ceilings;
 pub mod clash;
+pub mod conduit_reader;
 pub mod covercheck;
 pub mod design;
 pub mod draw;

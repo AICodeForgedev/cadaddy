@@ -819,6 +819,8 @@ pub enum MepKind {
     Conduit,
     /// Cable tray (width × depth), a coordination trade like the others.
     Tray,
+    /// Cable outside conduit (a homerun's MC cable), round like conduit.
+    Cable,
 }
 
 /// What a duct system carries — determines the default colour when none is set.
@@ -861,6 +863,7 @@ impl MepSystem {
             MepKind::Pipe => 3,    // green
             MepKind::Conduit => 6, // magenta
             MepKind::Tray => 30,   // orange
+            MepKind::Cable => 210, // pink: an assumed homerun route
         }
     }
 }
@@ -1384,6 +1387,7 @@ impl BuildingSpec {
                 MepKind::Pipe => "pipe",
                 MepKind::Conduit => "conduit",
                 MepKind::Tray => "tray",
+                MepKind::Cable => "cable",
             };
             let hidden = if sy.show { "" } else { ", hidden" };
             put(
