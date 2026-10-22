@@ -375,28 +375,45 @@ fn element_options(e: &DashElement) -> String {
 /// `*NAME` line and the lines under it, as [`write_lin`] / [`write_pat`] write them), or `block`
 /// added at the end. Every other line stays as it was, byte for byte: comments, blank lines,
 /// definitions the readers skip. Of two definitions with the name, the first (the one the
-/// readers keep) is replaced; a definition ends at a blank line, a comment or the next `*`.
+/// readers keep) is replaced; a definition ends at the next `*` header or EOF (matching
+/// [`parse_lin`] / [`parse_pat`]). Within the old span, data lines are replaced by `block`
+/// and comment / blank lines are kept right after the new data.
 pub fn put_definition(text: &str, name: &str, block: &str) -> String {
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let block: String = block.lines().filter(|l| !l.trim().is_empty() && !l.starts_with(';')).map(|l| format!("{l}{nl}")).collect();
-    let (mut start, mut end, mut pos) = (None, None, 0usize);
+    let (mut start, mut end) = (None::<usize>, None::<usize>);
+    let mut found = false;
+    let mut pos = 0usize;
     for line in text.split_inclusive('\n') {
         let t = line.trim();
-        if start.is_some() {
-            if end.is_none() && (t.is_empty() || t.starts_with(';') || t.starts_with('*')) {
+        if found {
+            if t.starts_with('*') {
                 end = Some(pos);
+                break;
             }
         } else if let Some(rest) = t.strip_prefix('*')
             && header(rest).is_ok_and(|(n, _)| n.eq_ignore_ascii_case(name))
         {
             start = Some(pos);
+            found = true;
         }
         pos += line.len();
     }
     match start {
         Some(a) => {
             let b = end.unwrap_or(text.len());
-            format!("{}{block}{}", text.get(..a).unwrap_or_default(), text.get(b..).unwrap_or_default())
+            // Keep blank and comment lines from the old span (skip the header line).
+            let kept: String = text
+                .get(a..b)
+                .unwrap_or_default()
+                .split_inclusive('\n')
+                .skip(1)
+                .filter(|l| {
+                    let t = l.trim();
+                    t.is_empty() || t.starts_with(';')
+                })
+                .collect();
+            format!("{}{block}{kept}{}", text.get(..a).unwrap_or_default(), text.get(b..).unwrap_or_default())
         }
         None if text.is_empty() || text.ends_with('\n') => format!("{text}{block}"),
         None => format!("{text}{nl}{block}"),
@@ -488,5 +505,33 @@ mod tests {
         assert_eq!(put_definition(crlf, "a", ";; header\n*A,new\nA,3,-3\n"), ";; note\r\n*A,new\r\nA,3,-3\r\n\r\n*B,two\r\nA,2,-2\r\n");
         assert_eq!(put_definition("*B,two\nA,2,-2", "C", "*C\nA,1,-1\n"), "*B,two\nA,2,-2\n*C\nA,1,-1\n");
         assert_eq!(put_definition("", "C", "*C\nA,1,-1\n"), "*C\nA,1,-1\n");
+    }
+
+    /// A comment and blank line inside a definition belong to that definition (the readers
+    /// skip them). Redefining the entry removes only its data lines; comments and blank lines
+    /// stay, and the next definition is untouched.
+    #[test]
+    fn put_definition_keeps_comments_inside_the_old_block() {
+        // .pat case: BOND has a comment and blank line between two families.
+        let pat = "*BOND,old\n0, 0,0, 0,2\n; joints\n\n90, 0,0, 0,2\n*NEXT,next\n0, 0,0, 0,1\n";
+        let out = put_definition(pat, "BOND", "*BOND,New bond\n0, 0,0, 0,3\n");
+        assert_eq!(out, "*BOND,New bond\n0, 0,0, 0,3\n; joints\n\n*NEXT,next\n0, 0,0, 0,1\n");
+        // parse_pat reads back BOND with exactly the one new family.
+        let parsed = parse_pat(&out);
+        let bond = parsed.items.iter().find(|p| p.name == "BOND").expect("BOND in parse_pat");
+        assert_eq!(bond.lines.len(), 1, "only the new family");
+        assert_eq!(bond.lines[0].delta.1, 3.0);
+        let next = parsed.items.iter().find(|p| p.name == "NEXT").expect("NEXT in parse_pat");
+        assert_eq!(next.lines.len(), 1);
+
+        // .lin case: FENCE has a comment between *NAME and the pattern line.
+        let lin = "*FENCE,old\n; note\nA,1,-0.5\n";
+        let out = put_definition(lin, "FENCE", "*FENCE,New fence\nA,0.6,-0.2\n");
+        assert_eq!(out, "*FENCE,New fence\nA,0.6,-0.2\n; note\n");
+        // parse_lin reads FENCE with the new pattern and no warning about the comment.
+        let parsed = parse_lin(&out);
+        let fence = parsed.items.iter().find(|l| l.name == "FENCE").expect("FENCE in parse_lin");
+        assert_eq!(fence.pattern.iter().map(|e| e.length).collect::<Vec<_>>(), [0.6, -0.2]);
+        assert!(!parsed.warnings.iter().any(|w| w.contains("without a *NAME")), "no stray-line warning");
     }
 }

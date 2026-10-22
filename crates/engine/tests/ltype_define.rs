@@ -209,3 +209,55 @@ fn a_target_that_cant_be_read_or_isnt_text_is_refused() {
     assert_eq!(std::fs::read(&binary_lin).unwrap(), bytes);
     assert!(folder.is_dir() && folder_pat.is_dir());
 }
+
+/// MUST 1(a): a .pat definition with a comment and blank line between two families. Redefining
+/// it with one family removes both old family lines; the comment and blank line stay; the next
+/// definition is byte-for-byte; parse_pat reads exactly the new families back.
+#[test]
+fn pat_save_keeps_comments_inside_a_redefined_block() {
+    use cadaddy_engine::doc::library::files::parse_pat;
+    let src = "*BOND,old\n0, 0,0, 0,2\n; joints\n\n90, 0,0, 0,2\n*NEXT,next\n0, 0,0, 0,1\n";
+    let pat = dir("pat-comment").join("hand.pat");
+    std::fs::write(&pat, src).unwrap();
+    let path = pat.display().to_string();
+    let mut s = Session::new();
+    s.execute("hatch.pattern.define", &json!({"name": "Bond", "description": "New bond", "lines": [{"angle": 0, "dy": 3}], "save": path})).unwrap();
+    let text = std::fs::read_to_string(&pat).unwrap();
+    // No old family lines remain; the comment and blank line stay; NEXT is untouched.
+    assert!(!text.contains("0, 0,0, 0,2") && !text.contains("90, 0,0, 0,2"), "old families gone: {text}");
+    assert!(text.contains("; joints\n"), "comment kept: {text}");
+    assert!(text.contains("*NEXT,next\n0, 0,0, 0,1\n"), "NEXT untouched: {text}");
+    // parse_pat reads BOND with exactly the one new family.
+    let back = parse_pat(&text);
+    let bond = back.items.iter().find(|p| p.name == "BOND").expect("BOND");
+    assert_eq!(bond.lines.len(), 1, "exactly one family");
+    assert_eq!(bond.lines[0].delta.1, 3.0);
+    let next = back.items.iter().find(|p| p.name == "NEXT").expect("NEXT");
+    assert_eq!(next.lines.len(), 1);
+    assert_eq!(next.lines[0].delta.1, 1.0);
+}
+
+/// MUST 1(b): a .lin definition with a comment between *NAME and the pattern line. Redefining
+/// it removes the old A, line; the comment stays; parse_lin reads the new pattern with no
+/// "pattern line without a *NAME" warning.
+#[test]
+fn lin_save_keeps_comments_inside_a_redefined_block() {
+    use cadaddy_engine::doc::library::files::parse_lin;
+    let src = "*FENCE,old\n; note\nA,1,-0.5\n";
+    let lin = dir("lin-comment").join("hand.lin");
+    std::fs::write(&lin, src).unwrap();
+    let path = lin.display().to_string();
+    let mut s = Session::new();
+    s.execute("linetype.define", &json!({"name": "FENCE", "description": "New fence", "elements": [{"dash": 0.6}, {"gap": 0.2}], "save": path}))
+        .unwrap();
+    let text = std::fs::read_to_string(&lin).unwrap();
+    // The old A, line is gone; the comment stays.
+    assert!(!text.contains("A,1,-0.5"), "old pattern gone: {text}");
+    assert!(text.contains("; note"), "comment kept: {text}");
+    assert!(text.contains("*FENCE,New fence\n"), "new header: {text}");
+    // parse_lin reads FENCE with the new pattern and no stray-line warning.
+    let back = parse_lin(&text);
+    let fence = back.items.iter().find(|l| l.name == "FENCE").expect("FENCE");
+    assert_eq!(fence.pattern.iter().map(|e| e.length).collect::<Vec<_>>(), [0.6, -0.2]);
+    assert!(!back.warnings.iter().any(|w| w.contains("without a *NAME")), "no stray-line warning: {:?}", back.warnings);
+}
