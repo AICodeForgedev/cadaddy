@@ -98,6 +98,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
     ("ui.dialog.markups", "Markups", &["Window", "Markups"], None),
     ("rfilist", "RFI List", &["Window", "RFI List"], None),
+    ("ifcmodel", "IFC Model", &["Window", "IFC Model"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -727,6 +728,26 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some(crate::rfipalette::DIALOG.into());
             Ok(Value::Null)
         }
+        "ifcmodel" => {
+            app.ui.dialog = Some(crate::ifcpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        // From the menu or the palette: the IFC file from the file dialog, then the palette.
+        "ifc.open" if params.is_null() => match app.services.pick_open.as_ref().map(|p| p()) {
+            Some(Some(path)) => app.run("ifc.open", json!({ "path": path })).inspect(|_| app.ui.dialog = Some(crate::ifcpalette::DIALOG.into())),
+            Some(None) => Ok(Value::Null),
+            None => Err("IFC.OPEN: there is no file dialog here; run it with parameters, e.g. ifc.open {\"path\": \"model.ifc\"}".into()),
+        },
+        "bcf.import" if params.is_null() => match app.services.pick_open.as_ref().map(|p| p()) {
+            Some(Some(path)) => app.run("bcf.import", json!({ "path": path })),
+            Some(None) => Ok(Value::Null),
+            None => Err("BCF.IMPORT: there is no file dialog here; run it with parameters, e.g. bcf.import {\"path\": \"issues.bcf\"}".into()),
+        },
+        "bcf.export" if params.is_null() => match app.services.pick_save.as_ref().map(|p| p("issues.bcf")) {
+            Some(Some(path)) => app.run("bcf.export", json!({ "path": path })),
+            Some(None) => Ok(Value::Null),
+            None => Err("BCF.EXPORT: there is no file dialog here; run it with parameters, e.g. bcf.export {\"path\": \"issues.bcf\"}".into()),
+        },
         // From the menu or typed: the reviewed PDF from the file dialog.
         // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.
         "redline.import" if params.is_null() => import_markups(app, "redline.import", "IMPORT REDLINE MARKUPS"),

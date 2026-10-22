@@ -94,6 +94,7 @@ mod groupgrips;
 pub mod historypalettes;
 pub mod i18n;
 pub mod icons;
+pub mod ifcpalette;
 pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;

@@ -86,6 +86,8 @@ pub(crate) const DCTMAIN_KEY: &str = "CADADDY_DCTMAIN";
 /// Named-object-dictionary key of the XRECORD holding the building spec (JSON).
 pub(crate) const BUILDING_SPEC_KEY: &str = "CADADDY_BSPEC";
 pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
+/// Named-object-dictionary key of the XRECORD holding the BCF issues (JSON).
+pub(crate) const BCF_KEY: &str = "CADADDY_BCF";
 /// Named-object-dictionary key of the XRECORD holding the overrides of generated elements (JSON).
 pub(crate) const OVERRIDES_KEY: &str = "CADADDY_OVERRIDES";
 /// Named-object-dictionary key of the XRECORD holding the plot stamp's settings and the layouts
@@ -998,6 +1000,11 @@ pub(crate) fn apply_plot_stamp(d: &mut cadaddy_doc::Drawing, text: &str) {
 /// JSON chunks for the tours XRECORD, or `None` without saved viewpoints or tours.
 pub(crate) fn tours_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
     d.tours.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
+}
+
+/// JSON chunks for the BCF issues XRECORD, or `None` without issues.
+pub(crate) fn bcf_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.bcf.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
 }
 
 /// JSON chunks for the overrides XRECORD, or `None` without overrides.

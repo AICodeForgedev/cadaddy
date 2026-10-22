@@ -165,6 +165,10 @@ pub struct Drawing {
     /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
     /// Kept in the named-object dictionary (`CADADDY_TOURS`).
     pub tours: Option<String>,
+    /// BCF issues (`cmd::bcf`'s topics as JSON text, `bcf.*`): coordination issues raised on the
+    /// model, each with its viewpoint, selection, comments and snapshot. Kept in the named-object
+    /// dictionary (`CADADDY_BCF`).
+    pub bcf: Option<String>,
     /// Overrides of generated elements (`overrides::Overrides` as JSON text, `override.*`): the
     /// edits a person, an agent or an import made to what a build generated, put back after every
     /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
@@ -277,6 +281,7 @@ impl Drawing {
             project_rules: projrules::ProjectRules::new(),
             building_spec: None,
             tours: None,
+            bcf: None,
             overrides: None,
             embedded: BTreeMap::new(),
             plot_stamp: None,
