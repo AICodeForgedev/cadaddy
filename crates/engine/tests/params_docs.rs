@@ -124,9 +124,28 @@ fn fn_body<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 
 /// The parameter readers the commands use: `name(…, p, "key"` with `p` the parameters.
 const READERS: &[&str] = &[
-    "str_param", "bool_or", "point_param", "point_req", "f64_or", "f64_req", "points_param", "handle_param",
-    "usize_param", "size_param", "vec3_param", "num_param", "count_param", "radius_req", "opt_text", "count_or",
-    "signed_req", "point3_req", "opt_bool", "on_param", "p3_req", "point3",
+    "str_param",
+    "bool_or",
+    "point_param",
+    "point_req",
+    "f64_or",
+    "f64_req",
+    "points_param",
+    "handle_param",
+    "usize_param",
+    "size_param",
+    "vec3_param",
+    "num_param",
+    "count_param",
+    "radius_req",
+    "opt_text",
+    "count_or",
+    "signed_req",
+    "point3_req",
+    "opt_bool",
+    "on_param",
+    "p3_req",
+    "point3",
 ];
 
 /// The keys `body` reads from its parameters `p`.
@@ -155,7 +174,8 @@ fn reads(body: &str) -> Vec<String> {
             }
             // `(p, "key"` or `(cmd, p, "key"` / `("id", p, "key"`.
             let args = &body[from..];
-            let Some(i) = args.find(|c: char| c == ')' || c == '"').filter(|&i| args[..i].split(',').any(|a| a.trim() == "p" || a.trim() == "&p")) else {
+            let Some(i) = args.find(|c: char| c == ')' || c == '"').filter(|&i| args[..i].split(',').any(|a| a.trim() == "p" || a.trim() == "&p"))
+            else {
                 continue;
             };
             let head: Vec<&str> = args[..i].split(',').map(str::trim).collect();

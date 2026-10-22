@@ -1887,10 +1887,18 @@ pub fn object(
         "GROUP" => types::GROUP,
         "MLINESTYLE" => types::MLINESTYLE,
         "XRECORD" => types::XRECORD,
-        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES"
-        | "SORTENTSTABLE" | "MATERIAL" | "VISUALSTYLE" | "FIELD" => {
-            names.class(name)?
-        }
+        "ACDBDICTIONARYWDFLT"
+        | "PLOTSETTINGS"
+        | "SCALE"
+        | "DICTIONARYVAR"
+        | "IMAGEDEF"
+        | "IMAGEDEF_REACTOR"
+        | "MLEADERSTYLE"
+        | "RASTERVARIABLES"
+        | "SORTENTSTABLE"
+        | "MATERIAL"
+        | "VISUALSTYLE"
+        | "FIELD" => names.class(name)?,
         // TABLESTYLE: binary layout doesn't match what the bridge reader produces for cell
         // styles — kept on the stash path until verified (MUST 1b / MUST 6).
         "TABLESTYLE" => return None,
@@ -2388,11 +2396,15 @@ fn material(w: &mut ObjWriter, r: &Rec) {
         w.d.bl(r.id(73, 1) as i32);
         w.d.bl(0); // tiling
         w.d.bl(1); // auto-transform
-        let mx: Vec<f64> = r.all(43).filter_map(|g| match &g.value {
-            super::Value::Real(f) => Some(*f),
-            super::Value::Int(i) => Some(*i as f64),
-            _ => None,
-        }).take(16).collect();
+        let mx: Vec<f64> = r
+            .all(43)
+            .filter_map(|g| match &g.value {
+                super::Value::Real(f) => Some(*f),
+                super::Value::Int(i) => Some(*i as f64),
+                _ => None,
+            })
+            .take(16)
+            .collect();
         for i in 0..16 {
             w.d.bd(mx.get(i).copied().unwrap_or(if i % 5 == 0 { 1.0 } else { 0.0 }));
         }
@@ -2512,10 +2524,13 @@ fn field_obj(w: &mut ObjWriter, r: &Rec) {
     w.text(r.s(1).unwrap_or("")); // evaluator id
     // The field code: group 2 first chunk, then 3 for continuations.
     let code_first = r.s(2).unwrap_or("");
-    let continuations: Vec<&str> = r.all(3).filter_map(|g| match &g.value {
-        super::Value::Str(s) => Some(s.as_str()),
-        _ => None,
-    }).collect();
+    let continuations: Vec<&str> = r
+        .all(3)
+        .filter_map(|g| match &g.value {
+            super::Value::Str(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
     let mut full_code = code_first.to_string();
     for c in &continuations {
         full_code.push_str(c);
@@ -2546,20 +2561,31 @@ fn field_obj(w: &mut ObjWriter, r: &Rec) {
     w.d.bl(vtype as i32);
     match vtype {
         0 => {}
-        1 => w.d.bl(r.all(90).nth(1).and_then(|g| match &g.value {
-            super::Value::Int(i) => Some(*i as i32),
-            _ => None,
-        }).unwrap_or(0)),
-        2 => w.d.bd(r.all(140).nth(1).and_then(|g| match &g.value {
-            super::Value::Real(f) => Some(*f),
-            _ => None,
-        }).unwrap_or(0.0)),
+        1 => w.d.bl(r
+            .all(90)
+            .nth(1)
+            .and_then(|g| match &g.value {
+                super::Value::Int(i) => Some(*i as i32),
+                _ => None,
+            })
+            .unwrap_or(0)),
+        2 => w.d.bd(r
+            .all(140)
+            .nth(1)
+            .and_then(|g| match &g.value {
+                super::Value::Real(f) => Some(*f),
+                _ => None,
+            })
+            .unwrap_or(0.0)),
         4 => {
             let first = r.s(301).unwrap_or("");
-            let more: Vec<&str> = r.all(9).filter_map(|g| match &g.value {
-                super::Value::Str(s) => Some(s.as_str()),
-                _ => None,
-            }).collect();
+            let more: Vec<&str> = r
+                .all(9)
+                .filter_map(|g| match &g.value {
+                    super::Value::Str(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect();
             let mut full = first.to_string();
             for m in &more {
                 full.push_str(m);

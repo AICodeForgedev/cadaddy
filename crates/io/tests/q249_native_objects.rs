@@ -3,8 +3,8 @@
 //! with field-level asserts (opacity, refraction, name). TABLESTYLE: stays on the stash path
 //! (the DWG file is valid but TABLESTYLE goes through dwg_keep).
 
-use cadaddy_doc::*;
 use cadaddy_doc::material::Material;
+use cadaddy_doc::*;
 
 const VERSIONS: [&str; 6] = ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032"];
 
@@ -12,18 +12,10 @@ const VERSIONS: [&str; 6] = ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "
 #[test]
 fn material_survives_native_roundtrip() {
     let mut d = Drawing::new_metric();
-    d.materials.push(Material {
-        name: "Test Glass".into(),
-        opacity: 0.85,
-        refraction: 1.52,
-        ..Material::default()
-    });
+    d.materials.push(Material { name: "Test Glass".into(), opacity: 0.85, refraction: 1.52, ..Material::default() });
     for v in VERSIONS {
         let (bytes, report) = cadaddy_io::dwg_write::write(&d, v).unwrap();
-        assert!(
-            !report.skipped.iter().any(|(n, _)| n == "MATERIAL"),
-            "{v}: MATERIAL should be encoded natively, not skipped"
-        );
+        assert!(!report.skipped.iter().any(|(n, _)| n == "MATERIAL"), "{v}: MATERIAL should be encoded natively, not skipped");
         // Read back through the bridge.
         let (dxf_bytes, _notes) = cadaddy_dwg::dwg_to_dxf_noted(&bytes, cadaddy_dwg::Limits::DEFAULT).unwrap();
         let bridge = cadaddy_io::read(&dxf_bytes, "material.dxf").unwrap();

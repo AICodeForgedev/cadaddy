@@ -45,22 +45,15 @@ fn test_classes(v: Version) -> Classes {
         maintenance: 0,
         unknown: [0, 0],
     };
-    Classes::new(v, vec![
-        mk(SORTENTSTABLE_TYPE, "SORTENTSTABLE"),
-        mk(MATERIAL_TYPE, "MATERIAL"),
-        mk(VISUALSTYLE_TYPE, "VISUALSTYLE"),
-        mk(FIELD_TYPE, "FIELD"),
-    ])
+    Classes::new(
+        v,
+        vec![mk(SORTENTSTABLE_TYPE, "SORTENTSTABLE"), mk(MATERIAL_TYPE, "MATERIAL"), mk(VISUALSTYLE_TYPE, "VISUALSTYLE"), mk(FIELD_TYPE, "FIELD")],
+    )
 }
 
 fn test_handles() -> Handles {
     let mut names = Handles::default();
-    for (n, t) in [
-        ("SORTENTSTABLE", SORTENTSTABLE_TYPE),
-        ("MATERIAL", MATERIAL_TYPE),
-        ("VISUALSTYLE", VISUALSTYLE_TYPE),
-        ("FIELD", FIELD_TYPE),
-    ] {
+    for (n, t) in [("SORTENTSTABLE", SORTENTSTABLE_TYPE), ("MATERIAL", MATERIAL_TYPE), ("VISUALSTYLE", VISUALSTYLE_TYPE), ("FIELD", FIELD_TYPE)] {
         names.classes.insert(n.to_string(), t);
     }
     names
@@ -70,8 +63,7 @@ fn test_handles() -> Handles {
 fn roundtrip(v: Version, name: &str, handle: u64, owner: Option<u64>, groups: &[Group]) -> Vec<Group> {
     let names = test_handles();
     let rec = Rec(groups);
-    let raw = ek::object(v, name, handle, owner, &[], None, &rec, &names, &[])
-        .unwrap_or_else(|| panic!("{name} {v:?}: encoder returned None"));
+    let raw = ek::object(v, name, handle, owner, &[], None, &rec, &names, &[]).unwrap_or_else(|| panic!("{name} {v:?}: encoder returned None"));
     assert!(!raw.data.is_empty(), "{name} {v:?}: encoded data is empty");
 
     let classes = test_classes(v);
@@ -102,10 +94,14 @@ fn find_float(groups: &[Group], code: i32) -> Option<f64> {
     })
 }
 fn find_all_handles(groups: &[Group], code: i32) -> Vec<u64> {
-    groups.iter().filter(|g| g.code == code).filter_map(|g| match &g.value {
-        Value::Handle(h) => Some(*h),
-        _ => None,
-    }).collect()
+    groups
+        .iter()
+        .filter(|g| g.code == code)
+        .filter_map(|g| match &g.value {
+            Value::Handle(h) => Some(*h),
+            _ => None,
+        })
+        .collect()
 }
 fn assert_close(a: f64, b: f64, name: &str) {
     assert!((a - b).abs() < 1e-6, "{name}: {a} != {b}");
@@ -116,20 +112,14 @@ const VERSIONS: [Version; 4] = [Version::R2000, Version::R2004, Version::R2010, 
 /// SORTENTSTABLE: encode → decode → assert entity/sort handle pairs and block owner.
 #[test]
 fn sortentstable_roundtrip() {
-    let input = vec![
-        g(100, "AcDbSortentsTable"),
-        gh(330, 0x10),
-        gh(331, 0x20),
-        gh(5, 0x30),
-        gh(331, 0x21),
-        gh(5, 0x31),
-    ];
+    let input = vec![g(100, "AcDbSortentsTable"), gh(330, 0x10), gh(331, 0x20), gh(5, 0x30), gh(331, 0x21), gh(5, 0x31)];
     for v in VERSIONS {
         let decoded = roundtrip(v, "SORTENTSTABLE", 0x40, Some(0x01), &input);
         assert_eq!(find_str(&decoded, 100).as_deref(), Some("AcDbSortentsTable"), "{v:?}");
         let entities = find_all_handles(&decoded, 331);
         assert_eq!(entities.len(), 2, "{v:?}: expected 2 entities, got {}", entities.len());
-        let after_marker = decoded.iter()
+        let after_marker = decoded
+            .iter()
             .skip_while(|gg| !(gg.code == 100 && matches!(&gg.value, Value::Str(s) if s == "AcDbSortentsTable")))
             .filter(|gg| gg.code == 5)
             .count();
@@ -174,16 +164,7 @@ fn material_roundtrip() {
 /// TABLESTYLE stays on the stash path (encoder returns None).
 #[test]
 fn tablestyle_is_stashed() {
-    let input = vec![
-        g(100, "AcDbTableStyle"),
-        g(3, ""),
-        gi(70, 0),
-        gi(71, 0),
-        gf(40, 0.06),
-        gf(41, 0.06),
-        gi(280, 0),
-        gi(281, 0),
-    ];
+    let input = vec![g(100, "AcDbTableStyle"), g(3, ""), gi(70, 0), gi(71, 0), gf(40, 0.06), gf(41, 0.06), gi(280, 0), gi(281, 0)];
     let names = test_handles();
     // The TABLESTYLE type code isn't even needed: ek::object returns None before looking it up.
     let rec = Rec(&input);
@@ -281,15 +262,11 @@ fn native_objects_survive_acadrust_read() {
     use std::io::Cursor;
 
     let dxf = common::dxf(4);
-    let mut doc = acadrust::DxfReader::from_reader(Cursor::new(dxf.into_bytes()))
-        .and_then(|r| r.read())
-        .expect("acadrust reads the DXF");
+    let mut doc = acadrust::DxfReader::from_reader(Cursor::new(dxf.into_bytes())).and_then(|r| r.read()).expect("acadrust reads the DXF");
     doc.version = acadrust::DxfVersion::AC1024;
     let bytes = acadrust::DwgWriter::write_to_vec(&doc).expect("acadrust writes the DWG");
 
-    let _read = acadrust::DwgReader::from_stream(Cursor::new(bytes.clone()))
-        .read()
-        .expect("acadrust reads the DWG back");
+    let _read = acadrust::DwgReader::from_stream(Cursor::new(bytes.clone())).read().expect("acadrust reads the DWG back");
 
     let d = cadaddy_dwgcodec::read(&bytes).expect("our reader opens the DWG");
     assert!(!d.objects.is_empty(), "our reader should find objects");
