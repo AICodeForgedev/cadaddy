@@ -1472,7 +1472,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         EntityKind::Underlay(u) => {
             // Every underlay has its PDFDEFINITION (planned in `write`).
             let Some(def) = cx.underlays.by_entity.get(&e.handle) else { return };
-            w.s(0, if u.is_dgn() { "DGNUNDERLAY" } else { "PDFUNDERLAY" });
+            w.s(0, crate::dxf_underlay::Kind::of(u).entity());
             common(w, e, owner, paper, "AcDbUnderlayReference");
             w.t.extend(crate::dxf_underlay::entity_tags(u, def).into_iter().skip(1));
         }
@@ -2717,13 +2717,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if every.iter().any(|e| matches!(e.kind, EntityKind::Wipeout(_))) {
         classes.push(("WIPEOUT", "AcDbWipeout", 127, true));
     }
-    if cx.underlays.has_pdf() {
-        classes.push(("PDFUNDERLAY", "AcDbPdfReference", 4095, true));
-        classes.push(("PDFDEFINITION", "AcDbPdfDefinition", 1153, false));
-    }
-    if cx.underlays.has_dgn() {
-        classes.push(("DGNUNDERLAY", "AcDbDgnReference", 4095, true));
-        classes.push(("DGNDEFINITION", "AcDbDgnDefinition", 1153, false));
+    for k in crate::dxf_underlay::Kind::ALL.into_iter().filter(|k| cx.underlays.has(*k)) {
+        let [(entity, eclass), (def, dclass)] = k.classes();
+        classes.push((entity, eclass, 4095, true));
+        classes.push((def, dclass, 1153, false));
     }
     if !cx.images.is_empty() {
         classes.push(("IMAGE", "AcDbRasterImage", 127, true));
@@ -3169,13 +3166,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     w.i(281, 1);
     w.s(3, "ACAD_GROUP");
     w.s(350, group_dict.clone());
-    if cx.underlays.has_pdf() {
-        w.s(3, "ACAD_PDFDEFINITIONS");
-        w.s(350, cx.underlays.dict.clone());
-    }
-    if cx.underlays.has_dgn() {
-        w.s(3, "ACAD_DGNDEFINITIONS");
-        w.s(350, cx.underlays.dgn_dict.clone());
+    for (k, dict) in &cx.underlays.dicts {
+        w.s(3, k.dictionary());
+        w.s(350, dict.clone());
     }
     if !cx.images.is_empty() {
         w.s(3, "ACAD_IMAGE_DICT");

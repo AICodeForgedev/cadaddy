@@ -13,6 +13,8 @@ The built-in devices come first:
 | `CADaddy PDF` | vector PDF |
 | `CADaddy PNG` | raster PNG on white paper at the device resolution (300 dpi) |
 | `CADaddy SVG` | vector SVG |
+| `CADaddy DWFx` | DWFx (XPS): one named page per sheet, one Canvas per layer, hyperlinks; layouts at paper size, model space fitted unless `fit: false` (then at `scale`) |
+| `CADaddy DWF` | DWF 6: one W2D stream per sheet, same placement as DWFx |
 
 They offer the standard sizes:
 

@@ -73,6 +73,7 @@ pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub use render::apply_environment;
+pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
 pub mod bcf;
 pub mod cobie;

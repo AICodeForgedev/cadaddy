@@ -32,9 +32,10 @@ pub struct IoHooks {
     pub plot: Option<PlotHook>,
     /// PDFIMPORT: one page of a PDF as a drawing, with JSON options, and a report (optional).
     pub read_pdf: Option<PdfHook>,
-    /// DWFATTACH: read one page of a DWF/DWFx file as a drawing in sheet inches (optional).
+    /// DWFATTACH (and DWF underlays drawn after a reopen): one page of a DWFx/DWF file as a
+    /// drawing in sheet inches, and a report (optional).
     pub read_dwf: Option<DwfReadHook>,
-    /// DWFXOUT: export multiple spaces as a DWFx package (optional).
+    /// DWFXOUT, DWFOUT and PUBLISH to DWF: spaces as one DWFx or DWF 6 file (optional).
     pub write_dwfx: Option<DwfxWriteHook>,
 }
 
@@ -42,11 +43,14 @@ pub struct IoHooks {
 /// layout?}`) → the drawing and a report (scale used, counts, notes).
 pub type PdfHook = fn(&[u8], &Value) -> std::result::Result<(Drawing, Value), String>;
 
-/// Read one page (1-based) of a DWF or DWFx file as a drawing in sheet inches.
-pub type DwfReadHook = fn(&[u8], u32) -> std::result::Result<Drawing, String>;
+/// Read one page (1-based) of a DWFx or DWF file as a drawing in sheet inches, with a report:
+/// `{sheet: [w, h] inches, pages, name?, origin?: [x, y], scale?}` (`origin`/`scale`: where the
+/// page was drawn from, when the file records it).
+pub type DwfReadHook = fn(&[u8], u32) -> std::result::Result<(Drawing, Value), String>;
 
-/// Write multiple spaces of a drawing as a DWFx (XPS) package.
-pub type DwfxWriteHook = fn(&Drawing, &[cadaddy_doc::Space]) -> std::result::Result<Vec<u8>, String>;
+/// Write spaces of a drawing as one DWFx or DWF 6 file, one sheet each, with options
+/// `{format?: "dwfx" | "dwf", scale?: drawing units per sheet inch, fit?: bool}`.
+pub type DwfxWriteHook = fn(&Drawing, &[cadaddy_doc::Space], &Value) -> std::result::Result<Vec<u8>, String>;
 
 static IO: OnceLock<IoHooks> = OnceLock::new();
 

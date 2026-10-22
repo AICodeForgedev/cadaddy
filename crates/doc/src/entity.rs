@@ -1326,7 +1326,8 @@ pub struct Underlay {
     pub v: Vec3,
     /// The page size in sheet inches.
     pub size: Vec2,
-    /// The PDF file (its PDFDEFINITION's path).
+    /// The PDF, DGN, DWF or DWFx file (its PDFDEFINITION's, DGNDEFINITION's or DWFDEFINITION's
+    /// path).
     pub path: String,
     /// 1-based page number.
     #[serde(default = "first_page")]
@@ -1372,6 +1373,12 @@ impl Underlay {
     /// in its master units, shifted so its extents start at the origin.
     pub fn is_dgn(&self) -> bool {
         self.path.trim().to_ascii_lowercase().ends_with(".dgn")
+    }
+    /// A DWF underlay (DWFATTACH): its file is a `.dwf` or `.dwfx`; its page is a sheet of the
+    /// DWF read in sheet inches.
+    pub fn is_dwf(&self) -> bool {
+        let p = self.path.trim().to_ascii_lowercase();
+        p.ends_with(".dwf") || p.ends_with(".dwfx")
     }
     /// Page coordinates (sheet inches) → drawing coordinates.
     pub fn transform(&self) -> cadaddy_geom::Mat3 {
@@ -1584,6 +1591,7 @@ impl EntityKind {
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
             EntityKind::Image(_) => "Raster Image",
+            EntityKind::Underlay(u) if u.is_dwf() => "DWF Underlay",
             EntityKind::Underlay(_) => "PDF Underlay",
             EntityKind::PointCloud(_) => "Point Cloud",
             EntityKind::Wipeout(_) => "Wipeout",
@@ -1633,6 +1641,8 @@ impl EntityKind {
             EntityKind::Region(_) => "REGION",
             EntityKind::Viewport(_) => "VIEWPORT",
             EntityKind::Image(_) => "IMAGE",
+            EntityKind::Underlay(u) if u.is_dgn() => "DGNUNDERLAY",
+            EntityKind::Underlay(u) if u.is_dwf() => "DWFUNDERLAY",
             EntityKind::Underlay(_) => "PDFUNDERLAY",
             EntityKind::PointCloud(_) => "POINTCLOUDEX",
             EntityKind::Wipeout(_) => "WIPEOUT",

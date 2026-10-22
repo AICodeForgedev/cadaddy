@@ -1,5 +1,7 @@
 //! PDF underlays in DXF (DXF Reference: PDFUNDERLAY entity, AcDbUnderlayReference; PDFDEFINITION
-//! object, AcDbUnderlayDefinition, named in the `ACAD_PDFDEFINITIONS` dictionary). The entity holds
+//! object, AcDbUnderlayDefinition, named in the `ACAD_PDFDEFINITIONS` dictionary), and DGN and DWF
+//! underlays the same way (DGNUNDERLAY/DGNDEFINITION in `ACAD_DGNDEFINITIONS`,
+//! DWFUNDERLAY/DWFDEFINITION in `ACAD_DWFDEFINITIONS`). The entity holds
 //! the placement (insertion point, scale, rotation), the clip boundary and the display settings, and
 //! points (group 340) to its definition, which holds the file and the page. The page size and the
 //! layers turned off, which the reference groups don't hold, are kept in `CADADDY` xdata.
@@ -103,7 +105,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     let mut refs: HashMap<Handle, String> = HashMap::new();
     for s in secs.iter().filter(|s| s.name == "ENTITIES" || s.name == "BLOCKS") {
         each_record(&s.tags, |kind, tags| {
-            if !matches!(kind, "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE") {
+            if !matches!(kind, "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE" | "DWFUNDERLAY" | "DWFREFERENCE") {
                 return;
             }
             let h = tags.iter().find(|t| t.code == 5).and_then(|t| Handle::parse_hex(&t.str()));
@@ -117,7 +119,7 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     let mut names: HashMap<String, String> = HashMap::new();
     for s in secs.iter().filter(|s| s.name == "OBJECTS") {
         each_record(&s.tags, |kind, tags| match kind {
-            "PDFDEFINITION" | "DGNDEFINITION" => {
+            "PDFDEFINITION" | "DGNDEFINITION" | "DWFDEFINITION" => {
                 let Some(h) = tags.iter().find(|t| t.code == 5).map(|t| key(&t.str())) else { return };
                 let start = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbUnderlayDefinition").unwrap_or(0);
                 let body = tags.get(start..).unwrap_or(&[]);
@@ -177,35 +179,88 @@ fn fill(store: &mut EntityStore, by_ref: &HashMap<Handle, Def>) {
     }
 }
 
-/// One PDFDEFINITION to write, shared by the underlays of the same file and page.
+/// Which file an underlay shows, and so its entity, definition and dictionary names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Pdf,
+    Dgn,
+    Dwf,
+}
+
+impl Kind {
+    pub fn of(u: &Underlay) -> Kind {
+        if u.is_dgn() {
+            Kind::Dgn
+        } else if u.is_dwf() {
+            Kind::Dwf
+        } else {
+            Kind::Pdf
+        }
+    }
+    fn prefix(self) -> &'static str {
+        match self {
+            Kind::Pdf => "PDF",
+            Kind::Dgn => "DGN",
+            Kind::Dwf => "DWF",
+        }
+    }
+    /// The entity's DXF name: PDFUNDERLAY, DGNUNDERLAY or DWFUNDERLAY.
+    pub fn entity(self) -> &'static str {
+        match self {
+            Kind::Pdf => "PDFUNDERLAY",
+            Kind::Dgn => "DGNUNDERLAY",
+            Kind::Dwf => "DWFUNDERLAY",
+        }
+    }
+    fn definition(self) -> &'static str {
+        match self {
+            Kind::Pdf => "PDFDEFINITION",
+            Kind::Dgn => "DGNDEFINITION",
+            Kind::Dwf => "DWFDEFINITION",
+        }
+    }
+    /// The named object dictionary key listing the definitions.
+    pub fn dictionary(self) -> &'static str {
+        match self {
+            Kind::Pdf => "ACAD_PDFDEFINITIONS",
+            Kind::Dgn => "ACAD_DGNDEFINITIONS",
+            Kind::Dwf => "ACAD_DWFDEFINITIONS",
+        }
+    }
+    /// The CLASSES section's entries: (entity, its class), (definition, its class).
+    pub fn classes(self) -> [(&'static str, &'static str); 2] {
+        match self {
+            Kind::Pdf => [("PDFUNDERLAY", "AcDbPdfReference"), ("PDFDEFINITION", "AcDbPdfDefinition")],
+            Kind::Dgn => [("DGNUNDERLAY", "AcDbDgnReference"), ("DGNDEFINITION", "AcDbDgnDefinition")],
+            Kind::Dwf => [("DWFUNDERLAY", "AcDbDwfReference"), ("DWFDEFINITION", "AcDbDwfDefinition")],
+        }
+    }
+    pub const ALL: [Kind; 3] = [Kind::Pdf, Kind::Dgn, Kind::Dwf];
+}
+
+/// One definition to write, shared by the underlays of the same file and page.
 struct PlannedDef {
     handle: String,
     name: String,
     path: String,
     page: u32,
     users: Vec<Handle>,
-    /// A DGNDEFINITION (in `ACAD_DGNDEFINITIONS`), not a PDFDEFINITION.
-    dgn: bool,
+    kind: Kind,
 }
 
 /// The objects behind a drawing's underlays, with handles allocated before anything is written.
 #[derive(Default)]
 pub(crate) struct Plan {
-    /// PDFUNDERLAY entity → its PDFDEFINITION handle.
+    /// Underlay entity → its definition's handle.
     pub by_entity: HashMap<Handle, String>,
     defs: Vec<PlannedDef>,
-    /// The `ACAD_PDFDEFINITIONS` dictionary.
-    pub dict: String,
-    /// The `ACAD_DGNDEFINITIONS` dictionary.
-    pub dgn_dict: String,
+    /// Each kind's definitions dictionary (`ACAD_PDFDEFINITIONS`…), for the kinds the drawing has.
+    pub dicts: Vec<(Kind, String)>,
 }
 
 impl Plan {
-    pub fn has_pdf(&self) -> bool {
-        self.defs.iter().any(|d| !d.dgn)
-    }
-    pub fn has_dgn(&self) -> bool {
-        self.defs.iter().any(|d| d.dgn)
+    pub fn has(&self, k: Kind) -> bool {
+        self.defs.iter().any(|d| d.kind == k)
     }
 }
 
@@ -217,10 +272,11 @@ fn def_name(u: &Underlay) -> String {
     }
     let file = u.path.rsplit(['/', '\\']).next().unwrap_or("");
     let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file).trim();
-    if u.is_dgn() {
+    let kind = Kind::of(u);
+    if kind == Kind::Dgn {
         return format!("{} - Default", if stem.is_empty() { "DGN" } else { stem });
     }
-    format!("{} - {}", if stem.is_empty() { "PDF" } else { stem }, u.page.max(1))
+    format!("{} - {}", if stem.is_empty() { kind.prefix() } else { stem }, u.page.max(1))
 }
 
 /// Allocate the PDFDEFINITION and dictionary handles for every underlay.
@@ -244,7 +300,7 @@ pub(crate) fn plan<'a>(entities: impl Iterator<Item = &'a cadaddy_doc::Entity>, 
                     name = format!("{base}_{n}");
                     n = n.saturating_add(1);
                 }
-                p.defs.push(PlannedDef { handle: next(), name, path: u.path.clone(), page: u.page.max(1), users: Vec::new(), dgn: u.is_dgn() });
+                p.defs.push(PlannedDef { handle: next(), name, path: u.path.clone(), page: u.page.max(1), users: Vec::new(), kind: Kind::of(u) });
                 let at = p.defs.len().saturating_sub(1);
                 index.insert(k, at);
                 at
@@ -255,11 +311,10 @@ pub(crate) fn plan<'a>(entities: impl Iterator<Item = &'a cadaddy_doc::Entity>, 
             p.by_entity.insert(e.handle, def.handle.clone());
         }
     }
-    if p.has_pdf() {
-        p.dict = next();
-    }
-    if p.has_dgn() {
-        p.dgn_dict = next();
+    for k in Kind::ALL {
+        if p.has(k) {
+            p.dicts.push((k, next()));
+        }
     }
     p
 }
@@ -287,13 +342,13 @@ pub(crate) fn entity_tags(u: &Underlay, def: &str) -> Vec<Tag> {
     t
 }
 
-/// The `ACAD_PDFDEFINITIONS` dictionary and its PDFDEFINITION objects; `root` is the named object
-/// dictionary, which lists the dictionary.
+/// The `ACAD_PDFDEFINITIONS` (DGN, DWF) dictionaries and their definition objects; `root` is
+/// the named object dictionary, which lists the dictionaries.
 pub(crate) fn objects(p: &Plan, root: &str) -> Vec<Tag> {
     let mut t = Vec::new();
-    for dgn in [false, true] {
-        let dict = if dgn { &p.dgn_dict } else { &p.dict };
-        let defs: Vec<&PlannedDef> = p.defs.iter().filter(|d| d.dgn == dgn).collect();
+    for (kind, dict) in &p.dicts {
+        let dgn = *kind == Kind::Dgn;
+        let defs: Vec<&PlannedDef> = p.defs.iter().filter(|d| d.kind == *kind).collect();
         if defs.is_empty() {
             continue;
         }
@@ -302,9 +357,9 @@ pub(crate) fn objects(p: &Plan, root: &str) -> Vec<Tag> {
             t.extend([Tag::s(3, &d.name), Tag::s(350, &d.handle)]);
         }
         for d in defs {
-            t.extend([Tag::s(0, if dgn { "DGNDEFINITION" } else { "PDFDEFINITION" }), Tag::s(5, &d.handle), Tag::s(102, "{ACAD_REACTORS")]);
+            t.extend([Tag::s(0, kind.definition()), Tag::s(5, &d.handle), Tag::s(102, "{ACAD_REACTORS")]);
             t.extend(d.users.iter().map(|h| Tag::s(330, h.hex())));
-            // A DGN definition names the design file's model (group 2); a PDF one the page.
+            // A DGN definition names the design file's model (group 2); a PDF or DWF one the page.
             let sheet = if dgn { "Default".to_string() } else { d.page.to_string() };
             t.extend([Tag::s(102, "}"), Tag::s(330, dict), Tag::s(100, "AcDbUnderlayDefinition"), Tag::s(1, &d.path), Tag::s(2, sheet)]);
         }
