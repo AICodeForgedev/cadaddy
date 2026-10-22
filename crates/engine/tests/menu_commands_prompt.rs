@@ -28,6 +28,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "bcf.export",
     "cobie.export",
     "handover.schedules",
+    "fourd.import",
     "markupimport",
     "redline.import",
     "adcenter",
