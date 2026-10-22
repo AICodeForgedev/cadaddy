@@ -190,8 +190,12 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
                 ("rfi.read", "rfis"),
             ] {
                 match exec(b, cmd, json!({})) {
-                    Ok(v) => { reader_results[key] = json!({"ok": true, "summary": v.get("message")}); }
-                    Err(e) => { reader_results[key] = json!({"ok": false, "error": e.chars().take(200).collect::<String>()}); }
+                    Ok(v) => {
+                        reader_results[key] = json!({"ok": true, "summary": v.get("message")});
+                    }
+                    Err(e) => {
+                        reader_results[key] = json!({"ok": false, "error": e.chars().take(200).collect::<String>()});
+                    }
                 }
             }
             return Ok(

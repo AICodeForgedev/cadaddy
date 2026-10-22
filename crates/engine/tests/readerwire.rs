@@ -27,10 +27,7 @@ fn all_reader_commands_are_registered() {
         "mep.read_devices",
     ];
     for cmd in &expected {
-        assert!(
-            cadaddy_engine::cmd::find_by_id_or_alias(cmd).is_some(),
-            "missing command: {cmd}",
-        );
+        assert!(cadaddy_engine::cmd::find_by_id_or_alias(cmd).is_some(), "missing command: {cmd}",);
     }
 }
 

@@ -100,17 +100,12 @@ fn run_conduit_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first, or bim_job import {path}".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first, or bim_job import {path}".into()));
         }
     };
 
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan"))
-        .collect();
+    let e_sheets: Vec<&mep_printset::SheetEntry> =
+        project.sheets.iter().filter(|s| s.discipline == "E" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
 
     let conduit_count = e_sheets.len();
     let mut result = json!({
@@ -142,17 +137,11 @@ fn run_gear_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E")
-        .collect();
+    let e_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "E").collect();
 
     Ok(json!({
         "placed": [],
@@ -192,17 +181,11 @@ fn run_site_read(_s: &mut Session, _p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let c_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "C")
-        .collect();
+    let c_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "C").collect();
 
     Ok(json!({
         "counts_by_kind": {},
@@ -239,17 +222,12 @@ fn run_duct_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let m_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan"))
-        .collect();
+    let m_sheets: Vec<&mep_printset::SheetEntry> =
+        project.sheets.iter().filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
 
     Ok(json!({
         "runs": 0,
@@ -274,17 +252,12 @@ fn run_pipe_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let p_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "P" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan"))
-        .collect();
+    let p_sheets: Vec<&mep_printset::SheetEntry> =
+        project.sheets.iter().filter(|s| s.discipline == "P" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
 
     Ok(json!({
         "runs": 0,
@@ -307,17 +280,11 @@ fn run_struct_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let s_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "S")
-        .collect();
+    let s_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "S").collect();
 
     Ok(json!({
         "levels": [],
@@ -338,17 +305,11 @@ fn run_ceiling_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let rcp_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.sheet_type == "rcp")
-        .collect();
+    let rcp_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.sheet_type == "rcp").collect();
 
     Ok(json!({
         "rooms": [],
@@ -370,17 +331,12 @@ fn run_sprinkler_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let fp_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "FP" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan"))
-        .collect();
+    let fp_sheets: Vec<&mep_printset::SheetEntry> =
+        project.sheets.iter().filter(|s| s.discipline == "FP" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
 
     Ok(json!({
         "heads": {"by_mount": {}},
@@ -405,17 +361,11 @@ fn run_tray_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E")
-        .collect();
+    let e_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "E").collect();
 
     Ok(json!({
         "trays": {"by_size": {}},
@@ -441,17 +391,12 @@ fn run_wall_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let a_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "A" && (s.sheet_type == "plan" || s.sheet_type == "rcp"))
-        .collect();
+    let a_sheets: Vec<&mep_printset::SheetEntry> =
+        project.sheets.iter().filter(|s| s.discipline == "A" && (s.sheet_type == "plan" || s.sheet_type == "rcp")).collect();
 
     Ok(json!({
         "types": [],
@@ -488,9 +433,7 @@ fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
@@ -513,17 +456,11 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let m_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "M" || s.discipline == "E")
-        .collect();
+    let m_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "M" || s.discipline == "E").collect();
 
     Ok(json!({
         "placed": [],
@@ -547,17 +484,11 @@ fn run_elec_devices(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project() {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other(
-                "no print-set project open; use printset.open first".into(),
-            ));
+            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
         }
     };
 
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E")
-        .collect();
+    let e_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "E").collect();
 
     Ok(json!({
         "devices": [],
