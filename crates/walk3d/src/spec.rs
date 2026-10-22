@@ -87,6 +87,9 @@ pub struct BuildingSpec {
     /// Duct, pipe and conduit systems and their runs.
     #[serde(default, skip_serializing_if = "Mep::is_empty")]
     pub mep: Mep,
+    /// Concrete: slabs, footings, piers, equipment pads, encasement; pad decisions and pours.
+    #[serde(default, skip_serializing_if = "crate::concrete::Concrete::is_empty")]
+    pub concrete: crate::concrete::Concrete,
     /// Columns at structural grid intersections (`grids.columns`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<GridColumn>,
@@ -1878,6 +1881,7 @@ impl BuildingSpec {
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
+            concrete: crate::concrete::Concrete::default(),
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),

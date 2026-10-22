@@ -731,7 +731,7 @@ fn add_sprinkler_mesh(m: &mut Mesh, center: Vec2, kind: &str, z0: f64, upf: f64)
 }
 
 /// An upright 16-sided cylinder (a tank) from z0 to z1.
-fn add_upright_cylinder(m: &mut Mesh, c: Vec2, r: f64, z0: f64, z1: f64) {
+pub(crate) fn add_upright_cylinder(m: &mut Mesh, c: Vec2, r: f64, z0: f64, z1: f64) {
     if !(r > 1e-9 && z1 > z0) {
         return;
     }
@@ -773,12 +773,12 @@ fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
 }
 
 /// Sanitise a name for use in a layer name (alphanumeric, dash, underscore only).
-fn sanitise(name: &str, max: usize) -> String {
+pub(crate) fn sanitise(name: &str, max: usize) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(max).collect()
 }
 
 /// Ensure the layer exists; create it with the given ACI colour if not.
-fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
+pub(crate) fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
     if d.layer(layer).is_none() {
         let ci = u8::try_from(color.clamp(1, 255)).unwrap_or(7);
         d.layers.push(cadaddy_doc::Layer { name: layer.to_string(), color: cadaddy_doc::color::Color::Index(ci), ..cadaddy_doc::Layer::default() });
@@ -939,6 +939,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
     // tag, systems and schedule row for IFC. --
     let mut total_equipment = 0usize;
+    // Equipment on a housekeeping pad stands on it.
+    let pads = super::concrete::elements(sp, &d.bim_types);
+    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
     for e in sp.mep.equipment.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
@@ -948,7 +951,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
         ensure_layer(d, &layer, 30);
         let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
-        let z0 = (level.elevation_ft + e.bottom_ft) * upf;
+        let z0 = (level.elevation_ft + on_pad(e)) * upf;
         let z1 = z0 + e.height_ft * upf;
         let mut m = super::wallgen::empty_mesh();
         if e.round {
@@ -1005,11 +1008,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
             let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
             let z_floor = level.elevation_ft * upf;
-            let z_top = (level.elevation_ft + g.bottom_ft + g.height_ft) * upf;
+            let z_top = (level.elevation_ft + on_pad(g) + g.height_ft) * upf;
             let (z0, z1) = if top {
-                (z_top, ((level.elevation_ft + level.height_ft.max(g.bottom_ft + g.height_ft + 1.0)) * upf).max(z_top + upf))
+                (z_top, ((level.elevation_ft + level.height_ft.max(on_pad(g) + g.height_ft + 1.0)) * upf).max(z_top + upf))
             } else {
-                (z_floor - upf, (level.elevation_ft + g.bottom_ft) * upf)
+                (z_floor - upf, (level.elevation_ft + on_pad(g)) * upf)
             };
             if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
                 continue;

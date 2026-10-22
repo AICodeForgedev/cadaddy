@@ -61,10 +61,17 @@ pub enum RfiKind {
     /// Grounding or bonding the drawings call for that isn't in the model, can't be reached, or
     /// falls short of its note (a missed concrete-encased electrode).
     Grounding,
+    /// Floor- or grade-mounted equipment with no pad decision, or a pad nobody owns.
+    PadUndecided,
+    /// An item that must be in or under a pour before concrete (the Ufer electrode, stub-ups,
+    /// sleeves, anchor bolts) not confirmed by the pour date.
+    PourHold,
+    /// Rebar, conduits, sleeves and embeds that clash or lack cover in an element.
+    EmbedConflict,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 17] = [
+    pub const ALL: [RfiKind; 20] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -82,6 +89,9 @@ impl RfiKind {
         RfiKind::GearInstall,
         RfiKind::LabelData,
         RfiKind::Grounding,
+        RfiKind::PadUndecided,
+        RfiKind::PourHold,
+        RfiKind::EmbedConflict,
     ];
 
     /// The snake_case name (as in JSON).
@@ -104,6 +114,9 @@ impl RfiKind {
             RfiKind::GearInstall => "gear_install",
             RfiKind::LabelData => "label_data",
             RfiKind::Grounding => "grounding",
+            RfiKind::PadUndecided => "pad_undecided",
+            RfiKind::PourHold => "pour_hold",
+            RfiKind::EmbedConflict => "embed_conflict",
         }
     }
 
@@ -131,6 +144,9 @@ impl RfiKind {
             RfiKind::GearInstall => "Gear can't be installed as submitted",
             RfiKind::LabelData => "Labels need data the documents don't give",
             RfiKind::Grounding => "Grounding or bonding missing, unreachable or short",
+            RfiKind::PadUndecided => "Equipment pad not decided or not owned",
+            RfiKind::PourHold => "Item to cast in not confirmed before the pour",
+            RfiKind::EmbedConflict => "Rebar and embeds clash or lack cover",
         }
     }
 
@@ -144,7 +160,10 @@ impl RfiKind {
             | RfiKind::SleeveNoFit
             | RfiKind::GearLugs
             | RfiKind::GearInstall
-            | RfiKind::Grounding => Severity::High,
+            | RfiKind::Grounding
+            | RfiKind::PadUndecided
+            | RfiKind::PourHold
+            | RfiKind::EmbedConflict => Severity::High,
             RfiKind::DetailUnused => Severity::Low,
             _ => Severity::Medium,
         }

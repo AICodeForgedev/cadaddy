@@ -68,6 +68,7 @@ pub use qselect::wildcard;
 pub mod agentready;
 pub mod bcf;
 pub mod cobie;
+pub mod concrete;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
@@ -313,6 +314,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(procure::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
+        v.extend(concrete::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
         v.extend(grounding::specs());
