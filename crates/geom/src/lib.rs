@@ -35,7 +35,7 @@ pub use intersect::{circle_circle, intersect_ext, intersect_segments, intersect_
 pub use mat::{Mat3, Mat4};
 pub use refine::{CurveRef, offset_spline, refine_closest, refine_intersection};
 pub use similarity::{Similarity, shape_signature};
-pub use spline::Spline;
+pub use spline::{MAX_DEGREE as MAX_SPLINE_DEGREE, Spline};
 pub use spline_fit::{FitOptions, KnotParam};
 pub use surface::NurbsSurface;
 pub use vec::{Vec2, Vec3};
