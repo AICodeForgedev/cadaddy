@@ -1682,6 +1682,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     dir,
                     ucs,
                     background,
+                    environment: None,
                 };
                 match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = v,

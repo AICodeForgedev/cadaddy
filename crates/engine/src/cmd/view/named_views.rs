@@ -274,6 +274,7 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool, ex
     let replaced = find(&st.doc.views, name).map(|v| v.name.clone());
     // The centre is on the view plane (display coordinates), which the twist turns.
     let twist = if layout.is_some() || window.is_some() || extra.ortho.is_some() { 0.0 } else { st.twist() };
+    let saved_env = st.render_environment.clone();
     let d = s.doc_mut()?;
     let layer_state = snapshot.then(|| {
         let state = snapshot_name(name);
@@ -300,6 +301,7 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool, ex
         dir,
         ucs: extra.ucs.clone(),
         background: extra.background,
+        environment: saved_env,
     });
     let msg = if replaced.is_some() { format!("View \"{name}\" replaced.") } else { format!("View \"{name}\" saved.") };
     Ok(json!({ "name": name, "center": [center.x, center.y], "height": height, "width": width, "message": msg }))
@@ -344,6 +346,7 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
                 st.view_dir = v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).map_or(Vec3::Z, Vec3::normalized);
                 st.view_twist = 0.0;
                 st.view_background = v.background;
+                st.render_environment = v.environment.clone();
             }
             st.set_twist(v.twist);
             let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-9);

@@ -245,6 +245,117 @@ impl Sun {
     }
 }
 
+/// The kind of background a rendered view shows.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum BackgroundKind {
+    /// The analytic sky computed from the sun's position (the default).
+    #[default]
+    Sky,
+    /// A solid colour.
+    Solid {
+        /// Linear RGB, 0–1.
+        color: [f64; 3],
+    },
+    /// A two-colour gradient from the bottom to the top of the view.
+    Gradient {
+        /// Linear RGB, 0–1.
+        bottom: [f64; 3],
+        /// Linear RGB, 0–1.
+        top: [f64; 3],
+    },
+    /// An image file (JPEG, PNG, or HDR) mapped to the view's background.
+    Image {
+        path: String,
+    },
+}
+
+/// Fog / depth cue: objects farther from the viewer fade towards a colour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Fog {
+    pub enabled: bool,
+    /// The colour objects fade towards (linear RGB, 0–1).
+    pub color: [f64; 3],
+    /// Distance from the viewer where the fog starts (0 = at the viewer; fraction of the scene
+    /// depth range when ≤ 1, drawing units when > 1).
+    pub near: f64,
+    /// Distance where the fog is fully opaque.
+    pub far: f64,
+}
+
+impl Default for Fog {
+    fn default() -> Self {
+        Fog { enabled: false, color: [1.0, 1.0, 1.0], near: 0.2, far: 1.0 }
+    }
+}
+
+impl Fog {
+    pub fn sane(mut self) -> Fog {
+        let fin = |v: f64, d: f64| if v.is_finite() { v } else { d };
+        for c in &mut self.color {
+            *c = fin(*c, 1.0).clamp(0.0, 1.0);
+        }
+        self.near = fin(self.near, 0.2).clamp(0.0, 1e9);
+        self.far = fin(self.far, 1.0).clamp(self.near + 1e-6, 1e9);
+        self
+    }
+}
+
+/// White balance: a colour-temperature shift applied after tone mapping.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WhiteBalance {
+    /// Colour temperature in kelvin (6500 = daylight, lower = warmer, higher = cooler).
+    pub temperature: f64,
+    /// Green–magenta tint, −1 to +1 (0 = neutral).
+    pub tint: f64,
+}
+
+impl Default for WhiteBalance {
+    fn default() -> Self {
+        WhiteBalance { temperature: 6500.0, tint: 0.0 }
+    }
+}
+
+impl WhiteBalance {
+    pub fn sane(mut self) -> WhiteBalance {
+        let fin = |v: f64, d: f64| if v.is_finite() { v } else { d };
+        self.temperature = fin(self.temperature, 6500.0).clamp(1000.0, 40000.0);
+        self.tint = fin(self.tint, 0.0).clamp(-1.0, 1.0);
+        self
+    }
+
+    pub fn is_neutral(&self) -> bool {
+        (self.temperature - 6500.0).abs() < 1.0 && self.tint.abs() < 0.001
+    }
+}
+
+/// The render environment saved with a view: background, fog, image-based lighting, exposure
+/// and white balance (RENDERENVIRONMENT).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RenderEnvironment {
+    pub background: BackgroundKind,
+    pub fog: Fog,
+    /// Path to a Radiance .hdr file for image-based lighting; `None` uses the analytic sky.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ibl: Option<String>,
+    /// Exposure override in stops (added to the drawing's RENDEREXPOSURE).
+    pub exposure: f64,
+    pub white_balance: WhiteBalance,
+}
+
+impl RenderEnvironment {
+    pub fn sane(mut self) -> RenderEnvironment {
+        let fin = |v: f64, d: f64| if v.is_finite() { v } else { d };
+        self.fog = self.fog.sane();
+        self.exposure = fin(self.exposure, 0.0).clamp(-20.0, 20.0);
+        self.white_balance = self.white_balance.sane();
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

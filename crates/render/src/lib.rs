@@ -15,6 +15,7 @@ mod dim;
 pub mod encode;
 mod fill;
 mod hatch;
+pub mod hdr;
 pub mod hlr;
 pub mod images;
 pub mod light;

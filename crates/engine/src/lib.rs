@@ -254,6 +254,8 @@ pub struct DocState {
     /// The solid background colour of the named view last restored in model space (`None`:
     /// the drawing area's own colour).
     pub view_background: Option<cadaddy_color::Color>,
+    /// The render environment of the current view (RENDERENVIRONMENT).
+    pub render_environment: Option<cadaddy_doc::lighting::RenderEnvironment>,
     /// The UCSs UCS Previous goes back to, the latest last.
     pub ucs_previous: Vec<ucs::Frame>,
     /// What the last ERASE removed, with the spaces it was in, for OOPS.
@@ -354,6 +356,7 @@ impl DocState {
             view_dir: cadaddy_geom::Vec3::Z,
             view_twist: 0.0,
             view_background: None,
+            render_environment: None,
             ucs_previous: Vec::new(),
             oops: Vec::new(),
             vpmax: None,

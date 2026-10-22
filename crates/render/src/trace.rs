@@ -19,7 +19,7 @@
 use cadaddy_geom::Vec3;
 
 use crate::images::Raster;
-use crate::light::{Lighting, Surface, brdf_cos, incoming, sky_only, tonemap};
+use crate::light::{Lighting, Surface, brdf_cos, env_or_sky, incoming, tonemap_wb, view_background};
 use crate::shade::{Scene, ShadeView};
 
 /// Render quality presets (RENDERPRESETS): samples per pixel, bounces, and whether to filter.
@@ -509,8 +509,8 @@ impl Render {
         while steps < self.opts.bounces + 16 {
             steps += 1;
             let Some(hit) = self.bvh.intersect(o, d, self.far * 2.0) else {
-                // Leaving: the sky (behind the view, its gradient; elsewhere, the dome).
-                let sky = if bounce == 0 && !dome { crate::light::background(&self.lit, row_t) } else { sky_only(&self.lit, d) };
+                // Leaving: the background (behind the view) or the environment dome.
+                let sky = if bounce == 0 && !dome { view_background(&self.lit, row_t) } else { env_or_sky(&self.lit, d) };
                 for i in 0..3 {
                     l[i] += thr[i] * sky[i];
                 }
@@ -670,7 +670,7 @@ impl Render {
         self.sum.iter().map(|c| c.map(|x| x * k)).collect()
     }
 
-    /// The image so far: filtered (if asked) and tone mapped.
+    /// The image so far: filtered (if asked), fog applied, and tone mapped with white balance.
     pub fn image(&self) -> Raster {
         let (w, h) = (self.view.width_px, self.view.height_px);
         let mut c = self.mean();
@@ -680,13 +680,28 @@ impl Render {
             let var: Vec<f32> = self.sum.iter().zip(&self.sum2).map(|(s, s2)| (s2 * k - (lum(*s) * k).powi(2)).max(0.0) * k).collect();
             c = denoise(&c, &var, &self.normal, &self.depth, &self.albedo, w as usize, h as usize);
         }
+        // Apply fog if configured.
+        if let Some(fog) = &self.lit.fog {
+            // Normalise depth: near = 0, far = 1.
+            let zmin = self.depth.iter().copied().filter(|z| z.is_finite()).fold(f32::INFINITY, f32::min);
+            let zmax = self.depth.iter().copied().filter(|z| z.is_finite()).fold(f32::NEG_INFINITY, f32::max);
+            let range = (zmax - zmin).max(1e-6);
+            for (i, px) in c.iter_mut().enumerate() {
+                let z = self.depth.get(i).copied().unwrap_or(f32::INFINITY);
+                if z.is_finite() {
+                    let depth_frac = (z - zmin) / range;
+                    *px = crate::light::apply_fog(*px, depth_frac, fog);
+                }
+            }
+        }
         let crop = self.opts.crop;
+        let wb = self.lit.white_balance;
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for (i, px) in c.iter().enumerate() {
             let (x, y) = ((i % w as usize) as u32, (i / w as usize) as u32);
             let inside = crop.is_none_or(|(a, b, cc, d)| x >= a && x < cc && y >= b && y < d);
-            let rgb = if inside { *px } else { crate::light::background(&self.lit, 1.0 - (y as f32 + 0.5) / h as f32) };
-            let t = tonemap(rgb, self.lit.exposure);
+            let rgb = if inside { *px } else { view_background(&self.lit, 1.0 - (y as f32 + 0.5) / h as f32) };
+            let t = tonemap_wb(rgb, self.lit.exposure, wb);
             rgba.extend([t[0], t[1], t[2], 255]);
         }
         Raster::new(w, h, rgba).unwrap_or(Raster { width: 0, height: 0, rgba: Vec::new() })
@@ -812,6 +827,10 @@ mod tests {
             }],
             exposure: 1.0,
             unit_m: 1.0,
+            env_map: None,
+            fog: None,
+            background: crate::light::Background::default(),
+            white_balance: [1.0, 1.0, 1.0],
         };
         // Looking into the room from the open side.
         let view = ShadeView {
