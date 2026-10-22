@@ -544,10 +544,13 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
     // Text: small blobs, grouped in rows, boxed and taken out before tracing lines.
     if o.text {
         let given = o.text_max_px.filter(|v| v.is_finite() && *v > 0.0);
-        let tmax = given.unwrap_or(0.025 * w.min(h) as f64).max(4.0);
+        // Cap the default limits so that on a full-size sheet (min dim ~4800 px at 200 dpi)
+        // fixture-sized symbols (~40 px) aren't misclassified as text. Real text on
+        // engineering plans is at most about 10 mm = ~80 px at 300 dpi.
+        let tmax = given.unwrap_or((0.025 * w.min(h) as f64).min(40.0)).max(4.0);
         // Larger letters (titles, room names on a fine scan) count when they have company on
         // their row, so a lone column or symbol of that size isn't taken for a letter.
-        let big = given.unwrap_or(0.06 * w.min(h) as f64).max(tmax);
+        let big = given.unwrap_or((0.06 * w.min(h) as f64).min(80.0)).max(tmax);
         // Each group: its box, its blobs, and whether it has a letter of the ordinary size.
         let mut groups: Vec<([f64; 4], Vec<Vec<usize>>, bool, usize)> = Vec::new();
         for comp in components(&bits) {
@@ -587,9 +590,19 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
                 }
             }
         }
-        for (b, comps, small, count) in groups {
+        for (b, comps, small, count) in &groups {
             // Lone specks are noise, not text; a lone large blob is a symbol, not a letter.
-            if (b[2] - b[0]) * (b[3] - b[1]) < 9.0 || (!small && count < 2) {
+            if (b[2] - b[0]) * (b[3] - b[1]) < 9.0 {
+                continue;
+            }
+            // Groups of only "big" blobs (no confirmed ordinary-sized letter) need at least 2
+            // members AND a minimum fill ratio — text fills its bounding box more densely than
+            // thin geometric outlines (circles, symbol borders) of the same size.
+            if !small && (*count < 2 || {
+                let area = (b[2] - b[0]) * (b[3] - b[1]);
+                let ink: usize = comps.iter().map(|c| c.len()).sum();
+                (ink as f64 / area) < 0.10
+            }) {
                 continue;
             }
             for i in comps.iter().flatten() {
