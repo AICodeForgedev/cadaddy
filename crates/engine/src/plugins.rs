@@ -713,7 +713,7 @@ impl PluginHost {
         PluginPermissions { allowed: flag("allowed", true), files: flag("files", false), network: flag("network", false) }
     }
 
-    fn save_permissions(&self, name: &str, perms: &PluginPermissions) {
+    pub(crate) fn save_permissions(&self, name: &str, perms: &PluginPermissions) {
         let Some(dir) = self.dir() else {
             return;
         };

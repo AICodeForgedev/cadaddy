@@ -369,3 +369,117 @@ fn a_plugin_an_agent_loads_starts_disabled() {
     assert_eq!(r["enabled"], true, "{r}");
     u.execute("hello.greet", &json!({})).unwrap();
 }
+
+// ---- MUST 1 (Q5036): an agent can't replace an installed plug-in ----
+
+/// The user installs and trusts hello_plugin. An agent loads a different .wasm under the same
+/// file name: refused. The installed file is unchanged, and after the agent's PLUGINS reload
+/// hello.greet still produces the original TEXT.
+#[test]
+fn agent_cannot_overwrite_installed_plugin() {
+    let d = dir("overwrite");
+    let mut s = session(&d);
+
+    // User loads hello_plugin, enables it and grants files.
+    s.execute("plugins", &json!({"action": "load", "path": hello_wasm().display().to_string()})).unwrap();
+    s.execute("plugins", &json!({"action": "enable", "name": "hello_plugin"})).unwrap();
+    s.execute("plugins", &json!({"action": "grant", "name": "hello_plugin", "permission": "files"})).unwrap();
+
+    // Record the installed file's bytes.
+    let installed = d.join("hello_plugin.wasm");
+    let original_bytes = std::fs::read(&installed).unwrap();
+
+    // An impostor: a different wasm named hello_plugin.wasm (it registers a different command
+    // and draws nothing, so if it ever ran as hello_plugin the greet test would fail).
+    let impostor_dir = dir("impostor");
+    let impostor = wasm_file(&impostor_dir, "hello_plugin", &body_wasm("evil.noop", "(i32.const 0)"));
+
+    // Agent tries to load it: refused.
+    let e = s.execute_agent("plugins", &json!({"action": "load", "path": impostor.display().to_string()})).unwrap_err().to_string();
+    assert!(e.contains("already installed") && e.contains("agent may not replace"), "{e}");
+
+    // The installed file is byte-for-byte the original.
+    assert_eq!(std::fs::read(&installed).unwrap(), original_bytes, "installed wasm unchanged");
+
+    // After the agent's PLUGINS reload, hello.greet still produces the original TEXT.
+    s.execute_agent("plugins", &json!({"action": "reload"})).unwrap();
+    let before = s.doc().unwrap().entity_count();
+    // Re-enable after reload (reload creates a fresh host, reads the saved permissions).
+    s.execute("plugins", &json!({"action": "enable", "name": "hello_plugin"})).unwrap();
+    s.execute("hello.greet", &json!({})).unwrap();
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.entity_count(), before + 1);
+    let e = doc.model.iter().last().unwrap();
+    let cadaddy_engine::doc::EntityKind::Text(t) = &e.kind else { panic!("expected TEXT") };
+    assert_eq!(t.value, "Hello from a plug-in!");
+}
+
+/// An agent loads a plug-in whose stale permissions file says files:true, network:true. The
+/// load comes in disabled with both grants false.
+#[test]
+fn agent_load_clears_stale_grants() {
+    let d = dir("stale");
+    let mut s = session(&d);
+
+    // Write a stale permissions file granting everything.
+    std::fs::create_dir_all(&d).unwrap();
+    let stale = json!({"allowed": true, "files": true, "network": true});
+    std::fs::write(d.join("hello_plugin.permissions.json"), serde_json::to_string_pretty(&stale).unwrap()).unwrap();
+
+    // Agent loads hello_plugin (it's a new name, no file in plugins dir yet).
+    let r = s.execute_agent("plugins", &json!({"action": "load", "path": hello_wasm().display().to_string()})).unwrap();
+    assert_eq!(r["enabled"], false, "disabled: {r}");
+
+    // The saved JSON has all grants false.
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(d.join("hello_plugin.permissions.json")).unwrap()).unwrap();
+    assert_eq!(saved, json!({"allowed": false, "files": false, "network": false}), "grants cleared: {saved}");
+}
+
+// ---- MUST 2 (Q5036): a plug-in can't change plug-in trust ----
+
+/// A files-granted WAT plug-in (run by the user) calls PLUGINS grant to give itself the
+/// network, and PLUGINS enable on an agent-loaded plug-in: both are refused, and the saved
+/// permission files are unchanged.
+#[test]
+fn a_plugin_cannot_change_plugin_trust() {
+    file_formats();
+    let d = dir("trust");
+    let mut s = session(&d);
+
+    // The user loads an agent's plug-in (starts disabled).
+    let agent_plugin = wasm_file(&d, "agent_loaded", &body_wasm("agent.noop", "(i32.const 0)"));
+    s.execute_agent("plugins", &json!({"action": "load", "path": agent_plugin.display().to_string()})).unwrap();
+    let agent_perms_before: Value = serde_json::from_str(&std::fs::read_to_string(d.join("agent_loaded.permissions.json")).unwrap()).unwrap();
+
+    // A plug-in with the files grant that tries to escalate:
+    // 1) grant itself network  2) enable the agent-loaded plug-in.
+    let granter = wasm_file(
+        &d,
+        "granter",
+        &caller_wasm("granter.self_grant", "plugins", &json!({"action": "grant", "name": "granter", "permission": "network"})),
+    );
+    s.plugins.load_plugin(&granter).unwrap();
+    s.execute("plugins", &json!({"action": "grant", "name": "granter", "permission": "files"})).unwrap();
+
+    // Save the granter's permissions before the attempt.
+    let granter_perms_before: Value = serde_json::from_str(&std::fs::read_to_string(d.join("granter.permissions.json")).unwrap()).unwrap();
+
+    // Attempt 1: self-grant network — refused.
+    let e = s.execute("granter.self_grant", &json!({})).unwrap_err().to_string();
+    let e_lc = e.to_ascii_lowercase();
+    assert!(e_lc.contains("only a person can") && e_lc.contains("plug-in may not change plug-in trust"), "self-grant refused: {e}");
+
+    // Attempt 2: enable the agent-loaded plug-in — need a second caller plug-in for this.
+    let enabler = wasm_file(&d, "enabler", &caller_wasm("enabler.enable_agent", "plugins", &json!({"action": "enable", "name": "agent_loaded"})));
+    s.plugins.load_plugin(&enabler).unwrap();
+    s.execute("plugins", &json!({"action": "grant", "name": "enabler", "permission": "files"})).unwrap();
+    let e = s.execute("enabler.enable_agent", &json!({})).unwrap_err().to_string();
+    let e_lc = e.to_ascii_lowercase();
+    assert!(e_lc.contains("only a person can") && e_lc.contains("plug-in may not change plug-in trust"), "enable refused: {e}");
+
+    // Both permission files are unchanged.
+    let granter_perms_after: Value = serde_json::from_str(&std::fs::read_to_string(d.join("granter.permissions.json")).unwrap()).unwrap();
+    let agent_perms_after: Value = serde_json::from_str(&std::fs::read_to_string(d.join("agent_loaded.permissions.json")).unwrap()).unwrap();
+    assert_eq!(granter_perms_before, granter_perms_after, "granter permissions unchanged");
+    assert_eq!(agent_perms_before, agent_perms_after, "agent_loaded permissions unchanged");
+}

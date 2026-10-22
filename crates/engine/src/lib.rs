@@ -1205,7 +1205,7 @@ pub struct Session {
     pub plugins: plugins::PluginHost,
     /// Plug-in commands running now, one inside another's host call ([`plugins::MAX_PLUGIN_DEPTH`]).
     #[cfg(not(target_arch = "wasm32"))]
-    plugin_depth: u32,
+    pub(crate) plugin_depth: u32,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
