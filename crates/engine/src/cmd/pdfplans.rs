@@ -149,6 +149,73 @@ fn dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// Wall pairs bucketed by their box grown by their reach (half the thickness plus `slack`):
+/// the pairs a face could be near.
+struct PairGrid {
+    min: Vec2,
+    cell: f64,
+    cols: usize,
+    rows: usize,
+    cells: Vec<Vec<usize>>,
+}
+
+impl PairGrid {
+    /// Cells per side, at most (a hostile plan's pairs can't make a huge grid).
+    const MAX_SIDE: usize = 256;
+
+    fn new(pairs: &[super::perceive::geometry::Pair], slack: f64) -> PairGrid {
+        let grown = |p: &super::perceive::geometry::Pair| {
+            let r = p.thickness / 2.0 + slack;
+            (Vec2::new(p.c0.x.min(p.c1.x) - r, p.c0.y.min(p.c1.y) - r), Vec2::new(p.c0.x.max(p.c1.x) + r, p.c0.y.max(p.c1.y) + r))
+        };
+        let boxes: Vec<(Vec2, Vec2)> = pairs.iter().map(grown).collect();
+        let lo = boxes.iter().fold(Vec2::new(f64::INFINITY, f64::INFINITY), |m, b| Vec2::new(m.x.min(b.0.x), m.y.min(b.0.y)));
+        let hi = boxes.iter().fold(Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, b| Vec2::new(m.x.max(b.1.x), m.y.max(b.1.y)));
+        let span = (hi.x - lo.x).max(hi.y - lo.y);
+        let side = ((pairs.len() as f64).sqrt().ceil() as usize).clamp(1, Self::MAX_SIDE);
+        if !(span.is_finite() && span > 0.0) {
+            return PairGrid { min: Vec2::new(0.0, 0.0), cell: 1.0, cols: 1, rows: 1, cells: vec![(0..pairs.len()).collect()] };
+        }
+        let cell = span / side as f64;
+        let mut g = PairGrid { min: lo, cell, cols: side, rows: side, cells: vec![Vec::new(); side * side] };
+        for (i, (a, b)) in boxes.iter().enumerate() {
+            let (c0, r0, c1, r1) = g.range(*a, *b);
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    if let Some(v) = g.cells.get_mut(r * g.cols + c) {
+                        v.push(i);
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    /// The cells (first and last column and row) a box covers, clamped to the grid.
+    fn range(&self, a: Vec2, b: Vec2) -> (usize, usize, usize, usize) {
+        let at = |v: f64, lo: f64, n: usize| {
+            let i = ((v - lo) / self.cell).floor();
+            if i.is_finite() { (i.max(0.0) as usize).min(n - 1) } else { 0 }
+        };
+        (
+            at(a.x.min(b.x), self.min.x, self.cols),
+            at(a.y.min(b.y), self.min.y, self.rows),
+            at(a.x.max(b.x), self.min.x, self.cols),
+            at(a.y.max(b.y), self.min.y, self.rows),
+        )
+    }
+
+    /// The pairs that could be near the face `a`–`b` (each once).
+    fn near(&self, a: Vec2, b: Vec2) -> impl Iterator<Item = usize> + '_ {
+        let (c0, r0, c1, r1) = self.range(a, b);
+        let mut seen: Vec<usize> =
+            (r0..=r1).flat_map(|r| (c0..=c1).map(move |c| r * self.cols + c)).filter_map(|i| self.cells.get(i)).flatten().copied().collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.into_iter()
+    }
+}
+
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // The drawing as it stands (a shared copy: the session is used below).
     let doc = Arc::clone(&s.state()?.doc);
@@ -174,10 +241,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let found = pairs(d, &all_segs, &lim);
     // A face of a pair: its middle on the pair's centreline (within half the thickness), or the
     // pair's middle on it (a long outer face beside several rooms).
+    // Only the pairs whose box (grown by their reach) meets the face's box can pass: a grid of
+    // them instead of every pair for every face (a guest floor has thousands of each).
+    let grid = PairGrid::new(&found, 0.25 * k);
     let near_pair = |sg: &super::perceive::geometry::Seg| {
-        found.iter().any(|pr| {
-            let reach = pr.thickness / 2.0 + 0.25 * k;
-            dist((sg.a + sg.b) * 0.5, pr.c0, pr.c1) <= reach || dist((pr.c0 + pr.c1) * 0.5, sg.a, sg.b) <= reach
+        grid.near(sg.a, sg.b).any(|i| {
+            found.get(i).is_some_and(|pr| {
+                let reach = pr.thickness / 2.0 + 0.25 * k;
+                dist((sg.a + sg.b) * 0.5, pr.c0, pr.c1) <= reach || dist((pr.c0 + pr.c1) * 0.5, sg.a, sg.b) <= reach
+            })
         })
     };
     let weights: Vec<u16> = ents.iter().map(|e| weight(d, e)).filter(|w| *w > 0).collect();
@@ -286,6 +358,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let sheet_area = (ext.width() * ext.height()).max(1e-9);
     let mut rooms: Vec<(Handle, String)> = Vec::new();
     let mut numbers: Vec<Handle> = Vec::new();
+    let mut outline_cache = None;
     for (h, t, at, _) in texts(&ents) {
         let name = t.chars().filter(|c| c.is_alphabetic()).count() >= 2
             && t.chars().count() <= 40
@@ -295,7 +368,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if !name && !room_number(&t) {
             continue;
         }
-        let Ok(loops) = super::hatch::loops_at(s, at) else { continue };
+        let Ok(loops) = super::hatch::loops_at_lazy(s, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let q = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         let area = cadaddy_geom::shoelace(&q).abs();
@@ -388,6 +461,47 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The grid never misses a pair a face is near: every pair the full scan finds is among
+    /// the grid's candidates (random pairs and faces, and the degenerate cases).
+    #[test]
+    fn the_pair_grid_misses_nothing() {
+        use super::super::perceive::geometry::{Pair, Seg};
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10.0
+        };
+        let pair = |a: Vec2, b: Vec2, t: f64| Pair { layer: String::new(), c0: a, c1: b, thickness: t, length: a.dist(b), confidence: 1.0 };
+        let pairs: Vec<Pair> = (0..400).map(|_| pair(Vec2::new(rnd(), rnd()), Vec2::new(rnd(), rnd()), 2.0 + rnd() / 100.0)).collect();
+        let slack = 0.25;
+        let grid = PairGrid::new(&pairs, slack);
+        let near = |sg: &Seg, pr: &Pair| {
+            let reach = pr.thickness / 2.0 + slack;
+            dist((sg.a + sg.b) * 0.5, pr.c0, pr.c1) <= reach || dist((pr.c0 + pr.c1) * 0.5, sg.a, sg.b) <= reach
+        };
+        let mut hits = 0;
+        for _ in 0..2_000 {
+            let a = Vec2::new(rnd(), rnd());
+            let b = if rnd() < 500.0 { a + Vec2::new(rnd() / 50.0, rnd() / 50.0) } else { Vec2::new(rnd(), rnd()) };
+            let sg = Seg { a, b, layer: String::new() };
+            let cand: Vec<usize> = grid.near(a, b).collect();
+            for (i, pr) in pairs.iter().enumerate() {
+                if near(&sg, pr) {
+                    hits += 1;
+                    assert!(cand.contains(&i), "pair {i} missed for {a:?}-{b:?}");
+                }
+            }
+        }
+        assert!(hits > 100, "{hits}");
+        // No pairs, one point-sized pair, and a face far outside: no panic.
+        assert_eq!(PairGrid::new(&[], slack).near(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)).count(), 0);
+        let one = [pair(Vec2::new(5.0, 5.0), Vec2::new(5.0, 5.0), 0.0)];
+        assert_eq!(PairGrid::new(&one, 0.0).near(Vec2::new(5.0, 5.0), Vec2::new(5.0, 5.0)).count(), 1);
+        let _ = grid.near(Vec2::new(-1e300, f64::NAN), Vec2::new(1e300, 1e300)).count();
+    }
     use super::*;
 
     #[test]

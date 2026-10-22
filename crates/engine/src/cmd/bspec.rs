@@ -353,6 +353,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = room_plan(s)?;
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
+    let mut outline_cache = None;
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
             break;
@@ -367,7 +368,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         else {
             continue;
         };
-        let Ok(loops) = super::hatch::loops_at(plan, at) else { continue };
+        let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {

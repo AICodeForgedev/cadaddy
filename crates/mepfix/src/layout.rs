@@ -177,6 +177,8 @@ pub fn window(t: &Truth, area: &str) -> ([f64; 2], [f64; 2]) {
 }
 
 /// Enlarged plans' scales.
+/// Plan scales for a building too big for [`SCALES`] on the sheet, largest first.
+pub const SMALL_SCALES: &[(&str, f64)] = &[("1/16\" = 1'-0\"", 0.0625), ("1/32\" = 1'-0\"", 0.03125)];
 pub const ENLARGED_SCALES: &[(&str, f64)] = &[("1/4\" = 1'-0\"", 0.25), ("3/8\" = 1'-0\"", 0.375), ("1/2\" = 1'-0\"", 0.5)];
 
 /// Grid bubbles and labels outside the extents need this much paper, inches, each side.
@@ -411,7 +413,10 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
     let fits = |s: f64, rot: bool| if rot { bh * s <= aw && bw * s <= ah } else { bw * s <= aw && bh * s <= ah };
     let fitting: Vec<(&str, f64)> = SCALES.iter().copied().filter(|(_, s)| fits(*s, false)).collect();
     let set_scale = r.pick(&fitting);
-    let set_scale = if set_scale.1 > 0.0 { set_scale } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
+    // A building too long for the usual plan scales (the double-size hotel) drops to 1/16" or
+    // 1/32" rather than running off the sheet.
+    let small = SMALL_SCALES.iter().copied().find(|(_, s)| fits(*s, false));
+    let set_scale = if set_scale.1 > 0.0 { set_scale } else { small.or(SCALES.first().copied()).unwrap_or(("1/8\" = 1'-0\"", 0.125)) };
     for (number, title, disc, kind) in hotel_sheet_list() {
         let level = match &kind {
             Kind::Framing(l)
@@ -432,7 +437,7 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
         } else {
             let options: Vec<(&str, f64)> = SCALES.iter().copied().filter(|(_, s)| fits(*s, false)).collect();
             let s = r.pick(&options);
-            if s.1 > 0.0 { s } else { SCALES.first().copied().unwrap_or(("1/8\" = 1'-0\"", 0.125)) }
+            if s.1 > 0.0 { s } else { small.or(SCALES.first().copied()).unwrap_or(("1/8\" = 1'-0\"", 0.125)) }
         };
         let k = 12.0 / scale;
         let origin = if st.world_offsets { [r.range(0, 400) as f64 * 120.0, r.range(0, 200) as f64 * 120.0] } else { [0.0, 0.0] };
