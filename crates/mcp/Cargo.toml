@@ -18,3 +18,5 @@ log = { workspace = true }
 [dev-dependencies]
 # The real file formats for the MCP suite (tests/suite.rs), installed as the app does.
 cadaddy-io = { workspace = true }
+# The synthetic hotel the weak agent works on (tests/weakagent.rs).
+cadaddy-mepfix = { path = "../mepfix" }
