@@ -289,7 +289,7 @@ fn hostile_entity_data_never_panics() {
 
 /// R2000 links a block's entities one to the next; an entity that isn't decoded (a type not
 /// read yet, here a LINE relabelled as a REGION) keeps the chain, so the entities after it in
-/// model space are still placed there.
+/// model space are still placed there; it is reported as not read.
 #[test]
 fn an_undecoded_r2000_entity_keeps_the_ones_after_it() {
     let mut d = read(&common::dwg("AC1015", 40)).unwrap();
@@ -299,8 +299,10 @@ fn an_undecoded_r2000_entity_keeps_the_ones_after_it() {
     assert!(model.len() >= 40, "{}", model.len());
     let middle = before.iter().find(|e| e.name == "LINE" && model.iter().position(|h| *h == e.handle) > Some(10)).unwrap().handle;
     d.objects.iter_mut().find(|o| o.handle == middle).unwrap().type_code = 37;
-    let (ents, _) = decode_all(&d).unwrap();
+    let (ents, failed) = decode_all(&d).unwrap();
     assert_eq!(ents.len(), before.len() - 1);
+    // Left out, and said so.
+    assert_eq!(failed, [(middle, "REGION: not read yet".to_string())]);
     let lists = cadaddy_dwgcodec::entities::block_lists(&d, &ents).unwrap();
     assert!(lists.values().any(|l| *l == model), "the chain goes on past the undecoded entity");
     // Placed in model space: no owner, not paper.
