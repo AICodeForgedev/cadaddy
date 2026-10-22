@@ -1,5 +1,5 @@
 //! The BIM Coordination palette: a dockable panel for reviewing MEP and structural
-//! coordination in 3D. Tabs: Model Tree, Trades, Clashes, Viewpoints, Section Box, Measure.
+//! coordination in 3D. Tabs: Model Tree, Trades, Clashes, Views, Section Box, Measure.
 //!
 //! The palette drives the `coordination.*` engine commands and reads their results to show
 //! a live, interactive coordination viewer that matches or beats Navisworks for the
@@ -20,7 +20,7 @@ enum Tab {
     Tree,
     Trades,
     Clashes,
-    Viewpoints,
+    Views,
     SectionBox,
     Measure,
 }
@@ -31,16 +31,20 @@ struct State {
     tree_data: Option<Value>,
     trades_data: Option<Value>,
     clash_data: Option<Value>,
-    viewpoints_data: Option<Value>,
+    views_data: Option<Value>,
     sectionbox: Option<Value>,
     search: String,
     measure_result: Option<Value>,
-    /// Name typed into the viewpoint save field.
-    vp_name: String,
+    /// Name typed into the view save field.
+    view_name: String,
     /// The selected clash index for navigation.
     selected_clash: Option<usize>,
     /// Expanded levels in the tree.
     expanded: std::collections::HashSet<String>,
+    /// Coordination mode state.
+    coord_mode: Option<Value>,
+    /// Level filter for trades.
+    level_filter: String,
 }
 
 fn id() -> egui::Id {
@@ -65,7 +69,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             (Tab::Tree, "Tree"),
             (Tab::Trades, "Trades"),
             (Tab::Clashes, "Clashes"),
-            (Tab::Viewpoints, "Views"),
+            (Tab::Views, "Views"),
             (Tab::SectionBox, "Section"),
             (Tab::Measure, "Measure"),
         ];
@@ -84,7 +88,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Tab::Tree => tree_tab(app, ui, &mut st),
         Tab::Trades => trades_tab(app, ui, &mut st),
         Tab::Clashes => clashes_tab(app, ui, &mut st),
-        Tab::Viewpoints => viewpoints_tab(app, ui, &mut st),
+        Tab::Views => views_tab(app, ui, &mut st),
         Tab::SectionBox => sectionbox_tab(app, ui, &mut st),
         Tab::Measure => measure_tab(app, ui, &mut st),
     }
@@ -175,9 +179,33 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
 // ─── Trades tab ───────────────────────────────────────────────────────────────
 
 fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
-    if ui.button(crate::i18n::t("Refresh")).clicked() || st.trades_data.is_none() {
-        st.trades_data = app.session.execute("coordination.trades", &json!({})).ok();
+    // Coordination mode toggle.
+    if st.coord_mode.is_none() {
+        st.coord_mode = app.session.execute("coordination.mode", &json!({})).ok();
     }
+    let mode_on = st.coord_mode.as_ref().and_then(|v| v.get("on")).and_then(Value::as_bool).unwrap_or(false);
+
+    ui.horizontal(|ui| {
+        let mode_label = if mode_on { "Coordination: ON" } else { "Coordination: OFF" };
+        if ui.button(crate::i18n::t(mode_label)).clicked() {
+            st.coord_mode = app.session.execute("coordination.mode", &json!({ "on": !mode_on })).ok();
+        }
+    });
+    ui.separator();
+
+    // Level filter.
+    ui.horizontal(|ui| {
+        ui.label(crate::i18n::t("Level:"));
+        let changed = ui.text_edit_singleline(&mut st.level_filter).changed();
+        if ui.button(crate::i18n::t("Refresh")).clicked() || st.trades_data.is_none() || changed {
+            let params = if st.level_filter.is_empty() {
+                json!({})
+            } else {
+                json!({ "level": st.level_filter })
+            };
+            st.trades_data = app.session.execute("coordination.trades", &params).ok();
+        }
+    });
 
     let Some(data) = &st.trades_data.clone() else {
         ui.label(crate::i18n::t("No MEP systems found."));
@@ -217,6 +245,11 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
                 }
                 let color = if visible { t.text } else { t.text_faint };
                 ui.label(RichText::new(format!("{system} ({kind}, {count} runs)")).color(color));
+                // Isolate button.
+                if ui.small_button(crate::i18n::t("Isolate")).clicked() {
+                    let _ = app.session.execute("coordination.isolate", &json!({ "system": system }));
+                    st.trades_data = app.session.execute("coordination.trades", &json!({})).ok();
+                }
             });
         }
     });
@@ -297,39 +330,47 @@ fn clashes_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     });
 }
 
-// ─── Viewpoints tab ───────────────────────────────────────────────────────────
+// ─── Views tab (coordination views: camera + filters + section box + scheme) ─
 
-fn viewpoints_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
-    // Load viewpoints.
-    if st.viewpoints_data.is_none() {
-        st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({})).ok();
+fn views_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    // Load views.
+    if st.views_data.is_none() {
+        st.views_data = app.session.execute("coordination.views", &json!({})).ok();
     }
 
     ui.horizontal(|ui| {
         ui.label(crate::i18n::t("Name:"));
-        ui.text_edit_singleline(&mut st.vp_name);
-        if ui.button(crate::i18n::t("Save")).clicked() && !st.vp_name.is_empty() {
-            st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "save": { "name": st.vp_name } })).ok();
+        ui.text_edit_singleline(&mut st.view_name);
+        if ui.button(crate::i18n::t("Save")).clicked() && !st.view_name.is_empty() {
+            st.views_data = app.session.execute("coordination.views", &json!({ "save": { "name": st.view_name } })).ok();
         }
     });
+    ui.add_space(4.0);
+    ui.label(RichText::new(crate::i18n::t("Saves camera, section box, trade visibility and colour scheme.")).color(Tokens::get().text_dim));
     ui.separator();
 
-    let vps = st.viewpoints_data.as_ref().and_then(|d| d.get("viewpoints")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let views = st.views_data.as_ref().and_then(|d| d.get("views")).and_then(Value::as_array).cloned().unwrap_or_default();
 
-    if vps.is_empty() {
-        ui.label(crate::i18n::t("No saved viewpoints."));
+    if views.is_empty() {
+        ui.label(crate::i18n::t("No saved coordination views."));
         return;
     }
 
-    egui::ScrollArea::vertical().id_salt("bim-viewpoints").auto_shrink([false, false]).show(ui, |ui| {
-        for vp in &vps {
-            let name = vp.get("name").and_then(Value::as_str).unwrap_or("?");
+    egui::ScrollArea::vertical().id_salt("bim-views").auto_shrink([false, false]).show(ui, |ui| {
+        for view in &views {
+            let name = view.get("name").and_then(Value::as_str).unwrap_or("?");
+            let vstyle = view.get("visual_style").and_then(Value::as_str).unwrap_or("");
+            let has_sbox = view.get("sectionbox").and_then(|s| s.get("on")).and_then(Value::as_bool).unwrap_or(false);
+            let detail = format!("{vstyle}{}", if has_sbox { " [section box]" } else { "" });
+
             ui.horizontal(|ui| {
                 if ui.button(name).clicked() {
-                    st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "restore": name })).ok();
+                    st.views_data = app.session.execute("coordination.views", &json!({ "restore": name })).ok();
                 }
+                let t = Tokens::get();
+                ui.label(RichText::new(detail).color(t.text_dim));
                 if ui.small_button("X").clicked() {
-                    st.viewpoints_data = app.session.execute("coordination.viewpoints", &json!({ "delete": name })).ok();
+                    st.views_data = app.session.execute("coordination.views", &json!({ "delete": name })).ok();
                 }
             });
         }
@@ -357,6 +398,9 @@ fn sectionbox_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     });
 
     if on {
+        ui.add_space(4.0);
+        ui.label(RichText::new(crate::i18n::t("The section box clips the 3D view to its bounds.")).color(Tokens::get().text_dim));
+
         if let Some(lo) = sbox.get("min").and_then(Value::as_array) {
             let vals: Vec<f64> = lo.iter().filter_map(Value::as_f64).collect();
             if vals.len() == 3 {

@@ -1,12 +1,12 @@
 //! BIM coordination viewer commands: model tree, trade visibility, section box, viewpoints,
-//! 3D measure and BCF export.
+//! coordination views, colour schemes, isolate, 3D measure and BCF export.
 //!
 //! The coordination palette (UI) drives these commands to give the user a Navisworks-style
 //! experience for reviewing MEP and structural coordination in 3D.
 //!
-//! Coordination-specific data (viewpoints, section box) is stored as extra JSON keys inside the
-//! drawing's `building_spec` text. The `BuildingSpec` deserializer ignores unknown keys, so they
-//! survive round-trips through the spec parser.
+//! Coordination-specific data (viewpoints, section box, colour schemes, coordination views) is
+//! stored as extra JSON keys inside the drawing's `building_spec` text. The `BuildingSpec`
+//! deserializer ignores unknown keys, so they survive round-trips through the spec parser.
 
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_geom::Vec3;
@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?} → {levels: [{name, elevation_ft, rooms, systems, elements}]}")
             .noundo(),
         CommandSpec::new("coordination.trades", "Trade Visibility", run_trades)
-            .params("{set?: [{system, visible?}]} → {trades: [{system, kind, layer, visible, count}]}")
+            .params("{set?: [{system, visible?}], level?} → {trades: [{system, kind, layer, visible, count}]}")
             .noundo(),
         CommandSpec::new("coordination.sectionbox", "Section Box", run_sectionbox).params("{on?, min?, max?, fit?} → {on, min, max}").noundo(),
         CommandSpec::new("coordination.viewpoints", "Coordination Viewpoints", run_viewpoints)
@@ -44,6 +44,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("coordination.clashlist", "Clash List", run_clashlist).params("{tolerance_in?, group_by?} → {groups, total}").noundo(),
         CommandSpec::new("coordination.clashstatus", "Clash Status", run_clashstatus).params("{id, status}").noundo(),
         CommandSpec::new("coordination.bcf", "BCF Export", run_bcf).params("{path, tolerance_in?} → {topics, path}").noundo(),
+        CommandSpec::new("coordination.mode", "Coordination Mode", run_mode)
+            .params("{on?, ghost_opacity?} → {on, ghost_opacity}")
+            .noundo(),
+        CommandSpec::new("coordination.isolate", "Isolate Trade", run_isolate)
+            .params("{system?, level?, reset?} → {isolated, trades}")
+            .noundo(),
+        CommandSpec::new("coordination.colors", "Colour Scheme", run_colors)
+            .params("{save?: {name, colors}, load?, delete?, list?} → {schemes | active}")
+            .noundo(),
+        CommandSpec::new("coordination.views", "Coordination Views", run_views)
+            .params("{save?: {name}, restore?, delete?, list?} → {views}")
+            .noundo(),
     ]
 }
 
@@ -128,6 +140,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_trades(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "coordination.trades")?;
+    let level_filter = p.get("level").and_then(Value::as_str);
 
     if let Some(sets) = p.get("set").and_then(Value::as_array) {
         let d = s.doc_mut()?;
@@ -149,13 +162,27 @@ fn run_trades(s: &mut Session, p: &Value) -> Result<Value> {
     for sys in &sp.mep.systems {
         let layer_name = format!("3D-MEP-{}", sys.name);
         let visible = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(&layer_name)).is_none_or(|l| l.on);
-        let count = sp.mep.runs.iter().filter(|r| r.system == sys.name).count();
+        let count = sp.mep.runs.iter().filter(|r| {
+            r.system == sys.name
+                && level_filter.is_none_or(|lf| r.level.eq_ignore_ascii_case(lf))
+        }).count();
+        // Collect levels that have runs for this system.
+        let mut levels: Vec<String> = Vec::new();
+        for run in &sp.mep.runs {
+            if run.system == sys.name && !levels.iter().any(|l| l.eq_ignore_ascii_case(&run.level)) {
+                levels.push(run.level.clone());
+                if levels.len() >= 100 {
+                    break;
+                }
+            }
+        }
         trades.push(json!({
             "system": sys.name,
             "kind": kind_str(sys.kind),
             "layer": layer_name,
             "visible": visible,
             "count": count,
+            "levels": levels,
         }));
     }
     Ok(json!({ "trades": trades }))
@@ -235,10 +262,13 @@ fn run_viewpoints(s: &mut Session, p: &Value) -> Result<Value> {
         let name = save.get("name").and_then(Value::as_str).unwrap_or("Unnamed");
         let st = s.state()?;
         let vf = st.zoom_frame();
+        let vdir = st.view_dir;
         let entry = json!({
             "name": name,
             "center": [vf.center.x, vf.center.y],
             "height": vf.height,
+            "view_dir": [vdir.x, vdir.y, vdir.z],
+            "visual_style": st.visual_style.name(),
         });
         if let Some(pos) = vps.iter().position(|v| v.get("name").and_then(Value::as_str) == Some(name)) {
             if let Some(slot) = vps.get_mut(pos) {
@@ -263,6 +293,14 @@ fn run_viewpoints(s: &mut Session, p: &Value) -> Result<Value> {
         let height = vp.get("height").and_then(Value::as_f64);
         if let (Some(c), Some(h)) = (center, height) {
             s.execute("zoom", &json!({ "mode": "center", "center": c, "height": h }))?;
+        }
+        // Restore view direction if saved.
+        if let Some(vd) = arr3(vp, "view_dir") {
+            let _ = s.execute("vpoint", &json!({ "dir": vd }));
+        }
+        // Restore visual style if saved.
+        if let Some(vs) = vp.get("visual_style").and_then(Value::as_str) {
+            let _ = s.execute("vscurrent", &json!({ "style": vs }));
         }
     }
 
@@ -555,6 +593,372 @@ mod zip_mini {
     }
 }
 
+// ─── Coordination mode ───────────────────────────────────────────────────────
+
+/// Enable or disable coordination visual mode. When on, architecture/structure layers are shown
+/// ghosted (transparent) and MEP trade layers are solid in their system colours.
+fn run_mode(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let stored = coord_get(d, "coord_mode");
+    let mut on = stored.get("on").and_then(Value::as_bool).unwrap_or(false);
+    let mut ghost_opacity = stored.get("ghost_opacity").and_then(Value::as_f64).unwrap_or(0.2);
+
+    if let Some(v) = p.get("on").and_then(Value::as_bool) {
+        on = v;
+    }
+    if let Some(v) = p.get("ghost_opacity").and_then(Value::as_f64) {
+        ghost_opacity = v.clamp(0.0, 1.0);
+    }
+
+    // Apply ghosting: set transparency on non-MEP layers when on, restore when off.
+    if on {
+        let opacity_pct = ((1.0 - ghost_opacity) * 90.0).round().clamp(0.0, 90.0) as u8;
+        let d = s.doc_mut()?;
+        for layer in &mut d.layers {
+            if !layer.name.starts_with("3D-MEP-") {
+                layer.transparency = opacity_pct;
+            } else {
+                layer.transparency = 0;
+            }
+        }
+    } else {
+        let d = s.doc_mut()?;
+        for layer in &mut d.layers {
+            layer.transparency = 0;
+        }
+    }
+
+    let state = json!({ "on": on, "ghost_opacity": ghost_opacity });
+    coord_set(s, "coord_mode", &state)?;
+    Ok(state)
+}
+
+// ─── Isolate trade ───────────────────────────────────────────────────────────
+
+/// Hide all trades except the specified system (and optionally level), or reset to show all.
+fn run_isolate(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sp, _) = current(s, "coordination.isolate")?;
+
+    if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+        // Show all trade layers.
+        let d = s.doc_mut()?;
+        for sys in &sp.mep.systems {
+            let layer_name = format!("3D-MEP-{}", sys.name);
+            if let Some(layer) = d.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer_name)) {
+                layer.on = true;
+            }
+        }
+        return Ok(json!({ "isolated": null, "trades": "all visible" }));
+    }
+
+    let system = p.get("system").and_then(Value::as_str);
+    let level = p.get("level").and_then(Value::as_str);
+
+    let d = s.doc_mut()?;
+    for sys in &sp.mep.systems {
+        let layer_name = format!("3D-MEP-{}", sys.name);
+        let keep = system.is_none_or(|target| sys.name.eq_ignore_ascii_case(target));
+        if let Some(layer) = d.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer_name)) {
+            layer.on = keep;
+        }
+    }
+
+    let isolated = json!({ "system": system, "level": level });
+    Ok(json!({ "isolated": isolated }))
+}
+
+// ─── Colour schemes ──────────────────────────────────────────────────────────
+
+/// Manage named colour schemes for coordination views. Each scheme maps system names to RGB
+/// colours. Stored as `coord_color_schemes` in the building spec.
+fn run_colors(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let stored = coord_get(d, "coord_color_schemes");
+    let mut schemes: Vec<Value> = stored.as_array().cloned().unwrap_or_default();
+
+    // List all schemes.
+    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+        let names: Vec<&str> = schemes.iter().filter_map(|s| s.get("name").and_then(Value::as_str)).collect();
+        return Ok(json!({ "schemes": names }));
+    }
+
+    // Save a scheme.
+    if let Some(save) = p.get("save") {
+        let name = save.get("name").and_then(Value::as_str).unwrap_or("Default");
+        let colors = save.get("colors").cloned().unwrap_or(json!({}));
+        let entry = json!({ "name": name, "colors": colors });
+        if let Some(pos) = schemes.iter().position(|s| s.get("name").and_then(Value::as_str) == Some(name)) {
+            if let Some(slot) = schemes.get_mut(pos) {
+                *slot = entry;
+            }
+        } else if schemes.len() < 50 {
+            schemes.push(entry);
+        }
+        coord_set(s, "coord_color_schemes", &json!(schemes))?;
+        return Ok(json!({ "saved": name }));
+    }
+
+    // Load (apply) a scheme: set system colours on their layers.
+    if let Some(load_name) = p.get("load").and_then(Value::as_str) {
+        let scheme = schemes.iter().find(|s| s.get("name").and_then(Value::as_str) == Some(load_name));
+        let Some(scheme) = scheme else {
+            return Err(EngineError::Other(format!("colour scheme '{load_name}' not found")));
+        };
+        let colors = scheme.get("colors").cloned().unwrap_or(json!({}));
+        let d = s.doc_mut()?;
+        if let Some(obj) = colors.as_object() {
+            for (system, color_val) in obj.iter().take(100) {
+                let layer_name = format!("3D-MEP-{system}");
+                if let Some(arr) = color_val.as_array()
+                    && arr.len() == 3
+                {
+                    let r = arr.first().and_then(Value::as_u64).unwrap_or(255) as u8;
+                    let g = arr.get(1).and_then(Value::as_u64).unwrap_or(255) as u8;
+                    let b = arr.get(2).and_then(Value::as_u64).unwrap_or(255) as u8;
+                    if let Some(layer) = d.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer_name)) {
+                        layer.color = cadaddy_color::Color::True(cadaddy_color::Rgb(r, g, b));
+                    }
+                }
+            }
+        }
+        coord_set(s, "coord_active_scheme", &json!(load_name))?;
+        return Ok(json!({ "active": load_name, "colors": colors }));
+    }
+
+    // Delete a scheme.
+    if let Some(del) = p.get("delete").and_then(Value::as_str) {
+        schemes.retain(|s| s.get("name").and_then(Value::as_str) != Some(del));
+        coord_set(s, "coord_color_schemes", &json!(schemes))?;
+        return Ok(json!({ "deleted": del }));
+    }
+
+    // Default: return current state.
+    let active = coord_get(s.doc()?, "coord_active_scheme");
+    Ok(json!({ "schemes": schemes, "active": active }))
+}
+
+// ─── Coordination views (full state) ─────────────────────────────────────────
+
+/// A coordination view saves the full viewing state: camera, section box, trade visibility,
+/// colour scheme and visual style. Stored as `coord_views` in the building spec.
+fn run_views(s: &mut Session, p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let stored = coord_get(d, "coord_views");
+    let mut views: Vec<Value> = stored.as_array().cloned().unwrap_or_default();
+
+    // Save: capture full state.
+    if let Some(save) = p.get("save") {
+        let name = save.get("name").and_then(Value::as_str).unwrap_or("Unnamed");
+
+        // Camera state.
+        let st = s.state()?;
+        let vf = st.zoom_frame();
+        let vdir = st.view_dir;
+        let vstyle = st.visual_style.name();
+
+        // Section box state.
+        let d = s.doc()?;
+        let sbox = coord_get(d, "coord_sectionbox");
+        let mode = coord_get(d, "coord_mode");
+        let active_scheme = coord_get(d, "coord_active_scheme");
+
+        // Trade visibility snapshot.
+        let trade_vis: Vec<Value> = d
+            .layers
+            .iter()
+            .filter(|l| l.name.starts_with("3D-MEP-"))
+            .take(200)
+            .map(|l| json!({ "layer": l.name, "on": l.on }))
+            .collect();
+
+        let entry = json!({
+            "name": name,
+            "center": [vf.center.x, vf.center.y],
+            "height": vf.height,
+            "view_dir": [vdir.x, vdir.y, vdir.z],
+            "visual_style": vstyle,
+            "sectionbox": sbox,
+            "coord_mode": mode,
+            "color_scheme": active_scheme,
+            "trades": trade_vis,
+        });
+
+        if let Some(pos) = views.iter().position(|v| v.get("name").and_then(Value::as_str) == Some(name)) {
+            if let Some(slot) = views.get_mut(pos) {
+                *slot = entry;
+            }
+        } else if views.len() < 200 {
+            views.push(entry);
+        }
+        coord_set(s, "coord_views", &json!(views))?;
+        return Ok(json!({ "saved": name, "views": views }));
+    }
+
+    // Delete.
+    if let Some(del) = p.get("delete").and_then(Value::as_str) {
+        views.retain(|v| v.get("name").and_then(Value::as_str) != Some(del));
+        coord_set(s, "coord_views", &json!(views))?;
+        return Ok(json!({ "views": views }));
+    }
+
+    // Restore: apply full state.
+    if let Some(restore_name) = p.get("restore").and_then(Value::as_str) {
+        let view = views.iter().find(|v| v.get("name").and_then(Value::as_str) == Some(restore_name)).cloned();
+        let Some(view) = view else {
+            return Err(EngineError::Other(format!("coordination view '{restore_name}' not found")));
+        };
+
+        // Camera.
+        let center = view
+            .get("center")
+            .and_then(Value::as_array)
+            .map(|a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
+        let height = view.get("height").and_then(Value::as_f64);
+        if let (Some(c), Some(h)) = (center, height) {
+            let _ = s.execute("zoom", &json!({ "mode": "center", "center": c, "height": h }));
+        }
+        if let Some(vd) = arr3(&view, "view_dir") {
+            let _ = s.execute("vpoint", &json!({ "dir": vd }));
+        }
+        if let Some(vs) = view.get("visual_style").and_then(Value::as_str) {
+            let _ = s.execute("vscurrent", &json!({ "style": vs }));
+        }
+
+        // Section box.
+        if let Some(sbox) = view.get("sectionbox") {
+            coord_set(s, "coord_sectionbox", sbox)?;
+        }
+
+        // Coordination mode.
+        if let Some(mode) = view.get("coord_mode") {
+            coord_set(s, "coord_mode", mode)?;
+            let on = mode.get("on").and_then(Value::as_bool).unwrap_or(false);
+            if on {
+                let ghost_opacity = mode.get("ghost_opacity").and_then(Value::as_f64).unwrap_or(0.2);
+                let _ = s.execute("coordination.mode", &json!({ "on": true, "ghost_opacity": ghost_opacity }));
+            }
+        }
+
+        // Colour scheme.
+        if let Some(scheme_name) = view.get("color_scheme").and_then(Value::as_str) {
+            let _ = s.execute("coordination.colors", &json!({ "load": scheme_name }));
+        }
+
+        // Trade visibility.
+        if let Some(trades) = view.get("trades").and_then(Value::as_array) {
+            let d = s.doc_mut()?;
+            for tv in trades.iter().take(200) {
+                let lname = tv.get("layer").and_then(Value::as_str);
+                let on = tv.get("on").and_then(Value::as_bool);
+                if let (Some(lname), Some(on)) = (lname, on)
+                    && let Some(layer) = d.layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(lname))
+                {
+                    layer.on = on;
+                }
+            }
+        }
+
+        coord_set(s, "coord_views", &json!(views))?;
+        return Ok(json!({ "restored": restore_name }));
+    }
+
+    // List.
+    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+        let names: Vec<&str> = views.iter().filter_map(|v| v.get("name").and_then(Value::as_str)).collect();
+        return Ok(json!({ "views": names }));
+    }
+
+    Ok(json!({ "views": views }))
+}
+
+/// Read coordination state as a public helper for the renderer: section box, coordination mode.
+/// Returns `(sbox_on, sbox_min, sbox_max, coord_mode_on, ghost_opacity)`.
+pub fn coord_render_state(d: &Drawing) -> CoordRenderState {
+    let sbox = coord_get(d, "coord_sectionbox");
+    let sbox_on = sbox.get("on").and_then(Value::as_bool).unwrap_or(false);
+    let sbox_min = arr3(&sbox, "min").unwrap_or([f64::NEG_INFINITY; 3]);
+    let sbox_max = arr3(&sbox, "max").unwrap_or([f64::INFINITY; 3]);
+
+    let mode = coord_get(d, "coord_mode");
+    let mode_on = mode.get("on").and_then(Value::as_bool).unwrap_or(false);
+    let ghost_opacity = mode.get("ghost_opacity").and_then(Value::as_f64).unwrap_or(0.2);
+
+    CoordRenderState { sbox_on, sbox_min, sbox_max, mode_on, ghost_opacity }
+}
+
+/// Coordination rendering state read from the drawing.
+#[derive(Clone, Debug, Default)]
+pub struct CoordRenderState {
+    pub sbox_on: bool,
+    pub sbox_min: [f64; 3],
+    pub sbox_max: [f64; 3],
+    pub mode_on: bool,
+    pub ghost_opacity: f64,
+}
+
+impl CoordRenderState {
+    /// Whether a point is inside the section box (or the box is off).
+    pub fn inside_sbox(&self, p: Vec3) -> bool {
+        if !self.sbox_on {
+            return true;
+        }
+        p.x >= self.sbox_min[0]
+            && p.x <= self.sbox_max[0]
+            && p.y >= self.sbox_min[1]
+            && p.y <= self.sbox_max[1]
+            && p.z >= self.sbox_min[2]
+            && p.z <= self.sbox_max[2]
+    }
+
+    /// The 6 section planes of the section box (for clipping), empty if the box is off.
+    pub fn sbox_planes(&self) -> Vec<cadaddy_doc::SectionPlane> {
+        if !self.sbox_on {
+            return Vec::new();
+        }
+        let lo = self.sbox_min;
+        let hi = self.sbox_max;
+        let big = 1e6;
+        vec![
+            // +X face: keep what is below max X (normal = -X, origin at max X).
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new(hi[0], (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0),
+                normal: Vec3::new(-1.0, 0.0, 0.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+            // -X face.
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new(lo[0], (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0),
+                normal: Vec3::new(1.0, 0.0, 0.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+            // +Y face.
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new((lo[0] + hi[0]) / 2.0, hi[1], (lo[2] + hi[2]) / 2.0),
+                normal: Vec3::new(0.0, -1.0, 0.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+            // -Y face.
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new((lo[0] + hi[0]) / 2.0, lo[1], (lo[2] + hi[2]) / 2.0),
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+            // +Z face.
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2]),
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+            // -Z face.
+            cadaddy_doc::SectionPlane {
+                origin: Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2]),
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                width: big, height: big, live: true, name: String::new(),
+            },
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +1017,113 @@ mod tests {
         let v = json!({ "pt": [1.0, 2.0, 3.0] });
         assert_eq!(arr3(&v, "pt"), Some([1.0, 2.0, 3.0]));
         assert_eq!(arr3(&v, "nope"), None);
+    }
+
+    #[test]
+    fn coordination_mode_toggles() {
+        let mut s = Session::new();
+        let r = run_mode(&mut s, &json!({ "on": true, "ghost_opacity": 0.3 }));
+        assert!(r.is_ok());
+        let v = r.as_ref().ok().and_then(|v| v.get("on")).and_then(Value::as_bool).unwrap_or(false);
+        assert!(v, "mode should be on");
+        let opacity = r.as_ref().ok().and_then(|v| v.get("ghost_opacity")).and_then(Value::as_f64).unwrap_or(0.0);
+        assert!((opacity - 0.3).abs() < 0.01);
+
+        // Turn off.
+        let r = run_mode(&mut s, &json!({ "on": false }));
+        assert!(r.is_ok());
+        let v = r.as_ref().ok().and_then(|v| v.get("on")).and_then(Value::as_bool).unwrap_or(true);
+        assert!(!v, "mode should be off");
+    }
+
+    #[test]
+    fn color_scheme_crud() {
+        let mut s = Session::new();
+        // Save.
+        let r = run_colors(&mut s, &json!({
+            "save": { "name": "Test Scheme", "colors": { "Supply": [255, 0, 0], "Return": [0, 0, 255] } }
+        }));
+        assert!(r.is_ok());
+        let saved = r.as_ref().ok().and_then(|v| v.get("saved")).and_then(Value::as_str);
+        assert_eq!(saved, Some("Test Scheme"));
+
+        // List.
+        let r = run_colors(&mut s, &json!({ "list": true }));
+        assert!(r.is_ok());
+        let schemes = r.as_ref().ok().and_then(|v| v.get("schemes")).and_then(Value::as_array);
+        assert_eq!(schemes.map(|a| a.len()), Some(1));
+
+        // Delete.
+        let r = run_colors(&mut s, &json!({ "delete": "Test Scheme" }));
+        assert!(r.is_ok());
+        let r = run_colors(&mut s, &json!({ "list": true }));
+        let schemes = r.as_ref().ok().and_then(|v| v.get("schemes")).and_then(Value::as_array);
+        assert_eq!(schemes.map(|a| a.len()), Some(0));
+    }
+
+    #[test]
+    fn coord_views_save_and_delete() {
+        let mut s = Session::new();
+        let r = run_views(&mut s, &json!({ "save": { "name": "View A" } }));
+        assert!(r.is_ok());
+        let views = r.as_ref().ok().and_then(|v| v.get("views")).and_then(Value::as_array);
+        assert_eq!(views.map(|a| a.len()), Some(1));
+
+        // Delete.
+        let r = run_views(&mut s, &json!({ "delete": "View A" }));
+        assert!(r.is_ok());
+        let views = r.as_ref().ok().and_then(|v| v.get("views")).and_then(Value::as_array);
+        assert_eq!(views.map(|a| a.len()), Some(0));
+    }
+
+    #[test]
+    fn coord_render_state_defaults() {
+        let d = cadaddy_doc::Drawing::new_imperial();
+        let crs = coord_render_state(&d);
+        assert!(!crs.sbox_on);
+        assert!(!crs.mode_on);
+        assert!((crs.ghost_opacity - 0.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn sbox_planes_generates_six_when_on() {
+        let crs = CoordRenderState {
+            sbox_on: true,
+            sbox_min: [-10.0, -10.0, 0.0],
+            sbox_max: [10.0, 10.0, 20.0],
+            mode_on: false,
+            ghost_opacity: 0.2,
+        };
+        let planes = crs.sbox_planes();
+        assert_eq!(planes.len(), 6);
+        // A point inside should pass all planes.
+        let inside = Vec3::new(0.0, 0.0, 10.0);
+        for p in &planes {
+            assert!(p.side(inside) >= 0.0, "inside point should be on kept side");
+        }
+        // A point outside should fail at least one.
+        let outside = Vec3::new(20.0, 0.0, 10.0);
+        assert!(planes.iter().any(|p| p.side(outside) < 0.0), "outside point should be clipped");
+    }
+
+    #[test]
+    fn sbox_planes_empty_when_off() {
+        let crs = CoordRenderState::default();
+        assert!(crs.sbox_planes().is_empty());
+    }
+
+    #[test]
+    fn inside_sbox_check() {
+        let crs = CoordRenderState {
+            sbox_on: true,
+            sbox_min: [0.0, 0.0, 0.0],
+            sbox_max: [10.0, 10.0, 10.0],
+            ..CoordRenderState::default()
+        };
+        assert!(crs.inside_sbox(Vec3::new(5.0, 5.0, 5.0)));
+        assert!(!crs.inside_sbox(Vec3::new(15.0, 5.0, 5.0)));
+        // When off, everything is inside.
+        let off = CoordRenderState::default();
+        assert!(off.inside_sbox(Vec3::new(100.0, 100.0, 100.0)));
     }
 }

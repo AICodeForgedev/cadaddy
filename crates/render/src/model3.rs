@@ -24,7 +24,7 @@ use cadaddy_color::Rgb;
 use cadaddy_doc::{Drawing, EntityKind, EntityStore, Space};
 use cadaddy_geom::{Mat4, Vec3};
 
-use crate::shade::{Line3, Scene, ShadeView, Tri, scene};
+use crate::shade::{Line3, Scene, ShadeView, Tri, scene, scene_clipped};
 
 /// A box in space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -357,6 +357,19 @@ pub const MAX_INSTANCES: usize = 2_000_000;
 /// Build the model of `space` (curves to `tol`, colour 7 for `bg`), `progress` counting the steps
 /// done out of the total stored in `total`.
 pub fn build(d: &Drawing, space: &Space, tol: f64, bg: Rgb, progress: &AtomicUsize, total: &AtomicUsize) -> Model3 {
+    build_clipped(d, space, tol, bg, progress, total, &[])
+}
+
+/// Like [`build`] but with extra clipping planes (e.g. from a coordination section box).
+pub fn build_clipped(
+    d: &Drawing,
+    space: &Space,
+    tol: f64,
+    bg: Rgb,
+    progress: &AtomicUsize,
+    total: &AtomicUsize,
+    extra_planes: &[cadaddy_doc::SectionPlane],
+) -> Model3 {
     let Some(store) = d.space(space) else { return Model3::default() };
     // The blocks referenced from the space, each built once.
     let mut names: Vec<String> = Vec::new();
@@ -377,6 +390,7 @@ pub fn build(d: &Drawing, space: &Space, tol: f64, bg: Rgb, progress: &AtomicUsi
         if b.xref_path.is_some() {
             continue;
         }
+        // Blocks are built without section box clipping (instances are clipped at cull time).
         let full = scene(&with_model(d, b.entities.iter().map(|x| (**x).clone())), &Space::Model, tol, bg);
         // Only blocks with surfaces: flat symbols keep drawing as the plan does.
         if full.tris.is_empty() {
@@ -415,7 +429,8 @@ pub fn build(d: &Drawing, space: &Space, tol: f64, bg: Rgb, progress: &AtomicUsi
         rest.push((**e).clone());
     }
     progress.fetch_add(1, Ordering::Relaxed);
-    let mut base = scene(&with_model(d, rest.into_iter()), &Space::Model, tol, bg);
+    // The base scene is clipped by the section box planes (if any).
+    let mut base = scene_clipped(&with_model(d, rest.into_iter()), &Space::Model, tol, bg, extra_planes);
     base.lighting = Some(crate::light::Lighting::of(d, space));
     let (base, chunks) = chunked(base);
     let mut bounds = bounds_of(&base);
