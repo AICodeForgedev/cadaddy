@@ -2634,3 +2634,11 @@ menu	Modify	Modifikace
 	Reason:	Důvod:
 	Overridden values:	Přepsané hodnoty:
 	No drawing open.	Žádný výkres není otevřen.
+	List Project Rules	Vypsat pravidla projektu
+	Get Project Rule	Získat pravidlo projektu
+	Set Project Rule	Nastavit pravidlo projektu
+	Remove Project Rule	Odebrat pravidlo projektu
+	Preview Project Rule Change	Náhled změny pravidla projektu
+	Project Rules Label	Popisek pravidel projektu
+	Import Project Rules	Importovat pravidla projektu
+	Export Project Rules	Exportovat pravidla projektu

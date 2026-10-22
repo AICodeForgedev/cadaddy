@@ -2537,3 +2537,11 @@
 	Reason:	原因:
 	Overridden values:	被覆盖的值:
 	No drawing open.	没有打开的图形。
+	List Project Rules	列出项目规则
+	Get Project Rule	获取项目规则
+	Set Project Rule	设置项目规则
+	Remove Project Rule	删除项目规则
+	Preview Project Rule Change	预览项目规则更改
+	Project Rules Label	项目规则标签
+	Import Project Rules	导入项目规则
+	Export Project Rules	导出项目规则

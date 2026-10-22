@@ -2661,3 +2661,11 @@ menu	Modify	Ändra
 	Reason:	Anledning:
 	Overridden values:	Åsidosatta värden:
 	No drawing open.	Ingen ritning öppnad.
+	List Project Rules	Lista projektregler
+	Get Project Rule	Hämta projektregel
+	Set Project Rule	Ange projektregel
+	Remove Project Rule	Ta bort projektregel
+	Preview Project Rule Change	Förhandsgranska ändring av projektregel
+	Project Rules Label	Etikett för projektregler
+	Import Project Rules	Importera projektregler
+	Export Project Rules	Exportera projektregler

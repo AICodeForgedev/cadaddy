@@ -2660,3 +2660,11 @@
 	Reason:	Razón:
 	Overridden values:	Valores anulados:
 	No drawing open.	Ningún dibujo abierto.
+	List Project Rules	Listar reglas del proyecto
+	Get Project Rule	Obtener regla del proyecto
+	Set Project Rule	Establecer regla del proyecto
+	Remove Project Rule	Quitar regla del proyecto
+	Preview Project Rule Change	Vista previa del cambio de regla
+	Project Rules Label	Etiqueta de reglas del proyecto
+	Import Project Rules	Importar reglas del proyecto
+	Export Project Rules	Exportar reglas del proyecto

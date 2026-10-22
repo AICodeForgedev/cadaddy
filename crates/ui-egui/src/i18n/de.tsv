@@ -2470,3 +2470,11 @@
 	Reason:	Grund:
 	Overridden values:	Überschriebene Werte:
 	No drawing open.	Keine Zeichnung geöffnet.
+	List Project Rules	Projektregeln auflisten
+	Get Project Rule	Projektregel abrufen
+	Set Project Rule	Projektregel festlegen
+	Remove Project Rule	Projektregel entfernen
+	Preview Project Rule Change	Änderung der Projektregel anzeigen
+	Project Rules Label	Bezeichnung der Projektregeln
+	Import Project Rules	Projektregeln importieren
+	Export Project Rules	Projektregeln exportieren

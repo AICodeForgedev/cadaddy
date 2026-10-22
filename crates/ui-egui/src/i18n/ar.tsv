@@ -2649,3 +2649,11 @@ menu	View	عرض
 	Reason:	السبب:
 	Overridden values:	القيم المتجاوزة:
 	No drawing open.	لا يوجد رسم مفتوح.
+	List Project Rules	عرض قواعد المشروع
+	Get Project Rule	جلب قاعدة مشروع
+	Set Project Rule	تعيين قاعدة مشروع
+	Remove Project Rule	إزالة قاعدة مشروع
+	Preview Project Rule Change	معاينة تغيير قاعدة المشروع
+	Project Rules Label	تسمية قواعد المشروع
+	Import Project Rules	استيراد قواعد المشروع
+	Export Project Rules	تصدير قواعد المشروع

@@ -2654,3 +2654,11 @@ menu	Modify	수정
 	Reason:	이유:
 	Overridden values:	재정의된 값:
 	No drawing open.	열린 도면이 없습니다.
+	List Project Rules	프로젝트 규칙 목록
+	Get Project Rule	프로젝트 규칙 가져오기
+	Set Project Rule	프로젝트 규칙 설정
+	Remove Project Rule	프로젝트 규칙 제거
+	Preview Project Rule Change	프로젝트 규칙 변경 미리 보기
+	Project Rules Label	프로젝트 규칙 레이블
+	Import Project Rules	프로젝트 규칙 불러오기
+	Export Project Rules	프로젝트 규칙 내보내기
