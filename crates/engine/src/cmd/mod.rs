@@ -12,6 +12,7 @@ pub mod autospec;
 pub mod bimprops;
 pub mod blockdetect;
 pub(crate) mod blocks;
+pub mod bom;
 pub mod bspec;
 pub mod ceilings;
 pub mod classic;
@@ -304,6 +305,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(levels::specs());
+        v.extend(bom::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
         v.extend(gear::specs());
