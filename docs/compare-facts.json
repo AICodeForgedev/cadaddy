@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1033,
-    "count": 1033,
+    "callableAsJson": 1034,
+    "count": 1034,
     "ids": [
       "-attedit",
       "-block",
@@ -837,6 +837,7 @@
       "share",
       "sheetset",
       "showurls",
+      "site.takeoff",
       "slice",
       "snap",
       "soldraw",
@@ -1120,7 +1121,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 37,
+    "count": 38,
     "tools": [
       "bim_job",
       "bim_spec_import",
@@ -1154,6 +1155,7 @@
       "script",
       "select",
       "set_variable",
+      "site_takeoff",
       "stairs",
       "switch_drawing",
       "undo",
