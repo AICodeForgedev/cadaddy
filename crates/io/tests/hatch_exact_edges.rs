@@ -113,6 +113,29 @@ fn elliptical_and_spline_edges_roundtrip_in_dwg() {
     check(&back, &d);
 }
 
+/// CADaddy's own DWG writer, every version: a spline edge followed by another edge (before
+/// R2010 a spline edge has no fit data, and the fit point count in its groups was taken for the
+/// next edge's type, so the hatch didn't read back; in an R2000 file the objects after it in
+/// model space went too).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn spline_edges_roundtrip_through_the_native_writer_in_every_version() {
+    let mut d = sample();
+    d.add(
+        &Space::Model,
+        Common::default(),
+        EntityKind::Line(Line { a: cadaddy_geom::Vec3::new(0.0, 20.0, 0.0), b: cadaddy_geom::Vec3::new(10.0, 20.0, 0.0) }),
+    )
+    .expect("add");
+    for v in ["AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032"] {
+        let (bytes, _) = cadaddy_io::dwg_write::write(&d, v).unwrap_or_else(|e| panic!("{v}: {e}"));
+        let (back, report) = cadaddy_io::dwg_read::read(&bytes).unwrap_or_else(|e| panic!("{v}: {e}"));
+        assert!(report.failed.is_empty(), "{v}: {:?}", report.failed);
+        assert_eq!(back.model.iter().count(), d.model.iter().count(), "{v}");
+        check(&back, &d);
+    }
+}
+
 #[test]
 fn a_loop_with_a_broken_curve_keeps_its_points_only() {
     // A spline edge with too few control points: the loop reads, without an exact edge list.
