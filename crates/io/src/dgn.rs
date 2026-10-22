@@ -17,7 +17,8 @@
 //!   strings, ellipses and arcs (circles and arcs when round), texts and text nodes, B-spline
 //!   curves (poles, order, knots, weights);
 //! - complex chains and shapes → one polyline (round arcs as bulges);
-//! - cells → blocks named by the cell (its elements placed back by the cell's transform) and a
+//! - cells → blocks named by the cell (its elements placed back by the cell's transform; copies of
+//!   one cell share one block, a different body under the same name gets `NAME_2`…) and a
 //!   reference where it was placed;
 //! - the rest (3D surfaces and solids, dimensions, shared cells, tags, raster…) is counted in the
 //!   drawing's read notes.
@@ -38,8 +39,11 @@ use crate::{IoError, Result};
 const MAX_FILE: usize = 512 << 20;
 /// Most elements read.
 const MAX_ELEMENTS: usize = 4_000_000;
-/// Deepest nesting of cells and complex elements.
+/// Deepest nesting of cells and text nodes (the elements that hold others).
 const MAX_DEPTH: usize = 8;
+/// Most earlier blocks of one cell name a cell's body is compared with before it gets a block
+/// of its own (keeps a file of many different same-named cells linear).
+const MAX_BODIES: usize = 64;
 /// Most vertices a written line string or shape holds (MicroStation's limit).
 const MAX_VERTICES: usize = 101;
 
@@ -213,6 +217,10 @@ struct Ctx {
     skipped: BTreeMap<String, usize>,
     levels: std::collections::BTreeSet<u8>,
     styles: std::collections::BTreeSet<u8>,
+    /// The blocks made for cells, by cell name: each block's name and its body as compared.
+    cells: BTreeMap<String, Vec<(String, Vec<serde_json::Value>)>>,
+    /// The next `NAME_n` suffix to try, by cell name.
+    suffix: BTreeMap<String, usize>,
 }
 
 impl Ctx {
@@ -335,7 +343,7 @@ fn text_kind(ctx: &Ctx, d: &[u8]) -> Option<EntityKind> {
     let n = usize::from(d.get(n_at).copied().unwrap_or(0));
     let raw = d.get(n_at + 2..(n_at + 2 + n).min(d.len())).unwrap_or(&[]);
     let value: String = if raw.starts_with(&[0xFF, 0xFD]) {
-        let units: Vec<u16> = raw.get(2..).unwrap_or(&[]).chunks_exact(2).map(|c| u16::from(c[0]) | u16::from(c[1]) << 8).collect();
+        let units: Vec<u16> = raw.get(2..).unwrap_or(&[]).as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         String::from_utf16_lossy(&units).trim_end_matches('\0').to_string()
     } else {
         raw.iter().take_while(|b| **b != 0).map(|b| char::from(*b)).collect()
@@ -464,6 +472,50 @@ fn cell_transform(ctx: &Ctx, d: &[u8]) -> Option<(Vec3, [f64; 4])> {
     Some((ctx.pt(d, 84)?, [t(68)?, t(72)?, t(76)?, t(80)?]))
 }
 
+/// Whether two bodies are the same: numbers within `tol`, whole numbers (colours, flags) and
+/// everything else exactly.
+fn same_value(a: &serde_json::Value, b: &serde_json::Value, tol: f64) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) if x.is_f64() || y.is_f64() => x.as_f64().zip(y.as_f64()).is_some_and(|(x, y)| (x - y).abs() <= tol),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_value(x, y, tol)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same_value(v, w, tol))),
+        _ => a == b,
+    }
+}
+
+/// The block for a cell named `base` with `members` (in the cell's own coordinates): an earlier
+/// block of that name with the same body (within `tol`), else a new block `base`, `base_2`, …
+/// under a name no block has yet.
+fn cell_block(ctx: &mut Ctx, d: &mut Drawing, base: &str, members: Vec<(Common, EntityKind)>, tol: f64) -> String {
+    let body: Vec<serde_json::Value> = members.iter().filter_map(|m| serde_json::to_value(m).ok()).collect();
+    let earlier = ctx.cells.get(base).map(Vec::as_slice).unwrap_or(&[]);
+    let start = earlier.len().saturating_sub(MAX_BODIES);
+    if let Some((name, _)) = earlier
+        .get(start..)
+        .unwrap_or(&[])
+        .iter()
+        .find(|(_, b)| b.len() == body.len() && body.len() == members.len() && b.iter().zip(&body).all(|(x, y)| same_value(x, y, tol)))
+    {
+        return name.clone();
+    }
+    let mut n = ctx.suffix.get(base).copied().unwrap_or(1);
+    let mut name = if n == 1 { base.to_string() } else { format!("{base}_{n}") };
+    while d.blocks.contains_key(&name) {
+        n += 1;
+        name = format!("{base}_{n}");
+    }
+    ctx.suffix.insert(base.to_string(), n + 1);
+    let mut blk = Block::new(&name);
+    for (c, k) in members {
+        let h = d.new_handle();
+        blk.entities.push(Entity { handle: h, common: c, kind: k });
+    }
+    d.blocks.insert(name.clone(), std::sync::Arc::new(blk));
+    ctx.cells.entry(base.to_string()).or_default().push((name.clone(), body));
+    name
+}
+
 /// One element (and the members of a group it heads) as objects, appended to `out`; returns the
 /// index of the next element to read.
 fn take(ctx: &mut Ctx, d: &mut Drawing, raws: &[Raw], i: usize, depth: usize, out: &mut Vec<(Common, EntityKind)>) -> usize {
@@ -483,6 +535,12 @@ fn take(ctx: &mut Ctx, d: &mut Drawing, raws: &[Raw], i: usize, depth: usize, ou
     // symbology, a cell library header): no layer of their own.
     if matches!(ty, 1 | 5 | 8 | 9 | 10) {
         return i + 1;
+    }
+    // Cells and text nodes are the elements that hold others (and so recurse): their nesting is
+    // capped here, once, for both.
+    if depth >= MAX_DEPTH && matches!(ty, 2 | 7) {
+        ctx.skip(if ty == 2 { "cells nested too deep" } else { "text nodes nested too deep" });
+        return members_end(raws, i, r.group_end()).max(i + 1);
     }
     let common = ctx.common(r);
     match ty {
@@ -565,10 +623,6 @@ fn take(ctx: &mut Ctx, d: &mut Drawing, raws: &[Raw], i: usize, depth: usize, ou
         }
         2 => {
             let end = members_end(raws, i, r.group_end());
-            if depth >= MAX_DEPTH {
-                ctx.skip("cells nested too deep");
-                return end.max(i + 1);
-            }
             let mut members = Vec::new();
             let mut j = i + 1;
             while j < end {
@@ -587,21 +641,25 @@ fn take(ctx: &mut Ctx, d: &mut Drawing, raws: &[Raw], i: usize, depth: usize, ou
             let inv = [t[3] / det, -t[1] / det, -t[2] / det, t[0] / det];
             let m_inv = Mat3 { a: inv[0], b: inv[2], c: inv[1], d: inv[3], e: 0.0, f: 0.0 }.then_before(to_local);
             let base = if name.is_empty() { "CELL".to_string() } else { name };
-            let mut block_name = base.clone();
-            let mut n = 1;
-            while d.blocks.contains_key(&block_name) && n < 100_000 {
-                n += 1;
-                block_name = format!("{base}_{n}");
-            }
-            let mut blk = Block::new(&block_name);
-            for (c, mut k) in members {
-                k.transform(&m_inv);
-                let h = d.new_handle();
-                blk.entities.push(Entity { handle: h, common: c, kind: k });
-            }
-            d.blocks.insert(block_name.clone(), std::sync::Arc::new(blk));
+            let members: Vec<(Common, EntityKind)> = members
+                .into_iter()
+                .map(|(c, mut k)| {
+                    k.transform(&m_inv);
+                    (c, k)
+                })
+                .collect();
             let sx = (t[0] * t[0] + t[2] * t[2]).sqrt();
             let sy = (t[1] * t[1] + t[3] * t[3]).sqrt() * det.signum();
+            // Copies of one cell are one block: the same body within what the file can tell apart
+            // (a UOR, back in the cell's own units, and the fixed-point matrix's precision).
+            let size = members
+                .iter()
+                .map(|(c, k)| cadaddy_doc::entity_bounds(d, &Entity { handle: Default::default(), common: c.clone(), kind: k.clone() }, 1))
+                .fold(Bounds2::EMPTY, |a, b| a.union(&b));
+            let size = if size.is_empty() { 0.0 } else { (size.max - size.min).len() };
+            let tol = (1e-5 * size).max(2.0 * ctx.scale / sx.min(sy.abs()).max(1e-9)).max(1e-9);
+            let tol = if tol.is_finite() { tol } else { 1e-9 };
+            let block_name = cell_block(ctx, d, &base, members, tol);
             let ins = cadaddy_doc::Insert {
                 block: block_name,
                 insert: origin,
@@ -659,6 +717,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         skipped: BTreeMap::new(),
         levels: Default::default(),
         styles: Default::default(),
+        cells: BTreeMap::new(),
+        suffix: BTreeMap::new(),
     };
     let mut d = Drawing::new_imperial();
     // The TCB: dimension, units, global origin.
