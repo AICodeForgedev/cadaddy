@@ -240,6 +240,8 @@ fn sheets_export_to_pdf_and_dwg() {
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
     let mut s = session(&t);
