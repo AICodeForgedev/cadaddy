@@ -9,18 +9,32 @@
 //! a **scope** (`in_contract`, `by_others`, `nic`, `ofci`, `alternate:<n>`); nothing undecided
 //! reaches a total.
 //!
+//! Labor is the book rate at the line's difficulty tier, or the production model's drivers
+//! (book rates blended with field observations), times the condition factors on the line
+//! (`labor`). Dated prices escalate to `today` by their index. The job's tools, equipment and
+//! setup are priced from what the work implies (`equipment`). Totals break down by level, trade
+//! and system, export to CSV/XLSX and draft a bid summary (`outputs`).
+//!
 //! - `estimate.import {folder}`: the baseline (`item_labor_units.csv`, `assemblies.csv`,
-//!   `assembly_parts.csv`, `prices.csv`, `rates.json`, `benchmarks.json`).
-//! - `estimate.set_price {item, unit, material, labor_hours? | labor_dollars?, date, source}`.
+//!   `assembly_parts.csv`, `prices.csv`, `rates.json`, `benchmarks.json`, `factors.csv`,
+//!   `production_model.json`, `field_observations.csv`, `indexes.csv`, `tool_rules.json`,
+//!   `price_history.csv`).
+//! - `estimate.set_price {item, unit, material, labor_hours? | labor_dollars?, date, source, index?}`.
 //! - `estimate.set_assembly {lines? | trade?/category?/item?, assembly, reason, citation?}`.
 //! - `estimate.set_scope {lines? | trade?/category?/item?, scope, reason, citation?}`.
+//! - `estimate.set_factor {lines? | trade?/category?/item?, factor? | tier?, reason, remove?}`.
+//! - `estimate.observe {driver, context?, qty, hours, date, source}`: a field observation; the
+//!   driver's rate is blended again.
 //! - `estimate.settings {tax_pct?, overhead_pct?, profit_pct?, contingency_pct?, bond_pct?,
-//!   crew_rate?, today?, stale_days?}`.
+//!   crew_rate?, today?, stale_days?, tier?, context?, duration_days?, peak_crew?, high_work_ft?,
+//!   gross_sf?}`.
 //! - `estimate.query {trade?, category?, status?, limit?, cursor?}`: priced lines, summary first.
-//! - `estimate.status`: totals by scope and the validator's findings, each with a fix.
+//! - `estimate.status`: totals (by scope, phase, level, trade, system) and the validator's
+//!   findings, each with a fix.
 //! - `estimate.explain {line? | total?}`: a number traced to its math, its lines and elements.
 //! - `estimate.compare {assembly?: {from, to}, scope?: {line: scope}, settings?}`: a what-if
 //!   against the current estimate.
+//! - `estimate.export {path, format?, columns?}` and `estimate.bid_summary {}`: the human outputs.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -28,6 +42,10 @@ use std::collections::BTreeMap;
 use super::bspec::current;
 use super::*;
 use crate::{Result, Session};
+
+mod equipment;
+mod labor;
+mod outputs;
 
 /// Rows read from one baseline file, at most (hostile files).
 const MAX_ROWS: usize = 200_000;
@@ -39,29 +57,39 @@ const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("estimate.import", "Import Estimating Baseline", run_import)
-            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json), label?: \"public data\"|\"baseline\" (default baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
+            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json, factors.csv, production_model.json, field_observations.csv, indexes.csv, tool_rules.json, price_history.csv), label?: \"public data\"|\"baseline\" (default baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
         CommandSpec::new("estimate.import_p405", "Import P-405 Labor Tables", run_import_p405)
             .params("{file: path to p405_labor_units.csv (all 735 rows), private_folder?: path for the private pack (electrical rows go here)} → {public_rows, private_rows, skipped, notes}"),
         CommandSpec::new("estimate.set_price", "Set Estimate Price", run_set_price).params(
-            "{item, size?, unit: each|ft|lb|sq ft…, material: dollars per unit, labor_hours?: per unit, labor_dollars?: per unit (÷ crew rate), date: YYYY-MM-DD, source} → {price}",
+            "{item, size?, unit: each|ft|lb|sq ft…, material: dollars per unit, labor_hours?: per unit, labor_dollars?: per unit (÷ crew rate), date: YYYY-MM-DD, source, index?: name in indexes.csv (escalates the price to today)} → {price}",
         ),
         CommandSpec::new("estimate.set_assembly", "Set Estimate Assembly", run_set_assembly)
             .params("{lines?: [key] | trade?, category?, item?, assembly, reason, citation?} → {lines}"),
         CommandSpec::new("estimate.set_scope", "Set Estimate Scope", run_set_scope)
             .params("{lines?: [key] | trade?, category?, item?, scope: in_contract|by_others|nic|ofci|alternate:<n>, reason, citation?} → {lines}"),
         CommandSpec::new("estimate.settings", "Estimate Settings", run_settings)
-            .params("{tax_pct?, overhead_pct?, profit_pct?, contingency_pct?, bond_pct?, crew_rate?, today?: YYYY-MM-DD, stale_days?} → {settings}"),
+            .params("{tax_pct?, overhead_pct?, profit_pct?, contingency_pct?, bond_pct?, crew_rate?, today?: YYYY-MM-DD, stale_days?, tier?: normal|difficult|very_difficult (the job's labor tier), context?: production-model context, duration_days?, peak_crew?, high_work_ft?: work this high needs a lift (14), gross_sf?: building area for hours/SF} → {settings}"),
+        CommandSpec::new("estimate.set_factor", "Set Estimate Factor", run_set_factor)
+            .params("{lines?: [key] | trade?, category?, item?, factor?: a factor in factors.csv (height, ceiling, exposure, wall, floor, learning_curve), tier?: normal|difficult|very_difficult, reason, citation?, remove?: bool} → {lines, factor?, tier?}"),
+        CommandSpec::new("estimate.observe", "Record Field Observation", run_observe)
+            .params("{driver: a production-model driver, context?, qty: units installed, hours: labor hours they took, date: YYYY-MM-DD, source} → {driver, context, before, after, observations}"),
         CommandSpec::new("estimate.query", "Query Estimate", run_query)
             .params("{trade?, category?, status?: priced|unpriced|undecided|error, limit?, cursor?} → {summary, lines: [{key, item, size, unit, qty, material, labor_hours, labor_cost, cost, scope, status, issues}], next?}")
             .noundo(),
         CommandSpec::new("estimate.status", "Estimate Status", run_status)
-            .params("{} → {totals: {direct, tax, overhead, profit, contingency, bond, total, labor_hours}, by_scope, alternates, findings: [{kind, line?, message, fix}], ok}")
+            .params("{} → {totals: {material, labor, labor_hours, direct, tax, overhead, profit, contingency, bond, total}, labor_by_phase, by_scope, alternates, by_level, by_trade, by_system, findings: [{kind, line?, message, fix}], ok, summary}")
             .noundo(),
         CommandSpec::new("estimate.explain", "Explain Estimate Number", run_explain)
             .params("{line?: key | total?: true} → {value, math: [steps], lines?, elements?}")
             .noundo(),
         CommandSpec::new("estimate.compare", "Compare Estimate What-If", run_compare)
             .params("{assembly?: {from, to}, scope?: {key: scope}, settings?: {…}} → {now, what_if, delta}")
+            .noundo(),
+        CommandSpec::new("estimate.export", "Export Estimate", run_export)
+            .params("{path: .xlsx or .csv file, format?: xlsx|csv (from the extension), columns?: [key|trade|category|item|size|unit|qty|net|level|material|labor_hours|labor_cost|cost|total|scope|status|via]} → {path, lines, total, columns}")
+            .noundo(),
+        CommandSpec::new("estimate.bid_summary", "Estimate Bid Summary", run_bid_summary)
+            .params("{} → {total, base_bid: {by_trade}, alternates, assumptions, clarifications, exclusions, open_findings, text}")
             .noundo(),
     ]
 }
@@ -184,16 +212,53 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         if num(&r, "labor_dollars").is_some() && crew.is_none() {
             notes.push(format!("prices: {item} has labor in dollars but rates.json has no crew_rate"));
         }
-        prices.push(json!({ "item": item, "size": r.get("size").cloned().unwrap_or_default(), "unit": r.get("unit").cloned().unwrap_or_default(), "material": num(&r, "material"), "labor_hours": hours, "date": r.get("date").cloned().unwrap_or_default(), "source": r.get("source").cloned().unwrap_or_else(|| "baseline".into()) }));
+        let mut row = json!({ "item": item, "size": r.get("size").cloned().unwrap_or_default(), "unit": r.get("unit").cloned().unwrap_or_default(), "material": num(&r, "material"), "labor_hours": hours, "date": r.get("date").cloned().unwrap_or_default(), "source": r.get("source").cloned().unwrap_or_else(|| "baseline".into()) });
+        if let Some(ix) = r.get("index").filter(|x| !x.is_empty()) {
+            row["index"] = json!(ix);
+        }
+        prices.push(row);
     }
     let benchmarks: Value = read("benchmarks.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    let json_file = |name: &str, notes: &mut Vec<String>| -> Value {
+        match read(name).map(|t| serde_json::from_str::<Value>(&t)) {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => {
+                notes.push(format!("{name}: not JSON ({e})"));
+                json!({})
+            }
+            None => json!({}),
+        }
+    };
+    let factors = read("factors.csv").map(|t| labor::read_factors(&t, &mut notes)).unwrap_or_default();
+    let production = labor::read_production(&json_file("production_model.json", &mut notes), &mut notes);
+    let observations = read("field_observations.csv").map(|t| labor::read_observations(&t, &mut notes)).unwrap_or_default();
+    let indexes = read("indexes.csv").map(|t| labor::read_indexes(&t, &mut notes)).unwrap_or_default();
+    let tool_rules = equipment::read_rules(&json_file("tool_rules.json", &mut notes), &mut notes);
+    let history: Vec<Value> = read("price_history.csv")
+        .map(|t| csv_rows(&t))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| {
+            let item = r.get("item").filter(|i| !i.is_empty())?;
+            Some(json!({ "item": item, "size": r.get("size").cloned().unwrap_or_default(), "unit": r.get("unit").cloned().unwrap_or_default(), "material": num(r, "material")?, "date": r.get("date").cloned().unwrap_or_default(), "source": r.get("source").cloned().unwrap_or_default() }))
+        })
+        .collect();
     let label = str_param(p, "label").unwrap_or("baseline").to_string();
-    let counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "label": label, "notes": notes });
+    let counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "factors": factors.len(), "drivers": production.len(), "observations": observations.len(), "indexes": indexes.len(), "tool_rules": tool_rules.len(), "history": history.len(), "label": label, "notes": notes });
     baseline.insert("label".into(), json!(label));
     baseline.insert("items".into(), Value::Object(items));
     baseline.insert("assemblies".into(), Value::Object(assemblies));
     baseline.insert("prices".into(), Value::Array(prices));
     baseline.insert("benchmarks".into(), benchmarks);
+    baseline.insert("factors".into(), Value::Object(factors));
+    baseline.insert("production".into(), Value::Array(production));
+    baseline.insert("observations".into(), Value::Array(observations));
+    baseline.insert("indexes".into(), Value::Object(indexes));
+    baseline.insert("tool_rules".into(), Value::Array(tool_rules));
+    baseline.insert("history".into(), Value::Array(history));
+    if let Some(m) = rates.get("tier_multipliers").filter(|m| m.is_object()) {
+        baseline.insert("tier_multipliers".into(), m.clone());
+    }
     st.insert("baseline".into(), Value::Object(baseline));
     if let (Some(c), Some(set)) = (crew, obj(&mut st, "settings")) {
         set.insert("crew_rate".into(), json!(c));
@@ -297,10 +362,22 @@ fn run_set_price(s: &mut Session, p: &Value) -> Result<Value> {
     let crew = setting(&st, "crew_rate", 0.0);
     let hours = p["labor_hours"].as_f64().or_else(|| p["labor_dollars"].as_f64().filter(|_| crew > 0.0).map(|d| d / crew));
     let size = str_param(p, "size").unwrap_or_default();
-    let price = json!({ "item": item, "size": size, "unit": unit, "material": material, "labor_hours": hours, "date": date, "source": source });
+    let mut price = json!({ "item": item, "size": size, "unit": unit, "material": material, "labor_hours": hours, "date": date, "source": source });
+    if let Some(ix) = str_param(p, "index").filter(|x| !x.trim().is_empty()) {
+        price["index"] = json!(ix);
+    }
+    let mut replaced: Vec<Value> = Vec::new();
     if let Some(a) = obj(&mut st, "baseline").and_then(|base| base.entry("prices").or_insert_with(|| json!([])).as_array_mut()) {
-        a.retain(|x| !(x["item"].as_str() == Some(item) && x["size"].as_str().unwrap_or_default() == size));
+        let same = |x: &Value| x["item"].as_str() == Some(item) && x["size"].as_str().unwrap_or_default() == size;
+        replaced = a.iter().filter(|x| same(x)).cloned().collect();
+        a.retain(|x| !same(x));
         a.push(price.clone());
+    }
+    // A replaced price becomes history (the validator compares new prices with it).
+    if let Some(h) = obj(&mut st, "baseline").and_then(|base| base.entry("history").or_insert_with(|| json!([])).as_array_mut()) {
+        h.extend(replaced.into_iter().filter(|x| x["material"].as_f64().is_some()));
+        let over = h.len().saturating_sub(MAX_ROWS);
+        h.drain(..over);
     }
     store(s, sp, st)?;
     Ok(json!({ "price": price }))
@@ -360,7 +437,19 @@ fn run_set_scope(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, mut st) = state(s, "estimate.settings")?;
     let Some(set) = obj(&mut st, "settings") else { return Err(bad("estimate.settings", "no settings")) };
-    for k in ["tax_pct", "overhead_pct", "profit_pct", "contingency_pct", "bond_pct", "crew_rate", "stale_days"] {
+    for k in [
+        "tax_pct",
+        "overhead_pct",
+        "profit_pct",
+        "contingency_pct",
+        "bond_pct",
+        "crew_rate",
+        "stale_days",
+        "duration_days",
+        "peak_crew",
+        "high_work_ft",
+        "gross_sf",
+    ] {
         if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
             let v = v
                 .as_f64()
@@ -374,6 +463,15 @@ fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad("estimate.settings", "`today` is YYYY-MM-DD"));
         }
         set.insert("today".into(), json!(d));
+    }
+    if let Some(tier) = str_param(p, "tier") {
+        if !labor::TIERS.contains(&tier) {
+            return Err(bad("estimate.settings", "`tier` is normal, difficult or very_difficult"));
+        }
+        set.insert("tier".into(), json!(tier));
+    }
+    if let Some(c) = str_param(p, "context") {
+        set.insert("context".into(), json!(c.trim().chars().take(200).collect::<String>()));
     }
     let out = Value::Object(set.clone());
     store(s, sp, st)?;
@@ -410,16 +508,29 @@ pub(super) struct Priced {
     pub(super) scope: Option<String>,
     pub(super) via: String,
     pub(super) issues: Vec<(&'static str, String, String)>,
+    /// How the material price was reached (escalation, rental periods).
+    pub(super) material_steps: Vec<String>,
+    /// How the labor rate was reached (tier, drivers, factors).
+    pub(super) labor_steps: Vec<String>,
+    /// Labor hours of the line by production phase.
+    pub(super) phases: Vec<(String, f64)>,
 }
 
 /// Price every BOM line from the state; `what_if` overrides assemblies, scopes and settings.
 pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec<Priced>, f64)> {
     let bom = s.execute("bim.bom", &json!({}))?;
+    Ok(price_lines(st, &bom))
+}
+
+/// Price the lines of a BOM (`bim.bom`'s result).
+fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let lines = bom["lines"].as_array().cloned().unwrap_or_default();
     let crew = setting(st, "crew_rate", 0.0);
-    let today = st.get("settings").and_then(|x| x["today"].as_str()).and_then(parse_date);
+    let today_str = st.get("settings").and_then(|x| x["today"].as_str()).unwrap_or_default().to_string();
+    let today = parse_date(&today_str);
     let stale = setting(st, "stale_days", 365.0);
     let base = st.get("baseline").cloned().unwrap_or(json!({}));
+    let drivers = labor::drivers(st, &base);
     let prices: Vec<Value> = base["prices"].as_array().cloned().unwrap_or_default();
     let find_price = |item: &str, size: &str| -> Option<&Value> {
         prices
@@ -443,7 +554,8 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
         let mut pr = Priced { key: key.clone(), line: l.clone(), qty, net, unit: unit.clone(), ..Priced::default() };
         pr.scope = st.get("scope").and_then(|m| m.get(&key)).and_then(|x| x["scope"].as_str()).map(String::from);
         let assembly = st.get("map").and_then(|m| m.get(&key)).and_then(|x| x["assembly"].as_str()).map(String::from);
-        let check_price = |p: &Value, issues: &mut Vec<(&'static str, String, String)>, what: &str| -> Option<(f64, Option<f64>)> {
+        type Issues = Vec<(&'static str, String, String)>;
+        let check_price = |p: &Value, issues: &mut Issues, steps: &mut Vec<String>, what: &str| -> Option<(f64, Option<f64>)> {
             let pu = p["unit"].as_str().unwrap_or_default();
             // A part's unit is its own; a line's price must be in the line's unit.
             if what == "line" && !pu.eq_ignore_ascii_case(&unit) {
@@ -467,8 +579,22 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
                     "get a current quote".into(),
                 ));
             }
-            Some((m.unwrap_or(0.0), p["labor_hours"].as_f64()))
+            let item = p["item"].as_str().unwrap_or_default();
+            if let Some(msg) = m.and_then(|m| labor::off_history(&base, item, p["size"].as_str().unwrap_or_default(), m)) {
+                issues.push(("price_off_history", msg, "confirm the quote with the supplier, or correct it (estimate.set_price)".into()));
+            }
+            let mut m = m.unwrap_or(0.0);
+            match labor::escalation(&base, today.map(|t| (t, today_str.as_str())), p) {
+                Ok(Some((ratio, text))) => {
+                    steps.push(format!("{item}: ${m:.2} {text} = ${:.4}", m * ratio));
+                    m *= ratio;
+                }
+                Ok(None) => {}
+                Err(e) => issues.push(("no_index", e, "add the index's values to indexes.csv (or drop the price's index)".into())),
+            }
+            Some((m, p["labor_hours"].as_f64()))
         };
+        let mut book: Option<f64> = None;
         match assembly.as_deref().and_then(|a| base["assemblies"].get(a).map(|x| (a, x))) {
             Some((a, asm)) => {
                 pr.via = format!("assembly {a}");
@@ -485,7 +611,7 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
                     for part in asm["parts"].as_array().into_iter().flatten() {
                         let item = part["item"].as_str().unwrap_or_default();
                         let q = part["qty"].as_f64().unwrap_or(1.0);
-                        match find_price(item, "").and_then(|p| check_price(p, &mut pr.issues, "part")) {
+                        match find_price(item, "").and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part")) {
                             Some((m, _)) => mat += q * m,
                             None => missing.push(item.to_string()),
                         }
@@ -498,7 +624,7 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
                         ));
                     }
                     pr.material_unit = Some(mat);
-                    pr.labor_unit_hours = asm["labor_hours"].as_f64();
+                    book = asm["labor_hours"].as_f64();
                 }
             }
             None => {
@@ -507,9 +633,9 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
                 match find_price(item, size) {
                     Some(p) => {
                         pr.via = format!("price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default());
-                        if let Some((m, h)) = check_price(p, &mut pr.issues, "line") {
+                        if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
                             pr.material_unit = Some(m);
-                            pr.labor_unit_hours = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                            book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
                         }
                     }
                     None => pr.issues.push((
@@ -519,6 +645,12 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
                     )),
                 }
             }
+        }
+        if pr.material_unit.is_some() {
+            let (h, steps, phases) = labor::line_labor(st, &base, &drivers, &key, l, book);
+            pr.labor_unit_hours = h;
+            pr.labor_steps = steps;
+            pr.phases = phases.into_iter().map(|(ph, u)| (ph, u * net)).collect();
         }
         if pr.material_unit.is_some() && pr.labor_unit_hours.is_none() {
             pr.issues.push(("missing_labor", "no labor per unit".into(), "add labor hours or dollars to the price or assembly".into()));
@@ -539,7 +671,122 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
             pr.issues.push(("duplicate", "counted on more than one line".into(), "check the takeoff for double counting".into()));
         }
     }
-    Ok((out, crew))
+    (out, crew)
+}
+
+/// The whole job priced: the BOM's lines, the job's equipment, tools and setup, and the
+/// findings that aren't one line's (missing equipment, the spec check, open model validation).
+pub(super) struct Job {
+    pub(super) priced: Vec<Priced>,
+    pub(super) crew: f64,
+    pub(super) findings: Vec<Value>,
+    /// Per line key, its net quantity by level (for the by-level breakdown).
+    pub(super) levels: BTreeMap<String, Vec<(String, f64)>>,
+    pub(super) level_count: usize,
+}
+
+pub(super) fn price_job(s: &mut Session, st: &Map<String, Value>, cmd: &str, with_levels: bool) -> Result<Job> {
+    let bom = s.execute("bim.bom", &json!({}))?;
+    let (mut priced, crew) = price_lines(st, &bom);
+    let (sp, _) = current(s, cmd)?;
+    let base = st.get("baseline").cloned().unwrap_or(json!({}));
+    let facts = equipment::facts(&sp, st, &priced);
+    let required = bom["required"].as_array().cloned().unwrap_or_default();
+    let (eq, mut findings) = equipment::lines(st, &base, &facts, &required, &priced);
+    priced.extend(eq);
+    // The documents' requirements with no line (the BOM's spec check).
+    for c in bom["spec_check"].as_array().into_iter().flatten().take(1_000) {
+        findings.push(json!({
+            "kind": "spec_unmatched",
+            "message": format!("{}: {} ({})", c["item"].as_str().unwrap_or_default(), c["detail"].as_str().unwrap_or_default(), c["issue"].as_str().unwrap_or_default()),
+            "fix": "add the line the specification requires to the model or takeoff, or record why it isn't needed (bim.bom waive)",
+        }));
+    }
+    // The print validator's failures still open: the quantities may be wrong.
+    if sp.prints.is_some()
+        && let Ok(v) = s.execute("bim.validate", &json!({ "limit": 5 }))
+        && let Some(n) = v["total"].as_u64().filter(|n| *n > 0)
+    {
+        let first: Vec<String> =
+            v["failures"].as_array().into_iter().flatten().filter_map(|f| f["rule"].as_str().map(String::from)).take(5).collect();
+        findings.push(json!({
+            "kind": "model_validation_open",
+            "message": format!("{n} model validation failure(s) still open (bim.validate): {}", first.join("; ")),
+            "fix": "fix or answer the failures (bim.validate) before the bid: the quantities come from the model",
+        }));
+    }
+    findings.extend(ratio_findings(&sp, st, &priced));
+    let mut levels: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
+    if with_levels {
+        let by = s.execute("bim.bom", &json!({ "group_by": "level" }))?;
+        for l in by["lines"].as_array().into_iter().flatten() {
+            levels.entry(key_of(l)).or_default().push((l["level"].as_str().unwrap_or_default().to_string(), l["net"].as_f64().unwrap_or(0.0)));
+        }
+    }
+    Ok(Job { priced, crew, findings, levels, level_count: sp.levels.len() })
+}
+
+/// Is `p` inside the polygon `poly` (even-odd)?
+fn inside(p: [f64; 2], poly: &[[f64; 2]]) -> bool {
+    let mut c = false;
+    let n = poly.len();
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i), poly.get((i + n - 1) % n)) else { continue };
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// Benchmarks per unit type (quantities per room of a type, the prints' rooms) and hours per
+/// square foot.
+fn ratio_findings(sp: &cadaddy_walk3d::BuildingSpec, st: &Map<String, Value>, priced: &[Priced]) -> Vec<Value> {
+    let mut out = Vec::new();
+    let Some(b) = st.get("baseline").map(|b| &b["benchmarks"]) else { return out };
+    let rooms = sp.prints.as_ref().map(|p| p.rooms.as_slice()).unwrap_or_default();
+    let tags: BTreeMap<&str, &cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().map(|t| (t.id.as_str(), t)).collect();
+    for r in b["per_unit_type"].as_array().into_iter().flatten().take(1_000) {
+        let ut = r["unit_type"].as_str().unwrap_or_default();
+        let m = r["match"].as_str().unwrap_or_default().to_ascii_lowercase();
+        let units: Vec<_> = rooms.iter().filter(|x| x.unit_type.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(ut))).collect();
+        if ut.is_empty() || m.is_empty() || units.is_empty() {
+            continue;
+        }
+        let mut n = 0usize;
+        for p in priced.iter().filter(|p| p.line["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains(&m))) {
+            for id in p.line["elements"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if let Some(t) = tags.get(id)
+                    && units.iter().any(|u| u.level.eq_ignore_ascii_case(&t.level) && inside(t.at_ft, &u.outline))
+                {
+                    n += 1;
+                }
+            }
+        }
+        let per = n as f64 / units.len() as f64;
+        let (lo, hi) = (r["low"].as_f64().unwrap_or(0.0), r["high"].as_f64().unwrap_or(f64::INFINITY));
+        if per < lo || per > hi {
+            out.push(json!({
+                "kind": "off_ratio_unit",
+                "message": format!("{m}: {per:.1} per {ut} unit ({n} in {} units), typical {lo}–{hi} ({})", units.len(), r["source"].as_str().unwrap_or("benchmarks")),
+                "fix": format!("check the {ut} units' takeoff for missed or double-counted items"),
+            }));
+        }
+    }
+    let sf = setting(st, "gross_sf", 0.0);
+    if let Some(h) = b.get("hours_per_sf").filter(|_| sf > 0.0) {
+        let hours: f64 = priced.iter().filter(|p| p.scope.as_deref() == Some("in_contract")).map(|p| p.labor_hours).sum();
+        let per = hours / sf;
+        let (lo, hi) = (h["low"].as_f64().unwrap_or(0.0), h["high"].as_f64().unwrap_or(f64::INFINITY));
+        if per < lo || per > hi {
+            out.push(json!({
+                "kind": "off_hours_per_sf",
+                "message": format!("{hours:.1} h over {sf} SF = {per:.4} h/SF, typical {lo}–{hi} ({})", h["source"].as_str().unwrap_or("benchmarks")),
+                "fix": "check the labor rates, factors and quantities against past jobs",
+            }));
+        }
+    }
+    out
 }
 
 /// Totals over the in-contract lines, with markups; and each alternate's own direct cost.
@@ -563,7 +810,14 @@ fn totals(st: &Map<String, Value>, priced: &[Priced]) -> Value {
         *by_scope.entry(p.scope.clone().unwrap_or_else(|| "undecided".into())).or_insert(0.0) += p.cost;
     }
     let alternates: BTreeMap<String, f64> = by_scope.iter().filter(|(k, _)| k.starts_with("alternate:")).map(|(k, v)| (k.clone(), r2(*v))).collect();
+    let mut phases: BTreeMap<String, f64> = BTreeMap::new();
+    for p in &inc {
+        for (ph, h) in &p.phases {
+            *phases.entry(ph.clone()).or_insert(0.0) += h;
+        }
+    }
     json!({
+        "labor_by_phase": phases.into_iter().map(|(k, v)| (k, json!(r2(v)))).collect::<Map<String, Value>>(),
         "totals": { "material": r2(material), "labor": r2(labor), "labor_hours": r2(hours), "direct": r2(direct), "tax": r2(tax), "overhead": r2(overhead), "profit": r2(profit), "contingency": r2(contingency), "bond": r2(bond), "total": r2(before_bond + bond) },
         "by_scope": by_scope.into_iter().map(|(k, v)| (k, json!(r2(v)))).collect::<Map<String, Value>>(),
         "alternates": alternates,
@@ -571,7 +825,8 @@ fn totals(st: &Map<String, Value>, priced: &[Priced]) -> Value {
 }
 
 /// The validator: every line's issues, and the benchmark ratio checks.
-fn findings(st: &Map<String, Value>, priced: &[Priced], levels: usize) -> Vec<Value> {
+fn findings(st: &Map<String, Value>, job: &Job) -> Vec<Value> {
+    let (priced, levels) = (&job.priced, job.level_count);
     let mut out: Vec<Value> = priced
         .iter()
         .filter(|p| p.scope.as_deref() != Some("nic") && p.scope.as_deref() != Some("by_others"))
@@ -593,6 +848,7 @@ fn findings(st: &Map<String, Value>, priced: &[Priced], levels: usize) -> Vec<Va
             }
         }
     }
+    out.extend(job.findings.iter().cloned());
     out
 }
 
@@ -621,7 +877,7 @@ fn line_json(p: &Priced) -> Value {
 
 fn run_query(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, st) = state(s, "estimate.query")?;
-    let (priced, _) = price_all(s, &st)?;
+    let priced = price_job(s, &st, "estimate.query", false)?.priced;
     let m = |l: &Value, k: &str| {
         str_param(p, k).is_none_or(|w| l["key"].as_str().is_some_and(|key| key.split('|').any(|part| part.eq_ignore_ascii_case(w))))
     };
@@ -640,37 +896,47 @@ fn run_query(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
-    let (sp, st) = state(s, "estimate.status")?;
-    let (priced, _) = price_all(s, &st)?;
-    let mut out = totals(&st, &priced);
-    let f = findings(&st, &priced, sp.levels.len());
+    let (_, st) = state(s, "estimate.status")?;
+    let job = price_job(s, &st, "estimate.status", true)?;
+    let mut out = totals(&st, &job.priced);
+    let b = outputs::breakdown(&st, &job);
+    for k in ["by_level", "by_trade", "by_system"] {
+        out[k] = b[k].clone();
+    }
+    let f = findings(&st, &job);
     out["ok"] = json!(f.is_empty());
-    out["summary"] = summary(&priced);
+    out["summary"] = summary(&job.priced);
     out["findings"] = json!(f);
     Ok(out)
 }
 
 fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, st) = state(s, "estimate.explain")?;
-    let (priced, crew) = price_all(s, &st)?;
+    let job = price_job(s, &st, "estimate.explain", false)?;
+    let (priced, crew) = (&job.priced, job.crew);
     if let Some(k) = str_param(p, "line") {
         let pr = priced.iter().find(|x| x.key == k).ok_or_else(|| bad("estimate.explain", format!("no line {k}")))?;
         let mu = pr.material_unit.unwrap_or(0.0);
         let lh = pr.labor_unit_hours.unwrap_or(0.0);
+        let mut math = vec![format!("material: {} {} (net {} + waste) × ${mu:.4} = ${:.2}  [{}]", pr.qty, pr.unit, pr.net, pr.material, pr.via)];
+        math.extend(pr.material_steps.iter().map(|x| format!("  material price: {x}")));
+        math.extend(pr.labor_steps.iter().map(|x| format!("  labor rate: {x}")));
+        math.push(format!("labor: {} {} (net) × {lh:.4} h = {:.2} h × ${crew:.2}/h = ${:.2}", pr.net, pr.unit, pr.labor_hours, pr.labor_cost));
+        math.push(format!("line: ${:.2} + ${:.2} = ${:.2}", pr.material, pr.labor_cost, pr.cost));
+        let r2 = |v: f64| (v * 100.0).round() / 100.0;
         return Ok(json!({
-            "value": (pr.cost * 100.0).round() / 100.0,
-            "math": [
-                format!("material: {} {} (net {} + waste) × ${mu:.2} = ${:.2}  [{}]", pr.qty, pr.unit, pr.net, pr.material, pr.via),
-                format!("labor: {} {} (net) × {lh:.3} h = {:.2} h × ${crew:.2}/h = ${:.2}", pr.net, pr.unit, pr.labor_hours, pr.labor_cost),
-                format!("line: ${:.2} + ${:.2} = ${:.2}", pr.material, pr.labor_cost, pr.cost),
-            ],
+            "value": r2(pr.cost),
+            "math": math,
+            "labor_hours": r2(pr.labor_hours),
+            "labor_cost": r2(pr.labor_cost),
+            "phases": pr.phases.iter().map(|(ph, h)| (ph.clone(), json!(r2(*h)))).collect::<Map<String, Value>>(),
             "scope": pr.scope,
             "rule": pr.line["rule"],
             "elements": pr.line["elements"],
         }));
     }
     if bool_or(p, "total", false) {
-        let t = totals(&st, &priced);
+        let t = totals(&st, priced);
         let inc: Vec<Value> = priced
             .iter()
             .filter(|x| x.scope.as_deref() == Some("in_contract"))
@@ -693,7 +959,7 @@ fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, st) = state(s, "estimate.compare")?;
-    let (priced, _) = price_all(s, &st)?;
+    let priced = price_job(s, &st, "estimate.compare", false)?.priced;
     let now = totals(&st, &priced)["totals"].clone();
     let mut alt = st.clone();
     if let Some(a) = p.get("assembly") {
@@ -720,10 +986,101 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
             m.insert(k.clone(), v.clone());
         }
     }
-    let (priced2, _) = price_all(s, &alt)?;
+    let priced2 = price_job(s, &alt, "estimate.compare", false)?.priced;
     let what_if = totals(&alt, &priced2)["totals"].clone();
     let delta = (what_if["total"].as_f64().unwrap_or(0.0) - now["total"].as_f64().unwrap_or(0.0)) * 100.0;
     Ok(json!({ "now": now, "what_if": what_if, "delta": delta.round() / 100.0 }))
+}
+
+fn run_set_factor(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "estimate.set_factor";
+    let reason = str_param(p, "reason").filter(|r| !r.trim().is_empty()).ok_or_else(|| bad(CMD, "`reason` is required"))?.to_string();
+    let factor = str_param(p, "factor").filter(|f| !f.trim().is_empty());
+    let tier = str_param(p, "tier");
+    if factor.is_none() && tier.is_none() {
+        return Err(bad(CMD, "give a `factor` (from factors.csv) or a `tier`"));
+    }
+    if let Some(t) = tier
+        && !labor::TIERS.contains(&t)
+    {
+        return Err(bad(CMD, "`tier` is normal, difficult or very_difficult"));
+    }
+    let remove = bool_or(p, "remove", false);
+    let keys = picked(CMD, s, p)?;
+    if keys.is_empty() {
+        return Err(bad(CMD, "no BOM line matches (estimate.query lists the keys)"));
+    }
+    let (sp, mut st) = state(s, CMD)?;
+    if let Some(f) = factor
+        && st.get("baseline").and_then(|b| b["factors"].get(f)).is_none()
+    {
+        return Err(bad(CMD, format!("there is no factor named {f} (import factors.csv first)")));
+    }
+    if let Some(f) = factor
+        && let Some(m) = obj(&mut st, "factors")
+    {
+        for k in &keys {
+            let list = m.entry(k.clone()).or_insert_with(|| json!([]));
+            if let Some(a) = list.as_array_mut() {
+                a.retain(|x| x["factor"].as_str() != Some(f));
+                if !remove {
+                    a.push(json!({ "factor": f, "reason": reason, "citation": str_param(p, "citation") }));
+                }
+            }
+        }
+    }
+    if let Some(t) = tier
+        && let Some(m) = obj(&mut st, "tiers")
+    {
+        for k in &keys {
+            if remove {
+                m.remove(k);
+            } else {
+                m.insert(k.clone(), json!({ "tier": t, "reason": reason }));
+            }
+        }
+    }
+    store(s, sp, st)?;
+    Ok(json!({ "lines": keys, "factor": factor, "tier": tier }))
+}
+
+fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "estimate.observe";
+    let driver = str_param(p, "driver").filter(|d| !d.trim().is_empty()).ok_or_else(|| bad(CMD, "`driver` is required"))?;
+    let qty = p["qty"].as_f64().filter(|q| q.is_finite() && *q > 0.0 && *q <= 1e9).ok_or_else(|| bad(CMD, "`qty` (units installed) must be above 0"))?;
+    let hours =
+        p["hours"].as_f64().filter(|h| h.is_finite() && *h >= 0.0 && *h <= 1e9).ok_or_else(|| bad(CMD, "`hours` (labor hours they took) must be 0 or more"))?;
+    let date = str_param(p, "date").filter(|d| parse_date(d).is_some()).ok_or_else(|| bad(CMD, "`date` is YYYY-MM-DD"))?;
+    let source = str_param(p, "source").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(CMD, "`source` (whose field report) is required"))?;
+    let (sp, mut st) = state(s, CMD)?;
+    let base = st.get("baseline").cloned().unwrap_or(json!({}));
+    let rate_of = |st: &Map<String, Value>| labor::drivers(st, &base).into_iter().find(|d| d.name.eq_ignore_ascii_case(driver));
+    let before = rate_of(&st).ok_or_else(|| bad(CMD, format!("{driver} is not a driver of the production model (import production_model.json)")))?;
+    let context = str_param(p, "context").map_or_else(|| before.context.clone(), str::to_string);
+    let obs = json!({ "driver": before.name, "context": context, "qty": qty, "hours": hours, "date": date, "source": source });
+    if let Some(a) = st.entry("observations".to_string()).or_insert_with(|| json!([])).as_array_mut() {
+        if a.len() >= MAX_ROWS {
+            return Err(bad(CMD, "too many observations"));
+        }
+        a.push(obs);
+    }
+    let after = rate_of(&st).unwrap_or_else(|| before.clone());
+    store(s, sp, st)?;
+    let r6 = |v: f64| (v * 1e6).round() / 1e6;
+    Ok(json!({ "driver": after.name, "context": after.context, "before": r6(before.rate), "after": r6(after.rate), "observations": after.obs, "math": after.text() }))
+}
+
+fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    let (_, st) = state(s, "estimate.export")?;
+    let job = price_job(s, &st, "estimate.export", true)?;
+    outputs::export(&st, &job, p)
+}
+
+fn run_bid_summary(s: &mut Session, _p: &Value) -> Result<Value> {
+    let (_, st) = state(s, "estimate.bid_summary")?;
+    let job = price_job(s, &st, "estimate.bid_summary", true)?;
+    let f = findings(&st, &job);
+    Ok(outputs::bid_summary(&st, &job, &f))
 }
 
 #[cfg(test)]
@@ -851,5 +1208,317 @@ mod tests {
         assert_eq!(csv_rows("a,b\n\"x, y\",\"q\"\"r\"\n").first().and_then(|r| r.get("a")).map(String::as_str), Some("x, y"));
         assert_eq!(csv_rows("item,size\nEMT,3/4\"\n").first().and_then(|r| r.get("size")).map(String::as_str), Some("3/4\""));
         assert!(parse_date("2026-13-01").is_none() && parse_date("2026-10-21").is_some());
+    }
+
+    /// Import `dir`, map the receptacles to their assemblies and put Division 26 in contract.
+    fn priced_job(s: &mut Session, dir: &std::path::Path) {
+        s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_assembly", &json!({ "item": "standard duplex receptacle", "assembly": "DUPLEX-MS", "reason": "metal stud walls per A-501" }))
+            .unwrap();
+        s.execute("estimate.set_assembly", &json!({ "item": "GFCI receptacle", "assembly": "GFCI-MS", "reason": "metal stud walls per A-501" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "in_contract", "reason": "Division 26 is ours" })).unwrap();
+    }
+
+    fn kinds(st: &Value, kind: &str) -> Vec<Value> {
+        st["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == json!(kind)).cloned().collect()
+    }
+
+    const CONDUIT: &str = "electrical|conduit|EMT conduit|3/4\"";
+
+    #[test]
+    fn condition_factors_and_tiers_multiply_the_book_rate() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        std::fs::write(
+            dir.join("factors.csv"),
+            "factor,kind,multiplier,basis,source\nHeight 12-16 ft,height,1.25,assumption,invented company table\nHard ceiling,ceiling,1.10,observed,invented past jobs\nBad,height,1.1,guess,x\n",
+        )
+        .unwrap();
+        let r = s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        // A factor without an observed|assumption basis is refused on import.
+        assert_eq!(r["factors"], json!(2), "{r}");
+        assert_eq!(r["notes"].as_array().unwrap().len(), 1, "{r}");
+        priced_job(&mut s, &dir);
+        s.execute(
+            "estimate.set_factor",
+            &json!({ "lines": [CONDUIT], "factor": "Height 12-16 ft", "tier": "difficult", "reason": "runs at 14 ft per E-201" }),
+        )
+        .unwrap();
+        let ex = s.execute("estimate.explain", &json!({ "line": CONDUIT })).unwrap();
+        // Difficult tier from the item table: 0.07 h/ft × 1.25 = 0.0875 h/ft × 100 ft = 8.75 h ×
+        // $85 = $743.75; + material 110 ft × $1.10 = $121.00 → $864.75.
+        assert_eq!((ex["labor_hours"].clone(), ex["labor_cost"].clone(), ex["value"].clone()), (json!(8.75), json!(743.75), json!(864.75)), "{ex}");
+        let math = ex["math"].to_string();
+        assert!(math.contains("tier difficult: 0.07 h") && math.contains("× 1.25 Height 12-16 ft") && math.contains("factor 1.2500"), "{math}");
+        // A tier with no per-tier hours multiplies the book rate (1.8 for very difficult):
+        // duplex 0.6 h × 1.8 = 1.08 h × 2 = 2.16 h × $85 = $183.60.
+        s.execute("estimate.set_factor", &json!({ "item": "standard duplex receptacle", "tier": "very_difficult", "reason": "exposed in a parking deck" }))
+            .unwrap();
+        let ex = s.execute("estimate.explain", &json!({ "line": "electrical|devices|standard duplex receptacle|" })).unwrap();
+        assert_eq!((ex["labor_hours"].clone(), ex["labor_cost"].clone()), (json!(2.16), json!(183.6)), "{ex}");
+        // Removing the factor takes it off; an unknown factor or tier is refused.
+        s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Height 12-16 ft", "reason": "low after all", "remove": true })).unwrap();
+        let ex = s.execute("estimate.explain", &json!({ "line": CONDUIT })).unwrap();
+        assert_eq!(ex["labor_hours"], json!(7.0), "{ex}");
+        assert!(s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Nope", "reason": "x" })).is_err());
+        assert!(s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "tier": "awful", "reason": "x" })).is_err());
+        assert!(s.execute("estimate.set_factor", &json!({ "lines": [CONDUIT], "factor": "Hard ceiling" })).is_err());
+        assert!(s.execute("estimate.set_factor", &json!({ "lines": ["no|such|line|"], "factor": "Hard ceiling", "reason": "x" })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_production_model_blends_book_and_field_rates_by_phase() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        let w = |n: &str, t: &str| std::fs::write(dir.join(n), t).unwrap();
+        w(
+            "production_model.json",
+            r#"{"phases": [
+                {"phase": "rough-in", "drivers": [{"driver": "device boxes", "unit": "each", "rate": 0.5, "prior_qty": 40, "match": {"category": "boxes", "item": "Box"}}]},
+                {"phase": "trim", "drivers": [{"driver": "devices", "unit": "each", "rate": 0.25, "prior_qty": 20, "match": {"category": "devices"}}]}
+            ]}"#,
+        );
+        w(
+            "field_observations.csv",
+            "driver,context,qty,hours,date,source\ndevice boxes,,10,8,2026-08-01,Invented Job A\ndevice boxes,,20,12,2026-08-15,Invented Job B\ndevice boxes,,10,8,2026-09-01,Invented Job C\n",
+        );
+        let mut prices = std::fs::read_to_string(dir.join("prices.csv")).unwrap();
+        prices += "\"Box, 4\"\" square\",\"2-1/8\"\" deep\",each,3.00,,2026-09-01,Invented Supply\n";
+        w("prices.csv", &prices);
+        priced_job(&mut s, &dir);
+        // Box rate = (0.5 h × 40 + 28 h observed) ÷ (40 + 40 boxes) = 0.6 h; 3 boxes → 1.8 h of
+        // rough-in. Trim: 3 devices × 0.25 h (no observations) = 0.75 h.
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        assert_eq!((st["labor_by_phase"]["rough-in"].clone(), st["labor_by_phase"]["trim"].clone()), (json!(1.8), json!(0.75)), "{st}");
+        let ex = s.execute("estimate.explain", &json!({ "line": "electrical|boxes|Box, 4\" square|2-1/8\" deep" })).unwrap();
+        let math = ex["math"].to_string();
+        assert!(math.contains("driver device boxes (rough-in): 0.6000 h/each") && math.contains("3 observation(s): 28 h over 40 each"), "{math}");
+        // 3 × 0.6 h = 1.8 h × $85 = $153.00 labor; 3 × $3.00 material.
+        assert_eq!((ex["labor_hours"].clone(), ex["labor_cost"].clone(), ex["value"].clone()), (json!(1.8), json!(153.0), json!(162.0)), "{ex}");
+        // A new observation recalibrates: (48 + 20) ÷ (80 + 20) = 0.68 h → 2.04 h of rough-in.
+        let o = s.execute("estimate.observe", &json!({ "driver": "device boxes", "qty": 20, "hours": 20, "date": "2026-10-01", "source": "Invented Job D" })).unwrap();
+        assert_eq!((o["before"].clone(), o["after"].clone(), o["observations"].clone()), (json!(0.6), json!(0.68), json!(4)), "{o}");
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        assert_eq!(st["labor_by_phase"]["rough-in"], json!(2.04), "{st}");
+        assert!(s.execute("estimate.observe", &json!({ "driver": "nope", "qty": 1, "hours": 1, "date": "2026-10-01", "source": "x" })).is_err());
+        assert!(s.execute("estimate.observe", &json!({ "driver": "devices", "qty": 0, "hours": 1, "date": "2026-10-01", "source": "x" })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dated_prices_escalate_by_their_index() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        std::fs::write(dir.join("indexes.csv"), "index,date,value\ncopper,2026-01-01,100\ncopper,2026-10-01,110\n").unwrap();
+        priced_job(&mut s, &dir);
+        s.execute(
+            "estimate.set_price",
+            &json!({ "item": "EMT conduit", "size": "3/4\"", "unit": "ft", "material": 1.10, "labor_hours": 0.05, "date": "2026-01-15", "source": "Invented Supply", "index": "copper" }),
+        )
+        .unwrap();
+        // $1.10 × 110/100 = $1.21/ft × 110 ft = $133.10; labor 5 h × $85 = $425 → $558.10.
+        let ex = s.execute("estimate.explain", &json!({ "line": CONDUIT })).unwrap();
+        assert_eq!(ex["value"], json!(558.1), "{ex}");
+        let math = ex["math"].to_string();
+        assert!(math.contains("escalated × 1.1000 = index copper 110 (2026-10-01) ÷ 100 (2026-01-01)"), "{math}");
+        // An index with no value at the price's date is a finding, not a silent ×1.
+        s.execute(
+            "estimate.set_price",
+            &json!({ "item": "EMT conduit", "size": "3/4\"", "unit": "ft", "material": 1.10, "labor_hours": 0.05, "date": "2025-06-01", "source": "Invented Supply", "index": "copper" }),
+        )
+        .unwrap();
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        assert_eq!(kinds(&st, "no_index").len(), 1, "{st}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 400 A feeder: 4 × 600 kcmil + #3 ground, 100 ft.
+    fn feeder_job(s: &mut Session) {
+        let spec = json!({
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
+            "mep": {
+                "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "cable", "size_in": [3, 0], "bottom_ft": 10}],
+                "runs": [{"system": "E-FEEDER", "level": "1", "points": [[0, 0], [1200, 0]], "size_in": [3, 0], "bottoms_ft": [10]}]
+            },
+            "tags": [{"id": "F1", "kind": "homerun", "level": "1", "at_ft": [0, 0], "fields": {"conductors": {"value": "4#600 + 1#3G", "source": "note"}}}]
+        });
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+    }
+
+    #[test]
+    fn large_terminations_need_priced_equipment() {
+        let mut s = Session::new();
+        feeder_job(&mut s);
+        let dir = baseline();
+        priced_job(&mut s, &dir);
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let missing = kinds(&st, "missing_equipment");
+        assert!(missing.iter().any(|f| f["message"].as_str().unwrap().to_ascii_lowercase().contains("crimper")), "{missing:?}");
+        assert!(missing.iter().all(|f| f["fix"].as_str().is_some_and(|x| !x.is_empty())), "{missing:?}");
+        std::fs::write(
+            dir.join("tool_rules.json"),
+            r#"{"rules": [{"when": "large_terminations", "items": [
+                {"item": "Crimper with dies", "supply": "rental", "rate": 45, "per": "day", "qty": 1},
+                {"item": "Torque wrench", "supply": "owned", "rate": 5, "per": "day", "qty": 1},
+                {"item": "Lug, compression 600 kcmil", "supply": "purchase", "price": 18.5, "qty_per": 1},
+                {"item": "Lug bolt kit", "supply": "purchase", "price": 2.25, "qty_per": 1}
+            ]}]}"#,
+        )
+        .unwrap();
+        priced_job(&mut s, &dir);
+        s.execute("estimate.settings", &json!({ "duration_days": 10 })).unwrap();
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let left: Vec<String> = kinds(&st, "missing_equipment").iter().map(|f| f["message"].as_str().unwrap().to_ascii_lowercase()).collect();
+        assert!(!left.iter().any(|m| m.contains("crimper") || m.contains("torque") || m.contains(" lug")), "{left:?}");
+        // 4 phase conductors × 2 ends = 8 terminations. Crimper: 1 × $45/day × 10 days = $450;
+        // torque wrench (owned, tool charge) 1 × $5 × 10 = $50; lugs 8 × $18.50 = $148; bolt
+        // kits 8 × $2.25 = $18.
+        let q = s.execute("estimate.query", &json!({ "trade": "job", "limit": 100 })).unwrap();
+        let cost = |k: &str| q["lines"].as_array().unwrap().iter().find(|l| l["key"] == json!(k)).map(|l| (l["qty"].clone(), l["cost"].clone()));
+        assert_eq!(cost("job|equipment|Crimper with dies|"), Some((json!(1.0), json!(450.0))), "{q}");
+        assert_eq!(cost("job|tools|Torque wrench|"), Some((json!(1.0), json!(50.0))), "{q}");
+        assert_eq!(cost("job|hardware|Lug, compression 600 kcmil|"), Some((json!(8.0), json!(148.0))), "{q}");
+        assert_eq!(cost("job|hardware|Lug bolt kit|"), Some((json!(8.0), json!(18.0))), "{q}");
+        let ex = s.execute("estimate.explain", &json!({ "line": "job|equipment|Crimper with dies|" })).unwrap();
+        assert_eq!(ex["elements"], json!(["F1"]), "{ex}");
+        assert!(ex["math"].to_string().contains("1 × $45.00/day × 10 day(s) of 10 day(s) (rental)"), "{ex}");
+        // A day rate with no duration says so.
+        s.execute("estimate.settings", &json!({ "duration_days": 0 })).unwrap();
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        assert_eq!(kinds(&st, "missing_duration").len(), 2, "{st}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_planted_error_produces_its_finding() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        std::fs::write(
+            dir.join("benchmarks.json"),
+            r#"{"ratios": [{"match": "receptacle", "per_level_low": 1, "per_level_high": 40, "source": "invented past jobs"}],
+                "per_unit_type": [{"unit_type": "K", "match": "receptacle", "low": 4, "high": 8, "source": "invented past jobs"}],
+                "hours_per_sf": {"low": 0.01, "high": 0.05, "source": "invented past jobs"},
+                "price_tolerance_pct": 25}"#,
+        )
+        .unwrap();
+        priced_job(&mut s, &dir);
+        let count = |s: &mut Session, k: &str| kinds(&s.execute("estimate.status", &json!({})).unwrap(), k);
+        for k in ["price_off_history", "spec_unmatched", "model_validation_open", "off_ratio_unit", "off_hours_per_sf"] {
+            assert!(count(&mut s, k).is_empty(), "{k} before it was planted");
+        }
+        // A price 50% above the one it replaced.
+        s.execute("estimate.set_price", &json!({ "item": "Duplex device", "unit": "each", "material": 3.0, "date": "2026-10-01", "source": "Invented Quote" }))
+            .unwrap();
+        let f = count(&mut s, "price_off_history");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0]["message"].as_str().unwrap().contains("+50% from $2.00") && f[0]["fix"].is_string(), "{f:?}");
+        // Hours per square foot: about 10 h over 10 SF is far above 0.05.
+        s.execute("estimate.settings", &json!({ "gross_sf": 10 })).unwrap();
+        let f = count(&mut s, "off_hours_per_sf");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0]["fix"].is_string());
+        // A specified type the BOM carries no line for.
+        {
+            let mut ty = cadaddy_doc::bimspec::BimType::new("WP1");
+            ty.set_field("finish", cadaddy_doc::bimspec::SpecField { value: "WHITE".into(), source: "26 27 26 2.3".into(), ..Default::default() });
+            s.doc_mut().unwrap().bim_types.types.push(ty);
+        }
+        let f = count(&mut s, "spec_unmatched");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0]["message"].as_str().unwrap().starts_with("WP1: finish: WHITE") && f[0]["fix"].is_string(), "{f:?}");
+        // A typical unit of type K with 3 receptacles, typical 4–8; and the prints the model
+        // fails (a symbol with no device modelled).
+        s.execute(
+            "bim.prints",
+            &json!({ "prints": {
+                "rooms": [{"level": "1", "number": "101", "name": "Guest Room", "outline": [[0, 0], [10, 0], [10, 5], [0, 5]], "unit_type": "K", "sheet": "A-101"}],
+                "symbols": [{"sheet": "E-101", "level": "1", "kind": "receptacle", "at": [40, 40]}]
+            } }),
+        )
+        .unwrap();
+        let f = count(&mut s, "off_ratio_unit");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0]["message"].as_str().unwrap().contains("3.0 per K unit (3 in 1 units)") && f[0]["fix"].is_string(), "{f:?}");
+        let f = count(&mut s, "model_validation_open");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0]["fix"].is_string());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_markup_chain_compounds_to_the_cent() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        priced_job(&mut s, &dir);
+        s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "nic", "reason": "only the conduit for this check" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "lines": [CONDUIT], "scope": "in_contract", "reason": "Division 26" })).unwrap();
+        s.execute(
+            "estimate.settings",
+            &json!({ "tax_pct": 8, "overhead_pct": 10, "profit_pct": 10, "contingency_pct": 5, "bond_pct": 1 }),
+        )
+        .unwrap();
+        // Direct $546.00 (material $121.00 + labor $425.00). Tax 8% × $121 = $9.68 → $555.68;
+        // overhead 10% = $55.568 → $611.248; profit 10% = $61.1248 → $672.3728; contingency 5% =
+        // $33.61864 → $705.99144; bond 1% = $7.0599144 → $713.0513544.
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        assert_eq!(
+            st["totals"],
+            json!({ "material": 121.0, "labor": 425.0, "labor_hours": 5.0, "direct": 546.0, "tax": 9.68, "overhead": 55.57, "profit": 61.12, "contingency": 33.62, "bond": 7.06, "total": 713.05 }),
+            "{st}"
+        );
+        assert_eq!(st["by_level"], json!({ "1": 713.05 }), "{st}");
+        assert_eq!(st["by_trade"], json!({ "electrical": 713.05 }), "{st}");
+        // The bid summary: the base bid, and the exclusions drafted from scope.
+        let b = s.execute("estimate.bid_summary", &json!({})).unwrap();
+        assert_eq!(b["total"], json!(713.05));
+        let ex = b["exclusions"].to_string();
+        assert!(ex.contains("Not in contract:") && ex.contains("only the conduit for this check"), "{b}");
+        assert!(b["text"].as_str().unwrap().starts_with("# Bid summary\n\nBase bid: $713.05"), "{b}");
+        // Exported to XLSX and CSV, each reopens with every line and the same total.
+        for name in ["estimate.xlsx", "estimate.csv"] {
+            let path = dir.join(name);
+            let r = s.execute("estimate.export", &json!({ "path": path.to_string_lossy(), "columns": ["key", "scope", "cost", "total"] })).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let rows: Vec<Vec<String>> = if name.ends_with(".xlsx") {
+                crate::cmd::table::xlsx::open(&bytes).unwrap().cells(None, None).unwrap()
+            } else {
+                csv_rows(&String::from_utf8(bytes).unwrap())
+                    .iter()
+                    .map(|r| ["key", "scope", "cost", "total"].iter().map(|k| r.get(*k).cloned().unwrap_or_default()).collect())
+                    .collect()
+            };
+            let data: Vec<&Vec<String>> = rows.iter().filter(|r| r.first().is_some_and(|k| k.contains('|'))).collect();
+            assert_eq!(data.len() as u64, r["lines"].as_u64().unwrap(), "{name}: {rows:?}");
+            let last = rows.iter().find(|r| r.first().map(String::as_str) == Some("TOTAL")).unwrap();
+            assert_eq!(last.get(3).map(String::as_str), Some("713.05"), "{name}");
+            let sum: f64 = data.iter().filter_map(|r| r.get(3)?.parse::<f64>().ok()).sum();
+            assert_eq!((sum * 100.0).round() / 100.0, 713.05, "{name}");
+        }
+        assert!(s.execute("estimate.export", &json!({ "path": dir.join("x.csv").to_string_lossy(), "columns": ["nope"] })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_project_briefing_carries_the_estimate_status() {
+        let mut s = Session::new();
+        job(&mut s);
+        let b = s.execute("project.briefing", &json!({})).unwrap();
+        assert!(b.get("estimate").is_none(), "{b}");
+        let dir = baseline();
+        priced_job(&mut s, &dir);
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let b = s.execute("project.briefing", &json!({})).unwrap();
+        assert_eq!(b["estimate"]["total"], st["totals"]["total"], "{b}");
+        assert_eq!(b["estimate"]["ok"], json!(false), "{b}");
+        assert_eq!(b["estimate"]["open_findings"].as_u64(), Some(st["findings"].as_array().unwrap().len() as u64), "{b}");
+        assert!(b["text"].as_str().unwrap().contains("open finding(s)"), "{b}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
