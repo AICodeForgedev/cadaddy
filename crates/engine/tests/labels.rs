@@ -253,3 +253,122 @@ fn the_sheets_render_and_the_bom_lines_come_with_them() {
     assert_eq!(r["incomplete"], json!(["P1"]));
     assert!(Session::new().execute("labels.list", &json!({})).is_err(), "no building spec");
 }
+
+/// The study's own column names: the arc flash boundary comes from the AFB column, never from the
+/// limited or restricted approach boundary; a row without a boundary (or a voltage) makes no label
+/// and is an "incomplete" failure with a document request.
+#[test]
+fn arc_flash_boundary_is_read_from_its_own_column_and_never_defaulted() {
+    let mut s = session();
+    let d = dir("afb");
+    let csv = d.join("study.csv");
+    std::fs::write(
+        &csv,
+        "Bus,IE (cal/cm2),WD (in),AFB (in),Limited Approach Boundary,Restricted Approach Boundary,Voltage\n\
+         MDP,8.2,18,52,42 in,12 in,480 V\n\
+         P1,1.4,18,,42 in,12 in,480 V\n\
+         DS-1,3.1,18,33,42 in,12 in,\n",
+    )
+    .unwrap();
+    let r = s.execute("labels.arcflash", &json!({"path": csv.display().to_string()})).unwrap();
+    assert_eq!((r["imported"].as_u64(), r["incomplete"].clone()), (Some(3), json!(["P1", "DS-1"])), "{r}");
+    let l = s.execute("labels.list", &json!({})).unwrap();
+    let lines: Vec<&str> = label(&l, "af:MDP")["lines"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    assert_eq!(
+        lines[4..],
+        [
+            "INCIDENT ENERGY: 8.2 CAL/CM² AT 18 IN",
+            "ARC FLASH BOUNDARY: 52 IN",
+            "NOMINAL VOLTAGE: 480 V",
+            "LIMITED APPROACH: 42 IN",
+            "RESTRICTED APPROACH: 12 IN"
+        ]
+    );
+    // No label for P1 (no boundary) or DS-1 (no voltage), and no label anywhere prints a 0.
+    let af: Vec<&str> = l["labels"].as_array().unwrap().iter().filter(|x| x["set"] == "arc_flash").map(|x| x["id"].as_str().unwrap()).collect();
+    assert_eq!(af, ["af:MDP"]);
+    assert!(l["labels"].as_array().unwrap().iter().flat_map(|x| x["lines"].as_array().unwrap()).all(|t| !t.as_str().unwrap().contains(": 0 ")));
+    let problems: Vec<String> = l["problems"].as_array().unwrap().iter().map(|p| p["message"].as_str().unwrap().to_string()).collect();
+    assert!(problems.iter().any(|p| p.starts_with("P1's arc flash study data is incomplete (missing arc flash boundary)")), "{problems:#?}");
+    assert!(problems.iter().any(|p| p.starts_with("DS-1's arc flash study data is incomplete (missing nominal voltage)")), "{problems:#?}");
+    let c = s.execute("labels.check", &json!({"review": true})).unwrap();
+    let rfis = s.execute("rfi.list", &json!({"kind": "label_data"})).unwrap();
+    assert_eq!(c["rfis"].as_array().unwrap().len(), rfis["total"].as_u64().unwrap() as usize);
+    assert!(
+        rfis["items"].as_array().unwrap().iter().any(|i| i["issue"].as_str().unwrap().contains("P1's arc flash study data is incomplete")),
+        "{rfis}"
+    );
+    // Rows given directly: a zero boundary is no boundary.
+    let r = s
+        .execute("labels.arcflash", &json!({"rows": [{"equipment": "MDP", "incident_energy": 8.2, "working_distance_in": 18, "arc_flash_boundary_in": 0, "voltage": "480 V"}]}))
+        .unwrap();
+    assert_eq!(r["incomplete"], json!(["MDP"]));
+    let l = s.execute("labels.list", &json!({"set": "arc_flash"})).unwrap();
+    assert_eq!(l["labels"].as_array().unwrap().len(), 0, "{l}");
+}
+
+/// `labels.read`: a panel schedule drawn as text (with a room/area column) and the circuits
+/// printed beside devices become the panel's circuits and the devices, each with its sheet.
+#[test]
+fn panel_schedules_and_device_circuits_read_off_a_sheet() {
+    let mut s = session();
+    let t = |s: &mut Session, at: [f64; 2], text: &str| {
+        s.execute("text", &json!({"at": at, "text": text, "height": 1})).unwrap();
+    };
+    t(&mut s, [0.0, 100.0], "PANEL L2 SCHEDULE");
+    for (x, h) in [(0.0, "CKT"), (5.0, "DESCRIPTION"), (30.0, "ROOM/AREA"), (45.0, "BKR"), (52.0, "POLES"), (60.0, "TYPE")] {
+        t(&mut s, [x, 97.0], h);
+    }
+    for (i, row) in [
+        ["1", "LIGHTING - LOBBY", "LOBBY", "20", "1", "-"],
+        ["2", "RECEP - OFFICE", "OFFICE 201", "20", "1", "GFCI"],
+        ["3", "AHU-2", "ROOF", "30", "3", "-"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        for (x, v) in [0.0, 5.0, 30.0, 45.0, 52.0, 60.0].iter().zip(row) {
+            t(&mut s, [*x, 94.0 - 3.0 * i as f64], v);
+        }
+    }
+    // On the plan: two devices on L2, one on P1, and a grid label that isn't a circuit.
+    t(&mut s, [200.0, 50.0], "L2-2");
+    t(&mut s, [220.0, 50.0], "L2-11");
+    t(&mut s, [240.0, 40.0], "P1-1");
+    t(&mut s, [260.0, 40.0], "B-2");
+    let r = s.execute("labels.read", &json!({"sheet": "E-201", "level": "L1", "apply": true})).unwrap();
+    assert_eq!(r["added_panels"], json!(["L2"]), "{r}");
+    assert_eq!(
+        r["schedules"][0]["circuits"],
+        json!([
+            {"number": "1", "description": "LIGHTING - LOBBY", "room": "LOBBY", "breaker": "20", "poles": 1, "source": "E-201"},
+            {"number": "2", "description": "RECEP - OFFICE", "room": "OFFICE 201", "breaker": "20", "poles": 1, "source": "E-201"},
+            {"number": "3", "description": "AHU-2", "room": "ROOF", "breaker": "30", "poles": 3, "source": "E-201"}
+        ])
+    );
+    let devs: Vec<(String, String, String)> = r["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["panel"].as_str().unwrap().into(), d["circuit"].as_str().unwrap().into(), d["source"].as_str().unwrap().into()))
+        .collect();
+    assert_eq!(
+        devs,
+        [("L2".into(), "2".into(), "E-201".into()), ("L2".into(), "11".into(), "E-201".into()), ("P1".into(), "1".into(), "E-201".into())]
+    );
+    let l = s.execute("labels.list", &json!({})).unwrap();
+    let rows: Vec<&str> = l["directories"]["L2"].as_array().unwrap().iter().map(|r| r["circuit"].as_str().unwrap()).collect();
+    assert_eq!(rows, ["1", "2", "3,5,7"]);
+    assert_eq!(l["directories"]["L2"][1]["room"], "RM OFFICE 201");
+    assert_eq!(label(&l, "dev:E-201-D001")["lines"], json!(["L2-2"]));
+    assert!(l["problems"].as_array().unwrap().iter().any(|p| p["message"] == "E-201-D002 is on L2-11, which L2's schedule doesn't have"), "{l}");
+    // Read again: the sheet's devices are replaced, the hand-entered ones stay.
+    s.execute("labels.read", &json!({"sheet": "E-201", "apply": true})).unwrap();
+    let sp = s.execute("bspec.get", &json!({})).unwrap();
+    let devices = sp["spec"]["mep"]["devices"].as_array().unwrap();
+    assert_eq!((devices.len(), devices.iter().filter(|d| d["source"] == "E-201").count()), (7, 3));
+    // Hostile.
+    for p in [json!({"paths": "x"}), json!({"paths": [7]}), json!({"path": "missing-sheet.dxf"})] {
+        assert!(s.execute("labels.read", &p).is_err(), "{p}");
+    }
+}

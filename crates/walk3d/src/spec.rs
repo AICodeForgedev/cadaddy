@@ -976,6 +976,9 @@ pub struct ElecDevice {
     /// The panel and circuit number(s): `P1`, `12` (or `1,3,5` for three poles).
     pub panel: String,
     pub circuit: String,
+    /// The sheet its circuit was read from (`E-101`), empty when entered by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// One piece of gear's arc flash study result.
@@ -1274,6 +1277,9 @@ pub struct PanelCircuit {
     /// Breaker amps and poles, as the schedule prints them.
     pub breaker: String,
     pub poles: u32,
+    /// The sheet it was read from (`E-601`), empty when entered by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
