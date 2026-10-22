@@ -1,0 +1,2833 @@
+# CADaddy Romanian interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Romanian translation.
+# Empty context = ordinary label; @plural = one|few|other with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	Ajustare...
+	Apply	Aplicare
+	Attach DWG...	Atașare DWG...
+	Bind	Legare
+	Detach	Detașare
+	Image	Imagine
+	Loaded	Încărcat
+	Make it a block of this drawing, keeping its layer names	Transformă-l în bloc al acestui desen, păstrând numele straturilor
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Transformă-l în bloc al acestui desen; straturile sale devin NUME$0$STRAT
+	No external references are attached.	Nu există referințe externe atașate.
+	Not Found	Negăsit
+	Not loaded	Neîncărcat
+	Open	Deschidere
+	Overlay	Suprapunere
+	Reference Manager	Manager de referințe
+	Reference Name	Nume referință
+	References: {n}	Referințe: {n}
+	Reload	Reîncărcare
+	Reload All	Reîncarcă tot
+	Saved Path	Cale salvată
+	Unload	Descărcare
+	Unloaded	Descărcat
+	Unreferenced	Nereferențiat
+	Unresolved	Nerezolvat
+	  Cancel  	  Anulare  
+	  OK  	  OK  
+	 or [	 sau [
+	% of all commits	% din toate commit-urile
+	* Wildcard Match	* Potrivire cu caractere joker
+	*VARIES*	*DIVERSE*
+	+  |  Top  |  2D Wireframe	+  |  Sus  |  Cadru de sârmă 2D
+	+Bin	+Binar
+	+LOC	+LOC
+	1 Viewport	1 fereastră
+	2 Points	2 puncte
+	2 Viewports	2 ferestre
+	2D Solid	Solid 2D
+	3 Points	3 puncte
+	3 Viewports	3 ferestre
+	3D Face	Față 3D
+	3D Operations	Operații 3D
+	3D Polyline	Polilinie 3D
+	4 Viewports	4 ferestre
+	< Less than	< Mai mic decât
+	<> Not Equal	<> Diferit de
+	= Equals	= Egal cu
+	> Greater than	> Mai mare decât
+	A variable name starts with a letter and has only letters, digits and _	Un nume de variabilă începe cu o literă și conține doar litere, cifre și _
+	About	Despre
+	About CADaddy	Despre CADaddy
+	Absolute	Absolut
+	Add Leader	Adăugare linie de indicație
+	Additional angles	Unghiuri suplimentare
+	Align	Aliniere
+	Align Text	Aliniere text
+	Aligned	Aliniată
+	All	Tot
+	All Annotation Objects	Toate obiectele de adnotare
+	All Used Layers	Toate straturile utilizate
+	All files	Toate fișierele
+	Angle	Unghi
+	Angular	Unghiulară
+	Annotation Visibility	Vizibilitate adnotări
+	Annotation scale	Scară de adnotare
+	Apparent Intersection	Intersecție aparentă
+	Append to current selection set	Adaugă la setul de selecție curent
+	Apply to:	Aplicare la:
+	Apply true color	Aplicare culoare reală
+	Arc	Arc
+	Arc Length	Lungime arc
+	Area	Arie
+	Arrange Panel	Panou Aranjare
+	Array	Multiplicare
+	Attach	Atașare
+	Attribute	Atribut
+	Attribute Definition	Definiție atribut
+	Attribute Display	Afișare atribute
+	Audit	Verificare
+	Auto (system language)	Automat (limba sistemului)
+	Auto Constrain	Constrângere automată
+	AutoConstrain	Constrângere automată
+	Axis, End	Axă, capăt
+	Base	Bază
+	Baseline	Linie de bază
+	Batch Publish	Publicare în lot
+	Binary assets added	Resurse binare adăugate
+	Binary assets removed	Resurse binare eliminate
+	Bind...	Legare...
+	Blend	Racordare curbă
+	Block	Bloc
+	Block Attribute Manager...	Manager atribute bloc...
+	Block Editor	Editor de blocuri
+	Block Reference	Referință bloc
+	Block...	Bloc...
+	Blocks	Blocuri
+	Blue	Albastru
+	Bold	Aldin
+	Boolean	Boolean
+	Boundary	Contur
+	Boundary...	Contur...
+	Box	Paralelipiped
+	Break	Întrerupere
+	Break At Point	Întrerupere în punct
+	Bring Above Objects	Adu deasupra obiectelor
+	Bring Annotations to Front	Adu adnotările în față
+	Bring to Front	Adu în față
+	Bulleted list	Listă cu marcatori
+	ByBlock	DupăBloc
+	ByColor	DupăCuloare
+	ByLayer	DupăStrat
+	CADaddy Help	Ajutor CADaddy
+	Cancel	Anulare
+	Cartesian (x, y)	Carteziene (x, y)
+	Center	Centru
+	Center Line	Linie de axă
+	Center Mark	Marcaj de centru
+	Center X	Centru X
+	Center Y	Centru Y
+	Center Z	Centru Z
+	Center, Diameter	Centru, diametru
+	Center, Radius	Centru, rază
+	Center, Start, Angle	Centru, start, unghi
+	Center, Start, End	Centru, start, capăt
+	Center, Start, Length	Centru, start, lungime
+	Chamfer	Teșire
+	Change Space	Schimbare spațiu
+	Change to Current Layer	Mută în stratul curent
+	Changed: {n}	Modificate: {n}
+	Circle	Cerc
+	Circumference	Circumferință
+	Clear History	Golire istoric
+	Clear	Golire
+	Clip	Decupare
+	Clip Viewport	Decupare fereastră
+	Clipboard	Clipboard
+	Close	Închidere
+	Close All	Închide tot
+	Close All Other Drawings	Închide toate celelalte desene
+	Closed	Închis
+	Close Comparison	Închide comparația
+	Coincident	Coincident
+	Collapse Palettes	Restrângere palete
+	Collapse Tool Sets	Restrângere seturi de instrumente
+	Collinear	Coliniar
+	Color	Culoare
+	Color 8	Culoarea 8
+	Color 9	Culoarea 9
+	Color Index	Index culoare
+	Color...	Culoare...
+	Command Aliases	Aliasuri de comenzi
+	Command History	Istoric comenzi
+	Clear Command History	Golire istoric comenzi
+	Command Line	Linie de comandă
+	Command Line History Lines	Linii de istoric în linia de comandă
+	Command Reference	Referință comenzi
+	Commits	Commit-uri
+	Company	Companie
+	Compare Drawings...	Comparare desene...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Proiectare și desenare asistate de calculator: o aplicație CAD open-source, clean-room, scrisă integral în Rust.
+	Concentric	Concentric
+	Cone	Con
+	Constraint Bars	Bare de constrângeri
+	Constraint Settings	Setări constrângeri
+	Construction Line	Linie de construcție
+	Contents	Cuprins
+	Continue	Continuare
+	Contributors	Contribuitori
+	Control Vertices	Vârfuri de control
+	Convert	Conversie
+	Copy	Copiere
+	Copy Full File Path	Copiază calea completă a fișierului
+	Copy History	Copiere istoric
+	Copy Layout	Copiere layout
+	Copy Nested Objects	Copiere obiecte imbricate
+	Copy Selection	Copiere selecție
+	Copy with Base Point	Copiere cu punct de bază
+	Count	Numărare
+	Count List	Listă numărare
+	Count Table	Tabel numărare
+	Create Block	Creare bloc
+	Creates a user parameter	Creează un parametru utilizator
+	Ctrl+Enter to finish	Ctrl+Enter pentru a termina
+	Current layer	Strat curent
+	Current selection	Selecția curentă
+	Current: {color}	Curentă: {color}
+	Cut	Decupare
+	Cyan	Cyan
+	Cylinder	Cilindru
+	DWG	DWG
+	DWG Reference...	Referință DWG...
+	DXF	DXF
+	Dark	Întunecat
+	Data Extraction...	Extragere date...
+	Default	Implicit
+	Data Link...	Legătură de date...
+	Default Save Format	Format implicit de salvare
+	Default Save Version	Versiune implicită de salvare
+	Define Attributes	Definire atribute
+	Define Attributes...	Definire atribute...
+	Defined width	Lățime definită
+	Degree	Grad
+	Degrees of Freedom	Grade de libertate
+	Degrees of freedom: {n}	Grade de libertate: {n}
+	Delete	Ștergere
+	Delete Column	Ștergere coloană
+	Delete Constraints	Ștergere constrângeri
+	Delete Dimension Style	Ștergere stil de cotare
+	Delete Duplicate Objects	Ștergere obiecte duplicate
+	Delete Layer	Ștergere strat
+	Delete Layer State	Ștergere stare straturi
+	Delete Layout	Ștergere layout
+	Delete Row	Ștergere rând
+	Delete Text Style	Ștergere stil de text
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Descriere
+	Deselect All	Deselectează tot
+	Diameter	Diametru
+	Dim style	Stil cotă
+	Dimension Break	Întrerupere cotă
+	Dimension Edit	Editare cotă
+	Dimension	Cotare
+	Dimension Objects Only	Doar obiecte de cotare
+	Dimension Space	Spațiere cote
+	Dimension Style Override	Suprascriere stil de cotare
+	Dimension Style...	Stil de cotare...
+	Dimension Text Edit	Editare text cotă
+	Dimension style	Stil de cotare
+	Dimensional Constraint	Constrângere dimensională
+	Dimensional Constraint Parameters	Parametri constrângeri dimensionale
+	Dimensional Constraints	Constrângeri dimensionale
+	Disassociate Dimensions	Disociere cote
+	Display name	Nume afișat
+	Distance	Distanță
+	Divide	Divizare
+	Do not plot (click: plot)	Nu se plotează (clic: plotare)
+	Donut	Inel
+	Double-click to edit the description	Dublu clic pentru a edita descrierea
+	Down	Jos
+	Drafting	Desenare
+	Drafting Settings	Setări de desenare
+	Drafting Settings...	Setări de desenare...
+	Draw	Desenare
+	Draw Order	Ordine de afișare
+	Drawing (DWG)	Desen (DWG)
+	Drawing (DXF)	Desen (DXF)
+	Drawing Limits	Limite desen
+	Drawing Template (DWT)	Șablon de desen (DWT)
+	Drawing Utilities	Utilitare desen
+	Drawings (DWG, DXF)	Desene (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	Desene SVG (SVG, SVGZ)
+	Dynamic	Dinamic
+	Dynamic Dimensions	Cote dinamice
+	Dynamic Input	Intrare dinamică
+	Dynamic Input (F12)	Intrare dinamică (F12)
+	E	E
+	Edit	Editare
+	Edit Attributes...	Editare atribute...
+	Edit Text...	Editare text...
+	Edit Table Cell	Editare celulă tabel
+	Elevation	Cotă de nivel
+	Ellipse	Elipsă
+	Elliptical Arc	Arc eliptic
+	Enable Dynamic Input (F12)	Activare intrare dinamică (F12)
+	End Object Isolation	Încheiere izolare obiecte
+	End Width	Lățime finală
+	End X	X final
+	End Y	Y final
+	End angle	Unghi final
+	Endpoint	Punct final
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Introduceți Top, Zero sau Bottom.
+	Enter a fit data option	Introduceți o opțiune de date de potrivire
+	Enter a pattern name	Introduceți un nume de model
+	Enter a vertex editing option	Introduceți o opțiune de editare a vârfurilor
+	Enter an option	Introduceți o opțiune
+	Enter angle of xline	Introduceți unghiul liniei de construcție
+	Enter angle of xline (0) or	Introduceți unghiul liniei de construcție (0) sau
+	Enter area of rectangle in current units	Introduceți aria dreptunghiului în unitățile curente
+	Enter attribute prompt	Introduceți solicitarea atributului
+	Enter attribute tag name	Introduceți numele etichetei atributului
+	Enter attribute value	Introduceți valoarea atributului
+	Enter block name	Introduceți numele blocului
+	Enter constraint type	Introduceți tipul constrângerii
+	Enter continuity	Introduceți continuitatea
+	Enter default attribute value	Introduceți valoarea implicită a atributului
+	Enter degree of spline	Introduceți gradul splinei
+	Enter delta angle	Introduceți unghiul delta
+	Enter delta length or	Introduceți lungimea delta sau
+	Enter dimension text	Introduceți textul cotei
+	Enter dimension text (<> = measurement)	Introduceți textul cotei (<> = măsurătoare)
+	Enter dimension value or [name=expression]	Introduceți valoarea cotei sau [nume=expresie]
+	Enter dimension variable name to override	Introduceți numele variabilei de cotare de suprascris
+	Enter justification type	Introduceți tipul de aliniere
+	Enter leader text	Introduceți textul liniei de indicație
+	Enter mline scale	Introduceți scara multiliniei
+	Enter mode	Introduceți modul
+	Enter name of block to insert	Introduceți numele blocului de inserat
+	Enter new text	Introduceți textul nou
+	Enter next point	Introduceți punctul următor
+	Enter number of columns	Introduceți numărul de coloane
+	Enter number of data rows	Introduceți numărul de rânduri de date
+	Enter number of items	Introduceți numărul de elemente
+	Enter number of items along path	Introduceți numărul de elemente de-a lungul traseului
+	Enter number of sides	Introduceți numărul de laturi
+	Enter number of turns	Introduceți numărul de spire
+	Enter percentage length	Introduceți procentul din lungime
+	Enter rectangle length	Introduceți lungimea dreptunghiului
+	Enter rectangle width	Introduceți lățimea dreptunghiului
+	Enter scale factor	Introduceți factorul de scară
+	Enter text	Introduceți textul
+	Enter text (use \P for new paragraphs)	Introduceți textul (folosiți \P pentru paragrafe noi)
+	Enter the number of segments	Introduceți numărul de segmente
+	Enter twist direction of helix	Introduceți sensul de răsucire al elicei
+	Entire drawing	Întregul desen
+	Equal	Egal
+	Erase	Ștergere
+	Evaluate	Evaluare
+	Evaluate LISP	Evaluare LISP
+	Exclude from new selection set	Exclude din noul set de selecție
+	Explode	Descompunere
+	Export	Export
+	Export Table	Export tabel
+	Export to PDF...	Export în PDF...
+	Expression	Expresie
+	Extend	Extindere
+	Extension	Prelungire
+	Extents	Extinderi
+	External Reference	Referință externă
+	External References	Referințe externe
+	Extrude	Extrudare
+	File	Fișier
+	File Tab	Filă fișier
+	Fillet	Racordare
+	Filter	Filtru
+	Filters	Filtre
+	Find and Replace	Găsire și înlocuire
+	Find...	Găsire...
+	First	Primul
+	First commit	Primul commit
+	Fit Points	Puncte de potrivire
+	Fix	Fixare
+	Flatten Objects	Aplatizare obiecte
+	Format	Format
+	Freehand	Mână liberă
+	Freeze	Înghețare
+	Freeze Layer	Înghețare strat
+	Freeze in new viewports	Înghețat în ferestre noi
+	Freeze/Thaw	Înghețare/Dezghețare
+	Freeze/Thaw in all viewports	Înghețare/Dezghețare în toate ferestrele
+	Freeze/Thaw in the current viewport	Înghețare/Dezghețare în fereastra curentă
+	From	De la
+	From Template...	Din șablon...
+	General	General
+	Geometric Center	Centru geometric
+	Geometric Constraint	Constrângere geometrică
+	Geometric Constraints	Constrângeri geometrice
+	Geometry	Geometrie
+	Get from the Drawing	Preluare din desen
+	Get Variable	Citire variabilă
+	Get View	Preluare vedere
+	Global	Global
+	Global width	Lățime globală
+	Grab bag	Diverse
+	Gradient	Gradient
+	Gradient...	Gradient...
+	Green	Verde
+	Grid (F7)	Grilă (F7)
+	Grid Display	Afișare grilă
+	Grid On (F7)	Grilă activă (F7)
+	Grid snap	Prindere pe grilă
+	Grid spacing	Pas grilă
+	Grip Edit	Editare prin grip-uri
+	Grip Mirror	Oglindire prin grip
+	Grip Option	Opțiune grip
+	Grip Rotate	Rotire prin grip
+	Grip Scale	Scalare prin grip
+	Grip Stretch	Întindere prin grip
+	Group	Grup
+	Group Edit	Editare grup
+	Group Options	Opțiuni grup
+	Group Selection	Selecție grup
+	Hatch	Hașură
+	Hatch Edit	Editare hașură
+	Hatch Patterns	Modele de hașură
+	Hatch...	Hașură...
+	Height	Înălțime
+	Height: {height}	Înălțime: {height}
+	Helix	Elice
+	Help	Ajutor
+	Hide All	Ascunde tot
+	Hide All Constraint Bars	Ascunde toate barele de constrângeri
+	Hide All Dynamic Dimensions	Ascunde toate cotele dinamice
+	Hide Layer List	Ascunde lista de straturi
+	Hide Objects	Ascundere obiecte
+	Hide Palettes	Ascundere palete
+	History	Istoric
+	Home	Pornire
+	Horizontal	Orizontal
+	HorizontalDistance	Distanță orizontală
+	How to apply:	Mod de aplicare:
+	ID Point	Identificare punct
+	Import	Import
+	Align Multileaders	Aliniere multi-indicații
+	Collect	Colectare
+	Collect Multileaders	Colectare multi-indicații
+	Edit Multileader	Editare multi-indicație
+	In	Mărire
+	In-window Menu Bar	Bară de meniu în fereastră
+	Include in new selection set	Include în noul set de selecție
+	Increment angle	Increment unghi
+	Index Color	Culoare index
+	Index color: {index}	Culoare index: {index}
+	Infer Constraints	Deducere constrângeri
+	Inquiry	Interogare
+	Insert	Inserare
+	Insert Block	Inserare bloc
+	Insert Column	Inserare coloană
+	Insert Row	Inserare rând
+	Insert tab	Inserare tabulator
+	Insert this block	Inserează acest bloc
+	Insert Table Formula	Inserare formulă în tabel
+	Insertion	Inserție
+	Insertion X	Inserție X
+	Insertion Y	Inserție Y
+	Insertion Z	Inserție Z
+	Inspect Constraints	Inspectare constrângeri
+	Inspect Drawing	Inspectare desen
+	Inspection	Inspecție
+	Interface Language	Limba interfeței
+	Interface Theme	Tema interfeței
+	Intersect	Intersecție
+	Intersection	Intersecție
+	Isolate	Izolare
+	Isolate Layer	Izolare strat
+	Isolate Objects	Izolare obiecte
+	Isometric Drafting	Desenare izometrică
+	Jogged	Frântă
+	Jogged Linear	Liniară frântă
+	Join	Unire
+	Join the ArtCraft Discord…	Alătură-te pe Discord-ul ArtCraft…
+	Join us on Discord	Alătură-te nouă pe Discord
+	Isometric Plane	Plan izometric
+	Isometric snap	Prindere izometrică
+	Language	Limbă
+	Last	Ultimul
+	Last commit	Ultimul commit
+	Layer	Strat
+	Layer Delete	Ștergere strat
+	Layer Match	Potrivire strat
+	Layer Merge	Combinare straturi
+	Layer Off	Dezactivare strat
+	Layer Properties	Proprietăți strat
+	Layer Properties Manager	Manager proprietăți straturi
+	Layer Properties Manager — current viewport	Manager proprietăți straturi — fereastra curentă
+	Layer State	Stare straturi
+	Layer States Manager...	Manager stări straturi...
+	Layer Tools	Instrumente straturi
+	Layer contains objects (double-click to make current)	Stratul conține obiecte (dublu clic pentru a-l face curent)
+	Layer is empty (double-click to make current)	Stratul este gol (dublu clic pentru a-l face curent)
+	Layers	Straturi
+	Layers Palette	Paleta Straturi
+	Hide Palette	Ascunde paleta
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Straturi afișate: {shown} din {total}.   Strat curent: {layer}
+	Layout	Layout
+	Layout list	Listă layout-uri
+	Leader	Linie de indicație
+	Leaders Only	Doar linii de indicație
+	Left	Stânga
+	Length	Lungime
+	Length X	Lungime X
+	Length Y	Lungime Y
+	Lengthen	Alungire
+	Light	Luminos
+	Line	Linie
+	Line delta	Delta linii
+	Linear	Liniară
+	Lines +/−	Linii +/−
+	Lines added	Linii adăugate
+	Lines deleted	Linii șterse
+	Lines of Command History	Linii de istoric comenzi
+	Linetype	Tip de linie
+	Linetype Scale	Scară tip de linie
+	Linetype scale	Scară tip de linie
+	Ltscale	Ltscale
+	Linetype...	Tip de linie...
+	Lineweight	Grosime linie
+	Lineweight...	Grosime linie...
+	List	Listare
+	List Blocks	Listare blocuri
+	List Dimension Styles	Listare stiluri de cotare
+	List Groups	Listare grupuri
+	List Layer States	Listare stări straturi
+	List Layouts	Listare layout-uri
+	List System Variables	Listare variabile de sistem
+	List Text Styles	Listare stiluri de text
+	Load all	Încarcă tot
+	Load...	Încărcare...
+	Load Application...	Încărcare aplicație...
+	Loaded linetypes	Tipuri de linie încărcate
+	Lock	Blocare
+	Lock Layer	Blocare strat
+	Lock viewport	Blocare fereastră
+	Lock/Unlock	Blocare/Deblocare
+	Loft	Loft
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Nu este afiliat cu Autodesk, Inc.
+	MODEL	MODEL
+	MText	MText
+	Magenta	Magenta
+	Major line every	Linie principală la fiecare
+	Make Current	Setare curent
+	Make Object's Layer Current	Setează stratul obiectului ca și curent
+	Make...	Creare...
+	Match Layer	Potrivire strat
+	Match Properties	Potrivire proprietăți
+	Measure	Măsurare
+	Measure Distance	Măsurare distanță
+	Measure Geometry	Măsurare geometrie
+	Merge Cells	Îmbinare celule
+	Merged PRs	PR-uri îmbinate
+	Mid Between 2 Points	Mijloc între 2 puncte
+	Midpoint	Mijloc
+	Mirror	Oglindire
+	Model	Model
+	Model Space (in viewport)	Spațiul model (în fereastră)
+	Modeling	Modelare
+	Models	Modele
+	Modify	Modificare
+	Move	Mutare
+	Multileader	Multi-indicație
+	Multileader Style...	Stil multi-indicație...
+	Multileader style	Stil multi-indicație
+	Multiline	Multilinie
+	Multiline Text	Text multilinie
+	Multiline Text...	Text multilinie...
+	Multiple	Multiplu
+	Multiple Point	Punct multiplu
+	My	Ale mele
+	My properties: not available yet	Proprietățile mele: încă indisponibile
+	N	N
+	Name	Nume
+	Name (A–Z)	Nume (A–Z)
+	Named Views...	Vederi denumite...
+	Nearest	Cel mai apropiat
+	New	Nou
+	New (metric)	Nou (metric)
+	New Drawing	Desen nou
+	New Drawing (⌘N)	Desen nou (⌘N)
+	New Drawing...	Desen nou...
+	New Layer	Strat nou
+	New Layout	Layout nou
+	New VP Freeze	Înghețare în ferestre noi
+	New Viewports...	Ferestre noi...
+	New from Template...	Nou din șablon...
+	New layout	Layout nou
+	New state name	Numele stării noi
+	Next Change	Modificarea următoare
+	No	Nu
+	No blocks defined in this drawing.	Nu există blocuri definite în acest desen.
+	No contributor data was built into this copy.	Această copie nu include date despre contribuitori.
+	No model credits were built into this copy.	Această copie nu include mențiuni despre modele.
+	No saved layer states	Nu există stări de straturi salvate
+	No selection	Nicio selecție
+	Node	Nod
+	None	Niciunul
+	Not available	Indisponibil
+	Not available yet	Încă indisponibil
+	Numbered list	Listă numerotată
+	OK	OK
+	Object	Obiect
+	Object Snap	Prindere la obiecte
+	Object Snap (F3)	Prindere la obiecte (F3)
+	Object Snap On (F3)	Prindere la obiecte activă (F3)
+	Object Snap Tracking	Urmărire prindere la obiecte
+	Object Snap Tracking (F11)	Urmărire prindere la obiecte (F11)
+	Object Snap Tracking Settings	Setări urmărire prindere la obiecte
+	Object type:	Tip obiect:
+	Oblique	Oblic
+	Off	Dezactivat
+	Offset	Offset
+	On	Activat
+	On/Off	Activat/Dezactivat
+	One of the Crafting Apps by the ArtCraft team and community.	Una dintre aplicațiile Crafting create de echipa și comunitatea ArtCraft.
+	Only in this drawing: {n}	Doar în acest desen: {n}
+	Only in {name}: {n}	Doar în {name}: {n}
+	Open (⌘O)	Deschidere (⌘O)
+	Open Sample Drawing	Deschide desenul exemplu
+	Open sample drawing	Deschide desenul exemplu
+	Open Xref	Deschidere Xref
+	Open...	Deschidere...
+	Open Recent	Deschise recent
+	Clear Recent Files	Golire fișiere recente
+	Operator:	Operator:
+	Orbit	Orbitare
+	Ordinate	Ordonată
+	Ortho (F8)	Orto (F8)
+	Ortho Mode	Mod orto
+	Ortho Mode (F8)	Mod orto (F8)
+	Osnap Settings...	Setări Osnap...
+	Out	Micșorare
+	Over-constrained	Supra-constrâns
+	Override	Suprascriere
+	PAPER	HÂRTIE
+	Percent	Procent
+	Polar (distance < angle)	Polare (distanță < unghi)
+	PRs	PR-uri
+	Page Setup Manager	Manager configurare pagină
+	Page Setup Manager...	Manager configurare pagină...
+	Pan	Panoramare
+	Pan Down	Panoramare în jos
+	Pan Left	Panoramare la stânga
+	Pan Right	Panoramare la dreapta
+	Pan Up	Panoramare în sus
+	Paper Space	Spațiul hârtie
+	Parallel	Paralel
+	Parameters Manager	Manager parametri
+	Parametric	Parametric
+	Paste	Lipire
+	Paste as Block	Lipire ca bloc
+	Paste to Command Line	Lipire în linia de comandă
+	Paste to Original Coordinates	Lipire la coordonatele originale
+	Path Array	Multiplicare pe traseu
+	Pattern	Model
+	Perpendicular	Perpendicular
+	Plot	Plotare
+	Plot (click: do not plot)	Plotare (clic: fără plotare)
+	Plot Preview	Previzualizare plotare
+	Plot Window	Fereastră de plotare
+	Plot style	Stil de plotare
+	Plot style attached to	Stil de plotare atașat la
+	Plot style table	Tabel de stiluri de plotare
+	Plot Style...	Stil de plotare...
+	Plot Style Manager	Manager stiluri de plotare
+	Plot Style Manager...	Manager stiluri de plotare...
+	Plot Styles...	Stiluri de plotare...
+	Plotter Manager	Manager plotere
+	Plotter Manager...	Manager plotere...
+	New CTB	CTB nou
+	New STB	STB nou
+	New style	Stil nou
+	Reset Panel Layout	Resetare aranjare panouri
+	Send Hatches to Back	Trimite hașurile în spate
+	Send Under Objects	Trimite sub obiecte
+	Text Objects Only	Doar obiecte text
+	Use for this layout	Folosește pentru acest layout
+	Display plot styles	Afișare stiluri de plotare
+	No plot style tables.	Nu există tabele de stiluri de plotare.
+	A built-in table: editing it keeps an edited copy in the drawing.	Un tabel predefinit: editarea lui păstrează o copie modificată în desen.
+	Keep an editable copy of this table in the drawing	Păstrează în desen o copie editabilă a acestui tabel
+	Layout {name}: {table}	Layout {name}: {table}
+	Grayscale	Tonuri de gri
+	Screening	Estompare
+	Use object linetype	Folosește tipul de linie al obiectului
+	Use object lineweight	Folosește grosimea de linie a obiectului
+	Remove	Eliminare
+	Add	Adăugare
+	Open a drawing first.	Deschideți mai întâi un desen.
+	Plot table type	Tip tabel de plotare
+	Color-dependent	Dependent de culoare
+	Named	Denumit
+	Plus/minus	Plus/minus
+	Point	Punct
+	Point Filters	Filtre de puncte
+	Point Style...	Stil punct...
+	Polar Array	Multiplicare polară
+	Polar Tracking	Urmărire polară
+	Polar Tracking (F10)	Urmărire polară (F10)
+	Polar Tracking On (F10)	Urmărire polară activă (F10)
+	Polar angle measurement	Măsurare unghi polar
+	Polar distance	Distanță polară
+	Polar: {distance} < {angle}°	Polar: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	Poligon
+	Polygonal	Poligonală
+	Polygonal Viewport	Fereastră poligonală
+	Polyline	Polilinie
+	Polyline Edit	Editare polilinie
+	Position X	Poziție X
+	Position Y	Poziție Y
+	Position Z	Poziție Z
+	Previous	Anterior
+	Previous Change	Modificarea anterioară
+	Previous Layer	Stratul anterior
+	Primitives	Primitive
+	Print	Tipărire
+	Print...	Tipărire...
+	Properties	Proprietăți
+	Properties Inspector	Inspector proprietăți
+	Properties:	Proprietăți:
+	Proxy	Proxy
+	Purge	Curățare
+	Pyramid	Piramidă
+	Quadrant	Cadran
+	Query Entities	Interogare entități
+	Quick	Rapid
+	Quick Dimension	Cotare rapidă
+	Quick Properties	Proprietăți rapide
+	Quick Select	Selecție rapidă
+	Quick Select Properties	Proprietăți selecție rapidă
+	Quick Select...	Selecție rapidă...
+	QuickCalc	QuickCalc
+	QuickCalc Pick	Preluare QuickCalc
+	Quit CADaddy	Ieșire din CADaddy
+	Radius	Rază
+	Raster Image	Imagine raster
+	Ray	Semidreaptă
+	Read-only	Doar citire
+	Real name	Nume real
+	Realtime	Timp real
+	Reassociate Dimensions	Reasociere cote
+	Recent	Recente
+	Recent Commands	Comenzi recente
+	Recent Input	Intrări recente
+	Recover...	Recuperare...
+	Rectangle	Dreptunghi
+	Recalculate Table Formulas	Recalculare formule tabel
+	Rectangular	Rectangulară
+	Rectangular snap	Prindere rectangulară
+	Rectangular Array	Multiplicare rectangulară
+	Red	Roșu
+	Redo	Refacere
+	Redo (⇧⌘Z)	Refacere (⇧⌘Z)
+	Redraw	Redesenare
+	Regen	Regenerare
+	Regen All	Regenerare totală
+	Region	Regiune
+	Region/Mass Properties	Proprietăți regiune/masă
+	Reinitialize	Reinițializare
+	Relative	Relativ
+	Relative to last segment	Relativ la ultimul segment
+	Remove Leader	Eliminare linie de indicație
+	Remove the viewport override	Elimină suprascrierea ferestrei
+	Rename Dimension Style	Redenumire stil de cotare
+	Rename Layer	Redenumire strat
+	Rename Layer State	Redenumire stare straturi
+	Rename Layout	Redenumire layout
+	Rename Text Style	Redenumire stil de text
+	Rename...	Redenumire...
+	Repeat {command}	Repetă {command}
+	Requires a point (x,y, @dx,dy or @d<a).	Necesită un punct (x,y, @dx,dy sau @d<a).
+	Reset Palettes	Resetare palete
+	Restore	Restaurare
+	Restore Layer State	Restaurare stare straturi
+	Reverse	Inversare
+	Reverse the order	Inversează ordinea
+	Revision Cloud	Nor de revizie
+	Revolve	Revoluție
+	Right	Dreapta
+	Rotate	Rotire
+	Rotation	Rotație
+	S	S
+	Save	Salvare
+	Save (⌘S)	Salvare (⌘S)
+	Save As	Salvare ca
+	Save As...	Salvare ca...
+	Save Layer State	Salvare stare straturi
+	Save State	Salvare stare
+	Scale	Scalare
+	Search for layer	Căutare strat
+	Search for parameter	Căutare parametru
+	Second and next points:	Punctul al doilea și următoarele:
+	Select	Selectare
+	Select 2D polyline	Selectați polilinia 2D
+	Select All	Selectează tot
+	Select Objects	Selectare obiecte
+	Select Similar	Selectare similare
+	Select a 2D polyline.	Selectați o polilinie 2D.
+	Select a block reference.	Selectați o referință de bloc.
+	Select a circle or arc.	Selectați un cerc sau un arc.
+	Select a closed polyline	Selectați o polilinie închisă
+	Select a closed polyline, circle, ellipse or closed spline.	Selectați o polilinie închisă, un cerc, o elipsă sau o spline închisă.
+	Select a closed polyline.	Selectați o polilinie închisă.
+	Select a curve as the path.	Selectați o curbă ca traseu.
+	Select a dimension constraint type	Selectați un tip de constrângere dimensională
+	Select a line object	Selectați un obiect linie
+	Select a line object.	Selectați un obiect linie.
+	Select a line or an arc.	Selectați o linie sau un arc.
+	Select a line or polyline segment	Selectați o linie sau un segment de polilinie
+	Select a line, arc or open polyline.	Selectați o linie, un arc sau o polilinie deschisă.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Selectați o linie, un arc, un cerc, o polilinie, o elipsă sau o spline ca traseu.
+	Select a line, circle, arc or polyline segment.	Selectați o linie, un cerc, un arc sau un segment de polilinie.
+	Select a line.	Selectați o linie.
+	Select a polyline.	Selectați o polilinie.
+	Select a text, mtext, attribute definition or dimension.	Selectați un text, un mtext, o definiție de atribut sau o cotă.
+	Select an annotation object	Selectați un obiect de adnotare
+	Select an arc or circle	Selectați un arc sau un cerc
+	Select an arc.	Selectați un arc.
+	Select an object	Selectați un obiect
+	Select an object to change or	Selectați un obiect de modificat sau
+	Select an object to measure or	Selectați un obiect de măsurat sau
+	Select an object.	Selectați un obiect.
+	Select an open curve.	Selectați o curbă deschisă.
+	Select an open line, arc, polyline, ellipse arc or spline.	Selectați o linie, un arc, o polilinie, un arc de elipsă sau o spline deschise.
+	Select arc or circle	Selectați arcul sau cercul
+	Select arc or polyline arc segment	Selectați arcul sau segmentul de arc al poliliniei
+	Select arc style	Selectați stilul arcului
+	Select arc, circle, line	Selectați arc, cerc, linie
+	Select at least two objects to join.	Selectați cel puțin două obiecte de unit.
+	Select circle or arc to add center mark	Selectați cercul sau arcul pentru marcajul de centru
+	Select closed objects (regions, closed polylines, circles).	Selectați obiecte închise (regiuni, polilinii închise, cercuri).
+	Select first line	Selectați prima linie
+	Select first line or arc	Selectați prima linie sau primul arc
+	Select first object	Selectați primul obiect
+	Select first object or	Selectați primul obiect sau
+	Select first point	Selectați primul punct
+	Select nested objects to copy or	Selectați obiectele imbricate de copiat sau
+	Select object	Selectați obiectul
+	Select object to dimension	Selectați obiectul de cotat
+	Select object to divide	Selectați obiectul de divizat
+	Select object to extend or shift-select to trim	Selectați obiectul de extins sau Shift+selectare pentru a tăia
+	Select object to measure	Selectați obiectul de măsurat
+	Select object to offset	Selectați obiectul pentru offset
+	Select object to trim or shift-select to extend	Selectați obiectul de tăiat sau Shift+selectare pentru a extinde
+	Select objects	Selectați obiectele
+	Select objects (crossing window first corner)	Selectați obiectele (primul colț al ferestrei de traversare)
+	Select objects to array.	Selectați obiectele de multiplicat.
+	Select objects to stretch by crossing-window or crossing-polygon...	Selectați obiectele de întins cu fereastră sau poligon de traversare...
+	Select objects:	Selectați obiectele:
+	Add to Working Set	Adăugare la setul de lucru
+	Edit Reference In-Place	Editare referință pe loc
+	Save Reference Edits	Salvare editări referință
+	Working Set	Set de lucru
+	Xref and Block In-place Editing	Editare pe loc a Xref-urilor și blocurilor
+	Select one polyline (Multiple is available through the JSON form).	Selectați o polilinie (Multiplu este disponibil prin formularul JSON).
+	Select path curve	Selectați curba traseului
+	Select point or object	Selectați punctul sau obiectul
+	Select polyline or	Selectați polilinia sau
+	Select second line	Selectați a doua linie
+	Select second line or shift-select to apply corner	Selectați a doua linie sau Shift+selectare pentru a aplica colțul
+	Select second object	Selectați al doilea obiect
+	Select second object or shift-select to apply corner	Selectați al doilea obiect sau Shift+selectare pentru a aplica colțul
+	Select second point	Selectați al doilea punct
+	Select spline	Selectați spline-ul
+	Select symmetry line	Selectați linia de simetrie
+	Select two points	Selectați două puncte
+	Selection Cycling	Selecție ciclică
+	Send to Back	Trimite în spate
+	Set Current	Setare curent
+	Set Current Dimension Style	Setare stil de cotare curent
+	Set Current Text Style	Setare stil de text curent
+	Set Current Viewport	Setare fereastră curentă
+	Set Layer Properties	Setare proprietăți strat
+	Set Properties	Setare proprietăți
+	Set Table Cell	Setare celulă tabel
+	Set Table Cell Style	Setare stil celulă tabel
+	Set Variable	Setare variabilă
+	Set View	Setare vedere
+	Share	Partajare
+	Show	Afișare
+	Show All	Afișează tot
+	Show All Constraint Bars	Afișează toate barele de constrângeri
+	Show All Dynamic Dimensions	Afișează toate cotele dinamice
+	Show and hide the tools of this category	Afișează și ascunde instrumentele acestei categorii
+	Show in Tool Sets	Afișare în seturile de instrumente
+	Show command prompting near the crosshairs	Afișează solicitările comenzilor lângă cursor
+	Show Layer List	Afișare listă straturi
+	Show/Hide Lineweight	Afișare/Ascundere grosime linie
+	Show/Hide Transparency	Afișare/Ascundere transparență
+	Single Line Text	Text pe un rând
+	Single Point	Punct simplu
+	Single...	Simplu...
+	Smooth	Netezire
+	Snap	Prindere
+	Snap Mode	Mod prindere
+	Snap Mode (F9)	Mod prindere (F9)
+	Snap On (F9)	Prindere activă (F9)
+	Snap Overrides	Suprascrieri prindere
+	Snap X spacing	Pas prindere X
+	Snap and Grid	Prindere și grilă
+	Snap type	Tip prindere
+	Solid	Solid
+	Sort	Sortare
+	Specify a point	Specificați un punct
+	Specify a scale for the hatch pattern	Specificați o scară pentru modelul de hașură
+	Specify a second extension line origin	Specificați originea celei de-a doua linii de extensie
+	Specify an angle for the hatch pattern	Specificați un unghi pentru modelul de hașură
+	Specify angle end point	Specificați punctul final al unghiului
+	Specify angle of dimension line	Specificați unghiul liniei de cotă
+	Specify angle of dimension text	Specificați unghiul textului cotei
+	Specify angle start point	Specificați punctul de start al unghiului
+	Specify angle vertex	Specificați vârful unghiului
+	Specify angle vertex point	Specificați punctul vârfului unghiului
+	Specify arc length dimension location	Specificați poziția cotei de lungime a arcului
+	Specify axis endpoint of ellipse	Specificați capătul axei elipsei
+	Specify base diameter	Specificați diametrul bazei
+	Specify base point	Specificați punctul de bază
+	Specify base point or	Specificați punctul de bază sau
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Specificați punctul de bază sau deplasarea (trageți cu butonul din mijloc pentru panoramare în timp real)
+	Specify base radius or	Specificați raza bazei sau
+	Specify center of donut	Specificați centrul inelului
+	Specify center of ellipse	Specificați centrul elipsei
+	Specify center of polygon	Specificați centrul poligonului
+	Specify center point for circle	Specificați centrul cercului
+	Specify center point of arc	Specificați centrul arcului
+	Specify center point of array	Specificați centrul multiplicării
+	Specify center point of base	Specificați centrul bazei
+	Specify corner of viewport	Specificați colțul ferestrei de vizualizare
+	Specify corner of window, enter a scale factor (nX or nXP)	Specificați colțul ferestrei, introduceți un factor de scară (nX sau nXP)
+	Specify diameter of circle	Specificați diametrul cercului
+	Specify dimension arc line location	Specificați poziția arcului liniei de cotă
+	Specify dimension line location	Specificați poziția liniei de cotă
+	Specify distance between turns	Specificați distanța dintre spire
+	Specify distance to other axis	Specificați distanța până la cealaltă axă
+	Specify end angle	Specificați unghiul final
+	Specify end point of arc	Specificați punctul final al arcului
+	Specify end point of arc (hold Ctrl to switch direction)	Specificați punctul final al arcului (țineți apăsat Ctrl pentru a schimba sensul)
+	Specify ending width	Specificați lățimea finală
+	Specify ending width for next segment	Specificați lățimea finală pentru segmentul următor
+	Specify endpoint of arc	Specificați capătul arcului
+	Specify endpoint of axis	Specificați capătul axei
+	Specify endpoint of line	Specificați capătul liniei
+	Specify feature location	Specificați poziția elementului
+	Specify fillet radius	Specificați raza de racordare
+	Specify fillet radius for rectangles	Specificați raza de racordare pentru dreptunghiuri
+	Specify first angle endpoint	Specificați primul capăt al unghiului
+	Specify first chamfer distance	Specificați prima distanță de teșire
+	Specify first chamfer distance for rectangles	Specificați prima distanță de teșire pentru dreptunghiuri
+	Specify first constraint point	Specificați primul punct de constrângere
+	Specify first corner	Specificați primul colț
+	Specify first corner point	Specificați punctul primului colț
+	Specify first destination point	Specificați primul punct de destinație
+	Specify first end point of circle's diameter	Specificați primul capăt al diametrului cercului
+	Specify first endpoint of edge	Specificați primul capăt al muchiei
+	Specify first extension line origin	Specificați originea primei linii de extensie
+	Specify first point	Specificați primul punct
+	Specify first point of mirror line	Specificați primul punct al liniei de oglindire
+	Specify first point on circle	Specificați primul punct pe cerc
+	Specify first point on circle: _tan to	Specificați primul punct pe cerc: _tan la
+	Specify first source point	Specificați primul punct sursă
+	Specify height	Specificați înălțimea
+	Specify helix height or	Specificați înălțimea elicei sau
+	Specify included angle	Specificați unghiul inclus
+	Specify insertion base point	Specificați punctul de bază pentru inserție
+	Specify insertion point	Specificați punctul de inserție
+	A drawing opened from a file keeps that file's format.	Un desen deschis dintr-un fișier păstrează formatul acelui fișier.
+	An array that would create more objects than this is refused.	O multiplicare care ar crea mai multe obiecte decât acest număr este refuzată.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy păstrează aceste preferințe, modurile de prindere la obiecte și comutatoarele de desenare pentru contul dvs. de utilizator și le restaurează la pornire.
+	Changes apply at once and are kept for next time.	Modificările se aplică imediat și sunt păstrate pentru data viitoare.
+	Command line history	Istoric linie de comandă
+	Copy as JSON	Copiere ca JSON
+	Crosshair size	Dimensiune cursor în cruce
+	Crossing selection color:	Culoare selecție prin traversare:
+	Display	Afișare
+	Exclude:	Excludere:
+	Grip size	Dimensiune grip
+	Grips	Grip-uri
+	Groups	Grupuri
+	Hatches	Hașuri
+	Hold Shift to add to the selection	Țineți apăsat Shift pentru a adăuga la selecție
+	Indicate selection area	Indică zona de selecție
+	Interface language	Limba interfeței
+	Interface theme	Tema interfeței
+	Keep the system cursor visible over the drawing area	Păstrează cursorul sistemului vizibil deasupra zonei de desenare
+	Largest array	Cea mai mare multiplicare
+	Layout paper	Hârtie layout
+	Model background	Fundal model
+	Multiline text	Text multilinie
+	Object grouping	Grupare obiecte
+	Object selection limit for display of grips	Limita de obiecte selectate pentru afișarea grip-urilor
+	Object snap aperture	Apertură prindere la obiecte
+	Object snap marker size	Dimensiune marcaj prindere la obiecte
+	Objects on locked layers	Obiecte pe straturi blocate
+	Open and Save	Deschidere și salvare
+	Options	Opțiuni
+	Options...	Opțiuni...
+	Pickbox size	Dimensiune casetă de selecție
+	Preview	Previzualizare
+	Profiles	Profiluri
+	Reset keeps the interface language.	Resetarea păstrează limba interfeței.
+	Reset to Defaults	Resetare la valorile implicite
+	Save new drawings as	Salvează desenele noi ca
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Lupele de ecran, cititoarele de ecran și programele de înregistrare urmăresc cursorul sistemului.
+	Select objects first, then choose a command	Selectați întâi obiectele, apoi alegeți o comandă
+	Selection	Selecție
+	Selection Area Effect	Efect zonă de selecție
+	Selection Preview Filter	Filtru previzualizare selecție
+	Selection area opacity:	Opacitate zonă de selecție:
+	Selection effect color	Culoare efect de selecție
+	Selection modes	Moduri de selecție
+	Selection preview	Previzualizare selecție
+	Settings...	Setări...
+	Show Quick Properties for selected objects	Afișează Proprietăți rapide pentru obiectele selectate
+	Show grips	Afișare grip-uri
+	Snap, grid, polar tracking and Dynamic Input:	Prindere, grilă, urmărire polară și intrare dinamică:
+	Tables	Tabele
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Apertura indică cât de aproape trebuie să ajungă cursorul de un punct pentru ca prinderea la obiecte să-l găsească.
+	User Preferences	Preferințe utilizator
+	Visual Effect Settings	Setări efecte vizuale
+	Visual Effect Settings...	Setări efecte vizuale...
+	When a command is active	Când o comandă este activă
+	When no command is active	Când nicio comandă nu este activă
+	Window selection color:	Culoare selecție prin fereastră:
+	Xrefs	Xref-uri
+	objects	obiecte
+	Specify inside diameter of donut	Specificați diametrul interior al inelului
+	Specify leader arrowhead location	Specificați poziția vârfului săgeții liniei de indicație
+	Specify leader endpoint	Specificați capătul liniei de indicație
+	Specify leader landing location	Specificați poziția palierului liniei de indicație
+	Specify length for rectangles	Specificați lungimea pentru dreptunghiuri
+	Specify length of chord	Specificați lungimea coardei
+	Specify length of segment	Specificați lungimea segmentului
+	Specify line width for rectangles	Specificați lățimea liniei pentru dreptunghiuri
+	Specify location for new vertex	Specificați poziția noului vârf
+	Specify minimum length of arc	Specificați lungimea minimă a arcului
+	Specify new end point	Specificați noul punct final
+	Specify new location for marked vertex	Specificați noua poziție a vârfului marcat
+	Specify new width for all segments	Specificați noua lățime pentru toate segmentele
+	Specify next point	Specificați punctul următor
+	Specify offset distance	Specificați distanța de offset
+	Specify offset distance or	Specificați distanța de offset sau
+	Specify opposite corner	Specificați colțul opus
+	Specify other corner point	Specificați punctul celuilalt colț
+	Specify other endpoint of axis	Specificați celălalt capăt al axei
+	Specify outside diameter of donut	Specificați diametrul exterior al inelului
+	Specify point	Specificați punctul
+	Specify point on object for first tangent of circle	Specificați punctul de pe obiect pentru prima tangentă a cercului
+	Specify point on object for second tangent of circle	Specificați punctul de pe obiect pentru a doua tangentă a cercului
+	Specify point on side to offset	Specificați un punct pe partea spre care se face offset
+	Specify radius of arc	Specificați raza arcului
+	Specify radius of circle	Specificați raza cercului
+	Specify rotation angle	Specificați unghiul de rotație
+	Specify rotation angle of text	Specificați unghiul de rotație al textului
+	Specify rotation angle or	Specificați unghiul de rotație sau
+	Specify scale factor	Specificați factorul de scară
+	Specify second angle endpoint	Specificați al doilea capăt al unghiului
+	Specify second break point	Specificați al doilea punct de întrerupere
+	Specify second chamfer distance for rectangles	Specificați a doua distanță de teșire pentru dreptunghiuri
+	Specify second constraint point	Specificați al doilea punct de constrângere
+	Specify second destination point	Specificați al doilea punct de destinație
+	Specify second end point of circle's diameter	Specificați al doilea capăt al diametrului cercului
+	Specify second endpoint of edge	Specificați al doilea capăt al muchiei
+	Specify second extension line origin	Specificați originea celei de-a doua linii de extensie
+	Specify second point	Specificați al doilea punct
+	Specify second point of arc	Specificați al doilea punct al arcului
+	Specify second point of mirror line	Specificați al doilea punct al liniei de oglindire
+	Specify second point on circle	Specificați al doilea punct pe cerc
+	Specify second point on circle: _tan to	Specificați al doilea punct pe cerc: _tan la
+	Specify second point or <use first point as displacement>	Specificați al doilea punct sau <folosiți primul punct ca deplasare>
+	Specify second source point	Specificați al doilea punct sursă
+	Specify side to offset	Specificați partea spre care se face offset
+	Specify start angle	Specificați unghiul de start
+	Specify start point	Specificați punctul de start
+	Specify start point of arc	Specificați punctul de start al arcului
+	Specify start point of polyline	Specificați punctul de start al poliliniei
+	Specify start point of text	Specificați punctul de start al textului
+	Specify starting width	Specificați lățimea inițială
+	Specify starting width for next segment	Specificați lățimea inițială pentru segmentul următor
+	Specify tangent direction for the start point of arc	Specificați direcția tangentei în punctul de start al arcului
+	Specify the elevation for rectangles	Specificați cota de nivel pentru dreptunghiuri
+	Specify thickness for rectangles	Specificați grosimea pentru dreptunghiuri
+	Specify third point on circle	Specificați al treilea punct pe cerc
+	Specify third point on circle: _tan to	Specificați al treilea punct pe cerc: _tan la
+	Specify third source point or <continue>	Specificați al treilea punct sursă sau <continuare>
+	Specify through point	Specificați punctul de trecere
+	Specify top diameter	Specificați diametrul superior
+	Specify top radius or	Specificați raza superioară sau
+	Specify total angle	Specificați unghiul total
+	Specify total length or	Specificați lungimea totală sau
+	Specify width for rectangles	Specificați lățimea pentru dreptunghiuri
+	Sphere	Sferă
+	Spline	Spline
+	Spline Edit	Editare spline
+	Stack (type 1/2 then select)	Fracție (tastați 1/2, apoi selectați)
+	Standard	Standard
+	Start	Start
+	Start Width	Lățime inițială
+	Start X	X inițial
+	Start Y	Y inițial
+	Start angle	Unghi de start
+	Start, Center, Angle	Start, centru, unghi
+	Start, Center, End	Start, centru, capăt
+	Start, Center, Length	Start, centru, lungime
+	Start, End, Angle	Start, capăt, unghi
+	Start, End, Direction	Start, capăt, direcție
+	Start, End, Radius	Start, capăt, rază
+	Status	Stare
+	Status Bar	Bară de stare
+	Stretch	Întindere
+	Style: Standard	Stil: Standard
+	Subtract	Scădere
+	Sweep	Baleiere
+	Switch Drawing	Comutare desen
+	Switch Layout	Comutare layout
+	Switch between model space in a viewport and paper space	Comută între spațiul model dintr-o fereastră și spațiul hârtie
+	Symmetric	Simetric
+	Synchronize Attributes	Sincronizare atribute
+	To	Până la
+	Toggle PICKADD (off: each pick replaces the selection)	Comutare PICKADD (dezactivat: fiecare selecție o înlocuiește pe cea existentă)
+	Toggle PICKADD (on: picks add to the selection)	Comutare PICKADD (activat: selecțiile se adaugă la selecție)
+	TOP	SUS
+	Table	Tabel
+	Table Breaks	Întreruperi tabel
+	Table Cell Style	Stil celulă tabel
+	Table Style...	Stil de tabel...
+	Table style	Stil de tabel
+	Table...	Tabel...
+	Tan, Tan, Radius	Tan, Tan, Rază
+	Tan, Tan, Tan	Tan, Tan, Tan
+	Tangent	Tangent
+	Temporary track point	Punct de urmărire temporar
+	Text	Text
+	Text Editor	Editor de text
+	Text Height	Înălțime text
+	Text Style...	Stil de text...
+	Text height	Înălțime text
+	Text override	Suprascriere text
+	Text style	Stil de text
+	Thaw All Layers	Dezghețare toate straturile
+	Thaw Layer	Dezghețare strat
+	There is nothing here yet.	Aici nu există încă nimic.
+	Thickness	Grosime
+	Time	Timp
+	To get started, create or open a drawing.	Pentru a începe, creați sau deschideți un desen.
+	Tool Bar	Bară de instrumente
+	Tool Sets	Seturi de instrumente
+	Tools	Instrumente
+	Torus	Tor
+	Trace	Trasare
+	Track orthogonally only	Urmărire doar ortogonală
+	Track using all polar angle settings	Urmărire folosind toate setările de unghi polar
+	Transparency	Transparență
+	Trim	Tăiere
+	True Color	Culoare reală
+	Turn All Layers On	Activează toate straturile
+	Turn Off Layer	Dezactivare strat
+	Turn On Layer	Activare strat
+	Turn Quick Properties off (QPMODE)	Dezactivează Proprietăți rapide (QPMODE)
+	Type	Tip
+	Type a command	Tastați o comandă
+	Type text; Enter starts a new paragraph	Tastați textul; Enter începe un paragraf nou
+	UCS Icon	Pictogramă UCS
+	Undo	Anulare acțiune
+	Undo (⌘Z)	Anulare acțiune (⌘Z)
+	Ungroup	Degrupare
+	Union	Reuniune
+	Unisolate Layer	Anulare izolare strat
+	Units Conversion	Conversie unități
+	Units...	Unități...
+	Unlock Layer	Deblocare strat
+	Unlock viewport	Deblocare fereastră
+	Unmerge Cells	Separare celule
+	Unsaved Layer State	Stare straturi nesalvată
+	Up	Sus
+	Update Data Links	Actualizare legături de date
+	Update	Actualizare
+	Use System Setting	Folosește setarea sistemului
+	User	Utilizator
+	User Parameters	Parametri utilizator
+	Username	Nume utilizator
+	Volume	Volum
+	VP Color	Culoare FV
+	VP Freeze	Înghețare FV
+	Value	Valoare
+	Value:	Valoare:
+	Variables	Variabile
+	Version	Versiune
+	Version 2000	Versiunea 2000
+	Version 2004	Versiunea 2004
+	Version 2007	Versiunea 2007
+	Version 2010	Versiunea 2010
+	Version 2013	Versiunea 2013
+	Version 2018	Versiunea 2018
+	Version {version}	Versiunea {version}
+	Vertical	Vertical
+	VerticalDistance	Distanță verticală
+	View	Vedere
+	ViewCube	ViewCube
+	Viewport	Fereastră de vizualizare
+	Viewport Layer Freeze	Înghețare strat în fereastră
+	Viewport Properties	Proprietăți fereastră
+	Viewport is locked	Fereastra este blocată
+	Viewport scale	Scară fereastră
+	Viewport {id}	Fereastra {id}
+	Viewports	Ferestre de vizualizare
+	W	V
+	WCS ⌄	WCS ⌄
+	White	Alb
+	Width factor	Factor de lățime
+	Window	Fereastră
+	Wipeout	Mascare
+	Workspace Switching	Comutare spațiu de lucru
+	Write Block	Scriere bloc
+	Xline	Linie de construcție
+	Yellow	Galben
+	Yes	Da
+	Zoom	Zoom
+	Zoom All	Zoom total
+	Zoom Dynamic	Zoom dinamic
+	Zoom Extents	Zoom extinderi
+	Zoom In	Mărire
+	Zoom Object	Zoom obiect
+	Zoom Out	Micșorare
+	Zoom Previous	Zoom anterior
+	Zoom Realtime	Zoom în timp real
+	Zoom Window	Zoom fereastră
+	error	eroare
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (constrângerea {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	Constrângere {kind} {name} = {expression}  (dublu clic pentru editare)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Parametru utilizator nou
+	ΔLOC	ΔLOC
+	−Bin	−Binar
+	−LOC	−LOC
+	⌘↩ to finish	⌘↩ pentru a termina
+@plural	{n} commit	{n} commit|{n} commit-uri|{n} de commit-uri
+@plural	{n} contributor	{n} contribuitor|{n} contribuitori|{n} de contribuitori
+	Drawing as bytes	Desen ca octeți
+	Services	Servicii
+	Hide CADaddy	Ascunde CADaddy
+	Hide Others	Ascunde celelalte
+	Accessibility	Accesibilitate
+	Show System Cursor	Afișare cursor sistem
+	Animation Effects	Efecte de animație
+	Animation effects	Efecte de animație
+	Import...	Import...
+	Export...	Export...
+	Batch Publish...	Publicare în lot...
+	Scale List...	Listă de scări...
+	Annotative Object Scale	Scară obiect adnotativ
+	Add Current Scale	Adăugare scară curentă
+	Delete Current Scale	Ștergere scară curentă
+	Add/Delete Scales...	Adăugare/Ștergere scări...
+	Synchronize Multiple-scale Positions	Sincronizare poziții la scări multiple
+	Annotative Update	Actualizare adnotative
+	Show Annotative Objects	Afișare obiecte adnotative
+	Current Scale Only	Doar scara curentă
+	All Scales	Toate scările
+	Drawing Recovery Manager...	Manager recuperare desene...
+	Tolerance...	Toleranță...
+	Add Vertex	Adăugare vârf
+	Remove Vertex	Eliminare vârf
+	Convert to Arc	Conversie în arc
+	Convert to Line	Conversie în linie
+	Stretch Vertex	Întindere vârf
+	Edit Array	Editare multiplicare
+	Close Array Editing	Închidere editare multiplicare
+	Multiline...	Multilinie...
+	Multiline Style...	Stil multilinie...
+	Solid Editing	Editare solide
+	3D Mouse...	Mouse 3D...
+	3D Mouse	Mouse 3D
+	Calibrate 3D Mouse	Calibrare mouse 3D
+	3D Mouse Navigation	Navigare cu mouse 3D
+	3D mouse input is unavailable on this platform	Intrarea de la mouse-ul 3D nu este disponibilă pe această platformă
+	No supported 3D mouse found	Nu s-a găsit niciun mouse 3D compatibil
+	Release the 3D mouse to calibrate its resting position	Eliberați mouse-ul 3D pentru a-i calibra poziția de repaus
+	3D mouse connected	Mouse 3D conectat
+	3D mouse busy, possibly 3DxWare or missing device permissions	Mouse 3D ocupat, posibil de 3DxWare sau lipsesc permisiunile dispozitivului
+	3D mouse disconnected	Mouse 3D deconectat
+	3D mouse input could not be started	Intrarea de la mouse-ul 3D nu a putut fi pornită
+	Enable 3D mouse navigation	Activare navigare cu mouse 3D
+	Pan sensitivity	Sensibilitate panoramare
+	Zoom sensitivity	Sensibilitate zoom
+	Reverse zoom direction	Inversare sens zoom
+	Calibrate	Calibrare
+	Move sideways to pan; push/pull or twist to zoom.	Deplasați lateral pentru panoramare; împingeți/trageți sau răsuciți pentru zoom.
+	Left device button: zoom extents. Right device button: calibrate.	Buton stâng al dispozitivului: zoom extinderi. Buton drept: calibrare.
+	More toolbar commands	Mai multe comenzi din bara de instrumente
+	Default save version	Versiune implicită de salvare
+	Automatic save every	Salvare automată la fiecare
+	min	min
+	Automatic save file location	Locația fișierelor de salvare automată
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Desenele care nu au încă un fișier sunt salvate în versiunea implicită. 0 minute dezactivează salvarea automată.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Clic dreapta sensibil la timp: un clic rapid înseamnă Enter, ținerea apăsată deschide meniul
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Dezactivat, un clic dreapta în timpul unei comenzi deschide întotdeauna meniul contextual.
+	Hatch Pattern	Model de hașură
+	Search for pattern	Căutare model
+	Run Script...	Rulare script...
+	Query Texts	Interogare texte
+	Hatch Pick	Preluare hașură
+	Hatch and Gradient	Hașură și gradient
+	Color 1	Culoarea 1
+	Color 2	Culoarea 2
+	Shape	Formă
+	Curved	Curbat
+	Spherical	Sferic
+	Hemispherical	Emisferic
+	Inverted	Inversat
+	Centered	Centrat
+	Hatch origin	Origine hașură
+	Use current origin	Folosește originea curentă
+	Specified origin	Origine specificată
+	Click to set new origin	Clic pentru a seta noua origine
+	Default to boundary extents	Implicit la extinderile conturului
+	Bottom left	Stânga jos
+	Bottom right	Dreapta jos
+	Top left	Stânga sus
+	Top right	Dreapta sus
+	Boundaries	Contururi
+	Add: Pick points	Adăugare: selectare puncte
+	Add: Select objects	Adăugare: selectare obiecte
+	Boundaries picked: {n}	Contururi selectate: {n}
+	Associative	Asociativ
+	Create separate hatches	Creare hașuri separate
+	Island detection	Detectare insule
+	Normal	Normal
+	Outer	Exterior
+	Ignore	Ignorare
+	Origin: {x}, {y}	Origine: {x}, {y}
+	Sheet Books to PDF...	Seturi de planșe în PDF...
+	Not a number or distance: {text}	Nu este un număr sau o distanță: {text}
+	Dynamic Block Data	Date bloc dinamic
+	Custom	Personalizat
+	Dynamic Block Reference	Referință bloc dinamic
+	Set Dynamic Property	Setare proprietate dinamică
+	Dynamic Block Grips	Grip-uri bloc dinamic
+	Drag Dynamic Grip	Tragere grip dinamic
+	Save Block	Salvare bloc
+	Save Block As	Salvare bloc ca
+	Close Block Editor	Închidere editor de blocuri
+	Unsaved changes	Modificări nesalvate
+	Edit Block Definition	Editare definiție bloc
+	Block to create or edit	Bloc de creat sau de editat
+	Open in Block Editor	Deschidere în Editorul de blocuri
+	This drawing	Acest desen
+	contains authoring elements. Open in Block Editor?	conține elemente de creare. Deschideți în Editorul de blocuri?
+	New block	Bloc nou
+	Italic	Cursiv
+	Underline	Subliniat
+	Overline	Supraliniat
+	Justify	Aliniere stânga-dreapta
+	Text color	Culoare text
+	Click the ruler to add a tab stop, right-click to remove one	Clic pe riglă pentru a adăuga un tabulator, clic dreapta pentru a-l elimina
+	Ribbon	Panglică
+	Close Ribbon	Închidere panglică
+	Menu Bar	Bară de meniu
+	Top	Sus
+	Bottom	Jos
+	Front	Față
+	Back	Spate
+	SW Isometric	Izometric SV
+	SE Isometric	Izometric SE
+	NE Isometric	Izometric NE
+	NW Isometric	Izometric NV
+	3D Views	Vederi 3D
+	Plan View	Vedere în plan
+	World UCS	UCS global
+	View Direction	Direcție de vizualizare
+	2D Wireframe	Cadru de sârmă 2D
+	Custom View	Vedere personalizată
+	Convert PDF to DWG...	Conversie PDF în DWG...
+	Convert PDF to DWG	Conversie PDF în DWG
+	PDF Import...	Import PDF...
+	PDF Import	Import PDF
+	Page	Pagină
+	PDF layers (else by colour and line weight)	Straturi PDF (altfel după culoare și grosime de linie)
+	By colour and line weight	După culoare și grosime de linie
+	Object layers (PDF_Geometry, PDF_Text, …)	Straturi de obiecte (PDF_Geometry, PDF_Text, …)
+	Import text	Import text
+	Join line pieces and make circles	Unire bucăți de linie și creare cercuri
+	Keep white fills (masks)	Păstrare umpleri albe (măști)
+	Import raster images (saved as PNG files)	Import imagini raster (salvate ca fișiere PNG)
+	Add a layout that plots like the sheet	Adaugă un layout care se plotează ca planșa
+	Convert and Save as DWG…	Conversie și salvare ca DWG…
+	Walk	Plimbare
+	Report a Bug...	Raportare eroare...
+	Request a Feature...	Solicitare funcționalitate...
+	Donate / Improve	Donație / Îmbunătățire
+	Improve CADaddy	Îmbunătățiți CADaddy
+	Or email {address}	Sau trimiteți un e-mail la {address}
+	Support CADaddy	Susțineți CADaddy
+	CADaddy is free, and it always will be.	CADaddy este gratuit și va fi întotdeauna.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Fără reclame, fără abonament. Dacă CADaddy vă economisește timp, o mică donație plătește timpul de AI care construiește următoarele funcționalități.
+	Report a bug or request a feature	Raportați o eroare sau solicitați o funcționalitate
+	Support CADaddy...	Susțineți CADaddy...
+	Array (classic)	Multiplicare (clasic)
+	Change	Schimbare
+	Change Properties	Schimbare proprietăți
+	Quick Leader	Indicație rapidă
+	Symbol...	Simbol...
+	List Symbols	Listare simboluri
+	Symbols	Simboluri
+	Search symbols	Căutare simboluri
+	No symbols match.	Niciun simbol nu corespunde.
+	Plumbing fixtures	Obiecte sanitare
+	Plumbing piping	Conducte sanitare
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Proiectare și desenare asistate de calculator pentru Windows, Mac și Linux, scrisă în Rust.
+	Includes open-source components: see NOTICE.	Include componente open-source: vezi NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Gratuit. Nu este afiliat cu Autodesk, Inc.
+	Electrical devices	Dispozitive electrice
+	Lighting	Iluminat
+	Power and distribution	Alimentare și distribuție
+	Low voltage	Curenți slabi
+	Fire alarm	Alarmă de incendiu
+	Check for Updates...	Căutare actualizări...
+	Check for updates automatically	Caută automat actualizări
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	O dată pe zi, CADaddy întreabă GitHub care este cel mai nou număr de versiune. Nu se trimite nimic despre dvs. sau despre desenele dvs.
+	Checking for updates...	Se caută actualizări...
+	CADaddy {v} is the latest version.	CADaddy {v} este cea mai recentă versiune.
+	CADaddy {v} is available	CADaddy {v} este disponibil
+	You have {v}. Updating keeps your drawings and settings.	Aveți {v}. Actualizarea păstrează desenele și setările dvs.
+	Downloading CADaddy {v}...	Se descarcă CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} este gata de instalare
+	It installs when you close CADaddy. Restart now to update right away.	Se instalează când închideți CADaddy. Reporniți acum pentru a actualiza imediat.
+	Couldn't update CADaddy	Nu s-a putut actualiza CADaddy
+	Download	Descărcare
+	What's New	Noutăți
+	Later	Mai târziu
+	Skip This Version	Omite această versiune
+	Restart Now	Repornește acum
+	When I Close CADaddy	La închiderea CADaddy
+	Download Page	Pagina de descărcare
+	Hide	Ascundere
+	The current layer is being turned off	Stratul curent este dezactivat
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Stratul „{layer}” este stratul curent. Obiectele desenate pe el nu vor fi vizibile până nu îl reactivați.
+	Keep the Current Layer On	Păstrează stratul curent activat
+	Turn the Current Layer Off	Dezactivează stratul curent
+	Quantity Takeoff	Extragere cantități
+	Dimension Style	Stil de cotare
+	Text Style	Stil de text
+	Xref	Xref
+	Raster Image Reference...	Referință imagine raster...
+	Window Lasso	Lasou fereastră
+	Crossing Lasso	Lasou traversare
+	Fence Lasso	Lasou gard
+	Press Space to cycle options	Apăsați Space pentru a parcurge opțiunile
+	Burst	Descompunere cu atribute
+	Convert to Mtext	Conversie în Mtext
+	View Twist	Răsucire vedere
+	Let AI agents control CADaddy	Permite agenților AI să controleze CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Conectorul Claude și alți agenți de pe acest computer vor putea deschide, edita, salva și închide desene în această fereastră. Nimic din afara acestui computer nu se poate conecta. Intră în vigoare la următoarea pornire a CADaddy.
+	Base Point	Punct de bază
+	Column Spacing	Distanță între coloane
+	Column Count	Număr de coloane
+	Row Spacing	Distanță între rânduri
+	Row Count	Număr de rânduri
+	Row and Column Count	Număr de rânduri și coloane
+	Level Spacing	Distanță între niveluri
+	Level Count	Număr de niveluri
+	Item Spacing	Distanță între elemente
+	Item Count	Număr de elemente
+	Total column spacing	Distanța totală între coloane
+	Total row spacing	Distanța totală între rânduri
+	Total row and column spacing	Distanța totală între rânduri și coloane
+	Total level spacing	Distanța totală între niveluri
+	Fill angle	Unghi de umplere
+	Stretch radius	Întindere rază
+	Array Grips	Grip-uri multiplicare
+	Edit Array with a Grip	Editare multiplicare cu un grip
+	Open Drawings	Desene deschise
+	Close Drawing	Închidere desen
+	Close All Drawings	Închide toate desenele
+	Export Comparison Report...	Export raport de comparație...
+	Select All Layouts	Selectează toate layout-urile
+	Move or Copy...	Mutare sau copiere...
+	Move or Copy	Mutare sau copiere
+	Move or copy layout "{name}"	Mutare sau copiere layout „{name}”
+	Before layout:	Înainte de layout:
+	(move to end)	(mutare la sfârșit)
+	Create a copy	Creează o copie
+	A drawing keeps at least one layout.	Un desen păstrează cel puțin un layout.
+	Move Layout	Mutare layout
+	Background	Fundal
+	Text fill	Umplere text
+	Text fill color	Culoare umplere text
+	Text reads right to left	Textul se citește de la dreapta la stânga
+	Placing text places the dimension line	Plasarea textului plasează linia de cotă
+	Alternate tolerance precision	Precizie toleranță alternativă
+	Alternate tolerance zero suppression	Suprimare zerouri toleranță alternativă
+	Linear jog height (× text height)	Înălțime frângere liniară (× înălțimea textului)
+	Break size	Dimensiune întrerupere
+	Express Tools	Instrumente Express
+	Break-line Symbol	Simbol linie de întrerupere
+	Replace Block...	Înlocuire bloc...
+	Move/Copy/Rotate	Mutare/Copiere/Rotire
+	Remove boundaries	Eliminare contururi
+	Inherit Properties	Moștenire proprietăți
+	Nothing to preview yet.	Încă nu există nimic de previzualizat.
+	Property Settings	Setări proprietăți
+	Basic Properties	Proprietăți de bază
+	Special Properties	Proprietăți speciale
+	Plot Style	Stil de plotare
+	Material	Material
+	Shadow display	Afișare umbre
+	Center object	Obiect central
+	Move with Dim Line	Mutare cu linia de cotă
+	Move Text Only	Mutare doar text
+	Above Dim Line	Deasupra liniei de cotă
+	Center Vertically	Centrare pe verticală
+	Reset Text Position	Resetare poziție text
+	Continue Dimension	Continuare cotă
+	Baseline Dimension	Cotă de la linia de bază
+	Flip Arrow	Întoarcere săgeată
+	Lengthen Landing	Alungire palier
+	Origin Point	Punct de origine
+	Hatch Angle	Unghi hașură
+	Hatch Scale	Scară hașură
+	Edit Tolerance	Editare toleranță
+	Geometric Tolerance	Toleranță geometrică
+	Geometric characteristic	Caracteristică geometrică
+	Material condition	Condiție de material
+	No symbol	Fără simbol
+	Projected Tolerance Zone	Zonă de toleranță proiectată
+	Datum Identifier	Identificator bază de referință
+	Sym	Sim
+	Tolerance 1	Toleranța 1
+	Tolerance 2	Toleranța 2
+	Datum 1	Baza de referință 1
+	Datum 2	Baza de referință 2
+	Datum 3	Baza de referință 3
+	PDF Underlay...	Suport PDF...
+	Clip PDF Underlay	Decupare suport PDF
+	Adjust PDF Underlay	Ajustare suport PDF
+	PDF Underlay Layers	Straturi suport PDF
+	Unused items in this drawing	Elemente neutilizate în acest desen
+	Purge Checked Items	Curățare elemente bifate
+	Purge All	Curățare totală
+	Items purged: {count}	Elemente curățate: {count}
+	Find what:	De găsit:
+	Replace with:	Înlocuire cu:
+	Match case	Potrivire majuscule/minuscule
+	Find whole words only	Doar cuvinte întregi
+	Find	Găsire
+	Replace All	Înlocuiește tot
+	Matches replaced: {count} (objects: {objects})	Potriviri înlocuite: {count} (obiecte: {objects})
+	Matches found and selected: {count} (objects: {objects})	Potriviri găsite și selectate: {count} (obiecte: {objects})
+	Select Color	Selectare culoare
+	Dimension styles	Stiluri de cotare
+	Linetypes	Tipuri de linie
+	Multileader styles	Stiluri multi-indicație
+	Multiline styles	Stiluri multilinie
+	Table styles	Stiluri de tabel
+	Text styles	Stiluri de text
+	Zero-length geometry	Geometrie de lungime zero
+	Empty text objects	Obiecte text goale
+	Palette Windows	Ferestre de palete
+	Dock	Andocare
+	Back into the main window	Înapoi în fereastra principală
+	Dock Palette	Andocare paletă
+	Float in Own Window	Flotantă în fereastră proprie
+	Drawings (CDY, DWG, DXF)	Desene (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Desen CADaddy (CDY)
+	CADaddy drawing (.cdy)	Desen CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Salvează și o copie DWG la salvarea unui desen CADaddy (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Un desen CADaddy păstrează totul; fișierele DWG și DXF s-ar putea să nu păstreze tot (la salvare se indică ce anume).
+	Field...	Câmp...
+	Update Fields	Actualizare câmpuri
+	Change Text Case	Schimbare majuscule/minuscule
+	Auto Number	Numerotare automată
+	Explode Text	Descompunere text
+	Arc Aligned Text	Text aliniat pe arc
+	Data Extraction	Extragere date
+	Data source	Sursă de date
+	Objects	Obiecte
+	Output	Ieșire
+	Other drawings:	Alte desene:
+	Add Drawings...	Adăugare desene...
+	Open Settings...	Deschidere setări...
+	Start from a saved .dxe settings file	Pornește de la un fișier de setări .dxe salvat
+	Block names	Nume blocuri
+	Include blocks inside blocks	Include blocurile din interiorul blocurilor
+	Other objects:	Alte obiecte:
+	The drawing has no other objects.	Desenul nu are alte obiecte.
+	Properties to extract:	Proprietăți de extras:
+	Attribute tags	Etichete atribute
+	Combine identical rows	Combinare rânduri identice
+	Insert a table	Inserare tabel
+	Insertion point	Punct de inserție
+	Title	Titlu
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Scriere fișier (.csv pentru foi de calcul, .txt separat prin tabulatori)
+	Browse...	Răsfoire...
+	Save Settings...	Salvare setări...
+	Save these choices to a .dxe file to use again	Salvați aceste opțiuni într-un fișier .dxe pentru a le refolosi
+	< Back	< Înapoi
+	Next >	Înainte >
+	Finish	Terminare
+	UCS	UCS
+	Plan View (World)	Vedere în plan (global)
+	New UCS	UCS nou
+	World	Global
+	Current UCS	UCS curent
+	World (WCS)	Global (WCS)
+	Unnamed	Fără nume
+	Hide UCS Icon	Ascundere pictogramă UCS
+	WCS	WCS
+	Spelling	Ortografie
+	Check Spelling	Verificare ortografie
+	Where to check	Unde se verifică
+	Selected objects	Obiecte selectate
+	Not in dictionary:	Nu este în dicționar:
+	Suggestions:	Sugestii:
+	Ignore All	Ignoră tot
+	Change All	Schimbă tot
+	Add to Dictionary	Adăugare în dicționar
+	Main dictionary:	Dicționar principal:
+	American English	Engleză americană
+	Custom dictionary:	Dicționar personalizat:
+	Spelling check complete.	Verificarea ortografiei s-a încheiat.
+	Hyperlink...	Hyperlink...
+	Select Objects for a Hyperlink	Selectare obiecte pentru un hyperlink
+	Open Hyperlink	Deschidere hyperlink
+	Insert Hyperlink	Inserare hyperlink
+	Edit Hyperlink	Editare hyperlink
+	Text to display	Text de afișat
+	File or web page	Fișier sau pagină web
+	Named location	Locație denumită
+	A named location with no file or web page is a layout or view of this drawing.	O locație denumită fără fișier sau pagină web este un layout sau o vedere din acest desen.
+	Remove Link	Eliminare legătură
+	⌘-click to follow the link	⌘-clic pentru a urma legătura
+	Ctrl+click to follow the link	Ctrl+clic pentru a urma legătura
+	Materials Browser...	Navigator materiale...
+	Attach by Layer	Atașare după strat
+	Material Mapping	Mapare material
+	New Material	Material nou
+	Edit Material	Editare material
+	Delete Material	Ștergere material
+	Assign Material	Atribuire material
+	Materials Browser	Navigator materiale
+	Search	Căutare
+	Library	Bibliotecă
+	Add to drawing	Adăugare în desen
+	In this drawing	În acest desen
+	No materials yet: add one from the library.	Încă nu există materiale: adăugați unul din bibliotecă.
+	Colour	Culoare
+	Roughness	Rugozitate
+	Metallic	Metalic
+	Opacity	Opacitate
+	Mapping	Mapare
+	Tile size	Dimensiune dală
+	Assign to selection ({n})	Atribuire la selecție ({n})
+	Attach to layer	Atașare la strat
+	Render	Randare
+	Edit Layer State	Editare stare straturi
+	Export Layer State	Export stare straturi
+	Import Layer State	Import stare straturi
+	New Layer Filter	Filtru de straturi nou
+	Edit Layer Filter	Editare filtru de straturi
+	Delete Layer Filter	Ștergere filtru de straturi
+	List Layer Filters	Listare filtre de straturi
+	Layers in Filter	Straturi din filtru
+	Layer States Manager	Manager stări straturi
+	Invert filter	Inversare filtru
+	New Property Filter...	Filtru de proprietăți nou...
+	New Group Filter	Filtru de grup nou
+	Add Layer	Adăugare strat
+	Remove Layer	Eliminare strat
+	Layer Filter Properties	Proprietăți filtru de straturi
+	Filter name	Nume filtru
+	Within	În interiorul
+	Any	Oricare
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Modele: * orice, ? un caracter, # o cifră; separați prin virgule; ~ exclude.
+	Layer states	Stări straturi
+	Turn off layers not found in layer state	Dezactivează straturile care nu se găsesc în starea straturilor
+	Layer properties to restore	Proprietăți strat de restaurat
+	On / Off	Activat / Dezactivat
+	Frozen / Thawed	Înghețat / Dezghețat
+	Locked / Unlocked	Blocat / Deblocat
+	Plot / No Plot	Plotare / Fără plotare
+	Layers in "{name}"	Straturi în „{name}”
+	Remove from the layer state	Eliminare din starea straturilor
+	New...	Nou...
+	Save the layers as they are now in this state	Salvează în această stare straturile așa cum sunt acum
+	Edit...	Editare...
+	Rename	Redenumire
+	New layer state name	Numele noii stări de straturi
+	New name	Nume nou
+	Visual Style	Stil vizual
+	Visual Styles	Stiluri vizuale
+	Wireframe	Cadru de sârmă
+	Hidden	Ascuns
+	Shaded	Umbrit
+	Shaded with Edges	Umbrit cu muchii
+	Realistic	Realist
+	Mesh	Plasă
+	Polyface Mesh	Plasă poliface
+	Polygon Mesh	Plasă poligonală
+	Fly	Zbor
+	Walk and Fly	Plimbare și zbor
+	3D Library...	Bibliotecă 3D...
+	Add 3D Twins to Symbols	Adăugare gemeni 3D la simboluri
+	List 3D Models	Listare modele 3D
+	Add 3D Twins	Adăugare gemeni 3D
+	Plan Layers	Straturi plan
+	Plan Walls	Pereți plan
+	Plan Openings	Goluri plan
+	Plan Rooms	Încăperi plan
+	Plan Notes	Note plan
+	Plan Sheets	Planșe plan
+	3D Building from Plan	Clădire 3D din plan
+	Wedge	Pană
+	Presspull	Apăsare/Tragere
+	3D Solid	Solid 3D
+	Specify center	Specificați centrul
+	Specify length	Specificați lungimea
+	Specify width	Specificați lățimea
+	Specify other corner	Specificați celălalt colț
+	Specify center point	Specificați punctul central
+	Specify base radius	Specificați raza bazei
+	Specify radius	Specificați raza
+	Specify diameter	Specificați diametrul
+	Specify top radius	Specificați raza superioară
+	Specify tube radius	Specificați raza tubului
+	Select objects to extrude	Selectați obiectele de extrudat
+	Select extrusion path	Selectați traseul de extrudare
+	Specify angle of taper for extrusion	Specificați unghiul de înclinare pentru extrudare
+	Specify height of extrusion	Specificați înălțimea extrudării
+	Select objects to revolve	Selectați obiectele de revoluționat
+	Specify axis start point or define axis by	Specificați punctul de start al axei sau definiți axa prin
+	Specify axis endpoint	Specificați capătul axei
+	Specify angle of revolution	Specificați unghiul de revoluție
+	Select objects to sweep	Selectați obiectele de baleiat
+	Select sweep path	Selectați traseul de baleiere
+	Select cross sections in lofting order	Selectați secțiunile transversale în ordinea loft-ului
+	Click inside bounded areas to press or pull	Clic în interiorul zonelor închise pentru a apăsa sau a trage
+	Specify extrusion height	Specificați înălțimea extrudării
+	Cube	Cub
+	Sides	Laturi
+	Top radius	Rază superioară
+	Path	Traseu
+	Taper angle	Unghi de înclinare
+	Select one or more regions or 3D solids.	Selectați una sau mai multe regiuni sau solide 3D.
+	No closed area found there.	Nu s-a găsit acolo nicio zonă închisă.
+	Slice	Secționare
+	Thicken	Îngroșare
+	Fillet Edge	Racordare muchie
+	Chamfer Edge	Teșire muchie
+	Fillet Edges	Racordare muchii
+	Chamfer Edges	Teșire muchii
+	Move Faces	Mutare fețe
+	Offset Faces	Offset fețe
+	Delete Faces	Ștergere fețe
+	Shell	Carcasă
+	Composite	Compus
+	Select objects to slice	Selectați obiectele de secționat
+	Specify a point on desired side or [keep Both sides]	Specificați un punct pe partea dorită sau [păstrare Ambele părți]
+	Both	Ambele
+	Specify start point of slicing plane or	Specificați punctul de start al planului de secționare sau
+	Specify second point on plane	Specificați al doilea punct pe plan
+	Specify the Z of the XY-plane	Specificați Z al planului XY
+	Specify the X of the YZ-plane	Specificați X al planului YZ
+	Specify the Y of the ZX-plane	Specificați Y al planului ZX
+	Select surfaces to thicken	Selectați suprafețele de îngroșat
+	Select a 3D solid	Selectați un solid 3D
+	Select an edge	Selectați o muchie
+	Remove faces	Eliminare fețe
+	Select faces	Selectare fețe
+	Specify thickness	Specificați grosimea
+	Enter fillet radius	Introduceți raza de racordare
+	Enter distance	Introduceți distanța
+	Specify a base point or displacement	Specificați un punct de bază sau o deplasare
+	Specify a second point of displacement	Specificați al doilea punct al deplasării
+	Specify the offset distance	Specificați distanța de offset
+	Enter the shell offset distance	Introduceți distanța de offset a carcasei
+	Select solids, surfaces, and regions to subtract from ..	Selectați solidele, suprafețele și regiunile din care se scade ..
+	Select solids, surfaces, and regions to subtract ..	Selectați solidele, suprafețele și regiunile de scăzut ..
+	Select two or more solids.	Selectați două sau mai multe solide.
+	The solids don't overlap; nothing was changed.	Solidele nu se suprapun; nu s-a modificat nimic.
+	Nothing would remain; nothing was changed.	Nu ar rămâne nimic; nu s-a modificat nimic.
+	The result would not be a solid; nothing was changed.	Rezultatul nu ar fi un solid; nu s-a modificat nimic.
+	No straight edge between two flat faces there.	Acolo nu există o muchie dreaptă între două fețe plane.
+	No face of the solid there.	Acolo nu există nicio față a solidului.
+	Only outside (convex) edges can be filleted or chamfered.	Doar muchiile exterioare (convexe) pot fi racordate sau teșite.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL funcționează pe paralelipipede, cilindri, sfere și extrudări drepte.
+	The walls are too thick for this solid.	Pereții sunt prea groși pentru acest solid.
+	Select solids to subtract from.	Selectați solidele din care se scade.
+	A solid can't be subtracted from itself.	Un solid nu poate fi scăzut din el însuși.
+	The solid would have too many operations; nothing was changed.	Solidul ar avea prea multe operații; nu s-a modificat nimic.
+	That face can't be moved (only flat faces, holes and added parts).	Fața respectivă nu poate fi mutată (doar fețe plane, găuri și părți adăugate).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Fața respectivă nu poate fi ștearsă (doar găuri, racordări, teșituri și părți adăugate).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Fața respectivă nu poate primi offset (laturi de paralelipiped, capete de cilindri, conuri și extrudări, pereți de cilindri și sfere).
+	The thickness must be more than zero.	Grosimea trebuie să fie mai mare decât zero.
+	The radius must be more than zero.	Raza trebuie să fie mai mare decât zero.
+	The distance must be more than zero.	Distanța trebuie să fie mai mare decât zero.
+	Requires a number.	Necesită un număr.
+	Parameter	Parametru
+	Action	Acțiune
+	Visibility States	Stări de vizibilitate
+	Remove Parameter or Action	Eliminare parametru sau acțiune
+	Edit Reference	Editare referință
+	Discard Reference Edits	Renunțare la editările referinței
+	Nested References	Referințe imbricate
+	Light List	Listă lumini
+	Sun Properties	Proprietăți soare
+	Render Exposure	Expunere randare
+	Point Light	Lumină punctiformă
+	Spotlight	Spot
+	Distant Light	Lumină îndepărtată
+	Change Lights	Modificare lumini
+	Section Plane	Plan de secțiune
+	Live Section	Secțiune live
+	Generate Section Block	Generare bloc de secțiune
+	Generate Section	Generare secțiune
+	Flatshot	Proiecție plană
+	Base View	Vedere de bază
+	Section View	Vedere în secțiune
+	Drawing Views	Vederi desen
+	Select face or any point to locate section line or	Selectați o față sau orice punct pentru a poziționa linia de secțiune sau
+	Orthographic	Ortografic
+	Select section object	Selectați obiectul de secțiune
+	Specify location of base view	Specificați poziția vederii de bază
+	Select parent view	Selectați vederea părinte
+	Specify end point	Specificați punctul final
+	Specify location of section view	Specificați poziția vederii în secțiune
+	There is nothing to draw: no 3D objects were found.	Nu există nimic de desenat: nu s-au găsit obiecte 3D.
+	The section plane doesn't cut any solid.	Planul de secțiune nu taie niciun solid.
+	The view needs a direction.	Vederea are nevoie de o direcție.
+	The drawing has no layout.	Desenul nu are niciun layout.
+	That is not a section plane.	Acesta nu este un plan de secțiune.
+	Requires a point.	Necesită un punct.
+	The view is [dx, dy, dz].	Vederea este [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Creare pachet de transmitere
+	Files in the package	Fișiere din pachet
+	Not included	Neincluse
+	Organized folders	Foldere organizate
+	One folder	Un singur folder
+	Include a transmittal report	Include un raport de transmitere
+	Create ZIP...	Creare ZIP...
+	Create Folder...	Creare folder...
+	STL Out	Ieșire STL
+	Export STL...	Export STL...
+	3D models (glTF, OBJ, STL)	Modele 3D (glTF, OBJ, STL)
+	3D model (glTF binary)	Model 3D (glTF binar)
+	3D model (glTF)	Model 3D (glTF)
+	3D model (OBJ)	Model 3D (OBJ)
+	3D model (STL)	Model 3D (STL)
+	Render Region	Randare regiune
+	samples	eșantioane
+	a sample	un eșantion
+	Pick crop window to render	Alegeți fereastra de decupare pentru randare
+	Nothing has been rendered yet.	Încă nu s-a randat nimic.
+	There is nothing to render: no surfaces in the view.	Nu există nimic de randat: nu sunt suprafețe în vedere.
+	The image couldn't be encoded.	Imaginea nu a putut fi codificată.
+	Saving images isn't available in the browser.	Salvarea imaginilor nu este disponibilă în browser.
+	PNG image	Imagine PNG
+	JPEG image	Imagine JPEG
+	Save Image	Salvare imagine
+	My Properties	Proprietățile mele
+	Add to My Properties	Adăugare la Proprietățile mele
+	Remove from My Properties	Eliminare din Proprietățile mele
+	All properties	Toate proprietățile
+	My properties: the ones you added (right-click a property's name to add it)	Proprietățile mele: cele adăugate de dvs. (clic dreapta pe numele unei proprietăți pentru a o adăuga)
+	Right-click a property's name and choose Add to My Properties.	Clic dreapta pe numele unei proprietăți și alegeți Adăugare la Proprietățile mele.
+	Color Books	Cataloage de culori
+	Sheet Set Manager	Manager seturi de planșe
+	Palettes	Palete
+	New Sheet Set...	Set de planșe nou...
+	Open Sheet Set...	Deschidere set de planșe...
+	No sheet set is open.	Niciun set de planșe nu este deschis.
+	Number	Număr
+	Subset	Subset
+	Remove Sheet	Eliminare planșă
+	Add Drawing...	Adăugare desen...
+	Rename Layouts to Match	Redenumire layout-uri pentru potrivire
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Layout-ul fiecărei planșe devine „număr titlu”, afișat de câmpurile număr și titlu planșă
+	Publish to PDF...	Publicare în PDF...
+	Prefix	Prefix
+	Digits	Cifre
+	Renumber	Renumerotare
+	Zoom to Fit	Zoom pentru încadrare
+	Drag to pan, scroll to zoom	Trageți pentru panoramare, derulați pentru zoom
+	Publish	Publicare
+	Sheets to publish, in order	Planșe de publicat, în ordine
+	Sheet	Planșă
+	Bookmark	Marcaj
+	Paper	Hârtie
+	Orientation	Orientare
+	(sheet name)	(numele planșei)
+	Page setup	Configurare pagină
+	Landscape	Peisaj
+	Portrait	Portret
+	Add Sheets from Drawing...	Adăugare planșe din desen...
+	Load List...	Încărcare listă...
+	Save List...	Salvare listă...
+	Publish List	Listă de publicare
+	Enclose Text with Object	Încadrare text cu obiect
+	Export Attribute Information	Export informații atribute
+	Import Attribute Information	Import informații atribute
+	Mask Text	Mascare text
+	Remote Text	Text la distanță
+	Rotate Text	Rotire text
+	Text Fit	Potrivire text
+	Toggle Frames	Comutare cadre
+	Unmask Text	Demascare text
+	Update Remote Text	Actualizare text la distanță
+	Geometric	Geometric
+	Infer geometric constraints	Deducere constrângeri geometrice
+	Show constraint bars	Afișare bare de constrângeri
+	Constraint bar transparency (%)	Transparență bare de constrângeri (%)
+	Dimensional	Dimensional
+	Show dynamic constraints	Afișare constrângeri dinamice
+	Dimension name format	Format nume cotă
+	Name and Expression	Nume și expresie
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Tipuri de constrângeri aplicate de AUTOCONSTRAIN, în ordinea priorității
+	Move Up	Mutare în sus
+	Move Down	Mutare în jos
+	Tangent objects must share an intersection point	Obiectele tangente trebuie să aibă un punct de intersecție comun
+	Perpendicular objects must share an intersection point	Obiectele perpendiculare trebuie să aibă un punct de intersecție comun
+	Distance tolerance	Toleranță distanță
+	Angle tolerance (degrees)	Toleranță unghi (grade)
+	3D Move	Mutare 3D
+	3D Rotate	Rotire 3D
+	3D Scale	Scalare 3D
+	3D Align	Aliniere 3D
+	3D Mirror	Oglindire 3D
+	3D Array	Multiplicare 3D
+	3D Object Snap	Prindere la obiecte 3D
+	Specify second point or distance	Specificați al doilea punct sau distanța
+	Specify angle	Specificați unghiul
+	Specify source plane: first point	Specificați planul sursă: primul punct
+	Specify source plane: second point	Specificați planul sursă: al doilea punct
+	Specify source plane: third point	Specificați planul sursă: al treilea punct
+	Specify destination plane: first point	Specificați planul destinație: primul punct
+	Specify destination plane: second point	Specificați planul destinație: al doilea punct
+	Specify destination plane: third point	Specificați planul destinație: al treilea punct
+	Delete source objects?	Ștergeți obiectele sursă?
+	Specify point on XY plane	Specificați un punct pe planul XY
+	Specify point on YZ plane	Specificați un punct pe planul YZ
+	Specify point on ZX plane	Specificați un punct pe planul ZX
+	Specify first point of mirror plane (3 points) or	Specificați primul punct al planului de oglindire (3 puncte) sau
+	Specify second point on mirror plane	Specificați al doilea punct pe planul de oglindire
+	Specify third point on mirror plane	Specificați al treilea punct pe planul de oglindire
+	Enter the type of array	Introduceți tipul de multiplicare
+	Polar	Polar
+	Enter the number of items in the array	Introduceți numărul de elemente din multiplicare
+	Specify the angle to fill (+=ccw, -=cw)	Specificați unghiul de umplere (+=trigonometric, -=orar)
+	Enter the number of rows (---)	Introduceți numărul de rânduri (---)
+	Enter the number of columns (|||)	Introduceți numărul de coloane (|||)
+	Enter the number of levels (...)	Introduceți numărul de niveluri (...)
+	Specify the distance between rows (---)	Specificați distanța dintre rânduri (---)
+	Specify the distance between columns (|||)	Specificați distanța dintre coloane (|||)
+	Specify the distance between levels (...)	Specificați distanța dintre niveluri (...)
+	Specify second point on axis of rotation	Specificați al doilea punct pe axa de rotație
+	Select the objects first.	Selectați mai întâi obiectele.
+	Requires a point, or a distance along an axis.	Necesită un punct sau o distanță de-a lungul unei axe.
+	The points must not coincide or line up.	Punctele nu trebuie să coincidă sau să fie coliniare.
+	The three points line up: they make no plane.	Cele trei puncte sunt coliniare: nu formează un plan.
+	<3D Object Snap on>	<Prindere la obiecte 3D activată>
+	<3D Object Snap off>	<Prindere la obiecte 3D dezactivată>
+	Preparing the 3D view…	Se pregătește vederea 3D…
+	Viewpoint	Punct de vedere
+	3D View Benchmark	Test de performanță vedere 3D
+	Drawing area	Zonă de desenare
+	Command line	Linie de comandă
+	Viewport controls	Comenzi fereastră
+	Coordinate system menu	Meniu sistem de coordonate
+	UCS icon X axis	Axa X a pictogramei UCS
+	UCS icon Y axis	Axa Y a pictogramei UCS
+	High Contrast	Contrast ridicat
+	Interface size	Dimensiune interfață
+	Interface Size	Dimensiune interfață
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	Specificație clădire
+	Set Building Spec	Setare specificație clădire
+	Validate Building Spec	Validare specificație clădire
+	Build Model from Spec	Construire model din specificație
+	Convert Matches to Block	Conversie potriviri în bloc
+	Command Line Transparency	Transparență linie de comandă
+	AutoComplete Settings	Setări completare automată
+	Input Settings	Setări intrare
+	AutoComplete	Completare automată
+	Search System Variables	Căutare variabile de sistem
+	Mid-string Search	Căutare în mijlocul șirului
+	System variable	Variabilă de sistem
+	Layer state	Stare straturi
+	Model Issues	Probleme model
+	Render Model View	Randare vedere model
+	Model Overlay	Suprapunere model
+	Model Counts	Numărători model
+	System Printers	Imprimante sistem
+	Report a Problem...	Raportare problemă...
+	Report a Problem	Raportare problemă
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Adună într-un fișier ZIP pe acest computer ce ajută la găsirea unei probleme. Nu se trimite nimic: atașați fișierul la un e-mail dacă doriți să o raportați.
+	Always included	Incluse întotdeauna
+	The log of this run and the two before it	Jurnalul acestei rulări și al celor două dinainte
+	The last commands	Ultimele comenzi
+	Versions, operating system and graphics adapter	Versiuni, sistem de operare și placă grafică
+	A summary of the open drawings (counts only, no geometry)	Un rezumat al desenelor deschise (doar numărători, fără geometrie)
+	Names: file paths, layer and block names, typed text	Nume: căi de fișiere, nume de straturi și blocuri, text tastat
+	Names are replaced by placeholders, also in the log.	Numele sunt înlocuite cu substituenți, inclusiv în jurnal.
+	Save Report...	Salvare raport...
+	Email it to {address}	Trimiteți-l prin e-mail la {address}
+	Plans to Model	Din planuri în model
+	Build	Construire
+	Rebuild	Reconstruire
+	Check	Verificare
+	Kept in the drawing.	Păstrat în desen.
+	Drafted from the walk rules; not saved yet.	Schițat din regulile de parcurgere; încă nesalvat.
+	{n} of {total} approved	{n} din {total} aprobate
+	Save Spec	Salvare specificație
+	Approve All	Aprobă tot
+	Approved	Aprobat
+	Levels	Niveluri
+	Wall Types	Tipuri de pereți
+	Rooms	Încăperi
+	Door and Window Families	Familii de uși și ferestre
+	Materials	Materiale
+	Site	Amplasament
+	Openings	Goluri
+	Issues ({n})	Probleme ({n})
+	The drawing changed since; check again.	Desenul s-a modificat între timp; verificați din nou.
+	No issues found.	Nu s-au găsit probleme.
+	Configure Standards	Configurare standarde
+	Standards files associated with the current drawing	Fișiere de standarde asociate desenului curent
+	Add...	Adăugare...
+	Check Standards...	Verificare standarde...
+	Check Standards	Verificare standarde
+	No standards violations were found.	Nu s-au găsit încălcări ale standardelor.
+	problem(s)	problemă(e)
+	Take the standard's properties	Preia proprietățile standardului
+	Replace it with the standard one	Înlocuiește cu cel standard
+	Fix All	Corectează tot
+	Give everything that differs the standard's properties	Aplică proprietățile standardului la tot ce diferă
+	Check Again	Verifică din nou
+	Layer Translator	Translator de straturi
+	Translate From	Traducere din
+	Translate To	Traducere în
+	Load a drawing whose layers to translate to.	Încărcați un desen cu straturile în care se traduce.
+	Map	Asociere
+	Layer Translation Mappings	Asocieri de traducere a straturilor
+	Load Map...	Încărcare asocieri...
+	Save Map...	Salvare asocieri...
+	Translate	Traducere
+	Not in the standards	Nu se află în standarde
+	Properties differ from the standards	Proprietățile diferă de standarde
+	CAD Standards	Standarde CAD
+	Configure...	Configurare...
+	Check...	Verificare...
+	Layer Translator...	Translator de straturi...
+	Draft Building Spec	Schiță specificație clădire
+	Draft from Plan	Schiță din plan
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Citește straturile, pereții, ușile, încăperile și notele planului; estimările sunt marcate.
+	guess	estimare
+	Detect Stairs	Detectare scări
+	List Stairs	Listare scări
+	Confirm Stairs	Confirmare scări
+	Stairs and Ramps	Scări și rampe
+	Bake Lighting	Precalculare iluminare
+	Command Aliases and Shortcuts	Aliasuri de comenzi și comenzi rapide
+	Keyboard Shortcuts	Comenzi rapide de la tastatură
+	replaces {command}	înlocuiește {command}
+	Built-in	Predefinit
+	Alias	Alias
+	Command	Comandă
+	Add or Change	Adăugare sau modificare
+	Keys	Taste
+	Edit Aliases and Shortcuts...	Editare aliasuri și comenzi rapide...
+	Customize	Personalizare
+	Read Elevation	Citire fațadă
+	Read Roof Plan	Citire plan acoperiș
+	Exterior	Exterior
+	Drafting & Annotation	Desenare și adnotare
+	3D Modeling	Modelare 3D
+	Electrical	Electric
+	Save Current As...	Salvare curent ca...
+	Workspace Settings...	Setări spațiu de lucru...
+	Workspace Settings	Setări spațiu de lucru
+	Navigation Bar	Bară de navigare
+	Save Workspace	Salvare spațiu de lucru
+	Workspaces	Spații de lucru
+	Close Navigation Bar	Închidere bară de navigare
+	Workspace	Spațiu de lucru
+	Read Ceiling Plan	Citire plan tavan
+	Ceilings	Tavane
+	Current Drawing	Desenul curent
+	Favourites	Favorite
+	Libraries	Biblioteci
+	No library folder	Niciun folder de bibliotecă
+	Choose Folder...	Alegere folder...
+	No blocks here.	Nu există blocuri aici.
+	Remove from Favourites	Eliminare din Favorite
+	Add to Favourites	Adăugare la Favorite
+	Insertion Options	Opțiuni de inserare
+	Auto-rotate (follow the current UCS)	Rotire automată (după UCS-ul curent)
+	Repeat Placement	Repetare plasare
+	Tool Palettes	Palete de instrumente
+	Drag objects from the drawing here to make tools.	Trageți aici obiecte din desen pentru a crea instrumente.
+	Add Selected	Adăugare selecție
+	New palette	Paletă nouă
+	Select objects in the drawing first.	Selectați mai întâi obiecte în desen.
+	Blocks Palette	Paleta Blocuri
+	Detect Grids	Detectare axe
+	Align Levels by Grids	Aliniere niveluri după axe
+	Columns at Grids	Stâlpi la axe
+	Columns	Stâlpi
+	Build Room Volumes	Construire volume încăperi
+	Building	Clădire
+	Go to Room	Salt la încăpere
+	List Rooms	Listare încăperi
+	Room	Încăpere
+	Build Volumes	Construire volume
+	Go to	Salt la
+	{n} rooms	{n} încăperi
+	No rooms found: rooms are found from name labels inside closed outlines.	Nu s-au găsit încăperi: încăperile sunt identificate după etichetele de nume din interiorul contururilor închise.
+	Ceiling	Tavan
+	DesignCenter	DesignCenter
+	Up One Level	Cu un nivel mai sus
+	Folder	Folder
+	Text Styles	Stiluri de text
+	Dimension Styles	Stiluri de cotare
+	Layouts	Layout-uri
+	Add to Drawing	Adăugare în desen
+	Choose a drawing to see what it holds.	Alegeți un desen pentru a vedea ce conține.
+	{name} inserted.	{name} inserat.
+	{name} is already in the drawing; it was kept.	{name} există deja în desen; a fost păstrat.
+	{name} added.	{name} adăugat.
+	Read MEP Runs	Citire trasee MEP
+	Model Clashes	Coliziuni model
+	MEP Systems	Sisteme MEP
+	Undo History	Istoric anulări
+	(Start)	(Start)
+	Click a step to undo or redo to it.	Clic pe un pas pentru a anula sau reface până la el.
+	Nothing yet.	Încă nimic.
+	Double-click to run it again	Dublu clic pentru a o rula din nou
+	Copy as Script	Copiere ca script
+	Save Session as Script...	Salvare sesiune ca script...
+	Command History Palette	Paleta Istoric comenzi
+	Furnish from Plan	Mobilare din plan
+	Classify Plan	Clasificare plan
+	Text and multiline text	Text și text multilinie
+	Block attribute values	Valori atribute bloc
+	Dimension text	Text cotă
+	Multileaders	Multi-indicații
+	Hyperlinks	Hyperlink-uri
+	Layer and block names	Nume de straturi și blocuri
+	Find where:	Unde se caută:
+	Current space	Spațiul curent
+	Plain text	Text simplu
+	Use wildcards	Folosire caractere joker
+	Regular expressions	Expresii regulate
+	Look in	Căutare în
+	Zoom To	Zoom la
+	Replace	Înlocuire
+	Create Selection Set	Creare set de selecție
+	Matches found: {count} (objects: {objects})	Potriviri găsite: {count} (obiecte: {objects})
+	Layer name	Nume strat
+	Block name	Nume bloc
+	Revise Model from Plans	Revizuire model din planuri
+	Plans to Model Benchmark	Test de performanță Din planuri în model
+	Plans to Model Case	Caz Din planuri în model
+	Plans to Model Score	Scor Din planuri în model
+	Save Viewpoint	Salvare punct de vedere
+	Viewpoints for Every Room	Puncte de vedere pentru fiecare încăpere
+	Camera Tour	Tur cu camera
+	Tours and Viewpoints	Tururi și puncte de vedere
+	Tour Timing	Temporizare tur
+	3D Graphics Limits	Limite grafică 3D
+	Drawn by the CPU (no usable GPU)	Desenat de CPU (niciun GPU utilizabil)
+	Point Cloud...	Nor de puncte...
+	Point Cloud	Nor de puncte
+	Attach Point Cloud	Atașare nor de puncte
+	Clip Point Cloud	Decupare nor de puncte
+	Point Cloud Color Map	Hartă de culori nor de puncte
+	Point Cloud Information	Informații nor de puncte
+	Markups	Marcaje de revizie
+	{done} of {total} done	{done} din {total} rezolvate
+	No markups. Import them from a reviewed PDF.	Nu există marcaje. Importați-le dintr-un PDF revizuit.
+	Done	Rezolvat
+	Import Markups...	Import marcaje...
+	Import Markups	Import marcaje
+	Markup Import...	Import marcaje...
+	Markup Status	Stare marcaj
+	Read Door and Window Schedules	Citire tabele de uși și ferestre
+	Schedules	Tabele de elemente
+	Esc	Esc
+	Hide the touch bar	Ascunde bara tactilă
+	Type a command or value	Tastați o comandă sau o valoare
+	Embed Textures	Încorporare texturi
+	Publish Walkthrough	Publicare parcurgere virtuală
+	Walkthroughs (CDYWALK)	Parcurgeri virtuale (CDYWALK)
+	Check Exchange	Verificare schimb
+	Not kept in the {format} file	Nu se păstrează în fișierul {format}
+	The drawing was saved. This file format can't keep everything in it:	Desenul a fost salvat. Acest format de fișier nu poate păstra tot conținutul:
+	What	Ce
+	left out	omis
+	changed	modificat
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Un desen CADaddy (.cdy) păstrează totul. Verificare schimb afișează din nou această listă fără a salva.
+	VP Linetype	Tip de linie FV
+	VP Lineweight	Grosime linie FV
+	Unreconciled New Layers ({n})	Straturi noi nereconciliate ({n})
+	Reconcile All	Reconciliază tot
+	Reconcile Layer	Reconciliere strat
+	LayerWalk	LayerWalk
+	Layers: {n}	Straturi: {n}
+	Restore on exit	Restaurare la ieșire
+	Filter:	Filtru:
+	Layer Walk...	Parcurgere straturi...
+	Layer Walk	Parcurgere straturi
+	Isolate Layer to Current Viewport	Izolare strat în fereastra curentă
+	Unreconciled New Layers	Straturi noi nereconciliate
+	Move to New Window	Mutare în fereastră nouă
+	Dock All Windows	Andochează toate ferestrele
+	Every drawing is in a window of its own.	Fiecare desen este într-o fereastră proprie.
+	Back among the drawing tabs	Înapoi printre filele desenelor
+	Plot Stamp...	Ștampilă de plotare...
+	Plot a Folder of Drawings...	Plotare folder de desene...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Fiecare desen dintr-un folder în propriul PDF, într-un folder PDF din interiorul acestuia
+	Plot stamp	Ștampilă de plotare
+	Quick Properties Lists	Liste Proprietăți rapide
+	Purgeable Items	Elemente care pot fi curățate
+	Find Non-Purgeable Items	Găsire elemente care nu pot fi curățate
+	Purge {kind} "{name}"?	Curățați {kind} „{name}”?
+	Yes to All	Da la toate
+	Items that can't be purged, and why	Elemente care nu pot fi curățate și motivul
+	Select and Zoom	Selectare și zoom
+	Pick an item to see why it can't be purged.	Alegeți un element pentru a vedea de ce nu poate fi curățat.
+	Confirm each item to be purged	Confirmă fiecare element de curățat
+	Purge nested items	Curățare elemente imbricate
+	Text Align	Aliniere text
+	Color model:	Model de culoare:
+	Hue	Nuanță
+	Saturation	Saturație
+	Luminance	Luminanță
+	Hex	Hex
+	More Colors...	Mai multe culori...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Încărcați mai multe cataloage cu COLORBOOK (fișiere JSON sau separate prin tabulatori).
+	All spaces	Toate spațiile
+	Total: {n}	Total: {n}
+	No block references here.	Nu există referințe de bloc aici.
+	Highlight and zoom to its references	Evidențiază și apropie referințele sale
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Similare, dar nu identice: {scaled} scalate, {exploded} descompuse
+	Insert Count Table	Inserare tabel de numărare
+	Update Count Tables	Actualizare tabele de numărare
+	Count in Area	Numărare în zonă
+	{n} reference(s) of {name} selected.	{n} referință(e) ale lui {name} selectate.
+	{n} similar object(s) selected.	{n} obiect(e) similar(e) selectat(e).
+	Geographic Location...	Locație geografică...
+	Remove Geographic Location	Eliminare locație geografică
+	Set Location	Setare locație
+	Remove Location	Eliminare locație
+	Latitude and Longitude	Latitudine și longitudine
+	Trace Image to Vectors	Vectorizare imagine
+	Trace Raster Image to Vectors	Vectorizare imagine raster
+	Drawing Summary	Rezumat desen
+	Query Drawing	Interogare desen
+	Begin Agent Request	Începere cerere agent
+	End Agent Request	Încheiere cerere agent
+	Agent Dry Run	Rulare de probă agent
+	Agent Confirmations	Confirmări agent
+	Agent Change Journal	Jurnal modificări agent
+	Agent Activity	Activitate agent
+	An agent asks	Un agent întreabă
+	Allow	Permite
+	Deny	Refuză
+	Not allowed: {question}	Nepermis: {question}
+	Ask me before an agent saves over a file or closes with changes	Întreabă-mă înainte ca un agent să suprascrie un fișier sau să închidă cu modificări
+	Dry run: agents' commands change nothing	Rulare de probă: comenzile agenților nu modifică nimic
+	No agent requests yet.	Încă nu există cereri de la agenți.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} comenzi · {added} adăugate · {removed} eliminate · {changed} modificate
+	Select what it added and changed	Selectează ce a adăugat și a modificat
+	Activity History	Istoric activitate
+	Activity history is off (Options ▸ Open and Save).	Istoricul activității este dezactivat (Opțiuni ▸ Deschidere și salvare).
+	command	comandă
+	{n} steps	{n} pași
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Selectează obiectele adăugate sau modificate de acest pas
+	The objects of this step are gone.	Obiectele acestui pas nu mai există.
+	{n} object(s) selected.	{n} obiect(e) selectat(e).
+	{n} object(s) selected ({gone} since erased).	{n} obiect(e) selectat(e) ({gone} șterse între timp).
+	{n} s ago	acum {n} s
+	{n} min ago	acum {n} min
+	{n} h ago	acum {n} h
+	{n} d ago	acum {n} z
+	Keep an activity history beside each drawing (private, on this computer)	Păstrează un istoric al activității lângă fiecare desen (privat, pe acest computer)
+	Background mask	Mască de fundal
+	Mask border offset	Offset chenar mască
+	Mask color	Culoare mască
+	Use drawing background	Folosește fundalul desenului
+	Regenerate Dimensions	Regenerare cote
+	Enter layer name for new dimensions (. for the current layer)	Introduceți numele stratului pentru cotele noi (. pentru stratul curent)
+	{folder} (folder)	{folder} (folder)
+	Add drawings or a folder of them.	Adăugați desene sau un folder cu desene.
+	Add Files...	Adăugare fișiere...
+	Add Folder...	Adăugare folder...
+	cancelled	anulat
+	Choose the output folder, or Next to the originals.	Alegeți folderul de ieșire sau Lângă originale.
+	Convert Drawings	Conversie desene
+	Convert Drawings...	Conversie desene...
+	Convert drawings...	Conversie desene...
+	Convert to	Conversie în
+	Converted	Convertit
+	Converted, not all kept	Convertit, nu totul păstrat
+	Converting files is not available on the web.	Conversia fișierelor nu este disponibilă pe web.
+	Drawings to convert	Desene de convertit
+	Each drawing's own	Propria versiune a fiecărui desen
+	Failed	Eșuat
+	Files already there	Fișiere deja existente
+	Folder:	Folder:
+	Include subfolders	Include subfolderele
+	Keep a file written over as .bak	Păstrează un fișier suprascris ca .bak
+	Next to the originals	Lângă originale
+	Open Log	Deschidere jurnal
+	Or type a file or folder path	Sau tastați calea unui fișier sau folder
+	Overwrite	Suprascriere
+	Save to	Salvare în
+	Skip	Omitere
+	Skipped	Omis
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Nu există desene (.dwg, .dxf, .cdy) de convertit.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} convertite, {skipped} omise, {failed} eșuate din {total}
+	DWG drawing (.dwg)	Desen DWG (.dwg)
+	DXF drawing (.dxf)	Desen DXF (.dxf)
+	Require a token for control connections (recommended)	Necesită un token pentru conexiunile de control (recomandat)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Programele trebuie să trimită mai întâi tokenul pe care CADaddy îl scrie într-un fișier pe care doar dvs. îl puteți citi, astfel încât programele altor utilizatori să nu îl poată controla. Conectorul Claude îl citește pentru dvs. Intră în vigoare la următoarea pornire a CADaddy.
+	Building models (IFC)	Modele de clădiri (IFC)
+	Building model (IFC4)	Model de clădire (IFC4)
+	3D printing (3MF)	Imprimare 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Include desenul (desenul activ ca fișier DXF)
+	Your account, home folder and computer name are always left out.	Contul, folderul personal și numele computerului sunt întotdeauna omise.
+	Files in the report	Fișiere din raport
+	Send to Redline	Trimitere la Redline
+	Import Redline Markups	Import marcaje Redline
+	Import Redline Markups...	Import marcaje Redline...
+	Open a Program?	Deschideți un program?
+	This link opens a program or script, not a document:	Această legătură deschide un program sau un script, nu un document:
+	Open it only if you trust the drawing and know what it runs.	Deschideți-o doar dacă aveți încredere în desen și știți ce rulează.
+	Open Anyway	Deschide oricum
+	Report a security problem	Raportați o problemă de securitate
+	Load This File?	Încărcați acest fișier?
+	This file isn't in a trusted folder:	Acest fișier nu se află într-un folder de încredere:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Rutinele LISP și scripturile pot modifica desene și fișiere. Încărcați-l doar dacă aveți încredere în proveniența lui.
+	Don't Load	Nu încărca
+	Load Once	Încarcă o dată
+	Always Load from This Folder	Încarcă întotdeauna din acest folder
+	Adds {folder} to TRUSTEDPATHS	Adaugă {folder} la TRUSTEDPATHS
+	Allow Loading a File	Permitere încărcare fișier
+	Plot Stamp	Ștampilă de plotare
+	Plot stamp fields	Câmpuri ștampilă de plotare
+	Drawing name	Nume desen
+	Layout name	Nume layout
+	Date and Time	Data și ora
+	Device name	Nume dispozitiv
+	Paper size	Format hârtie
+	Plot scale	Scară de plotare
+	No login or computer name is ever stamped.	Numele de autentificare sau al computerului nu sunt niciodată ștampilate.
+	User defined fields	Câmpuri definite de utilizator
+	One per line, up to {n}.	Câte unul pe rând, până la {n}.
+	Stamp model space plots	Ștampilează plotările din spațiul model
+	Stamp this layout's plots	Ștampilează plotările acestui layout
+	Location and offset	Locație și offset
+	Location	Locație
+	Upside-down	Răsturnat
+	X offset	Offset X
+	Y offset	Offset Y
+	Offset relative to	Offset relativ la
+	Printable area	Zonă imprimabilă
+	Paper border	Margine hârtie
+	Text properties	Proprietăți text
+	Font	Font
+	Single line plot stamp	Ștampilă de plotare pe un singur rând
+	Units	Unități
+	Inches	Inchi
+	Millimeters	Milimetri
+	Log file location	Locație fișier jurnal
+	Create a log file	Creare fișier jurnal
+	The log is kept for this session, never saved with the drawing.	Jurnalul este păstrat pentru această sesiune, nu este salvat niciodată cu desenul.
+	Action Macro Manager...	Manager macrocomenzi de acțiuni...
+	Action Macros	Macrocomenzi de acțiuni
+	Action Recorder	Înregistrator de acțiuni
+	Insert Base Point	Inserare punct de bază
+	Insert Message	Inserare mesaj
+	Play Action Macro	Rulare macrocomandă de acțiuni
+	Play...	Rulare...
+	Record	Înregistrare
+	Request User Input	Solicitare intrare utilizator
+	Stop	Oprire
+	Action Macro Manager	Manager macrocomenzi de acțiuni
+	Recording…	Se înregistrează…
+	No action macros yet: Record, do the work, then Stop.	Încă nu există macrocomenzi de acțiuni: Înregistrare, efectuați lucrul, apoi Oprire.
+	Play	Rulare
+	Message: {text}	Mesaj: {text}
+	Base point (asked for)	Punct de bază (solicitat)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Solicită această intrare la rularea macrocomenzii
+	Customize Interface	Personalizare interfață
+	Customize User Interface...	Personalizare interfață utilizator...
+	Interface...	Interfață...
+	Customize User Interface	Personalizare interfață utilizator
+	Quick Access Toolbar	Bară de acces rapid
+	Add a command	Adăugare comandă
+	Reset Quick Access Toolbar	Resetare bară de acces rapid
+	Built-in panels shown (untick to hide):	Panouri predefinite afișate (debifați pentru a ascunde):
+	Your panels on built-in tabs:	Panourile dvs. pe filele predefinite:
+	Tab	Filă
+	New panel name	Nume panou nou
+	Add Panel	Adăugare panou
+	Your tabs:	Filele dvs.:
+	Remove Tab	Eliminare filă
+	New tab name	Nume filă nouă
+	Add Tab	Adăugare filă
+	Edit Keyboard Shortcuts...	Editare comenzi rapide de la tastatură...
+	Remove Panel	Eliminare panou
+	Command or LISP macro, e.g. (command "line")	Comandă sau macrocomandă LISP, de ex. (command "line")
+	Hatch Editor	Editor hașură
+	Table Cell	Celulă tabel
+	Rows & Columns	Rânduri și coloane
+	Merge	Îmbinare
+	Open/Save	Deschidere/Salvare
+	Attributes	Atribute
+	Spell Check	Verificare ortografie
+	Formula	Formulă
+	Edit Source	Editare sursă
+	Close Array	Închidere multiplicare
+	Manage Attributes	Gestionare atribute
+	Dialog State	Stare dialog
+	Dialog Action	Acțiune dialog
+	Recover Drawing and Xrefs...	Recuperare desen și Xref-uri...
+	Count Blocks	Numărare blocuri
+	Get Selection Set	Preluare set de selecție
+	Global Attribute Edit	Editare globală atribute
+	LISP Function Surfer	Navigator funcții LISP
+	List LISP Symbols	Listare simboluri LISP
+	List Nested Object	Listare obiect imbricat
+	List Object Xdata	Listare Xdata obiect
+	Multiple Polyline Edit	Editare polilinii multiple
+	Redefine Path	Redefinire cale
+	Redefine Path Mode	Mod redefinire cale
+	Restore Dimension Text	Restaurare text cotă
+	Revert	Revenire
+	Rotate Blocks	Rotire blocuri
+	Scale Blocks	Scalare blocuri
+	Select Similar by Properties	Selectare similare după proprietăți
+	Show URLs	Afișare URL-uri
+	Synchronize Viewports	Sincronizare ferestre
+	Paste Special	Lipire specială
+	Paste Special...	Lipire specială...
+	Paste as	Lipire ca
+	Last Measurement	Ultima măsurătoare
+	Perimeter	Perimetru
+	curl isn't available ({error}).	curl nu este disponibil ({error}).
+	This build has no release key to check updates with.	Această versiune nu are o cheie de lansare pentru verificarea actualizărilor.
+	The release's signature files are too large.	Fișierele de semnătură ale lansării sunt prea mari.
+	The release's signature isn't one CADaddy reads.	Semnătura lansării nu este una pe care CADaddy o poate citi.
+	The release's signature is missing or damaged.	Semnătura lansării lipsește sau este deteriorată.
+	The release's signature is for another version ({version}).	Semnătura lansării este pentru altă versiune ({version}).
+	The release is signed with a key this build doesn't trust.	Lansarea este semnată cu o cheie în care această versiune nu are încredere.
+	This build's release key is damaged.	Cheia de lansare a acestei versiuni este deteriorată.
+	The release's signature doesn't match its files.	Semnătura lansării nu corespunde fișierelor sale.
+	Couldn't reach GitHub: {why}	Nu s-a putut contacta GitHub: {why}
+	GitHub's answer was too large.	Răspunsul GitHub a fost prea mare.
+	GitHub's answer wasn't readable ({error}).	Răspunsul GitHub nu a putut fi citit ({error}).
+	GitHub's answer has no version.	Răspunsul GitHub nu conține nicio versiune.
+	GitHub's answer has an unreadable version ({version}).	Răspunsul GitHub conține o versiune ilizibilă ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Nu s-a putut descărca {name} al lansării, așa că nu s-a instalat nimic: {why}
+	The release's {name} is too large, so nothing was installed.	{name} al lansării este prea mare, așa că nu s-a instalat nimic.
+	The release's {name} isn't text, so nothing was installed.	{name} al lansării nu este text, așa că nu s-a instalat nimic.
+	It wasn't downloaded. Download it from the release page instead.	Nu a fost descărcat. Descărcați-l în schimb de pe pagina lansării.
+	Version {version} isn't newer than this one ({current}).	Versiunea {version} nu este mai nouă decât aceasta ({current}).
+	This release isn't signed.	Această lansare nu este semnată.
+	The release failed its check.	Lansarea nu a trecut verificarea.
+	The signed release doesn't list {name}.	Lansarea semnată nu include {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Amprenta GitHub pentru {name} diferă de cea semnată.
+	Couldn't make the folder {folder}: {error}	Nu s-a putut crea folderul {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Descărcarea nu corespunde amprentei SHA-256 publicate, așa că nu a fost instalată.
+	Couldn't read the download: {error}	Nu s-a putut citi descărcarea: {error}
+	The download failed: {why}	Descărcarea a eșuat: {why}
+	This release has no installer for this computer yet.	Această lansare nu are încă un program de instalare pentru acest computer.
+	Drawing Properties...	Proprietăți desen...
+	System Variable Monitor...	Monitor variabile de sistem...
+	{name} Properties	Proprietăți {name}
+	Summary	Rezumat
+	Statistics	Statistici
+	Size	Dimensiune
+	Subject	Subiect
+	Author	Autor
+	Keywords	Cuvinte cheie
+	Comments	Comentarii
+	Revision number	Număr revizie
+	Hyperlink base	Bază hyperlink
+	Created	Creat
+	Modified	Modificat
+	Last saved by	Salvat ultima dată de
+	Total editing time (minutes)	Timp total de editare (minute)
+	Property	Proprietate
+	System Variable Monitor	Monitor variabile de sistem
+	Variable	Variabilă
+	Watched value	Valoare urmărită
+	Current value	Valoare curentă
+	Notify when a watched variable changes	Notifică la modificarea unei variabile urmărite
+	Reset All	Resetează tot
+	Delay	Întârziere
+	Repeat Script	Repetare script
+	Script Call	Apel script
+	Resume Script	Reluare script
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Păstrează un istoric al activității fiecărui desen (privat, în folderul de setări CADaddy)
+	Specify insertion point or	Specificați punctul de inserție sau
+	Specify table scale	Specificați scara tabelului
+	{} dimension(s) updated to the current settings.	{} cotă(e) actualizată(e) la setările curente.
+	British English (-ise)	Engleză britanică (-ise)
+	British English (-ize)	Engleză britanică (-ize)
+	Spanish	Spaniolă
+	French	Franceză
+	German	Germană
+	Portuguese (Iberian)	Portugheză (Portugalia)
+	Portuguese (Brazilian)	Portugheză (Brazilia)
+	(not installed)	(neinstalat)
+	Dictionaries are read from:	Dicționarele sunt citite din:
+	Published to {path}	Publicat în {path}
+	Sheet Set (.sheetset.json)	Set de planșe (.sheetset.json)
+	Resolution	Rezoluție
+	Colour depth	Adâncime de culoare
+	Colour (24-bit)	Color (24 de biți)
+	Greys (8-bit)	Tonuri de gri (8 biți)
+	Black and white (1-bit)	Alb-negru (1 bit)
+	PNG Out	Ieșire PNG
+	JPEG Out	Ieșire JPEG
+	BMP Out	Ieșire BMP
+	TIFF Out	Ieșire TIFF
+	Enter image file name	Introduceți numele fișierului imagine
+	Nothing selected: no image written.	Nimic selectat: nu s-a scris nicio imagine.
+	{} object(s) written to {} ({} × {} pixels).	{} obiect(e) scris(e) în {} ({} × {} pixeli).
+	Set to ByLayer	Setare la DupăStrat
+	Explode and Set Properties	Descompunere și setare proprietăți
+	Edit Attribute in Place	Editare atribut pe loc
+	Frame	Cadru
+	Setup	Configurare
+	Setup View	Configurare vedere
+	Setup Drawing	Configurare desen
+	Setup Profile	Configurare profil
+	Enter view scale	Introduceți scara vederii
+	Specify view center	Specificați centrul vederii
+	Enter view name	Introduceți numele vederii
+	Specify side of viewport to project	Specificați latura ferestrei de proiectat
+	Specify first point of cutting plane	Specificați primul punct al planului de secționare
+	Specify second point of cutting plane	Specificați al doilea punct al planului de secționare
+	Specify first point of inclined plane	Specificați primul punct al planului înclinat
+	Specify second point of inclined plane	Specificați al doilea punct al planului înclinat
+	Specify side to view from	Specificați partea din care se privește
+	Specify first corner of viewport	Specificați primul colț al ferestrei
+	Specify opposite corner of viewport	Specificați colțul opus al ferestrei
+	Display hidden profile lines on separate layer?	Afișați liniile de profil ascunse pe un strat separat?
+	Project profile lines onto a plane?	Proiectați liniile de profil pe un plan?
+	Delete tangential edges?	Ștergeți muchiile tangențiale?
+	None (PDF file)	Niciuna (fișier PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Textul de cotă de înălțime {} este prea mic pentru a fi citit în acest desen. Tastați DIMSCALE {} pentru a face cotele noi de {} ori mai mari.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Textul de înălțime {} este prea mic pentru a fi citit în acest desen. Încercați o înălțime de {} (TEXTSIZE setează valoarea implicită).
+	(each layout's own)	(propria setare a fiecărui layout)
+	A callout on the selected sheet pointing at the selected view	O trimitere pe planșa selectată care indică spre vederea selectată
+	A page setup copied from the selected sheet's layout	O configurare de pagină copiată din layout-ul planșei selectate
+	Add Callout	Adăugare trimitere
+	Callouts: {}	Trimiteri: {}
+	From Selected Sheet	Din planșa selectată
+	Insert on Selected Sheet	Inserare pe planșa selectată
+	Named view	Vedere denumită
+	Page Setup Override	Suprascriere configurare pagină
+	Place View	Plasare vedere
+	Position on sheet	Poziție pe planșă
+	Remove Property	Eliminare proprietate
+	Sheet Properties	Proprietăți planșă
+	Sheet Set Fields	Câmpuri set de planșe
+	Sheet Set Properties	Proprietăți set de planșe
+	Sync Drawings	Sincronizare desene
+	Text holding the field, at the position on sheet	Text care conține câmpul, la poziția de pe planșă
+	Views and Callouts	Vederi și trimiteri
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Layout-ul fiecărei planșe devine „număr titlu”; câmpurile setului de planșe, etichetele vederilor și trimiterile preiau valorile curente ale setului
+	3 Point	3 puncte
+	Origin	Origine
+	Z	Z
+	Named UCS...	UCS denumit...
+	Center Mark (DIMCEN)	Marcaj de centru (DIMCEN)
+	Copy Objects to New Layer	Copiere obiecte în strat nou
+	Cut with Base Point	Decupare cu punct de bază
+	DXF In	Intrare DXF
+	DXF Out	Ieșire DXF
+	Fill	Umplere
+	Maximize Viewport	Maximizare fereastră
+	Minimize Viewport	Minimizare fereastră
+	Object Selection Filters	Filtre de selecție obiecte
+	Oops	Oops
+	Quick Text	Text rapid
+	Redefine Attributes	Redefinire atribute
+	Drawing	Desen
+	Profile	Profil
+	Clashes	Coliziuni
+	Run	Rulare
+	Re-run	Rulare din nou
+	Run clash detection	Rulare detectare coliziuni
+	Re-run keeping statuses	Rulare din nou cu păstrarea stărilor
+	Tolerance:	Toleranță:
+	in	in
+	Show:	Afișare:
+	No clashes. Run detection first.	Nicio coliziune. Rulați mai întâi detectarea.
+	Status:	Stare:
+	Trade:	Specialitate:
+	Notes:	Note:
+	Go To	Salt la
+	Zoom to clash	Zoom la coliziune
+	Export BCF	Export BCF
+	Export CSV	Export CSV
+	Export to BCF 2.1 (ZIP)	Export în BCF 2.1 (ZIP)
+	Export clash report to CSV	Export raport coliziuni în CSV
+	MEP Review	Revizuire MEP
+	Guessed only	Doar estimate
+	{n} items	{n} elemente
+	No MEP items found. Run mep.read first.	Nu s-au găsit elemente MEP. Rulați mai întâi mep.read.
+	Mark reviewed	Marcare ca revizuit
+	Size: {ss}, Height: {hs}	Dimensiune: {ss}, Înălțime: {hs}
+	Edit size, height or system	Editare dimensiune, înălțime sau sistem
+	Size W:	Dimensiune L:
+	Bottom ft:	Jos ft:
+	Rebuild 3D model keeping hand edits	Reconstruire model 3D cu păstrarea editărilor manuale
+	Zoomed to {sys} run on {lvl}.	Zoom la traseul {sys} pe {lvl}.
+	Marked as reviewed.	Marcat ca revizuit.
+	Unmarked.	Demarcat.
+	Edit applied.	Editare aplicată.
+	Rebuilt: {n} MEP runs.	Reconstruite: {n} trasee MEP.
+	3D Measure	Măsurare 3D
+	BCF Export	Export BCF
+	Clash List	Listă coliziuni
+	Clash Status	Stare coliziune
+	Coordination Tree	Arbore de coordonare
+	Coordination Viewpoints	Puncte de vedere coordonare
+	Edit MEP Item	Editare element MEP
+	List MEP Items	Listare elemente MEP
+	Section Box	Casetă de secțiune
+	Trade Visibility	Vizibilitate specialități
+	BIM Types	Tipuri BIM
+	Get BIM Spec	Preluare specificație BIM
+	Remove BIM Spec from Entities	Eliminare specificație BIM de pe entități
+	Remove BIM Type	Eliminare tip BIM
+	Set BIM Spec on Entities	Setare specificație BIM pe entități
+	Set BIM Type	Setare tip BIM
+	Ceiling and Soffit Takeoff	Extragere cantități tavane și intradosuri
+	Colour by Assembly	Colorare după ansamblu
+	RFI List	Listă RFI
+	Zoom to RFI	Zoom la RFI
+	Update RFI	Actualizare RFI
+	Export RFI List	Export listă RFI
+	Sent	Trimis
+	Answered	Răspuns
+	Not sent	Netrimis
+	High	Ridicată
+	Medium	Medie
+	Low	Scăzută
+	All levels	Toate nivelurile
+	Open items only	Doar elementele deschise
+	{high} high, {medium} medium, {low} low	{high} ridicată, {medium} medie, {low} scăzută
+	No gaps or conflicts in the building spec.	Nu există lipsuri sau conflicte în specificația clădirii.
+	Assumed meanwhile:	Presupus între timp:
+	Proposed fix:	Corectare propusă:
+	Sheets:	Planșe:
+	Walk to It	Mergi până acolo
+	Export XLSX...	Export XLSX...
+	Export PDF...	Export PDF...
+	Drywall Takeoff	Extragere cantități gips-carton
+	Drywall View Mode	Mod vizualizare gips-carton
+	Finish Faces	Fețe finisate
+	Wall Info	Informații perete
+	Open Print Set	Deschidere set de tipărire
+	Classify Print Set	Clasificare set de tipărire
+	Print Set Dashboard	Tablou de bord set de tipărire
+	Print Set Sheets	Planșe set de tipărire
+	Re-import Revised Set	Reimport set revizuit
+	Save Print Set	Salvare set de tipărire
+	Ahead	Înainte
+	Bottom / top AFF	Jos / sus față de pardoseala finită
+	Clash	Coliziune
+	elements	elemente
+	Field Viewer	Vizualizator de șantier
+	Fit	Încadrare
+	Keep	Păstrare
+	New note	Notă nouă
+	No new notes to send	Nu există note noi de trimis
+	No room matches	Nicio încăpere nu corespunde
+	Note	Notă
+	Note kept	Notă păstrată
+	Notes	Note
+	notes ready to sync	note pregătite pentru sincronizare
+	not typed	netastat
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Deschideți un pachet de șantier (FIELDVIEW.EXPORT în CADaddy) sau plasați unul aici
+	Open clashes and RFIs	Coliziuni și RFI-uri deschise
+	RFI	RFI
+	Room number	Număr încăpere
+	Search a room number, or tap a room	Căutați un număr de încăpere sau atingeți o încăpere
+	Send Notes	Trimitere note
+	Tap two points to measure	Atingeți două puncte pentru a măsura
+	Trades	Specialități
+	Unit	Unitate
+	Verified	Verificat
+	Verified point	Punct verificat
+	What is there, as built	Ce există, așa cum a fost construit
+	Plan	Plan
+	3D	3D
+	Architectural	Arhitectură
+	Structural	Structură
+	Mechanical	Instalații HVAC
+	Plumbing	Instalații sanitare
+	Fire protection	Protecție la incendiu
+	Other	Altele
+	stated	declarat
+	inferred	dedus
+	assumed	presupus
+	Field Package	Pachet de șantier
+	Sync Field Notes	Sincronizare note de șantier
+	Field Notes	Note de șantier
+	Detect Unit Types	Detectare tipuri de unități
+	List Unit Types	Listare tipuri de unități
+	Unit Schedule	Tabel unități
+	Unit Type Takeoff	Extragere cantități pe tip de unitate
+	Override Generated Element	Suprascriere element generat
+	List Overrides	Listare suprascrieri
+	Revert Override	Anulare suprascriere
+	Accept Override After Review	Acceptare suprascriere după revizuire
+	Show or Hide Overrides	Afișare sau ascundere suprascrieri
+	Re-apply Overrides	Reaplicare suprascrieri
+	Overrides	Suprascrieri
+	Select generated element (or an object drawn by hand to add)	Selectați elementul generat (sau un obiect desenat manual de adăugat)
+	Enter type mark	Introduceți marcajul de tip
+	Enter override to revert	Introduceți suprascrierea de anulat
+	Verify	Verificare
+	review: the drawing changed here	revizuire: desenul s-a modificat aici
+	orphaned: its element is no longer generated	orfan: elementul său nu mai este generat
+	Project Rules	Reguli de proiect
+	Domain:	Domeniu:
+	No project rules set.	Nu sunt setate reguli de proiect.
+	Tier:	Nivel:
+	Source:	Sursă:
+	Reason:	Motiv:
+	Overridden values:	Valori suprascrise:
+	No drawing open.	Niciun desen deschis.
+	List Project Rules	Listare reguli de proiect
+	Get Project Rule	Preluare regulă de proiect
+	Set Project Rule	Setare regulă de proiect
+	Remove Project Rule	Eliminare regulă de proiect
+	Preview Project Rule Change	Previzualizare modificare regulă de proiect
+	Project Rules Label	Etichetă reguli de proiect
+	Import Project Rules	Import reguli de proiect
+	Export Project Rules	Export reguli de proiect
+	Print Validator Documents	Documente validator planșe
+	Validate Model Against Prints	Validare model față de planșe
+	Validation Failure Overlay	Suprapunere erori de validare
+	Element Provenance	Proveniență element
+	MEP Quantities	Cantități MEP
+	Refresh MEP Quantities	Reîmprospătare cantități MEP
+	Activate Drawing	Activare desen
+	Add to Project	Adăugare la proiect
+	Close Project	Închidere proiect
+	Import Manifest	Import manifest
+	Import Standards	Import standarde
+	New Project	Proiect nou
+	Open Project	Deschidere proiect
+	Project Disk Use	Spațiu pe disc proiect
+	Project Drawings	Desene proiect
+	Project Info	Informații proiect
+	Remove Standard	Eliminare standard
+	Remove from Project	Eliminare din proiect
+	Restore Project	Restaurare proiect
+	Set Standard	Setare standard
+	Shelve Drawing	Arhivare desen
+	Shelve Project	Arhivare proiect
+	Standards Library	Bibliotecă de standarde
+	Validate Manifest	Validare manifest
+	Active	Activ
+	Shelved	Arhivat
+	{n} drawings	{n} desene
+	Compare Revised Print	Comparare planșă revizuită
+	Revision Log	Jurnal revizii
+	Attach IFC Reference	Atașare referință IFC
+	IFC References	Referințe IFC
+	IFC Reference Elements	Elemente referință IFC
+	Reload IFC References	Reîncărcare referințe IFC
+	Accept Specifications	Acceptare specificații
+	Import Specifications	Import specificații
+	Colour Scheme	Schemă de culori
+	Coordination Mode	Mod coordonare
+	Coordination Views	Vederi coordonare
+	Isolate Trade	Izolare specialitate
+	Project Briefing	Prezentare proiect
+	Project Note	Notă proiect
+	Review Queue	Coadă de revizuire
+	Next Review Item	Următorul element de revizuit
+	Resolve Review Item	Rezolvare element de revizuit
+	Defer Review Item	Amânare element de revizuit
+	Draft RFI	Schiță RFI
+	Batch Resolve	Rezolvare în lot
+	Approve Agent Work	Aprobare lucru agent
+	Agent Work	Lucru agent
+	Build BIM Model	Construire model BIM
+	to accept	de acceptat
+	Accept all	Acceptă tot
+	Accept	Acceptare
+	Cited:	Citat:
+	Nothing waiting: agents' work is all accepted.	Nimic în așteptare: tot lucrul agenților este acceptat.
+	Open IFC Model	Deschidere model IFC
+	Open IFC Model...	Deschidere model IFC...
+	IFC Model	Model IFC
+	IFC Model Tree	Arbore model IFC
+	IFC Object Properties	Proprietăți obiect IFC
+	Filter IFC Objects	Filtrare obiecte IFC
+	IFC Section Box	Casetă de secțiune IFC
+	Measure in 3D	Măsurare în 3D
+	IFC Camera	Cameră IFC
+	Render IFC Model	Randare model IFC
+	New BCF Issue	Problemă BCF nouă
+	BCF Issues	Probleme BCF
+	BCF Issues...	Probleme BCF...
+	BCF Issue	Problemă BCF
+	Update BCF Issue	Actualizare problemă BCF
+	Show BCF Issue	Afișare problemă BCF
+	Delete BCF Issue	Ștergere problemă BCF
+	Import BCF	Import BCF
+	Read Levels	Citire niveluri
+	List Levels	Listare niveluri
+	Edit Level	Editare nivel
+	Attach Sheets to Levels	Atașare planșe la niveluri
+	Check Shafts Through Levels	Verificare puțuri prin niveluri
+	Isolate Level	Izolare nivel
+	Read from Prints	Citire din planșe
+	Level names and elevations from the sections, elevations and level markers	Nume și cote de nivel din secțiuni, fațade și marcajele de nivel
+	Attach Sheets	Atașare planșe
+	Check Shafts	Verificare puțuri
+	Shafts, chases and risers must carry on through the levels between their ends	Puțurile, ghenele și coloanele trebuie să continue prin nivelurile dintre capetele lor
+	No levels in the building spec.	Nu există niveluri în specificația clădirii.
+	Level	Nivel
+	Floor to floor	De la etaj la etaj
+	Sheets	Planșe
+	Show only this storey in 3D	Afișează doar acest etaj în 3D
+	Datums (no plan on this drawing):	Repere (niciun plan în acest desen):
+	Sheets on no level:	Planșe fără nivel:
+	Show All Levels	Afișare toate nivelurile
+	The levels already match the prints.	Nivelurile corespund deja planșelor.
+	{sheets} sheets, {loose} on no level	{sheets} planșe, {loose} fără nivel
+	{name}: not shown on {levels}	{name}: nu apare pe {levels}
+	Every shaft and riser carries on through its levels.	Fiecare puț și coloană continuă prin nivelurile sale.
+	Not a height: {text}	Nu este o înălțime: {text}
+	Export COBie	Export COBie
+	Validate COBie	Validare COBie
+	Export Handover Schedules	Export tabele de predare
+	COBie...	COBie...
+	Handover Schedules...	Tabele de predare...
+	Electrical Gear	Echipamente electrice
+	Check Electrical Gear	Verificare echipamente electrice
+	Submittal Review of Gear	Revizuire documentație echipamente
+	Accept Gear as Submitted	Acceptare echipamente ca trimise

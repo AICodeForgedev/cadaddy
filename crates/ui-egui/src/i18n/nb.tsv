@@ -1,0 +1,2833 @@
+# CADaddy Norwegian Bokmål interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Norwegian Bokmål translation.
+# Empty context = ordinary label; @plural = one|other with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	Juster...
+	Apply	Bruk
+	Attach DWG...	Tilknytt DWG...
+	Bind	Bind
+	Detach	Koble fra
+	Image	Bilde
+	Loaded	Lastet
+	Make it a block of this drawing, keeping its layer names	Gjør den til en blokk i denne tegningen, og behold lagnavnene
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Gjør den til en blokk i denne tegningen; lagene blir NAME$0$LAYER
+	No external references are attached.	Ingen eksterne referanser er tilknyttet.
+	Not Found	Ikke funnet
+	Not loaded	Ikke lastet
+	Open	Åpne
+	Overlay	Overlegg
+	Reference Manager	Referansebehandling
+	Reference Name	Referansenavn
+	References: {n}	Referanser: {n}
+	Reload	Last inn på nytt
+	Reload All	Last inn alle på nytt
+	Saved Path	Lagret bane
+	Unload	Last ut
+	Unloaded	Lastet ut
+	Unreferenced	Ikke referert
+	Unresolved	Uløst
+	  Cancel  	  Avbryt
+	  OK  	  OK
+	 or [	 eller [
+	% of all commits	% av alle commits
+	* Wildcard Match	* Jokertegnsøk
+	*VARIES*	*VARIERER*
+	+  |  Top  |  2D Wireframe	+  |  Topp  |  2D-trådmodell
+	+Bin	+Bin
+	+LOC	+LOC
+	1 Viewport	1 visningsport
+	2 Points	2 punkter
+	2 Viewports	2 visningsporter
+	2D Solid	2D-flate
+	3 Points	3 punkter
+	3 Viewports	3 visningsporter
+	3D Face	3D-flate
+	3D Operations	3D-operasjoner
+	3D Polyline	3D-polylinje
+	4 Viewports	4 visningsporter
+	< Less than	< Mindre enn
+	<> Not Equal	<> Ikke lik
+	= Equals	= Lik
+	> Greater than	> Større enn
+	A variable name starts with a letter and has only letters, digits and _	Et variabelnavn begynner med en bokstav og har bare bokstaver, sifre og _
+	About	Om
+	About CADaddy	Om CADaddy
+	Absolute	Absolutt
+	Add Leader	Legg til leder
+	Additional angles	Flere vinkler
+	Align	Juster
+	Align Text	Juster tekst
+	Aligned	Justert
+	All	Alle
+	All Annotation Objects	Alle annoteringsobjekter
+	All Used Layers	Alle brukte lag
+	All files	Alle filer
+	Angle	Vinkel
+	Angular	Vinkel
+	Annotation Visibility	Annoteringssynlighet
+	Annotation scale	Annoteringsskala
+	Apparent Intersection	Tilsynelatende skjæring
+	Append to current selection set	Legg til i gjeldende utvalg
+	Apply to:	Bruk på:
+	Apply true color	Bruk ekte farge
+	Arc	Bue
+	Arc Length	Buelengde
+	Area	Areal
+	Arrange Panel	Ordne-panel
+	Array	Matrise
+	Attach	Tilknytt
+	Attribute	Attributt
+	Attribute Definition	Attributtdefinisjon
+	Attribute Display	Attributtvisning
+	Audit	Kontroller
+	Auto (system language)	Auto (systemspråk)
+	Auto Constrain	Automatiske begrensninger
+	AutoConstrain	AutoConstrain
+	Axis, End	Akse, ende
+	Base	Basis
+	Baseline	Grunnlinje
+	Batch Publish	Satsvis publisering
+	Binary assets added	Binære ressurser lagt til
+	Binary assets removed	Binære ressurser fjernet
+	Bind...	Bind...
+	Blend	Overgang
+	Block	Blokk
+	Block Attribute Manager...	Blokkattributtbehandling...
+	Block Editor	Blokkredigering
+	Block Reference	Blokkreferanse
+	Block...	Blokk...
+	Blocks	Blokker
+	Blue	Blå
+	Bold	Fet
+	Boolean	Boolsk
+	Boundary	Avgrensning
+	Boundary...	Avgrensning...
+	Box	Boks
+	Break	Bryt
+	Break At Point	Bryt ved punkt
+	Bring Above Objects	Flytt over objekter
+	Bring Annotations to Front	Flytt annoteringer fremst
+	Bring to Front	Flytt fremst
+	Bulleted list	Punktliste
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	CADaddy-hjelp
+	Cancel	Avbryt
+	Cartesian (x, y)	Kartesisk (x, y)
+	Center	Senter
+	Center Line	Senterlinje
+	Center Mark	Sentermerke
+	Center X	Senter X
+	Center Y	Senter Y
+	Center Z	Senter Z
+	Center, Diameter	Senter, diameter
+	Center, Radius	Senter, radius
+	Center, Start, Angle	Senter, start, vinkel
+	Center, Start, End	Senter, start, ende
+	Center, Start, Length	Senter, start, lengde
+	Chamfer	Fas
+	Change Space	Endre rom
+	Change to Current Layer	Endre til gjeldende lag
+	Changed: {n}	Endret: {n}
+	Circle	Sirkel
+	Circumference	Omkrets
+	Clear History	Tøm historikk
+	Clear	Tøm
+	Clip	Klipp
+	Clip Viewport	Klipp visningsport
+	Clipboard	Utklippstavle
+	Close	Lukk
+	Close All	Lukk alle
+	Close All Other Drawings	Lukk alle andre tegninger
+	Closed	Lukket
+	Close Comparison	Lukk sammenligning
+	Coincident	Sammenfallende
+	Collapse Palettes	Skjul paletter
+	Collapse Tool Sets	Skjul verktøysett
+	Collinear	Kolineær
+	Color	Farge
+	Color 8	Farge 8
+	Color 9	Farge 9
+	Color Index	Fargeindeks
+	Color...	Farge...
+	Command Aliases	Kommandoaliaser
+	Command History	Kommandohistorikk
+	Clear Command History	Tøm kommandohistorikk
+	Command Line	Kommandolinje
+	Command Line History Lines	Historikklinjer i kommandolinjen
+	Command Reference	Kommandoreferanse
+	Commits	Commits
+	Company	Firma
+	Compare Drawings...	Sammenlign tegninger...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Dataassistert konstruksjon og tegning: en åpen kildekode-CAD-applikasjon i clean room-utførelse, skrevet i ren Rust.
+	Concentric	Konsentrisk
+	Cone	Kjegle
+	Constraint Bars	Begrensningslinjer
+	Constraint Settings	Begrensningsinnstillinger
+	Construction Line	Konstruksjonslinje
+	Contents	Innhold
+	Continue	Fortsett
+	Contributors	Bidragsytere
+	Control Vertices	Kontrollpunkter
+	Convert	Konverter
+	Copy	Kopier
+	Copy Full File Path	Kopier full filbane
+	Copy History	Kopier historikk
+	Copy Layout	Kopier layout
+	Copy Nested Objects	Kopier nestede objekter
+	Copy Selection	Kopier utvalg
+	Copy with Base Point	Kopier med basispunkt
+	Count	Antall
+	Count List	Telleliste
+	Count Table	Telletabell
+	Create Block	Opprett blokk
+	Creates a user parameter	Oppretter en brukerparameter
+	Ctrl+Enter to finish	Ctrl+Enter for å fullføre
+	Current layer	Gjeldende lag
+	Current selection	Gjeldende utvalg
+	Current: {color}	Gjeldende: {color}
+	Cut	Klipp ut
+	Cyan	Cyan
+	Cylinder	Sylinder
+	DWG	DWG
+	DWG Reference...	DWG-referanse...
+	DXF	DXF
+	Dark	Mørk
+	Data Extraction...	Datauttrekk...
+	Default	Standard
+	Data Link...	Datakobling...
+	Default Save Format	Standard lagringsformat
+	Default Save Version	Standard lagringsversjon
+	Define Attributes	Definer attributter
+	Define Attributes...	Definer attributter...
+	Defined width	Definert bredde
+	Degree	Grad
+	Degrees of Freedom	Frihetsgrader
+	Degrees of freedom: {n}	Frihetsgrader: {n}
+	Delete	Slett
+	Delete Column	Slett kolonne
+	Delete Constraints	Slett begrensninger
+	Delete Dimension Style	Slett målsettingsstil
+	Delete Duplicate Objects	Slett dupliserte objekter
+	Delete Layer	Slett lag
+	Delete Layer State	Slett lagtilstand
+	Delete Layout	Slett layout
+	Delete Row	Slett rad
+	Delete Text Style	Slett tekststil
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Beskrivelse
+	Deselect All	Fjern alle valg
+	Diameter	Diameter
+	Dim style	Målstil
+	Dimension Break	Målbrudd
+	Dimension Edit	Rediger mål
+	Dimension	Mål
+	Dimension Objects Only	Bare målobjekter
+	Dimension Space	Målavstand
+	Dimension Style Override	Overstyring av målsettingsstil
+	Dimension Style...	Målsettingsstil...
+	Dimension Text Edit	Rediger måltekst
+	Dimension style	Målsettingsstil
+	Dimensional Constraint	Dimensjonal begrensning
+	Dimensional Constraint Parameters	Parametere for dimensjonale begrensninger
+	Dimensional Constraints	Dimensjonale begrensninger
+	Disassociate Dimensions	Fjern målassosiering
+	Display name	Visningsnavn
+	Distance	Avstand
+	Divide	Del opp
+	Do not plot (click: plot)	Ikke plott (klikk: plott)
+	Donut	Ring
+	Double-click to edit the description	Dobbeltklikk for å redigere beskrivelsen
+	Down	Ned
+	Drafting	Tegning
+	Drafting Settings	Tegneinnstillinger
+	Drafting Settings...	Tegneinnstillinger...
+	Draw	Tegn
+	Draw Order	Tegnerekkefølge
+	Drawing (DWG)	Tegning (DWG)
+	Drawing (DXF)	Tegning (DXF)
+	Drawing Limits	Tegningsgrenser
+	Drawing Template (DWT)	Tegningsmal (DWT)
+	Drawing Utilities	Tegneverktøy
+	Drawings (DWG, DXF)	Tegninger (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	SVG-tegninger (SVG, SVGZ)
+	Dynamic	Dynamisk
+	Dynamic Dimensions	Dynamiske mål
+	Dynamic Input	Dynamisk inndata
+	Dynamic Input (F12)	Dynamisk inndata (F12)
+	E	Ø
+	Edit	Rediger
+	Edit Attributes...	Rediger attributter...
+	Edit Text...	Rediger tekst...
+	Edit Table Cell	Rediger tabellcelle
+	Elevation	Kotehøyde
+	Ellipse	Ellipse
+	Elliptical Arc	Elliptisk bue
+	Enable Dynamic Input (F12)	Aktiver dynamisk inndata (F12)
+	End Object Isolation	Avslutt objektisolering
+	End Width	Sluttbredde
+	End X	Ende X
+	End Y	Ende Y
+	End angle	Sluttvinkel
+	Endpoint	Endepunkt
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Angi Topp, Null eller Bunn.
+	Enter a fit data option	Angi et tilpasningsdataalternativ
+	Enter a pattern name	Angi et mønsternavn
+	Enter a vertex editing option	Angi et alternativ for punktredigering
+	Enter an option	Angi et alternativ
+	Enter angle of xline	Angi vinkel for xline
+	Enter angle of xline (0) or	Angi vinkel for xline (0) eller
+	Enter area of rectangle in current units	Angi rektangelets areal i gjeldende enheter
+	Enter attribute prompt	Angi attributtledetekst
+	Enter attribute tag name	Angi attributtkodenavn
+	Enter attribute value	Angi attributtverdi
+	Enter block name	Angi blokknavn
+	Enter constraint type	Angi begrensningstype
+	Enter continuity	Angi kontinuitet
+	Enter default attribute value	Angi standard attributtverdi
+	Enter degree of spline	Angi splinegrad
+	Enter delta angle	Angi deltavinkel
+	Enter delta length or	Angi deltalengde eller
+	Enter dimension text	Angi måltekst
+	Enter dimension text (<> = measurement)	Angi måltekst (<> = måling)
+	Enter dimension value or [name=expression]	Angi målverdi eller [name=expression]
+	Enter dimension variable name to override	Angi navn på målvariabel som skal overstyres
+	Enter justification type	Angi justeringstype
+	Enter leader text	Angi ledetekst
+	Enter mline scale	Angi mline-skala
+	Enter mode	Angi modus
+	Enter name of block to insert	Angi navn på blokk som skal settes inn
+	Enter new text	Angi ny tekst
+	Enter next point	Angi neste punkt
+	Enter number of columns	Angi antall kolonner
+	Enter number of data rows	Angi antall datarader
+	Enter number of items	Angi antall elementer
+	Enter number of items along path	Angi antall elementer langs banen
+	Enter number of sides	Angi antall sider
+	Enter number of turns	Angi antall omdreininger
+	Enter percentage length	Angi lengde i prosent
+	Enter rectangle length	Angi rektangelets lengde
+	Enter rectangle width	Angi rektangelets bredde
+	Enter scale factor	Angi skalafaktor
+	Enter text	Angi tekst
+	Enter text (use \P for new paragraphs)	Angi tekst (bruk \P for nye avsnitt)
+	Enter the number of segments	Angi antall segmenter
+	Enter twist direction of helix	Angi vridningsretning for helix
+	Entire drawing	Hele tegningen
+	Equal	Lik
+	Erase	Slett
+	Evaluate	Evaluer
+	Evaluate LISP	Evaluer LISP
+	Exclude from new selection set	Utelat fra nytt utvalg
+	Explode	Splitt
+	Export	Eksporter
+	Export Table	Eksporter tabell
+	Export to PDF...	Eksporter til PDF...
+	Expression	Uttrykk
+	Extend	Forleng
+	Extension	Forlengelse
+	Extents	Utstrekning
+	External Reference	Ekstern referanse
+	External References	Eksterne referanser
+	Extrude	Ekstruder
+	File	Fil
+	File Tab	Filfane
+	Fillet	Avrunding
+	Filter	Filter
+	Filters	Filtre
+	Find and Replace	Søk og erstatt
+	Find...	Søk...
+	First	Første
+	First commit	Første commit
+	Fit Points	Tilpasningspunkter
+	Fix	Fast
+	Flatten Objects	Flat ut objekter
+	Format	Format
+	Freehand	Frihånd
+	Freeze	Frys
+	Freeze Layer	Frys lag
+	Freeze in new viewports	Frys i nye visningsporter
+	Freeze/Thaw	Frys/tin
+	Freeze/Thaw in all viewports	Frys/tin i alle visningsporter
+	Freeze/Thaw in the current viewport	Frys/tin i gjeldende visningsport
+	From	Fra
+	From Template...	Fra mal...
+	General	Generelt
+	Geometric Center	Geometrisk senter
+	Geometric Constraint	Geometrisk begrensning
+	Geometric Constraints	Geometriske begrensninger
+	Geometry	Geometri
+	Get from the Drawing	Hent fra tegningen
+	Get Variable	Hent variabel
+	Get View	Hent visning
+	Global	Global
+	Global width	Global bredde
+	Grab bag	Diverse
+	Gradient	Gradient
+	Gradient...	Gradient...
+	Green	Grønn
+	Grid (F7)	Rutenett (F7)
+	Grid Display	Rutenettvisning
+	Grid On (F7)	Rutenett på (F7)
+	Grid snap	Rutenettsprang
+	Grid spacing	Rutenettavstand
+	Grip Edit	Grepsredigering
+	Grip Mirror	Grepsspeiling
+	Grip Option	Grepsalternativ
+	Grip Rotate	Grepsrotering
+	Grip Scale	Grepsskalering
+	Grip Stretch	Grepsstrekking
+	Group	Gruppe
+	Group Edit	Gruppredigering
+	Group Options	Gruppealternativer
+	Group Selection	Gruppevalg
+	Hatch	Skravur
+	Hatch Edit	Rediger skravur
+	Hatch Patterns	Skravurmønstre
+	Hatch...	Skravur...
+	Height	Høyde
+	Height: {height}	Høyde: {height}
+	Helix	Helix
+	Help	Hjelp
+	Hide All	Skjul alle
+	Hide All Constraint Bars	Skjul alle begrensningslinjer
+	Hide All Dynamic Dimensions	Skjul alle dynamiske mål
+	Hide Layer List	Skjul lagliste
+	Hide Objects	Skjul objekter
+	Hide Palettes	Skjul paletter
+	History	Historikk
+	Home	Hjem
+	Horizontal	Horisontal
+	HorizontalDistance	Horisontal avstand
+	How to apply:	Slik brukes det:
+	ID Point	ID-punkt
+	Import	Importer
+	Align Multileaders	Juster multiledere
+	Collect	Samle
+	Collect Multileaders	Samle multiledere
+	Edit Multileader	Rediger multileder
+	In	Inn
+	In-window Menu Bar	Menylinje i vinduet
+	Include in new selection set	Ta med i nytt utvalg
+	Increment angle	Vinkeltrinn
+	Index Color	Indeksfarge
+	Index color: {index}	Indeksfarge: {index}
+	Infer Constraints	Utled begrensninger
+	Inquiry	Forespørsel
+	Insert	Sett inn
+	Insert Block	Sett inn blokk
+	Insert Column	Sett inn kolonne
+	Insert Row	Sett inn rad
+	Insert tab	Sett inn-fanen
+	Insert this block	Sett inn denne blokken
+	Insert Table Formula	Sett inn tabellformel
+	Insertion	Innsetting
+	Insertion X	Innsetting X
+	Insertion Y	Innsetting Y
+	Insertion Z	Innsetting Z
+	Inspect Constraints	Inspiser begrensninger
+	Inspect Drawing	Inspiser tegning
+	Inspection	Inspeksjon
+	Interface Language	Grensesnittspråk
+	Interface Theme	Grensesnittema
+	Intersect	Snitt
+	Intersection	Skjæringspunkt
+	Isolate	Isoler
+	Isolate Layer	Isoler lag
+	Isolate Objects	Isoler objekter
+	Isometric Drafting	Isometrisk tegning
+	Jogged	Knekket
+	Jogged Linear	Knekket lineær
+	Join	Slå sammen
+	Join the ArtCraft Discord…	Bli med i ArtCraft-Discord…
+	Join us on Discord	Bli med oss på Discord
+	Isometric Plane	Isometrisk plan
+	Isometric snap	Isometrisk sprang
+	Language	Språk
+	Last	Siste
+	Last commit	Siste commit
+	Layer	Lag
+	Layer Delete	Slett lag
+	Layer Match	Match lag
+	Layer Merge	Slå sammen lag
+	Layer Off	Lag av
+	Layer Properties	Lagegenskaper
+	Layer Properties Manager	Lagegenskapsbehandling
+	Layer Properties Manager — current viewport	Lagegenskapsbehandling — gjeldende visningsport
+	Layer State	Lagtilstand
+	Layer States Manager...	Lagtilstandsbehandling...
+	Layer Tools	Lagverktøy
+	Layer contains objects (double-click to make current)	Laget inneholder objekter (dobbeltklikk for å gjøre gjeldende)
+	Layer is empty (double-click to make current)	Laget er tomt (dobbeltklikk for å gjøre gjeldende)
+	Layers	Lag
+	Layers Palette	Lagpalett
+	Hide Palette	Skjul palett
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Viste lag: {shown} av {total}.   Gjeldende lag: {layer}
+	Layout	Layout
+	Layout list	Layoutliste
+	Leader	Leder
+	Leaders Only	Bare ledere
+	Left	Venstre
+	Length	Lengde
+	Length X	Lengde X
+	Length Y	Lengde Y
+	Lengthen	Endre lengde
+	Light	Lys
+	Line	Linje
+	Line delta	Linjedelta
+	Linear	Lineær
+	Lines +/−	Linjer +/−
+	Lines added	Linjer lagt til
+	Lines deleted	Linjer slettet
+	Lines of Command History	Linjer i kommandohistorikken
+	Linetype	Linjetype
+	Linetype Scale	Linjetypeskala
+	Linetype scale	Linjetypeskala
+	Ltscale	Ltscale
+	Linetype...	Linjetype...
+	Lineweight	Linjetykkelse
+	Lineweight...	Linjetykkelse...
+	List	List opp
+	List Blocks	List opp blokker
+	List Dimension Styles	List opp målsettingsstiler
+	List Groups	List opp grupper
+	List Layer States	List opp lagtilstander
+	List Layouts	List opp layouter
+	List System Variables	List opp systemvariabler
+	List Text Styles	List opp tekststiler
+	Load all	Last inn alle
+	Load...	Last inn...
+	Load Application...	Last inn applikasjon...
+	Loaded linetypes	Innlastede linjetyper
+	Lock	Lås
+	Lock Layer	Lås lag
+	Lock viewport	Lås visningsport
+	Lock/Unlock	Lås/lås opp
+	Loft	Loft
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Ikke tilknyttet Autodesk, Inc.
+	MODEL	MODELL
+	MText	MText
+	Magenta	Magenta
+	Major line every	Hovedlinje hver
+	Make Current	Gjør gjeldende
+	Make Object's Layer Current	Gjør objektets lag gjeldende
+	Make...	Lag...
+	Match Layer	Match lag
+	Match Properties	Match egenskaper
+	Measure	Mål opp
+	Measure Distance	Mål avstand
+	Measure Geometry	Mål geometri
+	Merge Cells	Slå sammen celler
+	Merged PRs	Sammenslåtte PR-er
+	Mid Between 2 Points	Midt mellom 2 punkter
+	Midpoint	Midtpunkt
+	Mirror	Speil
+	Model	Modell
+	Model Space (in viewport)	Modellrom (i visningsport)
+	Modeling	Modellering
+	Models	Modeller
+	Modify	Endre
+	Move	Flytt
+	Multileader	Multileder
+	Multileader Style...	Multilederstil...
+	Multileader style	Multilederstil
+	Multiline	Multilinje
+	Multiline Text	Flerlinjetekst
+	Multiline Text...	Flerlinjetekst...
+	Multiple	Flere
+	Multiple Point	Flere punkter
+	My	Mine
+	My properties: not available yet	Mine egenskaper: ikke tilgjengelig ennå
+	N	N
+	Name	Navn
+	Name (A–Z)	Navn (A–Å)
+	Named Views...	Navngitte visninger...
+	Nearest	Nærmeste
+	New	Ny
+	New (metric)	Ny (metrisk)
+	New Drawing	Ny tegning
+	New Drawing (⌘N)	Ny tegning (⌘N)
+	New Drawing...	Ny tegning...
+	New Layer	Nytt lag
+	New Layout	Ny layout
+	New VP Freeze	Frys i ny VP
+	New Viewports...	Nye visningsporter...
+	New from Template...	Ny fra mal...
+	New layout	Ny layout
+	New state name	Navn på ny tilstand
+	Next Change	Neste endring
+	No	Nei
+	No blocks defined in this drawing.	Ingen blokker er definert i denne tegningen.
+	No contributor data was built into this copy.	Ingen bidragsyterdata er bygget inn i denne kopien.
+	No model credits were built into this copy.	Ingen modellkreditter er bygget inn i denne kopien.
+	No saved layer states	Ingen lagrede lagtilstander
+	No selection	Ingen valgt
+	Node	Node
+	None	Ingen
+	Not available	Ikke tilgjengelig
+	Not available yet	Ikke tilgjengelig ennå
+	Numbered list	Nummerert liste
+	OK	OK
+	Object	Objekt
+	Object Snap	Objektfang
+	Object Snap (F3)	Objektfang (F3)
+	Object Snap On (F3)	Objektfang på (F3)
+	Object Snap Tracking	Objektfangsporing
+	Object Snap Tracking (F11)	Objektfangsporing (F11)
+	Object Snap Tracking Settings	Innstillinger for objektfangsporing
+	Object type:	Objekttype:
+	Oblique	Skrå
+	Off	Av
+	Offset	Forskyv
+	On	På
+	On/Off	På/av
+	One of the Crafting Apps by the ArtCraft team and community.	En av Crafting-appene fra ArtCraft-teamet og fellesskapet.
+	Only in this drawing: {n}	Bare i denne tegningen: {n}
+	Only in {name}: {n}	Bare i {name}: {n}
+	Open (⌘O)	Åpne (⌘O)
+	Open Sample Drawing	Åpne eksempeltegning
+	Open sample drawing	Åpne eksempeltegning
+	Open Xref	Åpne xref
+	Open...	Åpne...
+	Open Recent	Åpne nylig brukte
+	Clear Recent Files	Tøm nylig brukte filer
+	Operator:	Operator:
+	Orbit	Orbit
+	Ordinate	Ordinat
+	Ortho (F8)	Orto (F8)
+	Ortho Mode	Ortomodus
+	Ortho Mode (F8)	Ortomodus (F8)
+	Osnap Settings...	Objektfanginnstillinger...
+	Out	Ut
+	Over-constrained	Overbegrenset
+	Override	Overstyr
+	PAPER	PAPIR
+	Percent	Prosent
+	Polar (distance < angle)	Polar (avstand < vinkel)
+	PRs	PR-er
+	Page Setup Manager	Sideoppsettbehandling
+	Page Setup Manager...	Sideoppsettbehandling...
+	Pan	Panorer
+	Pan Down	Panorer ned
+	Pan Left	Panorer til venstre
+	Pan Right	Panorer til høyre
+	Pan Up	Panorer opp
+	Paper Space	Papirrom
+	Parallel	Parallell
+	Parameters Manager	Parameterbehandling
+	Parametric	Parametrisk
+	Paste	Lim inn
+	Paste as Block	Lim inn som blokk
+	Paste to Command Line	Lim inn i kommandolinjen
+	Paste to Original Coordinates	Lim inn ved opprinnelige koordinater
+	Path Array	Banematrise
+	Pattern	Mønster
+	Perpendicular	Vinkelrett
+	Plot	Plott
+	Plot (click: do not plot)	Plott (klikk: ikke plott)
+	Plot Preview	Forhåndsvisning av plott
+	Plot Window	Plottvindu
+	Plot style	Plottstil
+	Plot style attached to	Plottstil tilknyttet
+	Plot style table	Plottstiltabell
+	Plot Style...	Plottstil...
+	Plot Style Manager	Plottstilbehandling
+	Plot Style Manager...	Plottstilbehandling...
+	Plot Styles...	Plottstiler...
+	Plotter Manager	Plotterbehandling
+	Plotter Manager...	Plotterbehandling...
+	New CTB	Ny CTB
+	New STB	Ny STB
+	New style	Ny stil
+	Reset Panel Layout	Tilbakestill paneloppsett
+	Send Hatches to Back	Flytt skraveringer bakerst
+	Send Under Objects	Flytt under objekter
+	Text Objects Only	Bare tekstobjekter
+	Use for this layout	Bruk for denne layouten
+	Display plot styles	Vis plottstiler
+	No plot style tables.	Ingen plottstiltabeller.
+	A built-in table: editing it keeps an edited copy in the drawing.	En innebygd tabell: redigering lagrer en redigert kopi i tegningen.
+	Keep an editable copy of this table in the drawing	Behold en redigerbar kopi av denne tabellen i tegningen
+	Layout {name}: {table}	Layout {name}: {table}
+	Grayscale	Gråtoner
+	Screening	Skjerming
+	Use object linetype	Bruk objektets linjetype
+	Use object lineweight	Bruk objektets linjetykkelse
+	Remove	Fjern
+	Add	Legg til
+	Open a drawing first.	Åpne en tegning først.
+	Plot table type	Plottabelltype
+	Color-dependent	Fargeavhengig
+	Named	Navngitt
+	Plus/minus	Pluss/minus
+	Point	Punkt
+	Point Filters	Punktfiltre
+	Point Style...	Punktstil...
+	Polar Array	Polarmatrise
+	Polar Tracking	Polarsporing
+	Polar Tracking (F10)	Polarsporing (F10)
+	Polar Tracking On (F10)	Polarsporing på (F10)
+	Polar angle measurement	Polar vinkelmåling
+	Polar distance	Polar avstand
+	Polar: {distance} < {angle}°	Polar: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	Polygon
+	Polygonal	Polygonal
+	Polygonal Viewport	Polygonal visningsport
+	Polyline	Polylinje
+	Polyline Edit	Rediger polylinje
+	Position X	Posisjon X
+	Position Y	Posisjon Y
+	Position Z	Posisjon Z
+	Previous	Forrige
+	Previous Change	Forrige endring
+	Previous Layer	Forrige lag
+	Primitives	Primitiver
+	Print	Skriv ut
+	Print...	Skriv ut...
+	Properties	Egenskaper
+	Properties Inspector	Egenskapsinspektør
+	Properties:	Egenskaper:
+	Proxy	Proxy
+	Purge	Rens
+	Pyramid	Pyramide
+	Quadrant	Kvadrant
+	Query Entities	Spør objekter
+	Quick	Hurtig
+	Quick Dimension	Hurtigmål
+	Quick Properties	Hurtigegenskaper
+	Quick Select	Hurtigvalg
+	Quick Select Properties	Egenskaper for hurtigvalg
+	Quick Select...	Hurtigvalg...
+	QuickCalc	QuickCalc
+	QuickCalc Pick	QuickCalc-valg
+	Quit CADaddy	Avslutt CADaddy
+	Radius	Radius
+	Raster Image	Rasterbilde
+	Ray	Stråle
+	Read-only	Skrivebeskyttet
+	Real name	Virkelig navn
+	Realtime	Sanntid
+	Reassociate Dimensions	Assosier mål på nytt
+	Recent	Nylige
+	Recent Commands	Nylige kommandoer
+	Recent Input	Nylig inndata
+	Recover...	Gjenopprett...
+	Rectangle	Rektangel
+	Recalculate Table Formulas	Beregn tabellformler på nytt
+	Rectangular	Rektangulær
+	Rectangular snap	Rektangulært sprang
+	Rectangular Array	Rektangulær matrise
+	Red	Rød
+	Redo	Gjør om
+	Redo (⇧⌘Z)	Gjør om (⇧⌘Z)
+	Redraw	Tegn på nytt
+	Regen	Regen
+	Regen All	Regen alle
+	Region	Region
+	Region/Mass Properties	Region-/masseegenskaper
+	Reinitialize	Initialiser på nytt
+	Relative	Relativ
+	Relative to last segment	Relativt til siste segment
+	Remove Leader	Fjern leder
+	Remove the viewport override	Fjern overstyringen for visningsporten
+	Rename Dimension Style	Gi nytt navn til målsettingsstil
+	Rename Layer	Gi nytt navn til lag
+	Rename Layer State	Gi nytt navn til lagtilstand
+	Rename Layout	Gi nytt navn til layout
+	Rename Text Style	Gi nytt navn til tekststil
+	Rename...	Gi nytt navn...
+	Repeat {command}	Gjenta {command}
+	Requires a point (x,y, @dx,dy or @d<a).	Krever et punkt (x,y, @dx,dy eller @d<a).
+	Reset Palettes	Tilbakestill paletter
+	Restore	Gjenopprett
+	Restore Layer State	Gjenopprett lagtilstand
+	Reverse	Snu
+	Reverse the order	Snu rekkefølgen
+	Revision Cloud	Revisjonssky
+	Revolve	Roter rundt akse
+	Right	Høyre
+	Rotate	Roter
+	Rotation	Rotasjon
+	S	S
+	Save	Lagre
+	Save (⌘S)	Lagre (⌘S)
+	Save As	Lagre som
+	Save As...	Lagre som...
+	Save Layer State	Lagre lagtilstand
+	Save State	Lagre tilstand
+	Scale	Skaler
+	Search for layer	Søk etter lag
+	Search for parameter	Søk etter parameter
+	Second and next points:	Andre og neste punkter:
+	Select	Velg
+	Select 2D polyline	Velg 2D-polylinje
+	Select All	Velg alle
+	Select Objects	Velg objekter
+	Select Similar	Velg lignende
+	Select a 2D polyline.	Velg en 2D-polylinje.
+	Select a block reference.	Velg en blokkreferanse.
+	Select a circle or arc.	Velg en sirkel eller bue.
+	Select a closed polyline	Velg en lukket polylinje
+	Select a closed polyline, circle, ellipse or closed spline.	Velg en lukket polylinje, sirkel, ellipse eller lukket spline.
+	Select a closed polyline.	Velg en lukket polylinje.
+	Select a curve as the path.	Velg en kurve som bane.
+	Select a dimension constraint type	Velg en type dimensjonal begrensning
+	Select a line object	Velg et linjeobjekt
+	Select a line object.	Velg et linjeobjekt.
+	Select a line or an arc.	Velg en linje eller en bue.
+	Select a line or polyline segment	Velg en linje eller et polylinjesegment
+	Select a line, arc or open polyline.	Velg en linje, bue eller åpen polylinje.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Velg en linje, bue, sirkel, polylinje, ellipse eller spline som bane.
+	Select a line, circle, arc or polyline segment.	Velg en linje, sirkel, bue eller et polylinjesegment.
+	Select a line.	Velg en linje.
+	Select a polyline.	Velg en polylinje.
+	Select a text, mtext, attribute definition or dimension.	Velg en tekst, mtext, attributtdefinisjon eller et mål.
+	Select an annotation object	Velg et annoteringsobjekt
+	Select an arc or circle	Velg en bue eller sirkel
+	Select an arc.	Velg en bue.
+	Select an object	Velg et objekt
+	Select an object to change or	Velg et objekt som skal endres, eller
+	Select an object to measure or	Velg et objekt som skal måles, eller
+	Select an object.	Velg et objekt.
+	Select an open curve.	Velg en åpen kurve.
+	Select an open line, arc, polyline, ellipse arc or spline.	Velg en åpen linje, bue, polylinje, ellipsebue eller spline.
+	Select arc or circle	Velg bue eller sirkel
+	Select arc or polyline arc segment	Velg bue eller buesegment i polylinje
+	Select arc style	Velg buestil
+	Select arc, circle, line	Velg bue, sirkel, linje
+	Select at least two objects to join.	Velg minst to objekter som skal slås sammen.
+	Select circle or arc to add center mark	Velg sirkel eller bue for å legge til sentermerke
+	Select closed objects (regions, closed polylines, circles).	Velg lukkede objekter (regioner, lukkede polylinjer, sirkler).
+	Select first line	Velg første linje
+	Select first line or arc	Velg første linje eller bue
+	Select first object	Velg første objekt
+	Select first object or	Velg første objekt eller
+	Select first point	Velg første punkt
+	Select nested objects to copy or	Velg nestede objekter som skal kopieres, eller
+	Select object	Velg objekt
+	Select object to dimension	Velg objekt som skal målsettes
+	Select object to divide	Velg objekt som skal deles
+	Select object to extend or shift-select to trim	Velg objekt som skal forlenges, eller Shift-velg for å trimme
+	Select object to measure	Velg objekt som skal måles
+	Select object to offset	Velg objekt som skal forskyves
+	Select object to trim or shift-select to extend	Velg objekt som skal trimmes, eller Shift-velg for å forlenge
+	Select objects	Velg objekter
+	Select objects (crossing window first corner)	Velg objekter (første hjørne av kryssvindu)
+	Select objects to array.	Velg objekter for matrise.
+	Select objects to stretch by crossing-window or crossing-polygon...	Velg objekter som skal strekkes, med kryssvindu eller kryssmangekant...
+	Select objects:	Velg objekter:
+	Add to Working Set	Legg til i arbeidssett
+	Edit Reference In-Place	Rediger referanse på stedet
+	Save Reference Edits	Lagre referanseendringer
+	Working Set	Arbeidssett
+	Xref and Block In-place Editing	Redigering av xref og blokk på stedet
+	Select one polyline (Multiple is available through the JSON form).	Velg én polylinje (Flere er tilgjengelig via JSON-skjemaet).
+	Select path curve	Velg banekurve
+	Select point or object	Velg punkt eller objekt
+	Select polyline or	Velg polylinje eller
+	Select second line	Velg andre linje
+	Select second line or shift-select to apply corner	Velg andre linje, eller Shift-velg for å lage hjørne
+	Select second object	Velg andre objekt
+	Select second object or shift-select to apply corner	Velg andre objekt, eller Shift-velg for å lage hjørne
+	Select second point	Velg andre punkt
+	Select spline	Velg spline
+	Select symmetry line	Velg symmetrilinje
+	Select two points	Velg to punkter
+	Selection Cycling	Valgsykling
+	Send to Back	Flytt bakerst
+	Set Current	Sett som gjeldende
+	Set Current Dimension Style	Angi gjeldende målsettingsstil
+	Set Current Text Style	Angi gjeldende tekststil
+	Set Current Viewport	Angi gjeldende visningsport
+	Set Layer Properties	Angi lagegenskaper
+	Set Properties	Angi egenskaper
+	Set Table Cell	Angi tabellcelle
+	Set Table Cell Style	Angi tabellcellestil
+	Set Variable	Angi variabel
+	Set View	Angi visning
+	Share	Del
+	Show	Vis
+	Show All	Vis alle
+	Show All Constraint Bars	Vis alle begrensningslinjer
+	Show All Dynamic Dimensions	Vis alle dynamiske mål
+	Show and hide the tools of this category	Vis og skjul verktøyene i denne kategorien
+	Show in Tool Sets	Vis i verktøysett
+	Show command prompting near the crosshairs	Vis kommandoledetekst nær trådkorset
+	Show Layer List	Vis lagliste
+	Show/Hide Lineweight	Vis/skjul linjetykkelse
+	Show/Hide Transparency	Vis/skjul gjennomsiktighet
+	Single Line Text	Enkeltlinjetekst
+	Single Point	Enkeltpunkt
+	Single...	Enkelt...
+	Smooth	Glatt
+	Snap	Sprang
+	Snap Mode	Sprangmodus
+	Snap Mode (F9)	Sprangmodus (F9)
+	Snap On (F9)	Sprang på (F9)
+	Snap Overrides	Fangoverstyringer
+	Snap X spacing	Sprangavstand X
+	Snap and Grid	Sprang og rutenett
+	Snap type	Sprangtype
+	Solid	Solid
+	Sort	Sorter
+	Specify a point	Angi et punkt
+	Specify a scale for the hatch pattern	Angi en skala for skravurmønsteret
+	Specify a second extension line origin	Angi utgangspunkt for andre hjelpelinje
+	Specify an angle for the hatch pattern	Angi en vinkel for skravurmønsteret
+	Specify angle end point	Angi vinkelens endepunkt
+	Specify angle of dimension line	Angi vinkel for mållinjen
+	Specify angle of dimension text	Angi vinkel for målteksten
+	Specify angle start point	Angi vinkelens startpunkt
+	Specify angle vertex	Angi vinkelens toppunkt
+	Specify angle vertex point	Angi vinkelens toppunkt
+	Specify arc length dimension location	Angi plassering for buelengdemål
+	Specify axis endpoint of ellipse	Angi akseendepunkt for ellipsen
+	Specify base diameter	Angi basisdiameter
+	Specify base point	Angi basispunkt
+	Specify base point or	Angi basispunkt eller
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Angi basispunkt eller forskyvning (dra med midtre museknapp for å panorere i sanntid)
+	Specify base radius or	Angi basisradius eller
+	Specify center of donut	Angi senter for ringen
+	Specify center of ellipse	Angi senter for ellipsen
+	Specify center of polygon	Angi senter for polygonet
+	Specify center point for circle	Angi senterpunkt for sirkelen
+	Specify center point of arc	Angi senterpunkt for buen
+	Specify center point of array	Angi senterpunkt for matrisen
+	Specify center point of base	Angi senterpunkt for basen
+	Specify corner of viewport	Angi hjørne av visningsporten
+	Specify corner of window, enter a scale factor (nX or nXP)	Angi hjørne av vindu, angi en skalafaktor (nX eller nXP)
+	Specify diameter of circle	Angi sirkelens diameter
+	Specify dimension arc line location	Angi plassering for målbuelinjen
+	Specify dimension line location	Angi plassering for mållinjen
+	Specify distance between turns	Angi avstand mellom omdreininger
+	Specify distance to other axis	Angi avstand til den andre aksen
+	Specify end angle	Angi sluttvinkel
+	Specify end point of arc	Angi endepunkt for buen
+	Specify end point of arc (hold Ctrl to switch direction)	Angi endepunkt for buen (hold Ctrl for å bytte retning)
+	Specify ending width	Angi sluttbredde
+	Specify ending width for next segment	Angi sluttbredde for neste segment
+	Specify endpoint of arc	Angi endepunkt for buen
+	Specify endpoint of axis	Angi endepunkt for aksen
+	Specify endpoint of line	Angi endepunkt for linjen
+	Specify feature location	Angi plassering for elementet
+	Specify fillet radius	Angi avrundingsradius
+	Specify fillet radius for rectangles	Angi avrundingsradius for rektangler
+	Specify first angle endpoint	Angi første vinkelendepunkt
+	Specify first chamfer distance	Angi første fasavstand
+	Specify first chamfer distance for rectangles	Angi første fasavstand for rektangler
+	Specify first constraint point	Angi første begrensningspunkt
+	Specify first corner	Angi første hjørne
+	Specify first corner point	Angi første hjørnepunkt
+	Specify first destination point	Angi første målpunkt
+	Specify first end point of circle's diameter	Angi første endepunkt for sirkelens diameter
+	Specify first endpoint of edge	Angi første endepunkt for kanten
+	Specify first extension line origin	Angi utgangspunkt for første hjelpelinje
+	Specify first point	Angi første punkt
+	Specify first point of mirror line	Angi første punkt på speillinjen
+	Specify first point on circle	Angi første punkt på sirkelen
+	Specify first point on circle: _tan to	Angi første punkt på sirkelen: _tan til
+	Specify first source point	Angi første kildepunkt
+	Specify height	Angi høyde
+	Specify helix height or	Angi høyde for helix eller
+	Specify included angle	Angi innesluttet vinkel
+	Specify insertion base point	Angi basispunkt for innsetting
+	Specify insertion point	Angi innsettingspunkt
+	A drawing opened from a file keeps that file's format.	En tegning som er åpnet fra en fil, beholder filens format.
+	An array that would create more objects than this is refused.	En matrise som ville lage flere objekter enn dette, avvises.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy lagrer disse innstillingene, objektfangmodusene og tegnebryterne for brukerkontoen din og gjenoppretter dem ved oppstart.
+	Changes apply at once and are kept for next time.	Endringer trer i kraft umiddelbart og beholdes til neste gang.
+	Command line history	Kommandolinjehistorikk
+	Copy as JSON	Kopier som JSON
+	Crosshair size	Trådkorsstørrelse
+	Crossing selection color:	Farge for kryssvalg:
+	Display	Visning
+	Exclude:	Utelat:
+	Grip size	Grepsstørrelse
+	Grips	Grep
+	Groups	Grupper
+	Hatches	Skraveringer
+	Hold Shift to add to the selection	Hold Shift for å legge til i utvalget
+	Indicate selection area	Marker valgområdet
+	Interface language	Grensesnittspråk
+	Interface theme	Grensesnittema
+	Keep the system cursor visible over the drawing area	Hold systemmarkøren synlig over tegneområdet
+	Largest array	Største matrise
+	Layout paper	Layoutpapir
+	Model background	Modellbakgrunn
+	Multiline text	Flerlinjetekst
+	Object grouping	Objektgruppering
+	Object selection limit for display of grips	Grense for antall valgte objekter som viser grep
+	Object snap aperture	Objektfangåpning
+	Object snap marker size	Størrelse på objektfangmarkør
+	Objects on locked layers	Objekter på låste lag
+	Open and Save	Åpne og lagre
+	Options	Alternativer
+	Options...	Alternativer...
+	Pickbox size	Størrelse på valgboks
+	Preview	Forhåndsvisning
+	Profiles	Profiler
+	Reset keeps the interface language.	Tilbakestilling beholder grensesnittspråket.
+	Reset to Defaults	Tilbakestill til standard
+	Save new drawings as	Lagre nye tegninger som
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Skjermforstørrere, skjermlesere og opptaksprogrammer følger systemmarkøren.
+	Select objects first, then choose a command	Velg objekter først, og velg deretter en kommando
+	Selection	Utvalg
+	Selection Area Effect	Effekt for valgområde
+	Selection Preview Filter	Filter for valgforhåndsvisning
+	Selection area opacity:	Opasitet for valgområde:
+	Selection effect color	Farge for valgeffekt
+	Selection modes	Valgmoduser
+	Selection preview	Valgforhåndsvisning
+	Settings...	Innstillinger...
+	Show Quick Properties for selected objects	Vis hurtigegenskaper for valgte objekter
+	Show grips	Vis grep
+	Snap, grid, polar tracking and Dynamic Input:	Sprang, rutenett, polarsporing og dynamisk inndata:
+	Tables	Tabeller
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Åpningen er hvor nær markøren må komme et punkt for at objektfang skal finne det.
+	User Preferences	Brukerinnstillinger
+	Visual Effect Settings	Innstillinger for visuelle effekter
+	Visual Effect Settings...	Innstillinger for visuelle effekter...
+	When a command is active	Når en kommando er aktiv
+	When no command is active	Når ingen kommando er aktiv
+	Window selection color:	Farge for vindusvalg:
+	Xrefs	Xrefs
+	objects	objekter
+	Specify inside diameter of donut	Angi innvendig diameter for ringen
+	Specify leader arrowhead location	Angi plassering for lederens pilspiss
+	Specify leader endpoint	Angi endepunkt for lederen
+	Specify leader landing location	Angi plassering for lederens avsats
+	Specify length for rectangles	Angi lengde for rektangler
+	Specify length of chord	Angi kordelengde
+	Specify length of segment	Angi segmentlengde
+	Specify line width for rectangles	Angi linjebredde for rektangler
+	Specify location for new vertex	Angi plassering for nytt toppunkt
+	Specify minimum length of arc	Angi minste buelengde
+	Specify new end point	Angi nytt endepunkt
+	Specify new location for marked vertex	Angi ny plassering for merket toppunkt
+	Specify new width for all segments	Angi ny bredde for alle segmenter
+	Specify next point	Angi neste punkt
+	Specify offset distance	Angi forskyvningsavstand
+	Specify offset distance or	Angi forskyvningsavstand eller
+	Specify opposite corner	Angi motsatt hjørne
+	Specify other corner point	Angi det andre hjørnepunktet
+	Specify other endpoint of axis	Angi andre endepunkt for aksen
+	Specify outside diameter of donut	Angi utvendig diameter for ringen
+	Specify point	Angi punkt
+	Specify point on object for first tangent of circle	Angi punkt på objektet for sirkelens første tangent
+	Specify point on object for second tangent of circle	Angi punkt på objektet for sirkelens andre tangent
+	Specify point on side to offset	Angi punkt på siden det skal forskyves til
+	Specify radius of arc	Angi buens radius
+	Specify radius of circle	Angi sirkelens radius
+	Specify rotation angle	Angi rotasjonsvinkel
+	Specify rotation angle of text	Angi tekstens rotasjonsvinkel
+	Specify rotation angle or	Angi rotasjonsvinkel eller
+	Specify scale factor	Angi skalafaktor
+	Specify second angle endpoint	Angi andre vinkelendepunkt
+	Specify second break point	Angi andre bruddpunkt
+	Specify second chamfer distance for rectangles	Angi andre fasavstand for rektangler
+	Specify second constraint point	Angi andre begrensningspunkt
+	Specify second destination point	Angi andre målpunkt
+	Specify second end point of circle's diameter	Angi andre endepunkt for sirkelens diameter
+	Specify second endpoint of edge	Angi andre endepunkt for kanten
+	Specify second extension line origin	Angi utgangspunkt for andre hjelpelinje
+	Specify second point	Angi andre punkt
+	Specify second point of arc	Angi andre punkt på buen
+	Specify second point of mirror line	Angi andre punkt på speillinjen
+	Specify second point on circle	Angi andre punkt på sirkelen
+	Specify second point on circle: _tan to	Angi andre punkt på sirkelen: _tan til
+	Specify second point or <use first point as displacement>	Angi andre punkt eller <bruk første punkt som forskyvning>
+	Specify second source point	Angi andre kildepunkt
+	Specify side to offset	Angi siden det skal forskyves til
+	Specify start angle	Angi startvinkel
+	Specify start point	Angi startpunkt
+	Specify start point of arc	Angi startpunkt for buen
+	Specify start point of polyline	Angi startpunkt for polylinjen
+	Specify start point of text	Angi startpunkt for teksten
+	Specify starting width	Angi startbredde
+	Specify starting width for next segment	Angi startbredde for neste segment
+	Specify tangent direction for the start point of arc	Angi tangentretning for buens startpunkt
+	Specify the elevation for rectangles	Angi kotehøyde for rektangler
+	Specify thickness for rectangles	Angi tykkelse for rektangler
+	Specify third point on circle	Angi tredje punkt på sirkelen
+	Specify third point on circle: _tan to	Angi tredje punkt på sirkelen: _tan til
+	Specify third source point or <continue>	Angi tredje kildepunkt eller <fortsett>
+	Specify through point	Angi gjennomgangspunkt
+	Specify top diameter	Angi toppdiameter
+	Specify top radius or	Angi toppradius eller
+	Specify total angle	Angi total vinkel
+	Specify total length or	Angi total lengde eller
+	Specify width for rectangles	Angi bredde for rektangler
+	Sphere	Kule
+	Spline	Spline
+	Spline Edit	Rediger spline
+	Stack (type 1/2 then select)	Stable (skriv 1/2 og merk)
+	Standard	Standard
+	Start	Start
+	Start Width	Startbredde
+	Start X	Start X
+	Start Y	Start Y
+	Start angle	Startvinkel
+	Start, Center, Angle	Start, senter, vinkel
+	Start, Center, End	Start, senter, ende
+	Start, Center, Length	Start, senter, lengde
+	Start, End, Angle	Start, ende, vinkel
+	Start, End, Direction	Start, ende, retning
+	Start, End, Radius	Start, ende, radius
+	Status	Status
+	Status Bar	Statuslinje
+	Stretch	Strekk
+	Style: Standard	Stil: Standard
+	Subtract	Trekk fra
+	Sweep	Sveip
+	Switch Drawing	Bytt tegning
+	Switch Layout	Bytt layout
+	Switch between model space in a viewport and paper space	Bytt mellom modellrom i en visningsport og papirrom
+	Symmetric	Symmetrisk
+	Synchronize Attributes	Synkroniser attributter
+	To	Til
+	Toggle PICKADD (off: each pick replaces the selection)	Slå PICKADD av/på (av: hvert valg erstatter utvalget)
+	Toggle PICKADD (on: picks add to the selection)	Slå PICKADD av/på (på: valg legges til utvalget)
+	TOP	TOPP
+	Table	Tabell
+	Table Breaks	Tabellbrudd
+	Table Cell Style	Tabellcellestil
+	Table Style...	Tabellstil...
+	Table style	Tabellstil
+	Table...	Tabell...
+	Tan, Tan, Radius	Tan, tan, radius
+	Tan, Tan, Tan	Tan, tan, tan
+	Tangent	Tangent
+	Temporary track point	Midlertidig sporingspunkt
+	Text	Tekst
+	Text Editor	Tekstredigering
+	Text Height	Teksthøyde
+	Text Style...	Tekststil...
+	Text height	Teksthøyde
+	Text override	Tekstoverstyring
+	Text style	Tekststil
+	Thaw All Layers	Tin alle lag
+	Thaw Layer	Tin lag
+	There is nothing here yet.	Det er ingenting her ennå.
+	Thickness	Tykkelse
+	Time	Tid
+	To get started, create or open a drawing.	Kom i gang ved å opprette eller åpne en tegning.
+	Tool Bar	Verktøylinje
+	Tool Sets	Verktøysett
+	Tools	Verktøy
+	Torus	Torus
+	Trace	Spor
+	Track orthogonally only	Spor bare ortogonalt
+	Track using all polar angle settings	Spor med alle polarvinkelinnstillinger
+	Transparency	Gjennomsiktighet
+	Trim	Trim
+	True Color	Ekte farge
+	Turn All Layers On	Slå på alle lag
+	Turn Off Layer	Slå av lag
+	Turn On Layer	Slå på lag
+	Turn Quick Properties off (QPMODE)	Slå av hurtigegenskaper (QPMODE)
+	Type	Type
+	Type a command	Skriv en kommando
+	Type text; Enter starts a new paragraph	Skriv tekst; Enter starter et nytt avsnitt
+	UCS Icon	UCS-ikon
+	Undo	Angre
+	Undo (⌘Z)	Angre (⌘Z)
+	Ungroup	Del opp gruppe
+	Union	Union
+	Unisolate Layer	Opphev isolering av lag
+	Units Conversion	Enhetskonvertering
+	Units...	Enheter...
+	Unlock Layer	Lås opp lag
+	Unlock viewport	Lås opp visningsport
+	Unmerge Cells	Del opp celler
+	Unsaved Layer State	Ulagret lagtilstand
+	Up	Opp
+	Update Data Links	Oppdater datakoblinger
+	Update	Oppdater
+	Use System Setting	Bruk systeminnstilling
+	User	Bruker
+	User Parameters	Brukerparametere
+	Username	Brukernavn
+	Volume	Volum
+	VP Color	VP-farge
+	VP Freeze	VP-frysing
+	Value	Verdi
+	Value:	Verdi:
+	Variables	Variabler
+	Version	Versjon
+	Version 2000	Versjon 2000
+	Version 2004	Versjon 2004
+	Version 2007	Versjon 2007
+	Version 2010	Versjon 2010
+	Version 2013	Versjon 2013
+	Version 2018	Versjon 2018
+	Version {version}	Versjon {version}
+	Vertical	Vertikal
+	VerticalDistance	Vertikal avstand
+	View	Vis
+	ViewCube	ViewCube
+	Viewport	Visningsport
+	Viewport Layer Freeze	Frysing av lag i visningsport
+	Viewport Properties	Egenskaper for visningsport
+	Viewport is locked	Visningsporten er låst
+	Viewport scale	Skala for visningsport
+	Viewport {id}	Visningsport {id}
+	Viewports	Visningsporter
+	W	V
+	WCS ⌄	WCS ⌄
+	White	Hvit
+	Width factor	Breddefaktor
+	Window	Vindu
+	Wipeout	Maskering
+	Workspace Switching	Bytte av arbeidsområde
+	Write Block	Skriv blokk
+	Xline	Xline
+	Yellow	Gul
+	Yes	Ja
+	Zoom	Zoom
+	Zoom All	Zoom alt
+	Zoom Dynamic	Zoom dynamisk
+	Zoom Extents	Zoom utstrekning
+	Zoom In	Zoom inn
+	Zoom Object	Zoom objekt
+	Zoom Out	Zoom ut
+	Zoom Previous	Zoom forrige
+	Zoom Realtime	Zoom sanntid
+	Zoom Window	Zoom vindu
+	error	feil
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (begrensning {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	{kind}-begrensning {name} = {expression}  (dobbeltklikk for å redigere)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Ny brukerparameter
+	ΔLOC	ΔLOC
+	−Bin	−Bin
+	−LOC	−LOC
+	⌘↩ to finish	⌘↩ for å fullføre
+@plural	{n} commit	{n} commit|{n} commits
+@plural	{n} contributor	{n} bidragsyter|{n} bidragsytere
+	Drawing as bytes	Tegning som byte
+	Services	Tjenester
+	Hide CADaddy	Skjul CADaddy
+	Hide Others	Skjul andre
+	Accessibility	Tilgjengelighet
+	Show System Cursor	Vis systemmarkør
+	Animation Effects	Animasjonseffekter
+	Animation effects	Animasjonseffekter
+	Import...	Importer...
+	Export...	Eksporter...
+	Batch Publish...	Satsvis publisering...
+	Scale List...	Skalaliste...
+	Annotative Object Scale	Annoterende objektskala
+	Add Current Scale	Legg til gjeldende skala
+	Delete Current Scale	Slett gjeldende skala
+	Add/Delete Scales...	Legg til/slett skalaer...
+	Synchronize Multiple-scale Positions	Synkroniser posisjoner for flere skalaer
+	Annotative Update	Annoterende oppdatering
+	Show Annotative Objects	Vis annoterende objekter
+	Current Scale Only	Bare gjeldende skala
+	All Scales	Alle skalaer
+	Drawing Recovery Manager...	Behandling av tegningsgjenoppretting...
+	Tolerance...	Toleranse...
+	Add Vertex	Legg til toppunkt
+	Remove Vertex	Fjern toppunkt
+	Convert to Arc	Konverter til bue
+	Convert to Line	Konverter til linje
+	Stretch Vertex	Strekk toppunkt
+	Edit Array	Rediger matrise
+	Close Array Editing	Lukk matriseredigering
+	Multiline...	Multilinje...
+	Multiline Style...	Multilinjestil...
+	Solid Editing	Solidredigering
+	3D Mouse...	3D-mus...
+	3D Mouse	3D-mus
+	Calibrate 3D Mouse	Kalibrer 3D-mus
+	3D Mouse Navigation	3D-musnavigering
+	3D mouse input is unavailable on this platform	3D-musinndata er ikke tilgjengelig på denne plattformen
+	No supported 3D mouse found	Fant ingen støttet 3D-mus
+	Release the 3D mouse to calibrate its resting position	Slipp 3D-musen for å kalibrere hvileposisjonen
+	3D mouse connected	3D-mus tilkoblet
+	3D mouse busy, possibly 3DxWare or missing device permissions	3D-musen er opptatt, muligens av 3DxWare eller manglende enhetstillatelser
+	3D mouse disconnected	3D-mus frakoblet
+	3D mouse input could not be started	Kunne ikke starte 3D-musinndata
+	Enable 3D mouse navigation	Aktiver 3D-musnavigering
+	Pan sensitivity	Panoreringsfølsomhet
+	Zoom sensitivity	Zoomfølsomhet
+	Reverse zoom direction	Omvendt zoomretning
+	Calibrate	Kalibrer
+	Move sideways to pan; push/pull or twist to zoom.	Beveg sidelengs for å panorere; skyv/trekk eller vri for å zoome.
+	Left device button: zoom extents. Right device button: calibrate.	Venstre enhetsknapp: zoom utstrekning. Høyre enhetsknapp: kalibrer.
+	More toolbar commands	Flere verktøylinjekommandoer
+	Default save version	Standard lagringsversjon
+	Automatic save every	Automatisk lagring hvert
+	min	min
+	Automatic save file location	Plassering for automatisk lagrede filer
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Tegninger som ennå ikke har en fil, lagres i standardversjonen. 0 minutter slår av automatisk lagring.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Tidsavhengig høyreklikk: et raskt klikk er Enter, å holde åpner menyen
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Når dette er slått av, åpner et høyreklikk under en kommando alltid hurtigmenyen.
+	Hatch Pattern	Skravurmønster
+	Search for pattern	Søk etter mønster
+	Run Script...	Kjør skript...
+	Query Texts	Spør tekster
+	Hatch Pick	Skravurvalg
+	Hatch and Gradient	Skravur og gradient
+	Color 1	Farge 1
+	Color 2	Farge 2
+	Shape	Form
+	Curved	Buet
+	Spherical	Sfærisk
+	Hemispherical	Halvsfærisk
+	Inverted	Invertert
+	Centered	Sentrert
+	Hatch origin	Skravurens origo
+	Use current origin	Bruk gjeldende origo
+	Specified origin	Angitt origo
+	Click to set new origin	Klikk for å angi nytt origo
+	Default to boundary extents	Bruk avgrensningens utstrekning som standard
+	Bottom left	Nede til venstre
+	Bottom right	Nede til høyre
+	Top left	Oppe til venstre
+	Top right	Oppe til høyre
+	Boundaries	Avgrensninger
+	Add: Pick points	Legg til: Velg punkter
+	Add: Select objects	Legg til: Velg objekter
+	Boundaries picked: {n}	Valgte avgrensninger: {n}
+	Associative	Assosiativ
+	Create separate hatches	Opprett separate skraveringer
+	Island detection	Øydeteksjon
+	Normal	Normal
+	Outer	Ytre
+	Ignore	Ignorer
+	Origin: {x}, {y}	Origo: {x}, {y}
+	Sheet Books to PDF...	Arkbøker til PDF...
+	Not a number or distance: {text}	Ikke et tall eller en avstand: {text}
+	Dynamic Block Data	Data for dynamisk blokk
+	Custom	Egendefinert
+	Dynamic Block Reference	Dynamisk blokkreferanse
+	Set Dynamic Property	Angi dynamisk egenskap
+	Dynamic Block Grips	Grep for dynamisk blokk
+	Drag Dynamic Grip	Dra dynamisk grep
+	Save Block	Lagre blokk
+	Save Block As	Lagre blokk som
+	Close Block Editor	Lukk blokkredigering
+	Unsaved changes	Ulagrede endringer
+	Edit Block Definition	Rediger blokkdefinisjon
+	Block to create or edit	Blokk som skal opprettes eller redigeres
+	Open in Block Editor	Åpne i blokkredigering
+	This drawing	Denne tegningen
+	contains authoring elements. Open in Block Editor?	inneholder redigeringselementer. Åpne i blokkredigering?
+	New block	Ny blokk
+	Italic	Kursiv
+	Underline	Understreking
+	Overline	Overstreking
+	Justify	Blokkjuster
+	Text color	Tekstfarge
+	Click the ruler to add a tab stop, right-click to remove one	Klikk på linjalen for å legge til et tabulatorstopp, høyreklikk for å fjerne et
+	Ribbon	Bånd
+	Close Ribbon	Lukk båndet
+	Menu Bar	Menylinje
+	Top	Topp
+	Bottom	Bunn
+	Front	Front
+	Back	Bak
+	SW Isometric	SV-isometrisk
+	SE Isometric	SØ-isometrisk
+	NE Isometric	NØ-isometrisk
+	NW Isometric	NV-isometrisk
+	3D Views	3D-visninger
+	Plan View	Planvisning
+	World UCS	Globalt UCS
+	View Direction	Visningsretning
+	2D Wireframe	2D-trådmodell
+	Custom View	Egendefinert visning
+	Convert PDF to DWG...	Konverter PDF til DWG...
+	Convert PDF to DWG	Konverter PDF til DWG
+	PDF Import...	PDF-import...
+	PDF Import	PDF-import
+	Page	Side
+	PDF layers (else by colour and line weight)	PDF-lag (ellers etter farge og linjetykkelse)
+	By colour and line weight	Etter farge og linjetykkelse
+	Object layers (PDF_Geometry, PDF_Text, …)	Objektlag (PDF_Geometry, PDF_Text, …)
+	Import text	Importer tekst
+	Join line pieces and make circles	Slå sammen linjebiter og lag sirkler
+	Keep white fills (masks)	Behold hvite fyll (masker)
+	Import raster images (saved as PNG files)	Importer rasterbilder (lagret som PNG-filer)
+	Add a layout that plots like the sheet	Legg til en layout som plotter som arket
+	Convert and Save as DWG…	Konverter og lagre som DWG…
+	Walk	Gå
+	Report a Bug...	Rapporter en feil...
+	Request a Feature...	Be om en funksjon...
+	Donate / Improve	Doner / forbedre
+	Improve CADaddy	Forbedre CADaddy
+	Or email {address}	Eller send e-post til {address}
+	Support CADaddy	Støtt CADaddy
+	CADaddy is free, and it always will be.	CADaddy er gratis, og vil alltid være det.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Ingen reklame, intet abonnement. Hvis CADaddy sparer deg tid, betaler en liten donasjon for AI-tiden som bygger de neste funksjonene.
+	Report a bug or request a feature	Rapporter en feil eller be om en funksjon
+	Support CADaddy...	Støtt CADaddy...
+	Array (classic)	Matrise (klassisk)
+	Change	Endre
+	Change Properties	Endre egenskaper
+	Quick Leader	Hurtigleder
+	Symbol...	Symbol...
+	List Symbols	List opp symboler
+	Symbols	Symboler
+	Search symbols	Søk i symboler
+	No symbols match.	Ingen symboler samsvarer.
+	Plumbing fixtures	Sanitærutstyr
+	Plumbing piping	Sanitærrør
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Dataassistert konstruksjon og tegning for Windows, Mac og Linux, skrevet i Rust.
+	Includes open-source components: see NOTICE.	Inneholder komponenter med åpen kildekode: se NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Gratis å bruke. Ikke tilknyttet Autodesk, Inc.
+	Electrical devices	Elektriske enheter
+	Lighting	Belysning
+	Power and distribution	Kraft og fordeling
+	Low voltage	Svakstrøm
+	Fire alarm	Brannalarm
+	Check for Updates...	Se etter oppdateringer...
+	Check for updates automatically	Se etter oppdateringer automatisk
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Én gang om dagen spør CADaddy GitHub om det nyeste versjonsnummeret. Ingenting om deg eller tegningene dine sendes.
+	Checking for updates...	Ser etter oppdateringer...
+	CADaddy {v} is the latest version.	CADaddy {v} er den nyeste versjonen.
+	CADaddy {v} is available	CADaddy {v} er tilgjengelig
+	You have {v}. Updating keeps your drawings and settings.	Du har {v}. Oppdatering beholder tegningene og innstillingene dine.
+	Downloading CADaddy {v}...	Laster ned CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} er klar til å installeres
+	It installs when you close CADaddy. Restart now to update right away.	Den installeres når du lukker CADaddy. Start på nytt nå for å oppdatere med en gang.
+	Couldn't update CADaddy	Kunne ikke oppdatere CADaddy
+	Download	Last ned
+	What's New	Nyheter
+	Later	Senere
+	Skip This Version	Hopp over denne versjonen
+	Restart Now	Start på nytt nå
+	When I Close CADaddy	Når jeg lukker CADaddy
+	Download Page	Nedlastingsside
+	Hide	Skjul
+	The current layer is being turned off	Gjeldende lag blir slått av
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Laget «{layer}» er gjeldende lag. Objekter du tegner på det, vises ikke før du slår det på igjen.
+	Keep the Current Layer On	La gjeldende lag være på
+	Turn the Current Layer Off	Slå av gjeldende lag
+	Quantity Takeoff	Mengdeuttak
+	Dimension Style	Målsettingsstil
+	Text Style	Tekststil
+	Xref	Xref
+	Raster Image Reference...	Rasterbildereferanse...
+	Window Lasso	Vinduslasso
+	Crossing Lasso	Krysslasso
+	Fence Lasso	Gjerdelasso
+	Press Space to cycle options	Trykk mellomrom for å bla gjennom alternativer
+	Burst	Spreng
+	Convert to Mtext	Konverter til MText
+	View Twist	Visningsvridning
+	Let AI agents control CADaddy	La AI-agenter styre CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Claude-koblingen og andre agenter på denne datamaskinen kan da åpne, redigere, lagre og lukke tegninger i dette vinduet. Ingenting utenfor denne datamaskinen kan koble til. Trer i kraft neste gang CADaddy starter.
+	Base Point	Basispunkt
+	Column Spacing	Kolonneavstand
+	Column Count	Antall kolonner
+	Row Spacing	Radavstand
+	Row Count	Antall rader
+	Row and Column Count	Antall rader og kolonner
+	Level Spacing	Nivåavstand
+	Level Count	Antall nivåer
+	Item Spacing	Elementavstand
+	Item Count	Antall elementer
+	Total column spacing	Total kolonneavstand
+	Total row spacing	Total radavstand
+	Total row and column spacing	Total rad- og kolonneavstand
+	Total level spacing	Total nivåavstand
+	Fill angle	Fyllvinkel
+	Stretch radius	Strekkradius
+	Array Grips	Matrisegrep
+	Edit Array with a Grip	Rediger matrise med et grep
+	Open Drawings	Åpne tegninger
+	Close Drawing	Lukk tegning
+	Close All Drawings	Lukk alle tegninger
+	Export Comparison Report...	Eksporter sammenligningsrapport...
+	Select All Layouts	Velg alle layouter
+	Move or Copy...	Flytt eller kopier...
+	Move or Copy	Flytt eller kopier
+	Move or copy layout "{name}"	Flytt eller kopier layouten «{name}»
+	Before layout:	Før layout:
+	(move to end)	(flytt til slutten)
+	Create a copy	Opprett en kopi
+	A drawing keeps at least one layout.	En tegning har alltid minst én layout.
+	Move Layout	Flytt layout
+	Background	Bakgrunn
+	Text fill	Tekstfyll
+	Text fill color	Farge for tekstfyll
+	Text reads right to left	Tekst leses fra høyre til venstre
+	Placing text places the dimension line	Plassering av tekst plasserer mållinjen
+	Alternate tolerance precision	Presisjon for alternativ toleranse
+	Alternate tolerance zero suppression	Nullundertrykking for alternativ toleranse
+	Linear jog height (× text height)	Lineær knekkhøyde (× teksthøyde)
+	Break size	Bruddstørrelse
+	Express Tools	Express Tools
+	Break-line Symbol	Bruddlinjesymbol
+	Replace Block...	Erstatt blokk...
+	Move/Copy/Rotate	Flytt/kopier/roter
+	Remove boundaries	Fjern avgrensninger
+	Inherit Properties	Arv egenskaper
+	Nothing to preview yet.	Ingenting å forhåndsvise ennå.
+	Property Settings	Egenskapsinnstillinger
+	Basic Properties	Grunnleggende egenskaper
+	Special Properties	Spesielle egenskaper
+	Plot Style	Plottstil
+	Material	Materiale
+	Shadow display	Skyggevisning
+	Center object	Senterobjekt
+	Move with Dim Line	Flytt med mållinjen
+	Move Text Only	Flytt bare teksten
+	Above Dim Line	Over mållinjen
+	Center Vertically	Sentrer vertikalt
+	Reset Text Position	Tilbakestill tekstposisjon
+	Continue Dimension	Fortsett mål
+	Baseline Dimension	Grunnlinjemål
+	Flip Arrow	Snu pil
+	Lengthen Landing	Forleng avsats
+	Origin Point	Origopunkt
+	Hatch Angle	Skravurvinkel
+	Hatch Scale	Skravurskala
+	Edit Tolerance	Rediger toleranse
+	Geometric Tolerance	Geometrisk toleranse
+	Geometric characteristic	Geometrisk egenskap
+	Material condition	Materialtilstand
+	No symbol	Intet symbol
+	Projected Tolerance Zone	Projisert toleransesone
+	Datum Identifier	Referanseidentifikator
+	Sym	Sym
+	Tolerance 1	Toleranse 1
+	Tolerance 2	Toleranse 2
+	Datum 1	Referanse 1
+	Datum 2	Referanse 2
+	Datum 3	Referanse 3
+	PDF Underlay...	PDF-underlag...
+	Clip PDF Underlay	Klipp PDF-underlag
+	Adjust PDF Underlay	Juster PDF-underlag
+	PDF Underlay Layers	Lag i PDF-underlag
+	Unused items in this drawing	Ubrukte elementer i denne tegningen
+	Purge Checked Items	Rens avmerkede elementer
+	Purge All	Rens alle
+	Items purged: {count}	Elementer renset: {count}
+	Find what:	Søk etter:
+	Replace with:	Erstatt med:
+	Match case	Skill mellom store og små bokstaver
+	Find whole words only	Bare hele ord
+	Find	Søk
+	Replace All	Erstatt alle
+	Matches replaced: {count} (objects: {objects})	Treff erstattet: {count} (objekter: {objects})
+	Matches found and selected: {count} (objects: {objects})	Treff funnet og valgt: {count} (objekter: {objects})
+	Select Color	Velg farge
+	Dimension styles	Målsettingsstiler
+	Linetypes	Linjetyper
+	Multileader styles	Multilederstiler
+	Multiline styles	Multilinjestiler
+	Table styles	Tabellstiler
+	Text styles	Tekststiler
+	Zero-length geometry	Geometri med null lengde
+	Empty text objects	Tomme tekstobjekter
+	Palette Windows	Palettvinduer
+	Dock	Forankre
+	Back into the main window	Tilbake i hovedvinduet
+	Dock Palette	Forankre palett
+	Float in Own Window	Flytende i eget vindu
+	Drawings (CDY, DWG, DXF)	Tegninger (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy-tegning (CDY)
+	CADaddy drawing (.cdy)	CADaddy-tegning (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Lagre også en DWG-kopi når en CADaddy-tegning (.cdy) lagres
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	En CADaddy-tegning beholder alt; DWG- og DXF-filer beholder kanskje ikke alt (lagring til dem forteller hva).
+	Field...	Felt...
+	Update Fields	Oppdater felt
+	Change Text Case	Endre store/små bokstaver
+	Auto Number	Autonummerering
+	Explode Text	Splitt tekst
+	Arc Aligned Text	Buejustert tekst
+	Data Extraction	Datauttrekk
+	Data source	Datakilde
+	Objects	Objekter
+	Output	Utdata
+	Other drawings:	Andre tegninger:
+	Add Drawings...	Legg til tegninger...
+	Open Settings...	Åpne innstillinger...
+	Start from a saved .dxe settings file	Start fra en lagret .dxe-innstillingsfil
+	Block names	Blokknavn
+	Include blocks inside blocks	Ta med blokker i blokker
+	Other objects:	Andre objekter:
+	The drawing has no other objects.	Tegningen har ingen andre objekter.
+	Properties to extract:	Egenskaper som skal trekkes ut:
+	Attribute tags	Attributtkoder
+	Combine identical rows	Kombiner identiske rader
+	Insert a table	Sett inn en tabell
+	Insertion point	Innsettingspunkt
+	Title	Tittel
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Skriv en fil (.csv for regneark, .txt tabulatordelt)
+	Browse...	Bla gjennom...
+	Save Settings...	Lagre innstillinger...
+	Save these choices to a .dxe file to use again	Lagre disse valgene i en .dxe-fil for senere bruk
+	< Back	< Tilbake
+	Next >	Neste >
+	Finish	Fullfør
+	UCS	UCS
+	Plan View (World)	Planvisning (global)
+	New UCS	Nytt UCS
+	World	Global
+	Current UCS	Gjeldende UCS
+	World (WCS)	Global (WCS)
+	Unnamed	Uten navn
+	Hide UCS Icon	Skjul UCS-ikon
+	WCS	WCS
+	Spelling	Stavekontroll
+	Check Spelling	Kontroller stavemåte
+	Where to check	Hvor det skal kontrolleres
+	Selected objects	Valgte objekter
+	Not in dictionary:	Ikke i ordboken:
+	Suggestions:	Forslag:
+	Ignore All	Ignorer alle
+	Change All	Endre alle
+	Add to Dictionary	Legg til i ordbok
+	Main dictionary:	Hovedordbok:
+	American English	Amerikansk engelsk
+	Custom dictionary:	Egendefinert ordbok:
+	Spelling check complete.	Stavekontrollen er fullført.
+	Hyperlink...	Hyperkobling...
+	Select Objects for a Hyperlink	Velg objekter for en hyperkobling
+	Open Hyperlink	Åpne hyperkobling
+	Insert Hyperlink	Sett inn hyperkobling
+	Edit Hyperlink	Rediger hyperkobling
+	Text to display	Tekst som skal vises
+	File or web page	Fil eller nettside
+	Named location	Navngitt plassering
+	A named location with no file or web page is a layout or view of this drawing.	En navngitt plassering uten fil eller nettside er en layout eller visning i denne tegningen.
+	Remove Link	Fjern kobling
+	⌘-click to follow the link	⌘-klikk for å følge koblingen
+	Ctrl+click to follow the link	Ctrl+klikk for å følge koblingen
+	Materials Browser...	Materialleser...
+	Attach by Layer	Tilknytt etter lag
+	Material Mapping	Materialtilordning
+	New Material	Nytt materiale
+	Edit Material	Rediger materiale
+	Delete Material	Slett materiale
+	Assign Material	Tildel materiale
+	Materials Browser	Materialleser
+	Search	Søk
+	Library	Bibliotek
+	Add to drawing	Legg til i tegningen
+	In this drawing	I denne tegningen
+	No materials yet: add one from the library.	Ingen materialer ennå: legg til et fra biblioteket.
+	Colour	Farge
+	Roughness	Ruhet
+	Metallic	Metallisk
+	Opacity	Opasitet
+	Mapping	Tilordning
+	Tile size	Flisstørrelse
+	Assign to selection ({n})	Tildel til utvalget ({n})
+	Attach to layer	Tilknytt til lag
+	Render	Render
+	Edit Layer State	Rediger lagtilstand
+	Export Layer State	Eksporter lagtilstand
+	Import Layer State	Importer lagtilstand
+	New Layer Filter	Nytt lagfilter
+	Edit Layer Filter	Rediger lagfilter
+	Delete Layer Filter	Slett lagfilter
+	List Layer Filters	List opp lagfiltre
+	Layers in Filter	Lag i filteret
+	Layer States Manager	Lagtilstandsbehandling
+	Invert filter	Inverter filter
+	New Property Filter...	Nytt egenskapsfilter...
+	New Group Filter	Nytt gruppefilter
+	Add Layer	Legg til lag
+	Remove Layer	Fjern lag
+	Layer Filter Properties	Egenskaper for lagfilter
+	Filter name	Filternavn
+	Within	Innenfor
+	Any	Alle
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Mønstre: * hva som helst, ? ett tegn, # ett siffer; skill med komma; ~ utelater.
+	Layer states	Lagtilstander
+	Turn off layers not found in layer state	Slå av lag som ikke finnes i lagtilstanden
+	Layer properties to restore	Lagegenskaper som skal gjenopprettes
+	On / Off	På / av
+	Frozen / Thawed	Frosset / tint
+	Locked / Unlocked	Låst / ulåst
+	Plot / No Plot	Plott / ikke plott
+	Layers in "{name}"	Lag i «{name}»
+	Remove from the layer state	Fjern fra lagtilstanden
+	New...	Ny...
+	Save the layers as they are now in this state	Lagre lagene slik de er nå i denne tilstanden
+	Edit...	Rediger...
+	Rename	Gi nytt navn
+	New layer state name	Navn på ny lagtilstand
+	New name	Nytt navn
+	Visual Style	Visuell stil
+	Visual Styles	Visuelle stiler
+	Wireframe	Trådmodell
+	Hidden	Skjult
+	Shaded	Skyggelagt
+	Shaded with Edges	Skyggelagt med kanter
+	Realistic	Realistisk
+	Mesh	Netting
+	Polyface Mesh	Polyflatenetting
+	Polygon Mesh	Polygonnetting
+	Fly	Fly
+	Walk and Fly	Gå og fly
+	3D Library...	3D-bibliotek...
+	Add 3D Twins to Symbols	Legg til 3D-tvillinger i symboler
+	List 3D Models	List opp 3D-modeller
+	Add 3D Twins	Legg til 3D-tvillinger
+	Plan Layers	Planlag
+	Plan Walls	Planvegger
+	Plan Openings	Planåpninger
+	Plan Rooms	Planrom
+	Plan Notes	Plannotater
+	Plan Sheets	Planark
+	3D Building from Plan	3D-bygning fra plan
+	Wedge	Kile
+	Presspull	Trykk/trekk
+	3D Solid	3D-solid
+	Specify center	Angi senter
+	Specify length	Angi lengde
+	Specify width	Angi bredde
+	Specify other corner	Angi det andre hjørnet
+	Specify center point	Angi senterpunkt
+	Specify base radius	Angi basisradius
+	Specify radius	Angi radius
+	Specify diameter	Angi diameter
+	Specify top radius	Angi toppradius
+	Specify tube radius	Angi rørradius
+	Select objects to extrude	Velg objekter som skal ekstruderes
+	Select extrusion path	Velg ekstruderingsbane
+	Specify angle of taper for extrusion	Angi avsmalningsvinkel for ekstruderingen
+	Specify height of extrusion	Angi ekstruderingshøyde
+	Select objects to revolve	Velg objekter som skal roteres rundt en akse
+	Specify axis start point or define axis by	Angi startpunkt for aksen eller definer aksen ved
+	Specify axis endpoint	Angi endepunkt for aksen
+	Specify angle of revolution	Angi rotasjonsvinkel
+	Select objects to sweep	Velg objekter som skal sveipes
+	Select sweep path	Velg sveipebane
+	Select cross sections in lofting order	Velg tverrsnitt i loft-rekkefølge
+	Click inside bounded areas to press or pull	Klikk inne i avgrensede områder for å trykke eller trekke
+	Specify extrusion height	Angi ekstruderingshøyde
+	Cube	Kube
+	Sides	Sider
+	Top radius	Toppradius
+	Path	Bane
+	Taper angle	Avsmalningsvinkel
+	Select one or more regions or 3D solids.	Velg én eller flere regioner eller 3D-solider.
+	No closed area found there.	Fant ikke noe lukket område der.
+	Slice	Del i snitt
+	Thicken	Gjør tykkere
+	Fillet Edge	Avrund kant
+	Chamfer Edge	Fas kant
+	Fillet Edges	Avrund kanter
+	Chamfer Edges	Fas kanter
+	Move Faces	Flytt flater
+	Offset Faces	Forskyv flater
+	Delete Faces	Slett flater
+	Shell	Skall
+	Composite	Sammensatt
+	Select objects to slice	Velg objekter som skal snittes
+	Specify a point on desired side or [keep Both sides]	Angi et punkt på ønsket side eller [behold Begge sider]
+	Both	Begge
+	Specify start point of slicing plane or	Angi startpunkt for snittplanet eller
+	Specify second point on plane	Angi andre punkt på planet
+	Specify the Z of the XY-plane	Angi Z for XY-planet
+	Specify the X of the YZ-plane	Angi X for YZ-planet
+	Specify the Y of the ZX-plane	Angi Y for ZX-planet
+	Select surfaces to thicken	Velg flater som skal gjøres tykkere
+	Select a 3D solid	Velg en 3D-solid
+	Select an edge	Velg en kant
+	Remove faces	Fjern flater
+	Select faces	Velg flater
+	Specify thickness	Angi tykkelse
+	Enter fillet radius	Angi avrundingsradius
+	Enter distance	Angi avstand
+	Specify a base point or displacement	Angi et basispunkt eller en forskyvning
+	Specify a second point of displacement	Angi et andre punkt for forskyvningen
+	Specify the offset distance	Angi forskyvningsavstanden
+	Enter the shell offset distance	Angi skallets forskyvningsavstand
+	Select solids, surfaces, and regions to subtract from ..	Velg solider, flater og regioner det skal trekkes fra ..
+	Select solids, surfaces, and regions to subtract ..	Velg solider, flater og regioner som skal trekkes fra ..
+	Select two or more solids.	Velg to eller flere solider.
+	The solids don't overlap; nothing was changed.	Solidene overlapper ikke; ingenting ble endret.
+	Nothing would remain; nothing was changed.	Ingenting ville bli igjen; ingenting ble endret.
+	The result would not be a solid; nothing was changed.	Resultatet ville ikke bli en solid; ingenting ble endret.
+	No straight edge between two flat faces there.	Ingen rett kant mellom to plane flater der.
+	No face of the solid there.	Ingen flate på soliden der.
+	Only outside (convex) edges can be filleted or chamfered.	Bare utvendige (konvekse) kanter kan avrundes eller fases.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL fungerer på bokser, sylindrer, kuler og rette ekstruderinger.
+	The walls are too thick for this solid.	Veggene er for tykke for denne soliden.
+	Select solids to subtract from.	Velg solider det skal trekkes fra.
+	A solid can't be subtracted from itself.	En solid kan ikke trekkes fra seg selv.
+	The solid would have too many operations; nothing was changed.	Soliden ville få for mange operasjoner; ingenting ble endret.
+	That face can't be moved (only flat faces, holes and added parts).	Den flaten kan ikke flyttes (bare plane flater, hull og tilføyde deler).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Den flaten kan ikke slettes (bare hull, avrundinger, faser og tilføyde deler).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Den flaten kan ikke forskyves (bokssider, endene av sylindrer, kjegler og ekstruderinger, sylindervegger og kuler).
+	The thickness must be more than zero.	Tykkelsen må være større enn null.
+	The radius must be more than zero.	Radien må være større enn null.
+	The distance must be more than zero.	Avstanden må være større enn null.
+	Requires a number.	Krever et tall.
+	Parameter	Parameter
+	Action	Handling
+	Visibility States	Synlighetstilstander
+	Remove Parameter or Action	Fjern parameter eller handling
+	Edit Reference	Rediger referanse
+	Discard Reference Edits	Forkast referanseendringer
+	Nested References	Nestede referanser
+	Light List	Lysliste
+	Sun Properties	Solegenskaper
+	Render Exposure	Renderingseksponering
+	Point Light	Punktlys
+	Spotlight	Spotlys
+	Distant Light	Fjernlys
+	Change Lights	Endre lys
+	Section Plane	Snittplan
+	Live Section	Direkte snitt
+	Generate Section Block	Generer snittblokk
+	Generate Section	Generer snitt
+	Flatshot	Flatshot
+	Base View	Basisvisning
+	Section View	Snittvisning
+	Drawing Views	Tegningsvisninger
+	Select face or any point to locate section line or	Velg flate eller et punkt for å plassere snittlinjen, eller
+	Orthographic	Ortografisk
+	Select section object	Velg snittobjekt
+	Specify location of base view	Angi plassering for basisvisningen
+	Select parent view	Velg overordnet visning
+	Specify end point	Angi endepunkt
+	Specify location of section view	Angi plassering for snittvisningen
+	There is nothing to draw: no 3D objects were found.	Det er ingenting å tegne: fant ingen 3D-objekter.
+	The section plane doesn't cut any solid.	Snittplanet skjærer ingen solid.
+	The view needs a direction.	Visningen trenger en retning.
+	The drawing has no layout.	Tegningen har ingen layout.
+	That is not a section plane.	Det er ikke et snittplan.
+	Requires a point.	Krever et punkt.
+	The view is [dx, dy, dz].	Visningen er [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Opprett overføringspakke
+	Files in the package	Filer i pakken
+	Not included	Ikke inkludert
+	Organized folders	Organiserte mapper
+	One folder	Én mappe
+	Include a transmittal report	Ta med en overføringsrapport
+	Create ZIP...	Opprett ZIP...
+	Create Folder...	Opprett mappe...
+	STL Out	STL ut
+	Export STL...	Eksporter STL...
+	3D models (glTF, OBJ, STL)	3D-modeller (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-modell (glTF binær)
+	3D model (glTF)	3D-modell (glTF)
+	3D model (OBJ)	3D-modell (OBJ)
+	3D model (STL)	3D-modell (STL)
+	Render Region	Render område
+	samples	sampler
+	a sample	én sample
+	Pick crop window to render	Velg beskjæringsvindu for rendering
+	Nothing has been rendered yet.	Ingenting er rendret ennå.
+	There is nothing to render: no surfaces in the view.	Det er ingenting å rendre: ingen flater i visningen.
+	The image couldn't be encoded.	Bildet kunne ikke kodes.
+	Saving images isn't available in the browser.	Lagring av bilder er ikke tilgjengelig i nettleseren.
+	PNG image	PNG-bilde
+	JPEG image	JPEG-bilde
+	Save Image	Lagre bilde
+	My Properties	Mine egenskaper
+	Add to My Properties	Legg til i Mine egenskaper
+	Remove from My Properties	Fjern fra Mine egenskaper
+	All properties	Alle egenskaper
+	My properties: the ones you added (right-click a property's name to add it)	Mine egenskaper: de du har lagt til (høyreklikk et egenskapsnavn for å legge det til)
+	Right-click a property's name and choose Add to My Properties.	Høyreklikk et egenskapsnavn og velg Legg til i Mine egenskaper.
+	Color Books	Fargebøker
+	Sheet Set Manager	Arksettbehandling
+	Palettes	Paletter
+	New Sheet Set...	Nytt arksett...
+	Open Sheet Set...	Åpne arksett...
+	No sheet set is open.	Ingen arksett er åpent.
+	Number	Nummer
+	Subset	Delsett
+	Remove Sheet	Fjern ark
+	Add Drawing...	Legg til tegning...
+	Rename Layouts to Match	Gi layouter nytt navn som samsvarer
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Hvert arks layout blir «nummer tittel», som feltene for arknummer og tittel viser
+	Publish to PDF...	Publiser til PDF...
+	Prefix	Prefiks
+	Digits	Sifre
+	Renumber	Nummerer på nytt
+	Zoom to Fit	Zoom for å tilpasse
+	Drag to pan, scroll to zoom	Dra for å panorere, rull for å zoome
+	Publish	Publiser
+	Sheets to publish, in order	Ark som skal publiseres, i rekkefølge
+	Sheet	Ark
+	Bookmark	Bokmerke
+	Paper	Papir
+	Orientation	Retning
+	(sheet name)	(arknavn)
+	Page setup	Sideoppsett
+	Landscape	Liggende
+	Portrait	Stående
+	Add Sheets from Drawing...	Legg til ark fra tegning...
+	Load List...	Last inn liste...
+	Save List...	Lagre liste...
+	Publish List	Publiseringsliste
+	Enclose Text with Object	Omslutt tekst med objekt
+	Export Attribute Information	Eksporter attributtinformasjon
+	Import Attribute Information	Importer attributtinformasjon
+	Mask Text	Masker tekst
+	Remote Text	Ekstern tekst
+	Rotate Text	Roter tekst
+	Text Fit	Tilpass tekst
+	Toggle Frames	Slå rammer av/på
+	Unmask Text	Fjern tekstmaskering
+	Update Remote Text	Oppdater ekstern tekst
+	Geometric	Geometrisk
+	Infer geometric constraints	Utled geometriske begrensninger
+	Show constraint bars	Vis begrensningslinjer
+	Constraint bar transparency (%)	Gjennomsiktighet for begrensningslinjer (%)
+	Dimensional	Dimensjonal
+	Show dynamic constraints	Vis dynamiske begrensninger
+	Dimension name format	Format for målnavn
+	Name and Expression	Navn og uttrykk
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Begrensningstyper som AUTOCONSTRAIN bruker, i prioritert rekkefølge
+	Move Up	Flytt opp
+	Move Down	Flytt ned
+	Tangent objects must share an intersection point	Tangerende objekter må ha et felles skjæringspunkt
+	Perpendicular objects must share an intersection point	Vinkelrette objekter må ha et felles skjæringspunkt
+	Distance tolerance	Avstandstoleranse
+	Angle tolerance (degrees)	Vinkeltoleranse (grader)
+	3D Move	3D-flytt
+	3D Rotate	3D-roter
+	3D Scale	3D-skaler
+	3D Align	3D-juster
+	3D Mirror	3D-speil
+	3D Array	3D-matrise
+	3D Object Snap	3D-objektfang
+	Specify second point or distance	Angi andre punkt eller avstand
+	Specify angle	Angi vinkel
+	Specify source plane: first point	Angi kildeplan: første punkt
+	Specify source plane: second point	Angi kildeplan: andre punkt
+	Specify source plane: third point	Angi kildeplan: tredje punkt
+	Specify destination plane: first point	Angi målplan: første punkt
+	Specify destination plane: second point	Angi målplan: andre punkt
+	Specify destination plane: third point	Angi målplan: tredje punkt
+	Delete source objects?	Slette kildeobjektene?
+	Specify point on XY plane	Angi punkt på XY-planet
+	Specify point on YZ plane	Angi punkt på YZ-planet
+	Specify point on ZX plane	Angi punkt på ZX-planet
+	Specify first point of mirror plane (3 points) or	Angi første punkt på speilplanet (3 punkter) eller
+	Specify second point on mirror plane	Angi andre punkt på speilplanet
+	Specify third point on mirror plane	Angi tredje punkt på speilplanet
+	Enter the type of array	Angi matrisetype
+	Polar	Polar
+	Enter the number of items in the array	Angi antall elementer i matrisen
+	Specify the angle to fill (+=ccw, -=cw)	Angi vinkelen som skal fylles (+=mot klokken, -=med klokken)
+	Enter the number of rows (---)	Angi antall rader (---)
+	Enter the number of columns (|||)	Angi antall kolonner (|||)
+	Enter the number of levels (...)	Angi antall nivåer (...)
+	Specify the distance between rows (---)	Angi avstanden mellom rader (---)
+	Specify the distance between columns (|||)	Angi avstanden mellom kolonner (|||)
+	Specify the distance between levels (...)	Angi avstanden mellom nivåer (...)
+	Specify second point on axis of rotation	Angi andre punkt på rotasjonsaksen
+	Select the objects first.	Velg objektene først.
+	Requires a point, or a distance along an axis.	Krever et punkt eller en avstand langs en akse.
+	The points must not coincide or line up.	Punktene må ikke falle sammen eller ligge på linje.
+	The three points line up: they make no plane.	De tre punktene ligger på linje: de danner ikke noe plan.
+	<3D Object Snap on>	<3D-objektfang på>
+	<3D Object Snap off>	<3D-objektfang av>
+	Preparing the 3D view…	Forbereder 3D-visningen…
+	Viewpoint	Synspunkt
+	3D View Benchmark	Ytelsestest for 3D-visning
+	Drawing area	Tegneområde
+	Command line	Kommandolinje
+	Viewport controls	Visningsportkontroller
+	Coordinate system menu	Koordinatsystemmeny
+	UCS icon X axis	UCS-ikonets X-akse
+	UCS icon Y axis	UCS-ikonets Y-akse
+	High Contrast	Høy kontrast
+	Interface size	Grensesnittstørrelse
+	Interface Size	Grensesnittstørrelse
+	100%	100 %
+	125%	125 %
+	150%	150 %
+	200%	200 %
+	Building Spec	Bygningsspesifikasjon
+	Set Building Spec	Angi bygningsspesifikasjon
+	Validate Building Spec	Valider bygningsspesifikasjon
+	Build Model from Spec	Bygg modell fra spesifikasjon
+	Convert Matches to Block	Konverter treff til blokk
+	Command Line Transparency	Gjennomsiktighet for kommandolinjen
+	AutoComplete Settings	Innstillinger for autofullføring
+	Input Settings	Inndatainnstillinger
+	AutoComplete	Autofullføring
+	Search System Variables	Søk i systemvariabler
+	Mid-string Search	Søk midt i strengen
+	System variable	Systemvariabel
+	Layer state	Lagtilstand
+	Model Issues	Modellproblemer
+	Render Model View	Render modellvisning
+	Model Overlay	Modelloverlegg
+	Model Counts	Modellantall
+	System Printers	Systemskrivere
+	Report a Problem...	Rapporter et problem...
+	Report a Problem	Rapporter et problem
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Samler det som hjelper med å finne et problem, i en ZIP-fil på denne datamaskinen. Ingenting sendes: legg ved filen i en e-post hvis du vil rapportere det.
+	Always included	Alltid inkludert
+	The log of this run and the two before it	Loggen for denne kjøringen og de to før den
+	The last commands	De siste kommandoene
+	Versions, operating system and graphics adapter	Versjoner, operativsystem og grafikkort
+	A summary of the open drawings (counts only, no geometry)	Et sammendrag av de åpne tegningene (bare antall, ingen geometri)
+	Names: file paths, layer and block names, typed text	Navn: filbaner, lag- og blokknavn, skrevet tekst
+	Names are replaced by placeholders, also in the log.	Navn erstattes med plassholdere, også i loggen.
+	Save Report...	Lagre rapport...
+	Email it to {address}	Send den på e-post til {address}
+	Plans to Model	Planer til modell
+	Build	Bygg
+	Rebuild	Bygg på nytt
+	Check	Kontroller
+	Kept in the drawing.	Lagret i tegningen.
+	Drafted from the walk rules; not saved yet.	Utkast fra gangreglene; ikke lagret ennå.
+	{n} of {total} approved	{n} av {total} godkjent
+	Save Spec	Lagre spesifikasjon
+	Approve All	Godkjenn alle
+	Approved	Godkjent
+	Levels	Nivåer
+	Wall Types	Veggtyper
+	Rooms	Rom
+	Door and Window Families	Dør- og vindusfamilier
+	Materials	Materialer
+	Site	Tomt
+	Openings	Åpninger
+	Issues ({n})	Problemer ({n})
+	The drawing changed since; check again.	Tegningen er endret siden; kontroller igjen.
+	No issues found.	Fant ingen problemer.
+	Configure Standards	Konfigurer standarder
+	Standards files associated with the current drawing	Standardfiler knyttet til gjeldende tegning
+	Add...	Legg til...
+	Check Standards...	Kontroller standarder...
+	Check Standards	Kontroller standarder
+	No standards violations were found.	Fant ingen brudd på standardene.
+	problem(s)	problem(er)
+	Take the standard's properties	Bruk standardens egenskaper
+	Replace it with the standard one	Erstatt med standardversjonen
+	Fix All	Rett alle
+	Give everything that differs the standard's properties	Gi alt som avviker, standardens egenskaper
+	Check Again	Kontroller igjen
+	Layer Translator	Lagoversetter
+	Translate From	Oversett fra
+	Translate To	Oversett til
+	Load a drawing whose layers to translate to.	Last inn en tegning med lagene det skal oversettes til.
+	Map	Tilordne
+	Layer Translation Mappings	Tilordninger for lagoversetting
+	Load Map...	Last inn tilordning...
+	Save Map...	Lagre tilordning...
+	Translate	Oversett
+	Not in the standards	Ikke i standardene
+	Properties differ from the standards	Egenskapene avviker fra standardene
+	CAD Standards	CAD-standarder
+	Configure...	Konfigurer...
+	Check...	Kontroller...
+	Layer Translator...	Lagoversetter...
+	Draft Building Spec	Utkast til bygningsspesifikasjon
+	Draft from Plan	Utkast fra plan
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Les planens lag, vegger, dører, rom og notater; gjetninger er merket.
+	guess	gjetning
+	Detect Stairs	Finn trapper
+	List Stairs	List opp trapper
+	Confirm Stairs	Bekreft trapper
+	Stairs and Ramps	Trapper og ramper
+	Bake Lighting	Bak inn belysning
+	Command Aliases and Shortcuts	Kommandoaliaser og hurtigtaster
+	Keyboard Shortcuts	Hurtigtaster
+	replaces {command}	erstatter {command}
+	Built-in	Innebygd
+	Alias	Alias
+	Command	Kommando
+	Add or Change	Legg til eller endre
+	Keys	Taster
+	Edit Aliases and Shortcuts...	Rediger aliaser og hurtigtaster...
+	Customize	Tilpass
+	Read Elevation	Les fasade
+	Read Roof Plan	Les takplan
+	Exterior	Eksteriør
+	Drafting & Annotation	Tegning og annotering
+	3D Modeling	3D-modellering
+	Electrical	Elektro
+	Save Current As...	Lagre gjeldende som...
+	Workspace Settings...	Innstillinger for arbeidsområde...
+	Workspace Settings	Innstillinger for arbeidsområde
+	Navigation Bar	Navigasjonslinje
+	Save Workspace	Lagre arbeidsområde
+	Workspaces	Arbeidsområder
+	Close Navigation Bar	Lukk navigasjonslinjen
+	Workspace	Arbeidsområde
+	Read Ceiling Plan	Les himlingsplan
+	Ceilings	Himlinger
+	Current Drawing	Gjeldende tegning
+	Favourites	Favoritter
+	Libraries	Biblioteker
+	No library folder	Ingen biblioteksmappe
+	Choose Folder...	Velg mappe...
+	No blocks here.	Ingen blokker her.
+	Remove from Favourites	Fjern fra favoritter
+	Add to Favourites	Legg til i favoritter
+	Insertion Options	Innsettingsalternativer
+	Auto-rotate (follow the current UCS)	Autoroter (følg gjeldende UCS)
+	Repeat Placement	Gjenta plassering
+	Tool Palettes	Verktøypaletter
+	Drag objects from the drawing here to make tools.	Dra objekter fra tegningen hit for å lage verktøy.
+	Add Selected	Legg til valgte
+	New palette	Ny palett
+	Select objects in the drawing first.	Velg objekter i tegningen først.
+	Blocks Palette	Blokkpalett
+	Detect Grids	Finn akser
+	Align Levels by Grids	Juster nivåer etter akser
+	Columns at Grids	Søyler ved akser
+	Columns	Søyler
+	Build Room Volumes	Bygg romvolumer
+	Building	Bygning
+	Go to Room	Gå til rom
+	List Rooms	List opp rom
+	Room	Rom
+	Build Volumes	Bygg volumer
+	Go to	Gå til
+	{n} rooms	{n} rom
+	No rooms found: rooms are found from name labels inside closed outlines.	Fant ingen rom: rom finnes ut fra navneetiketter inne i lukkede omriss.
+	Ceiling	Himling
+	DesignCenter	DesignCenter
+	Up One Level	Opp ett nivå
+	Folder	Mappe
+	Text Styles	Tekststiler
+	Dimension Styles	Målsettingsstiler
+	Layouts	Layouter
+	Add to Drawing	Legg til i tegningen
+	Choose a drawing to see what it holds.	Velg en tegning for å se hva den inneholder.
+	{name} inserted.	{name} satt inn.
+	{name} is already in the drawing; it was kept.	{name} finnes allerede i tegningen; den ble beholdt.
+	{name} added.	{name} lagt til.
+	Read MEP Runs	Les VVS-/elektroføringer
+	Model Clashes	Modellkollisjoner
+	MEP Systems	Tekniske systemer
+	Undo History	Angrehistorikk
+	(Start)	(Start)
+	Click a step to undo or redo to it.	Klikk på et trinn for å angre eller gjøre om til det.
+	Nothing yet.	Ingenting ennå.
+	Double-click to run it again	Dobbeltklikk for å kjøre den på nytt
+	Copy as Script	Kopier som skript
+	Save Session as Script...	Lagre økten som skript...
+	Command History Palette	Kommandohistorikkpalett
+	Furnish from Plan	Møbler fra plan
+	Classify Plan	Klassifiser plan
+	Text and multiline text	Tekst og flerlinjetekst
+	Block attribute values	Blokkattributtverdier
+	Dimension text	Måltekst
+	Multileaders	Multiledere
+	Hyperlinks	Hyperkoblinger
+	Layer and block names	Lag- og blokknavn
+	Find where:	Søk hvor:
+	Current space	Gjeldende rom
+	Plain text	Ren tekst
+	Use wildcards	Bruk jokertegn
+	Regular expressions	Regulære uttrykk
+	Look in	Søk i
+	Zoom To	Zoom til
+	Replace	Erstatt
+	Create Selection Set	Opprett utvalgssett
+	Matches found: {count} (objects: {objects})	Treff funnet: {count} (objekter: {objects})
+	Layer name	Lagnavn
+	Block name	Blokknavn
+	Revise Model from Plans	Revider modell fra planer
+	Plans to Model Benchmark	Ytelsestest for planer til modell
+	Plans to Model Case	Testtilfelle for planer til modell
+	Plans to Model Score	Poengsum for planer til modell
+	Save Viewpoint	Lagre synspunkt
+	Viewpoints for Every Room	Synspunkter for hvert rom
+	Camera Tour	Kameratur
+	Tours and Viewpoints	Turer og synspunkter
+	Tour Timing	Turtiming
+	3D Graphics Limits	3D-grafikkgrenser
+	Drawn by the CPU (no usable GPU)	Tegnet av CPU-en (ingen brukbar GPU)
+	Point Cloud...	Punktsky...
+	Point Cloud	Punktsky
+	Attach Point Cloud	Tilknytt punktsky
+	Clip Point Cloud	Klipp punktsky
+	Point Cloud Color Map	Fargekart for punktsky
+	Point Cloud Information	Punktskyinformasjon
+	Markups	Merknader
+	{done} of {total} done	{done} av {total} ferdig
+	No markups. Import them from a reviewed PDF.	Ingen merknader. Importer dem fra en gjennomgått PDF.
+	Done	Ferdig
+	Import Markups...	Importer merknader...
+	Import Markups	Importer merknader
+	Markup Import...	Merknadsimport...
+	Markup Status	Merknadsstatus
+	Read Door and Window Schedules	Les dør- og vindusskjemaer
+	Schedules	Skjemaer
+	Esc	Esc
+	Hide the touch bar	Skjul berøringslinjen
+	Type a command or value	Skriv en kommando eller verdi
+	Embed Textures	Bygg inn teksturer
+	Publish Walkthrough	Publiser gjennomgang
+	Walkthroughs (CDYWALK)	Gjennomganger (CDYWALK)
+	Check Exchange	Kontroller utveksling
+	Not kept in the {format} file	Ikke beholdt i {format}-filen
+	The drawing was saved. This file format can't keep everything in it:	Tegningen ble lagret. Dette filformatet kan ikke beholde alt i den:
+	What	Hva
+	left out	utelatt
+	changed	endret
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	En CADaddy-tegning (.cdy) beholder alt. Kontroller utveksling viser dette igjen uten å lagre.
+	VP Linetype	VP-linjetype
+	VP Lineweight	VP-linjetykkelse
+	Unreconciled New Layers ({n})	Uavstemte nye lag ({n})
+	Reconcile All	Avstem alle
+	Reconcile Layer	Avstem lag
+	LayerWalk	LayerWalk
+	Layers: {n}	Lag: {n}
+	Restore on exit	Gjenopprett ved avslutning
+	Filter:	Filter:
+	Layer Walk...	Laggjennomgang...
+	Layer Walk	Laggjennomgang
+	Isolate Layer to Current Viewport	Isoler lag til gjeldende visningsport
+	Unreconciled New Layers	Uavstemte nye lag
+	Move to New Window	Flytt til nytt vindu
+	Dock All Windows	Forankre alle vinduer
+	Every drawing is in a window of its own.	Hver tegning er i sitt eget vindu.
+	Back among the drawing tabs	Tilbake blant tegningsfanene
+	Plot Stamp...	Plottstempel...
+	Plot a Folder of Drawings...	Plott en mappe med tegninger...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Hver tegning i en mappe til sin egen PDF, i en PDF-mappe inni den
+	Plot stamp	Plottstempel
+	Quick Properties Lists	Lister for hurtigegenskaper
+	Purgeable Items	Elementer som kan renses
+	Find Non-Purgeable Items	Finn elementer som ikke kan renses
+	Purge {kind} "{name}"?	Rense {kind} «{name}»?
+	Yes to All	Ja til alle
+	Items that can't be purged, and why	Elementer som ikke kan renses, og hvorfor
+	Select and Zoom	Velg og zoom
+	Pick an item to see why it can't be purged.	Velg et element for å se hvorfor det ikke kan renses.
+	Confirm each item to be purged	Bekreft hvert element som skal renses
+	Purge nested items	Rens nestede elementer
+	Text Align	Tekstjustering
+	Color model:	Fargemodell:
+	Hue	Fargetone
+	Saturation	Metning
+	Luminance	Luminans
+	Hex	Hex
+	More Colors...	Flere farger...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Last inn flere bøker med COLORBOOK (JSON- eller tabulatordelte filer).
+	All spaces	Alle rom
+	Total: {n}	Totalt: {n}
+	No block references here.	Ingen blokkreferanser her.
+	Highlight and zoom to its references	Uthev og zoom til referansene
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Lignende, men ikke identiske: {scaled} skalert, {exploded} splittet
+	Insert Count Table	Sett inn telletabell
+	Update Count Tables	Oppdater telletabeller
+	Count in Area	Tell i område
+	{n} reference(s) of {name} selected.	{n} referanse(r) til {name} valgt.
+	{n} similar object(s) selected.	{n} lignende objekt(er) valgt.
+	Geographic Location...	Geografisk plassering...
+	Remove Geographic Location	Fjern geografisk plassering
+	Set Location	Angi plassering
+	Remove Location	Fjern plassering
+	Latitude and Longitude	Breddegrad og lengdegrad
+	Trace Image to Vectors	Vektoriser bilde
+	Trace Raster Image to Vectors	Vektoriser rasterbilde
+	Drawing Summary	Tegningssammendrag
+	Query Drawing	Spør tegning
+	Begin Agent Request	Start agentforespørsel
+	End Agent Request	Avslutt agentforespørsel
+	Agent Dry Run	Agent-prøvekjøring
+	Agent Confirmations	Agentbekreftelser
+	Agent Change Journal	Endringslogg for agenter
+	Agent Activity	Agentaktivitet
+	An agent asks	En agent spør
+	Allow	Tillat
+	Deny	Avslå
+	Not allowed: {question}	Ikke tillatt: {question}
+	Ask me before an agent saves over a file or closes with changes	Spør meg før en agent lagrer over en fil eller lukker med endringer
+	Dry run: agents' commands change nothing	Prøvekjøring: agentenes kommandoer endrer ingenting
+	No agent requests yet.	Ingen agentforespørsler ennå.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} kommandoer · {added} lagt til · {removed} fjernet · {changed} endret
+	Select what it added and changed	Velg det den la til og endret
+	Activity History	Aktivitetshistorikk
+	Activity history is off (Options ▸ Open and Save).	Aktivitetshistorikk er av (Alternativer ▸ Åpne og lagre).
+	command	kommando
+	{n} steps	{n} trinn
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Velg objektene dette trinnet la til eller endret
+	The objects of this step are gone.	Objektene i dette trinnet finnes ikke lenger.
+	{n} object(s) selected.	{n} objekt(er) valgt.
+	{n} object(s) selected ({gone} since erased).	{n} objekt(er) valgt ({gone} slettet siden).
+	{n} s ago	for {n} s siden
+	{n} min ago	for {n} min siden
+	{n} h ago	for {n} t siden
+	{n} d ago	for {n} d siden
+	Keep an activity history beside each drawing (private, on this computer)	Behold en aktivitetshistorikk ved siden av hver tegning (privat, på denne datamaskinen)
+	Background mask	Bakgrunnsmaske
+	Mask border offset	Forskyvning for maskekant
+	Mask color	Maskefarge
+	Use drawing background	Bruk tegningsbakgrunn
+	Regenerate Dimensions	Regenerer mål
+	Enter layer name for new dimensions (. for the current layer)	Angi lagnavn for nye mål (. for gjeldende lag)
+	{folder} (folder)	{folder} (mappe)
+	Add drawings or a folder of them.	Legg til tegninger eller en mappe med tegninger.
+	Add Files...	Legg til filer...
+	Add Folder...	Legg til mappe...
+	cancelled	avbrutt
+	Choose the output folder, or Next to the originals.	Velg utdatamappen, eller Ved siden av originalene.
+	Convert Drawings	Konverter tegninger
+	Convert Drawings...	Konverter tegninger...
+	Convert drawings...	Konverter tegninger...
+	Convert to	Konverter til
+	Converted	Konvertert
+	Converted, not all kept	Konvertert, ikke alt beholdt
+	Converting files is not available on the web.	Konvertering av filer er ikke tilgjengelig på nettet.
+	Drawings to convert	Tegninger som skal konverteres
+	Each drawing's own	Tegningens eget
+	Failed	Mislyktes
+	Files already there	Filer som allerede finnes
+	Folder:	Mappe:
+	Include subfolders	Ta med undermapper
+	Keep a file written over as .bak	Behold en overskrevet fil som .bak
+	Next to the originals	Ved siden av originalene
+	Open Log	Åpne logg
+	Or type a file or folder path	Eller skriv en fil- eller mappebane
+	Overwrite	Overskriv
+	Save to	Lagre til
+	Skip	Hopp over
+	Skipped	Hoppet over
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Det finnes ingen tegninger (.dwg, .dxf, .cdy) å konvertere.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} konvertert, {skipped} hoppet over, {failed} mislyktes av {total}
+	DWG drawing (.dwg)	DWG-tegning (.dwg)
+	DXF drawing (.dxf)	DXF-tegning (.dxf)
+	Require a token for control connections (recommended)	Krev et token for styringstilkoblinger (anbefalt)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Programmer må først sende tokenet CADaddy skriver til en fil bare du kan lese, slik at andre brukeres programmer ikke kan styre det. Claude-koblingen leser det for deg. Trer i kraft neste gang CADaddy starter.
+	Building models (IFC)	Bygningsmodeller (IFC)
+	Building model (IFC4)	Bygningsmodell (IFC4)
+	3D printing (3MF)	3D-utskrift (3MF)
+	Include the drawing (the active drawing as a DXF file)	Ta med tegningen (den aktive tegningen som DXF-fil)
+	Your account, home folder and computer name are always left out.	Kontoen, hjemmemappen og datamaskinnavnet ditt utelates alltid.
+	Files in the report	Filer i rapporten
+	Send to Redline	Send til Redline
+	Import Redline Markups	Importer Redline-merknader
+	Import Redline Markups...	Importer Redline-merknader...
+	Open a Program?	Åpne et program?
+	This link opens a program or script, not a document:	Denne koblingen åpner et program eller skript, ikke et dokument:
+	Open it only if you trust the drawing and know what it runs.	Åpne den bare hvis du stoler på tegningen og vet hva den kjører.
+	Open Anyway	Åpne likevel
+	Report a security problem	Rapporter et sikkerhetsproblem
+	Load This File?	Laste inn denne filen?
+	This file isn't in a trusted folder:	Denne filen er ikke i en klarert mappe:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP-rutiner og skript kan endre tegninger og filer. Last den bare inn hvis du stoler på hvor den kommer fra.
+	Don't Load	Ikke last inn
+	Load Once	Last inn én gang
+	Always Load from This Folder	Last alltid inn fra denne mappen
+	Adds {folder} to TRUSTEDPATHS	Legger til {folder} i TRUSTEDPATHS
+	Allow Loading a File	Tillat innlasting av en fil
+	Plot Stamp	Plottstempel
+	Plot stamp fields	Felt for plottstempel
+	Drawing name	Tegningsnavn
+	Layout name	Layoutnavn
+	Date and Time	Dato og klokkeslett
+	Device name	Enhetsnavn
+	Paper size	Papirstørrelse
+	Plot scale	Plottskala
+	No login or computer name is ever stamped.	Ingen pålogging eller datamaskinnavn stemples noen gang.
+	User defined fields	Brukerdefinerte felt
+	One per line, up to {n}.	Ett per linje, opptil {n}.
+	Stamp model space plots	Stemple plott fra modellrom
+	Stamp this layout's plots	Stemple plott fra denne layouten
+	Location and offset	Plassering og forskyvning
+	Location	Plassering
+	Upside-down	Opp ned
+	X offset	X-forskyvning
+	Y offset	Y-forskyvning
+	Offset relative to	Forskyvning relativt til
+	Printable area	Utskrivbart område
+	Paper border	Papirkant
+	Text properties	Tekstegenskaper
+	Font	Skrift
+	Single line plot stamp	Plottstempel på én linje
+	Units	Enheter
+	Inches	Tommer
+	Millimeters	Millimeter
+	Log file location	Plassering for loggfil
+	Create a log file	Opprett en loggfil
+	The log is kept for this session, never saved with the drawing.	Loggen beholdes for denne økten og lagres aldri med tegningen.
+	Action Macro Manager...	Behandling av handlingsmakroer...
+	Action Macros	Handlingsmakroer
+	Action Recorder	Handlingsopptaker
+	Insert Base Point	Sett inn basispunkt
+	Insert Message	Sett inn melding
+	Play Action Macro	Spill av handlingsmakro
+	Play...	Spill av...
+	Record	Ta opp
+	Request User Input	Be om brukerinndata
+	Stop	Stopp
+	Action Macro Manager	Behandling av handlingsmakroer
+	Recording…	Tar opp…
+	No action macros yet: Record, do the work, then Stop.	Ingen handlingsmakroer ennå: Ta opp, gjør arbeidet, og trykk Stopp.
+	Play	Spill av
+	Message: {text}	Melding: {text}
+	Base point (asked for)	Basispunkt (blir spurt om)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Be om denne inndataen når makroen spilles av
+	Customize Interface	Tilpass grensesnitt
+	Customize User Interface...	Tilpass brukergrensesnitt...
+	Interface...	Grensesnitt...
+	Customize User Interface	Tilpass brukergrensesnitt
+	Quick Access Toolbar	Verktøylinje for hurtigtilgang
+	Add a command	Legg til en kommando
+	Reset Quick Access Toolbar	Tilbakestill verktøylinjen for hurtigtilgang
+	Built-in panels shown (untick to hide):	Innebygde paneler som vises (fjern avmerkingen for å skjule):
+	Your panels on built-in tabs:	Dine paneler på innebygde faner:
+	Tab	Fane
+	New panel name	Navn på nytt panel
+	Add Panel	Legg til panel
+	Your tabs:	Dine faner:
+	Remove Tab	Fjern fane
+	New tab name	Navn på ny fane
+	Add Tab	Legg til fane
+	Edit Keyboard Shortcuts...	Rediger hurtigtaster...
+	Remove Panel	Fjern panel
+	Command or LISP macro, e.g. (command "line")	Kommando eller LISP-makro, f.eks. (command "line")
+	Hatch Editor	Skravurredigering
+	Table Cell	Tabellcelle
+	Rows & Columns	Rader og kolonner
+	Merge	Slå sammen
+	Open/Save	Åpne/lagre
+	Attributes	Attributter
+	Spell Check	Stavekontroll
+	Formula	Formel
+	Edit Source	Rediger kilde
+	Close Array	Lukk matrise
+	Manage Attributes	Behandle attributter
+	Dialog State	Dialogtilstand
+	Dialog Action	Dialoghandling
+	Recover Drawing and Xrefs...	Gjenopprett tegning og xrefs...
+	Count Blocks	Tell blokker
+	Get Selection Set	Hent utvalgssett
+	Global Attribute Edit	Global attributtredigering
+	LISP Function Surfer	LISP-funksjonsleser
+	List LISP Symbols	List opp LISP-symboler
+	List Nested Object	List opp nestet objekt
+	List Object Xdata	List opp objektets xdata
+	Multiple Polyline Edit	Rediger flere polylinjer
+	Redefine Path	Redefiner bane
+	Redefine Path Mode	Modus for redefinering av bane
+	Restore Dimension Text	Gjenopprett måltekst
+	Revert	Tilbakestill
+	Rotate Blocks	Roter blokker
+	Scale Blocks	Skaler blokker
+	Select Similar by Properties	Velg lignende etter egenskaper
+	Show URLs	Vis URL-er
+	Synchronize Viewports	Synkroniser visningsporter
+	Paste Special	Lim inn spesielt
+	Paste Special...	Lim inn spesielt...
+	Paste as	Lim inn som
+	Last Measurement	Siste måling
+	Perimeter	Omkrets
+	curl isn't available ({error}).	curl er ikke tilgjengelig ({error}).
+	This build has no release key to check updates with.	Denne versjonen har ingen utgivelsesnøkkel å kontrollere oppdateringer med.
+	The release's signature files are too large.	Signaturfilene for utgivelsen er for store.
+	The release's signature isn't one CADaddy reads.	Signaturen for utgivelsen er ikke en som CADaddy kan lese.
+	The release's signature is missing or damaged.	Signaturen for utgivelsen mangler eller er skadet.
+	The release's signature is for another version ({version}).	Signaturen for utgivelsen gjelder en annen versjon ({version}).
+	The release is signed with a key this build doesn't trust.	Utgivelsen er signert med en nøkkel denne versjonen ikke stoler på.
+	This build's release key is damaged.	Utgivelsesnøkkelen i denne versjonen er skadet.
+	The release's signature doesn't match its files.	Signaturen for utgivelsen samsvarer ikke med filene.
+	Couldn't reach GitHub: {why}	Kunne ikke nå GitHub: {why}
+	GitHub's answer was too large.	Svaret fra GitHub var for stort.
+	GitHub's answer wasn't readable ({error}).	Svaret fra GitHub kunne ikke leses ({error}).
+	GitHub's answer has no version.	Svaret fra GitHub har ingen versjon.
+	GitHub's answer has an unreadable version ({version}).	Svaret fra GitHub har en versjon som ikke kan leses ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Kunne ikke laste ned {name} for utgivelsen, så ingenting ble installert: {why}
+	The release's {name} is too large, so nothing was installed.	{name} for utgivelsen er for stor, så ingenting ble installert.
+	The release's {name} isn't text, so nothing was installed.	{name} for utgivelsen er ikke tekst, så ingenting ble installert.
+	It wasn't downloaded. Download it from the release page instead.	Den ble ikke lastet ned. Last den ned fra utgivelsessiden i stedet.
+	Version {version} isn't newer than this one ({current}).	Versjon {version} er ikke nyere enn denne ({current}).
+	This release isn't signed.	Denne utgivelsen er ikke signert.
+	The release failed its check.	Utgivelsen besto ikke kontrollen.
+	The signed release doesn't list {name}.	Den signerte utgivelsen inneholder ikke {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	GitHubs fingeravtrykk for {name} avviker fra det signerte.
+	Couldn't make the folder {folder}: {error}	Kunne ikke opprette mappen {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Nedlastingen samsvarte ikke med det publiserte SHA-256-fingeravtrykket, så den ble ikke installert.
+	Couldn't read the download: {error}	Kunne ikke lese nedlastingen: {error}
+	The download failed: {why}	Nedlastingen mislyktes: {why}
+	This release has no installer for this computer yet.	Denne utgivelsen har ennå ikke noe installasjonsprogram for denne datamaskinen.
+	Drawing Properties...	Tegningsegenskaper...
+	System Variable Monitor...	Overvåking av systemvariabler...
+	{name} Properties	Egenskaper for {name}
+	Summary	Sammendrag
+	Statistics	Statistikk
+	Size	Størrelse
+	Subject	Emne
+	Author	Forfatter
+	Keywords	Nøkkelord
+	Comments	Kommentarer
+	Revision number	Revisjonsnummer
+	Hyperlink base	Hyperkoblingsbase
+	Created	Opprettet
+	Modified	Endret
+	Last saved by	Sist lagret av
+	Total editing time (minutes)	Total redigeringstid (minutter)
+	Property	Egenskap
+	System Variable Monitor	Overvåking av systemvariabler
+	Variable	Variabel
+	Watched value	Overvåket verdi
+	Current value	Gjeldende verdi
+	Notify when a watched variable changes	Varsle når en overvåket variabel endres
+	Reset All	Tilbakestill alle
+	Delay	Forsinkelse
+	Repeat Script	Gjenta skript
+	Script Call	Skriptkall
+	Resume Script	Fortsett skript
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Behold en aktivitetshistorikk for hver tegning (privat, i CADaddys innstillingsmappe)
+	Specify insertion point or	Angi innsettingspunkt eller
+	Specify table scale	Angi tabellskala
+	{} dimension(s) updated to the current settings.	{} mål oppdatert til gjeldende innstillinger.
+	British English (-ise)	Britisk engelsk (-ise)
+	British English (-ize)	Britisk engelsk (-ize)
+	Spanish	Spansk
+	French	Fransk
+	German	Tysk
+	Portuguese (Iberian)	Portugisisk (europeisk)
+	Portuguese (Brazilian)	Portugisisk (brasiliansk)
+	(not installed)	(ikke installert)
+	Dictionaries are read from:	Ordbøker leses fra:
+	Published to {path}	Publisert til {path}
+	Sheet Set (.sheetset.json)	Arksett (.sheetset.json)
+	Resolution	Oppløsning
+	Colour depth	Fargedybde
+	Colour (24-bit)	Farge (24-biters)
+	Greys (8-bit)	Gråtoner (8-biters)
+	Black and white (1-bit)	Svart-hvitt (1-biters)
+	PNG Out	PNG ut
+	JPEG Out	JPEG ut
+	BMP Out	BMP ut
+	TIFF Out	TIFF ut
+	Enter image file name	Angi navn på bildefil
+	Nothing selected: no image written.	Ingenting valgt: ingen bilder skrevet.
+	{} object(s) written to {} ({} × {} pixels).	{} objekt(er) skrevet til {} ({} × {} piksler).
+	Set to ByLayer	Sett til ByLayer
+	Explode and Set Properties	Splitt og angi egenskaper
+	Edit Attribute in Place	Rediger attributt på stedet
+	Frame	Ramme
+	Setup	Oppsett
+	Setup View	Oppsett av visning
+	Setup Drawing	Oppsett av tegning
+	Setup Profile	Oppsett av profil
+	Enter view scale	Angi visningsskala
+	Specify view center	Angi visningens senter
+	Enter view name	Angi visningsnavn
+	Specify side of viewport to project	Angi siden av visningsporten som skal projiseres
+	Specify first point of cutting plane	Angi første punkt på snittplanet
+	Specify second point of cutting plane	Angi andre punkt på snittplanet
+	Specify first point of inclined plane	Angi første punkt på det skrå planet
+	Specify second point of inclined plane	Angi andre punkt på det skrå planet
+	Specify side to view from	Angi siden det skal ses fra
+	Specify first corner of viewport	Angi første hjørne av visningsporten
+	Specify opposite corner of viewport	Angi motsatt hjørne av visningsporten
+	Display hidden profile lines on separate layer?	Vise skjulte profillinjer på et eget lag?
+	Project profile lines onto a plane?	Projisere profillinjer på et plan?
+	Delete tangential edges?	Slette tangentielle kanter?
+	None (PDF file)	Ingen (PDF-fil)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Måltekst med høyde {} er for liten til å leses i denne tegningen. Skriv DIMSCALE {} for å gjøre nye mål {} ganger større.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Tekst med høyde {} er for liten til å leses i denne tegningen. Prøv høyden {} (TEXTSIZE angir standardverdien).
+	(each layout's own)	(hver layouts egen)
+	A callout on the selected sheet pointing at the selected view	En henvisning på det valgte arket som peker på den valgte visningen
+	A page setup copied from the selected sheet's layout	Et sideoppsett kopiert fra layouten til det valgte arket
+	Add Callout	Legg til henvisning
+	Callouts: {}	Henvisninger: {}
+	From Selected Sheet	Fra valgt ark
+	Insert on Selected Sheet	Sett inn på valgt ark
+	Named view	Navngitt visning
+	Page Setup Override	Overstyring av sideoppsett
+	Place View	Plasser visning
+	Position on sheet	Posisjon på arket
+	Remove Property	Fjern egenskap
+	Sheet Properties	Arkegenskaper
+	Sheet Set Fields	Arksettfelt
+	Sheet Set Properties	Arksettegenskaper
+	Sync Drawings	Synkroniser tegninger
+	Text holding the field, at the position on sheet	Tekst som inneholder feltet, ved posisjonen på arket
+	Views and Callouts	Visninger og henvisninger
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Hvert arks layout blir «nummer tittel»; arksettfeltene, visningsetikettene og henvisningene får settets gjeldende verdier
+	3 Point	3 punkter
+	Origin	Origo
+	Z	Z
+	Named UCS...	Navngitte UCS-er...
+	Center Mark (DIMCEN)	Sentermerke (DIMCEN)
+	Copy Objects to New Layer	Kopier objekter til nytt lag
+	Cut with Base Point	Klipp ut med basispunkt
+	DXF In	DXF inn
+	DXF Out	DXF ut
+	Fill	Fyll
+	Maximize Viewport	Maksimer visningsport
+	Minimize Viewport	Minimer visningsport
+	Object Selection Filters	Filtre for objektvalg
+	Oops	Oops
+	Quick Text	Hurtigtekst
+	Redefine Attributes	Redefiner attributter
+	Drawing	Tegning
+	Profile	Profil
+	Clashes	Kollisjoner
+	Run	Kjør
+	Re-run	Kjør på nytt
+	Run clash detection	Kjør kollisjonskontroll
+	Re-run keeping statuses	Kjør på nytt og behold statuser
+	Tolerance:	Toleranse:
+	in	in
+	Show:	Vis:
+	No clashes. Run detection first.	Ingen kollisjoner. Kjør kontrollen først.
+	Status:	Status:
+	Trade:	Fag:
+	Notes:	Notater:
+	Go To	Gå til
+	Zoom to clash	Zoom til kollisjon
+	Export BCF	Eksporter BCF
+	Export CSV	Eksporter CSV
+	Export to BCF 2.1 (ZIP)	Eksporter til BCF 2.1 (ZIP)
+	Export clash report to CSV	Eksporter kollisjonsrapport til CSV
+	MEP Review	Gjennomgang av tekniske fag
+	Guessed only	Bare gjettet
+	{n} items	{n} elementer
+	No MEP items found. Run mep.read first.	Fant ingen tekniske elementer. Kjør mep.read først.
+	Mark reviewed	Merk som gjennomgått
+	Size: {ss}, Height: {hs}	Størrelse: {ss}, høyde: {hs}
+	Edit size, height or system	Rediger størrelse, høyde eller system
+	Size W:	Størrelse B:
+	Bottom ft:	Bunn ft:
+	Rebuild 3D model keeping hand edits	Bygg 3D-modellen på nytt og behold manuelle endringer
+	Zoomed to {sys} run on {lvl}.	Zoomet til {sys}-føring på {lvl}.
+	Marked as reviewed.	Merket som gjennomgått.
+	Unmarked.	Merking fjernet.
+	Edit applied.	Endring brukt.
+	Rebuilt: {n} MEP runs.	Bygget på nytt: {n} tekniske føringer.
+	3D Measure	3D-måling
+	BCF Export	BCF-eksport
+	Clash List	Kollisjonsliste
+	Clash Status	Kollisjonsstatus
+	Coordination Tree	Koordineringstre
+	Coordination Viewpoints	Koordineringssynspunkter
+	Edit MEP Item	Rediger teknisk element
+	List MEP Items	List opp tekniske elementer
+	Section Box	Snittboks
+	Trade Visibility	Fagsynlighet
+	BIM Types	BIM-typer
+	Get BIM Spec	Hent BIM-spesifikasjon
+	Remove BIM Spec from Entities	Fjern BIM-spesifikasjon fra objekter
+	Remove BIM Type	Fjern BIM-type
+	Set BIM Spec on Entities	Angi BIM-spesifikasjon på objekter
+	Set BIM Type	Angi BIM-type
+	Ceiling and Soffit Takeoff	Mengdeuttak for himlinger og innkassinger
+	Colour by Assembly	Farge etter konstruksjon
+	RFI List	RFI-liste
+	Zoom to RFI	Zoom til RFI
+	Update RFI	Oppdater RFI
+	Export RFI List	Eksporter RFI-liste
+	Sent	Sendt
+	Answered	Besvart
+	Not sent	Ikke sendt
+	High	Høy
+	Medium	Middels
+	Low	Lav
+	All levels	Alle nivåer
+	Open items only	Bare åpne elementer
+	{high} high, {medium} medium, {low} low	{high} høy, {medium} middels, {low} lav
+	No gaps or conflicts in the building spec.	Ingen mangler eller konflikter i bygningsspesifikasjonen.
+	Assumed meanwhile:	Antatt inntil videre:
+	Proposed fix:	Foreslått løsning:
+	Sheets:	Ark:
+	Walk to It	Gå dit
+	Export XLSX...	Eksporter XLSX...
+	Export PDF...	Eksporter PDF...
+	Drywall Takeoff	Mengdeuttak for gips
+	Drywall View Mode	Visningsmodus for gips
+	Finish Faces	Overflater
+	Wall Info	Vegginfo
+	Open Print Set	Åpne tegningssett
+	Classify Print Set	Klassifiser tegningssett
+	Print Set Dashboard	Oversikt over tegningssett
+	Print Set Sheets	Ark i tegningssett
+	Re-import Revised Set	Importer revidert sett på nytt
+	Save Print Set	Lagre tegningssett
+	Ahead	Fremover
+	Bottom / top AFF	Bunn / topp OFG
+	Clash	Kollisjon
+	elements	elementer
+	Field Viewer	Feltvisning
+	Fit	Tilpass
+	Keep	Behold
+	New note	Nytt notat
+	No new notes to send	Ingen nye notater å sende
+	No room matches	Ingen rom samsvarer
+	Note	Notat
+	Note kept	Notat beholdt
+	Notes	Notater
+	notes ready to sync	notater klare til synkronisering
+	not typed	ikke skrevet
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Åpne en feltpakke (FIELDVIEW.EXPORT i CADaddy), eller slipp en her
+	Open clashes and RFIs	Åpne kollisjoner og RFI-er
+	RFI	RFI
+	Room number	Romnummer
+	Search a room number, or tap a room	Søk etter et romnummer, eller trykk på et rom
+	Send Notes	Send notater
+	Tap two points to measure	Trykk på to punkter for å måle
+	Trades	Fag
+	Unit	Enhet
+	Verified	Verifisert
+	Verified point	Verifisert punkt
+	What is there, as built	Det som finnes der, som bygget
+	Plan	Plan
+	3D	3D
+	Architectural	Arkitekt
+	Structural	Konstruksjon
+	Mechanical	Mekanisk
+	Plumbing	Sanitær
+	Fire protection	Brannsikring
+	Other	Annet
+	stated	oppgitt
+	inferred	utledet
+	assumed	antatt
+	Field Package	Feltpakke
+	Sync Field Notes	Synkroniser feltnotater
+	Field Notes	Feltnotater
+	Detect Unit Types	Finn enhetstyper
+	List Unit Types	List opp enhetstyper
+	Unit Schedule	Enhetsskjema
+	Unit Type Takeoff	Mengdeuttak per enhetstype
+	Override Generated Element	Overstyr generert element
+	List Overrides	List opp overstyringer
+	Revert Override	Tilbakestill overstyring
+	Accept Override After Review	Godta overstyring etter gjennomgang
+	Show or Hide Overrides	Vis eller skjul overstyringer
+	Re-apply Overrides	Bruk overstyringer på nytt
+	Overrides	Overstyringer
+	Select generated element (or an object drawn by hand to add)	Velg generert element (eller et håndtegnet objekt som skal legges til)
+	Enter type mark	Angi typemerke
+	Enter override to revert	Angi overstyring som skal tilbakestilles
+	Verify	Verifiser
+	review: the drawing changed here	gjennomgå: tegningen er endret her
+	orphaned: its element is no longer generated	foreldreløs: elementet genereres ikke lenger
+	Project Rules	Prosjektregler
+	Domain:	Domene:
+	No project rules set.	Ingen prosjektregler er angitt.
+	Tier:	Nivå:
+	Source:	Kilde:
+	Reason:	Årsak:
+	Overridden values:	Overstyrte verdier:
+	No drawing open.	Ingen tegning er åpen.
+	List Project Rules	List opp prosjektregler
+	Get Project Rule	Hent prosjektregel
+	Set Project Rule	Angi prosjektregel
+	Remove Project Rule	Fjern prosjektregel
+	Preview Project Rule Change	Forhåndsvis endring av prosjektregel
+	Project Rules Label	Etikett for prosjektregler
+	Import Project Rules	Importer prosjektregler
+	Export Project Rules	Eksporter prosjektregler
+	Print Validator Documents	Dokumenter for tegningsvalidering
+	Validate Model Against Prints	Valider modellen mot tegningene
+	Validation Failure Overlay	Overlegg for valideringsfeil
+	Element Provenance	Elementets opphav
+	MEP Quantities	Mengder for tekniske fag
+	Refresh MEP Quantities	Oppdater mengder for tekniske fag
+	Activate Drawing	Aktiver tegning
+	Add to Project	Legg til i prosjekt
+	Close Project	Lukk prosjekt
+	Import Manifest	Importer manifest
+	Import Standards	Importer standarder
+	New Project	Nytt prosjekt
+	Open Project	Åpne prosjekt
+	Project Disk Use	Prosjektets diskbruk
+	Project Drawings	Prosjekttegninger
+	Project Info	Prosjektinfo
+	Remove Standard	Fjern standard
+	Remove from Project	Fjern fra prosjekt
+	Restore Project	Gjenopprett prosjekt
+	Set Standard	Angi standard
+	Shelve Drawing	Arkiver tegning
+	Shelve Project	Arkiver prosjekt
+	Standards Library	Standardbibliotek
+	Validate Manifest	Valider manifest
+	Active	Aktiv
+	Shelved	Arkivert
+	{n} drawings	{n} tegninger
+	Compare Revised Print	Sammenlign revidert tegning
+	Revision Log	Revisjonslogg
+	Attach IFC Reference	Tilknytt IFC-referanse
+	IFC References	IFC-referanser
+	IFC Reference Elements	IFC-referanseelementer
+	Reload IFC References	Last inn IFC-referanser på nytt
+	Accept Specifications	Godta spesifikasjoner
+	Import Specifications	Importer spesifikasjoner
+	Colour Scheme	Fargeskjema
+	Coordination Mode	Koordineringsmodus
+	Coordination Views	Koordineringsvisninger
+	Isolate Trade	Isoler fag
+	Project Briefing	Prosjektbrief
+	Project Note	Prosjektnotat
+	Review Queue	Gjennomgangskø
+	Next Review Item	Neste gjennomgangselement
+	Resolve Review Item	Løs gjennomgangselement
+	Defer Review Item	Utsett gjennomgangselement
+	Draft RFI	Utkast til RFI
+	Batch Resolve	Løs satsvis
+	Approve Agent Work	Godkjenn agentarbeid
+	Agent Work	Agentarbeid
+	Build BIM Model	Bygg BIM-modell
+	to accept	til godkjenning
+	Accept all	Godta alle
+	Accept	Godta
+	Cited:	Sitert:
+	Nothing waiting: agents' work is all accepted.	Ingenting venter: alt agentarbeid er godtatt.
+	Open IFC Model	Åpne IFC-modell
+	Open IFC Model...	Åpne IFC-modell...
+	IFC Model	IFC-modell
+	IFC Model Tree	IFC-modelltre
+	IFC Object Properties	IFC-objektegenskaper
+	Filter IFC Objects	Filtrer IFC-objekter
+	IFC Section Box	IFC-snittboks
+	Measure in 3D	Mål i 3D
+	IFC Camera	IFC-kamera
+	Render IFC Model	Render IFC-modell
+	New BCF Issue	Ny BCF-sak
+	BCF Issues	BCF-saker
+	BCF Issues...	BCF-saker...
+	BCF Issue	BCF-sak
+	Update BCF Issue	Oppdater BCF-sak
+	Show BCF Issue	Vis BCF-sak
+	Delete BCF Issue	Slett BCF-sak
+	Import BCF	Importer BCF
+	Read Levels	Les nivåer
+	List Levels	List opp nivåer
+	Edit Level	Rediger nivå
+	Attach Sheets to Levels	Knytt ark til nivåer
+	Check Shafts Through Levels	Kontroller sjakter gjennom nivåer
+	Isolate Level	Isoler nivå
+	Read from Prints	Les fra tegningene
+	Level names and elevations from the sections, elevations and level markers	Nivånavn og høyder fra snittene, fasadene og nivåmarkørene
+	Attach Sheets	Knytt ark
+	Check Shafts	Kontroller sjakter
+	Shafts, chases and risers must carry on through the levels between their ends	Sjakter, føringskanaler og stigeledninger må gå gjennom nivåene mellom endene sine
+	No levels in the building spec.	Ingen nivåer i bygningsspesifikasjonen.
+	Level	Nivå
+	Floor to floor	Etasjehøyde
+	Sheets	Ark
+	Show only this storey in 3D	Vis bare denne etasjen i 3D
+	Datums (no plan on this drawing):	Referansenivåer (ingen plan på denne tegningen):
+	Sheets on no level:	Ark uten nivå:
+	Show All Levels	Vis alle nivåer
+	The levels already match the prints.	Nivåene samsvarer allerede med tegningene.
+	{sheets} sheets, {loose} on no level	{sheets} ark, {loose} uten nivå
+	{name}: not shown on {levels}	{name}: vises ikke på {levels}
+	Every shaft and riser carries on through its levels.	Hver sjakt og stigeledning går gjennom nivåene sine.
+	Not a height: {text}	Ikke en høyde: {text}
+	Export COBie	Eksporter COBie
+	Validate COBie	Valider COBie
+	Export Handover Schedules	Eksporter overleveringsskjemaer
+	COBie...	COBie...
+	Handover Schedules...	Overleveringsskjemaer...
+	Electrical Gear	Elektrisk utstyr
+	Check Electrical Gear	Kontroller elektrisk utstyr
+	Submittal Review of Gear	Gjennomgang av innsendt utstyr
+	Accept Gear as Submitted	Godta utstyret som innsendt

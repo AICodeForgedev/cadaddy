@@ -1,0 +1,196 @@
+# CADaddy engine messages in Vietnamese: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Nhập tên nhóm
+	Pick internal point	Chọn điểm bên trong
+	Specify the pattern origin	Chỉ định gốc của mẫu
+	Specify the incrementing elevation between rows	Chỉ định cao độ gia tăng giữa các hàng
+	Specify the angle to fill (+=ccw, -=cw)	Chỉ định góc điền (+=ngược chiều kim đồng hồ, -=cùng chiều kim đồng hồ)
+	Select hatch object	Chọn đối tượng mặt tô
+	Red, Green, Blue	Đỏ, Lục, Lam
+	Enter the number of rows	Nhập số hàng
+	Enter the number of levels	Nhập số tầng
+	Enter new layer name	Nhập tên lớp mới
+	Specify width	Chỉ định chiều rộng
+	Specify the angle between items	Chỉ định góc giữa các phần tử
+	Specify text height	Chỉ định chiều cao chữ
+	Specify start tangent	Chỉ định tiếp tuyến đầu
+	Specify end tangent	Chỉ định tiếp tuyến cuối
+	Specify reference length	Chỉ định độ dài tham chiếu
+	Specify other corner	Chỉ định góc còn lại
+	Specify next point or [Undo]	Chỉ định điểm tiếp theo hoặc [Undo]
+	Specify new location	Chỉ định vị trí mới
+	Specify new length	Chỉ định độ dài mới
+	Specify length of line	Chỉ định độ dài đường thẳng
+	Specify displacement	Chỉ định độ dời
+	Specify angle for dimension text	Chỉ định góc cho chữ kích thước
+	Select viewports	Chọn khung nhìn
+	Select object to break dimension	Chọn đối tượng để ngắt kích thước
+	Select group	Chọn nhóm
+	Select grip to edit array	Chọn grip để sửa mảng
+	Select a table	Chọn một bảng
+	Select a boundary to remove	Chọn đường biên cần xóa
+	Rotate arrayed items?	Xoay các phần tử của mảng?
+	Erase polyline?	Xóa đa tuyến?
+	Enter viewport arrangement	Nhập cách bố trí khung nhìn
+	Enter transparency value (0-90)	Nhập giá trị độ trong suốt (0-90)
+	Enter the number of operations to undo	Nhập số thao tác cần hoàn tác
+	Enter the number of columns	Nhập số cột
+	Enter number of items in array	Nhập số phần tử trong mảng
+	Enter new layer state name	Nhập tên trạng thái lớp mới
+	Enter new color	Nhập màu mới
+	Enter name of new layout	Nhập tên bố cục mới
+	Enter layer name	Nhập tên lớp
+	Enter file name	Nhập tên tệp
+	Enter color name or number (1-255)	Nhập tên hoặc số màu (1-255)
+	Enter a configuration option	Nhập tùy chọn cấu hình
+	Base point	Điểm cơ sở
+	Word-wrap the combined Mtext?	Tự động xuống dòng cho Mtext đã gộp?
+	Where should the data go?	Dữ liệu sẽ được đưa đi đâu?
+	Verify each name to be purged?	Xác nhận từng tên cần dọn dẹp?
+	Use landing	Dùng đoạn đỡ
+	Type of boundary object	Loại đối tượng đường biên
+	Specify width factor	Chỉ định hệ số độ rộng
+	Specify tolerance	Chỉ định dung sai
+	Specify the tangent direction for the start point of arc	Chỉ định hướng tiếp tuyến tại điểm đầu cung tròn
+	Specify the reference angle	Chỉ định góc tham chiếu
+	Specify the new angle	Chỉ định góc mới
+	Specify text width	Chỉ định độ rộng văn bản
+	Specify temporary OTRACK point	Chỉ định điểm OTRACK tạm thời
+	Invalid option keyword.	Từ khóa tùy chọn không hợp lệ.
+	*Invalid selection*	*Lựa chọn không hợp lệ*
+	Requires a valid angle.	Cần một góc hợp lệ.
+	Nothing to undo.	Không có gì để hoàn tác.
+	Invalid point.	Điểm không hợp lệ.
+	No viewport found there.	Không tìm thấy khung nhìn nào ở đó.
+	*Cancel*	*Đã hủy*
+	Requires a positive number.	Cần một số dương.
+	No hatch selected.	Chưa chọn mặt tô nào.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Không được dùng lệnh trong thẻ Model ** (hãy chuyển sang một bố cục trước)
+	Select a multileader.	Hãy chọn một đường dẫn đa chú thích.
+	No line or arc to continue.	Không có đường thẳng hay cung tròn để tiếp tục.
+	Revision cloud finished.	Đã vẽ xong đám mây hiệu chỉnh.
+	Object selected is not a circle or arc.	Đối tượng được chọn không phải đường tròn hay cung tròn.
+	Select a linear or aligned dimension.	Hãy chọn một kích thước tuyến tính hoặc căn thẳng.
+	Object selected is not a dimension.	Đối tượng được chọn không phải kích thước.
+	No dimensions selected.	Chưa chọn kích thước nào.
+	Requires a number.	Cần một số.
+	0 found	Tìm thấy 0
+	The feature control frame is empty.	Khung điều khiển đặc tính đang trống.
+	1 was on a locked layer.	1 đối tượng nằm trên lớp bị khóa.
+	Row elevations need an associative array; the copies stay at the same elevation.	Cao độ hàng cần mảng liên kết; các bản sao vẫn ở cùng cao độ.
+	Point or option keyword required.	Cần một điểm hoặc từ khóa tùy chọn.
+	Enter Yes or No.	Nhập Yes hoặc No.
+	Viewport created, zoomed to the model extents.	Đã tạo khung nhìn, thu phóng đến phạm vi mô hình.
+	No object found.	Không tìm thấy đối tượng.
+	The object is not a table.	Đối tượng không phải là bảng.
+	No table there.	Không có bảng nào ở đó.
+	A transparent command is already in progress.	Đang có một lệnh trong suốt chạy.
+	Invalid class name.	Tên lớp đối tượng không hợp lệ.
+	Invalid group name.	Tên nhóm không hợp lệ.
+	Too many point modifiers.	Quá nhiều bổ ngữ điểm.
+	No leader to remove.	Không có đường dẫn chú thích để xóa.
+	Requires a non-negative number.	Cần một số không âm.
+	Clipboard is empty.	Bộ nhớ tạm đang trống.
+	1 object was on a locked layer.	1 đối tượng nằm trên lớp bị khóa.
+	Circle does not exist.	Đường tròn không tồn tại.
+	Enter Length or Area.	Nhập Length hoặc Area.
+	Enter a percentage from 0 to 1000.	Nhập phần trăm từ 0 đến 1000.
+	Enter Table, File or None.	Nhập Table, File hoặc None.
+	Cannot measure that object.	Không thể đo đối tượng đó.
+	Third pair ignored (2D align).	Bỏ qua cặp thứ ba (căn chỉnh 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	Chế độ chèn: Copy (đối tượng lồng được sao chép thành đối tượng độc lập).
+	Everything has been undone	Đã hoàn tác mọi thứ
+	Everything has been undone.	Đã hoàn tác mọi thứ.
+	Requires a non-negative number or Auto.	Cần một số không âm hoặc Auto.
+	Select a dimension.	Hãy chọn một kích thước.
+	Object cannot be dimensioned this way.	Không thể ghi kích thước cho đối tượng theo cách này.
+	Select an arc, circle or line.	Hãy chọn một cung tròn, đường tròn hoặc đường thẳng.
+	The two points must be different.	Hai điểm phải khác nhau.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Không có kích thước tuyến tính để nối tiếp. Hãy tạo một kích thước bằng DIMLINEAR trước.
+	A multileader needs a leader line or content; nothing was drawn.	Đường dẫn đa chú thích cần đường dẫn hoặc nội dung; không có gì được vẽ.
+	Requires the name of a block defined in the drawing.	Cần tên của một khối đã định nghĩa trong bản vẽ.
+	Invalid option.	Tùy chọn không hợp lệ.
+	The boundary encloses none of the image.	Đường biên không bao phần nào của ảnh.
+	The object is not an image.	Đối tượng không phải là ảnh.
+	The image has no clipping boundary.	Ảnh không có đường biên cắt xén.
+	No images selected.	Chưa chọn ảnh nào.
+	Requires an integer between 0 and 100.	Cần một số nguyên từ 0 đến 100.
+	The selected object has no area.	Đối tượng được chọn không có diện tích.
+	No such object	Không có đối tượng như vậy
+	Requires a point.	Cần một điểm.
+	Requires a distance.	Cần một khoảng cách.
+	The object is on a locked layer.	Đối tượng nằm trên lớp bị khóa.
+	Value must be positive and nonzero.	Giá trị phải dương và khác không.
+	Requires an angle.	Cần một góc.
+	Requires a point or option keyword.	Cần một điểm hoặc từ khóa tùy chọn.
+	Object does not intersect a cutting edge.	Đối tượng không giao với cạnh cắt.
+	Object does not intersect an edge.	Đối tượng không giao với cạnh nào.
+	Lines are parallel.	Các đường thẳng song song.
+	The Block Editor is not open.	Trình soạn khối chưa mở.
+	Requires a positive integer.	Cần một số nguyên dương.
+	Answer Yes or No.	Hãy trả lời Yes hoặc No.
+	Requires a valid point.	Cần một điểm hợp lệ.
+	No reference objects	Không có đối tượng tham chiếu
+	Requires an angle or point.	Cần một góc hoặc điểm.
+	Requires a positive distance.	Cần một khoảng cách dương.
+	Requires a non-negative distance.	Cần một khoảng cách không âm.
+	No such grip	Không có grip như vậy
+	Requires a template file name.	Cần tên tệp bản mẫu.
+	A hatch needs at least one boundary: erase it instead.	Mặt tô cần ít nhất một đường biên: hãy xóa mặt tô thay vì vậy.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Hoàn tác đang tắt (UNDO Control None); UNDO Control All sẽ bật lại.
+	Enter ON or OFF.	Nhập ON hoặc OFF.
+	Not a linear dimension.	Không phải kích thước tuyến tính.
+	Valid hatch boundary not found.	Không tìm thấy đường biên mặt tô hợp lệ.
+	No closed boundary objects selected.	Chưa chọn đối tượng đường biên kín nào.
+	Requires a name.	Cần một tên.
+	That option doesn't apply to this grip.	Tùy chọn đó không áp dụng cho grip này.
+	That would make a degenerate object.	Thao tác đó sẽ tạo ra đối tượng suy biến.
+	No tangent or perpendicular from the last point.	Không có tiếp tuyến hay đường vuông góc từ điểm cuối cùng.
+	Requires numeric distance or second point.	Cần khoảng cách dạng số hoặc điểm thứ hai.
+	Edge endpoints must differ.	Hai điểm cuối của cạnh phải khác nhau.
+	Requires numeric distance or point.	Cần khoảng cách dạng số hoặc một điểm.
+	Requires a positive height.	Cần chiều cao dương.
+	No objects found.	Không tìm thấy đối tượng nào.
+	Requires a non-zero number.	Cần một số khác không.
+	Circle must intersect cutting edges at two or more points.	Đường tròn phải giao với cạnh cắt tại hai điểm trở lên.
+	Arc cannot be full 360 degrees.	Cung tròn không thể là trọn 360 độ.
+	Cannot break that object.	Không thể ngắt đối tượng đó.
+	An object is on a locked layer.	Có một đối tượng nằm trên lớp bị khóa.
+	Objects are not connected.	Các đối tượng không nối với nhau.
+	The two points must differ.	Hai điểm phải khác nhau.
+	Mirror line points must differ.	Các điểm của đường đối xứng phải khác nhau.
+	No drawing is open.	Chưa mở bản vẽ nào.
+	Command: {}	Lệnh: {}
+	Unknown command "{}". Press F1 for help.	Lệnh không xác định "{}". Nhấn F1 để được trợ giúp.
+	{} found	Tìm thấy {}
+	{} found, {} total	Tìm thấy {}, tổng {}
+	Distance = {}	Khoảng cách = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Khoảng cách = {},  Góc trong mặt phẳng XY = {},  Góc so với mặt phẳng XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Diện tích = {}, Chu vi = {}
+	Total area = {}	Tổng diện tích = {}
+	Resuming {} command.	Tiếp tục lệnh {}.
+	Invalid input: {}	Giá trị nhập không hợp lệ: {}
+	{} were on a locked layer.	{} đối tượng nằm trên lớp bị khóa.
+	{} dimension(s) changed.	Đã thay đổi {} kích thước.
+	Group {} ungrouped.	Đã rã nhóm {}.
+	{} object(s) flattened.	Đã làm phẳng {} đối tượng.
+	Group {} renamed to {}.	Đã đổi tên nhóm {} thành {}.
+	{} object(s) added to group {}.	Đã thêm {} đối tượng vào nhóm {}.
+	{} object(s) removed from group {}.	Đã gỡ {} đối tượng khỏi nhóm {}.
+	{} lines were chamfered	Đã vát cạnh {} đường thẳng
+	{} lines were filleted	Đã bo tròn {} đường thẳng
+	{} objects joined into 1 {}	Đã nối {} đối tượng thành 1 {}
+	Current dimension style:  {}	Kiểu kích thước hiện hành:  {}
+	Wrote {}	Đã ghi {}
+	{} is already open.	{} đã được mở.
+	{} dimension(s) created.	Đã tạo {} kích thước.
+	BOUNDARY created {} polyline(s)	BOUNDARY đã tạo {} đa tuyến
+	Current line-width is {}	Độ rộng nét hiện tại là {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Biến không xác định {}. Gõ SETVAR ? để liệt kê các biến.
+	{} = {} (read only)	{} = {} (chỉ đọc)
+	Dimension text = {}	Chữ kích thước = {}
+	{} segments added to polyline	Đã thêm {} đoạn vào đa tuyến

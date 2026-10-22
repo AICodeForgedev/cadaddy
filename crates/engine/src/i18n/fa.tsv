@@ -1,0 +1,196 @@
+# CADaddy engine messages in Persian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	نام گروه را وارد کنید
+	Pick internal point	نقطه داخلی را انتخاب کنید
+	Specify the pattern origin	مبدأ الگو را مشخص کنید
+	Specify the incrementing elevation between rows	افزایش ارتفاع تراز بین سطرها را مشخص کنید
+	Specify the angle to fill (+=ccw, -=cw)	زاویه پرکردن را مشخص کنید (+=پادساعتگرد، -=ساعتگرد)
+	Select hatch object	شیء هاشور را انتخاب کنید
+	Red, Green, Blue	قرمز، سبز، آبی
+	Enter the number of rows	تعداد سطرها را وارد کنید
+	Enter the number of levels	تعداد ترازها را وارد کنید
+	Enter new layer name	نام لایه جدید را وارد کنید
+	Specify width	عرض را مشخص کنید
+	Specify the angle between items	زاویه بین اقلام را مشخص کنید
+	Specify text height	ارتفاع متن را مشخص کنید
+	Specify start tangent	مماس شروع را مشخص کنید
+	Specify end tangent	مماس انتها را مشخص کنید
+	Specify reference length	طول مرجع را مشخص کنید
+	Specify other corner	گوشه دیگر را مشخص کنید
+	Specify next point or [Undo]	نقطه بعدی را مشخص کنید یا [Undo]
+	Specify new location	محل جدید را مشخص کنید
+	Specify new length	طول جدید را مشخص کنید
+	Specify length of line	طول خط را مشخص کنید
+	Specify displacement	جابه‌جایی را مشخص کنید
+	Specify angle for dimension text	زاویه متن اندازه را مشخص کنید
+	Select viewports	پنجره‌های دید را انتخاب کنید
+	Select object to break dimension	شیء برای شکستن اندازه را انتخاب کنید
+	Select group	گروه را انتخاب کنید
+	Select grip to edit array	دستگیره برای ویرایش آرایه را انتخاب کنید
+	Select a table	یک جدول انتخاب کنید
+	Select a boundary to remove	مرزی برای حذف انتخاب کنید
+	Rotate arrayed items?	اقلام آرایه چرخانده شوند؟
+	Erase polyline?	چندخطی پاک شود؟
+	Enter viewport arrangement	چیدمان پنجره‌های دید را وارد کنید
+	Enter transparency value (0-90)	مقدار شفافیت را وارد کنید (0-90)
+	Enter the number of operations to undo	تعداد عملیات برای واگرد را وارد کنید
+	Enter the number of columns	تعداد ستون‌ها را وارد کنید
+	Enter number of items in array	تعداد اقلام آرایه را وارد کنید
+	Enter new layer state name	نام وضعیت لایه جدید را وارد کنید
+	Enter new color	رنگ جدید را وارد کنید
+	Enter name of new layout	نام طرح‌بندی جدید را وارد کنید
+	Enter layer name	نام لایه را وارد کنید
+	Enter file name	نام فایل را وارد کنید
+	Enter color name or number (1-255)	نام یا شماره رنگ را وارد کنید (1-255)
+	Enter a configuration option	یک گزینه پیکربندی وارد کنید
+	Base point	نقطه پایه
+	Word-wrap the combined Mtext?	متن چندخطی ترکیبی شکست خودکار خط داشته باشد؟
+	Where should the data go?	داده‌ها به کجا بروند؟
+	Verify each name to be purged?	هر نام پیش از پاک‌سازی تأیید شود؟
+	Use landing	استفاده از پاگرد
+	Type of boundary object	نوع شیء مرزی
+	Specify width factor	ضریب عرض را مشخص کنید
+	Specify tolerance	رواداری را مشخص کنید
+	Specify the tangent direction for the start point of arc	جهت مماس در نقطه شروع کمان را مشخص کنید
+	Specify the reference angle	زاویه مرجع را مشخص کنید
+	Specify the new angle	زاویه جدید را مشخص کنید
+	Specify text width	عرض متن را مشخص کنید
+	Specify temporary OTRACK point	نقطه موقت OTRACK را مشخص کنید
+	Invalid option keyword.	کلیدواژه گزینه نامعتبر است.
+	*Invalid selection*	*انتخاب نامعتبر*
+	Requires a valid angle.	یک زاویه معتبر لازم است.
+	Nothing to undo.	چیزی برای واگرد نیست.
+	Invalid point.	نقطه نامعتبر.
+	No viewport found there.	آنجا هیچ پنجره دیدی یافت نشد.
+	*Cancel*	*لغو*
+	Requires a positive number.	یک عدد مثبت لازم است.
+	No hatch selected.	هیچ هاشوری انتخاب نشده است.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** این فرمان در زبانه Model مجاز نیست ** (ابتدا به یک طرح‌بندی بروید)
+	Select a multileader.	یک چندراهنما انتخاب کنید.
+	No line or arc to continue.	هیچ خط یا کمانی برای ادامه وجود ندارد.
+	Revision cloud finished.	ابر بازنگری تمام شد.
+	Object selected is not a circle or arc.	شیء انتخاب‌شده دایره یا کمان نیست.
+	Select a linear or aligned dimension.	یک اندازه خطی یا هم‌راستا انتخاب کنید.
+	Object selected is not a dimension.	شیء انتخاب‌شده اندازه نیست.
+	No dimensions selected.	هیچ اندازه‌ای انتخاب نشده است.
+	Requires a number.	یک عدد لازم است.
+	0 found	0 مورد یافت شد
+	The feature control frame is empty.	قاب کنترل عارضه خالی است.
+	1 was on a locked layer.	1 مورد روی لایه قفل‌شده بود.
+	Row elevations need an associative array; the copies stay at the same elevation.	ارتفاع تراز سطرها به آرایه وابسته نیاز دارد؛ کپی‌ها در همان ارتفاع تراز می‌مانند.
+	Point or option keyword required.	نقطه یا کلیدواژه گزینه لازم است.
+	Enter Yes or No.	Yes یا No را وارد کنید.
+	Viewport created, zoomed to the model extents.	پنجره دید ایجاد شد و روی حدود کامل مدل زوم شد.
+	No object found.	هیچ شیئی یافت نشد.
+	The object is not a table.	شیء جدول نیست.
+	No table there.	آنجا جدولی نیست.
+	A transparent command is already in progress.	یک فرمان شفاف از قبل در حال اجراست.
+	Invalid class name.	نام کلاس نامعتبر است.
+	Invalid group name.	نام گروه نامعتبر است.
+	Too many point modifiers.	تعداد اصلاح‌گرهای نقطه بیش از حد است.
+	No leader to remove.	هیچ خط راهنمایی برای حذف وجود ندارد.
+	Requires a non-negative number.	یک عدد نامنفی لازم است.
+	Clipboard is empty.	کلیپ‌بورد خالی است.
+	1 object was on a locked layer.	1 شیء روی لایه قفل‌شده بود.
+	Circle does not exist.	دایره وجود ندارد.
+	Enter Length or Area.	Length یا Area را وارد کنید.
+	Enter a percentage from 0 to 1000.	درصدی از 0 تا 1000 وارد کنید.
+	Enter Table, File or None.	Table، File یا None را وارد کنید.
+	Cannot measure that object.	اندازه‌گیری آن شیء ممکن نیست.
+	Third pair ignored (2D align).	جفت سوم نادیده گرفته شد (تراز دوبعدی).
+	Insert mode: Copy (nested objects are copied as independent objects).	حالت درج: Copy (اشیای تودرتو به‌صورت اشیای مستقل کپی می‌شوند).
+	Everything has been undone	همه چیز واگرد شد
+	Everything has been undone.	همه چیز واگرد شد.
+	Requires a non-negative number or Auto.	یک عدد نامنفی یا Auto لازم است.
+	Select a dimension.	یک اندازه انتخاب کنید.
+	Object cannot be dimensioned this way.	این شیء را نمی‌توان به این روش اندازه‌گذاری کرد.
+	Select an arc, circle or line.	یک کمان، دایره یا خط انتخاب کنید.
+	The two points must be different.	دو نقطه باید متفاوت باشند.
+	No linear dimension to continue. Create one with DIMLINEAR first.	هیچ اندازه خطی برای ادامه وجود ندارد. ابتدا با DIMLINEAR یکی ایجاد کنید.
+	A multileader needs a leader line or content; nothing was drawn.	چندراهنما به خط راهنما یا محتوا نیاز دارد؛ چیزی ترسیم نشد.
+	Requires the name of a block defined in the drawing.	نام بلوکی که در نقشه تعریف شده باشد لازم است.
+	Invalid option.	گزینه نامعتبر.
+	The boundary encloses none of the image.	مرز هیچ بخشی از تصویر را در بر نمی‌گیرد.
+	The object is not an image.	شیء تصویر نیست.
+	The image has no clipping boundary.	تصویر مرز برش ندارد.
+	No images selected.	هیچ تصویری انتخاب نشده است.
+	Requires an integer between 0 and 100.	یک عدد صحیح بین 0 و 100 لازم است.
+	The selected object has no area.	شیء انتخاب‌شده مساحت ندارد.
+	No such object	چنین شیئی وجود ندارد
+	Requires a point.	یک نقطه لازم است.
+	Requires a distance.	یک فاصله لازم است.
+	The object is on a locked layer.	شیء روی لایه قفل‌شده است.
+	Value must be positive and nonzero.	مقدار باید مثبت و غیرصفر باشد.
+	Requires an angle.	یک زاویه لازم است.
+	Requires a point or option keyword.	یک نقطه یا کلیدواژه گزینه لازم است.
+	Object does not intersect a cutting edge.	شیء با هیچ لبه برشی تقاطع ندارد.
+	Object does not intersect an edge.	شیء با هیچ لبه‌ای تقاطع ندارد.
+	Lines are parallel.	خطوط موازی هستند.
+	The Block Editor is not open.	ویرایشگر بلوک باز نیست.
+	Requires a positive integer.	یک عدد صحیح مثبت لازم است.
+	Answer Yes or No.	با Yes یا No پاسخ دهید.
+	Requires a valid point.	یک نقطه معتبر لازم است.
+	No reference objects	هیچ شیء مرجعی وجود ندارد
+	Requires an angle or point.	یک زاویه یا نقطه لازم است.
+	Requires a positive distance.	یک فاصله مثبت لازم است.
+	Requires a non-negative distance.	یک فاصله نامنفی لازم است.
+	No such grip	چنین دستگیره‌ای وجود ندارد
+	Requires a template file name.	نام فایل الگو لازم است.
+	A hatch needs at least one boundary: erase it instead.	هاشور دست‌کم به یک مرز نیاز دارد: به جای آن، هاشور را پاک کنید.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	واگرد خاموش است (UNDO Control None)؛ UNDO Control All آن را روشن می‌کند.
+	Enter ON or OFF.	ON یا OFF را وارد کنید.
+	Not a linear dimension.	اندازه خطی نیست.
+	Valid hatch boundary not found.	مرز معتبری برای هاشور یافت نشد.
+	No closed boundary objects selected.	هیچ شیء مرزی بسته‌ای انتخاب نشده است.
+	Requires a name.	یک نام لازم است.
+	That option doesn't apply to this grip.	آن گزینه برای این دستگیره کاربرد ندارد.
+	That would make a degenerate object.	این کار یک شیء تباهیده می‌سازد.
+	No tangent or perpendicular from the last point.	از آخرین نقطه، مماس یا عمودی وجود ندارد.
+	Requires numeric distance or second point.	فاصله عددی یا نقطه دوم لازم است.
+	Edge endpoints must differ.	نقاط انتهای لبه باید متفاوت باشند.
+	Requires numeric distance or point.	فاصله عددی یا نقطه لازم است.
+	Requires a positive height.	یک ارتفاع مثبت لازم است.
+	No objects found.	هیچ شیئی یافت نشد.
+	Requires a non-zero number.	یک عدد غیرصفر لازم است.
+	Circle must intersect cutting edges at two or more points.	دایره باید لبه‌های برش را در دو نقطه یا بیشتر قطع کند.
+	Arc cannot be full 360 degrees.	کمان نمی‌تواند کامل 360 درجه باشد.
+	Cannot break that object.	شکستن آن شیء ممکن نیست.
+	An object is on a locked layer.	یک شیء روی لایه قفل‌شده است.
+	Objects are not connected.	اشیا به هم متصل نیستند.
+	The two points must differ.	دو نقطه باید متفاوت باشند.
+	Mirror line points must differ.	نقاط خط قرینه باید متفاوت باشند.
+	No drawing is open.	هیچ نقشه‌ای باز نیست.
+	Command: {}	فرمان: {}
+	Unknown command "{}". Press F1 for help.	فرمان ناشناخته «{}». برای راهنما F1 را فشار دهید.
+	{} found	{} مورد یافت شد
+	{} found, {} total	{} مورد یافت شد، {} در مجموع
+	Distance = {}	فاصله = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	فاصله = {},  زاویه در صفحه XY = {},  زاویه از صفحه XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	دلتای X = {},  دلتای Y = {},   دلتای Z = {}
+	Area = {}, Perimeter = {}	مساحت = {}، محیط = {}
+	Total area = {}	مساحت کل = {}
+	Resuming {} command.	ادامه فرمان {}.
+	Invalid input: {}	ورودی نامعتبر: {}
+	{} were on a locked layer.	{} مورد روی لایه قفل‌شده بودند.
+	{} dimension(s) changed.	{} اندازه تغییر کرد.
+	Group {} ungrouped.	گروه {} از حالت گروه خارج شد.
+	{} object(s) flattened.	{} شیء مسطح شد.
+	Group {} renamed to {}.	نام گروه {} به {} تغییر کرد.
+	{} object(s) added to group {}.	{0} شیء به گروه {1} اضافه شد.
+	{} object(s) removed from group {}.	{0} شیء از گروه {1} حذف شد.
+	{} lines were chamfered	{} خط پخ زده شد
+	{} lines were filleted	{} خط گرد شد
+	{} objects joined into 1 {}	{} شیء در 1 {} ادغام شد
+	Current dimension style:  {}	سبک اندازه‌گذاری جاری:  {}
+	Wrote {}	{} نوشته شد
+	{} is already open.	{} از قبل باز است.
+	{} dimension(s) created.	{} اندازه ایجاد شد.
+	BOUNDARY created {} polyline(s)	BOUNDARY {} چندخطی ایجاد کرد
+	Current line-width is {}	عرض خط جاری {} است
+	Unknown variable {}. Type SETVAR ? to list variables.	متغیر ناشناخته {}. برای فهرست متغیرها SETVAR ? را تایپ کنید.
+	{} = {} (read only)	{} = {} (فقط‌خواندنی)
+	Dimension text = {}	متن اندازه = {}
+	{} segments added to polyline	{} قطعه به چندخطی اضافه شد

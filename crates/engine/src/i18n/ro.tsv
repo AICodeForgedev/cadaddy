@@ -1,0 +1,196 @@
+# CADaddy engine messages in Romanian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Introduceți un nume de grup
+	Pick internal point	Alegeți un punct interior
+	Specify the pattern origin	Specificați originea modelului
+	Specify the incrementing elevation between rows	Specificați incrementul de cotă de nivel între rânduri
+	Specify the angle to fill (+=ccw, -=cw)	Specificați unghiul de umplere (+=trigonometric, -=orar)
+	Select hatch object	Selectați obiectul hașură
+	Red, Green, Blue	Roșu, verde, albastru
+	Enter the number of rows	Introduceți numărul de rânduri
+	Enter the number of levels	Introduceți numărul de niveluri
+	Enter new layer name	Introduceți numele noului strat
+	Specify width	Specificați lățimea
+	Specify the angle between items	Specificați unghiul dintre elemente
+	Specify text height	Specificați înălțimea textului
+	Specify start tangent	Specificați tangenta de start
+	Specify end tangent	Specificați tangenta finală
+	Specify reference length	Specificați lungimea de referință
+	Specify other corner	Specificați celălalt colț
+	Specify next point or [Undo]	Specificați punctul următor sau [Undo]
+	Specify new location	Specificați noua poziție
+	Specify new length	Specificați noua lungime
+	Specify length of line	Specificați lungimea liniei
+	Specify displacement	Specificați deplasarea
+	Specify angle for dimension text	Specificați unghiul textului cotei
+	Select viewports	Selectați ferestrele
+	Select object to break dimension	Selectați obiectul care întrerupe cota
+	Select group	Selectați grupul
+	Select grip to edit array	Selectați grip-ul pentru editarea multiplicării
+	Select a table	Selectați un tabel
+	Select a boundary to remove	Selectați un contur de eliminat
+	Rotate arrayed items?	Rotiți elementele multiplicate?
+	Erase polyline?	Ștergeți polilinia?
+	Enter viewport arrangement	Introduceți aranjarea ferestrelor
+	Enter transparency value (0-90)	Introduceți valoarea transparenței (0-90)
+	Enter the number of operations to undo	Introduceți numărul de operații de anulat
+	Enter the number of columns	Introduceți numărul de coloane
+	Enter number of items in array	Introduceți numărul de elemente din multiplicare
+	Enter new layer state name	Introduceți numele noii stări de straturi
+	Enter new color	Introduceți culoarea nouă
+	Enter name of new layout	Introduceți numele noului layout
+	Enter layer name	Introduceți numele stratului
+	Enter file name	Introduceți numele fișierului
+	Enter color name or number (1-255)	Introduceți numele sau numărul culorii (1-255)
+	Enter a configuration option	Introduceți o opțiune de configurare
+	Base point	Punct de bază
+	Word-wrap the combined Mtext?	Încadrați automat rândurile în Mtext-ul combinat?
+	Where should the data go?	Unde trebuie să ajungă datele?
+	Verify each name to be purged?	Verificați fiecare nume de curățat?
+	Use landing	Folosire palier
+	Type of boundary object	Tipul obiectului de contur
+	Specify width factor	Specificați factorul de lățime
+	Specify tolerance	Specificați toleranța
+	Specify the tangent direction for the start point of arc	Specificați direcția tangentei în punctul de start al arcului
+	Specify the reference angle	Specificați unghiul de referință
+	Specify the new angle	Specificați unghiul nou
+	Specify text width	Specificați lățimea textului
+	Specify temporary OTRACK point	Specificați punctul OTRACK temporar
+	Invalid option keyword.	Cuvânt cheie de opțiune nevalid.
+	*Invalid selection*	*Selecție nevalidă*
+	Requires a valid angle.	Necesită un unghi valid.
+	Nothing to undo.	Nimic de anulat.
+	Invalid point.	Punct nevalid.
+	No viewport found there.	Nu s-a găsit acolo nicio fereastră.
+	*Cancel*	*Anulare*
+	Requires a positive number.	Necesită un număr pozitiv.
+	No hatch selected.	Nicio hașură selectată.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Comanda nu este permisă în fila Model ** (comutați mai întâi la un layout)
+	Select a multileader.	Selectați o multi-indicație.
+	No line or arc to continue.	Nicio linie sau arc de continuat.
+	Revision cloud finished.	Norul de revizie s-a terminat.
+	Object selected is not a circle or arc.	Obiectul selectat nu este un cerc sau un arc.
+	Select a linear or aligned dimension.	Selectați o cotă liniară sau aliniată.
+	Object selected is not a dimension.	Obiectul selectat nu este o cotă.
+	No dimensions selected.	Nicio cotă selectată.
+	Requires a number.	Necesită un număr.
+	0 found	0 găsite
+	The feature control frame is empty.	Cadrul de control al caracteristicii este gol.
+	1 was on a locked layer.	1 era pe un strat blocat.
+	Row elevations need an associative array; the copies stay at the same elevation.	Cotele de nivel ale rândurilor necesită o multiplicare asociativă; copiile rămân la aceeași cotă de nivel.
+	Point or option keyword required.	Este necesar un punct sau un cuvânt cheie de opțiune.
+	Enter Yes or No.	Introduceți Yes sau No.
+	Viewport created, zoomed to the model extents.	Fereastră creată, cu zoom la extinderile modelului.
+	No object found.	Nu s-a găsit niciun obiect.
+	The object is not a table.	Obiectul nu este un tabel.
+	No table there.	Nu există niciun tabel acolo.
+	A transparent command is already in progress.	O comandă transparentă este deja în curs.
+	Invalid class name.	Nume de clasă nevalid.
+	Invalid group name.	Nume de grup nevalid.
+	Too many point modifiers.	Prea mulți modificatori de punct.
+	No leader to remove.	Nicio linie de indicație de eliminat.
+	Requires a non-negative number.	Necesită un număr nenegativ.
+	Clipboard is empty.	Clipboard-ul este gol.
+	1 object was on a locked layer.	1 obiect era pe un strat blocat.
+	Circle does not exist.	Cercul nu există.
+	Enter Length or Area.	Introduceți Length sau Area.
+	Enter a percentage from 0 to 1000.	Introduceți un procent de la 0 la 1000.
+	Enter Table, File or None.	Introduceți Table, File sau None.
+	Cannot measure that object.	Obiectul respectiv nu poate fi măsurat.
+	Third pair ignored (2D align).	A treia pereche a fost ignorată (aliniere 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	Mod inserare: Copiere (obiectele imbricate sunt copiate ca obiecte independente).
+	Everything has been undone	Totul a fost anulat
+	Everything has been undone.	Totul a fost anulat.
+	Requires a non-negative number or Auto.	Necesită un număr nenegativ sau Auto.
+	Select a dimension.	Selectați o cotă.
+	Object cannot be dimensioned this way.	Obiectul nu poate fi cotat în acest mod.
+	Select an arc, circle or line.	Selectați un arc, un cerc sau o linie.
+	The two points must be different.	Cele două puncte trebuie să fie diferite.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Nicio cotă liniară de continuat. Creați una mai întâi cu DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	O multi-indicație are nevoie de o linie de indicație sau de conținut; nu s-a desenat nimic.
+	Requires the name of a block defined in the drawing.	Necesită numele unui bloc definit în desen.
+	Invalid option.	Opțiune nevalidă.
+	The boundary encloses none of the image.	Conturul nu include nimic din imagine.
+	The object is not an image.	Obiectul nu este o imagine.
+	The image has no clipping boundary.	Imaginea nu are un contur de decupare.
+	No images selected.	Nicio imagine selectată.
+	Requires an integer between 0 and 100.	Necesită un întreg între 0 și 100.
+	The selected object has no area.	Obiectul selectat nu are arie.
+	No such object	Obiectul nu există
+	Requires a point.	Necesită un punct.
+	Requires a distance.	Necesită o distanță.
+	The object is on a locked layer.	Obiectul este pe un strat blocat.
+	Value must be positive and nonzero.	Valoarea trebuie să fie pozitivă și nenulă.
+	Requires an angle.	Necesită un unghi.
+	Requires a point or option keyword.	Necesită un punct sau un cuvânt cheie de opțiune.
+	Object does not intersect a cutting edge.	Obiectul nu intersectează o muchie de tăiere.
+	Object does not intersect an edge.	Obiectul nu intersectează o muchie.
+	Lines are parallel.	Liniile sunt paralele.
+	The Block Editor is not open.	Editorul de blocuri nu este deschis.
+	Requires a positive integer.	Necesită un întreg pozitiv.
+	Answer Yes or No.	Răspundeți Yes sau No.
+	Requires a valid point.	Necesită un punct valid.
+	No reference objects	Niciun obiect de referință
+	Requires an angle or point.	Necesită un unghi sau un punct.
+	Requires a positive distance.	Necesită o distanță pozitivă.
+	Requires a non-negative distance.	Necesită o distanță nenegativă.
+	No such grip	Grip-ul nu există
+	Requires a template file name.	Necesită numele unui fișier șablon.
+	A hatch needs at least one boundary: erase it instead.	O hașură are nevoie de cel puțin un contur: ștergeți-o în schimb.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Anularea este dezactivată (UNDO Control None); UNDO Control All o activează.
+	Enter ON or OFF.	Introduceți ON sau OFF.
+	Not a linear dimension.	Nu este o cotă liniară.
+	Valid hatch boundary not found.	Nu s-a găsit un contur de hașură valid.
+	No closed boundary objects selected.	Niciun obiect de contur închis selectat.
+	Requires a name.	Necesită un nume.
+	That option doesn't apply to this grip.	Această opțiune nu se aplică acestui grip.
+	That would make a degenerate object.	Aceasta ar crea un obiect degenerat.
+	No tangent or perpendicular from the last point.	Nicio tangentă sau perpendiculară din ultimul punct.
+	Requires numeric distance or second point.	Necesită o distanță numerică sau al doilea punct.
+	Edge endpoints must differ.	Capetele muchiei trebuie să difere.
+	Requires numeric distance or point.	Necesită o distanță numerică sau un punct.
+	Requires a positive height.	Necesită o înălțime pozitivă.
+	No objects found.	Nu s-au găsit obiecte.
+	Requires a non-zero number.	Necesită un număr nenul.
+	Circle must intersect cutting edges at two or more points.	Cercul trebuie să intersecteze muchiile de tăiere în două sau mai multe puncte.
+	Arc cannot be full 360 degrees.	Arcul nu poate avea 360 de grade complete.
+	Cannot break that object.	Obiectul respectiv nu poate fi întrerupt.
+	An object is on a locked layer.	Un obiect este pe un strat blocat.
+	Objects are not connected.	Obiectele nu sunt conectate.
+	The two points must differ.	Cele două puncte trebuie să difere.
+	Mirror line points must differ.	Punctele liniei de oglindire trebuie să difere.
+	No drawing is open.	Niciun desen nu este deschis.
+	Command: {}	Comandă: {}
+	Unknown command "{}". Press F1 for help.	Comandă necunoscută „{}”. Apăsați F1 pentru ajutor.
+	{} found	{} găsite
+	{} found, {} total	{} găsite, {} în total
+	Distance = {}	Distanță = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Distanță = {},  Unghi în planul XY = {},  Unghi față de planul XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Arie = {}, Perimetru = {}
+	Total area = {}	Arie totală = {}
+	Resuming {} command.	Se reia comanda {}.
+	Invalid input: {}	Intrare nevalidă: {}
+	{} were on a locked layer.	{} erau pe un strat blocat.
+	{} dimension(s) changed.	{} cotă(e) modificată(e).
+	Group {} ungrouped.	Grupul {} a fost degrupat.
+	{} object(s) flattened.	{} obiect(e) aplatizat(e).
+	Group {} renamed to {}.	Grupul {} a fost redenumit în {}.
+	{} object(s) added to group {}.	{} obiect(e) adăugat(e) la grupul {}.
+	{} object(s) removed from group {}.	{} obiect(e) eliminat(e) din grupul {}.
+	{} lines were chamfered	{} linii au fost teșite
+	{} lines were filleted	{} linii au fost racordate
+	{} objects joined into 1 {}	{} obiecte unite în 1 {}
+	Current dimension style:  {}	Stil de cotare curent:  {}
+	Wrote {}	S-a scris {}
+	{} is already open.	{} este deja deschis.
+	{} dimension(s) created.	{} cotă(e) creată(e).
+	BOUNDARY created {} polyline(s)	BOUNDARY a creat {} polilinie(i)
+	Current line-width is {}	Lățimea curentă a liniei este {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Variabilă necunoscută {}. Tastați SETVAR ? pentru a lista variabilele.
+	{} = {} (read only)	{} = {} (doar citire)
+	Dimension text = {}	Text cotă = {}
+	{} segments added to polyline	{} segmente adăugate la polilinie

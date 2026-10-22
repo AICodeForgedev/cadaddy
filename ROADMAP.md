@@ -81,25 +81,25 @@ Hours are Opus 5.5 agent wall-clock hours, calibrated on this repo's own build: 
 
 ## Languages
 
-AutoCAD 2027 for Mac ships 8 interface languages; CADaddy ships English plus partial
-Ukrainian and German. Detail: [localization-parity.md](docs/localization-parity.md).
+AutoCAD 2027 for Mac ships 8 interface languages; CADaddy ships 30 (English and 29
+translations; the newest twelve await native review). Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Status | UI translated |
 |---|---|---:|
 | English | full | 100% |
 | Simplified Chinese | none | 0% |
 | Spanish | none | 0% |
-| Hindi | none | 0% |
+| Hindi | complete catalog, native review pending | ≈ 100% of the catalog (2,827 rows) |
 | Arabic | none | 0% |
 | French | none | 0% |
 | Portuguese | none | 0% |
-| Indonesian | none | 0% |
+| Indonesian | complete catalog, native review pending | ≈ 100% of the catalog (2,827 rows) |
 | Japanese | none | 0% |
 | German | partial | ≈ 100% of the catalog (989 rows) |
 | Korean | none | 0% |
-| Vietnamese | none | 0% |
+| Vietnamese | complete catalog, native review pending | ≈ 100% of the catalog (2,827 rows) |
 
-Other languages shipped: Ukrainian and German (989 catalog rows each; Ukrainian landed with #36), Brazilian Portuguese, Spanish, Czech, Russian, French, Simplified Chinese and Italian (1,227 rows, 2026-10-12); engine messages stay English.
+Other languages shipped: Ukrainian and German (989 catalog rows each; Ukrainian landed with #36), Brazilian Portuguese, Spanish, Czech, Russian, French, Simplified Chinese and Italian (1,227 rows, 2026-10-12); Dutch, Danish, Finnish, Norwegian Bokmål, Greek, Romanian, Thai, Hebrew and Persian (2026-10-22, with Hindi, Indonesian and Vietnamese: the whole catalog and the engine messages each).
 
 ## Upcoming
 

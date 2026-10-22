@@ -1,0 +1,2833 @@
+# CADaddy Hebrew interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Hebrew translation.
+# Empty context = ordinary label; @plural = one|two|other with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	התאמה...
+	Apply	החל
+	Attach DWG...	צירוף DWG...
+	Bind	כריכה
+	Detach	ניתוק
+	Image	תמונה
+	Loaded	טעון
+	Make it a block of this drawing, keeping its layer names	הפוך לבלוק של שרטוט זה, תוך שמירת שמות השכבות
+	Make it a block of this drawing; its layers become NAME$0$LAYER	הפוך לבלוק של שרטוט זה; השכבות שלו יהפכו ל-NAME$0$LAYER
+	No external references are attached.	לא צורפו הפניות חיצוניות.
+	Not Found	לא נמצא
+	Not loaded	לא טעון
+	Open	פתח
+	Overlay	שכבת-על
+	Reference Manager	מנהל הפניות
+	Reference Name	שם הפניה
+	References: {n}	הפניות: {n}
+	Reload	טען מחדש
+	Reload All	טען הכול מחדש
+	Saved Path	נתיב שמור
+	Unload	פרוק
+	Unloaded	פורק
+	Unreferenced	ללא הפניה
+	Unresolved	לא פתור
+	  Cancel  	  ביטול  
+	  OK  	  אישור  
+	 or [	 או [
+	% of all commits	% מכלל השמירות
+	* Wildcard Match	* התאמה עם תווים כלליים
+	*VARIES*	*משתנה*
+	+  |  Top  |  2D Wireframe	+  |  מלמעלה  |  2D מסגרת תיל
+	+Bin	+בינארי
+	+LOC	+שורות
+	1 Viewport	אשנב 1
+	2 Points	2 נקודות
+	2 Viewports	2 אשנבים
+	2D Solid	מוצק 2D
+	3 Points	3 נקודות
+	3 Viewports	3 אשנבים
+	3D Face	פאה 3D
+	3D Operations	פעולות 3D
+	3D Polyline	קו מרובה 3D
+	4 Viewports	4 אשנבים
+	< Less than	< קטן מ
+	<> Not Equal	<> שונה מ
+	= Equals	= שווה
+	> Greater than	> גדול מ
+	A variable name starts with a letter and has only letters, digits and _	שם משתנה מתחיל באות ומכיל רק אותיות, ספרות ו-_
+	About	אודות
+	About CADaddy	אודות CADaddy
+	Absolute	מוחלט
+	Add Leader	הוסף קו הובלה
+	Additional angles	זוויות נוספות
+	Align	יישור
+	Align Text	יישור טקסט
+	Aligned	מיושר
+	All	הכול
+	All Annotation Objects	כל אובייקטי ההערות
+	All Used Layers	כל השכבות שבשימוש
+	All files	כל הקבצים
+	Angle	זווית
+	Angular	זוויתי
+	Annotation Visibility	נראות הערות
+	Annotation scale	קנה מידה להערות
+	Apparent Intersection	חיתוך נראה
+	Append to current selection set	הוסף לקבוצת הבחירה הנוכחית
+	Apply to:	החל על:
+	Apply true color	החל צבע אמיתי
+	Arc	קשת
+	Arc Length	אורך קשת
+	Area	שטח
+	Arrange Panel	לוח סידור
+	Array	מערך
+	Attach	צרף
+	Attribute	תכונה
+	Attribute Definition	הגדרת תכונה
+	Attribute Display	תצוגת תכונות
+	Audit	ביקורת
+	Auto (system language)	אוטומטי (שפת המערכת)
+	Auto Constrain	אילוץ אוטומטי
+	AutoConstrain	אילוץ אוטומטי
+	Axis, End	ציר, קצה
+	Base	בסיס
+	Baseline	קו בסיס
+	Batch Publish	פרסום אצווה
+	Binary assets added	נכסים בינאריים שנוספו
+	Binary assets removed	נכסים בינאריים שהוסרו
+	Bind...	כריכה...
+	Blend	מיזוג
+	Block	בלוק
+	Block Attribute Manager...	מנהל תכונות בלוק...
+	Block Editor	עורך בלוקים
+	Block Reference	הפניית בלוק
+	Block...	בלוק...
+	Blocks	בלוקים
+	Blue	כחול
+	Bold	מודגש
+	Boolean	בוליאני
+	Boundary	גבול
+	Boundary...	גבול...
+	Box	תיבה
+	Break	שבירה
+	Break At Point	שבירה בנקודה
+	Bring Above Objects	הבא מעל אובייקטים
+	Bring Annotations to Front	הבא הערות לחזית
+	Bring to Front	הבא לחזית
+	Bulleted list	רשימת תבליטים
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	עזרה של CADaddy
+	Cancel	ביטול
+	Cartesian (x, y)	קרטזי (x, y)
+	Center	מרכז
+	Center Line	קו מרכז
+	Center Mark	סימן מרכז
+	Center X	מרכז X
+	Center Y	מרכז Y
+	Center Z	מרכז Z
+	Center, Diameter	מרכז, קוטר
+	Center, Radius	מרכז, רדיוס
+	Center, Start, Angle	מרכז, התחלה, זווית
+	Center, Start, End	מרכז, התחלה, סוף
+	Center, Start, Length	מרכז, התחלה, אורך
+	Chamfer	שיפוע
+	Change Space	שנה מרחב
+	Change to Current Layer	העבר לשכבה הנוכחית
+	Changed: {n}	שונו: {n}
+	Circle	עיגול
+	Circumference	היקף
+	Clear History	נקה היסטוריה
+	Clear	נקה
+	Clip	חיתוך
+	Clip Viewport	חיתוך אשנב
+	Clipboard	לוח
+	Close	סגור
+	Close All	סגור הכול
+	Close All Other Drawings	סגור את כל השרטוטים האחרים
+	Closed	סגור
+	Close Comparison	סגור השוואה
+	Coincident	חופף
+	Collapse Palettes	כווץ לוחות
+	Collapse Tool Sets	כווץ ערכות כלים
+	Collinear	קו-ישר
+	Color	צבע
+	Color 8	צבע 8
+	Color 9	צבע 9
+	Color Index	אינדקס צבע
+	Color...	צבע...
+	Command Aliases	כינויי פקודות
+	Command History	היסטוריית פקודות
+	Clear Command History	נקה היסטוריית פקודות
+	Command Line	שורת פקודה
+	Command Line History Lines	שורות היסטוריה בשורת הפקודה
+	Command Reference	מדריך פקודות
+	Commits	שמירות
+	Company	חברה
+	Compare Drawings...	השווה שרטוטים...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	תכנון ושרטוט בעזרת מחשב: יישום CAD בקוד פתוח, שנבנה מאפס ונכתב ב-Rust טהור.
+	Concentric	קונצנטרי
+	Cone	חרוט
+	Constraint Bars	סרגלי אילוצים
+	Constraint Settings	הגדרות אילוצים
+	Construction Line	קו בנייה
+	Contents	תוכן
+	Continue	המשך
+	Contributors	תורמים
+	Control Vertices	קודקודי בקרה
+	Convert	המר
+	Copy	העתק
+	Copy Full File Path	העתק נתיב קובץ מלא
+	Copy History	העתק היסטוריה
+	Copy Layout	העתק פריסה
+	Copy Nested Objects	העתק אובייקטים מקוננים
+	Copy Selection	העתק בחירה
+	Copy with Base Point	העתק עם נקודת בסיס
+	Count	ספירה
+	Count List	רשימת ספירה
+	Count Table	טבלת ספירה
+	Create Block	צור בלוק
+	Creates a user parameter	יוצר פרמטר משתמש
+	Ctrl+Enter to finish	Ctrl+Enter לסיום
+	Current layer	שכבה נוכחית
+	Current selection	בחירה נוכחית
+	Current: {color}	נוכחי: {color}
+	Cut	גזור
+	Cyan	ציאן
+	Cylinder	גליל
+	DWG	DWG
+	DWG Reference...	הפניית DWG...
+	DXF	DXF
+	Dark	כהה
+	Data Extraction...	חילוץ נתונים...
+	Default	ברירת מחדל
+	Data Link...	קישור נתונים...
+	Default Save Format	תבנית שמירה ברירת מחדל
+	Default Save Version	גרסת שמירה ברירת מחדל
+	Define Attributes	הגדר תכונות
+	Define Attributes...	הגדר תכונות...
+	Defined width	רוחב מוגדר
+	Degree	מעלה
+	Degrees of Freedom	דרגות חופש
+	Degrees of freedom: {n}	דרגות חופש: {n}
+	Delete	מחק
+	Delete Column	מחק עמודה
+	Delete Constraints	מחק אילוצים
+	Delete Dimension Style	מחק סגנון מידות
+	Delete Duplicate Objects	מחק אובייקטים כפולים
+	Delete Layer	מחק שכבה
+	Delete Layer State	מחק מצב שכבות
+	Delete Layout	מחק פריסה
+	Delete Row	מחק שורה
+	Delete Text Style	מחק סגנון טקסט
+	Delta X	הפרש X
+	Delta Y	הפרש Y
+	Description	תיאור
+	Deselect All	בטל בחירת הכול
+	Diameter	קוטר
+	Dim style	סגנון מידות
+	Dimension Break	שבירת מידה
+	Dimension Edit	עריכת מידה
+	Dimension	מידה
+	Dimension Objects Only	אובייקטי מידות בלבד
+	Dimension Space	ריווח מידות
+	Dimension Style Override	עקיפת סגנון מידות
+	Dimension Style...	סגנון מידות...
+	Dimension Text Edit	עריכת טקסט מידה
+	Dimension style	סגנון מידות
+	Dimensional Constraint	אילוץ ממדי
+	Dimensional Constraint Parameters	פרמטרים של אילוצים ממדיים
+	Dimensional Constraints	אילוצים ממדיים
+	Disassociate Dimensions	נתק שיוך מידות
+	Display name	שם תצוגה
+	Distance	מרחק
+	Divide	חלוקה
+	Do not plot (click: plot)	לא להדפסה (לחץ: הדפס)
+	Donut	טבעת
+	Double-click to edit the description	לחץ פעמיים כדי לערוך את התיאור
+	Down	למטה
+	Drafting	שרטוט
+	Drafting Settings	הגדרות שרטוט
+	Drafting Settings...	הגדרות שרטוט...
+	Draw	שרטט
+	Draw Order	סדר תצוגה
+	Drawing (DWG)	שרטוט (DWG)
+	Drawing (DXF)	שרטוט (DXF)
+	Drawing Limits	גבולות שרטוט
+	Drawing Template (DWT)	תבנית שרטוט (DWT)
+	Drawing Utilities	כלי שרטוט
+	Drawings (DWG, DXF)	שרטוטים (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	שרטוטי SVG (SVG, SVGZ)
+	Dynamic	דינמי
+	Dynamic Dimensions	מידות דינמיות
+	Dynamic Input	קלט דינמי
+	Dynamic Input (F12)	קלט דינמי (F12)
+	E	מז
+	Edit	עריכה
+	Edit Attributes...	ערוך תכונות...
+	Edit Text...	ערוך טקסט...
+	Edit Table Cell	ערוך תא טבלה
+	Elevation	גובה
+	Ellipse	אליפסה
+	Elliptical Arc	קשת אליפטית
+	Enable Dynamic Input (F12)	הפעל קלט דינמי (F12)
+	End Object Isolation	סיים בידוד אובייקטים
+	End Width	רוחב סיום
+	End X	סוף X
+	End Y	סוף Y
+	End angle	זווית סיום
+	Endpoint	נקודת קצה
+	Enter	Enter
+	Enter Top, Zero or Bottom.	הזן Top, Zero או Bottom.
+	Enter a fit data option	הזן אפשרות נתוני התאמה
+	Enter a pattern name	הזן שם דוגמה
+	Enter a vertex editing option	הזן אפשרות עריכת קודקוד
+	Enter an option	הזן אפשרות
+	Enter angle of xline	הזן זווית של קו בנייה
+	Enter angle of xline (0) or	הזן זווית של קו בנייה (0) או
+	Enter area of rectangle in current units	הזן שטח המלבן ביחידות הנוכחיות
+	Enter attribute prompt	הזן הנחיית תכונה
+	Enter attribute tag name	הזן שם תג התכונה
+	Enter attribute value	הזן ערך תכונה
+	Enter block name	הזן שם בלוק
+	Enter constraint type	הזן סוג אילוץ
+	Enter continuity	הזן רציפות
+	Enter default attribute value	הזן ערך ברירת מחדל לתכונה
+	Enter degree of spline	הזן דרגת ה-spline
+	Enter delta angle	הזן זווית הפרש
+	Enter delta length or	הזן אורך הפרש או
+	Enter dimension text	הזן טקסט מידה
+	Enter dimension text (<> = measurement)	הזן טקסט מידה (<> = מדידה)
+	Enter dimension value or [name=expression]	הזן ערך מידה או [name=expression]
+	Enter dimension variable name to override	הזן שם משתנה מידה לעקיפה
+	Enter justification type	הזן סוג יישור
+	Enter leader text	הזן טקסט קו הובלה
+	Enter mline scale	הזן קנה מידה לקו מרובה מקביל
+	Enter mode	הזן מצב
+	Enter name of block to insert	הזן שם הבלוק להכנסה
+	Enter new text	הזן טקסט חדש
+	Enter next point	הזן נקודה הבאה
+	Enter number of columns	הזן מספר עמודות
+	Enter number of data rows	הזן מספר שורות נתונים
+	Enter number of items	הזן מספר פריטים
+	Enter number of items along path	הזן מספר פריטים לאורך המסלול
+	Enter number of sides	הזן מספר צלעות
+	Enter number of turns	הזן מספר סיבובים
+	Enter percentage length	הזן אחוז אורך
+	Enter rectangle length	הזן אורך המלבן
+	Enter rectangle width	הזן רוחב המלבן
+	Enter scale factor	הזן מקדם קנה מידה
+	Enter text	הזן טקסט
+	Enter text (use \P for new paragraphs)	הזן טקסט (השתמש ב-\P לפסקאות חדשות)
+	Enter the number of segments	הזן את מספר המקטעים
+	Enter twist direction of helix	הזן כיוון פיתול של הסליל
+	Entire drawing	השרטוט כולו
+	Equal	שווה
+	Erase	מחיקה
+	Evaluate	הערך
+	Evaluate LISP	הערך LISP
+	Exclude from new selection set	החרג מקבוצת בחירה חדשה
+	Explode	פירוק
+	Export	ייצוא
+	Export Table	ייצוא טבלה
+	Export to PDF...	ייצוא ל-PDF...
+	Expression	ביטוי
+	Extend	הארכה
+	Extension	המשך
+	Extents	תחום
+	External Reference	הפניה חיצונית
+	External References	הפניות חיצוניות
+	Extrude	שליפה
+	File	קובץ
+	File Tab	לשונית קובץ
+	Fillet	עיגול פינה
+	Filter	מסנן
+	Filters	מסננים
+	Find and Replace	חיפוש והחלפה
+	Find...	חיפוש...
+	First	ראשון
+	First commit	שמירה ראשונה
+	Fit Points	נקודות התאמה
+	Fix	קבע
+	Flatten Objects	השטח אובייקטים
+	Format	תבנית
+	Freehand	ציור חופשי
+	Freeze	הקפא
+	Freeze Layer	הקפא שכבה
+	Freeze in new viewports	הקפא באשנבים חדשים
+	Freeze/Thaw	הקפא/הפשר
+	Freeze/Thaw in all viewports	הקפא/הפשר בכל האשנבים
+	Freeze/Thaw in the current viewport	הקפא/הפשר באשנב הנוכחי
+	From	מ-
+	From Template...	מתבנית...
+	General	כללי
+	Geometric Center	מרכז גאומטרי
+	Geometric Constraint	אילוץ גאומטרי
+	Geometric Constraints	אילוצים גאומטריים
+	Geometry	גאומטריה
+	Get from the Drawing	קבל מהשרטוט
+	Get Variable	קבל משתנה
+	Get View	קבל תצוגה
+	Global	גלובלי
+	Global width	רוחב כללי
+	Grab bag	אוסף
+	Gradient	מעבר צבע
+	Gradient...	מעבר צבע...
+	Green	ירוק
+	Grid (F7)	רשת (F7)
+	Grid Display	תצוגת רשת
+	Grid On (F7)	רשת מופעלת (F7)
+	Grid snap	הצמדה לרשת
+	Grid spacing	מרווח רשת
+	Grip Edit	עריכה בידיות
+	Grip Mirror	שיקוף בידיות
+	Grip Option	אפשרות ידית
+	Grip Rotate	סיבוב בידיות
+	Grip Scale	קנה מידה בידיות
+	Grip Stretch	מתיחה בידיות
+	Group	קבוצה
+	Group Edit	עריכת קבוצה
+	Group Options	אפשרויות קבוצה
+	Group Selection	בחירת קבוצה
+	Hatch	הצללה
+	Hatch Edit	עריכת הצללה
+	Hatch Patterns	דוגמאות הצללה
+	Hatch...	הצללה...
+	Height	גובה
+	Height: {height}	גובה: {height}
+	Helix	סליל
+	Help	עזרה
+	Hide All	הסתר הכול
+	Hide All Constraint Bars	הסתר את כל סרגלי האילוצים
+	Hide All Dynamic Dimensions	הסתר את כל המידות הדינמיות
+	Hide Layer List	הסתר רשימת שכבות
+	Hide Objects	הסתר אובייקטים
+	Hide Palettes	הסתר לוחות
+	History	היסטוריה
+	Home	בית
+	Horizontal	אופקי
+	HorizontalDistance	מרחק אופקי
+	How to apply:	אופן ההחלה:
+	ID Point	נקודת זיהוי
+	Import	ייבוא
+	Align Multileaders	יישור קווי הובלה מרובים
+	Collect	איסוף
+	Collect Multileaders	איסוף קווי הובלה מרובים
+	Edit Multileader	עריכת קו הובלה מרובה
+	In	התקרב
+	In-window Menu Bar	שורת תפריטים בחלון
+	Include in new selection set	כלול בקבוצת בחירה חדשה
+	Increment angle	זווית תוספת
+	Index Color	צבע אינדקס
+	Index color: {index}	צבע אינדקס: {index}
+	Infer Constraints	הסק אילוצים
+	Inquiry	בירור
+	Insert	הוספה
+	Insert Block	הוסף בלוק
+	Insert Column	הוסף עמודה
+	Insert Row	הוסף שורה
+	Insert tab	לשונית הוספה
+	Insert this block	הוסף בלוק זה
+	Insert Table Formula	הוסף נוסחת טבלה
+	Insertion	הכנסה
+	Insertion X	הכנסה X
+	Insertion Y	הכנסה Y
+	Insertion Z	הכנסה Z
+	Inspect Constraints	בדוק אילוצים
+	Inspect Drawing	בדוק שרטוט
+	Inspection	בדיקה
+	Interface Language	שפת ממשק
+	Interface Theme	ערכת נושא לממשק
+	Intersect	חיתוך
+	Intersection	חיתוך
+	Isolate	בודד
+	Isolate Layer	בודד שכבה
+	Isolate Objects	בודד אובייקטים
+	Isometric Drafting	שרטוט איזומטרי
+	Jogged	שבור
+	Jogged Linear	קווי שבור
+	Join	חבר
+	Join the ArtCraft Discord…	הצטרפו ל-Discord של ArtCraft…
+	Join us on Discord	הצטרפו אלינו ב-Discord
+	Isometric Plane	מישור איזומטרי
+	Isometric snap	הצמדה איזומטרית
+	Language	שפה
+	Last	אחרון
+	Last commit	שמירה אחרונה
+	Layer	שכבה
+	Layer Delete	מחיקת שכבה
+	Layer Match	התאמת שכבה
+	Layer Merge	מיזוג שכבות
+	Layer Off	כיבוי שכבה
+	Layer Properties	מאפייני שכבה
+	Layer Properties Manager	מנהל מאפייני שכבות
+	Layer Properties Manager — current viewport	מנהל מאפייני שכבות — אשנב נוכחי
+	Layer State	מצב שכבות
+	Layer States Manager...	מנהל מצבי שכבות...
+	Layer Tools	כלי שכבות
+	Layer contains objects (double-click to make current)	השכבה מכילה אובייקטים (לחץ פעמיים כדי להפוך לנוכחית)
+	Layer is empty (double-click to make current)	השכבה ריקה (לחץ פעמיים כדי להפוך לנוכחית)
+	Layers	שכבות
+	Layers Palette	לוח שכבות
+	Hide Palette	הסתר לוח
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	שכבות מוצגות: {shown} מתוך {total}.   שכבה נוכחית: {layer}
+	Layout	פריסה
+	Layout list	רשימת פריסות
+	Leader	קו הובלה
+	Leaders Only	קווי הובלה בלבד
+	Left	שמאל
+	Length	אורך
+	Length X	אורך X
+	Length Y	אורך Y
+	Lengthen	הארכת אורך
+	Light	בהיר
+	Line	קו
+	Line delta	הפרש שורות
+	Linear	קווי
+	Lines +/−	שורות +/−
+	Lines added	שורות שנוספו
+	Lines deleted	שורות שנמחקו
+	Lines of Command History	שורות היסטוריית פקודות
+	Linetype	סוג קו
+	Linetype Scale	קנה מידה לסוג קו
+	Linetype scale	קנה מידה לסוג קו
+	Ltscale	Ltscale
+	Linetype...	סוג קו...
+	Lineweight	עובי קו
+	Lineweight...	עובי קו...
+	List	רשימה
+	List Blocks	רשימת בלוקים
+	List Dimension Styles	רשימת סגנונות מידות
+	List Groups	רשימת קבוצות
+	List Layer States	רשימת מצבי שכבות
+	List Layouts	רשימת פריסות
+	List System Variables	רשימת משתני מערכת
+	List Text Styles	רשימת סגנונות טקסט
+	Load all	טען הכול
+	Load...	טען...
+	Load Application...	טען יישום...
+	Loaded linetypes	סוגי קו טעונים
+	Lock	נעל
+	Lock Layer	נעל שכבה
+	Lock viewport	נעל אשנב
+	Lock/Unlock	נעל/בטל נעילה
+	Loft	לופט
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. ללא קשר ל-Autodesk, Inc.
+	MODEL	MODEL
+	MText	MText
+	Magenta	מג'נטה
+	Major line every	קו ראשי כל
+	Make Current	הפוך לנוכחי
+	Make Object's Layer Current	הפוך את שכבת האובייקט לנוכחית
+	Make...	צור...
+	Match Layer	התאם שכבה
+	Match Properties	התאמת מאפיינים
+	Measure	מדידה
+	Measure Distance	מדוד מרחק
+	Measure Geometry	מדוד גאומטריה
+	Merge Cells	מזג תאים
+	Merged PRs	PRs שמוזגו
+	Mid Between 2 Points	אמצע בין 2 נקודות
+	Midpoint	נקודת אמצע
+	Mirror	שיקוף
+	Model	מודל
+	Model Space (in viewport)	מרחב מודל (באשנב)
+	Modeling	מידול
+	Models	מודלים
+	Modify	שינוי
+	Move	הזזה
+	Multileader	קו הובלה מרובה
+	Multileader Style...	סגנון קו הובלה מרובה...
+	Multileader style	סגנון קו הובלה מרובה
+	Multiline	קו מקביל מרובה
+	Multiline Text	טקסט מרובה שורות
+	Multiline Text...	טקסט מרובה שורות...
+	Multiple	מרובה
+	Multiple Point	נקודות מרובות
+	My	שלי
+	My properties: not available yet	המאפיינים שלי: עדיין לא זמין
+	N	צפ
+	Name	שם
+	Name (A–Z)	שם (א–ת)
+	Named Views...	תצוגות בשם...
+	Nearest	הקרוב ביותר
+	New	חדש
+	New (metric)	חדש (מטרי)
+	New Drawing	שרטוט חדש
+	New Drawing (⌘N)	שרטוט חדש (⌘N)
+	New Drawing...	שרטוט חדש...
+	New Layer	שכבה חדשה
+	New Layout	פריסה חדשה
+	New VP Freeze	הקפאה באשנב חדש
+	New Viewports...	אשנבים חדשים...
+	New from Template...	חדש מתבנית...
+	New layout	פריסה חדשה
+	New state name	שם מצב חדש
+	Next Change	השינוי הבא
+	No	לא
+	No blocks defined in this drawing.	לא הוגדרו בלוקים בשרטוט זה.
+	No contributor data was built into this copy.	נתוני תורמים לא נכללו בעותק זה.
+	No model credits were built into this copy.	קרדיטים של מודלים לא נכללו בעותק זה.
+	No saved layer states	אין מצבי שכבות שמורים
+	No selection	אין בחירה
+	Node	צומת
+	None	ללא
+	Not available	לא זמין
+	Not available yet	עדיין לא זמין
+	Numbered list	רשימה ממוספרת
+	OK	אישור
+	Object	אובייקט
+	Object Snap	הצמדה לאובייקט
+	Object Snap (F3)	הצמדה לאובייקט (F3)
+	Object Snap On (F3)	הצמדה לאובייקט מופעלת (F3)
+	Object Snap Tracking	מעקב הצמדה לאובייקט
+	Object Snap Tracking (F11)	מעקב הצמדה לאובייקט (F11)
+	Object Snap Tracking Settings	הגדרות מעקב הצמדה לאובייקט
+	Object type:	סוג אובייקט:
+	Oblique	נטוי
+	Off	כבוי
+	Offset	היסט
+	On	מופעל
+	On/Off	הפעלה/כיבוי
+	One of the Crafting Apps by the ArtCraft team and community.	אחת מאפליקציות Crafting של צוות וקהילת ArtCraft.
+	Only in this drawing: {n}	רק בשרטוט זה: {n}
+	Only in {name}: {n}	רק ב-{name}: {n}
+	Open (⌘O)	פתח (⌘O)
+	Open Sample Drawing	פתח שרטוט לדוגמה
+	Open sample drawing	פתח שרטוט לדוגמה
+	Open Xref	פתח Xref
+	Open...	פתח...
+	Open Recent	פתח אחרונים
+	Clear Recent Files	נקה קבצים אחרונים
+	Operator:	אופרטור:
+	Orbit	סיבוב מסלול
+	Ordinate	קואורדינטה
+	Ortho (F8)	אורתו (F8)
+	Ortho Mode	מצב אורתו
+	Ortho Mode (F8)	מצב אורתו (F8)
+	Osnap Settings...	הגדרות Osnap...
+	Out	התרחק
+	Over-constrained	אילוץ־יתר
+	Override	עקיפה
+	PAPER	PAPER
+	Percent	אחוז
+	Polar (distance < angle)	קוטבי (מרחק < זווית)
+	PRs	PRs
+	Page Setup Manager	מנהל הגדרות עמוד
+	Page Setup Manager...	מנהל הגדרות עמוד...
+	Pan	הזזת תצוגה
+	Pan Down	הזז תצוגה למטה
+	Pan Left	הזז תצוגה שמאלה
+	Pan Right	הזז תצוגה ימינה
+	Pan Up	הזז תצוגה למעלה
+	Paper Space	מרחב נייר
+	Parallel	מקביל
+	Parameters Manager	מנהל פרמטרים
+	Parametric	פרמטרי
+	Paste	הדבק
+	Paste as Block	הדבק כבלוק
+	Paste to Command Line	הדבק לשורת הפקודה
+	Paste to Original Coordinates	הדבק לקואורדינטות המקוריות
+	Path Array	מערך לאורך מסלול
+	Pattern	דוגמה
+	Perpendicular	ניצב
+	Plot	הדפסה
+	Plot (click: do not plot)	הדפסה (לחץ: לא להדפסה)
+	Plot Preview	תצוגה מקדימה להדפסה
+	Plot Window	חלון הדפסה
+	Plot style	סגנון הדפסה
+	Plot style attached to	סגנון הדפסה מצורף ל-
+	Plot style table	טבלת סגנונות הדפסה
+	Plot Style...	סגנון הדפסה...
+	Plot Style Manager	מנהל סגנונות הדפסה
+	Plot Style Manager...	מנהל סגנונות הדפסה...
+	Plot Styles...	סגנונות הדפסה...
+	Plotter Manager	מנהל מדפסות
+	Plotter Manager...	מנהל מדפסות...
+	New CTB	CTB חדש
+	New STB	STB חדש
+	New style	סגנון חדש
+	Reset Panel Layout	אפס את פריסת הלוחות
+	Send Hatches to Back	שלח הצללות לרקע
+	Send Under Objects	שלח מתחת לאובייקטים
+	Text Objects Only	אובייקטי טקסט בלבד
+	Use for this layout	השתמש עבור פריסה זו
+	Display plot styles	הצג סגנונות הדפסה
+	No plot style tables.	אין טבלאות סגנונות הדפסה.
+	A built-in table: editing it keeps an edited copy in the drawing.	טבלה מובנית: עריכתה שומרת עותק ערוך בשרטוט.
+	Keep an editable copy of this table in the drawing	שמור עותק ניתן לעריכה של טבלה זו בשרטוט
+	Layout {name}: {table}	פריסה {name}: {table}
+	Grayscale	גווני אפור
+	Screening	עמעום
+	Use object linetype	השתמש בסוג הקו של האובייקט
+	Use object lineweight	השתמש בעובי הקו של האובייקט
+	Remove	הסר
+	Add	הוסף
+	Open a drawing first.	פתח שרטוט תחילה.
+	Plot table type	סוג טבלת הדפסה
+	Color-dependent	תלוי צבע
+	Named	בשם
+	Plus/minus	פלוס/מינוס
+	Point	נקודה
+	Point Filters	מסנני נקודה
+	Point Style...	סגנון נקודה...
+	Polar Array	מערך קוטבי
+	Polar Tracking	מעקב קוטבי
+	Polar Tracking (F10)	מעקב קוטבי (F10)
+	Polar Tracking On (F10)	מעקב קוטבי מופעל (F10)
+	Polar angle measurement	מדידת זווית קוטבית
+	Polar distance	מרחק קוטבי
+	Polar: {distance} < {angle}°	קוטבי: {distance} < {angle}°
+	PolarSnap	הצמדה קוטבית
+	Polygon	מצולע
+	Polygonal	מצולע
+	Polygonal Viewport	אשנב מצולע
+	Polyline	קו מרובה
+	Polyline Edit	עריכת קו מרובה
+	Position X	מיקום X
+	Position Y	מיקום Y
+	Position Z	מיקום Z
+	Previous	קודם
+	Previous Change	השינוי הקודם
+	Previous Layer	השכבה הקודמת
+	Primitives	גופים בסיסיים
+	Print	הדפס
+	Print...	הדפס...
+	Properties	מאפיינים
+	Properties Inspector	בוחן מאפיינים
+	Properties:	מאפיינים:
+	Proxy	פרוקסי
+	Purge	ניקוי
+	Pyramid	פירמידה
+	Quadrant	רביע
+	Query Entities	שאילתת ישויות
+	Quick	מהיר
+	Quick Dimension	מידה מהירה
+	Quick Properties	מאפיינים מהירים
+	Quick Select	בחירה מהירה
+	Quick Select Properties	מאפייני בחירה מהירה
+	Quick Select...	בחירה מהירה...
+	QuickCalc	מחשבון מהיר
+	QuickCalc Pick	בחירה במחשבון מהיר
+	Quit CADaddy	צא מ-CADaddy
+	Radius	רדיוס
+	Raster Image	תמונת רסטר
+	Ray	קרן
+	Read-only	לקריאה בלבד
+	Real name	ערך אמיתי
+	Realtime	בזמן אמת
+	Reassociate Dimensions	שייך מידות מחדש
+	Recent	אחרונים
+	Recent Commands	פקודות אחרונות
+	Recent Input	קלט אחרון
+	Recover...	שחזור...
+	Rectangle	מלבן
+	Recalculate Table Formulas	חשב מחדש נוסחאות טבלה
+	Rectangular	מלבני
+	Rectangular snap	הצמדה מלבנית
+	Rectangular Array	מערך מלבני
+	Red	אדום
+	Redo	בצע שוב
+	Redo (⇧⌘Z)	בצע שוב (⇧⌘Z)
+	Redraw	צייר מחדש
+	Regen	חידוש
+	Regen All	חדש הכול
+	Region	אזור
+	Region/Mass Properties	מאפייני אזור/מסה
+	Reinitialize	אתחל מחדש
+	Relative	יחסי
+	Relative to last segment	יחסית למקטע האחרון
+	Remove Leader	הסר קו הובלה
+	Remove the viewport override	הסר את עקיפת האשנב
+	Rename Dimension Style	שנה שם סגנון מידות
+	Rename Layer	שנה שם שכבה
+	Rename Layer State	שנה שם מצב שכבות
+	Rename Layout	שנה שם פריסה
+	Rename Text Style	שנה שם סגנון טקסט
+	Rename...	שנה שם...
+	Repeat {command}	חזור על {command}
+	Requires a point (x,y, @dx,dy or @d<a).	נדרשת נקודה (x,y, @dx,dy או @d<a).
+	Reset Palettes	אפס לוחות
+	Restore	שחזר
+	Restore Layer State	שחזר מצב שכבות
+	Reverse	הפוך
+	Reverse the order	הפוך את הסדר
+	Revision Cloud	ענן תיקונים
+	Revolve	סיבוב גוף
+	Right	ימין
+	Rotate	סיבוב
+	Rotation	סיבוב
+	S	דר
+	Save	שמור
+	Save (⌘S)	שמור (⌘S)
+	Save As	שמירה בשם
+	Save As...	שמירה בשם...
+	Save Layer State	שמור מצב שכבות
+	Save State	שמור מצב
+	Scale	קנה מידה
+	Search for layer	חפש שכבה
+	Search for parameter	חפש פרמטר
+	Second and next points:	נקודה שנייה והבאות:
+	Select	בחר
+	Select 2D polyline	בחר קו מרובה 2D
+	Select All	בחר הכול
+	Select Objects	בחר אובייקטים
+	Select Similar	בחר דומים
+	Select a 2D polyline.	בחר קו מרובה 2D.
+	Select a block reference.	בחר הפניית בלוק.
+	Select a circle or arc.	בחר עיגול או קשת.
+	Select a closed polyline	בחר קו מרובה סגור
+	Select a closed polyline, circle, ellipse or closed spline.	בחר קו מרובה סגור, עיגול, אליפסה או spline סגור.
+	Select a closed polyline.	בחר קו מרובה סגור.
+	Select a curve as the path.	בחר עקומה כמסלול.
+	Select a dimension constraint type	בחר סוג אילוץ ממדי
+	Select a line object	בחר אובייקט קו
+	Select a line object.	בחר אובייקט קו.
+	Select a line or an arc.	בחר קו או קשת.
+	Select a line or polyline segment	בחר קו או מקטע של קו מרובה
+	Select a line, arc or open polyline.	בחר קו, קשת או קו מרובה פתוח.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	בחר קו, קשת, עיגול, קו מרובה, אליפסה או spline כמסלול.
+	Select a line, circle, arc or polyline segment.	בחר קו, עיגול, קשת או מקטע של קו מרובה.
+	Select a line.	בחר קו.
+	Select a polyline.	בחר קו מרובה.
+	Select a text, mtext, attribute definition or dimension.	בחר טקסט, mtext, הגדרת תכונה או מידה.
+	Select an annotation object	בחר אובייקט הערה
+	Select an arc or circle	בחר קשת או עיגול
+	Select an arc.	בחר קשת.
+	Select an object	בחר אובייקט
+	Select an object to change or	בחר אובייקט לשינוי או
+	Select an object to measure or	בחר אובייקט למדידה או
+	Select an object.	בחר אובייקט.
+	Select an open curve.	בחר עקומה פתוחה.
+	Select an open line, arc, polyline, ellipse arc or spline.	בחר קו, קשת, קו מרובה, קשת אליפטית או spline פתוחים.
+	Select arc or circle	בחר קשת או עיגול
+	Select arc or polyline arc segment	בחר קשת או מקטע קשת של קו מרובה
+	Select arc style	בחר סגנון קשת
+	Select arc, circle, line	בחר קשת, עיגול, קו
+	Select at least two objects to join.	בחר לפחות שני אובייקטים לחיבור.
+	Select circle or arc to add center mark	בחר עיגול או קשת להוספת סימן מרכז
+	Select closed objects (regions, closed polylines, circles).	בחר אובייקטים סגורים (אזורים, קווים מרובים סגורים, עיגולים).
+	Select first line	בחר קו ראשון
+	Select first line or arc	בחר קו או קשת ראשונים
+	Select first object	בחר אובייקט ראשון
+	Select first object or	בחר אובייקט ראשון או
+	Select first point	בחר נקודה ראשונה
+	Select nested objects to copy or	בחר אובייקטים מקוננים להעתקה או
+	Select object	בחר אובייקט
+	Select object to dimension	בחר אובייקט למידה
+	Select object to divide	בחר אובייקט לחלוקה
+	Select object to extend or shift-select to trim	בחר אובייקט להארכה או Shift+בחירה לקיצוץ
+	Select object to measure	בחר אובייקט למדידה
+	Select object to offset	בחר אובייקט להיסט
+	Select object to trim or shift-select to extend	בחר אובייקט לקיצוץ או Shift+בחירה להארכה
+	Select objects	בחר אובייקטים
+	Select objects (crossing window first corner)	בחר אובייקטים (פינה ראשונה של חלון חוצה)
+	Select objects to array.	בחר אובייקטים למערך.
+	Select objects to stretch by crossing-window or crossing-polygon...	בחר אובייקטים למתיחה באמצעות חלון חוצה או מצולע חוצה...
+	Select objects:	בחר אובייקטים:
+	Add to Working Set	הוסף לקבוצת העבודה
+	Edit Reference In-Place	ערוך הפניה במקום
+	Save Reference Edits	שמור עריכות הפניה
+	Working Set	קבוצת עבודה
+	Xref and Block In-place Editing	עריכה במקום של Xref ובלוקים
+	Select one polyline (Multiple is available through the JSON form).	בחר קו מרובה אחד (בחירה מרובה זמינה דרך טופס JSON).
+	Select path curve	בחר עקומת מסלול
+	Select point or object	בחר נקודה או אובייקט
+	Select polyline or	בחר קו מרובה או
+	Select second line	בחר קו שני
+	Select second line or shift-select to apply corner	בחר קו שני או Shift+בחירה להחלת פינה
+	Select second object	בחר אובייקט שני
+	Select second object or shift-select to apply corner	בחר אובייקט שני או Shift+בחירה להחלת פינה
+	Select second point	בחר נקודה שנייה
+	Select spline	בחר spline
+	Select symmetry line	בחר קו סימטריה
+	Select two points	בחר שתי נקודות
+	Selection Cycling	מחזור בחירה
+	Send to Back	שלח לרקע
+	Set Current	קבע כנוכחי
+	Set Current Dimension Style	קבע סגנון מידות נוכחי
+	Set Current Text Style	קבע סגנון טקסט נוכחי
+	Set Current Viewport	קבע אשנב נוכחי
+	Set Layer Properties	קבע מאפייני שכבה
+	Set Properties	קבע מאפיינים
+	Set Table Cell	קבע תא טבלה
+	Set Table Cell Style	קבע סגנון תא טבלה
+	Set Variable	קבע משתנה
+	Set View	קבע תצוגה
+	Share	שתף
+	Show	הצג
+	Show All	הצג הכול
+	Show All Constraint Bars	הצג את כל סרגלי האילוצים
+	Show All Dynamic Dimensions	הצג את כל המידות הדינמיות
+	Show and hide the tools of this category	הצג והסתר את הכלים בקטגוריה זו
+	Show in Tool Sets	הצג בערכות כלים
+	Show command prompting near the crosshairs	הצג הנחיות פקודה ליד הסמן
+	Show Layer List	הצג רשימת שכבות
+	Show/Hide Lineweight	הצג/הסתר עובי קו
+	Show/Hide Transparency	הצג/הסתר שקיפות
+	Single Line Text	טקסט שורה אחת
+	Single Point	נקודה בודדת
+	Single...	בודד...
+	Smooth	החלקה
+	Snap	הצמדה
+	Snap Mode	מצב הצמדה
+	Snap Mode (F9)	מצב הצמדה (F9)
+	Snap On (F9)	הצמדה מופעלת (F9)
+	Snap Overrides	עקיפות הצמדה
+	Snap X spacing	מרווח הצמדה X
+	Snap and Grid	הצמדה ורשת
+	Snap type	סוג הצמדה
+	Solid	מלא
+	Sort	מיין
+	Specify a point	ציין נקודה
+	Specify a scale for the hatch pattern	ציין קנה מידה לדוגמת ההצללה
+	Specify a second extension line origin	ציין ראשית של קו הרחבה שני
+	Specify an angle for the hatch pattern	ציין זווית לדוגמת ההצללה
+	Specify angle end point	ציין נקודת קצה של הזווית
+	Specify angle of dimension line	ציין זווית של קו המידה
+	Specify angle of dimension text	ציין זווית של טקסט המידה
+	Specify angle start point	ציין נקודת התחלה של הזווית
+	Specify angle vertex	ציין קודקוד הזווית
+	Specify angle vertex point	ציין נקודת קודקוד הזווית
+	Specify arc length dimension location	ציין מיקום מידת אורך הקשת
+	Specify axis endpoint of ellipse	ציין נקודת קצה של ציר האליפסה
+	Specify base diameter	ציין קוטר הבסיס
+	Specify base point	ציין נקודת בסיס
+	Specify base point or	ציין נקודת בסיס או
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	ציין נקודת בסיס או היסט (גרור עם לחצן העכבר האמצעי להזזת תצוגה בזמן אמת)
+	Specify base radius or	ציין רדיוס בסיס או
+	Specify center of donut	ציין מרכז הטבעת
+	Specify center of ellipse	ציין מרכז האליפסה
+	Specify center of polygon	ציין מרכז המצולע
+	Specify center point for circle	ציין נקודת מרכז לעיגול
+	Specify center point of arc	ציין נקודת מרכז של הקשת
+	Specify center point of array	ציין נקודת מרכז של המערך
+	Specify center point of base	ציין נקודת מרכז של הבסיס
+	Specify corner of viewport	ציין פינה של האשנב
+	Specify corner of window, enter a scale factor (nX or nXP)	ציין פינת חלון, הזן מקדם קנה מידה (nX או nXP)
+	Specify diameter of circle	ציין קוטר העיגול
+	Specify dimension arc line location	ציין מיקום קשת המידה
+	Specify dimension line location	ציין מיקום קו המידה
+	Specify distance between turns	ציין מרחק בין סיבובים
+	Specify distance to other axis	ציין מרחק לציר השני
+	Specify end angle	ציין זווית סיום
+	Specify end point of arc	ציין נקודת סיום של הקשת
+	Specify end point of arc (hold Ctrl to switch direction)	ציין נקודת סיום של הקשת (החזק Ctrl להחלפת כיוון)
+	Specify ending width	ציין רוחב סיום
+	Specify ending width for next segment	ציין רוחב סיום למקטע הבא
+	Specify endpoint of arc	ציין נקודת קצה של הקשת
+	Specify endpoint of axis	ציין נקודת קצה של הציר
+	Specify endpoint of line	ציין נקודת קצה של הקו
+	Specify feature location	ציין מיקום תכונה
+	Specify fillet radius	ציין רדיוס עיגול פינה
+	Specify fillet radius for rectangles	ציין רדיוס עיגול פינה למלבנים
+	Specify first angle endpoint	ציין נקודת קצה ראשונה של הזווית
+	Specify first chamfer distance	ציין מרחק שיפוע ראשון
+	Specify first chamfer distance for rectangles	ציין מרחק שיפוע ראשון למלבנים
+	Specify first constraint point	ציין נקודת אילוץ ראשונה
+	Specify first corner	ציין פינה ראשונה
+	Specify first corner point	ציין נקודת פינה ראשונה
+	Specify first destination point	ציין נקודת יעד ראשונה
+	Specify first end point of circle's diameter	ציין נקודת קצה ראשונה של קוטר העיגול
+	Specify first endpoint of edge	ציין נקודת קצה ראשונה של הצלע
+	Specify first extension line origin	ציין ראשית של קו הרחבה ראשון
+	Specify first point	ציין נקודה ראשונה
+	Specify first point of mirror line	ציין נקודה ראשונה של קו השיקוף
+	Specify first point on circle	ציין נקודה ראשונה על העיגול
+	Specify first point on circle: _tan to	ציין נקודה ראשונה על העיגול: _tan to
+	Specify first source point	ציין נקודת מקור ראשונה
+	Specify height	ציין גובה
+	Specify helix height or	ציין גובה הסליל או
+	Specify included angle	ציין זווית כלולה
+	Specify insertion base point	ציין נקודת בסיס להכנסה
+	Specify insertion point	ציין נקודת הכנסה
+	A drawing opened from a file keeps that file's format.	שרטוט שנפתח מקובץ שומר על תבנית הקובץ.
+	An array that would create more objects than this is refused.	מערך שייצור יותר אובייקטים ממספר זה יידחה.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy שומר העדפות אלה, מצבי הצמדה לאובייקט ומתגי שרטוט עבור חשבון המשתמש שלך ומשחזר אותם בעת ההפעלה.
+	Changes apply at once and are kept for next time.	השינויים חלים מיד ונשמרים לפעם הבאה.
+	Command line history	היסטוריית שורת הפקודה
+	Copy as JSON	העתק כ-JSON
+	Crosshair size	גודל הסמן
+	Crossing selection color:	צבע בחירה חוצה:
+	Display	תצוגה
+	Exclude:	החרג:
+	Grip size	גודל ידית
+	Grips	ידיות
+	Groups	קבוצות
+	Hatches	הצללות
+	Hold Shift to add to the selection	החזק Shift כדי להוסיף לבחירה
+	Indicate selection area	סמן את אזור הבחירה
+	Interface language	שפת ממשק
+	Interface theme	ערכת נושא לממשק
+	Keep the system cursor visible over the drawing area	השאר את סמן המערכת גלוי מעל אזור השרטוט
+	Largest array	המערך הגדול ביותר
+	Layout paper	נייר הפריסה
+	Model background	רקע המודל
+	Multiline text	טקסט מרובה שורות
+	Object grouping	קיבוץ אובייקטים
+	Object selection limit for display of grips	מגבלת אובייקטים נבחרים להצגת ידיות
+	Object snap aperture	צמצם הצמדה לאובייקט
+	Object snap marker size	גודל סמן הצמדה לאובייקט
+	Objects on locked layers	אובייקטים בשכבות נעולות
+	Open and Save	פתיחה ושמירה
+	Options	אפשרויות
+	Options...	אפשרויות...
+	Pickbox size	גודל תיבת הבחירה
+	Preview	תצוגה מקדימה
+	Profiles	פרופילים
+	Reset keeps the interface language.	האיפוס שומר את שפת הממשק.
+	Reset to Defaults	אפס לברירות המחדל
+	Save new drawings as	שמור שרטוטים חדשים בתור
+	Screen magnifiers, screen readers and recorders follow the system cursor.	מגדילי מסך, קוראי מסך ומקליטים עוקבים אחר סמן המערכת.
+	Select objects first, then choose a command	בחר אובייקטים תחילה, ואז בחר פקודה
+	Selection	בחירה
+	Selection Area Effect	אפקט אזור הבחירה
+	Selection Preview Filter	מסנן תצוגה מקדימה של בחירה
+	Selection area opacity:	אטימות אזור הבחירה:
+	Selection effect color	צבע אפקט הבחירה
+	Selection modes	מצבי בחירה
+	Selection preview	תצוגה מקדימה של בחירה
+	Settings...	הגדרות...
+	Show Quick Properties for selected objects	הצג מאפיינים מהירים לאובייקטים נבחרים
+	Show grips	הצג ידיות
+	Snap, grid, polar tracking and Dynamic Input:	הצמדה, רשת, מעקב קוטבי וקלט דינמי:
+	Tables	טבלאות
+	The aperture is how near the cursor must come to a point for an object snap to find it.	הצמצם קובע עד כמה הסמן צריך להתקרב לנקודה כדי שהצמדה לאובייקט תמצא אותה.
+	User Preferences	העדפות משתמש
+	Visual Effect Settings	הגדרות אפקטים חזותיים
+	Visual Effect Settings...	הגדרות אפקטים חזותיים...
+	When a command is active	כאשר פקודה פעילה
+	When no command is active	כאשר אין פקודה פעילה
+	Window selection color:	צבע בחירת חלון:
+	Xrefs	Xrefs
+	objects	אובייקטים
+	Specify inside diameter of donut	ציין קוטר פנימי של הטבעת
+	Specify leader arrowhead location	ציין מיקום ראש החץ של קו ההובלה
+	Specify leader endpoint	ציין נקודת קצה של קו ההובלה
+	Specify leader landing location	ציין מיקום מדף קו ההובלה
+	Specify length for rectangles	ציין אורך למלבנים
+	Specify length of chord	ציין אורך המיתר
+	Specify length of segment	ציין אורך המקטע
+	Specify line width for rectangles	ציין עובי קו למלבנים
+	Specify location for new vertex	ציין מיקום לקודקוד החדש
+	Specify minimum length of arc	ציין אורך מינימלי של הקשת
+	Specify new end point	ציין נקודת סיום חדשה
+	Specify new location for marked vertex	ציין מיקום חדש לקודקוד המסומן
+	Specify new width for all segments	ציין רוחב חדש לכל המקטעים
+	Specify next point	ציין נקודה הבאה
+	Specify offset distance	ציין מרחק היסט
+	Specify offset distance or	ציין מרחק היסט או
+	Specify opposite corner	ציין פינה נגדית
+	Specify other corner point	ציין נקודת פינה אחרת
+	Specify other endpoint of axis	ציין נקודת קצה אחרת של הציר
+	Specify outside diameter of donut	ציין קוטר חיצוני של הטבעת
+	Specify point	ציין נקודה
+	Specify point on object for first tangent of circle	ציין נקודה על אובייקט למשיק הראשון של העיגול
+	Specify point on object for second tangent of circle	ציין נקודה על אובייקט למשיק השני של העיגול
+	Specify point on side to offset	ציין נקודה בצד ההיסט
+	Specify radius of arc	ציין רדיוס הקשת
+	Specify radius of circle	ציין רדיוס העיגול
+	Specify rotation angle	ציין זווית סיבוב
+	Specify rotation angle of text	ציין זווית סיבוב של הטקסט
+	Specify rotation angle or	ציין זווית סיבוב או
+	Specify scale factor	ציין מקדם קנה מידה
+	Specify second angle endpoint	ציין נקודת קצה שנייה של הזווית
+	Specify second break point	ציין נקודת שבירה שנייה
+	Specify second chamfer distance for rectangles	ציין מרחק שיפוע שני למלבנים
+	Specify second constraint point	ציין נקודת אילוץ שנייה
+	Specify second destination point	ציין נקודת יעד שנייה
+	Specify second end point of circle's diameter	ציין נקודת קצה שנייה של קוטר העיגול
+	Specify second endpoint of edge	ציין נקודת קצה שנייה של הצלע
+	Specify second extension line origin	ציין ראשית של קו הרחבה שני
+	Specify second point	ציין נקודה שנייה
+	Specify second point of arc	ציין נקודה שנייה של הקשת
+	Specify second point of mirror line	ציין נקודה שנייה של קו השיקוף
+	Specify second point on circle	ציין נקודה שנייה על העיגול
+	Specify second point on circle: _tan to	ציין נקודה שנייה על העיגול: _tan to
+	Specify second point or <use first point as displacement>	ציין נקודה שנייה או <השתמש בנקודה הראשונה כהיסט>
+	Specify second source point	ציין נקודת מקור שנייה
+	Specify side to offset	ציין צד להיסט
+	Specify start angle	ציין זווית התחלה
+	Specify start point	ציין נקודת התחלה
+	Specify start point of arc	ציין נקודת התחלה של הקשת
+	Specify start point of polyline	ציין נקודת התחלה של הקו המרובה
+	Specify start point of text	ציין נקודת התחלה של הטקסט
+	Specify starting width	ציין רוחב התחלה
+	Specify starting width for next segment	ציין רוחב התחלה למקטע הבא
+	Specify tangent direction for the start point of arc	ציין כיוון משיק לנקודת ההתחלה של הקשת
+	Specify the elevation for rectangles	ציין גובה למלבנים
+	Specify thickness for rectangles	ציין עובי למלבנים
+	Specify third point on circle	ציין נקודה שלישית על העיגול
+	Specify third point on circle: _tan to	ציין נקודה שלישית על העיגול: _tan to
+	Specify third source point or <continue>	ציין נקודת מקור שלישית או <המשך>
+	Specify through point	ציין נקודת מעבר
+	Specify top diameter	ציין קוטר עליון
+	Specify top radius or	ציין רדיוס עליון או
+	Specify total angle	ציין זווית כוללת
+	Specify total length or	ציין אורך כולל או
+	Specify width for rectangles	ציין רוחב למלבנים
+	Sphere	כדור
+	Spline	Spline
+	Spline Edit	עריכת Spline
+	Stack (type 1/2 then select)	ערימה (הקלד 1/2 ואז בחר)
+	Standard	רגיל
+	Start	התחלה
+	Start Width	רוחב התחלה
+	Start X	התחלה X
+	Start Y	התחלה Y
+	Start angle	זווית התחלה
+	Start, Center, Angle	התחלה, מרכז, זווית
+	Start, Center, End	התחלה, מרכז, סוף
+	Start, Center, Length	התחלה, מרכז, אורך
+	Start, End, Angle	התחלה, סוף, זווית
+	Start, End, Direction	התחלה, סוף, כיוון
+	Start, End, Radius	התחלה, סוף, רדיוס
+	Status	מצב
+	Status Bar	שורת מצב
+	Stretch	מתיחה
+	Style: Standard	סגנון: Standard
+	Subtract	חיסור
+	Sweep	סחיפה
+	Switch Drawing	החלף שרטוט
+	Switch Layout	החלף פריסה
+	Switch between model space in a viewport and paper space	מעבר בין מרחב מודל באשנב לבין מרחב נייר
+	Symmetric	סימטרי
+	Synchronize Attributes	סנכרן תכונות
+	To	אל
+	Toggle PICKADD (off: each pick replaces the selection)	החלף PICKADD (כבוי: כל בחירה מחליפה את הבחירה)
+	Toggle PICKADD (on: picks add to the selection)	החלף PICKADD (מופעל: בחירות מתווספות לבחירה)
+	TOP	TOP
+	Table	טבלה
+	Table Breaks	שבירות טבלה
+	Table Cell Style	סגנון תא טבלה
+	Table Style...	סגנון טבלה...
+	Table style	סגנון טבלה
+	Table...	טבלה...
+	Tan, Tan, Radius	משיק, משיק, רדיוס
+	Tan, Tan, Tan	משיק, משיק, משיק
+	Tangent	משיק
+	Temporary track point	נקודת מעקב זמנית
+	Text	טקסט
+	Text Editor	עורך טקסט
+	Text Height	גובה טקסט
+	Text Style...	סגנון טקסט...
+	Text height	גובה טקסט
+	Text override	עקיפת טקסט
+	Text style	סגנון טקסט
+	Thaw All Layers	הפשר את כל השכבות
+	Thaw Layer	הפשר שכבה
+	There is nothing here yet.	אין כאן עדיין כלום.
+	Thickness	עובי
+	Time	זמן
+	To get started, create or open a drawing.	כדי להתחיל, צור או פתח שרטוט.
+	Tool Bar	סרגל כלים
+	Tool Sets	ערכות כלים
+	Tools	כלים
+	Torus	טורוס
+	Trace	עקיבה
+	Track orthogonally only	מעקב אורתוגונלי בלבד
+	Track using all polar angle settings	מעקב לפי כל הגדרות הזווית הקוטבית
+	Transparency	שקיפות
+	Trim	קיצוץ
+	True Color	צבע אמיתי
+	Turn All Layers On	הפעל את כל השכבות
+	Turn Off Layer	כבה שכבה
+	Turn On Layer	הפעל שכבה
+	Turn Quick Properties off (QPMODE)	כבה מאפיינים מהירים (QPMODE)
+	Type	סוג
+	Type a command	הקלד פקודה
+	Type text; Enter starts a new paragraph	הקלד טקסט; Enter מתחיל פסקה חדשה
+	UCS Icon	סמל UCS
+	Undo	בטל
+	Undo (⌘Z)	בטל (⌘Z)
+	Ungroup	פרק קבוצה
+	Union	איחוד
+	Unisolate Layer	בטל בידוד שכבה
+	Units Conversion	המרת יחידות
+	Units...	יחידות...
+	Unlock Layer	בטל נעילת שכבה
+	Unlock viewport	בטל נעילת אשנב
+	Unmerge Cells	בטל מיזוג תאים
+	Unsaved Layer State	מצב שכבות לא שמור
+	Up	למעלה
+	Update Data Links	עדכן קישורי נתונים
+	Update	עדכן
+	Use System Setting	השתמש בהגדרת המערכת
+	User	משתמש
+	User Parameters	פרמטרי משתמש
+	Username	שם משתמש
+	Volume	נפח
+	VP Color	צבע באשנב
+	VP Freeze	הקפאה באשנב
+	Value	ערך
+	Value:	ערך:
+	Variables	משתנים
+	Version	גרסה
+	Version 2000	גרסה 2000
+	Version 2004	גרסה 2004
+	Version 2007	גרסה 2007
+	Version 2010	גרסה 2010
+	Version 2013	גרסה 2013
+	Version 2018	גרסה 2018
+	Version {version}	גרסה {version}
+	Vertical	אנכי
+	VerticalDistance	מרחק אנכי
+	View	תצוגה
+	ViewCube	ViewCube
+	Viewport	אשנב
+	Viewport Layer Freeze	הקפאת שכבה באשנב
+	Viewport Properties	מאפייני אשנב
+	Viewport is locked	האשנב נעול
+	Viewport scale	קנה מידה של אשנב
+	Viewport {id}	אשנב {id}
+	Viewports	אשנבים
+	W	מע
+	WCS ⌄	WCS ⌄
+	White	לבן
+	Width factor	מקדם רוחב
+	Window	חלון
+	Wipeout	מחיקון
+	Workspace Switching	החלפת סביבת עבודה
+	Write Block	כתוב בלוק
+	Xline	קו בנייה
+	Yellow	צהוב
+	Yes	כן
+	Zoom	זום
+	Zoom All	זום הכול
+	Zoom Dynamic	זום דינמי
+	Zoom Extents	זום לתחום
+	Zoom In	התקרב
+	Zoom Object	זום לאובייקט
+	Zoom Out	התרחק
+	Zoom Previous	זום קודם
+	Zoom Realtime	זום בזמן אמת
+	Zoom Window	זום לחלון
+	error	שגיאה
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (אילוץ {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	אילוץ {kind} {name} = {expression}  (לחץ פעמיים לעריכה)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  פרמטר משתמש חדש
+	ΔLOC	ΔLOC
+	−Bin	−בינארי
+	−LOC	−שורות
+	⌘↩ to finish	⌘↩ לסיום
+@plural	{n} commit	שמירה {n}|{n} שמירות|{n} שמירות
+@plural	{n} contributor	תורם {n}|{n} תורמים|{n} תורמים
+	Drawing as bytes	שרטוט כבתים
+	Services	שירותים
+	Hide CADaddy	הסתר את CADaddy
+	Hide Others	הסתר אחרים
+	Accessibility	נגישות
+	Show System Cursor	הצג את סמן המערכת
+	Animation Effects	אפקטי הנפשה
+	Animation effects	אפקטי הנפשה
+	Import...	ייבוא...
+	Export...	ייצוא...
+	Batch Publish...	פרסום אצווה...
+	Scale List...	רשימת קני מידה...
+	Annotative Object Scale	קנה מידה של אובייקט מבואר
+	Add Current Scale	הוסף קנה מידה נוכחי
+	Delete Current Scale	מחק קנה מידה נוכחי
+	Add/Delete Scales...	הוסף/מחק קני מידה...
+	Synchronize Multiple-scale Positions	סנכרן מיקומים מרובי קני מידה
+	Annotative Update	עדכון מבואר
+	Show Annotative Objects	הצג אובייקטים מבוארים
+	Current Scale Only	קנה מידה נוכחי בלבד
+	All Scales	כל קני המידה
+	Drawing Recovery Manager...	מנהל שחזור שרטוטים...
+	Tolerance...	טולרנס...
+	Add Vertex	הוסף קודקוד
+	Remove Vertex	הסר קודקוד
+	Convert to Arc	המר לקשת
+	Convert to Line	המר לקו
+	Stretch Vertex	מתח קודקוד
+	Edit Array	ערוך מערך
+	Close Array Editing	סגור עריכת מערך
+	Multiline...	קו מקביל מרובה...
+	Multiline Style...	סגנון קו מקביל מרובה...
+	Solid Editing	עריכת גופים מוצקים
+	3D Mouse...	עכבר 3D...
+	3D Mouse	עכבר 3D
+	Calibrate 3D Mouse	כייל עכבר 3D
+	3D Mouse Navigation	ניווט בעכבר 3D
+	3D mouse input is unavailable on this platform	קלט עכבר 3D אינו זמין בפלטפורמה זו
+	No supported 3D mouse found	לא נמצא עכבר 3D נתמך
+	Release the 3D mouse to calibrate its resting position	שחרר את עכבר ה-3D כדי לכייל את מצב המנוחה שלו
+	3D mouse connected	עכבר 3D מחובר
+	3D mouse busy, possibly 3DxWare or missing device permissions	עכבר 3D תפוס, ייתכן 3DxWare או חסרות הרשאות התקן
+	3D mouse disconnected	עכבר 3D מנותק
+	3D mouse input could not be started	לא ניתן היה להפעיל קלט עכבר 3D
+	Enable 3D mouse navigation	הפעל ניווט בעכבר 3D
+	Pan sensitivity	רגישות הזזת תצוגה
+	Zoom sensitivity	רגישות זום
+	Reverse zoom direction	הפוך כיוון זום
+	Calibrate	כייל
+	Move sideways to pan; push/pull or twist to zoom.	הזז הצידה להזזת תצוגה; דחוף/משוך או סובב לזום.
+	Left device button: zoom extents. Right device button: calibrate.	לחצן ההתקן השמאלי: זום לתחום. לחצן ההתקן הימני: כיול.
+	More toolbar commands	פקודות נוספות בסרגל הכלים
+	Default save version	גרסת שמירה ברירת מחדל
+	Automatic save every	שמירה אוטומטית כל
+	min	דק'
+	Automatic save file location	מיקום קובץ השמירה האוטומטית
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	שרטוטים שעדיין אין להם קובץ נשמרים בגרסת ברירת המחדל. 0 דקות מכבה את השמירה האוטומטית.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	לחיצה ימנית תלוית זמן: לחיצה מהירה היא Enter, החזקה פותחת את התפריט
+	Turned off, a right-click while a command runs always opens the shortcut menu.	כשהאפשרות כבויה, לחיצה ימנית בזמן ביצוע פקודה תמיד פותחת את תפריט הקיצורים.
+	Hatch Pattern	דוגמת הצללה
+	Search for pattern	חפש דוגמה
+	Run Script...	הפעל סקריפט...
+	Query Texts	שאילתת טקסטים
+	Hatch Pick	בחירת הצללה
+	Hatch and Gradient	הצללה ומעבר צבע
+	Color 1	צבע 1
+	Color 2	צבע 2
+	Shape	צורה
+	Curved	מעוקל
+	Spherical	כדורי
+	Hemispherical	חצי כדורי
+	Inverted	הפוך
+	Centered	ממורכז
+	Hatch origin	ראשית ההצללה
+	Use current origin	השתמש בראשית הנוכחית
+	Specified origin	ראשית מוגדרת
+	Click to set new origin	לחץ כדי לקבוע ראשית חדשה
+	Default to boundary extents	ברירת מחדל לפי תחום הגבול
+	Bottom left	שמאל למטה
+	Bottom right	ימין למטה
+	Top left	שמאל למעלה
+	Top right	ימין למעלה
+	Boundaries	גבולות
+	Add: Pick points	הוסף: בחר נקודות
+	Add: Select objects	הוסף: בחר אובייקטים
+	Boundaries picked: {n}	גבולות שנבחרו: {n}
+	Associative	אסוציאטיבי
+	Create separate hatches	צור הצללות נפרדות
+	Island detection	זיהוי איים
+	Normal	רגיל
+	Outer	חיצוני
+	Ignore	התעלם
+	Origin: {x}, {y}	ראשית: {x}, {y}
+	Sheet Books to PDF...	ספרי גיליונות ל-PDF...
+	Not a number or distance: {text}	לא מספר או מרחק: {text}
+	Dynamic Block Data	נתוני בלוק דינמי
+	Custom	מותאם אישית
+	Dynamic Block Reference	הפניית בלוק דינמי
+	Set Dynamic Property	קבע מאפיין דינמי
+	Dynamic Block Grips	ידיות בלוק דינמי
+	Drag Dynamic Grip	גרור ידית דינמית
+	Save Block	שמור בלוק
+	Save Block As	שמור בלוק בשם
+	Close Block Editor	סגור עורך בלוקים
+	Unsaved changes	שינויים שלא נשמרו
+	Edit Block Definition	ערוך הגדרת בלוק
+	Block to create or edit	בלוק ליצירה או עריכה
+	Open in Block Editor	פתח בעורך הבלוקים
+	This drawing	שרטוט זה
+	contains authoring elements. Open in Block Editor?	מכיל רכיבי עריכה. לפתוח בעורך הבלוקים?
+	New block	בלוק חדש
+	Italic	נטוי
+	Underline	קו תחתון
+	Overline	קו עליון
+	Justify	יישור לשני הצדדים
+	Text color	צבע טקסט
+	Click the ruler to add a tab stop, right-click to remove one	לחץ על הסרגל כדי להוסיף טאב, לחיצה ימנית להסרתו
+	Ribbon	רצועת כלים
+	Close Ribbon	סגור רצועת כלים
+	Menu Bar	שורת תפריטים
+	Top	עליון
+	Bottom	תחתון
+	Front	חזית
+	Back	אחור
+	SW Isometric	איזומטרי דר-מע
+	SE Isometric	איזומטרי דר-מז
+	NE Isometric	איזומטרי צפ-מז
+	NW Isometric	איזומטרי צפ-מע
+	3D Views	תצוגות 3D
+	Plan View	תצוגת תוכנית
+	World UCS	UCS עולמי
+	View Direction	כיוון תצוגה
+	2D Wireframe	מסגרת תיל 2D
+	Custom View	תצוגה מותאמת אישית
+	Convert PDF to DWG...	המר PDF ל-DWG...
+	Convert PDF to DWG	המר PDF ל-DWG
+	PDF Import...	ייבוא PDF...
+	PDF Import	ייבוא PDF
+	Page	עמוד
+	PDF layers (else by colour and line weight)	שכבות PDF (אחרת לפי צבע ועובי קו)
+	By colour and line weight	לפי צבע ועובי קו
+	Object layers (PDF_Geometry, PDF_Text, …)	שכבות אובייקטים (PDF_Geometry, PDF_Text, …)
+	Import text	ייבא טקסט
+	Join line pieces and make circles	חבר חלקי קווים וצור עיגולים
+	Keep white fills (masks)	שמור מילויים לבנים (מסכות)
+	Import raster images (saved as PNG files)	ייבא תמונות רסטר (נשמרות כקבצי PNG)
+	Add a layout that plots like the sheet	הוסף פריסה שמודפסת כמו הגיליון
+	Convert and Save as DWG…	המר ושמור כ-DWG…
+	Walk	הליכה
+	Report a Bug...	דווח על באג...
+	Request a Feature...	בקש תכונה...
+	Donate / Improve	תרומה / שיפור
+	Improve CADaddy	שפר את CADaddy
+	Or email {address}	או שלח דוא"ל ל-{address}
+	Support CADaddy	תמוך ב-CADaddy
+	CADaddy is free, and it always will be.	CADaddy חינמי, ותמיד יהיה.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	בלי פרסומות, בלי מנוי. אם CADaddy חוסך לך זמן, תרומה קטנה מממנת את זמן ה-AI שבונה את התכונות הבאות.
+	Report a bug or request a feature	דווח על באג או בקש תכונה
+	Support CADaddy...	תמוך ב-CADaddy...
+	Array (classic)	מערך (קלאסי)
+	Change	שנה
+	Change Properties	שנה מאפיינים
+	Quick Leader	קו הובלה מהיר
+	Symbol...	סמל...
+	List Symbols	רשימת סמלים
+	Symbols	סמלים
+	Search symbols	חפש סמלים
+	No symbols match.	אין סמלים תואמים.
+	Plumbing fixtures	מתקני אינסטלציה
+	Plumbing piping	צנרת אינסטלציה
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	תכנון ושרטוט בעזרת מחשב עבור Windows, Mac ו-Linux, נכתב ב-Rust.
+	Includes open-source components: see NOTICE.	כולל רכיבי קוד פתוח: ראה NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	חינמי לשימוש. ללא קשר ל-Autodesk, Inc.
+	Electrical devices	התקנים חשמליים
+	Lighting	תאורה
+	Power and distribution	כוח וחלוקה
+	Low voltage	מתח נמוך
+	Fire alarm	גילוי אש
+	Check for Updates...	בדוק אם יש עדכונים...
+	Check for updates automatically	בדוק אם יש עדכונים באופן אוטומטי
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	פעם ביום CADaddy שואל את GitHub מהו מספר הגרסה החדשה ביותר. שום מידע עליך או על השרטוטים שלך לא נשלח.
+	Checking for updates...	בודק אם יש עדכונים...
+	CADaddy {v} is the latest version.	CADaddy {v} היא הגרסה העדכנית ביותר.
+	CADaddy {v} is available	CADaddy {v} זמין
+	You have {v}. Updating keeps your drawings and settings.	יש לך {v}. העדכון שומר את השרטוטים וההגדרות שלך.
+	Downloading CADaddy {v}...	מוריד את CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} מוכן להתקנה
+	It installs when you close CADaddy. Restart now to update right away.	ההתקנה תתבצע כשתסגור את CADaddy. הפעל מחדש עכשיו כדי לעדכן מיד.
+	Couldn't update CADaddy	לא ניתן היה לעדכן את CADaddy
+	Download	הורד
+	What's New	מה חדש
+	Later	מאוחר יותר
+	Skip This Version	דלג על גרסה זו
+	Restart Now	הפעל מחדש עכשיו
+	When I Close CADaddy	כשאסגור את CADaddy
+	Download Page	דף ההורדה
+	Hide	הסתר
+	The current layer is being turned off	השכבה הנוכחית עומדת להיכבות
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	השכבה "{layer}" היא השכבה הנוכחית. אובייקטים שתשרטט עליה לא יוצגו עד שתפעיל אותה מחדש.
+	Keep the Current Layer On	השאר את השכבה הנוכחית מופעלת
+	Turn the Current Layer Off	כבה את השכבה הנוכחית
+	Quantity Takeoff	כתב כמויות
+	Dimension Style	סגנון מידות
+	Text Style	סגנון טקסט
+	Xref	Xref
+	Raster Image Reference...	הפניית תמונת רסטר...
+	Window Lasso	לאסו חלון
+	Crossing Lasso	לאסו חוצה
+	Fence Lasso	לאסו גדר
+	Press Space to cycle options	לחץ על רווח כדי לעבור בין האפשרויות
+	Burst	פירוק עם תכונות
+	Convert to Mtext	המר ל-Mtext
+	View Twist	סיבוב תצוגה
+	Let AI agents control CADaddy	אפשר לסוכני AI לשלוט ב-CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	המחבר של Claude וסוכנים אחרים במחשב זה יוכלו אז לפתוח, לערוך, לשמור ולסגור שרטוטים בחלון זה. שום דבר מחוץ למחשב זה לא יכול להתחבר. ההגדרה תיכנס לתוקף בהפעלה הבאה של CADaddy.
+	Base Point	נקודת בסיס
+	Column Spacing	מרווח עמודות
+	Column Count	מספר עמודות
+	Row Spacing	מרווח שורות
+	Row Count	מספר שורות
+	Row and Column Count	מספר שורות ועמודות
+	Level Spacing	מרווח מפלסים
+	Level Count	מספר מפלסים
+	Item Spacing	מרווח פריטים
+	Item Count	מספר פריטים
+	Total column spacing	מרווח עמודות כולל
+	Total row spacing	מרווח שורות כולל
+	Total row and column spacing	מרווח שורות ועמודות כולל
+	Total level spacing	מרווח מפלסים כולל
+	Fill angle	זווית מילוי
+	Stretch radius	רדיוס מתיחה
+	Array Grips	ידיות מערך
+	Edit Array with a Grip	ערוך מערך באמצעות ידית
+	Open Drawings	שרטוטים פתוחים
+	Close Drawing	סגור שרטוט
+	Close All Drawings	סגור את כל השרטוטים
+	Export Comparison Report...	ייצוא דוח השוואה...
+	Select All Layouts	בחר את כל הפריסות
+	Move or Copy...	הזז או העתק...
+	Move or Copy	הזז או העתק
+	Move or copy layout "{name}"	הזז או העתק את הפריסה "{name}"
+	Before layout:	לפני הפריסה:
+	(move to end)	(העבר לסוף)
+	Create a copy	צור עותק
+	A drawing keeps at least one layout.	שרטוט חייב להכיל פריסה אחת לפחות.
+	Move Layout	הזז פריסה
+	Background	רקע
+	Text fill	מילוי טקסט
+	Text fill color	צבע מילוי טקסט
+	Text reads right to left	הטקסט נקרא מימין לשמאל
+	Placing text places the dimension line	מיקום הטקסט ממקם את קו המידה
+	Alternate tolerance precision	דיוק טולרנס חלופי
+	Alternate tolerance zero suppression	השמטת אפסים בטולרנס חלופי
+	Linear jog height (× text height)	גובה שבירה קווית (× גובה טקסט)
+	Break size	גודל שבירה
+	Express Tools	Express Tools
+	Break-line Symbol	סמל קו שבירה
+	Replace Block...	החלף בלוק...
+	Move/Copy/Rotate	הזז/העתק/סובב
+	Remove boundaries	הסר גבולות
+	Inherit Properties	ירש מאפיינים
+	Nothing to preview yet.	אין עדיין מה להציג בתצוגה מקדימה.
+	Property Settings	הגדרות מאפיינים
+	Basic Properties	מאפיינים בסיסיים
+	Special Properties	מאפיינים מיוחדים
+	Plot Style	סגנון הדפסה
+	Material	חומר
+	Shadow display	תצוגת צל
+	Center object	מרכז אובייקט
+	Move with Dim Line	הזז עם קו המידה
+	Move Text Only	הזז טקסט בלבד
+	Above Dim Line	מעל קו המידה
+	Center Vertically	מרכז אנכית
+	Reset Text Position	אפס מיקום טקסט
+	Continue Dimension	מידה רציפה
+	Baseline Dimension	מידת קו בסיס
+	Flip Arrow	הפוך חץ
+	Lengthen Landing	הארך מדף
+	Origin Point	נקודת ראשית
+	Hatch Angle	זווית הצללה
+	Hatch Scale	קנה מידה של הצללה
+	Edit Tolerance	ערוך טולרנס
+	Geometric Tolerance	טולרנס גאומטרי
+	Geometric characteristic	מאפיין גאומטרי
+	Material condition	מצב חומר
+	No symbol	ללא סמל
+	Projected Tolerance Zone	אזור טולרנס מוטל
+	Datum Identifier	מזהה בסיס ייחוס
+	Sym	סמל
+	Tolerance 1	טולרנס 1
+	Tolerance 2	טולרנס 2
+	Datum 1	בסיס ייחוס 1
+	Datum 2	בסיס ייחוס 2
+	Datum 3	בסיס ייחוס 3
+	PDF Underlay...	רקע PDF...
+	Clip PDF Underlay	חיתוך רקע PDF
+	Adjust PDF Underlay	התאמת רקע PDF
+	PDF Underlay Layers	שכבות רקע PDF
+	Unused items in this drawing	פריטים שאינם בשימוש בשרטוט זה
+	Purge Checked Items	נקה פריטים מסומנים
+	Purge All	נקה הכול
+	Items purged: {count}	פריטים שנוקו: {count}
+	Find what:	חפש את:
+	Replace with:	החלף ב:
+	Match case	התאם רישיות
+	Find whole words only	מצא מילים שלמות בלבד
+	Find	חפש
+	Replace All	החלף הכול
+	Matches replaced: {count} (objects: {objects})	התאמות שהוחלפו: {count} (אובייקטים: {objects})
+	Matches found and selected: {count} (objects: {objects})	התאמות שנמצאו ונבחרו: {count} (אובייקטים: {objects})
+	Select Color	בחר צבע
+	Dimension styles	סגנונות מידות
+	Linetypes	סוגי קו
+	Multileader styles	סגנונות קו הובלה מרובה
+	Multiline styles	סגנונות קו מקביל מרובה
+	Table styles	סגנונות טבלה
+	Text styles	סגנונות טקסט
+	Zero-length geometry	גאומטריה באורך אפס
+	Empty text objects	אובייקטי טקסט ריקים
+	Palette Windows	חלונות לוחות
+	Dock	עגן
+	Back into the main window	חזרה לחלון הראשי
+	Dock Palette	עגן לוח
+	Float in Own Window	צף בחלון נפרד
+	Drawings (CDY, DWG, DXF)	שרטוטים (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	שרטוט CADaddy (CDY)
+	CADaddy drawing (.cdy)	שרטוט CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	שמור גם עותק DWG בעת שמירת שרטוט CADaddy (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	שרטוט CADaddy שומר הכול; ייתכן שקובצי DWG ו-DXF לא ישמרו את הכול (השמירה אליהם מציינת מה).
+	Field...	שדה...
+	Update Fields	עדכן שדות
+	Change Text Case	שנה רישיות טקסט
+	Auto Number	מספור אוטומטי
+	Explode Text	פרק טקסט
+	Arc Aligned Text	טקסט מיושר לקשת
+	Data Extraction	חילוץ נתונים
+	Data source	מקור נתונים
+	Objects	אובייקטים
+	Output	פלט
+	Other drawings:	שרטוטים אחרים:
+	Add Drawings...	הוסף שרטוטים...
+	Open Settings...	פתח הגדרות...
+	Start from a saved .dxe settings file	התחל מקובץ הגדרות .dxe שמור
+	Block names	שמות בלוקים
+	Include blocks inside blocks	כלול בלוקים בתוך בלוקים
+	Other objects:	אובייקטים אחרים:
+	The drawing has no other objects.	אין בשרטוט אובייקטים אחרים.
+	Properties to extract:	מאפיינים לחילוץ:
+	Attribute tags	תגי תכונות
+	Combine identical rows	אחד שורות זהות
+	Insert a table	הוסף טבלה
+	Insertion point	נקודת הכנסה
+	Title	כותרת
+	Write a file (.csv for spreadsheets, .txt tab-separated)	כתוב קובץ (.csv לגיליונות אלקטרוניים, .txt מופרד בטאבים)
+	Browse...	עיון...
+	Save Settings...	שמור הגדרות...
+	Save these choices to a .dxe file to use again	שמור בחירות אלה לקובץ .dxe לשימוש חוזר
+	< Back	< הקודם
+	Next >	הבא >
+	Finish	סיום
+	UCS	UCS
+	Plan View (World)	תצוגת תוכנית (עולם)
+	New UCS	UCS חדש
+	World	עולם
+	Current UCS	UCS נוכחי
+	World (WCS)	עולם (WCS)
+	Unnamed	ללא שם
+	Hide UCS Icon	הסתר סמל UCS
+	WCS	WCS
+	Spelling	איות
+	Check Spelling	בדוק איות
+	Where to check	היכן לבדוק
+	Selected objects	אובייקטים נבחרים
+	Not in dictionary:	לא במילון:
+	Suggestions:	הצעות:
+	Ignore All	התעלם מהכול
+	Change All	שנה הכול
+	Add to Dictionary	הוסף למילון
+	Main dictionary:	מילון ראשי:
+	American English	אנגלית אמריקאית
+	Custom dictionary:	מילון מותאם אישית:
+	Spelling check complete.	בדיקת האיות הושלמה.
+	Hyperlink...	היפר-קישור...
+	Select Objects for a Hyperlink	בחר אובייקטים להיפר-קישור
+	Open Hyperlink	פתח היפר-קישור
+	Insert Hyperlink	הוסף היפר-קישור
+	Edit Hyperlink	ערוך היפר-קישור
+	Text to display	טקסט לתצוגה
+	File or web page	קובץ או דף אינטרנט
+	Named location	מיקום בשם
+	A named location with no file or web page is a layout or view of this drawing.	מיקום בשם ללא קובץ או דף אינטרנט הוא פריסה או תצוגה של שרטוט זה.
+	Remove Link	הסר קישור
+	⌘-click to follow the link	⌘+לחיצה כדי לעקוב אחר הקישור
+	Ctrl+click to follow the link	Ctrl+לחיצה כדי לעקוב אחר הקישור
+	Materials Browser...	דפדפן חומרים...
+	Attach by Layer	צרף לפי שכבה
+	Material Mapping	מיפוי חומר
+	New Material	חומר חדש
+	Edit Material	ערוך חומר
+	Delete Material	מחק חומר
+	Assign Material	הקצה חומר
+	Materials Browser	דפדפן חומרים
+	Search	חיפוש
+	Library	ספרייה
+	Add to drawing	הוסף לשרטוט
+	In this drawing	בשרטוט זה
+	No materials yet: add one from the library.	אין עדיין חומרים: הוסף אחד מהספרייה.
+	Colour	צבע
+	Roughness	חספוס
+	Metallic	מתכתי
+	Opacity	אטימות
+	Mapping	מיפוי
+	Tile size	גודל אריח
+	Assign to selection ({n})	הקצה לבחירה ({n})
+	Attach to layer	צרף לשכבה
+	Render	רינדור
+	Edit Layer State	ערוך מצב שכבות
+	Export Layer State	ייצא מצב שכבות
+	Import Layer State	ייבא מצב שכבות
+	New Layer Filter	מסנן שכבות חדש
+	Edit Layer Filter	ערוך מסנן שכבות
+	Delete Layer Filter	מחק מסנן שכבות
+	List Layer Filters	רשימת מסנני שכבות
+	Layers in Filter	שכבות במסנן
+	Layer States Manager	מנהל מצבי שכבות
+	Invert filter	הפוך מסנן
+	New Property Filter...	מסנן מאפיינים חדש...
+	New Group Filter	מסנן קבוצה חדש
+	Add Layer	הוסף שכבה
+	Remove Layer	הסר שכבה
+	Layer Filter Properties	מאפייני מסנן שכבות
+	Filter name	שם המסנן
+	Within	בתוך
+	Any	כלשהו
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	תבניות: * כל דבר, ? תו אחד, # ספרה אחת; הפרד בפסיקים; ~ מחריג.
+	Layer states	מצבי שכבות
+	Turn off layers not found in layer state	כבה שכבות שאינן במצב השכבות
+	Layer properties to restore	מאפייני שכבה לשחזור
+	On / Off	מופעל / כבוי
+	Frozen / Thawed	מוקפא / מופשר
+	Locked / Unlocked	נעול / לא נעול
+	Plot / No Plot	הדפסה / ללא הדפסה
+	Layers in "{name}"	שכבות ב-"{name}"
+	Remove from the layer state	הסר ממצב השכבות
+	New...	חדש...
+	Save the layers as they are now in this state	שמור את השכבות כפי שהן כעת במצב זה
+	Edit...	ערוך...
+	Rename	שנה שם
+	New layer state name	שם מצב שכבות חדש
+	New name	שם חדש
+	Visual Style	סגנון חזותי
+	Visual Styles	סגנונות חזותיים
+	Wireframe	מסגרת תיל
+	Hidden	מוסתר
+	Shaded	מוצלל
+	Shaded with Edges	מוצלל עם קצוות
+	Realistic	ריאליסטי
+	Mesh	רשת
+	Polyface Mesh	רשת פאות
+	Polygon Mesh	רשת מצולעים
+	Fly	טיסה
+	Walk and Fly	הליכה וטיסה
+	3D Library...	ספריית 3D...
+	Add 3D Twins to Symbols	הוסף תאומי 3D לסמלים
+	List 3D Models	רשימת מודלי 3D
+	Add 3D Twins	הוסף תאומי 3D
+	Plan Layers	שכבות תוכנית
+	Plan Walls	קירות תוכנית
+	Plan Openings	פתחים בתוכנית
+	Plan Rooms	חדרים בתוכנית
+	Plan Notes	הערות תוכנית
+	Plan Sheets	גיליונות תוכנית
+	3D Building from Plan	בניין 3D מתוכנית
+	Wedge	טריז
+	Presspull	לחיצה/משיכה
+	3D Solid	גוף מוצק 3D
+	Specify center	ציין מרכז
+	Specify length	ציין אורך
+	Specify width	ציין רוחב
+	Specify other corner	ציין פינה אחרת
+	Specify center point	ציין נקודת מרכז
+	Specify base radius	ציין רדיוס בסיס
+	Specify radius	ציין רדיוס
+	Specify diameter	ציין קוטר
+	Specify top radius	ציין רדיוס עליון
+	Specify tube radius	ציין רדיוס הצינור
+	Select objects to extrude	בחר אובייקטים לשליפה
+	Select extrusion path	בחר מסלול שליפה
+	Specify angle of taper for extrusion	ציין זווית התחדדות לשליפה
+	Specify height of extrusion	ציין גובה השליפה
+	Select objects to revolve	בחר אובייקטים לסיבוב גוף
+	Specify axis start point or define axis by	ציין נקודת התחלה של הציר או הגדר ציר באמצעות
+	Specify axis endpoint	ציין נקודת קצה של הציר
+	Specify angle of revolution	ציין זווית סיבוב הגוף
+	Select objects to sweep	בחר אובייקטים לסחיפה
+	Select sweep path	בחר מסלול סחיפה
+	Select cross sections in lofting order	בחר חתכי רוחב לפי סדר הלופט
+	Click inside bounded areas to press or pull	לחץ בתוך אזורים תחומים כדי לדחוף או למשוך
+	Specify extrusion height	ציין גובה שליפה
+	Cube	קובייה
+	Sides	צלעות
+	Top radius	רדיוס עליון
+	Path	מסלול
+	Taper angle	זווית התחדדות
+	Select one or more regions or 3D solids.	בחר אזור אחד או יותר או גופים מוצקים 3D.
+	No closed area found there.	לא נמצא שם אזור סגור.
+	Slice	חתך
+	Thicken	עיבוי
+	Fillet Edge	עיגול קצה
+	Chamfer Edge	שיפוע קצה
+	Fillet Edges	עיגול קצוות
+	Chamfer Edges	שיפוע קצוות
+	Move Faces	הזז פאות
+	Offset Faces	היסט פאות
+	Delete Faces	מחק פאות
+	Shell	מעטפת
+	Composite	מורכב
+	Select objects to slice	בחר אובייקטים לחיתוך
+	Specify a point on desired side or [keep Both sides]	ציין נקודה בצד הרצוי או [שמור את שני הצדדים]
+	Both	שניהם
+	Specify start point of slicing plane or	ציין נקודת התחלה של מישור החיתוך או
+	Specify second point on plane	ציין נקודה שנייה על המישור
+	Specify the Z of the XY-plane	ציין את ה-Z של מישור XY
+	Specify the X of the YZ-plane	ציין את ה-X של מישור YZ
+	Specify the Y of the ZX-plane	ציין את ה-Y של מישור ZX
+	Select surfaces to thicken	בחר משטחים לעיבוי
+	Select a 3D solid	בחר גוף מוצק 3D
+	Select an edge	בחר קצה
+	Remove faces	הסר פאות
+	Select faces	בחר פאות
+	Specify thickness	ציין עובי
+	Enter fillet radius	הזן רדיוס עיגול פינה
+	Enter distance	הזן מרחק
+	Specify a base point or displacement	ציין נקודת בסיס או היסט
+	Specify a second point of displacement	ציין נקודה שנייה של ההיסט
+	Specify the offset distance	ציין את מרחק ההיסט
+	Enter the shell offset distance	הזן את מרחק היסט המעטפת
+	Select solids, surfaces, and regions to subtract from ..	בחר גופים מוצקים, משטחים ואזורים שמהם יש לחסר ..
+	Select solids, surfaces, and regions to subtract ..	בחר גופים מוצקים, משטחים ואזורים לחיסור ..
+	Select two or more solids.	בחר שני גופים מוצקים או יותר.
+	The solids don't overlap; nothing was changed.	הגופים המוצקים אינם חופפים; לא בוצע שינוי.
+	Nothing would remain; nothing was changed.	לא היה נשאר דבר; לא בוצע שינוי.
+	The result would not be a solid; nothing was changed.	התוצאה לא תהיה גוף מוצק; לא בוצע שינוי.
+	No straight edge between two flat faces there.	אין שם קצה ישר בין שתי פאות שטוחות.
+	No face of the solid there.	אין שם פאה של הגוף המוצק.
+	Only outside (convex) edges can be filleted or chamfered.	ניתן לעגל או לשפע רק קצוות חיצוניים (קמורים).
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL פועל על תיבות, גלילים, כדורים ושליפות ישרות.
+	The walls are too thick for this solid.	הדפנות עבות מדי עבור גוף מוצק זה.
+	Select solids to subtract from.	בחר גופים מוצקים שמהם יש לחסר.
+	A solid can't be subtracted from itself.	לא ניתן לחסר גוף מוצק מעצמו.
+	The solid would have too many operations; nothing was changed.	לגוף המוצק יהיו יותר מדי פעולות; לא בוצע שינוי.
+	That face can't be moved (only flat faces, holes and added parts).	לא ניתן להזיז את הפאה הזו (רק פאות שטוחות, חורים וחלקים שנוספו).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	לא ניתן למחוק את הפאה הזו (רק חורים, עיגולי פינות, שיפועים וחלקים שנוספו).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	לא ניתן להסיט את הפאה הזו (צדי תיבה, קצוות של גלילים, חרוטים ושליפות, דפנות גלילים וכדורים).
+	The thickness must be more than zero.	העובי חייב להיות גדול מאפס.
+	The radius must be more than zero.	הרדיוס חייב להיות גדול מאפס.
+	The distance must be more than zero.	המרחק חייב להיות גדול מאפס.
+	Requires a number.	נדרש מספר.
+	Parameter	פרמטר
+	Action	פעולה
+	Visibility States	מצבי נראות
+	Remove Parameter or Action	הסר פרמטר או פעולה
+	Edit Reference	ערוך הפניה
+	Discard Reference Edits	בטל עריכות הפניה
+	Nested References	הפניות מקוננות
+	Light List	רשימת אורות
+	Sun Properties	מאפייני שמש
+	Render Exposure	חשיפת רינדור
+	Point Light	אור נקודתי
+	Spotlight	זרקור
+	Distant Light	אור מרוחק
+	Change Lights	שנה אורות
+	Section Plane	מישור חתך
+	Live Section	חתך חי
+	Generate Section Block	צור בלוק חתך
+	Generate Section	צור חתך
+	Flatshot	צילום שטוח
+	Base View	תצוגת בסיס
+	Section View	תצוגת חתך
+	Drawing Views	תצוגות שרטוט
+	Select face or any point to locate section line or	בחר פאה או נקודה כלשהי למיקום קו החתך או
+	Orthographic	אורתוגרפי
+	Select section object	בחר אובייקט חתך
+	Specify location of base view	ציין מיקום של תצוגת הבסיס
+	Select parent view	בחר תצוגת אב
+	Specify end point	ציין נקודת סיום
+	Specify location of section view	ציין מיקום של תצוגת החתך
+	There is nothing to draw: no 3D objects were found.	אין מה לשרטט: לא נמצאו אובייקטי 3D.
+	The section plane doesn't cut any solid.	מישור החתך אינו חותך אף גוף מוצק.
+	The view needs a direction.	התצוגה זקוקה לכיוון.
+	The drawing has no layout.	אין לשרטוט פריסה.
+	That is not a section plane.	זה אינו מישור חתך.
+	Requires a point.	נדרשת נקודה.
+	The view is [dx, dy, dz].	התצוגה היא [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	צור חבילת העברה
+	Files in the package	קבצים בחבילה
+	Not included	לא נכלל
+	Organized folders	תיקיות מאורגנות
+	One folder	תיקייה אחת
+	Include a transmittal report	כלול דוח העברה
+	Create ZIP...	צור ZIP...
+	Create Folder...	צור תיקייה...
+	STL Out	STL Out
+	Export STL...	ייצוא STL...
+	3D models (glTF, OBJ, STL)	מודלי 3D (glTF, OBJ, STL)
+	3D model (glTF binary)	מודל 3D (glTF בינארי)
+	3D model (glTF)	מודל 3D (glTF)
+	3D model (OBJ)	מודל 3D (OBJ)
+	3D model (STL)	מודל 3D (STL)
+	Render Region	רינדור אזור
+	samples	דגימות
+	a sample	דגימה
+	Pick crop window to render	בחר חלון חיתוך לרינדור
+	Nothing has been rendered yet.	עדיין לא בוצע רינדור.
+	There is nothing to render: no surfaces in the view.	אין מה לרנדר: אין משטחים בתצוגה.
+	The image couldn't be encoded.	לא ניתן היה לקודד את התמונה.
+	Saving images isn't available in the browser.	שמירת תמונות אינה זמינה בדפדפן.
+	PNG image	תמונת PNG
+	JPEG image	תמונת JPEG
+	Save Image	שמור תמונה
+	My Properties	המאפיינים שלי
+	Add to My Properties	הוסף למאפיינים שלי
+	Remove from My Properties	הסר מהמאפיינים שלי
+	All properties	כל המאפיינים
+	My properties: the ones you added (right-click a property's name to add it)	המאפיינים שלי: אלה שהוספת (לחץ לחיצה ימנית על שם מאפיין כדי להוסיף אותו)
+	Right-click a property's name and choose Add to My Properties.	לחץ לחיצה ימנית על שם מאפיין ובחר הוסף למאפיינים שלי.
+	Color Books	ספרי צבעים
+	Sheet Set Manager	מנהל ערכות גיליונות
+	Palettes	לוחות
+	New Sheet Set...	ערכת גיליונות חדשה...
+	Open Sheet Set...	פתח ערכת גיליונות...
+	No sheet set is open.	אין ערכת גיליונות פתוחה.
+	Number	מספר
+	Subset	תת-ערכה
+	Remove Sheet	הסר גיליון
+	Add Drawing...	הוסף שרטוט...
+	Rename Layouts to Match	שנה שמות פריסות בהתאם
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	הפריסה של כל גיליון תהפוך ל-"מספר כותרת", שאותם מציגים שדות מספר הגיליון והכותרת
+	Publish to PDF...	פרסם ל-PDF...
+	Prefix	קידומת
+	Digits	ספרות
+	Renumber	מספר מחדש
+	Zoom to Fit	זום להתאמה
+	Drag to pan, scroll to zoom	גרור להזזת תצוגה, גלול לזום
+	Publish	פרסם
+	Sheets to publish, in order	גיליונות לפרסום, לפי הסדר
+	Sheet	גיליון
+	Bookmark	סימנייה
+	Paper	נייר
+	Orientation	כיוון
+	(sheet name)	(שם הגיליון)
+	Page setup	הגדרות עמוד
+	Landscape	לרוחב
+	Portrait	לאורך
+	Add Sheets from Drawing...	הוסף גיליונות משרטוט...
+	Load List...	טען רשימה...
+	Save List...	שמור רשימה...
+	Publish List	רשימת פרסום
+	Enclose Text with Object	הקף טקסט באובייקט
+	Export Attribute Information	ייצא מידע תכונות
+	Import Attribute Information	ייבא מידע תכונות
+	Mask Text	מסך טקסט
+	Remote Text	טקסט מרוחק
+	Rotate Text	סובב טקסט
+	Text Fit	התאמת טקסט
+	Toggle Frames	החלף מסגרות
+	Unmask Text	הסר מסך טקסט
+	Update Remote Text	עדכן טקסט מרוחק
+	Geometric	גאומטרי
+	Infer geometric constraints	הסק אילוצים גאומטריים
+	Show constraint bars	הצג סרגלי אילוצים
+	Constraint bar transparency (%)	שקיפות סרגל אילוצים (%)
+	Dimensional	ממדי
+	Show dynamic constraints	הצג אילוצים דינמיים
+	Dimension name format	תבנית שם מידה
+	Name and Expression	שם וביטוי
+	Constraint types AUTOCONSTRAIN applies, in order of priority	סוגי אילוצים ש-AUTOCONSTRAIN מחיל, לפי סדר עדיפות
+	Move Up	הזז למעלה
+	Move Down	הזז למטה
+	Tangent objects must share an intersection point	אובייקטים משיקים חייבים לחלוק נקודת חיתוך
+	Perpendicular objects must share an intersection point	אובייקטים ניצבים חייבים לחלוק נקודת חיתוך
+	Distance tolerance	טולרנס מרחק
+	Angle tolerance (degrees)	טולרנס זווית (מעלות)
+	3D Move	הזזה 3D
+	3D Rotate	סיבוב 3D
+	3D Scale	קנה מידה 3D
+	3D Align	יישור 3D
+	3D Mirror	שיקוף 3D
+	3D Array	מערך 3D
+	3D Object Snap	הצמדה לאובייקט 3D
+	Specify second point or distance	ציין נקודה שנייה או מרחק
+	Specify angle	ציין זווית
+	Specify source plane: first point	ציין מישור מקור: נקודה ראשונה
+	Specify source plane: second point	ציין מישור מקור: נקודה שנייה
+	Specify source plane: third point	ציין מישור מקור: נקודה שלישית
+	Specify destination plane: first point	ציין מישור יעד: נקודה ראשונה
+	Specify destination plane: second point	ציין מישור יעד: נקודה שנייה
+	Specify destination plane: third point	ציין מישור יעד: נקודה שלישית
+	Delete source objects?	למחוק את אובייקטי המקור?
+	Specify point on XY plane	ציין נקודה על מישור XY
+	Specify point on YZ plane	ציין נקודה על מישור YZ
+	Specify point on ZX plane	ציין נקודה על מישור ZX
+	Specify first point of mirror plane (3 points) or	ציין נקודה ראשונה של מישור השיקוף (3 נקודות) או
+	Specify second point on mirror plane	ציין נקודה שנייה על מישור השיקוף
+	Specify third point on mirror plane	ציין נקודה שלישית על מישור השיקוף
+	Enter the type of array	הזן את סוג המערך
+	Polar	קוטבי
+	Enter the number of items in the array	הזן את מספר הפריטים במערך
+	Specify the angle to fill (+=ccw, -=cw)	ציין את זווית המילוי (+=נגד כיוון השעון, -=עם כיוון השעון)
+	Enter the number of rows (---)	הזן את מספר השורות (---)
+	Enter the number of columns (|||)	הזן את מספר העמודות (|||)
+	Enter the number of levels (...)	הזן את מספר המפלסים (...)
+	Specify the distance between rows (---)	ציין את המרחק בין השורות (---)
+	Specify the distance between columns (|||)	ציין את המרחק בין העמודות (|||)
+	Specify the distance between levels (...)	ציין את המרחק בין המפלסים (...)
+	Specify second point on axis of rotation	ציין נקודה שנייה על ציר הסיבוב
+	Select the objects first.	בחר תחילה את האובייקטים.
+	Requires a point, or a distance along an axis.	נדרשת נקודה, או מרחק לאורך ציר.
+	The points must not coincide or line up.	הנקודות לא יכולות לחפוף או להיות על קו אחד.
+	The three points line up: they make no plane.	שלוש הנקודות על קו אחד: הן אינן יוצרות מישור.
+	<3D Object Snap on>	<הצמדה לאובייקט 3D מופעלת>
+	<3D Object Snap off>	<הצמדה לאובייקט 3D כבויה>
+	Preparing the 3D view…	מכין את תצוגת ה-3D…
+	Viewpoint	נקודת מבט
+	3D View Benchmark	מדד ביצועים לתצוגת 3D
+	Drawing area	אזור השרטוט
+	Command line	שורת הפקודה
+	Viewport controls	פקדי אשנב
+	Coordinate system menu	תפריט מערכת קואורדינטות
+	UCS icon X axis	ציר X של סמל UCS
+	UCS icon Y axis	ציר Y של סמל UCS
+	High Contrast	ניגודיות גבוהה
+	Interface size	גודל ממשק
+	Interface Size	גודל ממשק
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	מפרט בניין
+	Set Building Spec	קבע מפרט בניין
+	Validate Building Spec	אמת מפרט בניין
+	Build Model from Spec	בנה מודל מהמפרט
+	Convert Matches to Block	המר התאמות לבלוק
+	Command Line Transparency	שקיפות שורת הפקודה
+	AutoComplete Settings	הגדרות השלמה אוטומטית
+	Input Settings	הגדרות קלט
+	AutoComplete	השלמה אוטומטית
+	Search System Variables	חפש משתני מערכת
+	Mid-string Search	חיפוש באמצע מחרוזת
+	System variable	משתנה מערכת
+	Layer state	מצב שכבות
+	Model Issues	בעיות במודל
+	Render Model View	רנדר תצוגת מודל
+	Model Overlay	שכבת-על של מודל
+	Model Counts	ספירות מודל
+	System Printers	מדפסות מערכת
+	Report a Problem...	דווח על בעיה...
+	Report a Problem	דווח על בעיה
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	אוסף את מה שעוזר לאתר בעיה לקובץ ZIP במחשב זה. שום דבר לא נשלח: צרף את הקובץ לדוא"ל אם ברצונך לדווח עליה.
+	Always included	נכלל תמיד
+	The log of this run and the two before it	היומן של הפעלה זו ושתי ההפעלות הקודמות
+	The last commands	הפקודות האחרונות
+	Versions, operating system and graphics adapter	גרסאות, מערכת הפעלה ומתאם גרפי
+	A summary of the open drawings (counts only, no geometry)	סיכום של השרטוטים הפתוחים (ספירות בלבד, ללא גאומטריה)
+	Names: file paths, layer and block names, typed text	שמות: נתיבי קבצים, שמות שכבות ובלוקים, טקסט מוקלד
+	Names are replaced by placeholders, also in the log.	השמות מוחלפים במצייני מקום, גם ביומן.
+	Save Report...	שמור דוח...
+	Email it to {address}	שלח בדוא"ל אל {address}
+	Plans to Model	מתוכניות למודל
+	Build	בנה
+	Rebuild	בנה מחדש
+	Check	בדוק
+	Kept in the drawing.	נשמר בשרטוט.
+	Drafted from the walk rules; not saved yet.	נוסח לפי כללי ההליכה; עדיין לא נשמר.
+	{n} of {total} approved	{n} מתוך {total} אושרו
+	Save Spec	שמור מפרט
+	Approve All	אשר הכול
+	Approved	אושר
+	Levels	מפלסים
+	Wall Types	סוגי קירות
+	Rooms	חדרים
+	Door and Window Families	משפחות דלתות וחלונות
+	Materials	חומרים
+	Site	אתר
+	Openings	פתחים
+	Issues ({n})	בעיות ({n})
+	The drawing changed since; check again.	השרטוט השתנה מאז; בדוק שוב.
+	No issues found.	לא נמצאו בעיות.
+	Configure Standards	הגדר תקנים
+	Standards files associated with the current drawing	קובצי תקנים המשויכים לשרטוט הנוכחי
+	Add...	הוסף...
+	Check Standards...	בדוק תקנים...
+	Check Standards	בדוק תקנים
+	No standards violations were found.	לא נמצאו הפרות תקנים.
+	problem(s)	בעיות
+	Take the standard's properties	קבל את מאפייני התקן
+	Replace it with the standard one	החלף אותו בזה של התקן
+	Fix All	תקן הכול
+	Give everything that differs the standard's properties	תן לכל מה ששונה את מאפייני התקן
+	Check Again	בדוק שוב
+	Layer Translator	מתרגם שכבות
+	Translate From	תרגם מ-
+	Translate To	תרגם אל
+	Load a drawing whose layers to translate to.	טען שרטוט שאל שכבותיו יש לתרגם.
+	Map	מפה
+	Layer Translation Mappings	מיפויי תרגום שכבות
+	Load Map...	טען מיפוי...
+	Save Map...	שמור מיפוי...
+	Translate	תרגם
+	Not in the standards	לא בתקנים
+	Properties differ from the standards	המאפיינים שונים מהתקנים
+	CAD Standards	תקני CAD
+	Configure...	הגדר...
+	Check...	בדוק...
+	Layer Translator...	מתרגם שכבות...
+	Draft Building Spec	נסח מפרט בניין
+	Draft from Plan	נסח מתוכנית
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	קרא את השכבות, הקירות, הדלתות, החדרים וההערות של התוכנית; ניחושים מסומנים.
+	guess	ניחוש
+	Detect Stairs	זהה מדרגות
+	List Stairs	רשימת מדרגות
+	Confirm Stairs	אשר מדרגות
+	Stairs and Ramps	מדרגות ורמפות
+	Bake Lighting	אפיית תאורה
+	Command Aliases and Shortcuts	כינויי פקודות וקיצורים
+	Keyboard Shortcuts	קיצורי מקלדת
+	replaces {command}	מחליף את {command}
+	Built-in	מובנה
+	Alias	כינוי
+	Command	פקודה
+	Add or Change	הוסף או שנה
+	Keys	מקשים
+	Edit Aliases and Shortcuts...	ערוך כינויים וקיצורים...
+	Customize	התאמה אישית
+	Read Elevation	קרא חזית
+	Read Roof Plan	קרא תוכנית גג
+	Exterior	חוץ
+	Drafting & Annotation	שרטוט והערות
+	3D Modeling	מידול 3D
+	Electrical	חשמל
+	Save Current As...	שמור את הנוכחי בשם...
+	Workspace Settings...	הגדרות סביבת עבודה...
+	Workspace Settings	הגדרות סביבת עבודה
+	Navigation Bar	סרגל ניווט
+	Save Workspace	שמור סביבת עבודה
+	Workspaces	סביבות עבודה
+	Close Navigation Bar	סגור סרגל ניווט
+	Workspace	סביבת עבודה
+	Read Ceiling Plan	קרא תוכנית תקרה
+	Ceilings	תקרות
+	Current Drawing	שרטוט נוכחי
+	Favourites	מועדפים
+	Libraries	ספריות
+	No library folder	אין תיקיית ספרייה
+	Choose Folder...	בחר תיקייה...
+	No blocks here.	אין כאן בלוקים.
+	Remove from Favourites	הסר מהמועדפים
+	Add to Favourites	הוסף למועדפים
+	Insertion Options	אפשרויות הכנסה
+	Auto-rotate (follow the current UCS)	סיבוב אוטומטי (לפי ה-UCS הנוכחי)
+	Repeat Placement	חזור על המיקום
+	Tool Palettes	לוחות כלים
+	Drag objects from the drawing here to make tools.	גרור לכאן אובייקטים מהשרטוט כדי ליצור כלים.
+	Add Selected	הוסף נבחרים
+	New palette	לוח חדש
+	Select objects in the drawing first.	בחר תחילה אובייקטים בשרטוט.
+	Blocks Palette	לוח בלוקים
+	Detect Grids	זהה רשתות צירים
+	Align Levels by Grids	ישר מפלסים לפי רשתות צירים
+	Columns at Grids	עמודים ברשתות צירים
+	Columns	עמודים
+	Build Room Volumes	בנה נפחי חדרים
+	Building	בניין
+	Go to Room	עבור לחדר
+	List Rooms	רשימת חדרים
+	Room	חדר
+	Build Volumes	בנה נפחים
+	Go to	עבור אל
+	{n} rooms	{n} חדרים
+	No rooms found: rooms are found from name labels inside closed outlines.	לא נמצאו חדרים: חדרים מזוהים לפי תוויות שם בתוך קווי מתאר סגורים.
+	Ceiling	תקרה
+	DesignCenter	DesignCenter
+	Up One Level	רמה אחת למעלה
+	Folder	תיקייה
+	Text Styles	סגנונות טקסט
+	Dimension Styles	סגנונות מידות
+	Layouts	פריסות
+	Add to Drawing	הוסף לשרטוט
+	Choose a drawing to see what it holds.	בחר שרטוט כדי לראות מה הוא מכיל.
+	{name} inserted.	{name} הוכנס.
+	{name} is already in the drawing; it was kept.	{name} כבר קיים בשרטוט; הוא נשמר.
+	{name} added.	{name} נוסף.
+	Read MEP Runs	קרא קווי MEP
+	Model Clashes	התנגשויות במודל
+	MEP Systems	מערכות MEP
+	Undo History	היסטוריית ביטול
+	(Start)	(התחלה)
+	Click a step to undo or redo to it.	לחץ על שלב כדי לבטל או לבצע שוב עד אליו.
+	Nothing yet.	עדיין אין כלום.
+	Double-click to run it again	לחץ פעמיים כדי להריץ שוב
+	Copy as Script	העתק כסקריפט
+	Save Session as Script...	שמור הפעלה כסקריפט...
+	Command History Palette	לוח היסטוריית פקודות
+	Furnish from Plan	ריהוט מתוכנית
+	Classify Plan	סווג תוכנית
+	Text and multiline text	טקסט וטקסט מרובה שורות
+	Block attribute values	ערכי תכונות בלוק
+	Dimension text	טקסט מידה
+	Multileaders	קווי הובלה מרובים
+	Hyperlinks	היפר-קישורים
+	Layer and block names	שמות שכבות ובלוקים
+	Find where:	חפש היכן:
+	Current space	מרחב נוכחי
+	Plain text	טקסט רגיל
+	Use wildcards	השתמש בתווים כלליים
+	Regular expressions	ביטויים רגולריים
+	Look in	חפש ב-
+	Zoom To	זום אל
+	Replace	החלף
+	Create Selection Set	צור קבוצת בחירה
+	Matches found: {count} (objects: {objects})	התאמות שנמצאו: {count} (אובייקטים: {objects})
+	Layer name	שם שכבה
+	Block name	שם בלוק
+	Revise Model from Plans	עדכן מודל מתוכניות
+	Plans to Model Benchmark	מדד ביצועים: מתוכניות למודל
+	Plans to Model Case	מקרה: מתוכניות למודל
+	Plans to Model Score	ציון: מתוכניות למודל
+	Save Viewpoint	שמור נקודת מבט
+	Viewpoints for Every Room	נקודות מבט לכל חדר
+	Camera Tour	סיור מצלמה
+	Tours and Viewpoints	סיורים ונקודות מבט
+	Tour Timing	תזמון סיור
+	3D Graphics Limits	מגבלות גרפיקת 3D
+	Drawn by the CPU (no usable GPU)	מצויר על ידי המעבד (אין GPU שמיש)
+	Point Cloud...	ענן נקודות...
+	Point Cloud	ענן נקודות
+	Attach Point Cloud	צרף ענן נקודות
+	Clip Point Cloud	חיתוך ענן נקודות
+	Point Cloud Color Map	מפת צבעים לענן נקודות
+	Point Cloud Information	מידע על ענן נקודות
+	Markups	סימונים
+	{done} of {total} done	{done} מתוך {total} בוצעו
+	No markups. Import them from a reviewed PDF.	אין סימונים. ייבא אותם מ-PDF שנבדק.
+	Done	בוצע
+	Import Markups...	ייבוא סימונים...
+	Import Markups	ייבוא סימונים
+	Markup Import...	ייבוא סימונים...
+	Markup Status	מצב סימון
+	Read Door and Window Schedules	קרא טבלאות דלתות וחלונות
+	Schedules	טבלאות
+	Esc	Esc
+	Hide the touch bar	הסתר את ה-Touch Bar
+	Type a command or value	הקלד פקודה או ערך
+	Embed Textures	הטמע טקסטורות
+	Publish Walkthrough	פרסם סיור הליכה
+	Walkthroughs (CDYWALK)	סיורי הליכה (CDYWALK)
+	Check Exchange	בדוק המרה
+	Not kept in the {format} file	לא נשמר בקובץ {format}
+	The drawing was saved. This file format can't keep everything in it:	השרטוט נשמר. תבנית קובץ זו אינה יכולה לשמור את כל תוכנו:
+	What	מה
+	left out	הושמט
+	changed	שונה
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	שרטוט CADaddy (.cdy) שומר הכול. בדוק המרה מציג רשימה זו שוב ללא שמירה.
+	VP Linetype	סוג קו באשנב
+	VP Lineweight	עובי קו באשנב
+	Unreconciled New Layers ({n})	שכבות חדשות שלא תואמו ({n})
+	Reconcile All	תאם הכול
+	Reconcile Layer	תאם שכבה
+	LayerWalk	LayerWalk
+	Layers: {n}	שכבות: {n}
+	Restore on exit	שחזר ביציאה
+	Filter:	מסנן:
+	Layer Walk...	מעבר בין שכבות...
+	Layer Walk	מעבר בין שכבות
+	Isolate Layer to Current Viewport	בודד שכבה לאשנב הנוכחי
+	Unreconciled New Layers	שכבות חדשות שלא תואמו
+	Move to New Window	העבר לחלון חדש
+	Dock All Windows	עגן את כל החלונות
+	Every drawing is in a window of its own.	כל שרטוט נמצא בחלון משלו.
+	Back among the drawing tabs	חזרה ללשוניות השרטוטים
+	Plot Stamp...	חותמת הדפסה...
+	Plot a Folder of Drawings...	הדפס תיקיית שרטוטים...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	כל שרטוט בתיקייה ל-PDF משלו, בתיקיית PDF בתוכה
+	Plot stamp	חותמת הדפסה
+	Quick Properties Lists	רשימות מאפיינים מהירים
+	Purgeable Items	פריטים שניתן לנקות
+	Find Non-Purgeable Items	מצא פריטים שלא ניתן לנקות
+	Purge {kind} "{name}"?	לנקות את {kind} "{name}"?
+	Yes to All	כן לכולם
+	Items that can't be purged, and why	פריטים שלא ניתן לנקות, והסיבה
+	Select and Zoom	בחר והתמקד
+	Pick an item to see why it can't be purged.	בחר פריט כדי לראות מדוע לא ניתן לנקות אותו.
+	Confirm each item to be purged	אשר כל פריט לניקוי
+	Purge nested items	נקה פריטים מקוננים
+	Text Align	יישור טקסט
+	Color model:	מודל צבע:
+	Hue	גוון
+	Saturation	רוויה
+	Luminance	בהירות
+	Hex	Hex
+	More Colors...	צבעים נוספים...
+	Load more books with COLORBOOK (JSON or tab-separated files).	טען ספרים נוספים באמצעות COLORBOOK (קובצי JSON או מופרדי טאבים).
+	All spaces	כל המרחבים
+	Total: {n}	סה"כ: {n}
+	No block references here.	אין כאן הפניות בלוק.
+	Highlight and zoom to its references	הדגש והתמקד בהפניות שלו
+	Similar but not identical: {scaled} scaled, {exploded} exploded	דומים אך לא זהים: {scaled} בקנה מידה שונה, {exploded} מפורקים
+	Insert Count Table	הוסף טבלת ספירה
+	Update Count Tables	עדכן טבלאות ספירה
+	Count in Area	ספירה באזור
+	{n} reference(s) of {name} selected.	נבחרו {n} הפניות של {name}.
+	{n} similar object(s) selected.	נבחרו {n} אובייקטים דומים.
+	Geographic Location...	מיקום גאוגרפי...
+	Remove Geographic Location	הסר מיקום גאוגרפי
+	Set Location	קבע מיקום
+	Remove Location	הסר מיקום
+	Latitude and Longitude	קו רוחב וקו אורך
+	Trace Image to Vectors	המר תמונה לווקטורים
+	Trace Raster Image to Vectors	המר תמונת רסטר לווקטורים
+	Drawing Summary	סיכום שרטוט
+	Query Drawing	שאילתת שרטוט
+	Begin Agent Request	התחל בקשת סוכן
+	End Agent Request	סיים בקשת סוכן
+	Agent Dry Run	הרצת ניסיון של סוכן
+	Agent Confirmations	אישורי סוכן
+	Agent Change Journal	יומן שינויים של סוכן
+	Agent Activity	פעילות סוכן
+	An agent asks	סוכן שואל
+	Allow	אפשר
+	Deny	דחה
+	Not allowed: {question}	לא מותר: {question}
+	Ask me before an agent saves over a file or closes with changes	שאל אותי לפני שסוכן שומר מעל קובץ או סוגר עם שינויים
+	Dry run: agents' commands change nothing	הרצת ניסיון: פקודות הסוכנים לא משנות דבר
+	No agent requests yet.	עדיין אין בקשות סוכן.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} פקודות · {added} נוספו · {removed} הוסרו · {changed} שונו
+	Select what it added and changed	בחר את מה שהוא הוסיף ושינה
+	Activity History	היסטוריית פעילות
+	Activity history is off (Options ▸ Open and Save).	היסטוריית הפעילות כבויה (אפשרויות ▸ פתיחה ושמירה).
+	command	פקודה
+	{n} steps	{n} שלבים
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	בחר את האובייקטים ששלב זה הוסיף או שינה
+	The objects of this step are gone.	האובייקטים של שלב זה כבר אינם קיימים.
+	{n} object(s) selected.	נבחרו {n} אובייקטים.
+	{n} object(s) selected ({gone} since erased).	נבחרו {n} אובייקטים ({gone} נמחקו מאז).
+	{n} s ago	לפני {n} שנ'
+	{n} min ago	לפני {n} דק'
+	{n} h ago	לפני {n} שע'
+	{n} d ago	לפני {n} ימים
+	Keep an activity history beside each drawing (private, on this computer)	שמור היסטוריית פעילות לצד כל שרטוט (פרטית, במחשב זה)
+	Background mask	מסכת רקע
+	Mask border offset	היסט גבול המסכה
+	Mask color	צבע המסכה
+	Use drawing background	השתמש ברקע השרטוט
+	Regenerate Dimensions	צור מחדש מידות
+	Enter layer name for new dimensions (. for the current layer)	הזן שם שכבה למידות חדשות (. לשכבה הנוכחית)
+	{folder} (folder)	{folder} (תיקייה)
+	Add drawings or a folder of them.	הוסף שרטוטים או תיקייה שלהם.
+	Add Files...	הוסף קבצים...
+	Add Folder...	הוסף תיקייה...
+	cancelled	בוטל
+	Choose the output folder, or Next to the originals.	בחר את תיקיית הפלט, או ליד המקוריים.
+	Convert Drawings	המר שרטוטים
+	Convert Drawings...	המר שרטוטים...
+	Convert drawings...	המר שרטוטים...
+	Convert to	המר ל-
+	Converted	הומר
+	Converted, not all kept	הומר, לא הכול נשמר
+	Converting files is not available on the web.	המרת קבצים אינה זמינה ברשת.
+	Drawings to convert	שרטוטים להמרה
+	Each drawing's own	של כל שרטוט
+	Failed	נכשל
+	Files already there	קבצים שכבר קיימים
+	Folder:	תיקייה:
+	Include subfolders	כלול תיקיות משנה
+	Keep a file written over as .bak	שמור קובץ שנכתב עליו כ-.bak
+	Next to the originals	ליד המקוריים
+	Open Log	פתח יומן
+	Or type a file or folder path	או הקלד נתיב קובץ או תיקייה
+	Overwrite	דרוס
+	Save to	שמור אל
+	Skip	דלג
+	Skipped	דולג
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	אין שרטוטים (.dwg, .dxf, .cdy) להמרה.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} הומרו, {skipped} דולגו, {failed} נכשלו מתוך {total}
+	DWG drawing (.dwg)	שרטוט DWG (.dwg)
+	DXF drawing (.dxf)	שרטוט DXF (.dxf)
+	Require a token for control connections (recommended)	דרוש אסימון לחיבורי בקרה (מומלץ)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	תוכנות חייבות לשלוח תחילה את האסימון ש-CADaddy כותב לקובץ שרק אתה יכול לקרוא, כך שתוכנות של משתמשים אחרים לא יוכלו להפעיל אותו. המחבר של Claude קורא אותו עבורך. ההגדרה תיכנס לתוקף בהפעלה הבאה של CADaddy.
+	Building models (IFC)	מודלי בניין (IFC)
+	Building model (IFC4)	מודל בניין (IFC4)
+	3D printing (3MF)	הדפסת 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	כלול את השרטוט (השרטוט הפעיל כקובץ DXF)
+	Your account, home folder and computer name are always left out.	החשבון, תיקיית הבית ושם המחשב שלך תמיד מושמטים.
+	Files in the report	קבצים בדוח
+	Send to Redline	שלח ל-Redline
+	Import Redline Markups	ייבוא סימוני Redline
+	Import Redline Markups...	ייבוא סימוני Redline...
+	Open a Program?	לפתוח תוכנה?
+	This link opens a program or script, not a document:	קישור זה פותח תוכנה או סקריפט, לא מסמך:
+	Open it only if you trust the drawing and know what it runs.	פתח אותו רק אם אתה סומך על השרטוט ויודע מה הוא מריץ.
+	Open Anyway	פתח בכל זאת
+	Report a security problem	דווח על בעיית אבטחה
+	Load This File?	לטעון קובץ זה?
+	This file isn't in a trusted folder:	קובץ זה אינו בתיקייה מהימנה:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	שגרות LISP וסקריפטים יכולים לשנות שרטוטים וקבצים. טען אותו רק אם אתה סומך על המקור שלו.
+	Don't Load	אל תטען
+	Load Once	טען פעם אחת
+	Always Load from This Folder	טען תמיד מתיקייה זו
+	Adds {folder} to TRUSTEDPATHS	מוסיף את {folder} ל-TRUSTEDPATHS
+	Allow Loading a File	אפשר טעינת קובץ
+	Plot Stamp	חותמת הדפסה
+	Plot stamp fields	שדות חותמת הדפסה
+	Drawing name	שם השרטוט
+	Layout name	שם הפריסה
+	Date and Time	תאריך ושעה
+	Device name	שם ההתקן
+	Paper size	גודל נייר
+	Plot scale	קנה מידה להדפסה
+	No login or computer name is ever stamped.	שם משתמש או שם מחשב לעולם אינם מוטבעים.
+	User defined fields	שדות מוגדרי משתמש
+	One per line, up to {n}.	אחד בכל שורה, עד {n}.
+	Stamp model space plots	הטבע חותמת בהדפסות מרחב מודל
+	Stamp this layout's plots	הטבע חותמת בהדפסות של פריסה זו
+	Location and offset	מיקום והיסט
+	Location	מיקום
+	Upside-down	הפוך
+	X offset	היסט X
+	Y offset	היסט Y
+	Offset relative to	היסט ביחס ל-
+	Printable area	אזור הדפסה
+	Paper border	גבול הנייר
+	Text properties	מאפייני טקסט
+	Font	גופן
+	Single line plot stamp	חותמת הדפסה בשורה אחת
+	Units	יחידות
+	Inches	אינצ'ים
+	Millimeters	מילימטרים
+	Log file location	מיקום קובץ היומן
+	Create a log file	צור קובץ יומן
+	The log is kept for this session, never saved with the drawing.	היומן נשמר להפעלה זו בלבד, לעולם לא נשמר עם השרטוט.
+	Action Macro Manager...	מנהל פקודות מאקרו...
+	Action Macros	פקודות מאקרו
+	Action Recorder	מקליט פעולות
+	Insert Base Point	הוסף נקודת בסיס
+	Insert Message	הוסף הודעה
+	Play Action Macro	הפעל פקודת מאקרו
+	Play...	הפעל...
+	Record	הקלט
+	Request User Input	בקש קלט משתמש
+	Stop	עצור
+	Action Macro Manager	מנהל פקודות מאקרו
+	Recording…	מקליט…
+	No action macros yet: Record, do the work, then Stop.	עדיין אין פקודות מאקרו: הקלט, בצע את העבודה ואז עצור.
+	Play	הפעל
+	Message: {text}	הודעה: {text}
+	Base point (asked for)	נקודת בסיס (נשאלת)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	בקש קלט זה כשהמאקרו מופעל
+	Customize Interface	התאמה אישית של הממשק
+	Customize User Interface...	התאמה אישית של ממשק המשתמש...
+	Interface...	ממשק...
+	Customize User Interface	התאמה אישית של ממשק המשתמש
+	Quick Access Toolbar	סרגל כלים לגישה מהירה
+	Add a command	הוסף פקודה
+	Reset Quick Access Toolbar	אפס את סרגל הכלים לגישה מהירה
+	Built-in panels shown (untick to hide):	לוחות מובנים מוצגים (בטל סימון כדי להסתיר):
+	Your panels on built-in tabs:	הלוחות שלך בלשוניות מובנות:
+	Tab	לשונית
+	New panel name	שם לוח חדש
+	Add Panel	הוסף לוח
+	Your tabs:	הלשוניות שלך:
+	Remove Tab	הסר לשונית
+	New tab name	שם לשונית חדשה
+	Add Tab	הוסף לשונית
+	Edit Keyboard Shortcuts...	ערוך קיצורי מקלדת...
+	Remove Panel	הסר לוח
+	Command or LISP macro, e.g. (command "line")	פקודה או מאקרו LISP, לדוגמה (command "line")
+	Hatch Editor	עורך הצללה
+	Table Cell	תא טבלה
+	Rows & Columns	שורות ועמודות
+	Merge	מיזוג
+	Open/Save	פתיחה/שמירה
+	Attributes	תכונות
+	Spell Check	בדיקת איות
+	Formula	נוסחה
+	Edit Source	ערוך מקור
+	Close Array	סגור מערך
+	Manage Attributes	נהל תכונות
+	Dialog State	מצב תיבת דו-שיח
+	Dialog Action	פעולת תיבת דו-שיח
+	Recover Drawing and Xrefs...	שחזר שרטוט ו-Xrefs...
+	Count Blocks	ספור בלוקים
+	Get Selection Set	קבל קבוצת בחירה
+	Global Attribute Edit	עריכת תכונות גלובלית
+	LISP Function Surfer	סייר פונקציות LISP
+	List LISP Symbols	רשימת סמלי LISP
+	List Nested Object	רשימת אובייקט מקונן
+	List Object Xdata	רשימת Xdata של אובייקט
+	Multiple Polyline Edit	עריכת קווים מרובים רבים
+	Redefine Path	הגדר נתיב מחדש
+	Redefine Path Mode	מצב הגדרת נתיב מחדש
+	Restore Dimension Text	שחזר טקסט מידה
+	Revert	חזור לגרסה השמורה
+	Rotate Blocks	סובב בלוקים
+	Scale Blocks	קנה מידה לבלוקים
+	Select Similar by Properties	בחר דומים לפי מאפיינים
+	Show URLs	הצג כתובות URL
+	Synchronize Viewports	סנכרן אשנבים
+	Paste Special	הדבקה מיוחדת
+	Paste Special...	הדבקה מיוחדת...
+	Paste as	הדבק בתור
+	Last Measurement	המדידה האחרונה
+	Perimeter	היקף
+	curl isn't available ({error}).	curl אינו זמין ({error}).
+	This build has no release key to check updates with.	לגרסה זו אין מפתח שחרור לבדיקת עדכונים.
+	The release's signature files are too large.	קובצי החתימה של השחרור גדולים מדי.
+	The release's signature isn't one CADaddy reads.	חתימת השחרור אינה מסוג ש-CADaddy קורא.
+	The release's signature is missing or damaged.	חתימת השחרור חסרה או פגומה.
+	The release's signature is for another version ({version}).	חתימת השחרור שייכת לגרסה אחרת ({version}).
+	The release is signed with a key this build doesn't trust.	השחרור חתום במפתח שגרסה זו אינה סומכת עליו.
+	This build's release key is damaged.	מפתח השחרור של גרסה זו פגום.
+	The release's signature doesn't match its files.	חתימת השחרור אינה תואמת את קבציו.
+	Couldn't reach GitHub: {why}	לא ניתן היה להתחבר ל-GitHub: {why}
+	GitHub's answer was too large.	התשובה של GitHub הייתה גדולה מדי.
+	GitHub's answer wasn't readable ({error}).	לא ניתן היה לקרוא את התשובה של GitHub ({error}).
+	GitHub's answer has no version.	בתשובה של GitHub אין גרסה.
+	GitHub's answer has an unreadable version ({version}).	בתשובה של GitHub יש גרסה שאינה קריאה ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	לא ניתן היה להוריד את {name} של השחרור, ולכן לא הותקן דבר: {why}
+	The release's {name} is too large, so nothing was installed.	{name} של השחרור גדול מדי, ולכן לא הותקן דבר.
+	The release's {name} isn't text, so nothing was installed.	{name} של השחרור אינו טקסט, ולכן לא הותקן דבר.
+	It wasn't downloaded. Download it from the release page instead.	הוא לא הורד. הורד אותו מדף השחרור במקום זאת.
+	Version {version} isn't newer than this one ({current}).	הגרסה {version} אינה חדשה יותר מגרסה זו ({current}).
+	This release isn't signed.	שחרור זה אינו חתום.
+	The release failed its check.	השחרור נכשל בבדיקה.
+	The signed release doesn't list {name}.	השחרור החתום אינו כולל את {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	טביעת האצבע של GitHub עבור {name} שונה מהחתומה.
+	Couldn't make the folder {folder}: {error}	לא ניתן היה ליצור את התיקייה {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	ההורדה לא תאמה את טביעת האצבע SHA-256 שפורסמה, ולכן לא הותקנה.
+	Couldn't read the download: {error}	לא ניתן היה לקרוא את ההורדה: {error}
+	The download failed: {why}	ההורדה נכשלה: {why}
+	This release has no installer for this computer yet.	לשחרור זה עדיין אין מתקין למחשב זה.
+	Drawing Properties...	מאפייני שרטוט...
+	System Variable Monitor...	מנטר משתני מערכת...
+	{name} Properties	מאפייני {name}
+	Summary	סיכום
+	Statistics	סטטיסטיקה
+	Size	גודל
+	Subject	נושא
+	Author	מחבר
+	Keywords	מילות מפתח
+	Comments	הערות
+	Revision number	מספר גרסה
+	Hyperlink base	בסיס היפר-קישור
+	Created	נוצר
+	Modified	שונה
+	Last saved by	נשמר לאחרונה על ידי
+	Total editing time (minutes)	זמן עריכה כולל (דקות)
+	Property	מאפיין
+	System Variable Monitor	מנטר משתני מערכת
+	Variable	משתנה
+	Watched value	ערך במעקב
+	Current value	ערך נוכחי
+	Notify when a watched variable changes	הודע כאשר משתנה במעקב משתנה
+	Reset All	אפס הכול
+	Delay	השהיה
+	Repeat Script	חזור על סקריפט
+	Script Call	קריאה לסקריפט
+	Resume Script	המשך סקריפט
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	שמור היסטוריית פעילות לכל שרטוט (פרטית, בתיקיית ההגדרות של CADaddy)
+	Specify insertion point or	ציין נקודת הכנסה או
+	Specify table scale	ציין קנה מידה לטבלה
+	{} dimension(s) updated to the current settings.	{} מידות עודכנו להגדרות הנוכחיות.
+	British English (-ise)	אנגלית בריטית (-ise)
+	British English (-ize)	אנגלית בריטית (-ize)
+	Spanish	ספרדית
+	French	צרפתית
+	German	גרמנית
+	Portuguese (Iberian)	פורטוגזית (איברית)
+	Portuguese (Brazilian)	פורטוגזית (ברזילאית)
+	(not installed)	(לא מותקן)
+	Dictionaries are read from:	המילונים נקראים מתוך:
+	Published to {path}	פורסם אל {path}
+	Sheet Set (.sheetset.json)	ערכת גיליונות (.sheetset.json)
+	Resolution	רזולוציה
+	Colour depth	עומק צבע
+	Colour (24-bit)	צבע (24 סיביות)
+	Greys (8-bit)	גווני אפור (8 סיביות)
+	Black and white (1-bit)	שחור-לבן (1 סיבית)
+	PNG Out	PNG Out
+	JPEG Out	JPEG Out
+	BMP Out	BMP Out
+	TIFF Out	TIFF Out
+	Enter image file name	הזן שם קובץ תמונה
+	Nothing selected: no image written.	לא נבחר דבר: לא נכתבה תמונה.
+	{} object(s) written to {} ({} × {} pixels).	{} אובייקטים נכתבו אל {} ({} × {} פיקסלים).
+	Set to ByLayer	קבע ל-ByLayer
+	Explode and Set Properties	פרק וקבע מאפיינים
+	Edit Attribute in Place	ערוך תכונה במקום
+	Frame	מסגרת
+	Setup	הגדרה
+	Setup View	הגדרת תצוגה
+	Setup Drawing	הגדרת שרטוט
+	Setup Profile	הגדרת פרופיל
+	Enter view scale	הזן קנה מידה של התצוגה
+	Specify view center	ציין מרכז התצוגה
+	Enter view name	הזן שם תצוגה
+	Specify side of viewport to project	ציין צד האשנב להטלה
+	Specify first point of cutting plane	ציין נקודה ראשונה של מישור החיתוך
+	Specify second point of cutting plane	ציין נקודה שנייה של מישור החיתוך
+	Specify first point of inclined plane	ציין נקודה ראשונה של המישור המשופע
+	Specify second point of inclined plane	ציין נקודה שנייה של המישור המשופע
+	Specify side to view from	ציין את הצד שממנו להציג
+	Specify first corner of viewport	ציין פינה ראשונה של האשנב
+	Specify opposite corner of viewport	ציין פינה נגדית של האשנב
+	Display hidden profile lines on separate layer?	להציג קווי פרופיל מוסתרים בשכבה נפרדת?
+	Project profile lines onto a plane?	להטיל קווי פרופיל על מישור?
+	Delete tangential edges?	למחוק קצוות משיקים?
+	None (PDF file)	ללא (קובץ PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	טקסט מידה בגובה {} קטן מדי לקריאה בשרטוט זה. הקלד DIMSCALE {} כדי להגדיל מידות חדשות פי {}.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	טקסט בגובה {} קטן מדי לקריאה בשרטוט זה. נסה גובה של {} (TEXTSIZE קובע את ברירת המחדל).
+	(each layout's own)	(של כל פריסה)
+	A callout on the selected sheet pointing at the selected view	הפניה בגיליון הנבחר המצביעה על התצוגה הנבחרת
+	A page setup copied from the selected sheet's layout	הגדרות עמוד שהועתקו מהפריסה של הגיליון הנבחר
+	Add Callout	הוסף הפניה
+	Callouts: {}	הפניות: {}
+	From Selected Sheet	מהגיליון הנבחר
+	Insert on Selected Sheet	הוסף לגיליון הנבחר
+	Named view	תצוגה בשם
+	Page Setup Override	עקיפת הגדרות עמוד
+	Place View	מקם תצוגה
+	Position on sheet	מיקום בגיליון
+	Remove Property	הסר מאפיין
+	Sheet Properties	מאפייני גיליון
+	Sheet Set Fields	שדות ערכת גיליונות
+	Sheet Set Properties	מאפייני ערכת גיליונות
+	Sync Drawings	סנכרן שרטוטים
+	Text holding the field, at the position on sheet	טקסט המכיל את השדה, במיקום בגיליון
+	Views and Callouts	תצוגות והפניות
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	הפריסה של כל גיליון תהפוך ל-"מספר כותרת"; שדות ערכת הגיליונות, תוויות התצוגות וההפניות יקבלו את הערכים הנוכחיים של הערכה
+	3 Point	3 נקודות
+	Origin	ראשית
+	Z	Z
+	Named UCS...	UCS בשם...
+	Center Mark (DIMCEN)	סימן מרכז (DIMCEN)
+	Copy Objects to New Layer	העתק אובייקטים לשכבה חדשה
+	Cut with Base Point	גזור עם נקודת בסיס
+	DXF In	DXF In
+	DXF Out	DXF Out
+	Fill	מילוי
+	Maximize Viewport	הגדל אשנב
+	Minimize Viewport	מזער אשנב
+	Object Selection Filters	מסנני בחירת אובייקטים
+	Oops	אופס
+	Quick Text	טקסט מהיר
+	Redefine Attributes	הגדר תכונות מחדש
+	Drawing	שרטוט
+	Profile	פרופיל
+	Clashes	התנגשויות
+	Run	הפעל
+	Re-run	הפעל שוב
+	Run clash detection	הפעל זיהוי התנגשויות
+	Re-run keeping statuses	הפעל שוב תוך שמירת מצבים
+	Tolerance:	טולרנס:
+	in	in
+	Show:	הצג:
+	No clashes. Run detection first.	אין התנגשויות. הפעל זיהוי תחילה.
+	Status:	מצב:
+	Trade:	מקצוע:
+	Notes:	הערות:
+	Go To	עבור אל
+	Zoom to clash	זום להתנגשות
+	Export BCF	ייצוא BCF
+	Export CSV	ייצוא CSV
+	Export to BCF 2.1 (ZIP)	ייצוא ל-BCF 2.1 (ZIP)
+	Export clash report to CSV	ייצא דוח התנגשויות ל-CSV
+	MEP Review	סקירת MEP
+	Guessed only	משוערים בלבד
+	{n} items	{n} פריטים
+	No MEP items found. Run mep.read first.	לא נמצאו פריטי MEP. הפעל תחילה את mep.read.
+	Mark reviewed	סמן כנסקר
+	Size: {ss}, Height: {hs}	גודל: {ss}, גובה: {hs}
+	Edit size, height or system	ערוך גודל, גובה או מערכת
+	Size W:	גודל W:
+	Bottom ft:	תחתית ft:
+	Rebuild 3D model keeping hand edits	בנה מחדש את מודל ה-3D תוך שמירת עריכות ידניות
+	Zoomed to {sys} run on {lvl}.	זום לקו {sys} במפלס {lvl}.
+	Marked as reviewed.	סומן כנסקר.
+	Unmarked.	הסימון הוסר.
+	Edit applied.	העריכה הוחלה.
+	Rebuilt: {n} MEP runs.	נבנו מחדש: {n} קווי MEP.
+	3D Measure	מדידה 3D
+	BCF Export	ייצוא BCF
+	Clash List	רשימת התנגשויות
+	Clash Status	מצב התנגשות
+	Coordination Tree	עץ תיאום
+	Coordination Viewpoints	נקודות מבט לתיאום
+	Edit MEP Item	ערוך פריט MEP
+	List MEP Items	רשימת פריטי MEP
+	Section Box	תיבת חתך
+	Trade Visibility	נראות מקצועות
+	BIM Types	סוגי BIM
+	Get BIM Spec	קבל מפרט BIM
+	Remove BIM Spec from Entities	הסר מפרט BIM מישויות
+	Remove BIM Type	הסר סוג BIM
+	Set BIM Spec on Entities	קבע מפרט BIM לישויות
+	Set BIM Type	קבע סוג BIM
+	Ceiling and Soffit Takeoff	כתב כמויות לתקרות וסופיטים
+	Colour by Assembly	צבע לפי הרכב
+	RFI List	רשימת RFI
+	Zoom to RFI	זום ל-RFI
+	Update RFI	עדכן RFI
+	Export RFI List	ייצא רשימת RFI
+	Sent	נשלח
+	Answered	נענה
+	Not sent	לא נשלח
+	High	גבוה
+	Medium	בינוני
+	Low	נמוך
+	All levels	כל המפלסים
+	Open items only	פריטים פתוחים בלבד
+	{high} high, {medium} medium, {low} low	{high} גבוהים, {medium} בינוניים, {low} נמוכים
+	No gaps or conflicts in the building spec.	אין פערים או סתירות במפרט הבניין.
+	Assumed meanwhile:	הנחה בינתיים:
+	Proposed fix:	תיקון מוצע:
+	Sheets:	גיליונות:
+	Walk to It	לך אליו
+	Export XLSX...	ייצוא XLSX...
+	Export PDF...	ייצוא PDF...
+	Drywall Takeoff	כתב כמויות לגבס
+	Drywall View Mode	מצב תצוגת גבס
+	Finish Faces	פאות גמר
+	Wall Info	מידע על קיר
+	Open Print Set	פתח סט הדפסה
+	Classify Print Set	סווג סט הדפסה
+	Print Set Dashboard	לוח מחוונים לסט הדפסה
+	Print Set Sheets	גיליונות סט הדפסה
+	Re-import Revised Set	ייבא מחדש סט מעודכן
+	Save Print Set	שמור סט הדפסה
+	Ahead	קדימה
+	Bottom / top AFF	תחתית / עליון מעל הרצפה הגמורה
+	Clash	התנגשות
+	elements	רכיבים
+	Field Viewer	מציג שטח
+	Fit	התאם
+	Keep	שמור
+	New note	הערה חדשה
+	No new notes to send	אין הערות חדשות לשליחה
+	No room matches	אין חדר תואם
+	Note	הערה
+	Note kept	ההערה נשמרה
+	Notes	הערות
+	notes ready to sync	הערות מוכנות לסנכרון
+	not typed	לא הוקלד
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	פתח חבילת שטח (FIELDVIEW.EXPORT ב-CADaddy), או שחרר אחת כאן
+	Open clashes and RFIs	התנגשויות ו-RFI פתוחים
+	RFI	RFI
+	Room number	מספר חדר
+	Search a room number, or tap a room	חפש מספר חדר, או הקש על חדר
+	Send Notes	שלח הערות
+	Tap two points to measure	הקש על שתי נקודות כדי למדוד
+	Trades	מקצועות
+	Unit	יחידה
+	Verified	אומת
+	Verified point	נקודה מאומתת
+	What is there, as built	מה שקיים בפועל, כפי שנבנה
+	Plan	תוכנית
+	3D	3D
+	Architectural	אדריכלי
+	Structural	קונסטרוקציה
+	Mechanical	מכני
+	Plumbing	אינסטלציה
+	Fire protection	הגנה מפני אש
+	Other	אחר
+	stated	מוצהר
+	inferred	מוסק
+	assumed	משוער
+	Field Package	חבילת שטח
+	Sync Field Notes	סנכרן הערות שטח
+	Field Notes	הערות שטח
+	Detect Unit Types	זהה סוגי יחידות
+	List Unit Types	רשימת סוגי יחידות
+	Unit Schedule	טבלת יחידות
+	Unit Type Takeoff	כתב כמויות לפי סוג יחידה
+	Override Generated Element	עקוף רכיב שנוצר
+	List Overrides	רשימת עקיפות
+	Revert Override	בטל עקיפה
+	Accept Override After Review	קבל עקיפה לאחר סקירה
+	Show or Hide Overrides	הצג או הסתר עקיפות
+	Re-apply Overrides	החל מחדש עקיפות
+	Overrides	עקיפות
+	Select generated element (or an object drawn by hand to add)	בחר רכיב שנוצר (או אובייקט ששורטט ביד כדי להוסיף)
+	Enter type mark	הזן סימון סוג
+	Enter override to revert	הזן עקיפה לביטול
+	Verify	אמת
+	review: the drawing changed here	לסקירה: השרטוט השתנה כאן
+	orphaned: its element is no longer generated	יתום: הרכיב שלו כבר אינו נוצר
+	Project Rules	כללי פרויקט
+	Domain:	תחום:
+	No project rules set.	לא הוגדרו כללי פרויקט.
+	Tier:	דרג:
+	Source:	מקור:
+	Reason:	סיבה:
+	Overridden values:	ערכים שנעקפו:
+	No drawing open.	אין שרטוט פתוח.
+	List Project Rules	רשימת כללי פרויקט
+	Get Project Rule	קבל כלל פרויקט
+	Set Project Rule	קבע כלל פרויקט
+	Remove Project Rule	הסר כלל פרויקט
+	Preview Project Rule Change	תצוגה מקדימה של שינוי כלל פרויקט
+	Project Rules Label	תווית כללי פרויקט
+	Import Project Rules	ייבא כללי פרויקט
+	Export Project Rules	ייצא כללי פרויקט
+	Print Validator Documents	מסמכי אימות הדפסות
+	Validate Model Against Prints	אמת מודל מול הדפסות
+	Validation Failure Overlay	שכבת-על של כשלי אימות
+	Element Provenance	מקור הרכיב
+	MEP Quantities	כמויות MEP
+	Refresh MEP Quantities	רענן כמויות MEP
+	Activate Drawing	הפעל שרטוט
+	Add to Project	הוסף לפרויקט
+	Close Project	סגור פרויקט
+	Import Manifest	ייבא מניפסט
+	Import Standards	ייבא תקנים
+	New Project	פרויקט חדש
+	Open Project	פתח פרויקט
+	Project Disk Use	שימוש בדיסק של הפרויקט
+	Project Drawings	שרטוטי הפרויקט
+	Project Info	מידע על הפרויקט
+	Remove Standard	הסר תקן
+	Remove from Project	הסר מהפרויקט
+	Restore Project	שחזר פרויקט
+	Set Standard	קבע תקן
+	Shelve Drawing	העבר שרטוט לארכיון
+	Shelve Project	העבר פרויקט לארכיון
+	Standards Library	ספריית תקנים
+	Validate Manifest	אמת מניפסט
+	Active	פעיל
+	Shelved	בארכיון
+	{n} drawings	{n} שרטוטים
+	Compare Revised Print	השווה הדפסה מעודכנת
+	Revision Log	יומן גרסאות
+	Attach IFC Reference	צרף הפניית IFC
+	IFC References	הפניות IFC
+	IFC Reference Elements	רכיבי הפניית IFC
+	Reload IFC References	טען מחדש הפניות IFC
+	Accept Specifications	קבל מפרטים
+	Import Specifications	ייבא מפרטים
+	Colour Scheme	ערכת צבעים
+	Coordination Mode	מצב תיאום
+	Coordination Views	תצוגות תיאום
+	Isolate Trade	בודד מקצוע
+	Project Briefing	תדריך פרויקט
+	Project Note	הערת פרויקט
+	Review Queue	תור סקירה
+	Next Review Item	פריט הסקירה הבא
+	Resolve Review Item	פתור פריט סקירה
+	Defer Review Item	דחה פריט סקירה
+	Draft RFI	נסח RFI
+	Batch Resolve	פתרון באצווה
+	Approve Agent Work	אשר עבודת סוכן
+	Agent Work	עבודת סוכן
+	Build BIM Model	בנה מודל BIM
+	to accept	לקבלה
+	Accept all	קבל הכול
+	Accept	קבל
+	Cited:	מצוטט:
+	Nothing waiting: agents' work is all accepted.	אין דבר ממתין: כל עבודת הסוכנים התקבלה.
+	Open IFC Model	פתח מודל IFC
+	Open IFC Model...	פתח מודל IFC...
+	IFC Model	מודל IFC
+	IFC Model Tree	עץ מודל IFC
+	IFC Object Properties	מאפייני אובייקט IFC
+	Filter IFC Objects	סנן אובייקטי IFC
+	IFC Section Box	תיבת חתך IFC
+	Measure in 3D	מדידה ב-3D
+	IFC Camera	מצלמת IFC
+	Render IFC Model	רנדר מודל IFC
+	New BCF Issue	בעיית BCF חדשה
+	BCF Issues	בעיות BCF
+	BCF Issues...	בעיות BCF...
+	BCF Issue	בעיית BCF
+	Update BCF Issue	עדכן בעיית BCF
+	Show BCF Issue	הצג בעיית BCF
+	Delete BCF Issue	מחק בעיית BCF
+	Import BCF	ייבוא BCF
+	Read Levels	קרא מפלסים
+	List Levels	רשימת מפלסים
+	Edit Level	ערוך מפלס
+	Attach Sheets to Levels	צרף גיליונות למפלסים
+	Check Shafts Through Levels	בדוק פירים דרך מפלסים
+	Isolate Level	בודד מפלס
+	Read from Prints	קרא מההדפסות
+	Level names and elevations from the sections, elevations and level markers	שמות מפלסים וגבהים מהחתכים, החזיתות וסימוני המפלסים
+	Attach Sheets	צרף גיליונות
+	Check Shafts	בדוק פירים
+	Shafts, chases and risers must carry on through the levels between their ends	פירים, תעלות ורייזרים חייבים להמשיך דרך המפלסים שבין קצותיהם
+	No levels in the building spec.	אין מפלסים במפרט הבניין.
+	Level	מפלס
+	Floor to floor	מרצפה לרצפה
+	Sheets	גיליונות
+	Show only this storey in 3D	הצג רק קומה זו ב-3D
+	Datums (no plan on this drawing):	מישורי ייחוס (אין תוכנית בשרטוט זה):
+	Sheets on no level:	גיליונות ללא מפלס:
+	Show All Levels	הצג את כל המפלסים
+	The levels already match the prints.	המפלסים כבר תואמים להדפסות.
+	{sheets} sheets, {loose} on no level	{sheets} גיליונות, {loose} ללא מפלס
+	{name}: not shown on {levels}	{name}: לא מוצג ב-{levels}
+	Every shaft and riser carries on through its levels.	כל פיר ורייזר ממשיך דרך המפלסים שלו.
+	Not a height: {text}	לא גובה: {text}
+	Export COBie	ייצוא COBie
+	Validate COBie	אמת COBie
+	Export Handover Schedules	ייצא טבלאות מסירה
+	COBie...	COBie...
+	Handover Schedules...	טבלאות מסירה...
+	Electrical Gear	ציוד חשמלי
+	Check Electrical Gear	בדוק ציוד חשמלי
+	Submittal Review of Gear	סקירת הגשה של ציוד
+	Accept Gear as Submitted	קבל ציוד כפי שהוגש

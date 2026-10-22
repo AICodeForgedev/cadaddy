@@ -32,6 +32,18 @@ const MISSING_AT_MOST: &[(&str, usize)] = &[
     ("sv", 18),
     ("uk", 0),
     ("zh", 19),
+    ("nl", 0),
+    ("da", 0),
+    ("fi", 0),
+    ("nb", 0),
+    ("el", 0),
+    ("ro", 0),
+    ("hi", 0),
+    ("id", 0),
+    ("vi", 0),
+    ("th", 0),
+    ("he", 0),
+    ("fa", 0),
 ];
 
 /// A render of dialog `id` in `lang` (egui_kittest's wgpu renderer), for the report.
@@ -71,6 +83,18 @@ const CATALOGS: &[(&str, &str)] = &[
     ("sv", include_str!("../src/i18n/sv.tsv")),
     ("ar", include_str!("../src/i18n/ar.tsv")),
     ("ja", include_str!("../src/i18n/ja.tsv")),
+    ("nl", include_str!("../src/i18n/nl.tsv")),
+    ("da", include_str!("../src/i18n/da.tsv")),
+    ("fi", include_str!("../src/i18n/fi.tsv")),
+    ("nb", include_str!("../src/i18n/nb.tsv")),
+    ("el", include_str!("../src/i18n/el.tsv")),
+    ("ro", include_str!("../src/i18n/ro.tsv")),
+    ("hi", include_str!("../src/i18n/hi.tsv")),
+    ("id", include_str!("../src/i18n/id.tsv")),
+    ("vi", include_str!("../src/i18n/vi.tsv")),
+    ("th", include_str!("../src/i18n/th.tsv")),
+    ("he", include_str!("../src/i18n/he.tsv")),
+    ("fa", include_str!("../src/i18n/fa.tsv")),
 ];
 
 /// The dialogs the app opens by id (`ui.dialog`): dialogs.rs, the style and settings managers

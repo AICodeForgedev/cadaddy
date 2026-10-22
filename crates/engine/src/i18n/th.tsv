@@ -1,0 +1,196 @@
+# CADaddy engine messages in Thai: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	ป้อนชื่อกลุ่ม
+	Pick internal point	เลือกจุดภายใน
+	Specify the pattern origin	ระบุจุดกำเนิดลวดลาย
+	Specify the incrementing elevation between rows	ระบุระดับความสูงที่เพิ่มขึ้นระหว่างแถว
+	Specify the angle to fill (+=ccw, -=cw)	ระบุมุมที่จะเติม (+=ทวนเข็ม, -=ตามเข็ม)
+	Select hatch object	เลือกวัตถุแฮทช์
+	Red, Green, Blue	แดง, เขียว, น้ำเงิน
+	Enter the number of rows	ป้อนจำนวนแถว
+	Enter the number of levels	ป้อนจำนวนระดับ
+	Enter new layer name	ป้อนชื่อเลเยอร์ใหม่
+	Specify width	ระบุความกว้าง
+	Specify the angle between items	ระบุมุมระหว่างรายการ
+	Specify text height	ระบุความสูงข้อความ
+	Specify start tangent	ระบุแทนเจนต์เริ่ม
+	Specify end tangent	ระบุแทนเจนต์ปลาย
+	Specify reference length	ระบุความยาวอ้างอิง
+	Specify other corner	ระบุมุมอีกมุม
+	Specify next point or [Undo]	ระบุจุดถัดไป หรือ [Undo]
+	Specify new location	ระบุตำแหน่งใหม่
+	Specify new length	ระบุความยาวใหม่
+	Specify length of line	ระบุความยาวของเส้น
+	Specify displacement	ระบุระยะเลื่อน
+	Specify angle for dimension text	ระบุมุมสำหรับข้อความไดเมนชัน
+	Select viewports	เลือกวิวพอร์ต
+	Select object to break dimension	เลือกวัตถุที่จะแบ่งไดเมนชัน
+	Select group	เลือกกลุ่ม
+	Select grip to edit array	เลือกกริปเพื่อแก้ไขอาร์เรย์
+	Select a table	เลือกตาราง
+	Select a boundary to remove	เลือกขอบเขตที่จะเอาออก
+	Rotate arrayed items?	หมุนรายการในอาร์เรย์หรือไม่?
+	Erase polyline?	ลบโพลีไลน์หรือไม่?
+	Enter viewport arrangement	ป้อนการจัดวางวิวพอร์ต
+	Enter transparency value (0-90)	ป้อนค่าความโปร่งใส (0-90)
+	Enter the number of operations to undo	ป้อนจำนวนการดำเนินการที่จะเลิกทำ
+	Enter the number of columns	ป้อนจำนวนคอลัมน์
+	Enter number of items in array	ป้อนจำนวนรายการในอาร์เรย์
+	Enter new layer state name	ป้อนชื่อสถานะเลเยอร์ใหม่
+	Enter new color	ป้อนสีใหม่
+	Enter name of new layout	ป้อนชื่อเลย์เอาต์ใหม่
+	Enter layer name	ป้อนชื่อเลเยอร์
+	Enter file name	ป้อนชื่อไฟล์
+	Enter color name or number (1-255)	ป้อนชื่อหรือหมายเลขสี (1-255)
+	Enter a configuration option	ป้อนตัวเลือกการกำหนดค่า
+	Base point	จุดฐาน
+	Word-wrap the combined Mtext?	ตัดคำอัตโนมัติใน Mtext ที่รวมแล้วหรือไม่?
+	Where should the data go?	จะให้ข้อมูลไปที่ใด?
+	Verify each name to be purged?	ยืนยันแต่ละชื่อที่จะล้างหรือไม่?
+	Use landing	ใช้ขาพัก
+	Type of boundary object	ชนิดของวัตถุขอบเขต
+	Specify width factor	ระบุตัวคูณความกว้าง
+	Specify tolerance	ระบุพิกัดความเผื่อ
+	Specify the tangent direction for the start point of arc	ระบุทิศทางแทนเจนต์สำหรับจุดเริ่มของส่วนโค้ง
+	Specify the reference angle	ระบุมุมอ้างอิง
+	Specify the new angle	ระบุมุมใหม่
+	Specify text width	ระบุความกว้างข้อความ
+	Specify temporary OTRACK point	ระบุจุด OTRACK ชั่วคราว
+	Invalid option keyword.	คีย์เวิร์ดตัวเลือกไม่ถูกต้อง
+	*Invalid selection*	*การเลือกไม่ถูกต้อง*
+	Requires a valid angle.	ต้องเป็นมุมที่ถูกต้อง
+	Nothing to undo.	ไม่มีอะไรให้เลิกทำ
+	Invalid point.	จุดไม่ถูกต้อง
+	No viewport found there.	ไม่พบวิวพอร์ตตรงนั้น
+	*Cancel*	*ยกเลิก*
+	Requires a positive number.	ต้องเป็นจำนวนบวก
+	No hatch selected.	ไม่ได้เลือกแฮทช์
+	** Command not allowed in Model Tab ** (switch to a layout first)	** ใช้คำสั่งนี้ในแท็บโมเดลไม่ได้ ** (สลับไปยังเลย์เอาต์ก่อน)
+	Select a multileader.	เลือกมัลติลีดเดอร์
+	No line or arc to continue.	ไม่มีเส้นหรือส่วนโค้งให้ต่อ
+	Revision cloud finished.	สร้างเมฆแก้ไขเสร็จแล้ว
+	Object selected is not a circle or arc.	วัตถุที่เลือกไม่ใช่วงกลมหรือส่วนโค้ง
+	Select a linear or aligned dimension.	เลือกไดเมนชันเชิงเส้นหรือแนวขนาน
+	Object selected is not a dimension.	วัตถุที่เลือกไม่ใช่ไดเมนชัน
+	No dimensions selected.	ไม่ได้เลือกไดเมนชัน
+	Requires a number.	ต้องเป็นตัวเลข
+	0 found	พบ 0 รายการ
+	The feature control frame is empty.	กรอบควบคุมคุณลักษณะว่างเปล่า
+	1 was on a locked layer.	1 รายการอยู่บนเลเยอร์ที่ล็อก
+	Row elevations need an associative array; the copies stay at the same elevation.	ระดับความสูงของแถวต้องใช้อาร์เรย์แบบเชื่อมโยง สำเนาจะอยู่ที่ระดับความสูงเดิม
+	Point or option keyword required.	ต้องระบุจุดหรือคีย์เวิร์ดตัวเลือก
+	Enter Yes or No.	ป้อน Yes หรือ No
+	Viewport created, zoomed to the model extents.	สร้างวิวพอร์ตแล้ว และซูมไปยังขอบเขตโมเดล
+	No object found.	ไม่พบวัตถุ
+	The object is not a table.	วัตถุไม่ใช่ตาราง
+	No table there.	ไม่มีตารางตรงนั้น
+	A transparent command is already in progress.	มีคำสั่งแทรกระหว่างทำงานอยู่แล้ว
+	Invalid class name.	ชื่อคลาสไม่ถูกต้อง
+	Invalid group name.	ชื่อกลุ่มไม่ถูกต้อง
+	Too many point modifiers.	ตัวปรับจุดมากเกินไป
+	No leader to remove.	ไม่มีเส้นชี้นำให้เอาออก
+	Requires a non-negative number.	ต้องเป็นจำนวนที่ไม่ติดลบ
+	Clipboard is empty.	คลิปบอร์ดว่างเปล่า
+	1 object was on a locked layer.	วัตถุ 1 ชิ้นอยู่บนเลเยอร์ที่ล็อก
+	Circle does not exist.	วงกลมไม่มีอยู่
+	Enter Length or Area.	ป้อน Length หรือ Area
+	Enter a percentage from 0 to 1000.	ป้อนเปอร์เซ็นต์ตั้งแต่ 0 ถึง 1000
+	Enter Table, File or None.	ป้อน Table, File หรือ None
+	Cannot measure that object.	ไม่สามารถวัดวัตถุนั้นได้
+	Third pair ignored (2D align).	ละเว้นคู่ที่สาม (จัดแนว 2D)
+	Insert mode: Copy (nested objects are copied as independent objects).	โหมดแทรก: Copy (วัตถุซ้อนจะถูกคัดลอกเป็นวัตถุอิสระ)
+	Everything has been undone	เลิกทำทุกอย่างแล้ว
+	Everything has been undone.	เลิกทำทุกอย่างแล้ว
+	Requires a non-negative number or Auto.	ต้องเป็นจำนวนที่ไม่ติดลบหรือ Auto
+	Select a dimension.	เลือกไดเมนชัน
+	Object cannot be dimensioned this way.	ไม่สามารถใส่ไดเมนชันให้วัตถุด้วยวิธีนี้
+	Select an arc, circle or line.	เลือกส่วนโค้ง วงกลม หรือเส้น
+	The two points must be different.	จุดทั้งสองต้องต่างกัน
+	No linear dimension to continue. Create one with DIMLINEAR first.	ไม่มีไดเมนชันเชิงเส้นให้ต่อ สร้างด้วย DIMLINEAR ก่อน
+	A multileader needs a leader line or content; nothing was drawn.	มัลติลีดเดอร์ต้องมีเส้นชี้นำหรือเนื้อหา ไม่ได้วาดอะไร
+	Requires the name of a block defined in the drawing.	ต้องเป็นชื่อบล็อกที่กำหนดไว้ในแบบ
+	Invalid option.	ตัวเลือกไม่ถูกต้อง
+	The boundary encloses none of the image.	ขอบเขตไม่ได้ครอบคลุมส่วนใดของภาพ
+	The object is not an image.	วัตถุไม่ใช่ภาพ
+	The image has no clipping boundary.	ภาพไม่มีขอบเขตการคลิป
+	No images selected.	ไม่ได้เลือกภาพ
+	Requires an integer between 0 and 100.	ต้องเป็นจำนวนเต็มระหว่าง 0 ถึง 100
+	The selected object has no area.	วัตถุที่เลือกไม่มีพื้นที่
+	No such object	ไม่มีวัตถุดังกล่าว
+	Requires a point.	ต้องระบุจุด
+	Requires a distance.	ต้องระบุระยะ
+	The object is on a locked layer.	วัตถุอยู่บนเลเยอร์ที่ล็อก
+	Value must be positive and nonzero.	ค่าต้องเป็นบวกและไม่เป็นศูนย์
+	Requires an angle.	ต้องระบุมุม
+	Requires a point or option keyword.	ต้องระบุจุดหรือคีย์เวิร์ดตัวเลือก
+	Object does not intersect a cutting edge.	วัตถุไม่ตัดกับขอบตัด
+	Object does not intersect an edge.	วัตถุไม่ตัดกับขอบ
+	Lines are parallel.	เส้นขนานกัน
+	The Block Editor is not open.	ตัวแก้ไขบล็อกไม่ได้เปิดอยู่
+	Requires a positive integer.	ต้องเป็นจำนวนเต็มบวก
+	Answer Yes or No.	ตอบ Yes หรือ No
+	Requires a valid point.	ต้องเป็นจุดที่ถูกต้อง
+	No reference objects	ไม่มีวัตถุอ้างอิง
+	Requires an angle or point.	ต้องระบุมุมหรือจุด
+	Requires a positive distance.	ต้องเป็นระยะที่เป็นบวก
+	Requires a non-negative distance.	ต้องเป็นระยะที่ไม่ติดลบ
+	No such grip	ไม่มีกริปดังกล่าว
+	Requires a template file name.	ต้องระบุชื่อไฟล์เทมเพลต
+	A hatch needs at least one boundary: erase it instead.	แฮทช์ต้องมีขอบเขตอย่างน้อยหนึ่งขอบเขต: ให้ลบแฮทช์แทน
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	การเลิกทำถูกปิดอยู่ (UNDO Control None) UNDO Control All จะเปิดใช้
+	Enter ON or OFF.	ป้อน ON หรือ OFF
+	Not a linear dimension.	ไม่ใช่ไดเมนชันเชิงเส้น
+	Valid hatch boundary not found.	ไม่พบขอบเขตแฮทช์ที่ถูกต้อง
+	No closed boundary objects selected.	ไม่ได้เลือกวัตถุขอบเขตปิด
+	Requires a name.	ต้องระบุชื่อ
+	That option doesn't apply to this grip.	ตัวเลือกนั้นใช้กับกริปนี้ไม่ได้
+	That would make a degenerate object.	จะทำให้เกิดวัตถุที่เสื่อมรูป
+	No tangent or perpendicular from the last point.	ไม่มีแทนเจนต์หรือเส้นตั้งฉากจากจุดล่าสุด
+	Requires numeric distance or second point.	ต้องระบุระยะเป็นตัวเลขหรือจุดที่สอง
+	Edge endpoints must differ.	จุดปลายขอบต้องต่างกัน
+	Requires numeric distance or point.	ต้องระบุระยะเป็นตัวเลขหรือจุด
+	Requires a positive height.	ต้องเป็นความสูงที่เป็นบวก
+	No objects found.	ไม่พบวัตถุ
+	Requires a non-zero number.	ต้องเป็นจำนวนที่ไม่ใช่ศูนย์
+	Circle must intersect cutting edges at two or more points.	วงกลมต้องตัดกับขอบตัดตั้งแต่สองจุดขึ้นไป
+	Arc cannot be full 360 degrees.	ส่วนโค้งเต็ม 360 องศาไม่ได้
+	Cannot break that object.	ไม่สามารถแบ่งวัตถุนั้นได้
+	An object is on a locked layer.	มีวัตถุอยู่บนเลเยอร์ที่ล็อก
+	Objects are not connected.	วัตถุไม่ได้เชื่อมต่อกัน
+	The two points must differ.	จุดทั้งสองต้องต่างกัน
+	Mirror line points must differ.	จุดของเส้นสะท้อนต้องต่างกัน
+	No drawing is open.	ไม่มีแบบที่เปิดอยู่
+	Command: {}	คำสั่ง: {}
+	Unknown command "{}". Press F1 for help.	ไม่รู้จักคำสั่ง "{}" กด F1 เพื่อดูวิธีใช้
+	{} found	พบ {} รายการ
+	{} found, {} total	พบ {} รายการ, รวม {}
+	Distance = {}	ระยะ = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	ระยะ = {},  มุมในระนาบ XY = {},  มุมจากระนาบ XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	เดลตา X = {},  เดลตา Y = {},   เดลตา Z = {}
+	Area = {}, Perimeter = {}	พื้นที่ = {}, เส้นรอบรูป = {}
+	Total area = {}	พื้นที่รวม = {}
+	Resuming {} command.	กลับไปทำคำสั่ง {} ต่อ
+	Invalid input: {}	อินพุตไม่ถูกต้อง: {}
+	{} were on a locked layer.	{} รายการอยู่บนเลเยอร์ที่ล็อก
+	{} dimension(s) changed.	เปลี่ยนไดเมนชันแล้ว {} รายการ
+	Group {} ungrouped.	ยกเลิกกลุ่ม {} แล้ว
+	{} object(s) flattened.	ทำให้วัตถุแบนแล้ว {} ชิ้น
+	Group {} renamed to {}.	เปลี่ยนชื่อกลุ่ม {} เป็น {} แล้ว
+	{} object(s) added to group {}.	เพิ่มวัตถุ {} ชิ้นในกลุ่ม {} แล้ว
+	{} object(s) removed from group {}.	เอาวัตถุ {} ชิ้นออกจากกลุ่ม {} แล้ว
+	{} lines were chamfered	ลบมุมเส้นแล้ว {} เส้น
+	{} lines were filleted	ลบมุมโค้งเส้นแล้ว {} เส้น
+	{} objects joined into 1 {}	เชื่อมวัตถุ {} ชิ้นเป็น 1 {}
+	Current dimension style:  {}	สไตล์ไดเมนชันปัจจุบัน:  {}
+	Wrote {}	เขียน {} แล้ว
+	{} is already open.	{} เปิดอยู่แล้ว
+	{} dimension(s) created.	สร้างไดเมนชันแล้ว {} รายการ
+	BOUNDARY created {} polyline(s)	BOUNDARY สร้างโพลีไลน์ {} เส้น
+	Current line-width is {}	ความกว้างเส้นปัจจุบันคือ {}
+	Unknown variable {}. Type SETVAR ? to list variables.	ไม่รู้จักตัวแปร {} พิมพ์ SETVAR ? เพื่อแสดงรายการตัวแปร
+	{} = {} (read only)	{} = {} (อ่านอย่างเดียว)
+	Dimension text = {}	ข้อความไดเมนชัน = {}
+	{} segments added to polyline	เพิ่ม {} ช่วงในโพลีไลน์แล้ว

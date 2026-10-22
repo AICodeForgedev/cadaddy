@@ -1,0 +1,196 @@
+# CADaddy engine messages in Dutch: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Voer een groepsnaam in
+	Pick internal point	Kies een intern punt
+	Specify the pattern origin	Geef de oorsprong van het patroon op
+	Specify the incrementing elevation between rows	Geef de hoogtetoename tussen rijen op
+	Specify the angle to fill (+=ccw, -=cw)	Geef de te vullen hoek op (+=linksom, -=rechtsom)
+	Select hatch object	Selecteer arceringsobject
+	Red, Green, Blue	Rood, groen, blauw
+	Enter the number of rows	Voer het aantal rijen in
+	Enter the number of levels	Voer het aantal niveaus in
+	Enter new layer name	Voer de nieuwe laagnaam in
+	Specify width	Geef de breedte op
+	Specify the angle between items	Geef de hoek tussen elementen op
+	Specify text height	Geef de teksthoogte op
+	Specify start tangent	Geef de beginraaklijn op
+	Specify end tangent	Geef de eindraaklijn op
+	Specify reference length	Geef de referentielengte op
+	Specify other corner	Geef de andere hoek op
+	Specify next point or [Undo]	Geef het volgende punt op of [Undo]
+	Specify new location	Geef de nieuwe positie op
+	Specify new length	Geef de nieuwe lengte op
+	Specify length of line	Geef de lengte van de lijn op
+	Specify displacement	Geef de verplaatsing op
+	Specify angle for dimension text	Geef de hoek voor de maattekst op
+	Select viewports	Selecteer viewports
+	Select object to break dimension	Selecteer object om de maat te onderbreken
+	Select group	Selecteer groep
+	Select grip to edit array	Selecteer grip om de reeks te bewerken
+	Select a table	Selecteer een tabel
+	Select a boundary to remove	Selecteer een te verwijderen grens
+	Rotate arrayed items?	Elementen van de reeks roteren?
+	Erase polyline?	Polylijn wissen?
+	Enter viewport arrangement	Voer de viewportindeling in
+	Enter transparency value (0-90)	Voer de transparantiewaarde in (0-90)
+	Enter the number of operations to undo	Voer het aantal ongedaan te maken bewerkingen in
+	Enter the number of columns	Voer het aantal kolommen in
+	Enter number of items in array	Voer het aantal elementen in de reeks in
+	Enter new layer state name	Voer de naam van de nieuwe laagstatus in
+	Enter new color	Voer de nieuwe kleur in
+	Enter name of new layout	Voer de naam van de nieuwe layout in
+	Enter layer name	Voer de laagnaam in
+	Enter file name	Voer de bestandsnaam in
+	Enter color name or number (1-255)	Voer kleurnaam of -nummer in (1-255)
+	Enter a configuration option	Voer een configuratieoptie in
+	Base point	Basispunt
+	Word-wrap the combined Mtext?	Woordterugloop toepassen op de gecombineerde Mtext?
+	Where should the data go?	Waar moeten de gegevens naartoe?
+	Verify each name to be purged?	Elke op te schonen naam bevestigen?
+	Use landing	Aansluiting gebruiken
+	Type of boundary object	Type grensobject
+	Specify width factor	Geef de breedtefactor op
+	Specify tolerance	Geef de tolerantie op
+	Specify the tangent direction for the start point of arc	Geef de raakrichting voor het beginpunt van de boog op
+	Specify the reference angle	Geef de referentiehoek op
+	Specify the new angle	Geef de nieuwe hoek op
+	Specify text width	Geef de tekstbreedte op
+	Specify temporary OTRACK point	Geef een tijdelijk OTRACK-punt op
+	Invalid option keyword.	Ongeldig optiesleutelwoord.
+	*Invalid selection*	*Ongeldige selectie*
+	Requires a valid angle.	Vereist een geldige hoek.
+	Nothing to undo.	Niets om ongedaan te maken.
+	Invalid point.	Ongeldig punt.
+	No viewport found there.	Daar is geen viewport gevonden.
+	*Cancel*	*Geannuleerd*
+	Requires a positive number.	Vereist een positief getal.
+	No hatch selected.	Geen arcering geselecteerd.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Opdracht niet toegestaan op tab Model ** (schakel eerst naar een layout)
+	Select a multileader.	Selecteer een multileider.
+	No line or arc to continue.	Geen lijn of boog om voort te zetten.
+	Revision cloud finished.	Revisiewolk voltooid.
+	Object selected is not a circle or arc.	Het geselecteerde object is geen cirkel of boog.
+	Select a linear or aligned dimension.	Selecteer een lineaire of uitgelijnde maat.
+	Object selected is not a dimension.	Het geselecteerde object is geen maat.
+	No dimensions selected.	Geen maten geselecteerd.
+	Requires a number.	Vereist een getal.
+	0 found	0 gevonden
+	The feature control frame is empty.	Het kader voor vorm- en plaatstolerantie is leeg.
+	1 was on a locked layer.	1 lag op een vergrendelde laag.
+	Row elevations need an associative array; the copies stay at the same elevation.	Rijhoogten vereisen een associatieve reeks; de kopieën blijven op dezelfde hoogte.
+	Point or option keyword required.	Punt of optiesleutelwoord vereist.
+	Enter Yes or No.	Voer Yes of No in.
+	Viewport created, zoomed to the model extents.	Viewport gemaakt, ingezoomd tot de grenzen van het model.
+	No object found.	Geen object gevonden.
+	The object is not a table.	Het object is geen tabel.
+	No table there.	Daar is geen tabel.
+	A transparent command is already in progress.	Er is al een transparante opdracht bezig.
+	Invalid class name.	Ongeldige klassenaam.
+	Invalid group name.	Ongeldige groepsnaam.
+	Too many point modifiers.	Te veel puntmodificatoren.
+	No leader to remove.	Geen leider om te verwijderen.
+	Requires a non-negative number.	Vereist een niet-negatief getal.
+	Clipboard is empty.	Klembord is leeg.
+	1 object was on a locked layer.	1 object lag op een vergrendelde laag.
+	Circle does not exist.	Cirkel bestaat niet.
+	Enter Length or Area.	Voer Length of Area in.
+	Enter a percentage from 0 to 1000.	Voer een percentage in van 0 tot 1000.
+	Enter Table, File or None.	Voer Table, File of None in.
+	Cannot measure that object.	Dat object kan niet worden gemeten.
+	Third pair ignored (2D align).	Derde paar genegeerd (2D-uitlijning).
+	Insert mode: Copy (nested objects are copied as independent objects).	Invoegmodus: kopiëren (geneste objecten worden als zelfstandige objecten gekopieerd).
+	Everything has been undone	Alles is ongedaan gemaakt
+	Everything has been undone.	Alles is ongedaan gemaakt.
+	Requires a non-negative number or Auto.	Vereist een niet-negatief getal of Auto.
+	Select a dimension.	Selecteer een maat.
+	Object cannot be dimensioned this way.	Object kan niet op deze manier worden bemaat.
+	Select an arc, circle or line.	Selecteer een boog, cirkel of lijn.
+	The two points must be different.	De twee punten moeten verschillen.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Geen lineaire maat om voort te zetten. Maak er eerst een met DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Een multileider heeft een leiderlijn of inhoud nodig; er is niets getekend.
+	Requires the name of a block defined in the drawing.	Vereist de naam van een blok dat in de tekening is gedefinieerd.
+	Invalid option.	Ongeldige optie.
+	The boundary encloses none of the image.	De grens omsluit niets van de afbeelding.
+	The object is not an image.	Het object is geen afbeelding.
+	The image has no clipping boundary.	De afbeelding heeft geen uitsnijgrens.
+	No images selected.	Geen afbeeldingen geselecteerd.
+	Requires an integer between 0 and 100.	Vereist een geheel getal tussen 0 en 100.
+	The selected object has no area.	Het geselecteerde object heeft geen oppervlakte.
+	No such object	Object bestaat niet
+	Requires a point.	Vereist een punt.
+	Requires a distance.	Vereist een afstand.
+	The object is on a locked layer.	Het object ligt op een vergrendelde laag.
+	Value must be positive and nonzero.	Waarde moet positief en niet nul zijn.
+	Requires an angle.	Vereist een hoek.
+	Requires a point or option keyword.	Vereist een punt of optiesleutelwoord.
+	Object does not intersect a cutting edge.	Object snijdt geen snijrand.
+	Object does not intersect an edge.	Object snijdt geen rand.
+	Lines are parallel.	Lijnen zijn evenwijdig.
+	The Block Editor is not open.	De blokeditor is niet geopend.
+	Requires a positive integer.	Vereist een positief geheel getal.
+	Answer Yes or No.	Antwoord Yes of No.
+	Requires a valid point.	Vereist een geldig punt.
+	No reference objects	Geen referentieobjecten
+	Requires an angle or point.	Vereist een hoek of punt.
+	Requires a positive distance.	Vereist een positieve afstand.
+	Requires a non-negative distance.	Vereist een niet-negatieve afstand.
+	No such grip	Grip bestaat niet
+	Requires a template file name.	Vereist een bestandsnaam van een sjabloon.
+	A hatch needs at least one boundary: erase it instead.	Een arcering heeft minstens één grens nodig: wis deze in plaats daarvan.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Ongedaan maken is uitgeschakeld (UNDO Control None); UNDO Control All schakelt het in.
+	Enter ON or OFF.	Voer ON of OFF in.
+	Not a linear dimension.	Geen lineaire maat.
+	Valid hatch boundary not found.	Geen geldige arceringsgrens gevonden.
+	No closed boundary objects selected.	Geen gesloten grensobjecten geselecteerd.
+	Requires a name.	Vereist een naam.
+	That option doesn't apply to this grip.	Die optie is niet van toepassing op deze grip.
+	That would make a degenerate object.	Dat zou een gedegenereerd object opleveren.
+	No tangent or perpendicular from the last point.	Geen raaklijn of loodlijn vanaf het laatste punt.
+	Requires numeric distance or second point.	Vereist een numerieke afstand of tweede punt.
+	Edge endpoints must differ.	Eindpunten van de rand moeten verschillen.
+	Requires numeric distance or point.	Vereist een numerieke afstand of punt.
+	Requires a positive height.	Vereist een positieve hoogte.
+	No objects found.	Geen objecten gevonden.
+	Requires a non-zero number.	Vereist een getal ongelijk aan nul.
+	Circle must intersect cutting edges at two or more points.	Cirkel moet de snijranden in twee of meer punten snijden.
+	Arc cannot be full 360 degrees.	Boog kan geen volle 360 graden zijn.
+	Cannot break that object.	Dat object kan niet worden gebroken.
+	An object is on a locked layer.	Er ligt een object op een vergrendelde laag.
+	Objects are not connected.	Objecten zijn niet verbonden.
+	The two points must differ.	De twee punten moeten verschillen.
+	Mirror line points must differ.	Punten van de spiegellijn moeten verschillen.
+	No drawing is open.	Er is geen tekening geopend.
+	Command: {}	Opdracht: {}
+	Unknown command "{}". Press F1 for help.	Onbekende opdracht "{}". Druk op F1 voor help.
+	{} found	{} gevonden
+	{} found, {} total	{} gevonden, {} in totaal
+	Distance = {}	Afstand = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Afstand = {},  Hoek in XY-vlak = {},  Hoek vanaf XY-vlak = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Oppervlakte = {}, Omtrek = {}
+	Total area = {}	Totale oppervlakte = {}
+	Resuming {} command.	Opdracht {} wordt hervat.
+	Invalid input: {}	Ongeldige invoer: {}
+	{} were on a locked layer.	{} lagen op een vergrendelde laag.
+	{} dimension(s) changed.	{} maat/maten gewijzigd.
+	Group {} ungrouped.	Groep {} opgeheven.
+	{} object(s) flattened.	{} object(en) afgevlakt.
+	Group {} renamed to {}.	Groep {} hernoemd naar {}.
+	{} object(s) added to group {}.	{} object(en) toegevoegd aan groep {}.
+	{} object(s) removed from group {}.	{} object(en) verwijderd uit groep {}.
+	{} lines were chamfered	{} lijnen zijn afgeschuind
+	{} lines were filleted	{} lijnen zijn afgerond
+	{} objects joined into 1 {}	{} objecten samengevoegd tot 1 {}
+	Current dimension style:  {}	Huidige maatstijl:  {}
+	Wrote {}	{} geschreven
+	{} is already open.	{} is al geopend.
+	{} dimension(s) created.	{} maat/maten gemaakt.
+	BOUNDARY created {} polyline(s)	BOUNDARY heeft {} polylijn(en) gemaakt
+	Current line-width is {}	Huidige lijnbreedte is {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Onbekende variabele {}. Typ SETVAR ? om variabelen weer te geven.
+	{} = {} (read only)	{} = {} (alleen-lezen)
+	Dimension text = {}	Maattekst = {}
+	{} segments added to polyline	{} segmenten toegevoegd aan polylijn

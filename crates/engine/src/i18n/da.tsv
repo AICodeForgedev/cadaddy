@@ -1,0 +1,196 @@
+# CADaddy engine messages in Danish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Angiv et gruppenavn
+	Pick internal point	Vælg internt punkt
+	Specify the pattern origin	Angiv mønstrets origo
+	Specify the incrementing elevation between rows	Angiv den stigende kote mellem rækker
+	Specify the angle to fill (+=ccw, -=cw)	Angiv vinklen, der skal udfyldes (+=mod uret, -=med uret)
+	Select hatch object	Vælg skraveringsobjekt
+	Red, Green, Blue	Rød, grøn, blå
+	Enter the number of rows	Angiv antal rækker
+	Enter the number of levels	Angiv antal niveauer
+	Enter new layer name	Angiv nyt lagnavn
+	Specify width	Angiv bredde
+	Specify the angle between items	Angiv vinklen mellem elementer
+	Specify text height	Angiv teksthøjde
+	Specify start tangent	Angiv starttangent
+	Specify end tangent	Angiv sluttangent
+	Specify reference length	Angiv referencelængde
+	Specify other corner	Angiv andet hjørne
+	Specify next point or [Undo]	Angiv næste punkt eller [Undo]
+	Specify new location	Angiv ny placering
+	Specify new length	Angiv ny længde
+	Specify length of line	Angiv linjens længde
+	Specify displacement	Angiv forskydning
+	Specify angle for dimension text	Angiv vinkel for måltekst
+	Select viewports	Vælg visningsporte
+	Select object to break dimension	Vælg objekt, der skal bryde målet
+	Select group	Vælg gruppe
+	Select grip to edit array	Vælg greb for at redigere mønster
+	Select a table	Vælg en tabel
+	Select a boundary to remove	Vælg en afgrænsning, der skal fjernes
+	Rotate arrayed items?	Roter elementerne i mønstret?
+	Erase polyline?	Slet polylinje?
+	Enter viewport arrangement	Angiv opdeling i visningsporte
+	Enter transparency value (0-90)	Angiv gennemsigtighedsværdi (0-90)
+	Enter the number of operations to undo	Angiv antal handlinger, der skal fortrydes
+	Enter the number of columns	Angiv antal kolonner
+	Enter number of items in array	Angiv antal elementer i mønstret
+	Enter new layer state name	Angiv navn på ny lagtilstand
+	Enter new color	Angiv ny farve
+	Enter name of new layout	Angiv navn på nyt layout
+	Enter layer name	Angiv lagnavn
+	Enter file name	Angiv filnavn
+	Enter color name or number (1-255)	Angiv farvenavn eller -nummer (1-255)
+	Enter a configuration option	Angiv en konfigurationsindstilling
+	Base point	Basispunkt
+	Word-wrap the combined Mtext?	Ombryd den kombinerede MText?
+	Where should the data go?	Hvor skal dataene hen?
+	Verify each name to be purged?	Bekræft hvert navn, der skal renses?
+	Use landing	Brug landing
+	Type of boundary object	Type af afgrænsningsobjekt
+	Specify width factor	Angiv breddefaktor
+	Specify tolerance	Angiv tolerance
+	Specify the tangent direction for the start point of arc	Angiv tangentretning for buens startpunkt
+	Specify the reference angle	Angiv referencevinklen
+	Specify the new angle	Angiv den nye vinkel
+	Specify text width	Angiv tekstbredde
+	Specify temporary OTRACK point	Angiv midlertidigt OTRACK-punkt
+	Invalid option keyword.	Ugyldigt nøgleord.
+	*Invalid selection*	*Ugyldigt valg*
+	Requires a valid angle.	Kræver en gyldig vinkel.
+	Nothing to undo.	Intet at fortryde.
+	Invalid point.	Ugyldigt punkt.
+	No viewport found there.	Der blev ikke fundet en visningsport der.
+	*Cancel*	*Annuller*
+	Requires a positive number.	Kræver et positivt tal.
+	No hatch selected.	Ingen skravering valgt.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Kommandoen er ikke tilladt på fanen Model ** (skift til et layout først)
+	Select a multileader.	Vælg en multihenvisning.
+	No line or arc to continue.	Ingen linje eller bue at fortsætte.
+	Revision cloud finished.	Revisionssky afsluttet.
+	Object selected is not a circle or arc.	Det valgte objekt er ikke en cirkel eller bue.
+	Select a linear or aligned dimension.	Vælg et lineært eller justeret mål.
+	Object selected is not a dimension.	Det valgte objekt er ikke et mål.
+	No dimensions selected.	Ingen mål valgt.
+	Requires a number.	Kræver et tal.
+	0 found	0 fundet
+	The feature control frame is empty.	Toleranceramme er tom.
+	1 was on a locked layer.	1 var på et låst lag.
+	Row elevations need an associative array; the copies stay at the same elevation.	Rækkekoter kræver et associativt mønster; kopierne forbliver i samme kote.
+	Point or option keyword required.	Punkt eller nøgleord påkrævet.
+	Enter Yes or No.	Angiv Yes eller No.
+	Viewport created, zoomed to the model extents.	Visningsport oprettet, zoomet til modellens udstrækning.
+	No object found.	Der blev ikke fundet noget objekt.
+	The object is not a table.	Objektet er ikke en tabel.
+	No table there.	Ingen tabel der.
+	A transparent command is already in progress.	En transparent kommando er allerede i gang.
+	Invalid class name.	Ugyldigt klassenavn.
+	Invalid group name.	Ugyldigt gruppenavn.
+	Too many point modifiers.	For mange punktmodifikatorer.
+	No leader to remove.	Ingen henvisning at fjerne.
+	Requires a non-negative number.	Kræver et ikke-negativt tal.
+	Clipboard is empty.	Udklipsholderen er tom.
+	1 object was on a locked layer.	1 objekt var på et låst lag.
+	Circle does not exist.	Cirklen findes ikke.
+	Enter Length or Area.	Angiv Length eller Area.
+	Enter a percentage from 0 to 1000.	Angiv en procentdel fra 0 til 1000.
+	Enter Table, File or None.	Angiv Table, File eller None.
+	Cannot measure that object.	Kan ikke måle det objekt.
+	Third pair ignored (2D align).	Tredje par ignoreret (2D-justering).
+	Insert mode: Copy (nested objects are copied as independent objects).	Indsættelsestilstand: kopi (indlejrede objekter kopieres som selvstændige objekter).
+	Everything has been undone	Alt er fortrudt
+	Everything has been undone.	Alt er fortrudt.
+	Requires a non-negative number or Auto.	Kræver et ikke-negativt tal eller Auto.
+	Select a dimension.	Vælg et mål.
+	Object cannot be dimensioned this way.	Objektet kan ikke måles på denne måde.
+	Select an arc, circle or line.	Vælg en bue, cirkel eller linje.
+	The two points must be different.	De to punkter skal være forskellige.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Intet lineært mål at fortsætte. Opret et med DIMLINEAR først.
+	A multileader needs a leader line or content; nothing was drawn.	En multihenvisning kræver en henvisningslinje eller et indhold; intet blev tegnet.
+	Requires the name of a block defined in the drawing.	Kræver navnet på en blok, der er defineret i tegningen.
+	Invalid option.	Ugyldig indstilling.
+	The boundary encloses none of the image.	Afgrænsningen omslutter intet af billedet.
+	The object is not an image.	Objektet er ikke et billede.
+	The image has no clipping boundary.	Billedet har ingen klipningsafgrænsning.
+	No images selected.	Ingen billeder valgt.
+	Requires an integer between 0 and 100.	Kræver et heltal mellem 0 og 100.
+	The selected object has no area.	Det valgte objekt har intet areal.
+	No such object	Intet sådant objekt
+	Requires a point.	Kræver et punkt.
+	Requires a distance.	Kræver en afstand.
+	The object is on a locked layer.	Objektet er på et låst lag.
+	Value must be positive and nonzero.	Værdien skal være positiv og forskellig fra nul.
+	Requires an angle.	Kræver en vinkel.
+	Requires a point or option keyword.	Kræver et punkt eller et nøgleord.
+	Object does not intersect a cutting edge.	Objektet skærer ikke en skærekant.
+	Object does not intersect an edge.	Objektet skærer ikke en kant.
+	Lines are parallel.	Linjerne er parallelle.
+	The Block Editor is not open.	Blokeditoren er ikke åben.
+	Requires a positive integer.	Kræver et positivt heltal.
+	Answer Yes or No.	Svar Yes eller No.
+	Requires a valid point.	Kræver et gyldigt punkt.
+	No reference objects	Ingen referenceobjekter
+	Requires an angle or point.	Kræver en vinkel eller et punkt.
+	Requires a positive distance.	Kræver en positiv afstand.
+	Requires a non-negative distance.	Kræver en ikke-negativ afstand.
+	No such grip	Intet sådant greb
+	Requires a template file name.	Kræver et skabelonfilnavn.
+	A hatch needs at least one boundary: erase it instead.	En skravering kræver mindst én afgrænsning: slet den i stedet.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Fortryd er slået fra (UNDO Control None); UNDO Control All slår det til.
+	Enter ON or OFF.	Angiv ON eller OFF.
+	Not a linear dimension.	Ikke et lineært mål.
+	Valid hatch boundary not found.	Der blev ikke fundet en gyldig skraveringsafgrænsning.
+	No closed boundary objects selected.	Ingen lukkede afgrænsningsobjekter valgt.
+	Requires a name.	Kræver et navn.
+	That option doesn't apply to this grip.	Den indstilling gælder ikke for dette greb.
+	That would make a degenerate object.	Det ville give et degenereret objekt.
+	No tangent or perpendicular from the last point.	Ingen tangent eller vinkelret fra det sidste punkt.
+	Requires numeric distance or second point.	Kræver numerisk afstand eller andet punkt.
+	Edge endpoints must differ.	Kantens endepunkter skal være forskellige.
+	Requires numeric distance or point.	Kræver numerisk afstand eller punkt.
+	Requires a positive height.	Kræver en positiv højde.
+	No objects found.	Der blev ikke fundet objekter.
+	Requires a non-zero number.	Kræver et tal forskelligt fra nul.
+	Circle must intersect cutting edges at two or more points.	Cirklen skal skære skærekanterne i to eller flere punkter.
+	Arc cannot be full 360 degrees.	Buen kan ikke være fulde 360 grader.
+	Cannot break that object.	Kan ikke bryde det objekt.
+	An object is on a locked layer.	Et objekt er på et låst lag.
+	Objects are not connected.	Objekterne er ikke forbundet.
+	The two points must differ.	De to punkter skal være forskellige.
+	Mirror line points must differ.	Spejlingslinjens punkter skal være forskellige.
+	No drawing is open.	Ingen tegning er åben.
+	Command: {}	Kommando: {}
+	Unknown command "{}". Press F1 for help.	Ukendt kommando "{}". Tryk på F1 for at få hjælp.
+	{} found	{} fundet
+	{} found, {} total	{} fundet, {} i alt
+	Distance = {}	Afstand = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Afstand = {},  Vinkel i XY-plan = {},  Vinkel fra XY-plan = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Areal = {}, Omkreds = {}
+	Total area = {}	Samlet areal = {}
+	Resuming {} command.	Genoptager kommandoen {}.
+	Invalid input: {}	Ugyldigt input: {}
+	{} were on a locked layer.	{} var på et låst lag.
+	{} dimension(s) changed.	{} mål ændret.
+	Group {} ungrouped.	Gruppen {} er opløst.
+	{} object(s) flattened.	{} objekt(er) udfladet.
+	Group {} renamed to {}.	Gruppen {} er omdøbt til {}.
+	{} object(s) added to group {}.	{} objekt(er) føjet til gruppen {}.
+	{} object(s) removed from group {}.	{} objekt(er) fjernet fra gruppen {}.
+	{} lines were chamfered	{} linjer blev affaset
+	{} lines were filleted	{} linjer blev afrundet
+	{} objects joined into 1 {}	{} objekter sammenføjet til 1 {}
+	Current dimension style:  {}	Aktuel målestil:  {}
+	Wrote {}	Skrev {}
+	{} is already open.	{} er allerede åben.
+	{} dimension(s) created.	{} mål oprettet.
+	BOUNDARY created {} polyline(s)	BOUNDARY oprettede {} polylinje(r)
+	Current line-width is {}	Aktuel linjebredde er {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Ukendt variabel {}. Skriv SETVAR ? for at få vist variablerne.
+	{} = {} (read only)	{} = {} (skrivebeskyttet)
+	Dimension text = {}	Måltekst = {}
+	{} segments added to polyline	{} segmenter føjet til polylinjen

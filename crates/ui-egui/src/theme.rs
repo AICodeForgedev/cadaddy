@@ -439,6 +439,13 @@ pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
         data.index = face.index;
         added.push(("korean-ui".into(), std::sync::Arc::new(data)));
     }
+    // עברית, فارسی, हिन्दी, ไทย, Tiếng Việt: a face with the letters egui's bundled faces lack,
+    // after the Latin ones ([`script_font`]).
+    if let Some(face) = script_font(language) {
+        let mut data = egui::FontData::from_owned(face.bytes.as_ref().clone());
+        data.index = face.index;
+        added.push(("script-ui".into(), std::sync::Arc::new(data)));
+    }
     // Windows: Segoe UI and egui's faces lack some symbols the interface shows (▸ in menu paths);
     // Segoe UI Symbol has them, last so that every other face keeps its own forms.
     #[cfg(not(target_arch = "wasm32"))]
@@ -616,6 +623,165 @@ fn japanese_font() -> Option<&'static std::path::Path> {
     None
 }
 
+/// Interface languages whose letters egui's bundled faces lack, and those letters: Hebrew,
+/// Persian (its letters and the joined forms they're drawn in), Hindi (Devanagari), Thai, and
+/// Vietnamese (the vowels with tone marks).
+const SCRIPT_LANGUAGES: [&str; 5] = ["he", "fa", "hi", "th", "vi"];
+
+fn script_char(language: &str, c: char) -> bool {
+    match language {
+        "he" => ('\u{0590}'..='\u{05ff}').contains(&c),
+        "fa" => matches!(c, '\u{0600}'..='\u{06ff}' | '\u{fb50}'..='\u{fdff}' | '\u{fe70}'..='\u{fefe}'),
+        "hi" => ('\u{0900}'..='\u{097f}').contains(&c),
+        "th" => ('\u{0e00}'..='\u{0e7f}').contains(&c),
+        "vi" => matches!(c, '\u{1ea0}'..='\u{1eff}' | '\u{01a0}'..='\u{01b0}'),
+        _ => false,
+    }
+}
+
+/// The letters `language`'s interface draws that need [`script_font`]: its catalog's, and its
+/// name's; for Persian, the joined forms they're shown in.
+pub fn script_letters(language: &str) -> std::collections::BTreeSet<char> {
+    let Some(l) = crate::i18n::LANGUAGES.iter().find(|l| l.code == language) else { return Default::default() };
+    let mut out = std::collections::BTreeSet::new();
+    for text in l.source.lines().filter(|x| !x.starts_with('#')).filter_map(|x| x.split('\t').nth(2)).chain([l.name]) {
+        let chars: Vec<char> = text.chars().collect();
+        out.extend(chars.iter().copied().filter(|c| script_char(language, *c)));
+        if language == "fa" {
+            out.extend(cadaddy_fonts::bidi::presentation_forms(&chars, |_| true).into_iter().map(|(c, _)| c).filter(|c| script_char("fa", *c)));
+        }
+    }
+    out
+}
+
+/// An installed face (or a craft-fonts one) with every letter `language`'s interface draws that
+/// egui's bundled faces lack ([`SCRIPT_LANGUAGES`]); `None` for other languages, or when there's
+/// none — then the interface stays English. Nothing is bundled or downloaded. Checked once per
+/// language; reads are capped.
+pub fn script_font(language: &str) -> Option<&'static cadaddy_fonts::ttf::Face> {
+    static FOUND: [std::sync::OnceLock<Option<cadaddy_fonts::ttf::Face>>; 5] = [const { std::sync::OnceLock::new() }; 5];
+    let i = SCRIPT_LANGUAGES.iter().position(|l| *l == language)?;
+    FOUND
+        .get(i)?
+        .get_or_init(|| {
+            let letters = script_letters(language);
+            if letters.is_empty() {
+                return None;
+            }
+            let covering =
+                |bytes: Vec<u8>| cadaddy_fonts::ttf::faces(&std::sync::Arc::new(bytes)).into_iter().find(|f| letters.iter().all(|c| f.has_glyph(*c)));
+            let tags: &[&str] = match language {
+                "he" => &["Hebr"],
+                "fa" => &["Arab"],
+                "hi" => &["Deva"],
+                "th" => &["Thai"],
+                _ => &["Latn"],
+            };
+            for font in cadaddy_fonts::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| tags.contains(s))) {
+                if (font.bytes.len() as u64) <= MAX_UI_FONT_BYTES
+                    && let Some(face) = covering(font.bytes.to_vec())
+                {
+                    return Some(face);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            for path in script_candidates(language) {
+                if let Some(face) = read_capped(std::path::Path::new(path), MAX_UI_FONT_BYTES).and_then(covering) {
+                    return Some(face);
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+/// Where the OS or common packages put a face for each script language.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn script_candidates(language: &str) -> &'static [&'static str] {
+    let mac = cfg!(target_os = "macos");
+    let win = cfg!(windows);
+    match language {
+        "he" if mac => &[
+            "/System/Library/Fonts/SFHebrew.ttf",
+            "/System/Library/Fonts/ArialHB.ttc",
+            "/System/Library/Fonts/Supplemental/Raanana.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        ],
+        "he" if win => &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\david.ttf"],
+        "he" => &[
+            "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/culmus/NachlieliCLM-Light.otf",
+        ],
+        "fa" if mac => &[
+            "/System/Library/Fonts/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/Geeza Pro.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        ],
+        "fa" if win => &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\tahoma.ttf", "C:\\Windows\\Fonts\\arial.ttf"],
+        "fa" => &[
+            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/fonts-farsiweb/nazli.ttf",
+        ],
+        "hi" if mac => &[
+            "/System/Library/Fonts/Kohinoor.ttc",
+            "/System/Library/Fonts/Supplemental/DevanagariMT.ttc",
+            "/System/Library/Fonts/Supplemental/ITFDevanagari.ttc",
+            "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
+        ],
+        "hi" if win => &[
+            "C:\\Windows\\Fonts\\Nirmala.ttc",
+            "C:\\Windows\\Fonts\\Nirmala.ttf",
+            "C:\\Windows\\Fonts\\mangal.ttf",
+            "C:\\Windows\\Fonts\\aparaj.ttf",
+        ],
+        "hi" => &[
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
+            "/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf",
+            "/usr/share/fonts/lohit-devanagari/Lohit-Devanagari.ttf",
+            "/usr/share/fonts/truetype/fonts-deva-extra/kalimati.ttf",
+        ],
+        "th" if mac => &[
+            "/System/Library/Fonts/ThonburiUI.ttc",
+            "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/SukhumvitSet.ttc",
+            "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
+        ],
+        "th" if win => &["C:\\Windows\\Fonts\\LeelawUI.ttf", "C:\\Windows\\Fonts\\leelawad.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"],
+        "th" => &[
+            "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansThai-Regular.ttf",
+            "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
+            "/usr/share/fonts/truetype/tlwg/Loma.ttf",
+            "/usr/share/fonts/TTF/Garuda.ttf",
+        ],
+        "vi" if mac => &[
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ],
+        "vi" if win => &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"],
+        "vi" => &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        ],
+        _ => &[],
+    }
+}
+
 /// The Hangul letters the Korean interface shows: its catalog and its own name.
 fn hangul_letters() -> &'static std::collections::BTreeSet<char> {
     static LETTERS: std::sync::OnceLock<std::collections::BTreeSet<char>> = std::sync::OnceLock::new();
@@ -773,6 +939,7 @@ pub fn can_show(language: &str) -> bool {
         "ko" => shows_hangul("ko"),
         "ja" => shows_japanese(),
         "ar" => arabic_font().is_some(),
+        "he" | "fa" | "hi" | "th" | "vi" => script_font(language).is_some(),
         l if l.starts_with("zh") => cjk_font().is_some(),
         _ => true,
     }
