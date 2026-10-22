@@ -569,7 +569,7 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-mod linfile;
+pub(crate) mod linfile;
 
 fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
     if linfile::has_file(p) {

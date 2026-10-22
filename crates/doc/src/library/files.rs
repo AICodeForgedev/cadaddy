@@ -371,6 +371,38 @@ fn element_options(e: &DashElement) -> String {
     o
 }
 
+/// A `.lin` or `.pat` file's `text` with the definition named `name` replaced by `block` (its
+/// `*NAME` line and the lines under it, as [`write_lin`] / [`write_pat`] write them), or `block`
+/// added at the end. Every other line stays as it was, byte for byte: comments, blank lines,
+/// definitions the readers skip. Of two definitions with the name, the first (the one the
+/// readers keep) is replaced; a definition ends at a blank line, a comment or the next `*`.
+pub fn put_definition(text: &str, name: &str, block: &str) -> String {
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let block: String = block.lines().filter(|l| !l.trim().is_empty() && !l.starts_with(';')).map(|l| format!("{l}{nl}")).collect();
+    let (mut start, mut end, mut pos) = (None, None, 0usize);
+    for line in text.split_inclusive('\n') {
+        let t = line.trim();
+        if start.is_some() {
+            if end.is_none() && (t.is_empty() || t.starts_with(';') || t.starts_with('*')) {
+                end = Some(pos);
+            }
+        } else if let Some(rest) = t.strip_prefix('*')
+            && header(rest).is_ok_and(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+            start = Some(pos);
+        }
+        pos += line.len();
+    }
+    match start {
+        Some(a) => {
+            let b = end.unwrap_or(text.len());
+            format!("{}{block}{}", text.get(..a).unwrap_or_default(), text.get(b..).unwrap_or_default())
+        }
+        None if text.is_empty() || text.ends_with('\n') => format!("{text}{block}"),
+        None => format!("{text}{nl}{block}"),
+    }
+}
+
 /// Linetypes as a `.lin` file ([`parse_lin`] reads them back): `*NAME,description`, then
 /// `A,` and each element's length, a text or shape in brackets after the element it ends.
 /// A shape needs its name (`DashElement::shape_name`).
@@ -441,4 +473,20 @@ fn pat_family(line: &str) -> std::result::Result<PatternLine, String> {
         return Err("a line family with zero spacing (delta-y)".into());
     }
     Ok(PatternLine { angle, origin: (x, y), delta: (dx, dy), dashes: v.get(5..).unwrap_or(&[]).to_vec() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One definition swapped in a file with Windows line ends: the rest kept byte for byte,
+    /// the new lines written with the file's own line ends; a file without a final line end
+    /// gets one before an added definition.
+    #[test]
+    fn a_definition_is_put_into_the_text_as_it_stands() {
+        let crlf = ";; note\r\n*A,one\r\nA,1,-1\r\n\r\n*B,two\r\nA,2,-2\r\n";
+        assert_eq!(put_definition(crlf, "a", ";; header\n*A,new\nA,3,-3\n"), ";; note\r\n*A,new\r\nA,3,-3\r\n\r\n*B,two\r\nA,2,-2\r\n");
+        assert_eq!(put_definition("*B,two\nA,2,-2", "C", "*C\nA,1,-1\n"), "*B,two\nA,2,-2\n*C\nA,1,-1\n");
+        assert_eq!(put_definition("", "C", "*C\nA,1,-1\n"), "*C\nA,1,-1\n");
+    }
 }

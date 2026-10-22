@@ -344,16 +344,25 @@ fn elements(p: &Value) -> Result<Vec<cadaddy_doc::DashElement>> {
 /// Write `lt` into the `.lin` file at `path` (its definition of the same name replaced, others
 /// kept; a new file when there is none).
 fn save_lin(path: &str, lt: &Linetype) -> Result<()> {
-    let mut all = match crate::readfile::read(path) {
-        Ok(bytes) => cadaddy_doc::library::files::parse_lin(&String::from_utf8_lossy(&bytes)).items,
-        Err(_) => Vec::new(),
+    let new = cadaddy_doc::library::files::write_lin(std::slice::from_ref(lt)).map_err(|e| bad("linetype.define", e))?;
+    // Into a file that is there: only this linetype's lines change.
+    let text = match existing_text(path, "linetype.define")? {
+        Some(old) => cadaddy_doc::library::files::put_definition(&old, &lt.name, &new),
+        None => new,
     };
-    match all.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&lt.name)) {
-        Some(l) => *l = lt.clone(),
-        None => all.push(lt.clone()),
-    }
-    let text = cadaddy_doc::library::files::write_lin(&all).map_err(|e| bad("linetype.define", e))?;
     crate::writefile::write(path, text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))
+}
+
+/// The text of the `.lin` / `.pat` file at `path` a definition is saved into (`None`: there is
+/// none yet). One that can't be read, or isn't text, is refused rather than written over.
+pub(crate) fn existing_text(path: &str, cmd: &str) -> Result<Option<String>> {
+    match crate::readfile::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| {
+            bad(cmd, format!("`{path}` isn't a text file (not UTF-8), so it isn't written over: save into a .lin or .pat text file, or a new one"))
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(bad(cmd, format!("`{path}` can't be read ({e}), so it isn't written over: give a file you can read, or a new name"))),
+    }
 }
 
 /// LINETYPE.DEFINE `{name, description?, elements, save?: .lin path, current?}`: make (or remake)
