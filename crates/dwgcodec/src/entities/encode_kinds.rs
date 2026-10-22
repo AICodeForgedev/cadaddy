@@ -1887,21 +1887,14 @@ pub fn object(
         "GROUP" => types::GROUP,
         "MLINESTYLE" => types::MLINESTYLE,
         "XRECORD" => types::XRECORD,
-        "ACDBDICTIONARYWDFLT"
-        | "PLOTSETTINGS"
-        | "SCALE"
-        | "DICTIONARYVAR"
-        | "IMAGEDEF"
-        | "IMAGEDEF_REACTOR"
-        | "MLEADERSTYLE"
-        | "RASTERVARIABLES"
-        | "SORTENTSTABLE"
-        | "MATERIAL"
-        | "VISUALSTYLE"
-        | "FIELD" => names.class(name)?,
-        // TABLESTYLE: binary layout doesn't match what the bridge reader produces for cell
-        // styles — kept on the stash path until verified (MUST 1b / MUST 6).
-        "TABLESTYLE" => return None,
+        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES" => {
+            names.class(name)?
+        }
+        // Kept on the stash path (CADADDY_KEEP), which is lossless, until each layout is proven
+        // against an independent reader in both directions for all six versions: TABLESTYLE
+        // (cell styles), and SORTENTSTABLE, MATERIAL, VISUALSTYLE and FIELD, whose encoders below
+        // follow our own decoder rather than the public spec.
+        "TABLESTYLE" | "SORTENTSTABLE" | "MATERIAL" | "VISUALSTYLE" | "FIELD" => return None,
         _ => return None,
     };
     let mut w = ObjWriter::new(v, t, handle);

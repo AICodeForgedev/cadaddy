@@ -496,7 +496,7 @@ fn an_empty_drawing_reads_back() {
         let d = cadaddy_io::read(&bytes, "empty.dwg").unwrap();
         assert_eq!(d.entity_count(), 0, "{v}");
         assert!(d.layers.iter().any(|l| l.name == "0"), "{v}");
-        assert!(report.skipped.iter().all(|(n, _)| matches!(n.as_str(), "TABLESTYLE")), "{v}: {:?}", report.skipped);
+        assert!(report.skipped.iter().all(|(n, _)| matches!(n.as_str(), "MATERIAL" | "TABLESTYLE")), "{v}: {:?}", report.skipped);
     }
 }
 

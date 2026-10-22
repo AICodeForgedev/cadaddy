@@ -59,12 +59,8 @@ const KNOWN: &[&str] = &[
     "IMAGEDEF",
     "IMAGEDEF_REACTOR",
     "MLEADERSTYLE",
-    "SORTENTSTABLE",
-    "MATERIAL",
-    // TABLESTYLE stays stashed (ek::object returns None) until its binary layout is verified
-    // against the bridge (cell styles gap). Not in KNOWN.
-    "VISUALSTYLE",
-    "FIELD",
+    // Not here (stashed, `ek::object` returns None): TABLESTYLE, SORTENTSTABLE, MATERIAL,
+    // VISUALSTYLE and FIELD, until each is proven against an independent reader both ways.
 ];
 
 /// The DXF name of a fixed object type that is a table record or object this module decodes.
@@ -187,30 +183,12 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.s(100, "AcDbRasterImageDefReactor");
             g.i(90, i64::from(version));
         }
-        // Q342: these four types have native encoders and decoders that are symmetric with our
-        // encoder. Files written by other programs (acadrust R2007+) may use a different binary
-        // layout; if our decoder fails on them, fall back to None (the caller keeps the raw
-        // object intact) rather than reporting an error.
-        "SORTENTSTABLE" => {
-            if decode_sortentstable(&mut o, &mut g).is_err() {
-                return Ok(None);
-            }
-        }
-        "MATERIAL" => {
-            if decode_material(&mut o, &mut g).is_err() {
-                return Ok(None);
-            }
-        }
-        "VISUALSTYLE" => {
-            if decode_visualstyle(&mut o, &mut g).is_err() {
-                return Ok(None);
-            }
-        }
-        "FIELD" => {
-            if decode_field(&mut o, &mut g).is_err() {
-                return Ok(None);
-            }
-        }
+        // Not in KNOWN yet (their layouts are unproven against another reader); a failure is an
+        // error like any other type's once they are.
+        "SORTENTSTABLE" => decode_sortentstable(&mut o, &mut g)?,
+        "MATERIAL" => decode_material(&mut o, &mut g)?,
+        "VISUALSTYLE" => decode_visualstyle(&mut o, &mut g)?,
+        "FIELD" => decode_field(&mut o, &mut g)?,
         _ => return Err(Error::Unsupported(format!("{name} records are not decoded yet"))),
     }
     groups.extend(super::eed_groups(&c.eed, names, v >= Version::R2007));
