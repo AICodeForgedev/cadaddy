@@ -1033,7 +1033,71 @@ fn detect_grid(d: &Drawing) -> (Vec<(String, [f64; 2])>, Vec<DetectedGrid>, Vec<
             (grid_x, grid_y) = (lx, ly);
         }
     }
+    // A plan printed with its grid lines off (one bubble per line, nothing leaving them): the
+    // bubbles still stand in a row along one edge and a column along another.
+    let read = if grid_x.is_empty() || grid_y.is_empty() { 0 } else { grid_x.len() + grid_y.len() };
+    if read < bubbles.len() / 3 {
+        let (rx, ry) = grid_by_rows(d, &bubbles);
+        if !rx.is_empty() && !ry.is_empty() && rx.len() + ry.len() > read {
+            (grid_x, grid_y) = (rx, ry);
+        }
+    }
     (bubbles, grid_x, grid_y)
+}
+
+/// Fewest bubbles in a row (or a column) that [`grid_by_rows`] takes for grid lines.
+const MIN_BUBBLE_ROW: usize = 3;
+
+/// Grid lines from where one-per-line bubbles stand: the longest row of bubbles (centres level
+/// within three radii, as bubbles on close lines are staggered) are lines of constant x at
+/// their x, the longest column lines of constant y at their y. Each needs
+/// [`MIN_BUBBLE_ROW`] different labels; a label in both keeps the longer reading.
+fn grid_by_rows(d: &Drawing, bubbles: &[(String, [f64; 2])]) -> (Vec<DetectedGrid>, Vec<DetectedGrid>) {
+    let mut radii: Vec<f64> = d
+        .model
+        .iter()
+        .filter_map(|e| round_shape(&e.kind))
+        .take(MAX_ROUNDS)
+        .filter(|(c, r)| bubbles.iter().any(|(_, b)| (b[0] - c[0]).hypot(b[1] - c[1]) < r * 0.2))
+        .map(|(_, r)| r)
+        .collect();
+    radii.sort_by(f64::total_cmp);
+    let Some(&r) = radii.get(radii.len() / 2) else { return (Vec::new(), Vec::new()) };
+    let tol = r * 3.0;
+    // The longest run of bubbles whose `across` coordinate stays within `tol` of the run's first,
+    // one bubble per label, placed by `along`.
+    let longest = |across: usize, along: usize| -> Vec<DetectedGrid> {
+        let mut sorted: Vec<&(String, [f64; 2])> = bubbles.iter().collect();
+        sorted.sort_by(|a, b| a.1.get(across).copied().unwrap_or(0.0).total_cmp(&b.1.get(across).copied().unwrap_or(0.0)));
+        let mut best: Vec<DetectedGrid> = Vec::new();
+        for (i, first) in sorted.iter().enumerate() {
+            let at0 = first.1.get(across).copied().unwrap_or(0.0);
+            let mut run: Vec<DetectedGrid> = Vec::new();
+            for b in sorted.iter().skip(i).take_while(|b| b.1.get(across).copied().unwrap_or(0.0) - at0 <= tol) {
+                if !run.iter().any(|g| g.label == b.0) {
+                    run.push(DetectedGrid { label: b.0.clone(), at_in: b.1.get(along).copied().unwrap_or(0.0) });
+                }
+            }
+            if run.len() > best.len() {
+                best = run;
+            }
+        }
+        if best.len() < MIN_BUBBLE_ROW {
+            return Vec::new();
+        }
+        best.sort_by(|a, b| a.at_in.total_cmp(&b.at_in));
+        best
+    };
+    let (mut gx, mut gy) = (longest(1, 0), longest(0, 1));
+    if gx.len() >= gy.len() {
+        gy.retain(|g| !gx.iter().any(|x| x.label == g.label));
+    } else {
+        gx.retain(|g| !gy.iter().any(|y| y.label == g.label));
+    }
+    if gx.len() < MIN_BUBBLE_ROW || gy.len() < MIN_BUBBLE_ROW {
+        return (Vec::new(), Vec::new());
+    }
+    (gx, gy)
 }
 
 /// A plan view's title printed under it on the sheet (`2ND FLOOR LIGHTING PLAN`).
@@ -1434,4 +1498,32 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
     }
 
     scores
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bubbles of `printed_sheets::detail_sheet`: two wall sections, each with `1` and `A`
+    /// at its corner.
+    fn detail_bubbles() -> Vec<(String, [f64; 2])> {
+        let mut b = Vec::new();
+        for at in [[0.0, 0.0], [420.0, 300.0]] {
+            b.push(("1".to_string(), [at[0] + 60.0, at[1] + 240.0]));
+            b.push(("A".to_string(), [at[0], at[1] + 60.0]));
+        }
+        b
+    }
+
+    #[test]
+    fn detail_bubble_pairs_give_a_rotation_their_bubbles_reject() {
+        let gx = vec![GridLine { label: "1".into(), at_ft: 0.0 }, GridLine { label: "2".into(), at_ft: 24.0 }];
+        let gy = vec![GridLine { label: "A".into(), at_ft: 0.0 }, GridLine { label: "B".into(), at_ft: 30.0 }];
+        let b = detail_bubbles();
+        // The pairs alone turn the sheet (the nonsense rotations seen on details) ...
+        let a = compute_alignment_from_bubbles(&b, &gx, &gy).expect("pairs give an alignment");
+        assert!(a.rotation_deg.abs() > 5.0, "rotation {}", a.rotation_deg);
+        // ... which the bubbles then sitting off their lines rejects.
+        assert!(!bubbles_on_lines(&a, &b, &gx, &gy));
+    }
 }

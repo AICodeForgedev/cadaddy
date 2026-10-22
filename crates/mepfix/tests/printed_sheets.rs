@@ -411,3 +411,80 @@ fn a_sheet_printing_two_levels_splits_into_views_each_aligned() {
     assert!((up.offset_in[0] - lo.offset_in[0]).abs() < 1.0, "x offsets {:?} {:?}", lo.offset_in, up.offset_in);
     assert!((up.offset_in[1] - lo.offset_in[1] - sheet.shift).abs() < 1.0, "y offsets {:?} {:?} shift {}", lo.offset_in, up.offset_in, sheet.shift);
 }
+
+// ---- Fix classes 4 and 5b, and the floor whose views read no grid -----------------------------
+
+#[test]
+fn stray_keynote_pairs_do_not_beat_a_one_bubble_per_line_grid() {
+    use cadaddy_mepfix::printed::{OneViewOptions, one_view_sheet};
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let opts = OneViewOptions { keynote_pairs: true, ..OneViewOptions::default() };
+    let sheet = one_view_sheet(&t, &st, "E-102", "LIGHTING", &opts).expect("one-view sheet");
+    let rec = recognise_dxf(&sheet.drawing);
+    // The two keynote pairs are read as bubbles and alone pair up as one line each way (1×1);
+    // the bubbles' own lines read the grid.
+    assert_eq!(rec.bubbles.len(), sheet.grid_x + sheet.grid_y + 4, "one bubble per line and the four keynote tags");
+    assert_eq!(rec.level.as_deref(), Some("2"));
+    assert_eq!((rec.grid_x.len(), rec.grid_y.len()), (sheet.grid_x, sheet.grid_y), "grid {}x{}", rec.grid_x.len(), rec.grid_y.len());
+    let want_x: Vec<&str> = t.building.grid.x.iter().map(|g| g.label.as_str()).collect();
+    let want_y: Vec<&str> = t.building.grid.y.iter().map(|g| g.label.as_str()).collect();
+    assert_eq!(rec.grid_x.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(), want_x);
+    assert_eq!(rec.grid_y.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(), want_y);
+}
+
+/// A sheet of wall sections, each section showing the grid bubbles `1` and `A` at its corner (as
+/// details do): the two `1`s and the two `A`s each pair along the line from one section to the
+/// next, so bubble pairs turn the sheet by that line's angle.
+fn detail_sheet() -> Drawing {
+    let mut d = Drawing::default();
+    let r = 18.0;
+    for (i, at) in [[0.0, 0.0], [420.0, 300.0]].iter().enumerate() {
+        bubble(&mut d, [at[0] + 60.0, at[1] + 240.0], r, "1");
+        bubble(&mut d, [at[0], at[1] + 60.0], r, "A");
+        text(&mut d, [at[0], at[1] - 40.0], 14.0, &format!("WALL SECTION {}", i + 1));
+    }
+    text(&mut d, [900.0, 300.0], 14.0, "WALL SECTIONS");
+    text(&mut d, [900.0, -140.0], 36.0, "A501");
+    d
+}
+
+#[test]
+fn a_detail_whose_bubble_pairs_turn_it_gets_no_alignment() {
+    let plan = recognise_dxf(&printed_plan("M201"));
+    let detail = recognise_dxf(&detail_sheet());
+    assert_eq!(detail.bubbles.len(), 4, "the detail's bubbles are read");
+    assert!(detail.grid_x.is_empty() && detail.grid_y.is_empty(), "no square lines on the detail");
+    let map = sheet_reader::sheet_map_from(vec![plan, detail]);
+    let get = |n: &str| map.sheets.iter().find(|s| s.number == n).unwrap_or_else(|| panic!("{n}"));
+    assert!(get("M201").alignment.is_some(), "the plan aligns");
+    assert_eq!(get("A501").alignment, None, "the detail's pair rotation is rejected");
+}
+
+#[test]
+fn a_floor_printed_without_its_grid_lines_reads_and_aligns_its_grid() {
+    use cadaddy_mepfix::printed::{OneViewOptions, one_view_sheet};
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let mut views = Vec::new();
+    // The repro: the fourth floor printed with one stray grid line and its bubbles alone (before
+    // the bubble-row reading it read a 0×0 grid from its 12 bubbles; the real set's read 1×0 from 33).
+    for (number, lines) in [("E-101", usize::MAX), ("E-102", usize::MAX), ("E-103", usize::MAX), ("E-104", 1)] {
+        let opts = OneViewOptions { grid_lines: lines, ..OneViewOptions::default() };
+        let sheet = one_view_sheet(&t, &st, number, "LIGHTING", &opts).expect("one-view sheet");
+        let rec = recognise_dxf(&sheet.drawing);
+        assert_eq!((rec.grid_x.len(), rec.grid_y.len()), (sheet.grid_x, sheet.grid_y), "{number}: grid {}x{}", rec.grid_x.len(), rec.grid_y.len());
+        views.push(rec);
+    }
+    let map = sheet_reader::sheet_map_from(views);
+    let a: Vec<_> = map.sheets.iter().map(|s| s.alignment.clone().unwrap_or_else(|| panic!("{} not aligned", s.number))).collect();
+    // Every floor prints its plan in the same place: the fourth aligns where the first does.
+    for (s, al) in map.sheets.iter().zip(&a) {
+        assert!(al.rotation_deg.abs() < 1e-6, "{} rotation", s.number);
+        assert!(
+            (al.offset_in[0] - a[0].offset_in[0]).abs() < 1.0 && (al.offset_in[1] - a[0].offset_in[1]).abs() < 1.0,
+            "{} offset {:?} vs {:?}",
+            s.number,
+            al.offset_in,
+            a[0].offset_in
+        );
+    }
+}
