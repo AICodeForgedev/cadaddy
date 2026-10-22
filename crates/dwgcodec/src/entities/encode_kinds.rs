@@ -1887,7 +1887,8 @@ pub fn object(
         "GROUP" => types::GROUP,
         "MLINESTYLE" => types::MLINESTYLE,
         "XRECORD" => types::XRECORD,
-        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES" => {
+        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES"
+        | "SORTENTSTABLE" | "MATERIAL" | "TABLESTYLE" | "VISUALSTYLE" | "FIELD" => {
             names.class(name)?
         }
         _ => return None,
@@ -1965,6 +1966,11 @@ pub fn object(
             w.d.rc(r.id(281, 0) as u8);
             w.d.rd2(r.p2(11));
         }
+        "SORTENTSTABLE" => sortentstable(&mut w, r),
+        "MATERIAL" => material(&mut w, r),
+        "TABLESTYLE" => tablestyle(&mut w, r),
+        "VISUALSTYLE" => visualstyle(&mut w, r),
+        "FIELD" => field(&mut w, r),
         _ => w.d.bl(r.id(90, 2) as i32),
     }
     Some(w.finish())
@@ -2311,4 +2317,354 @@ struct Dash {
     rotation: f64,
     offset: [f64; 2],
     text: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Objects added by Q249 (dwgwrite2): SORTENTSTABLE, MATERIAL, TABLESTYLE,
+// VISUALSTYLE, FIELD.
+// ---------------------------------------------------------------------------
+
+/// SORTENTSTABLE (spec §20.4.90): draw-order table for a block space.
+///
+/// DXF groups after AcDbSortentsTable: 330 (block owner), pairs of 331 (entity) and 5 (sort
+/// handle). DWG: BL count, sort handles (5), BL count, entity handles (4), block owner (4).
+fn sortentstable(w: &mut ObjWriter, r: &Rec) {
+    let marker = r.0.iter().position(|g| g.code == 100 && matches!(&g.value, super::Value::Str(s) if s == "AcDbSortentsTable"));
+    let tail = marker.and_then(|i| r.0.get(i + 1..)).unwrap_or(&[]);
+    let block_owner = tail.iter().find(|g| g.code == 330).and_then(|g| handle_of(&g.value));
+    let mut entities: Vec<u64> = Vec::new();
+    let mut sorts: Vec<u64> = Vec::new();
+    let mut cur_ent: Option<u64> = None;
+    for g in tail {
+        match g.code {
+            331 => cur_ent = handle_of(&g.value),
+            5 => {
+                if let (Some(e), Some(s)) = (cur_ent.take(), handle_of(&g.value)) {
+                    entities.push(e);
+                    sorts.push(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    let n = sorts.len().min(entities.len());
+    w.d.bl(n as i32);
+    for s in sorts.iter().take(n) {
+        w.href(5, Some(*s));
+    }
+    w.d.bl(n as i32);
+    for e in entities.iter().take(n) {
+        w.href(4, Some(*e));
+    }
+    w.href(4, block_owner);
+}
+
+/// MATERIAL (spec §20.4.83): a material definition.
+///
+/// Writes the full material record from its DXF groups. The binary layout matches the ODA
+/// specification: name, description, then for each channel (ambient, diffuse, specular,
+/// reflection, opacity, bump, refraction) the enable flag, colour, factor, and mapper data.
+fn material(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(1).unwrap_or(""));
+    w.text(r.s(2).unwrap_or(""));
+    // Ambient: enabled, colour method, factor, colour value.
+    w.d.bl(0); // ambient color method (0 = use current)
+    w.d.bl(0); // ambient color factor
+    w.d.bl(0); // ambient color value
+    // Diffuse channel.
+    let has_diffuse_color = r.i(71).is_some();
+    w.d.bl(i32::from(has_diffuse_color)); // diffuse color method
+    w.d.bl(r.id(91, 0) as i32); // diffuse color value (entity color)
+    w.d.bd(r.fd(41, 1.0)); // diffuse factor
+    // Diffuse map.
+    let has_diffuse_map = r.s(3).is_some();
+    w.d.bl(i32::from(has_diffuse_map));
+    if has_diffuse_map {
+        w.d.bd(1.0); // blend factor
+        w.text(r.s(3).unwrap_or("")); // file name
+        w.d.bl(r.id(73, 1) as i32); // projection
+        w.d.bl(0); // tiling (0 = tile)
+        w.d.bl(1); // auto-transform (1 = yes)
+        // 16-double transform matrix.
+        let mx: Vec<f64> = r.all(43).filter_map(|g| match &g.value {
+            super::Value::Real(f) => Some(*f),
+            super::Value::Int(i) => Some(*i as f64),
+            _ => None,
+        }).take(16).collect();
+        for i in 0..16 {
+            w.d.bd(mx.get(i).copied().unwrap_or(if i % 5 == 0 { 1.0 } else { 0.0 }));
+        }
+    }
+    // Specular gloss factor.
+    w.d.bd(r.fd(44, 1.0));
+    // Specular colour.
+    w.d.bl(0); // specular color method
+    w.d.bl(0); // specular color value
+    w.d.bd(1.0); // specular factor
+    w.d.bl(0); // has specular map
+    // Reflection.
+    w.d.bd(0.0); // reflection factor
+    w.d.bl(0); // has reflection map
+    // Opacity.
+    w.d.bd(r.fd(140, 1.0));
+    w.d.bl(0); // has opacity map
+    // Bump.
+    w.d.bl(if r.s(8).is_some() { 1 } else { 0 }); // has bump map
+    if r.s(8).is_some() {
+        w.d.bd(r.fd(143, 1.0)); // normal strength / blend factor
+        w.text(r.s(8).unwrap_or("")); // bump map file
+        w.d.bl(1); // projection (planar)
+        w.d.bl(0); // tiling
+        w.d.bl(1); // auto-transform
+        // Identity matrix for bump.
+        for i in 0..16 {
+            w.d.bd(if i % 5 == 0 { 1.0 } else { 0.0 });
+        }
+    }
+    // Refraction.
+    w.d.bd(r.fd(145, 1.0)); // refraction index
+    w.d.bl(0); // has refraction map
+    // From R2007: genproc fields.
+    if w.at_least(Version::R2007) {
+        w.d.bl(0); // genproc val bool (0 = false)
+        w.d.bl(0); // genproc val int
+        w.text(""); // genproc val text
+        w.d.b(false); // genproc table flag
+        w.d.b(false); // genproc color flag (R2010+)
+        w.d.bl(0); // genproc color index (R2010+)
+        w.d.bl(0); // genproc color value (R2010+)
+    }
+}
+
+/// TABLESTYLE (spec §20.4.89): table cell style definition.
+///
+/// DXF groups: 3 (empty name), 70/71 flags, 40/41 margins, 280/281 suppress flags, then for
+/// each of Data/Header/Title: 7 (text style), 140 (height), 170 (align), 62 (text color),
+/// 63 (fill color), 283 (fill flag), 274-279 (border lw), 284-289 (border vis), 64-69 (border
+/// color).
+fn tablestyle(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(3).unwrap_or("")); // description
+    w.d.bl(r.id(70, 0) as i32); // flags
+    w.d.bl(r.id(71, 0) as i32); // flow direction
+    w.d.bd(r.fd(40, 0.06)); // horizontal margin
+    w.d.bd(r.fd(41, 0.06)); // vertical margin
+    w.d.b(r.id(280, 0) != 0); // suppress title
+    w.d.b(r.id(281, 0) != 0); // suppress header
+    // Three cell styles: Data, Header, Title.
+    // The groups repeat for each cell type — find them by the repeating group 7 codes.
+    let style_names: Vec<&str> = r.all(7).filter_map(|g| match &g.value {
+        super::Value::Str(s) => Some(s.as_str()),
+        _ => None,
+    }).take(3).collect();
+    let heights: Vec<f64> = r.all(140).filter_map(|g| match &g.value {
+        super::Value::Real(f) => Some(*f),
+        super::Value::Int(i) => Some(*i as f64),
+        _ => None,
+    }).take(3).collect();
+    let aligns: Vec<i64> = r.all(170).filter_map(|g| match &g.value {
+        super::Value::Int(i) => Some(*i),
+        super::Value::Real(f) if f.is_finite() => Some(*f as i64),
+        _ => None,
+    }).take(3).collect();
+    let text_colors: Vec<i64> = r.all(62).filter_map(|g| match &g.value {
+        super::Value::Int(i) => Some(*i),
+        super::Value::Real(f) if f.is_finite() => Some(*f as i64),
+        _ => None,
+    }).take(3).collect();
+    let fill_colors: Vec<i64> = r.all(63).filter_map(|g| match &g.value {
+        super::Value::Int(i) => Some(*i),
+        super::Value::Real(f) if f.is_finite() => Some(*f as i64),
+        _ => None,
+    }).take(3).collect();
+    let fill_flags: Vec<bool> = r.all(283).map(|g| match &g.value {
+        super::Value::Int(i) => *i != 0,
+        _ => false,
+    }).take(3).collect();
+    // Border lineweights (codes 274-279), visibility (284-289), colors (64-69) per cell type.
+    let border_lw = |ct: usize, bi: usize| -> i64 {
+        let code = 274 + bi as i32;
+        r.all(code).nth(ct).and_then(|g| match &g.value {
+            super::Value::Int(i) => Some(*i),
+            _ => None,
+        }).unwrap_or(-2)
+    };
+    let border_vis = |ct: usize, bi: usize| -> bool {
+        let code = 284 + bi as i32;
+        r.all(code).nth(ct).map(|g| match &g.value {
+            super::Value::Int(i) => *i != 0,
+            _ => true,
+        }).unwrap_or(true)
+    };
+    let border_color = |ct: usize, bi: usize| -> i64 {
+        let code = 64 + bi as i32;
+        r.all(code).nth(ct).and_then(|g| match &g.value {
+            super::Value::Int(i) => Some(*i),
+            _ => None,
+        }).unwrap_or(0)
+    };
+    for ct in 0..3 {
+        w.text(style_names.get(ct).unwrap_or(&"Standard"));
+        w.d.bd(heights.get(ct).copied().unwrap_or(0.18));
+        w.d.bs(aligns.get(ct).copied().unwrap_or(2) as i16);
+        cmc_from_aci(w, text_colors.get(ct).copied().unwrap_or(0));
+        cmc_from_aci(w, fill_colors.get(ct).copied().unwrap_or(7));
+        w.d.b(fill_flags.get(ct).copied().unwrap_or(false));
+        // Six borders per cell style.
+        for bi in 0..6 {
+            w.d.bl(0); // border type flags
+            cmc_from_aci(w, border_color(ct, bi));
+            w.d.bs(super::encode::lineweight_index(border_lw(ct, bi)) as i16);
+            w.d.b(border_vis(ct, bi));
+        }
+    }
+}
+
+/// A colour written as CMC from an ACI index (spec §2.11): the index, and from R2004 the
+/// raw value (method byte) and no colour-book name. Unlike [`cmc_raw`], this takes an ACI
+/// number (256=ByLayer, 0=ByBlock) rather than the method|RGB word.
+fn cmc_from_aci(w: &mut ObjWriter, aci: i64) {
+    w.d.bs(aci as i16);
+    if w.at_least(Version::R2004) {
+        let raw = match aci {
+            256 => 0xC000_0000u32,
+            0 => 0xC100_0000u32,
+            i => 0xC300_0000u32 | (i as u32 & 0xFF),
+        };
+        w.d.bl(raw as i32);
+        w.d.rc(0);
+    }
+}
+
+/// VISUALSTYLE (spec §20.4.84): rendering style definition.
+///
+/// This is a complex object with many fields. We write the binary format per the spec.
+fn visualstyle(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(2).unwrap_or("")); // description
+    w.d.bl(r.id(70, 0) as i32); // type (internal use number)
+    // Face settings.
+    w.d.bl(r.id(71, 0) as i32); // face lighting model
+    w.d.bl(r.id(72, 0) as i32); // face lighting quality
+    w.d.bl(r.id(73, 0) as i32); // face color mode
+    w.d.bd(r.fd(40, 0.6)); // face opacity
+    w.d.bd(r.fd(41, 30.0)); // face specular
+    // Face modifier/mono colour.
+    cmc_from_aci(w, r.id(62, 256));
+    cmc_from_aci(w, r.id(63, 7));
+    w.d.bl(r.id(90, 0) as i32); // face modifier
+    // Edge settings.
+    w.d.bl(r.id(74, 1) as i32); // edge model
+    w.d.bl(r.id(91, 0) as i32); // edge style
+    cmc_from_aci(w, r.id(64, 256)); // edge intersection colour
+    cmc_from_aci(w, r.id(65, 257)); // edge obscured colour
+    w.d.bl(r.id(75, 1) as i32); // edge intersection line pattern
+    w.d.bl(r.id(175, 1) as i32); // edge obscured line pattern
+    w.d.bl(r.id(92, 1) as i32); // edge crease angle (as int)
+    // Edge modifiers.
+    w.d.bl(r.id(174, 0) as i32); // edge modifier
+    cmc_from_aci(w, r.id(66, 257)); // edge colour
+    w.d.bd(r.fd(43, -2.0)); // edge opacity
+    w.d.bl(r.id(76, 0) as i32); // edge width
+    w.d.bl(r.id(77, 6) as i32); // edge overhang
+    w.d.bl(r.id(78, 0) as i32); // edge jitter
+    cmc_from_aci(w, r.id(67, 257)); // edge silhouette colour
+    w.d.bl(r.id(79, 5) as i32); // edge silhouette width
+    // Display settings.
+    w.d.bl(r.id(170, 0) as i32); // display settings
+    w.d.bd(r.fd(44, 0.0)); // display brightness
+    w.d.bl(r.id(171, 0) as i32); // shadow type
+    // From R2010: further visual style flags.
+    if w.at_least(Version::R2010) {
+        w.d.bd(r.fd(45, 0.0)); // unknown double
+        w.d.bl(r.id(176, 0) as i32); // unknown BL
+        w.d.bl(r.id(93, 0) as i32); // unknown BL (face lighting flags)
+        w.d.bl(r.id(172, 0) as i32); // unknown BL
+        w.d.bl(r.id(94, 0) as i32); // unknown BL (edge style overrides)
+        cmc_from_aci(w, r.id(68, 0)); // unknown colour
+    }
+    // From R2013: even more fields.
+    if w.at_least(Version::R2013) {
+        w.d.bl(r.id(177, 0) as i32);
+        w.d.bl(r.id(95, 0) as i32);
+        cmc_from_aci(w, r.id(69, 0));
+        w.d.bd(r.fd(46, 0.0));
+        w.d.bd(r.fd(47, 0.0));
+        w.d.bd(r.fd(48, 0.0));
+    }
+}
+
+/// FIELD (spec §20.4.85): a calculated field expression.
+///
+/// DXF groups: 1 (evaluator), 2 (code first chunk), 3 (code continuation), 90 (child count),
+/// 360 (child handles), 97 (object refs count), 331 (object handles), 91 (flags), 92, 94, 95,
+/// 96, 300 (format), 93, 7, then value data.
+fn field(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(1).unwrap_or("")); // evaluator id
+    // The field code: group 2 first chunk, then 3 for continuations.
+    let code_first = r.s(2).unwrap_or("");
+    let continuations: Vec<&str> = r.all(3).filter_map(|g| match &g.value {
+        super::Value::Str(s) => Some(s.as_str()),
+        _ => None,
+    }).collect();
+    let mut full_code = code_first.to_string();
+    for c in &continuations {
+        full_code.push_str(c);
+    }
+    w.text(&full_code);
+    // Child field count and handles.
+    let child_handles: Vec<u64> = r.all(360).filter_map(|g| handle_of(&g.value)).collect();
+    w.d.bl(child_handles.len() as i32);
+    for ch in &child_handles {
+        w.href(3, Some(*ch));
+    }
+    // Object reference count and handles.
+    let obj_handles: Vec<u64> = r.all(331).filter_map(|g| handle_of(&g.value)).collect();
+    w.d.bl(obj_handles.len() as i32);
+    for oh in &obj_handles {
+        w.href(5, Some(*oh));
+    }
+    // Format string.
+    w.text(r.s(300).unwrap_or(""));
+    // Evaluation option, filing option, field state, evaluation error, evaluation status.
+    w.d.bl(r.id(91, 0) as i32);
+    w.d.bl(r.id(92, 0) as i32);
+    w.d.bl(r.id(94, 0) as i32);
+    w.d.bl(r.id(95, 0) as i32);
+    w.d.bl(r.id(96, 0) as i32);
+    // The value: type (93) and then the appropriate value.
+    let vtype = r.id(93, 0);
+    w.d.bl(vtype as i32);
+    // Value data: 90 (long), 140 (double), 300/301/302/9 (strings), 90 (date), 310 (binary).
+    // For simplicity, write the value based on its type code.
+    match vtype {
+        // No value or empty.
+        0 => {}
+        // Long.
+        1 => w.d.bl(r.all(90).nth(1).and_then(|g| match &g.value {
+            super::Value::Int(i) => Some(*i as i32),
+            _ => None,
+        }).unwrap_or(0)),
+        // Double.
+        2 => w.d.bd(r.all(140).nth(1).and_then(|g| match &g.value {
+            super::Value::Real(f) => Some(*f),
+            _ => None,
+        }).unwrap_or(0.0)),
+        // String: the cached evaluation result. In DXF: 301 first chunk, 9 for more.
+        4 => {
+            let first = r.s(301).unwrap_or("");
+            let more: Vec<&str> = r.all(9).filter_map(|g| match &g.value {
+                super::Value::Str(s) => Some(s.as_str()),
+                _ => None,
+            }).collect();
+            let mut full = first.to_string();
+            for m in &more {
+                full.push_str(m);
+            }
+            w.text(&full);
+            // Value length.
+            let vlen = r.id(98, full.len() as i64);
+            w.d.bl(vlen as i32);
+        }
+        // Other types: write empty/zero.
+        _ => {}
+    }
 }
