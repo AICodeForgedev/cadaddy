@@ -1,0 +1,196 @@
+# CADaddy engine messages in Finnish: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Anna ryhmän nimi
+	Pick internal point	Poimi sisäpiste
+	Specify the pattern origin	Määritä kuvion origo
+	Specify the incrementing elevation between rows	Määritä rivien välinen korkeusaseman lisäys
+	Specify the angle to fill (+=ccw, -=cw)	Määritä täytettävä kulma (+=vastapäivään, -=myötäpäivään)
+	Select hatch object	Valitse viivoitusobjekti
+	Red, Green, Blue	Punainen, vihreä, sininen
+	Enter the number of rows	Anna rivien määrä
+	Enter the number of levels	Anna tasojen määrä
+	Enter new layer name	Anna uuden tason nimi
+	Specify width	Määritä leveys
+	Specify the angle between items	Määritä kohteiden välinen kulma
+	Specify text height	Määritä tekstin korkeus
+	Specify start tangent	Määritä alkutangentti
+	Specify end tangent	Määritä lopputangentti
+	Specify reference length	Määritä vertailupituus
+	Specify other corner	Määritä toinen kulma
+	Specify next point or [Undo]	Määritä seuraava piste tai [Undo]
+	Specify new location	Määritä uusi sijainti
+	Specify new length	Määritä uusi pituus
+	Specify length of line	Määritä viivan pituus
+	Specify displacement	Määritä siirtymä
+	Specify angle for dimension text	Määritä mittatekstin kulma
+	Select viewports	Valitse näkymäikkunat
+	Select object to break dimension	Valitse objekti, jonka kohdalla mitta katkaistaan
+	Select group	Valitse ryhmä
+	Select grip to edit array	Valitse kahva sarjan muokkaamiseksi
+	Select a table	Valitse taulukko
+	Select a boundary to remove	Valitse poistettava raja
+	Rotate arrayed items?	Kierretäänkö sarjan kohteita?
+	Erase polyline?	Poistetaanko murtoviiva?
+	Enter viewport arrangement	Anna näkymäikkunoiden järjestely
+	Enter transparency value (0-90)	Anna läpinäkyvyysarvo (0-90)
+	Enter the number of operations to undo	Anna kumottavien toimintojen määrä
+	Enter the number of columns	Anna sarakkeiden määrä
+	Enter number of items in array	Anna sarjan kohteiden määrä
+	Enter new layer state name	Anna uuden tasotilan nimi
+	Enter new color	Anna uusi väri
+	Enter name of new layout	Anna uuden asettelun nimi
+	Enter layer name	Anna tason nimi
+	Enter file name	Anna tiedoston nimi
+	Enter color name or number (1-255)	Anna värin nimi tai numero (1-255)
+	Enter a configuration option	Anna määritysvaihtoehto
+	Base point	Peruspiste
+	Word-wrap the combined Mtext?	Rivitetäänkö yhdistetty monirivinen teksti?
+	Where should the data go?	Minne tiedot viedään?
+	Verify each name to be purged?	Vahvistetaanko jokainen siivottava nimi?
+	Use landing	Käytä hyllyä
+	Type of boundary object	Rajaobjektin tyyppi
+	Specify width factor	Määritä leveyskerroin
+	Specify tolerance	Määritä toleranssi
+	Specify the tangent direction for the start point of arc	Määritä kaaren alkupisteen tangentin suunta
+	Specify the reference angle	Määritä vertailukulma
+	Specify the new angle	Määritä uusi kulma
+	Specify text width	Määritä tekstin leveys
+	Specify temporary OTRACK point	Määritä tilapäinen OTRACK-piste
+	Invalid option keyword.	Virheellinen vaihtoehdon avainsana.
+	*Invalid selection*	*Virheellinen valinta*
+	Requires a valid angle.	Vaatii kelvollisen kulman.
+	Nothing to undo.	Ei mitään kumottavaa.
+	Invalid point.	Virheellinen piste.
+	No viewport found there.	Siitä ei löytynyt näkymäikkunaa.
+	*Cancel*	*Peruuta*
+	Requires a positive number.	Vaatii positiivisen luvun.
+	No hatch selected.	Viivoitusta ei valittu.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Komento ei ole sallittu Malli-välilehdellä ** (siirry ensin asetteluun)
+	Select a multileader.	Valitse monijohde.
+	No line or arc to continue.	Ei jatkettavaa viivaa tai kaarta.
+	Revision cloud finished.	Revisiopilvi valmis.
+	Object selected is not a circle or arc.	Valittu objekti ei ole ympyrä tai kaari.
+	Select a linear or aligned dimension.	Valitse lineaarinen tai kohdistettu mitta.
+	Object selected is not a dimension.	Valittu objekti ei ole mitta.
+	No dimensions selected.	Mittoja ei valittu.
+	Requires a number.	Vaatii luvun.
+	0 found	0 löydetty
+	The feature control frame is empty.	Toleranssikehys on tyhjä.
+	1 was on a locked layer.	1 oli lukitulla tasolla.
+	Row elevations need an associative array; the copies stay at the same elevation.	Rivien korkeusasemat vaativat assosiatiivisen sarjan; kopiot jäävät samaan korkeusasemaan.
+	Point or option keyword required.	Vaaditaan piste tai vaihtoehdon avainsana.
+	Enter Yes or No.	Anna Yes tai No.
+	Viewport created, zoomed to the model extents.	Näkymäikkuna luotu ja zoomattu mallin laajuuteen.
+	No object found.	Objektia ei löytynyt.
+	The object is not a table.	Objekti ei ole taulukko.
+	No table there.	Siinä ei ole taulukkoa.
+	A transparent command is already in progress.	Läpinäkyvä komento on jo käynnissä.
+	Invalid class name.	Virheellinen luokan nimi.
+	Invalid group name.	Virheellinen ryhmän nimi.
+	Too many point modifiers.	Liian monta pistemääritettä.
+	No leader to remove.	Ei poistettavaa viittausviivaa.
+	Requires a non-negative number.	Vaatii ei-negatiivisen luvun.
+	Clipboard is empty.	Leikepöytä on tyhjä.
+	1 object was on a locked layer.	1 objekti oli lukitulla tasolla.
+	Circle does not exist.	Ympyrää ei ole olemassa.
+	Enter Length or Area.	Anna Length tai Area.
+	Enter a percentage from 0 to 1000.	Anna prosenttiluku väliltä 0–1000.
+	Enter Table, File or None.	Anna Table, File tai None.
+	Cannot measure that object.	Objektia ei voi mitata.
+	Third pair ignored (2D align).	Kolmas pari ohitettu (2D-tasaus).
+	Insert mode: Copy (nested objects are copied as independent objects).	Lisäystila: kopio (sisäkkäiset objektit kopioidaan itsenäisinä objekteina).
+	Everything has been undone	Kaikki on kumottu
+	Everything has been undone.	Kaikki on kumottu.
+	Requires a non-negative number or Auto.	Vaatii ei-negatiivisen luvun tai Auto.
+	Select a dimension.	Valitse mitta.
+	Object cannot be dimensioned this way.	Objektia ei voi mitoittaa tällä tavalla.
+	Select an arc, circle or line.	Valitse kaari, ympyrä tai viiva.
+	The two points must be different.	Pisteiden on oltava eri pisteitä.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Ei jatkettavaa lineaarista mittaa. Luo ensin mitta DIMLINEAR-komennolla.
+	A multileader needs a leader line or content; nothing was drawn.	Monijohde tarvitsee viittausviivan tai sisältöä; mitään ei piirretty.
+	Requires the name of a block defined in the drawing.	Vaatii piirustuksessa määritetyn lohkon nimen.
+	Invalid option.	Virheellinen vaihtoehto.
+	The boundary encloses none of the image.	Raja ei rajaa mitään kuvan osaa.
+	The object is not an image.	Objekti ei ole kuva.
+	The image has no clipping boundary.	Kuvalla ei ole rajausrajaa.
+	No images selected.	Kuvia ei valittu.
+	Requires an integer between 0 and 100.	Vaatii kokonaisluvun väliltä 0–100.
+	The selected object has no area.	Valitulla objektilla ei ole pinta-alaa.
+	No such object	Objektia ei ole
+	Requires a point.	Vaatii pisteen.
+	Requires a distance.	Vaatii etäisyyden.
+	The object is on a locked layer.	Objekti on lukitulla tasolla.
+	Value must be positive and nonzero.	Arvon on oltava positiivinen eikä nolla.
+	Requires an angle.	Vaatii kulman.
+	Requires a point or option keyword.	Vaatii pisteen tai vaihtoehdon avainsanan.
+	Object does not intersect a cutting edge.	Objekti ei leikkaa leikkaavaa särmää.
+	Object does not intersect an edge.	Objekti ei leikkaa särmää.
+	Lines are parallel.	Viivat ovat yhdensuuntaisia.
+	The Block Editor is not open.	Lohkoeditori ei ole auki.
+	Requires a positive integer.	Vaatii positiivisen kokonaisluvun.
+	Answer Yes or No.	Vastaa Yes tai No.
+	Requires a valid point.	Vaatii kelvollisen pisteen.
+	No reference objects	Ei viiteobjekteja
+	Requires an angle or point.	Vaatii kulman tai pisteen.
+	Requires a positive distance.	Vaatii positiivisen etäisyyden.
+	Requires a non-negative distance.	Vaatii ei-negatiivisen etäisyyden.
+	No such grip	Kahvaa ei ole
+	Requires a template file name.	Vaatii mallitiedoston nimen.
+	A hatch needs at least one boundary: erase it instead.	Viivoitus tarvitsee vähintään yhden rajan: poista se sen sijaan.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Kumoaminen on pois käytöstä (UNDO Control None); UNDO Control All ottaa sen käyttöön.
+	Enter ON or OFF.	Anna ON tai OFF.
+	Not a linear dimension.	Ei lineaarinen mitta.
+	Valid hatch boundary not found.	Kelvollista viivoitusrajaa ei löytynyt.
+	No closed boundary objects selected.	Suljettuja rajaobjekteja ei valittu.
+	Requires a name.	Vaatii nimen.
+	That option doesn't apply to this grip.	Vaihtoehto ei koske tätä kahvaa.
+	That would make a degenerate object.	Tästä tulisi surkastunut objekti.
+	No tangent or perpendicular from the last point.	Ei tangenttia tai normaalia viimeisestä pisteestä.
+	Requires numeric distance or second point.	Vaatii numeerisen etäisyyden tai toisen pisteen.
+	Edge endpoints must differ.	Särmän päätepisteiden on oltava eri pisteitä.
+	Requires numeric distance or point.	Vaatii numeerisen etäisyyden tai pisteen.
+	Requires a positive height.	Vaatii positiivisen korkeuden.
+	No objects found.	Objekteja ei löytynyt.
+	Requires a non-zero number.	Vaatii nollasta poikkeavan luvun.
+	Circle must intersect cutting edges at two or more points.	Ympyrän on leikattava leikkaavat särmät kahdessa tai useammassa pisteessä.
+	Arc cannot be full 360 degrees.	Kaari ei voi olla täysi 360 astetta.
+	Cannot break that object.	Objektia ei voi katkaista.
+	An object is on a locked layer.	Objekti on lukitulla tasolla.
+	Objects are not connected.	Objektit eivät ole yhteydessä.
+	The two points must differ.	Pisteiden on oltava eri pisteitä.
+	Mirror line points must differ.	Peilausviivan pisteiden on oltava eri pisteitä.
+	No drawing is open.	Yhtään piirustusta ei ole avoinna.
+	Command: {}	Komento: {}
+	Unknown command "{}". Press F1 for help.	Tuntematon komento "{}". Paina F1 saadaksesi ohjeita.
+	{} found	{} löydetty
+	{} found, {} total	{} löydetty, {} yhteensä
+	Distance = {}	Etäisyys = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Etäisyys = {},  Kulma XY-tasossa = {},  Kulma XY-tasosta = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Pinta-ala = {}, ympärysmitta = {}
+	Total area = {}	Kokonaispinta-ala = {}
+	Resuming {} command.	Jatketaan komentoa {}.
+	Invalid input: {}	Virheellinen syöte: {}
+	{} were on a locked layer.	{} oli lukitulla tasolla.
+	{} dimension(s) changed.	{} mittaa muutettu.
+	Group {} ungrouped.	Ryhmä {} purettu.
+	{} object(s) flattened.	{} objektia litistetty.
+	Group {} renamed to {}.	Ryhmä {} nimetty uudelleen: {}.
+	{} object(s) added to group {}.	{} objektia lisätty ryhmään {}.
+	{} object(s) removed from group {}.	{} objektia poistettu ryhmästä {}.
+	{} lines were chamfered	{} viivaa viistetty
+	{} lines were filleted	{} viivaa pyöristetty
+	{} objects joined into 1 {}	{} objektia yhdistetty: 1 {}
+	Current dimension style:  {}	Nykyinen mitoitustyyli:  {}
+	Wrote {}	Kirjoitettu {}
+	{} is already open.	{} on jo auki.
+	{} dimension(s) created.	{} mittaa luotu.
+	BOUNDARY created {} polyline(s)	BOUNDARY loi {} murtoviivaa
+	Current line-width is {}	Nykyinen viivanleveys on {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Tuntematon muuttuja {}. Kirjoita SETVAR ? luetellaksesi muuttujat.
+	{} = {} (read only)	{} = {} (vain luku)
+	Dimension text = {}	Mittateksti = {}
+	{} segments added to polyline	{} segmenttiä lisätty murtoviivaan

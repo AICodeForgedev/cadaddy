@@ -1,0 +1,2833 @@
+# CADaddy Vietnamese interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Vietnamese translation.
+# Empty context = ordinary label; @plural = a single form with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	Điều chỉnh...
+	Apply	Áp dụng
+	Attach DWG...	Đính kèm DWG...
+	Bind	Gộp vào
+	Detach	Tách
+	Image	Hình ảnh
+	Loaded	Đã tải
+	Make it a block of this drawing, keeping its layer names	Biến thành khối của bản vẽ này, giữ nguyên tên lớp
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Biến thành khối của bản vẽ này; các lớp trở thành NAME$0$LAYER
+	No external references are attached.	Chưa đính kèm tham chiếu ngoài nào.
+	Not Found	Không tìm thấy
+	Not loaded	Chưa tải
+	Open	Mở
+	Overlay	Phủ chồng
+	Reference Manager	Quản lý tham chiếu
+	Reference Name	Tên tham chiếu
+	References: {n}	Tham chiếu: {n}
+	Reload	Tải lại
+	Reload All	Tải lại tất cả
+	Saved Path	Đường dẫn đã lưu
+	Unload	Gỡ tải
+	Unloaded	Đã gỡ tải
+	Unreferenced	Không được tham chiếu
+	Unresolved	Chưa xác định
+	  Cancel  	  Hủy  
+	  OK  	  OK  
+	 or [	 hoặc [
+	% of all commits	% tổng số commit
+	* Wildcard Match	* Khớp ký tự đại diện
+	*VARIES*	*KHÁC NHAU*
+	+  |  Top  |  2D Wireframe	+  |  Trên  |  Khung dây 2D
+	+Bin	+nhị phân
+	+LOC	+dòng
+	1 Viewport	1 khung nhìn
+	2 Points	2 điểm
+	2 Viewports	2 khung nhìn
+	2D Solid	Khối đặc 2D
+	3 Points	3 điểm
+	3 Viewports	3 khung nhìn
+	3D Face	Mặt 3D
+	3D Operations	Thao tác 3D
+	3D Polyline	Đa tuyến 3D
+	4 Viewports	4 khung nhìn
+	< Less than	< Nhỏ hơn
+	<> Not Equal	<> Khác
+	= Equals	= Bằng
+	> Greater than	> Lớn hơn
+	A variable name starts with a letter and has only letters, digits and _	Tên biến bắt đầu bằng một chữ cái và chỉ gồm chữ cái, chữ số và _
+	About	Giới thiệu
+	About CADaddy	Giới thiệu CADaddy
+	Absolute	Tuyệt đối
+	Add Leader	Thêm đường dẫn chú thích
+	Additional angles	Các góc bổ sung
+	Align	Căn chỉnh
+	Align Text	Căn chỉnh văn bản
+	Aligned	Căn thẳng
+	All	Tất cả
+	All Annotation Objects	Mọi đối tượng chú thích
+	All Used Layers	Mọi lớp đang dùng
+	All files	Tất cả tệp
+	Angle	Góc
+	Angular	Góc
+	Annotation Visibility	Hiển thị chú thích
+	Annotation scale	Tỷ lệ chú thích
+	Apparent Intersection	Giao điểm biểu kiến
+	Append to current selection set	Thêm vào tập chọn hiện tại
+	Apply to:	Áp dụng cho:
+	Apply true color	Áp dụng màu thực
+	Arc	Cung tròn
+	Arc Length	Độ dài cung
+	Area	Diện tích
+	Arrange Panel	Bảng sắp xếp
+	Array	Mảng
+	Attach	Đính kèm
+	Attribute	Thuộc tính
+	Attribute Definition	Định nghĩa thuộc tính
+	Attribute Display	Hiển thị thuộc tính
+	Audit	Kiểm tra
+	Auto (system language)	Tự động (ngôn ngữ hệ thống)
+	Auto Constrain	Ràng buộc tự động
+	AutoConstrain	Ràng buộc tự động
+	Axis, End	Trục, điểm cuối
+	Base	Cơ sở
+	Baseline	Đường chuẩn
+	Batch Publish	Xuất bản hàng loạt
+	Binary assets added	Đã thêm tài nguyên nhị phân
+	Binary assets removed	Đã xóa tài nguyên nhị phân
+	Bind...	Gộp vào...
+	Blend	Nối mượt
+	Block	Khối
+	Block Attribute Manager...	Quản lý thuộc tính khối...
+	Block Editor	Trình soạn khối
+	Block Reference	Tham chiếu khối
+	Block...	Khối...
+	Blocks	Khối
+	Blue	Lam
+	Bold	Đậm
+	Boolean	Boolean
+	Boundary	Đường biên
+	Boundary...	Đường biên...
+	Box	Hộp
+	Break	Ngắt
+	Break At Point	Ngắt tại điểm
+	Bring Above Objects	Đưa lên trên đối tượng
+	Bring Annotations to Front	Đưa chú thích lên trước
+	Bring to Front	Đưa lên trước
+	Bulleted list	Danh sách gạch đầu dòng
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	Trợ giúp CADaddy
+	Cancel	Hủy
+	Cartesian (x, y)	Đề-các (x, y)
+	Center	Tâm
+	Center Line	Đường tâm
+	Center Mark	Dấu tâm
+	Center X	Tâm X
+	Center Y	Tâm Y
+	Center Z	Tâm Z
+	Center, Diameter	Tâm, đường kính
+	Center, Radius	Tâm, bán kính
+	Center, Start, Angle	Tâm, đầu, góc
+	Center, Start, End	Tâm, đầu, cuối
+	Center, Start, Length	Tâm, đầu, độ dài
+	Chamfer	Vát cạnh
+	Change Space	Đổi không gian
+	Change to Current Layer	Chuyển sang lớp hiện hành
+	Changed: {n}	Đã thay đổi: {n}
+	Circle	Đường tròn
+	Circumference	Chu vi
+	Clear History	Xóa lịch sử
+	Clear	Xóa
+	Clip	Cắt xén
+	Clip Viewport	Cắt xén khung nhìn
+	Clipboard	Bộ nhớ tạm
+	Close	Đóng
+	Close All	Đóng tất cả
+	Close All Other Drawings	Đóng các bản vẽ khác
+	Closed	Kín
+	Close Comparison	Đóng so sánh
+	Coincident	Trùng điểm
+	Collapse Palettes	Thu gọn bảng
+	Collapse Tool Sets	Thu gọn bộ công cụ
+	Collinear	Thẳng hàng
+	Color	Màu
+	Color 8	Màu 8
+	Color 9	Màu 9
+	Color Index	Chỉ số màu
+	Color...	Màu...
+	Command Aliases	Bí danh lệnh
+	Command History	Lịch sử lệnh
+	Clear Command History	Xóa lịch sử lệnh
+	Command Line	Dòng lệnh
+	Command Line History Lines	Số dòng lịch sử dòng lệnh
+	Command Reference	Tham khảo lệnh
+	Commits	Commit
+	Company	Công ty
+	Compare Drawings...	So sánh bản vẽ...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Thiết kế và vẽ kỹ thuật có trợ giúp của máy tính: ứng dụng CAD mã nguồn mở, xây dựng độc lập (clean-room), viết hoàn toàn bằng Rust.
+	Concentric	Đồng tâm
+	Cone	Hình nón
+	Constraint Bars	Thanh ràng buộc
+	Constraint Settings	Thiết lập ràng buộc
+	Construction Line	Đường dựng hình
+	Contents	Nội dung
+	Continue	Tiếp tục
+	Contributors	Người đóng góp
+	Control Vertices	Đỉnh điều khiển
+	Convert	Chuyển đổi
+	Copy	Sao chép
+	Copy Full File Path	Sao chép đường dẫn tệp đầy đủ
+	Copy History	Sao chép lịch sử
+	Copy Layout	Sao chép bố cục
+	Copy Nested Objects	Sao chép đối tượng lồng
+	Copy Selection	Sao chép vùng chọn
+	Copy with Base Point	Sao chép với điểm cơ sở
+	Count	Đếm
+	Count List	Danh sách đếm
+	Count Table	Bảng đếm
+	Create Block	Tạo khối
+	Creates a user parameter	Tạo một tham số người dùng
+	Ctrl+Enter to finish	Ctrl+Enter để kết thúc
+	Current layer	Lớp hiện hành
+	Current selection	Vùng chọn hiện tại
+	Current: {color}	Hiện tại: {color}
+	Cut	Cắt
+	Cyan	Lục lam
+	Cylinder	Hình trụ
+	DWG	DWG
+	DWG Reference...	Tham chiếu DWG...
+	DXF	DXF
+	Dark	Tối
+	Data Extraction...	Trích xuất dữ liệu...
+	Default	Mặc định
+	Data Link...	Liên kết dữ liệu...
+	Default Save Format	Định dạng lưu mặc định
+	Default Save Version	Phiên bản lưu mặc định
+	Define Attributes	Định nghĩa thuộc tính
+	Define Attributes...	Định nghĩa thuộc tính...
+	Defined width	Độ rộng xác định
+	Degree	Bậc
+	Degrees of Freedom	Bậc tự do
+	Degrees of freedom: {n}	Bậc tự do: {n}
+	Delete	Xóa
+	Delete Column	Xóa cột
+	Delete Constraints	Xóa ràng buộc
+	Delete Dimension Style	Xóa kiểu kích thước
+	Delete Duplicate Objects	Xóa đối tượng trùng lặp
+	Delete Layer	Xóa lớp
+	Delete Layer State	Xóa trạng thái lớp
+	Delete Layout	Xóa bố cục
+	Delete Row	Xóa hàng
+	Delete Text Style	Xóa kiểu chữ
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Mô tả
+	Deselect All	Bỏ chọn tất cả
+	Diameter	Đường kính
+	Dim style	Kiểu kích thước
+	Dimension Break	Ngắt kích thước
+	Dimension Edit	Sửa kích thước
+	Dimension	Kích thước
+	Dimension Objects Only	Chỉ đối tượng kích thước
+	Dimension Space	Khoảng cách kích thước
+	Dimension Style Override	Ghi đè kiểu kích thước
+	Dimension Style...	Kiểu kích thước...
+	Dimension Text Edit	Sửa chữ kích thước
+	Dimension style	Kiểu kích thước
+	Dimensional Constraint	Ràng buộc kích thước
+	Dimensional Constraint Parameters	Tham số ràng buộc kích thước
+	Dimensional Constraints	Ràng buộc kích thước
+	Disassociate Dimensions	Bỏ liên kết kích thước
+	Display name	Tên hiển thị
+	Distance	Khoảng cách
+	Divide	Chia đều
+	Do not plot (click: plot)	Không in (bấm: in)
+	Donut	Hình vành khuyên
+	Double-click to edit the description	Nhấp đúp để sửa mô tả
+	Down	Xuống
+	Drafting	Vẽ kỹ thuật
+	Drafting Settings	Thiết lập vẽ
+	Drafting Settings...	Thiết lập vẽ...
+	Draw	Vẽ
+	Draw Order	Thứ tự hiển thị
+	Drawing (DWG)	Bản vẽ (DWG)
+	Drawing (DXF)	Bản vẽ (DXF)
+	Drawing Limits	Giới hạn bản vẽ
+	Drawing Template (DWT)	Bản vẽ mẫu (DWT)
+	Drawing Utilities	Tiện ích bản vẽ
+	Drawings (DWG, DXF)	Bản vẽ (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	Bản vẽ SVG (SVG, SVGZ)
+	Dynamic	Động
+	Dynamic Dimensions	Kích thước động
+	Dynamic Input	Nhập liệu động
+	Dynamic Input (F12)	Nhập liệu động (F12)
+	E	Đ
+	Edit	Sửa
+	Edit Attributes...	Sửa thuộc tính...
+	Edit Text...	Sửa văn bản...
+	Edit Table Cell	Sửa ô bảng
+	Elevation	Cao độ
+	Ellipse	Elip
+	Elliptical Arc	Cung elip
+	Enable Dynamic Input (F12)	Bật nhập liệu động (F12)
+	End Object Isolation	Kết thúc cô lập đối tượng
+	End Width	Độ rộng cuối
+	End X	Cuối X
+	End Y	Cuối Y
+	End angle	Góc cuối
+	Endpoint	Điểm cuối
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Nhập Top, Zero hoặc Bottom.
+	Enter a fit data option	Nhập tùy chọn dữ liệu khớp
+	Enter a pattern name	Nhập tên mẫu
+	Enter a vertex editing option	Nhập tùy chọn sửa đỉnh
+	Enter an option	Nhập một tùy chọn
+	Enter angle of xline	Nhập góc của xline
+	Enter angle of xline (0) or	Nhập góc của xline (0) hoặc
+	Enter area of rectangle in current units	Nhập diện tích hình chữ nhật theo đơn vị hiện hành
+	Enter attribute prompt	Nhập lời nhắc thuộc tính
+	Enter attribute tag name	Nhập tên thẻ thuộc tính
+	Enter attribute value	Nhập giá trị thuộc tính
+	Enter block name	Nhập tên khối
+	Enter constraint type	Nhập loại ràng buộc
+	Enter continuity	Nhập độ liên tục
+	Enter default attribute value	Nhập giá trị thuộc tính mặc định
+	Enter degree of spline	Nhập bậc của spline
+	Enter delta angle	Nhập góc gia số
+	Enter delta length or	Nhập độ dài gia số hoặc
+	Enter dimension text	Nhập chữ kích thước
+	Enter dimension text (<> = measurement)	Nhập chữ kích thước (<> = số đo)
+	Enter dimension value or [name=expression]	Nhập giá trị kích thước hoặc [name=expression]
+	Enter dimension variable name to override	Nhập tên biến kích thước cần ghi đè
+	Enter justification type	Nhập kiểu căn lề
+	Enter leader text	Nhập chữ đường dẫn chú thích
+	Enter mline scale	Nhập tỷ lệ mline
+	Enter mode	Nhập chế độ
+	Enter name of block to insert	Nhập tên khối cần chèn
+	Enter new text	Nhập văn bản mới
+	Enter next point	Nhập điểm tiếp theo
+	Enter number of columns	Nhập số cột
+	Enter number of data rows	Nhập số hàng dữ liệu
+	Enter number of items	Nhập số phần tử
+	Enter number of items along path	Nhập số phần tử dọc theo đường dẫn
+	Enter number of sides	Nhập số cạnh
+	Enter number of turns	Nhập số vòng
+	Enter percentage length	Nhập độ dài theo phần trăm
+	Enter rectangle length	Nhập chiều dài hình chữ nhật
+	Enter rectangle width	Nhập chiều rộng hình chữ nhật
+	Enter scale factor	Nhập hệ số tỷ lệ
+	Enter text	Nhập văn bản
+	Enter text (use \P for new paragraphs)	Nhập văn bản (dùng \P để xuống đoạn mới)
+	Enter the number of segments	Nhập số đoạn
+	Enter twist direction of helix	Nhập chiều xoắn của đường xoắn ốc
+	Entire drawing	Toàn bộ bản vẽ
+	Equal	Bằng nhau
+	Erase	Xóa
+	Evaluate	Tính toán
+	Evaluate LISP	Tính biểu thức LISP
+	Exclude from new selection set	Loại khỏi tập chọn mới
+	Explode	Phá khối
+	Export	Xuất
+	Export Table	Xuất bảng
+	Export to PDF...	Xuất sang PDF...
+	Expression	Biểu thức
+	Extend	Kéo dài
+	Extension	Phần mở rộng
+	Extents	Phạm vi
+	External Reference	Tham chiếu ngoài
+	External References	Tham chiếu ngoài
+	Extrude	Đùn
+	File	Tệp
+	File Tab	Thẻ tệp
+	Fillet	Bo tròn
+	Filter	Bộ lọc
+	Filters	Bộ lọc
+	Find and Replace	Tìm và thay thế
+	Find...	Tìm...
+	First	Đầu tiên
+	First commit	Commit đầu tiên
+	Fit Points	Điểm khớp
+	Fix	Cố định
+	Flatten Objects	Làm phẳng đối tượng
+	Format	Định dạng
+	Freehand	Vẽ tự do
+	Freeze	Đóng băng
+	Freeze Layer	Đóng băng lớp
+	Freeze in new viewports	Đóng băng trong khung nhìn mới
+	Freeze/Thaw	Đóng băng/Rã băng
+	Freeze/Thaw in all viewports	Đóng băng/Rã băng trong mọi khung nhìn
+	Freeze/Thaw in the current viewport	Đóng băng/Rã băng trong khung nhìn hiện tại
+	From	Từ
+	From Template...	Từ bản mẫu...
+	General	Chung
+	Geometric Center	Tâm hình học
+	Geometric Constraint	Ràng buộc hình học
+	Geometric Constraints	Ràng buộc hình học
+	Geometry	Hình học
+	Get from the Drawing	Lấy từ bản vẽ
+	Get Variable	Lấy biến
+	Get View	Lấy khung nhìn
+	Global	Toàn cục
+	Global width	Độ rộng chung
+	Grab bag	Danh sách
+	Gradient	Chuyển màu
+	Gradient...	Chuyển màu...
+	Green	Lục
+	Grid (F7)	Lưới (F7)
+	Grid Display	Hiển thị lưới
+	Grid On (F7)	Bật lưới (F7)
+	Grid snap	Bắt điểm lưới
+	Grid spacing	Khoảng cách lưới
+	Grip Edit	Sửa bằng grip
+	Grip Mirror	Đối xứng bằng grip
+	Grip Option	Tùy chọn grip
+	Grip Rotate	Xoay bằng grip
+	Grip Scale	Tỷ lệ bằng grip
+	Grip Stretch	Kéo giãn bằng grip
+	Group	Nhóm
+	Group Edit	Sửa nhóm
+	Group Options	Tùy chọn nhóm
+	Group Selection	Chọn nhóm
+	Hatch	Tô vật liệu
+	Hatch Edit	Sửa mặt tô
+	Hatch Patterns	Mẫu tô vật liệu
+	Hatch...	Tô vật liệu...
+	Height	Chiều cao
+	Height: {height}	Chiều cao: {height}
+	Helix	Đường xoắn ốc
+	Help	Trợ giúp
+	Hide All	Ẩn tất cả
+	Hide All Constraint Bars	Ẩn mọi thanh ràng buộc
+	Hide All Dynamic Dimensions	Ẩn mọi kích thước động
+	Hide Layer List	Ẩn danh sách lớp
+	Hide Objects	Ẩn đối tượng
+	Hide Palettes	Ẩn bảng
+	History	Lịch sử
+	Home	Trang chủ
+	Horizontal	Ngang
+	HorizontalDistance	Khoảng cách ngang
+	How to apply:	Cách áp dụng:
+	ID Point	Tọa độ điểm
+	Import	Nhập
+	Align Multileaders	Căn chỉnh đường dẫn đa chú thích
+	Collect	Gom
+	Collect Multileaders	Gom đường dẫn đa chú thích
+	Edit Multileader	Sửa đường dẫn đa chú thích
+	In	Phóng to
+	In-window Menu Bar	Thanh menu trong cửa sổ
+	Include in new selection set	Đưa vào tập chọn mới
+	Increment angle	Góc gia tăng
+	Index Color	Màu chỉ số
+	Index color: {index}	Màu chỉ số: {index}
+	Infer Constraints	Suy luận ràng buộc
+	Inquiry	Truy vấn
+	Insert	Chèn
+	Insert Block	Chèn khối
+	Insert Column	Chèn cột
+	Insert Row	Chèn hàng
+	Insert tab	Thẻ Chèn
+	Insert this block	Chèn khối này
+	Insert Table Formula	Chèn công thức bảng
+	Insertion	Điểm chèn
+	Insertion X	Điểm chèn X
+	Insertion Y	Điểm chèn Y
+	Insertion Z	Điểm chèn Z
+	Inspect Constraints	Kiểm tra ràng buộc
+	Inspect Drawing	Kiểm tra bản vẽ
+	Inspection	Kiểm tra
+	Interface Language	Ngôn ngữ giao diện
+	Interface Theme	Chủ đề giao diện
+	Intersect	Giao
+	Intersection	Giao điểm
+	Isolate	Cô lập
+	Isolate Layer	Cô lập lớp
+	Isolate Objects	Cô lập đối tượng
+	Isometric Drafting	Vẽ trục đo
+	Jogged	Gấp khúc
+	Jogged Linear	Tuyến tính gấp khúc
+	Join	Nối
+	Join the ArtCraft Discord…	Tham gia Discord của ArtCraft…
+	Join us on Discord	Tham gia cùng chúng tôi trên Discord
+	Isometric Plane	Mặt phẳng trục đo
+	Isometric snap	Bắt điểm trục đo
+	Language	Ngôn ngữ
+	Last	Cuối cùng
+	Last commit	Commit gần nhất
+	Layer	Lớp
+	Layer Delete	Xóa lớp
+	Layer Match	Khớp lớp
+	Layer Merge	Gộp lớp
+	Layer Off	Tắt lớp
+	Layer Properties	Thuộc tính lớp
+	Layer Properties Manager	Quản lý thuộc tính lớp
+	Layer Properties Manager — current viewport	Quản lý thuộc tính lớp — khung nhìn hiện tại
+	Layer State	Trạng thái lớp
+	Layer States Manager...	Quản lý trạng thái lớp...
+	Layer Tools	Công cụ lớp
+	Layer contains objects (double-click to make current)	Lớp có đối tượng (nhấp đúp để đặt làm hiện hành)
+	Layer is empty (double-click to make current)	Lớp trống (nhấp đúp để đặt làm hiện hành)
+	Layers	Lớp
+	Layers Palette	Bảng lớp
+	Hide Palette	Ẩn bảng
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Lớp đang hiển thị: {shown} / {total}.   Lớp hiện hành: {layer}
+	Layout	Bố cục
+	Layout list	Danh sách bố cục
+	Leader	Đường dẫn chú thích
+	Leaders Only	Chỉ đường dẫn chú thích
+	Left	Trái
+	Length	Độ dài
+	Length X	Độ dài X
+	Length Y	Độ dài Y
+	Lengthen	Kéo dài/thu ngắn
+	Light	Sáng
+	Line	Đường thẳng
+	Line delta	Chênh lệch dòng
+	Linear	Tuyến tính
+	Lines +/−	Dòng +/−
+	Lines added	Dòng đã thêm
+	Lines deleted	Dòng đã xóa
+	Lines of Command History	Số dòng lịch sử lệnh
+	Linetype	Kiểu đường
+	Linetype Scale	Tỷ lệ kiểu đường
+	Linetype scale	Tỷ lệ kiểu đường
+	Ltscale	Tỷ lệ kiểu đường
+	Linetype...	Kiểu đường...
+	Lineweight	Độ dày nét
+	Lineweight...	Độ dày nét...
+	List	Liệt kê
+	List Blocks	Liệt kê khối
+	List Dimension Styles	Liệt kê kiểu kích thước
+	List Groups	Liệt kê nhóm
+	List Layer States	Liệt kê trạng thái lớp
+	List Layouts	Liệt kê bố cục
+	List System Variables	Liệt kê biến hệ thống
+	List Text Styles	Liệt kê kiểu chữ
+	Load all	Tải tất cả
+	Load...	Tải...
+	Load Application...	Tải ứng dụng...
+	Loaded linetypes	Kiểu đường đã tải
+	Lock	Khóa
+	Lock Layer	Khóa lớp
+	Lock viewport	Khóa khung nhìn
+	Lock/Unlock	Khóa/Mở khóa
+	Loft	Loft
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Không liên kết với Autodesk, Inc.
+	MODEL	MÔ HÌNH
+	MText	MText
+	Magenta	Đỏ tươi
+	Major line every	Đường chính mỗi
+	Make Current	Đặt làm hiện hành
+	Make Object's Layer Current	Đặt lớp của đối tượng làm hiện hành
+	Make...	Tạo...
+	Match Layer	Khớp lớp
+	Match Properties	Sao chép thuộc tính
+	Measure	Đo chia
+	Measure Distance	Đo khoảng cách
+	Measure Geometry	Đo hình học
+	Merge Cells	Gộp ô
+	Merged PRs	PR đã hợp nhất
+	Mid Between 2 Points	Trung điểm giữa 2 điểm
+	Midpoint	Trung điểm
+	Mirror	Đối xứng
+	Model	Mô hình
+	Model Space (in viewport)	Không gian mô hình (trong khung nhìn)
+	Modeling	Mô hình hóa
+	Models	Mô hình
+	Modify	Hiệu chỉnh
+	Move	Di chuyển
+	Multileader	Đường dẫn đa chú thích
+	Multileader Style...	Kiểu đường dẫn đa chú thích...
+	Multileader style	Kiểu đường dẫn đa chú thích
+	Multiline	Đa đường
+	Multiline Text	Văn bản nhiều dòng
+	Multiline Text...	Văn bản nhiều dòng...
+	Multiple	Nhiều
+	Multiple Point	Nhiều điểm
+	My	Của tôi
+	My properties: not available yet	Thuộc tính của tôi: chưa có
+	N	B
+	Name	Tên
+	Name (A–Z)	Tên (A–Z)
+	Named Views...	Khung nhìn đã đặt tên...
+	Nearest	Gần nhất
+	New	Mới
+	New (metric)	Mới (hệ mét)
+	New Drawing	Bản vẽ mới
+	New Drawing (⌘N)	Bản vẽ mới (⌘N)
+	New Drawing...	Bản vẽ mới...
+	New Layer	Lớp mới
+	New Layout	Bố cục mới
+	New VP Freeze	Đóng băng ở KN mới
+	New Viewports...	Khung nhìn mới...
+	New from Template...	Mới từ bản mẫu...
+	New layout	Bố cục mới
+	New state name	Tên trạng thái mới
+	Next Change	Thay đổi tiếp theo
+	No	Không
+	No blocks defined in this drawing.	Bản vẽ này chưa định nghĩa khối nào.
+	No contributor data was built into this copy.	Bản sao này không kèm dữ liệu người đóng góp.
+	No model credits were built into this copy.	Bản sao này không kèm ghi công mô hình.
+	No saved layer states	Không có trạng thái lớp đã lưu
+	No selection	Không có vùng chọn
+	Node	Nút
+	None	Không
+	Not available	Không khả dụng
+	Not available yet	Chưa khả dụng
+	Numbered list	Danh sách đánh số
+	OK	OK
+	Object	Đối tượng
+	Object Snap	Bắt điểm đối tượng
+	Object Snap (F3)	Bắt điểm đối tượng (F3)
+	Object Snap On (F3)	Bật bắt điểm đối tượng (F3)
+	Object Snap Tracking	Dò theo bắt điểm đối tượng
+	Object Snap Tracking (F11)	Dò theo bắt điểm đối tượng (F11)
+	Object Snap Tracking Settings	Thiết lập dò theo bắt điểm
+	Object type:	Loại đối tượng:
+	Oblique	Xiên
+	Off	Tắt
+	Offset	Dời song song
+	On	Bật
+	On/Off	Bật/Tắt
+	One of the Crafting Apps by the ArtCraft team and community.	Một trong các ứng dụng Crafting của nhóm và cộng đồng ArtCraft.
+	Only in this drawing: {n}	Chỉ trong bản vẽ này: {n}
+	Only in {name}: {n}	Chỉ trong {name}: {n}
+	Open (⌘O)	Mở (⌘O)
+	Open Sample Drawing	Mở bản vẽ mẫu
+	Open sample drawing	Mở bản vẽ mẫu
+	Open Xref	Mở Xref
+	Open...	Mở...
+	Open Recent	Mở gần đây
+	Clear Recent Files	Xóa danh sách tệp gần đây
+	Operator:	Toán tử:
+	Orbit	Quỹ đạo
+	Ordinate	Tọa độ
+	Ortho (F8)	Ortho (F8)
+	Ortho Mode	Chế độ Ortho
+	Ortho Mode (F8)	Chế độ Ortho (F8)
+	Osnap Settings...	Thiết lập Osnap...
+	Out	Thu nhỏ
+	Over-constrained	Ràng buộc thừa
+	Override	Ghi đè
+	PAPER	GIẤY
+	Percent	Phần trăm
+	Polar (distance < angle)	Cực (khoảng cách < góc)
+	PRs	PR
+	Page Setup Manager	Quản lý thiết lập trang
+	Page Setup Manager...	Quản lý thiết lập trang...
+	Pan	Kéo màn hình
+	Pan Down	Kéo xuống
+	Pan Left	Kéo sang trái
+	Pan Right	Kéo sang phải
+	Pan Up	Kéo lên
+	Paper Space	Không gian giấy
+	Parallel	Song song
+	Parameters Manager	Quản lý tham số
+	Parametric	Tham số
+	Paste	Dán
+	Paste as Block	Dán thành khối
+	Paste to Command Line	Dán vào dòng lệnh
+	Paste to Original Coordinates	Dán vào tọa độ gốc
+	Path Array	Mảng theo đường dẫn
+	Pattern	Mẫu
+	Perpendicular	Vuông góc
+	Plot	In
+	Plot (click: do not plot)	In (bấm: không in)
+	Plot Preview	Xem trước bản in
+	Plot Window	Cửa sổ in
+	Plot style	Kiểu in
+	Plot style attached to	Kiểu in gắn với
+	Plot style table	Bảng kiểu in
+	Plot Style...	Kiểu in...
+	Plot Style Manager	Quản lý kiểu in
+	Plot Style Manager...	Quản lý kiểu in...
+	Plot Styles...	Kiểu in...
+	Plotter Manager	Quản lý máy in
+	Plotter Manager...	Quản lý máy in...
+	New CTB	CTB mới
+	New STB	STB mới
+	New style	Kiểu mới
+	Reset Panel Layout	Đặt lại bố cục bảng
+	Send Hatches to Back	Đưa mặt tô xuống dưới cùng
+	Send Under Objects	Đưa xuống dưới đối tượng
+	Text Objects Only	Chỉ đối tượng văn bản
+	Use for this layout	Dùng cho bố cục này
+	Display plot styles	Hiển thị kiểu in
+	No plot style tables.	Không có bảng kiểu in.
+	A built-in table: editing it keeps an edited copy in the drawing.	Bảng có sẵn: khi sửa, một bản sao đã chỉnh sửa sẽ được lưu trong bản vẽ.
+	Keep an editable copy of this table in the drawing	Giữ một bản sao có thể chỉnh sửa của bảng này trong bản vẽ
+	Layout {name}: {table}	Bố cục {name}: {table}
+	Grayscale	Thang xám
+	Screening	Độ đậm nhạt
+	Use object linetype	Dùng kiểu đường của đối tượng
+	Use object lineweight	Dùng độ dày nét của đối tượng
+	Remove	Gỡ bỏ
+	Add	Thêm
+	Open a drawing first.	Hãy mở một bản vẽ trước.
+	Plot table type	Loại bảng in
+	Color-dependent	Theo màu
+	Named	Đặt tên
+	Plus/minus	Cộng/trừ
+	Point	Điểm
+	Point Filters	Bộ lọc điểm
+	Point Style...	Kiểu điểm...
+	Polar Array	Mảng tròn
+	Polar Tracking	Dò theo cực
+	Polar Tracking (F10)	Dò theo cực (F10)
+	Polar Tracking On (F10)	Bật dò theo cực (F10)
+	Polar angle measurement	Đo góc cực
+	Polar distance	Khoảng cách cực
+	Polar: {distance} < {angle}°	Cực: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	Đa giác
+	Polygonal	Đa giác
+	Polygonal Viewport	Khung nhìn đa giác
+	Polyline	Đa tuyến
+	Polyline Edit	Sửa đa tuyến
+	Position X	Vị trí X
+	Position Y	Vị trí Y
+	Position Z	Vị trí Z
+	Previous	Trước
+	Previous Change	Thay đổi trước
+	Previous Layer	Lớp trước
+	Primitives	Khối cơ bản
+	Print	In
+	Print...	In...
+	Properties	Thuộc tính
+	Properties Inspector	Trình kiểm tra thuộc tính
+	Properties:	Thuộc tính:
+	Proxy	Proxy
+	Purge	Dọn dẹp
+	Pyramid	Hình chóp
+	Quadrant	Điểm góc phần tư
+	Query Entities	Truy vấn đối tượng
+	Quick	Nhanh
+	Quick Dimension	Kích thước nhanh
+	Quick Properties	Thuộc tính nhanh
+	Quick Select	Chọn nhanh
+	Quick Select Properties	Thuộc tính chọn nhanh
+	Quick Select...	Chọn nhanh...
+	QuickCalc	Máy tính nhanh
+	QuickCalc Pick	Lấy giá trị cho máy tính nhanh
+	Quit CADaddy	Thoát CADaddy
+	Radius	Bán kính
+	Raster Image	Ảnh raster
+	Ray	Tia
+	Read-only	Chỉ đọc
+	Real name	Tên thật
+	Realtime	Thời gian thực
+	Reassociate Dimensions	Liên kết lại kích thước
+	Recent	Gần đây
+	Recent Commands	Lệnh gần đây
+	Recent Input	Giá trị nhập gần đây
+	Recover...	Khôi phục...
+	Rectangle	Hình chữ nhật
+	Recalculate Table Formulas	Tính lại công thức bảng
+	Rectangular	Hình chữ nhật
+	Rectangular snap	Bắt điểm chữ nhật
+	Rectangular Array	Mảng chữ nhật
+	Red	Đỏ
+	Redo	Làm lại
+	Redo (⇧⌘Z)	Làm lại (⇧⌘Z)
+	Redraw	Vẽ lại
+	Regen	Tái tạo
+	Regen All	Tái tạo tất cả
+	Region	Miền
+	Region/Mass Properties	Thuộc tính miền/khối lượng
+	Reinitialize	Khởi tạo lại
+	Relative	Tương đối
+	Relative to last segment	Tương đối với đoạn cuối
+	Remove Leader	Xóa đường dẫn chú thích
+	Remove the viewport override	Bỏ ghi đè khung nhìn
+	Rename Dimension Style	Đổi tên kiểu kích thước
+	Rename Layer	Đổi tên lớp
+	Rename Layer State	Đổi tên trạng thái lớp
+	Rename Layout	Đổi tên bố cục
+	Rename Text Style	Đổi tên kiểu chữ
+	Rename...	Đổi tên...
+	Repeat {command}	Lặp lại {command}
+	Requires a point (x,y, @dx,dy or @d<a).	Cần một điểm (x,y, @dx,dy hoặc @d<a).
+	Reset Palettes	Đặt lại bảng
+	Restore	Khôi phục
+	Restore Layer State	Khôi phục trạng thái lớp
+	Reverse	Đảo chiều
+	Reverse the order	Đảo ngược thứ tự
+	Revision Cloud	Đám mây hiệu chỉnh
+	Revolve	Xoay tròn
+	Right	Phải
+	Rotate	Xoay
+	Rotation	Góc xoay
+	S	N
+	Save	Lưu
+	Save (⌘S)	Lưu (⌘S)
+	Save As	Lưu thành
+	Save As...	Lưu thành...
+	Save Layer State	Lưu trạng thái lớp
+	Save State	Lưu trạng thái
+	Scale	Tỷ lệ
+	Search for layer	Tìm lớp
+	Search for parameter	Tìm tham số
+	Second and next points:	Điểm thứ hai và các điểm tiếp theo:
+	Select	Chọn
+	Select 2D polyline	Chọn đa tuyến 2D
+	Select All	Chọn tất cả
+	Select Objects	Chọn đối tượng
+	Select Similar	Chọn tương tự
+	Select a 2D polyline.	Hãy chọn một đa tuyến 2D.
+	Select a block reference.	Hãy chọn một tham chiếu khối.
+	Select a circle or arc.	Hãy chọn một đường tròn hoặc cung tròn.
+	Select a closed polyline	Chọn một đa tuyến kín
+	Select a closed polyline, circle, ellipse or closed spline.	Hãy chọn một đa tuyến kín, đường tròn, elip hoặc spline kín.
+	Select a closed polyline.	Hãy chọn một đa tuyến kín.
+	Select a curve as the path.	Hãy chọn một đường cong làm đường dẫn.
+	Select a dimension constraint type	Chọn loại ràng buộc kích thước
+	Select a line object	Chọn một đối tượng đường thẳng
+	Select a line object.	Hãy chọn một đối tượng đường thẳng.
+	Select a line or an arc.	Chọn một đường thẳng hoặc cung tròn.
+	Select a line or polyline segment	Chọn một đoạn thẳng hoặc đoạn đa tuyến
+	Select a line, arc or open polyline.	Hãy chọn một đường thẳng, cung tròn hoặc đa tuyến hở.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Hãy chọn một đường thẳng, cung tròn, đường tròn, đa tuyến, elip hoặc spline làm đường dẫn.
+	Select a line, circle, arc or polyline segment.	Hãy chọn một đường thẳng, đường tròn, cung tròn hoặc đoạn đa tuyến.
+	Select a line.	Hãy chọn một đường thẳng.
+	Select a polyline.	Hãy chọn một đa tuyến.
+	Select a text, mtext, attribute definition or dimension.	Hãy chọn một văn bản, mtext, định nghĩa thuộc tính hoặc kích thước.
+	Select an annotation object	Chọn một đối tượng chú thích
+	Select an arc or circle	Chọn một cung tròn hoặc đường tròn
+	Select an arc.	Hãy chọn một cung tròn.
+	Select an object	Chọn một đối tượng
+	Select an object to change or	Chọn đối tượng cần thay đổi hoặc
+	Select an object to measure or	Chọn đối tượng cần đo hoặc
+	Select an object.	Hãy chọn một đối tượng.
+	Select an open curve.	Hãy chọn một đường cong hở.
+	Select an open line, arc, polyline, ellipse arc or spline.	Hãy chọn một đường thẳng, cung tròn, đa tuyến, cung elip hoặc spline hở.
+	Select arc or circle	Chọn cung tròn hoặc đường tròn
+	Select arc or polyline arc segment	Chọn cung tròn hoặc đoạn cung của đa tuyến
+	Select arc style	Chọn kiểu cung
+	Select arc, circle, line	Chọn cung tròn, đường tròn, đường thẳng
+	Select at least two objects to join.	Hãy chọn ít nhất hai đối tượng để nối.
+	Select circle or arc to add center mark	Chọn đường tròn hoặc cung tròn để thêm dấu tâm
+	Select closed objects (regions, closed polylines, circles).	Hãy chọn các đối tượng kín (miền, đa tuyến kín, đường tròn).
+	Select first line	Chọn đường thẳng thứ nhất
+	Select first line or arc	Chọn đường thẳng hoặc cung tròn thứ nhất
+	Select first object	Chọn đối tượng thứ nhất
+	Select first object or	Chọn đối tượng thứ nhất hoặc
+	Select first point	Chọn điểm thứ nhất
+	Select nested objects to copy or	Chọn các đối tượng lồng cần sao chép hoặc
+	Select object	Chọn đối tượng
+	Select object to dimension	Chọn đối tượng cần ghi kích thước
+	Select object to divide	Chọn đối tượng cần chia đều
+	Select object to extend or shift-select to trim	Chọn đối tượng cần kéo dài hoặc giữ Shift khi chọn để cắt
+	Select object to measure	Chọn đối tượng cần đo
+	Select object to offset	Chọn đối tượng cần dời song song
+	Select object to trim or shift-select to extend	Chọn đối tượng cần cắt hoặc giữ Shift khi chọn để kéo dài
+	Select objects	Chọn đối tượng
+	Select objects (crossing window first corner)	Chọn đối tượng (góc thứ nhất của cửa sổ cắt ngang)
+	Select objects to array.	Hãy chọn các đối tượng để tạo mảng.
+	Select objects to stretch by crossing-window or crossing-polygon...	Chọn đối tượng cần kéo giãn bằng cửa sổ cắt ngang hoặc đa giác cắt ngang...
+	Select objects:	Chọn đối tượng:
+	Add to Working Set	Thêm vào tập làm việc
+	Edit Reference In-Place	Sửa tham chiếu tại chỗ
+	Save Reference Edits	Lưu chỉnh sửa tham chiếu
+	Working Set	Tập làm việc
+	Xref and Block In-place Editing	Sửa Xref và khối tại chỗ
+	Select one polyline (Multiple is available through the JSON form).	Chọn một đa tuyến (có thể chọn nhiều qua biểu mẫu JSON).
+	Select path curve	Chọn đường cong dẫn
+	Select point or object	Chọn điểm hoặc đối tượng
+	Select polyline or	Chọn đa tuyến hoặc
+	Select second line	Chọn đường thẳng thứ hai
+	Select second line or shift-select to apply corner	Chọn đường thẳng thứ hai hoặc giữ Shift khi chọn để tạo góc
+	Select second object	Chọn đối tượng thứ hai
+	Select second object or shift-select to apply corner	Chọn đối tượng thứ hai hoặc giữ Shift khi chọn để tạo góc
+	Select second point	Chọn điểm thứ hai
+	Select spline	Chọn spline
+	Select symmetry line	Chọn đường đối xứng
+	Select two points	Chọn hai điểm
+	Selection Cycling	Chọn xoay vòng
+	Send to Back	Đưa xuống dưới cùng
+	Set Current	Đặt làm hiện hành
+	Set Current Dimension Style	Đặt kiểu kích thước hiện hành
+	Set Current Text Style	Đặt kiểu chữ hiện hành
+	Set Current Viewport	Đặt khung nhìn hiện hành
+	Set Layer Properties	Đặt thuộc tính lớp
+	Set Properties	Đặt thuộc tính
+	Set Table Cell	Đặt ô bảng
+	Set Table Cell Style	Đặt kiểu ô bảng
+	Set Variable	Đặt biến
+	Set View	Đặt khung nhìn
+	Share	Chia sẻ
+	Show	Hiện
+	Show All	Hiện tất cả
+	Show All Constraint Bars	Hiện mọi thanh ràng buộc
+	Show All Dynamic Dimensions	Hiện mọi kích thước động
+	Show and hide the tools of this category	Hiện và ẩn công cụ của nhóm này
+	Show in Tool Sets	Hiện trong bộ công cụ
+	Show command prompting near the crosshairs	Hiện lời nhắc lệnh gần con trỏ chữ thập
+	Show Layer List	Hiện danh sách lớp
+	Show/Hide Lineweight	Hiện/Ẩn độ dày nét
+	Show/Hide Transparency	Hiện/Ẩn độ trong suốt
+	Single Line Text	Văn bản một dòng
+	Single Point	Một điểm
+	Single...	Một...
+	Smooth	Làm mượt
+	Snap	Bắt điểm
+	Snap Mode	Chế độ bắt điểm
+	Snap Mode (F9)	Chế độ bắt điểm (F9)
+	Snap On (F9)	Bật bắt điểm (F9)
+	Snap Overrides	Ghi đè bắt điểm
+	Snap X spacing	Khoảng cách bắt điểm X
+	Snap and Grid	Bắt điểm và lưới
+	Snap type	Loại bắt điểm
+	Solid	Khối đặc
+	Sort	Sắp xếp
+	Specify a point	Chỉ định một điểm
+	Specify a scale for the hatch pattern	Chỉ định tỷ lệ cho mẫu tô vật liệu
+	Specify a second extension line origin	Chỉ định gốc đường gióng thứ hai
+	Specify an angle for the hatch pattern	Chỉ định góc cho mẫu tô vật liệu
+	Specify angle end point	Chỉ định điểm cuối của góc
+	Specify angle of dimension line	Chỉ định góc của đường kích thước
+	Specify angle of dimension text	Chỉ định góc của chữ kích thước
+	Specify angle start point	Chỉ định điểm đầu của góc
+	Specify angle vertex	Chỉ định đỉnh góc
+	Specify angle vertex point	Chỉ định điểm đỉnh góc
+	Specify arc length dimension location	Chỉ định vị trí kích thước độ dài cung
+	Specify axis endpoint of ellipse	Chỉ định điểm cuối trục của elip
+	Specify base diameter	Chỉ định đường kính đáy
+	Specify base point	Chỉ định điểm cơ sở
+	Specify base point or	Chỉ định điểm cơ sở hoặc
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Chỉ định điểm cơ sở hoặc độ dời (kéo bằng nút chuột giữa để kéo màn hình theo thời gian thực)
+	Specify base radius or	Chỉ định bán kính đáy hoặc
+	Specify center of donut	Chỉ định tâm hình vành khuyên
+	Specify center of ellipse	Chỉ định tâm elip
+	Specify center of polygon	Chỉ định tâm đa giác
+	Specify center point for circle	Chỉ định tâm đường tròn
+	Specify center point of arc	Chỉ định tâm cung tròn
+	Specify center point of array	Chỉ định tâm của mảng
+	Specify center point of base	Chỉ định tâm đáy
+	Specify corner of viewport	Chỉ định góc của khung nhìn
+	Specify corner of window, enter a scale factor (nX or nXP)	Chỉ định góc cửa sổ, nhập hệ số tỷ lệ (nX hoặc nXP)
+	Specify diameter of circle	Chỉ định đường kính đường tròn
+	Specify dimension arc line location	Chỉ định vị trí đường cung kích thước
+	Specify dimension line location	Chỉ định vị trí đường kích thước
+	Specify distance between turns	Chỉ định khoảng cách giữa các vòng
+	Specify distance to other axis	Chỉ định khoảng cách đến trục kia
+	Specify end angle	Chỉ định góc cuối
+	Specify end point of arc	Chỉ định điểm cuối cung tròn
+	Specify end point of arc (hold Ctrl to switch direction)	Chỉ định điểm cuối cung tròn (giữ Ctrl để đổi chiều)
+	Specify ending width	Chỉ định độ rộng cuối
+	Specify ending width for next segment	Chỉ định độ rộng cuối cho đoạn tiếp theo
+	Specify endpoint of arc	Chỉ định điểm cuối cung tròn
+	Specify endpoint of axis	Chỉ định điểm cuối của trục
+	Specify endpoint of line	Chỉ định điểm cuối đường thẳng
+	Specify feature location	Chỉ định vị trí đặc điểm
+	Specify fillet radius	Chỉ định bán kính bo tròn
+	Specify fillet radius for rectangles	Chỉ định bán kính bo tròn cho hình chữ nhật
+	Specify first angle endpoint	Chỉ định điểm cuối thứ nhất của góc
+	Specify first chamfer distance	Chỉ định khoảng vát thứ nhất
+	Specify first chamfer distance for rectangles	Chỉ định khoảng vát thứ nhất cho hình chữ nhật
+	Specify first constraint point	Chỉ định điểm ràng buộc thứ nhất
+	Specify first corner	Chỉ định góc thứ nhất
+	Specify first corner point	Chỉ định điểm góc thứ nhất
+	Specify first destination point	Chỉ định điểm đích thứ nhất
+	Specify first end point of circle's diameter	Chỉ định điểm cuối thứ nhất của đường kính
+	Specify first endpoint of edge	Chỉ định điểm cuối thứ nhất của cạnh
+	Specify first extension line origin	Chỉ định gốc đường gióng thứ nhất
+	Specify first point	Chỉ định điểm thứ nhất
+	Specify first point of mirror line	Chỉ định điểm thứ nhất của đường đối xứng
+	Specify first point on circle	Chỉ định điểm thứ nhất trên đường tròn
+	Specify first point on circle: _tan to	Chỉ định điểm thứ nhất trên đường tròn: _tan to
+	Specify first source point	Chỉ định điểm nguồn thứ nhất
+	Specify height	Chỉ định chiều cao
+	Specify helix height or	Chỉ định chiều cao đường xoắn ốc hoặc
+	Specify included angle	Chỉ định góc chắn
+	Specify insertion base point	Chỉ định điểm cơ sở chèn
+	Specify insertion point	Chỉ định điểm chèn
+	A drawing opened from a file keeps that file's format.	Bản vẽ mở từ tệp sẽ giữ định dạng của tệp đó.
+	An array that would create more objects than this is refused.	Mảng tạo ra nhiều đối tượng hơn mức này sẽ bị từ chối.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy lưu các tùy chọn, chế độ bắt điểm đối tượng và các nút bật/tắt vẽ này cho tài khoản người dùng của bạn và khôi phục chúng khi khởi động.
+	Changes apply at once and are kept for next time.	Thay đổi có hiệu lực ngay và được giữ cho lần sau.
+	Command line history	Lịch sử dòng lệnh
+	Copy as JSON	Sao chép dạng JSON
+	Crosshair size	Kích thước con trỏ chữ thập
+	Crossing selection color:	Màu chọn cắt ngang:
+	Display	Hiển thị
+	Exclude:	Loại trừ:
+	Grip size	Kích thước grip
+	Grips	Grip
+	Groups	Nhóm
+	Hatches	Mặt tô vật liệu
+	Hold Shift to add to the selection	Giữ Shift để thêm vào vùng chọn
+	Indicate selection area	Hiển thị vùng chọn
+	Interface language	Ngôn ngữ giao diện
+	Interface theme	Chủ đề giao diện
+	Keep the system cursor visible over the drawing area	Giữ con trỏ hệ thống hiển thị trên vùng vẽ
+	Largest array	Mảng lớn nhất
+	Layout paper	Giấy bố cục
+	Model background	Nền mô hình
+	Multiline text	Văn bản nhiều dòng
+	Object grouping	Nhóm đối tượng
+	Object selection limit for display of grips	Giới hạn số đối tượng được chọn để hiển thị grip
+	Object snap aperture	Ô bắt điểm đối tượng
+	Object snap marker size	Kích thước dấu bắt điểm đối tượng
+	Objects on locked layers	Đối tượng trên lớp bị khóa
+	Open and Save	Mở và lưu
+	Options	Tùy chọn
+	Options...	Tùy chọn...
+	Pickbox size	Kích thước ô chọn
+	Preview	Xem trước
+	Profiles	Hồ sơ
+	Reset keeps the interface language.	Đặt lại vẫn giữ ngôn ngữ giao diện.
+	Reset to Defaults	Đặt lại mặc định
+	Save new drawings as	Lưu bản vẽ mới dưới dạng
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Kính lúp màn hình, trình đọc màn hình và phần mềm quay màn hình đi theo con trỏ hệ thống.
+	Select objects first, then choose a command	Chọn đối tượng trước, rồi chọn lệnh
+	Selection	Vùng chọn
+	Selection Area Effect	Hiệu ứng vùng chọn
+	Selection Preview Filter	Bộ lọc xem trước vùng chọn
+	Selection area opacity:	Độ mờ đục vùng chọn:
+	Selection effect color	Màu hiệu ứng vùng chọn
+	Selection modes	Chế độ chọn
+	Selection preview	Xem trước vùng chọn
+	Settings...	Thiết lập...
+	Show Quick Properties for selected objects	Hiện thuộc tính nhanh cho đối tượng được chọn
+	Show grips	Hiện grip
+	Snap, grid, polar tracking and Dynamic Input:	Bắt điểm, lưới, dò theo cực và nhập liệu động:
+	Tables	Bảng
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Ô bắt điểm là khoảng cách con trỏ phải đến gần một điểm để bắt điểm đối tượng tìm thấy nó.
+	User Preferences	Tùy chọn người dùng
+	Visual Effect Settings	Thiết lập hiệu ứng hình ảnh
+	Visual Effect Settings...	Thiết lập hiệu ứng hình ảnh...
+	When a command is active	Khi có lệnh đang chạy
+	When no command is active	Khi không có lệnh nào đang chạy
+	Window selection color:	Màu chọn cửa sổ:
+	Xrefs	Xref
+	objects	đối tượng
+	Specify inside diameter of donut	Chỉ định đường kính trong của hình vành khuyên
+	Specify leader arrowhead location	Chỉ định vị trí đầu mũi tên đường dẫn chú thích
+	Specify leader endpoint	Chỉ định điểm cuối đường dẫn chú thích
+	Specify leader landing location	Chỉ định vị trí đoạn đỡ đường dẫn chú thích
+	Specify length for rectangles	Chỉ định chiều dài cho hình chữ nhật
+	Specify length of chord	Chỉ định độ dài dây cung
+	Specify length of segment	Chỉ định độ dài đoạn
+	Specify line width for rectangles	Chỉ định độ rộng nét cho hình chữ nhật
+	Specify location for new vertex	Chỉ định vị trí đỉnh mới
+	Specify minimum length of arc	Chỉ định độ dài tối thiểu của cung
+	Specify new end point	Chỉ định điểm cuối mới
+	Specify new location for marked vertex	Chỉ định vị trí mới cho đỉnh đã đánh dấu
+	Specify new width for all segments	Chỉ định độ rộng mới cho mọi đoạn
+	Specify next point	Chỉ định điểm tiếp theo
+	Specify offset distance	Chỉ định khoảng dời song song
+	Specify offset distance or	Chỉ định khoảng dời song song hoặc
+	Specify opposite corner	Chỉ định góc đối diện
+	Specify other corner point	Chỉ định điểm góc còn lại
+	Specify other endpoint of axis	Chỉ định điểm cuối còn lại của trục
+	Specify outside diameter of donut	Chỉ định đường kính ngoài của hình vành khuyên
+	Specify point	Chỉ định điểm
+	Specify point on object for first tangent of circle	Chỉ định điểm trên đối tượng cho tiếp tuyến thứ nhất của đường tròn
+	Specify point on object for second tangent of circle	Chỉ định điểm trên đối tượng cho tiếp tuyến thứ hai của đường tròn
+	Specify point on side to offset	Chỉ định điểm ở phía cần dời song song
+	Specify radius of arc	Chỉ định bán kính cung tròn
+	Specify radius of circle	Chỉ định bán kính đường tròn
+	Specify rotation angle	Chỉ định góc xoay
+	Specify rotation angle of text	Chỉ định góc xoay của văn bản
+	Specify rotation angle or	Chỉ định góc xoay hoặc
+	Specify scale factor	Chỉ định hệ số tỷ lệ
+	Specify second angle endpoint	Chỉ định điểm cuối thứ hai của góc
+	Specify second break point	Chỉ định điểm ngắt thứ hai
+	Specify second chamfer distance for rectangles	Chỉ định khoảng vát thứ hai cho hình chữ nhật
+	Specify second constraint point	Chỉ định điểm ràng buộc thứ hai
+	Specify second destination point	Chỉ định điểm đích thứ hai
+	Specify second end point of circle's diameter	Chỉ định điểm cuối thứ hai của đường kính
+	Specify second endpoint of edge	Chỉ định điểm cuối thứ hai của cạnh
+	Specify second extension line origin	Chỉ định gốc đường gióng thứ hai
+	Specify second point	Chỉ định điểm thứ hai
+	Specify second point of arc	Chỉ định điểm thứ hai của cung tròn
+	Specify second point of mirror line	Chỉ định điểm thứ hai của đường đối xứng
+	Specify second point on circle	Chỉ định điểm thứ hai trên đường tròn
+	Specify second point on circle: _tan to	Chỉ định điểm thứ hai trên đường tròn: _tan to
+	Specify second point or <use first point as displacement>	Chỉ định điểm thứ hai hoặc <dùng điểm thứ nhất làm độ dời>
+	Specify second source point	Chỉ định điểm nguồn thứ hai
+	Specify side to offset	Chỉ định phía cần dời song song
+	Specify start angle	Chỉ định góc đầu
+	Specify start point	Chỉ định điểm đầu
+	Specify start point of arc	Chỉ định điểm đầu cung tròn
+	Specify start point of polyline	Chỉ định điểm đầu đa tuyến
+	Specify start point of text	Chỉ định điểm đầu văn bản
+	Specify starting width	Chỉ định độ rộng đầu
+	Specify starting width for next segment	Chỉ định độ rộng đầu cho đoạn tiếp theo
+	Specify tangent direction for the start point of arc	Chỉ định hướng tiếp tuyến tại điểm đầu cung tròn
+	Specify the elevation for rectangles	Chỉ định cao độ cho hình chữ nhật
+	Specify thickness for rectangles	Chỉ định độ dày cho hình chữ nhật
+	Specify third point on circle	Chỉ định điểm thứ ba trên đường tròn
+	Specify third point on circle: _tan to	Chỉ định điểm thứ ba trên đường tròn: _tan to
+	Specify third source point or <continue>	Chỉ định điểm nguồn thứ ba hoặc <tiếp tục>
+	Specify through point	Chỉ định điểm đi qua
+	Specify top diameter	Chỉ định đường kính đỉnh
+	Specify top radius or	Chỉ định bán kính đỉnh hoặc
+	Specify total angle	Chỉ định tổng góc
+	Specify total length or	Chỉ định tổng độ dài hoặc
+	Specify width for rectangles	Chỉ định chiều rộng cho hình chữ nhật
+	Sphere	Hình cầu
+	Spline	Spline
+	Spline Edit	Sửa spline
+	Stack (type 1/2 then select)	Phân số (gõ 1/2 rồi chọn)
+	Standard	Chuẩn
+	Start	Bắt đầu
+	Start Width	Độ rộng đầu
+	Start X	Đầu X
+	Start Y	Đầu Y
+	Start angle	Góc đầu
+	Start, Center, Angle	Đầu, tâm, góc
+	Start, Center, End	Đầu, tâm, cuối
+	Start, Center, Length	Đầu, tâm, độ dài
+	Start, End, Angle	Đầu, cuối, góc
+	Start, End, Direction	Đầu, cuối, hướng
+	Start, End, Radius	Đầu, cuối, bán kính
+	Status	Trạng thái
+	Status Bar	Thanh trạng thái
+	Stretch	Kéo giãn
+	Style: Standard	Kiểu: Standard
+	Subtract	Trừ
+	Sweep	Quét
+	Switch Drawing	Chuyển bản vẽ
+	Switch Layout	Chuyển bố cục
+	Switch between model space in a viewport and paper space	Chuyển giữa không gian mô hình trong khung nhìn và không gian giấy
+	Symmetric	Đối xứng
+	Synchronize Attributes	Đồng bộ thuộc tính
+	To	Đến
+	Toggle PICKADD (off: each pick replaces the selection)	Bật/tắt PICKADD (tắt: mỗi lần chọn thay thế vùng chọn)
+	Toggle PICKADD (on: picks add to the selection)	Bật/tắt PICKADD (bật: mỗi lần chọn thêm vào vùng chọn)
+	TOP	TRÊN
+	Table	Bảng
+	Table Breaks	Ngắt bảng
+	Table Cell Style	Kiểu ô bảng
+	Table Style...	Kiểu bảng...
+	Table style	Kiểu bảng
+	Table...	Bảng...
+	Tan, Tan, Radius	Tiếp tuyến, tiếp tuyến, bán kính
+	Tan, Tan, Tan	Tiếp tuyến, tiếp tuyến, tiếp tuyến
+	Tangent	Tiếp tuyến
+	Temporary track point	Điểm dò tạm thời
+	Text	Văn bản
+	Text Editor	Trình soạn văn bản
+	Text Height	Chiều cao chữ
+	Text Style...	Kiểu chữ...
+	Text height	Chiều cao chữ
+	Text override	Ghi đè văn bản
+	Text style	Kiểu chữ
+	Thaw All Layers	Rã băng mọi lớp
+	Thaw Layer	Rã băng lớp
+	There is nothing here yet.	Chưa có gì ở đây.
+	Thickness	Độ dày
+	Time	Thời gian
+	To get started, create or open a drawing.	Để bắt đầu, hãy tạo hoặc mở một bản vẽ.
+	Tool Bar	Thanh công cụ
+	Tool Sets	Bộ công cụ
+	Tools	Công cụ
+	Torus	Hình xuyến
+	Trace	Nét dày
+	Track orthogonally only	Chỉ dò theo phương trực giao
+	Track using all polar angle settings	Dò theo mọi thiết lập góc cực
+	Transparency	Độ trong suốt
+	Trim	Cắt
+	True Color	Màu thực
+	Turn All Layers On	Bật mọi lớp
+	Turn Off Layer	Tắt lớp
+	Turn On Layer	Bật lớp
+	Turn Quick Properties off (QPMODE)	Tắt thuộc tính nhanh (QPMODE)
+	Type	Loại
+	Type a command	Nhập lệnh
+	Type text; Enter starts a new paragraph	Gõ văn bản; Enter để bắt đầu đoạn mới
+	UCS Icon	Biểu tượng UCS
+	Undo	Hoàn tác
+	Undo (⌘Z)	Hoàn tác (⌘Z)
+	Ungroup	Rã nhóm
+	Union	Hợp
+	Unisolate Layer	Bỏ cô lập lớp
+	Units Conversion	Chuyển đổi đơn vị
+	Units...	Đơn vị...
+	Unlock Layer	Mở khóa lớp
+	Unlock viewport	Mở khóa khung nhìn
+	Unmerge Cells	Tách ô
+	Unsaved Layer State	Trạng thái lớp chưa lưu
+	Up	Lên
+	Update Data Links	Cập nhật liên kết dữ liệu
+	Update	Cập nhật
+	Use System Setting	Dùng thiết lập hệ thống
+	User	Người dùng
+	User Parameters	Tham số người dùng
+	Username	Tên người dùng
+	Volume	Thể tích
+	VP Color	Màu KN
+	VP Freeze	Đóng băng KN
+	Value	Giá trị
+	Value:	Giá trị:
+	Variables	Biến
+	Version	Phiên bản
+	Version 2000	Phiên bản 2000
+	Version 2004	Phiên bản 2004
+	Version 2007	Phiên bản 2007
+	Version 2010	Phiên bản 2010
+	Version 2013	Phiên bản 2013
+	Version 2018	Phiên bản 2018
+	Version {version}	Phiên bản {version}
+	Vertical	Dọc
+	VerticalDistance	Khoảng cách dọc
+	View	Xem
+	ViewCube	ViewCube
+	Viewport	Khung nhìn
+	Viewport Layer Freeze	Đóng băng lớp trong khung nhìn
+	Viewport Properties	Thuộc tính khung nhìn
+	Viewport is locked	Khung nhìn đã khóa
+	Viewport scale	Tỷ lệ khung nhìn
+	Viewport {id}	Khung nhìn {id}
+	Viewports	Khung nhìn
+	W	T
+	WCS ⌄	WCS ⌄
+	White	Trắng
+	Width factor	Hệ số độ rộng
+	Window	Cửa sổ
+	Wipeout	Che khuất
+	Workspace Switching	Chuyển không gian làm việc
+	Write Block	Ghi khối ra tệp
+	Xline	Xline
+	Yellow	Vàng
+	Yes	Có
+	Zoom	Thu phóng
+	Zoom All	Thu phóng tất cả
+	Zoom Dynamic	Thu phóng động
+	Zoom Extents	Thu phóng phạm vi
+	Zoom In	Phóng to
+	Zoom Object	Thu phóng đối tượng
+	Zoom Out	Thu nhỏ
+	Zoom Previous	Thu phóng trước
+	Zoom Realtime	Thu phóng thời gian thực
+	Zoom Window	Thu phóng cửa sổ
+	error	lỗi
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (ràng buộc {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	Ràng buộc {kind} {name} = {expression}  (nhấp đúp để sửa)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Tham số người dùng mới
+	ΔLOC	Δdòng
+	−Bin	−nhị phân
+	−LOC	−dòng
+	⌘↩ to finish	⌘↩ để kết thúc
+@plural	{n} commit	{n} commit
+@plural	{n} contributor	{n} người đóng góp
+	Drawing as bytes	Bản vẽ dạng byte
+	Services	Dịch vụ
+	Hide CADaddy	Ẩn CADaddy
+	Hide Others	Ẩn ứng dụng khác
+	Accessibility	Trợ năng
+	Show System Cursor	Hiện con trỏ hệ thống
+	Animation Effects	Hiệu ứng chuyển động
+	Animation effects	Hiệu ứng chuyển động
+	Import...	Nhập...
+	Export...	Xuất...
+	Batch Publish...	Xuất bản hàng loạt...
+	Scale List...	Danh sách tỷ lệ...
+	Annotative Object Scale	Tỷ lệ đối tượng chú thích
+	Add Current Scale	Thêm tỷ lệ hiện hành
+	Delete Current Scale	Xóa tỷ lệ hiện hành
+	Add/Delete Scales...	Thêm/Xóa tỷ lệ...
+	Synchronize Multiple-scale Positions	Đồng bộ vị trí đa tỷ lệ
+	Annotative Update	Cập nhật chú thích
+	Show Annotative Objects	Hiện đối tượng chú thích
+	Current Scale Only	Chỉ tỷ lệ hiện hành
+	All Scales	Mọi tỷ lệ
+	Drawing Recovery Manager...	Quản lý khôi phục bản vẽ...
+	Tolerance...	Dung sai...
+	Add Vertex	Thêm đỉnh
+	Remove Vertex	Xóa đỉnh
+	Convert to Arc	Chuyển thành cung
+	Convert to Line	Chuyển thành đường thẳng
+	Stretch Vertex	Kéo giãn đỉnh
+	Edit Array	Sửa mảng
+	Close Array Editing	Đóng sửa mảng
+	Multiline...	Đa đường...
+	Multiline Style...	Kiểu đa đường...
+	Solid Editing	Sửa khối đặc
+	3D Mouse...	Chuột 3D...
+	3D Mouse	Chuột 3D
+	Calibrate 3D Mouse	Hiệu chuẩn chuột 3D
+	3D Mouse Navigation	Điều hướng bằng chuột 3D
+	3D mouse input is unavailable on this platform	Nền tảng này không hỗ trợ nhập liệu chuột 3D
+	No supported 3D mouse found	Không tìm thấy chuột 3D được hỗ trợ
+	Release the 3D mouse to calibrate its resting position	Thả chuột 3D để hiệu chuẩn vị trí nghỉ
+	3D mouse connected	Đã kết nối chuột 3D
+	3D mouse busy, possibly 3DxWare or missing device permissions	Chuột 3D đang bận, có thể do 3DxWare hoặc thiếu quyền truy cập thiết bị
+	3D mouse disconnected	Đã ngắt kết nối chuột 3D
+	3D mouse input could not be started	Không thể khởi động nhập liệu chuột 3D
+	Enable 3D mouse navigation	Bật điều hướng bằng chuột 3D
+	Pan sensitivity	Độ nhạy kéo màn hình
+	Zoom sensitivity	Độ nhạy thu phóng
+	Reverse zoom direction	Đảo chiều thu phóng
+	Calibrate	Hiệu chuẩn
+	Move sideways to pan; push/pull or twist to zoom.	Di chuyển ngang để kéo màn hình; đẩy/kéo hoặc vặn để thu phóng.
+	Left device button: zoom extents. Right device button: calibrate.	Nút trái thiết bị: thu phóng phạm vi. Nút phải thiết bị: hiệu chuẩn.
+	More toolbar commands	Thêm lệnh thanh công cụ
+	Default save version	Phiên bản lưu mặc định
+	Automatic save every	Tự động lưu mỗi
+	min	phút
+	Automatic save file location	Vị trí tệp tự động lưu
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Bản vẽ chưa có tệp sẽ được lưu theo phiên bản mặc định. 0 phút sẽ tắt tự động lưu.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Nhấp chuột phải theo thời gian: nhấp nhanh là Enter, giữ lâu sẽ mở menu
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Khi tắt, nhấp chuột phải trong lúc lệnh đang chạy luôn mở menu ngữ cảnh.
+	Hatch Pattern	Mẫu tô vật liệu
+	Search for pattern	Tìm mẫu
+	Run Script...	Chạy script...
+	Query Texts	Truy vấn văn bản
+	Hatch Pick	Chọn mặt tô
+	Hatch and Gradient	Tô vật liệu và chuyển màu
+	Color 1	Màu 1
+	Color 2	Màu 2
+	Shape	Hình dạng
+	Curved	Cong
+	Spherical	Cầu
+	Hemispherical	Bán cầu
+	Inverted	Đảo ngược
+	Centered	Căn giữa
+	Hatch origin	Gốc mặt tô
+	Use current origin	Dùng gốc hiện tại
+	Specified origin	Gốc chỉ định
+	Click to set new origin	Nhấp để đặt gốc mới
+	Default to boundary extents	Mặc định theo phạm vi đường biên
+	Bottom left	Dưới trái
+	Bottom right	Dưới phải
+	Top left	Trên trái
+	Top right	Trên phải
+	Boundaries	Đường biên
+	Add: Pick points	Thêm: Chọn điểm
+	Add: Select objects	Thêm: Chọn đối tượng
+	Boundaries picked: {n}	Đường biên đã chọn: {n}
+	Associative	Liên kết
+	Create separate hatches	Tạo các mặt tô riêng biệt
+	Island detection	Phát hiện đảo
+	Normal	Bình thường
+	Outer	Ngoài cùng
+	Ignore	Bỏ qua
+	Origin: {x}, {y}	Gốc: {x}, {y}
+	Sheet Books to PDF...	Tập bản vẽ sang PDF...
+	Not a number or distance: {text}	Không phải số hoặc khoảng cách: {text}
+	Dynamic Block Data	Dữ liệu khối động
+	Custom	Tùy chỉnh
+	Dynamic Block Reference	Tham chiếu khối động
+	Set Dynamic Property	Đặt thuộc tính động
+	Dynamic Block Grips	Grip khối động
+	Drag Dynamic Grip	Kéo grip động
+	Save Block	Lưu khối
+	Save Block As	Lưu khối thành
+	Close Block Editor	Đóng trình soạn khối
+	Unsaved changes	Thay đổi chưa lưu
+	Edit Block Definition	Sửa định nghĩa khối
+	Block to create or edit	Khối cần tạo hoặc sửa
+	Open in Block Editor	Mở trong trình soạn khối
+	This drawing	Bản vẽ này
+	contains authoring elements. Open in Block Editor?	chứa các phần tử soạn thảo. Mở trong trình soạn khối?
+	New block	Khối mới
+	Italic	Nghiêng
+	Underline	Gạch chân
+	Overline	Gạch trên
+	Justify	Căn đều
+	Text color	Màu chữ
+	Click the ruler to add a tab stop, right-click to remove one	Nhấp vào thước để thêm điểm dừng tab, nhấp chuột phải để xóa
+	Ribbon	Ribbon
+	Close Ribbon	Đóng ribbon
+	Menu Bar	Thanh menu
+	Top	Trên
+	Bottom	Dưới
+	Front	Trước
+	Back	Sau
+	SW Isometric	Trục đo Tây Nam
+	SE Isometric	Trục đo Đông Nam
+	NE Isometric	Trục đo Đông Bắc
+	NW Isometric	Trục đo Tây Bắc
+	3D Views	Hình chiếu 3D
+	Plan View	Hình chiếu bằng
+	World UCS	UCS thế giới
+	View Direction	Hướng nhìn
+	2D Wireframe	Khung dây 2D
+	Custom View	Hướng nhìn tùy chỉnh
+	Convert PDF to DWG...	Chuyển PDF sang DWG...
+	Convert PDF to DWG	Chuyển PDF sang DWG
+	PDF Import...	Nhập PDF...
+	PDF Import	Nhập PDF
+	Page	Trang
+	PDF layers (else by colour and line weight)	Lớp PDF (nếu không thì theo màu và độ dày nét)
+	By colour and line weight	Theo màu và độ dày nét
+	Object layers (PDF_Geometry, PDF_Text, …)	Lớp theo đối tượng (PDF_Geometry, PDF_Text, …)
+	Import text	Nhập văn bản
+	Join line pieces and make circles	Nối các đoạn thẳng và tạo đường tròn
+	Keep white fills (masks)	Giữ các vùng tô trắng (mặt nạ)
+	Import raster images (saved as PNG files)	Nhập ảnh raster (lưu thành tệp PNG)
+	Add a layout that plots like the sheet	Thêm bố cục in giống tờ bản vẽ
+	Convert and Save as DWG…	Chuyển đổi và lưu thành DWG…
+	Walk	Đi bộ
+	Report a Bug...	Báo lỗi...
+	Request a Feature...	Đề xuất tính năng...
+	Donate / Improve	Ủng hộ / Cải thiện
+	Improve CADaddy	Cải thiện CADaddy
+	Or email {address}	Hoặc gửi email đến {address}
+	Support CADaddy	Ủng hộ CADaddy
+	CADaddy is free, and it always will be.	CADaddy miễn phí, và sẽ luôn miễn phí.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Không quảng cáo, không thuê bao. Nếu CADaddy giúp bạn tiết kiệm thời gian, một khoản ủng hộ nhỏ sẽ trả chi phí AI để xây dựng các tính năng tiếp theo.
+	Report a bug or request a feature	Báo lỗi hoặc đề xuất tính năng
+	Support CADaddy...	Ủng hộ CADaddy...
+	Array (classic)	Mảng (kiểu cũ)
+	Change	Thay đổi
+	Change Properties	Thay đổi thuộc tính
+	Quick Leader	Đường dẫn chú thích nhanh
+	Symbol...	Ký hiệu...
+	List Symbols	Liệt kê ký hiệu
+	Symbols	Ký hiệu
+	Search symbols	Tìm ký hiệu
+	No symbols match.	Không có ký hiệu phù hợp.
+	Plumbing fixtures	Thiết bị vệ sinh
+	Plumbing piping	Đường ống cấp thoát nước
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Thiết kế và vẽ kỹ thuật có trợ giúp của máy tính cho Windows, Mac và Linux, viết bằng Rust.
+	Includes open-source components: see NOTICE.	Có các thành phần mã nguồn mở: xem NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Miễn phí sử dụng. Không liên kết với Autodesk, Inc.
+	Electrical devices	Thiết bị điện
+	Lighting	Chiếu sáng
+	Power and distribution	Điện lực và phân phối
+	Low voltage	Điện nhẹ
+	Fire alarm	Báo cháy
+	Check for Updates...	Kiểm tra cập nhật...
+	Check for updates automatically	Tự động kiểm tra cập nhật
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Mỗi ngày một lần CADaddy hỏi GitHub số phiên bản mới nhất. Không có thông tin nào về bạn hay bản vẽ của bạn được gửi đi.
+	Checking for updates...	Đang kiểm tra cập nhật...
+	CADaddy {v} is the latest version.	CADaddy {v} là phiên bản mới nhất.
+	CADaddy {v} is available	Đã có CADaddy {v}
+	You have {v}. Updating keeps your drawings and settings.	Bạn đang dùng {v}. Cập nhật vẫn giữ nguyên bản vẽ và thiết lập của bạn.
+	Downloading CADaddy {v}...	Đang tải xuống CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} đã sẵn sàng để cài đặt
+	It installs when you close CADaddy. Restart now to update right away.	Bản cập nhật sẽ được cài khi bạn đóng CADaddy. Khởi động lại ngay để cập nhật luôn.
+	Couldn't update CADaddy	Không thể cập nhật CADaddy
+	Download	Tải xuống
+	What's New	Có gì mới
+	Later	Để sau
+	Skip This Version	Bỏ qua phiên bản này
+	Restart Now	Khởi động lại ngay
+	When I Close CADaddy	Khi tôi đóng CADaddy
+	Download Page	Trang tải xuống
+	Hide	Ẩn
+	The current layer is being turned off	Lớp hiện hành đang bị tắt
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Lớp "{layer}" là lớp hiện hành. Đối tượng bạn vẽ trên lớp này sẽ không hiển thị cho đến khi bạn bật lại.
+	Keep the Current Layer On	Giữ lớp hiện hành bật
+	Turn the Current Layer Off	Tắt lớp hiện hành
+	Quantity Takeoff	Bóc tách khối lượng
+	Dimension Style	Kiểu kích thước
+	Text Style	Kiểu chữ
+	Xref	Xref
+	Raster Image Reference...	Tham chiếu ảnh raster...
+	Window Lasso	Lasso cửa sổ
+	Crossing Lasso	Lasso cắt ngang
+	Fence Lasso	Lasso hàng rào
+	Press Space to cycle options	Nhấn Space để chuyển qua các tùy chọn
+	Burst	Phá khối giữ thuộc tính
+	Convert to Mtext	Chuyển thành Mtext
+	View Twist	Xoay hướng nhìn
+	Let AI agents control CADaddy	Cho phép tác tử AI điều khiển CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Khi đó, trình kết nối Claude và các tác tử khác trên máy tính này có thể mở, sửa, lưu và đóng bản vẽ trong cửa sổ này. Không gì bên ngoài máy tính này có thể kết nối. Có hiệu lực vào lần khởi động CADaddy tiếp theo.
+	Base Point	Điểm cơ sở
+	Column Spacing	Khoảng cách cột
+	Column Count	Số cột
+	Row Spacing	Khoảng cách hàng
+	Row Count	Số hàng
+	Row and Column Count	Số hàng và cột
+	Level Spacing	Khoảng cách tầng
+	Level Count	Số tầng
+	Item Spacing	Khoảng cách phần tử
+	Item Count	Số phần tử
+	Total column spacing	Tổng khoảng cách cột
+	Total row spacing	Tổng khoảng cách hàng
+	Total row and column spacing	Tổng khoảng cách hàng và cột
+	Total level spacing	Tổng khoảng cách tầng
+	Fill angle	Góc điền
+	Stretch radius	Bán kính kéo giãn
+	Array Grips	Grip mảng
+	Edit Array with a Grip	Sửa mảng bằng grip
+	Open Drawings	Bản vẽ đang mở
+	Close Drawing	Đóng bản vẽ
+	Close All Drawings	Đóng mọi bản vẽ
+	Export Comparison Report...	Xuất báo cáo so sánh...
+	Select All Layouts	Chọn mọi bố cục
+	Move or Copy...	Di chuyển hoặc sao chép...
+	Move or Copy	Di chuyển hoặc sao chép
+	Move or copy layout "{name}"	Di chuyển hoặc sao chép bố cục "{name}"
+	Before layout:	Trước bố cục:
+	(move to end)	(chuyển xuống cuối)
+	Create a copy	Tạo bản sao
+	A drawing keeps at least one layout.	Bản vẽ phải có ít nhất một bố cục.
+	Move Layout	Di chuyển bố cục
+	Background	Nền
+	Text fill	Tô nền chữ
+	Text fill color	Màu tô nền chữ
+	Text reads right to left	Chữ viết từ phải sang trái
+	Placing text places the dimension line	Đặt chữ sẽ đặt đường kích thước
+	Alternate tolerance precision	Độ chính xác dung sai thay thế
+	Alternate tolerance zero suppression	Ẩn số 0 dung sai thay thế
+	Linear jog height (× text height)	Chiều cao gấp khúc tuyến tính (× chiều cao chữ)
+	Break size	Kích thước ngắt
+	Express Tools	Express Tools
+	Break-line Symbol	Ký hiệu đường cắt ngắt
+	Replace Block...	Thay thế khối...
+	Move/Copy/Rotate	Di chuyển/Sao chép/Xoay
+	Remove boundaries	Xóa đường biên
+	Inherit Properties	Kế thừa thuộc tính
+	Nothing to preview yet.	Chưa có gì để xem trước.
+	Property Settings	Thiết lập thuộc tính
+	Basic Properties	Thuộc tính cơ bản
+	Special Properties	Thuộc tính đặc biệt
+	Plot Style	Kiểu in
+	Material	Vật liệu
+	Shadow display	Hiển thị bóng
+	Center object	Đối tượng tâm
+	Move with Dim Line	Di chuyển cùng đường kích thước
+	Move Text Only	Chỉ di chuyển chữ
+	Above Dim Line	Trên đường kích thước
+	Center Vertically	Căn giữa theo chiều dọc
+	Reset Text Position	Đặt lại vị trí chữ
+	Continue Dimension	Kích thước nối tiếp
+	Baseline Dimension	Kích thước theo đường chuẩn
+	Flip Arrow	Lật mũi tên
+	Lengthen Landing	Kéo dài đoạn đỡ
+	Origin Point	Điểm gốc
+	Hatch Angle	Góc mặt tô
+	Hatch Scale	Tỷ lệ mặt tô
+	Edit Tolerance	Sửa dung sai
+	Geometric Tolerance	Dung sai hình học
+	Geometric characteristic	Đặc tính hình học
+	Material condition	Điều kiện vật liệu
+	No symbol	Không ký hiệu
+	Projected Tolerance Zone	Vùng dung sai chiếu
+	Datum Identifier	Ký hiệu chuẩn
+	Sym	Ký hiệu
+	Tolerance 1	Dung sai 1
+	Tolerance 2	Dung sai 2
+	Datum 1	Chuẩn 1
+	Datum 2	Chuẩn 2
+	Datum 3	Chuẩn 3
+	PDF Underlay...	Nền PDF...
+	Clip PDF Underlay	Cắt xén nền PDF
+	Adjust PDF Underlay	Điều chỉnh nền PDF
+	PDF Underlay Layers	Lớp của nền PDF
+	Unused items in this drawing	Mục không dùng trong bản vẽ này
+	Purge Checked Items	Dọn dẹp mục đã đánh dấu
+	Purge All	Dọn dẹp tất cả
+	Items purged: {count}	Mục đã dọn dẹp: {count}
+	Find what:	Tìm gì:
+	Replace with:	Thay bằng:
+	Match case	Phân biệt chữ hoa/thường
+	Find whole words only	Chỉ tìm nguyên từ
+	Find	Tìm
+	Replace All	Thay thế tất cả
+	Matches replaced: {count} (objects: {objects})	Đã thay thế: {count} (đối tượng: {objects})
+	Matches found and selected: {count} (objects: {objects})	Đã tìm thấy và chọn: {count} (đối tượng: {objects})
+	Select Color	Chọn màu
+	Dimension styles	Kiểu kích thước
+	Linetypes	Kiểu đường
+	Multileader styles	Kiểu đường dẫn đa chú thích
+	Multiline styles	Kiểu đa đường
+	Table styles	Kiểu bảng
+	Text styles	Kiểu chữ
+	Zero-length geometry	Hình học độ dài bằng 0
+	Empty text objects	Đối tượng văn bản rỗng
+	Palette Windows	Cửa sổ bảng
+	Dock	Neo
+	Back into the main window	Đưa trở lại cửa sổ chính
+	Dock Palette	Neo bảng
+	Float in Own Window	Nổi trong cửa sổ riêng
+	Drawings (CDY, DWG, DXF)	Bản vẽ (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Bản vẽ CADaddy (CDY)
+	CADaddy drawing (.cdy)	Bản vẽ CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Lưu thêm bản sao DWG khi lưu bản vẽ CADaddy (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Bản vẽ CADaddy giữ mọi thứ; tệp DWG và DXF có thể không giữ được tất cả (khi lưu sẽ báo những gì bị mất).
+	Field...	Trường...
+	Update Fields	Cập nhật trường
+	Change Text Case	Đổi kiểu chữ hoa/thường
+	Auto Number	Đánh số tự động
+	Explode Text	Phá văn bản
+	Arc Aligned Text	Văn bản theo cung
+	Data Extraction	Trích xuất dữ liệu
+	Data source	Nguồn dữ liệu
+	Objects	Đối tượng
+	Output	Đầu ra
+	Other drawings:	Bản vẽ khác:
+	Add Drawings...	Thêm bản vẽ...
+	Open Settings...	Mở thiết lập...
+	Start from a saved .dxe settings file	Bắt đầu từ tệp thiết lập .dxe đã lưu
+	Block names	Tên khối
+	Include blocks inside blocks	Bao gồm khối nằm trong khối
+	Other objects:	Đối tượng khác:
+	The drawing has no other objects.	Bản vẽ không có đối tượng nào khác.
+	Properties to extract:	Thuộc tính cần trích xuất:
+	Attribute tags	Thẻ thuộc tính
+	Combine identical rows	Gộp các hàng giống nhau
+	Insert a table	Chèn bảng
+	Insertion point	Điểm chèn
+	Title	Tiêu đề
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Ghi ra tệp (.csv cho bảng tính, .txt phân cách bằng tab)
+	Browse...	Duyệt...
+	Save Settings...	Lưu thiết lập...
+	Save these choices to a .dxe file to use again	Lưu các lựa chọn này vào tệp .dxe để dùng lại
+	< Back	< Quay lại
+	Next >	Tiếp >
+	Finish	Hoàn tất
+	UCS	UCS
+	Plan View (World)	Hình chiếu bằng (thế giới)
+	New UCS	UCS mới
+	World	Thế giới
+	Current UCS	UCS hiện hành
+	World (WCS)	Thế giới (WCS)
+	Unnamed	Chưa đặt tên
+	Hide UCS Icon	Ẩn biểu tượng UCS
+	WCS	WCS
+	Spelling	Chính tả
+	Check Spelling	Kiểm tra chính tả
+	Where to check	Phạm vi kiểm tra
+	Selected objects	Đối tượng đã chọn
+	Not in dictionary:	Không có trong từ điển:
+	Suggestions:	Gợi ý:
+	Ignore All	Bỏ qua tất cả
+	Change All	Thay đổi tất cả
+	Add to Dictionary	Thêm vào từ điển
+	Main dictionary:	Từ điển chính:
+	American English	Tiếng Anh (Mỹ)
+	Custom dictionary:	Từ điển tùy chỉnh:
+	Spelling check complete.	Đã kiểm tra chính tả xong.
+	Hyperlink...	Siêu liên kết...
+	Select Objects for a Hyperlink	Chọn đối tượng cho siêu liên kết
+	Open Hyperlink	Mở siêu liên kết
+	Insert Hyperlink	Chèn siêu liên kết
+	Edit Hyperlink	Sửa siêu liên kết
+	Text to display	Văn bản hiển thị
+	File or web page	Tệp hoặc trang web
+	Named location	Vị trí đã đặt tên
+	A named location with no file or web page is a layout or view of this drawing.	Vị trí đã đặt tên không kèm tệp hay trang web là một bố cục hoặc khung nhìn của bản vẽ này.
+	Remove Link	Xóa liên kết
+	⌘-click to follow the link	⌘-nhấp để mở liên kết
+	Ctrl+click to follow the link	Ctrl+nhấp để mở liên kết
+	Materials Browser...	Trình duyệt vật liệu...
+	Attach by Layer	Gán theo lớp
+	Material Mapping	Ánh xạ vật liệu
+	New Material	Vật liệu mới
+	Edit Material	Sửa vật liệu
+	Delete Material	Xóa vật liệu
+	Assign Material	Gán vật liệu
+	Materials Browser	Trình duyệt vật liệu
+	Search	Tìm kiếm
+	Library	Thư viện
+	Add to drawing	Thêm vào bản vẽ
+	In this drawing	Trong bản vẽ này
+	No materials yet: add one from the library.	Chưa có vật liệu: hãy thêm từ thư viện.
+	Colour	Màu
+	Roughness	Độ nhám
+	Metallic	Kim loại
+	Opacity	Độ mờ đục
+	Mapping	Ánh xạ
+	Tile size	Kích thước ô lát
+	Assign to selection ({n})	Gán cho vùng chọn ({n})
+	Attach to layer	Gán cho lớp
+	Render	Kết xuất
+	Edit Layer State	Sửa trạng thái lớp
+	Export Layer State	Xuất trạng thái lớp
+	Import Layer State	Nhập trạng thái lớp
+	New Layer Filter	Bộ lọc lớp mới
+	Edit Layer Filter	Sửa bộ lọc lớp
+	Delete Layer Filter	Xóa bộ lọc lớp
+	List Layer Filters	Liệt kê bộ lọc lớp
+	Layers in Filter	Lớp trong bộ lọc
+	Layer States Manager	Quản lý trạng thái lớp
+	Invert filter	Đảo bộ lọc
+	New Property Filter...	Bộ lọc thuộc tính mới...
+	New Group Filter	Bộ lọc nhóm mới
+	Add Layer	Thêm lớp
+	Remove Layer	Gỡ lớp
+	Layer Filter Properties	Thuộc tính bộ lọc lớp
+	Filter name	Tên bộ lọc
+	Within	Trong
+	Any	Bất kỳ
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Mẫu: * bất kỳ, ? một ký tự, # một chữ số; phân cách bằng dấu phẩy; ~ để loại trừ.
+	Layer states	Trạng thái lớp
+	Turn off layers not found in layer state	Tắt các lớp không có trong trạng thái lớp
+	Layer properties to restore	Thuộc tính lớp cần khôi phục
+	On / Off	Bật / Tắt
+	Frozen / Thawed	Đóng băng / Rã băng
+	Locked / Unlocked	Khóa / Mở khóa
+	Plot / No Plot	In / Không in
+	Layers in "{name}"	Lớp trong "{name}"
+	Remove from the layer state	Gỡ khỏi trạng thái lớp
+	New...	Mới...
+	Save the layers as they are now in this state	Lưu các lớp như hiện tại vào trạng thái này
+	Edit...	Sửa...
+	Rename	Đổi tên
+	New layer state name	Tên trạng thái lớp mới
+	New name	Tên mới
+	Visual Style	Kiểu hiển thị
+	Visual Styles	Kiểu hiển thị
+	Wireframe	Khung dây
+	Hidden	Khuất
+	Shaded	Tô bóng
+	Shaded with Edges	Tô bóng có cạnh
+	Realistic	Chân thực
+	Mesh	Lưới
+	Polyface Mesh	Lưới đa mặt
+	Polygon Mesh	Lưới đa giác
+	Fly	Bay
+	Walk and Fly	Đi bộ và bay
+	3D Library...	Thư viện 3D...
+	Add 3D Twins to Symbols	Thêm bản 3D cho ký hiệu
+	List 3D Models	Liệt kê mô hình 3D
+	Add 3D Twins	Thêm bản 3D
+	Plan Layers	Lớp mặt bằng
+	Plan Walls	Tường mặt bằng
+	Plan Openings	Lỗ mở mặt bằng
+	Plan Rooms	Phòng mặt bằng
+	Plan Notes	Ghi chú mặt bằng
+	Plan Sheets	Tờ mặt bằng
+	3D Building from Plan	Tòa nhà 3D từ mặt bằng
+	Wedge	Hình nêm
+	Presspull	Ấn/kéo
+	3D Solid	Khối đặc 3D
+	Specify center	Chỉ định tâm
+	Specify length	Chỉ định chiều dài
+	Specify width	Chỉ định chiều rộng
+	Specify other corner	Chỉ định góc còn lại
+	Specify center point	Chỉ định tâm
+	Specify base radius	Chỉ định bán kính đáy
+	Specify radius	Chỉ định bán kính
+	Specify diameter	Chỉ định đường kính
+	Specify top radius	Chỉ định bán kính đỉnh
+	Specify tube radius	Chỉ định bán kính ống
+	Select objects to extrude	Chọn đối tượng cần đùn
+	Select extrusion path	Chọn đường dẫn đùn
+	Specify angle of taper for extrusion	Chỉ định góc côn khi đùn
+	Specify height of extrusion	Chỉ định chiều cao đùn
+	Select objects to revolve	Chọn đối tượng cần xoay tròn
+	Specify axis start point or define axis by	Chỉ định điểm đầu trục hoặc xác định trục bằng
+	Specify axis endpoint	Chỉ định điểm cuối trục
+	Specify angle of revolution	Chỉ định góc xoay tròn
+	Select objects to sweep	Chọn đối tượng cần quét
+	Select sweep path	Chọn đường dẫn quét
+	Select cross sections in lofting order	Chọn các mặt cắt theo thứ tự loft
+	Click inside bounded areas to press or pull	Nhấp vào bên trong vùng kín để ấn hoặc kéo
+	Specify extrusion height	Chỉ định chiều cao đùn
+	Cube	Hình lập phương
+	Sides	Số cạnh
+	Top radius	Bán kính đỉnh
+	Path	Đường dẫn
+	Taper angle	Góc côn
+	Select one or more regions or 3D solids.	Hãy chọn một hoặc nhiều miền hoặc khối đặc 3D.
+	No closed area found there.	Không tìm thấy vùng kín ở đó.
+	Slice	Cắt lát
+	Thicken	Làm dày
+	Fillet Edge	Bo tròn cạnh
+	Chamfer Edge	Vát cạnh
+	Fillet Edges	Bo tròn các cạnh
+	Chamfer Edges	Vát các cạnh
+	Move Faces	Di chuyển mặt
+	Offset Faces	Dời song song mặt
+	Delete Faces	Xóa mặt
+	Shell	Tạo vỏ
+	Composite	Hỗn hợp
+	Select objects to slice	Chọn đối tượng cần cắt lát
+	Specify a point on desired side or [keep Both sides]	Chỉ định một điểm ở phía mong muốn hoặc [Both: giữ cả hai phía]
+	Both	Cả hai
+	Specify start point of slicing plane or	Chỉ định điểm đầu của mặt phẳng cắt hoặc
+	Specify second point on plane	Chỉ định điểm thứ hai trên mặt phẳng
+	Specify the Z of the XY-plane	Chỉ định Z của mặt phẳng XY
+	Specify the X of the YZ-plane	Chỉ định X của mặt phẳng YZ
+	Specify the Y of the ZX-plane	Chỉ định Y của mặt phẳng ZX
+	Select surfaces to thicken	Chọn các bề mặt cần làm dày
+	Select a 3D solid	Chọn một khối đặc 3D
+	Select an edge	Chọn một cạnh
+	Remove faces	Bỏ mặt
+	Select faces	Chọn mặt
+	Specify thickness	Chỉ định độ dày
+	Enter fillet radius	Nhập bán kính bo tròn
+	Enter distance	Nhập khoảng cách
+	Specify a base point or displacement	Chỉ định điểm cơ sở hoặc độ dời
+	Specify a second point of displacement	Chỉ định điểm thứ hai của độ dời
+	Specify the offset distance	Chỉ định khoảng dời song song
+	Enter the shell offset distance	Nhập khoảng dời của vỏ
+	Select solids, surfaces, and regions to subtract from ..	Chọn khối đặc, bề mặt và miền để trừ đi từ đó ..
+	Select solids, surfaces, and regions to subtract ..	Chọn khối đặc, bề mặt và miền cần trừ ..
+	Select two or more solids.	Hãy chọn hai khối đặc trở lên.
+	The solids don't overlap; nothing was changed.	Các khối đặc không chồng lên nhau; không có gì thay đổi.
+	Nothing would remain; nothing was changed.	Sẽ không còn lại gì; không có gì thay đổi.
+	The result would not be a solid; nothing was changed.	Kết quả sẽ không phải là khối đặc; không có gì thay đổi.
+	No straight edge between two flat faces there.	Không có cạnh thẳng giữa hai mặt phẳng tại đó.
+	No face of the solid there.	Không có mặt nào của khối đặc tại đó.
+	Only outside (convex) edges can be filleted or chamfered.	Chỉ có thể bo tròn hoặc vát các cạnh ngoài (lồi).
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL dùng được với hộp, hình trụ, hình cầu và khối đùn thẳng.
+	The walls are too thick for this solid.	Tường quá dày đối với khối đặc này.
+	Select solids to subtract from.	Chọn khối đặc để trừ đi từ đó.
+	A solid can't be subtracted from itself.	Không thể trừ một khối đặc khỏi chính nó.
+	The solid would have too many operations; nothing was changed.	Khối đặc sẽ có quá nhiều thao tác; không có gì thay đổi.
+	That face can't be moved (only flat faces, holes and added parts).	Không thể di chuyển mặt đó (chỉ mặt phẳng, lỗ và phần thêm vào).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Không thể xóa mặt đó (chỉ lỗ, bo tròn, vát cạnh và phần thêm vào).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Không thể dời song song mặt đó (mặt bên hộp, hai đầu hình trụ, hình nón và khối đùn, thành hình trụ và hình cầu).
+	The thickness must be more than zero.	Độ dày phải lớn hơn không.
+	The radius must be more than zero.	Bán kính phải lớn hơn không.
+	The distance must be more than zero.	Khoảng cách phải lớn hơn không.
+	Requires a number.	Cần một số.
+	Parameter	Tham số
+	Action	Hành động
+	Visibility States	Trạng thái hiển thị
+	Remove Parameter or Action	Xóa tham số hoặc hành động
+	Edit Reference	Sửa tham chiếu
+	Discard Reference Edits	Hủy chỉnh sửa tham chiếu
+	Nested References	Tham chiếu lồng
+	Light List	Danh sách nguồn sáng
+	Sun Properties	Thuộc tính mặt trời
+	Render Exposure	Độ phơi sáng kết xuất
+	Point Light	Nguồn sáng điểm
+	Spotlight	Đèn chiếu
+	Distant Light	Nguồn sáng xa
+	Change Lights	Thay đổi nguồn sáng
+	Section Plane	Mặt phẳng cắt
+	Live Section	Mặt cắt trực tiếp
+	Generate Section Block	Tạo khối mặt cắt
+	Generate Section	Tạo mặt cắt
+	Flatshot	Ảnh chụp phẳng
+	Base View	Hình chiếu cơ sở
+	Section View	Hình chiếu mặt cắt
+	Drawing Views	Hình chiếu bản vẽ
+	Select face or any point to locate section line or	Chọn mặt hoặc điểm bất kỳ để định vị đường cắt hoặc
+	Orthographic	Vuông góc
+	Select section object	Chọn đối tượng mặt cắt
+	Specify location of base view	Chỉ định vị trí hình chiếu cơ sở
+	Select parent view	Chọn hình chiếu gốc
+	Specify end point	Chỉ định điểm cuối
+	Specify location of section view	Chỉ định vị trí hình chiếu mặt cắt
+	There is nothing to draw: no 3D objects were found.	Không có gì để vẽ: không tìm thấy đối tượng 3D nào.
+	The section plane doesn't cut any solid.	Mặt phẳng cắt không cắt qua khối đặc nào.
+	The view needs a direction.	Hình chiếu cần có hướng.
+	The drawing has no layout.	Bản vẽ không có bố cục.
+	That is not a section plane.	Đó không phải là mặt phẳng cắt.
+	Requires a point.	Cần một điểm.
+	The view is [dx, dy, dz].	Hướng nhìn là [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Tạo gói chuyển giao
+	Files in the package	Tệp trong gói
+	Not included	Không bao gồm
+	Organized folders	Thư mục có tổ chức
+	One folder	Một thư mục
+	Include a transmittal report	Kèm báo cáo chuyển giao
+	Create ZIP...	Tạo ZIP...
+	Create Folder...	Tạo thư mục...
+	STL Out	Xuất STL
+	Export STL...	Xuất STL...
+	3D models (glTF, OBJ, STL)	Mô hình 3D (glTF, OBJ, STL)
+	3D model (glTF binary)	Mô hình 3D (glTF nhị phân)
+	3D model (glTF)	Mô hình 3D (glTF)
+	3D model (OBJ)	Mô hình 3D (OBJ)
+	3D model (STL)	Mô hình 3D (STL)
+	Render Region	Kết xuất vùng
+	samples	mẫu
+	a sample	một mẫu
+	Pick crop window to render	Chọn cửa sổ cắt để kết xuất
+	Nothing has been rendered yet.	Chưa kết xuất gì.
+	There is nothing to render: no surfaces in the view.	Không có gì để kết xuất: không có bề mặt nào trong khung nhìn.
+	The image couldn't be encoded.	Không thể mã hóa hình ảnh.
+	Saving images isn't available in the browser.	Không thể lưu ảnh trong trình duyệt.
+	PNG image	Ảnh PNG
+	JPEG image	Ảnh JPEG
+	Save Image	Lưu ảnh
+	My Properties	Thuộc tính của tôi
+	Add to My Properties	Thêm vào Thuộc tính của tôi
+	Remove from My Properties	Gỡ khỏi Thuộc tính của tôi
+	All properties	Mọi thuộc tính
+	My properties: the ones you added (right-click a property's name to add it)	Thuộc tính của tôi: những thuộc tính bạn đã thêm (nhấp chuột phải vào tên thuộc tính để thêm)
+	Right-click a property's name and choose Add to My Properties.	Nhấp chuột phải vào tên thuộc tính và chọn Thêm vào Thuộc tính của tôi.
+	Color Books	Sổ màu
+	Sheet Set Manager	Quản lý tập bản vẽ
+	Palettes	Bảng
+	New Sheet Set...	Tập bản vẽ mới...
+	Open Sheet Set...	Mở tập bản vẽ...
+	No sheet set is open.	Chưa mở tập bản vẽ nào.
+	Number	Số
+	Subset	Tập con
+	Remove Sheet	Gỡ tờ
+	Add Drawing...	Thêm bản vẽ...
+	Rename Layouts to Match	Đổi tên bố cục cho khớp
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Bố cục của mỗi tờ trở thành "số tiêu đề", được hiển thị bởi các trường số tờ và tiêu đề
+	Publish to PDF...	Xuất bản sang PDF...
+	Prefix	Tiền tố
+	Digits	Chữ số
+	Renumber	Đánh số lại
+	Zoom to Fit	Thu phóng vừa khít
+	Drag to pan, scroll to zoom	Kéo để di chuyển, cuộn để thu phóng
+	Publish	Xuất bản
+	Sheets to publish, in order	Các tờ cần xuất bản, theo thứ tự
+	Sheet	Tờ
+	Bookmark	Dấu trang
+	Paper	Khổ giấy
+	Orientation	Hướng giấy
+	(sheet name)	(tên tờ)
+	Page setup	Thiết lập trang
+	Landscape	Ngang
+	Portrait	Dọc
+	Add Sheets from Drawing...	Thêm tờ từ bản vẽ...
+	Load List...	Tải danh sách...
+	Save List...	Lưu danh sách...
+	Publish List	Danh sách xuất bản
+	Enclose Text with Object	Bao văn bản bằng đối tượng
+	Export Attribute Information	Xuất thông tin thuộc tính
+	Import Attribute Information	Nhập thông tin thuộc tính
+	Mask Text	Che nền văn bản
+	Remote Text	Văn bản từ xa
+	Rotate Text	Xoay văn bản
+	Text Fit	Khớp văn bản
+	Toggle Frames	Bật/tắt khung
+	Unmask Text	Bỏ che nền văn bản
+	Update Remote Text	Cập nhật văn bản từ xa
+	Geometric	Hình học
+	Infer geometric constraints	Suy luận ràng buộc hình học
+	Show constraint bars	Hiện thanh ràng buộc
+	Constraint bar transparency (%)	Độ trong suốt thanh ràng buộc (%)
+	Dimensional	Kích thước
+	Show dynamic constraints	Hiện ràng buộc động
+	Dimension name format	Định dạng tên kích thước
+	Name and Expression	Tên và biểu thức
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Các loại ràng buộc AUTOCONSTRAIN áp dụng, theo thứ tự ưu tiên
+	Move Up	Lên trên
+	Move Down	Xuống dưới
+	Tangent objects must share an intersection point	Các đối tượng tiếp tuyến phải có chung một giao điểm
+	Perpendicular objects must share an intersection point	Các đối tượng vuông góc phải có chung một giao điểm
+	Distance tolerance	Dung sai khoảng cách
+	Angle tolerance (degrees)	Dung sai góc (độ)
+	3D Move	Di chuyển 3D
+	3D Rotate	Xoay 3D
+	3D Scale	Tỷ lệ 3D
+	3D Align	Căn chỉnh 3D
+	3D Mirror	Đối xứng 3D
+	3D Array	Mảng 3D
+	3D Object Snap	Bắt điểm đối tượng 3D
+	Specify second point or distance	Chỉ định điểm thứ hai hoặc khoảng cách
+	Specify angle	Chỉ định góc
+	Specify source plane: first point	Chỉ định mặt phẳng nguồn: điểm thứ nhất
+	Specify source plane: second point	Chỉ định mặt phẳng nguồn: điểm thứ hai
+	Specify source plane: third point	Chỉ định mặt phẳng nguồn: điểm thứ ba
+	Specify destination plane: first point	Chỉ định mặt phẳng đích: điểm thứ nhất
+	Specify destination plane: second point	Chỉ định mặt phẳng đích: điểm thứ hai
+	Specify destination plane: third point	Chỉ định mặt phẳng đích: điểm thứ ba
+	Delete source objects?	Xóa đối tượng nguồn?
+	Specify point on XY plane	Chỉ định điểm trên mặt phẳng XY
+	Specify point on YZ plane	Chỉ định điểm trên mặt phẳng YZ
+	Specify point on ZX plane	Chỉ định điểm trên mặt phẳng ZX
+	Specify first point of mirror plane (3 points) or	Chỉ định điểm thứ nhất của mặt phẳng đối xứng (3 điểm) hoặc
+	Specify second point on mirror plane	Chỉ định điểm thứ hai trên mặt phẳng đối xứng
+	Specify third point on mirror plane	Chỉ định điểm thứ ba trên mặt phẳng đối xứng
+	Enter the type of array	Nhập loại mảng
+	Polar	Cực
+	Enter the number of items in the array	Nhập số phần tử trong mảng
+	Specify the angle to fill (+=ccw, -=cw)	Chỉ định góc điền (+=ngược chiều kim đồng hồ, -=cùng chiều kim đồng hồ)
+	Enter the number of rows (---)	Nhập số hàng (---)
+	Enter the number of columns (|||)	Nhập số cột (|||)
+	Enter the number of levels (...)	Nhập số tầng (...)
+	Specify the distance between rows (---)	Chỉ định khoảng cách giữa các hàng (---)
+	Specify the distance between columns (|||)	Chỉ định khoảng cách giữa các cột (|||)
+	Specify the distance between levels (...)	Chỉ định khoảng cách giữa các tầng (...)
+	Specify second point on axis of rotation	Chỉ định điểm thứ hai trên trục xoay
+	Select the objects first.	Hãy chọn đối tượng trước.
+	Requires a point, or a distance along an axis.	Cần một điểm, hoặc một khoảng cách dọc theo trục.
+	The points must not coincide or line up.	Các điểm không được trùng nhau hoặc thẳng hàng.
+	The three points line up: they make no plane.	Ba điểm thẳng hàng: chúng không tạo thành mặt phẳng.
+	<3D Object Snap on>	<Bật bắt điểm đối tượng 3D>
+	<3D Object Snap off>	<Tắt bắt điểm đối tượng 3D>
+	Preparing the 3D view…	Đang chuẩn bị khung nhìn 3D…
+	Viewpoint	Điểm nhìn
+	3D View Benchmark	Đo hiệu năng khung nhìn 3D
+	Drawing area	Vùng vẽ
+	Command line	Dòng lệnh
+	Viewport controls	Điều khiển khung nhìn
+	Coordinate system menu	Menu hệ tọa độ
+	UCS icon X axis	Trục X biểu tượng UCS
+	UCS icon Y axis	Trục Y biểu tượng UCS
+	High Contrast	Độ tương phản cao
+	Interface size	Kích thước giao diện
+	Interface Size	Kích thước giao diện
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	Đặc tả công trình
+	Set Building Spec	Đặt đặc tả công trình
+	Validate Building Spec	Kiểm tra đặc tả công trình
+	Build Model from Spec	Dựng mô hình từ đặc tả
+	Convert Matches to Block	Chuyển các đối tượng khớp thành khối
+	Command Line Transparency	Độ trong suốt dòng lệnh
+	AutoComplete Settings	Thiết lập tự động hoàn thành
+	Input Settings	Thiết lập nhập liệu
+	AutoComplete	Tự động hoàn thành
+	Search System Variables	Tìm biến hệ thống
+	Mid-string Search	Tìm giữa chuỗi
+	System variable	Biến hệ thống
+	Layer state	Trạng thái lớp
+	Model Issues	Vấn đề mô hình
+	Render Model View	Kết xuất khung nhìn mô hình
+	Model Overlay	Lớp phủ mô hình
+	Model Counts	Số lượng mô hình
+	System Printers	Máy in hệ thống
+	Report a Problem...	Báo cáo sự cố...
+	Report a Problem	Báo cáo sự cố
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Thu thập những thông tin giúp tìm ra sự cố vào một tệp ZIP trên máy tính này. Không có gì được gửi đi: hãy đính kèm tệp vào email nếu bạn muốn báo cáo.
+	Always included	Luôn bao gồm
+	The log of this run and the two before it	Nhật ký của lần chạy này và hai lần trước đó
+	The last commands	Các lệnh gần nhất
+	Versions, operating system and graphics adapter	Phiên bản, hệ điều hành và card đồ họa
+	A summary of the open drawings (counts only, no geometry)	Tóm tắt các bản vẽ đang mở (chỉ số lượng, không có hình học)
+	Names: file paths, layer and block names, typed text	Tên: đường dẫn tệp, tên lớp và khối, văn bản đã gõ
+	Names are replaced by placeholders, also in the log.	Tên được thay bằng ký hiệu giữ chỗ, cả trong nhật ký.
+	Save Report...	Lưu báo cáo...
+	Email it to {address}	Gửi email đến {address}
+	Plans to Model	Từ mặt bằng sang mô hình
+	Build	Dựng
+	Rebuild	Dựng lại
+	Check	Kiểm tra
+	Kept in the drawing.	Được giữ trong bản vẽ.
+	Drafted from the walk rules; not saved yet.	Phác thảo từ quy tắc khảo sát; chưa lưu.
+	{n} of {total} approved	Đã duyệt {n} / {total}
+	Save Spec	Lưu đặc tả
+	Approve All	Duyệt tất cả
+	Approved	Đã duyệt
+	Levels	Tầng
+	Wall Types	Loại tường
+	Rooms	Phòng
+	Door and Window Families	Họ cửa đi và cửa sổ
+	Materials	Vật liệu
+	Site	Khu đất
+	Openings	Lỗ mở
+	Issues ({n})	Vấn đề ({n})
+	The drawing changed since; check again.	Bản vẽ đã thay đổi từ đó; hãy kiểm tra lại.
+	No issues found.	Không tìm thấy vấn đề nào.
+	Configure Standards	Cấu hình tiêu chuẩn
+	Standards files associated with the current drawing	Tệp tiêu chuẩn gắn với bản vẽ hiện tại
+	Add...	Thêm...
+	Check Standards...	Kiểm tra tiêu chuẩn...
+	Check Standards	Kiểm tra tiêu chuẩn
+	No standards violations were found.	Không tìm thấy vi phạm tiêu chuẩn nào.
+	problem(s)	vấn đề
+	Take the standard's properties	Lấy thuộc tính của tiêu chuẩn
+	Replace it with the standard one	Thay bằng mục tiêu chuẩn
+	Fix All	Sửa tất cả
+	Give everything that differs the standard's properties	Gán thuộc tính tiêu chuẩn cho mọi mục khác biệt
+	Check Again	Kiểm tra lại
+	Layer Translator	Chuyển đổi lớp
+	Translate From	Chuyển từ
+	Translate To	Chuyển sang
+	Load a drawing whose layers to translate to.	Tải bản vẽ có các lớp đích cần chuyển sang.
+	Map	Ánh xạ
+	Layer Translation Mappings	Ánh xạ chuyển đổi lớp
+	Load Map...	Tải ánh xạ...
+	Save Map...	Lưu ánh xạ...
+	Translate	Chuyển đổi
+	Not in the standards	Không có trong tiêu chuẩn
+	Properties differ from the standards	Thuộc tính khác với tiêu chuẩn
+	CAD Standards	Tiêu chuẩn CAD
+	Configure...	Cấu hình...
+	Check...	Kiểm tra...
+	Layer Translator...	Chuyển đổi lớp...
+	Draft Building Spec	Phác thảo đặc tả công trình
+	Draft from Plan	Phác thảo từ mặt bằng
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Đọc lớp, tường, cửa, phòng và ghi chú của mặt bằng; các phỏng đoán sẽ được đánh dấu.
+	guess	phỏng đoán
+	Detect Stairs	Phát hiện cầu thang
+	List Stairs	Liệt kê cầu thang
+	Confirm Stairs	Xác nhận cầu thang
+	Stairs and Ramps	Cầu thang và dốc
+	Bake Lighting	Nướng ánh sáng
+	Command Aliases and Shortcuts	Bí danh lệnh và phím tắt
+	Keyboard Shortcuts	Phím tắt
+	replaces {command}	thay thế {command}
+	Built-in	Có sẵn
+	Alias	Bí danh
+	Command	Lệnh
+	Add or Change	Thêm hoặc thay đổi
+	Keys	Phím
+	Edit Aliases and Shortcuts...	Sửa bí danh và phím tắt...
+	Customize	Tùy biến
+	Read Elevation	Đọc mặt đứng
+	Read Roof Plan	Đọc mặt bằng mái
+	Exterior	Bên ngoài
+	Drafting & Annotation	Vẽ & chú thích
+	3D Modeling	Mô hình hóa 3D
+	Electrical	Điện
+	Save Current As...	Lưu cấu hình hiện tại thành...
+	Workspace Settings...	Thiết lập không gian làm việc...
+	Workspace Settings	Thiết lập không gian làm việc
+	Navigation Bar	Thanh điều hướng
+	Save Workspace	Lưu không gian làm việc
+	Workspaces	Không gian làm việc
+	Close Navigation Bar	Đóng thanh điều hướng
+	Workspace	Không gian làm việc
+	Read Ceiling Plan	Đọc mặt bằng trần
+	Ceilings	Trần
+	Current Drawing	Bản vẽ hiện tại
+	Favourites	Yêu thích
+	Libraries	Thư viện
+	No library folder	Không có thư mục thư viện
+	Choose Folder...	Chọn thư mục...
+	No blocks here.	Không có khối nào ở đây.
+	Remove from Favourites	Gỡ khỏi Yêu thích
+	Add to Favourites	Thêm vào Yêu thích
+	Insertion Options	Tùy chọn chèn
+	Auto-rotate (follow the current UCS)	Tự động xoay (theo UCS hiện hành)
+	Repeat Placement	Lặp lại việc đặt
+	Tool Palettes	Bảng công cụ
+	Drag objects from the drawing here to make tools.	Kéo đối tượng từ bản vẽ vào đây để tạo công cụ.
+	Add Selected	Thêm mục đã chọn
+	New palette	Bảng mới
+	Select objects in the drawing first.	Hãy chọn đối tượng trong bản vẽ trước.
+	Blocks Palette	Bảng khối
+	Detect Grids	Phát hiện lưới trục
+	Align Levels by Grids	Căn tầng theo lưới trục
+	Columns at Grids	Cột tại lưới trục
+	Columns	Cột
+	Build Room Volumes	Dựng khối tích phòng
+	Building	Công trình
+	Go to Room	Đi đến phòng
+	List Rooms	Liệt kê phòng
+	Room	Phòng
+	Build Volumes	Dựng khối tích
+	Go to	Đi đến
+	{n} rooms	{n} phòng
+	No rooms found: rooms are found from name labels inside closed outlines.	Không tìm thấy phòng: phòng được xác định từ nhãn tên nằm trong đường bao kín.
+	Ceiling	Trần
+	DesignCenter	DesignCenter
+	Up One Level	Lên một cấp
+	Folder	Thư mục
+	Text Styles	Kiểu chữ
+	Dimension Styles	Kiểu kích thước
+	Layouts	Bố cục
+	Add to Drawing	Thêm vào bản vẽ
+	Choose a drawing to see what it holds.	Chọn một bản vẽ để xem nội dung.
+	{name} inserted.	Đã chèn {name}.
+	{name} is already in the drawing; it was kept.	{name} đã có trong bản vẽ; giữ nguyên.
+	{name} added.	Đã thêm {name}.
+	Read MEP Runs	Đọc tuyến MEP
+	Model Clashes	Xung đột mô hình
+	MEP Systems	Hệ thống MEP
+	Undo History	Lịch sử hoàn tác
+	(Start)	(Bắt đầu)
+	Click a step to undo or redo to it.	Nhấp vào một bước để hoàn tác hoặc làm lại đến bước đó.
+	Nothing yet.	Chưa có gì.
+	Double-click to run it again	Nhấp đúp để chạy lại
+	Copy as Script	Sao chép dạng script
+	Save Session as Script...	Lưu phiên làm việc thành script...
+	Command History Palette	Bảng lịch sử lệnh
+	Furnish from Plan	Bố trí nội thất từ mặt bằng
+	Classify Plan	Phân loại mặt bằng
+	Text and multiline text	Văn bản và văn bản nhiều dòng
+	Block attribute values	Giá trị thuộc tính khối
+	Dimension text	Chữ kích thước
+	Multileaders	Đường dẫn đa chú thích
+	Hyperlinks	Siêu liên kết
+	Layer and block names	Tên lớp và khối
+	Find where:	Tìm ở đâu:
+	Current space	Không gian hiện tại
+	Plain text	Văn bản thuần
+	Use wildcards	Dùng ký tự đại diện
+	Regular expressions	Biểu thức chính quy
+	Look in	Tìm trong
+	Zoom To	Thu phóng đến
+	Replace	Thay thế
+	Create Selection Set	Tạo tập chọn
+	Matches found: {count} (objects: {objects})	Đã tìm thấy: {count} (đối tượng: {objects})
+	Layer name	Tên lớp
+	Block name	Tên khối
+	Revise Model from Plans	Hiệu chỉnh mô hình từ mặt bằng
+	Plans to Model Benchmark	Đo hiệu năng Từ mặt bằng sang mô hình
+	Plans to Model Case	Trường hợp Từ mặt bằng sang mô hình
+	Plans to Model Score	Điểm Từ mặt bằng sang mô hình
+	Save Viewpoint	Lưu điểm nhìn
+	Viewpoints for Every Room	Điểm nhìn cho mọi phòng
+	Camera Tour	Tham quan bằng camera
+	Tours and Viewpoints	Tham quan và điểm nhìn
+	Tour Timing	Thời gian tham quan
+	3D Graphics Limits	Giới hạn đồ họa 3D
+	Drawn by the CPU (no usable GPU)	Vẽ bằng CPU (không có GPU dùng được)
+	Point Cloud...	Đám mây điểm...
+	Point Cloud	Đám mây điểm
+	Attach Point Cloud	Đính kèm đám mây điểm
+	Clip Point Cloud	Cắt xén đám mây điểm
+	Point Cloud Color Map	Bản đồ màu đám mây điểm
+	Point Cloud Information	Thông tin đám mây điểm
+	Markups	Đánh dấu
+	{done} of {total} done	Hoàn thành {done} / {total}
+	No markups. Import them from a reviewed PDF.	Không có đánh dấu. Hãy nhập từ một PDF đã duyệt.
+	Done	Xong
+	Import Markups...	Nhập đánh dấu...
+	Import Markups	Nhập đánh dấu
+	Markup Import...	Nhập đánh dấu...
+	Markup Status	Trạng thái đánh dấu
+	Read Door and Window Schedules	Đọc bảng thống kê cửa đi và cửa sổ
+	Schedules	Bảng thống kê
+	Esc	Esc
+	Hide the touch bar	Ẩn thanh cảm ứng
+	Type a command or value	Nhập lệnh hoặc giá trị
+	Embed Textures	Nhúng texture
+	Publish Walkthrough	Xuất bản tham quan
+	Walkthroughs (CDYWALK)	Tham quan (CDYWALK)
+	Check Exchange	Kiểm tra trao đổi
+	Not kept in the {format} file	Không được giữ trong tệp {format}
+	The drawing was saved. This file format can't keep everything in it:	Đã lưu bản vẽ. Định dạng tệp này không giữ được mọi thứ trong bản vẽ:
+	What	Cái gì
+	left out	bị bỏ qua
+	changed	bị thay đổi
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Bản vẽ CADaddy (.cdy) giữ mọi thứ. Kiểm tra trao đổi sẽ liệt kê lại nội dung này mà không lưu.
+	VP Linetype	Kiểu đường KN
+	VP Lineweight	Độ dày nét KN
+	Unreconciled New Layers ({n})	Lớp mới chưa đối chiếu ({n})
+	Reconcile All	Đối chiếu tất cả
+	Reconcile Layer	Đối chiếu lớp
+	LayerWalk	Duyệt lớp
+	Layers: {n}	Lớp: {n}
+	Restore on exit	Khôi phục khi thoát
+	Filter:	Bộ lọc:
+	Layer Walk...	Duyệt lớp...
+	Layer Walk	Duyệt lớp
+	Isolate Layer to Current Viewport	Cô lập lớp trong khung nhìn hiện tại
+	Unreconciled New Layers	Lớp mới chưa đối chiếu
+	Move to New Window	Chuyển sang cửa sổ mới
+	Dock All Windows	Neo mọi cửa sổ
+	Every drawing is in a window of its own.	Mỗi bản vẽ nằm trong cửa sổ riêng.
+	Back among the drawing tabs	Trở lại các thẻ bản vẽ
+	Plot Stamp...	Dấu in...
+	Plot a Folder of Drawings...	In một thư mục bản vẽ...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Mỗi bản vẽ trong thư mục thành một PDF riêng, đặt trong thư mục PDF bên trong
+	Plot stamp	Dấu in
+	Quick Properties Lists	Danh sách thuộc tính nhanh
+	Purgeable Items	Mục có thể dọn dẹp
+	Find Non-Purgeable Items	Tìm mục không thể dọn dẹp
+	Purge {kind} "{name}"?	Dọn dẹp {kind} "{name}"?
+	Yes to All	Có cho tất cả
+	Items that can't be purged, and why	Mục không thể dọn dẹp và lý do
+	Select and Zoom	Chọn và thu phóng
+	Pick an item to see why it can't be purged.	Chọn một mục để xem vì sao không thể dọn dẹp.
+	Confirm each item to be purged	Xác nhận từng mục cần dọn dẹp
+	Purge nested items	Dọn dẹp mục lồng
+	Text Align	Căn văn bản
+	Color model:	Mô hình màu:
+	Hue	Sắc độ
+	Saturation	Độ bão hòa
+	Luminance	Độ sáng
+	Hex	Hex
+	More Colors...	Thêm màu...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Tải thêm sổ màu bằng COLORBOOK (tệp JSON hoặc phân cách bằng tab).
+	All spaces	Mọi không gian
+	Total: {n}	Tổng: {n}
+	No block references here.	Không có tham chiếu khối nào ở đây.
+	Highlight and zoom to its references	Tô sáng và thu phóng đến các tham chiếu
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Tương tự nhưng không giống hệt: {scaled} bị co giãn, {exploded} bị phá khối
+	Insert Count Table	Chèn bảng đếm
+	Update Count Tables	Cập nhật bảng đếm
+	Count in Area	Đếm trong vùng
+	{n} reference(s) of {name} selected.	Đã chọn {n} tham chiếu của {name}.
+	{n} similar object(s) selected.	Đã chọn {n} đối tượng tương tự.
+	Geographic Location...	Vị trí địa lý...
+	Remove Geographic Location	Xóa vị trí địa lý
+	Set Location	Đặt vị trí
+	Remove Location	Xóa vị trí
+	Latitude and Longitude	Vĩ độ và kinh độ
+	Trace Image to Vectors	Chuyển ảnh thành vector
+	Trace Raster Image to Vectors	Chuyển ảnh raster thành vector
+	Drawing Summary	Tóm tắt bản vẽ
+	Query Drawing	Truy vấn bản vẽ
+	Begin Agent Request	Bắt đầu yêu cầu tác tử
+	End Agent Request	Kết thúc yêu cầu tác tử
+	Agent Dry Run	Chạy thử tác tử
+	Agent Confirmations	Xác nhận của tác tử
+	Agent Change Journal	Nhật ký thay đổi của tác tử
+	Agent Activity	Hoạt động của tác tử
+	An agent asks	Một tác tử hỏi
+	Allow	Cho phép
+	Deny	Từ chối
+	Not allowed: {question}	Không được phép: {question}
+	Ask me before an agent saves over a file or closes with changes	Hỏi tôi trước khi tác tử lưu đè lên tệp hoặc đóng khi còn thay đổi
+	Dry run: agents' commands change nothing	Chạy thử: lệnh của tác tử không thay đổi gì
+	No agent requests yet.	Chưa có yêu cầu nào từ tác tử.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} lệnh · {added} đã thêm · {removed} đã xóa · {changed} đã thay đổi
+	Select what it added and changed	Chọn những gì nó đã thêm và thay đổi
+	Activity History	Lịch sử hoạt động
+	Activity history is off (Options ▸ Open and Save).	Lịch sử hoạt động đang tắt (Tùy chọn ▸ Mở và lưu).
+	command	lệnh
+	{n} steps	{n} bước
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Chọn các đối tượng mà bước này đã thêm hoặc thay đổi
+	The objects of this step are gone.	Các đối tượng của bước này không còn nữa.
+	{n} object(s) selected.	Đã chọn {n} đối tượng.
+	{n} object(s) selected ({gone} since erased).	Đã chọn {n} đối tượng ({gone} đã bị xóa từ đó).
+	{n} s ago	{n} giây trước
+	{n} min ago	{n} phút trước
+	{n} h ago	{n} giờ trước
+	{n} d ago	{n} ngày trước
+	Keep an activity history beside each drawing (private, on this computer)	Lưu lịch sử hoạt động bên cạnh mỗi bản vẽ (riêng tư, trên máy tính này)
+	Background mask	Mặt nạ nền
+	Mask border offset	Khoảng lề viền mặt nạ
+	Mask color	Màu mặt nạ
+	Use drawing background	Dùng nền bản vẽ
+	Regenerate Dimensions	Tái tạo kích thước
+	Enter layer name for new dimensions (. for the current layer)	Nhập tên lớp cho kích thước mới (. cho lớp hiện hành)
+	{folder} (folder)	{folder} (thư mục)
+	Add drawings or a folder of them.	Thêm bản vẽ hoặc một thư mục chứa bản vẽ.
+	Add Files...	Thêm tệp...
+	Add Folder...	Thêm thư mục...
+	cancelled	đã hủy
+	Choose the output folder, or Next to the originals.	Chọn thư mục đầu ra, hoặc Cạnh tệp gốc.
+	Convert Drawings	Chuyển đổi bản vẽ
+	Convert Drawings...	Chuyển đổi bản vẽ...
+	Convert drawings...	Chuyển đổi bản vẽ...
+	Convert to	Chuyển sang
+	Converted	Đã chuyển đổi
+	Converted, not all kept	Đã chuyển đổi, không giữ được tất cả
+	Converting files is not available on the web.	Không thể chuyển đổi tệp trên web.
+	Drawings to convert	Bản vẽ cần chuyển đổi
+	Each drawing's own	Theo từng bản vẽ
+	Failed	Thất bại
+	Files already there	Tệp đã tồn tại
+	Folder:	Thư mục:
+	Include subfolders	Bao gồm thư mục con
+	Keep a file written over as .bak	Giữ tệp bị ghi đè dưới dạng .bak
+	Next to the originals	Cạnh tệp gốc
+	Open Log	Mở nhật ký
+	Or type a file or folder path	Hoặc nhập đường dẫn tệp hay thư mục
+	Overwrite	Ghi đè
+	Save to	Lưu vào
+	Skip	Bỏ qua
+	Skipped	Đã bỏ qua
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Không có bản vẽ nào (.dwg, .dxf, .cdy) để chuyển đổi.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} đã chuyển đổi, {skipped} bỏ qua, {failed} thất bại trên tổng {total}
+	DWG drawing (.dwg)	Bản vẽ DWG (.dwg)
+	DXF drawing (.dxf)	Bản vẽ DXF (.dxf)
+	Require a token for control connections (recommended)	Yêu cầu token cho kết nối điều khiển (khuyến nghị)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Chương trình phải gửi trước token mà CADaddy ghi vào một tệp chỉ bạn đọc được, để chương trình của người dùng khác không thể điều khiển nó. Trình kết nối Claude tự đọc token cho bạn. Có hiệu lực vào lần khởi động CADaddy tiếp theo.
+	Building models (IFC)	Mô hình công trình (IFC)
+	Building model (IFC4)	Mô hình công trình (IFC4)
+	3D printing (3MF)	In 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Kèm bản vẽ (bản vẽ đang mở dưới dạng tệp DXF)
+	Your account, home folder and computer name are always left out.	Tài khoản, thư mục cá nhân và tên máy tính của bạn luôn được loại bỏ.
+	Files in the report	Tệp trong báo cáo
+	Send to Redline	Gửi đến Redline
+	Import Redline Markups	Nhập đánh dấu Redline
+	Import Redline Markups...	Nhập đánh dấu Redline...
+	Open a Program?	Mở một chương trình?
+	This link opens a program or script, not a document:	Liên kết này mở một chương trình hoặc script, không phải tài liệu:
+	Open it only if you trust the drawing and know what it runs.	Chỉ mở nếu bạn tin tưởng bản vẽ và biết nó chạy gì.
+	Open Anyway	Vẫn mở
+	Report a security problem	Báo cáo vấn đề bảo mật
+	Load This File?	Tải tệp này?
+	This file isn't in a trusted folder:	Tệp này không nằm trong thư mục tin cậy:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Các thủ tục LISP và script có thể thay đổi bản vẽ và tệp. Chỉ tải nếu bạn tin tưởng nguồn gốc của nó.
+	Don't Load	Không tải
+	Load Once	Tải một lần
+	Always Load from This Folder	Luôn tải từ thư mục này
+	Adds {folder} to TRUSTEDPATHS	Thêm {folder} vào TRUSTEDPATHS
+	Allow Loading a File	Cho phép tải tệp
+	Plot Stamp	Dấu in
+	Plot stamp fields	Trường dấu in
+	Drawing name	Tên bản vẽ
+	Layout name	Tên bố cục
+	Date and Time	Ngày và giờ
+	Device name	Tên thiết bị
+	Paper size	Khổ giấy
+	Plot scale	Tỷ lệ in
+	No login or computer name is ever stamped.	Không bao giờ in tên đăng nhập hay tên máy tính.
+	User defined fields	Trường do người dùng định nghĩa
+	One per line, up to {n}.	Mỗi dòng một trường, tối đa {n}.
+	Stamp model space plots	Đóng dấu bản in không gian mô hình
+	Stamp this layout's plots	Đóng dấu bản in của bố cục này
+	Location and offset	Vị trí và độ lệch
+	Location	Vị trí
+	Upside-down	Lộn ngược
+	X offset	Độ lệch X
+	Y offset	Độ lệch Y
+	Offset relative to	Độ lệch tính từ
+	Printable area	Vùng in được
+	Paper border	Viền giấy
+	Text properties	Thuộc tính văn bản
+	Font	Phông chữ
+	Single line plot stamp	Dấu in một dòng
+	Units	Đơn vị
+	Inches	Inch
+	Millimeters	Milimét
+	Log file location	Vị trí tệp nhật ký
+	Create a log file	Tạo tệp nhật ký
+	The log is kept for this session, never saved with the drawing.	Nhật ký được giữ trong phiên này, không bao giờ lưu cùng bản vẽ.
+	Action Macro Manager...	Quản lý macro thao tác...
+	Action Macros	Macro thao tác
+	Action Recorder	Trình ghi thao tác
+	Insert Base Point	Chèn điểm cơ sở
+	Insert Message	Chèn thông báo
+	Play Action Macro	Phát macro thao tác
+	Play...	Phát...
+	Record	Ghi
+	Request User Input	Yêu cầu người dùng nhập
+	Stop	Dừng
+	Action Macro Manager	Quản lý macro thao tác
+	Recording…	Đang ghi…
+	No action macros yet: Record, do the work, then Stop.	Chưa có macro thao tác: bấm Ghi, thực hiện công việc, rồi Dừng.
+	Play	Phát
+	Message: {text}	Thông báo: {text}
+	Base point (asked for)	Điểm cơ sở (được hỏi)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Hỏi giá trị nhập này khi phát macro
+	Customize Interface	Tùy biến giao diện
+	Customize User Interface...	Tùy biến giao diện người dùng...
+	Interface...	Giao diện...
+	Customize User Interface	Tùy biến giao diện người dùng
+	Quick Access Toolbar	Thanh truy cập nhanh
+	Add a command	Thêm lệnh
+	Reset Quick Access Toolbar	Đặt lại thanh truy cập nhanh
+	Built-in panels shown (untick to hide):	Bảng có sẵn được hiển thị (bỏ chọn để ẩn):
+	Your panels on built-in tabs:	Bảng của bạn trên các thẻ có sẵn:
+	Tab	Thẻ
+	New panel name	Tên bảng mới
+	Add Panel	Thêm bảng
+	Your tabs:	Thẻ của bạn:
+	Remove Tab	Xóa thẻ
+	New tab name	Tên thẻ mới
+	Add Tab	Thêm thẻ
+	Edit Keyboard Shortcuts...	Sửa phím tắt...
+	Remove Panel	Xóa bảng
+	Command or LISP macro, e.g. (command "line")	Lệnh hoặc macro LISP, ví dụ (command "line")
+	Hatch Editor	Trình sửa mặt tô
+	Table Cell	Ô bảng
+	Rows & Columns	Hàng & cột
+	Merge	Gộp
+	Open/Save	Mở/Lưu
+	Attributes	Thuộc tính
+	Spell Check	Kiểm tra chính tả
+	Formula	Công thức
+	Edit Source	Sửa nguồn
+	Close Array	Đóng mảng
+	Manage Attributes	Quản lý thuộc tính
+	Dialog State	Trạng thái hộp thoại
+	Dialog Action	Thao tác hộp thoại
+	Recover Drawing and Xrefs...	Khôi phục bản vẽ và Xref...
+	Count Blocks	Đếm khối
+	Get Selection Set	Lấy tập chọn
+	Global Attribute Edit	Sửa thuộc tính toàn cục
+	LISP Function Surfer	Duyệt hàm LISP
+	List LISP Symbols	Liệt kê ký hiệu LISP
+	List Nested Object	Liệt kê đối tượng lồng
+	List Object Xdata	Liệt kê Xdata của đối tượng
+	Multiple Polyline Edit	Sửa nhiều đa tuyến
+	Redefine Path	Định nghĩa lại đường dẫn
+	Redefine Path Mode	Chế độ định nghĩa lại đường dẫn
+	Restore Dimension Text	Khôi phục chữ kích thước
+	Revert	Hoàn nguyên
+	Rotate Blocks	Xoay khối
+	Scale Blocks	Tỷ lệ khối
+	Select Similar by Properties	Chọn tương tự theo thuộc tính
+	Show URLs	Hiện URL
+	Synchronize Viewports	Đồng bộ khung nhìn
+	Paste Special	Dán đặc biệt
+	Paste Special...	Dán đặc biệt...
+	Paste as	Dán dưới dạng
+	Last Measurement	Lần đo gần nhất
+	Perimeter	Chu vi
+	curl isn't available ({error}).	Không có curl ({error}).
+	This build has no release key to check updates with.	Bản dựng này không có khóa phát hành để kiểm tra cập nhật.
+	The release's signature files are too large.	Tệp chữ ký của bản phát hành quá lớn.
+	The release's signature isn't one CADaddy reads.	Chữ ký của bản phát hành không phải loại CADaddy đọc được.
+	The release's signature is missing or damaged.	Chữ ký của bản phát hành bị thiếu hoặc hỏng.
+	The release's signature is for another version ({version}).	Chữ ký của bản phát hành dành cho phiên bản khác ({version}).
+	The release is signed with a key this build doesn't trust.	Bản phát hành được ký bằng khóa mà bản dựng này không tin cậy.
+	This build's release key is damaged.	Khóa phát hành của bản dựng này bị hỏng.
+	The release's signature doesn't match its files.	Chữ ký của bản phát hành không khớp với các tệp của nó.
+	Couldn't reach GitHub: {why}	Không thể kết nối GitHub: {why}
+	GitHub's answer was too large.	Phản hồi của GitHub quá lớn.
+	GitHub's answer wasn't readable ({error}).	Không đọc được phản hồi của GitHub ({error}).
+	GitHub's answer has no version.	Phản hồi của GitHub không có phiên bản.
+	GitHub's answer has an unreadable version ({version}).	Phản hồi của GitHub có phiên bản không đọc được ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Không thể tải xuống {name} của bản phát hành, nên không có gì được cài đặt: {why}
+	The release's {name} is too large, so nothing was installed.	{name} của bản phát hành quá lớn, nên không có gì được cài đặt.
+	The release's {name} isn't text, so nothing was installed.	{name} của bản phát hành không phải văn bản, nên không có gì được cài đặt.
+	It wasn't downloaded. Download it from the release page instead.	Chưa tải xuống. Hãy tải từ trang phát hành.
+	Version {version} isn't newer than this one ({current}).	Phiên bản {version} không mới hơn phiên bản này ({current}).
+	This release isn't signed.	Bản phát hành này chưa được ký.
+	The release failed its check.	Bản phát hành không vượt qua kiểm tra.
+	The signed release doesn't list {name}.	Bản phát hành đã ký không liệt kê {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Dấu vân tay của GitHub cho {name} khác với dấu đã ký.
+	Couldn't make the folder {folder}: {error}	Không thể tạo thư mục {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Tệp tải xuống không khớp với dấu vân tay SHA-256 đã công bố, nên không được cài đặt.
+	Couldn't read the download: {error}	Không thể đọc tệp tải xuống: {error}
+	The download failed: {why}	Tải xuống thất bại: {why}
+	This release has no installer for this computer yet.	Bản phát hành này chưa có trình cài đặt cho máy tính này.
+	Drawing Properties...	Thuộc tính bản vẽ...
+	System Variable Monitor...	Theo dõi biến hệ thống...
+	{name} Properties	Thuộc tính {name}
+	Summary	Tóm tắt
+	Statistics	Thống kê
+	Size	Kích thước
+	Subject	Chủ đề
+	Author	Tác giả
+	Keywords	Từ khóa
+	Comments	Ghi chú
+	Revision number	Số hiệu chỉnh
+	Hyperlink base	Gốc siêu liên kết
+	Created	Ngày tạo
+	Modified	Ngày sửa
+	Last saved by	Người lưu gần nhất
+	Total editing time (minutes)	Tổng thời gian chỉnh sửa (phút)
+	Property	Thuộc tính
+	System Variable Monitor	Theo dõi biến hệ thống
+	Variable	Biến
+	Watched value	Giá trị theo dõi
+	Current value	Giá trị hiện tại
+	Notify when a watched variable changes	Thông báo khi biến được theo dõi thay đổi
+	Reset All	Đặt lại tất cả
+	Delay	Trễ
+	Repeat Script	Lặp lại script
+	Script Call	Gọi script
+	Resume Script	Tiếp tục script
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Lưu lịch sử hoạt động của từng bản vẽ (riêng tư, trong thư mục thiết lập của CADaddy)
+	Specify insertion point or	Chỉ định điểm chèn hoặc
+	Specify table scale	Chỉ định tỷ lệ bảng
+	{} dimension(s) updated to the current settings.	Đã cập nhật {} kích thước theo thiết lập hiện tại.
+	British English (-ise)	Tiếng Anh (Anh, -ise)
+	British English (-ize)	Tiếng Anh (Anh, -ize)
+	Spanish	Tiếng Tây Ban Nha
+	French	Tiếng Pháp
+	German	Tiếng Đức
+	Portuguese (Iberian)	Tiếng Bồ Đào Nha (Bồ Đào Nha)
+	Portuguese (Brazilian)	Tiếng Bồ Đào Nha (Brazil)
+	(not installed)	(chưa cài đặt)
+	Dictionaries are read from:	Từ điển được đọc từ:
+	Published to {path}	Đã xuất bản đến {path}
+	Sheet Set (.sheetset.json)	Tập bản vẽ (.sheetset.json)
+	Resolution	Độ phân giải
+	Colour depth	Độ sâu màu
+	Colour (24-bit)	Màu (24-bit)
+	Greys (8-bit)	Thang xám (8-bit)
+	Black and white (1-bit)	Đen trắng (1-bit)
+	PNG Out	Xuất PNG
+	JPEG Out	Xuất JPEG
+	BMP Out	Xuất BMP
+	TIFF Out	Xuất TIFF
+	Enter image file name	Nhập tên tệp ảnh
+	Nothing selected: no image written.	Chưa chọn gì: không ghi ảnh nào.
+	{} object(s) written to {} ({} × {} pixels).	Đã ghi {} đối tượng vào {} ({} × {} điểm ảnh).
+	Set to ByLayer	Đặt thành ByLayer
+	Explode and Set Properties	Phá khối và đặt thuộc tính
+	Edit Attribute in Place	Sửa thuộc tính tại chỗ
+	Frame	Khung
+	Setup	Thiết lập
+	Setup View	Thiết lập hình chiếu
+	Setup Drawing	Thiết lập bản vẽ
+	Setup Profile	Thiết lập biên dạng
+	Enter view scale	Nhập tỷ lệ hình chiếu
+	Specify view center	Chỉ định tâm hình chiếu
+	Enter view name	Nhập tên hình chiếu
+	Specify side of viewport to project	Chỉ định phía khung nhìn cần chiếu
+	Specify first point of cutting plane	Chỉ định điểm thứ nhất của mặt phẳng cắt
+	Specify second point of cutting plane	Chỉ định điểm thứ hai của mặt phẳng cắt
+	Specify first point of inclined plane	Chỉ định điểm thứ nhất của mặt phẳng nghiêng
+	Specify second point of inclined plane	Chỉ định điểm thứ hai của mặt phẳng nghiêng
+	Specify side to view from	Chỉ định phía nhìn từ đó
+	Specify first corner of viewport	Chỉ định góc thứ nhất của khung nhìn
+	Specify opposite corner of viewport	Chỉ định góc đối diện của khung nhìn
+	Display hidden profile lines on separate layer?	Hiển thị đường biên dạng khuất trên lớp riêng?
+	Project profile lines onto a plane?	Chiếu đường biên dạng lên một mặt phẳng?
+	Delete tangential edges?	Xóa các cạnh tiếp tuyến?
+	None (PDF file)	Không (tệp PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Chữ kích thước cao {} quá nhỏ để đọc trong bản vẽ này. Gõ DIMSCALE {} để kích thước mới lớn gấp {} lần.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Văn bản cao {} quá nhỏ để đọc trong bản vẽ này. Hãy thử chiều cao {} (TEXTSIZE đặt giá trị mặc định).
+	(each layout's own)	(theo từng bố cục)
+	A callout on the selected sheet pointing at the selected view	Một chú dẫn trên tờ đã chọn trỏ đến hình chiếu đã chọn
+	A page setup copied from the selected sheet's layout	Một thiết lập trang sao chép từ bố cục của tờ đã chọn
+	Add Callout	Thêm chú dẫn
+	Callouts: {}	Chú dẫn: {}
+	From Selected Sheet	Từ tờ đã chọn
+	Insert on Selected Sheet	Chèn vào tờ đã chọn
+	Named view	Khung nhìn đã đặt tên
+	Page Setup Override	Ghi đè thiết lập trang
+	Place View	Đặt hình chiếu
+	Position on sheet	Vị trí trên tờ
+	Remove Property	Xóa thuộc tính
+	Sheet Properties	Thuộc tính tờ
+	Sheet Set Fields	Trường tập bản vẽ
+	Sheet Set Properties	Thuộc tính tập bản vẽ
+	Sync Drawings	Đồng bộ bản vẽ
+	Text holding the field, at the position on sheet	Văn bản chứa trường, tại vị trí trên tờ
+	Views and Callouts	Hình chiếu và chú dẫn
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Bố cục của mỗi tờ trở thành "số tiêu đề"; các trường tập bản vẽ, nhãn hình chiếu và chú dẫn lấy giá trị hiện tại của tập
+	3 Point	3 điểm
+	Origin	Gốc tọa độ
+	Z	Z
+	Named UCS...	UCS đã đặt tên...
+	Center Mark (DIMCEN)	Dấu tâm (DIMCEN)
+	Copy Objects to New Layer	Sao chép đối tượng sang lớp mới
+	Cut with Base Point	Cắt với điểm cơ sở
+	DXF In	Nhập DXF
+	DXF Out	Xuất DXF
+	Fill	Tô đặc
+	Maximize Viewport	Phóng to khung nhìn
+	Minimize Viewport	Thu nhỏ khung nhìn
+	Object Selection Filters	Bộ lọc chọn đối tượng
+	Oops	Khôi phục đối tượng vừa xóa
+	Quick Text	Văn bản nhanh
+	Redefine Attributes	Định nghĩa lại thuộc tính
+	Drawing	Bản vẽ
+	Profile	Biên dạng
+	Clashes	Xung đột
+	Run	Chạy
+	Re-run	Chạy lại
+	Run clash detection	Chạy phát hiện xung đột
+	Re-run keeping statuses	Chạy lại, giữ trạng thái
+	Tolerance:	Dung sai:
+	in	inch
+	Show:	Hiện:
+	No clashes. Run detection first.	Không có xung đột. Hãy chạy phát hiện trước.
+	Status:	Trạng thái:
+	Trade:	Bộ môn:
+	Notes:	Ghi chú:
+	Go To	Đi đến
+	Zoom to clash	Thu phóng đến xung đột
+	Export BCF	Xuất BCF
+	Export CSV	Xuất CSV
+	Export to BCF 2.1 (ZIP)	Xuất sang BCF 2.1 (ZIP)
+	Export clash report to CSV	Xuất báo cáo xung đột sang CSV
+	MEP Review	Rà soát MEP
+	Guessed only	Chỉ phỏng đoán
+	{n} items	{n} mục
+	No MEP items found. Run mep.read first.	Không tìm thấy mục MEP nào. Hãy chạy mep.read trước.
+	Mark reviewed	Đánh dấu đã rà soát
+	Size: {ss}, Height: {hs}	Kích thước: {ss}, Cao độ: {hs}
+	Edit size, height or system	Sửa kích thước, cao độ hoặc hệ thống
+	Size W:	Kích thước R:
+	Bottom ft:	Đáy (ft):
+	Rebuild 3D model keeping hand edits	Dựng lại mô hình 3D, giữ chỉnh sửa thủ công
+	Zoomed to {sys} run on {lvl}.	Đã thu phóng đến tuyến {sys} trên {lvl}.
+	Marked as reviewed.	Đã đánh dấu là đã rà soát.
+	Unmarked.	Đã bỏ đánh dấu.
+	Edit applied.	Đã áp dụng chỉnh sửa.
+	Rebuilt: {n} MEP runs.	Đã dựng lại: {n} tuyến MEP.
+	3D Measure	Đo 3D
+	BCF Export	Xuất BCF
+	Clash List	Danh sách xung đột
+	Clash Status	Trạng thái xung đột
+	Coordination Tree	Cây phối hợp
+	Coordination Viewpoints	Điểm nhìn phối hợp
+	Edit MEP Item	Sửa mục MEP
+	List MEP Items	Liệt kê mục MEP
+	Section Box	Hộp mặt cắt
+	Trade Visibility	Hiển thị theo bộ môn
+	BIM Types	Loại BIM
+	Get BIM Spec	Lấy đặc tả BIM
+	Remove BIM Spec from Entities	Gỡ đặc tả BIM khỏi đối tượng
+	Remove BIM Type	Xóa loại BIM
+	Set BIM Spec on Entities	Gán đặc tả BIM cho đối tượng
+	Set BIM Type	Đặt loại BIM
+	Ceiling and Soffit Takeoff	Bóc tách trần và trần sofit
+	Colour by Assembly	Tô màu theo cấu tạo
+	RFI List	Danh sách RFI
+	Zoom to RFI	Thu phóng đến RFI
+	Update RFI	Cập nhật RFI
+	Export RFI List	Xuất danh sách RFI
+	Sent	Đã gửi
+	Answered	Đã trả lời
+	Not sent	Chưa gửi
+	High	Cao
+	Medium	Trung bình
+	Low	Thấp
+	All levels	Mọi tầng
+	Open items only	Chỉ mục đang mở
+	{high} high, {medium} medium, {low} low	{high} cao, {medium} trung bình, {low} thấp
+	No gaps or conflicts in the building spec.	Đặc tả công trình không có thiếu sót hay mâu thuẫn.
+	Assumed meanwhile:	Giả định trong lúc chờ:
+	Proposed fix:	Đề xuất sửa:
+	Sheets:	Tờ:
+	Walk to It	Đi đến đó
+	Export XLSX...	Xuất XLSX...
+	Export PDF...	Xuất PDF...
+	Drywall Takeoff	Bóc tách vách thạch cao
+	Drywall View Mode	Chế độ xem vách thạch cao
+	Finish Faces	Mặt hoàn thiện
+	Wall Info	Thông tin tường
+	Open Print Set	Mở bộ bản in
+	Classify Print Set	Phân loại bộ bản in
+	Print Set Dashboard	Bảng điều khiển bộ bản in
+	Print Set Sheets	Các tờ của bộ bản in
+	Re-import Revised Set	Nhập lại bộ đã hiệu chỉnh
+	Save Print Set	Lưu bộ bản in
+	Ahead	Phía trước
+	Bottom / top AFF	Đáy / đỉnh tính từ sàn hoàn thiện
+	Clash	Xung đột
+	elements	phần tử
+	Field Viewer	Trình xem hiện trường
+	Fit	Vừa khít
+	Keep	Giữ
+	New note	Ghi chú mới
+	No new notes to send	Không có ghi chú mới để gửi
+	No room matches	Không có phòng phù hợp
+	Note	Ghi chú
+	Note kept	Đã giữ ghi chú
+	Notes	Ghi chú
+	notes ready to sync	ghi chú sẵn sàng đồng bộ
+	not typed	chưa nhập
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Mở một gói hiện trường (FIELDVIEW.EXPORT trong CADaddy), hoặc thả vào đây
+	Open clashes and RFIs	Xung đột và RFI đang mở
+	RFI	RFI
+	Room number	Số phòng
+	Search a room number, or tap a room	Tìm số phòng, hoặc chạm vào một phòng
+	Send Notes	Gửi ghi chú
+	Tap two points to measure	Chạm hai điểm để đo
+	Trades	Bộ môn
+	Unit	Căn hộ
+	Verified	Đã xác minh
+	Verified point	Điểm đã xác minh
+	What is there, as built	Hiện trạng thực tế đã thi công
+	Plan	Mặt bằng
+	3D	3D
+	Architectural	Kiến trúc
+	Structural	Kết cấu
+	Mechanical	Cơ khí
+	Plumbing	Cấp thoát nước
+	Fire protection	Phòng cháy chữa cháy
+	Other	Khác
+	stated	đã nêu
+	inferred	suy luận
+	assumed	giả định
+	Field Package	Gói hiện trường
+	Sync Field Notes	Đồng bộ ghi chú hiện trường
+	Field Notes	Ghi chú hiện trường
+	Detect Unit Types	Phát hiện loại căn hộ
+	List Unit Types	Liệt kê loại căn hộ
+	Unit Schedule	Bảng thống kê căn hộ
+	Unit Type Takeoff	Bóc tách theo loại căn hộ
+	Override Generated Element	Ghi đè phần tử được tạo
+	List Overrides	Liệt kê ghi đè
+	Revert Override	Hoàn nguyên ghi đè
+	Accept Override After Review	Chấp nhận ghi đè sau khi rà soát
+	Show or Hide Overrides	Hiện hoặc ẩn ghi đè
+	Re-apply Overrides	Áp dụng lại ghi đè
+	Overrides	Ghi đè
+	Select generated element (or an object drawn by hand to add)	Chọn phần tử được tạo (hoặc đối tượng vẽ tay để thêm)
+	Enter type mark	Nhập ký hiệu loại
+	Enter override to revert	Nhập ghi đè cần hoàn nguyên
+	Verify	Xác minh
+	review: the drawing changed here	rà soát: bản vẽ đã thay đổi ở đây
+	orphaned: its element is no longer generated	mồ côi: phần tử của nó không còn được tạo nữa
+	Project Rules	Quy tắc dự án
+	Domain:	Lĩnh vực:
+	No project rules set.	Chưa đặt quy tắc dự án.
+	Tier:	Cấp:
+	Source:	Nguồn:
+	Reason:	Lý do:
+	Overridden values:	Giá trị bị ghi đè:
+	No drawing open.	Chưa mở bản vẽ nào.
+	List Project Rules	Liệt kê quy tắc dự án
+	Get Project Rule	Lấy quy tắc dự án
+	Set Project Rule	Đặt quy tắc dự án
+	Remove Project Rule	Xóa quy tắc dự án
+	Preview Project Rule Change	Xem trước thay đổi quy tắc dự án
+	Project Rules Label	Nhãn quy tắc dự án
+	Import Project Rules	Nhập quy tắc dự án
+	Export Project Rules	Xuất quy tắc dự án
+	Print Validator Documents	Tài liệu kiểm tra bản in
+	Validate Model Against Prints	Kiểm tra mô hình đối chiếu bản in
+	Validation Failure Overlay	Lớp phủ lỗi kiểm tra
+	Element Provenance	Nguồn gốc phần tử
+	MEP Quantities	Khối lượng MEP
+	Refresh MEP Quantities	Làm mới khối lượng MEP
+	Activate Drawing	Kích hoạt bản vẽ
+	Add to Project	Thêm vào dự án
+	Close Project	Đóng dự án
+	Import Manifest	Nhập manifest
+	Import Standards	Nhập tiêu chuẩn
+	New Project	Dự án mới
+	Open Project	Mở dự án
+	Project Disk Use	Dung lượng đĩa dự án
+	Project Drawings	Bản vẽ dự án
+	Project Info	Thông tin dự án
+	Remove Standard	Gỡ tiêu chuẩn
+	Remove from Project	Gỡ khỏi dự án
+	Restore Project	Khôi phục dự án
+	Set Standard	Đặt tiêu chuẩn
+	Shelve Drawing	Cất bản vẽ
+	Shelve Project	Cất dự án
+	Standards Library	Thư viện tiêu chuẩn
+	Validate Manifest	Kiểm tra manifest
+	Active	Đang hoạt động
+	Shelved	Đã cất
+	{n} drawings	{n} bản vẽ
+	Compare Revised Print	So sánh bản in đã hiệu chỉnh
+	Revision Log	Nhật ký hiệu chỉnh
+	Attach IFC Reference	Đính kèm tham chiếu IFC
+	IFC References	Tham chiếu IFC
+	IFC Reference Elements	Phần tử tham chiếu IFC
+	Reload IFC References	Tải lại tham chiếu IFC
+	Accept Specifications	Chấp nhận chỉ dẫn kỹ thuật
+	Import Specifications	Nhập chỉ dẫn kỹ thuật
+	Colour Scheme	Bảng màu
+	Coordination Mode	Chế độ phối hợp
+	Coordination Views	Khung nhìn phối hợp
+	Isolate Trade	Cô lập bộ môn
+	Project Briefing	Tóm tắt dự án
+	Project Note	Ghi chú dự án
+	Review Queue	Hàng đợi rà soát
+	Next Review Item	Mục rà soát tiếp theo
+	Resolve Review Item	Giải quyết mục rà soát
+	Defer Review Item	Hoãn mục rà soát
+	Draft RFI	Soạn RFI
+	Batch Resolve	Giải quyết hàng loạt
+	Approve Agent Work	Duyệt công việc của tác tử
+	Agent Work	Công việc của tác tử
+	Build BIM Model	Dựng mô hình BIM
+	to accept	chờ chấp nhận
+	Accept all	Chấp nhận tất cả
+	Accept	Chấp nhận
+	Cited:	Trích dẫn:
+	Nothing waiting: agents' work is all accepted.	Không có gì đang chờ: mọi công việc của tác tử đã được chấp nhận.
+	Open IFC Model	Mở mô hình IFC
+	Open IFC Model...	Mở mô hình IFC...
+	IFC Model	Mô hình IFC
+	IFC Model Tree	Cây mô hình IFC
+	IFC Object Properties	Thuộc tính đối tượng IFC
+	Filter IFC Objects	Lọc đối tượng IFC
+	IFC Section Box	Hộp mặt cắt IFC
+	Measure in 3D	Đo trong 3D
+	IFC Camera	Camera IFC
+	Render IFC Model	Kết xuất mô hình IFC
+	New BCF Issue	Vấn đề BCF mới
+	BCF Issues	Vấn đề BCF
+	BCF Issues...	Vấn đề BCF...
+	BCF Issue	Vấn đề BCF
+	Update BCF Issue	Cập nhật vấn đề BCF
+	Show BCF Issue	Hiện vấn đề BCF
+	Delete BCF Issue	Xóa vấn đề BCF
+	Import BCF	Nhập BCF
+	Read Levels	Đọc tầng
+	List Levels	Liệt kê tầng
+	Edit Level	Sửa tầng
+	Attach Sheets to Levels	Gắn tờ với tầng
+	Check Shafts Through Levels	Kiểm tra hộp kỹ thuật xuyên tầng
+	Isolate Level	Cô lập tầng
+	Read from Prints	Đọc từ bản in
+	Level names and elevations from the sections, elevations and level markers	Tên tầng và cao độ từ mặt cắt, mặt đứng và ký hiệu cao độ
+	Attach Sheets	Gắn tờ
+	Check Shafts	Kiểm tra hộp kỹ thuật
+	Shafts, chases and risers must carry on through the levels between their ends	Hộp kỹ thuật, hộp gen và trục đứng phải xuyên suốt các tầng giữa hai đầu
+	No levels in the building spec.	Đặc tả công trình không có tầng nào.
+	Level	Tầng
+	Floor to floor	Chiều cao tầng
+	Sheets	Tờ
+	Show only this storey in 3D	Chỉ hiện tầng này trong 3D
+	Datums (no plan on this drawing):	Mốc cao độ (bản vẽ này không có mặt bằng):
+	Sheets on no level:	Tờ không thuộc tầng nào:
+	Show All Levels	Hiện mọi tầng
+	The levels already match the prints.	Các tầng đã khớp với bản in.
+	{sheets} sheets, {loose} on no level	{sheets} tờ, {loose} không thuộc tầng nào
+	{name}: not shown on {levels}	{name}: không hiển thị trên {levels}
+	Every shaft and riser carries on through its levels.	Mọi hộp kỹ thuật và trục đứng đều xuyên suốt các tầng của nó.
+	Not a height: {text}	Không phải chiều cao: {text}
+	Export COBie	Xuất COBie
+	Validate COBie	Kiểm tra COBie
+	Export Handover Schedules	Xuất bảng thống kê bàn giao
+	COBie...	COBie...
+	Handover Schedules...	Bảng thống kê bàn giao...
+	Electrical Gear	Thiết bị điện
+	Check Electrical Gear	Kiểm tra thiết bị điện
+	Submittal Review of Gear	Rà soát hồ sơ trình duyệt thiết bị
+	Accept Gear as Submitted	Chấp nhận thiết bị như đã trình

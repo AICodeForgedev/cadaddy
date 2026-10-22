@@ -1,0 +1,196 @@
+# CADaddy engine messages in Greek: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Δώστε όνομα ομάδας
+	Pick internal point	Επιλέξτε εσωτερικό σημείο
+	Specify the pattern origin	Καθορίστε την αρχή του μοτίβου
+	Specify the incrementing elevation between rows	Καθορίστε τη βηματική μεταβολή υψομέτρου μεταξύ γραμμών
+	Specify the angle to fill (+=ccw, -=cw)	Καθορίστε τη γωνία πλήρωσης (+=αριστερόστροφα, -=δεξιόστροφα)
+	Select hatch object	Επιλέξτε αντικείμενο διαγράμμισης
+	Red, Green, Blue	Κόκκινο, Πράσινο, Μπλε
+	Enter the number of rows	Δώστε τον αριθμό γραμμών
+	Enter the number of levels	Δώστε τον αριθμό επιπέδων
+	Enter new layer name	Δώστε νέο όνομα επιπέδου
+	Specify width	Καθορίστε πλάτος
+	Specify the angle between items	Καθορίστε τη γωνία μεταξύ στοιχείων
+	Specify text height	Καθορίστε ύψος κειμένου
+	Specify start tangent	Καθορίστε αρχική εφαπτομένη
+	Specify end tangent	Καθορίστε τελική εφαπτομένη
+	Specify reference length	Καθορίστε μήκος αναφοράς
+	Specify other corner	Καθορίστε άλλη γωνία
+	Specify next point or [Undo]	Καθορίστε επόμενο σημείο ή [Undo]
+	Specify new location	Καθορίστε νέα θέση
+	Specify new length	Καθορίστε νέο μήκος
+	Specify length of line	Καθορίστε μήκος γραμμής
+	Specify displacement	Καθορίστε μετατόπιση
+	Specify angle for dimension text	Καθορίστε γωνία για το κείμενο διάστασης
+	Select viewports	Επιλέξτε παράθυρα προβολής
+	Select object to break dimension	Επιλέξτε αντικείμενο για διακοπή διάστασης
+	Select group	Επιλέξτε ομάδα
+	Select grip to edit array	Επιλέξτε λαβή για επεξεργασία συστοιχίας
+	Select a table	Επιλέξτε πίνακα
+	Select a boundary to remove	Επιλέξτε όριο προς αφαίρεση
+	Rotate arrayed items?	Περιστροφή των στοιχείων της συστοιχίας;
+	Erase polyline?	Διαγραφή πολυγραμμής;
+	Enter viewport arrangement	Δώστε διάταξη παραθύρων προβολής
+	Enter transparency value (0-90)	Δώστε τιμή διαφάνειας (0-90)
+	Enter the number of operations to undo	Δώστε τον αριθμό λειτουργιών προς αναίρεση
+	Enter the number of columns	Δώστε τον αριθμό στηλών
+	Enter number of items in array	Δώστε αριθμό στοιχείων στη συστοιχία
+	Enter new layer state name	Δώστε όνομα νέας κατάστασης επιπέδων
+	Enter new color	Δώστε νέο χρώμα
+	Enter name of new layout	Δώστε όνομα νέας διάταξης
+	Enter layer name	Δώστε όνομα επιπέδου
+	Enter file name	Δώστε όνομα αρχείου
+	Enter color name or number (1-255)	Δώστε όνομα ή αριθμό χρώματος (1-255)
+	Enter a configuration option	Δώστε επιλογή διαμόρφωσης
+	Base point	Σημείο βάσης
+	Word-wrap the combined Mtext?	Αναδίπλωση λέξεων στο συνδυασμένο Mtext;
+	Where should the data go?	Πού να πάνε τα δεδομένα;
+	Verify each name to be purged?	Επιβεβαίωση κάθε ονόματος προς εκκαθάριση;
+	Use landing	Χρήση πλατύσκαλου
+	Type of boundary object	Τύπος αντικειμένου ορίου
+	Specify width factor	Καθορίστε συντελεστή πλάτους
+	Specify tolerance	Καθορίστε ανοχή
+	Specify the tangent direction for the start point of arc	Καθορίστε την εφαπτομενική διεύθυνση για το αρχικό σημείο του τόξου
+	Specify the reference angle	Καθορίστε τη γωνία αναφοράς
+	Specify the new angle	Καθορίστε τη νέα γωνία
+	Specify text width	Καθορίστε πλάτος κειμένου
+	Specify temporary OTRACK point	Καθορίστε προσωρινό σημείο OTRACK
+	Invalid option keyword.	Μη έγκυρη λέξη-κλειδί επιλογής.
+	*Invalid selection*	*Μη έγκυρη επιλογή*
+	Requires a valid angle.	Απαιτείται έγκυρη γωνία.
+	Nothing to undo.	Δεν υπάρχει τίποτα για αναίρεση.
+	Invalid point.	Μη έγκυρο σημείο.
+	No viewport found there.	Δεν βρέθηκε παράθυρο προβολής εκεί.
+	*Cancel*	*Άκυρο*
+	Requires a positive number.	Απαιτείται θετικός αριθμός.
+	No hatch selected.	Δεν επιλέχθηκε διαγράμμιση.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Η εντολή δεν επιτρέπεται στην καρτέλα Μοντέλο ** (μεταβείτε πρώτα σε διάταξη)
+	Select a multileader.	Επιλέξτε πολλαπλό οδηγό.
+	No line or arc to continue.	Δεν υπάρχει γραμμή ή τόξο για συνέχεια.
+	Revision cloud finished.	Το σύννεφο αναθεώρησης ολοκληρώθηκε.
+	Object selected is not a circle or arc.	Το επιλεγμένο αντικείμενο δεν είναι κύκλος ή τόξο.
+	Select a linear or aligned dimension.	Επιλέξτε γραμμική ή ευθυγραμμισμένη διάσταση.
+	Object selected is not a dimension.	Το επιλεγμένο αντικείμενο δεν είναι διάσταση.
+	No dimensions selected.	Δεν επιλέχθηκαν διαστάσεις.
+	Requires a number.	Απαιτείται αριθμός.
+	0 found	Βρέθηκαν 0
+	The feature control frame is empty.	Το πλαίσιο ελέγχου χαρακτηριστικού είναι κενό.
+	1 was on a locked layer.	1 βρισκόταν σε κλειδωμένο επίπεδο.
+	Row elevations need an associative array; the copies stay at the same elevation.	Τα υψόμετρα γραμμών απαιτούν συσχετιστική συστοιχία· τα αντίγραφα παραμένουν στο ίδιο υψόμετρο.
+	Point or option keyword required.	Απαιτείται σημείο ή λέξη-κλειδί επιλογής.
+	Enter Yes or No.	Πληκτρολογήστε Yes ή No.
+	Viewport created, zoomed to the model extents.	Δημιουργήθηκε παράθυρο προβολής, με ζουμ στην έκταση του μοντέλου.
+	No object found.	Δεν βρέθηκε αντικείμενο.
+	The object is not a table.	Το αντικείμενο δεν είναι πίνακας.
+	No table there.	Δεν υπάρχει πίνακας εκεί.
+	A transparent command is already in progress.	Μια διαφανής εντολή εκτελείται ήδη.
+	Invalid class name.	Μη έγκυρο όνομα κλάσης.
+	Invalid group name.	Μη έγκυρο όνομα ομάδας.
+	Too many point modifiers.	Πάρα πολλοί τροποποιητές σημείου.
+	No leader to remove.	Δεν υπάρχει οδηγός για αφαίρεση.
+	Requires a non-negative number.	Απαιτείται μη αρνητικός αριθμός.
+	Clipboard is empty.	Το πρόχειρο είναι κενό.
+	1 object was on a locked layer.	1 αντικείμενο βρισκόταν σε κλειδωμένο επίπεδο.
+	Circle does not exist.	Ο κύκλος δεν υπάρχει.
+	Enter Length or Area.	Πληκτρολογήστε Length ή Area.
+	Enter a percentage from 0 to 1000.	Δώστε ποσοστό από 0 έως 1000.
+	Enter Table, File or None.	Πληκτρολογήστε Table, File ή None.
+	Cannot measure that object.	Δεν είναι δυνατή η μέτρηση αυτού του αντικειμένου.
+	Third pair ignored (2D align).	Το τρίτο ζεύγος αγνοήθηκε (2D στοίχιση).
+	Insert mode: Copy (nested objects are copied as independent objects).	Λειτουργία εισαγωγής: Αντιγραφή (τα ένθετα αντικείμενα αντιγράφονται ως ανεξάρτητα αντικείμενα).
+	Everything has been undone	Όλα έχουν αναιρεθεί
+	Everything has been undone.	Όλα έχουν αναιρεθεί.
+	Requires a non-negative number or Auto.	Απαιτείται μη αρνητικός αριθμός ή Auto.
+	Select a dimension.	Επιλέξτε διάσταση.
+	Object cannot be dimensioned this way.	Το αντικείμενο δεν μπορεί να διαστασιολογηθεί με αυτόν τον τρόπο.
+	Select an arc, circle or line.	Επιλέξτε τόξο, κύκλο ή γραμμή.
+	The two points must be different.	Τα δύο σημεία πρέπει να είναι διαφορετικά.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Δεν υπάρχει γραμμική διάσταση για συνέχεια. Δημιουργήστε μία πρώτα με την DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Ένας πολλαπλός οδηγός χρειάζεται γραμμή οδηγού ή περιεχόμενο· δεν σχεδιάστηκε τίποτα.
+	Requires the name of a block defined in the drawing.	Απαιτείται το όνομα ενός μπλοκ που ορίζεται στο σχέδιο.
+	Invalid option.	Μη έγκυρη επιλογή.
+	The boundary encloses none of the image.	Το όριο δεν περικλείει κανένα τμήμα της εικόνας.
+	The object is not an image.	Το αντικείμενο δεν είναι εικόνα.
+	The image has no clipping boundary.	Η εικόνα δεν έχει όριο αποκοπής.
+	No images selected.	Δεν επιλέχθηκαν εικόνες.
+	Requires an integer between 0 and 100.	Απαιτείται ακέραιος από 0 έως 100.
+	The selected object has no area.	Το επιλεγμένο αντικείμενο δεν έχει εμβαδόν.
+	No such object	Δεν υπάρχει τέτοιο αντικείμενο
+	Requires a point.	Απαιτείται σημείο.
+	Requires a distance.	Απαιτείται απόσταση.
+	The object is on a locked layer.	Το αντικείμενο βρίσκεται σε κλειδωμένο επίπεδο.
+	Value must be positive and nonzero.	Η τιμή πρέπει να είναι θετική και μη μηδενική.
+	Requires an angle.	Απαιτείται γωνία.
+	Requires a point or option keyword.	Απαιτείται σημείο ή λέξη-κλειδί επιλογής.
+	Object does not intersect a cutting edge.	Το αντικείμενο δεν τέμνει ακμή αποκοπής.
+	Object does not intersect an edge.	Το αντικείμενο δεν τέμνει ακμή.
+	Lines are parallel.	Οι γραμμές είναι παράλληλες.
+	The Block Editor is not open.	Ο επεξεργαστής μπλοκ δεν είναι ανοιχτός.
+	Requires a positive integer.	Απαιτείται θετικός ακέραιος.
+	Answer Yes or No.	Απαντήστε Yes ή No.
+	Requires a valid point.	Απαιτείται έγκυρο σημείο.
+	No reference objects	Δεν υπάρχουν αντικείμενα αναφοράς
+	Requires an angle or point.	Απαιτείται γωνία ή σημείο.
+	Requires a positive distance.	Απαιτείται θετική απόσταση.
+	Requires a non-negative distance.	Απαιτείται μη αρνητική απόσταση.
+	No such grip	Δεν υπάρχει τέτοια λαβή
+	Requires a template file name.	Απαιτείται όνομα αρχείου προτύπου.
+	A hatch needs at least one boundary: erase it instead.	Μια διαγράμμιση χρειάζεται τουλάχιστον ένα όριο: διαγράψτε την.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Η αναίρεση είναι απενεργοποιημένη (UNDO Control None)· η UNDO Control All την ενεργοποιεί.
+	Enter ON or OFF.	Πληκτρολογήστε ON ή OFF.
+	Not a linear dimension.	Δεν είναι γραμμική διάσταση.
+	Valid hatch boundary not found.	Δεν βρέθηκε έγκυρο όριο διαγράμμισης.
+	No closed boundary objects selected.	Δεν επιλέχθηκαν κλειστά αντικείμενα ορίου.
+	Requires a name.	Απαιτείται όνομα.
+	That option doesn't apply to this grip.	Αυτή η επιλογή δεν ισχύει για αυτή τη λαβή.
+	That would make a degenerate object.	Αυτό θα δημιουργούσε εκφυλισμένο αντικείμενο.
+	No tangent or perpendicular from the last point.	Δεν υπάρχει εφαπτομένη ή κάθετος από το τελευταίο σημείο.
+	Requires numeric distance or second point.	Απαιτείται αριθμητική απόσταση ή δεύτερο σημείο.
+	Edge endpoints must differ.	Τα άκρα της ακμής πρέπει να διαφέρουν.
+	Requires numeric distance or point.	Απαιτείται αριθμητική απόσταση ή σημείο.
+	Requires a positive height.	Απαιτείται θετικό ύψος.
+	No objects found.	Δεν βρέθηκαν αντικείμενα.
+	Requires a non-zero number.	Απαιτείται μη μηδενικός αριθμός.
+	Circle must intersect cutting edges at two or more points.	Ο κύκλος πρέπει να τέμνει τις ακμές αποκοπής σε δύο ή περισσότερα σημεία.
+	Arc cannot be full 360 degrees.	Το τόξο δεν μπορεί να είναι πλήρες 360 μοιρών.
+	Cannot break that object.	Δεν είναι δυνατή η διακοπή αυτού του αντικειμένου.
+	An object is on a locked layer.	Ένα αντικείμενο βρίσκεται σε κλειδωμένο επίπεδο.
+	Objects are not connected.	Τα αντικείμενα δεν είναι συνδεδεμένα.
+	The two points must differ.	Τα δύο σημεία πρέπει να διαφέρουν.
+	Mirror line points must differ.	Τα σημεία του άξονα κατοπτρισμού πρέπει να διαφέρουν.
+	No drawing is open.	Δεν υπάρχει ανοιχτό σχέδιο.
+	Command: {}	Εντολή: {}
+	Unknown command "{}". Press F1 for help.	Άγνωστη εντολή "{}". Πατήστε F1 για βοήθεια.
+	{} found	Βρέθηκαν {}
+	{} found, {} total	Βρέθηκαν {}, σύνολο {}
+	Distance = {}	Απόσταση = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Απόσταση = {},  Γωνία στο επίπεδο XY = {},  Γωνία από το επίπεδο XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Δέλτα X = {},  Δέλτα Y = {},   Δέλτα Z = {}
+	Area = {}, Perimeter = {}	Εμβαδόν = {}, Περίμετρος = {}
+	Total area = {}	Συνολικό εμβαδόν = {}
+	Resuming {} command.	Συνέχιση της εντολής {}.
+	Invalid input: {}	Μη έγκυρη εισαγωγή: {}
+	{} were on a locked layer.	{} βρίσκονταν σε κλειδωμένο επίπεδο.
+	{} dimension(s) changed.	Άλλαξαν {} διαστάσεις.
+	Group {} ungrouped.	Η ομάδα {} καταργήθηκε.
+	{} object(s) flattened.	Ισοπεδώθηκαν {} αντικείμενα.
+	Group {} renamed to {}.	Η ομάδα {} μετονομάστηκε σε {}.
+	{} object(s) added to group {}.	Προστέθηκαν {} αντικείμενα στην ομάδα {}.
+	{} object(s) removed from group {}.	Αφαιρέθηκαν {} αντικείμενα από την ομάδα {}.
+	{} lines were chamfered	Λοξοτμήθηκαν {} γραμμές
+	{} lines were filleted	Στρογγυλεύτηκαν {} γραμμές
+	{} objects joined into 1 {}	{} αντικείμενα ενώθηκαν σε 1 {}
+	Current dimension style:  {}	Τρέχον στυλ διαστάσεων:  {}
+	Wrote {}	Γράφτηκε το {}
+	{} is already open.	Το {} είναι ήδη ανοιχτό.
+	{} dimension(s) created.	Δημιουργήθηκαν {} διαστάσεις.
+	BOUNDARY created {} polyline(s)	Η BOUNDARY δημιούργησε {} πολυγραμμές
+	Current line-width is {}	Το τρέχον πλάτος γραμμής είναι {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Άγνωστη μεταβλητή {}. Πληκτρολογήστε SETVAR ? για λίστα μεταβλητών.
+	{} = {} (read only)	{} = {} (μόνο για ανάγνωση)
+	Dimension text = {}	Κείμενο διάστασης = {}
+	{} segments added to polyline	Προστέθηκαν {} τμήματα στην πολυγραμμή

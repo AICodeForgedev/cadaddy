@@ -1,0 +1,2833 @@
+# CADaddy Persian interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Persian translation.
+# Empty context = ordinary label; @plural = one|other with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	تنظیم...
+	Apply	اعمال
+	Attach DWG...	پیوست DWG...
+	Bind	ادغام
+	Detach	جدا کردن
+	Image	تصویر
+	Loaded	بارگذاری‌شده
+	Make it a block of this drawing, keeping its layer names	تبدیل به بلوکی از این نقشه، با حفظ نام لایه‌ها
+	Make it a block of this drawing; its layers become NAME$0$LAYER	تبدیل به بلوکی از این نقشه؛ لایه‌های آن NAME$0$LAYER می‌شوند
+	No external references are attached.	هیچ ارجاع خارجی پیوست نشده است.
+	Not Found	یافت نشد
+	Not loaded	بارگذاری‌نشده
+	Open	باز کردن
+	Overlay	هم‌پوشانی
+	Reference Manager	مدیریت ارجاع‌ها
+	Reference Name	نام ارجاع
+	References: {n}	ارجاع‌ها: {n}
+	Reload	بارگذاری مجدد
+	Reload All	بارگذاری مجدد همه
+	Saved Path	مسیر ذخیره‌شده
+	Unload	تخلیه
+	Unloaded	تخلیه‌شده
+	Unreferenced	بدون ارجاع
+	Unresolved	حل‌نشده
+	  Cancel  	لغو
+	  OK  	تأیید
+	 or [	 یا [
+	% of all commits	% از کل کامیت‌ها
+	* Wildcard Match	* تطبیق با الگو
+	*VARIES*	*متفاوت*
+	+  |  Top  |  2D Wireframe	+  |  بالا  |  قاب‌سیمی دوبعدی
+	+Bin	+دودویی
+	+LOC	+خط کد
+	1 Viewport	1 پنجره دید
+	2 Points	2 نقطه
+	2 Viewports	2 پنجره دید
+	2D Solid	سطح توپر دوبعدی
+	3 Points	3 نقطه
+	3 Viewports	3 پنجره دید
+	3D Face	وجه سه‌بعدی
+	3D Operations	عملیات سه‌بعدی
+	3D Polyline	چندخطی سه‌بعدی
+	4 Viewports	4 پنجره دید
+	< Less than	< کوچک‌تر از
+	<> Not Equal	<> نابرابر
+	= Equals	= برابر
+	> Greater than	> بزرگ‌تر از
+	A variable name starts with a letter and has only letters, digits and _	نام متغیر با حرف شروع می‌شود و فقط شامل حروف، ارقام و _ است
+	About	درباره
+	About CADaddy	درباره CADaddy
+	Absolute	مطلق
+	Add Leader	افزودن خط راهنما
+	Additional angles	زاویه‌های اضافی
+	Align	تراز کردن
+	Align Text	تراز کردن متن
+	Aligned	هم‌راستا
+	All	همه
+	All Annotation Objects	همه اشیای حاشیه‌نویسی
+	All Used Layers	همه لایه‌های استفاده‌شده
+	All files	همه فایل‌ها
+	Angle	زاویه
+	Angular	زاویه‌ای
+	Annotation Visibility	نمایش حاشیه‌نویسی
+	Annotation scale	مقیاس حاشیه‌نویسی
+	Apparent Intersection	تقاطع ظاهری
+	Append to current selection set	افزودن به مجموعه انتخاب فعلی
+	Apply to:	اعمال به:
+	Apply true color	اعمال رنگ واقعی
+	Arc	کمان
+	Arc Length	طول کمان
+	Area	مساحت
+	Arrange Panel	مرتب‌سازی پانل
+	Array	آرایه
+	Attach	پیوست
+	Attribute	ویژگی
+	Attribute Definition	تعریف ویژگی
+	Attribute Display	نمایش ویژگی
+	Audit	ممیزی
+	Auto (system language)	خودکار (زبان سیستم)
+	Auto Constrain	قیدگذاری خودکار
+	AutoConstrain	قیدگذاری خودکار
+	Axis, End	محور، انتها
+	Base	پایه
+	Baseline	خط مبنا
+	Batch Publish	انتشار دسته‌ای
+	Binary assets added	دارایی‌های دودویی اضافه‌شده
+	Binary assets removed	دارایی‌های دودویی حذف‌شده
+	Bind...	ادغام...
+	Blend	ترکیب
+	Block	بلوک
+	Block Attribute Manager...	مدیریت ویژگی‌های بلوک...
+	Block Editor	ویرایشگر بلوک
+	Block Reference	ارجاع بلوک
+	Block...	بلوک...
+	Blocks	بلوک‌ها
+	Blue	آبی
+	Bold	پررنگ
+	Boolean	بولی
+	Boundary	مرز
+	Boundary...	مرز...
+	Box	مکعب
+	Break	شکستن
+	Break At Point	شکستن در نقطه
+	Bring Above Objects	آوردن بالای اشیا
+	Bring Annotations to Front	آوردن حاشیه‌نویسی‌ها به جلو
+	Bring to Front	آوردن به جلو
+	Bulleted list	فهرست گلوله‌ای
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	راهنمای CADaddy
+	Cancel	لغو
+	Cartesian (x, y)	دکارتی (x, y)
+	Center	مرکز
+	Center Line	خط مرکز
+	Center Mark	علامت مرکز
+	Center X	مرکز X
+	Center Y	مرکز Y
+	Center Z	مرکز Z
+	Center, Diameter	مرکز، قطر
+	Center, Radius	مرکز، شعاع
+	Center, Start, Angle	مرکز، شروع، زاویه
+	Center, Start, End	مرکز، شروع، انتها
+	Center, Start, Length	مرکز، شروع، طول
+	Chamfer	پخ
+	Change Space	تغییر فضا
+	Change to Current Layer	انتقال به لایه جاری
+	Changed: {n}	تغییرکرده: {n}
+	Circle	دایره
+	Circumference	محیط
+	Clear History	پاک کردن تاریخچه
+	Clear	پاک کردن
+	Clip	برش قاب
+	Clip Viewport	برش قاب پنجره دید
+	Clipboard	کلیپ‌بورد
+	Close	بستن
+	Close All	بستن همه
+	Close All Other Drawings	بستن همه نقشه‌های دیگر
+	Closed	بسته
+	Close Comparison	بستن مقایسه
+	Coincident	هم‌نقطه
+	Collapse Palettes	جمع کردن پالت‌ها
+	Collapse Tool Sets	جمع کردن مجموعه ابزارها
+	Collinear	هم‌خط
+	Color	رنگ
+	Color 8	رنگ 8
+	Color 9	رنگ 9
+	Color Index	شاخص رنگ
+	Color...	رنگ...
+	Command Aliases	نام‌های مستعار فرمان
+	Command History	تاریخچه فرمان
+	Clear Command History	پاک کردن تاریخچه فرمان
+	Command Line	خط فرمان
+	Command Line History Lines	تعداد خطوط تاریخچه خط فرمان
+	Command Reference	مرجع فرمان‌ها
+	Commits	کامیت‌ها
+	Company	شرکت
+	Compare Drawings...	مقایسه نقشه‌ها...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	طراحی و نقشه‌کشی به کمک رایانه: یک نرم‌افزار CAD متن‌باز و clean-room که به‌طور کامل با Rust نوشته شده است.
+	Concentric	هم‌مرکز
+	Cone	مخروط
+	Constraint Bars	نوارهای قید
+	Constraint Settings	تنظیمات قید
+	Construction Line	خط ساختمانی
+	Contents	محتوا
+	Continue	ادامه
+	Contributors	مشارکت‌کنندگان
+	Control Vertices	رئوس کنترلی
+	Convert	تبدیل
+	Copy	کپی
+	Copy Full File Path	کپی مسیر کامل فایل
+	Copy History	کپی تاریخچه
+	Copy Layout	کپی طرح‌بندی
+	Copy Nested Objects	کپی اشیای تودرتو
+	Copy Selection	کپی انتخاب
+	Copy with Base Point	کپی با نقطه پایه
+	Count	شمارش
+	Count List	فهرست شمارش
+	Count Table	جدول شمارش
+	Create Block	ایجاد بلوک
+	Creates a user parameter	یک پارامتر کاربر ایجاد می‌کند
+	Ctrl+Enter to finish	Ctrl+Enter برای پایان
+	Current layer	لایه جاری
+	Current selection	انتخاب فعلی
+	Current: {color}	جاری: {color}
+	Cut	برش
+	Cyan	فیروزه‌ای
+	Cylinder	استوانه
+	DWG	DWG
+	DWG Reference...	ارجاع DWG...
+	DXF	DXF
+	Dark	تیره
+	Data Extraction...	استخراج داده...
+	Default	پیش‌فرض
+	Data Link...	پیوند داده...
+	Default Save Format	قالب پیش‌فرض ذخیره
+	Default Save Version	نسخه پیش‌فرض ذخیره
+	Define Attributes	تعریف ویژگی‌ها
+	Define Attributes...	تعریف ویژگی‌ها...
+	Defined width	عرض تعریف‌شده
+	Degree	درجه
+	Degrees of Freedom	درجات آزادی
+	Degrees of freedom: {n}	درجات آزادی: {n}
+	Delete	حذف
+	Delete Column	حذف ستون
+	Delete Constraints	حذف قیدها
+	Delete Dimension Style	حذف سبک اندازه‌گذاری
+	Delete Duplicate Objects	حذف اشیای تکراری
+	Delete Layer	حذف لایه
+	Delete Layer State	حذف وضعیت لایه
+	Delete Layout	حذف طرح‌بندی
+	Delete Row	حذف سطر
+	Delete Text Style	حذف سبک متن
+	Delta X	دلتای X
+	Delta Y	دلتای Y
+	Description	توضیحات
+	Deselect All	لغو انتخاب همه
+	Diameter	قطر
+	Dim style	سبک اندازه
+	Dimension Break	شکست اندازه
+	Dimension Edit	ویرایش اندازه
+	Dimension	اندازه‌گذاری
+	Dimension Objects Only	فقط اشیای اندازه‌گذاری
+	Dimension Space	فاصله‌گذاری اندازه‌ها
+	Dimension Style Override	جایگزینی سبک اندازه‌گذاری
+	Dimension Style...	سبک اندازه‌گذاری...
+	Dimension Text Edit	ویرایش متن اندازه
+	Dimension style	سبک اندازه‌گذاری
+	Dimensional Constraint	قید ابعادی
+	Dimensional Constraint Parameters	پارامترهای قید ابعادی
+	Dimensional Constraints	قیدهای ابعادی
+	Disassociate Dimensions	جدا کردن وابستگی اندازه‌ها
+	Display name	نام نمایشی
+	Distance	فاصله
+	Divide	تقسیم
+	Do not plot (click: plot)	چاپ نشود (کلیک: چاپ)
+	Donut	حلقه
+	Double-click to edit the description	برای ویرایش توضیحات دوبار کلیک کنید
+	Down	پایین
+	Drafting	نقشه‌کشی
+	Drafting Settings	تنظیمات نقشه‌کشی
+	Drafting Settings...	تنظیمات نقشه‌کشی...
+	Draw	ترسیم
+	Draw Order	ترتیب ترسیم
+	Drawing (DWG)	نقشه (DWG)
+	Drawing (DXF)	نقشه (DXF)
+	Drawing Limits	محدوده نقشه
+	Drawing Template (DWT)	الگوی نقشه (DWT)
+	Drawing Utilities	ابزارهای نقشه
+	Drawings (DWG, DXF)	نقشه‌ها (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	نقشه‌های SVG (SVG, SVGZ)
+	Dynamic	پویا
+	Dynamic Dimensions	اندازه‌های پویا
+	Dynamic Input	ورودی پویا
+	Dynamic Input (F12)	ورودی پویا (F12)
+	E	شرق
+	Edit	ویرایش
+	Edit Attributes...	ویرایش ویژگی‌ها...
+	Edit Text...	ویرایش متن...
+	Edit Table Cell	ویرایش خانه جدول
+	Elevation	ارتفاع تراز
+	Ellipse	بیضی
+	Elliptical Arc	کمان بیضوی
+	Enable Dynamic Input (F12)	فعال‌سازی ورودی پویا (F12)
+	End Object Isolation	پایان جداسازی اشیا
+	End Width	عرض انتها
+	End X	X انتها
+	End Y	Y انتها
+	End angle	زاویه انتها
+	Endpoint	نقطه انتها
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Top، Zero یا Bottom را وارد کنید.
+	Enter a fit data option	یک گزینه داده برازش وارد کنید
+	Enter a pattern name	نام الگو را وارد کنید
+	Enter a vertex editing option	یک گزینه ویرایش رأس وارد کنید
+	Enter an option	یک گزینه وارد کنید
+	Enter angle of xline	زاویه خط ساختمانی را وارد کنید
+	Enter angle of xline (0) or	زاویه خط ساختمانی را وارد کنید (0) یا
+	Enter area of rectangle in current units	مساحت مستطیل را به واحد جاری وارد کنید
+	Enter attribute prompt	اعلان ویژگی را وارد کنید
+	Enter attribute tag name	نام برچسب ویژگی را وارد کنید
+	Enter attribute value	مقدار ویژگی را وارد کنید
+	Enter block name	نام بلوک را وارد کنید
+	Enter constraint type	نوع قید را وارد کنید
+	Enter continuity	پیوستگی را وارد کنید
+	Enter default attribute value	مقدار پیش‌فرض ویژگی را وارد کنید
+	Enter degree of spline	درجه اسپلاین را وارد کنید
+	Enter delta angle	زاویه تغییر را وارد کنید
+	Enter delta length or	طول تغییر را وارد کنید یا
+	Enter dimension text	متن اندازه را وارد کنید
+	Enter dimension text (<> = measurement)	متن اندازه را وارد کنید (<> = مقدار اندازه)
+	Enter dimension value or [name=expression]	مقدار اندازه یا [name=expression] را وارد کنید
+	Enter dimension variable name to override	نام متغیر اندازه‌گذاری برای جایگزینی را وارد کنید
+	Enter justification type	نوع تراز را وارد کنید
+	Enter leader text	متن خط راهنما را وارد کنید
+	Enter mline scale	مقیاس چندخط موازی را وارد کنید
+	Enter mode	حالت را وارد کنید
+	Enter name of block to insert	نام بلوک برای درج را وارد کنید
+	Enter new text	متن جدید را وارد کنید
+	Enter next point	نقطه بعدی را وارد کنید
+	Enter number of columns	تعداد ستون‌ها را وارد کنید
+	Enter number of data rows	تعداد سطرهای داده را وارد کنید
+	Enter number of items	تعداد اقلام را وارد کنید
+	Enter number of items along path	تعداد اقلام در طول مسیر را وارد کنید
+	Enter number of sides	تعداد اضلاع را وارد کنید
+	Enter number of turns	تعداد دورها را وارد کنید
+	Enter percentage length	درصد طول را وارد کنید
+	Enter rectangle length	طول مستطیل را وارد کنید
+	Enter rectangle width	عرض مستطیل را وارد کنید
+	Enter scale factor	ضریب مقیاس را وارد کنید
+	Enter text	متن را وارد کنید
+	Enter text (use \P for new paragraphs)	متن را وارد کنید (برای پاراگراف جدید از \P استفاده کنید)
+	Enter the number of segments	تعداد قطعه‌ها را وارد کنید
+	Enter twist direction of helix	جهت پیچش مارپیچ را وارد کنید
+	Entire drawing	کل نقشه
+	Equal	مساوی
+	Erase	پاک کردن
+	Evaluate	ارزیابی
+	Evaluate LISP	ارزیابی LISP
+	Exclude from new selection set	حذف از مجموعه انتخاب جدید
+	Explode	تجزیه
+	Export	صدور
+	Export Table	صدور جدول
+	Export to PDF...	صدور به PDF...
+	Expression	عبارت
+	Extend	امتداد
+	Extension	امتداد
+	Extents	حدود کامل
+	External Reference	ارجاع خارجی
+	External References	ارجاع‌های خارجی
+	Extrude	اکسترود
+	File	فایل
+	File Tab	زبانه فایل
+	Fillet	گرد کردن گوشه
+	Filter	فیلتر
+	Filters	فیلترها
+	Find and Replace	یافتن و جایگزینی
+	Find...	یافتن...
+	First	اولین
+	First commit	اولین کامیت
+	Fit Points	نقاط برازش
+	Fix	ثابت
+	Flatten Objects	مسطح کردن اشیا
+	Format	قالب
+	Freehand	دست‌آزاد
+	Freeze	انجماد
+	Freeze Layer	منجمد کردن لایه
+	Freeze in new viewports	منجمد در پنجره‌های دید جدید
+	Freeze/Thaw	انجماد/آزادسازی
+	Freeze/Thaw in all viewports	انجماد/آزادسازی در همه پنجره‌های دید
+	Freeze/Thaw in the current viewport	انجماد/آزادسازی در پنجره دید جاری
+	From	از
+	From Template...	از الگو...
+	General	عمومی
+	Geometric Center	مرکز هندسی
+	Geometric Constraint	قید هندسی
+	Geometric Constraints	قیدهای هندسی
+	Geometry	هندسه
+	Get from the Drawing	دریافت از نقشه
+	Get Variable	دریافت متغیر
+	Get View	دریافت نما
+	Global	سراسری
+	Global width	عرض سراسری
+	Grab bag	فهرست متفرقه
+	Gradient	گرادیان
+	Gradient...	گرادیان...
+	Green	سبز
+	Grid (F7)	شبکه (F7)
+	Grid Display	نمایش شبکه
+	Grid On (F7)	شبکه روشن (F7)
+	Grid snap	گیره شبکه
+	Grid spacing	فاصله شبکه
+	Grip Edit	ویرایش با دستگیره
+	Grip Mirror	قرینه با دستگیره
+	Grip Option	گزینه دستگیره
+	Grip Rotate	چرخش با دستگیره
+	Grip Scale	مقیاس با دستگیره
+	Grip Stretch	کشش با دستگیره
+	Group	گروه
+	Group Edit	ویرایش گروه
+	Group Options	گزینه‌های گروه
+	Group Selection	انتخاب گروهی
+	Hatch	هاشور
+	Hatch Edit	ویرایش هاشور
+	Hatch Patterns	الگوهای هاشور
+	Hatch...	هاشور...
+	Height	ارتفاع
+	Height: {height}	ارتفاع: {height}
+	Helix	مارپیچ
+	Help	راهنما
+	Hide All	پنهان کردن همه
+	Hide All Constraint Bars	پنهان کردن همه نوارهای قید
+	Hide All Dynamic Dimensions	پنهان کردن همه اندازه‌های پویا
+	Hide Layer List	پنهان کردن فهرست لایه‌ها
+	Hide Objects	پنهان کردن اشیا
+	Hide Palettes	پنهان کردن پالت‌ها
+	History	تاریخچه
+	Home	خانه
+	Horizontal	افقی
+	HorizontalDistance	فاصله افقی
+	How to apply:	نحوه اعمال:
+	ID Point	شناسایی نقطه
+	Import	وارد کردن
+	Align Multileaders	تراز کردن چندراهنماها
+	Collect	جمع کردن
+	Collect Multileaders	جمع کردن چندراهنماها
+	Edit Multileader	ویرایش چندراهنما
+	In	بزرگ‌نمایی
+	In-window Menu Bar	نوار منوی درون پنجره
+	Include in new selection set	گنجاندن در مجموعه انتخاب جدید
+	Increment angle	زاویه افزایشی
+	Index Color	رنگ شاخص
+	Index color: {index}	رنگ شاخص: {index}
+	Infer Constraints	استنتاج قیدها
+	Inquiry	پرس‌وجو
+	Insert	درج
+	Insert Block	درج بلوک
+	Insert Column	درج ستون
+	Insert Row	درج سطر
+	Insert tab	زبانه درج
+	Insert this block	درج این بلوک
+	Insert Table Formula	درج فرمول جدول
+	Insertion	درج
+	Insertion X	درج X
+	Insertion Y	درج Y
+	Insertion Z	درج Z
+	Inspect Constraints	بررسی قیدها
+	Inspect Drawing	بررسی نقشه
+	Inspection	بازرسی
+	Interface Language	زبان رابط کاربری
+	Interface Theme	پوسته رابط کاربری
+	Intersect	اشتراک
+	Intersection	تقاطع
+	Isolate	جداسازی
+	Isolate Layer	جداسازی لایه
+	Isolate Objects	جداسازی اشیا
+	Isometric Drafting	نقشه‌کشی ایزومتریک
+	Jogged	شکسته
+	Jogged Linear	خطی شکسته
+	Join	اتصال
+	Join the ArtCraft Discord…	به Discord ArtCraft بپیوندید…
+	Join us on Discord	در Discord به ما بپیوندید
+	Isometric Plane	صفحه ایزومتریک
+	Isometric snap	گیره ایزومتریک
+	Language	زبان
+	Last	آخرین
+	Last commit	آخرین کامیت
+	Layer	لایه
+	Layer Delete	حذف لایه
+	Layer Match	تطبیق لایه
+	Layer Merge	ادغام لایه
+	Layer Off	خاموش کردن لایه
+	Layer Properties	خصوصیات لایه
+	Layer Properties Manager	مدیریت خصوصیات لایه
+	Layer Properties Manager — current viewport	مدیریت خصوصیات لایه — پنجره دید جاری
+	Layer State	وضعیت لایه
+	Layer States Manager...	مدیریت وضعیت‌های لایه...
+	Layer Tools	ابزارهای لایه
+	Layer contains objects (double-click to make current)	لایه دارای شیء است (برای جاری کردن دوبار کلیک کنید)
+	Layer is empty (double-click to make current)	لایه خالی است (برای جاری کردن دوبار کلیک کنید)
+	Layers	لایه‌ها
+	Layers Palette	پالت لایه‌ها
+	Hide Palette	پنهان کردن پالت
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	لایه‌های نمایش‌داده‌شده: {shown} از {total}.   لایه جاری: {layer}
+	Layout	طرح‌بندی
+	Layout list	فهرست طرح‌بندی‌ها
+	Leader	خط راهنما
+	Leaders Only	فقط خطوط راهنما
+	Left	چپ
+	Length	طول
+	Length X	طول X
+	Length Y	طول Y
+	Lengthen	تغییر طول
+	Light	روشن
+	Line	خط
+	Line delta	تغییر خطوط
+	Linear	خطی
+	Lines +/−	خطوط +/−
+	Lines added	خطوط اضافه‌شده
+	Lines deleted	خطوط حذف‌شده
+	Lines of Command History	خطوط تاریخچه فرمان
+	Linetype	نوع خط
+	Linetype Scale	مقیاس نوع خط
+	Linetype scale	مقیاس نوع خط
+	Ltscale	مقیاس نوع خط
+	Linetype...	نوع خط...
+	Lineweight	ضخامت خط
+	Lineweight...	ضخامت خط...
+	List	فهرست
+	List Blocks	فهرست بلوک‌ها
+	List Dimension Styles	فهرست سبک‌های اندازه‌گذاری
+	List Groups	فهرست گروه‌ها
+	List Layer States	فهرست وضعیت‌های لایه
+	List Layouts	فهرست طرح‌بندی‌ها
+	List System Variables	فهرست متغیرهای سیستمی
+	List Text Styles	فهرست سبک‌های متن
+	Load all	بارگذاری همه
+	Load...	بارگذاری...
+	Load Application...	بارگذاری برنامه...
+	Loaded linetypes	انواع خط بارگذاری‌شده
+	Lock	قفل
+	Lock Layer	قفل کردن لایه
+	Lock viewport	قفل کردن پنجره دید
+	Lock/Unlock	قفل/بازکردن قفل
+	Loft	لافت
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. وابسته به Autodesk, Inc. نیست.
+	MODEL	مدل
+	MText	متن چندخطی
+	Magenta	سرخابی
+	Major line every	خط اصلی در هر
+	Make Current	جاری کردن
+	Make Object's Layer Current	جاری کردن لایه شیء
+	Make...	ساخت...
+	Match Layer	تطبیق لایه
+	Match Properties	تطبیق خصوصیات
+	Measure	اندازه‌گیری
+	Measure Distance	اندازه‌گیری فاصله
+	Measure Geometry	اندازه‌گیری هندسه
+	Merge Cells	ادغام خانه‌ها
+	Merged PRs	PRهای ادغام‌شده
+	Mid Between 2 Points	میانه بین 2 نقطه
+	Midpoint	نقطه میانی
+	Mirror	قرینه
+	Model	مدل
+	Model Space (in viewport)	فضای مدل (در پنجره دید)
+	Modeling	مدل‌سازی
+	Models	مدل‌ها
+	Modify	اصلاح
+	Move	جابه‌جایی
+	Multileader	چندراهنما
+	Multileader Style...	سبک چندراهنما...
+	Multileader style	سبک چندراهنما
+	Multiline	چندخط موازی
+	Multiline Text	متن چندخطی
+	Multiline Text...	متن چندخطی...
+	Multiple	چندگانه
+	Multiple Point	چند نقطه
+	My	من
+	My properties: not available yet	خصوصیات من: هنوز در دسترس نیست
+	N	شمال
+	Name	نام
+	Name (A–Z)	نام (الف–ی)
+	Named Views...	نماهای نام‌دار...
+	Nearest	نزدیک‌ترین
+	New	جدید
+	New (metric)	جدید (متریک)
+	New Drawing	نقشه جدید
+	New Drawing (⌘N)	نقشه جدید (⌘N)
+	New Drawing...	نقشه جدید...
+	New Layer	لایه جدید
+	New Layout	طرح‌بندی جدید
+	New VP Freeze	انجماد در پنجره‌های دید جدید
+	New Viewports...	پنجره‌های دید جدید...
+	New from Template...	جدید از الگو...
+	New layout	طرح‌بندی جدید
+	New state name	نام وضعیت جدید
+	Next Change	تغییر بعدی
+	No	خیر
+	No blocks defined in this drawing.	هیچ بلوکی در این نقشه تعریف نشده است.
+	No contributor data was built into this copy.	داده‌ای از مشارکت‌کنندگان در این نسخه گنجانده نشده است.
+	No model credits were built into this copy.	اعتباری برای مدل‌ها در این نسخه گنجانده نشده است.
+	No saved layer states	هیچ وضعیت لایه ذخیره‌شده‌ای وجود ندارد
+	No selection	بدون انتخاب
+	Node	گره
+	None	هیچ
+	Not available	در دسترس نیست
+	Not available yet	هنوز در دسترس نیست
+	Numbered list	فهرست شماره‌دار
+	OK	تأیید
+	Object	شیء
+	Object Snap	گیره شیء
+	Object Snap (F3)	گیره شیء (F3)
+	Object Snap On (F3)	گیره شیء روشن (F3)
+	Object Snap Tracking	ردیابی گیره شیء
+	Object Snap Tracking (F11)	ردیابی گیره شیء (F11)
+	Object Snap Tracking Settings	تنظیمات ردیابی گیره شیء
+	Object type:	نوع شیء:
+	Oblique	مایل
+	Off	خاموش
+	Offset	آفست
+	On	روشن
+	On/Off	روشن/خاموش
+	One of the Crafting Apps by the ArtCraft team and community.	یکی از برنامه‌های Crafting از تیم و جامعه ArtCraft.
+	Only in this drawing: {n}	فقط در این نقشه: {n}
+	Only in {name}: {n}	فقط در {name}: {n}
+	Open (⌘O)	باز کردن (⌘O)
+	Open Sample Drawing	باز کردن نقشه نمونه
+	Open sample drawing	باز کردن نقشه نمونه
+	Open Xref	باز کردن ارجاع خارجی
+	Open...	باز کردن...
+	Open Recent	باز کردن اخیر
+	Clear Recent Files	پاک کردن فایل‌های اخیر
+	Operator:	عملگر:
+	Orbit	مدار
+	Ordinate	مختصاتی
+	Ortho (F8)	متعامد (F8)
+	Ortho Mode	حالت متعامد
+	Ortho Mode (F8)	حالت متعامد (F8)
+	Osnap Settings...	تنظیمات گیره شیء...
+	Out	کوچک‌نمایی
+	Over-constrained	بیش‌مقید
+	Override	جایگزینی
+	PAPER	کاغذ
+	Percent	درصد
+	Polar (distance < angle)	قطبی (فاصله < زاویه)
+	PRs	PRها
+	Page Setup Manager	مدیریت تنظیمات صفحه
+	Page Setup Manager...	مدیریت تنظیمات صفحه...
+	Pan	جابه‌جایی نما
+	Pan Down	جابه‌جایی نما به پایین
+	Pan Left	جابه‌جایی نما به چپ
+	Pan Right	جابه‌جایی نما به راست
+	Pan Up	جابه‌جایی نما به بالا
+	Paper Space	فضای کاغذ
+	Parallel	موازی
+	Parameters Manager	مدیریت پارامترها
+	Parametric	پارامتری
+	Paste	چسباندن
+	Paste as Block	چسباندن به‌صورت بلوک
+	Paste to Command Line	چسباندن در خط فرمان
+	Paste to Original Coordinates	چسباندن در مختصات اصلی
+	Path Array	آرایه مسیری
+	Pattern	الگو
+	Perpendicular	عمود
+	Plot	پلات
+	Plot (click: do not plot)	پلات (کلیک: بدون پلات)
+	Plot Preview	پیش‌نمایش پلات
+	Plot Window	پنجره پلات
+	Plot style	سبک پلات
+	Plot style attached to	سبک پلات پیوست‌شده به
+	Plot style table	جدول سبک پلات
+	Plot Style...	سبک پلات...
+	Plot Style Manager	مدیریت سبک‌های پلات
+	Plot Style Manager...	مدیریت سبک‌های پلات...
+	Plot Styles...	سبک‌های پلات...
+	Plotter Manager	مدیریت پلاترها
+	Plotter Manager...	مدیریت پلاترها...
+	New CTB	CTB جدید
+	New STB	STB جدید
+	New style	سبک جدید
+	Reset Panel Layout	بازنشانی چیدمان پانل
+	Send Hatches to Back	فرستادن هاشورها به عقب
+	Send Under Objects	فرستادن زیر اشیا
+	Text Objects Only	فقط اشیای متنی
+	Use for this layout	استفاده برای این طرح‌بندی
+	Display plot styles	نمایش سبک‌های پلات
+	No plot style tables.	هیچ جدول سبک پلاتی وجود ندارد.
+	A built-in table: editing it keeps an edited copy in the drawing.	یک جدول داخلی: ویرایش آن یک نسخه ویرایش‌شده در نقشه نگه می‌دارد.
+	Keep an editable copy of this table in the drawing	نگه داشتن نسخه قابل ویرایش این جدول در نقشه
+	Layout {name}: {table}	طرح‌بندی {name}: {table}
+	Grayscale	خاکستری
+	Screening	کم‌رنگ‌سازی
+	Use object linetype	استفاده از نوع خط شیء
+	Use object lineweight	استفاده از ضخامت خط شیء
+	Remove	حذف
+	Add	افزودن
+	Open a drawing first.	ابتدا یک نقشه باز کنید.
+	Plot table type	نوع جدول پلات
+	Color-dependent	وابسته به رنگ
+	Named	نام‌دار
+	Plus/minus	مثبت/منفی
+	Point	نقطه
+	Point Filters	فیلترهای نقطه
+	Point Style...	سبک نقطه...
+	Polar Array	آرایه قطبی
+	Polar Tracking	ردیابی قطبی
+	Polar Tracking (F10)	ردیابی قطبی (F10)
+	Polar Tracking On (F10)	ردیابی قطبی روشن (F10)
+	Polar angle measurement	اندازه‌گیری زاویه قطبی
+	Polar distance	فاصله قطبی
+	Polar: {distance} < {angle}°	قطبی: {distance} < {angle}°
+	PolarSnap	گیره قطبی
+	Polygon	چندضلعی
+	Polygonal	چندضلعی
+	Polygonal Viewport	پنجره دید چندضلعی
+	Polyline	چندخطی
+	Polyline Edit	ویرایش چندخطی
+	Position X	موقعیت X
+	Position Y	موقعیت Y
+	Position Z	موقعیت Z
+	Previous	قبلی
+	Previous Change	تغییر قبلی
+	Previous Layer	لایه قبلی
+	Primitives	احجام پایه
+	Print	چاپ
+	Print...	چاپ...
+	Properties	خصوصیات
+	Properties Inspector	بازرس خصوصیات
+	Properties:	خصوصیات:
+	Proxy	پراکسی
+	Purge	پاک‌سازی
+	Pyramid	هرم
+	Quadrant	ربع دایره
+	Query Entities	پرس‌وجوی موجودیت‌ها
+	Quick	سریع
+	Quick Dimension	اندازه‌گذاری سریع
+	Quick Properties	خصوصیات سریع
+	Quick Select	انتخاب سریع
+	Quick Select Properties	خصوصیات انتخاب سریع
+	Quick Select...	انتخاب سریع...
+	QuickCalc	ماشین‌حساب سریع
+	QuickCalc Pick	برداشت ماشین‌حساب سریع
+	Quit CADaddy	خروج از CADaddy
+	Radius	شعاع
+	Raster Image	تصویر رستری
+	Ray	پرتو
+	Read-only	فقط‌خواندنی
+	Real name	نام واقعی
+	Realtime	بی‌درنگ
+	Reassociate Dimensions	وابسته‌سازی مجدد اندازه‌ها
+	Recent	اخیر
+	Recent Commands	فرمان‌های اخیر
+	Recent Input	ورودی اخیر
+	Recover...	بازیابی...
+	Rectangle	مستطیل
+	Recalculate Table Formulas	محاسبه مجدد فرمول‌های جدول
+	Rectangular	مستطیلی
+	Rectangular snap	گیره مستطیلی
+	Rectangular Array	آرایه مستطیلی
+	Red	قرمز
+	Redo	انجام مجدد
+	Redo (⇧⌘Z)	انجام مجدد (⇧⌘Z)
+	Redraw	ترسیم مجدد
+	Regen	بازسازی
+	Regen All	بازسازی همه
+	Region	ناحیه
+	Region/Mass Properties	خصوصیات ناحیه/جرم
+	Reinitialize	راه‌اندازی مجدد
+	Relative	نسبی
+	Relative to last segment	نسبت به آخرین قطعه
+	Remove Leader	حذف خط راهنما
+	Remove the viewport override	حذف جایگزینی پنجره دید
+	Rename Dimension Style	تغییر نام سبک اندازه‌گذاری
+	Rename Layer	تغییر نام لایه
+	Rename Layer State	تغییر نام وضعیت لایه
+	Rename Layout	تغییر نام طرح‌بندی
+	Rename Text Style	تغییر نام سبک متن
+	Rename...	تغییر نام...
+	Repeat {command}	تکرار {command}
+	Requires a point (x,y, @dx,dy or @d<a).	یک نقطه لازم است (x,y، @dx,dy یا @d<a).
+	Reset Palettes	بازنشانی پالت‌ها
+	Restore	بازگردانی
+	Restore Layer State	بازگردانی وضعیت لایه
+	Reverse	معکوس
+	Reverse the order	معکوس کردن ترتیب
+	Revision Cloud	ابر بازنگری
+	Revolve	دوران
+	Right	راست
+	Rotate	چرخش
+	Rotation	چرخش
+	S	جنوب
+	Save	ذخیره
+	Save (⌘S)	ذخیره (⌘S)
+	Save As	ذخیره با نام
+	Save As...	ذخیره با نام...
+	Save Layer State	ذخیره وضعیت لایه
+	Save State	ذخیره وضعیت
+	Scale	مقیاس
+	Search for layer	جستجوی لایه
+	Search for parameter	جستجوی پارامتر
+	Second and next points:	نقطه دوم و نقاط بعدی:
+	Select	انتخاب
+	Select 2D polyline	چندخطی دوبعدی را انتخاب کنید
+	Select All	انتخاب همه
+	Select Objects	انتخاب اشیا
+	Select Similar	انتخاب مشابه
+	Select a 2D polyline.	یک چندخطی دوبعدی انتخاب کنید.
+	Select a block reference.	یک ارجاع بلوک انتخاب کنید.
+	Select a circle or arc.	یک دایره یا کمان انتخاب کنید.
+	Select a closed polyline	یک چندخطی بسته انتخاب کنید
+	Select a closed polyline, circle, ellipse or closed spline.	یک چندخطی بسته، دایره، بیضی یا اسپلاین بسته انتخاب کنید.
+	Select a closed polyline.	یک چندخطی بسته انتخاب کنید.
+	Select a curve as the path.	یک منحنی را به‌عنوان مسیر انتخاب کنید.
+	Select a dimension constraint type	نوع قید ابعادی را انتخاب کنید
+	Select a line object	یک شیء خطی انتخاب کنید
+	Select a line object.	یک شیء خطی انتخاب کنید.
+	Select a line or an arc.	یک خط یا کمان انتخاب کنید.
+	Select a line or polyline segment	یک خط یا قطعه چندخطی انتخاب کنید
+	Select a line, arc or open polyline.	یک خط، کمان یا چندخطی باز انتخاب کنید.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	یک خط، کمان، دایره، چندخطی، بیضی یا اسپلاین را به‌عنوان مسیر انتخاب کنید.
+	Select a line, circle, arc or polyline segment.	یک خط، دایره، کمان یا قطعه چندخطی انتخاب کنید.
+	Select a line.	یک خط انتخاب کنید.
+	Select a polyline.	یک چندخطی انتخاب کنید.
+	Select a text, mtext, attribute definition or dimension.	یک متن، متن چندخطی، تعریف ویژگی یا اندازه انتخاب کنید.
+	Select an annotation object	یک شیء حاشیه‌نویسی انتخاب کنید
+	Select an arc or circle	یک کمان یا دایره انتخاب کنید
+	Select an arc.	یک کمان انتخاب کنید.
+	Select an object	یک شیء انتخاب کنید
+	Select an object to change or	شیء مورد نظر برای تغییر را انتخاب کنید یا
+	Select an object to measure or	شیء مورد نظر برای اندازه‌گیری را انتخاب کنید یا
+	Select an object.	یک شیء انتخاب کنید.
+	Select an open curve.	یک منحنی باز انتخاب کنید.
+	Select an open line, arc, polyline, ellipse arc or spline.	یک خط، کمان، چندخطی، کمان بیضوی یا اسپلاین باز انتخاب کنید.
+	Select arc or circle	کمان یا دایره را انتخاب کنید
+	Select arc or polyline arc segment	کمان یا قطعه کمانی چندخطی را انتخاب کنید
+	Select arc style	سبک کمان را انتخاب کنید
+	Select arc, circle, line	کمان، دایره یا خط را انتخاب کنید
+	Select at least two objects to join.	دست‌کم دو شیء برای اتصال انتخاب کنید.
+	Select circle or arc to add center mark	دایره یا کمان را برای افزودن علامت مرکز انتخاب کنید
+	Select closed objects (regions, closed polylines, circles).	اشیای بسته را انتخاب کنید (ناحیه‌ها، چندخطی‌های بسته، دایره‌ها).
+	Select first line	خط اول را انتخاب کنید
+	Select first line or arc	خط یا کمان اول را انتخاب کنید
+	Select first object	شیء اول را انتخاب کنید
+	Select first object or	شیء اول را انتخاب کنید یا
+	Select first point	نقطه اول را انتخاب کنید
+	Select nested objects to copy or	اشیای تودرتو برای کپی را انتخاب کنید یا
+	Select object	شیء را انتخاب کنید
+	Select object to dimension	شیء مورد نظر برای اندازه‌گذاری را انتخاب کنید
+	Select object to divide	شیء مورد نظر برای تقسیم را انتخاب کنید
+	Select object to extend or shift-select to trim	شیء مورد نظر برای امتداد را انتخاب کنید یا برای برش با Shift انتخاب کنید
+	Select object to measure	شیء مورد نظر برای اندازه‌گیری را انتخاب کنید
+	Select object to offset	شیء مورد نظر برای آفست را انتخاب کنید
+	Select object to trim or shift-select to extend	شیء مورد نظر برای برش را انتخاب کنید یا برای امتداد با Shift انتخاب کنید
+	Select objects	اشیا را انتخاب کنید
+	Select objects (crossing window first corner)	اشیا را انتخاب کنید (گوشه اول پنجره تقاطعی)
+	Select objects to array.	اشیا را برای آرایه انتخاب کنید.
+	Select objects to stretch by crossing-window or crossing-polygon...	اشیای مورد نظر برای کشش را با پنجره تقاطعی یا چندضلعی تقاطعی انتخاب کنید...
+	Select objects:	اشیا را انتخاب کنید:
+	Add to Working Set	افزودن به مجموعه کاری
+	Edit Reference In-Place	ویرایش درجای ارجاع
+	Save Reference Edits	ذخیره ویرایش‌های ارجاع
+	Working Set	مجموعه کاری
+	Xref and Block In-place Editing	ویرایش درجای ارجاع خارجی و بلوک
+	Select one polyline (Multiple is available through the JSON form).	یک چندخطی انتخاب کنید (گزینه Multiple از طریق فرم JSON در دسترس است).
+	Select path curve	منحنی مسیر را انتخاب کنید
+	Select point or object	نقطه یا شیء را انتخاب کنید
+	Select polyline or	چندخطی را انتخاب کنید یا
+	Select second line	خط دوم را انتخاب کنید
+	Select second line or shift-select to apply corner	خط دوم را انتخاب کنید یا برای اعمال گوشه با Shift انتخاب کنید
+	Select second object	شیء دوم را انتخاب کنید
+	Select second object or shift-select to apply corner	شیء دوم را انتخاب کنید یا برای اعمال گوشه با Shift انتخاب کنید
+	Select second point	نقطه دوم را انتخاب کنید
+	Select spline	اسپلاین را انتخاب کنید
+	Select symmetry line	خط تقارن را انتخاب کنید
+	Select two points	دو نقطه انتخاب کنید
+	Selection Cycling	چرخه انتخاب
+	Send to Back	فرستادن به عقب
+	Set Current	جاری کردن
+	Set Current Dimension Style	جاری کردن سبک اندازه‌گذاری
+	Set Current Text Style	جاری کردن سبک متن
+	Set Current Viewport	جاری کردن پنجره دید
+	Set Layer Properties	تنظیم خصوصیات لایه
+	Set Properties	تنظیم خصوصیات
+	Set Table Cell	تنظیم خانه جدول
+	Set Table Cell Style	تنظیم سبک خانه جدول
+	Set Variable	تنظیم متغیر
+	Set View	تنظیم نما
+	Share	اشتراک‌گذاری
+	Show	نمایش
+	Show All	نمایش همه
+	Show All Constraint Bars	نمایش همه نوارهای قید
+	Show All Dynamic Dimensions	نمایش همه اندازه‌های پویا
+	Show and hide the tools of this category	نمایش و پنهان کردن ابزارهای این دسته
+	Show in Tool Sets	نمایش در مجموعه ابزارها
+	Show command prompting near the crosshairs	نمایش اعلان فرمان نزدیک نشانگر متقاطع
+	Show Layer List	نمایش فهرست لایه‌ها
+	Show/Hide Lineweight	نمایش/پنهان کردن ضخامت خط
+	Show/Hide Transparency	نمایش/پنهان کردن شفافیت
+	Single Line Text	متن تک‌خطی
+	Single Point	تک نقطه
+	Single...	تکی...
+	Smooth	هموار
+	Snap	گیره
+	Snap Mode	حالت گیره
+	Snap Mode (F9)	حالت گیره (F9)
+	Snap On (F9)	گیره روشن (F9)
+	Snap Overrides	جایگزینی‌های گیره
+	Snap X spacing	فاصله X گیره
+	Snap and Grid	گیره و شبکه
+	Snap type	نوع گیره
+	Solid	توپر
+	Sort	مرتب‌سازی
+	Specify a point	یک نقطه مشخص کنید
+	Specify a scale for the hatch pattern	مقیاس الگوی هاشور را مشخص کنید
+	Specify a second extension line origin	مبدأ خط امتداد دوم را مشخص کنید
+	Specify an angle for the hatch pattern	زاویه الگوی هاشور را مشخص کنید
+	Specify angle end point	نقطه انتهای زاویه را مشخص کنید
+	Specify angle of dimension line	زاویه خط اندازه را مشخص کنید
+	Specify angle of dimension text	زاویه متن اندازه را مشخص کنید
+	Specify angle start point	نقطه شروع زاویه را مشخص کنید
+	Specify angle vertex	رأس زاویه را مشخص کنید
+	Specify angle vertex point	نقطه رأس زاویه را مشخص کنید
+	Specify arc length dimension location	محل اندازه طول کمان را مشخص کنید
+	Specify axis endpoint of ellipse	نقطه انتهای محور بیضی را مشخص کنید
+	Specify base diameter	قطر قاعده را مشخص کنید
+	Specify base point	نقطه پایه را مشخص کنید
+	Specify base point or	نقطه پایه را مشخص کنید یا
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	نقطه پایه یا جابه‌جایی را مشخص کنید (برای جابه‌جایی بی‌درنگ نما، با دکمه وسط ماوس بکشید)
+	Specify base radius or	شعاع قاعده را مشخص کنید یا
+	Specify center of donut	مرکز حلقه را مشخص کنید
+	Specify center of ellipse	مرکز بیضی را مشخص کنید
+	Specify center of polygon	مرکز چندضلعی را مشخص کنید
+	Specify center point for circle	نقطه مرکز دایره را مشخص کنید
+	Specify center point of arc	نقطه مرکز کمان را مشخص کنید
+	Specify center point of array	نقطه مرکز آرایه را مشخص کنید
+	Specify center point of base	نقطه مرکز قاعده را مشخص کنید
+	Specify corner of viewport	گوشه پنجره دید را مشخص کنید
+	Specify corner of window, enter a scale factor (nX or nXP)	گوشه پنجره را مشخص کنید، یا ضریب مقیاس را وارد کنید (nX یا nXP)
+	Specify diameter of circle	قطر دایره را مشخص کنید
+	Specify dimension arc line location	محل کمان خط اندازه را مشخص کنید
+	Specify dimension line location	محل خط اندازه را مشخص کنید
+	Specify distance between turns	فاصله بین دورها را مشخص کنید
+	Specify distance to other axis	فاصله تا محور دیگر را مشخص کنید
+	Specify end angle	زاویه انتها را مشخص کنید
+	Specify end point of arc	نقطه انتهای کمان را مشخص کنید
+	Specify end point of arc (hold Ctrl to switch direction)	نقطه انتهای کمان را مشخص کنید (برای تغییر جهت Ctrl را نگه دارید)
+	Specify ending width	عرض انتها را مشخص کنید
+	Specify ending width for next segment	عرض انتها برای قطعه بعدی را مشخص کنید
+	Specify endpoint of arc	نقطه انتهای کمان را مشخص کنید
+	Specify endpoint of axis	نقطه انتهای محور را مشخص کنید
+	Specify endpoint of line	نقطه انتهای خط را مشخص کنید
+	Specify feature location	محل عارضه را مشخص کنید
+	Specify fillet radius	شعاع گرد کردن گوشه را مشخص کنید
+	Specify fillet radius for rectangles	شعاع گرد کردن گوشه برای مستطیل‌ها را مشخص کنید
+	Specify first angle endpoint	نقطه انتهای اول زاویه را مشخص کنید
+	Specify first chamfer distance	فاصله پخ اول را مشخص کنید
+	Specify first chamfer distance for rectangles	فاصله پخ اول برای مستطیل‌ها را مشخص کنید
+	Specify first constraint point	نقطه قید اول را مشخص کنید
+	Specify first corner	گوشه اول را مشخص کنید
+	Specify first corner point	نقطه گوشه اول را مشخص کنید
+	Specify first destination point	نقطه مقصد اول را مشخص کنید
+	Specify first end point of circle's diameter	نقطه انتهای اول قطر دایره را مشخص کنید
+	Specify first endpoint of edge	نقطه انتهای اول لبه را مشخص کنید
+	Specify first extension line origin	مبدأ خط امتداد اول را مشخص کنید
+	Specify first point	نقطه اول را مشخص کنید
+	Specify first point of mirror line	نقطه اول خط قرینه را مشخص کنید
+	Specify first point on circle	نقطه اول روی دایره را مشخص کنید
+	Specify first point on circle: _tan to	نقطه اول روی دایره را مشخص کنید: _tan to
+	Specify first source point	نقطه مبدأ اول را مشخص کنید
+	Specify height	ارتفاع را مشخص کنید
+	Specify helix height or	ارتفاع مارپیچ را مشخص کنید یا
+	Specify included angle	زاویه محاط را مشخص کنید
+	Specify insertion base point	نقطه پایه درج را مشخص کنید
+	Specify insertion point	نقطه درج را مشخص کنید
+	A drawing opened from a file keeps that file's format.	نقشه‌ای که از یک فایل باز شود، قالب همان فایل را حفظ می‌کند.
+	An array that would create more objects than this is refused.	آرایه‌ای که بیش از این تعداد شیء ایجاد کند، رد می‌شود.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy این ترجیحات، حالت‌های گیره شیء و کلیدهای نقشه‌کشی را برای حساب کاربری شما نگه می‌دارد و هنگام شروع بازمی‌گرداند.
+	Changes apply at once and are kept for next time.	تغییرات بلافاصله اعمال می‌شوند و برای دفعه بعد حفظ می‌شوند.
+	Command line history	تاریخچه خط فرمان
+	Copy as JSON	کپی به‌صورت JSON
+	Crosshair size	اندازه نشانگر متقاطع
+	Crossing selection color:	رنگ انتخاب تقاطعی:
+	Display	نمایش
+	Exclude:	مستثنا:
+	Grip size	اندازه دستگیره
+	Grips	دستگیره‌ها
+	Groups	گروه‌ها
+	Hatches	هاشورها
+	Hold Shift to add to the selection	برای افزودن به انتخاب، Shift را نگه دارید
+	Indicate selection area	نشان دادن ناحیه انتخاب
+	Interface language	زبان رابط کاربری
+	Interface theme	پوسته رابط کاربری
+	Keep the system cursor visible over the drawing area	نشانگر سیستم روی ناحیه ترسیم قابل مشاهده بماند
+	Largest array	بزرگ‌ترین آرایه
+	Layout paper	کاغذ طرح‌بندی
+	Model background	پس‌زمینه مدل
+	Multiline text	متن چندخطی
+	Object grouping	گروه‌بندی اشیا
+	Object selection limit for display of grips	حد انتخاب اشیا برای نمایش دستگیره‌ها
+	Object snap aperture	دریچه گیره شیء
+	Object snap marker size	اندازه نشانه گیره شیء
+	Objects on locked layers	اشیای روی لایه‌های قفل‌شده
+	Open and Save	باز کردن و ذخیره
+	Options	گزینه‌ها
+	Options...	گزینه‌ها...
+	Pickbox size	اندازه کادر انتخاب
+	Preview	پیش‌نمایش
+	Profiles	پروفایل‌ها
+	Reset keeps the interface language.	بازنشانی، زبان رابط کاربری را حفظ می‌کند.
+	Reset to Defaults	بازنشانی به پیش‌فرض‌ها
+	Save new drawings as	ذخیره نقشه‌های جدید به‌صورت
+	Screen magnifiers, screen readers and recorders follow the system cursor.	ذره‌بین‌های صفحه، صفحه‌خوان‌ها و ضبط‌کننده‌ها نشانگر سیستم را دنبال می‌کنند.
+	Select objects first, then choose a command	ابتدا اشیا را انتخاب کنید، سپس فرمان را برگزینید
+	Selection	انتخاب
+	Selection Area Effect	جلوه ناحیه انتخاب
+	Selection Preview Filter	فیلتر پیش‌نمایش انتخاب
+	Selection area opacity:	شفافیت ناحیه انتخاب:
+	Selection effect color	رنگ جلوه انتخاب
+	Selection modes	حالت‌های انتخاب
+	Selection preview	پیش‌نمایش انتخاب
+	Settings...	تنظیمات...
+	Show Quick Properties for selected objects	نمایش خصوصیات سریع برای اشیای انتخاب‌شده
+	Show grips	نمایش دستگیره‌ها
+	Snap, grid, polar tracking and Dynamic Input:	گیره، شبکه، ردیابی قطبی و ورودی پویا:
+	Tables	جدول‌ها
+	The aperture is how near the cursor must come to a point for an object snap to find it.	دریچه یعنی نشانگر چقدر باید به یک نقطه نزدیک شود تا گیره شیء آن را پیدا کند.
+	User Preferences	ترجیحات کاربر
+	Visual Effect Settings	تنظیمات جلوه بصری
+	Visual Effect Settings...	تنظیمات جلوه بصری...
+	When a command is active	وقتی فرمانی فعال است
+	When no command is active	وقتی هیچ فرمانی فعال نیست
+	Window selection color:	رنگ انتخاب پنجره‌ای:
+	Xrefs	ارجاع‌های خارجی
+	objects	شیء
+	Specify inside diameter of donut	قطر داخلی حلقه را مشخص کنید
+	Specify leader arrowhead location	محل سرپیکان خط راهنما را مشخص کنید
+	Specify leader endpoint	نقطه انتهای خط راهنما را مشخص کنید
+	Specify leader landing location	محل پاگرد خط راهنما را مشخص کنید
+	Specify length for rectangles	طول مستطیل‌ها را مشخص کنید
+	Specify length of chord	طول وتر را مشخص کنید
+	Specify length of segment	طول قطعه را مشخص کنید
+	Specify line width for rectangles	عرض خط مستطیل‌ها را مشخص کنید
+	Specify location for new vertex	محل رأس جدید را مشخص کنید
+	Specify minimum length of arc	حداقل طول کمان را مشخص کنید
+	Specify new end point	نقطه انتهای جدید را مشخص کنید
+	Specify new location for marked vertex	محل جدید رأس علامت‌خورده را مشخص کنید
+	Specify new width for all segments	عرض جدید برای همه قطعه‌ها را مشخص کنید
+	Specify next point	نقطه بعدی را مشخص کنید
+	Specify offset distance	فاصله آفست را مشخص کنید
+	Specify offset distance or	فاصله آفست را مشخص کنید یا
+	Specify opposite corner	گوشه مقابل را مشخص کنید
+	Specify other corner point	نقطه گوشه دیگر را مشخص کنید
+	Specify other endpoint of axis	نقطه انتهای دیگر محور را مشخص کنید
+	Specify outside diameter of donut	قطر خارجی حلقه را مشخص کنید
+	Specify point	نقطه را مشخص کنید
+	Specify point on object for first tangent of circle	نقطه‌ای روی شیء برای مماس اول دایره مشخص کنید
+	Specify point on object for second tangent of circle	نقطه‌ای روی شیء برای مماس دوم دایره مشخص کنید
+	Specify point on side to offset	نقطه‌ای در سمت آفست مشخص کنید
+	Specify radius of arc	شعاع کمان را مشخص کنید
+	Specify radius of circle	شعاع دایره را مشخص کنید
+	Specify rotation angle	زاویه چرخش را مشخص کنید
+	Specify rotation angle of text	زاویه چرخش متن را مشخص کنید
+	Specify rotation angle or	زاویه چرخش را مشخص کنید یا
+	Specify scale factor	ضریب مقیاس را مشخص کنید
+	Specify second angle endpoint	نقطه انتهای دوم زاویه را مشخص کنید
+	Specify second break point	نقطه شکست دوم را مشخص کنید
+	Specify second chamfer distance for rectangles	فاصله پخ دوم برای مستطیل‌ها را مشخص کنید
+	Specify second constraint point	نقطه قید دوم را مشخص کنید
+	Specify second destination point	نقطه مقصد دوم را مشخص کنید
+	Specify second end point of circle's diameter	نقطه انتهای دوم قطر دایره را مشخص کنید
+	Specify second endpoint of edge	نقطه انتهای دوم لبه را مشخص کنید
+	Specify second extension line origin	مبدأ خط امتداد دوم را مشخص کنید
+	Specify second point	نقطه دوم را مشخص کنید
+	Specify second point of arc	نقطه دوم کمان را مشخص کنید
+	Specify second point of mirror line	نقطه دوم خط قرینه را مشخص کنید
+	Specify second point on circle	نقطه دوم روی دایره را مشخص کنید
+	Specify second point on circle: _tan to	نقطه دوم روی دایره را مشخص کنید: _tan to
+	Specify second point or <use first point as displacement>	نقطه دوم را مشخص کنید یا <استفاده از نقطه اول به‌عنوان جابه‌جایی>
+	Specify second source point	نقطه مبدأ دوم را مشخص کنید
+	Specify side to offset	سمت آفست را مشخص کنید
+	Specify start angle	زاویه شروع را مشخص کنید
+	Specify start point	نقطه شروع را مشخص کنید
+	Specify start point of arc	نقطه شروع کمان را مشخص کنید
+	Specify start point of polyline	نقطه شروع چندخطی را مشخص کنید
+	Specify start point of text	نقطه شروع متن را مشخص کنید
+	Specify starting width	عرض شروع را مشخص کنید
+	Specify starting width for next segment	عرض شروع برای قطعه بعدی را مشخص کنید
+	Specify tangent direction for the start point of arc	جهت مماس در نقطه شروع کمان را مشخص کنید
+	Specify the elevation for rectangles	ارتفاع تراز مستطیل‌ها را مشخص کنید
+	Specify thickness for rectangles	ضخامت مستطیل‌ها را مشخص کنید
+	Specify third point on circle	نقطه سوم روی دایره را مشخص کنید
+	Specify third point on circle: _tan to	نقطه سوم روی دایره را مشخص کنید: _tan to
+	Specify third source point or <continue>	نقطه مبدأ سوم را مشخص کنید یا <ادامه>
+	Specify through point	نقطه عبور را مشخص کنید
+	Specify top diameter	قطر بالا را مشخص کنید
+	Specify top radius or	شعاع بالا را مشخص کنید یا
+	Specify total angle	زاویه کل را مشخص کنید
+	Specify total length or	طول کل را مشخص کنید یا
+	Specify width for rectangles	عرض مستطیل‌ها را مشخص کنید
+	Sphere	کره
+	Spline	اسپلاین
+	Spline Edit	ویرایش اسپلاین
+	Stack (type 1/2 then select)	کسر پشته‌ای (1/2 را تایپ و سپس انتخاب کنید)
+	Standard	استاندارد
+	Start	شروع
+	Start Width	عرض شروع
+	Start X	X شروع
+	Start Y	Y شروع
+	Start angle	زاویه شروع
+	Start, Center, Angle	شروع، مرکز، زاویه
+	Start, Center, End	شروع، مرکز، انتها
+	Start, Center, Length	شروع، مرکز، طول
+	Start, End, Angle	شروع، انتها، زاویه
+	Start, End, Direction	شروع، انتها، جهت
+	Start, End, Radius	شروع، انتها، شعاع
+	Status	وضعیت
+	Status Bar	نوار وضعیت
+	Stretch	کشش
+	Style: Standard	سبک: Standard
+	Subtract	تفریق
+	Sweep	جاروب
+	Switch Drawing	تعویض نقشه
+	Switch Layout	تعویض طرح‌بندی
+	Switch between model space in a viewport and paper space	جابه‌جایی بین فضای مدل در پنجره دید و فضای کاغذ
+	Symmetric	متقارن
+	Synchronize Attributes	همگام‌سازی ویژگی‌ها
+	To	تا
+	Toggle PICKADD (off: each pick replaces the selection)	تغییر PICKADD (خاموش: هر انتخاب جایگزین انتخاب قبلی می‌شود)
+	Toggle PICKADD (on: picks add to the selection)	تغییر PICKADD (روشن: انتخاب‌ها به مجموعه افزوده می‌شوند)
+	TOP	بالا
+	Table	جدول
+	Table Breaks	شکست‌های جدول
+	Table Cell Style	سبک خانه جدول
+	Table Style...	سبک جدول...
+	Table style	سبک جدول
+	Table...	جدول...
+	Tan, Tan, Radius	مماس، مماس، شعاع
+	Tan, Tan, Tan	مماس، مماس، مماس
+	Tangent	مماس
+	Temporary track point	نقطه ردیابی موقت
+	Text	متن
+	Text Editor	ویرایشگر متن
+	Text Height	ارتفاع متن
+	Text Style...	سبک متن...
+	Text height	ارتفاع متن
+	Text override	جایگزینی متن
+	Text style	سبک متن
+	Thaw All Layers	آزادسازی همه لایه‌ها
+	Thaw Layer	آزادسازی لایه
+	There is nothing here yet.	هنوز چیزی اینجا نیست.
+	Thickness	ضخامت
+	Time	زمان
+	To get started, create or open a drawing.	برای شروع، یک نقشه ایجاد کنید یا باز کنید.
+	Tool Bar	نوار ابزار
+	Tool Sets	مجموعه ابزارها
+	Tools	ابزارها
+	Torus	چنبره
+	Trace	ردیابی
+	Track orthogonally only	فقط ردیابی متعامد
+	Track using all polar angle settings	ردیابی با همه تنظیمات زاویه قطبی
+	Transparency	شفافیت
+	Trim	برش
+	True Color	رنگ واقعی
+	Turn All Layers On	روشن کردن همه لایه‌ها
+	Turn Off Layer	خاموش کردن لایه
+	Turn On Layer	روشن کردن لایه
+	Turn Quick Properties off (QPMODE)	خاموش کردن خصوصیات سریع (QPMODE)
+	Type	نوع
+	Type a command	یک فرمان تایپ کنید
+	Type text; Enter starts a new paragraph	متن را تایپ کنید؛ Enter پاراگراف جدیدی شروع می‌کند
+	UCS Icon	نماد UCS
+	Undo	واگرد
+	Undo (⌘Z)	واگرد (⌘Z)
+	Ungroup	لغو گروه
+	Union	اجتماع
+	Unisolate Layer	لغو جداسازی لایه
+	Units Conversion	تبدیل واحدها
+	Units...	واحدها...
+	Unlock Layer	بازکردن قفل لایه
+	Unlock viewport	بازکردن قفل پنجره دید
+	Unmerge Cells	لغو ادغام خانه‌ها
+	Unsaved Layer State	وضعیت لایه ذخیره‌نشده
+	Up	بالا
+	Update Data Links	به‌روزرسانی پیوندهای داده
+	Update	به‌روزرسانی
+	Use System Setting	استفاده از تنظیمات سیستم
+	User	کاربر
+	User Parameters	پارامترهای کاربر
+	Username	نام کاربری
+	Volume	حجم
+	VP Color	رنگ پنجره دید
+	VP Freeze	انجماد در پنجره دید
+	Value	مقدار
+	Value:	مقدار:
+	Variables	متغیرها
+	Version	نسخه
+	Version 2000	نسخه 2000
+	Version 2004	نسخه 2004
+	Version 2007	نسخه 2007
+	Version 2010	نسخه 2010
+	Version 2013	نسخه 2013
+	Version 2018	نسخه 2018
+	Version {version}	نسخه {version}
+	Vertical	عمودی
+	VerticalDistance	فاصله عمودی
+	View	نما
+	ViewCube	ViewCube
+	Viewport	پنجره دید
+	Viewport Layer Freeze	انجماد لایه در پنجره دید
+	Viewport Properties	خصوصیات پنجره دید
+	Viewport is locked	پنجره دید قفل است
+	Viewport scale	مقیاس پنجره دید
+	Viewport {id}	پنجره دید {id}
+	Viewports	پنجره‌های دید
+	W	غرب
+	WCS ⌄	WCS ⌄
+	White	سفید
+	Width factor	ضریب عرض
+	Window	پنجره
+	Wipeout	پوشاننده
+	Workspace Switching	تعویض فضای کاری
+	Write Block	نوشتن بلوک
+	Xline	خط ساختمانی
+	Yellow	زرد
+	Yes	بله
+	Zoom	زوم
+	Zoom All	زوم همه
+	Zoom Dynamic	زوم پویا
+	Zoom Extents	زوم حدود کامل
+	Zoom In	بزرگ‌نمایی
+	Zoom Object	زوم شیء
+	Zoom Out	کوچک‌نمایی
+	Zoom Previous	زوم قبلی
+	Zoom Realtime	زوم بی‌درنگ
+	Zoom Window	زوم پنجره‌ای
+	error	خطا
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (قید {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	قید {kind} {name} = {expression}  (برای ویرایش دوبار کلیک کنید)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  پارامتر کاربر جدید
+	ΔLOC	Δخط کد
+	−Bin	−دودویی
+	−LOC	−خط کد
+	⌘↩ to finish	⌘↩ برای پایان
+@plural	{n} commit	{n} کامیت|{n} کامیت
+@plural	{n} contributor	{n} مشارکت‌کننده|{n} مشارکت‌کننده
+	Drawing as bytes	نقشه به‌صورت بایت
+	Services	سرویس‌ها
+	Hide CADaddy	پنهان کردن CADaddy
+	Hide Others	پنهان کردن بقیه
+	Accessibility	دسترس‌پذیری
+	Show System Cursor	نمایش نشانگر سیستم
+	Animation Effects	جلوه‌های پویانمایی
+	Animation effects	جلوه‌های پویانمایی
+	Import...	وارد کردن...
+	Export...	صدور...
+	Batch Publish...	انتشار دسته‌ای...
+	Scale List...	فهرست مقیاس‌ها...
+	Annotative Object Scale	مقیاس شیء حاشیه‌نویسی
+	Add Current Scale	افزودن مقیاس جاری
+	Delete Current Scale	حذف مقیاس جاری
+	Add/Delete Scales...	افزودن/حذف مقیاس‌ها...
+	Synchronize Multiple-scale Positions	همگام‌سازی موقعیت‌های چندمقیاسی
+	Annotative Update	به‌روزرسانی حاشیه‌نویسی
+	Show Annotative Objects	نمایش اشیای حاشیه‌نویسی
+	Current Scale Only	فقط مقیاس جاری
+	All Scales	همه مقیاس‌ها
+	Drawing Recovery Manager...	مدیریت بازیابی نقشه...
+	Tolerance...	رواداری...
+	Add Vertex	افزودن رأس
+	Remove Vertex	حذف رأس
+	Convert to Arc	تبدیل به کمان
+	Convert to Line	تبدیل به خط
+	Stretch Vertex	کشش رأس
+	Edit Array	ویرایش آرایه
+	Close Array Editing	بستن ویرایش آرایه
+	Multiline...	چندخط موازی...
+	Multiline Style...	سبک چندخط موازی...
+	Solid Editing	ویرایش جامد
+	3D Mouse...	ماوس سه‌بعدی...
+	3D Mouse	ماوس سه‌بعدی
+	Calibrate 3D Mouse	کالیبره کردن ماوس سه‌بعدی
+	3D Mouse Navigation	پیمایش با ماوس سه‌بعدی
+	3D mouse input is unavailable on this platform	ورودی ماوس سه‌بعدی در این پلتفرم در دسترس نیست
+	No supported 3D mouse found	هیچ ماوس سه‌بعدی پشتیبانی‌شده‌ای یافت نشد
+	Release the 3D mouse to calibrate its resting position	ماوس سه‌بعدی را رها کنید تا موقعیت سکون آن کالیبره شود
+	3D mouse connected	ماوس سه‌بعدی متصل شد
+	3D mouse busy, possibly 3DxWare or missing device permissions	ماوس سه‌بعدی مشغول است؛ احتمالاً به‌دلیل 3DxWare یا نبود مجوزهای دستگاه
+	3D mouse disconnected	ماوس سه‌بعدی قطع شد
+	3D mouse input could not be started	ورودی ماوس سه‌بعدی شروع نشد
+	Enable 3D mouse navigation	فعال‌سازی پیمایش با ماوس سه‌بعدی
+	Pan sensitivity	حساسیت جابه‌جایی نما
+	Zoom sensitivity	حساسیت زوم
+	Reverse zoom direction	معکوس کردن جهت زوم
+	Calibrate	کالیبره کردن
+	Move sideways to pan; push/pull or twist to zoom.	برای جابه‌جایی نما به طرفین حرکت دهید؛ برای زوم فشار/کشش دهید یا بچرخانید.
+	Left device button: zoom extents. Right device button: calibrate.	دکمه چپ دستگاه: زوم حدود کامل. دکمه راست دستگاه: کالیبره کردن.
+	More toolbar commands	فرمان‌های بیشتر نوار ابزار
+	Default save version	نسخه پیش‌فرض ذخیره
+	Automatic save every	ذخیره خودکار هر
+	min	دقیقه
+	Automatic save file location	محل فایل ذخیره خودکار
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	نقشه‌هایی که هنوز فایلی ندارند با نسخه پیش‌فرض ذخیره می‌شوند. مقدار 0 دقیقه ذخیره خودکار را خاموش می‌کند.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	کلیک راست زمان‌محور: کلیک سریع معادل Enter است و نگه داشتن، منو را باز می‌کند
+	Turned off, a right-click while a command runs always opens the shortcut menu.	در حالت خاموش، کلیک راست هنگام اجرای فرمان همیشه منوی میان‌بر را باز می‌کند.
+	Hatch Pattern	الگوی هاشور
+	Search for pattern	جستجوی الگو
+	Run Script...	اجرای اسکریپت...
+	Query Texts	پرس‌وجوی متن‌ها
+	Hatch Pick	انتخاب هاشور
+	Hatch and Gradient	هاشور و گرادیان
+	Color 1	رنگ 1
+	Color 2	رنگ 2
+	Shape	شکل
+	Curved	منحنی
+	Spherical	کروی
+	Hemispherical	نیم‌کروی
+	Inverted	معکوس
+	Centered	مرکزی
+	Hatch origin	مبدأ هاشور
+	Use current origin	استفاده از مبدأ جاری
+	Specified origin	مبدأ مشخص‌شده
+	Click to set new origin	برای تعیین مبدأ جدید کلیک کنید
+	Default to boundary extents	پیش‌فرض بر اساس حدود مرز
+	Bottom left	پایین چپ
+	Bottom right	پایین راست
+	Top left	بالا چپ
+	Top right	بالا راست
+	Boundaries	مرزها
+	Add: Pick points	افزودن: انتخاب نقاط
+	Add: Select objects	افزودن: انتخاب اشیا
+	Boundaries picked: {n}	مرزهای انتخاب‌شده: {n}
+	Associative	وابسته
+	Create separate hatches	ایجاد هاشورهای جداگانه
+	Island detection	تشخیص جزیره
+	Normal	عادی
+	Outer	بیرونی
+	Ignore	نادیده گرفتن
+	Origin: {x}, {y}	مبدأ: {x}, {y}
+	Sheet Books to PDF...	دفترچه برگه‌ها به PDF...
+	Not a number or distance: {text}	عدد یا فاصله نیست: {text}
+	Dynamic Block Data	داده بلوک پویا
+	Custom	سفارشی
+	Dynamic Block Reference	ارجاع بلوک پویا
+	Set Dynamic Property	تنظیم خصوصیت پویا
+	Dynamic Block Grips	دستگیره‌های بلوک پویا
+	Drag Dynamic Grip	کشیدن دستگیره پویا
+	Save Block	ذخیره بلوک
+	Save Block As	ذخیره بلوک با نام
+	Close Block Editor	بستن ویرایشگر بلوک
+	Unsaved changes	تغییرات ذخیره‌نشده
+	Edit Block Definition	ویرایش تعریف بلوک
+	Block to create or edit	بلوک برای ایجاد یا ویرایش
+	Open in Block Editor	باز کردن در ویرایشگر بلوک
+	This drawing	این نقشه
+	contains authoring elements. Open in Block Editor?	دارای عناصر ساخت بلوک پویا است. در ویرایشگر بلوک باز شود؟
+	New block	بلوک جدید
+	Italic	مورب
+	Underline	زیرخط
+	Overline	بالاخط
+	Justify	تراز دوطرفه
+	Text color	رنگ متن
+	Click the ruler to add a tab stop, right-click to remove one	برای افزودن نقطه توقف Tab روی خط‌کش کلیک کنید و برای حذف آن کلیک راست کنید
+	Ribbon	ریبون
+	Close Ribbon	بستن ریبون
+	Menu Bar	نوار منو
+	Top	بالا
+	Bottom	پایین
+	Front	جلو
+	Back	پشت
+	SW Isometric	ایزومتریک جنوب‌غربی
+	SE Isometric	ایزومتریک جنوب‌شرقی
+	NE Isometric	ایزومتریک شمال‌شرقی
+	NW Isometric	ایزومتریک شمال‌غربی
+	3D Views	نماهای سه‌بعدی
+	Plan View	نمای پلان
+	World UCS	UCS جهانی
+	View Direction	جهت دید
+	2D Wireframe	قاب‌سیمی دوبعدی
+	Custom View	نمای سفارشی
+	Convert PDF to DWG...	تبدیل PDF به DWG...
+	Convert PDF to DWG	تبدیل PDF به DWG
+	PDF Import...	وارد کردن PDF...
+	PDF Import	وارد کردن PDF
+	Page	صفحه
+	PDF layers (else by colour and line weight)	لایه‌های PDF (در غیر این صورت بر اساس رنگ و ضخامت خط)
+	By colour and line weight	بر اساس رنگ و ضخامت خط
+	Object layers (PDF_Geometry, PDF_Text, …)	لایه‌های شیء (PDF_Geometry، PDF_Text، …)
+	Import text	وارد کردن متن
+	Join line pieces and make circles	اتصال تکه‌های خط و ساخت دایره‌ها
+	Keep white fills (masks)	حفظ پرشدگی‌های سفید (ماسک‌ها)
+	Import raster images (saved as PNG files)	وارد کردن تصاویر رستری (ذخیره به‌صورت فایل PNG)
+	Add a layout that plots like the sheet	افزودن طرح‌بندی‌ای که مانند برگه پلات شود
+	Convert and Save as DWG…	تبدیل و ذخیره به‌صورت DWG…
+	Walk	قدم زدن
+	Report a Bug...	گزارش اشکال...
+	Request a Feature...	درخواست ویژگی...
+	Donate / Improve	کمک مالی / بهبود
+	Improve CADaddy	بهبود CADaddy
+	Or email {address}	یا به {address} ایمیل بزنید
+	Support CADaddy	حمایت از CADaddy
+	CADaddy is free, and it always will be.	CADaddy رایگان است و همیشه رایگان خواهد ماند.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	بدون تبلیغات، بدون اشتراک. اگر CADaddy در وقت شما صرفه‌جویی می‌کند، یک کمک مالی کوچک هزینه زمان هوش مصنوعی را که ویژگی‌های بعدی را می‌سازد تأمین می‌کند.
+	Report a bug or request a feature	گزارش اشکال یا درخواست ویژگی
+	Support CADaddy...	حمایت از CADaddy...
+	Array (classic)	آرایه (کلاسیک)
+	Change	تغییر
+	Change Properties	تغییر خصوصیات
+	Quick Leader	خط راهنمای سریع
+	Symbol...	نماد...
+	List Symbols	فهرست نمادها
+	Symbols	نمادها
+	Search symbols	جستجوی نمادها
+	No symbols match.	هیچ نمادی مطابقت ندارد.
+	Plumbing fixtures	لوازم بهداشتی
+	Plumbing piping	لوله‌کشی
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	طراحی و نقشه‌کشی به کمک رایانه برای Windows، Mac و Linux، نوشته‌شده با Rust.
+	Includes open-source components: see NOTICE.	شامل اجزای متن‌باز است: NOTICE را ببینید.
+	Free to use. Not affiliated with Autodesk, Inc.	استفاده رایگان. وابسته به Autodesk, Inc. نیست.
+	Electrical devices	تجهیزات برقی
+	Lighting	روشنایی
+	Power and distribution	قدرت و توزیع
+	Low voltage	ولتاژ ضعیف
+	Fire alarm	اعلام حریق
+	Check for Updates...	بررسی به‌روزرسانی‌ها...
+	Check for updates automatically	بررسی خودکار به‌روزرسانی‌ها
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	CADaddy روزی یک بار شماره جدیدترین نسخه را از GitHub می‌پرسد. هیچ اطلاعاتی درباره شما یا نقشه‌هایتان ارسال نمی‌شود.
+	Checking for updates...	در حال بررسی به‌روزرسانی‌ها...
+	CADaddy {v} is the latest version.	CADaddy {v} آخرین نسخه است.
+	CADaddy {v} is available	CADaddy {v} در دسترس است
+	You have {v}. Updating keeps your drawings and settings.	نسخه شما {v} است. به‌روزرسانی، نقشه‌ها و تنظیمات شما را حفظ می‌کند.
+	Downloading CADaddy {v}...	در حال دانلود CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} آماده نصب است
+	It installs when you close CADaddy. Restart now to update right away.	هنگام بستن CADaddy نصب می‌شود. برای به‌روزرسانی فوری، اکنون راه‌اندازی مجدد کنید.
+	Couldn't update CADaddy	به‌روزرسانی CADaddy ممکن نشد
+	Download	دانلود
+	What's New	تازه‌ها
+	Later	بعداً
+	Skip This Version	رد کردن این نسخه
+	Restart Now	راه‌اندازی مجدد اکنون
+	When I Close CADaddy	هنگام بستن CADaddy
+	Download Page	صفحه دانلود
+	Hide	پنهان کردن
+	The current layer is being turned off	لایه جاری در حال خاموش شدن است
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	لایه «{layer}» لایه جاری است. اشیایی که روی آن ترسیم می‌کنید تا زمانی که دوباره روشنش نکنید نمایش داده نمی‌شوند.
+	Keep the Current Layer On	لایه جاری روشن بماند
+	Turn the Current Layer Off	خاموش کردن لایه جاری
+	Quantity Takeoff	برآورد مقادیر
+	Dimension Style	سبک اندازه‌گذاری
+	Text Style	سبک متن
+	Xref	ارجاع خارجی
+	Raster Image Reference...	ارجاع تصویر رستری...
+	Window Lasso	کمند پنجره‌ای
+	Crossing Lasso	کمند تقاطعی
+	Fence Lasso	کمند حصاری
+	Press Space to cycle options	برای چرخش بین گزینه‌ها Space را فشار دهید
+	Burst	انفجار با حفظ ویژگی
+	Convert to Mtext	تبدیل به متن چندخطی
+	View Twist	پیچش نما
+	Let AI agents control CADaddy	اجازه کنترل CADaddy به عامل‌های هوش مصنوعی
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	در این صورت، رابط Claude و عامل‌های دیگر روی این رایانه می‌توانند نقشه‌ها را در این پنجره باز، ویرایش، ذخیره و بسته کنند. هیچ چیزی از خارج این رایانه نمی‌تواند متصل شود. از دفعه بعدی که CADaddy شروع شود اعمال می‌شود.
+	Base Point	نقطه پایه
+	Column Spacing	فاصله ستون‌ها
+	Column Count	تعداد ستون‌ها
+	Row Spacing	فاصله سطرها
+	Row Count	تعداد سطرها
+	Row and Column Count	تعداد سطرها و ستون‌ها
+	Level Spacing	فاصله ترازها
+	Level Count	تعداد ترازها
+	Item Spacing	فاصله اقلام
+	Item Count	تعداد اقلام
+	Total column spacing	فاصله کل ستون‌ها
+	Total row spacing	فاصله کل سطرها
+	Total row and column spacing	فاصله کل سطرها و ستون‌ها
+	Total level spacing	فاصله کل ترازها
+	Fill angle	زاویه پرکردن
+	Stretch radius	کشش شعاع
+	Array Grips	دستگیره‌های آرایه
+	Edit Array with a Grip	ویرایش آرایه با دستگیره
+	Open Drawings	نقشه‌های باز
+	Close Drawing	بستن نقشه
+	Close All Drawings	بستن همه نقشه‌ها
+	Export Comparison Report...	صدور گزارش مقایسه...
+	Select All Layouts	انتخاب همه طرح‌بندی‌ها
+	Move or Copy...	جابه‌جایی یا کپی...
+	Move or Copy	جابه‌جایی یا کپی
+	Move or copy layout "{name}"	جابه‌جایی یا کپی طرح‌بندی «{name}»
+	Before layout:	قبل از طرح‌بندی:
+	(move to end)	(انتقال به انتها)
+	Create a copy	ایجاد یک کپی
+	A drawing keeps at least one layout.	هر نقشه دست‌کم یک طرح‌بندی دارد.
+	Move Layout	جابه‌جایی طرح‌بندی
+	Background	پس‌زمینه
+	Text fill	پرشدگی متن
+	Text fill color	رنگ پرشدگی متن
+	Text reads right to left	متن از راست به چپ خوانده می‌شود
+	Placing text places the dimension line	قرار دادن متن، خط اندازه را جای‌گذاری می‌کند
+	Alternate tolerance precision	دقت رواداری جایگزین
+	Alternate tolerance zero suppression	حذف صفرهای رواداری جایگزین
+	Linear jog height (× text height)	ارتفاع شکست خطی (× ارتفاع متن)
+	Break size	اندازه شکست
+	Express Tools	Express Tools
+	Break-line Symbol	نماد خط شکست
+	Replace Block...	جایگزینی بلوک...
+	Move/Copy/Rotate	جابه‌جایی/کپی/چرخش
+	Remove boundaries	حذف مرزها
+	Inherit Properties	ارث‌بری خصوصیات
+	Nothing to preview yet.	هنوز چیزی برای پیش‌نمایش نیست.
+	Property Settings	تنظیمات خصوصیات
+	Basic Properties	خصوصیات پایه
+	Special Properties	خصوصیات ویژه
+	Plot Style	سبک پلات
+	Material	جنس
+	Shadow display	نمایش سایه
+	Center object	شیء مرکز
+	Move with Dim Line	جابه‌جایی با خط اندازه
+	Move Text Only	جابه‌جایی فقط متن
+	Above Dim Line	بالای خط اندازه
+	Center Vertically	وسط‌چین عمودی
+	Reset Text Position	بازنشانی موقعیت متن
+	Continue Dimension	اندازه‌گذاری پیوسته
+	Baseline Dimension	اندازه‌گذاری از خط مبنا
+	Flip Arrow	برگرداندن پیکان
+	Lengthen Landing	افزایش طول پاگرد
+	Origin Point	نقطه مبدأ
+	Hatch Angle	زاویه هاشور
+	Hatch Scale	مقیاس هاشور
+	Edit Tolerance	ویرایش رواداری
+	Geometric Tolerance	رواداری هندسی
+	Geometric characteristic	مشخصه هندسی
+	Material condition	شرط ماده
+	No symbol	بدون نماد
+	Projected Tolerance Zone	ناحیه رواداری تصویرشده
+	Datum Identifier	شناسه مبنا
+	Sym	نماد
+	Tolerance 1	رواداری 1
+	Tolerance 2	رواداری 2
+	Datum 1	مبنا 1
+	Datum 2	مبنا 2
+	Datum 3	مبنا 3
+	PDF Underlay...	زیرلایه PDF...
+	Clip PDF Underlay	برش قاب زیرلایه PDF
+	Adjust PDF Underlay	تنظیم زیرلایه PDF
+	PDF Underlay Layers	لایه‌های زیرلایه PDF
+	Unused items in this drawing	اقلام استفاده‌نشده در این نقشه
+	Purge Checked Items	پاک‌سازی اقلام علامت‌خورده
+	Purge All	پاک‌سازی همه
+	Items purged: {count}	اقلام پاک‌سازی‌شده: {count}
+	Find what:	یافتن:
+	Replace with:	جایگزینی با:
+	Match case	تطبیق حروف کوچک و بزرگ
+	Find whole words only	فقط یافتن کلمات کامل
+	Find	یافتن
+	Replace All	جایگزینی همه
+	Matches replaced: {count} (objects: {objects})	موارد جایگزین‌شده: {count} (اشیا: {objects})
+	Matches found and selected: {count} (objects: {objects})	موارد یافته و انتخاب‌شده: {count} (اشیا: {objects})
+	Select Color	انتخاب رنگ
+	Dimension styles	سبک‌های اندازه‌گذاری
+	Linetypes	انواع خط
+	Multileader styles	سبک‌های چندراهنما
+	Multiline styles	سبک‌های چندخط موازی
+	Table styles	سبک‌های جدول
+	Text styles	سبک‌های متن
+	Zero-length geometry	هندسه با طول صفر
+	Empty text objects	اشیای متنی خالی
+	Palette Windows	پنجره‌های پالت
+	Dock	داک کردن
+	Back into the main window	بازگشت به پنجره اصلی
+	Dock Palette	داک کردن پالت
+	Float in Own Window	شناور در پنجره جداگانه
+	Drawings (CDY, DWG, DXF)	نقشه‌ها (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	نقشه CADaddy (CDY)
+	CADaddy drawing (.cdy)	نقشه CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	هنگام ذخیره نقشه CADaddy (.cdy) یک کپی DWG هم ذخیره شود
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	نقشه CADaddy همه چیز را نگه می‌دارد؛ فایل‌های DWG و DXF ممکن است همه آن را نگه ندارند (هنگام ذخیره در آن‌ها گفته می‌شود چه چیزی).
+	Field...	فیلد...
+	Update Fields	به‌روزرسانی فیلدها
+	Change Text Case	تغییر حالت حروف متن
+	Auto Number	شماره‌گذاری خودکار
+	Explode Text	تجزیه متن
+	Arc Aligned Text	متن هم‌راستا با کمان
+	Data Extraction	استخراج داده
+	Data source	منبع داده
+	Objects	اشیا
+	Output	خروجی
+	Other drawings:	نقشه‌های دیگر:
+	Add Drawings...	افزودن نقشه‌ها...
+	Open Settings...	باز کردن تنظیمات...
+	Start from a saved .dxe settings file	شروع از یک فایل تنظیمات .dxe ذخیره‌شده
+	Block names	نام بلوک‌ها
+	Include blocks inside blocks	شامل بلوک‌های درون بلوک‌ها
+	Other objects:	اشیای دیگر:
+	The drawing has no other objects.	نقشه هیچ شیء دیگری ندارد.
+	Properties to extract:	خصوصیات برای استخراج:
+	Attribute tags	برچسب‌های ویژگی
+	Combine identical rows	ترکیب سطرهای یکسان
+	Insert a table	درج جدول
+	Insertion point	نقطه درج
+	Title	عنوان
+	Write a file (.csv for spreadsheets, .txt tab-separated)	نوشتن فایل (.csv برای صفحه‌گسترده، .txt جداشده با Tab)
+	Browse...	مرور...
+	Save Settings...	ذخیره تنظیمات...
+	Save these choices to a .dxe file to use again	ذخیره این انتخاب‌ها در فایل .dxe برای استفاده مجدد
+	< Back	< قبلی
+	Next >	بعدی >
+	Finish	پایان
+	UCS	UCS
+	Plan View (World)	نمای پلان (جهانی)
+	New UCS	UCS جدید
+	World	جهانی
+	Current UCS	UCS جاری
+	World (WCS)	جهانی (WCS)
+	Unnamed	بی‌نام
+	Hide UCS Icon	پنهان کردن نماد UCS
+	WCS	WCS
+	Spelling	املا
+	Check Spelling	بررسی املا
+	Where to check	محل بررسی
+	Selected objects	اشیای انتخاب‌شده
+	Not in dictionary:	در فرهنگ لغت نیست:
+	Suggestions:	پیشنهادها:
+	Ignore All	نادیده گرفتن همه
+	Change All	تغییر همه
+	Add to Dictionary	افزودن به فرهنگ لغت
+	Main dictionary:	فرهنگ لغت اصلی:
+	American English	انگلیسی آمریکایی
+	Custom dictionary:	فرهنگ لغت سفارشی:
+	Spelling check complete.	بررسی املا کامل شد.
+	Hyperlink...	پیوند...
+	Select Objects for a Hyperlink	انتخاب اشیا برای پیوند
+	Open Hyperlink	باز کردن پیوند
+	Insert Hyperlink	درج پیوند
+	Edit Hyperlink	ویرایش پیوند
+	Text to display	متن نمایشی
+	File or web page	فایل یا صفحه وب
+	Named location	مکان نام‌دار
+	A named location with no file or web page is a layout or view of this drawing.	مکان نام‌دار بدون فایل یا صفحه وب، یک طرح‌بندی یا نما از همین نقشه است.
+	Remove Link	حذف پیوند
+	⌘-click to follow the link	برای دنبال کردن پیوند ⌘-کلیک کنید
+	Ctrl+click to follow the link	برای دنبال کردن پیوند Ctrl+کلیک کنید
+	Materials Browser...	مرورگر مصالح...
+	Attach by Layer	پیوست بر اساس لایه
+	Material Mapping	نگاشت مصالح
+	New Material	مصالح جدید
+	Edit Material	ویرایش مصالح
+	Delete Material	حذف مصالح
+	Assign Material	اختصاص مصالح
+	Materials Browser	مرورگر مصالح
+	Search	جستجو
+	Library	کتابخانه
+	Add to drawing	افزودن به نقشه
+	In this drawing	در این نقشه
+	No materials yet: add one from the library.	هنوز مصالحی وجود ندارد: یکی از کتابخانه اضافه کنید.
+	Colour	رنگ
+	Roughness	زبری
+	Metallic	فلزی
+	Opacity	کدری
+	Mapping	نگاشت
+	Tile size	اندازه کاشی
+	Assign to selection ({n})	اختصاص به انتخاب ({n})
+	Attach to layer	پیوست به لایه
+	Render	رندر
+	Edit Layer State	ویرایش وضعیت لایه
+	Export Layer State	صدور وضعیت لایه
+	Import Layer State	وارد کردن وضعیت لایه
+	New Layer Filter	فیلتر لایه جدید
+	Edit Layer Filter	ویرایش فیلتر لایه
+	Delete Layer Filter	حذف فیلتر لایه
+	List Layer Filters	فهرست فیلترهای لایه
+	Layers in Filter	لایه‌های داخل فیلتر
+	Layer States Manager	مدیریت وضعیت‌های لایه
+	Invert filter	معکوس کردن فیلتر
+	New Property Filter...	فیلتر خصوصیات جدید...
+	New Group Filter	فیلتر گروهی جدید
+	Add Layer	افزودن لایه
+	Remove Layer	حذف لایه
+	Layer Filter Properties	خصوصیات فیلتر لایه
+	Filter name	نام فیلتر
+	Within	در محدوده
+	Any	هر
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	الگوها: * هر چیزی، ? یک نویسه، # یک رقم؛ با کاما جدا کنید؛ ~ مستثنا می‌کند.
+	Layer states	وضعیت‌های لایه
+	Turn off layers not found in layer state	خاموش کردن لایه‌هایی که در وضعیت لایه یافت نمی‌شوند
+	Layer properties to restore	خصوصیات لایه برای بازگردانی
+	On / Off	روشن / خاموش
+	Frozen / Thawed	منجمد / آزاد
+	Locked / Unlocked	قفل / باز
+	Plot / No Plot	پلات / بدون پلات
+	Layers in "{name}"	لایه‌های «{name}»
+	Remove from the layer state	حذف از وضعیت لایه
+	New...	جدید...
+	Save the layers as they are now in this state	ذخیره لایه‌ها به همین شکل فعلی در این وضعیت
+	Edit...	ویرایش...
+	Rename	تغییر نام
+	New layer state name	نام وضعیت لایه جدید
+	New name	نام جدید
+	Visual Style	سبک بصری
+	Visual Styles	سبک‌های بصری
+	Wireframe	قاب‌سیمی
+	Hidden	پنهان
+	Shaded	سایه‌دار
+	Shaded with Edges	سایه‌دار با لبه‌ها
+	Realistic	واقع‌گرایانه
+	Mesh	مش
+	Polyface Mesh	مش چندوجهی
+	Polygon Mesh	مش چندضلعی
+	Fly	پرواز
+	Walk and Fly	قدم زدن و پرواز
+	3D Library...	کتابخانه سه‌بعدی...
+	Add 3D Twins to Symbols	افزودن همتاهای سه‌بعدی به نمادها
+	List 3D Models	فهرست مدل‌های سه‌بعدی
+	Add 3D Twins	افزودن همتاهای سه‌بعدی
+	Plan Layers	لایه‌های پلان
+	Plan Walls	دیوارهای پلان
+	Plan Openings	بازشوهای پلان
+	Plan Rooms	اتاق‌های پلان
+	Plan Notes	یادداشت‌های پلان
+	Plan Sheets	برگه‌های پلان
+	3D Building from Plan	ساختمان سه‌بعدی از پلان
+	Wedge	گوه
+	Presspull	فشار/کشش
+	3D Solid	جامد سه‌بعدی
+	Specify center	مرکز را مشخص کنید
+	Specify length	طول را مشخص کنید
+	Specify width	عرض را مشخص کنید
+	Specify other corner	گوشه دیگر را مشخص کنید
+	Specify center point	نقطه مرکز را مشخص کنید
+	Specify base radius	شعاع قاعده را مشخص کنید
+	Specify radius	شعاع را مشخص کنید
+	Specify diameter	قطر را مشخص کنید
+	Specify top radius	شعاع بالا را مشخص کنید
+	Specify tube radius	شعاع لوله را مشخص کنید
+	Select objects to extrude	اشیا را برای اکسترود انتخاب کنید
+	Select extrusion path	مسیر اکسترود را انتخاب کنید
+	Specify angle of taper for extrusion	زاویه شیب اکسترود را مشخص کنید
+	Specify height of extrusion	ارتفاع اکسترود را مشخص کنید
+	Select objects to revolve	اشیا را برای دوران انتخاب کنید
+	Specify axis start point or define axis by	نقطه شروع محور را مشخص کنید یا محور را تعریف کنید با
+	Specify axis endpoint	نقطه انتهای محور را مشخص کنید
+	Specify angle of revolution	زاویه دوران را مشخص کنید
+	Select objects to sweep	اشیا را برای جاروب انتخاب کنید
+	Select sweep path	مسیر جاروب را انتخاب کنید
+	Select cross sections in lofting order	مقاطع را به ترتیب لافت انتخاب کنید
+	Click inside bounded areas to press or pull	برای فشار یا کشش، داخل نواحی محصور کلیک کنید
+	Specify extrusion height	ارتفاع اکسترود را مشخص کنید
+	Cube	مکعب
+	Sides	اضلاع
+	Top radius	شعاع بالا
+	Path	مسیر
+	Taper angle	زاویه شیب
+	Select one or more regions or 3D solids.	یک یا چند ناحیه یا جامد سه‌بعدی انتخاب کنید.
+	No closed area found there.	هیچ ناحیه بسته‌ای آنجا یافت نشد.
+	Slice	برش مقطع
+	Thicken	ضخیم کردن
+	Fillet Edge	گرد کردن لبه
+	Chamfer Edge	پخ لبه
+	Fillet Edges	گرد کردن لبه‌ها
+	Chamfer Edges	پخ لبه‌ها
+	Move Faces	جابه‌جایی وجه‌ها
+	Offset Faces	آفست وجه‌ها
+	Delete Faces	حذف وجه‌ها
+	Shell	پوسته
+	Composite	مرکب
+	Select objects to slice	اشیا را برای برش مقطع انتخاب کنید
+	Specify a point on desired side or [keep Both sides]	نقطه‌ای در سمت مورد نظر مشخص کنید یا [حفظ هر دو سمت]
+	Both	هر دو
+	Specify start point of slicing plane or	نقطه شروع صفحه برش را مشخص کنید یا
+	Specify second point on plane	نقطه دوم روی صفحه را مشخص کنید
+	Specify the Z of the XY-plane	Z صفحه XY را مشخص کنید
+	Specify the X of the YZ-plane	X صفحه YZ را مشخص کنید
+	Specify the Y of the ZX-plane	Y صفحه ZX را مشخص کنید
+	Select surfaces to thicken	سطوح را برای ضخیم کردن انتخاب کنید
+	Select a 3D solid	یک جامد سه‌بعدی انتخاب کنید
+	Select an edge	یک لبه انتخاب کنید
+	Remove faces	حذف وجه‌ها
+	Select faces	وجه‌ها را انتخاب کنید
+	Specify thickness	ضخامت را مشخص کنید
+	Enter fillet radius	شعاع گرد کردن را وارد کنید
+	Enter distance	فاصله را وارد کنید
+	Specify a base point or displacement	نقطه پایه یا جابه‌جایی را مشخص کنید
+	Specify a second point of displacement	نقطه دوم جابه‌جایی را مشخص کنید
+	Specify the offset distance	فاصله آفست را مشخص کنید
+	Enter the shell offset distance	فاصله آفست پوسته را وارد کنید
+	Select solids, surfaces, and regions to subtract from ..	جامدها، سطوح و نواحی را که باید از آن‌ها کم شود انتخاب کنید ..
+	Select solids, surfaces, and regions to subtract ..	جامدها، سطوح و نواحی را که باید کم شوند انتخاب کنید ..
+	Select two or more solids.	دو یا چند جامد انتخاب کنید.
+	The solids don't overlap; nothing was changed.	جامدها هم‌پوشانی ندارند؛ چیزی تغییر نکرد.
+	Nothing would remain; nothing was changed.	چیزی باقی نمی‌ماند؛ چیزی تغییر نکرد.
+	The result would not be a solid; nothing was changed.	نتیجه جامد نخواهد بود؛ چیزی تغییر نکرد.
+	No straight edge between two flat faces there.	آنجا لبه مستقیمی بین دو وجه تخت وجود ندارد.
+	No face of the solid there.	آنجا وجهی از جامد وجود ندارد.
+	Only outside (convex) edges can be filleted or chamfered.	فقط لبه‌های بیرونی (محدب) را می‌توان گرد یا پخ کرد.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL روی مکعب‌ها، استوانه‌ها، کره‌ها و اکسترودهای مستقیم کار می‌کند.
+	The walls are too thick for this solid.	دیواره‌ها برای این جامد بیش از حد ضخیم هستند.
+	Select solids to subtract from.	جامدهایی را که باید از آن‌ها کم شود انتخاب کنید.
+	A solid can't be subtracted from itself.	نمی‌توان یک جامد را از خودش کم کرد.
+	The solid would have too many operations; nothing was changed.	جامد عملیات بیش از حدی خواهد داشت؛ چیزی تغییر نکرد.
+	That face can't be moved (only flat faces, holes and added parts).	آن وجه قابل جابه‌جایی نیست (فقط وجه‌های تخت، سوراخ‌ها و بخش‌های افزوده).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	آن وجه قابل حذف نیست (فقط سوراخ‌ها، گردی‌ها، پخ‌ها و بخش‌های افزوده).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	آن وجه قابل آفست نیست (اضلاع مکعب، دو سر استوانه‌ها، مخروط‌ها و اکسترودها، دیواره استوانه‌ها و کره‌ها).
+	The thickness must be more than zero.	ضخامت باید بیشتر از صفر باشد.
+	The radius must be more than zero.	شعاع باید بیشتر از صفر باشد.
+	The distance must be more than zero.	فاصله باید بیشتر از صفر باشد.
+	Requires a number.	یک عدد لازم است.
+	Parameter	پارامتر
+	Action	عملکرد
+	Visibility States	وضعیت‌های نمایان
+	Remove Parameter or Action	حذف پارامتر یا عملکرد
+	Edit Reference	ویرایش ارجاع
+	Discard Reference Edits	رد ویرایش‌های ارجاع
+	Nested References	ارجاع‌های تودرتو
+	Light List	فهرست نورها
+	Sun Properties	خصوصیات خورشید
+	Render Exposure	نوردهی رندر
+	Point Light	نور نقطه‌ای
+	Spotlight	نورافکن
+	Distant Light	نور دوردست
+	Change Lights	تغییر نورها
+	Section Plane	صفحه مقطع
+	Live Section	مقطع زنده
+	Generate Section Block	ایجاد بلوک مقطع
+	Generate Section	ایجاد مقطع
+	Flatshot	تصویر تخت
+	Base View	نمای پایه
+	Section View	نمای مقطع
+	Drawing Views	نماهای نقشه
+	Select face or any point to locate section line or	وجه یا هر نقطه‌ای را برای تعیین خط مقطع انتخاب کنید یا
+	Orthographic	ارتوگرافیک
+	Select section object	شیء مقطع را انتخاب کنید
+	Specify location of base view	محل نمای پایه را مشخص کنید
+	Select parent view	نمای والد را انتخاب کنید
+	Specify end point	نقطه انتها را مشخص کنید
+	Specify location of section view	محل نمای مقطع را مشخص کنید
+	There is nothing to draw: no 3D objects were found.	چیزی برای ترسیم نیست: هیچ شیء سه‌بعدی یافت نشد.
+	The section plane doesn't cut any solid.	صفحه مقطع هیچ جامدی را قطع نمی‌کند.
+	The view needs a direction.	نما به یک جهت نیاز دارد.
+	The drawing has no layout.	نقشه هیچ طرح‌بندی‌ای ندارد.
+	That is not a section plane.	آن یک صفحه مقطع نیست.
+	Requires a point.	یک نقطه لازم است.
+	The view is [dx, dy, dz].	نما به‌صورت [dx, dy, dz] است.
+	eTransmit...	eTransmit...
+	Create Transmittal	ایجاد بسته ارسال
+	Files in the package	فایل‌های داخل بسته
+	Not included	گنجانده نشده
+	Organized folders	پوشه‌های سازمان‌یافته
+	One folder	یک پوشه
+	Include a transmittal report	گنجاندن گزارش ارسال
+	Create ZIP...	ایجاد ZIP...
+	Create Folder...	ایجاد پوشه...
+	STL Out	خروجی STL
+	Export STL...	صدور STL...
+	3D models (glTF, OBJ, STL)	مدل‌های سه‌بعدی (glTF, OBJ, STL)
+	3D model (glTF binary)	مدل سه‌بعدی (glTF دودویی)
+	3D model (glTF)	مدل سه‌بعدی (glTF)
+	3D model (OBJ)	مدل سه‌بعدی (OBJ)
+	3D model (STL)	مدل سه‌بعدی (STL)
+	Render Region	رندر ناحیه
+	samples	نمونه
+	a sample	یک نمونه
+	Pick crop window to render	پنجره برش را برای رندر انتخاب کنید
+	Nothing has been rendered yet.	هنوز چیزی رندر نشده است.
+	There is nothing to render: no surfaces in the view.	چیزی برای رندر نیست: هیچ سطحی در نما وجود ندارد.
+	The image couldn't be encoded.	تصویر کدگذاری نشد.
+	Saving images isn't available in the browser.	ذخیره تصاویر در مرورگر در دسترس نیست.
+	PNG image	تصویر PNG
+	JPEG image	تصویر JPEG
+	Save Image	ذخیره تصویر
+	My Properties	خصوصیات من
+	Add to My Properties	افزودن به خصوصیات من
+	Remove from My Properties	حذف از خصوصیات من
+	All properties	همه خصوصیات
+	My properties: the ones you added (right-click a property's name to add it)	خصوصیات من: مواردی که اضافه کرده‌اید (برای افزودن، روی نام یک خصوصیت کلیک راست کنید)
+	Right-click a property's name and choose Add to My Properties.	روی نام یک خصوصیت کلیک راست کنید و «افزودن به خصوصیات من» را برگزینید.
+	Color Books	کتاب‌های رنگ
+	Sheet Set Manager	مدیریت مجموعه برگه‌ها
+	Palettes	پالت‌ها
+	New Sheet Set...	مجموعه برگه جدید...
+	Open Sheet Set...	باز کردن مجموعه برگه...
+	No sheet set is open.	هیچ مجموعه برگه‌ای باز نیست.
+	Number	شماره
+	Subset	زیرمجموعه
+	Remove Sheet	حذف برگه
+	Add Drawing...	افزودن نقشه...
+	Rename Layouts to Match	تغییر نام طرح‌بندی‌ها برای تطابق
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	طرح‌بندی هر برگه به «شماره عنوان» تبدیل می‌شود که فیلدهای شماره و عنوان برگه آن را نشان می‌دهند
+	Publish to PDF...	انتشار به PDF...
+	Prefix	پیشوند
+	Digits	ارقام
+	Renumber	شماره‌گذاری مجدد
+	Zoom to Fit	زوم برای جا شدن
+	Drag to pan, scroll to zoom	برای جابه‌جایی نما بکشید، برای زوم اسکرول کنید
+	Publish	انتشار
+	Sheets to publish, in order	برگه‌های قابل انتشار، به ترتیب
+	Sheet	برگه
+	Bookmark	نشانک
+	Paper	کاغذ
+	Orientation	جهت
+	(sheet name)	(نام برگه)
+	Page setup	تنظیمات صفحه
+	Landscape	افقی
+	Portrait	عمودی
+	Add Sheets from Drawing...	افزودن برگه‌ها از نقشه...
+	Load List...	بارگذاری فهرست...
+	Save List...	ذخیره فهرست...
+	Publish List	فهرست انتشار
+	Enclose Text with Object	محصور کردن متن با شیء
+	Export Attribute Information	صدور اطلاعات ویژگی
+	Import Attribute Information	وارد کردن اطلاعات ویژگی
+	Mask Text	ماسک متن
+	Remote Text	متن راه دور
+	Rotate Text	چرخش متن
+	Text Fit	جا دادن متن
+	Toggle Frames	تغییر قاب‌ها
+	Unmask Text	لغو ماسک متن
+	Update Remote Text	به‌روزرسانی متن راه دور
+	Geometric	هندسی
+	Infer geometric constraints	استنتاج قیدهای هندسی
+	Show constraint bars	نمایش نوارهای قید
+	Constraint bar transparency (%)	شفافیت نوار قید (%)
+	Dimensional	ابعادی
+	Show dynamic constraints	نمایش قیدهای پویا
+	Dimension name format	قالب نام اندازه
+	Name and Expression	نام و عبارت
+	Constraint types AUTOCONSTRAIN applies, in order of priority	انواع قیدی که AUTOCONSTRAIN اعمال می‌کند، به ترتیب اولویت
+	Move Up	انتقال به بالا
+	Move Down	انتقال به پایین
+	Tangent objects must share an intersection point	اشیای مماس باید یک نقطه تقاطع مشترک داشته باشند
+	Perpendicular objects must share an intersection point	اشیای عمود باید یک نقطه تقاطع مشترک داشته باشند
+	Distance tolerance	رواداری فاصله
+	Angle tolerance (degrees)	رواداری زاویه (درجه)
+	3D Move	جابه‌جایی سه‌بعدی
+	3D Rotate	چرخش سه‌بعدی
+	3D Scale	مقیاس سه‌بعدی
+	3D Align	تراز کردن سه‌بعدی
+	3D Mirror	قرینه سه‌بعدی
+	3D Array	آرایه سه‌بعدی
+	3D Object Snap	گیره شیء سه‌بعدی
+	Specify second point or distance	نقطه دوم یا فاصله را مشخص کنید
+	Specify angle	زاویه را مشخص کنید
+	Specify source plane: first point	صفحه مبدأ را مشخص کنید: نقطه اول
+	Specify source plane: second point	صفحه مبدأ را مشخص کنید: نقطه دوم
+	Specify source plane: third point	صفحه مبدأ را مشخص کنید: نقطه سوم
+	Specify destination plane: first point	صفحه مقصد را مشخص کنید: نقطه اول
+	Specify destination plane: second point	صفحه مقصد را مشخص کنید: نقطه دوم
+	Specify destination plane: third point	صفحه مقصد را مشخص کنید: نقطه سوم
+	Delete source objects?	اشیای مبدأ حذف شوند؟
+	Specify point on XY plane	نقطه‌ای روی صفحه XY مشخص کنید
+	Specify point on YZ plane	نقطه‌ای روی صفحه YZ مشخص کنید
+	Specify point on ZX plane	نقطه‌ای روی صفحه ZX مشخص کنید
+	Specify first point of mirror plane (3 points) or	نقطه اول صفحه قرینه (3 نقطه) را مشخص کنید یا
+	Specify second point on mirror plane	نقطه دوم روی صفحه قرینه را مشخص کنید
+	Specify third point on mirror plane	نقطه سوم روی صفحه قرینه را مشخص کنید
+	Enter the type of array	نوع آرایه را وارد کنید
+	Polar	قطبی
+	Enter the number of items in the array	تعداد اقلام آرایه را وارد کنید
+	Specify the angle to fill (+=ccw, -=cw)	زاویه پرکردن را مشخص کنید (+=پادساعتگرد، -=ساعتگرد)
+	Enter the number of rows (---)	تعداد سطرها را وارد کنید (---)
+	Enter the number of columns (|||)	تعداد ستون‌ها را وارد کنید (|||)
+	Enter the number of levels (...)	تعداد ترازها را وارد کنید (...)
+	Specify the distance between rows (---)	فاصله بین سطرها را مشخص کنید (---)
+	Specify the distance between columns (|||)	فاصله بین ستون‌ها را مشخص کنید (|||)
+	Specify the distance between levels (...)	فاصله بین ترازها را مشخص کنید (...)
+	Specify second point on axis of rotation	نقطه دوم روی محور چرخش را مشخص کنید
+	Select the objects first.	ابتدا اشیا را انتخاب کنید.
+	Requires a point, or a distance along an axis.	یک نقطه یا فاصله‌ای در امتداد یک محور لازم است.
+	The points must not coincide or line up.	نقاط نباید بر هم منطبق یا هم‌خط باشند.
+	The three points line up: they make no plane.	سه نقطه هم‌خط هستند: صفحه‌ای نمی‌سازند.
+	<3D Object Snap on>	<گیره شیء سه‌بعدی روشن>
+	<3D Object Snap off>	<گیره شیء سه‌بعدی خاموش>
+	Preparing the 3D view…	در حال آماده‌سازی نمای سه‌بعدی…
+	Viewpoint	نقطه دید
+	3D View Benchmark	محک نمای سه‌بعدی
+	Drawing area	ناحیه ترسیم
+	Command line	خط فرمان
+	Viewport controls	کنترل‌های پنجره دید
+	Coordinate system menu	منوی دستگاه مختصات
+	UCS icon X axis	محور X نماد UCS
+	UCS icon Y axis	محور Y نماد UCS
+	High Contrast	کنتراست بالا
+	Interface size	اندازه رابط کاربری
+	Interface Size	اندازه رابط کاربری
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	مشخصات ساختمان
+	Set Building Spec	تنظیم مشخصات ساختمان
+	Validate Building Spec	اعتبارسنجی مشخصات ساختمان
+	Build Model from Spec	ساخت مدل از مشخصات
+	Convert Matches to Block	تبدیل موارد منطبق به بلوک
+	Command Line Transparency	شفافیت خط فرمان
+	AutoComplete Settings	تنظیمات تکمیل خودکار
+	Input Settings	تنظیمات ورودی
+	AutoComplete	تکمیل خودکار
+	Search System Variables	جستجوی متغیرهای سیستمی
+	Mid-string Search	جستجو در میانه رشته
+	System variable	متغیر سیستمی
+	Layer state	وضعیت لایه
+	Model Issues	مشکلات مدل
+	Render Model View	رندر نمای مدل
+	Model Overlay	هم‌پوشانی مدل
+	Model Counts	شمارش‌های مدل
+	System Printers	چاپگرهای سیستم
+	Report a Problem...	گزارش مشکل...
+	Report a Problem	گزارش مشکل
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	آنچه به یافتن مشکل کمک می‌کند در یک فایل ZIP روی این رایانه جمع‌آوری می‌شود. چیزی ارسال نمی‌شود: اگر می‌خواهید گزارش دهید، فایل را به یک ایمیل پیوست کنید.
+	Always included	همیشه گنجانده می‌شود
+	The log of this run and the two before it	گزارش این اجرا و دو اجرای قبلی
+	The last commands	آخرین فرمان‌ها
+	Versions, operating system and graphics adapter	نسخه‌ها، سیستم‌عامل و کارت گرافیک
+	A summary of the open drawings (counts only, no geometry)	خلاصه‌ای از نقشه‌های باز (فقط شمارش‌ها، بدون هندسه)
+	Names: file paths, layer and block names, typed text	نام‌ها: مسیر فایل‌ها، نام لایه‌ها و بلوک‌ها، متن تایپ‌شده
+	Names are replaced by placeholders, also in the log.	نام‌ها با جای‌نگهدار جایگزین می‌شوند، در گزارش هم.
+	Save Report...	ذخیره گزارش...
+	Email it to {address}	آن را به {address} ایمیل کنید
+	Plans to Model	پلان به مدل
+	Build	ساخت
+	Rebuild	ساخت مجدد
+	Check	بررسی
+	Kept in the drawing.	در نقشه نگه داشته می‌شود.
+	Drafted from the walk rules; not saved yet.	بر اساس قواعد پیمایش پیش‌نویس شده؛ هنوز ذخیره نشده.
+	{n} of {total} approved	{n} از {total} تأییدشده
+	Save Spec	ذخیره مشخصات
+	Approve All	تأیید همه
+	Approved	تأییدشده
+	Levels	ترازها
+	Wall Types	انواع دیوار
+	Rooms	اتاق‌ها
+	Door and Window Families	خانواده‌های در و پنجره
+	Materials	مصالح
+	Site	سایت
+	Openings	بازشوها
+	Issues ({n})	مشکلات ({n})
+	The drawing changed since; check again.	نقشه از آن زمان تغییر کرده است؛ دوباره بررسی کنید.
+	No issues found.	هیچ مشکلی یافت نشد.
+	Configure Standards	پیکربندی استانداردها
+	Standards files associated with the current drawing	فایل‌های استاندارد مرتبط با نقشه جاری
+	Add...	افزودن...
+	Check Standards...	بررسی استانداردها...
+	Check Standards	بررسی استانداردها
+	No standards violations were found.	هیچ تخطی از استانداردها یافت نشد.
+	problem(s)	مشکل
+	Take the standard's properties	گرفتن خصوصیات استاندارد
+	Replace it with the standard one	جایگزینی با نمونه استاندارد
+	Fix All	رفع همه
+	Give everything that differs the standard's properties	دادن خصوصیات استاندارد به همه موارد متفاوت
+	Check Again	بررسی دوباره
+	Layer Translator	مترجم لایه
+	Translate From	ترجمه از
+	Translate To	ترجمه به
+	Load a drawing whose layers to translate to.	نقشه‌ای را بارگذاری کنید که لایه‌ها به لایه‌های آن ترجمه شوند.
+	Map	نگاشت
+	Layer Translation Mappings	نگاشت‌های ترجمه لایه
+	Load Map...	بارگذاری نگاشت...
+	Save Map...	ذخیره نگاشت...
+	Translate	ترجمه
+	Not in the standards	در استانداردها نیست
+	Properties differ from the standards	خصوصیات با استانداردها متفاوت است
+	CAD Standards	استانداردهای CAD
+	Configure...	پیکربندی...
+	Check...	بررسی...
+	Layer Translator...	مترجم لایه...
+	Draft Building Spec	پیش‌نویس مشخصات ساختمان
+	Draft from Plan	پیش‌نویس از پلان
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	لایه‌ها، دیوارها، درها، اتاق‌ها و یادداشت‌های پلان خوانده می‌شوند؛ حدس‌ها علامت‌گذاری می‌شوند.
+	guess	حدس
+	Detect Stairs	تشخیص پله‌ها
+	List Stairs	فهرست پله‌ها
+	Confirm Stairs	تأیید پله‌ها
+	Stairs and Ramps	پله‌ها و رمپ‌ها
+	Bake Lighting	پخت نورپردازی
+	Command Aliases and Shortcuts	نام‌های مستعار فرمان و میان‌برها
+	Keyboard Shortcuts	میان‌برهای صفحه‌کلید
+	replaces {command}	جایگزین {command} می‌شود
+	Built-in	داخلی
+	Alias	نام مستعار
+	Command	فرمان
+	Add or Change	افزودن یا تغییر
+	Keys	کلیدها
+	Edit Aliases and Shortcuts...	ویرایش نام‌های مستعار و میان‌برها...
+	Customize	سفارشی‌سازی
+	Read Elevation	خواندن نما
+	Read Roof Plan	خواندن پلان بام
+	Exterior	نمای بیرونی
+	Drafting & Annotation	نقشه‌کشی و حاشیه‌نویسی
+	3D Modeling	مدل‌سازی سه‌بعدی
+	Electrical	برق
+	Save Current As...	ذخیره فعلی با نام...
+	Workspace Settings...	تنظیمات فضای کاری...
+	Workspace Settings	تنظیمات فضای کاری
+	Navigation Bar	نوار پیمایش
+	Save Workspace	ذخیره فضای کاری
+	Workspaces	فضاهای کاری
+	Close Navigation Bar	بستن نوار پیمایش
+	Workspace	فضای کاری
+	Read Ceiling Plan	خواندن پلان سقف
+	Ceilings	سقف‌ها
+	Current Drawing	نقشه جاری
+	Favourites	برگزیده‌ها
+	Libraries	کتابخانه‌ها
+	No library folder	بدون پوشه کتابخانه
+	Choose Folder...	انتخاب پوشه...
+	No blocks here.	اینجا هیچ بلوکی نیست.
+	Remove from Favourites	حذف از برگزیده‌ها
+	Add to Favourites	افزودن به برگزیده‌ها
+	Insertion Options	گزینه‌های درج
+	Auto-rotate (follow the current UCS)	چرخش خودکار (پیروی از UCS جاری)
+	Repeat Placement	تکرار جای‌گذاری
+	Tool Palettes	پالت‌های ابزار
+	Drag objects from the drawing here to make tools.	برای ساخت ابزار، اشیا را از نقشه به اینجا بکشید.
+	Add Selected	افزودن انتخاب‌شده‌ها
+	New palette	پالت جدید
+	Select objects in the drawing first.	ابتدا اشیا را در نقشه انتخاب کنید.
+	Blocks Palette	پالت بلوک‌ها
+	Detect Grids	تشخیص محورها
+	Align Levels by Grids	تراز کردن ترازها بر اساس محورها
+	Columns at Grids	ستون‌ها در محل محورها
+	Columns	ستون‌ها
+	Build Room Volumes	ساخت احجام اتاق‌ها
+	Building	ساختمان
+	Go to Room	رفتن به اتاق
+	List Rooms	فهرست اتاق‌ها
+	Room	اتاق
+	Build Volumes	ساخت احجام
+	Go to	رفتن به
+	{n} rooms	{n} اتاق
+	No rooms found: rooms are found from name labels inside closed outlines.	هیچ اتاقی یافت نشد: اتاق‌ها از برچسب‌های نام درون محدوده‌های بسته یافت می‌شوند.
+	Ceiling	سقف
+	DesignCenter	DesignCenter
+	Up One Level	یک سطح بالاتر
+	Folder	پوشه
+	Text Styles	سبک‌های متن
+	Dimension Styles	سبک‌های اندازه‌گذاری
+	Layouts	طرح‌بندی‌ها
+	Add to Drawing	افزودن به نقشه
+	Choose a drawing to see what it holds.	یک نقشه انتخاب کنید تا محتوای آن را ببینید.
+	{name} inserted.	{name} درج شد.
+	{name} is already in the drawing; it was kept.	{name} از قبل در نقشه هست؛ حفظ شد.
+	{name} added.	{name} اضافه شد.
+	Read MEP Runs	خواندن مسیرهای MEP
+	Model Clashes	تداخل‌های مدل
+	MEP Systems	سیستم‌های MEP
+	Undo History	تاریخچه واگرد
+	(Start)	(شروع)
+	Click a step to undo or redo to it.	روی یک مرحله کلیک کنید تا تا آنجا واگرد یا انجام مجدد شود.
+	Nothing yet.	هنوز چیزی نیست.
+	Double-click to run it again	برای اجرای دوباره دوبار کلیک کنید
+	Copy as Script	کپی به‌صورت اسکریپت
+	Save Session as Script...	ذخیره جلسه به‌صورت اسکریپت...
+	Command History Palette	پالت تاریخچه فرمان
+	Furnish from Plan	مبلمان از پلان
+	Classify Plan	طبقه‌بندی پلان
+	Text and multiline text	متن و متن چندخطی
+	Block attribute values	مقادیر ویژگی بلوک
+	Dimension text	متن اندازه
+	Multileaders	چندراهنماها
+	Hyperlinks	پیوندها
+	Layer and block names	نام لایه‌ها و بلوک‌ها
+	Find where:	محل یافتن:
+	Current space	فضای جاری
+	Plain text	متن ساده
+	Use wildcards	استفاده از نویسه‌های عام
+	Regular expressions	عبارات باقاعده
+	Look in	جستجو در
+	Zoom To	زوم به
+	Replace	جایگزینی
+	Create Selection Set	ایجاد مجموعه انتخاب
+	Matches found: {count} (objects: {objects})	موارد یافته: {count} (اشیا: {objects})
+	Layer name	نام لایه
+	Block name	نام بلوک
+	Revise Model from Plans	بازنگری مدل از روی پلان‌ها
+	Plans to Model Benchmark	محک پلان به مدل
+	Plans to Model Case	نمونه پلان به مدل
+	Plans to Model Score	امتیاز پلان به مدل
+	Save Viewpoint	ذخیره نقطه دید
+	Viewpoints for Every Room	نقاط دید برای همه اتاق‌ها
+	Camera Tour	تور دوربین
+	Tours and Viewpoints	تورها و نقاط دید
+	Tour Timing	زمان‌بندی تور
+	3D Graphics Limits	محدودیت‌های گرافیک سه‌بعدی
+	Drawn by the CPU (no usable GPU)	ترسیم با CPU (بدون GPU قابل استفاده)
+	Point Cloud...	ابر نقاط...
+	Point Cloud	ابر نقاط
+	Attach Point Cloud	پیوست ابر نقاط
+	Clip Point Cloud	برش قاب ابر نقاط
+	Point Cloud Color Map	نگاشت رنگ ابر نقاط
+	Point Cloud Information	اطلاعات ابر نقاط
+	Markups	نشانه‌گذاری‌ها
+	{done} of {total} done	{done} از {total} انجام‌شده
+	No markups. Import them from a reviewed PDF.	بدون نشانه‌گذاری. آن‌ها را از یک PDF بازبینی‌شده وارد کنید.
+	Done	انجام‌شده
+	Import Markups...	وارد کردن نشانه‌گذاری‌ها...
+	Import Markups	وارد کردن نشانه‌گذاری‌ها
+	Markup Import...	وارد کردن نشانه‌گذاری...
+	Markup Status	وضعیت نشانه‌گذاری
+	Read Door and Window Schedules	خواندن جدول‌های در و پنجره
+	Schedules	جدول‌های مشخصات
+	Esc	Esc
+	Hide the touch bar	پنهان کردن نوار لمسی
+	Type a command or value	یک فرمان یا مقدار تایپ کنید
+	Embed Textures	جاسازی بافت‌ها
+	Publish Walkthrough	انتشار گشت مجازی
+	Walkthroughs (CDYWALK)	گشت‌های مجازی (CDYWALK)
+	Check Exchange	بررسی تبادل
+	Not kept in the {format} file	در فایل {format} حفظ نمی‌شود
+	The drawing was saved. This file format can't keep everything in it:	نقشه ذخیره شد. این قالب فایل نمی‌تواند همه محتوای آن را نگه دارد:
+	What	چه چیزی
+	left out	حذف‌شده
+	changed	تغییرکرده
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	نقشه CADaddy (.cdy) همه چیز را نگه می‌دارد. «بررسی تبادل» این فهرست را بدون ذخیره دوباره نشان می‌دهد.
+	VP Linetype	نوع خط پنجره دید
+	VP Lineweight	ضخامت خط پنجره دید
+	Unreconciled New Layers ({n})	لایه‌های جدید تطبیق‌نیافته ({n})
+	Reconcile All	تطبیق همه
+	Reconcile Layer	تطبیق لایه
+	LayerWalk	LayerWalk
+	Layers: {n}	لایه‌ها: {n}
+	Restore on exit	بازگردانی هنگام خروج
+	Filter:	فیلتر:
+	Layer Walk...	پیمایش لایه‌ها...
+	Layer Walk	پیمایش لایه‌ها
+	Isolate Layer to Current Viewport	جداسازی لایه در پنجره دید جاری
+	Unreconciled New Layers	لایه‌های جدید تطبیق‌نیافته
+	Move to New Window	انتقال به پنجره جدید
+	Dock All Windows	داک کردن همه پنجره‌ها
+	Every drawing is in a window of its own.	هر نقشه در پنجره جداگانه خودش است.
+	Back among the drawing tabs	بازگشت میان زبانه‌های نقشه
+	Plot Stamp...	مهر پلات...
+	Plot a Folder of Drawings...	پلات یک پوشه از نقشه‌ها...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	هر نقشه درون پوشه به یک PDF جداگانه، در یک پوشه PDF داخل آن
+	Plot stamp	مهر پلات
+	Quick Properties Lists	فهرست‌های خصوصیات سریع
+	Purgeable Items	اقلام قابل پاک‌سازی
+	Find Non-Purgeable Items	یافتن اقلام غیرقابل پاک‌سازی
+	Purge {kind} "{name}"?	{kind} «{name}» پاک‌سازی شود؟
+	Yes to All	بله برای همه
+	Items that can't be purged, and why	اقلامی که قابل پاک‌سازی نیستند و دلیل آن
+	Select and Zoom	انتخاب و زوم
+	Pick an item to see why it can't be purged.	یک قلم را انتخاب کنید تا ببینید چرا قابل پاک‌سازی نیست.
+	Confirm each item to be purged	تأیید هر قلم پیش از پاک‌سازی
+	Purge nested items	پاک‌سازی اقلام تودرتو
+	Text Align	تراز متن
+	Color model:	مدل رنگ:
+	Hue	فام
+	Saturation	اشباع
+	Luminance	روشنایی
+	Hex	Hex
+	More Colors...	رنگ‌های بیشتر...
+	Load more books with COLORBOOK (JSON or tab-separated files).	کتاب‌های بیشتری را با COLORBOOK بارگذاری کنید (فایل‌های JSON یا جداشده با Tab).
+	All spaces	همه فضاها
+	Total: {n}	مجموع: {n}
+	No block references here.	اینجا هیچ ارجاع بلوکی نیست.
+	Highlight and zoom to its references	برجسته‌سازی و زوم به ارجاع‌های آن
+	Similar but not identical: {scaled} scaled, {exploded} exploded	مشابه ولی نه یکسان: {scaled} مقیاس‌شده، {exploded} تجزیه‌شده
+	Insert Count Table	درج جدول شمارش
+	Update Count Tables	به‌روزرسانی جدول‌های شمارش
+	Count in Area	شمارش در ناحیه
+	{n} reference(s) of {name} selected.	{n} ارجاع از {name} انتخاب شد.
+	{n} similar object(s) selected.	{n} شیء مشابه انتخاب شد.
+	Geographic Location...	موقعیت جغرافیایی...
+	Remove Geographic Location	حذف موقعیت جغرافیایی
+	Set Location	تنظیم موقعیت
+	Remove Location	حذف موقعیت
+	Latitude and Longitude	عرض و طول جغرافیایی
+	Trace Image to Vectors	ردیابی تصویر به بردار
+	Trace Raster Image to Vectors	ردیابی تصویر رستری به بردار
+	Drawing Summary	خلاصه نقشه
+	Query Drawing	پرس‌وجوی نقشه
+	Begin Agent Request	شروع درخواست عامل
+	End Agent Request	پایان درخواست عامل
+	Agent Dry Run	اجرای آزمایشی عامل
+	Agent Confirmations	تأییدهای عامل
+	Agent Change Journal	دفتر تغییرات عامل
+	Agent Activity	فعالیت عامل
+	An agent asks	یک عامل می‌پرسد
+	Allow	اجازه دادن
+	Deny	رد کردن
+	Not allowed: {question}	مجاز نیست: {question}
+	Ask me before an agent saves over a file or closes with changes	پیش از اینکه یک عامل روی فایلی ذخیره کند یا با تغییرات ببندد، از من بپرس
+	Dry run: agents' commands change nothing	اجرای آزمایشی: فرمان‌های عامل‌ها چیزی را تغییر نمی‌دهند
+	No agent requests yet.	هنوز درخواستی از عامل‌ها نیست.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} فرمان · {added} اضافه‌شده · {removed} حذف‌شده · {changed} تغییرکرده
+	Select what it added and changed	انتخاب آنچه اضافه و تغییر داده است
+	Activity History	تاریخچه فعالیت
+	Activity history is off (Options ▸ Open and Save).	تاریخچه فعالیت خاموش است (گزینه‌ها ▸ باز کردن و ذخیره).
+	command	فرمان
+	{n} steps	{n} مرحله
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	انتخاب اشیایی که این مرحله اضافه یا تغییر داده است
+	The objects of this step are gone.	اشیای این مرحله دیگر وجود ندارند.
+	{n} object(s) selected.	{n} شیء انتخاب شد.
+	{n} object(s) selected ({gone} since erased).	{n} شیء انتخاب شد ({gone} از آن زمان پاک شده‌اند).
+	{n} s ago	{n} ثانیه پیش
+	{n} min ago	{n} دقیقه پیش
+	{n} h ago	{n} ساعت پیش
+	{n} d ago	{n} روز پیش
+	Keep an activity history beside each drawing (private, on this computer)	نگهداری تاریخچه فعالیت در کنار هر نقشه (خصوصی، روی این رایانه)
+	Background mask	ماسک پس‌زمینه
+	Mask border offset	فاصله حاشیه ماسک
+	Mask color	رنگ ماسک
+	Use drawing background	استفاده از پس‌زمینه نقشه
+	Regenerate Dimensions	بازسازی اندازه‌ها
+	Enter layer name for new dimensions (. for the current layer)	نام لایه را برای اندازه‌های جدید وارد کنید (. برای لایه جاری)
+	{folder} (folder)	{folder} (پوشه)
+	Add drawings or a folder of them.	نقشه‌ها یا پوشه‌ای از آن‌ها را اضافه کنید.
+	Add Files...	افزودن فایل‌ها...
+	Add Folder...	افزودن پوشه...
+	cancelled	لغو شد
+	Choose the output folder, or Next to the originals.	پوشه خروجی را انتخاب کنید، یا «کنار فایل‌های اصلی».
+	Convert Drawings	تبدیل نقشه‌ها
+	Convert Drawings...	تبدیل نقشه‌ها...
+	Convert drawings...	تبدیل نقشه‌ها...
+	Convert to	تبدیل به
+	Converted	تبدیل‌شده
+	Converted, not all kept	تبدیل‌شده، نه با حفظ همه چیز
+	Converting files is not available on the web.	تبدیل فایل‌ها در نسخه وب در دسترس نیست.
+	Drawings to convert	نقشه‌های قابل تبدیل
+	Each drawing's own	نسخه خود هر نقشه
+	Failed	ناموفق
+	Files already there	فایل‌های موجود در مقصد
+	Folder:	پوشه:
+	Include subfolders	شامل زیرپوشه‌ها
+	Keep a file written over as .bak	نگه داشتن فایل بازنویسی‌شده به‌صورت .bak
+	Next to the originals	کنار فایل‌های اصلی
+	Open Log	باز کردن گزارش
+	Or type a file or folder path	یا مسیر یک فایل یا پوشه را تایپ کنید
+	Overwrite	بازنویسی
+	Save to	ذخیره در
+	Skip	رد شدن
+	Skipped	ردشده
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	هیچ نقشه‌ای (.dwg، .dxf، .cdy) برای تبدیل وجود ندارد.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} تبدیل‌شده، {skipped} ردشده، {failed} ناموفق از {total}
+	DWG drawing (.dwg)	نقشه DWG (.dwg)
+	DXF drawing (.dxf)	نقشه DXF (.dxf)
+	Require a token for control connections (recommended)	نیاز به توکن برای اتصال‌های کنترلی (توصیه‌شده)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	برنامه‌ها ابتدا باید توکنی را بفرستند که CADaddy در فایلی می‌نویسد که فقط شما می‌توانید بخوانید، تا برنامه‌های کاربران دیگر نتوانند آن را کنترل کنند. رابط Claude آن را برای شما می‌خواند. از دفعه بعدی که CADaddy شروع شود اعمال می‌شود.
+	Building models (IFC)	مدل‌های ساختمان (IFC)
+	Building model (IFC4)	مدل ساختمان (IFC4)
+	3D printing (3MF)	چاپ سه‌بعدی (3MF)
+	Include the drawing (the active drawing as a DXF file)	گنجاندن نقشه (نقشه فعال به‌صورت فایل DXF)
+	Your account, home folder and computer name are always left out.	حساب کاربری، پوشه خانگی و نام رایانه شما همیشه کنار گذاشته می‌شوند.
+	Files in the report	فایل‌های داخل گزارش
+	Send to Redline	ارسال به Redline
+	Import Redline Markups	وارد کردن نشانه‌گذاری‌های Redline
+	Import Redline Markups...	وارد کردن نشانه‌گذاری‌های Redline...
+	Open a Program?	یک برنامه باز شود؟
+	This link opens a program or script, not a document:	این پیوند یک برنامه یا اسکریپت را باز می‌کند، نه یک سند:
+	Open it only if you trust the drawing and know what it runs.	فقط در صورتی بازش کنید که به نقشه اعتماد دارید و می‌دانید چه چیزی را اجرا می‌کند.
+	Open Anyway	در هر حال باز شود
+	Report a security problem	گزارش یک مشکل امنیتی
+	Load This File?	این فایل بارگذاری شود؟
+	This file isn't in a trusted folder:	این فایل در یک پوشه مورد اعتماد نیست:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	روال‌های LISP و اسکریپت‌ها می‌توانند نقشه‌ها و فایل‌ها را تغییر دهند. فقط در صورتی بارگذاری کنید که به منبع آن اعتماد دارید.
+	Don't Load	بارگذاری نشود
+	Load Once	یک بار بارگذاری شود
+	Always Load from This Folder	همیشه از این پوشه بارگذاری شود
+	Adds {folder} to TRUSTEDPATHS	{folder} را به TRUSTEDPATHS اضافه می‌کند
+	Allow Loading a File	اجازه بارگذاری یک فایل
+	Plot Stamp	مهر پلات
+	Plot stamp fields	فیلدهای مهر پلات
+	Drawing name	نام نقشه
+	Layout name	نام طرح‌بندی
+	Date and Time	تاریخ و زمان
+	Device name	نام دستگاه
+	Paper size	اندازه کاغذ
+	Plot scale	مقیاس پلات
+	No login or computer name is ever stamped.	هرگز نام ورود یا نام رایانه مهر نمی‌شود.
+	User defined fields	فیلدهای تعریف‌شده توسط کاربر
+	One per line, up to {n}.	یکی در هر خط، حداکثر {n}.
+	Stamp model space plots	مهر زدن پلات‌های فضای مدل
+	Stamp this layout's plots	مهر زدن پلات‌های این طرح‌بندی
+	Location and offset	محل و فاصله
+	Location	محل
+	Upside-down	وارونه
+	X offset	فاصله X
+	Y offset	فاصله Y
+	Offset relative to	فاصله نسبت به
+	Printable area	ناحیه قابل چاپ
+	Paper border	لبه کاغذ
+	Text properties	خصوصیات متن
+	Font	قلم
+	Single line plot stamp	مهر پلات تک‌خطی
+	Units	واحدها
+	Inches	اینچ
+	Millimeters	میلی‌متر
+	Log file location	محل فایل گزارش
+	Create a log file	ایجاد فایل گزارش
+	The log is kept for this session, never saved with the drawing.	گزارش برای این جلسه نگه داشته می‌شود و هرگز همراه نقشه ذخیره نمی‌شود.
+	Action Macro Manager...	مدیریت ماکروهای عملیات...
+	Action Macros	ماکروهای عملیات
+	Action Recorder	ضبط‌کننده عملیات
+	Insert Base Point	درج نقطه پایه
+	Insert Message	درج پیام
+	Play Action Macro	اجرای ماکروی عملیات
+	Play...	اجرا...
+	Record	ضبط
+	Request User Input	درخواست ورودی کاربر
+	Stop	توقف
+	Action Macro Manager	مدیریت ماکروهای عملیات
+	Recording…	در حال ضبط…
+	No action macros yet: Record, do the work, then Stop.	هنوز ماکروی عملیاتی نیست: «ضبط» را بزنید، کار را انجام دهید، سپس «توقف».
+	Play	اجرا
+	Message: {text}	پیام: {text}
+	Base point (asked for)	نقطه پایه (درخواستی)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	هنگام اجرای ماکرو این ورودی پرسیده شود
+	Customize Interface	سفارشی‌سازی رابط کاربری
+	Customize User Interface...	سفارشی‌سازی رابط کاربری...
+	Interface...	رابط کاربری...
+	Customize User Interface	سفارشی‌سازی رابط کاربری
+	Quick Access Toolbar	نوار ابزار دسترسی سریع
+	Add a command	افزودن یک فرمان
+	Reset Quick Access Toolbar	بازنشانی نوار ابزار دسترسی سریع
+	Built-in panels shown (untick to hide):	پانل‌های داخلی نمایش‌داده‌شده (برای پنهان کردن تیک را بردارید):
+	Your panels on built-in tabs:	پانل‌های شما در زبانه‌های داخلی:
+	Tab	زبانه
+	New panel name	نام پانل جدید
+	Add Panel	افزودن پانل
+	Your tabs:	زبانه‌های شما:
+	Remove Tab	حذف زبانه
+	New tab name	نام زبانه جدید
+	Add Tab	افزودن زبانه
+	Edit Keyboard Shortcuts...	ویرایش میان‌برهای صفحه‌کلید...
+	Remove Panel	حذف پانل
+	Command or LISP macro, e.g. (command "line")	فرمان یا ماکروی LISP، مثلاً (command "line")
+	Hatch Editor	ویرایشگر هاشور
+	Table Cell	خانه جدول
+	Rows & Columns	سطرها و ستون‌ها
+	Merge	ادغام
+	Open/Save	باز کردن/ذخیره
+	Attributes	ویژگی‌ها
+	Spell Check	بررسی املا
+	Formula	فرمول
+	Edit Source	ویرایش منبع
+	Close Array	بستن آرایه
+	Manage Attributes	مدیریت ویژگی‌ها
+	Dialog State	وضعیت کادر گفتگو
+	Dialog Action	عملکرد کادر گفتگو
+	Recover Drawing and Xrefs...	بازیابی نقشه و ارجاع‌های خارجی...
+	Count Blocks	شمارش بلوک‌ها
+	Get Selection Set	دریافت مجموعه انتخاب
+	Global Attribute Edit	ویرایش سراسری ویژگی‌ها
+	LISP Function Surfer	مرورگر توابع LISP
+	List LISP Symbols	فهرست نمادهای LISP
+	List Nested Object	فهرست شیء تودرتو
+	List Object Xdata	فهرست Xdata شیء
+	Multiple Polyline Edit	ویرایش چند چندخطی
+	Redefine Path	تعریف مجدد مسیر
+	Redefine Path Mode	حالت تعریف مجدد مسیر
+	Restore Dimension Text	بازگردانی متن اندازه
+	Revert	بازگشت به نسخه ذخیره‌شده
+	Rotate Blocks	چرخش بلوک‌ها
+	Scale Blocks	مقیاس بلوک‌ها
+	Select Similar by Properties	انتخاب مشابه بر اساس خصوصیات
+	Show URLs	نمایش URLها
+	Synchronize Viewports	همگام‌سازی پنجره‌های دید
+	Paste Special	چسباندن ویژه
+	Paste Special...	چسباندن ویژه...
+	Paste as	چسباندن به‌صورت
+	Last Measurement	آخرین اندازه‌گیری
+	Perimeter	محیط
+	curl isn't available ({error}).	curl در دسترس نیست ({error}).
+	This build has no release key to check updates with.	این نسخه کلید انتشاری برای بررسی به‌روزرسانی‌ها ندارد.
+	The release's signature files are too large.	فایل‌های امضای انتشار بیش از حد بزرگ هستند.
+	The release's signature isn't one CADaddy reads.	امضای انتشار از نوعی نیست که CADaddy بخواند.
+	The release's signature is missing or damaged.	امضای انتشار وجود ندارد یا آسیب دیده است.
+	The release's signature is for another version ({version}).	امضای انتشار برای نسخه دیگری است ({version}).
+	The release is signed with a key this build doesn't trust.	انتشار با کلیدی امضا شده که این نسخه به آن اعتماد ندارد.
+	This build's release key is damaged.	کلید انتشار این نسخه آسیب دیده است.
+	The release's signature doesn't match its files.	امضای انتشار با فایل‌های آن مطابقت ندارد.
+	Couldn't reach GitHub: {why}	دسترسی به GitHub ممکن نشد: {why}
+	GitHub's answer was too large.	پاسخ GitHub بیش از حد بزرگ بود.
+	GitHub's answer wasn't readable ({error}).	پاسخ GitHub قابل خواندن نبود ({error}).
+	GitHub's answer has no version.	پاسخ GitHub نسخه‌ای ندارد.
+	GitHub's answer has an unreadable version ({version}).	پاسخ GitHub نسخه‌ای غیرقابل خواندن دارد ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	دانلود {name} انتشار ممکن نشد، بنابراین چیزی نصب نشد: {why}
+	The release's {name} is too large, so nothing was installed.	{name} انتشار بیش از حد بزرگ است، بنابراین چیزی نصب نشد.
+	The release's {name} isn't text, so nothing was installed.	{name} انتشار متنی نیست، بنابراین چیزی نصب نشد.
+	It wasn't downloaded. Download it from the release page instead.	دانلود نشد. به جای آن، از صفحه انتشار دانلود کنید.
+	Version {version} isn't newer than this one ({current}).	نسخه {version} جدیدتر از این نسخه ({current}) نیست.
+	This release isn't signed.	این انتشار امضا نشده است.
+	The release failed its check.	انتشار در بررسی رد شد.
+	The signed release doesn't list {name}.	انتشار امضاشده {name} را فهرست نمی‌کند.
+	GitHub's fingerprint for {name} differs from the signed one.	اثر انگشت GitHub برای {name} با اثر انگشت امضاشده متفاوت است.
+	Couldn't make the folder {folder}: {error}	ساخت پوشه {folder} ممکن نشد: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	دانلود با اثر انگشت SHA-256 منتشرشده آن مطابقت نداشت، بنابراین نصب نشد.
+	Couldn't read the download: {error}	خواندن فایل دانلودشده ممکن نشد: {error}
+	The download failed: {why}	دانلود ناموفق بود: {why}
+	This release has no installer for this computer yet.	این انتشار هنوز نصب‌کننده‌ای برای این رایانه ندارد.
+	Drawing Properties...	خصوصیات نقشه...
+	System Variable Monitor...	پایشگر متغیرهای سیستمی...
+	{name} Properties	خصوصیات {name}
+	Summary	خلاصه
+	Statistics	آمار
+	Size	اندازه
+	Subject	موضوع
+	Author	نویسنده
+	Keywords	کلیدواژه‌ها
+	Comments	نظرات
+	Revision number	شماره بازنگری
+	Hyperlink base	پایه پیوند
+	Created	ایجادشده
+	Modified	اصلاح‌شده
+	Last saved by	آخرین ذخیره توسط
+	Total editing time (minutes)	کل زمان ویرایش (دقیقه)
+	Property	خصوصیت
+	System Variable Monitor	پایشگر متغیرهای سیستمی
+	Variable	متغیر
+	Watched value	مقدار پایش‌شده
+	Current value	مقدار فعلی
+	Notify when a watched variable changes	اعلان هنگام تغییر یک متغیر پایش‌شده
+	Reset All	بازنشانی همه
+	Delay	تأخیر
+	Repeat Script	تکرار اسکریپت
+	Script Call	فراخوانی اسکریپت
+	Resume Script	ادامه اسکریپت
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	نگهداری تاریخچه فعالیت هر نقشه (خصوصی، در پوشه تنظیمات CADaddy)
+	Specify insertion point or	نقطه درج را مشخص کنید یا
+	Specify table scale	مقیاس جدول را مشخص کنید
+	{} dimension(s) updated to the current settings.	{} اندازه به تنظیمات جاری به‌روز شد.
+	British English (-ise)	انگلیسی بریتانیایی (-ise)
+	British English (-ize)	انگلیسی بریتانیایی (-ize)
+	Spanish	اسپانیایی
+	French	فرانسوی
+	German	آلمانی
+	Portuguese (Iberian)	پرتغالی (اروپایی)
+	Portuguese (Brazilian)	پرتغالی (برزیلی)
+	(not installed)	(نصب نشده)
+	Dictionaries are read from:	فرهنگ‌های لغت از اینجا خوانده می‌شوند:
+	Published to {path}	در {path} منتشر شد
+	Sheet Set (.sheetset.json)	مجموعه برگه (.sheetset.json)
+	Resolution	وضوح
+	Colour depth	عمق رنگ
+	Colour (24-bit)	رنگی (24 بیتی)
+	Greys (8-bit)	خاکستری (8 بیتی)
+	Black and white (1-bit)	سیاه و سفید (1 بیتی)
+	PNG Out	خروجی PNG
+	JPEG Out	خروجی JPEG
+	BMP Out	خروجی BMP
+	TIFF Out	خروجی TIFF
+	Enter image file name	نام فایل تصویر را وارد کنید
+	Nothing selected: no image written.	چیزی انتخاب نشده: تصویری نوشته نشد.
+	{} object(s) written to {} ({} × {} pixels).	{} شیء در {} نوشته شد ({} × {} پیکسل).
+	Set to ByLayer	تنظیم به ByLayer
+	Explode and Set Properties	تجزیه و تنظیم خصوصیات
+	Edit Attribute in Place	ویرایش درجای ویژگی
+	Frame	قاب
+	Setup	راه‌اندازی
+	Setup View	راه‌اندازی نما
+	Setup Drawing	راه‌اندازی نقشه
+	Setup Profile	راه‌اندازی پروفیل
+	Enter view scale	مقیاس نما را وارد کنید
+	Specify view center	مرکز نما را مشخص کنید
+	Enter view name	نام نما را وارد کنید
+	Specify side of viewport to project	سمتی از پنجره دید برای تصویر کردن را مشخص کنید
+	Specify first point of cutting plane	نقطه اول صفحه برش را مشخص کنید
+	Specify second point of cutting plane	نقطه دوم صفحه برش را مشخص کنید
+	Specify first point of inclined plane	نقطه اول صفحه مایل را مشخص کنید
+	Specify second point of inclined plane	نقطه دوم صفحه مایل را مشخص کنید
+	Specify side to view from	سمت دید را مشخص کنید
+	Specify first corner of viewport	گوشه اول پنجره دید را مشخص کنید
+	Specify opposite corner of viewport	گوشه مقابل پنجره دید را مشخص کنید
+	Display hidden profile lines on separate layer?	خطوط پروفیل پنهان روی لایه جداگانه نمایش داده شوند؟
+	Project profile lines onto a plane?	خطوط پروفیل روی یک صفحه تصویر شوند؟
+	Delete tangential edges?	لبه‌های مماسی حذف شوند؟
+	None (PDF file)	هیچ (فایل PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	متن اندازه با ارتفاع {} در این نقشه برای خواندن بیش از حد کوچک است. DIMSCALE {} را تایپ کنید تا اندازه‌های جدید {} برابر بزرگ‌تر شوند.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	متن با ارتفاع {} در این نقشه برای خواندن بیش از حد کوچک است. ارتفاع {} را امتحان کنید (TEXTSIZE مقدار پیش‌فرض را تنظیم می‌کند).
+	(each layout's own)	(مقدار خود هر طرح‌بندی)
+	A callout on the selected sheet pointing at the selected view	یک فراخوان روی برگه انتخاب‌شده که به نمای انتخاب‌شده اشاره می‌کند
+	A page setup copied from the selected sheet's layout	تنظیمات صفحه‌ای که از طرح‌بندی برگه انتخاب‌شده کپی شده است
+	Add Callout	افزودن فراخوان
+	Callouts: {}	فراخوان‌ها: {}
+	From Selected Sheet	از برگه انتخاب‌شده
+	Insert on Selected Sheet	درج در برگه انتخاب‌شده
+	Named view	نمای نام‌دار
+	Page Setup Override	جایگزینی تنظیمات صفحه
+	Place View	قرار دادن نما
+	Position on sheet	موقعیت روی برگه
+	Remove Property	حذف خصوصیت
+	Sheet Properties	خصوصیات برگه
+	Sheet Set Fields	فیلدهای مجموعه برگه
+	Sheet Set Properties	خصوصیات مجموعه برگه
+	Sync Drawings	همگام‌سازی نقشه‌ها
+	Text holding the field, at the position on sheet	متن حاوی فیلد، در موقعیت روی برگه
+	Views and Callouts	نماها و فراخوان‌ها
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	طرح‌بندی هر برگه به «شماره عنوان» تبدیل می‌شود؛ فیلدهای مجموعه برگه، برچسب‌های نما و فراخوان‌ها مقادیر جاری مجموعه را می‌گیرند
+	3 Point	3 نقطه
+	Origin	مبدأ
+	Z	Z
+	Named UCS...	UCS نام‌دار...
+	Center Mark (DIMCEN)	علامت مرکز (DIMCEN)
+	Copy Objects to New Layer	کپی اشیا به لایه جدید
+	Cut with Base Point	برش با نقطه پایه
+	DXF In	ورود DXF
+	DXF Out	خروج DXF
+	Fill	پرکردن
+	Maximize Viewport	بیشینه کردن پنجره دید
+	Minimize Viewport	کمینه کردن پنجره دید
+	Object Selection Filters	فیلترهای انتخاب شیء
+	Oops	بازگرداندن آخرین پاک‌شده
+	Quick Text	متن سریع
+	Redefine Attributes	تعریف مجدد ویژگی‌ها
+	Drawing	نقشه
+	Profile	پروفیل
+	Clashes	تداخل‌ها
+	Run	اجرا
+	Re-run	اجرای دوباره
+	Run clash detection	اجرای تشخیص تداخل
+	Re-run keeping statuses	اجرای دوباره با حفظ وضعیت‌ها
+	Tolerance:	رواداری:
+	in	in
+	Show:	نمایش:
+	No clashes. Run detection first.	بدون تداخل. ابتدا تشخیص را اجرا کنید.
+	Status:	وضعیت:
+	Trade:	رشته:
+	Notes:	یادداشت‌ها:
+	Go To	رفتن به
+	Zoom to clash	زوم به تداخل
+	Export BCF	صدور BCF
+	Export CSV	صدور CSV
+	Export to BCF 2.1 (ZIP)	صدور به BCF 2.1 (ZIP)
+	Export clash report to CSV	صدور گزارش تداخل به CSV
+	MEP Review	بازبینی MEP
+	Guessed only	فقط حدسی
+	{n} items	{n} قلم
+	No MEP items found. Run mep.read first.	هیچ قلم MEP یافت نشد. ابتدا mep.read را اجرا کنید.
+	Mark reviewed	علامت‌گذاری به‌عنوان بازبینی‌شده
+	Size: {ss}, Height: {hs}	اندازه: {ss}، ارتفاع: {hs}
+	Edit size, height or system	ویرایش اندازه، ارتفاع یا سیستم
+	Size W:	اندازه W:
+	Bottom ft:	پایین ft:
+	Rebuild 3D model keeping hand edits	ساخت مجدد مدل سه‌بعدی با حفظ ویرایش‌های دستی
+	Zoomed to {sys} run on {lvl}.	زوم به مسیر {sys} در {lvl}.
+	Marked as reviewed.	به‌عنوان بازبینی‌شده علامت خورد.
+	Unmarked.	علامت برداشته شد.
+	Edit applied.	ویرایش اعمال شد.
+	Rebuilt: {n} MEP runs.	ساخته شد: {n} مسیر MEP.
+	3D Measure	اندازه‌گیری سه‌بعدی
+	BCF Export	صدور BCF
+	Clash List	فهرست تداخل‌ها
+	Clash Status	وضعیت تداخل
+	Coordination Tree	درخت هماهنگی
+	Coordination Viewpoints	نقاط دید هماهنگی
+	Edit MEP Item	ویرایش قلم MEP
+	List MEP Items	فهرست اقلام MEP
+	Section Box	جعبه مقطع
+	Trade Visibility	نمایش رشته‌ها
+	BIM Types	انواع BIM
+	Get BIM Spec	دریافت مشخصات BIM
+	Remove BIM Spec from Entities	حذف مشخصات BIM از موجودیت‌ها
+	Remove BIM Type	حذف نوع BIM
+	Set BIM Spec on Entities	تنظیم مشخصات BIM روی موجودیت‌ها
+	Set BIM Type	تنظیم نوع BIM
+	Ceiling and Soffit Takeoff	برآورد سقف و زیرسقف
+	Colour by Assembly	رنگ بر اساس مجموعه
+	RFI List	فهرست RFI
+	Zoom to RFI	زوم به RFI
+	Update RFI	به‌روزرسانی RFI
+	Export RFI List	صدور فهرست RFI
+	Sent	ارسال‌شده
+	Answered	پاسخ‌داده‌شده
+	Not sent	ارسال‌نشده
+	High	زیاد
+	Medium	متوسط
+	Low	کم
+	All levels	همه ترازها
+	Open items only	فقط موارد باز
+	{high} high, {medium} medium, {low} low	{high} زیاد، {medium} متوسط، {low} کم
+	No gaps or conflicts in the building spec.	هیچ خلأ یا تعارضی در مشخصات ساختمان نیست.
+	Assumed meanwhile:	فرض موقت:
+	Proposed fix:	راه‌حل پیشنهادی:
+	Sheets:	برگه‌ها:
+	Walk to It	قدم زدن تا آنجا
+	Export XLSX...	صدور XLSX...
+	Export PDF...	صدور PDF...
+	Drywall Takeoff	برآورد دیوار خشک
+	Drywall View Mode	حالت نمای دیوار خشک
+	Finish Faces	وجه‌های نازک‌کاری
+	Wall Info	اطلاعات دیوار
+	Open Print Set	باز کردن مجموعه چاپی
+	Classify Print Set	طبقه‌بندی مجموعه چاپی
+	Print Set Dashboard	داشبورد مجموعه چاپی
+	Print Set Sheets	برگه‌های مجموعه چاپی
+	Re-import Revised Set	وارد کردن دوباره مجموعه بازنگری‌شده
+	Save Print Set	ذخیره مجموعه چاپی
+	Ahead	جلو
+	Bottom / top AFF	پایین / بالا از کف تمام‌شده
+	Clash	تداخل
+	elements	عنصر
+	Field Viewer	نمایشگر کارگاهی
+	Fit	جا دادن
+	Keep	نگه داشتن
+	New note	یادداشت جدید
+	No new notes to send	یادداشت جدیدی برای ارسال نیست
+	No room matches	هیچ اتاقی مطابقت ندارد
+	Note	یادداشت
+	Note kept	یادداشت نگه داشته شد
+	Notes	یادداشت‌ها
+	notes ready to sync	یادداشت آماده همگام‌سازی
+	not typed	بدون نوع
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	یک بسته کارگاهی باز کنید (FIELDVIEW.EXPORT در CADaddy)، یا آن را اینجا رها کنید
+	Open clashes and RFIs	تداخل‌ها و RFIهای باز
+	RFI	RFI
+	Room number	شماره اتاق
+	Search a room number, or tap a room	شماره اتاق را جستجو کنید، یا روی یک اتاق ضربه بزنید
+	Send Notes	ارسال یادداشت‌ها
+	Tap two points to measure	برای اندازه‌گیری روی دو نقطه ضربه بزنید
+	Trades	رشته‌ها
+	Unit	واحد
+	Verified	تأییدشده
+	Verified point	نقطه تأییدشده
+	What is there, as built	آنچه آنجا هست، مطابق اجرا
+	Plan	پلان
+	3D	سه‌بعدی
+	Architectural	معماری
+	Structural	سازه
+	Mechanical	مکانیکال
+	Plumbing	لوله‌کشی
+	Fire protection	اطفای حریق
+	Other	سایر
+	stated	اعلام‌شده
+	inferred	استنتاج‌شده
+	assumed	فرض‌شده
+	Field Package	بسته کارگاهی
+	Sync Field Notes	همگام‌سازی یادداشت‌های کارگاهی
+	Field Notes	یادداشت‌های کارگاهی
+	Detect Unit Types	تشخیص انواع واحد
+	List Unit Types	فهرست انواع واحد
+	Unit Schedule	جدول واحدها
+	Unit Type Takeoff	برآورد نوع واحد
+	Override Generated Element	جایگزینی عنصر تولیدشده
+	List Overrides	فهرست جایگزینی‌ها
+	Revert Override	بازگرداندن جایگزینی
+	Accept Override After Review	پذیرش جایگزینی پس از بازبینی
+	Show or Hide Overrides	نمایش یا پنهان کردن جایگزینی‌ها
+	Re-apply Overrides	اعمال دوباره جایگزینی‌ها
+	Overrides	جایگزینی‌ها
+	Select generated element (or an object drawn by hand to add)	عنصر تولیدشده را انتخاب کنید (یا شیئی که دستی ترسیم شده تا اضافه شود)
+	Enter type mark	علامت نوع را وارد کنید
+	Enter override to revert	جایگزینی برای بازگرداندن را وارد کنید
+	Verify	تأیید
+	review: the drawing changed here	بازبینی: نقشه در اینجا تغییر کرده است
+	orphaned: its element is no longer generated	بی‌والد: عنصر آن دیگر تولید نمی‌شود
+	Project Rules	قواعد پروژه
+	Domain:	حوزه:
+	No project rules set.	هیچ قاعده پروژه‌ای تنظیم نشده است.
+	Tier:	سطح:
+	Source:	منبع:
+	Reason:	دلیل:
+	Overridden values:	مقادیر جایگزین‌شده:
+	No drawing open.	هیچ نقشه‌ای باز نیست.
+	List Project Rules	فهرست قواعد پروژه
+	Get Project Rule	دریافت قاعده پروژه
+	Set Project Rule	تنظیم قاعده پروژه
+	Remove Project Rule	حذف قاعده پروژه
+	Preview Project Rule Change	پیش‌نمایش تغییر قاعده پروژه
+	Project Rules Label	برچسب قواعد پروژه
+	Import Project Rules	وارد کردن قواعد پروژه
+	Export Project Rules	صدور قواعد پروژه
+	Print Validator Documents	اسناد اعتبارسنج چاپی
+	Validate Model Against Prints	اعتبارسنجی مدل در برابر نقشه‌های چاپی
+	Validation Failure Overlay	لایه نمایش خطاهای اعتبارسنجی
+	Element Provenance	منشأ عنصر
+	MEP Quantities	مقادیر MEP
+	Refresh MEP Quantities	تازه‌سازی مقادیر MEP
+	Activate Drawing	فعال کردن نقشه
+	Add to Project	افزودن به پروژه
+	Close Project	بستن پروژه
+	Import Manifest	وارد کردن مانیفست
+	Import Standards	وارد کردن استانداردها
+	New Project	پروژه جدید
+	Open Project	باز کردن پروژه
+	Project Disk Use	فضای دیسک پروژه
+	Project Drawings	نقشه‌های پروژه
+	Project Info	اطلاعات پروژه
+	Remove Standard	حذف استاندارد
+	Remove from Project	حذف از پروژه
+	Restore Project	بازگردانی پروژه
+	Set Standard	تنظیم استاندارد
+	Shelve Drawing	بایگانی نقشه
+	Shelve Project	بایگانی پروژه
+	Standards Library	کتابخانه استانداردها
+	Validate Manifest	اعتبارسنجی مانیفست
+	Active	فعال
+	Shelved	بایگانی‌شده
+	{n} drawings	{n} نقشه
+	Compare Revised Print	مقایسه نقشه چاپی بازنگری‌شده
+	Revision Log	گزارش بازنگری‌ها
+	Attach IFC Reference	پیوست ارجاع IFC
+	IFC References	ارجاع‌های IFC
+	IFC Reference Elements	عناصر ارجاع IFC
+	Reload IFC References	بارگذاری مجدد ارجاع‌های IFC
+	Accept Specifications	پذیرش مشخصات فنی
+	Import Specifications	وارد کردن مشخصات فنی
+	Colour Scheme	طرح رنگ
+	Coordination Mode	حالت هماهنگی
+	Coordination Views	نماهای هماهنگی
+	Isolate Trade	جداسازی رشته
+	Project Briefing	خلاصه پروژه
+	Project Note	یادداشت پروژه
+	Review Queue	صف بازبینی
+	Next Review Item	مورد بازبینی بعدی
+	Resolve Review Item	حل مورد بازبینی
+	Defer Review Item	تعویق مورد بازبینی
+	Draft RFI	پیش‌نویس RFI
+	Batch Resolve	حل دسته‌ای
+	Approve Agent Work	تأیید کار عامل
+	Agent Work	کار عامل
+	Build BIM Model	ساخت مدل BIM
+	to accept	در انتظار پذیرش
+	Accept all	پذیرش همه
+	Accept	پذیرش
+	Cited:	استناد:
+	Nothing waiting: agents' work is all accepted.	چیزی در انتظار نیست: همه کارهای عامل‌ها پذیرفته شده است.
+	Open IFC Model	باز کردن مدل IFC
+	Open IFC Model...	باز کردن مدل IFC...
+	IFC Model	مدل IFC
+	IFC Model Tree	درخت مدل IFC
+	IFC Object Properties	خصوصیات شیء IFC
+	Filter IFC Objects	فیلتر اشیای IFC
+	IFC Section Box	جعبه مقطع IFC
+	Measure in 3D	اندازه‌گیری سه‌بعدی
+	IFC Camera	دوربین IFC
+	Render IFC Model	رندر مدل IFC
+	New BCF Issue	مسئله BCF جدید
+	BCF Issues	مسائل BCF
+	BCF Issues...	مسائل BCF...
+	BCF Issue	مسئله BCF
+	Update BCF Issue	به‌روزرسانی مسئله BCF
+	Show BCF Issue	نمایش مسئله BCF
+	Delete BCF Issue	حذف مسئله BCF
+	Import BCF	وارد کردن BCF
+	Read Levels	خواندن ترازها
+	List Levels	فهرست ترازها
+	Edit Level	ویرایش تراز
+	Attach Sheets to Levels	پیوست برگه‌ها به ترازها
+	Check Shafts Through Levels	بررسی داکت‌ها در ترازها
+	Isolate Level	جداسازی تراز
+	Read from Prints	خواندن از نقشه‌های چاپی
+	Level names and elevations from the sections, elevations and level markers	نام و ارتفاع ترازها از مقاطع، نماها و نشانگرهای تراز
+	Attach Sheets	پیوست برگه‌ها
+	Check Shafts	بررسی داکت‌ها
+	Shafts, chases and risers must carry on through the levels between their ends	داکت‌ها، شیارها و رایزرها باید در ترازهای بین دو انتهای خود ادامه داشته باشند
+	No levels in the building spec.	هیچ ترازی در مشخصات ساختمان نیست.
+	Level	تراز
+	Floor to floor	کف تا کف
+	Sheets	برگه‌ها
+	Show only this storey in 3D	نمایش فقط این طبقه در سه‌بعدی
+	Datums (no plan on this drawing):	مبناها (بدون پلان در این نقشه):
+	Sheets on no level:	برگه‌های بدون تراز:
+	Show All Levels	نمایش همه ترازها
+	The levels already match the prints.	ترازها از قبل با نقشه‌های چاپی مطابقت دارند.
+	{sheets} sheets, {loose} on no level	{sheets} برگه، {loose} بدون تراز
+	{name}: not shown on {levels}	{name}: در {levels} نشان داده نشده
+	Every shaft and riser carries on through its levels.	هر داکت و رایزر در ترازهای خود ادامه دارد.
+	Not a height: {text}	ارتفاع نیست: {text}
+	Export COBie	صدور COBie
+	Validate COBie	اعتبارسنجی COBie
+	Export Handover Schedules	صدور جدول‌های تحویل
+	COBie...	COBie...
+	Handover Schedules...	جدول‌های تحویل...
+	Electrical Gear	تجهیزات برقی
+	Check Electrical Gear	بررسی تجهیزات برقی
+	Submittal Review of Gear	بازبینی ارسالی تجهیزات
+	Accept Gear as Submitted	پذیرش تجهیزات مطابق ارسالی

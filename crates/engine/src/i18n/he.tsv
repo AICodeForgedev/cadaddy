@@ -1,0 +1,196 @@
+# CADaddy engine messages in Hebrew: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	הזן שם קבוצה
+	Pick internal point	בחר נקודה פנימית
+	Specify the pattern origin	ציין את ראשית הדוגמה
+	Specify the incrementing elevation between rows	ציין את הפרש הגובה בין השורות
+	Specify the angle to fill (+=ccw, -=cw)	ציין את זווית המילוי (+=נגד כיוון השעון, -=עם כיוון השעון)
+	Select hatch object	בחר אובייקט הצללה
+	Red, Green, Blue	אדום, ירוק, כחול
+	Enter the number of rows	הזן את מספר השורות
+	Enter the number of levels	הזן את מספר המפלסים
+	Enter new layer name	הזן שם שכבה חדש
+	Specify width	ציין רוחב
+	Specify the angle between items	ציין את הזווית בין הפריטים
+	Specify text height	ציין גובה טקסט
+	Specify start tangent	ציין משיק התחלה
+	Specify end tangent	ציין משיק סיום
+	Specify reference length	ציין אורך ייחוס
+	Specify other corner	ציין פינה אחרת
+	Specify next point or [Undo]	ציין נקודה הבאה או [Undo]
+	Specify new location	ציין מיקום חדש
+	Specify new length	ציין אורך חדש
+	Specify length of line	ציין אורך הקו
+	Specify displacement	ציין היסט
+	Specify angle for dimension text	ציין זווית לטקסט המידה
+	Select viewports	בחר אשנבים
+	Select object to break dimension	בחר אובייקט לשבירת מידה
+	Select group	בחר קבוצה
+	Select grip to edit array	בחר ידית לעריכת המערך
+	Select a table	בחר טבלה
+	Select a boundary to remove	בחר גבול להסרה
+	Rotate arrayed items?	לסובב את פריטי המערך?
+	Erase polyline?	למחוק את הקו המרובה?
+	Enter viewport arrangement	הזן סידור אשנבים
+	Enter transparency value (0-90)	הזן ערך שקיפות (0-90)
+	Enter the number of operations to undo	הזן את מספר הפעולות לביטול
+	Enter the number of columns	הזן את מספר העמודות
+	Enter number of items in array	הזן מספר פריטים במערך
+	Enter new layer state name	הזן שם מצב שכבות חדש
+	Enter new color	הזן צבע חדש
+	Enter name of new layout	הזן שם לפריסה החדשה
+	Enter layer name	הזן שם שכבה
+	Enter file name	הזן שם קובץ
+	Enter color name or number (1-255)	הזן שם צבע או מספר (1-255)
+	Enter a configuration option	הזן אפשרות תצורה
+	Base point	נקודת בסיס
+	Word-wrap the combined Mtext?	לגלוש מילים ב-Mtext המשולב?
+	Where should the data go?	לאן יש לשלוח את הנתונים?
+	Verify each name to be purged?	לאמת כל שם לפני ניקוי?
+	Use landing	השתמש במדף
+	Type of boundary object	סוג אובייקט הגבול
+	Specify width factor	ציין מקדם רוחב
+	Specify tolerance	ציין טולרנס
+	Specify the tangent direction for the start point of arc	ציין את כיוון המשיק לנקודת ההתחלה של הקשת
+	Specify the reference angle	ציין את זווית הייחוס
+	Specify the new angle	ציין את הזווית החדשה
+	Specify text width	ציין רוחב טקסט
+	Specify temporary OTRACK point	ציין נקודת OTRACK זמנית
+	Invalid option keyword.	מילת מפתח לא חוקית.
+	*Invalid selection*	*בחירה לא חוקית*
+	Requires a valid angle.	נדרשת זווית חוקית.
+	Nothing to undo.	אין מה לבטל.
+	Invalid point.	נקודה לא חוקית.
+	No viewport found there.	לא נמצא שם אשנב.
+	*Cancel*	*ביטול*
+	Requires a positive number.	נדרש מספר חיובי.
+	No hatch selected.	לא נבחרה הצללה.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** הפקודה אינה מותרת בלשונית Model ** (עבור תחילה לפריסה)
+	Select a multileader.	בחר קו הובלה מרובה.
+	No line or arc to continue.	אין קו או קשת להמשך.
+	Revision cloud finished.	ענן התיקונים הושלם.
+	Object selected is not a circle or arc.	האובייקט שנבחר אינו עיגול או קשת.
+	Select a linear or aligned dimension.	בחר מידה קווית או מיושרת.
+	Object selected is not a dimension.	האובייקט שנבחר אינו מידה.
+	No dimensions selected.	לא נבחרו מידות.
+	Requires a number.	נדרש מספר.
+	0 found	נמצאו 0
+	The feature control frame is empty.	מסגרת בקרת התכונה ריקה.
+	1 was on a locked layer.	1 היה בשכבה נעולה.
+	Row elevations need an associative array; the copies stay at the same elevation.	גובהי שורות דורשים מערך אסוציאטיבי; העותקים נשארים באותו גובה.
+	Point or option keyword required.	נדרשת נקודה או מילת מפתח.
+	Enter Yes or No.	הזן Yes או No.
+	Viewport created, zoomed to the model extents.	נוצר אשנב, עם זום לתחום המודל.
+	No object found.	לא נמצא אובייקט.
+	The object is not a table.	האובייקט אינו טבלה.
+	No table there.	אין שם טבלה.
+	A transparent command is already in progress.	פקודה שקופה כבר מתבצעת.
+	Invalid class name.	שם מחלקה לא חוקי.
+	Invalid group name.	שם קבוצה לא חוקי.
+	Too many point modifiers.	יותר מדי משני נקודה.
+	No leader to remove.	אין קו הובלה להסרה.
+	Requires a non-negative number.	נדרש מספר אי-שלילי.
+	Clipboard is empty.	הלוח ריק.
+	1 object was on a locked layer.	אובייקט 1 היה בשכבה נעולה.
+	Circle does not exist.	העיגול אינו קיים.
+	Enter Length or Area.	הזן Length או Area.
+	Enter a percentage from 0 to 1000.	הזן אחוז בין 0 ל-1000.
+	Enter Table, File or None.	הזן Table, File או None.
+	Cannot measure that object.	לא ניתן למדוד אובייקט זה.
+	Third pair ignored (2D align).	הזוג השלישי התעלם (יישור 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	מצב הכנסה: העתקה (אובייקטים מקוננים מועתקים כאובייקטים עצמאיים).
+	Everything has been undone	הכול בוטל
+	Everything has been undone.	הכול בוטל.
+	Requires a non-negative number or Auto.	נדרש מספר אי-שלילי או Auto.
+	Select a dimension.	בחר מידה.
+	Object cannot be dimensioned this way.	לא ניתן להוסיף מידה לאובייקט בדרך זו.
+	Select an arc, circle or line.	בחר קשת, עיגול או קו.
+	The two points must be different.	שתי הנקודות חייבות להיות שונות.
+	No linear dimension to continue. Create one with DIMLINEAR first.	אין מידה קווית להמשך. צור אחת תחילה עם DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	קו הובלה מרובה זקוק לקו הובלה או לתוכן; לא שורטט דבר.
+	Requires the name of a block defined in the drawing.	נדרש שם של בלוק המוגדר בשרטוט.
+	Invalid option.	אפשרות לא חוקית.
+	The boundary encloses none of the image.	הגבול אינו מקיף שום חלק מהתמונה.
+	The object is not an image.	האובייקט אינו תמונה.
+	The image has no clipping boundary.	לתמונה אין גבול חיתוך.
+	No images selected.	לא נבחרו תמונות.
+	Requires an integer between 0 and 100.	נדרש מספר שלם בין 0 ל-100.
+	The selected object has no area.	לאובייקט שנבחר אין שטח.
+	No such object	אין אובייקט כזה
+	Requires a point.	נדרשת נקודה.
+	Requires a distance.	נדרש מרחק.
+	The object is on a locked layer.	האובייקט נמצא בשכבה נעולה.
+	Value must be positive and nonzero.	הערך חייב להיות חיובי ושונה מאפס.
+	Requires an angle.	נדרשת זווית.
+	Requires a point or option keyword.	נדרשת נקודה או מילת מפתח.
+	Object does not intersect a cutting edge.	האובייקט אינו חותך קצה חיתוך.
+	Object does not intersect an edge.	האובייקט אינו חותך קצה.
+	Lines are parallel.	הקווים מקבילים.
+	The Block Editor is not open.	עורך הבלוקים אינו פתוח.
+	Requires a positive integer.	נדרש מספר שלם חיובי.
+	Answer Yes or No.	ענה Yes או No.
+	Requires a valid point.	נדרשת נקודה חוקית.
+	No reference objects	אין אובייקטי ייחוס
+	Requires an angle or point.	נדרשת זווית או נקודה.
+	Requires a positive distance.	נדרש מרחק חיובי.
+	Requires a non-negative distance.	נדרש מרחק אי-שלילי.
+	No such grip	אין ידית כזו
+	Requires a template file name.	נדרש שם קובץ תבנית.
+	A hatch needs at least one boundary: erase it instead.	הצללה זקוקה לגבול אחד לפחות: מחק אותה במקום זאת.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	הביטול כבוי (UNDO Control None); UNDO Control All מפעיל אותו.
+	Enter ON or OFF.	הזן ON או OFF.
+	Not a linear dimension.	לא מידה קווית.
+	Valid hatch boundary not found.	לא נמצא גבול הצללה חוקי.
+	No closed boundary objects selected.	לא נבחרו אובייקטי גבול סגורים.
+	Requires a name.	נדרש שם.
+	That option doesn't apply to this grip.	אפשרות זו אינה חלה על ידית זו.
+	That would make a degenerate object.	הפעולה תיצור אובייקט מנוון.
+	No tangent or perpendicular from the last point.	אין משיק או אנך מהנקודה האחרונה.
+	Requires numeric distance or second point.	נדרש מרחק מספרי או נקודה שנייה.
+	Edge endpoints must differ.	נקודות הקצה של הצלע חייבות להיות שונות.
+	Requires numeric distance or point.	נדרש מרחק מספרי או נקודה.
+	Requires a positive height.	נדרש גובה חיובי.
+	No objects found.	לא נמצאו אובייקטים.
+	Requires a non-zero number.	נדרש מספר שונה מאפס.
+	Circle must intersect cutting edges at two or more points.	העיגול חייב לחתוך את קצוות החיתוך בשתי נקודות או יותר.
+	Arc cannot be full 360 degrees.	קשת אינה יכולה להיות 360 מעלות מלאות.
+	Cannot break that object.	לא ניתן לשבור אובייקט זה.
+	An object is on a locked layer.	אובייקט נמצא בשכבה נעולה.
+	Objects are not connected.	האובייקטים אינם מחוברים.
+	The two points must differ.	שתי הנקודות חייבות להיות שונות.
+	Mirror line points must differ.	נקודות קו השיקוף חייבות להיות שונות.
+	No drawing is open.	אין שרטוט פתוח.
+	Command: {}	פקודה: {}
+	Unknown command "{}". Press F1 for help.	פקודה לא מוכרת "{}". הקש F1 לעזרה.
+	{} found	נמצאו {}
+	{} found, {} total	נמצאו {}, {} בסך הכול
+	Distance = {}	מרחק = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	מרחק = {},  זווית במישור XY = {},  זווית ממישור XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	הפרש X = {},  הפרש Y = {},   הפרש Z = {}
+	Area = {}, Perimeter = {}	שטח = {}, היקף = {}
+	Total area = {}	שטח כולל = {}
+	Resuming {} command.	ממשיך את הפקודה {}.
+	Invalid input: {}	קלט לא חוקי: {}
+	{} were on a locked layer.	{} היו בשכבה נעולה.
+	{} dimension(s) changed.	{} מידות שונו.
+	Group {} ungrouped.	הקבוצה {} פורקה.
+	{} object(s) flattened.	{} אובייקטים הושטחו.
+	Group {} renamed to {}.	שם הקבוצה {} שונה ל-{}.
+	{} object(s) added to group {}.	{} אובייקטים נוספו לקבוצה {}.
+	{} object(s) removed from group {}.	{} אובייקטים הוסרו מהקבוצה {}.
+	{} lines were chamfered	{} קווים שופעו
+	{} lines were filleted	{} קווים עוגלו
+	{} objects joined into 1 {}	{} אובייקטים חוברו ל-{} אחד
+	Current dimension style:  {}	סגנון מידות נוכחי:  {}
+	Wrote {}	נכתב {}
+	{} is already open.	{} כבר פתוח.
+	{} dimension(s) created.	{} מידות נוצרו.
+	BOUNDARY created {} polyline(s)	BOUNDARY יצר {} קווים מרובים
+	Current line-width is {}	רוחב הקו הנוכחי הוא {}
+	Unknown variable {}. Type SETVAR ? to list variables.	משתנה לא מוכר {}. הקלד SETVAR ? לרשימת המשתנים.
+	{} = {} (read only)	{} = {} (לקריאה בלבד)
+	Dimension text = {}	טקסט מידה = {}
+	{} segments added to polyline	{} מקטעים נוספו לקו המרובה

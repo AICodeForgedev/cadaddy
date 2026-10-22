@@ -39,7 +39,12 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja"];
+const REPORTED: &[&str] = &[
+    "pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja", "nl", "da", "fi", "nb", "el", "ro", "hi", "id", "vi", "th", "he", "fa",
+];
+
+/// The twelve languages added together (Q280), each a full catalog when it was made.
+const THIRD: [&str; 12] = ["nl", "da", "fi", "nb", "el", "ro", "hi", "id", "vi", "th", "he", "fa"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -155,14 +160,14 @@ fn locale_and_saved_preference_resolution() {
     for (tag, code) in [("ru", "ru"), ("ru-RU", "ru"), ("ru_RU.UTF-8", "ru"), ("fr", "fr"), ("fr-FR", "fr"), ("fr_CA.UTF-8", "fr")] {
         assert_eq!(locale_language(tag), Some(code), "{tag}");
     }
-    for tag in ["ua", "ukulele", "nl-NL", "", "garbage", "💙"] {
+    for tag in ["ua", "ukulele", "is-IS", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
     for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "PT-br", "pt-PT"] {
         assert_eq!(locale_language(tag), Some("pt-BR"), "{tag}");
     }
     assert_eq!(locale_language("ptolemy"), None);
-    assert_eq!(Preference::Auto.resolve(&["nl-NL".into(), "pt-BR".into()]), "pt-BR");
+    assert_eq!(Preference::Auto.resolve(&["is-IS".into(), "pt-BR".into()]), "pt-BR");
     assert_eq!(Preference::Auto.resolve(&["fr-FR".into(), "pt-BR".into()]), "fr");
     for tag in ["es", "es-ES", "es_MX.UTF-8", "ES-ar"] {
         assert_eq!(locale_language(tag), Some("es"), "{tag}");
@@ -171,7 +176,7 @@ fn locale_and_saved_preference_resolution() {
     assert_eq!(Preference::parse("es"), Some(Preference::Spanish));
     assert_eq!(Preference::BrazilianPortuguese.resolve(&["uk-UA".into()]), "pt-BR");
     assert_eq!(Preference::parse("pt-BR"), Some(Preference::BrazilianPortuguese));
-    let locales = vec!["nl-NL".into(), "uk-UA".into(), "en-US".into()];
+    let locales = vec!["is-IS".into(), "uk-UA".into(), "en-US".into()];
     assert_eq!(Preference::Auto.resolve(&locales), "uk");
     assert_eq!(Preference::English.resolve(&locales), "en");
     assert_eq!(Preference::German.resolve(&locales), "de");
@@ -489,7 +494,7 @@ fn czech_locales_preferences_and_plural_forms() {
     assert_eq!(Preference::parse("cs"), Some(Preference::Czech));
     assert_eq!(Preference::Czech.name(), "Čeština");
     assert_eq!(Preference::Czech.resolve(&["en-US".into()]), "cs");
-    assert_eq!(Preference::Auto.resolve(&["nl-NL".into(), "cs-CZ".into(), "en-US".into()]), "cs");
+    assert_eq!(Preference::Auto.resolve(&["is-IS".into(), "cs-CZ".into(), "en-US".into()]), "cs");
     let mut app = CadApp::new(Session::new(), Services::default());
     app.ui.interface_language = Preference::Czech;
     let mut restored = CadApp::new(Session::new(), Services::default());
@@ -701,7 +706,7 @@ fn korean_locale_saved_preference_and_single_count_form() {
     }
     assert_eq!(Preference::parse("ko"), Some(Preference::Korean));
     assert_eq!(Preference::Korean.resolve(&["en-US".into()]), "ko");
-    assert_eq!(Preference::Auto.resolve(&["nl-NL".into(), "ko-KR".into(), "en-US".into()]), "ko");
+    assert_eq!(Preference::Auto.resolve(&["is-IS".into(), "ko-KR".into(), "en-US".into()]), "ko");
     let mut app = CadApp::new(Session::new(), Services::default());
     app.system_languages = vec!["ko-KR".into()];
     app.run("ui.language", json!({"lang": "ko"})).unwrap();
@@ -742,7 +747,7 @@ fn japanese_representative_translations_and_single_count_form() {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
     assert_eq!(Preference::parse("ja"), Some(Preference::Japanese));
-    assert_eq!(Preference::Auto.resolve(&["nl-NL".into(), "ja-JP".into(), "en-US".into()]), "ja");
+    assert_eq!(Preference::Auto.resolve(&["is-IS".into(), "ja-JP".into(), "en-US".into()]), "ja");
     let mut app = CadApp::new(Session::new(), Services::default());
     app.run("ui.language", json!({"lang": "ja"})).unwrap();
     let mut restored = CadApp::new(Session::new(), Services::default());
@@ -914,7 +919,7 @@ fn swedish_locales_preferences_and_plural_forms() {
     assert_eq!(Preference::parse("sv"), Some(Preference::Swedish));
     assert_eq!(Preference::Swedish.name(), "Svenska");
     assert_eq!(Preference::Swedish.resolve(&["en-US".into()]), "sv");
-    assert_eq!(Preference::Auto.resolve(&["nl-NL".into(), "sv-SE".into(), "en-US".into()]), "sv");
+    assert_eq!(Preference::Auto.resolve(&["is-IS".into(), "sv-SE".into(), "en-US".into()]), "sv");
     let mut app = CadApp::new(Session::new(), Services::default());
     app.ui.interface_language = Preference::Swedish;
     let mut restored = CadApp::new(Session::new(), Services::default());
@@ -1031,4 +1036,149 @@ fn engine_prompts_and_messages_show_in_the_interface_language_and_replies_stay_e
     s.cmdline("line").unwrap();
     s.cancel();
     assert!(s.log.iter().all(|l| !l.contains("Команда")), "{:?}", s.log);
+}
+
+#[test]
+fn thirty_languages_resolve_with_their_plural_rules() {
+    assert_eq!(LANGUAGES.len(), 30);
+    assert_eq!(Preference::ALL.len(), 31);
+    for p in Preference::ALL {
+        assert_eq!(Preference::parse(p.code()), Some(p));
+        if p != Preference::Auto {
+            assert_eq!(p.resolve(&[]), p.code());
+            assert!(LANGUAGES.iter().any(|l| l.code == p.code()), "{}", p.code());
+        }
+    }
+    for (tag, code) in [
+        ("nl-NL", "nl"),
+        ("nl_BE.UTF-8", "nl"),
+        ("da-DK", "da"),
+        ("fi-FI", "fi"),
+        ("nb-NO", "nb"),
+        ("no", "nb"),
+        ("nn-NO", "nb"),
+        ("el-GR", "el"),
+        ("ro-RO", "ro"),
+        ("hi-IN", "hi"),
+        ("id-ID", "id"),
+        ("in-ID", "id"),
+        ("vi-VN", "vi"),
+        ("th-TH", "th"),
+        ("he-IL", "he"),
+        ("iw", "he"),
+        ("fa-IR", "fa"),
+    ] {
+        assert_eq!(locale_language(tag), Some(code), "{tag}");
+    }
+    let forms = |code: &str, ns: &[u64]| -> Vec<usize> {
+        let l = LANGUAGES.iter().find(|l| l.code == code).unwrap();
+        ns.iter().map(|n| (l.plural)(*n)).collect()
+    };
+    // Romanian: one (1), few (0, 2–19, 101–119), other (20–100, 120 …).
+    assert_eq!(forms("ro", &[0, 1, 2, 19, 20, 100, 101, 119, 120, 1001]), [1, 0, 1, 1, 2, 2, 1, 1, 2, 1]);
+    // Hebrew: one (1), two (2), other.
+    assert_eq!(forms("he", &[0, 1, 2, 3, 20]), [2, 0, 1, 2, 2]);
+    // Hindi and Persian: one for 0 and 1.
+    for c in ["hi", "fa"] {
+        assert_eq!(forms(c, &[0, 1, 2, 10]), [0, 0, 1, 1], "{c}");
+    }
+    for c in ["id", "vi", "th"] {
+        assert_eq!(forms(c, &[0, 1, 2, 5]), [0, 0, 0, 0], "{c}");
+    }
+    for c in ["nl", "da", "fi", "nb", "el"] {
+        assert_eq!(forms(c, &[0, 1, 2]), [1, 0, 1], "{c}");
+    }
+    assert!(is_rtl("ar") && is_rtl("he") && is_rtl("fa") && !is_rtl("hi") && !is_rtl("th"));
+}
+
+#[test]
+fn the_new_catalogs_cover_everything_the_reference_does() {
+    let keys = |code: &str| -> BTreeSet<(String, String)> {
+        let l = LANGUAGES.iter().find(|l| l.code == code).unwrap();
+        parse(l.source).0.keys().map(|(c, k)| (c.to_string(), k.to_string())).collect()
+    };
+    let reference = keys("uk");
+    for code in THIRD {
+        let have = keys(code);
+        let missing: Vec<_> = reference.difference(&have).take(10).collect();
+        assert!(missing.is_empty(), "{code}: {} rows missing, e.g. {missing:?}", reference.difference(&have).count());
+        assert_ne!(tr(code, "Layer Properties"), "Layer Properties", "{code}");
+        assert!(missing_commands_menus_tools_and_snap_labels(code).is_empty(), "{code}");
+    }
+}
+
+#[test]
+fn default_fonts_cover_the_latin_and_greek_letters_of_the_new_catalogs() {
+    // Dutch, Danish, Finnish, Norwegian, Greek, Romanian (ș ț) and Indonesian need no font of
+    // their own: egui's bundled faces have them (the web build too).
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<char> = ["nl", "da", "fi", "nb", "el", "ro", "id"]
+        .iter()
+        .flat_map(|code| LANGUAGES.iter().find(|l| l.code == *code).unwrap().source.lines())
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split('\t').nth(2))
+        .flat_map(str::chars)
+        .filter(|c| matches!(c, '\u{00c0}'..='\u{024f}' | '\u{0370}'..='\u{03ff}'))
+        .collect();
+    assert!(letters.contains(&'ș') && letters.contains(&'ω') && letters.contains(&'ø'), "{letters:?}");
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
+}
+
+/// Hebrew, Persian, Hindi, Thai and Vietnamese show only with an installed face that has every
+/// letter their interface draws; without one the interface stays English and says why.
+#[test]
+fn script_languages_show_with_a_covering_font_or_stay_english() {
+    for code in ["he", "fa", "hi", "th", "vi"] {
+        let letters = crate::theme::script_letters(code);
+        assert!(letters.len() > 20, "{code}: {}", letters.len());
+        let font = crate::theme::script_font(code);
+        assert_eq!(crate::theme::can_show(code), font.is_some(), "{code}");
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let r = app.run("ui.language", json!({"lang": code})).unwrap();
+        assert_eq!(r["interfaceLanguage"], code);
+        assert_eq!(app.language(), if font.is_some() { code } else { "en" }, "{code}");
+        match font {
+            Some(face) => {
+                assert!(letters.iter().all(|c| face.has_glyph(*c)), "{code}");
+                // Installed for that interface: the UI fonts draw every letter.
+                let ctx = egui::Context::default();
+                crate::theme::install_fonts(&ctx, code, false);
+                let mut output = ctx.run_ui(Default::default(), |_| {});
+                output.textures_delta.clear();
+                let missing = ctx.fonts_mut(|view| {
+                    let mut f = view.fonts.font(&egui::FontFamily::Proportional);
+                    letters.iter().filter(|c| !f.characters().contains_key(c)).copied().collect::<String>()
+                });
+                assert!(missing.is_empty(), "{code}: {missing}");
+            }
+            None => assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("stays in English")), "{code}"),
+        }
+    }
+}
+
+#[test]
+fn hebrew_and_persian_are_drawn_right_to_left() {
+    for code in ["he", "fa"] {
+        let stored = tr(code, "Layer Properties");
+        with_language(code, || {
+            assert!(rtl());
+            let drawn = t("Layer Properties");
+            assert_eq!(drawn, rtl_display(stored));
+            assert_ne!(drawn, stored, "{code}: shown in display order");
+        });
+    }
+    // Persian letters are drawn in their joined forms.
+    with_language("fa", || {
+        let drawn = t("Layer Properties");
+        assert!(drawn.chars().any(|c| ('\u{fb50}'..='\u{feff}').contains(&c)), "{drawn}");
+    });
 }

@@ -1,0 +1,2833 @@
+# CADaddy Indonesian interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Indonesian translation.
+# Empty context = ordinary label; @plural = a single form with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	Sesuaikan...
+	Apply	Terapkan
+	Attach DWG...	Lampirkan DWG...
+	Bind	Ikat
+	Detach	Lepaskan
+	Image	Gambar
+	Loaded	Dimuat
+	Make it a block of this drawing, keeping its layer names	Jadikan blok di gambar ini, pertahankan nama lapisannya
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Jadikan blok di gambar ini; lapisannya menjadi NAME$0$LAYER
+	No external references are attached.	Tidak ada referensi eksternal yang terlampir.
+	Not Found	Tidak Ditemukan
+	Not loaded	Tidak dimuat
+	Open	Buka
+	Overlay	Tumpang
+	Reference Manager	Manajer Referensi
+	Reference Name	Nama Referensi
+	References: {n}	Referensi: {n}
+	Reload	Muat Ulang
+	Reload All	Muat Ulang Semua
+	Saved Path	Jalur Tersimpan
+	Unload	Bongkar
+	Unloaded	Dibongkar
+	Unreferenced	Tidak direferensikan
+	Unresolved	Tidak terselesaikan
+	  Cancel  	  Batal
+	  OK  	  OK
+	 or [	 atau [
+	% of all commits	% dari semua komit
+	* Wildcard Match	* Cocok Wildcard
+	*VARIES*	*BERVARIASI*
+	+  |  Top  |  2D Wireframe	+  |  Atas  |  Rangka Kawat 2D
+	+Bin	+Biner
+	+LOC	+Baris
+	1 Viewport	1 Viewport
+	2 Points	2 Titik
+	2 Viewports	2 Viewport
+	2D Solid	Solid 2D
+	3 Points	3 Titik
+	3 Viewports	3 Viewport
+	3D Face	Muka 3D
+	3D Operations	Operasi 3D
+	3D Polyline	Polilina 3D
+	4 Viewports	4 Viewport
+	< Less than	< Kurang dari
+	<> Not Equal	<> Tidak Sama
+	= Equals	= Sama Dengan
+	> Greater than	> Lebih dari
+	A variable name starts with a letter and has only letters, digits and _	Nama variabel diawali huruf dan hanya berisi huruf, angka, dan _
+	About	Tentang
+	About CADaddy	Tentang CADaddy
+	Absolute	Absolut
+	Add Leader	Tambah Leader
+	Additional angles	Sudut tambahan
+	Align	Ratakan
+	Align Text	Ratakan Teks
+	Aligned	Sejajar
+	All	Semua
+	All Annotation Objects	Semua Objek Anotasi
+	All Used Layers	Semua Lapisan Terpakai
+	All files	Semua berkas
+	Angle	Sudut
+	Angular	Sudut
+	Annotation Visibility	Visibilitas Anotasi
+	Annotation scale	Skala anotasi
+	Apparent Intersection	Perpotongan Semu
+	Append to current selection set	Tambahkan ke set pilihan saat ini
+	Apply to:	Terapkan ke:
+	Apply true color	Terapkan warna asli
+	Arc	Busur
+	Arc Length	Panjang Busur
+	Area	Luas
+	Arrange Panel	Panel Susun
+	Array	Larik
+	Attach	Lampirkan
+	Attribute	Atribut
+	Attribute Definition	Definisi Atribut
+	Attribute Display	Tampilan Atribut
+	Audit	Audit
+	Auto (system language)	Otomatis (bahasa sistem)
+	Auto Constrain	Batasan Otomatis
+	AutoConstrain	Batasan Otomatis
+	Axis, End	Sumbu, Ujung
+	Base	Dasar
+	Baseline	Garis Dasar
+	Batch Publish	Terbitkan Massal
+	Binary assets added	Aset biner ditambahkan
+	Binary assets removed	Aset biner dihapus
+	Bind...	Ikat...
+	Blend	Paduan
+	Block	Blok
+	Block Attribute Manager...	Manajer Atribut Blok...
+	Block Editor	Editor Blok
+	Block Reference	Referensi Blok
+	Block...	Blok...
+	Blocks	Blok
+	Blue	Biru
+	Bold	Tebal
+	Boolean	Boolean
+	Boundary	Batas
+	Boundary...	Batas...
+	Box	Kotak
+	Break	Patahkan
+	Break At Point	Patahkan di Titik
+	Bring Above Objects	Bawa ke Atas Objek
+	Bring Annotations to Front	Bawa Anotasi ke Depan
+	Bring to Front	Bawa ke Depan
+	Bulleted list	Daftar berpoin
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	Bantuan CADaddy
+	Cancel	Batal
+	Cartesian (x, y)	Kartesius (x, y)
+	Center	Pusat
+	Center Line	Garis Pusat
+	Center Mark	Tanda Pusat
+	Center X	Pusat X
+	Center Y	Pusat Y
+	Center Z	Pusat Z
+	Center, Diameter	Pusat, Diameter
+	Center, Radius	Pusat, Jari-jari
+	Center, Start, Angle	Pusat, Awal, Sudut
+	Center, Start, End	Pusat, Awal, Akhir
+	Center, Start, Length	Pusat, Awal, Panjang
+	Chamfer	Talang
+	Change Space	Ubah Ruang
+	Change to Current Layer	Ubah ke Lapisan Saat Ini
+	Changed: {n}	Diubah: {n}
+	Circle	Lingkaran
+	Circumference	Keliling
+	Clear History	Hapus Riwayat
+	Clear	Hapus
+	Clip	Pangkas
+	Clip Viewport	Pangkas Viewport
+	Clipboard	Papan Klip
+	Close	Tutup
+	Close All	Tutup Semua
+	Close All Other Drawings	Tutup Semua Gambar Lain
+	Closed	Tertutup
+	Close Comparison	Tutup Perbandingan
+	Coincident	Berimpit
+	Collapse Palettes	Ciutkan Palet
+	Collapse Tool Sets	Ciutkan Set Alat
+	Collinear	Segaris
+	Color	Warna
+	Color 8	Warna 8
+	Color 9	Warna 9
+	Color Index	Indeks Warna
+	Color...	Warna...
+	Command Aliases	Alias Perintah
+	Command History	Riwayat Perintah
+	Clear Command History	Hapus Riwayat Perintah
+	Command Line	Baris Perintah
+	Command Line History Lines	Jumlah Baris Riwayat Perintah
+	Command Reference	Referensi Perintah
+	Commits	Komit
+	Company	Perusahaan
+	Compare Drawings...	Bandingkan Gambar...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Desain dan drafting berbantuan komputer: aplikasi CAD sumber terbuka clean-room yang ditulis dalam Rust murni.
+	Concentric	Konsentris
+	Cone	Kerucut
+	Constraint Bars	Bilah Batasan
+	Constraint Settings	Pengaturan Batasan
+	Construction Line	Garis Konstruksi
+	Contents	Isi
+	Continue	Lanjutkan
+	Contributors	Kontributor
+	Control Vertices	Verteks Kontrol
+	Convert	Konversi
+	Copy	Salin
+	Copy Full File Path	Salin Jalur Berkas Lengkap
+	Copy History	Salin Riwayat
+	Copy Layout	Salin Tata Letak
+	Copy Nested Objects	Salin Objek Bersarang
+	Copy Selection	Salin Pilihan
+	Copy with Base Point	Salin dengan Titik Dasar
+	Count	Jumlah
+	Count List	Daftar Hitungan
+	Count Table	Tabel Hitungan
+	Create Block	Buat Blok
+	Creates a user parameter	Membuat parameter pengguna
+	Ctrl+Enter to finish	Ctrl+Enter untuk selesai
+	Current layer	Lapisan saat ini
+	Current selection	Pilihan saat ini
+	Current: {color}	Saat ini: {color}
+	Cut	Potong
+	Cyan	Sian
+	Cylinder	Silinder
+	DWG	DWG
+	DWG Reference...	Referensi DWG...
+	DXF	DXF
+	Dark	Gelap
+	Data Extraction...	Ekstraksi Data...
+	Default	Bawaan
+	Data Link...	Tautan Data...
+	Default Save Format	Format Simpan Bawaan
+	Default Save Version	Versi Simpan Bawaan
+	Define Attributes	Definisikan Atribut
+	Define Attributes...	Definisikan Atribut...
+	Defined width	Lebar tertentu
+	Degree	Derajat
+	Degrees of Freedom	Derajat Kebebasan
+	Degrees of freedom: {n}	Derajat kebebasan: {n}
+	Delete	Hapus
+	Delete Column	Hapus Kolom
+	Delete Constraints	Hapus Batasan
+	Delete Dimension Style	Hapus Gaya Dimensi
+	Delete Duplicate Objects	Hapus Objek Duplikat
+	Delete Layer	Hapus Lapisan
+	Delete Layer State	Hapus Status Lapisan
+	Delete Layout	Hapus Tata Letak
+	Delete Row	Hapus Baris
+	Delete Text Style	Hapus Gaya Teks
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Deskripsi
+	Deselect All	Batalkan Semua Pilihan
+	Diameter	Diameter
+	Dim style	Gaya dimensi
+	Dimension Break	Pemutus Dimensi
+	Dimension Edit	Edit Dimensi
+	Dimension	Dimensi
+	Dimension Objects Only	Hanya Objek Dimensi
+	Dimension Space	Spasi Dimensi
+	Dimension Style Override	Penimpaan Gaya Dimensi
+	Dimension Style...	Gaya Dimensi...
+	Dimension Text Edit	Edit Teks Dimensi
+	Dimension style	Gaya dimensi
+	Dimensional Constraint	Batasan Dimensional
+	Dimensional Constraint Parameters	Parameter Batasan Dimensional
+	Dimensional Constraints	Batasan Dimensional
+	Disassociate Dimensions	Lepaskan Asosiasi Dimensi
+	Display name	Nama tampilan
+	Distance	Jarak
+	Divide	Bagi
+	Do not plot (click: plot)	Jangan plot (klik: plot)
+	Donut	Donat
+	Double-click to edit the description	Klik ganda untuk mengedit deskripsi
+	Down	Bawah
+	Drafting	Drafting
+	Drafting Settings	Pengaturan Drafting
+	Drafting Settings...	Pengaturan Drafting...
+	Draw	Gambar
+	Draw Order	Urutan Gambar
+	Drawing (DWG)	Gambar (DWG)
+	Drawing (DXF)	Gambar (DXF)
+	Drawing Limits	Batas Gambar
+	Drawing Template (DWT)	Templat Gambar (DWT)
+	Drawing Utilities	Utilitas Gambar
+	Drawings (DWG, DXF)	Gambar (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	Gambar SVG (SVG, SVGZ)
+	Dynamic	Dinamis
+	Dynamic Dimensions	Dimensi Dinamis
+	Dynamic Input	Input Dinamis
+	Dynamic Input (F12)	Input Dinamis (F12)
+	E	T
+	Edit	Edit
+	Edit Attributes...	Edit Atribut...
+	Edit Text...	Edit Teks...
+	Edit Table Cell	Edit Sel Tabel
+	Elevation	Elevasi
+	Ellipse	Elips
+	Elliptical Arc	Busur Eliptis
+	Enable Dynamic Input (F12)	Aktifkan Input Dinamis (F12)
+	End Object Isolation	Akhiri Isolasi Objek
+	End Width	Lebar Akhir
+	End X	Akhir X
+	End Y	Akhir Y
+	End angle	Sudut akhir
+	Endpoint	Titik Ujung
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Masukkan Top, Zero, atau Bottom.
+	Enter a fit data option	Masukkan opsi data fit
+	Enter a pattern name	Masukkan nama pola
+	Enter a vertex editing option	Masukkan opsi pengeditan verteks
+	Enter an option	Masukkan opsi
+	Enter angle of xline	Masukkan sudut garis konstruksi
+	Enter angle of xline (0) or	Masukkan sudut garis konstruksi (0) atau
+	Enter area of rectangle in current units	Masukkan luas persegi panjang dalam satuan saat ini
+	Enter attribute prompt	Masukkan prompt atribut
+	Enter attribute tag name	Masukkan nama tag atribut
+	Enter attribute value	Masukkan nilai atribut
+	Enter block name	Masukkan nama blok
+	Enter constraint type	Masukkan jenis batasan
+	Enter continuity	Masukkan kontinuitas
+	Enter default attribute value	Masukkan nilai atribut bawaan
+	Enter degree of spline	Masukkan derajat spline
+	Enter delta angle	Masukkan sudut delta
+	Enter delta length or	Masukkan panjang delta atau
+	Enter dimension text	Masukkan teks dimensi
+	Enter dimension text (<> = measurement)	Masukkan teks dimensi (<> = hasil ukur)
+	Enter dimension value or [name=expression]	Masukkan nilai dimensi atau [name=expression]
+	Enter dimension variable name to override	Masukkan nama variabel dimensi yang akan ditimpa
+	Enter justification type	Masukkan jenis justifikasi
+	Enter leader text	Masukkan teks leader
+	Enter mline scale	Masukkan skala multilina
+	Enter mode	Masukkan mode
+	Enter name of block to insert	Masukkan nama blok yang akan disisipkan
+	Enter new text	Masukkan teks baru
+	Enter next point	Masukkan titik berikutnya
+	Enter number of columns	Masukkan jumlah kolom
+	Enter number of data rows	Masukkan jumlah baris data
+	Enter number of items	Masukkan jumlah item
+	Enter number of items along path	Masukkan jumlah item sepanjang lintasan
+	Enter number of sides	Masukkan jumlah sisi
+	Enter number of turns	Masukkan jumlah putaran
+	Enter percentage length	Masukkan persentase panjang
+	Enter rectangle length	Masukkan panjang persegi panjang
+	Enter rectangle width	Masukkan lebar persegi panjang
+	Enter scale factor	Masukkan faktor skala
+	Enter text	Masukkan teks
+	Enter text (use \P for new paragraphs)	Masukkan teks (gunakan \P untuk paragraf baru)
+	Enter the number of segments	Masukkan jumlah segmen
+	Enter twist direction of helix	Masukkan arah puntiran heliks
+	Entire drawing	Seluruh gambar
+	Equal	Sama
+	Erase	Hapus
+	Evaluate	Evaluasi
+	Evaluate LISP	Evaluasi LISP
+	Exclude from new selection set	Kecualikan dari set pilihan baru
+	Explode	Pecah
+	Export	Ekspor
+	Export Table	Ekspor Tabel
+	Export to PDF...	Ekspor ke PDF...
+	Expression	Ekspresi
+	Extend	Perpanjang
+	Extension	Ekstensi
+	Extents	Batas Penuh
+	External Reference	Referensi Eksternal
+	External References	Referensi Eksternal
+	Extrude	Ekstrusi
+	File	Berkas
+	File Tab	Tab Berkas
+	Fillet	Fillet
+	Filter	Filter
+	Filters	Filter
+	Find and Replace	Cari dan Ganti
+	Find...	Cari...
+	First	Pertama
+	First commit	Komit pertama
+	Fit Points	Titik Fit
+	Fix	Tetapkan
+	Flatten Objects	Ratakan Objek
+	Format	Format
+	Freehand	Tangan Bebas
+	Freeze	Bekukan
+	Freeze Layer	Bekukan Lapisan
+	Freeze in new viewports	Bekukan di viewport baru
+	Freeze/Thaw	Bekukan/Cairkan
+	Freeze/Thaw in all viewports	Bekukan/Cairkan di semua viewport
+	Freeze/Thaw in the current viewport	Bekukan/Cairkan di viewport saat ini
+	From	Dari
+	From Template...	Dari Templat...
+	General	Umum
+	Geometric Center	Pusat Geometris
+	Geometric Constraint	Batasan Geometris
+	Geometric Constraints	Batasan Geometris
+	Geometry	Geometri
+	Get from the Drawing	Ambil dari Gambar
+	Get Variable	Ambil Variabel
+	Get View	Ambil Tampilan
+	Global	Global
+	Global width	Lebar global
+	Grab bag	Daftar
+	Gradient	Gradien
+	Gradient...	Gradien...
+	Green	Hijau
+	Grid (F7)	Grid (F7)
+	Grid Display	Tampilan Grid
+	Grid On (F7)	Grid Aktif (F7)
+	Grid snap	Snap grid
+	Grid spacing	Jarak grid
+	Grip Edit	Edit Grip
+	Grip Mirror	Cermin Grip
+	Grip Option	Opsi Grip
+	Grip Rotate	Putar Grip
+	Grip Scale	Skala Grip
+	Grip Stretch	Regang Grip
+	Group	Grup
+	Group Edit	Edit Grup
+	Group Options	Opsi Grup
+	Group Selection	Pilihan Grup
+	Hatch	Arsiran
+	Hatch Edit	Edit Arsiran
+	Hatch Patterns	Pola Arsiran
+	Hatch...	Arsiran...
+	Height	Tinggi
+	Height: {height}	Tinggi: {height}
+	Helix	Heliks
+	Help	Bantuan
+	Hide All	Sembunyikan Semua
+	Hide All Constraint Bars	Sembunyikan Semua Bilah Batasan
+	Hide All Dynamic Dimensions	Sembunyikan Semua Dimensi Dinamis
+	Hide Layer List	Sembunyikan Daftar Lapisan
+	Hide Objects	Sembunyikan Objek
+	Hide Palettes	Sembunyikan Palet
+	History	Riwayat
+	Home	Beranda
+	Horizontal	Horizontal
+	HorizontalDistance	Jarak Horizontal
+	How to apply:	Cara menerapkan:
+	ID Point	Titik ID
+	Import	Impor
+	Align Multileaders	Ratakan Multileader
+	Collect	Kumpulkan
+	Collect Multileaders	Kumpulkan Multileader
+	Edit Multileader	Edit Multileader
+	In	Perbesar
+	In-window Menu Bar	Bilah Menu dalam Jendela
+	Include in new selection set	Sertakan dalam set pilihan baru
+	Increment angle	Sudut kenaikan
+	Index Color	Warna Indeks
+	Index color: {index}	Warna indeks: {index}
+	Infer Constraints	Simpulkan Batasan
+	Inquiry	Inkuiri
+	Insert	Sisipkan
+	Insert Block	Sisipkan Blok
+	Insert Column	Sisipkan Kolom
+	Insert Row	Sisipkan Baris
+	Insert tab	Tab Sisipkan
+	Insert this block	Sisipkan blok ini
+	Insert Table Formula	Sisipkan Rumus Tabel
+	Insertion	Penyisipan
+	Insertion X	Penyisipan X
+	Insertion Y	Penyisipan Y
+	Insertion Z	Penyisipan Z
+	Inspect Constraints	Periksa Batasan
+	Inspect Drawing	Periksa Gambar
+	Inspection	Inspeksi
+	Interface Language	Bahasa Antarmuka
+	Interface Theme	Tema Antarmuka
+	Intersect	Irisan
+	Intersection	Perpotongan
+	Isolate	Isolasi
+	Isolate Layer	Isolasi Lapisan
+	Isolate Objects	Isolasi Objek
+	Isometric Drafting	Drafting Isometrik
+	Jogged	Bertekuk
+	Jogged Linear	Linear Bertekuk
+	Join	Gabung
+	Join the ArtCraft Discord…	Bergabung dengan Discord ArtCraft…
+	Join us on Discord	Bergabunglah dengan kami di Discord
+	Isometric Plane	Bidang Isometrik
+	Isometric snap	Snap isometrik
+	Language	Bahasa
+	Last	Terakhir
+	Last commit	Komit terakhir
+	Layer	Lapisan
+	Layer Delete	Hapus Lapisan
+	Layer Match	Cocokkan Lapisan
+	Layer Merge	Gabung Lapisan
+	Layer Off	Matikan Lapisan
+	Layer Properties	Properti Lapisan
+	Layer Properties Manager	Manajer Properti Lapisan
+	Layer Properties Manager — current viewport	Manajer Properti Lapisan — viewport saat ini
+	Layer State	Status Lapisan
+	Layer States Manager...	Manajer Status Lapisan...
+	Layer Tools	Alat Lapisan
+	Layer contains objects (double-click to make current)	Lapisan berisi objek (klik ganda untuk menjadikan aktif)
+	Layer is empty (double-click to make current)	Lapisan kosong (klik ganda untuk menjadikan aktif)
+	Layers	Lapisan
+	Layers Palette	Palet Lapisan
+	Hide Palette	Sembunyikan Palet
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Lapisan ditampilkan: {shown} dari {total}.   Lapisan saat ini: {layer}
+	Layout	Tata Letak
+	Layout list	Daftar tata letak
+	Leader	Leader
+	Leaders Only	Hanya Leader
+	Left	Kiri
+	Length	Panjang
+	Length X	Panjang X
+	Length Y	Panjang Y
+	Lengthen	Perpanjang
+	Light	Terang
+	Line	Garis
+	Line delta	Delta baris
+	Linear	Linear
+	Lines +/−	Baris +/−
+	Lines added	Baris ditambahkan
+	Lines deleted	Baris dihapus
+	Lines of Command History	Baris Riwayat Perintah
+	Linetype	Jenis Garis
+	Linetype Scale	Skala Jenis Garis
+	Linetype scale	Skala jenis garis
+	Ltscale	Skala jenis garis
+	Linetype...	Jenis Garis...
+	Lineweight	Tebal Garis
+	Lineweight...	Tebal Garis...
+	List	Daftar
+	List Blocks	Daftar Blok
+	List Dimension Styles	Daftar Gaya Dimensi
+	List Groups	Daftar Grup
+	List Layer States	Daftar Status Lapisan
+	List Layouts	Daftar Tata Letak
+	List System Variables	Daftar Variabel Sistem
+	List Text Styles	Daftar Gaya Teks
+	Load all	Muat semua
+	Load...	Muat...
+	Load Application...	Muat Aplikasi...
+	Loaded linetypes	Jenis garis dimuat
+	Lock	Kunci
+	Lock Layer	Kunci Lapisan
+	Lock viewport	Kunci viewport
+	Lock/Unlock	Kunci/Buka Kunci
+	Loft	Loft
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Tidak berafiliasi dengan Autodesk, Inc.
+	MODEL	MODEL
+	MText	MText
+	Magenta	Magenta
+	Major line every	Garis utama setiap
+	Make Current	Jadikan Aktif
+	Make Object's Layer Current	Jadikan Lapisan Objek Aktif
+	Make...	Buat...
+	Match Layer	Cocokkan Lapisan
+	Match Properties	Cocokkan Properti
+	Measure	Ukur
+	Measure Distance	Ukur Jarak
+	Measure Geometry	Ukur Geometri
+	Merge Cells	Gabung Sel
+	Merged PRs	PR yang Digabung
+	Mid Between 2 Points	Tengah Antara 2 Titik
+	Midpoint	Titik Tengah
+	Mirror	Cermin
+	Model	Model
+	Model Space (in viewport)	Ruang Model (di viewport)
+	Modeling	Pemodelan
+	Models	Model
+	Modify	Ubah
+	Move	Pindah
+	Multileader	Multileader
+	Multileader Style...	Gaya Multileader...
+	Multileader style	Gaya multileader
+	Multiline	Multilina
+	Multiline Text	Teks Multibaris
+	Multiline Text...	Teks Multibaris...
+	Multiple	Beragam
+	Multiple Point	Titik Ganda
+	My	Milik Saya
+	My properties: not available yet	Properti saya: belum tersedia
+	N	U
+	Name	Nama
+	Name (A–Z)	Nama (A–Z)
+	Named Views...	Tampilan Bernama...
+	Nearest	Terdekat
+	New	Baru
+	New (metric)	Baru (metrik)
+	New Drawing	Gambar Baru
+	New Drawing (⌘N)	Gambar Baru (⌘N)
+	New Drawing...	Gambar Baru...
+	New Layer	Lapisan Baru
+	New Layout	Tata Letak Baru
+	New VP Freeze	Beku VP Baru
+	New Viewports...	Viewport Baru...
+	New from Template...	Baru dari Templat...
+	New layout	Tata letak baru
+	New state name	Nama status baru
+	Next Change	Perubahan Berikutnya
+	No	Tidak
+	No blocks defined in this drawing.	Tidak ada blok yang didefinisikan di gambar ini.
+	No contributor data was built into this copy.	Tidak ada data kontributor yang disertakan dalam salinan ini.
+	No model credits were built into this copy.	Tidak ada kredit model yang disertakan dalam salinan ini.
+	No saved layer states	Tidak ada status lapisan tersimpan
+	No selection	Tidak ada pilihan
+	Node	Simpul
+	None	Tidak ada
+	Not available	Tidak tersedia
+	Not available yet	Belum tersedia
+	Numbered list	Daftar bernomor
+	OK	OK
+	Object	Objek
+	Object Snap	Snap Objek
+	Object Snap (F3)	Snap Objek (F3)
+	Object Snap On (F3)	Snap Objek Aktif (F3)
+	Object Snap Tracking	Pelacakan Snap Objek
+	Object Snap Tracking (F11)	Pelacakan Snap Objek (F11)
+	Object Snap Tracking Settings	Pengaturan Pelacakan Snap Objek
+	Object type:	Jenis objek:
+	Oblique	Miring
+	Off	Mati
+	Offset	Offset
+	On	Aktif
+	On/Off	Aktif/Mati
+	One of the Crafting Apps by the ArtCraft team and community.	Salah satu Crafting Apps dari tim dan komunitas ArtCraft.
+	Only in this drawing: {n}	Hanya di gambar ini: {n}
+	Only in {name}: {n}	Hanya di {name}: {n}
+	Open (⌘O)	Buka (⌘O)
+	Open Sample Drawing	Buka Gambar Contoh
+	Open sample drawing	Buka gambar contoh
+	Open Xref	Buka Xref
+	Open...	Buka...
+	Open Recent	Buka Terbaru
+	Clear Recent Files	Hapus Berkas Terbaru
+	Operator:	Operator:
+	Orbit	Orbit
+	Ordinate	Ordinat
+	Ortho (F8)	Ortho (F8)
+	Ortho Mode	Mode Ortho
+	Ortho Mode (F8)	Mode Ortho (F8)
+	Osnap Settings...	Pengaturan Osnap...
+	Out	Perkecil
+	Over-constrained	Batasan berlebih
+	Override	Timpa
+	PAPER	KERTAS
+	Percent	Persen
+	Polar (distance < angle)	Polar (jarak < sudut)
+	PRs	PR
+	Page Setup Manager	Manajer Pengaturan Halaman
+	Page Setup Manager...	Manajer Pengaturan Halaman...
+	Pan	Geser
+	Pan Down	Geser ke Bawah
+	Pan Left	Geser ke Kiri
+	Pan Right	Geser ke Kanan
+	Pan Up	Geser ke Atas
+	Paper Space	Ruang Kertas
+	Parallel	Sejajar
+	Parameters Manager	Manajer Parameter
+	Parametric	Parametrik
+	Paste	Tempel
+	Paste as Block	Tempel sebagai Blok
+	Paste to Command Line	Tempel ke Baris Perintah
+	Paste to Original Coordinates	Tempel ke Koordinat Asli
+	Path Array	Larik Lintasan
+	Pattern	Pola
+	Perpendicular	Tegak Lurus
+	Plot	Plot
+	Plot (click: do not plot)	Plot (klik: jangan plot)
+	Plot Preview	Pratinjau Plot
+	Plot Window	Jendela Plot
+	Plot style	Gaya plot
+	Plot style attached to	Gaya plot terlampir pada
+	Plot style table	Tabel gaya plot
+	Plot Style...	Gaya Plot...
+	Plot Style Manager	Manajer Gaya Plot
+	Plot Style Manager...	Manajer Gaya Plot...
+	Plot Styles...	Gaya Plot...
+	Plotter Manager	Manajer Plotter
+	Plotter Manager...	Manajer Plotter...
+	New CTB	CTB Baru
+	New STB	STB Baru
+	New style	Gaya baru
+	Reset Panel Layout	Atur Ulang Tata Letak Panel
+	Send Hatches to Back	Kirim Arsiran ke Belakang
+	Send Under Objects	Kirim ke Bawah Objek
+	Text Objects Only	Hanya Objek Teks
+	Use for this layout	Gunakan untuk tata letak ini
+	Display plot styles	Tampilkan gaya plot
+	No plot style tables.	Tidak ada tabel gaya plot.
+	A built-in table: editing it keeps an edited copy in the drawing.	Tabel bawaan: mengeditnya menyimpan salinan yang diedit di dalam gambar.
+	Keep an editable copy of this table in the drawing	Simpan salinan tabel ini yang dapat diedit di dalam gambar
+	Layout {name}: {table}	Tata letak {name}: {table}
+	Grayscale	Skala abu-abu
+	Screening	Screening
+	Use object linetype	Gunakan jenis garis objek
+	Use object lineweight	Gunakan tebal garis objek
+	Remove	Hapus
+	Add	Tambah
+	Open a drawing first.	Buka gambar terlebih dahulu.
+	Plot table type	Jenis tabel plot
+	Color-dependent	Bergantung warna
+	Named	Bernama
+	Plus/minus	Plus/minus
+	Point	Titik
+	Point Filters	Filter Titik
+	Point Style...	Gaya Titik...
+	Polar Array	Larik Polar
+	Polar Tracking	Pelacakan Polar
+	Polar Tracking (F10)	Pelacakan Polar (F10)
+	Polar Tracking On (F10)	Pelacakan Polar Aktif (F10)
+	Polar angle measurement	Pengukuran sudut polar
+	Polar distance	Jarak polar
+	Polar: {distance} < {angle}°	Polar: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	Poligon
+	Polygonal	Poligonal
+	Polygonal Viewport	Viewport Poligonal
+	Polyline	Polilina
+	Polyline Edit	Edit Polilina
+	Position X	Posisi X
+	Position Y	Posisi Y
+	Position Z	Posisi Z
+	Previous	Sebelumnya
+	Previous Change	Perubahan Sebelumnya
+	Previous Layer	Lapisan Sebelumnya
+	Primitives	Primitif
+	Print	Cetak
+	Print...	Cetak...
+	Properties	Properti
+	Properties Inspector	Inspektur Properti
+	Properties:	Properti:
+	Proxy	Proksi
+	Purge	Bersihkan
+	Pyramid	Piramida
+	Quadrant	Kuadran
+	Query Entities	Kueri Entitas
+	Quick	Cepat
+	Quick Dimension	Dimensi Cepat
+	Quick Properties	Properti Cepat
+	Quick Select	Pilih Cepat
+	Quick Select Properties	Properti Pilih Cepat
+	Quick Select...	Pilih Cepat...
+	QuickCalc	QuickCalc
+	QuickCalc Pick	Ambil QuickCalc
+	Quit CADaddy	Keluar dari CADaddy
+	Radius	Jari-jari
+	Raster Image	Gambar Raster
+	Ray	Sinar
+	Read-only	Hanya-baca
+	Real name	Nama asli
+	Realtime	Waktu nyata
+	Reassociate Dimensions	Asosiasikan Ulang Dimensi
+	Recent	Terbaru
+	Recent Commands	Perintah Terbaru
+	Recent Input	Input Terbaru
+	Recover...	Pulihkan...
+	Rectangle	Persegi Panjang
+	Recalculate Table Formulas	Hitung Ulang Rumus Tabel
+	Rectangular	Persegi panjang
+	Rectangular snap	Snap persegi panjang
+	Rectangular Array	Larik Persegi Panjang
+	Red	Merah
+	Redo	Ulangi
+	Redo (⇧⌘Z)	Ulangi (⇧⌘Z)
+	Redraw	Gambar Ulang
+	Regen	Regen
+	Regen All	Regen Semua
+	Region	Region
+	Region/Mass Properties	Properti Region/Massa
+	Reinitialize	Inisialisasi Ulang
+	Relative	Relatif
+	Relative to last segment	Relatif terhadap segmen terakhir
+	Remove Leader	Hapus Leader
+	Remove the viewport override	Hapus penimpaan viewport
+	Rename Dimension Style	Ganti Nama Gaya Dimensi
+	Rename Layer	Ganti Nama Lapisan
+	Rename Layer State	Ganti Nama Status Lapisan
+	Rename Layout	Ganti Nama Tata Letak
+	Rename Text Style	Ganti Nama Gaya Teks
+	Rename...	Ganti Nama...
+	Repeat {command}	Ulangi {command}
+	Requires a point (x,y, @dx,dy or @d<a).	Memerlukan titik (x,y, @dx,dy atau @d<a).
+	Reset Palettes	Atur Ulang Palet
+	Restore	Pulihkan
+	Restore Layer State	Pulihkan Status Lapisan
+	Reverse	Balik
+	Reverse the order	Balik urutan
+	Revision Cloud	Awan Revisi
+	Revolve	Putar Revolusi
+	Right	Kanan
+	Rotate	Putar
+	Rotation	Rotasi
+	S	S
+	Save	Simpan
+	Save (⌘S)	Simpan (⌘S)
+	Save As	Simpan Sebagai
+	Save As...	Simpan Sebagai...
+	Save Layer State	Simpan Status Lapisan
+	Save State	Simpan Status
+	Scale	Skala
+	Search for layer	Cari lapisan
+	Search for parameter	Cari parameter
+	Second and next points:	Titik kedua dan berikutnya:
+	Select	Pilih
+	Select 2D polyline	Pilih polilina 2D
+	Select All	Pilih Semua
+	Select Objects	Pilih Objek
+	Select Similar	Pilih yang Serupa
+	Select a 2D polyline.	Pilih polilina 2D.
+	Select a block reference.	Pilih referensi blok.
+	Select a circle or arc.	Pilih lingkaran atau busur.
+	Select a closed polyline	Pilih polilina tertutup
+	Select a closed polyline, circle, ellipse or closed spline.	Pilih polilina tertutup, lingkaran, elips, atau spline tertutup.
+	Select a closed polyline.	Pilih polilina tertutup.
+	Select a curve as the path.	Pilih kurva sebagai lintasan.
+	Select a dimension constraint type	Pilih jenis batasan dimensi
+	Select a line object	Pilih objek garis
+	Select a line object.	Pilih objek garis.
+	Select a line or an arc.	Pilih garis atau busur.
+	Select a line or polyline segment	Pilih garis atau segmen polilina
+	Select a line, arc or open polyline.	Pilih garis, busur, atau polilina terbuka.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Pilih garis, busur, lingkaran, polilina, elips, atau spline sebagai lintasan.
+	Select a line, circle, arc or polyline segment.	Pilih garis, lingkaran, busur, atau segmen polilina.
+	Select a line.	Pilih garis.
+	Select a polyline.	Pilih polilina.
+	Select a text, mtext, attribute definition or dimension.	Pilih teks, mtext, definisi atribut, atau dimensi.
+	Select an annotation object	Pilih objek anotasi
+	Select an arc or circle	Pilih busur atau lingkaran
+	Select an arc.	Pilih busur.
+	Select an object	Pilih objek
+	Select an object to change or	Pilih objek yang akan diubah atau
+	Select an object to measure or	Pilih objek yang akan diukur atau
+	Select an object.	Pilih objek.
+	Select an open curve.	Pilih kurva terbuka.
+	Select an open line, arc, polyline, ellipse arc or spline.	Pilih garis terbuka, busur, polilina, busur elips, atau spline.
+	Select arc or circle	Pilih busur atau lingkaran
+	Select arc or polyline arc segment	Pilih busur atau segmen busur polilina
+	Select arc style	Pilih gaya busur
+	Select arc, circle, line	Pilih busur, lingkaran, garis
+	Select at least two objects to join.	Pilih setidaknya dua objek untuk digabung.
+	Select circle or arc to add center mark	Pilih lingkaran atau busur untuk menambahkan tanda pusat
+	Select closed objects (regions, closed polylines, circles).	Pilih objek tertutup (region, polilina tertutup, lingkaran).
+	Select first line	Pilih garis pertama
+	Select first line or arc	Pilih garis atau busur pertama
+	Select first object	Pilih objek pertama
+	Select first object or	Pilih objek pertama atau
+	Select first point	Pilih titik pertama
+	Select nested objects to copy or	Pilih objek bersarang yang akan disalin atau
+	Select object	Pilih objek
+	Select object to dimension	Pilih objek yang akan diberi dimensi
+	Select object to divide	Pilih objek yang akan dibagi
+	Select object to extend or shift-select to trim	Pilih objek yang akan diperpanjang atau shift-pilih untuk memangkas
+	Select object to measure	Pilih objek yang akan diukur
+	Select object to offset	Pilih objek yang akan di-offset
+	Select object to trim or shift-select to extend	Pilih objek yang akan dipangkas atau shift-pilih untuk memperpanjang
+	Select objects	Pilih objek
+	Select objects (crossing window first corner)	Pilih objek (sudut pertama jendela silang)
+	Select objects to array.	Pilih objek yang akan dilarik.
+	Select objects to stretch by crossing-window or crossing-polygon...	Pilih objek yang akan diregangkan dengan jendela silang atau poligon silang...
+	Select objects:	Pilih objek:
+	Add to Working Set	Tambahkan ke Set Kerja
+	Edit Reference In-Place	Edit Referensi di Tempat
+	Save Reference Edits	Simpan Editan Referensi
+	Working Set	Set Kerja
+	Xref and Block In-place Editing	Pengeditan Xref dan Blok di Tempat
+	Select one polyline (Multiple is available through the JSON form).	Pilih satu polilina (Multiple tersedia melalui formulir JSON).
+	Select path curve	Pilih kurva lintasan
+	Select point or object	Pilih titik atau objek
+	Select polyline or	Pilih polilina atau
+	Select second line	Pilih garis kedua
+	Select second line or shift-select to apply corner	Pilih garis kedua atau shift-pilih untuk menerapkan sudut
+	Select second object	Pilih objek kedua
+	Select second object or shift-select to apply corner	Pilih objek kedua atau shift-pilih untuk menerapkan sudut
+	Select second point	Pilih titik kedua
+	Select spline	Pilih spline
+	Select symmetry line	Pilih garis simetri
+	Select two points	Pilih dua titik
+	Selection Cycling	Siklus Pilihan
+	Send to Back	Kirim ke Belakang
+	Set Current	Jadikan Aktif
+	Set Current Dimension Style	Jadikan Gaya Dimensi Aktif
+	Set Current Text Style	Jadikan Gaya Teks Aktif
+	Set Current Viewport	Jadikan Viewport Aktif
+	Set Layer Properties	Atur Properti Lapisan
+	Set Properties	Atur Properti
+	Set Table Cell	Atur Sel Tabel
+	Set Table Cell Style	Atur Gaya Sel Tabel
+	Set Variable	Atur Variabel
+	Set View	Atur Tampilan
+	Share	Bagikan
+	Show	Tampilkan
+	Show All	Tampilkan Semua
+	Show All Constraint Bars	Tampilkan Semua Bilah Batasan
+	Show All Dynamic Dimensions	Tampilkan Semua Dimensi Dinamis
+	Show and hide the tools of this category	Tampilkan dan sembunyikan alat kategori ini
+	Show in Tool Sets	Tampilkan di Set Alat
+	Show command prompting near the crosshairs	Tampilkan prompt perintah di dekat kursor silang
+	Show Layer List	Tampilkan Daftar Lapisan
+	Show/Hide Lineweight	Tampilkan/Sembunyikan Tebal Garis
+	Show/Hide Transparency	Tampilkan/Sembunyikan Transparansi
+	Single Line Text	Teks Satu Baris
+	Single Point	Titik Tunggal
+	Single...	Tunggal...
+	Smooth	Halus
+	Snap	Snap
+	Snap Mode	Mode Snap
+	Snap Mode (F9)	Mode Snap (F9)
+	Snap On (F9)	Snap Aktif (F9)
+	Snap Overrides	Penimpaan Snap
+	Snap X spacing	Jarak snap X
+	Snap and Grid	Snap dan Grid
+	Snap type	Jenis snap
+	Solid	Solid
+	Sort	Urutkan
+	Specify a point	Tentukan titik
+	Specify a scale for the hatch pattern	Tentukan skala pola arsiran
+	Specify a second extension line origin	Tentukan titik asal garis ekstensi kedua
+	Specify an angle for the hatch pattern	Tentukan sudut pola arsiran
+	Specify angle end point	Tentukan titik akhir sudut
+	Specify angle of dimension line	Tentukan sudut garis dimensi
+	Specify angle of dimension text	Tentukan sudut teks dimensi
+	Specify angle start point	Tentukan titik awal sudut
+	Specify angle vertex	Tentukan verteks sudut
+	Specify angle vertex point	Tentukan titik verteks sudut
+	Specify arc length dimension location	Tentukan lokasi dimensi panjang busur
+	Specify axis endpoint of ellipse	Tentukan titik ujung sumbu elips
+	Specify base diameter	Tentukan diameter alas
+	Specify base point	Tentukan titik dasar
+	Specify base point or	Tentukan titik dasar atau
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Tentukan titik dasar atau perpindahan (seret dengan tombol tengah mouse untuk geser waktu nyata)
+	Specify base radius or	Tentukan jari-jari alas atau
+	Specify center of donut	Tentukan pusat donat
+	Specify center of ellipse	Tentukan pusat elips
+	Specify center of polygon	Tentukan pusat poligon
+	Specify center point for circle	Tentukan titik pusat lingkaran
+	Specify center point of arc	Tentukan titik pusat busur
+	Specify center point of array	Tentukan titik pusat larik
+	Specify center point of base	Tentukan titik pusat alas
+	Specify corner of viewport	Tentukan sudut viewport
+	Specify corner of window, enter a scale factor (nX or nXP)	Tentukan sudut jendela, masukkan faktor skala (nX atau nXP)
+	Specify diameter of circle	Tentukan diameter lingkaran
+	Specify dimension arc line location	Tentukan lokasi garis busur dimensi
+	Specify dimension line location	Tentukan lokasi garis dimensi
+	Specify distance between turns	Tentukan jarak antarputaran
+	Specify distance to other axis	Tentukan jarak ke sumbu lainnya
+	Specify end angle	Tentukan sudut akhir
+	Specify end point of arc	Tentukan titik akhir busur
+	Specify end point of arc (hold Ctrl to switch direction)	Tentukan titik akhir busur (tahan Ctrl untuk mengganti arah)
+	Specify ending width	Tentukan lebar akhir
+	Specify ending width for next segment	Tentukan lebar akhir untuk segmen berikutnya
+	Specify endpoint of arc	Tentukan titik ujung busur
+	Specify endpoint of axis	Tentukan titik ujung sumbu
+	Specify endpoint of line	Tentukan titik ujung garis
+	Specify feature location	Tentukan lokasi fitur
+	Specify fillet radius	Tentukan jari-jari fillet
+	Specify fillet radius for rectangles	Tentukan jari-jari fillet untuk persegi panjang
+	Specify first angle endpoint	Tentukan titik ujung sudut pertama
+	Specify first chamfer distance	Tentukan jarak talang pertama
+	Specify first chamfer distance for rectangles	Tentukan jarak talang pertama untuk persegi panjang
+	Specify first constraint point	Tentukan titik batasan pertama
+	Specify first corner	Tentukan sudut pertama
+	Specify first corner point	Tentukan titik sudut pertama
+	Specify first destination point	Tentukan titik tujuan pertama
+	Specify first end point of circle's diameter	Tentukan titik ujung pertama diameter lingkaran
+	Specify first endpoint of edge	Tentukan titik ujung pertama tepi
+	Specify first extension line origin	Tentukan titik asal garis ekstensi pertama
+	Specify first point	Tentukan titik pertama
+	Specify first point of mirror line	Tentukan titik pertama garis cermin
+	Specify first point on circle	Tentukan titik pertama pada lingkaran
+	Specify first point on circle: _tan to	Tentukan titik pertama pada lingkaran: _tan ke
+	Specify first source point	Tentukan titik sumber pertama
+	Specify height	Tentukan tinggi
+	Specify helix height or	Tentukan tinggi heliks atau
+	Specify included angle	Tentukan sudut yang dicakup
+	Specify insertion base point	Tentukan titik dasar penyisipan
+	Specify insertion point	Tentukan titik penyisipan
+	A drawing opened from a file keeps that file's format.	Gambar yang dibuka dari berkas mempertahankan format berkas tersebut.
+	An array that would create more objects than this is refused.	Larik yang akan membuat objek lebih banyak dari ini akan ditolak.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy menyimpan preferensi ini, mode snap objek, dan sakelar drafting untuk akun pengguna Anda dan memulihkannya saat dijalankan.
+	Changes apply at once and are kept for next time.	Perubahan langsung diterapkan dan disimpan untuk lain kali.
+	Command line history	Riwayat baris perintah
+	Copy as JSON	Salin sebagai JSON
+	Crosshair size	Ukuran kursor silang
+	Crossing selection color:	Warna pilihan silang:
+	Display	Tampilan
+	Exclude:	Kecualikan:
+	Grip size	Ukuran grip
+	Grips	Grip
+	Groups	Grup
+	Hatches	Arsiran
+	Hold Shift to add to the selection	Tahan Shift untuk menambahkan ke pilihan
+	Indicate selection area	Tandai area pilihan
+	Interface language	Bahasa antarmuka
+	Interface theme	Tema antarmuka
+	Keep the system cursor visible over the drawing area	Tetap tampilkan kursor sistem di atas area gambar
+	Largest array	Larik terbesar
+	Layout paper	Kertas tata letak
+	Model background	Latar belakang model
+	Multiline text	Teks multibaris
+	Object grouping	Pengelompokan objek
+	Object selection limit for display of grips	Batas pilihan objek untuk menampilkan grip
+	Object snap aperture	Apertur snap objek
+	Object snap marker size	Ukuran penanda snap objek
+	Objects on locked layers	Objek di lapisan terkunci
+	Open and Save	Buka dan Simpan
+	Options	Opsi
+	Options...	Opsi...
+	Pickbox size	Ukuran kotak pilih
+	Preview	Pratinjau
+	Profiles	Profil
+	Reset keeps the interface language.	Atur ulang tetap mempertahankan bahasa antarmuka.
+	Reset to Defaults	Kembalikan ke Bawaan
+	Save new drawings as	Simpan gambar baru sebagai
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Kaca pembesar layar, pembaca layar, dan perekam mengikuti kursor sistem.
+	Select objects first, then choose a command	Pilih objek terlebih dahulu, lalu pilih perintah
+	Selection	Pilihan
+	Selection Area Effect	Efek Area Pilihan
+	Selection Preview Filter	Filter Pratinjau Pilihan
+	Selection area opacity:	Opasitas area pilihan:
+	Selection effect color	Warna efek pilihan
+	Selection modes	Mode pilihan
+	Selection preview	Pratinjau pilihan
+	Settings...	Pengaturan...
+	Show Quick Properties for selected objects	Tampilkan Properti Cepat untuk objek terpilih
+	Show grips	Tampilkan grip
+	Snap, grid, polar tracking and Dynamic Input:	Snap, grid, pelacakan polar, dan Input Dinamis:
+	Tables	Tabel
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Apertur adalah seberapa dekat kursor harus mendekati titik agar snap objek menemukannya.
+	User Preferences	Preferensi Pengguna
+	Visual Effect Settings	Pengaturan Efek Visual
+	Visual Effect Settings...	Pengaturan Efek Visual...
+	When a command is active	Saat perintah aktif
+	When no command is active	Saat tidak ada perintah aktif
+	Window selection color:	Warna pilihan jendela:
+	Xrefs	Xref
+	objects	objek
+	Specify inside diameter of donut	Tentukan diameter dalam donat
+	Specify leader arrowhead location	Tentukan lokasi kepala panah leader
+	Specify leader endpoint	Tentukan titik ujung leader
+	Specify leader landing location	Tentukan lokasi landasan leader
+	Specify length for rectangles	Tentukan panjang untuk persegi panjang
+	Specify length of chord	Tentukan panjang tali busur
+	Specify length of segment	Tentukan panjang segmen
+	Specify line width for rectangles	Tentukan lebar garis untuk persegi panjang
+	Specify location for new vertex	Tentukan lokasi verteks baru
+	Specify minimum length of arc	Tentukan panjang minimum busur
+	Specify new end point	Tentukan titik akhir baru
+	Specify new location for marked vertex	Tentukan lokasi baru untuk verteks yang ditandai
+	Specify new width for all segments	Tentukan lebar baru untuk semua segmen
+	Specify next point	Tentukan titik berikutnya
+	Specify offset distance	Tentukan jarak offset
+	Specify offset distance or	Tentukan jarak offset atau
+	Specify opposite corner	Tentukan sudut seberang
+	Specify other corner point	Tentukan titik sudut lainnya
+	Specify other endpoint of axis	Tentukan titik ujung sumbu lainnya
+	Specify outside diameter of donut	Tentukan diameter luar donat
+	Specify point	Tentukan titik
+	Specify point on object for first tangent of circle	Tentukan titik pada objek untuk garis singgung pertama lingkaran
+	Specify point on object for second tangent of circle	Tentukan titik pada objek untuk garis singgung kedua lingkaran
+	Specify point on side to offset	Tentukan titik di sisi yang akan di-offset
+	Specify radius of arc	Tentukan jari-jari busur
+	Specify radius of circle	Tentukan jari-jari lingkaran
+	Specify rotation angle	Tentukan sudut rotasi
+	Specify rotation angle of text	Tentukan sudut rotasi teks
+	Specify rotation angle or	Tentukan sudut rotasi atau
+	Specify scale factor	Tentukan faktor skala
+	Specify second angle endpoint	Tentukan titik ujung sudut kedua
+	Specify second break point	Tentukan titik patah kedua
+	Specify second chamfer distance for rectangles	Tentukan jarak talang kedua untuk persegi panjang
+	Specify second constraint point	Tentukan titik batasan kedua
+	Specify second destination point	Tentukan titik tujuan kedua
+	Specify second end point of circle's diameter	Tentukan titik ujung kedua diameter lingkaran
+	Specify second endpoint of edge	Tentukan titik ujung kedua tepi
+	Specify second extension line origin	Tentukan titik asal garis ekstensi kedua
+	Specify second point	Tentukan titik kedua
+	Specify second point of arc	Tentukan titik kedua busur
+	Specify second point of mirror line	Tentukan titik kedua garis cermin
+	Specify second point on circle	Tentukan titik kedua pada lingkaran
+	Specify second point on circle: _tan to	Tentukan titik kedua pada lingkaran: _tan ke
+	Specify second point or <use first point as displacement>	Tentukan titik kedua atau <gunakan titik pertama sebagai perpindahan>
+	Specify second source point	Tentukan titik sumber kedua
+	Specify side to offset	Tentukan sisi yang akan di-offset
+	Specify start angle	Tentukan sudut awal
+	Specify start point	Tentukan titik awal
+	Specify start point of arc	Tentukan titik awal busur
+	Specify start point of polyline	Tentukan titik awal polilina
+	Specify start point of text	Tentukan titik awal teks
+	Specify starting width	Tentukan lebar awal
+	Specify starting width for next segment	Tentukan lebar awal untuk segmen berikutnya
+	Specify tangent direction for the start point of arc	Tentukan arah singgung untuk titik awal busur
+	Specify the elevation for rectangles	Tentukan elevasi untuk persegi panjang
+	Specify thickness for rectangles	Tentukan ketebalan untuk persegi panjang
+	Specify third point on circle	Tentukan titik ketiga pada lingkaran
+	Specify third point on circle: _tan to	Tentukan titik ketiga pada lingkaran: _tan ke
+	Specify third source point or <continue>	Tentukan titik sumber ketiga atau <lanjutkan>
+	Specify through point	Tentukan titik lintasan
+	Specify top diameter	Tentukan diameter atas
+	Specify top radius or	Tentukan jari-jari atas atau
+	Specify total angle	Tentukan sudut total
+	Specify total length or	Tentukan panjang total atau
+	Specify width for rectangles	Tentukan lebar untuk persegi panjang
+	Sphere	Bola
+	Spline	Spline
+	Spline Edit	Edit Spline
+	Stack (type 1/2 then select)	Tumpuk (ketik 1/2 lalu pilih)
+	Standard	Standar
+	Start	Mulai
+	Start Width	Lebar Awal
+	Start X	Awal X
+	Start Y	Awal Y
+	Start angle	Sudut awal
+	Start, Center, Angle	Awal, Pusat, Sudut
+	Start, Center, End	Awal, Pusat, Akhir
+	Start, Center, Length	Awal, Pusat, Panjang
+	Start, End, Angle	Awal, Akhir, Sudut
+	Start, End, Direction	Awal, Akhir, Arah
+	Start, End, Radius	Awal, Akhir, Jari-jari
+	Status	Status
+	Status Bar	Bilah Status
+	Stretch	Regangkan
+	Style: Standard	Gaya: Standar
+	Subtract	Kurangi
+	Sweep	Sapuan
+	Switch Drawing	Ganti Gambar
+	Switch Layout	Ganti Tata Letak
+	Switch between model space in a viewport and paper space	Beralih antara ruang model di viewport dan ruang kertas
+	Symmetric	Simetris
+	Synchronize Attributes	Sinkronkan Atribut
+	To	Ke
+	Toggle PICKADD (off: each pick replaces the selection)	Alihkan PICKADD (mati: setiap pilihan menggantikan pilihan sebelumnya)
+	Toggle PICKADD (on: picks add to the selection)	Alihkan PICKADD (aktif: pilihan ditambahkan ke set pilihan)
+	TOP	ATAS
+	Table	Tabel
+	Table Breaks	Pemisah Tabel
+	Table Cell Style	Gaya Sel Tabel
+	Table Style...	Gaya Tabel...
+	Table style	Gaya tabel
+	Table...	Tabel...
+	Tan, Tan, Radius	Singgung, Singgung, Jari-jari
+	Tan, Tan, Tan	Singgung, Singgung, Singgung
+	Tangent	Singgung
+	Temporary track point	Titik lacak sementara
+	Text	Teks
+	Text Editor	Editor Teks
+	Text Height	Tinggi Teks
+	Text Style...	Gaya Teks...
+	Text height	Tinggi teks
+	Text override	Penimpaan teks
+	Text style	Gaya teks
+	Thaw All Layers	Cairkan Semua Lapisan
+	Thaw Layer	Cairkan Lapisan
+	There is nothing here yet.	Belum ada apa-apa di sini.
+	Thickness	Ketebalan
+	Time	Waktu
+	To get started, create or open a drawing.	Untuk memulai, buat atau buka gambar.
+	Tool Bar	Bilah Alat
+	Tool Sets	Set Alat
+	Tools	Alat
+	Torus	Torus
+	Trace	Jejak
+	Track orthogonally only	Lacak secara ortogonal saja
+	Track using all polar angle settings	Lacak menggunakan semua pengaturan sudut polar
+	Transparency	Transparansi
+	Trim	Pangkas
+	True Color	Warna Asli
+	Turn All Layers On	Aktifkan Semua Lapisan
+	Turn Off Layer	Matikan Lapisan
+	Turn On Layer	Aktifkan Lapisan
+	Turn Quick Properties off (QPMODE)	Matikan Properti Cepat (QPMODE)
+	Type	Jenis
+	Type a command	Ketik perintah
+	Type text; Enter starts a new paragraph	Ketik teks; Enter memulai paragraf baru
+	UCS Icon	Ikon UCS
+	Undo	Urungkan
+	Undo (⌘Z)	Urungkan (⌘Z)
+	Ungroup	Pisahkan Grup
+	Union	Gabungan
+	Unisolate Layer	Batalkan Isolasi Lapisan
+	Units Conversion	Konversi Satuan
+	Units...	Satuan...
+	Unlock Layer	Buka Kunci Lapisan
+	Unlock viewport	Buka kunci viewport
+	Unmerge Cells	Pisahkan Sel
+	Unsaved Layer State	Status Lapisan Belum Disimpan
+	Up	Atas
+	Update Data Links	Perbarui Tautan Data
+	Update	Perbarui
+	Use System Setting	Gunakan Pengaturan Sistem
+	User	Pengguna
+	User Parameters	Parameter Pengguna
+	Username	Nama pengguna
+	Volume	Volume
+	VP Color	Warna VP
+	VP Freeze	Beku VP
+	Value	Nilai
+	Value:	Nilai:
+	Variables	Variabel
+	Version	Versi
+	Version 2000	Versi 2000
+	Version 2004	Versi 2004
+	Version 2007	Versi 2007
+	Version 2010	Versi 2010
+	Version 2013	Versi 2013
+	Version 2018	Versi 2018
+	Version {version}	Versi {version}
+	Vertical	Vertikal
+	VerticalDistance	Jarak Vertikal
+	View	Tampilan
+	ViewCube	ViewCube
+	Viewport	Viewport
+	Viewport Layer Freeze	Pembekuan Lapisan Viewport
+	Viewport Properties	Properti Viewport
+	Viewport is locked	Viewport terkunci
+	Viewport scale	Skala viewport
+	Viewport {id}	Viewport {id}
+	Viewports	Viewport
+	W	B
+	WCS ⌄	WCS ⌄
+	White	Putih
+	Width factor	Faktor lebar
+	Window	Jendela
+	Wipeout	Wipeout
+	Workspace Switching	Peralihan Ruang Kerja
+	Write Block	Tulis Blok
+	Xline	Xline
+	Yellow	Kuning
+	Yes	Ya
+	Zoom	Zoom
+	Zoom All	Zoom Semua
+	Zoom Dynamic	Zoom Dinamis
+	Zoom Extents	Zoom Batas Penuh
+	Zoom In	Perbesar
+	Zoom Object	Zoom Objek
+	Zoom Out	Perkecil
+	Zoom Previous	Zoom Sebelumnya
+	Zoom Realtime	Zoom Waktu Nyata
+	Zoom Window	Zoom Jendela
+	error	galat
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (batasan {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	Batasan {kind} {name} = {expression}  (klik ganda untuk mengedit)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Parameter Pengguna Baru
+	ΔLOC	ΔBaris
+	−Bin	−Biner
+	−LOC	−Baris
+	⌘↩ to finish	⌘↩ untuk selesai
+@plural	{n} commit	{n} komit
+@plural	{n} contributor	{n} kontributor
+	Drawing as bytes	Gambar sebagai byte
+	Services	Layanan
+	Hide CADaddy	Sembunyikan CADaddy
+	Hide Others	Sembunyikan Lainnya
+	Accessibility	Aksesibilitas
+	Show System Cursor	Tampilkan Kursor Sistem
+	Animation Effects	Efek Animasi
+	Animation effects	Efek animasi
+	Import...	Impor...
+	Export...	Ekspor...
+	Batch Publish...	Terbitkan Massal...
+	Scale List...	Daftar Skala...
+	Annotative Object Scale	Skala Objek Anotatif
+	Add Current Scale	Tambah Skala Saat Ini
+	Delete Current Scale	Hapus Skala Saat Ini
+	Add/Delete Scales...	Tambah/Hapus Skala...
+	Synchronize Multiple-scale Positions	Sinkronkan Posisi Multi-skala
+	Annotative Update	Pembaruan Anotatif
+	Show Annotative Objects	Tampilkan Objek Anotatif
+	Current Scale Only	Hanya Skala Saat Ini
+	All Scales	Semua Skala
+	Drawing Recovery Manager...	Manajer Pemulihan Gambar...
+	Tolerance...	Toleransi...
+	Add Vertex	Tambah Verteks
+	Remove Vertex	Hapus Verteks
+	Convert to Arc	Konversi ke Busur
+	Convert to Line	Konversi ke Garis
+	Stretch Vertex	Regangkan Verteks
+	Edit Array	Edit Larik
+	Close Array Editing	Tutup Pengeditan Larik
+	Multiline...	Multilina...
+	Multiline Style...	Gaya Multilina...
+	Solid Editing	Pengeditan Solid
+	3D Mouse...	Mouse 3D...
+	3D Mouse	Mouse 3D
+	Calibrate 3D Mouse	Kalibrasi Mouse 3D
+	3D Mouse Navigation	Navigasi Mouse 3D
+	3D mouse input is unavailable on this platform	Input mouse 3D tidak tersedia di platform ini
+	No supported 3D mouse found	Tidak ditemukan mouse 3D yang didukung
+	Release the 3D mouse to calibrate its resting position	Lepaskan mouse 3D untuk mengkalibrasi posisi diamnya
+	3D mouse connected	Mouse 3D terhubung
+	3D mouse busy, possibly 3DxWare or missing device permissions	Mouse 3D sibuk, mungkin karena 3DxWare atau izin perangkat yang tidak ada
+	3D mouse disconnected	Mouse 3D terputus
+	3D mouse input could not be started	Input mouse 3D tidak dapat dimulai
+	Enable 3D mouse navigation	Aktifkan navigasi mouse 3D
+	Pan sensitivity	Sensitivitas geser
+	Zoom sensitivity	Sensitivitas zoom
+	Reverse zoom direction	Balik arah zoom
+	Calibrate	Kalibrasi
+	Move sideways to pan; push/pull or twist to zoom.	Gerakkan ke samping untuk menggeser; dorong/tarik atau putar untuk zoom.
+	Left device button: zoom extents. Right device button: calibrate.	Tombol kiri perangkat: zoom batas penuh. Tombol kanan perangkat: kalibrasi.
+	More toolbar commands	Perintah bilah alat lainnya
+	Default save version	Versi simpan bawaan
+	Automatic save every	Simpan otomatis setiap
+	min	mnt
+	Automatic save file location	Lokasi berkas simpan otomatis
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Gambar yang belum memiliki berkas disimpan dalam versi bawaan. 0 menit mematikan simpan otomatis.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Klik kanan peka waktu: klik cepat berarti Enter, menahan membuka menu
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Jika dimatikan, klik kanan saat perintah berjalan selalu membuka menu pintasan.
+	Hatch Pattern	Pola Arsiran
+	Search for pattern	Cari pola
+	Run Script...	Jalankan Skrip...
+	Query Texts	Kueri Teks
+	Hatch Pick	Ambil Arsiran
+	Hatch and Gradient	Arsiran dan Gradien
+	Color 1	Warna 1
+	Color 2	Warna 2
+	Shape	Bentuk
+	Curved	Melengkung
+	Spherical	Bola
+	Hemispherical	Setengah Bola
+	Inverted	Terbalik
+	Centered	Di tengah
+	Hatch origin	Titik asal arsiran
+	Use current origin	Gunakan titik asal saat ini
+	Specified origin	Titik asal tertentu
+	Click to set new origin	Klik untuk menetapkan titik asal baru
+	Default to boundary extents	Bawaan ke luasan batas
+	Bottom left	Kiri bawah
+	Bottom right	Kanan bawah
+	Top left	Kiri atas
+	Top right	Kanan atas
+	Boundaries	Batas
+	Add: Pick points	Tambah: Pilih titik
+	Add: Select objects	Tambah: Pilih objek
+	Boundaries picked: {n}	Batas dipilih: {n}
+	Associative	Asosiatif
+	Create separate hatches	Buat arsiran terpisah
+	Island detection	Deteksi pulau
+	Normal	Normal
+	Outer	Luar
+	Ignore	Abaikan
+	Origin: {x}, {y}	Titik asal: {x}, {y}
+	Sheet Books to PDF...	Buku Lembar ke PDF...
+	Not a number or distance: {text}	Bukan angka atau jarak: {text}
+	Dynamic Block Data	Data Blok Dinamis
+	Custom	Kustom
+	Dynamic Block Reference	Referensi Blok Dinamis
+	Set Dynamic Property	Atur Properti Dinamis
+	Dynamic Block Grips	Grip Blok Dinamis
+	Drag Dynamic Grip	Seret Grip Dinamis
+	Save Block	Simpan Blok
+	Save Block As	Simpan Blok Sebagai
+	Close Block Editor	Tutup Editor Blok
+	Unsaved changes	Perubahan belum disimpan
+	Edit Block Definition	Edit Definisi Blok
+	Block to create or edit	Blok yang akan dibuat atau diedit
+	Open in Block Editor	Buka di Editor Blok
+	This drawing	Gambar ini
+	contains authoring elements. Open in Block Editor?	berisi elemen authoring. Buka di Editor Blok?
+	New block	Blok baru
+	Italic	Miring
+	Underline	Garis Bawah
+	Overline	Garis Atas
+	Justify	Rata Kiri-Kanan
+	Text color	Warna teks
+	Click the ruler to add a tab stop, right-click to remove one	Klik penggaris untuk menambahkan tab stop, klik kanan untuk menghapusnya
+	Ribbon	Ribbon
+	Close Ribbon	Tutup Ribbon
+	Menu Bar	Bilah Menu
+	Top	Atas
+	Bottom	Bawah
+	Front	Depan
+	Back	Belakang
+	SW Isometric	Isometrik BD
+	SE Isometric	Isometrik TG
+	NE Isometric	Isometrik TL
+	NW Isometric	Isometrik BL
+	3D Views	Tampilan 3D
+	Plan View	Tampilan Denah
+	World UCS	UCS Dunia
+	View Direction	Arah Tampilan
+	2D Wireframe	Rangka Kawat 2D
+	Custom View	Tampilan Kustom
+	Convert PDF to DWG...	Konversi PDF ke DWG...
+	Convert PDF to DWG	Konversi PDF ke DWG
+	PDF Import...	Impor PDF...
+	PDF Import	Impor PDF
+	Page	Halaman
+	PDF layers (else by colour and line weight)	Lapisan PDF (selain itu berdasarkan warna dan tebal garis)
+	By colour and line weight	Berdasarkan warna dan tebal garis
+	Object layers (PDF_Geometry, PDF_Text, …)	Lapisan objek (PDF_Geometry, PDF_Text, …)
+	Import text	Impor teks
+	Join line pieces and make circles	Gabungkan potongan garis dan buat lingkaran
+	Keep white fills (masks)	Pertahankan isian putih (masker)
+	Import raster images (saved as PNG files)	Impor gambar raster (disimpan sebagai berkas PNG)
+	Add a layout that plots like the sheet	Tambahkan tata letak yang diplot seperti lembar aslinya
+	Convert and Save as DWG…	Konversi dan Simpan sebagai DWG…
+	Walk	Jelajah
+	Report a Bug...	Laporkan Bug...
+	Request a Feature...	Minta Fitur...
+	Donate / Improve	Donasi / Tingkatkan
+	Improve CADaddy	Tingkatkan CADaddy
+	Or email {address}	Atau kirim email ke {address}
+	Support CADaddy	Dukung CADaddy
+	CADaddy is free, and it always will be.	CADaddy gratis, dan akan selalu gratis.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Tanpa iklan, tanpa langganan. Jika CADaddy menghemat waktu Anda, donasi kecil akan membiayai waktu AI yang membangun fitur-fitur berikutnya.
+	Report a bug or request a feature	Laporkan bug atau minta fitur
+	Support CADaddy...	Dukung CADaddy...
+	Array (classic)	Larik (klasik)
+	Change	Ubah
+	Change Properties	Ubah Properti
+	Quick Leader	Leader Cepat
+	Symbol...	Simbol...
+	List Symbols	Daftar Simbol
+	Symbols	Simbol
+	Search symbols	Cari simbol
+	No symbols match.	Tidak ada simbol yang cocok.
+	Plumbing fixtures	Perlengkapan plambing
+	Plumbing piping	Perpipaan plambing
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Desain dan drafting berbantuan komputer untuk Windows, Mac, dan Linux, ditulis dalam Rust.
+	Includes open-source components: see NOTICE.	Menyertakan komponen sumber terbuka: lihat NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Gratis digunakan. Tidak berafiliasi dengan Autodesk, Inc.
+	Electrical devices	Perangkat listrik
+	Lighting	Pencahayaan
+	Power and distribution	Daya dan distribusi
+	Low voltage	Tegangan rendah
+	Fire alarm	Alarm kebakaran
+	Check for Updates...	Periksa Pembaruan...
+	Check for updates automatically	Periksa pembaruan secara otomatis
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Sekali sehari CADaddy menanyakan nomor versi terbaru ke GitHub. Tidak ada informasi tentang Anda atau gambar Anda yang dikirim.
+	Checking for updates...	Memeriksa pembaruan...
+	CADaddy {v} is the latest version.	CADaddy {v} adalah versi terbaru.
+	CADaddy {v} is available	CADaddy {v} tersedia
+	You have {v}. Updating keeps your drawings and settings.	Anda memiliki {v}. Pembaruan mempertahankan gambar dan pengaturan Anda.
+	Downloading CADaddy {v}...	Mengunduh CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} siap dipasang
+	It installs when you close CADaddy. Restart now to update right away.	Pembaruan dipasang saat Anda menutup CADaddy. Mulai ulang sekarang untuk langsung memperbarui.
+	Couldn't update CADaddy	Tidak dapat memperbarui CADaddy
+	Download	Unduh
+	What's New	Yang Baru
+	Later	Nanti
+	Skip This Version	Lewati Versi Ini
+	Restart Now	Mulai Ulang Sekarang
+	When I Close CADaddy	Saat Saya Menutup CADaddy
+	Download Page	Halaman Unduhan
+	Hide	Sembunyikan
+	The current layer is being turned off	Lapisan saat ini sedang dimatikan
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Lapisan "{layer}" adalah lapisan saat ini. Objek yang Anda gambar di lapisan ini tidak akan terlihat sampai Anda mengaktifkannya kembali.
+	Keep the Current Layer On	Biarkan Lapisan Saat Ini Aktif
+	Turn the Current Layer Off	Matikan Lapisan Saat Ini
+	Quantity Takeoff	Perhitungan Kuantitas
+	Dimension Style	Gaya Dimensi
+	Text Style	Gaya Teks
+	Xref	Xref
+	Raster Image Reference...	Referensi Gambar Raster...
+	Window Lasso	Laso Jendela
+	Crossing Lasso	Laso Silang
+	Fence Lasso	Laso Pagar
+	Press Space to cycle options	Tekan Spasi untuk berganti opsi
+	Burst	Burai
+	Convert to Mtext	Konversi ke Mtext
+	View Twist	Puntiran Tampilan
+	Let AI agents control CADaddy	Izinkan agen AI mengendalikan CADaddy
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Konektor Claude dan agen lain di komputer ini kemudian dapat membuka, mengedit, menyimpan, dan menutup gambar di jendela ini. Tidak ada yang dari luar komputer ini dapat terhubung. Berlaku saat CADaddy dijalankan berikutnya.
+	Base Point	Titik Dasar
+	Column Spacing	Jarak Kolom
+	Column Count	Jumlah Kolom
+	Row Spacing	Jarak Baris
+	Row Count	Jumlah Baris
+	Row and Column Count	Jumlah Baris dan Kolom
+	Level Spacing	Jarak Tingkat
+	Level Count	Jumlah Tingkat
+	Item Spacing	Jarak Item
+	Item Count	Jumlah Item
+	Total column spacing	Jarak kolom total
+	Total row spacing	Jarak baris total
+	Total row and column spacing	Jarak baris dan kolom total
+	Total level spacing	Jarak tingkat total
+	Fill angle	Sudut isi
+	Stretch radius	Jari-jari regang
+	Array Grips	Grip Larik
+	Edit Array with a Grip	Edit Larik dengan Grip
+	Open Drawings	Gambar Terbuka
+	Close Drawing	Tutup Gambar
+	Close All Drawings	Tutup Semua Gambar
+	Export Comparison Report...	Ekspor Laporan Perbandingan...
+	Select All Layouts	Pilih Semua Tata Letak
+	Move or Copy...	Pindah atau Salin...
+	Move or Copy	Pindah atau Salin
+	Move or copy layout "{name}"	Pindah atau salin tata letak "{name}"
+	Before layout:	Sebelum tata letak:
+	(move to end)	(pindah ke akhir)
+	Create a copy	Buat salinan
+	A drawing keeps at least one layout.	Gambar harus memiliki setidaknya satu tata letak.
+	Move Layout	Pindah Tata Letak
+	Background	Latar Belakang
+	Text fill	Isian teks
+	Text fill color	Warna isian teks
+	Text reads right to left	Teks dibaca dari kanan ke kiri
+	Placing text places the dimension line	Menempatkan teks akan menempatkan garis dimensi
+	Alternate tolerance precision	Presisi toleransi alternatif
+	Alternate tolerance zero suppression	Penekanan nol toleransi alternatif
+	Linear jog height (× text height)	Tinggi tekukan linear (× tinggi teks)
+	Break size	Ukuran pemutus
+	Express Tools	Express Tools
+	Break-line Symbol	Simbol Garis Patah
+	Replace Block...	Ganti Blok...
+	Move/Copy/Rotate	Pindah/Salin/Putar
+	Remove boundaries	Hapus batas
+	Inherit Properties	Warisi Properti
+	Nothing to preview yet.	Belum ada yang bisa dipratinjau.
+	Property Settings	Pengaturan Properti
+	Basic Properties	Properti Dasar
+	Special Properties	Properti Khusus
+	Plot Style	Gaya Plot
+	Material	Material
+	Shadow display	Tampilan bayangan
+	Center object	Pusatkan objek
+	Move with Dim Line	Pindah dengan Garis Dim
+	Move Text Only	Pindahkan Teks Saja
+	Above Dim Line	Di Atas Garis Dim
+	Center Vertically	Tengah Vertikal
+	Reset Text Position	Atur Ulang Posisi Teks
+	Continue Dimension	Lanjutkan Dimensi
+	Baseline Dimension	Dimensi Garis Dasar
+	Flip Arrow	Balik Panah
+	Lengthen Landing	Perpanjang Landasan
+	Origin Point	Titik Asal
+	Hatch Angle	Sudut Arsiran
+	Hatch Scale	Skala Arsiran
+	Edit Tolerance	Edit Toleransi
+	Geometric Tolerance	Toleransi Geometris
+	Geometric characteristic	Karakteristik geometris
+	Material condition	Kondisi material
+	No symbol	Tanpa simbol
+	Projected Tolerance Zone	Zona Toleransi Proyeksi
+	Datum Identifier	Pengenal Datum
+	Sym	Sim
+	Tolerance 1	Toleransi 1
+	Tolerance 2	Toleransi 2
+	Datum 1	Datum 1
+	Datum 2	Datum 2
+	Datum 3	Datum 3
+	PDF Underlay...	Underlay PDF...
+	Clip PDF Underlay	Pangkas Underlay PDF
+	Adjust PDF Underlay	Sesuaikan Underlay PDF
+	PDF Underlay Layers	Lapisan Underlay PDF
+	Unused items in this drawing	Item tidak terpakai di gambar ini
+	Purge Checked Items	Bersihkan Item yang Dicentang
+	Purge All	Bersihkan Semua
+	Items purged: {count}	Item dibersihkan: {count}
+	Find what:	Cari apa:
+	Replace with:	Ganti dengan:
+	Match case	Cocokkan huruf besar/kecil
+	Find whole words only	Hanya cari kata utuh
+	Find	Cari
+	Replace All	Ganti Semua
+	Matches replaced: {count} (objects: {objects})	Kecocokan diganti: {count} (objek: {objects})
+	Matches found and selected: {count} (objects: {objects})	Kecocokan ditemukan dan dipilih: {count} (objek: {objects})
+	Select Color	Pilih Warna
+	Dimension styles	Gaya dimensi
+	Linetypes	Jenis garis
+	Multileader styles	Gaya multileader
+	Multiline styles	Gaya multilina
+	Table styles	Gaya tabel
+	Text styles	Gaya teks
+	Zero-length geometry	Geometri panjang nol
+	Empty text objects	Objek teks kosong
+	Palette Windows	Jendela Palet
+	Dock	Tambatkan
+	Back into the main window	Kembali ke jendela utama
+	Dock Palette	Tambatkan Palet
+	Float in Own Window	Mengambang di Jendela Sendiri
+	Drawings (CDY, DWG, DXF)	Gambar (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	Gambar CADaddy (CDY)
+	CADaddy drawing (.cdy)	Gambar CADaddy (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Simpan juga salinan DWG saat menyimpan gambar CADaddy (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	Gambar CADaddy menyimpan semuanya; berkas DWG dan DXF mungkin tidak menyimpan semuanya (saat menyimpan ke format tersebut akan diberi tahu apa saja).
+	Field...	Bidang...
+	Update Fields	Perbarui Bidang
+	Change Text Case	Ubah Huruf Teks
+	Auto Number	Penomoran Otomatis
+	Explode Text	Pecah Teks
+	Arc Aligned Text	Teks Selaras Busur
+	Data Extraction	Ekstraksi Data
+	Data source	Sumber data
+	Objects	Objek
+	Output	Keluaran
+	Other drawings:	Gambar lain:
+	Add Drawings...	Tambah Gambar...
+	Open Settings...	Buka Pengaturan...
+	Start from a saved .dxe settings file	Mulai dari berkas pengaturan .dxe tersimpan
+	Block names	Nama blok
+	Include blocks inside blocks	Sertakan blok di dalam blok
+	Other objects:	Objek lain:
+	The drawing has no other objects.	Gambar tidak memiliki objek lain.
+	Properties to extract:	Properti yang akan diekstrak:
+	Attribute tags	Tag atribut
+	Combine identical rows	Gabungkan baris yang identik
+	Insert a table	Sisipkan tabel
+	Insertion point	Titik penyisipan
+	Title	Judul
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Tulis berkas (.csv untuk spreadsheet, .txt dipisah tab)
+	Browse...	Telusuri...
+	Save Settings...	Simpan Pengaturan...
+	Save these choices to a .dxe file to use again	Simpan pilihan ini ke berkas .dxe untuk digunakan lagi
+	< Back	< Kembali
+	Next >	Berikutnya >
+	Finish	Selesai
+	UCS	UCS
+	Plan View (World)	Tampilan Denah (Dunia)
+	New UCS	UCS Baru
+	World	Dunia
+	Current UCS	UCS Saat Ini
+	World (WCS)	Dunia (WCS)
+	Unnamed	Tanpa nama
+	Hide UCS Icon	Sembunyikan Ikon UCS
+	WCS	WCS
+	Spelling	Ejaan
+	Check Spelling	Periksa Ejaan
+	Where to check	Tempat pemeriksaan
+	Selected objects	Objek terpilih
+	Not in dictionary:	Tidak ada di kamus:
+	Suggestions:	Saran:
+	Ignore All	Abaikan Semua
+	Change All	Ubah Semua
+	Add to Dictionary	Tambahkan ke Kamus
+	Main dictionary:	Kamus utama:
+	American English	Bahasa Inggris Amerika
+	Custom dictionary:	Kamus kustom:
+	Spelling check complete.	Pemeriksaan ejaan selesai.
+	Hyperlink...	Hyperlink...
+	Select Objects for a Hyperlink	Pilih Objek untuk Hyperlink
+	Open Hyperlink	Buka Hyperlink
+	Insert Hyperlink	Sisipkan Hyperlink
+	Edit Hyperlink	Edit Hyperlink
+	Text to display	Teks yang ditampilkan
+	File or web page	Berkas atau halaman web
+	Named location	Lokasi bernama
+	A named location with no file or web page is a layout or view of this drawing.	Lokasi bernama tanpa berkas atau halaman web adalah tata letak atau tampilan gambar ini.
+	Remove Link	Hapus Tautan
+	⌘-click to follow the link	⌘-klik untuk mengikuti tautan
+	Ctrl+click to follow the link	Ctrl+klik untuk mengikuti tautan
+	Materials Browser...	Penjelajah Material...
+	Attach by Layer	Lampirkan per Lapisan
+	Material Mapping	Pemetaan Material
+	New Material	Material Baru
+	Edit Material	Edit Material
+	Delete Material	Hapus Material
+	Assign Material	Tetapkan Material
+	Materials Browser	Penjelajah Material
+	Search	Cari
+	Library	Pustaka
+	Add to drawing	Tambahkan ke gambar
+	In this drawing	Di gambar ini
+	No materials yet: add one from the library.	Belum ada material: tambahkan dari pustaka.
+	Colour	Warna
+	Roughness	Kekasaran
+	Metallic	Metalik
+	Opacity	Opasitas
+	Mapping	Pemetaan
+	Tile size	Ukuran ubin
+	Assign to selection ({n})	Tetapkan ke pilihan ({n})
+	Attach to layer	Lampirkan ke lapisan
+	Render	Render
+	Edit Layer State	Edit Status Lapisan
+	Export Layer State	Ekspor Status Lapisan
+	Import Layer State	Impor Status Lapisan
+	New Layer Filter	Filter Lapisan Baru
+	Edit Layer Filter	Edit Filter Lapisan
+	Delete Layer Filter	Hapus Filter Lapisan
+	List Layer Filters	Daftar Filter Lapisan
+	Layers in Filter	Lapisan dalam Filter
+	Layer States Manager	Manajer Status Lapisan
+	Invert filter	Balik filter
+	New Property Filter...	Filter Properti Baru...
+	New Group Filter	Filter Grup Baru
+	Add Layer	Tambah Lapisan
+	Remove Layer	Hapus Lapisan
+	Layer Filter Properties	Properti Filter Lapisan
+	Filter name	Nama filter
+	Within	Di dalam
+	Any	Apa saja
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Pola: * apa saja, ? satu karakter, # satu digit; pisahkan dengan koma; ~ mengecualikan.
+	Layer states	Status lapisan
+	Turn off layers not found in layer state	Matikan lapisan yang tidak ada di status lapisan
+	Layer properties to restore	Properti lapisan yang akan dipulihkan
+	On / Off	Aktif / Mati
+	Frozen / Thawed	Beku / Cair
+	Locked / Unlocked	Terkunci / Tidak Terkunci
+	Plot / No Plot	Plot / Tanpa Plot
+	Layers in "{name}"	Lapisan di "{name}"
+	Remove from the layer state	Hapus dari status lapisan
+	New...	Baru...
+	Save the layers as they are now in this state	Simpan lapisan seperti sekarang ke status ini
+	Edit...	Edit...
+	Rename	Ganti Nama
+	New layer state name	Nama status lapisan baru
+	New name	Nama baru
+	Visual Style	Gaya Visual
+	Visual Styles	Gaya Visual
+	Wireframe	Rangka Kawat
+	Hidden	Tersembunyi
+	Shaded	Berbayang
+	Shaded with Edges	Berbayang dengan Tepi
+	Realistic	Realistis
+	Mesh	Mesh
+	Polyface Mesh	Mesh Polyface
+	Polygon Mesh	Mesh Poligon
+	Fly	Terbang
+	Walk and Fly	Jelajah dan Terbang
+	3D Library...	Pustaka 3D...
+	Add 3D Twins to Symbols	Tambahkan Kembaran 3D ke Simbol
+	List 3D Models	Daftar Model 3D
+	Add 3D Twins	Tambah Kembaran 3D
+	Plan Layers	Lapisan Denah
+	Plan Walls	Dinding Denah
+	Plan Openings	Bukaan Denah
+	Plan Rooms	Ruangan Denah
+	Plan Notes	Catatan Denah
+	Plan Sheets	Lembar Denah
+	3D Building from Plan	Bangunan 3D dari Denah
+	Wedge	Baji
+	Presspull	Tekan-tarik
+	3D Solid	Solid 3D
+	Specify center	Tentukan pusat
+	Specify length	Tentukan panjang
+	Specify width	Tentukan lebar
+	Specify other corner	Tentukan sudut lainnya
+	Specify center point	Tentukan titik pusat
+	Specify base radius	Tentukan jari-jari alas
+	Specify radius	Tentukan jari-jari
+	Specify diameter	Tentukan diameter
+	Specify top radius	Tentukan jari-jari atas
+	Specify tube radius	Tentukan jari-jari tabung
+	Select objects to extrude	Pilih objek yang akan diekstrusi
+	Select extrusion path	Pilih lintasan ekstrusi
+	Specify angle of taper for extrusion	Tentukan sudut kemiringan ekstrusi
+	Specify height of extrusion	Tentukan tinggi ekstrusi
+	Select objects to revolve	Pilih objek yang akan direvolusi
+	Specify axis start point or define axis by	Tentukan titik awal sumbu atau definisikan sumbu dengan
+	Specify axis endpoint	Tentukan titik ujung sumbu
+	Specify angle of revolution	Tentukan sudut revolusi
+	Select objects to sweep	Pilih objek yang akan disapu
+	Select sweep path	Pilih lintasan sapuan
+	Select cross sections in lofting order	Pilih penampang dalam urutan loft
+	Click inside bounded areas to press or pull	Klik di dalam area tertutup untuk menekan atau menarik
+	Specify extrusion height	Tentukan tinggi ekstrusi
+	Cube	Kubus
+	Sides	Sisi
+	Top radius	Jari-jari atas
+	Path	Lintasan
+	Taper angle	Sudut kemiringan
+	Select one or more regions or 3D solids.	Pilih satu atau beberapa region atau solid 3D.
+	No closed area found there.	Tidak ditemukan area tertutup di sana.
+	Slice	Iris
+	Thicken	Pertebal
+	Fillet Edge	Fillet Tepi
+	Chamfer Edge	Talang Tepi
+	Fillet Edges	Fillet Tepi
+	Chamfer Edges	Talang Tepi
+	Move Faces	Pindahkan Muka
+	Offset Faces	Offset Muka
+	Delete Faces	Hapus Muka
+	Shell	Cangkang
+	Composite	Komposit
+	Select objects to slice	Pilih objek yang akan diiris
+	Specify a point on desired side or [keep Both sides]	Tentukan titik di sisi yang diinginkan atau [keep Both sides]
+	Both	Keduanya
+	Specify start point of slicing plane or	Tentukan titik awal bidang iris atau
+	Specify second point on plane	Tentukan titik kedua pada bidang
+	Specify the Z of the XY-plane	Tentukan Z bidang XY
+	Specify the X of the YZ-plane	Tentukan X bidang YZ
+	Specify the Y of the ZX-plane	Tentukan Y bidang ZX
+	Select surfaces to thicken	Pilih permukaan yang akan dipertebal
+	Select a 3D solid	Pilih solid 3D
+	Select an edge	Pilih tepi
+	Remove faces	Hapus muka
+	Select faces	Pilih muka
+	Specify thickness	Tentukan ketebalan
+	Enter fillet radius	Masukkan jari-jari fillet
+	Enter distance	Masukkan jarak
+	Specify a base point or displacement	Tentukan titik dasar atau perpindahan
+	Specify a second point of displacement	Tentukan titik kedua perpindahan
+	Specify the offset distance	Tentukan jarak offset
+	Enter the shell offset distance	Masukkan jarak offset cangkang
+	Select solids, surfaces, and regions to subtract from ..	Pilih solid, permukaan, dan region yang akan dikurangi ..
+	Select solids, surfaces, and regions to subtract ..	Pilih solid, permukaan, dan region pengurang ..
+	Select two or more solids.	Pilih dua solid atau lebih.
+	The solids don't overlap; nothing was changed.	Solid tidak saling tumpang tindih; tidak ada yang diubah.
+	Nothing would remain; nothing was changed.	Tidak ada yang tersisa; tidak ada yang diubah.
+	The result would not be a solid; nothing was changed.	Hasilnya bukan solid; tidak ada yang diubah.
+	No straight edge between two flat faces there.	Tidak ada tepi lurus di antara dua muka datar di sana.
+	No face of the solid there.	Tidak ada muka solid di sana.
+	Only outside (convex) edges can be filleted or chamfered.	Hanya tepi luar (cembung) yang dapat di-fillet atau ditalang.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL berfungsi pada kotak, silinder, bola, dan ekstrusi lurus.
+	The walls are too thick for this solid.	Dinding terlalu tebal untuk solid ini.
+	Select solids to subtract from.	Pilih solid yang akan dikurangi.
+	A solid can't be subtracted from itself.	Solid tidak dapat dikurangi dari dirinya sendiri.
+	The solid would have too many operations; nothing was changed.	Solid akan memiliki terlalu banyak operasi; tidak ada yang diubah.
+	That face can't be moved (only flat faces, holes and added parts).	Muka itu tidak dapat dipindahkan (hanya muka datar, lubang, dan bagian tambahan).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Muka itu tidak dapat dihapus (hanya lubang, fillet, talang, dan bagian tambahan).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Muka itu tidak dapat di-offset (sisi kotak, ujung silinder, kerucut, dan ekstrusi, dinding silinder, dan bola).
+	The thickness must be more than zero.	Ketebalan harus lebih dari nol.
+	The radius must be more than zero.	Jari-jari harus lebih dari nol.
+	The distance must be more than zero.	Jarak harus lebih dari nol.
+	Requires a number.	Memerlukan angka.
+	Parameter	Parameter
+	Action	Aksi
+	Visibility States	Status Visibilitas
+	Remove Parameter or Action	Hapus Parameter atau Aksi
+	Edit Reference	Edit Referensi
+	Discard Reference Edits	Buang Editan Referensi
+	Nested References	Referensi Bersarang
+	Light List	Daftar Cahaya
+	Sun Properties	Properti Matahari
+	Render Exposure	Eksposur Render
+	Point Light	Cahaya Titik
+	Spotlight	Lampu Sorot
+	Distant Light	Cahaya Jauh
+	Change Lights	Ubah Cahaya
+	Section Plane	Bidang Potongan
+	Live Section	Potongan Langsung
+	Generate Section Block	Buat Blok Potongan
+	Generate Section	Buat Potongan
+	Flatshot	Flatshot
+	Base View	Tampilan Dasar
+	Section View	Tampilan Potongan
+	Drawing Views	Tampilan Gambar
+	Select face or any point to locate section line or	Pilih muka atau titik mana pun untuk menempatkan garis potongan atau
+	Orthographic	Ortografis
+	Select section object	Pilih objek potongan
+	Specify location of base view	Tentukan lokasi tampilan dasar
+	Select parent view	Pilih tampilan induk
+	Specify end point	Tentukan titik akhir
+	Specify location of section view	Tentukan lokasi tampilan potongan
+	There is nothing to draw: no 3D objects were found.	Tidak ada yang bisa digambar: tidak ditemukan objek 3D.
+	The section plane doesn't cut any solid.	Bidang potongan tidak memotong solid mana pun.
+	The view needs a direction.	Tampilan memerlukan arah.
+	The drawing has no layout.	Gambar tidak memiliki tata letak.
+	That is not a section plane.	Itu bukan bidang potongan.
+	Requires a point.	Memerlukan titik.
+	The view is [dx, dy, dz].	Tampilannya adalah [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Buat Paket Kiriman
+	Files in the package	Berkas dalam paket
+	Not included	Tidak disertakan
+	Organized folders	Folder terorganisasi
+	One folder	Satu folder
+	Include a transmittal report	Sertakan laporan pengiriman
+	Create ZIP...	Buat ZIP...
+	Create Folder...	Buat Folder...
+	STL Out	STL Out
+	Export STL...	Ekspor STL...
+	3D models (glTF, OBJ, STL)	Model 3D (glTF, OBJ, STL)
+	3D model (glTF binary)	Model 3D (glTF biner)
+	3D model (glTF)	Model 3D (glTF)
+	3D model (OBJ)	Model 3D (OBJ)
+	3D model (STL)	Model 3D (STL)
+	Render Region	Render Wilayah
+	samples	sampel
+	a sample	satu sampel
+	Pick crop window to render	Pilih jendela potong untuk dirender
+	Nothing has been rendered yet.	Belum ada yang dirender.
+	There is nothing to render: no surfaces in the view.	Tidak ada yang bisa dirender: tidak ada permukaan dalam tampilan.
+	The image couldn't be encoded.	Gambar tidak dapat dienkode.
+	Saving images isn't available in the browser.	Menyimpan gambar tidak tersedia di peramban.
+	PNG image	Gambar PNG
+	JPEG image	Gambar JPEG
+	Save Image	Simpan Gambar
+	My Properties	Properti Saya
+	Add to My Properties	Tambahkan ke Properti Saya
+	Remove from My Properties	Hapus dari Properti Saya
+	All properties	Semua properti
+	My properties: the ones you added (right-click a property's name to add it)	Properti saya: yang Anda tambahkan (klik kanan nama properti untuk menambahkannya)
+	Right-click a property's name and choose Add to My Properties.	Klik kanan nama properti dan pilih Tambahkan ke Properti Saya.
+	Color Books	Buku Warna
+	Sheet Set Manager	Manajer Set Lembar
+	Palettes	Palet
+	New Sheet Set...	Set Lembar Baru...
+	Open Sheet Set...	Buka Set Lembar...
+	No sheet set is open.	Tidak ada set lembar yang terbuka.
+	Number	Nomor
+	Subset	Subset
+	Remove Sheet	Hapus Lembar
+	Add Drawing...	Tambah Gambar...
+	Rename Layouts to Match	Ganti Nama Tata Letak agar Sesuai
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Tata letak setiap lembar menjadi "nomor judul", yang ditampilkan oleh bidang nomor dan judul lembar
+	Publish to PDF...	Terbitkan ke PDF...
+	Prefix	Awalan
+	Digits	Digit
+	Renumber	Beri Nomor Ulang
+	Zoom to Fit	Zoom agar Pas
+	Drag to pan, scroll to zoom	Seret untuk menggeser, gulir untuk zoom
+	Publish	Terbitkan
+	Sheets to publish, in order	Lembar yang akan diterbitkan, sesuai urutan
+	Sheet	Lembar
+	Bookmark	Penanda
+	Paper	Kertas
+	Orientation	Orientasi
+	(sheet name)	(nama lembar)
+	Page setup	Pengaturan halaman
+	Landscape	Lanskap
+	Portrait	Potret
+	Add Sheets from Drawing...	Tambah Lembar dari Gambar...
+	Load List...	Muat Daftar...
+	Save List...	Simpan Daftar...
+	Publish List	Daftar Terbitan
+	Enclose Text with Object	Kelilingi Teks dengan Objek
+	Export Attribute Information	Ekspor Informasi Atribut
+	Import Attribute Information	Impor Informasi Atribut
+	Mask Text	Masker Teks
+	Remote Text	Teks Jarak Jauh
+	Rotate Text	Putar Teks
+	Text Fit	Paskan Teks
+	Toggle Frames	Alihkan Bingkai
+	Unmask Text	Hapus Masker Teks
+	Update Remote Text	Perbarui Teks Jarak Jauh
+	Geometric	Geometris
+	Infer geometric constraints	Simpulkan batasan geometris
+	Show constraint bars	Tampilkan bilah batasan
+	Constraint bar transparency (%)	Transparansi bilah batasan (%)
+	Dimensional	Dimensional
+	Show dynamic constraints	Tampilkan batasan dinamis
+	Dimension name format	Format nama dimensi
+	Name and Expression	Nama dan Ekspresi
+	Constraint types AUTOCONSTRAIN applies, in order of priority	Jenis batasan yang diterapkan AUTOCONSTRAIN, sesuai urutan prioritas
+	Move Up	Pindah ke Atas
+	Move Down	Pindah ke Bawah
+	Tangent objects must share an intersection point	Objek bersinggungan harus berbagi titik potong
+	Perpendicular objects must share an intersection point	Objek tegak lurus harus berbagi titik potong
+	Distance tolerance	Toleransi jarak
+	Angle tolerance (degrees)	Toleransi sudut (derajat)
+	3D Move	Pindah 3D
+	3D Rotate	Putar 3D
+	3D Scale	Skala 3D
+	3D Align	Ratakan 3D
+	3D Mirror	Cermin 3D
+	3D Array	Larik 3D
+	3D Object Snap	Snap Objek 3D
+	Specify second point or distance	Tentukan titik kedua atau jarak
+	Specify angle	Tentukan sudut
+	Specify source plane: first point	Tentukan bidang sumber: titik pertama
+	Specify source plane: second point	Tentukan bidang sumber: titik kedua
+	Specify source plane: third point	Tentukan bidang sumber: titik ketiga
+	Specify destination plane: first point	Tentukan bidang tujuan: titik pertama
+	Specify destination plane: second point	Tentukan bidang tujuan: titik kedua
+	Specify destination plane: third point	Tentukan bidang tujuan: titik ketiga
+	Delete source objects?	Hapus objek sumber?
+	Specify point on XY plane	Tentukan titik pada bidang XY
+	Specify point on YZ plane	Tentukan titik pada bidang YZ
+	Specify point on ZX plane	Tentukan titik pada bidang ZX
+	Specify first point of mirror plane (3 points) or	Tentukan titik pertama bidang cermin (3 titik) atau
+	Specify second point on mirror plane	Tentukan titik kedua pada bidang cermin
+	Specify third point on mirror plane	Tentukan titik ketiga pada bidang cermin
+	Enter the type of array	Masukkan jenis larik
+	Polar	Polar
+	Enter the number of items in the array	Masukkan jumlah item dalam larik
+	Specify the angle to fill (+=ccw, -=cw)	Tentukan sudut isi (+=berlawanan jarum jam, -=searah jarum jam)
+	Enter the number of rows (---)	Masukkan jumlah baris (---)
+	Enter the number of columns (|||)	Masukkan jumlah kolom (|||)
+	Enter the number of levels (...)	Masukkan jumlah tingkat (...)
+	Specify the distance between rows (---)	Tentukan jarak antarbaris (---)
+	Specify the distance between columns (|||)	Tentukan jarak antarkolom (|||)
+	Specify the distance between levels (...)	Tentukan jarak antartingkat (...)
+	Specify second point on axis of rotation	Tentukan titik kedua pada sumbu rotasi
+	Select the objects first.	Pilih objek terlebih dahulu.
+	Requires a point, or a distance along an axis.	Memerlukan titik, atau jarak sepanjang sumbu.
+	The points must not coincide or line up.	Titik-titik tidak boleh berimpit atau segaris.
+	The three points line up: they make no plane.	Ketiga titik segaris: tidak membentuk bidang.
+	<3D Object Snap on>	<Snap Objek 3D aktif>
+	<3D Object Snap off>	<Snap Objek 3D mati>
+	Preparing the 3D view…	Menyiapkan tampilan 3D…
+	Viewpoint	Titik Pandang
+	3D View Benchmark	Benchmark Tampilan 3D
+	Drawing area	Area gambar
+	Command line	Baris perintah
+	Viewport controls	Kontrol viewport
+	Coordinate system menu	Menu sistem koordinat
+	UCS icon X axis	Sumbu X ikon UCS
+	UCS icon Y axis	Sumbu Y ikon UCS
+	High Contrast	Kontras Tinggi
+	Interface size	Ukuran antarmuka
+	Interface Size	Ukuran Antarmuka
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	Spesifikasi Bangunan
+	Set Building Spec	Atur Spesifikasi Bangunan
+	Validate Building Spec	Validasi Spesifikasi Bangunan
+	Build Model from Spec	Bangun Model dari Spesifikasi
+	Convert Matches to Block	Konversi Kecocokan ke Blok
+	Command Line Transparency	Transparansi Baris Perintah
+	AutoComplete Settings	Pengaturan Lengkapi Otomatis
+	Input Settings	Pengaturan Input
+	AutoComplete	Lengkapi Otomatis
+	Search System Variables	Cari Variabel Sistem
+	Mid-string Search	Pencarian di Tengah String
+	System variable	Variabel sistem
+	Layer state	Status lapisan
+	Model Issues	Masalah Model
+	Render Model View	Render Tampilan Model
+	Model Overlay	Hamparan Model
+	Model Counts	Jumlah Model
+	System Printers	Printer Sistem
+	Report a Problem...	Laporkan Masalah...
+	Report a Problem	Laporkan Masalah
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Mengumpulkan hal-hal yang membantu menemukan masalah ke dalam berkas ZIP di komputer ini. Tidak ada yang dikirim: lampirkan berkas ke email jika Anda ingin melaporkannya.
+	Always included	Selalu disertakan
+	The log of this run and the two before it	Log sesi ini dan dua sesi sebelumnya
+	The last commands	Perintah terakhir
+	Versions, operating system and graphics adapter	Versi, sistem operasi, dan adaptor grafis
+	A summary of the open drawings (counts only, no geometry)	Ringkasan gambar yang terbuka (hanya jumlah, tanpa geometri)
+	Names: file paths, layer and block names, typed text	Nama: jalur berkas, nama lapisan dan blok, teks yang diketik
+	Names are replaced by placeholders, also in the log.	Nama diganti dengan placeholder, juga di log.
+	Save Report...	Simpan Laporan...
+	Email it to {address}	Kirim melalui email ke {address}
+	Plans to Model	Denah ke Model
+	Build	Bangun
+	Rebuild	Bangun Ulang
+	Check	Periksa
+	Kept in the drawing.	Disimpan di dalam gambar.
+	Drafted from the walk rules; not saved yet.	Disusun dari aturan jelajah; belum disimpan.
+	{n} of {total} approved	{n} dari {total} disetujui
+	Save Spec	Simpan Spesifikasi
+	Approve All	Setujui Semua
+	Approved	Disetujui
+	Levels	Tingkat
+	Wall Types	Jenis Dinding
+	Rooms	Ruangan
+	Door and Window Families	Famili Pintu dan Jendela
+	Materials	Material
+	Site	Tapak
+	Openings	Bukaan
+	Issues ({n})	Masalah ({n})
+	The drawing changed since; check again.	Gambar telah berubah sejak itu; periksa lagi.
+	No issues found.	Tidak ditemukan masalah.
+	Configure Standards	Konfigurasi Standar
+	Standards files associated with the current drawing	Berkas standar yang terkait dengan gambar saat ini
+	Add...	Tambah...
+	Check Standards...	Periksa Standar...
+	Check Standards	Periksa Standar
+	No standards violations were found.	Tidak ditemukan pelanggaran standar.
+	problem(s)	masalah
+	Take the standard's properties	Ambil properti standar
+	Replace it with the standard one	Ganti dengan yang standar
+	Fix All	Perbaiki Semua
+	Give everything that differs the standard's properties	Berikan properti standar ke semua yang berbeda
+	Check Again	Periksa Lagi
+	Layer Translator	Penerjemah Lapisan
+	Translate From	Terjemahkan Dari
+	Translate To	Terjemahkan Ke
+	Load a drawing whose layers to translate to.	Muat gambar yang lapisannya menjadi tujuan terjemahan.
+	Map	Petakan
+	Layer Translation Mappings	Pemetaan Terjemahan Lapisan
+	Load Map...	Muat Peta...
+	Save Map...	Simpan Peta...
+	Translate	Terjemahkan
+	Not in the standards	Tidak ada di standar
+	Properties differ from the standards	Properti berbeda dari standar
+	CAD Standards	Standar CAD
+	Configure...	Konfigurasi...
+	Check...	Periksa...
+	Layer Translator...	Penerjemah Lapisan...
+	Draft Building Spec	Susun Spesifikasi Bangunan
+	Draft from Plan	Susun dari Denah
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Baca lapisan, dinding, pintu, ruangan, dan catatan denah; tebakan diberi tanda.
+	guess	tebakan
+	Detect Stairs	Deteksi Tangga
+	List Stairs	Daftar Tangga
+	Confirm Stairs	Konfirmasi Tangga
+	Stairs and Ramps	Tangga dan Ramp
+	Bake Lighting	Bake Pencahayaan
+	Command Aliases and Shortcuts	Alias Perintah dan Pintasan
+	Keyboard Shortcuts	Pintasan Keyboard
+	replaces {command}	menggantikan {command}
+	Built-in	Bawaan
+	Alias	Alias
+	Command	Perintah
+	Add or Change	Tambah atau Ubah
+	Keys	Tombol
+	Edit Aliases and Shortcuts...	Edit Alias dan Pintasan...
+	Customize	Kustomisasi
+	Read Elevation	Baca Tampak
+	Read Roof Plan	Baca Denah Atap
+	Exterior	Eksterior
+	Drafting & Annotation	Drafting & Anotasi
+	3D Modeling	Pemodelan 3D
+	Electrical	Kelistrikan
+	Save Current As...	Simpan yang Aktif Sebagai...
+	Workspace Settings...	Pengaturan Ruang Kerja...
+	Workspace Settings	Pengaturan Ruang Kerja
+	Navigation Bar	Bilah Navigasi
+	Save Workspace	Simpan Ruang Kerja
+	Workspaces	Ruang Kerja
+	Close Navigation Bar	Tutup Bilah Navigasi
+	Workspace	Ruang kerja
+	Read Ceiling Plan	Baca Denah Plafon
+	Ceilings	Plafon
+	Current Drawing	Gambar Saat Ini
+	Favourites	Favorit
+	Libraries	Pustaka
+	No library folder	Tidak ada folder pustaka
+	Choose Folder...	Pilih Folder...
+	No blocks here.	Tidak ada blok di sini.
+	Remove from Favourites	Hapus dari Favorit
+	Add to Favourites	Tambahkan ke Favorit
+	Insertion Options	Opsi Penyisipan
+	Auto-rotate (follow the current UCS)	Putar otomatis (ikuti UCS saat ini)
+	Repeat Placement	Ulangi Penempatan
+	Tool Palettes	Palet Alat
+	Drag objects from the drawing here to make tools.	Seret objek dari gambar ke sini untuk membuat alat.
+	Add Selected	Tambahkan yang Dipilih
+	New palette	Palet baru
+	Select objects in the drawing first.	Pilih objek di gambar terlebih dahulu.
+	Blocks Palette	Palet Blok
+	Detect Grids	Deteksi Grid
+	Align Levels by Grids	Ratakan Tingkat Berdasarkan Grid
+	Columns at Grids	Kolom di Grid
+	Columns	Kolom
+	Build Room Volumes	Bangun Volume Ruangan
+	Building	Bangunan
+	Go to Room	Buka Ruangan
+	List Rooms	Daftar Ruangan
+	Room	Ruangan
+	Build Volumes	Bangun Volume
+	Go to	Buka
+	{n} rooms	{n} ruangan
+	No rooms found: rooms are found from name labels inside closed outlines.	Tidak ditemukan ruangan: ruangan ditemukan dari label nama di dalam garis tepi tertutup.
+	Ceiling	Plafon
+	DesignCenter	DesignCenter
+	Up One Level	Naik Satu Tingkat
+	Folder	Folder
+	Text Styles	Gaya Teks
+	Dimension Styles	Gaya Dimensi
+	Layouts	Tata Letak
+	Add to Drawing	Tambahkan ke Gambar
+	Choose a drawing to see what it holds.	Pilih gambar untuk melihat isinya.
+	{name} inserted.	{name} disisipkan.
+	{name} is already in the drawing; it was kept.	{name} sudah ada di gambar; tetap dipertahankan.
+	{name} added.	{name} ditambahkan.
+	Read MEP Runs	Baca Jalur MEP
+	Model Clashes	Benturan Model
+	MEP Systems	Sistem MEP
+	Undo History	Riwayat Urungkan
+	(Start)	(Awal)
+	Click a step to undo or redo to it.	Klik langkah untuk mengurungkan atau mengulang hingga langkah itu.
+	Nothing yet.	Belum ada apa-apa.
+	Double-click to run it again	Klik ganda untuk menjalankannya lagi
+	Copy as Script	Salin sebagai Skrip
+	Save Session as Script...	Simpan Sesi sebagai Skrip...
+	Command History Palette	Palet Riwayat Perintah
+	Furnish from Plan	Isi Perabot dari Denah
+	Classify Plan	Klasifikasikan Denah
+	Text and multiline text	Teks dan teks multibaris
+	Block attribute values	Nilai atribut blok
+	Dimension text	Teks dimensi
+	Multileaders	Multileader
+	Hyperlinks	Hyperlink
+	Layer and block names	Nama lapisan dan blok
+	Find where:	Cari di:
+	Current space	Ruang saat ini
+	Plain text	Teks biasa
+	Use wildcards	Gunakan wildcard
+	Regular expressions	Ekspresi reguler
+	Look in	Cari di
+	Zoom To	Zoom Ke
+	Replace	Ganti
+	Create Selection Set	Buat Set Pilihan
+	Matches found: {count} (objects: {objects})	Kecocokan ditemukan: {count} (objek: {objects})
+	Layer name	Nama lapisan
+	Block name	Nama blok
+	Revise Model from Plans	Revisi Model dari Denah
+	Plans to Model Benchmark	Benchmark Denah ke Model
+	Plans to Model Case	Kasus Denah ke Model
+	Plans to Model Score	Skor Denah ke Model
+	Save Viewpoint	Simpan Titik Pandang
+	Viewpoints for Every Room	Titik Pandang untuk Setiap Ruangan
+	Camera Tour	Tur Kamera
+	Tours and Viewpoints	Tur dan Titik Pandang
+	Tour Timing	Waktu Tur
+	3D Graphics Limits	Batas Grafis 3D
+	Drawn by the CPU (no usable GPU)	Digambar oleh CPU (tidak ada GPU yang dapat digunakan)
+	Point Cloud...	Point Cloud...
+	Point Cloud	Point Cloud
+	Attach Point Cloud	Lampirkan Point Cloud
+	Clip Point Cloud	Pangkas Point Cloud
+	Point Cloud Color Map	Peta Warna Point Cloud
+	Point Cloud Information	Informasi Point Cloud
+	Markups	Markup
+	{done} of {total} done	{done} dari {total} selesai
+	No markups. Import them from a reviewed PDF.	Tidak ada markup. Impor dari PDF yang telah ditinjau.
+	Done	Selesai
+	Import Markups...	Impor Markup...
+	Import Markups	Impor Markup
+	Markup Import...	Impor Markup...
+	Markup Status	Status Markup
+	Read Door and Window Schedules	Baca Jadwal Pintu dan Jendela
+	Schedules	Jadwal
+	Esc	Esc
+	Hide the touch bar	Sembunyikan touch bar
+	Type a command or value	Ketik perintah atau nilai
+	Embed Textures	Sematkan Tekstur
+	Publish Walkthrough	Terbitkan Walkthrough
+	Walkthroughs (CDYWALK)	Walkthrough (CDYWALK)
+	Check Exchange	Periksa Pertukaran
+	Not kept in the {format} file	Tidak tersimpan di berkas {format}
+	The drawing was saved. This file format can't keep everything in it:	Gambar telah disimpan. Format berkas ini tidak dapat menyimpan semua isinya:
+	What	Apa
+	left out	dihilangkan
+	changed	diubah
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	Gambar CADaddy (.cdy) menyimpan semuanya. Periksa Pertukaran menampilkan daftar ini lagi tanpa menyimpan.
+	VP Linetype	Jenis Garis VP
+	VP Lineweight	Tebal Garis VP
+	Unreconciled New Layers ({n})	Lapisan Baru Belum Direkonsiliasi ({n})
+	Reconcile All	Rekonsiliasi Semua
+	Reconcile Layer	Rekonsiliasi Lapisan
+	LayerWalk	LayerWalk
+	Layers: {n}	Lapisan: {n}
+	Restore on exit	Pulihkan saat keluar
+	Filter:	Filter:
+	Layer Walk...	Layer Walk...
+	Layer Walk	Layer Walk
+	Isolate Layer to Current Viewport	Isolasi Lapisan ke Viewport Saat Ini
+	Unreconciled New Layers	Lapisan Baru Belum Direkonsiliasi
+	Move to New Window	Pindah ke Jendela Baru
+	Dock All Windows	Tambatkan Semua Jendela
+	Every drawing is in a window of its own.	Setiap gambar ada di jendelanya sendiri.
+	Back among the drawing tabs	Kembali ke tab gambar
+	Plot Stamp...	Cap Plot...
+	Plot a Folder of Drawings...	Plot Folder Gambar...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Setiap gambar dalam folder ke PDF-nya sendiri, di folder PDF di dalamnya
+	Plot stamp	Cap plot
+	Quick Properties Lists	Daftar Properti Cepat
+	Purgeable Items	Item yang Dapat Dibersihkan
+	Find Non-Purgeable Items	Temukan Item yang Tidak Dapat Dibersihkan
+	Purge {kind} "{name}"?	Bersihkan {kind} "{name}"?
+	Yes to All	Ya untuk Semua
+	Items that can't be purged, and why	Item yang tidak dapat dibersihkan, dan alasannya
+	Select and Zoom	Pilih dan Zoom
+	Pick an item to see why it can't be purged.	Pilih item untuk melihat mengapa item itu tidak dapat dibersihkan.
+	Confirm each item to be purged	Konfirmasi setiap item yang akan dibersihkan
+	Purge nested items	Bersihkan item bersarang
+	Text Align	Ratakan Teks
+	Color model:	Model warna:
+	Hue	Rona
+	Saturation	Saturasi
+	Luminance	Luminansi
+	Hex	Hex
+	More Colors...	Warna Lain...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Muat buku lain dengan COLORBOOK (berkas JSON atau dipisah tab).
+	All spaces	Semua ruang
+	Total: {n}	Total: {n}
+	No block references here.	Tidak ada referensi blok di sini.
+	Highlight and zoom to its references	Sorot dan zoom ke referensinya
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Mirip tetapi tidak identik: {scaled} diskalakan, {exploded} dipecah
+	Insert Count Table	Sisipkan Tabel Hitungan
+	Update Count Tables	Perbarui Tabel Hitungan
+	Count in Area	Hitung di Area
+	{n} reference(s) of {name} selected.	{n} referensi {name} dipilih.
+	{n} similar object(s) selected.	{n} objek serupa dipilih.
+	Geographic Location...	Lokasi Geografis...
+	Remove Geographic Location	Hapus Lokasi Geografis
+	Set Location	Atur Lokasi
+	Remove Location	Hapus Lokasi
+	Latitude and Longitude	Lintang dan Bujur
+	Trace Image to Vectors	Lacak Gambar ke Vektor
+	Trace Raster Image to Vectors	Lacak Gambar Raster ke Vektor
+	Drawing Summary	Ringkasan Gambar
+	Query Drawing	Kueri Gambar
+	Begin Agent Request	Mulai Permintaan Agen
+	End Agent Request	Akhiri Permintaan Agen
+	Agent Dry Run	Uji Coba Agen
+	Agent Confirmations	Konfirmasi Agen
+	Agent Change Journal	Jurnal Perubahan Agen
+	Agent Activity	Aktivitas Agen
+	An agent asks	Agen bertanya
+	Allow	Izinkan
+	Deny	Tolak
+	Not allowed: {question}	Tidak diizinkan: {question}
+	Ask me before an agent saves over a file or closes with changes	Tanyakan saya sebelum agen menimpa berkas atau menutup dengan perubahan
+	Dry run: agents' commands change nothing	Uji coba: perintah agen tidak mengubah apa pun
+	No agent requests yet.	Belum ada permintaan agen.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} perintah · {added} ditambahkan · {removed} dihapus · {changed} diubah
+	Select what it added and changed	Pilih yang ditambahkan dan diubahnya
+	Activity History	Riwayat Aktivitas
+	Activity history is off (Options ▸ Open and Save).	Riwayat aktivitas nonaktif (Opsi ▸ Buka dan Simpan).
+	command	perintah
+	{n} steps	{n} langkah
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Pilih objek yang ditambahkan atau diubah langkah ini
+	The objects of this step are gone.	Objek dari langkah ini sudah tidak ada.
+	{n} object(s) selected.	{n} objek dipilih.
+	{n} object(s) selected ({gone} since erased).	{n} objek dipilih ({gone} telah dihapus sejak itu).
+	{n} s ago	{n} dtk lalu
+	{n} min ago	{n} mnt lalu
+	{n} h ago	{n} jam lalu
+	{n} d ago	{n} hr lalu
+	Keep an activity history beside each drawing (private, on this computer)	Simpan riwayat aktivitas di samping setiap gambar (pribadi, di komputer ini)
+	Background mask	Masker latar belakang
+	Mask border offset	Offset tepi masker
+	Mask color	Warna masker
+	Use drawing background	Gunakan latar belakang gambar
+	Regenerate Dimensions	Regenerasi Dimensi
+	Enter layer name for new dimensions (. for the current layer)	Masukkan nama lapisan untuk dimensi baru (. untuk lapisan saat ini)
+	{folder} (folder)	{folder} (folder)
+	Add drawings or a folder of them.	Tambahkan gambar atau folder berisi gambar.
+	Add Files...	Tambah Berkas...
+	Add Folder...	Tambah Folder...
+	cancelled	dibatalkan
+	Choose the output folder, or Next to the originals.	Pilih folder keluaran, atau Di samping berkas asli.
+	Convert Drawings	Konversi Gambar
+	Convert Drawings...	Konversi Gambar...
+	Convert drawings...	Konversi gambar...
+	Convert to	Konversi ke
+	Converted	Dikonversi
+	Converted, not all kept	Dikonversi, tidak semua tersimpan
+	Converting files is not available on the web.	Konversi berkas tidak tersedia di web.
+	Drawings to convert	Gambar yang akan dikonversi
+	Each drawing's own	Milik masing-masing gambar
+	Failed	Gagal
+	Files already there	Berkas yang sudah ada
+	Folder:	Folder:
+	Include subfolders	Sertakan subfolder
+	Keep a file written over as .bak	Simpan berkas yang ditimpa sebagai .bak
+	Next to the originals	Di samping berkas asli
+	Open Log	Buka Log
+	Or type a file or folder path	Atau ketik jalur berkas atau folder
+	Overwrite	Timpa
+	Save to	Simpan ke
+	Skip	Lewati
+	Skipped	Dilewati
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Tidak ada gambar (.dwg, .dxf, .cdy) untuk dikonversi.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} dikonversi, {skipped} dilewati, {failed} gagal dari {total}
+	DWG drawing (.dwg)	Gambar DWG (.dwg)
+	DXF drawing (.dxf)	Gambar DXF (.dxf)
+	Require a token for control connections (recommended)	Wajibkan token untuk koneksi kontrol (disarankan)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Program harus terlebih dahulu mengirim token yang ditulis CADaddy ke berkas yang hanya dapat Anda baca, sehingga program pengguna lain tidak dapat mengendalikannya. Konektor Claude membacanya untuk Anda. Berlaku saat CADaddy dijalankan berikutnya.
+	Building models (IFC)	Model bangunan (IFC)
+	Building model (IFC4)	Model bangunan (IFC4)
+	3D printing (3MF)	Cetak 3D (3MF)
+	Include the drawing (the active drawing as a DXF file)	Sertakan gambar (gambar aktif sebagai berkas DXF)
+	Your account, home folder and computer name are always left out.	Akun, folder beranda, dan nama komputer Anda selalu dikecualikan.
+	Files in the report	Berkas dalam laporan
+	Send to Redline	Kirim ke Redline
+	Import Redline Markups	Impor Markup Redline
+	Import Redline Markups...	Impor Markup Redline...
+	Open a Program?	Buka Program?
+	This link opens a program or script, not a document:	Tautan ini membuka program atau skrip, bukan dokumen:
+	Open it only if you trust the drawing and know what it runs.	Buka hanya jika Anda memercayai gambar ini dan tahu apa yang dijalankannya.
+	Open Anyway	Tetap Buka
+	Report a security problem	Laporkan masalah keamanan
+	Load This File?	Muat Berkas Ini?
+	This file isn't in a trusted folder:	Berkas ini tidak berada di folder tepercaya:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	Rutin LISP dan skrip dapat mengubah gambar dan berkas. Muat hanya jika Anda memercayai asalnya.
+	Don't Load	Jangan Muat
+	Load Once	Muat Sekali
+	Always Load from This Folder	Selalu Muat dari Folder Ini
+	Adds {folder} to TRUSTEDPATHS	Menambahkan {folder} ke TRUSTEDPATHS
+	Allow Loading a File	Izinkan Memuat Berkas
+	Plot Stamp	Cap Plot
+	Plot stamp fields	Bidang cap plot
+	Drawing name	Nama gambar
+	Layout name	Nama tata letak
+	Date and Time	Tanggal dan Waktu
+	Device name	Nama perangkat
+	Paper size	Ukuran kertas
+	Plot scale	Skala plot
+	No login or computer name is ever stamped.	Nama login atau komputer tidak pernah dicap.
+	User defined fields	Bidang yang ditentukan pengguna
+	One per line, up to {n}.	Satu per baris, hingga {n}.
+	Stamp model space plots	Cap plot ruang model
+	Stamp this layout's plots	Cap plot tata letak ini
+	Location and offset	Lokasi dan offset
+	Location	Lokasi
+	Upside-down	Terbalik
+	X offset	Offset X
+	Y offset	Offset Y
+	Offset relative to	Offset relatif terhadap
+	Printable area	Area yang dapat dicetak
+	Paper border	Tepi kertas
+	Text properties	Properti teks
+	Font	Fon
+	Single line plot stamp	Cap plot satu baris
+	Units	Satuan
+	Inches	Inci
+	Millimeters	Milimeter
+	Log file location	Lokasi berkas log
+	Create a log file	Buat berkas log
+	The log is kept for this session, never saved with the drawing.	Log disimpan untuk sesi ini, tidak pernah disimpan bersama gambar.
+	Action Macro Manager...	Manajer Makro Aksi...
+	Action Macros	Makro Aksi
+	Action Recorder	Perekam Aksi
+	Insert Base Point	Sisipkan Titik Dasar
+	Insert Message	Sisipkan Pesan
+	Play Action Macro	Putar Makro Aksi
+	Play...	Putar...
+	Record	Rekam
+	Request User Input	Minta Input Pengguna
+	Stop	Berhenti
+	Action Macro Manager	Manajer Makro Aksi
+	Recording…	Merekam…
+	No action macros yet: Record, do the work, then Stop.	Belum ada makro aksi: Rekam, lakukan pekerjaan, lalu Berhenti.
+	Play	Putar
+	Message: {text}	Pesan: {text}
+	Base point (asked for)	Titik dasar (diminta)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Minta input ini saat makro diputar
+	Customize Interface	Kustomisasi Antarmuka
+	Customize User Interface...	Kustomisasi Antarmuka Pengguna...
+	Interface...	Antarmuka...
+	Customize User Interface	Kustomisasi Antarmuka Pengguna
+	Quick Access Toolbar	Bilah Alat Akses Cepat
+	Add a command	Tambah perintah
+	Reset Quick Access Toolbar	Atur Ulang Bilah Alat Akses Cepat
+	Built-in panels shown (untick to hide):	Panel bawaan yang ditampilkan (hapus centang untuk menyembunyikan):
+	Your panels on built-in tabs:	Panel Anda di tab bawaan:
+	Tab	Tab
+	New panel name	Nama panel baru
+	Add Panel	Tambah Panel
+	Your tabs:	Tab Anda:
+	Remove Tab	Hapus Tab
+	New tab name	Nama tab baru
+	Add Tab	Tambah Tab
+	Edit Keyboard Shortcuts...	Edit Pintasan Keyboard...
+	Remove Panel	Hapus Panel
+	Command or LISP macro, e.g. (command "line")	Perintah atau makro LISP, mis. (command "line")
+	Hatch Editor	Editor Arsiran
+	Table Cell	Sel Tabel
+	Rows & Columns	Baris & Kolom
+	Merge	Gabung
+	Open/Save	Buka/Simpan
+	Attributes	Atribut
+	Spell Check	Periksa Ejaan
+	Formula	Rumus
+	Edit Source	Edit Sumber
+	Close Array	Tutup Larik
+	Manage Attributes	Kelola Atribut
+	Dialog State	Status Dialog
+	Dialog Action	Aksi Dialog
+	Recover Drawing and Xrefs...	Pulihkan Gambar dan Xref...
+	Count Blocks	Hitung Blok
+	Get Selection Set	Ambil Set Pilihan
+	Global Attribute Edit	Edit Atribut Global
+	LISP Function Surfer	Penjelajah Fungsi LISP
+	List LISP Symbols	Daftar Simbol LISP
+	List Nested Object	Daftar Objek Bersarang
+	List Object Xdata	Daftar Xdata Objek
+	Multiple Polyline Edit	Edit Polilina Ganda
+	Redefine Path	Definisikan Ulang Lintasan
+	Redefine Path Mode	Mode Definisi Ulang Lintasan
+	Restore Dimension Text	Pulihkan Teks Dimensi
+	Revert	Kembalikan
+	Rotate Blocks	Putar Blok
+	Scale Blocks	Skalakan Blok
+	Select Similar by Properties	Pilih yang Serupa berdasarkan Properti
+	Show URLs	Tampilkan URL
+	Synchronize Viewports	Sinkronkan Viewport
+	Paste Special	Tempel Khusus
+	Paste Special...	Tempel Khusus...
+	Paste as	Tempel sebagai
+	Last Measurement	Pengukuran Terakhir
+	Perimeter	Keliling
+	curl isn't available ({error}).	curl tidak tersedia ({error}).
+	This build has no release key to check updates with.	Build ini tidak memiliki kunci rilis untuk memeriksa pembaruan.
+	The release's signature files are too large.	Berkas tanda tangan rilis terlalu besar.
+	The release's signature isn't one CADaddy reads.	Tanda tangan rilis bukan jenis yang dapat dibaca CADaddy.
+	The release's signature is missing or damaged.	Tanda tangan rilis tidak ada atau rusak.
+	The release's signature is for another version ({version}).	Tanda tangan rilis untuk versi lain ({version}).
+	The release is signed with a key this build doesn't trust.	Rilis ditandatangani dengan kunci yang tidak dipercaya build ini.
+	This build's release key is damaged.	Kunci rilis build ini rusak.
+	The release's signature doesn't match its files.	Tanda tangan rilis tidak cocok dengan berkasnya.
+	Couldn't reach GitHub: {why}	Tidak dapat menghubungi GitHub: {why}
+	GitHub's answer was too large.	Jawaban GitHub terlalu besar.
+	GitHub's answer wasn't readable ({error}).	Jawaban GitHub tidak dapat dibaca ({error}).
+	GitHub's answer has no version.	Jawaban GitHub tidak berisi versi.
+	GitHub's answer has an unreadable version ({version}).	Jawaban GitHub berisi versi yang tidak dapat dibaca ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Tidak dapat mengunduh {name} dari rilis, jadi tidak ada yang dipasang: {why}
+	The release's {name} is too large, so nothing was installed.	{name} dari rilis terlalu besar, jadi tidak ada yang dipasang.
+	The release's {name} isn't text, so nothing was installed.	{name} dari rilis bukan teks, jadi tidak ada yang dipasang.
+	It wasn't downloaded. Download it from the release page instead.	Berkas tidak diunduh. Unduh dari halaman rilis sebagai gantinya.
+	Version {version} isn't newer than this one ({current}).	Versi {version} tidak lebih baru dari versi ini ({current}).
+	This release isn't signed.	Rilis ini tidak ditandatangani.
+	The release failed its check.	Rilis gagal dalam pemeriksaan.
+	The signed release doesn't list {name}.	Rilis yang ditandatangani tidak mencantumkan {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	Sidik jari GitHub untuk {name} berbeda dengan yang ditandatangani.
+	Couldn't make the folder {folder}: {error}	Tidak dapat membuat folder {folder}: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Unduhan tidak cocok dengan sidik jari SHA-256 yang dipublikasikan, jadi tidak dipasang.
+	Couldn't read the download: {error}	Tidak dapat membaca unduhan: {error}
+	The download failed: {why}	Unduhan gagal: {why}
+	This release has no installer for this computer yet.	Rilis ini belum memiliki penginstal untuk komputer ini.
+	Drawing Properties...	Properti Gambar...
+	System Variable Monitor...	Monitor Variabel Sistem...
+	{name} Properties	Properti {name}
+	Summary	Ringkasan
+	Statistics	Statistik
+	Size	Ukuran
+	Subject	Subjek
+	Author	Penulis
+	Keywords	Kata kunci
+	Comments	Komentar
+	Revision number	Nomor revisi
+	Hyperlink base	Basis hyperlink
+	Created	Dibuat
+	Modified	Diubah
+	Last saved by	Terakhir disimpan oleh
+	Total editing time (minutes)	Total waktu pengeditan (menit)
+	Property	Properti
+	System Variable Monitor	Monitor Variabel Sistem
+	Variable	Variabel
+	Watched value	Nilai yang dipantau
+	Current value	Nilai saat ini
+	Notify when a watched variable changes	Beri tahu saat variabel yang dipantau berubah
+	Reset All	Atur Ulang Semua
+	Delay	Jeda
+	Repeat Script	Ulangi Skrip
+	Script Call	Panggil Skrip
+	Resume Script	Lanjutkan Skrip
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Simpan riwayat aktivitas setiap gambar (pribadi, di folder pengaturan CADaddy)
+	Specify insertion point or	Tentukan titik penyisipan atau
+	Specify table scale	Tentukan skala tabel
+	{} dimension(s) updated to the current settings.	{} dimensi diperbarui ke pengaturan saat ini.
+	British English (-ise)	Bahasa Inggris Britania (-ise)
+	British English (-ize)	Bahasa Inggris Britania (-ize)
+	Spanish	Bahasa Spanyol
+	French	Bahasa Prancis
+	German	Bahasa Jerman
+	Portuguese (Iberian)	Bahasa Portugis (Iberia)
+	Portuguese (Brazilian)	Bahasa Portugis (Brasil)
+	(not installed)	(tidak terpasang)
+	Dictionaries are read from:	Kamus dibaca dari:
+	Published to {path}	Diterbitkan ke {path}
+	Sheet Set (.sheetset.json)	Set Lembar (.sheetset.json)
+	Resolution	Resolusi
+	Colour depth	Kedalaman warna
+	Colour (24-bit)	Warna (24-bit)
+	Greys (8-bit)	Abu-abu (8-bit)
+	Black and white (1-bit)	Hitam putih (1-bit)
+	PNG Out	PNG Out
+	JPEG Out	JPEG Out
+	BMP Out	BMP Out
+	TIFF Out	TIFF Out
+	Enter image file name	Masukkan nama berkas gambar
+	Nothing selected: no image written.	Tidak ada yang dipilih: tidak ada gambar yang ditulis.
+	{} object(s) written to {} ({} × {} pixels).	{} objek ditulis ke {} ({} × {} piksel).
+	Set to ByLayer	Atur ke ByLayer
+	Explode and Set Properties	Pecah dan Atur Properti
+	Edit Attribute in Place	Edit Atribut di Tempat
+	Frame	Bingkai
+	Setup	Penyiapan
+	Setup View	Penyiapan Tampilan
+	Setup Drawing	Penyiapan Gambar
+	Setup Profile	Penyiapan Profil
+	Enter view scale	Masukkan skala tampilan
+	Specify view center	Tentukan pusat tampilan
+	Enter view name	Masukkan nama tampilan
+	Specify side of viewport to project	Tentukan sisi viewport yang akan diproyeksikan
+	Specify first point of cutting plane	Tentukan titik pertama bidang potong
+	Specify second point of cutting plane	Tentukan titik kedua bidang potong
+	Specify first point of inclined plane	Tentukan titik pertama bidang miring
+	Specify second point of inclined plane	Tentukan titik kedua bidang miring
+	Specify side to view from	Tentukan sisi tempat melihat
+	Specify first corner of viewport	Tentukan sudut pertama viewport
+	Specify opposite corner of viewport	Tentukan sudut seberang viewport
+	Display hidden profile lines on separate layer?	Tampilkan garis profil tersembunyi di lapisan terpisah?
+	Project profile lines onto a plane?	Proyeksikan garis profil ke bidang?
+	Delete tangential edges?	Hapus tepi tangensial?
+	None (PDF file)	Tidak ada (berkas PDF)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	Teks dimensi setinggi {} terlalu kecil untuk dibaca di gambar ini. Ketik DIMSCALE {} untuk membuat dimensi baru {} kali lebih besar.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	Teks setinggi {} terlalu kecil untuk dibaca di gambar ini. Coba tinggi {} (TEXTSIZE mengatur nilai bawaan).
+	(each layout's own)	(milik masing-masing tata letak)
+	A callout on the selected sheet pointing at the selected view	Callout pada lembar terpilih yang menunjuk ke tampilan terpilih
+	A page setup copied from the selected sheet's layout	Pengaturan halaman yang disalin dari tata letak lembar terpilih
+	Add Callout	Tambah Callout
+	Callouts: {}	Callout: {}
+	From Selected Sheet	Dari Lembar Terpilih
+	Insert on Selected Sheet	Sisipkan pada Lembar Terpilih
+	Named view	Tampilan bernama
+	Page Setup Override	Penimpaan Pengaturan Halaman
+	Place View	Tempatkan Tampilan
+	Position on sheet	Posisi pada lembar
+	Remove Property	Hapus Properti
+	Sheet Properties	Properti Lembar
+	Sheet Set Fields	Bidang Set Lembar
+	Sheet Set Properties	Properti Set Lembar
+	Sync Drawings	Sinkronkan Gambar
+	Text holding the field, at the position on sheet	Teks yang memuat bidang, pada posisi di lembar
+	Views and Callouts	Tampilan dan Callout
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Tata letak setiap lembar menjadi "nomor judul"; bidang set lembar, label tampilan, dan callout mengambil nilai set saat ini
+	3 Point	3 Titik
+	Origin	Titik Asal
+	Z	Z
+	Named UCS...	UCS Bernama...
+	Center Mark (DIMCEN)	Tanda Pusat (DIMCEN)
+	Copy Objects to New Layer	Salin Objek ke Lapisan Baru
+	Cut with Base Point	Potong dengan Titik Dasar
+	DXF In	DXF In
+	DXF Out	DXF Out
+	Fill	Isian
+	Maximize Viewport	Maksimalkan Viewport
+	Minimize Viewport	Minimalkan Viewport
+	Object Selection Filters	Filter Pilihan Objek
+	Oops	Pulihkan Terhapus
+	Quick Text	Teks Cepat
+	Redefine Attributes	Definisikan Ulang Atribut
+	Drawing	Gambar
+	Profile	Profil
+	Clashes	Benturan
+	Run	Jalankan
+	Re-run	Jalankan Ulang
+	Run clash detection	Jalankan deteksi benturan
+	Re-run keeping statuses	Jalankan ulang dengan mempertahankan status
+	Tolerance:	Toleransi:
+	in	in
+	Show:	Tampilkan:
+	No clashes. Run detection first.	Tidak ada benturan. Jalankan deteksi terlebih dahulu.
+	Status:	Status:
+	Trade:	Bidang Pekerjaan:
+	Notes:	Catatan:
+	Go To	Buka
+	Zoom to clash	Zoom ke benturan
+	Export BCF	Ekspor BCF
+	Export CSV	Ekspor CSV
+	Export to BCF 2.1 (ZIP)	Ekspor ke BCF 2.1 (ZIP)
+	Export clash report to CSV	Ekspor laporan benturan ke CSV
+	MEP Review	Tinjauan MEP
+	Guessed only	Hanya tebakan
+	{n} items	{n} item
+	No MEP items found. Run mep.read first.	Tidak ditemukan item MEP. Jalankan mep.read terlebih dahulu.
+	Mark reviewed	Tandai sudah ditinjau
+	Size: {ss}, Height: {hs}	Ukuran: {ss}, Tinggi: {hs}
+	Edit size, height or system	Edit ukuran, tinggi, atau sistem
+	Size W:	Ukuran L:
+	Bottom ft:	Bawah ft:
+	Rebuild 3D model keeping hand edits	Bangun ulang model 3D dengan mempertahankan editan manual
+	Zoomed to {sys} run on {lvl}.	Zoom ke jalur {sys} di {lvl}.
+	Marked as reviewed.	Ditandai sudah ditinjau.
+	Unmarked.	Tanda dihapus.
+	Edit applied.	Editan diterapkan.
+	Rebuilt: {n} MEP runs.	Dibangun ulang: {n} jalur MEP.
+	3D Measure	Ukur 3D
+	BCF Export	Ekspor BCF
+	Clash List	Daftar Benturan
+	Clash Status	Status Benturan
+	Coordination Tree	Pohon Koordinasi
+	Coordination Viewpoints	Titik Pandang Koordinasi
+	Edit MEP Item	Edit Item MEP
+	List MEP Items	Daftar Item MEP
+	Section Box	Kotak Potongan
+	Trade Visibility	Visibilitas Bidang Pekerjaan
+	BIM Types	Jenis BIM
+	Get BIM Spec	Ambil Spesifikasi BIM
+	Remove BIM Spec from Entities	Hapus Spesifikasi BIM dari Entitas
+	Remove BIM Type	Hapus Jenis BIM
+	Set BIM Spec on Entities	Atur Spesifikasi BIM pada Entitas
+	Set BIM Type	Atur Jenis BIM
+	Ceiling and Soffit Takeoff	Perhitungan Plafon dan Soffit
+	Colour by Assembly	Warna per Rakitan
+	RFI List	Daftar RFI
+	Zoom to RFI	Zoom ke RFI
+	Update RFI	Perbarui RFI
+	Export RFI List	Ekspor Daftar RFI
+	Sent	Terkirim
+	Answered	Dijawab
+	Not sent	Belum terkirim
+	High	Tinggi
+	Medium	Sedang
+	Low	Rendah
+	All levels	Semua tingkat
+	Open items only	Hanya item terbuka
+	{high} high, {medium} medium, {low} low	{high} tinggi, {medium} sedang, {low} rendah
+	No gaps or conflicts in the building spec.	Tidak ada celah atau konflik dalam spesifikasi bangunan.
+	Assumed meanwhile:	Diasumsikan sementara:
+	Proposed fix:	Usulan perbaikan:
+	Sheets:	Lembar:
+	Walk to It	Jalan ke Sana
+	Export XLSX...	Ekspor XLSX...
+	Export PDF...	Ekspor PDF...
+	Drywall Takeoff	Perhitungan Drywall
+	Drywall View Mode	Mode Tampilan Drywall
+	Finish Faces	Muka Finishing
+	Wall Info	Info Dinding
+	Open Print Set	Buka Set Cetak
+	Classify Print Set	Klasifikasikan Set Cetak
+	Print Set Dashboard	Dasbor Set Cetak
+	Print Set Sheets	Lembar Set Cetak
+	Re-import Revised Set	Impor Ulang Set Revisi
+	Save Print Set	Simpan Set Cetak
+	Ahead	Depan
+	Bottom / top AFF	Bawah / atas AFF
+	Clash	Benturan
+	elements	elemen
+	Field Viewer	Penampil Lapangan
+	Fit	Paskan
+	Keep	Simpan
+	New note	Catatan baru
+	No new notes to send	Tidak ada catatan baru untuk dikirim
+	No room matches	Tidak ada ruangan yang cocok
+	Note	Catatan
+	Note kept	Catatan disimpan
+	Notes	Catatan
+	notes ready to sync	catatan siap disinkronkan
+	not typed	tanpa jenis
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Buka paket lapangan (FIELDVIEW.EXPORT di CADaddy), atau letakkan di sini
+	Open clashes and RFIs	Benturan dan RFI terbuka
+	RFI	RFI
+	Room number	Nomor ruangan
+	Search a room number, or tap a room	Cari nomor ruangan, atau ketuk ruangan
+	Send Notes	Kirim Catatan
+	Tap two points to measure	Ketuk dua titik untuk mengukur
+	Trades	Bidang Pekerjaan
+	Unit	Unit
+	Verified	Terverifikasi
+	Verified point	Titik terverifikasi
+	What is there, as built	Apa yang ada, sesuai terbangun
+	Plan	Denah
+	3D	3D
+	Architectural	Arsitektur
+	Structural	Struktur
+	Mechanical	Mekanikal
+	Plumbing	Plambing
+	Fire protection	Proteksi kebakaran
+	Other	Lainnya
+	stated	dinyatakan
+	inferred	disimpulkan
+	assumed	diasumsikan
+	Field Package	Paket Lapangan
+	Sync Field Notes	Sinkronkan Catatan Lapangan
+	Field Notes	Catatan Lapangan
+	Detect Unit Types	Deteksi Jenis Unit
+	List Unit Types	Daftar Jenis Unit
+	Unit Schedule	Jadwal Unit
+	Unit Type Takeoff	Perhitungan Jenis Unit
+	Override Generated Element	Timpa Elemen yang Dihasilkan
+	List Overrides	Daftar Penimpaan
+	Revert Override	Kembalikan Penimpaan
+	Accept Override After Review	Terima Penimpaan Setelah Ditinjau
+	Show or Hide Overrides	Tampilkan atau Sembunyikan Penimpaan
+	Re-apply Overrides	Terapkan Ulang Penimpaan
+	Overrides	Penimpaan
+	Select generated element (or an object drawn by hand to add)	Pilih elemen yang dihasilkan (atau objek yang digambar manual untuk ditambahkan)
+	Enter type mark	Masukkan tanda jenis
+	Enter override to revert	Masukkan penimpaan yang akan dikembalikan
+	Verify	Verifikasi
+	review: the drawing changed here	tinjau: gambar berubah di sini
+	orphaned: its element is no longer generated	yatim: elemennya tidak lagi dihasilkan
+	Project Rules	Aturan Proyek
+	Domain:	Domain:
+	No project rules set.	Belum ada aturan proyek.
+	Tier:	Tingkat:
+	Source:	Sumber:
+	Reason:	Alasan:
+	Overridden values:	Nilai yang ditimpa:
+	No drawing open.	Tidak ada gambar yang terbuka.
+	List Project Rules	Daftar Aturan Proyek
+	Get Project Rule	Ambil Aturan Proyek
+	Set Project Rule	Atur Aturan Proyek
+	Remove Project Rule	Hapus Aturan Proyek
+	Preview Project Rule Change	Pratinjau Perubahan Aturan Proyek
+	Project Rules Label	Label Aturan Proyek
+	Import Project Rules	Impor Aturan Proyek
+	Export Project Rules	Ekspor Aturan Proyek
+	Print Validator Documents	Dokumen Validator Cetak
+	Validate Model Against Prints	Validasi Model terhadap Cetakan
+	Validation Failure Overlay	Hamparan Kegagalan Validasi
+	Element Provenance	Asal-usul Elemen
+	MEP Quantities	Kuantitas MEP
+	Refresh MEP Quantities	Segarkan Kuantitas MEP
+	Activate Drawing	Aktifkan Gambar
+	Add to Project	Tambahkan ke Proyek
+	Close Project	Tutup Proyek
+	Import Manifest	Impor Manifes
+	Import Standards	Impor Standar
+	New Project	Proyek Baru
+	Open Project	Buka Proyek
+	Project Disk Use	Penggunaan Disk Proyek
+	Project Drawings	Gambar Proyek
+	Project Info	Info Proyek
+	Remove Standard	Hapus Standar
+	Remove from Project	Hapus dari Proyek
+	Restore Project	Pulihkan Proyek
+	Set Standard	Atur Standar
+	Shelve Drawing	Simpan Gambar ke Arsip
+	Shelve Project	Simpan Proyek ke Arsip
+	Standards Library	Pustaka Standar
+	Validate Manifest	Validasi Manifes
+	Active	Aktif
+	Shelved	Diarsipkan
+	{n} drawings	{n} gambar
+	Compare Revised Print	Bandingkan Cetakan Revisi
+	Revision Log	Log Revisi
+	Attach IFC Reference	Lampirkan Referensi IFC
+	IFC References	Referensi IFC
+	IFC Reference Elements	Elemen Referensi IFC
+	Reload IFC References	Muat Ulang Referensi IFC
+	Accept Specifications	Terima Spesifikasi
+	Import Specifications	Impor Spesifikasi
+	Colour Scheme	Skema Warna
+	Coordination Mode	Mode Koordinasi
+	Coordination Views	Tampilan Koordinasi
+	Isolate Trade	Isolasi Bidang Pekerjaan
+	Project Briefing	Ringkasan Proyek
+	Project Note	Catatan Proyek
+	Review Queue	Antrean Tinjauan
+	Next Review Item	Item Tinjauan Berikutnya
+	Resolve Review Item	Selesaikan Item Tinjauan
+	Defer Review Item	Tunda Item Tinjauan
+	Draft RFI	Susun Draf RFI
+	Batch Resolve	Selesaikan Massal
+	Approve Agent Work	Setujui Pekerjaan Agen
+	Agent Work	Pekerjaan Agen
+	Build BIM Model	Bangun Model BIM
+	to accept	untuk diterima
+	Accept all	Terima semua
+	Accept	Terima
+	Cited:	Dikutip:
+	Nothing waiting: agents' work is all accepted.	Tidak ada yang menunggu: semua pekerjaan agen sudah diterima.
+	Open IFC Model	Buka Model IFC
+	Open IFC Model...	Buka Model IFC...
+	IFC Model	Model IFC
+	IFC Model Tree	Pohon Model IFC
+	IFC Object Properties	Properti Objek IFC
+	Filter IFC Objects	Filter Objek IFC
+	IFC Section Box	Kotak Potongan IFC
+	Measure in 3D	Ukur dalam 3D
+	IFC Camera	Kamera IFC
+	Render IFC Model	Render Model IFC
+	New BCF Issue	Isu BCF Baru
+	BCF Issues	Isu BCF
+	BCF Issues...	Isu BCF...
+	BCF Issue	Isu BCF
+	Update BCF Issue	Perbarui Isu BCF
+	Show BCF Issue	Tampilkan Isu BCF
+	Delete BCF Issue	Hapus Isu BCF
+	Import BCF	Impor BCF
+	Read Levels	Baca Tingkat
+	List Levels	Daftar Tingkat
+	Edit Level	Edit Tingkat
+	Attach Sheets to Levels	Lampirkan Lembar ke Tingkat
+	Check Shafts Through Levels	Periksa Shaft Antar Tingkat
+	Isolate Level	Isolasi Tingkat
+	Read from Prints	Baca dari Cetakan
+	Level names and elevations from the sections, elevations and level markers	Nama dan elevasi tingkat dari potongan, tampak, dan penanda tingkat
+	Attach Sheets	Lampirkan Lembar
+	Check Shafts	Periksa Shaft
+	Shafts, chases and risers must carry on through the levels between their ends	Shaft, chase, dan riser harus menerus melewati tingkat-tingkat di antara ujungnya
+	No levels in the building spec.	Tidak ada tingkat dalam spesifikasi bangunan.
+	Level	Tingkat
+	Floor to floor	Lantai ke lantai
+	Sheets	Lembar
+	Show only this storey in 3D	Tampilkan hanya lantai ini dalam 3D
+	Datums (no plan on this drawing):	Datum (tidak ada denah di gambar ini):
+	Sheets on no level:	Lembar tanpa tingkat:
+	Show All Levels	Tampilkan Semua Tingkat
+	The levels already match the prints.	Tingkat sudah sesuai dengan cetakan.
+	{sheets} sheets, {loose} on no level	{sheets} lembar, {loose} tanpa tingkat
+	{name}: not shown on {levels}	{name}: tidak ditampilkan di {levels}
+	Every shaft and riser carries on through its levels.	Setiap shaft dan riser menerus melewati tingkatnya.
+	Not a height: {text}	Bukan ketinggian: {text}
+	Export COBie	Ekspor COBie
+	Validate COBie	Validasi COBie
+	Export Handover Schedules	Ekspor Jadwal Serah Terima
+	COBie...	COBie...
+	Handover Schedules...	Jadwal Serah Terima...
+	Electrical Gear	Peralatan Listrik
+	Check Electrical Gear	Periksa Peralatan Listrik
+	Submittal Review of Gear	Tinjauan Submittal Peralatan
+	Accept Gear as Submitted	Terima Peralatan sesuai Submittal

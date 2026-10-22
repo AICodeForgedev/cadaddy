@@ -49,10 +49,34 @@ pub enum Preference {
     Hungarian,
     #[serde(rename = "tr")]
     Turkish,
+    #[serde(rename = "nl")]
+    Dutch,
+    #[serde(rename = "da")]
+    Danish,
+    #[serde(rename = "fi")]
+    Finnish,
+    #[serde(rename = "nb")]
+    NorwegianBokmal,
+    #[serde(rename = "el")]
+    Greek,
+    #[serde(rename = "ro")]
+    Romanian,
+    #[serde(rename = "hi")]
+    Hindi,
+    #[serde(rename = "id")]
+    Indonesian,
+    #[serde(rename = "vi")]
+    Vietnamese,
+    #[serde(rename = "th")]
+    Thai,
+    #[serde(rename = "he")]
+    Hebrew,
+    #[serde(rename = "fa")]
+    Persian,
 }
 
 impl Preference {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 31] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -72,6 +96,18 @@ impl Preference {
         Self::Polish,
         Self::Hungarian,
         Self::Turkish,
+        Self::Dutch,
+        Self::Danish,
+        Self::Finnish,
+        Self::NorwegianBokmal,
+        Self::Greek,
+        Self::Romanian,
+        Self::Hindi,
+        Self::Indonesian,
+        Self::Vietnamese,
+        Self::Thai,
+        Self::Hebrew,
+        Self::Persian,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -104,6 +140,18 @@ impl Preference {
             Self::Polish => "pl",
             Self::Hungarian => "hu",
             Self::Turkish => "tr",
+            Self::Dutch => "nl",
+            Self::Danish => "da",
+            Self::Finnish => "fi",
+            Self::NorwegianBokmal => "nb",
+            Self::Greek => "el",
+            Self::Romanian => "ro",
+            Self::Hindi => "hi",
+            Self::Indonesian => "id",
+            Self::Vietnamese => "vi",
+            Self::Thai => "th",
+            Self::Hebrew => "he",
+            Self::Persian => "fa",
         }
     }
 
@@ -140,6 +188,52 @@ impl Preference {
             Self::Polish => "Polski",
             Self::Hungarian => "Magyar",
             Self::Turkish => "Türkçe",
+            Self::Dutch => "Nederlands",
+            Self::Danish => "Dansk",
+            Self::Finnish => "Suomi",
+            Self::NorwegianBokmal => "Norsk bokmål",
+            Self::Greek => "Ελληνικά",
+            Self::Romanian => "Română",
+            // Its script shows only with its font, loaded in its own interface.
+            Self::Hindi => {
+                if CURRENT.with(Cell::get) == "hi" && crate::theme::can_show("hi") {
+                    shown("हिन्दी")
+                } else {
+                    "Hindi"
+                }
+            }
+            Self::Indonesian => "Bahasa Indonesia",
+            Self::Vietnamese => {
+                if crate::theme::can_show("vi") {
+                    "Tiếng Việt"
+                } else {
+                    "Vietnamese"
+                }
+            }
+            // Its script shows only with its font, loaded in its own interface.
+            Self::Thai => {
+                if CURRENT.with(Cell::get) == "th" && crate::theme::can_show("th") {
+                    shown("ไทย")
+                } else {
+                    "Thai"
+                }
+            }
+            // Its script shows only with its font, loaded in its own interface.
+            Self::Hebrew => {
+                if CURRENT.with(Cell::get) == "he" && crate::theme::can_show("he") {
+                    shown("עברית")
+                } else {
+                    "Hebrew"
+                }
+            }
+            // Its script shows only with its font, loaded in its own interface.
+            Self::Persian => {
+                if CURRENT.with(Cell::get) == "fa" && crate::theme::can_show("fa") {
+                    shown("فارسی")
+                } else {
+                    "Persian"
+                }
+            }
         }
     }
 
@@ -172,6 +266,18 @@ impl Preference {
             Self::Polish => "pl",
             Self::Hungarian => "hu",
             Self::Turkish => "tr",
+            Self::Dutch => "nl",
+            Self::Danish => "da",
+            Self::Finnish => "fi",
+            Self::NorwegianBokmal => "nb",
+            Self::Greek => "el",
+            Self::Romanian => "ro",
+            Self::Hindi => "hi",
+            Self::Indonesian => "id",
+            Self::Vietnamese => "vi",
+            Self::Thai => "th",
+            Self::Hebrew => "he",
+            Self::Persian => "fa",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -188,7 +294,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 18] = [
+pub static LANGUAGES: [Language; 30] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -233,6 +339,26 @@ pub static LANGUAGES: [Language; 18] = [
     // Hungarian and Turkish keep a noun singular after a number: one, other (usually the same).
     Language { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language { code: "tr", name: "Türkçe", source: include_str!("tr.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Dutch, Danish, Finnish, Norwegian Bokmål and Greek: one (1), other.
+    Language { code: "nl", name: "Nederlands", source: include_str!("nl.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "da", name: "Dansk", source: include_str!("da.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "fi", name: "Suomi", source: include_str!("fi.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "nb", name: "Norsk bokmål", source: include_str!("nb.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "el", name: "Ελληνικά", source: include_str!("el.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Romanian (CLDR `ro`): one (1), few (0, 2–19, 101–119 …), other (20 …, written with "de").
+    Language { code: "ro", name: "Română", source: include_str!("ro.tsv"), plural: plural_ro, plural_forms: 3, catalog: OnceLock::new() },
+    // Hindi (CLDR `hi`): one (0 and 1), other. Devanagari needs an installed font
+    // (`theme::script_font`); egui shapes it (conjuncts, reph, the short-i sign).
+    Language { code: "hi", name: "हिन्दी", source: include_str!("hi.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
+    // Indonesian, Vietnamese and Thai: one count form. Vietnamese tone marks and Thai need an
+    // installed font with them (`theme::script_font`).
+    Language { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    Language { code: "vi", name: "Tiếng Việt", source: include_str!("vi.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    Language { code: "th", name: "ไทย", source: include_str!("th.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    // עברית (Hebrew) and فارسی (Persian) are right-to-left like Arabic, with an installed font.
+    // Hebrew: one (1), two (2), other. Persian (CLDR `fa`): one (0 and 1), other.
+    Language { code: "he", name: "עברית", source: include_str!("he.tsv"), plural: plural_he, plural_forms: 3, catalog: OnceLock::new() },
+    Language { code: "fa", name: "فارسی", source: include_str!("fa.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
@@ -243,6 +369,14 @@ pub fn locale_language(tag: &str) -> Option<&'static str> {
     let primary = parts.next()?;
     if primary.eq_ignore_ascii_case("zh") && parts.take(2).any(|p| ["tw", "hk", "mo", "hant"].contains(&p.to_ascii_lowercase().as_str())) {
         return Some("zh-TW");
+    }
+    // Norwegian (`no`, Nynorsk `nn`) reads the Bokmål catalog; `iw` and `in` are the old codes of
+    // Hebrew and Indonesian that some systems still report.
+    match primary.to_ascii_lowercase().as_str() {
+        "no" | "nn" => return Some("nb"),
+        "iw" => return Some("he"),
+        "in" => return Some("id"),
+        _ => {}
     }
     LANGUAGES.iter().find(|l| l.code.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(primary))).map(|l| l.code)
 }
@@ -306,7 +440,7 @@ pub fn t(source: &str) -> &str {
 
 /// Languages written right to left: their interface is mirrored ([`crate::rtl`]).
 pub fn is_rtl(language: &str) -> bool {
-    language == "ar"
+    matches!(language, "ar" | "he" | "fa")
 }
 
 /// The interface language being drawn is right-to-left.
@@ -346,7 +480,7 @@ const MAX_SHOWN: usize = 20_000;
 /// `text` as drawn: in a right-to-left interface its display order ([`rtl_display`]), made once
 /// per text and kept.
 fn shown(text: &str) -> &str {
-    if !rtl() || !cadaddy_fonts::bidi::has_rtl(text) {
+    if !needs_display(text) {
         return text;
     }
     static SHOWN: std::sync::Mutex<Option<HashMap<String, &'static str>>> = std::sync::Mutex::new(None);
@@ -358,9 +492,21 @@ fn shown(text: &str) -> &str {
     if map.len() >= MAX_SHOWN {
         return text;
     }
-    let s: &'static str = Box::leak(rtl_display(text).into_boxed_str());
+    let s: &'static str = Box::leak(display(text).into_boxed_str());
     map.insert(text.to_string(), s);
     s
+}
+
+/// Whether `text` is drawn differently from how it's stored: right to left. (egui shapes
+/// complex scripts such as Devanagari and Thai itself; right-to-left text needs its display
+/// order.)
+fn needs_display(text: &str) -> bool {
+    rtl() && cadaddy_fonts::bidi::has_rtl(text)
+}
+
+/// `text` in display order for the interface language ([`rtl_display`]).
+fn display(text: &str) -> String {
+    if rtl() { rtl_display(text) } else { text.to_string() }
 }
 
 /// Text the engine wrote (a prompt, a command-line message, an error) in the interface language:
@@ -372,7 +518,7 @@ pub fn t_engine(source: &str) -> std::borrow::Cow<'_, str> {
         return std::borrow::Cow::Borrowed(ui);
     }
     let text = CURRENT.with(|l| cadaddy_engine::i18n::tr(l.get(), source));
-    if rtl() && cadaddy_fonts::bidi::has_rtl(&text) { std::borrow::Cow::Owned(rtl_display(&text)) } else { text }
+    if needs_display(&text) { std::borrow::Cow::Owned(display(&text)) } else { text }
 }
 
 /// Menu headings can differ from command or object labels (e.g. Czech Kótování / Kóta).
@@ -409,7 +555,7 @@ pub fn format(source: &str, values: &[(&str, String)]) -> String {
         rest = after;
     }
     result.push_str(rest);
-    if rtl() { rtl_display(&result) } else { result }
+    if needs_display(&result) { display(&result) } else { result }
 }
 
 /// Ukrainian integer plurals: one (1, 21), few (2–4, 22–24), many (0, 5–20, 25…).
@@ -425,6 +571,25 @@ pub fn plural_uk(n: u64) -> usize {
 /// Portuguese integer plurals (CLDR `pt`): one (0, 1), other (2 and up).
 pub fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
+}
+
+/// Romanian integer plurals (CLDR `ro`): one (1), few (0, 2–19, and 01–19 after the hundreds:
+/// 101–119), other (20–100, 120 …).
+pub fn plural_ro(n: u64) -> usize {
+    match (n, n % 100) {
+        (1, _) => 0,
+        (0, _) | (_, 1..=19) => 1,
+        _ => 2,
+    }
+}
+
+/// Hebrew integer plurals (CLDR `he`): one (1), two (2), other.
+pub fn plural_he(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2 => 1,
+        _ => 2,
+    }
 }
 
 /// Korean (and Japanese) use the same count form for every integer.

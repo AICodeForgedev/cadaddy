@@ -1,0 +1,196 @@
+# CADaddy engine messages in Indonesian: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	Masukkan nama grup
+	Pick internal point	Pilih titik internal
+	Specify the pattern origin	Tentukan titik asal pola
+	Specify the incrementing elevation between rows	Tentukan kenaikan elevasi antarbaris
+	Specify the angle to fill (+=ccw, -=cw)	Tentukan sudut isi (+=berlawanan jarum jam, -=searah jarum jam)
+	Select hatch object	Pilih objek arsiran
+	Red, Green, Blue	Merah, Hijau, Biru
+	Enter the number of rows	Masukkan jumlah baris
+	Enter the number of levels	Masukkan jumlah tingkat
+	Enter new layer name	Masukkan nama lapisan baru
+	Specify width	Tentukan lebar
+	Specify the angle between items	Tentukan sudut antar-item
+	Specify text height	Tentukan tinggi teks
+	Specify start tangent	Tentukan garis singgung awal
+	Specify end tangent	Tentukan garis singgung akhir
+	Specify reference length	Tentukan panjang referensi
+	Specify other corner	Tentukan sudut lainnya
+	Specify next point or [Undo]	Tentukan titik berikutnya atau [Undo]
+	Specify new location	Tentukan lokasi baru
+	Specify new length	Tentukan panjang baru
+	Specify length of line	Tentukan panjang garis
+	Specify displacement	Tentukan perpindahan
+	Specify angle for dimension text	Tentukan sudut teks dimensi
+	Select viewports	Pilih viewport
+	Select object to break dimension	Pilih objek untuk memutus dimensi
+	Select group	Pilih grup
+	Select grip to edit array	Pilih grip untuk mengedit larik
+	Select a table	Pilih tabel
+	Select a boundary to remove	Pilih batas yang akan dihapus
+	Rotate arrayed items?	Putar item larik?
+	Erase polyline?	Hapus polilina?
+	Enter viewport arrangement	Masukkan susunan viewport
+	Enter transparency value (0-90)	Masukkan nilai transparansi (0-90)
+	Enter the number of operations to undo	Masukkan jumlah operasi yang akan diurungkan
+	Enter the number of columns	Masukkan jumlah kolom
+	Enter number of items in array	Masukkan jumlah item dalam larik
+	Enter new layer state name	Masukkan nama status lapisan baru
+	Enter new color	Masukkan warna baru
+	Enter name of new layout	Masukkan nama tata letak baru
+	Enter layer name	Masukkan nama lapisan
+	Enter file name	Masukkan nama berkas
+	Enter color name or number (1-255)	Masukkan nama atau nomor warna (1-255)
+	Enter a configuration option	Masukkan opsi konfigurasi
+	Base point	Titik dasar
+	Word-wrap the combined Mtext?	Bungkus kata Mtext gabungan?
+	Where should the data go?	Ke mana data harus dikirim?
+	Verify each name to be purged?	Verifikasi setiap nama yang akan dibersihkan?
+	Use landing	Gunakan landasan
+	Type of boundary object	Jenis objek batas
+	Specify width factor	Tentukan faktor lebar
+	Specify tolerance	Tentukan toleransi
+	Specify the tangent direction for the start point of arc	Tentukan arah singgung untuk titik awal busur
+	Specify the reference angle	Tentukan sudut referensi
+	Specify the new angle	Tentukan sudut baru
+	Specify text width	Tentukan lebar teks
+	Specify temporary OTRACK point	Tentukan titik OTRACK sementara
+	Invalid option keyword.	Kata kunci opsi tidak valid.
+	*Invalid selection*	*Pilihan tidak valid*
+	Requires a valid angle.	Memerlukan sudut yang valid.
+	Nothing to undo.	Tidak ada yang bisa diurungkan.
+	Invalid point.	Titik tidak valid.
+	No viewport found there.	Tidak ditemukan viewport di sana.
+	*Cancel*	*Batal*
+	Requires a positive number.	Memerlukan angka positif.
+	No hatch selected.	Tidak ada arsiran yang dipilih.
+	** Command not allowed in Model Tab ** (switch to a layout first)	** Perintah tidak diizinkan di Tab Model ** (beralih ke tata letak terlebih dahulu)
+	Select a multileader.	Pilih multileader.
+	No line or arc to continue.	Tidak ada garis atau busur untuk dilanjutkan.
+	Revision cloud finished.	Awan revisi selesai.
+	Object selected is not a circle or arc.	Objek yang dipilih bukan lingkaran atau busur.
+	Select a linear or aligned dimension.	Pilih dimensi linear atau sejajar.
+	Object selected is not a dimension.	Objek yang dipilih bukan dimensi.
+	No dimensions selected.	Tidak ada dimensi yang dipilih.
+	Requires a number.	Memerlukan angka.
+	0 found	0 ditemukan
+	The feature control frame is empty.	Bingkai kontrol fitur kosong.
+	1 was on a locked layer.	1 berada di lapisan terkunci.
+	Row elevations need an associative array; the copies stay at the same elevation.	Elevasi baris memerlukan larik asosiatif; salinan tetap pada elevasi yang sama.
+	Point or option keyword required.	Memerlukan titik atau kata kunci opsi.
+	Enter Yes or No.	Masukkan Yes atau No.
+	Viewport created, zoomed to the model extents.	Viewport dibuat, di-zoom ke batas penuh model.
+	No object found.	Tidak ditemukan objek.
+	The object is not a table.	Objek bukan tabel.
+	No table there.	Tidak ada tabel di sana.
+	A transparent command is already in progress.	Perintah transparan sedang berjalan.
+	Invalid class name.	Nama kelas tidak valid.
+	Invalid group name.	Nama grup tidak valid.
+	Too many point modifiers.	Terlalu banyak pengubah titik.
+	No leader to remove.	Tidak ada leader untuk dihapus.
+	Requires a non-negative number.	Memerlukan angka non-negatif.
+	Clipboard is empty.	Papan klip kosong.
+	1 object was on a locked layer.	1 objek berada di lapisan terkunci.
+	Circle does not exist.	Lingkaran tidak ada.
+	Enter Length or Area.	Masukkan Length atau Area.
+	Enter a percentage from 0 to 1000.	Masukkan persentase dari 0 sampai 1000.
+	Enter Table, File or None.	Masukkan Table, File, atau None.
+	Cannot measure that object.	Tidak dapat mengukur objek tersebut.
+	Third pair ignored (2D align).	Pasangan ketiga diabaikan (perataan 2D).
+	Insert mode: Copy (nested objects are copied as independent objects).	Mode sisip: Salin (objek bersarang disalin sebagai objek independen).
+	Everything has been undone	Semuanya telah diurungkan
+	Everything has been undone.	Semuanya telah diurungkan.
+	Requires a non-negative number or Auto.	Memerlukan angka non-negatif atau Auto.
+	Select a dimension.	Pilih dimensi.
+	Object cannot be dimensioned this way.	Objek tidak dapat diberi dimensi dengan cara ini.
+	Select an arc, circle or line.	Pilih busur, lingkaran, atau garis.
+	The two points must be different.	Kedua titik harus berbeda.
+	No linear dimension to continue. Create one with DIMLINEAR first.	Tidak ada dimensi linear untuk dilanjutkan. Buat terlebih dahulu dengan DIMLINEAR.
+	A multileader needs a leader line or content; nothing was drawn.	Multileader memerlukan garis leader atau konten; tidak ada yang digambar.
+	Requires the name of a block defined in the drawing.	Memerlukan nama blok yang didefinisikan di gambar.
+	Invalid option.	Opsi tidak valid.
+	The boundary encloses none of the image.	Batas tidak mencakup bagian mana pun dari gambar.
+	The object is not an image.	Objek bukan gambar.
+	The image has no clipping boundary.	Gambar tidak memiliki batas pangkas.
+	No images selected.	Tidak ada gambar yang dipilih.
+	Requires an integer between 0 and 100.	Memerlukan bilangan bulat antara 0 dan 100.
+	The selected object has no area.	Objek yang dipilih tidak memiliki luas.
+	No such object	Objek tidak ada
+	Requires a point.	Memerlukan titik.
+	Requires a distance.	Memerlukan jarak.
+	The object is on a locked layer.	Objek berada di lapisan terkunci.
+	Value must be positive and nonzero.	Nilai harus positif dan bukan nol.
+	Requires an angle.	Memerlukan sudut.
+	Requires a point or option keyword.	Memerlukan titik atau kata kunci opsi.
+	Object does not intersect a cutting edge.	Objek tidak berpotongan dengan tepi potong.
+	Object does not intersect an edge.	Objek tidak berpotongan dengan tepi.
+	Lines are parallel.	Garis-garis sejajar.
+	The Block Editor is not open.	Editor Blok tidak terbuka.
+	Requires a positive integer.	Memerlukan bilangan bulat positif.
+	Answer Yes or No.	Jawab Yes atau No.
+	Requires a valid point.	Memerlukan titik yang valid.
+	No reference objects	Tidak ada objek referensi
+	Requires an angle or point.	Memerlukan sudut atau titik.
+	Requires a positive distance.	Memerlukan jarak positif.
+	Requires a non-negative distance.	Memerlukan jarak non-negatif.
+	No such grip	Grip tidak ada
+	Requires a template file name.	Memerlukan nama berkas templat.
+	A hatch needs at least one boundary: erase it instead.	Arsiran memerlukan setidaknya satu batas: hapus arsiran sebagai gantinya.
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	Urungkan dinonaktifkan (UNDO Control None); UNDO Control All mengaktifkannya.
+	Enter ON or OFF.	Masukkan ON atau OFF.
+	Not a linear dimension.	Bukan dimensi linear.
+	Valid hatch boundary not found.	Batas arsiran yang valid tidak ditemukan.
+	No closed boundary objects selected.	Tidak ada objek batas tertutup yang dipilih.
+	Requires a name.	Memerlukan nama.
+	That option doesn't apply to this grip.	Opsi itu tidak berlaku untuk grip ini.
+	That would make a degenerate object.	Itu akan membuat objek degeneratif.
+	No tangent or perpendicular from the last point.	Tidak ada garis singgung atau tegak lurus dari titik terakhir.
+	Requires numeric distance or second point.	Memerlukan jarak numerik atau titik kedua.
+	Edge endpoints must differ.	Titik ujung tepi harus berbeda.
+	Requires numeric distance or point.	Memerlukan jarak numerik atau titik.
+	Requires a positive height.	Memerlukan tinggi positif.
+	No objects found.	Tidak ditemukan objek.
+	Requires a non-zero number.	Memerlukan angka bukan nol.
+	Circle must intersect cutting edges at two or more points.	Lingkaran harus memotong tepi potong di dua titik atau lebih.
+	Arc cannot be full 360 degrees.	Busur tidak boleh penuh 360 derajat.
+	Cannot break that object.	Tidak dapat mematahkan objek tersebut.
+	An object is on a locked layer.	Ada objek di lapisan terkunci.
+	Objects are not connected.	Objek tidak terhubung.
+	The two points must differ.	Kedua titik harus berbeda.
+	Mirror line points must differ.	Titik garis cermin harus berbeda.
+	No drawing is open.	Tidak ada gambar yang terbuka.
+	Command: {}	Perintah: {}
+	Unknown command "{}". Press F1 for help.	Perintah tidak dikenal "{}". Tekan F1 untuk bantuan.
+	{} found	{} ditemukan
+	{} found, {} total	{} ditemukan, {} total
+	Distance = {}	Jarak = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	Jarak = {},  Sudut pada Bidang XY = {},  Sudut dari Bidang XY = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	Delta X = {},  Delta Y = {},   Delta Z = {}
+	Area = {}, Perimeter = {}	Luas = {}, Keliling = {}
+	Total area = {}	Luas total = {}
+	Resuming {} command.	Melanjutkan perintah {}.
+	Invalid input: {}	Input tidak valid: {}
+	{} were on a locked layer.	{} berada di lapisan terkunci.
+	{} dimension(s) changed.	{} dimensi diubah.
+	Group {} ungrouped.	Grup {} dipisahkan.
+	{} object(s) flattened.	{} objek diratakan.
+	Group {} renamed to {}.	Grup {} diganti namanya menjadi {}.
+	{} object(s) added to group {}.	{} objek ditambahkan ke grup {}.
+	{} object(s) removed from group {}.	{} objek dihapus dari grup {}.
+	{} lines were chamfered	{} garis ditalang
+	{} lines were filleted	{} garis di-fillet
+	{} objects joined into 1 {}	{} objek digabung menjadi 1 {}
+	Current dimension style:  {}	Gaya dimensi saat ini:  {}
+	Wrote {}	Menulis {}
+	{} is already open.	{} sudah terbuka.
+	{} dimension(s) created.	{} dimensi dibuat.
+	BOUNDARY created {} polyline(s)	BOUNDARY membuat {} polilina
+	Current line-width is {}	Lebar garis saat ini adalah {}
+	Unknown variable {}. Type SETVAR ? to list variables.	Variabel tidak dikenal {}. Ketik SETVAR ? untuk menampilkan daftar variabel.
+	{} = {} (read only)	{} = {} (hanya-baca)
+	Dimension text = {}	Teks dimensi = {}
+	{} segments added to polyline	{} segmen ditambahkan ke polilina
