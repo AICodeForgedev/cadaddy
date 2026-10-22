@@ -4,6 +4,25 @@
 //! converted to DXF bytes, which CADaddy's own DXF reader maps to its document model; saving
 //! goes the other way. Keeping the dependency behind this byte-level API isolates it: nothing
 //! else in CADaddy depends on its types. Native targets only (it memory-maps files).
+//!
+//! # Guardrails around the third-party decoder
+//!
+//! The decoder allocates tables and section buffers from sizes a (possibly damaged or hostile)
+//! file declares, and once it starts it cannot be interrupted (an allocation failure aborts the
+//! process, which `catch_unwind` cannot recover). Because the dependency is used unmodified, this
+//! crate guards it from the outside:
+//!
+//! - Both directions reject oversized input *before* the decoder runs ([`Limits::max_dwg_bytes`]
+//!   for DWG→DXF, [`Limits::max_dxf_bytes`] for DXF→DWG), and the DWG→DXF output is capped while
+//!   it is written (`CappedWriter`).
+//! - The reader and writer run inside `catch_unwind`, so a decode failure is reported instead of
+//!   crashing.
+//!
+//! These bound the input- and output-size variants. A small file that declares a huge internal
+//! table or section can still make the dependency allocate before any size is known; fully fixing
+//! that requires an upstream fix in `acadrust` (validate declared sizes against a decoded-memory
+//! budget) or running the decode in a separate worker with an OS memory limit. The limits here
+//! keep the blast radius bounded in the meantime.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -714,6 +733,13 @@ mod native {
     /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
     /// from the (ASCII) DXF.
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, linetypes: Option<&[String]>) -> Result<Vec<u8>, String> {
+        // Reject a pathologically large DXF before handing it to the third-party decoder, which
+        // allocates tables and section buffers from the input's declared sizes and cannot be
+        // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
+        // runs inside `catch_unwind` so a decode failure is reported rather than crashing.
+        if dxf.len() > Limits::DEFAULT.max_dxf_bytes {
+            return Err(format!("DXF: the input is {}, larger than the {} CADaddy converts to DWG", mb(dxf.len() as u64), mb(Limits::DEFAULT.max_dxf_bytes as u64)));
+        }
         let read = |dxf: &[u8]| {
             let data = dxf.to_vec();
             std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
