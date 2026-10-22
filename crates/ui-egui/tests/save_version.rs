@@ -17,7 +17,7 @@ fn with_options(_: &Drawing, _: &str, o: &SaveAs) -> Result<Vec<u8>, String> {
 
 #[test]
 fn default_save_version_applies_to_new_drawings_and_persists() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"plain".to_vec()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"plain".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     set_write_as(with_options);
     let services = Services { pick_save: Some(Box::new(|_: &str| Some(picked().to_string_lossy().to_string()))), ..Services::default() };
     let mut app = CadApp::new(Session::new(), services);

@@ -22,7 +22,7 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl", "ifc", "3mf"];
+pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl", "ifc", "3mf", "dwfx", "dwf"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("attach", "Attach", run_attach)
             .params(
-                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. A PDF attaches as an underlay (PDFATTACH); DWF and DGN files need readers CADaddy doesn't have",
+                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. A PDF attaches as an underlay (PDFATTACH); a DWF/DWFx attaches as an underlay (DWFATTACH). DGN files need a reader CADaddy doesn't have",
             )
             .interactive(|_| Ok(Box::new(AttachM::default()))),
         CommandSpec::new("share", "Share", |_, _| {
@@ -97,10 +97,11 @@ fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
         "png" | "jpg" | "jpeg" => "imageattach",
         "cdy" | "dwg" | "dxf" => "xattach",
         "pdf" => "pdfattach",
-        "dwf" | "dwfx" | "dgn" => {
+        "dwf" | "dwfx" => "dwfattach",
+        "dgn" => {
             return Err(bad(
                 "attach",
-                "DWF and DGN underlays need DWF/DGN readers, which CADaddy doesn't have; attach a PDF, image or drawing instead",
+                "DGN underlays need a DGN reader, which CADaddy doesn't have; attach a PDF, DWF, image or drawing instead",
             ));
         }
         other => {
@@ -269,7 +270,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     if !EXPORT_FORMATS.contains(&format.as_str()) {
         return Err(bad(
             "export",
-            "`format` must be cdy, dxf, dwg, svg, png, pdf, eps, wmf, glb, gltf, obj, stl, ifc or 3mf (or give a `path` with one of those extensions)",
+            "`format` must be cdy, dxf, dwg, svg, png, pdf, eps, wmf, glb, gltf, obj, stl, ifc, 3mf, dwfx or dwf (or give a `path` with one of those extensions)",
         ));
     }
     // A PNG of model space shown in 3D or in a visual style: the shaded view, fitted.
@@ -941,7 +942,7 @@ mod tests {
             read: |_, _| Err("no reader in tests".into()),
             write: |d, name| Ok(if name == "probe.test" { b"exchange".to_vec() } else { format!("{name}:{}", d.model.len()).into_bytes() }),
             plot: Some(fake_plot),
-            read_pdf: None,
+            read_pdf: None, read_dwf: None, write_dwfx: None,
         });
         io().is_some_and(|h| (h.write)(&Drawing::new_imperial(), "probe.test").is_ok_and(|b| b == b"exchange"))
     }

@@ -34,6 +34,10 @@ pub enum PlotOutput {
     #[serde(alias = "tiff")]
     Tif,
     Bmp,
+    /// DWFx (XPS/ECMA-388) vector output.
+    Dwfx,
+    /// DWF 6 (W2D streams in a zip) vector output.
+    Dwf,
 }
 
 impl PlotOutput {
@@ -46,9 +50,11 @@ impl PlotOutput {
             PlotOutput::Jpg => "jpg",
             PlotOutput::Tif => "tif",
             PlotOutput::Bmp => "bmp",
+            PlotOutput::Dwfx => "dwfx",
+            PlotOutput::Dwf => "dwf",
         }
     }
-    /// Parse `pdf`, `png`, `svg`, `jpg`/`jpeg`, `tif`/`tiff` or `bmp` (any case).
+    /// Parse `pdf`, `png`, `svg`, `jpg`/`jpeg`, `tif`/`tiff`, `bmp`, `dwfx` or `dwf` (any case).
     pub fn parse(s: &str) -> Option<PlotOutput> {
         match s.trim().to_ascii_lowercase().as_str() {
             "pdf" => Some(PlotOutput::Pdf),
@@ -57,6 +63,8 @@ impl PlotOutput {
             "jpg" | "jpeg" => Some(PlotOutput::Jpg),
             "tif" | "tiff" => Some(PlotOutput::Tif),
             "bmp" => Some(PlotOutput::Bmp),
+            "dwfx" => Some(PlotOutput::Dwfx),
+            "dwf" => Some(PlotOutput::Dwf),
             _ => None,
         }
     }

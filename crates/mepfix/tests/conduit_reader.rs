@@ -61,7 +61,7 @@ fn read_conduit_build_clash_and_export() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let (t, r) = conduit_reader::read_fixture_conduits(3).unwrap();
     let names: Vec<(&str, &str)> = t.building.levels.iter().map(|l| (l.code.as_str(), l.name.as_str())).collect();

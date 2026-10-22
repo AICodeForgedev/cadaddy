@@ -238,7 +238,7 @@ fn agent_manages_drawings_without_losing_work() {
     // A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
     // doesn't depend on the real readers; the CLI installs them).
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "circle 0,0 5"}));
     let docs = tool(&mut s, "list_drawings", json!({}));

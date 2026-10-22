@@ -33,7 +33,7 @@ fn a_folder_is_plotted_from_the_publish_dialog() {
         },
         write: |_, name| Ok(name.as_bytes().to_vec()),
         plot: Some(|_, _, opts| Ok(format!("%PDF {opts}").into_bytes())),
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let services = Services { pick_folder: Some(Box::new(|| Some(folder().to_string_lossy().into_owned()))), ..Services::default() };
     let mut app = CadApp::new(Session::new(), services);

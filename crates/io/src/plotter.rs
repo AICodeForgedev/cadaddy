@@ -52,6 +52,8 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
         None | Some("pdf") => pdf::plot(d, space, opts),
         Some(f) if cadaddy_render::encode::Format::parse(f).is_some() => png(d, space, opts),
         Some("svg") => svg(d, space, opts),
+        Some("dwfx") => crate::dwfx::export(d, space),
+        Some("dwf") => crate::dwfx::export_dwf6(d, space),
         Some(other) => Err(IoError::Unsupported(other.to_string())),
     }
 }
@@ -240,7 +242,7 @@ mod tests {
         let svg = String::from_utf8(plot(&d, &layout, &json!({"output": "svg"})).unwrap()).unwrap();
         assert!(svg.starts_with("<svg"));
         assert!(plot(&d, &layout, &json!({"output": "png", "resolution": f64::NAN, "margins": [1, 2, 3]})).is_ok());
-        assert!(plot(&d, &Space::Model, &json!({"output": "dwf"})).is_err());
+        assert!(plot(&d, &Space::Model, &json!({"output": "dwf"})).is_ok(), "DWF plot is now supported");
         assert!(plot(&d, &Space::Model, &json!({})).unwrap().starts_with(b"%PDF"));
     }
 

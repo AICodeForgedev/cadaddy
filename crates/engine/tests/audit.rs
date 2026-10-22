@@ -269,7 +269,7 @@ fn read_corrupt(_: &[u8], name: &str) -> Result<Drawing, String> {
 
 #[test]
 fn recover_opens_the_file_with_the_fixes_applied() {
-    set_io(IoHooks { read: read_corrupt, write: |_, _| Ok(Vec::new()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: read_corrupt, write: |_, _| Ok(Vec::new()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let mut s = Session::new();
     let r = s.execute("recover", &json!({"data": base64_encode(b"0\nEOF\n"), "name": "plan.dxf"})).unwrap();
     assert_eq!(r["errors"], 2, "{r:#}");

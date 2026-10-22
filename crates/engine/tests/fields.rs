@@ -60,7 +60,7 @@ fn plot_and_save_dates_follow_fieldeval() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let dir = std::env::temp_dir().join(format!("cadaddy-fields-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -341,7 +341,7 @@ fn fields_survive_a_dwg_round_trip() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
     let (date, shown) = field(&mut s, json!({ "field": "date", "format": "yyyy-MM-dd", "at": [0, 0] }));
     let (file, _) = field(&mut s, json!({ "field": "filename", "at": [0, 5] }));

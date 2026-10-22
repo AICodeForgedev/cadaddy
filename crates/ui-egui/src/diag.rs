@@ -712,7 +712,7 @@ mod tests {
             read: |_, _| Err("not in this test".into()),
             write: |_, _| Ok(b"0\nSECTION\n".to_vec()),
             plot: None,
-            read_pdf: None,
+            read_pdf: None, read_dwf: None, write_dwfx: None,
         });
         let with = Choices { file: true, ..Choices::default() };
         let listed: Vec<String> = file_list(&app, with).into_iter().map(|(n, _)| n).collect();

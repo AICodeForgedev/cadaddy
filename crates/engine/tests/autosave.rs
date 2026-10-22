@@ -297,7 +297,7 @@ fn hooks() {
         read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
         write: |_, _| Ok(b"0\nSECTION\n0\nENDSEC\n0\nEOF\n".to_vec()),
         plot: None,
-        read_pdf: None,
+        read_pdf: None, read_dwf: None, write_dwfx: None,
     });
 }
 

@@ -107,7 +107,7 @@ fn group_from_a_script_and_nested_begin() {
 
 #[test]
 fn saving_closes_an_open_group() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None });
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let mut s = Session::new();
     let depth = s.state().unwrap().undo.len();
     s.execute("undo", &json!({ "mode": "begin" })).unwrap();

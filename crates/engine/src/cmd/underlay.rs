@@ -40,6 +40,20 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles?, fade?: 0-80, contrast?: 20-100, monochrome?: bool} → {fade, contrast, monochrome}"),
         CommandSpec::new("pdflayers", "PDF Underlay Layers", run_layers)
             .params("{handle?, off?: [layer], on?: [layer]} → {layers: [{name, on}]}: the page's layers"),
+        CommandSpec::new("dwfattach", "DWF Underlay...", run_dwf_attach)
+            .menu(&["Insert", "DWF Underlay..."])
+            .params("{path, page?: 1, at?: [x,y] (default 0,0), scale?: 1 (drawing units per sheet inch), rotation?: degrees, name?} → {handle, size: [w,h] sheet inches, layers}")
+            .interactive(|_| Ok(Box::new(DwfAttachM::default()))),
+        CommandSpec::new("dwfout", "DWF Out", run_dwfout)
+            .menu(&["File", "Export", "DWF..."])
+            .alias(&["dwf"])
+            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model)} → {format: \"dwf\", path? | data}")
+            .noundo(),
+        CommandSpec::new("dwfxout", "DWFx Out", run_dwfxout)
+            .menu(&["File", "Export", "DWFx..."])
+            .alias(&["dwfx"])
+            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order)} → {format: \"dwfx\", path? | data, pages}")
+            .noundo(),
     ]
 }
 
@@ -353,6 +367,229 @@ impl Interactive for AttachM {
         };
         let p = json!({ "path": self.path, "page": self.page, "at": [at.x, at.y], "scale": self.scale, "rotation": rot });
         run_attach(s, &p)?;
+        Ok(Step::Done)
+    }
+}
+
+// ---------- DWF/DWFx underlay and export ----------
+
+/// DWFATTACH: place a page of a DWF or DWFx file as an underlay.
+fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path")
+        .map(|t| t.trim().trim_matches('"').to_string())
+        .ok_or_else(|| bad("dwfattach", "`path` is required"))?;
+    let page = p
+        .get("page")
+        .and_then(Value::as_u64)
+        .map(|n| u32::try_from(n.clamp(1, 100_000)).unwrap_or(1))
+        .unwrap_or(1);
+    let at = point_param(p, "at").unwrap_or(Vec2::ZERO);
+    let scale = f64_or(p, "scale", 1.0);
+    if !(scale.is_finite() && scale > 0.0 && scale < 1e9) {
+        return Err(bad("dwfattach", "`scale` must be a positive number"));
+    }
+    let rot = f64_or(p, "rotation", 0.0).to_radians();
+    if !rot.is_finite() || !at.is_finite() {
+        return Err(bad("dwfattach", "`at` and `rotation` must be finite"));
+    }
+
+    let bytes = read_bytes(&path)?;
+    let d = read_dwf_page(&bytes, &path, page)?;
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    let size = if !ext.is_empty() { ext.max } else { Vec2::new(8.5, 11.0) };
+    let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
+
+    // Cache the page like PDF underlays do.
+    if let Ok(mut g) = PAGES.lock() {
+        g.get_or_insert_with(HashMap::new).insert((path.clone(), page), Some(Arc::new(d)));
+    }
+
+    let (sn, cs) = rot.sin_cos();
+    let u = Underlay {
+        insert: at.to3(0.0),
+        u: Vec3::new(cs * scale, sn * scale, 0.0),
+        v: Vec3::new(-sn * scale, cs * scale, 0.0),
+        size,
+        path: path.clone(),
+        page,
+        name: str_param(p, "name").unwrap_or("").to_string(),
+        clip: Vec::new(),
+        clipping: false,
+        fade: 25,
+        contrast: 20,
+        monochrome: false,
+        layers_off: Vec::new(),
+    };
+    let h = s.add_entity(EntityKind::Underlay(u))?;
+    Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "layers": layers }))
+}
+
+/// Read a DWF/DWFx page: try DWFx (XPS) first, then DWF6.
+fn read_dwf_page(bytes: &[u8], path: &str, page: u32) -> Result<Drawing> {
+    let hooks = super::file::io().ok_or_else(|| bad("dwfattach", "file formats are not available in this build"))?;
+    // The read_dwf hook decodes a DWFx or DWF page from the raw file bytes.
+    let read = hooks.read_dwf.ok_or_else(|| bad("dwfattach", "DWF reading is not available in this build"))?;
+    read(bytes, page).map_err(|e| bad("dwfattach", format!("{path}: {e}")))
+}
+
+/// DWFOUT: export model space as DWF 6.
+fn run_dwfout(s: &mut Session, p: &Value) -> Result<Value> {
+    let hooks = super::file::io().ok_or_else(|| bad("dwfout", "file formats are not available in this build"))?;
+    let bytes = (hooks.write)(s.doc()?, "export.dwf").map_err(|e| bad("dwfout", e))?;
+    match str_param(p, "path") {
+        Some(path) => {
+            super::exchange::write_file("dwfout", path, &bytes)?;
+            Ok(json!({ "format": "dwf", "path": path, "bytes": bytes.len() }))
+        }
+        None => Ok(json!({ "format": "dwf", "data": super::file::base64_encode(&bytes), "bytes": bytes.len() })),
+    }
+}
+
+/// DWFXOUT: export as DWFx (multi-sheet).
+fn run_dwfxout(s: &mut Session, p: &Value) -> Result<Value> {
+    let hooks = super::file::io().ok_or_else(|| bad("dwfxout", "file formats are not available in this build"))?;
+    let d = s.doc()?;
+
+    // Collect spaces to export.
+    let spaces: Vec<cadaddy_doc::Space> = match p.get("layouts") {
+        Some(v) => {
+            let a = v
+                .as_array()
+                .ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
+            a.iter()
+                .map(|n| {
+                    let n = n
+                        .as_str()
+                        .ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
+                    if n.eq_ignore_ascii_case("model") {
+                        return Ok(cadaddy_doc::Space::Model);
+                    }
+                    d.layout(n)
+                        .map(|l| cadaddy_doc::Space::Paper(l.name.clone()))
+                        .ok_or_else(|| bad("dwfxout", format!("no layout `{n}`")))
+                })
+                .collect::<Result<_>>()?
+        }
+        None => {
+            let mut out = Vec::new();
+            if !d.model.is_empty() {
+                out.push(cadaddy_doc::Space::Model);
+            }
+            let mut layouts: Vec<_> = d.layouts.iter().collect();
+            layouts.sort_by_key(|l| l.tab_order);
+            for l in layouts {
+                out.push(cadaddy_doc::Space::Paper(l.name.clone()));
+            }
+            if out.is_empty() {
+                out.push(cadaddy_doc::Space::Model);
+            }
+            out
+        }
+    };
+
+    let pages = spaces.len();
+    let write_dwfx = hooks.write_dwfx.ok_or_else(|| bad("dwfxout", "DWFx writing is not available in this build"))?;
+    let bytes = write_dwfx(d, &spaces).map_err(|e| bad("dwfxout", e))?;
+
+    match str_param(p, "path") {
+        Some(path) => {
+            super::exchange::write_file("dwfxout", path, &bytes)?;
+            Ok(json!({ "format": "dwfx", "path": path, "pages": pages, "bytes": bytes.len() }))
+        }
+        None => Ok(json!({ "format": "dwfx", "data": super::file::base64_encode(&bytes), "pages": pages, "bytes": bytes.len() })),
+    }
+}
+
+/// DWFATTACH interactive: file, page, insertion point, scale, rotation.
+#[derive(Default)]
+struct DwfAttachM {
+    path: Option<String>,
+    page: Option<u32>,
+    at: Option<Vec2>,
+    scale: Option<f64>,
+}
+
+impl Interactive for DwfAttachM {
+    fn name(&self) -> &'static str {
+        "DWFATTACH"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match (&self.path, self.page, self.at, self.scale) {
+            (None, ..) => Prompt::new("Enter path of DWF/DWFx file to attach", Accept::TEXT),
+            (Some(_), None, ..) => Prompt::new("Enter page number", Accept::NUMBER).default("1"),
+            (Some(_), Some(_), None, _) => Prompt::new("Specify insertion point", Accept::POINT),
+            (_, _, Some(_), None) => Prompt::new("Specify scale factor", Accept::NUMBER).default("1"),
+            (_, _, Some(a), Some(_)) => {
+                Prompt::new("Specify rotation", Accept::POINT_OR_NUMBER).default("0").base(a)
+            }
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if i == Input::Cancel {
+            return Ok(Step::Cancel);
+        }
+        if self.path.is_none() {
+            let t = match i {
+                Input::Text(t) => t,
+                Input::Enter => return Ok(Step::Cancel),
+                _ => return Ok(Step::Continue),
+            };
+            let t = t.trim().trim_matches('"').to_string();
+            if t.is_empty() {
+                return Ok(Step::Cancel);
+            }
+            self.path = Some(t);
+            return Ok(Step::Continue);
+        }
+        let number = |i: &Input| match i {
+            Input::Text(t) => t.trim().parse::<f64>().ok(),
+            _ => None,
+        };
+        if self.page.is_none() {
+            let n = match i {
+                Input::Enter => 1.0,
+                Input::Text(_) => {
+                    number(&i).ok_or_else(|| bad("dwfattach", "Requires a page number of 1 or more."))?
+                }
+                _ => return Ok(Step::Continue),
+            };
+            if !(1.0..=100_000.0).contains(&n) {
+                return Err(bad("dwfattach", "Requires a page number of 1 or more."));
+            }
+            self.page = Some(n.round() as u32);
+            return Ok(Step::Continue);
+        }
+        if self.at.is_none() {
+            if let Input::Point(p) = i {
+                self.at = Some(p);
+            }
+            return Ok(Step::Continue);
+        }
+        if self.scale.is_none() {
+            let k = match i {
+                Input::Enter => 1.0,
+                Input::Text(_) => number(&i)
+                    .filter(|n| n.is_finite() && *n > 0.0)
+                    .ok_or_else(|| bad("dwfattach", "Requires a positive scale factor."))?,
+                _ => return Ok(Step::Continue),
+            };
+            self.scale = Some(k);
+            return Ok(Step::Continue);
+        }
+        let at = self.at.unwrap_or(Vec2::ZERO);
+        let rot = match i {
+            Input::Enter => 0.0,
+            Input::Text(_) => {
+                number(&i).filter(|a| a.is_finite()).ok_or_else(|| bad("dwfattach", "Requires an angle."))?
+            }
+            Input::Point(q) => (q - at).angle().to_degrees(),
+            _ => return Ok(Step::Continue),
+        };
+        let p = json!({
+            "path": self.path, "page": self.page,
+            "at": [at.x, at.y], "scale": self.scale, "rotation": rot
+        });
+        run_dwf_attach(s, &p)?;
         Ok(Step::Done)
     }
 }

@@ -32,11 +32,21 @@ pub struct IoHooks {
     pub plot: Option<PlotHook>,
     /// PDFIMPORT: one page of a PDF as a drawing, with JSON options, and a report (optional).
     pub read_pdf: Option<PdfHook>,
+    /// DWFATTACH: read one page of a DWF/DWFx file as a drawing in sheet inches (optional).
+    pub read_dwf: Option<DwfReadHook>,
+    /// DWFXOUT: export multiple spaces as a DWFx package (optional).
+    pub write_dwfx: Option<DwfxWriteHook>,
 }
 
 /// Read a PDF page with JSON options (`{page?, scale?, layers?, whiteFills?, text?, join?,
 /// layout?}`) → the drawing and a report (scale used, counts, notes).
 pub type PdfHook = fn(&[u8], &Value) -> std::result::Result<(Drawing, Value), String>;
+
+/// Read one page (1-based) of a DWF or DWFx file as a drawing in sheet inches.
+pub type DwfReadHook = fn(&[u8], u32) -> std::result::Result<Drawing, String>;
+
+/// Write multiple spaces of a drawing as a DWFx (XPS) package.
+pub type DwfxWriteHook = fn(&Drawing, &[cadaddy_doc::Space]) -> std::result::Result<Vec<u8>, String>;
 
 static IO: OnceLock<IoHooks> = OnceLock::new();
 
