@@ -863,16 +863,28 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
     out
 }
 
-/// Parameters every command takes: the objects it works on, and the agent rails' own.
-const ALWAYS_PARAMS: [&str; 2] = ["handle", "handles"];
+/// Parameters every command takes: the objects it works on, and the agent rails' own
+/// (`confirmed`: an agent claiming the user's answer gets "Waiting for the user", not a refusal).
+const ALWAYS_PARAMS: [&str; 3] = ["handle", "handles", "confirmed"];
 
 /// Whether a command's documentation leaves its parameters open: `<style fields or DIM*
-/// variables…>`, `…: any profile variable` or `...the parameters of arrayrect` stand for more
-/// names than it lists.
+/// variables…>`, `…: any profile variable` or `...the parameters of arrayrect` at the top level
+/// of a parameter list stand for more names than it lists. One inside a nested `{…}` or `[…]`
+/// (`shade?: {…}`, `points: [[x,y]…]`) is that value's, not the command's.
 fn open_params(doc: &str) -> bool {
-    let Some((_, inner)) = doc.split_once('{') else { return false };
-    let inner = inner.split('→').next().unwrap_or(inner);
-    (inner.contains('<') && inner.contains('>')) || inner.contains('…') || inner.contains("...")
+    let doc = doc.split('→').next().unwrap_or(doc);
+    let mut depth = 0usize;
+    let mut chars = doc.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth = depth.saturating_sub(1),
+            '…' | '<' if depth == 1 => return true,
+            '.' if depth == 1 && chars.peek() == Some(&'.') => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
@@ -883,6 +895,12 @@ fn params_doc(spec: &CommandSpec) -> &'static str {
         Some(other) if other.id != spec.id => other.params,
         _ => doc,
     }
+}
+
+/// Whether `spec` takes parameters beyond the ones its documentation names (its doc leaves them
+/// open), so that an agent's unknown ones aren't refused.
+pub fn takes_open_params(spec: &CommandSpec) -> bool {
+    open_params(params_doc(spec))
 }
 
 /// The parameters given that `spec` doesn't take (none when its documentation lists none, or

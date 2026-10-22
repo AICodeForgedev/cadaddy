@@ -75,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("ai_deselect", "Deselect All", run_deselect).params("{}").noundo(),
         CommandSpec::new("select", "Select", run_select)
             .params(
-                "{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {lasso: [[x,y],...], mode?: \"window\"|\"crossing\"|\"fence\" (default: rightward window, leftward crossing)} | {at: [x,y], cycle?: n (the nth of the overlapping objects there, nearest first; the reply lists them as candidates)} | {fence: [[x,y],...]} | {class: \"LINE,AcDbCircle,*Text\" (classes, DXF types or type names, wildcards)} | {all: true} | {clear: true} | {add?: bool}",
+                "{handles: [hex]} | {window: [[x,y],[x,y]], crossing?: bool} | {lasso: [[x,y],...], mode?: \"window\"|\"crossing\"|\"fence\" (default: rightward window, leftward crossing)} | {at: [x,y], aperture?: how far from it a pick reaches (drawing units; default the pickbox), cycle?: n (the nth of the overlapping objects there, nearest first; the reply lists them as candidates)} | {fence: [[x,y],...]} | {class: \"LINE,AcDbCircle,*Text\" (classes, DXF types or type names, wildcards)} | {all: true} | {clear: true} | {add?: bool}",
             )
             .noundo()
             .interactive(|_| Ok(Box::new(SelectM::default()))),
