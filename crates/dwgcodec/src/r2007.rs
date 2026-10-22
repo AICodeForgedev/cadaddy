@@ -183,7 +183,7 @@ pub(crate) fn read(bytes: &[u8], limits: &Limits) -> Result<Dwg> {
         if d.encryption == 1 {
             return Err(Error::Unsupported(format!("encrypted DWG sections ({})", d.name)));
         }
-        let mut out = vec![0u8; data_size];
+        let mut out = crate::dwg::Assembly::new(data_size);
         let mut first = u64::MAX;
         for _ in 0..npages {
             let w = |k: usize| u64_at(&sm, p + 8 * k);
@@ -194,13 +194,10 @@ pub(crate) fn read(bytes: &[u8], limits: &Limits) -> Result<Dwg> {
             p += 56;
             first = first.min(id);
             let content = data_page(bytes, page_at(id)?, csize, usize_, d.encoding)?;
-            let n = content.len().min(data_size - start);
-            if let (Some(slot), Some(src)) = (out.get_mut(start..start + n), content.get(..n)) {
-                slot.copy_from_slice(src);
-            }
+            out.place(start, &content)?;
         }
         descs.push(d);
-        contents.push(out);
+        contents.push(out.finish()?);
         first_page.push(first);
     }
     let mut stream: Vec<usize> = (0..descs.len()).collect();
@@ -588,5 +585,54 @@ mod tests {
     fn system_page_sizes_follow_the_spec() {
         assert_eq!(system_page_size(0x110), 0x400);
         assert_eq!(system_page_size(0x704), 0x1000);
+    }
+
+    /// A new R2007 file whose section map claims `claimed` bytes for every section (the map is
+    /// stored uncompressed, so it is encoded again at the same size and address).
+    fn with_section_sizes(claimed: Option<u64>) -> Vec<u8> {
+        let v = Version::R2007;
+        let hv = crate::header::HeaderVars::defaults(v);
+        let classes = crate::classes::Classes::new(v, Vec::new());
+        let dwg = Dwg::new(v, &hv, &classes, Vec::new()).expect("a new file");
+        let mut bytes = crate::write(&dwg).expect("written");
+        let h = file_header(&bytes).expect("file header");
+        let f = |at: usize| u64_at(&h, at).expect("field") as usize;
+        let mut pages = std::collections::HashMap::new();
+        let pm = system_page(&bytes, PAGES_AT + f(0x38), f(0x50), f(0x58), f(0x18) as u64).expect("page map");
+        let mut offset = 0;
+        for pair in pm.as_chunks::<16>().0 {
+            let size = u64_at(pair, 0).expect("size") as usize;
+            pages.insert(u64_at(pair, 8).expect("id"), PAGES_AT + offset);
+            offset += size;
+        }
+        let at = pages[&(f(0xC0) as u64)];
+        let mut sm = system_page(&bytes, at, f(0xB0), f(0xC8), f(0xD8) as u64).expect("section map");
+        let mut p = 0;
+        while p + 64 <= sm.len() {
+            let name_len = u64_at(&sm, p + 32).expect("name length") as usize;
+            let npages = u64_at(&sm, p + 56).expect("page count") as usize;
+            if let Some(c) = claimed {
+                sm[p..p + 8].copy_from_slice(&c.to_le_bytes());
+            }
+            p += 64 + name_len + 56 * npages;
+        }
+        let (page, factor, _) = encode_system_page(&sm, &Code::system(), &mut Random::new(0));
+        assert_eq!(factor, f(0xD8) as u64, "same repeat count");
+        bytes[at..at + page.len()].copy_from_slice(&page);
+        bytes
+    }
+
+    #[test]
+    fn section_sizes_without_pages_are_refused_before_allocating() {
+        // Every section claims 1 GiB (the per-section cap) while its pages hold a few bytes.
+        let start = std::time::Instant::now();
+        let r = crate::read(&with_section_sizes(Some(1 << 30)));
+        assert!(matches!(r, Err(Error::Corrupt(_))), "{:?}", r.as_ref().err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn re_encoded_section_map_still_reads() {
+        assert!(crate::read(&with_section_sizes(None)).is_ok());
     }
 }

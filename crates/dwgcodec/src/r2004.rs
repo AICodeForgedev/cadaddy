@@ -355,7 +355,7 @@ pub(crate) fn read(bytes: &[u8], version: Version, limits: &Limits) -> Result<Dw
         if d.encrypted == 1 {
             return Err(Error::Unsupported(format!("encrypted DWG sections ({})", d.name())));
         }
-        let mut out = vec![0u8; size];
+        let mut out = crate::dwg::Assembly::new(size);
         for &(id, _, start) in &d.pages {
             let at = *address_of.get(&id).ok_or_else(|| corrupt("a section page not in the page map"))?;
             let (h, data) = data_page(bytes, at)?;
@@ -365,12 +365,9 @@ pub(crate) fn read(bytes: &[u8], version: Version, limits: &Limits) -> Result<Dw
             let content = if d.compressed == 2 { lz77::decompress(data, d.max_size as usize)? } else { data.to_vec() };
             let start = usize::try_from(start).map_err(|_| corrupt("a page start"))?;
             // A page holds at most the section's remaining bytes (spec §4.5).
-            let n = content.len().min(size.saturating_sub(start));
-            if let Some(slot) = out.get_mut(start..start + n) {
-                slot.copy_from_slice(&content[..n]);
-            }
+            out.place(start, &content)?;
         }
-        contents.push(out);
+        contents.push(out.finish()?);
     }
     let original = contents.iter().map(|c| (c.len(), crc32(0, c))).collect();
 
@@ -813,4 +810,61 @@ pub(crate) fn fresh_maintenance(version: Version) -> u8 {
 /// Whether a new file of `version` has the second size field in its header and classes sections.
 pub(crate) fn fresh_has_hi(version: Version) -> bool {
     has_hi(version, fresh_maintenance(version))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A new R2004 file whose section map is rewritten by `edit` (the map page is compressed and
+    /// checksummed again, so only the claims inside it are hostile).
+    fn with_section_map(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+        let v = Version::R2004;
+        let hv = crate::header::HeaderVars::defaults(v);
+        let classes = crate::classes::Classes::new(v, Vec::new());
+        let dwg = Dwg::new(v, &hv, &classes, Vec::new()).expect("a new file");
+        let mut bytes = crate::write(&dwg).expect("written");
+        let data: Vec<u8> = bytes[0x80..0x80 + HEADER_DATA_LEN].iter().zip(magic(HEADER_DATA_LEN)).map(|(a, b)| a ^ b).collect();
+        let Ok(AnyLayout::R2004(l)) = crate::read(&bytes).map(|d| d.layout) else { panic!("an R2004 layout") };
+        let map_id = u32_at(&data, 0x5C).expect("map id") as i32;
+        let mut at = 0x100;
+        let mut extent = 0;
+        for p in &l.pages {
+            if p.id == map_id {
+                extent = p.bytes.len();
+                break;
+            }
+            at += p.bytes.len();
+        }
+        let mut content = l.section_map_content.clone();
+        edit(&mut content);
+        let page = pad(make_system_page(SECTION_MAP, &content).expect("compressed"));
+        assert!(page.len() <= extent, "the rewritten map fits its page");
+        bytes[at..at + page.len()].copy_from_slice(&page);
+        bytes
+    }
+
+    #[test]
+    fn section_sizes_without_pages_are_refused_before_allocating() {
+        // Every section claims 1 GiB (the per-section cap) while its pages hold a few bytes: a
+        // file of a few kilobytes asked for gigabytes of zeroed memory and a CRC over all of it.
+        let bytes = with_section_map(|m| {
+            let count = u32_at(m, 0).expect("count") as usize;
+            let mut p = 20;
+            for _ in 0..count {
+                let pages = u32_at(m, p + 8).expect("pages") as usize;
+                put_u64(m, p, 1 << 30);
+                p += 96 + 16 * pages;
+            }
+        });
+        let start = std::time::Instant::now();
+        let r = crate::read(&bytes);
+        assert!(matches!(r, Err(Error::Corrupt(_))), "{:?}", r.as_ref().err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn untouched_section_map_still_reads() {
+        assert!(crate::read(&with_section_map(|_| {})).is_ok());
+    }
 }

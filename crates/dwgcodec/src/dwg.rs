@@ -4,6 +4,60 @@ use crate::frame::Framed;
 use crate::objects::RawObject;
 use crate::{Error, Limits, Result, Version, r2000, r2004, r2007};
 
+/// Most bytes of a section that no page fills (left as zeros). A section map states each
+/// section's size; without this a file of a few kilobytes could claim gigabytes its pages don't
+/// hold.
+const MAX_UNBACKED: usize = 1 << 20;
+
+/// A section of a stated size put together from its pages (R2004+, R2007): it grows only as far
+/// as the pages fill it, plus at most [`MAX_UNBACKED`] bytes of zeros.
+pub(crate) struct Assembly {
+    size: usize,
+    out: Vec<u8>,
+    unbacked: usize,
+}
+
+impl Assembly {
+    pub(crate) fn new(size: usize) -> Assembly {
+        Assembly { size, out: Vec::new(), unbacked: 0 }
+    }
+
+    /// Grows the section to `len` bytes (at most its size) with zeros counted as unbacked.
+    fn grow(&mut self, len: usize) -> Result<()> {
+        let len = len.min(self.size);
+        if len > self.out.len() {
+            self.unbacked = self.unbacked.saturating_add(len - self.out.len());
+            if self.unbacked > MAX_UNBACKED {
+                return Err(crate::error::corrupt(format!("a section of {} bytes whose pages hold far less", self.size)));
+            }
+            self.out.resize(len, 0);
+        }
+        Ok(())
+    }
+
+    /// Copies a page's `content` to `start` (what is past the section's size is dropped).
+    pub(crate) fn place(&mut self, start: usize, content: &[u8]) -> Result<()> {
+        if start >= self.size {
+            return Ok(());
+        }
+        let n = content.len().min(self.size - start);
+        self.grow(start)?;
+        if start + n > self.out.len() {
+            self.out.resize(start + n, 0);
+        }
+        if let (Some(slot), Some(src)) = (self.out.get_mut(start..start + n), content.get(..n)) {
+            slot.copy_from_slice(src);
+        }
+        Ok(())
+    }
+
+    /// The section at its stated size.
+    pub(crate) fn finish(mut self) -> Result<Vec<u8>> {
+        self.grow(self.size)?;
+        Ok(self.out)
+    }
+}
+
 /// A section kept as raw bytes (one this layer does not interpret).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
