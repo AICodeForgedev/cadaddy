@@ -168,7 +168,7 @@ fn hostile_names_and_values_are_refused() {
     assert_eq!(r["name"], "../../etc/passwd", "the name is kept; only the file name is cleaned");
     for p in [
         json!({"action": "new", "name": ""}),
-        json!({"action": "new", "name": "x", "output": "dwf"}),
+        json!({"action": "new", "name": "x", "output": "hpgl"}),
         json!({"action": "new", "name": "y", "resolution": 1e12}),
         json!({"action": "set", "name": "../../etc/passwd", "paper": {"name": "p", "width": f64::MAX, "height": 1}}),
         json!({"action": "set", "name": "../../etc/passwd", "paper": {"name": "p", "width": -1, "height": 1}}),

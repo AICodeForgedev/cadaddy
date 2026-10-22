@@ -794,6 +794,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                     .into(),
             ),
         },
+        // From the menu: where to save, then the export (without a path the command returns the bytes).
+        "dwfout" | "dwfxout" if params.is_null() => {
+            let (default, name) = if id == "dwfout" { ("drawing.dwf", "DWFOUT") } else { ("drawing.dwfx", "DWFXOUT") };
+            match app.services.pick_save.as_ref().map(|p| p(default)) {
+                Some(Some(path)) => app.run(id, json!({ "path": path })),
+                Some(None) => Ok(Value::Null),
+                None => Err(format!("{name}: there is no file dialog here; run it with parameters, e.g. {id} {{\"path\": \"{default}\"}}")),
+            }
+        }
         "bcf.export" if params.is_null() => match app.services.pick_save.as_ref().map(|p| p("issues.bcf")) {
             Some(Some(path)) => app.run("bcf.export", json!({ "path": path })),
             Some(None) => Ok(Value::Null),

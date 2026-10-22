@@ -1170,7 +1170,7 @@ mod tests {
         // 8 units wide, 4 high (square pixels), lower-left corner at the point.
         assert!((im.u.x * im.size.x - 8.0).abs() < 1e-9 && (im.v.y * im.size.y - 4.0).abs() < 1e-9, "{im:?}");
         assert_eq!((im.insert.x, im.insert.y, im.name.as_str()), (10.0, 5.0, "photo"));
-        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "DWF/DGN readers"), ("notes.txt", "can't be attached")] {
+        for (p, says) in [("plan.pdf", "pdfattach"), ("a.dgn", "DGN reader"), ("notes.txt", "can't be attached")] {
             let e = s.execute("attach", &json!({ "path": p })).unwrap_err().to_string();
             assert!(e.contains(says), "{p}: {e}");
         }
