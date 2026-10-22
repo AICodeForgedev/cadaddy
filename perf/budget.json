@@ -339,5 +339,19 @@
     "zoom_extents@100000": 9.5,
     "zoom_extents@1000000": 99.0,
     "zoom_extents@500000": 47.4
+  },
+  "windows-x86_64": {
+    "mem_bytes_per_object@100000": 516.3,
+    "mem_bytes_per_object@1000000": 521.3,
+    "mem_bytes_per_object@500000": 527.5,
+    "mem_open_dwg_live_mb@100000": 61.8,
+    "mem_open_dwg_live_mb@1000000": 538.1,
+    "mem_open_dwg_live_mb@500000": 275.6,
+    "mem_open_dwg_peak_mb@100000": 171.6,
+    "mem_open_dwg_peak_mb@1000000": 1532.1,
+    "mem_open_dwg_peak_mb@500000": 773.5,
+    "mem_session_bytes_per_object@100000": 1725.0,
+    "mem_session_bytes_per_object@1000000": 1721.3,
+    "mem_session_bytes_per_object@500000": 1712.5
   }
 }
