@@ -168,11 +168,34 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
             );
         }
         Some("import") => {
-            // Open the prints as the project, then classify its sheets.
+            // Open the prints as the project, classify sheets, then run readers.
             let opened = exec(b, "printset.open", params)?;
             let classified = exec(b, "printset.classify", json!({}))?;
+            // Run each reader in dependency order on the classified sheets.
+            let mut reader_results = json!({});
+            for (cmd, key) in [
+                ("structure.read", "structure"),
+                ("walls.read", "walls"),
+                ("ceilings.read", "ceilings"),
+                ("ducts.read", "ducts"),
+                ("pipes.read", "pipes"),
+                ("conduit.read", "conduit"),
+                ("trays.read", "trays"),
+                ("sprinklers.read", "sprinklers"),
+                ("gear.read", "gear"),
+                ("mep.equipment.read", "equipment"),
+                ("mep.read_devices", "devices"),
+                ("site.read", "site"),
+                ("mep.heights", "heights"),
+                ("rfi.read", "rfis"),
+            ] {
+                match exec(b, cmd, json!({})) {
+                    Ok(v) => { reader_results[key] = json!({"ok": true, "summary": v.get("message")}); }
+                    Err(e) => { reader_results[key] = json!({"ok": false, "error": e.chars().take(200).collect::<String>()}); }
+                }
+            }
             return Ok(
-                json!({"opened": {"name": opened["name"], "sheets": opened["sheets"], "revision": opened["revision"]}, "classified": classified, "next": "bim_job build {}"}),
+                json!({"opened": {"name": opened["name"], "sheets": opened["sheets"], "revision": opened["revision"]}, "classified": classified, "readers": reader_results, "next": "bim_job build {}"}),
             );
         }
         Some(other) => {

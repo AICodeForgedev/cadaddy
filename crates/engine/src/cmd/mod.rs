@@ -100,6 +100,7 @@ pub mod materials;
 mod measuregeom;
 pub mod mep;
 pub mod mepqty;
+pub mod readers;
 mod mleader_content;
 mod mleader_edit;
 mod models3d;
@@ -502,6 +503,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(part::specs());
         v.extend(cobie::specs());
         v.extend(printset::specs());
+        v.extend(readers::specs());
         v.extend(validate::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
