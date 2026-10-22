@@ -46,6 +46,7 @@ pub mod rfi;
 pub mod rng;
 pub mod score;
 pub mod sheet_reader;
+pub mod sprinkler_reader;
 pub mod struct_reader;
 pub mod style;
 pub mod truth;

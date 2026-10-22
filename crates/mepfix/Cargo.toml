@@ -26,3 +26,5 @@ cadaddy-walk3d = { path = "../walk3d" }
 
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
+# Read sprinklers become a 3D model and IFC (sprinkler_reader's end-to-end test).
+cadaddy-engine = { workspace = true }

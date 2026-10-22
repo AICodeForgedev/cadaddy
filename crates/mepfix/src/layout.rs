@@ -544,6 +544,9 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
     let scale_of: BTreeMap<String, f64> = t.sheets.iter().map(|s| (s.number.clone(), s.scale)).collect();
     let mut placed: BTreeMap<String, Vec<[f64; 4]>> = BTreeMap::new();
     let printed: BTreeMap<String, String> = t.systems.iter().map(|s| (s.code.clone(), s.printed.clone())).collect();
+    // Some sprinkler branch lines go untagged: they are sized by the FP sheets' pipe schedule from
+    // the heads they carry. A stream of its own, so the other tags don't move.
+    let mut untag = Rng::new(t.seed ^ 0x554E_5441_4746);
     for group in runs(t) {
         let members: Vec<&Segment> = group.iter().filter_map(|i| t.segments.get(*i)).collect();
         let Some(first) = members.first() else { continue };
@@ -554,6 +557,22 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
         let is_planted = members.iter().any(|s| planted.contains(&s.id));
         // Short connections at fixtures and devices aren't tagged (they show in the schedules).
         if total < 2.5 && !is_planted {
+            continue;
+        }
+        // Sprinkler pipe exposed in a room open to structure always carries its size and height.
+        let open_room = first.system == "FP" && {
+            let [p, q] = first.path_ft;
+            let m = [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
+            t.building.rooms.iter().any(|rm| {
+                rm.level == first.level
+                    && rm.ceiling.is_none()
+                    && m[0] > rm.min_ft[0]
+                    && m[0] < rm.max_ft[0]
+                    && m[1] > rm.min_ft[1]
+                    && m[1] < rm.max_ft[1]
+            })
+        };
+        if first.system == "FP" && first.size_in[0] < 2.0 && !is_planted && !open_room && untag.chance(0.4) {
             continue;
         }
         let Some(longest) = members.iter().copied().max_by(|a, b| a.length_ft().total_cmp(&b.length_ft())) else { continue };
@@ -584,7 +603,8 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
         } else {
             0.0
         };
-        let noted = is_planted || (!longest.below_floor && longest.system != "SAN" && (main || r.chance(share)));
+        // (The open-room rule comes last so the random stream draws as it always did.)
+        let noted = is_planted || (!longest.below_floor && longest.system != "SAN" && (main || r.chance(share))) || open_room;
         let mut note = None;
         if noted {
             let n = if duct { st.height_note(h.bottom_ft, h.top_ft, h.centre_ft) } else { st.pipe_height_note(h.bottom_ft, h.centre_ft) };
