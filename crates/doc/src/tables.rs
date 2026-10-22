@@ -903,6 +903,9 @@ pub struct NamedView {
     /// A solid background colour shown behind the view (`None`: the drawing area's own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Color>,
+    /// The render environment saved with the view (RENDERENVIRONMENT).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<crate::lighting::RenderEnvironment>,
 }
 
 /// A UCS kept with a named view: its origin and axes, and the named UCS it was (empty when it

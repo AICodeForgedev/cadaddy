@@ -25,6 +25,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(CropM::default()))),
         // Saved from the Render window (its Save button); scripts and agents give the path.
         CommandSpec::new("saveimg", "Save Image", run_saveimg).params("{path} (.png or .jpg: the last render)").noundo(),
+        CommandSpec::new("renderenvironment", "Render Environment", run_renderenv)
+            .menu(&["View", "Render", "Render Environment"])
+            .alias(&["renderenv"])
+            .params("{background?: {kind: sky|solid|gradient|image, color?, bottom?, top?, path?}, fog?: {enabled, color?: [r,g,b] 0-1, near? 0-1, far? 0-1}, ibl?: path (.hdr), exposure?: stops, whiteBalance?: {temperature?: kelvin, tint?: -1..1}} → {environment}"),
     ]
 }
 
@@ -101,7 +105,8 @@ fn render(s: &mut Session, p: &Value, crop: Option<(u32, u32, u32, u32)>) -> Res
     }
     // A plan view with nothing set: frame the model.
     let view = if s.state()?.projection().is_none() { fit(&sc, None, w, h).unwrap_or(view) } else { view };
-    let lit = sc.lighting.clone().unwrap_or_else(|| cadaddy_render::light::Lighting::of(d, &Space::Model));
+    let mut lit = sc.lighting.clone().unwrap_or_else(|| cadaddy_render::light::Lighting::of(d, &Space::Model));
+    apply_environment(s, &mut lit)?;
     let mut r = Render::new(sc, view, lit, opts);
     for _ in 0..samples {
         r.pass();
@@ -176,6 +181,157 @@ fn run_saveimg(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("saveimg", "`path` is required"))?;
     save(s, path)?;
     Ok(json!({ "path": path }))
+}
+
+/// RENDERENVIRONMENT: set the background, fog, IBL, exposure and white balance.
+fn run_renderenv(s: &mut Session, p: &Value) -> Result<Value> {
+    use cadaddy_doc::lighting::{BackgroundKind, Fog, WhiteBalance};
+
+    let mut env = s.state()?.render_environment.clone().unwrap_or_default();
+
+    // Background.
+    if let Some(bg) = p.get("background") {
+        let kind = bg.get("kind").and_then(Value::as_str).unwrap_or("sky");
+        env.background = match kind {
+            "solid" => {
+                let c = parse_color3(bg, "color").unwrap_or([1.0, 1.0, 1.0]);
+                BackgroundKind::Solid { color: c }
+            }
+            "gradient" => {
+                let bottom = parse_color3(bg, "bottom").unwrap_or([0.2, 0.2, 0.3]);
+                let top = parse_color3(bg, "top").unwrap_or([0.6, 0.7, 0.9]);
+                BackgroundKind::Gradient { bottom, top }
+            }
+            "image" => {
+                let path = bg.get("path").and_then(Value::as_str).unwrap_or("");
+                if path.is_empty() {
+                    return Err(bad("renderenvironment", "background.path is required for image backgrounds"));
+                }
+                BackgroundKind::Image { path: path.to_string() }
+            }
+            _ => BackgroundKind::Sky,
+        };
+    }
+
+    // Fog.
+    if let Some(fg) = p.get("fog") {
+        let enabled = fg.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let color = parse_color3(fg, "color").unwrap_or([1.0, 1.0, 1.0]);
+        let near = fg.get("near").and_then(Value::as_f64).unwrap_or(env.fog.near);
+        let far = fg.get("far").and_then(Value::as_f64).unwrap_or(env.fog.far);
+        env.fog = Fog { enabled, color, near, far }.sane();
+    }
+
+    // IBL.
+    if let Some(ibl) = p.get("ibl") {
+        match ibl {
+            Value::Null => {
+                env.ibl = None;
+            }
+            Value::String(path) if path.is_empty() => {
+                env.ibl = None;
+            }
+            Value::String(path) => {
+                env.ibl = Some(path.clone());
+            }
+            _ => {
+                if let Some(path) = ibl.as_str() {
+                    env.ibl = Some(path.to_string());
+                }
+            }
+        }
+    }
+
+    // Exposure.
+    if let Some(exp) = p.get("exposure").and_then(Value::as_f64) {
+        env.exposure = exp;
+    }
+
+    // White balance.
+    if let Some(wb) = p.get("whiteBalance") {
+        let temperature = wb.get("temperature").and_then(Value::as_f64).unwrap_or(env.white_balance.temperature);
+        let tint = wb.get("tint").and_then(Value::as_f64).unwrap_or(env.white_balance.tint);
+        env.white_balance = WhiteBalance { temperature, tint }.sane();
+    }
+
+    let env = env.sane();
+    let out = serde_json::to_value(&env).unwrap_or(json!({}));
+    s.state_mut()?.render_environment = Some(env);
+    s.echo("Render environment updated.".to_string());
+    Ok(json!({ "environment": out }))
+}
+
+/// Parse a [r, g, b] array (0–1) from a JSON value at a key.
+fn parse_color3(p: &Value, key: &str) -> Option<[f64; 3]> {
+    let a = p.get(key).and_then(Value::as_array)?;
+    if a.len() < 3 {
+        return None;
+    }
+    let r = a.first()?.as_f64()?;
+    let g = a.get(1)?.as_f64()?;
+    let b = a.get(2)?.as_f64()?;
+    Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)])
+}
+
+/// Apply the current session's render environment to a [`Lighting`] for rendering.
+pub(crate) fn apply_environment(s: &Session, lit: &mut cadaddy_render::light::Lighting) -> Result<()> {
+    let env = match &s.state()?.render_environment {
+        Some(e) => e.clone().sane(),
+        None => return Ok(()),
+    };
+
+    // Exposure: add the environment's offset to the drawing's.
+    if env.exposure.abs() > 0.001 {
+        lit.exposure *= 2f32.powf(env.exposure as f32);
+    }
+
+    // White balance.
+    if !env.white_balance.is_neutral() {
+        lit.white_balance = cadaddy_render::light::white_balance_rgb(env.white_balance.temperature, env.white_balance.tint);
+    }
+
+    // Fog.
+    if env.fog.enabled {
+        lit.fog = Some(cadaddy_render::light::FogParams {
+            color: [env.fog.color[0] as f32, env.fog.color[1] as f32, env.fog.color[2] as f32],
+            near: env.fog.near as f32,
+            far: env.fog.far as f32,
+        });
+    }
+
+    // Background.
+    use cadaddy_doc::lighting::BackgroundKind;
+    match &env.background {
+        BackgroundKind::Sky => {}
+        BackgroundKind::Solid { color } => {
+            lit.background = cadaddy_render::light::Background::Solid([color[0] as f32, color[1] as f32, color[2] as f32]);
+        }
+        BackgroundKind::Gradient { bottom, top } => {
+            lit.background = cadaddy_render::light::Background::Gradient {
+                bottom: [bottom[0] as f32, bottom[1] as f32, bottom[2] as f32],
+                top: [top[0] as f32, top[1] as f32, top[2] as f32],
+            };
+        }
+        BackgroundKind::Image { path } => {
+            if let Some(raster) = cadaddy_render::images::get(path) {
+                lit.background = cadaddy_render::light::Background::Image(raster);
+            }
+        }
+    }
+
+    // IBL (image-based lighting from HDR).
+    if let Some(ibl_path) = &env.ibl {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Ok(bytes) = std::fs::read(ibl_path)
+                && let Some(hdr) = cadaddy_render::hdr::decode(&bytes)
+            {
+                lit.env_map = Some(std::sync::Arc::new(hdr));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// RENDERCROP at the prompts: two corners of the region.

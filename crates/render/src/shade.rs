@@ -689,12 +689,13 @@ pub(crate) fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
 /// sky, the sun (with its shadows) and the lights, through its material and texture; glass and
 /// other see-through surfaces over what lies behind; line objects on top; the sky behind.
 fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Raster {
-    use crate::light::{Surface, background, shade_baked, tonemap};
+    use crate::light::{Surface, shade_baked, tonemap_wb, view_background};
     let (w, h) = (v.width_px as usize, v.height_px as usize);
-    // The sky behind: the view direction tilted with the image row.
+    let wb = lit.white_balance;
+    // The background: sky gradient, solid, gradient or image.
     let mut color: Vec<[u8; 4]> = Vec::with_capacity(w * h);
     for y in 0..h {
-        let c = tonemap(background(lit, 1.0 - (y as f32 + 0.5) / h as f32), lit.exposure);
+        let c = tonemap_wb(view_background(lit, 1.0 - (y as f32 + 0.5) / h as f32), lit.exposure, wb);
         color.extend(std::iter::repeat_n([c[0], c[1], c[2], 255], w));
     }
     let mut depth = vec![f32::NEG_INFINITY; w * h];
@@ -752,7 +753,7 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
         // Its back is the side seen when the corners turn clockwise from here.
         let back = (tri.p[1] - tri.p[0]).cross(tri.p[2] - tri.p[0]).dot(n) < 0.0;
         let baked = scene.baked.as_ref().and_then(|bk| bk.at(ti, b[1], b[2], back));
-        (tonemap(shade_baked(lit, p, n, view_dir, &surface, sun, baked), lit.exposure), opacity)
+        (tonemap_wb(shade_baked(lit, p, n, view_dir, &surface, sun, baked), lit.exposure, wb), opacity)
     };
     let bands = h.div_ceil(BAND).max(1);
     let mut binned: Vec<Vec<usize>> = vec![Vec::new(); bands];
@@ -828,6 +829,23 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
     for l in scene.lines.iter().filter(|l| !l.edge) {
         let (a, b) = (v.screen(l.a), v.screen(l.b));
         raster_line(a, b, [l.color.0, l.color.1, l.color.2], &mut color, &depth, w, h, Some(bias));
+    }
+    // Apply fog / depth cue: blend towards the fog colour by distance.
+    if let Some(fog) = &lit.fog {
+        let zmin = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::INFINITY, f32::min);
+        let zmax = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::NEG_INFINITY, f32::max);
+        let range = (zmax - zmin).max(1e-6);
+        let fog_srgb = crate::light::tonemap_wb(fog.color, lit.exposure, wb);
+        for (i, c) in color.iter_mut().enumerate() {
+            let z = depth.get(i).copied().unwrap_or(f32::NEG_INFINITY);
+            if z > f32::NEG_INFINITY && z.is_finite() {
+                // Depth is towards the viewer (larger = nearer), so invert for fog.
+                let depth_frac = 1.0 - (z - zmin) / range;
+                let t = ((depth_frac - fog.near) / (fog.far - fog.near).max(1e-6)).clamp(0.0, 1.0);
+                let mix = |o: u8, f: u8| ((1.0 - t) * f32::from(o) + t * f32::from(f)).round().clamp(0.0, 255.0) as u8;
+                *c = [mix(c[0], fog_srgb[0]), mix(c[1], fog_srgb[1]), mix(c[2], fog_srgb[2]), 255];
+            }
+        }
     }
     let rgba: Vec<u8> = color.into_iter().flatten().collect();
     Raster::new(v.width_px, v.height_px, rgba).unwrap_or(Raster { width: 1, height: 1, rgba: vec![0, 0, 0, 255] })
@@ -1078,6 +1096,62 @@ mod tests {
                 std::fs::write(format!("{out}/{name}.png"), big(s).encode_png().unwrap()).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn fog_fades_distant_geometry_in_realistic_view() {
+        use crate::light::FogParams;
+        let p = Projection::new(Vec3::new(-1.0, -1.0, 1.0));
+        let d = courtyard(None);
+        let s = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        let v = fit(&s, p, 80, 60).unwrap();
+        let lum = |r: &Raster| r.rgba.chunks(4).map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2])).sum::<u64>();
+        // Without fog.
+        let no_fog = rasterize(&s, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+        // With white fog.
+        let mut sf = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        if let Some(lit) = sf.lighting.as_mut() {
+            lit.fog = Some(FogParams { color: [1.0, 1.0, 1.0], near: 0.0, far: 0.5 });
+        }
+        let with_fog = rasterize(&sf, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+        // Fog pushes surface pixels towards white, so the overall luminance increases.
+        assert!(lum(&with_fog) > lum(&no_fog), "fog brightens (towards white): {} vs {}", lum(&with_fog), lum(&no_fog));
+    }
+
+    #[test]
+    fn solid_background_replaces_sky_in_realistic_view() {
+        use crate::light::Background;
+        let p = Projection::new(Vec3::new(-1.0, -1.0, 1.0));
+        let d = courtyard(None);
+        let s = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        let v = fit(&s, p, 80, 60).unwrap();
+        // With a red solid background.
+        let mut sr = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        if let Some(lit) = sr.lighting.as_mut() {
+            lit.background = Background::Solid([1.0, 0.0, 0.0]);
+        }
+        let r = rasterize(&sr, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+        // The top-left corner (sky area) should be red.
+        let px = r.pixel(0, 0).unwrap();
+        assert!(px[0] > 100 && px[1] < 50 && px[2] < 50, "sky area is red background: {px:?}");
+    }
+
+    #[test]
+    fn gradient_background_varies_top_to_bottom() {
+        use crate::light::Background;
+        let p = Projection::new(Vec3::new(-1.0, -1.0, 1.0));
+        let d = courtyard(None);
+        let s = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        let v = fit(&s, p, 80, 60).unwrap();
+        let mut sg = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        if let Some(lit) = sg.lighting.as_mut() {
+            lit.background = Background::Gradient { bottom: [0.0, 0.0, 0.0], top: [1.0, 1.0, 1.0] };
+        }
+        let r = rasterize(&sg, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+        let top = r.pixel(0, 0).unwrap();
+        let bot = r.pixel(0, r.height - 1).unwrap();
+        // Top should be brighter than bottom in the sky region.
+        assert!(top[0] > bot[0] + 20, "gradient top brighter: {top:?} vs {bot:?}");
     }
 
     #[test]

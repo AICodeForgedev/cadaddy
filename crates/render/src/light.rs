@@ -44,6 +44,31 @@ pub struct Sky {
     pub ground: [f32; 3],
 }
 
+/// Fog / depth cue applied after shading: objects fade towards a colour with distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FogParams {
+    /// Linear RGB fog colour.
+    pub color: [f32; 3],
+    /// Depth where fog begins (as a fraction of the view's depth range, 0..1).
+    pub near: f32,
+    /// Depth where fog is fully opaque.
+    pub far: f32,
+}
+
+/// Background for a rendered view.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Background {
+    /// The analytic sky (default).
+    #[default]
+    Sky,
+    /// A solid colour (linear RGB).
+    Solid([f32; 3]),
+    /// A vertical gradient (bottom, top; linear RGB).
+    Gradient { bottom: [f32; 3], top: [f32; 3] },
+    /// An image (the decoded raster, from the image cache).
+    Image(std::sync::Arc<crate::images::Raster>),
+}
+
 /// Everything that lights a view.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lighting {
@@ -55,6 +80,14 @@ pub struct Lighting {
     pub exposure: f32,
     /// Metres per drawing unit (light falloff).
     pub unit_m: f64,
+    /// Image-based lighting: an HDR environment map; replaces the analytic sky when set.
+    pub env_map: Option<std::sync::Arc<crate::hdr::HdrImage>>,
+    /// Fog / depth cue; `None` = no fog.
+    pub fog: Option<FogParams>,
+    /// Background override; `None` = the sky gradient.
+    pub background: Background,
+    /// White balance: colour multiplier from temperature/tint (linear RGB).
+    pub white_balance: [f32; 3],
 }
 
 fn lin(c: cadaddy_doc::color::Rgb) -> [f32; 3] {
@@ -136,6 +169,10 @@ impl Lighting {
             lights,
             exposure: 2f32.powf(sun.exposure as f32),
             unit_m: if unit_m.is_finite() && unit_m > 0.0 { unit_m } else { 1.0 },
+            env_map: None,
+            fog: None,
+            background: Background::Sky,
+            white_balance: [1.0, 1.0, 1.0],
         }
     }
 }
@@ -180,9 +217,15 @@ pub fn brdf_cos(n: Vec3, v: Vec3, l: Vec3, s: &Surface) -> [f32; 3] {
     out
 }
 
-/// What the sky lights a surface with (its normal `n`): the sky above, the ground below, by how
-/// much of each the surface faces; diffuse, plus a rough specular share for metals.
+/// What the sky (or environment map) lights a surface with (its normal `n`): the sky above,
+/// the ground below, by how much of each the surface faces; diffuse, plus a rough specular
+/// share for metals.
 pub fn ambient(lit: &Lighting, n: Vec3, s: &Surface) -> [f32; 3] {
+    if let Some(env) = &lit.env_map {
+        // Sample the environment map in the normal's direction for diffuse irradiance.
+        let env_color = env.sample(n);
+        return surround(env_color, s);
+    }
     let up = (n.z as f32).clamp(-1.0, 1.0);
     let sky_part = mix3(lit.sky.horizon, lit.sky.zenith, up.max(0.0));
     let env = mix3(lit.sky.ground, sky_part, up * 0.5 + 0.5);
@@ -260,6 +303,15 @@ pub fn incoming(l: &PointLight, p: Vec3, unit_m: f64) -> Option<(Vec3, [f32; 3],
     }
 }
 
+/// The environment in direction `d`: the HDR map when set, else the analytic sky without the
+/// sun's disc. For path-traced rays that leave the scene.
+pub fn env_or_sky(lit: &Lighting, d: Vec3) -> [f32; 3] {
+    if let Some(env) = &lit.env_map {
+        return env.sample(d);
+    }
+    sky_only(lit, d)
+}
+
 /// The sky seen in direction `d` without the sun's disc (rays that leave the scene: the sun
 /// itself is sampled directly), linear.
 pub fn sky_only(lit: &Lighting, d: Vec3) -> [f32; 3] {
@@ -278,6 +330,55 @@ pub fn tonemap(c: [f32; 3], exposure: f32) -> [u8; 3] {
         let s = if y <= 0.003_130_8 { y * 12.92 } else { 1.055 * y.powf(1.0 / 2.4) - 0.055 };
         (s * 255.0).round().clamp(0.0, 255.0) as u8
     })
+}
+
+/// Apply fog to a shaded colour: blend towards the fog colour by the fog factor at `depth`
+/// (0 = at the viewer, 1 = far plane).
+pub fn apply_fog(c: [f32; 3], depth_frac: f32, fog: &FogParams) -> [f32; 3] {
+    let t = ((depth_frac - fog.near) / (fog.far - fog.near).max(1e-6)).clamp(0.0, 1.0);
+    mix3(c, fog.color, t)
+}
+
+/// Tone map with white balance applied: the balance multiplier scales linear light before the
+/// tone curve.
+pub fn tonemap_wb(c: [f32; 3], exposure: f32, wb: [f32; 3]) -> [u8; 3] {
+    tonemap([c[0] * wb[0], c[1] * wb[1], c[2] * wb[2]], exposure)
+}
+
+/// Compute a white-balance RGB multiplier from colour temperature (kelvin) and tint.
+/// Approximates the ratio of the Planckian locus colour at `temperature` to D65 (6500 K).
+pub fn white_balance_rgb(temperature: f64, tint: f64) -> [f32; 3] {
+    let t = temperature.clamp(1000.0, 40000.0);
+    // Planckian ratio: lower K → more red, less blue; higher K → less red, more blue.
+    // Using a log-ratio that gives smooth, perceptually reasonable shifts.
+    let ratio = (6500.0 / t).ln();
+    let r = (1.0 + ratio * 0.8).clamp(0.3, 3.0) as f32;
+    let b = (1.0 - ratio * 0.8).clamp(0.3, 3.0) as f32;
+    // Tint shifts green vs magenta.
+    let g = (1.0 - tint.clamp(-1.0, 1.0) * 0.3).clamp(0.3, 3.0) as f32;
+    [r, g, b]
+}
+
+/// The rendered view's background at image fraction `t` (0 bottom … 1 top), respecting the
+/// background setting.
+pub fn view_background(lit: &Lighting, t: f32) -> [f32; 3] {
+    match &lit.background {
+        Background::Sky => background(lit, t),
+        Background::Solid(c) => *c,
+        Background::Gradient { bottom, top } => mix3(*bottom, *top, t.clamp(0.0, 1.0)),
+        Background::Image(raster) => {
+            // Sample the image at this vertical position, horizontally centred.
+            let y = ((1.0 - t) * raster.height as f32).clamp(0.0, (raster.height.saturating_sub(1)) as f32) as u32;
+            let x = raster.width / 2;
+            match raster.pixel(x, y) {
+                Some(p) => {
+                    let f = |v: u8| (f32::from(v) / 255.0).powf(2.2);
+                    [f(p[0]), f(p[1]), f(p[2])]
+                }
+                None => background(lit, t),
+            }
+        }
+    }
 }
 
 /// The sky seen in direction `d` (a rendered view's background), linear.
@@ -373,5 +474,76 @@ mod tests {
         let sunny = Lighting::of(&Drawing::new_metric(), &Space::Model);
         let up = Vec3::Z;
         assert!(shade(&sunny, Vec3::ZERO, up, up, &grey(0.6), 1.0)[0] > shade(&sunny, Vec3::ZERO, up, up, &grey(0.6), 0.0)[0]);
+    }
+
+    #[test]
+    fn fog_blends_towards_the_fog_colour() {
+        let fog = FogParams { color: [1.0, 1.0, 1.0], near: 0.2, far: 0.8 };
+        // Before the fog starts: no fog.
+        let c = apply_fog([0.5, 0.0, 0.0], 0.1, &fog);
+        assert!((c[0] - 0.5).abs() < 1e-4 && c[1].abs() < 1e-4, "{c:?}");
+        // At full fog distance: all fog colour.
+        let c = apply_fog([0.5, 0.0, 0.0], 1.0, &fog);
+        assert!((c[0] - 1.0).abs() < 1e-4 && (c[1] - 1.0).abs() < 1e-4, "{c:?}");
+        // At the midpoint: half blended.
+        let c = apply_fog([0.0, 0.0, 0.0], 0.5, &fog);
+        assert!((c[0] - 0.5).abs() < 0.01, "{c:?}");
+    }
+
+    #[test]
+    fn white_balance_shifts_colour() {
+        // Daylight (6500K): neutral.
+        let wb = white_balance_rgb(6500.0, 0.0);
+        assert!((wb[0] - 1.0).abs() < 0.1 && (wb[2] - 1.0).abs() < 0.1, "{wb:?}");
+        // Warm (3000K): more red than blue.
+        let warm = white_balance_rgb(3000.0, 0.0);
+        assert!(warm[0] > warm[2], "warm: {warm:?}");
+        // Cool (10000K): more blue than red.
+        let cool = white_balance_rgb(10000.0, 0.0);
+        assert!(cool[2] > cool[0], "cool: {cool:?}");
+        // Tint shifts green.
+        let tinted = white_balance_rgb(6500.0, 0.5);
+        assert!(tinted[1] < 1.0, "tinted: {tinted:?}");
+    }
+
+    #[test]
+    fn tonemap_with_white_balance() {
+        let neutral = tonemap([0.5, 0.5, 0.5], 1.0);
+        let balanced = tonemap_wb([0.5, 0.5, 0.5], 1.0, [1.5, 1.0, 0.7]);
+        // Red should be brighter, blue dimmer.
+        assert!(balanced[0] > neutral[0] && balanced[2] < neutral[2], "{balanced:?} vs {neutral:?}");
+    }
+
+    #[test]
+    fn view_background_respects_settings() {
+        let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
+        // Sky default: the top (zenith) should differ from the bottom (horizon).
+        let sky_top = view_background(&lit, 1.0);
+        let sky_bot = view_background(&lit, 0.0);
+        assert!(sky_top != sky_bot, "sky varies vertically: top {sky_top:?} bot {sky_bot:?}");
+        // Solid background.
+        lit.background = Background::Solid([0.1, 0.2, 0.3]);
+        let solid = view_background(&lit, 0.5);
+        assert!((solid[0] - 0.1).abs() < 1e-4 && (solid[1] - 0.2).abs() < 1e-4, "{solid:?}");
+        // Gradient background.
+        lit.background = Background::Gradient { bottom: [0.0, 0.0, 0.0], top: [1.0, 1.0, 1.0] };
+        let mid = view_background(&lit, 0.5);
+        assert!((mid[0] - 0.5).abs() < 0.01, "{mid:?}");
+        let top = view_background(&lit, 1.0);
+        assert!((top[0] - 1.0).abs() < 0.01, "{top:?}");
+    }
+
+    #[test]
+    fn environment_map_ambient_lighting() {
+        // A bright red environment map: ambient should be reddish.
+        let hdr = crate::hdr::HdrImage {
+            width: 4,
+            height: 2,
+            data: vec![[5.0f32, 0.1, 0.1]; 8].into_iter().flatten().collect(),
+        };
+        let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
+        lit.env_map = Some(std::sync::Arc::new(hdr));
+        let c = ambient(&lit, Vec3::Z, &grey(0.6));
+        assert!(c[0] > c[1] * 3.0, "env map makes ambient red: {c:?}");
     }
 }
