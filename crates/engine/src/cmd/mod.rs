@@ -27,6 +27,7 @@ mod draw2;
 mod draworder;
 mod edit;
 mod edit3d;
+pub mod estimate;
 mod exact_ends;
 mod exchange;
 mod express;
@@ -306,6 +307,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(levels::specs());
+        v.extend(estimate::specs());
         v.extend(bom::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());

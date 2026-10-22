@@ -52,6 +52,10 @@ pub struct BuildingSpec {
     /// What each element is from the documents, with sources and open issues (`tags.list`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<crate::tags::ElementTag>,
+    /// The estimate's state (`estimate.*`): the imported baseline and prices, each line's
+    /// assembly and scope with reasons, and the markup settings.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub estimate: serde_json::Value,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -1859,6 +1863,7 @@ impl BuildingSpec {
             datums: Vec::new(),
             sheets: Vec::new(),
             tags: Vec::new(),
+            estimate: serde_json::Value::Null,
             layers,
             wall_types,
             rooms: Vec::new(),
