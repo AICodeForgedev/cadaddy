@@ -151,3 +151,38 @@ fn sheet_numbers_and_scales_as_print_sets_write_them() {
     assert_eq!(parse_scale("1/8\" = 1'-0\""), Some(0.125));
     assert_eq!(parse_scale("3\" = 1'-0\""), Some(3.0));
 }
+
+fn dash(d: &mut Drawing, a: [f64; 2], b: [f64; 2]) {
+    add(d, EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) }));
+}
+
+#[test]
+fn grid_lines_with_one_bubble_each_read_from_their_dashes() {
+    // A bubble at one end of each line, the line printed as its dashes (a center linetype),
+    // as on a plan split over two views: lines 1–3 run down from their bubbles, A–B right.
+    let mut d = Drawing::default();
+    let r = 18.0;
+    for (i, l) in ["1", "2", "3"].iter().enumerate() {
+        let x = 120.0 + i as f64 * 288.0;
+        bubble(&mut d, [x, 480.0], r, l);
+        for k in 0..20 {
+            let y = 480.0 - r - f64::from(k) * 24.0;
+            dash(&mut d, [x, y], [x, y - 16.0]);
+        }
+    }
+    for (i, l) in ["A", "B"].iter().enumerate() {
+        let y = 60.0 + i as f64 * 360.0;
+        bubble(&mut d, [-60.0, y], r, l);
+        for k in 0..30 {
+            let x = -60.0 + r + f64::from(k) * 24.0;
+            dash(&mut d, [x, y], [x + 16.0, y]);
+        }
+    }
+    // A keynote bubble with no line and a door tag: no grid lines of their own.
+    bubble(&mut d, [300.0, 300.0], r, "4");
+    let rec = recognise_dxf(&d);
+    let labels = |g: &[sheet_reader::DetectedGrid]| g.iter().map(|g| g.label.clone()).collect::<Vec<_>>();
+    assert_eq!(labels(&rec.grid_x), ["1", "2", "3"]);
+    assert_eq!(labels(&rec.grid_y), ["A", "B"]);
+    assert!((rec.grid_y[1].at_in - rec.grid_y[0].at_in - 360.0).abs() < 1e-6);
+}

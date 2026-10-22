@@ -523,7 +523,8 @@ fn bubbles_without_layers(d: &Drawing) -> Vec<(String, [f64; 2])> {
         }
     }
     if paired.len() < 3 {
-        return Vec::new();
+        // One bubble per line: the radius most labelled shapes share (their lines decide).
+        paired = by_label.values().flatten().map(|(_, r)| *r).collect();
     }
     paired.sort_by(f64::total_cmp);
     let Some(&usual) = paired.get(paired.len() / 2) else { return Vec::new() };
@@ -531,6 +532,93 @@ fn bubbles_without_layers(d: &Drawing) -> Vec<(String, [f64; 2])> {
         .into_iter()
         .flat_map(|(l, v)| v.into_iter().filter(|(_, r)| (r - usual).abs() <= usual * 0.15).map(move |(c, _)| (l.to_string(), c)))
         .collect()
+}
+
+/// Most line pieces looked at for grid leaders (hostile input guard).
+const MAX_LEADER_SEGS: usize = 2_000_000;
+
+/// Grid lines from the line leaving each bubble (a print draws a dashed grid line as its
+/// dashes, so the first dash is all there is next to the bubble): a bubble whose line leaves
+/// it straight up or down is on a line of constant x, left or right one of constant y. A label
+/// is classified by most of its bubbles and placed at the middle one.
+fn grid_by_leaders(d: &Drawing, bubbles: &[(String, [f64; 2])]) -> (Vec<DetectedGrid>, Vec<DetectedGrid>) {
+    if bubbles.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    // The bubbles' radius: of the round shapes centred on them.
+    let mut radii: Vec<f64> = d
+        .model
+        .iter()
+        .filter_map(|e| round_shape(&e.kind))
+        .take(MAX_ROUNDS)
+        .filter(|(c, r)| bubbles.iter().any(|(_, b)| (b[0] - c[0]).hypot(b[1] - c[1]) < r * 0.2))
+        .map(|(_, r)| r)
+        .collect();
+    radii.sort_by(f64::total_cmp);
+    let Some(&r) = radii.get(radii.len() / 2) else { return (Vec::new(), Vec::new()) };
+    let mut segs: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    for e in d.model.iter() {
+        match &e.kind {
+            EntityKind::Line(l) => segs.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
+            EntityKind::LwPolyline(pl) if round_shape(&e.kind).is_none() => {
+                segs.extend(pl.vertices.windows(2).filter_map(|w| match w {
+                    [a, b] => Some(([a.p.x, a.p.y], [b.p.x, b.p.y])),
+                    _ => None,
+                }));
+            }
+            _ => {}
+        }
+        if segs.len() >= MAX_LEADER_SEGS {
+            break;
+        }
+    }
+    // Per label: (votes for constant x, for constant y), and the positions.
+    let mut votes: BTreeMap<&str, (usize, usize, Vec<[f64; 2]>)> = BTreeMap::new();
+    for (label, c) in bubbles {
+        let mut best: Option<(f64, [f64; 2])> = None;
+        for (p, q) in &segs {
+            for (near, far) in [(p, q), (q, p)] {
+                let dn = (near[0] - c[0]).hypot(near[1] - c[1]);
+                if dn < r * 0.7 || dn > r * 1.6 {
+                    continue;
+                }
+                let v = [far[0] - near[0], far[1] - near[1]];
+                let len = v[0].hypot(v[1]);
+                if len < r * 0.4 {
+                    continue;
+                }
+                let out = [(near[0] - c[0]) / dn, (near[1] - c[1]) / dn];
+                let dir = [v[0] / len, v[1] / len];
+                if dir[0] * out[0] + dir[1] * out[1] > 0.98 && best.is_none_or(|b| len > b.0) {
+                    best = Some((len, dir));
+                }
+            }
+        }
+        let Some((_, dir)) = best else { continue };
+        let e = votes.entry(label.as_str()).or_insert((0, 0, Vec::new()));
+        if dir[0].abs() < 0.17 {
+            e.0 += 1;
+        } else if dir[1].abs() < 0.17 {
+            e.1 += 1;
+        } else {
+            continue;
+        }
+        e.2.push(*c);
+    }
+    let (mut gx, mut gy) = (Vec::new(), Vec::new());
+    for (label, (vx, vy, mut at)) in votes {
+        let x = vx > vy;
+        at.sort_by(|a, b| if x { a[0].total_cmp(&b[0]) } else { a[1].total_cmp(&b[1]) });
+        let Some(mid) = at.get(at.len() / 2) else { continue };
+        if x {
+            gx.push(DetectedGrid { label: label.to_string(), at_in: mid[0] });
+        } else if vy > 0 {
+            gy.push(DetectedGrid { label: label.to_string(), at_in: mid[1] });
+        }
+    }
+    gx.sort_by(|a, b| a.at_in.total_cmp(&b.at_in));
+    gy.sort_by(|a, b| a.at_in.total_cmp(&b.at_in));
+    (gx, gy)
 }
 
 /// Detect grid lines on the GRID layer.
@@ -737,7 +825,15 @@ pub fn recognise_dxf(d: &Drawing) -> RecognisedSheet {
 
     let bubbles = detect_grid_bubbles(d);
     let _grid_lines = detect_grid_lines(d);
-    let (grid_x, grid_y) = group_grid_lines_simple(&bubbles);
+    let (mut grid_x, mut grid_y) = group_grid_lines_simple(&bubbles);
+    if grid_x.is_empty() || grid_y.is_empty() {
+        // One bubble per line, or a plan split over two views: each bubble's own line says
+        // which way it runs.
+        let (lx, ly) = grid_by_leaders(d, &bubbles);
+        if !lx.is_empty() && !ly.is_empty() {
+            (grid_x, grid_y) = (lx, ly);
+        }
+    }
 
     RecognisedSheet { number, title, discipline, level, scale_text, scale, grid_x, grid_y, alignment: None, bubbles }
 }
