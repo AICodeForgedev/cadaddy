@@ -2662,3 +2662,9 @@ menu	Modify	수정
 	Project Rules Label	프로젝트 규칙 레이블
 	Import Project Rules	프로젝트 규칙 불러오기
 	Export Project Rules	프로젝트 규칙 내보내기
+	Print Validator Documents	도면 검증기 문서
+	Validate Model Against Prints	도면 기준 모델 검증
+	Validation Failure Overlay	검증 실패 오버레이
+	Element Provenance	요소 출처
+	MEP Quantities	MEP 물량
+	Refresh MEP Quantities	MEP 물량 새로 고침

@@ -2478,3 +2478,9 @@
 	Project Rules Label	Bezeichnung der Projektregeln
 	Import Project Rules	Projektregeln importieren
 	Export Project Rules	Projektregeln exportieren
+	Print Validator Documents	Planprüfer-Unterlagen
+	Validate Model Against Prints	Modell gegen Pläne prüfen
+	Validation Failure Overlay	Überlagerung des Prüffehlers
+	Element Provenance	Herkunft des Elements
+	MEP Quantities	TGA-Mengen
+	Refresh MEP Quantities	TGA-Mengen aktualisieren

@@ -2642,3 +2642,9 @@ menu	Modify	Modifikace
 	Project Rules Label	Popisek pravidel projektu
 	Import Project Rules	Importovat pravidla projektu
 	Export Project Rules	Exportovat pravidla projektu
+	Print Validator Documents	Podklady validátoru výkresů
+	Validate Model Against Prints	Ověřit model podle výkresů
+	Validation Failure Overlay	Překryv chyby ověření
+	Element Provenance	Původ prvku
+	MEP Quantities	Výkaz výměr TZB
+	Refresh MEP Quantities	Aktualizovat výkaz výměr TZB

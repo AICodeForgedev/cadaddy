@@ -2661,3 +2661,9 @@ menu	Modify	Edita
 	Project Rules Label	Etichetta regole del progetto
 	Import Project Rules	Importa regole del progetto
 	Export Project Rules	Esporta regole del progetto
+	Print Validator Documents	Documenti del validatore delle tavole
+	Validate Model Against Prints	Convalida modello rispetto alle tavole
+	Validation Failure Overlay	Sovrapposizione dell'errore di convalida
+	Element Provenance	Provenienza dell'elemento
+	MEP Quantities	Quantità impianti MEP
+	Refresh MEP Quantities	Aggiorna quantità impianti MEP

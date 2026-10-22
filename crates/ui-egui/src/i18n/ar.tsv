@@ -2657,3 +2657,9 @@ menu	View	عرض
 	Project Rules Label	تسمية قواعد المشروع
 	Import Project Rules	استيراد قواعد المشروع
 	Export Project Rules	تصدير قواعد المشروع
+	Print Validator Documents	مستندات مدقق المخططات
+	Validate Model Against Prints	التحقق من النموذج مقابل المخططات
+	Validation Failure Overlay	تراكب إخفاق التحقق
+	Element Provenance	مصدر العنصر
+	MEP Quantities	كميات الأعمال الميكانيكية والكهربائية والصحية
+	Refresh MEP Quantities	تحديث كميات الأعمال الميكانيكية والكهربائية والصحية

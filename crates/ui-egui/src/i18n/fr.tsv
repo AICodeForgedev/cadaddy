@@ -2449,3 +2449,9 @@
 	Project Rules Label	Libellé des règles du projet
 	Import Project Rules	Importer les règles du projet
 	Export Project Rules	Exporter les règles du projet
+	Print Validator Documents	Documents du validateur de plans
+	Validate Model Against Prints	Valider le modèle par rapport aux plans
+	Validation Failure Overlay	Superposition de l'échec de validation
+	Element Provenance	Provenance de l'élément
+	MEP Quantities	Quantités CVC-plomberie-électricité
+	Refresh MEP Quantities	Actualiser les quantités CVC-plomberie-électricité

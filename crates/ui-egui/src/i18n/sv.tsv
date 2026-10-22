@@ -2669,3 +2669,9 @@ menu	Modify	Ändra
 	Project Rules Label	Etikett för projektregler
 	Import Project Rules	Importera projektregler
 	Export Project Rules	Exportera projektregler
+	Print Validator Documents	Ritningsvalidatorns underlag
+	Validate Model Against Prints	Validera modellen mot ritningarna
+	Validation Failure Overlay	Överlägg för valideringsfel
+	Element Provenance	Elementets ursprung
+	MEP Quantities	Installationsmängder
+	Refresh MEP Quantities	Uppdatera installationsmängder

@@ -2668,3 +2668,9 @@
 	Project Rules Label	Etiqueta de reglas del proyecto
 	Import Project Rules	Importar reglas del proyecto
 	Export Project Rules	Exportar reglas del proyecto
+	Print Validator Documents	Documentos del validador de planos
+	Validate Model Against Prints	Validar modelo con los planos
+	Validation Failure Overlay	Superposición del fallo de validación
+	Element Provenance	Procedencia del elemento
+	MEP Quantities	Cantidades MEP
+	Refresh MEP Quantities	Actualizar cantidades MEP

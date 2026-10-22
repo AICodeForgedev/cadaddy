@@ -2545,3 +2545,9 @@
 	Project Rules Label	项目规则标签
 	Import Project Rules	导入项目规则
 	Export Project Rules	导出项目规则
+	Print Validator Documents	图纸校验器文档
+	Validate Model Against Prints	按图纸校验模型
+	Validation Failure Overlay	校验失败叠加图
+	Element Provenance	元素来源
+	MEP Quantities	机电工程量
+	Refresh MEP Quantities	刷新机电工程量

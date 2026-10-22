@@ -2450,3 +2450,9 @@
 	Project Rules Label	Метка правил проекта
 	Import Project Rules	Импорт правил проекта
 	Export Project Rules	Экспорт правил проекта
+	Print Validator Documents	Документы проверки по чертежам
+	Validate Model Against Prints	Проверить модель по чертежам
+	Validation Failure Overlay	Наложение ошибки проверки
+	Element Provenance	Происхождение элемента
+	MEP Quantities	Объёмы инженерных систем
+	Refresh MEP Quantities	Обновить объёмы инженерных систем
