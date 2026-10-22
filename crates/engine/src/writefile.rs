@@ -9,6 +9,13 @@ pub fn write(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std:
     std::fs::write(path, bytes)
 }
 
+/// [`write`], replacing `path` atomically through an exclusively created temporary file (so a
+/// planted symlink at a predictable temporary name can't redirect the write, CWE-59).
+pub fn write_atomic(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    check(path.as_ref())?;
+    crate::atomic_write::write_atomic(path.as_ref(), bytes.as_ref())
+}
+
 /// An error when files may not be written now (an agent's dry run) or not there (a system folder).
 pub fn check(path: &std::path::Path) -> std::io::Result<()> {
     protected(path)?;

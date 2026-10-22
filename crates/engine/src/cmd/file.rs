@@ -1253,16 +1253,9 @@ pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<
             };
             keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
         }
-        let tmp = format!("{path}.cadaddy-tmp");
-        let written = crate::writefile::write(&tmp, bytes)
-            .and_then(|()| before.as_ref().map_or(Ok(()), |m| std::fs::set_permissions(&tmp, m.permissions())))
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if let Err(e) = written {
-            // A failed save leaves nothing behind but the file as it was.
-            let _ = std::fs::remove_file(&tmp);
-            return Err(bad("save", format!("{path}: {e}")));
-        }
-        Ok(())
+        // A failed save leaves nothing behind but the file as it was; the new file keeps the
+        // replaced one's permissions.
+        crate::writefile::write_atomic(path, bytes).map_err(|e| bad("save", format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {
