@@ -459,9 +459,7 @@ mod native {
         if let Some(dir) = Path::new(path).parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = format!("{path}.tmp");
-        crate::writefile::write(&tmp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        crate::writefile::write_atomic(path, bytes).map_err(|e| e.to_string())?;
         Ok(held)
     }
 

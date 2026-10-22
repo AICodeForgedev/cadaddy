@@ -13,6 +13,8 @@
 pub mod activity;
 pub mod agent;
 pub mod assoc;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod atomic_write;
 pub mod audit;
 pub mod autosave;
 pub mod batch;

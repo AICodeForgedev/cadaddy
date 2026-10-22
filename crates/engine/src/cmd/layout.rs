@@ -1210,9 +1210,7 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let path = _path;
-                let tmp = format!("{path}.cadaddy-tmp");
-                crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                crate::writefile::write_atomic(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 let mut r = json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages, "warnings": warnings });
                 match super::plotstamp::log_plot(s, &space, &opts, path) {
                     Some(Ok(log)) => r["stampLog"] = json!(log),

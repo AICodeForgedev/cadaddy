@@ -244,10 +244,7 @@ fn extension(path: &str) -> String {
 pub(crate) fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let tmp = format!("{path}.cadaddy-tmp");
-        crate::writefile::write(&tmp, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-        Ok(())
+        crate::writefile::write_atomic(path, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {
