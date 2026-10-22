@@ -37,6 +37,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("dxf", Class::Standalone),
     ("dwg", Class::Standalone),
     ("dwgcodec", Class::Standalone),
+    // macOS platform glue for the desktop app (Finder's open-documents event); no workspace crates.
+    ("macos-open", Class::Standalone),
     ("color", Class::Layer(0)),
     ("doc", Class::Layer(1)),
     ("constraints", Class::Layer(2)),

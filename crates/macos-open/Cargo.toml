@@ -1,0 +1,19 @@
+[package]
+name = "cadaddy-macos-open"
+description = "macOS: the files Finder asks CADaddy to open (the open-documents Apple Event)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The one crate that may use `unsafe`: Objective-C calls that register an Apple Event handler
+# take a selector, and objc2 marks them unsafe. Every other lint is the workspace's.
+[lints.rust]
+unsafe_code = "allow"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already in Cargo.lock through winit, muda and the app's objc2-app-kit.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSData", "NSNotification", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
+log = { workspace = true }

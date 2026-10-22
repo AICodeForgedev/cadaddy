@@ -607,6 +607,7 @@ dependencies = [
  "arboard",
  "cadaddy-engine",
  "cadaddy-io",
+ "cadaddy-macos-open",
  "cadaddy-ui-egui",
  "clipboard-win",
  "ed25519-dalek",
@@ -776,6 +777,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tiny-skia",
+]
+
+[[package]]
+name = "cadaddy-macos-open"
+version = "0.7.8"
+dependencies = [
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
