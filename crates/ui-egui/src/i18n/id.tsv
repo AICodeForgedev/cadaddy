@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Periksa Peralatan Listrik
 	Submittal Review of Gear	Tinjauan Submittal Peralatan
 	Accept Gear as Submitted	Terima Peralatan sesuai Submittal
+	Labels	Label
+	Print Labels	Cetak Label
+	Import Arc Flash Data	Impor Data Arc Flash
+	Check Labels	Periksa Label
+	Label BOM Lines	Beri Label Baris BOM
+	Water and Gas Points of Entry	Titik Masuk Air dan Gas
+	Route Grounding	Rutekan Pembumian
+	Check Grounding	Periksa Pembumian
+	Alternative Grounding Electrode	Elektroda Pembumian Alternatif
+	Grounding Takeoff	Perhitungan Pembumian
+	4D Schedule	Jadwal 4D
+	Import 4D Schedule	Impor Jadwal 4D
+	4D Schedule Tasks	Tugas Jadwal 4D
+	Link 4D Task	Tautkan Tugas 4D
+	4D State at a Date	Status 4D pada Tanggal
+	Export 4D Video	Ekspor Video 4D
+	Clear 4D Schedule	Hapus Jadwal 4D
+	Import Schedule...	Impor Jadwal...
+	Export Video...	Ekspor Video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV atau Excel: kolom tugas, mulai, selesai, dan tingkat, sistem, kelas, atau elemen
+	No schedule yet. Import one to show the model on a date.	Belum ada jadwal. Impor satu untuk menampilkan model pada suatu tanggal.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} tugas, {start} hingga {finish}; {linked} dari {elements} objek terjadwal
+	Show the model on a date	Tampilkan model pada suatu tanggal
+	Pause	Jeda
+	A day earlier	Sehari lebih awal
+	A day later	Sehari kemudian
+	 days/s	 hari/dtk
+	Show work not started, pale	Tampilkan pekerjaan yang belum dimulai secara pudar
+	Built	Terbangun
+	In progress	Sedang berjalan
+	Not yet	Belum
+	Add Selected Objects	Tambahkan Objek yang Dipilih
+	Remove Selected Objects	Hapus Objek yang Dipilih
+	Bill of Materials	Daftar Material
+	List Element Tags	Daftar Tag Elemen
+	Set Element Tag Field	Atur Bidang Tag Elemen
+	Accept Element Tags	Terima Tag Elemen
+	Element Tags	Tag Elemen
+	Untagged	Tanpa tag
+	Tag not in schedule	Tag tidak ada di jadwal
+	Missing protection	Proteksi tidak ada
+	Double protection	Proteksi ganda
+	No conductor note	Tidak ada catatan konduktor
+	Two rules apply	Dua aturan berlaku
+	All elements	Semua elemen
+	{n} elements	{n} elemen
+	No element tags: read the electrical plans first.	Tidak ada tag elemen: baca denah kelistrikan terlebih dahulu.
+	Field	Bidang
+	Set on Picked	Atur pada yang Dipilih
+	Accept Picked	Terima yang Dipilih
+	Pick All Shown	Pilih Semua yang Ditampilkan
+	New Material Release	Rilis Material Baru
+	Procurement	Pengadaan
+	Order Status	Status Pesanan
+	Submittal Log Entry	Entri Log Submittal
+	Submittal Log	Log Submittal
+	Lead Times	Waktu Tunggu
+	Export Release	Ekspor Rilis
+	Progress Plan	Rencana Progres
+	Mark Installed Work	Tandai Pekerjaan Terpasang
+	Import Timecards	Impor Kartu Waktu
+	Progress and Earned Value	Progres dan Nilai Hasil
+	Actual Production Rates	Laju Produksi Aktual
+	Add Field Observations	Tambah Observasi Lapangan
+	Compare Estimate What-If	Bandingkan Skenario Estimasi
+	Estimate Settings	Pengaturan Estimasi
+	Estimate Status	Status Estimasi
+	Explain Estimate Number	Jelaskan Angka Estimasi
+	Import Estimating Baseline	Impor Baseline Estimasi
+	Query Estimate	Kueri Estimasi
+	Set Estimate Assembly	Atur Rakitan Estimasi
+	Set Estimate Price	Atur Harga Estimasi
+	Set Estimate Scope	Atur Lingkup Estimasi
+	New Window	Jendela Baru
+	Concrete Elements	Elemen Beton
+	Set Concrete	Atur Beton
+	Check Concrete	Periksa Beton
+	Concrete Coordination Review	Tinjauan Koordinasi Beton
+	Concrete Quantities	Kuantitas Beton
+	Pour Hold Points	Titik Tahan Pengecoran
+	Sign Off Hold Point	Setujui Titik Tahan
+	Trade Quantities	Kuantitas Bidang Pekerjaan
+	Trade Scope	Lingkup Bidang Pekerjaan
+	Trade Prices	Harga Bidang Pekerjaan
+	Whole-Job Settings	Pengaturan Seluruh Proyek
+	Whole-Job Estimate	Estimasi Seluruh Proyek
+	Bid Package	Paket Penawaran
+	Sub Bid	Penawaran Subkontraktor
+	Level Bids	Setarakan Penawaran
+	Add Bid History	Tambah Riwayat Penawaran
+	Bid Benchmarks	Benchmark Penawaran
+	Record Outcome	Catat Hasil
+	Add Calibration Project	Tambah Proyek Kalibrasi
+	Fit Rates to Bids	Sesuaikan Tarif dengan Penawaran
+	Certified Payroll Hours	Jam Penggajian Bersertifikat
+	Top-Down Labor Estimate	Estimasi Tenaga Kerja Top-Down
+	Change Order Snapshot	Snapshot Perintah Perubahan
+	Price Change Order	Hitung Harga Perintah Perubahan
+	Change Order Log	Log Perintah Perubahan
+	Segment	Segmen
+	Total	Total
+	Total area	Luas total
+	Import P-405 Labor Tables	Impor Tabel Tenaga Kerja P-405
+	New Part	Komponen Baru
+	Part Parameter	Parameter Komponen
+	Part Sketch	Sketsa Komponen
+	Pad	Tonjolan
+	Pocket	Kantong
+	Revolve Feature	Fitur Putar Revolusi
+	Fillet Feature	Fitur Fillet
+	Chamfer Feature	Fitur Talang
+	Edit Feature	Edit Fitur
+	Reorder Feature	Ubah Urutan Fitur
+	Delete Feature	Hapus Fitur
+	Rebuild Part	Bangun Ulang Komponen
+	Model Tree	Pohon Model
+	List Parts	Daftar Komponen
+	No part yet: New Part starts one; sketches and features come from the part commands.	Belum ada komponen: Komponen Baru memulai satu; sketsa dan fitur berasal dari perintah komponen.
+	Volume {v}	Volume {v}
+	Parameters	Parameter
+	name	nama
+	expression	ekspresi
+	Features	Fitur
+	Suppress	Nonaktifkan
+	Double-click to rename	Klik ganda untuk mengganti nama
+	Parts Library...	Pustaka Komponen...
+	Parts Library	Pustaka Komponen
+	Part Categories	Kategori Komponen
+	Showing {shown} of {total} parts; type in Filter to narrow.	Menampilkan {shown} dari {total} komponen; ketik di Filter untuk mempersempit.
+	Annotation	Anotasi
+	Doors	Pintu
+	Windows	Jendela
+	Stairs and ramps	Tangga dan ramp
+	Furniture	Furnitur
+	Sanitary fixtures	Perlengkapan sanitasi
+	Kitchen	Dapur
+	Diffusers and grilles	Difuser dan kisi-kisi
+	Terminal units	Unit terminal
+	HVAC equipment	Peralatan HVAC
+	Dampers	Damper udara
+	Valves	Katup
+	Pipe fittings	Fiting pipa
+	Pumps and tanks	Pompa dan tangki
+	Drains	Saluran pembuangan
+	Power distribution	Distribusi daya
+	Light fixtures	Armatur lampu
+	Steel W shapes	Profil baja W
+	Steel channels	Profil baja kanal
+	Steel angles	Profil baja siku
+	Steel HSS	Profil baja HSS
+	Steel pipe	Pipa baja
+	Steel metric shapes	Profil baja metrik
+	Rebar	Tulangan
+	Lumber	Kayu gergajian
+	Base plates	Pelat dasar
+	Masonry units	Unit pasangan bata
+	Planting	Tanaman
+	Parking	Parkir
+	Vehicles	Kendaraan
+	Site utilities	Utilitas tapak
+	Site amenities	Fasilitas tapak
+	North arrows	Panah utara
+	Section and elevation marks	Tanda potongan dan tampak
+	Tags and titles	Tag dan judul
+	Weld and drafting symbols	Simbol las dan drafting
+	Scale bars	Batang skala
+	Title blocks	Blok judul
+	2D Profile	Profil 2D
+	2D Profile Toolpath	Jalur Pahat Profil 2D
+	CNC DXF Export	Ekspor DXF CNC
+	CNC DXF Export...	Ekspor DXF CNC...
+	Evaluate Rhai	Evaluasi Rhai
+	Manufacture	Manufaktur
+	Rhai	Rhai
+	Run Rhai Script	Jalankan Skrip Rhai
+	Script Editor	Editor Skrip
+	Define Linetype	Definisikan Jenis Garis
+	Define Hatch Pattern	Definisikan Pola Arsiran
+	Linetype Editor...	Editor Jenis Garis...
+	Hatch Pattern Editor...	Editor Pola Arsiran...
+	Linetype Editor	Editor Jenis Garis
+	Hatch Pattern Editor	Editor Pola Arsiran
+	Start from	Mulai dari
+	A linetype in this drawing	Jenis garis di gambar ini
+	A pattern	Sebuah pola
+	Add a dash or a gap	Tambahkan strip atau celah
+	Pattern length {n}	Panjang pola {n}
+	Dash	Strip
+	Gap	Celah
+	Dot	Titik
+	Add Row	Tambah Baris
+	Save to .lin File...	Simpan ke Berkas .lin...
+	Linetype {name} is in the drawing	Jenis garis {name} ada di gambar
+	Dashes	Strip
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Strip: > 0 strip, < 0 celah, 0 titik
+	Add Line Family	Tambah Famili Garis
+	Save to .pat File...	Simpan ke Berkas .pat...
+	Pattern {name} is offered for new hatches	Pola {name} tersedia untuk arsiran baru
+	Check Underground	Periksa Bawah Tanah
+	Review Underground	Tinjau Bawah Tanah
+	Underground Sheets	Lembar Bawah Tanah
+	DWF Underlay...	Underlay DWF...
+	DWF Out	Keluaran DWF
+	DWFx Out	Keluaran DWFx
+	Enter path of DWF/DWFx file to attach	Masukkan jalur berkas DWF/DWFx yang akan dilampirkan
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Plugin

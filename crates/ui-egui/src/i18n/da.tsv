@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Kontroller el-udstyr
 	Submittal Review of Gear	Gennemgang af materialegodkendelse for udstyr
 	Accept Gear as Submitted	Accepter udstyr som indsendt
+	Labels	Etiketter
+	Print Labels	Udskriv etiketter
+	Import Arc Flash Data	Importer lysbuedata
+	Check Labels	Kontroller etiketter
+	Label BOM Lines	Styklistelinjer for etiketter
+	Water and Gas Points of Entry	Indføringspunkter for vand og gas
+	Route Grounding	Træk jording
+	Check Grounding	Kontroller jording
+	Alternative Grounding Electrode	Alternativ jordelektrode
+	Grounding Takeoff	Mængdeopgørelse af jording
+	4D Schedule	4D-tidsplan
+	Import 4D Schedule	Importer 4D-tidsplan
+	4D Schedule Tasks	Opgaver i 4D-tidsplan
+	Link 4D Task	Tilknyt 4D-opgave
+	4D State at a Date	4D-status på en dato
+	Export 4D Video	Eksporter 4D-video
+	Clear 4D Schedule	Ryd 4D-tidsplan
+	Import Schedule...	Importer tidsplan...
+	Export Video...	Eksporter video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV eller Excel: kolonner for opgave, start, slut samt niveau, system, klasse eller element
+	No schedule yet. Import one to show the model on a date.	Ingen tidsplan endnu. Importer en for at vise modellen på en dato.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} opgaver, {start} til {finish}; {linked} af {elements} objekter planlagt
+	Show the model on a date	Vis modellen på en dato
+	Pause	Pause
+	A day earlier	En dag tidligere
+	A day later	En dag senere
+	 days/s	 dage/s
+	Show work not started, pale	Vis ikke-påbegyndt arbejde blegt
+	Built	Bygget
+	In progress	I gang
+	Not yet	Endnu ikke
+	Add Selected Objects	Tilføj valgte objekter
+	Remove Selected Objects	Fjern valgte objekter
+	Bill of Materials	Stykliste
+	List Element Tags	Vis elementmærker
+	Set Element Tag Field	Angiv felt for elementmærke
+	Accept Element Tags	Accepter elementmærker
+	Element Tags	Elementmærker
+	Untagged	Uden mærke
+	Tag not in schedule	Mærke ikke i skema
+	Missing protection	Beskyttelse mangler
+	Double protection	Dobbelt beskyttelse
+	No conductor note	Ingen lederangivelse
+	Two rules apply	To regler gælder
+	All elements	Alle elementer
+	{n} elements	{n} elementer
+	No element tags: read the electrical plans first.	Ingen elementmærker: læs først el-tegningerne.
+	Field	Felt
+	Set on Picked	Angiv på valgte
+	Accept Picked	Accepter valgte
+	Pick All Shown	Vælg alle viste
+	New Material Release	Ny materialefrigivelse
+	Procurement	Indkøb
+	Order Status	Ordrestatus
+	Submittal Log Entry	Post i log over materialegodkendelser
+	Submittal Log	Log over materialegodkendelser
+	Lead Times	Leveringstider
+	Export Release	Eksporter frigivelse
+	Progress Plan	Fremdriftsplan
+	Mark Installed Work	Marker installeret arbejde
+	Import Timecards	Importer timesedler
+	Progress and Earned Value	Fremdrift og optjent værdi
+	Actual Production Rates	Faktiske produktionsrater
+	Add Field Observations	Tilføj observationer fra pladsen
+	Compare Estimate What-If	Sammenlign hvad-hvis-kalkulation
+	Estimate Settings	Kalkulationsindstillinger
+	Estimate Status	Kalkulationsstatus
+	Explain Estimate Number	Forklar kalkulationstal
+	Import Estimating Baseline	Importer kalkulationsgrundlag
+	Query Estimate	Forespørg kalkulation
+	Set Estimate Assembly	Angiv kalkulationskonstruktion
+	Set Estimate Price	Angiv kalkulationspris
+	Set Estimate Scope	Angiv kalkulationsomfang
+	New Window	Nyt vindue
+	Concrete Elements	Betonelementer
+	Set Concrete	Angiv beton
+	Check Concrete	Kontroller beton
+	Concrete Coordination Review	Koordineringsgennemgang af beton
+	Concrete Quantities	Betonmængder
+	Pour Hold Points	Stoppunkter før støbning
+	Sign Off Hold Point	Godkend stoppunkt
+	Trade Quantities	Mængder pr. fag
+	Trade Scope	Omfang pr. fag
+	Trade Prices	Priser pr. fag
+	Whole-Job Settings	Indstillinger for hele projektet
+	Whole-Job Estimate	Kalkulation for hele projektet
+	Bid Package	Udbudspakke
+	Sub Bid	Underentreprisetilbud
+	Level Bids	Sammenlign tilbud
+	Add Bid History	Tilføj tilbudshistorik
+	Bid Benchmarks	Tilbudsbenchmarks
+	Record Outcome	Registrer udfald
+	Add Calibration Project	Tilføj kalibreringsprojekt
+	Fit Rates to Bids	Tilpas satser til tilbud
+	Certified Payroll Hours	Timer fra certificerede lønlister
+	Top-Down Labor Estimate	Top-down-kalkulation af arbejdstimer
+	Change Order Snapshot	Øjebliksbillede af ændringsordre
+	Price Change Order	Prissæt ændringsordre
+	Change Order Log	Log over ændringsordrer
+	Segment	Segment
+	Total	I alt
+	Total area	Samlet areal
+	Import P-405 Labor Tables	Importer P-405-arbejdstabeller
+	New Part	Ny del
+	Part Parameter	Delparameter
+	Part Sketch	Delskitse
+	Pad	Fremspring
+	Pocket	Lomme
+	Revolve Feature	Drejeelement
+	Fillet Feature	Afrundingselement
+	Chamfer Feature	Affasningselement
+	Edit Feature	Rediger element
+	Reorder Feature	Flyt element
+	Delete Feature	Slet element
+	Rebuild Part	Genopbyg del
+	Model Tree	Modeltræ
+	List Parts	Vis dele
+	No part yet: New Part starts one; sketches and features come from the part commands.	Ingen del endnu: Ny del opretter en; skitser og elementer kommer fra delkommandoerne.
+	Volume {v}	Volumen {v}
+	Parameters	Parametre
+	name	navn
+	expression	udtryk
+	Features	Elementer
+	Suppress	Undertryk
+	Double-click to rename	Dobbeltklik for at omdøbe
+	Parts Library...	Delbibliotek...
+	Parts Library	Delbibliotek
+	Part Categories	Delkategorier
+	Showing {shown} of {total} parts; type in Filter to narrow.	Viser {shown} af {total} dele; skriv i Filter for at indsnævre.
+	Annotation	Annotation
+	Doors	Døre
+	Windows	Vinduer
+	Stairs and ramps	Trapper og ramper
+	Furniture	Møbler
+	Sanitary fixtures	Sanitet
+	Kitchen	Køkken
+	Diffusers and grilles	Diffusorer og riste
+	Terminal units	Endeenheder
+	HVAC equipment	HVAC-udstyr
+	Dampers	Spjæld
+	Valves	Ventiler
+	Pipe fittings	Rørfittings
+	Pumps and tanks	Pumper og tanke
+	Drains	Afløb
+	Power distribution	Kraftfordeling
+	Light fixtures	Belysningsarmaturer
+	Steel W shapes	Stål-W-profiler
+	Steel channels	Stål-U-profiler
+	Steel angles	Stålvinkler
+	Steel HSS	Stålhulprofiler
+	Steel pipe	Stålrør
+	Steel metric shapes	Metriske stålprofiler
+	Rebar	Armering
+	Lumber	Tømmer
+	Base plates	Fodplader
+	Masonry units	Mursten
+	Planting	Beplantning
+	Parking	Parkering
+	Vehicles	Køretøjer
+	Site utilities	Forsyningsledninger på grunden
+	Site amenities	Udendørs inventar
+	North arrows	Nordpile
+	Section and elevation marks	Snit- og facademarkeringer
+	Tags and titles	Mærker og titler
+	Weld and drafting symbols	Svejse- og tegnesymboler
+	Scale bars	Målestokslinjer
+	Title blocks	Tegningshoveder
+	2D Profile	2D-profil
+	2D Profile Toolpath	Værktøjsbane for 2D-profil
+	CNC DXF Export	CNC DXF-eksport
+	CNC DXF Export...	CNC DXF-eksport...
+	Evaluate Rhai	Evaluer Rhai
+	Manufacture	Fremstilling
+	Rhai	Rhai
+	Run Rhai Script	Kør Rhai-script
+	Script Editor	Scripteditor
+	Define Linetype	Definer linjetype
+	Define Hatch Pattern	Definer skraveringsmønster
+	Linetype Editor...	Linjetypeeditor...
+	Hatch Pattern Editor...	Skraveringsmønstereditor...
+	Linetype Editor	Linjetypeeditor
+	Hatch Pattern Editor	Skraveringsmønstereditor
+	Start from	Start fra
+	A linetype in this drawing	En linjetype i denne tegning
+	A pattern	Et mønster
+	Add a dash or a gap	Tilføj en streg eller et mellemrum
+	Pattern length {n}	Mønsterlængde {n}
+	Dash	Streg
+	Gap	Mellemrum
+	Dot	Prik
+	Add Row	Tilføj række
+	Save to .lin File...	Gem i .lin-fil...
+	Linetype {name} is in the drawing	Linjetypen {name} er i tegningen
+	Dashes	Streger
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Streger: > 0 en streg, < 0 et mellemrum, 0 en prik
+	Add Line Family	Tilføj linjefamilie
+	Save to .pat File...	Gem i .pat-fil...
+	Pattern {name} is offered for new hatches	Mønstret {name} tilbydes til nye skraveringer
+	Check Underground	Kontroller nedgravede ledninger
+	Review Underground	Gennemgå nedgravede ledninger
+	Underground Sheets	Ark med nedgravede ledninger
+	DWF Underlay...	DWF-underlag...
+	DWF Out	DWF-eksport
+	DWFx Out	DWFx-eksport
+	Enter path of DWF/DWFx file to attach	Angiv sti til DWF/DWFx-fil, der skal vedhæftes
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Udvidelser

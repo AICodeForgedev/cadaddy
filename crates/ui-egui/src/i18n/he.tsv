@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	בדוק ציוד חשמלי
 	Submittal Review of Gear	סקירת הגשה של ציוד
 	Accept Gear as Submitted	קבל ציוד כפי שהוגש
+	Labels	תוויות
+	Print Labels	הדפס תוויות
+	Import Arc Flash Data	ייבא נתוני הבזק קשת
+	Check Labels	בדוק תוויות
+	Label BOM Lines	שורות BOM לתוויות
+	Water and Gas Points of Entry	נקודות כניסה של מים וגז
+	Route Grounding	נתב הארקה
+	Check Grounding	בדוק הארקה
+	Alternative Grounding Electrode	אלקטרודת הארקה חלופית
+	Grounding Takeoff	כתב כמויות להארקה
+	4D Schedule	לוח זמנים 4D
+	Import 4D Schedule	ייבא לוח זמנים 4D
+	4D Schedule Tasks	משימות לוח הזמנים 4D
+	Link 4D Task	קשר משימת 4D
+	4D State at a Date	מצב 4D בתאריך
+	Export 4D Video	ייצא סרטון 4D
+	Clear 4D Schedule	נקה לוח זמנים 4D
+	Import Schedule...	ייבא לוח זמנים...
+	Export Video...	ייצא סרטון...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV או Excel: עמודות משימה, התחלה, סיום, וכן מפלס, מערכת, מחלקה או רכיב
+	No schedule yet. Import one to show the model on a date.	אין עדיין לוח זמנים. ייבא אחד כדי להציג את המודל בתאריך מסוים.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} משימות, {start} עד {finish}; {linked} מתוך {elements} אובייקטים מתוזמנים
+	Show the model on a date	הצג את המודל בתאריך
+	Pause	השהה
+	A day earlier	יום אחד קודם
+	A day later	יום אחד מאוחר יותר
+	 days/s	 ימים/שנייה
+	Show work not started, pale	הצג עבודה שלא התחילה בגוון חיוור
+	Built	נבנה
+	In progress	בביצוע
+	Not yet	עדיין לא
+	Add Selected Objects	הוסף אובייקטים נבחרים
+	Remove Selected Objects	הסר אובייקטים נבחרים
+	Bill of Materials	רשימת חומרים
+	List Element Tags	רשימת תגי רכיבים
+	Set Element Tag Field	הגדר שדה בתג רכיב
+	Accept Element Tags	קבל תגי רכיבים
+	Element Tags	תגי רכיבים
+	Untagged	ללא תג
+	Tag not in schedule	התג אינו בטבלה
+	Missing protection	חסרה הגנה
+	Double protection	הגנה כפולה
+	No conductor note	אין הערת מוליך
+	Two rules apply	חלים שני כללים
+	All elements	כל הרכיבים
+	{n} elements	{n} רכיבים
+	No element tags: read the electrical plans first.	אין תגי רכיבים: קרא תחילה את תוכניות החשמל.
+	Field	שדה
+	Set on Picked	הגדר בנבחרים
+	Accept Picked	קבל נבחרים
+	Pick All Shown	בחר את כל המוצגים
+	New Material Release	שחרור חומרים חדש
+	Procurement	רכש
+	Order Status	מצב הזמנה
+	Submittal Log Entry	רשומה ביומן ההגשות
+	Submittal Log	יומן הגשות
+	Lead Times	זמני אספקה
+	Export Release	ייצא שחרור
+	Progress Plan	תוכנית התקדמות
+	Mark Installed Work	סמן עבודה שהותקנה
+	Import Timecards	ייבא כרטיסי נוכחות
+	Progress and Earned Value	התקדמות וערך מושג
+	Actual Production Rates	קצבי ביצוע בפועל
+	Add Field Observations	הוסף תצפיות שטח
+	Compare Estimate What-If	השווה תרחיש "מה אם" באומדן
+	Estimate Settings	הגדרות אומדן
+	Estimate Status	מצב אומדן
+	Explain Estimate Number	הסבר מספר באומדן
+	Import Estimating Baseline	ייבא בסיס אומדן
+	Query Estimate	שאילתת אומדן
+	Set Estimate Assembly	הגדר הרכב אומדן
+	Set Estimate Price	הגדר מחיר אומדן
+	Set Estimate Scope	הגדר היקף אומדן
+	New Window	חלון חדש
+	Concrete Elements	רכיבי בטון
+	Set Concrete	הגדר בטון
+	Check Concrete	בדוק בטון
+	Concrete Coordination Review	סקירת תיאום בטון
+	Concrete Quantities	כמויות בטון
+	Pour Hold Points	נקודות עצירה לפני יציקה
+	Sign Off Hold Point	אשר נקודת עצירה
+	Trade Quantities	כמויות לפי מקצוע
+	Trade Scope	היקף עבודת המקצוע
+	Trade Prices	מחירים לפי מקצוע
+	Whole-Job Settings	הגדרות לכל הפרויקט
+	Whole-Job Estimate	אומדן לכל הפרויקט
+	Bid Package	חבילת מכרז
+	Sub Bid	הצעת קבלן משנה
+	Level Bids	השווה הצעות
+	Add Bid History	הוסף היסטוריית הצעות
+	Bid Benchmarks	מדדי השוואה להצעות
+	Record Outcome	רשום תוצאה
+	Add Calibration Project	הוסף פרויקט כיול
+	Fit Rates to Bids	התאם תעריפים להצעות
+	Certified Payroll Hours	שעות מדוחות שכר מאושרים
+	Top-Down Labor Estimate	אומדן עבודה מלמעלה למטה
+	Change Order Snapshot	תמונת מצב של פקודת שינוי
+	Price Change Order	תמחר פקודת שינוי
+	Change Order Log	יומן פקודות שינוי
+	Segment	מקטע
+	Total	סה"כ
+	Total area	שטח כולל
+	Import P-405 Labor Tables	ייבא טבלאות עבודה P-405
+	New Part	חלק חדש
+	Part Parameter	פרמטר חלק
+	Part Sketch	סקיצת חלק
+	Pad	בליטה
+	Pocket	כיס
+	Revolve Feature	תכונת סיבוב גוף
+	Fillet Feature	תכונת עיגול פינה
+	Chamfer Feature	תכונת שיפוע
+	Edit Feature	ערוך תכונה
+	Reorder Feature	שנה סדר תכונה
+	Delete Feature	מחק תכונה
+	Rebuild Part	בנה מחדש את החלק
+	Model Tree	עץ מודל
+	List Parts	רשימת חלקים
+	No part yet: New Part starts one; sketches and features come from the part commands.	אין עדיין חלק: "חלק חדש" יוצר אחד; סקיצות ותכונות מגיעות מפקודות החלק.
+	Volume {v}	נפח {v}
+	Parameters	פרמטרים
+	name	שם
+	expression	ביטוי
+	Features	תכונות
+	Suppress	השבת
+	Double-click to rename	לחץ פעמיים כדי לשנות שם
+	Parts Library...	ספריית חלקים...
+	Parts Library	ספריית חלקים
+	Part Categories	קטגוריות חלקים
+	Showing {shown} of {total} parts; type in Filter to narrow.	מוצגים {shown} מתוך {total} חלקים; הקלד במסנן כדי לצמצם.
+	Annotation	הערות
+	Doors	דלתות
+	Windows	חלונות
+	Stairs and ramps	מדרגות ורמפות
+	Furniture	ריהוט
+	Sanitary fixtures	כלים סניטריים
+	Kitchen	מטבח
+	Diffusers and grilles	מפזרים ותריסים
+	Terminal units	יחידות קצה
+	HVAC equipment	ציוד מיזוג אוויר
+	Dampers	מדפים
+	Valves	שסתומים
+	Pipe fittings	אביזרי צנרת
+	Pumps and tanks	משאבות ומכלים
+	Drains	נקזים
+	Power distribution	חלוקת חשמל
+	Light fixtures	גופי תאורה
+	Steel W shapes	פרופילי פלדה W
+	Steel channels	פרופילי פלדה U
+	Steel angles	זוויתני פלדה
+	Steel HSS	פרופילי פלדה חלולים
+	Steel pipe	צינורות פלדה
+	Steel metric shapes	פרופילי פלדה מטריים
+	Rebar	ברזל זיון
+	Lumber	עץ בנייה
+	Base plates	פלטות בסיס
+	Masonry units	יחידות בנייה
+	Planting	צמחייה
+	Parking	חניה
+	Vehicles	כלי רכב
+	Site utilities	תשתיות אתר
+	Site amenities	מתקני אתר
+	North arrows	חיצי צפון
+	Section and elevation marks	סימוני חתך וחזית
+	Tags and titles	תגים וכותרות
+	Weld and drafting symbols	סמלי ריתוך ושרטוט
+	Scale bars	סרגלי קנה מידה
+	Title blocks	טבלאות כותרת
+	2D Profile	פרופיל 2D
+	2D Profile Toolpath	מסלול כלי לפרופיל 2D
+	CNC DXF Export	ייצוא DXF ל-CNC
+	CNC DXF Export...	ייצוא DXF ל-CNC...
+	Evaluate Rhai	הערך Rhai
+	Manufacture	ייצור
+	Rhai	Rhai
+	Run Rhai Script	הפעל סקריפט Rhai
+	Script Editor	עורך סקריפטים
+	Define Linetype	הגדר סוג קו
+	Define Hatch Pattern	הגדר דוגמת הצללה
+	Linetype Editor...	עורך סוגי קו...
+	Hatch Pattern Editor...	עורך דוגמאות הצללה...
+	Linetype Editor	עורך סוגי קו
+	Hatch Pattern Editor	עורך דוגמאות הצללה
+	Start from	התחל מתוך
+	A linetype in this drawing	סוג קו בשרטוט זה
+	A pattern	דוגמה
+	Add a dash or a gap	הוסף מקף או רווח
+	Pattern length {n}	אורך דוגמה {n}
+	Dash	מקף
+	Gap	רווח
+	Dot	נקודה
+	Add Row	הוסף שורה
+	Save to .lin File...	שמור לקובץ .lin...
+	Linetype {name} is in the drawing	סוג הקו {name} נמצא בשרטוט
+	Dashes	מקפים
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	מקפים: > 0 מקף, < 0 רווח, 0 נקודה
+	Add Line Family	הוסף משפחת קווים
+	Save to .pat File...	שמור לקובץ .pat...
+	Pattern {name} is offered for new hatches	הדוגמה {name} מוצעת להצללות חדשות
+	Check Underground	בדוק מערכות תת-קרקעיות
+	Review Underground	סקור מערכות תת-קרקעיות
+	Underground Sheets	גיליונות מערכות תת-קרקעיות
+	DWF Underlay...	רקע DWF...
+	DWF Out	פלט DWF
+	DWFx Out	פלט DWFx
+	Enter path of DWF/DWFx file to attach	הזן נתיב של קובץ DWF/DWFx לצירוף
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	תוספים

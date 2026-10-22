@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Kiểm tra thiết bị điện
 	Submittal Review of Gear	Rà soát hồ sơ trình duyệt thiết bị
 	Accept Gear as Submitted	Chấp nhận thiết bị như đã trình
+	Labels	Nhãn
+	Print Labels	In nhãn
+	Import Arc Flash Data	Nhập dữ liệu hồ quang điện
+	Check Labels	Kiểm tra nhãn
+	Label BOM Lines	Dòng danh mục vật tư của nhãn
+	Water and Gas Points of Entry	Điểm đấu vào nước và khí
+	Route Grounding	Đi dây nối đất
+	Check Grounding	Kiểm tra nối đất
+	Alternative Grounding Electrode	Điện cực nối đất thay thế
+	Grounding Takeoff	Bóc tách nối đất
+	4D Schedule	Tiến độ 4D
+	Import 4D Schedule	Nhập tiến độ 4D
+	4D Schedule Tasks	Công việc tiến độ 4D
+	Link 4D Task	Liên kết công việc 4D
+	4D State at a Date	Trạng thái 4D tại một ngày
+	Export 4D Video	Xuất video 4D
+	Clear 4D Schedule	Xóa tiến độ 4D
+	Import Schedule...	Nhập tiến độ...
+	Export Video...	Xuất video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV hoặc Excel: các cột công việc, bắt đầu, kết thúc và tầng, hệ thống, lớp hoặc phần tử
+	No schedule yet. Import one to show the model on a date.	Chưa có tiến độ. Hãy nhập một tiến độ để hiển thị mô hình tại một ngày.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} công việc, {start} đến {finish}; {linked} trên {elements} đối tượng đã xếp tiến độ
+	Show the model on a date	Hiển thị mô hình tại một ngày
+	Pause	Tạm dừng
+	A day earlier	Lùi một ngày
+	A day later	Tiến một ngày
+	 days/s	 ngày/giây
+	Show work not started, pale	Hiện mờ công việc chưa bắt đầu
+	Built	Đã xây dựng
+	In progress	Đang thi công
+	Not yet	Chưa bắt đầu
+	Add Selected Objects	Thêm đối tượng đã chọn
+	Remove Selected Objects	Bỏ đối tượng đã chọn
+	Bill of Materials	Danh mục vật tư
+	List Element Tags	Liệt kê mã hiệu phần tử
+	Set Element Tag Field	Đặt trường mã hiệu phần tử
+	Accept Element Tags	Chấp nhận mã hiệu phần tử
+	Element Tags	Mã hiệu phần tử
+	Untagged	Chưa có mã hiệu
+	Tag not in schedule	Mã hiệu không có trong bảng thống kê
+	Missing protection	Thiếu bảo vệ
+	Double protection	Bảo vệ trùng lặp
+	No conductor note	Không có ghi chú dây dẫn
+	Two rules apply	Hai quy tắc cùng áp dụng
+	All elements	Tất cả phần tử
+	{n} elements	{n} phần tử
+	No element tags: read the electrical plans first.	Không có mã hiệu phần tử: hãy đọc bản vẽ điện trước.
+	Field	Trường
+	Set on Picked	Đặt cho mục đã chọn
+	Accept Picked	Chấp nhận mục đã chọn
+	Pick All Shown	Chọn tất cả mục đang hiện
+	New Material Release	Phiếu cấp vật tư mới
+	Procurement	Mua sắm
+	Order Status	Trạng thái đơn hàng
+	Submittal Log Entry	Mục sổ theo dõi hồ sơ trình duyệt
+	Submittal Log	Sổ theo dõi hồ sơ trình duyệt
+	Lead Times	Thời gian giao hàng
+	Export Release	Xuất phiếu cấp vật tư
+	Progress Plan	Mặt bằng tiến độ
+	Mark Installed Work	Đánh dấu khối lượng đã lắp đặt
+	Import Timecards	Nhập bảng chấm công
+	Progress and Earned Value	Tiến độ và giá trị thu được
+	Actual Production Rates	Năng suất thực tế
+	Add Field Observations	Thêm quan sát hiện trường
+	Compare Estimate What-If	So sánh phương án dự toán
+	Estimate Settings	Thiết lập dự toán
+	Estimate Status	Trạng thái dự toán
+	Explain Estimate Number	Giải thích số liệu dự toán
+	Import Estimating Baseline	Nhập dữ liệu gốc dự toán
+	Query Estimate	Truy vấn dự toán
+	Set Estimate Assembly	Đặt cấu tạo dự toán
+	Set Estimate Price	Đặt đơn giá dự toán
+	Set Estimate Scope	Đặt phạm vi dự toán
+	New Window	Cửa sổ mới
+	Concrete Elements	Cấu kiện bê tông
+	Set Concrete	Đặt bê tông
+	Check Concrete	Kiểm tra bê tông
+	Concrete Coordination Review	Rà soát phối hợp bê tông
+	Concrete Quantities	Khối lượng bê tông
+	Pour Hold Points	Điểm dừng kiểm tra trước khi đổ
+	Sign Off Hold Point	Ký duyệt điểm dừng kiểm tra
+	Trade Quantities	Khối lượng theo bộ môn
+	Trade Scope	Phạm vi bộ môn
+	Trade Prices	Đơn giá theo bộ môn
+	Whole-Job Settings	Thiết lập toàn dự án
+	Whole-Job Estimate	Dự toán toàn dự án
+	Bid Package	Gói thầu
+	Sub Bid	Giá thầu phụ
+	Level Bids	So sánh giá thầu
+	Add Bid History	Thêm lịch sử đấu thầu
+	Bid Benchmarks	Chuẩn so sánh giá thầu
+	Record Outcome	Ghi kết quả
+	Add Calibration Project	Thêm dự án hiệu chuẩn
+	Fit Rates to Bids	Khớp định mức theo giá thầu
+	Certified Payroll Hours	Giờ công theo bảng lương xác nhận
+	Top-Down Labor Estimate	Dự toán nhân công từ trên xuống
+	Change Order Snapshot	Ảnh chụp lệnh thay đổi
+	Price Change Order	Tính giá lệnh thay đổi
+	Change Order Log	Sổ lệnh thay đổi
+	Segment	Đoạn
+	Total	Tổng
+	Total area	Tổng diện tích
+	Import P-405 Labor Tables	Nhập bảng nhân công P-405
+	New Part	Chi tiết mới
+	Part Parameter	Tham số chi tiết
+	Part Sketch	Phác thảo chi tiết
+	Pad	Đùn khối
+	Pocket	Khoét lõm
+	Revolve Feature	Đặc trưng xoay tròn
+	Fillet Feature	Đặc trưng bo tròn
+	Chamfer Feature	Đặc trưng vát cạnh
+	Edit Feature	Sửa đặc trưng
+	Reorder Feature	Sắp xếp lại đặc trưng
+	Delete Feature	Xóa đặc trưng
+	Rebuild Part	Dựng lại chi tiết
+	Model Tree	Cây mô hình
+	List Parts	Liệt kê chi tiết
+	No part yet: New Part starts one; sketches and features come from the part commands.	Chưa có chi tiết: "Chi tiết mới" tạo một chi tiết; phác thảo và đặc trưng được tạo từ các lệnh chi tiết.
+	Volume {v}	Thể tích {v}
+	Parameters	Tham số
+	name	tên
+	expression	biểu thức
+	Features	Đặc trưng
+	Suppress	Tạm tắt
+	Double-click to rename	Nhấp đúp để đổi tên
+	Parts Library...	Thư viện chi tiết...
+	Parts Library	Thư viện chi tiết
+	Part Categories	Danh mục chi tiết
+	Showing {shown} of {total} parts; type in Filter to narrow.	Đang hiện {shown}/{total} chi tiết; nhập vào Bộ lọc để thu hẹp.
+	Annotation	Chú thích
+	Doors	Cửa đi
+	Windows	Cửa sổ
+	Stairs and ramps	Cầu thang và dốc
+	Furniture	Nội thất
+	Sanitary fixtures	Thiết bị vệ sinh
+	Kitchen	Nhà bếp
+	Diffusers and grilles	Miệng gió và lưới gió
+	Terminal units	Thiết bị đầu cuối
+	HVAC equipment	Thiết bị HVAC
+	Dampers	Van gió
+	Valves	Van
+	Pipe fittings	Phụ kiện ống
+	Pumps and tanks	Bơm và bể chứa
+	Drains	Phễu thu
+	Power distribution	Phân phối điện
+	Light fixtures	Đèn chiếu sáng
+	Steel W shapes	Thép hình W
+	Steel channels	Thép chữ U
+	Steel angles	Thép góc
+	Steel HSS	Thép hộp HSS
+	Steel pipe	Ống thép
+	Steel metric shapes	Thép hình hệ mét
+	Rebar	Cốt thép
+	Lumber	Gỗ xẻ
+	Base plates	Bản đế
+	Masonry units	Khối xây
+	Planting	Cây xanh
+	Parking	Bãi đỗ xe
+	Vehicles	Phương tiện
+	Site utilities	Hạ tầng kỹ thuật
+	Site amenities	Tiện ích ngoài trời
+	North arrows	Mũi tên chỉ hướng bắc
+	Section and elevation marks	Ký hiệu mặt cắt và mặt đứng
+	Tags and titles	Ký hiệu và tiêu đề
+	Weld and drafting symbols	Ký hiệu hàn và vẽ kỹ thuật
+	Scale bars	Thước tỷ lệ
+	Title blocks	Khung tên
+	2D Profile	Biên dạng 2D
+	2D Profile Toolpath	Đường chạy dao biên dạng 2D
+	CNC DXF Export	Xuất DXF cho CNC
+	CNC DXF Export...	Xuất DXF cho CNC...
+	Evaluate Rhai	Thực thi Rhai
+	Manufacture	Gia công
+	Rhai	Rhai
+	Run Rhai Script	Chạy script Rhai
+	Script Editor	Trình soạn script
+	Define Linetype	Định nghĩa kiểu đường
+	Define Hatch Pattern	Định nghĩa mẫu tô vật liệu
+	Linetype Editor...	Trình soạn kiểu đường...
+	Hatch Pattern Editor...	Trình soạn mẫu tô vật liệu...
+	Linetype Editor	Trình soạn kiểu đường
+	Hatch Pattern Editor	Trình soạn mẫu tô vật liệu
+	Start from	Bắt đầu từ
+	A linetype in this drawing	Một kiểu đường trong bản vẽ này
+	A pattern	Một mẫu
+	Add a dash or a gap	Thêm một nét gạch hoặc khoảng hở
+	Pattern length {n}	Chiều dài mẫu {n}
+	Dash	Nét gạch
+	Gap	Khoảng hở
+	Dot	Chấm
+	Add Row	Thêm hàng
+	Save to .lin File...	Lưu vào tệp .lin...
+	Linetype {name} is in the drawing	Kiểu đường {name} đã có trong bản vẽ
+	Dashes	Các nét gạch
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Nét gạch: > 0 là nét gạch, < 0 là khoảng hở, 0 là chấm
+	Add Line Family	Thêm họ đường
+	Save to .pat File...	Lưu vào tệp .pat...
+	Pattern {name} is offered for new hatches	Mẫu {name} có sẵn cho các mặt tô mới
+	Check Underground	Kiểm tra công trình ngầm
+	Review Underground	Rà soát công trình ngầm
+	Underground Sheets	Tờ bản vẽ công trình ngầm
+	DWF Underlay...	Nền DWF...
+	DWF Out	Xuất DWF
+	DWFx Out	Xuất DWFx
+	Enter path of DWF/DWFx file to attach	Nhập đường dẫn tệp DWF/DWFx cần đính kèm
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Phần bổ trợ

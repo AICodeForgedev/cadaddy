@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Verificare echipamente electrice
 	Submittal Review of Gear	Revizuire documentație echipamente
 	Accept Gear as Submitted	Acceptare echipamente ca trimise
+	Labels	Etichete
+	Print Labels	Tipărire etichete
+	Import Arc Flash Data	Import date arc electric
+	Check Labels	Verificare etichete
+	Label BOM Lines	Linii listă de materiale pentru etichete
+	Water and Gas Points of Entry	Puncte de intrare apă și gaz
+	Route Grounding	Trasare împământare
+	Check Grounding	Verificare împământare
+	Alternative Grounding Electrode	Electrod de împământare alternativ
+	Grounding Takeoff	Extragere cantități împământare
+	4D Schedule	Grafic 4D
+	Import 4D Schedule	Import grafic 4D
+	4D Schedule Tasks	Activități grafic 4D
+	Link 4D Task	Legare activitate 4D
+	4D State at a Date	Stare 4D la o dată
+	Export 4D Video	Export video 4D
+	Clear 4D Schedule	Golire grafic 4D
+	Import Schedule...	Import grafic...
+	Export Video...	Export video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV sau Excel: coloane activitate, început, sfârșit și nivel, sistem, clasă sau element
+	No schedule yet. Import one to show the model on a date.	Încă nu există grafic. Importați unul pentru a afișa modelul la o dată.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} activități, de la {start} la {finish}; {linked} din {elements} obiecte planificate
+	Show the model on a date	Afișează modelul la o dată
+	Pause	Pauză
+	A day earlier	Cu o zi mai devreme
+	A day later	Cu o zi mai târziu
+	 days/s	 zile/s
+	Show work not started, pale	Afișează estompat lucrările neîncepute
+	Built	Construit
+	In progress	În curs
+	Not yet	Încă nu
+	Add Selected Objects	Adăugare obiecte selectate
+	Remove Selected Objects	Eliminare obiecte selectate
+	Bill of Materials	Listă de materiale
+	List Element Tags	Listare etichete elemente
+	Set Element Tag Field	Setare câmp etichetă element
+	Accept Element Tags	Acceptare etichete elemente
+	Element Tags	Etichete elemente
+	Untagged	Fără etichetă
+	Tag not in schedule	Eticheta nu este în tabel
+	Missing protection	Protecție lipsă
+	Double protection	Protecție dublă
+	No conductor note	Fără notă de conductoare
+	Two rules apply	Se aplică două reguli
+	All elements	Toate elementele
+	{n} elements	{n} elemente
+	No element tags: read the electrical plans first.	Nu există etichete de elemente: citiți mai întâi planurile electrice.
+	Field	Câmp
+	Set on Picked	Setare pe cele alese
+	Accept Picked	Acceptare cele alese
+	Pick All Shown	Alegere toate cele afișate
+	New Material Release	Eliberare nouă de materiale
+	Procurement	Aprovizionare
+	Order Status	Stare comandă
+	Submittal Log Entry	Intrare în registrul de documentații
+	Submittal Log	Registru documentații
+	Lead Times	Termene de livrare
+	Export Release	Export eliberare
+	Progress Plan	Plan de progres
+	Mark Installed Work	Marcare lucrări instalate
+	Import Timecards	Import pontaje
+	Progress and Earned Value	Progres și valoare câștigată
+	Actual Production Rates	Ritmuri reale de producție
+	Add Field Observations	Adăugare observații de șantier
+	Compare Estimate What-If	Comparare variantă deviz
+	Estimate Settings	Setări deviz
+	Estimate Status	Stare deviz
+	Explain Estimate Number	Explicare valoare deviz
+	Import Estimating Baseline	Import bază de devizare
+	Query Estimate	Interogare deviz
+	Set Estimate Assembly	Setare ansamblu deviz
+	Set Estimate Price	Setare preț deviz
+	Set Estimate Scope	Setare domeniu de lucrări deviz
+	New Window	Fereastră nouă
+	Concrete Elements	Elemente din beton
+	Set Concrete	Setare beton
+	Check Concrete	Verificare beton
+	Concrete Coordination Review	Revizuire coordonare beton
+	Concrete Quantities	Cantități beton
+	Pour Hold Points	Puncte de oprire înainte de turnare
+	Sign Off Hold Point	Aprobare punct de oprire
+	Trade Quantities	Cantități pe specialități
+	Trade Scope	Domeniu de lucrări specialitate
+	Trade Prices	Prețuri pe specialități
+	Whole-Job Settings	Setări lucrare completă
+	Whole-Job Estimate	Deviz lucrare completă
+	Bid Package	Pachet de ofertare
+	Sub Bid	Ofertă subcontractor
+	Level Bids	Comparare oferte
+	Add Bid History	Adăugare istoric oferte
+	Bid Benchmarks	Repere oferte
+	Record Outcome	Înregistrare rezultat
+	Add Calibration Project	Adăugare proiect de calibrare
+	Fit Rates to Bids	Ajustare norme la oferte
+	Certified Payroll Hours	Ore din state de plată certificate
+	Top-Down Labor Estimate	Estimare manoperă de sus în jos
+	Change Order Snapshot	Instantaneu ordin de modificare
+	Price Change Order	Evaluare cost ordin de modificare
+	Change Order Log	Registru ordine de modificare
+	Segment	Segment
+	Total	Total
+	Total area	Suprafață totală
+	Import P-405 Labor Tables	Import tabele manoperă P-405
+	New Part	Piesă nouă
+	Part Parameter	Parametru piesă
+	Part Sketch	Schiță piesă
+	Pad	Protuberanță
+	Pocket	Buzunar
+	Revolve Feature	Caracteristică de revoluție
+	Fillet Feature	Caracteristică de racordare
+	Chamfer Feature	Caracteristică de teșire
+	Edit Feature	Editare caracteristică
+	Reorder Feature	Reordonare caracteristică
+	Delete Feature	Ștergere caracteristică
+	Rebuild Part	Reconstruire piesă
+	Model Tree	Arbore model
+	List Parts	Listare piese
+	No part yet: New Part starts one; sketches and features come from the part commands.	Încă nu există piesă: Piesă nouă creează una; schițele și caracteristicile provin din comenzile pentru piese.
+	Volume {v}	Volum {v}
+	Parameters	Parametri
+	name	nume
+	expression	expresie
+	Features	Caracteristici
+	Suppress	Suprimare
+	Double-click to rename	Dublu clic pentru redenumire
+	Parts Library...	Bibliotecă de piese...
+	Parts Library	Bibliotecă de piese
+	Part Categories	Categorii de piese
+	Showing {shown} of {total} parts; type in Filter to narrow.	Se afișează {shown} din {total} piese; tastați în Filtru pentru a restrânge.
+	Annotation	Adnotare
+	Doors	Uși
+	Windows	Ferestre
+	Stairs and ramps	Scări și rampe
+	Furniture	Mobilier
+	Sanitary fixtures	Obiecte sanitare
+	Kitchen	Bucătărie
+	Diffusers and grilles	Difuzoare și grile
+	Terminal units	Unități terminale
+	HVAC equipment	Echipamente HVAC
+	Dampers	Clapete
+	Valves	Robinete
+	Pipe fittings	Fitinguri
+	Pumps and tanks	Pompe și rezervoare
+	Drains	Sifoane de pardoseală
+	Power distribution	Distribuție energie
+	Light fixtures	Corpuri de iluminat
+	Steel W shapes	Profile din oțel W
+	Steel channels	Profile U din oțel
+	Steel angles	Corniere din oțel
+	Steel HSS	Profile tubulare din oțel
+	Steel pipe	Țevi din oțel
+	Steel metric shapes	Profile metrice din oțel
+	Rebar	Armături
+	Lumber	Cherestea
+	Base plates	Plăci de bază
+	Masonry units	Elemente de zidărie
+	Planting	Plantații
+	Parking	Parcare
+	Vehicles	Vehicule
+	Site utilities	Rețele edilitare
+	Site amenities	Mobilier urban
+	North arrows	Săgeți nord
+	Section and elevation marks	Marcaje de secțiune și fațadă
+	Tags and titles	Etichete și titluri
+	Weld and drafting symbols	Simboluri de sudură și desen
+	Scale bars	Scări grafice
+	Title blocks	Cartușe
+	2D Profile	Profil 2D
+	2D Profile Toolpath	Traseu de sculă profil 2D
+	CNC DXF Export	Export DXF CNC
+	CNC DXF Export...	Export DXF CNC...
+	Evaluate Rhai	Evaluare Rhai
+	Manufacture	Fabricație
+	Rhai	Rhai
+	Run Rhai Script	Rulare script Rhai
+	Script Editor	Editor de scripturi
+	Define Linetype	Definire tip de linie
+	Define Hatch Pattern	Definire model de hașură
+	Linetype Editor...	Editor tipuri de linie...
+	Hatch Pattern Editor...	Editor modele de hașură...
+	Linetype Editor	Editor tipuri de linie
+	Hatch Pattern Editor	Editor modele de hașură
+	Start from	Pornire de la
+	A linetype in this drawing	Un tip de linie din acest desen
+	A pattern	Un model
+	Add a dash or a gap	Adăugați o liniuță sau un spațiu
+	Pattern length {n}	Lungime model {n}
+	Dash	Liniuță
+	Gap	Spațiu
+	Dot	Punct
+	Add Row	Adăugare rând
+	Save to .lin File...	Salvare în fișier .lin...
+	Linetype {name} is in the drawing	Tipul de linie {name} este în desen
+	Dashes	Liniuțe
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Liniuțe: > 0 liniuță, < 0 spațiu, 0 punct
+	Add Line Family	Adăugare familie de linii
+	Save to .pat File...	Salvare în fișier .pat...
+	Pattern {name} is offered for new hatches	Modelul {name} este disponibil pentru hașuri noi
+	Check Underground	Verificare rețele subterane
+	Review Underground	Revizuire rețele subterane
+	Underground Sheets	Planșe rețele subterane
+	DWF Underlay...	Suport DWF...
+	DWF Out	Export DWF
+	DWFx Out	Export DWFx
+	Enter path of DWF/DWFx file to attach	Introduceți calea fișierului DWF/DWFx de atașat
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Plug-in-uri

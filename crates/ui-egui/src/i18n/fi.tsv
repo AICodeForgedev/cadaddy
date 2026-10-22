@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Tarkista sähkökeskukset ja -laitteet
 	Submittal Review of Gear	Sähkölaitteiden hyväksyntätarkastus
 	Accept Gear as Submitted	Hyväksy laitteet toimitettuina
+	Labels	Merkintäkilvet
+	Print Labels	Tulosta merkintäkilvet
+	Import Arc Flash Data	Tuo valokaaritiedot
+	Check Labels	Tarkista merkintäkilvet
+	Label BOM Lines	Merkintäkilpien materiaaliluettelorivit
+	Water and Gas Points of Entry	Vesi- ja kaasujohtojen sisäänvientikohdat
+	Route Grounding	Reititä maadoitus
+	Check Grounding	Tarkista maadoitus
+	Alternative Grounding Electrode	Vaihtoehtoinen maadoituselektrodi
+	Grounding Takeoff	Maadoituksen määrälaskenta
+	4D Schedule	4D-aikataulu
+	Import 4D Schedule	Tuo 4D-aikataulu
+	4D Schedule Tasks	4D-aikataulun tehtävät
+	Link 4D Task	Linkitä 4D-tehtävä
+	4D State at a Date	4D-tila tiettynä päivänä
+	Export 4D Video	Vie 4D-video
+	Clear 4D Schedule	Tyhjennä 4D-aikataulu
+	Import Schedule...	Tuo aikataulu...
+	Export Video...	Vie video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV tai Excel: tehtävä-, alku- ja loppusarakkeet sekä kerros-, järjestelmä-, luokka- tai elementtisarake
+	No schedule yet. Import one to show the model on a date.	Ei vielä aikataulua. Tuo aikataulu, niin malli voidaan näyttää tiettynä päivänä.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} tehtävää, {start}–{finish}; {linked}/{elements} objektia aikataulutettu
+	Show the model on a date	Näytä malli tiettynä päivänä
+	Pause	Tauko
+	A day earlier	Päivä aiemmin
+	A day later	Päivä myöhemmin
+	 days/s	 päivää/s
+	Show work not started, pale	Näytä aloittamattomat työt haaleina
+	Built	Rakennettu
+	In progress	Käynnissä
+	Not yet	Ei vielä
+	Add Selected Objects	Lisää valitut objektit
+	Remove Selected Objects	Poista valitut objektit
+	Bill of Materials	Materiaaliluettelo
+	List Element Tags	Luettele elementtitunnisteet
+	Set Element Tag Field	Aseta elementtitunnisteen kenttä
+	Accept Element Tags	Hyväksy elementtitunnisteet
+	Element Tags	Elementtitunnisteet
+	Untagged	Ei tunnistetta
+	Tag not in schedule	Tunniste puuttuu luettelosta
+	Missing protection	Suojaus puuttuu
+	Double protection	Kaksinkertainen suojaus
+	No conductor note	Ei johdinmerkintää
+	Two rules apply	Kaksi sääntöä pätee
+	All elements	Kaikki elementit
+	{n} elements	{n} elementtiä
+	No element tags: read the electrical plans first.	Ei elementtitunnisteita: lue ensin sähköpiirustukset.
+	Field	Kenttä
+	Set on Picked	Aseta valituille
+	Accept Picked	Hyväksy valitut
+	Pick All Shown	Valitse kaikki näytetyt
+	New Material Release	Uusi materiaalitilaus
+	Procurement	Hankinnat
+	Order Status	Tilauksen tila
+	Submittal Log Entry	Hyväksyntälokin merkintä
+	Submittal Log	Hyväksyntäloki
+	Lead Times	Toimitusajat
+	Export Release	Vie tilaus
+	Progress Plan	Edistymissuunnitelma
+	Mark Installed Work	Merkitse asennettu työ
+	Import Timecards	Tuo tuntikortit
+	Progress and Earned Value	Edistyminen ja ansaittu arvo
+	Actual Production Rates	Toteutuneet tuotantonopeudet
+	Add Field Observations	Lisää työmaahavaintoja
+	Compare Estimate What-If	Vertaa kustannusarvion vaihtoehtoja
+	Estimate Settings	Kustannusarvion asetukset
+	Estimate Status	Kustannusarvion tila
+	Explain Estimate Number	Selitä kustannusarvion luku
+	Import Estimating Baseline	Tuo kustannuslaskennan perustaso
+	Query Estimate	Kysy kustannusarviolta
+	Set Estimate Assembly	Aseta kustannusarvion rakenne
+	Set Estimate Price	Aseta kustannusarvion hinta
+	Set Estimate Scope	Aseta kustannusarvion laajuus
+	New Window	Uusi ikkuna
+	Concrete Elements	Betoniosat
+	Set Concrete	Aseta betoni
+	Check Concrete	Tarkista betoni
+	Concrete Coordination Review	Betonin koordinointitarkastus
+	Concrete Quantities	Betonimäärät
+	Pour Hold Points	Valun pysäytyskohdat
+	Sign Off Hold Point	Kuittaa pysäytyskohta
+	Trade Quantities	Urakoiden määrät
+	Trade Scope	Urakan laajuus
+	Trade Prices	Urakoiden hinnat
+	Whole-Job Settings	Koko kohteen asetukset
+	Whole-Job Estimate	Koko kohteen kustannusarvio
+	Bid Package	Tarjouspaketti
+	Sub Bid	Aliurakkatarjous
+	Level Bids	Tasaa tarjoukset
+	Add Bid History	Lisää tarjoushistoriaa
+	Bid Benchmarks	Tarjousten vertailuarvot
+	Record Outcome	Kirjaa lopputulos
+	Add Calibration Project	Lisää kalibrointiprojekti
+	Fit Rates to Bids	Sovita yksikköhinnat tarjouksiin
+	Certified Payroll Hours	Varmennettujen palkkalistojen tunnit
+	Top-Down Labor Estimate	Ylhäältä alas -työmenekkiarvio
+	Change Order Snapshot	Muutostyön tilannekuva
+	Price Change Order	Hinnoittele muutostyö
+	Change Order Log	Muutostyöloki
+	Segment	Segmentti
+	Total	Yhteensä
+	Total area	Kokonaispinta-ala
+	Import P-405 Labor Tables	Tuo P-405-työmenekkitaulukot
+	New Part	Uusi osa
+	Part Parameter	Osan parametri
+	Part Sketch	Osan luonnos
+	Pad	Pursotus
+	Pocket	Tasku
+	Revolve Feature	Pyöräytyspiirre
+	Fillet Feature	Pyöristyspiirre
+	Chamfer Feature	Viistepiirre
+	Edit Feature	Muokkaa piirrettä
+	Reorder Feature	Järjestä piirre uudelleen
+	Delete Feature	Poista piirre
+	Rebuild Part	Rakenna osa uudelleen
+	Model Tree	Mallipuu
+	List Parts	Luettele osat
+	No part yet: New Part starts one; sketches and features come from the part commands.	Ei vielä osaa: Uusi osa aloittaa osan; luonnokset ja piirteet luodaan osakomennoilla.
+	Volume {v}	Tilavuus {v}
+	Parameters	Parametrit
+	name	nimi
+	expression	lauseke
+	Features	Piirteet
+	Suppress	Poista käytöstä
+	Double-click to rename	Nimeä uudelleen kaksoisnapsauttamalla
+	Parts Library...	Osakirjasto...
+	Parts Library	Osakirjasto
+	Part Categories	Osaluokat
+	Showing {shown} of {total} parts; type in Filter to narrow.	Näytetään {shown}/{total} osaa; rajaa kirjoittamalla Suodatin-kenttään.
+	Annotation	Merkinnät
+	Doors	Ovet
+	Windows	Ikkunat
+	Stairs and ramps	Portaat ja luiskat
+	Furniture	Kalusteet
+	Sanitary fixtures	Saniteettikalusteet
+	Kitchen	Keittiö
+	Diffusers and grilles	Hajottimet ja säleiköt
+	Terminal units	Päätelaitteet
+	HVAC equipment	LVI-laitteet
+	Dampers	Peltit
+	Valves	Venttiilit
+	Pipe fittings	Putkenosat
+	Pumps and tanks	Pumput ja säiliöt
+	Drains	Kaivot
+	Power distribution	Sähkönjakelu
+	Light fixtures	Valaisimet
+	Steel W shapes	Teräksiset W-profiilit
+	Steel channels	Teräksiset U-profiilit
+	Steel angles	Teräksiset L-profiilit
+	Steel HSS	Teräksiset HSS-putkiprofiilit
+	Steel pipe	Teräsputket
+	Steel metric shapes	Teräksiset metriset profiilit
+	Rebar	Raudoitteet
+	Lumber	Sahatavara
+	Base plates	Pohjalevyt
+	Masonry units	Muuraustuotteet
+	Planting	Istutukset
+	Parking	Pysäköinti
+	Vehicles	Ajoneuvot
+	Site utilities	Tontin kunnallistekniikka
+	Site amenities	Pihavarusteet
+	North arrows	Pohjoisnuolet
+	Section and elevation marks	Leikkaus- ja julkisivumerkit
+	Tags and titles	Tunnisteet ja otsikot
+	Weld and drafting symbols	Hitsaus- ja piirustussymbolit
+	Scale bars	Mittakaavajanat
+	Title blocks	Nimiöt
+	2D Profile	2D-profiili
+	2D Profile Toolpath	2D-profiilin työstörata
+	CNC DXF Export	CNC DXF -vienti
+	CNC DXF Export...	CNC DXF -vienti...
+	Evaluate Rhai	Laske Rhai-lauseke
+	Manufacture	Valmistus
+	Rhai	Rhai
+	Run Rhai Script	Suorita Rhai-skripti
+	Script Editor	Skriptieditori
+	Define Linetype	Määritä viivatyyppi
+	Define Hatch Pattern	Määritä viivoituskuvio
+	Linetype Editor...	Viivatyyppieditori...
+	Hatch Pattern Editor...	Viivoituskuvioeditori...
+	Linetype Editor	Viivatyyppieditori
+	Hatch Pattern Editor	Viivoituskuvioeditori
+	Start from	Lähtökohta
+	A linetype in this drawing	Tämän piirustuksen viivatyyppi
+	A pattern	Kuvio
+	Add a dash or a gap	Lisää viiva tai väli
+	Pattern length {n}	Kuvion pituus {n}
+	Dash	Viiva
+	Gap	Väli
+	Dot	Piste
+	Add Row	Lisää rivi
+	Save to .lin File...	Tallenna .lin-tiedostoon...
+	Linetype {name} is in the drawing	Viivatyyppi {name} on piirustuksessa
+	Dashes	Viivat
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Viivat: > 0 viiva, < 0 väli, 0 piste
+	Add Line Family	Lisää viivaperhe
+	Save to .pat File...	Tallenna .pat-tiedostoon...
+	Pattern {name} is offered for new hatches	Kuvio {name} on tarjolla uusille viivoituksille
+	Check Underground	Tarkista maanalaiset verkostot
+	Review Underground	Käy läpi maanalaiset verkostot
+	Underground Sheets	Maanalaisten verkostojen arkit
+	DWF Underlay...	DWF-alusta...
+	DWF Out	DWF-vienti
+	DWFx Out	DWFx-vienti
+	Enter path of DWF/DWFx file to attach	Anna liitettävän DWF/DWFx-tiedoston polku
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Laajennukset

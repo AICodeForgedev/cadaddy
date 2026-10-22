@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Kontroller elektrisk utstyr
 	Submittal Review of Gear	Gjennomgang av innsendt utstyr
 	Accept Gear as Submitted	Godta utstyret som innsendt
+	Labels	Etiketter
+	Print Labels	Skriv ut etiketter
+	Import Arc Flash Data	Importer lysbuedata
+	Check Labels	Kontroller etiketter
+	Label BOM Lines	Stykklistelinjer for etiketter
+	Water and Gas Points of Entry	Inntakspunkter for vann og gass
+	Route Grounding	Legg jording
+	Check Grounding	Kontroller jording
+	Alternative Grounding Electrode	Alternativ jordelektrode
+	Grounding Takeoff	Mengdeuttak for jording
+	4D Schedule	4D-tidsplan
+	Import 4D Schedule	Importer 4D-tidsplan
+	4D Schedule Tasks	Oppgaver i 4D-tidsplan
+	Link 4D Task	Koble 4D-oppgave
+	4D State at a Date	4D-tilstand på en dato
+	Export 4D Video	Eksporter 4D-video
+	Clear 4D Schedule	Fjern 4D-tidsplan
+	Import Schedule...	Importer tidsplan...
+	Export Video...	Eksporter video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV eller Excel: kolonner for oppgave, start og slutt, samt etasje, system, klasse eller element
+	No schedule yet. Import one to show the model on a date.	Ingen tidsplan ennå. Importer en for å vise modellen på en dato.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} oppgaver, {start} til {finish}; {linked} av {elements} objekter planlagt
+	Show the model on a date	Vis modellen på en dato
+	Pause	Pause
+	A day earlier	En dag tidligere
+	A day later	En dag senere
+	 days/s	 dager/s
+	Show work not started, pale	Vis arbeid som ikke er startet, blekt
+	Built	Bygget
+	In progress	Pågår
+	Not yet	Ikke ennå
+	Add Selected Objects	Legg til valgte objekter
+	Remove Selected Objects	Fjern valgte objekter
+	Bill of Materials	Stykkliste
+	List Element Tags	List opp elementkoder
+	Set Element Tag Field	Angi felt for elementkode
+	Accept Element Tags	Godta elementkoder
+	Element Tags	Elementkoder
+	Untagged	Uten kode
+	Tag not in schedule	Koden finnes ikke i skjemaet
+	Missing protection	Mangler vern
+	Double protection	Dobbelt vern
+	No conductor note	Ingen ledermerknad
+	Two rules apply	To regler gjelder
+	All elements	Alle elementer
+	{n} elements	{n} elementer
+	No element tags: read the electrical plans first.	Ingen elementkoder: les elektrotegningene først.
+	Field	Felt
+	Set on Picked	Angi på valgte
+	Accept Picked	Godta valgte
+	Pick All Shown	Velg alle viste
+	New Material Release	Ny materialbestilling
+	Procurement	Innkjøp
+	Order Status	Ordrestatus
+	Submittal Log Entry	Oppføring i innsendingslogg
+	Submittal Log	Innsendingslogg
+	Lead Times	Leveringstider
+	Export Release	Eksporter bestilling
+	Progress Plan	Fremdriftsplan
+	Mark Installed Work	Merk installert arbeid
+	Import Timecards	Importer timelister
+	Progress and Earned Value	Fremdrift og opptjent verdi
+	Actual Production Rates	Faktiske produksjonsrater
+	Add Field Observations	Legg til observasjoner fra byggeplassen
+	Compare Estimate What-If	Sammenlign hva-hvis for kalkyle
+	Estimate Settings	Kalkyleinnstillinger
+	Estimate Status	Kalkylestatus
+	Explain Estimate Number	Forklar kalkyletall
+	Import Estimating Baseline	Importer kalkylegrunnlag
+	Query Estimate	Spør kalkyle
+	Set Estimate Assembly	Angi konstruksjon for kalkyle
+	Set Estimate Price	Angi pris for kalkyle
+	Set Estimate Scope	Angi omfang for kalkyle
+	New Window	Nytt vindu
+	Concrete Elements	Betongelementer
+	Set Concrete	Angi betong
+	Check Concrete	Kontroller betong
+	Concrete Coordination Review	Koordineringsgjennomgang for betong
+	Concrete Quantities	Betongmengder
+	Pour Hold Points	Stoppunkter for støp
+	Sign Off Hold Point	Godkjenn stoppunkt
+	Trade Quantities	Mengder per fag
+	Trade Scope	Fagomfang
+	Trade Prices	Priser per fag
+	Whole-Job Settings	Innstillinger for hele jobben
+	Whole-Job Estimate	Kalkyle for hele jobben
+	Bid Package	Tilbudspakke
+	Sub Bid	Underentreprisetilbud
+	Level Bids	Utjevn tilbud
+	Add Bid History	Legg til tilbudshistorikk
+	Bid Benchmarks	Referanseverdier for tilbud
+	Record Outcome	Registrer utfall
+	Add Calibration Project	Legg til kalibreringsprosjekt
+	Fit Rates to Bids	Tilpass satser til tilbud
+	Certified Payroll Hours	Timer fra sertifiserte lønnslister
+	Top-Down Labor Estimate	Ovenfra-og-ned-kalkyle for arbeid
+	Change Order Snapshot	Øyeblikksbilde av endringsordre
+	Price Change Order	Prissett endringsordre
+	Change Order Log	Endringsordrelogg
+	Segment	Segment
+	Total	Totalt
+	Total area	Totalt areal
+	Import P-405 Labor Tables	Importer P-405-arbeidstabeller
+	New Part	Ny del
+	Part Parameter	Delparameter
+	Part Sketch	Delskisse
+	Pad	Ekstrudering
+	Pocket	Lomme
+	Revolve Feature	Rotasjonselement
+	Fillet Feature	Avrundingselement
+	Chamfer Feature	Faselement
+	Edit Feature	Rediger element
+	Reorder Feature	Endre rekkefølge på element
+	Delete Feature	Slett element
+	Rebuild Part	Bygg delen på nytt
+	Model Tree	Modelltre
+	List Parts	List opp deler
+	No part yet: New Part starts one; sketches and features come from the part commands.	Ingen del ennå: Ny del starter en; skisser og elementer kommer fra delkommandoene.
+	Volume {v}	Volum {v}
+	Parameters	Parametere
+	name	navn
+	expression	uttrykk
+	Features	Elementer
+	Suppress	Undertrykk
+	Double-click to rename	Dobbeltklikk for å gi nytt navn
+	Parts Library...	Delbibliotek...
+	Parts Library	Delbibliotek
+	Part Categories	Delkategorier
+	Showing {shown} of {total} parts; type in Filter to narrow.	Viser {shown} av {total} deler; skriv i Filter for å begrense.
+	Annotation	Annotering
+	Doors	Dører
+	Windows	Vinduer
+	Stairs and ramps	Trapper og ramper
+	Furniture	Møbler
+	Sanitary fixtures	Sanitærutstyr
+	Kitchen	Kjøkken
+	Diffusers and grilles	Diffusorer og rister
+	Terminal units	Terminalenheter
+	HVAC equipment	VVS-utstyr
+	Dampers	Spjeld
+	Valves	Ventiler
+	Pipe fittings	Rørdeler
+	Pumps and tanks	Pumper og tanker
+	Drains	Sluk
+	Power distribution	Kraftfordeling
+	Light fixtures	Lysarmaturer
+	Steel W shapes	W-profiler i stål
+	Steel channels	U-profiler i stål
+	Steel angles	Vinkelprofiler i stål
+	Steel HSS	HSS-profiler i stål
+	Steel pipe	Stålrør
+	Steel metric shapes	Metriske stålprofiler
+	Rebar	Armering
+	Lumber	Trelast
+	Base plates	Fotplater
+	Masonry units	Murverksenheter
+	Planting	Beplantning
+	Parking	Parkering
+	Vehicles	Kjøretøy
+	Site utilities	Tekniske anlegg på tomten
+	Site amenities	Utomhusutstyr
+	North arrows	Nordpiler
+	Section and elevation marks	Snitt- og fasademerker
+	Tags and titles	Merker og titler
+	Weld and drafting symbols	Sveise- og tegnesymboler
+	Scale bars	Målestokklinjaler
+	Title blocks	Tegningshoder
+	2D Profile	2D-profil
+	2D Profile Toolpath	Verktøybane for 2D-profil
+	CNC DXF Export	CNC DXF-eksport
+	CNC DXF Export...	CNC DXF-eksport...
+	Evaluate Rhai	Evaluer Rhai
+	Manufacture	Produksjon
+	Rhai	Rhai
+	Run Rhai Script	Kjør Rhai-skript
+	Script Editor	Skriptredigering
+	Define Linetype	Definer linjetype
+	Define Hatch Pattern	Definer skravurmønster
+	Linetype Editor...	Linjetyperedigering...
+	Hatch Pattern Editor...	Skravurmønsterredigering...
+	Linetype Editor	Linjetyperedigering
+	Hatch Pattern Editor	Skravurmønsterredigering
+	Start from	Start fra
+	A linetype in this drawing	En linjetype i denne tegningen
+	A pattern	Et mønster
+	Add a dash or a gap	Legg til en strek eller et mellomrom
+	Pattern length {n}	Mønsterlengde {n}
+	Dash	Strek
+	Gap	Mellomrom
+	Dot	Punkt
+	Add Row	Legg til rad
+	Save to .lin File...	Lagre til .lin-fil...
+	Linetype {name} is in the drawing	Linjetypen {name} er i tegningen
+	Dashes	Streker
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Streker: > 0 en strek, < 0 et mellomrom, 0 et punkt
+	Add Line Family	Legg til linjefamilie
+	Save to .pat File...	Lagre til .pat-fil...
+	Pattern {name} is offered for new hatches	Mønsteret {name} tilbys for nye skraveringer
+	Check Underground	Kontroller underjordiske anlegg
+	Review Underground	Gjennomgå underjordiske anlegg
+	Underground Sheets	Ark for underjordiske anlegg
+	DWF Underlay...	DWF-underlag...
+	DWF Out	DWF ut
+	DWFx Out	DWFx ut
+	Enter path of DWF/DWFx file to attach	Angi banen til DWF/DWFx-filen som skal tilknyttes
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Programtillegg
