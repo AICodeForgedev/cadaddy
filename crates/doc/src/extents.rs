@@ -165,9 +165,21 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
             if let Some(blk) = dm.block.as_ref().and_then(|n| d.block(n))
                 && depth < MAX_BLOCK_DEPTH
             {
-                for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
-                    b = b.union(&bounds_in(d, be, depth + 1, blocks));
-                }
+                // Reuse the shared block-bounds cache (as the Insert branch does) so a dimension
+                // block with branching or self-referencing children costs one pass per definition
+                // per depth, not one per reference (which grows exponentially) (CWE-400).
+                let inner = match blocks.get(&(blk.name.as_str(), depth)) {
+                    Some(cached) => *cached,
+                    None => {
+                        let mut inner = Bounds2::EMPTY;
+                        for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
+                            inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+                        }
+                        blocks.insert((blk.name.as_str(), depth), inner);
+                        inner
+                    }
+                };
+                b = b.union(&inner);
             }
             b
         }
