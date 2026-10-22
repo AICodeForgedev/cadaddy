@@ -58,10 +58,13 @@ pub enum RfiKind {
     /// Labels that need data the documents don't give yet (an arc flash study's results for a
     /// piece of gear): a document request, so the labels are ordered in time.
     LabelData,
+    /// Grounding or bonding the drawings call for that isn't in the model, can't be reached, or
+    /// falls short of its note (a missed concrete-encased electrode).
+    Grounding,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 16] = [
+    pub const ALL: [RfiKind; 17] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -78,6 +81,7 @@ impl RfiKind {
         RfiKind::GearLugs,
         RfiKind::GearInstall,
         RfiKind::LabelData,
+        RfiKind::Grounding,
     ];
 
     /// The snake_case name (as in JSON).
@@ -99,6 +103,7 @@ impl RfiKind {
             RfiKind::GearLugs => "gear_lugs",
             RfiKind::GearInstall => "gear_install",
             RfiKind::LabelData => "label_data",
+            RfiKind::Grounding => "grounding",
         }
     }
 
@@ -125,6 +130,7 @@ impl RfiKind {
             RfiKind::GearLugs => "Gear lugs don't take the feeders",
             RfiKind::GearInstall => "Gear can't be installed as submitted",
             RfiKind::LabelData => "Labels need data the documents don't give",
+            RfiKind::Grounding => "Grounding or bonding missing, unreachable or short",
         }
     }
 
@@ -137,7 +143,8 @@ impl RfiKind {
             | RfiKind::SleeveNoRoute
             | RfiKind::SleeveNoFit
             | RfiKind::GearLugs
-            | RfiKind::GearInstall => Severity::High,
+            | RfiKind::GearInstall
+            | RfiKind::Grounding => Severity::High,
             RfiKind::DetailUnused => Severity::Low,
             _ => Severity::Medium,
         }

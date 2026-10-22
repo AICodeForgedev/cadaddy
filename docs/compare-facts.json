@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 829,
-    "count": 829,
+    "callableAsJson": 834,
+    "count": 834,
     "ids": [
       "-attedit",
       "-block",
@@ -326,6 +326,11 @@
       "grip.rotate",
       "grip.scale",
       "grip.stretch",
+      "grounding.alternative",
+      "grounding.check",
+      "grounding.entries",
+      "grounding.route",
+      "grounding.takeoff",
       "group",
       "groupedit",
       "groups.list",

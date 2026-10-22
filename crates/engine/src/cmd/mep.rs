@@ -1052,9 +1052,94 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    // -- Grounding: conductors along their routes (drawn an inch thick to be seen), rods, the
+    // concrete-encased electrode in its footing, rings and busbars. --
+    let mut total_ground = 0usize;
+    if let Some(g) = &sp.mep.grounding {
+        let inch = upf / 12.0;
+        let mut add_ground = |d: &mut Drawing, level: &str, tag: &str, part: &str, m: Mesh| {
+            if m.faces.is_empty() {
+                return;
+            }
+            let layer = "3D-GROUNDING".to_string();
+            ensure_layer(d, &layer, 3);
+            let xdata = vec![
+                t(1001, super::wallgen::APP.into()),
+                t(1000, "mep".into()),
+                t(1000, level.to_string()),
+                t(1000, Handle(0).hex()),
+                t(1000, "system:grounding".into()),
+                t(1000, "kind:grounding".into()),
+                t(1000, format!("part:{}", sanitise(part, 40))),
+                t(1000, format!("tag:{}", tag.chars().take(60).collect::<String>())),
+            ];
+            if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+                total_ground += 1;
+            }
+        };
+        let conductor = |path: &[[f64; 3]]| -> Mesh {
+            let mut m = super::wallgen::empty_mesh();
+            for w in path.windows(2).take(1000) {
+                let [a, b] = w else { continue };
+                if !(a.iter().chain(b.iter()).all(|v| v.is_finite())) {
+                    continue;
+                }
+                let (pa, pb) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+                if pa.dist(pb) > 1e-9 {
+                    super::wallgen::add_box(&mut m, pa, pb, inch, a[2].min(b[2]) * upf - inch / 2.0, a[2].max(b[2]) * upf + inch / 2.0);
+                } else if (a[2] - b[2]).abs() > 1e-9 {
+                    add_upright_cylinder(&mut m, pa, inch / 2.0, a[2].min(b[2]) * upf, a[2].max(b[2]) * upf);
+                }
+            }
+            m
+        };
+        for e in g.electrodes.iter().take(MAX_RUNS) {
+            add_ground(d, &e.level, &e.tag, "gec", conductor(&e.path));
+            let at = Vec2::new(e.at[0], e.at[1]);
+            let z = e.z_ft * upf;
+            let mut m = super::wallgen::empty_mesh();
+            match e.kind.to_ascii_lowercase().as_str() {
+                "ground_rod" => {
+                    for k in 0..e.count.clamp(1, 50) {
+                        let c = at + Vec2::new(f64::from(k) * 6.0 * upf, 0.0);
+                        let len = if e.rod_length_ft.is_finite() { e.rod_length_ft.clamp(1.0, 100.0) } else { 10.0 };
+                        add_upright_cylinder(&mut m, c, inch * 0.3125, z - len * upf, z);
+                    }
+                }
+                "concrete_encased" if e.length_ft.is_finite() && e.length_ft > 0.0 => {
+                    let a = e.angle_deg.to_radians();
+                    let end = at + Vec2::new(a.cos(), a.sin()) * (e.length_ft.min(1000.0) * upf);
+                    super::wallgen::add_box(&mut m, at, end, inch, z - inch / 2.0, z + inch / 2.0);
+                }
+                "ground_ring" if e.ring_length_ft.is_finite() && e.ring_length_ft > 0.0 => {
+                    let side = e.ring_length_ft.min(4000.0) / 4.0 * upf;
+                    let c = [at, at + Vec2::new(side, 0.0), at + Vec2::new(side, side), at + Vec2::new(0.0, side)];
+                    for k in 0..4 {
+                        let (Some(p), Some(q)) = (c.get(k), c.get((k + 1) % 4)) else { continue };
+                        super::wallgen::add_box(&mut m, *p, *q, inch, z - inch / 2.0, z + inch / 2.0);
+                    }
+                }
+                _ => {}
+            }
+            add_ground(d, &e.level, &e.tag, &e.kind, m);
+        }
+        for b in g.bonds.iter().take(MAX_RUNS) {
+            add_ground(d, &b.level, &b.tag, &format!("bond:{}", b.kind), conductor(&b.path));
+        }
+        for b in g.busbars.iter().take(MAX_RUNS) {
+            let Some(level) = sp.level(&b.level) else { continue };
+            let z = if b.z_ft != 0.0 { b.z_ft } else { level.elevation_ft + 7.0 } * upf;
+            let at = Vec2::new(b.at[0], b.at[1]);
+            let mut m = super::wallgen::empty_mesh();
+            super::wallgen::add_box(&mut m, at - Vec2::new(6.0 * inch, 0.0), at + Vec2::new(6.0 * inch, 0.0), inch, z - 2.0 * inch, z + 2.0 * inch);
+            add_ground(d, &b.level, &b.tag, "busbar", m);
+        }
+    }
+
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
         "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
+        "grounding": total_ground,
     })
 }
 
