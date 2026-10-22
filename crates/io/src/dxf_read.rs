@@ -564,7 +564,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
         // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
         // PDFREFERENCE: the name the ODA's converter writes for it.
-        "PDFUNDERLAY" | "PDFREFERENCE" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
+        "PDFUNDERLAY" | "PDFREFERENCE" | "DGNUNDERLAY" | "DGNREFERENCE" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };

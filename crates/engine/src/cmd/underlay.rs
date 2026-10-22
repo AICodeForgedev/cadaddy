@@ -26,6 +26,17 @@ type PageKey = (String, u32);
 /// Pages read so far (and pages that couldn't be read, as `None`), by file and page.
 static PAGES: Mutex<Option<HashMap<PageKey, Option<Arc<Drawing>>>>> = Mutex::new(None);
 
+/// The underlay commands' own functions, for DGNCLIP, DGNADJUST and DGNLAYERS.
+pub(crate) fn clip(s: &mut Session, p: &Value) -> Result<Value> {
+    run_clip(s, p)
+}
+pub(crate) fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
+    run_adjust(s, p)
+}
+pub(crate) fn layers(s: &mut Session, p: &Value) -> Result<Value> {
+    run_layers(s, p)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     // The renderer draws underlays with the pages this module reads.
     cadaddy_render::set_underlay_loader(load_page);
@@ -51,7 +62,11 @@ pub fn load_page(path: &str, page: u32) -> Option<Arc<Drawing>> {
     {
         return hit.clone();
     }
-    let got = read_page(path, page.max(1)).ok().map(|(d, _)| Arc::new(d));
+    let got = if path.trim().to_ascii_lowercase().ends_with(".dgn") {
+        read_dgn(path).ok().map(|(d, _, _)| Arc::new(d))
+    } else {
+        read_page(path, page.max(1)).ok().map(|(d, _)| Arc::new(d))
+    };
     if let Ok(mut g) = PAGES.lock() {
         let m = g.get_or_insert_with(HashMap::new);
         if m.len() >= MAX_CACHED_PAGES {
@@ -60,6 +75,35 @@ pub fn load_page(path: &str, page: u32) -> Option<Arc<Drawing>> {
         m.insert(key, got.clone());
     }
     got
+}
+
+/// Keep a page (or a DGN design) just read, for the renderer and snaps.
+pub(crate) fn cache_page(path: &str, page: u32, d: Drawing) {
+    if let Ok(mut g) = PAGES.lock() {
+        let m = g.get_or_insert_with(HashMap::new);
+        if m.len() >= MAX_CACHED_PAGES {
+            m.clear();
+        }
+        m.insert((path.to_string(), page.max(1)), Some(Arc::new(d)));
+    }
+}
+
+/// A DGN design file read through the io hooks, moved so its extents start at the origin (an
+/// underlay's "page"): the drawing, where its extents started, and their size.
+pub(crate) fn read_dgn(path: &str) -> Result<(Drawing, Vec2, Vec2)> {
+    let hooks = super::file::io().ok_or_else(|| bad("dgnattach", "file formats are not available in this build"))?;
+    let bytes = read_bytes(path)?;
+    let mut d = (hooks.read)(&bytes, path).map_err(|e| bad("dgnattach", format!("{path}: {e}")))?;
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    if ext.is_empty() {
+        return Err(bad("dgnattach", format!("{path}: the design file has nothing in it")));
+    }
+    let to_origin = Mat3::translate(-ext.min);
+    let hs: Vec<Handle> = d.model.iter().map(|e| e.handle).collect();
+    for h in hs {
+        let _ = d.modify_entity(h, |e| e.kind.transform(&to_origin));
+    }
+    Ok((d, ext.min, Vec2::new(ext.width().max(1e-9), ext.height().max(1e-9))))
 }
 
 /// Read a page through the io hooks' PDF reader: the drawing and the reader's report.
@@ -132,7 +176,7 @@ fn underlays(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Handle>> {
     let d = s.doc()?;
     let hs: Vec<Handle> = targets(s, p)?.into_iter().filter(|h| d.entity(*h).is_some_and(|e| matches!(e.kind, EntityKind::Underlay(_)))).collect();
     if hs.is_empty() {
-        return Err(bad(cmd, "select a PDF underlay"));
+        return Err(bad(cmd, "select an underlay (PDF or DGN)"));
     }
     Ok(hs)
 }
@@ -140,7 +184,7 @@ fn underlays(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Handle>> {
 fn underlay_of(s: &Session, h: Handle) -> Result<Underlay> {
     match s.doc()?.entity(h).map(|e| &e.kind) {
         Some(EntityKind::Underlay(u)) => Ok(u.clone()),
-        _ => Err(bad("pdf", "not a PDF underlay")),
+        _ => Err(bad("pdf", "not an underlay")),
     }
 }
 
@@ -153,7 +197,7 @@ fn store(s: &mut Session, h: Handle, u: Underlay) -> Result<()> {
 /// the boundary deleted.
 fn run_clip(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = underlays(s, p, "pdfclip")?;
-    let h = *hs.first().ok_or_else(|| bad("pdfclip", "select a PDF underlay"))?;
+    let h = *hs.first().ok_or_else(|| bad("pdfclip", "select an underlay (PDF or DGN)"))?;
     let mut u = underlay_of(s, h)?;
     let to_page = u.transform().inverse().ok_or_else(|| bad("pdfclip", "the underlay has no area"))?;
     let pts: Option<Vec<Vec2>> = match (p.get("rect"), p.get("points")) {
@@ -235,7 +279,7 @@ fn names(p: &Value, key: &str) -> Vec<String> {
 /// PDFLAYERS: the page's layers, with those named turned off or on.
 fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = underlays(s, p, "pdflayers")?;
-    let h = *hs.first().ok_or_else(|| bad("pdflayers", "select a PDF underlay"))?;
+    let h = *hs.first().ok_or_else(|| bad("pdflayers", "select an underlay (PDF or DGN)"))?;
     let mut u = underlay_of(s, h)?;
     let page = load_page(&u.path, u.page);
     let all: Vec<String> = page.as_ref().map(|d| d.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();
@@ -254,7 +298,9 @@ fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
 /// Snapping to underlay geometry (PDFOSNAP, a drawing setting, on unless 0): the underlays of
 /// `space` whose frame is near `cursor`, with the page drawing and its placement.
 pub(crate) fn near(d: &Drawing, space: &cadaddy_doc::Space, cursor: Vec2, aperture: f64) -> Vec<(Arc<Drawing>, Mat3)> {
-    if d.header.i64("PDFOSNAP", 1) == 0 {
+    // PDFOSNAP for PDF underlays, DGNOSNAP for DGN ones (each on unless 0).
+    let (pdf, dgn) = (d.header.i64("PDFOSNAP", 1) != 0, d.header.i64("DGNOSNAP", 1) != 0);
+    if !pdf && !dgn {
         return Vec::new();
     }
     let Some(store) = d.space(space) else { return Vec::new() };
@@ -262,7 +308,9 @@ pub(crate) fn near(d: &Drawing, space: &cadaddy_doc::Space, cursor: Vec2, apertu
     store
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Underlay(u) if Bounds2::from_points(u.corners()).intersects(&probe) => Some((load_page(&u.path, u.page)?, u.transform())),
+            EntityKind::Underlay(u) if (if u.is_dgn() { dgn } else { pdf }) && Bounds2::from_points(u.corners()).intersects(&probe) => {
+                Some((load_page(&u.path, u.page)?, u.transform()))
+            }
             _ => None,
         })
         .take(16)

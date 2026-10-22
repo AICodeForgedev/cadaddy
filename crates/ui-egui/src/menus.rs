@@ -174,9 +174,26 @@ fn file_dialogs_off(app: &CadApp) -> bool {
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if params.is_null()
         && file_dialogs_off(app)
-        && matches!(cadaddy_engine::cmd::resolve_alias(id).as_str(), "open" | "saveas" | "recover" | "xattach" | "imageattach" | "attach")
+        && matches!(
+            cadaddy_engine::cmd::resolve_alias(id).as_str(),
+            "open" | "saveas" | "recover" | "xattach" | "imageattach" | "attach" | "dgnimport" | "dgnattach" | "dgnexport"
+        )
     {
         return None;
+    }
+    // DGN files from the menus: the file dialog first (without one, the command asks).
+    if params.is_null() && matches!(id, "dgnimport" | "dgnattach" | "dgnexport") {
+        let picked = if id == "dgnexport" {
+            let stem = app.session.state().map(|st| st.title.clone()).unwrap_or_else(|_| "Drawing".into());
+            app.services.pick_save.as_ref().map(|f| f(&format!("{stem}.dgn")))
+        } else {
+            app.services.pick_open.as_ref().map(|f| f())
+        };
+        match picked {
+            Some(Some(path)) => return Some(app.run(id, serde_json::json!({ "path": path }))),
+            Some(None) => return Some(Ok(Value::Null)),
+            None => {}
+        }
     }
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);

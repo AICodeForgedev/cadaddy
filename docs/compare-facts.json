@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 921,
-    "count": 921,
+    "callableAsJson": 927,
+    "count": 927,
     "ids": [
       "-attedit",
       "-block",
@@ -226,6 +226,12 @@
       "ddptype",
       "delay",
       "delconstraint",
+      "dgnadjust",
+      "dgnattach",
+      "dgnclip",
+      "dgnexport",
+      "dgnimport",
+      "dgnlayers",
       "dim",
       "dimaligned",
       "dimangular",
@@ -925,8 +931,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 472,
-    "typed": 496
+    "inMenus": 475,
+    "typed": 502
   },
   "features": {
     "ifcExport": true,

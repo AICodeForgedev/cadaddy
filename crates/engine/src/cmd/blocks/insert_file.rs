@@ -238,6 +238,23 @@ pub(super) fn json_params(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(p)
 }
 
+/// Bring a drawing's model space into this one as it is (DGNIMPORT): its objects, with the
+/// layers, linetypes and blocks they use. Returns the objects added.
+pub(crate) fn import_drawing(s: &mut Session, src: &Drawing, name: &str) -> Result<Vec<Handle>> {
+    let mut block = name.to_string();
+    let mut n = 1;
+    while s.doc()?.block(&block).is_some() && n < 10_000 {
+        n += 1;
+        block = format!("{name}_{n}");
+    }
+    let block = define_from(s, src, &block)?;
+    let h = super::insert(s, &block, cadaddy_geom::Vec2::ZERO, 1.0, 0.0, &serde_json::Map::new())?;
+    let added = explode_insert(s, h)?;
+    // The block was only the way in.
+    s.doc_mut()?.blocks.remove(&block);
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

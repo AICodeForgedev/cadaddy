@@ -524,6 +524,7 @@ impl BlockM {
 }
 
 mod insert_file;
+pub(crate) use insert_file::import_drawing;
 mod xclip;
 pub(crate) mod xref;
 

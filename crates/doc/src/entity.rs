@@ -1321,6 +1321,11 @@ impl Underlay {
         let (u, v) = (self.u.xy() * self.size.x, self.v.xy() * self.size.y);
         [o, o + u, o + u + v, o + v]
     }
+    /// A DGN underlay (DGNATTACH): its file is a `.dgn`; its "page" is the design file's model,
+    /// in its master units, shifted so its extents start at the origin.
+    pub fn is_dgn(&self) -> bool {
+        self.path.trim().to_ascii_lowercase().ends_with(".dgn")
+    }
     /// Page coordinates (sheet inches) → drawing coordinates.
     pub fn transform(&self) -> cadaddy_geom::Mat3 {
         let (u, v, o) = (self.u.xy(), self.v.xy(), self.insert.xy());
