@@ -2281,3 +2281,25 @@
 	Add Bid History	入札履歴を追加
 	Bid Benchmarks	入札ベンチマーク
 	Record Outcome	結果を記録
+	New Part	新規パーツ
+	Part Parameter	パーツパラメータ
+	Part Sketch	パーツスケッチ
+	Pad	パッド
+	Pocket	ポケット
+	Revolve Feature	回転フィーチャー
+	Fillet Feature	フィレットフィーチャー
+	Chamfer Feature	面取りフィーチャー
+	Edit Feature	フィーチャーを編集
+	Reorder Feature	フィーチャーの順序変更
+	Delete Feature	フィーチャーを削除
+	Rebuild Part	パーツを再構築
+	Model Tree	モデルツリー
+	List Parts	パーツ一覧
+	No part yet: New Part starts one; sketches and features come from the part commands.	パーツはまだありません: 新規パーツで作成し、スケッチとフィーチャーはパーツのコマンドで追加します。
+	Volume {v}	体積 {v}
+	Parameters	パラメータ
+	name	名前
+	expression	式
+	Features	フィーチャー
+	Suppress	抑制
+	Double-click to rename	ダブルクリックで名前を変更

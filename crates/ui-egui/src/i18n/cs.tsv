@@ -2879,3 +2879,67 @@ menu	Modify	Modifikace
 	Add Bid History	Přidat historii nabídek
 	Bid Benchmarks	Srovnávací hodnoty nabídek
 	Record Outcome	Zaznamenat výsledek
+	New Part	Nový díl
+	Part Parameter	Parametr dílu
+	Part Sketch	Skica dílu
+	Pad	Vysunutí
+	Pocket	Kapsa
+	Revolve Feature	Prvek rotace
+	Fillet Feature	Prvek zaoblení
+	Chamfer Feature	Prvek zkosení
+	Edit Feature	Upravit prvek
+	Reorder Feature	Přesunout prvek
+	Delete Feature	Odstranit prvek
+	Rebuild Part	Přestavět díl
+	Model Tree	Strom modelu
+	List Parts	Seznam dílů
+	No part yet: New Part starts one; sketches and features come from the part commands.	Zatím žádný díl: Nový díl jej založí; skici a prvky přidávají příkazy dílu.
+	Volume {v}	Objem {v}
+	Parameters	Parametry
+	name	název
+	expression	výraz
+	Features	Prvky
+	Suppress	Potlačit
+	Double-click to rename	Dvojklikem přejmenujete
+	Parts Library...	Knihovna dílů...
+	Parts Library	Knihovna dílů
+	Part Categories	Kategorie dílů
+	Showing {shown} of {total} parts; type in Filter to narrow.	Zobrazeno {shown} z {total} dílů; zúžíte zadáním do filtru.
+	Annotation	Poznámky
+	Doors	Dveře
+	Windows	Okna
+	Stairs and ramps	Schodiště a rampy
+	Furniture	Nábytek
+	Sanitary fixtures	Zařizovací předměty
+	Kitchen	Kuchyně
+	Diffusers and grilles	Vyústky a mřížky
+	Terminal units	Koncové jednotky
+	HVAC equipment	Zařízení VZT
+	Dampers	Klapky
+	Valves	Armatury
+	Pipe fittings	Tvarovky
+	Pumps and tanks	Čerpadla a nádrže
+	Drains	Vpusti
+	Power distribution	Rozvod energie
+	Light fixtures	Svítidla
+	Steel W shapes	Ocelové profily W
+	Steel channels	Ocelové profily U
+	Steel angles	Ocelové úhelníky
+	Steel HSS	Ocelové uzavřené profily
+	Steel pipe	Ocelové trubky
+	Steel metric shapes	Ocelové metrické profily
+	Rebar	Výztuž
+	Lumber	Řezivo
+	Base plates	Patní desky
+	Masonry units	Zdicí prvky
+	Planting	Výsadba
+	Parking	Parkování
+	Vehicles	Vozidla
+	Site utilities	Inženýrské sítě
+	Site amenities	Mobiliář areálu
+	North arrows	Severky
+	Section and elevation marks	Značky řezů a pohledů
+	Tags and titles	Značky a titulky
+	Weld and drafting symbols	Svarové a výkresové značky
+	Scale bars	Grafická měřítka
+	Title blocks	Rohová razítka

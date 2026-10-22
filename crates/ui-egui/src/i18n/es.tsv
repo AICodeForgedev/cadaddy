@@ -2905,3 +2905,67 @@
 	Add Bid History	Añadir historial de ofertas
 	Bid Benchmarks	Referencias de ofertas
 	Record Outcome	Registrar resultado
+	New Part	Pieza nueva
+	Part Parameter	Parámetro de pieza
+	Part Sketch	Croquis de pieza
+	Pad	Extrusión
+	Pocket	Vaciado
+	Revolve Feature	Operación de revolución
+	Fillet Feature	Operación de redondeo
+	Chamfer Feature	Operación de chaflán
+	Edit Feature	Editar operación
+	Reorder Feature	Reordenar operación
+	Delete Feature	Eliminar operación
+	Rebuild Part	Reconstruir pieza
+	Model Tree	Árbol del modelo
+	List Parts	Listar piezas
+	No part yet: New Part starts one; sketches and features come from the part commands.	Aún no hay pieza: Pieza nueva crea una; los croquis y operaciones vienen de los comandos de pieza.
+	Volume {v}	Volumen {v}
+	Parameters	Parámetros
+	name	nombre
+	expression	expresión
+	Features	Operaciones
+	Suppress	Suprimir
+	Double-click to rename	Doble clic para cambiar el nombre
+	Parts Library...	Biblioteca de piezas...
+	Parts Library	Biblioteca de piezas
+	Part Categories	Categorías de piezas
+	Showing {shown} of {total} parts; type in Filter to narrow.	Se muestran {shown} de {total} piezas; escriba en Filtro para acotar.
+	Annotation	Anotación
+	Doors	Puertas
+	Windows	Ventanas
+	Stairs and ramps	Escaleras y rampas
+	Furniture	Mobiliario
+	Sanitary fixtures	Aparatos sanitarios
+	Kitchen	Cocina
+	Diffusers and grilles	Difusores y rejillas
+	Terminal units	Unidades terminales
+	HVAC equipment	Equipos de climatización
+	Dampers	Compuertas
+	Valves	Válvulas
+	Pipe fittings	Accesorios de tubería
+	Pumps and tanks	Bombas y depósitos
+	Drains	Desagües
+	Power distribution	Distribución eléctrica
+	Light fixtures	Luminarias
+	Steel W shapes	Perfiles de acero W
+	Steel channels	Perfiles de acero en U
+	Steel angles	Angulares de acero
+	Steel HSS	Perfiles tubulares de acero
+	Steel pipe	Tubos de acero
+	Steel metric shapes	Perfiles de acero métricos
+	Rebar	Armadura
+	Lumber	Madera aserrada
+	Base plates	Placas base
+	Masonry units	Unidades de mampostería
+	Planting	Plantación
+	Parking	Aparcamiento
+	Vehicles	Vehículos
+	Site utilities	Servicios del emplazamiento
+	Site amenities	Mobiliario exterior
+	North arrows	Flechas de norte
+	Section and elevation marks	Marcas de sección y alzado
+	Tags and titles	Etiquetas y títulos
+	Weld and drafting symbols	Símbolos de soldadura y dibujo
+	Scale bars	Escalas gráficas
+	Title blocks	Cajetines

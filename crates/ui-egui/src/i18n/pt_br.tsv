@@ -2905,3 +2905,67 @@
 	Add Bid History	Adicionar histórico de licitações
 	Bid Benchmarks	Referências de licitação
 	Record Outcome	Registrar resultado
+	New Part	Nova peça
+	Part Parameter	Parâmetro da peça
+	Part Sketch	Esboço da peça
+	Pad	Extrusão
+	Pocket	Rebaixo
+	Revolve Feature	Recurso de revolução
+	Fillet Feature	Recurso de arredondamento
+	Chamfer Feature	Recurso de chanfro
+	Edit Feature	Editar recurso
+	Reorder Feature	Reordenar recurso
+	Delete Feature	Excluir recurso
+	Rebuild Part	Reconstruir peça
+	Model Tree	Árvore do modelo
+	List Parts	Listar peças
+	No part yet: New Part starts one; sketches and features come from the part commands.	Ainda não há peça: Nova peça cria uma; esboços e recursos vêm dos comandos de peça.
+	Volume {v}	Volume {v}
+	Parameters	Parâmetros
+	name	nome
+	expression	expressão
+	Features	Recursos
+	Suppress	Suprimir
+	Double-click to rename	Clique duas vezes para renomear
+	Parts Library...	Biblioteca de peças...
+	Parts Library	Biblioteca de peças
+	Part Categories	Categorias de peças
+	Showing {shown} of {total} parts; type in Filter to narrow.	Mostrando {shown} de {total} peças; digite no Filtro para restringir.
+	Annotation	Anotação
+	Doors	Portas
+	Windows	Janelas
+	Stairs and ramps	Escadas e rampas
+	Furniture	Mobiliário
+	Sanitary fixtures	Aparelhos sanitários
+	Kitchen	Cozinha
+	Diffusers and grilles	Difusores e grelhas
+	Terminal units	Unidades terminais
+	HVAC equipment	Equipamentos de AVAC
+	Dampers	Registos
+	Valves	Válvulas
+	Pipe fittings	Acessórios de tubagem
+	Pumps and tanks	Bombas e reservatórios
+	Drains	Ralos
+	Power distribution	Distribuição de energia
+	Light fixtures	Luminárias
+	Steel W shapes	Perfis de aço W
+	Steel channels	Perfis de aço em U
+	Steel angles	Cantoneiras de aço
+	Steel HSS	Perfis tubulares de aço
+	Steel pipe	Tubos de aço
+	Steel metric shapes	Perfis de aço métricos
+	Rebar	Armadura
+	Lumber	Madeira serrada
+	Base plates	Placas de base
+	Masonry units	Unidades de alvenaria
+	Planting	Plantação
+	Parking	Estacionamento
+	Vehicles	Veículos
+	Site utilities	Infraestruturas do local
+	Site amenities	Mobiliário exterior
+	North arrows	Setas de norte
+	Section and elevation marks	Marcas de corte e alçado
+	Tags and titles	Etiquetas e títulos
+	Weld and drafting symbols	Símbolos de soldadura e desenho
+	Scale bars	Escalas gráficas
+	Title blocks	Carimbos

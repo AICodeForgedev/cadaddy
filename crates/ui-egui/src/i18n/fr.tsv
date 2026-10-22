@@ -2687,3 +2687,67 @@
 	Add Bid History	Ajouter un historique d'offres
 	Bid Benchmarks	Repères d'offres
 	Record Outcome	Enregistrer le résultat
+	New Part	Nouvelle pièce
+	Part Parameter	Paramètre de pièce
+	Part Sketch	Esquisse de pièce
+	Pad	Protrusion
+	Pocket	Poche
+	Revolve Feature	Fonction de révolution
+	Fillet Feature	Fonction de congé
+	Chamfer Feature	Fonction de chanfrein
+	Edit Feature	Modifier la fonction
+	Reorder Feature	Réordonner la fonction
+	Delete Feature	Supprimer la fonction
+	Rebuild Part	Reconstruire la pièce
+	Model Tree	Arbre du modèle
+	List Parts	Lister les pièces
+	No part yet: New Part starts one; sketches and features come from the part commands.	Pas encore de pièce : Nouvelle pièce en crée une ; esquisses et fonctions viennent des commandes de pièce.
+	Volume {v}	Volume {v}
+	Parameters	Paramètres
+	name	nom
+	expression	expression
+	Features	Fonctions
+	Suppress	Supprimer temporairement
+	Double-click to rename	Double-cliquez pour renommer
+	Parts Library...	Bibliothèque de pièces...
+	Parts Library	Bibliothèque de pièces
+	Part Categories	Catégories de pièces
+	Showing {shown} of {total} parts; type in Filter to narrow.	{shown} pièces affichées sur {total} ; saisissez un filtre pour affiner.
+	Annotation	Annotation
+	Doors	Portes
+	Windows	Fenêtres
+	Stairs and ramps	Escaliers et rampes
+	Furniture	Mobilier
+	Sanitary fixtures	Appareils sanitaires
+	Kitchen	Cuisine
+	Diffusers and grilles	Diffuseurs et grilles
+	Terminal units	Unités terminales
+	HVAC equipment	Équipements CVC
+	Dampers	Registres
+	Valves	Vannes
+	Pipe fittings	Raccords
+	Pumps and tanks	Pompes et réservoirs
+	Drains	Siphons de sol
+	Power distribution	Distribution électrique
+	Light fixtures	Luminaires
+	Steel W shapes	Profilés acier W
+	Steel channels	Profilés acier en U
+	Steel angles	Cornières acier
+	Steel HSS	Profils creux acier
+	Steel pipe	Tubes acier
+	Steel metric shapes	Profilés acier métriques
+	Rebar	Armatures
+	Lumber	Bois de sciage
+	Base plates	Platines
+	Masonry units	Éléments de maçonnerie
+	Planting	Plantations
+	Parking	Stationnement
+	Vehicles	Véhicules
+	Site utilities	Réseaux du site
+	Site amenities	Mobilier extérieur
+	North arrows	Flèches du nord
+	Section and elevation marks	Repères de coupe et d'élévation
+	Tags and titles	Étiquettes et titres
+	Weld and drafting symbols	Symboles de soudure et de dessin
+	Scale bars	Échelles graphiques
+	Title blocks	Cartouches

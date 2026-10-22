@@ -2783,3 +2783,67 @@
 	Add Bid History	添加报价历史
 	Bid Benchmarks	报价基准
 	Record Outcome	记录结果
+	New Part	新建零件
+	Part Parameter	零件参数
+	Part Sketch	零件草图
+	Pad	凸台
+	Pocket	凹槽
+	Revolve Feature	旋转特征
+	Fillet Feature	圆角特征
+	Chamfer Feature	倒角特征
+	Edit Feature	编辑特征
+	Reorder Feature	重排特征
+	Delete Feature	删除特征
+	Rebuild Part	重建零件
+	Model Tree	模型树
+	List Parts	列出零件
+	No part yet: New Part starts one; sketches and features come from the part commands.	尚无零件：“新建零件”创建一个；草图和特征来自零件命令。
+	Volume {v}	体积 {v}
+	Parameters	参数
+	name	名称
+	expression	表达式
+	Features	特征
+	Suppress	抑制
+	Double-click to rename	双击以重命名
+	Parts Library...	零件库...
+	Parts Library	零件库
+	Part Categories	零件类别
+	Showing {shown} of {total} parts; type in Filter to narrow.	显示 {total} 个零件中的 {shown} 个；在筛选框中输入以缩小范围。
+	Annotation	注释
+	Doors	门
+	Windows	窗
+	Stairs and ramps	楼梯和坡道
+	Furniture	家具
+	Sanitary fixtures	卫生器具
+	Kitchen	厨房
+	Diffusers and grilles	散流器和风口
+	Terminal units	末端装置
+	HVAC equipment	暖通空调设备
+	Dampers	风阀
+	Valves	阀门
+	Pipe fittings	管件
+	Pumps and tanks	泵和水箱
+	Drains	地漏
+	Power distribution	配电
+	Light fixtures	灯具
+	Steel W shapes	W 型钢
+	Steel channels	槽钢
+	Steel angles	角钢
+	Steel HSS	空心型钢
+	Steel pipe	钢管
+	Steel metric shapes	公制型钢
+	Rebar	钢筋
+	Lumber	木材
+	Base plates	柱脚底板
+	Masonry units	砌块
+	Planting	种植
+	Parking	停车
+	Vehicles	车辆
+	Site utilities	场地管线
+	Site amenities	场地设施
+	North arrows	指北针
+	Section and elevation marks	剖面和立面标记
+	Tags and titles	标记和标题
+	Weld and drafting symbols	焊接和制图符号
+	Scale bars	比例尺
+	Title blocks	图框

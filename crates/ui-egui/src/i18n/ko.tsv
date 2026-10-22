@@ -2899,3 +2899,67 @@ menu	Modify	수정
 	Add Bid History	입찰 이력 추가
 	Bid Benchmarks	입찰 기준값
 	Record Outcome	결과 기록
+	New Part	새 부품
+	Part Parameter	부품 매개변수
+	Part Sketch	부품 스케치
+	Pad	돌출
+	Pocket	포켓
+	Revolve Feature	회전 피처
+	Fillet Feature	필렛 피처
+	Chamfer Feature	모따기 피처
+	Edit Feature	피처 편집
+	Reorder Feature	피처 순서 변경
+	Delete Feature	피처 삭제
+	Rebuild Part	부품 재생성
+	Model Tree	모델 트리
+	List Parts	부품 목록
+	No part yet: New Part starts one; sketches and features come from the part commands.	아직 부품이 없습니다: 새 부품으로 만들고, 스케치와 피처는 부품 명령으로 추가합니다.
+	Volume {v}	부피 {v}
+	Parameters	매개변수
+	name	이름
+	expression	식
+	Features	피처
+	Suppress	억제
+	Double-click to rename	두 번 클릭하여 이름 변경
+	Parts Library...	부품 라이브러리...
+	Parts Library	부품 라이브러리
+	Part Categories	부품 범주
+	Showing {shown} of {total} parts; type in Filter to narrow.	부품 {total}개 중 {shown}개 표시; 필터에 입력해 범위를 좁히십시오.
+	Annotation	주석
+	Doors	문
+	Windows	창
+	Stairs and ramps	계단 및 경사로
+	Furniture	가구
+	Sanitary fixtures	위생 기구
+	Kitchen	주방
+	Diffusers and grilles	디퓨저 및 그릴
+	Terminal units	터미널 유닛
+	HVAC equipment	공조 장비
+	Dampers	댐퍼
+	Valves	밸브
+	Pipe fittings	배관 부속
+	Pumps and tanks	펌프 및 탱크
+	Drains	배수구
+	Power distribution	배전
+	Light fixtures	조명 기구
+	Steel W shapes	강재 W 형강
+	Steel channels	강재 채널
+	Steel angles	강재 앵글
+	Steel HSS	강재 각형 강관
+	Steel pipe	강관
+	Steel metric shapes	미터법 강재 형강
+	Rebar	철근
+	Lumber	목재
+	Base plates	베이스 플레이트
+	Masonry units	조적 유닛
+	Planting	식재
+	Parking	주차
+	Vehicles	차량
+	Site utilities	부지 설비
+	Site amenities	부지 편의시설
+	North arrows	방위 표시
+	Section and elevation marks	단면 및 입면 기호
+	Tags and titles	태그 및 제목
+	Weld and drafting symbols	용접 및 제도 기호
+	Scale bars	축척 막대
+	Title blocks	표제란

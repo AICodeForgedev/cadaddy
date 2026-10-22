@@ -2688,3 +2688,67 @@
 	Add Bid History	Добавить историю предложений
 	Bid Benchmarks	Ориентиры предложений
 	Record Outcome	Записать результат
+	New Part	Новая деталь
+	Part Parameter	Параметр детали
+	Part Sketch	Эскиз детали
+	Pad	Выдавливание
+	Pocket	Карман
+	Revolve Feature	Элемент вращения
+	Fillet Feature	Элемент скругления
+	Chamfer Feature	Элемент фаски
+	Edit Feature	Изменить элемент
+	Reorder Feature	Переместить элемент
+	Delete Feature	Удалить элемент
+	Rebuild Part	Перестроить деталь
+	Model Tree	Дерево модели
+	List Parts	Список деталей
+	No part yet: New Part starts one; sketches and features come from the part commands.	Детали пока нет: «Новая деталь» создаёт её; эскизы и элементы добавляют команды детали.
+	Volume {v}	Объём {v}
+	Parameters	Параметры
+	name	имя
+	expression	выражение
+	Features	Элементы
+	Suppress	Подавить
+	Double-click to rename	Дважды щёлкните, чтобы переименовать
+	Parts Library...	Библиотека деталей...
+	Parts Library	Библиотека деталей
+	Part Categories	Категории деталей
+	Showing {shown} of {total} parts; type in Filter to narrow.	Показано {shown} из {total} деталей; введите текст в фильтр, чтобы сузить.
+	Annotation	Аннотации
+	Doors	Двери
+	Windows	Окна
+	Stairs and ramps	Лестницы и пандусы
+	Furniture	Мебель
+	Sanitary fixtures	Сантехнические приборы
+	Kitchen	Кухня
+	Diffusers and grilles	Диффузоры и решётки
+	Terminal units	Концевые устройства
+	HVAC equipment	Оборудование ОВиК
+	Dampers	Клапаны
+	Valves	Арматура
+	Pipe fittings	Фитинги
+	Pumps and tanks	Насосы и баки
+	Drains	Трапы
+	Power distribution	Распределение электроэнергии
+	Light fixtures	Светильники
+	Steel W shapes	Стальные профили W
+	Steel channels	Стальные швеллеры
+	Steel angles	Стальные уголки
+	Steel HSS	Стальные замкнутые профили
+	Steel pipe	Стальные трубы
+	Steel metric shapes	Метрические стальные профили
+	Rebar	Арматура (стержни)
+	Lumber	Пиломатериалы
+	Base plates	Опорные плиты
+	Masonry units	Кладочные изделия
+	Planting	Озеленение
+	Parking	Парковка
+	Vehicles	Транспортные средства
+	Site utilities	Наружные сети
+	Site amenities	Благоустройство
+	North arrows	Указатели севера
+	Section and elevation marks	Знаки разрезов и фасадов
+	Tags and titles	Марки и заголовки
+	Weld and drafting symbols	Сварочные и чертёжные знаки
+	Scale bars	Графические масштабы
+	Title blocks	Основные надписи

@@ -2906,3 +2906,67 @@ menu	Modify	Ändra
 	Add Bid History	Lägg till anbudshistorik
 	Bid Benchmarks	Anbudsriktvärden
 	Record Outcome	Registrera utfall
+	New Part	Ny detalj
+	Part Parameter	Detaljparameter
+	Part Sketch	Detaljskiss
+	Pad	Utsträckning
+	Pocket	Ficka
+	Revolve Feature	Rotationsfunktion
+	Fillet Feature	Avrundningsfunktion
+	Chamfer Feature	Fasfunktion
+	Edit Feature	Redigera funktion
+	Reorder Feature	Ändra ordning för funktion
+	Delete Feature	Ta bort funktion
+	Rebuild Part	Bygg om detaljen
+	Model Tree	Modellträd
+	List Parts	Lista detaljer
+	No part yet: New Part starts one; sketches and features come from the part commands.	Ingen detalj än: Ny detalj skapar en; skisser och funktioner kommer från detaljkommandona.
+	Volume {v}	Volym {v}
+	Parameters	Parametrar
+	name	namn
+	expression	uttryck
+	Features	Funktioner
+	Suppress	Undertryck
+	Double-click to rename	Dubbelklicka för att byta namn
+	Parts Library...	Delbibliotek...
+	Parts Library	Delbibliotek
+	Part Categories	Delkategorier
+	Showing {shown} of {total} parts; type in Filter to narrow.	Visar {shown} av {total} delar; skriv i filtret för att begränsa.
+	Annotation	Annotering
+	Doors	Dörrar
+	Windows	Fönster
+	Stairs and ramps	Trappor och ramper
+	Furniture	Möbler
+	Sanitary fixtures	Sanitetsporslin
+	Kitchen	Kök
+	Diffusers and grilles	Don och galler
+	Terminal units	Ändapparater
+	HVAC equipment	VVS-utrustning
+	Dampers	Spjäll
+	Valves	Ventiler
+	Pipe fittings	Rördelar
+	Pumps and tanks	Pumpar och tankar
+	Drains	Brunnar
+	Power distribution	Kraftdistribution
+	Light fixtures	Armaturer
+	Steel W shapes	Stålprofiler W
+	Steel channels	Stål-U-profiler
+	Steel angles	Stålvinklar
+	Steel HSS	Stålrör (VKR/KKR)
+	Steel pipe	Stålrör
+	Steel metric shapes	Metriska stålprofiler
+	Rebar	Armering
+	Lumber	Virke
+	Base plates	Fotplåtar
+	Masonry units	Murblock
+	Planting	Plantering
+	Parking	Parkering
+	Vehicles	Fordon
+	Site utilities	Markledningar
+	Site amenities	Utemöbler
+	North arrows	Nordpilar
+	Section and elevation marks	Sektions- och fasadmarkeringar
+	Tags and titles	Taggar och rubriker
+	Weld and drafting symbols	Svets- och ritsymboler
+	Scale bars	Skalstockar
+	Title blocks	Namnrutor

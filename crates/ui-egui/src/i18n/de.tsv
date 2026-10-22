@@ -2716,3 +2716,67 @@
 	Add Bid History	Angebotshistorie hinzufügen
 	Bid Benchmarks	Angebotskennwerte
 	Record Outcome	Ergebnis erfassen
+	New Part	Neues Teil
+	Part Parameter	Teileparameter
+	Part Sketch	Teileskizze
+	Pad	Aufpolsterung
+	Pocket	Tasche
+	Revolve Feature	Rotationselement
+	Fillet Feature	Verrundungselement
+	Chamfer Feature	Fasenelement
+	Edit Feature	Element bearbeiten
+	Reorder Feature	Element verschieben
+	Delete Feature	Element löschen
+	Rebuild Part	Teil neu aufbauen
+	Model Tree	Modellbaum
+	List Parts	Teile auflisten
+	No part yet: New Part starts one; sketches and features come from the part commands.	Noch kein Teil: Neues Teil legt eines an; Skizzen und Elemente kommen aus den Teilebefehlen.
+	Volume {v}	Volumen {v}
+	Parameters	Parameter
+	name	Name
+	expression	Ausdruck
+	Features	Elemente
+	Suppress	Unterdrücken
+	Double-click to rename	Doppelklicken zum Umbenennen
+	Parts Library...	Teilebibliothek...
+	Parts Library	Teilebibliothek
+	Part Categories	Teilekategorien
+	Showing {shown} of {total} parts; type in Filter to narrow.	{shown} von {total} Teilen angezeigt; zum Eingrenzen im Filter tippen.
+	Annotation	Beschriftung
+	Doors	Türen
+	Windows	Fenster
+	Stairs and ramps	Treppen und Rampen
+	Furniture	Möbel
+	Sanitary fixtures	Sanitärobjekte
+	Kitchen	Küche
+	Diffusers and grilles	Luftauslässe und Gitter
+	Terminal units	Endgeräte
+	HVAC equipment	HLK-Geräte
+	Dampers	Klappen
+	Valves	Armaturen
+	Pipe fittings	Rohrformteile
+	Pumps and tanks	Pumpen und Behälter
+	Drains	Abläufe
+	Power distribution	Energieverteilung
+	Light fixtures	Leuchten
+	Steel W shapes	Stahlprofile W
+	Steel channels	Stahl-U-Profile
+	Steel angles	Stahlwinkel
+	Steel HSS	Stahlhohlprofile
+	Steel pipe	Stahlrohre
+	Steel metric shapes	Metrische Stahlprofile
+	Rebar	Bewehrung
+	Lumber	Schnittholz
+	Base plates	Fußplatten
+	Masonry units	Mauersteine
+	Planting	Bepflanzung
+	Parking	Parkplätze
+	Vehicles	Fahrzeuge
+	Site utilities	Ver- und Entsorgung
+	Site amenities	Außenausstattung
+	North arrows	Nordpfeile
+	Section and elevation marks	Schnitt- und Ansichtsmarken
+	Tags and titles	Kennzeichen und Titel
+	Weld and drafting symbols	Schweiß- und Zeichensymbole
+	Scale bars	Maßstabsleisten
+	Title blocks	Schriftfelder

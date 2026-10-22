@@ -2894,3 +2894,67 @@ menu	View	عرض
 	Add Bid History	إضافة سجل العطاءات
 	Bid Benchmarks	معايير العطاءات
 	Record Outcome	تسجيل النتيجة
+	New Part	جزء جديد
+	Part Parameter	معامل الجزء
+	Part Sketch	رسم الجزء
+	Pad	بثق
+	Pocket	جيب
+	Revolve Feature	ميزة الدوران
+	Fillet Feature	ميزة التدوير
+	Chamfer Feature	ميزة الشطف
+	Edit Feature	تحرير الميزة
+	Reorder Feature	إعادة ترتيب الميزة
+	Delete Feature	حذف الميزة
+	Rebuild Part	إعادة بناء الجزء
+	Model Tree	شجرة النموذج
+	List Parts	سرد الأجزاء
+	No part yet: New Part starts one; sketches and features come from the part commands.	لا يوجد جزء بعد: «جزء جديد» ينشئ واحدًا؛ الرسومات والميزات تأتي من أوامر الجزء.
+	Volume {v}	الحجم {v}
+	Parameters	المعاملات
+	name	الاسم
+	expression	تعبير
+	Features	الميزات
+	Suppress	إخماد
+	Double-click to rename	انقر نقرًا مزدوجًا لإعادة التسمية
+	Parts Library...	مكتبة القطع...
+	Parts Library	مكتبة القطع
+	Part Categories	فئات القطع
+	Showing {shown} of {total} parts; type in Filter to narrow.	عرض {shown} من {total} قطعة؛ اكتب في عامل التصفية للتضييق.
+	Annotation	التعليقات التوضيحية
+	Doors	الأبواب
+	Windows	النوافذ
+	Stairs and ramps	السلالم والمنحدرات
+	Furniture	الأثاث
+	Sanitary fixtures	التجهيزات الصحية
+	Kitchen	المطبخ
+	Diffusers and grilles	الناشرات والشبكات
+	Terminal units	الوحدات الطرفية
+	HVAC equipment	معدات التدفئة والتهوية والتكييف
+	Dampers	المخمدات
+	Valves	الصمامات
+	Pipe fittings	تجهيزات الأنابيب
+	Pumps and tanks	المضخات والخزانات
+	Drains	المصارف
+	Power distribution	توزيع الطاقة
+	Light fixtures	وحدات الإنارة
+	Steel W shapes	مقاطع فولاذية W
+	Steel channels	مقاطع فولاذية مجرى
+	Steel angles	زوايا فولاذية
+	Steel HSS	مقاطع فولاذية مجوفة
+	Steel pipe	أنابيب فولاذية
+	Steel metric shapes	مقاطع فولاذية مترية
+	Rebar	حديد التسليح
+	Lumber	الأخشاب
+	Base plates	ألواح القاعدة
+	Masonry units	وحدات البناء
+	Planting	التشجير
+	Parking	مواقف السيارات
+	Vehicles	المركبات
+	Site utilities	مرافق الموقع
+	Site amenities	مرافق الموقع العامة
+	North arrows	أسهم الشمال
+	Section and elevation marks	علامات المقاطع والواجهات
+	Tags and titles	الوسوم والعناوين
+	Weld and drafting symbols	رموز اللحام والرسم
+	Scale bars	مقاييس الرسم البيانية
+	Title blocks	إطارات العناوين

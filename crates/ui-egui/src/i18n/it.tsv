@@ -2898,3 +2898,67 @@ menu	Modify	Edita
 	Add Bid History	Aggiungi storico offerte
 	Bid Benchmarks	Parametri di riferimento delle offerte
 	Record Outcome	Registra l'esito
+	New Part	Nuova parte
+	Part Parameter	Parametro della parte
+	Part Sketch	Schizzo della parte
+	Pad	Estrusione
+	Pocket	Tasca
+	Revolve Feature	Funzione di rivoluzione
+	Fillet Feature	Funzione di raccordo
+	Chamfer Feature	Funzione di smusso
+	Edit Feature	Modifica funzione
+	Reorder Feature	Riordina funzione
+	Delete Feature	Elimina funzione
+	Rebuild Part	Ricostruisci parte
+	Model Tree	Albero del modello
+	List Parts	Elenca parti
+	No part yet: New Part starts one; sketches and features come from the part commands.	Nessuna parte: Nuova parte ne crea una; schizzi e funzioni vengono dai comandi della parte.
+	Volume {v}	Volume {v}
+	Parameters	Parametri
+	name	nome
+	expression	espressione
+	Features	Funzioni
+	Suppress	Sopprimi
+	Double-click to rename	Doppio clic per rinominare
+	Parts Library...	Libreria parti...
+	Parts Library	Libreria parti
+	Part Categories	Categorie parti
+	Showing {shown} of {total} parts; type in Filter to narrow.	Visualizzate {shown} di {total} parti; digitare nel filtro per restringere.
+	Annotation	Annotazione
+	Doors	Porte
+	Windows	Finestre
+	Stairs and ramps	Scale e rampe
+	Furniture	Arredi
+	Sanitary fixtures	Apparecchi sanitari
+	Kitchen	Cucina
+	Diffusers and grilles	Diffusori e griglie
+	Terminal units	Unità terminali
+	HVAC equipment	Apparecchiature HVAC
+	Dampers	Serrande
+	Valves	Valvole
+	Pipe fittings	Raccordi
+	Pumps and tanks	Pompe e serbatoi
+	Drains	Scarichi
+	Power distribution	Distribuzione elettrica
+	Light fixtures	Apparecchi di illuminazione
+	Steel W shapes	Profili in acciaio W
+	Steel channels	Profili in acciaio a U
+	Steel angles	Angolari in acciaio
+	Steel HSS	Profili cavi in acciaio
+	Steel pipe	Tubi in acciaio
+	Steel metric shapes	Profili in acciaio metrici
+	Rebar	Armature
+	Lumber	Legname
+	Base plates	Piastre di base
+	Masonry units	Elementi in muratura
+	Planting	Piantumazione
+	Parking	Parcheggio
+	Vehicles	Veicoli
+	Site utilities	Reti del sito
+	Site amenities	Arredo esterno
+	North arrows	Frecce del nord
+	Section and elevation marks	Simboli di sezione e prospetto
+	Tags and titles	Etichette e titoli
+	Weld and drafting symbols	Simboli di saldatura e disegno
+	Scale bars	Scale grafiche
+	Title blocks	Cartigli
