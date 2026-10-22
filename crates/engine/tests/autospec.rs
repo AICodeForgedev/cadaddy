@@ -184,6 +184,47 @@ fn plain_names_in_millimetres_draft_the_spec() {
     assert_eq!(b["rooms"], json!(2), "{b}");
 }
 
+/// Q251: rooms trace on what bounds them. A duct across the office (between its name and its
+/// ceiling note) and a stair in the lobby don't split them; with no room tag layer, a fixture's
+/// label (on the lighting layer, taller than the room names) and an equipment mark never name a
+/// room.
+#[test]
+fn ducts_stairs_and_labels_never_split_or_name_rooms() {
+    let mut s = ncs();
+    layer(&mut s, "M-HVAC-DUCT");
+    line(&mut s, [6.0, 80.0], [234.0, 80.0]);
+    line(&mut s, [6.0, 94.0], [234.0, 94.0]);
+    layer(&mut s, "A-FLOR-STRS");
+    rect(&mut s, [400.0, 20.0], [444.0, 220.0]);
+    for i in 1..12 {
+        let y = 20.0 + 11.0 * f64::from(i);
+        line(&mut s, [400.0, y], [444.0, y]);
+    }
+    let sp = s.execute("bspec.draft", &json!({})).unwrap()["spec"].clone();
+    let rooms = sp["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 2, "{sp}");
+    let office = rooms.iter().find(|x| x["name"] == "Office").unwrap();
+    assert_eq!((office["number"].clone(), office["ceiling_ft"].clone()), (json!("101"), json!(9.0)), "the office is whole: {office}");
+    assert_eq!(rooms.iter().find(|x| x["name"] == "Lobby").unwrap()["number"], json!("102"));
+
+    // No room tag layer: names on any layer without a role, one per room.
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    layer(&mut s, "LABELS");
+    text(&mut s, [100.0, 120.0], "OFFICE", 6.0);
+    text(&mut s, [340.0, 120.0], "LOBBY", 6.0);
+    text(&mut s, [300.0, 40.0], "EF-1", 9.0);
+    layer(&mut s, "E-LITE");
+    text(&mut s, [60.0, 200.0], "PENDANT LIGHTS", 9.0);
+    let sp = s.execute("bspec.draft", &json!({})).unwrap()["spec"].clone();
+    let mut names: Vec<&str> = sp["rooms"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["Lobby", "Office"], "{sp}");
+}
+
 #[test]
 fn an_empty_drawing_drafts_a_minimal_spec() {
     let mut s = Session::new();

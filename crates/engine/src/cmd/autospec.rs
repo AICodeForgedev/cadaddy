@@ -1,12 +1,12 @@
 //! `bspec.draft`: a first building spec from the plan alone, without any AI, from what the
 //! perception tools see (`plan.layers`, `plan.walls`, `plan.openings`, `plan.rooms`,
 //! `plan.notes`). Layer roles come from standard layer names, in two conventions (the US
-//! National CAD Standard's `A-WALL`, `A-DOOR`, `A-GLAZ`, `E-LITE`…, and plain names such as
+//! National CAD Standard's `A-WALL`, `A-DOOR`, `A-GLAZ`, `E-LITE`â€¦, and plain names such as
 //! `Walls`, `Doors`, `Windows`, `Lighting`), and else from what a layer holds (wall face pairs,
 //! door swings, room names). Wall types take their thickness from the measured face pairs; rooms
 //! are the closed outlines round their name tags, with their numbers and any ceiling note inside;
 //! door and window families are the blocks found as openings. Everything that is a convention or
-//! a default rather than read from the plan is marked in the spec's `guess` (part key → why), so
+//! a default rather than read from the plan is marked in the spec's `guess` (part key â†’ why), so
 //! the Plans to Model palette and agents know what to confirm.
 
 use std::collections::BTreeMap;
@@ -30,7 +30,7 @@ const MAX_ROOMS: usize = 1_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("bspec.draft", "Draft Building Spec", run_draft).params(
-        "{store?: bool (keep it as the drawing's spec; default false)} → {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
+        "{store?: bool (keep it as the drawing's spec; default false)} â†’ {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
     )]
 }
 
@@ -119,6 +119,14 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
 
 /// The draft and why each guessed part was guessed.
 pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
+    draft_with(s, true)
+}
+
+/// [`draft`], with layer roles from what a layer holds (`by_content`) or from layer names only.
+/// `plan.classify` has already sorted a PDF sheet's linework by what it draws and put walls,
+/// doors and room names on their own layers: what it left behind (a duct's sides, a stair's
+/// treads) is not walls however many line pairs it holds.
+pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> {
     let plan = super::verify::plan_session(s)?;
     let d = plan.doc()?;
     let ents = plan_objects(d);
@@ -146,6 +154,9 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
         let by_name = role_by_name(layer);
         // Else what it holds: wall face pairs, door swings, room names.
         let by_content = || -> Option<(Role, String)> {
+            if !by_content {
+                return None;
+            }
             if found.len() >= 2 {
                 return Some((Role::Wall, format!("{} wall face pairs on it", found.len())));
             }
@@ -184,40 +195,61 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
         guess.insert(format!("layers/{layer}"), why);
         roles.push(lr);
     }
-    // Room tags: the room tag layers' texts, else names on any layer that close an outline.
+    // Room tags: the room tag layers' texts, else names on a layer with no other role (a
+    // fixture's or a duct's label never names a room) that close an outline.
     let tagged: Vec<&str> = roles.iter().filter(|r| r.role == Role::RoomTag).map(|r| r.layer.as_str()).collect();
-    let candidates: Vec<(cadaddy_doc::Handle, String, Vec2)> = all_texts
+    let layer_of = |h: cadaddy_doc::Handle| ents.iter().find(|e| e.handle == h).map(|e| e.common.layer.as_str());
+    let candidates: Vec<(cadaddy_doc::Handle, String, Vec2, f64)> = all_texts
         .iter()
         .filter(|(h, t, _, _)| {
+            let layer = layer_of(*h).unwrap_or_default();
             room_name(t)
-                && (tagged.is_empty() || ents.iter().any(|e| e.handle == *h && tagged.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer))))
+                && if tagged.is_empty() {
+                    !roles.iter().any(|r| r.layer.eq_ignore_ascii_case(layer))
+                } else {
+                    tagged.iter().any(|l| l.eq_ignore_ascii_case(layer))
+                }
         })
-        .map(|(h, t, at, _)| (*h, t.clone(), *at))
+        .map(|(h, t, at, ht)| (*h, t.clone(), *at, *ht))
         .collect();
+    // Traced on a plan of what bounds rooms (the wall, door and window layers just found, each
+    // centreline wall as its two faces), so MEP lines, stairs and tags never split a room.
+    let roles_spec = serde_json::from_value::<BuildingSpec>(json!({
+        "units_per_foot": 12.0 * k,
+        "layers": serde_json::to_value(&roles).unwrap_or_default(),
+        "wall_types": serde_json::to_value(&wall_types).unwrap_or_default(),
+    }))
+    .ok();
+    let bounds_plan = super::bspec::room_plan_for(&plan, roles_spec)?;
+    let trace_on = bounds_plan.as_ref().unwrap_or(&plan);
     let ext = d.extents(&cadaddy_doc::Space::Model);
     let sheet = (ext.width() * ext.height()).max(1e-9);
     let numbers: Vec<&(cadaddy_doc::Handle, String, Vec2, f64)> = all_texts.iter().filter(|(_, t, _, _)| room_number(t)).collect();
     let notes: Vec<(f64, Vec2)> = all_texts.iter().filter_map(|(_, t, at, _)| ceiling_note(t).map(|c| (c, *at))).collect();
-    let mut rooms: Vec<Room> = Vec::new();
     let mut outlines: Vec<Vec<Vec2>> = Vec::new();
-    let mut room_layers: Vec<String> = Vec::new();
-    for (h, name, at) in candidates.into_iter().take(MAX_ROOMS) {
-        let Ok(loops) = super::hatch::loops_at(&plan, at) else { continue };
+    let mut named: Vec<(usize, cadaddy_doc::Handle, String, Vec2, f64)> = Vec::new();
+    for (h, name, at, height) in candidates.into_iter().take(MAX_ROOMS) {
+        let Ok(loops) = super::hatch::loops_at(trace_on, at) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         let area = cadaddy_geom::shoelace(&poly).abs();
         if poly.len() < 3 || area < 16.0 * 144.0 * k * k || area > 0.5 * sheet {
             continue;
         }
-        // The same outline as a room already found (a second name in it, or traced from another
-        // corner): same area and extents.
-        let bounds = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
-        if outlines.iter().any(|q| {
-            let b = cadaddy_geom::Bounds2::from_points(q.iter().copied());
-            (cadaddy_geom::shoelace(q).abs() - area).abs() <= 1e-6 * area && b.min.dist(bounds.min) < 1e-6 && b.max.dist(bounds.max) < 1e-6
-        }) {
-            continue;
-        }
+        let i = match outlines.iter().position(|q| super::bspec::same_outline(q, &poly)) {
+            Some(i) => i,
+            None => {
+                outlines.push(poly);
+                outlines.len() - 1
+            }
+        };
+        named.push((i, h, name, at, height));
+    }
+    let mut rooms: Vec<Room> = Vec::new();
+    let mut room_layers: Vec<String> = Vec::new();
+    for (i, h, name) in super::bspec::room_tags(&outlines, &named) {
+        let (Some(poly), Some(at)) = (outlines.get(i), named.iter().find(|n| n.1 == h).map(|n| n.3)) else { continue };
+        let poly = poly.clone();
         let number = numbers
             .iter()
             .filter(|(_, _, q, _)| cadaddy_geom::point_in_polygon(&poly, *q))
@@ -239,7 +271,6 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
             room_layers.push(e.common.layer.clone());
         }
         rooms.push(Room { name: room_name, number, level: None, ceiling_ft: ceiling, materials: Default::default() });
-        outlines.push(poly);
     }
     // Names found on a layer with no role make it a room tag layer.
     for l in &room_layers {
@@ -295,7 +326,7 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
     guess.insert("openings".into(), "default door head and window sill and head".into());
     let mut sp = BuildingSpec {
         version: SPEC_VERSION,
-        // Rounded: 12 × 25.4 is 304.79999… in binary.
+        // Rounded: 12 Ã— 25.4 is 304.79999â€¦ in binary.
         units_per_foot: (12.0 * k * 1e6).round() / 1e6,
         levels: vec![level],
         layers: roles,

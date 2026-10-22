@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use super::bspec::{room_tags, same_outline};
 use super::perceive::geometry::{Limits, openings, pairs, room_number, segments};
 use super::perceive::{feet_inches, texts, units_per_inch};
 use super::*;
@@ -195,7 +196,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             _ => false,
         };
         let score = 2 * u8::from(paired) + u8::from(heavy(e) && !segs.is_empty()) + 2 * u8::from(poche);
-        if score >= 2 {
+        // Where pens differ, line pairs in the lightest pen are a duct's sides, a stair's treads,
+        // casework (Q251): walls are drawn heavier, or filled.
+        let light = heaviest != lightest && lightest.is_some_and(|l| weight(d, e) == l);
+        if score >= 2 && (poche || !light) {
             walls.insert(e.handle);
         }
     }
@@ -281,12 +285,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             walls.remove(&e.handle);
         }
     }
-    // Room names: names inside a closed area of a room's size.
+    // Room names: traced on a plan of what bounds rooms (the walls, doors and windows found
+    // above), so MEP lines, stair treads, furniture and tags never split or close a room; each
+    // area named once, by its tag (see `room_tags`).
     let ext = d.extents(&cadaddy_doc::Space::Model);
     let sheet_area = (ext.width() * ext.height()).max(1e-9);
-    let mut rooms: Vec<(Handle, String)> = Vec::new();
+    let bounding: HashSet<Handle> =
+        walls.iter().chain(doors.iter()).copied().chain(ops.iter().filter(|o| o.kind == "window").map(|o| o.handle)).collect();
+    let plan = super::bspec::room_plan_of(s, &bounding)?;
+    let trace_on = plan.as_ref().unwrap_or(s);
+    let mut areas: Vec<Vec<Vec2>> = Vec::new();
+    let mut names: Vec<(usize, Handle, String, Vec2, f64)> = Vec::new();
     let mut numbers: Vec<Handle> = Vec::new();
-    for (h, t, at, _) in texts(&ents) {
+    for (h, t, at, height) in texts(&ents) {
         let name = t.chars().filter(|c| c.is_alphabetic()).count() >= 2
             && t.chars().count() <= 40
             && !room_number(&t)
@@ -295,18 +306,27 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if !name && !room_number(&t) {
             continue;
         }
-        let Ok(loops) = super::hatch::loops_at(s, at) else { continue };
+        let Ok(loops) = super::hatch::loops_at(trace_on, at) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let q = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         let area = cadaddy_geom::shoelace(&q).abs();
-        if area >= 16.0 * 144.0 * k * k && area <= 0.5 * sheet_area {
-            if name {
-                rooms.push((h, t.clone()));
-            } else {
-                numbers.push(h);
-            }
+        if q.len() < 3 || area < 16.0 * 144.0 * k * k || area > 0.5 * sheet_area {
+            continue;
         }
+        if !name {
+            numbers.push(h);
+            continue;
+        }
+        let i = match areas.iter().position(|a| same_outline(a, &q)) {
+            Some(i) => i,
+            None => {
+                areas.push(q);
+                areas.len() - 1
+            }
+        };
+        names.push((i, h, t.clone(), at, height));
     }
+    let rooms: Vec<(Handle, String)> = room_tags(&areas, &names).into_iter().map(|(_, h, t)| (h, t)).collect();
     // The sheet: number and title from the title block.
     let sheets = super::perceive::run_sheets(s, &json!({}))?;
     let items = sheets["items"].as_array().cloned().unwrap_or_default();
@@ -376,7 +396,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out["applied"] = json!(true);
         if bool_or(p, "draft", false) {
-            let r = super::autospec::draft(s)?;
+            let r = super::autospec::draft_with(s, false)?;
             s.doc_mut()?.building_spec = Some(r.to_json());
             out["spec"] = serde_json::to_value(&r).unwrap_or(Value::Null);
         }
