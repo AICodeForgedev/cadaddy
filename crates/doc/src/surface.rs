@@ -51,7 +51,8 @@ impl Surface3d {
     /// Whether parameter point `(u, v)` is on the kept part.
     pub fn kept(&self, u: f64, v: f64) -> bool {
         let p = Vec2::new(u, v);
-        (self.outer.len() < 3 || point_in_polygon(&poly(&self.outer), p)) && !self.holes.iter().filter(|h| h.len() >= 3).any(|h| point_in_polygon(&poly(h), p))
+        (self.outer.len() < 3 || point_in_polygon(&poly(&self.outer), p))
+            && !self.holes.iter().filter(|h| h.len() >= 3).any(|h| point_in_polygon(&poly(h), p))
     }
 
     /// Grid steps for a tolerance: finer for bigger, more curved surfaces (8 to 96 each way).
@@ -59,12 +60,14 @@ impl Surface3d {
         let size = self.size();
         let n = if tol.is_finite() && tol > 0.0 && size > 0.0 { (size / tol).sqrt() } else { 24.0 };
         let curved = (self.nurbs.degree_u.max(self.nurbs.degree_v) > 1 || self.nurbs.count_u * self.nurbs.count_v > 4) as usize;
-        if curved == 0 { n.clamp(1.0, 8.0) as usize } else { n.clamp(8.0, 96.0) as usize }
+        // A flat untrimmed patch is exact with a few cells; trims need cells fine enough to follow.
+        if curved == 0 && !self.is_trimmed() { n.clamp(1.0, 8.0) as usize } else { n.clamp(48.0, 96.0) as usize }
     }
 
     /// The diagonal of the control vertices' box.
     pub fn size(&self) -> f64 {
-        let (mut lo, mut hi) = (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+        let (mut lo, mut hi) =
+            (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
         for p in &self.nurbs.control {
             lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
             hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));

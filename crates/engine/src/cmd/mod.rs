@@ -145,6 +145,7 @@ mod solids;
 mod solview;
 mod spline_opts;
 pub mod standards;
+mod surfaces;
 pub(crate) mod table;
 /// Excel workbooks for data links and table export.
 pub use table::xlsx;
@@ -474,6 +475,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lisp::specs());
         v.extend(crate::secureload::specs());
         v.extend(solids::specs());
+    v.extend(surfaces::specs());
         v.extend(sections::specs());
         v.extend(solview::specs());
         v.extend(render::specs());

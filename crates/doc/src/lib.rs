@@ -22,8 +22,8 @@ mod rare;
 mod refedit;
 mod section;
 mod solid;
-mod surface;
 mod store;
+mod surface;
 mod tables;
 mod transform3;
 
@@ -43,8 +43,8 @@ pub use rare::{Rare, RareEmpty};
 pub use refedit::{RefEdit, WorkItem};
 pub use section::*;
 pub use solid::*;
-pub use surface::*;
 pub use store::{ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
+pub use surface::*;
 pub use tables::*;
 pub use transform3::*;
 
