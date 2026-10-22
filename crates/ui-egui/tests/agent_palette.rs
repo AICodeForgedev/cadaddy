@@ -16,9 +16,14 @@ fn worked() -> CadApp {
     s.execute("bspec.set", &json!({"replace": true, "spec": {"levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]}]}})).unwrap();
     s.execute("mep.read", &json!({"apply": true})).unwrap();
     s.execute("bim.build", &json!({})).unwrap();
-    let ids: Vec<String> = s.execute("review.list", &json!({})).unwrap()["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect();
+    let ids: Vec<String> =
+        s.execute("review.list", &json!({})).unwrap()["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect();
     s.execute("review.defer", &json!({"id": ids[0], "reason": "field to check the beam depth at grid 2"})).unwrap();
-    s.execute("review.resolve", &json!({"id": ids[1], "answer": {"size_in": [14, 10]}, "citation": {"kind": "drawing", "document": "M-101", "ref": "tag at B-2"}})).unwrap();
+    s.execute(
+        "review.resolve",
+        &json!({"id": ids[1], "answer": {"size_in": [14, 10]}, "citation": {"kind": "drawing", "document": "M-101", "ref": "tag at B-2"}}),
+    )
+    .unwrap();
     s.execute("project.note", &json!({"text": "L1 supply runs reviewed to grid 3."})).unwrap();
     CadApp::new(s, Services::default())
 }
