@@ -1037,6 +1037,41 @@ pub struct Gradient {
 pub struct Solid {
     pub corners: [Vec3; 4],
 }
+/// Longest shape name kept (SHAPE, files read).
+pub const MAX_SHAPE_NAME: usize = 255;
+/// Most shape files one drawing loads.
+pub const MAX_SHAPE_FILES: usize = 256;
+
+/// SHAPE: a shape from a loaded shape file (`.shx`, see LOAD), called by its name. Its vectors
+/// are scaled so one unit of the file is `size / above` (`above`: the file's font height, 1 for
+/// a plain shape file).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shape {
+    pub insert: Vec3,
+    pub name: String,
+    pub size: f64,
+    /// Radians.
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default = "one")]
+    pub width_factor: f64,
+    /// Radians.
+    #[serde(default)]
+    pub oblique: f64,
+}
+
+impl Shape {
+    /// The square the shape is sized by (its insertion point to `size` up and across), turned
+    /// by its rotation: an estimate of where it lies when the file isn't at hand.
+    pub fn frame(&self) -> [Vec2; 4] {
+        let s = if self.size.is_finite() { self.size.abs() } else { 0.0 };
+        let w = s * if self.width_factor.is_finite() { self.width_factor.abs() } else { 1.0 };
+        let (u, v) = (Vec2::from_angle(self.rotation), Vec2::from_angle(self.rotation).perp());
+        let o = self.insert.xy();
+        [o, o + u * w, o + u * w + v * s, o + v * s]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Face3d {
     pub corners: [Vec3; 4],
@@ -1451,6 +1486,7 @@ pub enum EntityKind {
     Hatch(Hatch),
     Solid(Solid),
     Trace(Solid),
+    Shape(Shape),
     Face3d(Face3d),
     Mesh(Mesh),
     /// A 3D solid (BOX, EXTRUDE, REVOLVE…): our own exact definition, tessellated for display.
@@ -1515,6 +1551,7 @@ impl EntityKind {
             EntityKind::Hatch(_) => "Hatch",
             EntityKind::Solid(_) => "2D Solid",
             EntityKind::Trace(_) => "Trace",
+            EntityKind::Shape(_) => "Shape",
             EntityKind::Face3d(_) => "3D Face",
             EntityKind::Mesh(m) => match m.kind {
                 MeshKind::Subd => "Mesh",
@@ -1560,6 +1597,7 @@ impl EntityKind {
             EntityKind::Hatch(_) => "HATCH",
             EntityKind::Solid(_) => "SOLID",
             EntityKind::Trace(_) => "TRACE",
+            EntityKind::Shape(_) => "SHAPE",
             EntityKind::Face3d(_) => "3DFACE",
             EntityKind::Mesh(m) => match m.kind {
                 MeshKind::Subd => "MESH",
@@ -1601,6 +1639,7 @@ impl EntityKind {
             EntityKind::Dimension(d) => d.defpt.z,
             EntityKind::Hatch(h) => h.elevation,
             EntityKind::Solid(s) | EntityKind::Trace(s) => s.corners[0].z,
+            EntityKind::Shape(s) => s.insert.z,
             EntityKind::Image(i) => i.insert.z,
             EntityKind::Underlay(u) => u.insert.z,
             EntityKind::PointCloud(pc) => pc.insert.z,
@@ -1748,6 +1787,7 @@ impl EntityKind {
                 (0..4).filter_map(|k| Some(Prim::Seg(Segment::Line(GLine::new(*c.get(k)?, *c.get((k + 1) % 4)?))))).collect()
             }
             EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
+            EntityKind::Shape(sh) => vec![Prim::Point(sh.insert.xy())],
             // A light shows as its glyph: a point, and a spot's aim.
             EntityKind::Light(l) => match l.kind {
                 crate::lighting::LightKind::Point => vec![Prim::Point(l.position.xy())],
@@ -1990,6 +2030,19 @@ impl EntityKind {
                 t3(&mut l.position);
                 t3(&mut l.target);
             }
+            EntityKind::Shape(sh) => {
+                t3(&mut sh.insert);
+                sh.size *= s;
+                let u = m.apply_vec(Vec2::from_angle(sh.rotation)).angle();
+                // Mirrored: the shape turns over — a negative width, turned half round, keeps
+                // its X axis where the transform puts it and flips its Y axis.
+                if mirror {
+                    sh.width_factor = -sh.width_factor;
+                    sh.rotation = cadaddy_geom::norm_angle(u + std::f64::consts::PI);
+                } else {
+                    sh.rotation = cadaddy_geom::norm_angle(u);
+                }
+            }
             EntityKind::Unknown(_) => {}
         }
     }
@@ -2072,6 +2125,7 @@ impl EntityKind {
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],
+            EntityKind::Shape(sh) => vec![sh.insert.xy()],
             EntityKind::Light(l) => vec![l.position.xy(), l.target.xy()],
             EntityKind::Unknown(_) => Vec::new(),
         }

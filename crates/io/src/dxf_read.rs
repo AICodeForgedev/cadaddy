@@ -565,6 +565,16 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
         // PDFREFERENCE: the name the ODA's converter writes for it.
         "PDFUNDERLAY" | "PDFREFERENCE" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
+        // SHAPE (DXF Reference): insertion 10, size 40, name 2, rotation 50, relative X scale
+        // 41, oblique 51 (degrees), in its OCS.
+        "SHAPE" => EntityKind::Shape(Shape {
+            insert: ocs(&c, t.p(10)),
+            name: t.s(2).unwrap_or_default().chars().take(MAX_SHAPE_NAME).collect(),
+            size: t.fd(40, 1.0),
+            rotation: t.fd(50, 0.0).to_radians(),
+            width_factor: t.fd(41, 1.0),
+            oblique: t.fd(51, 0.0).to_radians(),
+        }),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
@@ -1575,7 +1585,15 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "STYLE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                // An unnamed shape-file record (70 bit 1): a shape file loaded for SHAPE.
+                if name.trim().is_empty() {
+                    if t.i(70).unwrap_or(0) & 1 != 0
+                        && let Some(f) = t.s(3).map(|f| f.trim().to_string()).filter(|f| !f.is_empty())
+                        && !d.shape_files.iter().any(|x| x.eq_ignore_ascii_case(&f))
+                        && d.shape_files.len() < MAX_SHAPE_FILES
+                    {
+                        d.shape_files.push(f);
+                    }
                     continue;
                 }
                 // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.

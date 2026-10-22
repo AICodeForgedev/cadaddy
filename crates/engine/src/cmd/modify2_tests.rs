@@ -398,6 +398,13 @@ fn chspace_json_and_command_line() {
     assert!(s.running.is_none());
     assert_eq!(s.doc().unwrap().space_of(hh), Some(Space::Paper("Layout1".into())));
     assert!(s.log.iter().any(|l| l.contains("changed from MODEL space to PAPER space")));
+    // CHANGESPACE, the full name, is the same command: back to model space from the layout.
+    assert_eq!(crate::cmd::resolve_alias("changespace"), "chspace");
+    s.state_mut().unwrap().space = Space::Paper("Layout1".into());
+    s.cmdline("changespace 7,5").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(s.doc().unwrap().space_of(hh), Some(Space::Model));
 }
 
 #[test]

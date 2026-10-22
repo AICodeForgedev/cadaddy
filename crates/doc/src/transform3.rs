@@ -86,6 +86,7 @@ impl EntityKind {
             EntityKind::PointCloud(pc) => z(&mut pc.insert),
             EntityKind::Table(t) => z(&mut t.insert),
             EntityKind::Tolerance(t) => z(&mut t.insert),
+            EntityKind::Shape(sh) => z(&mut sh.insert),
             EntityKind::Light(l) => {
                 z(&mut l.position);
                 z(&mut l.target);

@@ -33,6 +33,7 @@ mod plotstyle;
 mod point;
 pub mod raster;
 pub mod shade;
+pub mod shapes;
 mod solid;
 mod text;
 mod tolerance;
@@ -1484,6 +1485,11 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 b.tris(ctx, rgb, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
             } else {
                 b.polyline(ctx, rgb, lw, &[q[0], q[1], q[2], q[3], q[0]]);
+            }
+        }
+        EntityKind::Shape(sh) => {
+            for l in shapes::strokes(ctx.d, sh) {
+                b.polyline(ctx, rgb, lw, &l);
             }
         }
         EntityKind::Wipeout(w) => {

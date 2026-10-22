@@ -84,7 +84,9 @@ fn every_interactive_widget_has_a_name() {
 #[test]
 fn dialogs_name_their_controls_too() {
     let mut problems = Vec::new();
-    for dialog in ["layers", "dsettings", "units", "options", "qselect", "parameters", "csettings", "plot", "stylesmanager", "about", "language"] {
+    for dialog in
+        ["layers", "dsettings", "units", "options", "qselect", "filter", "parameters", "csettings", "plot", "stylesmanager", "about", "language"]
+    {
         let h = harness_with(false, false, Some(dialog));
         for p in unnamed(&h) {
             problems.push(format!("{dialog}: {p}"));

@@ -55,6 +55,7 @@ enum Def {
 /// Header variables: name, kind, the default the commands use while the header has none.
 const HEADER: &[(&str, Kind, Def)] = &[
     ("QTEXTMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
+    ("TRACEWID", Kind::Real { min: 0.0, strict: false }, Def::Units(0.05, 1.0)),
     ("CENTEREXE", Kind::Real { min: 0.0, strict: false }, Def::Units(0.12, 3.5)),
     ("CHAMFERA", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),
     ("CHAMFERB", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),
