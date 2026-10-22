@@ -320,6 +320,7 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
             Some(MepKind::Duct) => "duct",
             Some(MepKind::Pipe) => "pipe",
             Some(MepKind::Tray) => "tray",
+            Some(MepKind::Cable) => "cable",
             Some(MepKind::Conduit) | None => "conduit",
         };
         let (w, h) = (run.size_in[0].max(0.0) / 12.0, if run.size_in[1] > 0.0 { run.size_in[1] } else { run.size_in[0] }.max(0.0) / 12.0);
