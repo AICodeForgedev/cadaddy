@@ -42,7 +42,7 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built} → {issues: [{kind, message, level?, at?, handles}], total, byKind}")
+            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page)}")
             .noundo(),
         CommandSpec::new("model.render", "Render Model View", run_render)
             .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: realistic|shaded|conceptual|hidden|wireframe, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
@@ -490,9 +490,22 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     for f in &all {
         *by.entry(f.kind).or_insert(0) += 1;
     }
-    let list: Vec<Value> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).map(Finding::json).collect();
-    Ok(json!({ "total": list.len(), "issues": list, "byKind": by }))
+    // A page at a time: a big model's issues would flood an agent's context.
+    let limit =
+        p.get("limit").and_then(Value::as_u64).map_or(ISSUES_PAGE, |n| usize::try_from(n).unwrap_or(MAX_ISSUES_PAGE).clamp(1, MAX_ISSUES_PAGE));
+    let from = p.get("cursor").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let matching: Vec<&Finding> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).collect();
+    let list: Vec<Value> = matching.iter().skip(from).take(limit).map(|f| f.json()).collect();
+    let mut out = json!({ "total": matching.len(), "issues": list, "byKind": by });
+    if from.saturating_add(limit) < matching.len() {
+        out["next"] = json!(from + limit);
+    }
+    Ok(out)
 }
+
+/// Issues per `model.issues` answer by default, and at most.
+const ISSUES_PAGE: usize = 100;
+const MAX_ISSUES_PAGE: usize = 1_000;
 
 // ---------------- images ----------------
 

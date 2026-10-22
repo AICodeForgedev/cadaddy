@@ -21,6 +21,8 @@ pub enum HotelSize {
     Small,
     /// 10 rooms per side per floor (realistic).
     Full,
+    /// 20 rooms per side per floor: twice the full hotel, for the end-to-end performance check.
+    Double,
 }
 
 /// The design result before sheets are laid out.
@@ -35,6 +37,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     let rooms_per_side: usize = match size {
         HotelSize::Small => 4,
         HotelSize::Full => 10,
+        HotelSize::Double => 20,
     };
 
     let mut t = Truth { schema: SCHEMA.to_string(), seed, project: project_name(r), kind: "hotel".into(), ..Truth::default() };

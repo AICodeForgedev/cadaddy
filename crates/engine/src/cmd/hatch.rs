@@ -225,11 +225,108 @@ pub(crate) fn island_style(t: &str) -> Option<u8> {
     }
 }
 
+/// Every object's outline in one space, made once: for finding many boundaries in the same
+/// drawing (one per room name on a plan) without outlining every object again for each search
+/// window of each point. What a window holds is exactly what [`outlines`] gives for it.
+pub(crate) struct Outlines {
+    space: Space,
+    ext: Bounds2,
+    /// Each object's bounds, whether it is infinite (in every window), handle and outlines.
+    items: Vec<(Bounds2, bool, Handle, Vec<Vec<Vec2>>)>,
+    /// Boundaries found so far: the outer outline, the islands' outlines and the loops. A point
+    /// inside the outline and outside every island is in the same area (a room's name and its
+    /// number), so it has the same loops.
+    found: Vec<(Vec<Vec2>, Vec<Vec<Vec2>>, Vec<HatchLoop>)>,
+}
+
+impl Outlines {
+    pub(crate) fn new(s: &Session) -> Result<Outlines> {
+        let d = s.doc()?;
+        let space = s.space();
+        let ext = d.extents(&space);
+        let tol = (ext.width() + ext.height()).max(1e-9) / 20000.0;
+        let mut items = Vec::new();
+        if let Some(store) = d.space(&space) {
+            for e in store.iter() {
+                if !d.is_visible(e) || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_))
+                {
+                    continue;
+                }
+                let infinite = matches!(e.kind, EntityKind::XLine(_) | EntityKind::Ray(_));
+                let b = if infinite { Bounds2::EMPTY } else { entity_bounds(d, e, 0) };
+                items.push((b, infinite, e.handle, object_polys(d, e, tol, ext)));
+            }
+        }
+        Ok(Outlines { space, ext, items, found: Vec::new() })
+    }
+
+    /// As [`outlines`] for this window (none: everything).
+    fn window(&self, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
+        let mut out = Vec::new();
+        let mut owners = Vec::new();
+        for (b, infinite, h, polys) in &self.items {
+            if let Some(n) = near
+                && !*infinite
+                && !b.intersects(&n)
+            {
+                continue;
+            }
+            owners.extend(std::iter::repeat_n(*h, polys.len()));
+            out.extend(polys.iter().cloned());
+        }
+        (out, owners)
+    }
+}
+
 /// Boundary loops (outer + islands) around an internal point.
 pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
+    loops_at_with(s, p, None)
+}
+
+/// [`loops_at`] for a loop over many points: the drawing's outlines are made at the first point
+/// (never, when there are none) and kept in `cache` for the next ones.
+pub(crate) fn loops_at_lazy(s: &Session, p: Vec2, cache: &mut Option<Outlines>) -> Result<Vec<HatchLoop>> {
+    if cache.as_ref().is_none_or(|c| c.space != s.space()) {
+        *cache = Some(Outlines::new(s)?);
+    }
+    let Some(c) = cache.as_mut() else { return loops_at(s, p) };
+    // Clear of every outline by a margin: a point on (or a hair from) an edge is searched.
+    let margin = ((c.ext.width() + c.ext.height()) * 1e-6).max(1e-9);
+    let clear = |poly: &[Vec2]| {
+        (0..poly.len()).all(|i| match (poly.get(i), poly.get((i + 1) % poly.len())) {
+            (Some(a), Some(b)) => {
+                let ab = *b - *a;
+                let l2 = ab.dot(ab);
+                let t = if l2 > 0.0 { ((p - *a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                p.dist(*a + ab * t) > margin
+            }
+            _ => true,
+        })
+    };
+    if let Some((_, _, loops)) = c
+        .found
+        .iter()
+        .find(|(outer, islands, _)| point_in_polygon(outer, p) && clear(outer) && islands.iter().all(|i| !point_in_polygon(i, p) && clear(i)))
+    {
+        return Ok(loops.clone());
+    }
+    let loops = loops_at_with(s, p, Some(c))?;
+    let ring = |l: &HatchLoop| Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(margin);
+    if let Some(outer) = loops.iter().find(|l| l.outer).map(ring).filter(|o| o.len() >= 3 && point_in_polygon(o, p)) {
+        let islands = loops.iter().filter(|l| !l.outer).map(ring).collect();
+        if c.found.len() < 10_000 {
+            c.found.push((outer, islands, loops.clone()));
+        }
+    }
+    Ok(loops)
+}
+
+fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<HatchLoop>> {
     let d = s.doc()?;
     let space = s.space();
-    let ext = d.extents(&space);
+    // A cache made for another space can't answer for this one.
+    let cache = cache.filter(|c| c.space == space);
+    let ext = cache.map_or_else(|| d.extents(&space), |c| c.ext);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
     let gap = gap_tolerance(d);
     // Search around the point first, widening the window: a big plan has far more segments than
@@ -245,7 +342,10 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let (owners, found) = loop {
         let full = !span.is_finite() || r >= span * 2.0;
         let window = if full { None } else { Some(Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r))) };
-        let (polys, owners) = outlines(d, &space, window);
+        let (polys, owners) = match cache {
+            Some(c) => c.window(window),
+            None => outlines(d, &space, window),
+        };
         let found = cadaddy_geom::region::search_at_gap(&polys, p, tol, gap);
         let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
             let bb = Bounds2::from_points(b.outer.iter().copied());
@@ -1076,6 +1176,33 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A row of rooms with a column, a circle island and an infinite line: the outlines made
+    /// once give the same loops at every point as outlining the drawing for each search.
+    #[test]
+    fn outlines_made_once_find_the_same_loops() {
+        let mut s = Session::new();
+        for i in 0..12 {
+            let x = f64::from(i) * 120.0;
+            s.execute("rectang", &json!({ "p1": [x, 0], "p2": [x + 120.0, 144.0] })).unwrap();
+            s.execute("circle", &json!({ "center": [x + 30.0, 30.0], "radius": 6.0 })).unwrap();
+        }
+        s.execute("xline", &json!({ "point": [0, 200], "through": [10, 200] })).ok();
+        let mut cache = None;
+        let mut checked = 0;
+        for i in 0..12 {
+            for (dx, dy) in [(60.0, 72.0), (100.0, 120.0), (30.0, 30.0)] {
+                let p = Vec2::new(f64::from(i) * 120.0 + dx, dy);
+                let plain = loops_at(&s, p).map_err(|e| e.to_string());
+                let cached = loops_at_lazy(&s, p, &mut cache).map_err(|e| e.to_string());
+                assert_eq!(plain, cached, "at {p:?}");
+                checked += usize::from(plain.is_ok());
+            }
+        }
+        assert!(checked >= 24, "{checked}");
+        // Outside everything: both find nothing.
+        assert!(loops_at_lazy(&s, Vec2::new(-500.0, -500.0), &mut cache).is_err());
+    }
 
     /// The drawing's only hatch and its handle (hatches go to the back of the draw order, so not the last entity).
     fn only_hatch(s: &Session) -> (String, Hatch) {

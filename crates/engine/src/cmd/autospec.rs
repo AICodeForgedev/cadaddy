@@ -201,8 +201,9 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
     let mut rooms: Vec<Room> = Vec::new();
     let mut outlines: Vec<Vec<Vec2>> = Vec::new();
     let mut room_layers: Vec<String> = Vec::new();
+    let mut outline_cache = None;
     for (h, name, at) in candidates.into_iter().take(MAX_ROOMS) {
-        let Ok(loops) = super::hatch::loops_at(&plan, at) else { continue };
+        let Ok(loops) = super::hatch::loops_at_lazy(&plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         let area = cadaddy_geom::shoelace(&poly).abs();
