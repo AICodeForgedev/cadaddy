@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 865,
-    "count": 865,
+    "callableAsJson": 872,
+    "count": 872,
     "ids": [
       "-attedit",
       "-block",
@@ -161,6 +161,8 @@
       "circle.ttt",
       "close",
       "closeall",
+      "cobie.export",
+      "cobie.validate",
       "color",
       "colorbook",
       "commandhistory",
@@ -321,6 +323,10 @@
       "gcsymmetric",
       "gctangent",
       "gcvertical",
+      "gear.accept",
+      "gear.check",
+      "gear.list",
+      "gear.review",
       "geographiclocation",
       "geomconstraint",
       "georemove",
@@ -340,6 +346,7 @@
       "group",
       "groupedit",
       "groups.list",
+      "handover.schedules",
       "hatch",
       "hatch.patterns",
       "hatchedit",
@@ -869,7 +876,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 469,
+    "inMenus": 471,
     "typed": 496
   },
   "features": {
