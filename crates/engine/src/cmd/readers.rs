@@ -12,9 +12,9 @@ use crate::{EngineError, Result, Session};
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-/// Get the current printset project from the global state.
-fn project() -> Result<PrintSetProject> {
-    super::printset::get_project_handle()
+/// Get the current printset project from the session state.
+fn project(s: &Session) -> Result<PrintSetProject> {
+    super::printset::get_project_handle(s)
 }
 
 // ─── Command specs ───────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ fn run_conduit_read(_s: &mut Session, p: &Value) -> Result<Value> {
     // The conduit reader needs DXF data from the printset project's E-sheets.
     // For now, return a structured placeholder that shows the command is wired.
     // Full integration requires loading DXF sheets from the printset project.
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -139,7 +139,7 @@ fn run_gear_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -189,7 +189,7 @@ fn run_scan_read(_s: &mut Session, p: &Value) -> Result<Value> {
 // ─── site.read ───────────────────────────────────────────────────────────────
 
 fn run_site_read(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -236,7 +236,7 @@ fn run_duct_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -271,7 +271,7 @@ fn run_pipe_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -304,7 +304,7 @@ fn run_pipe_read(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_struct_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -335,7 +335,7 @@ fn run_struct_read(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_ceiling_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -367,7 +367,7 @@ fn run_sprinkler_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -402,7 +402,7 @@ fn run_tray_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -438,7 +438,7 @@ fn run_wall_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -485,7 +485,7 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -510,7 +510,7 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let _level = str_param(p, "level");
     let apply = bool_or(p, "apply", false);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(
@@ -544,7 +544,7 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_elec_devices(_s: &mut Session, p: &Value) -> Result<Value> {
     let _preview = bool_or(p, "preview", true);
 
-    let project = match project() {
+    let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
             return Err(EngineError::Other(

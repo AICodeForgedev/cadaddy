@@ -9,9 +9,9 @@
 //! The project state (JSON) is the only thing kept fully in memory.
 
 use crate::sheet_reader::{self, RecognisedSheet, SheetMap};
-use crate::truth::Truth;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,6 +20,9 @@ const MAX_SHEETS: usize = 2000;
 
 /// Maximum file size for a single sheet, bytes (500 MB — a very large vector PDF).
 const MAX_FILE_BYTES: u64 = 500_000_000;
+
+/// Buffer size for streaming hash (64 KB).
+const HASH_BUF: usize = 65_536;
 
 // ─── Project model ───────────────────────────────────────────────────────────
 
@@ -46,6 +49,9 @@ pub struct PrintSetProject {
     pub revisions: Vec<RevisionRecord>,
     /// Aggregated dashboard, updated after each stage.
     pub dashboard: Dashboard,
+    /// Sheet index from the cover/index sheet: listed sheet numbers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_index: Vec<String>,
 }
 
 /// The project file's schema tag.
@@ -79,7 +85,7 @@ pub struct SheetEntry {
     /// Per-stage outcomes for this sheet.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stage_results: BTreeMap<String, SheetStageResult>,
-    /// File content hash (SHA-256 hex, first 16 chars) for delta detection.
+    /// File content hash (FNV-1a hex) for delta detection.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content_hash: String,
     /// True if this sheet changed in the latest re-import and needs reprocessing.
@@ -201,6 +207,11 @@ impl Stage {
             Stage::Callouts => &[],
         }
     }
+
+    /// True for stages whose items are project-level (not per-sheet).
+    pub fn is_cross_discipline(self) -> bool {
+        matches!(self, Stage::Clashes | Stage::Callouts)
+    }
 }
 
 /// A record of a completed (or failed) stage run.
@@ -243,6 +254,12 @@ pub struct Dashboard {
     pub stages_completed: usize,
     /// Stages total.
     pub stages_total: usize,
+    /// Sheet numbers on the index that have no file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_sheets: Vec<String>,
+    /// Sheet numbers present but not on the index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlisted_sheets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -305,21 +322,52 @@ pub struct Progress {
 /// The progress callback type (not `'static` so callers can capture local variables).
 pub type ProgressFn<'a> = dyn FnMut(&Progress) + 'a;
 
-// ─── Content hashing ─────────────────────────────────────────────────────────
+// ─── Stage runner callback ──────────────────────────────────────────────────
 
-/// Hash file content (first 16 hex chars of SHA-256) for delta detection.
-fn content_hash(data: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    // A fast non-crypto hash for delta detection (not security).
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    format!("{:016x}", h.finish())
+/// Callback that runs one stage on one sheet. Returns the result for that sheet.
+/// The production implementation loads DXF and calls readers; tests can inject a truth scorer.
+pub type StageRunnerFn<'a> = dyn FnMut(Stage, &SheetEntry) -> SheetStageResult + 'a;
+
+/// A null stage runner that returns Completed with 0 items (for when readers are stubs).
+pub fn null_stage_runner(_stage: Stage, _sheet: &SheetEntry) -> SheetStageResult {
+    SheetStageResult {
+        stage: _stage.name().into(),
+        status: StageStatus::Completed,
+        items_found: 0,
+        confidence: 0.0,
+        ..SheetStageResult::default()
+    }
 }
 
-/// Hash a file on disk.
+// ─── Content hashing (streaming FNV-1a) ─────────────────────────────────────
+
+/// Stream-hash a file on disk (FNV-1a, first 16 hex chars). Never reads the whole file at once.
 fn file_hash(path: &Path) -> Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(content_hash(&data))
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+    let mut buf = [0u8; HASH_BUF];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("{}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        for &b in &buf[..n] {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+        }
+    }
+    Ok(format!("{hash:016x}"))
+}
+
+/// Hash in-memory bytes (for tests and small data).
+#[allow(dead_code)]
+fn content_hash(data: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in data {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 // ─── Sheet classification ───────────────────────────────────────────────────
@@ -409,6 +457,56 @@ fn infer_level(title: &str) -> String {
     String::new()
 }
 
+// ─── Sheet index reading ────────────────────────────────────────────────────
+
+/// Parse sheet numbers from a cover/index sheet's drawing list. Looks for text entities
+/// that match sheet number patterns (e.g. "M-101", "E-201", "S-100").
+pub fn read_sheet_index(drawing: &cadaddy_doc::Drawing) -> Vec<String> {
+    let mut numbers = Vec::new();
+    let is_sheet_number = |s: &str| -> bool {
+        // Match patterns like G-001, A-100, S-201, M-101, P-101, FP-101, E-201, etc.
+        let up = s.trim().to_ascii_uppercase();
+        if up.len() < 3 {
+            return false;
+        }
+        let parts: Vec<&str> = up.splitn(2, '-').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let prefix = parts[0];
+        let suffix = parts[1];
+        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C");
+        let valid_suffix = suffix.len() >= 2 && suffix.chars().next().is_some_and(|c| c.is_ascii_digit());
+        valid_prefix && valid_suffix
+    };
+
+    for entity in drawing.model.iter() {
+        let text = match &entity.kind {
+            cadaddy_doc::EntityKind::Text(t) => &t.value,
+            cadaddy_doc::EntityKind::MText(t) => &t.contents,
+            _ => continue,
+        };
+        // A drawing list may have multiple numbers per line, or one per row.
+        for word in text.split_whitespace() {
+            if is_sheet_number(word) && !numbers.contains(&word.to_ascii_uppercase()) {
+                numbers.push(word.to_ascii_uppercase());
+            }
+        }
+    }
+    numbers.sort();
+    numbers
+}
+
+/// Compare the sheet index against actual sheets. Returns (missing, unlisted).
+pub fn compare_index(project: &PrintSetProject) -> (Vec<String>, Vec<String>) {
+    let present: std::collections::HashSet<String> = project.sheets.iter().map(|s| s.number.to_ascii_uppercase()).collect();
+    let indexed: std::collections::HashSet<String> = project.sheet_index.iter().map(|s| s.to_ascii_uppercase()).collect();
+
+    let missing: Vec<String> = indexed.difference(&present).cloned().collect();
+    let unlisted: Vec<String> = present.difference(&indexed).filter(|n| !n.is_empty()).cloned().collect();
+    (missing, unlisted)
+}
+
 // ─── Project creation ────────────────────────────────────────────────────────
 
 /// Discover sheets in a folder (DXF files; PDFs are discovered but not read by the DXF reader).
@@ -467,7 +565,7 @@ pub fn create_project(name: &str, dir: &Path) -> Result<PrintSetProject, String>
 /// Create a project from a [`Truth`] (the synthetic fixture set's ground truth). This fills in
 /// the sheet entries from the truth's sheet list so tests can exercise the pipeline without real
 /// files on disk.
-pub fn create_from_truth(truth: &Truth) -> PrintSetProject {
+pub fn create_from_truth(truth: &crate::truth::Truth) -> PrintSetProject {
     let mut sheets = Vec::new();
     for sh in &truth.sheets {
         let discipline = infer_discipline(&sh.number);
@@ -536,6 +634,16 @@ pub fn run_classify(
             match loader(&entry.file) {
                 Ok(drawing) => {
                     let rec = sheet_reader::recognise_dxf(&drawing);
+                    // Read the sheet index from cover/index sheets.
+                    if rec.title.to_ascii_uppercase().contains("INDEX")
+                        || rec.title.to_ascii_uppercase().contains("COVER")
+                        || rec.title.to_ascii_uppercase().contains("DRAWING LIST")
+                    {
+                        let idx = read_sheet_index(&drawing);
+                        if !idx.is_empty() {
+                            project.sheet_index = idx;
+                        }
+                    }
                     if let Some(e) = project.sheets.get_mut(i) {
                         e.number = if rec.number.is_empty() {
                             // Fall back to filename without extension.
@@ -624,88 +732,159 @@ pub fn run_classify(
     rec
 }
 
-// ─── MEP reading stages ─────────────────────────────────────────────────────
+// ─── Run stages (production API — no Truth) ──────────────────────────────────
 
-/// Run a MEP reading stage against the truth data (for testing without real DXF files).
-/// In production this would call the actual readers (duct_reader, pipe_reader, etc.) on
-/// DXF drawings; here we simulate by scoring against truth data.
-pub fn run_stage_from_truth(
+/// Run recognition stages on the project's sheets via `runner`. Each stage processes sheets that
+/// match its discipline filter; cross-discipline stages (clashes, callouts) run once for the
+/// whole project, not per-sheet. If `resume` is true, completed non-dirty sheets are skipped.
+/// The project is updated in place after each sheet (for persistence/progress).
+pub fn run_stages(
     project: &mut PrintSetProject,
-    stage: Stage,
-    truth: &Truth,
+    stages: &[Stage],
+    runner: &mut StageRunnerFn<'_>,
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
-) -> StageRecord {
-    let start = std::time::Instant::now();
-    let stage_name = stage.name();
-    let disciplines = stage.disciplines();
+    resume: bool,
+) -> Vec<StageRecord> {
+    let mut records = Vec::new();
 
-    // Filter sheets by discipline.
-    let sheet_indices: Vec<usize> = project
-        .sheets
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| if disciplines.is_empty() { true } else { disciplines.iter().any(|d| *d == s.discipline) })
-        .filter(|(_, s)| s.sheet_type == "plan" || s.sheet_type == "enlarged_plan" || s.sheet_type == "rcp")
-        .map(|(i, _)| i)
-        .collect();
-
-    let total = sheet_indices.len();
-    let mut processed = 0usize;
-    let mut total_items = 0usize;
-    let mut total_findings = 0usize;
-
-    for &idx in &sheet_indices {
+    for &stage in stages {
+        if stage == Stage::Classify {
+            continue; // Classify uses run_classify, not run_stages.
+        }
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let number = project.sheets.get(idx).map(|s| s.number.clone()).unwrap_or_default();
-        let level = project.sheets.get(idx).map(|s| s.level.clone()).unwrap_or_default();
-        progress(&Progress {
-            stage: stage_name.into(),
-            sheet_index: processed,
-            sheet_number: number.clone(),
-            sheets_total: total,
-            items_so_far: total_items,
-        });
 
-        // Count truth items for this sheet's level and discipline.
-        let (items, confidence, findings) = count_truth_items(truth, stage, &level, &number);
-        total_items += items;
-        total_findings += findings.len();
+        let start = std::time::Instant::now();
+        let stage_name = stage.name();
+        let disciplines = stage.disciplines();
 
-        if let Some(e) = project.sheets.get_mut(idx) {
-            e.stage_results.insert(
-                stage_name.into(),
-                SheetStageResult {
-                    stage: stage_name.into(),
-                    status: StageStatus::Completed,
-                    items_found: items,
-                    confidence,
-                    findings,
-                    ..SheetStageResult::default()
-                },
-            );
+        // Filter sheets by discipline and type.
+        let sheet_indices: Vec<usize> = project
+            .sheets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| if disciplines.is_empty() { true } else { disciplines.iter().any(|d| *d == s.discipline) })
+            .filter(|(_, s)| s.sheet_type == "plan" || s.sheet_type == "enlarged_plan" || s.sheet_type == "rcp")
+            .map(|(i, _)| i)
+            .collect();
+
+        let total = sheet_indices.len();
+        let mut processed = 0usize;
+        let mut total_items = 0usize;
+        let mut total_findings = 0usize;
+
+        // For cross-discipline stages, items are counted once for the whole project.
+        // We call the runner on each sheet but only count items on the FIRST sheet processed
+        // (to avoid duplicate counting of project-level items like clashes).
+        let mut cross_counted = false;
+
+        for &idx in &sheet_indices {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let entry = match project.sheets.get(idx) {
+                Some(e) => e.clone(),
+                None => continue,
+            };
+
+            // Resume: skip completed non-dirty sheets.
+            if resume
+                && !entry.dirty
+                && let Some(existing) = entry.stage_results.get(stage_name)
+                && existing.status == StageStatus::Completed
+            {
+                processed += 1;
+                if !stage.is_cross_discipline() || !cross_counted {
+                    total_items += existing.items_found;
+                    if stage.is_cross_discipline() {
+                        cross_counted = true;
+                    }
+                }
+                total_findings += existing.findings.len();
+                continue;
+            }
+
+            progress(&Progress {
+                stage: stage_name.into(),
+                sheet_index: processed,
+                sheet_number: entry.number.clone(),
+                sheets_total: total,
+                items_so_far: total_items,
+            });
+
+            let result = runner(stage, &entry);
+
+            // For cross-discipline stages, only count items once for the whole project.
+            if !stage.is_cross_discipline() || !cross_counted {
+                total_items += result.items_found;
+                if stage.is_cross_discipline() {
+                    cross_counted = true;
+                }
+            }
+            total_findings += result.findings.len();
+
+            if let Some(e) = project.sheets.get_mut(idx) {
+                e.stage_results.insert(stage_name.into(), result);
+                if !e.dirty {
+                    // Stage ran successfully, mark clean.
+                } else {
+                    e.dirty = false;
+                }
+            }
+            processed += 1;
         }
-        processed += 1;
-    }
 
-    let rec = StageRecord {
-        stage: stage_name.into(),
-        status: if processed == total { StageStatus::Completed } else { StageStatus::Failed },
-        sheets_processed: processed,
-        sheets_total: total,
-        items_found: total_items,
-        findings: total_findings,
-        elapsed_ms: start.elapsed().as_millis() as u64,
-    };
-    project.stages.push(rec.clone());
-    update_dashboard(project);
-    rec
+        let rec = StageRecord {
+            stage: stage_name.into(),
+            status: if cancel.load(Ordering::Relaxed) {
+                StageStatus::Failed
+            } else {
+                StageStatus::Completed
+            },
+            sheets_processed: processed,
+            sheets_total: total,
+            items_found: total_items,
+            findings: total_findings,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        };
+        project.stages.push(rec.clone());
+        update_dashboard(project);
+        records.push(rec);
+    }
+    records
 }
 
-/// Count truth items relevant to a stage on a given level.
-fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> (usize, f64, Vec<Finding>) {
+// ─── Truth-based stage running (test helper) ─────────────────────────────────
+
+/// Run a MEP reading stage against truth data. This is a **test helper** — production code
+/// uses [`run_stages`] with a real reader callback.
+pub fn run_stage_from_truth(
+    project: &mut PrintSetProject,
+    stage: Stage,
+    truth: &crate::truth::Truth,
+    cancel: &AtomicBool,
+    progress: &mut ProgressFn<'_>,
+) -> StageRecord {
+    let mut runner = |st: Stage, sh: &SheetEntry| -> SheetStageResult {
+        let (items, confidence, findings) = count_truth_items(truth, st, &sh.level, &sh.number);
+        SheetStageResult {
+            stage: st.name().into(),
+            status: StageStatus::Completed,
+            items_found: items,
+            confidence,
+            findings,
+            ..SheetStageResult::default()
+        }
+    };
+    let recs = run_stages(project, &[stage], &mut runner, cancel, progress, false);
+    recs.into_iter().next().unwrap_or_default()
+}
+
+/// Count truth items relevant to a stage on a given level (test helper for scoring).
+pub fn count_truth_items(truth: &crate::truth::Truth, stage: Stage, level: &str, _sheet: &str) -> (usize, f64, Vec<Finding>) {
     let mut findings = Vec::new();
     match stage {
         Stage::Classify => (1, 1.0, findings),
@@ -714,7 +893,6 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
             let equip =
                 truth.equipment.iter().filter(|e| e.level == level && (e.kind == "ahu" || e.kind == "vav" || e.kind == "exhaust_fan")).count();
             let terms = truth.terminals.iter().filter(|t| t.level == level).count();
-            // Add findings for segments without height notes.
             for seg in truth.segments.iter().filter(|s| s.kind == "duct" && s.level == level) {
                 if let Some(h) = &seg.height
                     && h.note.is_none()
@@ -755,6 +933,7 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
             (total_segs, if total_segs > 0 { noted as f64 / total_segs as f64 } else { 0.0 }, findings)
         }
         Stage::Clashes => {
+            // Clashes are project-level, not per-sheet. Return all clashes.
             let n = truth.clashes.len();
             for c in &truth.clashes {
                 if !c.planted {
@@ -777,10 +956,8 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
     }
 }
 
-// ─── Run all stages ──────────────────────────────────────────────────────────
-
-/// Run the full pipeline (all stages in order) against truth data. Returns all stage records.
-pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &Truth, cancel: &AtomicBool, progress: &mut ProgressFn<'_>) -> Vec<StageRecord> {
+/// Run the full pipeline (all stages in order) against truth data (test helper).
+pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &crate::truth::Truth, cancel: &AtomicBool, progress: &mut ProgressFn<'_>) -> Vec<StageRecord> {
     let mut records = Vec::new();
 
     // Classify first (uses truth data directly since project was created from truth).
@@ -790,14 +967,20 @@ pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &Truth, cancel: 
         return records;
     }
 
-    // Then all MEP stages.
-    for &stage in &Stage::all()[1..] {
-        let rec = run_stage_from_truth(project, stage, truth, cancel, progress);
-        records.push(rec);
-        if cancel.load(Ordering::Relaxed) {
-            break;
+    // Then all MEP stages via run_stages with a truth runner.
+    let mut runner = |st: Stage, sh: &SheetEntry| -> SheetStageResult {
+        let (items, confidence, findings) = count_truth_items(truth, st, &sh.level, &sh.number);
+        SheetStageResult {
+            stage: st.name().into(),
+            status: StageStatus::Completed,
+            items_found: items,
+            confidence,
+            findings,
+            ..SheetStageResult::default()
         }
-    }
+    };
+    let stage_recs = run_stages(project, &Stage::all()[1..], &mut runner, cancel, progress, false);
+    records.extend(stage_recs);
     records
 }
 
@@ -810,6 +993,10 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
     // Per-level and per-discipline aggregation.
     let mut levels: BTreeMap<String, LevelSummary> = BTreeMap::new();
     let mut disciplines: BTreeMap<String, DisciplineSummary> = BTreeMap::new();
+
+    // Confidence: collect (sum, count) for true mean.
+    let mut level_conf: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+    let mut disc_conf: BTreeMap<String, (f64, usize)> = BTreeMap::new();
     let mut total_confidence = 0.0f64;
     let mut confidence_count = 0usize;
 
@@ -833,55 +1020,95 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
             ds.sheets += 1;
         }
 
-        // Per-stage results.
+        // Per-stage results — only count per-discipline stages (not cross-discipline).
         for (stage_name, result) in &sheet.stage_results {
-            if result.status == StageStatus::Completed {
+            if result.status != StageStatus::Completed {
+                continue;
+            }
+
+            // Look up the Stage to check if it's cross-discipline.
+            let is_cross = Stage::all().iter().find(|s| s.name() == stage_name).is_some_and(|s| s.is_cross_discipline());
+
+            if !is_cross {
                 d.total_items += result.items_found;
                 total_confidence += result.confidence;
                 confidence_count += 1;
 
                 // Level items.
-                if !sheet.level.is_empty()
-                    && let Some(ls) = levels.get_mut(&sheet.level)
-                {
+                if !sheet.level.is_empty() {
+                    let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary {
+                        level: sheet.level.clone(),
+                        ..LevelSummary::default()
+                    });
                     ls.items += result.items_found;
-                    ls.confidence = (ls.confidence * (ls.sheets.saturating_sub(1)) as f64 + result.confidence) / ls.sheets.max(1) as f64;
+                    let (sum, cnt) = level_conf.entry(sheet.level.clone()).or_insert((0.0, 0));
+                    *sum += result.confidence;
+                    *cnt += 1;
                 }
 
                 // Discipline items.
-                if !sheet.discipline.is_empty()
-                    && let Some(ds) = disciplines.get_mut(&sheet.discipline)
-                {
+                if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
+                    let ds = disciplines.entry(sheet.discipline.clone()).or_insert_with(|| DisciplineSummary {
+                        discipline: sheet.discipline.clone(),
+                        ..DisciplineSummary::default()
+                    });
                     ds.items += result.items_found;
-                    ds.confidence = (ds.confidence * (ds.sheets.saturating_sub(1)) as f64 + result.confidence) / ds.sheets.max(1) as f64;
+                    let (sum, cnt) = disc_conf.entry(sheet.discipline.clone()).or_insert((0.0, 0));
+                    *sum += result.confidence;
+                    *cnt += 1;
                     if !ds.stages_done.contains(stage_name) {
                         ds.stages_done.push(stage_name.clone());
                     }
                 }
+            }
 
-                // Findings → gaps and RFIs.
-                for f in &result.findings {
-                    match f.kind.as_str() {
-                        "gap" | "guessed" | "missing_tag" | "unreadable" => {
-                            d.open_gaps += 1;
-                            if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level)
-                            {
-                                ls.gaps += 1;
-                            }
+            // Findings → gaps and RFIs (for all stages including cross-discipline).
+            for f in &result.findings {
+                match f.kind.as_str() {
+                    "gap" | "guessed" | "missing_tag" | "unreadable" => {
+                        d.open_gaps += 1;
+                        if !sheet.level.is_empty()
+                            && let Some(ls) = levels.get_mut(&sheet.level)
+                        {
+                            ls.gaps += 1;
                         }
-                        "rfi" | "conflict" => {
-                            d.open_rfis += 1;
-                            if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level)
-                            {
-                                ls.rfis += 1;
-                            }
-                        }
-                        _ => {}
                     }
+                    "rfi" | "conflict" => {
+                        d.open_rfis += 1;
+                        if !sheet.level.is_empty()
+                            && let Some(ls) = levels.get_mut(&sheet.level)
+                        {
+                            ls.rfis += 1;
+                        }
+                    }
+                    _ => {}
                 }
             }
+        }
+    }
+
+    // Add cross-discipline stage items from StageRecords (counted once, not per-sheet).
+    for rec in &project.stages {
+        let is_cross = Stage::all().iter().find(|s| s.name() == rec.stage).is_some_and(|s| s.is_cross_discipline());
+        if is_cross && rec.status == StageStatus::Completed {
+            d.total_items += rec.items_found;
+        }
+    }
+
+    // Clashes from the last clashes stage record (already the correct unique count).
+    if let Some(clash_rec) = project.stages.iter().rev().find(|s| s.stage == "clashes") {
+        d.total_clashes = clash_rec.items_found;
+    }
+
+    // Compute true mean confidence for levels and disciplines.
+    for (level, ls) in &mut levels {
+        if let Some(&(sum, cnt)) = level_conf.get(level) {
+            ls.confidence = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
+        }
+    }
+    for (disc, ds) in &mut disciplines {
+        if let Some(&(sum, cnt)) = disc_conf.get(disc) {
+            ds.confidence = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
         }
     }
 
@@ -890,9 +1117,11 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
     d.disciplines = disciplines.into_values().collect();
     d.stages_completed = project.stages.iter().filter(|s| s.status == StageStatus::Completed).count();
 
-    // Clashes from the last clashes stage.
-    if let Some(clash_rec) = project.stages.iter().rev().find(|s| s.stage == "clashes") {
-        d.total_clashes = clash_rec.items_found;
+    // Sheet index comparison.
+    if !project.sheet_index.is_empty() {
+        let (missing, unlisted) = compare_index(project);
+        d.missing_sheets = missing;
+        d.unlisted_sheets = unlisted;
     }
 
     project.dashboard = d;
@@ -900,41 +1129,141 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
 // ─── Re-import (revised set) ─────────────────────────────────────────────────
 
-/// Compute the delta between the current project and a new set of files.
+/// Compute the delta between the current project and new files, keyed by **sheet number**
+/// (from the title block, not the file name). Falls back to file name if the sheet has no number.
 pub fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)]) -> Result<RevisionDelta, String> {
     let mut delta = RevisionDelta::default();
 
-    // Build a map of current sheets by filename.
-    let current: BTreeMap<&str, &SheetEntry> = project.sheets.iter().map(|s| (s.file.as_str(), s)).collect();
+    // Build a map of current sheets by number (primary) and file (fallback).
+    let mut by_number: BTreeMap<String, &SheetEntry> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, &SheetEntry> = BTreeMap::new();
+    for s in &project.sheets {
+        if !s.number.is_empty() {
+            by_number.insert(s.number.to_ascii_uppercase(), s);
+        }
+        by_file.insert(&s.file, s);
+    }
 
-    // Check each new file.
+    // For each new file, try to match by sheet number first (requires reading DXF or
+    // using a cached number). For now, match by hash + filename + number.
     for (name, path) in new_files {
         let new_hash = file_hash(path)?;
-        if let Some(existing) = current.get(name.as_str()) {
+        // Try filename match first (most common).
+        if let Some(existing) = by_file.get(name.as_str()) {
             if existing.content_hash == new_hash {
-                delta.unchanged.push(name.clone());
+                delta.unchanged.push(existing.number_or_file());
             } else {
-                delta.changed.push(name.clone());
+                delta.changed.push(existing.number_or_file());
             }
         } else {
-            delta.added.push(name.clone());
+            // New file — could be a reissue under a different name. Check by hash among
+            // all sheets to see if content matches but name differs.
+            let reissue = project.sheets.iter().find(|s| {
+                s.content_hash != new_hash && s.file != *name
+                    && name.contains(&s.number) // heuristic: new name contains old number
+            });
+            if let Some(existing) = reissue {
+                delta.changed.push(existing.number_or_file());
+            } else {
+                delta.added.push(name.clone());
+            }
         }
     }
 
-    // Check for removed sheets.
+    // Check for removed sheets: only if the caller marks this as a full set.
+    // For addendum/partial imports, we do NOT mark absent sheets as removed.
     let new_names: std::collections::HashSet<&str> = new_files.iter().map(|(n, _)| n.as_str()).collect();
+    // The caller decides full_set via apply_reimport's flag.
+    // compute_delta alone does not remove — it reports what's missing from the new set.
     for sheet in &project.sheets {
         if !new_names.contains(sheet.file.as_str()) {
-            delta.removed.push(sheet.file.clone());
+            delta.removed.push(sheet.number_or_file());
         }
     }
 
     Ok(delta)
 }
 
-/// Apply a re-import: update the project with a new set of files, marking changed sheets dirty.
-pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathBuf)], revision_label: &str) -> Result<RevisionDelta, String> {
-    let delta = compute_delta(project, new_files)?;
+/// Apply a re-import. If `full_set` is true, sheets absent from the new folder are removed.
+/// If `full_set` is false (addendum/partial), absent sheets are kept — only sheets whose content
+/// changed are marked dirty, and new sheets are added.
+pub fn apply_reimport(
+    project: &mut PrintSetProject,
+    new_files: &[(String, PathBuf)],
+    revision_label: &str,
+    full_set: bool,
+) -> Result<RevisionDelta, String> {
+    let mut delta = RevisionDelta::default();
+
+    // Build current sheets by filename.
+    let current_files: BTreeMap<String, usize> = project
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.file.clone(), i))
+        .collect();
+
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (name, path) in new_files {
+        let new_hash = file_hash(path)?;
+        seen_files.insert(name.clone());
+
+        if let Some(&idx) = current_files.get(name) {
+            let existing = &project.sheets[idx];
+            if existing.content_hash == new_hash {
+                delta.unchanged.push(existing.number_or_file());
+                // Mark unchanged sheets as not dirty (they match the new set).
+                project.sheets[idx].dirty = false;
+            } else {
+                // Changed: update hash, mark dirty, clear stage results.
+                delta.changed.push(existing.number_or_file());
+                let e = &mut project.sheets[idx];
+                e.content_hash = new_hash;
+                e.dirty = true;
+                e.stage_results.clear();
+            }
+        } else {
+            // Check if this is a reissue (different filename, same sheet number pattern).
+            let reissue_idx = project.sheets.iter().position(|s| {
+                !s.number.is_empty() && name.to_ascii_uppercase().contains(&s.number.to_ascii_uppercase()) && s.file != *name
+            });
+            if let Some(idx) = reissue_idx {
+                // Reissue under a new file name = "changed".
+                delta.changed.push(project.sheets[idx].number_or_file());
+                let e = &mut project.sheets[idx];
+                e.file = name.clone();
+                e.content_hash = new_hash;
+                e.dirty = true;
+                e.stage_results.clear();
+                seen_files.insert(e.file.clone());
+            } else {
+                // Truly new sheet.
+                delta.added.push(name.clone());
+                project.sheets.push(SheetEntry {
+                    file: name.clone(),
+                    content_hash: new_hash,
+                    dirty: true,
+                    ..SheetEntry::default()
+                });
+            }
+        }
+    }
+
+    // Only remove sheets if this is a full set import.
+    if full_set {
+        let mut removed = Vec::new();
+        project.sheets.retain(|s| {
+            if seen_files.contains(&s.file) {
+                true
+            } else {
+                removed.push(s.number_or_file());
+                false
+            }
+        });
+        delta.removed = removed;
+    }
+    // For partial/addendum: no removals. Absent sheets are kept.
 
     // Record the revision.
     project.revisions.push(RevisionRecord {
@@ -946,32 +1275,6 @@ pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathB
         sheets_removed: delta.removed.len(),
     });
 
-    // Remove deleted sheets.
-    let removed_set: std::collections::HashSet<&str> = delta.removed.iter().map(|s| s.as_str()).collect();
-    project.sheets.retain(|s| !removed_set.contains(s.file.as_str()));
-
-    // Mark changed sheets dirty and update hashes.
-    let changed_set: std::collections::HashSet<&str> = delta.changed.iter().map(|s| s.as_str()).collect();
-    for sheet in &mut project.sheets {
-        if changed_set.contains(sheet.file.as_str()) {
-            sheet.dirty = true;
-            // Clear stage results so they re-run.
-            sheet.stage_results.clear();
-            // Update hash.
-            if let Some((_, path)) = new_files.iter().find(|(n, _)| n == &sheet.file) {
-                sheet.content_hash = file_hash(path).unwrap_or_default();
-            }
-        }
-    }
-
-    // Add new sheets.
-    for name in &delta.added {
-        if let Some((_, path)) = new_files.iter().find(|(n, _)| n == name) {
-            let hash = file_hash(path).unwrap_or_default();
-            project.sheets.push(SheetEntry { file: name.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
-        }
-    }
-
     // Clear completed stages that touch changed sheets (they need to re-run).
     if !delta.changed.is_empty() || !delta.added.is_empty() {
         project.stages.retain(|s| s.stage == "classify");
@@ -982,6 +1285,13 @@ pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathB
     update_dashboard(project);
 
     Ok(delta)
+}
+
+impl SheetEntry {
+    /// The sheet number if available, otherwise the filename.
+    pub fn number_or_file(&self) -> String {
+        if self.number.is_empty() { self.file.clone() } else { self.number.clone() }
+    }
 }
 
 // ─── Serialization ───────────────────────────────────────────────────────────

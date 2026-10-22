@@ -1,13 +1,14 @@
 //! Print-set project commands: open a folder of sheets as a project, run the classification
-//! pipeline, show the dashboard, and re-import revised sets.
+//! and stage pipeline, show the dashboard, and re-import revised sets.
 //!
 //! Delegates to [`cadaddy_mepfix::printset`] for all project operations (create, classify,
-//! reimport, dashboard). The engine commands are thin wrappers that manage the global project
-//! state and convert between engine types and mepfix types.
+//! reimport, dashboard). Project state is owned by the [`Session`] (not a process-global static),
+//! so two sessions can each have their own project open.
 //!
 //! Commands:
 //! - `printset.open`: create or load a project from a folder of sheets.
 //! - `printset.classify`: classify sheets by discipline, type, level, scale.
+//! - `printset.run`: run recognition stages on the project's sheets.
 //! - `printset.dashboard`: show what has been modelled, confidence, gaps, RFIs.
 //! - `printset.sheets`: list the project's sheets with their classification.
 //! - `printset.reimport`: re-import a revised set, only reprocessing changed sheets.
@@ -15,44 +16,33 @@
 
 use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use super::{CommandSpec, always, str_param};
+use super::{CommandSpec, always, bool_or, str_param};
 use crate::{EngineError, Result, Session};
 
-// ─── Global project state ────────────────────────────────────────────────────
+// ─── Per-session project access ─────────────────────────────────────────────
 
-static PROJECT: std::sync::Mutex<Option<PrintSetProject>> = std::sync::Mutex::new(None);
+fn get_project(s: &Session) -> Result<&PrintSetProject> {
+    s.printset_project
+        .as_deref()
+        .ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
+}
 
-fn get_project() -> Result<PrintSetProject> {
-    PROJECT
-        .lock()
-        .map_err(|_| EngineError::Other("project lock poisoned".into()))?
-        .clone()
+fn get_project_mut(s: &mut Session) -> Result<&mut PrintSetProject> {
+    s.printset_project
+        .as_deref_mut()
         .ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
 }
 
 /// Access the current printset project from other modules (readers).
-pub(crate) fn get_project_handle() -> Result<PrintSetProject> {
-    get_project()
+pub(crate) fn get_project_handle(s: &Session) -> Result<PrintSetProject> {
+    get_project(s).cloned()
 }
 
-fn set_project(p: PrintSetProject) -> Result<()> {
-    *PROJECT.lock().map_err(|_| EngineError::Other("project lock poisoned".into()))? = Some(p);
-    Ok(())
-}
-
-// ─── Serialization helpers ──────────────────────────────────────────────────
-
-fn save_project(project: &PrintSetProject, path: &Path) -> std::result::Result<(), String> {
-    let json = serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn load_project(path: &Path) -> std::result::Result<PrintSetProject, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    serde_json::from_slice(&data).map_err(|e| format!("{}: {e}", path.display()))
+fn set_project(s: &mut Session, p: PrintSetProject) {
+    s.printset_project = Some(Box::new(p));
 }
 
 // ─── Command specs ───────────────────────────────────────────────────────────
@@ -69,7 +59,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {classified, total, elapsed_ms}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
+        CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
+            .files()
+            .params("{stages?: [name], resume?: bool} → {stages_run, total_items, elapsed_ms}")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard)
+            .files()
+            .params("{} → {dashboard}")
+            .enabled(always)
+            .noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
             .files()
             .params("{discipline?, level?} → {sheets, total}")
@@ -77,21 +76,25 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport)
             .files()
-            .params("{path: folder, revision?: label} → {delta, sheets}")
+            .params("{path: folder, revision?: label, full_set?: bool} → {delta, sheets}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
+        CommandSpec::new("printset.save", "Save Print Set", run_save)
+            .files()
+            .params("{path?} → {saved}")
+            .enabled(always)
+            .noundo(),
     ]
 }
 
 // ─── printset.open ───────────────────────────────────────────────────────────
 
-fn run_open(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let path = PathBuf::from(path_str);
 
     let project = if path.extension().and_then(|e| e.to_str()) == Some("json") && path.is_file() {
-        load_project(&path).map_err(EngineError::Other)?
+        mep_printset::load_project(&path).map_err(EngineError::Other)?
     } else if path.is_dir() {
         let name = str_param(p, "name").unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set"));
         mep_printset::create_project(name, &path).map_err(EngineError::Other)?
@@ -105,31 +108,65 @@ fn run_open(_s: &mut Session, p: &Value) -> Result<Value> {
         "revision": project.revision,
         "dashboard": project.dashboard,
     });
-    set_project(project)?;
+    set_project(s, project);
     Ok(result)
 }
 
 // ─── printset.classify ───────────────────────────────────────────────────────
 
-fn run_classify(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let mut project = get_project()?;
+fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project_mut(s)?;
     let cancel = AtomicBool::new(false);
     let mut noop = |_: &mep_printset::Progress| {};
-    let rec = mep_printset::run_classify(&mut project, None, &cancel, &mut noop);
+    let rec = mep_printset::run_classify(project, None, &cancel, &mut noop);
 
-    let result = json!({
+    Ok(json!({
         "classified": rec.sheets_processed,
         "total": rec.sheets_total,
         "elapsed_ms": rec.elapsed_ms,
+    }))
+}
+
+// ─── printset.run ────────────────────────────────────────────────────────────
+
+fn run_stages(s: &mut Session, p: &Value) -> Result<Value> {
+    let resume = bool_or(p, "resume", false);
+
+    // Parse optional stage filter.
+    let stage_filter: Option<Vec<mep_printset::Stage>> = p.get("stages").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str())
+            .filter_map(|name| mep_printset::Stage::all().iter().find(|s| s.name() == name).copied())
+            .collect()
     });
-    set_project(project)?;
-    Ok(result)
+
+    let stages = stage_filter.as_deref().unwrap_or(&mep_printset::Stage::all()[1..]);
+    let project = get_project_mut(s)?;
+    let cancel = AtomicBool::new(false);
+    let mut noop = |_: &mep_printset::Progress| {};
+
+    let records = mep_printset::run_stages(project, stages, &mut mep_printset::null_stage_runner, &cancel, &mut noop, resume);
+
+    let total_items: usize = records.iter().map(|r| r.items_found).sum();
+    let elapsed_ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
+
+    Ok(json!({
+        "stages_run": records.len(),
+        "total_items": total_items,
+        "elapsed_ms": elapsed_ms,
+        "stages": records.iter().map(|r| json!({
+            "stage": r.stage,
+            "status": r.status,
+            "sheets_processed": r.sheets_processed,
+            "items_found": r.items_found,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 // ─── printset.dashboard ──────────────────────────────────────────────────────
 
-fn run_dashboard(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_dashboard(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     Ok(json!({
         "name": project.name,
         "revision": project.revision,
@@ -140,22 +177,22 @@ fn run_dashboard(_s: &mut Session, _p: &Value) -> Result<Value> {
 
 // ─── printset.sheets ─────────────────────────────────────────────────────────
 
-fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     let filter_discipline = str_param(p, "discipline");
     let filter_level = str_param(p, "level");
 
     let sheets: Vec<Value> = project
         .sheets
         .iter()
-        .filter(|s| filter_discipline.is_none_or(|d| s.discipline == d))
-        .filter(|s| filter_level.is_none_or(|l| s.level == l))
-        .map(|s| {
+        .filter(|sh| filter_discipline.is_none_or(|d| sh.discipline == d))
+        .filter(|sh| filter_level.is_none_or(|l| sh.level == l))
+        .map(|sh| {
             json!({
-                "number": s.number, "title": s.title, "discipline": s.discipline,
-                "type": s.sheet_type, "level": s.level, "scale": s.scale_text,
-                "file": s.file, "dirty": s.dirty,
-                "stages": s.stage_results.keys().collect::<Vec<_>>(),
+                "number": sh.number, "title": sh.title, "discipline": sh.discipline,
+                "type": sh.sheet_type, "level": sh.level, "scale": sh.scale_text,
+                "file": sh.file, "dirty": sh.dirty,
+                "stages": sh.stage_results.keys().collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -165,33 +202,37 @@ fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── printset.reimport ───────────────────────────────────────────────────────
 
-fn run_reimport(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_reimport(s: &mut Session, p: &Value) -> Result<Value> {
     let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let dir = PathBuf::from(path_str);
     if !dir.is_dir() {
         return Err(EngineError::Other(format!("{path_str} is not a directory")));
     }
     let label = str_param(p, "revision").unwrap_or("revised");
+    let full_set = bool_or(p, "full_set", false);
     let files = mep_printset::discover_sheets(&dir).map_err(EngineError::Other)?;
-    let mut project = get_project()?;
-    let delta = mep_printset::apply_reimport(&mut project, &files, label).map_err(EngineError::Other)?;
+    let project = get_project_mut(s)?;
+    let delta = mep_printset::apply_reimport(project, &files, label, full_set).map_err(EngineError::Other)?;
 
-    let result = json!({
+    Ok(json!({
         "delta": { "added": delta.added, "changed": delta.changed, "removed": delta.removed, "unchanged": delta.unchanged },
         "revision": label, "sheets": project.sheets.len(),
-    });
-    set_project(project)?;
-    Ok(result)
+    }))
 }
 
 // ─── printset.save ───────────────────────────────────────────────────────────
 
-fn run_save(_s: &mut Session, p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     let path = str_param(p, "path").map(PathBuf::from).unwrap_or_else(|| {
         let dir = PathBuf::from(&project.source_dir);
         dir.join(format!("{}.printset.json", project.name.replace(' ', "_")))
     });
-    save_project(&project, &path).map_err(EngineError::Other)?;
+    // Sanitize: don't allow path separators in the name portion.
+    let name_part = path.file_name().and_then(|n| n.to_str()).unwrap_or("project.json");
+    if name_part.contains("..") {
+        return Err(EngineError::Other("path must not contain '..'".into()));
+    }
+    mep_printset::save_project(project, &path).map_err(EngineError::Other)?;
     Ok(json!({ "saved": path.display().to_string() }))
 }
