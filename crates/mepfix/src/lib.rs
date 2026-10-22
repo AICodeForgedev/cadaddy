@@ -31,6 +31,7 @@ pub mod covercheck;
 pub mod design;
 pub mod draw;
 pub mod duct_reader;
+pub mod earthwork;
 pub mod elec_reader;
 pub mod elecspec;
 pub mod envelope;

@@ -608,7 +608,7 @@ fn parts<'a>(it: impl Iterator<Item = &'a SiteElement>, share: impl Fn(&SiteElem
 /// command runs on the read C-102); a missing surface gives an `insufficient data` line, never a
 /// number. Every line names its sheets, its status and the elements whose shares make it up.
 pub fn compute_quantities(t: &mut Truth) {
-    use cadaddy_engine::cmd::sitetakeoff::{self as st, Contour, Surface};
+    use crate::earthwork::{self as st, Contour, Surface};
     let mut qs = Vec::new();
 
     // Earthwork: cut and fill between the surfaces.
