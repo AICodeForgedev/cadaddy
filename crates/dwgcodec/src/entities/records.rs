@@ -59,6 +59,13 @@ const KNOWN: &[&str] = &[
     "IMAGEDEF",
     "IMAGEDEF_REACTOR",
     "MLEADERSTYLE",
+    "SORTENTSTABLE",
+    "MATERIAL",
+    // TABLESTYLE: decoder exists but stays stashed (ek::object returns None) until its binary
+    // layout is verified against the bridge — adding it to KNOWN introduces cellStyles
+    // differences in dwg_write_native tests (MUST 6).
+    "VISUALSTYLE",
+    "FIELD",
 ];
 
 /// The DXF name of a fixed object type that is a table record or object this module decodes.
@@ -181,6 +188,11 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.s(100, "AcDbRasterImageDefReactor");
             g.i(90, i64::from(version));
         }
+        "SORTENTSTABLE" => decode_sortentstable(&mut o, &mut g)?,
+        "MATERIAL" => decode_material(&mut o, &mut g)?,
+        // TABLESTYLE: decoder ready but not wired (stashed until MUST 6 verified).
+        "VISUALSTYLE" => decode_visualstyle(&mut o, &mut g)?,
+        "FIELD" => decode_field(&mut o, &mut g)?,
         _ => return Err(Error::Unsupported(format!("{name} records are not decoded yet"))),
     }
     groups.extend(super::eed_groups(&c.eed, names, v >= Version::R2007));
@@ -1039,14 +1051,10 @@ fn group(o: &mut Obj, g: &mut G) -> Result<()> {
 
 // ---------------------------------------------------------------------------
 // Objects added by Q249 (dwgwrite2): SORTENTSTABLE, MATERIAL, TABLESTYLE,
-// VISUALSTYLE, FIELD. Not in KNOWN yet — the binary format needs to be verified
-// against the ODA specification's exact layout before these decode acadrust-written
-// files. The encoders in encode_kinds.rs write them; the decoders here are the
-// inverse, ready for when reading is verified.
+// VISUALSTYLE, FIELD. Wired into KNOWN so our reader decodes them natively.
 // ---------------------------------------------------------------------------
 
 /// SORTENTSTABLE (spec §20.4.90): draw-order table for a block space.
-#[allow(dead_code)]
 fn decode_sortentstable(o: &mut Obj, g: &mut G) -> Result<()> {
     let n_sort = count(o.d.bl()?, "sort handles")?;
     let mut sorts = Vec::with_capacity(n_sort);
@@ -1070,7 +1078,6 @@ fn decode_sortentstable(o: &mut Obj, g: &mut G) -> Result<()> {
 }
 
 /// A colour (CMC) read the same way as `color_number` but returning just the ACI index.
-#[allow(dead_code)]
 fn cmc_aci(o: &mut Obj) -> Result<i64> {
     let index = o.d.bs()?;
     if !o.at_least(Version::R2004) {
@@ -1082,7 +1089,6 @@ fn cmc_aci(o: &mut Obj) -> Result<i64> {
 }
 
 /// MATERIAL (spec §20.4.83): a material definition.
-#[allow(dead_code)]
 fn decode_material(o: &mut Obj, g: &mut G) -> Result<()> {
     let name = o.text()?;
     let description = o.text()?;
@@ -1091,10 +1097,13 @@ fn decode_material(o: &mut Obj, g: &mut G) -> Result<()> {
     if !description.is_empty() {
         g.s(2, description);
     }
-    // Ambient channel.
-    let _amb_method = o.d.bl()?;
-    let _amb_factor = o.d.bl()?;
-    let _amb_value = o.d.bl()?;
+    // Ambient channel (method, color value, factor).
+    let amb_method = o.d.bl()?;
+    let amb_value = o.d.bl()?;
+    let amb_factor = o.d.bl()?;
+    if amb_method != 0 { g.i(70, i64::from(amb_method)); }
+    if amb_value != 0 { g.i(90, i64::from(amb_value)); }
+    if amb_factor != 0 { g.i(40, i64::from(amb_factor)); }
     // Diffuse channel.
     let diff_method = o.d.bl()?;
     let diff_value = o.d.bl()?;
@@ -1130,14 +1139,18 @@ fn decode_material(o: &mut Obj, g: &mut G) -> Result<()> {
     }
     // Specular.
     let glossiness = o.d.bd()?;
-    let _spec_method = o.d.bl()?;
-    let _spec_value = o.d.bl()?;
-    let _spec_factor = o.d.bd()?;
+    let spec_method = o.d.bl()?;
+    let spec_value = o.d.bl()?;
+    let spec_factor = o.d.bd()?;
     let _has_spec_map = o.d.bl()?;
     g.f(44, glossiness);
+    if spec_method != 0 { g.i(74, i64::from(spec_method)); }
+    if spec_value != 0 { g.i(94, i64::from(spec_value)); }
+    if (spec_factor - 1.0).abs() > 1e-9 { g.f(45, spec_factor); }
     // Reflection.
-    let _reflect_factor = o.d.bd()?;
+    let reflect_factor = o.d.bd()?;
     let _has_reflect_map = o.d.bl()?;
+    if reflect_factor.abs() > 1e-9 { g.f(146, reflect_factor); }
     // Opacity.
     let opacity = o.d.bd()?;
     let _has_opacity_map = o.d.bl()?;
@@ -1163,20 +1176,24 @@ fn decode_material(o: &mut Obj, g: &mut G) -> Result<()> {
     let refraction = o.d.bd()?;
     let _has_refract_map = o.d.bl()?;
     g.f(145, refraction);
-    // From R2007: genproc fields (skip).
+    // From R2007: genproc fields (consumed but not round-tripped to DXF).
     if o.at_least(Version::R2007) {
         o.d.bl()?; // genproc val bool
         o.d.bl()?; // genproc val int
         o.text()?; // genproc val text
         o.d.b()?; // genproc table flag
-        o.d.b()?; // genproc color flag
-        o.d.bl()?; // genproc color index
-        o.d.bl()?; // genproc color value
+        // R2010+ only: genproc colour.
+        if o.at_least(Version::R2010) {
+            o.d.b()?; // genproc color flag
+            o.d.bl()?; // genproc color index
+            o.d.bl()?; // genproc color value
+        }
     }
     Ok(())
 }
 
 /// TABLESTYLE (spec §20.4.89): table cell style definition.
+/// Not wired (TABLESTYLE stays stashed) — kept for when the layout is verified against the bridge.
 #[allow(dead_code)]
 fn decode_tablestyle(o: &mut Obj, g: &mut G) -> Result<()> {
     let description = o.text()?;
@@ -1223,7 +1240,6 @@ fn decode_tablestyle(o: &mut Obj, g: &mut G) -> Result<()> {
 }
 
 /// VISUALSTYLE (spec §20.4.84): rendering style definition.
-#[allow(dead_code)]
 fn decode_visualstyle(o: &mut Obj, g: &mut G) -> Result<()> {
     let description = o.text()?;
     let vtype = o.d.bl()?;
@@ -1308,7 +1324,6 @@ fn decode_visualstyle(o: &mut Obj, g: &mut G) -> Result<()> {
 }
 
 /// FIELD (spec §20.4.85): a calculated field expression.
-#[allow(dead_code)]
 fn decode_field(o: &mut Obj, g: &mut G) -> Result<()> {
     let evaluator = o.text()?;
     let code = o.text()?;

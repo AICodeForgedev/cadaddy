@@ -1968,7 +1968,9 @@ pub fn object(
         }
         "SORTENTSTABLE" => sortentstable(&mut w, r),
         "MATERIAL" => material(&mut w, r),
-        "TABLESTYLE" => tablestyle(&mut w, r),
+        // TABLESTYLE: encoder exists but returns None (stashed) — its binary layout
+        // doesn't match what the bridge reads, so it goes through dwg_keep until verified.
+        "TABLESTYLE" => return None,
         "VISUALSTYLE" => visualstyle(&mut w, r),
         "FIELD" => field(&mut w, r),
         _ => w.d.bl(r.id(90, 2) as i32),
@@ -2361,16 +2363,17 @@ fn sortentstable(w: &mut ObjWriter, r: &Rec) {
 
 /// MATERIAL (spec §20.4.83): a material definition.
 ///
-/// Writes the full material record from its DXF groups. The binary layout matches the ODA
-/// specification: name, description, then for each channel (ambient, diffuse, specular,
-/// reflection, opacity, bump, refraction) the enable flag, colour, factor, and mapper data.
+/// Writes the binary DWG record from its DXF groups: name, description, then for each channel
+/// (ambient, diffuse, specular, reflection, opacity, bump, refraction) the colour method,
+/// value, factor and mapper. Ambient and specular channels are read from DXF groups when
+/// present; defaults are zero/inherit (the usual for drawings that only set diffuse+opacity).
 fn material(w: &mut ObjWriter, r: &Rec) {
     w.text(r.s(1).unwrap_or(""));
     w.text(r.s(2).unwrap_or(""));
-    // Ambient: enabled, colour method, factor, colour value.
-    w.d.bl(0); // ambient color method (0 = use current)
-    w.d.bl(0); // ambient color factor
-    w.d.bl(0); // ambient color value
+    // Ambient channel (DXF 70 method, 40 factor, 90 color value — when the file has them).
+    w.d.bl(r.id(70, 0) as i32);
+    w.d.bl(r.id(90, 0) as i32);
+    w.d.bl(r.id(40, 0) as i32);
     // Diffuse channel.
     let has_diffuse_color = r.i(71).is_some();
     w.d.bl(i32::from(has_diffuse_color)); // diffuse color method
@@ -2380,7 +2383,7 @@ fn material(w: &mut ObjWriter, r: &Rec) {
     let has_diffuse_map = r.s(3).is_some();
     w.d.bl(i32::from(has_diffuse_map));
     if has_diffuse_map {
-        w.d.bd(1.0); // blend factor
+        w.d.bd(r.fd(42, 1.0)); // blend factor
         w.text(r.s(3).unwrap_or("")); // file name
         w.d.bl(r.id(73, 1) as i32); // projection
         w.d.bl(0); // tiling (0 = tile)
@@ -2395,15 +2398,15 @@ fn material(w: &mut ObjWriter, r: &Rec) {
             w.d.bd(mx.get(i).copied().unwrap_or(if i % 5 == 0 { 1.0 } else { 0.0 }));
         }
     }
-    // Specular gloss factor.
+    // Specular glossiness factor.
     w.d.bd(r.fd(44, 1.0));
-    // Specular colour.
-    w.d.bl(0); // specular color method
-    w.d.bl(0); // specular color value
-    w.d.bd(1.0); // specular factor
-    w.d.bl(0); // has specular map
+    // Specular colour: DXF 74 (method), 94 (color value), 45 (factor) when the file has them.
+    w.d.bl(r.id(74, 0) as i32);
+    w.d.bl(r.id(94, 0) as i32);
+    w.d.bd(r.fd(45, 1.0));
+    w.d.bl(0); // has specular map (no standard DXF group for this)
     // Reflection.
-    w.d.bd(0.0); // reflection factor
+    w.d.bd(r.fd(146, 0.0)); // reflection factor
     w.d.bl(0); // has reflection map
     // Opacity.
     w.d.bd(r.fd(140, 1.0));
@@ -2430,18 +2433,23 @@ fn material(w: &mut ObjWriter, r: &Rec) {
         w.d.bl(0); // genproc val int
         w.text(""); // genproc val text
         w.d.b(false); // genproc table flag
-        w.d.b(false); // genproc color flag (R2010+)
-        w.d.bl(0); // genproc color index (R2010+)
-        w.d.bl(0); // genproc color value (R2010+)
+        // R2010+ only: genproc colour flag, index, value.
+        if w.at_least(Version::R2010) {
+            w.d.b(false); // genproc color flag
+            w.d.bl(0); // genproc color index
+            w.d.bl(0); // genproc color value
+        }
     }
 }
 
 /// TABLESTYLE (spec §20.4.89): table cell style definition.
+/// Not called in production (encoder returns None for TABLESTYLE) — kept for when verified.
 ///
 /// DXF groups: 3 (empty name), 70/71 flags, 40/41 margins, 280/281 suppress flags, then for
 /// each of Data/Header/Title: 7 (text style), 140 (height), 170 (align), 62 (text color),
 /// 63 (fill color), 283 (fill flag), 274-279 (border lw), 284-289 (border vis), 64-69 (border
 /// color).
+#[allow(dead_code)]
 fn tablestyle(w: &mut ObjWriter, r: &Rec) {
     w.text(r.s(3).unwrap_or("")); // description
     w.d.bl(r.id(70, 0) as i32); // flags
