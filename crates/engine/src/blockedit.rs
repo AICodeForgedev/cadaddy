@@ -21,6 +21,9 @@ use cadaddy_geom::{Mat3, Vec2};
 
 use crate::{DocState, EngineError, Result, Snapshot};
 
+/// The Block Editor's action bars (BACTIONBAR), for the UI to draw.
+pub use crate::cmd::blocks::action_bars;
+
 /// The undo step a save into the block records in the drawing.
 const UNDO_LABEL: &str = "Block Editor";
 
@@ -60,6 +63,17 @@ pub struct BlockEdit {
     base: Vec2,
     /// The editor is open on the drawing itself ([`CURRENT_DRAWING`]).
     pub current: bool,
+    /// Parameters (graph ids) whose action bars are hidden (BACTIONBAR Hide).
+    pub hidden_bars: Vec<i32>,
+    /// The visibility state the editor shows (BVSTATE current), when one is set.
+    pub vis_state: Option<String>,
+}
+
+impl BlockEdit {
+    /// The block's base point (the editor's origin), in block coordinates.
+    pub fn base(&self) -> Vec2 {
+        self.base
+    }
 }
 
 /// Why a block can't be opened in the Block Editor, if it can't.
@@ -220,6 +234,8 @@ impl DocState {
                 original: EntityStore::new(),
                 base: Vec2::ZERO,
                 current: true,
+                hidden_bars: Vec::new(),
+                vis_state: None,
             });
             return Ok(());
         }
@@ -242,7 +258,16 @@ impl DocState {
         let host = Box::new(self.clone());
         let editor = Arc::new(d);
         self.doc = editor.clone();
-        self.enter_block_editor(BlockEdit { name: block.name.clone(), host, saved: editor, original: block.entities.clone(), base, current: false });
+        self.enter_block_editor(BlockEdit {
+            name: block.name.clone(),
+            host,
+            saved: editor,
+            original: block.entities.clone(),
+            base,
+            current: false,
+            hidden_bars: Vec::new(),
+            vis_state: None,
+        });
         Ok(())
     }
 

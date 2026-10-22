@@ -225,6 +225,26 @@ pub fn radial_assoc(d: &Drawing, h: Handle, diameter: bool, defpt: Vec2, p15: Ve
     }
 }
 
+/// The object an attachment follows (or the other line of an intersection) was erased.
+fn object_gone(d: &Drawing, a: &DimAssoc) -> bool {
+    d.entity(a.handle).is_none() || matches!(a.snap, AssocSnap::Intersection { other } if d.entity(other).is_none())
+}
+
+/// Record definition points that lost their association (the annotation monitor's badge).
+fn orphan(nd: &mut Dimension, lost: Vec<String>) {
+    for p in lost {
+        if !nd.marks.orphaned.contains(&p) {
+            nd.marks.orphaned.push(p);
+        }
+    }
+}
+
+/// The dimension lost (part of) its association because an object was erased and nobody has
+/// reassociated it or accepted it since: the annotation monitor shows a badge on it.
+pub fn is_orphaned(dm: &Dimension) -> bool {
+    !dm.marks.orphaned.is_empty()
+}
+
 fn src_changed(before: &Drawing, after: &Drawing, h: Handle) -> bool {
     match (before.entity(h), after.entity(h)) {
         (Some(x), Some(y)) => !Arc::ptr_eq(x, y) && x.kind != y.kind,
@@ -242,6 +262,7 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
     let mut deltas: Vec<Vec2> = Vec::new();
     let mut moved: Vec<String> = Vec::new();
     let was = prev.unwrap_or(dm);
+    let mut lost: Vec<String> = Vec::new();
     nd.assoc.retain(|a| {
         let Some(old) = def_point(was, &a.point) else { return false };
         // Only follow if the point sat on the object before the change.
@@ -250,8 +271,15 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
         {
             return false;
         }
-        snap_point(after, a).is_some()
+        if snap_point(after, a).is_some() {
+            return true;
+        }
+        if object_gone(after, a) {
+            lost.push(a.point.clone());
+        }
+        false
     });
+    orphan(&mut nd, lost);
     for a in &nd.assoc {
         if let (Some(p), Some(old)) = (snap_point(after, a), def_point(dm, &a.point)) {
             deltas.push(p - old.xy());
@@ -297,7 +325,9 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
 /// are dropped; the dimension's graphics are rebuilt.
 pub fn regen(dm: &Dimension, d: &Drawing) -> Dimension {
     let mut nd = dm.clone();
+    let lost: Vec<String> = nd.assoc.iter().filter(|a| snap_point(d, a).is_none() && object_gone(d, a)).map(|a| a.point.clone()).collect();
     nd.assoc.retain(|a| snap_point(d, a).is_some());
+    orphan(&mut nd, lost);
     for a in nd.assoc.clone() {
         if let (Some(p), Some(slot)) = (snap_point(d, &a), def_point_mut(&mut nd, &a.point)) {
             slot.x = p.x;
@@ -343,10 +373,46 @@ pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> usize {
     }
     let d = Arc::make_mut(after);
     let n = changes.len();
+    let mut orphaned = 0;
     for (h, nd) in changes {
-        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Dimension(Box::new(nd)));
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Dimension(old) = &e.kind {
+                orphaned += usize::from(nd.marks.orphaned.len() > old.marks.orphaned.len());
+            }
+            e.kind = EntityKind::Dimension(Box::new(nd));
+        });
+    }
+    // ANNOMONITOR -1/-2: off until a dimension loses its association, then on (1/2).
+    let monitor = d.header.i64("ANNOMONITOR", ANNOMONITOR_DEFAULT);
+    if orphaned > 0 && monitor < 0 {
+        d.header.set_i64("ANNOMONITOR", monitor.saturating_abs());
     }
     n
+}
+
+/// ANNOMONITOR's value while the drawing has none: off until a dimension loses its association.
+pub const ANNOMONITOR_DEFAULT: i64 = -2;
+
+/// The annotation monitor is on (ANNOMONITOR 1 or 2): badges show on dimensions that lost
+/// their association.
+pub fn monitor_on(d: &Drawing) -> bool {
+    d.header.i64("ANNOMONITOR", ANNOMONITOR_DEFAULT) > 0
+}
+
+/// The dimensions that lost their association (in every space), with where their badge goes
+/// (the text's position, else the dimension line's point).
+pub fn orphans(d: &Drawing, space: &Space) -> Vec<(Handle, Vec2)> {
+    let Some(store) = d.space(space) else { return Vec::new() };
+    store
+        .iter_kinds(cadaddy_doc::KIND_DIMENSION)
+        .filter_map(|e| match &e.kind {
+            EntityKind::Dimension(dm) if is_orphaned(dm) => {
+                let at = if dm.text_mid.xy() == Vec2::ZERO && !dm.user_text_pos { dm.defpt.xy() } else { dm.text_mid.xy() };
+                Some((e.handle, at))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The post-command pass: called by `Session::execute` and when an interactive command

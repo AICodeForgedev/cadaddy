@@ -66,6 +66,13 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("CMLSCALE", Kind::AnyReal, Def::Units(1.0, 20.0)),
     ("CPLOTSTYLE", Kind::ReadOnlyStr, Def::Str("ByLayer")),
     ("DIMASSOC", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
+    // The annotation monitor: 1/2 on (badges on dimensions that lost their association), 0 off,
+    // -1/-2 off until a dimension loses its association, then on.
+    ("ANNOMONITOR", Kind::Choice(&[-2, -1, 0, 1, 2]), Def::Int(crate::assoc::ANNOMONITOR_DEFAULT)),
+    // Block Editor: 1 action bars under their parameters, 0 the actions alone.
+    ("BACTIONBARMODE", Kind::Choice(&[0, 1]), Def::Int(1)),
+    // Block Editor: objects hidden in the current visibility state are 0 not drawn, 1 dimmed.
+    ("BVMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("DONUTID", Kind::Real { min: 0.0, strict: false }, Def::Real(0.5)),
     ("DONUTOD", Kind::Real { min: 0.0, strict: true }, Def::Real(1.0)),
     ("EDGEMODE", Kind::Choice(&[0, 1]), Def::Int(0)),

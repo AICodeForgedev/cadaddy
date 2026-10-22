@@ -20,7 +20,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .params("{block, type: move|stretch|scale|rotate|flip|array|polarstretch|lookup, parameter (its label or graph id), handles: [objects of the block], frame?: [[x,y]…] (stretch), at?: [x,y], name?, columns?: [{parameter, property?, lookup?: bool}], rows?: [[value…]] (lookup)} → {node, name, dynamic}")
             .enabled(has_doc),
         CommandSpec::new("bvstate", "Visibility States", run_vstate)
-            .params("{block, action?: list (default) | new | set | rename | delete, name?, newName?, handles?: [the state's visible objects]} → {states: [{name, visible}]}")
+            .params("{block (default the Block Editor's), action?: list (default) | new | set | rename | delete | current (the state the Block Editor shows), name?, newName?, handles?: [the state's visible objects]} → {states: [{name, visible}], current?}")
             .enabled(has_doc),
         CommandSpec::new("bremove", "Remove Parameter or Action", run_remove)
             .params("{block, element (a parameter's label, an action's name or a graph id)} → {dynamic}: a parameter goes with its grips and the actions following it")
@@ -235,14 +235,22 @@ fn states(s: &Session, block: &str) -> Result<Vec<(String, Vec<Handle>)>> {
 
 fn listing(s: &Session, block: &str) -> Result<Value> {
     let st = states(s, block)?;
-    Ok(
-        json!({ "states": st.iter().map(|(n, v)| json!({ "name": n, "visible": v.iter().map(|h| h.hex()).collect::<Vec<_>>() })).collect::<Vec<_>>() }),
-    )
+    let mut v = json!({ "states": st.iter().map(|(n, v)| json!({ "name": n, "visible": v.iter().map(|h| h.hex()).collect::<Vec<_>>() })).collect::<Vec<_>>() });
+    // In the Block Editor on this block: the state it shows.
+    let editing = s.state()?.block_edit.as_ref().is_some_and(|b| !b.current && b.name.eq_ignore_ascii_case(block));
+    if editing && let Some(c) = super::actionbar::current_state(s, &st) {
+        v["current"] = json!(c);
+    }
+    Ok(v)
 }
 
 fn run_vstate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "bvstate";
-    let block = block_name(s, cmd, p)?;
+    let block = match s.state()?.block_edit.as_ref() {
+        // In the Block Editor `name` is the state's, the block is the one edited.
+        Some(be) if !be.current && str_param(p, "block").is_none() => be.name.clone(),
+        _ => block_name(s, cmd, p)?,
+    };
     let action = str_param(p, "action").unwrap_or("list").to_ascii_lowercase();
     let mut st = states(s, &block)?;
     let name = || {
@@ -254,6 +262,13 @@ fn run_vstate(s: &mut Session, p: &Value) -> Result<Value> {
     let find = |st: &[(String, Vec<Handle>)], n: &str| st.iter().position(|(m, _)| m.eq_ignore_ascii_case(n));
     match action.as_str() {
         "list" => return listing(s, &block),
+        "current" | "setcurrent" => {
+            let n = name()?;
+            let i = find(&st, &n).ok_or_else(|| bad(cmd, format!("no state \"{n}\"")))?;
+            let n = st.get(i).map(|e| e.0.clone()).unwrap_or(n);
+            super::actionbar::show_state(s, &block, &n)?;
+            return listing(s, &block);
+        }
         "new" => {
             let n = name()?;
             if find(&st, &n).is_some() {
@@ -294,6 +309,10 @@ fn run_vstate(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(bad(cmd, format!("unknown action \"{other}\" (list, new, set, rename or delete)"))),
     }
     change(s, cmd, |d| author::set_states(d, &block, &st))?;
+    // The Block Editor keeps showing its current state as it is now.
+    if let Some(c) = super::actionbar::current_state(s, &st) {
+        super::actionbar::show_state(s, &block, &c)?;
+    }
     listing(s, &block)
 }
 

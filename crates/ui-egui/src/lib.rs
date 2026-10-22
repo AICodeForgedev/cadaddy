@@ -42,6 +42,7 @@ pub(crate) fn dialog_refused() -> bool {
 }
 
 pub mod aliasdlg;
+pub mod annomon;
 pub mod animation;
 pub mod autosave;
 pub mod bedit;
@@ -71,6 +72,7 @@ pub mod update;
 // The External References palette.
 pub mod xrefs;
 
+pub mod actionbars;
 pub mod actionsdlg;
 pub mod activitypalette;
 pub mod agentdlg;

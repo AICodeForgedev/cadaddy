@@ -739,6 +739,11 @@ pub struct DimMarks {
     /// side of its extension line (the Flip Arrow grip option).
     #[serde(skip_serializing_if = "no_flip")]
     pub flip_arrows: [bool; 2],
+    /// Definition points ("p13", "defpt", …) that lost their association because the object
+    /// they were attached to was erased: the annotation monitor's badge (ANNOMONITOR).
+    /// DIMREASSOCIATE and DIMDISASSOCIATE clear it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub orphaned: Vec<String>,
 }
 
 fn no_flip(f: &[bool; 2]) -> bool {
