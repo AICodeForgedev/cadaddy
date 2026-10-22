@@ -739,6 +739,7 @@ fn large_button(app: &CadApp, ui: &mut egui::Ui, rect: Rect, btn: &Btn, clicks: 
     }
     let tip = if split { variant_label(&shown) } else { btn.label };
     icons::describe_control(ui, &resp, tip, None, false);
+    crate::menus::note_hover(&resp, shown.cmd);
     if enabled {
         clicks.buttons.push((top, tip, shown.cmd));
     }
@@ -786,6 +787,7 @@ fn small_button(app: &CadApp, ui: &mut egui::Ui, rect: Rect, btn: &Btn, fit: Fit
         btn.label
     };
     icons::describe_control(ui, &resp, tip, None, false);
+    crate::menus::note_hover(&resp, shown.cmd);
     if enabled {
         clicks.buttons.push((main, tip, shown.cmd));
     }
@@ -822,6 +824,7 @@ fn layer_controls(app: &CadApp, ui: &mut egui::Ui, rect: Rect, clicks: &mut Clic
         }
         icons::paint(ui.painter(), br.shrink(3.0), icon, false);
         icons::describe_control(ui, &resp, tip, None, false);
+        crate::menus::note_hover(&resp, cmd);
         if resp.on_hover_text(crate::i18n::t(tip)).clicked() {
             clicks.cmd = Some(cmd.to_string());
         }

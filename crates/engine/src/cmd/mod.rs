@@ -297,11 +297,18 @@ pub struct HelpPage {
     pub interactive: bool,
     pub transparent: bool,
     pub help_text: &'static str,
+    /// The keywords of the command's first prompt, as the command line offers them
+    /// ("Ttr (tan tan radius)" is typed TTR or T); empty when it offers none.
+    pub options: Vec<String>,
+    /// What the command asks first, as the command line shows it
+    /// ("Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:").
+    pub prompts: Vec<String>,
 }
 
 impl CommandSpec {
     /// Generate a help page for this command.
     pub fn help_page(&self) -> HelpPage {
+        let first = first_prompt(self);
         HelpPage {
             id: self.id.to_ascii_uppercase(),
             label: self.label,
@@ -312,8 +319,22 @@ impl CommandSpec {
             interactive: self.interactive.is_some(),
             transparent: self.transparent,
             help_text: self.help,
+            options: first.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
+            prompts: first.iter().map(crate::Prompt::display).collect(),
         }
     }
+}
+
+/// The first prompt of an interactive command, read from the command's own machine on a fresh
+/// drawing. Only the factory and `prompt` run, and both only read the session, so nothing is
+/// drawn, saved or opened. `None` for a command with no prompts, or one that can't start on an
+/// empty drawing (it needs a selection, say).
+pub fn first_prompt(spec: &CommandSpec) -> Option<crate::Prompt> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let factory = spec.interactive?;
+    let s = Session::new();
+    let machine = catch_unwind(AssertUnwindSafe(|| factory(&s))).ok()?.ok()?;
+    catch_unwind(AssertUnwindSafe(|| machine.prompt(&s))).ok()
 }
 
 /// Find a command by id or alias.

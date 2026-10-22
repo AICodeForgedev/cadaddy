@@ -32,15 +32,6 @@ pub fn lookup(id: &str) -> &'static str {
             "Saves the current drawing under a new name or in a different format \
                      (DWG, DXF or CDY). The drawing tab updates to the new name."
         }
-        "save" => {
-            "Saves the current drawing. Equivalent to QSAVE for a named drawing; for an \
-                   unnamed drawing, prompts for a file name."
-        }
-        "quit" => {
-            "Closes all drawings and exits the application. Unsaved drawings prompt for \
-                   confirmation."
-        }
-        "qquit" => "Closes all drawings, asking about unsaved ones, then quits.",
         "recover" => {
             "Opens a damaged drawing and attempts to repair it. Objects that cannot be \
                       read are reported on the command line."
@@ -71,8 +62,10 @@ pub fn lookup(id: &str) -> &'static str {
             "Packages the drawing and all its dependent files (xrefs, images, fonts, \
                         plot styles) into a folder or ZIP for sending."
         }
-        "dwgconvert" => "Converts drawings between DWG versions (R12 through 2018) in batch.",
-        "cdyconvert" => "Converts drawings between CDY and DWG/DXF formats.",
+        "dwgconvert" => {
+            "Converts drawings in batch between CDY, DWG and DXF. DWG and DXF files can be \
+             written in an older version (2000 to 2018, or Release 12 DXF)."
+        }
         "convert" => "Opens the Convert Drawings dialog for batch file format conversion.",
 
         // ── Drawing ───────────────────────────────────────────────────────────────
@@ -231,7 +224,6 @@ pub fn lookup(id: &str) -> &'static str {
             "Inserts a block reference into the drawing. Specify the name, insertion \
                      point, scale and rotation."
         }
-        "-insert" => "Command-line version of INSERT (no dialog).",
         "wblock" => "Writes a block or selected objects to a new drawing file.",
         "bedit" => "Opens the Block Editor so you can modify a block definition in place.",
         "bclose" => "Closes the Block Editor and saves or discards changes.",
@@ -255,13 +247,12 @@ pub fn lookup(id: &str) -> &'static str {
                     configure layers (color, linetype, lineweight, transparency, plot, freeze, \
                     lock, description)."
         }
-        "-layer" => "Command-line version of LAYER.",
         "laycur" => "Moves selected objects to the current layer.",
         "layiso" => "Isolates selected layers: turns off or fades all others.",
         "layuniso" => "Restores layers that were hidden by LAYISO.",
         "layoff" => "Turns off the layer of a selected object.",
         "layon" => "Turns on all layers.",
-        "layfz" => "Freezes the layer of a selected object.",
+        "layfrz" => "Freezes the layer of a selected object.",
         "laythw" => "Thaws all layers.",
         "laylck" => "Locks the layer of a selected object so its objects cannot be edited.",
         "layulk" => "Unlocks the layer of a selected object.",
@@ -426,7 +417,6 @@ pub fn lookup(id: &str) -> &'static str {
         "attdef" => "Creates an attribute definition for use in a block.",
         "attedit" => "Edits attribute values in a block reference.",
         "-attedit" => "Command-line attribute editing.",
-        "eattedit" => "Opens the Enhanced Attribute Editor for a block reference.",
         "battman" => "Opens the Block Attribute Manager to edit attribute definitions in blocks.",
         "dataextraction" => "Extracts object and attribute data to a table or external file.",
         "field" => {
@@ -447,7 +437,6 @@ pub fn lookup(id: &str) -> &'static str {
         "lightbake" => "Bakes indirect lighting into the 3D model for realistic walkthroughs.",
 
         // ── Security ──────────────────────────────────────────────────────────────
-        "secureload" => "Controls which locations are trusted for loading scripts and LISP files.",
         "appload" => "Loads an AutoLISP (.lsp) application into the current session.",
 
         _ => "",
@@ -456,81 +445,208 @@ pub fn lookup(id: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::cmd::{command_specs, commands_without_help, find_by_id_or_alias, find_command};
+    use crate::{EngineError, Input, Session};
 
-    /// Every command has a help page that can be generated.
-    #[test]
-    fn every_command_has_a_help_page() {
-        for spec in crate::cmd::command_specs() {
-            let page = spec.help_page();
-            assert!(!page.id.is_empty(), "command {:?} has no id in its help page", spec.id);
-            assert!(!page.label.is_empty(), "command {:?} has no label in its help page", spec.id);
-        }
+    fn page(id: &str) -> crate::cmd::HelpPage {
+        find_command(id).map(|c| c.help_page()).unwrap_or_else(|| panic!("no command {id}"))
     }
 
-    /// A help page lists the command's aliases.
+    /// The keys of [`lookup`], read from this file's source: every `"key" =>` arm before the tests.
+    fn text_keys() -> Vec<&'static str> {
+        let src = include_str!("help_texts.rs");
+        let body = src.split("#[cfg(test)]").next().unwrap_or("");
+        body.lines().filter_map(|l| l.trim_start().strip_prefix('"')?.split_once("\" =>").map(|(k, _)| k)).collect()
+    }
+
     #[test]
-    fn help_page_lists_aliases() {
-        for spec in crate::cmd::command_specs() {
-            let page = spec.help_page();
-            assert_eq!(page.aliases.len(), spec.aliases.len(), "command {:?}: help page aliases count mismatch", spec.id,);
-            for (i, alias) in spec.aliases.iter().enumerate() {
-                assert_eq!(page.aliases[i], alias.to_ascii_uppercase(), "command {:?}: alias {:?} not in help page", spec.id, alias,);
+    fn zoom_page_lists_its_options_and_prompt() {
+        let p = page("zoom");
+        assert_eq!(p.options, ["All", "Center", "Dynamic", "Extents", "Previous", "Scale", "Window", "Object"]);
+        assert_eq!(
+            p.prompts,
+            ["Specify corner of window, enter a scale factor (nX or nXP) or [All/Center/Dynamic/Extents/Previous/Scale/Window/Object] <real time>:"]
+        );
+    }
+
+    #[test]
+    fn circle_page_lists_its_options_and_prompt() {
+        let p = page("circle");
+        assert_eq!(p.options, ["3P", "2P", "Ttr (tan tan radius)"]);
+        assert_eq!(p.prompts, ["Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:"]);
+        // The option is typed TTR: the running command takes it as that keyword.
+        let mut s = Session::new();
+        s.start("circle").unwrap();
+        assert_eq!(s.current_prompt().and_then(|q| q.match_keyword("TTR")).as_deref(), Some("Ttr (tan tan radius)"));
+    }
+
+    /// A command without prompts, or one that can't start on an empty drawing, has no options.
+    #[test]
+    fn pages_without_prompts_have_no_options() {
+        let p = page("regen");
+        assert!(p.options.is_empty() && p.prompts.is_empty(), "{p:?}");
+    }
+
+    /// What the page offers is what the command asks when started at the command line: every
+    /// interactive command whose first prompt (in a session, through `Session::start`) has
+    /// keywords has exactly those as the page's options.
+    #[test]
+    fn every_page_offers_the_keywords_of_the_first_prompt() {
+        let mut checked = 0;
+        let mut wrong = Vec::new();
+        for spec in command_specs().iter().filter(|c| c.interactive.is_some()) {
+            let mut s = Session::new();
+            if s.start(spec.id).is_err() || s.running.as_ref().is_none_or(|r| r.id != spec.id) {
+                continue;
+            }
+            let Some(asked) = s.running.as_ref().map(|r| r.machine.prompt(&s)) else { continue };
+            if asked.keywords.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let p = spec.help_page();
+            if p.options != asked.keywords {
+                wrong.push(format!("{}: page {:?}, prompt {:?}", spec.id, p.options, asked.keywords));
             }
         }
+        assert!(wrong.is_empty(), "{} of {checked} differ:\n{}", wrong.len(), wrong.join("\n"));
+        assert!(checked > 100, "only {checked} commands with keywords checked");
     }
 
-    /// A help page includes the JSON params when present.
+    /// Known truth from the commands' registrations (not from the page code).
     #[test]
-    fn help_page_includes_params() {
-        for spec in crate::cmd::command_specs() {
-            let page = spec.help_page();
-            assert_eq!(page.params, spec.params, "command {:?}: help page params mismatch", spec.id,);
-        }
+    fn pages_show_known_aliases_menus_and_params() {
+        let line = page("line");
+        assert_eq!(line.id, "LINE");
+        assert_eq!(line.aliases, ["L"]);
+        assert_eq!(line.menu_path, "Draw > Line");
+        assert_eq!(line.params, "{points: [[x,y],...], closed?: bool}");
+        assert!(line.interactive && !line.transparent);
+
+        let circle = page("circle");
+        assert_eq!(circle.aliases, ["C"]);
+        assert_eq!(circle.menu_path, "Draw > Circle > Center, Radius");
+        assert_eq!(circle.params, "{center, radius} | {center, diameter} | {p1, p2} | {p1, p2, p3}");
+
+        let erase = page("erase");
+        assert_eq!(erase.aliases, ["E", "DELETE"]);
+        assert_eq!(erase.menu_path, "Modify > Erase");
+        assert_eq!(erase.params, "{handles?: [hex]} (default: selection)");
+
+        let zoom = page("zoom");
+        assert_eq!(zoom.aliases, ["Z"]);
+        assert_eq!(zoom.menu_path, "");
+        assert!(zoom.transparent);
     }
 
-    /// Commands without help text: a report for coverage tracking.
+    /// Every hand-written text is keyed by a real command id (not an alias or a typo), so it shows.
     #[test]
-    fn commands_without_help_report() {
-        let missing = crate::cmd::commands_without_help();
-        let total = crate::cmd::command_specs().len();
-        let covered = total - missing.len();
-        eprintln!("Help text coverage: {covered}/{total} commands ({:.0}%)", covered as f64 / total as f64 * 100.0);
-        if !missing.is_empty() {
-            eprintln!("Commands without hand-written help text ({}):", missing.len());
-            for id in &missing {
-                eprintln!("  - {}", id.to_ascii_uppercase());
-            }
+    fn every_text_key_is_a_command_id() {
+        let keys = text_keys();
+        assert!(keys.len() > 150, "read only {} keys", keys.len());
+        let dead: Vec<_> = keys.iter().filter(|k| find_command(k).is_none_or(|c| c.id != **k)).collect();
+        assert!(dead.is_empty(), "help texts keyed to no command: {dead:?}");
+        // The arms reach the registry: each key's command carries its text.
+        for k in keys {
+            assert_eq!(find_command(k).map(|c| c.help), Some(lookup(k)), "{k}");
         }
-        // At least 100 commands should have help text.
-        assert!(covered >= 100, "Only {covered} commands have help text; at least 100 are required",);
+        assert!(!page("layfrz").help_text.is_empty(), "LAYFRZ has its text");
     }
 
-    /// The lookup function returns non-empty text for known commands.
     #[test]
     fn lookup_returns_text_for_known_commands() {
-        assert!(!lookup("line").is_empty());
+        assert!(lookup("line").starts_with("Draws"), "{}", lookup("line"));
         assert!(!lookup("circle").is_empty());
-        assert!(!lookup("copy").is_empty());
         assert!(lookup("nonexistent_command_xyz").is_empty());
     }
 
-    /// The HELP command returns a page for a known command.
-    #[test]
-    fn help_page_for_known_command() {
-        let spec = crate::cmd::find_by_id_or_alias("line").expect("LINE should exist");
-        let page = spec.help_page();
-        assert_eq!(page.id, "LINE");
-        assert!(!page.help_text.is_empty(), "LINE should have help text");
-        assert!(page.aliases.contains(&"L".to_string()), "LINE should have alias L");
-    }
-
-    /// find_by_id_or_alias works for aliases.
     #[test]
     fn find_by_alias() {
-        let spec = crate::cmd::find_by_id_or_alias("c").expect("C should find CIRCLE");
-        assert_eq!(spec.id, "circle");
-        let spec = crate::cmd::find_by_id_or_alias("l").expect("L should find LINE");
-        assert_eq!(spec.id, "line");
+        assert_eq!(find_by_id_or_alias("c").map(|c| c.id), Some("circle"));
+        assert_eq!(find_by_id_or_alias("L").map(|c| c.id), Some("line"));
+        assert_eq!(find_by_id_or_alias("cdyconvert").map(|c| c.id), Some("dwgconvert"));
+        assert!(find_by_id_or_alias("nosuch").is_none());
+    }
+
+    #[test]
+    fn help_command_gives_a_page_by_alias() {
+        let mut s = Session::new();
+        let v = s.execute("help", &json!({"command": "c"})).unwrap();
+        assert_eq!(v["id"], "CIRCLE");
+        assert_eq!(v["aliases"], json!(["C"]));
+        assert_eq!(v["options"], json!(["3P", "2P", "Ttr (tan tan radius)"]));
+        assert_eq!(v["prompts"][0], "Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:");
+        assert_eq!(v["menuPath"], "Draw > Circle > Center, Radius");
+        // `?` is HELP typed short.
+        assert_eq!(find_by_id_or_alias("?").map(|c| c.id), Some("help"));
+        let v = s.execute("help", &json!({"command": "l"})).unwrap();
+        assert_eq!(v["id"], "LINE");
+    }
+
+    #[test]
+    fn help_command_refuses_an_unknown_name() {
+        let mut s = Session::new();
+        match s.execute("help", &json!({"command": "nosuch"})) {
+            Err(EngineError::UnknownCommand(n)) => assert_eq!(n, "nosuch"),
+            r => panic!("expected UnknownCommand, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn help_command_lists_in_pages() {
+        let mut s = Session::new();
+        let v = s.execute("help", &json!({})).unwrap();
+        assert_eq!(v["count"], command_specs().len());
+        assert_eq!(v["commands"].as_array().map(Vec::len), Some(100), "the default page");
+        let v = s.execute("help", &json!({"filter": "circle", "limit": 5000})).unwrap();
+        let ids: Vec<&str> = v["commands"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+        assert!(ids.contains(&"CIRCLE") && !ids.contains(&"LINE"), "{ids:?}");
+        assert_eq!(v["count"], ids.len());
+        let second = s.execute("help", &json!({"offset": 1, "limit": 1})).unwrap();
+        let first_two = s.execute("help", &json!({"limit": 2})).unwrap();
+        assert_eq!(second["commands"][0], first_two["commands"][1]);
+    }
+
+    /// The coverage report: HELP {missing: true} pages through `commands_without_help`.
+    #[test]
+    fn help_command_reports_commands_without_text() {
+        let mut s = Session::new();
+        let without = commands_without_help();
+        let v = s.execute("help", &json!({"missing": true})).unwrap();
+        assert_eq!(v["count"], without.len());
+        assert_eq!(v["total"], command_specs().len());
+        let mut listed = Vec::new();
+        let mut offset = 0;
+        loop {
+            let v = s.execute("help", &json!({"missing": true, "offset": offset, "limit": 1000})).unwrap();
+            let page: Vec<String> = v["missing"].as_array().unwrap().iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
+            if page.is_empty() {
+                break;
+            }
+            offset += page.len();
+            listed.extend(page);
+        }
+        let expected: Vec<String> = without.iter().map(|id| id.to_ascii_uppercase()).collect();
+        assert_eq!(listed, expected);
+        // LINE has hand-written text, so it is not listed.
+        assert!(!listed.iter().any(|id| id == "LINE"));
+        assert!(!find_command("line").is_none_or(|c| c.help.is_empty()));
+        let first = without.first().map(|id| id.to_ascii_uppercase());
+        assert_eq!(listed.first(), first.as_ref());
+        // At least 100 commands carry text.
+        assert!(command_specs().len() - without.len() >= 100);
+    }
+
+    /// A HELP typed at the command line answers, and does not end the running command.
+    #[test]
+    fn transparent_help_keeps_the_command() {
+        let mut s = Session::new();
+        s.start("line").unwrap();
+        s.input(Input::Text("0,0".into())).unwrap();
+        s.start("'help").unwrap();
+        assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("line"));
     }
 }

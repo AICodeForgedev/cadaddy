@@ -12,13 +12,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("help", "Help", run_help)
             .menu(&["Help", "Help"])
             .alias(&["?"])
-            .params("{command?: \"LINE\"} → {page} | {} → {commands: [{id, label, hasHelp}]}")
+            .params(
+                "{command: \"LINE\" | alias} → {id, label, aliases, menuPath, shortcut, params, interactive, transparent, helpText, options, prompts} | \
+                 {filter?, offset?, limit? (default 100, at most 1000)} → {commands: [{id, label, hasHelp}], count, offset} | \
+                 {missing: true, filter?, offset?, limit?} → {missing: [id], count, total, offset} (the commands without hand-written help)",
+            )
             .enabled(always)
             .noundo()
             .transparent()
-            .help("Opens the help page for a command. Type HELP followed by a command name to see \
-                   its description, aliases, menu path, keyboard shortcut and JSON parameters. \
-                   Without a command name, lists all available commands."),
+            .help("Opens the help page for a command: its description, options, first prompt, aliases, \
+                   menu path, keyboard shortcut and JSON parameters. Type HELP followed by a command \
+                   name, or 'HELP during a command for help on that command. F1 gives help for the \
+                   running command, or for the menu item or button under the pointer."),
         CommandSpec::new("cal", "QuickCalc", run_cal)
             .menu(&["Tools", "Inquiry", "Quick"])
             .alias(&["quickcalc", "qc"])
@@ -78,23 +83,40 @@ pub fn eval(expr: &str, vars: &serde_json::Map<String, Value>) -> std::result::R
     }
 }
 
+/// Most rows one HELP list answer holds; `offset` pages through the rest.
+const HELP_PAGE_MAX: usize = 1000;
+/// Rows a HELP list answer holds when the caller gives no `limit`.
+const HELP_PAGE_DEFAULT: usize = 100;
+
 fn run_help(_s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(name) = p.get("command").and_then(Value::as_str) {
         let spec = super::find_by_id_or_alias(name).ok_or_else(|| crate::EngineError::UnknownCommand(name.to_string()))?;
-        Ok(serde_json::to_value(spec.help_page()).unwrap_or(Value::Null))
-    } else {
-        let list: Vec<Value> = super::command_specs()
-            .iter()
-            .map(|c| {
-                json!({
-                    "id": c.id.to_ascii_uppercase(),
-                    "label": c.label,
-                    "hasHelp": !c.help.is_empty(),
-                })
-            })
-            .collect();
-        Ok(json!({ "commands": list }))
+        return Ok(serde_json::to_value(spec.help_page()).unwrap_or(Value::Null));
     }
+    let count = |k: &str, default: usize| p.get(k).and_then(Value::as_u64).map_or(default, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let offset = count("offset", 0);
+    let limit = count("limit", HELP_PAGE_DEFAULT).min(HELP_PAGE_MAX);
+    let filter = p.get("filter").and_then(Value::as_str).unwrap_or("");
+    let matching = super::command_specs().iter().filter(|c| c.matches(filter));
+    if bool_or(p, "missing", false) {
+        // The commands with no hand-written text yet: the coverage report.
+        let missing: Vec<&CommandSpec> = matching.filter(|c| c.help.is_empty()).collect();
+        let ids: Vec<String> = missing.iter().skip(offset).take(limit).map(|c| c.id.to_ascii_uppercase()).collect();
+        return Ok(json!({
+            "count": missing.len(),
+            "total": super::command_specs().len(),
+            "offset": offset,
+            "missing": ids,
+        }));
+    }
+    let all: Vec<&CommandSpec> = matching.collect();
+    let list: Vec<Value> = all
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|c| json!({ "id": c.id.to_ascii_uppercase(), "label": c.label, "hasHelp": !c.help.is_empty() }))
+        .collect();
+    Ok(json!({ "commands": list, "count": all.len(), "offset": offset }))
 }
 
 fn run_cal(s: &mut Session, p: &Value) -> Result<Value> {
