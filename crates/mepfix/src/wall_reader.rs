@@ -105,10 +105,16 @@ fn is_iden(e: &cadaddy_doc::Entity) -> bool {
     e.common.layer.to_ascii_uppercase().ends_with("-IDEN")
 }
 
+/// Casework tags (`BC-1`, `SK-1`, Q301) sit in their cabinet's outline, which looks like a tag
+/// symbol against the wall, but never type a wall.
+fn is_casework(e: &cadaddy_doc::Entity) -> bool {
+    e.common.layer.to_ascii_uppercase().contains("CASEWORK")
+}
+
 fn texts(d: &Drawing) -> Vec<Txt> {
     d.model
         .iter()
-        .filter(|e| !is_iden(e))
+        .filter(|e| !is_iden(e) && !is_casework(e))
         .filter_map(|e| match &e.kind {
             EntityKind::Text(t) => {
                 let p = t.align_pt.unwrap_or(t.insert);
