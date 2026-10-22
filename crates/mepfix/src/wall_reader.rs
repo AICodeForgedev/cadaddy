@@ -99,9 +99,16 @@ fn is_grid(e: &cadaddy_doc::Entity) -> bool {
     e.common.layer.to_ascii_uppercase().contains("GRID")
 }
 
+/// Door and window marks (`A-DOOR-IDEN`, `A-GLAZ-IDEN`, Q307) look like tags in a symbol but
+/// never type a wall.
+fn is_iden(e: &cadaddy_doc::Entity) -> bool {
+    e.common.layer.to_ascii_uppercase().ends_with("-IDEN")
+}
+
 fn texts(d: &Drawing) -> Vec<Txt> {
     d.model
         .iter()
+        .filter(|e| !is_iden(e))
         .filter_map(|e| match &e.kind {
             EntityKind::Text(t) => {
                 let p = t.align_pt.unwrap_or(t.insert);
@@ -533,6 +540,9 @@ fn overlap(p: &FoundWall, q: &FoundWall) -> f64 {
     (o / len.min(q1 - q0).max(1e-9)).max(0.0)
 }
 
+/// Layers whose lines are never a tag's leader.
+const NOT_LEADERS: [&str; 6] = ["STRS", "ELEV", "GLAZ", "SLAB", "ROOF", "IDEN"];
+
 /// Tags on a plan: each legend tag's text (and tag-like text in a tag symbol the legend doesn't
 /// have), landing where its leader ends (or at the text): (text, where, leader, in the legend).
 fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f64; 2], bool, bool)> {
@@ -540,6 +550,9 @@ fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f
         .model
         .iter()
         .filter(|e| !e.common.layer.to_ascii_uppercase().contains("WALL") || e.common.layer.to_ascii_uppercase().contains("TAG"))
+        // Stair flights, the elevator, glazing, slab edges, the roof and door/window marks (Q307)
+        // are building, not leaders: a stair line beside a wall would carry its tag away.
+        .filter(|e| !NOT_LEADERS.iter().any(|k| e.common.layer.to_ascii_uppercase().contains(k)))
         .filter_map(|e| match &e.kind {
             EntityKind::Line(l) => Some(Seg { a: [l.a.x, l.a.y], b: [l.b.x, l.b.y] }),
             _ => None,
