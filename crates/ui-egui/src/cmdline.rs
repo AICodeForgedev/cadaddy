@@ -240,7 +240,37 @@ fn allow_ime(ctx: &egui::Context, area: Rect) {
     });
 }
 
-/// An input method event at the command line: the composition shows as it changes; committed
+/// The command line as the window's focused text box, for screen magnifiers and readers (#39):
+/// Windows Magnifier's "follow the keyboard focus" and "follow the text cursor" track the
+/// focused element and its caret. Typing reaches the command line without egui focus, so egui
+/// reports the window itself as focused; here the window names the command line its active
+/// element (while nothing else has the keyboard) and the command line's text carries the caret,
+/// at `caret` where it is drawn. Nothing is built unless an assistive tool is listening.
+fn expose_caret(painter: &egui::Painter, id: egui::Id, text: &str, caret: Pos2) {
+    use egui::accesskit::Role;
+    let ctx = painter.ctx();
+    // Accessibility is off until a tool connects; the area's node exists then (`history`).
+    if ctx.accesskit_node_builder(id, |_| ()).is_none() {
+        return;
+    }
+    let galley = painter.layout_no_wrap(text.to_owned(), crate::theme::body(), egui::Color32::PLACEHOLDER);
+    // The text ends at the caret: what's drawn may scroll, and its pieces may differ slightly
+    // from the plain text, but the caret is where people look.
+    let origin = pos2(caret.x - galley.size().x, caret.y - galley.size().y / 2.0);
+    let end = egui::text::CCursor::new(text.chars().count());
+    egui::text_selection::accesskit_text::update_accesskit_for_text_widget(
+        ctx,
+        id,
+        Some(egui::text_selection::CCursorRange::one(end)),
+        Role::TextInput,
+        egui::emath::TSTransform::from_translation(origin.to_vec2()),
+        &galley,
+    );
+    ctx.accesskit_node_builder(id, |node| node.set_value(text));
+    ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_active_descendant(id.accesskit_id()));
+}
+
+/// An input method event at the command line:the composition shows as it changes; committed
 /// text is typed (a committed space at a prompt that doesn't take text enters, like Space).
 fn ime_event(app: &mut CadApp, ev: &egui::ImeEvent, text_prompt: bool) {
     match ev {
@@ -510,7 +540,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let overflow = (full_w - (text_right - text_left)).max(0.0);
     let pt = p.with_clip_rect(Rect::from_x_y_ranges(text_left..=text_right, bar.y_range()));
     if overflow > 0.0 {
-        ui.interact(bar, ui.id().with("cmd_bar_hover"), Sense::hover()).on_hover_text(full);
+        ui.interact(bar, ui.id().with("cmd_bar_hover"), Sense::hover()).on_hover_text(full.clone());
     }
     let mut x = text_left - overflow;
     let prompt = app.session.current_prompt();
@@ -610,6 +640,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     app.cmd.ime_area = Some(ime_area);
     if has_keyboard(app, ui.ctx()) {
         allow_ime(ui.ctx(), ime_area);
+        expose_caret(&p, ui.id().with("cmdline"), &full, pos2(x + gw + 1.0, bar.center().y));
     }
     // Caret.
     let blink = (ui.input(|i| i.time) * 2.0).floor() as i64 % 2 == 0;
@@ -916,6 +947,70 @@ mod tests {
         // The box is near the dialog's corner (200, 200), the command line at the bottom.
         assert!(ime.is_some_and(|i| i.rect.top() < 400.0 && i.rect.left() < 700.0), "the box's IME: {ime:?}");
         assert_eq!(name, "字");
+    }
+
+    /// The accessibility tree's focused element: the focus, or the active element it names.
+    fn focused(update: &egui::accesskit::TreeUpdate) -> Option<(egui::accesskit::NodeId, &egui::accesskit::Node)> {
+        let find = |id| update.nodes.iter().find(|(n, _)| *n == id).map(|(_, node)| node);
+        let focus = find(update.focus)?;
+        let id = focus.active_descendant().unwrap_or(update.focus);
+        Some((id, find(id)?))
+    }
+
+    #[test]
+    fn magnifiers_find_the_command_line_and_its_caret() {
+        // #39: a screen magnifier follows the focused element and its text caret. With nothing
+        // else holding the keyboard, the command line is the focused text box and its caret is
+        // where it is drawn, after what was typed.
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        frame(&mut app, &ctx, Vec::new());
+        app.cmd.buffer = "circle".into();
+        let out = frame(&mut app, &ctx, Vec::new());
+        let update = out.platform_output.accesskit_update.expect("an accessibility tree");
+        let (id, node) = focused(&update).expect("a focused element");
+        assert_eq!(node.role(), egui::accesskit::Role::TextInput);
+        assert_eq!(node.label(), Some("Command line"));
+        let value = node.value().unwrap_or_default();
+        assert!(value.ends_with("circle"), "the prompt and what's typed: {value}");
+        let selection = node.text_selection().expect("a caret");
+        assert_eq!(selection.anchor, selection.focus, "a caret, not a selection");
+        let run = update.nodes.iter().find(|(n, _)| *n == selection.focus.node).map(|(_, r)| r).expect("the caret's text run");
+        assert_eq!(run.role(), egui::accesskit::Role::TextRun);
+        assert!(node.children().contains(&selection.focus.node), "the run belongs to the command line");
+        assert_eq!(selection.focus.character_index, value.chars().count(), "the caret is after the typed text");
+        // The run ends at the drawn caret, inside the bar.
+        let bounds = run.bounds().expect("the run's place on screen");
+        let canvas = app.canvas.rect.unwrap_or(Rect::NOTHING);
+        assert!(bounds.y0 > f64::from(canvas.center().y) && bounds.x1 > bounds.x0, "{bounds:?} in {canvas:?}");
+        assert!(id != update.focus, "the window names the command line its active element");
+    }
+
+    #[test]
+    fn a_focused_dialog_box_is_what_magnifiers_follow() {
+        // A dialog's text box with the keyboard is the focus; the command line doesn't claim it.
+        let mut app = CadApp::new(Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut name = String::new();
+        let mut update = None;
+        for _ in 0..3 {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+                egui::Window::new("Layer name").fixed_pos(pos2(200.0, 200.0)).show(ui.ctx(), |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut name).id(egui::Id::new("dialog_name"))).request_focus();
+                });
+            });
+            out.textures_delta.clear();
+            update = out.platform_output.accesskit_update;
+        }
+        let update = update.expect("an accessibility tree");
+        assert_eq!(update.focus, egui::Id::new("dialog_name").accesskit_id());
+        let (id, _) = focused(&update).expect("a focused element");
+        assert_eq!(id, update.focus);
     }
 
     #[test]

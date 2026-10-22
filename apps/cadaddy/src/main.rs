@@ -1,6 +1,10 @@
 //! CADaddy desktop app.
 //!
-//! Usage: `cadaddy [--control <port>] [--sample] [files…]`
+//! Usage: `cadaddy [--control <port>] [--sample] [--new-window] [files…]`
+//!
+//! On Linux and the BSDs, files opened while a CADaddy window runs (double-clicked in the file
+//! manager) open in that window; `--new-window` or `CADADDY_SINGLE_INSTANCE=0` starts another
+//! one. See [`open_files`].
 //!
 //! `--control <port>` (or `CADADDY_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"cmdline.input","params":{"text":"circle 0,0 5"}}` → `{"id":1,"ok":true,…}`.
@@ -20,6 +24,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod open_files;
 mod printing;
 mod relsig;
 mod spacemouse;
@@ -40,6 +45,8 @@ struct App {
     system_animations: system_animations::SystemAnimations,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
+    /// Files opened from the desktop while this window runs.
+    inbox: open_files::Inbox,
     /// Frames left to check that the first window fits its screen ([`too_big_for`]).
     fit_frames: u8,
     #[cfg(target_os = "macos")]
@@ -107,6 +114,13 @@ impl eframe::App for App {
             }
         }
         self.cad.system_animations = self.system_animations.current();
+        let handed = self.inbox.take();
+        if !handed.is_empty() {
+            for f in &handed {
+                self.cad.open_path(f);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         self.fit_first_window(ctx);
         self.cad.logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
@@ -406,7 +420,7 @@ fn open_in_redline(path: &str) -> Result<bool, String> {
 fn main() -> eframe::Result {
     cadaddy_engine::crash_report::install_hook();
     // --debug: verbose logging (set before the logger installs so it reads the right level).
-    let debug = std::env::args().any(|a| a == "--debug");
+    let debug = std::env::args_os().any(|a| a == "--debug");
     cadaddy_ui_egui::startup::begin();
     // First, so every start-up record is captured; see `logging`.
     let debug_filter = if debug { Some("debug,cadaddy*=debug") } else { None };
@@ -414,21 +428,16 @@ fn main() -> eframe::Result {
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let mut control_port =
         control_port_from("CADADDY_CONTROL_PORT", std::env::var_os("CADADDY_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
-    let mut files = Vec::new();
-    let mut sample = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" => control_port = control_flag(control_port, args.next()),
-            "--sample" => sample = true,
-            "--debug" => {}
-            "--version" | "-V" => {
-                println!("{}", version_string());
-                return Ok(());
-            }
-            _ => files.push(a),
-        }
+    // `args_os`: a file name that isn't Unicode must not stop the start (`args` panics on one).
+    let launch = open_files::Launch::parse(std::env::args_os().skip(1));
+    if launch.version {
+        println!("{}", version_string());
+        return Ok(());
     }
+    for value in &launch.control {
+        control_port = control_flag(control_port, value.clone());
+    }
+    let sample = launch.sample;
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
     if let Some(logger) = logger {
@@ -441,6 +450,29 @@ fn main() -> eframe::Result {
             }
         }
     }
+    // Files opened from the desktop while a window runs go to that window (open_files.rs).
+    let inbox = open_files::Inbox::default();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _instance = {
+        let single = std::env::var_os("CADADDY_SINGLE_INSTANCE");
+        match config_dir() {
+            Some(dir) if launch.joins_running(single.as_deref()) => {
+                if launch.hands_over(single.as_deref()) {
+                    match open_files::instance::hand_over(&dir, &launch.files) {
+                        Ok(true) => {
+                            log::info!("handed {} file(s) to the running window", launch.files.len());
+                            return Ok(());
+                        }
+                        Ok(false) => {}
+                        Err(e) => log::warn!("the running window didn't take the files ({e}); opening them here"),
+                    }
+                }
+                open_files::instance::listen(&dir, inbox.clone())
+            }
+            _ => None,
+        }
+    };
+    let files = launch.files;
     install_io();
     cadaddy_ui_egui::startup::mark("logging and file formats");
     let surface = cadaddy_ui_egui::gpu::surface_config(std::env::var("CADADDY_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
@@ -500,12 +532,14 @@ fn main() -> eframe::Result {
     for (n, attempt) in attempts.iter().copied().enumerate() {
         let options = make_options(attempt);
         let files = files.clone();
+        let inbox = inbox.clone();
         let fallback = graphics::note(attempt);
         result = eframe::run_native(
             "CADaddy",
             options,
             Box::new(move |cc| {
                 cadaddy_ui_egui::startup::mark("window and graphics");
+                inbox.wake(cc.egui_ctx.clone());
                 let mut app = CadApp::new(Session::empty(), services());
                 // The first DWG save returns once written; its "not kept" check follows.
                 app.session.background_checks = true;
@@ -606,6 +640,7 @@ fn main() -> eframe::Result {
                     spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                     workspace,
                     workspace_error,
+                    inbox,
                     fit_frames: 30,
                     #[cfg(target_os = "macos")]
                     native_menu: None,

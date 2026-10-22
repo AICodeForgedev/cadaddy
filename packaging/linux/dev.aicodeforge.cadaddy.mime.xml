@@ -7,6 +7,8 @@
   </mime-type>
   <mime-type type="image/vnd.dxf">
     <comment>DXF drawing</comment>
+    <!-- Binary DXF's sentinel (DXF Reference); text DXF has no fixed first bytes. -->
+    <magic priority="50"><match type="string" value="AutoCAD Binary DXF\r\n\x1a" offset="0"/></magic>
     <glob pattern="*.dxf"/>
   </mime-type>
   <mime-type type="image/vnd.dwg">
