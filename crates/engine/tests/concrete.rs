@@ -378,3 +378,133 @@ fn hostile_concrete_never_panics() {
         assert!(s.execute("concrete.set", &p).is_err(), "{p}");
     }
 }
+
+/// The job's line for one element: its trade, category and size, traced to that element only.
+fn bom_line<'a>(bom: &'a Value, category: &str, size: &str, id: &str) -> &'a Value {
+    bom["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["trade"] == "concrete" && l["category"] == category && l["size"] == size && l["elements"] == json!([id]))
+        .unwrap_or_else(|| panic!("no {category} {size} line for {id} in {bom:#}"))
+}
+
+#[test]
+fn the_job_bom_takes_our_concrete_and_lists_the_rest_by_others() {
+    let mut s = session();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    // The switchboard's pad is ours: 0.30 cy, 0.33 with the takeoff's 10% (under a yard).
+    let cy = bom_line(&bom, "concrete", "4\"", "PAD-MSB");
+    assert_eq!((cy["item"].as_str(), cy["unit"].as_str(), cy["waste_pct"].as_f64()), (Some("Concrete, pad"), Some("cu yd"), Some(10.0)), "{cy}");
+    assert!(near(&cy["net"], 0.30) && near(&cy["total"], 0.33), "{cy}");
+    // #4 each way: 33.12 lb.
+    let rebar = bom_line(&bom, "rebar", "#4", "PAD-MSB");
+    assert_eq!(rebar["unit"], "lb");
+    assert!(near(&rebar["total"], 33.12), "{rebar}");
+    // Forms 6.89 sq ft; finish and curing 80" x 44" = 24.44 sq ft; four anchor bolts and the
+    // service's four 4" stub-ups.
+    assert!(near(&bom_line(&bom, "forms", "", "PAD-MSB")["total"], 6.89));
+    let finish: Vec<&Value> =
+        bom["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "finish" && l["elements"] == json!(["PAD-MSB"])).collect();
+    assert_eq!(finish.len(), 2, "finish and curing: {finish:?}");
+    assert!(finish.iter().all(|l| near(&l["total"], 24.44) && l["unit"] == "sq ft"), "{finish:?}");
+    let bolts = bom_line(&bom, "embeds", "0.5\" dia", "PAD-MSB");
+    assert_eq!((bolts["item"].as_str(), bolts["unit"].as_str(), bolts["total"].as_f64()), (Some("Anchor bolt"), Some("each"), Some(4.0)));
+    let stubs = bom_line(&bom, "embeds", "4\"", "PAD-MSB");
+    assert_eq!((stubs["item"].as_str(), stubs["total"].as_f64()), (Some("Stub up"), Some(4.0)));
+    // A derived pad is sized by a rule.
+    assert_eq!(cy["status"], "rule");
+    assert!(cy["rule"].as_str().unwrap().contains("footprint"), "{cy}");
+    // Only our concrete is on the BOM.
+    let ours: Vec<&Value> = bom["lines"].as_array().unwrap().iter().filter(|l| l["trade"] == "concrete").collect();
+    assert!(ours.iter().all(|l| l["elements"] == json!(["PAD-MSB"])), "{ours:?}");
+    // The rest is listed by whose it is, at no cost to us.
+    let by = bom["by_others"].as_array().unwrap();
+    let of = |id: &str| by.iter().find(|x| x["element"] == id).unwrap_or_else(|| panic!("{id} not listed: {by:?}"));
+    assert_eq!(of("SOG-1")["scope"], "by others (concrete)");
+    assert_eq!(of("SOG-1")["cost_to_us"], 0.0);
+    assert!(near(&of("SOG-1")["cy"], 19.44));
+    assert_eq!((of("F-1")["scope"].as_str(), of("F-2")["scope"].as_str()), (Some("by others (concrete)"), Some("by others (concrete)")));
+    assert_eq!(of("PAD-TX-1")["scope"], "unassigned", "the transformer's pad has no owner");
+    assert!(by.iter().all(|x| x["element"] != "PAD-MSB"));
+    // The slab taken into our scope: on the BOM with its own 5% (over a yard), off the list.
+    let mut slab = spec()["concrete"]["elements"][0].clone();
+    slab["owner"] = json!("electrical");
+    s.execute("concrete.set", &json!({"element": slab})).unwrap();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    let sog = bom_line(&bom, "concrete", "5\"", "SOG-1");
+    assert!(near(&sog["net"], 18.52) && near(&sog["total"], 19.44) && sog["waste_pct"] == 5.0, "{sog}");
+    assert_eq!(sog["status"], "model");
+    assert!(near(&bom_line(&bom, "welded wire", "6x6-W2.9xW2.9", "SOG-1")["total"], 1320.0));
+    assert!(bom["by_others"].as_array().unwrap().iter().all(|x| x["element"] != "SOG-1"));
+    // A job waste percent overrides the takeoff's.
+    let bom = s.execute("bim.bom", &json!({"waste": {"concrete": 0}})).unwrap();
+    assert!(near(&bom_line(&bom, "concrete", "4\"", "PAD-MSB")["total"], 0.30));
+}
+
+/// The fixture with the grounding's concrete-encased electrode GE-1 (Q329) in the strip footing.
+fn with_electrode(s: &mut Session, extra: Value) {
+    let mut sp = spec();
+    let mut ge = json!({"tag": "GE-1", "kind": "concrete_encased", "level": "L1", "at": [96, -24], "z_ft": -1.5, "length_ft": 20,
+                        "conductor": "#4", "cover_in": 3});
+    for (k, v) in extra.as_object().unwrap() {
+        ge[k] = v.clone();
+    }
+    sp["mep"]["grounding"] = json!({"service": "MSB", "electrodes": [ge]});
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+}
+
+#[test]
+fn a_grounding_encased_electrode_is_the_footing_pours_ufer() {
+    let mut s = session();
+    with_electrode(&mut s, json!({}));
+    // No "no concrete-encased electrode" error on F-1, and no RFI for it.
+    let r = s.execute("concrete.check", &json!({"today": "2026-03-05"})).unwrap();
+    assert!(found(&r, "F-1", "ufer").is_empty(), "{:#}", r["findings"]);
+    let rv = s.execute("concrete.review", &json!({"today": "2026-03-05"})).unwrap();
+    assert!(rv["findings"].as_array().unwrap().iter().all(|f| !f["message"].as_str().unwrap().contains("No concrete-encased electrode")), "{rv}");
+    let rfis = s.execute("rfi.list", &json!({})).unwrap();
+    assert!(rfis["items"].as_array().unwrap().iter().all(|i| !i.to_string().contains("No concrete-encased electrode")), "{rfis}");
+    // The footing pour's checklist has it, due in five days, with a sign-off key.
+    let h = s.execute("concrete.holds", &json!({"pour": "P-1", "today": "2026-03-05"})).unwrap();
+    let items = h["pours"][0]["items"].as_array().unwrap();
+    let u: Vec<&Value> = items.iter().filter(|i| i["kind"] == "ufer").collect();
+    assert_eq!(u.len(), 1, "{h}");
+    assert_eq!(
+        (u[0]["element"].as_str(), u[0]["item"].as_str(), u[0]["source"].as_str(), u[0]["status"].as_str()),
+        (Some("F-1"), Some("F-1|ufer|#4"), Some("grounding electrode GE-1"), Some("due")),
+        "{}",
+        u[0]
+    );
+    assert!(near(&u[0]["length_ft"], 20.0));
+    let warned = found(&r, "F-1", "hold point");
+    assert_eq!(warned.len(), 1);
+    assert_eq!(warned[0]["severity"], "warning");
+    // Signed off like any other item.
+    s.execute("concrete.signoff", &json!({"pour": "P-1", "item": "F-1|ufer|#4", "by": "Inspector A", "on": "2026-03-09"})).unwrap();
+    let h = s.execute("concrete.holds", &json!({"pour": "P-1"})).unwrap();
+    let u = h["pours"][0]["items"].as_array().unwrap().iter().find(|i| i["kind"] == "ufer").unwrap();
+    assert_eq!((u["status"].as_str(), u["signed_by"].as_str()), (Some("signed"), Some("Inspector A")));
+    // The grounding marks the footing poured with the electrode undocumented: missed, with the
+    // ground ring.
+    with_electrode(&mut s, json!({"pour": "poured", "documented": false}));
+    let r = s.execute("concrete.check", &json!({})).unwrap();
+    let missed: Vec<&Value> = found(&r, "F-1", "hold point");
+    assert_eq!(missed.len(), 1, "{:#}", r["findings"]);
+    assert_eq!(missed[0]["severity"], "error");
+    assert!(missed[0]["message"].as_str().unwrap().contains("ground ring"), "{}", missed[0]["message"]);
+    assert!(found(&r, "F-1", "ufer").is_empty());
+    let h = s.execute("concrete.holds", &json!({"pour": "P-1"})).unwrap();
+    let u = h["pours"][0]["items"].as_array().unwrap().iter().find(|i| i["kind"] == "ufer").unwrap();
+    assert_eq!(u["status"], "missed");
+    assert!(u["alternative"].as_str().unwrap().starts_with("A ground ring"), "{u}");
+    // Documented as installed: it stands signed off.
+    with_electrode(&mut s, json!({"pour": "poured", "documented": true}));
+    let r = s.execute("concrete.check", &json!({})).unwrap();
+    assert!(found(&r, "F-1", "hold point").is_empty(), "{:#}", r["findings"]);
+    // An electrode naming its footing goes on that footing's list wherever its point is.
+    with_electrode(&mut s, json!({"element": "F-2", "at": [0, 600]}));
+    let h = s.execute("concrete.holds", &json!({"pour": "P-1"})).unwrap();
+    let u: Vec<&Value> = h["pours"][0]["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "ufer").collect();
+    assert_eq!((u.len(), u[0]["element"].as_str()), (1, Some("F-2")), "{h}");
+}

@@ -15,13 +15,16 @@
 //! - **Quantities:** volume (cubic yards, with waste), forms (edge and side area, linear feet,
 //!   round forms, chamfer strip), rebar by bar size (with laps, by weight), welded wire,
 //!   dowels, anchor bolts and embeds, conduit stub-ups, finish and curing area. On the MEP
-//!   takeoff (`mep.qty`) when the element is in our scope (the rules' `our_scope`, electrical by
-//!   default); listed as by others otherwise, so nobody assumes it.
+//!   takeoff (`mep.qty`) and the job BOM (`bim.bom`) when the element is in our scope (the
+//!   rules' `our_scope`, electrical by default); listed as by others otherwise, so nobody
+//!   assumes it.
 //! - **Hold points:** for every pour, each item that must be in or under it before concrete —
 //!   the concrete-encased electrode, under-slab conduit and stub-ups, sleeves, anchor bolts,
 //!   embeds — as a checklist to sign off; warned ahead of the pour date, and a pour placed
 //!   without one says what replaces it and roughly what that costs (a missed encased electrode:
-//!   a ground ring or rods).
+//!   a ground ring or rods). The encased electrode is an `ufer` embed or the grounding system's
+//!   concrete-encased electrode (Q329), on the checklist of the foundation it names or sits in;
+//!   documented as installed it stands signed off, and poured undocumented it is missed.
 //! - **Rebar and embeds:** conduits, sleeves and the electrode against the element's cover and
 //!   its rebar mats, anchor bolts against the depth, items outside the element.
 //!
@@ -32,7 +35,7 @@
 use std::collections::BTreeMap;
 
 use cadaddy_doc::bimspec::BimTypes;
-use cadaddy_walk3d::{BuildingSpec, ConcreteElement, Embed, MAX_CONCRETE, MepEquipment, MepKind, PadDecision, Pour, Rebar, Signoff};
+use cadaddy_walk3d::{BuildingSpec, ConcreteElement, Electrode, Embed, MAX_CONCRETE, MepEquipment, MepKind, PadDecision, Pour, Rebar, Signoff};
 use serde_json::{Value, json};
 
 use super::*;
@@ -248,7 +251,7 @@ pub fn bar(size: &str) -> Option<(f64, f64)> {
     BARS.iter().find(|(k, _, _)| k.trim_start_matches('#') == n).map(|(_, d, w)| (*d, *w))
 }
 
-fn r2(v: f64) -> f64 {
+pub(crate) fn r2(v: f64) -> f64 {
     if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 }
 }
 
@@ -419,7 +422,7 @@ pub fn equipment_footprint(sp: &BuildingSpec, types: &BimTypes, e: &MepEquipment
     (plan, "plan".into())
 }
 
-fn upf(sp: &BuildingSpec) -> f64 {
+pub(crate) fn upf(sp: &BuildingSpec) -> f64 {
     if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 }
 }
 
@@ -729,7 +732,7 @@ pub fn quantities(e: &ConcreteElement, upf: f64, r: &Rules) -> Qty {
     q
 }
 
-fn scope_of(r: &Rules, owner: &str) -> String {
+pub(crate) fn scope_of(r: &Rules, owner: &str) -> String {
     if owner.trim().is_empty() {
         "unassigned".into()
     } else if r.ours(owner) {
@@ -1266,9 +1269,10 @@ fn alternative(kind: &str, count: u32, length_ft: f64, perimeter_ft: f64, r: &Ru
     }
 }
 
-/// Every pour's checklist: what is cast into or run under each of its elements; and, when the
-/// building has footings but no concrete-encased electrode, the electrode as a missing item of
-/// the first footing pour.
+/// Every pour's checklist: what is cast into or run under each of its elements, with the
+/// grounding's concrete-encased electrodes in their foundations; and, when the building has
+/// footings but no concrete-encased electrode, the electrode as a missing item of the first
+/// footing pour.
 pub fn holds(sp: &BuildingSpec, els: &[Element], today: Option<i64>, r: &Rules) -> Vec<Hold> {
     let perimeter = foundation_perimeter(sp, els);
     let pour_of = |id: &str| -> Option<&Pour> { sp.concrete.pours.iter().find(|p| !id.is_empty() && p.id.eq_ignore_ascii_case(id.trim())) };
@@ -1282,16 +1286,22 @@ pub fn holds(sp: &BuildingSpec, els: &[Element], today: Option<i64>, r: &Rules) 
                owner: &str,
                source: &str,
                at: [f64; 2],
-               drawn: bool| {
+               drawn: bool,
+               electrode: Option<&Electrode>| {
         if out.len() >= MAX_FINDINGS {
             return;
         }
         let pour = pour_of(&e.pour);
         let n = out.iter().filter(|h| h.element == e.id && h.kind == kind && h.size == size).count();
         let key = if n == 0 { format!("{}|{kind}|{size}", e.id) } else { format!("{}|{kind}|{size}|{}", e.id, n + 1) };
-        let signed = pour.and_then(|p| p.signoffs.iter().find(|s| s.item.eq_ignore_ascii_case(&key)).cloned());
+        // A grounding electrode documented as installed stands as signed off; its footing marked
+        // poured is a placed pour.
+        let signed = pour.and_then(|p| p.signoffs.iter().find(|s| s.item.eq_ignore_ascii_case(&key)).cloned()).or_else(|| {
+            electrode.filter(|g| g.documented).map(|g| Signoff { item: key.clone(), by: format!("documented ({})", g.tag), on: String::new() })
+        });
         let days = pour.and_then(|p| day(&p.date)).zip(today).map(|(d, t)| d - t);
-        let placed = pour.is_some_and(|p| p.placed) || days.is_some_and(|d| d < 0);
+        let placed =
+            pour.is_some_and(|p| p.placed) || days.is_some_and(|d| d < 0) || electrode.is_some_and(|g| g.pour.trim().eq_ignore_ascii_case("poured"));
         let status = if signed.is_some() && drawn {
             "signed"
         } else if placed {
@@ -1332,7 +1342,7 @@ pub fn holds(sp: &BuildingSpec, els: &[Element], today: Option<i64>, r: &Rules) 
     for x in els {
         let e = &x.e;
         for m in e.embeds.iter().take(MAX_CONCRETE).filter(|m| cast_in.contains(&m.kind.as_str())) {
-            add(&mut out, e, &m.kind, &m.size, m.count.max(1), m.length_ft, &m.owner, &m.source, m.at.unwrap_or_else(|| centre(e)), true);
+            add(&mut out, e, &m.kind, &m.size, m.count.max(1), m.length_ft, &m.owner, &m.source, m.at.unwrap_or_else(|| centre(e)), true, None);
         }
         // Conduit run below the floor of a slab's level: under-slab, in before the slab.
         if e.kind == "slab" {
@@ -1354,19 +1364,50 @@ pub fn holds(sp: &BuildingSpec, els: &[Element], today: Option<i64>, r: &Rules) 
                     })
                     .sum();
                 let size = if run.size_in[0] > 0.0 { format!("{}\"", r2(run.size_in[0])) } else { String::new() };
-                add(&mut out, e, "conduit", &size, 1, len, "electrical", &format!("under-slab run {}", run.system), p, true);
+                add(&mut out, e, "conduit", &size, 1, len, "electrical", &format!("under-slab run {}", run.system), p, true, None);
             }
+        }
+    }
+    // The grounding's concrete-encased electrodes (Q329): each on the checklist of the
+    // foundation it names or sits in.
+    let encased = encased_electrodes(sp);
+    for g in &encased {
+        if let Some(x) = electrode_host(sp, els, g) {
+            let source = format!("grounding electrode {}", g.tag);
+            add(&mut out, &x.e, "ufer", &g.conductor, 1, g.length_ft.max(0.0), "electrical", &source, g.at, true, Some(*g));
         }
     }
     // No encased electrode anywhere: the first footing pour's missing item.
     let foundations: Vec<&Element> = els.iter().filter(|x| matches!(x.e.kind.as_str(), "footing" | "grade_beam")).collect();
-    if r.ufer_required && !foundations.is_empty() && !els.iter().any(|x| x.e.embeds.iter().any(|m| m.kind == "ufer")) {
+    if r.ufer_required && !foundations.is_empty() && encased.is_empty() && !els.iter().any(|x| x.e.embeds.iter().any(|m| m.kind == "ufer")) {
         let first = foundations.iter().min_by_key(|x| pour_of(&x.e.pour).and_then(|p| day(&p.date)).unwrap_or(i64::MAX)).map(|x| &x.e);
         if let Some(e) = first {
-            add(&mut out, e, "ufer", "", 1, r.ufer_min_ft, "electrical", "required: the building has footings", centre(e), false);
+            add(&mut out, e, "ufer", "", 1, r.ufer_min_ft, "electrical", "required: the building has footings", centre(e), false, None);
         }
     }
     out
+}
+
+/// The grounding system's concrete-encased electrodes (Q329).
+fn encased_electrodes(sp: &BuildingSpec) -> Vec<&Electrode> {
+    sp.mep
+        .grounding
+        .iter()
+        .flat_map(|g| g.electrodes.iter().take(MAX_CONCRETE))
+        .filter(|g| g.kind.trim().eq_ignore_ascii_case("concrete_encased"))
+        .collect()
+}
+
+/// The foundation a concrete-encased electrode is cast in: the element it names, else the
+/// footing, grade beam, pier or pole base on its level under its connection point.
+fn electrode_host<'a>(sp: &BuildingSpec, els: &'a [Element], g: &Electrode) -> Option<&'a Element> {
+    let foundation = |x: &&Element| matches!(x.e.kind.as_str(), "footing" | "grade_beam" | "pier" | "pole_base");
+    let named = g.element.trim();
+    if !named.is_empty() {
+        return els.iter().filter(foundation).find(|x| x.e.id.eq_ignore_ascii_case(named));
+    }
+    let same_level = |x: &&Element| g.level.trim().is_empty() || x.e.level.eq_ignore_ascii_case(g.level.trim());
+    els.iter().filter(foundation).filter(same_level).find(|x| g.at.iter().all(|v| v.is_finite()) && inside(&x.e, g.at, upf(sp)))
 }
 
 fn hold_findings(hs: &[Hold], out: &mut Vec<Finding>) {
