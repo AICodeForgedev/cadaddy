@@ -126,9 +126,59 @@ fn spec(t: &Truth) -> Value {
 }
 
 fn session(t: &Truth) -> Session {
+    session_with(spec(t))
+}
+
+fn session_with(spec: Value) -> Session {
     let mut s = Session::new();
-    s.execute("bspec.set", &json!({"replace": true, "spec": spec(t)})).unwrap();
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
     s
+}
+
+/// The switchboard's and the distribution panel's centres as [`spec`] places them (feet).
+fn hub_points(t: &Truth) -> ([f64; 2], [f64; 2]) {
+    let sp = spec(t);
+    let eq = sp["mep"]["equipment"].as_array().unwrap().clone();
+    let at = |tag: &str| {
+        let e = eq.iter().find(|e| e["tag"] == tag).unwrap();
+        let v = |k: &str, i: usize| e[k][i].as_f64().unwrap() / 12.0;
+        [(v("min", 0) + v("max", 0)) / 2.0, (v("min", 1) + v("max", 1)) / 2.0]
+    };
+    (at("MSB"), at("DP-A"))
+}
+
+type Seg = ([f64; 2], [f64; 2]);
+
+/// Whether two segments cross or touch.
+fn segs_cross(a: Seg, b: Seg) -> bool {
+    let cr = |o: [f64; 2], p: [f64; 2], q: [f64; 2]| (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+    let (d1, d2) = (cr(b.0, b.1, a.0), cr(b.0, b.1, a.1));
+    let (d3, d4) = (cr(a.0, a.1, b.0), cr(a.0, a.1, b.1));
+    d1 * d2 <= 0.0 && d3 * d4 <= 0.0
+}
+
+/// The least distance between two segments that don't cross.
+fn seg_dist(a: Seg, b: Seg) -> f64 {
+    let near = |p: [f64; 2], s: Seg| {
+        let d = [s.1[0] - s.0[0], s.1[1] - s.0[1]];
+        let l2 = d[0] * d[0] + d[1] * d[1];
+        let t = if l2 > 0.0 { (((p[0] - s.0[0]) * d[0] + (p[1] - s.0[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (p[0] - s.0[0] - t * d[0]).hypot(p[1] - s.0[1] - t * d[1])
+    };
+    near(b.0, a).min(near(b.1, a)).min(near(a.0, b)).min(near(a.1, b))
+}
+
+/// The texts on a layout and where each is.
+fn texts_of(s: &Session, layout: &str) -> Vec<(String, [f64; 2])> {
+    let d = s.doc().unwrap();
+    d.space(&cadaddy_engine::doc::Space::Paper(layout.to_string()))
+        .unwrap()
+        .iter()
+        .filter_map(|e| match &e.kind {
+            cadaddy_engine::doc::EntityKind::Text(t) => Some((t.value.clone(), [t.insert.x, t.insert.y])),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -148,7 +198,9 @@ fn the_hotel_gets_its_underground_sheets() {
     );
     for run in runs.iter().filter(|x| x["kind"] == "run") {
         assert_eq!((run["from"].clone(), run["material"].clone()), (json!("MSB"), json!("PVC Sch 40")), "{run}");
-        assert!(run["depth_in"].as_f64().unwrap() > 20.0 && run["length_ft"].as_f64().unwrap() > 0.0, "{run}");
+        // 2 ft below the floor to the bottom of a 1-1/2" conduit: its top is 24 - 1.5 = 22.5".
+        assert_eq!(run["depth_in"], json!(22.5), "{run}");
+        assert!(run["length_ft"].as_f64().unwrap() > 0.0, "{run}");
     }
     // Every stub-up dimensioned from the grid, with what it feeds and coordinates.
     let stubs = r["stubups"].as_array().unwrap();
@@ -163,6 +215,14 @@ fn the_hotel_gets_its_underground_sheets() {
             assert!(st[axis]["from"].as_str().unwrap().starts_with("grid "), "{st}");
         }
         assert!(!st["feeds"].as_str().unwrap().is_empty() && st["coords_ft"].is_array(), "{st}");
+        // Each dimension is the stub-up's distance from the nearest grid line of the truth.
+        for (axis, i, lines) in [("x", 0, &t.building.grid.x), ("y", 1, &t.building.grid.y)] {
+            let at_ft = st["at"][i].as_f64().unwrap() / 12.0;
+            let near = lines.iter().min_by(|a, b| (a.at_ft - at_ft).abs().total_cmp(&(b.at_ft - at_ft).abs())).unwrap();
+            assert_eq!(st[axis]["from"], json!(format!("grid {}", near.label)), "{st}");
+            let ft = st[axis]["ft"].as_f64().unwrap();
+            assert!((ft - (at_ft - near.at_ft)).abs() <= 0.01, "{axis}: {ft} vs {at_ft} - {}: {st}", near.at_ft);
+        }
     }
     assert!(stubs.iter().any(|st| st["feeds"] == "MSB" && st["material"] == "PVC Sch 80"));
 
@@ -187,6 +247,33 @@ fn the_hotel_gets_its_underground_sheets() {
     );
     let (under, over) = (dpa["under_slab"]["cost"].as_f64().unwrap(), dpa["overhead"]["cost"].as_f64().unwrap());
     assert!(under < over && dpa["under_slab"]["length_ft"].as_f64() < dpa["overhead"]["length_ft"].as_f64(), "{dpa}");
+    // By hand from the fixture: the run is MSB to DP-A centre to centre, square (feet); under
+    // the slab 2 ft down and 1 ft up at each end, overhead up the 9 ft ceiling and down. Per
+    // foot at $95/h: 2-1/2" PVC 3.10 + 0.06 h, EMT 6.40 + 0.09 h; three #4/0 and a #4/0
+    // neutral at 9.80 + 0.02 h; a #4 ground at 1.90 + 0.01 h.
+    let (msb, dp) = hub_points(&t);
+    let run = (msb[0] - dp[0]).abs() + (msb[1] - dp[1]).abs();
+    let wire = 4.0 * (9.8 + 0.02 * 95.0) + (1.9 + 0.01 * 95.0);
+    let want_under = (run + 6.0) * ((3.1 + 0.06 * 95.0) + wire);
+    let want_over = (run + 18.0) * ((6.4 + 0.09 * 95.0) + wire);
+    assert!((under - want_under).abs() <= 1.0, "under {under} vs {want_under}");
+    assert!((over - want_over).abs() <= 1.0, "overhead {over} vs {want_over}");
+
+    // Bends: an L-shaped feeder's one turn and the 90 at each end; the service's 90 inside.
+    let mut ells = 0;
+    for run in runs.iter().filter(|x| x["kind"] == "run") {
+        let id = run["id"].as_str().unwrap();
+        let p = t.elec_panels.iter().find(|p| format!("F-{}", p.tag) == id).unwrap();
+        let c = centre(p.min_ft, p.max_ft);
+        if (c[0] - msb[0]).abs() > 0.01 && (c[1] - msb[1]).abs() > 0.01 {
+            assert_eq!(run["bends_deg"], json!(270.0), "{run}");
+            ells += 1;
+        }
+        assert_eq!(run["encased"], json!(false), "{run}");
+    }
+    assert!(ells > 0, "the hotel has L-shaped feeders");
+    assert_eq!(svc["bends_deg"], json!(90.0), "{svc}");
+    assert!(!r["findings"].as_array().unwrap().iter().any(|f| f["check"] == "bends" || f["check"] == "crossing"), "{r}");
 
     // The slab's hold points: the conduits under it.
     let holds = r["holds"].as_array().unwrap();
@@ -212,7 +299,9 @@ fn the_hotel_gets_its_underground_sheets() {
     let d = s.doc().unwrap();
     let paper = d.space(&cadaddy_engine::doc::Space::Paper(layout.clone())).expect("the sheet's layout");
     let ents: Vec<_> = paper.iter().collect();
-    let dims = ents.iter().filter(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Dimension(_))).count();
+    // The stub-ups' dimensions (the trench sections' are on their own layer).
+    let dims =
+        ents.iter().filter(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Dimension(_)) && e.common.layer.starts_with("E-UG-DIMS")).count();
     assert_eq!(dims, 2 * stubs.len());
     let texts: Vec<String> = ents
         .iter()
@@ -274,4 +363,208 @@ fn a_building_with_no_services_fails_for_each_required_one() {
     // Built with nothing buried: still one sheet for the slab level, nothing to dimension.
     let b = s.execute("ugsheets.build", &json!({})).unwrap();
     assert_eq!(b["sheets"][0]["stubups"], json!(0), "{b}");
+}
+
+/// Each buried electrical run's segments (feet), the power service as one straight segment.
+fn buried_segments(sp: &Value) -> Vec<(String, Vec<Seg>)> {
+    let ft = |q: &Value| [q[0].as_f64().unwrap() / 12.0, q[1].as_f64().unwrap() / 12.0];
+    let mut out: Vec<(String, Vec<Seg>)> = sp["mep"]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let p: Vec<[f64; 2]> = r["points"].as_array().unwrap().iter().map(ft).collect();
+            (r["id"].as_str().unwrap().to_string(), p.windows(2).map(|w| (w[0], w[1])).collect())
+        })
+        .collect();
+    let svc = &sp["mep"]["services"][0];
+    out.push(("SVC-P".into(), vec![(ft(&svc["from"]), ft(&svc["at"]))]));
+    out
+}
+
+#[test]
+fn a_sewer_across_a_feeder_is_one_crossing_marked_on_the_sheet() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    let buried = buried_segments(&sp);
+    // A feeder's leg into its panel (along y, 10 ft or longer), and a sewer lateral coming
+    // 6 ft from one side across its middle and ending 6" past it, where no other buried run
+    // crosses it or comes within 15" (the check's clearance is 12").
+    let (feeder, side, cross, sewer) = buried
+        .iter()
+        .flat_map(|(id, ss)| [(id, ss, -1.0), (id, ss, 1.0)])
+        .find_map(|(id, ss, side): (&String, &Vec<Seg>, f64)| {
+            let (a, b) = *ss.last()?;
+            if (a[0] - b[0]).abs() > 1e-6 || (a[1] - b[1]).abs() < 10.0 {
+                return None;
+            }
+            let at = [a[0], (a[1] + b[1]) / 2.0];
+            let sewer: Seg = ([at[0] + 6.0 * side, at[1]], [at[0] - 0.5 * side, at[1]]);
+            let alone =
+                buried.iter().filter(|(o, _)| o != id).all(|(_, oss)| oss.iter().all(|o| !segs_cross(*o, sewer) && seg_dist(*o, sewer) > 1.25));
+            alone.then(|| (id.clone(), side, at, sewer))
+        })
+        .expect("a feeder leg with nothing else near it");
+    let route = json!([[sewer.0[0] * 12.0, sewer.0[1] * 12.0], [sewer.1[0] * 12.0, sewer.1[1] * 12.0]]);
+    let sewer = json!({"kind": "sewer", "tag": "SS-1", "level": "1", "route": route, "at": route[1], "size_in": 6, "depth_ft": 4, "source": "C-201"});
+    sp["mep"]["services"].as_array_mut().unwrap().push(sewer);
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({})).unwrap();
+    let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
+    assert_eq!(xs.len(), 1, "{r}");
+    let x = xs[0];
+    assert_eq!((x["items"].clone(), x["how"].clone()), (json!([feeder, "SS-1"]), json!("crosses")), "{x}");
+    let at = [x["at"][0].as_f64().unwrap() / 12.0, x["at"][1].as_f64().unwrap() / 12.0];
+    assert!((at[0] - cross[0]).hypot(at[1] - cross[1]) <= 1.0, "{at:?} vs {cross:?}");
+    // The feeder's top 22.5" down and its bottom 24"; the sewer's top 4 ft down: 24" clear.
+    assert_eq!((x["vertical_separation_in"].clone(), x["severity"].clone()), (json!(24.0), json!("warning")), "{x}");
+    assert_eq!(r["crossings"].as_array().unwrap().len(), 1, "{r}");
+    // The sewer isn't an electrical run.
+    assert!(!r["runs"].as_array().unwrap().iter().any(|x| x["id"] == "SS-1"));
+
+    // Marked on the sheet where it is, and listed.
+    let b = s.execute("ugsheets.build", &json!({})).unwrap();
+    let sh = &b["sheets"][0];
+    assert_eq!(sh["crossings"], json!(1), "{sh}");
+    let layout = sh["layout"].as_str().unwrap();
+    let d = s.doc().unwrap();
+    let paper = d.space(&cadaddy_engine::doc::Space::Paper(layout.to_string())).unwrap();
+    let marks =
+        paper.iter().filter(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Circle(_)) && e.common.layer.starts_with("E-UG-XING")).count();
+    assert_eq!(marks, 1);
+    let texts = texts_of(&s, layout);
+    for want in ["X-1", "CROSSINGS - POTHOLE AND VERIFY BEFORE TRENCHING"] {
+        assert!(texts.iter().any(|(x, _)| x == want), "{want} on the sheet");
+    }
+
+    // A pipe below the floor (another trade's run) 6" beside the leg, on the side the sewer
+    // came from: within a foot's clearance.
+    let mut sp = spec(&t);
+    let (x0, mid) = (cross[0] + 0.5 * side, cross[1]);
+    sp["mep"]["systems"].as_array_mut().unwrap().push(json!({"name": "P-SAN", "layer": "P-SAN", "kind": "pipe", "size_in": [4, 4], "bottom_ft": -3}));
+    sp["mep"]["runs"].as_array_mut().unwrap().push(json!({"id": "SAN-1", "system": "P-SAN", "level": "1",
+        "points": [[x0 * 12.0, (mid - 1.0) * 12.0], [x0 * 12.0, (mid + 1.0) * 12.0]], "size_in": [4, 4], "bottoms_ft": [-3]}));
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"clearance_in": 12})).unwrap();
+    let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
+    assert_eq!(xs.len(), 1, "{r}");
+    assert_eq!(
+        (xs[0]["items"].clone(), xs[0]["how"].clone(), xs[0]["distance_ft"].clone()),
+        (json!([feeder, "SAN-1"]), json!("within clearance"), json!(0.5)),
+        "{}",
+        xs[0]
+    );
+    // The pipe's top 36 - 4 = 32" down, the feeder's bottom 24": 8" clear, under a foot.
+    assert_eq!((xs[0]["vertical_separation_in"].clone(), xs[0]["severity"].clone()), (json!(8.0), json!("error")), "{}", xs[0]);
+    let r = s.execute("ugsheets.check", &json!({"clearance_in": 3})).unwrap();
+    assert!(!r["findings"].as_array().unwrap().iter().any(|f| f["check"] == "crossing"), "6\" apart is outside a 3\" clearance");
+    assert!(s.execute("ugsheets.check", &json!({"clearance_in": -1})).is_err());
+}
+
+#[test]
+fn bends_and_encasement_are_reported() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    let (msb, _) = hub_points(&t);
+    // A run with four turns out of the switchboard: 4 x 90, and 90 at each end that comes up.
+    let m = [msb[0] * 12.0, msb[1] * 12.0];
+    let zig = json!([m, [m[0], m[1] + 60.0], [m[0] + 60.0, m[1] + 60.0], [m[0] + 60.0, m[1] + 120.0], [m[0], m[1] + 120.0], [m[0], m[1] + 180.0]]);
+    sp["mep"]["runs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "F-ZIG", "system": "E-UG", "level": "1", "points": zig, "size_in": [1, 1], "bottoms_ft": [-2], "encased": true}));
+    sp["mep"]["services"][0]["encased"] = json!(true);
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({})).unwrap();
+    let runs = r["runs"].as_array().unwrap();
+    let zig = runs.iter().find(|x| x["id"] == "F-ZIG").unwrap();
+    let ends = if zig["to"].as_str().unwrap().is_empty() { 1.0 } else { 2.0 };
+    let want = 360.0 + 90.0 * ends;
+    assert_eq!((zig["bends_deg"].clone(), zig["encased"].clone()), (json!(want), json!(true)), "{zig}");
+    let bends: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "bends").collect();
+    assert_eq!(bends.len(), 1, "only F-ZIG is over 360: {r}");
+    assert_eq!((bends[0]["about"].clone(), bends[0]["bends_deg"].clone()), (json!("F-ZIG"), json!(want)));
+    let svc = runs.iter().find(|x| x["id"] == "SVC-P").unwrap();
+    assert_eq!(svc["encased"], json!(true), "{svc}");
+    assert_eq!(r["services"].as_array().unwrap().iter().find(|x| x["tag"] == "SVC-P").unwrap()["encased"], json!(true));
+
+    // The run schedule: ENCASED on the service's row, and each row's bends.
+    let b = s.execute("ugsheets.build", &json!({})).unwrap();
+    let texts = texts_of(&s, b["sheets"][0]["layout"].as_str().unwrap());
+    let row_of = |id: &str| texts.iter().find(|(x, _)| x == id).map(|(_, at)| at[1]).unwrap();
+    let on_row = |y: f64, want: &str| texts.iter().any(|(x, at)| x == want && (at[1] - y).abs() < 1e-6);
+    assert!(on_row(row_of("SVC-P"), "ENCASED"), "the service's row says ENCASED");
+    assert!(on_row(row_of("SVC-P"), "90\u{b0}"), "the service's row has its bends");
+    assert!(on_row(row_of("F-ZIG"), &format!("{want}\u{b0}")), "the zigzag's row has its bends");
+    // The service's trench section draws the encasement.
+    assert!(texts.iter().any(|(x, _)| x.starts_with("CONCRETE ENCASED")), "the section says encased");
+}
+
+#[test]
+fn the_sheet_has_trench_sections_and_builds_again_in_place() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut s = session(&t);
+    let b = s.execute("ugsheets.build", &json!({"number": "E-020"})).unwrap();
+    let sh = b["sheets"][0].clone();
+    assert_eq!((sh["sections"].clone(), sh["replaced"].clone()), (json!(2), json!(false)), "{sh}");
+    let layout = sh["layout"].as_str().unwrap().to_string();
+    let texts = texts_of(&s, &layout);
+    for want in ["TYPICAL TRENCH SECTION - SERVICE", "TYPICAL TRENCH SECTION - UNDER SLAB"] {
+        assert!(texts.iter().any(|(x, _)| x == want), "{want} on the sheet");
+    }
+    let all = texts.iter().map(|(x, _)| x.as_str()).collect::<Vec<_>>().join(" ");
+    assert!(all.contains("4-4\" PVC Sch 40") && all.contains("WARNING TAPE") && all.contains("DIRECT BURIED"), "{all}");
+    // The cover dimensioned from the spec: SVC-P's 30" is 2'-6"; the feeders' 22.5" 1'-11".
+    let count = |s: &Session| {
+        let d = s.doc().unwrap();
+        let paper = d.space(&cadaddy_engine::doc::Space::Paper(layout.clone())).unwrap();
+        let sect: Vec<String> = paper
+            .iter()
+            .filter(|e| e.common.layer.starts_with("E-UG-SECT"))
+            .filter_map(|e| match &e.kind {
+                cadaddy_engine::doc::EntityKind::Dimension(dm) => Some(dm.text.clone()),
+                _ => None,
+            })
+            .collect();
+        (paper.iter().count(), sect, d.layouts.len())
+    };
+    let (n1, sect, layouts1) = count(&s);
+    assert_eq!(sect, vec!["2'-6\"".to_string(), "1'-11\"".to_string()]);
+
+    // Again: the same layout, drawn afresh, nothing doubled.
+    let b2 = s.execute("ugsheets.build", &json!({"number": "E-020"})).unwrap();
+    let sh2 = &b2["sheets"][0];
+    assert_eq!((sh2["layout"].as_str().unwrap(), sh2["replaced"].clone()), (layout.as_str(), json!(true)), "{sh2}");
+    let (n2, sect2, layouts2) = count(&s);
+    assert_eq!((layouts2, n2, sect2.len()), (layouts1, n1, 2));
+    assert_eq!(sh2["dimensions"], sh["dimensions"]);
+}
+
+#[test]
+fn a_short_hop_with_trenching_is_cheaper_overhead() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // HA to HB, 6 ft apart centre to centre, a #1 feeder in 1-1/2"; the estimator prices
+    // trenching under the slab at $60 and half an hour a foot.
+    sp["mep"]["feeders"].as_array_mut().unwrap().push(json!({"tag": "F-HAB", "from": "HA", "to": "HB", "phases": 3, "size": "#1", "material": "cu", "neutrals": 1, "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 1.5}));
+    sp["estimate"]["baseline"]["prices"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"item": "Trenching", "size": "", "unit": "ft", "material": 60.0, "labor_hours": 0.5}));
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({})).unwrap();
+    let hab = r["routes"].as_array().unwrap().iter().find(|x| x["feeder"] == "F-HAB").unwrap().clone();
+    assert_eq!((hab["suggest"].clone(), hab["basis"].clone()), (json!("overhead"), json!("estimator prices and crew rate, with trenching")), "{hab}");
+    // By hand at $95/h: three #1 and a #1 neutral at 4.60 + 0.015 h, a #6 ground at 1.20 +
+    // 0.01 h; 12 ft of 1-1/2" PVC and 6 ft of trench, against 24 ft of 1-1/2" EMT.
+    let wire = 4.0 * (4.6 + 0.015 * 95.0) + (1.2 + 0.01 * 95.0);
+    let want_under = 12.0 * ((1.4 + 0.04 * 95.0) + wire) + 6.0 * (60.0 + 0.5 * 95.0);
+    let want_over = 24.0 * ((2.9 + 0.06 * 95.0) + wire);
+    assert_eq!((hab["under_slab"]["length_ft"].clone(), hab["overhead"]["length_ft"].clone()), (json!(12.0), json!(24.0)), "{hab}");
+    assert!((hab["under_slab"]["cost"].as_f64().unwrap() - want_under).abs() <= 1.0, "{hab} vs {want_under}");
+    assert!((hab["overhead"]["cost"].as_f64().unwrap() - want_over).abs() <= 1.0, "{hab} vs {want_over}");
+    // Only under-slab suggestions are sheet notes.
+    let b = s.execute("ugsheets.build", &json!({})).unwrap();
+    let all = texts_of(&s, b["sheets"][0]["layout"].as_str().unwrap()).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
+    assert!(!all.contains("ROUTE F-HAB"), "{all}");
 }

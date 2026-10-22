@@ -170,7 +170,7 @@ fn run_pspace(s: &mut Session, _p: &Value) -> Result<Value> {
 // ---------- layouts ----------
 
 /// Characters AutoCAD does not allow in layout names.
-const BAD_CHARS: &[char] = &['<', '>', '/', '\\', '"', ':', ';', '?', '*', '|', ',', '=', '`'];
+pub(crate) const BAD_CHARS: &[char] = &['<', '>', '/', '\\', '"', ':', ';', '?', '*', '|', ',', '=', '`'];
 
 fn check_name(cmd: &str, d: &Drawing, name: &str, except: Option<&str>) -> Result<String> {
     let n = name.trim();
