@@ -158,7 +158,7 @@ fn collect(d: &Drawing, ents: &[&Entity], m: Mat3, z: f64, k: (f64, f64, f64), l
         out.push(Found {
             level,
             handle: e.handle,
-            layer: e.common.layer.clone(),
+            layer: e.common.layer.to_string(),
             ins: i.clone(),
             at: at.to3(i.insert.z + z),
             rotation,
