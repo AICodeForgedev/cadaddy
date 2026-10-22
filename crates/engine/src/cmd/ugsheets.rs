@@ -143,6 +143,8 @@ struct Ug {
     runs: Vec<Buried>,
     stubs: Vec<Stub>,
     services: Vec<Value>,
+    /// Pipe services (water, sewer, storm, gas) shown for coordination only (label, points, level).
+    other_trade: Vec<(String, Vec<[f64; 2]>, String)>,
     routes: Vec<Route>,
     holds: Vec<super::concrete::Hold>,
     findings: Vec<Finding>,
@@ -213,6 +215,12 @@ fn service_words(kind: &str) -> &'static [&'static str] {
 fn is_kind(s: &Service, kind: &str) -> bool {
     let k = s.kind.trim().to_ascii_lowercase();
     k == kind.to_ascii_lowercase() || service_words(kind).contains(&k.as_str())
+}
+
+/// Pipe services (water, sewer, storm, gas) are other-trade utilities: they are NOT electrical
+/// conduit or duct-bank services and must not be drawn as conduit runs or given PVC material.
+fn is_pipe_service(kind: &str) -> bool {
+    matches!(kind.to_ascii_lowercase().as_str(), "water" | "sewer" | "storm" | "gas")
 }
 
 /// Grid lines from the spec's columns (`A-1` at a point): a label whose columns line up on one x
@@ -394,6 +402,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     }
     // Service entrances.
     let mut services: Vec<Value> = Vec::new();
+    let mut other_trade: Vec<(String, Vec<[f64; 2]>, String)> = Vec::new(); // (label, points, level) for pipe services shown for coordination
     let required: Vec<String> =
         if sp.mep.required_services.is_empty() { vec!["power".into(), "telephone".into()] } else { sp.mep.required_services.clone() };
     for svc in sp.mep.services.iter().take(MAX_ITEMS) {
@@ -411,6 +420,24 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             svc.from.into_iter().chain([at]).filter(|p| finite(*p)).collect()
         };
         let id = if svc.tag.trim().is_empty() { format!("SVC-{}", svc.kind.to_ascii_uppercase()) } else { svc.tag.clone() };
+        // Pipe services (water, sewer, storm, gas) are other-trade utilities for coordination:
+        // they don't become electrical conduit runs or stub-ups.
+        if is_pipe_service(&svc.kind) {
+            let mut label = svc.kind.to_ascii_uppercase();
+            if let Some(size) = svc.size_in {
+                label = format!("{size}\" {label}");
+            }
+            if let Some(dep) = svc.depth_ft {
+                label = format!("{label} @ {dep}' DEEP");
+            } else if svc.cover_in.is_finite() && svc.cover_in > 0.0 {
+                label = format!("{label} @ {}' DEEP", svc.cover_in / 12.0);
+            }
+            if let Some(inv) = svc.invert_ft {
+                label = format!("{label} INV {inv}");
+            }
+            other_trade.push((label, points, svc.level.clone()));
+            continue;
+        }
         runs.push(Buried {
             kind: "service",
             system: svc.kind.clone(),
@@ -583,7 +610,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     let els = super::concrete::elements(sp, types);
     let holds = super::concrete::holds(sp, &els, today, &super::concrete::Rules::of(sp));
     findings.truncate(MAX_ITEMS);
-    Ug { runs, stubs, services, routes, holds, findings, grids: g }
+    Ug { runs, stubs, services, other_trade, routes, holds, findings, grids: g }
 }
 
 fn id_of(s: &Service) -> String {
@@ -623,6 +650,7 @@ fn ug_json(ug: &Ug) -> Value {
             "mix": s.mix.iter().map(|(n, size)| json!({ "count": n, "size_in": size })).collect::<Vec<_>>(), "material": s.material, "height_in": r2(s.height_in), "x": dim(&s.x), "y": dim(&s.y), "coords_ft": [r2(s.at[0] - ox), r2(s.at[1] - oy)],
         })).collect::<Vec<_>>(),
         "services": ug.services,
+        "other_trade": ug.other_trade.iter().map(|(label, _, level)| json!({ "label": label, "level": level })).collect::<Vec<_>>(),
         "routes": ug.routes.iter().map(|r| json!({
             "feeder": r.feeder, "from": r.from, "to": r.to, "level": r.level,
             "under_slab": { "length_ft": r2(r.under.length_ft), "cost": r.under.cost.map(r2) },
@@ -939,6 +967,17 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
                 let what = format!("{} {}-{} {} @ {}\" BFF", r.id, r.conduits, trade_size(r.size_in), r.material, r2(r.depth_in));
                 pen.text([mid[0] + 0.05, mid[1] + 0.08], &what, 0.08)?;
+            }
+        }
+        // Other-trade utilities (pipe services) for coordination only.
+        if !ug.other_trade.is_empty() {
+            pen.layer("E-UG-OTHR", 8, Some("DASHDOT"))?;
+            for (label, pts, _) in &ug.other_trade {
+                let pp: Vec<[f64; 2]> = pts.iter().map(|q| f.to(*q)).collect();
+                pen.pline(&pp, false)?;
+                if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
+                    pen.text([mid[0] + 0.05, mid[1] + 0.08], label, 0.08)?;
+                }
             }
         }
         // Stub-ups, dimensioned from the grid lines (or the level's edges).
