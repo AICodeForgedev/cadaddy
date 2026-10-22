@@ -11,6 +11,11 @@
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
+//! - **Concrete** from the concrete takeoff (Q328): each element in our scope (the concrete
+//!   rules' `our_scope`) gives its concrete (cubic yards, with the takeoff's waste), forms, rebar
+//!   by bar size, welded wire, anchor bolts, embeds and stub-ups by size, finish and curing, each
+//!   line carrying its element ids; every other element is listed in `by_others` as
+//!   `by others (<owner>)` or `unassigned`, at no cost to us.
 //! - **Waste** per category (defaults below; project rules `custom` `waste.<category>` or the
 //!   `waste` param override), shown as its own column.
 //! - **Required job items** from the modelled work, each with the rule that requires it; a line
@@ -57,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{group_by?: job|level|trade, all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, elements}], required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{group_by?: job|level|trade, all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -77,6 +82,9 @@ struct Line {
     rule: Option<String>,
     level: String,
     elements: Vec<String>,
+    /// Waste the takeoff already worked out (concrete: by each element's size), in the line's
+    /// unit; `None`: the category's percent.
+    waste_qty: Option<f64>,
 }
 
 impl Line {
@@ -91,12 +99,19 @@ fn add(lines: &mut Vec<Line>, l: Line) {
         return;
     }
     match lines.iter_mut().find(|x| x.key(true) == l.key(true) && x.status == l.status && x.rule == l.rule) {
-        Some(x) => {
-            x.net += l.net;
-            x.elements.extend(l.elements);
-        }
+        Some(x) => merge(x, l),
         None => lines.push(l),
     }
+}
+
+/// `l`'s quantities and elements into `x`.
+fn merge(x: &mut Line, l: Line) {
+    x.net += l.net;
+    x.waste_qty = match (x.waste_qty, l.waste_qty) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+    };
+    x.elements.extend(l.elements);
 }
 
 /// A run's plan length, feet.
@@ -156,6 +171,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         rule: None,
                         level: t.level.clone(),
                         elements: vec![t.id.clone()],
+                        waste_qty: None,
                     },
                 );
             }
@@ -175,6 +191,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         rule: None,
                         level: t.level.clone(),
                         elements: vec![t.id.clone()],
+                        waste_qty: None,
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
@@ -193,6 +210,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                                 rule: Some(rule.clone()),
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
+                                waste_qty: None,
                             },
                         );
                     }
@@ -225,6 +243,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         rule: None,
                         level: r.level.clone(),
                         elements: el.clone(),
+                        waste_qty: None,
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
@@ -250,6 +269,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                             rule: Some(rule),
                             level: r.level.clone(),
                             elements: el.clone(),
+                            waste_qty: None,
                         },
                     );
                 }
@@ -280,6 +300,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                             rule: Some(format!("{} over the assumed homerun route plus {MAKEUP_FT}' makeup at each end", makeup.0)),
                             level: r.level.clone(),
                             elements: el,
+                            waste_qty: None,
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -296,6 +317,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                                 rule: Some("#4 AWG and up: an insulating bushing at each raceway end (NEC 300.4(G))".into()),
                                 level: r.level.clone(),
                                 elements: vec![id.clone()],
+                                waste_qty: None,
                             },
                         );
                     }
@@ -545,6 +567,74 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
     }
 }
 
+/// Concrete from the concrete takeoff: the elements in our scope as lines; the rest listed by
+/// whose they are, at no cost to us.
+fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
+    use super::concrete as c;
+    let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) else { return Vec::new() };
+    let r = c::Rules::of(&sp);
+    let upf = c::upf(&sp);
+    let mut others: Vec<Value> = Vec::new();
+    for x in c::elements(&sp, &d.bim_types) {
+        let e = &x.e;
+        let q = c::quantities(e, upf, &r);
+        let scope = c::scope_of(&r, &e.owner);
+        if scope != "ours" {
+            if others.len() < MAX_LINES {
+                others.push(json!({
+                    "trade": "concrete", "element": e.id, "kind": e.kind, "level": e.level, "owner": e.owner, "scope": scope,
+                    "cy": c::r2(q.cy_waste), "cost_to_us": 0.0,
+                }));
+            }
+            continue;
+        }
+        let kind = e.kind.replace('_', " ");
+        let (status, rule) = if x.derived {
+            ("rule", Some("housekeeping pad: the equipment's footprint plus the concrete rules' margin each side".to_string()))
+        } else {
+            ("model", None)
+        };
+        let mut put = |category: &str, item: String, size: String, unit: &'static str, net: f64, waste_qty: Option<f64>| {
+            add(
+                lines,
+                Line {
+                    trade: "concrete",
+                    category: category.into(),
+                    item,
+                    size,
+                    unit,
+                    net,
+                    status,
+                    rule: rule.clone(),
+                    level: e.level.clone(),
+                    elements: vec![e.id.clone()],
+                    waste_qty,
+                },
+            );
+        };
+        put("concrete", format!("Concrete, {kind}"), format!("{}\"", c::r2(e.depth_in)), "cu yd", q.cy, Some((q.cy_waste - q.cy).max(0.0)));
+        put("forms", format!("Forms, {kind}"), String::new(), "sq ft", q.forms_sf, None);
+        for (bar, (_, lb)) in &q.rebar {
+            put("rebar", "Rebar".into(), bar.clone(), "lb", *lb, None);
+        }
+        put("welded wire", "Welded wire".into(), e.mesh.clone(), "sq ft", q.mesh_sf, None);
+        for ((k, size), (n, ft)) in &q.embeds {
+            let mut item = k.replace('_', " ");
+            if let Some(f) = item.get(..1).map(str::to_ascii_uppercase) {
+                item.replace_range(..1, &f);
+            }
+            if *ft > 0.0 {
+                put("embeds", item, size.clone(), "ft", *ft, None);
+            } else {
+                put("embeds", item, size.clone(), "each", *n as f64, None);
+            }
+        }
+        put("finish", "Finish".into(), String::new(), "sq ft", q.finish_sf, None);
+        put("finish", "Curing".into(), String::new(), "sq ft", q.curing_sf, None);
+    }
+    others
+}
+
 /// The job's required items from the modelled work.
 fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, String)> {
     let mut out: Vec<(String, f64, &'static str, String)> = Vec::new();
@@ -595,6 +685,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     electrical(s, &mut lines)?;
     mechanical(s, &mut lines);
     drywall(s, &mut lines);
+    let by_others = concrete(s, &mut lines);
     // Waivers: recorded in the project rules, with the reason.
     if let Some(ws) = p.get("waive").and_then(Value::as_array) {
         for w in ws.iter().take(1_000) {
@@ -606,14 +697,14 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let d = s.doc()?;
     let rules = &d.project_rules;
-    let waste_of = |cat: &str| -> f64 {
+    // A percent the job sets (the param, else the project rules).
+    let waste_set = |cat: &str| -> Option<f64> {
         p["waste"][cat]
             .as_f64()
             .or_else(|| {
                 rules.resolve(RuleDomain::Custom, &format!("waste.{cat}")).and_then(|v| v.value.trim().trim_end_matches('%').parse::<f64>().ok())
             })
             .filter(|v| v.is_finite() && (0.0..=200.0).contains(v))
-            .unwrap_or_else(|| default_waste(cat))
     };
     let (sp, _) = current(s, "bim.bom")?;
     let by_level = group == "level";
@@ -622,10 +713,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     for l in lines {
         let l = Line { level: if by_level { l.level } else { String::new() }, ..l };
         match grouped.iter_mut().find(|x| x.key(by_level) == l.key(by_level) && x.status == l.status && x.rule == l.rule) {
-            Some(x) => {
-                x.net += l.net;
-                x.elements.extend(l.elements);
-            }
+            Some(x) => merge(x, l),
             None => grouped.push(l),
         }
     }
@@ -641,9 +729,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let out_lines: Vec<Value> = grouped
         .iter()
         .map(|l| {
-            let pct = waste_of(&l.category);
-            // Whole units of counted items (to the nearest one), lengths and areas as they are.
-            let waste = if l.unit == "each" { (l.net * pct / 100.0).round() } else { l.net * pct / 100.0 };
+            let set = waste_set(&l.category);
+            let (pct, waste) = match (set, l.waste_qty) {
+                // The takeoff's own waste, unless the job sets the category's.
+                (None, Some(w)) if l.net > 0.0 => (round(w / l.net * 100.0), w),
+                _ => {
+                    let pct = set.unwrap_or_else(|| default_waste(&l.category));
+                    // Whole units of counted items (to the nearest one), lengths and areas as they are.
+                    (pct, if l.unit == "each" { (l.net * pct / 100.0).round() } else { l.net * pct / 100.0 })
+                }
+            };
             let mut v = json!({
                 "trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit,
                 "net": round(l.net), "waste_pct": pct, "waste": round(waste), "total": round(l.net + waste),
@@ -698,7 +793,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let req_ok = req.iter().all(|r| r["qty"].as_f64().unwrap_or(0.0) > 0.0 || r["waived"].is_string());
-    let mut out = json!({ "lines": out_lines, "required": req, "spec_check": check, "complete": complete && req_ok && check.is_empty() });
+    let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": complete && req_ok && check.is_empty() });
     // What changed since an earlier BOM.
     if let Some(prev) = p.get("compare_to").and_then(|v| v["lines"].as_array().or_else(|| v.as_array())) {
         out["changes"] = changes(prev, out["lines"].as_array().map(Vec::as_slice).unwrap_or_default());
