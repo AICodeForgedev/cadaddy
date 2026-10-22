@@ -853,7 +853,7 @@ pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingRe
         }
         let title = upper(&sh.title);
         let plan = title.contains("FLOOR PLAN") || title.contains("ROOF PLAN");
-        let schedule = (title.contains("SCHEDULE") || title.contains("FINISHES")) && !title.contains("PARTITION") && !title.contains("WALL TYPE");
+        let schedule = title.contains("SCHEDULE") && !title.contains("PARTITION") && !title.contains("WALL TYPE");
         if !plan && !schedule {
             continue;
         }

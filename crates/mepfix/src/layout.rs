@@ -141,7 +141,7 @@ pub fn sheet_list() -> Vec<(String, String, String, Kind)> {
     // Added after every other sheet, so every sheet above keeps its random draws.
     v.push(("A-103".into(), "ROOF PLAN".into(), "A".into(), Kind::Roof));
     v.push(("A-602".into(), "DOOR AND WINDOW SCHEDULES".into(), "A".into(), Kind::DoorSchedule));
-    v.push(("A-603".into(), "ROOM FINISHES AND FINISH LEGEND".into(), "A".into(), Kind::ArchFinishes));
+    v.push(("A-603".into(), "ROOM FINISHES SCHEDULE AND FINISH LEGEND".into(), "A".into(), Kind::ArchFinishes));
     // Added after the architecture's sheets, so every sheet above keeps its random draws.
     v.push(("A-104".into(), "ROOF DRAINAGE AND FLASHING PLAN".into(), "A".into(), Kind::RoofDrainage));
     v.push((crate::envelope::ASSEMBLIES_SHEET.into(), "ROOF AND EXTERIOR WALL ASSEMBLIES".into(), "A".into(), Kind::Assemblies));
