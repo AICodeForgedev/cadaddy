@@ -926,6 +926,106 @@ pub fn building_from_model(alignment: &Alignment, m: [f64; 2]) -> [f64; 2] {
     [r[0] / 12.0, r[1] / 12.0]
 }
 
+// ---- Linework without layer names -------------------------------------------------------------
+
+/// Most straight pieces [`drawn_segments`] takes from one drawing (hostile drawings).
+const MAX_DRAWN_SEGMENTS: usize = 200_000;
+
+/// Whether an entity is drawn in a screened (gray) pen: the background a trade's plan is drawn
+/// over (the architecture under an electrical plan, the grid). Its colour, else its layer's, is
+/// a gray between black and white; nothing is read from the layer's name, so a print's pen
+/// layers (`PDF-GRAY50-0.18`) and a drawing's own (`ARCH`, colour 8) say the same.
+pub fn screened(d: &Drawing, e: &cadaddy_doc::Entity) -> bool {
+    let layer = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(&e.common.layer)).map_or(cadaddy_color::Color::Index(7), |l| l.color);
+    let c = e.common.color.resolve(layer, cadaddy_color::Color::Index(7));
+    let (lo, hi) = (c.0.min(c.1).min(c.2), c.0.max(c.1).max(c.2));
+    hi - lo <= 16 && (40..=230).contains(&lo)
+}
+
+/// A polyline that is an outline: closed, or ending where it began (a print's closed path).
+fn shut(p: &cadaddy_doc::LwPolyline) -> bool {
+    p.closed || p.vertices.len() > 3 && p.vertices.first().zip(p.vertices.last()).is_some_and(|(a, b)| (a.p.x - b.p.x).hypot(a.p.y - b.p.y) < 1e-6)
+}
+
+/// The round shapes of a drawing (circles, and closed polylines as round as a printed circle):
+/// centre and radius, drawing units.
+/// A print draws a symbol in one path: a polyline that goes round and comes back to its start,
+/// then on (a bubble and its divider) is round in that first loop.
+pub fn round_shapes(d: &Drawing) -> Vec<([f64; 2], f64)> {
+    let first_loop = |kind: &EntityKind| -> Option<([f64; 2], f64)> {
+        let EntityKind::LwPolyline(pl) = kind else { return None };
+        let v0 = pl.vertices.first()?.p;
+        let j = pl.vertices.iter().enumerate().skip(7).find(|(_, v)| (v.p.x - v0.x).hypot(v.p.y - v0.y) < 1e-6)?.0;
+        let ring = cadaddy_doc::LwPolyline { vertices: pl.vertices.get(..j)?.to_vec(), closed: true, ..pl.clone() };
+        round_shape(&EntityKind::LwPolyline(ring))
+    };
+    d.model
+        .iter()
+        .filter_map(|e| round_shape(&e.kind).or_else(|| first_loop(&e.kind)))
+        .filter(|(c, r)| c.iter().all(|v| v.is_finite()) && r.is_finite() && *r > 0.0)
+        .take(MAX_ROUNDS)
+        .collect()
+}
+
+/// The straight linework drawn in the drawing pens (not [`screened`]), in drawing units: lines,
+/// and the straight sides of open polylines (a print often joins a run and its neighbours into
+/// one path), and of closed ones too with `outlines` (a printed wall is often an outline; a
+/// run never is). For readers that can't lean on layer names, as on a print. A piece across a
+/// round shape (a callout bubble's divider, a symbol's bar) is the symbol's, not linework.
+pub fn drawn_segments(d: &Drawing, outlines: bool) -> Vec<[[f64; 2]; 2]> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if out.len() >= MAX_DRAWN_SEGMENTS {
+            break;
+        }
+        match &e.kind {
+            EntityKind::Line(l) if !screened(d, e) => out.push([[l.a.x, l.a.y], [l.b.x, l.b.y]]),
+            EntityKind::LwPolyline(p) if !screened(d, e) && (outlines || !shut(p)) && round_shape(&e.kind).is_none() => {
+                let n = p.vertices.len();
+                let sides = if p.closed { n } else { n.saturating_sub(1) };
+                for i in 0..sides {
+                    let (Some(a), Some(b)) = (p.vertices.get(i), p.vertices.get((i + 1) % n)) else { continue };
+                    if a.bulge.abs() < 1e-9 && out.len() < MAX_DRAWN_SEGMENTS {
+                        out.push([[a.p.x, a.p.y], [b.p.x, b.p.y]]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out.retain(|s| s.iter().flatten().all(|v| v.is_finite()));
+    // Round shapes by cell (a cell as wide as the largest), to find the one a piece crosses.
+    let rounds = round_shapes(d);
+    let cell = rounds.iter().map(|r| r.1 * 2.0).fold(0.0, f64::max);
+    if cell <= 0.0 {
+        return out;
+    }
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut cells: BTreeMap<(i64, i64), Vec<([f64; 2], f64)>> = BTreeMap::new();
+    for r in &rounds {
+        cells.entry(key(r.0)).or_default().push(*r);
+    }
+    let across = |s: &[[f64; 2]; 2]| {
+        let m = [(s[0][0] + s[1][0]) / 2.0, (s[0][1] + s[1][1]) / 2.0];
+        let (kx, ky) = key(m);
+        (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (kx + dx, ky + dy))).filter_map(|k| cells.get(&k)).flatten().any(|(c, r)| {
+            let on = |p: [f64; 2]| (p[0] - c[0]).hypot(p[1] - c[1]) <= r * 1.1;
+            on(s[0]) && on(s[1]) && (m[0] - c[0]).hypot(m[1] - c[1]) < r * 0.7
+        })
+    };
+    out.retain(|s| !across(s));
+    out
+}
+
+/// The structural grid's extents in building feet, `margin` past it (none without a grid).
+pub fn grid_box(map: &SheetMap, margin: f64) -> Option<([f64; 2], [f64; 2])> {
+    let xs: Vec<f64> = map.grid_x.iter().map(|g| g.at_ft).filter(|v| v.is_finite()).collect();
+    let ys: Vec<f64> = map.grid_y.iter().map(|g| g.at_ft).filter(|v| v.is_finite()).collect();
+    let lo = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min) - margin;
+    let hi = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max) + margin;
+    (!xs.is_empty() && !ys.is_empty()).then(|| ([lo(&xs), lo(&ys)], [hi(&xs), hi(&ys)]))
+}
+
 /// Build a sheet map directly from a fixture set's DXF data.
 pub fn recognise_fixture_set(dxf_data: &[(String, Vec<u8>)]) -> SheetMap {
     let mut drawings: Vec<(String, Drawing)> = Vec::new();
