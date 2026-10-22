@@ -2876,3 +2876,106 @@
 	DWF Out	DWF 输出
 	DWFx Out	DWFx 输出
 	Enter path of DWF/DWFx file to attach	输入 DWF/DWFx 文件路径
+	Load Shape File	加载形文件
+	Compile Shape File	编译形文件
+	Make Shape	创建形
+	Copy Multiple	多重复制
+	Attribute Extraction	属性提取
+	Make Linetype	创建线型
+	Enter name of shape file to load	输入要加载的形文件名
+	Enter name of shape source file to compile	输入要编译的形源文件名
+	Enter shape name or [?]	输入形名称或 [?]
+	Enter the name of the shape	输入形的名称
+	Enter the name of the shape file	输入形文件的名称
+	Enter resolution	输入分辨率
+	Specify trace width	指定宽线宽度
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	第二点或 [Repeat (上一个)/Divide/Measure/Array (动态)]
+	Number of copies	副本数
+	Specify array corner	指定阵列角点
+	Enter extraction type or enable object selection	输入提取类型或启用对象选择
+	Enter template file name	输入样板文件名
+	Enter extract file name	输入提取文件名
+	Enter linetype file name	输入线型文件名
+	Enter linetype name	输入线型名称
+	Enter linetype description	输入线型说明
+	Specify starting point for line definition	指定线定义的起点
+	Specify ending point for line definition	指定线定义的端点
+	Enter name of saved filter	输入已保存过滤器的名称
+	Enter name to save the filter as	输入保存过滤器所用的名称
+	Enter filter to save	输入要保存的过滤器
+	Enter name of saved filter to delete	输入要删除的已保存过滤器的名称
+	Add (AND)	添加（与）
+	Add (OR)	添加（或）
+	Saved filters:	已保存的过滤器：
+	(none)	（无）
+	Apply to current selection	应用于当前选择集
+	DGN Import...	DGN 输入...
+	DGN Export...	DGN 输出...
+	DGN Underlay...	DGN 参考底图...
+	Clip DGN Underlay	剪裁 DGN 参考底图
+	Adjust DGN Underlay	调整 DGN 参考底图
+	DGN Underlay Levels	DGN 参考底图层级
+	DGN...	DGN...
+	Add CV	添加控制点
+	Blend Surface	过渡曲面
+	Convert to Solid	转换为实体
+	Convert to Surface	转换为曲面
+	Extend Surface	延伸曲面
+	Fillet Surface	曲面圆角
+	Hide CV	隐藏控制点
+	Interference Checking	干涉检查
+	Offset Surface	偏移曲面
+	Patch	修补
+	Patch Surface	修补曲面
+	Planar	平面
+	Planar Surface	平面曲面
+	Rebuild Surface	重建曲面
+	Remove CV	删除控制点
+	Show CV	显示控制点
+	Surface Editing	曲面编辑
+	Surfaces	曲面
+	Trim Surface	修剪曲面
+	Untrim	取消修剪
+	Untrim Surface	取消修剪曲面
+	SteeringWheels	控制盘
+	SteeringWheel	控制盘
+	Wheel Zoom	控制盘：缩放
+	Wheel Pan	控制盘：平移
+	Wheel Orbit	控制盘：动态观察
+	Wheel Look	控制盘：环视
+	Wheel Center	控制盘：中心
+	Wheel Rewind	控制盘：回放
+	Wheel Walk	控制盘：漫游
+	ViewCube Settings	ViewCube 设置
+	Create Camera	创建相机
+	Cameras	相机
+	Change Camera	更改相机
+	Delete Camera	删除相机
+	View from Camera	相机视图
+	Quick View Drawings	快速查看图形
+	Quick View Layouts	快速查看布局
+	Close Quick View Drawings	关闭快速查看图形
+	Close Quick View Layouts	关闭快速查看布局
+	ZOOM	缩放
+	ORBIT	动态观察
+	REWIND	回放
+	PAN	平移
+	CENTER	中心
+	WALK	漫游
+	LOOK	环视
+	Zoom: drag up or down	缩放：向上或向下拖动
+	Orbit: drag to turn the model	动态观察：拖动以旋转模型
+	Rewind: back to the view before	回放：返回上一个视图
+	Pan: drag the drawing	平移：拖动图形
+	Center: click or drag onto a point	中心：单击或拖到某一点
+	Look: drag to look around	环视：拖动以环顾四周
+	double-click to look from it	双击以从此处查看
+	Select a command to see its help page.	选择一个命令以查看其帮助页面。
+	Command not found.	未找到命令。
+	Aliases:	别名：
+	Menu:	菜单：
+	Shortcut:	快捷键：
+	Transparent:	透明：
+	Yes (can run inside another command with a leading apostrophe)	是（可以在另一个命令内以前导撇号运行）
+	JSON parameters:	JSON 参数：
+	Run this command	运行此命令

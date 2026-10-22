@@ -2781,3 +2781,106 @@
 	DWF Out	Вывод DWF
 	DWFx Out	Вывод DWFx
 	Enter path of DWF/DWFx file to attach	Введите путь к файлу DWF/DWFx
+	Load Shape File	Загрузить файл форм
+	Compile Shape File	Компилировать файл форм
+	Make Shape	Создать форму
+	Copy Multiple	Множественное копирование
+	Attribute Extraction	Извлечение атрибутов
+	Make Linetype	Создать тип линии
+	Enter name of shape file to load	Введите имя загружаемого файла форм
+	Enter name of shape source file to compile	Введите имя исходного файла форм для компиляции
+	Enter shape name or [?]	Введите имя формы или [?]
+	Enter the name of the shape	Введите имя формы
+	Enter the name of the shape file	Введите имя файла форм
+	Enter resolution	Введите разрешение
+	Specify trace width	Укажите ширину полосы
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Вторая точка или [Repeat (последняя)/Divide/Measure/Array (динамический)]
+	Number of copies	Количество копий
+	Specify array corner	Укажите угол массива
+	Enter extraction type or enable object selection	Введите тип извлечения или включите выбор объектов
+	Enter template file name	Введите имя файла шаблона
+	Enter extract file name	Введите имя файла извлечения
+	Enter linetype file name	Введите имя файла типов линий
+	Enter linetype name	Введите имя типа линии
+	Enter linetype description	Введите описание типа линии
+	Specify starting point for line definition	Укажите начальную точку определения линии
+	Specify ending point for line definition	Укажите конечную точку определения линии
+	Enter name of saved filter	Введите имя сохранённого фильтра
+	Enter name to save the filter as	Введите имя для сохранения фильтра
+	Enter filter to save	Введите фильтр для сохранения
+	Enter name of saved filter to delete	Введите имя сохранённого фильтра для удаления
+	Add (AND)	Добавить (И)
+	Add (OR)	Добавить (ИЛИ)
+	Saved filters:	Сохранённые фильтры:
+	(none)	(нет)
+	Apply to current selection	Применить к текущему выбору
+	DGN Import...	Импорт DGN...
+	DGN Export...	Экспорт DGN...
+	DGN Underlay...	Подложка DGN...
+	Clip DGN Underlay	Подрезать подложку DGN
+	Adjust DGN Underlay	Настроить подложку DGN
+	DGN Underlay Levels	Уровни подложки DGN
+	DGN...	DGN...
+	Add CV	Добавить управляющую точку
+	Blend Surface	Сопрягающая поверхность
+	Convert to Solid	Преобразовать в тело
+	Convert to Surface	Преобразовать в поверхность
+	Extend Surface	Удлинить поверхность
+	Fillet Surface	Скругление поверхности
+	Hide CV	Скрыть управляющие точки
+	Interference Checking	Проверка пересечений
+	Offset Surface	Смещение поверхности
+	Patch	Заплатка
+	Patch Surface	Поверхность-заплатка
+	Planar	Плоская
+	Planar Surface	Плоская поверхность
+	Rebuild Surface	Перестроить поверхность
+	Remove CV	Удалить управляющую точку
+	Show CV	Показать управляющие точки
+	Surface Editing	Редактирование поверхностей
+	Surfaces	Поверхности
+	Trim Surface	Обрезать поверхность
+	Untrim	Отменить обрезку
+	Untrim Surface	Отменить обрезку поверхности
+	SteeringWheels	Штурвалы
+	SteeringWheel	Штурвал
+	Wheel Zoom	Штурвал: зумирование
+	Wheel Pan	Штурвал: панорамирование
+	Wheel Orbit	Штурвал: орбита
+	Wheel Look	Штурвал: обзор
+	Wheel Center	Штурвал: центр
+	Wheel Rewind	Штурвал: назад
+	Wheel Walk	Штурвал: прогулка
+	ViewCube Settings	Параметры ViewCube
+	Create Camera	Создать камеру
+	Cameras	Камеры
+	Change Camera	Изменить камеру
+	Delete Camera	Удалить камеру
+	View from Camera	Вид из камеры
+	Quick View Drawings	Быстрый просмотр чертежей
+	Quick View Layouts	Быстрый просмотр листов
+	Close Quick View Drawings	Закрыть быстрый просмотр чертежей
+	Close Quick View Layouts	Закрыть быстрый просмотр листов
+	ZOOM	ЗУМ
+	ORBIT	ОРБИТА
+	REWIND	НАЗАД
+	PAN	ПАНОРАМА
+	CENTER	ЦЕНТР
+	WALK	ПРОГУЛКА
+	LOOK	ОБЗОР
+	Zoom: drag up or down	Зумирование: перетащите вверх или вниз
+	Orbit: drag to turn the model	Орбита: перетащите, чтобы повернуть модель
+	Rewind: back to the view before	Назад: к предыдущему виду
+	Pan: drag the drawing	Панорама: перетащите чертёж
+	Center: click or drag onto a point	Центр: щёлкните или перетащите на точку
+	Look: drag to look around	Обзор: перетащите, чтобы осмотреться
+	double-click to look from it	дважды щёлкните, чтобы смотреть из неё
+	Select a command to see its help page.	Выберите команду для просмотра её справки.
+	Command not found.	Команда не найдена.
+	Aliases:	Псевдонимы:
+	Menu:	Меню:
+	Shortcut:	Сочетание клавиш:
+	Transparent:	Прозрачная:
+	Yes (can run inside another command with a leading apostrophe)	Да (можно запускать внутри другой команды с начальным апострофом)
+	JSON parameters:	Параметры JSON:
+	Run this command	Выполнить эту команду

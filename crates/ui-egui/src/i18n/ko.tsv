@@ -2992,3 +2992,106 @@ menu	Modify	수정
 	DWF Out	DWF 출력
 	DWFx Out	DWFx 출력
 	Enter path of DWF/DWFx file to attach	첨부할 DWF/DWFx 파일 경로 입력
+	Load Shape File	모양 파일 로드
+	Compile Shape File	모양 파일 컴파일
+	Make Shape	모양 만들기
+	Copy Multiple	다중 복사
+	Attribute Extraction	속성 추출
+	Make Linetype	선종류 만들기
+	Enter name of shape file to load	로드할 모양 파일 이름 입력
+	Enter name of shape source file to compile	컴파일할 모양 원본 파일 이름 입력
+	Enter shape name or [?]	모양 이름 입력 또는 [?]
+	Enter the name of the shape	모양 이름 입력
+	Enter the name of the shape file	모양 파일 이름 입력
+	Enter resolution	해상도 입력
+	Specify trace width	트레이스 폭 지정
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	두 번째 점 또는 [Repeat (마지막)/Divide/Measure/Array (동적)]
+	Number of copies	복사 개수
+	Specify array corner	배열 구석 지정
+	Enter extraction type or enable object selection	추출 유형 입력 또는 객체 선택 사용
+	Enter template file name	템플릿 파일 이름 입력
+	Enter extract file name	추출 파일 이름 입력
+	Enter linetype file name	선종류 파일 이름 입력
+	Enter linetype name	선종류 이름 입력
+	Enter linetype description	선종류 설명 입력
+	Specify starting point for line definition	선 정의의 시작점 지정
+	Specify ending point for line definition	선 정의의 끝점 지정
+	Enter name of saved filter	저장된 필터 이름 입력
+	Enter name to save the filter as	필터를 저장할 이름 입력
+	Enter filter to save	저장할 필터 입력
+	Enter name of saved filter to delete	삭제할 저장된 필터 이름 입력
+	Add (AND)	추가 (AND)
+	Add (OR)	추가 (OR)
+	Saved filters:	저장된 필터:
+	(none)	(없음)
+	Apply to current selection	현재 선택에 적용
+	DGN Import...	DGN 가져오기...
+	DGN Export...	DGN 내보내기...
+	DGN Underlay...	DGN 언더레이...
+	Clip DGN Underlay	DGN 언더레이 자르기
+	Adjust DGN Underlay	DGN 언더레이 조정
+	DGN Underlay Levels	DGN 언더레이 레벨
+	DGN...	DGN...
+	Add CV	제어점 추가
+	Blend Surface	블렌드 곡면
+	Convert to Solid	솔리드로 변환
+	Convert to Surface	곡면으로 변환
+	Extend Surface	곡면 연장
+	Fillet Surface	곡면 모깎기
+	Hide CV	제어점 숨기기
+	Interference Checking	간섭 검사
+	Offset Surface	곡면 간격띄우기
+	Patch	패치
+	Patch Surface	패치 곡면
+	Planar	평면
+	Planar Surface	평면 곡면
+	Rebuild Surface	곡면 재구성
+	Remove CV	제어점 제거
+	Show CV	제어점 표시
+	Surface Editing	곡면 편집
+	Surfaces	곡면
+	Trim Surface	곡면 자르기
+	Untrim	자르기 해제
+	Untrim Surface	곡면 자르기 해제
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	휠: 줌
+	Wheel Pan	휠: 초점이동
+	Wheel Orbit	휠: 궤도
+	Wheel Look	휠: 보기
+	Wheel Center	휠: 중심
+	Wheel Rewind	휠: 되감기
+	Wheel Walk	휠: 걷기
+	ViewCube Settings	ViewCube 설정
+	Create Camera	카메라 작성
+	Cameras	카메라
+	Change Camera	카메라 변경
+	Delete Camera	카메라 삭제
+	View from Camera	카메라에서 보기
+	Quick View Drawings	도면 빠른 보기
+	Quick View Layouts	배치 빠른 보기
+	Close Quick View Drawings	도면 빠른 보기 닫기
+	Close Quick View Layouts	배치 빠른 보기 닫기
+	ZOOM	줌
+	ORBIT	궤도
+	REWIND	되감기
+	PAN	초점이동
+	CENTER	중심
+	WALK	걷기
+	LOOK	보기
+	Zoom: drag up or down	줌: 위나 아래로 끌기
+	Orbit: drag to turn the model	궤도: 끌어서 모형 회전
+	Rewind: back to the view before	되감기: 이전 뷰로
+	Pan: drag the drawing	초점이동: 도면 끌기
+	Center: click or drag onto a point	중심: 점을 클릭하거나 점으로 끌기
+	Look: drag to look around	보기: 끌어서 둘러보기
+	double-click to look from it	두 번 클릭하여 이 카메라에서 보기
+	Select a command to see its help page.	명령을 선택하여 도움말 페이지를 확인하세요.
+	Command not found.	명령을 찾을 수 없습니다.
+	Aliases:	별칭:
+	Menu:	메뉴:
+	Shortcut:	단축키:
+	Transparent:	투명:
+	Yes (can run inside another command with a leading apostrophe)	예 (선행 아포스트로피로 다른 명령 내에서 실행 가능)
+	JSON parameters:	JSON 매개변수:
+	Run this command	이 명령 실행

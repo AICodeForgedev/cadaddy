@@ -2325,3 +2325,43 @@
 	Add Line Family	線ファミリを追加
 	Save to .pat File...	.pat ファイルに保存...
 	Pattern {name} is offered for new hatches	パターン {name} を新しいハッチングで使えます
+	DGN Import...	DGN 読み込み...
+	DGN Export...	DGN 書き出し...
+	DGN Underlay...	DGN アンダーレイ...
+	Clip DGN Underlay	DGN アンダーレイをクリップ
+	Adjust DGN Underlay	DGN アンダーレイを調整
+	DGN Underlay Levels	DGN アンダーレイのレベル
+	DGN...	DGN...
+	SteeringWheels	ステアリング ホイール
+	SteeringWheel	ステアリング ホイール
+	Wheel Zoom	ホイール: ズーム
+	Wheel Pan	ホイール: 画面移動
+	Wheel Orbit	ホイール: オービット
+	Wheel Look	ホイール: 見回す
+	Wheel Center	ホイール: 中心
+	Wheel Rewind	ホイール: 巻き戻し
+	Wheel Walk	ホイール: ウォーク
+	ViewCube Settings	ViewCube の設定
+	Create Camera	カメラを作成
+	Cameras	カメラ
+	Change Camera	カメラを変更
+	Delete Camera	カメラを削除
+	View from Camera	カメラからのビュー
+	Quick View Drawings	図面のクイック ビュー
+	Quick View Layouts	レイアウトのクイック ビュー
+	Close Quick View Drawings	図面のクイック ビューを閉じる
+	Close Quick View Layouts	レイアウトのクイック ビューを閉じる
+	ZOOM	ズーム
+	ORBIT	オービット
+	REWIND	巻き戻し
+	PAN	画面移動
+	CENTER	中心
+	WALK	ウォーク
+	LOOK	見回す
+	Zoom: drag up or down	ズーム: 上下にドラッグ
+	Orbit: drag to turn the model	オービット: ドラッグしてモデルを回転
+	Rewind: back to the view before	巻き戻し: 前のビューに戻る
+	Pan: drag the drawing	画面移動: 図面をドラッグ
+	Center: click or drag onto a point	中心: 点をクリックまたはドラッグ
+	Look: drag to look around	見回す: ドラッグして見回す
+	double-click to look from it	ダブルクリックしてここから見る

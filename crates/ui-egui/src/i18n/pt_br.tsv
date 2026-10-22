@@ -2998,3 +2998,106 @@
 	DWF Out	Saída DWF
 	DWFx Out	Saída DWFx
 	Enter path of DWF/DWFx file to attach	Insira o caminho do arquivo DWF/DWFx
+	Load Shape File	Carregar arquivo de formas
+	Compile Shape File	Compilar arquivo de formas
+	Make Shape	Criar forma
+	Copy Multiple	Cópia múltipla
+	Attribute Extraction	Extração de atributos
+	Make Linetype	Criar tipo de linha
+	Enter name of shape file to load	Digite o nome do arquivo de formas a carregar
+	Enter name of shape source file to compile	Digite o nome do arquivo-fonte de formas a compilar
+	Enter shape name or [?]	Digite o nome da forma ou [?]
+	Enter the name of the shape	Digite o nome da forma
+	Enter the name of the shape file	Digite o nome do arquivo de formas
+	Enter resolution	Digite a resolução
+	Specify trace width	Especifique a largura do traço
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Segundo ponto ou [Repeat (última)/Divide/Measure/Array (dinâmica)]
+	Number of copies	Número de cópias
+	Specify array corner	Especifique o canto da matriz
+	Enter extraction type or enable object selection	Digite o tipo de extração ou ative a seleção de objetos
+	Enter template file name	Digite o nome do arquivo de modelo
+	Enter extract file name	Digite o nome do arquivo de extração
+	Enter linetype file name	Digite o nome do arquivo de tipos de linha
+	Enter linetype name	Digite o nome do tipo de linha
+	Enter linetype description	Digite a descrição do tipo de linha
+	Specify starting point for line definition	Especifique o ponto inicial da definição da linha
+	Specify ending point for line definition	Especifique o ponto final da definição da linha
+	Enter name of saved filter	Digite o nome do filtro salvo
+	Enter name to save the filter as	Digite o nome com o qual salvar o filtro
+	Enter filter to save	Digite o filtro a salvar
+	Enter name of saved filter to delete	Digite o nome do filtro salvo a excluir
+	Add (AND)	Adicionar (E)
+	Add (OR)	Adicionar (OU)
+	Saved filters:	Filtros salvos:
+	(none)	(nenhum)
+	Apply to current selection	Aplicar à seleção atual
+	DGN Import...	Importar DGN...
+	DGN Export...	Exportar DGN...
+	DGN Underlay...	Referência subjacente DGN...
+	Clip DGN Underlay	Recortar referência DGN
+	Adjust DGN Underlay	Ajustar referência DGN
+	DGN Underlay Levels	Níveis da referência DGN
+	DGN...	DGN...
+	Add CV	Adicionar ponto de controle
+	Blend Surface	Superfície de mesclagem
+	Convert to Solid	Converter em sólido
+	Convert to Surface	Converter em superfície
+	Extend Surface	Estender superfície
+	Fillet Surface	Concordância de superfície
+	Hide CV	Ocultar pontos de controle
+	Interference Checking	Verificação de interferência
+	Offset Surface	Deslocar superfície
+	Patch	Remendo
+	Patch Surface	Superfície de remendo
+	Planar	Plana
+	Planar Surface	Superfície plana
+	Rebuild Surface	Reconstruir superfície
+	Remove CV	Remover ponto de controle
+	Show CV	Mostrar pontos de controle
+	Surface Editing	Edição de superfícies
+	Surfaces	Superfícies
+	Trim Surface	Aparar superfície
+	Untrim	Desfazer aparo
+	Untrim Surface	Desfazer aparo da superfície
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Roda: zoom
+	Wheel Pan	Roda: pan
+	Wheel Orbit	Roda: órbita
+	Wheel Look	Roda: olhar
+	Wheel Center	Roda: centro
+	Wheel Rewind	Roda: retroceder
+	Wheel Walk	Roda: caminhar
+	ViewCube Settings	Configurações do ViewCube
+	Create Camera	Criar câmera
+	Cameras	Câmeras
+	Change Camera	Alterar câmera
+	Delete Camera	Excluir câmera
+	View from Camera	Vista da câmera
+	Quick View Drawings	Visualização rápida de desenhos
+	Quick View Layouts	Visualização rápida de layouts
+	Close Quick View Drawings	Fechar visualização rápida de desenhos
+	Close Quick View Layouts	Fechar visualização rápida de layouts
+	ZOOM	ZOOM
+	ORBIT	ÓRBITA
+	REWIND	RETROCEDER
+	PAN	PAN
+	CENTER	CENTRO
+	WALK	CAMINHAR
+	LOOK	OLHAR
+	Zoom: drag up or down	Zoom: arraste para cima ou para baixo
+	Orbit: drag to turn the model	Órbita: arraste para girar o modelo
+	Rewind: back to the view before	Retroceder: volta à vista anterior
+	Pan: drag the drawing	Pan: arraste o desenho
+	Center: click or drag onto a point	Centro: clique ou arraste até um ponto
+	Look: drag to look around	Olhar: arraste para olhar ao redor
+	double-click to look from it	clique duas vezes para olhar dela
+	Select a command to see its help page.	Selecione um comando para ver sua página de ajuda.
+	Command not found.	Comando não encontrado.
+	Aliases:	Aliases:
+	Menu:	Menu:
+	Shortcut:	Atalho:
+	Transparent:	Transparente:
+	Yes (can run inside another command with a leading apostrophe)	Sim (pode ser executado dentro de outro comando com um apóstrofo inicial)
+	JSON parameters:	Parâmetros JSON:
+	Run this command	Executar este comando

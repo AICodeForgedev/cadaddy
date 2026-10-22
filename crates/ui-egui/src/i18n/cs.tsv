@@ -2972,3 +2972,106 @@ menu	Modify	Modifikace
 	DWF Out	Výstup DWF
 	DWFx Out	Výstup DWFx
 	Enter path of DWF/DWFx file to attach	Zadejte cestu k souboru DWF/DWFx
+	Load Shape File	Načíst soubor tvarů
+	Compile Shape File	Kompilovat soubor tvarů
+	Make Shape	Vytvořit tvar
+	Copy Multiple	Vícenásobná kopie
+	Attribute Extraction	Extrakce atributů
+	Make Linetype	Vytvořit typ čáry
+	Enter name of shape file to load	Zadejte název souboru tvarů k načtení
+	Enter name of shape source file to compile	Zadejte název zdrojového souboru tvarů ke kompilaci
+	Enter shape name or [?]	Zadejte název tvaru nebo [?]
+	Enter the name of the shape	Zadejte název tvaru
+	Enter the name of the shape file	Zadejte název souboru tvarů
+	Enter resolution	Zadejte rozlišení
+	Specify trace width	Zadejte šířku stopy
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Druhý bod nebo [Repeat (poslední)/Divide/Measure/Array (dynamické)]
+	Number of copies	Počet kopií
+	Specify array corner	Zadejte roh pole
+	Enter extraction type or enable object selection	Zadejte typ extrakce nebo povolte výběr objektů
+	Enter template file name	Zadejte název souboru šablony
+	Enter extract file name	Zadejte název souboru extrakce
+	Enter linetype file name	Zadejte název souboru typů čar
+	Enter linetype name	Zadejte název typu čáry
+	Enter linetype description	Zadejte popis typu čáry
+	Specify starting point for line definition	Zadejte počáteční bod definice čáry
+	Specify ending point for line definition	Zadejte koncový bod definice čáry
+	Enter name of saved filter	Zadejte název uloženého filtru
+	Enter name to save the filter as	Zadejte název, pod kterým filtr uložit
+	Enter filter to save	Zadejte filtr k uložení
+	Enter name of saved filter to delete	Zadejte název uloženého filtru k odstranění
+	Add (AND)	Přidat (A)
+	Add (OR)	Přidat (NEBO)
+	Saved filters:	Uložené filtry:
+	(none)	(žádný)
+	Apply to current selection	Použít na aktuální výběr
+	DGN Import...	Import DGN...
+	DGN Export...	Export DGN...
+	DGN Underlay...	Podklad DGN...
+	Clip DGN Underlay	Oříznout podklad DGN
+	Adjust DGN Underlay	Upravit podklad DGN
+	DGN Underlay Levels	Úrovně podkladu DGN
+	DGN...	DGN...
+	Add CV	Přidat řídicí bod
+	Blend Surface	Přechodová plocha
+	Convert to Solid	Převést na těleso
+	Convert to Surface	Převést na plochu
+	Extend Surface	Prodloužit plochu
+	Fillet Surface	Zaoblit plochu
+	Hide CV	Skrýt řídicí body
+	Interference Checking	Kontrola kolizí
+	Offset Surface	Odsadit plochu
+	Patch	Záplata
+	Patch Surface	Záplatová plocha
+	Planar	Rovinná
+	Planar Surface	Rovinná plocha
+	Rebuild Surface	Přestavět plochu
+	Remove CV	Odebrat řídicí bod
+	Show CV	Zobrazit řídicí body
+	Surface Editing	Úpravy ploch
+	Surfaces	Plochy
+	Trim Surface	Oříznout plochu
+	Untrim	Zrušit oříznutí
+	Untrim Surface	Zrušit oříznutí plochy
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Kolo: zoom
+	Wheel Pan	Kolo: posun
+	Wheel Orbit	Kolo: orbit
+	Wheel Look	Kolo: rozhlédnout
+	Wheel Center	Kolo: střed
+	Wheel Rewind	Kolo: zpět
+	Wheel Walk	Kolo: chůze
+	ViewCube Settings	Nastavení ViewCube
+	Create Camera	Vytvořit kameru
+	Cameras	Kamery
+	Change Camera	Změnit kameru
+	Delete Camera	Odstranit kameru
+	View from Camera	Pohled z kamery
+	Quick View Drawings	Rychlý náhled výkresů
+	Quick View Layouts	Rychlý náhled rozvržení
+	Close Quick View Drawings	Zavřít rychlý náhled výkresů
+	Close Quick View Layouts	Zavřít rychlý náhled rozvržení
+	ZOOM	ZOOM
+	ORBIT	ORBIT
+	REWIND	ZPĚT
+	PAN	POSUN
+	CENTER	STŘED
+	WALK	CHŮZE
+	LOOK	ROZHLÉDNOUT
+	Zoom: drag up or down	Zoom: táhněte nahoru nebo dolů
+	Orbit: drag to turn the model	Orbit: tažením otočíte model
+	Rewind: back to the view before	Zpět: na předchozí pohled
+	Pan: drag the drawing	Posun: táhněte výkres
+	Center: click or drag onto a point	Střed: klikněte nebo táhněte na bod
+	Look: drag to look around	Rozhlédnout: tažením se rozhlédnete
+	double-click to look from it	poklepáním se podíváte z ní
+	Select a command to see its help page.	Vyberte příkaz pro zobrazení jeho nápovědy.
+	Command not found.	Příkaz nenalezen.
+	Aliases:	Aliasy:
+	Menu:	Nabídka:
+	Shortcut:	Zkratka:
+	Transparent:	Transparentní:
+	Yes (can run inside another command with a leading apostrophe)	Ano (lze spustit uvnitř jiného příkazu s úvodním apostrofem)
+	JSON parameters:	Parametry JSON:
+	Run this command	Spustit tento příkaz

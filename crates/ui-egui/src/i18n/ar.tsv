@@ -2987,3 +2987,106 @@ menu	View	عرض
 	DWF Out	تصدير DWF
 	DWFx Out	تصدير DWFx
 	Enter path of DWF/DWFx file to attach	أدخل مسار ملف DWF/DWFx للإرفاق
+	Load Shape File	تحميل ملف الأشكال
+	Compile Shape File	ترجمة ملف الأشكال
+	Make Shape	إنشاء شكل
+	Copy Multiple	نسخ متعدد
+	Attribute Extraction	استخراج السمات
+	Make Linetype	إنشاء نوع خط
+	Enter name of shape file to load	أدخل اسم ملف الأشكال المراد تحميله
+	Enter name of shape source file to compile	أدخل اسم ملف مصدر الأشكال المراد ترجمته
+	Enter shape name or [?]	أدخل اسم الشكل أو [?]
+	Enter the name of the shape	أدخل اسم الشكل
+	Enter the name of the shape file	أدخل اسم ملف الأشكال
+	Enter resolution	أدخل الدقة
+	Specify trace width	حدد عرض الخط العريض
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	النقطة الثانية أو [Repeat (الأخير)/Divide/Measure/Array (ديناميكي)]
+	Number of copies	عدد النسخ
+	Specify array corner	حدد زاوية المصفوفة
+	Enter extraction type or enable object selection	أدخل نوع الاستخراج أو فعّل تحديد الكائنات
+	Enter template file name	أدخل اسم ملف القالب
+	Enter extract file name	أدخل اسم ملف الاستخراج
+	Enter linetype file name	أدخل اسم ملف أنواع الخطوط
+	Enter linetype name	أدخل اسم نوع الخط
+	Enter linetype description	أدخل وصف نوع الخط
+	Specify starting point for line definition	حدد نقطة البداية لتعريف الخط
+	Specify ending point for line definition	حدد نقطة النهاية لتعريف الخط
+	Enter name of saved filter	أدخل اسم عامل التصفية المحفوظ
+	Enter name to save the filter as	أدخل الاسم الذي يُحفظ به عامل التصفية
+	Enter filter to save	أدخل عامل التصفية المراد حفظه
+	Enter name of saved filter to delete	أدخل اسم عامل التصفية المحفوظ المراد حذفه
+	Add (AND)	إضافة (و)
+	Add (OR)	إضافة (أو)
+	Saved filters:	عوامل التصفية المحفوظة:
+	(none)	(لا شيء)
+	Apply to current selection	تطبيق على التحديد الحالي
+	DGN Import...	استيراد DGN...
+	DGN Export...	تصدير DGN...
+	DGN Underlay...	طبقة DGN سفلية...
+	Clip DGN Underlay	قص طبقة DGN السفلية
+	Adjust DGN Underlay	ضبط طبقة DGN السفلية
+	DGN Underlay Levels	مستويات طبقة DGN السفلية
+	DGN...	DGN...
+	Add CV	إضافة نقطة تحكم
+	Blend Surface	سطح مزج
+	Convert to Solid	تحويل إلى مجسم
+	Convert to Surface	تحويل إلى سطح
+	Extend Surface	تمديد السطح
+	Fillet Surface	تقويس السطح
+	Hide CV	إخفاء نقاط التحكم
+	Interference Checking	فحص التداخل
+	Offset Surface	إزاحة السطح
+	Patch	رقعة
+	Patch Surface	سطح رقعة
+	Planar	مستوٍ
+	Planar Surface	سطح مستوٍ
+	Rebuild Surface	إعادة بناء السطح
+	Remove CV	إزالة نقطة تحكم
+	Show CV	إظهار نقاط التحكم
+	Surface Editing	تحرير الأسطح
+	Surfaces	الأسطح
+	Trim Surface	قص السطح
+	Untrim	إلغاء القص
+	Untrim Surface	إلغاء قص السطح
+	SteeringWheels	عجلات التوجيه
+	SteeringWheel	عجلة التوجيه
+	Wheel Zoom	العجلة: تكبير
+	Wheel Pan	العجلة: تحريك
+	Wheel Orbit	العجلة: مدار
+	Wheel Look	العجلة: نظر
+	Wheel Center	العجلة: مركز
+	Wheel Rewind	العجلة: إرجاع
+	Wheel Walk	العجلة: مشي
+	ViewCube Settings	إعدادات ViewCube
+	Create Camera	إنشاء كاميرا
+	Cameras	الكاميرات
+	Change Camera	تغيير الكاميرا
+	Delete Camera	حذف الكاميرا
+	View from Camera	العرض من الكاميرا
+	Quick View Drawings	عرض سريع للرسومات
+	Quick View Layouts	عرض سريع للتخطيطات
+	Close Quick View Drawings	إغلاق العرض السريع للرسومات
+	Close Quick View Layouts	إغلاق العرض السريع للتخطيطات
+	ZOOM	تكبير
+	ORBIT	مدار
+	REWIND	إرجاع
+	PAN	تحريك
+	CENTER	مركز
+	WALK	مشي
+	LOOK	نظر
+	Zoom: drag up or down	تكبير: اسحب لأعلى أو لأسفل
+	Orbit: drag to turn the model	مدار: اسحب لتدوير النموذج
+	Rewind: back to the view before	إرجاع: إلى العرض السابق
+	Pan: drag the drawing	تحريك: اسحب الرسم
+	Center: click or drag onto a point	مركز: انقر أو اسحب إلى نقطة
+	Look: drag to look around	نظر: اسحب للنظر حولك
+	double-click to look from it	انقر نقرًا مزدوجًا للنظر منها
+	Select a command to see its help page.	حدد أمرًا لعرض صفحة المساعدة الخاصة به.
+	Command not found.	الأمر غير موجود.
+	Aliases:	الأسماء المستعارة:
+	Menu:	القائمة:
+	Shortcut:	اختصار:
+	Transparent:	شفاف:
+	Yes (can run inside another command with a leading apostrophe)	نعم (يمكن تشغيله داخل أمر آخر بفاصلة عليا بادئة)
+	JSON parameters:	معاملات JSON:
+	Run this command	تشغيل هذا الأمر

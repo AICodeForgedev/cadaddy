@@ -2809,3 +2809,106 @@
 	DWF Out	DWF-Ausgabe
 	DWFx Out	DWFx-Ausgabe
 	Enter path of DWF/DWFx file to attach	Pfad der DWF/DWFx-Datei eingeben
+	Load Shape File	Formdatei laden
+	Compile Shape File	Formdatei kompilieren
+	Make Shape	Form erstellen
+	Copy Multiple	Mehrfach kopieren
+	Attribute Extraction	Attributextraktion
+	Make Linetype	Linientyp erstellen
+	Enter name of shape file to load	Name der zu ladenden Formdatei eingeben
+	Enter name of shape source file to compile	Name der zu kompilierenden Formquelldatei eingeben
+	Enter shape name or [?]	Formnamen eingeben oder [?]
+	Enter the name of the shape	Namen der Form eingeben
+	Enter the name of the shape file	Namen der Formdatei eingeben
+	Enter resolution	Auflösung eingeben
+	Specify trace width	Breite der Spur angeben
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Zweiter Punkt oder [Repeat (letzte)/Divide/Measure/Array (dynamisch)]
+	Number of copies	Anzahl der Kopien
+	Specify array corner	Reihenecke angeben
+	Enter extraction type or enable object selection	Extraktionstyp eingeben oder Objektwahl aktivieren
+	Enter template file name	Namen der Vorlagendatei eingeben
+	Enter extract file name	Namen der Extraktionsdatei eingeben
+	Enter linetype file name	Namen der Linientypdatei eingeben
+	Enter linetype name	Linientypnamen eingeben
+	Enter linetype description	Linientypbeschreibung eingeben
+	Specify starting point for line definition	Startpunkt der Liniendefinition angeben
+	Specify ending point for line definition	Endpunkt der Liniendefinition angeben
+	Enter name of saved filter	Namen des gespeicherten Filters eingeben
+	Enter name to save the filter as	Namen eingeben, unter dem der Filter gespeichert wird
+	Enter filter to save	Zu speichernden Filter eingeben
+	Enter name of saved filter to delete	Namen des zu löschenden gespeicherten Filters eingeben
+	Add (AND)	Hinzufügen (UND)
+	Add (OR)	Hinzufügen (ODER)
+	Saved filters:	Gespeicherte Filter:
+	(none)	(keiner)
+	Apply to current selection	Auf aktuelle Auswahl anwenden
+	DGN Import...	DGN-Import...
+	DGN Export...	DGN-Export...
+	DGN Underlay...	DGN-Unterlage...
+	Clip DGN Underlay	DGN-Unterlage zuschneiden
+	Adjust DGN Underlay	DGN-Unterlage anpassen
+	DGN Underlay Levels	Ebenen der DGN-Unterlage
+	DGN...	DGN...
+	Add CV	Kontrollpunkt hinzufügen
+	Blend Surface	Übergangsfläche
+	Convert to Solid	In Volumenkörper umwandeln
+	Convert to Surface	In Fläche umwandeln
+	Extend Surface	Fläche dehnen
+	Fillet Surface	Flächenabrundung
+	Hide CV	Kontrollpunkte ausblenden
+	Interference Checking	Überlagerungsprüfung
+	Offset Surface	Fläche versetzen
+	Patch	Flicken
+	Patch Surface	Flickenfläche
+	Planar	Eben
+	Planar Surface	Ebene Fläche
+	Rebuild Surface	Fläche neu erstellen
+	Remove CV	Kontrollpunkt entfernen
+	Show CV	Kontrollpunkte einblenden
+	Surface Editing	Flächenbearbeitung
+	Surfaces	Flächen
+	Trim Surface	Fläche stutzen
+	Untrim	Stutzen aufheben
+	Untrim Surface	Stutzen der Fläche aufheben
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Rad: Zoom
+	Wheel Pan	Rad: Pan
+	Wheel Orbit	Rad: Orbit
+	Wheel Look	Rad: Umsehen
+	Wheel Center	Rad: Mitte
+	Wheel Rewind	Rad: Zurück
+	Wheel Walk	Rad: Gehen
+	ViewCube Settings	ViewCube-Einstellungen
+	Create Camera	Kamera erstellen
+	Cameras	Kameras
+	Change Camera	Kamera ändern
+	Delete Camera	Kamera löschen
+	View from Camera	Ansicht aus Kamera
+	Quick View Drawings	Schnellansicht Zeichnungen
+	Quick View Layouts	Schnellansicht Layouts
+	Close Quick View Drawings	Schnellansicht Zeichnungen schließen
+	Close Quick View Layouts	Schnellansicht Layouts schließen
+	ZOOM	ZOOM
+	ORBIT	ORBIT
+	REWIND	ZURÜCK
+	PAN	PAN
+	CENTER	MITTE
+	WALK	GEHEN
+	LOOK	UMSEHEN
+	Zoom: drag up or down	Zoom: nach oben oder unten ziehen
+	Orbit: drag to turn the model	Orbit: ziehen, um das Modell zu drehen
+	Rewind: back to the view before	Zurück: zur vorherigen Ansicht
+	Pan: drag the drawing	Pan: Zeichnung ziehen
+	Center: click or drag onto a point	Mitte: auf einen Punkt klicken oder ziehen
+	Look: drag to look around	Umsehen: ziehen, um sich umzusehen
+	double-click to look from it	doppelklicken, um aus ihr zu sehen
+	Select a command to see its help page.	Wählen Sie einen Befehl, um seine Hilfeseite anzuzeigen.
+	Command not found.	Befehl nicht gefunden.
+	Aliases:	Aliase:
+	Menu:	Menü:
+	Shortcut:	Tastenkürzel:
+	Transparent:	Transparent:
+	Yes (can run inside another command with a leading apostrophe)	Ja (kann innerhalb eines anderen Befehls mit einem führenden Apostroph ausgeführt werden)
+	JSON parameters:	JSON-Parameter:
+	Run this command	Diesen Befehl ausführen

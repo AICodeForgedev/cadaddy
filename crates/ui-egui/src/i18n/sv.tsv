@@ -2999,3 +2999,106 @@ menu	Modify	Ändra
 	DWF Out	DWF-utdata
 	DWFx Out	DWFx-utdata
 	Enter path of DWF/DWFx file to attach	Ange sökväg till DWF/DWFx-fil
+	Load Shape File	Läs in formfil
+	Compile Shape File	Kompilera formfil
+	Make Shape	Skapa form
+	Copy Multiple	Kopiera flera
+	Attribute Extraction	Attributextrahering
+	Make Linetype	Skapa linjetyp
+	Enter name of shape file to load	Ange namnet på formfilen som ska läsas in
+	Enter name of shape source file to compile	Ange namnet på formkällfilen som ska kompileras
+	Enter shape name or [?]	Ange formnamn eller [?]
+	Enter the name of the shape	Ange formens namn
+	Enter the name of the shape file	Ange formfilens namn
+	Enter resolution	Ange upplösning
+	Specify trace width	Ange spårbredd
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Andra punkt eller [Repeat (senaste)/Divide/Measure/Array (dynamisk)]
+	Number of copies	Antal kopior
+	Specify array corner	Ange fältets hörn
+	Enter extraction type or enable object selection	Ange extraheringstyp eller aktivera objektval
+	Enter template file name	Ange mallfilens namn
+	Enter extract file name	Ange extraheringsfilens namn
+	Enter linetype file name	Ange linjetypsfilens namn
+	Enter linetype name	Ange linjetypens namn
+	Enter linetype description	Ange linjetypens beskrivning
+	Specify starting point for line definition	Ange startpunkt för linjedefinitionen
+	Specify ending point for line definition	Ange slutpunkt för linjedefinitionen
+	Enter name of saved filter	Ange namnet på det sparade filtret
+	Enter name to save the filter as	Ange namnet som filtret ska sparas som
+	Enter filter to save	Ange filtret som ska sparas
+	Enter name of saved filter to delete	Ange namnet på det sparade filtret som ska tas bort
+	Add (AND)	Lägg till (OCH)
+	Add (OR)	Lägg till (ELLER)
+	Saved filters:	Sparade filter:
+	(none)	(inget)
+	Apply to current selection	Använd på aktuellt urval
+	DGN Import...	Importera DGN...
+	DGN Export...	Exportera DGN...
+	DGN Underlay...	DGN-underlägg...
+	Clip DGN Underlay	Beskär DGN-underlägg
+	Adjust DGN Underlay	Justera DGN-underlägg
+	DGN Underlay Levels	Nivåer i DGN-underlägg
+	DGN...	DGN...
+	Add CV	Lägg till kontrollpunkt
+	Blend Surface	Övergångsyta
+	Convert to Solid	Konvertera till solid
+	Convert to Surface	Konvertera till yta
+	Extend Surface	Förläng yta
+	Fillet Surface	Avrunda yta
+	Hide CV	Dölj kontrollpunkter
+	Interference Checking	Kollisionskontroll
+	Offset Surface	Förskjut yta
+	Patch	Lapp
+	Patch Surface	Lappyta
+	Planar	Plan
+	Planar Surface	Plan yta
+	Rebuild Surface	Bygg om yta
+	Remove CV	Ta bort kontrollpunkt
+	Show CV	Visa kontrollpunkter
+	Surface Editing	Ytredigering
+	Surfaces	Ytor
+	Trim Surface	Trimma yta
+	Untrim	Ångra trimning
+	Untrim Surface	Ångra trimning av yta
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Hjul: zooma
+	Wheel Pan	Hjul: panorera
+	Wheel Orbit	Hjul: kretsa
+	Wheel Look	Hjul: titta
+	Wheel Center	Hjul: centrera
+	Wheel Rewind	Hjul: spola tillbaka
+	Wheel Walk	Hjul: gå
+	ViewCube Settings	ViewCube-inställningar
+	Create Camera	Skapa kamera
+	Cameras	Kameror
+	Change Camera	Ändra kamera
+	Delete Camera	Ta bort kamera
+	View from Camera	Vy från kamera
+	Quick View Drawings	Snabbvisning av ritningar
+	Quick View Layouts	Snabbvisning av layouter
+	Close Quick View Drawings	Stäng snabbvisning av ritningar
+	Close Quick View Layouts	Stäng snabbvisning av layouter
+	ZOOM	ZOOMA
+	ORBIT	KRETSA
+	REWIND	SPOLA
+	PAN	PANORERA
+	CENTER	CENTRERA
+	WALK	GÅ
+	LOOK	TITTA
+	Zoom: drag up or down	Zooma: dra uppåt eller nedåt
+	Orbit: drag to turn the model	Kretsa: dra för att vrida modellen
+	Rewind: back to the view before	Spola tillbaka: till föregående vy
+	Pan: drag the drawing	Panorera: dra ritningen
+	Center: click or drag onto a point	Centrera: klicka eller dra till en punkt
+	Look: drag to look around	Titta: dra för att se dig omkring
+	double-click to look from it	dubbelklicka för att titta från den
+	Select a command to see its help page.	Välj ett kommando för att se dess hjälpsida.
+	Command not found.	Kommandot hittades inte.
+	Aliases:	Alias:
+	Menu:	Meny:
+	Shortcut:	Genväg:
+	Transparent:	Transparent:
+	Yes (can run inside another command with a leading apostrophe)	Ja (kan köras inuti ett annat kommando med en inledande apostrof)
+	JSON parameters:	JSON-parametrar:
+	Run this command	Kör detta kommando

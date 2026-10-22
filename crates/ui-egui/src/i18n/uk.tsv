@@ -3084,3 +3084,66 @@
 	Center: click or drag onto a point	Центр: клацніть або перетягніть на точку
 	Look: drag to look around	Огляд: перетягніть, щоб роззирнутися
 	double-click to look from it	двічі клацніть, щоб дивитися з неї
+	Load Shape File	Завантажити файл форм
+	Compile Shape File	Компілювати файл форм
+	Make Shape	Створити форму
+	Copy Multiple	Множинне копіювання
+	Attribute Extraction	Вилучення атрибутів
+	Make Linetype	Створити тип лінії
+	Enter name of shape file to load	Введіть назву файлу форм для завантаження
+	Enter name of shape source file to compile	Введіть назву вихідного файлу форм для компіляції
+	Enter shape name or [?]	Введіть назву форми або [?]
+	Enter the name of the shape	Введіть назву форми
+	Enter the name of the shape file	Введіть назву файлу форм
+	Enter resolution	Введіть роздільність
+	Specify trace width	Вкажіть ширину смуги
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Друга точка або [Repeat (остання)/Divide/Measure/Array (динамічний)]
+	Number of copies	Кількість копій
+	Specify array corner	Вкажіть кут масиву
+	Enter extraction type or enable object selection	Введіть тип вилучення або ввімкніть вибір об'єктів
+	Enter template file name	Введіть назву файлу шаблону
+	Enter extract file name	Введіть назву файлу вилучення
+	Enter linetype file name	Введіть назву файлу типів ліній
+	Enter linetype name	Введіть назву типу лінії
+	Enter linetype description	Введіть опис типу лінії
+	Specify starting point for line definition	Вкажіть початкову точку визначення лінії
+	Specify ending point for line definition	Вкажіть кінцеву точку визначення лінії
+	Enter name of saved filter	Введіть назву збереженого фільтра
+	Enter name to save the filter as	Введіть назву, під якою зберегти фільтр
+	Enter filter to save	Введіть фільтр для збереження
+	Enter name of saved filter to delete	Введіть назву збереженого фільтра для видалення
+	Add (AND)	Додати (І)
+	Add (OR)	Додати (АБО)
+	Saved filters:	Збережені фільтри:
+	(none)	(немає)
+	Apply to current selection	Застосувати до поточного вибору
+	Add CV	Додати керувальну точку
+	Blend Surface	Сполучна поверхня
+	Convert to Solid	Перетворити на тіло
+	Convert to Surface	Перетворити на поверхню
+	Extend Surface	Подовжити поверхню
+	Fillet Surface	Заокруглення поверхні
+	Hide CV	Сховати керувальні точки
+	Interference Checking	Перевірка перетинів
+	Offset Surface	Зміщення поверхні
+	Patch	Латка
+	Patch Surface	Поверхня-латка
+	Planar	Плоска
+	Planar Surface	Плоска поверхня
+	Rebuild Surface	Перебудувати поверхню
+	Remove CV	Вилучити керувальну точку
+	Show CV	Показати керувальні точки
+	Surface Editing	Редагування поверхонь
+	Surfaces	Поверхні
+	Trim Surface	Обрізати поверхню
+	Untrim	Скасувати обрізання
+	Untrim Surface	Скасувати обрізання поверхні
+	Select a command to see its help page.	Виберіть команду, щоб побачити її довідку.
+	Command not found.	Команду не знайдено.
+	Aliases:	Псевдоніми:
+	Menu:	Меню:
+	Shortcut:	Клавіша:
+	Transparent:	Прозора:
+	Yes (can run inside another command with a leading apostrophe)	Так (можна запускати всередині іншої команди з початковим апострофом)
+	JSON parameters:	Параметри JSON:
+	Run this command	Виконати цю команду
