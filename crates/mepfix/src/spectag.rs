@@ -39,6 +39,9 @@ pub struct Schedules {
     pub breakers: BTreeMap<(String, String), String>,
     /// What each circuit serves, as the panel schedule describes it (`RECEP/DATA - OFFICE`).
     pub circuits: BTreeMap<(String, String), String>,
+    /// The tags in the electrical equipment schedule (panels, disconnects, transformers): a symbol
+    /// tagged with one is gear, not a luminaire.
+    pub gear: std::collections::BTreeSet<String>,
 }
 
 /// The schedules from the electrical schedule sheet's tables (as [`crate::arch_reader`]
@@ -56,6 +59,9 @@ pub fn schedules_from(tables: &[ReadTable]) -> Schedules {
                     s.luminaires.insert(tag, cell(r, desc).unwrap_or_default());
                 }
             }
+        } else if title.contains("EQUIPMENT SCHEDULE") {
+            let tag = col(&["TAG"]);
+            s.gear.extend(t.rows.iter().filter_map(|r| cell(r, tag)));
         } else if let Some(panel) = title.strip_prefix("PANEL ").and_then(|x| x.strip_suffix(" SCHEDULE")) {
             let (ckt, kind, desc) = (col(&["CKT", "CIRCUIT"]), col(&["TYPE"]), col(&["DESCRIPTION"]));
             for r in &t.rows {
@@ -187,6 +193,9 @@ pub fn tag(
 ) -> Vec<ElementTag> {
     let mut out = Vec::new();
     for d in devices {
+        if d.kind == "light_fixture" && schedules.gear.contains(&d.type_tag) {
+            continue;
+        }
         let mut e = ElementTag {
             id: format!("device:{}:{:.1},{:.1}", d.level, d.drawn_ft[0], d.drawn_ft[1]),
             kind: if d.kind == "light_fixture" { "luminaire".into() } else { d.kind.clone() },
