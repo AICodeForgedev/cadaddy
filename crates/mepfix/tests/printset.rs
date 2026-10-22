@@ -1,9 +1,9 @@
 //! Tests for the print-set project module: creating projects from truth data, running the full
 //! pipeline, checking the dashboard, and testing re-import with delta detection.
 
+use cadaddy_mepfix::generate_hotel;
 use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::printset::{self, Stage, StageStatus};
-use cadaddy_mepfix::generate_hotel;
 use std::sync::atomic::AtomicBool;
 
 /// Generate a hotel fixture set and return its truth (with sheets populated).
@@ -37,11 +37,7 @@ fn sheets_are_classified_from_truth() {
     assert!(disciplines.contains(&"S"), "should have structural sheets");
 
     // Check that levels are assigned to plan sheets.
-    let plan_sheets: Vec<&printset::SheetEntry> = project
-        .sheets
-        .iter()
-        .filter(|s| s.sheet_type == "plan" || s.sheet_type == "rcp")
-        .collect();
+    let plan_sheets: Vec<&printset::SheetEntry> = project.sheets.iter().filter(|s| s.sheet_type == "plan" || s.sheet_type == "rcp").collect();
     assert!(!plan_sheets.is_empty(), "should have plan sheets");
     for sh in &plan_sheets {
         assert!(!sh.level.is_empty(), "plan sheet {} should have a level", sh.number);
@@ -62,7 +58,9 @@ fn classify_stage_completes() {
     let mut project = printset::create_from_truth(&truth);
     let cancel = AtomicBool::new(false);
     let mut progress_count = 0usize;
-    let rec = printset::run_classify(&mut project, None, &cancel, &mut |_| { progress_count += 1; });
+    let rec = printset::run_classify(&mut project, None, &cancel, &mut |_| {
+        progress_count += 1;
+    });
 
     assert_eq!(rec.status, StageStatus::Completed);
     assert_eq!(rec.sheets_processed, rec.sheets_total);
@@ -133,10 +131,7 @@ fn dashboard_reports_gaps_and_rfis() {
         assert!(d.total_clashes > 0, "dashboard should report clashes");
     }
     // The pipeline generates findings (guessed heights, conflicts), so gaps/rfis should exist.
-    assert!(
-        d.open_gaps > 0 || d.open_rfis > 0,
-        "dashboard should have gaps ({}) or rfis ({})", d.open_gaps, d.open_rfis,
-    );
+    assert!(d.open_gaps > 0 || d.open_rfis > 0, "dashboard should have gaps ({}) or rfis ({})", d.open_gaps, d.open_rfis,);
 }
 
 #[test]
@@ -247,10 +242,7 @@ fn project_json_size_stays_reasonable() {
 
     let json = serde_json::to_vec(&project).expect("serialize");
     // The project JSON for a small hotel should be under 1 MB.
-    assert!(
-        json.len() < 1_000_000,
-        "project JSON should be under 1 MB, got {} bytes", json.len()
-    );
+    assert!(json.len() < 1_000_000, "project JSON should be under 1 MB, got {} bytes", json.len());
 }
 
 #[test]
@@ -301,10 +293,7 @@ fn all_hotel_sheets_are_classified() {
     for sheet in &project.sheets {
         assert!(!sheet.number.is_empty(), "sheet should have a number: {:?}", sheet.file);
         assert!(!sheet.discipline.is_empty(), "sheet {} should have a discipline", sheet.number);
-        assert!(
-            sheet.discipline != "unknown" || sheet.sheet_type == "cover",
-            "sheet {} has unknown discipline", sheet.number,
-        );
+        assert!(sheet.discipline != "unknown" || sheet.sheet_type == "cover", "sheet {} has unknown discipline", sheet.number,);
     }
 }
 

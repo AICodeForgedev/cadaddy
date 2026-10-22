@@ -369,18 +369,9 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
 /// Infer the discipline from the sheet number prefix.
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
-    for &(prefix, code) in &[
-        ("FP-", "FP"),
-        ("FA-", "FA"),
-        ("M-", "M"),
-        ("P-", "P"),
-        ("S-", "S"),
-        ("A-", "A"),
-        ("G-", "G"),
-        ("E-", "E"),
-        ("T-", "T"),
-        ("C-", "C"),
-    ] {
+    for &(prefix, code) in
+        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
+    {
         if up.starts_with(prefix) {
             return code.into();
         }
@@ -459,12 +450,7 @@ pub fn create_project(name: &str, dir: &Path) -> Result<PrintSetProject, String>
             continue;
         }
         let hash = file_hash(path).unwrap_or_default();
-        sheets.push(SheetEntry {
-            file: filename.clone(),
-            content_hash: hash,
-            dirty: true,
-            ..SheetEntry::default()
-        });
+        sheets.push(SheetEntry { file: filename.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
     }
     Ok(PrintSetProject {
         schema: SCHEMA.into(),
@@ -472,11 +458,7 @@ pub fn create_project(name: &str, dir: &Path) -> Result<PrintSetProject, String>
         source_dir: dir.display().to_string(),
         sheets,
         revision: "initial".into(),
-        dashboard: Dashboard {
-            total_sheets: files.len(),
-            stages_total: Stage::all().len(),
-            ..Dashboard::default()
-        },
+        dashboard: Dashboard { total_sheets: files.len(), stages_total: Stage::all().len(), ..Dashboard::default() },
         ..PrintSetProject::default()
     })
 }
@@ -509,11 +491,7 @@ pub fn create_from_truth(truth: &Truth) -> PrintSetProject {
         name: truth.project.clone(),
         sheets,
         revision: "initial".into(),
-        dashboard: Dashboard {
-            total_sheets: n,
-            stages_total: Stage::all().len(),
-            ..Dashboard::default()
-        },
+        dashboard: Dashboard { total_sheets: n, stages_total: Stage::all().len(), ..Dashboard::default() },
         ..PrintSetProject::default()
     }
 }
@@ -552,58 +530,55 @@ pub fn run_classify(
 
         // Try to recognise from DXF if we have a loader and the entry is dirty or unclassified.
         if let Some(loader) = &dxf_loader
-            && (entry.dirty || entry.number.is_empty()) {
-                match loader(&entry.file) {
-                    Ok(drawing) => {
-                        let rec = sheet_reader::recognise_dxf(&drawing);
-                        if let Some(e) = project.sheets.get_mut(i) {
-                            e.number = if rec.number.is_empty() {
-                                // Fall back to filename without extension.
-                                entry.file.rsplit('.').next_back().unwrap_or(&entry.file).into()
-                            } else {
-                                rec.number.clone()
-                            };
-                            e.title = rec.title.clone();
-                            e.discipline = if rec.discipline.is_empty() {
-                                infer_discipline(&e.number)
-                            } else {
-                                rec.discipline.clone()
-                            };
-                            e.sheet_type = classify_sheet_type(&e.number, &e.title);
-                            e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
-                            e.scale_text = rec.scale_text.clone();
-                            e.scale = rec.scale;
-                            e.recognised = Some(rec);
-                            e.dirty = false;
-                            e.stage_results.insert(
-                                "classify".into(),
-                                SheetStageResult {
-                                    stage: "classify".into(),
-                                    status: StageStatus::Completed,
-                                    items_found: 1,
-                                    confidence: 1.0,
-                                    ..SheetStageResult::default()
-                                },
-                            );
-                        }
-                        classified += 1;
+            && (entry.dirty || entry.number.is_empty())
+        {
+            match loader(&entry.file) {
+                Ok(drawing) => {
+                    let rec = sheet_reader::recognise_dxf(&drawing);
+                    if let Some(e) = project.sheets.get_mut(i) {
+                        e.number = if rec.number.is_empty() {
+                            // Fall back to filename without extension.
+                            entry.file.rsplit('.').next_back().unwrap_or(&entry.file).into()
+                        } else {
+                            rec.number.clone()
+                        };
+                        e.title = rec.title.clone();
+                        e.discipline = if rec.discipline.is_empty() { infer_discipline(&e.number) } else { rec.discipline.clone() };
+                        e.sheet_type = classify_sheet_type(&e.number, &e.title);
+                        e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
+                        e.scale_text = rec.scale_text.clone();
+                        e.scale = rec.scale;
+                        e.recognised = Some(rec);
+                        e.dirty = false;
+                        e.stage_results.insert(
+                            "classify".into(),
+                            SheetStageResult {
+                                stage: "classify".into(),
+                                status: StageStatus::Completed,
+                                items_found: 1,
+                                confidence: 1.0,
+                                ..SheetStageResult::default()
+                            },
+                        );
                     }
-                    Err(err) => {
-                        if let Some(e) = project.sheets.get_mut(i) {
-                            e.stage_results.insert(
-                                "classify".into(),
-                                SheetStageResult {
-                                    stage: "classify".into(),
-                                    status: StageStatus::Failed,
-                                    error: Some(err),
-                                    ..SheetStageResult::default()
-                                },
-                            );
-                        }
+                    classified += 1;
+                }
+                Err(err) => {
+                    if let Some(e) = project.sheets.get_mut(i) {
+                        e.stage_results.insert(
+                            "classify".into(),
+                            SheetStageResult {
+                                stage: "classify".into(),
+                                status: StageStatus::Failed,
+                                error: Some(err),
+                                ..SheetStageResult::default()
+                            },
+                        );
                     }
                 }
-                continue;
             }
+            continue;
+        }
 
         // If the entry already has data from truth or a previous run, just classify.
         if let Some(e) = project.sheets.get_mut(i) {
@@ -631,16 +606,8 @@ pub fn run_classify(
     }
 
     // Build grid from all recognised sheets (just collect them into a SheetMap).
-    let recognised: Vec<RecognisedSheet> = project
-        .sheets
-        .iter()
-        .filter_map(|s| s.recognised.clone())
-        .collect();
-    project.grid = SheetMap {
-        sheets: recognised,
-        grid_x: Vec::new(),
-        grid_y: Vec::new(),
-    };
+    let recognised: Vec<RecognisedSheet> = project.sheets.iter().filter_map(|s| s.recognised.clone()).collect();
+    project.grid = SheetMap { sheets: recognised, grid_x: Vec::new(), grid_y: Vec::new() };
 
     let rec = StageRecord {
         stage: "classify".into(),
@@ -677,13 +644,7 @@ pub fn run_stage_from_truth(
         .sheets
         .iter()
         .enumerate()
-        .filter(|(_, s)| {
-            if disciplines.is_empty() {
-                true
-            } else {
-                disciplines.iter().any(|d| *d == s.discipline)
-            }
-        })
+        .filter(|(_, s)| if disciplines.is_empty() { true } else { disciplines.iter().any(|d| *d == s.discipline) })
         .filter(|(_, s)| s.sheet_type == "plan" || s.sheet_type == "enlarged_plan" || s.sheet_type == "rcp")
         .map(|(i, _)| i)
         .collect();
@@ -749,19 +710,21 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
         Stage::Classify => (1, 1.0, findings),
         Stage::Ducts => {
             let n = truth.segments.iter().filter(|s| s.kind == "duct" && s.level == level).count();
-            let equip = truth.equipment.iter().filter(|e| e.level == level && (e.kind == "ahu" || e.kind == "vav" || e.kind == "exhaust_fan")).count();
+            let equip =
+                truth.equipment.iter().filter(|e| e.level == level && (e.kind == "ahu" || e.kind == "vav" || e.kind == "exhaust_fan")).count();
             let terms = truth.terminals.iter().filter(|t| t.level == level).count();
             // Add findings for segments without height notes.
             for seg in truth.segments.iter().filter(|s| s.kind == "duct" && s.level == level) {
                 if let Some(h) = &seg.height
-                    && h.note.is_none() {
-                        findings.push(Finding {
-                            kind: "guessed".into(),
-                            description: format!("duct {} height from rules, no note on sheet", seg.id),
-                            severity: 2,
-                            ..Finding::default()
-                        });
-                    }
+                    && h.note.is_none()
+                {
+                    findings.push(Finding {
+                        kind: "guessed".into(),
+                        description: format!("duct {} height from rules, no note on sheet", seg.id),
+                        severity: 2,
+                        ..Finding::default()
+                    });
+                }
             }
             (n + equip + terms, if n > 0 { 0.85 } else { 0.0 }, findings)
         }
@@ -816,12 +779,7 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
 // ─── Run all stages ──────────────────────────────────────────────────────────
 
 /// Run the full pipeline (all stages in order) against truth data. Returns all stage records.
-pub fn run_all_from_truth(
-    project: &mut PrintSetProject,
-    truth: &Truth,
-    cancel: &AtomicBool,
-    progress: &mut ProgressFn<'_>,
-) -> Vec<StageRecord> {
+pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &Truth, cancel: &AtomicBool, progress: &mut ProgressFn<'_>) -> Vec<StageRecord> {
     let mut records = Vec::new();
 
     // Classify first (uses truth data directly since project was created from truth).
@@ -846,11 +804,7 @@ pub fn run_all_from_truth(
 
 /// Recompute the dashboard from the project's current state.
 pub fn update_dashboard(project: &mut PrintSetProject) {
-    let mut d = Dashboard {
-        total_sheets: project.sheets.len(),
-        stages_total: Stage::all().len(),
-        ..Dashboard::default()
-    };
+    let mut d = Dashboard { total_sheets: project.sheets.len(), stages_total: Stage::all().len(), ..Dashboard::default() };
 
     // Per-level and per-discipline aggregation.
     let mut levels: BTreeMap<String, LevelSummary> = BTreeMap::new();
@@ -866,19 +820,15 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
         // Level summary.
         if !sheet.level.is_empty() {
-            let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary {
-                level: sheet.level.clone(),
-                ..LevelSummary::default()
-            });
+            let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary { level: sheet.level.clone(), ..LevelSummary::default() });
             ls.sheets += 1;
         }
 
         // Discipline summary.
         if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
-            let ds = disciplines.entry(sheet.discipline.clone()).or_insert_with(|| DisciplineSummary {
-                discipline: sheet.discipline.clone(),
-                ..DisciplineSummary::default()
-            });
+            let ds = disciplines
+                .entry(sheet.discipline.clone())
+                .or_insert_with(|| DisciplineSummary { discipline: sheet.discipline.clone(), ..DisciplineSummary::default() });
             ds.sheets += 1;
         }
 
@@ -891,20 +841,22 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
                 // Level items.
                 if !sheet.level.is_empty()
-                    && let Some(ls) = levels.get_mut(&sheet.level) {
-                        ls.items += result.items_found;
-                        ls.confidence = (ls.confidence * (ls.sheets.saturating_sub(1)) as f64 + result.confidence) / ls.sheets.max(1) as f64;
-                    }
+                    && let Some(ls) = levels.get_mut(&sheet.level)
+                {
+                    ls.items += result.items_found;
+                    ls.confidence = (ls.confidence * (ls.sheets.saturating_sub(1)) as f64 + result.confidence) / ls.sheets.max(1) as f64;
+                }
 
                 // Discipline items.
                 if !sheet.discipline.is_empty()
-                    && let Some(ds) = disciplines.get_mut(&sheet.discipline) {
-                        ds.items += result.items_found;
-                        ds.confidence = (ds.confidence * (ds.sheets.saturating_sub(1)) as f64 + result.confidence) / ds.sheets.max(1) as f64;
-                        if !ds.stages_done.contains(stage_name) {
-                            ds.stages_done.push(stage_name.clone());
-                        }
+                    && let Some(ds) = disciplines.get_mut(&sheet.discipline)
+                {
+                    ds.items += result.items_found;
+                    ds.confidence = (ds.confidence * (ds.sheets.saturating_sub(1)) as f64 + result.confidence) / ds.sheets.max(1) as f64;
+                    if !ds.stages_done.contains(stage_name) {
+                        ds.stages_done.push(stage_name.clone());
                     }
+                }
 
                 // Findings → gaps and RFIs.
                 for f in &result.findings {
@@ -912,16 +864,18 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
                         "gap" | "guessed" | "missing_tag" | "unreadable" => {
                             d.open_gaps += 1;
                             if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level) {
-                                    ls.gaps += 1;
-                                }
+                                && let Some(ls) = levels.get_mut(&sheet.level)
+                            {
+                                ls.gaps += 1;
+                            }
                         }
                         "rfi" | "conflict" => {
                             d.open_rfis += 1;
                             if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level) {
-                                    ls.rfis += 1;
-                                }
+                                && let Some(ls) = levels.get_mut(&sheet.level)
+                            {
+                                ls.rfis += 1;
+                            }
                         }
                         _ => {}
                     }
@@ -978,11 +932,7 @@ pub fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)])
 }
 
 /// Apply a re-import: update the project with a new set of files, marking changed sheets dirty.
-pub fn apply_reimport(
-    project: &mut PrintSetProject,
-    new_files: &[(String, PathBuf)],
-    revision_label: &str,
-) -> Result<RevisionDelta, String> {
+pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathBuf)], revision_label: &str) -> Result<RevisionDelta, String> {
     let delta = compute_delta(project, new_files)?;
 
     // Record the revision.
@@ -1017,12 +967,7 @@ pub fn apply_reimport(
     for name in &delta.added {
         if let Some((_, path)) = new_files.iter().find(|(n, _)| n == name) {
             let hash = file_hash(path).unwrap_or_default();
-            project.sheets.push(SheetEntry {
-                file: name.clone(),
-                content_hash: hash,
-                dirty: true,
-                ..SheetEntry::default()
-            });
+            project.sheets.push(SheetEntry { file: name.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
         }
     }
 
@@ -1081,18 +1026,23 @@ impl PrintSetProject {
 
     /// Sheet list as JSON.
     pub fn sheets_json(&self) -> serde_json::Value {
-        serde_json::json!(self.sheets.iter().map(|s| {
-            serde_json::json!({
-                "number": s.number,
-                "title": s.title,
-                "discipline": s.discipline,
-                "type": s.sheet_type,
-                "level": s.level,
-                "scale": s.scale_text,
-                "file": s.file,
-                "dirty": s.dirty,
-                "stages": s.stage_results.keys().collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>())
+        serde_json::json!(
+            self.sheets
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "number": s.number,
+                        "title": s.title,
+                        "discipline": s.discipline,
+                        "type": s.sheet_type,
+                        "level": s.level,
+                        "scale": s.scale_text,
+                        "file": s.file,
+                        "dirty": s.dirty,
+                        "stages": s.stage_results.keys().collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        )
     }
 }
