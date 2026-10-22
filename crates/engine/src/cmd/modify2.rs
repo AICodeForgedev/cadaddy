@@ -1603,6 +1603,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
         EntityKind::Face3d(f) => f.corners.iter_mut().for_each(z),
         EntityKind::Mesh(m) => m.vertices.iter_mut().for_each(z),
         // A solid keeps its shape (EXPLODE it to a mesh first to flatten that).
+        EntityKind::Surface(sf) => sf.nurbs.control.iter_mut().for_each(z),
         EntityKind::Region(_) | EntityKind::Solid3d(_) | EntityKind::SectionPlane(_) => {}
         // A light keeps its height: FLATTEN is for drawing geometry.
         EntityKind::Light(_) => {}

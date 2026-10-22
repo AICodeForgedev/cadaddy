@@ -1496,6 +1496,11 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
         EntityKind::Mesh(m) => {
             Some(m.to_faces().into_iter().map(|f| Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Face3d(f) }).collect())
         }
+        // A surface explodes into the mesh of its kept part.
+        EntityKind::Surface(sf) => {
+            let m = sf.mesh(sf.size() / 4000.0);
+            (!m.faces.is_empty()).then(|| vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Mesh(m) }])
+        }
         // A solid explodes into the mesh of its surfaces.
         EntityKind::Solid3d(so) => {
             let m = cadaddy_render::solid_mesh(so, so.mesh_tol());

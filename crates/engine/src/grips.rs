@@ -293,6 +293,9 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         // The base grip moves the solid; the others set a dimension.
         EntityKind::Solid3d(_) if index == 0 => return Some(translated(kind, delta)),
         EntityKind::Solid3d(so) => **so = so.grip_moved(index, delta)?,
+        // With its control vertices shown, a grip moves that vertex (the surface follows it).
+        EntityKind::Surface(sf) if sf.cvs_shown => set_xy(sf.nurbs.control.get_mut(index)?, to),
+        EntityKind::Surface(_) => return None,
         EntityKind::Light(l) => match index {
             0 => set_xy(&mut l.position, to),
             1 => set_xy(&mut l.target, to),
