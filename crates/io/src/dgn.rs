@@ -240,7 +240,7 @@ impl Ctx {
         let d = r.data;
         let level = r.level().max(1);
         self.levels.insert(level);
-        let mut c = Common { layer: format!("Level {level}"), ..Default::default() };
+        let mut c = Common { layer: format!("Level {level}").into(), ..Default::default() };
         if d.len() >= 36 {
             let sym = d.get(34).copied().unwrap_or(0);
             let (style, weight) = (sym & 7, sym >> 3);
@@ -256,7 +256,7 @@ impl Ctx {
             };
             if style > 0 {
                 self.styles.insert(style);
-                c.linetype = STYLES.get(usize::from(style)).copied().unwrap_or("ByLayer").to_string();
+                c.linetype = STYLES.get(usize::from(style)).copied().unwrap_or("ByLayer").into();
             }
             if weight > 0 {
                 let v = u16::from(weight) * 10;
@@ -449,7 +449,7 @@ fn bspline(ctx: &Ctx, header: &Raw, members: &[&Raw]) -> Option<EntityKind> {
     }
     knots.extend(std::iter::repeat_n(1.0, order));
     let weights: Vec<f64> = members.iter().find(|m| m.ty() == 28).map(|m| array(m)).filter(|w| w.len() == n).unwrap_or_default();
-    Some(EntityKind::Spline(Spline { degree: order - 1, knots, control: poles, weights, closed, ..Spline::default() }))
+    Some(EntityKind::Spline(Box::new(Spline { degree: order - 1, knots, control: poles, weights, closed, ..Spline::default() })))
 }
 
 /// A cell's placement: its origin and the 2×2 matrix taking its elements' local coordinates to
@@ -816,7 +816,7 @@ fn sym(d: &Drawing, w: &Writer, c: &Common) -> Sym {
         },
         Color::ByBlock => 7,
     };
-    let lt = if c.linetype.eq_ignore_ascii_case("ByLayer") { layer.map(|l| l.linetype.clone()).unwrap_or_default() } else { c.linetype.clone() };
+    let lt = if c.linetype.eq_ignore_ascii_case("ByLayer") { layer.map(|l| l.linetype.clone()).unwrap_or_default() } else { c.linetype.to_string() };
     let style = STYLES.iter().position(|s| s.eq_ignore_ascii_case(&lt)).unwrap_or(0) as u8;
     let lw = match c.lineweight {
         Lineweight::ByLayer => layer.map(|l| l.lineweight).unwrap_or_default(),

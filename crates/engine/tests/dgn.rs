@@ -13,6 +13,8 @@ fn hooks() {
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
         read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
 }
 
@@ -68,7 +70,7 @@ fn export_then_import_brings_the_drawing_back() {
     assert_eq!(inserts.len(), 3, "{inserts:?}");
     assert!(inserts.iter().all(|b| t.doc().unwrap().block(b).is_some_and(|blk| blk.entities.len() == 1)));
     // Levels became layers, one each for SITE and BLDG.
-    let layers: std::collections::BTreeSet<String> = t.doc().unwrap().model.iter().map(|e| e.common.layer.clone()).collect();
+    let layers: std::collections::BTreeSet<String> = t.doc().unwrap().model.iter().map(|e| e.common.layer.to_string()).collect();
     assert!(layers.iter().all(|l| l.starts_with("Level ")) && layers.len() >= 2, "{layers:?}");
     // The import's temporary block is gone.
     assert!(t.doc().unwrap().blocks.keys().all(|k| !k.starts_with("DGN-")));
