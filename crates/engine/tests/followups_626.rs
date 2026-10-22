@@ -59,7 +59,7 @@ fn viewports(s: &Session, layout: &str, handles: &Value) -> Vec<Viewport> {
         .map(|h| {
             let h = cadaddy_doc::Handle::parse_hex(h.as_str().unwrap()).unwrap();
             match &st.get(h).unwrap().kind {
-                EntityKind::Viewport(v) => v.clone(),
+                EntityKind::Viewport(v) => v.as_ref().clone(),
                 other => panic!("not a viewport: {other:?}"),
             }
         })

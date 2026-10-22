@@ -171,7 +171,7 @@ fn viewport_contents_get_their_pens() {
         anno_scale: None,
     };
     let space = Space::Paper("Layout1".into());
-    d.add(&space, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&space, Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     let l = build_plot(&d, &space, &table(EndStyle::Square, JoinStyle::Object, FillStyle::Object));
     let content: Vec<_> = l.prims.iter().filter(|p| p.handle == VIEWPORT_CONTENT).collect();
     assert_eq!(content.len(), 1);

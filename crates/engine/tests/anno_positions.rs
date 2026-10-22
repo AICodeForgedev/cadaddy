@@ -120,7 +120,7 @@ fn multileaders_and_dimensions_move_their_content() {
     );
     let mut sc = AnnoScale::new("1:2", 1.0, 2.0);
     sc.offset = Vec2::new(0.0, 3.0);
-    e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), sc];
+    e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), sc].into();
     // The dimension line moves; the points it measures stay.
     let EntityKind::Dimension(d) = anno_scaled(&e, 2.0).kind else { panic!() };
     assert_eq!((d.defpt.y, d.p13.y, d.p14.x), (5.0, 0.0, 10.0));
@@ -133,7 +133,7 @@ fn multileaders_and_dimensions_move_their_content() {
     let mut e = entity(&s, m);
     let mut sc = AnnoScale::new("1:2", 1.0, 2.0);
     sc.offset = Vec2::new(1.0, 0.0);
-    e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), sc];
+    e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), sc].into();
     let (EntityKind::MLeader(before), EntityKind::MLeader(after)) = (e.kind.clone(), anno_scaled(&e, 2.0).kind) else { panic!() };
     assert!((after.landing.x - before.landing.x - 1.0).abs() < 1e-9);
     assert_eq!(after.leaders, before.leaders);

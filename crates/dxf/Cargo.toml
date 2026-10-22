@@ -12,3 +12,4 @@ workspace = true
 thiserror = { workspace = true }
 log = { workspace = true }
 encoding_rs = { workspace = true }
+smol_str = { workspace = true }

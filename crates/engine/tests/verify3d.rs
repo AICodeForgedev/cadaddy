@@ -126,7 +126,7 @@ fn of_kind<'a>(r: &'a Value, k: &str) -> Vec<&'a Value> {
 
 fn handle_layer(s: &Session, h: &Value) -> String {
     let h = h.as_str().unwrap();
-    s.doc().unwrap().model.iter().find(|e| e.handle.hex() == h).map(|e| e.common.layer.clone()).unwrap_or_default()
+    s.doc().unwrap().model.iter().find(|e| e.handle.hex() == h).map(|e| e.common.layer.clone()).unwrap_or_default().to_string()
 }
 
 #[test]

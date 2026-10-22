@@ -106,7 +106,7 @@ pub fn target(app: &CadApp) -> Option<(Handle, Viewport)> {
     let sel = app.session.selection();
     let [h] = sel.as_slice() else { return None };
     match &st.doc.space(&st.space)?.get(*h)?.kind {
-        EntityKind::Viewport(v) if v.id != 1 => Some((*h, v.clone())),
+        EntityKind::Viewport(v) if v.id != 1 => Some((*h, v.as_ref().clone())),
         _ => None,
     }
 }

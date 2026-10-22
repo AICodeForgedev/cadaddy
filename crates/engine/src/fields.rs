@@ -538,8 +538,8 @@ fn object_property(d: &Drawing, c: &Code) -> Option<String> {
                 false,
             )
         }
-        "layer" => Some(e.common.layer.clone()),
-        "linetype" => Some(e.common.linetype.clone()),
+        "layer" => Some(e.common.layer.to_string()),
+        "linetype" => Some(e.common.linetype.to_string()),
         "color" => Some(e.common.color.name()),
         "textstring" | "contents" | "value" => match &e.kind {
             EntityKind::Text(t) => Some(t.value.clone()),

@@ -538,7 +538,7 @@ fn report(c: &Comparison, cur: &Drawing, title: &str) -> (String, usize) {
             return;
         }
         n += 1;
-        let (kind, layer) = d.entity(h).map(|e| (e.kind.type_name(), e.common.layer.clone())).unwrap_or(("", String::new()));
+        let (kind, layer) = d.entity(h).map(|e| (e.kind.type_name(), e.common.layer.clone())).unwrap_or(("", String::new().into()));
         rows.push_str(&format!(
             "<tr class=\"{}\"><td>{}</td><td>{status}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{change}</td></tr>\n",
             status.to_ascii_lowercase(),

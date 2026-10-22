@@ -176,7 +176,7 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .collect()
         }
         Kind::Linetypes => {
-            let used = lower(&mut entities(d).map(|e| e.common.linetype.clone()).chain(d.layers.iter().map(|l| l.linetype.clone())));
+            let used = lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())));
             let cur = d.header.str("CELTYPE", "ByLayer");
             d.linetypes
                 .iter()

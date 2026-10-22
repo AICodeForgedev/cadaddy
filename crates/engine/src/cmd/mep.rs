@@ -233,7 +233,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut systems = sp.mep.systems.clone();
     if systems.is_empty() {
-        let mut layers: Vec<String> = ents.iter().map(|e| e.common.layer.clone()).collect();
+        let mut layers: Vec<String> = ents.iter().map(|e| e.common.layer.to_string()).collect();
         layers.sort();
         layers.dedup();
         systems = layers.iter().filter_map(|l| draft_system(l)).collect();
@@ -867,7 +867,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             if let Some(dt) = duct_type_str {
                 xdata.push(t(1000, format!("duct_type:{dt}")));
             }
-            if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
+                .is_ok()
+            {
                 total_runs += 1;
             }
         }
@@ -894,7 +896,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             if let Some(dt) = duct_type_str {
                 xdata.push(t(1000, format!("duct_type:{dt}")));
             }
-            if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(fit_mesh)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(fit_mesh))
+                .is_ok()
+            {
                 total_fittings += 1;
             }
         }
@@ -930,7 +934,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 t(1000, format!("kind:{}", kind_str(sy.kind))),
                 t(1000, format!("part:terminal:{}", term.terminal_kind)),
             ];
-            if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_terminals += 1;
             }
         }
@@ -985,7 +989,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         for (k, v) in e.sources.iter().take(8) {
             xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
         }
-        if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_equipment += 1;
         }
     }

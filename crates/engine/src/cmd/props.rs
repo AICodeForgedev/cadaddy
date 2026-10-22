@@ -308,13 +308,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             cadaddy_doc::set_annotative(e, a, &anno_scale);
         }
         if let Some(l) = str_param(p, "layer") {
-            e.common.layer = l.to_string();
+            e.common.layer = l.into();
         }
         if let Some(c) = color {
             e.common.color = c;
         }
         if let Some(lt) = &linetype {
-            e.common.linetype.clone_from(lt);
+            e.common.linetype = lt.into();
         }
         if let Some(w) = lw {
             e.common.lineweight = w;
@@ -435,7 +435,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     t.rotation = x.to_radians();
                 }
                 if let Some(bg) = &background {
-                    t.background = bg.clone();
+                    t.background = bg.clone().map(Box::new);
                 }
             }
             EntityKind::LwPolyline(pl) => {
@@ -1177,6 +1177,11 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
                     *n = to.clone();
                 }
             };
+            let fix_name = |n: &mut cadaddy_doc::Name| {
+                if n.eq_ignore_ascii_case(&from) {
+                    *n = to.as_str().into();
+                }
+            };
             d.layers.iter_mut().for_each(|l| fix(&mut l.linetype));
             if d.header.str("CELTYPE", "ByLayer").eq_ignore_ascii_case(&from) {
                 d.header.set_str("CELTYPE", &to);
@@ -1187,14 +1192,14 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
             let mut hs = users(&d.model);
             hs.extend(d.layouts.iter().flat_map(|l| users(&l.entities)));
             for h in hs {
-                d.modify_entity(h, |e| fix(&mut e.common.linetype))?;
+                d.modify_entity(h, |e| fix_name(&mut e.common.linetype))?;
             }
             for block in d.blocks.values_mut() {
                 let hs = users(&block.entities);
                 if !hs.is_empty() {
                     let b = std::sync::Arc::make_mut(block);
                     for h in hs {
-                        b.entities.modify(h, |e| fix(&mut e.common.linetype));
+                        b.entities.modify(h, |e| fix_name(&mut e.common.linetype));
                     }
                 }
             }

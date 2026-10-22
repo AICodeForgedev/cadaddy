@@ -521,7 +521,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         let name = room.map_or(String::new(), room_label);
         let mut xdata = wallgen::tag(Part::Ceiling, &level.name, t.tag);
         xdata.push(RawTag { code: 1000, value: format!("room:{}", name.chars().take(240).collect::<String>()) });
-        let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata, ..Common::default() };
+        let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
         if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             ceilings += 1;
             if let Some(i) = t.room {
@@ -563,7 +563,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         }
         let t = |code: i32, v: String| RawTag { code, value: v };
         let xdata = vec![t(1001, wallgen::APP.into()), t(1000, part.into()), t(1000, level.chars().take(255).collect()), t(1000, source.hex())];
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             match part {
                 "column" => columns += 1,
                 "curtainwall" => curtain += 1,

@@ -15,7 +15,7 @@ fn viewports(s: &Session, layout: &str) -> Vec<Viewport> {
         .unwrap()
         .entities
         .iter()
-        .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.clone()) } else { None })
+        .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.as_ref().clone()) } else { None })
         .filter(|v| v.id != 1)
         .collect()
 }

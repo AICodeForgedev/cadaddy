@@ -424,12 +424,12 @@ impl Interactive for GetselM {
             Input::Pick(hs) => {
                 let d = s.doc()?;
                 let Some(e) = hs.first().and_then(|h| d.entity(*h)) else { return Ok(Step::Continue) };
-                if self.layer.is_none() { e.common.layer.clone() } else { e.kind.dxf_name().to_string() }
+                if self.layer.is_none() { e.common.layer.to_string() } else { e.kind.dxf_name().to_string() }
             }
             Input::Point(p) => {
                 let Some(h) = super::curves::pick_at(s, p) else { return Ok(Step::Continue) };
                 let e = super::curves::entity(s, h)?;
-                if self.layer.is_none() { e.common.layer } else { e.kind.dxf_name().to_string() }
+                if self.layer.is_none() { e.common.layer.to_string() } else { e.kind.dxf_name().to_string() }
             }
             _ => return Ok(Step::Continue),
         };

@@ -137,7 +137,7 @@ pub(super) fn run_laymrg(s: &mut Session, p: &Value) -> Result<Value> {
     let moved = for_each_store(d, &set, |store| {
         let hs: Vec<Handle> = on_layers(store, &set).collect();
         for h in &hs {
-            store.modify(*h, |e| e.common.layer = target.clone());
+            store.modify(*h, |e| e.common.layer = target.as_str().into());
         }
         hs.len()
     });
@@ -267,7 +267,7 @@ impl LayerRemove {
         let mut out: Vec<String> = Vec::new();
         for l in hs.iter().filter_map(|h| d.entity(*h)).map(|e| e.common.layer.clone()) {
             if !out.iter().any(|o| o.eq_ignore_ascii_case(&l)) {
-                out.push(l);
+                out.push(l.to_string());
             }
         }
         out

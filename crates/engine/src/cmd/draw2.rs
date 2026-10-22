@@ -2088,7 +2088,7 @@ fn run_spline_cv(s: &mut Session, p: &Value) -> Result<Value> {
     let deg = p.get("degree").and_then(Value::as_u64).unwrap_or(3).clamp(1, 10) as usize;
     let mut sp = Spline::from_control(c, deg);
     sp.closed = closed;
-    added(s.add_entity(EntityKind::Spline(sp))?)
+    added(s.add_entity(EntityKind::Spline(Box::new(sp)))?)
 }
 
 #[derive(Default)]
@@ -2145,7 +2145,7 @@ impl Interactive for SplineCvM {
                         c.extend(self.pts.first().copied());
                         let mut sp = Spline::from_control(c, deg);
                         sp.closed = true;
-                        s.add_entity(EntityKind::Spline(sp))?;
+                        s.add_entity(EntityKind::Spline(Box::new(sp)))?;
                         return Ok(Step::Done);
                     }
                     _ => s.echo(format!("{k}: use SPLINE for fit points.")),
@@ -2154,7 +2154,7 @@ impl Interactive for SplineCvM {
             }
             Input::Enter => {
                 if self.pts.len() >= 2 {
-                    s.add_entity(EntityKind::Spline(Spline::from_control(self.pts.clone(), deg)))?;
+                    s.add_entity(EntityKind::Spline(Box::new(Spline::from_control(self.pts.clone(), deg))))?;
                 }
                 Ok(Step::Done)
             }
@@ -2167,7 +2167,7 @@ impl Interactive for SplineCvM {
         }
         let mut pts = self.pts.clone();
         pts.push(c);
-        vec![EntityKind::Spline(Spline::from_control(pts, self.degree.unwrap_or(3)))]
+        vec![EntityKind::Spline(Box::new(Spline::from_control(pts, self.degree.unwrap_or(3))))]
     }
 }
 

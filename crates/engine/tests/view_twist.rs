@@ -102,7 +102,7 @@ fn named_views_save_and_restore_the_twist() {
 
 fn viewport(s: &Session, h: &str) -> Viewport {
     match s.doc().unwrap().layout("Layout1").unwrap().entities.iter().find(|e| e.handle.hex() == h).map(|e| &e.kind) {
-        Some(EntityKind::Viewport(v)) => v.clone(),
+        Some(EntityKind::Viewport(v)) => v.as_ref().clone(),
         _ => panic!("not a viewport"),
     }
 }

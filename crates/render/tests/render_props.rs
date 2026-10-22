@@ -67,7 +67,7 @@ fn dimensions_take_the_viewport_layer_colour() {
         twist: 0.0,
         anno_scale: None,
     };
-    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     let l = build(&d, &Space::Paper("Layout1".into()), &Options::default());
     let seen: Vec<Rgb> = l.prims.iter().filter(|p| p.handle == VIEWPORT_CONTENT).map(|p| p.color).collect();
     assert!(seen.iter().filter(|c| **c == rgb(3)).count() > 3, "dimension lines, arrows and text: {seen:?}");

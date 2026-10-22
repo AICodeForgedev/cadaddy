@@ -446,7 +446,7 @@ fn missing_layers(d: &mut Drawing, out: &mut Vec<Issue>) {
     for e in each_entity(d) {
         let n = &e.common.layer;
         if !n.trim().is_empty() && known.insert(n.to_ascii_lowercase()) {
-            missing.push(n.clone());
+            missing.push(n.to_string());
         }
     }
     for n in missing {

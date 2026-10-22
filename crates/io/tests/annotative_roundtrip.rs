@@ -28,7 +28,7 @@ fn drawing() -> Drawing {
     d.scales.push(AnnoScale::new("Site plan", 1.0, 250.0));
     d.header.set_str("CANNOSCALE", "1:50");
     d.header.set_i64("ANNOALLVISIBLE", 0);
-    let anno = Common { anno_scales: vec![AnnoScale::new("1:50", 1.0, 50.0), AnnoScale::new("Site plan", 1.0, 250.0)], ..Default::default() };
+    let anno = Common { anno_scales: vec![AnnoScale::new("1:50", 1.0, 50.0), AnnoScale::new("Site plan", 1.0, 250.0)].into(), ..Default::default() };
     d.add(&Space::Model, anno, text("ROOM")).unwrap();
     d.add(&Space::Model, Common::default(), text("PLAIN")).unwrap();
     let mut b = Block::new("TAG");
@@ -47,7 +47,7 @@ fn drawing() -> Drawing {
         row_spacing: 0.0,
         clip: None,
     };
-    let on_paper = Common { anno_scales: vec![AnnoScale::unit()], ..Default::default() };
+    let on_paper = Common { anno_scales: vec![AnnoScale::unit()].into(), ..Default::default() };
     d.add(&Space::Paper("Layout1".into()), on_paper, EntityKind::Insert(ins)).unwrap();
     d.mleader_styles.push(MLeaderStyle { name: "Callout".into(), annotative: true, ..Default::default() });
     d
@@ -71,7 +71,7 @@ fn annotative_scaling_round_trips() {
     assert!(scales_of(&r, "PLAIN").is_empty());
     assert!(r.block("TAG").unwrap().annotative);
     let ins = r.layouts.iter().flat_map(|l| l.entities.iter()).find(|e| matches!(e.kind, EntityKind::Insert(_))).unwrap();
-    assert_eq!(ins.common.anno_scales, [AnnoScale::unit()]);
+    assert_eq!(*ins.common.anno_scales, [AnnoScale::unit()]);
     assert!(r.mleader_styles.iter().find(|s| s.name == "Callout").unwrap().annotative);
     assert!(!r.mleader_styles.iter().find(|s| s.name == "Standard").unwrap().annotative);
 }

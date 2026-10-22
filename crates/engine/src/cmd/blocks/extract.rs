@@ -209,7 +209,7 @@ fn from_drawing(d: &cadaddy_doc::Drawing, name: &str, ents: &[std::sync::Arc<cad
                     block: k.type_name().to_string(),
                     drawing: name.to_string(),
                     handle: e.handle.hex(),
-                    layer: e.common.layer.clone(),
+                    layer: e.common.layer.to_string(),
                     at,
                     rotation,
                     values: Vec::new(),
@@ -486,7 +486,7 @@ fn extract(s: &mut Session, o: &Options, file: Option<&str>, at: Option<Vec2>) -
         let h = insert_table(s, at, o.st.title.as_deref(), &columns, &rows)?;
         if let Ok(hh) = u64::from_str_radix(&h, 16).map(cadaddy_doc::Handle) {
             let xd = o.st.clone();
-            s.doc_mut()?.modify_entity(hh, |e| e.common.xdata = xd.replace_in(&e.common.xdata))?;
+            s.doc_mut()?.modify_entity(hh, |e| e.common.xdata = xd.replace_in(&e.common.xdata).into())?;
         }
         r["table"] = json!(h);
     }

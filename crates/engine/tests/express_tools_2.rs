@@ -146,7 +146,8 @@ fn insert(s: &Session, h: Handle) -> Insert {
 #[test]
 fn blockreplace_keeps_placement_properties_and_attribute_values() {
     let (mut s, refs) = blocks();
-    let before: Vec<(Insert, String)> = refs.iter().map(|r| (insert(&s, *r), s.doc().unwrap().entity(*r).unwrap().common.layer.clone())).collect();
+    let before: Vec<(Insert, String)> =
+        refs.iter().map(|r| (insert(&s, *r), s.doc().unwrap().entity(*r).unwrap().common.layer.to_string())).collect();
     let r = s.execute("blockreplace", &json!({"from": "OLD", "to": "NEW"})).unwrap();
     // Both references and the one inside HOLDER.
     assert_eq!(r["replaced"], 3);

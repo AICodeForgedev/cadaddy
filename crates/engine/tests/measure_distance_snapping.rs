@@ -15,7 +15,7 @@ fn drawing() -> (Drawing, Space) {
     d.add(
         &paper,
         Common::default(),
-        EntityKind::Viewport(Viewport {
+        EntityKind::Viewport(Box::new(Viewport {
             center: Vec3::new(100.0, 50.0, 0.0),
             width: 20.0,
             height: 20.0,
@@ -31,7 +31,7 @@ fn drawing() -> (Drawing, Space) {
             on: true,
             twist: 0.0,
             anno_scale: None,
-        }),
+        })),
     )
     .unwrap();
     (d, paper)

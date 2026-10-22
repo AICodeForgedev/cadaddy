@@ -3,8 +3,12 @@
 //! Runs the engine's `perfbench` example (the dev profile CI builds anyway) over generated
 //! drawings — 1k and 10k objects, and with `--full` also 100k, 500k and a million — timing open
 //! and save as DWG/DXF/.cdy, regen, select all, move all, undo, zoom extents, 3D build, plot to
-//! PDF and close, with each size's peak memory (`peak_mb@size`, MB). Each time is
-//! compared with `perf/budget.json` (today's numbers plus 25 %, from `--update-budget`), under
+//! PDF and close, with each size's peak memory (`peak_mb@size`, MB); with `--full`, from 100k
+//! objects on, also memory measured in fresh processes: the bytes one object holds in the
+//! drawing (`mem_bytes_per_object`) and with its session and display list
+//! (`mem_session_bytes_per_object`), and opening the size's DWG: the most memory the open took
+//! (`mem_open_dwg_peak_mb`, MB) and what the open drawing holds (`mem_open_dwg_live_mb`). Each
+//! number is compared with `perf/budget.json` (today's numbers plus 25 %, from `--update-budget`), under
 //! this machine's platform (`macos-aarch64`, `linux-x86_64`…: each records its own; a platform
 //! with none only gets "no budget" until `--update-budget` runs there): over the budget is a
 //! warning, over twice the budget fails. Times under 5 ms are compared with 5 ms
@@ -68,7 +72,8 @@ pub fn superlinear(results: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
     let mut out = Vec::new();
     for (k, big) in results {
         let Some(op) = k.strip_suffix("@1000000") else { continue };
-        if op.starts_with("peak_mb") {
+        // Memory isn't time (bytes per object stay flat; an open's memory grows with the file).
+        if op.starts_with("peak_mb") || op.starts_with("mem_") {
             continue;
         }
         let Some(small) = results.get(&format!("{op}@100000")) else { continue };
@@ -273,6 +278,8 @@ mod tests {
             ("zoom_extents@1000000", 60.0),
             ("peak_mb@100000", 100.0),
             ("peak_mb@1000000", 5000.0),
+            ("mem_open_dwg_peak_mb@100000", 200.0),
+            ("mem_open_dwg_peak_mb@1000000", 4500.0),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

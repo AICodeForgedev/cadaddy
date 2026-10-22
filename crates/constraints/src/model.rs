@@ -208,7 +208,7 @@ impl Model {
                     // fit point; a control polygon's ends are its first and last points when the
                     // knots are clamped.
                     let ends = !sp.closed && (fit || (clamped(sp, false) && clamped(sp, true)));
-                    m.splines.insert(h, sp.clone());
+                    m.splines.insert(h, sp.as_ref().clone());
                     Shape::Spline { n, fit, ends }
                 }
                 EntityKind::Insert(ins) => {
@@ -554,7 +554,7 @@ impl Model {
                 }
                 (EntityKind::Spline(sp), Shape::Spline { .. }) => {
                     if let Some(rebuilt) = spline.as_ref() {
-                        *sp = rebuilt.clone();
+                        **sp = rebuilt.clone();
                     }
                 }
                 (EntityKind::Insert(ins), Shape::Insert { .. }) => {

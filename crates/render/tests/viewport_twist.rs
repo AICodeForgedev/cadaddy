@@ -21,7 +21,7 @@ fn drawing(twist: f64) -> Drawing {
         anno_scale: None,
         ..Viewport::default()
     };
-    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     d
 }
 

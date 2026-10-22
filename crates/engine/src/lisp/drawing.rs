@@ -191,7 +191,8 @@ fn point_group(code: i32) -> bool {
 
 fn tag_value(t: &Tag) -> Value {
     match &t.value {
-        cadaddy_dxf::Value::Str(s) | cadaddy_dxf::Value::Hex(s) => Value::str(s),
+        cadaddy_dxf::Value::Str(s) => Value::str(s),
+        cadaddy_dxf::Value::Hex(s) => Value::str(s),
         cadaddy_dxf::Value::Real(r) => Value::Real(*r),
         cadaddy_dxf::Value::Int(i) => Value::Int(i32::try_from(*i).unwrap_or(if *i < 0 { i32::MIN } else { i32::MAX })),
         cadaddy_dxf::Value::Bool(b) => Value::Int(i32::from(*b)),
@@ -499,7 +500,7 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
                 if let Some(t) = xdata.iter().find(|t| t.code == 1001 && !known.iter().any(|k| k.eq_ignore_ascii_case(&t.value))) {
                     return Err(LispError::new(format!("bad DXF group: application {} isn't registered (regapp)", t.value)));
                 }
-                common.xdata = xdata;
+                common.xdata = xdata.into();
             }
             Ok((kind, common, k))
         }

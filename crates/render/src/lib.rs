@@ -1249,7 +1249,7 @@ fn resolve_common(ctx: &Ctx, c: &cadaddy_doc::Common, plotting: bool) -> Resolve
     let lt_name = match c.linetype.to_ascii_lowercase().as_str() {
         "bylayer" => layer.map(|l| l.linetype.clone()).unwrap_or_else(|| "Continuous".into()),
         "byblock" => ctx.block_ltype.clone(),
-        _ => c.linetype.clone(),
+        _ => c.linetype.to_string(),
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
     let scale = d.header.f64("LTSCALE", 1.0) * c.ltscale * ctx.lt_factor;
@@ -1543,7 +1543,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     c.color = col;
                 }
                 if let Some(l) = &m.leader_linetype {
-                    c.linetype.clone_from(l);
+                    c.linetype = l.into();
                 }
                 let (r, _, l, _, _, _) = resolve_common(ctx, &c, b.plotting);
                 (r, l)
@@ -2012,7 +2012,7 @@ fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Alig
 }
 
 fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
-    let layer = if e.common.layer == "0" { ctx.block_layer.clone() } else { Some(e.common.layer.clone()) };
+    let layer = if e.common.layer == "0" { ctx.block_layer.clone() } else { Some(e.common.layer.to_string()) };
     let color = match e.common.color {
         Color::ByBlock => ctx.block_color,
         Color::ByLayer => ctx.layer_color(layer.as_deref().unwrap_or("0")).unwrap_or(Color::Index(7)),
@@ -2026,7 +2026,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
     let lt = match e.common.linetype.to_ascii_lowercase().as_str() {
         "byblock" => ctx.block_ltype.clone(),
         "bylayer" => ctx.d.layer(layer.as_deref().unwrap_or("0")).map(|l| l.linetype.clone()).unwrap_or_else(|| "Continuous".into()),
-        _ => e.common.linetype.clone(),
+        _ => e.common.linetype.to_string(),
     };
     Ctx {
         d: ctx.d,

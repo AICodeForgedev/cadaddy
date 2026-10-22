@@ -193,7 +193,7 @@ fn block_entity(d: &Drawing, h: Handle) -> Option<cadaddy_doc::Entity> {
 fn set_clip(d: &mut Drawing, h: Handle, clip: XClip) {
     let put = |e: &mut cadaddy_doc::Entity| {
         if let EntityKind::Insert(i) = &mut e.kind {
-            i.clip = Some(clip.clone());
+            i.clip = Some(Box::new(clip.clone()));
         }
     };
     if d.entity(h).is_some() {

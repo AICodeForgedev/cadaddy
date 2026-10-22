@@ -45,7 +45,7 @@ fn drawing() -> Drawing {
         view_height: 30.0,
         ..Viewport::default()
     };
-    d.add(&Space::Paper("Sheet 2".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&Space::Paper("Sheet 2".into()), Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     d
 }
 

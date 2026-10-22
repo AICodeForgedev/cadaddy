@@ -9,7 +9,7 @@ use cadaddy_engine::geom::{Vec2, Vec3};
 use serde_json::json;
 
 fn mline(style: &MLineStyle) -> EntityKind {
-    EntityKind::MLine(MLine::new(style, &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false, MLineJust::Zero, 1.0))
+    EntityKind::MLine(Box::new(MLine::new(style, &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false, MLineJust::Zero, 1.0)))
 }
 
 fn block(name: &str, style: &MLineStyle, handle: u64) -> Arc<Block> {

@@ -68,7 +68,7 @@ fn a_placed_plan_image_traces_back_at_the_drawings_scale() {
         path: path.clone(),
         ..Image::default()
     };
-    s.add_entity(EntityKind::Image(img)).unwrap();
+    s.add_entity(EntityKind::Image(Box::new(img))).unwrap();
     let r = s.execute("imagetrace", &json!({"text": false})).unwrap();
     assert_eq!((r["lines"].as_u64(), r["walls"].as_u64(), r["circles"].as_u64()), (Some(4), Some(1), Some(1)), "{r}");
     let d = s.doc().unwrap();

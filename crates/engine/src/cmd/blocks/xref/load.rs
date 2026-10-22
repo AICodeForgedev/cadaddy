@@ -62,8 +62,13 @@ pub(crate) fn rename_refs(e: &mut Entity, f: &dyn Fn(Sym, &str) -> Option<String
             *n = to;
         }
     };
-    fix(Sym::Layer, &mut e.common.layer);
-    fix(Sym::Linetype, &mut e.common.linetype);
+    let fix_name = |sym: Sym, n: &mut cadaddy_doc::Name| {
+        if let Some(to) = f(sym, n) {
+            *n = to.into();
+        }
+    };
+    fix_name(Sym::Layer, &mut e.common.layer);
+    fix_name(Sym::Linetype, &mut e.common.linetype);
     let attrib = |a: &mut Attrib| {
         fix(Sym::Style, &mut a.text.style);
         if let Some(l) = &mut a.props.layer {

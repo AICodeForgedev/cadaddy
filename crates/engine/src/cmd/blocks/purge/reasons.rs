@@ -17,8 +17,8 @@ const MAX_HANDLES: usize = 1000;
 /// Names of `kind` that entity `e` uses.
 fn uses(kind: Kind, e: &Entity) -> Vec<String> {
     match kind {
-        Kind::Layers => vec![e.common.layer.clone()],
-        Kind::Linetypes => vec![e.common.linetype.clone()],
+        Kind::Layers => vec![e.common.layer.to_string()],
+        Kind::Linetypes => vec![e.common.linetype.to_string()],
         Kind::Blocks => match &e.kind {
             EntityKind::Insert(i) => vec![i.block.clone()],
             EntityKind::Dimension(dm) => dm.block.iter().cloned().collect(),
@@ -207,7 +207,7 @@ pub(super) fn why(d: &Drawing, kind: Kind, name: &str) -> Vec<Value> {
     let mut groups: BTreeMap<(String, String, String), Vec<Handle>> = BTreeMap::new();
     for (space, e) in top(d) {
         if uses_name(kind, e, name) {
-            let g = groups.entry((space.to_string(), e.kind.type_name().to_string(), e.common.layer.clone())).or_default();
+            let g = groups.entry((space.to_string(), e.kind.type_name().to_string(), e.common.layer.to_string())).or_default();
             if g.len() < MAX_HANDLES {
                 g.push(e.handle);
             }

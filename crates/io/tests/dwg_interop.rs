@@ -133,7 +133,7 @@ fn underlays(d: &Drawing) -> usize {
 #[test]
 fn pdfreference_reads_as_an_underlay_from_dxf() {
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Underlay(underlay())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Underlay(Box::new(underlay()))).unwrap();
     let text = cadaddy_io::write_dxf(&d);
     // As the ODA's converter writes it: the entity (and its class) named PDFREFERENCE.
     let renamed = text.replace("PDFUNDERLAY", "PDFREFERENCE");
@@ -149,7 +149,7 @@ fn pdfreference_reads_as_an_underlay_from_dxf() {
 #[test]
 fn pdfreference_classes_read_as_underlays_through_the_bridge() {
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Underlay(underlay())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Underlay(Box::new(underlay()))).unwrap();
     for v in [cadaddy_io::Version::R2000, cadaddy_io::Version::R2004, cadaddy_io::Version::R2007, cadaddy_io::Version::R2018] {
         let bytes = cadaddy_io::write_dwg(&d, v, cadaddy_io::DwgEngine::Bridge).unwrap();
         // As the ODA's converter saves it: the underlay's class named PDFREFERENCE.
@@ -207,7 +207,7 @@ fn bridge_image_definitions_list_their_reactors() {
         path: "pictures/site plan.png".into(),
         ..Image::default()
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Image(img)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
     for v in [cadaddy_io::Version::R2000, cadaddy_io::Version::R2004] {
         let bytes = cadaddy_io::write_dwg(&d, v, cadaddy_io::DwgEngine::Bridge).unwrap();
         let dwg = cadaddy_dwgcodec::read(&bytes).unwrap();

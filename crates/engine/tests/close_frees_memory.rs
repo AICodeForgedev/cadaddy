@@ -42,9 +42,9 @@ fn closing_a_drawing_drops_its_images_only() {
     let (mine, theirs) = ("close-test-kept.png", "close-test-dropped.png");
     images::insert(mine, pixels());
     images::insert(theirs, pixels());
-    s.add_entity(EntityKind::Image(Image { path: mine.into(), ..Default::default() })).unwrap();
+    s.add_entity(EntityKind::Image(Box::new(Image { path: mine.into(), ..Default::default() }))).unwrap();
     s.execute("new", &json!({})).unwrap();
-    s.add_entity(EntityKind::Image(Image { path: theirs.into(), ..Default::default() })).unwrap();
+    s.add_entity(EntityKind::Image(Box::new(Image { path: theirs.into(), ..Default::default() }))).unwrap();
     s.execute("close", &json!({})).unwrap();
     assert!(images::get(mine).is_some(), "an open drawing's image stays");
     assert!(images::get(theirs).is_none(), "a closed drawing's image is let go");

@@ -23,7 +23,7 @@ fn viewport(x: f64, scale: f64) -> Viewport {
 fn drawing(scale: f64, all_visible: bool) -> Drawing {
     let mut d = Drawing::new_metric();
     d.header.set_i64("ANNOALLVISIBLE", i64::from(all_visible));
-    let anno = Common { anno_scales: vec![AnnoScale::new("1:50", 1.0, 50.0), AnnoScale::new("1:100", 1.0, 100.0)], ..Default::default() };
+    let anno = Common { anno_scales: vec![AnnoScale::new("1:50", 1.0, 50.0), AnnoScale::new("1:100", 1.0, 100.0)].into(), ..Default::default() };
     let text = Text {
         insert: Vec3::ZERO,
         align_pt: None,
@@ -37,7 +37,7 @@ fn drawing(scale: f64, all_visible: bool) -> Drawing {
         valign: Default::default(),
     };
     d.add(&Space::Model, anno, EntityKind::Text(text)).unwrap();
-    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(viewport(50.0, scale))).unwrap();
+    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(Box::new(viewport(50.0, scale)))).unwrap();
     d
 }
 

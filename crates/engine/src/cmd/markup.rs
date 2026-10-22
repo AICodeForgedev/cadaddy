@@ -298,7 +298,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let d = s.doc_mut()?;
         for h in &hs {
             d.modify_entity(*h, |e| {
-                e.common.layer = on.clone();
+                e.common.layer = on.as_str().into();
                 if let Some(c) = color {
                     e.common.color = c;
                 }

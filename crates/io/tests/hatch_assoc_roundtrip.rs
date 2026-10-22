@@ -32,7 +32,7 @@ fn poly(d: &mut Drawing, vs: Vec<PolyVertex>) -> Handle {
 }
 
 fn hatches(d: &Drawing) -> Vec<Hatch> {
-    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.as_ref().clone()) } else { None }).collect()
 }
 
 #[test]
@@ -44,12 +44,16 @@ fn source_boundary_objects_roundtrip() {
         HatchLoop { curves: Vec::new(), vertices: square(0.0, 20.0), outer: true, sources: vec![outer] },
         HatchLoop { curves: Vec::new(), vertices: square(5.0, 5.0), outer: false, sources: vec![island] },
     ];
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(loops.clone(), true))).expect("add");
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch(loops.clone(), true)))).expect("add");
     // A non-associative hatch writes no sources; a source that is gone isn't written.
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(vec![HatchLoop { sources: vec![outer], ..loops[0].clone() }], false)))
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch(vec![HatchLoop { sources: vec![outer], ..loops[0].clone() }], false))))
         .expect("add");
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(vec![HatchLoop { sources: vec![Handle(0xFFFF)], ..loops[0].clone() }], true)))
-        .expect("add");
+    d.add(
+        &Space::Model,
+        Common::default(),
+        EntityKind::Hatch(Box::new(hatch(vec![HatchLoop { sources: vec![Handle(0xFFFF)], ..loops[0].clone() }], true))),
+    )
+    .expect("add");
     let text = write_dxf(&d);
     let back = read_dxf(text.as_bytes()).expect("read");
     let hs = hatches(&back);
@@ -80,7 +84,7 @@ fn sources_after_spline_fit_data_and_hostile_counts() {
     let mut d = Drawing::new_imperial();
     let outer = poly(&mut d, square(0.0, 20.0));
     let loops = vec![HatchLoop { curves: Vec::new(), vertices: square(0.0, 20.0), outer: true, sources: vec![outer] }];
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(loops, true))).expect("add");
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch(loops, true)))).expect("add");
     let p = pairs(&write_dxf(&d));
     let start = p.iter().position(|(c, v)| *c == 0 && v == "HATCH").expect("HATCH");
     let at = start + p.iter().skip(start).position(|(c, _)| *c == 92).expect("92");
@@ -127,11 +131,11 @@ fn a_hatch_in_a_block_keeps_its_boundary_and_the_boundary_its_reactor() {
     let k = EntityKind::LwPolyline(LwPolyline { vertices: square(0.0, 10.0), closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
     b.entities.push(Entity::new(outline, k));
     let loops = vec![HatchLoop { curves: Vec::new(), vertices: square(0.0, 10.0), outer: true, sources: vec![outline] }];
-    b.entities.push(Entity::new(fill, EntityKind::Hatch(hatch(loops, true))));
+    b.entities.push(Entity::new(fill, EntityKind::Hatch(Box::new(hatch(loops, true)))));
     d.blocks.insert("Tag".into(), std::sync::Arc::new(b));
     // A model-space hatch whose source is in the block is not linked to it.
     let stray = vec![HatchLoop { curves: Vec::new(), vertices: square(0.0, 10.0), outer: true, sources: vec![outline] }];
-    let other = d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(stray, true))).expect("add");
+    let other = d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch(stray, true)))).expect("add");
     let p = pairs(&write_dxf(&d));
     let poly = record(&p, "LWPOLYLINE", outline);
     let reactors = ["{ACAD_REACTORS", &fill.hex(), "}"].map(String::from);

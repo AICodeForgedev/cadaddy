@@ -610,7 +610,7 @@ fn drawing_of(meshes: Vec<(Vec<[Vec3; 3]>, Option<Material>)>) -> Result<Drawing
             if !d.materials.iter().any(|x| x.name == mat.name) && !Material::is_builtin(&mat.name) {
                 d.materials.push(mat.clone());
             }
-            c.material = Some(mat.name);
+            c.material = Some(mat.name).into();
         }
         d.add(&Space::Model, c, EntityKind::Mesh(m)).map_err(|e| IoError::Format(e.to_string()))?;
         n += 1;

@@ -16,7 +16,7 @@ fn line(d: &mut Drawing, space: &Space, common: Common) -> Handle {
 }
 
 fn viewport(id: u32) -> EntityKind {
-    EntityKind::Viewport(Viewport {
+    EntityKind::Viewport(Box::new(Viewport {
         center: Vec3::new(50.0, 40.0, 0.0),
         width: 80.0,
         height: 60.0,
@@ -32,7 +32,7 @@ fn viewport(id: u32) -> EntityKind {
         on: true,
         twist: 0.0,
         anno_scale: None,
-    })
+    }))
 }
 
 /// The (code, value) pairs of every `kind` record in DXF text.
@@ -271,7 +271,7 @@ fn mtext_background_masks_survive_dxf_and_dwg() {
     let mut d = Drawing::new_imperial();
     let mt = |bg: Option<MTextBackground>, y: f64| {
         EntityKind::MText(MText {
-            background: bg,
+            background: bg.map(Box::new),
             insert: Vec3::new(0.0, y, 0.0),
             height: 2.5,
             width: 40.0,
@@ -294,7 +294,7 @@ fn mtext_background_masks_survive_dxf_and_dwg() {
         k => panic!("{k:?}"),
     };
     let dxf = cadaddy_io::read_dxf(cadaddy_io::write_dxf(&d).as_bytes()).unwrap();
-    assert_eq!((bg(&dxf, a), bg(&dxf, b), bg(&dxf, c)), (coloured.clone(), window.clone(), None));
+    assert_eq!((bg(&dxf, a), bg(&dxf, b), bg(&dxf, c)), (coloured.clone().map(Box::new), window.clone().map(Box::new), None));
     let dwg = through_dwg(&d);
     let find = |d: &Drawing, y: f64| {
         d.model

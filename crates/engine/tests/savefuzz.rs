@@ -353,7 +353,7 @@ fn drawing(seed: u64, dir: &std::path::Path) -> (Drawing, Vec<String>) {
     // What no command makes: solids, traces, 3D faces, an empty block, blocks nested deep,
     // an array insert.
     let lay = r.pick(&layers).clone();
-    let common = || Common { layer: lay.clone(), ..Common::default() };
+    let common = || Common { layer: lay.as_str().into(), ..Common::default() };
     let q = |x: f64, y: f64, k: f64| [Vec3::new(x, y, 0.0), Vec3::new(x + k, y, 0.0), Vec3::new(x, y + k, 0.0), Vec3::new(x + k, y + k, 0.0)];
     let k = scale * 4.0;
     let (x, y) = (c(&mut r), c(&mut r));

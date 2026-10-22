@@ -79,7 +79,8 @@ fn building() -> Session {
             RawTag { code: 1001, value: "CADADDY_ROOM".into() },
             RawTag { code: 1000, value: "Office".into() },
             RawTag { code: 1000, value: "101".into() },
-        ],
+        ]
+        .into(),
         ..Common::default()
     };
     let d = s.doc_mut().unwrap();

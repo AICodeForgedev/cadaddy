@@ -476,7 +476,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         x
     };
     let add = |d: &mut Drawing, layer: &str, xdata: Vec<RawTag>, m: Mesh| {
-        !m.faces.is_empty() && d.add(&Space::Model, Common { layer: layer.into(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok()
+        !m.faces.is_empty()
+            && d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
     };
     let (mut ceilings, mut grids, mut soffits, mut lights, mut diffusers) = (0, 0, 0, 0, 0);
     for c in sp.rcp.ceilings.iter().take(MAX_ITEMS) {

@@ -216,7 +216,7 @@ fn xplode_at_the_command_line() {
 
 fn vp(s: &Session, h: Handle) -> Viewport {
     match &s.doc().unwrap().entity(h).unwrap().kind {
-        EntityKind::Viewport(v) => v.clone(),
+        EntityKind::Viewport(v) => v.as_ref().clone(),
         other => panic!("not a viewport: {other:?}"),
     }
 }

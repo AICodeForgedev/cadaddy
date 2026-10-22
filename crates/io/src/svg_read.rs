@@ -358,7 +358,7 @@ impl Parser {
         if self.elements > MAX_ELEMENTS {
             return Err(IoError::Format(format!("SVG: more than {MAX_ELEMENTS} elements")));
         }
-        let common = Common { layer: self.layer.clone(), color, ..Common::default() };
+        let common = Common { layer: self.layer.as_str().into(), color, ..Common::default() };
         self.drawing.add(&Space::Model, common, kind).map(|_| ()).map_err(parse_err)
     }
 
@@ -534,7 +534,7 @@ impl Parser {
             background: None,
             pattern_lines: Vec::new(),
         };
-        self.add_colored(EntityKind::Hatch(hatch), color)
+        self.add_colored(EntityKind::Hatch(Box::new(hatch)), color)
     }
 
     /// The hatch loops of `sps` in drawing units: lines and circular arcs as polyline vertices
@@ -821,7 +821,7 @@ impl Parser {
             display: 1 | 2 | if clipping { 4 } else { 0 } | if transparent { 8 } else { 0 },
             ..Image::default()
         };
-        self.add(EntityKind::Image(image))
+        self.add(EntityKind::Image(Box::new(image)))
     }
 
     /// A `data:` image: decoded, then written beside the SVG (once per distinct image).
@@ -1017,7 +1017,7 @@ impl Parser {
     fn flush_ctrl(&mut self, ctrl: &mut Vec<Vec2>) -> Result<()> {
         if ctrl.len() >= 4 {
             let spline = Spline::from_control(std::mem::take(ctrl), 3);
-            self.add(EntityKind::Spline(spline))?;
+            self.add(EntityKind::Spline(Box::new(spline)))?;
         } else {
             ctrl.clear();
         }

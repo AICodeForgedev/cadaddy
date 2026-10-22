@@ -26,14 +26,14 @@ fn drawing(clip: Option<XClip>) -> Drawing {
         rows: 1,
         col_spacing: 0.0,
         row_spacing: 0.0,
-        clip,
+        clip: clip.map(Box::new),
     };
     d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
     d
 }
 
 fn clip_of(d: &Drawing) -> Option<XClip> {
-    d.model.iter().find_map(|e| if let EntityKind::Insert(i) = &e.kind { i.clip.clone() } else { None })
+    d.model.iter().find_map(|e| if let EntityKind::Insert(i) = &e.kind { i.clip.as_deref().cloned() } else { None })
 }
 
 fn square() -> XClip {

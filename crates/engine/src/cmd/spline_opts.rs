@@ -175,7 +175,7 @@ pub(super) fn convert_objects(s: &mut Session, hs: &[Handle], opts: FitOptions) 
         }
         match polyline_spline(&e.kind, opts) {
             Ok(sp) => {
-                s.doc_mut()?.modify_entity(*h, |e| e.kind = EntityKind::Spline(sp))?;
+                s.doc_mut()?.modify_entity(*h, |e| e.kind = EntityKind::Spline(Box::new(sp)))?;
                 n += 1;
             }
             Err(why) => s.echo(format!("Object not converted: {why}.")),
@@ -230,7 +230,7 @@ pub(super) fn run_object(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(other("The object is on a locked layer."));
         }
         let sp = polyline_spline(&e.kind, opts).map_err(|why| other(format!("Object {} not converted: {why}.", h.hex())))?;
-        s.doc_mut()?.modify_entity(*h, |e| e.kind = EntityKind::Spline(sp))?;
+        s.doc_mut()?.modify_entity(*h, |e| e.kind = EntityKind::Spline(Box::new(sp)))?;
         converted.push(h.hex());
     }
     Ok(json!({ "handles": converted }))

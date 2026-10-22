@@ -672,6 +672,7 @@ dependencies = [
  "cadaddy-geom",
  "serde",
  "serde_json",
+ "smol_str",
  "thiserror 2.0.21",
 ]
 
@@ -695,6 +696,7 @@ version = "0.7.8"
 dependencies = [
  "encoding_rs",
  "log",
+ "smol_str",
  "thiserror 2.0.21",
 ]
 

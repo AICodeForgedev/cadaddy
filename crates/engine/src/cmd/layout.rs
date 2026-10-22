@@ -117,7 +117,7 @@ fn layout_viewports(s: &Session) -> Result<Vec<(Handle, Viewport)>> {
         .map(|st| {
             st.iter()
                 .filter_map(|e| match &e.kind {
-                    EntityKind::Viewport(v) if v.id != 1 && v.on && v.height > 1e-12 && v.view_height > 1e-12 => Some((e.handle, v.clone())),
+                    EntityKind::Viewport(v) if v.id != 1 && v.on && v.height > 1e-12 && v.view_height > 1e-12 => Some((e.handle, v.as_ref().clone())),
                     _ => None,
                 })
                 .collect()
@@ -494,7 +494,7 @@ pub(crate) fn default_viewports(d: &mut Drawing) {
         }
         let id = viewports::next_viewport_id(d);
         let vp = viewports::new_viewport(d, rect, id);
-        let _ = d.add(&Space::Paper(name.clone()), cadaddy_doc::Common::default(), EntityKind::Viewport(vp));
+        let _ = d.add(&Space::Paper(name.clone()), cadaddy_doc::Common::default(), EntityKind::Viewport(Box::new(vp)));
         // Zoomed again to what has been drawn by the time the layout is first opened.
         if let Some(l) = d.layouts.iter_mut().find(|l| l.name == name) {
             l.pending_setup = true;
@@ -572,7 +572,7 @@ pub(crate) fn set_up_layout(d: &mut Drawing, name: &str) -> bool {
     if bare {
         let id = viewports::next_viewport_id(d);
         let vp = viewports::new_viewport(d, rect, id);
-        return d.add(&Space::Paper(name.to_string()), cadaddy_doc::Common::default(), EntityKind::Viewport(vp)).is_ok();
+        return d.add(&Space::Paper(name.to_string()), cadaddy_doc::Common::default(), EntityKind::Viewport(Box::new(vp))).is_ok();
     }
     let hs = d.layouts.iter().find(|l| l.name == name).map(|l| viewports_over(l, rect)).unwrap_or_default();
     fit_viewports(d, name, &hs, rect);
@@ -633,7 +633,7 @@ fn add_viewports(s: &mut Session, space: &Space, rect: Bounds2, count: usize, ar
     for r in split(rect, count, arrangement) {
         let id = viewports::next_viewport_id(d);
         let vp = viewports::new_viewport(d, r, id);
-        out.push(d.add(space, common.clone(), EntityKind::Viewport(vp))?);
+        out.push(d.add(space, common.clone(), EntityKind::Viewport(Box::new(vp)))?);
     }
     Ok(out)
 }
@@ -1230,7 +1230,7 @@ mod tests {
             .unwrap()
             .entities
             .iter()
-            .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some((e.handle, v.clone())) } else { None })
+            .filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some((e.handle, v.as_ref().clone())) } else { None })
             .collect()
     }
 

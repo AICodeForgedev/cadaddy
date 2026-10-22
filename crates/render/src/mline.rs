@@ -31,7 +31,7 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, m: &MLine, rgb: Ink, 
             }
             let lt = el.linetype.trim();
             if !lt.is_empty() && !lt.eq_ignore_ascii_case("bylayer") && !lt.eq_ignore_ascii_case("byblock") {
-                c.linetype = lt.to_string();
+                c.linetype = lt.into();
             }
             let (rgb, w, lt, scale, _, _) = resolve_common(ctx, &c, b.plotting);
             let lt = match b.styles.and_then(|s| s.linetype(rgb, b.named)) {

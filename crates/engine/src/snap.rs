@@ -1230,7 +1230,7 @@ mod tests {
             cadaddy_geom::Spline::from_control(vec![Vec2::new(20.0, -6.0), Vec2::new(22.0, 6.0), Vec2::new(25.0, -6.0), Vec2::new(28.0, 6.0)], 3);
         let line2 = cadaddy_geom::Line::new(Vec2::new(18.0, 0.3), Vec2::new(30.0, 0.1));
         d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(18.0, 0.3, 0.0), b: Vec3::new(30.0, 0.1, 0.0) })).unwrap();
-        d.add(&Space::Model, Common::default(), EntityKind::Spline(sp.clone())).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(sp.clone()))).unwrap();
         let pts = sp.tessellate(1e-3);
         let rough: Vec<Vec2> = pts.windows(2).filter_map(|w| cadaddy_geom::line_line(&cadaddy_geom::Line::new(w[0], w[1]), &line2)).collect();
         assert!(!rough.is_empty());

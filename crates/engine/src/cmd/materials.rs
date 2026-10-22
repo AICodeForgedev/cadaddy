@@ -233,7 +233,7 @@ fn rename_refs(d: &mut cadaddy_doc::Drawing, from: &str, to: Option<&str>) -> (u
         let hs: Vec<Handle> =
             store.iter().filter(|e| e.common.material.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(from))).map(|e| e.handle).collect();
         for h in hs {
-            if store.modify(h, |e| e.common.material = to.map(str::to_string)) {
+            if store.modify(h, |e| e.common.material = to.map(str::to_string).into()) {
                 objects += 1;
             }
         }
@@ -351,7 +351,7 @@ fn assign(s: &mut Session, hs: &[Handle], target: Option<String>) -> Result<usiz
     let d = s.doc_mut()?;
     let mut n = 0usize;
     for h in hs {
-        if d.entity(*h).is_some_and(|e| e.common.material != target) && d.modify_entity(*h, |e| e.common.material.clone_from(&target)).is_ok() {
+        if d.entity(*h).is_some_and(|e| *e.common.material != target) && d.modify_entity(*h, |e| e.common.material = target.clone().into()).is_ok() {
             n += 1;
         }
     }

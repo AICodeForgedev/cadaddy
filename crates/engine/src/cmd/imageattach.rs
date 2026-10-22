@@ -336,7 +336,7 @@ fn attach_as(s: &mut Session, path: &str, at: Vec2, width: f64, rotation: f64, f
         name: name.clone(),
         ..Default::default()
     };
-    let handle = s.add_entity(EntityKind::Image(image))?;
+    let handle = s.add_entity(EntityKind::Image(Box::new(image)))?;
     Ok(json!({ "handle": handle.hex(), "name": name, "path": stored, "pixels": [w, h] }))
 }
 

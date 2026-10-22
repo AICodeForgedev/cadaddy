@@ -1428,7 +1428,7 @@ fn blend(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, smooth: bo
     let e1 = curve_end(&k1, p1).ok_or_else(|| other("Select an open line, arc, polyline, ellipse arc or spline."))?;
     let e2 = curve_end(&k2, p2).ok_or_else(|| other("Select an open line, arc, polyline, ellipse arc or spline."))?;
     let sp = blend_spline(e1, e2, smooth).ok_or_else(|| other("The ends coincide."))?;
-    s.add_entity(EntityKind::Spline(sp))
+    s.add_entity(EntityKind::Spline(Box::new(sp)))
 }
 
 fn run_blend(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1511,7 +1511,7 @@ pub(crate) fn reverse_kind(k: &EntityKind) -> Option<EntityKind> {
         EntityKind::Polyline3d(p) => {
             EntityKind::Polyline3d(cadaddy_doc::Polyline3d { points: p.points.iter().rev().copied().collect(), closed: p.closed })
         }
-        EntityKind::Spline(sp) => EntityKind::Spline(curves::reverse_spline(sp)),
+        EntityKind::Spline(sp) => EntityKind::Spline(Box::new(curves::reverse_spline(sp))),
         _ => return None,
     })
 }
@@ -1552,7 +1552,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             z(&mut e.center);
             z(&mut e.major);
         }
-        EntityKind::Helix(h) => *k = EntityKind::Spline(h.spline()),
+        EntityKind::Helix(h) => *k = EntityKind::Spline(Box::new(h.spline())),
         EntityKind::LwPolyline(p) => p.elevation = 0.0,
         EntityKind::Polyline3d(p) => {
             *k = lwpoly(p.points.iter().map(|q| PolyVertex::new(q.xy())).collect(), p.closed);
@@ -1656,11 +1656,11 @@ fn viewport_of(s: &Session, layout: &str, vp: Option<Handle>) -> Option<cadaddy_
         && let Some(e) = d.entity(h)
         && let EntityKind::Viewport(v) = &e.kind
     {
-        return Some(v.clone());
+        return Some(v.as_ref().clone());
     }
     let st = d.space(&Space::Paper(layout.to_string()))?;
     st.iter().find_map(|e| match &e.kind {
-        EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 && v.id != 1 => Some(v.clone()),
+        EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 && v.id != 1 => Some(v.as_ref().clone()),
         _ => None,
     })
 }
@@ -2253,12 +2253,12 @@ pub(crate) fn trim_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<
             if lo > lo_d
                 && let Some(a) = curves::sub_spline(sp, lo_d, lo)
             {
-                v.push(EntityKind::Spline(a));
+                v.push(EntityKind::Spline(Box::new(a)));
             }
             if hi < hi_d
                 && let Some(b) = curves::sub_spline(sp, hi, hi_d)
             {
-                v.push(EntityKind::Spline(b));
+                v.push(EntityKind::Spline(Box::new(b)));
             }
             Ok(v)
         }

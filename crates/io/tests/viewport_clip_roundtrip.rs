@@ -35,7 +35,7 @@ fn drawing(locked: bool, on: bool) -> (Drawing, Handle, Handle) {
         on,
         ..Viewport::default()
     };
-    let v = d.add(&sheet, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    let v = d.add(&sheet, Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     (d, v, b)
 }
 
@@ -50,7 +50,7 @@ fn text_of(gs: &[(String, String)]) -> String {
 
 fn viewport(d: &Drawing, h: Handle) -> Viewport {
     match d.entity(h).map(|e| e.kind.clone()) {
-        Some(EntityKind::Viewport(v)) => v,
+        Some(EntityKind::Viewport(v)) => *v,
         other => panic!("not a viewport: {other:?}"),
     }
 }

@@ -10,7 +10,7 @@ fn last_spline(s: &Session) -> (String, Spline) {
     let d = s.doc().unwrap();
     let Some(e) = d.model.iter().last() else { panic!("empty drawing") };
     let EntityKind::Spline(sp) = &e.kind else { panic!("not a spline: {:?}", e.kind) };
-    (e.handle.hex(), sp.clone())
+    (e.handle.hex(), sp.as_ref().clone())
 }
 
 #[test]

@@ -73,7 +73,7 @@ fn every_kind() -> Drawing {
         EntityKind::MLeader(Box::new(mleader)),
         EntityKind::Table(Box::new(table)),
         EntityKind::Region(Region { loops }),
-        EntityKind::Image(image),
+        EntityKind::Image(Box::new(image)),
         EntityKind::AttDef(Box::new(Attrib {
             tag: "ROOM".into(),
             prompt: "Room?".into(),
@@ -100,7 +100,7 @@ fn every_kind() -> Drawing {
         on: true,
         twist: 0.25,
     };
-    d.add(&paper, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&paper, Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     d.add(&paper, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 1.0, 0.0) })).unwrap();
     d
 }
@@ -412,7 +412,7 @@ fn generated_drawings_roundtrip_exactly() {
             };
             let layer = format!("L{}-ü", i % 3);
             let layer = if d.layers.iter().any(|l| l.name == layer) { layer } else { "0".into() };
-            d.add(&Space::Model, Common { layer, ..Common::default() }, kind).unwrap();
+            d.add(&Space::Model, Common { layer: layer.into(), ..Common::default() }, kind).unwrap();
         }
         let (back, notes) = cycle(&d);
         assert!(notes.is_empty(), "round {round}: {notes:?}");
@@ -504,7 +504,7 @@ fn waste_past_the_limit_compacts_the_file() {
     let h = d.model.iter().next().map(|e| e.handle).unwrap();
     let mut appends = 0;
     for i in 0..20 {
-        d.model.modify(h, |e| e.common.layer = format!("L{i}"));
+        d.model.modify(h, |e| e.common.layer = format!("L{i}").into());
         let (out, s) = save(&d, Some(&state), &no_thumb).unwrap();
         state = s;
         match &out {

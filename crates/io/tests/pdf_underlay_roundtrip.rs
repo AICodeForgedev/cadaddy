@@ -29,13 +29,13 @@ fn underlay(path: &str, page: u32, mirrored: bool) -> Underlay {
 fn drawing() -> Drawing {
     let mut d = Drawing::new_imperial();
     for (p, page, m) in [("C:/jobs/plans.pdf", 2, false), ("C:/jobs/plans.pdf", 2, true), ("/tmp/site.pdf", 1, false)] {
-        d.add(&Space::Model, Common::default(), EntityKind::Underlay(underlay(p, page, m))).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Underlay(Box::new(underlay(p, page, m)))).unwrap();
     }
     d
 }
 
 fn underlays(d: &Drawing) -> Vec<Underlay> {
-    d.model.iter().filter_map(|e| if let EntityKind::Underlay(u) = &e.kind { Some(u.clone()) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::Underlay(u) = &e.kind { Some(u.as_ref().clone()) } else { None }).collect()
 }
 
 fn close(a: &Underlay, b: &Underlay) -> bool {

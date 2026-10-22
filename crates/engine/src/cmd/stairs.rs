@@ -497,7 +497,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> (usize, usize, usize)
         };
         let part = if st.ramp { "ramp" } else { "stair" };
         if !m.faces.is_empty()
-            && d.add(&Space::Model, Common { layer: "3D-Stairs".into(), xdata: tag(part), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
+            && d.add(&Space::Model, Common { layer: "3D-Stairs".into(), xdata: tag(part).into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
         {
             if st.ramp {
                 ramps += 1;
@@ -506,7 +506,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> (usize, usize, usize)
             }
         }
         if !r.faces.is_empty()
-            && d.add(&Space::Model, Common { layer: "3D-Railings".into(), xdata: tag("railing"), ..Common::default() }, EntityKind::Mesh(r)).is_ok()
+            && d.add(&Space::Model, Common { layer: "3D-Railings".into(), xdata: tag("railing").into(), ..Common::default() }, EntityKind::Mesh(r))
+                .is_ok()
         {
             rails += 1;
         }

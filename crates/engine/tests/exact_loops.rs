@@ -76,7 +76,7 @@ fn a_region_of_a_closed_spline_keeps_the_spline() {
     s.execute("spline", &json!({ "fit": [[0, 0], [4, 1], [5, 4], [1, 5]], "closed": true })).unwrap();
     let sp = last(&s);
     let exact = match &s.doc().unwrap().entity(sp).unwrap().kind {
-        EntityKind::Spline(g) => cadaddy_engine::geom::loop_area(&[LoopEdge::Spline(g.clone())]).abs(),
+        EntityKind::Spline(g) => cadaddy_engine::geom::loop_area(&[LoopEdge::Spline(g.as_ref().clone())]).abs(),
         k => panic!("{k:?}"),
     };
     s.execute("region", &json!({ "handles": [sp.hex()] })).unwrap();

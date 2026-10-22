@@ -8,7 +8,7 @@ fn drawing(lt: Linetype, a: Vec2, b: Vec2) -> Drawing {
     let mut d = Drawing::new_imperial();
     let name = lt.name.clone();
     d.linetypes.push(lt);
-    let common = Common { linetype: name, ..Default::default() };
+    let common = Common { linetype: name.into(), ..Default::default() };
     d.add(&Space::Model, common, EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) })).unwrap();
     d
 }

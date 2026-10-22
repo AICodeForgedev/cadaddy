@@ -30,7 +30,7 @@ fn user_linetypes_and_patterns_survive_dxf() {
         background: None,
         pattern_lines: steps.lines.clone(),
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).unwrap();
 
     let back = read_dxf(write_dxf(&d).as_bytes()).unwrap();
     for lt in &lin.items {

@@ -313,7 +313,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 fn repoint(store: &mut cadaddy_doc::EntityStore, old: &str, new: &str) {
     let hs: Vec<_> = store.iter().filter(|e| e.common.layer.eq_ignore_ascii_case(old)).map(|e| e.handle).collect();
     for h in hs {
-        store.modify(h, |e| e.common.layer = new.to_string());
+        store.modify(h, |e| e.common.layer = new.into());
     }
 }
 
@@ -361,7 +361,7 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn obj_layers(s: &Session, p: &Value) -> Result<Vec<String>> {
     let hs = targets(s, p)?;
     let d = s.doc()?;
-    let mut v: Vec<String> = hs.iter().filter_map(|h| d.entity(*h).map(|e| e.common.layer.clone())).collect();
+    let mut v: Vec<String> = hs.iter().filter_map(|h| d.entity(*h).map(|e| e.common.layer.to_string())).collect();
     v.sort();
     v.dedup();
     Ok(v)
@@ -380,7 +380,7 @@ fn run_laymch(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
     d.ensure_layer(&layer);
     for h in &hs {
-        d.modify_entity(*h, |e| e.common.layer = layer.clone())?;
+        d.modify_entity(*h, |e| e.common.layer = layer.as_str().into())?;
     }
     let n = hs.len();
     Ok(json!({ "changed": n, "message": format!("{n} object{} changed to layer \"{layer}\".", if n == 1 { "" } else { "s" }) }))
@@ -391,7 +391,7 @@ fn run_laycur(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
     let cur = d.header.str("CLAYER", "0");
     for h in &hs {
-        d.modify_entity(*h, |e| e.common.layer = cur.clone())?;
+        d.modify_entity(*h, |e| e.common.layer = cur.as_str().into())?;
     }
     Ok(json!({ "changed": hs.len() }))
 }

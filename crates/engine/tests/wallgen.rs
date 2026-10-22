@@ -96,7 +96,7 @@ fn a_room_becomes_walls_a_floor_slab_and_a_ceiling() {
     let (lo, hi) = c.first().map(z_range).unwrap();
     assert!((lo - 96.0).abs() < 1e-3 && (hi - 96.0).abs() < 1e-3);
     // On their own layers.
-    let layers: Vec<String> = s.doc().unwrap().model.iter().filter(|e| made_as(e).is_some()).map(|e| e.common.layer.clone()).collect();
+    let layers: Vec<String> = s.doc().unwrap().model.iter().filter(|e| made_as(e).is_some()).map(|e| e.common.layer.to_string()).collect();
     assert!(layers.iter().all(|l| l.starts_with("3D-")), "{layers:?}");
     // Again: the old objects are replaced, not doubled.
     let again = s.execute("wallgen", &json!({})).unwrap();

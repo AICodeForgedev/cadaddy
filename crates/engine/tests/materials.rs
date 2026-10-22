@@ -56,7 +56,7 @@ fn attach_assign_edit_rename_and_delete() {
     assert_eq!(d.material_of(d.entity(line).unwrap(), None).map(|m| m.name.as_str()), Some("Oak"));
     // Undo takes the assignment back.
     s.undo().unwrap();
-    assert_eq!(s.doc().unwrap().entity(line).unwrap().common.material, None);
+    assert_eq!(s.doc().unwrap().entity(line).unwrap().common.material, None.into());
     s.execute("materialassign", &json!({"handles": [line.hex()], "material": "Oak"})).unwrap();
     // Rename follows every reference; delete clears them.
     s.execute("material.edit", &json!({"name": "Concrete, cast", "rename": "Slab", "roughness": 0.4})).unwrap();
@@ -64,7 +64,7 @@ fn attach_assign_edit_rename_and_delete() {
     assert!((s.doc().unwrap().material("Slab").unwrap().roughness - 0.4).abs() < 1e-12);
     let r = s.execute("material.delete", &json!({"name": "oak"})).unwrap();
     assert_eq!((r["objects"].clone(), r["layers"].clone()), (json!(1), json!(0)));
-    assert_eq!(s.doc().unwrap().entity(line).unwrap().common.material, None);
+    assert_eq!(s.doc().unwrap().entity(line).unwrap().common.material, None.into());
     // Errors: unknown names and layers.
     assert!(s.execute("materialassign", &json!({"handles": [line.hex()], "material": "nope"})).is_err());
     assert!(s.execute("materialattach", &json!({"layer": "nope", "material": "Slab"})).is_err());
@@ -92,7 +92,7 @@ fn cmaterial_gives_new_objects_their_material() {
     // A CMATERIAL a file kept as a handle names nothing: new objects stay ByLayer.
     s.doc_mut().unwrap().header.set_str("CMATERIAL", "1F");
     s.execute("circle", &json!({"center": [5, 0], "radius": 1})).unwrap();
-    assert_eq!(s.doc().unwrap().model.iter().last().unwrap().common.material, None);
+    assert_eq!(s.doc().unwrap().model.iter().last().unwrap().common.material, None.into());
 }
 
 #[test]

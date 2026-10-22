@@ -11,7 +11,7 @@ fn lines(s: &Session) -> Vec<((f64, f64), (f64, f64), String)> {
         .unwrap()
         .model
         .iter()
-        .filter_map(|e| if let EntityKind::Line(l) = &e.kind { Some(((l.a.x, l.a.y), (l.b.x, l.b.y), e.common.layer.clone())) } else { None })
+        .filter_map(|e| if let EntityKind::Line(l) = &e.kind { Some(((l.a.x, l.a.y), (l.b.x, l.b.y), e.common.layer.to_string())) } else { None })
         .collect();
     v.sort_by(|a, b| a.0.1.total_cmp(&b.0.1).then(a.0.0.total_cmp(&b.0.0)));
     v

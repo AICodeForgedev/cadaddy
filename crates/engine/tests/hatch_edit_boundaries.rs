@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 fn hatch(s: &Session, h: &str) -> Hatch {
     match &s.doc().unwrap().entity(Handle::parse_hex(h).unwrap()).unwrap().kind {
-        EntityKind::Hatch(x) => x.clone(),
+        EntityKind::Hatch(x) => x.as_ref().clone(),
         k => panic!("not a hatch: {k:?}"),
     }
 }

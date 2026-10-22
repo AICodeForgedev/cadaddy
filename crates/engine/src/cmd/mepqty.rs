@@ -944,7 +944,7 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
         let rows = t.rows(part);
         let table = make(s.doc()?, at, &rows, p);
         let layer = s.doc()?.header.str("CLAYER", "0");
-        let common = Common { layer, xdata: link_xdata(p, part), ..Common::default() };
+        let common = Common { layer: layer.into(), xdata: link_xdata(p, part).into(), ..Common::default() };
         let h = s.doc_mut()?.add(&Space::Model, common, EntityKind::Table(Box::new(table)))?;
         out["table"] = json!(h.hex());
     }

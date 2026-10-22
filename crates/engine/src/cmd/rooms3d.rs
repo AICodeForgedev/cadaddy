@@ -244,7 +244,8 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             RawTag { code: 1000, value: r.name.chars().take(250).collect() },
             RawTag { code: 1000, value: r.number.clone().unwrap_or_default().chars().take(250).collect() },
         ];
-        let common = Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag, ..Common::default() };
+        let common =
+            Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag.into(), ..Common::default() };
         if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             built += 1;
         }

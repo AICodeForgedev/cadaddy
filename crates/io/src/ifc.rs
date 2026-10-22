@@ -379,14 +379,14 @@ fn class_of(e: &Entity) -> Kind {
     if let Some(t) = tag_strings(e, APP)
         && let Some(class) = t.first().and_then(|c| Class::of_read(c))
     {
-        let name = t.get(2).cloned().filter(|n| !n.is_empty()).unwrap_or_else(|| e.common.layer.clone());
+        let name = t.get(2).cloned().filter(|n| !n.is_empty()).unwrap_or_else(|| e.common.layer.to_string());
         let mut k = kind(class, None, name, String::new());
         // Its predefined type wasn't read: not defined, rather than a guess.
         k.predefined = if class == Class::Space { "SPACE" } else { "NOTDEFINED" };
         k.read_id = t.get(1).filter(|g| is_guid(g)).cloned();
         return k;
     }
-    kind(Class::Proxy, None, e.common.layer.clone(), String::new())
+    kind(Class::Proxy, None, e.common.layer.to_string(), String::new())
 }
 
 /// Whether `g` is an IFC GlobalId: 22 characters of IFC's base-64 alphabet, the first 0–3.
@@ -2118,7 +2118,7 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
             RawTag { code: 1000, value: cap(label, MAX_TAG) },
         ];
         xdata.extend(r.extras(&rel, *id, unit).into_iter().map(|value| RawTag { code: 1000, value }));
-        let mut c = Common { layer, xdata, ..Common::default() };
+        let mut c = Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() };
         if class == "Space" {
             c.transparency = cadaddy_doc::Transparency::Percent(80);
         }

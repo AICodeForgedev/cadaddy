@@ -574,7 +574,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
     let (mut roofs, mut parapets, mut crickets, mut equipment, mut glass) = (0, 0, 0, 0, 0);
     let add = |d: &mut Drawing, layer: &str, xdata: Vec<RawTag>, m: Mesh| {
-        !m.faces.is_empty() && d.add(&Space::Model, Common { layer: layer.into(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok()
+        !m.faces.is_empty()
+            && d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
     };
     for r in sp.exterior.roofs.iter().take(10_000) {
         let Some(level) = sp.level(&r.level) else { continue };

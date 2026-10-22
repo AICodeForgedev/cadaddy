@@ -132,7 +132,7 @@ fn solviews(d: &Drawing) -> Vec<(String, Handle, Viewport, SolInfo)> {
             if let EntityKind::Viewport(v) = &e.kind
                 && let Some(i) = info_of(&e.common)
             {
-                out.push((l.name.clone(), e.handle, v.clone(), i));
+                out.push((l.name.clone(), e.handle, v.as_ref().clone(), i));
             }
         }
     }
@@ -425,7 +425,7 @@ fn run_solview(s: &mut Session, p: &Value) -> Result<Value> {
     d.ensure_layer(VPORTS_LAYER);
     let mut common = Common { layer: VPORTS_LAYER.into(), ..Common::default() };
     store_info(&mut common.xdata, &info);
-    let h = d.add(&Space::Paper(layout.clone()), common, EntityKind::Viewport(vp))?;
+    let h = d.add(&Space::Paper(layout.clone()), common, EntityKind::Viewport(Box::new(vp)))?;
     Ok(json!({ "handle": h.hex(), "name": name, "layout": layout, "scale": scale, "layers": mine }))
 }
 
@@ -632,7 +632,7 @@ fn run_soldraw(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let hatches = ents.iter().filter(|(_, k)| matches!(k, EntityKind::Hatch(_))).count();
         for (suffix, k) in ents {
-            let common = Common { layer: info.layer(suffix), ..Common::default() };
+            let common = Common { layer: info.layer(suffix).into(), ..Common::default() };
             d.add(&Space::Model, common, k)?;
         }
         done.push(json!({ "viewport": h.hex(), "name": info.name, "visible": nv, "hidden": nh, "hatches": hatches }));
@@ -1025,7 +1025,7 @@ mod tests {
         store_info(&mut x, &info);
         assert_eq!(x.iter().filter(|t| t.value == APP).count(), 1);
         assert!(x.iter().all(|t| t.value.chars().count() <= 255));
-        let back = info_of(&Common { xdata: x.clone(), ..Common::default() }).unwrap();
+        let back = info_of(&Common { xdata: x.clone().into(), ..Common::default() }).unwrap();
         assert_eq!(back.name, "Front");
         assert_eq!(back.place, [12.5, -3.0]);
         assert!(x.iter().any(|t| t.value == "keep"));

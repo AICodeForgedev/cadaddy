@@ -67,7 +67,7 @@ fn style_named(s: &Session, name: &str) -> Result<MLineStyle> {
 }
 
 fn make(def: &MLineStyle, pts: &[Vec2], closed: bool, just: MLineJust, scale: f64) -> Option<EntityKind> {
-    (pts.len() >= 2).then(|| EntityKind::MLine(MLine::new(def, pts, closed, just, scale)))
+    (pts.len() >= 2).then(|| EntityKind::MLine(Box::new(MLine::new(def, pts, closed, just, scale))))
 }
 
 fn run_mline(s: &mut Session, p: &Value) -> Result<Value> {
@@ -373,13 +373,13 @@ fn run_mlstyle(s: &mut Session, p: &Value) -> Result<Value> {
 /// The multiline `h`.
 fn mline_of(s: &Session, h: Handle) -> Result<MLine> {
     match curves::entity(s, h)?.kind {
-        EntityKind::MLine(m) => Ok(m),
+        EntityKind::MLine(m) => Ok(*m),
         _ => Err(other("Select a multiline.")),
     }
 }
 
 fn store(s: &mut Session, h: Handle, m: MLine) -> Result<()> {
-    s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::MLine(m))?;
+    s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::MLine(Box::new(m)))?;
     Ok(())
 }
 
@@ -902,7 +902,7 @@ pub(crate) fn explode(e: &Entity, m: &MLine) -> Vec<Entity> {
             }
             let lt = el.linetype.trim();
             if !lt.is_empty() && !lt.eq_ignore_ascii_case("bylayer") && !lt.eq_ignore_ascii_case("byblock") {
-                c.linetype = el.linetype.clone();
+                c.linetype = el.linetype.as_str().into();
             }
         }
         out.push(Entity { handle: Handle(0), common: c, kind: crate::cmd::helpers::line(*a, *b) });

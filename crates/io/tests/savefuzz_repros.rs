@@ -104,7 +104,7 @@ fn svg_writes_a_dense_hatch_as_few_paths() {
             background: None,
             pattern_lines: Vec::new(),
         };
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch))).unwrap();
         let svg = String::from_utf8(cadaddy_io::write(&d, "x.svg").unwrap()).unwrap();
         let elements = svg.matches("<path").count() + svg.matches("<polyline").count() + svg.matches("<circle").count();
         let segments = svg.matches('M').count();

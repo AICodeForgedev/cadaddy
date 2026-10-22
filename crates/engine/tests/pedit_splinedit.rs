@@ -29,7 +29,7 @@ fn polys(s: &Session) -> Vec<LwPolyline> {
 
 fn spline(s: &Session, hex: &str) -> Spline {
     let EntityKind::Spline(sp) = kind(s, hex) else { panic!("not a spline") };
-    sp
+    *sp
 }
 
 fn pts(p: &LwPolyline) -> Vec<(f64, f64)> {

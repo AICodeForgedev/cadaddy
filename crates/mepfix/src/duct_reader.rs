@@ -173,7 +173,7 @@ fn line_segments(d: &Drawing) -> Vec<LineSeg> {
             EntityKind::Line(l) => {
                 let (a, b) = (l.a.xy(), l.b.xy());
                 if a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 {
-                    out.push(LineSeg { a, b, layer: e.common.layer.clone() });
+                    out.push(LineSeg { a, b, layer: e.common.layer.to_string() });
                 }
             }
             EntityKind::LwPolyline(p) => {
@@ -185,7 +185,7 @@ fn line_segments(d: &Drawing) -> Vec<LineSeg> {
                         continue;
                     };
                     if a.is_finite() && b.is_finite() && a.dist(*b) > 1e-9 {
-                        out.push(LineSeg { a: *a, b: *b, layer: e.common.layer.clone() });
+                        out.push(LineSeg { a: *a, b: *b, layer: e.common.layer.to_string() });
                     }
                 }
             }
@@ -204,10 +204,10 @@ fn arcs(d: &Drawing) -> Vec<(Vec2, f64, f64, f64, String)> {
     for e in d.model.iter() {
         match &e.kind {
             EntityKind::Arc(a) if a.center.xy().is_finite() && a.radius.is_finite() && a.radius > 0.0 => {
-                out.push((a.center.xy(), a.radius, a.start, a.end, e.common.layer.clone()));
+                out.push((a.center.xy(), a.radius, a.start, a.end, e.common.layer.to_string()));
             }
             EntityKind::Circle(c) if c.center.xy().is_finite() && c.radius.is_finite() && c.radius > 0.0 => {
-                out.push((c.center.xy(), c.radius, 0.0, 360.0, e.common.layer.clone()));
+                out.push((c.center.xy(), c.radius, 0.0, 360.0, e.common.layer.to_string()));
             }
             _ => {}
         }
@@ -222,7 +222,7 @@ fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
         if let EntityKind::Text(t) = &e.kind {
             let at = t.align_pt.unwrap_or(t.insert).xy();
             if at.is_finite() && !t.value.trim().is_empty() {
-                out.push((t.value.clone(), at, e.common.layer.clone(), t.height));
+                out.push((t.value.clone(), at, e.common.layer.to_string(), t.height));
             }
         }
     }
@@ -245,7 +245,7 @@ fn rectangles(d: &Drawing, layer_filter: &str) -> Vec<(Vec2, Vec2, String)> {
                 let min = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
                 let max =
                     Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
-                out.push((min, max, e.common.layer.clone()));
+                out.push((min, max, e.common.layer.to_string()));
             }
         }
     }

@@ -101,7 +101,7 @@ fn hatches(s: &Session) -> Vec<Hatch> {
         .model
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Hatch(h) => Some(h.clone()),
+            EntityKind::Hatch(h) => Some(h.as_ref().clone()),
             _ => None,
         })
         .collect()

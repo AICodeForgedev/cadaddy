@@ -50,7 +50,7 @@ fn length(l: &Seg) -> f64 {
 
 fn viewport(s: &Session, h: Handle) -> Viewport {
     match &s.doc().unwrap().entity(h).unwrap().kind {
-        EntityKind::Viewport(v) => v.clone(),
+        EntityKind::Viewport(v) => v.as_ref().clone(),
         k => panic!("{k:?}"),
     }
 }

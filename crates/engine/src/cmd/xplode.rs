@@ -67,10 +67,10 @@ impl Options {
             c.color = v;
         }
         if let Some(v) = &self.layer {
-            c.layer = v.clone();
+            c.layer = v.as_str().into();
         }
         if let Some(v) = &self.linetype {
-            c.linetype = v.clone();
+            c.linetype = v.as_str().into();
         }
         if let Some(v) = self.lineweight {
             c.lineweight = v;

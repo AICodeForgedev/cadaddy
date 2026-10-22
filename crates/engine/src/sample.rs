@@ -135,7 +135,7 @@ pub fn bracket() -> Drawing {
     add(on("Center"), line(Vec2::new(sx - 0.4, c.y), Vec2::new(sx + 2.4, c.y)));
     // Section hatch on the solid parts (two regions around the bore).
     let hatch = |a: Vec2, bb: Vec2| {
-        EntityKind::Hatch(Hatch {
+        EntityKind::Hatch(Box::new(Hatch {
             pattern: "ANSI31".into(),
             solid: false,
             loops: vec![HatchLoop { curves: Vec::new(), vertices: rect_vertices(a, bb), outer: true, sources: Vec::new() }],
@@ -148,7 +148,7 @@ pub fn bracket() -> Drawing {
             origin: Vec2::ZERO,
             background: None,
             pattern_lines: Vec::new(),
-        })
+        }))
     };
     add(on("Hatch"), hatch(Vec2::new(sx, c.y + 0.875), Vec2::new(sx + 0.5, y0 + h)));
     add(on("Hatch"), hatch(Vec2::new(sx, y0), Vec2::new(sx + 0.5, c.y - 0.875)));

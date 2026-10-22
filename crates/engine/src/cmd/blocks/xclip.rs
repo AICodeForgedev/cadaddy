@@ -62,7 +62,7 @@ fn outline(pts: &[Vec2]) -> Option<Vec<Vec2>> {
 fn set_clip(s: &mut Session, h: Handle, clip: Option<XClip>) -> Result<()> {
     s.doc_mut()?.modify_entity(h, |e| {
         if let EntityKind::Insert(i) = &mut e.kind {
-            i.clip = clip;
+            i.clip = clip.map(Box::new);
         }
     })?;
     Ok(())
@@ -86,7 +86,7 @@ fn clip_option(s: &mut Session, hs: &[Handle], option: &str) -> Result<(usize, V
     for (h, ins, base) in references(s, hs)? {
         let Some(c) = ins.clip.clone() else { continue };
         match option {
-            "on" | "off" => set_clip(s, h, Some(XClip { enabled: option == "on", ..c }))?,
+            "on" | "off" => set_clip(s, h, Some(XClip { enabled: option == "on", ..*c }))?,
             "delete" => set_clip(s, h, None)?,
             _ => {
                 let m = ins.transform(base);
@@ -114,7 +114,7 @@ fn clip_depth(s: &mut Session, hs: &[Handle], front: Option<f64>, back: Option<f
     let mut n = 0;
     for (h, ins, _) in references(s, hs)? {
         let Some(c) = ins.clip.clone() else { continue };
-        set_clip(s, h, Some(XClip { front, back: back.map(|b| -b), ..c }))?;
+        set_clip(s, h, Some(XClip { front, back: back.map(|b| -b), ..*c }))?;
         n += 1;
     }
     Ok(n)
@@ -461,7 +461,7 @@ mod tests {
 
     fn clip(s: &Session, h: Handle) -> Option<XClip> {
         match &s.doc().unwrap().entity(h).unwrap().kind {
-            EntityKind::Insert(i) => i.clip.clone(),
+            EntityKind::Insert(i) => i.clip.as_deref().cloned(),
             _ => None,
         }
     }

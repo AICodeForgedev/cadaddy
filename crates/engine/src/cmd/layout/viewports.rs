@@ -115,7 +115,7 @@ fn add_clipped(s: &mut Session, cmd: &str, space: &Space, boundary: Handle) -> R
     let d = s.doc_mut()?;
     let id = next_viewport_id(d);
     let vp = Viewport { clip: Some(boundary), ..new_viewport(d, b, id) };
-    Ok(d.add(space, common, EntityKind::Viewport(vp))?)
+    Ok(d.add(space, common, EntityKind::Viewport(Box::new(vp)))?)
 }
 
 /// MVIEW Polygonal: `{points, bulges?, layout?}`.
@@ -253,7 +253,7 @@ fn mview_restore(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some((c, h)) = tile_view(t, r) {
             (vp.view_center, vp.view_height) = (c, h);
         }
-        out.push(d.add(&space, common.clone(), EntityKind::Viewport(vp))?);
+        out.push(d.add(&space, common.clone(), EntityKind::Viewport(Box::new(vp)))?);
     }
     if out.is_empty() {
         return Err(EngineError::Other(format!("Viewport configuration \"{name}\" has no viewports to restore.")));
@@ -314,9 +314,9 @@ pub(super) fn run_vpclip(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let b = check_boundary(cmd, s.doc()?, &space, boundary)?;
     // The viewport takes the boundary's extents; model space stays where it was on the sheet.
-    let mut v = super::super::clip_partners::fitted(&cur, b).unwrap_or(cur);
+    let mut v = super::super::clip_partners::fitted(&cur, b).unwrap_or(*cur);
     v.clip = Some(boundary);
-    s.doc_mut()?.modify_entity(vh, |e| e.kind = EntityKind::Viewport(v))?;
+    s.doc_mut()?.modify_entity(vh, |e| e.kind = EntityKind::Viewport(Box::new(v)))?;
     if let Some(o) = old.filter(|o| *o != boundary) {
         s.doc_mut()?.remove_entity(o);
     }

@@ -136,7 +136,7 @@ pub fn plan_items(d: &Drawing, g: &WallGen) -> Vec<PlanItem> {
             _ => None,
         };
         if let Some((kind, name, signature, at)) = item {
-            out.push(PlanItem { kind, handle: e.handle, layer: e.common.layer.clone(), name, signature, at });
+            out.push(PlanItem { kind, handle: e.handle, layer: e.common.layer.to_string(), name, signature, at });
         }
     }
     out

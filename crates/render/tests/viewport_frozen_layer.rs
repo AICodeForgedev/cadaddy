@@ -26,7 +26,7 @@ fn drawing() -> Drawing {
         twist: 0.0,
         anno_scale: None,
     };
-    d.add(&Space::Paper("Layout1".into()), Common { layer: "VPORTS".into(), ..Default::default() }, EntityKind::Viewport(vp)).unwrap();
+    d.add(&Space::Paper("Layout1".into()), Common { layer: "VPORTS".into(), ..Default::default() }, EntityKind::Viewport(Box::new(vp))).unwrap();
     d
 }
 

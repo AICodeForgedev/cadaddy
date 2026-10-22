@@ -304,7 +304,7 @@ impl Props<'_> {
         let n = norm(name);
         match n.as_str() {
             "type" | "objecttype" | "entity" => return Some(Value::String(self.e.kind.type_name().into())),
-            "layer" => return Some(Value::String(self.e.common.layer.clone())),
+            "layer" => return Some(Value::String(self.e.common.layer.to_string())),
             "handle" => return Some(Value::String(self.e.handle.hex())),
             _ => {}
         }

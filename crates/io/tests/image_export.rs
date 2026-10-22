@@ -18,7 +18,7 @@ fn drawing(path: &str) -> Drawing {
         path: path.into(),
         ..Image::default()
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Image(img)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
     d
 }
 

@@ -37,13 +37,13 @@ fn custom_lines() -> Vec<PatternLine> {
 
 fn save(h: Hatch) -> String {
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).expect("add");
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).expect("add");
     write_dxf(&d)
 }
 
 fn first_hatch(text: &str) -> Hatch {
     let d = read_dxf(text.as_bytes()).expect("read");
-    d.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).expect("hatch")
+    d.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.as_ref().clone()) } else { None }).expect("hatch")
 }
 
 /// (group code, value) pairs of a DXF text.
@@ -111,7 +111,7 @@ fn library_named_patterns_keep_the_files_definition() {
 fn file_definition_is_drawn_instead_of_the_librarys() {
     let prims = |lines: Vec<PatternLine>| {
         let mut d = Drawing::new_imperial();
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch("ANSI31", 1.0, 0.0, Vec2::ZERO, lines))).expect("add");
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch("ANSI31", 1.0, 0.0, Vec2::ZERO, lines)))).expect("add");
         cadaddy_render::build(&d, &Space::Model, &cadaddy_render::Options::default()).prims.len()
     };
     // One horizontal family 5 units apart from y = 2.5 across the 10 × 10 square: two lines.
@@ -143,6 +143,6 @@ fn hostile_pattern_definitions_are_capped() {
     assert!(h.pattern_lines.iter().all(|l| l.delta.0.is_finite() && l.dashes.len() <= 256));
     // Drawing the capped definition stays bounded.
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).expect("add");
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).expect("add");
     let _ = cadaddy_render::build(&d, &Space::Model, &cadaddy_render::Options::default());
 }

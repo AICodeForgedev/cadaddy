@@ -148,6 +148,7 @@ fn xdlist_xlist_and_showurls_report() {
                 RawTag { code: 1001, value: "OTHER".into() },
                 RawTag { code: 1040, value: "2.5".into() },
             ]
+            .into()
         })
         .unwrap();
     let r = s.execute("xdlist", &json!({"handle": refs[2].hex()})).unwrap();

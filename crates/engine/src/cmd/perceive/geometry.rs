@@ -31,11 +31,11 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
             break;
         }
         match &e.kind {
-            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.clone() }),
+            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string() }),
             EntityKind::LwPolyline(p) => {
                 for sg in (Polyline { vertices: p.vertices.clone(), closed: p.closed }).segments() {
                     if let Segment::Line(l) = sg {
-                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.clone() });
+                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string() });
                     }
                 }
             }
@@ -197,7 +197,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     kind: "door",
                     at: c,
                     width: a.radius,
-                    layer: e.common.layer.clone(),
+                    layer: e.common.layer.to_string(),
                     handle: e.handle,
                     swing: Some((deg, ends)),
                     block: None,
@@ -219,7 +219,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     kind,
                     at: i.insert.xy(),
                     width,
-                    layer: e.common.layer.clone(),
+                    layer: e.common.layer.to_string(),
                     handle: e.handle,
                     swing: None,
                     block: Some(i.block.clone()),

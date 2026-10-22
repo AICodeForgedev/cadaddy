@@ -304,7 +304,7 @@ pub(super) fn ensure_layer(d: &mut Drawing, name: &str) {
 pub(super) fn tagged_as(layer: &str, app: &str, label: &str) -> Common {
     Common {
         layer: layer.into(),
-        xdata: vec![RawTag { code: 1001, value: app.into() }, RawTag { code: 1000, value: label.into() }],
+        xdata: vec![RawTag { code: 1001, value: app.into() }, RawTag { code: 1000, value: label.into() }].into(),
         ..Common::default()
     }
 }

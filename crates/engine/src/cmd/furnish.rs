@@ -188,7 +188,7 @@ fn sources(s: &Session, p: &Value, layers: &str) -> Result<Vec<Source>> {
                 out.push(Source {
                     handle: e.handle,
                     kind: "block",
-                    layer: e.common.layer.clone(),
+                    layer: e.common.layer.to_string(),
                     name: Some(i.block.clone()),
                     center,
                     angle: i.rotation,
@@ -199,7 +199,16 @@ fn sources(s: &Session, p: &Value, layers: &str) -> Result<Vec<Source>> {
             EntityKind::LwPolyline(pl) if pl.closed && layers.split(',').any(|q| super::qselect::wildcard(q.trim(), &e.common.layer)) => {
                 let pts: Vec<Vec2> = pl.vertices.iter().map(|v| v.p).collect();
                 let Some((center, angle, size)) = min_rect(&pts) else { continue };
-                out.push(Source { handle: e.handle, kind: "outline", layer: e.common.layer.clone(), name: None, center, angle, size, free: true });
+                out.push(Source {
+                    handle: e.handle,
+                    kind: "outline",
+                    layer: e.common.layer.to_string(),
+                    name: None,
+                    center,
+                    angle,
+                    size,
+                    free: true,
+                });
             }
             _ => {}
         }
@@ -316,8 +325,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(h) = r.get("handle").and_then(Value::as_str).and_then(Handle::parse_hex) {
                 let layer = src.layer.clone();
                 s.doc_mut()?.modify_entity(h, |e| {
-                    e.common.layer = layer;
-                    e.common.xdata = vec![RawTag { code: 1001, value: FURNISH_APP.into() }, RawTag { code: 1005, value: src.handle.hex() }];
+                    e.common.layer = layer.into();
+                    e.common.xdata = vec![RawTag { code: 1001, value: FURNISH_APP.into() }, RawTag { code: 1005, value: src.handle.hex() }].into();
                 })?;
                 if let Some(o) = v.as_object_mut() {
                     o.insert("handle".into(), json!(h.hex()));

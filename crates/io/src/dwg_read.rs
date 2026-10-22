@@ -375,7 +375,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
             if let cadaddy_dxf::Value::Str(v) = &mut t.value
                 && let Some(text) = decode_pre2007(v, page)
             {
-                *v = text;
+                *v = text.into();
             }
         }
     }

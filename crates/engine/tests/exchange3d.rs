@@ -28,7 +28,7 @@ fn session() -> Session {
     let d = std::sync::Arc::make_mut(&mut st.doc);
     d.add(
         &Space::Model,
-        Common { material: Some("Copper".into()), ..Common::default() },
+        Common { material: Some("Copper".into()).into(), ..Common::default() },
         EntityKind::Mesh(Mesh { vertices, faces, kind: MeshKind::Subd }),
     )
     .unwrap();

@@ -27,7 +27,8 @@ pub fn specs() -> Vec<CommandSpec> {
 fn target(s: &Session, p: &Value) -> Result<cadaddy_doc::Image> {
     let cmd = "imagetrace";
     let d = s.doc()?;
-    let image_of = |h: cadaddy_doc::Handle| d.entity(h).and_then(|e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None });
+    let image_of =
+        |h: cadaddy_doc::Handle| d.entity(h).and_then(|e| if let EntityKind::Image(i) = &e.kind { Some(i.as_ref().clone()) } else { None });
     if let Some(h) = str_param(p, "handle") {
         let h = cadaddy_doc::Handle::parse_hex(h).ok_or_else(|| bad(cmd, format!("`{h}` is not a handle")))?;
         return image_of(h).ok_or_else(|| bad(cmd, "that object is not a raster image"));
@@ -38,7 +39,7 @@ fn target(s: &Session, p: &Value) -> Result<cadaddy_doc::Image> {
     }
     let all: Vec<_> = d.model.iter().filter_map(|e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None }).take(2).collect();
     match all.as_slice() {
-        [one] => Ok(one.clone()),
+        [one] => Ok(one.as_ref().clone()),
         [] => Err(crate::EngineError::Other("There is no raster image to trace (attach one with IMAGEATTACH).".into())),
         _ => Err(crate::EngineError::Other("Select the raster image to trace (there are several).".into())),
     }
@@ -101,7 +102,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let mut c = base.clone();
-        c.layer = on.to_string();
+        c.layer = on.into();
         let hnd = s.doc_mut()?.add(&space, c, kind)?;
         added.push(hnd.hex());
         Ok(())

@@ -169,7 +169,7 @@ fn run_set_spec(s: &mut Session, p: &Value) -> Result<Value> {
         let h = Handle::parse_hex(h_str).unwrap_or_default();
         let tags = xdata_tags.clone();
         if d.modify_entity(h, |ent| {
-            ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata);
+            ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata).into();
             ent.common.xdata.extend(tags);
         })
         .is_ok()
@@ -196,7 +196,7 @@ fn run_unset_spec(s: &mut Session, p: &Value) -> Result<Value> {
         let has_bim = d.entity(h).is_some_and(|e| bimspec::entity_type_mark(&e.common.xdata).is_some());
         if has_bim
             && d.modify_entity(h, |ent| {
-                ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata);
+                ent.common.xdata = bimspec::strip_bim_xdata(&ent.common.xdata).into();
             })
             .is_ok()
         {

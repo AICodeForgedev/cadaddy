@@ -88,12 +88,12 @@ fn hatch_pattern_and_solid() {
         background: None,
         pattern_lines: Vec::new(),
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h.clone()))).unwrap();
     let l = build(&d, &Space::Model, &Options::default());
     // 45° lines at 0.125 spacing across a 4x4 square: about 4*sqrt(2)/0.125 ≈ 45 lines.
     assert!(l.prims.len() > 35 && l.prims.len() < 60, "{}", l.prims.len());
     let mut d2 = Drawing::new_imperial();
-    d2.add(&Space::Model, Common::default(), EntityKind::Hatch(Hatch { solid: true, pattern: "SOLID".into(), ..h })).unwrap();
+    d2.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(Hatch { solid: true, pattern: "SOLID".into(), ..h }))).unwrap();
     let l2 = build(&d2, &Space::Model, &Options::default());
     assert_eq!(l2.prims.len(), 1);
     assert_eq!(l2.prims[0].kind, Kind::Tris);
@@ -120,7 +120,7 @@ fn raster_rejects_bad_size() {
 fn layout_with_viewport(vp: cadaddy_doc::Viewport) -> Drawing {
     let mut d = sample(); // line (0,0)-(10,0) and red circle at (5,5) r3
     let paper = Space::Paper("Layout1".into());
-    d.add(&paper, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&paper, Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     d
 }
 
@@ -483,7 +483,7 @@ fn pattern_hatch(pattern: &str, scale: f64, (x0, y0, x1, y1): (f64, f64, f64, f6
 
 fn drawing_with(h: Hatch) -> Drawing {
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).unwrap();
     d
 }
 
@@ -642,7 +642,7 @@ fn hatch_in_a_squashed_block_keeps_lines_that_show() {
     // screen, so it is drawn with lines, not merged into a fill.
     let mut d = Drawing::new_imperial();
     let mut blk = cadaddy_doc::Block::new("B");
-    let mut e = cadaddy_doc::Entity::new(cadaddy_doc::Handle(1), EntityKind::Hatch(pattern_hatch("ANSI31", 1.0, (0.0, 0.0, 4.0, 4.0))));
+    let mut e = cadaddy_doc::Entity::new(cadaddy_doc::Handle(1), EntityKind::Hatch(Box::new(pattern_hatch("ANSI31", 1.0, (0.0, 0.0, 4.0, 4.0)))));
     e.common = Common::default();
     blk.entities.push(e);
     d.blocks.insert("B".into(), std::sync::Arc::new(blk));
@@ -765,7 +765,7 @@ fn transparent_solid_hatch_blends_with_the_line_under_it() {
     d.add(
         &Space::Model,
         Common { color: Color::Index(1), transparency: cadaddy_doc::Transparency::Percent(50), ..Default::default() },
-        EntityKind::Hatch(solid),
+        EntityKind::Hatch(Box::new(solid)),
     )
     .unwrap();
     let pixel = |o: &Options, x: f64, y: f64| {
@@ -956,7 +956,7 @@ fn cancelled_build_stops_early() {
 fn mtext_background_mask_draws_under_the_text() {
     let mt = |bg: Option<cadaddy_doc::MTextBackground>| {
         EntityKind::MText(cadaddy_doc::MText {
-            background: bg,
+            background: bg.map(Box::new),
             insert: Vec3::new(0.0, 10.0, 0.0),
             height: 2.0,
             width: 0.0,
@@ -1025,7 +1025,7 @@ fn clipped_block_reference_draws_only_inside_its_boundary() {
             rows: 1,
             col_spacing: 0.0,
             row_spacing: 0.0,
-            clip,
+            clip: clip.map(Box::new),
         })
     };
     d.add(&Space::Model, Common::default(), ins(150.0, Some(clip.clone()))).unwrap();

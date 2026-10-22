@@ -7,6 +7,8 @@ use cadaddy_geom::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::Rare;
+
 mod mline;
 pub use mline::*;
 
@@ -85,13 +87,18 @@ impl Transparency {
     }
 }
 
+/// A table name an object refers to (its layer, linetype, plot style): up to 23 bytes kept in
+/// place, longer ones shared by every copy, so a million objects on a few layers don't hold a
+/// million small allocations. It reads as a `&str` (and serializes as a string).
+pub type Name = smol_str::SmolStr;
+
 /// Properties every entity has.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Common {
-    pub layer: String,
+    pub layer: Name,
     pub color: Color,
-    pub linetype: String,
+    pub linetype: Name,
     pub lineweight: Lineweight,
     pub ltscale: f64,
     pub transparency: Transparency,
@@ -100,19 +107,19 @@ pub struct Common {
     pub extrusion: Vec3,
     /// Named plot style: `ByLayer`, `ByBlock` or a style of the layout's named (`.stb`) plot
     /// style table.
-    pub plot_style: String,
+    pub plot_style: Name,
     /// The annotation scales an annotative object supports (empty: not annotative).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub anno_scales: Vec<crate::AnnoScale>,
+    #[serde(skip_serializing_if = "Rare::is_empty_value")]
+    pub anno_scales: Rare<Vec<crate::AnnoScale>>,
     /// Other applications' extended data (xdata) as read from the drawing file: whole
     /// applications, each from its `1001` group on. It is part of the object, so a copy of the
     /// object (COPY, MIRROR, ARRAY, paste) carries it, as in AutoCAD.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub xdata: Vec<RawTag>,
+    #[serde(skip_serializing_if = "Rare::is_empty_value")]
+    pub xdata: Rare<Vec<RawTag>>,
     /// The material assigned to the object (MATERIALASSIGN): a material's name, `ByBlock`, or
     /// `None` for its layer's (ByLayer).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub material: Option<String>,
+    #[serde(skip_serializing_if = "Rare::is_empty_value")]
+    pub material: Rare<Option<String>>,
 }
 
 impl Default for Common {
@@ -128,9 +135,9 @@ impl Default for Common {
             thickness: 0.0,
             extrusion: Vec3::Z,
             plot_style: "ByLayer".into(),
-            anno_scales: Vec::new(),
-            xdata: Vec::new(),
-            material: None,
+            anno_scales: Rare::default(),
+            xdata: Rare::default(),
+            material: Rare::default(),
         }
     }
 }
@@ -300,11 +307,11 @@ pub struct MText {
     /// Columns the text flows through, each `width` wide (DXF 75/76/78/79/48/49/50); `None`:
     /// one column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub columns: Option<MTextColumns>,
+    pub columns: Option<Box<MTextColumns>>,
     /// Background mask (DXF 90/63/421/45/441): a fill behind the text, so it reads over
     /// hatches and lines. `None` when off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<MTextBackground>,
+    pub background: Option<Box<MTextBackground>>,
 }
 
 /// An MTEXT background mask.
@@ -519,9 +526,9 @@ impl AttribProps {
     /// `base` (the definition's properties) with the ones set here in place.
     pub fn over(&self, base: &Common) -> Common {
         Common {
-            layer: self.layer.clone().unwrap_or_else(|| base.layer.clone()),
+            layer: self.layer.as_deref().map_or_else(|| base.layer.clone(), Name::from),
             color: self.color.unwrap_or(base.color),
-            linetype: self.linetype.clone().unwrap_or_else(|| base.linetype.clone()),
+            linetype: self.linetype.as_deref().map_or_else(|| base.linetype.clone(), Name::from),
             lineweight: self.lineweight.unwrap_or(base.lineweight),
             ..base.clone()
         }
@@ -549,7 +556,7 @@ pub struct Insert {
     pub row_spacing: f64,
     /// XCLIP: only the part of the block inside this boundary shows and plots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clip: Option<XClip>,
+    pub clip: Option<Box<XClip>>,
 }
 
 /// A block reference's clip boundary (XCLIP), in the block definition's coordinates, so it
@@ -1436,7 +1443,7 @@ pub enum EntityKind {
     Ellipse(Ellipse),
     LwPolyline(LwPolyline),
     Polyline3d(Polyline3d),
-    Spline(GSpline),
+    Spline(Box<GSpline>),
     Helix(Helix),
     Ray(RayLine),
     XLine(RayLine),
@@ -1445,10 +1452,10 @@ pub enum EntityKind {
     AttDef(Box<Attrib>),
     Insert(Insert),
     Dimension(Box<Dimension>),
-    MLine(MLine),
+    MLine(Box<MLine>),
     Leader(Leader),
     MLeader(Box<MLeader>),
-    Hatch(Hatch),
+    Hatch(Box<Hatch>),
     Solid(Solid),
     Trace(Solid),
     Face3d(Face3d),
@@ -1458,9 +1465,9 @@ pub enum EntityKind {
     /// A section plane (SECTIONPLANE).
     SectionPlane(crate::SectionPlane),
     Region(Region),
-    Viewport(Viewport),
-    Image(Image),
-    Underlay(Underlay),
+    Viewport(Box<Viewport>),
+    Image(Box<Image>),
+    Underlay(Box<Underlay>),
     /// A point cloud: a scan file placed in the drawing (POINTCLOUDATTACH).
     PointCloud(Box<crate::pointcloud::PointCloud>),
     Wipeout(Wipeout),
@@ -1651,7 +1658,7 @@ impl EntityKind {
                 }
                 v
             }
-            EntityKind::Spline(s) => vec![Prim::Spline(s.clone())],
+            EntityKind::Spline(s) => vec![Prim::Spline(s.as_ref().clone())],
             EntityKind::Helix(h) => vec![Prim::Spline(h.spline())],
             EntityKind::Ray(r) => vec![Prim::Infinite { base: r.base.xy(), dir: r.dir.xy().normalized(), ray: true }],
             EntityKind::XLine(r) => vec![Prim::Infinite { base: r.base.xy(), dir: r.dir.xy().normalized(), ray: false }],

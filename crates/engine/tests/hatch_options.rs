@@ -8,13 +8,18 @@ use serde_json::{Value, json};
 
 fn hatch(s: &Session, h: &str) -> Hatch {
     match &s.doc().unwrap().entity(Handle::parse_hex(h).unwrap()).unwrap().kind {
-        EntityKind::Hatch(x) => x.clone(),
+        EntityKind::Hatch(x) => x.as_ref().clone(),
         k => panic!("not a hatch: {k:?}"),
     }
 }
 
 fn all_hatches(s: &Session) -> Vec<(String, Hatch)> {
-    s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some((e.handle.hex(), h.clone())) } else { None }).collect()
+    s.doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some((e.handle.hex(), h.as_ref().clone())) } else { None })
+        .collect()
 }
 
 fn handle(v: &Value) -> String {

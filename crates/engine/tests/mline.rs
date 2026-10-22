@@ -13,7 +13,7 @@ fn h(v: &Value) -> Handle {
 
 fn mline(s: &Session, hd: Handle) -> MLine {
     match &s.doc().unwrap().entity(hd).unwrap().kind {
-        EntityKind::MLine(m) => m.clone(),
+        EntityKind::MLine(m) => m.as_ref().clone(),
         k => panic!("not a multiline: {k:?}"),
     }
 }

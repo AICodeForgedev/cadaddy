@@ -84,7 +84,7 @@ fn run_plotstyle(s: &mut Session, p: &Value) -> Result<Value> {
         if d.entity(*h).is_none() {
             return Err(bad(cmd, format!("no object {}", h.hex())));
         }
-        d.modify_entity(*h, |e| e.common.plot_style = name.clone())?;
+        d.modify_entity(*h, |e| e.common.plot_style = name.as_str().into())?;
         changed += 1;
     }
     Ok(json!({ "changed": changed, "plotStyle": name }))

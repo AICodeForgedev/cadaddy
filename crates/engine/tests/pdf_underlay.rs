@@ -48,7 +48,7 @@ fn h(v: &Value) -> Handle {
 
 fn underlay(s: &Session, hd: Handle) -> cadaddy_engine::doc::Underlay {
     match &s.doc().unwrap().entity(hd).unwrap().kind {
-        EntityKind::Underlay(u) => u.clone(),
+        EntityKind::Underlay(u) => u.as_ref().clone(),
         k => panic!("not an underlay: {k:?}"),
     }
 }
