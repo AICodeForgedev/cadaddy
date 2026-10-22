@@ -1016,6 +1016,11 @@ pub struct Session {
     pub(crate) multiple: Option<String>,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
     pub(crate) in_script: bool,
+    /// Set by an interface just before it starts TABLEDIT for a person (a double-click on a
+    /// cell, a table just inserted): that TABLEDIT walks on to the next cell after each one, as
+    /// Tab does in AutoCAD's cell editor, starting at `Some(cell)` when given. Scripts and agents
+    /// never set it, so their TABLEDIT edits one cell.
+    pub tabledit_walk: Option<Option<(Handle, usize, usize)>>,
     /// The last script run (RSCRIPT at the command line runs it again).
     pub script_last: Option<String>,
     /// The script a failed line stopped: its lines, the next one, how deep it was called.
@@ -1157,6 +1162,10 @@ fn current_material(d: &Drawing) -> Option<String> {
 }
 
 impl Session {
+    /// Whether a script is running (its commands are the script's, not a person's).
+    pub fn in_script(&self) -> bool {
+        self.in_script
+    }
     pub fn new() -> Self {
         let mut s = Session::empty();
         s.new_drawing(false);
@@ -1172,6 +1181,7 @@ impl Session {
             keep_undo_step: false,
             multiple: None,
             in_script: false,
+            tabledit_walk: None,
             script_last: None,
             script_interrupted: None,
             monitor: script_tools::Monitor::default(),

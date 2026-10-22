@@ -2142,6 +2142,16 @@ fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
         }
         return true;
     }
+    // A table cell: typed in place, then the next cell (Tab in AutoCAD's cell editor).
+    let on_table = cadaddy_engine::cmd::curves::pick_at(&app.session, p)
+        .is_some_and(|h| app.session.doc().ok().and_then(|d| d.entity(h)).is_some_and(|e| matches!(e.kind, EntityKind::Table(_))));
+    if on_table {
+        app.edit_table_cells(None);
+        if let Err(e) = app.session.input(Input::Point(p)) {
+            app.session.echo(e.to_string());
+        }
+        return true;
+    }
     let is_text = cadaddy_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
     });
@@ -3238,6 +3248,50 @@ mod hatch_pick_tests {
         assert_eq!(app.session.running.as_ref().map(|r| r.machine.name()), Some("ATTIPEDIT"));
         let p = app.session.current_prompt().unwrap();
         assert_eq!((p.message.as_str(), p.default.as_deref()), ("Enter attribute value", Some("101")));
+    }
+
+    /// Q282: a table's cells were out of reach (a double-click did nothing). Double-clicking a cell
+    /// now edits it, then goes on to the next cell, as Tab does in AutoCAD.
+    #[test]
+    fn double_clicking_a_table_cell_edits_it_and_walks_on() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.session.execute("table", &json!({ "at": [0, 0], "rows": 2, "cols": 2, "rowHeight": 4, "colWidth": 20 })).unwrap();
+        let (row_h, col_w) = {
+            let d = app.session.doc().unwrap();
+            let t =
+                d.model.iter().find_map(|e| if let cadaddy_engine::doc::EntityKind::Table(t) = &e.kind { Some(t.clone()) } else { None }).unwrap();
+            (t.row_heights.clone(), t.col_widths.clone())
+        };
+        app.session.set_selection(Vec::new());
+        let _ = app.session.zoom_extents();
+        let ctx = egui::Context::default();
+        let screen = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0)));
+        let frame = |app: &mut CadApp, events: Vec<egui::Event>, time: f64| {
+            app.logic(&ctx);
+            let input = egui::RawInput { screen_rect: screen, events, time: Some(time), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.ui(ui));
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new(), 0.0);
+        // Inside B1: the second column of the first row (a table made this way has no title row).
+        assert_eq!((row_h.len(), col_w.len()), (2, 2));
+        let p = Vec2::new(col_w[0] + col_w[1] / 2.0, -row_h[0] / 2.0);
+        let at = app.canvas.xf.unwrap().to_screen(p);
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() };
+        frame(&mut app, vec![egui::Event::PointerMoved(at)], 0.1);
+        frame(&mut app, vec![button(true), button(false)], 0.2);
+        frame(&mut app, vec![button(true), button(false)], 0.3);
+        frame(&mut app, Vec::new(), 0.4);
+        assert_eq!(app.session.running.as_ref().map(|r| r.machine.name()), Some("TABLEDIT"));
+        assert_eq!(app.session.current_prompt().unwrap().message, "Enter text for cell B1 (=formula, Enter to finish)");
+        app.session.input(cadaddy_engine::Input::Text("12.5".into())).unwrap();
+        assert_eq!(app.session.current_prompt().unwrap().message, "Enter text for cell A2 (=formula, Enter to finish)");
+        app.session.input(cadaddy_engine::Input::Enter).unwrap();
+        assert!(app.session.running.is_none());
+        let d = app.session.doc().unwrap();
+        let t = d.model.iter().find_map(|e| if let cadaddy_engine::doc::EntityKind::Table(t) = &e.kind { Some(t.clone()) } else { None }).unwrap();
+        assert_eq!(t.cells[0][1].text, "12.5");
     }
 }
 

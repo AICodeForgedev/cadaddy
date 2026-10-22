@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("table.recalc", "Recalculate Table Formulas", run_recalc).params("{handle?} (default: every table) → {changed}"),
         CommandSpec::new("tabledit", "Edit Table Cell", run_tabledit)
             .params("{handle?, at: [x,y] | row+col, text (=… for a formula)}")
-            .interactive(|_| Ok(Box::new(TableEditM::default()))),
+            .interactive(|s| Ok(Box::new(TableEditM { cell: s.tabledit_walk.flatten(), walk: s.tabledit_walk.is_some() }))),
         CommandSpec::new("tableexport", "Export Table", run_export)
             .params("{handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
             .interactive(|_| Ok(Box::new(ExportM::default()))),
@@ -451,10 +451,24 @@ fn run_tabledit(s: &mut Session, p: &Value) -> Result<Value> {
     super::run_set(s, &q)
 }
 
-/// TABLEDIT at the command line: pick a cell, type its text (or `=formula`).
+/// TABLEDIT at the command line: pick a cell, type its text (or `=formula`). Started for a person
+/// by the interface ([`Session::tabledit_walk`]) it goes on to the next cell after each one, row
+/// by row past merged-over cells, until Enter on its own (as Tab does in AutoCAD's cell editor).
 #[derive(Default)]
 struct TableEditM {
     cell: Option<(Handle, usize, usize)>,
+    walk: bool,
+}
+
+/// The cell after `(r, c)` in reading order that a merge doesn't cover, if any.
+fn next_cell(s: &Session, h: Handle, r: usize, c: usize) -> Option<(usize, usize)> {
+    let d = s.doc().ok()?;
+    let EntityKind::Table(t) = &d.entity(h)?.kind else { return None };
+    let cov = cadaddy_render::table_covered(t);
+    let rows = t.row_heights.len().min(t.cells.len()).min(MAX_ROWS);
+    let cols = t.col_widths.len().min(MAX_COLS);
+    let start = r.checked_mul(cols)?.checked_add(c)?.checked_add(1)?;
+    (start..rows.checked_mul(cols)?).map(|i| (i / cols, i % cols)).find(|(r, c)| !cov.get(*r).and_then(|v| v.get(*c)).copied().unwrap_or(false))
 }
 
 impl Interactive for TableEditM {
@@ -472,7 +486,11 @@ impl Interactive for TableEditM {
                     .and_then(|e| if let EntityKind::Table(t) = &e.kind { t.cells.get(r).and_then(|row| row.get(c)).cloned() } else { None })
                     .map(|c| c.formula.unwrap_or(c.text))
                     .unwrap_or_default();
-                let p = Prompt::new(format!("Enter text for cell {} (=formula)", cell_name(r, c)), Accept::TEXT);
+                let p = if self.walk {
+                    Prompt::new(format!("Enter text for cell {} (=formula, Enter to finish)", cell_name(r, c)), Accept::TEXT)
+                } else {
+                    Prompt::new(format!("Enter text for cell {} (=formula)", cell_name(r, c)), Accept::TEXT)
+                };
                 if cur.is_empty() { p } else { p.default(cur) }
             }
         }
@@ -490,8 +508,16 @@ impl Interactive for TableEditM {
             (None, Input::Enter) => Ok(Step::Cancel),
             (Some(_), Input::Enter) => Ok(Step::Done),
             (Some((h, r, c)), Input::Text(t) | Input::Keyword(t)) => {
+                let (h, r, c) = (*h, *r, *c);
                 let q = json!({ "handle": h.hex(), "row": r, "col": c, "text": t });
                 match super::run_set(s, &q) {
+                    Ok(_) if self.walk => match next_cell(s, h, r, c) {
+                        Some((r, c)) => {
+                            self.cell = Some((h, r, c));
+                            Ok(Step::Continue)
+                        }
+                        None => Ok(Step::Done),
+                    },
                     Ok(_) => Ok(Step::Done),
                     Err(e) => {
                         s.echo(e.to_string());

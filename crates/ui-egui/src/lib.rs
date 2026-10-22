@@ -454,6 +454,9 @@ pub struct CadApp {
     /// The command an agent started from the control channel and may go on typing into (see
     /// `control::users_command`).
     pub(crate) agent_run: Option<usize>,
+    /// A TABLE a person is placing: the last object before it, so the table it adds is known and
+    /// opens on its title cell ([`CadApp::follow_new_table`]).
+    table_placing: Option<Option<cadaddy_engine::doc::Handle>>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -570,6 +573,7 @@ impl CadApp {
             last_frame_start: None,
             control_active_until: 0.0,
             agent_run: None,
+            table_placing: None,
             shown_theme: None,
             shown_follows_system: false,
             shown_contrast: false,
@@ -1047,6 +1051,33 @@ impl CadApp {
         }
     }
 
+    /// TABLEDIT for a person: walking on from cell to cell (`cell` given: from that one).
+    pub fn edit_table_cells(&mut self, cell: Option<(cadaddy_engine::doc::Handle, usize, usize)>) {
+        self.session.tabledit_walk = Some(cell);
+        self.start("tabledit");
+        self.session.tabledit_walk = None;
+    }
+
+    /// A table a person just inserted with TABLE opens on its title cell for typing, as in
+    /// AutoCAD (Q282: an empty grid with no way into its cells was a dead end). Not for tables an
+    /// agent or a script makes.
+    fn follow_new_table(&mut self) {
+        let last = |app: &CadApp| app.session.doc().ok().and_then(|d| d.space(&app.session.space()).and_then(|sp| sp.last()).map(|e| e.handle));
+        let placing = self.session.running.as_ref().is_some_and(|r| r.id == "table") && self.agent_run.is_none() && !self.session.in_script();
+        if placing {
+            if self.table_placing.is_none() {
+                self.table_placing = Some(last(self));
+            }
+            return;
+        }
+        let Some(before) = self.table_placing.take() else { return };
+        let Some(h) = last(self).filter(|h| Some(*h) != before) else { return };
+        let is_table = self.session.doc().ok().and_then(|d| d.entity(h)).is_some_and(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Table(_)));
+        if is_table && self.session.running.is_none() {
+            self.edit_table_cells(Some((h, 0, 0)));
+        }
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
@@ -1055,6 +1086,7 @@ impl CadApp {
         workspaces::follow(self);
         self.follow_direction();
         blockspalette::follow(self);
+        self.follow_new_table();
         // FILEDIA 0: no native file dialogs (the commands ask on the command line).
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);

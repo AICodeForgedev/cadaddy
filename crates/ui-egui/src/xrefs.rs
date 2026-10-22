@@ -35,6 +35,17 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
                 return Some(Err(e.to_string()));
             }
             app.cmdline(&path);
+            // As AutoCAD's Attach dialog defaults: scale 1 and rotation 0, so the only question
+            // left is where it goes (Q282: a new user pressed Enter three times after the point).
+            if app.session.running.as_ref().is_some_and(|r| r.id == "xattach") {
+                use cadaddy_engine::Input;
+                for i in [Input::Keyword("Scale".into()), Input::Text("1".into()), Input::Keyword("Rotate".into()), Input::Text("0".into())] {
+                    if let Err(e) = app.session.input(i) {
+                        app.session.echo(e.to_string());
+                        break;
+                    }
+                }
+            }
             Some(Ok(Value::Null))
         }
         _ => None,
