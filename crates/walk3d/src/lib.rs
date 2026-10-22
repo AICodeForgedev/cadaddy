@@ -23,6 +23,7 @@ mod openings;
 pub mod package;
 mod pick;
 pub mod rfi;
+pub mod share;
 mod rules;
 mod spec;
 pub mod stairs;

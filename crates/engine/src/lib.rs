@@ -36,6 +36,7 @@ pub mod readfile;
 mod recent;
 pub mod rhai_engine;
 pub mod sample;
+pub mod sample_ifc;
 pub mod script_tools;
 pub mod secureload;
 pub mod select;

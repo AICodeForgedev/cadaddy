@@ -1,6 +1,9 @@
 //! `mep-fixtures [--seed N] [--count K] [--out DIR] [--hotel [--small]]`: write fixture sets
 //! `DIR/seed-N/` (sheets as PDF and DXF, `set.pdf`, `truth.json`). `cargo xtask mep-fixtures`
 //! runs it. `--hotel` generates a 4-storey hotel; `--small` makes it smaller (4 rooms/side).
+//! `--share DIR` writes three wings of the hotel (a 200-room job) as a shared project page's
+//! model files instead
+//! (`cargo xtask share-page --hotel`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -11,6 +14,7 @@ fn main() -> ExitCode {
     let mut out = PathBuf::from("target/mep-fixtures");
     let mut hotel = false;
     let mut small = false;
+    let mut share: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = || args.next().unwrap_or_default();
@@ -20,8 +24,9 @@ fn main() -> ExitCode {
             "--out" => out = PathBuf::from(value()),
             "--hotel" => hotel = true,
             "--small" => small = true,
+            "--share" => share = Some(PathBuf::from(value())),
             "-h" | "--help" => {
-                println!("mep-fixtures [--seed N (1)] [--count K (1)] [--out DIR] [--hotel [--small]]");
+                println!("mep-fixtures [--seed N (1)] [--count K (1)] [--out DIR] [--hotel [--small]] [--share DIR (the hotel as a shared page's model)]");
                 return ExitCode::SUCCESS;
             }
             other => {
@@ -31,6 +36,19 @@ fn main() -> ExitCode {
         }
     }
     let size = if small { cadaddy_mepfix::hotel::HotelSize::Small } else { cadaddy_mepfix::hotel::HotelSize::Full };
+    if let Some(dir) = share {
+        let t = cadaddy_mepfix::hotel_truth_for(seed, size);
+        return match cadaddy_mepfix::fieldpkg::write_share(&t, &dir, "Sample Hotel", 3) {
+            Ok((m, r)) => {
+                println!("share: {} elements in {} parts, {} KB, {} removed -> {}", m.elements, m.parts.len(), m.total_bytes() >> 10, r.removed.len(), dir.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("mep-fixtures: share: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     for s in seed..seed.saturating_add(count) {
         let set = if hotel {
             match cadaddy_mepfix::generate_hotel(s, size) {
