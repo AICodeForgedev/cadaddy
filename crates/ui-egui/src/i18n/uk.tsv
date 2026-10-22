@@ -2826,3 +2826,8 @@
 	{name}: not shown on {levels}	{name}: немає на {levels}
 	Every shaft and riser carries on through its levels.	Кожна шахта і стояк проходить через свої рівні.
 	Not a height: {text}	Не висота: {text}
+	Export COBie	Експортувати COBie
+	Validate COBie	Перевірити COBie
+	Export Handover Schedules	Експортувати відомості для передачі
+	COBie...	COBie...
+	Handover Schedules...	Відомості для передачі...
