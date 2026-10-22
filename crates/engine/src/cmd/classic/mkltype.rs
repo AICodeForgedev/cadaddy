@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mkltype", "Make Linetype", run_mkltype)
             .params(
-                "{file: path of the .lin file (created, or the definition added; one of the same name is replaced), name, \
+                "{file | path: path of the .lin file (created, or the definition added; one of the same name is replaced), name, \
                  description?, start: [x,y], end: [x,y] (one repeat of the pattern), handles? (lines on the start–end line: dashes; \
                  points: dots; text and shapes: carried along)} → {name, file, pattern}",
             )
