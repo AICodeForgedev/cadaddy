@@ -47,6 +47,9 @@ const MAX_LAYERS: usize = 256;
 const MAX_TRANSFORM_DEPTH: usize = 64;
 /// Nested `use` references.
 const MAX_USE_DEPTH: usize = 16;
+/// Generated vertices retained across the whole document (all paths and shapes), so repeated
+/// arc/curve flattening cannot amplify a compact input into unbounded geometry (CWE-400).
+const MAX_TOTAL_VERTS: usize = 8_000_000;
 /// Flattened chords per elliptical arc under a non-uniform transform.
 const MAX_ARC_CHORDS: usize = 10_000;
 /// Raster images per file, and the bytes of one.
@@ -173,6 +176,8 @@ struct Parser {
     layers: HashSet<String>,
     layer_color: u8,
     elements: usize,
+    /// Generated vertices still allowed across the whole document ([`MAX_TOTAL_VERTS`]).
+    verts_left: usize,
     visits: usize,
     css: Css,
     /// The `use` targets being read, innermost last (a reference cycle stops there).
@@ -203,6 +208,7 @@ impl Parser {
             layers: HashSet::from(["0".to_string()]),
             layer_color: 1,
             elements: 0,
+            verts_left: MAX_TOTAL_VERTS,
             visits: 0,
             css: Css::default(),
             uses: Vec::new(),
@@ -486,10 +492,17 @@ impl Parser {
         self.add(EntityKind::Ellipse(Ellipse { center: v3(center), major: v3(major), ratio, start: 0.0, end: std::f64::consts::TAU }))
     }
 
+    /// Charge `n` generated vertices to the document's budget.
+    fn spend_vertices(&mut self, n: usize) -> Result<()> {
+        self.verts_left = self.verts_left.checked_sub(n).ok_or_else(|| IoError::Format("SVG: too much generated geometry".into()))?;
+        Ok(())
+    }
+
     fn add_polyline(&mut self, pts: &[Vec2], closed: bool) -> Result<()> {
         if pts.len() < 2 {
             return Ok(());
         }
+        self.spend_vertices(pts.len())?;
         let vertices = pts.iter().map(|p| PolyVertex::new(*p)).collect();
         self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))
     }
@@ -1006,6 +1019,7 @@ impl Parser {
             run.pop();
         }
         if run.len() >= 2 {
+            self.spend_vertices(run.len())?;
             let vertices = std::mem::take(run);
             self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))?;
         } else {
