@@ -85,6 +85,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::agentdlg::DIALOG => crate::agentdlg::dialog(app, ctx, &mut open),
         crate::convertdlg::DIALOG => crate::convertdlg::dialog(app, ctx, &mut open),
         crate::hyperlinks::CONFIRM => crate::hyperlinks::confirm_dialog(app, ctx, &mut open),
+        crate::scripteditor::DIALOG => crate::scripteditor::dialog(app, ctx, &mut open),
         crate::secureloaddlg::DIALOG => crate::secureloaddlg::dialog(app, ctx, &mut open),
         crate::actionsdlg::DIALOG => crate::actionsdlg::dialog(app, ctx, &mut open),
         crate::customui::DIALOG => crate::customui::dialog(app, ctx, &mut open),

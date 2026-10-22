@@ -35,6 +35,7 @@ pub mod prompt;
 pub mod readfile;
 mod recent;
 pub mod sample;
+pub mod rhai_engine;
 pub mod script_tools;
 pub mod secureload;
 pub mod select;
@@ -1014,7 +1015,7 @@ pub struct Session {
     /// MULTIPLE: the command started again each time it ends, until it is cancelled.
     pub(crate) multiple: Option<String>,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
-    in_script: bool,
+    pub(crate) in_script: bool,
     /// The last script run (RSCRIPT at the command line runs it again).
     pub script_last: Option<String>,
     /// The script a failed line stopped: its lines, the next one, how deep it was called.
@@ -1109,6 +1110,8 @@ pub struct Session {
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
+    /// Rhai scripting engine state (scope and engine; see [`rhai_engine`]).
+    pub rhai: rhai_engine::RhaiState,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1212,6 +1215,7 @@ impl Session {
             background_checks: false,
             drywall_viewmode: None,
             project: None,
+            rhai: rhai_engine::RhaiState::new(),
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't

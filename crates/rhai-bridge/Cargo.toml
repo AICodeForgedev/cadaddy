@@ -1,0 +1,18 @@
+[package]
+name = "cadaddy-rhai-bridge"
+description = "Thin bridge: lets Rhai closures call back into a mutable reference safely"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# This crate opts out of the workspace-wide `unsafe_code = "forbid"` because it contains the one
+# controlled use of unsafe required to bridge Rhai's `'static` closure registrations with a mutable
+# borrow of `Session`.  The public API is fully safe; the unsafe is confined to `SlotRef::with`.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"

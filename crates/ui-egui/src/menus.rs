@@ -932,6 +932,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("color".into());
             Ok(Value::Null)
         }
+        "rhaiedit" if params.is_null() => {
+            app.ui.dialog = Some(crate::scripteditor::DIALOG.into());
+            Ok(Value::Null)
+        }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
             crate::docking::command(app, false, &json!({"operation":"open", "panel":"properties"}))
         }

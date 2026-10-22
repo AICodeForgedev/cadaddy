@@ -113,6 +113,7 @@ pub mod printrev;
 pub mod printset;
 pub mod projrules;
 mod props;
+mod rhai_cmd;
 pub mod redline;
 pub mod revise3d;
 pub mod rooms3d;
@@ -419,6 +420,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(frames::specs());
         v.extend(coordination::specs());
         v.extend(project::specs());
+        v.extend(rhai_cmd::specs());
         v
     })
 }

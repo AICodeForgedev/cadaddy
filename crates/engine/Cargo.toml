@@ -30,6 +30,10 @@ rstar = { version = "0.12", default-features = false }
 miniz_oxide = "0.8"
 # Human-readable project rules files (MIT OR Apache-2.0; already used by cadaddy-ui-egui).
 toml = "1"
+# Embedded scripting language (MIT OR Apache-2.0). Sandboxed: Engine::new_raw() + selective packages.
+rhai = { version = "1.27", default-features = false, features = ["std", "serde"] }
+# Bridge for Rhai closures to call back into Session (see rhai-bridge crate).
+cadaddy-rhai-bridge = { path = "../rhai-bridge" }
 
 # The local time-zone offset on Windows (no /etc/localtime there): FIELD dates and the Drawing
 # Recovery times were UTC. MIT OR Apache-2.0; only its clock.
