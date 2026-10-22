@@ -17,7 +17,8 @@
 //! `--mem-open FILE` the most memory opening FILE took above its bytes and what the open drawing
 //! holds (for the size's DWG: `mem_open_dwg_peak_mb@N`, `mem_open_dwg_live_mb@N`). Process memory
 //! is private bytes on Windows, anonymous resident memory on Linux, resident memory elsewhere
-//! (sampled for the peak on macOS). `--write FILE [--objects N]` saves the N-object drawing as
+//! (sampled for the peak on macOS); the open's peak is taken above the same counter's start
+//! (Windows `PeakPagedMemorySize64` above `PrivateMemorySize64`, Linux `VmHWM` above `VmRSS`). `--write FILE [--objects N]` saves the N-object drawing as
 //! FILE, for looking at one size by hand.
 //!
 //! For comparing with other programs (`docs/perf-vs.md`): `--plans DIR` writes the 2D plan of
@@ -158,14 +159,29 @@ fn private_mb() -> Option<f64> {
     rss_mb()
 }
 
-/// The most memory this process has held, in MB: its peak commit (private bytes) on Windows, its
-/// peak resident memory on Linux; `None` elsewhere (macOS has no peak to ask for: the caller
-/// samples).
+/// The most memory this process has held, in MB; `None` elsewhere (macOS has no peak to ask for:
+/// the caller samples [`rss_mb`]). Windows: `PeakPagedMemorySize64`, the peak of pagefile-backed
+/// memory, the documented peak beside `PrivateMemorySize64` (close to but not the same counter:
+/// both count the process's private allocations). Linux: `VmHWM`, the peak of all resident memory
+/// (code and file pages too), so its base is `VmRSS`, not `RssAnon` ([`peak_base_mb`]).
 fn peak_private_mb() -> Option<f64> {
     if cfg!(windows) {
         return powershell_process("PeakPagedMemorySize64");
     }
     proc_status_kb("VmHWM:").map(|kb| kb / 1024.0)
+}
+
+/// The memory [`peak_private_mb`] (or macOS's sampling) measures, now, in MB: the base a peak is
+/// taken above, from the same counter family. Windows: `PrivateMemorySize64`; Linux: `VmRSS`
+/// (all resident memory, as `VmHWM` counts it); elsewhere the resident memory [`rss_mb`] samples.
+fn peak_base_mb() -> Option<f64> {
+    if cfg!(windows) {
+        return private_mb();
+    }
+    if let Some(kb) = proc_status_kb("VmRSS:") {
+        return Some(kb / 1024.0);
+    }
+    rss_mb()
 }
 
 fn powershell_process(field: &str) -> Option<f64> {
@@ -230,15 +246,18 @@ fn mem_live(n: usize) {
 fn mem_open(path: &str) {
     let bytes = std::fs::read(path).unwrap_or_default();
     let before = private_mb().unwrap_or(0.0);
+    // The peak is taken above its own counter's start (Linux: `VmHWM` above `VmRSS`, so code and
+    // file pages aren't counted as the open's), the live memory above `before`.
+    let base = peak_base_mb().unwrap_or(0.0);
     // The peak so far (start-up, the file read) is not the open's: Windows and Linux keep the
     // process's peak, so the open's is only seen when it goes above the start.
-    let start_peak = peak_private_mb().unwrap_or(0.0).max(before);
+    let start_peak = peak_private_mb().unwrap_or(0.0).max(base);
     let (d, peak) = with_peak(|| cadaddy_io::read(&bytes, path));
-    let live = private_mb().unwrap_or(0.0);
+    let live = private_mb().unwrap_or(0.0) - before;
     let objects = d.as_ref().map_or(0, |d| d.model.len());
-    let peak = if peak > start_peak { peak } else { live };
+    let peak = if peak > start_peak { peak - base } else { live };
     let r = |mb: f64| (mb.max(0.0) * 10.0).round() / 10.0;
-    println!("{}", json!({ "peak_mb": r(peak - before), "live_mb": r(live - before), "objects": objects }));
+    println!("{}", json!({ "peak_mb": r(peak), "live_mb": r(live), "objects": objects }));
     drop(d);
 }
 
