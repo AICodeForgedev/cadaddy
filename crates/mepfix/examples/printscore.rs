@@ -11,8 +11,9 @@
 //! Stages: every page imported (`pdf_read`), each recognised as a sheet (number, discipline,
 //! level, scale, grid), newer revisions replacing older sheets of the same number, the sheet
 //! map assembled, then the readers on the sheets they read: ceilings, structure, walls,
-//! architecture, ducts, pipes, sprinklers, conduits and callouts, and the heights of the
-//! conduit runs (from a note on the print vs a stacking rule).
+//! architecture, ducts, pipes, sprinklers, conduits, trays and feeder banks, and callouts; the
+//! conduit runs (branch and feeder) with how their heights are known (a note on the print vs a
+//! rule), and the clashes among them (level by level, at those heights).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -269,6 +270,32 @@ fn main() {
         *sources.entry(format!("{:?}", c.height_source)).or_default() += 1;
     }
     println!("conduit heights: {noted} with a note; by source {sources:?}");
+    let t = Instant::now();
+    let trays = cadaddy_mepfix::tray_reader::read_trays(&dxf, &map);
+    stage("trays", t);
+    println!(
+        "trays: {}, feeder bank conduits: {}, riser banks: {}",
+        trays.runs.iter().filter(|r| r.kind == "tray").count(),
+        trays.runs.iter().filter(|r| r.kind == "conduit").count(),
+        trays.risers.len()
+    );
+    let runs = cadaddy_mepfix::printed::conduit_runs(&conduits, &trays);
+    let pct = |n: usize| 100.0 * n as f64 / runs.len().max(1) as f64;
+    let from_note = runs.iter().filter(|r| r.from_note).count();
+    let unknown = runs.iter().filter(|r| r.bottom_ft.is_none()).count();
+    let guessed = runs.len() - from_note - unknown;
+    println!(
+        "conduit runs found: {} (branch {}, feeder {}); heights: {from_note} from a note ({:.0}%), {guessed} by rule ({:.0}%), {unknown} unknown",
+        runs.len(),
+        runs.iter().filter(|r| r.kind == "branch").count(),
+        runs.iter().filter(|r| r.kind == "feeder").count(),
+        pct(from_note),
+        pct(guessed)
+    );
+    let t = Instant::now();
+    let clashes = cadaddy_mepfix::printed::clashes(&runs);
+    stage("clashes", t);
+    println!("clashes among the conduit runs: {}", clashes.len());
     let t = Instant::now();
     let (mut duct_runs, mut terminals, mut pipe_runs, mut risers) = (0, 0, 0, 0);
     for (n, d) in &prefs {

@@ -421,49 +421,56 @@ fn to_seg(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
 }
 
 /// Face pairs → wall pieces (centreline, thickness inches), then pieces on one line with the same
-/// thickness joined across door-sized gaps that a door swings in (`hinges`: arc centres).
-fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str) -> Vec<FoundWall> {
+/// thickness joined across door-sized gaps that a door swings in (`hinges`: arc centres). A
+/// face's partner is the nearest parallel at least `min_ft` away (a print's glazing and trim
+/// lines along a wall are nearer than its other face), on its left (a drawing's walls are drawn
+/// one way round), or with `either_side` on each side (a print strokes its lines either way).
+fn find_walls(lines: &[Seg], hinges: &[[f64; 2]], level: &str, min_ft: f64, either_side: bool) -> Vec<FoundWall> {
     let mut pieces: Vec<FoundWall> = Vec::new();
+    let sides: &[f64] = if either_side { &[1.0, -1.0] } else { &[1.0] };
     for (i, f) in lines.iter().enumerate() {
         let lf = dist(f.a, f.b);
         if lf < 1.0 {
             continue;
         }
         let u = [(f.b[0] - f.a[0]) / lf, (f.b[1] - f.a[1]) / lf];
-        let n = [-u[1], u[0]];
-        // The nearest parallel partner on its left, overlapping it.
-        let mut best: Option<(f64, f64, f64)> = None;
-        for (j, g) in lines.iter().enumerate() {
-            if i == j {
-                continue;
+        for &side in sides {
+            let n = [-u[1] * side, u[0] * side];
+            // The nearest parallel partner on that side, overlapping it.
+            let mut best: Option<(f64, f64, f64)> = None;
+            for (j, g) in lines.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let lg = dist(g.a, g.b);
+                if lg < 1.0 {
+                    continue;
+                }
+                let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
+                if (u[0] * v[1] - u[1] * v[0]).abs() > 0.01 {
+                    continue;
+                }
+                let off = (g.a[0] - f.a[0]) * n[0] + (g.a[1] - f.a[1]) * n[1];
+                if !(min_ft..=16.0 / 12.0).contains(&off) {
+                    continue;
+                }
+                let along = |p: [f64; 2]| (p[0] - f.a[0]) * u[0] + (p[1] - f.a[1]) * u[1];
+                let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
+                let (s0, s1) = (g0.max(0.0), g1.min(lf));
+                if s1 - s0 < 0.5 {
+                    continue;
+                }
+                // The nearest; at the same offset (a frame's edge along the face), the longer overlap.
+                if best.is_none_or(|b| off < b.0 - 1e-6 || (off < b.0 + 1e-6 && s1 - s0 > b.2 - b.1 + 1e-6)) {
+                    best = Some((off, s0, s1));
+                }
             }
-            let lg = dist(g.a, g.b);
-            if lg < 1.0 {
-                continue;
+            let Some((off, s0, s1)) = best else { continue };
+            let at = |s: f64| [f.a[0] + u[0] * s + n[0] * off / 2.0, f.a[1] + u[1] * s + n[1] * off / 2.0];
+            let w = FoundWall { level: level.into(), a_ft: at(s0), b_ft: at(s1), thickness_in: off * 12.0, ..FoundWall::default() };
+            if !pieces.iter().any(|p| same_line(p, &w) && overlap(p, &w) > 0.5) {
+                pieces.push(w);
             }
-            let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
-            if (u[0] * v[1] - u[1] * v[0]).abs() > 0.01 {
-                continue;
-            }
-            let off = (g.a[0] - f.a[0]) * n[0] + (g.a[1] - f.a[1]) * n[1];
-            if !(2.0 / 12.0..=16.0 / 12.0).contains(&off) {
-                continue;
-            }
-            let along = |p: [f64; 2]| (p[0] - f.a[0]) * u[0] + (p[1] - f.a[1]) * u[1];
-            let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
-            let (s0, s1) = (g0.max(0.0), g1.min(lf));
-            if s1 - s0 < 0.5 {
-                continue;
-            }
-            if best.is_none_or(|b| off < b.0 - 1e-6) {
-                best = Some((off, s0, s1));
-            }
-        }
-        let Some((off, s0, s1)) = best else { continue };
-        let at = |s: f64| [f.a[0] + u[0] * s + n[0] * off / 2.0, f.a[1] + u[1] * s + n[1] * off / 2.0];
-        let w = FoundWall { level: level.into(), a_ft: at(s0), b_ft: at(s1), thickness_in: off * 12.0, ..FoundWall::default() };
-        if !pieces.iter().any(|p| same_line(p, &w) && overlap(p, &w) > 0.5) {
-            pieces.push(w);
         }
     }
     // Join across openings.
@@ -599,22 +606,96 @@ fn plan_tags(d: &Drawing, al: &Alignment, types: &[ReadType]) -> Vec<(String, [f
 /// legend tag types its wall; a tag the legend doesn't have is kept in [`FoundWall::stray_tag`].
 /// No guesses or heights (see [`read_walls`]).
 pub fn read_plan_walls(d: &Drawing, al: &Alignment, level: &str, types: &[ReadType]) -> Vec<FoundWall> {
-    let lines: Vec<Seg> = d
-        .model
-        .iter()
-        .filter(|e| {
-            let l = e.common.layer.to_ascii_uppercase();
-            l.contains("WALL") && !l.contains("TAG")
-        })
-        .filter_map(|e| match &e.kind {
-            EntityKind::Line(l) => {
-                Some(Seg { a: sheet_reader::building_from_model(al, [l.a.x, l.a.y]), b: sheet_reader::building_from_model(al, [l.b.x, l.b.y]) })
+    read_plan_walls_within(d, al, level, types, None)
+}
+
+/// The thinnest wall a print's face pairs make (inches): thinner pairs are glazing, frames and
+/// trim drawn along or beside a wall.
+const PRINT_MIN_WALL_IN: f64 = 3.5;
+
+/// Whether a face pair is a rung of a ladder (stair treads, a rack): a third same-extent
+/// parallel at the same spacing beyond either face.
+fn ladder(w: &FoundWall, lines: &[Seg]) -> bool {
+    let len = dist(w.a_ft, w.b_ft);
+    if len <= 1e-9 {
+        return false;
+    }
+    let u = [(w.b_ft[0] - w.a_ft[0]) / len, (w.b_ft[1] - w.a_ft[1]) / len];
+    let t = w.thickness_in / 12.0;
+    [1.5 * t, -1.5 * t].iter().any(|off| {
+        lines.iter().any(|l| {
+            let ll = dist(l.a, l.b);
+            if ll <= 1e-9 || (ll - len).abs() > 0.25 {
+                return false;
             }
-            _ => None,
+            let v = [(l.b[0] - l.a[0]) / ll, (l.b[1] - l.a[1]) / ll];
+            let side = (l.a[0] - w.a_ft[0]) * -u[1] + (l.a[1] - w.a_ft[1]) * u[0];
+            (u[0] * v[1] - u[1] * v[0]).abs() < 0.01 && (side - off).abs() < 0.05
         })
-        .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()))
-        .take(MAX_LINES)
-        .collect();
+    })
+}
+
+/// Whether a line lies inside a wall: a parallel on each side within a wall's thickness covering
+/// it (a window's glass between the faces, a centreline). On a print it would pair with a face.
+fn between_faces(l: &Seg, lines: &[Seg]) -> bool {
+    let len = dist(l.a, l.b);
+    if len <= 1e-9 {
+        return false;
+    }
+    let u = [(l.b[0] - l.a[0]) / len, (l.b[1] - l.a[1]) / len];
+    let covered = |sign: f64| {
+        lines.iter().any(|g| {
+            let lg = dist(g.a, g.b);
+            if lg <= 1e-9 {
+                return false;
+            }
+            let v = [(g.b[0] - g.a[0]) / lg, (g.b[1] - g.a[1]) / lg];
+            let off = ((g.a[0] - l.a[0]) * -u[1] + (g.a[1] - l.a[1]) * u[0]) * sign;
+            let along = |p: [f64; 2]| (p[0] - l.a[0]) * u[0] + (p[1] - l.a[1]) * u[1];
+            let (g0, g1) = (along(g.a).min(along(g.b)), along(g.a).max(along(g.b)));
+            (u[0] * v[1] - u[1] * v[0]).abs() < 0.01 && off > 1.0 / 12.0 && off <= 8.0 / 12.0 && g0 <= 0.05 && g1 >= len - 0.05
+        })
+    };
+    covered(1.0) && covered(-1.0)
+}
+
+/// How far past the structural grid (feet) a print's wall faces are looked for: the exterior
+/// walls sit on or just outside it; beyond is the title block, the legend and the notes.
+const PRINT_MARGIN_FT: f64 = 6.0;
+
+/// [`read_plan_walls`], and on a drawing without wall layers (a print: pen layers only) from its
+/// drawn linework (lines and outlines in the drawing pens, the screened background left out)
+/// inside `inside` (building feet).
+fn read_plan_walls_within(d: &Drawing, al: &Alignment, level: &str, types: &[ReadType], inside: Option<([f64; 2], [f64; 2])>) -> Vec<FoundWall> {
+    let to_b = |p: [f64; 2]| sheet_reader::building_from_model(al, p);
+    let layered = d.layers.iter().any(|l| {
+        let l = l.name.to_ascii_uppercase();
+        l.contains("WALL") && !l.contains("TAG")
+    });
+    let lines: Vec<Seg> = if layered {
+        d.model
+            .iter()
+            .filter(|e| {
+                let l = e.common.layer.to_ascii_uppercase();
+                l.contains("WALL") && !l.contains("TAG")
+            })
+            .filter_map(|e| match &e.kind {
+                EntityKind::Line(l) => Some(Seg { a: to_b([l.a.x, l.a.y]), b: to_b([l.b.x, l.b.y]) }),
+                _ => None,
+            })
+            .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()))
+            .take(MAX_LINES)
+            .collect()
+    } else {
+        let within = |p: [f64; 2]| inside.is_none_or(|(lo, hi)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]);
+        let drawn: Vec<Seg> = sheet_reader::drawn_segments(d, true)
+            .into_iter()
+            .map(|[a, b]| Seg { a: to_b(a), b: to_b(b) })
+            .filter(|s| s.a.iter().chain(&s.b).all(|v| v.is_finite()) && within(s.a) && within(s.b) && dist(s.a, s.b) >= 1.0)
+            .take(MAX_LINES)
+            .collect();
+        drawn.iter().filter(|l| !between_faces(l, &drawn)).copied().collect()
+    };
     let hinges: Vec<[f64; 2]> = d
         .model
         .iter()
@@ -625,7 +706,10 @@ pub fn read_plan_walls(d: &Drawing, al: &Alignment, level: &str, types: &[ReadTy
         .filter(|p| p.iter().all(|v| v.is_finite()))
         .take(MAX_LINES)
         .collect();
-    let mut walls = find_walls(&lines, &hinges, level);
+    let mut walls = find_walls(&lines, &hinges, level, if layered { 2.0 / 12.0 } else { PRINT_MIN_WALL_IN / 12.0 }, !layered);
+    if !layered {
+        walls.retain(|w| !ladder(w, &lines));
+    }
     for (tag, p, leader, known) in plan_tags(d, al, types) {
         let reach = if leader { 1.0 } else { 3.0 };
         let best = walls
@@ -833,8 +917,9 @@ pub fn read_walls(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingR
         }
     }
     let decks = deck_heights(&framing, structure);
+    let inside = sheet_reader::grid_box(map, PRINT_MARGIN_FT);
     for (level, al, d) in &plans {
-        let mut walls = read_plan_walls(d, al, level, &res.types);
+        let mut walls = read_plan_walls_within(d, al, level, &res.types, inside);
         let tagged: Vec<FoundWall> = walls.iter().filter(|w| w.tagged).cloned().collect();
         let (lo, hi) = walls
             .iter()

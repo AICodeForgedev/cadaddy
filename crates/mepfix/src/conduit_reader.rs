@@ -15,6 +15,11 @@
 //!   it is in; else stacked under the other trades below structure. A height from a rule is an
 //!   assumption, and says so.
 //!
+//! - **Without layer names** (a print: its pen layers only): every straight piece drawn in a
+//!   drawing pen (not the screened background) is a candidate, and a run is one drawn single: a
+//!   long piece with a same-length parallel close beside it is a feeder bank or a tray's rail
+//!   ([`crate::tray_reader`]'s), not branch conduit.
+//!
 //! E-sheet conduit and homerun routes are diagrammatic: every route this reader builds is an
 //! assumed route between architecturally placed devices and panels, never a surveyed path.
 //! Positions come from Q255's sheet map (each sheet aligned by its grid), not from the truth.
@@ -224,11 +229,31 @@ pub fn read_conduits(dxf_data: &[(String, Vec<u8>)], map: &SheetMap) -> ConduitR
 
 /// The structural grid's extents with a margin (none without a grid: everything is in).
 fn building_box(map: &SheetMap) -> Option<([f64; 2], [f64; 2])> {
-    let xs: Vec<f64> = map.grid_x.iter().map(|g| g.at_ft).filter(|v| v.is_finite()).collect();
-    let ys: Vec<f64> = map.grid_y.iter().map(|g| g.at_ft).filter(|v| v.is_finite()).collect();
-    let lo = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min) - GRID_MARGIN_FT;
-    let hi = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max) + GRID_MARGIN_FT;
-    (!xs.is_empty() && !ys.is_empty()).then(|| ([lo(&xs), lo(&ys)], [hi(&xs), hi(&ys)]))
+    crate::sheet_reader::grid_box(map, GRID_MARGIN_FT)
+}
+
+/// How close (feet) a same-length parallel makes a long line part of a bank or a tray, not a
+/// branch run (without layer names).
+const BANKED_FT: f64 = 1.5;
+
+/// Whether a long line has a parallel of about its extent within [`BANKED_FT`]: a feeder bank's
+/// conduit or a tray's rail.
+fn banked(l: &Line2, others: &[Line2]) -> bool {
+    let len = l.len();
+    if len <= 1e-9 {
+        return false;
+    }
+    let u = [(l.b[0] - l.a[0]) / len, (l.b[1] - l.a[1]) / len];
+    others.iter().any(|o| {
+        let lo = o.len();
+        if lo <= 1e-9 || (lo - len).abs() > 0.5 {
+            return false;
+        }
+        let v = [(o.b[0] - o.a[0]) / lo, (o.b[1] - o.a[1]) / lo];
+        let off = ((o.a[0] - l.a[0]) * -u[1] + (o.a[1] - l.a[1]) * u[0]).abs();
+        let along = (o.a[0] - l.a[0]) * u[0] + (o.a[1] - l.a[1]) * u[1];
+        (u[0] * v[1] - u[1] * v[0]).abs() < 0.01 && off > 0.01 && off <= BANKED_FT && (along.abs() < 0.5 || (along.abs() - len).abs() < 0.5)
+    })
 }
 
 fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level: &str, al: &Alignment, inside: Option<([f64; 2], [f64; 2])>) {
@@ -236,10 +261,11 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
     let to_b = |x: f64, y: f64| building_from_model(al, [x, y]);
     let mut lines: Vec<Line2> = Vec::new();
     let mut texts: Vec<(String, [f64; 2])> = Vec::new();
+    // A drawing with the device layer reads its lines; a print (no such layer) its drawn pens.
+    let layered = d.layers.iter().any(|l| l.name.eq_ignore_ascii_case("DEVICE"));
     for e in d.model.iter().take(MAX_ITEMS) {
-        let device = e.common.layer.eq_ignore_ascii_case("DEVICE");
         match &e.kind {
-            EntityKind::Line(l) if device => {
+            EntityKind::Line(l) if layered && e.common.layer.eq_ignore_ascii_case("DEVICE") => {
                 let ln = Line2 { a: to_b(l.a.x, l.a.y), b: to_b(l.b.x, l.b.y) };
                 if within(ln.a) && within(ln.b) {
                     lines.push(ln);
@@ -252,8 +278,18 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
             _ => {}
         }
     }
-    // Conduit: the long device lines, each with the nearest tag beside it.
-    for l in lines.iter().filter(|l| l.len() >= MIN_RUN_FT) {
+    if !layered {
+        for [a, b] in crate::sheet_reader::drawn_segments(d, false).into_iter().take(MAX_ITEMS) {
+            let ln = Line2 { a: to_b(a[0], a[1]), b: to_b(b[0], b[1]) };
+            if within(ln.a) && within(ln.b) {
+                lines.push(ln);
+            }
+        }
+    }
+    let long: Vec<Line2> = lines.iter().filter(|l| l.len() >= MIN_RUN_FT).copied().collect();
+    // Conduit: the long device lines (drawn single, without layers), each with the nearest tag
+    // beside it.
+    for l in long.iter().filter(|l| layered || !banked(l, &long)) {
         let tag = texts
             .iter()
             .filter_map(|(t, p)| parse_conduit_tag(t).map(|s| (t, s, p)))
