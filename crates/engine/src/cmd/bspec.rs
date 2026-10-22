@@ -207,11 +207,17 @@ pub(crate) fn bounds_rooms(sp: &BuildingSpec, layer: &str) -> bool {
 /// drawn as its two faces (a room ends at the partition's face, not its middle). None: nothing
 /// to leave out, or not in model space (trace on the drawing itself).
 pub(crate) fn room_plan(s: &Session) -> Result<Option<Session>> {
+    let sp = s.doc()?.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
+    room_plan_for(s, sp)
+}
+
+/// [`room_plan`] with the spec given instead of the drawing's own (`bspec.draft`'s layer roles
+/// before they are stored).
+pub(crate) fn room_plan_for(s: &Session, sp: Option<BuildingSpec>) -> Result<Option<Session>> {
     if s.space().is_paper() {
         return Ok(None);
     }
     let d = s.doc()?;
-    let sp = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
     let sp = sp.filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall)));
     let generated = |e: &Entity| wallgen::made_as(e).is_some() || super::rooms3d::room_of(&e.common).is_some();
     let keep = |e: &Entity| !generated(e) && sp.as_ref().is_none_or(|sp| bounds_rooms(sp, &e.common.layer));
@@ -262,6 +268,59 @@ pub(crate) fn room_plan(s: &Session) -> Result<Option<Session>> {
     let mut t = Session::empty();
     t.open_drawing(wd, "Room boundaries", None);
     Ok(Some(t))
+}
+
+/// A plan to trace rooms on from the objects that bound them, picked by handle: a plan with no
+/// layer roles (a PDF-converted sheet), its walls, doors and windows as `plan.classify` reads
+/// them. Everything else (MEP, stairs, tags, furniture, dimensions) is left out, so it never
+/// splits a room. None: nothing picked (trace on the drawing itself).
+pub(crate) fn room_plan_of(s: &Session, keep: &std::collections::HashSet<Handle>) -> Result<Option<Session>> {
+    if keep.is_empty() {
+        return Ok(None);
+    }
+    let mut wd = (*s.doc()?).clone();
+    let drop: Vec<Handle> = wd.model.iter().map(|e| e.handle).filter(|h| !keep.contains(h)).collect();
+    for h in drop {
+        wd.model.remove(h);
+    }
+    let mut t = Session::empty();
+    t.open_drawing(wd, "Room boundaries", None);
+    Ok(Some(t))
+}
+
+/// Two traced outlines are the same room: same area and extents (a second text in it, or traced
+/// from another corner).
+pub(crate) fn same_outline(a: &[Vec2], b: &[Vec2]) -> bool {
+    let (aa, ab) = (cadaddy_geom::shoelace(a).abs(), cadaddy_geom::shoelace(b).abs());
+    let (ba, bb) = (cadaddy_geom::Bounds2::from_points(a.iter().copied()), cadaddy_geom::Bounds2::from_points(b.iter().copied()));
+    let tol = 1e-6 * aa.max(ab).max(1.0);
+    (aa - ab).abs() <= 1e-6 * aa.max(ab) && ba.min.dist(bb.min) < tol.sqrt() && ba.max.dist(bb.max) < tol.sqrt()
+}
+
+/// An equipment or device mark, not a room's name: one word with a digit, short (`EF-1`, `VAV2`,
+/// `RTU-3A`, `P1`).
+pub(crate) fn equipment_mark(t: &str) -> bool {
+    let t = t.trim();
+    !t.contains(char::is_whitespace) && t.chars().any(|c| c.is_ascii_digit()) && t.chars().count() <= 8
+}
+
+/// The tag naming each traced area: of the names inside it (area index, handle, text, where,
+/// height), the tallest, then the one nearest the area's middle. Labels of what stands in the
+/// room (an exhaust fan's name, a stair note) are smaller than the room's tag; equipment marks
+/// never name a room. (area index, tag, text), in the order the areas were found.
+pub(crate) fn room_tags(areas: &[Vec<Vec2>], names: &[(usize, Handle, String, Vec2, f64)]) -> Vec<(usize, Handle, String)> {
+    let mut out = Vec::new();
+    for (i, area) in areas.iter().enumerate() {
+        let mid = cadaddy_geom::Bounds2::from_points(area.iter().copied()).center();
+        let best = names.iter().filter(|n| n.0 == i && !equipment_mark(&n.2)).max_by(|a, b| {
+            let h = |n: &(usize, Handle, String, Vec2, f64)| if n.4.is_finite() { n.4 } else { 0.0 };
+            h(a).total_cmp(&h(b)).then_with(|| b.3.dist(mid).total_cmp(&a.3.dist(mid)))
+        });
+        if let Some((_, h, t, _, _)) = best {
+            out.push((i, *h, t.clone()));
+        }
+    }
+    out
 }
 
 /// A described part as `bspec.get` and `bspec.draft` give it.

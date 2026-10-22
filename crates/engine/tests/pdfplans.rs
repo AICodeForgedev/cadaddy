@@ -90,6 +90,46 @@ fn a_pdf_plan_is_read_by_what_it_draws() {
     assert!(b["walls"].as_u64().unwrap() >= 4, "{b}");
 }
 
+/// The plan with what a real sheet has in its rooms (Q251), in light pens: a 14" duct across the
+/// office with its label between the duct's sides, an exhaust fan's mark, a stair in the lobby
+/// (stringers, ten 11" treads, its note on the landing), room numbers by the names.
+fn cluttered() -> Session {
+    let mut s = plan(true);
+    layer(&mut s, "DUCT", 18);
+    s.execute("line", &json!({"points": [[6, 60], [234, 60]]})).unwrap();
+    s.execute("line", &json!({"points": [[6, 74], [234, 74]]})).unwrap();
+    text(&mut s, [60.0, 65.0], "SUPPLY AIR", 4.0);
+    text(&mut s, [180.0, 200.0], "EF-1", 4.0);
+    layer(&mut s, "STAIR", 18);
+    rect(&mut s, [420.0, 60.0], [464.0, 230.0]);
+    for i in 1..11 {
+        let y = 60.0 + 11.0 * f64::from(i);
+        s.execute("line", &json!({"points": [[420, y], [464, y]]})).unwrap();
+    }
+    // The note on the landing (44" × 60": a room's size when the treads bound it).
+    text(&mut s, [424.0, 195.0], "STAIR", 3.0);
+    layer(&mut s, "TAGS", 25);
+    text(&mut s, [90.0, 40.0], "101", 6.0);
+    text(&mut s, [380.0, 105.0], "102", 6.0);
+    s
+}
+
+#[test]
+fn ducts_stairs_and_marks_never_make_or_split_rooms() {
+    let mut s = through_pdf(&cluttered());
+    let r = s.execute("plan.classify", &json!({})).unwrap();
+    let mut rooms: Vec<&str> = r["rooms"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    rooms.sort_unstable();
+    assert_eq!(rooms, vec!["LOBBY", "OFFICE"], "{r}");
+    // Drafted: two rooms, numbered from the tags inside them, and the office whole (its number
+    // is below the duct, its name above).
+    let r = s.execute("plan.classify", &json!({"draft": true})).unwrap();
+    let rooms = r["spec"]["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 2, "{}", r["spec"]);
+    let office = rooms.iter().find(|x| x["name"] == "Office").unwrap();
+    assert_eq!(office["number"], json!("101"), "{office}");
+}
+
 #[test]
 fn the_scale_comes_from_a_dimension_without_a_note() {
     let mut s = through_pdf(&plan(false));
