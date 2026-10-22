@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{handle? (default: selected viewports), scale?: paper units per model unit | \"1:50\", viewHeight?, center?: [x,y], locked?, annoScale?: scale name (the viewport's own annotation scale) | null (follow its scale), freeze?: [layer], thaw?: [layer], colors?: {layer: color | null}, linetypes?: {layer: linetype | null}, lineweights?: {layer: mm | null}}",
         ),
         CommandSpec::new("vplayer", "Viewport Layer Freeze", run_viewport_set)
-            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}, linetypes?: {layer: linetype | null}, lineweights?: {layer: mm | null}} (typed: option prompts)")
+            .params("{handle?, freeze?: [layer], thaw?: [layer], colors?: {layer: color (\"red\" | 1..255 | \"r,g,b\") | null to clear}, linetypes?: {layer: linetype | null}, lineweights?: {layer: mm | null}, and viewport.set's: scale?, viewHeight?, center?, locked?, annoScale?} (typed: option prompts)")
             .interactive(|_| Ok(Box::new(vplayer::VplayerM::default()))),
         CommandSpec::new("pagesetup", "Page Setup Manager...", run_pagesetup)
             .menu(&["File", "Page Setup Manager..."])
@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
-            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]]} (typed or from the menu: the Plot dialog)")
+            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot)} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
             .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
@@ -91,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(plotcli::DashPlotM::default()))),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
-            .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?} (as PLOT)")
+            .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?, device?, layouts?: [names] (one PDF of these sheets)} (as PLOT)")
             .noundo(),
         CommandSpec::new("mspace", "Model Space (in viewport)", run_mspace)
             .alias(&["ms"])

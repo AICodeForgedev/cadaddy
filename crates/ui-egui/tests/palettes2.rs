@@ -97,7 +97,7 @@ fn clicking_a_block_places_it_with_the_options_and_repeats() {
 fn tool_palettes_are_made_from_objects_used_kept_and_exchanged() {
     hooks();
     let mut app = app();
-    app.session.execute("layer", &json!({ "action": "new", "name": "WALLS" })).ok();
+    app.session.execute("layer.new", &json!({ "name": "WALLS" })).ok();
     if app.session.doc().unwrap().layer("WALLS").is_none() {
         app.session.doc_mut().unwrap().layers.push(cadaddy_engine::doc::Layer::new("WALLS"));
     }

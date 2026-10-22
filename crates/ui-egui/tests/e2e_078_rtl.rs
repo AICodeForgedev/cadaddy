@@ -35,7 +35,7 @@ fn close(e: &mut E2e) {
 #[test]
 fn arabic_dialogs_run_from_the_right() {
     let mut e = E2e::new();
-    e.exec("layer", json!({ "option": "new", "name": "Spare" }));
+    e.exec("layer.new", json!({ "name": "Spare" }));
     let purge = ["Purge Checked Items", "Purge All", "Close"];
     {
         let (command, id, row) = ("purge", "purge", &purge[..]);

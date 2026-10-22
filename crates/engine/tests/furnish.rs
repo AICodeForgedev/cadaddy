@@ -15,7 +15,7 @@ fn outline(s: &mut Session, layer: &str, center: [f64; 2], w: f64, d: f64, deg: 
     let (c, sn) = (deg.to_radians().cos(), deg.to_radians().sin());
     let p = |x: f64, y: f64| json!([center[0] + x * c - y * sn, center[1] + x * sn + y * c]);
     s.execute("layer.new", &json!({"name": layer, "current": true})).ok();
-    s.execute("layer.set", &json!({"name": layer, "current": true})).ok();
+    s.execute("layer.current", &json!({"name": layer})).ok();
     s.execute("pline", &json!({"vertices": [p(-w / 2.0, -d / 2.0), p(w / 2.0, -d / 2.0), p(w / 2.0, d / 2.0), p(-w / 2.0, d / 2.0)], "closed": true}))
         .unwrap()["handle"]
         .as_str()

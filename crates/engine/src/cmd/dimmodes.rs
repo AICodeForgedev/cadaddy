@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The DIM command's parameters (its JSON form).
-pub const DIM_PARAMS: &str = "{p1, p2, at} (linear) | {handle, at?} (a line: aligned; a circle: diameter; an arc: radius) | {lines: [hex, hex], at} (angular) | {mode: linear|aligned|angular|radius|diameter|ordinate|baseline|continue (those commands' parameters) | align {base, handles} | distribute {handles, type?: equal|offset, offset?} | layer {layer (\".\": the current layer)}}";
+pub const DIM_PARAMS: &str = "{p1, p2, at} (linear) | {handle, at?} (a line: aligned; a circle: diameter; an arc: radius) | {lines: [hex, hex], at} (angular) | {mode: linear|aligned|angular|radius|diameter|ordinate|baseline|continue (then that command's parameters: points?, feature?, leader?, xtype?, rotation?, text?, object?, vertex?, arc?, center?, point?) | align {base, handles} | distribute {handles, type?: equal|offset, offset?} | layer {layer (\".\": the current layer)}}";
 
 fn run_dimregen(s: &mut Session, _p: &Value) -> Result<Value> {
     let d = s.doc()?.clone();

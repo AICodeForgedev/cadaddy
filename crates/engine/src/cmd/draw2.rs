@@ -58,15 +58,15 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(ArcContinueM::default()))),
         CommandSpec::new("circle.cd", "Center, Diameter", run_circle_variant)
             .menu(&["Draw", "Circle", "Center, Diameter"])
-            .params("{center, diameter}")
+            .params("{center, diameter} (or as circle.2p: p1, p2; circle.3p: p1, p2, p3)")
             .interactive(|_| Ok(seq(ArcV::CircleCd))),
         CommandSpec::new("circle.2p", "2 Points", run_circle_variant)
             .menu(&["Draw", "Circle", "2 Points"])
-            .params("{p1, p2}")
+            .params("{p1, p2} (+ p3: as circle.3p; center + diameter: as circle.cd)")
             .interactive(|_| Ok(seq(ArcV::Circle2p))),
         CommandSpec::new("circle.3p", "3 Points", run_circle_variant)
             .menu(&["Draw", "Circle", "3 Points"])
-            .params("{p1, p2, p3}")
+            .params("{p1, p2, p3} (or without p3: as circle.2p; center + diameter: as circle.cd)")
             .interactive(|_| Ok(seq(ArcV::Circle3p))),
         CommandSpec::new("circle.ttr", "Tan, Tan, Radius", run_circle_ttr)
             .menu(&["Draw", "Circle", "Tan, Tan, Radius"])

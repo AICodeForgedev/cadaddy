@@ -764,7 +764,8 @@ mod tests {
         assert_eq!(app.session.doc().unwrap().model.len(), 1, "the macro drew a circle");
         let ctx = egui::Context::default();
         assert!(contextual(&app, &ctx).is_none());
-        let h = app.run("hatch", json!({ "boundary": [[0, 0], [10, 0], [10, 10], [0, 10]] }));
+        let circle = app.session.doc().ok().and_then(|d| d.model.iter().next().map(|e| e.handle.hex())).unwrap_or_default();
+        let h = app.run("hatch", json!({ "handles": [circle] }));
         if let Ok(r) = h
             && let Some(h) = r["handle"].as_str().or_else(|| r["handles"][0].as_str())
         {

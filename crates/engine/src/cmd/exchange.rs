@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("attach", "Attach", run_attach)
             .params(
-                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), and that command's other parameters} → its reply. A PDF attaches as an underlay (PDFATTACH); a DWF/DWFx attaches as an underlay (DWFATTACH). DGN files need a reader CADaddy doesn't have",
+                "{path: an image (PNG, JPEG: as IMAGEATTACH) or a drawing (DWG, DXF: as XATTACH), …that command's other parameters (at, scale…)} → its reply. A PDF attaches as an underlay (PDFATTACH); a DWF/DWFx attaches as an underlay (DWFATTACH). DGN files need a reader CADaddy doesn't have",
             )
             .interactive(|_| Ok(Box::new(AttachM::default()))),
         CommandSpec::new("share", "Share", |_, _| {

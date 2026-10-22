@@ -95,7 +95,7 @@ fn an_xref_edited_in_place_writes_its_source_drawing_and_reloads() {
     let second = w.iter().find(|h| **h != first).unwrap().clone();
     s.execute("move", &json!({ "handles": [first], "from": [0, 0], "to": [0, 1] })).unwrap();
     s.execute("erase", &json!({ "handles": [second] })).unwrap();
-    s.execute("layer", &json!({ "action": "new", "name": "Fence" })).ok();
+    s.execute("layer.new", &json!({ "name": "Fence" })).ok();
     if s.doc().unwrap().layer("Fence").is_none() {
         s.doc_mut().unwrap().layers.push(Layer { name: "Fence".into(), ..Layer::default() });
     }

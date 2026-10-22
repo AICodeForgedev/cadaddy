@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleader", "Multileader", run_mleader)
             .menu(&["Dimension", "Multileader"])
             .alias(&["mld"])
-            .params("{points: [[arrow], ..., [landing]] ([location] with leaderType none), text?, leaderType?: straight|spline|none, block?: name, blockAttach?: center|insertion}")
+            .params("{mode?: linear|aligned|angular|radius|diameter|ordinate|baseline|continue (…that command's parameters: points, feature, leader, at…) | align | distribute | layer (+ layer), handle?, at?, lines?: [two line handles] | vertex? (angular)}")
             .interactive(|s| Ok(Box::new(MLeaderM::new(s)))),
         CommandSpec::new("leader", "Leader", run_leader)
             .alias(&["lead"])
