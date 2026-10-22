@@ -341,7 +341,8 @@ fn a_weak_scripted_agent_finishes_the_hotel() {
         );
         let ctx = format!("budget {budget}, every {every}: {sc:?}\n{}", log.iter().take(30).cloned().collect::<Vec<_>>().join("\n"));
         assert!(sc.finished, "it reached the takeoff and the RFI list — {ctx}");
-        assert_eq!(sc.sheets_classified, 46, "the import classified the prints — {ctx}");
+        // 49: the set gained the civil sheets C-102, C-103 and C-601 (Q339 sitework).
+        assert_eq!(sc.sheets_classified, 49, "the import classified the prints — {ctx}");
         assert_eq!(sc.wrong_edits, 0, "no edit against the documents — {ctx}");
         assert_eq!(sc.lost_track, 0, "resumed from the briefing without redoing work — {ctx}");
         assert_eq!(sc.tool_errors, 0, "no tool errors (each was a confusion to fix) — {ctx}");
