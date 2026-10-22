@@ -1,31 +1,31 @@
-item,size,unit,material,date,source,licence,note
-EMT conduit,1/2",10 ft,3.50,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT conduit,3/4",10 ft,5.20,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT conduit,1",10 ft,8.40,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT conduit,1-1/4",10 ft,12.80,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT conduit,1-1/2",10 ft,15.60,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT conduit,2",10 ft,20.10,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Duplex receptacle 15A 125V,,,1.80,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-GFCI receptacle 20A 125V,,,18.50,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Single-pole switch 15A,,,1.50,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Three-way switch 15A,,,3.20,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-4 in square box,,,2.80,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-4-11/16 in square box,,,4.20,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Device ring single gang,,,0.65,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT connector 3/4",,,0.45,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-EMT coupling 3/4",,,0.35,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-THHN wire #12,ft,0.12,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-THHN wire #10,ft,0.18,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-THHN wire #8,ft,0.35,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-THHN wire #6,ft,0.55,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Wire nut yellow,each,0.08,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-20A 1P breaker,each,8.50,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Panel 100A MLO 20-space,each,185.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Panel 200A MB 42-space,each,420.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-LED troffer 2x4 40W,each,42.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-LED troffer 2x2 25W,each,38.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-LED downlight 6 in,each,22.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Exit sign LED,each,28.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Emergency light LED dual head,each,45.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Fire alarm pull station,each,35.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
-Smoke detector 2-wire,each,25.00,2025-06,Public bid tabulation (state agency let-date averages),US government work (17 USC §105),material price only — no labor
+item,size,unit,material,date,source,licence,note,status,fetched
+EMT conduit,"1/2""",10 ft,3.50,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+EMT conduit,"3/4""",10 ft,5.20,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+EMT conduit,"1""",10 ft,8.40,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+EMT conduit,"1-1/4""",10 ft,12.80,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+EMT conduit,"1-1/2""",10 ft,15.60,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+EMT conduit,"2""",10 ft,20.10,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Duplex receptacle 15A 125V,,each,1.80,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+GFCI receptacle 20A 125V,,each,18.50,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Single-pole switch 15A,,each,1.50,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Three-way switch 15A,,each,3.20,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+4 in square box,,each,2.80,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+4-11/16 in square box,,each,4.20,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Device ring single gang,,each,0.65,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+"EMT connector 3/4""",,each,0.45,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+"EMT coupling 3/4""",,each,0.35,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+THHN wire #12,,ft,0.12,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+THHN wire #10,,ft,0.18,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+THHN wire #8,,ft,0.35,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+THHN wire #6,,ft,0.55,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Wire nut yellow,,each,0.08,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+20A 1P breaker,,each,8.50,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Panel 100A MLO 20-space,,each,185.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Panel 200A MB 42-space,,each,420.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+LED troffer 2x4 40W,,each,42.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+LED troffer 2x2 25W,,each,38.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+LED downlight 6 in,,each,22.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Exit sign LED,,each,28.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Emergency light LED dual head,,each,45.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Fire alarm pull station,,each,35.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,
+Smoke detector 2-wire,,each,25.00,2025-06,seed placeholder — not from Public bid tabulation (state agency let-date averages); replace with fetched data,placeholder written for CADaddy (FSL-1.1-ALv2),material price only — no labor,seed,

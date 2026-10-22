@@ -1,1 +1,15 @@
-{}
+{
+  "area": "38060 Phoenix-Mesa-Chandler AZ",
+  "crew_rate": 17.88,
+  "occupation": "47-2061",
+  "source": "bls_wages.csv (hourly mean wage; status as the rows there)",
+  "trade_rates": {
+    "Carpenters": 23.85,
+    "Construction Laborers": 17.88,
+    "Drywall and Ceiling Tile Installers": 20.58,
+    "Heating, Air Conditioning, and Refrigeration Mechanics and Installers": 26.35,
+    "Operating Engineers and Other Construction Equipment Operators": 24.09,
+    "Plumbers, Pipefitters, and Steamfitters": 28.56,
+    "Sheet Metal Workers": 25.14
+  }
+}

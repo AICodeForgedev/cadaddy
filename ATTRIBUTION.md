@@ -23,6 +23,7 @@ Generated-in-code assets are original and have no file to list:
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
+| `assets/public-cost-data/` | CADaddy contributors (2026-10) | seed placeholders written for CADaddy to give the public MEP cost pack its shape (every row's source says "seed placeholder — not from …"; status `seed`), and `baseline/` generated from them by `cargo xtask fetch-pubcost` | FSL-1.1-ALv2 | Public cost pack; rows are replaced by fetched public data, each then citing its own source, licence and fetch date. No electrical labor. |
 | `assets/app-icon/cadaddy-icon.svg` | CADaddy contributors (2026-10-17) | original vector drawing (hexagon mark from a concept sketch made with Grok Imagine, redrawn by hand) | MIT OR Apache-2.0 | Icon source |
 | `assets/app-icon/cadaddy-icon-small.svg` | CADaddy contributors (2026-10-17) | original vector drawing (hexagon mark from a concept sketch made with Grok Imagine, redrawn by hand) | MIT OR Apache-2.0 | Icon source, 32 px and below |
 | `assets/app-icon/cadaddy-icon-macos.svg` | CADaddy contributors (2026-10-17) | original vector drawing (hexagon mark from a concept sketch made with Grok Imagine, redrawn by hand) | MIT OR Apache-2.0 | Icon source, macOS grid |

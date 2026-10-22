@@ -93,7 +93,8 @@ commands:
                   what a release built now would be signed with on each platform (Windows Authenticode,
                   macOS Developer ID + notarization, Linux GPG, the updater's SHA256SUMS.sig);
                   --require fails if any would ship unsigned (docs/code-signing.md)
-  fetch-pubcost    validate and package the public MEP cost data (assets/public-cost-data/);
+  fetch-pubcost    validate and package the public MEP cost data (assets/public-cost-data/)
+                  [--area <BLS area code, default 38060>] [--occupation <SOC, default 47-2061>];
                   generates the baseline/ folder for estimate.import; enforces source+licence
                   on every row and refuses any electrical labor
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
@@ -153,7 +154,7 @@ fn main() -> ExitCode {
         Some("sign-release") => release::sign_cmd(&root(), &rest),
         Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("soak") => soak::run(&root(), &rest),
-        Some("fetch-pubcost") => pubcost::run(&root()),
+        Some("fetch-pubcost") => pubcost::run(&root(), &args),
         Some("supplychain") => supplychain::run(&root()),
         Some("advisories") => supplychain::advisories(&root()),
         Some("sbom") => supplychain::sbom(&root(), &rest),

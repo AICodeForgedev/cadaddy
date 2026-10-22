@@ -39,9 +39,9 @@ const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("estimate.import", "Import Estimating Baseline", run_import)
-            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json), label?: \"public data\"|\"baseline\" (default baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
+            .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json, pack.json), label?: \"public data\"|\"baseline\" (default: the folder's pack.json label, else baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
         CommandSpec::new("estimate.import_p405", "Import P-405 Labor Tables", run_import_p405)
-            .params("{file: path to p405_labor_units.csv (all 735 rows), private_folder?: path for the private pack (electrical rows go here)} → {public_rows, private_rows, skipped, notes}"),
+            .params("{file: path to p405_labor_units.csv (all 735 rows), private_folder?: path for the private pack (required when any row is electrical or of no known trade: those go here)} → {public_rows, private_rows, skipped, notes}"),
         CommandSpec::new("estimate.set_price", "Set Estimate Price", run_set_price).params(
             "{item, size?, unit: each|ft|lb|sq ft…, material: dollars per unit, labor_hours?: per unit, labor_dollars?: per unit (÷ crew rate), date: YYYY-MM-DD, source} → {price}",
         ),
@@ -187,7 +187,9 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         prices.push(json!({ "item": item, "size": r.get("size").cloned().unwrap_or_default(), "unit": r.get("unit").cloned().unwrap_or_default(), "material": num(&r, "material"), "labor_hours": hours, "date": r.get("date").cloned().unwrap_or_default(), "source": r.get("source").cloned().unwrap_or_else(|| "baseline".into()) }));
     }
     let benchmarks: Value = read("benchmarks.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
-    let label = str_param(p, "label").unwrap_or("baseline").to_string();
+    // The label: given, else the pack's own (`pack.json`: the public pack says "public data").
+    let pack: Value = read("pack.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    let label = str_param(p, "label").or_else(|| pack["label"].as_str()).unwrap_or("baseline").to_string();
     let counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "label": label, "notes": notes });
     baseline.insert("label".into(), json!(label));
     baseline.insert("items".into(), Value::Object(items));
@@ -202,27 +204,56 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(counts)
 }
 
+/// The trade classes P-405's public rows may have; any other (blank, unknown, electrical) is
+/// kept private.
+const PUBLIC_TRADES: &[&str] = &[
+    "earthwork",
+    "concrete",
+    "masonry",
+    "carpentry",
+    "drywall",
+    "roofing",
+    "plumbing",
+    "mechanical",
+    "site",
+    "finishes",
+    "steel",
+    "painting",
+    "demolition",
+    "insulation",
+    "glazing",
+    "paving",
+    "landscaping",
+];
+/// Trade classes that are electrical (P-405 writes "CE", Construction Electrician).
+const ELECTRICAL_TRADES: &[&str] = &["electrical", "electric", "elec", "electrician", "ce", "construction electrician"];
+
+/// Whether a P-405 table's title (or a work element) is electrical work.
+fn electrical_title(text: &str) -> bool {
+    let t = format!(" {} ", text.to_ascii_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), " "));
+    ["electric", "electrical", "lighting", "wiring", "power distribution", "conduit", "raceway", "cable", "panelboard", "switchgear"]
+        .iter()
+        .any(|w| t.contains(&format!(" {w} ")))
+}
+
 /// Import P-405 labor tables, splitting electrical rows into a private pack and keeping
 /// everything else for the public pack. The full CSV has columns: table, title, work element
-/// (= item), unit, man-hours/unit (= labor_normal), P-405 code, trade class.
+/// (= item), unit, man-hours/unit (= labor_normal), P-405 code, trade class. Fail closed: only a
+/// row of a known non-electrical trade whose table and work aren't electrical is public; and the
+/// private rows need a private folder before anything is kept.
 fn run_import_p405(s: &mut Session, p: &Value) -> Result<Value> {
-    let file = str_param(p, "file").ok_or_else(|| bad("estimate.import_p405", "`file` (path to p405_labor_units.csv) is required"))?;
+    const C: &str = "estimate.import_p405";
+    let file = str_param(p, "file").ok_or_else(|| bad(C, "`file` (path to p405_labor_units.csv) is required"))?;
     let path = std::path::Path::new(file);
-    let text = std::fs::read_to_string(path).map_err(|e| bad("estimate.import_p405", format!("{file}: {e}")))?;
+    let text = std::fs::read_to_string(path).map_err(|e| bad(C, format!("{file}: {e}")))?;
     let rows = csv_rows(&text);
     if rows.is_empty() {
-        return Err(bad("estimate.import_p405", format!("{file}: no data rows")));
+        return Err(bad(C, format!("{file}: no data rows")));
     }
 
-    let electrical_trades: &[&str] = &["electrical", "electric", "elec"];
-    let (sp, mut st) = state(s, "estimate.import_p405")?;
-    let mut items = obj(&mut st, "baseline").and_then(|b| b.entry("items").or_insert_with(|| json!({})).as_object_mut());
-    let mut pub_count = 0usize;
-    let mut priv_count = 0usize;
-    let mut skipped = 0usize;
-    let mut notes: Vec<String> = Vec::new();
+    let mut public: Vec<(String, Value)> = Vec::new();
     let mut private_rows: Vec<String> = Vec::new();
-
+    let mut skipped = 0usize;
     for r in &rows {
         let item = r.get("item").or(r.get("work element")).map(String::as_str).unwrap_or("").trim();
         if item.is_empty() {
@@ -231,57 +262,53 @@ fn run_import_p405(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let unit = r.get("unit").map(String::as_str).unwrap_or("").trim();
         let trade = r.get("trade_class").or(r.get("trade class")).map(String::as_str).unwrap_or("").trim();
-        let is_electrical = electrical_trades.iter().any(|t| trade.eq_ignore_ascii_case(t));
+        let title = r.get("p405_title").or(r.get("title")).map(String::as_str).unwrap_or("");
+        let table = r.get("p405_table").or(r.get("table")).map(String::as_str).unwrap_or("?");
+        let code = r.get("p-405 code").or(r.get("p405_code")).map(String::as_str).unwrap_or("");
+        let electrical = ELECTRICAL_TRADES.iter().any(|t| trade.eq_ignore_ascii_case(t)) || electrical_title(title) || electrical_title(item);
+        let public_trade = PUBLIC_TRADES.iter().any(|t| trade.eq_ignore_ascii_case(t));
         let labor_n = num(r, "labor_normal").or(num(r, "man-hours/unit"));
+        if electrical || !public_trade {
+            // Electrical labor, and anything whose trade isn't known to be something else: private.
+            private_rows.push(format!("{item}\t{unit}\t{}\t{trade}\t{table}\t{code}", labor_n.map_or(String::new(), |h| h.to_string())));
+            continue;
+        }
         // Difficulty tiers: P-405 uses a 1.4x/1.8x factor.
-        let labor_d = labor_n.map(|h| h * 1.4);
-        let labor_v = labor_n.map(|h| h * 1.8);
-
-        if is_electrical {
-            // Electrical labor goes to the private pack only.
-            priv_count += 1;
-            if let Some(h) = labor_n {
-                private_rows.push(format!("{item}\t{unit}\t{h}\t{trade}"));
-            }
-        } else if let Some(items) = items.as_mut() {
-            // Non-electrical goes into the public baseline.
-            pub_count += 1;
-            items.insert(
-                item.to_string(),
-                json!({
-                    "unit": unit,
-                    "labor": {
-                        "normal": labor_n,
-                        "difficult": labor_d,
-                        "very_difficult": labor_v,
-                    },
-                    "source": format!("NAVFAC P-405 Table {} (Oct 1996)", r.get("p405_table").or(r.get("table")).map(String::as_str).unwrap_or("?")),
-                }),
-            );
-        }
+        public.push((
+            item.to_string(),
+            json!({
+                "unit": unit,
+                "labor": { "normal": labor_n, "difficult": labor_n.map(|h| h * 1.4), "very_difficult": labor_n.map(|h| h * 1.8) },
+                "source": format!("NAVFAC P-405 Table {table} (Oct 1996)"),
+            }),
+        ));
     }
-
-    // Write private rows to the private folder if given.
-    if let Some(priv_folder) = str_param(p, "private_folder") {
-        let priv_dir = std::path::Path::new(priv_folder);
-        if priv_dir.is_dir() {
-            let priv_path = priv_dir.join("p405_electrical_labor.tsv");
-            let mut out = String::from("item\tunit\tman_hours_per_unit\ttrade_class\n");
-            for row in &private_rows {
-                out.push_str(row);
-                out.push('\n');
-            }
-            std::fs::write(&priv_path, &out).map_err(|e| bad("estimate.import_p405", format!("write {}: {e}", priv_path.display())))?;
-            notes.push(format!("{priv_count} electrical labor rows written to {}", priv_path.display()));
-        } else {
-            notes.push(format!("private_folder {priv_folder} is not a directory — electrical rows not written"));
+    // The private rows go to the private folder, or nothing is imported.
+    let mut notes: Vec<String> = Vec::new();
+    if !private_rows.is_empty() {
+        let folder = str_param(p, "private_folder").map(str::trim).filter(|f| !f.is_empty()).ok_or_else(|| {
+            bad(C, format!("{} rows are electrical (or of no known trade) and go to the private pack: give `private_folder`", private_rows.len()))
+        })?;
+        let dir = std::path::Path::new(folder);
+        if !dir.is_dir() {
+            return Err(bad(C, format!("private_folder {folder} is not a folder: the {} private rows have nowhere to go", private_rows.len())));
         }
-    } else if priv_count > 0 {
-        notes.push(format!("{priv_count} electrical labor rows skipped (no private_folder given)"));
+        let priv_path = dir.join("p405_electrical_labor.tsv");
+        let mut out = String::from("item\tunit\tman_hours_per_unit\ttrade_class\ttable\tcode\n");
+        for row in &private_rows {
+            out.push_str(row);
+            out.push('\n');
+        }
+        std::fs::write(&priv_path, &out).map_err(|e| bad(C, format!("write {}: {e}", priv_path.display())))?;
+        notes.push(format!("{} private rows written to {}", private_rows.len(), priv_path.display()));
     }
-
+    let (sp, mut st) = state(s, C)?;
+    let pub_count = public.len();
+    if let Some(items) = obj(&mut st, "baseline").and_then(|b| b.entry("items").or_insert_with(|| json!({})).as_object_mut()) {
+        items.extend(public);
+    }
     store(s, sp, st)?;
-    Ok(json!({ "public_rows": pub_count, "private_rows": priv_count, "skipped": skipped, "notes": notes }))
+    Ok(json!({ "public_rows": pub_count, "private_rows": private_rows.len(), "skipped": skipped, "notes": notes }))
 }
 
 fn run_set_price(s: &mut Session, p: &Value) -> Result<Value> {
