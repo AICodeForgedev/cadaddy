@@ -1125,18 +1125,18 @@ fn cmc_aci(o: &mut Obj) -> Result<i64> {
 
 /// SORTENTSTABLE (spec §20.4.90): draw-order table for a block space.
 fn decode_sortentstable(o: &mut Obj, g: &mut G) -> Result<()> {
-    let n_sort = count(o.d.bl()?, "sort handles")?;
-    let mut sorts = Vec::with_capacity(n_sort);
-    for _ in 0..n_sort {
-        sorts.push(o.href()?.unwrap_or(0));
-    }
-    let n_ent = count(o.d.bl()?, "entity handles")?;
-    let n = n_ent.min(n_sort);
-    let mut entities = Vec::with_capacity(n);
-    for _ in 0..n_ent {
-        entities.push(o.href()?.unwrap_or(0));
+    // The entry count and each entry's sort handle in the data
+    // stream; in the handle stream the block record it orders, then each entry's entity.
+    let n = count(o.d.bl()?, "sort entries")?;
+    let mut sorts = Vec::with_capacity(n.min(1 << 16));
+    for _ in 0..n {
+        sorts.push(o.d.h()?.absolute(o.handle).unwrap_or(0));
     }
     let block_owner = o.href()?.unwrap_or(0);
+    let mut entities = Vec::with_capacity(n.min(1 << 16));
+    for _ in 0..n {
+        entities.push(o.href()?.unwrap_or(0));
+    }
     g.s(100, "AcDbSortentsTable");
     g.h(330, block_owner);
     for (ent, sort) in entities.iter().zip(sorts.iter()) {

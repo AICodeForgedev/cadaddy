@@ -211,3 +211,51 @@ fn hostile_record_data_never_panics() {
         }
     }
 }
+
+/// A draw order table (SORTENTSTABLE) in a DWG written by another program decodes as the
+/// drawing it was written from: the same entity and sort handle pairs (in a DWG the sort handles
+/// are in the object's data, the block record and the entities in its handles; the layout CADaddy
+/// read before, all in the handles, matched only its own writer).
+#[test]
+fn a_draw_order_table_written_by_another_program_decodes() {
+    let line = |h: &str, y: u32| format!("0\nLINE\n5\n{h}\n8\n0\n10\n0\n20\n{y}\n30\n0\n11\n10\n21\n{y}\n31\n0\n");
+    let text = format!(
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1018\n9\n$HANDSEED\n5\nFFF\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{}{}{}0\nENDSEC\n\
+         0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n3\nACAD_SORTENTS\n350\nB0\n\
+         0\nSORTENTSTABLE\n5\nB0\n330\nC\n100\nAcDbSortentsTable\n330\n1F\n331\nA1\n5\nA4\n331\nA3\n5\n10\n0\nENDSEC\n0\nEOF\n",
+        line("A1", 0),
+        line("A2", 1),
+        line("A3", 2)
+    );
+    for v in ["AC1015", "AC1018", "AC1024", "AC1032"] {
+        let mut doc =
+            acadrust::DxfReader::from_reader(Cursor::new(text.clone().into_bytes())).and_then(|r| r.read()).expect("acadrust reads the DXF");
+        doc.version = match v {
+            "AC1015" => acadrust::DxfVersion::AC1015,
+            "AC1018" => acadrust::DxfVersion::AC1018,
+            "AC1024" => acadrust::DxfVersion::AC1024,
+            _ => acadrust::DxfVersion::AC1032,
+        };
+        let bytes = acadrust::DwgWriter::write_to_vec(&doc).expect("acadrust writes the DWG");
+        let pairs = |g: &[(i32, String)]| -> Vec<(String, String)> {
+            g.windows(2).filter(|w| w[0].0 == 331 && w[1].0 == 5).map(|w| (w[0].1.trim().to_uppercase(), w[1].1.trim().to_uppercase())).collect()
+        };
+        let written = [("A1".to_string(), "A4".to_string()), ("A3".to_string(), "10".to_string())];
+        let (recs, failed) = decode_all(&read(&bytes).unwrap()).unwrap();
+        assert!(failed.is_empty(), "{v}: {failed:?}");
+        let ours: Vec<(String, String)> = recs
+            .iter()
+            .filter(|r| r.name == "SORTENTSTABLE")
+            .flat_map(|r| {
+                let g: Vec<(i32, String)> =
+                    r.groups.iter().map(|g| (g.code, if let Value::Handle(h) = g.value { format!("{h:X}") } else { String::new() })).collect();
+                pairs(&g)
+            })
+            .collect();
+        assert_eq!(ours, written, "{v}");
+        // And the block record it orders, as written.
+        let owner =
+            recs.iter().find(|r| r.name == "SORTENTSTABLE").and_then(|r| r.groups.iter().rev().find(|g| g.code == 330)).map(|g| g.value.clone());
+        assert_eq!(owner, Some(Value::Handle(0x1F)), "{v}");
+    }
+}
