@@ -2752,3 +2752,28 @@
 	Weld and drafting symbols	Сварочные и чертёжные знаки
 	Scale bars	Графические масштабы
 	Title blocks	Основные надписи
+	Define Linetype	Определить тип линии
+	Define Hatch Pattern	Определить образец штриховки
+	Linetype Editor...	Редактор типов линий...
+	Hatch Pattern Editor...	Редактор образцов штриховки...
+	Linetype Editor	Редактор типов линий
+	Hatch Pattern Editor	Редактор образцов штриховки
+	Start from	Начать с
+	A linetype in this drawing	Тип линии из этого чертежа
+	A pattern	Образец
+	Add a dash or a gap	Добавьте штрих или промежуток
+	Pattern length {n}	Длина образца {n}
+	Dash	Штрих
+	Gap	Промежуток
+	Dot	Точка
+	Add Row	Добавить строку
+	Save to .lin File...	Сохранить в файл .lin...
+	Linetype {name} is in the drawing	Тип линии {name} добавлен в чертёж
+	Dashes	Штрихи
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Штрихи: > 0 штрих, < 0 промежуток, 0 точка
+	Add Line Family	Добавить семейство линий
+	Save to .pat File...	Сохранить в файл .pat...
+	Pattern {name} is offered for new hatches	Образец {name} доступен для новых штриховок
+	Check Underground	Проверить подземные сети
+	Review Underground	Проверка подземных сетей
+	Underground Sheets	Листы подземных сетей

@@ -2943,3 +2943,28 @@ menu	Modify	Modifikace
 	Weld and drafting symbols	Svarové a výkresové značky
 	Scale bars	Grafická měřítka
 	Title blocks	Rohová razítka
+	Define Linetype	Definovat typ čáry
+	Define Hatch Pattern	Definovat šrafovací vzor
+	Linetype Editor...	Editor typů čar...
+	Hatch Pattern Editor...	Editor šrafovacích vzorů...
+	Linetype Editor	Editor typů čar
+	Hatch Pattern Editor	Editor šrafovacích vzorů
+	Start from	Začít z
+	A linetype in this drawing	Typ čáry z tohoto výkresu
+	A pattern	Vzor
+	Add a dash or a gap	Přidejte čárku nebo mezeru
+	Pattern length {n}	Délka vzoru {n}
+	Dash	Čárka
+	Gap	Mezera
+	Dot	Tečka
+	Add Row	Přidat řádek
+	Save to .lin File...	Uložit do souboru .lin...
+	Linetype {name} is in the drawing	Typ čáry {name} je ve výkresu
+	Dashes	Čárky
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Čárky: > 0 čárka, < 0 mezera, 0 tečka
+	Add Line Family	Přidat skupinu čar
+	Save to .pat File...	Uložit do souboru .pat...
+	Pattern {name} is offered for new hatches	Vzor {name} je k dispozici pro nová šrafování
+	Check Underground	Zkontrolovat podzemní rozvody
+	Review Underground	Revize podzemních rozvodů
+	Underground Sheets	Výkresy podzemních rozvodů

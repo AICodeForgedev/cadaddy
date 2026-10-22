@@ -2780,3 +2780,28 @@
 	Weld and drafting symbols	Schweiß- und Zeichensymbole
 	Scale bars	Maßstabsleisten
 	Title blocks	Schriftfelder
+	Define Linetype	Linientyp definieren
+	Define Hatch Pattern	Schraffurmuster definieren
+	Linetype Editor...	Linientyp-Editor...
+	Hatch Pattern Editor...	Schraffurmuster-Editor...
+	Linetype Editor	Linientyp-Editor
+	Hatch Pattern Editor	Schraffurmuster-Editor
+	Start from	Ausgehend von
+	A linetype in this drawing	Ein Linientyp dieser Zeichnung
+	A pattern	Ein Muster
+	Add a dash or a gap	Strich oder Lücke hinzufügen
+	Pattern length {n}	Musterlänge {n}
+	Dash	Strich
+	Gap	Lücke
+	Dot	Punkt
+	Add Row	Zeile hinzufügen
+	Save to .lin File...	In .lin-Datei speichern...
+	Linetype {name} is in the drawing	Linientyp {name} ist in der Zeichnung
+	Dashes	Striche
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Striche: > 0 Strich, < 0 Lücke, 0 Punkt
+	Add Line Family	Linienschar hinzufügen
+	Save to .pat File...	In .pat-Datei speichern...
+	Pattern {name} is offered for new hatches	Muster {name} steht für neue Schraffuren bereit
+	Check Underground	Erdverlegung prüfen
+	Review Underground	Erdverlegung überprüfen
+	Underground Sheets	Pläne Erdverlegung

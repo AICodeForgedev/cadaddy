@@ -2751,3 +2751,28 @@
 	Weld and drafting symbols	Symboles de soudure et de dessin
 	Scale bars	Échelles graphiques
 	Title blocks	Cartouches
+	Define Linetype	Définir un type de ligne
+	Define Hatch Pattern	Définir un motif de hachures
+	Linetype Editor...	Éditeur de types de ligne...
+	Hatch Pattern Editor...	Éditeur de motifs de hachures...
+	Linetype Editor	Éditeur de types de ligne
+	Hatch Pattern Editor	Éditeur de motifs de hachures
+	Start from	Partir de
+	A linetype in this drawing	Un type de ligne de ce dessin
+	A pattern	Un motif
+	Add a dash or a gap	Ajoutez un trait ou un espace
+	Pattern length {n}	Longueur du motif {n}
+	Dash	Trait
+	Gap	Espace
+	Dot	Point
+	Add Row	Ajouter une ligne
+	Save to .lin File...	Enregistrer dans un fichier .lin...
+	Linetype {name} is in the drawing	Le type de ligne {name} est dans le dessin
+	Dashes	Traits
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Traits : > 0 trait, < 0 espace, 0 point
+	Add Line Family	Ajouter une famille de lignes
+	Save to .pat File...	Enregistrer dans un fichier .pat...
+	Pattern {name} is offered for new hatches	Le motif {name} est proposé pour les nouvelles hachures
+	Check Underground	Vérifier les réseaux enterrés
+	Review Underground	Examiner les réseaux enterrés
+	Underground Sheets	Plans des réseaux enterrés

@@ -2970,3 +2970,28 @@ menu	Modify	Ändra
 	Weld and drafting symbols	Svets- och ritsymboler
 	Scale bars	Skalstockar
 	Title blocks	Namnrutor
+	Define Linetype	Definiera linjetyp
+	Define Hatch Pattern	Definiera snittmönster
+	Linetype Editor...	Linjetypsredigerare...
+	Hatch Pattern Editor...	Redigerare för snittmönster...
+	Linetype Editor	Linjetypsredigerare
+	Hatch Pattern Editor	Redigerare för snittmönster
+	Start from	Utgå från
+	A linetype in this drawing	En linjetyp i denna ritning
+	A pattern	Ett mönster
+	Add a dash or a gap	Lägg till ett streck eller ett mellanrum
+	Pattern length {n}	Mönsterlängd {n}
+	Dash	Streck
+	Gap	Mellanrum
+	Dot	Punkt
+	Add Row	Lägg till rad
+	Save to .lin File...	Spara till .lin-fil...
+	Linetype {name} is in the drawing	Linjetypen {name} finns i ritningen
+	Dashes	Streck
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Streck: > 0 streck, < 0 mellanrum, 0 punkt
+	Add Line Family	Lägg till linjefamilj
+	Save to .pat File...	Spara till .pat-fil...
+	Pattern {name} is offered for new hatches	Mönstret {name} finns för nya snitt
+	Check Underground	Kontrollera markförlagt
+	Review Underground	Granska markförlagt
+	Underground Sheets	Ritningar markförlagt

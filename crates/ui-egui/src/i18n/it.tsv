@@ -2962,3 +2962,28 @@ menu	Modify	Edita
 	Weld and drafting symbols	Simboli di saldatura e disegno
 	Scale bars	Scale grafiche
 	Title blocks	Cartigli
+	Define Linetype	Definisci tipo di linea
+	Define Hatch Pattern	Definisci motivo di tratteggio
+	Linetype Editor...	Editor tipi di linea...
+	Hatch Pattern Editor...	Editor motivi di tratteggio...
+	Linetype Editor	Editor tipi di linea
+	Hatch Pattern Editor	Editor motivi di tratteggio
+	Start from	Parti da
+	A linetype in this drawing	Un tipo di linea di questo disegno
+	A pattern	Un motivo
+	Add a dash or a gap	Aggiungi un tratto o uno spazio
+	Pattern length {n}	Lunghezza del motivo {n}
+	Dash	Tratto
+	Gap	Spazio
+	Dot	Punto
+	Add Row	Aggiungi riga
+	Save to .lin File...	Salva in file .lin...
+	Linetype {name} is in the drawing	Il tipo di linea {name} è nel disegno
+	Dashes	Tratti
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Tratti: > 0 tratto, < 0 spazio, 0 punto
+	Add Line Family	Aggiungi famiglia di linee
+	Save to .pat File...	Salva in file .pat...
+	Pattern {name} is offered for new hatches	Il motivo {name} è disponibile per nuovi tratteggi
+	Check Underground	Verifica impianti interrati
+	Review Underground	Revisione impianti interrati
+	Underground Sheets	Tavole impianti interrati

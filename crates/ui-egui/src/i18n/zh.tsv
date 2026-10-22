@@ -2847,3 +2847,28 @@
 	Weld and drafting symbols	焊接和制图符号
 	Scale bars	比例尺
 	Title blocks	图框
+	Define Linetype	定义线型
+	Define Hatch Pattern	定义填充图案
+	Linetype Editor...	线型编辑器...
+	Hatch Pattern Editor...	填充图案编辑器...
+	Linetype Editor	线型编辑器
+	Hatch Pattern Editor	填充图案编辑器
+	Start from	起始于
+	A linetype in this drawing	此图形中的线型
+	A pattern	图案
+	Add a dash or a gap	添加短划或间隙
+	Pattern length {n}	图案长度 {n}
+	Dash	短划
+	Gap	间隙
+	Dot	点
+	Add Row	添加行
+	Save to .lin File...	保存到 .lin 文件...
+	Linetype {name} is in the drawing	线型 {name} 已在图形中
+	Dashes	短划
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	短划：> 0 为短划，< 0 为间隙，0 为点
+	Add Line Family	添加线族
+	Save to .pat File...	保存到 .pat 文件...
+	Pattern {name} is offered for new hatches	图案 {name} 可用于新填充
+	Check Underground	检查地下管线
+	Review Underground	审查地下管线
+	Underground Sheets	地下管线图纸

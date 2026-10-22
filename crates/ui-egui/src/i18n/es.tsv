@@ -2969,3 +2969,28 @@
 	Weld and drafting symbols	Símbolos de soldadura y dibujo
 	Scale bars	Escalas gráficas
 	Title blocks	Cajetines
+	Define Linetype	Definir tipo de línea
+	Define Hatch Pattern	Definir patrón de sombreado
+	Linetype Editor...	Editor de tipos de línea...
+	Hatch Pattern Editor...	Editor de patrones de sombreado...
+	Linetype Editor	Editor de tipos de línea
+	Hatch Pattern Editor	Editor de patrones de sombreado
+	Start from	Partir de
+	A linetype in this drawing	Un tipo de línea de este dibujo
+	A pattern	Un patrón
+	Add a dash or a gap	Añada un trazo o un hueco
+	Pattern length {n}	Longitud del patrón {n}
+	Dash	Trazo
+	Gap	Hueco
+	Dot	Punto
+	Add Row	Añadir fila
+	Save to .lin File...	Guardar en archivo .lin...
+	Linetype {name} is in the drawing	El tipo de línea {name} está en el dibujo
+	Dashes	Trazos
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Trazos: > 0 trazo, < 0 hueco, 0 punto
+	Add Line Family	Añadir familia de líneas
+	Save to .pat File...	Guardar en archivo .pat...
+	Pattern {name} is offered for new hatches	El patrón {name} está disponible para nuevos sombreados
+	Check Underground	Comprobar instalación subterránea
+	Review Underground	Revisar instalación subterránea
+	Underground Sheets	Planos de instalación subterránea

@@ -2958,3 +2958,28 @@ menu	View	عرض
 	Weld and drafting symbols	رموز اللحام والرسم
 	Scale bars	مقاييس الرسم البيانية
 	Title blocks	إطارات العناوين
+	Define Linetype	تعريف نوع الخط
+	Define Hatch Pattern	تعريف نمط التهشير
+	Linetype Editor...	محرر أنواع الخطوط...
+	Hatch Pattern Editor...	محرر أنماط التهشير...
+	Linetype Editor	محرر أنواع الخطوط
+	Hatch Pattern Editor	محرر أنماط التهشير
+	Start from	البدء من
+	A linetype in this drawing	نوع خط في هذا الرسم
+	A pattern	نمط
+	Add a dash or a gap	أضف شرطة أو فراغًا
+	Pattern length {n}	طول النمط {n}
+	Dash	شرطة
+	Gap	فراغ
+	Dot	نقطة
+	Add Row	إضافة صف
+	Save to .lin File...	حفظ في ملف .lin...
+	Linetype {name} is in the drawing	نوع الخط {name} موجود في الرسم
+	Dashes	الشرطات
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	الشرطات: > 0 شرطة، < 0 فراغ، 0 نقطة
+	Add Line Family	إضافة عائلة خطوط
+	Save to .pat File...	حفظ في ملف .pat...
+	Pattern {name} is offered for new hatches	النمط {name} متاح للتهشيرات الجديدة
+	Check Underground	فحص الأعمال تحت الأرض
+	Review Underground	مراجعة الأعمال تحت الأرض
+	Underground Sheets	لوحات الأعمال تحت الأرض

@@ -2969,3 +2969,28 @@
 	Weld and drafting symbols	Símbolos de soldadura e desenho
 	Scale bars	Escalas gráficas
 	Title blocks	Carimbos
+	Define Linetype	Definir tipo de linha
+	Define Hatch Pattern	Definir padrão de hachura
+	Linetype Editor...	Editor de tipos de linha...
+	Hatch Pattern Editor...	Editor de padrões de hachura...
+	Linetype Editor	Editor de tipos de linha
+	Hatch Pattern Editor	Editor de padrões de hachura
+	Start from	Começar de
+	A linetype in this drawing	Um tipo de linha deste desenho
+	A pattern	Um padrão
+	Add a dash or a gap	Adicione um traço ou um espaço
+	Pattern length {n}	Comprimento do padrão {n}
+	Dash	Traço
+	Gap	Espaço
+	Dot	Ponto
+	Add Row	Adicionar linha
+	Save to .lin File...	Salvar em arquivo .lin...
+	Linetype {name} is in the drawing	O tipo de linha {name} está no desenho
+	Dashes	Traços
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Traços: > 0 traço, < 0 espaço, 0 ponto
+	Add Line Family	Adicionar família de linhas
+	Save to .pat File...	Salvar em arquivo .pat...
+	Pattern {name} is offered for new hatches	O padrão {name} está disponível para novas hachuras
+	Check Underground	Verificar instalações subterrâneas
+	Review Underground	Revisar instalações subterrâneas
+	Underground Sheets	Pranchas de instalações subterrâneas

@@ -2303,3 +2303,25 @@
 	Features	フィーチャー
 	Suppress	抑制
 	Double-click to rename	ダブルクリックで名前を変更
+	Define Linetype	線種を定義
+	Define Hatch Pattern	ハッチング パターンを定義
+	Linetype Editor...	線種エディタ...
+	Hatch Pattern Editor...	ハッチング パターン エディタ...
+	Linetype Editor	線種エディタ
+	Hatch Pattern Editor	ハッチング パターン エディタ
+	Start from	開始元
+	A linetype in this drawing	この図面の線種
+	A pattern	パターン
+	Add a dash or a gap	ダッシュかギャップを追加
+	Pattern length {n}	パターン長 {n}
+	Dash	ダッシュ
+	Gap	ギャップ
+	Dot	点
+	Add Row	行を追加
+	Save to .lin File...	.lin ファイルに保存...
+	Linetype {name} is in the drawing	線種 {name} が図面に追加されました
+	Dashes	ダッシュ
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	ダッシュ: > 0 ダッシュ、< 0 ギャップ、0 点
+	Add Line Family	線ファミリを追加
+	Save to .pat File...	.pat ファイルに保存...
+	Pattern {name} is offered for new hatches	パターン {name} を新しいハッチングで使えます

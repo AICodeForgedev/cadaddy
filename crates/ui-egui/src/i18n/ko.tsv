@@ -2963,3 +2963,28 @@ menu	Modify	수정
 	Weld and drafting symbols	용접 및 제도 기호
 	Scale bars	축척 막대
 	Title blocks	표제란
+	Define Linetype	선종류 정의
+	Define Hatch Pattern	해치 패턴 정의
+	Linetype Editor...	선종류 편집기...
+	Hatch Pattern Editor...	해치 패턴 편집기...
+	Linetype Editor	선종류 편집기
+	Hatch Pattern Editor	해치 패턴 편집기
+	Start from	시작 기준
+	A linetype in this drawing	이 도면의 선종류
+	A pattern	패턴
+	Add a dash or a gap	대시나 간격을 추가하세요
+	Pattern length {n}	패턴 길이 {n}
+	Dash	대시
+	Gap	간격
+	Dot	점
+	Add Row	행 추가
+	Save to .lin File...	.lin 파일로 저장...
+	Linetype {name} is in the drawing	선종류 {name}이(가) 도면에 있습니다
+	Dashes	대시
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	대시: > 0 대시, < 0 간격, 0 점
+	Add Line Family	선 패밀리 추가
+	Save to .pat File...	.pat 파일로 저장...
+	Pattern {name} is offered for new hatches	패턴 {name}을(를) 새 해치에 사용할 수 있습니다
+	Check Underground	지중 배관 검사
+	Review Underground	지중 배관 검토
+	Underground Sheets	지중 배관 도면
