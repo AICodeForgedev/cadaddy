@@ -97,7 +97,7 @@ pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
+pub use prompt::{Accept, Drag, Input, Interactive, LiveLabel, Picker, Prompt, Step};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -714,6 +714,10 @@ pub struct Settings {
     /// SELECTIONPREVIEW bits: the object under the cursor is highlighted (1) when no command is
     /// active, (2) when a command asks for objects.
     pub selectionpreview: u8,
+    /// MEASURELABELS: DIST, AREA and MEASUREGEOM label what they measure on the drawing while you
+    /// pick (1, the default), also keep the final labels as multiline text (2), or only report at
+    /// the command line (0).
+    pub measurelabels: u8,
     /// PREVIEWEFFECT: how that object is highlighted: 0 dashed, 1 thicker, 2 dashed and thicker.
     pub previeweffect: u8,
     /// PREVIEWFILTER bits: objects the cursor never highlights: 1 on locked layers, 2 xrefs,
@@ -800,6 +804,7 @@ impl Default for Settings {
             highlight: true,
             selectioneffect: 1,
             selectionpreview: 3,
+            measurelabels: 1,
             previeweffect: 2,
             previewfilter: 3,
             grips: 1,
@@ -2181,6 +2186,15 @@ impl Session {
             (None, None) => Vec::new(),
         };
         kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+    }
+
+    /// The active command's live measurement labels for the cursor (MEASURELABELS; see
+    /// [`Interactive::labels`]).
+    pub fn live_labels(&self, cursor: Vec2) -> Vec<LiveLabel> {
+        if self.settings.measurelabels == 0 || self.lisp_prompt().is_some() {
+            return Vec::new();
+        }
+        self.running.as_ref().map(|r| r.machine.labels(self, cursor)).unwrap_or_default()
     }
 
     /// The active command's preview as a transform of existing objects (see

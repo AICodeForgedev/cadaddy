@@ -35,6 +35,7 @@ pub const PROFILE_VARS: &[&str] = &[
     "QPMODE",
     "SELECTIONEFFECT",
     "SELECTIONPREVIEW",
+    "MEASURELABELS",
     "PREVIEWEFFECT",
     "PREVIEWFILTER",
     "GRIPS",

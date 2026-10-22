@@ -37,12 +37,12 @@ fn quick_mode_measures_around_the_cursor_and_echoes_on_click() {
     assert!(has(&log, "Area = 100.0000, Perimeter = 40.0000"), "the square encloses the point: {log:?}");
     assert!(s.running.is_some(), "Quick keeps measuring after a click");
 
-    // Moving the cursor previews the distances: lines to the hits and their values as text.
+    // Moving the cursor previews the distances: lines to the hits, their values as live labels.
     let pv = s.preview(Vec2::new(3.0, 2.0));
-    let texts: Vec<String> = pv.iter().filter_map(|e| serde_json::to_value(&e.kind).ok()?.get("value")?.as_str().map(str::to_string)).collect();
+    let texts: Vec<String> = s.live_labels(Vec2::new(3.0, 2.0)).iter().map(|l| l.text()).collect();
     assert!(texts.iter().any(|t| t == "3.0000"), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("Area = 100")), "{texts:?}");
-    assert!(pv.len() >= 4 * 3, "a line, an end tick and a value per side: {}", pv.len());
+    assert!(pv.len() >= 4 * 2, "a line and an end tick per side: {}", pv.len());
 
     // Inside the circle the smallest closed object is the circle.
     s.cmdline("5.5,5").unwrap();

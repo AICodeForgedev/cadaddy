@@ -47,17 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Inquiry", "Angle"])
             .params("{vertex, p1, p2} | {h1, h2}")
             .noundo()
-            .interactive(|_| {
-                Ok(super::ask::machine(
-                    "angle.measure",
-                    "MEASUREGEOM",
-                    [
-                        super::ask::ask("vertex", "Specify angle vertex", super::ask::Kind::Point),
-                        super::ask::ask("p1", "Specify first angle endpoint", super::ask::Kind::Point),
-                        super::ask::ask("p2", "Specify second angle endpoint", super::ask::Kind::Point),
-                    ],
-                ))
-            }),
+            .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::angle()))),
     ]
 }
 
