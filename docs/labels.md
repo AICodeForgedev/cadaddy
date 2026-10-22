@@ -11,6 +11,7 @@ circuit that changes changes its labels; `labels.list` marks every label **new**
 |---|---|
 | `labels.list {set?}` | Every label, its lines and status; the directories; what's missing |
 | `labels.export {path, format?, set?, changed_only?, mark?}` | PDF sheets, PNG pages, a CSV for label printers, or DXF |
+| `labels.read {path \| paths, apply?}` | Reads the prints: each `PANEL … SCHEDULE` (circuit, description, room or area, breaker, poles) gives the panel's `circuits`, each circuit printed beside a device on a plan (`P1-5`, `P1-3,5`) gives a device in `mep.devices`; each records the sheet it came from (`source`). `apply` puts them in the building spec (a panel scheduled but not yet placed is added); reading a sheet again replaces what it gave |
 | `labels.arcflash {rows \| path}` | The arc flash study's results (CSV columns: equipment or bus, incident energy, working distance, arc flash boundary, PPE, voltage, limited and restricted approach, study, date) |
 | `labels.check {review?}` | What the labels can't be made right without; `review` makes each an RFI (a document request) |
 | `labels.bom` | The BOM lines the labels need (also on `mep.qty`, part `labels`) |
@@ -27,7 +28,12 @@ circuit that changes changes its labels; `labels.list` marks every label **new**
   distance, arc flash boundary, PPE, nominal voltage, approach boundaries, the study and its date.
   The values come from the engineer's arc flash study, imported; **CADaddy doesn't calculate
   them**. Gear without study data gets no label: it is a failure in `labels.check`, and with
-  `review` a document request, so the labels are ordered in time.
+  `review` a document request, so the labels are ordered in time. A study row without a positive
+  incident energy, working distance and arc flash boundary, or without the nominal voltage, is
+  **incomplete**: the same failure and request, never a label with a 0 or made-up value. The
+  boundary is read from the `Arc Flash Boundary` / `AFB` column, never from a limited or
+  restricted approach boundary column; units in brackets (`AFB (in)`, `IE (cal/cm2)`, `WD (in)`)
+  are ignored when matching.
 
 ## Project rules
 

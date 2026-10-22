@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1028,
-    "count": 1028,
+    "callableAsJson": 1029,
+    "count": 1029,
     "ids": [
       "-attedit",
       "-block",
@@ -458,6 +458,7 @@
       "labels.check",
       "labels.export",
       "labels.list",
+      "labels.read",
       "latlong",
       "laycur",
       "laydel",

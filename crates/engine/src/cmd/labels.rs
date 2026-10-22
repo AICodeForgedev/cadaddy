@@ -11,7 +11,12 @@
 //!   a page each, 2" × 4" equipment labels and nameplates ten a sheet, ½" × 1¾" device labels
 //!   eighty a sheet, 4" × 6" arc flash labels two a sheet), PNG pages, a CSV for label printers
 //!   (12 mm tape and the rest), or DXF.
-//! - `labels.arcflash {rows | path}`: the study's results (CSV or rows).
+//! - `labels.read {path | paths, apply?}`: the panel schedules (`PANEL P1 SCHEDULE`: circuit,
+//!   description, room or area, breaker, poles) and the circuit printed beside each device
+//!   (`P1-5`) read off the prints, each with the sheet it came from ([`read`]).
+//! - `labels.arcflash {rows | path}`: the study's results (CSV or rows). A row without positive
+//!   incident energy, working distance and arc flash boundary, or without the nominal voltage, is
+//!   incomplete: a failure and a document request, never a label with a 0 or made-up value.
 //! - `labels.check {review?}`: what's missing (study data for labeled gear, devices on circuits
 //!   the schedule doesn't have); `review` makes each an RFI (a document request).
 //! - `labels.bom`: the BOM lines the labels need: the label printer, tape cartridges for the
@@ -32,6 +37,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{Result, Session};
+
+mod read;
 
 /// Most labels made at once.
 const MAX_LABELS: usize = 100_000;
@@ -192,7 +199,7 @@ fn fmt_num(v: f64) -> String {
     if (r - r.round()).abs() < 1e-9 { format!("{}", r.round() as i64) } else { format!("{r}") }
 }
 
-/// The arc flash label's lines, or `None` without study data.
+/// The arc flash label's lines (only for a row [`arc_missing`] finds complete).
 fn arc_flash_lines(tag: &str, a: &ArcFlash, r: &TextRules) -> Vec<String> {
     let mut l = vec!["WARNING".to_string(), "ARC FLASH AND SHOCK HAZARD".into(), "APPROPRIATE PPE REQUIRED".into(), r.case(tag)];
     l.push(format!("INCIDENT ENERGY: {} CAL/CM² AT {} IN", fmt_num(a.incident_energy), fmt_num(a.working_distance_in)));
@@ -200,9 +207,7 @@ fn arc_flash_lines(tag: &str, a: &ArcFlash, r: &TextRules) -> Vec<String> {
     if !a.ppe.trim().is_empty() {
         l.push(format!("PPE: {}", r.case(&a.ppe)));
     }
-    if !a.voltage.trim().is_empty() {
-        l.push(format!("NOMINAL VOLTAGE: {}", r.case(&a.voltage)));
-    }
+    l.push(format!("NOMINAL VOLTAGE: {}", r.case(&a.voltage)));
     if !a.limited_approach.trim().is_empty() {
         l.push(format!("LIMITED APPROACH: {}", r.case(&a.limited_approach)));
     }
@@ -247,13 +252,16 @@ pub fn make(sp: &BuildingSpec, d: &Drawing) -> (Vec<Label>, BTreeMap<String, Vec
         }
         // Every labeled piece of gear gets an arc flash label: from the study, or a request for it.
         match sp.mep.arc_flash.iter().find(|a| a.equipment.trim().eq_ignore_ascii_case(tag)) {
-            Some(a) if a.incident_energy.is_finite() && a.incident_energy >= 0.0 && a.working_distance_in > 0.0 => {
+            Some(a) if arc_missing(a).is_empty() => {
                 labels.push(Label { id: format!("af:{tag}"), set: "arc_flash", lines: arc_flash_lines(tag, a, &r), media: ARC_FLASH_4X6 });
             }
-            Some(_) => problems.push(Problem {
+            Some(a) => problems.push(Problem {
                 label: format!("af:{tag}"),
                 about: tag.into(),
-                message: format!("{tag}'s arc flash study data is incomplete (incident energy and working distance needed)"),
+                message: format!(
+                    "{tag}'s arc flash study data is incomplete (missing {}): no arc flash label until it comes",
+                    arc_missing(a).join(", ")
+                ),
                 error: true,
             }),
             None => problems.push(Problem {
@@ -598,29 +606,70 @@ fn csv_line(l: &str) -> Vec<String> {
     out.into_iter().map(|f| f.trim().to_string()).collect()
 }
 
+/// The header without its units (`AFB (in)` → `afb`): headers are lower case without spaces.
+fn base_header(h: &str) -> &str {
+    h.split(['(', '[']).next().unwrap_or(h).trim()
+}
+
+/// The value of the column a field comes from: a header that is exactly one of `exact` (units
+/// aside) first, else one containing one of `like`; never a column that also names one of
+/// `never` (the limited or restricted approach boundary is not the arc flash boundary).
+fn column(row: &BTreeMap<String, String>, exact: &[&str], like: &[&str], never: &[&str]) -> String {
+    let ok = |c: &str, v: &str| !v.trim().is_empty() && !never.iter().any(|n| c.contains(n));
+    let hit = exact
+        .iter()
+        .find_map(|k| row.iter().find(|(c, v)| base_header(c) == *k && ok(c, v)))
+        .or_else(|| like.iter().find_map(|k| row.iter().find(|(c, v)| c.contains(k) && ok(c, v))));
+    hit.map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+}
+
 fn arc_from(row: &BTreeMap<String, String>) -> Option<ArcFlash> {
-    let get = |keys: &[&str]| {
-        keys.iter().find_map(|k| row.iter().find(|(c, v)| c.contains(k) && !v.is_empty()).map(|(_, v)| v.clone())).unwrap_or_default()
-    };
-    let num = |keys: &[&str]| {
-        get(keys).trim_end_matches(|c: char| !c.is_ascii_digit()).trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e6)
-    };
-    let equipment = get(&["equipment", "bus", "tag"]);
+    let num =
+        |v: String| v.trim_end_matches(|c: char| !c.is_ascii_digit()).trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e6);
+    let equipment = column(row, &["equipment", "bus", "tag", "busname", "equipmenttag", "equipmentname"], &["equipment", "bus"], &[]);
     if equipment.is_empty() {
         return None;
     }
+    let approach = ["limited", "restricted", "prohibited", "approach", "shock"];
     Some(ArcFlash {
         equipment,
-        incident_energy: num(&["incident", "energy"]).unwrap_or(f64::NAN),
-        working_distance_in: num(&["working"]).unwrap_or(0.0),
-        arc_flash_boundary_in: num(&["boundary", "afb"]).unwrap_or(0.0),
-        ppe: get(&["ppe"]),
-        voltage: get(&["volt"]),
-        limited_approach: get(&["limited"]),
-        restricted_approach: get(&["restricted"]),
-        study: get(&["study"]),
-        date: get(&["date"]),
+        incident_energy: num(column(row, &["ie", "incidentenergy"], &["incidentenergy", "incident"], &[])).unwrap_or(f64::NAN),
+        working_distance_in: num(column(row, &["wd", "workingdistance"], &["working"], &[])).unwrap_or(0.0),
+        // Missing stays 0: such a row is incomplete and makes no label.
+        arc_flash_boundary_in: num(column(
+            row,
+            &["afb", "arcflashboundary", "flashboundary", "boundary"],
+            &["arcflashboundary", "flashboundary", "afb"],
+            &approach,
+        ))
+        .unwrap_or(0.0),
+        ppe: column(row, &["ppe", "ppecategory", "ppelevel"], &["ppe"], &[]),
+        voltage: column(row, &["voltage", "volts", "nominalvoltage", "kv"], &["volt"], &[]),
+        limited_approach: column(row, &["limited", "limitedapproach", "limitedapproachboundary"], &["limited"], &[]),
+        restricted_approach: column(row, &["restricted", "restrictedapproach", "restrictedapproachboundary"], &["restricted"], &[]),
+        study: column(row, &["study"], &["study"], &[]),
+        date: column(row, &["date"], &["date"], &[]),
     })
+}
+
+/// What a study row lacks for its label: positive incident energy, working distance and arc
+/// flash boundary, and the nominal voltage. A label never prints a missing or zero value.
+pub fn arc_missing(a: &ArcFlash) -> Vec<&'static str> {
+    let pos = |v: f64| v.is_finite() && v > 0.0;
+    let mut m = Vec::new();
+    if !pos(a.incident_energy) {
+        m.push("incident energy");
+    }
+    if !pos(a.working_distance_in) {
+        m.push("working distance");
+    }
+    if !pos(a.arc_flash_boundary_in) {
+        m.push("arc flash boundary");
+    }
+    if a.voltage.trim().is_empty() {
+        m.push("nominal voltage");
+    }
+    m
 }
 
 fn run_arcflash(s: &mut Session, p: &Value) -> Result<Value> {
@@ -653,7 +702,7 @@ fn run_arcflash(s: &mut Session, p: &Value) -> Result<Value> {
             unknown.push(a.equipment.clone());
             continue;
         }
-        if !(a.incident_energy.is_finite() && a.working_distance_in > 0.0) {
+        if !arc_missing(&a).is_empty() {
             incomplete.push(a.equipment.clone());
         }
         let a = ArcFlash { incident_energy: if a.incident_energy.is_finite() { a.incident_energy } else { -1.0 }, ..a };
@@ -772,6 +821,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path, format?: pdf|png|csv|dxf (default from the extension), set?, changed_only?: bool, mark?: bool (remember them as printed; default true)} → {path|paths, format, labels, pages?, problems}"),
         CommandSpec::new("labels.arcflash", "Import Arc Flash Data", run_arcflash)
             .params("{rows: [{equipment, incident_energy (cal/cm²), working_distance_in, arc_flash_boundary_in, ppe, voltage, limited_approach, restricted_approach, study, date}]} | {path: CSV with those columns} → {imported, replaced, unknown_equipment, incomplete}"),
+        CommandSpec::new("labels.read", "Read Panel Schedules", read::run_read)
+            .params("{path?: string | {path, sheet?, level?}, paths?: [string | {path, sheet?, level?}] (print sheets, DXF/DWG; none: the open drawing), sheet?, level?, apply?: bool (put the circuits on the panels and the devices in the building spec)} → {sheets, schedules: [{panel, circuits: [{number, description, room, breaker, poles, source}]}], devices: [{tag, panel, circuit, level, source}], added_panels, applied}: each PANEL … SCHEDULE's circuits and the circuit printed beside each device, with the sheet each came from"),
         CommandSpec::new("labels.check", "Check Labels", run_check).params("{review?: bool (each failure an RFI: a document request)} → {ok, errors, problems, rfis}"),
         CommandSpec::new("labels.bom", "Label BOM Lines", run_bom).params("{} → {items: [{item, unit, qty, note}]}: the label printer, tape, label stock, directory cards, arc flash labels").noundo(),
     ]

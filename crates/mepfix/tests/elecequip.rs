@@ -108,93 +108,137 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
     }
 }
 
-/// Q335: each panel's directory, made from the model, matches its panel schedule on the prints;
-/// every device on a circuit gets its plate label; a device on a circuit the schedule doesn't have
-/// is flagged.
+/// Q335: each panel's directory, read off the prints by `labels.read` (the `PANEL … SCHEDULE`
+/// tables on the schedule sheet, the circuit printed beside each device on the plans), matches
+/// the answer key's panel schedule row for row; every device read gets its plate label; the
+/// devices on circuits the schedule doesn't have are exactly the planted ones. Nothing comes from
+/// the answer key but the expectations.
 #[test]
 fn directories_match_the_panel_schedules_of_a_made_up_set() {
-    use cadaddy_walk3d::{ElecDevice, MepEquipment, PanelCircuit};
-    let set = generate(3).unwrap();
-    let t = &set.truth;
-    let mut equipment = Vec::new();
-    for p in t.elec_panels.iter().filter(|p| !p.schedule.is_empty()) {
-        let circuits = p
-            .schedule
+    for seed in [3, 11] {
+        let set = generate(seed).unwrap();
+        let t = &set.truth;
+        // The E sheets, as the sheet reader recognises them, written out as the prints are.
+        let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+        let map = sheet_reader::recognise_fixture_set(&dxf);
+        let dir = std::env::temp_dir().join(format!("cadaddy-labels-read-{seed}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The answer key: each drawn panel schedule, and the circuit printed beside each device.
+        let scheduled: Vec<&cadaddy_mepfix::truth::ElecPanel> =
+            t.elec_panels.iter().filter(|p| p.kind == "panel" && !p.schedule.is_empty()).collect();
+        assert!(!scheduled.is_empty(), "seed {seed}");
+        let drawn: BTreeSet<&str> = t.elec_devices.iter().filter(|d| !d.sheet.is_empty()).map(|d| d.id.as_str()).collect();
+        let mut refs: Vec<String> = t
+            .elec_spec
+            .notes
             .iter()
-            .map(|row| {
-                // The rooms its devices are in.
-                let mut rooms: Vec<String> = t
-                    .elec_circuits
-                    .iter()
-                    .filter(|c| c.panel == p.id && c.number == row.circuit)
-                    .flat_map(|c| c.devices.iter())
-                    .filter_map(|id| t.elec_devices.iter().find(|d| &d.id == id).map(|d| d.room.clone()))
-                    .collect();
-                rooms.sort();
-                rooms.dedup();
-                PanelCircuit {
-                    number: row.circuit.clone(),
-                    description: row.description.clone(),
-                    room: rooms.join(", "),
-                    breaker: row.breaker_amps.clone(),
-                    poles: row.poles.parse().unwrap_or(1),
-                }
-            })
+            .filter(|n| drawn.contains(n.device.as_str()) && !n.circuit_ref.is_empty())
+            .map(|n| n.circuit_ref.clone())
             .collect();
-        equipment.push(MepEquipment {
-            tag: p.tag.clone(),
-            kind: "panel".into(),
-            level: p.level.clone(),
-            min: [p.min_ft[0] * 12.0, p.min_ft[1] * 12.0],
-            max: [p.max_ft[0] * 12.0, p.max_ft[1] * 12.0],
-            height_ft: 5.0,
-            circuits,
-            ..MepEquipment::default()
-        });
-    }
-    let devices: Vec<ElecDevice> = t
-        .elec_devices
-        .iter()
-        .filter_map(|d| {
-            // (A circuit names its panel by id.)
-            let c = t.elec_circuits.iter().find(|c| c.id == d.circuit)?;
-            let panel = t.elec_panels.iter().find(|p| p.id == c.panel)?;
-            Some(ElecDevice {
-                tag: d.id.clone(),
-                kind: d.kind.clone(),
-                level: d.level.clone(),
-                room: d.room.clone(),
-                panel: panel.tag.clone(),
-                circuit: c.number.clone(),
-            })
-        })
-        .collect();
-    assert!(!devices.is_empty() && !equipment.is_empty());
-    let unscheduled =
-        devices.iter().filter(|d| !t.elec_panels.iter().any(|p| p.tag == d.panel && p.schedule.iter().any(|r| r.circuit == d.circuit))).count();
-    let levels: Vec<serde_json::Value> =
-        t.building.levels.iter().map(|l| json!({"name": l.code, "elevation_ft": l.elevation_ft, "height_ft": 12, "region": [-100000, -100000, 100000, 100000], "base": [0, 0]})).collect();
-    let mut s = cadaddy_engine::Session::new();
-    s.execute(
-        "bspec.set",
-        &json!({"replace": true, "spec": {"units_per_foot": 12, "levels": levels, "mep": {"equipment": equipment, "devices": devices}}}),
-    )
-    .unwrap();
-    let l = s.execute("labels.list", &json!({})).unwrap();
-    for p in t.elec_panels.iter().filter(|p| !p.schedule.is_empty()) {
-        let rows = l["directories"][&p.tag].as_array().unwrap_or_else(|| panic!("no directory for {}", p.tag));
-        assert_eq!(rows.len(), p.schedule.len(), "{}", p.tag);
-        for (row, sched) in rows.iter().zip(&p.schedule) {
-            // A multi-pole breaker lists every pole it takes (`17,19`).
-            let poles: Vec<&str> = row["circuit"].as_str().unwrap().split(',').collect();
-            assert_eq!((poles[0], poles.len()), (sched.circuit.as_str(), sched.poles.parse::<usize>().unwrap_or(1)), "{}", p.tag);
-            assert_eq!(row["description"], json!(sched.description.to_uppercase()), "{}", p.tag);
+        // Planted on the first plan: two devices' notes name circuits their panel's schedule
+        // doesn't have (a 9x number, past every panel's last circuit).
+        let mut planted: Vec<String> = Vec::new();
+        let mut paths = Vec::new();
+        for (n, b) in &dxf {
+            let stem = n.trim_end_matches(".dxf");
+            let Some(sh) = map.sheets.iter().find(|s| s.number == stem && s.discipline == "E") else { continue };
+            let mut bytes = b.clone();
+            if sh.level.is_some() && planted.is_empty() {
+                let text = String::from_utf8(b.clone()).unwrap();
+                let mut out = Vec::new();
+                for line in text.split_inclusive('\n') {
+                    let v = line.trim_end();
+                    if planted.len() < 2 && out.last().is_some_and(|l: &String| l.trim() == "1") && refs.iter().any(|r| r == v) {
+                        let (panel, _) = v.rsplit_once('-').unwrap();
+                        let new = format!("{panel}-{}", 91 + 2 * planted.len());
+                        let i = refs.iter().position(|r| r == v).unwrap();
+                        refs[i] = new.clone();
+                        planted.push(new.clone());
+                        out.push(line.replacen(v, &new, 1));
+                    } else {
+                        out.push(line.to_string());
+                    }
+                }
+                bytes = out.concat().into_bytes();
+            }
+            let path = dir.join(n);
+            std::fs::write(&path, &bytes).unwrap();
+            paths.push(json!({"path": path.display().to_string(), "sheet": sh.number}));
         }
-        assert!(rows.iter().any(|r| r["room"].as_str().unwrap().starts_with("RM ")), "{}: rooms by the rule", p.tag);
+        assert!(paths.len() >= 2, "seed {seed}: {paths:?}");
+        assert_eq!(planted.len(), 2, "seed {seed}: two notes planted");
+        cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+            read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+            write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+            plot: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
+        });
+        let levels: Vec<serde_json::Value> = t
+            .building
+            .levels
+            .iter()
+            .map(|l| json!({"name": l.code, "elevation_ft": l.elevation_ft, "height_ft": 12, "region": [-100000, -100000, 100000, 100000], "base": [0, 0]}))
+            .collect();
+        let mut s = cadaddy_engine::Session::new();
+        s.execute("bspec.set", &json!({"replace": true, "spec": {"units_per_foot": 12, "levels": levels}})).unwrap();
+        let r = s.execute("labels.read", &json!({"paths": paths, "apply": true})).unwrap();
+
+        let read_panels: BTreeSet<&str> = r["schedules"].as_array().unwrap().iter().map(|x| x["panel"].as_str().unwrap()).collect();
+        assert_eq!(read_panels, scheduled.iter().map(|p| p.tag.as_str()).collect::<BTreeSet<_>>(), "seed {seed}");
+        // Unscheduled circuits: the two planted, and any the set itself has.
+        let on_schedule =
+            |r: &str| r.rsplit_once('-').is_some_and(|(p, c)| scheduled.iter().any(|x| x.tag == p && x.schedule.iter().any(|row| row.circuit == c)));
+        assert!(planted.iter().all(|r| !on_schedule(r)));
+        let mut planted: Vec<String> = refs.iter().filter(|r| !on_schedule(r)).cloned().collect();
+        planted.sort();
+
+        let l = s.execute("labels.list", &json!({})).unwrap();
+        for p in &scheduled {
+            let rows = l["directories"][&p.tag].as_array().unwrap_or_else(|| panic!("seed {seed}: no directory for {}", p.tag));
+            let mut key: Vec<(u32, String, String)> = p
+                .schedule
+                .iter()
+                .map(|row| {
+                    let n: u32 = row.circuit.parse().unwrap();
+                    let poles: u32 = row.poles.parse().unwrap_or(1);
+                    let circuit = (0..poles).map(|k| (n + 2 * k).to_string()).collect::<Vec<_>>().join(",");
+                    (n, circuit, row.description.to_uppercase())
+                })
+                .collect();
+            key.sort();
+            let got: Vec<(String, String)> =
+                rows.iter().map(|x| (x["circuit"].as_str().unwrap().to_string(), x["description"].as_str().unwrap().to_string())).collect();
+            let want: Vec<(String, String)> = key.into_iter().map(|(_, c, d)| (c, d)).collect();
+            assert_eq!(got, want, "seed {seed}: panel {}", p.tag);
+        }
+        // Every circuit printed beside a device is one device label, each from its plan sheet.
+        let devices = r["devices"].as_array().unwrap();
+        let mut read_refs: Vec<String> =
+            devices.iter().map(|d| format!("{}-{}", d["panel"].as_str().unwrap(), d["circuit"].as_str().unwrap())).collect();
+        let mut want_refs = refs.clone();
+        read_refs.sort();
+        want_refs.sort();
+        assert_eq!(read_refs, want_refs, "seed {seed}");
+        assert!(devices.iter().all(|d| map.sheets.iter().any(|sh| sh.number == d["source"].as_str().unwrap() && sh.level.is_some())), "seed {seed}");
+        assert_eq!(devices_count(&l), refs.len(), "seed {seed}");
+        // The device-circuit problems (labels.check) are exactly the planted unscheduled circuits.
+        let c = s.execute("labels.check", &json!({})).unwrap();
+        let mut flagged: Vec<String> = c["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["message"].as_str())
+            .filter(|m| m.contains("schedule doesn't have") || m.contains("isn't in the equipment"))
+            .map(|m| m.split(" is on ").nth(1).and_then(|x| x.split(", which").next()).unwrap_or(m).to_string())
+            .collect();
+        flagged.sort();
+        println!("seed {seed}: {} panels, {} devices read, {} on unscheduled circuits", scheduled.len(), refs.len(), planted.len());
+        assert_eq!(flagged, planted, "seed {seed}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    assert_eq!(l["counts"]["devices"].as_u64().unwrap() as usize, devices_count(&l));
-    let flagged = l["problems"].as_array().unwrap().iter().filter(|p| p["message"].as_str().unwrap().contains("schedule doesn't have")).count();
-    assert_eq!(flagged, unscheduled);
 }
 
 fn devices_count(l: &serde_json::Value) -> usize {
