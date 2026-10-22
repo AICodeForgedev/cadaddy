@@ -9,7 +9,6 @@
 mod array;
 pub mod bimspec;
 mod constraint;
-pub mod projrules;
 mod entity;
 mod extents;
 pub mod field;
@@ -18,6 +17,7 @@ mod header;
 pub mod library;
 mod plotstyle;
 mod plotter;
+pub mod projrules;
 mod refedit;
 mod section;
 mod solid;
@@ -169,6 +169,11 @@ pub struct Drawing {
     /// edits a person, an agent or an import made to what a build generated, put back after every
     /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
     pub overrides: Option<String>,
+    /// What agents (and people) working on the project through its tools keep in it (JSON text,
+    /// `project.*` / `review.*`): handoff notes, review decisions with their citations, the
+    /// change log and the revision count, so a fresh agent resumes from the file alone. Kept in
+    /// the named-object dictionary (`CADADDY_AGENT`).
+    pub agent: Option<String>,
     /// Files the drawing carries inside itself, by name: texture images its materials name
     /// (`texture:<path>`, see [`Drawing::embedded_texture`]) and the baked lightmap
     /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
@@ -278,6 +283,7 @@ impl Drawing {
             building_spec: None,
             tours: None,
             overrides: None,
+            agent: None,
             embedded: BTreeMap::new(),
             plot_stamp: None,
             properties: dwgprops::DwgProps::default(),

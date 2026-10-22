@@ -778,6 +778,7 @@ dependencies = [
  "cadaddy-color",
  "cadaddy-doc",
  "cadaddy-dxf",
+ "cadaddy-engine",
  "cadaddy-geom",
  "cadaddy-io",
  "cadaddy-walk3d",

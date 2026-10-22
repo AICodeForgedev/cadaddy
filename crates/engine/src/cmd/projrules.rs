@@ -9,9 +9,7 @@
 //! - `project.rules.import` — import rules from a TOML or JSON file.
 //! - `project.rules.export` — export rules to a TOML or JSON file.
 
-use cadaddy_doc::projrules::{
-    ChangePreview, ProjectRules, RuleDomain, RuleEntry, RuleValue, SourceTier,
-};
+use cadaddy_doc::projrules::{ChangePreview, ProjectRules, RuleDomain, RuleEntry, RuleValue, SourceTier};
 use serde_json::{Value, json};
 
 use super::*;
@@ -57,10 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
-    let domain_filter = p
-        .get("domain")
-        .and_then(Value::as_str)
-        .and_then(RuleDomain::parse);
+    let domain_filter = p.get("domain").and_then(Value::as_str).and_then(RuleDomain::parse);
 
     let entries = d.project_rules.list(domain_filter);
     let rules: Vec<Value> = entries.iter().map(|e| entry_to_json(e)).collect();
@@ -75,10 +70,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
     let domain = parse_domain(CMD_GET, p)?;
-    let key = p
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_GET, "`key` (string) is required"))?;
+    let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_GET, "`key` (string) is required"))?;
 
     let d = s.doc()?;
     match d.project_rules.resolve(domain, key) {
@@ -96,28 +88,15 @@ fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let domain = parse_domain(CMD_SET, p)?;
-    let key = p
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_SET, "`key` (string) is required"))?;
-    let value_str = p
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_SET, "`value` (string) is required"))?;
+    let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET, "`key` (string) is required"))?;
+    let value_str = p.get("value").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET, "`value` (string) is required"))?;
 
-    let tier = p
-        .get("tier")
-        .and_then(Value::as_str)
-        .and_then(SourceTier::parse)
-        .unwrap_or(SourceTier::ProjectRule);
+    let tier = p.get("tier").and_then(Value::as_str).and_then(SourceTier::parse).unwrap_or(SourceTier::ProjectRule);
     let source = p.get("source").and_then(Value::as_str).unwrap_or_default();
     let set_by = p.get("set_by").and_then(Value::as_str).unwrap_or_default();
     let reason = p.get("reason").and_then(Value::as_str).unwrap_or_default();
 
-    let rule_value = RuleValue::new(value_str)
-        .with_source(source)
-        .with_tier(tier)
-        .with_set_by(set_by);
+    let rule_value = RuleValue::new(value_str).with_source(source).with_tier(tier).with_set_by(set_by);
 
     let d = s.doc_mut()?;
     let preview = d.project_rules.set(domain, key, rule_value, reason);
@@ -141,22 +120,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
     let domain = parse_domain(CMD_REMOVE, p)?;
-    let key = p
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_REMOVE, "`key` (string) is required"))?;
+    let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_REMOVE, "`key` (string) is required"))?;
 
-    let tier = p
-        .get("tier")
-        .and_then(Value::as_str)
-        .and_then(SourceTier::parse);
+    let tier = p.get("tier").and_then(Value::as_str).and_then(SourceTier::parse);
 
     let d = s.doc_mut()?;
-    let removed = if let Some(t) = tier {
-        d.project_rules.remove_tier(domain, key, t).is_some()
-    } else {
-        d.project_rules.remove(domain, key).is_some()
-    };
+    let removed =
+        if let Some(t) = tier { d.project_rules.remove_tier(domain, key, t).is_some() } else { d.project_rules.remove(domain, key).is_some() };
 
     Ok(json!({ "removed": removed }))
 }
@@ -165,20 +135,10 @@ fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let domain = parse_domain(CMD_PREVIEW, p)?;
-    let key = p
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_PREVIEW, "`key` (string) is required"))?;
-    let value_str = p
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_PREVIEW, "`value` (string) is required"))?;
+    let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_PREVIEW, "`key` (string) is required"))?;
+    let value_str = p.get("value").and_then(Value::as_str).ok_or_else(|| bad(CMD_PREVIEW, "`value` (string) is required"))?;
 
-    let tier = p
-        .get("tier")
-        .and_then(Value::as_str)
-        .and_then(SourceTier::parse)
-        .unwrap_or(SourceTier::ProjectRule);
+    let tier = p.get("tier").and_then(Value::as_str).and_then(SourceTier::parse).unwrap_or(SourceTier::ProjectRule);
 
     let rule_value = RuleValue::new(value_str).with_tier(tier);
 
@@ -204,14 +164,10 @@ fn run_label(s: &mut Session, p: &Value) -> Result<Value> {
 // ── project.rules.import ───────────────────────────────────────────────────
 
 fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = p
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_IMPORT, "`path` (string) is required"))?;
+    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD_IMPORT, "`path` (string) is required"))?;
     let merge = p.get("merge").and_then(Value::as_bool).unwrap_or(true);
 
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| bad(CMD_IMPORT, format!("cannot read `{path}`: {e}")))?;
+    let text = std::fs::read_to_string(path).map_err(|e| bad(CMD_IMPORT, format!("cannot read `{path}`: {e}")))?;
 
     // Cap file size for hostile input.
     if text.len() > 4 * 1024 * 1024 {
@@ -221,8 +177,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let imported: ProjectRules = if path.ends_with(".toml") {
         parse_toml_rules(&text).map_err(|e| bad(CMD_IMPORT, format!("TOML parse error: {e}")))?
     } else {
-        ProjectRules::from_json(&text)
-            .map_err(|e| bad(CMD_IMPORT, format!("JSON parse error: {e}")))?
+        ProjectRules::from_json(&text).map_err(|e| bad(CMD_IMPORT, format!("JSON parse error: {e}")))?
     };
 
     let count = imported.rules.len();
@@ -231,12 +186,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut changed = 0u64;
     if merge {
         for entry in imported.rules.values() {
-            let preview = d.project_rules.set(
-                entry.domain,
-                &entry.key,
-                entry.active.clone(),
-                "imported from file",
-            );
+            let preview = d.project_rules.set(entry.domain, &entry.key, entry.active.clone(), "imported from file");
             if preview.changed {
                 changed = changed.saturating_add(1);
             }
@@ -255,21 +205,16 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 // ── project.rules.export ───────────────────────────────────────────────────
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = p
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(CMD_EXPORT, "`path` (string) is required"))?;
+    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD_EXPORT, "`path` (string) is required"))?;
 
     let d = s.doc()?;
     let text = if path.ends_with(".toml") {
         rules_to_toml(&d.project_rules)
     } else {
-        serde_json::to_string_pretty(&d.project_rules)
-            .map_err(|e| bad(CMD_EXPORT, format!("JSON serialisation error: {e}")))?
+        serde_json::to_string_pretty(&d.project_rules).map_err(|e| bad(CMD_EXPORT, format!("JSON serialisation error: {e}")))?
     };
 
-    std::fs::write(path, &text)
-        .map_err(|e| bad(CMD_EXPORT, format!("cannot write `{path}`: {e}")))?;
+    std::fs::write(path, &text).map_err(|e| bad(CMD_EXPORT, format!("cannot write `{path}`: {e}")))?;
 
     Ok(json!({ "exported": d.project_rules.rules.len() }))
 }
@@ -313,10 +258,7 @@ fn parse_toml_rule_value(val: &toml::Value) -> std::result::Result<RuleValue, St
     match val {
         toml::Value::String(s) => Ok(RuleValue::new(s.clone())),
         toml::Value::Table(t) => {
-            let value = t
-                .get("value")
-                .and_then(toml::Value::as_str)
-                .ok_or("each rule must have a `value` string")?;
+            let value = t.get("value").and_then(toml::Value::as_str).ok_or("each rule must have a `value` string")?;
             let mut rv = RuleValue::new(value);
             if let Some(source) = t.get("source").and_then(toml::Value::as_str) {
                 rv = rv.with_source(source);
@@ -407,22 +349,9 @@ fn preview_to_json(p: &ChangePreview) -> Value {
 }
 
 fn parse_domain(cmd: &str, p: &Value) -> Result<RuleDomain> {
-    let s = p
-        .get("domain")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad(cmd, "`domain` (string) is required"))?;
+    let s = p.get("domain").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`domain` (string) is required"))?;
     RuleDomain::parse(s).ok_or_else(|| {
-        bad(
-            cmd,
-            format!(
-                "unknown domain `{s}`; valid: {}",
-                RuleDomain::ALL
-                    .iter()
-                    .map(|d| d.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        )
+        bad(cmd, format!("unknown domain `{s}`; valid: {}", RuleDomain::ALL.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(", ")))
     })
 }
 
@@ -461,9 +390,7 @@ mod tests {
         assert_eq!(r["preview"]["newValue"], "18\"");
 
         // List rules.
-        let r = s
-            .execute("project.rules.list", &json!({}))
-            .unwrap_or_default();
+        let r = s.execute("project.rules.list", &json!({})).unwrap_or_default();
         let empty = vec![];
         let rules = r["rules"].as_array().unwrap_or(&empty);
         assert_eq!(rules.len(), 1);
@@ -500,12 +427,7 @@ mod tests {
         )
         .ok();
 
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "wiring_method", "key": "general"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "wiring_method", "key": "general"})).unwrap_or_default();
         assert_eq!(r["value"], "EMT");
         assert_eq!(r["tier"], "spec");
         assert_eq!(r["source"], "Spec 26 05 33");
@@ -547,12 +469,7 @@ mod tests {
         assert_eq!(r["preview"]["oldValue"], "36\"");
 
         // Actual value unchanged.
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "clearance", "key": "panel_front"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap_or_default();
         assert_eq!(r["value"], "36\"");
     }
 
@@ -571,20 +488,10 @@ mod tests {
         )
         .ok();
 
-        let r = s
-            .execute(
-                "project.rules.remove",
-                &json!({"domain": "tolerance", "key": "placement"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.remove", &json!({"domain": "tolerance", "key": "placement"})).unwrap_or_default();
         assert_eq!(r["removed"], true);
 
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "tolerance", "key": "placement"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap_or_default();
         assert!(r.is_null());
     }
 
@@ -616,30 +523,15 @@ mod tests {
         .ok();
 
         // RFI wins.
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "mounting_height", "key": "switch/general"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
         assert_eq!(r["value"], "46\"");
 
         // Remove RFI tier.
-        let r = s
-            .execute(
-                "project.rules.remove",
-                &json!({"domain": "mounting_height", "key": "switch/general", "tier": "rfi"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.remove", &json!({"domain": "mounting_height", "key": "switch/general", "tier": "rfi"})).unwrap_or_default();
         assert_eq!(r["removed"], true);
 
         // Project rule takes over.
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "mounting_height", "key": "switch/general"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
         assert_eq!(r["value"], "48\"");
     }
 
@@ -647,14 +539,10 @@ mod tests {
     fn label_set_and_get() {
         let mut s = session();
 
-        let r = s
-            .execute("project.rules.label", &json!({"label": "Sample Tower"}))
-            .unwrap_or_default();
+        let r = s.execute("project.rules.label", &json!({"label": "Sample Tower"})).unwrap_or_default();
         assert_eq!(r["label"], "Sample Tower");
 
-        let r = s
-            .execute("project.rules.label", &json!({}))
-            .unwrap_or_default();
+        let r = s.execute("project.rules.label", &json!({})).unwrap_or_default();
         assert_eq!(r["label"], "Sample Tower");
     }
 
@@ -676,12 +564,7 @@ mod tests {
         // Undo should restore.
         s.execute("undo", &json!({})).ok();
 
-        let r = s
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "naming", "key": "layer"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "naming", "key": "layer"})).unwrap_or_default();
         assert!(r.is_null());
     }
 
@@ -689,28 +572,13 @@ mod tests {
     fn filter_by_domain() {
         let mut s = session();
 
-        s.execute(
-            "project.rules.set",
-            &json!({"domain": "mounting_height", "key": "a", "value": "1"}),
-        )
-        .ok();
-        s.execute(
-            "project.rules.set",
-            &json!({"domain": "wiring_method", "key": "b", "value": "2"}),
-        )
-        .ok();
+        s.execute("project.rules.set", &json!({"domain": "mounting_height", "key": "a", "value": "1"})).ok();
+        s.execute("project.rules.set", &json!({"domain": "wiring_method", "key": "b", "value": "2"})).ok();
 
-        let r = s
-            .execute(
-                "project.rules.list",
-                &json!({"domain": "mounting_height"}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.list", &json!({"domain": "mounting_height"})).unwrap_or_default();
         assert_eq!(r["rules"].as_array().unwrap_or(&vec![]).len(), 1);
 
-        let r = s
-            .execute("project.rules.list", &json!({}))
-            .unwrap_or_default();
+        let r = s.execute("project.rules.list", &json!({})).unwrap_or_default();
         assert_eq!(r["rules"].as_array().unwrap_or(&vec![]).len(), 2);
     }
 
@@ -725,36 +593,16 @@ mod tests {
         assert!(s.execute("project.rules.preview", &json!({})).is_err());
 
         // Bad domain.
-        assert!(s
-            .execute(
-                "project.rules.set",
-                &json!({"domain": "nonsense", "key": "a", "value": "b"})
-            )
-            .is_err());
+        assert!(s.execute("project.rules.set", &json!({"domain": "nonsense", "key": "a", "value": "b"})).is_err());
 
         // Missing key.
-        assert!(s
-            .execute(
-                "project.rules.set",
-                &json!({"domain": "clearance", "value": "36\""})
-            )
-            .is_err());
+        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "value": "36\""})).is_err());
 
         // Missing value.
-        assert!(s
-            .execute(
-                "project.rules.set",
-                &json!({"domain": "clearance", "key": "a"})
-            )
-            .is_err());
+        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "key": "a"})).is_err());
 
         // Import non-existent file.
-        assert!(s
-            .execute(
-                "project.rules.import",
-                &json!({"path": "/nonexistent/file.json"})
-            )
-            .is_err());
+        assert!(s.execute("project.rules.import", &json!({"path": "/nonexistent/file.json"})).is_err());
     }
 
     #[test]
@@ -766,40 +614,21 @@ mod tests {
             &json!({"domain": "clearance", "key": "panel_front", "value": "36\"", "tier": "spec", "source": "NEC 110.26"}),
         )
         .ok();
-        s.execute(
-            "project.rules.label",
-            &json!({"label": "Export Test"}),
-        )
-        .ok();
+        s.execute("project.rules.label", &json!({"label": "Export Test"})).ok();
 
         let dir = std::env::temp_dir().join("projrules_test");
         let _ = std::fs::create_dir_all(&dir);
         let json_path = dir.join("test_rules.json");
 
-        let r = s
-            .execute(
-                "project.rules.export",
-                &json!({"path": json_path.to_str().unwrap_or_default()}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.export", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap_or_default();
         assert_eq!(r["exported"], 1);
 
         // Import into a new session.
         let mut s2 = session();
-        let r = s2
-            .execute(
-                "project.rules.import",
-                &json!({"path": json_path.to_str().unwrap_or_default()}),
-            )
-            .unwrap_or_default();
+        let r = s2.execute("project.rules.import", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap_or_default();
         assert_eq!(r["imported"], 1);
 
-        let r = s2
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "clearance", "key": "panel_front"}),
-            )
-            .unwrap_or_default();
+        let r = s2.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap_or_default();
         assert_eq!(r["value"], "36\"");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -814,45 +643,22 @@ mod tests {
             &json!({"domain": "mounting_height", "key": "switch/general", "value": "48\"", "tier": "spec", "source": "NEC"}),
         )
         .ok();
-        s.execute(
-            "project.rules.set",
-            &json!({"domain": "wiring_method", "key": "general", "value": "MC cable"}),
-        )
-        .ok();
-        s.execute(
-            "project.rules.label",
-            &json!({"label": "TOML Test"}),
-        )
-        .ok();
+        s.execute("project.rules.set", &json!({"domain": "wiring_method", "key": "general", "value": "MC cable"})).ok();
+        s.execute("project.rules.label", &json!({"label": "TOML Test"})).ok();
 
         let dir = std::env::temp_dir().join("projrules_toml_test");
         let _ = std::fs::create_dir_all(&dir);
         let toml_path = dir.join("test_rules.toml");
 
-        let r = s
-            .execute(
-                "project.rules.export",
-                &json!({"path": toml_path.to_str().unwrap_or_default()}),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.export", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap_or_default();
         assert_eq!(r["exported"], 2);
 
         // Import into a new session.
         let mut s2 = session();
-        let r = s2
-            .execute(
-                "project.rules.import",
-                &json!({"path": toml_path.to_str().unwrap_or_default()}),
-            )
-            .unwrap_or_default();
+        let r = s2.execute("project.rules.import", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap_or_default();
         assert_eq!(r["imported"], 2);
 
-        let r = s2
-            .execute(
-                "project.rules.get",
-                &json!({"domain": "mounting_height", "key": "switch/general"}),
-            )
-            .unwrap_or_default();
+        let r = s2.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
         assert_eq!(r["value"], "48\"");
 
         let _ = std::fs::remove_dir_all(&dir);

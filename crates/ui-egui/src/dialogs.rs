@@ -35,6 +35,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::clashpalette::DIALOG => crate::clashpalette::dialog(app, ctx, &mut open),
         crate::countpalette::DIALOG => crate::countpalette::dialog(app, ctx, &mut open),
         crate::projrulespalette::DIALOG => crate::projrulespalette::dialog(app, ctx, &mut open),
+        crate::agentpalette::DIALOG => crate::agentpalette::dialog(app, ctx, &mut open),
         crate::activitypalette::DIALOG => crate::activitypalette::dialog(app, ctx, &mut open),
         crate::meppalette::DIALOG => crate::meppalette::dialog(app, ctx, &mut open),
         crate::drywallpalette::DIALOG => crate::drywallpalette::dialog(app, ctx, &mut open),

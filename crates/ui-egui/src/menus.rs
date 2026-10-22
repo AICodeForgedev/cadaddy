@@ -703,6 +703,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some(crate::countpalette::DIALOG.into());
             Ok(Value::Null)
         }
+        "review.log" if params.is_null() && app.session.state().is_ok() => {
+            app.ui.dialog = Some(crate::agentpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
         "project.rules.list" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some(crate::projrulespalette::DIALOG.into());
             Ok(Value::Null)

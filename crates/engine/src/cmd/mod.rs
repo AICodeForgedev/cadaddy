@@ -58,6 +58,7 @@ mod xplode;
 pub use layer::filters::layers_of as layer_filter_layers;
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
+pub mod agentready;
 pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
@@ -318,6 +319,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
         v.extend(projrules::specs());
+        v.extend(agentready::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(drywall::specs());
