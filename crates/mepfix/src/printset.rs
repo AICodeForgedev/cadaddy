@@ -95,6 +95,9 @@ pub struct SheetEntry {
     /// A later file (a revision) has this sheet number: that file, page. Stages skip it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_by: String,
+    /// Why `superseded_by` replaces this sheet (which order decided it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub superseded_reason: String,
 }
 
 /// What one stage found on one sheet.
@@ -448,8 +451,8 @@ fn discover_in(dir: &Path, prefix: &str, depth: usize, files: &mut Vec<(String, 
             here.push((format!("{prefix}{name}"), path));
         }
     }
-    here.sort_by(|(a, _), (b, _)| a.cmp(b));
-    folders.sort_by(|(a, _), (b, _)| a.cmp(b));
+    here.sort_by(|(a, _), (b, _)| natural_cmp(a, b));
+    folders.sort_by(|(a, _), (b, _)| natural_cmp(a, b));
     for f in here {
         if files.len() >= MAX_SHEETS {
             return Ok(());
@@ -462,6 +465,67 @@ fn discover_in(dir: &Path, prefix: &str, depth: usize, files: &mut Vec<(String, 
         }
     }
     Ok(())
+}
+
+/// Compare names the way people number them: runs of digits by value (`Revision 2` before
+/// `Revision 10`, `ASI 02` with `ASI 2`), the rest ignoring case; exact text breaks ties.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < ab.len() && j < bb.len() {
+        let (ca, cb) = (ab.get(i).copied().unwrap_or(0), bb.get(j).copied().unwrap_or(0));
+        if ca.is_ascii_digit() && cb.is_ascii_digit() {
+            let si = i;
+            while ab.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+            }
+            let sj = j;
+            while bb.get(j).is_some_and(u8::is_ascii_digit) {
+                j += 1;
+            }
+            let da = trim_zeros(ab.get(si..i).unwrap_or_default());
+            let db = trim_zeros(bb.get(sj..j).unwrap_or_default());
+            // Longer digit runs (leading zeros dropped) are bigger; same length compares by digit.
+            let ord = da.len().cmp(&db.len()).then_with(|| da.cmp(db));
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            continue;
+        }
+        let ord = ca.to_ascii_lowercase().cmp(&cb.to_ascii_lowercase());
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        i += 1;
+        j += 1;
+    }
+    (ab.len() - i.min(ab.len())).cmp(&(bb.len() - j.min(bb.len()))).then_with(|| a.cmp(b))
+}
+
+fn trim_zeros(d: &[u8]) -> &[u8] {
+    let n = d.iter().take_while(|c| **c == b'0').count();
+    d.get(n..).unwrap_or_default()
+}
+
+/// The order [`discover_sheets`] lists two project paths in (`Revision 1/M-102.pdf`): folder by
+/// folder in [`natural_cmp`] order, a folder's own files before its subfolders.
+pub fn path_order(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (pa, pb): (Vec<&str>, Vec<&str>) = (a.split('/').collect(), b.split('/').collect());
+    for k in 0..pa.len().max(pb.len()) {
+        let (Some(x), Some(y)) = (pa.get(k), pb.get(k)) else { break };
+        let (x_file, y_file) = (k + 1 == pa.len(), k + 1 == pb.len());
+        let ord = match (x_file, y_file) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => natural_cmp(x, y),
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    pa.len().cmp(&pb.len())
 }
 
 /// The project's entries for one file: one per page of a PDF (a merged set), else one.
@@ -763,20 +827,34 @@ pub fn run_classify_prints(
         }
         classified += 1;
     }
-    // Later files replace earlier sheets of the same number.
+    // Later files replace earlier sheets of the same number. "Later" is folder order with
+    // numbers by value (`Revision 10/` after `Revision 2/`), not the order entries were added
+    // (a re-import appends), so the same folder always gives the same current sheets.
     let mut latest: BTreeMap<String, usize> = BTreeMap::new();
     for (i, e) in out.iter().enumerate() {
         if !e.number.is_empty() && e.recognised.as_ref().is_some_and(|r| !r.number.is_empty()) {
-            latest.insert(e.number.clone(), i);
+            let later = match latest.get(&e.number).and_then(|&j| out.get(j)) {
+                Some(prev) => path_order(&e.file, &prev.file).then(e.page.cmp(&prev.page)).is_ge(),
+                None => true,
+            };
+            if later {
+                latest.insert(e.number.clone(), i);
+            }
         }
     }
     let names: Vec<(String, u32)> = out.iter().map(|e| (e.file.clone(), e.page)).collect();
     for (i, e) in out.iter_mut().enumerate() {
-        e.superseded_by = match latest.get(&e.number) {
+        (e.superseded_by, e.superseded_reason) = match latest.get(&e.number) {
             Some(&j) if j != i && names.get(j).is_some_and(|(f, _)| *f != e.file) => {
-                names.get(j).map(|(f, p)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default()
+                let by = names.get(j).map(|(f, p)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default();
+                let later = names.get(j).map(|(f, _)| f.as_str()).unwrap_or_default();
+                let why = format!(
+                    "path order: {later} comes after {} (folders and files in name order, numbers by value; revision marks are not compared)",
+                    e.file
+                );
+                (by, why)
             }
-            _ => String::new(),
+            _ => (String::new(), String::new()),
         };
     }
     project.sheets = out;
@@ -1225,6 +1303,8 @@ impl PrintSetProject {
                         "scale": s.scale_text,
                         "file": s.file,
                         "dirty": s.dirty,
+                        "superseded_by": s.superseded_by,
+                        "superseded_reason": s.superseded_reason,
                         "stages": s.stage_results.keys().collect::<Vec<_>>(),
                     })
                 })

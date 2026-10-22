@@ -164,3 +164,112 @@ pub fn two_view_sheet(t: &Truth, st: &Style, lower: &str, upper: &str, number: &
     }
     Some(TwoViewSheet { drawing: out, number: number.into(), title, levels, shift })
 }
+
+/// How [`one_view_sheet`] prints its plan, where real sets differ from sheet to sheet.
+#[derive(Clone, Debug)]
+pub struct OneViewOptions {
+    /// How many grid lines are printed, first the lines of constant x then of constant y (a
+    /// floor's sheets printed with the grid turned off but for a stray line: its bubbles stand
+    /// in a row along the top and a column down the left with nothing leaving them).
+    pub grid_lines: usize,
+    /// Two pairs of same-label keynote tags, each pair in line (one pair up and down, one
+    /// across), drawn the size of the grid bubbles: on their own they read as a 1×1 "grid".
+    pub keynote_pairs: bool,
+}
+
+impl Default for OneViewOptions {
+    fn default() -> Self {
+        Self { grid_lines: usize::MAX, keynote_pairs: false }
+    }
+}
+
+/// A one-view printed sheet and what a reader should find on it.
+#[derive(Clone, Debug)]
+pub struct OneViewSheet {
+    pub drawing: Drawing,
+    pub number: String,
+    pub level: String,
+    /// The grid lines a reader should find (every line of the building's grid).
+    pub grid_x: usize,
+    pub grid_y: usize,
+}
+
+/// One plan sheet of the set (`number`, drawn as its kind) printed the way a print set does: one
+/// bubble per grid line, the view titled `<level> FLOOR <discipline word> PLAN` under it, a title
+/// column on the right, all on layer `0`, with `opts` for the ways a real sheet strays. `None`
+/// when the sheet isn't in the set or isn't a plan of one level.
+pub fn one_view_sheet(t: &Truth, st: &Style, number: &str, discipline_word: &str, opts: &OneViewOptions) -> Option<OneViewSheet> {
+    let kinds = layout::hotel_sheet_list();
+    let kind = kinds.iter().find(|(k, _, _, _)| k == number).map(|(_, _, _, k)| k.clone())?;
+    let sheet = t.sheets.iter().find(|s| s.number == number)?;
+    let level = sheet.level.clone()?;
+    let (d, _, _) = draw::draw(t, st, sheet, &kind);
+    let mut grid_seen = 0usize;
+    let part: Vec<Entity> = plan_part(&d)
+        .into_iter()
+        .filter(|e| {
+            if !e.common.layer.eq_ignore_ascii_case("GRID") {
+                return true;
+            }
+            grid_seen += 1;
+            grid_seen <= opts.grid_lines
+        })
+        .collect();
+    let items = one_bubble_per_line(&d, part);
+    let b = items.iter().fold(cadaddy_geom::Bounds2::EMPTY, |b, e| b.union(&entity_bounds(&d, e, 0)));
+    if b.is_empty() {
+        return None;
+    }
+    let bubble_r = items
+        .iter()
+        .filter(|e| e.common.layer.eq_ignore_ascii_case("GRID-BUBBLE"))
+        .find_map(|e| match &e.kind {
+            EntityKind::Circle(c) => Some(c.radius),
+            _ => None,
+        })
+        .unwrap_or(b.height() * 0.01);
+    let mut heights: Vec<f64> = items
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(t.height),
+            EntityKind::MText(t) => Some(t.height),
+            _ => None,
+        })
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .collect();
+    heights.sort_by(f64::total_cmp);
+    let h = heights.get(heights.len() / 2).copied().unwrap_or(b.height() * 0.01);
+    let gap = h * 8.0;
+    let mut kinds_out: Vec<EntityKind> = items.into_iter().map(|e| e.kind).collect();
+    if opts.keynote_pairs {
+        // Labels no grid line has, each tag a grid bubble's size, in the margin under the plan
+        // (where nothing leaves them): one pair stacked, one pair side by side.
+        let taken: Vec<&str> = t.building.grid.x.iter().chain(&t.building.grid.y).map(|g| g.label.as_str()).collect();
+        let mut free = (1..100u32).map(|n| n.to_string()).filter(|l| !taken.contains(&l.as_str()));
+        let (Some(l1), Some(l2)) = (free.next(), free.next()) else { return None };
+        let y0 = b.min.y - gap * 3.0;
+        let x0 = b.min.x + b.width() * 0.3;
+        let step = bubble_r * 6.0;
+        for (c, l) in [([x0, y0], &l1), ([x0, y0 - step], &l1), ([x0 + step * 2.0, y0], &l2), ([x0 + step * 3.0, y0], &l2)] {
+            kinds_out.push(EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(c[0], c[1], 0.0), radius: bubble_r }));
+            let th = bubble_r * 0.9;
+            kinds_out.push(text(Vec2::new(c[0] - th * 0.35 * l.len() as f64, c[1] - th * 0.5), th, l));
+        }
+    }
+    let title_h = h * 2.5;
+    kinds_out.push(text(
+        Vec2::new(b.center().x - title_h * 6.0, b.min.y - gap),
+        title_h,
+        &format!("{} FLOOR {discipline_word} PLAN", ordinal(&level)),
+    ));
+    let (top, bottom) = (b.max.y, b.min.y - gap * 2.0);
+    let x = b.max.x + (top - bottom) * 0.25;
+    kinds_out.push(text(Vec2::new(x, bottom + title_h * 6.0), title_h * 0.8, &format!("{} FLOOR {discipline_word} PLAN", ordinal_word(&level))));
+    kinds_out.push(text(Vec2::new(x, bottom + title_h * 3.0), h, &format!("SCALE: {}", sheet.scale_text.clone().unwrap_or_default())));
+    kinds_out.push(text(Vec2::new(x, bottom), title_h * 3.0, number));
+    let mut out = Drawing::new_imperial();
+    for kind in kinds_out {
+        out.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind).ok()?;
+    }
+    Some(OneViewSheet { drawing: out, number: number.into(), level, grid_x: t.building.grid.x.len(), grid_y: t.building.grid.y.len() })
+}

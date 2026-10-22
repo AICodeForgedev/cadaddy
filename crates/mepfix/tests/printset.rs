@@ -390,3 +390,69 @@ fn a_floor_plan_title_without_a_floor_has_no_level() {
         assert_eq!(printset::level_of_title(title), want, "{title}");
     }
 }
+
+#[test]
+fn names_sort_with_their_numbers_by_value() {
+    use std::cmp::Ordering;
+    let mut names = vec!["Revision 10", "Revision 2", "revision 1", "ASI 03", "ASI 12", "Addendum", "Revision 2a"];
+    names.sort_by(|a, b| printset::natural_cmp(a, b));
+    assert_eq!(names, ["Addendum", "ASI 03", "ASI 12", "revision 1", "Revision 2", "Revision 2a", "Revision 10"]);
+    assert_eq!(printset::natural_cmp("ASI 02", "ASI 2"), "ASI 02".cmp("ASI 2"), "equal numbers: exact text breaks the tie");
+    // A folder's own files come before its subfolders; folders compare by number.
+    assert_eq!(printset::path_order("Sample Set.pdf", "Revision 1/M-102.pdf"), Ordering::Less);
+    assert_eq!(printset::path_order("Revision 2/M-102.pdf", "Revision 10/M-102.pdf"), Ordering::Less);
+    assert_eq!(printset::path_order("Revision 2/Z.pdf", "Revision 2/Old/A.pdf"), Ordering::Less);
+}
+
+#[test]
+fn revision_ten_supersedes_revision_two_and_says_why() {
+    let set = generate_hotel(42, HotelSize::Small).expect("generate hotel");
+    let truth = &set.truth;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_printset_rev_order_{}_{nanos}", std::process::id()));
+    let reissued = truth.sheets.iter().find(|s| s.number == "M-102").expect("M-102");
+    let pdf = set.file(&reissued.pdf).expect("sheet pdf");
+    std::fs::create_dir_all(&dir).expect("folder");
+    std::fs::write(dir.join("Sample Set.pdf"), set.file("set.pdf").expect("set.pdf")).expect("write set");
+    // Made in the order a string sort would put them, so the order written proves nothing.
+    for rev in ["Revision 10", "Revision 2"] {
+        std::fs::create_dir_all(dir.join(rev)).expect("revision folder");
+        std::fs::write(dir.join(rev).join("M-102.pdf"), pdf).expect("write revision");
+    }
+
+    let mut project = printset::create_project("Project A", &dir).expect("create project");
+    let files: Vec<&str> = project.sheets.iter().skip(truth.sheets.len()).map(|s| s.file.as_str()).collect();
+    assert_eq!(files, ["Revision 2/M-102.pdf", "Revision 10/M-102.pdf"], "revision folders in number order");
+
+    let cancel = AtomicBool::new(false);
+    let rec = printset::run_classify_prints(&mut project, &|e| load_print(&dir, e), &cancel, &mut |_| {});
+    assert_eq!(rec.status, StageStatus::Completed);
+    let m102: Vec<&printset::SheetEntry> = project.sheets.iter().filter(|s| s.number == "M-102").collect();
+    assert_eq!(m102.len(), 3, "the set's page and both revisions");
+    let current: Vec<&&printset::SheetEntry> = m102.iter().filter(|s| s.superseded_by.is_empty()).collect();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].file, "Revision 10/M-102.pdf", "Revision 10 is current");
+    assert!(current[0].superseded_reason.is_empty());
+    for old in m102.iter().filter(|s| !s.superseded_by.is_empty()) {
+        assert_eq!(old.superseded_by, "Revision 10/M-102.pdf#1", "{} replaced by Revision 10", old.file);
+        assert!(old.superseded_reason.starts_with("path order: Revision 10/M-102.pdf comes after "), "{}", old.superseded_reason);
+        assert!(old.superseded_reason.contains(&old.file), "{}", old.superseded_reason);
+    }
+    assert_eq!(project.dashboard.superseded_sheets, 2);
+    // The reason travels with the sheet list.
+    let listed = project.sheets_json();
+    let rows = listed.as_array().expect("sheet rows");
+    assert_eq!(rows.iter().filter(|r| r["superseded_reason"].as_str().is_some_and(|s| s.starts_with("path order:"))).count(), 2);
+
+    // A re-import that appends Revision 2's page after Revision 10's still leaves Revision 10 current.
+    project.sheets.retain(|s| s.file != "Revision 2/M-102.pdf");
+    let mut all = printset::discover_sheets(&dir).expect("discover");
+    all.retain(|(n, _)| n != "Revision 2/M-102.pdf");
+    all.push(("Revision 2/M-102.pdf".into(), dir.join("Revision 2").join("M-102.pdf")));
+    printset::apply_reimport(&mut project, &all, "rev 2 again").expect("reimport");
+    assert_eq!(project.sheets.last().map(|s| s.file.as_str()), Some("Revision 2/M-102.pdf"), "the re-import appends");
+    printset::run_classify_prints(&mut project, &|e| load_print(&dir, e), &cancel, &mut |_| {});
+    let now: Vec<&str> = project.sheets.iter().filter(|s| s.number == "M-102" && s.superseded_by.is_empty()).map(|s| s.file.as_str()).collect();
+    assert_eq!(now, ["Revision 10/M-102.pdf"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
