@@ -2648,3 +2648,24 @@ menu	Modify	Modifikace
 	Element Provenance	Původ prvku
 	MEP Quantities	Výkaz výměr TZB
 	Refresh MEP Quantities	Aktualizovat výkaz výměr TZB
+	Activate Drawing	Aktivovat výkres
+	Add to Project	Přidat do projektu
+	Close Project	Zavřít projekt
+	Import Manifest	Importovat manifest
+	Import Standards	Importovat standardy
+	New Project	Nový projekt
+	Open Project	Otevřít projekt
+	Project Disk Use	Využití disku projektem
+	Project Drawings	Výkresy projektu
+	Project Info	Informace o projektu
+	Remove Standard	Odebrat standard
+	Remove from Project	Odebrat z projektu
+	Restore Project	Obnovit projekt
+	Set Standard	Nastavit standard
+	Shelve Drawing	Odložit výkres
+	Shelve Project	Odložit projekt
+	Standards Library	Knihovna standardů
+	Validate Manifest	Ověřit manifest
+	Active	Aktivní
+	Shelved	Odloženo
+	{n} drawings	Výkresy: {n}

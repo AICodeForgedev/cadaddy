@@ -2668,3 +2668,24 @@ menu	Modify	수정
 	Element Provenance	요소 출처
 	MEP Quantities	MEP 물량
 	Refresh MEP Quantities	MEP 물량 새로 고침
+	Activate Drawing	도면 활성화
+	Add to Project	프로젝트에 추가
+	Close Project	프로젝트 닫기
+	Import Manifest	매니페스트 가져오기
+	Import Standards	표준 가져오기
+	New Project	새 프로젝트
+	Open Project	프로젝트 열기
+	Project Disk Use	프로젝트 디스크 사용량
+	Project Drawings	프로젝트 도면
+	Project Info	프로젝트 정보
+	Remove Standard	표준 제거
+	Remove from Project	프로젝트에서 제거
+	Restore Project	프로젝트 복원
+	Set Standard	표준 설정
+	Shelve Drawing	도면 보류
+	Shelve Project	프로젝트 보류
+	Standards Library	표준 라이브러리
+	Validate Manifest	매니페스트 검사
+	Active	활성
+	Shelved	보류됨
+	{n} drawings	도면 {n}개

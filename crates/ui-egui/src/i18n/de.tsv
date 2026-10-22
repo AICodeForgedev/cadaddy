@@ -2484,3 +2484,24 @@
 	Element Provenance	Herkunft des Elements
 	MEP Quantities	TGA-Mengen
 	Refresh MEP Quantities	TGA-Mengen aktualisieren
+	Activate Drawing	Zeichnung aktivieren
+	Add to Project	Zum Projekt hinzufügen
+	Close Project	Projekt schließen
+	Import Manifest	Manifest importieren
+	Import Standards	Standards importieren
+	New Project	Neues Projekt
+	Open Project	Projekt öffnen
+	Project Disk Use	Speicherbelegung des Projekts
+	Project Drawings	Projektzeichnungen
+	Project Info	Projektinformationen
+	Remove Standard	Standard entfernen
+	Remove from Project	Aus Projekt entfernen
+	Restore Project	Projekt wiederherstellen
+	Set Standard	Standard festlegen
+	Shelve Drawing	Zeichnung zurückstellen
+	Shelve Project	Projekt zurückstellen
+	Standards Library	Standardbibliothek
+	Validate Manifest	Manifest prüfen
+	Active	Aktiv
+	Shelved	Zurückgestellt
+	{n} drawings	{n} Zeichnungen

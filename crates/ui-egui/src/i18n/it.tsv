@@ -2667,3 +2667,24 @@ menu	Modify	Edita
 	Element Provenance	Provenienza dell'elemento
 	MEP Quantities	Quantità impianti MEP
 	Refresh MEP Quantities	Aggiorna quantità impianti MEP
+	Activate Drawing	Attiva disegno
+	Add to Project	Aggiungi al progetto
+	Close Project	Chiudi progetto
+	Import Manifest	Importa manifest
+	Import Standards	Importa standard
+	New Project	Nuovo progetto
+	Open Project	Apri progetto
+	Project Disk Use	Spazio su disco del progetto
+	Project Drawings	Disegni del progetto
+	Project Info	Informazioni progetto
+	Remove Standard	Rimuovi standard
+	Remove from Project	Rimuovi dal progetto
+	Restore Project	Ripristina progetto
+	Set Standard	Imposta standard
+	Shelve Drawing	Accantona disegno
+	Shelve Project	Accantona progetto
+	Standards Library	Libreria standard
+	Validate Manifest	Convalida manifest
+	Active	Attivo
+	Shelved	Accantonato
+	{n} drawings	{n} disegni

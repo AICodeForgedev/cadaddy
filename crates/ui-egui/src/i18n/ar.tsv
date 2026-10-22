@@ -2663,3 +2663,24 @@ menu	View	عرض
 	Element Provenance	مصدر العنصر
 	MEP Quantities	كميات الأعمال الميكانيكية والكهربائية والصحية
 	Refresh MEP Quantities	تحديث كميات الأعمال الميكانيكية والكهربائية والصحية
+	Activate Drawing	تنشيط الرسم
+	Add to Project	إضافة إلى المشروع
+	Close Project	إغلاق المشروع
+	Import Manifest	استيراد البيان
+	Import Standards	استيراد المعايير
+	New Project	مشروع جديد
+	Open Project	فتح مشروع
+	Project Disk Use	استخدام القرص للمشروع
+	Project Drawings	رسومات المشروع
+	Project Info	معلومات المشروع
+	Remove Standard	إزالة المعيار
+	Remove from Project	إزالة من المشروع
+	Restore Project	استعادة المشروع
+	Set Standard	تعيين المعيار
+	Shelve Drawing	أرشفة الرسم مؤقتًا
+	Shelve Project	أرشفة المشروع مؤقتًا
+	Standards Library	مكتبة المعايير
+	Validate Manifest	التحقق من البيان
+	Active	نشط
+	Shelved	مؤرشف مؤقتًا
+	{n} drawings	الرسومات: {n}

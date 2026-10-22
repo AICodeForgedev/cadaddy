@@ -2455,3 +2455,24 @@
 	Element Provenance	Provenance de l'élément
 	MEP Quantities	Quantités CVC-plomberie-électricité
 	Refresh MEP Quantities	Actualiser les quantités CVC-plomberie-électricité
+	Activate Drawing	Activer le dessin
+	Add to Project	Ajouter au projet
+	Close Project	Fermer le projet
+	Import Manifest	Importer le manifeste
+	Import Standards	Importer les normes
+	New Project	Nouveau projet
+	Open Project	Ouvrir un projet
+	Project Disk Use	Espace disque du projet
+	Project Drawings	Dessins du projet
+	Project Info	Informations sur le projet
+	Remove Standard	Supprimer la norme
+	Remove from Project	Retirer du projet
+	Restore Project	Restaurer le projet
+	Set Standard	Définir la norme
+	Shelve Drawing	Mettre le dessin de côté
+	Shelve Project	Mettre le projet de côté
+	Standards Library	Bibliothèque de normes
+	Validate Manifest	Valider le manifeste
+	Active	Actif
+	Shelved	Mis de côté
+	{n} drawings	{n} dessins

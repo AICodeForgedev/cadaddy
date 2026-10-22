@@ -2456,3 +2456,24 @@
 	Element Provenance	Происхождение элемента
 	MEP Quantities	Объёмы инженерных систем
 	Refresh MEP Quantities	Обновить объёмы инженерных систем
+	Activate Drawing	Активировать чертёж
+	Add to Project	Добавить в проект
+	Close Project	Закрыть проект
+	Import Manifest	Импортировать манифест
+	Import Standards	Импортировать стандарты
+	New Project	Новый проект
+	Open Project	Открыть проект
+	Project Disk Use	Место на диске проекта
+	Project Drawings	Чертежи проекта
+	Project Info	Сведения о проекте
+	Remove Standard	Удалить стандарт
+	Remove from Project	Удалить из проекта
+	Restore Project	Восстановить проект
+	Set Standard	Задать стандарт
+	Shelve Drawing	Отложить чертёж
+	Shelve Project	Отложить проект
+	Standards Library	Библиотека стандартов
+	Validate Manifest	Проверить манифест
+	Active	Активен
+	Shelved	Отложен
+	{n} drawings	Чертежей: {n}

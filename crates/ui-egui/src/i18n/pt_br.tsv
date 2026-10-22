@@ -2674,3 +2674,24 @@
 	Element Provenance	Procedência do elemento
 	MEP Quantities	Quantitativos MEP
 	Refresh MEP Quantities	Atualizar quantitativos MEP
+	Activate Drawing	Ativar desenho
+	Add to Project	Adicionar ao projeto
+	Close Project	Fechar projeto
+	Import Manifest	Importar manifesto
+	Import Standards	Importar padrões
+	New Project	Novo projeto
+	Open Project	Abrir projeto
+	Project Disk Use	Uso de disco do projeto
+	Project Drawings	Desenhos do projeto
+	Project Info	Informações do projeto
+	Remove Standard	Remover padrão
+	Remove from Project	Remover do projeto
+	Restore Project	Restaurar projeto
+	Set Standard	Definir padrão
+	Shelve Drawing	Arquivar desenho
+	Shelve Project	Arquivar projeto
+	Standards Library	Biblioteca de padrões
+	Validate Manifest	Validar manifesto
+	Active	Ativo
+	Shelved	Arquivado
+	{n} drawings	{n} desenhos

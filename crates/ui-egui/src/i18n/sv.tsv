@@ -2675,3 +2675,24 @@ menu	Modify	Ändra
 	Element Provenance	Elementets ursprung
 	MEP Quantities	Installationsmängder
 	Refresh MEP Quantities	Uppdatera installationsmängder
+	Activate Drawing	Aktivera ritning
+	Add to Project	Lägg till i projekt
+	Close Project	Stäng projekt
+	Import Manifest	Importera manifest
+	Import Standards	Importera standarder
+	New Project	Nytt projekt
+	Open Project	Öppna projekt
+	Project Disk Use	Projektets diskanvändning
+	Project Drawings	Projektritningar
+	Project Info	Projektinformation
+	Remove Standard	Ta bort standard
+	Remove from Project	Ta bort från projekt
+	Restore Project	Återställ projekt
+	Set Standard	Ange standard
+	Shelve Drawing	Lägg undan ritning
+	Shelve Project	Lägg undan projekt
+	Standards Library	Standardbibliotek
+	Validate Manifest	Validera manifest
+	Active	Aktiv
+	Shelved	Undanlagt
+	{n} drawings	{n} ritningar

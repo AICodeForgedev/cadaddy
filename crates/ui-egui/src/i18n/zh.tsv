@@ -2551,3 +2551,24 @@
 	Element Provenance	元素来源
 	MEP Quantities	机电工程量
 	Refresh MEP Quantities	刷新机电工程量
+	Activate Drawing	激活图纸
+	Add to Project	添加到项目
+	Close Project	关闭项目
+	Import Manifest	导入清单
+	Import Standards	导入标准
+	New Project	新建项目
+	Open Project	打开项目
+	Project Disk Use	项目磁盘占用
+	Project Drawings	项目图纸
+	Project Info	项目信息
+	Remove Standard	移除标准
+	Remove from Project	从项目中移除
+	Restore Project	恢复项目
+	Set Standard	设置标准
+	Shelve Drawing	搁置图纸
+	Shelve Project	搁置项目
+	Standards Library	标准库
+	Validate Manifest	验证清单
+	Active	活动
+	Shelved	已搁置
+	{n} drawings	{n} 张图纸
