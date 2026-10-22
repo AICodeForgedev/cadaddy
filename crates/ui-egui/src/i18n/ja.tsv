@@ -2234,3 +2234,12 @@
 	Issue #{n} created	課題 #{n} を作成しました
 	BCF: {added} added, {updated} updated	BCF: {added} 件追加、{updated} 件更新
 	{n} of its objects aren't in this model	そのオブジェクトのうち {n} 個はこのモデルにありません
+	Export COBie	COBie を書き出し
+	Validate COBie	COBie を検証
+	Export Handover Schedules	引き渡し集計表を書き出し
+	COBie...	COBie...
+	Handover Schedules...	引き渡し集計表...
+	Electrical Gear	電気機器
+	Check Electrical Gear	電気機器をチェック
+	Submittal Review of Gear	機器提出書の審査
+	Accept Gear as Submitted	提出どおり機器を承認

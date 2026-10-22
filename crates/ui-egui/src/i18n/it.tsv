@@ -2787,3 +2787,12 @@ menu	Modify	Edita
 	Issue #{n} created	Segnalazione n. {n} creata
 	BCF: {added} added, {updated} updated	BCF: {added} aggiunte, {updated} aggiornate
 	{n} of its objects aren't in this model	{n} dei suoi oggetti non sono in questo modello
+	Export COBie	Esporta COBie
+	Validate COBie	Convalida COBie
+	Export Handover Schedules	Esporta abachi di consegna
+	COBie...	COBie...
+	Handover Schedules...	Abachi di consegna...
+	Electrical Gear	Apparecchiature elettriche
+	Check Electrical Gear	Verifica apparecchiature elettriche
+	Submittal Review of Gear	Revisione della documentazione delle apparecchiature
+	Accept Gear as Submitted	Accetta l'apparecchiatura come presentata

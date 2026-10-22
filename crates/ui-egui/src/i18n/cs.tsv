@@ -2768,3 +2768,12 @@ menu	Modify	Modifikace
 	Issue #{n} created	Připomínka č. {n} vytvořena
 	BCF: {added} added, {updated} updated	BCF: přidáno {added}, aktualizováno {updated}
 	{n} of its objects aren't in this model	{n} jeho objektů v tomto modelu není
+	Export COBie	Exportovat COBie
+	Validate COBie	Ověřit COBie
+	Export Handover Schedules	Exportovat předávací výkazy
+	COBie...	COBie...
+	Handover Schedules...	Předávací výkazy...
+	Electrical Gear	Elektrická zařízení
+	Check Electrical Gear	Zkontrolovat elektrická zařízení
+	Submittal Review of Gear	Kontrola předložení zařízení
+	Accept Gear as Submitted	Přijmout zařízení dle předložení

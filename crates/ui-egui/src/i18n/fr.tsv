@@ -2576,3 +2576,12 @@
 	Issue #{n} created	Sujet n° {n} créé
 	BCF: {added} added, {updated} updated	BCF : {added} ajoutés, {updated} mis à jour
 	{n} of its objects aren't in this model	{n} de ses objets ne sont pas dans ce modèle
+	Export COBie	Exporter COBie
+	Validate COBie	Valider COBie
+	Export Handover Schedules	Exporter les nomenclatures de livraison
+	COBie...	COBie...
+	Handover Schedules...	Nomenclatures de livraison...
+	Electrical Gear	Équipements électriques
+	Check Electrical Gear	Vérifier les équipements électriques
+	Submittal Review of Gear	Revue de soumission des équipements
+	Accept Gear as Submitted	Accepter l'équipement tel que soumis

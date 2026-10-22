@@ -2783,3 +2783,12 @@ menu	View	عرض
 	Issue #{n} created	تم إنشاء المشكلة رقم {n}
 	BCF: {added} added, {updated} updated	BCF: أُضيف {added}، وحُدّث {updated}
 	{n} of its objects aren't in this model	{n} من كائناته غير موجودة في هذا النموذج
+	Export COBie	تصدير COBie
+	Validate COBie	التحقق من COBie
+	Export Handover Schedules	تصدير جداول التسليم
+	COBie...	COBie...
+	Handover Schedules...	جداول التسليم...
+	Electrical Gear	المعدات الكهربائية
+	Check Electrical Gear	فحص المعدات الكهربائية
+	Submittal Review of Gear	مراجعة تقديم المعدات
+	Accept Gear as Submitted	قبول المعدات كما قُدّمت

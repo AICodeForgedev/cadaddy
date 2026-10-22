@@ -2577,3 +2577,12 @@
 	Issue #{n} created	Замечание № {n} создано
 	BCF: {added} added, {updated} updated	BCF: добавлено {added}, обновлено {updated}
 	{n} of its objects aren't in this model	{n} его объектов нет в этой модели
+	Export COBie	Экспорт COBie
+	Validate COBie	Проверить COBie
+	Export Handover Schedules	Экспорт ведомостей для передачи
+	COBie...	COBie...
+	Handover Schedules...	Ведомости для передачи...
+	Electrical Gear	Электрооборудование
+	Check Electrical Gear	Проверить электрооборудование
+	Submittal Review of Gear	Проверка подачи оборудования
+	Accept Gear as Submitted	Принять оборудование как подано

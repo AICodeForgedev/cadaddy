@@ -2605,3 +2605,12 @@
 	Issue #{n} created	Thema Nr. {n} erstellt
 	BCF: {added} added, {updated} updated	BCF: {added} hinzugefügt, {updated} aktualisiert
 	{n} of its objects aren't in this model	{n} seiner Objekte sind nicht in diesem Modell
+	Export COBie	COBie exportieren
+	Validate COBie	COBie prüfen
+	Export Handover Schedules	Übergabelisten exportieren
+	COBie...	COBie...
+	Handover Schedules...	Übergabelisten...
+	Electrical Gear	Elektrische Verteilungen
+	Check Electrical Gear	Elektrische Verteilungen prüfen
+	Submittal Review of Gear	Prüfung der Geräteeinreichung
+	Accept Gear as Submitted	Gerät wie eingereicht annehmen

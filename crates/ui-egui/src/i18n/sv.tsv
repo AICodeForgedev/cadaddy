@@ -2795,3 +2795,12 @@ menu	Modify	Ändra
 	Issue #{n} created	Ärende nr {n} skapat
 	BCF: {added} added, {updated} updated	BCF: {added} tillagda, {updated} uppdaterade
 	{n} of its objects aren't in this model	{n} av dess objekt finns inte i den här modellen
+	Export COBie	Exportera COBie
+	Validate COBie	Validera COBie
+	Export Handover Schedules	Exportera överlämningsförteckningar
+	COBie...	COBie...
+	Handover Schedules...	Överlämningsförteckningar...
+	Electrical Gear	Elutrustning
+	Check Electrical Gear	Kontrollera elutrustning
+	Submittal Review of Gear	Granskning av utrustningsunderlag
+	Accept Gear as Submitted	Godkänn utrustning som inlämnad

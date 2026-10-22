@@ -2788,3 +2788,12 @@ menu	Modify	수정
 	Issue #{n} created	이슈 #{n} 생성됨
 	BCF: {added} added, {updated} updated	BCF: {added}개 추가, {updated}개 업데이트
 	{n} of its objects aren't in this model	해당 객체 중 {n}개가 이 모델에 없습니다
+	Export COBie	COBie 내보내기
+	Validate COBie	COBie 검증
+	Export Handover Schedules	인계 일람표 내보내기
+	COBie...	COBie...
+	Handover Schedules...	인계 일람표...
+	Electrical Gear	전기 설비
+	Check Electrical Gear	전기 설비 검사
+	Submittal Review of Gear	설비 제출 검토
+	Accept Gear as Submitted	제출된 대로 설비 승인

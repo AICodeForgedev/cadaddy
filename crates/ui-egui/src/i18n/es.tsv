@@ -2794,3 +2794,12 @@
 	Issue #{n} created	Incidencia n.º {n} creada
 	BCF: {added} added, {updated} updated	BCF: {added} añadidas, {updated} actualizadas
 	{n} of its objects aren't in this model	{n} de sus objetos no están en este modelo
+	Export COBie	Exportar COBie
+	Validate COBie	Validar COBie
+	Export Handover Schedules	Exportar tablas de entrega
+	COBie...	COBie...
+	Handover Schedules...	Tablas de entrega...
+	Electrical Gear	Equipos eléctricos
+	Check Electrical Gear	Comprobar equipos eléctricos
+	Submittal Review of Gear	Revisión de la presentación de equipos
+	Accept Gear as Submitted	Aceptar equipo según presentado

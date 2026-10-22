@@ -2672,3 +2672,12 @@
 	Issue #{n} created	已创建问题 #{n}
 	BCF: {added} added, {updated} updated	BCF：新增 {added}，更新 {updated}
 	{n} of its objects aren't in this model	其中 {n} 个对象不在此模型中
+	Export COBie	导出 COBie
+	Validate COBie	验证 COBie
+	Export Handover Schedules	导出交付明细表
+	COBie...	COBie...
+	Handover Schedules...	交付明细表...
+	Electrical Gear	电气设备
+	Check Electrical Gear	检查电气设备
+	Submittal Review of Gear	设备提交审查
+	Accept Gear as Submitted	按提交接受设备
