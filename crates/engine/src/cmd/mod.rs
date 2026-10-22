@@ -78,6 +78,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod overkill;
+pub mod overrides;
 pub mod p2meval;
 pub mod pdfplans;
 mod perceive;
@@ -278,6 +279,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(materials::specs());
         v.extend(wallgen::specs());
         v.extend(revise3d::specs());
+        v.extend(overrides::specs());
         v.extend(bspec::specs());
         v.extend(p2meval::specs());
         v.extend(schedules::specs());
