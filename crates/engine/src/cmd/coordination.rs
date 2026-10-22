@@ -44,12 +44,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("coordination.clashlist", "Clash List", run_clashlist).params("{tolerance_in?, group_by?} → {groups, total}").noundo(),
         CommandSpec::new("coordination.clashstatus", "Clash Status", run_clashstatus).params("{id, status}").noundo(),
         CommandSpec::new("coordination.bcf", "BCF Export", run_bcf).params("{path, tolerance_in?} → {topics, path}").noundo(),
-        CommandSpec::new("coordination.mode", "Coordination Mode", run_mode)
-            .params("{on?, ghost_opacity?} → {on, ghost_opacity}")
-            .noundo(),
-        CommandSpec::new("coordination.isolate", "Isolate Trade", run_isolate)
-            .params("{system?, level?, reset?} → {isolated, trades}")
-            .noundo(),
+        CommandSpec::new("coordination.mode", "Coordination Mode", run_mode).params("{on?, ghost_opacity?} → {on, ghost_opacity}").noundo(),
+        CommandSpec::new("coordination.isolate", "Isolate Trade", run_isolate).params("{system?, level?, reset?} → {isolated, trades}").noundo(),
         CommandSpec::new("coordination.colors", "Colour Scheme", run_colors)
             .params("{save?: {name, colors}, load?, delete?, list?} → {schemes | active}")
             .noundo(),
@@ -162,10 +158,7 @@ fn run_trades(s: &mut Session, p: &Value) -> Result<Value> {
     for sys in &sp.mep.systems {
         let layer_name = format!("3D-MEP-{}", sys.name);
         let visible = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(&layer_name)).is_none_or(|l| l.on);
-        let count = sp.mep.runs.iter().filter(|r| {
-            r.system == sys.name
-                && level_filter.is_none_or(|lf| r.level.eq_ignore_ascii_case(lf))
-        }).count();
+        let count = sp.mep.runs.iter().filter(|r| r.system == sys.name && level_filter.is_none_or(|lf| r.level.eq_ignore_ascii_case(lf))).count();
         // Collect levels that have runs for this system.
         let mut levels: Vec<String> = Vec::new();
         for run in &sp.mep.runs {
@@ -763,13 +756,8 @@ fn run_views(s: &mut Session, p: &Value) -> Result<Value> {
         let active_scheme = coord_get(d, "coord_active_scheme");
 
         // Trade visibility snapshot.
-        let trade_vis: Vec<Value> = d
-            .layers
-            .iter()
-            .filter(|l| l.name.starts_with("3D-MEP-"))
-            .take(200)
-            .map(|l| json!({ "layer": l.name, "on": l.on }))
-            .collect();
+        let trade_vis: Vec<Value> =
+            d.layers.iter().filter(|l| l.name.starts_with("3D-MEP-")).take(200).map(|l| json!({ "layer": l.name, "on": l.on })).collect();
 
         let entry = json!({
             "name": name,
@@ -923,37 +911,55 @@ impl CoordRenderState {
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new(hi[0], (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0),
                 normal: Vec3::new(-1.0, 0.0, 0.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
             // -X face.
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new(lo[0], (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0),
                 normal: Vec3::new(1.0, 0.0, 0.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
             // +Y face.
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new((lo[0] + hi[0]) / 2.0, hi[1], (lo[2] + hi[2]) / 2.0),
                 normal: Vec3::new(0.0, -1.0, 0.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
             // -Y face.
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new((lo[0] + hi[0]) / 2.0, lo[1], (lo[2] + hi[2]) / 2.0),
                 normal: Vec3::new(0.0, 1.0, 0.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
             // +Z face.
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2]),
                 normal: Vec3::new(0.0, 0.0, -1.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
             // -Z face.
             cadaddy_doc::SectionPlane {
                 origin: Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2]),
                 normal: Vec3::new(0.0, 0.0, 1.0),
-                width: big, height: big, live: true, name: String::new(),
+                width: big,
+                height: big,
+                live: true,
+                name: String::new(),
             },
         ]
     }
@@ -1040,9 +1046,12 @@ mod tests {
     fn color_scheme_crud() {
         let mut s = Session::new();
         // Save.
-        let r = run_colors(&mut s, &json!({
-            "save": { "name": "Test Scheme", "colors": { "Supply": [255, 0, 0], "Return": [0, 0, 255] } }
-        }));
+        let r = run_colors(
+            &mut s,
+            &json!({
+                "save": { "name": "Test Scheme", "colors": { "Supply": [255, 0, 0], "Return": [0, 0, 255] } }
+            }),
+        );
         assert!(r.is_ok());
         let saved = r.as_ref().ok().and_then(|v| v.get("saved")).and_then(Value::as_str);
         assert_eq!(saved, Some("Test Scheme"));
@@ -1087,13 +1096,7 @@ mod tests {
 
     #[test]
     fn sbox_planes_generates_six_when_on() {
-        let crs = CoordRenderState {
-            sbox_on: true,
-            sbox_min: [-10.0, -10.0, 0.0],
-            sbox_max: [10.0, 10.0, 20.0],
-            mode_on: false,
-            ghost_opacity: 0.2,
-        };
+        let crs = CoordRenderState { sbox_on: true, sbox_min: [-10.0, -10.0, 0.0], sbox_max: [10.0, 10.0, 20.0], mode_on: false, ghost_opacity: 0.2 };
         let planes = crs.sbox_planes();
         assert_eq!(planes.len(), 6);
         // A point inside should pass all planes.
@@ -1114,12 +1117,7 @@ mod tests {
 
     #[test]
     fn inside_sbox_check() {
-        let crs = CoordRenderState {
-            sbox_on: true,
-            sbox_min: [0.0, 0.0, 0.0],
-            sbox_max: [10.0, 10.0, 10.0],
-            ..CoordRenderState::default()
-        };
+        let crs = CoordRenderState { sbox_on: true, sbox_min: [0.0, 0.0, 0.0], sbox_max: [10.0, 10.0, 10.0], ..CoordRenderState::default() };
         assert!(crs.inside_sbox(Vec3::new(5.0, 5.0, 5.0)));
         assert!(!crs.inside_sbox(Vec3::new(15.0, 5.0, 5.0)));
         // When off, everything is inside.

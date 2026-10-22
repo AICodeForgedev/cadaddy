@@ -7,8 +7,7 @@
 //! → `bim.spec_accept`. Nothing is applied silently.
 
 use cadaddy_doc::bimspec::{
-    self, BimType, Confidence, LocationRule, RfiItem, SpecField, SpecImportResult, SpecProposal,
-    SubmittalRecord, MAX_RFI_ITEMS,
+    self, BimType, Confidence, LocationRule, MAX_RFI_ITEMS, RfiItem, SpecField, SpecImportResult, SpecProposal, SubmittalRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -50,8 +49,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         if path.is_empty() {
             return Err(bad(CMD_IMPORT, "`file` path must not be empty"));
         }
-        let bytes = crate::readfile::read(path)
-            .map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?;
+        let bytes = crate::readfile::read(path).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?;
 
         let lower = path.to_ascii_lowercase();
         if lower.ends_with(".pdf") {
@@ -59,8 +57,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             extract_pdf_text(&bytes, path)?
         } else {
             // Assume UTF-8 text.
-            String::from_utf8(bytes)
-                .map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?
+            String::from_utf8(bytes).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?
         }
     } else {
         return Err(bad(CMD_IMPORT, "either `file` (path) or `text` (string) is required"));
@@ -88,8 +85,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 // ── bim.spec_accept ────────────────────────────────────────────────────────
 
 fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
-    let proposals = p.get("proposals").and_then(Value::as_array)
-        .ok_or_else(|| bad(CMD_ACCEPT, "`proposals` (array) is required"))?;
+    let proposals = p.get("proposals").and_then(Value::as_array).ok_or_else(|| bad(CMD_ACCEPT, "`proposals` (array) is required"))?;
     let overwrite = p.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
 
     let d = s.doc_mut()?;
@@ -107,11 +103,7 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
         };
 
         let existing = d.bim_types.get(mark).cloned();
-        let mut ty = if overwrite {
-            BimType::new(mark)
-        } else {
-            existing.unwrap_or_else(|| BimType::new(mark))
-        };
+        let mut ty = if overwrite { BimType::new(mark) } else { existing.unwrap_or_else(|| BimType::new(mark)) };
 
         if let Some(cat) = prop.get("category").and_then(Value::as_str)
             && !cat.is_empty()
@@ -145,10 +137,8 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
 // ── PDF text extraction ────────────────────────────────────────────────────
 
 fn extract_pdf_text(bytes: &[u8], path: &str) -> Result<String> {
-    let hooks = super::file::io()
-        .ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
-    let read_pdf = hooks.read_pdf
-        .ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;
+    let hooks = super::file::io().ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
+    let read_pdf = hooks.read_pdf.ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;
 
     // Read up to 200 pages.
     let mut all_text = String::new();
@@ -156,8 +146,7 @@ fn extract_pdf_text(bytes: &[u8], path: &str) -> Result<String> {
 
     // Try reading page 1 first to discover page count.
     let opts = json!({"page": 1, "text": true, "images": false});
-    let (first_drawing, report) = (read_pdf)(bytes, &opts)
-        .map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?;
+    let (first_drawing, report) = (read_pdf)(bytes, &opts).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?;
 
     let pages = report.get("pages").and_then(Value::as_u64).unwrap_or(1) as u32;
     all_text.push_str(&format!("--- page 1 of {pages} ---\n"));
@@ -212,17 +201,30 @@ fn strip_mtext_formatting(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.peek() {
-                Some('P') | Some('p') => { chars.next(); out.push('\n'); }
-                Some('~') => { chars.next(); out.push(' '); }
-                Some('{') | Some('}') => { out.push(chars.next().unwrap_or(c)); }
-                Some('\\') => { chars.next(); out.push('\\'); }
+                Some('P') | Some('p') => {
+                    chars.next();
+                    out.push('\n');
+                }
+                Some('~') => {
+                    chars.next();
+                    out.push(' ');
+                }
+                Some('{') | Some('}') => {
+                    out.push(chars.next().unwrap_or(c));
+                }
+                Some('\\') => {
+                    chars.next();
+                    out.push('\\');
+                }
                 Some(_) => {
                     // Skip formatting code until ; or end.
                     chars.next();
                     while chars.peek().is_some_and(|&ch| ch != ';') {
                         chars.next();
                     }
-                    if chars.peek() == Some(&';') { chars.next(); }
+                    if chars.peek() == Some(&';') {
+                        chars.next();
+                    }
                 }
                 None => {}
             }
@@ -242,20 +244,18 @@ fn is_csi_section(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     // Match "SECTION 26 51 13" or "26 51 13" at the start of a line.
     if trimmed.len() >= 8 {
-        let start = if trimmed.to_ascii_uppercase().starts_with("SECTION ") {
-            &trimmed[8..]
-        } else {
-            trimmed
-        };
+        let start = if trimmed.to_ascii_uppercase().starts_with("SECTION ") { &trimmed[8..] } else { trimmed };
         let parts: Vec<&str> = start.split_whitespace().collect();
         if parts.len() >= 3
-            && parts[0].len() == 2 && parts[0].chars().all(|c| c.is_ascii_digit())
-            && parts[1].len() == 2 && parts[1].chars().all(|c| c.is_ascii_digit())
-            && parts[2].len() == 2 && parts[2].chars().all(|c| c.is_ascii_digit())
+            && parts[0].len() == 2
+            && parts[0].chars().all(|c| c.is_ascii_digit())
+            && parts[1].len() == 2
+            && parts[1].chars().all(|c| c.is_ascii_digit())
+            && parts[2].len() == 2
+            && parts[2].chars().all(|c| c.is_ascii_digit())
         {
             // Return the section number portion.
-            let end = start.find(|c: char| !c.is_ascii_digit() && c != ' ')
-                .unwrap_or(8.min(start.len()));
+            let end = start.find(|c: char| !c.is_ascii_digit() && c != ' ').unwrap_or(8.min(start.len()));
             return Some(start[..end.max(8)].trim());
         }
     }
@@ -293,25 +293,15 @@ fn parse_spec_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportResult
         // Look for type mark definitions: patterns like "Type H:", "TYPE A -", "Mark J2:"
         if let Some((mark, desc)) = extract_type_definition(line) {
             let source = format_source(&current_section, &current_page);
-            let mut proposal = SpecProposal {
-                bim_type: BimType::new(&mark),
-                origin: "spec".into(),
-                file_source: source.clone(),
-                ..Default::default()
-            };
+            let mut proposal =
+                SpecProposal { bim_type: BimType::new(&mark), origin: "spec".into(), file_source: source.clone(), ..Default::default() };
 
             if !desc.is_empty() {
-                proposal.bim_type.set_field(
-                    bimspec::keys::DESCRIPTION,
-                    SpecField::new(&desc).with_source(&source),
-                );
+                proposal.bim_type.set_field(bimspec::keys::DESCRIPTION, SpecField::new(&desc).with_source(&source));
             }
 
             if !current_section.is_empty() {
-                proposal.bim_type.set_field(
-                    bimspec::keys::SPEC_SECTION,
-                    SpecField::new(&current_section).with_source(&source),
-                );
+                proposal.bim_type.set_field(bimspec::keys::SPEC_SECTION, SpecField::new(&current_section).with_source(&source));
             }
 
             // Guess category from section number.
@@ -332,10 +322,7 @@ fn parse_spec_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportResult
 
             // Check for disagreements with existing types.
             if let Some(existing_ty) = existing.get(&mark) {
-                check_disagreements(
-                    &mark, existing_ty, &proposal.bim_type,
-                    "spec", &source, &mut result.rfis, &mut rfi_counter,
-                );
+                check_disagreements(&mark, existing_ty, &proposal.bim_type, "spec", &source, &mut result.rfis, &mut rfi_counter);
             }
 
             if result.proposals.len() < MAX_PROPOSALS {
@@ -366,15 +353,13 @@ fn extract_type_definition(line: &str) -> Option<(String, String)> {
     for prefix in &["TYPE ", "MARK "] {
         if let Some(rest) = upper.strip_prefix(prefix) {
             // The mark is the next word (letters, digits, hyphens).
-            let mark_end = rest.find(|c: char| c == ':' || c == '-' || c == '–' || c.is_whitespace())
-                .unwrap_or(rest.len());
+            let mark_end = rest.find(|c: char| c == ':' || c == '-' || c == '–' || c.is_whitespace()).unwrap_or(rest.len());
             if mark_end > 0 && mark_end <= 10 {
                 let mark = line[prefix.len()..prefix.len() + mark_end].trim().to_string();
                 // Description is everything after the delimiter.
                 let desc_start = prefix.len() + mark_end;
                 let desc = if desc_start < line.len() {
-                    line[desc_start..].trim_start_matches(|c: char| c == ':' || c == '-' || c == '–' || c.is_whitespace())
-                        .trim().to_string()
+                    line[desc_start..].trim_start_matches(|c: char| c == ':' || c == '-' || c == '–' || c.is_whitespace()).trim().to_string()
                 } else {
                     String::new()
                 };
@@ -409,10 +394,8 @@ fn extract_type_definition(line: &str) -> Option<(String, String)> {
 
 /// Words that look like a mark but are really detail-field prefixes (case-insensitive).
 fn is_detail_prefix(candidate: &str) -> bool {
-    const PREFIXES: &[&str] = &[
-        "mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish",
-        "color", "colour", "size", "weight", "nema", "rating",
-    ];
+    const PREFIXES: &[&str] =
+        &["mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish", "color", "colour", "size", "weight", "nema", "rating"];
     let lower = candidate.to_ascii_lowercase();
     PREFIXES.iter().any(|p| lower == *p)
         || lower.starts_with("manufact")
@@ -608,8 +591,13 @@ fn parse_schedule_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportRe
                     // Check for disagreements with existing types.
                     if let Some(existing_ty) = existing.get(&proposal.bim_type.mark) {
                         check_disagreements(
-                            &proposal.bim_type.mark, existing_ty, &proposal.bim_type,
-                            "schedule", &source_line, &mut result.rfis, &mut rfi_counter,
+                            &proposal.bim_type.mark,
+                            existing_ty,
+                            &proposal.bim_type,
+                            "schedule",
+                            &source_line,
+                            &mut result.rfis,
+                            &mut rfi_counter,
                         );
                     }
                     if result.proposals.len() < MAX_PROPOSALS {
@@ -747,12 +735,7 @@ fn guess_schedule_type(header_line: &str) -> String {
     }
 }
 
-fn parse_schedule_row(
-    line: &str,
-    columns: &[(usize, String)],
-    schedule_type: &str,
-    source: &str,
-) -> Option<SpecProposal> {
+fn parse_schedule_row(line: &str, columns: &[(usize, String)], schedule_type: &str, source: &str) -> Option<SpecProposal> {
     let parts = split_columns(line);
     if parts.is_empty() {
         return None;
@@ -783,12 +766,7 @@ fn parse_schedule_row(
     ty.category = schedule_type.to_string();
     ty.fields = fields;
 
-    Some(SpecProposal {
-        bim_type: ty,
-        origin: "schedule".into(),
-        file_source: source.to_string(),
-        ..Default::default()
-    })
+    Some(SpecProposal { bim_type: ty, origin: "schedule".into(), file_source: source.to_string(), ..Default::default() })
 }
 
 // ── submittal text parsing ─────────────────────────────────────────────────
@@ -856,11 +834,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
             }
 
             let section = is_csi_section(line).unwrap_or("").to_string();
-            current_submittal = Some(SubmittalRecord {
-                spec_section: section,
-                file_source: current_page.clone(),
-                ..Default::default()
-            });
+            current_submittal = Some(SubmittalRecord { spec_section: section, file_source: current_page.clone(), ..Default::default() });
             i += 1;
             continue;
         }
@@ -871,10 +845,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
         } else {
             // No section yet — try to start one from product data lines.
             if let Some((mark, desc)) = extract_type_definition(line) {
-                current_submittal = Some(SubmittalRecord {
-                    file_source: current_page.clone(),
-                    ..Default::default()
-                });
+                current_submittal = Some(SubmittalRecord { file_source: current_page.clone(), ..Default::default() });
                 let mut ty = BimType::new(&mark);
                 ty.set_field(bimspec::keys::DESCRIPTION, SpecField::new(&desc).with_source(&current_page));
                 current_types.push(SpecProposal {
@@ -900,12 +871,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     result
 }
 
-fn parse_submittal_detail(
-    line: &str,
-    sub: &mut SubmittalRecord,
-    types: &mut Vec<SpecProposal>,
-    page: &str,
-) {
+fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, page: &str) {
     let lower = line.to_ascii_lowercase();
 
     // Type mark references.
@@ -917,12 +883,7 @@ fn parse_submittal_detail(
         if !desc.is_empty() {
             ty.set_field(bimspec::keys::DESCRIPTION, SpecField::new(&desc).with_source(page));
         }
-        types.push(SpecProposal {
-            bim_type: ty,
-            origin: "submittal".into(),
-            file_source: page.to_string(),
-            ..Default::default()
-        });
+        types.push(SpecProposal { bim_type: ty, origin: "submittal".into(), file_source: page.to_string(), ..Default::default() });
         return;
     }
 
@@ -1034,22 +995,13 @@ fn finalize_submittal(
                 }
             }
             // Record review status on the type.
-            p.bim_type.set_field(
-                bimspec::keys::REVIEW_STATUS,
-                SpecField::new(&sub.review_status).with_source(&sub.file_source),
-            );
-            p.bim_type.set_field(
-                bimspec::keys::SUBMITTAL_SOURCE,
-                SpecField::new(&sub.file_source),
-            );
+            p.bim_type.set_field(bimspec::keys::REVIEW_STATUS, SpecField::new(&sub.review_status).with_source(&sub.file_source));
+            p.bim_type.set_field(bimspec::keys::SUBMITTAL_SOURCE, SpecField::new(&sub.file_source));
         }
 
         // Check for mismatches between submittal and existing type.
         if let Some(existing_ty) = existing.get(&p.bim_type.mark) {
-            check_disagreements(
-                &p.bim_type.mark, existing_ty, &p.bim_type,
-                "submittal", &sub.file_source, &mut result.rfis, rfi_counter,
-            );
+            check_disagreements(&p.bim_type.mark, existing_ty, &p.bim_type, "submittal", &sub.file_source, &mut result.rfis, rfi_counter);
         }
 
         if result.proposals.len() < MAX_PROPOSALS {
@@ -1071,11 +1023,8 @@ fn auto_detect_and_parse(text: &str, existing: &bimspec::BimTypes) -> SpecImport
     let lower = text.to_ascii_lowercase();
 
     // Count cues for each format.
-    let spec_cues = lower.matches("section ").count()
-        + lower.matches("or equal").count()
-        + lower.matches("per specification").count();
-    let schedule_cues = lower.matches("mark").count()
-        + lower.matches("schedule").count();
+    let spec_cues = lower.matches("section ").count() + lower.matches("or equal").count() + lower.matches("per specification").count();
+    let schedule_cues = lower.matches("mark").count() + lower.matches("schedule").count();
     let submittal_cues = lower.matches("approved").count()
         + lower.matches("submittal").count()
         + lower.matches("product data").count()
@@ -1103,9 +1052,7 @@ fn auto_detect_and_parse(text: &str, existing: &bimspec::BimTypes) -> SpecImport
 fn merge_results(target: &mut SpecImportResult, source: SpecImportResult) {
     // Only add proposals with marks not already in target.
     for prop in source.proposals {
-        if !target.proposals.iter().any(|p| p.bim_type.mark.eq_ignore_ascii_case(&prop.bim_type.mark))
-            && target.proposals.len() < MAX_PROPOSALS
-        {
+        if !target.proposals.iter().any(|p| p.bim_type.mark.eq_ignore_ascii_case(&prop.bim_type.mark)) && target.proposals.len() < MAX_PROPOSALS {
             target.proposals.push(prop);
         }
     }
@@ -1136,15 +1083,36 @@ fn extract_location_rule(line: &str, section: &str, page: &str) -> Option<Locati
     // Patterns: "MC cable permitted concealed in walls", "EMT exposed", "PVC below slab",
     // "rigid conduit in wet locations", etc.
     let raceway_keywords = [
-        "mc cable", "mc ", "emt ", "emt,", "rigid conduit", "rigid metallic",
-        "imc ", "pvc ", "pvc conduit", "rnmc", "lfmc", "lfnc", "fmc ",
-        "wiremold", "surface raceway",
+        "mc cable",
+        "mc ",
+        "emt ",
+        "emt,",
+        "rigid conduit",
+        "rigid metallic",
+        "imc ",
+        "pvc ",
+        "pvc conduit",
+        "rnmc",
+        "lfmc",
+        "lfnc",
+        "fmc ",
+        "wiremold",
+        "surface raceway",
     ];
 
     let location_keywords = [
-        "concealed", "exposed", "below slab", "above ceiling", "in walls",
-        "wet location", "damp location", "underground", "exterior",
-        "above accessible ceiling", "in concrete", "direct burial",
+        "concealed",
+        "exposed",
+        "below slab",
+        "above ceiling",
+        "in walls",
+        "wet location",
+        "damp location",
+        "underground",
+        "exterior",
+        "above accessible ceiling",
+        "in concrete",
+        "direct burial",
     ];
 
     let mut found_material = String::new();
@@ -1169,12 +1137,7 @@ fn extract_location_rule(line: &str, section: &str, page: &str) -> Option<Locati
 
     let source = format_source(section, page);
     if !source.is_empty() || !found_location.is_empty() {
-        Some(LocationRule {
-            rule: line.trim().to_string(),
-            location: found_location,
-            material: found_material,
-            source,
-        })
+        Some(LocationRule { rule: line.trim().to_string(), location: found_location, material: found_material, source })
     } else {
         None
     }
@@ -1182,15 +1145,7 @@ fn extract_location_rule(line: &str, section: &str, page: &str) -> Option<Locati
 
 // ── disagreement detection ─────────────────────────────────────────────────
 
-fn check_disagreements(
-    mark: &str,
-    existing: &BimType,
-    proposed: &BimType,
-    origin: &str,
-    source: &str,
-    rfis: &mut Vec<RfiItem>,
-    counter: &mut u32,
-) {
+fn check_disagreements(mark: &str, existing: &BimType, proposed: &BimType, origin: &str, source: &str, rfis: &mut Vec<RfiItem>, counter: &mut u32) {
     // Compare common fields.
     for (key, new_field) in &proposed.fields {
         if let Some(old_field) = existing.get_field(key)
@@ -1208,10 +1163,7 @@ fn check_disagreements(
                 id: format!("RFI-{counter:03}"),
                 mark: mark.to_string(),
                 field: key.clone(),
-                description: format!(
-                    "{key} for type {mark}: existing \"{}\", {origin} says \"{}\"",
-                    old_field.value, new_field.value
-                ),
+                description: format!("{key} for type {mark}: existing \"{}\", {origin} says \"{}\"", old_field.value, new_field.value),
                 severity,
                 ..Default::default()
             };
@@ -1247,10 +1199,10 @@ fn check_disagreements(
 
 fn disagreement_severity(field: &str) -> String {
     match field {
-        bimspec::keys::VOLTS | bimspec::keys::AMPS | bimspec::keys::FIRE_RATING
-        | bimspec::keys::NEMA_CONFIG | bimspec::keys::WET_DAMP => "high".into(),
-        bimspec::keys::MANUFACTURER | bimspec::keys::CATALOG_NUMBER
-        | bimspec::keys::MATERIAL | bimspec::keys::SPEC_SECTION => "medium".into(),
+        bimspec::keys::VOLTS | bimspec::keys::AMPS | bimspec::keys::FIRE_RATING | bimspec::keys::NEMA_CONFIG | bimspec::keys::WET_DAMP => {
+            "high".into()
+        }
+        bimspec::keys::MANUFACTURER | bimspec::keys::CATALOG_NUMBER | bimspec::keys::MATERIAL | bimspec::keys::SPEC_SECTION => "medium".into(),
         _ => "low".into(),
     }
 }
@@ -1263,8 +1215,7 @@ fn parse_spec_field(val: &Value) -> std::result::Result<SpecField, ()> {
         Value::Object(obj) => {
             let value = obj.get("value").and_then(Value::as_str).ok_or(())?;
             let source = obj.get("source").and_then(Value::as_str).unwrap_or_default();
-            let confidence = obj.get("confidence").and_then(Value::as_str)
-                .map(Confidence::parse).unwrap_or_default();
+            let confidence = obj.get("confidence").and_then(Value::as_str).map(Confidence::parse).unwrap_or_default();
             Ok(SpecField::new(value).with_source(source).with_confidence(confidence))
         }
         _ => Err(()),
@@ -1296,21 +1247,25 @@ fn fields_to_json(fields: &BTreeMap<String, SpecField>) -> Value {
 }
 
 fn result_to_json(result: &SpecImportResult) -> Value {
-    let proposals: Vec<Value> = result.proposals.iter().map(|p| {
-        let mut v = type_to_json(&p.bim_type);
-        if let Some(obj) = v.as_object_mut() {
-            if !p.origin.is_empty() {
-                obj.insert("origin".into(), json!(p.origin));
+    let proposals: Vec<Value> = result
+        .proposals
+        .iter()
+        .map(|p| {
+            let mut v = type_to_json(&p.bim_type);
+            if let Some(obj) = v.as_object_mut() {
+                if !p.origin.is_empty() {
+                    obj.insert("origin".into(), json!(p.origin));
+                }
+                if !p.file_source.is_empty() {
+                    obj.insert("fileSource".into(), json!(p.file_source));
+                }
+                if !p.location_rules.is_empty() {
+                    obj.insert("locationRules".into(), json!(p.location_rules));
+                }
             }
-            if !p.file_source.is_empty() {
-                obj.insert("fileSource".into(), json!(p.file_source));
-            }
-            if !p.location_rules.is_empty() {
-                obj.insert("locationRules".into(), json!(p.location_rules));
-            }
-        }
-        v
-    }).collect();
+            v
+        })
+        .collect();
 
     json!({
         "proposals": proposals,
@@ -1371,9 +1326,14 @@ Voltage: 125V
 Amps: 20
 NEMA Configuration: 5-20R
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": spec_text, "format": "spec"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": spec_text, "format": "spec"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert!(proposals.len() >= 3, "should find at least 3 types, got {}", proposals.len());
@@ -1406,16 +1366,19 @@ EMT exposed in mechanical rooms
 PVC conduit below slab and underground
 Rigid metallic conduit in wet locations
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": spec_text, "format": "spec"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": spec_text, "format": "spec"
+                }),
+            )
+            .unwrap_or_default();
 
         let rules = arr(&r["locationRules"]);
         assert!(rules.len() >= 3, "should extract at least 3 rules, got {}", rules.len());
 
-        let mc = rules.iter().find(|r| {
-            r["material"].as_str().unwrap_or("").contains("mc")
-        });
+        let mc = rules.iter().find(|r| r["material"].as_str().unwrap_or("").contains("mc"));
         assert!(mc.is_some(), "should find MC cable rule");
     }
 
@@ -1431,9 +1394,14 @@ H\tRecessed 2x4 LED troffer\tPinnacle Lighting\tRT-2400-LED\t120/277\tRecessed
 J\tSurface LED strip\tPinnacle Lighting\tSL-4800\t120\tSurface
 K\tWall sconce LED\tBeacon Electric\tWS-1200\t120\tWall
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": schedule_text, "format": "schedule"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": schedule_text, "format": "schedule"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert_eq!(proposals.len(), 3, "should find 3 types");
@@ -1455,9 +1423,14 @@ A\tDuplex receptacle\tBeacon Electric\tBR-5362\t20\t125\t5-20R
 B\tGFCI receptacle\tBeacon Electric\tBR-5362-GFI\t20\t125\t5-20R
 C\tSingle-pole switch\tBeacon Electric\tBS-1201\t20\t120\t-
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": schedule_text, "format": "schedule"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": schedule_text, "format": "schedule"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert_eq!(proposals.len(), 3);
@@ -1492,9 +1465,14 @@ Mounting: Surface
 
 APPROVED AS NOTED
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": submittal_text, "format": "submittal"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": submittal_text, "format": "submittal"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert!(!proposals.is_empty(), "should have proposals");
@@ -1519,9 +1497,14 @@ Model: CHEAP-2400
 
 REJECTED
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": submittal_text, "format": "submittal"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": submittal_text, "format": "submittal"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert!(proposals.is_empty(), "rejected submittal should not produce proposals");
@@ -1538,14 +1521,18 @@ REJECTED
         let mut s = session();
 
         // Create an existing type with CCT = 4000K.
-        s.execute("bim.set_type", &json!({
-            "mark": "H",
-            "category": "luminaire",
-            "fields": {
-                "cct": {"value": "4000K", "source": "schedule E-1"},
-                "manufacturer": "Pinnacle Lighting"
-            }
-        })).ok();
+        s.execute(
+            "bim.set_type",
+            &json!({
+                "mark": "H",
+                "category": "luminaire",
+                "fields": {
+                    "cct": {"value": "4000K", "source": "schedule E-1"},
+                    "manufacturer": "Pinnacle Lighting"
+                }
+            }),
+        )
+        .ok();
 
         // Import a spec that says 3500K.
         let spec_text = "\
@@ -1554,9 +1541,14 @@ Type H: Recessed 2x4 LED troffer
 Manufacturer: Pinnacle Lighting
 CCT: 3500K
 ";
-        let r = s.execute("bim.spec_import", &json!({
-            "text": spec_text, "format": "spec"
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": spec_text, "format": "spec"
+                }),
+            )
+            .unwrap_or_default();
 
         let rfis = arr(&r["rfis"]);
         assert!(!rfis.is_empty(), "should detect CCT disagreement");
@@ -1573,26 +1565,31 @@ CCT: 3500K
     fn accept_proposals_creates_types() {
         let mut s = session();
 
-        let r = s.execute("bim.spec_accept", &json!({
-            "proposals": [
-                {
-                    "mark": "H",
-                    "category": "luminaire",
-                    "fields": {
-                        "description": "Recessed 2x4 LED troffer",
-                        "manufacturer": {"value": "Pinnacle Lighting", "source": "spec 26 51 13"}
-                    }
-                },
-                {
-                    "mark": "A",
-                    "category": "receptacle",
-                    "fields": {
-                        "description": "Duplex receptacle",
-                        "amps": "20"
-                    }
-                }
-            ]
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_accept",
+                &json!({
+                    "proposals": [
+                        {
+                            "mark": "H",
+                            "category": "luminaire",
+                            "fields": {
+                                "description": "Recessed 2x4 LED troffer",
+                                "manufacturer": {"value": "Pinnacle Lighting", "source": "spec 26 51 13"}
+                            }
+                        },
+                        {
+                            "mark": "A",
+                            "category": "receptacle",
+                            "fields": {
+                                "description": "Duplex receptacle",
+                                "amps": "20"
+                            }
+                        }
+                    ]
+                }),
+            )
+            .unwrap_or_default();
 
         assert_eq!(r["accepted"], 2);
         assert_eq!(r["types"].as_array().map(|a| a.len()), Some(2));
@@ -1607,22 +1604,30 @@ CCT: 3500K
         let mut s = session();
 
         // Create existing type.
-        s.execute("bim.set_type", &json!({
-            "mark": "H",
-            "fields": {"description": "original", "volts": "120/277"}
-        })).ok();
+        s.execute(
+            "bim.set_type",
+            &json!({
+                "mark": "H",
+                "fields": {"description": "original", "volts": "120/277"}
+            }),
+        )
+        .ok();
 
         // Accept proposal that adds new fields but doesn't overwrite.
-        s.execute("bim.spec_accept", &json!({
-            "proposals": [{
-                "mark": "H",
-                "category": "luminaire",
-                "fields": {
-                    "description": "should not overwrite",
-                    "manufacturer": "Pinnacle Lighting"
-                }
-            }]
-        })).ok();
+        s.execute(
+            "bim.spec_accept",
+            &json!({
+                "proposals": [{
+                    "mark": "H",
+                    "category": "luminaire",
+                    "fields": {
+                        "description": "should not overwrite",
+                        "manufacturer": "Pinnacle Lighting"
+                    }
+                }]
+            }),
+        )
+        .ok();
 
         let types = s.execute("bim.types", &json!({"mark": "H"})).unwrap_or_default();
         let h = &types["types"][0];
@@ -1635,19 +1640,27 @@ CCT: 3500K
     fn accept_overwrite_mode() {
         let mut s = session();
 
-        s.execute("bim.set_type", &json!({
-            "mark": "H",
-            "fields": {"description": "original", "volts": "120/277"}
-        })).ok();
-
-        s.execute("bim.spec_accept", &json!({
-            "proposals": [{
+        s.execute(
+            "bim.set_type",
+            &json!({
                 "mark": "H",
-                "category": "luminaire",
-                "fields": {"description": "updated"}
-            }],
-            "overwrite": true
-        })).ok();
+                "fields": {"description": "original", "volts": "120/277"}
+            }),
+        )
+        .ok();
+
+        s.execute(
+            "bim.spec_accept",
+            &json!({
+                "proposals": [{
+                    "mark": "H",
+                    "category": "luminaire",
+                    "fields": {"description": "updated"}
+                }],
+                "overwrite": true
+            }),
+        )
+        .ok();
 
         let types = s.execute("bim.types", &json!({"mark": "H"})).unwrap_or_default();
         let h = &types["types"][0];
@@ -1691,13 +1704,18 @@ Manufacturer: Pinnacle Lighting
     #[test]
     fn accept_skips_empty_marks() {
         let mut s = session();
-        let r = s.execute("bim.spec_accept", &json!({
-            "proposals": [
-                {"mark": "", "fields": {"description": "no mark"}},
-                {"fields": {"description": "also no mark"}},
-                {"mark": "X", "fields": {"description": "valid"}}
-            ]
-        })).unwrap_or_default();
+        let r = s
+            .execute(
+                "bim.spec_accept",
+                &json!({
+                    "proposals": [
+                        {"mark": "", "fields": {"description": "no mark"}},
+                        {"fields": {"description": "also no mark"}},
+                        {"mark": "X", "fields": {"description": "valid"}}
+                    ]
+                }),
+            )
+            .unwrap_or_default();
 
         assert_eq!(r["accepted"], 1);
         assert_eq!(r["skipped"].as_array().map(|a| a.len()), Some(2));
@@ -1721,18 +1739,9 @@ Manufacturer: Pinnacle Lighting
 
     #[test]
     fn strip_mtext_formatting_works() {
-        assert_eq!(
-            super::strip_mtext_formatting("Hello\\PWorld"),
-            "Hello\nWorld"
-        );
-        assert_eq!(
-            super::strip_mtext_formatting("{\\fArial;Some text}"),
-            "Some text"
-        );
-        assert_eq!(
-            super::strip_mtext_formatting("No formatting"),
-            "No formatting"
-        );
+        assert_eq!(super::strip_mtext_formatting("Hello\\PWorld"), "Hello\nWorld");
+        assert_eq!(super::strip_mtext_formatting("{\\fArial;Some text}"), "Some text");
+        assert_eq!(super::strip_mtext_formatting("No formatting"), "No formatting");
     }
 
     // ── full round-trip: import → accept → verify ──────────────────────────
@@ -1758,17 +1767,27 @@ Model: DL-900-30K
 Mounting: Surface
 ";
 
-        let import = s.execute("bim.spec_import", &json!({
-            "text": spec_text, "format": "spec"
-        })).unwrap_or_default();
+        let import = s
+            .execute(
+                "bim.spec_import",
+                &json!({
+                    "text": spec_text, "format": "spec"
+                }),
+            )
+            .unwrap_or_default();
 
         let proposals = arr(&import["proposals"]);
         assert!(proposals.len() >= 2);
 
         // Accept all proposals.
-        let accept = s.execute("bim.spec_accept", &json!({
-            "proposals": proposals
-        })).unwrap_or_default();
+        let accept = s
+            .execute(
+                "bim.spec_accept",
+                &json!({
+                    "proposals": proposals
+                }),
+            )
+            .unwrap_or_default();
 
         assert!(accept["accepted"].as_u64().unwrap_or(0) >= 2);
 

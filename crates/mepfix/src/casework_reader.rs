@@ -52,15 +52,11 @@ pub fn read_casework(d: &Drawing) -> Vec<DetectedCasework> {
         }
 
         // Classify by hatch pattern inside the rectangle.
-        let has_diag = lines.iter().any(|&(a, b)| {
-            inside_rect(a, *min, *max, 2.0) && inside_rect(b, *min, *max, 2.0) && !is_axis_aligned(a, b)
-        });
+        let has_diag = lines.iter().any(|&(a, b)| inside_rect(a, *min, *max, 2.0) && inside_rect(b, *min, *max, 2.0) && !is_axis_aligned(a, b));
         let has_x_mark = {
             let cross_lines: Vec<_> = lines
                 .iter()
-                .filter(|&&(a, b)| {
-                    inside_rect(a, *min, *max, 2.0) && inside_rect(b, *min, *max, 2.0) && !is_axis_aligned(a, b)
-                })
+                .filter(|&&(a, b)| inside_rect(a, *min, *max, 2.0) && inside_rect(b, *min, *max, 2.0) && !is_axis_aligned(a, b))
                 .collect();
             // An X has exactly 2 crossing diagonal lines spanning most of the rect.
             cross_lines.len() == 2
@@ -85,11 +81,7 @@ pub fn read_casework(d: &Drawing) -> Vec<DetectedCasework> {
             .iter()
             .filter(|(t, p, layer)| {
                 let d = ((p[0] - cx).powi(2) + (p[1] - cy).powi(2)).sqrt();
-                d < search_r
-                    && layer.eq_ignore_ascii_case("CASEWORK")
-                    && t.len() <= 8
-                    && !t.contains("AFF")
-                    && !t.contains('"')
+                d < search_r && layer.eq_ignore_ascii_case("CASEWORK") && t.len() <= 8 && !t.contains("AFF") && !t.contains('"')
             })
             .min_by(|(_, a, _), (_, b, _)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -121,13 +113,7 @@ pub fn read_casework(d: &Drawing) -> Vec<DetectedCasework> {
             classify_by_tag(&tag, "counter")
         };
 
-        items.push(DetectedCasework {
-            min_in: *min,
-            max_in: *max,
-            kind: kind.to_string(),
-            tag,
-            height_in,
-        });
+        items.push(DetectedCasework { min_in: *min, max_in: *max, kind: kind.to_string(), tag, height_in });
     }
     items
 }
@@ -140,10 +126,7 @@ pub fn to_found(items: &[DetectedCasework], sh: &Sheet) -> Vec<score::FoundCasew
         .map(|it| {
             let min_ft = score::building_from_model(sh, it.min_in);
             let max_ft = score::building_from_model(sh, it.max_in);
-            let (lo, hi) = (
-                [min_ft[0].min(max_ft[0]), min_ft[1].min(max_ft[1])],
-                [min_ft[0].max(max_ft[0]), min_ft[1].max(max_ft[1])],
-            );
+            let (lo, hi) = ([min_ft[0].min(max_ft[0]), min_ft[1].min(max_ft[1])], [min_ft[0].max(max_ft[0]), min_ft[1].max(max_ft[1])]);
             score::FoundCaseworkItem {
                 level: level.clone(),
                 kind: it.kind.clone(),
@@ -181,14 +164,8 @@ fn collect_casework_rects(d: &Drawing) -> Vec<([f64; 2], [f64; 2])> {
             if pts.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
                 continue;
             }
-            let min = [
-                pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
-                pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
-            ];
-            let max = [
-                pts.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max),
-                pts.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
-            ];
+            let min = [pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min)];
+            let max = [pts.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max)];
             out.push((min, max));
         }
     }
@@ -260,11 +237,7 @@ fn parse_height_note(s: &str) -> Option<f64> {
         return None;
     }
     let val: f64 = digits.parse().ok()?;
-    if val > 0.0 && val <= 120.0 && (s.contains("AFF") || s.contains('"') || s.contains('\"')) {
-        Some(val)
-    } else {
-        None
-    }
+    if val > 0.0 && val <= 120.0 && (s.contains("AFF") || s.contains('"') || s.contains('\"')) { Some(val) } else { None }
 }
 
 /// Classify kind by tag prefix when the hatch pattern alone is ambiguous.

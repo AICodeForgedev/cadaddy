@@ -198,11 +198,7 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         ui.label(crate::i18n::t("Level:"));
         let changed = ui.text_edit_singleline(&mut st.level_filter).changed();
         if ui.button(crate::i18n::t("Refresh")).clicked() || st.trades_data.is_none() || changed {
-            let params = if st.level_filter.is_empty() {
-                json!({})
-            } else {
-                json!({ "level": st.level_filter })
-            };
+            let params = if st.level_filter.is_empty() { json!({}) } else { json!({ "level": st.level_filter }) };
             st.trades_data = app.session.execute("coordination.trades", &params).ok();
         }
     });

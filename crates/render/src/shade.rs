@@ -222,13 +222,7 @@ pub fn scene(d: &Drawing, space: &Space, tol: f64, bg: Rgb) -> Scene {
 }
 
 /// Like [`scene`] but with additional clipping planes (section box faces).
-pub fn scene_clipped(
-    d: &Drawing,
-    space: &Space,
-    tol: f64,
-    bg: Rgb,
-    extra_planes: &[cadaddy_doc::SectionPlane],
-) -> Scene {
+pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes: &[cadaddy_doc::SectionPlane]) -> Scene {
     let Some(store) = d.space(space) else { return Scene::default() };
     let list = build(d, space, &Options { tolerance: tol.max(1e-9), ..Options::default() });
     // Each object's colours (its first primitive's): its lines as drawn on `bg` (colour 7 black on

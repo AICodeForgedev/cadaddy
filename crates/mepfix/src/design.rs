@@ -484,10 +484,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         };
         for rm in &t.building.rooms.clone() {
             let is_break = rm.name == "BREAK ROOM";
-            let is_toilet = rm.name.contains("TOILET")
-                || rm.name.contains("REST")
-                || rm.name.contains("MEN")
-                || rm.name.contains("WOMEN");
+            let is_toilet = rm.name.contains("TOILET") || rm.name.contains("REST") || rm.name.contains("MEN") || rm.name.contains("WOMEN");
             let is_conf = rm.name == "CONFERENCE";
             let rw = rm.max_ft[0] - rm.min_ft[0];
             let rh = rm.max_ft[1] - rm.min_ft[1];
@@ -499,22 +496,16 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 let depth = 2.0; // 24" = 2 ft
                 let y0 = rm.min_ft[1] + 0.5;
                 let y1 = y0 + depth;
-                cw(&mut t, "base_cabinet", "BC-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 34.0, 24.0, Some("11 40 00"));
-                cw(&mut t, "counter", "CT-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 36.0, 25.0, Some("06 41 16"));
-                cw(&mut t, "upper_cabinet", "UC-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 42.0, 14.0, Some("11 40 00"));
+                cw(&mut t, "base_cabinet", "BC-1", &rm.level, &rm.number, [x0, y0], [x1, y1], 34.0, 24.0, Some("11 40 00"));
+                cw(&mut t, "counter", "CT-1", &rm.level, &rm.number, [x0, y0], [x1, y1], 36.0, 25.0, Some("06 41 16"));
+                cw(&mut t, "upper_cabinet", "UC-1", &rm.level, &rm.number, [x0, y0], [x1, y1], 42.0, 14.0, Some("11 40 00"));
                 // Backsplash between counter and upper
-                cw(&mut t, "backsplash", "BS-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y0 + 0.33], 18.0, 4.0, Some("09 30 00"));
+                cw(&mut t, "backsplash", "BS-1", &rm.level, &rm.number, [x0, y0], [x1, y0 + 0.33], 18.0, 4.0, Some("09 30 00"));
                 // Appliances: fridge at one end, microwave above counter
-                cw(&mut t, "appliance", "RF-1", &rm.level, &rm.number,
-                   [x1 + 0.2, y0], [x1 + 3.0, y1], 70.0, 28.0, Some("11 40 00"));
+                cw(&mut t, "appliance", "RF-1", &rm.level, &rm.number, [x1 + 0.2, y0], [x1 + 3.0, y1], 70.0, 28.0, Some("11 40 00"));
                 // Sink (plumbing fixture) in the counter run
                 let sink_x = (x0 + x1) / 2.0;
-                cw(&mut t, "counter", "SK-1", &rm.level, &rm.number,
-                   [sink_x - 1.0, y0], [sink_x + 1.0, y1], 36.0, 22.0, Some("22 40 00"));
+                cw(&mut t, "counter", "SK-1", &rm.level, &rm.number, [sink_x - 1.0, y0], [sink_x + 1.0, y1], 36.0, 22.0, Some("22 40 00"));
             }
             if is_toilet {
                 // Vanity along the north wall with backsplash
@@ -524,10 +515,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 let depth = 22.0 / 12.0; // 22" in feet
                 let y1 = rm.max_ft[1] - 0.5;
                 let y0 = y1 - depth;
-                cw(&mut t, "vanity", "V-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 34.0, 22.0, Some("06 41 16"));
-                cw(&mut t, "backsplash", "BS-2", &rm.level, &rm.number,
-                   [x0, y1 - 0.33], [x1, y1], 6.0, 4.0, Some("09 30 00"));
+                cw(&mut t, "vanity", "V-1", &rm.level, &rm.number, [x0, y0], [x1, y1], 34.0, 22.0, Some("06 41 16"));
+                cw(&mut t, "backsplash", "BS-2", &rm.level, &rm.number, [x0, y1 - 0.33], [x1, y1], 6.0, 4.0, Some("09 30 00"));
             }
             if is_conf && rw > 15.0 && rh > 12.0 {
                 // Credenza / counter along south wall
@@ -536,10 +525,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 let x1 = x0 + cab_len;
                 let y0 = rm.min_ft[1] + 0.5;
                 let y1 = y0 + 20.0 / 12.0;
-                cw(&mut t, "base_cabinet", "CR-1", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 30.0, 20.0, Some("06 41 16"));
-                cw(&mut t, "counter", "CT-2", &rm.level, &rm.number,
-                   [x0, y0], [x1, y1], 30.0, 20.0, Some("06 41 16"));
+                cw(&mut t, "base_cabinet", "CR-1", &rm.level, &rm.number, [x0, y0], [x1, y1], 30.0, 20.0, Some("06 41 16"));
+                cw(&mut t, "counter", "CT-2", &rm.level, &rm.number, [x0, y0], [x1, y1], 30.0, 20.0, Some("06 41 16"));
             }
         }
     }

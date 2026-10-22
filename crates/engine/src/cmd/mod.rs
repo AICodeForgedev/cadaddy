@@ -13,7 +13,6 @@ pub mod bimprops;
 pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bspec;
-pub mod spec_import;
 pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;
@@ -54,6 +53,7 @@ mod rasterout;
 pub mod rfi;
 pub mod schedules;
 mod setbylayer;
+pub mod spec_import;
 mod vpsync;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
