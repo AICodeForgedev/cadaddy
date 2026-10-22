@@ -38,6 +38,9 @@ const MAX_LAYERS: usize = 256;
 const MAX_TRANSFORM_DEPTH: usize = 64;
 /// Flattened chords per elliptical arc under a non-uniform transform.
 const MAX_ARC_CHORDS: usize = 10_000;
+/// Generated vertices retained across the whole document (all paths and shapes), so repeated
+/// arc/curve flattening cannot amplify a compact input into unbounded geometry.
+const MAX_TOTAL_VERTS: usize = 8_000_000;
 
 /// Elements whose whole subtree is skipped (paint servers, text, raster images, metadata).
 const SKIP: &[&[u8]] = &[
@@ -126,6 +129,10 @@ struct Parser {
     layers: HashSet<String>,
     layer_color: u8,
     elements: usize,
+    /// Generated vertices still allowed across the whole document. Arc/curve flattening can turn
+    /// a compact path into many samples, and each flushed run is retained, so without a shared
+    /// budget repeated arcs amplify a small input into gigabytes of geometry (CWE-400).
+    verts_left: usize,
     /// > 0 while inside a skipped subtree; counts the starts seen there.
     skip: usize,
     /// What was left out, by kind ([`LeftOut`]).
@@ -173,6 +180,7 @@ impl Parser {
             layers: HashSet::from(["0".to_string()]),
             layer_color: 1,
             elements: 0,
+            verts_left: MAX_TOTAL_VERTS,
             skip: 0,
             left_out: BTreeMap::new(),
         }
@@ -331,6 +339,14 @@ impl Parser {
         if self.elements > MAX_ELEMENTS {
             return Err(IoError::Format(format!("SVG: more than {MAX_ELEMENTS} elements")));
         }
+        // Charge the vertices this entity retains against the shared document budget, so repeated
+        // flattened arcs/curves cannot amplify a compact path into unbounded geometry (CWE-400).
+        let verts = match &kind {
+            EntityKind::LwPolyline(p) => p.vertices.len(),
+            EntityKind::Spline(s) => s.control.len(),
+            _ => 1,
+        };
+        self.verts_left = self.verts_left.checked_sub(verts).ok_or_else(|| IoError::Format("SVG: too much generated geometry".into()))?;
         let common = Common { layer: self.layer.clone(), ..Common::default() };
         self.drawing.add(&Space::Model, common, kind).map(|_| ()).map_err(parse_err)
     }
