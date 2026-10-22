@@ -80,8 +80,7 @@ pub fn eval(expr: &str, vars: &serde_json::Map<String, Value>) -> std::result::R
 
 fn run_help(_s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(name) = p.get("command").and_then(Value::as_str) {
-        let spec = super::find_by_id_or_alias(name)
-            .ok_or_else(|| crate::EngineError::UnknownCommand(name.to_string()))?;
+        let spec = super::find_by_id_or_alias(name).ok_or_else(|| crate::EngineError::UnknownCommand(name.to_string()))?;
         Ok(serde_json::to_value(spec.help_page()).unwrap_or(Value::Null))
     } else {
         let list: Vec<Value> = super::command_specs()

@@ -536,11 +536,7 @@ mod tests {
     #[test]
     fn environment_map_ambient_lighting() {
         // A bright red environment map: ambient should be reddish.
-        let hdr = crate::hdr::HdrImage {
-            width: 4,
-            height: 2,
-            data: vec![[5.0f32, 0.1, 0.1]; 8].into_iter().flatten().collect(),
-        };
+        let hdr = crate::hdr::HdrImage { width: 4, height: 2, data: vec![[5.0f32, 0.1, 0.1]; 8].into_iter().flatten().collect() };
         let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
         lit.env_map = Some(std::sync::Arc::new(hdr));
         let c = ambient(&lit, Vec3::Z, &grey(0.6));

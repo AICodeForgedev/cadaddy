@@ -45,11 +45,7 @@ impl HdrImage {
         let (sx, sy) = (fx.fract(), fy.fract());
         let px = |x: u32, y: u32| -> [f32; 3] {
             let i = (y as usize * self.width as usize + x as usize) * 3;
-            [
-                self.data.get(i).copied().unwrap_or(0.0),
-                self.data.get(i + 1).copied().unwrap_or(0.0),
-                self.data.get(i + 2).copied().unwrap_or(0.0),
-            ]
+            [self.data.get(i).copied().unwrap_or(0.0), self.data.get(i + 1).copied().unwrap_or(0.0), self.data.get(i + 2).copied().unwrap_or(0.0)]
         };
         let mix = |a: [f32; 3], b: [f32; 3], t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
         let top = mix(px(x0, y0), px(x1, y0), sx);

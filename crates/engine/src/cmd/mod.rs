@@ -305,11 +305,7 @@ impl CommandSpec {
             id: self.id.to_ascii_uppercase(),
             label: self.label,
             aliases: self.aliases.iter().map(|a| a.to_ascii_uppercase()).collect(),
-            menu_path: if self.menu.is_empty() {
-                String::new()
-            } else {
-                self.menu.join(" > ")
-            },
+            menu_path: if self.menu.is_empty() { String::new() } else { self.menu.join(" > ") },
             shortcut: self.shortcut.unwrap_or("").to_string(),
             params: self.params,
             interactive: self.interactive.is_some(),

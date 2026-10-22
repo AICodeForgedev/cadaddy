@@ -265,9 +265,7 @@ pub enum BackgroundKind {
         top: [f64; 3],
     },
     /// An image file (JPEG, PNG, or HDR) mapped to the view's background.
-    Image {
-        path: String,
-    },
+    Image { path: String },
 }
 
 /// Fog / depth cue: objects farther from the viewer fade towards a colour.

@@ -518,9 +518,7 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.label(RichText::new(crate::tl!("Select a command to see its help page.")).italics().color(t.text_dim));
                         return;
                     }
-                    let Some(spec) = cadaddy_engine::find_command(&selected)
-                        .or_else(|| cadaddy_engine::find_by_id_or_alias(&selected))
-                    else {
+                    let Some(spec) = cadaddy_engine::find_command(&selected).or_else(|| cadaddy_engine::find_by_id_or_alias(&selected)) else {
                         ui.label(RichText::new(crate::tl!("Command not found.")).color(t.text_dim));
                         return;
                     };

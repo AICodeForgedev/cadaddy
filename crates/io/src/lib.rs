@@ -5,9 +5,9 @@
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
+pub mod dgn;
 /// DWFx (XML Paper Specification / ECMA-388) and DWF 6 export/reading.
 pub mod dwfx;
-pub mod dgn;
 mod dwg_fixup;
 mod dwg_keep;
 pub mod dwg_native;
