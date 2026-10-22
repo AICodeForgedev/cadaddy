@@ -23,6 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .interactive(|_| Ok(Box::new(BreakM::default()))),
         CommandSpec::new("datalink", "Data Link...", run_datalink)
+            .files()
             .menu(&["Insert", "Data Link..."])
             .params("{handle, path (.csv, .txt/.tsv tab-separated, .xlsx Excel workbook), sheet? (.xlsx: default the first), range? (.xlsx: A1:C5), startRow? (default: below the title), remove?: bool} → {rows, cols}")
             .interactive(|_| {
@@ -36,6 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 ))
             }),
         CommandSpec::new("datalinkupdate", "Update Data Links", run_update)
+            .files()
             .params("{handles?, changed?: bool (only links whose file changed since it was read)} (default: every linked table) → {updated}")
             .interactive(|_| Ok(Box::new(SelectRun::new("datalinkupdate", "DATALINKUPDATE")))),
     ]

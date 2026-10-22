@@ -432,6 +432,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         // The same for agents and scripts, by the name `cadaddy-cli convert` has.
-        CommandSpec::new("convert", "Convert Drawings", run_convert).params("as DWGCONVERT").enabled(always).noundo(),
+        CommandSpec::new("convert", "Convert Drawings", run_convert)
+            .files().params("as DWGCONVERT").enabled(always).noundo(),
     ]
 }

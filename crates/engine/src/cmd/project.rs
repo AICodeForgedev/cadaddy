@@ -223,67 +223,87 @@ fn drawing_abs_path(m: &ProjectManifest, d: &ProjectDrawing) -> String {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("project.create", "New Project", run_create)
+            .files()
             .params("{path, name?, metric?: bool} → {project}: create a new project folder with an empty manifest")
             .enabled(always)
             .noundo(),
         CommandSpec::new("project.open", "Open Project", run_open)
+            .files()
             .params("{path} → {project, drawings}: open a project folder")
             .enabled(always)
             .noundo(),
         CommandSpec::new("project.close", "Close Project", run_close)
+            .files()
             .params("{} → {}: close the active project (drawings stay open)")
             .enabled(has_project)
             .noundo(),
-        CommandSpec::new("project.info", "Project Info", run_info).params("{} → {project}: active project metadata").enabled(has_project).noundo(),
+        CommandSpec::new("project.info", "Project Info", run_info)
+            .files()
+            .params("{} → {project}: active project metadata")
+            .enabled(has_project)
+            .noundo(),
         CommandSpec::new("project.list", "Project Drawings", run_list)
+            .files()
             .params("{discipline?, status?, kind?} → {drawings, total}: list drawings in the project")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.activate", "Activate Drawing", run_activate)
+            .files()
             .params("{name} → {activated, shelved?}: open a drawing from the project, shelving the current one")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.shelve", "Shelve Drawing", run_shelve)
+            .files()
             .params("{save?: bool} → {shelved}: shelve the active drawing (save and close it within the project)")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.add", "Add to Project", run_add)
+            .files()
             .params("{path, discipline?, kind?, title?} → {drawing}: add an existing drawing to the project")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.remove", "Remove from Project", run_remove)
+            .files()
             .params("{name} → {removed}: remove a drawing from the manifest (file untouched)")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.shelve_project", "Shelve Project", run_shelve_project)
+            .files()
             .params("{} → {path, savedBytes}: archive the project (drop caches, mark shelved)")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.restore_project", "Restore Project", run_restore_project)
+            .files()
             .params("{path} → {project}: restore a shelved project")
             .enabled(always)
             .noundo(),
         CommandSpec::new("project.disk", "Project Disk Use", run_disk)
+            .files()
             .params("{} → {totalBytes, drawings: [{name, bytes}], caches}: disk use per drawing")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.standards.list", "Standards Library", run_standards_list)
+            .files()
             .params("{domain?} → {standards}: list shared standards")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.standards.set", "Set Standard", run_standards_set)
+            .files()
             .params("{domain, key, value, source?} → {standard}: set a standard")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.standards.remove", "Remove Standard", run_standards_remove)
+            .files()
             .params("{domain, key} → {removed}")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.standards.import", "Import Standards", run_standards_import)
+            .files()
             .params("{from, domain?, keys?} → {imported}: copy standards from another project")
             .enabled(has_project)
             .noundo(),
         CommandSpec::new("project.import_manifest", "Import Manifest", run_import_manifest)
+            .files()
             .params("{path} → {project, added, changed, errors}: import/update a project from a folder + manifest.json")
             .enabled(always)
             .noundo(),

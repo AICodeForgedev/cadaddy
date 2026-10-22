@@ -50,6 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{name?: reference, class?: IFC class (Wall, Slab… or IfcWall), level?: storey name, guid?, system?, property?: \"Set.Name\" | \"Set.Name=value\", limit? (default 500)} → {elements: [{ref, handle, class, guid, name, level?, elevation?, type?, systems, properties: {\"Set.Name\": value}, min, max}], total}")
             .noundo(),
         CommandSpec::new("ifc.reload", "Reload IFC References", run_reload)
+            .files()
             .params("{names?: [reference] | \"A,B*\" (default all), changed_only?: bool (only files changed since they were loaded; default false)} → {reloaded: [name], unchanged: [name], failed: [{name, reason}]}"),
     ]
 }

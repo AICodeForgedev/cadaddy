@@ -23,7 +23,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "{library?: id (a library material, sized for the drawing's units), name? (default: the library material's), description?, color?: \"#rrggbb\", roughness?, metallic?, opacity?, refraction?, colorMap?: path, roughnessMap?: path, normalMap?: path, normalStrength?, mapping?: {projection?, sizeU?, sizeV?, offsetU?, offsetV?, rotation?}} → {name}",
         ),
         CommandSpec::new("material.edit", "Edit Material", run_edit).params("{name, rename?, …the fields of material.new (a map \"\" removes it)} → {name}"),
-        CommandSpec::new("material.embed", "Embed Textures", run_embed).params(
+        CommandSpec::new("material.embed", "Embed Textures", run_embed)
+            .files().params(
             "{remove?: bool} → {embedded: [path], missing: [path], bytes} (the image files the drawing's materials name, copied into the drawing: a .cdy file then carries them; relative paths are from the drawing's folder; remove: drop the copies)",
         ),
         CommandSpec::new("material.delete", "Delete Material", run_delete).params("{name} → {name, layers, objects} (layers and objects that used it go back to Global / ByLayer)"),

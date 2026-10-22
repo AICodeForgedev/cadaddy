@@ -94,6 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot)} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
+            .files()
             .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
             .noundo()
             .interactive(|_| Ok(Box::new(plotcli::DashPlotM::default()))),

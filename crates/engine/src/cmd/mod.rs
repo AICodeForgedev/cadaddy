@@ -190,7 +190,60 @@ pub struct CommandSpec {
     pub transparent: bool,
     /// Hand-written help text for the command (empty = auto-generated only).
     pub help: &'static str,
+    /// What it reaches beyond the drawing, when its parameters don't say ([`CommandSpec::reach`]).
+    pub access: Option<Access>,
 }
+
+/// What a command reaches beyond the drawing: plug-ins need a grant for files or the network
+/// (PLUGINS grant).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// The open drawing (and the session) only.
+    Drawing,
+    /// Reads or writes files.
+    Files,
+    /// Uses the network.
+    Network,
+}
+
+impl Access {
+    /// The grant a plug-in needs for it (`None`: none).
+    pub fn grant(self) -> Option<&'static str> {
+        match self {
+            Access::Drawing => None,
+            Access::Files => Some("files"),
+            Access::Network => Some("network"),
+        }
+    }
+}
+
+/// Parameter names that are a file or a folder (`{path}`, `{output}`, `{pdf: path}`…).
+const FILE_PARAMS: &[&str] = &[
+    "path",
+    "paths",
+    "file",
+    "files",
+    "filename",
+    "folder",
+    "dir",
+    "directory",
+    "output",
+    "save",
+    "pdf",
+    "dwg",
+    "dxf",
+    "png",
+    "svg",
+    "csv",
+    "xlsx",
+    "lin",
+    "pat",
+    "font",
+    "zip",
+    "destination",
+];
+/// Parameter names that are a place on the network.
+const NETWORK_PARAMS: &[&str] = &["url", "urls", "uri", "endpoint", "server", "feed"];
 
 impl CommandSpec {
     pub const fn new(id: &'static str, label: &'static str, run: Run) -> Self {
@@ -207,6 +260,34 @@ impl CommandSpec {
             interactive: None,
             transparent: false,
             help: "",
+            access: None,
+        }
+    }
+    /// It reads or writes files though no parameter names one (QSAVE: the drawing's own file).
+    pub const fn files(mut self) -> Self {
+        self.access = Some(Access::Files);
+        self
+    }
+    /// It uses the network.
+    pub const fn network(mut self) -> Self {
+        self.access = Some(Access::Network);
+        self
+    }
+    /// What it reaches: as marked, else as its parameters say (a file or folder parameter: files;
+    /// an address: the network), else only the drawing. The one place plug-in host calls are
+    /// classified ([`crate::plugins`]).
+    pub fn reach(&self) -> Access {
+        if let Some(a) = self.access {
+            return a;
+        }
+        let names = crate::documented_params(self.params);
+        let any = |list: &[&str]| names.iter().any(|n| list.iter().any(|k| n.eq_ignore_ascii_case(k)));
+        if any(NETWORK_PARAMS) {
+            Access::Network
+        } else if any(FILE_PARAMS) {
+            Access::Files
+        } else {
+            Access::Drawing
         }
     }
     pub const fn menu(mut self, m: &'static [&'static str]) -> Self {

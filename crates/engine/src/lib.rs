@@ -1203,6 +1203,9 @@ pub struct Session {
     /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
     #[cfg(not(target_arch = "wasm32"))]
     pub plugins: plugins::PluginHost,
+    /// Plug-in commands running now, one inside another's host call ([`plugins::MAX_PLUGIN_DEPTH`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_depth: u32,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1314,6 +1317,8 @@ impl Session {
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            plugin_depth: 0,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't
@@ -1571,14 +1576,42 @@ impl Session {
         }
     }
 
+    /// A session as an app starts one (the desktop app, MCP, the CLI): [`Session::empty`] with
+    /// the plug-ins installed in the plug-ins folder loaded.
+    pub fn for_app() -> Session {
+        let mut s = Session::empty();
+        s.load_installed_plugins();
+        s
+    }
+
+    /// Load the plug-ins installed in the plug-ins folder; what fails to load is said in the log.
+    pub fn load_installed_plugins(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut log = Vec::new();
+            self.plugins.load_all(&mut log);
+            self.log.extend(log);
+        }
+    }
+
     /// Run a plug-in command with undo support: the drawing before and after are compared, and an
     /// undo step is created if the plug-in changed anything.
     #[cfg(not(target_arch = "wasm32"))]
     fn execute_plugin(&mut self, id: &str, params: &Value) -> Result<Value> {
         // Extract what we need from the plugin host before the mutable borrow of self.
         let (engine, module, _plugin_idx) = self.plugins.command_info(id)?;
+        let owner = self.plugins.owner(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // A plug-in calling itself (or another) through host calls: refused past the depth.
+        if self.plugin_depth >= plugins::MAX_PLUGIN_DEPTH {
+            return Err(EngineError::Other(format!(
+                "plug-in commands nest more than {} deep ({id} started from a plug-in's host call): refused",
+                plugins::MAX_PLUGIN_DEPTH
+            )));
+        }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
-        let result = plugins::execute_plugin_command(&engine, &module, id, params, self);
+        self.plugin_depth += 1;
+        let result = plugins::execute_plugin_command(&engine, &module, id, params, self, &owner);
+        self.plugin_depth -= 1;
         // Create an undo step if the plug-in changed the drawing.
         let changed = match (&before, self.state().ok()) {
             (Some((doc_before, _, uid_before)), Some(st)) if st.uid == *uid_before => !Arc::ptr_eq(&st.doc, doc_before),

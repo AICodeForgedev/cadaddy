@@ -23,8 +23,16 @@
 //! `plugin_run`. The host processes the request using the Session, writes the result to the
 //! host context, and re-enters `plugin_resume(result_code)`.
 //!
-//! Every call is bounded by a fuel limit (wasmi): a plug-in that loops forever is stopped.
-//! File and network access are not available (no WASI).
+//! Every call is bounded by a fuel limit (wasmi): a plug-in that loops forever is stopped; its
+//! memory by [`MAX_MEMORY`]; plug-in commands started from plug-in host calls by
+//! [`MAX_PLUGIN_DEPTH`].
+//!
+//! The sandbox: a module may import only CADaddy's `env.host_*` functions (no WASI: no files,
+//! network or system of its own). Through `host_execute` it runs the drawing's commands; one
+//! that reaches files or the network ([`crate::cmd::CommandSpec::reach`]) only with the user's
+//! grant for that plug-in (`PLUGINS {action: "grant", name, permission: "files" | "network"}`,
+//! kept in `<name>.permissions.json`). A plug-in an agent loads starts disabled until a person
+//! enables it.
 //!
 //! Runtime: wasmi 0.41 (MIT OR Apache-2.0), a pure-Rust WebAssembly interpreter with fuel metering.
 
@@ -48,6 +56,12 @@ const MAX_ID_LEN: usize = 128;
 
 /// Maximum trampoline iterations (host calls per plug-in command invocation).
 const MAX_TRAMPOLINES: usize = 256;
+
+/// Most memory a plug-in's instance may have (64 MiB); growing past it traps.
+pub const MAX_MEMORY: usize = 64 << 20;
+
+/// Deepest plug-in commands nest: one started from a plug-in's host call, and so on.
+pub const MAX_PLUGIN_DEPTH: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -73,15 +87,32 @@ pub struct PluginCommand {
     pub plugin_idx: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+/// What the user allows a plug-in: to run at all, and to reach files or the network through the
+/// commands it runs.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PluginPermissions {
     pub allowed: bool,
+    pub files: bool,
+    pub network: bool,
+}
+
+impl PluginPermissions {
+    /// Whether the grant named `g` (`files`, `network`) is given.
+    pub fn granted(&self, g: &str) -> bool {
+        match g {
+            "files" => self.files,
+            "network" => self.network,
+            _ => false,
+        }
+    }
 }
 
 /// The plug-in host: owned by `Session`, holds every loaded plug-in.
 #[derive(Default)]
 pub struct PluginHost {
     pub plugins: Vec<Plugin>,
+    /// The plug-ins folder (`None`: `<config dir>/plugins`); tests give their own.
+    dir: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -106,8 +137,9 @@ enum RequestKind {
 }
 
 /// The data the host functions read and write during a single WASM call.
-#[derive(Default)]
 struct HostCtx {
+    /// The memory cap ([`MAX_MEMORY`]).
+    limits: wasmi::StoreLimits,
     /// The host's JSON reply to the last host call (the plug-in reads it back).
     result_buf: Vec<u8>,
     /// Commands being registered during `plugin_init`.
@@ -118,18 +150,48 @@ struct HostCtx {
     pending: PendingRequest,
 }
 
+impl Default for HostCtx {
+    fn default() -> Self {
+        HostCtx {
+            limits: wasmi::StoreLimitsBuilder::new().memory_size(MAX_MEMORY).trap_on_grow_failure(true).build(),
+            result_buf: Vec::new(),
+            pending_commands: Vec::new(),
+            log_lines: Vec::new(),
+            pending: PendingRequest::default(),
+        }
+    }
+}
+
+/// A store for one call: fuel and the memory cap.
+fn store(engine: &wasmi::Engine) -> Result<wasmi::Store<HostCtx>> {
+    let mut store = wasmi::Store::new(engine, HostCtx::default());
+    store.limiter(|ctx| &mut ctx.limits);
+    store.set_fuel(CALL_FUEL).map_err(|e| EngineError::Other(format!("fuel: {e}")))?;
+    Ok(store)
+}
+
 // ---------------------------------------------------------------------------
 // PluginHost implementation
 // ---------------------------------------------------------------------------
 
 impl PluginHost {
     pub fn new() -> Self {
-        Self { plugins: Vec::new() }
+        Self { plugins: Vec::new(), dir: None }
+    }
+
+    /// A host whose plug-ins folder (and permission files) is `dir`.
+    pub fn in_dir(dir: impl Into<PathBuf>) -> Self {
+        Self { plugins: Vec::new(), dir: Some(dir.into()) }
+    }
+
+    /// The plug-ins folder.
+    pub fn dir(&self) -> Option<PathBuf> {
+        self.dir.clone().or_else(plugins_dir)
     }
 
     /// Load every `.wasm` file in the plugins directory. Errors per file are logged, not fatal.
     pub fn load_all(&mut self, log: &mut Vec<String>) {
-        let Some(dir) = plugins_dir() else {
+        let Some(dir) = self.dir() else {
             return;
         };
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -158,8 +220,14 @@ impl PluginHost {
         }
     }
 
-    /// Load a single plug-in from a `.wasm` file.
+    /// Load a single plug-in from a `.wasm` file (enabled as its permissions say: by default).
     pub fn load_plugin(&mut self, path: &Path) -> Result<()> {
+        self.load_plugin_as(path, false)
+    }
+
+    /// [`load_plugin`](Self::load_plugin); `by_agent`: an agent loaded it, so it starts disabled
+    /// (and stays so) until a person enables it.
+    pub fn load_plugin_as(&mut self, path: &Path, by_agent: bool) -> Result<()> {
         let name = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| EngineError::Other("invalid plugin path".into()))?.to_string();
         if self.plugins.iter().any(|p| p.name == name) {
             return Err(EngineError::Other(format!("plugin '{name}' is already loaded")));
@@ -171,13 +239,44 @@ impl PluginHost {
 
         let engine = make_engine();
         let module = wasmi::Module::new(&engine, &wasm_bytes[..]).map_err(|e| EngineError::Other(format!("invalid WASM module: {e}")))?;
+        // Only CADaddy's host functions: no WASI or other system access of its own.
+        if let Some(i) = module.imports().find(|i| i.module() != "env" || !i.name().starts_with("host_")) {
+            return Err(EngineError::Other(format!(
+                "plug-in {name} imports `{}.{}`: plug-ins get no file, network or system access of their own (no WASI); they may import only CADaddy's env.host_* functions",
+                i.module(),
+                i.name()
+            )));
+        }
 
         let plugin_idx = self.plugins.len();
         let commands = run_init(&engine, &module, plugin_idx)?;
-        let permissions = load_permissions(&name);
+        let mut permissions = self.load_permissions(&name);
+        if by_agent && permissions.allowed {
+            permissions.allowed = false;
+            self.save_permissions(&name, &permissions);
+        }
 
         self.plugins.push(Plugin { name, path: path.to_path_buf(), enabled: permissions.allowed, commands, permissions, module, engine });
         Ok(())
+    }
+
+    /// Give (or take back) plug-in `name` the grant `permission` (`files`, `network`).
+    pub fn set_grant(&mut self, name: &str, permission: &str, on: bool) -> Result<()> {
+        let p = self.plugins.iter_mut().find(|p| p.name == name).ok_or_else(|| EngineError::Other(format!("no plugin named '{name}'")))?;
+        match permission {
+            "files" => p.permissions.files = on,
+            "network" => p.permissions.network = on,
+            _ => return Err(EngineError::Other(format!("`permission` is files or network, not `{permission}`"))),
+        }
+        let (n, perms) = (p.name.clone(), p.permissions.clone());
+        self.save_permissions(&n, &perms);
+        Ok(())
+    }
+
+    /// The name and permissions of the plug-in that registered command `id`.
+    pub(crate) fn owner(&self, id: &str) -> Option<(String, PluginPermissions)> {
+        let c = self.find_command(id)?;
+        self.plugins.get(c.plugin_idx).map(|p| (p.name.clone(), p.permissions.clone()))
     }
 
     /// Find a plug-in command by id.
@@ -200,7 +299,8 @@ impl PluginHost {
         let p = self.plugins.iter_mut().find(|p| p.name == name).ok_or_else(|| EngineError::Other(format!("no plugin named '{name}'")))?;
         p.enabled = enabled;
         p.permissions.allowed = enabled;
-        save_permissions(&p.name, &p.permissions);
+        let (n, perms) = (p.name.clone(), p.permissions.clone());
+        self.save_permissions(&n, &perms);
         Ok(())
     }
 
@@ -214,7 +314,7 @@ impl PluginHost {
             }
         }
         let _ = std::fs::remove_file(&plugin.path);
-        if let Some(dir) = plugins_dir() {
+        if let Some(dir) = self.dir() {
             let _ = std::fs::remove_file(dir.join(format!("{}.permissions.json", plugin.name)));
         }
         Ok(())
@@ -234,6 +334,7 @@ impl PluginHost {
                     "name": p.name,
                     "path": p.path.display().to_string(),
                     "enabled": p.enabled,
+                    "grants": {"files": p.permissions.files, "network": p.permissions.network},
                     "commands": p.commands.iter().map(|c| json!({
                         "id": c.id, "label": c.label, "params": c.params_doc,
                     })).collect::<Vec<_>>(),
@@ -265,8 +366,7 @@ fn read_guest_str(memory: &wasmi::Memory, store: &impl wasmi::AsContext<Data = H
 // ---------------------------------------------------------------------------
 
 fn run_init(engine: &wasmi::Engine, module: &wasmi::Module, plugin_idx: usize) -> Result<Vec<PluginCommand>> {
-    let mut store = wasmi::Store::new(engine, HostCtx::default());
-    store.set_fuel(CALL_FUEL).map_err(|e| EngineError::Other(format!("fuel: {e}")))?;
+    let mut store = store(engine)?;
 
     let mut linker = wasmi::Linker::<HostCtx>::new(engine);
     define_host_functions(&mut linker)?;
@@ -278,7 +378,10 @@ fn run_init(engine: &wasmi::Engine, module: &wasmi::Module, plugin_idx: usize) -
 
     let init =
         instance.get_typed_func::<(), ()>(&store, "plugin_init").map_err(|_| EngineError::Other("plugin has no `plugin_init` export".into()))?;
-    init.call(&mut store, ()).map_err(|e| EngineError::Other(format!("plugin_init failed: {e}")))?;
+    init.call(&mut store, ()).map_err(|e| match map_wasm_error(e) {
+        EngineError::Other(m) => EngineError::Other(m.replacen("plugin_run failed", "plugin_init failed", 1)),
+        other => other,
+    })?;
 
     let ctx = store.data();
     if ctx.pending_commands.len() > MAX_COMMANDS_PER_PLUGIN {
@@ -317,9 +420,9 @@ pub(crate) fn execute_plugin_command(
     cmd_id: &str,
     params: &Value,
     session: &mut Session,
+    owner: &(String, PluginPermissions),
 ) -> Result<Value> {
-    let mut store = wasmi::Store::new(engine, HostCtx::default());
-    store.set_fuel(CALL_FUEL).map_err(|e| EngineError::Other(format!("fuel: {e}")))?;
+    let mut store = store(engine)?;
 
     let mut linker = wasmi::Linker::<HostCtx>::new(engine);
     define_host_functions(&mut linker)?;
@@ -364,7 +467,7 @@ pub(crate) fn execute_plugin_command(
         let host_rc = match pending.kind {
             RequestKind::Execute => {
                 let p: Value = serde_json::from_str(&pending.params).unwrap_or(Value::Null);
-                match session.execute(&pending.cmd, &p) {
+                match refused(&pending.cmd, owner).map_or_else(|| session.execute(&pending.cmd, &p), Err) {
                     Ok(v) => {
                         store.data_mut().result_buf = serde_json::to_string(&v).unwrap_or_default().into_bytes();
                         0
@@ -425,6 +528,22 @@ pub(crate) fn execute_plugin_command(
     Ok(value)
 }
 
+/// Why plug-in `owner` may not run command `cmd` (it reaches files or the network without that
+/// grant); `None` when it may.
+fn refused(cmd: &str, owner: &(String, PluginPermissions)) -> Option<EngineError> {
+    let spec = crate::cmd::find_command(&crate::cmd::resolve_alias(cmd))?;
+    let grant = spec.reach().grant()?;
+    if owner.1.granted(grant) {
+        return None;
+    }
+    let what = if grant == "files" { "reads or writes files" } else { "uses the network" };
+    Some(EngineError::Other(format!(
+        "the plug-in {name} may not run {id}: it {what}. A person can allow it with PLUGINS {{\"action\": \"grant\", \"name\": \"{name}\", \"permission\": \"{grant}\"}}",
+        name = owner.0,
+        id = spec.id
+    )))
+}
+
 fn alloc_in_guest(instance: &wasmi::Instance, store: &mut wasmi::Store<HostCtx>, memory: &wasmi::Memory, a: &[u8], b: &[u8]) -> Result<(u32, u32)> {
     if let Ok(alloc) = instance.get_typed_func::<i32, i32>(&mut *store, "alloc") {
         let pa = alloc.call(&mut *store, a.len() as i32).map_err(|e| EngineError::Other(format!("plugin alloc failed: {e}")))?;
@@ -445,6 +564,8 @@ fn map_wasm_error(e: wasmi::Error) -> EngineError {
     let msg = e.to_string();
     if msg.contains("fuel") || msg.contains("Fuel") {
         EngineError::Other(format!("plugin ran out of fuel (infinite loop?): {msg}"))
+    } else if msg.contains("grow") || msg.contains("limit") || msg.contains("memory") {
+        EngineError::Other(format!("plugin went past its memory ({} MiB): {msg}", MAX_MEMORY >> 20))
     } else {
         EngineError::Other(format!("plugin_run failed: {msg}"))
     }
@@ -576,26 +697,29 @@ pub fn plugins_dir() -> Option<PathBuf> {
     crate::control_auth::config_dir().map(|d| d.join("plugins"))
 }
 
-fn load_permissions(name: &str) -> PluginPermissions {
-    let Some(dir) = plugins_dir() else {
-        return PluginPermissions { allowed: true };
-    };
-    let path = dir.join(format!("{name}.permissions.json"));
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return PluginPermissions { allowed: true };
-    };
-    let Ok(v): std::result::Result<Value, _> = serde_json::from_str(&text) else {
-        return PluginPermissions { allowed: true };
-    };
-    PluginPermissions { allowed: v.get("allowed").and_then(|v| v.as_bool()).unwrap_or(true) }
-}
+impl PluginHost {
+    /// Plug-in `name`'s permissions from its file: a plug-in the user installed runs, with no
+    /// grants, until they say otherwise; a file that can't be read grants nothing.
+    fn load_permissions(&self, name: &str) -> PluginPermissions {
+        let fresh = PluginPermissions { allowed: true, files: false, network: false };
+        let Some(dir) = self.dir() else { return fresh };
+        let Ok(text) = std::fs::read_to_string(dir.join(format!("{name}.permissions.json"))) else {
+            return fresh;
+        };
+        let Ok(v): std::result::Result<Value, _> = serde_json::from_str(&text) else {
+            return PluginPermissions { allowed: false, files: false, network: false };
+        };
+        let flag = |k: &str, d: bool| v.get(k).and_then(Value::as_bool).unwrap_or(d);
+        PluginPermissions { allowed: flag("allowed", true), files: flag("files", false), network: flag("network", false) }
+    }
 
-fn save_permissions(name: &str, perms: &PluginPermissions) {
-    let Some(dir) = plugins_dir() else {
-        return;
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{name}.permissions.json"));
-    let json = json!({ "allowed": perms.allowed });
-    let _ = std::fs::write(path, serde_json::to_string_pretty(&json).unwrap_or_default());
+    fn save_permissions(&self, name: &str, perms: &PluginPermissions) {
+        let Some(dir) = self.dir() else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{name}.permissions.json"));
+        let json = json!({ "allowed": perms.allowed, "files": perms.files, "network": perms.network });
+        let _ = std::fs::write(path, serde_json::to_string_pretty(&json).unwrap_or_default());
+    }
 }

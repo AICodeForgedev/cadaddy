@@ -27,6 +27,7 @@ const MAX_SHAPE_NUMBER: u16 = 255;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("load", "Load Shape File", run_load)
+            .files()
             .params("{file: path of a compiled shape file (.shx; added when the name has no extension)} → {file, shapes: [names]}")
             .interactive(|_| Ok(Box::new(PathM { name: "LOAD", message: "Enter name of shape file to load", run: run_load }))),
         CommandSpec::new("shape", "Shape", run_shape)

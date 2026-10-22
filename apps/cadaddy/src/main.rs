@@ -549,7 +549,7 @@ fn main() -> eframe::Result {
             Box::new(move |cc| {
                 cadaddy_ui_egui::startup::mark("window and graphics");
                 inbox.wake(cc.egui_ctx.clone());
-                let mut app = CadApp::new(Session::empty(), services());
+                let mut app = CadApp::new(Session::for_app(), services());
                 // The first DWG save returns once written; its "not kept" check follows.
                 app.session.background_checks = true;
                 app.debug_overlay = debug;

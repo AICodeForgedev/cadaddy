@@ -566,6 +566,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("actrecord", "Record", run_record).menu(&["Tools", "Action Recorder", "Record"]).enabled(has_doc).noundo(),
         CommandSpec::new("actstop", "Stop", run_stop)
+            .files()
             .menu(&["Tools", "Action Recorder", "Stop"])
             .params("{name? (default ActMacroN), description?, path? (default the actions folder)} → {name, steps, asks, path?}")
             .enabled(has_doc)
@@ -588,11 +589,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(BaseM))),
         CommandSpec::new("actplay", "Play Action Macro", run_play)
+            .files()
             .menu(&["Tools", "Action Recorder", "Play..."])
             .params("{name | path, inputs?: [a value per asked step, in order: [x, y(, z)] or text; null keeps the recorded one]} → {macro, steps}")
             .enabled(has_doc)
             .interactive(|_| Ok(Box::new(PlayM { m: None, next: 0, given: Vec::new() }))),
         CommandSpec::new("actions", "Action Macros", run_manage)
+            .files()
             .params("{action?: list|delete|ask|rename, name, step?, ask?: bool, to?} → list: {macros: [{name, description, steps, asks}], recording}")
             .enabled(always)
             .noundo(),

@@ -580,17 +580,21 @@ fn run_topdown(_s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("calibrate.project", "Add Calibration Project", run_project)
+            .files()
             .params("{pack: .jsonl, id: anonymous, building_type?, region?, bid_date?: YYYY-MM, delivery?, quantities: {trade: {driver: qty}} | from_wholejob: true, totals?: {trade: $}, total?: $, hours?: {trade: h}} → {pack, id, trades}")
             .noundo(),
         CommandSpec::new("calibrate.fit", "Fit Rates to Bids", run_fit)
+            .files()
             .enabled(always)
             .params("{packs: [.jsonl], target?: cost|hours, building_type?, region?, priors?: {\"trade/driver\": {rate, sd}}, markups?: {trade: %}, regions?: {region: factor}, index?: {YYYY-MM: value}, base_date?, min_projects?: 3, holdout_every?: 5, out?: .jsonl, private?: bool} → {rates: [{trade, driver, rate, sd, projects, quality}], noise_pct, holdout: {projects, mape_pct}, written}")
             .noundo(),
         CommandSpec::new("calibrate.payroll", "Certified Payroll Hours", run_payroll)
+            .files()
             .enabled(always)
             .params("{rows: [{classification, hours}] | path: CSV, map?: {classification: trade}} → {hours: {trade: h}, unmapped}")
             .noundo(),
         CommandSpec::new("calibrate.topdown", "Top-Down Labor Estimate", run_topdown)
+            .files()
             .enabled(always)
             .params("{values: {trade: $}, ratios: {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}, wage_escalation?, materials_escalation?, bottom_up_hours?: {trade: h}, gap_pct?: 25} → {trades: [{trade, self_performed, field_hours, wages, gap_pct, flag}], no_ratios}")
             .noundo(),

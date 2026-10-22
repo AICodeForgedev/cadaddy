@@ -11,12 +11,14 @@ use crate::{Accept, CommandSpec, EngineError, Input, Interactive, Prompt, Result
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("appload", "Load Application...", run_appload)
+            .files()
             .menu(&["Tools", "Load Application..."])
             .alias(&["ap"])
             .params("{path: .lsp file} | {name, data: base64 | text} → {value?, error?}")
             .noundo()
             .interactive(|_| Ok(Box::new(ApploadM))),
         CommandSpec::new("lisp", "Evaluate LISP", run_lisp)
+            .files()
             .params(
                 "{code: LISP source, inputs?: [answers to get… calls: numbers, strings, [x,y] points], dialog?: [tile actions for start_dialog, in turn: {key, value?, reason?}]} → {value (printed as prin1), output: lines printed, error?}",
             )
