@@ -247,7 +247,7 @@ fn frame(e: &mut Env, plane: &Plane) -> std::result::Result<(Vec3, Vec3, Vec3, V
             let n = v3(*normal).normalized();
             let x0 = v3(*x);
             let x = (x0 - n * x0.dot(n)).normalized();
-            if !(n.len() > 0.5 && x.len() > 0.5) || !origin.iter().all(|c| c.is_finite() && c.abs() <= MAX_SIZE) {
+            if !(n.len() > 0.5 && x.len() > 0.5 && origin.iter().all(|c| c.is_finite() && c.abs() <= MAX_SIZE)) {
                 return Err("the sketch plane is degenerate".into());
             }
             Ok((v3(*origin), x, n.cross(x), n))

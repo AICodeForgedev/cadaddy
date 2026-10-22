@@ -236,7 +236,7 @@ mod tests {
         let tp = compute(&[square()], &basic_job());
         assert!(tp.is_ok());
         let tp = tp.ok();
-        let gcode = emit(tp.as_ref().map(|t| t).unwrap_or_else(|| std::process::abort()), &basic_job(), &GcodeOptions::default());
+        let gcode = emit(tp.as_ref().unwrap_or_else(|| std::process::abort()), &basic_job(), &GcodeOptions::default());
         assert!(gcode.is_ok());
         let text = gcode.ok().unwrap_or_default();
         assert!(text.contains("G21"), "should have metric");
@@ -278,7 +278,7 @@ mod tests {
         let mut f = 0.0;
         let m = parse_move(&line.to_ascii_uppercase(), &mut f);
         assert!(matches!(m, Some(Move::ArcCw { .. })));
-        if let Some(Move::ArcCw { x, y, z, i, j, f }) = m {
+        if let Some(Move::ArcCw { x, i, f, .. }) = m {
             assert!((x - 10.0).abs() < 1e-6);
             assert!((i - 5.0).abs() < 1e-6);
             assert!((f - 500.0).abs() < 1e-6);

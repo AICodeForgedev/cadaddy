@@ -283,7 +283,7 @@ fn diesel_follows_its_rules() {
     assert_eq!(d("$(edtime,2451545.0,H:MM AM/PM)"), "12:00 PM");
     assert!(!d("$(getvar,clayer)").contains('$'));
     // Deep nesting stays bounded.
-    let deep = "$(+,1,".repeat(200) + "1" + &")".repeat(200);
+    let deep = "$(+,1,".repeat(200) + "1" + ")".repeat(200).as_str();
     assert!(d(&deep).contains("$?"));
 }
 
