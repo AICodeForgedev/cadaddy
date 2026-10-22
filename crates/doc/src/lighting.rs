@@ -1,7 +1,7 @@
 //! Lighting for rendered views: LIGHT objects (point, spot and distant lights, an entity like any
 //! other: its colour is the object's colour) and the drawing's sun (SUNPROPERTIES: date, time and
 //! place, so the sun stands where it would) with the exposure rendered views use
-//! (RENDEREXPOSURE).
+//! (RENDEREXPOSURE) and how the Realistic style finishes its image ([`Look`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -167,6 +167,82 @@ pub struct Sun {
     pub intensity: f64,
     /// Exposure of rendered views (RENDEREXPOSURE), in stops: + brighter, − darker.
     pub exposure: f64,
+    /// How the Realistic visual style finishes its image (VISUALSTYLES): ambient occlusion, soft
+    /// shadows and the tone curve.
+    pub look: Look,
+}
+
+/// The curve that turns the light a view gathers into the colours shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToneMap {
+    /// A filmic curve (the ACES fitted curve): soft highlights, rich contrast.
+    #[default]
+    Filmic,
+    /// Reinhard's curve: gentle, a little flat.
+    Reinhard,
+    /// A neutral curve that keeps base colours as they are up to the highlights.
+    Neutral,
+    /// None: light clipped at white.
+    Linear,
+}
+
+impl ToneMap {
+    pub const ALL: [ToneMap; 4] = [ToneMap::Filmic, ToneMap::Reinhard, ToneMap::Neutral, ToneMap::Linear];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToneMap::Filmic => "filmic",
+            ToneMap::Reinhard => "reinhard",
+            ToneMap::Neutral => "neutral",
+            ToneMap::Linear => "linear",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ToneMap> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "filmic" | "aces" | "f" => Some(ToneMap::Filmic),
+            "reinhard" | "r" => Some(ToneMap::Reinhard),
+            "neutral" | "n" => Some(ToneMap::Neutral),
+            "linear" | "none" | "clip" | "l" => Some(ToneMap::Linear),
+            _ => None,
+        }
+    }
+}
+
+/// How the Realistic visual style finishes its image.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Look {
+    /// Screen-space ambient occlusion: how much the sky's light fades in corners and creases
+    /// (0 off … 2 strong).
+    pub ambient_occlusion: f64,
+    /// How far (drawing units) a surface looks for what shades it; 0: by the model's size.
+    pub ao_radius: f64,
+    /// The sun's apparent size in degrees, which widens shadow edges with the distance from the
+    /// object casting them (0: sharp shadows).
+    pub soft_shadows: f64,
+    pub tone_map: ToneMap,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Look { ambient_occlusion: 1.0, ao_radius: 0.0, soft_shadows: 1.0, tone_map: ToneMap::Filmic }
+    }
+}
+
+impl Look {
+    /// Most ambient occlusion strength, sun size (degrees).
+    pub const MAX_AO: f64 = 2.0;
+    pub const MAX_SOFT: f64 = 10.0;
+
+    pub fn sane(mut self) -> Look {
+        let fin = |v: f64, d: f64| if v.is_finite() { v } else { d };
+        self.ambient_occlusion = fin(self.ambient_occlusion, 1.0).clamp(0.0, Look::MAX_AO);
+        self.ao_radius = fin(self.ao_radius, 0.0).clamp(0.0, 1e12);
+        self.soft_shadows = fin(self.soft_shadows, 1.0).clamp(0.0, Look::MAX_SOFT);
+        self
+    }
 }
 
 impl Default for Sun {
@@ -184,6 +260,7 @@ impl Default for Sun {
             north: 0.0,
             intensity: 1.0,
             exposure: 0.0,
+            look: Look::default(),
         }
     }
 }
@@ -201,6 +278,7 @@ impl Sun {
         self.north = fin(self.north, 0.0).rem_euclid(360.0);
         self.intensity = fin(self.intensity, 1.0).clamp(0.0, 100.0);
         self.exposure = fin(self.exposure, 0.0).clamp(-20.0, 20.0);
+        self.look = self.look.sane();
         self
     }
 
@@ -357,6 +435,23 @@ impl RenderEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_look_is_kept_and_made_safe() {
+        // A sun saved before the look existed reads with the default look.
+        let old: Sun = serde_json::from_str(r#"{"on":true,"exposure":1.5}"#).unwrap();
+        assert_eq!(old.look, Look::default());
+        let l = Look { ambient_occlusion: f64::NAN, ao_radius: -3.0, soft_shadows: 1e9, tone_map: ToneMap::Reinhard }.sane();
+        assert_eq!((l.ambient_occlusion, l.ao_radius, l.soft_shadows), (1.0, 0.0, Look::MAX_SOFT));
+        let s = Sun { look: Look { tone_map: ToneMap::Neutral, ..Look::default() }, ..Sun::default() };
+        let back: Sun = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.look.tone_map, ToneMap::Neutral);
+        for t in ToneMap::ALL {
+            assert_eq!(ToneMap::parse(t.as_str()), Some(t));
+        }
+        assert_eq!(ToneMap::parse("aces"), Some(ToneMap::Filmic));
+        assert_eq!(ToneMap::parse("sepia"), None);
+    }
 
     #[test]
     fn the_sun_stands_where_it_should() {

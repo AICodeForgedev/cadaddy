@@ -593,6 +593,8 @@ struct ShadowMap {
     depth: Vec<f32>,
     /// Depth slack: a fraction of the scene's depth plus a texel.
     bias: f32,
+    /// The scene's depth along the sun (world units).
+    range: f64,
 }
 
 impl ShadowMap {
@@ -624,13 +626,27 @@ impl ShadowMap {
             let s = t.p.map(|p| ((p.dot(u) - lo.0) * k + 1.0, (p.dot(v) - lo.1) * k + 1.0, p.dot(d)));
             raster_depth(s, &mut depth, n);
         }
-        let bias = ((zhi - zlo).max(1e-9) * 2e-3 + 2.0 / k) as f32;
-        Some(ShadowMap { u, v, d, lo, k, n, depth, bias })
+        let range = (zhi - zlo).max(1e-9);
+        let bias = (range * 2e-3 + 2.0 / k) as f32;
+        Some(ShadowMap { u, v, d, lo, k, n, depth, bias, range })
+    }
+
+    /// Point `p` in the map: texel coordinates and depth towards the sun.
+    fn coords(&self, p: Vec3) -> (f64, f64, f32) {
+        ((p.dot(self.u) - self.lo.0) * self.k + 1.0, (p.dot(self.v) - self.lo.1) * self.k + 1.0, p.dot(self.d) as f32)
+    }
+
+    /// The nearest-to-the-sun depth in texel `(i, j)` (−∞ outside the map).
+    fn at(&self, i: i64, j: i64) -> f32 {
+        if i < 0 || j < 0 || i >= self.n as i64 || j >= self.n as i64 {
+            return f32::NEG_INFINITY;
+        }
+        self.depth.get(j as usize * self.n + i as usize).copied().unwrap_or(f32::NEG_INFINITY)
     }
 
     /// How lit by the sun point `p` is (0 shadowed … 1 lit), averaged over 3×3 texels.
     fn lit(&self, p: Vec3) -> f32 {
-        let (x, y, z) = ((p.dot(self.u) - self.lo.0) * self.k + 1.0, (p.dot(self.v) - self.lo.1) * self.k + 1.0, p.dot(self.d) as f32);
+        let (x, y, z) = self.coords(p);
         if !(x.is_finite() && y.is_finite()) {
             return 1.0;
         }
@@ -638,16 +654,60 @@ impl ShadowMap {
         let mut sum = 0.0;
         for dy in -1..=1 {
             for dx in -1..=1 {
-                let (i, j) = (cx + dx, cy + dy);
-                let occluder = if i < 0 || j < 0 || i >= self.n as i64 || j >= self.n as i64 {
-                    f32::NEG_INFINITY
-                } else {
-                    self.depth.get(j as usize * self.n + i as usize).copied().unwrap_or(f32::NEG_INFINITY)
-                };
-                sum += if occluder > z + self.bias { 0.0 } else { 1.0 };
+                sum += if self.at(cx + dx, cy + dy) > z + self.bias { 0.0 } else { 1.0 };
             }
         }
         sum / 9.0
+    }
+
+    /// Lit (1) or not (0) at texel coordinates `(x, y)`, filtered between the four nearest
+    /// texels.
+    fn compare(&self, x: f64, y: f64, z: f32) -> f32 {
+        let (fx, fy) = (x - 0.5, y - 0.5);
+        let (i, j) = (fx.floor(), fy.floor());
+        let (tx, ty) = ((fx - i) as f32, (fy - j) as f32);
+        let (i, j) = (i as i64, j as i64);
+        let lit = |a: i64, b: i64| if self.at(a, b) > z + self.bias { 0.0 } else { 1.0 };
+        let top = lit(i, j) * (1.0 - tx) + lit(i + 1, j) * tx;
+        let bottom = lit(i, j + 1) * (1.0 - tx) + lit(i + 1, j + 1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    }
+
+    /// How lit point `p` is by a sun whose apparent radius has tangent `tan_half`:
+    /// percentage-closer soft shadows. The casters near the point set the penumbra's width
+    /// (sharp where an object meets the ground, wider farther from it), then the map is filtered
+    /// over that width. `tan_half` 0: [`ShadowMap::lit`].
+    fn lit_soft(&self, p: Vec3, tan_half: f64) -> f32 {
+        if !(tan_half.is_finite() && tan_half > 0.0) {
+            return self.lit(p);
+        }
+        let (x, y, z) = self.coords(p);
+        if !(x.is_finite() && y.is_finite()) {
+            return 1.0;
+        }
+        use crate::ao::{SOFT_MAX_TEXELS, SOFT_TAPS, disc};
+        // Casters: within the widest penumbra the scene allows.
+        let search = (tan_half * self.range * self.k).clamp(1.0, SOFT_MAX_TEXELS);
+        let (mut sum, mut count) = (0.0f64, 0u32);
+        for k in 0..SOFT_TAPS {
+            let (dx, dy) = disc(k, SOFT_TAPS);
+            let occ = self.at((x + dx * search).floor() as i64, (y + dy * search).floor() as i64);
+            if occ > z + self.bias {
+                sum += f64::from(occ);
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return 1.0;
+        }
+        let blocker = sum / f64::from(count);
+        let radius = ((blocker - f64::from(z)) * tan_half * self.k).clamp(1.0, SOFT_MAX_TEXELS);
+        let mut lit = 0.0;
+        for k in 0..SOFT_TAPS {
+            let (dx, dy) = disc(k, SOFT_TAPS);
+            lit += self.compare(x + dx * radius, y + dy * radius, z);
+        }
+        lit / SOFT_TAPS as f32
     }
 }
 
@@ -699,31 +759,75 @@ pub(crate) fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
     [0, 1, 2].map(|i| (a[i] * (1.0 - fx) + b[i] * fx) * (1.0 - fy) + (c[i] * (1.0 - fx) + d[i] * fx) * fy)
 }
 
+/// Barycentric weights of pixel `(x, y)`'s centre in screen triangle `s`; `None` outside it.
+fn weights(s: &[(f64, f64, f64); 3], x: usize, y: usize) -> Option<[f64; 3]> {
+    let [(x0, y0, _), (x1, y1, _), (x2, y2, _)] = *s;
+    let area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if !(area.is_finite() && area.abs() > 1e-12) {
+        return None;
+    }
+    let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+    let w0 = ((x1 - px) * (y2 - py) - (x2 - px) * (y1 - py)) / area;
+    let w1 = ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) / area;
+    let w2 = 1.0 - w0 - w1;
+    (w0 >= -1e-9 && w1 >= -1e-9 && w2 >= -1e-9).then_some([w0, w1, w2])
+}
+
+/// A triangle of the Realistic style on the screen.
+struct ScreenTri {
+    s: [(f64, f64, f64); 3],
+    /// Its index in the scene.
+    tri: usize,
+    /// Its normal, turned towards the viewer.
+    n: Vec3,
+    y0: usize,
+    y1: usize,
+    opaque: bool,
+}
+
+impl ScreenTri {
+    /// Call `f(x, y, depth)` for each pixel of rows `row0 .. row0 + rows` the triangle covers.
+    fn cover(&self, row0: usize, rows: usize, w: usize, mut f: impl FnMut(usize, usize, f32)) {
+        let [(x0, y0, z0), (x1, y1, z1), (x2, y2, z2)] = self.s;
+        let ymin = y0.min(y1).min(y2).floor().max(row0 as f64) as usize;
+        let ymax = (y0.max(y1).max(y2).ceil().min((row0 + rows) as f64)).max(0.0) as usize;
+        let xmin = x0.min(x1).min(x2).floor().max(0.0) as usize;
+        let xmax = x0.max(x1).max(x2).ceil().min(w as f64).max(0.0) as usize;
+        for y in ymin..ymax {
+            for x in xmin..xmax {
+                if let Some([w0, w1, w2]) = weights(&self.s, x, y) {
+                    f(x, y, (w0 * z0 + w1 * z1 + w2 * z2) as f32);
+                }
+            }
+        }
+    }
+}
+
 /// The Realistic style: every pixel of every surface lit physically ([`crate::light`]) by the
-/// sky, the sun (with its shadows) and the lights, through its material and texture; glass and
-/// other see-through surfaces over what lies behind; line objects on top; the sky behind.
+/// sky (dimmed in corners and creases by screen-space ambient occlusion, [`crate::ao`]), the sun
+/// (with soft shadows) and the lights, through its material and texture; glass and other
+/// see-through surfaces over what lies behind; line objects on top; the sky behind; all through
+/// the tone curve.
+///
+/// Opaque surfaces go first into a visibility buffer (the nearest triangle at each pixel); the
+/// occlusion is worked out from its depths; then each pixel is lit once.
 fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Raster {
-    use crate::light::{Surface, shade_baked, tonemap_wb, view_background};
+    use crate::light::{Surface, shade_occluded, view_background};
+    // Which triangle a pixel shows: none (the background).
+    const NONE: u32 = u32::MAX;
     let (w, h) = (v.width_px as usize, v.height_px as usize);
-    let wb = lit.white_balance;
     // The background: sky gradient, solid, gradient or image.
     let mut color: Vec<[u8; 4]> = Vec::with_capacity(w * h);
     for y in 0..h {
-        let c = tonemap_wb(view_background(lit, 1.0 - (y as f32 + 0.5) / h as f32), lit.exposure, wb);
+        let c = lit.display(view_background(lit, 1.0 - (y as f32 + 0.5) / h as f32));
         color.extend(std::iter::repeat_n([c[0], c[1], c[2], 255], w));
     }
     let mut depth = vec![f32::NEG_INFINITY; w * h];
+    let mut owner = vec![NONE; w * h];
     let shadows = lit.sun.and_then(|(d, _)| ShadowMap::new(scene, d));
+    let tan_half = sun_tan_half(lit.sun_size);
     let view_dir = v.dir.normalized();
-    struct S {
-        s: [(f64, f64, f64); 3],
-        tri: usize,
-        n: Vec3,
-        y0: usize,
-        y1: usize,
-        opaque: bool,
-    }
-    let tris: Vec<S> = scene
+    let tris: Vec<ScreenTri> = scene
         .tris
         .iter()
         .enumerate()
@@ -743,12 +847,13 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
                 return None;
             }
             let opaque = scene.surfaces.get(t.mat as usize).is_none_or(|m| m.opacity > 0.99);
-            Some(S { s, tri: i, n, y0: y0 as usize, y1: y1 as usize, opaque })
+            Some(ScreenTri { s, tri: i, n, y0: y0 as usize, y1: y1 as usize, opaque })
         })
         .collect();
     let lin = |c: u8| (f32::from(c) / 255.0).powf(2.2);
-    // Colour of triangle `tri` at barycentric weights `b`: material, texture, light.
-    let pixel = |ti: usize, tri: &Tri, n: Vec3, b: [f64; 3]| -> ([u8; 3], f32) {
+    // Colour of triangle `tri` at barycentric weights `b`, `open` to the sky (ambient
+    // occlusion): material, texture, light.
+    let pixel = |ti: usize, tri: &Tri, n: Vec3, b: [f64; 3], open: f32| -> ([u8; 3], f32) {
         let p = tri.p[0] * b[0] + tri.p[1] * b[1] + tri.p[2] * b[2];
         let (surface, opacity) = match scene.surfaces.get(tri.mat as usize) {
             Some(m) => {
@@ -763,11 +868,11 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
             }
             None => (Surface { base: [lin(tri.color.0), lin(tri.color.1), lin(tri.color.2)], roughness: 0.6, metallic: 0.0 }, 1.0),
         };
-        let sun = shadows.as_ref().map_or(1.0, |m| m.lit(p + n * f64::from(m.bias) * 0.5));
+        let sun = shadows.as_ref().map_or(1.0, |m| m.lit_soft(p + n * f64::from(m.bias) * 0.5, tan_half));
         // Its back is the side seen when the corners turn clockwise from here.
         let back = (tri.p[1] - tri.p[0]).cross(tri.p[2] - tri.p[0]).dot(n) < 0.0;
         let baked = scene.baked.as_ref().and_then(|bk| bk.at(ti, b[1], b[2], back));
-        (tonemap_wb(shade_baked(lit, p, n, view_dir, &surface, sun, baked), lit.exposure, wb), opacity)
+        (lit.display(shade_occluded(lit, p, n, view_dir, &surface, sun, baked, open)), opacity)
     };
     let bands = h.div_ceil(BAND).max(1);
     let mut binned: Vec<Vec<usize>> = vec![Vec::new(); bands];
@@ -778,67 +883,97 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
             }
         }
     }
-    let draw_band = |(b, (cband, zband)): (usize, (&mut [[u8; 4]], &mut [f32]))| {
+    // 1. The nearest opaque surface at each pixel.
+    let visible = |(b, (zband, oband)): (usize, (&mut [f32], &mut [u32]))| {
         let row0 = b * BAND;
-        let rows = cband.len() / w.max(1);
-        let list = binned.get(b).map(Vec::as_slice).unwrap_or(&[]);
-        // Opaque surfaces first, then see-through ones over them (farthest first).
-        let mut clear: Vec<&S> = list.iter().filter_map(|&i| tris.get(i)).filter(|t| !t.opaque).collect();
-        clear.sort_by(|a, b| {
-            let z = |t: &S| t.s.iter().map(|p| p.2).sum::<f64>();
-            z(a).total_cmp(&z(b))
-        });
-        for (pass, set) in [(0, list.iter().filter_map(|&i| tris.get(i)).filter(|t| t.opaque).collect::<Vec<_>>()), (1, clear)] {
-            for t in set {
-                let Some(tri) = scene.tris.get(t.tri) else { continue };
-                let [(x0, y0, z0), (x1, y1, z1), (x2, y2, z2)] = t.s;
-                let area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
-                if !(area.is_finite() && area.abs() > 1e-12) {
-                    continue;
+        let rows = zband.len() / w.max(1);
+        for &i in binned.get(b).map(Vec::as_slice).unwrap_or(&[]) {
+            let Some(t) = tris.get(i).filter(|t| t.opaque) else { continue };
+            t.cover(row0, rows, w, |x, y, z| {
+                let k = (y - row0) * w + x;
+                if let (Some(d), Some(o)) = (zband.get_mut(k), oband.get_mut(k))
+                    && z > *d
+                {
+                    *d = z;
+                    *o = i as u32;
                 }
-                let ymin = y0.min(y1).min(y2).floor().max(row0 as f64) as usize;
-                let ymax = (y0.max(y1).max(y2).ceil().min((row0 + rows) as f64)).max(0.0) as usize;
-                let xmin = x0.min(x1).min(x2).floor().max(0.0) as usize;
-                let xmax = x0.max(x1).max(x2).ceil().min(w as f64).max(0.0) as usize;
-                for y in ymin..ymax {
-                    let py = y as f64 + 0.5;
-                    for x in xmin..xmax {
-                        let px = x as f64 + 0.5;
-                        let w0 = ((x1 - px) * (y2 - py) - (x2 - px) * (y1 - py)) / area;
-                        let w1 = ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) / area;
-                        let w2 = 1.0 - w0 - w1;
-                        if w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9 {
-                            continue;
-                        }
-                        let z = (w0 * z0 + w1 * z1 + w2 * z2) as f32;
-                        let i = (y - row0) * w + x;
-                        let (Some(d), Some(c)) = (zband.get_mut(i), cband.get_mut(i)) else { continue };
-                        if z <= *d {
-                            continue;
-                        }
-                        let (rgb, opacity) = pixel(t.tri, tri, t.n, [w0, w1, w2]);
-                        if pass == 0 {
-                            *d = z;
-                            *c = [rgb[0], rgb[1], rgb[2], 255];
-                        } else {
-                            let a = opacity.clamp(0.0, 1.0);
-                            let mix = |o: u8, n: u8| (f32::from(o) * (1.0 - a) + f32::from(n) * a).round() as u8;
-                            *c = [mix(c[0], rgb[0]), mix(c[1], rgb[1]), mix(c[2], rgb[2]), 255];
-                        }
-                    }
-                }
-            }
+            });
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        color.par_chunks_mut(BAND * w).zip(depth.par_chunks_mut(BAND * w)).enumerate().for_each(draw_band);
+        depth.par_chunks_mut(BAND * w).zip(owner.par_chunks_mut(BAND * w)).enumerate().for_each(visible);
     }
     #[cfg(target_arch = "wasm32")]
-    color.chunks_mut(BAND * w).zip(depth.chunks_mut(BAND * w)).enumerate().for_each(draw_band);
-    // Line objects on top (surface edges are not drawn in this style).
+    depth.chunks_mut(BAND * w).zip(owner.chunks_mut(BAND * w)).enumerate().for_each(visible);
+    // 2. How open each pixel is to the sky.
     let px = v.height / f64::from(v.height_px);
+    let open = if lit.ao > 0.0 {
+        let normal = |i: usize| {
+            let t = tris.get(*owner.get(i)? as usize)?;
+            Some([t.n.dot(v.right), t.n.dot(v.up), t.n.dot(view_dir)])
+        };
+        let reach = crate::light::ao_reach(lit.ao_radius, scene_diag(scene));
+        crate::ao::occlusion(&depth, normal, w, h, px, reach, lit.ao)
+    } else {
+        Vec::new()
+    };
+    // 3. Each pixel lit once.
+    let shade_row = |(y, row): (usize, &mut [[u8; 4]])| {
+        for (x, c) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            let Some(t) = owner.get(i).filter(|o| **o != NONE).and_then(|o| tris.get(*o as usize)) else { continue };
+            let Some(tri) = scene.tris.get(t.tri) else { continue };
+            let Some(b) = weights(&t.s, x, y) else { continue };
+            let (rgb, _) = pixel(t.tri, tri, t.n, b, open.get(i).copied().unwrap_or(1.0));
+            *c = [rgb[0], rgb[1], rgb[2], 255];
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        color.par_chunks_mut(w.max(1)).enumerate().for_each(shade_row);
+    }
+    #[cfg(target_arch = "wasm32")]
+    color.chunks_mut(w.max(1)).enumerate().for_each(shade_row);
+    // 4. See-through surfaces over them, farthest first.
+    let glass = |(b, (cband, zband)): (usize, (&mut [[u8; 4]], &[f32]))| {
+        let row0 = b * BAND;
+        let rows = cband.len() / w.max(1);
+        let mut clear: Vec<&ScreenTri> =
+            binned.get(b).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(|&i| tris.get(i)).filter(|t| !t.opaque).collect();
+        clear.sort_by(|a, b| {
+            let z = |t: &ScreenTri| t.s.iter().map(|p| p.2).sum::<f64>();
+            z(a).total_cmp(&z(b))
+        });
+        for t in clear {
+            let Some(tri) = scene.tris.get(t.tri) else { continue };
+            t.cover(row0, rows, w, |x, y, z| {
+                let k = (y - row0) * w + x;
+                if zband.get(k).is_none_or(|d| z <= *d) {
+                    return;
+                }
+                let Some(b) = weights(&t.s, x, y) else { return };
+                let (rgb, opacity) = pixel(t.tri, tri, t.n, b, 1.0);
+                if let Some(c) = cband.get_mut(k) {
+                    let a = opacity.clamp(0.0, 1.0);
+                    let mix = |o: u8, n: u8| (f32::from(o) * (1.0 - a) + f32::from(n) * a).round() as u8;
+                    *c = [mix(c[0], rgb[0]), mix(c[1], rgb[1]), mix(c[2], rgb[2]), 255];
+                }
+            });
+        }
+    };
+    if tris.iter().any(|t| !t.opaque) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            color.par_chunks_mut(BAND * w).zip(depth.par_chunks(BAND * w)).enumerate().for_each(glass);
+        }
+        #[cfg(target_arch = "wasm32")]
+        color.chunks_mut(BAND * w).zip(depth.chunks(BAND * w)).enumerate().for_each(glass);
+    }
+    // Line objects on top (surface edges are not drawn in this style).
     let bias = (px * 1.5) as f32;
     for l in scene.lines.iter().filter(|l| !l.edge) {
         let (a, b) = (v.screen(l.a), v.screen(l.b));
@@ -849,7 +984,7 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
         let zmin = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::INFINITY, f32::min);
         let zmax = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::NEG_INFINITY, f32::max);
         let range = (zmax - zmin).max(1e-6);
-        let fog_srgb = crate::light::tonemap_wb(fog.color, lit.exposure, wb);
+        let fog_srgb = lit.display(fog.color);
         for (i, c) in color.iter_mut().enumerate() {
             let z = depth.get(i).copied().unwrap_or(f32::NEG_INFINITY);
             if z > f32::NEG_INFINITY && z.is_finite() {
@@ -863,6 +998,23 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
     }
     let rgba: Vec<u8> = color.into_iter().flatten().collect();
     Raster::new(v.width_px, v.height_px, rgba).unwrap_or(Raster { width: 1, height: 1, rgba: vec![0, 0, 0, 255] })
+}
+
+/// The tangent of the sun's apparent radius for an apparent size of `degrees` (0: a point).
+pub fn sun_tan_half(degrees: f32) -> f64 {
+    let d = f64::from(degrees);
+    if d.is_finite() && d > 0.0 { (d.min(cadaddy_doc::lighting::Look::MAX_SOFT) * 0.5).to_radians().tan() } else { 0.0 }
+}
+
+/// The diagonal of everything `scene` holds (the ambient occlusion's reach by default).
+pub fn scene_diag(scene: &Scene) -> f64 {
+    let (mut lo, mut hi) = (Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN));
+    for p in scene.tris.iter().flat_map(|t| t.p).chain(scene.lines.iter().flat_map(|l| [l.a, l.b])).filter(|p| p.is_finite()) {
+        lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+        hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+    }
+    let d = (hi - lo).len();
+    if d.is_finite() { d } else { 0.0 }
 }
 
 /// Fill a triangle into one band (rows `row0..`), nearer pixels winning.
@@ -1179,5 +1331,196 @@ mod tests {
         };
         let r = rasterize(&s, &ShadeView::new(None, Vec2::ZERO, 10.0, 32, 32), VisualStyle::ShadedEdges, Rgb(9, 9, 9));
         assert_eq!(r.pixel(0, 0), Some([9, 9, 9, 255]));
+    }
+
+    fn luma(p: [u8; 4]) -> f64 {
+        0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2])
+    }
+
+    /// The courtyard seen from the south-west, Realistic, with its lighting changed by `f`; the
+    /// image and its view.
+    fn courtyard_look(f: impl Fn(&mut crate::light::Lighting)) -> (Raster, ShadeView) {
+        let mut s = scene(&courtyard(None), &Space::Model, 0.01, Rgb(0, 0, 0));
+        if let Some(l) = s.lighting.as_mut() {
+            f(l);
+        }
+        let v = fit(&s, Projection::new(Vec3::new(-1.0, -1.0, 1.0)), 320, 240).unwrap();
+        (rasterize(&s, &v, VisualStyle::Realistic, Rgb(0, 0, 0)), v)
+    }
+
+    #[test]
+    fn ambient_occlusion_darkens_where_the_box_meets_the_floor() {
+        let (open, v) = courtyard_look(|l| l.ao = 0.0);
+        let (shut, _) = courtyard_look(|l| l.ao = 1.0);
+        let (strong, _) = courtyard_look(|l| l.ao = 2.0);
+        if let Ok(out) = std::env::var("CDY_RENDER_DUMP") {
+            for (name, r) in [("ao-off", &open), ("ao-on", &shut), ("ao-strong", &strong)] {
+                std::fs::write(format!("{out}/{name}.png"), r.encode_png().unwrap()).unwrap();
+            }
+        }
+        let at = |r: &Raster, p: Vec3| {
+            let (x, y, _) = v.screen(p);
+            luma(r.pixel(x as u32, y as u32).unwrap())
+        };
+        // On the floor beside the box's west face, in the corner: darker with occlusion, and
+        // darker still when stronger.
+        let corner = Vec3::new(-1.05, 0.0, 0.0);
+        assert!(at(&shut, corner) < at(&open, corner) - 2.0, "{} vs {}", at(&shut, corner), at(&open, corner));
+        assert!(at(&strong, corner) < at(&shut, corner), "{} vs {}", at(&strong, corner), at(&shut, corner));
+        // Up the box's face, near the floor: darker too.
+        let face = Vec3::new(-1.0, 0.0, 0.05);
+        assert!(at(&shut, face) < at(&open, face), "{} vs {}", at(&shut, face), at(&open, face));
+        // Open ground far from the box, and the box's top: unchanged.
+        for p in [Vec3::new(-4.0, 3.5, 0.0), Vec3::new(0.0, 0.0, 2.0)] {
+            assert!((at(&shut, p) - at(&open, p)).abs() <= 1.0, "{p:?}: {} vs {}", at(&shut, p), at(&open, p));
+        }
+        // On the whole: a little darker, never brighter anywhere.
+        let mean = |r: &Raster| r.rgba.chunks(4).map(|p| luma([p[0], p[1], p[2], 255])).sum::<f64>() / (r.rgba.len() / 4) as f64;
+        assert!(mean(&shut) < mean(&open));
+        assert!(shut.rgba.chunks(4).zip(open.rgba.chunks(4)).all(|(a, b)| a[0] <= b[0].saturating_add(1)));
+    }
+
+    #[test]
+    fn a_flat_floor_has_no_occlusion() {
+        let mut d = Drawing::new_metric();
+        let v = |x: f64, y: f64| Vec3::new(x, y, 0.0);
+        let floor = Mesh {
+            vertices: vec![v(-5.0, -5.0), v(5.0, -5.0), v(5.0, 5.0), v(-5.0, 5.0)],
+            faces: vec![MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }],
+            kind: MeshKind::Polyface,
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Mesh(floor)).unwrap();
+        let s = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        let view = fit(&s, Projection::new(Vec3::new(-1.0, -0.5, 0.7)), 200, 150).unwrap();
+        let mut off = s.clone();
+        if let Some(l) = off.lighting.as_mut() {
+            l.ao = 0.0;
+        }
+        let a = rasterize(&s, &view, VisualStyle::Realistic, Rgb(0, 0, 0));
+        let b = rasterize(&off, &view, VisualStyle::Realistic, Rgb(0, 0, 0));
+        assert_eq!(a.rgba, b.rgba);
+    }
+
+    /// A 10 × 10 floor and two 3 × 2 plates over it: the west one 0.5 above, the east one 3.
+    fn plates() -> Scene {
+        let mut d = Drawing::new_metric();
+        let quad = |x0: f64, x1: f64, y0: f64, y1: f64, z: f64| Mesh {
+            vertices: vec![Vec3::new(x0, y0, z), Vec3::new(x1, y0, z), Vec3::new(x1, y1, z), Vec3::new(x0, y1, z)],
+            faces: vec![MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }],
+            kind: MeshKind::Polyface,
+        };
+        for m in [quad(-5.0, 5.0, -5.0, 5.0, 0.0), quad(-4.0, -1.0, -1.0, 1.0, 0.5), quad(1.0, 4.0, -1.0, 1.0, 3.0)] {
+            d.add(&Space::Model, Common::default(), EntityKind::Mesh(m)).unwrap();
+        }
+        scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0))
+    }
+
+    /// How wide (drawing units) the penumbra across the shadow edge at y = 1 below x is, the sun
+    /// overhead and `degrees` across.
+    fn penumbra(map: &ShadowMap, x: f64, degrees: f32) -> f64 {
+        let t = sun_tan_half(degrees);
+        let step = 0.002;
+        let soft = (0..1000).map(|i| Vec3::new(x, i as f64 * step, 0.001)).filter(|p| (0.05..0.95).contains(&map.lit_soft(*p, t))).count();
+        soft as f64 * step
+    }
+
+    #[test]
+    fn soft_shadows_widen_with_the_distance_from_what_casts_them() {
+        let s = plates();
+        let map = ShadowMap::new(&s, Vec3::Z).unwrap();
+        // Under the plates: in shadow; beside them: lit (sharp or soft).
+        for t in [0.0, sun_tan_half(3.0)] {
+            assert!(map.lit_soft(Vec3::new(-2.5, 0.0, 0.001), t) < 0.05);
+            assert!(map.lit_soft(Vec3::new(2.5, 0.0, 0.001), t) < 0.05);
+            assert!(map.lit_soft(Vec3::new(0.0, 3.0, 0.001), t) > 0.95);
+        }
+        let (low_sharp, high_sharp) = (penumbra(&map, -2.5, 0.0), penumbra(&map, 2.5, 0.0));
+        let (low, high) = (penumbra(&map, -2.5, 3.0), penumbra(&map, 2.5, 3.0));
+        // Sharp shadows: about a texel either way, whatever the height.
+        assert!(low_sharp < 0.02 && high_sharp < 0.02, "{low_sharp} {high_sharp}");
+        // Soft: wider than sharp, and the plate 3 up casts a much wider penumbra than the one
+        // 0.5 up (about 2 × height × tan(1.5°): 0.16 against 0.03).
+        assert!(low > low_sharp && high > low * 2.5, "{low} {high}");
+        assert!(high > 0.08 && high < 0.4, "{high}");
+        // A bigger sun, a wider penumbra.
+        assert!(penumbra(&map, 2.5, 6.0) > high);
+    }
+
+    #[test]
+    fn soft_shadows_show_in_the_realistic_image() {
+        // Seen from above, the sun a little off overhead: floor pixels between full shadow and
+        // full sun, against both.
+        let s = plates();
+        let view = fit(&s, None, 300, 300).unwrap();
+        let partial = |deg: f32| {
+            let mut s = s.clone();
+            if let Some(l) = s.lighting.as_mut() {
+                l.sun = Some((Vec3::new(0.2, 0.1, 1.0).normalized(), [3.0; 3]));
+                l.sun_size = deg;
+                l.ao = 0.0;
+            }
+            let r = rasterize(&s, &view, VisualStyle::Realistic, Rgb(0, 0, 0));
+            if let Ok(out) = std::env::var("CDY_RENDER_DUMP") {
+                std::fs::write(format!("{out}/soft-{deg}.png"), r.encode_png().unwrap()).unwrap();
+            }
+            let at = |p: Vec3| {
+                let (x, y, _) = view.screen(p);
+                luma(r.pixel(x as u32, y as u32).unwrap())
+            };
+            // In the high plate's shadow where the plate doesn't hide it, and in the open.
+            let (shadow, sun) = (at(Vec3::new(0.7, -0.3, 0.0)), at(Vec3::new(0.0, 3.5, 0.0)));
+            assert!(sun > shadow + 40.0, "{sun} {shadow}");
+            let (lo, hi) = (view.screen(Vec3::new(-4.8, 4.8, 0.0)), view.screen(Vec3::new(4.8, -4.8, 0.0)));
+            let mut n = 0;
+            for y in lo.1 as u32..hi.1 as u32 {
+                for x in lo.0 as u32..hi.0 as u32 {
+                    let l = luma(r.pixel(x, y).unwrap());
+                    if l > shadow + (sun - shadow) * 0.1 && l < sun - (sun - shadow) * 0.1 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let (sharp, soft) = (partial(0.0), partial(4.0));
+        assert!(soft > sharp * 3 && soft > 200, "{sharp} {soft}");
+    }
+
+    #[test]
+    fn tone_curves_change_the_realistic_image() {
+        use cadaddy_doc::lighting::ToneMap;
+        let imgs: Vec<Raster> = ToneMap::ALL.iter().map(|t| courtyard_look(|l| l.tone = *t).0).collect();
+        for (i, a) in imgs.iter().enumerate() {
+            for b in imgs.iter().skip(i + 1) {
+                assert_ne!(a.rgba, b.rgba);
+            }
+        }
+        // The drawing's own setting reaches the lighting.
+        let mut d = courtyard(None);
+        d.sun.look.tone_map = ToneMap::Neutral;
+        d.sun.look.ambient_occlusion = 0.5;
+        d.sun.look.soft_shadows = 2.0;
+        let l = crate::light::Lighting::of(&d, &Space::Model);
+        assert_eq!((l.tone, l.ao, l.sun_size), (ToneMap::Neutral, 0.5, 2.0));
+    }
+
+    #[test]
+    fn hostile_look_values_do_not_panic() {
+        for (ao, radius, size) in [
+            (f32::NAN, f64::NAN, f32::NAN),
+            (f32::INFINITY, f64::INFINITY, f32::INFINITY),
+            (-1.0, -1.0, -1.0),
+            (1e30, 1e-300, 1e30),
+            (2.0, 1e300, 90.0),
+        ] {
+            let (r, _) = courtyard_look(|l| {
+                l.ao = ao;
+                l.ao_radius = radius;
+                l.sun_size = size;
+            });
+            assert_eq!(r.rgba.len(), 320 * 240 * 4);
+        }
+        assert_eq!(sun_tan_half(f32::NAN), 0.0);
+        assert!(sun_tan_half(1e30).is_finite());
     }
 }

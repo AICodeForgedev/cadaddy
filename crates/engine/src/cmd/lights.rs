@@ -1,9 +1,10 @@
 //! Lights of rendered views: LIGHT (and POINTLIGHT, SPOTLIGHT, DISTANTLIGHT), light.set and
 //! LIGHTLIST; the sun (SUNPROPERTIES, SUNSTATUS) and the exposure of rendered views
-//! (RENDEREXPOSURE). The model is [`cadaddy_doc::lighting`]; the Realistic visual style draws
-//! with them ([`cadaddy_render::light`]).
+//! (RENDEREXPOSURE), and how the Realistic visual style finishes its image (VISUALSTYLES: ambient
+//! occlusion, soft shadows, the tone curve). The model is [`cadaddy_doc::lighting`]; the
+//! Realistic visual style draws with them ([`cadaddy_render::light`]).
 
-use cadaddy_doc::lighting::{Attenuation, Light, LightKind, Sun};
+use cadaddy_doc::lighting::{Attenuation, Light, LightKind, Look, Sun, ToneMap};
 use cadaddy_doc::{EntityKind, Handle};
 use cadaddy_geom::{Vec2, Vec3};
 use serde_json::{Value, json};
@@ -38,6 +39,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("renderexposure", "Render Exposure", run_exposure)
             .menu(&["View", "Render", "Render Exposure"])
             .params("{exposure?: stops (−20 … 20; + brighter)} → {exposure}"),
+        CommandSpec::new("visualstyles", "Visual Styles Manager", run_look)
+            .menu(&["View", "Visual Styles", "Visual Styles Manager"])
+            .alias(&["vsm"])
+            .params("{ambientOcclusion?: 0 … 2 (how much corners and creases darken; 0 off), aoRadius?: drawing units (how far a surface looks for what shades it; 0 by the model's size), softShadows?: degrees 0 … 10 (the sun's apparent size, widening shadow edges away from what casts them; 0 sharp), toneMap?: filmic|reinhard|neutral|linear} → those settings — how the Realistic visual style (and its plots and exports) finishes its image")
+            .interactive(|_| Ok(Box::new(LookM::default()))),
     ]
 }
 
@@ -204,7 +210,7 @@ fn sun_json(sun: &Sun) -> Value {
     json!({
         "on": sun.on, "date": format!("{:04}-{:02}-{:02}", sun.year, sun.month, sun.day), "time": format!("{:02}:{:02}", sun.minutes / 60, sun.minutes % 60),
         "latitude": sun.latitude, "longitude": sun.longitude, "timezone": sun.timezone, "north": sun.north, "intensity": sun.intensity,
-        "exposure": sun.exposure, "elevation": el, "azimuth": az,
+        "exposure": sun.exposure, "elevation": el, "azimuth": az, "look": look_json(&sun.look),
     })
 }
 
@@ -259,6 +265,124 @@ fn run_exposure(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.sun.exposure = v;
     }
     Ok(json!({ "exposure": s.doc()?.sun.exposure }))
+}
+
+fn look_json(l: &Look) -> Value {
+    json!({ "ambientOcclusion": l.ambient_occlusion, "aoRadius": l.ao_radius, "softShadows": l.soft_shadows, "toneMap": l.tone_map.as_str() })
+}
+
+/// VISUALSTYLES: the Realistic style's ambient occlusion, soft shadows and tone curve (kept with
+/// the drawing's sun, so plots and exports of the drawing use them too).
+fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut look = s.doc()?.sun.look.clone();
+    let mut changed = false;
+    for (key, field, hi) in [
+        ("ambientOcclusion", &mut look.ambient_occlusion, Look::MAX_AO),
+        ("aoRadius", &mut look.ao_radius, 1e12),
+        ("softShadows", &mut look.soft_shadows, Look::MAX_SOFT),
+    ] {
+        if let Some(v) = num(p, key)? {
+            if !(0.0..=hi).contains(&v) {
+                return Err(bad("visualstyles", format!("`{key}` must be from 0 to {hi}")));
+            }
+            *field = v;
+            changed = true;
+        }
+    }
+    if let Some(t) = str_param(p, "toneMap") {
+        look.tone_map =
+            ToneMap::parse(t).ok_or_else(|| bad("visualstyles", format!("unknown tone curve `{t}` (filmic, reinhard, neutral or linear)")))?;
+        changed = true;
+    }
+    let look = look.sane();
+    let r = look_json(&look);
+    if changed {
+        s.doc_mut()?.sun.look = look;
+    }
+    Ok(r)
+}
+
+/// What VISUALSTYLES asks for next at the command line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LookAsk {
+    #[default]
+    Option,
+    Ambient,
+    Radius,
+    Soft,
+    Tone,
+}
+
+/// VISUALSTYLES at the command line: pick a setting, give its value, until Enter.
+#[derive(Default)]
+struct LookM {
+    ask: LookAsk,
+}
+
+impl LookM {
+    fn set(&mut self, s: &mut Session, key: &str, v: Value) -> Result<Step> {
+        self.ask = LookAsk::Option;
+        if let Err(e) = run_look(s, &json!({ key: v })) {
+            s.echo(e.to_string());
+        }
+        Ok(Step::Continue)
+    }
+}
+
+impl Interactive for LookM {
+    fn name(&self) -> &'static str {
+        "VISUALSTYLES"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let l = s.doc().map(|d| d.sun.look.clone()).unwrap_or_default();
+        match self.ask {
+            LookAsk::Option => {
+                Prompt::new("Enter an option", Accept::TEXT).kw(&["Ambient occlusion", "Radius", "Soft shadows", "Tone map", "eXit"]).default("eXit")
+            }
+            LookAsk::Ambient => Prompt::new("Ambient occlusion strength (0 off … 2)", Accept::NUMBER).default(format!("{}", l.ambient_occlusion)),
+            LookAsk::Radius => Prompt::new("Ambient occlusion reach (0: by the model's size)", Accept::NUMBER).default(format!("{}", l.ao_radius)),
+            LookAsk::Soft => {
+                Prompt::new("Sun size for soft shadows in degrees (0 sharp … 10)", Accept::NUMBER).default(format!("{}", l.soft_shadows))
+            }
+            LookAsk::Tone => Prompt::new("Tone curve", Accept::TEXT).kw(&["Filmic", "Reinhard", "Neutral", "Linear"]).default(match l.tone_map {
+                ToneMap::Filmic => "Filmic",
+                ToneMap::Reinhard => "Reinhard",
+                ToneMap::Neutral => "Neutral",
+                ToneMap::Linear => "Linear",
+            }),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter if self.ask == LookAsk::Option => return Ok(Step::Done),
+            Input::Enter => {
+                self.ask = LookAsk::Option;
+                return Ok(Step::Continue);
+            }
+            Input::Text(t) | Input::Keyword(t) => t,
+            _ => return Err(EngineError::Other("Invalid option keyword.".into())),
+        };
+        let t = text.trim();
+        let number = || t.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(|| EngineError::Other("Requires a number.".into()));
+        match self.ask {
+            LookAsk::Option => {
+                let k = t.to_ascii_lowercase();
+                self.ask = match k.as_str() {
+                    "x" | "exit" => return Ok(Step::Done),
+                    _ if k.starts_with('a') => LookAsk::Ambient,
+                    _ if k.starts_with('r') => LookAsk::Radius,
+                    _ if k.starts_with('s') => LookAsk::Soft,
+                    _ if k.starts_with('t') => LookAsk::Tone,
+                    _ => return Err(EngineError::Other("Invalid option keyword.".into())),
+                };
+                Ok(Step::Continue)
+            }
+            LookAsk::Ambient => self.set(s, "ambientOcclusion", json!(number()?)),
+            LookAsk::Radius => self.set(s, "aoRadius", json!(number()?)),
+            LookAsk::Soft => self.set(s, "softShadows", json!(number()?)),
+            LookAsk::Tone => self.set(s, "toneMap", json!(t)),
+        }
+    }
 }
 
 /// LIGHT at the command line: the kind (unless the command names it), the position, then where

@@ -19,7 +19,7 @@
 use cadaddy_geom::Vec3;
 
 use crate::images::Raster;
-use crate::light::{Lighting, Surface, brdf_cos, env_or_sky, incoming, tonemap_wb, view_background};
+use crate::light::{Lighting, Surface, brdf_cos, env_or_sky, incoming, view_background};
 use crate::shade::{Scene, ShadeView};
 
 /// Render quality presets (RENDERPRESETS): samples per pixel, bounces, and whether to filter.
@@ -534,10 +534,11 @@ impl Render {
                     l[i] += thr[i] * rgb[i] * f[i];
                 }
             };
-            // The sun, from a random point of its disc (half a degree across).
+            // The sun, from a random point of its disc (as wide as the look's sun size, so soft
+            // shadows match the Realistic style's).
             if let Some((sd, rgb)) = self.lit.sun {
                 let (t, b) = basis(sd);
-                let (r, a) = ((rng.f()).sqrt() * 0.0045, rng.f() * std::f64::consts::TAU);
+                let (r, a) = ((rng.f()).sqrt() * crate::shade::sun_tan_half(self.lit.sun_size), rng.f() * std::f64::consts::TAU);
                 let dir = (sd + t * (r * a.cos()) + b * (r * a.sin())).normalized();
                 if n.dot(dir) > 0.0 && !self.bvh.occluded(off, dir, self.far * 2.0) {
                     add(rgb, brdf_cos(n, v, dir, &s));
@@ -695,13 +696,12 @@ impl Render {
             }
         }
         let crop = self.opts.crop;
-        let wb = self.lit.white_balance;
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for (i, px) in c.iter().enumerate() {
             let (x, y) = ((i % w as usize) as u32, (i / w as usize) as u32);
             let inside = crop.is_none_or(|(a, b, cc, d)| x >= a && x < cc && y >= b && y < d);
             let rgb = if inside { *px } else { view_background(&self.lit, 1.0 - (y as f32 + 0.5) / h as f32) };
-            let t = tonemap_wb(rgb, self.lit.exposure, wb);
+            let t = self.lit.display(rgb);
             rgba.extend([t[0], t[1], t[2], 255]);
         }
         Raster::new(w, h, rgba).unwrap_or(Raster { width: 0, height: 0, rgba: Vec::new() })
@@ -831,6 +831,10 @@ mod tests {
             fog: None,
             background: crate::light::Background::default(),
             white_balance: [1.0, 1.0, 1.0],
+            ao: 0.0,
+            ao_radius: 0.0,
+            sun_size: 0.0,
+            tone: Default::default(),
         };
         // Looking into the room from the open side.
         let view = ShadeView {

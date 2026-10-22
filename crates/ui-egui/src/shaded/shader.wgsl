@@ -1,7 +1,8 @@
 // CADaddy shaded model view: lit triangles and lines, orthographic, positions relative to an
 // origin. The Realistic style lights physically (cadaddy_render::light, the same equations): sky
 // and sun (with a shadow map), up to 16 lights, microfacet materials with base colour textures,
-// a filmic tone curve with exposure.
+// a tone curve with exposure; screen-space ambient occlusion from a depth pre-pass and
+// percentage-closer soft shadows (cadaddy_render::ao: the same steps and constants).
 struct Light {
     // xyz: position (distant: towards the light); w: kind (0 distant, 1 point, 2 spot)
     pos: vec4<f32>,
@@ -37,6 +38,17 @@ struct U {
     // x: shadow depth bias (depth units); y: 1 when there is a shadow map; z: normal offset
     // (world units)
     shadow: vec4<f32>,
+    // Soft shadows. x: tangent of the sun's apparent radius (0: sharp); y: shadow-map texels
+    // per world unit; z: world units per shadow depth unit; w: the blocker search's radius
+    // (texels)
+    soft: vec4<f32>,
+    // Ambient occlusion. xyz: the view's right; w: strength (0 off)
+    ao_right: vec4<f32>,
+    // xyz: the view's up; w: the disc's radius in pixels
+    ao_up: vec4<f32>,
+    // x: world units a pixel; y: reach (world units); z: world units per depth unit; w: the
+    // tone curve (0 filmic, 1 Reinhard, 2 neutral, 3 linear)
+    ao: vec4<f32>,
     lights: array<Light, 16>,
 };
 @group(0) @binding(0) var<uniform> u: U;
@@ -47,6 +59,14 @@ struct U {
 // Baked indirect light (LIGHTBAKE), RGBM: colour × alpha × 8.
 @group(0) @binding(5) var lm_tex: texture_2d<f32>;
 @group(0) @binding(6) var lm_sampler: sampler;
+// The opaque surfaces' depth (a pre-pass), for ambient occlusion.
+@group(0) @binding(7) var ao_depth: texture_depth_2d;
+
+// Neighbours the ambient occlusion and the soft shadows look at (AO_TAPS, SOFT_TAPS).
+const TAPS: i32 = 16;
+// Most texels a penumbra spans (SOFT_MAX_TEXELS); how far a neighbour must rise (AO_BIAS).
+const SOFT_MAX: f32 = 24.0;
+const AO_BIAS: f32 = 0.1;
 
 struct VI {
     @location(0) p: vec3<f32>,
@@ -97,10 +117,41 @@ fn enc(c: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2)), 1.0);
 }
 
-// The ACES fitted tone curve, exposure applied, then the sRGB curve.
-fn tonemap(c: vec3<f32>) -> vec3<f32> {
+// The neutral curve (cadaddy_render::light::neutral).
+fn neutral(c0: vec3<f32>) -> vec3<f32> {
+    let lo = min(c0.r, min(c0.g, c0.b));
+    let offset = select(0.04, lo - 6.25 * lo * lo, lo < 0.08);
+    var c = c0 - vec3<f32>(offset);
+    let peak = max(c.r, max(c.g, c.b));
+    if (peak < 0.76) {
+        return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    let d = 1.0 - 0.76;
+    let np = 1.0 - d * d / (peak + d - 0.76);
+    c = c * (np / peak);
+    let g = 1.0 - 1.0 / (0.15 * (peak - np) + 1.0);
+    return clamp(mix(c, vec3<f32>(np), g), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Exposure and the tone curve (cadaddy_render::light::tone_curve).
+fn tone_curve(c: vec3<f32>) -> vec3<f32> {
     let x = max(c * u.params.z * 0.8, vec3<f32>(0.0));
-    let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+    let op = u.ao.w;
+    if (op < 0.5) {
+        return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (op < 1.5) {
+        return clamp(x * (vec3<f32>(1.0) + x / 16.0) / (vec3<f32>(1.0) + x), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (op < 2.5) {
+        return neutral(x);
+    }
+    return clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Exposure and the tone curve, then the sRGB curve.
+fn tonemap(c: vec3<f32>) -> vec3<f32> {
+    let y = tone_curve(c);
     let lo = y * 12.92;
     let hi = 1.055 * pow(y, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(hi, lo, y <= vec3<f32>(0.0031308));
@@ -140,6 +191,12 @@ fn vs_line(v: VI, i: II) -> VO {
 @vertex
 fn vs_shadow(v: VI, i: II) -> @builtin(position) vec4<f32> {
     return u.shadow_vp * vec4<f32>(place(i, v.p), 1.0);
+}
+
+// The view's opaque surfaces, for the ambient occlusion's depth pre-pass.
+@vertex
+fn vs_depth(v: VI, i: II) -> @builtin(position) vec4<f32> {
+    return u.vp * vec4<f32>(place(i, v.p), 1.0);
 }
 
 // The sky behind a Realistic view: a full-screen triangle, horizon to zenith.
@@ -199,7 +256,61 @@ fn surround(env: vec3<f32>, base: vec3<f32>, rough: f32, metal: f32) -> vec3<f32
     return env * (base * kd + spec * (0.3 + gloss));
 }
 
-// How lit by the sun the point is (0 shadowed … 1 lit), 3 × 3 samples.
+// The `k`-th of `n` points of a golden-angle spiral filling the unit disc
+// (cadaddy_render::ao::disc).
+fn disc(k: i32, n: i32) -> vec2<f32> {
+    let a = f32(k) * 2.39996323;
+    let r = sqrt((f32(k) + 0.5) / f32(n));
+    return vec2<f32>(cos(a), sin(a)) * r;
+}
+
+// How open to the sky the surface at pixel `pos` with normal `n` is (1 open … 0 enclosed):
+// neighbours on a disc that rise above its tangent plane within the reach shade it
+// (cadaddy_render::ao::occlusion).
+fn occlusion(pos: vec2<f32>, n: vec3<f32>) -> f32 {
+    if (u.ao_right.w <= 0.0 || u.ao_up.w < 1.0) {
+        return 1.0;
+    }
+    let dims = vec2<i32>(textureDimensions(ao_depth));
+    let pix = vec2<i32>(floor(pos));
+    if (any(pix < vec2<i32>(0)) || any(pix >= dims)) {
+        return 1.0;
+    }
+    let raw0 = textureLoad(ao_depth, pix, 0);
+    if (raw0 >= 1.0) {
+        return 1.0;
+    }
+    let z0 = (0.5 - raw0) * u.ao.z;
+    let nv = vec3<f32>(dot(n, u.ao_right.xyz), dot(n, u.ao_up.xyz), dot(n, u.eye.xyz));
+    var occ = 0.0;
+    for (var k = 0; k < TAPS; k = k + 1) {
+        let s = vec2<i32>(floor(pos + disc(k, TAPS) * u.ao_up.w));
+        if (any(s < vec2<i32>(0)) || any(s >= dims)) {
+            continue;
+        }
+        let off = vec2<f32>(s - pix);
+        if (off.x == 0.0 && off.y == 0.0) {
+            continue;
+        }
+        let raw = textureLoad(ao_depth, s, 0);
+        if (raw >= 1.0) {
+            continue;
+        }
+        let d = vec3<f32>(off.x * u.ao.x, -off.y * u.ao.x, (0.5 - raw) * u.ao.z - z0);
+        let len = length(d);
+        if (len <= 1e-12) {
+            continue;
+        }
+        let rise = max(dot(nv, d) / len - AO_BIAS, 0.0);
+        occ = occ + rise * clamp(2.0 - len / u.ao.y, 0.0, 1.0);
+    }
+    // A crease can hide at most half the disc: that half, fully risen, closes it.
+    return clamp(1.0 - u.ao_right.w * 2.0 * occ / f32(TAPS), 0.0, 1.0);
+}
+
+// How lit by the sun the point is (0 shadowed … 1 lit): sharp shadows filter 3 × 3 samples;
+// soft ones find the casters near the point, whose distance sets the penumbra's width, then
+// filter over it (percentage-closer soft shadows).
 fn sun_visibility(wp: vec3<f32>, n: vec3<f32>) -> f32 {
     if (u.shadow.y < 0.5) {
         return 1.0;
@@ -209,7 +320,35 @@ fn sun_visibility(wp: vec3<f32>, n: vec3<f32>) -> f32 {
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
         return 1.0;
     }
-    let texel = 1.0 / f32(textureDimensions(shadow_map).x);
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    let texel = 1.0 / size.x;
+    if (u.soft.x > 0.0) {
+        let zr = c.z - u.shadow.x;
+        let at = uv * size;
+        var blockers = 0.0;
+        var count = 0.0;
+        for (var k = 0; k < TAPS; k = k + 1) {
+            let t = vec2<i32>(floor(at + disc(k, TAPS) * u.soft.w));
+            if (any(t < vec2<i32>(0)) || any(t >= vec2<i32>(size))) {
+                continue;
+            }
+            let d = textureLoad(shadow_map, t, 0);
+            if (d < zr) {
+                blockers = blockers + d;
+                count = count + 1.0;
+            }
+        }
+        if (count < 0.5) {
+            return 1.0;
+        }
+        let gap = (zr - blockers / count) * u.soft.z;
+        let radius = clamp(gap * u.soft.x * u.soft.y, 1.0, SOFT_MAX);
+        var lit = 0.0;
+        for (var k = 0; k < TAPS; k = k + 1) {
+            lit = lit + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + disc(k, TAPS) * radius * texel, zr);
+        }
+        return lit / f32(TAPS);
+    }
     var sum = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
@@ -227,10 +366,15 @@ fn physical(o: VO, n: vec3<f32>, back: bool) -> vec4<f32> {
     let rough = o.m.x;
     let metal = o.m.y;
     let v = normalize(u.eye.xyz);
-    var col = ambient(n, base, rough, metal);
+    // Ambient occlusion on opaque surfaces (see-through ones are not in the depth pre-pass).
+    var open = 1.0;
+    if (o.m.w >= 0.99) {
+        open = occlusion(o.pos.xy, n);
+    }
+    var col = ambient(n, base, rough, metal) * open;
     if (o.lm.x >= 0.0) {
         let t = textureSampleLevel(lm_tex, lm_sampler, select(o.lm.xy, o.lm.zw, back), 0.0);
-        col = surround(t.rgb * t.a * 8.0, base, rough, metal);
+        col = surround(t.rgb * t.a * 8.0, base, rough, metal) * open;
     }
     if (u.sun_dir.w > 0.5) {
         col = col + u.sun_rgb.rgb * sun_visibility(o.wp, n) * brdf_cos(n, v, normalize(u.sun_dir.xyz), base, rough, metal);

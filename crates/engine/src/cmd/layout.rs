@@ -91,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
-            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), colorDepth?: 24|8|1 (raster devices), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot)} (typed or from the menu: the Plot dialog)")
+            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), colorDepth?: 24|8|1 (raster devices), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot), shadePlot?: asDisplayed|wireframe|hidden|shaded|shadedWithEdges|realistic|rendered (Model: plot in that visual style whatever the view shows; Realistic lights it as VISUALSTYLES sets)} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
             .params("{…the parameters of plot, device?: plotter name, upsideDown?: bool, plotArea?: …|view (Model), view?: named view, savePageSetup?: bool (a layout's page setup keeps the device, paper, orientation, plot style table, lineweights and fit)} (typed: AutoCAD's command-line plot questions, detailed configuration Yes/No)")
@@ -1107,15 +1107,34 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             None => o.remove("plotTransparency"),
         };
     }
+    // Shade plot: a visual style for model space whatever the view shows (Rendered: Realistic).
+    let shade_plot = match str_param(p, "shadePlot").map(str::trim) {
+        None => None,
+        Some(t) if t.replace([' ', '_'], "").eq_ignore_ascii_case("asdisplayed") => None,
+        Some(t) if t.eq_ignore_ascii_case("rendered") => Some(cadaddy_render::shade::VisualStyle::Realistic),
+        Some(t) => Some(cadaddy_render::shade::VisualStyle::parse(t.trim_start_matches("legacy").trim_start_matches("Legacy")).ok_or_else(|| {
+            bad(cmd, format!("unknown shade plot `{t}` (asDisplayed, wireframe, hidden, shaded, shadedWithEdges, realistic or rendered)"))
+        })?),
+    };
     // Model space as displayed: a 3D view or a visual style plots shaded (`shade: false` plots
-    // the plan's vectors; a window, pages or several layouts keep the vector plot).
+    // the plan's vectors; a window, limits, a named view, pages or several layouts keep the
+    // vector plot). The display and the extents shade the whole view.
+    let whole_view = match str_param(p, "plotArea").map(str::to_ascii_lowercase).as_deref() {
+        None => p.get("window").is_none(),
+        Some("display" | "extents") => true,
+        Some(_) => false,
+    };
     if space == Space::Model
         && opts.get("shade").is_none()
-        && ["window", "pages", "layouts"].iter().all(|k| opts.get(*k).is_none())
+        && whole_view
+        && ["pages", "layouts"].iter().all(|k| opts.get(*k).is_none())
         && s.space() == Space::Model
-        && let Some(shade) = super::view::view3d::shade_options(s)
+        && let Some(shade) = super::view::view3d::shade_options_as(s, shade_plot)
     {
         opts["shade"] = shade;
+        if let Some(o) = opts.as_object_mut() {
+            o.remove("window");
+        }
     }
     if opts.get("shade").is_some_and(|v| !v.is_object())
         && let Some(o) = opts.as_object_mut()

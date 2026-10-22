@@ -648,6 +648,13 @@ fn sun_and_exposure_round_trip() {
     d.sun.latitude = 40.0;
     d.sun.longitude = -99.0;
     d.sun.exposure = 1.5;
+    // The Realistic style's look (VISUALSTYLES) travels with the sun.
+    d.sun.look = cadaddy_doc::lighting::Look {
+        ambient_occlusion: 1.5,
+        ao_radius: 250.0,
+        soft_shadows: 3.0,
+        tone_map: cadaddy_doc::lighting::ToneMap::Reinhard,
+    };
     let bytes = model::write(&d, None).unwrap();
     let (back, rep) = model::read(&bytes).unwrap();
     assert_eq!(back.sun, d.sun, "{:?}", rep.notes);
