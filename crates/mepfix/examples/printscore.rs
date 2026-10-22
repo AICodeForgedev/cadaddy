@@ -3,7 +3,10 @@
 //! same sheet number. It prints only counts, rates, timings and error classes, never a sheet's
 //! name, number, title or text, so its output can be shared when the prints can't.
 //!
-//! `cargo run --release -p cadaddy-mepfix --example printscore -- [--pages N] [--detail] <pdf or folder>…`
+//! `cargo run --release -p cadaddy-mepfix --example printscore -- [--pages N] [--detail] [--grid-out FILE] <pdf or folder>…`
+//!
+//! `--grid-out` writes the assembled grid (labels and feet) as JSON, to compare with a model of
+//! the building kept beside the prints.
 //!
 //! Stages: every page imported (`pdf_read`), each recognised as a sheet (number, discipline,
 //! level, scale, grid), newer revisions replacing older sheets of the same number, the sheet
@@ -57,12 +60,14 @@ fn import(bytes: &[u8], page: u32) -> Result<cadaddy_io::pdf_read::PdfImport, St
 fn main() {
     let mut max_pages = usize::MAX;
     let mut detail = false;
+    let mut grid_out: Option<PathBuf> = None;
     let mut inputs = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--pages" => max_pages = args.next().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX),
             "--detail" => detail = true,
+            "--grid-out" => grid_out = args.next().map(PathBuf::from),
             _ => inputs.push(PathBuf::from(a)),
         }
     }
@@ -168,22 +173,52 @@ fn main() {
         t.elapsed().as_secs_f64() * 1000.0
     );
 
+    if let Some(path) = &grid_out {
+        let lines = |g: &[cadaddy_mepfix::truth::GridLine]| g.iter().map(|l| (l.label.clone(), l.at_ft)).collect::<Vec<_>>();
+        let json = serde_json::json!({ "x": lines(&map.grid_x), "y": lines(&map.grid_y) });
+        if let Err(e) = std::fs::write(path, json.to_string()) {
+            eprintln!("grid-out: {e}");
+        }
+    }
+
     // The readers that read DXF sheets: the current plan sheets of the disciplines they read,
     // imported again one at a time and written as DXF.
     let t = Instant::now();
     let mut dxf: Vec<(String, Vec<u8>)> = Vec::new();
     let mut last: Option<(usize, Vec<u8>)> = None;
+    let mut height_notes: BTreeMap<String, usize> = BTreeMap::new();
     for p in current.iter().filter(|p| ["A", "S", "M", "P", "FP", "E"].contains(&p.rec.discipline.as_str())) {
         if last.as_ref().is_none_or(|(f, _)| *f != p.file) {
             last = files.get(p.file).and_then(|f| std::fs::read(f).ok()).map(|b| (p.file, b));
         }
         let Some((_, bytes)) = &last else { continue };
-        match import(bytes, p.page).and_then(|imp| cadaddy_io::write(&imp.drawing, "sheet.dxf").map_err(|e| e.to_string())) {
+        let imp = match import(bytes, p.page) {
+            Ok(imp) => imp,
+            Err(e) => {
+                *errors.entry(format!("import: {}", class(&e))).or_default() += 1;
+                continue;
+            }
+        };
+        // Height notes on the MEP plans (BOD @, BOP @, BOC @, AFF…), read from any text.
+        if ["M", "P", "FP", "E"].contains(&p.rec.discipline.as_str()) {
+            for e in imp.drawing.model.iter() {
+                let v = match &e.kind {
+                    cadaddy_doc::EntityKind::Text(t) => t.value.as_str(),
+                    cadaddy_doc::EntityKind::MText(t) => t.contents.as_str(),
+                    _ => continue,
+                };
+                if let Some(h) = cadaddy_mepfix::heights::parse_height_note(v) {
+                    *height_notes.entry(format!("{}:{:?}", p.rec.discipline, h.reference)).or_default() += 1;
+                }
+            }
+        }
+        match cadaddy_io::write(&imp.drawing, "sheet.dxf").map_err(|e| e.to_string()) {
             Ok(b) => dxf.push((p.rec.number.clone(), b)),
             Err(e) => *errors.entry(format!("dxf: {}", class(&e))).or_default() += 1,
         }
     }
     drop(last);
+    println!("height notes on MEP plans (discipline:reference): {height_notes:?}");
     println!(
         "dxf written: {} ({:.0} ms, {:.0} MB)",
         dxf.len(),
