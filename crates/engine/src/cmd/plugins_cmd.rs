@@ -23,7 +23,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let action = str_param(p, "action").unwrap_or("list");
     match action {
         "list" => run_list(s),
-        "load" => run_load(s, p),
+        "load" => {
+            not_from_plugin(s, "load a plug-in")?;
+            run_load(s, p)
+        }
         "enable" => {
             users_only(s, "enable a plug-in")?;
             run_enable(s, p, true)
@@ -36,16 +39,33 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "revoke" => run_grant(s, p, false),
         "remove" => run_remove(s, p),
         "commands" => run_commands(s),
-        "reload" => run_reload(s),
+        "reload" => {
+            not_from_plugin(s, "reload plug-ins")?;
+            run_reload(s)
+        }
         _ => Err(bad("plugins", format!("unknown action: {action}"))),
     }
 }
 
-/// Enabling and granting run code with the user's trust: never on an agent's say-so.
+/// Enable and grant run code with the user's trust: never on an agent's say-so and never from
+/// inside a plug-in's host call. MUST 2 (Q5036): a plug-in that has `files` can't escalate
+/// to `network` or enable an agent-loaded plug-in.
 fn users_only(s: &Session, what: &str) -> Result<()> {
     if s.agent.from_agent {
         return Err(bad("plugins", format!("only a person can {what}: ask the user to run PLUGINS in CADaddy")));
     }
+    not_from_plugin(s, what)?;
+    Ok(())
+}
+
+/// Trust-changing actions (enable, grant, load, reload) may not run from inside a plug-in's
+/// host call (plugin_depth > 0), regardless of that plug-in's grants.
+fn not_from_plugin(s: &Session, what: &str) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if s.plugin_depth > 0 {
+        return Err(bad("plugins", format!("only a person can {what}: a plug-in may not change plug-in trust")));
+    }
+    let _ = s;
     Ok(())
 }
 
@@ -91,13 +111,36 @@ fn run_load(s: &mut Session, p: &Value) -> Result<Value> {
         // Copy to the plugins directory so it persists.
         let plugins_dir = s.plugins.dir().ok_or_else(|| crate::EngineError::Other("cannot determine plugins directory".into()))?;
         let _ = std::fs::create_dir_all(&plugins_dir);
-        let dest = plugins_dir.join(path.file_name().ok_or_else(|| bad("plugins", "invalid file name"))?);
+        let file_name = path.file_name().ok_or_else(|| bad("plugins", "invalid file name"))?;
+        let dest = plugins_dir.join(file_name);
+
+        // The name that load_plugin_as will derive (file stem).
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let by_agent = s.agent.from_agent;
+
+        // MUST 1 (Q5036): refuse an agent's load if the name is already loaded or its
+        // file already exists in the plugins folder — before any copy, so the agent
+        // can never overwrite a trusted plug-in's code.
+        if by_agent {
+            if s.plugins.plugins.iter().any(|p| p.name == name) {
+                return Err(bad("plugins", format!("plug-in '{name}' is already installed: an agent may not replace it")));
+            }
+            if dest.exists() && dest != path {
+                return Err(bad(
+                    "plugins",
+                    format!("a file named '{}' already exists in the plugins folder: an agent may not overwrite it", file_name.to_string_lossy()),
+                ));
+            }
+            // An agent's load always starts with no trust: disabled and no grants.
+            s.plugins.save_permissions(name, &crate::plugins::PluginPermissions { allowed: false, files: false, network: false });
+        }
+
+        // Non-agent loads also check name collision (existing behaviour in
+        // load_plugin_as), but they may overwrite the file (a user re-loading).
         if dest != path {
             std::fs::copy(path, &dest).map_err(|e| crate::EngineError::Other(format!("cannot copy plugin: {e}")))?;
         }
 
-        // An agent's plug-in waits for the user (PLUGINS enable).
-        let by_agent = s.agent.from_agent;
         s.plugins.load_plugin_as(&dest, by_agent)?;
         let plugin = s.plugins.plugins.last().ok_or_else(|| crate::EngineError::Other("plugin not loaded".into()))?;
         let (name, enabled) = (plugin.name.clone(), plugin.enabled);
