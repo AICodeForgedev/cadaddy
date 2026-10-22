@@ -87,7 +87,10 @@ fn spec() -> Value {
             {"layer": "A-ROOM-TAG", "role": "room_tag"}
         ],
         "wall_types": [
-            {"name": "Exterior", "thickness_in": 6},
+            {"name": "Exterior", "thickness_in": 6, "assembly": {"tag": "X1", "layers": [
+                {"material": "5/8\" gypsum board", "thickness_in": 0.625, "category": "board"},
+                {"material": "3 5/8\" metal studs @ 16\" o.c.", "thickness_in": 3.625, "category": "framing"},
+                {"material": "exterior sheathing and finish", "thickness_in": 1.75, "category": "sheathing"}]}},
             {"name": "Partition", "thickness_in": 4.875, "from": "centerline"}
         ],
         "rooms": [{"name": "Office"}, {"name": "Storage", "ceiling_ft": 9}],
@@ -317,6 +320,13 @@ fn provenance_is_checked() {
     let r = p.s.execute("bim.validate", &json!({"checks": ["provenance"]})).unwrap();
     assert_eq!(r["total"], json!(0), "{r:#}");
     assert!(p.s.execute("bim.source", &json!({"handles": extra, "status": "guess"})).is_err());
+    // A box deeper than the wall's 3 5/8" studs, and a bad depth refused.
+    p.s.execute("bim.source", &json!({"handles": extra, "status": "fixed", "source": "E-101", "boxDepth": 6})).unwrap();
+    let r = p.s.execute("bim.validate", &json!({"checks": ["physical"]})).unwrap();
+    let f = r["failures"].as_array().unwrap().iter().find(|f| f["rule"] == "box_too_deep").unwrap_or_else(|| panic!("{r:#}"));
+    assert_eq!(f["element"], json!(extra[0]));
+    assert!(f["expected"].as_str().unwrap().contains("3.625") || f["expected"].as_str().unwrap().contains("3 5/8"), "{f}");
+    assert!(p.s.execute("bim.source", &json!({"handles": extra, "status": "fixed", "boxDepth": -1})).is_err());
 }
 
 #[test]

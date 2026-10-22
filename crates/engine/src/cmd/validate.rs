@@ -64,7 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{id: failure id, path?: PNG file (else base64), width?, height? (900×700), around?: feet (default 12)} → {id, path?|png, width, height}")
             .noundo(),
         CommandSpec::new("bim.source", "Element Provenance", run_source).params(
-            "{handles: [hex], status: fixed|rule|zone|field_verified|override|agent, source?: text (sheet and place, note, rule), homerun?: panel tag (a run), tag?: text, kind?: text} → {changed}: where an element's place and type come from (XDATA CADADDY_PROVENANCE)",
+            "{handles: [hex], status: fixed|rule|zone|field_verified|override|agent, source?: text (sheet and place, note, rule), homerun?: panel tag (a run), tag?: text, kind?: text, boxDepth?: inches (a wall device's box)} → {changed}: where an element's place and type come from (XDATA CADADDY_PROVENANCE)",
         ),
     ]
 }
@@ -615,6 +615,10 @@ fn run_source(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = str_param(p, key).filter(|v| !v.trim().is_empty()) {
             tags.push(RawTag { code: 1000, value: format!("{key}={}", clip(v)) });
         }
+    }
+    if let Some(d) = p.get("boxDepth").filter(|v| !v.is_null()) {
+        let d = d.as_f64().filter(|d| d.is_finite() && *d > 0.0 && *d < 100.0).ok_or_else(|| bad(CMD, "`boxDepth` is a depth in inches"))?;
+        tags.push(RawTag { code: 1000, value: format!("boxdepth={d}") });
     }
     let d = s.doc_mut()?;
     let mut changed = 0;
