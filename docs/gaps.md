@@ -1,6 +1,6 @@
 # Where CADaddy falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (Q233: everyday commands — OOPS, MULTIPLE, COPYTOLAYER, CUTBASE, DIMCENTER, SOLID, FILL, QTEXT, VPMAX/VPMIN, FILTER, ATTREDEF, DXFIN/DXFOUT, UCSMAN and menu options) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-22 · **Change:** minor (Q152: linetype shapes and the linetype / hatch pattern editors) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -78,7 +78,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |
 | FF7 | Table record and object handles from other programs' files are renumbered on the first save (entity handles are kept; `*D` blocks no longer duplicate and once reopened, CADaddy's own files keep every handle across saves, #495) | Low | 4–6 |
 | FF8 | SHX fonts (shape and big fonts) not read | Medium-high (text metrics differ) | 8–12 |
-| FF9 | `.pc3` plotter configuration files; linetype shape (SHX) elements are skipped (templates and `.dwt`, user `.lin`/`.pat` and `.pgp` alias files landed, #552; `.ctb`/`.stb`, #410) | Low-medium | 5–10 |
+| FF9 | `.pc3` plotter configuration files (templates and `.dwt`, user `.lin`/`.pat` and `.pgp` alias files landed, #552; `.ctb`/`.stb`, #410; linetype shapes drawn, plotted and kept, with CADaddy's own shape file and the Linetype / Hatch Pattern Editors, Q152) | Low-medium | 4–8 |
 | FF10 | PDF, DWF and DGN underlays (PDFATTACH; ATTACH says so); no image Properties dialog. Done: IMAGECLIP (rectangle/polygon, ON/OFF/Delete) and IMAGEADJUST (brightness, contrast, fade, drawn and plotted) (0.7.7); IMAGEATTACH (Insert ▸ Raster Image Reference…, typed, JSON; ATTACH picks it for PNG/JPEG and XATTACH for DWG/DXF; 0.7.7), PDF import and conversion (PDFIMPORT, the PDF converter: vectors, text with its fonts, raster images, white-paper pictures as wipeouts, scale from the sheet's scale note), raster IMAGEs read, drawn, plotted and saved (relative paths beside the drawing), PDF export with real text, layers, several sheets and hyperlinks (#567, #571) | Medium | 8–15 |
 | FF11 | DWF/DWFx, DGN, WMF, EPS, ACIS/STL and other exchange formats | Low-medium | 50–100 |
 | FF12 | DWG in the web build | Medium | 6–10 |
@@ -148,6 +148,7 @@ Detail: [localization-parity.md](localization-parity.md).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-21 | minor | Q233: the most-used AutoCAD commands still missing — OOPS, MULTIPLE, COPYTOLAYER, CUTBASE, DIMCENTER, SOLID, FILL, QTEXT, -PAN, VPMAX/VPMIN, FILTER, ATTREDEF, DXFIN/DXFOUT, UCSMAN, New UCS ▸ Origin / Z / 3 Point, View ▸ Attribute Display and UCS Icon items; the next ones listed in F25 |
+| 2026-10-22 | minor | Q152: linetypes with shapes drawn, plotted and kept in DXF/DWG from CADaddy's own `cadaddy.shx` (FENCELINE1/2, TRACKS, BATTING); Linetype Editor and Hatch Pattern Editor with previews, writing user .lin/.pat files; FF9 narrowed to .pc3 |
 | 2026-10-20 | minor | Q234: the same new-user task (open a plan, measure a room, recolour a layer, dimension, note, PDF) timed in CADaddy, LibreCAD and QCAD; fixed unreadable-annotation surprises (hint with DIMSCALE/height), drawings framed under the floating command line, over-wide ribbon flyouts, the Plot dialog's unexplained "None"; what's left is U14 |
 | 2026-10-20 | minor | Q151: 2D drawings from solids — SOLVIEW (Ucs, Ortho, Auxiliary and Section viewports on a layout, each view's -VIS/-HID/-DIM/-HAT layers frozen in the other viewports, kept through DXF), SOLDRAW (visible and hidden profile lines, section outlines and ANSI31 hatches; edges seen edge-on joined), SOLPROF (PV-/PH- profile blocks in the current view) (F24) |
 | 2026-10-19 | minor | Q154: IME composition (Chinese, Japanese, Korean) at the command line and in the MTEXT editor, candidate window at the caret, CJK interface fonts loaded when CJK is typed, `ui.ime` control method; vertical text styles drawn and plotted top to bottom (L4) |

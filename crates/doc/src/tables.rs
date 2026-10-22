@@ -83,11 +83,15 @@ pub struct DashElement {
     /// line direction (`R=`).
     #[serde(default)]
     pub absolute: bool,
+    /// A shape's name in its shape file (`style`), as `.lin` files give it (`[BOX,…]`). DXF keeps
+    /// only the number; the name finds it when the shape file is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_name: Option<String>,
 }
 
 impl DashElement {
     pub fn dash(length: f64) -> Self {
-        DashElement { length, text: None, shape: None, style: None, scale: 1.0, rotation: 0.0, offset: Vec2::ZERO, absolute: false }
+        DashElement { length, text: None, shape: None, style: None, scale: 1.0, rotation: 0.0, offset: Vec2::ZERO, absolute: false, shape_name: None }
     }
 }
 

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 892,
-    "count": 892,
+    "callableAsJson": 894,
+    "count": 894,
     "ids": [
       "-attedit",
       "-block",
@@ -360,6 +360,7 @@
       "groups.list",
       "handover.schedules",
       "hatch",
+      "hatch.pattern.define",
       "hatch.patterns",
       "hatchedit",
       "hatchpick",
@@ -465,6 +466,7 @@
       "limits",
       "line",
       "linetype",
+      "linetype.define",
       "lisp",
       "lisp.dialog",
       "lisp.tile",

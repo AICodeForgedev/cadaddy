@@ -1,4 +1,4 @@
-//! Readers for the user's own linetype (`.lin`) and hatch pattern (`.pat`) files.
+//! Readers and writers for the user's own linetype (`.lin`) and hatch pattern (`.pat`) files.
 //!
 //! Both follow the publicly documented text formats: a header line `*NAME[,description]`, then
 //! the definition (`A,dash,gap,…` for a linetype, `angle, x, y, dx, dy[, dash, …]` lines for
@@ -122,7 +122,7 @@ pub fn parse_lin(text: &str) -> Parsed<Linetype> {
             out.warn(no, format!("linetype {name} is defined twice; the first definition is kept"));
             continue;
         }
-        match lin_pattern(line, no, &name, &mut out) {
+        match lin_pattern(line) {
             Ok(pattern) => out.items.push(Linetype { name, description, pattern }),
             Err(e) => out.warn(no, format!("linetype {name}: {e}; skipped")),
         }
@@ -160,7 +160,7 @@ fn lin_fields(line: &str) -> std::result::Result<Vec<&str>, String> {
 }
 
 /// The elements of a pattern line `A,dash,gap,[…],…`.
-fn lin_pattern(line: &str, no: usize, name: &str, out: &mut Parsed<Linetype>) -> std::result::Result<Vec<DashElement>, String> {
+fn lin_pattern(line: &str) -> std::result::Result<Vec<DashElement>, String> {
     let mut fields = lin_fields(line)?;
     // The alignment field ("A") comes first; a line of plain numbers is read as well.
     if fields.first().is_some_and(|f| f.eq_ignore_ascii_case("a")) {
@@ -179,29 +179,61 @@ fn lin_pattern(line: &str, no: usize, name: &str, out: &mut Parsed<Linetype>) ->
             continue;
         };
         let inner = inner.strip_suffix(']').ok_or_else(|| format!("`{f}` is not a complete [ ] element"))?;
-        match lin_text(inner)? {
-            Some(text) => {
-                // The text sits at the end of the element before it (a zero-length one if none).
-                if pattern.last().is_none_or(|e| e.text.is_some()) {
-                    pattern.push(DashElement::dash(0.0));
-                }
-                if let Some(last) = pattern.last_mut() {
-                    *last = DashElement { length: last.length, ..text };
-                }
-            }
-            None => {
-                let shape = inner.split(',').next().unwrap_or("").trim();
-                out.warn(no, format!("linetype {name}: shape {shape} needs an SHX shape file, which CADaddy can't read; left out"));
-            }
+        let el = match lin_text(inner)? {
+            Some(text) => text,
+            None => lin_shape(inner)?,
+        };
+        // A text or shape sits at the end of the element before it (a zero-length one if none).
+        if pattern.last().is_none_or(|e| e.text.is_some() || e.shape_name.is_some() || e.shape.is_some()) {
+            pattern.push(DashElement::dash(0.0));
+        }
+        if let Some(last) = pattern.last_mut() {
+            *last = DashElement { length: last.length, ..el };
         }
     }
     if pattern.is_empty() {
         return Err("no dashes".into());
     }
-    if pattern.iter().all(|e| e.length == 0.0) && pattern.iter().all(|e| e.text.is_none()) {
+    if pattern.iter().all(|e| e.length == 0.0) && pattern.iter().all(|e| e.text.is_none() && e.shape_name.is_none()) {
         return Err("every element has zero length".into());
     }
     Ok(pattern)
+}
+
+/// A `SHAPE,FILE.shx,key=value…` element (the inside of `[…]`): the shape by name; its number is
+/// looked up in the shape file when the linetype is loaded.
+fn lin_shape(inner: &str) -> std::result::Result<DashElement, String> {
+    let mut parts = inner.split(',').map(str::trim);
+    let shape = parts.next().unwrap_or("");
+    if shape.is_empty() || shape.chars().count() > 64 || !shape.chars().all(|c| c.is_alphanumeric() || "_-$".contains(c)) {
+        return Err(format!("shape element: bad shape name `{shape}`"));
+    }
+    let file = parts.next().unwrap_or("").trim();
+    if file.is_empty() || file.contains('=') || file.chars().count() > MAX_NAME_CHARS || file.chars().any(char::is_control) {
+        return Err(format!("shape element {shape}: the shape file is missing"));
+    }
+    let mut e = DashElement { shape_name: Some(shape.to_ascii_uppercase()), style: Some(file.to_string()), ..DashElement::dash(0.0) };
+    options(&mut e, parts, "shape element")?;
+    Ok(e)
+}
+
+/// The `S=`, `X=`, `Y=`, `R=`/`A=`/`U=` options of a text or shape element.
+fn options<'a>(e: &mut DashElement, parts: impl Iterator<Item = &'a str>, what: &str) -> std::result::Result<(), String> {
+    for kv in parts.filter(|p| !p.is_empty()) {
+        let (k, v) = kv.split_once('=').ok_or_else(|| format!("{what}: `{kv}` is not key=value"))?;
+        match k.trim().to_ascii_uppercase().as_str() {
+            "S" => e.scale = number(v).filter(|s| *s > 0.0).ok_or_else(|| format!("{what}: bad scale `{v}`"))?,
+            "X" => e.offset.x = number(v).ok_or_else(|| format!("{what}: bad X offset `{v}`"))?,
+            "Y" => e.offset.y = number(v).ok_or_else(|| format!("{what}: bad Y offset `{v}`"))?,
+            // Upright text keeps a rotation relative to the line, like R.
+            k @ ("R" | "A" | "U") => {
+                e.rotation = angle(v).ok_or_else(|| format!("{what}: bad rotation `{v}`"))?;
+                e.absolute = k == "A";
+            }
+            other => return Err(format!("{what}: unknown option `{other}`")),
+        }
+    }
+    Ok(())
 }
 
 /// A `"TEXT",STYLE,key=value…` element (the inside of `[…]`), or `None` for a shape element.
@@ -221,20 +253,7 @@ fn lin_text(inner: &str) -> std::result::Result<Option<DashElement>, String> {
         return Err("text element: the text style is missing".into());
     }
     let mut e = DashElement { text: Some(text.to_string()), style: Some(style.to_string()), ..DashElement::dash(0.0) };
-    for kv in parts.filter(|p| !p.is_empty()) {
-        let (k, v) = kv.split_once('=').ok_or_else(|| format!("text element: `{kv}` is not key=value"))?;
-        match k.trim().to_ascii_uppercase().as_str() {
-            "S" => e.scale = number(v).filter(|s| *s > 0.0).ok_or_else(|| format!("text element: bad scale `{v}`"))?,
-            "X" => e.offset.x = number(v).ok_or_else(|| format!("text element: bad X offset `{v}`"))?,
-            "Y" => e.offset.y = number(v).ok_or_else(|| format!("text element: bad Y offset `{v}`"))?,
-            // Upright text keeps a rotation relative to the line, like R.
-            k @ ("R" | "A" | "U") => {
-                e.rotation = angle(v).ok_or_else(|| format!("text element: bad rotation `{v}`"))?;
-                e.absolute = k == "A";
-            }
-            other => return Err(format!("text element: unknown option `{other}`")),
-        }
-    }
+    options(&mut e, parts, "text element")?;
     Ok(Some(e))
 }
 
@@ -316,6 +335,90 @@ pub fn parse_pat(text: &str) -> Parsed<UserPattern> {
     }
     finish(cur, &mut out);
     out
+}
+
+// ---------- writing ----------
+
+/// A number as the files write it: as short as it reads back exactly.
+fn num(v: f64) -> String {
+    if v == 0.0 { "0".into() } else { format!("{v}") }
+}
+
+/// A `*NAME,description` header line (commas in the description would end it early).
+fn head(name: &str, description: &str) -> std::result::Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains([',', '*', ';', '\n', '\r']) {
+        return Err(format!("`{name}` can't be a name in the file"));
+    }
+    let d = description.replace([',', '\n', '\r'], " ");
+    Ok(if d.trim().is_empty() { format!("*{name}\n") } else { format!("*{name},{}\n", d.trim()) })
+}
+
+/// The `S=`, `R=`/`A=`, `X=`, `Y=` options of a text or shape element.
+fn element_options(e: &DashElement) -> String {
+    let mut o = format!(",S={}", num(if e.scale.is_finite() && e.scale > 0.0 { e.scale } else { 1.0 }));
+    if e.absolute {
+        o += &format!(",A={}", num(e.rotation.to_degrees()));
+    } else if e.rotation != 0.0 && e.rotation.is_finite() {
+        o += &format!(",R={}", num(e.rotation.to_degrees()));
+    }
+    if e.offset.x != 0.0 {
+        o += &format!(",X={}", num(e.offset.x));
+    }
+    if e.offset.y != 0.0 {
+        o += &format!(",Y={}", num(e.offset.y));
+    }
+    o
+}
+
+/// Linetypes as a `.lin` file ([`parse_lin`] reads them back): `*NAME,description`, then
+/// `A,` and each element's length, a text or shape in brackets after the element it ends.
+/// A shape needs its name (`DashElement::shape_name`).
+pub fn write_lin(linetypes: &[Linetype]) -> std::result::Result<String, String> {
+    let mut out = String::from(";; Linetypes written by CADaddy\n");
+    for lt in linetypes.iter().take(MAX_DEFINITIONS) {
+        out += &head(&lt.name, &lt.description)?;
+        let mut fields = vec!["A".to_string()];
+        for e in lt.pattern.iter().take(MAX_LINETYPE_ELEMENTS) {
+            if !e.length.is_finite() {
+                return Err(format!("linetype {}: a length that isn't a number", lt.name));
+            }
+            fields.push(num(e.length));
+            if let Some(t) = &e.text {
+                if t.contains(['"', '\n', '\r']) {
+                    return Err(format!("linetype {}: text `{t}` can't be written in a .lin file", lt.name));
+                }
+                fields.push(format!("[\"{t}\",{}{}]", e.style.as_deref().unwrap_or("STANDARD"), element_options(e)));
+            } else if e.shape.is_some() || e.shape_name.is_some() {
+                let Some(shape) = e.shape_name.as_deref() else {
+                    return Err(format!("linetype {}: shape {} has no name (its shape file wasn't found)", lt.name, e.shape.unwrap_or(0)));
+                };
+                fields.push(format!("[{shape},{}{}]", e.style.as_deref().unwrap_or(super::SHAPE_FILE), element_options(e)));
+            }
+        }
+        out += &fields.join(",");
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Hatch patterns as a `.pat` file ([`parse_pat`] reads them back): `*NAME, description`, then a
+/// line per family.
+pub fn write_pat(patterns: &[UserPattern]) -> std::result::Result<String, String> {
+    let mut out = String::from(";; Hatch patterns written by CADaddy\n");
+    for p in patterns.iter().take(MAX_DEFINITIONS) {
+        out += &head(&p.name, &p.description)?;
+        for l in p.lines.iter().take(MAX_PATTERN_FAMILIES) {
+            let mut v = vec![l.angle, l.origin.0, l.origin.1, l.delta.0, l.delta.1];
+            v.extend(l.dashes.iter().take(MAX_PATTERN_DASHES));
+            if v.iter().any(|x| !x.is_finite()) {
+                return Err(format!("pattern {}: a value that isn't a number", p.name));
+            }
+            out += &v.iter().map(|x| num(*x)).collect::<Vec<_>>().join(", ");
+            out.push('\n');
+        }
+    }
+    Ok(out)
 }
 
 /// One line family: `angle, x-origin, y-origin, delta-x, delta-y[, dash-1, dash-2, …]`.
