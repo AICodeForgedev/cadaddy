@@ -510,6 +510,62 @@ fn assign_devices_to_hotel_sheets(t: &mut Truth) {
     }
 }
 
+/// Tags of the cable tray (`12x4 CT` / `BOT @ 9'-2"`, north of it) and of each feeder conduit
+/// bank (`(2) 2"C` / `BOC @ 9'-2"`, south of it, on the southmost conduit), on the power plans.
+pub fn tag_trays(t: &mut Truth, st: &Style) {
+    let scale_of: BTreeMap<String, f64> = t.sheets.iter().map(|s| (s.number.clone(), s.scale)).collect();
+    let mut tags: Vec<(String, Tag, String)> = Vec::new();
+    for s in t.segments.iter().filter(|s| !s.vertical && (s.kind == "tray" || s.kind == "conduit")) {
+        let th = st.text_in / scale_of.get(&s.sheet).copied().unwrap_or(0.125);
+        let [a, b] = s.path_ft;
+        let h = s.height.clone().unwrap_or_default();
+        let half = crate::design::width_in(&s.shape, s.size_in) / 24.0;
+        if s.kind == "tray" {
+            let lines = vec![
+                format!("{}x{} CT", crate::truth::fmt_in(s.size_in[0]), crate::truth::fmt_in(s.size_in[1])),
+                format!("BOT @ {}", feet_inches(h.bottom_ft)),
+            ];
+            let at = [a[0] + (b[0] - a[0]) * 0.5, a[1] + half + th * 2.2];
+            tags.push((
+                s.id.clone(),
+                Tag { text: lines, at_ft: [round(at[0]), round(at[1])], leader: false },
+                format!("BOT @ {}", feet_inches(h.bottom_ft)),
+            ));
+        } else {
+            // One tag per bank: on the conduit with no other south of it on the same run.
+            let bank: Vec<&Segment> = t
+                .segments
+                .iter()
+                .filter(|o| {
+                    o.kind == "conduit"
+                        && !o.vertical
+                        && o.level == s.level
+                        && (o.path_ft[0][0] - a[0]).abs() < 1e-6
+                        && (o.path_ft[1][0] - b[0]).abs() < 1e-6
+                })
+                .collect();
+            if bank.iter().any(|o| o.path_ft[0][1] < a[1] - 1e-6) {
+                continue;
+            }
+            let lines = vec![format!("({}) {}\"C", bank.len(), pipe_size(s.size_in[0])), format!("BOC @ {}", feet_inches(h.bottom_ft))];
+            let at = [a[0] + (b[0] - a[0]) * 0.62, a[1] - half - th * 2.2];
+            tags.push((
+                s.id.clone(),
+                Tag { text: lines, at_ft: [round(at[0]), round(at[1])], leader: false },
+                format!("BOC @ {}", feet_inches(h.bottom_ft)),
+            ));
+        }
+    }
+    for (id, tag, note) in tags {
+        if let Some(s) = t.segments.iter_mut().find(|s| s.id == id) {
+            s.tag = Some(tag);
+            if let Some(h) = s.height.as_mut() {
+                h.note = Some(note);
+            }
+        }
+    }
+}
+
 /// Size tags (and height notes, slopes) on the runs, placed for the sheet they are drawn on.
 pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
     let scale_of: BTreeMap<String, f64> = t.sheets.iter().map(|s| (s.number.clone(), s.scale)).collect();
@@ -518,7 +574,8 @@ pub fn tag_runs(t: &mut Truth, st: &Style, planted: &[String], r: &mut Rng) {
     for group in runs(t) {
         let members: Vec<&Segment> = group.iter().filter_map(|i| t.segments.get(*i)).collect();
         let Some(first) = members.first() else { continue };
-        if first.vertical {
+        // Tray and conduit banks are tagged as a whole below.
+        if first.vertical || first.kind == "tray" || first.kind == "conduit" {
             continue;
         }
         let total: f64 = members.iter().map(|s| s.length_ft()).sum();

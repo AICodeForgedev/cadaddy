@@ -36,7 +36,7 @@ pub fn pipe_od(n: f64) -> f64 {
 /// The depth (vertical size) of a segment's cross-section, inches.
 pub fn depth_in(shape: &str, size: [f64; 2]) -> f64 {
     match shape {
-        "rect" => size[1],
+        "rect" | "tray" => size[1],
         "round" => size[0],
         _ => pipe_od(size[0]),
     }
@@ -45,7 +45,7 @@ pub fn depth_in(shape: &str, size: [f64; 2]) -> f64 {
 /// The width (across, on the plan) of a segment's cross-section, inches.
 pub fn width_in(shape: &str, size: [f64; 2]) -> f64 {
     match shape {
-        "rect" => size[0],
+        "rect" | "tray" => size[0],
         "round" => size[0],
         _ => pipe_od(size[0]),
     }
@@ -138,7 +138,10 @@ impl Net {
         self.segs.push(Segment {
             id: id.clone(),
             system: system.into(),
-            kind: if shape == "pipe" { "pipe".into() } else { "duct".into() },
+            kind: match shape {
+                "pipe" | "tray" | "conduit" => shape.into(),
+                _ => "duct".into(),
+            },
             shape: shape.into(),
             size_in: size,
             from: self.nodes.get(a).map(|n| n.id.clone()).unwrap_or_default(),
@@ -1297,6 +1300,9 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     // ---- Electrical -----------------------------------------------------------------------
     elec_design(&mut t, &floors, &xs, y1, y2, y3, cw, r);
 
+    // ---- Cable tray and feeder conduit (coordination trades) ----------------------------------
+    tray_design(&mut net, &mut t, &floors, &xs, y1, cw, w0, x_last0, cw_main, seed);
+
     // ---- Node kinds, risers ----------------------------------------------------------------
     finish_kinds(&mut net);
     t.nodes = net.nodes;
@@ -1747,6 +1753,69 @@ fn finish_kinds(net: &mut Net) {
             [_, _, _] => "tee".into(),
             _ => "cross".into(),
         };
+    }
+}
+
+/// Cable tray and a feeder conduit bank down each floor's corridor, and a conduit riser bank
+/// from the level 1 panels up to level 2's (coordination only: no circuiting).
+///
+/// They hang in the plumbing band, laterally between the corridor sprinkler drops (south) and
+/// the domestic water mains (north): the bank first, 3" clear, then the tray. Corridor widths
+/// set the sizes so both fit: 6' corridors a 6" tray and (2) 2" conduits, 7' a 12" tray and
+/// (2) 2", 8' a 12" tray and (2) 3" or (3) 2". The tray is 4" deep; both sit on the band's
+/// bottom (above the corridor ceiling). They run from just past the mech room (its return
+/// grilles and duct risers) to the toilet bay (the plumbing turns there).
+#[allow(clippy::too_many_arguments)]
+fn tray_design(net: &mut Net, t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, cw: f64, w0: f64, x_last0: f64, cw_main: f64, seed: u64) {
+    // A stream of its own: the rest of each set doesn't move.
+    let mut r = Rng::new(seed ^ 0x5452_4159_434F);
+    let tray_w = if cw < 6.5 { 6.0 } else { 12.0 };
+    let (n_bank, bank_d) = if cw < 7.5 { (2, 2.0) } else { r.pick(&[(2usize, 3.0f64), (3, 2.0)]) };
+    let gap = 1.0 / 12.0; // between conduits
+    let od = pipe_od(bank_d) / 12.0;
+    let lo = y1 + 0.2 * cw + 0.3;
+    let bank_ys: Vec<f64> = (0..n_bank).map(|k| lo + od / 2.0 + k as f64 * (od + gap)).collect();
+    let tray_y = lo + n_bank as f64 * od + (n_bank as f64 - 1.0) * gap + 0.25 + tray_w / 24.0;
+    let (xa, xb) = (w0 + 2.0, x_last0 - 1.0);
+    for c in [("CT", "CABLE TRAY", "tray"), ("EC", "FEEDER CONDUIT", "conduit")] {
+        if !t.systems.iter().any(|s| s.code == c.0) {
+            t.systems.push(System {
+                code: c.0.into(),
+                name: c.1.into(),
+                kind: c.2.into(),
+                printed: if c.0 == "CT" { "CT".into() } else { "C".into() },
+            });
+        }
+    }
+    let _ = xs;
+    let mut l1_bank: Vec<usize> = Vec::new();
+    for f in floors {
+        let lv = f.code.as_str();
+        let e = f.elev;
+        let sheet = format!("E-20{lv}");
+        // The band's bottom: the plumbing band's.
+        let bottom = e + f.pl_c - pipe_od(cw_main.max(2.0)) / 24.0;
+        let tz = bottom + 2.0 / 12.0;
+        let a = net.node("cap", "CT", lv, [xa, tray_y, tz]);
+        let b = net.node("cap", "CT", lv, [xb, tray_y, tz]);
+        net.link(a, b, "CT", "tray", [tray_w, 4.0], lv, &sheet);
+        let cz = bottom + od / 2.0;
+        for y in &bank_ys {
+            let a = net.node("cap", "EC", lv, [xa, *y, cz]);
+            let b = net.node("cap", "EC", lv, [xb, *y, cz]);
+            net.link(a, b, "EC", "conduit", [bank_d, bank_d], lv, &sheet);
+        }
+        // The riser bank between the panels in the mech room: (4) 2" from level 1 to level 2.
+        let x0 = xs.first().copied().unwrap_or(0.0);
+        let rz = e + 7.0;
+        let ends: Vec<usize> = (0..4).map(|k| net.node("cap", "EC", lv, [x0 + 3.0 + 0.3 * k as f64, 2.0, rz])).collect();
+        if lv == "1" {
+            l1_bank = ends;
+        } else {
+            for (lo_n, hi_n) in l1_bank.iter().zip(&ends) {
+                net.link(*lo_n, *hi_n, "EC", "conduit", [2.0, 2.0], "1", "E-201");
+            }
+        }
     }
 }
 

@@ -39,6 +39,7 @@ pub mod score;
 pub mod sheet_reader;
 pub mod struct_reader;
 pub mod style;
+pub mod tray_reader;
 pub mod truth;
 pub mod wall_reader;
 pub mod walls;
@@ -128,6 +129,7 @@ fn generate_set(seed: u64, with_gaps: bool) -> Result<FixtureSet, String> {
     let mut t = d.truth;
     layout::plan_sheets(&mut t, &st, &mut r.fork(3));
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
+    layout::tag_trays(&mut t, &st);
     layout::plan_callouts(&mut t, &mut r.fork(5));
     t.clashes = clash::clashes(&t, &d.planted);
     t.placement_zones = clash::placement_zones(&t);

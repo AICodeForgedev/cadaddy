@@ -776,6 +776,8 @@ pub enum MepKind {
     Duct,
     Pipe,
     Conduit,
+    /// Cable tray (width × depth), a coordination trade like the others.
+    Tray,
 }
 
 /// What a duct system carries — determines the default colour when none is set.
@@ -817,6 +819,7 @@ impl MepSystem {
             MepKind::Duct => 4,    // cyan (generic duct, no type set)
             MepKind::Pipe => 3,    // green
             MepKind::Conduit => 6, // magenta
+            MepKind::Tray => 30,   // orange
         }
     }
 }
@@ -1328,6 +1331,7 @@ impl BuildingSpec {
                 MepKind::Duct => "duct",
                 MepKind::Pipe => "pipe",
                 MepKind::Conduit => "conduit",
+                MepKind::Tray => "tray",
             };
             let hidden = if sy.show { "" } else { ", hidden" };
             put(
