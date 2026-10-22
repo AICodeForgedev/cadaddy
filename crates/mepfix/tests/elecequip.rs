@@ -55,7 +55,13 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
         let lights = devices.iter().filter(|d| d.kind == "light_fixture").count();
         println!("seed {seed}: {typed} of {lights} light fixtures typed and linked");
         assert!(typed * 3 > lights, "seed {seed}: {typed} of {lights}");
-        let truth_types: BTreeSet<&str> = t.elec_devices.iter().filter(|d| d.kind == "light_fixture").map(|d| d.type_tag.as_str()).collect();
+        // Types planted as missing from the schedule (`elec_spec.unscheduled`) are left out.
+        let truth_types: BTreeSet<&str> = t
+            .elec_devices
+            .iter()
+            .filter(|d| d.kind == "light_fixture" && !t.elec_spec.unscheduled.contains(&d.type_tag))
+            .map(|d| d.type_tag.as_str())
+            .collect();
         assert!(truth_types.iter().all(|ty| read.fixture_types.contains_key(*ty)), "{truth_types:?} vs {:?}", read.fixture_types.keys());
         for d in devices.iter().filter(|d| d.kind == "light_fixture" && d.type_tag == "A") {
             assert_eq!(d.properties.get("DESCRIPTION").map(String::as_str), Some("2X4 RECESSED TROFFER"));
