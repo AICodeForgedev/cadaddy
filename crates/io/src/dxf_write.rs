@@ -2585,6 +2585,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::overrides_chunks(d) {
         xrecords.push((dxf_ext::OVERRIDES_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::agent_chunks(d) {
+        xrecords.push((dxf_ext::AGENT_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::bim_types_chunks(d) {
         xrecords.push((dxf_ext::BIM_TYPES_KEY, w.h(), chunks));
     }

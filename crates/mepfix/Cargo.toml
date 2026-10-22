@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 # The RFI list's items (shared with the building spec) and the print validator's inputs.
 cadaddy-walk3d = { path = "../walk3d" }
 # Read trays become 3D runs, clash with other trades and export to IFC (tray_reader test).
+# The agent tools are tried on a whole synthetic hotel (agentready test).
 cadaddy-engine = { workspace = true }
 
 [dev-dependencies]

@@ -12,6 +12,7 @@
 //! | BSPC | the building spec | JSON text |
 //! | TOUR | the camera tours | JSON text |
 //! | OVRD | the overrides of generated elements | JSON text |
+//! | AGNT | the agent state (notes, review decisions, change log) | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
 //! | THMB | a PNG preview | raw |
 //!
@@ -35,7 +36,8 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 12] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"OVRD", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 13] =
+    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -432,6 +434,17 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     Some(Ok(o)) => d.overrides = o.to_json().ok(),
                     Some(Err(e)) => rep.notes.push(format!("the overrides couldn't be read: {e}")),
                     None => rep.notes.push("the overrides couldn't be read".into()),
+                }
+                continue;
+            }
+            b"AGNT" => {
+                // Any JSON object (the engine checks it when it reads it).
+                match String::from_utf8(c.data)
+                    .ok()
+                    .filter(|t| t.len() <= MAX_TEXT && serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v.is_object()))
+                {
+                    Some(t) => d.agent = Some(t),
+                    None => rep.notes.push("the agent notes and review decisions couldn't be read".into()),
                 }
                 continue;
             }
