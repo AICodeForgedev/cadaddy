@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 820,
-    "count": 820,
+    "callableAsJson": 824,
+    "count": 824,
     "ids": [
       "-attedit",
       "-block",
@@ -306,6 +306,10 @@
       "gcsymmetric",
       "gctangent",
       "gcvertical",
+      "gear.accept",
+      "gear.check",
+      "gear.list",
+      "gear.review",
       "geographiclocation",
       "geomconstraint",
       "georemove",

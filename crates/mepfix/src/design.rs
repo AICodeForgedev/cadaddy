@@ -1370,6 +1370,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
 
     // ---- Electrical -----------------------------------------------------------------------
     elec_design(&mut t, &floors, &xs, y1, y2, y3, cw, r);
+    // Its own random stream: the rest of each set is drawn as before.
+    gear_design(&mut t, &floors, &xs, &mut Rng::new(seed ^ 0x6EA2_0290));
 
     // ---- Cable tray and feeder conduit (coordination trades) ----------------------------------
     tray_design(&mut net, &mut t, &floors, &xs, y1, cw, w0, x_last0, cw_main, seed);
@@ -1947,6 +1949,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             max_ft: [panel_x + 0.75, panel_y + 0.25],
             schedule: Vec::new(),
             sheet: lsheet.clone(),
+            ..ElecPanel::default()
         });
         let pp_id = format!("EP{:02}", t.elec_panels.len() + 1);
         t.elec_panels.push(ElecPanel {
@@ -1960,6 +1963,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             max_ft: [panel_x + 3.75, panel_y + 0.25],
             schedule: Vec::new(),
             sheet: psheet.clone(),
+            ..ElecPanel::default()
         });
 
         // A transformer on level 1 only.
@@ -1976,6 +1980,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 max_ft: [panel_x + 6.75, panel_y + 0.5],
                 schedule: Vec::new(),
                 sheet: psheet.clone(),
+                ..ElecPanel::default()
             });
         }
 
@@ -2450,6 +2455,187 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
 
     // Light fixture schedule as a general note on the drawing (truth only, drawn separately).
     // The schedule exists in the truth for the E-601 sheet.
+}
+
+/// The electrical gear's schedule data, lug provisions and feeders: the switchboard MDP (the
+/// service), the transformer TX-1, every floor's panels, the disconnect DS-1, with four problems
+/// planted where the field finds them (`Truth::gear_problems`): the MDP's neutral bar short for
+/// the parallel service neutrals, its top entry plate too small for the feeders leaving it, one
+/// power panel's CU-only main lugs on an aluminium feeder, one lighting panel's main lugs too
+/// small for its feeder; and the transformer's secondary lugs ordered separately (a lug kit).
+fn gear_design(t: &mut Truth, floors: &[Floor], xs: &[f64], r: &mut Rng) {
+    use cadaddy_walk3d::{Enclosure, Feeder, Termination};
+    let Some(first) = floors.first() else { return };
+    let lv1 = first.code.clone();
+    let panel_x = xs.first().copied().unwrap_or(0.0) + 2.0;
+    let panel_y = 2.0;
+    let lug = |point: &str, lugs: u32, range: &str, material: &str| Termination {
+        point: point.into(),
+        lugs,
+        range: range.into(),
+        material: material.into(),
+        ..Termination::default()
+    };
+    let size_text = |s: [f64; 3]| format!("{}\"W x {}\"D x {}\"H", s[0], s[1], s[2]);
+    let entry_text = |e: [f64; 2]| if e[0] > 0.0 { format!("{}\" x {}\"", e[0], e[1]) } else { "NONE".to_string() };
+    // The switchboard and the disconnect, beside the floor's panels.
+    for (id_n, tag, kind, dx, w, d) in [(0, "MDP", "switchboard", 10.0, 72.0, 36.0), (1, "DS-1", "disconnect", 15.0, 16.0, 8.0)] {
+        let (cx, cy) = (panel_x + dx, panel_y + d / 24.0);
+        t.elec_panels.push(ElecPanel {
+            id: format!("EG{:02}", id_n + 1),
+            tag: tag.into(),
+            kind: kind.into(),
+            level: lv1.clone(),
+            room: format!("ELEC-{lv1}"),
+            at_ft: [cx, cy, first.elev],
+            min_ft: [cx - w / 24.0, cy - d / 24.0],
+            max_ft: [cx + w / 24.0, cy + d / 24.0],
+            sheet: format!("E-20{lv1}"),
+            ..ElecPanel::default()
+        });
+    }
+    let n_floors = floors.len();
+    let bad_p = floors.get(r.range(0, n_floors.max(1))).map(|f| format!("P{}", f.code)).unwrap_or_default();
+    let bad_l = floors.get(r.range(0, n_floors.max(1))).map(|f| format!("L{}", f.code)).unwrap_or_default();
+    // Feeders: the service, the transformer, every floor's power and lighting panels, the disconnect.
+    let mut feeders = vec![Feeder {
+        tag: "F-SVC".into(),
+        sets: 4,
+        size: "600 kcmil".into(),
+        material: "al".into(),
+        grounds: 0,
+        extra_grounds: vec!["3/0".into(), "#2".into()],
+        conduits: 4,
+        conduit_in: 4.0,
+        entry: "bottom".into(),
+        to: "MDP".into(),
+        ..Feeder::default()
+    }];
+    feeders.push(Feeder {
+        tag: "F-TX1".into(),
+        from: "MDP".into(),
+        to: "TX-1".into(),
+        size: "#8".into(),
+        neutrals: 0,
+        ground_size: "#10".into(),
+        conduit_in: 0.75,
+        ..Feeder::default()
+    });
+    for f in floors {
+        feeders.push(Feeder {
+            tag: format!("F-P{}", f.code),
+            from: "MDP".into(),
+            to: format!("P{}", f.code),
+            size: "3/0".into(),
+            material: "al".into(),
+            ground_size: "#6".into(),
+            conduit_in: 2.0,
+            ..Feeder::default()
+        });
+    }
+    for f in floors {
+        feeders.push(Feeder {
+            tag: format!("F-L{}", f.code),
+            from: "TX-1".into(),
+            to: format!("L{}", f.code),
+            size: "1/0".into(),
+            ground_size: "#6".into(),
+            conduit_in: 1.5,
+            ..Feeder::default()
+        });
+    }
+    feeders.push(Feeder {
+        tag: "F-DS1".into(),
+        from: "MDP".into(),
+        to: "DS-1".into(),
+        size: "#6".into(),
+        neutrals: 0,
+        ground_size: "#10".into(),
+        conduit_in: 1.0,
+        ..Feeder::default()
+    });
+    // The MDP's neutral bar: one position short of the service's four parallel neutrals and the
+    // power panels' neutrals. Its ground bar: room to spare.
+    let mdp_neutrals = u32::try_from(4 + n_floors).unwrap_or(8);
+    let mdp_grounds = u32::try_from(2 + 1 + n_floors + 1).unwrap_or(8);
+    let mut problems = vec![("MDP".to_string(), "neutral bar".to_string()), ("MDP".to_string(), "entry".to_string())];
+    for p in &mut t.elec_panels {
+        let mut props = BTreeMap::new();
+        let (size, bottom, mounting, voltage, rating, typ) = match p.kind.as_str() {
+            "switchboard" => {
+                p.terminations = vec![
+                    lug("main", 4, "#2-600 kcmil", "cu/al"),
+                    lug("breaker", 1, "#14-350 kcmil", "cu/al"),
+                    lug("neutral_bar", mdp_neutrals - 1, "#6-600 kcmil", "cu/al"),
+                    lug("ground_bar", mdp_grounds + 4, "#14-4/0", "cu/al"),
+                ];
+                // The top plate: too small for the feeders leaving it.
+                p.enclosure = Some(Enclosure { top_entry_in: [6.0, 3.0], bottom_entry_in: [60.0, 20.0], gutter_in: [12.0, 20.0] });
+                ([72.0, 36.0, 90.0], 0.0, "FLOOR".to_string(), "480Y/277V, 3PH, 4W", "2000A", "SWITCHBOARD")
+            }
+            "transformer" => {
+                let secondary = Termination {
+                    point: "secondary".into(),
+                    lugs: 1,
+                    range: "#6-250 kcmil".into(),
+                    material: "cu/al".into(),
+                    lug_type: "compression".into(),
+                    supplied: false,
+                    bolt_in: 0.375,
+                    holes: 1,
+                    stack_in: 0.5,
+                    ..Termination::default()
+                };
+                p.terminations = vec![
+                    lug("primary", 1, "#14-1/0", "cu/al"),
+                    secondary,
+                    lug("neutral_bar", 6, "#6-250 kcmil", "cu/al"),
+                    lug("ground_bar", 6, "#14-1/0", "cu/al"),
+                ];
+                ([18.0, 12.0, 30.0], 0.0, "FLOOR".to_string(), "480V-208Y/120V", "45 KVA", "TRANSFORMER")
+            }
+            "disconnect" => {
+                p.terminations = vec![lug("line", 1, "#14-#2", "cu/al"), lug("load", 1, "#14-#2", "cu/al"), lug("ground_bar", 3, "#14-#4", "cu/al")];
+                ([16.0, 8.0, 24.0], 48.0, "SURFACE, TOP @ 6'-0\"".to_string(), "480V, 3PH", "60A NF", "DISCONNECT SWITCH")
+            }
+            _ => {
+                let power = p.tag.starts_with('P');
+                let mut main =
+                    lug("main", 1, if p.tag == bad_l { "#14-#2" } else { "#6-250 kcmil" }, if power && p.tag == bad_p { "cu" } else { "cu/al" });
+                main.bending_in = 8.0;
+                p.terminations = vec![
+                    main,
+                    lug("breaker", 1, "#14-#2", "cu/al"),
+                    lug("neutral_bar", 42, "#14-4/0", "cu/al"),
+                    lug("ground_bar", 30, "#14-#4", "cu/al"),
+                ];
+                if p.tag == bad_p {
+                    problems.push((p.tag.clone(), "lug material".into()));
+                }
+                if p.tag == bad_l {
+                    problems.push((p.tag.clone(), "lug range".into()));
+                }
+                let v = if power { "480Y/277V, 3PH, 4W" } else { "208Y/120V, 3PH, 4W" };
+                ([18.0, 6.0, 60.0], 18.0, "SURFACE, TOP @ 6'-6\"".to_string(), v, "225A MLO", "PANELBOARD")
+            }
+        };
+        p.size_in = size;
+        p.bottom_in = bottom;
+        if let Some(e) = &p.enclosure {
+            props.insert("TOP ENTRY".to_string(), entry_text(e.top_entry_in));
+            props.insert("BOTTOM ENTRY".to_string(), entry_text(e.bottom_entry_in));
+            props.insert("GUTTER".to_string(), entry_text(e.gutter_in));
+        }
+        props.insert("TYPE".to_string(), typ.to_string());
+        props.insert("VOLTAGE".to_string(), voltage.to_string());
+        props.insert("RATING".to_string(), rating.to_string());
+        props.insert("SIZE".to_string(), size_text(size));
+        props.insert("MOUNTING".to_string(), mounting);
+        p.properties = props;
+    }
+    problems.sort();
+    t.elec_feeders = feeders;
+    t.gear_problems = problems;
 }
 
 fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
