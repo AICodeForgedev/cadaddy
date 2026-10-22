@@ -530,7 +530,7 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
 pub fn block_lists(dwg: &Dwg, ents: &[Entity]) -> Result<std::collections::HashMap<u64, Vec<u64>>> {
     let classes = dwg.classes()?;
     let names = Names::read(dwg, &classes);
-    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+    let next = links(dwg, &classes, ents);
     let mut out = std::collections::HashMap::new();
     for (block, contents) in names.block_contents() {
         let list = match contents {
@@ -553,11 +553,36 @@ pub fn block_lists(dwg: &Dwg, ents: &[Entity]) -> Result<std::collections::HashM
     Ok(out)
 }
 
+/// Each entity's next entity (R2000 links a block's entities, an INSERT's attributes and a
+/// POLYLINE's vertices so): those of `ents`, and in an R2000 file those of the entities that
+/// weren't decoded (a type not read yet, or damaged data after the common data), so the ones
+/// after them aren't lost.
+fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::HashMap<u64, u64> {
+    let mut next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+    if dwg.version >= Version::R2004 {
+        return next;
+    }
+    let decoded: std::collections::HashSet<u64> = ents.iter().map(|e| e.handle).collect();
+    for raw in dwg.objects.iter().filter(|o| !decoded.contains(&o.handle)) {
+        let entity = match raw.type_code {
+            t if t >= 500 => classes.get(t).is_some_and(|c| c.item_class_id == 0x1F2),
+            // Fixed entity types (spec §20.3), REGION, 3DSOLID, BODY and OLE2FRAME among them.
+            t => kinds::fixed_name(t).is_some() || matches!(t, 37 | 38 | 39 | 74),
+        };
+        if !entity {
+            continue;
+        }
+        if let Some(n) = Obj::open(raw, dwg.version).and_then(|mut o| common(&mut o)).ok().and_then(|c| c.next) {
+            next.insert(raw.handle, n);
+        }
+    }
+    next
+}
+
 /// R2000: an INSERT's attributes and a POLYLINE's vertices are stored as the first and last (0
 /// for none), the ones between linked by each one's next entity; made the whole list here
 /// (followed by the SEQEND).
-fn chain_children(ents: &mut [Entity]) {
-    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
+fn chain_children(ents: &mut [Entity], next: &std::collections::HashMap<u64, u64>) {
     for e in ents.iter_mut().filter(|e| matches!(e.name.as_str(), "INSERT" | "MINSERT" | "POLYLINE")) {
         let (Some(&first), Some(&last)) = (e.children.first(), e.children.get(1)) else { continue };
         let rest: Vec<u64> = e.children.iter().skip(2).copied().collect();
@@ -601,9 +626,10 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
         Some(crate::header::Value::Handle(r)) => Some(r.value).filter(|v| *v != 0),
         _ => None,
     };
-    place(&mut out, &names, space("BLOCK_RECORD_MODEL_SPACE"), space("BLOCK_RECORD_PAPER_SPACE"));
+    let next = links(dwg, &classes, &out);
+    place(&mut out, &names, &next, space("BLOCK_RECORD_MODEL_SPACE"), space("BLOCK_RECORD_PAPER_SPACE"));
     if dwg.version < Version::R2004 {
-        chain_children(&mut out);
+        chain_children(&mut out, &next);
     }
     Ok((out, failed))
 }
@@ -611,9 +637,8 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
 /// Each entity's place from the block records' lists of their entities (the entity mode alone
 /// marks every paper space entity as the active layout's): model space, the active paper space
 /// (67 = 1) or a block — another layout's paper space block among them — as the owner (330).
-fn place(ents: &mut [Entity], names: &Names, model: Option<u64>, paper_space: Option<u64>) {
+fn place(ents: &mut [Entity], names: &Names, next: &std::collections::HashMap<u64, u64>, model: Option<u64>, paper_space: Option<u64>) {
     let mut owner_of: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
-    let next: std::collections::HashMap<u64, u64> = ents.iter().filter_map(|e| e.next.map(|n| (e.handle, n))).collect();
     for (block, contents) in names.block_contents() {
         match contents {
             names::Contents::Owned(list) => {
