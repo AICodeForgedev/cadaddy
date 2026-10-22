@@ -62,6 +62,10 @@ pub struct Prompt {
     /// pointer boxes.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub distance: bool,
+    /// The prompt picks one object whatever it says: an AutoLISP `entsel`/`nentsel`, whose message
+    /// the routine writes, so it cannot be read for the word "Select" (#1598).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub picks_one: bool,
 }
 
 /// Parse `@distance<angle` (relative polar), returning `(distance, angle in radians)`.
@@ -128,11 +132,14 @@ impl Prompt {
         self.default = Some(d.into());
         self
     }
-    /// The prompt picks objects: a "Select objects" prompt, or a point prompt whose click selects
-    /// one object ("Select object to offset", "Select first line"…, the commands that pick a
-    /// single object themselves). The UI shows the pick box there.
+    /// The prompt picks objects: a "Select objects" prompt, one that says it picks a single object
+    /// ([`Prompt::picks_one`]), or a point prompt whose click selects one ("Select object to
+    /// offset", "Select first line"…, the commands that pick a single object themselves). The UI
+    /// shows the pick box there. The wording is only read where the engine wrote it: a routine
+    /// writes its own message (`raw`), which may open with "Select" and still ask for a point,
+    /// and says through `picks_one` when it picks instead (#1635 review).
     pub fn picks_objects(&self) -> bool {
-        self.accept.select || (self.accept.point && self.message.starts_with("Select"))
+        self.picks_one || self.accept.select || (self.accept.point && !self.raw && self.message.starts_with("Select"))
     }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
