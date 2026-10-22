@@ -719,17 +719,151 @@ pub struct Mep {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub terminals: Vec<MepTerminal>,
     /// Equipment from the schedules (air handlers, rooftop units, VAV boxes, fans, pumps, water
-    /// heaters, condensing units, meters), each a box at its tag on the plan.
+    /// heaters, condensing units, meters; electrical gear: panels, switchboards, transformers,
+    /// disconnects), each a box at its tag on the plan.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<MepEquipment>,
     /// What each revision of the prints changed, run by run, oldest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub revisions: Vec<MepRevision>,
+    /// Electrical feeders between gear (the feeder schedule, the one-line): what lands on each
+    /// gear's lugs and what comes in through its entry plates.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub feeders: Vec<Feeder>,
+    /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
+    /// when a project's differ from the defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gear_rules: Option<serde_json::Value>,
 }
 
 impl Mep {
     pub fn is_empty(&self) -> bool {
-        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty() && self.revisions.is_empty()
+        self.systems.is_empty() && self.runs.is_empty() && self.terminals.is_empty() && self.equipment.is_empty() && self.revisions.is_empty() && self.feeders.is_empty()
+    }
+}
+
+/// Where conductors land on a piece of electrical gear and what its lugs take (the gear schedule,
+/// the one-line, the approved submittal).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Termination {
+    /// `main`, `feed_through`, `breaker` (feeders out), `primary`, `secondary` (a transformer),
+    /// `line`, `load` (a disconnect), `neutral_bar`, `ground_bar`.
+    pub point: String,
+    /// Lugs per phase; on a bar, its positions.
+    pub lugs: u32,
+    /// Conductors one lug or position takes.
+    pub wires_per_lug: u32,
+    /// The wire range as printed: `#6 - 350 kcmil`, `1/0-750`.
+    pub range: String,
+    /// `cu`, `al` or `cu/al`.
+    pub material: String,
+    /// `mechanical` or `compression`.
+    pub lug_type: String,
+    /// The lugs come with the gear; `false`: ordered separately (compression lugs on a
+    /// transformer's pads), with their bolts.
+    pub supplied: bool,
+    /// Bolts for separately supplied lugs: diameter (inches), holes per lug, and the thickness
+    /// the bolt passes through (pad and lug tongues, inches).
+    pub bolt_in: f64,
+    pub holes: u32,
+    pub stack_in: f64,
+    /// Wire-bending space at the terminal, inches (0: not given), and whether the conductors
+    /// enter or leave the enclosure through the wall opposite it.
+    pub bending_in: f64,
+    pub opposite: bool,
+}
+
+impl Default for Termination {
+    fn default() -> Self {
+        Termination {
+            point: String::new(),
+            lugs: 1,
+            wires_per_lug: 1,
+            range: String::new(),
+            material: "cu/al".into(),
+            lug_type: "mechanical".into(),
+            supplied: true,
+            bolt_in: 0.5,
+            holes: 2,
+            stack_in: 0.75,
+            bending_in: 0.0,
+            opposite: true,
+        }
+    }
+}
+
+/// An electrical enclosure's room for what has to go into it, inches.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Enclosure {
+    /// Usable entry plate areas, width × depth (0 × 0: no entry that way).
+    pub top_entry_in: [f64; 2],
+    pub bottom_entry_in: [f64; 2],
+    /// The wiring gutter's cross-section, width × depth.
+    pub gutter_in: [f64; 2],
+}
+
+/// An electrical feeder: conductors and raceways from one piece of gear to another.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Feeder {
+    pub tag: String,
+    /// Gear tags; the termination points it lands on at each end (default: `breaker` or `load`
+    /// at the source, `main`, `primary` or `line` at the load).
+    pub from: String,
+    pub to: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub from_point: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub to_point: String,
+    /// Parallel sets.
+    pub sets: u32,
+    pub phases: u32,
+    /// Phase conductor size as printed (`500 kcmil`, `#2`, `3/0`) and `cu` or `al`.
+    pub size: String,
+    pub material: String,
+    /// Neutrals per set and their size (empty: the phase size).
+    pub neutrals: u32,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub neutral_size: String,
+    /// Equipment grounding conductors per set and their size.
+    pub grounds: u32,
+    pub ground_size: String,
+    /// More conductors landing on the load end's ground bar: grounding electrode conductors,
+    /// bonding jumpers (sizes).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_grounds: Vec<String>,
+    /// Raceways: count and trade size (inches); `top` or `bottom` entry at each end.
+    pub conduits: u32,
+    pub conduit_in: f64,
+    pub entry: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub from_entry: String,
+}
+
+impl Default for Feeder {
+    fn default() -> Self {
+        Feeder {
+            tag: String::new(),
+            from: String::new(),
+            to: String::new(),
+            from_point: String::new(),
+            to_point: String::new(),
+            sets: 1,
+            phases: 3,
+            size: String::new(),
+            material: "cu".into(),
+            neutrals: 1,
+            neutral_size: String::new(),
+            grounds: 1,
+            ground_size: String::new(),
+            extra_grounds: Vec::new(),
+            conduits: 1,
+            conduit_in: 0.0,
+            entry: "top".into(),
+            from_entry: String::new(),
+        }
     }
 }
 
@@ -764,6 +898,16 @@ pub struct MepEquipment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
     pub confidence: f64,
+    /// Electrical gear: where conductors land and what its lugs take.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub terminations: Vec<Termination>,
+    /// Electrical gear: its entry plates and gutter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosure: Option<Enclosure>,
+    /// Review findings accepted as they are (`entry`, `gutter`, `bending`…): the gear goes in as
+    /// submitted and the takeoff carries the harder installation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub accepted: Vec<String>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
@@ -1885,7 +2029,27 @@ impl BuildingSpec {
             }
             let corners = e.min.iter().chain(&e.max).all(|v| fin(*v)) && e.max[0] > e.min[0] && e.max[1] > e.min[1];
             if e.tag.trim().is_empty() || !corners || !(fin(e.bottom_ft) && fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
-                out.push(Issue::error(at, "equipment needs a tag, a plan box and a height from 0 to 100 feet"));
+                out.push(Issue::error(at.clone(), "equipment needs a tag, a plan box and a height from 0 to 100 feet"));
+            }
+            for (k, t) in e.terminations.iter().enumerate().take(MAX_ITEMS) {
+                if t.point.trim().is_empty() || t.lugs == 0 || t.lugs > 1000 || t.wires_per_lug == 0 || t.wires_per_lug > 10 {
+                    out.push(Issue::error(
+                        format!("{at}.terminations[{k}]"),
+                        "a termination needs a point and 1 to 1000 lugs of 1 to 10 conductors each",
+                    ));
+                }
+            }
+        }
+        for (i, f) in self.mep.feeders.iter().enumerate().take(MAX_ITEMS) {
+            let at = format!("mep.feeders[{i}]");
+            for end in [&f.from, &f.to] {
+                if !end.trim().is_empty() && !self.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(end.trim())) {
+                    out.push(Issue::warning(at.clone(), format!("{} feeds {end}, which isn't in the equipment", f.tag)));
+                }
+            }
+            let counts_ok = (1..=100).contains(&f.sets) && (1..=4).contains(&f.phases) && f.neutrals <= 4 && f.grounds <= 4 && f.conduits <= 400;
+            if f.tag.trim().is_empty() || f.size.trim().is_empty() || !counts_ok || !(fin(f.conduit_in) && (0.0..=8.0).contains(&f.conduit_in)) {
+                out.push(Issue::error(at, "a feeder needs a tag, a conductor size, 1 to 100 sets of 1 to 4 phases and raceways up to 8 inches"));
             }
         }
         for (i, c) in self.rcp.ceilings.iter().enumerate().take(MAX_ITEMS) {

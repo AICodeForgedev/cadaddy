@@ -88,6 +88,7 @@ enum Class {
     Boiler,
     Condenser,
     FlowMeter,
+    Transformer,
 }
 
 impl Class {
@@ -132,6 +133,7 @@ impl Class {
             Class::Boiler => ("IfcBoiler", "NOTDEFINED"),
             Class::Condenser => ("IfcCondenser", "NOTDEFINED"),
             Class::FlowMeter => ("IfcFlowMeter", "NOTDEFINED"),
+            Class::Transformer => ("IfcTransformer", "VOLTAGE"),
         }
     }
 
@@ -175,6 +177,7 @@ impl Class {
             "Boiler" => Class::Boiler,
             "Condenser" => Class::Condenser,
             "FlowMeter" => Class::FlowMeter,
+            "Transformer" => Class::Transformer,
             _ => return None,
         })
     }
@@ -208,6 +211,11 @@ fn equipment_class(kind: &str) -> (Class, &'static str) {
         "water_heater" => (Class::Boiler, "WATER"),
         "condensing_unit" => (Class::Condenser, "AIRCOOLED"),
         "gas_meter" => (Class::FlowMeter, "GASMETER"),
+        // Electrical gear.
+        "panel" | "panelboard" => (Class::ElectricDistributionBoard, "DISTRIBUTIONBOARD"),
+        "switchboard" | "switchgear" => (Class::ElectricDistributionBoard, "SWITCHBOARD"),
+        "transformer" => (Class::Transformer, "VOLTAGE"),
+        "disconnect" => (Class::SwitchingDevice, "SWITCHDISCONNECTOR"),
         _ => (Class::Proxy, "NOTDEFINED"),
     }
 }

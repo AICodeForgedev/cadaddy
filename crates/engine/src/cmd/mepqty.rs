@@ -37,7 +37,7 @@ const MAX_TABLES: usize = 200;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mep.qty", "MEP Quantities", run_qty).params(
-            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], totals, rows, csv, path?, table?}",
+            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], totals, rows, csv, path?, table?}",
         ),
         CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).params("{} → {tables}: rebuild every linked takeoff table from the model now"),
     ]
@@ -290,6 +290,10 @@ pub struct Takeoff {
     terminals: BTreeMap<(String, String, String, String), usize>,
     equipment: Vec<Value>,
     hangers: BTreeMap<(String, String, &'static str, String), HangerRow>,
+    /// Lugs ordered separately from the gear they land on, with their bolt kits (required items).
+    lug_kits: Vec<Value>,
+    /// Gear accepted with review failures, and the factor on its installation.
+    labor: Vec<Value>,
 }
 
 /// A run's corner: an elbow (a turn in plan) or a drop (a change of height), with the plan turn
@@ -522,6 +526,12 @@ fn takeoff(sp: &BuildingSpec, st: &Settings) -> Takeoff {
         }));
     }
     t.equipment.sort_by(|a, b| (a["level"].as_str(), a["tag"].as_str()).cmp(&(b["level"].as_str(), b["tag"].as_str())));
+    let gear_level = |tag: &str| sp.mep.equipment.iter().find(|e| e.tag == tag).map(|e| e.level.clone()).unwrap_or_default();
+    let on_level = |tag: &str| st.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&gear_level(tag)));
+    if st.system.is_none() {
+        t.lug_kits = super::gear::lug_kits(sp).into_iter().filter(|k| on_level(k["gear"].as_str().unwrap_or_default())).collect();
+        t.labor = super::gear::labor(sp).into_iter().filter(|k| on_level(k["gear"].as_str().unwrap_or_default())).collect();
+    }
     t
 }
 
@@ -560,7 +570,7 @@ impl Takeoff {
         };
         json!({
             "ducts": ducts, "pipes": pipes, "fittings": fittings, "terminals": terminals,
-            "equipment": self.equipment, "hangers": hangers,
+            "equipment": self.equipment, "hangers": hangers, "lug_kits": self.lug_kits, "labor_conditions": self.labor,
             "totals": {
                 "duct_length_ft": r2(self.ducts.values().map(|r| r.length_ft).sum()),
                 "duct_area_sqft": r2(self.ducts.values().map(|r| r.area_sqft).sum()),
@@ -669,6 +679,33 @@ impl Takeoff {
                 ]);
             }
         }
+        if all || part == "lug_kits" {
+            // Required items: lugs ordered separately from their gear, each with its bolt kit.
+            for k in &self.lug_kits {
+                let gear = k["gear"].as_str().unwrap_or("");
+                let level = sp_level(&self.equipment, gear);
+                let at = format!("{gear} {}", k["point"].as_str().unwrap_or(""));
+                let mut line = |item: String, qty: &Value| {
+                    out.push(vec![
+                        "Lug kit".into(),
+                        level.clone(),
+                        at.clone(),
+                        item,
+                        String::new(),
+                        String::new(),
+                        qty.to_string(),
+                        "ea".into(),
+                        String::new(),
+                        String::new(),
+                    ]);
+                };
+                line(format!("lug, {}", k["lug"].as_str().unwrap_or("")), &k["lugs"]);
+                line(format!("bolt, {}", k["bolt"].as_str().unwrap_or("")), &k["bolts"]);
+                line("nut".into(), &k["nuts"]);
+                line("flat washer".into(), &k["flat_washers"]);
+                line("Belleville washer".into(), &k["belleville_washers"]);
+            }
+        }
         if all || part == "hangers" {
             for ((l, s, k, size), r) in self.hangers.iter().filter(|(_, r)| r.count > 0) {
                 let item = format!("{k} hanger @ {}' (rod {} ft)", n(r.spacing_ft), n(r.rod_ft));
@@ -690,6 +727,11 @@ impl Takeoff {
     }
 }
 
+/// The level of the equipment tagged `tag` in the takeoff's equipment list.
+fn sp_level(equipment: &[Value], tag: &str) -> String {
+    equipment.iter().find(|e| e["tag"].as_str() == Some(tag)).and_then(|e| e["level"].as_str()).unwrap_or_default().to_string()
+}
+
 /// A CSV field: quoted when it holds a comma, quote or line break; text a spreadsheet would run
 /// as a formula (`=`, `+`, `-`, `@` and not a number) starts with an apostrophe.
 fn csv_field(text: &str) -> String {
@@ -707,7 +749,7 @@ fn csv(rows: &[Vec<String>]) -> String {
     out
 }
 
-const PARTS: [&str; 7] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers"];
+const PARTS: [&str; 8] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers", "lug_kits"];
 
 // ---------------- linked tables ----------------
 

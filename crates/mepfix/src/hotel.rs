@@ -1532,6 +1532,7 @@ fn hotel_electrical(
             max_ft: [px + 0.5, py + 0.25],
             schedule: vec![],
             sheet: String::new(),
+            ..ElecPanel::default()
         });
         let lp_tag = format!("L{lv}");
         panel_id += 1;
@@ -1548,6 +1549,7 @@ fn hotel_electrical(
             max_ft: [px + 2.5, py + 0.25],
             schedule: vec![],
             sheet: String::new(),
+            ..ElecPanel::default()
         });
         let pp_tag = format!("P{lv}");
         panel_id += 1;

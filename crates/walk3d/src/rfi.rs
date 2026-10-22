@@ -50,10 +50,15 @@ pub enum RfiKind {
     SleeveNoRoute,
     /// A sleeve or raceway that won't fit the framing where it is drawn.
     SleeveNoFit,
+    /// Gear whose lugs don't take the conductors that land on them (count, wire range, CU-only
+    /// lugs on aluminium, neutral or ground bar short), or lugs to order with it.
+    GearLugs,
+    /// Gear the field can't install as submitted: entry plates, gutter, bending space.
+    GearInstall,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 13] = [
+    pub const ALL: [RfiKind; 15] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -67,6 +72,8 @@ impl RfiKind {
         RfiKind::DetailUnused,
         RfiKind::SleeveNoRoute,
         RfiKind::SleeveNoFit,
+        RfiKind::GearLugs,
+        RfiKind::GearInstall,
     ];
 
     /// The snake_case name (as in JSON).
@@ -85,6 +92,8 @@ impl RfiKind {
             RfiKind::DetailUnused => "detail_unused",
             RfiKind::SleeveNoRoute => "sleeve_no_route",
             RfiKind::SleeveNoFit => "sleeve_no_fit",
+            RfiKind::GearLugs => "gear_lugs",
+            RfiKind::GearInstall => "gear_install",
         }
     }
 
@@ -108,13 +117,21 @@ impl RfiKind {
             RfiKind::DetailUnused => "Soffit detail no soffit uses",
             RfiKind::SleeveNoRoute => "Sleeve with no route or method",
             RfiKind::SleeveNoFit => "Sleeve won't fit the framing",
+            RfiKind::GearLugs => "Gear lugs don't take the feeders",
+            RfiKind::GearInstall => "Gear can't be installed as submitted",
         }
     }
 
     /// How much it matters before work goes ahead.
     pub fn severity(self) -> Severity {
         match self {
-            RfiKind::UnknownTag | RfiKind::SheetConflict | RfiKind::RatedToCeiling | RfiKind::SleeveNoRoute | RfiKind::SleeveNoFit => Severity::High,
+            RfiKind::UnknownTag
+            | RfiKind::SheetConflict
+            | RfiKind::RatedToCeiling
+            | RfiKind::SleeveNoRoute
+            | RfiKind::SleeveNoFit
+            | RfiKind::GearLugs
+            | RfiKind::GearInstall => Severity::High,
             RfiKind::DetailUnused => Severity::Low,
             _ => Severity::Medium,
         }

@@ -38,6 +38,7 @@ pub mod equip_reader;
 pub mod finishes;
 pub mod framing;
 pub mod gaps;
+pub mod gear_reader;
 
 pub mod heights;
 pub mod hotel;
