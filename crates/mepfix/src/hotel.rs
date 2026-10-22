@@ -1016,6 +1016,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
 
     // --- Site elements ---
     hotel_site(&mut t, building_width_ft, building_depth_ft, r);
+    crate::sitework::design_sitework(&mut t, building_width_ft, building_depth_ft, &mut r.fork(20));
 
     // --- Spec book ---
     t.spec_items = spec_book();
@@ -2750,7 +2751,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
         at_ft: [bldg_w / 2.0, parking_min[1]],
         min_ft: Some([bldg_w / 2.0 - 12.0, parking_min[1]]),
         max_ft: Some([bldg_w / 2.0 + 12.0, -setback]),
-        depth_ft: None,
+        ..SiteElement::default()
     });
     se_id += 1;
 
@@ -2766,7 +2767,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
             at_ft: [px + space_width / 2.0, parking_min[1] + space_depth / 2.0 + 5.0],
             min_ft: Some([px, parking_min[1] + 5.0]),
             max_ft: Some([px + space_width, parking_min[1] + 5.0 + space_depth]),
-            depth_ft: None,
+            ..SiteElement::default()
         });
         se_id += 1;
         px += space_width;
@@ -2782,7 +2783,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
             at_ft: [lx, parking_min[1] + 30.0],
             min_ft: None,
             max_ft: None,
-            depth_ft: None,
+            ..SiteElement::default()
         });
         se_id += 1;
     }
@@ -2796,7 +2797,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
             at_ft: [lx, bldg_d + setback - 5.0],
             min_ft: None,
             max_ft: None,
-            depth_ft: None,
+            ..SiteElement::default()
         });
         se_id += 1;
     }
@@ -2809,7 +2810,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
         at_ft: [bldg_w + 10.0, bldg_d / 2.0],
         min_ft: Some([bldg_w + 5.0, bldg_d / 2.0 - 5.0]),
         max_ft: Some([bldg_w + 15.0, bldg_d / 2.0 + 5.0]),
-        depth_ft: None,
+        ..SiteElement::default()
     });
     se_id += 1;
 
@@ -2821,7 +2822,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
         at_ft: [bldg_w + 10.0, 10.0],
         min_ft: Some([bldg_w + 5.0, 5.0]),
         max_ft: Some([bldg_w + 17.0, 15.0]),
-        depth_ft: None,
+        ..SiteElement::default()
     });
     se_id += 1;
 
@@ -2833,7 +2834,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
         at_ft: [-setback + 5.0, -setback + 5.0],
         min_ft: None,
         max_ft: None,
-        depth_ft: None,
+        ..SiteElement::default()
     });
     se_id += 1;
 
@@ -2854,6 +2855,7 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
             min_ft: Some([bldg_w / 2.0 + x_off - 0.5, -setback - 60.0]),
             max_ft: Some([bldg_w / 2.0 + x_off + 0.5, -5.0]),
             depth_ft: Some(depth),
+            ..SiteElement::default()
         });
         se_id += 1;
     }

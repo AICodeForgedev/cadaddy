@@ -56,6 +56,12 @@ pub enum Kind {
     Assemblies,
     /// The civil site plan: parking, light poles, transformer pad, underground utilities.
     Site,
+    /// The grading and earthwork plan (C-102).
+    Grading,
+    /// The site utility plan (C-103): storm, sanitary, water structures.
+    SiteUtility,
+    /// The sitework schedule (C-601): quantities, paving, landscaping, fencing, furnishings.
+    SiteSchedules,
 }
 
 impl Kind {
@@ -70,6 +76,7 @@ impl Kind {
                 | Kind::DoorSchedule
                 | Kind::ArchFinishes
                 | Kind::Assemblies
+                | Kind::SiteSchedules
         )
     }
 }
@@ -183,6 +190,20 @@ pub fn site_extents(t: &Truth) -> ([f64; 2], [f64; 2]) {
             lo[1] = lo[1].min(mn[1]);
             hi[0] = hi[0].max(mx[0]);
             hi[1] = hi[1].max(mx[1]);
+        }
+    }
+    for ss in &t.site_structures {
+        lo[0] = lo[0].min(ss.at_ft[0]);
+        lo[1] = lo[1].min(ss.at_ft[1]);
+        hi[0] = hi[0].max(ss.at_ft[0]);
+        hi[1] = hi[1].max(ss.at_ft[1]);
+    }
+    for gc in &t.grading_contours {
+        for pt in &gc.points {
+            lo[0] = lo[0].min(pt[0]);
+            lo[1] = lo[1].min(pt[1]);
+            hi[0] = hi[0].max(pt[0]);
+            hi[1] = hi[1].max(pt[1]);
         }
     }
     // Margin around the site
@@ -422,6 +443,9 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     }
     // Civil
     v.push(("C-101".into(), "SITE PLAN".into(), "C".into(), Kind::Site));
+    v.push(("C-102".into(), "GRADING AND EARTHWORK PLAN".into(), "C".into(), Kind::Grading));
+    v.push(("C-103".into(), "SITE UTILITY PLAN".into(), "C".into(), Kind::SiteUtility));
+    v.push(("C-601".into(), "SITEWORK SCHEDULES AND QUANTITIES".into(), "C".into(), Kind::SiteSchedules));
     // Schedules
     v.push(("M-601".into(), "MECHANICAL SCHEDULES".into(), "M".into(), Kind::Schedules("M".into())));
     v.push(("P-601".into(), "PLUMBING SCHEDULES".into(), "P".into(), Kind::Schedules("P".into())));
@@ -457,8 +481,8 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             _ => None,
         };
         let plan = kind.plan();
-        // Site plan needs to fit the wider site extent.
-        let is_site = matches!(kind, Kind::Site);
+        // Site plans need to fit the wider site extent.
+        let is_site = matches!(kind, Kind::Site | Kind::Grading | Kind::SiteUtility);
         let (s_lo, s_hi) = if is_site { site_extents(t) } else { (lo, hi) };
         let (sw, sh_ext) = (s_hi[0] - s_lo[0], s_hi[1] - s_lo[1]);
         let site_fits = |s: f64| sw * s <= aw && sh_ext * s <= ah;
