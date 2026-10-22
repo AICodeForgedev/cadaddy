@@ -269,6 +269,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 app.set_status(match preference.resolve(&app.system_languages) {
                     "ko" => "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face.",
                     "ja" => "No font covers the Japanese interface, so it stays in English. Install a Japanese font (Yu Gothic, Meiryo, Hiragino Sans or Noto Sans CJK JP).",
+                    "ar" => "No Arabic font is installed, so the interface stays in English. Install one (Noto Sans Arabic, for example) to use Arabic.",
+                    "he" => "No Hebrew font is installed, so the interface stays in English. Install one (Noto Sans Hebrew, for example) to use Hebrew.",
+                    "fa" => "No font covers the Persian interface, so it stays in English. Install one (Noto Sans Arabic, for example) to use Persian.",
+                    "hi" => "No Devanagari font is installed, so the interface stays in English. Install one (Noto Sans Devanagari or Nirmala UI) to use Hindi.",
+                    "th" => "No Thai font is installed, so the interface stays in English. Install one (Noto Sans Thai or Leelawadee UI) to use Thai.",
+                    "vi" => "No font covers the Vietnamese interface, so it stays in English. Install one with Vietnamese letters (Noto Sans or DejaVu Sans).",
                     _ => "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese.",
                 });
             }

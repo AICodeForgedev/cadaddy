@@ -1,7 +1,12 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
-**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), or **العربية** (Arabic).
+**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**, **Français**, **简体中文**, **Italiano**, **한국어** (Korean), **Svenska** (Swedish), **العربية** (Arabic), **日本語**, **繁體中文**, **Polski**, **Magyar**, **Türkçe**,
+**Nederlands**, **Dansk**, **Suomi**, **Norsk bokmål**, **Ελληνικά**, **Română**, **हिन्दी** (Hindi),
+**Bahasa Indonesia**, **Tiếng Việt**, **ไทย** (Thai), **עברית** (Hebrew) or **فارسی** (Persian).
+Hebrew and Persian are right to left like Arabic. Hebrew, Persian, Hindi, Thai and Vietnamese need
+an installed font with their letters (macOS, Windows and common Linux fonts are found); without one
+the interface stays English and says which font to install.
 The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadaddy.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -11,7 +16,8 @@ Auto uses the first supported language in the operating system's preferred local
 browser's `navigator.languages` on the web. BCP 47 and POSIX tags select their primary language:
 `uk-UA` → `uk`, `de_AT.UTF-8` → `de`, `es-MX` → `es`, `pt_BR.UTF-8` → `pt-BR`,
 `cs-CZ` and `cs_CZ.UTF-8` → `cs`, `it-IT` and `it_CH.UTF-8` → `it`, `ko-KR` and `ko_KR.UTF-8` → `ko`,
-`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`. Unsupported languages fall back to English.
+`sv-SE`, `sv-FI` and `sv_SE.UTF-8` → `sv`; Norwegian `no`, `nn` and `nb` → `nb`; the old codes
+`iw` → `he` and `in` → `id`. Unsupported languages fall back to English.
 Set `CADADDY_LOCALE=cs-CZ` to override the desktop's locale for a launch.
 An explicit saved language choice takes precedence over that override.
 

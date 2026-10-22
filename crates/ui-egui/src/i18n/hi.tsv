@@ -1,0 +1,2833 @@
+# CADaddy Hindi interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Hindi translation.
+# Empty context = ordinary label; @plural = one|other (one for 0 and 1) with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	समायोजित करें...
+	Apply	लागू करें
+	Attach DWG...	DWG संलग्न करें...
+	Bind	बाइंड करें
+	Detach	अलग करें
+	Image	इमेज
+	Loaded	लोड है
+	Make it a block of this drawing, keeping its layer names	इसे इस ड्रॉइंग का ब्लॉक बनाएँ, लेयर नाम बनाए रखें
+	Make it a block of this drawing; its layers become NAME$0$LAYER	इसे इस ड्रॉइंग का ब्लॉक बनाएँ; इसकी लेयर NAME$0$LAYER बन जाएँगी
+	No external references are attached.	कोई बाहरी रेफ़रेंस संलग्न नहीं है।
+	Not Found	नहीं मिला
+	Not loaded	लोड नहीं है
+	Open	खोलें
+	Overlay	ओवरले
+	Reference Manager	रेफ़रेंस मैनेजर
+	Reference Name	रेफ़रेंस नाम
+	References: {n}	रेफ़रेंस: {n}
+	Reload	फिर से लोड करें
+	Reload All	सभी फिर से लोड करें
+	Saved Path	सहेजा गया पथ
+	Unload	अनलोड करें
+	Unloaded	अनलोड है
+	Unreferenced	रेफ़रेंस रहित
+	Unresolved	अनसुलझा
+	  Cancel  	रद्द करें
+	  OK  	ठीक है
+	 or [	या [
+	% of all commits	सभी कमिट का %
+	* Wildcard Match	* वाइल्डकार्ड मिलान
+	*VARIES*	*भिन्न*
+	+  |  Top  |  2D Wireframe	+  |  ऊपर  |  2D वायरफ्रेम
+	+Bin	+बाइनरी
+	+LOC	+कोड पंक्तियाँ
+	1 Viewport	1 व्यूपोर्ट
+	2 Points	2 बिंदु
+	2 Viewports	2 व्यूपोर्ट
+	2D Solid	2D सॉलिड
+	3 Points	3 बिंदु
+	3 Viewports	3 व्यूपोर्ट
+	3D Face	3D फ़ेस
+	3D Operations	3D ऑपरेशन
+	3D Polyline	3D पॉलीलाइन
+	4 Viewports	4 व्यूपोर्ट
+	< Less than	< से कम
+	<> Not Equal	<> बराबर नहीं
+	= Equals	= बराबर
+	> Greater than	> से अधिक
+	A variable name starts with a letter and has only letters, digits and _	वेरिएबल नाम अक्षर से शुरू होता है और इसमें केवल अक्षर, अंक और _ होते हैं
+	About	परिचय
+	About CADaddy	CADaddy के बारे में
+	Absolute	निरपेक्ष
+	Add Leader	लीडर जोड़ें
+	Additional angles	अतिरिक्त कोण
+	Align	संरेखित करें
+	Align Text	टेक्स्ट संरेखित करें
+	Aligned	संरेखित
+	All	सभी
+	All Annotation Objects	सभी एनोटेशन ऑब्जेक्ट
+	All Used Layers	सभी प्रयुक्त लेयर
+	All files	सभी फ़ाइलें
+	Angle	कोण
+	Angular	कोणीय
+	Annotation Visibility	एनोटेशन दृश्यता
+	Annotation scale	एनोटेशन स्केल
+	Apparent Intersection	आभासी प्रतिच्छेदन
+	Append to current selection set	वर्तमान चयन सेट में जोड़ें
+	Apply to:	इस पर लागू करें:
+	Apply true color	ट्रू कलर लागू करें
+	Arc	आर्क
+	Arc Length	आर्क लंबाई
+	Area	क्षेत्रफल
+	Arrange Panel	पैनल व्यवस्थित करें
+	Array	ऐरे
+	Attach	संलग्न करें
+	Attribute	एट्रिब्यूट
+	Attribute Definition	एट्रिब्यूट परिभाषा
+	Attribute Display	एट्रिब्यूट प्रदर्शन
+	Audit	ऑडिट
+	Auto (system language)	स्वचालित (सिस्टम भाषा)
+	Auto Constrain	स्वतः कंस्ट्रेंट
+	AutoConstrain	ऑटोकंस्ट्रेंट
+	Axis, End	अक्ष, अंत
+	Base	आधार
+	Baseline	बेसलाइन
+	Batch Publish	बैच प्रकाशन
+	Binary assets added	बाइनरी एसेट जोड़े गए
+	Binary assets removed	बाइनरी एसेट हटाए गए
+	Bind...	बाइंड करें...
+	Blend	ब्लेंड
+	Block	ब्लॉक
+	Block Attribute Manager...	ब्लॉक एट्रिब्यूट मैनेजर...
+	Block Editor	ब्लॉक एडिटर
+	Block Reference	ब्लॉक रेफ़रेंस
+	Block...	ब्लॉक...
+	Blocks	ब्लॉक
+	Blue	नीला
+	Bold	बोल्ड
+	Boolean	बूलियन
+	Boundary	सीमा
+	Boundary...	सीमा...
+	Box	बॉक्स
+	Break	ब्रेक
+	Break At Point	बिंदु पर ब्रेक
+	Bring Above Objects	ऑब्जेक्ट के ऊपर लाएँ
+	Bring Annotations to Front	एनोटेशन सबसे आगे लाएँ
+	Bring to Front	सबसे आगे लाएँ
+	Bulleted list	बुलेट सूची
+	ByBlock	ब्लॉक अनुसार
+	ByColor	रंग अनुसार
+	ByLayer	लेयर अनुसार
+	CADaddy Help	CADaddy सहायता
+	Cancel	रद्द करें
+	Cartesian (x, y)	कार्तीय (x, y)
+	Center	केंद्र
+	Center Line	केंद्र रेखा
+	Center Mark	केंद्र चिह्न
+	Center X	केंद्र X
+	Center Y	केंद्र Y
+	Center Z	केंद्र Z
+	Center, Diameter	केंद्र, व्यास
+	Center, Radius	केंद्र, त्रिज्या
+	Center, Start, Angle	केंद्र, आरंभ, कोण
+	Center, Start, End	केंद्र, आरंभ, अंत
+	Center, Start, Length	केंद्र, आरंभ, लंबाई
+	Chamfer	चैम्फ़र
+	Change Space	स्पेस बदलें
+	Change to Current Layer	वर्तमान लेयर में बदलें
+	Changed: {n}	बदले गए: {n}
+	Circle	वृत्त
+	Circumference	परिधि
+	Clear History	इतिहास साफ़ करें
+	Clear	साफ़ करें
+	Clip	क्लिप
+	Clip Viewport	व्यूपोर्ट क्लिप करें
+	Clipboard	क्लिपबोर्ड
+	Close	बंद करें
+	Close All	सभी बंद करें
+	Close All Other Drawings	अन्य सभी ड्रॉइंग बंद करें
+	Closed	बंद
+	Close Comparison	तुलना बंद करें
+	Coincident	संपाती
+	Collapse Palettes	पैलेट समेटें
+	Collapse Tool Sets	टूल सेट समेटें
+	Collinear	संरेख
+	Color	रंग
+	Color 8	रंग 8
+	Color 9	रंग 9
+	Color Index	रंग इंडेक्स
+	Color...	रंग...
+	Command Aliases	कमांड उपनाम
+	Command History	कमांड इतिहास
+	Clear Command History	कमांड इतिहास साफ़ करें
+	Command Line	कमांड लाइन
+	Command Line History Lines	कमांड लाइन इतिहास पंक्तियाँ
+	Command Reference	कमांड संदर्भ
+	Commits	कमिट
+	Company	कंपनी
+	Compare Drawings...	ड्रॉइंग की तुलना करें...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	कंप्यूटर-सहायित डिज़ाइन और ड्राफ़्टिंग: शुद्ध Rust में लिखा गया एक ओपन-सोर्स, क्लीन-रूम CAD एप्लिकेशन।
+	Concentric	संकेंद्रित
+	Cone	शंकु
+	Constraint Bars	कंस्ट्रेंट बार
+	Constraint Settings	कंस्ट्रेंट सेटिंग्स
+	Construction Line	कंस्ट्रक्शन लाइन
+	Contents	विषय-सूची
+	Continue	जारी रखें
+	Contributors	योगदानकर्ता
+	Control Vertices	कंट्रोल वर्टेक्स
+	Convert	रूपांतरित करें
+	Copy	कॉपी करें
+	Copy Full File Path	पूरा फ़ाइल पथ कॉपी करें
+	Copy History	इतिहास कॉपी करें
+	Copy Layout	लेआउट कॉपी करें
+	Copy Nested Objects	नेस्टेड ऑब्जेक्ट कॉपी करें
+	Copy Selection	चयन कॉपी करें
+	Copy with Base Point	आधार बिंदु सहित कॉपी करें
+	Count	गणना
+	Count List	गणना सूची
+	Count Table	गणना तालिका
+	Create Block	ब्लॉक बनाएँ
+	Creates a user parameter	उपयोगकर्ता पैरामीटर बनाता है
+	Ctrl+Enter to finish	समाप्त करने के लिए Ctrl+Enter
+	Current layer	वर्तमान लेयर
+	Current selection	वर्तमान चयन
+	Current: {color}	वर्तमान: {color}
+	Cut	काटें
+	Cyan	सियान
+	Cylinder	सिलिंडर
+	DWG	DWG
+	DWG Reference...	DWG रेफ़रेंस...
+	DXF	DXF
+	Dark	डार्क
+	Data Extraction...	डेटा निष्कर्षण...
+	Default	डिफ़ॉल्ट
+	Data Link...	डेटा लिंक...
+	Default Save Format	डिफ़ॉल्ट सेव फ़ॉर्मेट
+	Default Save Version	डिफ़ॉल्ट सेव संस्करण
+	Define Attributes	एट्रिब्यूट परिभाषित करें
+	Define Attributes...	एट्रिब्यूट परिभाषित करें...
+	Defined width	निर्धारित चौड़ाई
+	Degree	डिग्री
+	Degrees of Freedom	स्वतंत्रता की कोटियाँ
+	Degrees of freedom: {n}	स्वतंत्रता की कोटियाँ: {n}
+	Delete	हटाएँ
+	Delete Column	कॉलम हटाएँ
+	Delete Constraints	कंस्ट्रेंट हटाएँ
+	Delete Dimension Style	डायमेंशन स्टाइल हटाएँ
+	Delete Duplicate Objects	डुप्लिकेट ऑब्जेक्ट हटाएँ
+	Delete Layer	लेयर हटाएँ
+	Delete Layer State	लेयर स्टेट हटाएँ
+	Delete Layout	लेआउट हटाएँ
+	Delete Row	पंक्ति हटाएँ
+	Delete Text Style	टेक्स्ट स्टाइल हटाएँ
+	Delta X	डेल्टा X
+	Delta Y	डेल्टा Y
+	Description	विवरण
+	Deselect All	सभी का चयन हटाएँ
+	Diameter	व्यास
+	Dim style	डायम स्टाइल
+	Dimension Break	डायमेंशन ब्रेक
+	Dimension Edit	डायमेंशन संपादन
+	Dimension	डायमेंशन
+	Dimension Objects Only	केवल डायमेंशन ऑब्जेक्ट
+	Dimension Space	डायमेंशन स्पेस
+	Dimension Style Override	डायमेंशन स्टाइल ओवरराइड
+	Dimension Style...	डायमेंशन स्टाइल...
+	Dimension Text Edit	डायमेंशन टेक्स्ट संपादन
+	Dimension style	डायमेंशन स्टाइल
+	Dimensional Constraint	डायमेंशनल कंस्ट्रेंट
+	Dimensional Constraint Parameters	डायमेंशनल कंस्ट्रेंट पैरामीटर
+	Dimensional Constraints	डायमेंशनल कंस्ट्रेंट
+	Disassociate Dimensions	डायमेंशन असंबद्ध करें
+	Display name	प्रदर्शित नाम
+	Distance	दूरी
+	Divide	विभाजित करें
+	Do not plot (click: plot)	प्लॉट न करें (क्लिक: प्लॉट करें)
+	Donut	डोनट
+	Double-click to edit the description	विवरण संपादित करने के लिए डबल-क्लिक करें
+	Down	नीचे
+	Drafting	ड्राफ़्टिंग
+	Drafting Settings	ड्राफ़्टिंग सेटिंग्स
+	Drafting Settings...	ड्राफ़्टिंग सेटिंग्स...
+	Draw	ड्रॉ
+	Draw Order	ड्रॉ क्रम
+	Drawing (DWG)	ड्रॉइंग (DWG)
+	Drawing (DXF)	ड्रॉइंग (DXF)
+	Drawing Limits	ड्रॉइंग सीमाएँ
+	Drawing Template (DWT)	ड्रॉइंग टेम्पलेट (DWT)
+	Drawing Utilities	ड्रॉइंग यूटिलिटी
+	Drawings (DWG, DXF)	ड्रॉइंग (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	SVG ड्रॉइंग (SVG, SVGZ)
+	Dynamic	डायनेमिक
+	Dynamic Dimensions	डायनेमिक डायमेंशन
+	Dynamic Input	डायनेमिक इनपुट
+	Dynamic Input (F12)	डायनेमिक इनपुट (F12)
+	E	पू
+	Edit	संपादित करें
+	Edit Attributes...	एट्रिब्यूट संपादित करें...
+	Edit Text...	टेक्स्ट संपादित करें...
+	Edit Table Cell	तालिका सेल संपादित करें
+	Elevation	एलिवेशन
+	Ellipse	दीर्घवृत्त
+	Elliptical Arc	दीर्घवृत्तीय आर्क
+	Enable Dynamic Input (F12)	डायनेमिक इनपुट सक्षम करें (F12)
+	End Object Isolation	ऑब्जेक्ट आइसोलेशन समाप्त करें
+	End Width	अंतिम चौड़ाई
+	End X	अंत X
+	End Y	अंत Y
+	End angle	अंतिम कोण
+	Endpoint	अंतबिंदु
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Top, Zero या Bottom दर्ज करें।
+	Enter a fit data option	फ़िट डेटा विकल्प दर्ज करें
+	Enter a pattern name	पैटर्न नाम दर्ज करें
+	Enter a vertex editing option	वर्टेक्स संपादन विकल्प दर्ज करें
+	Enter an option	विकल्प दर्ज करें
+	Enter angle of xline	xline का कोण दर्ज करें
+	Enter angle of xline (0) or	xline का कोण (0) दर्ज करें या
+	Enter area of rectangle in current units	वर्तमान इकाइयों में आयत का क्षेत्रफल दर्ज करें
+	Enter attribute prompt	एट्रिब्यूट प्रॉम्प्ट दर्ज करें
+	Enter attribute tag name	एट्रिब्यूट टैग नाम दर्ज करें
+	Enter attribute value	एट्रिब्यूट मान दर्ज करें
+	Enter block name	ब्लॉक नाम दर्ज करें
+	Enter constraint type	कंस्ट्रेंट प्रकार दर्ज करें
+	Enter continuity	निरंतरता दर्ज करें
+	Enter default attribute value	डिफ़ॉल्ट एट्रिब्यूट मान दर्ज करें
+	Enter degree of spline	स्प्लाइन की डिग्री दर्ज करें
+	Enter delta angle	डेल्टा कोण दर्ज करें
+	Enter delta length or	डेल्टा लंबाई दर्ज करें या
+	Enter dimension text	डायमेंशन टेक्स्ट दर्ज करें
+	Enter dimension text (<> = measurement)	डायमेंशन टेक्स्ट दर्ज करें (<> = माप)
+	Enter dimension value or [name=expression]	डायमेंशन मान या [name=expression] दर्ज करें
+	Enter dimension variable name to override	ओवरराइड करने के लिए डायमेंशन वेरिएबल नाम दर्ज करें
+	Enter justification type	जस्टिफ़िकेशन प्रकार दर्ज करें
+	Enter leader text	लीडर टेक्स्ट दर्ज करें
+	Enter mline scale	mline स्केल दर्ज करें
+	Enter mode	मोड दर्ज करें
+	Enter name of block to insert	डालने के लिए ब्लॉक का नाम दर्ज करें
+	Enter new text	नया टेक्स्ट दर्ज करें
+	Enter next point	अगला बिंदु दर्ज करें
+	Enter number of columns	कॉलम की संख्या दर्ज करें
+	Enter number of data rows	डेटा पंक्तियों की संख्या दर्ज करें
+	Enter number of items	आइटम की संख्या दर्ज करें
+	Enter number of items along path	पथ के साथ आइटम की संख्या दर्ज करें
+	Enter number of sides	भुजाओं की संख्या दर्ज करें
+	Enter number of turns	घुमावों की संख्या दर्ज करें
+	Enter percentage length	प्रतिशत लंबाई दर्ज करें
+	Enter rectangle length	आयत की लंबाई दर्ज करें
+	Enter rectangle width	आयत की चौड़ाई दर्ज करें
+	Enter scale factor	स्केल फ़ैक्टर दर्ज करें
+	Enter text	टेक्स्ट दर्ज करें
+	Enter text (use \P for new paragraphs)	टेक्स्ट दर्ज करें (नए पैराग्राफ़ के लिए \P उपयोग करें)
+	Enter the number of segments	सेगमेंट की संख्या दर्ज करें
+	Enter twist direction of helix	हेलिक्स की ट्विस्ट दिशा दर्ज करें
+	Entire drawing	संपूर्ण ड्रॉइंग
+	Equal	बराबर
+	Erase	मिटाएँ
+	Evaluate	मूल्यांकन करें
+	Evaluate LISP	LISP का मूल्यांकन करें
+	Exclude from new selection set	नए चयन सेट से बाहर रखें
+	Explode	एक्सप्लोड करें
+	Export	एक्सपोर्ट करें
+	Export Table	तालिका एक्सपोर्ट करें
+	Export to PDF...	PDF में एक्सपोर्ट करें...
+	Expression	व्यंजक
+	Extend	बढ़ाएँ
+	Extension	एक्सटेंशन
+	Extents	विस्तार
+	External Reference	बाहरी रेफ़रेंस
+	External References	बाहरी रेफ़रेंस
+	Extrude	एक्सट्रूड करें
+	File	फ़ाइल
+	File Tab	फ़ाइल टैब
+	Fillet	फ़िलेट
+	Filter	फ़िल्टर
+	Filters	फ़िल्टर
+	Find and Replace	ढूँढें और बदलें
+	Find...	ढूँढें...
+	First	पहला
+	First commit	पहला कमिट
+	Fit Points	फ़िट पॉइंट
+	Fix	स्थिर करें
+	Flatten Objects	ऑब्जेक्ट समतल करें
+	Format	फ़ॉर्मेट
+	Freehand	फ़्रीहैंड
+	Freeze	फ़्रीज़ करें
+	Freeze Layer	लेयर फ़्रीज़ करें
+	Freeze in new viewports	नए व्यूपोर्ट में फ़्रीज़ करें
+	Freeze/Thaw	फ़्रीज़/थॉ
+	Freeze/Thaw in all viewports	सभी व्यूपोर्ट में फ़्रीज़/थॉ
+	Freeze/Thaw in the current viewport	वर्तमान व्यूपोर्ट में फ़्रीज़/थॉ
+	From	से
+	From Template...	टेम्पलेट से...
+	General	सामान्य
+	Geometric Center	ज्यामितीय केंद्र
+	Geometric Constraint	ज्यामितीय कंस्ट्रेंट
+	Geometric Constraints	ज्यामितीय कंस्ट्रेंट
+	Geometry	ज्यामिति
+	Get from the Drawing	ड्रॉइंग से लें
+	Get Variable	वेरिएबल प्राप्त करें
+	Get View	व्यू प्राप्त करें
+	Global	ग्लोबल
+	Global width	ग्लोबल चौड़ाई
+	Grab bag	मिश्रित सूची
+	Gradient	ग्रेडिएंट
+	Gradient...	ग्रेडिएंट...
+	Green	हरा
+	Grid (F7)	ग्रिड (F7)
+	Grid Display	ग्रिड प्रदर्शन
+	Grid On (F7)	ग्रिड चालू (F7)
+	Grid snap	ग्रिड स्नैप
+	Grid spacing	ग्रिड अंतराल
+	Grip Edit	ग्रिप संपादन
+	Grip Mirror	ग्रिप मिरर
+	Grip Option	ग्रिप विकल्प
+	Grip Rotate	ग्रिप घुमाव
+	Grip Scale	ग्रिप स्केल
+	Grip Stretch	ग्रिप स्ट्रेच
+	Group	समूह
+	Group Edit	समूह संपादन
+	Group Options	समूह विकल्प
+	Group Selection	समूह चयन
+	Hatch	हैच
+	Hatch Edit	हैच संपादन
+	Hatch Patterns	हैच पैटर्न
+	Hatch...	हैच...
+	Height	ऊँचाई
+	Height: {height}	ऊँचाई: {height}
+	Helix	हेलिक्स
+	Help	सहायता
+	Hide All	सभी छिपाएँ
+	Hide All Constraint Bars	सभी कंस्ट्रेंट बार छिपाएँ
+	Hide All Dynamic Dimensions	सभी डायनेमिक डायमेंशन छिपाएँ
+	Hide Layer List	लेयर सूची छिपाएँ
+	Hide Objects	ऑब्जेक्ट छिपाएँ
+	Hide Palettes	पैलेट छिपाएँ
+	History	इतिहास
+	Home	होम
+	Horizontal	क्षैतिज
+	HorizontalDistance	क्षैतिज दूरी
+	How to apply:	कैसे लागू करें:
+	ID Point	ID बिंदु
+	Import	इम्पोर्ट करें
+	Align Multileaders	मल्टीलीडर संरेखित करें
+	Collect	एकत्र करें
+	Collect Multileaders	मल्टीलीडर एकत्र करें
+	Edit Multileader	मल्टीलीडर संपादित करें
+	In	ज़ूम इन
+	In-window Menu Bar	विंडो में मेनू बार
+	Include in new selection set	नए चयन सेट में शामिल करें
+	Increment angle	वृद्धि कोण
+	Index Color	इंडेक्स रंग
+	Index color: {index}	इंडेक्स रंग: {index}
+	Infer Constraints	कंस्ट्रेंट अनुमानित करें
+	Inquiry	पूछताछ
+	Insert	इन्सर्ट
+	Insert Block	ब्लॉक इन्सर्ट करें
+	Insert Column	कॉलम इन्सर्ट करें
+	Insert Row	पंक्ति इन्सर्ट करें
+	Insert tab	इन्सर्ट टैब
+	Insert this block	यह ब्लॉक इन्सर्ट करें
+	Insert Table Formula	तालिका सूत्र इन्सर्ट करें
+	Insertion	इन्सर्शन
+	Insertion X	इन्सर्शन X
+	Insertion Y	इन्सर्शन Y
+	Insertion Z	इन्सर्शन Z
+	Inspect Constraints	कंस्ट्रेंट जाँचें
+	Inspect Drawing	ड्रॉइंग जाँचें
+	Inspection	निरीक्षण
+	Interface Language	इंटरफ़ेस भाषा
+	Interface Theme	इंटरफ़ेस थीम
+	Intersect	प्रतिच्छेद करें
+	Intersection	प्रतिच्छेदन
+	Isolate	आइसोलेट करें
+	Isolate Layer	लेयर आइसोलेट करें
+	Isolate Objects	ऑब्जेक्ट आइसोलेट करें
+	Isometric Drafting	आइसोमेट्रिक ड्राफ़्टिंग
+	Jogged	जॉग्ड
+	Jogged Linear	जॉग्ड रैखिक
+	Join	जोड़ें
+	Join the ArtCraft Discord…	ArtCraft Discord से जुड़ें…
+	Join us on Discord	Discord पर हमसे जुड़ें
+	Isometric Plane	आइसोमेट्रिक तल
+	Isometric snap	आइसोमेट्रिक स्नैप
+	Language	भाषा
+	Last	अंतिम
+	Last commit	अंतिम कमिट
+	Layer	लेयर
+	Layer Delete	लेयर हटाएँ
+	Layer Match	लेयर मिलान
+	Layer Merge	लेयर मर्ज
+	Layer Off	लेयर बंद
+	Layer Properties	लेयर गुण
+	Layer Properties Manager	लेयर गुण मैनेजर
+	Layer Properties Manager — current viewport	लेयर गुण मैनेजर — वर्तमान व्यूपोर्ट
+	Layer State	लेयर स्टेट
+	Layer States Manager...	लेयर स्टेट मैनेजर...
+	Layer Tools	लेयर टूल
+	Layer contains objects (double-click to make current)	लेयर में ऑब्जेक्ट हैं (वर्तमान बनाने के लिए डबल-क्लिक करें)
+	Layer is empty (double-click to make current)	लेयर खाली है (वर्तमान बनाने के लिए डबल-क्लिक करें)
+	Layers	लेयर
+	Layers Palette	लेयर पैलेट
+	Hide Palette	पैलेट छिपाएँ
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	प्रदर्शित लेयर: {total} में से {shown}।   वर्तमान लेयर: {layer}
+	Layout	लेआउट
+	Layout list	लेआउट सूची
+	Leader	लीडर
+	Leaders Only	केवल लीडर
+	Left	बायाँ
+	Length	लंबाई
+	Length X	लंबाई X
+	Length Y	लंबाई Y
+	Lengthen	लंबा करें
+	Light	लाइट
+	Line	रेखा
+	Line delta	पंक्ति अंतर
+	Linear	रैखिक
+	Lines +/−	पंक्तियाँ +/−
+	Lines added	जोड़ी गई पंक्तियाँ
+	Lines deleted	हटाई गई पंक्तियाँ
+	Lines of Command History	कमांड इतिहास की पंक्तियाँ
+	Linetype	लाइनटाइप
+	Linetype Scale	लाइनटाइप स्केल
+	Linetype scale	लाइनटाइप स्केल
+	Ltscale	लाइनटाइप स्केल
+	Linetype...	लाइनटाइप...
+	Lineweight	लाइनवेट
+	Lineweight...	लाइनवेट...
+	List	सूची
+	List Blocks	ब्लॉक सूचीबद्ध करें
+	List Dimension Styles	डायमेंशन स्टाइल सूचीबद्ध करें
+	List Groups	समूह सूचीबद्ध करें
+	List Layer States	लेयर स्टेट सूचीबद्ध करें
+	List Layouts	लेआउट सूचीबद्ध करें
+	List System Variables	सिस्टम वेरिएबल सूचीबद्ध करें
+	List Text Styles	टेक्स्ट स्टाइल सूचीबद्ध करें
+	Load all	सभी लोड करें
+	Load...	लोड करें...
+	Load Application...	एप्लिकेशन लोड करें...
+	Loaded linetypes	लोड किए गए लाइनटाइप
+	Lock	लॉक करें
+	Lock Layer	लेयर लॉक करें
+	Lock viewport	व्यूपोर्ट लॉक करें
+	Lock/Unlock	लॉक/अनलॉक
+	Loft	लॉफ़्ट
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Autodesk, Inc. से संबद्ध नहीं।
+	MODEL	मॉडल
+	MText	MText
+	Magenta	मैजेंटा
+	Major line every	मुख्य रेखा हर
+	Make Current	वर्तमान बनाएँ
+	Make Object's Layer Current	ऑब्जेक्ट की लेयर वर्तमान बनाएँ
+	Make...	बनाएँ...
+	Match Layer	लेयर मिलाएँ
+	Match Properties	गुण मिलाएँ
+	Measure	मापें
+	Measure Distance	दूरी मापें
+	Measure Geometry	ज्यामिति मापें
+	Merge Cells	सेल मर्ज करें
+	Merged PRs	मर्ज किए गए PR
+	Mid Between 2 Points	2 बिंदुओं के बीच मध्य
+	Midpoint	मध्यबिंदु
+	Mirror	मिरर
+	Model	मॉडल
+	Model Space (in viewport)	मॉडल स्पेस (व्यूपोर्ट में)
+	Modeling	मॉडलिंग
+	Models	मॉडल
+	Modify	संशोधित करें
+	Move	मूव करें
+	Multileader	मल्टीलीडर
+	Multileader Style...	मल्टीलीडर स्टाइल...
+	Multileader style	मल्टीलीडर स्टाइल
+	Multiline	मल्टीलाइन
+	Multiline Text	मल्टीलाइन टेक्स्ट
+	Multiline Text...	मल्टीलाइन टेक्स्ट...
+	Multiple	एकाधिक
+	Multiple Point	एकाधिक बिंदु
+	My	मेरे
+	My properties: not available yet	मेरे गुण: अभी उपलब्ध नहीं
+	N	उ
+	Name	नाम
+	Name (A–Z)	नाम (A–Z)
+	Named Views...	नामित व्यू...
+	Nearest	निकटतम
+	New	नया
+	New (metric)	नया (मीट्रिक)
+	New Drawing	नई ड्रॉइंग
+	New Drawing (⌘N)	नई ड्रॉइंग (⌘N)
+	New Drawing...	नई ड्रॉइंग...
+	New Layer	नई लेयर
+	New Layout	नया लेआउट
+	New VP Freeze	नए VP में फ़्रीज़
+	New Viewports...	नए व्यूपोर्ट...
+	New from Template...	टेम्पलेट से नया...
+	New layout	नया लेआउट
+	New state name	नया स्टेट नाम
+	Next Change	अगला बदलाव
+	No	नहीं
+	No blocks defined in this drawing.	इस ड्रॉइंग में कोई ब्लॉक परिभाषित नहीं है।
+	No contributor data was built into this copy.	इस प्रति में कोई योगदानकर्ता डेटा शामिल नहीं किया गया।
+	No model credits were built into this copy.	इस प्रति में कोई मॉडल क्रेडिट शामिल नहीं किया गया।
+	No saved layer states	कोई सहेजा गया लेयर स्टेट नहीं
+	No selection	कोई चयन नहीं
+	Node	नोड
+	None	कोई नहीं
+	Not available	उपलब्ध नहीं
+	Not available yet	अभी उपलब्ध नहीं
+	Numbered list	क्रमांकित सूची
+	OK	ठीक है
+	Object	ऑब्जेक्ट
+	Object Snap	ऑब्जेक्ट स्नैप
+	Object Snap (F3)	ऑब्जेक्ट स्नैप (F3)
+	Object Snap On (F3)	ऑब्जेक्ट स्नैप चालू (F3)
+	Object Snap Tracking	ऑब्जेक्ट स्नैप ट्रैकिंग
+	Object Snap Tracking (F11)	ऑब्जेक्ट स्नैप ट्रैकिंग (F11)
+	Object Snap Tracking Settings	ऑब्जेक्ट स्नैप ट्रैकिंग सेटिंग्स
+	Object type:	ऑब्जेक्ट प्रकार:
+	Oblique	तिरछा
+	Off	बंद
+	Offset	ऑफ़सेट
+	On	चालू
+	On/Off	चालू/बंद
+	One of the Crafting Apps by the ArtCraft team and community.	ArtCraft टीम और समुदाय के Crafting Apps में से एक।
+	Only in this drawing: {n}	केवल इस ड्रॉइंग में: {n}
+	Only in {name}: {n}	केवल {name} में: {n}
+	Open (⌘O)	खोलें (⌘O)
+	Open Sample Drawing	नमूना ड्रॉइंग खोलें
+	Open sample drawing	नमूना ड्रॉइंग खोलें
+	Open Xref	Xref खोलें
+	Open...	खोलें...
+	Open Recent	हाल की खोलें
+	Clear Recent Files	हाल की फ़ाइलें साफ़ करें
+	Operator:	ऑपरेटर:
+	Orbit	ऑर्बिट
+	Ordinate	ऑर्डिनेट
+	Ortho (F8)	ऑर्थो (F8)
+	Ortho Mode	ऑर्थो मोड
+	Ortho Mode (F8)	ऑर्थो मोड (F8)
+	Osnap Settings...	Osnap सेटिंग्स...
+	Out	ज़ूम आउट
+	Over-constrained	अति-कंस्ट्रेंड
+	Override	ओवरराइड
+	PAPER	पेपर
+	Percent	प्रतिशत
+	Polar (distance < angle)	ध्रुवीय (दूरी < कोण)
+	PRs	PR
+	Page Setup Manager	पेज सेटअप मैनेजर
+	Page Setup Manager...	पेज सेटअप मैनेजर...
+	Pan	पैन
+	Pan Down	नीचे पैन करें
+	Pan Left	बाएँ पैन करें
+	Pan Right	दाएँ पैन करें
+	Pan Up	ऊपर पैन करें
+	Paper Space	पेपर स्पेस
+	Parallel	समांतर
+	Parameters Manager	पैरामीटर मैनेजर
+	Parametric	पैरामीट्रिक
+	Paste	पेस्ट करें
+	Paste as Block	ब्लॉक के रूप में पेस्ट करें
+	Paste to Command Line	कमांड लाइन में पेस्ट करें
+	Paste to Original Coordinates	मूल निर्देशांकों पर पेस्ट करें
+	Path Array	पथ ऐरे
+	Pattern	पैटर्न
+	Perpendicular	लंबवत
+	Plot	प्लॉट
+	Plot (click: do not plot)	प्लॉट करें (क्लिक: प्लॉट न करें)
+	Plot Preview	प्लॉट पूर्वावलोकन
+	Plot Window	प्लॉट विंडो
+	Plot style	प्लॉट स्टाइल
+	Plot style attached to	प्लॉट स्टाइल इससे संलग्न
+	Plot style table	प्लॉट स्टाइल तालिका
+	Plot Style...	प्लॉट स्टाइल...
+	Plot Style Manager	प्लॉट स्टाइल मैनेजर
+	Plot Style Manager...	प्लॉट स्टाइल मैनेजर...
+	Plot Styles...	प्लॉट स्टाइल...
+	Plotter Manager	प्लॉटर मैनेजर
+	Plotter Manager...	प्लॉटर मैनेजर...
+	New CTB	नई CTB
+	New STB	नई STB
+	New style	नई स्टाइल
+	Reset Panel Layout	पैनल लेआउट रीसेट करें
+	Send Hatches to Back	हैच सबसे पीछे भेजें
+	Send Under Objects	ऑब्जेक्ट के नीचे भेजें
+	Text Objects Only	केवल टेक्स्ट ऑब्जेक्ट
+	Use for this layout	इस लेआउट के लिए उपयोग करें
+	Display plot styles	प्लॉट स्टाइल दिखाएँ
+	No plot style tables.	कोई प्लॉट स्टाइल तालिका नहीं।
+	A built-in table: editing it keeps an edited copy in the drawing.	बिल्ट-इन तालिका: संपादित करने पर इसकी संपादित प्रति ड्रॉइंग में रखी जाती है।
+	Keep an editable copy of this table in the drawing	इस तालिका की संपादन योग्य प्रति ड्रॉइंग में रखें
+	Layout {name}: {table}	लेआउट {name}: {table}
+	Grayscale	ग्रेस्केल
+	Screening	स्क्रीनिंग
+	Use object linetype	ऑब्जेक्ट का लाइनटाइप उपयोग करें
+	Use object lineweight	ऑब्जेक्ट का लाइनवेट उपयोग करें
+	Remove	हटाएँ
+	Add	जोड़ें
+	Open a drawing first.	पहले कोई ड्रॉइंग खोलें।
+	Plot table type	प्लॉट तालिका प्रकार
+	Color-dependent	रंग-आधारित
+	Named	नामित
+	Plus/minus	प्लस/माइनस
+	Point	बिंदु
+	Point Filters	बिंदु फ़िल्टर
+	Point Style...	बिंदु स्टाइल...
+	Polar Array	ध्रुवीय ऐरे
+	Polar Tracking	ध्रुवीय ट्रैकिंग
+	Polar Tracking (F10)	ध्रुवीय ट्रैकिंग (F10)
+	Polar Tracking On (F10)	ध्रुवीय ट्रैकिंग चालू (F10)
+	Polar angle measurement	ध्रुवीय कोण मापन
+	Polar distance	ध्रुवीय दूरी
+	Polar: {distance} < {angle}°	ध्रुवीय: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	बहुभुज
+	Polygonal	बहुभुजीय
+	Polygonal Viewport	बहुभुजीय व्यूपोर्ट
+	Polyline	पॉलीलाइन
+	Polyline Edit	पॉलीलाइन संपादन
+	Position X	स्थिति X
+	Position Y	स्थिति Y
+	Position Z	स्थिति Z
+	Previous	पिछला
+	Previous Change	पिछला बदलाव
+	Previous Layer	पिछली लेयर
+	Primitives	प्रिमिटिव
+	Print	प्रिंट
+	Print...	प्रिंट करें...
+	Properties	गुण
+	Properties Inspector	गुण इंस्पेक्टर
+	Properties:	गुण:
+	Proxy	प्रॉक्सी
+	Purge	पर्ज करें
+	Pyramid	पिरामिड
+	Quadrant	चतुर्थांश
+	Query Entities	एंटिटी क्वेरी
+	Quick	त्वरित
+	Quick Dimension	त्वरित डायमेंशन
+	Quick Properties	त्वरित गुण
+	Quick Select	त्वरित चयन
+	Quick Select Properties	त्वरित चयन गुण
+	Quick Select...	त्वरित चयन...
+	QuickCalc	QuickCalc
+	QuickCalc Pick	QuickCalc पिक
+	Quit CADaddy	CADaddy बंद करें
+	Radius	त्रिज्या
+	Raster Image	रास्टर इमेज
+	Ray	किरण
+	Read-only	केवल-पठन
+	Real name	वास्तविक नाम
+	Realtime	रियलटाइम
+	Reassociate Dimensions	डायमेंशन पुनः संबद्ध करें
+	Recent	हाल के
+	Recent Commands	हाल की कमांड
+	Recent Input	हाल का इनपुट
+	Recover...	पुनर्प्राप्त करें...
+	Rectangle	आयत
+	Recalculate Table Formulas	तालिका सूत्र पुनर्गणना करें
+	Rectangular	आयताकार
+	Rectangular snap	आयताकार स्नैप
+	Rectangular Array	आयताकार ऐरे
+	Red	लाल
+	Redo	फिर से करें
+	Redo (⇧⌘Z)	फिर से करें (⇧⌘Z)
+	Redraw	रीड्रॉ
+	Regen	रीजेन
+	Regen All	सभी रीजेन करें
+	Region	रीजन
+	Region/Mass Properties	रीजन/द्रव्यमान गुण
+	Reinitialize	पुनः आरंभ करें
+	Relative	सापेक्ष
+	Relative to last segment	अंतिम सेगमेंट के सापेक्ष
+	Remove Leader	लीडर हटाएँ
+	Remove the viewport override	व्यूपोर्ट ओवरराइड हटाएँ
+	Rename Dimension Style	डायमेंशन स्टाइल का नाम बदलें
+	Rename Layer	लेयर का नाम बदलें
+	Rename Layer State	लेयर स्टेट का नाम बदलें
+	Rename Layout	लेआउट का नाम बदलें
+	Rename Text Style	टेक्स्ट स्टाइल का नाम बदलें
+	Rename...	नाम बदलें...
+	Repeat {command}	{command} दोहराएँ
+	Requires a point (x,y, @dx,dy or @d<a).	एक बिंदु आवश्यक है (x,y, @dx,dy या @d<a)।
+	Reset Palettes	पैलेट रीसेट करें
+	Restore	पुनर्स्थापित करें
+	Restore Layer State	लेयर स्टेट पुनर्स्थापित करें
+	Reverse	उलटें
+	Reverse the order	क्रम उलटें
+	Revision Cloud	रिविज़न क्लाउड
+	Revolve	रिवॉल्व
+	Right	दायाँ
+	Rotate	घुमाएँ
+	Rotation	घुमाव
+	S	द
+	Save	सहेजें
+	Save (⌘S)	सहेजें (⌘S)
+	Save As	इस रूप में सहेजें
+	Save As...	इस रूप में सहेजें...
+	Save Layer State	लेयर स्टेट सहेजें
+	Save State	स्टेट सहेजें
+	Scale	स्केल
+	Search for layer	लेयर खोजें
+	Search for parameter	पैरामीटर खोजें
+	Second and next points:	दूसरा और अगले बिंदु:
+	Select	चुनें
+	Select 2D polyline	2D पॉलीलाइन चुनें
+	Select All	सभी चुनें
+	Select Objects	ऑब्जेक्ट चुनें
+	Select Similar	समान चुनें
+	Select a 2D polyline.	एक 2D पॉलीलाइन चुनें।
+	Select a block reference.	एक ब्लॉक रेफ़रेंस चुनें।
+	Select a circle or arc.	एक वृत्त या आर्क चुनें।
+	Select a closed polyline	एक बंद पॉलीलाइन चुनें
+	Select a closed polyline, circle, ellipse or closed spline.	एक बंद पॉलीलाइन, वृत्त, दीर्घवृत्त या बंद स्प्लाइन चुनें।
+	Select a closed polyline.	एक बंद पॉलीलाइन चुनें।
+	Select a curve as the path.	पथ के रूप में एक वक्र चुनें।
+	Select a dimension constraint type	डायमेंशन कंस्ट्रेंट प्रकार चुनें
+	Select a line object	एक रेखा ऑब्जेक्ट चुनें
+	Select a line object.	एक रेखा ऑब्जेक्ट चुनें।
+	Select a line or an arc.	एक रेखा या आर्क चुनें।
+	Select a line or polyline segment	एक रेखा या पॉलीलाइन सेगमेंट चुनें
+	Select a line, arc or open polyline.	एक रेखा, आर्क या खुली पॉलीलाइन चुनें।
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	पथ के रूप में एक रेखा, आर्क, वृत्त, पॉलीलाइन, दीर्घवृत्त या स्प्लाइन चुनें।
+	Select a line, circle, arc or polyline segment.	एक रेखा, वृत्त, आर्क या पॉलीलाइन सेगमेंट चुनें।
+	Select a line.	एक रेखा चुनें।
+	Select a polyline.	एक पॉलीलाइन चुनें।
+	Select a text, mtext, attribute definition or dimension.	एक टेक्स्ट, mtext, एट्रिब्यूट परिभाषा या डायमेंशन चुनें।
+	Select an annotation object	एक एनोटेशन ऑब्जेक्ट चुनें
+	Select an arc or circle	एक आर्क या वृत्त चुनें
+	Select an arc.	एक आर्क चुनें।
+	Select an object	एक ऑब्जेक्ट चुनें
+	Select an object to change or	बदलने के लिए ऑब्जेक्ट चुनें या
+	Select an object to measure or	मापने के लिए ऑब्जेक्ट चुनें या
+	Select an object.	एक ऑब्जेक्ट चुनें।
+	Select an open curve.	एक खुला वक्र चुनें।
+	Select an open line, arc, polyline, ellipse arc or spline.	एक खुली रेखा, आर्क, पॉलीलाइन, दीर्घवृत्तीय आर्क या स्प्लाइन चुनें।
+	Select arc or circle	आर्क या वृत्त चुनें
+	Select arc or polyline arc segment	आर्क या पॉलीलाइन आर्क सेगमेंट चुनें
+	Select arc style	आर्क स्टाइल चुनें
+	Select arc, circle, line	आर्क, वृत्त, रेखा चुनें
+	Select at least two objects to join.	जोड़ने के लिए कम से कम दो ऑब्जेक्ट चुनें।
+	Select circle or arc to add center mark	केंद्र चिह्न जोड़ने के लिए वृत्त या आर्क चुनें
+	Select closed objects (regions, closed polylines, circles).	बंद ऑब्जेक्ट चुनें (रीजन, बंद पॉलीलाइन, वृत्त)।
+	Select first line	पहली रेखा चुनें
+	Select first line or arc	पहली रेखा या आर्क चुनें
+	Select first object	पहला ऑब्जेक्ट चुनें
+	Select first object or	पहला ऑब्जेक्ट चुनें या
+	Select first point	पहला बिंदु चुनें
+	Select nested objects to copy or	कॉपी करने के लिए नेस्टेड ऑब्जेक्ट चुनें या
+	Select object	ऑब्जेक्ट चुनें
+	Select object to dimension	डायमेंशन देने के लिए ऑब्जेक्ट चुनें
+	Select object to divide	विभाजित करने के लिए ऑब्जेक्ट चुनें
+	Select object to extend or shift-select to trim	बढ़ाने के लिए ऑब्जेक्ट चुनें या ट्रिम के लिए Shift-चयन करें
+	Select object to measure	मापने के लिए ऑब्जेक्ट चुनें
+	Select object to offset	ऑफ़सेट करने के लिए ऑब्जेक्ट चुनें
+	Select object to trim or shift-select to extend	ट्रिम करने के लिए ऑब्जेक्ट चुनें या बढ़ाने के लिए Shift-चयन करें
+	Select objects	ऑब्जेक्ट चुनें
+	Select objects (crossing window first corner)	ऑब्जेक्ट चुनें (क्रॉसिंग विंडो का पहला कोना)
+	Select objects to array.	ऐरे के लिए ऑब्जेक्ट चुनें।
+	Select objects to stretch by crossing-window or crossing-polygon...	क्रॉसिंग-विंडो या क्रॉसिंग-पॉलीगॉन से स्ट्रेच करने के लिए ऑब्जेक्ट चुनें...
+	Select objects:	ऑब्जेक्ट चुनें:
+	Add to Working Set	वर्किंग सेट में जोड़ें
+	Edit Reference In-Place	रेफ़रेंस को उसी स्थान पर संपादित करें
+	Save Reference Edits	रेफ़रेंस संपादन सहेजें
+	Working Set	वर्किंग सेट
+	Xref and Block In-place Editing	Xref और ब्लॉक का उसी स्थान पर संपादन
+	Select one polyline (Multiple is available through the JSON form).	एक पॉलीलाइन चुनें (Multiple JSON फ़ॉर्म के माध्यम से उपलब्ध है)।
+	Select path curve	पथ वक्र चुनें
+	Select point or object	बिंदु या ऑब्जेक्ट चुनें
+	Select polyline or	पॉलीलाइन चुनें या
+	Select second line	दूसरी रेखा चुनें
+	Select second line or shift-select to apply corner	दूसरी रेखा चुनें या कोना लागू करने के लिए Shift-चयन करें
+	Select second object	दूसरा ऑब्जेक्ट चुनें
+	Select second object or shift-select to apply corner	दूसरा ऑब्जेक्ट चुनें या कोना लागू करने के लिए Shift-चयन करें
+	Select second point	दूसरा बिंदु चुनें
+	Select spline	स्प्लाइन चुनें
+	Select symmetry line	सममिति रेखा चुनें
+	Select two points	दो बिंदु चुनें
+	Selection Cycling	चयन साइक्लिंग
+	Send to Back	सबसे पीछे भेजें
+	Set Current	वर्तमान सेट करें
+	Set Current Dimension Style	वर्तमान डायमेंशन स्टाइल सेट करें
+	Set Current Text Style	वर्तमान टेक्स्ट स्टाइल सेट करें
+	Set Current Viewport	वर्तमान व्यूपोर्ट सेट करें
+	Set Layer Properties	लेयर गुण सेट करें
+	Set Properties	गुण सेट करें
+	Set Table Cell	तालिका सेल सेट करें
+	Set Table Cell Style	तालिका सेल स्टाइल सेट करें
+	Set Variable	वेरिएबल सेट करें
+	Set View	व्यू सेट करें
+	Share	शेयर करें
+	Show	दिखाएँ
+	Show All	सभी दिखाएँ
+	Show All Constraint Bars	सभी कंस्ट्रेंट बार दिखाएँ
+	Show All Dynamic Dimensions	सभी डायनेमिक डायमेंशन दिखाएँ
+	Show and hide the tools of this category	इस श्रेणी के टूल दिखाएँ और छिपाएँ
+	Show in Tool Sets	टूल सेट में दिखाएँ
+	Show command prompting near the crosshairs	क्रॉसहेयर के पास कमांड प्रॉम्प्ट दिखाएँ
+	Show Layer List	लेयर सूची दिखाएँ
+	Show/Hide Lineweight	लाइनवेट दिखाएँ/छिपाएँ
+	Show/Hide Transparency	पारदर्शिता दिखाएँ/छिपाएँ
+	Single Line Text	सिंगल लाइन टेक्स्ट
+	Single Point	एकल बिंदु
+	Single...	एकल...
+	Smooth	स्मूथ
+	Snap	स्नैप
+	Snap Mode	स्नैप मोड
+	Snap Mode (F9)	स्नैप मोड (F9)
+	Snap On (F9)	स्नैप चालू (F9)
+	Snap Overrides	स्नैप ओवरराइड
+	Snap X spacing	स्नैप X अंतराल
+	Snap and Grid	स्नैप और ग्रिड
+	Snap type	स्नैप प्रकार
+	Solid	सॉलिड
+	Sort	क्रमबद्ध करें
+	Specify a point	एक बिंदु निर्दिष्ट करें
+	Specify a scale for the hatch pattern	हैच पैटर्न के लिए स्केल निर्दिष्ट करें
+	Specify a second extension line origin	दूसरी एक्सटेंशन लाइन का मूल बिंदु निर्दिष्ट करें
+	Specify an angle for the hatch pattern	हैच पैटर्न के लिए कोण निर्दिष्ट करें
+	Specify angle end point	कोण का अंतबिंदु निर्दिष्ट करें
+	Specify angle of dimension line	डायमेंशन लाइन का कोण निर्दिष्ट करें
+	Specify angle of dimension text	डायमेंशन टेक्स्ट का कोण निर्दिष्ट करें
+	Specify angle start point	कोण का आरंभ बिंदु निर्दिष्ट करें
+	Specify angle vertex	कोण का शीर्ष निर्दिष्ट करें
+	Specify angle vertex point	कोण का शीर्ष बिंदु निर्दिष्ट करें
+	Specify arc length dimension location	आर्क लंबाई डायमेंशन का स्थान निर्दिष्ट करें
+	Specify axis endpoint of ellipse	दीर्घवृत्त के अक्ष का अंतबिंदु निर्दिष्ट करें
+	Specify base diameter	आधार व्यास निर्दिष्ट करें
+	Specify base point	आधार बिंदु निर्दिष्ट करें
+	Specify base point or	आधार बिंदु निर्दिष्ट करें या
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	आधार बिंदु या विस्थापन निर्दिष्ट करें (रियलटाइम पैन के लिए माउस के मध्य बटन से ड्रैग करें)
+	Specify base radius or	आधार त्रिज्या निर्दिष्ट करें या
+	Specify center of donut	डोनट का केंद्र निर्दिष्ट करें
+	Specify center of ellipse	दीर्घवृत्त का केंद्र निर्दिष्ट करें
+	Specify center of polygon	बहुभुज का केंद्र निर्दिष्ट करें
+	Specify center point for circle	वृत्त का केंद्र बिंदु निर्दिष्ट करें
+	Specify center point of arc	आर्क का केंद्र बिंदु निर्दिष्ट करें
+	Specify center point of array	ऐरे का केंद्र बिंदु निर्दिष्ट करें
+	Specify center point of base	आधार का केंद्र बिंदु निर्दिष्ट करें
+	Specify corner of viewport	व्यूपोर्ट का कोना निर्दिष्ट करें
+	Specify corner of window, enter a scale factor (nX or nXP)	विंडो का कोना निर्दिष्ट करें, स्केल फ़ैक्टर दर्ज करें (nX या nXP)
+	Specify diameter of circle	वृत्त का व्यास निर्दिष्ट करें
+	Specify dimension arc line location	डायमेंशन आर्क लाइन का स्थान निर्दिष्ट करें
+	Specify dimension line location	डायमेंशन लाइन का स्थान निर्दिष्ट करें
+	Specify distance between turns	घुमावों के बीच की दूरी निर्दिष्ट करें
+	Specify distance to other axis	दूसरे अक्ष की दूरी निर्दिष्ट करें
+	Specify end angle	अंतिम कोण निर्दिष्ट करें
+	Specify end point of arc	आर्क का अंतबिंदु निर्दिष्ट करें
+	Specify end point of arc (hold Ctrl to switch direction)	आर्क का अंतबिंदु निर्दिष्ट करें (दिशा बदलने के लिए Ctrl दबाए रखें)
+	Specify ending width	अंतिम चौड़ाई निर्दिष्ट करें
+	Specify ending width for next segment	अगले सेगमेंट की अंतिम चौड़ाई निर्दिष्ट करें
+	Specify endpoint of arc	आर्क का अंतबिंदु निर्दिष्ट करें
+	Specify endpoint of axis	अक्ष का अंतबिंदु निर्दिष्ट करें
+	Specify endpoint of line	रेखा का अंतबिंदु निर्दिष्ट करें
+	Specify feature location	फ़ीचर का स्थान निर्दिष्ट करें
+	Specify fillet radius	फ़िलेट त्रिज्या निर्दिष्ट करें
+	Specify fillet radius for rectangles	आयतों के लिए फ़िलेट त्रिज्या निर्दिष्ट करें
+	Specify first angle endpoint	कोण का पहला अंतबिंदु निर्दिष्ट करें
+	Specify first chamfer distance	पहली चैम्फ़र दूरी निर्दिष्ट करें
+	Specify first chamfer distance for rectangles	आयतों के लिए पहली चैम्फ़र दूरी निर्दिष्ट करें
+	Specify first constraint point	पहला कंस्ट्रेंट बिंदु निर्दिष्ट करें
+	Specify first corner	पहला कोना निर्दिष्ट करें
+	Specify first corner point	पहला कोना बिंदु निर्दिष्ट करें
+	Specify first destination point	पहला गंतव्य बिंदु निर्दिष्ट करें
+	Specify first end point of circle's diameter	वृत्त के व्यास का पहला अंतबिंदु निर्दिष्ट करें
+	Specify first endpoint of edge	किनारे का पहला अंतबिंदु निर्दिष्ट करें
+	Specify first extension line origin	पहली एक्सटेंशन लाइन का मूल बिंदु निर्दिष्ट करें
+	Specify first point	पहला बिंदु निर्दिष्ट करें
+	Specify first point of mirror line	मिरर लाइन का पहला बिंदु निर्दिष्ट करें
+	Specify first point on circle	वृत्त पर पहला बिंदु निर्दिष्ट करें
+	Specify first point on circle: _tan to	वृत्त पर पहला बिंदु निर्दिष्ट करें: _tan to
+	Specify first source point	पहला स्रोत बिंदु निर्दिष्ट करें
+	Specify height	ऊँचाई निर्दिष्ट करें
+	Specify helix height or	हेलिक्स की ऊँचाई निर्दिष्ट करें या
+	Specify included angle	अंतर्निहित कोण निर्दिष्ट करें
+	Specify insertion base point	इन्सर्शन आधार बिंदु निर्दिष्ट करें
+	Specify insertion point	इन्सर्शन बिंदु निर्दिष्ट करें
+	A drawing opened from a file keeps that file's format.	फ़ाइल से खोली गई ड्रॉइंग उसी फ़ाइल का फ़ॉर्मेट बनाए रखती है।
+	An array that would create more objects than this is refused.	इससे अधिक ऑब्जेक्ट बनाने वाला ऐरे अस्वीकार कर दिया जाता है।
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy ये प्राथमिकताएँ, ऑब्जेक्ट स्नैप मोड और ड्राफ़्टिंग टॉगल आपके उपयोगकर्ता खाते के लिए सहेजता है और शुरू होने पर उन्हें पुनर्स्थापित करता है।
+	Changes apply at once and are kept for next time.	बदलाव तुरंत लागू होते हैं और अगली बार के लिए सहेजे जाते हैं।
+	Command line history	कमांड लाइन इतिहास
+	Copy as JSON	JSON के रूप में कॉपी करें
+	Crosshair size	क्रॉसहेयर आकार
+	Crossing selection color:	क्रॉसिंग चयन रंग:
+	Display	प्रदर्शन
+	Exclude:	बाहर रखें:
+	Grip size	ग्रिप आकार
+	Grips	ग्रिप
+	Groups	समूह
+	Hatches	हैच
+	Hold Shift to add to the selection	चयन में जोड़ने के लिए Shift दबाए रखें
+	Indicate selection area	चयन क्षेत्र दर्शाएँ
+	Interface language	इंटरफ़ेस भाषा
+	Interface theme	इंटरफ़ेस थीम
+	Keep the system cursor visible over the drawing area	ड्रॉइंग क्षेत्र पर सिस्टम कर्सर दिखाई देता रखें
+	Largest array	सबसे बड़ा ऐरे
+	Layout paper	लेआउट पेपर
+	Model background	मॉडल पृष्ठभूमि
+	Multiline text	मल्टीलाइन टेक्स्ट
+	Object grouping	ऑब्जेक्ट समूहन
+	Object selection limit for display of grips	ग्रिप प्रदर्शन के लिए ऑब्जेक्ट चयन सीमा
+	Object snap aperture	ऑब्जेक्ट स्नैप एपर्चर
+	Object snap marker size	ऑब्जेक्ट स्नैप मार्कर आकार
+	Objects on locked layers	लॉक लेयर पर ऑब्जेक्ट
+	Open and Save	खोलें और सहेजें
+	Options	विकल्प
+	Options...	विकल्प...
+	Pickbox size	पिकबॉक्स आकार
+	Preview	पूर्वावलोकन
+	Profiles	प्रोफ़ाइल
+	Reset keeps the interface language.	रीसेट करने पर इंटरफ़ेस भाषा बनी रहती है।
+	Reset to Defaults	डिफ़ॉल्ट पर रीसेट करें
+	Save new drawings as	नई ड्रॉइंग इस रूप में सहेजें
+	Screen magnifiers, screen readers and recorders follow the system cursor.	स्क्रीन मैग्नीफ़ायर, स्क्रीन रीडर और रिकॉर्डर सिस्टम कर्सर का अनुसरण करते हैं।
+	Select objects first, then choose a command	पहले ऑब्जेक्ट चुनें, फिर कमांड चुनें
+	Selection	चयन
+	Selection Area Effect	चयन क्षेत्र प्रभाव
+	Selection Preview Filter	चयन पूर्वावलोकन फ़िल्टर
+	Selection area opacity:	चयन क्षेत्र अपारदर्शिता:
+	Selection effect color	चयन प्रभाव रंग
+	Selection modes	चयन मोड
+	Selection preview	चयन पूर्वावलोकन
+	Settings...	सेटिंग्स...
+	Show Quick Properties for selected objects	चयनित ऑब्जेक्ट के लिए त्वरित गुण दिखाएँ
+	Show grips	ग्रिप दिखाएँ
+	Snap, grid, polar tracking and Dynamic Input:	स्नैप, ग्रिड, ध्रुवीय ट्रैकिंग और डायनेमिक इनपुट:
+	Tables	तालिकाएँ
+	The aperture is how near the cursor must come to a point for an object snap to find it.	एपर्चर यह है कि ऑब्जेक्ट स्नैप द्वारा किसी बिंदु को पकड़ने के लिए कर्सर को उसके कितने पास आना होगा।
+	User Preferences	उपयोगकर्ता प्राथमिकताएँ
+	Visual Effect Settings	विज़ुअल इफ़ेक्ट सेटिंग्स
+	Visual Effect Settings...	विज़ुअल इफ़ेक्ट सेटिंग्स...
+	When a command is active	जब कोई कमांड सक्रिय हो
+	When no command is active	जब कोई कमांड सक्रिय न हो
+	Window selection color:	विंडो चयन रंग:
+	Xrefs	Xref
+	objects	ऑब्जेक्ट
+	Specify inside diameter of donut	डोनट का भीतरी व्यास निर्दिष्ट करें
+	Specify leader arrowhead location	लीडर एरोहेड का स्थान निर्दिष्ट करें
+	Specify leader endpoint	लीडर का अंतबिंदु निर्दिष्ट करें
+	Specify leader landing location	लीडर लैंडिंग का स्थान निर्दिष्ट करें
+	Specify length for rectangles	आयतों के लिए लंबाई निर्दिष्ट करें
+	Specify length of chord	जीवा की लंबाई निर्दिष्ट करें
+	Specify length of segment	सेगमेंट की लंबाई निर्दिष्ट करें
+	Specify line width for rectangles	आयतों के लिए रेखा चौड़ाई निर्दिष्ट करें
+	Specify location for new vertex	नए वर्टेक्स का स्थान निर्दिष्ट करें
+	Specify minimum length of arc	आर्क की न्यूनतम लंबाई निर्दिष्ट करें
+	Specify new end point	नया अंतबिंदु निर्दिष्ट करें
+	Specify new location for marked vertex	चिह्नित वर्टेक्स का नया स्थान निर्दिष्ट करें
+	Specify new width for all segments	सभी सेगमेंट की नई चौड़ाई निर्दिष्ट करें
+	Specify next point	अगला बिंदु निर्दिष्ट करें
+	Specify offset distance	ऑफ़सेट दूरी निर्दिष्ट करें
+	Specify offset distance or	ऑफ़सेट दूरी निर्दिष्ट करें या
+	Specify opposite corner	विपरीत कोना निर्दिष्ट करें
+	Specify other corner point	दूसरा कोना बिंदु निर्दिष्ट करें
+	Specify other endpoint of axis	अक्ष का दूसरा अंतबिंदु निर्दिष्ट करें
+	Specify outside diameter of donut	डोनट का बाहरी व्यास निर्दिष्ट करें
+	Specify point	बिंदु निर्दिष्ट करें
+	Specify point on object for first tangent of circle	वृत्त की पहली स्पर्शरेखा के लिए ऑब्जेक्ट पर बिंदु निर्दिष्ट करें
+	Specify point on object for second tangent of circle	वृत्त की दूसरी स्पर्शरेखा के लिए ऑब्जेक्ट पर बिंदु निर्दिष्ट करें
+	Specify point on side to offset	ऑफ़सेट की ओर बिंदु निर्दिष्ट करें
+	Specify radius of arc	आर्क की त्रिज्या निर्दिष्ट करें
+	Specify radius of circle	वृत्त की त्रिज्या निर्दिष्ट करें
+	Specify rotation angle	घुमाव कोण निर्दिष्ट करें
+	Specify rotation angle of text	टेक्स्ट का घुमाव कोण निर्दिष्ट करें
+	Specify rotation angle or	घुमाव कोण निर्दिष्ट करें या
+	Specify scale factor	स्केल फ़ैक्टर निर्दिष्ट करें
+	Specify second angle endpoint	कोण का दूसरा अंतबिंदु निर्दिष्ट करें
+	Specify second break point	दूसरा ब्रेक बिंदु निर्दिष्ट करें
+	Specify second chamfer distance for rectangles	आयतों के लिए दूसरी चैम्फ़र दूरी निर्दिष्ट करें
+	Specify second constraint point	दूसरा कंस्ट्रेंट बिंदु निर्दिष्ट करें
+	Specify second destination point	दूसरा गंतव्य बिंदु निर्दिष्ट करें
+	Specify second end point of circle's diameter	वृत्त के व्यास का दूसरा अंतबिंदु निर्दिष्ट करें
+	Specify second endpoint of edge	किनारे का दूसरा अंतबिंदु निर्दिष्ट करें
+	Specify second extension line origin	दूसरी एक्सटेंशन लाइन का मूल बिंदु निर्दिष्ट करें
+	Specify second point	दूसरा बिंदु निर्दिष्ट करें
+	Specify second point of arc	आर्क का दूसरा बिंदु निर्दिष्ट करें
+	Specify second point of mirror line	मिरर लाइन का दूसरा बिंदु निर्दिष्ट करें
+	Specify second point on circle	वृत्त पर दूसरा बिंदु निर्दिष्ट करें
+	Specify second point on circle: _tan to	वृत्त पर दूसरा बिंदु निर्दिष्ट करें: _tan to
+	Specify second point or <use first point as displacement>	दूसरा बिंदु निर्दिष्ट करें या <पहले बिंदु को विस्थापन के रूप में उपयोग करें>
+	Specify second source point	दूसरा स्रोत बिंदु निर्दिष्ट करें
+	Specify side to offset	ऑफ़सेट की दिशा निर्दिष्ट करें
+	Specify start angle	आरंभ कोण निर्दिष्ट करें
+	Specify start point	आरंभ बिंदु निर्दिष्ट करें
+	Specify start point of arc	आर्क का आरंभ बिंदु निर्दिष्ट करें
+	Specify start point of polyline	पॉलीलाइन का आरंभ बिंदु निर्दिष्ट करें
+	Specify start point of text	टेक्स्ट का आरंभ बिंदु निर्दिष्ट करें
+	Specify starting width	आरंभिक चौड़ाई निर्दिष्ट करें
+	Specify starting width for next segment	अगले सेगमेंट की आरंभिक चौड़ाई निर्दिष्ट करें
+	Specify tangent direction for the start point of arc	आर्क के आरंभ बिंदु की स्पर्शरेखा दिशा निर्दिष्ट करें
+	Specify the elevation for rectangles	आयतों के लिए एलिवेशन निर्दिष्ट करें
+	Specify thickness for rectangles	आयतों के लिए मोटाई निर्दिष्ट करें
+	Specify third point on circle	वृत्त पर तीसरा बिंदु निर्दिष्ट करें
+	Specify third point on circle: _tan to	वृत्त पर तीसरा बिंदु निर्दिष्ट करें: _tan to
+	Specify third source point or <continue>	तीसरा स्रोत बिंदु निर्दिष्ट करें या <जारी रखें>
+	Specify through point	थ्रू पॉइंट निर्दिष्ट करें
+	Specify top diameter	शीर्ष व्यास निर्दिष्ट करें
+	Specify top radius or	शीर्ष त्रिज्या निर्दिष्ट करें या
+	Specify total angle	कुल कोण निर्दिष्ट करें
+	Specify total length or	कुल लंबाई निर्दिष्ट करें या
+	Specify width for rectangles	आयतों के लिए चौड़ाई निर्दिष्ट करें
+	Sphere	गोला
+	Spline	स्प्लाइन
+	Spline Edit	स्प्लाइन संपादन
+	Stack (type 1/2 then select)	भिन्न (1/2 टाइप करें फिर चुनें)
+	Standard	मानक
+	Start	आरंभ
+	Start Width	आरंभिक चौड़ाई
+	Start X	आरंभ X
+	Start Y	आरंभ Y
+	Start angle	आरंभ कोण
+	Start, Center, Angle	आरंभ, केंद्र, कोण
+	Start, Center, End	आरंभ, केंद्र, अंत
+	Start, Center, Length	आरंभ, केंद्र, लंबाई
+	Start, End, Angle	आरंभ, अंत, कोण
+	Start, End, Direction	आरंभ, अंत, दिशा
+	Start, End, Radius	आरंभ, अंत, त्रिज्या
+	Status	स्थिति
+	Status Bar	स्टेटस बार
+	Stretch	स्ट्रेच
+	Style: Standard	स्टाइल: मानक
+	Subtract	घटाएँ
+	Sweep	स्वीप
+	Switch Drawing	ड्रॉइंग बदलें
+	Switch Layout	लेआउट बदलें
+	Switch between model space in a viewport and paper space	व्यूपोर्ट के मॉडल स्पेस और पेपर स्पेस के बीच स्विच करें
+	Symmetric	सममित
+	Synchronize Attributes	एट्रिब्यूट सिंक्रनाइज़ करें
+	To	तक
+	Toggle PICKADD (off: each pick replaces the selection)	PICKADD टॉगल करें (बंद: हर चयन पिछले चयन को बदल देता है)
+	Toggle PICKADD (on: picks add to the selection)	PICKADD टॉगल करें (चालू: चयन मौजूदा चयन में जुड़ते हैं)
+	TOP	ऊपर
+	Table	तालिका
+	Table Breaks	तालिका ब्रेक
+	Table Cell Style	तालिका सेल स्टाइल
+	Table Style...	तालिका स्टाइल...
+	Table style	तालिका स्टाइल
+	Table...	तालिका...
+	Tan, Tan, Radius	स्पर्श, स्पर्श, त्रिज्या
+	Tan, Tan, Tan	स्पर्श, स्पर्श, स्पर्श
+	Tangent	स्पर्शरेखा
+	Temporary track point	अस्थायी ट्रैक बिंदु
+	Text	टेक्स्ट
+	Text Editor	टेक्स्ट एडिटर
+	Text Height	टेक्स्ट ऊँचाई
+	Text Style...	टेक्स्ट स्टाइल...
+	Text height	टेक्स्ट ऊँचाई
+	Text override	टेक्स्ट ओवरराइड
+	Text style	टेक्स्ट स्टाइल
+	Thaw All Layers	सभी लेयर थॉ करें
+	Thaw Layer	लेयर थॉ करें
+	There is nothing here yet.	यहाँ अभी कुछ नहीं है।
+	Thickness	मोटाई
+	Time	समय
+	To get started, create or open a drawing.	शुरू करने के लिए, कोई ड्रॉइंग बनाएँ या खोलें।
+	Tool Bar	टूल बार
+	Tool Sets	टूल सेट
+	Tools	टूल
+	Torus	टोरस
+	Trace	ट्रेस
+	Track orthogonally only	केवल ऑर्थोगोनल ट्रैक करें
+	Track using all polar angle settings	सभी ध्रुवीय कोण सेटिंग्स से ट्रैक करें
+	Transparency	पारदर्शिता
+	Trim	ट्रिम
+	True Color	ट्रू कलर
+	Turn All Layers On	सभी लेयर चालू करें
+	Turn Off Layer	लेयर बंद करें
+	Turn On Layer	लेयर चालू करें
+	Turn Quick Properties off (QPMODE)	त्वरित गुण बंद करें (QPMODE)
+	Type	प्रकार
+	Type a command	कमांड टाइप करें
+	Type text; Enter starts a new paragraph	टेक्स्ट टाइप करें; Enter से नया पैराग्राफ़ शुरू होता है
+	UCS Icon	UCS आइकन
+	Undo	पूर्ववत करें
+	Undo (⌘Z)	पूर्ववत करें (⌘Z)
+	Ungroup	समूह हटाएँ
+	Union	यूनियन
+	Unisolate Layer	लेयर आइसोलेशन हटाएँ
+	Units Conversion	इकाई रूपांतरण
+	Units...	इकाइयाँ...
+	Unlock Layer	लेयर अनलॉक करें
+	Unlock viewport	व्यूपोर्ट अनलॉक करें
+	Unmerge Cells	सेल अलग करें
+	Unsaved Layer State	बिना सहेजा लेयर स्टेट
+	Up	ऊपर
+	Update Data Links	डेटा लिंक अपडेट करें
+	Update	अपडेट करें
+	Use System Setting	सिस्टम सेटिंग उपयोग करें
+	User	उपयोगकर्ता
+	User Parameters	उपयोगकर्ता पैरामीटर
+	Username	उपयोगकर्ता नाम
+	Volume	आयतन
+	VP Color	VP रंग
+	VP Freeze	VP फ़्रीज़
+	Value	मान
+	Value:	मान:
+	Variables	वेरिएबल
+	Version	संस्करण
+	Version 2000	संस्करण 2000
+	Version 2004	संस्करण 2004
+	Version 2007	संस्करण 2007
+	Version 2010	संस्करण 2010
+	Version 2013	संस्करण 2013
+	Version 2018	संस्करण 2018
+	Version {version}	संस्करण {version}
+	Vertical	ऊर्ध्वाधर
+	VerticalDistance	ऊर्ध्वाधर दूरी
+	View	व्यू
+	ViewCube	ViewCube
+	Viewport	व्यूपोर्ट
+	Viewport Layer Freeze	व्यूपोर्ट लेयर फ़्रीज़
+	Viewport Properties	व्यूपोर्ट गुण
+	Viewport is locked	व्यूपोर्ट लॉक है
+	Viewport scale	व्यूपोर्ट स्केल
+	Viewport {id}	व्यूपोर्ट {id}
+	Viewports	व्यूपोर्ट
+	W	प
+	WCS ⌄	WCS ⌄
+	White	सफ़ेद
+	Width factor	चौड़ाई फ़ैक्टर
+	Window	विंडो
+	Wipeout	वाइपआउट
+	Workspace Switching	वर्कस्पेस बदलना
+	Write Block	ब्लॉक लिखें
+	Xline	Xline
+	Yellow	पीला
+	Yes	हाँ
+	Zoom	ज़ूम
+	Zoom All	सभी ज़ूम करें
+	Zoom Dynamic	डायनेमिक ज़ूम
+	Zoom Extents	विस्तार तक ज़ूम करें
+	Zoom In	ज़ूम इन
+	Zoom Object	ऑब्जेक्ट ज़ूम करें
+	Zoom Out	ज़ूम आउट
+	Zoom Previous	पिछला ज़ूम
+	Zoom Realtime	रियलटाइम ज़ूम
+	Zoom Window	विंडो ज़ूम
+	error	त्रुटि
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (कंस्ट्रेंट {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	{kind} कंस्ट्रेंट {name} = {expression}  (संपादित करने के लिए डबल-क्लिक करें)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  नया उपयोगकर्ता पैरामीटर
+	ΔLOC	Δ कोड पंक्तियाँ
+	−Bin	−बाइनरी
+	−LOC	−कोड पंक्तियाँ
+	⌘↩ to finish	समाप्त करने के लिए ⌘↩
+@plural	{n} commit	{n} कमिट|{n} कमिट
+@plural	{n} contributor	{n} योगदानकर्ता|{n} योगदानकर्ता
+	Drawing as bytes	ड्रॉइंग बाइट्स के रूप में
+	Services	सेवाएँ
+	Hide CADaddy	CADaddy छिपाएँ
+	Hide Others	अन्य छिपाएँ
+	Accessibility	सुलभता
+	Show System Cursor	सिस्टम कर्सर दिखाएँ
+	Animation Effects	एनिमेशन प्रभाव
+	Animation effects	एनिमेशन प्रभाव
+	Import...	इम्पोर्ट करें...
+	Export...	एक्सपोर्ट करें...
+	Batch Publish...	बैच प्रकाशन...
+	Scale List...	स्केल सूची...
+	Annotative Object Scale	एनोटेटिव ऑब्जेक्ट स्केल
+	Add Current Scale	वर्तमान स्केल जोड़ें
+	Delete Current Scale	वर्तमान स्केल हटाएँ
+	Add/Delete Scales...	स्केल जोड़ें/हटाएँ...
+	Synchronize Multiple-scale Positions	बहु-स्केल स्थितियाँ सिंक्रनाइज़ करें
+	Annotative Update	एनोटेटिव अपडेट
+	Show Annotative Objects	एनोटेटिव ऑब्जेक्ट दिखाएँ
+	Current Scale Only	केवल वर्तमान स्केल
+	All Scales	सभी स्केल
+	Drawing Recovery Manager...	ड्रॉइंग रिकवरी मैनेजर...
+	Tolerance...	टॉलरेंस...
+	Add Vertex	वर्टेक्स जोड़ें
+	Remove Vertex	वर्टेक्स हटाएँ
+	Convert to Arc	आर्क में बदलें
+	Convert to Line	रेखा में बदलें
+	Stretch Vertex	वर्टेक्स स्ट्रेच करें
+	Edit Array	ऐरे संपादित करें
+	Close Array Editing	ऐरे संपादन बंद करें
+	Multiline...	मल्टीलाइन...
+	Multiline Style...	मल्टीलाइन स्टाइल...
+	Solid Editing	सॉलिड संपादन
+	3D Mouse...	3D माउस...
+	3D Mouse	3D माउस
+	Calibrate 3D Mouse	3D माउस कैलिब्रेट करें
+	3D Mouse Navigation	3D माउस नेविगेशन
+	3D mouse input is unavailable on this platform	इस प्लेटफ़ॉर्म पर 3D माउस इनपुट उपलब्ध नहीं है
+	No supported 3D mouse found	कोई समर्थित 3D माउस नहीं मिला
+	Release the 3D mouse to calibrate its resting position	विश्राम स्थिति कैलिब्रेट करने के लिए 3D माउस छोड़ दें
+	3D mouse connected	3D माउस कनेक्ट है
+	3D mouse busy, possibly 3DxWare or missing device permissions	3D माउस व्यस्त है, संभवतः 3DxWare या डिवाइस अनुमतियाँ नहीं हैं
+	3D mouse disconnected	3D माउस डिस्कनेक्ट हो गया
+	3D mouse input could not be started	3D माउस इनपुट शुरू नहीं हो सका
+	Enable 3D mouse navigation	3D माउस नेविगेशन सक्षम करें
+	Pan sensitivity	पैन संवेदनशीलता
+	Zoom sensitivity	ज़ूम संवेदनशीलता
+	Reverse zoom direction	ज़ूम दिशा उलटें
+	Calibrate	कैलिब्रेट करें
+	Move sideways to pan; push/pull or twist to zoom.	पैन के लिए बगल में ले जाएँ; ज़ूम के लिए दबाएँ/खींचें या घुमाएँ।
+	Left device button: zoom extents. Right device button: calibrate.	डिवाइस का बायाँ बटन: विस्तार तक ज़ूम। डिवाइस का दायाँ बटन: कैलिब्रेट।
+	More toolbar commands	अधिक टूलबार कमांड
+	Default save version	डिफ़ॉल्ट सेव संस्करण
+	Automatic save every	स्वचालित सेव हर
+	min	मिनट
+	Automatic save file location	स्वचालित सेव फ़ाइल स्थान
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	जिन ड्रॉइंग की अभी कोई फ़ाइल नहीं है वे डिफ़ॉल्ट संस्करण में सहेजी जाती हैं। 0 मिनट से स्वचालित सेव बंद हो जाता है।
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	समय-संवेदी राइट-क्लिक: त्वरित क्लिक Enter है, दबाए रखने पर मेनू खुलता है
+	Turned off, a right-click while a command runs always opens the shortcut menu.	बंद होने पर, कमांड चलते समय राइट-क्लिक हमेशा शॉर्टकट मेनू खोलता है।
+	Hatch Pattern	हैच पैटर्न
+	Search for pattern	पैटर्न खोजें
+	Run Script...	स्क्रिप्ट चलाएँ...
+	Query Texts	टेक्स्ट क्वेरी
+	Hatch Pick	हैच पिक
+	Hatch and Gradient	हैच और ग्रेडिएंट
+	Color 1	रंग 1
+	Color 2	रंग 2
+	Shape	आकृति
+	Curved	वक्र
+	Spherical	गोलाकार
+	Hemispherical	अर्धगोलाकार
+	Inverted	उलटा
+	Centered	केंद्रित
+	Hatch origin	हैच मूल बिंदु
+	Use current origin	वर्तमान मूल बिंदु उपयोग करें
+	Specified origin	निर्दिष्ट मूल बिंदु
+	Click to set new origin	नया मूल बिंदु सेट करने के लिए क्लिक करें
+	Default to boundary extents	डिफ़ॉल्ट रूप से सीमा विस्तार
+	Bottom left	नीचे बाएँ
+	Bottom right	नीचे दाएँ
+	Top left	ऊपर बाएँ
+	Top right	ऊपर दाएँ
+	Boundaries	सीमाएँ
+	Add: Pick points	जोड़ें: बिंदु चुनें
+	Add: Select objects	जोड़ें: ऑब्जेक्ट चुनें
+	Boundaries picked: {n}	चुनी गई सीमाएँ: {n}
+	Associative	एसोसिएटिव
+	Create separate hatches	अलग-अलग हैच बनाएँ
+	Island detection	आइलैंड पहचान
+	Normal	सामान्य
+	Outer	बाहरी
+	Ignore	अनदेखा करें
+	Origin: {x}, {y}	मूल बिंदु: {x}, {y}
+	Sheet Books to PDF...	शीट बुक PDF में...
+	Not a number or distance: {text}	संख्या या दूरी नहीं है: {text}
+	Dynamic Block Data	डायनेमिक ब्लॉक डेटा
+	Custom	कस्टम
+	Dynamic Block Reference	डायनेमिक ब्लॉक रेफ़रेंस
+	Set Dynamic Property	डायनेमिक गुण सेट करें
+	Dynamic Block Grips	डायनेमिक ब्लॉक ग्रिप
+	Drag Dynamic Grip	डायनेमिक ग्रिप ड्रैग करें
+	Save Block	ब्लॉक सहेजें
+	Save Block As	ब्लॉक इस रूप में सहेजें
+	Close Block Editor	ब्लॉक एडिटर बंद करें
+	Unsaved changes	बिना सहेजे बदलाव
+	Edit Block Definition	ब्लॉक परिभाषा संपादित करें
+	Block to create or edit	बनाने या संपादित करने के लिए ब्लॉक
+	Open in Block Editor	ब्लॉक एडिटर में खोलें
+	This drawing	यह ड्रॉइंग
+	contains authoring elements. Open in Block Editor?	में ऑथरिंग एलिमेंट हैं। ब्लॉक एडिटर में खोलें?
+	New block	नया ब्लॉक
+	Italic	इटैलिक
+	Underline	अंडरलाइन
+	Overline	ओवरलाइन
+	Justify	जस्टिफ़ाई
+	Text color	टेक्स्ट रंग
+	Click the ruler to add a tab stop, right-click to remove one	टैब स्टॉप जोड़ने के लिए रूलर पर क्लिक करें, हटाने के लिए राइट-क्लिक करें
+	Ribbon	रिबन
+	Close Ribbon	रिबन बंद करें
+	Menu Bar	मेनू बार
+	Top	ऊपर
+	Bottom	नीचे
+	Front	सामने
+	Back	पीछे
+	SW Isometric	SW आइसोमेट्रिक
+	SE Isometric	SE आइसोमेट्रिक
+	NE Isometric	NE आइसोमेट्रिक
+	NW Isometric	NW आइसोमेट्रिक
+	3D Views	3D व्यू
+	Plan View	प्लान व्यू
+	World UCS	वर्ल्ड UCS
+	View Direction	व्यू दिशा
+	2D Wireframe	2D वायरफ्रेम
+	Custom View	कस्टम व्यू
+	Convert PDF to DWG...	PDF को DWG में बदलें...
+	Convert PDF to DWG	PDF को DWG में बदलें
+	PDF Import...	PDF इम्पोर्ट...
+	PDF Import	PDF इम्पोर्ट
+	Page	पेज
+	PDF layers (else by colour and line weight)	PDF लेयर (अन्यथा रंग और लाइनवेट के अनुसार)
+	By colour and line weight	रंग और लाइनवेट के अनुसार
+	Object layers (PDF_Geometry, PDF_Text, …)	ऑब्जेक्ट लेयर (PDF_Geometry, PDF_Text, …)
+	Import text	टेक्स्ट इम्पोर्ट करें
+	Join line pieces and make circles	रेखा के टुकड़े जोड़ें और वृत्त बनाएँ
+	Keep white fills (masks)	सफ़ेद फ़िल रखें (मास्क)
+	Import raster images (saved as PNG files)	रास्टर इमेज इम्पोर्ट करें (PNG फ़ाइलों के रूप में सहेजी जाती हैं)
+	Add a layout that plots like the sheet	शीट जैसा प्लॉट होने वाला लेआउट जोड़ें
+	Convert and Save as DWG…	बदलें और DWG के रूप में सहेजें…
+	Walk	वॉक
+	Report a Bug...	बग रिपोर्ट करें...
+	Request a Feature...	फ़ीचर का अनुरोध करें...
+	Donate / Improve	दान करें / बेहतर बनाएँ
+	Improve CADaddy	CADaddy को बेहतर बनाएँ
+	Or email {address}	या {address} पर ईमेल करें
+	Support CADaddy	CADaddy का समर्थन करें
+	CADaddy is free, and it always will be.	CADaddy मुफ़्त है, और हमेशा रहेगा।
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	न विज्ञापन, न सब्सक्रिप्शन। अगर CADaddy आपका समय बचाता है, तो एक छोटा-सा दान उस AI समय का खर्च उठाता है जो अगले फ़ीचर बनाता है।
+	Report a bug or request a feature	बग रिपोर्ट करें या फ़ीचर का अनुरोध करें
+	Support CADaddy...	CADaddy का समर्थन करें...
+	Array (classic)	ऐरे (क्लासिक)
+	Change	बदलें
+	Change Properties	गुण बदलें
+	Quick Leader	त्वरित लीडर
+	Symbol...	प्रतीक...
+	List Symbols	प्रतीक सूचीबद्ध करें
+	Symbols	प्रतीक
+	Search symbols	प्रतीक खोजें
+	No symbols match.	कोई प्रतीक मेल नहीं खाता।
+	Plumbing fixtures	प्लंबिंग फ़िक्स्चर
+	Plumbing piping	प्लंबिंग पाइपिंग
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Windows, Mac और Linux के लिए कंप्यूटर-सहायित डिज़ाइन और ड्राफ़्टिंग, Rust में लिखा गया।
+	Includes open-source components: see NOTICE.	ओपन-सोर्स घटक शामिल हैं: NOTICE देखें।
+	Free to use. Not affiliated with Autodesk, Inc.	उपयोग के लिए मुफ़्त। Autodesk, Inc. से संबद्ध नहीं।
+	Electrical devices	विद्युत उपकरण
+	Lighting	लाइटिंग
+	Power and distribution	पावर और वितरण
+	Low voltage	लो वोल्टेज
+	Fire alarm	फ़ायर अलार्म
+	Check for Updates...	अपडेट जाँचें...
+	Check for updates automatically	अपडेट स्वचालित रूप से जाँचें
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	दिन में एक बार CADaddy GitHub से नवीनतम संस्करण संख्या पूछता है। आपके या आपकी ड्रॉइंग के बारे में कुछ भी नहीं भेजा जाता।
+	Checking for updates...	अपडेट जाँचे जा रहे हैं...
+	CADaddy {v} is the latest version.	CADaddy {v} नवीनतम संस्करण है।
+	CADaddy {v} is available	CADaddy {v} उपलब्ध है
+	You have {v}. Updating keeps your drawings and settings.	आपके पास {v} है। अपडेट करने पर आपकी ड्रॉइंग और सेटिंग्स बनी रहती हैं।
+	Downloading CADaddy {v}...	CADaddy {v} डाउनलोड हो रहा है...
+	CADaddy {v} is ready to install	CADaddy {v} इंस्टॉल के लिए तैयार है
+	It installs when you close CADaddy. Restart now to update right away.	यह CADaddy बंद करने पर इंस्टॉल होगा। तुरंत अपडेट करने के लिए अभी रीस्टार्ट करें।
+	Couldn't update CADaddy	CADaddy अपडेट नहीं हो सका
+	Download	डाउनलोड करें
+	What's New	नया क्या है
+	Later	बाद में
+	Skip This Version	यह संस्करण छोड़ें
+	Restart Now	अभी रीस्टार्ट करें
+	When I Close CADaddy	जब मैं CADaddy बंद करूँ
+	Download Page	डाउनलोड पेज
+	Hide	छिपाएँ
+	The current layer is being turned off	वर्तमान लेयर बंद की जा रही है
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	लेयर "{layer}" वर्तमान लेयर है। इस पर बनाए गए ऑब्जेक्ट तब तक नहीं दिखेंगे जब तक आप इसे फिर से चालू नहीं करते।
+	Keep the Current Layer On	वर्तमान लेयर चालू रखें
+	Turn the Current Layer Off	वर्तमान लेयर बंद करें
+	Quantity Takeoff	क्वांटिटी टेकऑफ़
+	Dimension Style	डायमेंशन स्टाइल
+	Text Style	टेक्स्ट स्टाइल
+	Xref	Xref
+	Raster Image Reference...	रास्टर इमेज रेफ़रेंस...
+	Window Lasso	विंडो लैसो
+	Crossing Lasso	क्रॉसिंग लैसो
+	Fence Lasso	फ़ेंस लैसो
+	Press Space to cycle options	विकल्प बदलने के लिए Space दबाएँ
+	Burst	बर्स्ट
+	Convert to Mtext	Mtext में बदलें
+	View Twist	व्यू ट्विस्ट
+	Let AI agents control CADaddy	AI एजेंट को CADaddy नियंत्रित करने दें
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	इसके बाद Claude कनेक्टर और इस कंप्यूटर के अन्य एजेंट इस विंडो में ड्रॉइंग खोल, संपादित, सहेज और बंद कर सकते हैं। इस कंप्यूटर के बाहर से कुछ भी कनेक्ट नहीं हो सकता। अगली बार CADaddy शुरू होने पर लागू होगा।
+	Base Point	आधार बिंदु
+	Column Spacing	कॉलम अंतराल
+	Column Count	कॉलम संख्या
+	Row Spacing	पंक्ति अंतराल
+	Row Count	पंक्ति संख्या
+	Row and Column Count	पंक्ति और कॉलम संख्या
+	Level Spacing	लेवल अंतराल
+	Level Count	लेवल संख्या
+	Item Spacing	आइटम अंतराल
+	Item Count	आइटम संख्या
+	Total column spacing	कुल कॉलम अंतराल
+	Total row spacing	कुल पंक्ति अंतराल
+	Total row and column spacing	कुल पंक्ति और कॉलम अंतराल
+	Total level spacing	कुल लेवल अंतराल
+	Fill angle	फ़िल कोण
+	Stretch radius	स्ट्रेच त्रिज्या
+	Array Grips	ऐरे ग्रिप
+	Edit Array with a Grip	ग्रिप से ऐरे संपादित करें
+	Open Drawings	खुली ड्रॉइंग
+	Close Drawing	ड्रॉइंग बंद करें
+	Close All Drawings	सभी ड्रॉइंग बंद करें
+	Export Comparison Report...	तुलना रिपोर्ट एक्सपोर्ट करें...
+	Select All Layouts	सभी लेआउट चुनें
+	Move or Copy...	मूव या कॉपी करें...
+	Move or Copy	मूव या कॉपी करें
+	Move or copy layout "{name}"	लेआउट "{name}" मूव या कॉपी करें
+	Before layout:	इस लेआउट से पहले:
+	(move to end)	(अंत में ले जाएँ)
+	Create a copy	एक प्रति बनाएँ
+	A drawing keeps at least one layout.	ड्रॉइंग में कम से कम एक लेआउट रहता है।
+	Move Layout	लेआउट मूव करें
+	Background	पृष्ठभूमि
+	Text fill	टेक्स्ट फ़िल
+	Text fill color	टेक्स्ट फ़िल रंग
+	Text reads right to left	टेक्स्ट दाएँ से बाएँ पढ़ा जाता है
+	Placing text places the dimension line	टेक्स्ट रखने पर डायमेंशन लाइन भी रखी जाती है
+	Alternate tolerance precision	वैकल्पिक टॉलरेंस परिशुद्धता
+	Alternate tolerance zero suppression	वैकल्पिक टॉलरेंस शून्य दमन
+	Linear jog height (× text height)	रैखिक जॉग ऊँचाई (× टेक्स्ट ऊँचाई)
+	Break size	ब्रेक आकार
+	Express Tools	Express Tools
+	Break-line Symbol	ब्रेक-लाइन प्रतीक
+	Replace Block...	ब्लॉक बदलें...
+	Move/Copy/Rotate	मूव/कॉपी/घुमाएँ
+	Remove boundaries	सीमाएँ हटाएँ
+	Inherit Properties	गुण अपनाएँ
+	Nothing to preview yet.	अभी पूर्वावलोकन के लिए कुछ नहीं है।
+	Property Settings	गुण सेटिंग्स
+	Basic Properties	मूल गुण
+	Special Properties	विशेष गुण
+	Plot Style	प्लॉट स्टाइल
+	Material	मटीरियल
+	Shadow display	छाया प्रदर्शन
+	Center object	केंद्र ऑब्जेक्ट
+	Move with Dim Line	डायम लाइन के साथ मूव करें
+	Move Text Only	केवल टेक्स्ट मूव करें
+	Above Dim Line	डायम लाइन के ऊपर
+	Center Vertically	ऊर्ध्वाधर रूप से केंद्रित करें
+	Reset Text Position	टेक्स्ट स्थिति रीसेट करें
+	Continue Dimension	डायमेंशन जारी रखें
+	Baseline Dimension	बेसलाइन डायमेंशन
+	Flip Arrow	एरो पलटें
+	Lengthen Landing	लैंडिंग लंबी करें
+	Origin Point	मूल बिंदु
+	Hatch Angle	हैच कोण
+	Hatch Scale	हैच स्केल
+	Edit Tolerance	टॉलरेंस संपादित करें
+	Geometric Tolerance	ज्यामितीय टॉलरेंस
+	Geometric characteristic	ज्यामितीय विशेषता
+	Material condition	मटीरियल स्थिति
+	No symbol	कोई प्रतीक नहीं
+	Projected Tolerance Zone	प्रोजेक्टेड टॉलरेंस ज़ोन
+	Datum Identifier	डेटम पहचानकर्ता
+	Sym	प्रतीक
+	Tolerance 1	टॉलरेंस 1
+	Tolerance 2	टॉलरेंस 2
+	Datum 1	डेटम 1
+	Datum 2	डेटम 2
+	Datum 3	डेटम 3
+	PDF Underlay...	PDF अंडरले...
+	Clip PDF Underlay	PDF अंडरले क्लिप करें
+	Adjust PDF Underlay	PDF अंडरले समायोजित करें
+	PDF Underlay Layers	PDF अंडरले लेयर
+	Unused items in this drawing	इस ड्रॉइंग में अप्रयुक्त आइटम
+	Purge Checked Items	चिह्नित आइटम पर्ज करें
+	Purge All	सभी पर्ज करें
+	Items purged: {count}	पर्ज किए गए आइटम: {count}
+	Find what:	क्या ढूँढें:
+	Replace with:	इससे बदलें:
+	Match case	केस मिलाएँ
+	Find whole words only	केवल पूरे शब्द ढूँढें
+	Find	ढूँढें
+	Replace All	सभी बदलें
+	Matches replaced: {count} (objects: {objects})	बदले गए मिलान: {count} (ऑब्जेक्ट: {objects})
+	Matches found and selected: {count} (objects: {objects})	मिले और चुने गए मिलान: {count} (ऑब्जेक्ट: {objects})
+	Select Color	रंग चुनें
+	Dimension styles	डायमेंशन स्टाइल
+	Linetypes	लाइनटाइप
+	Multileader styles	मल्टीलीडर स्टाइल
+	Multiline styles	मल्टीलाइन स्टाइल
+	Table styles	तालिका स्टाइल
+	Text styles	टेक्स्ट स्टाइल
+	Zero-length geometry	शून्य-लंबाई ज्यामिति
+	Empty text objects	खाली टेक्स्ट ऑब्जेक्ट
+	Palette Windows	पैलेट विंडो
+	Dock	डॉक करें
+	Back into the main window	मुख्य विंडो में वापस
+	Dock Palette	पैलेट डॉक करें
+	Float in Own Window	अलग विंडो में फ़्लोट करें
+	Drawings (CDY, DWG, DXF)	ड्रॉइंग (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy ड्रॉइंग (CDY)
+	CADaddy drawing (.cdy)	CADaddy ड्रॉइंग (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	CADaddy ड्रॉइंग (.cdy) सहेजते समय एक DWG प्रति भी सहेजें
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	CADaddy ड्रॉइंग सब कुछ रखती है; DWG और DXF फ़ाइलें शायद सब कुछ न रखें (उनमें सहेजते समय बताया जाता है कि क्या नहीं)।
+	Field...	फ़ील्ड...
+	Update Fields	फ़ील्ड अपडेट करें
+	Change Text Case	टेक्स्ट केस बदलें
+	Auto Number	स्वतः क्रमांकन
+	Explode Text	टेक्स्ट एक्सप्लोड करें
+	Arc Aligned Text	आर्क संरेखित टेक्स्ट
+	Data Extraction	डेटा निष्कर्षण
+	Data source	डेटा स्रोत
+	Objects	ऑब्जेक्ट
+	Output	आउटपुट
+	Other drawings:	अन्य ड्रॉइंग:
+	Add Drawings...	ड्रॉइंग जोड़ें...
+	Open Settings...	सेटिंग्स खोलें...
+	Start from a saved .dxe settings file	सहेजी गई .dxe सेटिंग्स फ़ाइल से शुरू करें
+	Block names	ब्लॉक नाम
+	Include blocks inside blocks	ब्लॉक के अंदर के ब्लॉक शामिल करें
+	Other objects:	अन्य ऑब्जेक्ट:
+	The drawing has no other objects.	ड्रॉइंग में कोई अन्य ऑब्जेक्ट नहीं है।
+	Properties to extract:	निकालने के लिए गुण:
+	Attribute tags	एट्रिब्यूट टैग
+	Combine identical rows	समान पंक्तियाँ मिलाएँ
+	Insert a table	तालिका इन्सर्ट करें
+	Insertion point	इन्सर्शन बिंदु
+	Title	शीर्षक
+	Write a file (.csv for spreadsheets, .txt tab-separated)	फ़ाइल लिखें (स्प्रेडशीट के लिए .csv, टैब-विभाजित .txt)
+	Browse...	ब्राउज़ करें...
+	Save Settings...	सेटिंग्स सहेजें...
+	Save these choices to a .dxe file to use again	फिर से उपयोग के लिए ये विकल्प .dxe फ़ाइल में सहेजें
+	< Back	< पीछे
+	Next >	आगे >
+	Finish	समाप्त करें
+	UCS	UCS
+	Plan View (World)	प्लान व्यू (वर्ल्ड)
+	New UCS	नया UCS
+	World	वर्ल्ड
+	Current UCS	वर्तमान UCS
+	World (WCS)	वर्ल्ड (WCS)
+	Unnamed	अनाम
+	Hide UCS Icon	UCS आइकन छिपाएँ
+	WCS	WCS
+	Spelling	वर्तनी
+	Check Spelling	वर्तनी जाँचें
+	Where to check	कहाँ जाँचें
+	Selected objects	चयनित ऑब्जेक्ट
+	Not in dictionary:	शब्दकोश में नहीं:
+	Suggestions:	सुझाव:
+	Ignore All	सभी अनदेखा करें
+	Change All	सभी बदलें
+	Add to Dictionary	शब्दकोश में जोड़ें
+	Main dictionary:	मुख्य शब्दकोश:
+	American English	अमेरिकी अंग्रेज़ी
+	Custom dictionary:	कस्टम शब्दकोश:
+	Spelling check complete.	वर्तनी जाँच पूरी हुई।
+	Hyperlink...	हाइपरलिंक...
+	Select Objects for a Hyperlink	हाइपरलिंक के लिए ऑब्जेक्ट चुनें
+	Open Hyperlink	हाइपरलिंक खोलें
+	Insert Hyperlink	हाइपरलिंक इन्सर्ट करें
+	Edit Hyperlink	हाइपरलिंक संपादित करें
+	Text to display	प्रदर्शित करने के लिए टेक्स्ट
+	File or web page	फ़ाइल या वेब पेज
+	Named location	नामित स्थान
+	A named location with no file or web page is a layout or view of this drawing.	बिना फ़ाइल या वेब पेज वाला नामित स्थान इस ड्रॉइंग का लेआउट या व्यू होता है।
+	Remove Link	लिंक हटाएँ
+	⌘-click to follow the link	लिंक खोलने के लिए ⌘-क्लिक करें
+	Ctrl+click to follow the link	लिंक खोलने के लिए Ctrl+क्लिक करें
+	Materials Browser...	मटीरियल ब्राउज़र...
+	Attach by Layer	लेयर द्वारा संलग्न करें
+	Material Mapping	मटीरियल मैपिंग
+	New Material	नया मटीरियल
+	Edit Material	मटीरियल संपादित करें
+	Delete Material	मटीरियल हटाएँ
+	Assign Material	मटीरियल असाइन करें
+	Materials Browser	मटीरियल ब्राउज़र
+	Search	खोजें
+	Library	लाइब्रेरी
+	Add to drawing	ड्रॉइंग में जोड़ें
+	In this drawing	इस ड्रॉइंग में
+	No materials yet: add one from the library.	अभी कोई मटीरियल नहीं: लाइब्रेरी से एक जोड़ें।
+	Colour	रंग
+	Roughness	खुरदरापन
+	Metallic	धात्विक
+	Opacity	अपारदर्शिता
+	Mapping	मैपिंग
+	Tile size	टाइल आकार
+	Assign to selection ({n})	चयन को असाइन करें ({n})
+	Attach to layer	लेयर से संलग्न करें
+	Render	रेंडर
+	Edit Layer State	लेयर स्टेट संपादित करें
+	Export Layer State	लेयर स्टेट एक्सपोर्ट करें
+	Import Layer State	लेयर स्टेट इम्पोर्ट करें
+	New Layer Filter	नया लेयर फ़िल्टर
+	Edit Layer Filter	लेयर फ़िल्टर संपादित करें
+	Delete Layer Filter	लेयर फ़िल्टर हटाएँ
+	List Layer Filters	लेयर फ़िल्टर सूचीबद्ध करें
+	Layers in Filter	फ़िल्टर में लेयर
+	Layer States Manager	लेयर स्टेट मैनेजर
+	Invert filter	फ़िल्टर उलटें
+	New Property Filter...	नया गुण फ़िल्टर...
+	New Group Filter	नया समूह फ़िल्टर
+	Add Layer	लेयर जोड़ें
+	Remove Layer	लेयर हटाएँ
+	Layer Filter Properties	लेयर फ़िल्टर गुण
+	Filter name	फ़िल्टर नाम
+	Within	के भीतर
+	Any	कोई भी
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	पैटर्न: * कुछ भी, ? एक अक्षर, # एक अंक; अल्पविराम से अलग करें; ~ बाहर रखता है।
+	Layer states	लेयर स्टेट
+	Turn off layers not found in layer state	लेयर स्टेट में न मिली लेयर बंद करें
+	Layer properties to restore	पुनर्स्थापित करने के लिए लेयर गुण
+	On / Off	चालू / बंद
+	Frozen / Thawed	फ़्रोज़न / थॉ
+	Locked / Unlocked	लॉक / अनलॉक
+	Plot / No Plot	प्लॉट / प्लॉट नहीं
+	Layers in "{name}"	"{name}" में लेयर
+	Remove from the layer state	लेयर स्टेट से हटाएँ
+	New...	नया...
+	Save the layers as they are now in this state	लेयर को उनकी वर्तमान स्थिति में इस स्टेट में सहेजें
+	Edit...	संपादित करें...
+	Rename	नाम बदलें
+	New layer state name	नया लेयर स्टेट नाम
+	New name	नया नाम
+	Visual Style	विज़ुअल स्टाइल
+	Visual Styles	विज़ुअल स्टाइल
+	Wireframe	वायरफ्रेम
+	Hidden	हिडन
+	Shaded	शेडेड
+	Shaded with Edges	किनारों सहित शेडेड
+	Realistic	यथार्थवादी
+	Mesh	मेश
+	Polyface Mesh	पॉलीफ़ेस मेश
+	Polygon Mesh	पॉलीगॉन मेश
+	Fly	फ़्लाई
+	Walk and Fly	वॉक और फ़्लाई
+	3D Library...	3D लाइब्रेरी...
+	Add 3D Twins to Symbols	प्रतीकों में 3D ट्विन जोड़ें
+	List 3D Models	3D मॉडल सूचीबद्ध करें
+	Add 3D Twins	3D ट्विन जोड़ें
+	Plan Layers	प्लान लेयर
+	Plan Walls	प्लान दीवारें
+	Plan Openings	प्लान ओपनिंग
+	Plan Rooms	प्लान कमरे
+	Plan Notes	प्लान नोट्स
+	Plan Sheets	प्लान शीट
+	3D Building from Plan	प्लान से 3D भवन
+	Wedge	वेज
+	Presspull	प्रेसपुल
+	3D Solid	3D सॉलिड
+	Specify center	केंद्र निर्दिष्ट करें
+	Specify length	लंबाई निर्दिष्ट करें
+	Specify width	चौड़ाई निर्दिष्ट करें
+	Specify other corner	दूसरा कोना निर्दिष्ट करें
+	Specify center point	केंद्र बिंदु निर्दिष्ट करें
+	Specify base radius	आधार त्रिज्या निर्दिष्ट करें
+	Specify radius	त्रिज्या निर्दिष्ट करें
+	Specify diameter	व्यास निर्दिष्ट करें
+	Specify top radius	शीर्ष त्रिज्या निर्दिष्ट करें
+	Specify tube radius	ट्यूब त्रिज्या निर्दिष्ट करें
+	Select objects to extrude	एक्सट्रूड करने के लिए ऑब्जेक्ट चुनें
+	Select extrusion path	एक्सट्रूज़न पथ चुनें
+	Specify angle of taper for extrusion	एक्सट्रूज़न के लिए टेपर कोण निर्दिष्ट करें
+	Specify height of extrusion	एक्सट्रूज़न की ऊँचाई निर्दिष्ट करें
+	Select objects to revolve	रिवॉल्व करने के लिए ऑब्जेक्ट चुनें
+	Specify axis start point or define axis by	अक्ष का आरंभ बिंदु निर्दिष्ट करें या अक्ष परिभाषित करें
+	Specify axis endpoint	अक्ष का अंतबिंदु निर्दिष्ट करें
+	Specify angle of revolution	परिक्रमण कोण निर्दिष्ट करें
+	Select objects to sweep	स्वीप करने के लिए ऑब्जेक्ट चुनें
+	Select sweep path	स्वीप पथ चुनें
+	Select cross sections in lofting order	लॉफ़्टिंग क्रम में क्रॉस सेक्शन चुनें
+	Click inside bounded areas to press or pull	प्रेस या पुल करने के लिए सीमित क्षेत्रों के अंदर क्लिक करें
+	Specify extrusion height	एक्सट्रूज़न ऊँचाई निर्दिष्ट करें
+	Cube	घन
+	Sides	भुजाएँ
+	Top radius	शीर्ष त्रिज्या
+	Path	पथ
+	Taper angle	टेपर कोण
+	Select one or more regions or 3D solids.	एक या अधिक रीजन या 3D सॉलिड चुनें।
+	No closed area found there.	वहाँ कोई बंद क्षेत्र नहीं मिला।
+	Slice	स्लाइस
+	Thicken	मोटा करें
+	Fillet Edge	किनारा फ़िलेट करें
+	Chamfer Edge	किनारा चैम्फ़र करें
+	Fillet Edges	किनारे फ़िलेट करें
+	Chamfer Edges	किनारे चैम्फ़र करें
+	Move Faces	फ़ेस मूव करें
+	Offset Faces	फ़ेस ऑफ़सेट करें
+	Delete Faces	फ़ेस हटाएँ
+	Shell	शेल
+	Composite	कंपोज़िट
+	Select objects to slice	स्लाइस करने के लिए ऑब्जेक्ट चुनें
+	Specify a point on desired side or [keep Both sides]	वांछित ओर एक बिंदु निर्दिष्ट करें या [दोनों ओर रखें]
+	Both	दोनों
+	Specify start point of slicing plane or	स्लाइसिंग तल का आरंभ बिंदु निर्दिष्ट करें या
+	Specify second point on plane	तल पर दूसरा बिंदु निर्दिष्ट करें
+	Specify the Z of the XY-plane	XY-तल का Z निर्दिष्ट करें
+	Specify the X of the YZ-plane	YZ-तल का X निर्दिष्ट करें
+	Specify the Y of the ZX-plane	ZX-तल का Y निर्दिष्ट करें
+	Select surfaces to thicken	मोटा करने के लिए सतहें चुनें
+	Select a 3D solid	एक 3D सॉलिड चुनें
+	Select an edge	एक किनारा चुनें
+	Remove faces	फ़ेस हटाएँ
+	Select faces	फ़ेस चुनें
+	Specify thickness	मोटाई निर्दिष्ट करें
+	Enter fillet radius	फ़िलेट त्रिज्या दर्ज करें
+	Enter distance	दूरी दर्ज करें
+	Specify a base point or displacement	आधार बिंदु या विस्थापन निर्दिष्ट करें
+	Specify a second point of displacement	विस्थापन का दूसरा बिंदु निर्दिष्ट करें
+	Specify the offset distance	ऑफ़सेट दूरी निर्दिष्ट करें
+	Enter the shell offset distance	शेल ऑफ़सेट दूरी दर्ज करें
+	Select solids, surfaces, and regions to subtract from ..	सॉलिड, सतहें और रीजन चुनें जिनसे घटाना है ..
+	Select solids, surfaces, and regions to subtract ..	घटाने के लिए सॉलिड, सतहें और रीजन चुनें ..
+	Select two or more solids.	दो या अधिक सॉलिड चुनें।
+	The solids don't overlap; nothing was changed.	सॉलिड ओवरलैप नहीं करते; कुछ नहीं बदला गया।
+	Nothing would remain; nothing was changed.	कुछ भी शेष नहीं रहेगा; कुछ नहीं बदला गया।
+	The result would not be a solid; nothing was changed.	परिणाम सॉलिड नहीं होगा; कुछ नहीं बदला गया।
+	No straight edge between two flat faces there.	वहाँ दो समतल फ़ेस के बीच कोई सीधा किनारा नहीं है।
+	No face of the solid there.	वहाँ सॉलिड का कोई फ़ेस नहीं है।
+	Only outside (convex) edges can be filleted or chamfered.	केवल बाहरी (उत्तल) किनारों को फ़िलेट या चैम्फ़र किया जा सकता है।
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL बॉक्स, सिलिंडर, गोले और सीधे एक्सट्रूज़न पर काम करता है।
+	The walls are too thick for this solid.	इस सॉलिड के लिए दीवारें बहुत मोटी हैं।
+	Select solids to subtract from.	वे सॉलिड चुनें जिनसे घटाना है।
+	A solid can't be subtracted from itself.	किसी सॉलिड को स्वयं से नहीं घटाया जा सकता।
+	The solid would have too many operations; nothing was changed.	सॉलिड में बहुत अधिक ऑपरेशन हो जाएँगे; कुछ नहीं बदला गया।
+	That face can't be moved (only flat faces, holes and added parts).	वह फ़ेस मूव नहीं किया जा सकता (केवल समतल फ़ेस, छेद और जोड़े गए भाग)।
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	वह फ़ेस हटाया नहीं जा सकता (केवल छेद, फ़िलेट, चैम्फ़र और जोड़े गए भाग)।
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	वह फ़ेस ऑफ़सेट नहीं किया जा सकता (बॉक्स की भुजाएँ, सिलिंडर, शंकु और एक्सट्रूज़न के सिरे, सिलिंडर की दीवारें और गोले)।
+	The thickness must be more than zero.	मोटाई शून्य से अधिक होनी चाहिए।
+	The radius must be more than zero.	त्रिज्या शून्य से अधिक होनी चाहिए।
+	The distance must be more than zero.	दूरी शून्य से अधिक होनी चाहिए।
+	Requires a number.	एक संख्या आवश्यक है।
+	Parameter	पैरामीटर
+	Action	एक्शन
+	Visibility States	दृश्यता स्टेट
+	Remove Parameter or Action	पैरामीटर या एक्शन हटाएँ
+	Edit Reference	रेफ़रेंस संपादित करें
+	Discard Reference Edits	रेफ़रेंस संपादन छोड़ें
+	Nested References	नेस्टेड रेफ़रेंस
+	Light List	लाइट सूची
+	Sun Properties	सूर्य गुण
+	Render Exposure	रेंडर एक्सपोज़र
+	Point Light	पॉइंट लाइट
+	Spotlight	स्पॉटलाइट
+	Distant Light	डिस्टेंट लाइट
+	Change Lights	लाइट बदलें
+	Section Plane	सेक्शन प्लेन
+	Live Section	लाइव सेक्शन
+	Generate Section Block	सेक्शन ब्लॉक बनाएँ
+	Generate Section	सेक्शन बनाएँ
+	Flatshot	फ़्लैटशॉट
+	Base View	बेस व्यू
+	Section View	सेक्शन व्यू
+	Drawing Views	ड्रॉइंग व्यू
+	Select face or any point to locate section line or	सेक्शन लाइन रखने के लिए फ़ेस या कोई बिंदु चुनें या
+	Orthographic	ऑर्थोग्राफ़िक
+	Select section object	सेक्शन ऑब्जेक्ट चुनें
+	Specify location of base view	बेस व्यू का स्थान निर्दिष्ट करें
+	Select parent view	पैरेंट व्यू चुनें
+	Specify end point	अंतबिंदु निर्दिष्ट करें
+	Specify location of section view	सेक्शन व्यू का स्थान निर्दिष्ट करें
+	There is nothing to draw: no 3D objects were found.	बनाने के लिए कुछ नहीं है: कोई 3D ऑब्जेक्ट नहीं मिला।
+	The section plane doesn't cut any solid.	सेक्शन प्लेन किसी सॉलिड को नहीं काटता।
+	The view needs a direction.	व्यू के लिए दिशा आवश्यक है।
+	The drawing has no layout.	ड्रॉइंग में कोई लेआउट नहीं है।
+	That is not a section plane.	वह सेक्शन प्लेन नहीं है।
+	Requires a point.	एक बिंदु आवश्यक है।
+	The view is [dx, dy, dz].	व्यू [dx, dy, dz] है।
+	eTransmit...	eTransmit...
+	Create Transmittal	ट्रांसमिटल बनाएँ
+	Files in the package	पैकेज में फ़ाइलें
+	Not included	शामिल नहीं
+	Organized folders	व्यवस्थित फ़ोल्डर
+	One folder	एक फ़ोल्डर
+	Include a transmittal report	ट्रांसमिटल रिपोर्ट शामिल करें
+	Create ZIP...	ZIP बनाएँ...
+	Create Folder...	फ़ोल्डर बनाएँ...
+	STL Out	STL आउट
+	Export STL...	STL एक्सपोर्ट करें...
+	3D models (glTF, OBJ, STL)	3D मॉडल (glTF, OBJ, STL)
+	3D model (glTF binary)	3D मॉडल (glTF बाइनरी)
+	3D model (glTF)	3D मॉडल (glTF)
+	3D model (OBJ)	3D मॉडल (OBJ)
+	3D model (STL)	3D मॉडल (STL)
+	Render Region	रेंडर क्षेत्र
+	samples	सैंपल
+	a sample	एक सैंपल
+	Pick crop window to render	रेंडर करने के लिए क्रॉप विंडो चुनें
+	Nothing has been rendered yet.	अभी तक कुछ रेंडर नहीं हुआ है।
+	There is nothing to render: no surfaces in the view.	रेंडर करने के लिए कुछ नहीं है: व्यू में कोई सतह नहीं है।
+	The image couldn't be encoded.	इमेज एन्कोड नहीं हो सकी।
+	Saving images isn't available in the browser.	ब्राउज़र में इमेज सहेजना उपलब्ध नहीं है।
+	PNG image	PNG इमेज
+	JPEG image	JPEG इमेज
+	Save Image	इमेज सहेजें
+	My Properties	मेरे गुण
+	Add to My Properties	मेरे गुण में जोड़ें
+	Remove from My Properties	मेरे गुण से हटाएँ
+	All properties	सभी गुण
+	My properties: the ones you added (right-click a property's name to add it)	मेरे गुण: जो आपने जोड़े हैं (जोड़ने के लिए गुण के नाम पर राइट-क्लिक करें)
+	Right-click a property's name and choose Add to My Properties.	गुण के नाम पर राइट-क्लिक करें और मेरे गुण में जोड़ें चुनें।
+	Color Books	कलर बुक
+	Sheet Set Manager	शीट सेट मैनेजर
+	Palettes	पैलेट
+	New Sheet Set...	नया शीट सेट...
+	Open Sheet Set...	शीट सेट खोलें...
+	No sheet set is open.	कोई शीट सेट खुला नहीं है।
+	Number	संख्या
+	Subset	सबसेट
+	Remove Sheet	शीट हटाएँ
+	Add Drawing...	ड्रॉइंग जोड़ें...
+	Rename Layouts to Match	मिलान के लिए लेआउट का नाम बदलें
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	हर शीट का लेआउट "संख्या शीर्षक" बन जाता है, जिसे शीट संख्या और शीर्षक फ़ील्ड दिखाते हैं
+	Publish to PDF...	PDF में प्रकाशित करें...
+	Prefix	उपसर्ग
+	Digits	अंक
+	Renumber	पुनः क्रमांकित करें
+	Zoom to Fit	फ़िट होने तक ज़ूम करें
+	Drag to pan, scroll to zoom	पैन के लिए ड्रैग करें, ज़ूम के लिए स्क्रॉल करें
+	Publish	प्रकाशित करें
+	Sheets to publish, in order	प्रकाशित करने के लिए शीट, क्रम में
+	Sheet	शीट
+	Bookmark	बुकमार्क
+	Paper	पेपर
+	Orientation	ओरिएंटेशन
+	(sheet name)	(शीट नाम)
+	Page setup	पेज सेटअप
+	Landscape	लैंडस्केप
+	Portrait	पोर्ट्रेट
+	Add Sheets from Drawing...	ड्रॉइंग से शीट जोड़ें...
+	Load List...	सूची लोड करें...
+	Save List...	सूची सहेजें...
+	Publish List	प्रकाशन सूची
+	Enclose Text with Object	टेक्स्ट को ऑब्जेक्ट से घेरें
+	Export Attribute Information	एट्रिब्यूट जानकारी एक्सपोर्ट करें
+	Import Attribute Information	एट्रिब्यूट जानकारी इम्पोर्ट करें
+	Mask Text	टेक्स्ट मास्क करें
+	Remote Text	रिमोट टेक्स्ट
+	Rotate Text	टेक्स्ट घुमाएँ
+	Text Fit	टेक्स्ट फ़िट
+	Toggle Frames	फ़्रेम टॉगल करें
+	Unmask Text	टेक्स्ट मास्क हटाएँ
+	Update Remote Text	रिमोट टेक्स्ट अपडेट करें
+	Geometric	ज्यामितीय
+	Infer geometric constraints	ज्यामितीय कंस्ट्रेंट अनुमानित करें
+	Show constraint bars	कंस्ट्रेंट बार दिखाएँ
+	Constraint bar transparency (%)	कंस्ट्रेंट बार पारदर्शिता (%)
+	Dimensional	डायमेंशनल
+	Show dynamic constraints	डायनेमिक कंस्ट्रेंट दिखाएँ
+	Dimension name format	डायमेंशन नाम फ़ॉर्मेट
+	Name and Expression	नाम और व्यंजक
+	Constraint types AUTOCONSTRAIN applies, in order of priority	AUTOCONSTRAIN द्वारा लागू कंस्ट्रेंट प्रकार, प्राथमिकता क्रम में
+	Move Up	ऊपर ले जाएँ
+	Move Down	नीचे ले जाएँ
+	Tangent objects must share an intersection point	स्पर्शी ऑब्जेक्ट का एक साझा प्रतिच्छेदन बिंदु होना चाहिए
+	Perpendicular objects must share an intersection point	लंबवत ऑब्जेक्ट का एक साझा प्रतिच्छेदन बिंदु होना चाहिए
+	Distance tolerance	दूरी टॉलरेंस
+	Angle tolerance (degrees)	कोण टॉलरेंस (डिग्री)
+	3D Move	3D मूव
+	3D Rotate	3D घुमाव
+	3D Scale	3D स्केल
+	3D Align	3D संरेखण
+	3D Mirror	3D मिरर
+	3D Array	3D ऐरे
+	3D Object Snap	3D ऑब्जेक्ट स्नैप
+	Specify second point or distance	दूसरा बिंदु या दूरी निर्दिष्ट करें
+	Specify angle	कोण निर्दिष्ट करें
+	Specify source plane: first point	स्रोत तल निर्दिष्ट करें: पहला बिंदु
+	Specify source plane: second point	स्रोत तल निर्दिष्ट करें: दूसरा बिंदु
+	Specify source plane: third point	स्रोत तल निर्दिष्ट करें: तीसरा बिंदु
+	Specify destination plane: first point	गंतव्य तल निर्दिष्ट करें: पहला बिंदु
+	Specify destination plane: second point	गंतव्य तल निर्दिष्ट करें: दूसरा बिंदु
+	Specify destination plane: third point	गंतव्य तल निर्दिष्ट करें: तीसरा बिंदु
+	Delete source objects?	स्रोत ऑब्जेक्ट हटाएँ?
+	Specify point on XY plane	XY तल पर बिंदु निर्दिष्ट करें
+	Specify point on YZ plane	YZ तल पर बिंदु निर्दिष्ट करें
+	Specify point on ZX plane	ZX तल पर बिंदु निर्दिष्ट करें
+	Specify first point of mirror plane (3 points) or	मिरर तल का पहला बिंदु निर्दिष्ट करें (3 बिंदु) या
+	Specify second point on mirror plane	मिरर तल पर दूसरा बिंदु निर्दिष्ट करें
+	Specify third point on mirror plane	मिरर तल पर तीसरा बिंदु निर्दिष्ट करें
+	Enter the type of array	ऐरे का प्रकार दर्ज करें
+	Polar	ध्रुवीय
+	Enter the number of items in the array	ऐरे में आइटम की संख्या दर्ज करें
+	Specify the angle to fill (+=ccw, -=cw)	भरने का कोण निर्दिष्ट करें (+=वामावर्त, -=दक्षिणावर्त)
+	Enter the number of rows (---)	पंक्तियों की संख्या दर्ज करें (---)
+	Enter the number of columns (|||)	कॉलम की संख्या दर्ज करें (|||)
+	Enter the number of levels (...)	लेवल की संख्या दर्ज करें (...)
+	Specify the distance between rows (---)	पंक्तियों के बीच की दूरी निर्दिष्ट करें (---)
+	Specify the distance between columns (|||)	कॉलम के बीच की दूरी निर्दिष्ट करें (|||)
+	Specify the distance between levels (...)	लेवल के बीच की दूरी निर्दिष्ट करें (...)
+	Specify second point on axis of rotation	घूर्णन अक्ष पर दूसरा बिंदु निर्दिष्ट करें
+	Select the objects first.	पहले ऑब्जेक्ट चुनें।
+	Requires a point, or a distance along an axis.	एक बिंदु, या किसी अक्ष के साथ दूरी आवश्यक है।
+	The points must not coincide or line up.	बिंदु संपाती या एक सीध में नहीं होने चाहिए।
+	The three points line up: they make no plane.	तीनों बिंदु एक सीध में हैं: वे कोई तल नहीं बनाते।
+	<3D Object Snap on>	<3D ऑब्जेक्ट स्नैप चालू>
+	<3D Object Snap off>	<3D ऑब्जेक्ट स्नैप बंद>
+	Preparing the 3D view…	3D व्यू तैयार हो रहा है…
+	Viewpoint	व्यूपॉइंट
+	3D View Benchmark	3D व्यू बेंचमार्क
+	Drawing area	ड्रॉइंग क्षेत्र
+	Command line	कमांड लाइन
+	Viewport controls	व्यूपोर्ट नियंत्रण
+	Coordinate system menu	निर्देशांक प्रणाली मेनू
+	UCS icon X axis	UCS आइकन X अक्ष
+	UCS icon Y axis	UCS आइकन Y अक्ष
+	High Contrast	हाई कंट्रास्ट
+	Interface size	इंटरफ़ेस आकार
+	Interface Size	इंटरफ़ेस आकार
+	100%	100%
+	125%	125%
+	150%	150%
+	200%	200%
+	Building Spec	भवन स्पेक
+	Set Building Spec	भवन स्पेक सेट करें
+	Validate Building Spec	भवन स्पेक सत्यापित करें
+	Build Model from Spec	स्पेक से मॉडल बनाएँ
+	Convert Matches to Block	मिलानों को ब्लॉक में बदलें
+	Command Line Transparency	कमांड लाइन पारदर्शिता
+	AutoComplete Settings	ऑटोकम्प्लीट सेटिंग्स
+	Input Settings	इनपुट सेटिंग्स
+	AutoComplete	ऑटोकम्प्लीट
+	Search System Variables	सिस्टम वेरिएबल खोजें
+	Mid-string Search	मध्य-स्ट्रिंग खोज
+	System variable	सिस्टम वेरिएबल
+	Layer state	लेयर स्टेट
+	Model Issues	मॉडल समस्याएँ
+	Render Model View	मॉडल व्यू रेंडर करें
+	Model Overlay	मॉडल ओवरले
+	Model Counts	मॉडल गणना
+	System Printers	सिस्टम प्रिंटर
+	Report a Problem...	समस्या रिपोर्ट करें...
+	Report a Problem	समस्या रिपोर्ट करें
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	समस्या खोजने में मदद करने वाली जानकारी इस कंप्यूटर पर एक ZIP फ़ाइल में एकत्र करता है। कुछ भी भेजा नहीं जाता: रिपोर्ट करना चाहें तो फ़ाइल को ईमेल में संलग्न करें।
+	Always included	हमेशा शामिल
+	The log of this run and the two before it	इस रन का और उससे पहले के दो रन का लॉग
+	The last commands	अंतिम कमांड
+	Versions, operating system and graphics adapter	संस्करण, ऑपरेटिंग सिस्टम और ग्राफ़िक्स एडैप्टर
+	A summary of the open drawings (counts only, no geometry)	खुली ड्रॉइंग का सारांश (केवल गणना, कोई ज्यामिति नहीं)
+	Names: file paths, layer and block names, typed text	नाम: फ़ाइल पथ, लेयर और ब्लॉक नाम, टाइप किया गया टेक्स्ट
+	Names are replaced by placeholders, also in the log.	नामों को प्लेसहोल्डर से बदल दिया जाता है, लॉग में भी।
+	Save Report...	रिपोर्ट सहेजें...
+	Email it to {address}	इसे {address} पर ईमेल करें
+	Plans to Model	प्लान से मॉडल
+	Build	बनाएँ
+	Rebuild	फिर से बनाएँ
+	Check	जाँचें
+	Kept in the drawing.	ड्रॉइंग में रखा गया।
+	Drafted from the walk rules; not saved yet.	वॉक नियमों से ड्राफ़्ट किया गया; अभी सहेजा नहीं गया।
+	{n} of {total} approved	{total} में से {n} स्वीकृत
+	Save Spec	स्पेक सहेजें
+	Approve All	सभी स्वीकृत करें
+	Approved	स्वीकृत
+	Levels	लेवल
+	Wall Types	दीवार प्रकार
+	Rooms	कमरे
+	Door and Window Families	दरवाज़ा और खिड़की फ़ैमिली
+	Materials	मटीरियल
+	Site	साइट
+	Openings	ओपनिंग
+	Issues ({n})	समस्याएँ ({n})
+	The drawing changed since; check again.	ड्रॉइंग तब से बदल गई है; फिर से जाँचें।
+	No issues found.	कोई समस्या नहीं मिली।
+	Configure Standards	स्टैंडर्ड कॉन्फ़िगर करें
+	Standards files associated with the current drawing	वर्तमान ड्रॉइंग से संबद्ध स्टैंडर्ड फ़ाइलें
+	Add...	जोड़ें...
+	Check Standards...	स्टैंडर्ड जाँचें...
+	Check Standards	स्टैंडर्ड जाँचें
+	No standards violations were found.	कोई स्टैंडर्ड उल्लंघन नहीं मिला।
+	problem(s)	समस्या(एँ)
+	Take the standard's properties	स्टैंडर्ड के गुण लें
+	Replace it with the standard one	इसे स्टैंडर्ड वाले से बदलें
+	Fix All	सभी ठीक करें
+	Give everything that differs the standard's properties	जो कुछ भिन्न है उसे स्टैंडर्ड के गुण दें
+	Check Again	फिर से जाँचें
+	Layer Translator	लेयर ट्रांसलेटर
+	Translate From	इससे अनुवाद करें
+	Translate To	इसमें अनुवाद करें
+	Load a drawing whose layers to translate to.	वह ड्रॉइंग लोड करें जिसकी लेयर में अनुवाद करना है।
+	Map	मैप करें
+	Layer Translation Mappings	लेयर अनुवाद मैपिंग
+	Load Map...	मैप लोड करें...
+	Save Map...	मैप सहेजें...
+	Translate	अनुवाद करें
+	Not in the standards	स्टैंडर्ड में नहीं
+	Properties differ from the standards	गुण स्टैंडर्ड से भिन्न हैं
+	CAD Standards	CAD स्टैंडर्ड
+	Configure...	कॉन्फ़िगर करें...
+	Check...	जाँचें...
+	Layer Translator...	लेयर ट्रांसलेटर...
+	Draft Building Spec	भवन स्पेक ड्राफ़्ट करें
+	Draft from Plan	प्लान से ड्राफ़्ट करें
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	प्लान की लेयर, दीवारें, दरवाज़े, कमरे और नोट्स पढ़ें; अनुमान चिह्नित किए जाते हैं।
+	guess	अनुमान
+	Detect Stairs	सीढ़ियाँ पहचानें
+	List Stairs	सीढ़ियाँ सूचीबद्ध करें
+	Confirm Stairs	सीढ़ियों की पुष्टि करें
+	Stairs and Ramps	सीढ़ियाँ और रैंप
+	Bake Lighting	लाइटिंग बेक करें
+	Command Aliases and Shortcuts	कमांड उपनाम और शॉर्टकट
+	Keyboard Shortcuts	कीबोर्ड शॉर्टकट
+	replaces {command}	{command} की जगह लेता है
+	Built-in	बिल्ट-इन
+	Alias	उपनाम
+	Command	कमांड
+	Add or Change	जोड़ें या बदलें
+	Keys	कुंजियाँ
+	Edit Aliases and Shortcuts...	उपनाम और शॉर्टकट संपादित करें...
+	Customize	कस्टमाइज़ करें
+	Read Elevation	एलिवेशन पढ़ें
+	Read Roof Plan	रूफ़ प्लान पढ़ें
+	Exterior	बाहरी भाग
+	Drafting & Annotation	ड्राफ़्टिंग और एनोटेशन
+	3D Modeling	3D मॉडलिंग
+	Electrical	इलेक्ट्रिकल
+	Save Current As...	वर्तमान को इस रूप में सहेजें...
+	Workspace Settings...	वर्कस्पेस सेटिंग्स...
+	Workspace Settings	वर्कस्पेस सेटिंग्स
+	Navigation Bar	नेविगेशन बार
+	Save Workspace	वर्कस्पेस सहेजें
+	Workspaces	वर्कस्पेस
+	Close Navigation Bar	नेविगेशन बार बंद करें
+	Workspace	वर्कस्पेस
+	Read Ceiling Plan	सीलिंग प्लान पढ़ें
+	Ceilings	सीलिंग
+	Current Drawing	वर्तमान ड्रॉइंग
+	Favourites	पसंदीदा
+	Libraries	लाइब्रेरी
+	No library folder	कोई लाइब्रेरी फ़ोल्डर नहीं
+	Choose Folder...	फ़ोल्डर चुनें...
+	No blocks here.	यहाँ कोई ब्लॉक नहीं है।
+	Remove from Favourites	पसंदीदा से हटाएँ
+	Add to Favourites	पसंदीदा में जोड़ें
+	Insertion Options	इन्सर्शन विकल्प
+	Auto-rotate (follow the current UCS)	स्वतः घुमाएँ (वर्तमान UCS का अनुसरण करें)
+	Repeat Placement	प्लेसमेंट दोहराएँ
+	Tool Palettes	टूल पैलेट
+	Drag objects from the drawing here to make tools.	टूल बनाने के लिए ड्रॉइंग से ऑब्जेक्ट यहाँ ड्रैग करें।
+	Add Selected	चयनित जोड़ें
+	New palette	नया पैलेट
+	Select objects in the drawing first.	पहले ड्रॉइंग में ऑब्जेक्ट चुनें।
+	Blocks Palette	ब्लॉक पैलेट
+	Detect Grids	ग्रिड पहचानें
+	Align Levels by Grids	ग्रिड द्वारा लेवल संरेखित करें
+	Columns at Grids	ग्रिड पर कॉलम
+	Columns	कॉलम
+	Build Room Volumes	कमरों के वॉल्यूम बनाएँ
+	Building	भवन
+	Go to Room	कमरे पर जाएँ
+	List Rooms	कमरे सूचीबद्ध करें
+	Room	कमरा
+	Build Volumes	वॉल्यूम बनाएँ
+	Go to	पर जाएँ
+	{n} rooms	{n} कमरे
+	No rooms found: rooms are found from name labels inside closed outlines.	कोई कमरा नहीं मिला: कमरे बंद आउटलाइन के अंदर नाम लेबल से पहचाने जाते हैं।
+	Ceiling	सीलिंग
+	DesignCenter	DesignCenter
+	Up One Level	एक लेवल ऊपर
+	Folder	फ़ोल्डर
+	Text Styles	टेक्स्ट स्टाइल
+	Dimension Styles	डायमेंशन स्टाइल
+	Layouts	लेआउट
+	Add to Drawing	ड्रॉइंग में जोड़ें
+	Choose a drawing to see what it holds.	ड्रॉइंग में क्या है देखने के लिए उसे चुनें।
+	{name} inserted.	{name} इन्सर्ट किया गया।
+	{name} is already in the drawing; it was kept.	{name} पहले से ड्रॉइंग में है; उसे रखा गया।
+	{name} added.	{name} जोड़ा गया।
+	Read MEP Runs	MEP रन पढ़ें
+	Model Clashes	मॉडल क्लैश
+	MEP Systems	MEP सिस्टम
+	Undo History	पूर्ववत इतिहास
+	(Start)	(आरंभ)
+	Click a step to undo or redo to it.	किसी चरण तक पूर्ववत या फिर से करने के लिए उस पर क्लिक करें।
+	Nothing yet.	अभी कुछ नहीं।
+	Double-click to run it again	फिर से चलाने के लिए डबल-क्लिक करें
+	Copy as Script	स्क्रिप्ट के रूप में कॉपी करें
+	Save Session as Script...	सत्र को स्क्रिप्ट के रूप में सहेजें...
+	Command History Palette	कमांड इतिहास पैलेट
+	Furnish from Plan	प्लान से फ़र्निश करें
+	Classify Plan	प्लान वर्गीकृत करें
+	Text and multiline text	टेक्स्ट और मल्टीलाइन टेक्स्ट
+	Block attribute values	ब्लॉक एट्रिब्यूट मान
+	Dimension text	डायमेंशन टेक्स्ट
+	Multileaders	मल्टीलीडर
+	Hyperlinks	हाइपरलिंक
+	Layer and block names	लेयर और ब्लॉक नाम
+	Find where:	कहाँ ढूँढें:
+	Current space	वर्तमान स्पेस
+	Plain text	सादा टेक्स्ट
+	Use wildcards	वाइल्डकार्ड उपयोग करें
+	Regular expressions	रेगुलर एक्सप्रेशन
+	Look in	इसमें देखें
+	Zoom To	ज़ूम करें
+	Replace	बदलें
+	Create Selection Set	चयन सेट बनाएँ
+	Matches found: {count} (objects: {objects})	मिले मिलान: {count} (ऑब्जेक्ट: {objects})
+	Layer name	लेयर नाम
+	Block name	ब्लॉक नाम
+	Revise Model from Plans	प्लान से मॉडल संशोधित करें
+	Plans to Model Benchmark	प्लान से मॉडल बेंचमार्क
+	Plans to Model Case	प्लान से मॉडल केस
+	Plans to Model Score	प्लान से मॉडल स्कोर
+	Save Viewpoint	व्यूपॉइंट सहेजें
+	Viewpoints for Every Room	हर कमरे के लिए व्यूपॉइंट
+	Camera Tour	कैमरा टूर
+	Tours and Viewpoints	टूर और व्यूपॉइंट
+	Tour Timing	टूर समय
+	3D Graphics Limits	3D ग्राफ़िक्स सीमाएँ
+	Drawn by the CPU (no usable GPU)	CPU द्वारा बनाया गया (कोई उपयोगी GPU नहीं)
+	Point Cloud...	पॉइंट क्लाउड...
+	Point Cloud	पॉइंट क्लाउड
+	Attach Point Cloud	पॉइंट क्लाउड संलग्न करें
+	Clip Point Cloud	पॉइंट क्लाउड क्लिप करें
+	Point Cloud Color Map	पॉइंट क्लाउड कलर मैप
+	Point Cloud Information	पॉइंट क्लाउड जानकारी
+	Markups	मार्कअप
+	{done} of {total} done	{total} में से {done} पूर्ण
+	No markups. Import them from a reviewed PDF.	कोई मार्कअप नहीं। समीक्षा किए गए PDF से इम्पोर्ट करें।
+	Done	पूर्ण
+	Import Markups...	मार्कअप इम्पोर्ट करें...
+	Import Markups	मार्कअप इम्पोर्ट करें
+	Markup Import...	मार्कअप इम्पोर्ट...
+	Markup Status	मार्कअप स्थिति
+	Read Door and Window Schedules	दरवाज़ा और खिड़की शेड्यूल पढ़ें
+	Schedules	शेड्यूल
+	Esc	Esc
+	Hide the touch bar	टच बार छिपाएँ
+	Type a command or value	कमांड या मान टाइप करें
+	Embed Textures	टेक्सचर एम्बेड करें
+	Publish Walkthrough	वॉकथ्रू प्रकाशित करें
+	Walkthroughs (CDYWALK)	वॉकथ्रू (CDYWALK)
+	Check Exchange	एक्सचेंज जाँचें
+	Not kept in the {format} file	{format} फ़ाइल में नहीं रखा गया
+	The drawing was saved. This file format can't keep everything in it:	ड्रॉइंग सहेजी गई। यह फ़ाइल फ़ॉर्मेट इसमें सब कुछ नहीं रख सकता:
+	What	क्या
+	left out	छोड़ा गया
+	changed	बदला गया
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	CADaddy ड्रॉइंग (.cdy) सब कुछ रखती है। एक्सचेंज जाँचें इसे बिना सहेजे फिर से सूचीबद्ध करता है।
+	VP Linetype	VP लाइनटाइप
+	VP Lineweight	VP लाइनवेट
+	Unreconciled New Layers ({n})	असमायोजित नई लेयर ({n})
+	Reconcile All	सभी समायोजित करें
+	Reconcile Layer	लेयर समायोजित करें
+	LayerWalk	LayerWalk
+	Layers: {n}	लेयर: {n}
+	Restore on exit	बाहर निकलने पर पुनर्स्थापित करें
+	Filter:	फ़िल्टर:
+	Layer Walk...	लेयर वॉक...
+	Layer Walk	लेयर वॉक
+	Isolate Layer to Current Viewport	लेयर को वर्तमान व्यूपोर्ट में आइसोलेट करें
+	Unreconciled New Layers	असमायोजित नई लेयर
+	Move to New Window	नई विंडो में ले जाएँ
+	Dock All Windows	सभी विंडो डॉक करें
+	Every drawing is in a window of its own.	हर ड्रॉइंग अपनी अलग विंडो में है।
+	Back among the drawing tabs	ड्रॉइंग टैब में वापस
+	Plot Stamp...	प्लॉट स्टैम्प...
+	Plot a Folder of Drawings...	ड्रॉइंग का फ़ोल्डर प्लॉट करें...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	फ़ोल्डर की हर ड्रॉइंग अपनी अलग PDF में, उसके अंदर एक PDF फ़ोल्डर में
+	Plot stamp	प्लॉट स्टैम्प
+	Quick Properties Lists	त्वरित गुण सूचियाँ
+	Purgeable Items	पर्ज योग्य आइटम
+	Find Non-Purgeable Items	पर्ज न होने योग्य आइटम ढूँढें
+	Purge {kind} "{name}"?	{kind} "{name}" पर्ज करें?
+	Yes to All	सभी के लिए हाँ
+	Items that can't be purged, and why	वे आइटम जो पर्ज नहीं हो सकते, और क्यों
+	Select and Zoom	चुनें और ज़ूम करें
+	Pick an item to see why it can't be purged.	यह देखने के लिए आइटम चुनें कि वह पर्ज क्यों नहीं हो सकता।
+	Confirm each item to be purged	पर्ज होने वाले हर आइटम की पुष्टि करें
+	Purge nested items	नेस्टेड आइटम पर्ज करें
+	Text Align	टेक्स्ट संरेखण
+	Color model:	कलर मॉडल:
+	Hue	ह्यू
+	Saturation	सैचुरेशन
+	Luminance	ल्यूमिनेंस
+	Hex	Hex
+	More Colors...	और रंग...
+	Load more books with COLORBOOK (JSON or tab-separated files).	COLORBOOK से और बुक लोड करें (JSON या टैब-विभाजित फ़ाइलें)।
+	All spaces	सभी स्पेस
+	Total: {n}	कुल: {n}
+	No block references here.	यहाँ कोई ब्लॉक रेफ़रेंस नहीं है।
+	Highlight and zoom to its references	इसके रेफ़रेंस हाइलाइट करें और उन पर ज़ूम करें
+	Similar but not identical: {scaled} scaled, {exploded} exploded	समान पर एकदम वैसे नहीं: {scaled} स्केल किए गए, {exploded} एक्सप्लोड किए गए
+	Insert Count Table	गणना तालिका इन्सर्ट करें
+	Update Count Tables	गणना तालिकाएँ अपडेट करें
+	Count in Area	क्षेत्र में गणना
+	{n} reference(s) of {name} selected.	{name} के {n} रेफ़रेंस चुने गए।
+	{n} similar object(s) selected.	{n} समान ऑब्जेक्ट चुने गए।
+	Geographic Location...	भौगोलिक स्थान...
+	Remove Geographic Location	भौगोलिक स्थान हटाएँ
+	Set Location	स्थान सेट करें
+	Remove Location	स्थान हटाएँ
+	Latitude and Longitude	अक्षांश और देशांतर
+	Trace Image to Vectors	इमेज को वेक्टर में ट्रेस करें
+	Trace Raster Image to Vectors	रास्टर इमेज को वेक्टर में ट्रेस करें
+	Drawing Summary	ड्रॉइंग सारांश
+	Query Drawing	ड्रॉइंग क्वेरी
+	Begin Agent Request	एजेंट अनुरोध शुरू करें
+	End Agent Request	एजेंट अनुरोध समाप्त करें
+	Agent Dry Run	एजेंट ड्राई रन
+	Agent Confirmations	एजेंट पुष्टियाँ
+	Agent Change Journal	एजेंट परिवर्तन जर्नल
+	Agent Activity	एजेंट गतिविधि
+	An agent asks	एक एजेंट पूछता है
+	Allow	अनुमति दें
+	Deny	अस्वीकार करें
+	Not allowed: {question}	अनुमति नहीं: {question}
+	Ask me before an agent saves over a file or closes with changes	एजेंट द्वारा किसी फ़ाइल पर सहेजने या बदलावों सहित बंद करने से पहले मुझसे पूछें
+	Dry run: agents' commands change nothing	ड्राई रन: एजेंट की कमांड कुछ नहीं बदलतीं
+	No agent requests yet.	अभी कोई एजेंट अनुरोध नहीं।
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} कमांड · {added} जोड़े गए · {removed} हटाए गए · {changed} बदले गए
+	Select what it added and changed	जो इसने जोड़ा और बदला उसे चुनें
+	Activity History	गतिविधि इतिहास
+	Activity history is off (Options ▸ Open and Save).	गतिविधि इतिहास बंद है (विकल्प ▸ खोलें और सहेजें)।
+	command	कमांड
+	{n} steps	{n} चरण
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	इस चरण द्वारा जोड़े या बदले गए ऑब्जेक्ट चुनें
+	The objects of this step are gone.	इस चरण के ऑब्जेक्ट अब नहीं हैं।
+	{n} object(s) selected.	{n} ऑब्जेक्ट चुने गए।
+	{n} object(s) selected ({gone} since erased).	{n} ऑब्जेक्ट चुने गए ({gone} बाद में मिटाए गए)।
+	{n} s ago	{n} सेकंड पहले
+	{n} min ago	{n} मिनट पहले
+	{n} h ago	{n} घंटे पहले
+	{n} d ago	{n} दिन पहले
+	Keep an activity history beside each drawing (private, on this computer)	हर ड्रॉइंग के साथ गतिविधि इतिहास रखें (निजी, इस कंप्यूटर पर)
+	Background mask	पृष्ठभूमि मास्क
+	Mask border offset	मास्क बॉर्डर ऑफ़सेट
+	Mask color	मास्क रंग
+	Use drawing background	ड्रॉइंग पृष्ठभूमि उपयोग करें
+	Regenerate Dimensions	डायमेंशन रीजनरेट करें
+	Enter layer name for new dimensions (. for the current layer)	नए डायमेंशन के लिए लेयर नाम दर्ज करें (वर्तमान लेयर के लिए .)
+	{folder} (folder)	{folder} (फ़ोल्डर)
+	Add drawings or a folder of them.	ड्रॉइंग या उनका फ़ोल्डर जोड़ें।
+	Add Files...	फ़ाइलें जोड़ें...
+	Add Folder...	फ़ोल्डर जोड़ें...
+	cancelled	रद्द किया गया
+	Choose the output folder, or Next to the originals.	आउटपुट फ़ोल्डर चुनें, या मूल फ़ाइलों के बगल में।
+	Convert Drawings	ड्रॉइंग बदलें
+	Convert Drawings...	ड्रॉइंग बदलें...
+	Convert drawings...	ड्रॉइंग बदलें...
+	Convert to	इसमें बदलें
+	Converted	बदला गया
+	Converted, not all kept	बदला गया, सब कुछ नहीं रखा गया
+	Converting files is not available on the web.	वेब पर फ़ाइलें बदलना उपलब्ध नहीं है।
+	Drawings to convert	बदलने के लिए ड्रॉइंग
+	Each drawing's own	हर ड्रॉइंग का अपना
+	Failed	विफल
+	Files already there	पहले से मौजूद फ़ाइलें
+	Folder:	फ़ोल्डर:
+	Include subfolders	सबफ़ोल्डर शामिल करें
+	Keep a file written over as .bak	ओवरराइट की गई फ़ाइल को .bak के रूप में रखें
+	Next to the originals	मूल फ़ाइलों के बगल में
+	Open Log	लॉग खोलें
+	Or type a file or folder path	या फ़ाइल या फ़ोल्डर पथ टाइप करें
+	Overwrite	ओवरराइट करें
+	Save to	यहाँ सहेजें
+	Skip	छोड़ें
+	Skipped	छोड़ा गया
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	बदलने के लिए कोई ड्रॉइंग (.dwg, .dxf, .cdy) नहीं है।
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{total} में से {converted} बदली गईं, {skipped} छोड़ी गईं, {failed} विफल
+	DWG drawing (.dwg)	DWG ड्रॉइंग (.dwg)
+	DXF drawing (.dxf)	DXF ड्रॉइंग (.dxf)
+	Require a token for control connections (recommended)	नियंत्रण कनेक्शन के लिए टोकन आवश्यक करें (अनुशंसित)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	प्रोग्राम को पहले वह टोकन भेजना होगा जिसे CADaddy ऐसी फ़ाइल में लिखता है जिसे केवल आप पढ़ सकते हैं, ताकि अन्य उपयोगकर्ताओं के प्रोग्राम इसे नियंत्रित न कर सकें। Claude कनेक्टर इसे आपके लिए पढ़ता है। अगली बार CADaddy शुरू होने पर लागू होगा।
+	Building models (IFC)	भवन मॉडल (IFC)
+	Building model (IFC4)	भवन मॉडल (IFC4)
+	3D printing (3MF)	3D प्रिंटिंग (3MF)
+	Include the drawing (the active drawing as a DXF file)	ड्रॉइंग शामिल करें (सक्रिय ड्रॉइंग DXF फ़ाइल के रूप में)
+	Your account, home folder and computer name are always left out.	आपका खाता, होम फ़ोल्डर और कंप्यूटर का नाम हमेशा छोड़ दिए जाते हैं।
+	Files in the report	रिपोर्ट में फ़ाइलें
+	Send to Redline	Redline को भेजें
+	Import Redline Markups	Redline मार्कअप इम्पोर्ट करें
+	Import Redline Markups...	Redline मार्कअप इम्पोर्ट करें...
+	Open a Program?	प्रोग्राम खोलें?
+	This link opens a program or script, not a document:	यह लिंक कोई दस्तावेज़ नहीं, बल्कि प्रोग्राम या स्क्रिप्ट खोलता है:
+	Open it only if you trust the drawing and know what it runs.	इसे तभी खोलें जब आपको ड्रॉइंग पर भरोसा हो और आप जानते हों कि यह क्या चलाता है।
+	Open Anyway	फिर भी खोलें
+	Report a security problem	सुरक्षा समस्या रिपोर्ट करें
+	Load This File?	यह फ़ाइल लोड करें?
+	This file isn't in a trusted folder:	यह फ़ाइल किसी विश्वसनीय फ़ोल्डर में नहीं है:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP रूटीन और स्क्रिप्ट ड्रॉइंग और फ़ाइलें बदल सकते हैं। इसे तभी लोड करें जब आपको इसके स्रोत पर भरोसा हो।
+	Don't Load	लोड न करें
+	Load Once	एक बार लोड करें
+	Always Load from This Folder	इस फ़ोल्डर से हमेशा लोड करें
+	Adds {folder} to TRUSTEDPATHS	{folder} को TRUSTEDPATHS में जोड़ता है
+	Allow Loading a File	फ़ाइल लोड करने की अनुमति दें
+	Plot Stamp	प्लॉट स्टैम्प
+	Plot stamp fields	प्लॉट स्टैम्प फ़ील्ड
+	Drawing name	ड्रॉइंग नाम
+	Layout name	लेआउट नाम
+	Date and Time	दिनांक और समय
+	Device name	डिवाइस नाम
+	Paper size	पेपर आकार
+	Plot scale	प्लॉट स्केल
+	No login or computer name is ever stamped.	कोई लॉगिन या कंप्यूटर नाम कभी स्टैम्प नहीं किया जाता।
+	User defined fields	उपयोगकर्ता परिभाषित फ़ील्ड
+	One per line, up to {n}.	प्रति पंक्ति एक, अधिकतम {n}।
+	Stamp model space plots	मॉडल स्पेस प्लॉट पर स्टैम्प लगाएँ
+	Stamp this layout's plots	इस लेआउट के प्लॉट पर स्टैम्प लगाएँ
+	Location and offset	स्थान और ऑफ़सेट
+	Location	स्थान
+	Upside-down	उल्टा
+	X offset	X ऑफ़सेट
+	Y offset	Y ऑफ़सेट
+	Offset relative to	ऑफ़सेट इसके सापेक्ष
+	Printable area	प्रिंट योग्य क्षेत्र
+	Paper border	पेपर बॉर्डर
+	Text properties	टेक्स्ट गुण
+	Font	फ़ॉन्ट
+	Single line plot stamp	एक पंक्ति प्लॉट स्टैम्प
+	Units	इकाइयाँ
+	Inches	इंच
+	Millimeters	मिलीमीटर
+	Log file location	लॉग फ़ाइल स्थान
+	Create a log file	लॉग फ़ाइल बनाएँ
+	The log is kept for this session, never saved with the drawing.	लॉग इस सत्र के लिए रखा जाता है, ड्रॉइंग के साथ कभी नहीं सहेजा जाता।
+	Action Macro Manager...	एक्शन मैक्रो मैनेजर...
+	Action Macros	एक्शन मैक्रो
+	Action Recorder	एक्शन रिकॉर्डर
+	Insert Base Point	आधार बिंदु इन्सर्ट करें
+	Insert Message	संदेश इन्सर्ट करें
+	Play Action Macro	एक्शन मैक्रो चलाएँ
+	Play...	चलाएँ...
+	Record	रिकॉर्ड करें
+	Request User Input	उपयोगकर्ता इनपुट माँगें
+	Stop	रोकें
+	Action Macro Manager	एक्शन मैक्रो मैनेजर
+	Recording…	रिकॉर्ड हो रहा है…
+	No action macros yet: Record, do the work, then Stop.	अभी कोई एक्शन मैक्रो नहीं: रिकॉर्ड करें, काम करें, फिर रोकें।
+	Play	चलाएँ
+	Message: {text}	संदेश: {text}
+	Base point (asked for)	आधार बिंदु (माँगा गया)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	मैक्रो चलने पर यह इनपुट माँगें
+	Customize Interface	इंटरफ़ेस कस्टमाइज़ करें
+	Customize User Interface...	उपयोगकर्ता इंटरफ़ेस कस्टमाइज़ करें...
+	Interface...	इंटरफ़ेस...
+	Customize User Interface	उपयोगकर्ता इंटरफ़ेस कस्टमाइज़ करें
+	Quick Access Toolbar	क्विक एक्सेस टूलबार
+	Add a command	कमांड जोड़ें
+	Reset Quick Access Toolbar	क्विक एक्सेस टूलबार रीसेट करें
+	Built-in panels shown (untick to hide):	दिखाए गए बिल्ट-इन पैनल (छिपाने के लिए अनचेक करें):
+	Your panels on built-in tabs:	बिल्ट-इन टैब पर आपके पैनल:
+	Tab	टैब
+	New panel name	नया पैनल नाम
+	Add Panel	पैनल जोड़ें
+	Your tabs:	आपके टैब:
+	Remove Tab	टैब हटाएँ
+	New tab name	नया टैब नाम
+	Add Tab	टैब जोड़ें
+	Edit Keyboard Shortcuts...	कीबोर्ड शॉर्टकट संपादित करें...
+	Remove Panel	पैनल हटाएँ
+	Command or LISP macro, e.g. (command "line")	कमांड या LISP मैक्रो, जैसे (command "line")
+	Hatch Editor	हैच एडिटर
+	Table Cell	तालिका सेल
+	Rows & Columns	पंक्तियाँ और कॉलम
+	Merge	मर्ज
+	Open/Save	खोलें/सहेजें
+	Attributes	एट्रिब्यूट
+	Spell Check	वर्तनी जाँच
+	Formula	सूत्र
+	Edit Source	स्रोत संपादित करें
+	Close Array	ऐरे बंद करें
+	Manage Attributes	एट्रिब्यूट प्रबंधित करें
+	Dialog State	डायलॉग स्टेट
+	Dialog Action	डायलॉग एक्शन
+	Recover Drawing and Xrefs...	ड्रॉइंग और Xref पुनर्प्राप्त करें...
+	Count Blocks	ब्लॉक गिनें
+	Get Selection Set	चयन सेट प्राप्त करें
+	Global Attribute Edit	ग्लोबल एट्रिब्यूट संपादन
+	LISP Function Surfer	LISP फ़ंक्शन सर्फ़र
+	List LISP Symbols	LISP प्रतीक सूचीबद्ध करें
+	List Nested Object	नेस्टेड ऑब्जेक्ट सूचीबद्ध करें
+	List Object Xdata	ऑब्जेक्ट Xdata सूचीबद्ध करें
+	Multiple Polyline Edit	एकाधिक पॉलीलाइन संपादन
+	Redefine Path	पथ पुनर्परिभाषित करें
+	Redefine Path Mode	पथ पुनर्परिभाषा मोड
+	Restore Dimension Text	डायमेंशन टेक्स्ट पुनर्स्थापित करें
+	Revert	पूर्वस्थिति में लाएँ
+	Rotate Blocks	ब्लॉक घुमाएँ
+	Scale Blocks	ब्लॉक स्केल करें
+	Select Similar by Properties	गुणों द्वारा समान चुनें
+	Show URLs	URL दिखाएँ
+	Synchronize Viewports	व्यूपोर्ट सिंक्रनाइज़ करें
+	Paste Special	विशेष पेस्ट
+	Paste Special...	विशेष पेस्ट...
+	Paste as	इस रूप में पेस्ट करें
+	Last Measurement	अंतिम माप
+	Perimeter	परिमाप
+	curl isn't available ({error}).	curl उपलब्ध नहीं है ({error})।
+	This build has no release key to check updates with.	इस बिल्ड में अपडेट जाँचने के लिए कोई रिलीज़ कुंजी नहीं है।
+	The release's signature files are too large.	रिलीज़ की सिग्नेचर फ़ाइलें बहुत बड़ी हैं।
+	The release's signature isn't one CADaddy reads.	रिलीज़ का सिग्नेचर ऐसा नहीं है जिसे CADaddy पढ़ सके।
+	The release's signature is missing or damaged.	रिलीज़ का सिग्नेचर गायब या क्षतिग्रस्त है।
+	The release's signature is for another version ({version}).	रिलीज़ का सिग्नेचर किसी अन्य संस्करण ({version}) के लिए है।
+	The release is signed with a key this build doesn't trust.	रिलीज़ ऐसी कुंजी से साइन है जिस पर यह बिल्ड भरोसा नहीं करता।
+	This build's release key is damaged.	इस बिल्ड की रिलीज़ कुंजी क्षतिग्रस्त है।
+	The release's signature doesn't match its files.	रिलीज़ का सिग्नेचर उसकी फ़ाइलों से मेल नहीं खाता।
+	Couldn't reach GitHub: {why}	GitHub तक नहीं पहुँच सके: {why}
+	GitHub's answer was too large.	GitHub का उत्तर बहुत बड़ा था।
+	GitHub's answer wasn't readable ({error}).	GitHub का उत्तर पढ़ा नहीं जा सका ({error})।
+	GitHub's answer has no version.	GitHub के उत्तर में कोई संस्करण नहीं है।
+	GitHub's answer has an unreadable version ({version}).	GitHub के उत्तर में अपठनीय संस्करण है ({version})।
+	Couldn't download the release's {name}, so nothing was installed: {why}	रिलीज़ की {name} डाउनलोड नहीं हो सकी, इसलिए कुछ भी इंस्टॉल नहीं हुआ: {why}
+	The release's {name} is too large, so nothing was installed.	रिलीज़ की {name} बहुत बड़ी है, इसलिए कुछ भी इंस्टॉल नहीं हुआ।
+	The release's {name} isn't text, so nothing was installed.	रिलीज़ की {name} टेक्स्ट नहीं है, इसलिए कुछ भी इंस्टॉल नहीं हुआ।
+	It wasn't downloaded. Download it from the release page instead.	यह डाउनलोड नहीं हुआ। इसके बजाय रिलीज़ पेज से डाउनलोड करें।
+	Version {version} isn't newer than this one ({current}).	संस्करण {version} इस संस्करण ({current}) से नया नहीं है।
+	This release isn't signed.	यह रिलीज़ साइन नहीं है।
+	The release failed its check.	रिलीज़ अपनी जाँच में विफल रही।
+	The signed release doesn't list {name}.	साइन की गई रिलीज़ में {name} सूचीबद्ध नहीं है।
+	GitHub's fingerprint for {name} differs from the signed one.	{name} के लिए GitHub का फ़िंगरप्रिंट साइन किए गए फ़िंगरप्रिंट से भिन्न है।
+	Couldn't make the folder {folder}: {error}	फ़ोल्डर {folder} नहीं बन सका: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	डाउनलोड अपने प्रकाशित SHA-256 फ़िंगरप्रिंट से मेल नहीं खाया, इसलिए इंस्टॉल नहीं किया गया।
+	Couldn't read the download: {error}	डाउनलोड पढ़ा नहीं जा सका: {error}
+	The download failed: {why}	डाउनलोड विफल रहा: {why}
+	This release has no installer for this computer yet.	इस रिलीज़ में अभी इस कंप्यूटर के लिए कोई इंस्टॉलर नहीं है।
+	Drawing Properties...	ड्रॉइंग गुण...
+	System Variable Monitor...	सिस्टम वेरिएबल मॉनिटर...
+	{name} Properties	{name} गुण
+	Summary	सारांश
+	Statistics	आँकड़े
+	Size	आकार
+	Subject	विषय
+	Author	लेखक
+	Keywords	कीवर्ड
+	Comments	टिप्पणियाँ
+	Revision number	संशोधन संख्या
+	Hyperlink base	हाइपरलिंक आधार
+	Created	बनाया गया
+	Modified	संशोधित
+	Last saved by	अंतिम बार सहेजने वाले
+	Total editing time (minutes)	कुल संपादन समय (मिनट)
+	Property	गुण
+	System Variable Monitor	सिस्टम वेरिएबल मॉनिटर
+	Variable	वेरिएबल
+	Watched value	निगरानी मान
+	Current value	वर्तमान मान
+	Notify when a watched variable changes	निगरानी वाला वेरिएबल बदलने पर सूचित करें
+	Reset All	सभी रीसेट करें
+	Delay	विलंब
+	Repeat Script	स्क्रिप्ट दोहराएँ
+	Script Call	स्क्रिप्ट कॉल
+	Resume Script	स्क्रिप्ट फिर से शुरू करें
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	हर ड्रॉइंग का गतिविधि इतिहास रखें (निजी, CADaddy के सेटिंग्स फ़ोल्डर में)
+	Specify insertion point or	इन्सर्शन बिंदु निर्दिष्ट करें या
+	Specify table scale	तालिका स्केल निर्दिष्ट करें
+	{} dimension(s) updated to the current settings.	{} डायमेंशन वर्तमान सेटिंग्स के अनुसार अपडेट किए गए।
+	British English (-ise)	ब्रिटिश अंग्रेज़ी (-ise)
+	British English (-ize)	ब्रिटिश अंग्रेज़ी (-ize)
+	Spanish	स्पेनिश
+	French	फ़्रेंच
+	German	जर्मन
+	Portuguese (Iberian)	पुर्तगाली (इबेरियन)
+	Portuguese (Brazilian)	पुर्तगाली (ब्राज़ीलियाई)
+	(not installed)	(इंस्टॉल नहीं है)
+	Dictionaries are read from:	शब्दकोश यहाँ से पढ़े जाते हैं:
+	Published to {path}	{path} पर प्रकाशित
+	Sheet Set (.sheetset.json)	शीट सेट (.sheetset.json)
+	Resolution	रिज़ॉल्यूशन
+	Colour depth	कलर डेप्थ
+	Colour (24-bit)	रंगीन (24-बिट)
+	Greys (8-bit)	ग्रे (8-बिट)
+	Black and white (1-bit)	श्वेत-श्याम (1-बिट)
+	PNG Out	PNG आउट
+	JPEG Out	JPEG आउट
+	BMP Out	BMP आउट
+	TIFF Out	TIFF आउट
+	Enter image file name	इमेज फ़ाइल नाम दर्ज करें
+	Nothing selected: no image written.	कुछ भी चयनित नहीं: कोई इमेज नहीं लिखी गई।
+	{} object(s) written to {} ({} × {} pixels).	{} ऑब्जेक्ट {} में लिखे गए ({} × {} पिक्सेल)।
+	Set to ByLayer	लेयर अनुसार पर सेट करें
+	Explode and Set Properties	एक्सप्लोड करें और गुण सेट करें
+	Edit Attribute in Place	एट्रिब्यूट उसी स्थान पर संपादित करें
+	Frame	फ़्रेम
+	Setup	सेटअप
+	Setup View	व्यू सेटअप
+	Setup Drawing	ड्रॉइंग सेटअप
+	Setup Profile	प्रोफ़ाइल सेटअप
+	Enter view scale	व्यू स्केल दर्ज करें
+	Specify view center	व्यू केंद्र निर्दिष्ट करें
+	Enter view name	व्यू नाम दर्ज करें
+	Specify side of viewport to project	प्रोजेक्ट करने के लिए व्यूपोर्ट की भुजा निर्दिष्ट करें
+	Specify first point of cutting plane	कटिंग तल का पहला बिंदु निर्दिष्ट करें
+	Specify second point of cutting plane	कटिंग तल का दूसरा बिंदु निर्दिष्ट करें
+	Specify first point of inclined plane	झुके तल का पहला बिंदु निर्दिष्ट करें
+	Specify second point of inclined plane	झुके तल का दूसरा बिंदु निर्दिष्ट करें
+	Specify side to view from	देखने की दिशा निर्दिष्ट करें
+	Specify first corner of viewport	व्यूपोर्ट का पहला कोना निर्दिष्ट करें
+	Specify opposite corner of viewport	व्यूपोर्ट का विपरीत कोना निर्दिष्ट करें
+	Display hidden profile lines on separate layer?	छिपी प्रोफ़ाइल रेखाएँ अलग लेयर पर दिखाएँ?
+	Project profile lines onto a plane?	प्रोफ़ाइल रेखाओं को एक तल पर प्रोजेक्ट करें?
+	Delete tangential edges?	स्पर्शरेखीय किनारे हटाएँ?
+	None (PDF file)	कोई नहीं (PDF फ़ाइल)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	{} ऊँचा डायमेंशन टेक्स्ट इस ड्रॉइंग में पढ़ने के लिए बहुत छोटा है। नए डायमेंशन {} गुना बड़े करने के लिए DIMSCALE {} टाइप करें।
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	{} ऊँचा टेक्स्ट इस ड्रॉइंग में पढ़ने के लिए बहुत छोटा है। {} की ऊँचाई आज़माएँ (TEXTSIZE डिफ़ॉल्ट सेट करता है)।
+	(each layout's own)	(हर लेआउट का अपना)
+	A callout on the selected sheet pointing at the selected view	चयनित शीट पर एक कॉलआउट जो चयनित व्यू की ओर इंगित करता है
+	A page setup copied from the selected sheet's layout	चयनित शीट के लेआउट से कॉपी किया गया पेज सेटअप
+	Add Callout	कॉलआउट जोड़ें
+	Callouts: {}	कॉलआउट: {}
+	From Selected Sheet	चयनित शीट से
+	Insert on Selected Sheet	चयनित शीट पर इन्सर्ट करें
+	Named view	नामित व्यू
+	Page Setup Override	पेज सेटअप ओवरराइड
+	Place View	व्यू रखें
+	Position on sheet	शीट पर स्थिति
+	Remove Property	गुण हटाएँ
+	Sheet Properties	शीट गुण
+	Sheet Set Fields	शीट सेट फ़ील्ड
+	Sheet Set Properties	शीट सेट गुण
+	Sync Drawings	ड्रॉइंग सिंक करें
+	Text holding the field, at the position on sheet	फ़ील्ड वाला टेक्स्ट, शीट पर उस स्थिति में
+	Views and Callouts	व्यू और कॉलआउट
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	हर शीट का लेआउट "संख्या शीर्षक" बन जाता है; शीट सेट फ़ील्ड, व्यू लेबल और कॉलआउट सेट के वर्तमान मान लेते हैं
+	3 Point	3 बिंदु
+	Origin	मूल बिंदु
+	Z	Z
+	Named UCS...	नामित UCS...
+	Center Mark (DIMCEN)	केंद्र चिह्न (DIMCEN)
+	Copy Objects to New Layer	ऑब्जेक्ट को नई लेयर में कॉपी करें
+	Cut with Base Point	आधार बिंदु सहित काटें
+	DXF In	DXF इन
+	DXF Out	DXF आउट
+	Fill	फ़िल
+	Maximize Viewport	व्यूपोर्ट अधिकतम करें
+	Minimize Viewport	व्यूपोर्ट न्यूनतम करें
+	Object Selection Filters	ऑब्जेक्ट चयन फ़िल्टर
+	Oops	Oops
+	Quick Text	क्विक टेक्स्ट
+	Redefine Attributes	एट्रिब्यूट पुनर्परिभाषित करें
+	Drawing	ड्रॉइंग
+	Profile	प्रोफ़ाइल
+	Clashes	क्लैश
+	Run	चलाएँ
+	Re-run	फिर से चलाएँ
+	Run clash detection	क्लैश डिटेक्शन चलाएँ
+	Re-run keeping statuses	स्थितियाँ रखते हुए फिर से चलाएँ
+	Tolerance:	टॉलरेंस:
+	in	in
+	Show:	दिखाएँ:
+	No clashes. Run detection first.	कोई क्लैश नहीं। पहले डिटेक्शन चलाएँ।
+	Status:	स्थिति:
+	Trade:	ट्रेड:
+	Notes:	नोट्स:
+	Go To	पर जाएँ
+	Zoom to clash	क्लैश पर ज़ूम करें
+	Export BCF	BCF एक्सपोर्ट करें
+	Export CSV	CSV एक्सपोर्ट करें
+	Export to BCF 2.1 (ZIP)	BCF 2.1 (ZIP) में एक्सपोर्ट करें
+	Export clash report to CSV	क्लैश रिपोर्ट CSV में एक्सपोर्ट करें
+	MEP Review	MEP समीक्षा
+	Guessed only	केवल अनुमानित
+	{n} items	{n} आइटम
+	No MEP items found. Run mep.read first.	कोई MEP आइटम नहीं मिला। पहले mep.read चलाएँ।
+	Mark reviewed	समीक्षित चिह्नित करें
+	Size: {ss}, Height: {hs}	आकार: {ss}, ऊँचाई: {hs}
+	Edit size, height or system	आकार, ऊँचाई या सिस्टम संपादित करें
+	Size W:	आकार W:
+	Bottom ft:	नीचे ft:
+	Rebuild 3D model keeping hand edits	हाथ से किए संपादन रखते हुए 3D मॉडल फिर से बनाएँ
+	Zoomed to {sys} run on {lvl}.	{lvl} पर {sys} रन पर ज़ूम किया गया।
+	Marked as reviewed.	समीक्षित के रूप में चिह्नित।
+	Unmarked.	चिह्न हटाया गया।
+	Edit applied.	संपादन लागू किया गया।
+	Rebuilt: {n} MEP runs.	फिर से बनाए गए: {n} MEP रन।
+	3D Measure	3D माप
+	BCF Export	BCF एक्सपोर्ट
+	Clash List	क्लैश सूची
+	Clash Status	क्लैश स्थिति
+	Coordination Tree	कोऑर्डिनेशन ट्री
+	Coordination Viewpoints	कोऑर्डिनेशन व्यूपॉइंट
+	Edit MEP Item	MEP आइटम संपादित करें
+	List MEP Items	MEP आइटम सूचीबद्ध करें
+	Section Box	सेक्शन बॉक्स
+	Trade Visibility	ट्रेड दृश्यता
+	BIM Types	BIM प्रकार
+	Get BIM Spec	BIM स्पेक प्राप्त करें
+	Remove BIM Spec from Entities	एंटिटी से BIM स्पेक हटाएँ
+	Remove BIM Type	BIM प्रकार हटाएँ
+	Set BIM Spec on Entities	एंटिटी पर BIM स्पेक सेट करें
+	Set BIM Type	BIM प्रकार सेट करें
+	Ceiling and Soffit Takeoff	सीलिंग और सॉफ़िट टेकऑफ़
+	Colour by Assembly	असेंबली के अनुसार रंग
+	RFI List	RFI सूची
+	Zoom to RFI	RFI पर ज़ूम करें
+	Update RFI	RFI अपडेट करें
+	Export RFI List	RFI सूची एक्सपोर्ट करें
+	Sent	भेजा गया
+	Answered	उत्तर दिया गया
+	Not sent	नहीं भेजा गया
+	High	उच्च
+	Medium	मध्यम
+	Low	निम्न
+	All levels	सभी लेवल
+	Open items only	केवल खुले आइटम
+	{high} high, {medium} medium, {low} low	{high} उच्च, {medium} मध्यम, {low} निम्न
+	No gaps or conflicts in the building spec.	भवन स्पेक में कोई कमी या विरोध नहीं है।
+	Assumed meanwhile:	तब तक माना गया:
+	Proposed fix:	प्रस्तावित सुधार:
+	Sheets:	शीट:
+	Walk to It	वहाँ तक वॉक करें
+	Export XLSX...	XLSX एक्सपोर्ट करें...
+	Export PDF...	PDF एक्सपोर्ट करें...
+	Drywall Takeoff	ड्राईवॉल टेकऑफ़
+	Drywall View Mode	ड्राईवॉल व्यू मोड
+	Finish Faces	फ़िनिश फ़ेस
+	Wall Info	दीवार जानकारी
+	Open Print Set	प्रिंट सेट खोलें
+	Classify Print Set	प्रिंट सेट वर्गीकृत करें
+	Print Set Dashboard	प्रिंट सेट डैशबोर्ड
+	Print Set Sheets	प्रिंट सेट शीट
+	Re-import Revised Set	संशोधित सेट फिर से इम्पोर्ट करें
+	Save Print Set	प्रिंट सेट सहेजें
+	Ahead	आगे
+	Bottom / top AFF	नीचे / ऊपर AFF
+	Clash	क्लैश
+	elements	एलिमेंट
+	Field Viewer	फ़ील्ड व्यूअर
+	Fit	फ़िट
+	Keep	रखें
+	New note	नया नोट
+	No new notes to send	भेजने के लिए कोई नया नोट नहीं
+	No room matches	कोई कमरा मेल नहीं खाता
+	Note	नोट
+	Note kept	नोट रखा गया
+	Notes	नोट्स
+	notes ready to sync	नोट्स सिंक के लिए तैयार
+	not typed	टाइप नहीं किया गया
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	फ़ील्ड पैकेज खोलें (CADaddy में FIELDVIEW.EXPORT), या यहाँ ड्रॉप करें
+	Open clashes and RFIs	खुले क्लैश और RFI
+	RFI	RFI
+	Room number	कमरा संख्या
+	Search a room number, or tap a room	कमरा संख्या खोजें, या किसी कमरे पर टैप करें
+	Send Notes	नोट्स भेजें
+	Tap two points to measure	मापने के लिए दो बिंदुओं पर टैप करें
+	Trades	ट्रेड
+	Unit	यूनिट
+	Verified	सत्यापित
+	Verified point	सत्यापित बिंदु
+	What is there, as built	जैसा बना है, वहाँ क्या है
+	Plan	प्लान
+	3D	3D
+	Architectural	आर्किटेक्चरल
+	Structural	स्ट्रक्चरल
+	Mechanical	मैकेनिकल
+	Plumbing	प्लंबिंग
+	Fire protection	अग्नि सुरक्षा
+	Other	अन्य
+	stated	उल्लिखित
+	inferred	अनुमानित
+	assumed	माना गया
+	Field Package	फ़ील्ड पैकेज
+	Sync Field Notes	फ़ील्ड नोट्स सिंक करें
+	Field Notes	फ़ील्ड नोट्स
+	Detect Unit Types	यूनिट प्रकार पहचानें
+	List Unit Types	यूनिट प्रकार सूचीबद्ध करें
+	Unit Schedule	यूनिट शेड्यूल
+	Unit Type Takeoff	यूनिट प्रकार टेकऑफ़
+	Override Generated Element	जनरेट किया गया एलिमेंट ओवरराइड करें
+	List Overrides	ओवरराइड सूचीबद्ध करें
+	Revert Override	ओवरराइड वापस लें
+	Accept Override After Review	समीक्षा के बाद ओवरराइड स्वीकार करें
+	Show or Hide Overrides	ओवरराइड दिखाएँ या छिपाएँ
+	Re-apply Overrides	ओवरराइड फिर से लागू करें
+	Overrides	ओवरराइड
+	Select generated element (or an object drawn by hand to add)	जनरेट किया गया एलिमेंट चुनें (या जोड़ने के लिए हाथ से बना ऑब्जेक्ट)
+	Enter type mark	टाइप मार्क दर्ज करें
+	Enter override to revert	वापस लेने के लिए ओवरराइड दर्ज करें
+	Verify	सत्यापित करें
+	review: the drawing changed here	समीक्षा: यहाँ ड्रॉइंग बदल गई
+	orphaned: its element is no longer generated	अनाथ: इसका एलिमेंट अब जनरेट नहीं होता
+	Project Rules	प्रोजेक्ट नियम
+	Domain:	डोमेन:
+	No project rules set.	कोई प्रोजेक्ट नियम सेट नहीं है।
+	Tier:	स्तर:
+	Source:	स्रोत:
+	Reason:	कारण:
+	Overridden values:	ओवरराइड किए गए मान:
+	No drawing open.	कोई ड्रॉइंग खुली नहीं है।
+	List Project Rules	प्रोजेक्ट नियम सूचीबद्ध करें
+	Get Project Rule	प्रोजेक्ट नियम प्राप्त करें
+	Set Project Rule	प्रोजेक्ट नियम सेट करें
+	Remove Project Rule	प्रोजेक्ट नियम हटाएँ
+	Preview Project Rule Change	प्रोजेक्ट नियम परिवर्तन का पूर्वावलोकन
+	Project Rules Label	प्रोजेक्ट नियम लेबल
+	Import Project Rules	प्रोजेक्ट नियम इम्पोर्ट करें
+	Export Project Rules	प्रोजेक्ट नियम एक्सपोर्ट करें
+	Print Validator Documents	प्रिंट वैलिडेटर दस्तावेज़
+	Validate Model Against Prints	प्रिंट के विरुद्ध मॉडल सत्यापित करें
+	Validation Failure Overlay	सत्यापन विफलता ओवरले
+	Element Provenance	एलिमेंट उत्पत्ति
+	MEP Quantities	MEP मात्राएँ
+	Refresh MEP Quantities	MEP मात्राएँ रीफ़्रेश करें
+	Activate Drawing	ड्रॉइंग सक्रिय करें
+	Add to Project	प्रोजेक्ट में जोड़ें
+	Close Project	प्रोजेक्ट बंद करें
+	Import Manifest	मैनिफ़ेस्ट इम्पोर्ट करें
+	Import Standards	स्टैंडर्ड इम्पोर्ट करें
+	New Project	नया प्रोजेक्ट
+	Open Project	प्रोजेक्ट खोलें
+	Project Disk Use	प्रोजेक्ट डिस्क उपयोग
+	Project Drawings	प्रोजेक्ट ड्रॉइंग
+	Project Info	प्रोजेक्ट जानकारी
+	Remove Standard	स्टैंडर्ड हटाएँ
+	Remove from Project	प्रोजेक्ट से हटाएँ
+	Restore Project	प्रोजेक्ट पुनर्स्थापित करें
+	Set Standard	स्टैंडर्ड सेट करें
+	Shelve Drawing	ड्रॉइंग शेल्व करें
+	Shelve Project	प्रोजेक्ट शेल्व करें
+	Standards Library	स्टैंडर्ड लाइब्रेरी
+	Validate Manifest	मैनिफ़ेस्ट सत्यापित करें
+	Active	सक्रिय
+	Shelved	शेल्व किया गया
+	{n} drawings	{n} ड्रॉइंग
+	Compare Revised Print	संशोधित प्रिंट की तुलना करें
+	Revision Log	संशोधन लॉग
+	Attach IFC Reference	IFC रेफ़रेंस संलग्न करें
+	IFC References	IFC रेफ़रेंस
+	IFC Reference Elements	IFC रेफ़रेंस एलिमेंट
+	Reload IFC References	IFC रेफ़रेंस फिर से लोड करें
+	Accept Specifications	स्पेसिफ़िकेशन स्वीकार करें
+	Import Specifications	स्पेसिफ़िकेशन इम्पोर्ट करें
+	Colour Scheme	कलर स्कीम
+	Coordination Mode	कोऑर्डिनेशन मोड
+	Coordination Views	कोऑर्डिनेशन व्यू
+	Isolate Trade	ट्रेड आइसोलेट करें
+	Project Briefing	प्रोजेक्ट ब्रीफ़िंग
+	Project Note	प्रोजेक्ट नोट
+	Review Queue	समीक्षा कतार
+	Next Review Item	अगला समीक्षा आइटम
+	Resolve Review Item	समीक्षा आइटम हल करें
+	Defer Review Item	समीक्षा आइटम टालें
+	Draft RFI	RFI ड्राफ़्ट करें
+	Batch Resolve	बैच में हल करें
+	Approve Agent Work	एजेंट का काम स्वीकृत करें
+	Agent Work	एजेंट का काम
+	Build BIM Model	BIM मॉडल बनाएँ
+	to accept	स्वीकार करने के लिए
+	Accept all	सभी स्वीकार करें
+	Accept	स्वीकार करें
+	Cited:	उद्धृत:
+	Nothing waiting: agents' work is all accepted.	कुछ लंबित नहीं: एजेंट का सारा काम स्वीकार हो चुका है।
+	Open IFC Model	IFC मॉडल खोलें
+	Open IFC Model...	IFC मॉडल खोलें...
+	IFC Model	IFC मॉडल
+	IFC Model Tree	IFC मॉडल ट्री
+	IFC Object Properties	IFC ऑब्जेक्ट गुण
+	Filter IFC Objects	IFC ऑब्जेक्ट फ़िल्टर करें
+	IFC Section Box	IFC सेक्शन बॉक्स
+	Measure in 3D	3D में मापें
+	IFC Camera	IFC कैमरा
+	Render IFC Model	IFC मॉडल रेंडर करें
+	New BCF Issue	नया BCF इश्यू
+	BCF Issues	BCF इश्यू
+	BCF Issues...	BCF इश्यू...
+	BCF Issue	BCF इश्यू
+	Update BCF Issue	BCF इश्यू अपडेट करें
+	Show BCF Issue	BCF इश्यू दिखाएँ
+	Delete BCF Issue	BCF इश्यू हटाएँ
+	Import BCF	BCF इम्पोर्ट करें
+	Read Levels	लेवल पढ़ें
+	List Levels	लेवल सूचीबद्ध करें
+	Edit Level	लेवल संपादित करें
+	Attach Sheets to Levels	शीट को लेवल से संलग्न करें
+	Check Shafts Through Levels	लेवल के आर-पार शाफ़्ट जाँचें
+	Isolate Level	लेवल आइसोलेट करें
+	Read from Prints	प्रिंट से पढ़ें
+	Level names and elevations from the sections, elevations and level markers	सेक्शन, एलिवेशन और लेवल मार्कर से लेवल नाम और ऊँचाइयाँ
+	Attach Sheets	शीट संलग्न करें
+	Check Shafts	शाफ़्ट जाँचें
+	Shafts, chases and risers must carry on through the levels between their ends	शाफ़्ट, चेस और राइज़र को अपने सिरों के बीच के लेवल से होकर जारी रहना चाहिए
+	No levels in the building spec.	भवन स्पेक में कोई लेवल नहीं है।
+	Level	लेवल
+	Floor to floor	फ़्लोर से फ़्लोर
+	Sheets	शीट
+	Show only this storey in 3D	3D में केवल यह मंज़िल दिखाएँ
+	Datums (no plan on this drawing):	डेटम (इस ड्रॉइंग पर कोई प्लान नहीं):
+	Sheets on no level:	बिना लेवल की शीट:
+	Show All Levels	सभी लेवल दिखाएँ
+	The levels already match the prints.	लेवल पहले से प्रिंट से मेल खाते हैं।
+	{sheets} sheets, {loose} on no level	{sheets} शीट, {loose} बिना लेवल के
+	{name}: not shown on {levels}	{name}: {levels} पर नहीं दिखाया गया
+	Every shaft and riser carries on through its levels.	हर शाफ़्ट और राइज़र अपने लेवल से होकर जारी है।
+	Not a height: {text}	ऊँचाई नहीं है: {text}
+	Export COBie	COBie एक्सपोर्ट करें
+	Validate COBie	COBie सत्यापित करें
+	Export Handover Schedules	हैंडओवर शेड्यूल एक्सपोर्ट करें
+	COBie...	COBie...
+	Handover Schedules...	हैंडओवर शेड्यूल...
+	Electrical Gear	विद्युत उपकरण
+	Check Electrical Gear	विद्युत उपकरण जाँचें
+	Submittal Review of Gear	उपकरण की सबमिटल समीक्षा
+	Accept Gear as Submitted	उपकरण सबमिट किए अनुसार स्वीकार करें

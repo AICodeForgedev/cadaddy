@@ -1,0 +1,2833 @@
+# CADaddy Finnish interface catalog: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Finnish translation.
+# Empty context = ordinary label; @plural = one|other with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Adjust...	Säädä...
+	Apply	Käytä
+	Attach DWG...	Liitä DWG...
+	Bind	Sido
+	Detach	Irrota
+	Image	Kuva
+	Loaded	Ladattu
+	Make it a block of this drawing, keeping its layer names	Tee siitä tämän piirustuksen lohko säilyttäen sen tasojen nimet
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Tee siitä tämän piirustuksen lohko; sen tasoista tulee NAME$0$LAYER
+	No external references are attached.	Ulkoisia viitteitä ei ole liitetty.
+	Not Found	Ei löydy
+	Not loaded	Ei ladattu
+	Open	Avaa
+	Overlay	Peitto
+	Reference Manager	Viitteiden hallinta
+	Reference Name	Viitteen nimi
+	References: {n}	Viitteet: {n}
+	Reload	Lataa uudelleen
+	Reload All	Lataa kaikki uudelleen
+	Saved Path	Tallennettu polku
+	Unload	Poista lataus
+	Unloaded	Ei ladattu
+	Unreferenced	Viittaamaton
+	Unresolved	Ratkaisematon
+	  Cancel  	  Peruuta
+	  OK  	  OK
+	 or [	 tai [
+	% of all commits	% kaikista commiteista
+	* Wildcard Match	* Jokerimerkkihaku
+	*VARIES*	*VAIHTELEE*
+	+  |  Top  |  2D Wireframe	+  |  Ylhäältä  |  2D-rautalanka
+	+Bin	+binääri
+	+LOC	+rivit
+	1 Viewport	1 näkymäikkuna
+	2 Points	2 pistettä
+	2 Viewports	2 näkymäikkunaa
+	2D Solid	2D-täyttö
+	3 Points	3 pistettä
+	3 Viewports	3 näkymäikkunaa
+	3D Face	3D-pinta
+	3D Operations	3D-toiminnot
+	3D Polyline	3D-murtoviiva
+	4 Viewports	4 näkymäikkunaa
+	< Less than	< Pienempi kuin
+	<> Not Equal	<> Erisuuri
+	= Equals	= Yhtä suuri
+	> Greater than	> Suurempi kuin
+	A variable name starts with a letter and has only letters, digits and _	Muuttujan nimi alkaa kirjaimella ja sisältää vain kirjaimia, numeroita ja _-merkkejä
+	About	Tietoja
+	About CADaddy	Tietoja CADaddysta
+	Absolute	Absoluuttinen
+	Add Leader	Lisää viittausviiva
+	Additional angles	Lisäkulmat
+	Align	Tasaa
+	Align Text	Tasaa teksti
+	Aligned	Kohdistettu
+	All	Kaikki
+	All Annotation Objects	Kaikki merkintäobjektit
+	All Used Layers	Kaikki käytetyt tasot
+	All files	Kaikki tiedostot
+	Angle	Kulma
+	Angular	Kulmamitta
+	Annotation Visibility	Merkintöjen näkyvyys
+	Annotation scale	Merkintämittakaava
+	Apparent Intersection	Näennäinen leikkauspiste
+	Append to current selection set	Lisää nykyiseen valintajoukkoon
+	Apply to:	Käytä kohteeseen:
+	Apply true color	Käytä true color -väriä
+	Arc	Kaari
+	Arc Length	Kaaren pituus
+	Area	Pinta-ala
+	Arrange Panel	Järjestä-paneeli
+	Array	Sarja
+	Attach	Liitä
+	Attribute	Attribuutti
+	Attribute Definition	Attribuutin määrittely
+	Attribute Display	Attribuuttien näyttö
+	Audit	Tarkasta
+	Auto (system language)	Automaattinen (järjestelmän kieli)
+	Auto Constrain	Automaattiset rajoitteet
+	AutoConstrain	Automaattiset rajoitteet
+	Axis, End	Akseli, pää
+	Base	Kanta
+	Baseline	Perusviiva
+	Batch Publish	Erätulostus
+	Binary assets added	Binääritiedostoja lisätty
+	Binary assets removed	Binääritiedostoja poistettu
+	Bind...	Sido...
+	Blend	Sovitus
+	Block	Lohko
+	Block Attribute Manager...	Lohkoattribuuttien hallinta...
+	Block Editor	Lohkoeditori
+	Block Reference	Lohkoviite
+	Block...	Lohko...
+	Blocks	Lohkot
+	Blue	Sininen
+	Bold	Lihavointi
+	Boolean	Boolen operaatio
+	Boundary	Raja
+	Boundary...	Raja...
+	Box	Laatikko
+	Break	Katkaise
+	Break At Point	Katkaise pisteestä
+	Bring Above Objects	Tuo objektien yläpuolelle
+	Bring Annotations to Front	Tuo merkinnät eteen
+	Bring to Front	Tuo eteen
+	Bulleted list	Luettelomerkitty luettelo
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADaddy Help	CADaddy-ohje
+	Cancel	Peruuta
+	Cartesian (x, y)	Karteesinen (x, y)
+	Center	Keskipiste
+	Center Line	Keskiviiva
+	Center Mark	Keskipistemerkki
+	Center X	Keskipiste X
+	Center Y	Keskipiste Y
+	Center Z	Keskipiste Z
+	Center, Diameter	Keskipiste, halkaisija
+	Center, Radius	Keskipiste, säde
+	Center, Start, Angle	Keskipiste, alku, kulma
+	Center, Start, End	Keskipiste, alku, loppu
+	Center, Start, Length	Keskipiste, alku, pituus
+	Chamfer	Viiste
+	Change Space	Vaihda tilaa
+	Change to Current Layer	Siirrä nykyiselle tasolle
+	Changed: {n}	Muutettu: {n}
+	Circle	Ympyrä
+	Circumference	Ympärysmitta
+	Clear History	Tyhjennä historia
+	Clear	Tyhjennä
+	Clip	Leikkaa
+	Clip Viewport	Rajaa näkymäikkuna
+	Clipboard	Leikepöytä
+	Close	Sulje
+	Close All	Sulje kaikki
+	Close All Other Drawings	Sulje kaikki muut piirustukset
+	Closed	Suljettu
+	Close Comparison	Sulje vertailu
+	Coincident	Yhtenevä
+	Collapse Palettes	Kutista paletit
+	Collapse Tool Sets	Kutista työkalusarjat
+	Collinear	Samansuuntainen
+	Color	Väri
+	Color 8	Väri 8
+	Color 9	Väri 9
+	Color Index	Väri-indeksi
+	Color...	Väri...
+	Command Aliases	Komentoaliakset
+	Command History	Komentohistoria
+	Clear Command History	Tyhjennä komentohistoria
+	Command Line	Komentorivi
+	Command Line History Lines	Komentorivin historiarivit
+	Command Reference	Komentohakemisto
+	Commits	Commitit
+	Company	Yritys
+	Compare Drawings...	Vertaa piirustuksia...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Tietokoneavusteinen suunnittelu ja piirtäminen: avoimen lähdekoodin, puhtaasti itse kehitetty CAD-sovellus, kirjoitettu puhtaalla Rustilla.
+	Concentric	Samankeskinen
+	Cone	Kartio
+	Constraint Bars	Rajoitepalkit
+	Constraint Settings	Rajoiteasetukset
+	Construction Line	Rakenneviiva
+	Contents	Sisältö
+	Continue	Jatka
+	Contributors	Tekijät
+	Control Vertices	Ohjauspisteet
+	Convert	Muunna
+	Copy	Kopioi
+	Copy Full File Path	Kopioi koko tiedostopolku
+	Copy History	Kopioi historia
+	Copy Layout	Kopioi asettelu
+	Copy Nested Objects	Kopioi sisäkkäiset objektit
+	Copy Selection	Kopioi valinta
+	Copy with Base Point	Kopioi peruspisteen kanssa
+	Count	Määrä
+	Count List	Määräluettelo
+	Count Table	Määrätaulukko
+	Create Block	Luo lohko
+	Creates a user parameter	Luo käyttäjäparametrin
+	Ctrl+Enter to finish	Lopeta Ctrl+Enter
+	Current layer	Nykyinen taso
+	Current selection	Nykyinen valinta
+	Current: {color}	Nykyinen: {color}
+	Cut	Leikkaa
+	Cyan	Syaani
+	Cylinder	Sylinteri
+	DWG	DWG
+	DWG Reference...	DWG-viite...
+	DXF	DXF
+	Dark	Tumma
+	Data Extraction...	Tietojen poiminta...
+	Default	Oletus
+	Data Link...	Datalinkki...
+	Default Save Format	Oletustallennusmuoto
+	Default Save Version	Oletustallennusversio
+	Define Attributes	Määritä attribuutit
+	Define Attributes...	Määritä attribuutit...
+	Defined width	Määritetty leveys
+	Degree	Aste
+	Degrees of Freedom	Vapausasteet
+	Degrees of freedom: {n}	Vapausasteet: {n}
+	Delete	Poista
+	Delete Column	Poista sarake
+	Delete Constraints	Poista rajoitteet
+	Delete Dimension Style	Poista mitoitustyyli
+	Delete Duplicate Objects	Poista päällekkäiset objektit
+	Delete Layer	Poista taso
+	Delete Layer State	Poista tasotila
+	Delete Layout	Poista asettelu
+	Delete Row	Poista rivi
+	Delete Text Style	Poista tekstityyli
+	Delta X	Delta X
+	Delta Y	Delta Y
+	Description	Kuvaus
+	Deselect All	Poista kaikki valinnat
+	Diameter	Halkaisija
+	Dim style	Mitoitustyyli
+	Dimension Break	Mitan katkaisu
+	Dimension Edit	Mitan muokkaus
+	Dimension	Mitta
+	Dimension Objects Only	Vain mitoitusobjektit
+	Dimension Space	Mittojen väli
+	Dimension Style Override	Mitoitustyylin ohitus
+	Dimension Style...	Mitoitustyyli...
+	Dimension Text Edit	Mittatekstin muokkaus
+	Dimension style	Mitoitustyyli
+	Dimensional Constraint	Mittarajoite
+	Dimensional Constraint Parameters	Mittarajoitteen parametrit
+	Dimensional Constraints	Mittarajoitteet
+	Disassociate Dimensions	Irrota mittojen assosiatiivisuus
+	Display name	Näyttönimi
+	Distance	Etäisyys
+	Divide	Jaa
+	Do not plot (click: plot)	Ei tulostu (napsauta: tulostu)
+	Donut	Rengas
+	Double-click to edit the description	Muokkaa kuvausta kaksoisnapsauttamalla
+	Down	Alas
+	Drafting	Piirtäminen
+	Drafting Settings	Piirtoasetukset
+	Drafting Settings...	Piirtoasetukset...
+	Draw	Piirrä
+	Draw Order	Piirtojärjestys
+	Drawing (DWG)	Piirustus (DWG)
+	Drawing (DXF)	Piirustus (DXF)
+	Drawing Limits	Piirustuksen rajat
+	Drawing Template (DWT)	Piirustusmalli (DWT)
+	Drawing Utilities	Piirustustyökalut
+	Drawings (DWG, DXF)	Piirustukset (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	SVG-piirustukset (SVG, SVGZ)
+	Dynamic	Dynaaminen
+	Dynamic Dimensions	Dynaamiset mitat
+	Dynamic Input	Dynaaminen syöttö
+	Dynamic Input (F12)	Dynaaminen syöttö (F12)
+	E	I
+	Edit	Muokkaa
+	Edit Attributes...	Muokkaa attribuutteja...
+	Edit Text...	Muokkaa tekstiä...
+	Edit Table Cell	Muokkaa taulukon solua
+	Elevation	Korkeusasema
+	Ellipse	Ellipsi
+	Elliptical Arc	Elliptinen kaari
+	Enable Dynamic Input (F12)	Ota dynaaminen syöttö käyttöön (F12)
+	End Object Isolation	Lopeta objektien eristys
+	End Width	Loppuleveys
+	End X	Loppu X
+	End Y	Loppu Y
+	End angle	Loppukulma
+	Endpoint	Päätepiste
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Anna Top, Zero tai Bottom.
+	Enter a fit data option	Anna sovitustietojen vaihtoehto
+	Enter a pattern name	Anna kuvion nimi
+	Enter a vertex editing option	Anna kärkipisteen muokkausvaihtoehto
+	Enter an option	Anna vaihtoehto
+	Enter angle of xline	Anna rakenneviivan kulma
+	Enter angle of xline (0) or	Anna rakenneviivan kulma (0) tai
+	Enter area of rectangle in current units	Anna suorakulmion pinta-ala nykyisissä yksiköissä
+	Enter attribute prompt	Anna attribuutin kehote
+	Enter attribute tag name	Anna attribuutin tunnisteen nimi
+	Enter attribute value	Anna attribuutin arvo
+	Enter block name	Anna lohkon nimi
+	Enter constraint type	Anna rajoitteen tyyppi
+	Enter continuity	Anna jatkuvuus
+	Enter default attribute value	Anna attribuutin oletusarvo
+	Enter degree of spline	Anna splinin asteluku
+	Enter delta angle	Anna kulman muutos
+	Enter delta length or	Anna pituuden muutos tai
+	Enter dimension text	Anna mittateksti
+	Enter dimension text (<> = measurement)	Anna mittateksti (<> = mitattu arvo)
+	Enter dimension value or [name=expression]	Anna mitan arvo tai [nimi=lauseke]
+	Enter dimension variable name to override	Anna ohitettavan mitoitusmuuttujan nimi
+	Enter justification type	Anna tasaustyyppi
+	Enter leader text	Anna viittausviivan teksti
+	Enter mline scale	Anna moniviivan mittakaava
+	Enter mode	Anna tila
+	Enter name of block to insert	Anna lisättävän lohkon nimi
+	Enter new text	Anna uusi teksti
+	Enter next point	Anna seuraava piste
+	Enter number of columns	Anna sarakkeiden määrä
+	Enter number of data rows	Anna datarivien määrä
+	Enter number of items	Anna kohteiden määrä
+	Enter number of items along path	Anna kohteiden määrä polulla
+	Enter number of sides	Anna sivujen määrä
+	Enter number of turns	Anna kierrosten määrä
+	Enter percentage length	Anna pituus prosentteina
+	Enter rectangle length	Anna suorakulmion pituus
+	Enter rectangle width	Anna suorakulmion leveys
+	Enter scale factor	Anna mittakaavakerroin
+	Enter text	Anna teksti
+	Enter text (use \P for new paragraphs)	Anna teksti (\P aloittaa uuden kappaleen)
+	Enter the number of segments	Anna segmenttien määrä
+	Enter twist direction of helix	Anna kierukan kiertosuunta
+	Entire drawing	Koko piirustus
+	Equal	Yhtä suuri
+	Erase	Poista
+	Evaluate	Laske
+	Evaluate LISP	Suorita LISP
+	Exclude from new selection set	Jätä pois uudesta valintajoukosta
+	Explode	Hajota
+	Export	Vie
+	Export Table	Vie taulukko
+	Export to PDF...	Vie PDF-tiedostoksi...
+	Expression	Lauseke
+	Extend	Jatka
+	Extension	Jatke
+	Extents	Laajuus
+	External Reference	Ulkoinen viite
+	External References	Ulkoiset viitteet
+	Extrude	Pursota
+	File	Tiedosto
+	File Tab	Tiedostovälilehti
+	Fillet	Pyöristys
+	Filter	Suodatin
+	Filters	Suodattimet
+	Find and Replace	Etsi ja korvaa
+	Find...	Etsi...
+	First	Ensimmäinen
+	First commit	Ensimmäinen commit
+	Fit Points	Sovituspisteet
+	Fix	Kiinnitä
+	Flatten Objects	Litistä objektit
+	Format	Muotoilu
+	Freehand	Vapaa käsi
+	Freeze	Jäädytä
+	Freeze Layer	Jäädytä taso
+	Freeze in new viewports	Jäädytä uusissa näkymäikkunoissa
+	Freeze/Thaw	Jäädytä/sulata
+	Freeze/Thaw in all viewports	Jäädytä/sulata kaikissa näkymäikkunoissa
+	Freeze/Thaw in the current viewport	Jäädytä/sulata nykyisessä näkymäikkunassa
+	From	Lähtien
+	From Template...	Mallista...
+	General	Yleiset
+	Geometric Center	Geometrinen keskipiste
+	Geometric Constraint	Geometrinen rajoite
+	Geometric Constraints	Geometriset rajoitteet
+	Geometry	Geometria
+	Get from the Drawing	Hae piirustuksesta
+	Get Variable	Hae muuttuja
+	Get View	Hae näkymä
+	Global	Yleinen
+	Global width	Yleinen leveys
+	Grab bag	Sekalaiset
+	Gradient	Liukuväri
+	Gradient...	Liukuväri...
+	Green	Vihreä
+	Grid (F7)	Ruudukko (F7)
+	Grid Display	Ruudukon näyttö
+	Grid On (F7)	Ruudukko päällä (F7)
+	Grid snap	Ruudukkokohdistus
+	Grid spacing	Ruudukon väli
+	Grip Edit	Kahvamuokkaus
+	Grip Mirror	Kahvapeilaus
+	Grip Option	Kahva-asetus
+	Grip Rotate	Kahvakierto
+	Grip Scale	Kahvaskaalaus
+	Grip Stretch	Kahvavenytys
+	Group	Ryhmä
+	Group Edit	Ryhmän muokkaus
+	Group Options	Ryhmäasetukset
+	Group Selection	Ryhmävalinta
+	Hatch	Viivoitus
+	Hatch Edit	Viivoituksen muokkaus
+	Hatch Patterns	Viivoituskuviot
+	Hatch...	Viivoitus...
+	Height	Korkeus
+	Height: {height}	Korkeus: {height}
+	Helix	Kierukka
+	Help	Ohje
+	Hide All	Piilota kaikki
+	Hide All Constraint Bars	Piilota kaikki rajoitepalkit
+	Hide All Dynamic Dimensions	Piilota kaikki dynaamiset mitat
+	Hide Layer List	Piilota tasoluettelo
+	Hide Objects	Piilota objektit
+	Hide Palettes	Piilota paletit
+	History	Historia
+	Home	Aloitus
+	Horizontal	Vaakasuora
+	HorizontalDistance	Vaakaetäisyys
+	How to apply:	Käyttötapa:
+	ID Point	Pisteen tunnistus
+	Import	Tuo
+	Align Multileaders	Tasaa monijohteet
+	Collect	Kerää
+	Collect Multileaders	Kerää monijohteet
+	Edit Multileader	Muokkaa monijohdetta
+	In	Lähennä
+	In-window Menu Bar	Ikkunan sisäinen valikkorivi
+	Include in new selection set	Sisällytä uuteen valintajoukkoon
+	Increment angle	Kulman lisäys
+	Index Color	Indeksiväri
+	Index color: {index}	Indeksiväri: {index}
+	Infer Constraints	Päättele rajoitteet
+	Inquiry	Tiedustelu
+	Insert	Lisää
+	Insert Block	Lisää lohko
+	Insert Column	Lisää sarake
+	Insert Row	Lisää rivi
+	Insert tab	Lisää-välilehti
+	Insert this block	Lisää tämä lohko
+	Insert Table Formula	Lisää taulukkokaava
+	Insertion	Lisäyspiste
+	Insertion X	Lisäyspiste X
+	Insertion Y	Lisäyspiste Y
+	Insertion Z	Lisäyspiste Z
+	Inspect Constraints	Tarkastele rajoitteita
+	Inspect Drawing	Tarkastele piirustusta
+	Inspection	Tarkastus
+	Interface Language	Käyttöliittymän kieli
+	Interface Theme	Käyttöliittymän teema
+	Intersect	Leikkaus
+	Intersection	Leikkauspiste
+	Isolate	Eristä
+	Isolate Layer	Eristä taso
+	Isolate Objects	Eristä objektit
+	Isometric Drafting	Isometrinen piirtäminen
+	Jogged	Taitettu
+	Jogged Linear	Taitettu lineaarinen
+	Join	Yhdistä
+	Join the ArtCraft Discord…	Liity ArtCraftin Discordiin…
+	Join us on Discord	Liity meihin Discordissa
+	Isometric Plane	Isometrinen taso
+	Isometric snap	Isometrinen kohdistus
+	Language	Kieli
+	Last	Viimeinen
+	Last commit	Viimeisin commit
+	Layer	Taso
+	Layer Delete	Tason poisto
+	Layer Match	Tason vastaavuus
+	Layer Merge	Tasojen yhdistäminen
+	Layer Off	Taso pois
+	Layer Properties	Tason ominaisuudet
+	Layer Properties Manager	Tasojen ominaisuuksien hallinta
+	Layer Properties Manager — current viewport	Tasojen ominaisuuksien hallinta — nykyinen näkymäikkuna
+	Layer State	Tasotila
+	Layer States Manager...	Tasotilojen hallinta...
+	Layer Tools	Tasotyökalut
+	Layer contains objects (double-click to make current)	Tasolla on objekteja (aseta nykyiseksi kaksoisnapsauttamalla)
+	Layer is empty (double-click to make current)	Taso on tyhjä (aseta nykyiseksi kaksoisnapsauttamalla)
+	Layers	Tasot
+	Layers Palette	Tasopaletti
+	Hide Palette	Piilota paletti
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	Näytettyjä tasoja: {shown}/{total}.   Nykyinen taso: {layer}
+	Layout	Asettelu
+	Layout list	Asetteluluettelo
+	Leader	Viittausviiva
+	Leaders Only	Vain viittausviivat
+	Left	Vasen
+	Length	Pituus
+	Length X	Pituus X
+	Length Y	Pituus Y
+	Lengthen	Pidennä
+	Light	Vaalea
+	Line	Viiva
+	Line delta	Rivien muutos
+	Linear	Lineaarinen
+	Lines +/−	Rivit +/−
+	Lines added	Lisätyt rivit
+	Lines deleted	Poistetut rivit
+	Lines of Command History	Komentohistorian rivit
+	Linetype	Viivatyyppi
+	Linetype Scale	Viivatyypin mittakaava
+	Linetype scale	Viivatyypin mittakaava
+	Ltscale	Ltscale
+	Linetype...	Viivatyyppi...
+	Lineweight	Viivanpaksuus
+	Lineweight...	Viivanpaksuus...
+	List	Luettelo
+	List Blocks	Luettele lohkot
+	List Dimension Styles	Luettele mitoitustyylit
+	List Groups	Luettele ryhmät
+	List Layer States	Luettele tasotilat
+	List Layouts	Luettele asettelut
+	List System Variables	Luettele järjestelmämuuttujat
+	List Text Styles	Luettele tekstityylit
+	Load all	Lataa kaikki
+	Load...	Lataa...
+	Load Application...	Lataa sovellus...
+	Loaded linetypes	Ladatut viivatyypit
+	Lock	Lukitse
+	Lock Layer	Lukitse taso
+	Lock viewport	Lukitse näkymäikkuna
+	Lock/Unlock	Lukitse/vapauta
+	Loft	Loft
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Ei yhteydessä Autodesk, Inc:iin.
+	MODEL	MALLI
+	MText	MText
+	Magenta	Magenta
+	Major line every	Pääviiva joka
+	Make Current	Aseta nykyiseksi
+	Make Object's Layer Current	Aseta objektin taso nykyiseksi
+	Make...	Tee...
+	Match Layer	Täsmää taso
+	Match Properties	Täsmää ominaisuudet
+	Measure	Mittaa
+	Measure Distance	Mittaa etäisyys
+	Measure Geometry	Mittaa geometria
+	Merge Cells	Yhdistä solut
+	Merged PRs	Yhdistetyt PR:t
+	Mid Between 2 Points	Kahden pisteen puoliväli
+	Midpoint	Keskipiste
+	Mirror	Peilaa
+	Model	Malli
+	Model Space (in viewport)	Mallitila (näkymäikkunassa)
+	Modeling	Mallinnus
+	Models	Mallit
+	Modify	Muokkaa
+	Move	Siirrä
+	Multileader	Monijohde
+	Multileader Style...	Monijohdetyyli...
+	Multileader style	Monijohdetyyli
+	Multiline	Moniviiva
+	Multiline Text	Monirivinen teksti
+	Multiline Text...	Monirivinen teksti...
+	Multiple	Useita
+	Multiple Point	Useita pisteitä
+	My	Omat
+	My properties: not available yet	Omat ominaisuudet: ei vielä käytettävissä
+	N	P
+	Name	Nimi
+	Name (A–Z)	Nimi (A–Ö)
+	Named Views...	Nimetyt näkymät...
+	Nearest	Lähin
+	New	Uusi
+	New (metric)	Uusi (metrinen)
+	New Drawing	Uusi piirustus
+	New Drawing (⌘N)	Uusi piirustus (⌘N)
+	New Drawing...	Uusi piirustus...
+	New Layer	Uusi taso
+	New Layout	Uusi asettelu
+	New VP Freeze	Uusi NI-jäädytys
+	New Viewports...	Uudet näkymäikkunat...
+	New from Template...	Uusi mallista...
+	New layout	Uusi asettelu
+	New state name	Uuden tilan nimi
+	Next Change	Seuraava muutos
+	No	Ei
+	No blocks defined in this drawing.	Tässä piirustuksessa ei ole määritettyjä lohkoja.
+	No contributor data was built into this copy.	Tähän kopioon ei sisällytetty tekijätietoja.
+	No model credits were built into this copy.	Tähän kopioon ei sisällytetty mallien tekijätietoja.
+	No saved layer states	Ei tallennettuja tasotiloja
+	No selection	Ei valintaa
+	Node	Solmu
+	None	Ei mitään
+	Not available	Ei käytettävissä
+	Not available yet	Ei vielä käytettävissä
+	Numbered list	Numeroitu luettelo
+	OK	OK
+	Object	Objekti
+	Object Snap	Objektikohdistus
+	Object Snap (F3)	Objektikohdistus (F3)
+	Object Snap On (F3)	Objektikohdistus päällä (F3)
+	Object Snap Tracking	Objektikohdistuksen jäljitys
+	Object Snap Tracking (F11)	Objektikohdistuksen jäljitys (F11)
+	Object Snap Tracking Settings	Objektikohdistuksen jäljityksen asetukset
+	Object type:	Objektityyppi:
+	Oblique	Vino
+	Off	Pois
+	Offset	Siirtymä
+	On	Päällä
+	On/Off	Päällä/pois
+	One of the Crafting Apps by the ArtCraft team and community.	Yksi ArtCraft-tiimin ja -yhteisön Crafting-sovelluksista.
+	Only in this drawing: {n}	Vain tässä piirustuksessa: {n}
+	Only in {name}: {n}	Vain kohteessa {name}: {n}
+	Open (⌘O)	Avaa (⌘O)
+	Open Sample Drawing	Avaa esimerkkipiirustus
+	Open sample drawing	Avaa esimerkkipiirustus
+	Open Xref	Avaa ulkoinen viite
+	Open...	Avaa...
+	Open Recent	Avaa viimeaikainen
+	Clear Recent Files	Tyhjennä viimeaikaiset tiedostot
+	Operator:	Operaattori:
+	Orbit	Kierto
+	Ordinate	Koordinaattimitta
+	Ortho (F8)	Orto (F8)
+	Ortho Mode	Ortotila
+	Ortho Mode (F8)	Ortotila (F8)
+	Osnap Settings...	Kohdistusasetukset...
+	Out	Loitonna
+	Over-constrained	Ylirajoitettu
+	Override	Ohitus
+	PAPER	PAPERI
+	Percent	Prosentti
+	Polar (distance < angle)	Polaarinen (etäisyys < kulma)
+	PRs	PR:t
+	Page Setup Manager	Sivuasetusten hallinta
+	Page Setup Manager...	Sivuasetusten hallinta...
+	Pan	Panoroi
+	Pan Down	Panoroi alas
+	Pan Left	Panoroi vasemmalle
+	Pan Right	Panoroi oikealle
+	Pan Up	Panoroi ylös
+	Paper Space	Paperitila
+	Parallel	Yhdensuuntainen
+	Parameters Manager	Parametrien hallinta
+	Parametric	Parametrinen
+	Paste	Liitä
+	Paste as Block	Liitä lohkona
+	Paste to Command Line	Liitä komentoriville
+	Paste to Original Coordinates	Liitä alkuperäisiin koordinaatteihin
+	Path Array	Polkusarja
+	Pattern	Kuvio
+	Perpendicular	Kohtisuora
+	Plot	Tulosta
+	Plot (click: do not plot)	Tulostu (napsauta: ei tulostu)
+	Plot Preview	Tulostuksen esikatselu
+	Plot Window	Tulostusikkuna
+	Plot style	Tulostustyyli
+	Plot style attached to	Tulostustyyli liitetty kohteeseen
+	Plot style table	Tulostustyylitaulukko
+	Plot Style...	Tulostustyyli...
+	Plot Style Manager	Tulostustyylien hallinta
+	Plot Style Manager...	Tulostustyylien hallinta...
+	Plot Styles...	Tulostustyylit...
+	Plotter Manager	Tulostimien hallinta
+	Plotter Manager...	Tulostimien hallinta...
+	New CTB	Uusi CTB
+	New STB	Uusi STB
+	New style	Uusi tyyli
+	Reset Panel Layout	Palauta paneelien asettelu
+	Send Hatches to Back	Siirrä viivoitukset taakse
+	Send Under Objects	Siirrä objektien alle
+	Text Objects Only	Vain tekstiobjektit
+	Use for this layout	Käytä tässä asettelussa
+	Display plot styles	Näytä tulostustyylit
+	No plot style tables.	Ei tulostustyylitaulukoita.
+	A built-in table: editing it keeps an edited copy in the drawing.	Sisäänrakennettu taulukko: muokattu kopio tallennetaan piirustukseen.
+	Keep an editable copy of this table in the drawing	Säilytä muokattava kopio tästä taulukosta piirustuksessa
+	Layout {name}: {table}	Asettelu {name}: {table}
+	Grayscale	Harmaasävy
+	Screening	Rasterointi
+	Use object linetype	Käytä objektin viivatyyppiä
+	Use object lineweight	Käytä objektin viivanpaksuutta
+	Remove	Poista
+	Add	Lisää
+	Open a drawing first.	Avaa ensin piirustus.
+	Plot table type	Tulostustaulukon tyyppi
+	Color-dependent	Väririippuvainen
+	Named	Nimetty
+	Plus/minus	Plus/miinus
+	Point	Piste
+	Point Filters	Pistesuodattimet
+	Point Style...	Pistetyyli...
+	Polar Array	Polaarinen sarja
+	Polar Tracking	Polaarinen jäljitys
+	Polar Tracking (F10)	Polaarinen jäljitys (F10)
+	Polar Tracking On (F10)	Polaarinen jäljitys päällä (F10)
+	Polar angle measurement	Polaarikulman mittaus
+	Polar distance	Polaarinen etäisyys
+	Polar: {distance} < {angle}°	Polaarinen: {distance} < {angle}°
+	PolarSnap	PolarSnap
+	Polygon	Monikulmio
+	Polygonal	Monikulmainen
+	Polygonal Viewport	Monikulmainen näkymäikkuna
+	Polyline	Murtoviiva
+	Polyline Edit	Murtoviivan muokkaus
+	Position X	Sijainti X
+	Position Y	Sijainti Y
+	Position Z	Sijainti Z
+	Previous	Edellinen
+	Previous Change	Edellinen muutos
+	Previous Layer	Edellinen taso
+	Primitives	Perusmuodot
+	Print	Tulosta
+	Print...	Tulosta...
+	Properties	Ominaisuudet
+	Properties Inspector	Ominaisuuksien tarkastelu
+	Properties:	Ominaisuudet:
+	Proxy	Välityspalvelinobjekti
+	Purge	Siivoa
+	Pyramid	Pyramidi
+	Quadrant	Neljännespiste
+	Query Entities	Kysy entiteetit
+	Quick	Pika
+	Quick Dimension	Pikamitoitus
+	Quick Properties	Pikaominaisuudet
+	Quick Select	Pikavalinta
+	Quick Select Properties	Pikavalinnan ominaisuudet
+	Quick Select...	Pikavalinta...
+	QuickCalc	Pikalaskin
+	QuickCalc Pick	Pikalaskimen poiminta
+	Quit CADaddy	Lopeta CADaddy
+	Radius	Säde
+	Raster Image	Rasterikuva
+	Ray	Säde (puolisuora)
+	Read-only	Vain luku
+	Real name	Oikea nimi
+	Realtime	Reaaliaikainen
+	Reassociate Dimensions	Yhdistä mitat uudelleen
+	Recent	Viimeaikaiset
+	Recent Commands	Viimeaikaiset komennot
+	Recent Input	Viimeaikainen syöte
+	Recover...	Palauta...
+	Rectangle	Suorakulmio
+	Recalculate Table Formulas	Laske taulukon kaavat uudelleen
+	Rectangular	Suorakulmainen
+	Rectangular snap	Suorakulmainen kohdistus
+	Rectangular Array	Suorakulmainen sarja
+	Red	Punainen
+	Redo	Tee uudelleen
+	Redo (⇧⌘Z)	Tee uudelleen (⇧⌘Z)
+	Redraw	Piirrä uudelleen
+	Regen	Regeneroi
+	Regen All	Regeneroi kaikki
+	Region	Alue
+	Region/Mass Properties	Alueen/massan ominaisuudet
+	Reinitialize	Alusta uudelleen
+	Relative	Suhteellinen
+	Relative to last segment	Suhteessa viimeiseen segmenttiin
+	Remove Leader	Poista viittausviiva
+	Remove the viewport override	Poista näkymäikkunan ohitus
+	Rename Dimension Style	Nimeä mitoitustyyli uudelleen
+	Rename Layer	Nimeä taso uudelleen
+	Rename Layer State	Nimeä tasotila uudelleen
+	Rename Layout	Nimeä asettelu uudelleen
+	Rename Text Style	Nimeä tekstityyli uudelleen
+	Rename...	Nimeä uudelleen...
+	Repeat {command}	Toista {command}
+	Requires a point (x,y, @dx,dy or @d<a).	Vaatii pisteen (x,y, @dx,dy tai @d<a).
+	Reset Palettes	Palauta paletit
+	Restore	Palauta
+	Restore Layer State	Palauta tasotila
+	Reverse	Käännä
+	Reverse the order	Käännä järjestys
+	Revision Cloud	Revisiopilvi
+	Revolve	Pyöräytä
+	Right	Oikea
+	Rotate	Kierrä
+	Rotation	Kierto
+	S	E
+	Save	Tallenna
+	Save (⌘S)	Tallenna (⌘S)
+	Save As	Tallenna nimellä
+	Save As...	Tallenna nimellä...
+	Save Layer State	Tallenna tasotila
+	Save State	Tallenna tila
+	Scale	Skaalaa
+	Search for layer	Hae tasoa
+	Search for parameter	Hae parametria
+	Second and next points:	Toinen ja seuraavat pisteet:
+	Select	Valitse
+	Select 2D polyline	Valitse 2D-murtoviiva
+	Select All	Valitse kaikki
+	Select Objects	Valitse objektit
+	Select Similar	Valitse samankaltaiset
+	Select a 2D polyline.	Valitse 2D-murtoviiva.
+	Select a block reference.	Valitse lohkoviite.
+	Select a circle or arc.	Valitse ympyrä tai kaari.
+	Select a closed polyline	Valitse suljettu murtoviiva
+	Select a closed polyline, circle, ellipse or closed spline.	Valitse suljettu murtoviiva, ympyrä, ellipsi tai suljettu splini.
+	Select a closed polyline.	Valitse suljettu murtoviiva.
+	Select a curve as the path.	Valitse käyrä poluksi.
+	Select a dimension constraint type	Valitse mittarajoitteen tyyppi
+	Select a line object	Valitse viivaobjekti
+	Select a line object.	Valitse viivaobjekti.
+	Select a line or an arc.	Valitse viiva tai kaari.
+	Select a line or polyline segment	Valitse viiva tai murtoviivan segmentti
+	Select a line, arc or open polyline.	Valitse viiva, kaari tai avoin murtoviiva.
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	Valitse poluksi viiva, kaari, ympyrä, murtoviiva, ellipsi tai splini.
+	Select a line, circle, arc or polyline segment.	Valitse viiva, ympyrä, kaari tai murtoviivan segmentti.
+	Select a line.	Valitse viiva.
+	Select a polyline.	Valitse murtoviiva.
+	Select a text, mtext, attribute definition or dimension.	Valitse teksti, monirivinen teksti, attribuutin määrittely tai mitta.
+	Select an annotation object	Valitse merkintäobjekti
+	Select an arc or circle	Valitse kaari tai ympyrä
+	Select an arc.	Valitse kaari.
+	Select an object	Valitse objekti
+	Select an object to change or	Valitse muutettava objekti tai
+	Select an object to measure or	Valitse mitattava objekti tai
+	Select an object.	Valitse objekti.
+	Select an open curve.	Valitse avoin käyrä.
+	Select an open line, arc, polyline, ellipse arc or spline.	Valitse avoin viiva, kaari, murtoviiva, elliptinen kaari tai splini.
+	Select arc or circle	Valitse kaari tai ympyrä
+	Select arc or polyline arc segment	Valitse kaari tai murtoviivan kaarisegmentti
+	Select arc style	Valitse kaarityyli
+	Select arc, circle, line	Valitse kaari, ympyrä, viiva
+	Select at least two objects to join.	Valitse vähintään kaksi yhdistettävää objektia.
+	Select circle or arc to add center mark	Valitse ympyrä tai kaari keskipistemerkkiä varten
+	Select closed objects (regions, closed polylines, circles).	Valitse suljetut objektit (alueet, suljetut murtoviivat, ympyrät).
+	Select first line	Valitse ensimmäinen viiva
+	Select first line or arc	Valitse ensimmäinen viiva tai kaari
+	Select first object	Valitse ensimmäinen objekti
+	Select first object or	Valitse ensimmäinen objekti tai
+	Select first point	Valitse ensimmäinen piste
+	Select nested objects to copy or	Valitse kopioitavat sisäkkäiset objektit tai
+	Select object	Valitse objekti
+	Select object to dimension	Valitse mitoitettava objekti
+	Select object to divide	Valitse jaettava objekti
+	Select object to extend or shift-select to trim	Valitse jatkettava objekti tai Vaihto-valinnalla lyhennettävä
+	Select object to measure	Valitse mitattava objekti
+	Select object to offset	Valitse siirrettävä objekti
+	Select object to trim or shift-select to extend	Valitse lyhennettävä objekti tai Vaihto-valinnalla jatkettava
+	Select objects	Valitse objektit
+	Select objects (crossing window first corner)	Valitse objektit (leikkaavan ikkunan ensimmäinen kulma)
+	Select objects to array.	Valitse sarjaan monistettavat objektit.
+	Select objects to stretch by crossing-window or crossing-polygon...	Valitse venytettävät objektit leikkaavalla ikkunalla tai monikulmiolla...
+	Select objects:	Valitse objektit:
+	Add to Working Set	Lisää työjoukkoon
+	Edit Reference In-Place	Muokkaa viitettä paikallaan
+	Save Reference Edits	Tallenna viitteen muutokset
+	Working Set	Työjoukko
+	Xref and Block In-place Editing	Ulkoisten viitteiden ja lohkojen muokkaus paikallaan
+	Select one polyline (Multiple is available through the JSON form).	Valitse yksi murtoviiva (useita voi valita JSON-lomakkeella).
+	Select path curve	Valitse polkukäyrä
+	Select point or object	Valitse piste tai objekti
+	Select polyline or	Valitse murtoviiva tai
+	Select second line	Valitse toinen viiva
+	Select second line or shift-select to apply corner	Valitse toinen viiva tai Vaihto-valinnalla tee kulma
+	Select second object	Valitse toinen objekti
+	Select second object or shift-select to apply corner	Valitse toinen objekti tai Vaihto-valinnalla tee kulma
+	Select second point	Valitse toinen piste
+	Select spline	Valitse splini
+	Select symmetry line	Valitse symmetriaviiva
+	Select two points	Valitse kaksi pistettä
+	Selection Cycling	Valintasyklitys
+	Send to Back	Siirrä taakse
+	Set Current	Aseta nykyiseksi
+	Set Current Dimension Style	Aseta nykyinen mitoitustyyli
+	Set Current Text Style	Aseta nykyinen tekstityyli
+	Set Current Viewport	Aseta nykyinen näkymäikkuna
+	Set Layer Properties	Aseta tason ominaisuudet
+	Set Properties	Aseta ominaisuudet
+	Set Table Cell	Aseta taulukon solu
+	Set Table Cell Style	Aseta taulukon solutyyli
+	Set Variable	Aseta muuttuja
+	Set View	Aseta näkymä
+	Share	Jaa
+	Show	Näytä
+	Show All	Näytä kaikki
+	Show All Constraint Bars	Näytä kaikki rajoitepalkit
+	Show All Dynamic Dimensions	Näytä kaikki dynaamiset mitat
+	Show and hide the tools of this category	Näytä ja piilota tämän luokan työkalut
+	Show in Tool Sets	Näytä työkalusarjoissa
+	Show command prompting near the crosshairs	Näytä komentokehote hiusristikon lähellä
+	Show Layer List	Näytä tasoluettelo
+	Show/Hide Lineweight	Näytä/piilota viivanpaksuus
+	Show/Hide Transparency	Näytä/piilota läpinäkyvyys
+	Single Line Text	Yksirivinen teksti
+	Single Point	Yksittäinen piste
+	Single...	Yksittäinen...
+	Smooth	Pehmennä
+	Snap	Kohdistus
+	Snap Mode	Kohdistustila
+	Snap Mode (F9)	Kohdistustila (F9)
+	Snap On (F9)	Kohdistus päällä (F9)
+	Snap Overrides	Kohdistuksen ohitukset
+	Snap X spacing	Kohdistuksen X-väli
+	Snap and Grid	Kohdistus ja ruudukko
+	Snap type	Kohdistustyyppi
+	Solid	Kiinteä
+	Sort	Lajittele
+	Specify a point	Määritä piste
+	Specify a scale for the hatch pattern	Määritä viivoituskuvion mittakaava
+	Specify a second extension line origin	Määritä toisen apuviivan alkupiste
+	Specify an angle for the hatch pattern	Määritä viivoituskuvion kulma
+	Specify angle end point	Määritä kulman loppupiste
+	Specify angle of dimension line	Määritä mittaviivan kulma
+	Specify angle of dimension text	Määritä mittatekstin kulma
+	Specify angle start point	Määritä kulman alkupiste
+	Specify angle vertex	Määritä kulman kärki
+	Specify angle vertex point	Määritä kulman kärkipiste
+	Specify arc length dimension location	Määritä kaaren pituusmitan sijainti
+	Specify axis endpoint of ellipse	Määritä ellipsin akselin päätepiste
+	Specify base diameter	Määritä pohjan halkaisija
+	Specify base point	Määritä peruspiste
+	Specify base point or	Määritä peruspiste tai
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	Määritä peruspiste tai siirtymä (vedä hiiren keskipainikkeella reaaliaikaista panorointia varten)
+	Specify base radius or	Määritä pohjan säde tai
+	Specify center of donut	Määritä renkaan keskipiste
+	Specify center of ellipse	Määritä ellipsin keskipiste
+	Specify center of polygon	Määritä monikulmion keskipiste
+	Specify center point for circle	Määritä ympyrän keskipiste
+	Specify center point of arc	Määritä kaaren keskipiste
+	Specify center point of array	Määritä sarjan keskipiste
+	Specify center point of base	Määritä pohjan keskipiste
+	Specify corner of viewport	Määritä näkymäikkunan kulma
+	Specify corner of window, enter a scale factor (nX or nXP)	Määritä ikkunan kulma, anna mittakaavakerroin (nX tai nXP)
+	Specify diameter of circle	Määritä ympyrän halkaisija
+	Specify dimension arc line location	Määritä mittakaaren sijainti
+	Specify dimension line location	Määritä mittaviivan sijainti
+	Specify distance between turns	Määritä kierrosten välinen etäisyys
+	Specify distance to other axis	Määritä etäisyys toiseen akseliin
+	Specify end angle	Määritä loppukulma
+	Specify end point of arc	Määritä kaaren loppupiste
+	Specify end point of arc (hold Ctrl to switch direction)	Määritä kaaren loppupiste (vaihda suuntaa pitämällä Ctrl painettuna)
+	Specify ending width	Määritä loppuleveys
+	Specify ending width for next segment	Määritä seuraavan segmentin loppuleveys
+	Specify endpoint of arc	Määritä kaaren päätepiste
+	Specify endpoint of axis	Määritä akselin päätepiste
+	Specify endpoint of line	Määritä viivan päätepiste
+	Specify feature location	Määritä piirteen sijainti
+	Specify fillet radius	Määritä pyöristyssäde
+	Specify fillet radius for rectangles	Määritä suorakulmioiden pyöristyssäde
+	Specify first angle endpoint	Määritä kulman ensimmäinen päätepiste
+	Specify first chamfer distance	Määritä ensimmäinen viisteetäisyys
+	Specify first chamfer distance for rectangles	Määritä suorakulmioiden ensimmäinen viisteetäisyys
+	Specify first constraint point	Määritä ensimmäinen rajoitepiste
+	Specify first corner	Määritä ensimmäinen kulma
+	Specify first corner point	Määritä ensimmäinen kulmapiste
+	Specify first destination point	Määritä ensimmäinen kohdepiste
+	Specify first end point of circle's diameter	Määritä ympyrän halkaisijan ensimmäinen päätepiste
+	Specify first endpoint of edge	Määritä särmän ensimmäinen päätepiste
+	Specify first extension line origin	Määritä ensimmäisen apuviivan alkupiste
+	Specify first point	Määritä ensimmäinen piste
+	Specify first point of mirror line	Määritä peilausviivan ensimmäinen piste
+	Specify first point on circle	Määritä ensimmäinen piste ympyrällä
+	Specify first point on circle: _tan to	Määritä ensimmäinen piste ympyrällä: _tan kohteeseen
+	Specify first source point	Määritä ensimmäinen lähdepiste
+	Specify height	Määritä korkeus
+	Specify helix height or	Määritä kierukan korkeus tai
+	Specify included angle	Määritä sisäkulma
+	Specify insertion base point	Määritä lisäyksen peruspiste
+	Specify insertion point	Määritä lisäyspiste
+	A drawing opened from a file keeps that file's format.	Tiedostosta avattu piirustus säilyttää tiedoston muodon.
+	An array that would create more objects than this is refused.	Sarja, joka loisi tätä enemmän objekteja, hylätään.
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADaddy säilyttää nämä asetukset, objektikohdistustilat ja piirtotoiminnot käyttäjätilillesi ja palauttaa ne käynnistyessään.
+	Changes apply at once and are kept for next time.	Muutokset tulevat voimaan heti ja säilyvät seuraavaan kertaan.
+	Command line history	Komentorivin historia
+	Copy as JSON	Kopioi JSON-muodossa
+	Crosshair size	Hiusristikon koko
+	Crossing selection color:	Leikkaavan valinnan väri:
+	Display	Näyttö
+	Exclude:	Jätä pois:
+	Grip size	Kahvan koko
+	Grips	Kahvat
+	Groups	Ryhmät
+	Hatches	Viivoitukset
+	Hold Shift to add to the selection	Lisää valintaan pitämällä Vaihto painettuna
+	Indicate selection area	Näytä valinta-alue
+	Interface language	Käyttöliittymän kieli
+	Interface theme	Käyttöliittymän teema
+	Keep the system cursor visible over the drawing area	Pidä järjestelmän osoitin näkyvissä piirtoalueen päällä
+	Largest array	Suurin sarja
+	Layout paper	Asettelun paperi
+	Model background	Mallin tausta
+	Multiline text	Monirivinen teksti
+	Object grouping	Objektien ryhmittely
+	Object selection limit for display of grips	Kahvojen näytön objektivalintaraja
+	Object snap aperture	Objektikohdistuksen aukko
+	Object snap marker size	Objektikohdistusmerkin koko
+	Objects on locked layers	Lukittujen tasojen objektit
+	Open and Save	Avaaminen ja tallennus
+	Options	Asetukset
+	Options...	Asetukset...
+	Pickbox size	Poimintaruudun koko
+	Preview	Esikatselu
+	Profiles	Profiilit
+	Reset keeps the interface language.	Palautus säilyttää käyttöliittymän kielen.
+	Reset to Defaults	Palauta oletukset
+	Save new drawings as	Tallenna uudet piirustukset muodossa
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Näytönsuurentajat, näytönlukijat ja tallentimet seuraavat järjestelmän osoitinta.
+	Select objects first, then choose a command	Valitse ensin objektit, sitten komento
+	Selection	Valinta
+	Selection Area Effect	Valinta-alueen efekti
+	Selection Preview Filter	Valinnan esikatselusuodatin
+	Selection area opacity:	Valinta-alueen peittävyys:
+	Selection effect color	Valintaefektin väri
+	Selection modes	Valintatilat
+	Selection preview	Valinnan esikatselu
+	Settings...	Asetukset...
+	Show Quick Properties for selected objects	Näytä valittujen objektien pikaominaisuudet
+	Show grips	Näytä kahvat
+	Snap, grid, polar tracking and Dynamic Input:	Kohdistus, ruudukko, polaarinen jäljitys ja dynaaminen syöttö:
+	Tables	Taulukot
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Aukko määrää, kuinka lähelle pistettä osoittimen on tultava, jotta objektikohdistus löytää sen.
+	User Preferences	Käyttäjän asetukset
+	Visual Effect Settings	Visuaalisten efektien asetukset
+	Visual Effect Settings...	Visuaalisten efektien asetukset...
+	When a command is active	Kun komento on käynnissä
+	When no command is active	Kun mikään komento ei ole käynnissä
+	Window selection color:	Ikkunavalinnan väri:
+	Xrefs	Ulkoiset viitteet
+	objects	objektia
+	Specify inside diameter of donut	Määritä renkaan sisähalkaisija
+	Specify leader arrowhead location	Määritä viittausviivan nuolenkärjen sijainti
+	Specify leader endpoint	Määritä viittausviivan päätepiste
+	Specify leader landing location	Määritä viittausviivan hyllyn sijainti
+	Specify length for rectangles	Määritä suorakulmioiden pituus
+	Specify length of chord	Määritä jänteen pituus
+	Specify length of segment	Määritä segmentin pituus
+	Specify line width for rectangles	Määritä suorakulmioiden viivanleveys
+	Specify location for new vertex	Määritä uuden kärkipisteen sijainti
+	Specify minimum length of arc	Määritä kaaren vähimmäispituus
+	Specify new end point	Määritä uusi päätepiste
+	Specify new location for marked vertex	Määritä merkityn kärkipisteen uusi sijainti
+	Specify new width for all segments	Määritä kaikkien segmenttien uusi leveys
+	Specify next point	Määritä seuraava piste
+	Specify offset distance	Määritä siirtymäetäisyys
+	Specify offset distance or	Määritä siirtymäetäisyys tai
+	Specify opposite corner	Määritä vastakkainen kulma
+	Specify other corner point	Määritä toinen kulmapiste
+	Specify other endpoint of axis	Määritä akselin toinen päätepiste
+	Specify outside diameter of donut	Määritä renkaan ulkohalkaisija
+	Specify point	Määritä piste
+	Specify point on object for first tangent of circle	Määritä objektilta piste ympyrän ensimmäiselle tangentille
+	Specify point on object for second tangent of circle	Määritä objektilta piste ympyrän toiselle tangentille
+	Specify point on side to offset	Määritä piste siirtymäpuolelta
+	Specify radius of arc	Määritä kaaren säde
+	Specify radius of circle	Määritä ympyrän säde
+	Specify rotation angle	Määritä kiertokulma
+	Specify rotation angle of text	Määritä tekstin kiertokulma
+	Specify rotation angle or	Määritä kiertokulma tai
+	Specify scale factor	Määritä mittakaavakerroin
+	Specify second angle endpoint	Määritä kulman toinen päätepiste
+	Specify second break point	Määritä toinen katkaisupiste
+	Specify second chamfer distance for rectangles	Määritä suorakulmioiden toinen viisteetäisyys
+	Specify second constraint point	Määritä toinen rajoitepiste
+	Specify second destination point	Määritä toinen kohdepiste
+	Specify second end point of circle's diameter	Määritä ympyrän halkaisijan toinen päätepiste
+	Specify second endpoint of edge	Määritä särmän toinen päätepiste
+	Specify second extension line origin	Määritä toisen apuviivan alkupiste
+	Specify second point	Määritä toinen piste
+	Specify second point of arc	Määritä kaaren toinen piste
+	Specify second point of mirror line	Määritä peilausviivan toinen piste
+	Specify second point on circle	Määritä toinen piste ympyrällä
+	Specify second point on circle: _tan to	Määritä toinen piste ympyrällä: _tan kohteeseen
+	Specify second point or <use first point as displacement>	Määritä toinen piste tai <käytä ensimmäistä pistettä siirtymänä>
+	Specify second source point	Määritä toinen lähdepiste
+	Specify side to offset	Määritä siirtymäpuoli
+	Specify start angle	Määritä alkukulma
+	Specify start point	Määritä alkupiste
+	Specify start point of arc	Määritä kaaren alkupiste
+	Specify start point of polyline	Määritä murtoviivan alkupiste
+	Specify start point of text	Määritä tekstin alkupiste
+	Specify starting width	Määritä alkuleveys
+	Specify starting width for next segment	Määritä seuraavan segmentin alkuleveys
+	Specify tangent direction for the start point of arc	Määritä kaaren alkupisteen tangentin suunta
+	Specify the elevation for rectangles	Määritä suorakulmioiden korkeusasema
+	Specify thickness for rectangles	Määritä suorakulmioiden paksuus
+	Specify third point on circle	Määritä kolmas piste ympyrällä
+	Specify third point on circle: _tan to	Määritä kolmas piste ympyrällä: _tan kohteeseen
+	Specify third source point or <continue>	Määritä kolmas lähdepiste tai <jatka>
+	Specify through point	Määritä kauttakulkupiste
+	Specify top diameter	Määritä yläosan halkaisija
+	Specify top radius or	Määritä yläosan säde tai
+	Specify total angle	Määritä kokonaiskulma
+	Specify total length or	Määritä kokonaispituus tai
+	Specify width for rectangles	Määritä suorakulmioiden leveys
+	Sphere	Pallo
+	Spline	Splini
+	Spline Edit	Splinin muokkaus
+	Stack (type 1/2 then select)	Murtoluku (kirjoita 1/2 ja valitse)
+	Standard	Vakio
+	Start	Aloita
+	Start Width	Alkuleveys
+	Start X	Alku X
+	Start Y	Alku Y
+	Start angle	Alkukulma
+	Start, Center, Angle	Alku, keskipiste, kulma
+	Start, Center, End	Alku, keskipiste, loppu
+	Start, Center, Length	Alku, keskipiste, pituus
+	Start, End, Angle	Alku, loppu, kulma
+	Start, End, Direction	Alku, loppu, suunta
+	Start, End, Radius	Alku, loppu, säde
+	Status	Tila
+	Status Bar	Tilarivi
+	Stretch	Venytä
+	Style: Standard	Tyyli: Standard
+	Subtract	Vähennä
+	Sweep	Pyyhkäise
+	Switch Drawing	Vaihda piirustusta
+	Switch Layout	Vaihda asettelua
+	Switch between model space in a viewport and paper space	Vaihda näkymäikkunan mallitilan ja paperitilan välillä
+	Symmetric	Symmetrinen
+	Synchronize Attributes	Synkronoi attribuutit
+	To	Kohteeseen
+	Toggle PICKADD (off: each pick replaces the selection)	Vaihda PICKADD (pois: jokainen valinta korvaa valintajoukon)
+	Toggle PICKADD (on: picks add to the selection)	Vaihda PICKADD (päällä: valinnat lisätään valintajoukkoon)
+	TOP	YLHÄÄLTÄ
+	Table	Taulukko
+	Table Breaks	Taulukon katkot
+	Table Cell Style	Taulukon solutyyli
+	Table Style...	Taulukkotyyli...
+	Table style	Taulukkotyyli
+	Table...	Taulukko...
+	Tan, Tan, Radius	Tan, tan, säde
+	Tan, Tan, Tan	Tan, tan, tan
+	Tangent	Tangentti
+	Temporary track point	Tilapäinen jäljityspiste
+	Text	Teksti
+	Text Editor	Tekstieditori
+	Text Height	Tekstin korkeus
+	Text Style...	Tekstityyli...
+	Text height	Tekstin korkeus
+	Text override	Tekstin ohitus
+	Text style	Tekstityyli
+	Thaw All Layers	Sulata kaikki tasot
+	Thaw Layer	Sulata taso
+	There is nothing here yet.	Täällä ei ole vielä mitään.
+	Thickness	Paksuus
+	Time	Aika
+	To get started, create or open a drawing.	Aloita luomalla tai avaamalla piirustus.
+	Tool Bar	Työkalurivi
+	Tool Sets	Työkalusarjat
+	Tools	Työkalut
+	Torus	Torus
+	Trace	Jälki
+	Track orthogonally only	Jäljitä vain kohtisuorasti
+	Track using all polar angle settings	Jäljitä kaikilla polaarikulma-asetuksilla
+	Transparency	Läpinäkyvyys
+	Trim	Lyhennä
+	True Color	True Color
+	Turn All Layers On	Kytke kaikki tasot päälle
+	Turn Off Layer	Kytke taso pois
+	Turn On Layer	Kytke taso päälle
+	Turn Quick Properties off (QPMODE)	Kytke pikaominaisuudet pois (QPMODE)
+	Type	Tyyppi
+	Type a command	Kirjoita komento
+	Type text; Enter starts a new paragraph	Kirjoita tekstiä; Enter aloittaa uuden kappaleen
+	UCS Icon	UCS-kuvake
+	Undo	Kumoa
+	Undo (⌘Z)	Kumoa (⌘Z)
+	Ungroup	Pura ryhmä
+	Union	Yhdiste
+	Unisolate Layer	Poista tason eristys
+	Units Conversion	Yksikkömuunnos
+	Units...	Yksiköt...
+	Unlock Layer	Vapauta taso
+	Unlock viewport	Vapauta näkymäikkuna
+	Unmerge Cells	Pura solujen yhdistäminen
+	Unsaved Layer State	Tallentamaton tasotila
+	Up	Ylös
+	Update Data Links	Päivitä datalinkit
+	Update	Päivitä
+	Use System Setting	Käytä järjestelmän asetusta
+	User	Käyttäjä
+	User Parameters	Käyttäjäparametrit
+	Username	Käyttäjänimi
+	Volume	Tilavuus
+	VP Color	NI-väri
+	VP Freeze	NI-jäädytys
+	Value	Arvo
+	Value:	Arvo:
+	Variables	Muuttujat
+	Version	Versio
+	Version 2000	Versio 2000
+	Version 2004	Versio 2004
+	Version 2007	Versio 2007
+	Version 2010	Versio 2010
+	Version 2013	Versio 2013
+	Version 2018	Versio 2018
+	Version {version}	Versio {version}
+	Vertical	Pystysuora
+	VerticalDistance	Pystyetäisyys
+	View	Näkymä
+	ViewCube	ViewCube
+	Viewport	Näkymäikkuna
+	Viewport Layer Freeze	Näkymäikkunan tasojäädytys
+	Viewport Properties	Näkymäikkunan ominaisuudet
+	Viewport is locked	Näkymäikkuna on lukittu
+	Viewport scale	Näkymäikkunan mittakaava
+	Viewport {id}	Näkymäikkuna {id}
+	Viewports	Näkymäikkunat
+	W	L
+	WCS ⌄	WCS ⌄
+	White	Valkoinen
+	Width factor	Leveyskerroin
+	Window	Ikkuna
+	Wipeout	Peittoalue
+	Workspace Switching	Työtilan vaihto
+	Write Block	Kirjoita lohko
+	Xline	Rakenneviiva
+	Yellow	Keltainen
+	Yes	Kyllä
+	Zoom	Zoomaa
+	Zoom All	Zoomaa kaikki
+	Zoom Dynamic	Zoomaa dynaamisesti
+	Zoom Extents	Zoomaa laajuuteen
+	Zoom In	Lähennä
+	Zoom Object	Zoomaa objektiin
+	Zoom Out	Loitonna
+	Zoom Previous	Zoomaa edelliseen
+	Zoom Realtime	Zoomaa reaaliaikaisesti
+	Zoom Window	Zoomaa ikkunaan
+	error	virhe
+	{contributors} · {commits}	{contributors} · {commits}
+	{kind} (constraint {id})	{kind} (rajoite {id})
+	{kind} constraint {name} = {expression}  (double-click to edit)	{kind}-rajoite {name} = {expression}  (muokkaa kaksoisnapsauttamalla)
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	ƒx  New User Parameter	ƒx  Uusi käyttäjäparametri
+	ΔLOC	Δrivit
+	−Bin	−binääri
+	−LOC	−rivit
+	⌘↩ to finish	Lopeta ⌘↩
+@plural	{n} commit	{n} commit|{n} commitia
+@plural	{n} contributor	{n} tekijä|{n} tekijää
+	Drawing as bytes	Piirustus tavuina
+	Services	Palvelut
+	Hide CADaddy	Kätke CADaddy
+	Hide Others	Kätke muut
+	Accessibility	Saavutettavuus
+	Show System Cursor	Näytä järjestelmän osoitin
+	Animation Effects	Animaatiotehosteet
+	Animation effects	Animaatiotehosteet
+	Import...	Tuo...
+	Export...	Vie...
+	Batch Publish...	Erätulostus...
+	Scale List...	Mittakaavaluettelo...
+	Annotative Object Scale	Merkintäobjektin mittakaava
+	Add Current Scale	Lisää nykyinen mittakaava
+	Delete Current Scale	Poista nykyinen mittakaava
+	Add/Delete Scales...	Lisää/poista mittakaavoja...
+	Synchronize Multiple-scale Positions	Synkronoi monimittakaavaiset sijainnit
+	Annotative Update	Merkintöjen päivitys
+	Show Annotative Objects	Näytä merkintäobjektit
+	Current Scale Only	Vain nykyinen mittakaava
+	All Scales	Kaikki mittakaavat
+	Drawing Recovery Manager...	Piirustusten palautuksen hallinta...
+	Tolerance...	Toleranssi...
+	Add Vertex	Lisää kärkipiste
+	Remove Vertex	Poista kärkipiste
+	Convert to Arc	Muunna kaareksi
+	Convert to Line	Muunna viivaksi
+	Stretch Vertex	Venytä kärkipistettä
+	Edit Array	Muokkaa sarjaa
+	Close Array Editing	Sulje sarjan muokkaus
+	Multiline...	Moniviiva...
+	Multiline Style...	Moniviivatyyli...
+	Solid Editing	Solidien muokkaus
+	3D Mouse...	3D-hiiri...
+	3D Mouse	3D-hiiri
+	Calibrate 3D Mouse	Kalibroi 3D-hiiri
+	3D Mouse Navigation	3D-hiirinavigointi
+	3D mouse input is unavailable on this platform	3D-hiiren syöte ei ole käytettävissä tällä alustalla
+	No supported 3D mouse found	Tuettua 3D-hiirtä ei löytynyt
+	Release the 3D mouse to calibrate its resting position	Vapauta 3D-hiiri, jotta sen lepoasento voidaan kalibroida
+	3D mouse connected	3D-hiiri yhdistetty
+	3D mouse busy, possibly 3DxWare or missing device permissions	3D-hiiri varattu, mahdollisesti 3DxWare tai puuttuvat laiteoikeudet
+	3D mouse disconnected	3D-hiiri irrotettu
+	3D mouse input could not be started	3D-hiiren syötettä ei voitu käynnistää
+	Enable 3D mouse navigation	Ota 3D-hiirinavigointi käyttöön
+	Pan sensitivity	Panoroinnin herkkyys
+	Zoom sensitivity	Zoomauksen herkkyys
+	Reverse zoom direction	Käännä zoomaussuunta
+	Calibrate	Kalibroi
+	Move sideways to pan; push/pull or twist to zoom.	Panoroi liikuttamalla sivuttain; zoomaa työntämällä/vetämällä tai kiertämällä.
+	Left device button: zoom extents. Right device button: calibrate.	Laitteen vasen painike: zoomaa laajuuteen. Oikea painike: kalibroi.
+	More toolbar commands	Lisää työkalurivin komentoja
+	Default save version	Oletustallennusversio
+	Automatic save every	Automaattinen tallennus joka
+	min	min
+	Automatic save file location	Automaattisen tallennuksen sijainti
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Piirustukset, joilla ei vielä ole tiedostoa, tallennetaan oletusversiona. 0 minuuttia poistaa automaattisen tallennuksen käytöstä.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Aikaherkkä oikea napsautus: nopea napsautus on Enter, pitkä painallus avaa valikon
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Kun asetus on pois, oikea napsautus komennon aikana avaa aina pikavalikon.
+	Hatch Pattern	Viivoituskuvio
+	Search for pattern	Hae kuviota
+	Run Script...	Suorita skripti...
+	Query Texts	Kysy tekstit
+	Hatch Pick	Viivoituksen poiminta
+	Hatch and Gradient	Viivoitus ja liukuväri
+	Color 1	Väri 1
+	Color 2	Väri 2
+	Shape	Muoto
+	Curved	Kaareva
+	Spherical	Pallomainen
+	Hemispherical	Puolipallomainen
+	Inverted	Käänteinen
+	Centered	Keskitetty
+	Hatch origin	Viivoituksen origo
+	Use current origin	Käytä nykyistä origoa
+	Specified origin	Määritetty origo
+	Click to set new origin	Aseta uusi origo napsauttamalla
+	Default to boundary extents	Oletuksena rajan laajuus
+	Bottom left	Vasen alakulma
+	Bottom right	Oikea alakulma
+	Top left	Vasen yläkulma
+	Top right	Oikea yläkulma
+	Boundaries	Rajat
+	Add: Pick points	Lisää: poimi pisteitä
+	Add: Select objects	Lisää: valitse objekteja
+	Boundaries picked: {n}	Poimittuja rajoja: {n}
+	Associative	Assosiatiivinen
+	Create separate hatches	Luo erilliset viivoitukset
+	Island detection	Saarekkeiden tunnistus
+	Normal	Normaali
+	Outer	Ulompi
+	Ignore	Ohita
+	Origin: {x}, {y}	Origo: {x}, {y}
+	Sheet Books to PDF...	Arkkikirjat PDF-tiedostoksi...
+	Not a number or distance: {text}	Ei luku tai etäisyys: {text}
+	Dynamic Block Data	Dynaamisen lohkon tiedot
+	Custom	Mukautettu
+	Dynamic Block Reference	Dynaaminen lohkoviite
+	Set Dynamic Property	Aseta dynaaminen ominaisuus
+	Dynamic Block Grips	Dynaamisen lohkon kahvat
+	Drag Dynamic Grip	Vedä dynaamista kahvaa
+	Save Block	Tallenna lohko
+	Save Block As	Tallenna lohko nimellä
+	Close Block Editor	Sulje lohkoeditori
+	Unsaved changes	Tallentamattomia muutoksia
+	Edit Block Definition	Muokkaa lohkon määrittelyä
+	Block to create or edit	Luotava tai muokattava lohko
+	Open in Block Editor	Avaa lohkoeditorissa
+	This drawing	Tämä piirustus
+	contains authoring elements. Open in Block Editor?	sisältää laadintaelementtejä. Avataanko lohkoeditorissa?
+	New block	Uusi lohko
+	Italic	Kursivointi
+	Underline	Alleviivaus
+	Overline	Yliviivaus
+	Justify	Tasaa reunoihin
+	Text color	Tekstin väri
+	Click the ruler to add a tab stop, right-click to remove one	Lisää sarkainkohta napsauttamalla viivainta, poista napsauttamalla hiiren oikealla
+	Ribbon	Valintanauha
+	Close Ribbon	Sulje valintanauha
+	Menu Bar	Valikkorivi
+	Top	Ylhäältä
+	Bottom	Alhaalta
+	Front	Edestä
+	Back	Takaa
+	SW Isometric	LO-isometrinen
+	SE Isometric	KO-isometrinen
+	NE Isometric	KK-isometrinen
+	NW Isometric	LK-isometrinen
+	3D Views	3D-näkymät
+	Plan View	Tasonäkymä
+	World UCS	Maailman UCS
+	View Direction	Katselusuunta
+	2D Wireframe	2D-rautalanka
+	Custom View	Mukautettu näkymä
+	Convert PDF to DWG...	Muunna PDF DWG:ksi...
+	Convert PDF to DWG	Muunna PDF DWG:ksi
+	PDF Import...	PDF-tuonti...
+	PDF Import	PDF-tuonti
+	Page	Sivu
+	PDF layers (else by colour and line weight)	PDF-tasot (muuten värin ja viivanpaksuuden mukaan)
+	By colour and line weight	Värin ja viivanpaksuuden mukaan
+	Object layers (PDF_Geometry, PDF_Text, …)	Objektitasot (PDF_Geometry, PDF_Text, …)
+	Import text	Tuo teksti
+	Join line pieces and make circles	Yhdistä viivanpalat ja muodosta ympyrät
+	Keep white fills (masks)	Säilytä valkoiset täytöt (maskit)
+	Import raster images (saved as PNG files)	Tuo rasterikuvat (tallennetaan PNG-tiedostoina)
+	Add a layout that plots like the sheet	Lisää asettelu, joka tulostuu kuten arkki
+	Convert and Save as DWG…	Muunna ja tallenna DWG-muodossa…
+	Walk	Kävely
+	Report a Bug...	Ilmoita virheestä...
+	Request a Feature...	Ehdota ominaisuutta...
+	Donate / Improve	Lahjoita / kehitä
+	Improve CADaddy	Kehitä CADaddya
+	Or email {address}	Tai lähetä sähköpostia osoitteeseen {address}
+	Support CADaddy	Tue CADaddya
+	CADaddy is free, and it always will be.	CADaddy on ilmainen, ja se pysyy aina ilmaisena.
+	No ads, no subscription. If CADaddy saves you time, a small donation pays for the AI time that builds the next features.	Ei mainoksia, ei tilausta. Jos CADaddy säästää aikaasi, pieni lahjoitus maksaa tekoälyajan, jolla seuraavat ominaisuudet rakennetaan.
+	Report a bug or request a feature	Ilmoita virheestä tai ehdota ominaisuutta
+	Support CADaddy...	Tue CADaddya...
+	Array (classic)	Sarja (klassinen)
+	Change	Muuta
+	Change Properties	Muuta ominaisuuksia
+	Quick Leader	Pikaviittausviiva
+	Symbol...	Symboli...
+	List Symbols	Luettele symbolit
+	Symbols	Symbolit
+	Search symbols	Hae symboleita
+	No symbols match.	Yksikään symboli ei vastaa hakua.
+	Plumbing fixtures	LVI-kalusteet
+	Plumbing piping	LVI-putkisto
+	Computer-aided design and drafting for Windows, Mac and Linux, written in Rust.	Tietokoneavusteinen suunnittelu ja piirtäminen Windowsille, Macille ja Linuxille, kirjoitettu Rustilla.
+	Includes open-source components: see NOTICE.	Sisältää avoimen lähdekoodin komponentteja: katso NOTICE.
+	Free to use. Not affiliated with Autodesk, Inc.	Vapaasti käytettävissä. Ei yhteydessä Autodesk, Inc:iin.
+	Electrical devices	Sähkölaitteet
+	Lighting	Valaistus
+	Power and distribution	Sähkönsyöttö ja jakelu
+	Low voltage	Pienjännite
+	Fire alarm	Paloilmoitin
+	Check for Updates...	Tarkista päivitykset...
+	Check for updates automatically	Tarkista päivitykset automaattisesti
+	Once a day CADaddy asks GitHub for the newest version number. Nothing about you or your drawings is sent.	Kerran päivässä CADaddy kysyy GitHubista uusimman versionumeron. Sinusta tai piirustuksistasi ei lähetetä mitään.
+	Checking for updates...	Tarkistetaan päivityksiä...
+	CADaddy {v} is the latest version.	CADaddy {v} on uusin versio.
+	CADaddy {v} is available	CADaddy {v} on saatavilla
+	You have {v}. Updating keeps your drawings and settings.	Sinulla on {v}. Päivitys säilyttää piirustuksesi ja asetuksesi.
+	Downloading CADaddy {v}...	Ladataan CADaddy {v}...
+	CADaddy {v} is ready to install	CADaddy {v} on valmis asennettavaksi
+	It installs when you close CADaddy. Restart now to update right away.	Se asentuu, kun suljet CADaddyn. Käynnistä uudelleen nyt päivittääksesi heti.
+	Couldn't update CADaddy	CADaddya ei voitu päivittää
+	Download	Lataa
+	What's New	Uutta
+	Later	Myöhemmin
+	Skip This Version	Ohita tämä versio
+	Restart Now	Käynnistä uudelleen nyt
+	When I Close CADaddy	Kun suljen CADaddyn
+	Download Page	Lataussivu
+	Hide	Piilota
+	The current layer is being turned off	Nykyinen taso kytketään pois
+	Layer "{layer}" is the current layer. Objects you draw on it won't show until you turn it back on.	Taso "{layer}" on nykyinen taso. Siihen piirtämäsi objektit eivät näy, ennen kuin kytket sen takaisin päälle.
+	Keep the Current Layer On	Pidä nykyinen taso päällä
+	Turn the Current Layer Off	Kytke nykyinen taso pois
+	Quantity Takeoff	Määrälaskenta
+	Dimension Style	Mitoitustyyli
+	Text Style	Tekstityyli
+	Xref	Ulkoinen viite
+	Raster Image Reference...	Rasterikuvaviite...
+	Window Lasso	Ikkunalasso
+	Crossing Lasso	Leikkaava lasso
+	Fence Lasso	Aitalasso
+	Press Space to cycle options	Selaa vaihtoehtoja välilyönnillä
+	Burst	Räjäytä
+	Convert to Mtext	Muunna monirivitekstiksi
+	View Twist	Näkymän kierto
+	Let AI agents control CADaddy	Anna tekoälyagenttien ohjata CADaddya
+	The Claude connector and other agents on this computer can then open, edit, save and close drawings in this window. Nothing outside this computer can connect. Takes effect the next time CADaddy starts.	Claude-liitin ja muut tämän tietokoneen agentit voivat tällöin avata, muokata, tallentaa ja sulkea piirustuksia tässä ikkunassa. Mikään tämän tietokoneen ulkopuolinen ei voi muodostaa yhteyttä. Tulee voimaan, kun CADaddy käynnistetään seuraavan kerran.
+	Base Point	Peruspiste
+	Column Spacing	Sarakeväli
+	Column Count	Sarakemäärä
+	Row Spacing	Riviväli
+	Row Count	Rivimäärä
+	Row and Column Count	Rivi- ja sarakemäärä
+	Level Spacing	Tasoväli
+	Level Count	Tasomäärä
+	Item Spacing	Kohdeväli
+	Item Count	Kohdemäärä
+	Total column spacing	Sarakkeiden kokonaisväli
+	Total row spacing	Rivien kokonaisväli
+	Total row and column spacing	Rivien ja sarakkeiden kokonaisväli
+	Total level spacing	Tasojen kokonaisväli
+	Fill angle	Täyttökulma
+	Stretch radius	Venytyssäde
+	Array Grips	Sarjan kahvat
+	Edit Array with a Grip	Muokkaa sarjaa kahvalla
+	Open Drawings	Avoimet piirustukset
+	Close Drawing	Sulje piirustus
+	Close All Drawings	Sulje kaikki piirustukset
+	Export Comparison Report...	Vie vertailuraportti...
+	Select All Layouts	Valitse kaikki asettelut
+	Move or Copy...	Siirrä tai kopioi...
+	Move or Copy	Siirrä tai kopioi
+	Move or copy layout "{name}"	Siirrä tai kopioi asettelu "{name}"
+	Before layout:	Ennen asettelua:
+	(move to end)	(siirrä loppuun)
+	Create a copy	Luo kopio
+	A drawing keeps at least one layout.	Piirustuksessa on oltava vähintään yksi asettelu.
+	Move Layout	Siirrä asettelu
+	Background	Tausta
+	Text fill	Tekstin täyttö
+	Text fill color	Tekstin täyttöväri
+	Text reads right to left	Teksti luetaan oikealta vasemmalle
+	Placing text places the dimension line	Tekstin sijoitus sijoittaa mittaviivan
+	Alternate tolerance precision	Vaihtoehtoisen toleranssin tarkkuus
+	Alternate tolerance zero suppression	Vaihtoehtoisen toleranssin nollien poisto
+	Linear jog height (× text height)	Lineaarisen taitteen korkeus (× tekstin korkeus)
+	Break size	Katkon koko
+	Express Tools	Express Tools
+	Break-line Symbol	Katkoviivasymboli
+	Replace Block...	Korvaa lohko...
+	Move/Copy/Rotate	Siirrä/kopioi/kierrä
+	Remove boundaries	Poista rajat
+	Inherit Properties	Peri ominaisuudet
+	Nothing to preview yet.	Ei vielä mitään esikatseltavaa.
+	Property Settings	Ominaisuusasetukset
+	Basic Properties	Perusominaisuudet
+	Special Properties	Erityisominaisuudet
+	Plot Style	Tulostustyyli
+	Material	Materiaali
+	Shadow display	Varjojen näyttö
+	Center object	Keskitä objekti
+	Move with Dim Line	Siirrä mittaviivan mukana
+	Move Text Only	Siirrä vain tekstiä
+	Above Dim Line	Mittaviivan yläpuolelle
+	Center Vertically	Keskitä pystysuunnassa
+	Reset Text Position	Palauta tekstin sijainti
+	Continue Dimension	Jatka mitoitusta
+	Baseline Dimension	Perusviivamitoitus
+	Flip Arrow	Käännä nuoli
+	Lengthen Landing	Pidennä hyllyä
+	Origin Point	Origopiste
+	Hatch Angle	Viivoituksen kulma
+	Hatch Scale	Viivoituksen mittakaava
+	Edit Tolerance	Muokkaa toleranssia
+	Geometric Tolerance	Geometrinen toleranssi
+	Geometric characteristic	Geometrinen ominaisuus
+	Material condition	Materiaaliehto
+	No symbol	Ei symbolia
+	Projected Tolerance Zone	Projisoitu toleranssialue
+	Datum Identifier	Perustan tunnus
+	Sym	Symb.
+	Tolerance 1	Toleranssi 1
+	Tolerance 2	Toleranssi 2
+	Datum 1	Perusta 1
+	Datum 2	Perusta 2
+	Datum 3	Perusta 3
+	PDF Underlay...	PDF-alusta...
+	Clip PDF Underlay	Rajaa PDF-alusta
+	Adjust PDF Underlay	Säädä PDF-alustaa
+	PDF Underlay Layers	PDF-alustan tasot
+	Unused items in this drawing	Käyttämättömät kohteet tässä piirustuksessa
+	Purge Checked Items	Siivoa valitut kohteet
+	Purge All	Siivoa kaikki
+	Items purged: {count}	Siivottuja kohteita: {count}
+	Find what:	Etsittävä:
+	Replace with:	Korvaa tekstillä:
+	Match case	Sama kirjainkoko
+	Find whole words only	Etsi vain kokonaisia sanoja
+	Find	Etsi
+	Replace All	Korvaa kaikki
+	Matches replaced: {count} (objects: {objects})	Korvattuja osumia: {count} (objekteja: {objects})
+	Matches found and selected: {count} (objects: {objects})	Löydettyjä ja valittuja osumia: {count} (objekteja: {objects})
+	Select Color	Valitse väri
+	Dimension styles	Mitoitustyylit
+	Linetypes	Viivatyypit
+	Multileader styles	Monijohdetyylit
+	Multiline styles	Moniviivatyylit
+	Table styles	Taulukkotyylit
+	Text styles	Tekstityylit
+	Zero-length geometry	Nollapituinen geometria
+	Empty text objects	Tyhjät tekstiobjektit
+	Palette Windows	Palettiikkunat
+	Dock	Telakoi
+	Back into the main window	Takaisin pääikkunaan
+	Dock Palette	Telakoi paletti
+	Float in Own Window	Kelluta omassa ikkunassa
+	Drawings (CDY, DWG, DXF)	Piirustukset (CDY, DWG, DXF)
+	CADaddy Drawing (CDY)	CADaddy-piirustus (CDY)
+	CADaddy drawing (.cdy)	CADaddy-piirustus (.cdy)
+	Also save a DWG copy when saving a CADaddy drawing (.cdy)	Tallenna myös DWG-kopio, kun tallennat CADaddy-piirustuksen (.cdy)
+	A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what).	CADaddy-piirustus säilyttää kaiken; DWG- ja DXF-tiedostot eivät välttämättä säilytä kaikkea (tallennettaessa kerrotaan, mitä jää pois).
+	Field...	Kenttä...
+	Update Fields	Päivitä kentät
+	Change Text Case	Vaihda kirjainkokoa
+	Auto Number	Automaattinen numerointi
+	Explode Text	Hajota teksti
+	Arc Aligned Text	Kaaren mukainen teksti
+	Data Extraction	Tietojen poiminta
+	Data source	Tietolähde
+	Objects	Objektit
+	Output	Tuloste
+	Other drawings:	Muut piirustukset:
+	Add Drawings...	Lisää piirustuksia...
+	Open Settings...	Avaa asetukset...
+	Start from a saved .dxe settings file	Aloita tallennetusta .dxe-asetustiedostosta
+	Block names	Lohkojen nimet
+	Include blocks inside blocks	Sisällytä lohkojen sisäiset lohkot
+	Other objects:	Muut objektit:
+	The drawing has no other objects.	Piirustuksessa ei ole muita objekteja.
+	Properties to extract:	Poimittavat ominaisuudet:
+	Attribute tags	Attribuuttitunnisteet
+	Combine identical rows	Yhdistä samanlaiset rivit
+	Insert a table	Lisää taulukko
+	Insertion point	Lisäyspiste
+	Title	Otsikko
+	Write a file (.csv for spreadsheets, .txt tab-separated)	Kirjoita tiedosto (.csv laskentataulukoille, .txt sarkaineroteltuna)
+	Browse...	Selaa...
+	Save Settings...	Tallenna asetukset...
+	Save these choices to a .dxe file to use again	Tallenna nämä valinnat .dxe-tiedostoon uudelleenkäyttöä varten
+	< Back	< Edellinen
+	Next >	Seuraava >
+	Finish	Valmis
+	UCS	UCS
+	Plan View (World)	Tasonäkymä (maailma)
+	New UCS	Uusi UCS
+	World	Maailma
+	Current UCS	Nykyinen UCS
+	World (WCS)	Maailma (WCS)
+	Unnamed	Nimetön
+	Hide UCS Icon	Piilota UCS-kuvake
+	WCS	WCS
+	Spelling	Oikeinkirjoitus
+	Check Spelling	Tarkista oikeinkirjoitus
+	Where to check	Tarkistettava alue
+	Selected objects	Valitut objektit
+	Not in dictionary:	Ei sanastossa:
+	Suggestions:	Ehdotukset:
+	Ignore All	Ohita kaikki
+	Change All	Muuta kaikki
+	Add to Dictionary	Lisää sanastoon
+	Main dictionary:	Pääsanasto:
+	American English	Amerikanenglanti
+	Custom dictionary:	Mukautettu sanasto:
+	Spelling check complete.	Oikeinkirjoituksen tarkistus valmis.
+	Hyperlink...	Hyperlinkki...
+	Select Objects for a Hyperlink	Valitse objektit hyperlinkille
+	Open Hyperlink	Avaa hyperlinkki
+	Insert Hyperlink	Lisää hyperlinkki
+	Edit Hyperlink	Muokkaa hyperlinkkiä
+	Text to display	Näytettävä teksti
+	File or web page	Tiedosto tai verkkosivu
+	Named location	Nimetty sijainti
+	A named location with no file or web page is a layout or view of this drawing.	Nimetty sijainti ilman tiedostoa tai verkkosivua on tämän piirustuksen asettelu tai näkymä.
+	Remove Link	Poista linkki
+	⌘-click to follow the link	Seuraa linkkiä ⌘-napsautuksella
+	Ctrl+click to follow the link	Seuraa linkkiä Ctrl+napsautuksella
+	Materials Browser...	Materiaaliselain...
+	Attach by Layer	Liitä tason mukaan
+	Material Mapping	Materiaalin kartoitus
+	New Material	Uusi materiaali
+	Edit Material	Muokkaa materiaalia
+	Delete Material	Poista materiaali
+	Assign Material	Määritä materiaali
+	Materials Browser	Materiaaliselain
+	Search	Hae
+	Library	Kirjasto
+	Add to drawing	Lisää piirustukseen
+	In this drawing	Tässä piirustuksessa
+	No materials yet: add one from the library.	Ei vielä materiaaleja: lisää yksi kirjastosta.
+	Colour	Väri
+	Roughness	Karheus
+	Metallic	Metallisuus
+	Opacity	Peittävyys
+	Mapping	Kartoitus
+	Tile size	Laatan koko
+	Assign to selection ({n})	Määritä valinnalle ({n})
+	Attach to layer	Liitä tasoon
+	Render	Renderöi
+	Edit Layer State	Muokkaa tasotilaa
+	Export Layer State	Vie tasotila
+	Import Layer State	Tuo tasotila
+	New Layer Filter	Uusi tasosuodatin
+	Edit Layer Filter	Muokkaa tasosuodatinta
+	Delete Layer Filter	Poista tasosuodatin
+	List Layer Filters	Luettele tasosuodattimet
+	Layers in Filter	Suodattimen tasot
+	Layer States Manager	Tasotilojen hallinta
+	Invert filter	Käänteinen suodatin
+	New Property Filter...	Uusi ominaisuussuodatin...
+	New Group Filter	Uusi ryhmäsuodatin
+	Add Layer	Lisää taso
+	Remove Layer	Poista taso
+	Layer Filter Properties	Tasosuodattimen ominaisuudet
+	Filter name	Suodattimen nimi
+	Within	Sisällä
+	Any	Mikä tahansa
+	Patterns: * any, ? one character, # one digit; separate with commas; ~ excludes.	Kuviot: * mikä tahansa, ? yksi merkki, # yksi numero; erota pilkuilla; ~ jättää pois.
+	Layer states	Tasotilat
+	Turn off layers not found in layer state	Kytke pois tasot, joita ei löydy tasotilasta
+	Layer properties to restore	Palautettavat tason ominaisuudet
+	On / Off	Päällä / pois
+	Frozen / Thawed	Jäädytetty / sulatettu
+	Locked / Unlocked	Lukittu / vapautettu
+	Plot / No Plot	Tulostuu / ei tulostu
+	Layers in "{name}"	Tasot kohteessa "{name}"
+	Remove from the layer state	Poista tasotilasta
+	New...	Uusi...
+	Save the layers as they are now in this state	Tallenna tasot nykyisellään tähän tilaan
+	Edit...	Muokkaa...
+	Rename	Nimeä uudelleen
+	New layer state name	Uuden tasotilan nimi
+	New name	Uusi nimi
+	Visual Style	Visuaalinen tyyli
+	Visual Styles	Visuaaliset tyylit
+	Wireframe	Rautalanka
+	Hidden	Piilotettu
+	Shaded	Varjostettu
+	Shaded with Edges	Varjostettu reunoilla
+	Realistic	Realistinen
+	Mesh	Verkko
+	Polyface Mesh	Monitahoverkko
+	Polygon Mesh	Monikulmioverkko
+	Fly	Lennä
+	Walk and Fly	Kävele ja lennä
+	3D Library...	3D-kirjasto...
+	Add 3D Twins to Symbols	Lisää 3D-vastineet symboleihin
+	List 3D Models	Luettele 3D-mallit
+	Add 3D Twins	Lisää 3D-vastineet
+	Plan Layers	Pohjapiirroksen tasot
+	Plan Walls	Pohjapiirroksen seinät
+	Plan Openings	Pohjapiirroksen aukot
+	Plan Rooms	Pohjapiirroksen tilat
+	Plan Notes	Pohjapiirroksen huomautukset
+	Plan Sheets	Pohjapiirroksen arkit
+	3D Building from Plan	3D-rakennus pohjapiirroksesta
+	Wedge	Kiila
+	Presspull	Painavedä
+	3D Solid	3D-solidi
+	Specify center	Määritä keskipiste
+	Specify length	Määritä pituus
+	Specify width	Määritä leveys
+	Specify other corner	Määritä toinen kulma
+	Specify center point	Määritä keskipiste
+	Specify base radius	Määritä pohjan säde
+	Specify radius	Määritä säde
+	Specify diameter	Määritä halkaisija
+	Specify top radius	Määritä yläosan säde
+	Specify tube radius	Määritä putken säde
+	Select objects to extrude	Valitse pursotettavat objektit
+	Select extrusion path	Valitse pursotuspolku
+	Specify angle of taper for extrusion	Määritä pursotuksen kartiokulma
+	Specify height of extrusion	Määritä pursotuksen korkeus
+	Select objects to revolve	Valitse pyöräytettävät objektit
+	Specify axis start point or define axis by	Määritä akselin alkupiste tai määritä akseli
+	Specify axis endpoint	Määritä akselin päätepiste
+	Specify angle of revolution	Määritä pyöräytyskulma
+	Select objects to sweep	Valitse pyyhkäistävät objektit
+	Select sweep path	Valitse pyyhkäisypolku
+	Select cross sections in lofting order	Valitse poikkileikkaukset loft-järjestyksessä
+	Click inside bounded areas to press or pull	Paina tai vedä napsauttamalla rajattujen alueiden sisällä
+	Specify extrusion height	Määritä pursotuksen korkeus
+	Cube	Kuutio
+	Sides	Sivut
+	Top radius	Yläosan säde
+	Path	Polku
+	Taper angle	Kartiokulma
+	Select one or more regions or 3D solids.	Valitse yksi tai useampi alue tai 3D-solidi.
+	No closed area found there.	Siitä ei löytynyt suljettua aluetta.
+	Slice	Viipaloi
+	Thicken	Paksunna
+	Fillet Edge	Pyöristä särmä
+	Chamfer Edge	Viistä särmä
+	Fillet Edges	Pyöristä särmät
+	Chamfer Edges	Viistä särmät
+	Move Faces	Siirrä pintoja
+	Offset Faces	Siirrä pintoja sivusuunnassa
+	Delete Faces	Poista pintoja
+	Shell	Kuori
+	Composite	Yhdistelmä
+	Select objects to slice	Valitse viipaloitavat objektit
+	Specify a point on desired side or [keep Both sides]	Määritä piste halutulla puolella tai [säilytä Molemmat puolet]
+	Both	Molemmat
+	Specify start point of slicing plane or	Määritä leikkaustason alkupiste tai
+	Specify second point on plane	Määritä toinen piste tasolla
+	Specify the Z of the XY-plane	Määritä XY-tason Z
+	Specify the X of the YZ-plane	Määritä YZ-tason X
+	Specify the Y of the ZX-plane	Määritä ZX-tason Y
+	Select surfaces to thicken	Valitse paksunnettavat pinnat
+	Select a 3D solid	Valitse 3D-solidi
+	Select an edge	Valitse särmä
+	Remove faces	Poista pintoja
+	Select faces	Valitse pinnat
+	Specify thickness	Määritä paksuus
+	Enter fillet radius	Anna pyöristyssäde
+	Enter distance	Anna etäisyys
+	Specify a base point or displacement	Määritä peruspiste tai siirtymä
+	Specify a second point of displacement	Määritä siirtymän toinen piste
+	Specify the offset distance	Määritä siirtymäetäisyys
+	Enter the shell offset distance	Anna kuoren siirtymäetäisyys
+	Select solids, surfaces, and regions to subtract from ..	Valitse solidit, pinnat ja alueet, joista vähennetään ..
+	Select solids, surfaces, and regions to subtract ..	Valitse vähennettävät solidit, pinnat ja alueet ..
+	Select two or more solids.	Valitse kaksi tai useampi solidi.
+	The solids don't overlap; nothing was changed.	Solidit eivät ole päällekkäin; mitään ei muutettu.
+	Nothing would remain; nothing was changed.	Mitään ei jäisi jäljelle; mitään ei muutettu.
+	The result would not be a solid; nothing was changed.	Tulos ei olisi solidi; mitään ei muutettu.
+	No straight edge between two flat faces there.	Siinä ei ole suoraa särmää kahden tasopinnan välillä.
+	No face of the solid there.	Siinä ei ole solidin pintaa.
+	Only outside (convex) edges can be filleted or chamfered.	Vain ulkosärmät (kuperat) voidaan pyöristää tai viistää.
+	SHELL works on boxes, cylinders, spheres and straight extrusions.	SHELL toimii laatikoille, sylintereille, palloille ja suorille pursotuksille.
+	The walls are too thick for this solid.	Seinämät ovat liian paksut tälle solidille.
+	Select solids to subtract from.	Valitse solidit, joista vähennetään.
+	A solid can't be subtracted from itself.	Solidia ei voi vähentää itsestään.
+	The solid would have too many operations; nothing was changed.	Solidissa olisi liian monta operaatiota; mitään ei muutettu.
+	That face can't be moved (only flat faces, holes and added parts).	Tätä pintaa ei voi siirtää (vain tasopinnat, reiät ja lisätyt osat).
+	That face can't be deleted (only holes, fillets, chamfers and added parts).	Tätä pintaa ei voi poistaa (vain reiät, pyöristykset, viisteet ja lisätyt osat).
+	That face can't be offset (box sides, the ends of cylinders, cones and extrusions, cylinder walls and spheres).	Tätä pintaa ei voi siirtää sivusuunnassa (laatikon sivut, sylinterien, kartioiden ja pursotusten päädyt, sylinterin vaipat ja pallot).
+	The thickness must be more than zero.	Paksuuden on oltava suurempi kuin nolla.
+	The radius must be more than zero.	Säteen on oltava suurempi kuin nolla.
+	The distance must be more than zero.	Etäisyyden on oltava suurempi kuin nolla.
+	Requires a number.	Vaatii luvun.
+	Parameter	Parametri
+	Action	Toiminto
+	Visibility States	Näkyvyystilat
+	Remove Parameter or Action	Poista parametri tai toiminto
+	Edit Reference	Muokkaa viitettä
+	Discard Reference Edits	Hylkää viitteen muutokset
+	Nested References	Sisäkkäiset viitteet
+	Light List	Valoluettelo
+	Sun Properties	Auringon ominaisuudet
+	Render Exposure	Renderöinnin valotus
+	Point Light	Pistevalo
+	Spotlight	Kohdevalo
+	Distant Light	Etävalo
+	Change Lights	Muuta valoja
+	Section Plane	Leikkaustaso
+	Live Section	Reaaliaikainen leikkaus
+	Generate Section Block	Luo leikkauslohko
+	Generate Section	Luo leikkaus
+	Flatshot	Tasokuva
+	Base View	Perusnäkymä
+	Section View	Leikkausnäkymä
+	Drawing Views	Piirustusnäkymät
+	Select face or any point to locate section line or	Valitse pinta tai mikä tahansa piste leikkausviivan sijoittamiseksi tai
+	Orthographic	Ortografinen
+	Select section object	Valitse leikkausobjekti
+	Specify location of base view	Määritä perusnäkymän sijainti
+	Select parent view	Valitse emonäkymä
+	Specify end point	Määritä päätepiste
+	Specify location of section view	Määritä leikkausnäkymän sijainti
+	There is nothing to draw: no 3D objects were found.	Ei mitään piirrettävää: 3D-objekteja ei löytynyt.
+	The section plane doesn't cut any solid.	Leikkaustaso ei leikkaa yhtään solidia.
+	The view needs a direction.	Näkymä tarvitsee suunnan.
+	The drawing has no layout.	Piirustuksessa ei ole asettelua.
+	That is not a section plane.	Se ei ole leikkaustaso.
+	Requires a point.	Vaatii pisteen.
+	The view is [dx, dy, dz].	Näkymä on [dx, dy, dz].
+	eTransmit...	eTransmit...
+	Create Transmittal	Luo lähetyspaketti
+	Files in the package	Paketin tiedostot
+	Not included	Ei sisällytetty
+	Organized folders	Järjestetyt kansiot
+	One folder	Yksi kansio
+	Include a transmittal report	Sisällytä lähetysraportti
+	Create ZIP...	Luo ZIP...
+	Create Folder...	Luo kansio...
+	STL Out	STL-vienti
+	Export STL...	Vie STL...
+	3D models (glTF, OBJ, STL)	3D-mallit (glTF, OBJ, STL)
+	3D model (glTF binary)	3D-malli (glTF-binääri)
+	3D model (glTF)	3D-malli (glTF)
+	3D model (OBJ)	3D-malli (OBJ)
+	3D model (STL)	3D-malli (STL)
+	Render Region	Renderöi alue
+	samples	näytettä
+	a sample	näyte
+	Pick crop window to render	Valitse renderöitävä rajausikkuna
+	Nothing has been rendered yet.	Mitään ei ole vielä renderöity.
+	There is nothing to render: no surfaces in the view.	Ei mitään renderöitävää: näkymässä ei ole pintoja.
+	The image couldn't be encoded.	Kuvaa ei voitu koodata.
+	Saving images isn't available in the browser.	Kuvien tallennus ei ole käytettävissä selaimessa.
+	PNG image	PNG-kuva
+	JPEG image	JPEG-kuva
+	Save Image	Tallenna kuva
+	My Properties	Omat ominaisuudet
+	Add to My Properties	Lisää omiin ominaisuuksiin
+	Remove from My Properties	Poista omista ominaisuuksista
+	All properties	Kaikki ominaisuudet
+	My properties: the ones you added (right-click a property's name to add it)	Omat ominaisuudet: lisäämäsi ominaisuudet (lisää napsauttamalla ominaisuuden nimeä hiiren oikealla)
+	Right-click a property's name and choose Add to My Properties.	Napsauta ominaisuuden nimeä hiiren oikealla ja valitse Lisää omiin ominaisuuksiin.
+	Color Books	Värikirjat
+	Sheet Set Manager	Arkkijoukkojen hallinta
+	Palettes	Paletit
+	New Sheet Set...	Uusi arkkijoukko...
+	Open Sheet Set...	Avaa arkkijoukko...
+	No sheet set is open.	Yhtään arkkijoukkoa ei ole avoinna.
+	Number	Numero
+	Subset	Alijoukko
+	Remove Sheet	Poista arkki
+	Add Drawing...	Lisää piirustus...
+	Rename Layouts to Match	Nimeä asettelut vastaavasti
+	Each sheet's layout becomes "number title", which the sheet number and title fields show	Kunkin arkin asettelusta tulee "numero otsikko", jonka arkin numero- ja otsikkokentät näyttävät
+	Publish to PDF...	Julkaise PDF-muodossa...
+	Prefix	Etuliite
+	Digits	Numerot
+	Renumber	Numeroi uudelleen
+	Zoom to Fit	Sovita näkymään
+	Drag to pan, scroll to zoom	Panoroi vetämällä, zoomaa vierittämällä
+	Publish	Julkaise
+	Sheets to publish, in order	Julkaistavat arkit järjestyksessä
+	Sheet	Arkki
+	Bookmark	Kirjanmerkki
+	Paper	Paperi
+	Orientation	Suunta
+	(sheet name)	(arkin nimi)
+	Page setup	Sivuasetukset
+	Landscape	Vaaka
+	Portrait	Pysty
+	Add Sheets from Drawing...	Lisää arkit piirustuksesta...
+	Load List...	Lataa luettelo...
+	Save List...	Tallenna luettelo...
+	Publish List	Julkaisuluettelo
+	Enclose Text with Object	Ympäröi teksti objektilla
+	Export Attribute Information	Vie attribuuttitiedot
+	Import Attribute Information	Tuo attribuuttitiedot
+	Mask Text	Maskaa teksti
+	Remote Text	Etäteksti
+	Rotate Text	Kierrä tekstiä
+	Text Fit	Sovita teksti
+	Toggle Frames	Vaihda kehykset
+	Unmask Text	Poista tekstin maskaus
+	Update Remote Text	Päivitä etäteksti
+	Geometric	Geometrinen
+	Infer geometric constraints	Päättele geometriset rajoitteet
+	Show constraint bars	Näytä rajoitepalkit
+	Constraint bar transparency (%)	Rajoitepalkkien läpinäkyvyys (%)
+	Dimensional	Mitta
+	Show dynamic constraints	Näytä dynaamiset rajoitteet
+	Dimension name format	Mitan nimen muoto
+	Name and Expression	Nimi ja lauseke
+	Constraint types AUTOCONSTRAIN applies, in order of priority	AUTOCONSTRAIN-komennon käyttämät rajoitetyypit tärkeysjärjestyksessä
+	Move Up	Siirrä ylös
+	Move Down	Siirrä alas
+	Tangent objects must share an intersection point	Tangentiaalisilla objekteilla on oltava yhteinen leikkauspiste
+	Perpendicular objects must share an intersection point	Kohtisuorilla objekteilla on oltava yhteinen leikkauspiste
+	Distance tolerance	Etäisyystoleranssi
+	Angle tolerance (degrees)	Kulmatoleranssi (astetta)
+	3D Move	3D-siirto
+	3D Rotate	3D-kierto
+	3D Scale	3D-skaalaus
+	3D Align	3D-tasaus
+	3D Mirror	3D-peilaus
+	3D Array	3D-sarja
+	3D Object Snap	3D-objektikohdistus
+	Specify second point or distance	Määritä toinen piste tai etäisyys
+	Specify angle	Määritä kulma
+	Specify source plane: first point	Määritä lähdetaso: ensimmäinen piste
+	Specify source plane: second point	Määritä lähdetaso: toinen piste
+	Specify source plane: third point	Määritä lähdetaso: kolmas piste
+	Specify destination plane: first point	Määritä kohdetaso: ensimmäinen piste
+	Specify destination plane: second point	Määritä kohdetaso: toinen piste
+	Specify destination plane: third point	Määritä kohdetaso: kolmas piste
+	Delete source objects?	Poistetaanko lähdeobjektit?
+	Specify point on XY plane	Määritä piste XY-tasolla
+	Specify point on YZ plane	Määritä piste YZ-tasolla
+	Specify point on ZX plane	Määritä piste ZX-tasolla
+	Specify first point of mirror plane (3 points) or	Määritä peilaustason ensimmäinen piste (3 pistettä) tai
+	Specify second point on mirror plane	Määritä peilaustason toinen piste
+	Specify third point on mirror plane	Määritä peilaustason kolmas piste
+	Enter the type of array	Anna sarjan tyyppi
+	Polar	Polaarinen
+	Enter the number of items in the array	Anna sarjan kohteiden määrä
+	Specify the angle to fill (+=ccw, -=cw)	Määritä täytettävä kulma (+=vastapäivään, -=myötäpäivään)
+	Enter the number of rows (---)	Anna rivien määrä (---)
+	Enter the number of columns (|||)	Anna sarakkeiden määrä (|||)
+	Enter the number of levels (...)	Anna tasojen määrä (...)
+	Specify the distance between rows (---)	Määritä rivien välinen etäisyys (---)
+	Specify the distance between columns (|||)	Määritä sarakkeiden välinen etäisyys (|||)
+	Specify the distance between levels (...)	Määritä tasojen välinen etäisyys (...)
+	Specify second point on axis of rotation	Määritä kiertoakselin toinen piste
+	Select the objects first.	Valitse ensin objektit.
+	Requires a point, or a distance along an axis.	Vaatii pisteen tai etäisyyden akselia pitkin.
+	The points must not coincide or line up.	Pisteet eivät saa olla päällekkäin tai samalla suoralla.
+	The three points line up: they make no plane.	Kolme pistettä ovat samalla suoralla: ne eivät muodosta tasoa.
+	<3D Object Snap on>	<3D-objektikohdistus päällä>
+	<3D Object Snap off>	<3D-objektikohdistus pois>
+	Preparing the 3D view…	Valmistellaan 3D-näkymää…
+	Viewpoint	Katselupiste
+	3D View Benchmark	3D-näkymän suorituskykytesti
+	Drawing area	Piirtoalue
+	Command line	Komentorivi
+	Viewport controls	Näkymäikkunan säätimet
+	Coordinate system menu	Koordinaatistovalikko
+	UCS icon X axis	UCS-kuvakkeen X-akseli
+	UCS icon Y axis	UCS-kuvakkeen Y-akseli
+	High Contrast	Suuri kontrasti
+	Interface size	Käyttöliittymän koko
+	Interface Size	Käyttöliittymän koko
+	100%	100 %
+	125%	125 %
+	150%	150 %
+	200%	200 %
+	Building Spec	Rakennusmäärittely
+	Set Building Spec	Aseta rakennusmäärittely
+	Validate Building Spec	Tarkista rakennusmäärittely
+	Build Model from Spec	Rakenna malli määrittelystä
+	Convert Matches to Block	Muunna osumat lohkoksi
+	Command Line Transparency	Komentorivin läpinäkyvyys
+	AutoComplete Settings	Automaattisen täydennyksen asetukset
+	Input Settings	Syöteasetukset
+	AutoComplete	Automaattinen täydennys
+	Search System Variables	Hae järjestelmämuuttujia
+	Mid-string Search	Haku merkkijonon keskeltä
+	System variable	Järjestelmämuuttuja
+	Layer state	Tasotila
+	Model Issues	Mallin ongelmat
+	Render Model View	Renderöi mallinäkymä
+	Model Overlay	Mallin peitto
+	Model Counts	Mallin määrät
+	System Printers	Järjestelmän tulostimet
+	Report a Problem...	Ilmoita ongelmasta...
+	Report a Problem	Ilmoita ongelmasta
+	Collects what helps find a problem into a ZIP file on this computer. Nothing is sent: attach the file to an email if you want to report it.	Kerää ongelman selvittämistä auttavat tiedot ZIP-tiedostoon tälle tietokoneelle. Mitään ei lähetetä: liitä tiedosto sähköpostiin, jos haluat ilmoittaa ongelmasta.
+	Always included	Sisällytetään aina
+	The log of this run and the two before it	Tämän ajokerran ja kahden edellisen loki
+	The last commands	Viimeisimmät komennot
+	Versions, operating system and graphics adapter	Versiot, käyttöjärjestelmä ja näytönohjain
+	A summary of the open drawings (counts only, no geometry)	Yhteenveto avoimista piirustuksista (vain määrät, ei geometriaa)
+	Names: file paths, layer and block names, typed text	Nimet: tiedostopolut, tasojen ja lohkojen nimet, kirjoitettu teksti
+	Names are replaced by placeholders, also in the log.	Nimet korvataan paikkamerkeillä, myös lokissa.
+	Save Report...	Tallenna raportti...
+	Email it to {address}	Lähetä se osoitteeseen {address}
+	Plans to Model	Pohjapiirroksista malliksi
+	Build	Rakenna
+	Rebuild	Rakenna uudelleen
+	Check	Tarkista
+	Kept in the drawing.	Säilytetään piirustuksessa.
+	Drafted from the walk rules; not saved yet.	Laadittu kävelysäännöistä; ei vielä tallennettu.
+	{n} of {total} approved	{n}/{total} hyväksytty
+	Save Spec	Tallenna määrittely
+	Approve All	Hyväksy kaikki
+	Approved	Hyväksytty
+	Levels	Kerrokset
+	Wall Types	Seinätyypit
+	Rooms	Tilat
+	Door and Window Families	Ovi- ja ikkunaperheet
+	Materials	Materiaalit
+	Site	Tontti
+	Openings	Aukot
+	Issues ({n})	Ongelmat ({n})
+	The drawing changed since; check again.	Piirustus on muuttunut sen jälkeen; tarkista uudelleen.
+	No issues found.	Ongelmia ei löytynyt.
+	Configure Standards	Määritä standardit
+	Standards files associated with the current drawing	Nykyiseen piirustukseen liitetyt standarditiedostot
+	Add...	Lisää...
+	Check Standards...	Tarkista standardit...
+	Check Standards	Tarkista standardit
+	No standards violations were found.	Standardien rikkomuksia ei löytynyt.
+	problem(s)	ongelma(a)
+	Take the standard's properties	Ota standardin ominaisuudet
+	Replace it with the standard one	Korvaa standardin mukaisella
+	Fix All	Korjaa kaikki
+	Give everything that differs the standard's properties	Anna kaikille poikkeaville standardin ominaisuudet
+	Check Again	Tarkista uudelleen
+	Layer Translator	Tasojen kääntäjä
+	Translate From	Käännä lähteestä
+	Translate To	Käännä kohteeseen
+	Load a drawing whose layers to translate to.	Lataa piirustus, jonka tasoihin käännetään.
+	Map	Kartoita
+	Layer Translation Mappings	Tasojen käännöskartoitukset
+	Load Map...	Lataa kartoitus...
+	Save Map...	Tallenna kartoitus...
+	Translate	Käännä
+	Not in the standards	Ei standardeissa
+	Properties differ from the standards	Ominaisuudet poikkeavat standardeista
+	CAD Standards	CAD-standardit
+	Configure...	Määritä...
+	Check...	Tarkista...
+	Layer Translator...	Tasojen kääntäjä...
+	Draft Building Spec	Laadi rakennusmäärittely
+	Draft from Plan	Laadi pohjapiirroksesta
+	Read the plan's layers, walls, doors, rooms and notes; guesses are marked.	Lue pohjapiirroksen tasot, seinät, ovet, tilat ja huomautukset; arvaukset merkitään.
+	guess	arvaus
+	Detect Stairs	Tunnista portaat
+	List Stairs	Luettele portaat
+	Confirm Stairs	Vahvista portaat
+	Stairs and Ramps	Portaat ja luiskat
+	Bake Lighting	Laske valaistus
+	Command Aliases and Shortcuts	Komentoaliakset ja pikanäppäimet
+	Keyboard Shortcuts	Pikanäppäimet
+	replaces {command}	korvaa komennon {command}
+	Built-in	Sisäänrakennettu
+	Alias	Alias
+	Command	Komento
+	Add or Change	Lisää tai muuta
+	Keys	Näppäimet
+	Edit Aliases and Shortcuts...	Muokkaa aliaksia ja pikanäppäimiä...
+	Customize	Mukauta
+	Read Elevation	Lue julkisivu
+	Read Roof Plan	Lue kattopiirros
+	Exterior	Ulkopuoli
+	Drafting & Annotation	Piirtäminen ja merkinnät
+	3D Modeling	3D-mallinnus
+	Electrical	Sähkö
+	Save Current As...	Tallenna nykyinen nimellä...
+	Workspace Settings...	Työtilan asetukset...
+	Workspace Settings	Työtilan asetukset
+	Navigation Bar	Navigointipalkki
+	Save Workspace	Tallenna työtila
+	Workspaces	Työtilat
+	Close Navigation Bar	Sulje navigointipalkki
+	Workspace	Työtila
+	Read Ceiling Plan	Lue alakattopiirros
+	Ceilings	Alakatot
+	Current Drawing	Nykyinen piirustus
+	Favourites	Suosikit
+	Libraries	Kirjastot
+	No library folder	Ei kirjastokansiota
+	Choose Folder...	Valitse kansio...
+	No blocks here.	Täällä ei ole lohkoja.
+	Remove from Favourites	Poista suosikeista
+	Add to Favourites	Lisää suosikkeihin
+	Insertion Options	Lisäysasetukset
+	Auto-rotate (follow the current UCS)	Automaattinen kierto (seuraa nykyistä UCS:ää)
+	Repeat Placement	Toista sijoitus
+	Tool Palettes	Työkalupaletit
+	Drag objects from the drawing here to make tools.	Luo työkaluja vetämällä objekteja piirustuksesta tähän.
+	Add Selected	Lisää valitut
+	New palette	Uusi paletti
+	Select objects in the drawing first.	Valitse ensin objektit piirustuksesta.
+	Blocks Palette	Lohkopaletti
+	Detect Grids	Tunnista moduuliviivat
+	Align Levels by Grids	Tasaa kerrokset moduuliviivojen mukaan
+	Columns at Grids	Pilarit moduuliviivoille
+	Columns	Pilarit
+	Build Room Volumes	Luo tilojen tilavuudet
+	Building	Rakennus
+	Go to Room	Siirry tilaan
+	List Rooms	Luettele tilat
+	Room	Tila
+	Build Volumes	Luo tilavuudet
+	Go to	Siirry
+	{n} rooms	Tiloja: {n}
+	No rooms found: rooms are found from name labels inside closed outlines.	Tiloja ei löytynyt: tilat tunnistetaan suljettujen ääriviivojen sisällä olevista nimitunnisteista.
+	Ceiling	Katto
+	DesignCenter	DesignCenter
+	Up One Level	Taso ylöspäin
+	Folder	Kansio
+	Text Styles	Tekstityylit
+	Dimension Styles	Mitoitustyylit
+	Layouts	Asettelut
+	Add to Drawing	Lisää piirustukseen
+	Choose a drawing to see what it holds.	Valitse piirustus nähdäksesi sen sisällön.
+	{name} inserted.	{name} lisätty.
+	{name} is already in the drawing; it was kept.	{name} on jo piirustuksessa; se säilytettiin.
+	{name} added.	{name} lisätty.
+	Read MEP Runs	Lue talotekniikan linjat
+	Model Clashes	Mallin törmäykset
+	MEP Systems	Talotekniikan järjestelmät
+	Undo History	Kumoamishistoria
+	(Start)	(Alku)
+	Click a step to undo or redo to it.	Kumoa tai tee uudelleen vaiheeseen napsauttamalla sitä.
+	Nothing yet.	Ei vielä mitään.
+	Double-click to run it again	Suorita uudelleen kaksoisnapsauttamalla
+	Copy as Script	Kopioi skriptinä
+	Save Session as Script...	Tallenna istunto skriptinä...
+	Command History Palette	Komentohistoriapaletti
+	Furnish from Plan	Kalusta pohjapiirroksesta
+	Classify Plan	Luokittele pohjapiirros
+	Text and multiline text	Teksti ja monirivinen teksti
+	Block attribute values	Lohkoattribuuttien arvot
+	Dimension text	Mittateksti
+	Multileaders	Monijohteet
+	Hyperlinks	Hyperlinkit
+	Layer and block names	Tasojen ja lohkojen nimet
+	Find where:	Etsi kohteesta:
+	Current space	Nykyinen tila
+	Plain text	Pelkkä teksti
+	Use wildcards	Käytä jokerimerkkejä
+	Regular expressions	Säännölliset lausekkeet
+	Look in	Etsi kohteista
+	Zoom To	Zoomaa kohteeseen
+	Replace	Korvaa
+	Create Selection Set	Luo valintajoukko
+	Matches found: {count} (objects: {objects})	Löydettyjä osumia: {count} (objekteja: {objects})
+	Layer name	Tason nimi
+	Block name	Lohkon nimi
+	Revise Model from Plans	Päivitä malli pohjapiirroksista
+	Plans to Model Benchmark	Pohjapiirroksista malliksi -suorituskykytesti
+	Plans to Model Case	Pohjapiirroksista malliksi -tapaus
+	Plans to Model Score	Pohjapiirroksista malliksi -pisteet
+	Save Viewpoint	Tallenna katselupiste
+	Viewpoints for Every Room	Katselupisteet jokaiseen tilaan
+	Camera Tour	Kamerakierros
+	Tours and Viewpoints	Kierrokset ja katselupisteet
+	Tour Timing	Kierroksen ajoitus
+	3D Graphics Limits	3D-grafiikan rajat
+	Drawn by the CPU (no usable GPU)	Piirretty suorittimella (ei käyttökelpoista GPU:ta)
+	Point Cloud...	Pistepilvi...
+	Point Cloud	Pistepilvi
+	Attach Point Cloud	Liitä pistepilvi
+	Clip Point Cloud	Rajaa pistepilvi
+	Point Cloud Color Map	Pistepilven värikartta
+	Point Cloud Information	Pistepilven tiedot
+	Markups	Merkinnät
+	{done} of {total} done	{done}/{total} valmis
+	No markups. Import them from a reviewed PDF.	Ei merkintöjä. Tuo ne tarkastetusta PDF-tiedostosta.
+	Done	Valmis
+	Import Markups...	Tuo merkinnät...
+	Import Markups	Tuo merkinnät
+	Markup Import...	Merkintöjen tuonti...
+	Markup Status	Merkinnän tila
+	Read Door and Window Schedules	Lue ovi- ja ikkunaluettelot
+	Schedules	Luettelot
+	Esc	Esc
+	Hide the touch bar	Piilota kosketuspalkki
+	Type a command or value	Kirjoita komento tai arvo
+	Embed Textures	Upota tekstuurit
+	Publish Walkthrough	Julkaise läpikävely
+	Walkthroughs (CDYWALK)	Läpikävelyt (CDYWALK)
+	Check Exchange	Tarkista vaihtomuoto
+	Not kept in the {format} file	Ei säilytetä {format}-tiedostossa
+	The drawing was saved. This file format can't keep everything in it:	Piirustus tallennettiin. Tämä tiedostomuoto ei voi säilyttää kaikkea sen sisältöä:
+	What	Mitä
+	left out	jätetty pois
+	changed	muutettu
+	A CADaddy drawing (.cdy) keeps everything. Check Exchange lists this again without saving.	CADaddy-piirustus (.cdy) säilyttää kaiken. Tarkista vaihtomuoto näyttää tämän luettelon uudelleen tallentamatta.
+	VP Linetype	NI-viivatyyppi
+	VP Lineweight	NI-viivanpaksuus
+	Unreconciled New Layers ({n})	Täsmäyttämättömät uudet tasot ({n})
+	Reconcile All	Täsmäytä kaikki
+	Reconcile Layer	Täsmäytä taso
+	LayerWalk	LayerWalk
+	Layers: {n}	Tasot: {n}
+	Restore on exit	Palauta poistuttaessa
+	Filter:	Suodatin:
+	Layer Walk...	Tasokävely...
+	Layer Walk	Tasokävely
+	Isolate Layer to Current Viewport	Eristä taso nykyiseen näkymäikkunaan
+	Unreconciled New Layers	Täsmäyttämättömät uudet tasot
+	Move to New Window	Siirrä uuteen ikkunaan
+	Dock All Windows	Telakoi kaikki ikkunat
+	Every drawing is in a window of its own.	Jokainen piirustus on omassa ikkunassaan.
+	Back among the drawing tabs	Takaisin piirustusvälilehtien joukkoon
+	Plot Stamp...	Tulostusleima...
+	Plot a Folder of Drawings...	Tulosta kansiollinen piirustuksia...
+	Every drawing in a folder to its own PDF, in a PDF folder inside it	Jokainen kansion piirustus omaksi PDF-tiedostokseen sen sisällä olevaan PDF-kansioon
+	Plot stamp	Tulostusleima
+	Quick Properties Lists	Pikaominaisuuksien luettelot
+	Purgeable Items	Siivottavat kohteet
+	Find Non-Purgeable Items	Etsi kohteet, joita ei voi siivota
+	Purge {kind} "{name}"?	Siivotaanko {kind} "{name}"?
+	Yes to All	Kyllä kaikkiin
+	Items that can't be purged, and why	Kohteet, joita ei voi siivota, ja syy
+	Select and Zoom	Valitse ja zoomaa
+	Pick an item to see why it can't be purged.	Valitse kohde nähdäksesi, miksi sitä ei voi siivota.
+	Confirm each item to be purged	Vahvista jokainen siivottava kohde
+	Purge nested items	Siivoa sisäkkäiset kohteet
+	Text Align	Tekstin tasaus
+	Color model:	Värimalli:
+	Hue	Sävy
+	Saturation	Kylläisyys
+	Luminance	Valoisuus
+	Hex	Hex
+	More Colors...	Lisää värejä...
+	Load more books with COLORBOOK (JSON or tab-separated files).	Lataa lisää kirjoja COLORBOOK-komennolla (JSON- tai sarkaineroteltuja tiedostoja).
+	All spaces	Kaikki tilat
+	Total: {n}	Yhteensä: {n}
+	No block references here.	Täällä ei ole lohkoviitteitä.
+	Highlight and zoom to its references	Korosta ja zoomaa sen viitteisiin
+	Similar but not identical: {scaled} scaled, {exploded} exploded	Samankaltaisia mutta ei identtisiä: {scaled} skaalattu, {exploded} hajotettu
+	Insert Count Table	Lisää määrätaulukko
+	Update Count Tables	Päivitä määrätaulukot
+	Count in Area	Laske alueelta
+	{n} reference(s) of {name} selected.	{name}: {n} viitettä valittu.
+	{n} similar object(s) selected.	{n} samankaltaista objektia valittu.
+	Geographic Location...	Maantieteellinen sijainti...
+	Remove Geographic Location	Poista maantieteellinen sijainti
+	Set Location	Aseta sijainti
+	Remove Location	Poista sijainti
+	Latitude and Longitude	Leveys- ja pituusaste
+	Trace Image to Vectors	Vektoroi kuva
+	Trace Raster Image to Vectors	Vektoroi rasterikuva
+	Drawing Summary	Piirustuksen yhteenveto
+	Query Drawing	Kysy piirustukselta
+	Begin Agent Request	Aloita agenttipyyntö
+	End Agent Request	Lopeta agenttipyyntö
+	Agent Dry Run	Agentin kuivaharjoitus
+	Agent Confirmations	Agentin vahvistukset
+	Agent Change Journal	Agentin muutosloki
+	Agent Activity	Agentin toiminta
+	An agent asks	Agentti kysyy
+	Allow	Salli
+	Deny	Estä
+	Not allowed: {question}	Ei sallittu: {question}
+	Ask me before an agent saves over a file or closes with changes	Kysy minulta ennen kuin agentti tallentaa tiedoston päälle tai sulkee tallentamattomia muutoksia
+	Dry run: agents' commands change nothing	Kuivaharjoitus: agenttien komennot eivät muuta mitään
+	No agent requests yet.	Ei vielä agenttipyyntöjä.
+	{commands} commands · {added} added · {removed} removed · {changed} changed	{commands} komentoa · {added} lisätty · {removed} poistettu · {changed} muutettu
+	Select what it added and changed	Valitse, mitä se lisäsi ja muutti
+	Activity History	Toimintahistoria
+	Activity history is off (Options ▸ Open and Save).	Toimintahistoria on pois käytöstä (Asetukset ▸ Avaaminen ja tallennus).
+	command	komento
+	{n} steps	{n} vaihetta
+	+{a} ~{m} −{e}	+{a} ~{m} −{e}
+	Select the objects this step added or changed	Valitse objektit, jotka tämä vaihe lisäsi tai muutti
+	The objects of this step are gone.	Tämän vaiheen objekteja ei enää ole.
+	{n} object(s) selected.	{n} objektia valittu.
+	{n} object(s) selected ({gone} since erased).	{n} objektia valittu ({gone} poistettu sittemmin).
+	{n} s ago	{n} s sitten
+	{n} min ago	{n} min sitten
+	{n} h ago	{n} h sitten
+	{n} d ago	{n} vrk sitten
+	Keep an activity history beside each drawing (private, on this computer)	Säilytä toimintahistoria jokaisen piirustuksen vieressä (yksityinen, tällä tietokoneella)
+	Background mask	Taustamaski
+	Mask border offset	Maskin reunasiirtymä
+	Mask color	Maskin väri
+	Use drawing background	Käytä piirustuksen taustaa
+	Regenerate Dimensions	Regeneroi mitat
+	Enter layer name for new dimensions (. for the current layer)	Anna uusien mittojen tason nimi (. = nykyinen taso)
+	{folder} (folder)	{folder} (kansio)
+	Add drawings or a folder of them.	Lisää piirustuksia tai kansio piirustuksia.
+	Add Files...	Lisää tiedostoja...
+	Add Folder...	Lisää kansio...
+	cancelled	peruutettu
+	Choose the output folder, or Next to the originals.	Valitse tuloskansio tai Alkuperäisten viereen.
+	Convert Drawings	Muunna piirustukset
+	Convert Drawings...	Muunna piirustukset...
+	Convert drawings...	Muunna piirustukset...
+	Convert to	Muunna muotoon
+	Converted	Muunnettu
+	Converted, not all kept	Muunnettu, kaikkea ei säilytetty
+	Converting files is not available on the web.	Tiedostojen muuntaminen ei ole käytettävissä verkossa.
+	Drawings to convert	Muunnettavat piirustukset
+	Each drawing's own	Kunkin piirustuksen oma
+	Failed	Epäonnistui
+	Files already there	Tiedostot ovat jo olemassa
+	Folder:	Kansio:
+	Include subfolders	Sisällytä alikansiot
+	Keep a file written over as .bak	Säilytä korvattu tiedosto .bak-tiedostona
+	Next to the originals	Alkuperäisten viereen
+	Open Log	Avaa loki
+	Or type a file or folder path	Tai kirjoita tiedoston tai kansion polku
+	Overwrite	Korvaa
+	Save to	Tallenna kohteeseen
+	Skip	Ohita
+	Skipped	Ohitettu
+	There are no drawings (.dwg, .dxf, .cdy) to convert.	Muunnettavia piirustuksia (.dwg, .dxf, .cdy) ei ole.
+	{converted} converted, {skipped} skipped, {failed} failed of {total}	{converted} muunnettu, {skipped} ohitettu, {failed} epäonnistui, yhteensä {total}
+	DWG drawing (.dwg)	DWG-piirustus (.dwg)
+	DXF drawing (.dxf)	DXF-piirustus (.dxf)
+	Require a token for control connections (recommended)	Vaadi tunniste ohjausyhteyksiltä (suositellaan)
+	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Ohjelmien on ensin lähetettävä tunniste, jonka CADaddy kirjoittaa vain sinun luettavissasi olevaan tiedostoon, jotta muiden käyttäjien ohjelmat eivät voi ohjata sitä. Claude-liitin lukee sen puolestasi. Tulee voimaan, kun CADaddy käynnistetään seuraavan kerran.
+	Building models (IFC)	Rakennusmallit (IFC)
+	Building model (IFC4)	Rakennusmalli (IFC4)
+	3D printing (3MF)	3D-tulostus (3MF)
+	Include the drawing (the active drawing as a DXF file)	Sisällytä piirustus (aktiivinen piirustus DXF-tiedostona)
+	Your account, home folder and computer name are always left out.	Tilisi, kotikansiosi ja tietokoneesi nimi jätetään aina pois.
+	Files in the report	Raportin tiedostot
+	Send to Redline	Lähetä Redlineen
+	Import Redline Markups	Tuo Redline-merkinnät
+	Import Redline Markups...	Tuo Redline-merkinnät...
+	Open a Program?	Avataanko ohjelma?
+	This link opens a program or script, not a document:	Tämä linkki avaa ohjelman tai skriptin, ei asiakirjaa:
+	Open it only if you trust the drawing and know what it runs.	Avaa se vain, jos luotat piirustukseen ja tiedät, mitä se suorittaa.
+	Open Anyway	Avaa silti
+	Report a security problem	Ilmoita tietoturvaongelmasta
+	Load This File?	Ladataanko tämä tiedosto?
+	This file isn't in a trusted folder:	Tämä tiedosto ei ole luotetussa kansiossa:
+	LISP routines and scripts can change drawings and files. Load it only if you trust where it came from.	LISP-rutiinit ja skriptit voivat muuttaa piirustuksia ja tiedostoja. Lataa se vain, jos luotat sen alkuperään.
+	Don't Load	Älä lataa
+	Load Once	Lataa kerran
+	Always Load from This Folder	Lataa aina tästä kansiosta
+	Adds {folder} to TRUSTEDPATHS	Lisää kansion {folder} TRUSTEDPATHS-muuttujaan
+	Allow Loading a File	Salli tiedoston lataaminen
+	Plot Stamp	Tulostusleima
+	Plot stamp fields	Tulostusleiman kentät
+	Drawing name	Piirustuksen nimi
+	Layout name	Asettelun nimi
+	Date and Time	Päivämäärä ja aika
+	Device name	Laitteen nimi
+	Paper size	Paperikoko
+	Plot scale	Tulostusmittakaava
+	No login or computer name is ever stamped.	Kirjautumis- tai tietokoneen nimeä ei koskaan leimata.
+	User defined fields	Käyttäjän määrittämät kentät
+	One per line, up to {n}.	Yksi riviä kohti, enintään {n}.
+	Stamp model space plots	Leimaa mallitilan tulosteet
+	Stamp this layout's plots	Leimaa tämän asettelun tulosteet
+	Location and offset	Sijainti ja siirtymä
+	Location	Sijainti
+	Upside-down	Ylösalaisin
+	X offset	X-siirtymä
+	Y offset	Y-siirtymä
+	Offset relative to	Siirtymän lähtökohta
+	Printable area	Tulostettava alue
+	Paper border	Paperin reuna
+	Text properties	Tekstin ominaisuudet
+	Font	Fontti
+	Single line plot stamp	Yksirivinen tulostusleima
+	Units	Yksiköt
+	Inches	Tuumat
+	Millimeters	Millimetrit
+	Log file location	Lokitiedoston sijainti
+	Create a log file	Luo lokitiedosto
+	The log is kept for this session, never saved with the drawing.	Loki säilytetään tämän istunnon ajan, eikä sitä koskaan tallenneta piirustuksen mukana.
+	Action Macro Manager...	Toimintomakrojen hallinta...
+	Action Macros	Toimintomakrot
+	Action Recorder	Toimintojen tallennin
+	Insert Base Point	Lisää peruspiste
+	Insert Message	Lisää viesti
+	Play Action Macro	Toista toimintomakro
+	Play...	Toista...
+	Record	Tallenna
+	Request User Input	Pyydä käyttäjän syötettä
+	Stop	Pysäytä
+	Action Macro Manager	Toimintomakrojen hallinta
+	Recording…	Tallennetaan…
+	No action macros yet: Record, do the work, then Stop.	Ei vielä toimintomakroja: valitse Tallenna, tee työ ja valitse sitten Pysäytä.
+	Play	Toista
+	Message: {text}	Viesti: {text}
+	Base point (asked for)	Peruspiste (kysytään)
+	(Enter)	(Enter)
+	Ask for this input when the macro plays	Kysy tätä syötettä makroa toistettaessa
+	Customize Interface	Mukauta käyttöliittymää
+	Customize User Interface...	Mukauta käyttöliittymää...
+	Interface...	Käyttöliittymä...
+	Customize User Interface	Käyttöliittymän mukautus
+	Quick Access Toolbar	Pikatyökalurivi
+	Add a command	Lisää komento
+	Reset Quick Access Toolbar	Palauta pikatyökalurivi
+	Built-in panels shown (untick to hide):	Näytettävät sisäänrakennetut paneelit (poista valinta piilottaaksesi):
+	Your panels on built-in tabs:	Omat paneelisi sisäänrakennetuilla välilehdillä:
+	Tab	Välilehti
+	New panel name	Uuden paneelin nimi
+	Add Panel	Lisää paneeli
+	Your tabs:	Omat välilehtesi:
+	Remove Tab	Poista välilehti
+	New tab name	Uuden välilehden nimi
+	Add Tab	Lisää välilehti
+	Edit Keyboard Shortcuts...	Muokkaa pikanäppäimiä...
+	Remove Panel	Poista paneeli
+	Command or LISP macro, e.g. (command "line")	Komento tai LISP-makro, esim. (command "line")
+	Hatch Editor	Viivoituseditori
+	Table Cell	Taulukon solu
+	Rows & Columns	Rivit ja sarakkeet
+	Merge	Yhdistä
+	Open/Save	Avaa/tallenna
+	Attributes	Attribuutit
+	Spell Check	Oikeinkirjoituksen tarkistus
+	Formula	Kaava
+	Edit Source	Muokkaa lähdettä
+	Close Array	Sulje sarja
+	Manage Attributes	Hallitse attribuutteja
+	Dialog State	Valintaikkunan tila
+	Dialog Action	Valintaikkunan toiminto
+	Recover Drawing and Xrefs...	Palauta piirustus ja ulkoiset viitteet...
+	Count Blocks	Laske lohkot
+	Get Selection Set	Hae valintajoukko
+	Global Attribute Edit	Attribuuttien yleismuokkaus
+	LISP Function Surfer	LISP-funktioselain
+	List LISP Symbols	Luettele LISP-symbolit
+	List Nested Object	Luettele sisäkkäinen objekti
+	List Object Xdata	Luettele objektin Xdata
+	Multiple Polyline Edit	Usean murtoviivan muokkaus
+	Redefine Path	Määritä polku uudelleen
+	Redefine Path Mode	Polun uudelleenmäärityksen tila
+	Restore Dimension Text	Palauta mittateksti
+	Revert	Palauta ennalleen
+	Rotate Blocks	Kierrä lohkoja
+	Scale Blocks	Skaalaa lohkoja
+	Select Similar by Properties	Valitse samankaltaiset ominaisuuksien mukaan
+	Show URLs	Näytä URL-osoitteet
+	Synchronize Viewports	Synkronoi näkymäikkunat
+	Paste Special	Liitä määräten
+	Paste Special...	Liitä määräten...
+	Paste as	Liitä muodossa
+	Last Measurement	Viimeisin mittaus
+	Perimeter	Ympärysmitta
+	curl isn't available ({error}).	curl ei ole käytettävissä ({error}).
+	This build has no release key to check updates with.	Tässä koontiversiossa ei ole julkaisuavainta päivitysten tarkistamiseen.
+	The release's signature files are too large.	Julkaisun allekirjoitustiedostot ovat liian suuria.
+	The release's signature isn't one CADaddy reads.	Julkaisun allekirjoitus ei ole muodossa, jota CADaddy lukee.
+	The release's signature is missing or damaged.	Julkaisun allekirjoitus puuttuu tai on vahingoittunut.
+	The release's signature is for another version ({version}).	Julkaisun allekirjoitus on toiselle versiolle ({version}).
+	The release is signed with a key this build doesn't trust.	Julkaisu on allekirjoitettu avaimella, johon tämä koontiversio ei luota.
+	This build's release key is damaged.	Tämän koontiversion julkaisuavain on vahingoittunut.
+	The release's signature doesn't match its files.	Julkaisun allekirjoitus ei vastaa sen tiedostoja.
+	Couldn't reach GitHub: {why}	GitHubiin ei saatu yhteyttä: {why}
+	GitHub's answer was too large.	GitHubin vastaus oli liian suuri.
+	GitHub's answer wasn't readable ({error}).	GitHubin vastausta ei voitu lukea ({error}).
+	GitHub's answer has no version.	GitHubin vastauksessa ei ole versiota.
+	GitHub's answer has an unreadable version ({version}).	GitHubin vastauksessa on lukukelvoton versio ({version}).
+	Couldn't download the release's {name}, so nothing was installed: {why}	Julkaisun tiedostoa {name} ei voitu ladata, joten mitään ei asennettu: {why}
+	The release's {name} is too large, so nothing was installed.	Julkaisun tiedosto {name} on liian suuri, joten mitään ei asennettu.
+	The release's {name} isn't text, so nothing was installed.	Julkaisun tiedosto {name} ei ole tekstiä, joten mitään ei asennettu.
+	It wasn't downloaded. Download it from the release page instead.	Sitä ei ladattu. Lataa se sen sijaan julkaisusivulta.
+	Version {version} isn't newer than this one ({current}).	Versio {version} ei ole tätä ({current}) uudempi.
+	This release isn't signed.	Tätä julkaisua ei ole allekirjoitettu.
+	The release failed its check.	Julkaisu ei läpäissyt tarkistusta.
+	The signed release doesn't list {name}.	Allekirjoitettu julkaisu ei sisällä tiedostoa {name}.
+	GitHub's fingerprint for {name} differs from the signed one.	GitHubin sormenjälki tiedostolle {name} poikkeaa allekirjoitetusta.
+	Couldn't make the folder {folder}: {error}	Kansiota {folder} ei voitu luoda: {error}
+	The download didn't match its published SHA-256 fingerprint, so it wasn't installed.	Lataus ei vastannut julkaistua SHA-256-sormenjälkeä, joten sitä ei asennettu.
+	Couldn't read the download: {error}	Latausta ei voitu lukea: {error}
+	The download failed: {why}	Lataus epäonnistui: {why}
+	This release has no installer for this computer yet.	Tässä julkaisussa ei vielä ole asennusohjelmaa tälle tietokoneelle.
+	Drawing Properties...	Piirustuksen ominaisuudet...
+	System Variable Monitor...	Järjestelmämuuttujien valvonta...
+	{name} Properties	{name} – ominaisuudet
+	Summary	Yhteenveto
+	Statistics	Tilastot
+	Size	Koko
+	Subject	Aihe
+	Author	Tekijä
+	Keywords	Avainsanat
+	Comments	Kommentit
+	Revision number	Revision numero
+	Hyperlink base	Hyperlinkin perusosoite
+	Created	Luotu
+	Modified	Muokattu
+	Last saved by	Viimeksi tallentanut
+	Total editing time (minutes)	Muokkausaika yhteensä (minuuttia)
+	Property	Ominaisuus
+	System Variable Monitor	Järjestelmämuuttujien valvonta
+	Variable	Muuttuja
+	Watched value	Valvottu arvo
+	Current value	Nykyinen arvo
+	Notify when a watched variable changes	Ilmoita, kun valvottu muuttuja muuttuu
+	Reset All	Palauta kaikki
+	Delay	Viive
+	Repeat Script	Toista skripti
+	Script Call	Skriptikutsu
+	Resume Script	Jatka skriptiä
+	Keep an activity history of each drawing (private, in CADaddy's settings folder)	Säilytä toimintahistoria jokaisesta piirustuksesta (yksityinen, CADaddyn asetuskansiossa)
+	Specify insertion point or	Määritä lisäyspiste tai
+	Specify table scale	Määritä taulukon mittakaava
+	{} dimension(s) updated to the current settings.	{} mittaa päivitetty nykyisiin asetuksiin.
+	British English (-ise)	Brittienglanti (-ise)
+	British English (-ize)	Brittienglanti (-ize)
+	Spanish	Espanja
+	French	Ranska
+	German	Saksa
+	Portuguese (Iberian)	Portugali (Portugali)
+	Portuguese (Brazilian)	Portugali (Brasilia)
+	(not installed)	(ei asennettu)
+	Dictionaries are read from:	Sanastot luetaan sijainnista:
+	Published to {path}	Julkaistu kohteeseen {path}
+	Sheet Set (.sheetset.json)	Arkkijoukko (.sheetset.json)
+	Resolution	Tarkkuus
+	Colour depth	Värisyvyys
+	Colour (24-bit)	Väri (24-bittinen)
+	Greys (8-bit)	Harmaasävyt (8-bittinen)
+	Black and white (1-bit)	Mustavalkoinen (1-bittinen)
+	PNG Out	PNG-vienti
+	JPEG Out	JPEG-vienti
+	BMP Out	BMP-vienti
+	TIFF Out	TIFF-vienti
+	Enter image file name	Anna kuvatiedoston nimi
+	Nothing selected: no image written.	Mitään ei valittu: kuvaa ei kirjoitettu.
+	{} object(s) written to {} ({} × {} pixels).	{} objektia kirjoitettu tiedostoon {} ({} × {} pikseliä).
+	Set to ByLayer	Aseta ByLayer-arvoon
+	Explode and Set Properties	Hajota ja aseta ominaisuudet
+	Edit Attribute in Place	Muokkaa attribuuttia paikallaan
+	Frame	Kehys
+	Setup	Asetus
+	Setup View	Asetusnäkymä
+	Setup Drawing	Asetuspiirustus
+	Setup Profile	Asetusprofiili
+	Enter view scale	Anna näkymän mittakaava
+	Specify view center	Määritä näkymän keskipiste
+	Enter view name	Anna näkymän nimi
+	Specify side of viewport to project	Määritä projisoitava näkymäikkunan puoli
+	Specify first point of cutting plane	Määritä leikkaustason ensimmäinen piste
+	Specify second point of cutting plane	Määritä leikkaustason toinen piste
+	Specify first point of inclined plane	Määritä kaltevan tason ensimmäinen piste
+	Specify second point of inclined plane	Määritä kaltevan tason toinen piste
+	Specify side to view from	Määritä katselupuoli
+	Specify first corner of viewport	Määritä näkymäikkunan ensimmäinen kulma
+	Specify opposite corner of viewport	Määritä näkymäikkunan vastakkainen kulma
+	Display hidden profile lines on separate layer?	Näytetäänkö piilotetut profiiliviivat erillisellä tasolla?
+	Project profile lines onto a plane?	Projisoidaanko profiiliviivat tasolle?
+	Delete tangential edges?	Poistetaanko tangentiaaliset särmät?
+	None (PDF file)	Ei mitään (PDF-tiedosto)
+	Dimension text {} high is too small to read in this drawing. Type DIMSCALE {} to make new dimensions {} times bigger.	{} korkuinen mittateksti on liian pieni luettavaksi tässä piirustuksessa. Kirjoita DIMSCALE {}, niin uudet mitat ovat {} kertaa suurempia.
+	Text {} high is too small to read in this drawing. Try a height of {} (TEXTSIZE sets the default).	{} korkuinen teksti on liian pieni luettavaksi tässä piirustuksessa. Kokeile korkeutta {} (TEXTSIZE asettaa oletuksen).
+	(each layout's own)	(kunkin asettelun oma)
+	A callout on the selected sheet pointing at the selected view	Valitun arkin viittaus, joka osoittaa valittuun näkymään
+	A page setup copied from the selected sheet's layout	Valitun arkin asettelusta kopioitu sivuasetus
+	Add Callout	Lisää viittaus
+	Callouts: {}	Viittaukset: {}
+	From Selected Sheet	Valitusta arkista
+	Insert on Selected Sheet	Lisää valitulle arkille
+	Named view	Nimetty näkymä
+	Page Setup Override	Sivuasetuksen ohitus
+	Place View	Sijoita näkymä
+	Position on sheet	Sijainti arkilla
+	Remove Property	Poista ominaisuus
+	Sheet Properties	Arkin ominaisuudet
+	Sheet Set Fields	Arkkijoukon kentät
+	Sheet Set Properties	Arkkijoukon ominaisuudet
+	Sync Drawings	Synkronoi piirustukset
+	Text holding the field, at the position on sheet	Kentän sisältävä teksti arkin kohdassa
+	Views and Callouts	Näkymät ja viittaukset
+	Each sheet's layout becomes "number title"; the sheet set fields, view labels and callouts take the set's current values	Kunkin arkin asettelusta tulee "numero otsikko"; arkkijoukon kentät, näkymien nimiöt ja viittaukset saavat joukon nykyiset arvot
+	3 Point	3 pistettä
+	Origin	Origo
+	Z	Z
+	Named UCS...	Nimetyt UCS:t...
+	Center Mark (DIMCEN)	Keskipistemerkki (DIMCEN)
+	Copy Objects to New Layer	Kopioi objektit uudelle tasolle
+	Cut with Base Point	Leikkaa peruspisteen kanssa
+	DXF In	DXF-tuonti
+	DXF Out	DXF-vienti
+	Fill	Täyttö
+	Maximize Viewport	Suurenna näkymäikkuna
+	Minimize Viewport	Pienennä näkymäikkuna
+	Object Selection Filters	Objektien valintasuodattimet
+	Oops	Hups
+	Quick Text	Pikateksti
+	Redefine Attributes	Määritä attribuutit uudelleen
+	Drawing	Piirustus
+	Profile	Profiili
+	Clashes	Törmäykset
+	Run	Suorita
+	Re-run	Suorita uudelleen
+	Run clash detection	Suorita törmäystarkastelu
+	Re-run keeping statuses	Suorita uudelleen tilat säilyttäen
+	Tolerance:	Toleranssi:
+	in	in
+	Show:	Näytä:
+	No clashes. Run detection first.	Ei törmäyksiä. Suorita ensin tarkastelu.
+	Status:	Tila:
+	Trade:	Urakka:
+	Notes:	Huomautukset:
+	Go To	Siirry
+	Zoom to clash	Zoomaa törmäykseen
+	Export BCF	Vie BCF
+	Export CSV	Vie CSV
+	Export to BCF 2.1 (ZIP)	Vie BCF 2.1 -muotoon (ZIP)
+	Export clash report to CSV	Vie törmäysraportti CSV-muotoon
+	MEP Review	Talotekniikan tarkastus
+	Guessed only	Vain arvatut
+	{n} items	{n} kohdetta
+	No MEP items found. Run mep.read first.	Talotekniikan kohteita ei löytynyt. Suorita ensin mep.read.
+	Mark reviewed	Merkitse tarkastetuksi
+	Size: {ss}, Height: {hs}	Koko: {ss}, korkeus: {hs}
+	Edit size, height or system	Muokkaa kokoa, korkeutta tai järjestelmää
+	Size W:	Leveys:
+	Bottom ft:	Alapinta (ft):
+	Rebuild 3D model keeping hand edits	Rakenna 3D-malli uudelleen käsin tehdyt muokkaukset säilyttäen
+	Zoomed to {sys} run on {lvl}.	Zoomattu järjestelmän {sys} linjaan kerroksessa {lvl}.
+	Marked as reviewed.	Merkitty tarkastetuksi.
+	Unmarked.	Merkintä poistettu.
+	Edit applied.	Muokkaus tehty.
+	Rebuilt: {n} MEP runs.	Rakennettu uudelleen: {n} talotekniikan linjaa.
+	3D Measure	3D-mittaus
+	BCF Export	BCF-vienti
+	Clash List	Törmäysluettelo
+	Clash Status	Törmäyksen tila
+	Coordination Tree	Koordinointipuu
+	Coordination Viewpoints	Koordinoinnin katselupisteet
+	Edit MEP Item	Muokkaa talotekniikan kohdetta
+	List MEP Items	Luettele talotekniikan kohteet
+	Section Box	Leikkauslaatikko
+	Trade Visibility	Urakoiden näkyvyys
+	BIM Types	BIM-tyypit
+	Get BIM Spec	Hae BIM-määrittely
+	Remove BIM Spec from Entities	Poista BIM-määrittely entiteeteiltä
+	Remove BIM Type	Poista BIM-tyyppi
+	Set BIM Spec on Entities	Aseta BIM-määrittely entiteeteille
+	Set BIM Type	Aseta BIM-tyyppi
+	Ceiling and Soffit Takeoff	Alakattojen ja kotelointien määrälaskenta
+	Colour by Assembly	Väritä rakenteen mukaan
+	RFI List	Lisätietopyyntöluettelo
+	Zoom to RFI	Zoomaa lisätietopyyntöön
+	Update RFI	Päivitä lisätietopyyntö
+	Export RFI List	Vie lisätietopyyntöluettelo
+	Sent	Lähetetty
+	Answered	Vastattu
+	Not sent	Ei lähetetty
+	High	Korkea
+	Medium	Keskitaso
+	Low	Matala
+	All levels	Kaikki kerrokset
+	Open items only	Vain avoimet kohteet
+	{high} high, {medium} medium, {low} low	{high} korkea, {medium} keskitaso, {low} matala
+	No gaps or conflicts in the building spec.	Rakennusmäärittelyssä ei ole aukkoja tai ristiriitoja.
+	Assumed meanwhile:	Oletettu sillä välin:
+	Proposed fix:	Ehdotettu korjaus:
+	Sheets:	Arkit:
+	Walk to It	Kävele sinne
+	Export XLSX...	Vie XLSX...
+	Export PDF...	Vie PDF...
+	Drywall Takeoff	Kipsilevyjen määrälaskenta
+	Drywall View Mode	Kipsilevyjen näkymätila
+	Finish Faces	Pintamateriaalit
+	Wall Info	Seinän tiedot
+	Open Print Set	Avaa tulostesarja
+	Classify Print Set	Luokittele tulostesarja
+	Print Set Dashboard	Tulostesarjan koontinäyttö
+	Print Set Sheets	Tulostesarjan arkit
+	Re-import Revised Set	Tuo päivitetty sarja uudelleen
+	Save Print Set	Tallenna tulostesarja
+	Ahead	Edessä
+	Bottom / top AFF	Alapinta / yläpinta lattiasta
+	Clash	Törmäys
+	elements	elementtiä
+	Field Viewer	Työmaakatselin
+	Fit	Sovita
+	Keep	Säilytä
+	New note	Uusi muistiinpano
+	No new notes to send	Ei uusia lähetettäviä muistiinpanoja
+	No room matches	Mikään tila ei vastaa hakua
+	Note	Muistiinpano
+	Note kept	Muistiinpano säilytetty
+	Notes	Muistiinpanot
+	notes ready to sync	muistiinpanoa valmiina synkronoitavaksi
+	not typed	ei tyyppiä
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Avaa työmaapaketti (FIELDVIEW.EXPORT CADaddyssa) tai pudota se tähän
+	Open clashes and RFIs	Avoimet törmäykset ja lisätietopyynnöt
+	RFI	Lisätietopyyntö
+	Room number	Tilan numero
+	Search a room number, or tap a room	Hae tilan numeroa tai napauta tilaa
+	Send Notes	Lähetä muistiinpanot
+	Tap two points to measure	Mittaa napauttamalla kahta pistettä
+	Trades	Urakat
+	Unit	Asunto
+	Verified	Varmennettu
+	Verified point	Varmennettu piste
+	What is there, as built	Mitä siellä on toteutuneena
+	Plan	Pohjapiirros
+	3D	3D
+	Architectural	Arkkitehtuuri
+	Structural	Rakenteet
+	Mechanical	LVI
+	Plumbing	Vesi ja viemäri
+	Fire protection	Sprinklaus
+	Other	Muut
+	stated	ilmoitettu
+	inferred	päätelty
+	assumed	oletettu
+	Field Package	Työmaapaketti
+	Sync Field Notes	Synkronoi työmaamuistiinpanot
+	Field Notes	Työmaamuistiinpanot
+	Detect Unit Types	Tunnista asuntotyypit
+	List Unit Types	Luettele asuntotyypit
+	Unit Schedule	Asuntoluettelo
+	Unit Type Takeoff	Asuntotyyppien määrälaskenta
+	Override Generated Element	Ohita luotu elementti
+	List Overrides	Luettele ohitukset
+	Revert Override	Peru ohitus
+	Accept Override After Review	Hyväksy ohitus tarkastuksen jälkeen
+	Show or Hide Overrides	Näytä tai piilota ohitukset
+	Re-apply Overrides	Käytä ohituksia uudelleen
+	Overrides	Ohitukset
+	Select generated element (or an object drawn by hand to add)	Valitse luotu elementti (tai käsin piirretty lisättävä objekti)
+	Enter type mark	Anna tyyppitunnus
+	Enter override to revert	Anna peruttava ohitus
+	Verify	Varmenna
+	review: the drawing changed here	tarkastus: piirustus muuttui tässä
+	orphaned: its element is no longer generated	orpo: sen elementtiä ei enää luoda
+	Project Rules	Projektin säännöt
+	Domain:	Toimialue:
+	No project rules set.	Projektin sääntöjä ei ole asetettu.
+	Tier:	Taso:
+	Source:	Lähde:
+	Reason:	Syy:
+	Overridden values:	Ohitetut arvot:
+	No drawing open.	Ei avointa piirustusta.
+	List Project Rules	Luettele projektin säännöt
+	Get Project Rule	Hae projektin sääntö
+	Set Project Rule	Aseta projektin sääntö
+	Remove Project Rule	Poista projektin sääntö
+	Preview Project Rule Change	Esikatsele projektin säännön muutosta
+	Project Rules Label	Projektin sääntöjen nimiö
+	Import Project Rules	Tuo projektin säännöt
+	Export Project Rules	Vie projektin säännöt
+	Print Validator Documents	Tulosta tarkistusasiakirjat
+	Validate Model Against Prints	Tarkista malli tulosteita vasten
+	Validation Failure Overlay	Tarkistusvirheiden peitto
+	Element Provenance	Elementin alkuperä
+	MEP Quantities	Talotekniikan määrät
+	Refresh MEP Quantities	Päivitä talotekniikan määrät
+	Activate Drawing	Aktivoi piirustus
+	Add to Project	Lisää projektiin
+	Close Project	Sulje projekti
+	Import Manifest	Tuo luettelotiedosto
+	Import Standards	Tuo standardit
+	New Project	Uusi projekti
+	Open Project	Avaa projekti
+	Project Disk Use	Projektin levynkäyttö
+	Project Drawings	Projektin piirustukset
+	Project Info	Projektin tiedot
+	Remove Standard	Poista standardi
+	Remove from Project	Poista projektista
+	Restore Project	Palauta projekti
+	Set Standard	Aseta standardi
+	Shelve Drawing	Arkistoi piirustus
+	Shelve Project	Arkistoi projekti
+	Standards Library	Standardikirjasto
+	Validate Manifest	Tarkista luettelotiedosto
+	Active	Aktiivinen
+	Shelved	Arkistoitu
+	{n} drawings	{n} piirustusta
+	Compare Revised Print	Vertaa päivitettyyn tulosteeseen
+	Revision Log	Revisioloki
+	Attach IFC Reference	Liitä IFC-viite
+	IFC References	IFC-viitteet
+	IFC Reference Elements	IFC-viitteen elementit
+	Reload IFC References	Lataa IFC-viitteet uudelleen
+	Accept Specifications	Hyväksy määrittelyt
+	Import Specifications	Tuo määrittelyt
+	Colour Scheme	Värimalli
+	Coordination Mode	Koordinointitila
+	Coordination Views	Koordinointinäkymät
+	Isolate Trade	Eristä urakka
+	Project Briefing	Projektikatsaus
+	Project Note	Projektin muistiinpano
+	Review Queue	Tarkastusjono
+	Next Review Item	Seuraava tarkastuskohde
+	Resolve Review Item	Ratkaise tarkastuskohde
+	Defer Review Item	Lykkää tarkastuskohdetta
+	Draft RFI	Laadi lisätietopyyntö
+	Batch Resolve	Eräratkaisu
+	Approve Agent Work	Hyväksy agentin työ
+	Agent Work	Agentin työ
+	Build BIM Model	Rakenna BIM-malli
+	to accept	hyväksyttävänä
+	Accept all	Hyväksy kaikki
+	Accept	Hyväksy
+	Cited:	Lähteet:
+	Nothing waiting: agents' work is all accepted.	Ei odottavia: agenttien työ on kokonaan hyväksytty.
+	Open IFC Model	Avaa IFC-malli
+	Open IFC Model...	Avaa IFC-malli...
+	IFC Model	IFC-malli
+	IFC Model Tree	IFC-mallipuu
+	IFC Object Properties	IFC-objektin ominaisuudet
+	Filter IFC Objects	Suodata IFC-objekteja
+	IFC Section Box	IFC-leikkauslaatikko
+	Measure in 3D	Mittaa 3D:ssä
+	IFC Camera	IFC-kamera
+	Render IFC Model	Renderöi IFC-malli
+	New BCF Issue	Uusi BCF-asia
+	BCF Issues	BCF-asiat
+	BCF Issues...	BCF-asiat...
+	BCF Issue	BCF-asia
+	Update BCF Issue	Päivitä BCF-asia
+	Show BCF Issue	Näytä BCF-asia
+	Delete BCF Issue	Poista BCF-asia
+	Import BCF	Tuo BCF
+	Read Levels	Lue kerrokset
+	List Levels	Luettele kerrokset
+	Edit Level	Muokkaa kerrosta
+	Attach Sheets to Levels	Liitä arkit kerroksiin
+	Check Shafts Through Levels	Tarkista kuilut kerrosten läpi
+	Isolate Level	Eristä kerros
+	Read from Prints	Lue tulosteista
+	Level names and elevations from the sections, elevations and level markers	Kerrosten nimet ja korkeusasemat leikkauksista, julkisivuista ja kerrosmerkinnöistä
+	Attach Sheets	Liitä arkit
+	Check Shafts	Tarkista kuilut
+	Shafts, chases and risers must carry on through the levels between their ends	Kuilujen, asennuskanavien ja nousulinjojen on jatkuttava päidensä välisten kerrosten läpi
+	No levels in the building spec.	Rakennusmäärittelyssä ei ole kerroksia.
+	Level	Kerros
+	Floor to floor	Kerroskorkeus
+	Sheets	Arkit
+	Show only this storey in 3D	Näytä vain tämä kerros 3D:ssä
+	Datums (no plan on this drawing):	Perustasot (ei pohjapiirrosta tässä piirustuksessa):
+	Sheets on no level:	Arkit ilman kerrosta:
+	Show All Levels	Näytä kaikki kerrokset
+	The levels already match the prints.	Kerrokset vastaavat jo tulosteita.
+	{sheets} sheets, {loose} on no level	{sheets} arkkia, {loose} ilman kerrosta
+	{name}: not shown on {levels}	{name}: ei näy kerroksissa {levels}
+	Every shaft and riser carries on through its levels.	Jokainen kuilu ja nousulinja jatkuu kerrostensa läpi.
+	Not a height: {text}	Ei korkeus: {text}
+	Export COBie	Vie COBie
+	Validate COBie	Tarkista COBie
+	Export Handover Schedules	Vie luovutusluettelot
+	COBie...	COBie...
+	Handover Schedules...	Luovutusluettelot...
+	Electrical Gear	Sähkökeskukset ja -laitteet
+	Check Electrical Gear	Tarkista sähkökeskukset ja -laitteet
+	Submittal Review of Gear	Sähkölaitteiden hyväksyntätarkastus
+	Accept Gear as Submitted	Hyväksy laitteet toimitettuina

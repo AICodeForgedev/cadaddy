@@ -1,0 +1,196 @@
+# CADaddy engine messages in Hindi: original translations made for CADaddy.
+# License: as the repository (FSL-1.1-ALv2). No proprietary translations were copied.
+# UTF-8: context<TAB>English<TAB>translation. {} holds a value, in order; {0}, {1} pick one.
+# Keep command names, option keywords (Yes, No, Undo...) and system variables unchanged.
+# Machine translated for CADaddy; awaiting review by a native speaker.
+	Enter a group name	समूह का नाम दर्ज करें
+	Pick internal point	आंतरिक बिंदु चुनें
+	Specify the pattern origin	पैटर्न का मूल बिंदु निर्दिष्ट करें
+	Specify the incrementing elevation between rows	पंक्तियों के बीच बढ़ता एलिवेशन निर्दिष्ट करें
+	Specify the angle to fill (+=ccw, -=cw)	भरने का कोण निर्दिष्ट करें (+=वामावर्त, -=दक्षिणावर्त)
+	Select hatch object	हैच ऑब्जेक्ट चुनें
+	Red, Green, Blue	लाल, हरा, नीला
+	Enter the number of rows	पंक्तियों की संख्या दर्ज करें
+	Enter the number of levels	लेवल की संख्या दर्ज करें
+	Enter new layer name	नया लेयर नाम दर्ज करें
+	Specify width	चौड़ाई निर्दिष्ट करें
+	Specify the angle between items	आइटम के बीच का कोण निर्दिष्ट करें
+	Specify text height	टेक्स्ट ऊँचाई निर्दिष्ट करें
+	Specify start tangent	आरंभ स्पर्शरेखा निर्दिष्ट करें
+	Specify end tangent	अंत स्पर्शरेखा निर्दिष्ट करें
+	Specify reference length	संदर्भ लंबाई निर्दिष्ट करें
+	Specify other corner	दूसरा कोना निर्दिष्ट करें
+	Specify next point or [Undo]	अगला बिंदु निर्दिष्ट करें या [Undo]
+	Specify new location	नया स्थान निर्दिष्ट करें
+	Specify new length	नई लंबाई निर्दिष्ट करें
+	Specify length of line	रेखा की लंबाई निर्दिष्ट करें
+	Specify displacement	विस्थापन निर्दिष्ट करें
+	Specify angle for dimension text	डायमेंशन टेक्स्ट के लिए कोण निर्दिष्ट करें
+	Select viewports	व्यूपोर्ट चुनें
+	Select object to break dimension	डायमेंशन ब्रेक करने के लिए ऑब्जेक्ट चुनें
+	Select group	समूह चुनें
+	Select grip to edit array	ऐरे संपादित करने के लिए ग्रिप चुनें
+	Select a table	एक तालिका चुनें
+	Select a boundary to remove	हटाने के लिए सीमा चुनें
+	Rotate arrayed items?	ऐरे आइटम घुमाएँ?
+	Erase polyline?	पॉलीलाइन मिटाएँ?
+	Enter viewport arrangement	व्यूपोर्ट व्यवस्था दर्ज करें
+	Enter transparency value (0-90)	पारदर्शिता मान दर्ज करें (0-90)
+	Enter the number of operations to undo	पूर्ववत करने के लिए ऑपरेशन की संख्या दर्ज करें
+	Enter the number of columns	कॉलम की संख्या दर्ज करें
+	Enter number of items in array	ऐरे में आइटम की संख्या दर्ज करें
+	Enter new layer state name	नया लेयर स्टेट नाम दर्ज करें
+	Enter new color	नया रंग दर्ज करें
+	Enter name of new layout	नए लेआउट का नाम दर्ज करें
+	Enter layer name	लेयर नाम दर्ज करें
+	Enter file name	फ़ाइल नाम दर्ज करें
+	Enter color name or number (1-255)	रंग का नाम या संख्या दर्ज करें (1-255)
+	Enter a configuration option	कॉन्फ़िगरेशन विकल्प दर्ज करें
+	Base point	आधार बिंदु
+	Word-wrap the combined Mtext?	संयुक्त Mtext को वर्ड-रैप करें?
+	Where should the data go?	डेटा कहाँ जाना चाहिए?
+	Verify each name to be purged?	पर्ज होने वाले हर नाम को सत्यापित करें?
+	Use landing	लैंडिंग उपयोग करें
+	Type of boundary object	सीमा ऑब्जेक्ट का प्रकार
+	Specify width factor	चौड़ाई फ़ैक्टर निर्दिष्ट करें
+	Specify tolerance	टॉलरेंस निर्दिष्ट करें
+	Specify the tangent direction for the start point of arc	आर्क के आरंभ बिंदु की स्पर्शरेखा दिशा निर्दिष्ट करें
+	Specify the reference angle	संदर्भ कोण निर्दिष्ट करें
+	Specify the new angle	नया कोण निर्दिष्ट करें
+	Specify text width	टेक्स्ट चौड़ाई निर्दिष्ट करें
+	Specify temporary OTRACK point	अस्थायी OTRACK बिंदु निर्दिष्ट करें
+	Invalid option keyword.	अमान्य विकल्प कीवर्ड।
+	*Invalid selection*	*अमान्य चयन*
+	Requires a valid angle.	एक मान्य कोण आवश्यक है।
+	Nothing to undo.	पूर्ववत करने के लिए कुछ नहीं है।
+	Invalid point.	अमान्य बिंदु।
+	No viewport found there.	वहाँ कोई व्यूपोर्ट नहीं मिला।
+	*Cancel*	*रद्द*
+	Requires a positive number.	एक धनात्मक संख्या आवश्यक है।
+	No hatch selected.	कोई हैच चयनित नहीं है।
+	** Command not allowed in Model Tab ** (switch to a layout first)	** मॉडल टैब में कमांड की अनुमति नहीं ** (पहले किसी लेआउट पर जाएँ)
+	Select a multileader.	एक मल्टीलीडर चुनें।
+	No line or arc to continue.	जारी रखने के लिए कोई रेखा या आर्क नहीं है।
+	Revision cloud finished.	रिविज़न क्लाउड पूरा हुआ।
+	Object selected is not a circle or arc.	चयनित ऑब्जेक्ट वृत्त या आर्क नहीं है।
+	Select a linear or aligned dimension.	एक रैखिक या संरेखित डायमेंशन चुनें।
+	Object selected is not a dimension.	चयनित ऑब्जेक्ट डायमेंशन नहीं है।
+	No dimensions selected.	कोई डायमेंशन चयनित नहीं है।
+	Requires a number.	एक संख्या आवश्यक है।
+	0 found	0 मिले
+	The feature control frame is empty.	फ़ीचर कंट्रोल फ़्रेम खाली है।
+	1 was on a locked layer.	1 लॉक लेयर पर था।
+	Row elevations need an associative array; the copies stay at the same elevation.	पंक्ति एलिवेशन के लिए एसोसिएटिव ऐरे आवश्यक है; प्रतियाँ उसी एलिवेशन पर रहती हैं।
+	Point or option keyword required.	बिंदु या विकल्प कीवर्ड आवश्यक है।
+	Enter Yes or No.	Yes या No दर्ज करें।
+	Viewport created, zoomed to the model extents.	व्यूपोर्ट बनाया गया, मॉडल विस्तार तक ज़ूम किया गया।
+	No object found.	कोई ऑब्जेक्ट नहीं मिला।
+	The object is not a table.	ऑब्जेक्ट तालिका नहीं है।
+	No table there.	वहाँ कोई तालिका नहीं है।
+	A transparent command is already in progress.	एक ट्रांसपेरेंट कमांड पहले से चल रही है।
+	Invalid class name.	अमान्य क्लास नाम।
+	Invalid group name.	अमान्य समूह नाम।
+	Too many point modifiers.	बहुत अधिक बिंदु संशोधक।
+	No leader to remove.	हटाने के लिए कोई लीडर नहीं है।
+	Requires a non-negative number.	एक गैर-ऋणात्मक संख्या आवश्यक है।
+	Clipboard is empty.	क्लिपबोर्ड खाली है।
+	1 object was on a locked layer.	1 ऑब्जेक्ट लॉक लेयर पर था।
+	Circle does not exist.	वृत्त मौजूद नहीं है।
+	Enter Length or Area.	Length या Area दर्ज करें।
+	Enter a percentage from 0 to 1000.	0 से 1000 तक प्रतिशत दर्ज करें।
+	Enter Table, File or None.	Table, File या None दर्ज करें।
+	Cannot measure that object.	उस ऑब्जेक्ट को मापा नहीं जा सकता।
+	Third pair ignored (2D align).	तीसरी जोड़ी अनदेखी की गई (2D संरेखण)।
+	Insert mode: Copy (nested objects are copied as independent objects).	इन्सर्ट मोड: Copy (नेस्टेड ऑब्जेक्ट स्वतंत्र ऑब्जेक्ट के रूप में कॉपी होते हैं)।
+	Everything has been undone	सब कुछ पूर्ववत कर दिया गया है
+	Everything has been undone.	सब कुछ पूर्ववत कर दिया गया है।
+	Requires a non-negative number or Auto.	एक गैर-ऋणात्मक संख्या या Auto आवश्यक है।
+	Select a dimension.	एक डायमेंशन चुनें।
+	Object cannot be dimensioned this way.	ऑब्जेक्ट को इस तरह डायमेंशन नहीं दिया जा सकता।
+	Select an arc, circle or line.	एक आर्क, वृत्त या रेखा चुनें।
+	The two points must be different.	दोनों बिंदु भिन्न होने चाहिए।
+	No linear dimension to continue. Create one with DIMLINEAR first.	जारी रखने के लिए कोई रैखिक डायमेंशन नहीं है। पहले DIMLINEAR से एक बनाएँ।
+	A multileader needs a leader line or content; nothing was drawn.	मल्टीलीडर के लिए लीडर लाइन या सामग्री आवश्यक है; कुछ नहीं बनाया गया।
+	Requires the name of a block defined in the drawing.	ड्रॉइंग में परिभाषित किसी ब्लॉक का नाम आवश्यक है।
+	Invalid option.	अमान्य विकल्प।
+	The boundary encloses none of the image.	सीमा इमेज के किसी भाग को नहीं घेरती।
+	The object is not an image.	ऑब्जेक्ट इमेज नहीं है।
+	The image has no clipping boundary.	इमेज की कोई क्लिपिंग सीमा नहीं है।
+	No images selected.	कोई इमेज चयनित नहीं है।
+	Requires an integer between 0 and 100.	0 और 100 के बीच एक पूर्णांक आवश्यक है।
+	The selected object has no area.	चयनित ऑब्जेक्ट का कोई क्षेत्रफल नहीं है।
+	No such object	ऐसा कोई ऑब्जेक्ट नहीं
+	Requires a point.	एक बिंदु आवश्यक है।
+	Requires a distance.	एक दूरी आवश्यक है।
+	The object is on a locked layer.	ऑब्जेक्ट लॉक लेयर पर है।
+	Value must be positive and nonzero.	मान धनात्मक और शून्येतर होना चाहिए।
+	Requires an angle.	एक कोण आवश्यक है।
+	Requires a point or option keyword.	एक बिंदु या विकल्प कीवर्ड आवश्यक है।
+	Object does not intersect a cutting edge.	ऑब्जेक्ट किसी कटिंग एज को प्रतिच्छेद नहीं करता।
+	Object does not intersect an edge.	ऑब्जेक्ट किसी एज को प्रतिच्छेद नहीं करता।
+	Lines are parallel.	रेखाएँ समांतर हैं।
+	The Block Editor is not open.	ब्लॉक एडिटर खुला नहीं है।
+	Requires a positive integer.	एक धनात्मक पूर्णांक आवश्यक है।
+	Answer Yes or No.	Yes या No में उत्तर दें।
+	Requires a valid point.	एक मान्य बिंदु आवश्यक है।
+	No reference objects	कोई रेफ़रेंस ऑब्जेक्ट नहीं
+	Requires an angle or point.	एक कोण या बिंदु आवश्यक है।
+	Requires a positive distance.	एक धनात्मक दूरी आवश्यक है।
+	Requires a non-negative distance.	एक गैर-ऋणात्मक दूरी आवश्यक है।
+	No such grip	ऐसा कोई ग्रिप नहीं
+	Requires a template file name.	एक टेम्पलेट फ़ाइल नाम आवश्यक है।
+	A hatch needs at least one boundary: erase it instead.	हैच के लिए कम से कम एक सीमा आवश्यक है: इसके बजाय इसे मिटाएँ।
+	Undo is turned off (UNDO Control None); UNDO Control All turns it on.	पूर्ववत बंद है (UNDO Control None); UNDO Control All इसे चालू करता है।
+	Enter ON or OFF.	ON या OFF दर्ज करें।
+	Not a linear dimension.	रैखिक डायमेंशन नहीं है।
+	Valid hatch boundary not found.	मान्य हैच सीमा नहीं मिली।
+	No closed boundary objects selected.	कोई बंद सीमा ऑब्जेक्ट चयनित नहीं है।
+	Requires a name.	एक नाम आवश्यक है।
+	That option doesn't apply to this grip.	वह विकल्प इस ग्रिप पर लागू नहीं होता।
+	That would make a degenerate object.	इससे एक विकृत ऑब्जेक्ट बन जाएगा।
+	No tangent or perpendicular from the last point.	अंतिम बिंदु से कोई स्पर्शरेखा या लंब नहीं।
+	Requires numeric distance or second point.	संख्यात्मक दूरी या दूसरा बिंदु आवश्यक है।
+	Edge endpoints must differ.	एज के अंतबिंदु भिन्न होने चाहिए।
+	Requires numeric distance or point.	संख्यात्मक दूरी या बिंदु आवश्यक है।
+	Requires a positive height.	एक धनात्मक ऊँचाई आवश्यक है।
+	No objects found.	कोई ऑब्जेक्ट नहीं मिला।
+	Requires a non-zero number.	एक शून्येतर संख्या आवश्यक है।
+	Circle must intersect cutting edges at two or more points.	वृत्त को कटिंग एज को दो या अधिक बिंदुओं पर प्रतिच्छेद करना चाहिए।
+	Arc cannot be full 360 degrees.	आर्क पूरे 360 डिग्री का नहीं हो सकता।
+	Cannot break that object.	उस ऑब्जेक्ट को ब्रेक नहीं किया जा सकता।
+	An object is on a locked layer.	एक ऑब्जेक्ट लॉक लेयर पर है।
+	Objects are not connected.	ऑब्जेक्ट जुड़े हुए नहीं हैं।
+	The two points must differ.	दोनों बिंदु भिन्न होने चाहिए।
+	Mirror line points must differ.	मिरर लाइन के बिंदु भिन्न होने चाहिए।
+	No drawing is open.	कोई ड्रॉइंग खुली नहीं है।
+	Command: {}	कमांड: {}
+	Unknown command "{}". Press F1 for help.	अज्ञात कमांड "{}"। सहायता के लिए F1 दबाएँ।
+	{} found	{} मिले
+	{} found, {} total	{} मिले, कुल {}
+	Distance = {}	दूरी = {}
+	Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0	दूरी = {},  XY तल में कोण = {},  XY तल से कोण = 0
+	Delta X = {},  Delta Y = {},   Delta Z = {}	डेल्टा X = {},  डेल्टा Y = {},   डेल्टा Z = {}
+	Area = {}, Perimeter = {}	क्षेत्रफल = {}, परिमाप = {}
+	Total area = {}	कुल क्षेत्रफल = {}
+	Resuming {} command.	{} कमांड फिर से शुरू हो रही है।
+	Invalid input: {}	अमान्य इनपुट: {}
+	{} were on a locked layer.	{} लॉक लेयर पर थे।
+	{} dimension(s) changed.	{} डायमेंशन बदले गए।
+	Group {} ungrouped.	समूह {} का समूहन हटाया गया।
+	{} object(s) flattened.	{} ऑब्जेक्ट समतल किए गए।
+	Group {} renamed to {}.	समूह {} का नाम बदलकर {} किया गया।
+	{} object(s) added to group {}.	{1} समूह में {0} ऑब्जेक्ट जोड़े गए।
+	{} object(s) removed from group {}.	{1} समूह से {0} ऑब्जेक्ट हटाए गए।
+	{} lines were chamfered	{} रेखाएँ चैम्फ़र की गईं
+	{} lines were filleted	{} रेखाएँ फ़िलेट की गईं
+	{} objects joined into 1 {}	{} ऑब्जेक्ट 1 {} में जोड़े गए
+	Current dimension style:  {}	वर्तमान डायमेंशन स्टाइल:  {}
+	Wrote {}	{} लिखा गया
+	{} is already open.	{} पहले से खुली है।
+	{} dimension(s) created.	{} डायमेंशन बनाए गए।
+	BOUNDARY created {} polyline(s)	BOUNDARY ने {} पॉलीलाइन बनाईं
+	Current line-width is {}	वर्तमान रेखा-चौड़ाई {} है
+	Unknown variable {}. Type SETVAR ? to list variables.	अज्ञात वेरिएबल {}। वेरिएबल सूचीबद्ध करने के लिए SETVAR ? टाइप करें।
+	{} = {} (read only)	{} = {} (केवल-पठन)
+	Dimension text = {}	डायमेंशन टेक्स्ट = {}
+	{} segments added to polyline	पॉलीलाइन में {} सेगमेंट जोड़े गए
