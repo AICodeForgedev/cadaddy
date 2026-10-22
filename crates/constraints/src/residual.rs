@@ -116,6 +116,15 @@ fn r_at(c: &Constraint, i: usize) -> Option<&GeomRef> {
 }
 
 impl Built {
+    pub(crate) fn spline_reconstruct_cost(&self, m: &Model) -> f64 {
+        let cost = |i: usize| self.refs.get(i).map_or(0.0, |r| m.spline_reconstruct_cost(r.handle));
+        match self.form {
+            Form::EndOn { spline, .. } => cost(spline),
+            Form::Join { .. } => cost(0) + cost(1),
+            _ => 0.0,
+        }
+    }
+
     /// Interpret a constraint against the model at `x`. `target` is the evaluated value for
     /// dimensional constraints (degrees for angular). Errors explain what references are needed.
     pub fn new(c: &Constraint, m: &Model, x: &[f64], target: f64) -> Result<Built, String> {
