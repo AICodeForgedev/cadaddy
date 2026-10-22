@@ -193,7 +193,7 @@ fn dash_plot_shade_plot_visual_styles_and_rendered() {
     assert_eq!(o["shadePlot"], "shadedWithEdges");
     assert_eq!(o["shade"]["style"], "Shaded with Edges");
 
-    let path = out_path("rendered.pdf");
+    let path = out_path("dash-rendered.pdf");
     up_to_shade(&mut s);
     answer(
         &mut s,
