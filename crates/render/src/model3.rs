@@ -432,7 +432,7 @@ pub fn build_clipped(
     // The base scene is clipped by the section box planes (if any).
     let mut base = scene_clipped(&with_model(d, rest.into_iter()), &Space::Model, tol, bg, extra_planes);
     base.lighting = Some(crate::light::Lighting::of(d, space));
-    let (base, chunks) = chunked(base);
+    let (mut base, chunks) = chunked(base);
     let mut bounds = bounds_of(&base);
     for i in &instances {
         if !i.bounds.is_empty() {
@@ -441,6 +441,12 @@ pub fn build_clipped(
         }
     }
     progress.fetch_add(1, Ordering::Relaxed);
+    // Fog distances start at the front of the whole model (instances included).
+    if let Some(lit) = base.lighting.as_mut()
+        && !bounds.is_empty()
+    {
+        lit.bounds = Some((bounds.lo, bounds.hi));
+    }
     Model3 { base, chunks, protos, instances, bounds }
 }
 

@@ -500,7 +500,7 @@ impl Render {
     }
 
     /// The light along one path from the pixel's ray.
-    fn path(&self, mut o: Vec3, mut d: Vec3, rng: &mut Rng, row_t: f32, dome: bool) -> PathOut {
+    fn path(&self, mut o: Vec3, mut d: Vec3, rng: &mut Rng, at: (f32, f32), dome: bool) -> PathOut {
         let mut l = [0.0f32; 3];
         let mut thr = [1.0f32; 3];
         let mut first = None;
@@ -510,7 +510,7 @@ impl Render {
             steps += 1;
             let Some(hit) = self.bvh.intersect(o, d, self.far * 2.0) else {
                 // Leaving: the background (behind the view) or the environment dome.
-                let sky = if bounce == 0 && !dome { view_background(&self.lit, row_t) } else { env_or_sky(&self.lit, d) };
+                let sky = if bounce == 0 && !dome { view_background(&self.lit, at.0, at.1) } else { env_or_sky(&self.lit, d) };
                 for i in 0..3 {
                     l[i] += thr[i] * sky[i];
                 }
@@ -606,7 +606,7 @@ impl Render {
     /// The light arriving at `o` from direction `-d` along one path (a ray that leaves sees the
     /// sky dome, not the view's background): for baking light onto surfaces.
     pub fn radiance(&self, o: Vec3, d: Vec3, rng: &mut Rng) -> [f32; 3] {
-        self.path(o, d, rng, 0.5, true).rgb
+        self.path(o, d, rng, (0.5, 0.5), true).rgb
     }
 
     /// The scene's size (for offsets off surfaces).
@@ -633,7 +633,7 @@ impl Render {
                     let sx = (x as f64 + jx - w as f64 / 2.0) * px + v.center.x;
                     let sy = (h as f64 / 2.0 - y as f64 - jy) * px + v.center.y;
                     let o = v.right * sx + v.up * sy + v.dir * this.far;
-                    this.path(o, v.dir * -1.0, &mut rng, row_t, false)
+                    this.path(o, v.dir * -1.0, &mut rng, ((x as f32 + 0.5) / w as f32, row_t), false)
                 })
                 .collect();
             (y, outs)
@@ -681,17 +681,14 @@ impl Render {
             let var: Vec<f32> = self.sum.iter().zip(&self.sum2).map(|(s, s2)| (s2 * k - (lum(*s) * k).powi(2)).max(0.0) * k).collect();
             c = denoise(&c, &var, &self.normal, &self.depth, &self.albedo, w as usize, h as usize);
         }
-        // Apply fog if configured.
+        // Fog: by the first hit's distance from the front of the scene (rays start `far` along
+        // the view, so a hit `t` away lies at depth `far − t`), in linear light.
         if let Some(fog) = &self.lit.fog {
-            // Normalise depth: near = 0, far = 1.
-            let zmin = self.depth.iter().copied().filter(|z| z.is_finite()).fold(f32::INFINITY, f32::min);
-            let zmax = self.depth.iter().copied().filter(|z| z.is_finite()).fold(f32::NEG_INFINITY, f32::max);
-            let range = (zmax - zmin).max(1e-6);
+            let front = crate::light::fog_front(&self.lit, self.view.dir.normalized());
             for (i, px) in c.iter_mut().enumerate() {
-                let z = self.depth.get(i).copied().unwrap_or(f32::INFINITY);
-                if z.is_finite() {
-                    let depth_frac = (z - zmin) / range;
-                    *px = crate::light::apply_fog(*px, depth_frac, fog);
+                let t = self.depth.get(i).copied().unwrap_or(f32::INFINITY);
+                if t.is_finite() {
+                    *px = crate::light::apply_fog(*px, (front - self.far + f64::from(t)) as f32, fog);
                 }
             }
         }
@@ -700,7 +697,16 @@ impl Render {
         for (i, px) in c.iter().enumerate() {
             let (x, y) = ((i % w as usize) as u32, (i / w as usize) as u32);
             let inside = crop.is_none_or(|(a, b, cc, d)| x >= a && x < cc && y >= b && y < d);
-            let rgb = if inside { *px } else { view_background(&self.lit, 1.0 - (y as f32 + 0.5) / h as f32) };
+            let (u, up) = ((x as f32 + 0.5) / w as f32, 1.0 - (y as f32 + 0.5) / h as f32);
+            // Where nothing was hit an image background shows as it is.
+            let missed = self.depth.get(i).is_none_or(|t| !t.is_finite());
+            if (missed || !inside)
+                && let Some(p) = crate::light::background_image_pixel(&self.lit, u, up)
+            {
+                rgba.extend([p[0], p[1], p[2], 255]);
+                continue;
+            }
+            let rgb = if inside { *px } else { view_background(&self.lit, u, up) };
             let t = self.lit.display(rgb);
             rgba.extend([t[0], t[1], t[2], 255]);
         }
@@ -835,6 +841,7 @@ mod tests {
             ao_radius: 0.0,
             sun_size: 0.0,
             tone: Default::default(),
+            bounds: None,
         };
         // Looking into the room from the open side.
         let view = ShadeView {

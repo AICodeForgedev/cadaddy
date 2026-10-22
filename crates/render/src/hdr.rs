@@ -26,6 +26,32 @@ const MAX_PIXELS: u64 = 16_384 * 16_384;
 const MAX_FILE: usize = 256 << 20;
 
 impl HdrImage {
+    /// The map as the sky the shading's ambient term uses (CPU and GPU alike): the mean radiance
+    /// near the zenith, about the horizon and below it, each pixel weighted by its solid angle.
+    pub fn sky(&self) -> crate::light::Sky {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let mut sums = [[0.0f64; 3]; 3];
+        let mut weights = [0.0f64; 3];
+        for y in 0..h {
+            let lat = (0.5 - (y as f64 + 0.5) / h as f64) * std::f64::consts::PI;
+            let (up, solid) = (lat.sin(), lat.cos());
+            // Zenith: by how high it is; horizon: by how near it, above; ground: by how low.
+            let shares = [up.max(0.0).powi(2), if up >= 0.0 { 1.0 - up } else { 0.0 }, (-up).max(0.0)];
+            for x in 0..w {
+                let i = (y * w + x) * 3;
+                for (band, share) in shares.iter().enumerate() {
+                    let k = share * solid;
+                    for (c, sum) in sums[band].iter_mut().enumerate() {
+                        *sum += f64::from(self.data.get(i + c).copied().unwrap_or(0.0)) * k;
+                    }
+                    weights[band] += k;
+                }
+            }
+        }
+        let mean = |b: usize| sums[b].map(|s| if weights[b] > 0.0 { (s / weights[b]) as f32 } else { 0.0 });
+        crate::light::Sky { zenith: mean(0), horizon: mean(1), ground: mean(2) }
+    }
+
     /// Sample the environment map in direction `d` (unit vector) using a lat-long (equirect)
     /// mapping: longitude from +X through +Y, latitude from the equator up to +Z.
     pub fn sample(&self, d: cadaddy_geom::Vec3) -> [f32; 3] {
@@ -93,13 +119,17 @@ pub fn decode(bytes: &[u8]) -> Option<HdrImage> {
             if e == 0 {
                 data.extend([0.0f32, 0.0, 0.0]);
             } else {
-                // value = mantissa * 2^(e - 128 - 8)
-                let scale = f32::from_bits(((e as u32).wrapping_add(127).wrapping_sub(128 + 8)) << 23);
-                data.extend([f32::from(r) * scale, f32::from(g) * scale, f32::from(b) * scale]);
+                data.extend([r, g, b].map(|m| rgbe(m, e)));
             }
         }
     }
     Some(HdrImage { width, height, data })
+}
+
+/// A channel's linear value: `mantissa × 2^(e − 128 − 8)`, in f64 so that the smallest exponents
+/// give tiny positive values (2^−135 isn't a normal f32), never garbage.
+fn rgbe(mantissa: u8, e: u8) -> f32 {
+    (f64::from(mantissa) * 2f64.powi(i32::from(e) - 136)) as f32
 }
 
 /// Parse "-Y H +X W" or "+X W -Y H" (the only orientations we handle).
@@ -208,7 +238,7 @@ mod tests {
                 // mantissa = value / 2^(E - 136), so E = floor(log2(max)) + 129.
                 let e_raw = max.log2().floor() as i32 + 129;
                 let e = e_raw.clamp(1, 255) as u8;
-                let inv_scale = 1.0 / f32::from_bits(((e as u32).wrapping_add(127).wrapping_sub(136)) << 23);
+                let inv_scale = (1.0 / 2f64.powi(i32::from(e) - 136)) as f32;
                 let r = (px[0] * inv_scale).round().clamp(0.0, 255.0) as u8;
                 let g = (px[1] * inv_scale).round().clamp(0.0, 255.0) as u8;
                 let b = (px[2] * inv_scale).round().clamp(0.0, 255.0) as u8;
@@ -267,5 +297,79 @@ mod tests {
                 assert!((v - 1.0).abs() < 0.05, "dir {d:?} ch {c}: {v}");
             }
         }
+    }
+
+    /// Rows written with the adaptive run-length encoding (a 2, 2, width marker, then each
+    /// channel as runs and literals), as every HDR tool writes them, decode to the exact values.
+    #[test]
+    fn adaptive_rle_rows_decode_exactly() {
+        let mut f = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 8\n".to_vec();
+        // Exponent 136: a channel's value is its mantissa.
+        let row = |r: &[u8], g: &[u8], b: &[u8], e: &[u8]| {
+            let mut v = vec![2, 2, 0, 8];
+            for ch in [r, g, b, e] {
+                v.extend_from_slice(ch);
+            }
+            v
+        };
+        // Red: a run of 3 tens then 5 literals; green: one run of 8; blue: 8 literals; E: a run.
+        f.extend(row(&[128 + 3, 10, 5, 1, 2, 3, 4, 5], &[128 + 8, 20], &[8, 9, 8, 7, 6, 5, 4, 3, 2], &[128 + 8, 136]));
+        // Second row: literals then a run (the order reversed), exponent 137 (twice the mantissa).
+        f.extend(row(&[2, 100, 101, 128 + 6, 7], &[4, 1, 1, 2, 2, 128 + 4, 3], &[128 + 8, 0], &[128 + 8, 137]));
+        let img = decode(&f).unwrap();
+        assert_eq!((img.width, img.height), (8, 2));
+        let px = |x: usize, y: usize| [0, 1, 2].map(|c| img.data[(y * 8 + x) * 3 + c]);
+        let reds = [10.0, 10.0, 10.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let blues = [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0];
+        for x in 0..8 {
+            assert_eq!(px(x, 0), [reds[x], 20.0, blues[x]], "row 0, x {x}");
+        }
+        let reds = [100.0, 101.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0];
+        let greens = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0];
+        for x in 0..8 {
+            assert_eq!(px(x, 1), [reds[x] * 2.0, greens[x] * 2.0, 0.0], "row 1, x {x}");
+        }
+        // A run past the row's end is refused, not read on.
+        let mut bad = b"#?RADIANCE\n\n-Y 1 +X 8\n".to_vec();
+        bad.extend([2, 2, 0, 8, 128 + 9, 1]);
+        assert!(decode(&bad).is_none());
+    }
+
+    /// A map that isn't uniform is read the right way up and round: its top row is straight up
+    /// (+Z), its bottom row straight down, and the middle column (u = 0.5) is +X.
+    #[test]
+    fn a_maps_orientation() {
+        let (w, h) = (8u32, 4u32);
+        let mut pixels = vec![[0.1f32, 0.1, 0.1]; (w * h) as usize];
+        for x in 0..w as usize {
+            pixels[x] = [4.0, 0.0, 0.0];
+            pixels[(h as usize - 1) * w as usize + x] = [0.0, 0.0, 4.0];
+        }
+        for y in 1..h as usize - 1 {
+            pixels[y * w as usize + w as usize / 2] = [0.0, 4.0, 0.0];
+        }
+        let img = decode(&encode_hdr(w, h, &pixels)).unwrap();
+        use cadaddy_geom::Vec3;
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|c| (a[c] - b[c]).abs() < 0.05);
+        assert!(near(img.sample(Vec3::Z), [4.0, 0.0, 0.0]), "+Z: {:?}", img.sample(Vec3::Z));
+        assert!(near(img.sample(-Vec3::Z), [0.0, 0.0, 4.0]), "-Z: {:?}", img.sample(-Vec3::Z));
+        assert!(near(img.sample(Vec3::new(1.0, 0.0, 0.0)), [0.0, 4.0, 0.0]), "+X: {:?}", img.sample(Vec3::new(1.0, 0.0, 0.0)));
+        assert!(near(img.sample(Vec3::new(-1.0, 0.0, 0.0)), [0.1, 0.1, 0.1]), "-X: {:?}", img.sample(Vec3::new(-1.0, 0.0, 0.0)));
+        // Its sky terms: red overhead, blue below.
+        let sky = img.sky();
+        assert!(sky.zenith[0] > sky.zenith[2] && sky.ground[2] > sky.ground[0], "{sky:?}");
+    }
+
+    /// The smallest exponents give tiny positive values (they were huge negative ones).
+    #[test]
+    fn low_exponents_are_tiny_and_positive() {
+        let mut f = b"#?RADIANCE\n\n-Y 1 +X 3\n".to_vec();
+        f.extend([255, 128, 1, 1, 200, 200, 200, 8, 10, 20, 30, 9]);
+        let img = decode(&f).unwrap();
+        for (i, v) in img.data.iter().enumerate() {
+            assert!(v.is_finite() && *v > 0.0 && *v < 1e-30, "value {i}: {v}");
+        }
+        // e = 1: 255 × 2^−135.
+        assert!((f64::from(img.data[0]) - 255.0 * 2f64.powi(-135)).abs() < 1e-44, "{}", img.data[0]);
     }
 }

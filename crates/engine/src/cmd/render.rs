@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("renderenvironment", "Render Environment", run_renderenv)
             .menu(&["View", "Render", "Render Environment"])
             .alias(&["renderenv"])
-            .params("{background?: {kind: sky|solid|gradient|image, color?, bottom?, top?, path?}, fog?: {enabled, color?: [r,g,b] 0-1, near? 0-1, far? 0-1}, ibl?: path (.hdr), exposure?: stops, whiteBalance?: {temperature?: kelvin, tint?: -1..1}} → {environment}"),
+            .params("{background?: {kind: sky|solid|gradient|image, color?, bottom?, top?, path? (image: PNG, JPEG, BMP, TIFF)}, fog?: {enabled, color?: [r,g,b] 0-1, near?, far? (distances in drawing units from the front of the model, along the view)}, ibl?: path (a Radiance .hdr file) | null, exposure?: stops, whiteBalance?: {temperature?: kelvin, tint?: -1 to 1}} → {environment}: the live view and RENDER show it"),
     ]
 }
 
@@ -193,6 +193,7 @@ fn run_renderenv(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(bg) = p.get("background") {
         let kind = bg.get("kind").and_then(Value::as_str).unwrap_or("sky");
         env.background = match kind {
+            "sky" => BackgroundKind::Sky,
             "solid" => {
                 let c = parse_color3(bg, "color").unwrap_or([1.0, 1.0, 1.0]);
                 BackgroundKind::Solid { color: c }
@@ -207,9 +208,17 @@ fn run_renderenv(s: &mut Session, p: &Value) -> Result<Value> {
                 if path.is_empty() {
                     return Err(bad("renderenvironment", "background.path is required for image backgrounds"));
                 }
+                if cadaddy_render::images::get(path).is_none() {
+                    return Err(bad(
+                        "renderenvironment",
+                        format!("the background image `{path}` can't be read: give an image file that exists (PNG, JPEG, BMP or TIFF)"),
+                    ));
+                }
                 BackgroundKind::Image { path: path.to_string() }
             }
-            _ => BackgroundKind::Sky,
+            other => {
+                return Err(bad("renderenvironment", format!("`background.kind` is sky, solid, gradient or image, not `{other}`")));
+            }
         };
     }
 
@@ -232,13 +241,11 @@ fn run_renderenv(s: &mut Session, p: &Value) -> Result<Value> {
                 env.ibl = None;
             }
             Value::String(path) => {
+                // Read now: a file that can't be used is said, not ignored at render time.
+                hdr_map(path)?;
                 env.ibl = Some(path.clone());
             }
-            _ => {
-                if let Some(path) = ibl.as_str() {
-                    env.ibl = Some(path.to_string());
-                }
-            }
+            _ => return Err(bad("renderenvironment", "`ibl` is the path of a Radiance .hdr file, or null for the sky")),
         }
     }
 
@@ -273,8 +280,39 @@ fn parse_color3(p: &Value, key: &str) -> Option<[f64; 3]> {
     Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)])
 }
 
-/// Apply the current session's render environment to a [`Lighting`] for rendering.
-pub(crate) fn apply_environment(s: &Session, lit: &mut cadaddy_render::light::Lighting) -> Result<()> {
+/// The last environment map read, by path (the live view applies the environment every frame).
+static HDR: std::sync::Mutex<Option<(String, Arc<cadaddy_render::hdr::HdrImage>)>> = std::sync::Mutex::new(None);
+
+/// The Radiance .hdr environment map at `path` (kept once read).
+fn hdr_map(path: &str) -> Result<Arc<cadaddy_render::hdr::HdrImage>> {
+    if let Some((p, m)) = HDR.lock().ok().and_then(|g| g.clone())
+        && p == path
+    {
+        return Ok(m);
+    }
+    let bytes = read_hdr(path)?;
+    let map = Arc::new(cadaddy_render::hdr::decode(&bytes).ok_or_else(|| {
+        bad("renderenvironment", format!("`{path}` isn't a Radiance .hdr file (it starts \"#?RADIANCE\" and holds RGBE pixels): give one of those"))
+    })?);
+    if let Ok(mut g) = HDR.lock() {
+        *g = Some((path.to_string(), Arc::clone(&map)));
+    }
+    Ok(map)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_hdr(path: &str) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| bad("renderenvironment", format!("the lighting file `{path}` can't be read ({e}): give a Radiance .hdr file")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_hdr(_path: &str) -> Result<Vec<u8>> {
+    Err(bad("renderenvironment", "lighting files can't be read in the browser"))
+}
+
+/// Apply the current session's render environment to a [`Lighting`]: RENDER's, and the live
+/// view's (GPU and CPU) every frame.
+pub fn apply_environment(s: &Session, lit: &mut cadaddy_render::light::Lighting) -> Result<()> {
     let env = match &s.state()?.render_environment {
         Some(e) => e.clone().sane(),
         None => return Ok(()),
@@ -319,16 +357,10 @@ pub(crate) fn apply_environment(s: &Session, lit: &mut cadaddy_render::light::Li
         }
     }
 
-    // IBL (image-based lighting from HDR).
+    // IBL (image-based lighting from HDR): the path tracer's environment, and the ambient
+    // term's sky. RENDERENVIRONMENT checked the file; one gone since is said here.
     if let Some(ibl_path) = &env.ibl {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Ok(bytes) = std::fs::read(ibl_path)
-                && let Some(hdr) = cadaddy_render::hdr::decode(&bytes)
-            {
-                lit.env_map = Some(std::sync::Arc::new(hdr));
-            }
-        }
+        lit.set_env_map(hdr_map(ibl_path)?);
     }
 
     Ok(())
