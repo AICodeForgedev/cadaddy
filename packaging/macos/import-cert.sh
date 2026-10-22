@@ -18,11 +18,16 @@ if [ -z "${APPLE_CERTIFICATE:-}" ]; then
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# Create a private per-run directory (mode 0700 via the umask above) so the decoded signing
+# container cannot be read by, or pre-created by, another local user in a shared temp directory.
+CERT_DIR="$(mktemp -d "$TMP/cadcraft-signing.XXXXXXXX")"
 KEYCHAIN="$TMP/cadcraft-signing.keychain-db"
-CERT="$TMP/cadcraft-signing.p12"
+CERT="$CERT_DIR/cadcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -f "$CERT"' EXIT
+trap 'rm -f "$CERT"; rm -rf "$CERT_DIR"' EXIT
+# Create the certificate file privately before writing, refusing to follow a pre-existing entry.
+( set -C; : >"$CERT" )
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"

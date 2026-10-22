@@ -79,10 +79,9 @@ fn extension(path: &str) -> String {
 fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let tmp = format!("{path}.cadcraft-tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-        Ok(())
+        // Exclusively create a fresh temporary file and rename it into place so a planted
+        // `<path>.cadcraft-tmp` symlink cannot redirect the export write (CWE-59).
+        crate::atomic_write::write_atomic(std::path::Path::new(path), bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

@@ -403,10 +403,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<usiz
 fn store(path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let tmp = format!("{path}.cadcraft-tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| bad("save", format!("{path}: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| bad("save", format!("{path}: {e}")))?;
-        Ok(())
+        // Exclusively create a fresh temporary file and rename it over `path`, so a planted
+        // `<path>.cadcraft-tmp` symlink cannot redirect the write onto another file (CWE-59).
+        crate::atomic_write::write_atomic(std::path::Path::new(path), bytes).map_err(|e| bad("save", format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {
