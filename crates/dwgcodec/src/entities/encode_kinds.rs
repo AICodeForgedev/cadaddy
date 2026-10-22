@@ -782,6 +782,13 @@ impl Cursor<'_> {
         }
         .filter(|h| *h != 0)
     }
+    /// Whether the next group is a hatch spline edge's fit point count (97), not its boundary
+    /// path's source object count (also 97): fit points (11) follow a count, and after no fit
+    /// points comes another edge (72) or the path's own 97.
+    fn fit_count_next(&self) -> bool {
+        let (Some(g), next) = (self.gs.get(self.at), self.gs.get(self.at + 1).map(|g| g.code)) else { return false };
+        g.code == 97 && (next == Some(11) || (num(&g.value) == Some(0.0) && matches!(next, Some(72 | 97))))
+    }
     /// Moves to the first group with `code` (from here on).
     fn seek(&mut self, code: i32) -> bool {
         match self.gs.iter().skip(self.at).position(|g| g.code == code) {
@@ -924,15 +931,17 @@ fn hatch(w: &mut ObjWriter, r: &Rec) {
                                 w.d.bd(c.fd(42, 1.0));
                             }
                         }
+                        // Fit data (R2010+); an earlier version's edge has none, but the
+                        // groups are passed over all the same so the next edge reads in step.
+                        let nf = if c.fit_count_next() { cap(c.i(97), &c) } else { 0 };
+                        let fit: Vec<[f64; 2]> = (0..nf).map(|_| c.p2(11)).collect();
+                        let tangents = if nf > 0 { Some((c.p2(12), c.p2(13))) } else { None };
                         if w.at_least(Version::R2010) {
-                            let nf = cap(c.i(97), &c);
                             w.d.bl(nf as i32);
-                            if nf > 0 {
-                                for _ in 0..nf {
-                                    w.d.rd2(c.p2(11));
-                                }
-                                w.d.rd2(c.p2(12));
-                                w.d.rd2(c.p2(13));
+                            fit.iter().for_each(|p| w.d.rd2(*p));
+                            if let Some((start, end)) = tangents {
+                                w.d.rd2(start);
+                                w.d.rd2(end);
                             }
                         }
                     }
