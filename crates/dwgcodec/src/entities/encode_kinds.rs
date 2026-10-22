@@ -1887,9 +1887,13 @@ pub fn object(
         "GROUP" => types::GROUP,
         "MLINESTYLE" => types::MLINESTYLE,
         "XRECORD" => types::XRECORD,
-        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES" => {
+        "ACDBDICTIONARYWDFLT" | "PLOTSETTINGS" | "SCALE" | "DICTIONARYVAR" | "IMAGEDEF" | "IMAGEDEF_REACTOR" | "MLEADERSTYLE" | "RASTERVARIABLES"
+        | "SORTENTSTABLE" | "MATERIAL" | "VISUALSTYLE" | "FIELD" => {
             names.class(name)?
         }
+        // TABLESTYLE: binary layout doesn't match what the bridge reader produces for cell
+        // styles — kept on the stash path until verified (MUST 1b / MUST 6).
+        "TABLESTYLE" => return None,
         _ => return None,
     };
     let mut w = ObjWriter::new(v, t, handle);
@@ -1965,6 +1969,10 @@ pub fn object(
             w.d.rc(r.id(281, 0) as u8);
             w.d.rd2(r.p2(11));
         }
+        "SORTENTSTABLE" => sortentstable(&mut w, r),
+        "MATERIAL" => material(&mut w, r),
+        "VISUALSTYLE" => visualstyle(&mut w, r),
+        "FIELD" => field_obj(&mut w, r),
         _ => w.d.bl(r.id(90, 2) as i32),
     }
     Some(w.finish())
@@ -2311,4 +2319,255 @@ struct Dash {
     rotation: f64,
     offset: [f64; 2],
     text: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Objects added by Q342 (dwgwrite3): SORTENTSTABLE, MATERIAL, VISUALSTYLE,
+// FIELD. TABLESTYLE stays on the stash path (returns None above).
+// ---------------------------------------------------------------------------
+
+/// SORTENTSTABLE (spec §20.4.90): draw-order table for a block space.
+///
+/// DXF groups after AcDbSortentsTable: 330 (block owner), pairs of 331 (entity) and 5 (sort
+/// handle). DWG: BL count, sort handles (5), BL count, entity handles (4), block owner (4).
+fn sortentstable(w: &mut ObjWriter, r: &Rec) {
+    let marker = r.0.iter().position(|g| g.code == 100 && matches!(&g.value, super::Value::Str(s) if s == "AcDbSortentsTable"));
+    let tail = marker.and_then(|i| r.0.get(i + 1..)).unwrap_or(&[]);
+    let block_owner = tail.iter().find(|g| g.code == 330).and_then(|g| handle_of(&g.value));
+    let mut entities: Vec<u64> = Vec::new();
+    let mut sorts: Vec<u64> = Vec::new();
+    let mut cur_ent: Option<u64> = None;
+    for g in tail {
+        match g.code {
+            331 => cur_ent = handle_of(&g.value),
+            5 => {
+                if let (Some(e), Some(s)) = (cur_ent.take(), handle_of(&g.value)) {
+                    entities.push(e);
+                    sorts.push(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    let n = sorts.len().min(entities.len());
+    w.d.bl(n as i32);
+    for s in sorts.iter().take(n) {
+        w.href(5, Some(*s));
+    }
+    w.d.bl(n as i32);
+    for e in entities.iter().take(n) {
+        w.href(4, Some(*e));
+    }
+    w.href(4, block_owner);
+}
+
+/// MATERIAL (spec §20.4.83): a material definition.
+///
+/// Writes the binary DWG record from its DXF groups: name, description, then for each channel
+/// (ambient, diffuse, specular, reflection, opacity, bump, refraction) the colour method,
+/// value, factor and mapper. Ambient and specular channels are read from DXF groups when
+/// present; defaults are zero/inherit.
+fn material(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(1).unwrap_or(""));
+    w.text(r.s(2).unwrap_or(""));
+    // Ambient channel (DXF 70 method, 90 color value, 40 factor).
+    w.d.bl(r.id(70, 0) as i32);
+    w.d.bl(r.id(90, 0) as i32);
+    w.d.bl(r.id(40, 0) as i32);
+    // Diffuse channel.
+    let has_diffuse_color = r.i(71).is_some();
+    w.d.bl(i32::from(has_diffuse_color));
+    w.d.bl(r.id(91, 0) as i32);
+    w.d.bd(r.fd(41, 1.0));
+    // Diffuse map.
+    let has_diffuse_map = r.s(3).is_some();
+    w.d.bl(i32::from(has_diffuse_map));
+    if has_diffuse_map {
+        w.d.bd(r.fd(42, 1.0));
+        w.text(r.s(3).unwrap_or(""));
+        w.d.bl(r.id(73, 1) as i32);
+        w.d.bl(0); // tiling
+        w.d.bl(1); // auto-transform
+        let mx: Vec<f64> = r.all(43).filter_map(|g| match &g.value {
+            super::Value::Real(f) => Some(*f),
+            super::Value::Int(i) => Some(*i as f64),
+            _ => None,
+        }).take(16).collect();
+        for i in 0..16 {
+            w.d.bd(mx.get(i).copied().unwrap_or(if i % 5 == 0 { 1.0 } else { 0.0 }));
+        }
+    }
+    // Specular glossiness factor.
+    w.d.bd(r.fd(44, 1.0));
+    // Specular colour (DXF 74 method, 94 color value, 45 factor).
+    w.d.bl(r.id(74, 0) as i32);
+    w.d.bl(r.id(94, 0) as i32);
+    w.d.bd(r.fd(45, 1.0));
+    w.d.bl(0); // no specular map
+    // Reflection.
+    w.d.bd(r.fd(146, 0.0));
+    w.d.bl(0); // no reflection map
+    // Opacity.
+    w.d.bd(r.fd(140, 1.0));
+    w.d.bl(0); // no opacity map
+    // Bump.
+    w.d.bl(if r.s(8).is_some() { 1 } else { 0 });
+    if r.s(8).is_some() {
+        w.d.bd(r.fd(143, 1.0));
+        w.text(r.s(8).unwrap_or(""));
+        w.d.bl(1); // projection (planar)
+        w.d.bl(0); // tiling
+        w.d.bl(1); // auto-transform
+        for i in 0..16 {
+            w.d.bd(if i % 5 == 0 { 1.0 } else { 0.0 });
+        }
+    }
+    // Refraction.
+    w.d.bd(r.fd(145, 1.0));
+    w.d.bl(0); // no refraction map
+    // From R2007: genproc fields.
+    if w.at_least(Version::R2007) {
+        w.d.bl(0);
+        w.d.bl(0);
+        w.text("");
+        w.d.b(false);
+        if w.at_least(Version::R2010) {
+            w.d.b(false);
+            w.d.bl(0);
+            w.d.bl(0);
+        }
+    }
+}
+
+/// A colour written as CMC from an ACI index (spec §2.11).
+fn cmc_from_aci(w: &mut ObjWriter, aci: i64) {
+    w.d.bs(aci as i16);
+    if w.at_least(Version::R2004) {
+        let raw = match aci {
+            256 => 0xC000_0000u32,
+            0 => 0xC100_0000u32,
+            i => 0xC300_0000u32 | (i as u32 & 0xFF),
+        };
+        w.d.bl(raw as i32);
+        w.d.rc(0);
+    }
+}
+
+/// VISUALSTYLE (spec §20.4.84): rendering style definition.
+fn visualstyle(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(2).unwrap_or(""));
+    w.d.bl(r.id(70, 0) as i32);
+    // Face settings.
+    w.d.bl(r.id(71, 0) as i32);
+    w.d.bl(r.id(72, 0) as i32);
+    w.d.bl(r.id(73, 0) as i32);
+    w.d.bd(r.fd(40, 0.6));
+    w.d.bd(r.fd(41, 30.0));
+    cmc_from_aci(w, r.id(62, 256));
+    cmc_from_aci(w, r.id(63, 7));
+    w.d.bl(r.id(90, 0) as i32);
+    // Edge settings.
+    w.d.bl(r.id(74, 1) as i32);
+    w.d.bl(r.id(91, 0) as i32);
+    cmc_from_aci(w, r.id(64, 256));
+    cmc_from_aci(w, r.id(65, 257));
+    w.d.bl(r.id(75, 1) as i32);
+    w.d.bl(r.id(175, 1) as i32);
+    w.d.bl(r.id(92, 1) as i32);
+    // Edge modifiers.
+    w.d.bl(r.id(174, 0) as i32);
+    cmc_from_aci(w, r.id(66, 257));
+    w.d.bd(r.fd(43, -2.0));
+    w.d.bl(r.id(76, 0) as i32);
+    w.d.bl(r.id(77, 6) as i32);
+    w.d.bl(r.id(78, 0) as i32);
+    cmc_from_aci(w, r.id(67, 257));
+    w.d.bl(r.id(79, 5) as i32);
+    // Display settings.
+    w.d.bl(r.id(170, 0) as i32);
+    w.d.bd(r.fd(44, 0.0));
+    w.d.bl(r.id(171, 0) as i32);
+    // From R2010.
+    if w.at_least(Version::R2010) {
+        w.d.bd(r.fd(45, 0.0));
+        w.d.bl(r.id(176, 0) as i32);
+        w.d.bl(r.id(93, 0) as i32);
+        w.d.bl(r.id(172, 0) as i32);
+        w.d.bl(r.id(94, 0) as i32);
+        cmc_from_aci(w, r.id(68, 0));
+    }
+    // From R2013.
+    if w.at_least(Version::R2013) {
+        w.d.bl(r.id(177, 0) as i32);
+        w.d.bl(r.id(95, 0) as i32);
+        cmc_from_aci(w, r.id(69, 0));
+        w.d.bd(r.fd(46, 0.0));
+        w.d.bd(r.fd(47, 0.0));
+        w.d.bd(r.fd(48, 0.0));
+    }
+}
+
+/// FIELD (spec §20.4.85): a calculated field expression.
+fn field_obj(w: &mut ObjWriter, r: &Rec) {
+    w.text(r.s(1).unwrap_or("")); // evaluator id
+    // The field code: group 2 first chunk, then 3 for continuations.
+    let code_first = r.s(2).unwrap_or("");
+    let continuations: Vec<&str> = r.all(3).filter_map(|g| match &g.value {
+        super::Value::Str(s) => Some(s.as_str()),
+        _ => None,
+    }).collect();
+    let mut full_code = code_first.to_string();
+    for c in &continuations {
+        full_code.push_str(c);
+    }
+    w.text(&full_code);
+    // Child field count and handles.
+    let child_handles: Vec<u64> = r.all(360).filter_map(|g| handle_of(&g.value)).collect();
+    w.d.bl(child_handles.len() as i32);
+    for ch in &child_handles {
+        w.href(3, Some(*ch));
+    }
+    // Object reference count and handles.
+    let obj_handles: Vec<u64> = r.all(331).filter_map(|g| handle_of(&g.value)).collect();
+    w.d.bl(obj_handles.len() as i32);
+    for oh in &obj_handles {
+        w.href(5, Some(*oh));
+    }
+    // Format string.
+    w.text(r.s(300).unwrap_or(""));
+    // Evaluation option, filing option, field state, evaluation status, evaluation error code.
+    w.d.bl(r.id(91, 0) as i32);
+    w.d.bl(r.id(92, 0) as i32);
+    w.d.bl(r.id(94, 0) as i32);
+    w.d.bl(r.id(95, 0) as i32);
+    w.d.bl(r.id(96, 0) as i32);
+    // The value: type (93) and then the appropriate value.
+    let vtype = r.id(93, 0);
+    w.d.bl(vtype as i32);
+    match vtype {
+        0 => {}
+        1 => w.d.bl(r.all(90).nth(1).and_then(|g| match &g.value {
+            super::Value::Int(i) => Some(*i as i32),
+            _ => None,
+        }).unwrap_or(0)),
+        2 => w.d.bd(r.all(140).nth(1).and_then(|g| match &g.value {
+            super::Value::Real(f) => Some(*f),
+            _ => None,
+        }).unwrap_or(0.0)),
+        4 => {
+            let first = r.s(301).unwrap_or("");
+            let more: Vec<&str> = r.all(9).filter_map(|g| match &g.value {
+                super::Value::Str(s) => Some(s.as_str()),
+                _ => None,
+            }).collect();
+            let mut full = first.to_string();
+            for m in &more {
+                full.push_str(m);
+            }
+            w.text(&full);
+            let vlen = r.id(98, full.len() as i64);
+            w.d.bl(vlen as i32);
+        }
+        _ => {}
+    }
 }
