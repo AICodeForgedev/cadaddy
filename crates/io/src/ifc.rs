@@ -66,6 +66,9 @@ enum Class {
     Conduit,
     /// Cable tray: IfcCableCarrierSegment, CABLETRAYSEGMENT.
     CableTray,
+    /// Cable outside conduit (a homerun): IfcCableSegment, CABLESEGMENT.
+    Cable,
+    CableFitting,
     LightFixture,
     Outlet,
     SwitchingDevice,
@@ -110,6 +113,8 @@ impl Class {
             Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
             Class::Conduit => ("IfcCableCarrierSegment", "CONDUITSEGMENT"),
             Class::CableTray => ("IfcCableCarrierSegment", "CABLETRAYSEGMENT"),
+            Class::Cable => ("IfcCableSegment", "CABLESEGMENT"),
+            Class::CableFitting => ("IfcCableFitting", "NOTDEFINED"),
             Class::LightFixture => ("IfcLightFixture", "NOTDEFINED"),
             Class::Outlet => ("IfcOutlet", "POWEROUTLET"),
             Class::SwitchingDevice => ("IfcSwitchingDevice", "TOGGLESWITCH"),
@@ -151,6 +156,8 @@ impl Class {
             "DuctSegment" => Class::Duct,
             "PipeSegment" => Class::Pipe,
             "CableCarrierSegment" => Class::Conduit,
+            "CableSegment" => Class::Cable,
+            "CableFitting" => Class::CableFitting,
             "LightFixture" => Class::LightFixture,
             "Outlet" => Class::Outlet,
             "SwitchingDevice" => Class::SwitchingDevice,
@@ -272,6 +279,7 @@ fn class_of(e: &Entity) -> Kind {
                         Some("duct") => Class::DuctFitting,
                         Some("pipe") => Class::PipeFitting,
                         Some("conduit") | Some("tray") => Class::ConduitFitting,
+                        Some("cable") => Class::CableFitting,
                         _ => Class::DuctFitting,
                     }
                 } else {
@@ -280,6 +288,7 @@ fn class_of(e: &Entity) -> Kind {
                         Some("pipe") => Class::Pipe,
                         Some("conduit") => Class::Conduit,
                         Some("tray") => Class::CableTray,
+                        Some("cable") => Class::Cable,
                         Some("light_fixture") => Class::LightFixture,
                         Some("outlet") | Some("receptacle") | Some("data_outlet") | Some("floor_box") => Class::Outlet,
                         Some("switch") | Some("disconnect") => Class::SwitchingDevice,
@@ -1803,7 +1812,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 40] = [
+    const KNOWN: [&str; 42] = [
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -1831,10 +1840,12 @@ fn class_name(upper: &str) -> String {
         "DuctSegment",
         "PipeSegment",
         "CableCarrierSegment",
+        "CableSegment",
         "GeographicElement",
         "DuctFitting",
         "PipeFitting",
         "CableCarrierFitting",
+        "CableFitting",
         "AirTerminal",
         "FireSuppressionTerminal",
         "UnitaryEquipment",

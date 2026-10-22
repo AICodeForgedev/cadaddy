@@ -369,7 +369,7 @@ fn parse_mounting_height(texts: &[&(String, [f64; 2])], kind: &str) -> (f64, &'s
 }
 
 /// Detect panels on the DEVICE layer (filled rectangles with panel tags).
-fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
+pub(crate) fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
     let mut rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
     for e in d.model.iter() {
         if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
