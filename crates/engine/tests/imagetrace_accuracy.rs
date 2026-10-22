@@ -236,14 +236,19 @@ fn trace(img: &Img, deg: f64) -> Traced {
 }
 
 fn trace_with(img: &Img, deg: f64, params: serde_json::Value) -> Traced {
+    trace_in(img, deg, FRAME, params)
+}
+
+/// Trace `img` placed over `frame` (drawing units), the frame it was rendered from.
+fn trace_in(img: &Img, deg: f64, frame: (f64, f64, f64, f64), params: serde_json::Value) -> Traced {
     let path = format!("trace-accuracy-{}-{}.png", std::process::id(), TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
     cadaddy_render::images::insert(&path, cadaddy_render::images::Raster::new(img.w as u32, img.h as u32, img.px.clone()).unwrap());
-    let k = (FRAME.2 - FRAME.0) / img.w as f64;
+    let k = (frame.2 - frame.0) / img.w as f64;
     // Image pixels (y up from the lower left) to the drawing: centre to centre, turned back.
     let (c, s) = ((-deg).to_radians().cos(), (-deg).to_radians().sin());
     let turn = |p: Vec2| Vec2::new(c * p.x - s * p.y, s * p.x + c * p.y);
     let centre_px = v(img.w as f64 / 2.0, img.h as f64 / 2.0);
-    let centre = v((FRAME.0 + FRAME.2) / 2.0, (FRAME.1 + FRAME.3) / 2.0);
+    let centre = v((frame.0 + frame.2) / 2.0, (frame.1 + frame.3) / 2.0);
     let u = turn(v(k, 0.0));
     let vv = turn(v(0.0, k));
     let o = centre + turn(-centre_px) * k;
@@ -375,8 +380,8 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
     s.lines.1 = p.lines.len();
     s.line_err = mean(&errs) * px_per_unit;
     s.line_len_err = mean(&len_errs);
-    // Extra lines: traced where the source has nothing. Both endpoints AND midpoint must all be
-    // far from every source item for a line to count as extra (not just the midpoint alone).
+    // Extra lines: traced where the source has nothing. A traced line is on the drawing only
+    // when both its ends and its middle lie on a source item; any of the three off it is extra.
     let on_source = |q: Vec2| {
         p.lines.iter().any(|l| seg_dist(q, l.0, l.1) <= tol)
             || p.walls.iter().any(|w| seg_dist(q, w.0, w.1) <= w.2 / 2.0 + tol)
@@ -384,7 +389,7 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
             || p.arcs.iter().any(|a| (q.dist(a.0) - a.1).abs() <= tol)
             || p.texts.iter().any(|x| Bounds2::new(x.0, x.0 + v(x.1 * x.2.len() as f64, x.1)).expand(tol).contains(q))
     };
-    s.extra_lines = t.lines.iter().filter(|l| !on_source(l.0) && !on_source(l.1) && !on_source((l.0 + l.1) * 0.5)).count();
+    s.extra_lines = t.lines.iter().filter(|l| !on_source(l.0) || !on_source(l.1) || !on_source((l.0 + l.1) * 0.5)).count();
     // Circles and arcs: centre and radius within the tolerance.
     let mut cerr = Vec::new();
     // A circle broken by a speck may come back as an arc of most of it (three quarters or more).
@@ -562,6 +567,44 @@ fn score_table_and_thresholds() {
     eprintln!("{}\n\nworst: {:?}", table.join("\n"), worst.iter().take(4).collect::<Vec<_>>());
 }
 
+/// Measured on this bench (the score table): invented circles, arcs and text boxes at most, and
+/// circles and arcs found at least, per case: (plan, dpi, dirt, extra circles, extra arcs, extra
+/// texts, circles, arcs). The invented circles and arcs are fragments: a line through a column
+/// leaves a piece of the column as an arc, and at 300 dpi the clean column's outline traces as a
+/// circle and an arc of it (at most one of each); noise at 100 dpi groups into text boxes.
+const MEASURED: &[(&str, u32, Dirt, usize, usize, usize, usize, usize)] = &[
+    ("flat", 100, Dirt::Clean, 0, 0, 0, 2, 2),
+    ("flat", 100, Dirt::Noise, 0, 0, 3, 0, 1),
+    ("flat", 100, Dirt::Rotated, 0, 0, 15, 0, 0),
+    ("flat", 100, Dirt::Jpeg, 0, 0, 1, 1, 2),
+    ("flat", 100, Dirt::All, 0, 0, 19, 0, 0),
+    ("flat", 200, Dirt::Clean, 0, 0, 0, 2, 2),
+    ("flat", 200, Dirt::Noise, 0, 0, 0, 2, 2),
+    ("flat", 200, Dirt::Rotated, 0, 1, 0, 2, 2),
+    ("flat", 200, Dirt::Jpeg, 0, 0, 0, 2, 2),
+    ("flat", 200, Dirt::All, 1, 0, 0, 2, 2),
+    ("flat", 300, Dirt::Clean, 1, 1, 0, 2, 2),
+    ("flat", 300, Dirt::Noise, 0, 2, 0, 2, 2),
+    ("flat", 300, Dirt::Rotated, 1, 0, 0, 2, 2),
+    ("flat", 300, Dirt::Jpeg, 1, 1, 0, 2, 2),
+    ("flat", 300, Dirt::All, 0, 1, 0, 2, 2),
+    ("angles", 100, Dirt::Clean, 1, 0, 0, 1, 0),
+    ("angles", 100, Dirt::Noise, 0, 0, 0, 1, 0),
+    ("angles", 100, Dirt::Rotated, 1, 0, 0, 1, 0),
+    ("angles", 100, Dirt::Jpeg, 1, 0, 0, 1, 0),
+    ("angles", 100, Dirt::All, 0, 0, 0, 1, 0),
+    ("angles", 200, Dirt::Clean, 0, 0, 0, 1, 0),
+    ("angles", 200, Dirt::Noise, 1, 0, 0, 1, 0),
+    ("angles", 200, Dirt::Rotated, 1, 0, 0, 1, 0),
+    ("angles", 200, Dirt::Jpeg, 0, 0, 0, 1, 0),
+    ("angles", 200, Dirt::All, 0, 0, 1, 1, 0),
+    ("angles", 300, Dirt::Clean, 1, 0, 0, 1, 0),
+    ("angles", 300, Dirt::Noise, 0, 0, 0, 1, 0),
+    ("angles", 300, Dirt::Rotated, 1, 0, 0, 1, 0),
+    ("angles", 300, Dirt::Jpeg, 1, 0, 0, 1, 0),
+    ("angles", 300, Dirt::All, 0, 0, 0, 1, 0),
+];
+
 /// The thresholds every case must meet. At 200 dpi and finer (a 1:50 plan's 30 cm column is 47
 /// pixels across) nearly everything is found, whatever the dirt; at 100 dpi (12 pixels) thin
 /// lines and small circles can break up once the scan is turned or dirty.
@@ -595,7 +638,7 @@ fn check(name: &str, dpi: f64, dirt: Dirt, s: &Score) {
         assert_eq!(s.extra_texts, 0, "extra text boxes on clean scan, {case}");
     }
     // Circles (or arcs of three quarters of them): all on clean scans; all on dirty ≥200 dpi
-    // (measured: every case finds all circles); at 100 dpi dirty, at least half.
+    // (measured: every case finds all circles); at 100 dpi dirty, at least as measured (below).
     if dirt == Dirt::Clean {
         assert_eq!(s.circles.0, s.circles.1, "circles found, {case}");
         assert_eq!(s.arcs.0, s.arcs.1, "arcs found, {case}");
@@ -603,8 +646,6 @@ fn check(name: &str, dpi: f64, dirt: Dirt, s: &Score) {
         assert_eq!(s.circles.0, s.circles.1, "circles found (fine dirty), {case}");
         assert_eq!(s.arcs.0, s.arcs.1, "arcs found (fine dirty), {case}");
     }
-    // 100 dpi dirty: circles may be partially or fully lost (measured 0/2 at 100 dpi Noise);
-    // no floor assertion — the clean and fine-dirty checks are the meaningful ones.
     if s.circles.0 > 0 {
         assert!(!s.circle_err.is_nan(), "circle_err NaN with found circles, {case}");
         assert!(s.circle_err <= if dirt == Dirt::Clean { 1.0 } else { 3.0 }, "circle error in pixels, {case}");
@@ -612,9 +653,17 @@ fn check(name: &str, dpi: f64, dirt: Dirt, s: &Score) {
         // If we expect circles but found none, circle_err must be NaN, not 0.
         assert!(s.circle_err.is_nan(), "circle_err should be NaN when no circles found, {case}");
     }
-    // Extra circles/arcs: the tracer may produce small arc fragments from geometry overlaps
-    // (e.g. a line through a column at high DPI). The invented_shapes_are_caught_by_scoring test
-    // proves invented shapes register in the score; here we print them in the table for review.
+    // Invented circles, arcs and text boxes at most as measured (none where none were), and at
+    // 100 dpi on a dirty scan at least the circles and arcs measured.
+    let &(.., xc, xa, xt, circles, arcs) =
+        MEASURED.iter().find(|m| m.0 == name && f64::from(m.1) == dpi && m.2 == dirt).unwrap_or_else(|| panic!("no measured row, {case}"));
+    assert!(s.extra_circles <= xc, "extra circles (measured {xc}), {case}");
+    assert!(s.extra_arcs <= xa, "extra arcs (measured {xa}), {case}");
+    assert!(s.extra_texts <= xt, "extra text boxes (measured {xt}), {case}");
+    if !fine && dirt != Dirt::Clean {
+        assert!(s.circles.0 >= circles, "circles found at 100 dpi dirty (measured {circles}), {case}");
+        assert!(s.arcs.0 >= arcs, "arcs found at 100 dpi dirty (measured {arcs}), {case}");
+    }
 }
 
 // ---------------- regression fixtures ----------------
@@ -668,53 +717,51 @@ fn the_worst_case_floor() {
     assert_eq!(s.texts, (3, 3), "{s:?}");
 }
 
-/// MUST 4: On a full-size sheet (36×24 in at 200 dpi ≈ 7200×4800 px equivalent), a row of 3–4
-/// identical fixture-sized symbols (small outlines, ~40 px, ~75 px apart) must be traced as
-/// geometry (circles), not boxed as text. We use a cropped canvas with the same min(w,h) as a
-/// full-size sheet to exercise the big-letter limit at that scale.
+/// A row of four device symbols on a full-size sheet (36 × 24 in at 200 dpi: 4800 px on its
+/// short side), about 75 px on centre: traced as circles, not boxed as text. Ordinary letters
+/// there were allowed up to 2.5% of the short side (120 px), so a lone symbol was a letter. Two
+/// symbol sizes: 40 px and 32 px outlines (5 and 4 mm).
 #[test]
 fn fixture_symbols_on_a_full_size_sheet_are_not_text() {
-    // 36×24 in at 200 dpi → min(w,h) = 4800 px. We don't need the full image; a strip that
-    // has the same min(w,h) is enough to test the text rule at that scale.
-    // The big-letter limit at 6% of 4800 = 288 px; our fixture symbols at ~40 px diameter
-    // are well under that, but they also have "company" on their row, so they could trigger
-    // the grouping rule. They must stay as circles / geometry.
-    let min_dim = 4800usize;
-    // A strip tall enough for the fixtures, wide enough to be the long side.
-    let strip_h = min_dim; // this IS the min dimension
-    let strip_w = min_dim + 100; // just wider so min(w,h) = strip_h
-    // Build a plan with 4 fixture circles placed in a row.
-    let mut plan = Plan::default();
-    // Fixtures at the centre of the strip, in drawing units. The strip maps to (0..strip_w)
-    // drawing units (1:1) for simplicity.
-    let cy = strip_h as f64 / 2.0;
-    let r = 20.0; // radius in drawing units (~40 px diameter)
-    for i in 0..4 {
-        let cx = (strip_w as f64 / 2.0) - 120.0 + 80.0 * f64::from(i);
-        plan.circles.push((v(cx, cy), r));
+    // A strip with the sheet's short side; drawing units are pixels.
+    let (strip_w, strip_h) = (4900.0, 4800.0);
+    for diameter in [40.0, 32.0] {
+        let mut plan = Plan::default();
+        let (cx, cy) = (strip_w / 2.0, strip_h / 2.0);
+        for i in 0..4 {
+            plan.circles.push((v(cx - 112.5 + 75.0 * f64::from(i), cy), diameter / 2.0));
+        }
+        let sess = drawing(&plan);
+        let d = sess.doc().unwrap();
+        let frame = Bounds2::new(v(0.0, 0.0), v(strip_w, strip_h));
+        let view = cadaddy_render::raster::View::fit(&frame, strip_w as u32, strip_h as u32, 0.0);
+        let list = cadaddy_render::build(d, &Space::Model, &cadaddy_render::Options { tolerance: 0.25 / view.scale, ..Default::default() });
+        // The sheet's fine pen: 0.25 mm at 200 dpi.
+        let o =
+            cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 2.0, px_per_mm: 0.0, antialias: true };
+        let png = cadaddy_render::raster::render_png(&list, &view, &o).unwrap();
+        let r_img = cadaddy_render::images::decode(&png).unwrap();
+        let img = Img { w: r_img.width as usize, h: r_img.height as usize, px: r_img.rgba.clone() };
+        // Placed over the frame it was rendered from, so the plan and the trace share units.
+        let t = trace_in(&img, 0.0, (0.0, 0.0, strip_w, strip_h), json!({}));
+        let s = score(&plan, &t, img.w as f64 / strip_w);
+        assert_eq!(s.circles, (4, 4), "{diameter} px: {s:?} {:?} {:?}", t.circles, t.boxes);
+        assert_eq!(s.extra_texts, 0, "{diameter} px symbols boxed as text: {:?}", t.boxes);
+        assert_eq!(s.extra_circles, 0, "{diameter} px: {s:?}");
     }
-    // Build a drawing and render at the strip dimensions. Instead of going through render()
-    // (which uses FRAME/PAPER_MM), we use the same drawing→image machinery directly so that
-    // the image has the right min(w,h).
-    let sess = drawing(&plan);
-    let d = sess.doc().unwrap();
-    let frame = Bounds2::new(v(0.0, 0.0), v(strip_w as f64, strip_h as f64));
-    let view = cadaddy_render::raster::View::fit(&frame, strip_w as u32, strip_h as u32, 0.0);
-    let list = cadaddy_render::build(d, &Space::Model, &cadaddy_render::Options { tolerance: 0.25 / view.scale, ..Default::default() });
-    let o = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.5, px_per_mm: 0.0, antialias: true };
-    let png = cadaddy_render::raster::render_png(&list, &view, &o).unwrap();
-    let r_img = cadaddy_render::images::decode(&png).unwrap();
-    let img = Img { w: r_img.width as usize, h: r_img.height as usize, px: r_img.rgba.clone() };
-    let t = trace(&img, 0.0);
-    let px_per_unit = img.w as f64 / strip_w as f64;
-    let s = score(&plan, &t, px_per_unit);
-    // The symbols must NOT be boxed as text — they must stay as geometry (circles, arcs, or
-    // lines). The tracer may or may not detect them as circles specifically; the key is that the
-    // text rule doesn't swallow them.
-    assert_eq!(s.texts, (0, 0), "no text expected: {s:?}");
-    assert_eq!(s.extra_texts, 0, "fixture circles boxed as text: {s:?}");
-    let geom_count = t.circles.len() + t.arcs.len() + t.lines.len();
-    assert!(geom_count > 0, "fixture symbols must appear as some geometry: {s:?}");
+}
+
+/// A title 8 mm tall on a 300 dpi print (about 95 px) is still boxed as text, not traced as
+/// strokes: the letter limits follow the scan's scale.
+#[test]
+fn a_title_8_mm_tall_at_300_dpi_is_text() {
+    // The sheet is 1000 units across 200 mm of paper: 8 mm is 40 units (95 px at 300 dpi).
+    let mut plan = Plan::default();
+    plan.texts.push((v(250.0, 330.0), 40.0, "SITE PLAN".to_string()));
+    let s = run(&plan, 300.0, Dirt::Clean);
+    assert_eq!(s.texts, (plan.texts.len(), plan.texts.len()), "{s:?}");
+    assert_eq!(s.extra_texts, 0, "{s:?}");
+    assert_eq!(s.extra_lines, 0, "{s:?}");
 }
 
 /// A deliberately invented circle/wall/text box in a unit-level score must fail (not pass
@@ -737,6 +784,17 @@ fn invented_shapes_are_caught_by_scoring() {
     t3.boxes.push(Bounds2::new(v(0.0, 0.0), v(50.0, 20.0)));
     let s3 = score(&p, &t3, 1.0);
     assert_eq!(s3.extra_texts, 1, "invented text box must be extra: {s3:?}");
+    // A traced line crossing a source line at 45°: its middle is on it, its ends are not.
+    let mut p4 = Plan::default();
+    p4.lines.push((v(0.0, 0.0), v(200.0, 0.0)));
+    let mut t4 = Traced::default();
+    t4.lines.push((v(50.0, -50.0), v(150.0, 50.0)));
+    let s4 = score(&p4, &t4, 1.0);
+    assert_eq!(s4.extra_lines, 1, "a wrong-angle line across a source line is extra: {s4:?}");
+    // The same line traced where it is: not extra.
+    let mut t5 = Traced::default();
+    t5.lines.push((v(0.0, 0.0), v(200.0, 0.0)));
+    assert_eq!(score(&p4, &t5, 1.0).extra_lines, 0);
     // An empty-match error metric must be NaN, not 0.
     assert!(s.circle_err.is_nan(), "circle_err must be NaN when no circles found: {}", s.circle_err);
     assert!(s2.wall_err.is_nan(), "wall_err must be NaN when no walls found: {}", s2.wall_err);

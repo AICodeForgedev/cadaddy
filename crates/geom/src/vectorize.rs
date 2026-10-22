@@ -191,6 +191,74 @@ fn thin(b: &mut Bits) {
     }
 }
 
+/// A closed outline round a hole across most of it (a symbol's circle or box, a letter O): from
+/// the middle of its box, every way out meets the outline only after a third of the way.
+fn ring(comp: &[usize], w: usize) -> bool {
+    if w == 0 || comp.is_empty() {
+        return false;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+    for &i in comp {
+        let (x, y) = (i % w, i / w);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+    let Some(cells) = bw.checked_mul(bh) else { return false };
+    let mut ink = vec![false; cells];
+    for &i in comp {
+        if let Some(c) = ink.get_mut((i / w - y0) * bw + (i % w - x0)) {
+            *c = true;
+        }
+    }
+    let at = |x: i64, y: i64| {
+        x >= 0 && y >= 0 && (x as usize) < bw && (y as usize) < bh && ink.get(y as usize * bw + x as usize).copied().unwrap_or(false)
+    };
+    let (cx, cy) = ((bw / 2) as i64, (bh / 2) as i64);
+    [(1, 0, bw), (-1, 0, bw), (0, 1, bh), (0, -1, bh)].iter().all(|&(dx, dy, span)| {
+        let half = (span / 2) as i64;
+        // The first ink on the way out: past a third of the half-span, and before the edge.
+        (0..=half + 1).find(|k| at(cx + dx * k, cy + dy * k)).is_some_and(|k| k * 3 >= half)
+    })
+}
+
+/// The most common length of the ink runs across rows and columns: a fine line's width, pixels.
+fn typical_run(b: &Bits) -> f64 {
+    const LONGEST: usize = 64;
+    let mut count = [0usize; LONGEST + 1];
+    let mut tally = |run: usize| {
+        if let Some(c) = count.get_mut(run.min(LONGEST)) {
+            *c += 1;
+        }
+    };
+    let on = |x: usize, y: usize| b.on.get(y * b.w + x).copied().unwrap_or(false);
+    for y in 0..b.h {
+        let mut run = 0;
+        for x in 0..b.w {
+            if on(x, y) {
+                run += 1;
+            } else if run > 0 {
+                tally(run);
+                run = 0;
+            }
+        }
+        tally(run);
+    }
+    for x in 0..b.w {
+        let mut run = 0;
+        for y in 0..b.h {
+            if on(x, y) {
+                run += 1;
+            } else if run > 0 {
+                tally(run);
+                run = 0;
+            }
+        }
+        tally(run);
+    }
+    // Runs along a stroke are long and spread out; across one they pile up at its width.
+    count.iter().enumerate().skip(1).take(LONGEST - 1).max_by_key(|(_, c)| **c).map_or(1.0, |(i, _)| i as f64)
+}
+
 /// 3-4 chamfer distance to the nearest background pixel, in pixels (÷3).
 fn distance(b: &Bits) -> Vec<f32> {
     let (w, h) = (b.w, b.h);
@@ -544,13 +612,15 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
     // Text: small blobs, grouped in rows, boxed and taken out before tracing lines.
     if o.text {
         let given = o.text_max_px.filter(|v| v.is_finite() && *v > 0.0);
-        // Cap the default limits so that on a full-size sheet (min dim ~4800 px at 200 dpi)
-        // fixture-sized symbols (~40 px) aren't misclassified as text. Real text on
-        // engineering plans is at most about 10 mm = ~80 px at 300 dpi.
-        let tmax = given.unwrap_or((0.025 * w.min(h) as f64).min(40.0)).max(4.0);
+        // The scan's scale from its pen: the typical stroke is a fine line (about 0.25 mm), so
+        // ordinary letters (at most about 3.5 mm) are under 14 strokes tall and titles (about
+        // 12 mm) under 48, however many pixels the sheet has; never more than a share of the
+        // image (2.5%, 6%). A full sheet's device symbols (4–5 mm) are then not letters.
+        let pen = typical_run(&bits);
+        let tmax = given.unwrap_or((0.025 * w.min(h) as f64).min(14.0 * pen)).max(4.0);
         // Larger letters (titles, room names on a fine scan) count when they have company on
         // their row, so a lone column or symbol of that size isn't taken for a letter.
-        let big = given.unwrap_or((0.06 * w.min(h) as f64).min(80.0)).max(tmax);
+        let big = given.unwrap_or((0.06 * w.min(h) as f64).min(48.0 * pen)).max(tmax);
         // Each group: its box, its blobs, and whether it has a letter of the ordinary size.
         let mut groups: Vec<([f64; 4], Vec<Vec<usize>>, bool, usize)> = Vec::new();
         for comp in components(&bits) {
@@ -596,13 +666,15 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
                 continue;
             }
             // Groups of only "big" blobs (no confirmed ordinary-sized letter) need at least 2
-            // members AND a minimum fill ratio — text fills its bounding box more densely than
-            // thin geometric outlines (circles, symbol borders) of the same size.
+            // members, not all of them rings (a row of symbols, circles or outlined boxes, is
+            // closed outlines round a hole; a word has open letters), and the ink of letters
+            // drawn with the pen: strokes across each letter's height fill at least about
+            // twice the pen ÷ the height of the box, up to a tenth (scattered specks fill less).
             if !small
-                && (*count < 2 || {
+                && (*count < 2 || comps.iter().all(|c| ring(c, w)) || {
                     let area = (b[2] - b[0]) * (b[3] - b[1]);
                     let ink: usize = comps.iter().map(|c| c.len()).sum();
-                    (ink as f64 / area) < 0.10
+                    ink as f64 / area < (2.0 * pen / (b[3] - b[1]).max(1.0)).min(0.10)
                 })
             {
                 continue;
