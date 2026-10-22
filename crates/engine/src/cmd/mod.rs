@@ -45,6 +45,7 @@ mod gripcmds;
 mod griphot;
 pub mod groups;
 pub(crate) mod hatch;
+pub mod help_texts;
 pub mod history;
 pub mod hyperlink;
 mod imageattach;
@@ -185,6 +186,8 @@ pub struct CommandSpec {
     pub interactive: Option<Factory>,
     /// Can run inside another command with a leading apostrophe.
     pub transparent: bool,
+    /// Hand-written help text for the command (empty = auto-generated only).
+    pub help: &'static str,
 }
 
 impl CommandSpec {
@@ -201,6 +204,7 @@ impl CommandSpec {
             undoable: true,
             interactive: None,
             transparent: false,
+            help: "",
         }
     }
     pub const fn menu(mut self, m: &'static [&'static str]) -> Self {
@@ -233,6 +237,10 @@ impl CommandSpec {
     }
     pub const fn transparent(mut self) -> Self {
         self.transparent = true;
+        self
+    }
+    pub const fn help(mut self, h: &'static str) -> Self {
+        self.help = h;
         self
     }
     /// Whether the id, label or an alias contains `filter` (any case): what `list_commands` and
@@ -272,6 +280,53 @@ pub struct CommandInfo {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+/// A generated help page for a command.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelpPage {
+    pub id: String,
+    pub label: &'static str,
+    pub aliases: Vec<String>,
+    pub menu_path: String,
+    pub shortcut: String,
+    pub params: &'static str,
+    pub interactive: bool,
+    pub transparent: bool,
+    pub help_text: &'static str,
+}
+
+impl CommandSpec {
+    /// Generate a help page for this command.
+    pub fn help_page(&self) -> HelpPage {
+        HelpPage {
+            id: self.id.to_ascii_uppercase(),
+            label: self.label,
+            aliases: self.aliases.iter().map(|a| a.to_ascii_uppercase()).collect(),
+            menu_path: if self.menu.is_empty() {
+                String::new()
+            } else {
+                self.menu.join(" > ")
+            },
+            shortcut: self.shortcut.unwrap_or("").to_string(),
+            params: self.params,
+            interactive: self.interactive.is_some(),
+            transparent: self.transparent,
+            help_text: self.help,
+        }
+    }
+}
+
+/// Find a command by id or alias.
+pub fn find_by_id_or_alias(name: &str) -> Option<&'static CommandSpec> {
+    let l = name.to_ascii_lowercase();
+    command_specs().iter().find(|c| c.id == l || c.aliases.contains(&l.as_str()))
+}
+
+/// Return all command ids that have no hand-written help text.
+pub fn commands_without_help() -> Vec<&'static str> {
+    command_specs().iter().filter(|c| c.help.is_empty()).map(|c| c.id).collect()
 }
 
 pub fn always(_: &Session) -> std::result::Result<(), String> {
@@ -433,6 +488,13 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(project::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
+        // Apply hand-written help texts.
+        for spec in &mut v {
+            let text = help_texts::lookup(spec.id);
+            if !text.is_empty() {
+                spec.help = text;
+            }
+        }
         v
     })
 }

@@ -100,7 +100,7 @@ pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
-pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+pub use cmd::{CommandInfo, CommandSpec, HelpPage, command_specs, commands_without_help, find_by_id_or_alias, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, LiveLabel, Picker, Prompt, Step};
 
 #[derive(Debug, thiserror::Error)]

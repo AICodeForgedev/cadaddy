@@ -9,6 +9,16 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("help", "Help", run_help)
+            .menu(&["Help", "Help"])
+            .alias(&["?"])
+            .params("{command?: \"LINE\"} → {page} | {} → {commands: [{id, label, hasHelp}]}")
+            .enabled(always)
+            .noundo()
+            .transparent()
+            .help("Opens the help page for a command. Type HELP followed by a command name to see \
+                   its description, aliases, menu path, keyboard shortcut and JSON parameters. \
+                   Without a command name, lists all available commands."),
         CommandSpec::new("cal", "QuickCalc", run_cal)
             .menu(&["Tools", "Inquiry", "Quick"])
             .alias(&["quickcalc", "qc"])
@@ -65,6 +75,26 @@ pub fn eval(expr: &str, vars: &serde_json::Map<String, Value>) -> std::result::R
     match calc::eval_val(expr, vars)? {
         calc::Val::Num(v) => Ok(v),
         calc::Val::Pt(_) => Err("the result is a point, not a number".into()),
+    }
+}
+
+fn run_help(_s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(name) = p.get("command").and_then(Value::as_str) {
+        let spec = super::find_by_id_or_alias(name)
+            .ok_or_else(|| crate::EngineError::UnknownCommand(name.to_string()))?;
+        Ok(serde_json::to_value(spec.help_page()).unwrap_or(Value::Null))
+    } else {
+        let list: Vec<Value> = super::command_specs()
+            .iter()
+            .map(|c| {
+                json!({
+                    "id": c.id.to_ascii_uppercase(),
+                    "label": c.label,
+                    "hasHelp": !c.help.is_empty(),
+                })
+            })
+            .collect();
+        Ok(json!({ "commands": list }))
     }
 }
 

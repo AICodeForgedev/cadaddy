@@ -624,10 +624,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         | "ui.dialog.blocks"
         | "ui.dialog.dsettings"
         | "ui.dialog.about"
-        | "ui.dialog.commands"
         | "ui.dialog.qselect"
         | "ui.dialog.parameters" => {
             app.ui.dialog = Some(id.trim_start_matches("ui.dialog.").to_string());
+            Ok(Value::Null)
+        }
+        "ui.dialog.commands" => {
+            // F1 / Help: if a command is running, open the help page for it.
+            if let Some(r) = app.session.running.as_ref() {
+                app.ui.dialog = Some(format!("commands:{}", r.id));
+            } else {
+                app.ui.dialog = Some("commands".into());
+            }
             Ok(Value::Null)
         }
         "ui.dialog.close" => {
