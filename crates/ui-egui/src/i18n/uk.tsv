@@ -2826,3 +2826,28 @@
 	{name}: not shown on {levels}	{name}: немає на {levels}
 	Every shaft and riser carries on through its levels.	Кожна шахта і стояк проходить через свої рівні.
 	Not a height: {text}	Не висота: {text}
+	Accept Element Tags	Прийняти мітки елементів
+	Bill of Materials	Специфікація матеріалів
+	Compare Estimate What-If	Порівняти варіанти кошторису
+	Element Tags	Мітки елементів
+	Estimate Settings	Параметри кошторису
+	Estimate Status	Стан кошторису
+	Explain Estimate Number	Пояснити число кошторису
+	Import Estimating Baseline	Імпортувати базу кошторисних даних
+	List Element Tags	Список міток елементів
+	Query Estimate	Запит до кошторису
+	Set Element Tag Field	Задати поле мітки елемента
+	Set Estimate Assembly	Задати збірку кошторису
+	Set Estimate Price	Задати ціну кошторису
+	Set Estimate Scope	Задати обсяг кошторису
+	Trade Quantities	Обсяги робіт за фахом
+	Trade Scope	Обсяг робіт фаху
+	Trade Prices	Ціни за фахом
+	Whole-Job Settings	Налаштування кошторису об'єкта
+	Whole-Job Estimate	Кошторис усього об'єкта
+	Bid Package	Тендерний пакет
+	Sub Bid	Пропозиція субпідрядника
+	Level Bids	Порівняти пропозиції
+	Add Bid History	Додати історію пропозицій
+	Bid Benchmarks	Орієнтири пропозицій
+	Record Outcome	Записати результат

@@ -49,6 +49,10 @@ pub struct BuildingSpec {
     /// assembly and scope with reasons, and the markup settings.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub estimate: serde_json::Value,
+    /// The whole-job estimate (`wholejob.*`): every trade's quantities and scope, price packs,
+    /// markups, general conditions and sub bids.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub wholejob: serde_json::Value,
     /// Elevations the prints give for levels with no plan here (the roof, a parapet, a penthouse
     /// drawn elsewhere): they top the floor below and become IFC storeys (`levels.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1466,6 +1470,7 @@ impl BuildingSpec {
             levels: r.levels.clone(),
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
+            wholejob: serde_json::Value::Null,
             datums: Vec::new(),
             sheets: Vec::new(),
             layers,

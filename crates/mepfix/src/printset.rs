@@ -402,7 +402,8 @@ fn infer_level(title: &str) -> String {
     if up.contains("ROOF") {
         return "R".into();
     }
-    if up.contains("SITE") {
+    // Civil plans (grading, earthwork, utilities) are all on the site.
+    if up.contains("SITE") || up.contains("GRADING") || up.contains("EARTHWORK") || up.contains("PAVING") {
         return "SITE".into();
     }
     String::new()
