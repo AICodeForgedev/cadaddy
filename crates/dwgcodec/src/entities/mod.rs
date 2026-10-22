@@ -564,12 +564,7 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
     }
     let decoded: std::collections::HashSet<u64> = ents.iter().map(|e| e.handle).collect();
     for raw in dwg.objects.iter().filter(|o| !decoded.contains(&o.handle)) {
-        let entity = match raw.type_code {
-            t if t >= 500 => classes.get(t).is_some_and(|c| c.item_class_id == 0x1F2),
-            // Fixed entity types (spec §20.3), REGION, 3DSOLID, BODY and OLE2FRAME among them.
-            t => kinds::fixed_name(t).is_some() || matches!(t, 37 | 38 | 39 | 74),
-        };
-        if !entity {
+        if entity_type(raw.type_code, classes).is_none() {
             continue;
         }
         if let Some(n) = Obj::open(raw, dwg.version).and_then(|mut o| common(&mut o)).ok().and_then(|c| c.next) {
@@ -577,6 +572,20 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
         }
     }
     next
+}
+
+/// The DXF name of an object type that is an entity (in a block's entities): fixed types (spec
+/// §20.3; REGION, 3DSOLID, BODY and OLE2FRAME among them, BLOCK and ENDBLK not) and classes of
+/// entities.
+fn entity_type(t: u16, classes: &Classes) -> Option<String> {
+    match t {
+        t if t >= 500 => classes.get(t).filter(|c| c.item_class_id == 0x1F2).map(|c| c.dxf_name.to_string_lossy()),
+        37 => Some("REGION".into()),
+        38 => Some("3DSOLID".into()),
+        39 => Some("BODY".into()),
+        74 => Some("OLE2FRAME".into()),
+        t => kinds::fixed_name(t).map(str::to_string),
+    }
 }
 
 /// R2000: an INSERT's attributes and a POLYLINE's vertices are stored as the first and last (0
@@ -610,7 +619,12 @@ pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
     for raw in &dwg.objects {
         match decode(raw, dwg.version, &classes, &names) {
             Ok(Some(e)) => out.push(e),
-            Ok(None) => {}
+            // An entity of a type not decoded yet is left out, and said so.
+            Ok(None) => {
+                if let Some(name) = entity_type(raw.type_code, &classes) {
+                    failed.push((raw.handle, format!("{name}: not read yet")));
+                }
+            }
             Err(e) => {
                 let kind = match raw.type_code {
                     t if t >= 500 => classes.get(t).map(|c| c.dxf_name.to_string_lossy()).unwrap_or_default(),
