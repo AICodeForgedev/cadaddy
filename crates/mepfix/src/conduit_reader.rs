@@ -75,6 +75,8 @@ pub struct FoundHomerun {
     pub route_ft: Vec<[f64; 2]>,
     /// Bottom above the floor of each leg, feet, once [`assign_heights`] has run.
     pub bottoms_ft: Vec<f64>,
+    /// The conductor note under the label (`2#12, 1#12G`), as printed.
+    pub note: Option<String>,
 }
 
 /// A panel drawn on an electrical plan.
@@ -108,6 +110,23 @@ fn trade_size(s: &str) -> Option<f64> {
         s.parse::<f64>().ok()?
     };
     (v > 0.0 && v <= 6.0).then_some(v)
+}
+
+/// A trade size as printed: `3/4`, `1`, `1-1/4`.
+pub fn fmt_size(v: f64) -> String {
+    let eighths = (v * 8.0).round() as i64;
+    let (whole, rem) = (eighths / 8, eighths % 8);
+    let frac = match rem {
+        0 => String::new(),
+        r if r % 4 == 0 => format!("{}/2", r / 4),
+        r if r % 2 == 0 => format!("{}/4", r / 2),
+        r => format!("{r}/8"),
+    };
+    match (whole, frac.is_empty()) {
+        (0, false) => frac,
+        (w, true) => w.to_string(),
+        (w, false) => format!("{w}-{frac}"),
+    }
 }
 
 /// A branch conduit tag's size, inches: `3/4"C`, `1"C`, `1-1/4"C`, `1" EMT`, `3/4" C`. A bank
@@ -278,12 +297,19 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let Some((_, origin)) = arrow else { continue };
+        // The conductors noted just under the label.
+        let note = texts
+            .iter()
+            .filter(|(n, q)| n.contains('#') && dist(*q, *p) < 1.5)
+            .min_by(|a, b| dist(a.1, *p).total_cmp(&dist(b.1, *p)))
+            .map(|(n, _)| n.trim().to_string());
         res.homeruns.push(FoundHomerun {
             level: level.to_string(),
             sheet: sh.number.clone(),
             label: t.trim().to_string(),
             panel,
             origin_ft: origin,
+            note,
             ..FoundHomerun::default()
         });
     }

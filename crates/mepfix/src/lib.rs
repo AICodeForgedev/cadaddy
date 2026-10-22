@@ -29,6 +29,7 @@ pub mod clash;
 pub mod conduit_reader;
 pub mod covercheck;
 pub mod design;
+pub mod elecspec;
 pub mod draw;
 pub mod duct_reader;
 pub mod elec_reader;
@@ -50,6 +51,7 @@ pub mod rfi;
 pub mod rng;
 pub mod score;
 pub mod sheet_reader;
+pub mod spectag;
 pub mod sprinkler_reader;
 pub mod struct_reader;
 pub mod style;
@@ -100,6 +102,7 @@ pub fn truth_for(seed: u64) -> Truth {
     add_ceilings(&mut t, &mut st);
     add_arch(&mut t, &mut st);
     add_envelope(&mut t, &mut st);
+    elecspec::design(&mut t);
     t
 }
 
@@ -178,6 +181,7 @@ pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, 
     add_ceilings(&mut t, &mut st);
     add_arch(&mut t, &mut st);
     add_envelope(&mut t, &mut st);
+    elecspec::design(&mut t);
     let mut kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     if with_gaps {
         gaps::plant(&mut t);
