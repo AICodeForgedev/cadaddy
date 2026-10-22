@@ -12,7 +12,7 @@
 //!   is left out.
 //! - `model.clashes {tolerance_in?}`: runs hanging below their room's ceiling, reaching into the
 //!   floor structure above (the next level's slab), crossing another system's run, or running
-//!   through a column.
+//!   through a column, or cutting into an object of an attached IFC model (`ifc.attach`).
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, RawTag, Space};
 use cadaddy_geom::{Vec2, Vec3};
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column, message, systems, at, by_in, handles}], total}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference, message, systems, at, by_in, handles, reference?: {ref, class, guid, name, level}}], total}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed}], systems: [...]}")
@@ -1078,6 +1078,38 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 }));
             }
         }
+    }
+    // Into the objects of attached IFC models (architecture, structure from other programs), in
+    // building coordinates: each level's plan base taken off.
+    if p.get("references").and_then(Value::as_bool).unwrap_or(true) && !super::ifcref::ref_names(d).is_empty() {
+        let bases = cadaddy_walk3d::level_bases(d, &sp.to_rules());
+        let ignore: Option<Vec<String>> =
+            p.get("ignore_classes").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).take(64).map(str::to_string).collect());
+        let mut pieces_ref = Vec::new();
+        for (ri, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
+            let Some(level) = sp.level(&r.level) else { continue };
+            let base = bases.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level.name)).map_or(Vec2::ZERO, |(_, b)| *b);
+            let base = if base.is_finite() { base } else { Vec2::ZERO };
+            let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
+            let w = r.size_in[0] / 12.0 * upf;
+            for pc in ps.into_iter().filter(|p| !p.is_fitting()) {
+                if pieces_ref.len() >= MAX_SEGS {
+                    break;
+                }
+                pieces_ref.push(super::ifcref::RunPiece {
+                    system: &r.system,
+                    run: ri,
+                    a: pc.a - base,
+                    b: pc.b - base,
+                    z0: pc.z0,
+                    z1: pc.z1,
+                    w,
+                    handles: handles(r),
+                    base,
+                });
+            }
+        }
+        out.extend(super::ifcref::clashes(d, &pieces_ref, tol, upf, ignore.as_deref()));
     }
     out.truncate(5_000);
     Ok(json!({ "total": out.len(), "clashes": out }))

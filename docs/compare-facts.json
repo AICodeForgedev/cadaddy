@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 775,
-    "count": 775,
+    "callableAsJson": 779,
+    "count": 779,
     "ids": [
       "-attedit",
       "-block",
@@ -329,6 +329,10 @@
       "hyperlink.open",
       "hyperlink.pick",
       "id",
+      "ifc.attach",
+      "ifc.elements",
+      "ifc.refs",
+      "ifc.reload",
       "image",
       "imageadjust",
       "imageattach",

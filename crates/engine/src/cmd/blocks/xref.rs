@@ -135,18 +135,23 @@ fn echo_all(s: &mut Session, out: &[Outcome]) {
 /// Attach the drawing at `path` as xref `name` (defined and loaded; nothing changes when it can't
 /// be loaded). An xref of that name attached from the same file is used again. Returns its name.
 fn attach(s: &mut Session, name: &str, path: &str, overlay: bool) -> Result<String> {
+    attach_as(s, "xattach", name, path, overlay)
+}
+
+/// [`attach`] for command `cmd` (its errors name it).
+pub(crate) fn attach_as(s: &mut Session, cmd: &str, name: &str, path: &str, overlay: bool) -> Result<String> {
     let path = path.trim();
     if path.is_empty() {
-        return Err(bad("xattach", "`path` is required"));
+        return Err(bad(cmd, "`path` is required"));
     }
     if !valid_block_name(name) {
-        return Err(bad("xattach", format!("\"{name}\" is not a valid xref name")));
+        return Err(bad(cmd, format!("\"{name}\" is not a valid xref name")));
     }
     if let Some(b) = s.doc()?.block(name) {
         return match &b.xref_path {
             Some(p) if p.eq_ignore_ascii_case(path) => Ok(b.name.clone()),
-            Some(_) => Err(bad("xattach", format!("an xref named \"{}\" is already attached from another file", b.name))),
-            None => Err(bad("xattach", format!("a block named \"{}\" already exists", b.name))),
+            Some(_) => Err(bad(cmd, format!("an xref named \"{}\" is already attached from another file", b.name))),
+            None => Err(bad(cmd, format!("a block named \"{}\" already exists", b.name))),
         };
     }
     let host = host(s);
@@ -160,8 +165,8 @@ fn attach(s: &mut Session, name: &str, path: &str, overlay: bool) -> Result<Stri
     let out = load::load(&mut d, name, host.as_deref(), true);
     match out.first() {
         Some(o) if o.status == XrefStatus::Loaded => {}
-        Some(o) => return Err(bad("xattach", format!("{path} can't be attached: {}", o.detail))),
-        None => return Err(bad("xattach", format!("{path} can't be attached"))),
+        Some(o) => return Err(bad(cmd, format!("{path} can't be attached: {}", o.detail))),
+        None => return Err(bad(cmd, format!("{path} can't be attached"))),
     }
     // The layers of an xref just attached are the ones asked for: reconciled from the start.
     let added: Vec<String> = d.layers.iter().filter(|l| !before.contains(&l.name)).map(|l| l.name.clone()).collect();
