@@ -3443,10 +3443,8 @@ mod tests {
         let type_ids: Vec<&str> = t.unit_types.iter().map(|u| u.id.as_str()).collect();
         let room_ids: Vec<&str> = t.building.rooms.iter().map(|r| r.id.as_str()).collect();
         for inst in &t.unit_instances {
-            assert!(type_ids.contains(&inst.unit_type.as_str()),
-                "instance {} → unknown type {}", inst.id, inst.unit_type);
-            assert!(room_ids.contains(&inst.room.as_str()),
-                "instance {} → unknown room {}", inst.id, inst.room);
+            assert!(type_ids.contains(&inst.unit_type.as_str()), "instance {} → unknown type {}", inst.id, inst.unit_type);
+            assert!(room_ids.contains(&inst.room.as_str()), "instance {} → unknown room {}", inst.id, inst.room);
         }
     }
 
@@ -3467,11 +3465,15 @@ mod tests {
     #[test]
     fn every_guest_room_has_instance() {
         let t = hotel_truth_for(42, HotelSize::Small);
-        let guest_rooms: Vec<&str> = t.building.rooms.iter()
+        let guest_rooms: Vec<&str> = t
+            .building
+            .rooms
+            .iter()
             .filter(|r| ["2", "3", "4"].contains(&r.level.as_str()))
             .filter(|r| r.name != "CORRIDOR")
-            .filter(|r| !r.id.contains("MECH") && !r.id.contains("ELEC") && !r.id.contains("IDF")
-                && !r.id.contains("STAIR") && !r.id.contains("ELEV"))
+            .filter(|r| {
+                !r.id.contains("MECH") && !r.id.contains("ELEC") && !r.id.contains("IDF") && !r.id.contains("STAIR") && !r.id.contains("ELEV")
+            })
             .map(|r| r.id.as_str())
             .collect();
 
@@ -3497,20 +3499,52 @@ mod tests {
             let cw_count = |kind: &str| t.casework.iter().filter(|c| c.room == inst.room && c.kind == kind).count() as u32;
 
             for (kind, expected) in &ut.devices {
-                assert_eq!(dev_count(kind), *expected,
-                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, dev_count(kind));
+                assert_eq!(
+                    dev_count(kind),
+                    *expected,
+                    "room {} type {}: expected {} {}, found {}",
+                    inst.room,
+                    inst.unit_type,
+                    expected,
+                    kind,
+                    dev_count(kind)
+                );
             }
             for (kind, expected) in &ut.terminals {
-                assert_eq!(term_count(kind), *expected,
-                    "room {} type {}: expected {} terminal {}, found {}", inst.room, inst.unit_type, expected, kind, term_count(kind));
+                assert_eq!(
+                    term_count(kind),
+                    *expected,
+                    "room {} type {}: expected {} terminal {}, found {}",
+                    inst.room,
+                    inst.unit_type,
+                    expected,
+                    kind,
+                    term_count(kind)
+                );
             }
             for (kind, expected) in &ut.fixtures {
-                assert_eq!(fix_count(kind), *expected,
-                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, fix_count(kind));
+                assert_eq!(
+                    fix_count(kind),
+                    *expected,
+                    "room {} type {}: expected {} {}, found {}",
+                    inst.room,
+                    inst.unit_type,
+                    expected,
+                    kind,
+                    fix_count(kind)
+                );
             }
             for (kind, expected) in &ut.casework {
-                assert_eq!(cw_count(kind), *expected,
-                    "room {} type {}: expected {} {}, found {}", inst.room, inst.unit_type, expected, kind, cw_count(kind));
+                assert_eq!(
+                    cw_count(kind),
+                    *expected,
+                    "room {} type {}: expected {} {}, found {}",
+                    inst.room,
+                    inst.unit_type,
+                    expected,
+                    kind,
+                    cw_count(kind)
+                );
             }
         }
     }
@@ -3548,8 +3582,7 @@ mod tests {
                 Some(r) => r,
                 None => continue,
             };
-            assert!((inst.at_ft[0] - rm.min_ft[0]).abs() < 0.01,
-                "instance {} x={} vs room min_x={}", inst.id, inst.at_ft[0], rm.min_ft[0]);
+            assert!((inst.at_ft[0] - rm.min_ft[0]).abs() < 0.01, "instance {} x={} vs room min_x={}", inst.id, inst.at_ft[0], rm.min_ft[0]);
         }
     }
 
@@ -3561,8 +3594,7 @@ mod tests {
         assert!(t.unit_instances.len() > 20, "full hotel should have many instances, got {}", t.unit_instances.len());
         let room_ids: Vec<&str> = t.building.rooms.iter().map(|r| r.id.as_str()).collect();
         for inst in &t.unit_instances {
-            assert!(room_ids.contains(&inst.room.as_str()),
-                "instance {} room {} not found", inst.id, inst.room);
+            assert!(room_ids.contains(&inst.room.as_str()), "instance {} room {} not found", inst.id, inst.room);
         }
     }
 
@@ -3588,12 +3620,13 @@ mod tests {
             let count = t.unit_instances.iter().filter(|i| i.unit_type == ut.id).count() as u32;
             // Total lights = per-type × count
             let expected_lights = ut.devices.get("light_fixture").copied().unwrap_or(0) * count;
-            let actual_lights: u32 = t.unit_instances.iter()
+            let actual_lights: u32 = t
+                .unit_instances
+                .iter()
                 .filter(|i| i.unit_type == ut.id)
                 .map(|i| t.elec_devices.iter().filter(|d| d.room == i.room && d.kind == "light_fixture").count() as u32)
                 .sum();
-            assert_eq!(actual_lights, expected_lights,
-                "type {}: expected {} total lights, got {}", ut.id, expected_lights, actual_lights);
+            assert_eq!(actual_lights, expected_lights, "type {}: expected {} total lights, got {}", ut.id, expected_lights, actual_lights);
         }
     }
 
@@ -3605,8 +3638,7 @@ mod tests {
             let total = t.unit_instances.iter().filter(|i| i.unit_type == ut.id).count();
             let normal = t.unit_instances.iter().filter(|i| i.unit_type == ut.id && i.hand == "normal").count();
             let mirrored = t.unit_instances.iter().filter(|i| i.unit_type == ut.id && i.hand == "mirrored").count();
-            assert_eq!(total, normal + mirrored,
-                "type {}: total {} != normal {} + mirrored {}", ut.id, total, normal, mirrored);
+            assert_eq!(total, normal + mirrored, "type {}: total {} != normal {} + mirrored {}", ut.id, total, normal, mirrored);
         }
     }
 }

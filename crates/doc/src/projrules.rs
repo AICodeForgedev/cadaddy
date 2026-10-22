@@ -87,15 +87,7 @@ impl SourceTier {
     }
 
     /// All tiers in precedence order (highest first).
-    pub const ALL: [Self; 7] = [
-        Self::FieldVerified,
-        Self::Rfi,
-        Self::Submittal,
-        Self::DrawingRevision,
-        Self::Spec,
-        Self::ProjectRule,
-        Self::BuiltIn,
-    ];
+    pub const ALL: [Self; 7] = [Self::FieldVerified, Self::Rfi, Self::Submittal, Self::DrawingRevision, Self::Spec, Self::ProjectRule, Self::BuiltIn];
 }
 
 // ── rule domain ────────────────────────────────────────────────────────────
@@ -163,16 +155,8 @@ impl RuleDomain {
         }
     }
 
-    pub const ALL: [Self; 8] = [
-        Self::MountingHeight,
-        Self::WiringMethod,
-        Self::StudLayout,
-        Self::JoistLayout,
-        Self::Clearance,
-        Self::Tolerance,
-        Self::Naming,
-        Self::Custom,
-    ];
+    pub const ALL: [Self; 8] =
+        [Self::MountingHeight, Self::WiringMethod, Self::StudLayout, Self::JoistLayout, Self::Clearance, Self::Tolerance, Self::Naming, Self::Custom];
 }
 
 // ── rule key ───────────────────────────────────────────────────────────────
@@ -213,13 +197,7 @@ pub struct RuleValue {
 
 impl RuleValue {
     pub fn new(value: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-            source: String::new(),
-            tier: SourceTier::ProjectRule,
-            set_by: String::new(),
-            changed: String::new(),
-        }
+        Self { value: value.into(), source: String::new(), tier: SourceTier::ProjectRule, set_by: String::new(), changed: String::new() }
     }
 
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
@@ -266,9 +244,7 @@ impl RuleEntry {
 
     /// All values (active + overridden) sorted by tier (highest first).
     pub fn all_values(&self) -> Vec<&RuleValue> {
-        let mut all: Vec<&RuleValue> = std::iter::once(&self.active)
-            .chain(self.overridden.iter())
-            .collect();
+        let mut all: Vec<&RuleValue> = std::iter::once(&self.active).chain(self.overridden.iter()).collect();
         all.sort_by_key(|v| v.tier);
         all
     }
@@ -320,12 +296,7 @@ impl RuleEntry {
         if preview.changed && self.changelog.len() < MAX_CHANGELOG {
             self.changelog.insert(
                 0,
-                ChangeLogEntry {
-                    from: preview.old_value.clone(),
-                    to: preview.new_value.clone(),
-                    reason: reason.to_string(),
-                    tier: preview.new_tier,
-                },
+                ChangeLogEntry { from: preview.old_value.clone(), to: preview.new_value.clone(), reason: reason.to_string(), tier: preview.new_tier },
             );
         }
 
@@ -413,12 +384,7 @@ fn is_default_source_order(order: &[SourceTier]) -> bool {
 
 impl ProjectRules {
     pub fn new() -> Self {
-        Self {
-            version: 1,
-            label: String::new(),
-            source_order: default_source_order(),
-            rules: BTreeMap::new(),
-        }
+        Self { version: 1, label: String::new(), source_order: default_source_order(), rules: BTreeMap::new() }
     }
 
     /// Look up a rule by domain and key.
@@ -434,13 +400,7 @@ impl ProjectRules {
     }
 
     /// Set a rule value. Creates the entry if it doesn't exist. Returns the change preview.
-    pub fn set(
-        &mut self,
-        domain: RuleDomain,
-        key: &str,
-        value: RuleValue,
-        reason: &str,
-    ) -> ChangePreview {
+    pub fn set(&mut self, domain: RuleDomain, key: &str, value: RuleValue, reason: &str) -> ChangePreview {
         let id = format!("{}/{}", domain.as_str(), key);
         if self.rules.len() >= MAX_RULES && !self.rules.contains_key(&id) {
             return ChangePreview {
@@ -463,12 +423,7 @@ impl ProjectRules {
     }
 
     /// Preview what setting a value would change, without modifying anything.
-    pub fn preview(
-        &self,
-        domain: RuleDomain,
-        key: &str,
-        value: &RuleValue,
-    ) -> ChangePreview {
+    pub fn preview(&self, domain: RuleDomain, key: &str, value: &RuleValue) -> ChangePreview {
         let id = format!("{}/{}", domain.as_str(), key);
         if let Some(entry) = self.rules.get(&id) {
             entry.preview_set(value)
@@ -491,12 +446,7 @@ impl ProjectRules {
     }
 
     /// Remove the value at a specific tier from a rule.
-    pub fn remove_tier(
-        &mut self,
-        domain: RuleDomain,
-        key: &str,
-        tier: SourceTier,
-    ) -> Option<RuleValue> {
+    pub fn remove_tier(&mut self, domain: RuleDomain, key: &str, tier: SourceTier) -> Option<RuleValue> {
         let id = format!("{}/{}", domain.as_str(), key);
         let entry = self.rules.get_mut(&id)?;
         let removed = entry.remove_tier(tier);
@@ -512,7 +462,10 @@ impl ProjectRules {
         let prefix = format!("{}/", domain.as_str());
         self.rules
             .values()
-            .filter(|r| r.domain == domain || self.rules.keys().any(|k| k.starts_with(&prefix) && self.rules.get(k).map(|e| std::ptr::eq(*r, e)).unwrap_or(false)))
+            .filter(|r| {
+                r.domain == domain
+                    || self.rules.keys().any(|k| k.starts_with(&prefix) && self.rules.get(k).map(|e| std::ptr::eq(*r, e)).unwrap_or(false))
+            })
             .collect()
     }
 
@@ -525,17 +478,9 @@ impl ProjectRules {
     }
 
     /// Resolve a value for an element: find the rule and report which source won.
-    pub fn resolve(
-        &self,
-        domain: RuleDomain,
-        key: &str,
-    ) -> Option<ResolvedValue> {
+    pub fn resolve(&self, domain: RuleDomain, key: &str) -> Option<ResolvedValue> {
         let entry = self.get(domain, key)?;
-        let overridden_by: Vec<(String, SourceTier)> = entry
-            .overridden
-            .iter()
-            .map(|v| (v.value.clone(), v.tier))
-            .collect();
+        let overridden_by: Vec<(String, SourceTier)> = entry.overridden.iter().map(|v| (v.value.clone(), v.tier)).collect();
         Some(ResolvedValue {
             value: entry.active.value.clone(),
             tier: entry.active.tier,
@@ -649,9 +594,7 @@ mod tests {
     #[test]
     fn set_and_get_rule() {
         let mut rules = ProjectRules::new();
-        let val = RuleValue::new("48\"")
-            .with_source("Spec 26 05 33")
-            .with_tier(SourceTier::Spec);
+        let val = RuleValue::new("48\"").with_source("Spec 26 05 33").with_tier(SourceTier::Spec);
         let preview = rules.set(RuleDomain::MountingHeight, "switch/general", val, "initial setup");
         assert!(preview.changed);
         assert_eq!(preview.new_value, "48\"");
@@ -666,16 +609,8 @@ mod tests {
         let mut rules = ProjectRules::new();
 
         // Set a project-rule-tier value.
-        rules.set(
-            RuleDomain::MountingHeight,
-            "receptacle/general",
-            RuleValue::new("18\"").with_tier(SourceTier::ProjectRule),
-            "project default",
-        );
-        assert_eq!(
-            rules.get(RuleDomain::MountingHeight, "receptacle/general").unwrap().active.value,
-            "18\"",
-        );
+        rules.set(RuleDomain::MountingHeight, "receptacle/general", RuleValue::new("18\"").with_tier(SourceTier::ProjectRule), "project default");
+        assert_eq!(rules.get(RuleDomain::MountingHeight, "receptacle/general").unwrap().active.value, "18\"",);
 
         // Override with a spec value (higher precedence).
         let preview = rules.set(
@@ -700,20 +635,11 @@ mod tests {
     fn lower_tier_does_not_override() {
         let mut rules = ProjectRules::new();
 
-        rules.set(
-            RuleDomain::WiringMethod,
-            "general",
-            RuleValue::new("EMT").with_tier(SourceTier::Spec),
-            "spec requirement",
-        );
+        rules.set(RuleDomain::WiringMethod, "general", RuleValue::new("EMT").with_tier(SourceTier::Spec), "spec requirement");
 
         // Try to set a project-rule value (lower tier); shouldn't change the active.
-        let preview = rules.set(
-            RuleDomain::WiringMethod,
-            "general",
-            RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule),
-            "project default",
-        );
+        let preview =
+            rules.set(RuleDomain::WiringMethod, "general", RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule), "project default");
         assert!(!preview.changed);
         assert_eq!(preview.new_value, "EMT"); // spec still wins
 
@@ -727,12 +653,7 @@ mod tests {
     fn remove_tier_promotes_next() {
         let mut rules = ProjectRules::new();
 
-        rules.set(
-            RuleDomain::MountingHeight,
-            "switch/general",
-            RuleValue::new("48\"").with_tier(SourceTier::ProjectRule),
-            "",
-        );
+        rules.set(RuleDomain::MountingHeight, "switch/general", RuleValue::new("48\"").with_tier(SourceTier::ProjectRule), "");
         rules.set(
             RuleDomain::MountingHeight,
             "switch/general",
@@ -740,30 +661,19 @@ mod tests {
             "RFI response",
         );
 
-        assert_eq!(
-            rules.get(RuleDomain::MountingHeight, "switch/general").unwrap().active.value,
-            "46\"",
-        );
+        assert_eq!(rules.get(RuleDomain::MountingHeight, "switch/general").unwrap().active.value, "46\"",);
 
         // Remove the RFI tier; project rule should take over.
         let removed = rules.remove_tier(RuleDomain::MountingHeight, "switch/general", SourceTier::Rfi);
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().value, "46\"");
-        assert_eq!(
-            rules.get(RuleDomain::MountingHeight, "switch/general").unwrap().active.value,
-            "48\"",
-        );
+        assert_eq!(rules.get(RuleDomain::MountingHeight, "switch/general").unwrap().active.value, "48\"",);
     }
 
     #[test]
     fn preview_does_not_modify() {
         let mut rules = ProjectRules::new();
-        rules.set(
-            RuleDomain::Clearance,
-            "panel_front",
-            RuleValue::new("36\"").with_tier(SourceTier::Spec).with_source("NEC 110.26"),
-            "",
-        );
+        rules.set(RuleDomain::Clearance, "panel_front", RuleValue::new("36\"").with_tier(SourceTier::Spec).with_source("NEC 110.26"), "");
 
         let proposed = RuleValue::new("42\"").with_tier(SourceTier::Rfi).with_source("RFI #5");
         let preview = rules.preview(RuleDomain::Clearance, "panel_front", &proposed);
@@ -771,21 +681,13 @@ mod tests {
         assert_eq!(preview.new_value, "42\"");
 
         // The actual value should be unchanged.
-        assert_eq!(
-            rules.get(RuleDomain::Clearance, "panel_front").unwrap().active.value,
-            "36\"",
-        );
+        assert_eq!(rules.get(RuleDomain::Clearance, "panel_front").unwrap().active.value, "36\"",);
     }
 
     #[test]
     fn changelog_recorded() {
         let mut rules = ProjectRules::new();
-        rules.set(
-            RuleDomain::Tolerance,
-            "placement",
-            RuleValue::new("1/4\"").with_tier(SourceTier::ProjectRule),
-            "initial",
-        );
+        rules.set(RuleDomain::Tolerance, "placement", RuleValue::new("1/4\"").with_tier(SourceTier::ProjectRule), "initial");
         rules.set(
             RuleDomain::Tolerance,
             "placement",
@@ -808,12 +710,7 @@ mod tests {
     #[test]
     fn resolve_value() {
         let mut rules = ProjectRules::new();
-        rules.set(
-            RuleDomain::MountingHeight,
-            "receptacle/kitchen",
-            RuleValue::new("44\"").with_tier(SourceTier::ProjectRule),
-            "",
-        );
+        rules.set(RuleDomain::MountingHeight, "receptacle/kitchen", RuleValue::new("44\"").with_tier(SourceTier::ProjectRule), "");
         rules.set(
             RuleDomain::MountingHeight,
             "receptacle/kitchen",
@@ -834,18 +731,8 @@ mod tests {
     fn json_round_trip() {
         let mut rules = ProjectRules::new();
         rules.label = "Sample Project".to_string();
-        rules.set(
-            RuleDomain::MountingHeight,
-            "switch/general",
-            RuleValue::new("48\"").with_source("NEC").with_tier(SourceTier::Spec),
-            "initial",
-        );
-        rules.set(
-            RuleDomain::WiringMethod,
-            "general",
-            RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule),
-            "project default",
-        );
+        rules.set(RuleDomain::MountingHeight, "switch/general", RuleValue::new("48\"").with_source("NEC").with_tier(SourceTier::Spec), "initial");
+        rules.set(RuleDomain::WiringMethod, "general", RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule), "project default");
 
         let json = rules.to_json().unwrap();
         let back = ProjectRules::from_json(&json).unwrap();
@@ -866,12 +753,7 @@ mod tests {
     fn max_rules_cap() {
         let mut rules = ProjectRules::new();
         for i in 0..MAX_RULES + 10 {
-            rules.set(
-                RuleDomain::Custom,
-                &format!("rule_{i}"),
-                RuleValue::new("v"),
-                "",
-            );
+            rules.set(RuleDomain::Custom, &format!("rule_{i}"), RuleValue::new("v"), "");
         }
         assert_eq!(rules.rules.len(), MAX_RULES);
     }

@@ -11,11 +11,11 @@
 
 mod derive;
 mod doors;
+pub mod field;
 mod ground;
 mod math;
 mod measure;
 mod openings;
-pub mod field;
 pub mod package;
 mod pick;
 pub mod rfi;

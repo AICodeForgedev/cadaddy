@@ -9,7 +9,6 @@
 mod array;
 pub mod bimspec;
 mod constraint;
-pub mod projrules;
 mod entity;
 mod extents;
 pub mod field;
@@ -18,6 +17,7 @@ mod header;
 pub mod library;
 mod plotstyle;
 mod plotter;
+pub mod projrules;
 mod refedit;
 mod section;
 mod solid;

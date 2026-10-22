@@ -68,7 +68,8 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
     let instances = read_unit_instances(s)?;
 
     let type_name = |id: &str| -> String {
-        types.iter()
+        types
+            .iter()
             .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
             .and_then(|t| t.get("name").and_then(Value::as_str))
             .unwrap_or(id)
@@ -79,8 +80,12 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
     for inst in &instances {
         let lv = inst.get("level").and_then(Value::as_str).unwrap_or("");
         let ut = inst.get("unit_type").and_then(Value::as_str).unwrap_or("");
-        if level_filter.is_some_and(|f| lv != f) { continue; }
-        if type_filter.is_some_and(|f| ut != f) { continue; }
+        if level_filter.is_some_and(|f| lv != f) {
+            continue;
+        }
+        if type_filter.is_some_and(|f| ut != f) {
+            continue;
+        }
         let mut row = inst.clone();
         if let Some(obj) = row.as_object_mut() {
             obj.insert("type_name".into(), json!(type_name(ut)));
@@ -99,11 +104,16 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
         let hand = row.get("hand").and_then(Value::as_str).unwrap_or("normal");
         let e = summary_map.entry(ut.to_string()).or_insert_with(|| (type_name(ut), 0, 0, 0));
         e.1 += 1;
-        if hand == "normal" { e.2 += 1; } else { e.3 += 1; }
+        if hand == "normal" {
+            e.2 += 1;
+        } else {
+            e.3 += 1;
+        }
     }
-    let summary: Vec<Value> = summary_map.iter().map(|(k, (name, count, normal, mirrored))| {
-        json!({"type": k, "type_name": name, "count": count, "normal": normal, "mirrored": mirrored})
-    }).collect();
+    let summary: Vec<Value> = summary_map
+        .iter()
+        .map(|(k, (name, count, normal, mirrored))| json!({"type": k, "type_name": name, "count": count, "normal": normal, "mirrored": mirrored}))
+        .collect();
 
     // Insert table if requested
     if bool_or(p, "table", false) {
@@ -126,7 +136,9 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     for inst in &instances {
         let lv = inst.get("level").and_then(Value::as_str).unwrap_or("");
         let ut = inst.get("unit_type").and_then(Value::as_str).unwrap_or("");
-        if level_filter.is_some_and(|f| lv != f) { continue; }
+        if level_filter.is_some_and(|f| lv != f) {
+            continue;
+        }
         *counts.entry(ut.to_string()).or_default() += 1;
     }
 
@@ -139,7 +151,9 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         let id = ut_val.get("id").and_then(Value::as_str).unwrap_or("");
         let name = ut_val.get("name").and_then(Value::as_str).unwrap_or("");
         let count = counts.get(id).copied().unwrap_or(0);
-        if count == 0 { continue; }
+        if count == 0 {
+            continue;
+        }
 
         // Multiply per-unit counts by instance count
         let devices = ut_val.get("devices").and_then(Value::as_object).cloned().unwrap_or_default();
@@ -262,13 +276,17 @@ fn run_detect(s: &mut Session, p: &Value) -> Result<Value> {
         }));
     }
 
-    let type_summary: Vec<Value> = type_counts.iter().map(|(id, count)| {
-        let name = types.iter()
-            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
-            .and_then(|t| t.get("name").and_then(Value::as_str))
-            .unwrap_or(id);
-        json!({"id": id, "name": name, "count": count})
-    }).collect();
+    let type_summary: Vec<Value> = type_counts
+        .iter()
+        .map(|(id, count)| {
+            let name = types
+                .iter()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
+                .and_then(|t| t.get("name").and_then(Value::as_str))
+                .unwrap_or(id);
+            json!({"id": id, "name": name, "count": count})
+        })
+        .collect();
 
     Ok(json!({ "detected": detected, "types": type_summary }))
 }

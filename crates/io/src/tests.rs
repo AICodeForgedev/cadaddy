@@ -2627,18 +2627,8 @@ fn project_rules_roundtrip_in_dxf() {
         RuleValue::new("18\"").with_source("NEC 210.52").with_tier(SourceTier::Spec),
         "standard height",
     );
-    d.project_rules.set(
-        RuleDomain::WiringMethod,
-        "general",
-        RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule),
-        "project default",
-    );
-    d.project_rules.set(
-        RuleDomain::Clearance,
-        "panel_front",
-        RuleValue::new("36\"").with_source("NEC 110.26").with_tier(SourceTier::Spec),
-        "",
-    );
+    d.project_rules.set(RuleDomain::WiringMethod, "general", RuleValue::new("MC cable").with_tier(SourceTier::ProjectRule), "project default");
+    d.project_rules.set(RuleDomain::Clearance, "panel_front", RuleValue::new("36\"").with_source("NEC 110.26").with_tier(SourceTier::Spec), "");
 
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_PROJRULES"));
