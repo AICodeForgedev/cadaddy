@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	प्लग-इन
+	DGN Import...	DGN इम्पोर्ट...
+	DGN Export...	DGN एक्सपोर्ट...
+	DGN Underlay...	DGN अंडरले...
+	Clip DGN Underlay	DGN अंडरले क्लिप करें
+	Adjust DGN Underlay	DGN अंडरले समायोजित करें
+	DGN Underlay Levels	DGN अंडरले लेवल
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	व्हील: ज़ूम
+	Wheel Pan	व्हील: पैन
+	Wheel Orbit	व्हील: ऑर्बिट
+	Wheel Look	व्हील: चारों ओर देखें
+	Wheel Center	व्हील: केंद्र
+	Wheel Rewind	व्हील: रिवाइंड
+	Wheel Walk	व्हील: वॉक
+	ViewCube Settings	ViewCube सेटिंग्स
+	Create Camera	कैमरा बनाएँ
+	Cameras	कैमरे
+	Change Camera	कैमरा बदलें
+	Delete Camera	कैमरा हटाएँ
+	View from Camera	कैमरे से व्यू
+	Quick View Drawings	ड्रॉइंग का त्वरित व्यू
+	Quick View Layouts	लेआउट का त्वरित व्यू
+	Close Quick View Drawings	ड्रॉइंग का त्वरित व्यू बंद करें
+	Close Quick View Layouts	लेआउट का त्वरित व्यू बंद करें
+	MVSETUP	MVSETUP
+	ZOOM	ज़ूम
+	ORBIT	ऑर्बिट
+	REWIND	रिवाइंड
+	PAN	पैन
+	CENTER	केंद्र
+	WALK	वॉक
+	LOOK	देखें
+	Zoom: drag up or down	ज़ूम: ऊपर या नीचे ड्रैग करें
+	Orbit: drag to turn the model	ऑर्बिट: मॉडल घुमाने के लिए ड्रैग करें
+	Rewind: back to the view before	रिवाइंड: पिछले व्यू पर वापस
+	Pan: drag the drawing	पैन: ड्रॉइंग को ड्रैग करें
+	Center: click or drag onto a point	केंद्र: किसी बिंदु पर क्लिक या ड्रैग करें
+	Look: drag to look around	देखें: चारों ओर देखने के लिए ड्रैग करें
+	double-click to look from it	इससे देखने के लिए डबल-क्लिक करें
+	Load Shape File	आकृति फ़ाइल लोड करें
+	Compile Shape File	आकृति फ़ाइल कंपाइल करें
+	Make Shape	आकृति बनाएँ
+	Copy Multiple	एकाधिक कॉपी
+	Attribute Extraction	एट्रिब्यूट निष्कर्षण
+	Make Linetype	लाइनटाइप बनाएँ
+	Enter name of shape file to load	लोड करने के लिए आकृति फ़ाइल का नाम दर्ज करें
+	Enter name of shape source file to compile	कंपाइल करने के लिए आकृति स्रोत फ़ाइल का नाम दर्ज करें
+	Enter shape name or [?]	आकृति नाम या [?] दर्ज करें
+	Enter the name of the shape	आकृति का नाम दर्ज करें
+	Enter the name of the shape file	आकृति फ़ाइल का नाम दर्ज करें
+	Enter resolution	रिज़ॉल्यूशन दर्ज करें
+	Specify trace width	ट्रेस की चौड़ाई निर्दिष्ट करें
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	दूसरा बिंदु या [Repeat (अंतिम)/Divide/Measure/Array (डायनेमिक)]
+	Number of copies	प्रतियों की संख्या
+	Specify array corner	ऐरे का कोना निर्दिष्ट करें
+	Enter extraction type or enable object selection	निष्कर्षण प्रकार दर्ज करें या ऑब्जेक्ट चयन सक्षम करें
+	Enter template file name	टेम्पलेट फ़ाइल का नाम दर्ज करें
+	Enter extract file name	निष्कर्षण फ़ाइल का नाम दर्ज करें
+	Enter linetype file name	लाइनटाइप फ़ाइल का नाम दर्ज करें
+	Enter linetype name	लाइनटाइप का नाम दर्ज करें
+	Enter linetype description	लाइनटाइप का विवरण दर्ज करें
+	Specify starting point for line definition	रेखा परिभाषा का आरंभ बिंदु निर्दिष्ट करें
+	Specify ending point for line definition	रेखा परिभाषा का अंतबिंदु निर्दिष्ट करें
+	Enter name of saved filter	सहेजे गए फ़िल्टर का नाम दर्ज करें
+	Enter name to save the filter as	फ़िल्टर किस नाम से सहेजना है, वह दर्ज करें
+	Enter filter to save	सहेजने के लिए फ़िल्टर दर्ज करें
+	Enter name of saved filter to delete	हटाने के लिए सहेजे गए फ़िल्टर का नाम दर्ज करें
+	Add (AND)	जोड़ें (AND)
+	Add (OR)	जोड़ें (OR)
+	Saved filters:	सहेजे गए फ़िल्टर:
+	(none)	(कोई नहीं)
+	Apply to current selection	वर्तमान चयन पर लागू करें
+	Add CV	नियंत्रण बिंदु जोड़ें
+	Blend Surface	ब्लेंड सतह
+	Convert to Solid	सॉलिड में बदलें
+	Convert to Surface	सतह में बदलें
+	Extend Surface	सतह बढ़ाएँ
+	Fillet Surface	सतह फ़िलेट
+	Hide CV	नियंत्रण बिंदु छिपाएँ
+	Interference Checking	इंटरफ़ेरेंस जाँच
+	Offset Surface	सतह ऑफ़सेट
+	Patch	पैच
+	Patch Surface	पैच सतह
+	Planar	समतल
+	Planar Surface	समतल सतह
+	Rebuild Surface	सतह फिर से बनाएँ
+	Remove CV	नियंत्रण बिंदु हटाएँ
+	Show CV	नियंत्रण बिंदु दिखाएँ
+	Surface Editing	सतह संपादन
+	Surfaces	सतहें
+	Trim Surface	सतह ट्रिम करें
+	Untrim	ट्रिम हटाएँ
+	Untrim Surface	सतह की ट्रिम हटाएँ
+	Select a command to see its help page.	सहायता पृष्ठ देखने के लिए कोई कमांड चुनें।
+	Command not found.	कमांड नहीं मिला।
+	Aliases:	उपनाम:
+	Menu:	मेनू:
+	Shortcut:	शॉर्टकट:
+	Transparent:	ट्रांसपेरेंट:
+	Yes (can run inside another command with a leading apostrophe)	हाँ (आरंभ में एपॉस्ट्रॉफ़ी लगाकर किसी अन्य कमांड के भीतर चल सकता है)
+	JSON parameters:	JSON पैरामीटर:
+	Run this command	यह कमांड चलाएँ
+	Render Environment	रेंडर परिवेश
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	इस डायमेंशन का संबंध टूट गया है: जिस ऑब्जेक्ट को यह मापता था, वह मिटा दिया गया। इसे पुनः संबद्ध करने के लिए क्लिक करें।
+	Reassociate	पुनः संबद्ध करें
+	Disassociate	असंबद्ध करें
+	Hide Action Bar	एक्शन बार छिपाएँ
+	Reset Action Bars	एक्शन बार रीसेट करें
+	Action Bars	एक्शन बार
+	Make Visible	दृश्यमान बनाएँ
+	Make Invisible	अदृश्य बनाएँ
+	Convert Dimensions to Constraints	डायमेंशन को कंस्ट्रेंट में बदलें
+	Convert Constraints to Dimensions	कंस्ट्रेंट को डायमेंशन में बदलें
+	Polyhedron	बहुफलक
+	Select closed meshes or surfaces to convert	बदलने के लिए बंद मेश या सतहें चुनें
+	Select first surface	पहली सतह चुनें
+	Pick a point on its edge to fillet	फ़िलेट के लिए उसके किनारे पर एक बिंदु चुनें
+	Select second surface	दूसरी सतह चुनें
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	कोई बंद (वॉटरटाइट) मेश या सतह नहीं चुनी गई। केवल बंद आकृतियाँ ही सॉलिड बन सकती हैं।
+	Visual Styles Manager	विज़ुअल स्टाइल मैनेजर
+	Ambient occlusion	एम्बिएंट ऑक्लूज़न
+	Soft shadows	मुलायम छायाएँ
+	Tone map	टोन मैपिंग
+	Tone curve	टोन वक्र
+	Ambient occlusion strength (0 off … 2)	एम्बिएंट ऑक्लूज़न की तीव्रता (0 बंद … 2)
+	Ambient occlusion reach (0: by the model's size)	एम्बिएंट ऑक्लूज़न की पहुँच (0: मॉडल के आकार के अनुसार)
+	Sun size for soft shadows in degrees (0 sharp … 10)	मुलायम छायाओं के लिए सूर्य का आकार डिग्री में (0 तीखी … 10)
+	Filmic	फ़िल्मिक
+	Reinhard	Reinhard
+	Neutral	तटस्थ
+	Shade plot "Rendered" plots in the Realistic visual style.	शेड प्लॉट "Rendered" यथार्थवादी विज़ुअल स्टाइल में प्लॉट करता है।

@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Laajennukset
+	DGN Import...	DGN-tuonti...
+	DGN Export...	DGN-vienti...
+	DGN Underlay...	DGN-alusta...
+	Clip DGN Underlay	Rajaa DGN-alusta
+	Adjust DGN Underlay	Säädä DGN-alustaa
+	DGN Underlay Levels	DGN-alustan tasot
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Ohjauspyörä: zoomaus
+	Wheel Pan	Ohjauspyörä: panorointi
+	Wheel Orbit	Ohjauspyörä: kierto
+	Wheel Look	Ohjauspyörä: katselu
+	Wheel Center	Ohjauspyörä: keskitys
+	Wheel Rewind	Ohjauspyörä: takaisin
+	Wheel Walk	Ohjauspyörä: kävely
+	ViewCube Settings	ViewCube-asetukset
+	Create Camera	Luo kamera
+	Cameras	Kamerat
+	Change Camera	Muuta kameraa
+	Delete Camera	Poista kamera
+	View from Camera	Näkymä kamerasta
+	Quick View Drawings	Piirustusten pikanäkymä
+	Quick View Layouts	Asettelujen pikanäkymä
+	Close Quick View Drawings	Sulje piirustusten pikanäkymä
+	Close Quick View Layouts	Sulje asettelujen pikanäkymä
+	MVSETUP	MVSETUP
+	ZOOM	ZOOMAUS
+	ORBIT	KIERTO
+	REWIND	TAKAISIN
+	PAN	PANOROINTI
+	CENTER	KESKITYS
+	WALK	KÄVELY
+	LOOK	KATSELU
+	Zoom: drag up or down	Zoomaus: vedä ylös tai alas
+	Orbit: drag to turn the model	Kierto: kierrä mallia vetämällä
+	Rewind: back to the view before	Takaisin: edelliseen näkymään
+	Pan: drag the drawing	Panorointi: vedä piirustusta
+	Center: click or drag onto a point	Keskitys: napsauta pistettä tai vedä sen päälle
+	Look: drag to look around	Katselu: katsele ympärillesi vetämällä
+	double-click to look from it	katso siitä kaksoisnapsauttamalla
+	Load Shape File	Lataa muototiedosto
+	Compile Shape File	Käännä muototiedosto
+	Make Shape	Luo muoto
+	Copy Multiple	Kopioi useita
+	Attribute Extraction	Attribuuttien poiminta
+	Make Linetype	Luo viivatyyppi
+	Enter name of shape file to load	Anna ladattavan muototiedoston nimi
+	Enter name of shape source file to compile	Anna käännettävän muotolähdetiedoston nimi
+	Enter shape name or [?]	Anna muodon nimi tai [?]
+	Enter the name of the shape	Anna muodon nimi
+	Enter the name of the shape file	Anna muototiedoston nimi
+	Enter resolution	Anna tarkkuus
+	Specify trace width	Määritä jäljen leveys
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Toinen piste tai [Repeat (viimeinen)/Divide/Measure/Array (dynaaminen)]
+	Number of copies	Kopioiden määrä
+	Specify array corner	Määritä sarjan kulma
+	Enter extraction type or enable object selection	Anna poimintatyyppi tai ota objektien valinta käyttöön
+	Enter template file name	Anna mallitiedoston nimi
+	Enter extract file name	Anna poimintatiedoston nimi
+	Enter linetype file name	Anna viivatyyppitiedoston nimi
+	Enter linetype name	Anna viivatyypin nimi
+	Enter linetype description	Anna viivatyypin kuvaus
+	Specify starting point for line definition	Määritä viivamäärittelyn alkupiste
+	Specify ending point for line definition	Määritä viivamäärittelyn loppupiste
+	Enter name of saved filter	Anna tallennetun suodattimen nimi
+	Enter name to save the filter as	Anna nimi, jolla suodatin tallennetaan
+	Enter filter to save	Anna tallennettava suodatin
+	Enter name of saved filter to delete	Anna poistettavan tallennetun suodattimen nimi
+	Add (AND)	Lisää (JA)
+	Add (OR)	Lisää (TAI)
+	Saved filters:	Tallennetut suodattimet:
+	(none)	(ei mitään)
+	Apply to current selection	Käytä nykyiseen valintaan
+	Add CV	Lisää ohjauspiste
+	Blend Surface	Sovituspinta
+	Convert to Solid	Muunna solidiksi
+	Convert to Surface	Muunna pinnaksi
+	Extend Surface	Jatka pintaa
+	Fillet Surface	Pyöristyspinta
+	Hide CV	Piilota ohjauspisteet
+	Interference Checking	Törmäystarkistus
+	Offset Surface	Siirrä pintaa
+	Patch	Paikka
+	Patch Surface	Paikkapinta
+	Planar	Taso
+	Planar Surface	Tasopinta
+	Rebuild Surface	Rakenna pinta uudelleen
+	Remove CV	Poista ohjauspiste
+	Show CV	Näytä ohjauspisteet
+	Surface Editing	Pintojen muokkaus
+	Surfaces	Pinnat
+	Trim Surface	Lyhennä pintaa
+	Untrim	Kumoa lyhennys
+	Untrim Surface	Kumoa pinnan lyhennys
+	Select a command to see its help page.	Valitse komento nähdäksesi sen ohjesivun.
+	Command not found.	Komentoa ei löydy.
+	Aliases:	Aliakset:
+	Menu:	Valikko:
+	Shortcut:	Pikanäppäin:
+	Transparent:	Läpinäkyvä:
+	Yes (can run inside another command with a leading apostrophe)	Kyllä (voidaan suorittaa toisen komennon sisällä, kun eteen lisätään heittomerkki)
+	JSON parameters:	JSON-parametrit:
+	Run this command	Suorita tämä komento
+	Render Environment	Renderöintiympäristö
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Tämä mitta menetti assosiatiivisuutensa: sen mittaama objekti poistettiin. Yhdistä se uudelleen napsauttamalla.
+	Reassociate	Yhdistä uudelleen
+	Disassociate	Irrota assosiatiivisuus
+	Hide Action Bar	Piilota toimintopalkki
+	Reset Action Bars	Palauta toimintopalkit
+	Action Bars	Toimintopalkit
+	Make Visible	Tee näkyväksi
+	Make Invisible	Tee näkymättömäksi
+	Convert Dimensions to Constraints	Muunna mitat rajoitteiksi
+	Convert Constraints to Dimensions	Muunna rajoitteet mitoiksi
+	Polyhedron	Monitahokas
+	Select closed meshes or surfaces to convert	Valitse muunnettavat suljetut verkot tai pinnat
+	Select first surface	Valitse ensimmäinen pinta
+	Pick a point on its edge to fillet	Valitse pyöristettävän reunan piste
+	Select second surface	Valitse toinen pinta
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Suljettua (vesitiivistä) verkkoa tai pintaa ei valittu. Vain suljetuista muodoista voi tulla solideja.
+	Visual Styles Manager	Visuaalisten tyylien hallinta
+	Ambient occlusion	Ympäristön peittyvyys
+	Soft shadows	Pehmeät varjot
+	Tone map	Sävykartoitus
+	Tone curve	Sävykäyrä
+	Ambient occlusion strength (0 off … 2)	Ympäristön peittyvyyden voimakkuus (0 pois … 2)
+	Ambient occlusion reach (0: by the model's size)	Ympäristön peittyvyyden ulottuvuus (0: mallin koon mukaan)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Auringon koko pehmeille varjoille asteina (0 terävä … 10)
+	Filmic	Elokuvamainen
+	Reinhard	Reinhard
+	Neutral	Neutraali
+	Shade plot "Rendered" plots in the Realistic visual style.	Varjostettu tulostus "Rendered" tulostaa visuaalisella tyylillä Realistinen.

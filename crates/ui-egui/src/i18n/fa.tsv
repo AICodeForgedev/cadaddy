@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	افزونه‌ها
+	DGN Import...	وارد کردن DGN...
+	DGN Export...	صدور DGN...
+	DGN Underlay...	زیرلایه DGN...
+	Clip DGN Underlay	برش قاب زیرلایه DGN
+	Adjust DGN Underlay	تنظیم زیرلایه DGN
+	DGN Underlay Levels	ترازهای زیرلایه DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	چرخ ناوبری: زوم
+	Wheel Pan	چرخ ناوبری: جابه‌جایی نما
+	Wheel Orbit	چرخ ناوبری: مدار
+	Wheel Look	چرخ ناوبری: نگاه
+	Wheel Center	چرخ ناوبری: مرکز
+	Wheel Rewind	چرخ ناوبری: بازگشت
+	Wheel Walk	چرخ ناوبری: قدم زدن
+	ViewCube Settings	تنظیمات ViewCube
+	Create Camera	ایجاد دوربین
+	Cameras	دوربین‌ها
+	Change Camera	تغییر دوربین
+	Delete Camera	حذف دوربین
+	View from Camera	نما از دوربین
+	Quick View Drawings	نمای سریع نقشه‌ها
+	Quick View Layouts	نمای سریع طرح‌بندی‌ها
+	Close Quick View Drawings	بستن نمای سریع نقشه‌ها
+	Close Quick View Layouts	بستن نمای سریع طرح‌بندی‌ها
+	MVSETUP	MVSETUP
+	ZOOM	زوم
+	ORBIT	مدار
+	REWIND	بازگشت
+	PAN	جابه‌جایی
+	CENTER	مرکز
+	WALK	قدم زدن
+	LOOK	نگاه
+	Zoom: drag up or down	زوم: به بالا یا پایین بکشید
+	Orbit: drag to turn the model	مدار: برای چرخاندن مدل بکشید
+	Rewind: back to the view before	بازگشت: به نمای قبلی
+	Pan: drag the drawing	جابه‌جایی نما: نقشه را بکشید
+	Center: click or drag onto a point	مرکز: روی یک نقطه کلیک کنید یا بکشید
+	Look: drag to look around	نگاه: برای نگاه کردن به اطراف بکشید
+	double-click to look from it	برای نگاه کردن از آن دوبار کلیک کنید
+	Load Shape File	بارگذاری فایل شکل
+	Compile Shape File	کامپایل فایل شکل
+	Make Shape	ساخت شکل
+	Copy Multiple	کپی چندگانه
+	Attribute Extraction	استخراج ویژگی‌ها
+	Make Linetype	ساخت نوع خط
+	Enter name of shape file to load	نام فایل شکل برای بارگذاری را وارد کنید
+	Enter name of shape source file to compile	نام فایل منبع شکل برای کامپایل را وارد کنید
+	Enter shape name or [?]	نام شکل را وارد کنید یا [?]
+	Enter the name of the shape	نام شکل را وارد کنید
+	Enter the name of the shape file	نام فایل شکل را وارد کنید
+	Enter resolution	وضوح را وارد کنید
+	Specify trace width	عرض ردیابی را مشخص کنید
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	نقطه دوم یا [Repeat (آخرین)/Divide/Measure/Array (پویا)]
+	Number of copies	تعداد نسخه‌ها
+	Specify array corner	گوشه آرایه را مشخص کنید
+	Enter extraction type or enable object selection	نوع استخراج را وارد کنید یا انتخاب اشیا را فعال کنید
+	Enter template file name	نام فایل الگو را وارد کنید
+	Enter extract file name	نام فایل استخراج را وارد کنید
+	Enter linetype file name	نام فایل نوع خط را وارد کنید
+	Enter linetype name	نام نوع خط را وارد کنید
+	Enter linetype description	توضیح نوع خط را وارد کنید
+	Specify starting point for line definition	نقطه شروع تعریف خط را مشخص کنید
+	Specify ending point for line definition	نقطه انتهای تعریف خط را مشخص کنید
+	Enter name of saved filter	نام فیلتر ذخیره‌شده را وارد کنید
+	Enter name to save the filter as	نامی برای ذخیره فیلتر وارد کنید
+	Enter filter to save	فیلتر برای ذخیره را وارد کنید
+	Enter name of saved filter to delete	نام فیلتر ذخیره‌شده برای حذف را وارد کنید
+	Add (AND)	افزودن (و)
+	Add (OR)	افزودن (یا)
+	Saved filters:	فیلترهای ذخیره‌شده:
+	(none)	(هیچ)
+	Apply to current selection	اعمال به انتخاب فعلی
+	Add CV	افزودن رأس کنترلی
+	Blend Surface	سطح ترکیبی
+	Convert to Solid	تبدیل به جامد
+	Convert to Surface	تبدیل به سطح
+	Extend Surface	امتداد سطح
+	Fillet Surface	گرد کردن گوشه سطح
+	Hide CV	پنهان کردن رئوس کنترلی
+	Interference Checking	بررسی تداخل
+	Offset Surface	آفست سطح
+	Patch	وصله
+	Patch Surface	سطح وصله
+	Planar	صفحه‌ای
+	Planar Surface	سطح صفحه‌ای
+	Rebuild Surface	ساخت مجدد سطح
+	Remove CV	حذف رأس کنترلی
+	Show CV	نمایش رئوس کنترلی
+	Surface Editing	ویرایش سطح
+	Surfaces	سطوح
+	Trim Surface	برش سطح
+	Untrim	لغو برش
+	Untrim Surface	لغو برش سطح
+	Select a command to see its help page.	یک فرمان انتخاب کنید تا صفحه راهنمای آن را ببینید.
+	Command not found.	فرمان یافت نشد.
+	Aliases:	نام‌های مستعار:
+	Menu:	منو:
+	Shortcut:	میان‌بر:
+	Transparent:	شفاف:
+	Yes (can run inside another command with a leading apostrophe)	بله (با یک آپاستروف در ابتدا می‌تواند درون فرمان دیگری اجرا شود)
+	JSON parameters:	پارامترهای JSON:
+	Run this command	اجرای این فرمان
+	Render Environment	محیط رندر
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	این اندازه وابستگی خود را از دست داده است: شیئی که اندازه می‌گرفت پاک شده است. برای وابسته‌سازی مجدد آن کلیک کنید.
+	Reassociate	وابسته‌سازی مجدد
+	Disassociate	جدا کردن وابستگی
+	Hide Action Bar	پنهان کردن نوار عملکرد
+	Reset Action Bars	بازنشانی نوارهای عملکرد
+	Action Bars	نوارهای عملکرد
+	Make Visible	قابل مشاهده کردن
+	Make Invisible	نامرئی کردن
+	Convert Dimensions to Constraints	تبدیل اندازه‌ها به قیدها
+	Convert Constraints to Dimensions	تبدیل قیدها به اندازه‌ها
+	Polyhedron	چندوجهی
+	Select closed meshes or surfaces to convert	مش‌ها یا سطوح بسته را برای تبدیل انتخاب کنید
+	Select first surface	سطح اول را انتخاب کنید
+	Pick a point on its edge to fillet	نقطه‌ای روی لبه آن برای گرد کردن گوشه انتخاب کنید
+	Select second surface	سطح دوم را انتخاب کنید
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	هیچ مش یا سطح بسته (آب‌بند) انتخاب نشد. فقط شکل‌های بسته می‌توانند به جامد تبدیل شوند.
+	Visual Styles Manager	مدیریت سبک‌های بصری
+	Ambient occlusion	انسداد محیطی
+	Soft shadows	سایه‌های نرم
+	Tone map	نگاشت تن
+	Tone curve	منحنی تن
+	Ambient occlusion strength (0 off … 2)	شدت انسداد محیطی (0 خاموش … 2)
+	Ambient occlusion reach (0: by the model's size)	برد انسداد محیطی (0: بر اساس اندازه مدل)
+	Sun size for soft shadows in degrees (0 sharp … 10)	اندازه خورشید برای سایه‌های نرم به درجه (0 تیز … 10)
+	Filmic	سینمایی
+	Reinhard	راینهارد
+	Neutral	خنثی
+	Shade plot "Rendered" plots in the Realistic visual style.	پلات سایه‌دار "Rendered" با سبک بصری واقع‌گرایانه پلات می‌کند.

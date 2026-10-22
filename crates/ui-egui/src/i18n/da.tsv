@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Udvidelser
+	DGN Import...	DGN-import...
+	DGN Export...	DGN-eksport...
+	DGN Underlay...	DGN-underlag...
+	Clip DGN Underlay	Klip DGN-underlag
+	Adjust DGN Underlay	Juster DGN-underlag
+	DGN Underlay Levels	Niveauer i DGN-underlag
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Hjul: zoom
+	Wheel Pan	Hjul: panorer
+	Wheel Orbit	Hjul: kredsløb
+	Wheel Look	Hjul: se rundt
+	Wheel Center	Hjul: centrum
+	Wheel Rewind	Hjul: tilbage
+	Wheel Walk	Hjul: gå
+	ViewCube Settings	ViewCube-indstillinger
+	Create Camera	Opret kamera
+	Cameras	Kameraer
+	Change Camera	Rediger kamera
+	Delete Camera	Slet kamera
+	View from Camera	Visning fra kamera
+	Quick View Drawings	Hurtig visning af tegninger
+	Quick View Layouts	Hurtig visning af layouts
+	Close Quick View Drawings	Luk hurtig visning af tegninger
+	Close Quick View Layouts	Luk hurtig visning af layouts
+	MVSETUP	MVSETUP
+	ZOOM	ZOOM
+	ORBIT	KREDSLØB
+	REWIND	TILBAGE
+	PAN	PANORER
+	CENTER	CENTRUM
+	WALK	GÅ
+	LOOK	SE RUNDT
+	Zoom: drag up or down	Zoom: træk op eller ned
+	Orbit: drag to turn the model	Kredsløb: træk for at dreje modellen
+	Rewind: back to the view before	Tilbage: tilbage til den forrige visning
+	Pan: drag the drawing	Panorer: træk tegningen
+	Center: click or drag onto a point	Centrum: klik på eller træk til et punkt
+	Look: drag to look around	Se rundt: træk for at se dig omkring
+	double-click to look from it	dobbeltklik for at se fra kameraet
+	Load Shape File	Indlæs formfil
+	Compile Shape File	Kompiler formfil
+	Make Shape	Opret form
+	Copy Multiple	Kopier flere
+	Attribute Extraction	Attributudtræk
+	Make Linetype	Opret linjetype
+	Enter name of shape file to load	Angiv navn på formfil, der skal indlæses
+	Enter name of shape source file to compile	Angiv navn på formkildefil, der skal kompileres
+	Enter shape name or [?]	Angiv formnavn eller [?]
+	Enter the name of the shape	Angiv navnet på formen
+	Enter the name of the shape file	Angiv navnet på formfilen
+	Enter resolution	Angiv opløsning
+	Specify trace width	Angiv sporbredde
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Andet punkt eller [Repeat (seneste)/Divide/Measure/Array (dynamisk)]
+	Number of copies	Antal kopier
+	Specify array corner	Angiv mønstrets hjørne
+	Enter extraction type or enable object selection	Angiv udtrækstype, eller aktiver objektvalg
+	Enter template file name	Angiv navn på skabelonfil
+	Enter extract file name	Angiv navn på udtræksfil
+	Enter linetype file name	Angiv navn på linjetypefil
+	Enter linetype name	Angiv linjetypenavn
+	Enter linetype description	Angiv linjetypebeskrivelse
+	Specify starting point for line definition	Angiv startpunkt for linjedefinitionen
+	Specify ending point for line definition	Angiv slutpunkt for linjedefinitionen
+	Enter name of saved filter	Angiv navn på gemt filter
+	Enter name to save the filter as	Angiv navnet, filteret skal gemmes som
+	Enter filter to save	Angiv filter, der skal gemmes
+	Enter name of saved filter to delete	Angiv navn på gemt filter, der skal slettes
+	Add (AND)	Tilføj (OG)
+	Add (OR)	Tilføj (ELLER)
+	Saved filters:	Gemte filtre:
+	(none)	(ingen)
+	Apply to current selection	Anvend på aktuel markering
+	Add CV	Tilføj kontrolpunkt
+	Blend Surface	Overgangsflade
+	Convert to Solid	Konverter til solid
+	Convert to Surface	Konverter til flade
+	Extend Surface	Forlæng flade
+	Fillet Surface	Afrund flade
+	Hide CV	Skjul kontrolpunkter
+	Interference Checking	Interferenskontrol
+	Offset Surface	Forskyd flade
+	Patch	Lap
+	Patch Surface	Lapflade
+	Planar	Plan
+	Planar Surface	Plan flade
+	Rebuild Surface	Genopbyg flade
+	Remove CV	Fjern kontrolpunkt
+	Show CV	Vis kontrolpunkter
+	Surface Editing	Fladeredigering
+	Surfaces	Flader
+	Trim Surface	Trim flade
+	Untrim	Fjern trimning
+	Untrim Surface	Fjern trimning af flade
+	Select a command to see its help page.	Vælg en kommando for at se dens hjælpeside.
+	Command not found.	Kommandoen blev ikke fundet.
+	Aliases:	Aliasser:
+	Menu:	Menu:
+	Shortcut:	Genvej:
+	Transparent:	Transparent:
+	Yes (can run inside another command with a leading apostrophe)	Ja (kan køres inde i en anden kommando med en foranstillet apostrof)
+	JSON parameters:	JSON-parametre:
+	Run this command	Kør denne kommando
+	Render Environment	Renderingsmiljø
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Dette mål har mistet sin tilknytning: et objekt, det målte, blev slettet. Klik for at tilknytte det igen.
+	Reassociate	Tilknyt igen
+	Disassociate	Fjern tilknytning
+	Hide Action Bar	Skjul handlingslinje
+	Reset Action Bars	Nulstil handlingslinjer
+	Action Bars	Handlingslinjer
+	Make Visible	Gør synlig
+	Make Invisible	Gør usynlig
+	Convert Dimensions to Constraints	Konverter mål til betingelser
+	Convert Constraints to Dimensions	Konverter betingelser til mål
+	Polyhedron	Polyeder
+	Select closed meshes or surfaces to convert	Vælg lukkede net eller flader, der skal konverteres
+	Select first surface	Vælg første flade
+	Pick a point on its edge to fillet	Vælg et punkt på kanten, der skal afrundes
+	Select second surface	Vælg anden flade
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Der blev ikke valgt noget lukket (vandtæt) net eller nogen lukket flade. Kun lukkede former kan blive til solider.
+	Visual Styles Manager	Styring af visuelle stile
+	Ambient occlusion	Omgivelsesokklusion
+	Soft shadows	Bløde skygger
+	Tone map	Tonemapping
+	Tone curve	Tonekurve
+	Ambient occlusion strength (0 off … 2)	Styrke for omgivelsesokklusion (0 fra … 2)
+	Ambient occlusion reach (0: by the model's size)	Rækkevidde for omgivelsesokklusion (0: efter modellens størrelse)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Solstørrelse for bløde skygger i grader (0 skarp … 10)
+	Filmic	Filmisk
+	Reinhard	Reinhard
+	Neutral	Neutral
+	Shade plot "Rendered" plots in the Realistic visual style.	Skyggelagt plot "Rendered" plotter i den visuelle stil Realistisk.

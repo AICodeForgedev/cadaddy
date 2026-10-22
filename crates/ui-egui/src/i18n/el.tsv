@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Πρόσθετα
+	DGN Import...	Εισαγωγή DGN...
+	DGN Export...	Εξαγωγή DGN...
+	DGN Underlay...	Υπόβαθρο DGN...
+	Clip DGN Underlay	Αποκοπή υποβάθρου DGN
+	Adjust DGN Underlay	Προσαρμογή υποβάθρου DGN
+	DGN Underlay Levels	Στάθμες υποβάθρου DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Τροχός: ζουμ
+	Wheel Pan	Τροχός: μετατόπιση όψης
+	Wheel Orbit	Τροχός: περιστροφή όψης
+	Wheel Look	Τροχός: ματιά γύρω
+	Wheel Center	Τροχός: κέντρο
+	Wheel Rewind	Τροχός: επιστροφή
+	Wheel Walk	Τροχός: περιήγηση
+	ViewCube Settings	Ρυθμίσεις ViewCube
+	Create Camera	Δημιουργία κάμερας
+	Cameras	Κάμερες
+	Change Camera	Αλλαγή κάμερας
+	Delete Camera	Διαγραφή κάμερας
+	View from Camera	Όψη από κάμερα
+	Quick View Drawings	Γρήγορη προβολή σχεδίων
+	Quick View Layouts	Γρήγορη προβολή διατάξεων
+	Close Quick View Drawings	Κλείσιμο γρήγορης προβολής σχεδίων
+	Close Quick View Layouts	Κλείσιμο γρήγορης προβολής διατάξεων
+	MVSETUP	MVSETUP
+	ZOOM	ΖΟΥΜ
+	ORBIT	ΠΕΡΙΣΤΡΟΦΗ
+	REWIND	ΕΠΙΣΤΡΟΦΗ
+	PAN	ΜΕΤΑΤΟΠΙΣΗ
+	CENTER	ΚΕΝΤΡΟ
+	WALK	ΠΕΡΙΗΓΗΣΗ
+	LOOK	ΜΑΤΙΑ
+	Zoom: drag up or down	Ζουμ: σύρετε πάνω ή κάτω
+	Orbit: drag to turn the model	Περιστροφή όψης: σύρετε για να περιστρέψετε το μοντέλο
+	Rewind: back to the view before	Επιστροφή: στην προηγούμενη όψη
+	Pan: drag the drawing	Μετατόπιση όψης: σύρετε το σχέδιο
+	Center: click or drag onto a point	Κέντρο: κάντε κλικ ή σύρετε σε ένα σημείο
+	Look: drag to look around	Ματιά: σύρετε για να κοιτάξετε γύρω
+	double-click to look from it	διπλό κλικ για προβολή από αυτήν
+	Load Shape File	Φόρτωση αρχείου σχημάτων
+	Compile Shape File	Μεταγλώττιση αρχείου σχημάτων
+	Make Shape	Δημιουργία σχήματος
+	Copy Multiple	Πολλαπλή αντιγραφή
+	Attribute Extraction	Εξαγωγή χαρακτηριστικών
+	Make Linetype	Δημιουργία τύπου γραμμής
+	Enter name of shape file to load	Δώστε όνομα αρχείου σχημάτων για φόρτωση
+	Enter name of shape source file to compile	Δώστε όνομα αρχείου πηγής σχημάτων για μεταγλώττιση
+	Enter shape name or [?]	Δώστε όνομα σχήματος ή [?]
+	Enter the name of the shape	Δώστε το όνομα του σχήματος
+	Enter the name of the shape file	Δώστε το όνομα του αρχείου σχημάτων
+	Enter resolution	Δώστε ανάλυση
+	Specify trace width	Καθορίστε πλάτος ίχνους
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Δεύτερο σημείο ή [Repeat (τελευταίο)/Divide/Measure/Array (δυναμική)]
+	Number of copies	Πλήθος αντιγράφων
+	Specify array corner	Καθορίστε γωνία συστοιχίας
+	Enter extraction type or enable object selection	Δώστε τύπο εξαγωγής ή ενεργοποιήστε την επιλογή αντικειμένων
+	Enter template file name	Δώστε όνομα αρχείου προτύπου
+	Enter extract file name	Δώστε όνομα αρχείου εξαγωγής
+	Enter linetype file name	Δώστε όνομα αρχείου τύπων γραμμής
+	Enter linetype name	Δώστε όνομα τύπου γραμμής
+	Enter linetype description	Δώστε περιγραφή τύπου γραμμής
+	Specify starting point for line definition	Καθορίστε αρχικό σημείο για τον ορισμό γραμμής
+	Specify ending point for line definition	Καθορίστε τελικό σημείο για τον ορισμό γραμμής
+	Enter name of saved filter	Δώστε όνομα αποθηκευμένου φίλτρου
+	Enter name to save the filter as	Δώστε όνομα για αποθήκευση του φίλτρου
+	Enter filter to save	Δώστε φίλτρο για αποθήκευση
+	Enter name of saved filter to delete	Δώστε όνομα αποθηκευμένου φίλτρου για διαγραφή
+	Add (AND)	Προσθήκη (ΚΑΙ)
+	Add (OR)	Προσθήκη (Ή)
+	Saved filters:	Αποθηκευμένα φίλτρα:
+	(none)	(κανένα)
+	Apply to current selection	Εφαρμογή στην τρέχουσα επιλογή
+	Add CV	Προσθήκη σημείου ελέγχου
+	Blend Surface	Επιφάνεια ανάμειξης
+	Convert to Solid	Μετατροπή σε στερεό
+	Convert to Surface	Μετατροπή σε επιφάνεια
+	Extend Surface	Επέκταση επιφάνειας
+	Fillet Surface	Στρογγύλευση επιφάνειας
+	Hide CV	Απόκρυψη σημείων ελέγχου
+	Interference Checking	Έλεγχος παρεμβολών
+	Offset Surface	Μετατόπιση επιφάνειας
+	Patch	Μπάλωμα
+	Patch Surface	Επιφάνεια μπαλώματος
+	Planar	Επίπεδη
+	Planar Surface	Επίπεδη επιφάνεια
+	Rebuild Surface	Αναδημιουργία επιφάνειας
+	Remove CV	Αφαίρεση σημείου ελέγχου
+	Show CV	Εμφάνιση σημείων ελέγχου
+	Surface Editing	Επεξεργασία επιφανειών
+	Surfaces	Επιφάνειες
+	Trim Surface	Περικοπή επιφάνειας
+	Untrim	Αναίρεση περικοπής
+	Untrim Surface	Αναίρεση περικοπής επιφάνειας
+	Select a command to see its help page.	Επιλέξτε μια εντολή για να δείτε τη σελίδα βοήθειάς της.
+	Command not found.	Η εντολή δεν βρέθηκε.
+	Aliases:	Ψευδώνυμα:
+	Menu:	Μενού:
+	Shortcut:	Συντόμευση:
+	Transparent:	Διαφανής:
+	Yes (can run inside another command with a leading apostrophe)	Ναι (μπορεί να εκτελεστεί μέσα σε άλλη εντολή με αρχική απόστροφο)
+	JSON parameters:	Παράμετροι JSON:
+	Run this command	Εκτέλεση αυτής της εντολής
+	Render Environment	Περιβάλλον φωτορεαλισμού
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Αυτή η διάσταση έχασε τη συσχέτισή της: ένα αντικείμενο που μετρούσε διαγράφηκε. Κάντε κλικ για να τη συσχετίσετε ξανά.
+	Reassociate	Επανασύνδεση
+	Disassociate	Αποσύνδεση
+	Hide Action Bar	Απόκρυψη γραμμής ενεργειών
+	Reset Action Bars	Επαναφορά γραμμών ενεργειών
+	Action Bars	Γραμμές ενεργειών
+	Make Visible	Ορισμός ως ορατό
+	Make Invisible	Ορισμός ως αόρατο
+	Convert Dimensions to Constraints	Μετατροπή διαστάσεων σε περιορισμούς
+	Convert Constraints to Dimensions	Μετατροπή περιορισμών σε διαστάσεις
+	Polyhedron	Πολύεδρο
+	Select closed meshes or surfaces to convert	Επιλέξτε κλειστά πλέγματα ή επιφάνειες για μετατροπή
+	Select first surface	Επιλέξτε πρώτη επιφάνεια
+	Pick a point on its edge to fillet	Επιλέξτε ένα σημείο στην ακμή της για στρογγύλευση
+	Select second surface	Επιλέξτε δεύτερη επιφάνεια
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Δεν επιλέχθηκε κλειστό (στεγανό) πλέγμα ή επιφάνεια. Μόνο κλειστά σχήματα μπορούν να γίνουν στερεά.
+	Visual Styles Manager	Διαχείριση οπτικών στυλ
+	Ambient occlusion	Απόφραξη περιβάλλοντος
+	Soft shadows	Μαλακές σκιές
+	Tone map	Αντιστοίχιση τόνων
+	Tone curve	Καμπύλη τόνων
+	Ambient occlusion strength (0 off … 2)	Ένταση απόφραξης περιβάλλοντος (0 ανενεργή … 2)
+	Ambient occlusion reach (0: by the model's size)	Εμβέλεια απόφραξης περιβάλλοντος (0: βάσει μεγέθους μοντέλου)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Μέγεθος ήλιου για μαλακές σκιές σε μοίρες (0 αιχμηρές … 10)
+	Filmic	Κινηματογραφική
+	Reinhard	Reinhard
+	Neutral	Ουδέτερη
+	Shade plot "Rendered" plots in the Realistic visual style.	Η σκιασμένη εκτύπωση «Rendered» εκτυπώνει στο οπτικό στυλ Ρεαλιστικό.

@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	תוספים
+	DGN Import...	ייבוא DGN...
+	DGN Export...	ייצוא DGN...
+	DGN Underlay...	רקע DGN...
+	Clip DGN Underlay	חיתוך רקע DGN
+	Adjust DGN Underlay	התאמת רקע DGN
+	DGN Underlay Levels	מפלסי רקע DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	גלגל ניווט: זום
+	Wheel Pan	גלגל ניווט: הזזת תצוגה
+	Wheel Orbit	גלגל ניווט: סיבוב מסלול
+	Wheel Look	גלגל ניווט: מבט
+	Wheel Center	גלגל ניווט: מרכז
+	Wheel Rewind	גלגל ניווט: אחורה
+	Wheel Walk	גלגל ניווט: הליכה
+	ViewCube Settings	הגדרות ViewCube
+	Create Camera	צור מצלמה
+	Cameras	מצלמות
+	Change Camera	שנה מצלמה
+	Delete Camera	מחק מצלמה
+	View from Camera	תצוגה מהמצלמה
+	Quick View Drawings	תצוגה מהירה של שרטוטים
+	Quick View Layouts	תצוגה מהירה של פריסות
+	Close Quick View Drawings	סגור תצוגה מהירה של שרטוטים
+	Close Quick View Layouts	סגור תצוגה מהירה של פריסות
+	MVSETUP	MVSETUP
+	ZOOM	זום
+	ORBIT	סיבוב מסלול
+	REWIND	אחורה
+	PAN	הזזה
+	CENTER	מרכז
+	WALK	הליכה
+	LOOK	מבט
+	Zoom: drag up or down	זום: גרור למעלה או למטה
+	Orbit: drag to turn the model	סיבוב מסלול: גרור כדי לסובב את המודל
+	Rewind: back to the view before	אחורה: חזרה לתצוגה הקודמת
+	Pan: drag the drawing	הזזת תצוגה: גרור את השרטוט
+	Center: click or drag onto a point	מרכז: לחץ או גרור אל נקודה
+	Look: drag to look around	מבט: גרור כדי להסתכל מסביב
+	double-click to look from it	לחץ פעמיים כדי להסתכל ממנה
+	Load Shape File	טען קובץ צורות
+	Compile Shape File	הדר קובץ צורות
+	Make Shape	צור צורה
+	Copy Multiple	העתקה מרובה
+	Attribute Extraction	חילוץ תכונות
+	Make Linetype	צור סוג קו
+	Enter name of shape file to load	הזן שם קובץ צורות לטעינה
+	Enter name of shape source file to compile	הזן שם קובץ מקור של צורות להידור
+	Enter shape name or [?]	הזן שם צורה או [?]
+	Enter the name of the shape	הזן את שם הצורה
+	Enter the name of the shape file	הזן את שם קובץ הצורות
+	Enter resolution	הזן רזולוציה
+	Specify trace width	ציין רוחב עקיבה
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	נקודה שנייה או [Repeat (אחרון)/Divide/Measure/Array (דינמי)]
+	Number of copies	מספר עותקים
+	Specify array corner	ציין פינת מערך
+	Enter extraction type or enable object selection	הזן סוג חילוץ או הפעל בחירת אובייקטים
+	Enter template file name	הזן שם קובץ תבנית
+	Enter extract file name	הזן שם קובץ חילוץ
+	Enter linetype file name	הזן שם קובץ סוגי קו
+	Enter linetype name	הזן שם סוג קו
+	Enter linetype description	הזן תיאור סוג קו
+	Specify starting point for line definition	ציין נקודת התחלה להגדרת הקו
+	Specify ending point for line definition	ציין נקודת סיום להגדרת הקו
+	Enter name of saved filter	הזן שם מסנן שמור
+	Enter name to save the filter as	הזן שם לשמירת המסנן
+	Enter filter to save	הזן מסנן לשמירה
+	Enter name of saved filter to delete	הזן שם מסנן שמור למחיקה
+	Add (AND)	הוסף (וגם)
+	Add (OR)	הוסף (או)
+	Saved filters:	מסננים שמורים:
+	(none)	(אין)
+	Apply to current selection	החל על הבחירה הנוכחית
+	Add CV	הוסף נקודת בקרה
+	Blend Surface	משטח מיזוג
+	Convert to Solid	המר לגוף מוצק
+	Convert to Surface	המר למשטח
+	Extend Surface	הארכת משטח
+	Fillet Surface	עיגול פינה בין משטחים
+	Hide CV	הסתר נקודות בקרה
+	Interference Checking	בדיקת התנגשויות
+	Offset Surface	היסט משטח
+	Patch	טלאי
+	Patch Surface	משטח טלאי
+	Planar	מישורי
+	Planar Surface	משטח מישורי
+	Rebuild Surface	בנה מחדש משטח
+	Remove CV	הסר נקודת בקרה
+	Show CV	הצג נקודות בקרה
+	Surface Editing	עריכת משטחים
+	Surfaces	משטחים
+	Trim Surface	קיצוץ משטח
+	Untrim	ביטול קיצוץ
+	Untrim Surface	ביטול קיצוץ משטח
+	Select a command to see its help page.	בחר פקודה כדי לראות את דף העזרה שלה.
+	Command not found.	הפקודה לא נמצאה.
+	Aliases:	כינויים:
+	Menu:	תפריט:
+	Shortcut:	קיצור:
+	Transparent:	שקופה:
+	Yes (can run inside another command with a leading apostrophe)	כן (ניתן להפעיל בתוך פקודה אחרת עם גרש בהתחלה)
+	JSON parameters:	פרמטרי JSON:
+	Run this command	הפעל פקודה זו
+	Render Environment	סביבת רינדור
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	מידה זו איבדה את השיוך שלה: אובייקט שהיא מדדה נמחק. לחץ כדי לשייך אותה מחדש.
+	Reassociate	שייך מחדש
+	Disassociate	נתק שיוך
+	Hide Action Bar	הסתר סרגל פעולות
+	Reset Action Bars	אפס סרגלי פעולות
+	Action Bars	סרגלי פעולות
+	Make Visible	הפוך לגלוי
+	Make Invisible	הפוך לבלתי נראה
+	Convert Dimensions to Constraints	המר מידות לאילוצים
+	Convert Constraints to Dimensions	המר אילוצים למידות
+	Polyhedron	פאון
+	Select closed meshes or surfaces to convert	בחר רשתות או משטחים סגורים להמרה
+	Select first surface	בחר משטח ראשון
+	Pick a point on its edge to fillet	בחר נקודה על הקצה שלו לעיגול פינה
+	Select second surface	בחר משטח שני
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	לא נבחרו רשת או משטח סגורים (אטומים). רק צורות סגורות יכולות להפוך לגופים מוצקים.
+	Visual Styles Manager	מנהל סגנונות חזותיים
+	Ambient occlusion	הסתרה סביבתית
+	Soft shadows	צללים רכים
+	Tone map	מיפוי גוונים
+	Tone curve	עקומת גוונים
+	Ambient occlusion strength (0 off … 2)	עוצמת הסתרה סביבתית (0 כבוי … 2)
+	Ambient occlusion reach (0: by the model's size)	טווח הסתרה סביבתית (0: לפי גודל המודל)
+	Sun size for soft shadows in degrees (0 sharp … 10)	גודל השמש לצללים רכים במעלות (0 חד … 10)
+	Filmic	קולנועי
+	Reinhard	ריינהרד
+	Neutral	ניטרלי
+	Shade plot "Rendered" plots in the Realistic visual style.	הדפסה מוצללת "Rendered" מדפיסה בסגנון החזותי ריאליסטי.

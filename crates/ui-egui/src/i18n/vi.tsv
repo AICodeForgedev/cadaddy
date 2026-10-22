@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Phần bổ trợ
+	DGN Import...	Nhập DGN...
+	DGN Export...	Xuất DGN...
+	DGN Underlay...	Nền DGN...
+	Clip DGN Underlay	Cắt xén nền DGN
+	Adjust DGN Underlay	Điều chỉnh nền DGN
+	DGN Underlay Levels	Level của nền DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Vô lăng: Thu phóng
+	Wheel Pan	Vô lăng: Kéo màn hình
+	Wheel Orbit	Vô lăng: Quỹ đạo
+	Wheel Look	Vô lăng: Nhìn quanh
+	Wheel Center	Vô lăng: Tâm
+	Wheel Rewind	Vô lăng: Quay lại
+	Wheel Walk	Vô lăng: Đi bộ
+	ViewCube Settings	Thiết lập ViewCube
+	Create Camera	Tạo camera
+	Cameras	Camera
+	Change Camera	Đổi camera
+	Delete Camera	Xóa camera
+	View from Camera	Nhìn từ camera
+	Quick View Drawings	Xem nhanh bản vẽ
+	Quick View Layouts	Xem nhanh bố cục
+	Close Quick View Drawings	Đóng xem nhanh bản vẽ
+	Close Quick View Layouts	Đóng xem nhanh bố cục
+	MVSETUP	MVSETUP
+	ZOOM	THU PHÓNG
+	ORBIT	QUỸ ĐẠO
+	REWIND	QUAY LẠI
+	PAN	KÉO
+	CENTER	TÂM
+	WALK	ĐI BỘ
+	LOOK	NHÌN QUANH
+	Zoom: drag up or down	Thu phóng: kéo lên hoặc xuống
+	Orbit: drag to turn the model	Quỹ đạo: kéo để xoay mô hình
+	Rewind: back to the view before	Quay lại: về khung nhìn trước đó
+	Pan: drag the drawing	Kéo màn hình: kéo bản vẽ
+	Center: click or drag onto a point	Tâm: nhấp hoặc kéo vào một điểm
+	Look: drag to look around	Nhìn quanh: kéo để nhìn xung quanh
+	double-click to look from it	nhấp đúp để nhìn từ camera này
+	Load Shape File	Tải tệp hình dạng
+	Compile Shape File	Biên dịch tệp hình dạng
+	Make Shape	Tạo hình dạng
+	Copy Multiple	Sao chép nhiều lần
+	Attribute Extraction	Trích xuất thuộc tính
+	Make Linetype	Tạo kiểu đường
+	Enter name of shape file to load	Nhập tên tệp hình dạng cần tải
+	Enter name of shape source file to compile	Nhập tên tệp nguồn hình dạng cần biên dịch
+	Enter shape name or [?]	Nhập tên hình dạng hoặc [?]
+	Enter the name of the shape	Nhập tên của hình dạng
+	Enter the name of the shape file	Nhập tên tệp hình dạng
+	Enter resolution	Nhập độ phân giải
+	Specify trace width	Chỉ định độ rộng nét dày
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Điểm thứ hai hoặc [Repeat (lần trước)/Divide/Measure/Array (động)]
+	Number of copies	Số bản sao
+	Specify array corner	Chỉ định góc của mảng
+	Enter extraction type or enable object selection	Nhập kiểu trích xuất hoặc bật chọn đối tượng
+	Enter template file name	Nhập tên tệp bản mẫu
+	Enter extract file name	Nhập tên tệp trích xuất
+	Enter linetype file name	Nhập tên tệp kiểu đường
+	Enter linetype name	Nhập tên kiểu đường
+	Enter linetype description	Nhập mô tả kiểu đường
+	Specify starting point for line definition	Chỉ định điểm đầu cho định nghĩa đường
+	Specify ending point for line definition	Chỉ định điểm cuối cho định nghĩa đường
+	Enter name of saved filter	Nhập tên bộ lọc đã lưu
+	Enter name to save the filter as	Nhập tên để lưu bộ lọc
+	Enter filter to save	Nhập bộ lọc cần lưu
+	Enter name of saved filter to delete	Nhập tên bộ lọc đã lưu cần xóa
+	Add (AND)	Thêm (AND)
+	Add (OR)	Thêm (OR)
+	Saved filters:	Bộ lọc đã lưu:
+	(none)	(không có)
+	Apply to current selection	Áp dụng cho vùng chọn hiện tại
+	Add CV	Thêm điểm điều khiển
+	Blend Surface	Bề mặt nối mượt
+	Convert to Solid	Chuyển thành khối đặc
+	Convert to Surface	Chuyển thành bề mặt
+	Extend Surface	Kéo dài bề mặt
+	Fillet Surface	Bo tròn bề mặt
+	Hide CV	Ẩn điểm điều khiển
+	Interference Checking	Kiểm tra va chạm
+	Offset Surface	Dời song song bề mặt
+	Patch	Vá
+	Patch Surface	Bề mặt vá
+	Planar	Phẳng
+	Planar Surface	Bề mặt phẳng
+	Rebuild Surface	Dựng lại bề mặt
+	Remove CV	Xóa điểm điều khiển
+	Show CV	Hiện điểm điều khiển
+	Surface Editing	Sửa bề mặt
+	Surfaces	Bề mặt
+	Trim Surface	Cắt bề mặt
+	Untrim	Bỏ cắt
+	Untrim Surface	Bỏ cắt bề mặt
+	Select a command to see its help page.	Chọn một lệnh để xem trang trợ giúp của lệnh đó.
+	Command not found.	Không tìm thấy lệnh.
+	Aliases:	Bí danh:
+	Menu:	Menu:
+	Shortcut:	Phím tắt:
+	Transparent:	Trong suốt:
+	Yes (can run inside another command with a leading apostrophe)	Có (có thể chạy bên trong lệnh khác khi thêm dấu nháy đơn ở đầu)
+	JSON parameters:	Tham số JSON:
+	Run this command	Chạy lệnh này
+	Render Environment	Môi trường kết xuất
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Kích thước này đã mất liên kết: một đối tượng mà nó đo đã bị xóa. Nhấp để liên kết lại.
+	Reassociate	Liên kết lại
+	Disassociate	Bỏ liên kết
+	Hide Action Bar	Ẩn thanh hành động
+	Reset Action Bars	Đặt lại thanh hành động
+	Action Bars	Thanh hành động
+	Make Visible	Đặt thành hiển thị
+	Make Invisible	Đặt thành ẩn
+	Convert Dimensions to Constraints	Chuyển kích thước thành ràng buộc
+	Convert Constraints to Dimensions	Chuyển ràng buộc thành kích thước
+	Polyhedron	Khối đa diện
+	Select closed meshes or surfaces to convert	Chọn các lưới hoặc bề mặt kín cần chuyển đổi
+	Select first surface	Chọn bề mặt thứ nhất
+	Pick a point on its edge to fillet	Chọn một điểm trên cạnh cần bo tròn
+	Select second surface	Chọn bề mặt thứ hai
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Chưa chọn lưới hoặc bề mặt kín (không hở) nào. Chỉ hình kín mới có thể trở thành khối đặc.
+	Visual Styles Manager	Quản lý kiểu hiển thị
+	Ambient occlusion	Che khuất ánh sáng môi trường
+	Soft shadows	Bóng mềm
+	Tone map	Ánh xạ tông màu
+	Tone curve	Đường cong tông màu
+	Ambient occlusion strength (0 off … 2)	Cường độ che khuất ánh sáng môi trường (0 tắt … 2)
+	Ambient occlusion reach (0: by the model's size)	Phạm vi che khuất ánh sáng môi trường (0: theo kích thước mô hình)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Kích thước mặt trời cho bóng mềm, tính bằng độ (0 sắc nét … 10)
+	Filmic	Kiểu phim
+	Reinhard	Reinhard
+	Neutral	Trung tính
+	Shade plot "Rendered" plots in the Realistic visual style.	Tùy chọn in tô bóng "Rendered" in theo kiểu hiển thị Chân thực.

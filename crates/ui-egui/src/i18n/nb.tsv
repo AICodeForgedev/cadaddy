@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Programtillegg
+	DGN Import...	DGN-import...
+	DGN Export...	DGN-eksport...
+	DGN Underlay...	DGN-underlag...
+	Clip DGN Underlay	Klipp DGN-underlag
+	Adjust DGN Underlay	Juster DGN-underlag
+	DGN Underlay Levels	Nivåer i DGN-underlag
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Hjul: zoom
+	Wheel Pan	Hjul: panorering
+	Wheel Orbit	Hjul: orbit
+	Wheel Look	Hjul: se deg rundt
+	Wheel Center	Hjul: senter
+	Wheel Rewind	Hjul: tilbake
+	Wheel Walk	Hjul: gå
+	ViewCube Settings	ViewCube-innstillinger
+	Create Camera	Opprett kamera
+	Cameras	Kameraer
+	Change Camera	Endre kamera
+	Delete Camera	Slett kamera
+	View from Camera	Visning fra kamera
+	Quick View Drawings	Hurtigvisning av tegninger
+	Quick View Layouts	Hurtigvisning av layouter
+	Close Quick View Drawings	Lukk hurtigvisning av tegninger
+	Close Quick View Layouts	Lukk hurtigvisning av layouter
+	MVSETUP	MVSETUP
+	ZOOM	ZOOM
+	ORBIT	ORBIT
+	REWIND	TILBAKE
+	PAN	PANORER
+	CENTER	SENTER
+	WALK	GÅ
+	LOOK	SE RUNDT
+	Zoom: drag up or down	Zoom: dra opp eller ned
+	Orbit: drag to turn the model	Orbit: dra for å dreie modellen
+	Rewind: back to the view before	Tilbake: til forrige visning
+	Pan: drag the drawing	Panorer: dra tegningen
+	Center: click or drag onto a point	Senter: klikk eller dra til et punkt
+	Look: drag to look around	Se rundt: dra for å se deg rundt
+	double-click to look from it	dobbeltklikk for å se fra det
+	Load Shape File	Last inn formfil
+	Compile Shape File	Kompiler formfil
+	Make Shape	Lag form
+	Copy Multiple	Kopier flere
+	Attribute Extraction	Attributtuttrekk
+	Make Linetype	Lag linjetype
+	Enter name of shape file to load	Angi navn på formfilen som skal lastes inn
+	Enter name of shape source file to compile	Angi navn på formkildefilen som skal kompileres
+	Enter shape name or [?]	Angi formnavn eller [?]
+	Enter the name of the shape	Angi navnet på formen
+	Enter the name of the shape file	Angi navnet på formfilen
+	Enter resolution	Angi oppløsning
+	Specify trace width	Angi sporbredde
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Andre punkt eller [Repeat (siste)/Divide/Measure/Array (dynamisk)]
+	Number of copies	Antall kopier
+	Specify array corner	Angi hjørne av matrisen
+	Enter extraction type or enable object selection	Angi uttrekkstype eller aktiver objektvalg
+	Enter template file name	Angi navn på malfil
+	Enter extract file name	Angi navn på uttrekksfil
+	Enter linetype file name	Angi navn på linjetypefil
+	Enter linetype name	Angi linjetypenavn
+	Enter linetype description	Angi linjetypebeskrivelse
+	Specify starting point for line definition	Angi startpunkt for linjedefinisjonen
+	Specify ending point for line definition	Angi sluttpunkt for linjedefinisjonen
+	Enter name of saved filter	Angi navn på lagret filter
+	Enter name to save the filter as	Angi navnet filteret skal lagres som
+	Enter filter to save	Angi filteret som skal lagres
+	Enter name of saved filter to delete	Angi navn på lagret filter som skal slettes
+	Add (AND)	Legg til (OG)
+	Add (OR)	Legg til (ELLER)
+	Saved filters:	Lagrede filtre:
+	(none)	(ingen)
+	Apply to current selection	Bruk på gjeldende utvalg
+	Add CV	Legg til kontrollpunkt
+	Blend Surface	Overgangsflate
+	Convert to Solid	Konverter til solid
+	Convert to Surface	Konverter til flate
+	Extend Surface	Forleng flate
+	Fillet Surface	Avrundingsflate
+	Hide CV	Skjul kontrollpunkter
+	Interference Checking	Kollisjonskontroll
+	Offset Surface	Forskyv flate
+	Patch	Lapp
+	Patch Surface	Lappflate
+	Planar	Plan
+	Planar Surface	Plan flate
+	Rebuild Surface	Bygg flate på nytt
+	Remove CV	Fjern kontrollpunkt
+	Show CV	Vis kontrollpunkter
+	Surface Editing	Flateredigering
+	Surfaces	Flater
+	Trim Surface	Trim flate
+	Untrim	Opphev trimming
+	Untrim Surface	Opphev trimming av flate
+	Select a command to see its help page.	Velg en kommando for å se hjelpesiden for den.
+	Command not found.	Fant ikke kommandoen.
+	Aliases:	Aliaser:
+	Menu:	Meny:
+	Shortcut:	Hurtigtast:
+	Transparent:	Transparent:
+	Yes (can run inside another command with a leading apostrophe)	Ja (kan kjøres inne i en annen kommando med en apostrof foran)
+	JSON parameters:	JSON-parametere:
+	Run this command	Kjør denne kommandoen
+	Render Environment	Renderingsmiljø
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Dette målet har mistet assosieringen: et objekt det målte, ble slettet. Klikk for å assosiere det på nytt.
+	Reassociate	Assosier på nytt
+	Disassociate	Fjern assosiering
+	Hide Action Bar	Skjul handlingslinje
+	Reset Action Bars	Tilbakestill handlingslinjer
+	Action Bars	Handlingslinjer
+	Make Visible	Gjør synlig
+	Make Invisible	Gjør usynlig
+	Convert Dimensions to Constraints	Konverter mål til begrensninger
+	Convert Constraints to Dimensions	Konverter begrensninger til mål
+	Polyhedron	Polyeder
+	Select closed meshes or surfaces to convert	Velg lukkede nettinger eller flater som skal konverteres
+	Select first surface	Velg første flate
+	Pick a point on its edge to fillet	Velg et punkt på kanten som skal avrundes
+	Select second surface	Velg andre flate
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Ingen lukket (vanntett) netting eller flate ble valgt. Bare lukkede former kan bli solider.
+	Visual Styles Manager	Behandling av visuelle stiler
+	Ambient occlusion	Ambient okklusjon
+	Soft shadows	Myke skygger
+	Tone map	Tonemapping
+	Tone curve	Tonekurve
+	Ambient occlusion strength (0 off … 2)	Styrke for ambient okklusjon (0 av … 2)
+	Ambient occlusion reach (0: by the model's size)	Rekkevidde for ambient okklusjon (0: etter modellens størrelse)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Solstørrelse for myke skygger i grader (0 skarp … 10)
+	Filmic	Filmisk
+	Reinhard	Reinhard
+	Neutral	Nøytral
+	Shade plot "Rendered" plots in the Realistic visual style.	Skyggelagt plott «Rendered» plotter i den visuelle stilen Realistisk.

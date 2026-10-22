@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	ปลั๊กอิน
+	DGN Import...	นำเข้า DGN...
+	DGN Export...	ส่งออก DGN...
+	DGN Underlay...	DGN อันเดอร์เลย์...
+	Clip DGN Underlay	คลิป DGN อันเดอร์เลย์
+	Adjust DGN Underlay	ปรับ DGN อันเดอร์เลย์
+	DGN Underlay Levels	เลเวลของ DGN อันเดอร์เลย์
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	พวงมาลัย: ซูม
+	Wheel Pan	พวงมาลัย: เลื่อนมุมมอง
+	Wheel Orbit	พวงมาลัย: หมุนรอบ
+	Wheel Look	พวงมาลัย: มองรอบ
+	Wheel Center	พวงมาลัย: จุดศูนย์กลาง
+	Wheel Rewind	พวงมาลัย: ย้อนกลับ
+	Wheel Walk	พวงมาลัย: เดิน
+	ViewCube Settings	การตั้งค่า ViewCube
+	Create Camera	สร้างกล้อง
+	Cameras	กล้อง
+	Change Camera	เปลี่ยนกล้อง
+	Delete Camera	ลบกล้อง
+	View from Camera	มุมมองจากกล้อง
+	Quick View Drawings	ดูแบบด่วน
+	Quick View Layouts	ดูเลย์เอาต์ด่วน
+	Close Quick View Drawings	ปิดการดูแบบด่วน
+	Close Quick View Layouts	ปิดการดูเลย์เอาต์ด่วน
+	MVSETUP	MVSETUP
+	ZOOM	ซูม
+	ORBIT	หมุนรอบ
+	REWIND	ย้อนกลับ
+	PAN	เลื่อน
+	CENTER	ศูนย์กลาง
+	WALK	เดิน
+	LOOK	มองรอบ
+	Zoom: drag up or down	ซูม: ลากขึ้นหรือลง
+	Orbit: drag to turn the model	หมุนรอบ: ลากเพื่อหมุนโมเดล
+	Rewind: back to the view before	ย้อนกลับ: กลับไปยังมุมมองก่อนหน้า
+	Pan: drag the drawing	เลื่อนมุมมอง: ลากแบบ
+	Center: click or drag onto a point	จุดศูนย์กลาง: คลิกหรือลากไปที่จุด
+	Look: drag to look around	มองรอบ: ลากเพื่อมองไปรอบๆ
+	double-click to look from it	ดับเบิลคลิกเพื่อมองจากกล้องนี้
+	Load Shape File	โหลดไฟล์รูปร่าง
+	Compile Shape File	คอมไพล์ไฟล์รูปร่าง
+	Make Shape	สร้างรูปร่าง
+	Copy Multiple	คัดลอกหลายครั้ง
+	Attribute Extraction	ดึงแอตทริบิวต์
+	Make Linetype	สร้างชนิดเส้น
+	Enter name of shape file to load	ป้อนชื่อไฟล์รูปร่างที่จะโหลด
+	Enter name of shape source file to compile	ป้อนชื่อไฟล์ต้นฉบับรูปร่างที่จะคอมไพล์
+	Enter shape name or [?]	ป้อนชื่อรูปร่าง หรือ [?]
+	Enter the name of the shape	ป้อนชื่อของรูปร่าง
+	Enter the name of the shape file	ป้อนชื่อไฟล์รูปร่าง
+	Enter resolution	ป้อนความละเอียด
+	Specify trace width	ระบุความกว้างของเทรซ
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	จุดที่สอง หรือ [Repeat (ล่าสุด)/Divide/Measure/Array (ไดนามิก)]
+	Number of copies	จำนวนสำเนา
+	Specify array corner	ระบุมุมของอาร์เรย์
+	Enter extraction type or enable object selection	ป้อนชนิดการดึงข้อมูล หรือเปิดการเลือกวัตถุ
+	Enter template file name	ป้อนชื่อไฟล์เทมเพลต
+	Enter extract file name	ป้อนชื่อไฟล์ผลการดึงข้อมูล
+	Enter linetype file name	ป้อนชื่อไฟล์ชนิดเส้น
+	Enter linetype name	ป้อนชื่อชนิดเส้น
+	Enter linetype description	ป้อนคำอธิบายชนิดเส้น
+	Specify starting point for line definition	ระบุจุดเริ่มสำหรับนิยามเส้น
+	Specify ending point for line definition	ระบุจุดปลายสำหรับนิยามเส้น
+	Enter name of saved filter	ป้อนชื่อตัวกรองที่บันทึกไว้
+	Enter name to save the filter as	ป้อนชื่อสำหรับบันทึกตัวกรอง
+	Enter filter to save	ป้อนตัวกรองที่จะบันทึก
+	Enter name of saved filter to delete	ป้อนชื่อตัวกรองที่บันทึกไว้ที่จะลบ
+	Add (AND)	เพิ่ม (AND)
+	Add (OR)	เพิ่ม (OR)
+	Saved filters:	ตัวกรองที่บันทึกไว้:
+	(none)	(ไม่มี)
+	Apply to current selection	ใช้กับส่วนที่เลือกปัจจุบัน
+	Add CV	เพิ่มจุดควบคุม
+	Blend Surface	พื้นผิวผสาน
+	Convert to Solid	แปลงเป็นของแข็ง
+	Convert to Surface	แปลงเป็นพื้นผิว
+	Extend Surface	ยืดพื้นผิว
+	Fillet Surface	ลบมุมโค้งพื้นผิว
+	Hide CV	ซ่อนจุดควบคุม
+	Interference Checking	ตรวจสอบการชนกัน
+	Offset Surface	ออฟเซ็ตพื้นผิว
+	Patch	แพตช์
+	Patch Surface	พื้นผิวแพตช์
+	Planar	ระนาบ
+	Planar Surface	พื้นผิวระนาบ
+	Rebuild Surface	สร้างพื้นผิวใหม่
+	Remove CV	เอาจุดควบคุมออก
+	Show CV	แสดงจุดควบคุม
+	Surface Editing	การแก้ไขพื้นผิว
+	Surfaces	พื้นผิว
+	Trim Surface	ตัดพื้นผิว
+	Untrim	ยกเลิกการตัด
+	Untrim Surface	ยกเลิกการตัดพื้นผิว
+	Select a command to see its help page.	เลือกคำสั่งเพื่อดูหน้าวิธีใช้ของคำสั่งนั้น
+	Command not found.	ไม่พบคำสั่ง
+	Aliases:	ชื่อย่อ:
+	Menu:	เมนู:
+	Shortcut:	แป้นพิมพ์ลัด:
+	Transparent:	โปร่งใส:
+	Yes (can run inside another command with a leading apostrophe)	ใช่ (เรียกใช้ภายในคำสั่งอื่นได้โดยนำหน้าด้วยเครื่องหมายอะพอสทรอฟี)
+	JSON parameters:	พารามิเตอร์ JSON:
+	Run this command	เรียกใช้คำสั่งนี้
+	Render Environment	สภาพแวดล้อมการเรนเดอร์
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	ไดเมนชันนี้ขาดการเชื่อมโยง: วัตถุที่ไดเมนชันวัดอยู่ถูกลบไปแล้ว คลิกเพื่อเชื่อมโยงใหม่
+	Reassociate	เชื่อมโยงใหม่
+	Disassociate	ยกเลิกการเชื่อมโยง
+	Hide Action Bar	ซ่อนแถบการกระทำ
+	Reset Action Bars	รีเซ็ตแถบการกระทำ
+	Action Bars	แถบการกระทำ
+	Make Visible	ทำให้มองเห็น
+	Make Invisible	ทำให้มองไม่เห็น
+	Convert Dimensions to Constraints	แปลงไดเมนชันเป็นข้อจำกัด
+	Convert Constraints to Dimensions	แปลงข้อจำกัดเป็นไดเมนชัน
+	Polyhedron	ทรงหลายหน้า
+	Select closed meshes or surfaces to convert	เลือกเมชหรือพื้นผิวปิดที่จะแปลง
+	Select first surface	เลือกพื้นผิวแรก
+	Pick a point on its edge to fillet	เลือกจุดบนขอบที่จะลบมุมโค้ง
+	Select second surface	เลือกพื้นผิวที่สอง
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	ไม่ได้เลือกเมชหรือพื้นผิวปิด (ไม่มีรอยรั่ว) เฉพาะรูปทรงปิดเท่านั้นที่เปลี่ยนเป็นของแข็งได้
+	Visual Styles Manager	ตัวจัดการสไตล์ภาพ
+	Ambient occlusion	การบดบังแสงโดยรอบ
+	Soft shadows	เงานุ่ม
+	Tone map	การแมปโทนสี
+	Tone curve	เส้นโค้งโทนสี
+	Ambient occlusion strength (0 off … 2)	ความแรงของการบดบังแสงโดยรอบ (0 ปิด … 2)
+	Ambient occlusion reach (0: by the model's size)	ระยะของการบดบังแสงโดยรอบ (0: ตามขนาดของโมเดล)
+	Sun size for soft shadows in degrees (0 sharp … 10)	ขนาดดวงอาทิตย์สำหรับเงานุ่ม หน่วยองศา (0 คมชัด … 10)
+	Filmic	แบบฟิล์ม
+	Reinhard	Reinhard
+	Neutral	เป็นกลาง
+	Shade plot "Rendered" plots in the Realistic visual style.	การพล็อตแบบแรเงา "Rendered" จะพล็อตด้วยสไตล์ภาพสมจริง

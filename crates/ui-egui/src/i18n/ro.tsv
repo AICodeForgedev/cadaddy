@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Plug-in-uri
+	DGN Import...	Import DGN...
+	DGN Export...	Export DGN...
+	DGN Underlay...	Suport DGN...
+	Clip DGN Underlay	Decupare suport DGN
+	Adjust DGN Underlay	Ajustare suport DGN
+	DGN Underlay Levels	Niveluri suport DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Roată: zoom
+	Wheel Pan	Roată: panoramare
+	Wheel Orbit	Roată: orbitare
+	Wheel Look	Roată: privire
+	Wheel Center	Roată: centru
+	Wheel Rewind	Roată: înapoi
+	Wheel Walk	Roată: plimbare
+	ViewCube Settings	Setări ViewCube
+	Create Camera	Creare cameră
+	Cameras	Camere
+	Change Camera	Modificare cameră
+	Delete Camera	Ștergere cameră
+	View from Camera	Vedere din cameră
+	Quick View Drawings	Vizualizare rapidă desene
+	Quick View Layouts	Vizualizare rapidă layout-uri
+	Close Quick View Drawings	Închidere vizualizare rapidă desene
+	Close Quick View Layouts	Închidere vizualizare rapidă layout-uri
+	MVSETUP	MVSETUP
+	ZOOM	ZOOM
+	ORBIT	ORBITARE
+	REWIND	ÎNAPOI
+	PAN	PANORAMARE
+	CENTER	CENTRU
+	WALK	PLIMBARE
+	LOOK	PRIVIRE
+	Zoom: drag up or down	Zoom: trageți în sus sau în jos
+	Orbit: drag to turn the model	Orbitare: trageți pentru a roti modelul
+	Rewind: back to the view before	Înapoi: la vederea anterioară
+	Pan: drag the drawing	Panoramare: trageți desenul
+	Center: click or drag onto a point	Centru: faceți clic sau trageți pe un punct
+	Look: drag to look around	Privire: trageți pentru a privi în jur
+	double-click to look from it	dublu clic pentru a privi din ea
+	Load Shape File	Încărcare fișier de forme
+	Compile Shape File	Compilare fișier de forme
+	Make Shape	Creare formă
+	Copy Multiple	Copiere multiplă
+	Attribute Extraction	Extragere atribute
+	Make Linetype	Creare tip de linie
+	Enter name of shape file to load	Introduceți numele fișierului de forme de încărcat
+	Enter name of shape source file to compile	Introduceți numele fișierului sursă de forme de compilat
+	Enter shape name or [?]	Introduceți numele formei sau [?]
+	Enter the name of the shape	Introduceți numele formei
+	Enter the name of the shape file	Introduceți numele fișierului de forme
+	Enter resolution	Introduceți rezoluția
+	Specify trace width	Specificați lățimea trasării
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Al doilea punct sau [Repeat (ultimul)/Divide/Measure/Array (dinamic)]
+	Number of copies	Număr de copii
+	Specify array corner	Specificați colțul multiplicării
+	Enter extraction type or enable object selection	Introduceți tipul de extragere sau activați selecția obiectelor
+	Enter template file name	Introduceți numele fișierului șablon
+	Enter extract file name	Introduceți numele fișierului de extragere
+	Enter linetype file name	Introduceți numele fișierului de tipuri de linie
+	Enter linetype name	Introduceți numele tipului de linie
+	Enter linetype description	Introduceți descrierea tipului de linie
+	Specify starting point for line definition	Specificați punctul de start pentru definiția liniei
+	Specify ending point for line definition	Specificați punctul final pentru definiția liniei
+	Enter name of saved filter	Introduceți numele filtrului salvat
+	Enter name to save the filter as	Introduceți numele sub care se salvează filtrul
+	Enter filter to save	Introduceți filtrul de salvat
+	Enter name of saved filter to delete	Introduceți numele filtrului salvat de șters
+	Add (AND)	Adăugare (ȘI)
+	Add (OR)	Adăugare (SAU)
+	Saved filters:	Filtre salvate:
+	(none)	(niciunul)
+	Apply to current selection	Aplicare la selecția curentă
+	Add CV	Adăugare vârf de control
+	Blend Surface	Suprafață de racordare
+	Convert to Solid	Conversie în solid
+	Convert to Surface	Conversie în suprafață
+	Extend Surface	Extindere suprafață
+	Fillet Surface	Racordare suprafețe
+	Hide CV	Ascundere vârfuri de control
+	Interference Checking	Verificare interferențe
+	Offset Surface	Offset suprafață
+	Patch	Petic
+	Patch Surface	Suprafață petic
+	Planar	Plană
+	Planar Surface	Suprafață plană
+	Rebuild Surface	Reconstruire suprafață
+	Remove CV	Eliminare vârf de control
+	Show CV	Afișare vârfuri de control
+	Surface Editing	Editare suprafețe
+	Surfaces	Suprafețe
+	Trim Surface	Tăiere suprafață
+	Untrim	Anulare tăiere
+	Untrim Surface	Anulare tăiere suprafață
+	Select a command to see its help page.	Selectați o comandă pentru a vedea pagina sa de ajutor.
+	Command not found.	Comanda nu a fost găsită.
+	Aliases:	Aliasuri:
+	Menu:	Meniu:
+	Shortcut:	Comandă rapidă:
+	Transparent:	Transparentă:
+	Yes (can run inside another command with a leading apostrophe)	Da (poate rula în interiorul altei comenzi cu un apostrof la început)
+	JSON parameters:	Parametri JSON:
+	Run this command	Rulare această comandă
+	Render Environment	Mediu de randare
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Această cotă și-a pierdut asocierea: un obiect pe care îl măsura a fost șters. Faceți clic pentru a o reasocia.
+	Reassociate	Reasociere
+	Disassociate	Disociere
+	Hide Action Bar	Ascundere bară de acțiuni
+	Reset Action Bars	Resetare bare de acțiuni
+	Action Bars	Bare de acțiuni
+	Make Visible	Setare vizibil
+	Make Invisible	Setare invizibil
+	Convert Dimensions to Constraints	Conversie cote în constrângeri
+	Convert Constraints to Dimensions	Conversie constrângeri în cote
+	Polyhedron	Poliedru
+	Select closed meshes or surfaces to convert	Selectați plasele sau suprafețele închise de convertit
+	Select first surface	Selectați prima suprafață
+	Pick a point on its edge to fillet	Alegeți un punct pe muchia ei pentru racordare
+	Select second surface	Selectați a doua suprafață
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Nu a fost selectată nicio plasă sau suprafață închisă (etanșă). Doar formele închise pot deveni solide.
+	Visual Styles Manager	Manager stiluri vizuale
+	Ambient occlusion	Ocluzie ambientală
+	Soft shadows	Umbre difuze
+	Tone map	Mapare tonuri
+	Tone curve	Curbă de tonuri
+	Ambient occlusion strength (0 off … 2)	Intensitate ocluzie ambientală (0 dezactivată … 2)
+	Ambient occlusion reach (0: by the model's size)	Rază ocluzie ambientală (0: după dimensiunea modelului)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Dimensiunea soarelui pentru umbre difuze, în grade (0 clare … 10)
+	Filmic	Cinematic
+	Reinhard	Reinhard
+	Neutral	Neutru
+	Shade plot "Rendered" plots in the Realistic visual style.	Plotarea umbrită „Rendered” plotează în stilul vizual Realist.

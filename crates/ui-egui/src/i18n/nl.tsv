@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Invoegtoepassingen
+	DGN Import...	DGN-import...
+	DGN Export...	DGN-export...
+	DGN Underlay...	DGN-onderlegger...
+	Clip DGN Underlay	DGN-onderlegger uitsnijden
+	Adjust DGN Underlay	DGN-onderlegger aanpassen
+	DGN Underlay Levels	Niveaus DGN-onderlegger
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Wiel: zoomen
+	Wheel Pan	Wiel: pannen
+	Wheel Orbit	Wiel: orbit
+	Wheel Look	Wiel: rondkijken
+	Wheel Center	Wiel: middelpunt
+	Wheel Rewind	Wiel: terugspoelen
+	Wheel Walk	Wiel: lopen
+	ViewCube Settings	ViewCube-instellingen
+	Create Camera	Camera maken
+	Cameras	Camera's
+	Change Camera	Camera wijzigen
+	Delete Camera	Camera verwijderen
+	View from Camera	Aanzicht vanuit camera
+	Quick View Drawings	Snelweergave tekeningen
+	Quick View Layouts	Snelweergave layouts
+	Close Quick View Drawings	Snelweergave tekeningen sluiten
+	Close Quick View Layouts	Snelweergave layouts sluiten
+	MVSETUP	MVSETUP
+	ZOOM	ZOOMEN
+	ORBIT	ORBIT
+	REWIND	TERUGSPOELEN
+	PAN	PANNEN
+	CENTER	MIDDELPUNT
+	WALK	LOPEN
+	LOOK	RONDKIJKEN
+	Zoom: drag up or down	Zoomen: omhoog of omlaag slepen
+	Orbit: drag to turn the model	Orbit: slepen om het model te draaien
+	Rewind: back to the view before	Terugspoelen: terug naar het vorige aanzicht
+	Pan: drag the drawing	Pannen: de tekening slepen
+	Center: click or drag onto a point	Middelpunt: op een punt klikken of erheen slepen
+	Look: drag to look around	Rondkijken: slepen om rond te kijken
+	double-click to look from it	dubbelklik om vanuit deze camera te kijken
+	Load Shape File	Vormbestand laden
+	Compile Shape File	Vormbestand compileren
+	Make Shape	Vorm maken
+	Copy Multiple	Meervoudig kopiëren
+	Attribute Extraction	Attribuutextractie
+	Make Linetype	Lijntype maken
+	Enter name of shape file to load	Voer de naam in van het te laden vormbestand
+	Enter name of shape source file to compile	Voer de naam in van het te compileren vormbronbestand
+	Enter shape name or [?]	Voer de vormnaam in of [?]
+	Enter the name of the shape	Voer de naam van de vorm in
+	Enter the name of the shape file	Voer de naam van het vormbestand in
+	Enter resolution	Voer de resolutie in
+	Specify trace width	Geef de spoorbreedte op
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Tweede punt of [Repeat (laatste)/Divide/Measure/Array (dynamisch)]
+	Number of copies	Aantal kopieën
+	Specify array corner	Geef de hoek van de reeks op
+	Enter extraction type or enable object selection	Voer het extractietype in of schakel objectselectie in
+	Enter template file name	Voer de naam van het sjabloonbestand in
+	Enter extract file name	Voer de naam van het extractiebestand in
+	Enter linetype file name	Voer de naam van het lijntypebestand in
+	Enter linetype name	Voer de lijntypenaam in
+	Enter linetype description	Voer de lijntypebeschrijving in
+	Specify starting point for line definition	Geef het beginpunt van de lijndefinitie op
+	Specify ending point for line definition	Geef het eindpunt van de lijndefinitie op
+	Enter name of saved filter	Voer de naam van het opgeslagen filter in
+	Enter name to save the filter as	Voer de naam in waaronder het filter wordt opgeslagen
+	Enter filter to save	Voer het op te slaan filter in
+	Enter name of saved filter to delete	Voer de naam in van het te verwijderen opgeslagen filter
+	Add (AND)	Toevoegen (EN)
+	Add (OR)	Toevoegen (OF)
+	Saved filters:	Opgeslagen filters:
+	(none)	(geen)
+	Apply to current selection	Toepassen op huidige selectie
+	Add CV	Stuurpunt toevoegen
+	Blend Surface	Overvloeioppervlak
+	Convert to Solid	Converteren naar volume
+	Convert to Surface	Converteren naar oppervlak
+	Extend Surface	Oppervlak verlengen
+	Fillet Surface	Oppervlak afronden
+	Hide CV	Stuurpunten verbergen
+	Interference Checking	Interferentiecontrole
+	Offset Surface	Oppervlak verschuiven
+	Patch	Lap
+	Patch Surface	Lapoppervlak
+	Planar	Vlak
+	Planar Surface	Vlak oppervlak
+	Rebuild Surface	Oppervlak opnieuw opbouwen
+	Remove CV	Stuurpunt verwijderen
+	Show CV	Stuurpunten tonen
+	Surface Editing	Oppervlakbewerking
+	Surfaces	Oppervlakken
+	Trim Surface	Oppervlak inkorten
+	Untrim	Inkorten ongedaan maken
+	Untrim Surface	Inkorten van oppervlak ongedaan maken
+	Select a command to see its help page.	Selecteer een opdracht om de helppagina ervan te zien.
+	Command not found.	Opdracht niet gevonden.
+	Aliases:	Aliassen:
+	Menu:	Menu:
+	Shortcut:	Sneltoets:
+	Transparent:	Transparant:
+	Yes (can run inside another command with a leading apostrophe)	Ja (kan binnen een andere opdracht worden uitgevoerd met een apostrof ervoor)
+	JSON parameters:	JSON-parameters:
+	Run this command	Deze opdracht uitvoeren
+	Render Environment	Renderomgeving
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Deze maat is haar koppeling kwijt: een gemeten object is gewist. Klik om de maat opnieuw te koppelen.
+	Reassociate	Opnieuw koppelen
+	Disassociate	Loskoppelen
+	Hide Action Bar	Actiebalk verbergen
+	Reset Action Bars	Actiebalken herstellen
+	Action Bars	Actiebalken
+	Make Visible	Zichtbaar maken
+	Make Invisible	Onzichtbaar maken
+	Convert Dimensions to Constraints	Maten converteren naar beperkingen
+	Convert Constraints to Dimensions	Beperkingen converteren naar maten
+	Polyhedron	Veelvlak
+	Select closed meshes or surfaces to convert	Selecteer gesloten meshes of oppervlakken om te converteren
+	Select first surface	Selecteer het eerste oppervlak
+	Pick a point on its edge to fillet	Kies een punt op de rand om af te ronden
+	Select second surface	Selecteer het tweede oppervlak
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Er is geen gesloten (waterdichte) mesh of gesloten oppervlak geselecteerd. Alleen gesloten vormen kunnen volumes worden.
+	Visual Styles Manager	Beheer visuele stijlen
+	Ambient occlusion	Omgevingsocclusie
+	Soft shadows	Zachte schaduwen
+	Tone map	Tonemapping
+	Tone curve	Tooncurve
+	Ambient occlusion strength (0 off … 2)	Sterkte omgevingsocclusie (0 uit … 2)
+	Ambient occlusion reach (0: by the model's size)	Bereik omgevingsocclusie (0: naar modelgrootte)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Zongrootte voor zachte schaduwen in graden (0 scherp … 10)
+	Filmic	Filmisch
+	Reinhard	Reinhard
+	Neutral	Neutraal
+	Shade plot "Rendered" plots in the Realistic visual style.	Gearceerd plotten "Rendered" plot in de visuele stijl Realistisch.

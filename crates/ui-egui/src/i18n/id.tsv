@@ -3039,3 +3039,136 @@
 	DWF...	DWF...
 	DWFx...	DWFx...
 	Plug-ins	Plugin
+	DGN Import...	Impor DGN...
+	DGN Export...	Ekspor DGN...
+	DGN Underlay...	Underlay DGN...
+	Clip DGN Underlay	Pangkas Underlay DGN
+	Adjust DGN Underlay	Sesuaikan Underlay DGN
+	DGN Underlay Levels	Tingkat Underlay DGN
+	DGN...	DGN...
+	SteeringWheels	SteeringWheels
+	SteeringWheel	SteeringWheel
+	Wheel Zoom	Roda: Zoom
+	Wheel Pan	Roda: Geser
+	Wheel Orbit	Roda: Orbit
+	Wheel Look	Roda: Lihat Sekeliling
+	Wheel Center	Roda: Pusat
+	Wheel Rewind	Roda: Mundur
+	Wheel Walk	Roda: Jelajah
+	ViewCube Settings	Pengaturan ViewCube
+	Create Camera	Buat Kamera
+	Cameras	Kamera
+	Change Camera	Ubah Kamera
+	Delete Camera	Hapus Kamera
+	View from Camera	Tampilan dari Kamera
+	Quick View Drawings	Tampilan Cepat Gambar
+	Quick View Layouts	Tampilan Cepat Tata Letak
+	Close Quick View Drawings	Tutup Tampilan Cepat Gambar
+	Close Quick View Layouts	Tutup Tampilan Cepat Tata Letak
+	MVSETUP	MVSETUP
+	ZOOM	ZOOM
+	ORBIT	ORBIT
+	REWIND	MUNDUR
+	PAN	GESER
+	CENTER	PUSAT
+	WALK	JELAJAH
+	LOOK	LIHAT
+	Zoom: drag up or down	Zoom: seret ke atas atau ke bawah
+	Orbit: drag to turn the model	Orbit: seret untuk memutar model
+	Rewind: back to the view before	Mundur: kembali ke tampilan sebelumnya
+	Pan: drag the drawing	Geser: seret gambar
+	Center: click or drag onto a point	Pusat: klik atau seret ke sebuah titik
+	Look: drag to look around	Lihat: seret untuk melihat sekeliling
+	double-click to look from it	klik ganda untuk melihat darinya
+	Load Shape File	Muat Berkas Bentuk
+	Compile Shape File	Kompilasi Berkas Bentuk
+	Make Shape	Buat Bentuk
+	Copy Multiple	Salin Berganda
+	Attribute Extraction	Ekstraksi Atribut
+	Make Linetype	Buat Jenis Garis
+	Enter name of shape file to load	Masukkan nama berkas bentuk yang akan dimuat
+	Enter name of shape source file to compile	Masukkan nama berkas sumber bentuk yang akan dikompilasi
+	Enter shape name or [?]	Masukkan nama bentuk atau [?]
+	Enter the name of the shape	Masukkan nama bentuk
+	Enter the name of the shape file	Masukkan nama berkas bentuk
+	Enter resolution	Masukkan resolusi
+	Specify trace width	Tentukan lebar jejak
+	Second point or [Repeat (last)/Divide/Measure/Array (dynamic)]	Titik kedua atau [Repeat (terakhir)/Divide/Measure/Array (dinamis)]
+	Number of copies	Jumlah salinan
+	Specify array corner	Tentukan sudut larik
+	Enter extraction type or enable object selection	Masukkan jenis ekstraksi atau aktifkan pemilihan objek
+	Enter template file name	Masukkan nama berkas templat
+	Enter extract file name	Masukkan nama berkas ekstraksi
+	Enter linetype file name	Masukkan nama berkas jenis garis
+	Enter linetype name	Masukkan nama jenis garis
+	Enter linetype description	Masukkan deskripsi jenis garis
+	Specify starting point for line definition	Tentukan titik awal definisi garis
+	Specify ending point for line definition	Tentukan titik akhir definisi garis
+	Enter name of saved filter	Masukkan nama filter tersimpan
+	Enter name to save the filter as	Masukkan nama untuk menyimpan filter
+	Enter filter to save	Masukkan filter yang akan disimpan
+	Enter name of saved filter to delete	Masukkan nama filter tersimpan yang akan dihapus
+	Add (AND)	Tambah (DAN)
+	Add (OR)	Tambah (ATAU)
+	Saved filters:	Filter tersimpan:
+	(none)	(tidak ada)
+	Apply to current selection	Terapkan ke pilihan saat ini
+	Add CV	Tambah Titik Kontrol
+	Blend Surface	Permukaan Paduan
+	Convert to Solid	Konversi ke Solid
+	Convert to Surface	Konversi ke Permukaan
+	Extend Surface	Perpanjang Permukaan
+	Fillet Surface	Fillet Permukaan
+	Hide CV	Sembunyikan Titik Kontrol
+	Interference Checking	Pemeriksaan Interferensi
+	Offset Surface	Offset Permukaan
+	Patch	Tambalan
+	Patch Surface	Permukaan Tambalan
+	Planar	Planar
+	Planar Surface	Permukaan Planar
+	Rebuild Surface	Bangun Ulang Permukaan
+	Remove CV	Hapus Titik Kontrol
+	Show CV	Tampilkan Titik Kontrol
+	Surface Editing	Pengeditan Permukaan
+	Surfaces	Permukaan
+	Trim Surface	Pangkas Permukaan
+	Untrim	Batalkan Pangkasan
+	Untrim Surface	Batalkan Pangkasan Permukaan
+	Select a command to see its help page.	Pilih perintah untuk melihat halaman bantuannya.
+	Command not found.	Perintah tidak ditemukan.
+	Aliases:	Alias:
+	Menu:	Menu:
+	Shortcut:	Pintasan:
+	Transparent:	Transparan:
+	Yes (can run inside another command with a leading apostrophe)	Ya (dapat dijalankan di dalam perintah lain dengan apostrof di awal)
+	JSON parameters:	Parameter JSON:
+	Run this command	Jalankan perintah ini
+	Render Environment	Lingkungan Render
+	This dimension lost its association: an object it measured was erased. Click to reassociate it.	Dimensi ini kehilangan asosiasinya: objek yang diukurnya telah dihapus. Klik untuk mengasosiasikannya ulang.
+	Reassociate	Asosiasikan Ulang
+	Disassociate	Lepaskan Asosiasi
+	Hide Action Bar	Sembunyikan Bilah Aksi
+	Reset Action Bars	Atur Ulang Bilah Aksi
+	Action Bars	Bilah Aksi
+	Make Visible	Jadikan Terlihat
+	Make Invisible	Jadikan Tak Terlihat
+	Convert Dimensions to Constraints	Konversi Dimensi ke Batasan
+	Convert Constraints to Dimensions	Konversi Batasan ke Dimensi
+	Polyhedron	Polihedron
+	Select closed meshes or surfaces to convert	Pilih mesh atau permukaan tertutup yang akan dikonversi
+	Select first surface	Pilih permukaan pertama
+	Pick a point on its edge to fillet	Pilih titik pada tepinya untuk di-fillet
+	Select second surface	Pilih permukaan kedua
+	No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.	Tidak ada mesh atau permukaan tertutup (kedap) yang dipilih. Hanya bentuk tertutup yang dapat menjadi solid.
+	Visual Styles Manager	Manajer Gaya Visual
+	Ambient occlusion	Oklusi ambien
+	Soft shadows	Bayangan lembut
+	Tone map	Pemetaan nada
+	Tone curve	Kurva nada
+	Ambient occlusion strength (0 off … 2)	Kekuatan oklusi ambien (0 mati … 2)
+	Ambient occlusion reach (0: by the model's size)	Jangkauan oklusi ambien (0: menurut ukuran model)
+	Sun size for soft shadows in degrees (0 sharp … 10)	Ukuran matahari untuk bayangan lembut dalam derajat (0 tajam … 10)
+	Filmic	Filmik
+	Reinhard	Reinhard
+	Neutral	Netral
+	Shade plot "Rendered" plots in the Realistic visual style.	Plot berbayang "Rendered" memplot dengan gaya visual Realistis.
