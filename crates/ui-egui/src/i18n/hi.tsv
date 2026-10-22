@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	विद्युत उपकरण जाँचें
 	Submittal Review of Gear	उपकरण की सबमिटल समीक्षा
 	Accept Gear as Submitted	उपकरण सबमिट किए अनुसार स्वीकार करें
+	Labels	लेबल
+	Print Labels	प्रिंट लेबल
+	Import Arc Flash Data	आर्क फ़्लैश डेटा इम्पोर्ट करें
+	Check Labels	लेबल जाँचें
+	Label BOM Lines	BOM पंक्तियों को लेबल करें
+	Water and Gas Points of Entry	पानी और गैस के प्रवेश बिंदु
+	Route Grounding	ग्राउंडिंग रूट करें
+	Check Grounding	ग्राउंडिंग जाँचें
+	Alternative Grounding Electrode	वैकल्पिक ग्राउंडिंग इलेक्ट्रोड
+	Grounding Takeoff	ग्राउंडिंग टेकऑफ़
+	4D Schedule	4D शेड्यूल
+	Import 4D Schedule	4D शेड्यूल इम्पोर्ट करें
+	4D Schedule Tasks	4D शेड्यूल कार्य
+	Link 4D Task	4D कार्य लिंक करें
+	4D State at a Date	किसी तारीख पर 4D स्थिति
+	Export 4D Video	4D वीडियो एक्सपोर्ट करें
+	Clear 4D Schedule	4D शेड्यूल साफ़ करें
+	Import Schedule...	शेड्यूल इम्पोर्ट करें...
+	Export Video...	वीडियो एक्सपोर्ट करें...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV या Excel: कार्य, आरंभ, समाप्ति, और लेवल, सिस्टम, क्लास या एलिमेंट कॉलम
+	No schedule yet. Import one to show the model on a date.	अभी कोई शेड्यूल नहीं। किसी तारीख पर मॉडल दिखाने के लिए एक इम्पोर्ट करें।
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} कार्य, {start} से {finish}; {elements} में से {linked} ऑब्जेक्ट शेड्यूल किए गए
+	Show the model on a date	किसी तारीख पर मॉडल दिखाएँ
+	Pause	रोकें
+	A day earlier	एक दिन पहले
+	A day later	एक दिन बाद
+	 days/s	 दिन/से
+	Show work not started, pale	शुरू न हुआ काम हल्का दिखाएँ
+	Built	निर्मित
+	In progress	प्रगति में
+	Not yet	अभी नहीं
+	Add Selected Objects	चयनित ऑब्जेक्ट जोड़ें
+	Remove Selected Objects	चयनित ऑब्जेक्ट हटाएँ
+	Bill of Materials	बिल ऑफ़ मटीरियल्स
+	List Element Tags	एलिमेंट टैग सूचीबद्ध करें
+	Set Element Tag Field	एलिमेंट टैग फ़ील्ड सेट करें
+	Accept Element Tags	एलिमेंट टैग स्वीकार करें
+	Element Tags	एलिमेंट टैग
+	Untagged	बिना टैग
+	Tag not in schedule	टैग शेड्यूल में नहीं
+	Missing protection	सुरक्षा गायब
+	Double protection	दोहरी सुरक्षा
+	No conductor note	कोई कंडक्टर नोट नहीं
+	Two rules apply	दो नियम लागू होते हैं
+	All elements	सभी एलिमेंट
+	{n} elements	{n} एलिमेंट
+	No element tags: read the electrical plans first.	कोई एलिमेंट टैग नहीं: पहले इलेक्ट्रिकल प्लान पढ़ें।
+	Field	फ़ील्ड
+	Set on Picked	चुने गए पर सेट करें
+	Accept Picked	चुने गए स्वीकार करें
+	Pick All Shown	सभी दिखाए गए चुनें
+	New Material Release	नई मटीरियल रिलीज़
+	Procurement	खरीद
+	Order Status	ऑर्डर स्थिति
+	Submittal Log Entry	सबमिटल लॉग प्रविष्टि
+	Submittal Log	सबमिटल लॉग
+	Lead Times	लीड टाइम
+	Export Release	रिलीज़ एक्सपोर्ट करें
+	Progress Plan	प्रगति योजना
+	Mark Installed Work	स्थापित कार्य चिह्नित करें
+	Import Timecards	टाइमकार्ड इम्पोर्ट करें
+	Progress and Earned Value	प्रगति और अर्जित मूल्य
+	Actual Production Rates	वास्तविक उत्पादन दरें
+	Add Field Observations	फ़ील्ड अवलोकन जोड़ें
+	Compare Estimate What-If	एस्टिमेट व्हाट-इफ़ तुलना करें
+	Estimate Settings	एस्टिमेट सेटिंग्स
+	Estimate Status	एस्टिमेट स्थिति
+	Explain Estimate Number	एस्टिमेट संख्या समझाएँ
+	Import Estimating Baseline	एस्टिमेटिंग बेसलाइन इम्पोर्ट करें
+	Query Estimate	एस्टिमेट क्वेरी
+	Set Estimate Assembly	एस्टिमेट असेंबली सेट करें
+	Set Estimate Price	एस्टिमेट मूल्य सेट करें
+	Set Estimate Scope	एस्टिमेट स्कोप सेट करें
+	New Window	नई विंडो
+	Concrete Elements	कंक्रीट एलिमेंट
+	Set Concrete	कंक्रीट सेट करें
+	Check Concrete	कंक्रीट जाँचें
+	Concrete Coordination Review	कंक्रीट समन्वय समीक्षा
+	Concrete Quantities	कंक्रीट मात्राएँ
+	Pour Hold Points	ढलाई होल्ड पॉइंट
+	Sign Off Hold Point	होल्ड पॉइंट साइन ऑफ़ करें
+	Trade Quantities	ट्रेड मात्राएँ
+	Trade Scope	ट्रेड स्कोप
+	Trade Prices	ट्रेड मूल्य
+	Whole-Job Settings	पूरे जॉब की सेटिंग्स
+	Whole-Job Estimate	पूरे जॉब का एस्टिमेट
+	Bid Package	बिड पैकेज
+	Sub Bid	सब-बिड
+	Level Bids	बिड समतुल्य करें
+	Add Bid History	बिड इतिहास जोड़ें
+	Bid Benchmarks	बिड बेंचमार्क
+	Record Outcome	परिणाम दर्ज करें
+	Add Calibration Project	कैलिब्रेशन प्रोजेक्ट जोड़ें
+	Fit Rates to Bids	दरों को बिड के अनुरूप करें
+	Certified Payroll Hours	प्रमाणित पेरोल घंटे
+	Top-Down Labor Estimate	टॉप-डाउन श्रम एस्टिमेट
+	Change Order Snapshot	चेंज ऑर्डर स्नैपशॉट
+	Price Change Order	चेंज ऑर्डर का मूल्य निर्धारित करें
+	Change Order Log	चेंज ऑर्डर लॉग
+	Segment	सेगमेंट
+	Total	कुल
+	Total area	कुल क्षेत्रफल
+	Import P-405 Labor Tables	P-405 श्रम तालिकाएँ इम्पोर्ट करें
+	New Part	नया पार्ट
+	Part Parameter	पार्ट पैरामीटर
+	Part Sketch	पार्ट स्केच
+	Pad	पैड
+	Pocket	पॉकेट
+	Revolve Feature	रिवॉल्व फ़ीचर
+	Fillet Feature	फ़िलेट फ़ीचर
+	Chamfer Feature	चैम्फ़र फ़ीचर
+	Edit Feature	फ़ीचर संपादित करें
+	Reorder Feature	फ़ीचर का क्रम बदलें
+	Delete Feature	फ़ीचर हटाएँ
+	Rebuild Part	पार्ट फिर से बनाएँ
+	Model Tree	मॉडल ट्री
+	List Parts	पार्ट सूचीबद्ध करें
+	No part yet: New Part starts one; sketches and features come from the part commands.	अभी कोई पार्ट नहीं: नया पार्ट एक शुरू करता है; स्केच और फ़ीचर पार्ट कमांड से आते हैं।
+	Volume {v}	आयतन {v}
+	Parameters	पैरामीटर
+	name	नाम
+	expression	व्यंजक
+	Features	फ़ीचर
+	Suppress	सप्रेस करें
+	Double-click to rename	नाम बदलने के लिए डबल-क्लिक करें
+	Parts Library...	पार्ट लाइब्रेरी...
+	Parts Library	पार्ट लाइब्रेरी
+	Part Categories	पार्ट श्रेणियाँ
+	Showing {shown} of {total} parts; type in Filter to narrow.	{total} में से {shown} पार्ट दिखाए जा रहे हैं; सीमित करने के लिए फ़िल्टर में टाइप करें।
+	Annotation	एनोटेशन
+	Doors	दरवाज़े
+	Windows	खिड़कियाँ
+	Stairs and ramps	सीढ़ियाँ और रैंप
+	Furniture	फ़र्नीचर
+	Sanitary fixtures	सैनिटरी फ़िक्स्चर
+	Kitchen	रसोई
+	Diffusers and grilles	डिफ़्यूज़र और ग्रिल
+	Terminal units	टर्मिनल यूनिट
+	HVAC equipment	HVAC उपकरण
+	Dampers	डैम्पर
+	Valves	वाल्व
+	Pipe fittings	पाइप फ़िटिंग
+	Pumps and tanks	पंप और टैंक
+	Drains	ड्रेन
+	Power distribution	पावर वितरण
+	Light fixtures	लाइट फ़िक्स्चर
+	Steel W shapes	स्टील W सेक्शन
+	Steel channels	स्टील चैनल
+	Steel angles	स्टील एंगल
+	Steel HSS	स्टील HSS
+	Steel pipe	स्टील पाइप
+	Steel metric shapes	स्टील मीट्रिक सेक्शन
+	Rebar	सरिया
+	Lumber	लकड़ी
+	Base plates	बेस प्लेट
+	Masonry units	चिनाई इकाइयाँ
+	Planting	पौधारोपण
+	Parking	पार्किंग
+	Vehicles	वाहन
+	Site utilities	साइट यूटिलिटी
+	Site amenities	साइट सुविधाएँ
+	North arrows	उत्तर तीर
+	Section and elevation marks	सेक्शन और एलिवेशन चिह्न
+	Tags and titles	टैग और शीर्षक
+	Weld and drafting symbols	वेल्ड और ड्राफ़्टिंग प्रतीक
+	Scale bars	स्केल बार
+	Title blocks	टाइटल ब्लॉक
+	2D Profile	2D प्रोफ़ाइल
+	2D Profile Toolpath	2D प्रोफ़ाइल टूलपाथ
+	CNC DXF Export	CNC DXF एक्सपोर्ट
+	CNC DXF Export...	CNC DXF एक्सपोर्ट...
+	Evaluate Rhai	Rhai का मूल्यांकन करें
+	Manufacture	विनिर्माण
+	Rhai	Rhai
+	Run Rhai Script	Rhai स्क्रिप्ट चलाएँ
+	Script Editor	स्क्रिप्ट एडिटर
+	Define Linetype	लाइनटाइप परिभाषित करें
+	Define Hatch Pattern	हैच पैटर्न परिभाषित करें
+	Linetype Editor...	लाइनटाइप एडिटर...
+	Hatch Pattern Editor...	हैच पैटर्न एडिटर...
+	Linetype Editor	लाइनटाइप एडिटर
+	Hatch Pattern Editor	हैच पैटर्न एडिटर
+	Start from	से शुरू करें
+	A linetype in this drawing	इस ड्रॉइंग का एक लाइनटाइप
+	A pattern	एक पैटर्न
+	Add a dash or a gap	डैश या गैप जोड़ें
+	Pattern length {n}	पैटर्न लंबाई {n}
+	Dash	डैश
+	Gap	गैप
+	Dot	डॉट
+	Add Row	पंक्ति जोड़ें
+	Save to .lin File...	.lin फ़ाइल में सहेजें...
+	Linetype {name} is in the drawing	लाइनटाइप {name} ड्रॉइंग में है
+	Dashes	डैश
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	डैश: > 0 डैश, < 0 गैप, 0 डॉट
+	Add Line Family	लाइन फ़ैमिली जोड़ें
+	Save to .pat File...	.pat फ़ाइल में सहेजें...
+	Pattern {name} is offered for new hatches	पैटर्न {name} नए हैच के लिए उपलब्ध है
+	Check Underground	भूमिगत जाँचें
+	Review Underground	भूमिगत समीक्षा करें
+	Underground Sheets	भूमिगत शीट
+	DWF Underlay...	DWF अंडरले...
+	DWF Out	DWF एक्सपोर्ट
+	DWFx Out	DWFx एक्सपोर्ट
+	Enter path of DWF/DWFx file to attach	संलग्न करने के लिए DWF/DWFx फ़ाइल का पथ दर्ज करें
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	प्लग-इन

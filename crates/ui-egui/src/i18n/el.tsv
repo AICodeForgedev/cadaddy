@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Έλεγχος ηλεκτρολογικού εξοπλισμού
 	Submittal Review of Gear	Έλεγχος υποβολής εξοπλισμού
 	Accept Gear as Submitted	Αποδοχή εξοπλισμού ως υποβλήθηκε
+	Labels	Ετικέτες
+	Print Labels	Εκτύπωση ετικετών
+	Import Arc Flash Data	Εισαγωγή δεδομένων ηλεκτρικού τόξου
+	Check Labels	Έλεγχος ετικετών
+	Label BOM Lines	Γραμμές καταλόγου υλικών για ετικέτες
+	Water and Gas Points of Entry	Σημεία εισόδου νερού και αερίου
+	Route Grounding	Όδευση γείωσης
+	Check Grounding	Έλεγχος γείωσης
+	Alternative Grounding Electrode	Εναλλακτικό ηλεκτρόδιο γείωσης
+	Grounding Takeoff	Προμέτρηση γείωσης
+	4D Schedule	Χρονοδιάγραμμα 4D
+	Import 4D Schedule	Εισαγωγή χρονοδιαγράμματος 4D
+	4D Schedule Tasks	Εργασίες χρονοδιαγράμματος 4D
+	Link 4D Task	Σύνδεση εργασίας 4D
+	4D State at a Date	Κατάσταση 4D σε ημερομηνία
+	Export 4D Video	Εξαγωγή βίντεο 4D
+	Clear 4D Schedule	Εκκαθάριση χρονοδιαγράμματος 4D
+	Import Schedule...	Εισαγωγή χρονοδιαγράμματος...
+	Export Video...	Εξαγωγή βίντεο...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV ή Excel: στήλες εργασίας, έναρξης, λήξης και επιπέδου, συστήματος, κλάσης ή στοιχείου
+	No schedule yet. Import one to show the model on a date.	Δεν υπάρχει ακόμη χρονοδιάγραμμα. Εισαγάγετε ένα για να εμφανίσετε το μοντέλο σε μια ημερομηνία.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} εργασίες, {start} έως {finish}· {linked} από {elements} αντικείμενα προγραμματισμένα
+	Show the model on a date	Εμφάνιση του μοντέλου σε ημερομηνία
+	Pause	Παύση
+	A day earlier	Μία ημέρα νωρίτερα
+	A day later	Μία ημέρα αργότερα
+	 days/s	 ημέρες/s
+	Show work not started, pale	Αχνή εμφάνιση εργασιών που δεν έχουν ξεκινήσει
+	Built	Κατασκευασμένο
+	In progress	Σε εξέλιξη
+	Not yet	Όχι ακόμη
+	Add Selected Objects	Προσθήκη επιλεγμένων αντικειμένων
+	Remove Selected Objects	Αφαίρεση επιλεγμένων αντικειμένων
+	Bill of Materials	Κατάλογος υλικών
+	List Element Tags	Λίστα ετικετών στοιχείων
+	Set Element Tag Field	Ορισμός πεδίου ετικέτας στοιχείου
+	Accept Element Tags	Αποδοχή ετικετών στοιχείων
+	Element Tags	Ετικέτες στοιχείων
+	Untagged	Χωρίς ετικέτα
+	Tag not in schedule	Η ετικέτα δεν υπάρχει στον πίνακα
+	Missing protection	Λείπει προστασία
+	Double protection	Διπλή προστασία
+	No conductor note	Χωρίς σημείωση αγωγών
+	Two rules apply	Ισχύουν δύο κανόνες
+	All elements	Όλα τα στοιχεία
+	{n} elements	{n} στοιχεία
+	No element tags: read the electrical plans first.	Δεν υπάρχουν ετικέτες στοιχείων: διαβάστε πρώτα τα ηλεκτρολογικά σχέδια.
+	Field	Πεδίο
+	Set on Picked	Ορισμός στα επιλεγμένα
+	Accept Picked	Αποδοχή επιλεγμένων
+	Pick All Shown	Επιλογή όλων των εμφανιζόμενων
+	New Material Release	Νέα αποδέσμευση υλικών
+	Procurement	Προμήθειες
+	Order Status	Κατάσταση παραγγελίας
+	Submittal Log Entry	Καταχώριση μητρώου υποβολών
+	Submittal Log	Μητρώο υποβολών
+	Lead Times	Χρόνοι παράδοσης
+	Export Release	Εξαγωγή αποδέσμευσης
+	Progress Plan	Σχέδιο προόδου
+	Mark Installed Work	Σήμανση εγκατεστημένων εργασιών
+	Import Timecards	Εισαγωγή δελτίων χρονοχρέωσης
+	Progress and Earned Value	Πρόοδος και κερδισμένη αξία
+	Actual Production Rates	Πραγματικοί ρυθμοί παραγωγής
+	Add Field Observations	Προσθήκη παρατηρήσεων εργοταξίου
+	Compare Estimate What-If	Σύγκριση σεναρίου προϋπολογισμού
+	Estimate Settings	Ρυθμίσεις προϋπολογισμού
+	Estimate Status	Κατάσταση προϋπολογισμού
+	Explain Estimate Number	Εξήγηση τιμής προϋπολογισμού
+	Import Estimating Baseline	Εισαγωγή βάσης κοστολόγησης
+	Query Estimate	Ερώτημα προϋπολογισμού
+	Set Estimate Assembly	Ορισμός συναρμολόγησης προϋπολογισμού
+	Set Estimate Price	Ορισμός τιμής προϋπολογισμού
+	Set Estimate Scope	Ορισμός εύρους εργασιών προϋπολογισμού
+	New Window	Νέο παράθυρο
+	Concrete Elements	Στοιχεία σκυροδέματος
+	Set Concrete	Ορισμός σκυροδέματος
+	Check Concrete	Έλεγχος σκυροδέματος
+	Concrete Coordination Review	Έλεγχος συντονισμού σκυροδέματος
+	Concrete Quantities	Ποσότητες σκυροδέματος
+	Pour Hold Points	Σημεία αναμονής πριν από τη σκυροδέτηση
+	Sign Off Hold Point	Έγκριση σημείου αναμονής
+	Trade Quantities	Ποσότητες ανά ειδικότητα
+	Trade Scope	Εύρος εργασιών ειδικότητας
+	Trade Prices	Τιμές ανά ειδικότητα
+	Whole-Job Settings	Ρυθμίσεις συνολικού έργου
+	Whole-Job Estimate	Προϋπολογισμός συνολικού έργου
+	Bid Package	Πακέτο διαγωνισμού
+	Sub Bid	Προσφορά υπεργολάβου
+	Level Bids	Σύγκριση προσφορών
+	Add Bid History	Προσθήκη ιστορικού προσφορών
+	Bid Benchmarks	Δείκτες αναφοράς προσφορών
+	Record Outcome	Καταγραφή αποτελέσματος
+	Add Calibration Project	Προσθήκη έργου βαθμονόμησης
+	Fit Rates to Bids	Προσαρμογή συντελεστών στις προσφορές
+	Certified Payroll Hours	Ώρες πιστοποιημένης μισθοδοσίας
+	Top-Down Labor Estimate	Συνολική εκτίμηση εργασίας από πάνω προς τα κάτω
+	Change Order Snapshot	Στιγμιότυπο εντολής αλλαγής
+	Price Change Order	Κοστολόγηση εντολής αλλαγής
+	Change Order Log	Μητρώο εντολών αλλαγής
+	Segment	Τμήμα
+	Total	Σύνολο
+	Total area	Συνολικό εμβαδόν
+	Import P-405 Labor Tables	Εισαγωγή πινάκων εργασίας P-405
+	New Part	Νέο εξάρτημα
+	Part Parameter	Παράμετρος εξαρτήματος
+	Part Sketch	Σκαρίφημα εξαρτήματος
+	Pad	Προεξοχή
+	Pocket	Εσοχή
+	Revolve Feature	Χαρακτηριστικό περιστροφής εκ περιφοράς
+	Fillet Feature	Χαρακτηριστικό στρογγύλευσης
+	Chamfer Feature	Χαρακτηριστικό λοξοτόμησης
+	Edit Feature	Επεξεργασία χαρακτηριστικού
+	Reorder Feature	Αναδιάταξη χαρακτηριστικού
+	Delete Feature	Διαγραφή χαρακτηριστικού
+	Rebuild Part	Αναδημιουργία εξαρτήματος
+	Model Tree	Δέντρο μοντέλου
+	List Parts	Λίστα εξαρτημάτων
+	No part yet: New Part starts one; sketches and features come from the part commands.	Δεν υπάρχει ακόμη εξάρτημα: το Νέο εξάρτημα δημιουργεί ένα· τα σκαριφήματα και τα χαρακτηριστικά προέρχονται από τις εντολές εξαρτήματος.
+	Volume {v}	Όγκος {v}
+	Parameters	Παράμετροι
+	name	όνομα
+	expression	έκφραση
+	Features	Χαρακτηριστικά
+	Suppress	Καταστολή
+	Double-click to rename	Διπλό κλικ για μετονομασία
+	Parts Library...	Βιβλιοθήκη εξαρτημάτων...
+	Parts Library	Βιβλιοθήκη εξαρτημάτων
+	Part Categories	Κατηγορίες εξαρτημάτων
+	Showing {shown} of {total} parts; type in Filter to narrow.	Εμφανίζονται {shown} από {total} εξαρτήματα· πληκτρολογήστε στο Φίλτρο για περιορισμό.
+	Annotation	Σχολιασμός
+	Doors	Θύρες
+	Windows	Παράθυρα
+	Stairs and ramps	Κλίμακες και ράμπες
+	Furniture	Έπιπλα
+	Sanitary fixtures	Είδη υγιεινής
+	Kitchen	Κουζίνα
+	Diffusers and grilles	Στόμια και γρίλιες
+	Terminal units	Τερματικές μονάδες
+	HVAC equipment	Εξοπλισμός HVAC
+	Dampers	Διαφράγματα
+	Valves	Βάνες
+	Pipe fittings	Εξαρτήματα σωληνώσεων
+	Pumps and tanks	Αντλίες και δεξαμενές
+	Drains	Σιφώνια δαπέδου
+	Power distribution	Διανομή ισχύος
+	Light fixtures	Φωτιστικά
+	Steel W shapes	Χαλύβδινες διατομές W
+	Steel channels	Χαλύβδινες διατομές U
+	Steel angles	Χαλύβδινα γωνιακά
+	Steel HSS	Χαλύβδινες κοίλες διατομές
+	Steel pipe	Χαλυβδοσωλήνες
+	Steel metric shapes	Μετρικές χαλύβδινες διατομές
+	Rebar	Οπλισμός
+	Lumber	Ξυλεία
+	Base plates	Πλάκες έδρασης
+	Masonry units	Στοιχεία τοιχοποιίας
+	Planting	Φυτεύσεις
+	Parking	Στάθμευση
+	Vehicles	Οχήματα
+	Site utilities	Δίκτυα κοινής ωφέλειας
+	Site amenities	Εξοπλισμός περιβάλλοντος χώρου
+	North arrows	Βέλη βορρά
+	Section and elevation marks	Σύμβολα τομών και όψεων
+	Tags and titles	Ετικέτες και τίτλοι
+	Weld and drafting symbols	Σύμβολα συγκόλλησης και σχεδίασης
+	Scale bars	Γραφικές κλίμακες
+	Title blocks	Πινακίδες σχεδίων
+	2D Profile	Προφίλ 2D
+	2D Profile Toolpath	Διαδρομή εργαλείου προφίλ 2D
+	CNC DXF Export	Εξαγωγή DXF για CNC
+	CNC DXF Export...	Εξαγωγή DXF για CNC...
+	Evaluate Rhai	Υπολογισμός Rhai
+	Manufacture	Παραγωγή
+	Rhai	Rhai
+	Run Rhai Script	Εκτέλεση σεναρίου Rhai
+	Script Editor	Επεξεργαστής σεναρίων
+	Define Linetype	Ορισμός τύπου γραμμής
+	Define Hatch Pattern	Ορισμός μοτίβου διαγράμμισης
+	Linetype Editor...	Επεξεργαστής τύπων γραμμής...
+	Hatch Pattern Editor...	Επεξεργαστής μοτίβων διαγράμμισης...
+	Linetype Editor	Επεξεργαστής τύπων γραμμής
+	Hatch Pattern Editor	Επεξεργαστής μοτίβων διαγράμμισης
+	Start from	Έναρξη από
+	A linetype in this drawing	Ένας τύπος γραμμής αυτού του σχεδίου
+	A pattern	Ένα μοτίβο
+	Add a dash or a gap	Προσθέστε παύλα ή κενό
+	Pattern length {n}	Μήκος μοτίβου {n}
+	Dash	Παύλα
+	Gap	Κενό
+	Dot	Τελεία
+	Add Row	Προσθήκη γραμμής
+	Save to .lin File...	Αποθήκευση σε αρχείο .lin...
+	Linetype {name} is in the drawing	Ο τύπος γραμμής {name} υπάρχει στο σχέδιο
+	Dashes	Παύλες
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Παύλες: > 0 παύλα, < 0 κενό, 0 τελεία
+	Add Line Family	Προσθήκη οικογένειας γραμμών
+	Save to .pat File...	Αποθήκευση σε αρχείο .pat...
+	Pattern {name} is offered for new hatches	Το μοτίβο {name} προσφέρεται για νέες διαγραμμίσεις
+	Check Underground	Έλεγχος υπόγειων δικτύων
+	Review Underground	Επισκόπηση υπόγειων δικτύων
+	Underground Sheets	Φύλλα υπόγειων δικτύων
+	DWF Underlay...	Υπόβαθρο DWF...
+	DWF Out	Εξαγωγή DWF
+	DWFx Out	Εξαγωγή DWFx
+	Enter path of DWF/DWFx file to attach	Δώστε διαδρομή αρχείου DWF/DWFx για επισύναψη
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Πρόσθετα

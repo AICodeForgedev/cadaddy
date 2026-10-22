@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	بررسی تجهیزات برقی
 	Submittal Review of Gear	بازبینی ارسالی تجهیزات
 	Accept Gear as Submitted	پذیرش تجهیزات مطابق ارسالی
+	Labels	برچسب‌ها
+	Print Labels	چاپ برچسب‌ها
+	Import Arc Flash Data	وارد کردن داده‌های قوس الکتریکی
+	Check Labels	بررسی برچسب‌ها
+	Label BOM Lines	سطرهای BOM برای برچسب‌ها
+	Water and Gas Points of Entry	نقاط ورود آب و گاز
+	Route Grounding	مسیریابی اتصال زمین
+	Check Grounding	بررسی اتصال زمین
+	Alternative Grounding Electrode	الکترود زمین جایگزین
+	Grounding Takeoff	برآورد اتصال زمین
+	4D Schedule	برنامه زمان‌بندی چهاربعدی
+	Import 4D Schedule	وارد کردن برنامه زمان‌بندی چهاربعدی
+	4D Schedule Tasks	کارهای برنامه زمان‌بندی چهاربعدی
+	Link 4D Task	پیوند دادن کار چهاربعدی
+	4D State at a Date	وضعیت چهاربعدی در یک تاریخ
+	Export 4D Video	صدور ویدئوی چهاربعدی
+	Clear 4D Schedule	پاک کردن برنامه زمان‌بندی چهاربعدی
+	Import Schedule...	وارد کردن برنامه زمان‌بندی...
+	Export Video...	صدور ویدئو...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV یا Excel: ستون‌های کار، شروع، پایان، و تراز، سیستم، کلاس یا عنصر
+	No schedule yet. Import one to show the model on a date.	هنوز برنامه زمان‌بندی‌ای وجود ندارد. یکی را وارد کنید تا مدل در یک تاریخ نمایش داده شود.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} کار، {start} تا {finish}؛ {linked} از {elements} شیء زمان‌بندی‌شده
+	Show the model on a date	نمایش مدل در یک تاریخ
+	Pause	مکث
+	A day earlier	یک روز زودتر
+	A day later	یک روز دیرتر
+	 days/s	 روز/ثانیه
+	Show work not started, pale	نمایش کارهای شروع‌نشده به‌صورت کم‌رنگ
+	Built	ساخته‌شده
+	In progress	در حال انجام
+	Not yet	هنوز نه
+	Add Selected Objects	افزودن اشیای انتخاب‌شده
+	Remove Selected Objects	حذف اشیای انتخاب‌شده
+	Bill of Materials	فهرست مصالح
+	List Element Tags	فهرست برچسب‌های عنصر
+	Set Element Tag Field	تنظیم فیلد برچسب عنصر
+	Accept Element Tags	پذیرش برچسب‌های عنصر
+	Element Tags	برچسب‌های عنصر
+	Untagged	بدون برچسب
+	Tag not in schedule	برچسب در جدول نیست
+	Missing protection	فاقد حفاظت
+	Double protection	حفاظت مضاعف
+	No conductor note	بدون یادداشت هادی
+	Two rules apply	دو قاعده اعمال می‌شود
+	All elements	همه عناصر
+	{n} elements	{n} عنصر
+	No element tags: read the electrical plans first.	هیچ برچسب عنصری وجود ندارد: ابتدا نقشه‌های برق را بخوانید.
+	Field	فیلد
+	Set on Picked	تنظیم روی موارد انتخاب‌شده
+	Accept Picked	پذیرش موارد انتخاب‌شده
+	Pick All Shown	انتخاب همه موارد نمایش‌داده‌شده
+	New Material Release	ترخیص مصالح جدید
+	Procurement	تدارکات
+	Order Status	وضعیت سفارش
+	Submittal Log Entry	مورد دفتر ارسالی‌ها
+	Submittal Log	دفتر ارسالی‌ها
+	Lead Times	زمان‌های تحویل
+	Export Release	صدور ترخیص
+	Progress Plan	برنامه پیشرفت
+	Mark Installed Work	علامت‌گذاری کار نصب‌شده
+	Import Timecards	وارد کردن کارت‌های ساعت کار
+	Progress and Earned Value	پیشرفت و ارزش کسب‌شده
+	Actual Production Rates	نرخ‌های تولید واقعی
+	Add Field Observations	افزودن مشاهدات کارگاهی
+	Compare Estimate What-If	مقایسه سناریوی فرضی برآورد
+	Estimate Settings	تنظیمات برآورد
+	Estimate Status	وضعیت برآورد
+	Explain Estimate Number	توضیح عدد برآورد
+	Import Estimating Baseline	وارد کردن مبنای برآورد
+	Query Estimate	پرس‌وجوی برآورد
+	Set Estimate Assembly	تنظیم مجموعه برآورد
+	Set Estimate Price	تنظیم قیمت برآورد
+	Set Estimate Scope	تنظیم دامنه کار برآورد
+	New Window	پنجره جدید
+	Concrete Elements	عناصر بتنی
+	Set Concrete	تنظیم بتن
+	Check Concrete	بررسی بتن
+	Concrete Coordination Review	بازبینی هماهنگی بتن
+	Concrete Quantities	مقادیر بتن
+	Pour Hold Points	نقاط توقف پیش از بتن‌ریزی
+	Sign Off Hold Point	تأیید نقطه توقف
+	Trade Quantities	مقادیر هر رشته
+	Trade Scope	دامنه کار رشته
+	Trade Prices	قیمت‌های هر رشته
+	Whole-Job Settings	تنظیمات کل پروژه
+	Whole-Job Estimate	برآورد کل پروژه
+	Bid Package	بسته مناقصه
+	Sub Bid	پیشنهاد پیمانکار جزء
+	Level Bids	هم‌سطح‌سازی پیشنهادها
+	Add Bid History	افزودن سابقه پیشنهادها
+	Bid Benchmarks	محک‌های پیشنهاد
+	Record Outcome	ثبت نتیجه
+	Add Calibration Project	افزودن پروژه کالیبراسیون
+	Fit Rates to Bids	تطبیق نرخ‌ها با پیشنهادها
+	Certified Payroll Hours	ساعات از لیست‌های حقوق تأییدشده
+	Top-Down Labor Estimate	برآورد نیروی کار از بالا به پایین
+	Change Order Snapshot	تصویر لحظه‌ای دستور تغییر
+	Price Change Order	قیمت‌گذاری دستور تغییر
+	Change Order Log	دفتر دستورهای تغییر
+	Segment	قطعه
+	Total	مجموع
+	Total area	مساحت کل
+	Import P-405 Labor Tables	وارد کردن جدول‌های نیروی کار P-405
+	New Part	قطعه جدید
+	Part Parameter	پارامتر قطعه
+	Part Sketch	اسکیس قطعه
+	Pad	برجستگی
+	Pocket	حفره
+	Revolve Feature	عارضه دوران
+	Fillet Feature	عارضه گرد کردن گوشه
+	Chamfer Feature	عارضه پخ
+	Edit Feature	ویرایش عارضه
+	Reorder Feature	تغییر ترتیب عارضه
+	Delete Feature	حذف عارضه
+	Rebuild Part	ساخت مجدد قطعه
+	Model Tree	درخت مدل
+	List Parts	فهرست قطعه‌ها
+	No part yet: New Part starts one; sketches and features come from the part commands.	هنوز قطعه‌ای وجود ندارد: «قطعه جدید» یکی را ایجاد می‌کند؛ اسکیس‌ها و عارضه‌ها از فرمان‌های قطعه می‌آیند.
+	Volume {v}	حجم {v}
+	Parameters	پارامترها
+	name	نام
+	expression	عبارت
+	Features	عارضه‌ها
+	Suppress	غیرفعال کردن
+	Double-click to rename	برای تغییر نام دوبار کلیک کنید
+	Parts Library...	کتابخانه قطعه‌ها...
+	Parts Library	کتابخانه قطعه‌ها
+	Part Categories	دسته‌های قطعه
+	Showing {shown} of {total} parts; type in Filter to narrow.	نمایش {shown} از {total} قطعه؛ برای محدود کردن در فیلتر تایپ کنید.
+	Annotation	حاشیه‌نویسی
+	Doors	درها
+	Windows	پنجره‌ها
+	Stairs and ramps	پله‌ها و رمپ‌ها
+	Furniture	مبلمان
+	Sanitary fixtures	لوازم بهداشتی
+	Kitchen	آشپزخانه
+	Diffusers and grilles	دیفیوزرها و دریچه‌ها
+	Terminal units	واحدهای انتهایی
+	HVAC equipment	تجهیزات تهویه مطبوع
+	Dampers	دمپرها
+	Valves	شیرها
+	Pipe fittings	اتصالات لوله
+	Pumps and tanks	پمپ‌ها و مخازن
+	Drains	کف‌شورها
+	Power distribution	توزیع برق
+	Light fixtures	چراغ‌ها
+	Steel W shapes	پروفیل‌های فولادی W
+	Steel channels	ناودانی‌های فولادی
+	Steel angles	نبشی‌های فولادی
+	Steel HSS	مقاطع توخالی فولادی
+	Steel pipe	لوله‌های فولادی
+	Steel metric shapes	پروفیل‌های فولادی متریک
+	Rebar	میلگرد
+	Lumber	الوار
+	Base plates	صفحه‌ستون‌ها
+	Masonry units	واحدهای بنایی
+	Planting	کاشت گیاهان
+	Parking	پارکینگ
+	Vehicles	وسایل نقلیه
+	Site utilities	تأسیسات سایت
+	Site amenities	امکانات سایت
+	North arrows	فلش‌های شمال
+	Section and elevation marks	نشانه‌های مقطع و نما
+	Tags and titles	برچسب‌ها و عنوان‌ها
+	Weld and drafting symbols	نمادهای جوشکاری و نقشه‌کشی
+	Scale bars	نوارهای مقیاس
+	Title blocks	جدول‌های عنوان نقشه
+	2D Profile	پروفیل دوبعدی
+	2D Profile Toolpath	مسیر ابزار پروفیل دوبعدی
+	CNC DXF Export	صدور DXF برای CNC
+	CNC DXF Export...	صدور DXF برای CNC...
+	Evaluate Rhai	ارزیابی Rhai
+	Manufacture	تولید
+	Rhai	Rhai
+	Run Rhai Script	اجرای اسکریپت Rhai
+	Script Editor	ویرایشگر اسکریپت
+	Define Linetype	تعریف نوع خط
+	Define Hatch Pattern	تعریف الگوی هاشور
+	Linetype Editor...	ویرایشگر نوع خط...
+	Hatch Pattern Editor...	ویرایشگر الگوی هاشور...
+	Linetype Editor	ویرایشگر نوع خط
+	Hatch Pattern Editor	ویرایشگر الگوی هاشور
+	Start from	شروع از
+	A linetype in this drawing	یک نوع خط در این نقشه
+	A pattern	یک الگو
+	Add a dash or a gap	افزودن تیره یا فاصله
+	Pattern length {n}	طول الگو {n}
+	Dash	تیره
+	Gap	فاصله
+	Dot	نقطه
+	Add Row	افزودن سطر
+	Save to .lin File...	ذخیره در فایل .lin...
+	Linetype {name} is in the drawing	نوع خط {name} در نقشه موجود است
+	Dashes	تیره‌ها
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	تیره‌ها: > 0 تیره، < 0 فاصله، 0 نقطه
+	Add Line Family	افزودن خانواده خطوط
+	Save to .pat File...	ذخیره در فایل .pat...
+	Pattern {name} is offered for new hatches	الگوی {name} برای هاشورهای جدید پیشنهاد می‌شود
+	Check Underground	بررسی تأسیسات زیرزمینی
+	Review Underground	بازبینی تأسیسات زیرزمینی
+	Underground Sheets	برگه‌های تأسیسات زیرزمینی
+	DWF Underlay...	زیرلایه DWF...
+	DWF Out	خروجی DWF
+	DWFx Out	خروجی DWFx
+	Enter path of DWF/DWFx file to attach	مسیر فایل DWF/DWFx را برای پیوست وارد کنید
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	افزونه‌ها

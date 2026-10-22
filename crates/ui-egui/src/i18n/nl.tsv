@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	Elektrische apparatuur controleren
 	Submittal Review of Gear	Controle ingediende apparatuur
 	Accept Gear as Submitted	Apparatuur accepteren zoals ingediend
+	Labels	Labels
+	Print Labels	Labels afdrukken
+	Import Arc Flash Data	Vlamboogdata importeren
+	Check Labels	Labels controleren
+	Label BOM Lines	Stuklijstregels voor labels
+	Water and Gas Points of Entry	Invoerpunten water en gas
+	Route Grounding	Aarding leggen
+	Check Grounding	Aarding controleren
+	Alternative Grounding Electrode	Alternatieve aardelektrode
+	Grounding Takeoff	Hoeveelheden aarding
+	4D Schedule	4D-planning
+	Import 4D Schedule	4D-planning importeren
+	4D Schedule Tasks	Taken 4D-planning
+	Link 4D Task	4D-taak koppelen
+	4D State at a Date	4D-stand op een datum
+	Export 4D Video	4D-video exporteren
+	Clear 4D Schedule	4D-planning wissen
+	Import Schedule...	Planning importeren...
+	Export Video...	Video exporteren...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV of Excel: kolommen taak, start, einde en niveau, systeem, klasse of element
+	No schedule yet. Import one to show the model on a date.	Nog geen planning. Importeer er een om het model op een datum te tonen.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} taken, {start} tot {finish}; {linked} van {elements} objecten ingepland
+	Show the model on a date	Model op een datum tonen
+	Pause	Pauze
+	A day earlier	Een dag eerder
+	A day later	Een dag later
+	 days/s	 dagen/s
+	Show work not started, pale	Niet-begonnen werk vaag tonen
+	Built	Gebouwd
+	In progress	Bezig
+	Not yet	Nog niet
+	Add Selected Objects	Geselecteerde objecten toevoegen
+	Remove Selected Objects	Geselecteerde objecten verwijderen
+	Bill of Materials	Stuklijst
+	List Element Tags	Elementlabels weergeven
+	Set Element Tag Field	Veld van elementlabel instellen
+	Accept Element Tags	Elementlabels accepteren
+	Element Tags	Elementlabels
+	Untagged	Zonder label
+	Tag not in schedule	Label niet in staat
+	Missing protection	Beveiliging ontbreekt
+	Double protection	Dubbele beveiliging
+	No conductor note	Geen geleidernotitie
+	Two rules apply	Twee regels van toepassing
+	All elements	Alle elementen
+	{n} elements	{n} elementen
+	No element tags: read the electrical plans first.	Geen elementlabels: lees eerst de elektrische tekeningen.
+	Field	Veld
+	Set on Picked	Instellen op gekozen
+	Accept Picked	Gekozen accepteren
+	Pick All Shown	Alle getoonde kiezen
+	New Material Release	Nieuwe materiaalvrijgave
+	Procurement	Inkoop
+	Order Status	Bestelstatus
+	Submittal Log Entry	Regel in indieningslogboek
+	Submittal Log	Indieningslogboek
+	Lead Times	Levertijden
+	Export Release	Vrijgave exporteren
+	Progress Plan	Voortgangsplan
+	Mark Installed Work	Geïnstalleerd werk markeren
+	Import Timecards	Urenkaarten importeren
+	Progress and Earned Value	Voortgang en verdiende waarde
+	Actual Production Rates	Werkelijke productienormen
+	Add Field Observations	Veldwaarnemingen toevoegen
+	Compare Estimate What-If	Wat-als-calculatie vergelijken
+	Estimate Settings	Calculatie-instellingen
+	Estimate Status	Calculatiestatus
+	Explain Estimate Number	Calculatiegetal uitleggen
+	Import Estimating Baseline	Calculatiebasis importeren
+	Query Estimate	Calculatie bevragen
+	Set Estimate Assembly	Calculatiesamenstelling instellen
+	Set Estimate Price	Calculatieprijs instellen
+	Set Estimate Scope	Calculatieomvang instellen
+	New Window	Nieuw venster
+	Concrete Elements	Betonelementen
+	Set Concrete	Beton instellen
+	Check Concrete	Beton controleren
+	Concrete Coordination Review	Coördinatiecontrole beton
+	Concrete Quantities	Hoeveelheden beton
+	Pour Hold Points	Stoppunten voor storten
+	Sign Off Hold Point	Stoppunt aftekenen
+	Trade Quantities	Hoeveelheden per discipline
+	Trade Scope	Omvang per discipline
+	Trade Prices	Prijzen per discipline
+	Whole-Job Settings	Instellingen hele project
+	Whole-Job Estimate	Calculatie hele project
+	Bid Package	Aanbestedingspakket
+	Sub Bid	Offerte onderaannemer
+	Level Bids	Offertes vergelijken
+	Add Bid History	Offertegeschiedenis toevoegen
+	Bid Benchmarks	Offertebenchmarks
+	Record Outcome	Uitkomst vastleggen
+	Add Calibration Project	Kalibratieproject toevoegen
+	Fit Rates to Bids	Normen afstemmen op offertes
+	Certified Payroll Hours	Uren uit gecertificeerde loonlijsten
+	Top-Down Labor Estimate	Top-down arbeidsraming
+	Change Order Snapshot	Momentopname meerwerk
+	Price Change Order	Meerwerk calculeren
+	Change Order Log	Meerwerklogboek
+	Segment	Segment
+	Total	Totaal
+	Total area	Totale oppervlakte
+	Import P-405 Labor Tables	P-405-arbeidstabellen importeren
+	New Part	Nieuw onderdeel
+	Part Parameter	Onderdeelparameter
+	Part Sketch	Onderdeelschets
+	Pad	Uittrekken
+	Pocket	Uitsparing
+	Revolve Feature	Wentelkenmerk
+	Fillet Feature	Afrondingskenmerk
+	Chamfer Feature	Afschuiningskenmerk
+	Edit Feature	Kenmerk bewerken
+	Reorder Feature	Kenmerk verplaatsen
+	Delete Feature	Kenmerk verwijderen
+	Rebuild Part	Onderdeel opnieuw bouwen
+	Model Tree	Modelboom
+	List Parts	Onderdelen weergeven
+	No part yet: New Part starts one; sketches and features come from the part commands.	Nog geen onderdeel: Nieuw onderdeel start er een; schetsen en kenmerken komen uit de onderdeelopdrachten.
+	Volume {v}	Volume {v}
+	Parameters	Parameters
+	name	naam
+	expression	expressie
+	Features	Kenmerken
+	Suppress	Onderdrukken
+	Double-click to rename	Dubbelklik om te hernoemen
+	Parts Library...	Onderdelenbibliotheek...
+	Parts Library	Onderdelenbibliotheek
+	Part Categories	Onderdeelcategorieën
+	Showing {shown} of {total} parts; type in Filter to narrow.	{shown} van {total} onderdelen getoond; typ in Filter om te verfijnen.
+	Annotation	Annotatie
+	Doors	Deuren
+	Windows	Ramen
+	Stairs and ramps	Trappen en hellingen
+	Furniture	Meubilair
+	Sanitary fixtures	Sanitair
+	Kitchen	Keuken
+	Diffusers and grilles	Roosters en diffusors
+	Terminal units	Eindunits
+	HVAC equipment	HVAC-apparatuur
+	Dampers	Kleppen
+	Valves	Afsluiters
+	Pipe fittings	Leidingfittingen
+	Pumps and tanks	Pompen en tanks
+	Drains	Afvoeren
+	Power distribution	Stroomverdeling
+	Light fixtures	Armaturen
+	Steel W shapes	Stalen W-profielen
+	Steel channels	Stalen U-profielen
+	Steel angles	Stalen hoekprofielen
+	Steel HSS	Stalen kokerprofielen
+	Steel pipe	Stalen buizen
+	Steel metric shapes	Metrische staalprofielen
+	Rebar	Wapening
+	Lumber	Gezaagd hout
+	Base plates	Voetplaten
+	Masonry units	Metselstenen
+	Planting	Beplanting
+	Parking	Parkeren
+	Vehicles	Voertuigen
+	Site utilities	Nutsvoorzieningen terrein
+	Site amenities	Terreininrichting
+	North arrows	Noordpijlen
+	Section and elevation marks	Doorsnede- en aanzichtmarkeringen
+	Tags and titles	Labels en titels
+	Weld and drafting symbols	Las- en tekensymbolen
+	Scale bars	Schaalbalken
+	Title blocks	Titelblokken
+	2D Profile	2D-profiel
+	2D Profile Toolpath	Gereedschapsbaan 2D-profiel
+	CNC DXF Export	CNC-DXF-export
+	CNC DXF Export...	CNC-DXF-export...
+	Evaluate Rhai	Rhai evalueren
+	Manufacture	Fabricage
+	Rhai	Rhai
+	Run Rhai Script	Rhai-script uitvoeren
+	Script Editor	Scripteditor
+	Define Linetype	Lijntype definiëren
+	Define Hatch Pattern	Arceerpatroon definiëren
+	Linetype Editor...	Lijntype-editor...
+	Hatch Pattern Editor...	Arceerpatrooneditor...
+	Linetype Editor	Lijntype-editor
+	Hatch Pattern Editor	Arceerpatrooneditor
+	Start from	Beginnen vanaf
+	A linetype in this drawing	Een lijntype in deze tekening
+	A pattern	Een patroon
+	Add a dash or a gap	Een streep of een opening toevoegen
+	Pattern length {n}	Patroonlengte {n}
+	Dash	Streep
+	Gap	Opening
+	Dot	Punt
+	Add Row	Rij toevoegen
+	Save to .lin File...	Opslaan in .lin-bestand...
+	Linetype {name} is in the drawing	Lijntype {name} staat in de tekening
+	Dashes	Strepen
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	Strepen: > 0 een streep, < 0 een opening, 0 een punt
+	Add Line Family	Lijnfamilie toevoegen
+	Save to .pat File...	Opslaan in .pat-bestand...
+	Pattern {name} is offered for new hatches	Patroon {name} wordt aangeboden voor nieuwe arceringen
+	Check Underground	Ondergrondse leidingen controleren
+	Review Underground	Ondergrondse leidingen beoordelen
+	Underground Sheets	Bladen ondergrondse leidingen
+	DWF Underlay...	DWF-onderlegger...
+	DWF Out	DWF-uitvoer
+	DWFx Out	DWFx-uitvoer
+	Enter path of DWF/DWFx file to attach	Voer het pad in van het te koppelen DWF/DWFx-bestand
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	Invoegtoepassingen

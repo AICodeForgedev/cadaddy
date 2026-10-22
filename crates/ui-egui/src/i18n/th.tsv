@@ -2831,3 +2831,211 @@
 	Check Electrical Gear	ตรวจสอบอุปกรณ์ไฟฟ้าหลัก
 	Submittal Review of Gear	ตรวจทานเอกสารเสนออนุมัติของอุปกรณ์
 	Accept Gear as Submitted	ยอมรับอุปกรณ์ตามที่เสนอ
+	Labels	ป้าย
+	Print Labels	พิมพ์ป้าย
+	Import Arc Flash Data	นำเข้าข้อมูลอาร์กแฟลช
+	Check Labels	ตรวจสอบป้าย
+	Label BOM Lines	บรรทัดรายการวัสดุของป้าย
+	Water and Gas Points of Entry	จุดนำเข้าท่อน้ำและท่อแก๊ส
+	Route Grounding	เดินสายต่อลงดิน
+	Check Grounding	ตรวจสอบการต่อลงดิน
+	Alternative Grounding Electrode	หลักดินทางเลือก
+	Grounding Takeoff	ถอดปริมาณระบบต่อลงดิน
+	4D Schedule	แผนงาน 4D
+	Import 4D Schedule	นำเข้าแผนงาน 4D
+	4D Schedule Tasks	งานในแผนงาน 4D
+	Link 4D Task	เชื่อมโยงงาน 4D
+	4D State at a Date	สถานะ 4D ณ วันที่
+	Export 4D Video	ส่งออกวิดีโอ 4D
+	Clear 4D Schedule	ล้างแผนงาน 4D
+	Import Schedule...	นำเข้าแผนงาน...
+	Export Video...	ส่งออกวิดีโอ...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV หรือ Excel: คอลัมน์งาน วันเริ่ม วันเสร็จ และระดับ ระบบ คลาส หรือองค์ประกอบ
+	No schedule yet. Import one to show the model on a date.	ยังไม่มีแผนงาน นำเข้าแผนงานเพื่อแสดงโมเดล ณ วันที่ที่ต้องการ
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} งาน, {start} ถึง {finish}; จัดลงแผนงานแล้ว {linked} จาก {elements} วัตถุ
+	Show the model on a date	แสดงโมเดล ณ วันที่
+	Pause	หยุดชั่วคราว
+	A day earlier	ย้อนหนึ่งวัน
+	A day later	ถัดไปหนึ่งวัน
+	 days/s	 วัน/วินาที
+	Show work not started, pale	แสดงงานที่ยังไม่เริ่มแบบจาง
+	Built	ก่อสร้างแล้ว
+	In progress	กำลังดำเนินการ
+	Not yet	ยังไม่เริ่ม
+	Add Selected Objects	เพิ่มวัตถุที่เลือก
+	Remove Selected Objects	เอาวัตถุที่เลือกออก
+	Bill of Materials	รายการวัสดุ
+	List Element Tags	แสดงรายการแท็กองค์ประกอบ
+	Set Element Tag Field	ตั้งค่าฟิลด์แท็กองค์ประกอบ
+	Accept Element Tags	ยอมรับแท็กองค์ประกอบ
+	Element Tags	แท็กองค์ประกอบ
+	Untagged	ไม่มีแท็ก
+	Tag not in schedule	แท็กไม่อยู่ในตารางรายการ
+	Missing protection	ไม่มีอุปกรณ์ป้องกัน
+	Double protection	ป้องกันซ้ำซ้อน
+	No conductor note	ไม่มีหมายเหตุสายไฟ
+	Two rules apply	เข้าเงื่อนไขกฎสองข้อ
+	All elements	องค์ประกอบทั้งหมด
+	{n} elements	{n} องค์ประกอบ
+	No element tags: read the electrical plans first.	ไม่มีแท็กองค์ประกอบ: อ่านแบบไฟฟ้าก่อน
+	Field	ฟิลด์
+	Set on Picked	ตั้งค่าให้รายการที่เลือก
+	Accept Picked	ยอมรับรายการที่เลือก
+	Pick All Shown	เลือกทั้งหมดที่แสดง
+	New Material Release	ใบเบิกวัสดุใหม่
+	Procurement	การจัดซื้อ
+	Order Status	สถานะคำสั่งซื้อ
+	Submittal Log Entry	รายการในบันทึกเอกสารเสนออนุมัติ
+	Submittal Log	บันทึกเอกสารเสนออนุมัติ
+	Lead Times	ระยะเวลารอสินค้า
+	Export Release	ส่งออกใบเบิกวัสดุ
+	Progress Plan	แปลนความคืบหน้า
+	Mark Installed Work	ทำเครื่องหมายงานที่ติดตั้งแล้ว
+	Import Timecards	นำเข้าบัตรลงเวลา
+	Progress and Earned Value	ความคืบหน้าและมูลค่าที่ได้รับ
+	Actual Production Rates	อัตราผลผลิตจริง
+	Add Field Observations	เพิ่มข้อสังเกตหน้างาน
+	Compare Estimate What-If	เปรียบเทียบกรณีสมมติของการประมาณราคา
+	Estimate Settings	การตั้งค่าการประมาณราคา
+	Estimate Status	สถานะการประมาณราคา
+	Explain Estimate Number	อธิบายตัวเลขการประมาณราคา
+	Import Estimating Baseline	นำเข้าข้อมูลฐานการประมาณราคา
+	Query Estimate	สอบถามการประมาณราคา
+	Set Estimate Assembly	กำหนดชุดประกอบในการประมาณราคา
+	Set Estimate Price	กำหนดราคาในการประมาณราคา
+	Set Estimate Scope	กำหนดขอบเขตการประมาณราคา
+	New Window	หน้าต่างใหม่
+	Concrete Elements	องค์ประกอบคอนกรีต
+	Set Concrete	กำหนดคอนกรีต
+	Check Concrete	ตรวจสอบคอนกรีต
+	Concrete Coordination Review	ตรวจทานการประสานงานคอนกรีต
+	Concrete Quantities	ปริมาณคอนกรีต
+	Pour Hold Points	จุดหยุดตรวจก่อนเทคอนกรีต
+	Sign Off Hold Point	ลงนามจุดหยุดตรวจ
+	Trade Quantities	ปริมาณตามงานระบบ
+	Trade Scope	ขอบเขตงานระบบ
+	Trade Prices	ราคาตามงานระบบ
+	Whole-Job Settings	การตั้งค่าทั้งโครงการ
+	Whole-Job Estimate	ประมาณราคาทั้งโครงการ
+	Bid Package	ชุดเอกสารประกวดราคา
+	Sub Bid	ราคาผู้รับเหมาช่วง
+	Level Bids	เปรียบเทียบราคาเสนอ
+	Add Bid History	เพิ่มประวัติการเสนอราคา
+	Bid Benchmarks	เกณฑ์อ้างอิงราคาเสนอ
+	Record Outcome	บันทึกผลลัพธ์
+	Add Calibration Project	เพิ่มโครงการสำหรับปรับเทียบ
+	Fit Rates to Bids	ปรับอัตราให้ตรงกับราคาเสนอ
+	Certified Payroll Hours	ชั่วโมงจากบัญชีค่าจ้างที่รับรอง
+	Top-Down Labor Estimate	ประมาณค่าแรงแบบบนลงล่าง
+	Change Order Snapshot	สแนปช็อตใบสั่งเปลี่ยนแปลงงาน
+	Price Change Order	คิดราคาใบสั่งเปลี่ยนแปลงงาน
+	Change Order Log	บันทึกใบสั่งเปลี่ยนแปลงงาน
+	Segment	เซกเมนต์
+	Total	รวม
+	Total area	พื้นที่รวม
+	Import P-405 Labor Tables	นำเข้าตารางค่าแรง P-405
+	New Part	ชิ้นส่วนใหม่
+	Part Parameter	พารามิเตอร์ชิ้นส่วน
+	Part Sketch	สเก็ตช์ชิ้นส่วน
+	Pad	อัดรีดเพิ่มเนื้อ
+	Pocket	เจาะช่อง
+	Revolve Feature	ฟีเจอร์หมุนรอบแกน
+	Fillet Feature	ฟีเจอร์ลบมุมโค้ง
+	Chamfer Feature	ฟีเจอร์ลบมุม
+	Edit Feature	แก้ไขฟีเจอร์
+	Reorder Feature	จัดลำดับฟีเจอร์ใหม่
+	Delete Feature	ลบฟีเจอร์
+	Rebuild Part	สร้างชิ้นส่วนขึ้นใหม่
+	Model Tree	ทรีโมเดล
+	List Parts	แสดงรายการชิ้นส่วน
+	No part yet: New Part starts one; sketches and features come from the part commands.	ยังไม่มีชิ้นส่วน: "ชิ้นส่วนใหม่" จะเริ่มสร้างชิ้นส่วน ส่วนสเก็ตช์และฟีเจอร์มาจากคำสั่งชิ้นส่วน
+	Volume {v}	ปริมาตร {v}
+	Parameters	พารามิเตอร์
+	name	ชื่อ
+	expression	นิพจน์
+	Features	ฟีเจอร์
+	Suppress	ระงับ
+	Double-click to rename	ดับเบิลคลิกเพื่อเปลี่ยนชื่อ
+	Parts Library...	ไลบรารีชิ้นส่วน...
+	Parts Library	ไลบรารีชิ้นส่วน
+	Part Categories	หมวดหมู่ชิ้นส่วน
+	Showing {shown} of {total} parts; type in Filter to narrow.	แสดง {shown} จาก {total} ชิ้นส่วน พิมพ์ในตัวกรองเพื่อจำกัดผล
+	Annotation	คำอธิบายประกอบ
+	Doors	ประตู
+	Windows	หน้าต่าง
+	Stairs and ramps	บันไดและทางลาด
+	Furniture	เฟอร์นิเจอร์
+	Sanitary fixtures	สุขภัณฑ์
+	Kitchen	ห้องครัว
+	Diffusers and grilles	หัวจ่ายลมและหน้ากากลม
+	Terminal units	อุปกรณ์ปลายทาง
+	HVAC equipment	อุปกรณ์ HVAC
+	Dampers	แดมเปอร์
+	Valves	วาล์ว
+	Pipe fittings	ข้อต่อท่อ
+	Pumps and tanks	ปั๊มและถัง
+	Drains	จุดระบายน้ำ
+	Power distribution	การจ่ายไฟฟ้า
+	Light fixtures	โคมไฟ
+	Steel W shapes	เหล็กรูปพรรณ W
+	Steel channels	เหล็กรางน้ำ
+	Steel angles	เหล็กฉาก
+	Steel HSS	เหล็กกลวง HSS
+	Steel pipe	ท่อเหล็ก
+	Steel metric shapes	เหล็กรูปพรรณระบบเมตริก
+	Rebar	เหล็กเสริม
+	Lumber	ไม้แปรรูป
+	Base plates	แผ่นเหล็กฐาน
+	Masonry units	ก้อนวัสดุก่อ
+	Planting	พืชพรรณ
+	Parking	ที่จอดรถ
+	Vehicles	ยานพาหนะ
+	Site utilities	ระบบสาธารณูปโภคในไซต์
+	Site amenities	สิ่งอำนวยความสะดวกในไซต์
+	North arrows	ลูกศรทิศเหนือ
+	Section and elevation marks	สัญลักษณ์รูปตัดและรูปด้าน
+	Tags and titles	แท็กและชื่อเรื่อง
+	Weld and drafting symbols	สัญลักษณ์งานเชื่อมและงานเขียนแบบ
+	Scale bars	แถบมาตราส่วน
+	Title blocks	กรอบชื่อแบบ
+	2D Profile	โปรไฟล์ 2D
+	2D Profile Toolpath	เส้นทางเครื่องมือตัดโปรไฟล์ 2D
+	CNC DXF Export	ส่งออก DXF สำหรับ CNC
+	CNC DXF Export...	ส่งออก DXF สำหรับ CNC...
+	Evaluate Rhai	ประมวลผล Rhai
+	Manufacture	การผลิต
+	Rhai	Rhai
+	Run Rhai Script	เรียกใช้สคริปต์ Rhai
+	Script Editor	ตัวแก้ไขสคริปต์
+	Define Linetype	กำหนดชนิดเส้น
+	Define Hatch Pattern	กำหนดลวดลายแฮทช์
+	Linetype Editor...	ตัวแก้ไขชนิดเส้น...
+	Hatch Pattern Editor...	ตัวแก้ไขลวดลายแฮทช์...
+	Linetype Editor	ตัวแก้ไขชนิดเส้น
+	Hatch Pattern Editor	ตัวแก้ไขลวดลายแฮทช์
+	Start from	เริ่มจาก
+	A linetype in this drawing	ชนิดเส้นในแบบนี้
+	A pattern	ลวดลาย
+	Add a dash or a gap	เพิ่มเส้นขีดหรือช่องว่าง
+	Pattern length {n}	ความยาวลวดลาย {n}
+	Dash	เส้นขีด
+	Gap	ช่องว่าง
+	Dot	จุด
+	Add Row	เพิ่มแถว
+	Save to .lin File...	บันทึกเป็นไฟล์ .lin...
+	Linetype {name} is in the drawing	ชนิดเส้น {name} อยู่ในแบบแล้ว
+	Dashes	ชุดเส้นขีด
+	Dashes: > 0 a dash, < 0 a gap, 0 a dot	เส้นขีด: > 0 เส้นขีด, < 0 ช่องว่าง, 0 จุด
+	Add Line Family	เพิ่มกลุ่มเส้น
+	Save to .pat File...	บันทึกเป็นไฟล์ .pat...
+	Pattern {name} is offered for new hatches	ลวดลาย {name} พร้อมใช้สำหรับแฮทช์ใหม่
+	Check Underground	ตรวจสอบระบบใต้ดิน
+	Review Underground	ตรวจทานระบบใต้ดิน
+	Underground Sheets	แผ่นงานระบบใต้ดิน
+	DWF Underlay...	DWF อันเดอร์เลย์...
+	DWF Out	ส่งออก DWF
+	DWFx Out	ส่งออก DWFx
+	Enter path of DWF/DWFx file to attach	ป้อนพาธของไฟล์ DWF/DWFx ที่จะแนบ
+	DWF...	DWF...
+	DWFx...	DWFx...
+	Plug-ins	ปลั๊กอิน
