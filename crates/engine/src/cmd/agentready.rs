@@ -87,6 +87,8 @@ struct State {
     concerns: Vec<Concern>,
     /// The element counts of the last build, per level and discipline.
     last_build: BTreeMap<String, BTreeMap<String, usize>>,
+    /// The building spec the last build was made from (a hash of its text).
+    last_build_spec: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -476,6 +478,10 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
         json!({"call": "bspec.draft {} or printset.open {path}", "why": "there is no building spec yet: nothing to build or review"})
     } else if built.is_empty() {
         json!({"call": "bim.build {}", "why": "the building spec isn't built yet"})
+    } else if !st.last_build_spec.is_empty() && st.last_build_spec != spec_hash(s.doc()?) && open.is_empty() {
+        // Answers changed the spec since the build (Q320: the weak agent took off quantities
+        // from a model older than its own answers).
+        json!({"call": "bim.build {}", "why": "the building spec changed since the last build (review answers): build again before the takeoff"})
     } else if let Some(i) = open.first() {
         json!({"call": format!("review.next {{}} (top: {})", i.id), "why": format!("{} open review item(s)", open.len())})
     } else {
@@ -535,6 +541,10 @@ fn built_counts(d: &Drawing) -> BTreeMap<String, BTreeMap<String, usize>> {
         *m.entry((*level).to_string()).or_default().entry(disc.into()).or_default() += 1;
     }
     m
+}
+
+fn spec_hash(d: &Drawing) -> String {
+    d.building_spec.as_deref().map_or_else(String::new, hash)
 }
 
 fn discipline(part: &str) -> &'static str {
@@ -780,7 +790,28 @@ fn run_rfi_draft(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let about = item.title.clone();
     if sp.rfis.iter().any(|r| r.about == about && r.issue == question) {
-        return Ok(json!({"rfi": about, "changed": false}));
+        // The same question is already on the list (another item with the same title asked it):
+        // this item is settled by it too, so it leaves the queue (Q320: the weak agent asked the
+        // same RFI 1,984 times because the second item never left).
+        if st.decisions.get(&item.id).is_some_and(|d| d.status == "rfi") {
+            return Ok(json!({"rfi": about, "changed": false}));
+        }
+        st.revision += 1;
+        st.decisions.insert(
+            item.id.clone(),
+            Decision {
+                status: "rfi".into(),
+                answer: json!(question),
+                citation: None,
+                author: who.clone(),
+                rev: st.revision,
+                approved: who != "agent",
+                title: item.title.clone(),
+            },
+        );
+        log(&mut st, &who, "rfi", &item.id, &format!("same question as an RFI already on the list: {question}"), None);
+        save(s, &mut st)?;
+        return Ok(json!({"rfi": about, "changed": true, "same_as_existing": true}));
     }
     if sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
         return Err(bad("review.rfi_draft", "the RFI list is full — answer or close some first (rfi.set)"));
@@ -802,6 +833,9 @@ fn run_rfi_draft(s: &mut Session, p: &Value) -> Result<Value> {
         ..Rfi::default()
     };
     r.id = format!("RFI-A{}", hash(&format!("{about}|{question}")));
+    // Sent to the design team: it waits for their answer, not in the agent's open queue (Q320:
+    // the weak agent got its own RFIs back as new items and handled them twice).
+    r.status = cadaddy_walk3d::RfiStatus::Sent;
     sp.rfis.push(r);
     s.doc_mut()?.building_spec = Some(sp.to_json());
     st.revision += 1;
@@ -940,10 +974,12 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let r = s.execute("model.build", &json!({}))?;
     let counts = built_counts(s.doc()?);
     let mut st = load(s.doc()?);
-    let unchanged = st.last_build == counts;
+    let spec = spec_hash(s.doc()?);
+    let unchanged = st.last_build == counts && st.last_build_spec == spec;
     if !unchanged {
         st.revision += 1;
         st.last_build = counts.clone();
+        st.last_build_spec = spec;
         log(&mut st, "agent", "build", "", &format!("built {} level(s)", counts.len()), None);
         save(s, &mut st)?;
     }

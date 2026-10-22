@@ -115,14 +115,10 @@ fn a_fresh_agent_works_the_queue_from_the_briefing_alone() {
         false,
         "idempotent"
     );
-    let rfis = s.execute("review.list", &json!({"kind": "rfi"})).unwrap();
-    let rfi_item = ids(&rfis).into_iter().next().unwrap();
-    let ans = s
-        .execute("review.resolve", &json!({"id": rfi_item, "answer": "24x12, BOD 10'-0\"", "citation": {"kind": "rfi", "document": "RFI-031"}}))
-        .unwrap();
-    assert_eq!(ans["changed"], true);
-    let listed = s.execute("rfi.list", &json!({})).unwrap();
-    assert!(listed.to_string().contains("RFI-031"), "the answer and its citation are on the RFI list");
+    // The drafted RFI is on the list, sent: it waits for the design team (not back in the queue).
+    let sent = s.execute("rfi.list", &json!({"status": "sent"})).unwrap();
+    assert!(sent["total"].as_u64().unwrap() >= 1 && sent.to_string().contains("Confirm the duct size"), "{sent}");
+    assert!(ids(&s.execute("review.list", &json!({"kind": "rfi"})).unwrap()).is_empty());
     // Handoff note; the next agent sees everything in the briefing.
     s.execute("project.note", &json!({"text": "Ducts on L1 reviewed to grid C; the beam depth is with the field."})).unwrap();
     let b = s.execute("project.briefing", &json!({})).unwrap();
@@ -255,4 +251,46 @@ fn hostile_params_are_refusals_not_crashes() {
     let id = ids(&s.execute("review.list", &json!({})).unwrap()).remove(0);
     let e = err(s.execute("review.resolve", &json!({"id": id, "answer": {"size_in": [8, 8]}, "citation": {"kind": "code", "document": "IMC 603"}})));
     assert!(e.contains("documents outrank code knowledge"), "{e}");
+}
+
+/// Q320's weak agent found these; each is fixed and kept fixed here.
+#[test]
+fn what_the_weak_agent_tripped_on() {
+    let mut s = building(4);
+    s.execute("bim.build", &json!({})).unwrap();
+    let start = ids(&s.execute("review.list", &json!({})).unwrap());
+    // 1. An RFI the agent drafted waits for the design team: it doesn't come back as an open item.
+    s.execute("review.rfi_draft", &json!({"id": start[0], "question": "Confirm the size"})).unwrap();
+    let open = s.execute("review.list", &json!({"limit": 50})).unwrap();
+    assert!(!open["items"].as_array().unwrap().iter().any(|i| i["kind"] == "rfi"), "{open}");
+    let sent = s.execute("rfi.list", &json!({"status": "sent"})).unwrap();
+    assert_eq!(sent["total"], 1, "{sent}");
+    // 2. The same question for a second item with the same title settles that item too.
+    let titles: Vec<(String, String)> =
+        open["items"].as_array().unwrap().iter().map(|i| (i["id"].as_str().unwrap().into(), i["title"].as_str().unwrap().into())).collect();
+    let first_title = s.execute("review.list", &json!({"status": "all", "limit": 50})).unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == json!(start[0]))
+        .unwrap()["title"]
+        .clone();
+    if let Some((twin, _)) = titles.iter().find(|(_, t)| json!(t) == first_title) {
+        let r = s.execute("review.rfi_draft", &json!({"id": twin, "question": "Confirm the size"})).unwrap();
+        assert_eq!((r["changed"].clone(), r["same_as_existing"].clone()), (json!(true), json!(true)));
+        let again = s.execute("review.list", &json!({"limit": 50})).unwrap();
+        assert!(!ids(&again).contains(twin), "the twin left the queue");
+    }
+    // 3. Answers change the spec: the briefing asks for a build before the takeoff.
+    for id in ids(&s.execute("review.list", &json!({"limit": 50})).unwrap()) {
+        s.execute("review.resolve", &json!({"id": id, "answer": {"size_in": [10, 8]}, "citation": {"kind": "schedule", "document": "M-601"}}))
+            .unwrap();
+    }
+    let b = s.execute("project.briefing", &json!({})).unwrap();
+    assert_eq!(b["review"]["open"], 0, "{b}");
+    assert_eq!(b["next"]["call"], "bim.build {}", "{b}");
+    assert!(b["next"]["why"].as_str().unwrap().contains("changed since the last build"));
+    s.execute("bim.build", &json!({})).unwrap();
+    let b = s.execute("project.briefing", &json!({})).unwrap();
+    assert!(b["next"]["call"].as_str().unwrap().starts_with("takeoff"), "{b}");
 }

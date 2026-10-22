@@ -766,6 +766,7 @@ version = "0.7.8"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
+ "cadaddy-mepfix",
  "cadaddy-render",
  "log",
  "serde_json",
