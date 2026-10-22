@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::spline_fit::FitOptions;
 use crate::{Bounds2, Vec2};
 
+/// Largest B-spline degree treated as valid. Basis evaluation is O(degree²) per sample and
+/// tessellation takes O(degree) samples, so an unbounded degree (DXF/HATCH can declare up to
+/// 100 000) turns a tiny spline into billions of iterations (CWE-407). Real splines are low
+/// degree (AutoCAD caps at 11); above this a spline evaluates to its control polygon instead.
+pub const MAX_DEGREE: usize = 64;
+
 /// A (possibly rational) B-spline curve, DXF SPLINE style.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spline {
@@ -57,7 +63,11 @@ impl Spline {
 
     pub fn is_valid(&self) -> bool {
         let n = self.control.len();
-        n > self.degree && self.degree >= 1 && self.knots.len() == n + self.degree + 1 && self.knots.windows(2).all(|w| w.first() <= w.get(1))
+        n > self.degree
+            && self.degree >= 1
+            && self.degree <= MAX_DEGREE
+            && self.knots.len() == n + self.degree + 1
+            && self.knots.windows(2).all(|w| w.first() <= w.get(1))
     }
 
     pub fn domain(&self) -> (f64, f64) {
@@ -191,4 +201,30 @@ pub(crate) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
         x[r] = (b[r] - s) / a[r][r];
     }
     Some(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_huge_degree_spline_is_invalid_and_cheap_to_tessellate() {
+        // A HATCH/DXF spline edge can declare a very high degree with matching knots. Such a
+        // spline is treated as invalid, so eval/tessellate fall back to the control polygon
+        // instead of doing O(degree^2) work per sample (CWE-407, rows 18/28).
+        let degree = 50_000usize;
+        let control = vec![Vec2::ZERO; degree + 2];
+        let knots = clamped_uniform_knots(control.len(), degree);
+        let s = Spline { degree, knots, control: control.clone(), ..Spline::default() };
+        assert!(!s.is_valid(), "a degree-{degree} spline must be rejected as invalid");
+        // Returns the control polygon rather than sampling, so this is fast.
+        assert_eq!(s.tessellate(1e-3).len(), control.len());
+    }
+
+    #[test]
+    fn a_normal_low_degree_spline_is_valid() {
+        let s = Spline::from_control(vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(2.0, 0.0), Vec2::new(3.0, 1.0)], 3);
+        assert!(s.is_valid());
+        assert!(s.tessellate(1e-3).len() > 4);
+    }
 }
