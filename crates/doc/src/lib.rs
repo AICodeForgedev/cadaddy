@@ -113,6 +113,9 @@ pub struct Drawing {
     pub layers: Vec<Layer>,
     pub linetypes: Vec<Linetype>,
     pub text_styles: Vec<TextStyle>,
+    /// Shape files loaded for SHAPE (LOAD): file names or paths, kept in the STYLE table as
+    /// unnamed shape-file records.
+    pub shape_files: Vec<String>,
     pub dim_styles: Vec<DimStyle>,
     pub mleader_styles: Vec<MLeaderStyle>,
     pub table_styles: Vec<TableStyle>,
@@ -268,6 +271,7 @@ impl Drawing {
                 Linetype::continuous(),
             ],
             text_styles: vec![TextStyle::default()],
+            shape_files: Vec::new(),
             dim_styles: vec![DimStyle::default()],
             mleader_styles: vec![MLeaderStyle::default()],
             table_styles: vec![TableStyle::default()],

@@ -109,6 +109,9 @@ struct Tables {
     /// The building spec and the saved viewpoints and tours (JSON text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     building_spec: Option<String>,
+    /// Shape files loaded for SHAPE (LOAD).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shape_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tours: Option<String>,
 }
@@ -286,6 +289,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         // fields are still read from files written before.
         building_spec: None,
         tours: None,
+        shape_files: d.shape_files.clone(),
     };
     Ok(tokens::encode(&value(&tables)?))
 }
@@ -562,6 +566,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                     d.properties = p;
                 }
                 d.geo = t.geo.filter(|g| g.is_valid());
+                d.shape_files = t.shape_files.into_iter().filter(|f| !f.trim().is_empty()).take(cadaddy_doc::MAX_SHAPE_FILES).collect();
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {

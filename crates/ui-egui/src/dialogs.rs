@@ -32,6 +32,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "purge" => crate::cmddlgs::purge(app, ctx, &mut open),
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
+        crate::filterdlg::DIALOG => crate::filterdlg::dialog(app, ctx, &mut open),
         crate::laywalkdlg::DIALOG => crate::laywalkdlg::dialog(app, ctx, &mut open),
         crate::plotstampdlg::DIALOG => crate::plotstampdlg::dialog(app, ctx, &mut open),
         crate::dwgpropsdlg::DIALOG => crate::dwgpropsdlg::dialog(app, ctx, &mut open),

@@ -1,7 +1,8 @@
 //! Everyday drafting commands AutoCAD users type without thinking: OOPS, MULTIPLE, COPYTOLAYER,
-//! DIMCENTER, SOLID (2D solid), FILL and QTEXT, VPMAX / VPMIN, FILTER, ATTREDEF, DXFIN / DXFOUT,
-//! -PAN, and the View and Tools menu items that set an option of an existing command (Attribute
-//! Display, UCS Icon, New UCS ▸ Origin / Z / 3 Point, Named UCS...).
+//! DIMCENTER, SOLID (2D solid), TRACE, FILL and QTEXT, VPMAX / VPMIN, FILTER (with saved
+//! filters), ATTREDEF, ATTEXT, DXFIN / DXFOUT, -PAN, shapes (LOAD, SHAPE, COMPILE, MKSHAPE),
+//! MKLTYPE, COPYM, and the View and Tools menu items that set an option of an existing command
+//! (Attribute Display, UCS Icon, New UCS ▸ Origin / Z / 3 Point, Named UCS...).
 
 use std::sync::Arc;
 
@@ -12,11 +13,17 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step, View};
 
+mod attext;
+mod copym;
 mod copytolayer;
 mod filter;
+mod mkltype;
+mod shapes;
 mod solid;
+mod trace;
 mod vpmax;
 
+pub use filter::set_saved_filters_file;
 pub use vpmax::VpMax;
 
 /// A name typed at the command line: a space ends it, as Enter does (`MULTIPLE CIRCLE 0,0 1`).
@@ -102,9 +109,14 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .interactive(|_| Ok(Box::new(AttredefM::default()))),
     ];
+    v.extend(attext::specs());
+    v.extend(copym::specs());
     v.extend(copytolayer::specs());
     v.extend(filter::specs());
+    v.extend(mkltype::specs());
+    v.extend(shapes::specs());
     v.extend(solid::specs());
+    v.extend(trace::specs());
     v.extend(vpmax::specs());
     v
 }

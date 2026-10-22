@@ -1673,6 +1673,17 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.p2(14, Vec2::new((q.x - o.x) / sx - 0.5, 0.5 - (q.y - o.y) / sy));
             }
         }
+        EntityKind::Shape(sh) => {
+            w.s(0, "SHAPE");
+            common(w, e, owner, paper, "AcDbShape");
+            thickness(w, e);
+            w.p(10, sh.insert);
+            w.f(40, sh.size);
+            w.s(2, &sh.name);
+            w.f(50, sh.rotation.to_degrees());
+            w.f(41, sh.width_factor);
+            w.f(51, sh.oblique.to_degrees());
+        }
         EntityKind::Tolerance(t) => {
             w.s(0, "TOLERANCE");
             common(w, e, owner, paper, "AcDbFcf");
@@ -2824,6 +2835,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // STYLE. Linetype shapes from a shape file that isn't a text style get an unnamed shape
     // style record (70 bit 1) naming the file.
     let mut shape_files: Vec<String> = Vec::new();
+    // The shape files loaded for SHAPE (LOAD).
+    for f in d.shape_files.iter().map(|f| f.trim()).filter(|f| !f.is_empty() && d.text_style(f).is_none()) {
+        if !shape_files.iter().any(|x| x.eq_ignore_ascii_case(f)) {
+            shape_files.push(f.to_string());
+        }
+    }
     for (_, style, shape) in &ltype_style_refs {
         let Some(f) = style.as_deref().map(str::trim).filter(|f| *shape && !f.is_empty() && d.text_style(f).is_none()) else { continue };
         if !shape_files.iter().any(|x| x.eq_ignore_ascii_case(f)) {

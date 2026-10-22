@@ -63,6 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(NcopyM::default()))),
         CommandSpec::new("chspace", "Change Space", run_chspace)
             .menu(&["Modify", "Change Space"])
+            .alias(&["changespace"])
             .params("{handles?, to?: \"model\" | layout name, viewport?: handle}")
             .interactive(|_| Ok(Box::new(SelOp::new(SelKind::Chspace)))),
         CommandSpec::new("flatten", "Flatten Objects", run_flatten)
@@ -1621,6 +1622,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             z(&mut t.insert);
             t.dir.z = 0.0;
         }
+        EntityKind::Shape(sh) => z(&mut sh.insert),
         EntityKind::Spline(_) | EntityKind::Viewport(_) | EntityKind::Wipeout(_) | EntityKind::Unknown(_) => {}
     }
 }

@@ -114,7 +114,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         | EntityKind::Table(_) => {
             return Some(translated(kind, delta));
         }
-        EntityKind::Hatch(_) | EntityKind::Tolerance(_) => return Some(translated(kind, delta)),
+        EntityKind::Hatch(_) | EntityKind::Tolerance(_) | EntityKind::Shape(_) => return Some(translated(kind, delta)),
         EntityKind::Circle(c) => {
             if index == 0 {
                 return Some(translated(kind, delta));

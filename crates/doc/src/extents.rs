@@ -205,6 +205,8 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
         }
         // Text widths estimated like `text_box`; the renderer measures the font.
         EntityKind::Tolerance(t) => t.layout(d, &|s, h| h * 0.9 * s.chars().count() as f64).bounds,
+        // The square it is sized by; the renderer draws the file's vectors.
+        EntityKind::Shape(sh) => Bounds2::from_points(sh.frame()),
         EntityKind::Underlay(u) => Bounds2::from_points(u.corners()),
         EntityKind::PointCloud(pc) => pc.extents(),
         EntityKind::Image(i) => {

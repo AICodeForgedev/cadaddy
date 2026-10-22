@@ -17,6 +17,7 @@ pub mod bidi;
 mod complex;
 pub mod ltshapes;
 mod mtext;
+pub mod shp;
 pub mod shx;
 mod stroke;
 pub mod subset;

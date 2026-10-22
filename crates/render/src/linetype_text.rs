@@ -213,6 +213,32 @@ mod tests {
     }
 
     #[test]
+    fn shape_elements_draw_from_their_shape_file() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-lt-shapes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = cadaddy_fonts::shp::compile("*1,5,BOX\n014,010,01C,018,0\n").unwrap();
+        let file = dir.join("madeup-lt.shx").to_string_lossy().into_owned();
+        std::fs::write(&file, &c.shx).unwrap();
+        let lt = Linetype {
+            name: "BOXES".into(),
+            description: String::new(),
+            pattern: vec![DashElement::dash(0.5), DashElement { shape: Some(1), style: Some(file.clone()), scale: 0.1, ..DashElement::dash(-0.2) }],
+        };
+        let d = Drawing::new_imperial();
+        let t = texts(&d, &[Vec2::ZERO, Vec2::new(1.4, 0.0)], &lt, 1.0, 0.0);
+        // One box each repeat (0.7 long), 0.1 across, at the end of the gap: 0.7 and 1.4.
+        assert_eq!(t.len(), 2);
+        assert_eq!(starts(&t).iter().map(|x| (x * 100.0).round() as i64).collect::<Vec<_>>(), [70, 140]);
+        let top = t[0].strokes.iter().flatten().map(|p| p.y).fold(f64::MIN, f64::max);
+        assert!((top - 0.1).abs() < 1e-9, "{top}");
+        // Its file not found: nothing, the gap left empty.
+        let mut gone = lt.clone();
+        gone.pattern[1].style = Some(dir.join("absent.shx").to_string_lossy().into_owned());
+        assert!(texts(&d, &[Vec2::ZERO, Vec2::new(1.4, 0.0)], &gone, 1.0, 0.0).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn no_text_when_drawn_continuous() {
         let d = Drawing::new_imperial();
         assert!(texts(&d, &[Vec2::ZERO, Vec2::new(2.0, 0.0)], &gas(), 1.0, 5.0).is_empty());

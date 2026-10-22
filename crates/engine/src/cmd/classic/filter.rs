@@ -4,6 +4,9 @@
 //! `type = Line and (layer = Walls or color = red) and not lineweight > 0.3`.
 //! In JSON it is that line or a tree: `{"and": [{"property": "type", "op": "=", "value": "Line"},
 //! {"not": {…}}]}`.
+//!
+//! Filters can be saved by name and used again in any drawing, as AutoCAD's named filters are:
+//! they are kept per user in `filters.json` in the settings folder.
 
 use std::collections::HashMap;
 
@@ -21,6 +24,10 @@ const MAX_DEPTH: usize = 32;
 const MAX_SCAN: usize = 2_000_000;
 /// Longest typed filter.
 const MAX_TEXT: usize = 8192;
+/// Most saved filters, the longest name and the largest file of them read.
+const MAX_SAVED: usize = 1000;
+const MAX_NAME: usize = 64;
+const MAX_STORE: u64 = 4 << 20;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -29,11 +36,98 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(
                 "{filter: \"type = Line and (layer = Walls or color = red)\" | {and|or|xor: [filters]} | {not: filter} | \
                  {property, op?: =|!=|<|>|<=|>=|* (wildcard; default =), value}, applyTo?: drawing|selection, mode?: new|append|exclude} \
-                 → {selected, handles} (properties as QSELECT names them: type, layer, color, linetype, lineweight, radius, …)",
+                 → {selected, handles} (properties as QSELECT names them: type, layer, color, linetype, lineweight, radius, …). \
+                 Saved filters: {save: name, filter, apply?: bool (default true)}; {name: a saved filter} instead of `filter`; \
+                 {list: true} → {filters: [{name, filter}]}; {delete: name}",
             )
             .noundo()
-            .interactive(|_| Ok(Box::new(FilterM))),
+            .interactive(|_| Ok(Box::new(FilterM::default()))),
     ]
+}
+
+// ---------------- saved filters ----------------
+
+/// Where saved filters are kept: `filters.json` in the settings folder (tests point it elsewhere).
+static STORE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+fn store_path() -> Option<std::path::PathBuf> {
+    if let Some(p) = STORE.lock().ok().and_then(|g| g.clone()) {
+        return Some(p);
+    }
+    crate::control_auth::config_dir().map(|d| d.join("filters.json"))
+}
+
+/// Keep saved filters in `path` instead of `filters.json` in the settings folder (a portable
+/// install, tests).
+pub fn set_saved_filters_file(path: std::path::PathBuf) {
+    if let Ok(mut g) = STORE.lock() {
+        *g = Some(path);
+    }
+}
+
+/// The saved filters, by name (an unreadable or damaged file reads as none).
+fn saved() -> std::collections::BTreeMap<String, Value> {
+    let Some(p) = store_path() else { return Default::default() };
+    if std::fs::metadata(&p).map(|m| m.len() > MAX_STORE).unwrap_or(true) {
+        return Default::default();
+    }
+    let Some(v) = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return Default::default() };
+    v.get("filters")
+        .and_then(Value::as_object)
+        .map(|o| o.iter().take(MAX_SAVED).filter(|(_, f)| from_json(f, 0, &mut 0).is_ok()).map(|(k, f)| (k.clone(), f.clone())).collect())
+        .unwrap_or_default()
+}
+
+fn write_saved(all: &std::collections::BTreeMap<String, Value>) -> Result<()> {
+    let p = store_path().ok_or_else(|| err("there is no settings folder to keep saved filters in"))?;
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let text = serde_json::to_string_pretty(&json!({ "filters": all })).map_err(|e| err(e.to_string()))?;
+    crate::writefile::write(&p, text).map_err(|e| err(format!("{}: {e}", p.display())))
+}
+
+/// The saved filter called `name` (any case): its name as saved and the filter.
+fn find_saved(name: &str) -> Option<(String, Value)> {
+    saved().into_iter().find(|(k, _)| k.eq_ignore_ascii_case(name.trim()))
+}
+
+fn check_name(name: &str) -> Result<String> {
+    let n = name.trim();
+    if n.is_empty() || n.chars().count() > MAX_NAME || n.chars().any(char::is_control) {
+        return Err(err(format!("a filter name is 1 to {MAX_NAME} characters")));
+    }
+    Ok(n.to_string())
+}
+
+/// Save `filter` (checked first) as `name`, replacing one of the same name.
+fn save_filter(name: &str, filter: &Value) -> Result<String> {
+    let name = check_name(name)?;
+    from_json(filter, 0, &mut 0)?;
+    let mut all = saved();
+    all.retain(|k, _| !k.eq_ignore_ascii_case(&name));
+    if all.len() >= MAX_SAVED {
+        return Err(err(format!("at most {MAX_SAVED} saved filters")));
+    }
+    all.insert(name.clone(), filter.clone());
+    write_saved(&all)?;
+    Ok(name)
+}
+
+fn delete_filter(name: &str) -> Result<bool> {
+    let mut all = saved();
+    let before = all.len();
+    all.retain(|k, _| !k.eq_ignore_ascii_case(name.trim()));
+    if all.len() == before {
+        return Ok(false);
+    }
+    write_saved(&all)?;
+    Ok(true)
+}
+
+/// The saved filters as a list of `{name, filter}`.
+fn list_json() -> Value {
+    json!(saved().into_iter().map(|(name, filter)| json!({ "name": name, "filter": filter })).collect::<Vec<_>>())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -348,8 +442,34 @@ fn eval(c: &Cond, p: &mut Props) -> bool {
 }
 
 fn run_filter(s: &mut Session, p: &Value) -> Result<Value> {
-    let f = p.get("filter").filter(|v| !v.is_null()).ok_or_else(|| err("`filter` is required, e.g. \"type = Circle and radius > 2\""))?;
+    if bool_or(p, "list", false) {
+        return Ok(json!({ "filters": list_json() }));
+    }
+    if let Some(n) = str_param(p, "delete") {
+        let gone = delete_filter(n)?;
+        if !gone {
+            return Err(err(format!("there is no saved filter called {}", n.trim())));
+        }
+        return Ok(json!({ "deleted": n.trim(), "message": format!("Filter {} deleted.", n.trim()) }));
+    }
+    let named;
+    let f = match (p.get("filter").filter(|v| !v.is_null()), str_param(p, "name")) {
+        (Some(f), _) => f,
+        (None, Some(n)) => {
+            named = find_saved(n).ok_or_else(|| err(format!("there is no saved filter called {}", n.trim())))?.1;
+            &named
+        }
+        (None, None) => return Err(err("`filter` is required, e.g. \"type = Circle and radius > 2\"")),
+    };
     let cond = from_json(f, 0, &mut 0)?;
+    let saved_as = match str_param(p, "save") {
+        Some(n) => Some(save_filter(n, f)?),
+        None => None,
+    };
+    if saved_as.is_some() && !bool_or(p, "apply", true) {
+        let n = saved_as.unwrap_or_default();
+        return Ok(json!({ "saved": n, "message": format!("Filter saved as {n}.") }));
+    }
     let mode = str_param(p, "mode").unwrap_or("new").trim().to_ascii_lowercase();
     if !["new", "append", "exclude"].contains(&mode.as_str()) {
         return Err(err(format!("unknown mode `{mode}` (use new, append or exclude)")));
@@ -384,33 +504,149 @@ fn run_filter(s: &mut Session, p: &Value) -> Result<Value> {
     s.set_selection(sel);
     let sel = s.selection();
     let n = sel.len();
-    Ok(json!({ "selected": n, "handles": sel.iter().map(|h| h.hex()).collect::<Vec<_>>(), "message": format!("{n} object(s) pass the filter.") }))
+    let mut message = format!("{n} object(s) pass the filter.");
+    if let Some(name) = &saved_as {
+        message = format!("Filter saved as {name}. {message}");
+    }
+    Ok(json!({ "selected": n, "handles": sel.iter().map(|h| h.hex()).collect::<Vec<_>>(), "saved": saved_as, "message": message }))
 }
 
-/// FILTER typed: "Enter filter (e.g. type = Line and layer = Walls):" — the objects that pass
-/// are selected, for the next command (or its Previous).
-struct FilterM;
+/// FILTER typed: "Enter filter (e.g. type = Line and layer = Walls) or [Use saved/Save/List/
+/// Delete]:" — the objects that pass are selected, for the next command (or its Previous).
+/// Use saved asks for a saved filter's name; Save for a name, then the filter; Delete for a name.
+#[derive(Default)]
+struct FilterM {
+    /// The option being answered, and Save's name once given.
+    option: Option<&'static str>,
+    name: Option<String>,
+}
+
+impl FilterM {
+    fn select(s: &mut Session, p: &Value) -> Result<Step> {
+        let r = run_filter(s, p)?;
+        let sel = s.selection();
+        if !sel.is_empty() {
+            s.remember_selection(&sel);
+        }
+        super::echo_message(s, &r);
+        Ok(Step::Done)
+    }
+}
 
 impl Interactive for FilterM {
     fn name(&self) -> &'static str {
         "FILTER"
     }
     fn prompt(&self, _s: &Session) -> Prompt {
-        Prompt::new("Enter filter (e.g. type = Line and layer = Walls)", Accept::TEXT)
+        match (self.option, &self.name) {
+            (Some("use"), _) => Prompt::new("Enter name of saved filter", Accept::TEXT),
+            (Some("save"), None) => Prompt::new("Enter name to save the filter as", Accept::TEXT),
+            (Some("save"), Some(_)) => Prompt::new("Enter filter to save", Accept::TEXT),
+            (Some("delete"), _) => Prompt::new("Enter name of saved filter to delete", Accept::TEXT),
+            _ => Prompt::new("Enter filter (e.g. type = Line and layer = Walls)", Accept::TEXT).kw(&["Use saved", "Save", "List", "Delete"]),
+        }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        match i {
-            Input::Text(t) | Input::Keyword(t) if !t.trim().is_empty() => {
-                let r = run_filter(s, &json!({ "filter": t }))?;
-                let sel = s.selection();
-                if !sel.is_empty() {
-                    s.remember_selection(&sel);
-                }
-                super::echo_message(s, &r);
-                Ok(Step::Done)
-            }
-            Input::Enter | Input::Text(_) | Input::Keyword(_) => Ok(Step::Done),
-            _ => Ok(Step::Continue),
+        let t = match i {
+            Input::Text(t) | Input::Keyword(t) => t.trim().to_string(),
+            Input::Enter | Input::Cancel => return Ok(if self.option.is_some() { Step::Cancel } else { Step::Done }),
+            _ => return Ok(Step::Continue),
+        };
+        if t.is_empty() {
+            return Ok(Step::Done);
         }
+        match (self.option, self.name.clone()) {
+            (None, _) => match t.to_ascii_lowercase().as_str() {
+                "u" | "use" | "use saved" => self.option = Some("use"),
+                "s" | "save" => self.option = Some("save"),
+                "d" | "delete" => self.option = Some("delete"),
+                "l" | "list" => {
+                    let all = saved();
+                    if all.is_empty() {
+                        s.echo("No saved filters.");
+                    }
+                    for (n, f) in all {
+                        let f = f.as_str().map(str::to_string).unwrap_or_else(|| f.to_string());
+                        s.echo(format!("{n}: {f}"));
+                    }
+                }
+                _ => return Self::select(s, &json!({ "filter": t })),
+            },
+            (Some("use"), _) => return Self::select(s, &json!({ "name": t })),
+            (Some("save"), None) => self.name = Some(check_name(&t)?),
+            (Some("save"), Some(n)) => return Self::select(s, &json!({ "filter": t, "save": n })),
+            (Some(_), _) => {
+                let r = run_filter(s, &json!({ "delete": t }))?;
+                super::echo_message(s, &r);
+                return Ok(Step::Done);
+            }
+        }
+        Ok(Step::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_filters_are_kept_used_listed_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-filters-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        set_saved_filters_file(dir.join("filters.json"));
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+        s.execute("circle", &json!({ "center": [0, 0], "radius": 5 })).unwrap();
+        s.execute("circle", &json!({ "center": [0, 0], "radius": 1 })).unwrap();
+        // Saved and applied in one go; only saved with apply: false.
+        let r = s.execute("filter", &json!({ "filter": "type = Circle and radius > 2", "save": "Big circles" })).unwrap();
+        assert_eq!((r["selected"].as_u64(), r["saved"].as_str()), (Some(1), Some("Big circles")));
+        let r = s.execute("filter", &json!({ "filter": { "property": "type", "value": "Line" }, "save": "Lines", "apply": false })).unwrap();
+        assert_eq!(r["saved"], "Lines");
+        // Used by name in another drawing: the file is the user's, not the drawing's.
+        let mut t = Session::new();
+        t.execute("circle", &json!({ "center": [0, 0], "radius": 9 })).unwrap();
+        assert_eq!(t.execute("filter", &json!({ "name": "big CIRCLES" })).unwrap()["selected"], 1);
+        let names: Vec<String> = t.execute("filter", &json!({ "list": true })).unwrap()["filters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["Big circles", "Lines"]);
+        // Saving under the same name (any case) replaces it.
+        s.execute("filter", &json!({ "filter": "type = Circle", "save": "LINES", "apply": false })).unwrap();
+        assert_eq!(s.execute("filter", &json!({ "name": "lines" })).unwrap()["selected"], 2);
+        assert_eq!(s.execute("filter", &json!({ "list": true })).unwrap()["filters"].as_array().unwrap().len(), 2);
+        s.execute("filter", &json!({ "delete": "Lines" })).unwrap();
+        assert!(s.execute("filter", &json!({ "name": "Lines" })).is_err());
+        assert!(s.execute("filter", &json!({ "delete": "Lines" })).is_err());
+        // A bad filter or name is never saved.
+        assert!(s.execute("filter", &json!({ "filter": "type = = ", "save": "Broken" })).is_err());
+        assert!(s.execute("filter", &json!({ "filter": "type = Line", "save": "  " })).is_err());
+        assert_eq!(saved().len(), 1);
+
+        // Typed: Save asks a name, then the filter; Use saved runs it; List and Delete.
+        for l in ["filter", "s", "Small", "type = Circle and radius < 2"] {
+            s.cmdline(l).unwrap();
+        }
+        assert!(s.running.is_none());
+        assert_eq!(s.selection().len(), 1);
+        for l in ["filter", "l", ""] {
+            s.cmdline(l).unwrap();
+        }
+        assert!(s.log.iter().any(|l| l.starts_with("Small: ")), "{:?}", s.log);
+        for l in ["filter", "u", "big circles"] {
+            s.cmdline(l).unwrap();
+        }
+        assert_eq!(s.selection().len(), 1);
+        for l in ["filter", "d", "small"] {
+            s.cmdline(l).unwrap();
+        }
+        assert_eq!(saved().keys().cloned().collect::<Vec<_>>(), ["Big circles"]);
+        // A damaged file reads as no saved filters.
+        std::fs::write(dir.join("filters.json"), "{not json").unwrap();
+        assert!(saved().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

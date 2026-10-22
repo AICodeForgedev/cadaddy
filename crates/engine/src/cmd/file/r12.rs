@@ -83,6 +83,7 @@ fn piece(d: &Drawing, e: &Entity, lost: &mut BTreeMap<String, usize>, depth: usi
         | EntityKind::AttDef(_)
         | EntityKind::Solid(_)
         | EntityKind::Trace(_)
+        | EntityKind::Shape(_)
         | EntityKind::Face3d(_)
         | EntityKind::LwPolyline(_)
         | EntityKind::Polyline3d(_)

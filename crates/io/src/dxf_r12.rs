@@ -180,7 +180,7 @@ fn tables(w: &mut W, d: &Drawing) {
         w.s(6, if l.linetype.is_empty() { "CONTINUOUS" } else { l.linetype.as_str() });
     }
     w.s(0, "ENDTAB");
-    table(w, "STYLE", d.text_styles.len());
+    table(w, "STYLE", d.text_styles.len() + d.shape_files.len());
     for s in &d.text_styles {
         w.s(0, "STYLE");
         w.s(2, &s.name);
@@ -195,6 +195,19 @@ fn tables(w: &mut W, d: &Drawing) {
         let builtin = s.font.is_empty() || s.font.eq_ignore_ascii_case("CADaddy Stroke");
         w.s(3, if builtin { "txt" } else { s.font.as_str() });
         w.s(4, &s.big_font);
+    }
+    // Shape files loaded for SHAPE: unnamed shape-file records.
+    for f in &d.shape_files {
+        w.s(0, "STYLE");
+        w.s(2, "");
+        w.i(70, 1);
+        w.f(40, 0.0);
+        w.f(41, 1.0);
+        w.f(50, 0.0);
+        w.i(71, 0);
+        w.f(42, 0.2);
+        w.s(3, f);
+        w.s(4, "");
     }
     w.s(0, "ENDTAB");
     for name in ["VIEW", "UCS"] {
@@ -379,6 +392,15 @@ fn entity(w: &mut W, e: &Entity, paper: bool) {
             for (i, p) in s.corners.iter().enumerate() {
                 w.p(10 + i as i32, *p);
             }
+        }
+        EntityKind::Shape(sh) => {
+            common(w, e, "SHAPE", paper);
+            w.p(10, sh.insert);
+            w.f(40, sh.size);
+            w.s(2, &sh.name);
+            w.f(50, sh.rotation.to_degrees());
+            w.f(41, sh.width_factor);
+            w.f(51, sh.oblique.to_degrees());
         }
         EntityKind::Face3d(f) => {
             common(w, e, "3DFACE", paper);

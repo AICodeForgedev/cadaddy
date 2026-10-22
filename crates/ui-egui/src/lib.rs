@@ -87,6 +87,7 @@ pub mod dyninput;
 pub mod exchangeloss;
 pub mod extractdlg;
 pub mod fieldview;
+pub mod filterdlg;
 pub mod finddlg;
 pub mod fourdpalette;
 pub mod gpu;

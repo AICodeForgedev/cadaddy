@@ -76,6 +76,15 @@ fn spec_of(def: &[u8]) -> Vec<u8> {
     def.get(start..).unwrap_or(&[]).iter().take(MAX_DEF).copied().collect()
 }
 
+/// Remember `num` under the name in `def` (the first shape of a name wins).
+fn add_name(names: &mut HashMap<String, u32>, num: u32, def: &[u8]) {
+    if num != 0
+        && let Some(n) = name_of(def)
+    {
+        names.entry(n).or_insert(num);
+    }
+}
+
 /// Above / below from a font information spec (`above, below, modes, …`).
 fn font_info(spec: &[u8]) -> (f64, f64) {
     let above = spec.first().copied().filter(|a| *a > 0).map_or(1.0, f64::from);
@@ -131,14 +140,16 @@ impl ShxFont {
         let (above, below) = font_info(&spec_of(info));
         let mut at = 6 + info_len;
         let mut shapes = HashMap::new();
+        let mut names = HashMap::new();
         for _ in 0..n {
             let (Some(num), Some(len)) = (u16_at(b, at), u16_at(b, at + 2)) else { break };
             let len = usize::from(len);
             let Some(def) = b.get(at + 4..(at + 4).saturating_add(len)) else { break };
+            add_name(&mut names, u32::from(num), def);
             shapes.insert(u32::from(num), spec_of(def));
             at += 4 + len;
         }
-        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, names: HashMap::new(), escapes: Vec::new() })
+        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, names, escapes: Vec::new() })
     }
 
     /// Index size (u16), shape count (u16), escape range count (u16), the lead-byte ranges
@@ -153,6 +164,7 @@ impl ShxFont {
         }
         let index = 6 + 4 * ranges;
         let mut shapes = HashMap::new();
+        let mut names = HashMap::new();
         for k in 0..n {
             let at = index + 8 * k;
             let (Some(num), Some(len), Some(off)) = (u16_at(b, at), u16_at(b, at + 2), u32_at(b, at + 4)) else { break };
@@ -160,6 +172,7 @@ impl ShxFont {
             // Offsets count from the start of the file; also accept them from the data's start.
             let def = file.get(off..off.saturating_add(usize::from(len))).or_else(|| b.get(off.saturating_sub(body_at)..)?.get(..usize::from(len)));
             if let Some(def) = def {
+                add_name(&mut names, u32::from(num), def);
                 shapes.insert(u32::from(num), spec_of(def));
             }
         }
@@ -187,6 +200,21 @@ impl ShxFont {
         let mut v: Vec<(u32, String)> = self.names.iter().map(|(k, n)| (*n, k.clone())).collect();
         v.sort();
         v
+    }
+
+    /// The number of the shape called `name` (any case); the same as [`ShxFont::shape_number`].
+    pub fn code_by_name(&self, name: &str) -> Option<u32> {
+        self.shape_number(name)
+    }
+
+    /// How many shapes the file defines (the font information, shape 0, not counted).
+    pub fn len(&self) -> usize {
+        self.shapes.keys().filter(|k| **k != 0).count()
+    }
+
+    /// Whether the file defines no shapes.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Whether the font has a shape for `code`.
@@ -512,6 +540,14 @@ pub fn set_search_path(dirs: Vec<String>) {
     }
 }
 
+/// Forget the shape files read so far, so the next use reads them again (after COMPILE or
+/// MKSHAPE rewrote one).
+pub fn forget_cached() {
+    if let Ok(mut c) = CACHE.lock() {
+        *c = None;
+    }
+}
+
 /// The current drawing's folder: searched first, as AutoCAD does ([`set_drawing_dir`]).
 static DRAWING_DIR: RwLock<Option<String>> = RwLock::new(None);
 
@@ -707,6 +743,11 @@ pub fn compile_shapes(above: u8, below: u8, shapes: &[(u16, &str, &[u8])]) -> Ve
     for (n, name, spec) in shapes {
         defs.push((*n, [name.as_bytes(), &[0], spec].concat()));
     }
+    compile_defs(defs)
+}
+
+/// A compiled shape file of whole definitions (number; name, zero, spec), sorted by number.
+pub(crate) fn compile_defs(mut defs: Vec<(u16, Vec<u8>)>) -> Vec<u8> {
     defs.sort_by_key(|d| d.0);
     let mut out = b"AutoCAD-86 shapes 1.0\r\n\x1a".to_vec();
     let first = defs.first().map_or(0, |d| d.0);

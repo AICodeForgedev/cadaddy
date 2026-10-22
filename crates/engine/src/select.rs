@@ -42,6 +42,16 @@ fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) ->
             }
             v
         }
+        // A shape is picked on its strokes; without its file, on the square it is sized by.
+        EntityKind::Shape(sh) => {
+            let v = cadaddy_render::shapes::strokes(d, sh);
+            if v.is_empty() {
+                let c = sh.frame();
+                vec![vec![c[0], c[1], c[2], c[3], c[0]]]
+            } else {
+                v
+            }
+        }
         kind => {
             let mut out = Vec::new();
             for p in kind.prims() {
@@ -529,6 +539,7 @@ pub fn class_name(k: &EntityKind) -> &'static str {
         EntityKind::Wipeout(_) => "AcDbWipeout",
         EntityKind::Table(_) => "AcDbTable",
         EntityKind::Tolerance(_) => "AcDbFcf",
+        EntityKind::Shape(_) => "AcDbShape",
         EntityKind::Unknown(_) => "AcDbProxyEntity",
     }
 }
