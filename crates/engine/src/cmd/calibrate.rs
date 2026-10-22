@@ -11,8 +11,9 @@
 //!   prediction error; too few projects give "insufficient data", never a number. With `hours`
 //!   (certified payrolls) as the target, the rates are field hours per unit.
 //! - `calibrate.payroll {rows | path, map?}`: certified-payroll hours by trade classification.
-//! - `calibrate.topdown {values, ratios, …}`: the top-down estimate from census construction ratios
-//!   (self-performed share, field hours per dollar, wage), beside the bottom-up hours, gaps flagged.
+//! - `calibrate.topdown {values, census | ratios, …}`: the top-down estimate from census construction
+//!   figures (value of work, subcontracted out, worker hours and wages, from which it computes the
+//!   self-performed share, field hours per dollar and wage), beside the bottom-up hours, gaps flagged.
 //!
 //! Electrical results (divisions 26–28) go only to a private pack.
 
@@ -99,8 +100,37 @@ fn run_project(s: &mut Session, p: &Value) -> Result<Value> {
         "bid_date": str_param(p, "bid_date").unwrap_or(""), "delivery": str_param(p, "delivery").unwrap_or(""),
         "quantities": q, "totals": totals, "total": total, "hours": hours,
     });
-    append(&pack, &[row])?;
-    Ok(json!({"pack": pack, "id": id, "trades": q.len()}))
+    let replaced = put_project(&pack, id, &row)?;
+    Ok(json!({"pack": pack, "id": id, "trades": q.len(), "replaced": replaced}))
+}
+
+/// Writes a project row into its pack, replacing any earlier row with the same id, so a retried
+/// `calibrate.project` never counts one project twice. True when a row was replaced.
+fn put_project(path: &str, id: &str, row: &Value) -> Result<bool> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut out = String::with_capacity(text.len() + 256);
+        let mut replaced = false;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let same = serde_json::from_str::<Value>(line).is_ok_and(|v| v["kind"] == "project" && v["id"].as_str().map(str::trim) == Some(id));
+            if same {
+                replaced = true;
+            } else {
+                out += line;
+                out.push('\n');
+            }
+        }
+        out += &row.to_string();
+        out.push('\n');
+        crate::writefile::write(path, out.as_bytes()).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
+        Ok(replaced)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = id;
+        append(path, std::slice::from_ref(row)).map(|()| false)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -141,31 +171,43 @@ fn index_at(idx: &[(f64, f64)], m: f64) -> Option<f64> {
     })
 }
 
-fn load_projects(cmd: &str, packs: &[String]) -> Result<Vec<Project>> {
-    let mut out = Vec::new();
+/// The projects in the packs, one per id: a later row (in pack order, then line order) replaces
+/// an earlier one with the same id. Also the ids that appeared more than once, with their counts.
+fn load_projects(cmd: &str, packs: &[String]) -> Result<(Vec<Project>, BTreeMap<String, usize>)> {
+    let mut by_id: BTreeMap<String, Project> = BTreeMap::new();
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     for path in packs {
         let text =
             crate::readfile::read(path.trim()).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         for line in text.lines().take(MAX_ROWS) {
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-            if v["kind"] != "project" || out.len() >= MAX_PROJECTS {
+            if v["kind"] != "project" {
+                continue;
+            }
+            let id = v["id"].as_str().unwrap_or("").trim().to_string();
+            if by_id.len() >= MAX_PROJECTS && !by_id.contains_key(&id) {
                 continue;
             }
             let Ok(q) = quantities(cmd, &v["quantities"]) else { continue };
-            out.push(Project {
-                id: v["id"].as_str().unwrap_or("").into(),
-                building_type: norm(v["building_type"].as_str().unwrap_or("")),
-                region: norm(v["region"].as_str().unwrap_or("")),
-                month: v["bid_date"].as_str().and_then(month),
-                q,
-                totals: amounts(cmd, Some(&v["totals"])).unwrap_or_default(),
-                total: num(&v["total"]).filter(|t| *t > 0.0),
-                hours: amounts(cmd, Some(&v["hours"])).unwrap_or_default(),
-            });
+            *seen.entry(id.clone()).or_default() += 1;
+            by_id.insert(
+                id.clone(),
+                Project {
+                    id,
+                    building_type: norm(v["building_type"].as_str().unwrap_or("")),
+                    region: norm(v["region"].as_str().unwrap_or("")),
+                    month: v["bid_date"].as_str().and_then(month),
+                    q,
+                    totals: amounts(cmd, Some(&v["totals"])).unwrap_or_default(),
+                    total: num(&v["total"]).filter(|t| *t > 0.0),
+                    hours: amounts(cmd, Some(&v["hours"])).unwrap_or_default(),
+                },
+            );
         }
     }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(out)
+    seen.retain(|_, n| *n > 1);
+    // Sorted by id (the map's order), which the holdout split relies on.
+    Ok((by_id.into_values().collect(), seen))
 }
 
 /// One observation: a total over some trades' drivers.
@@ -278,7 +320,7 @@ fn run_fit(_s: &mut Session, p: &Value) -> Result<Value> {
     let min_projects = p.get("min_projects").and_then(Value::as_u64).unwrap_or(3).clamp(1, 1000) as usize;
     let holdout_every = p.get("holdout_every").and_then(Value::as_u64).unwrap_or(5).min(1000) as usize;
     let (bt, region) = (str_param(p, "building_type").map(norm), str_param(p, "region").map(norm));
-    let mut projects = load_projects(cmd, &packs)?;
+    let (mut projects, dups) = load_projects(cmd, &packs)?;
     projects.retain(|x| bt.as_ref().is_none_or(|b| x.building_type == *b) && region.as_ref().is_none_or(|r| x.region == *r));
     let obj = |k: &str| p.get(k).and_then(Value::as_object).cloned().unwrap_or_default();
     let regions: BTreeMap<String, f64> = obj("regions").iter().filter_map(|(k, v)| num(v).filter(|v| *v > 0.0).map(|v| (norm(k), v))).collect();
@@ -291,7 +333,8 @@ fn run_fit(_s: &mut Session, p: &Value) -> Result<Value> {
     };
     let base_index = base.and_then(|b| index_at(&idx, b));
     // A project's factor: its region, and its bid date's index over the base date's.
-    let mut warnings = BTreeSet::new();
+    let mut warnings: BTreeSet<String> =
+        dups.iter().map(|(id, n)| format!("{id}: {n} rows with this id, only the last is used (one project counts once)")).collect();
     let factor = |x: &Project, warnings: &mut BTreeSet<String>| -> f64 {
         if hours {
             return 1.0;
@@ -459,7 +502,10 @@ fn sig(v: f64) -> f64 {
 /// A certified-payroll classification's trade.
 fn classify(c: &str) -> Option<&'static str> {
     let c = c.to_ascii_lowercase();
+    // Concrete crafts come before "mason": a cement mason finishes concrete, not masonry.
     const MAP: &[(&str, &str)] = &[
+        ("cement mason", "concrete"),
+        ("concrete finisher", "concrete"),
         ("electric", "electrical"),
         ("lineman", "electrical"),
         ("sprinkler", "fire protection"),
@@ -476,10 +522,10 @@ fn classify(c: &str) -> Option<&'static str> {
         ("floor", "flooring"),
         ("glazier", "openings"),
         ("iron", "metals"),
-        ("brick", "masonry"),
-        ("mason", "masonry"),
         ("cement", "concrete"),
         ("concrete", "concrete"),
+        ("brick", "masonry"),
+        ("mason", "masonry"),
         ("carpenter", "carpentry"),
         ("operator", "earthwork"),
         ("laborer", "general"),
@@ -494,6 +540,7 @@ fn run_payroll(_s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_object)
         .map(|m| m.iter().filter_map(|(k, v)| Some((norm(k), norm(v.as_str()?)))).collect())
         .unwrap_or_default();
+    let mut hours_cols: Vec<String> = Vec::new();
     let rows: Vec<(String, f64)> = if let Some(rows) = p.get("rows").and_then(Value::as_array) {
         rows.iter().take(MAX_ROWS).filter_map(|r| Some((r["classification"].as_str()?.to_string(), num(&r["hours"])?))).collect()
     } else {
@@ -502,14 +549,29 @@ fn run_payroll(_s: &mut Session, p: &Value) -> Result<Value> {
             crate::readfile::read(path.trim()).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
         let table = super::estimate::csv_rows(&text);
         let col = |names: &[&str]| table.first().and_then(|r| r.keys().find(|h| names.iter().any(|n| h.to_ascii_lowercase().contains(n))).cloned());
-        let (c, h) = (
-            col(&["classification", "craft", "trade"]).ok_or_else(|| bad(cmd, "no classification column"))?,
-            col(&["hours", "hrs"]).ok_or_else(|| bad(cmd, "no hours column"))?,
-        );
+        let c = col(&["classification", "craft", "trade"]).ok_or_else(|| bad(cmd, "no classification column"))?;
+        let headers: Vec<String> = table.first().map(|r| r.keys().cloned().collect()).unwrap_or_default();
+        hours_cols = hours_columns(&headers).map_err(|e| bad(cmd, e))?;
         table
             .iter()
             .take(MAX_ROWS)
-            .filter_map(|r| Some((r.get(&c)?.clone(), r.get(&h)?.trim().parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0)?)))
+            .filter_map(|r| {
+                // Every hours column of the row (an empty cell is 0); a row with none is skipped.
+                let mut sum = 0.0;
+                let mut any = false;
+                for h in &hours_cols {
+                    let cell = r.get(h).map_or("", |x| x.trim());
+                    if cell.is_empty() {
+                        continue;
+                    }
+                    sum += cell.parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0 && *x < 1e9)?;
+                    any = true;
+                }
+                if !any {
+                    return None;
+                }
+                Some((r.get(&c)?.clone(), sum))
+            })
             .collect()
     };
     let mut by: BTreeMap<String, f64> = BTreeMap::new();
@@ -523,16 +585,89 @@ fn run_payroll(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "hours": by.into_iter().map(|(k, v)| (k, json!(r2(v)))).collect::<Map<String, Value>>(),
         "unmapped": unmapped.into_iter().map(|(k, v)| (k, json!(r2(v)))).collect::<Map<String, Value>>(),
+        "hours_columns": hours_cols,
     }))
+}
+
+/// The payroll CSV's hours columns to add up for a row's hours, never a guess:
+/// - a single hours column, or the one "total" hours column when there is one;
+/// - else every straight-time and overtime column (ST + OT + double time), or every per-day
+///   column (Mon … Sun, Day 1 …);
+/// - else an error naming the columns.
+fn hours_columns(headers: &[String]) -> std::result::Result<Vec<String>, String> {
+    const NOT_HOURS: &[&str] = &["rate", "pay", "wage", "wages", "gross", "net", "amount", "deduction", "deductions", "fringe", "fringes"];
+    const ST_OT: &[&str] = &["st", "straight", "reg", "regular", "ot", "overtime", "dt", "double", "doubletime"];
+    const DAYS: &[&str] = &[
+        "mon",
+        "tue",
+        "tues",
+        "wed",
+        "thu",
+        "thur",
+        "thurs",
+        "fri",
+        "sat",
+        "sun",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ];
+    let words = |h: &str| -> Vec<String> {
+        h.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let is_day = |w: &[String]| {
+        w.iter().any(|x| DAYS.contains(&x.as_str()))
+            || w.windows(2).any(|p| p.first().is_some_and(|a| a == "day") && p.get(1).is_some_and(|b| b.parse::<u8>().is_ok()))
+    };
+    let mut hours = Vec::new();
+    for h in headers {
+        let w = words(h);
+        if w.iter().any(|x| NOT_HOURS.contains(&x.as_str())) {
+            continue;
+        }
+        if w.iter().any(|x| x.starts_with("hour") || x == "hrs" || x == "hr") || is_day(&w) {
+            hours.push((h.clone(), w));
+        }
+    }
+    let names = |cols: &[(String, Vec<String>)]| cols.iter().map(|c| format!("\"{}\"", c.0)).collect::<Vec<_>>().join(", ");
+    match hours.as_slice() {
+        [] => return Err("no hours column (a column named like \"Hours\", \"Hrs\", \"Total Hours\" or \"ST Hours\"/\"OT Hours\")".into()),
+        [one] => return Ok(vec![one.0.clone()]),
+        _ => {}
+    }
+    let totals: Vec<&(String, Vec<String>)> = hours.iter().filter(|c| c.1.iter().any(|x| x == "total" || x == "tot")).collect();
+    match totals.as_slice() {
+        [one] => return Ok(vec![one.0.clone()]),
+        [] => {}
+        _ => return Err(format!("several total hours columns ({}): keep one, or send rows", names(&hours))),
+    }
+    let st_ot = hours.iter().filter(|c| c.1.iter().any(|x| ST_OT.contains(&x.as_str())) && !is_day(&c.1)).count();
+    let days = hours.iter().filter(|c| is_day(&c.1) && !c.1.iter().any(|x| ST_OT.contains(&x.as_str()))).count();
+    if st_ot == hours.len() || days == hours.len() {
+        return Ok(hours.into_iter().map(|c| c.0).collect());
+    }
+    Err(format!(
+        "can't tell which hours columns to add up ({}): add a \"Total Hours\" column, name them as straight-time/overtime (ST Hours, OT Hours) or per-day (Mon … Sun), or send rows",
+        names(&hours)
+    ))
 }
 
 fn run_topdown(_s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "calibrate.topdown";
     let values = p.get("values").and_then(Value::as_object).ok_or_else(|| bad(cmd, "values required: {trade: contract value}"))?;
-    let ratios = p
-        .get("ratios")
-        .and_then(Value::as_object)
-        .ok_or_else(|| bad(cmd, "ratios required: {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}"))?;
+    let empty = Map::new();
+    let (ratios, census) = (p.get("ratios").and_then(Value::as_object), p.get("census").and_then(Value::as_object));
+    if ratios.is_none() && census.is_none() {
+        return Err(bad(
+            cmd,
+            "ratios or census required: {trade: {value_of_work, subcontracted_out, construction_worker_hours, construction_worker_wages}} (the census figures) or {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}",
+        ));
+    }
+    let (ratios, census) = (ratios.unwrap_or(&empty), census.unwrap_or(&empty));
     let pos = |v: &Value, k: &str| v.get(k).and_then(num);
     // Census year → bid date: wages by the wage index, materials by an assumed factor, weighted by
     // the wage share of the self-performed work.
@@ -549,14 +684,26 @@ fn run_topdown(_s: &mut Session, p: &Value) -> Result<Value> {
     for (t, v) in values.iter().take(200) {
         let t = norm(t);
         let value = num(v).ok_or_else(|| bad(cmd, format!("{t}: a value is 0 or more")))?;
-        let Some(r) = ratios.iter().find(|(k, _)| norm(k) == t).map(|x| x.1) else {
+        let Some(r) = [census, ratios].into_iter().find_map(|m| m.iter().find(|(k, _)| norm(k) == t).map(|x| x.1)) else {
             missing.push(t);
             continue;
         };
-        let (Some(share), Some(hpd), Some(wage)) =
-            (pos(r, "self_performed_share").filter(|x| *x <= 1.0), pos(r, "hours_per_dollar"), pos(r, "wage_per_hour"))
-        else {
-            return Err(bad(cmd, format!("{t}: ratios need self_performed_share (0–1), hours_per_dollar and wage_per_hour")));
+        let raw = CENSUS.iter().any(|k| r.get(*k).is_some());
+        let (share, hpd, wage) = if raw {
+            census_ratios(r).map_err(|e| bad(cmd, format!("{t}: {e}")))?
+        } else {
+            let (Some(share), Some(hpd), Some(wage)) =
+                (pos(r, "self_performed_share").filter(|x| *x <= 1.0), pos(r, "hours_per_dollar"), pos(r, "wage_per_hour"))
+            else {
+                return Err(bad(
+                    cmd,
+                    format!(
+                        "{t}: ratios need self_performed_share (0–1), hours_per_dollar and wage_per_hour, or the census figures {}",
+                        CENSUS.join(", ")
+                    ),
+                ));
+            };
+            (share, hpd, wage)
         };
         let wage_share = if hpd * wage > 0.0 { (hpd * wage).min(1.0) } else { 0.0 };
         let esc = wage_share * wage_esc + (1.0 - wage_share) * mat_esc;
@@ -565,6 +712,7 @@ fn run_topdown(_s: &mut Session, p: &Value) -> Result<Value> {
         let mut row = json!({
             "trade": t, "value": value, "self_performed": r2(self_performed), "escalation": sig(esc), "field_hours": r2(hours),
             "wages": r2(hours * wage * wage_esc), "private": is_electrical(&t, trade_info(&t).0),
+            "ratios": {"self_performed_share": sig(share), "hours_per_dollar": sig(hpd), "wage_per_hour": sig(wage), "from": if raw { "census" } else { "given" }},
         });
         if let Some(b) = bottom.get(&t).filter(|b| **b > 0.0) {
             let gap = (hours - b) / b * 100.0;
@@ -577,22 +725,43 @@ fn run_topdown(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"trades": out, "no_ratios": missing}))
 }
 
+/// A trade's raw census construction figures (in the census year's dollars).
+const CENSUS: &[&str] = &["value_of_work", "subcontracted_out", "construction_worker_hours", "construction_worker_wages"];
+
+/// The top-down ratios from a trade's census figures: self-performed share = (value of work −
+/// subcontracted out) / value of work; field hours per self-performed dollar = construction
+/// worker hours / self-performed value; wage per hour = construction worker wages / hours.
+fn census_ratios(r: &Value) -> std::result::Result<(f64, f64, f64), String> {
+    let get = |k: &str| r.get(k).and_then(|v| v.as_f64()).filter(|x| x.is_finite() && *x < 1e15);
+    let need = "census figures need value_of_work > 0, subcontracted_out (0 or more, less than value_of_work), construction_worker_hours > 0 and construction_worker_wages > 0";
+    let (Some(value), Some(sub), Some(hours), Some(wages)) =
+        (get("value_of_work"), get("subcontracted_out"), get("construction_worker_hours"), get("construction_worker_wages"))
+    else {
+        return Err(need.into());
+    };
+    if value <= 0.0 || sub < 0.0 || sub >= value || hours <= 0.0 || wages <= 0.0 {
+        return Err(need.into());
+    }
+    let self_performed = value - sub;
+    Ok((self_performed / value, hours / self_performed, wages / hours))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("calibrate.project", "Add Calibration Project", run_project)
-            .params("{pack: .jsonl, id: anonymous, building_type?, region?, bid_date?: YYYY-MM, delivery?, quantities: {trade: {driver: qty}} | from_wholejob: true, totals?: {trade: $}, total?: $, hours?: {trade: h}} → {pack, id, trades}")
+            .params("{pack: .jsonl, id: anonymous (re-adding an id replaces it), building_type?, region?, bid_date?: YYYY-MM, delivery?, quantities: {trade: {driver: qty}} | from_wholejob: true, totals?: {trade: $}, total?: $, hours?: {trade: h}} → {pack, id, trades, replaced}")
             .noundo(),
         CommandSpec::new("calibrate.fit", "Fit Rates to Bids", run_fit)
             .enabled(always)
-            .params("{packs: [.jsonl], target?: cost|hours, building_type?, region?, priors?: {\"trade/driver\": {rate, sd}}, markups?: {trade: %}, regions?: {region: factor}, index?: {YYYY-MM: value}, base_date?, min_projects?: 3, holdout_every?: 5, out?: .jsonl, private?: bool} → {rates: [{trade, driver, rate, sd, projects, quality}], noise_pct, holdout: {projects, mape_pct}, written}")
+            .params("{packs: [.jsonl], target?: cost|hours, building_type?, region?, priors?: {\"trade/driver\": {rate, sd}}, markups?: {trade: %}, regions?: {region: factor}, index?: {YYYY-MM: value}, base_date?, min_projects?: 3, holdout_every?: 5, out?: .jsonl, private?: bool} → {rates: [{trade, driver, rate, sd, projects, quality}], noise_pct, holdout: {projects, mape_pct}, written, warnings}")
             .noundo(),
         CommandSpec::new("calibrate.payroll", "Certified Payroll Hours", run_payroll)
             .enabled(always)
-            .params("{rows: [{classification, hours}] | path: CSV, map?: {classification: trade}} → {hours: {trade: h}, unmapped}")
+            .params("{rows: [{classification, hours}] | path: CSV (a total hours column, else ST + OT or per-day columns), map?: {classification: trade}} → {hours: {trade: h}, unmapped, hours_columns}")
             .noundo(),
         CommandSpec::new("calibrate.topdown", "Top-Down Labor Estimate", run_topdown)
             .enabled(always)
-            .params("{values: {trade: $}, ratios: {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}, wage_escalation?, materials_escalation?, bottom_up_hours?: {trade: h}, gap_pct?: 25} → {trades: [{trade, self_performed, field_hours, wages, gap_pct, flag}], no_ratios}")
+            .params("{values: {trade: $}, census: {trade: {value_of_work, subcontracted_out, construction_worker_hours, construction_worker_wages}} | ratios: {trade: {self_performed_share, hours_per_dollar, wage_per_hour}}, wage_escalation?, materials_escalation?, bottom_up_hours?: {trade: h}, gap_pct?: 25} → {trades: [{trade, self_performed, field_hours, wages, ratios, gap_pct, flag}], no_ratios}")
             .noundo(),
     ]
 }
@@ -620,5 +789,20 @@ mod tests {
         assert_eq!(classify("Electrician - Journeyman"), Some("electrical"));
         assert_eq!(classify("Pipefitter"), Some("mechanical"));
         assert_eq!(classify("Clerk"), None);
+        assert_eq!(classify("Cement Mason / Concrete Finisher"), Some("concrete"));
+        assert_eq!(classify("Brick Mason"), Some("masonry"));
+    }
+
+    #[test]
+    fn payroll_hours_columns() {
+        let h = |v: &[&str]| hours_columns(&v.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        assert_eq!(h(&["Craft", "Hrs"]), Ok(vec!["Hrs".to_string()]));
+        assert_eq!(h(&["OT Hours", "ST Hours", "Total Hours"]), Ok(vec!["Total Hours".to_string()]));
+        assert_eq!(h(&["Hourly Rate", "OT Hours", "ST Hours"]), Ok(vec!["OT Hours".to_string(), "ST Hours".to_string()]));
+        assert_eq!(h(&["Day 1", "Day 2"]), Ok(vec!["Day 1".to_string(), "Day 2".to_string()]));
+        assert!(h(&["Classification", "Gross Pay"]).is_err());
+        assert!(h(&["Total Hours", "Total OT Hours"]).is_err());
+        assert!(h(&["Mon", "OT Hours"]).is_err(), "per-day beside overtime would count twice");
+        assert!(h(&["Shop Hours", "Field Hours"]).is_err());
     }
 }
