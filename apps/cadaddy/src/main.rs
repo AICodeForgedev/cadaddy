@@ -458,8 +458,8 @@ fn main() -> eframe::Result {
     let _instance = {
         let single = std::env::var_os("CADADDY_SINGLE_INSTANCE");
         match config_dir() {
-            Some(dir) if launch.joins_running(single.as_deref()) => {
-                if launch.hands_over(single.as_deref()) {
+            Some(dir) if launch.joins_running(single.as_deref(), control_port.is_some()) => {
+                if launch.hands_over(single.as_deref(), control_port.is_some()) {
                     match open_files::instance::hand_over(&dir, &launch.files) {
                         Ok(true) => {
                             log::info!("handed {} file(s) to the running window", launch.files.len());

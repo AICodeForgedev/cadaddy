@@ -73,16 +73,22 @@ impl Launch {
     /// only a plain "open these files" start (a file manager's). Agents and tests that ask for a
     /// control port or the sample get their own window, as does `--new-window`, and
     /// `CADADDY_SINGLE_INSTANCE=0` turns it off.
+    ///
+    /// `has_control_port` is true when a control port was resolved from any source (the
+    /// `--control` flag or the `CADADDY_CONTROL_PORT` environment variable).
     #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
-    pub fn hands_over(&self, single_instance_var: Option<&OsStr>) -> bool {
-        !self.files.is_empty() && self.joins_running(single_instance_var)
+    pub fn hands_over(&self, single_instance_var: Option<&OsStr>, has_control_port: bool) -> bool {
+        !self.files.is_empty() && self.joins_running(single_instance_var, has_control_port)
     }
 
     /// Whether this start takes part in single-window opening at all (it listens for files when it
     /// is the first one).
+    ///
+    /// `has_control_port` is true when a control port was resolved from any source (the
+    /// `--control` flag or the `CADADDY_CONTROL_PORT` environment variable).
     #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
-    pub fn joins_running(&self, single_instance_var: Option<&OsStr>) -> bool {
-        self.control.is_empty() && !self.sample && !self.new_window && single_instance_var.is_none_or(|v| v != "0")
+    pub fn joins_running(&self, single_instance_var: Option<&OsStr>, has_control_port: bool) -> bool {
+        !has_control_port && !self.sample && !self.new_window && single_instance_var.is_none_or(|v| v != "0")
     }
 }
 
@@ -363,15 +369,35 @@ mod tests {
     #[test]
     fn only_a_plain_open_hands_over() {
         let plain = Launch::parse(["a.dxf"]);
-        assert!(plain.hands_over(None));
-        assert!(plain.hands_over(Some(OsStr::new("1"))));
-        assert!(!plain.hands_over(Some(OsStr::new("0"))), "CADADDY_SINGLE_INSTANCE=0");
-        assert!(!Launch::parse(["--new-window", "a.dxf"]).hands_over(None));
-        assert!(!Launch::parse(["--control", "4000", "a.dxf"]).hands_over(None), "an agent's own window");
-        assert!(!Launch::parse(["--sample", "a.dxf"]).hands_over(None));
-        assert!(!Launch::parse(Vec::<String>::new()).hands_over(None), "nothing to hand over");
-        assert!(Launch::parse(Vec::<String>::new()).joins_running(None), "an empty start still listens");
-        assert!(!Launch::parse(Vec::<String>::new()).joins_running(Some(OsStr::new("0"))));
+        assert!(plain.hands_over(None, false));
+        assert!(plain.hands_over(Some(OsStr::new("1")), false));
+        assert!(!plain.hands_over(Some(OsStr::new("0")), false), "CADADDY_SINGLE_INSTANCE=0");
+        assert!(!Launch::parse(["--new-window", "a.dxf"]).hands_over(None, false));
+        assert!(!Launch::parse(["--control", "4000", "a.dxf"]).hands_over(None, true), "an agent's own window");
+        assert!(!Launch::parse(["--sample", "a.dxf"]).hands_over(None, false));
+        assert!(!Launch::parse(Vec::<String>::new()).hands_over(None, false), "nothing to hand over");
+        assert!(Launch::parse(Vec::<String>::new()).joins_running(None, false), "an empty start still listens");
+        assert!(!Launch::parse(Vec::<String>::new()).joins_running(Some(OsStr::new("0")), false));
+    }
+
+    /// An agent start whose control port comes from `CADADDY_CONTROL_PORT` (no `--control` flag)
+    /// must not hand its files to a running window — it needs its own session.
+    #[test]
+    fn an_env_var_agent_start_with_files_does_not_hand_over() {
+        // Simulates: `CADADDY_CONTROL_PORT=4000 cadaddy plan.dxf` — the env var resolved a port
+        // but Launch has no --control flag, so `launch.control` is empty.
+        let launch = Launch::parse(["plan.dxf"]);
+        assert!(launch.control.is_empty(), "no --control flag");
+        assert!(!launch.hands_over(None, true), "env-var agent start must not hand over");
+    }
+
+    /// An empty agent start whose control port comes from `CADADDY_CONTROL_PORT` must not join
+    /// the single-window scheme (must not listen on instance.sock).
+    #[test]
+    fn an_env_var_agent_start_without_files_does_not_join() {
+        let launch = Launch::parse(Vec::<String>::new());
+        assert!(launch.control.is_empty(), "no --control flag");
+        assert!(!launch.joins_running(None, true), "env-var agent start must not listen");
     }
 
     #[test]
