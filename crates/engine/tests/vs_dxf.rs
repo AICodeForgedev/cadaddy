@@ -319,21 +319,15 @@ fn librecad_shaped_dxf_reads_back_correctly() {
     assert_eq!(c.get("Block Reference").copied().unwrap_or(0), 1);
 
     // INSERT z-scale 0 is normalized to 1.0.
-    let ins = d.model.iter().find_map(|e| {
-        if let EntityKind::Insert(i) = &e.kind { Some(i) } else { None }
-    }).expect("INSERT");
+    let ins = d.model.iter().find_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i) } else { None }).expect("INSERT");
     assert!((ins.scale.z - 1.0).abs() < 1e-9, "z-scale 0 must read as 1.0");
 
     // TEXT %%C (uppercase) still decodes as the diameter symbol when rendered.
-    let txt = d.model.iter().find_map(|e| {
-        if let EntityKind::Text(t) = &e.kind { Some(t) } else { None }
-    }).expect("TEXT");
+    let txt = d.model.iter().find_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t) } else { None }).expect("TEXT");
     let plain = cadaddy_fonts::plain_text(&txt.value);
     assert!(plain.contains('⌀'), "%%C should decode to ⌀, got: {plain}");
 
     // Polyline bulge is preserved.
-    let pl = d.model.iter().find_map(|e| {
-        if let EntityKind::LwPolyline(p) = &e.kind { Some(p) } else { None }
-    }).expect("LWPOLYLINE");
+    let pl = d.model.iter().find_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p) } else { None }).expect("LWPOLYLINE");
     assert!((pl.vertices[0].bulge - 0.5).abs() < 1e-6, "bulge should be 0.5");
 }

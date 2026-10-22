@@ -431,7 +431,9 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let mut scale = Vec3::new(t.fd(41, 1.0), t.fd(42, 1.0), t.fd(43, 1.0));
             // LibreCAD (dxfrw 0.6.3) writes z-scale as 0; a scale of 0 in any axis makes the
             // block invisible or degenerate, so treat it as the default 1.0 (Q253).
-            if scale.z == 0.0 { scale.z = 1.0; }
+            if scale.z == 0.0 {
+                scale.z = 1.0;
+            }
             let mut rotation = t.fd(50, 0.0).to_radians();
             let mut col_spacing = t.fd(44, 0.0);
             if mirrored {

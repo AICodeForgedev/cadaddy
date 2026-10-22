@@ -60,9 +60,7 @@ pub fn run(root: &Path) -> Result<(), String> {
                 || row.get("labor_hours").filter(|v| !v.trim().is_empty()).is_some();
             if is_elec_trade && has_labor {
                 let item = row.get("item").map(String::as_str).unwrap_or("?");
-                errors.push(format!(
-                    "{name}:{line}: ELECTRICAL LABOR found (trade={trade}, item={item}) — this must not ship in the public pack"
-                ));
+                errors.push(format!("{name}:{line}: ELECTRICAL LABOR found (trade={trade}, item={item}) — this must not ship in the public pack"));
             }
         }
     }
@@ -105,10 +103,7 @@ fn generate_baseline(pack: &Path, out: &Path) -> Result<(), String> {
             let ld = row.get("labor_difficult").map(String::as_str).unwrap_or("");
             let lv = row.get("labor_very_difficult").map(String::as_str).unwrap_or("");
             if !item.is_empty() && !ln.is_empty() {
-                items.push(format!(
-                    "{},{},{},{},{},{}",
-                    csv_escape(item), csv_escape(unit), "", ln, ld, lv
-                ));
+                items.push(format!("{},{},{},{},{},{}", csv_escape(item), csv_escape(unit), "", ln, ld, lv));
             }
         }
     }
@@ -124,16 +119,10 @@ fn generate_baseline(pack: &Path, out: &Path) -> Result<(), String> {
                 if !ln.is_empty() {
                     let ld = row.get("labor_difficult").map(String::as_str).unwrap_or("");
                     let lv = row.get("labor_very_difficult").map(String::as_str).unwrap_or("");
-                    items.push(format!(
-                        "{},{},{},{},{},{}",
-                        csv_escape(item), csv_escape(unit), mat, ln, ld, lv
-                    ));
+                    items.push(format!("{},{},{},{},{},{}", csv_escape(item), csv_escape(unit), mat, ln, ld, lv));
                 }
                 if !mat.is_empty() {
-                    prices.push(format!(
-                        "{},,{},{},,,public data (concrete_costs.csv)",
-                        csv_escape(item), csv_escape(unit), mat
-                    ));
+                    prices.push(format!("{},,{},{},,,public data (concrete_costs.csv)", csv_escape(item), csv_escape(unit), mat));
                 }
             }
         }
@@ -150,7 +139,11 @@ fn generate_baseline(pack: &Path, out: &Path) -> Result<(), String> {
             if !item.is_empty() && !mat.is_empty() {
                 prices.push(format!(
                     "{},{},{},{},,{},public data (electrical_material.csv)",
-                    csv_escape(item), csv_escape(size), csv_escape(unit), mat, date
+                    csv_escape(item),
+                    csv_escape(size),
+                    csv_escape(unit),
+                    mat,
+                    date
                 ));
             }
         }
@@ -163,38 +156,25 @@ fn generate_baseline(pack: &Path, out: &Path) -> Result<(), String> {
             let unit = row.get("unit").map(String::as_str).unwrap_or("");
             let price = row.get("median_price").map(String::as_str).unwrap_or("");
             if !item.is_empty() && !price.is_empty() {
-                prices.push(format!(
-                    "{},,{},{},,2025,public data (public_bid_prices.csv)",
-                    csv_escape(item), csv_escape(unit), price
-                ));
+                prices.push(format!("{},,{},{},,2025,public data (public_bid_prices.csv)", csv_escape(item), csv_escape(unit), price));
             }
         }
     }
 
-    std::fs::write(out.join("item_labor_units.csv"), items.join("\n") + "\n")
-        .map_err(|e| format!("write item_labor_units.csv: {e}"))?;
-    std::fs::write(out.join("prices.csv"), prices.join("\n") + "\n")
-        .map_err(|e| format!("write prices.csv: {e}"))?;
+    std::fs::write(out.join("item_labor_units.csv"), items.join("\n") + "\n").map_err(|e| format!("write item_labor_units.csv: {e}"))?;
+    std::fs::write(out.join("prices.csv"), prices.join("\n") + "\n").map_err(|e| format!("write prices.csv: {e}"))?;
 
     // Empty but valid files so estimate.import doesn't warn.
-    std::fs::write(out.join("assemblies.csv"), "assembly,unit,description,labor_hours\n")
-        .map_err(|e| format!("write assemblies.csv: {e}"))?;
-    std::fs::write(out.join("assembly_parts.csv"), "assembly,item,qty\n")
-        .map_err(|e| format!("write assembly_parts.csv: {e}"))?;
-    std::fs::write(out.join("rates.json"), "{}\n")
-        .map_err(|e| format!("write rates.json: {e}"))?;
-    std::fs::write(out.join("benchmarks.json"), "{}\n")
-        .map_err(|e| format!("write benchmarks.json: {e}"))?;
+    std::fs::write(out.join("assemblies.csv"), "assembly,unit,description,labor_hours\n").map_err(|e| format!("write assemblies.csv: {e}"))?;
+    std::fs::write(out.join("assembly_parts.csv"), "assembly,item,qty\n").map_err(|e| format!("write assembly_parts.csv: {e}"))?;
+    std::fs::write(out.join("rates.json"), "{}\n").map_err(|e| format!("write rates.json: {e}"))?;
+    std::fs::write(out.join("benchmarks.json"), "{}\n").map_err(|e| format!("write benchmarks.json: {e}"))?;
 
     Ok(())
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
+    if s.contains(',') || s.contains('"') || s.contains('\n') { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
 }
 
 /// Parse CSV text into header-keyed rows (same as estimate.rs).

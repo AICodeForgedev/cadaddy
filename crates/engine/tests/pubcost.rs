@@ -66,12 +66,7 @@ fn every_row_has_source_and_licence() {
         for (i, row) in csv_rows(&text).iter().enumerate() {
             let line = i + 2;
             let source = row.get("source").map(String::as_str).unwrap_or("").trim();
-            let licence = row
-                .get("licence")
-                .or(row.get("license"))
-                .map(String::as_str)
-                .unwrap_or("")
-                .trim();
+            let licence = row.get("licence").or(row.get("license")).map(String::as_str).unwrap_or("").trim();
             if source.is_empty() {
                 violations.push(format!("{name}:{line}: missing source"));
             }
@@ -109,11 +104,7 @@ fn no_electrical_labor_in_public_pack() {
             }
         }
     }
-    assert!(
-        violations.is_empty(),
-        "electrical labor rows in the public pack (must not ship):\n{}",
-        violations.join("\n")
-    );
+    assert!(violations.is_empty(), "electrical labor rows in the public pack (must not ship):\n{}", violations.join("\n"));
 }
 
 #[test]
@@ -205,10 +196,15 @@ fn import_labels_public_data() {
     if !baseline.is_dir() {
         return; // Skip if baseline not generated.
     }
-    let r = s.execute("estimate.import", &json!({
-        "folder": baseline.to_string_lossy(),
-        "label": "public data"
-    })).unwrap();
+    let r = s
+        .execute(
+            "estimate.import",
+            &json!({
+                "folder": baseline.to_string_lossy(),
+                "label": "public data"
+            }),
+        )
+        .unwrap();
     assert_eq!(r["label"].as_str(), Some("public data"), "import should echo the label: {r}");
     assert!(r["items"].as_u64().unwrap_or(0) >= 50, "expected at least 50 items from public pack: {r}");
 }
@@ -236,10 +232,15 @@ Copper pipe 3/4 in solder,ft,0.09,11-1,plumbing
 ";
     std::fs::write(dir.join("p405_labor_units.csv"), csv).unwrap();
 
-    let r = s.execute("estimate.import_p405", &json!({
-        "file": dir.join("p405_labor_units.csv").to_string_lossy(),
-        "private_folder": priv_dir.to_string_lossy()
-    })).unwrap();
+    let r = s
+        .execute(
+            "estimate.import_p405",
+            &json!({
+                "file": dir.join("p405_labor_units.csv").to_string_lossy(),
+                "private_folder": priv_dir.to_string_lossy()
+            }),
+        )
+        .unwrap();
 
     assert_eq!(r["public_rows"].as_u64(), Some(3), "3 non-electrical rows: {r}");
     assert_eq!(r["private_rows"].as_u64(), Some(2), "2 electrical rows: {r}");

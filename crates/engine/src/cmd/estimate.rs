@@ -216,8 +216,7 @@ fn run_import_p405(s: &mut Session, p: &Value) -> Result<Value> {
 
     let electrical_trades: &[&str] = &["electrical", "electric", "elec"];
     let (sp, mut st) = state(s, "estimate.import_p405")?;
-    let mut items = obj(&mut st, "baseline")
-        .and_then(|b| b.entry("items").or_insert_with(|| json!({})).as_object_mut());
+    let mut items = obj(&mut st, "baseline").and_then(|b| b.entry("items").or_insert_with(|| json!({})).as_object_mut());
     let mut pub_count = 0usize;
     let mut priv_count = 0usize;
     let mut skipped = 0usize;
