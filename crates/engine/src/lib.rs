@@ -874,13 +874,31 @@ const ALWAYS_PARAMS: [&str; 3] = ["handle", "handles", "confirmed"];
 fn open_params(doc: &str) -> bool {
     let doc = doc.split('→').next().unwrap_or(doc);
     let mut depth = 0usize;
-    let mut chars = doc.chars().peekable();
-    while let Some(c) = chars.next() {
+    for (i, c) in doc.char_indices() {
+        let rest = doc.get(i..).unwrap_or_default();
         match c {
             '{' | '[' => depth += 1,
             '}' | ']' => depth = depth.saturating_sub(1),
-            '…' | '<' if depth == 1 => return true,
-            '.' if depth == 1 && chars.peek() == Some(&'.') => return true,
+            // An ellipsis (`…`, `...`), not a range (`1..255`).
+            '…' if depth == 1 => return true,
+            '.' if depth == 1 && rest.starts_with("...") => return true,
+            // A placeholder `<…>` closed in the same list, not a comparison.
+            '<' if depth == 1 && closes(rest) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether the `<` that starts `rest` is closed by a `>` before its parameter list ends.
+fn closes(rest: &str) -> bool {
+    let mut depth = 0usize;
+    for c in rest.chars().skip(1) {
+        match c {
+            '{' | '[' => depth += 1,
+            '}' | ']' if depth == 0 => return false,
+            '}' | ']' => depth -= 1,
+            '>' if depth == 0 => return true,
             _ => {}
         }
     }

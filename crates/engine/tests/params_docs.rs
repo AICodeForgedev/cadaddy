@@ -313,13 +313,10 @@ fn the_commands_with_open_parameters_are_these() {
     let expected = [
         "document.bytes",
         "qselect",
-        "mtext",
-        "spline.cv",
         "mleader",
         "dimoverride",
         "dimedit",
         "gradient",
-        "overkill",
         "xbind",
         "bedit",
         "blockify",
@@ -336,7 +333,6 @@ fn the_commands_with_open_parameters_are_these() {
         "rfi.export",
         "imagetrace",
         "fourd.link",
-        "imageadjust",
         "array",
         "arrayclassic",
         "symbol",
@@ -352,8 +348,6 @@ fn the_commands_with_open_parameters_are_these() {
         "properties.set",
         "chprop",
         "change",
-        "color",
-        "units",
         "dimstyle",
         "dimstyle.dimension",
         "dimstyle.override",
@@ -363,20 +357,25 @@ fn the_commands_with_open_parameters_are_these() {
         "count",
         "options",
         "measuregeom",
-        "tablestyle.cellstyle",
         "tabledit",
         "field",
         "markupimport",
         "wedge",
-        "xplode",
     ];
     assert_eq!(open, expected, "open parameter docs changed");
-    assert!(!open.contains(&"plot") && !open.contains(&"dim"));
+    // A range (`1..255`) or a lone `<` doesn't open a doc: COLOR, UNITS and IMAGEADJUST are strict.
+    for id in ["plot", "dim", "color", "units", "imageadjust"] {
+        assert!(!open.contains(&id), "{id} is strict");
+    }
     // So an agent's misspelt PLOT or DIM key is refused, not run on defaults.
     let mut s = Session::new();
     let e = s.execute_agent("plot", &json!({ "papr": "A3" })).unwrap_err().to_string();
     assert!(e.contains("`papr` is not a parameter of plot"), "{e}");
     let e = s.execute_agent("dim", &json!({ "mode": "linear", "p1": [0, 0], "p2": [10, 0], "att": [5, 3] })).unwrap_err().to_string();
     assert!(e.contains("`att` is not a parameter of dim"), "{e}");
+    let e = s.execute_agent("units", &json!({ "lunit": 2 })).unwrap_err().to_string();
+    assert!(e.contains("`lunit` is not a parameter of units"), "{e}");
+    let e = s.execute_agent("color", &json!({ "colour": "red" })).unwrap_err().to_string();
+    assert!(e.contains("`colour` is not a parameter of color"), "{e}");
     assert_eq!(s.doc().unwrap().model.iter().count(), 0, "nothing drawn");
 }
