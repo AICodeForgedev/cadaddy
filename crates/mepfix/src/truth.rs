@@ -40,6 +40,14 @@ pub struct Truth {
     /// tagging problems (Q299).
     #[serde(default, skip_serializing_if = "crate::elecspec::ElecSpec::is_empty")]
     pub elec_spec: crate::elecspec::ElecSpec,
+    /// Feeders between the electrical gear (the feeder schedule).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elec_feeders: Vec<cadaddy_walk3d::Feeder>,
+    /// The problems planted in the gear and its feeders: what the gear review must find
+    /// (gear tag, check: `lug count`, `lug range`, `lug material`, `neutral bar`, `ground bar`,
+    /// `entry`, `gutter`, `bending`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gear_problems: Vec<(String, String)>,
     pub risers: Vec<Riser>,
     // --- Hotel extensions (Q304) ---
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -702,12 +710,12 @@ pub struct ElecDevice {
     pub sheet: String,
 }
 
-/// An electrical panel or transformer.
+/// An electrical panel, transformer, switchboard or disconnect.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ElecPanel {
     pub id: String,
     pub tag: String,
-    /// `panel`, `transformer`.
+    /// `panel`, `transformer`, `switchboard`, `disconnect`.
     pub kind: String,
     pub level: String,
     pub room: String,
@@ -719,6 +727,19 @@ pub struct ElecPanel {
     pub schedule: Vec<PanelCircuitRow>,
     /// The sheet it is drawn on.
     pub sheet: String,
+    /// The equipment schedule: width, depth and height (inches), the bottom above the floor
+    /// (inches), and its columns as printed (`TYPE`, `VOLTAGE`, `RATING`, `MOUNTING`…).
+    #[serde(default)]
+    pub size_in: [f64; 3],
+    #[serde(default)]
+    pub bottom_in: f64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+    /// The lug schedule's rows for it, and its entry plates and gutter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminations: Vec<cadaddy_walk3d::Termination>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosure: Option<cadaddy_walk3d::Enclosure>,
 }
 
 /// One row in a panel schedule.

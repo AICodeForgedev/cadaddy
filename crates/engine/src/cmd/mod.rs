@@ -68,6 +68,7 @@ pub mod dwgprops;
 pub mod fieldview;
 pub mod fourd;
 pub mod furnish;
+pub mod gear;
 pub mod geo;
 pub mod ifcref;
 pub mod imagetrace;
@@ -300,6 +301,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(bom::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
+        v.extend(gear::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());
         v.extend(printset::specs());

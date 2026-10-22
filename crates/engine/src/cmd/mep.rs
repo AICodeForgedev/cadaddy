@@ -987,9 +987,77 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    // -- Feeders: their raceways where they come in through each gear's entry plates (rows
+    // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate
+    // shows), up to the ceiling or down into the slab. --
+    let rules = super::gear::Rules::of(sp);
+    let mut total_stubs = 0usize;
+    for f in sp.mep.feeders.iter().take(MAX_RUNS) {
+        if !(f.conduit_in.is_finite() && f.conduit_in > 0.0) || f.conduits == 0 {
+            continue;
+        }
+        for (tag, side) in
+            [(&f.to, f.entry.as_str()), (&f.from, if f.from_entry.trim().is_empty() { f.entry.as_str() } else { f.from_entry.as_str() })]
+        {
+            let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(tag.trim())) else { continue };
+            let Some(level) = sp.level(&g.level) else { continue };
+            let top = side.trim().eq_ignore_ascii_case("top");
+            let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
+            let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
+            let z_floor = level.elevation_ft * upf;
+            let z_top = (level.elevation_ft + g.bottom_ft + g.height_ft) * upf;
+            let (z0, z1) = if top {
+                (z_top, ((level.elevation_ft + level.height_ft.max(g.bottom_ft + g.height_ft + 1.0)) * upf).max(z_top + upf))
+            } else {
+                (z_floor - upf, (level.elevation_ft + g.bottom_ft) * upf)
+            };
+            if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
+                continue;
+            }
+            // Where this feeder's raceways start on the plate: after the ones placed before it.
+            let before: u32 = sp
+                .mep
+                .feeders
+                .iter()
+                .take_while(|x| !std::ptr::eq(*x, f))
+                .filter(|x| {
+                    let here_to = x.to.trim().eq_ignore_ascii_case(tag.trim()) && x.entry.trim().eq_ignore_ascii_case(side.trim());
+                    let xs = if x.from_entry.trim().is_empty() { &x.entry } else { &x.from_entry };
+                    let here_from = x.from.trim().eq_ignore_ascii_case(tag.trim()) && xs.trim().eq_ignore_ascii_case(side.trim());
+                    here_to || here_from
+                })
+                .fold(0u32, |a, x| a.saturating_add(x.conduits.min(400)));
+            let pitch = (rules.od(f.conduit_in) + rules.spacing_in) / 12.0 * upf;
+            let per_row = (((hi.x - lo.x) / pitch).floor() as u32).max(1);
+            let layer = format!("3D-ELEC-RACEWAY-{}", sanitise(&level.name, 16));
+            ensure_layer(d, &layer, 1);
+            for k in 0..f.conduits.min(400) {
+                let n = before.saturating_add(k);
+                let c = Vec2::new(lo.x + pitch * (f64::from(n % per_row) + 0.5), lo.y + pitch * (f64::from(n / per_row) + 0.5));
+                let mut m = super::wallgen::empty_mesh();
+                add_upright_cylinder(&mut m, c, rules.od(f.conduit_in) / 24.0 * upf, z0, z1);
+                if m.faces.is_empty() {
+                    continue;
+                }
+                let xdata = vec![
+                    t(1001, super::wallgen::APP.into()),
+                    t(1000, "mep".into()),
+                    t(1000, level.name.clone()),
+                    t(1000, Handle(0).hex()),
+                    t(1000, format!("system:{}", f.tag.chars().take(60).collect::<String>())),
+                    t(1000, "kind:conduit".into()),
+                    t(1000, "part:segment".into()),
+                ];
+                if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+                    total_stubs += 1;
+                }
+            }
+        }
+    }
+
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
-        "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment,
+        "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
     })
 }
 

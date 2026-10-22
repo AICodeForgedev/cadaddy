@@ -1671,6 +1671,74 @@ fn rcp(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
 // ---- Electrical ---------------------------------------------------------------------------------
 
 /// Draw electrical devices, conduit runs, homerun arrows and panels for a level.
+/// Inches as a fitter writes them, to the sixteenth: `3/8`, `1-1/2`, `4`.
+pub fn frac_in(v: f64) -> String {
+    let q = (v * 16.0).round() as i64;
+    let (whole, mut num, mut den) = (q / 16, q % 16, 16);
+    while num > 0 && num % 2 == 0 {
+        num /= 2;
+        den /= 2;
+    }
+    match (whole, num) {
+        (w, 0) => w.to_string(),
+        (0, n) => format!("{n}/{den}"),
+        (w, n) => format!("{w}-{n}/{den}"),
+    }
+}
+
+/// The gear's schedules as printed: equipment (type, voltage, rating, size, mounting, entry
+/// plates, gutter), lugs (one row per termination point) and feeders.
+pub fn gear_tables(t: &Truth) -> Vec<(&'static str, Vec<Vec<String>>)> {
+    let row = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let gear: Vec<&crate::truth::ElecPanel> = t.elec_panels.iter().filter(|p| !p.properties.is_empty()).collect();
+    let cols = ["TYPE", "VOLTAGE", "RATING", "SIZE", "MOUNTING", "TOP ENTRY", "BOTTOM ENTRY", "GUTTER"];
+    let mut eq = vec![std::iter::once("TAG").chain(cols).map(String::from).collect::<Vec<_>>()];
+    for p in &gear {
+        let mut r = vec![p.tag.clone()];
+        r.extend(cols.iter().map(|c| p.properties.get(*c).cloned().unwrap_or_else(|| "-".into())));
+        eq.push(r);
+    }
+    let mut lugs = vec![row(&["TAG", "POINT", "LUGS", "WIRES", "RANGE", "RATING", "TYPE", "SUPPLIED", "BOLT", "BENDING"])];
+    for p in &gear {
+        for l in &p.terminations {
+            let bolt =
+                if l.supplied { "-".to_string() } else { format!("{}\" {}-HOLE, {}\" STACK", frac_in(l.bolt_in), l.holes, frac_in(l.stack_in)) };
+            let bend = if l.bending_in > 0.0 { format!("{}\" {}", l.bending_in, if l.opposite { "OPP" } else { "ADJ" }) } else { "-".into() };
+            lugs.push(vec![
+                p.tag.clone(),
+                l.point.replace('_', " ").to_uppercase(),
+                l.lugs.to_string(),
+                l.wires_per_lug.to_string(),
+                l.range.to_uppercase(),
+                l.material.to_uppercase(),
+                if l.lug_type == "compression" { "COMP".into() } else { "MECH".into() },
+                if l.supplied { "YES".into() } else { "BY EC".into() },
+                bolt,
+                bend,
+            ]);
+        }
+    }
+    let mut feeders = vec![row(&["TAG", "FROM", "TO", "SETS", "PHASE", "NEUTRAL", "GROUND", "BONDING", "RACEWAY", "ENTRY"])];
+    for f in &t.elec_feeders {
+        let cond = |n: u32, size: &str| {
+            if n == 0 || size.is_empty() { "-".to_string() } else { format!("{n} x {} {}", size.to_uppercase(), f.material.to_uppercase()) }
+        };
+        feeders.push(vec![
+            f.tag.clone(),
+            if f.from.is_empty() { "UTILITY".into() } else { f.from.clone() },
+            f.to.clone(),
+            f.sets.to_string(),
+            format!("{} {}", f.size.to_uppercase(), f.material.to_uppercase()),
+            cond(f.neutrals, if f.neutral_size.is_empty() { &f.size } else { &f.neutral_size }),
+            cond(f.grounds, &f.ground_size),
+            if f.extra_grounds.is_empty() { "-".into() } else { f.extra_grounds.join(", ").to_uppercase() },
+            format!("{} x {}\"", f.conduits, frac_in(f.conduit_in)),
+            f.entry.to_uppercase(),
+        ]);
+    }
+    vec![("ELECTRICAL EQUIPMENT SCHEDULE", eq), ("LUG SCHEDULE", lugs), ("FEEDER SCHEDULE", feeders)]
+}
+
 fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, _lighting: bool) {
     let rot = readable(pen.rot());
     let th = st.text_in / pen.sh.scale;
@@ -1999,6 +2067,18 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
                 y = y1 - 0.5;
                 x += 13.0;
             }
+        }
+        // The gear: equipment, lug and feeder schedules (made-up data; see `gear_design`).
+        for (title, rows) in gear_tables(t) {
+            if rows.len() < 2 {
+                continue;
+            }
+            if y < fr.area[0][1] + 3.0 + 0.25 * rows.len() as f64 {
+                y = y1 - 0.5;
+                x += 13.0;
+            }
+            let h = table(pen, [x, y], title, &rows);
+            y -= h + 0.6;
         }
     } else {
         let rows = vec![

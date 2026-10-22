@@ -229,6 +229,12 @@ fn near(a: f64, b: f64, tol: f64) -> bool {
 
 /// Read every table with a tag column on a sheet.
 pub fn read_tables(d: &Drawing, sheet: &str) -> Vec<Table> {
+    read_tables_keyed(d, sheet, is_tag_column)
+}
+
+/// As [`read_tables`], with tables keyed by the columns `is_key` accepts (a fixture schedule's
+/// `TYPE`, say).
+pub fn read_tables_keyed(d: &Drawing, sheet: &str, is_key: fn(&str) -> bool) -> Vec<Table> {
     let txt = texts(d);
     let all = boxes(d);
     let h = txt.iter().map(|t| t.h).fold(f64::INFINITY, f64::min);
@@ -277,7 +283,7 @@ pub fn read_tables(d: &Drawing, sheet: &str) -> Vec<Table> {
             }
         }
         let names: Vec<String> = cols.iter().map(|c| c.2.clone()).collect();
-        if !names.iter().any(|n| is_tag_column(n)) {
+        if !names.iter().any(|n| is_key(n)) {
             continue;
         }
         // The title: the text just above the header's left end.
@@ -323,6 +329,10 @@ pub fn kind_from_title(title: &str) -> Option<&'static str> {
     let t = title.to_ascii_uppercase();
     let has = |w: &str| t.contains(w);
     if has("AIR DEVICE") || has("DIFFUSER") || has("GRILLE") || has("FIXTURE") || has("SHEET INDEX") || has("LIGHT") || has("DOOR") || has("WINDOW") {
+        return Some("");
+    }
+    // Electrical gear, its lugs and feeders: the gear reader's (`crate::gear_reader`).
+    if has("ELECTRICAL") || has("LUG") || has("FEEDER") || has("PANEL") || has("SWITCHBOARD") {
         return Some("");
     }
     Some(if has("ROOFTOP") || has("RTU") || has("PACKAGED") {
