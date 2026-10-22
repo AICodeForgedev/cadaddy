@@ -49,6 +49,7 @@ pub(crate) mod inquiry;
 mod layer;
 pub mod markup;
 pub mod pointcloud;
+pub mod procure;
 pub mod project;
 mod rasterout;
 pub mod rfi;
@@ -299,6 +300,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(bom::specs());
+        v.extend(procure::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
         v.extend(gear::specs());

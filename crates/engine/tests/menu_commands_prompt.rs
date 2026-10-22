@@ -23,6 +23,7 @@ const DIALOG_OR_STATE: &[&str] = &[
     "dwgconvert",
     "sheetset",
     "pointcloudattach",
+    "fourd.import",
     "markupimport",
     "redline.import",
     "adcenter",

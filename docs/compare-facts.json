@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 832,
-    "count": 832,
+    "callableAsJson": 853,
+    "count": 853,
     "ids": [
       "-attedit",
       "-block",
@@ -94,6 +94,7 @@
       "bclose",
       "bcount",
       "bedit",
+      "bim.bom",
       "bim.get_spec",
       "bim.prints",
       "bim.remove_type",
@@ -297,6 +298,12 @@
       "find",
       "flatshot",
       "flatten",
+      "fourd.clear",
+      "fourd.export",
+      "fourd.import",
+      "fourd.link",
+      "fourd.list",
+      "fourd.state",
       "frame",
       "furnish",
       "gatte",
@@ -558,6 +565,13 @@
       "printset.reimport",
       "printset.save",
       "printset.sheets",
+      "procure.export",
+      "procure.leadtimes",
+      "procure.list",
+      "procure.release",
+      "procure.status",
+      "procure.submittal",
+      "procure.submittals",
       "project.activate",
       "project.add",
       "project.close",
@@ -721,6 +735,9 @@
       "tableexport",
       "tablestyle",
       "tablestyle.cellstyle",
+      "tags.accept",
+      "tags.list",
+      "tags.set",
       "takeoff",
       "tcase",
       "tcircle",
@@ -840,7 +857,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 465,
+    "inMenus": 466,
     "typed": 496
   },
   "features": {

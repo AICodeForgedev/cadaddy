@@ -656,7 +656,7 @@ pub fn iso(days: i32) -> String {
 }
 
 /// `*` any run, `?` one character; case ignored. Iterative, one back-track point.
-fn wildcard(pat: &str, text: &str) -> bool {
+pub fn wildcard(pat: &str, text: &str) -> bool {
     let p: Vec<char> = pat.to_lowercase().chars().take(256).collect();
     let t: Vec<char> = text.to_lowercase().chars().take(1024).collect();
     let (mut pi, mut ti) = (0usize, 0usize);
