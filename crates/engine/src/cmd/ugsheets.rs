@@ -404,7 +404,12 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         };
         services.push(json!({ "kind": svc.kind, "tag": svc.tag, "status": status, "to": svc.to, "at": svc.at, "level": svc.level }));
         let (Some(at), true) = (svc.at, svc.shown) else { continue };
-        let points: Vec<[f64; 2]> = svc.from.into_iter().chain([at]).filter(|p| finite(*p)).collect();
+        // The route as drawn, else straight from where it starts.
+        let points: Vec<[f64; 2]> = if svc.route.len() >= 2 {
+            svc.route.iter().take(MAX_POINTS).copied().filter(|p| finite(*p)).collect()
+        } else {
+            svc.from.into_iter().chain([at]).filter(|p| finite(*p)).collect()
+        };
         let id = if svc.tag.trim().is_empty() { format!("SVC-{}", svc.kind.to_ascii_uppercase()) } else { svc.tag.clone() };
         runs.push(Buried {
             kind: "service",
