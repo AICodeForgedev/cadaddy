@@ -21,7 +21,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{code: Rhai source, inputs?: [answers to getpoint/getreal/getstring calls]} \
                  → {value, output: [lines printed], error?}",
             )
-            .noundo(),
+            .noundo()
+            .interactive(|_| Ok(Box::new(RhaiEvalM))),
         CommandSpec::new("rhairun", "Run Rhai Script", run_rhairun)
             .menu(&["Tools", "Rhai", "Run Script..."])
             .alias(&["rsr"])
@@ -82,6 +83,39 @@ fn rhai_source(s: &mut Session, p: &Value) -> Result<(String, String)> {
     s.check_load(std::path::Path::new(path), "RHAIRUN", Some(("rhairun".into(), json!({ "path": path }))))?;
     let bytes = crate::readfile::read(path).map_err(|e| bad("rhairun", format!("{path}: {e}")))?;
     Ok((path.to_string(), String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+/// Interactive RHAI (the menu, the command line): prompts for one line of Rhai source.
+struct RhaiEvalM;
+
+impl Interactive for RhaiEvalM {
+    fn name(&self) -> &'static str {
+        "RHAI"
+    }
+    fn prompt(&self, _: &Session) -> Prompt {
+        Prompt::new("Enter Rhai code to evaluate", Accept::TEXT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if matches!(i, Input::Cancel | Input::Enter) {
+            return Ok(Step::Cancel);
+        }
+        let Input::Text(t) = i else { return Ok(Step::Continue) };
+        let code = t.trim().to_string();
+        if code.is_empty() {
+            return Ok(Step::Cancel);
+        }
+        match eval_rhai(s, &code, Vec::new()) {
+            Ok(r) => {
+                if let Some(err) = r.get("error").and_then(Value::as_str) {
+                    s.echo(format!("Error: {err}"));
+                } else if let Some(v) = r.get("value").filter(|v| !v.is_null()) {
+                    s.echo(v.to_string());
+                }
+            }
+            Err(e) => s.echo(e.to_string()),
+        }
+        Ok(Step::Done)
+    }
 }
 
 /// Interactive RHAIRUN: prompts for a file name.
