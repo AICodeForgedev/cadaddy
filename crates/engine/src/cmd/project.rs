@@ -43,7 +43,6 @@ pub enum DrawingStatus {
     Archived,
 }
 
-
 /// A single document (drawing) in the project manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,9 +136,7 @@ const MAX_STANDARDS: usize = 10_000;
 
 fn timestamp() -> String {
     // Use web_time for wasm compat.
-    let d = web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let d = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs();
     // Approximate ISO 8601 (good enough for display; no chrono dependency).
     format!("{secs}")
@@ -157,20 +154,16 @@ fn content_hash(data: &[u8]) -> String {
 
 fn read_manifest(dir: &str) -> Result<ProjectManifest> {
     let path = format!("{dir}/project.json");
-    let data = std::fs::read(&path)
-        .map_err(|e| crate::EngineError::Other(format!("cannot read {path}: {e}")))?;
-    let mut m: ProjectManifest = serde_json::from_slice(&data)
-        .map_err(|e| crate::EngineError::Other(format!("invalid project.json: {e}")))?;
+    let data = std::fs::read(&path).map_err(|e| crate::EngineError::Other(format!("cannot read {path}: {e}")))?;
+    let mut m: ProjectManifest = serde_json::from_slice(&data).map_err(|e| crate::EngineError::Other(format!("invalid project.json: {e}")))?;
     m.dir = dir.to_string();
     Ok(m)
 }
 
 fn write_manifest(m: &ProjectManifest) -> Result<()> {
     let path = format!("{}/project.json", m.dir);
-    let json = serde_json::to_vec_pretty(m)
-        .map_err(|e| crate::EngineError::Other(format!("cannot serialize manifest: {e}")))?;
-    std::fs::write(&path, &json)
-        .map_err(|e| crate::EngineError::Other(format!("cannot write {path}: {e}")))?;
+    let json = serde_json::to_vec_pretty(m).map_err(|e| crate::EngineError::Other(format!("cannot serialize manifest: {e}")))?;
+    std::fs::write(&path, &json).map_err(|e| crate::EngineError::Other(format!("cannot write {path}: {e}")))?;
     Ok(())
 }
 
@@ -215,18 +208,12 @@ fn drawing_json(d: &ProjectDrawing) -> Value {
 
 /// Resolve a drawing name (title or relative path) to its index in the manifest.
 fn find_drawing(m: &ProjectManifest, name: &str) -> Option<usize> {
-    m.drawings.iter().position(|d| {
-        d.title.eq_ignore_ascii_case(name) || d.path.eq_ignore_ascii_case(name)
-    })
+    m.drawings.iter().position(|d| d.title.eq_ignore_ascii_case(name) || d.path.eq_ignore_ascii_case(name))
 }
 
 /// Absolute path to a drawing file inside the project.
 fn drawing_abs_path(m: &ProjectManifest, d: &ProjectDrawing) -> String {
-    if d.path.starts_with('/') || d.path.contains(':') {
-        d.path.clone()
-    } else {
-        format!("{}/{}", m.dir, d.path)
-    }
+    if d.path.starts_with('/') || d.path.contains(':') { d.path.clone() } else { format!("{}/{}", m.dir, d.path) }
 }
 
 // ---------------------------------------------------------------------------
@@ -247,10 +234,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {}: close the active project (drawings stay open)")
             .enabled(has_project)
             .noundo(),
-        CommandSpec::new("project.info", "Project Info", run_info)
-            .params("{} → {project}: active project metadata")
-            .enabled(has_project)
-            .noundo(),
+        CommandSpec::new("project.info", "Project Info", run_info).params("{} → {project}: active project metadata").enabled(has_project).noundo(),
         CommandSpec::new("project.list", "Project Drawings", run_list)
             .params("{discipline?, status?, kind?} → {drawings, total}: list drawings in the project")
             .enabled(has_project)
@@ -319,12 +303,9 @@ fn has_project(s: &Session) -> std::result::Result<(), String> {
 fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "project.create";
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
-    let name = str_param(p, "name").unwrap_or_else(|| {
-        path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Project")
-    });
+    let name = str_param(p, "name").unwrap_or_else(|| path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Project"));
 
-    std::fs::create_dir_all(path)
-        .map_err(|e| crate::EngineError::Other(format!("cannot create {path}: {e}")))?;
+    std::fs::create_dir_all(path).map_err(|e| crate::EngineError::Other(format!("cannot create {path}: {e}")))?;
 
     let now = timestamp();
     let m = ProjectManifest {
@@ -339,10 +320,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     write_manifest(&m)?;
 
-    s.project = Some(ProjectState {
-        manifest: m.clone(),
-        active_drawing: None,
-    });
+    s.project = Some(ProjectState { manifest: m.clone(), active_drawing: None });
 
     Ok(json!({ "project": manifest_json(&m) }))
 }
@@ -355,17 +333,12 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
 
     let m = read_manifest(path)?;
     if m.drawings.len() > MAX_DRAWINGS {
-        return Err(crate::EngineError::Other(format!(
-            "manifest has {} drawings (cap is {MAX_DRAWINGS})", m.drawings.len()
-        )));
+        return Err(crate::EngineError::Other(format!("manifest has {} drawings (cap is {MAX_DRAWINGS})", m.drawings.len())));
     }
 
     let drawings: Vec<Value> = m.drawings.iter().map(drawing_json).collect();
 
-    s.project = Some(ProjectState {
-        manifest: m.clone(),
-        active_drawing: None,
-    });
+    s.project = Some(ProjectState { manifest: m.clone(), active_drawing: None });
 
     Ok(json!({
         "project": manifest_json(&m),
@@ -404,12 +377,14 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let status = str_param(p, "status");
     let kind = str_param(p, "kind");
 
-    let filtered: Vec<Value> = ps.manifest.drawings.iter()
+    let filtered: Vec<Value> = ps
+        .manifest
+        .drawings
+        .iter()
         .filter(|d| {
             discipline.is_none_or(|f| d.discipline.eq_ignore_ascii_case(f))
                 && status.is_none_or(|f| {
-                    let ds = serde_json::to_value(&d.status).ok()
-                        .and_then(|v| v.as_str().map(str::to_string));
+                    let ds = serde_json::to_value(&d.status).ok().and_then(|v| v.as_str().map(str::to_string));
                     ds.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(f))
                 })
                 && kind.is_none_or(|f| d.kind.eq_ignore_ascii_case(f))
@@ -430,8 +405,7 @@ fn run_activate(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad(cmd, "`name` is required"))?;
 
     let ps = require_project_mut(s)?;
-    let idx = find_drawing(&ps.manifest, name)
-        .ok_or_else(|| bad(cmd, format!("drawing `{name}` not found in the project")))?;
+    let idx = find_drawing(&ps.manifest, name).ok_or_else(|| bad(cmd, format!("drawing `{name}` not found in the project")))?;
 
     // Mark the currently active drawing as shelved.
     let mut shelved_name = None;
@@ -465,8 +439,7 @@ fn run_activate(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_shelve(s: &mut Session, _p: &Value) -> Result<Value> {
     let cmd = "project.shelve";
     let ps = require_project_mut(s)?;
-    let idx = ps.active_drawing
-        .ok_or_else(|| bad(cmd, "no drawing is active in the project"))?;
+    let idx = ps.active_drawing.ok_or_else(|| bad(cmd, "no drawing is active in the project"))?;
 
     if let Some(d) = ps.manifest.drawings.get_mut(idx) {
         d.status = DrawingStatus::Shelved;
@@ -486,9 +459,7 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
     let discipline = str_param(p, "discipline").unwrap_or("");
     let kind = str_param(p, "kind").unwrap_or("drawing");
-    let title = str_param(p, "title").unwrap_or_else(|| {
-        path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Untitled")
-    });
+    let title = str_param(p, "title").unwrap_or_else(|| path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Untitled"));
 
     let ps = require_project_mut(s)?;
     if ps.manifest.drawings.len() >= MAX_DRAWINGS {
@@ -496,11 +467,7 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Make path relative to project dir if it's inside it.
-    let rel = if path.starts_with(&ps.manifest.dir) {
-        path.strip_prefix(&ps.manifest.dir).unwrap_or(path).trim_start_matches('/')
-    } else {
-        path
-    };
+    let rel = if path.starts_with(&ps.manifest.dir) { path.strip_prefix(&ps.manifest.dir).unwrap_or(path).trim_start_matches('/') } else { path };
 
     // Check for duplicates.
     if ps.manifest.drawings.iter().any(|d| d.path == rel) {
@@ -508,12 +475,22 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Read file size and hash if the file exists.
-    let abs = drawing_abs_path(&ps.manifest, &ProjectDrawing {
-        path: rel.to_string(), title: String::new(), discipline: String::new(),
-        status: DrawingStatus::Shelved, content_hash: String::new(), kind: String::new(),
-        revision: String::new(), date: String::new(), links: BTreeMap::new(),
-        notes: String::new(), file_size: 0,
-    });
+    let abs = drawing_abs_path(
+        &ps.manifest,
+        &ProjectDrawing {
+            path: rel.to_string(),
+            title: String::new(),
+            discipline: String::new(),
+            status: DrawingStatus::Shelved,
+            content_hash: String::new(),
+            kind: String::new(),
+            revision: String::new(),
+            date: String::new(),
+            links: BTreeMap::new(),
+            notes: String::new(),
+            file_size: 0,
+        },
+    );
     let (file_size, hash) = match std::fs::read(&abs) {
         Ok(data) => (data.len() as u64, content_hash(&data)),
         Err(_) => (0, String::new()),
@@ -547,8 +524,7 @@ fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad(cmd, "`name` is required"))?;
 
     let ps = require_project_mut(s)?;
-    let idx = find_drawing(&ps.manifest, name)
-        .ok_or_else(|| bad(cmd, format!("drawing `{name}` not found in the project")))?;
+    let idx = find_drawing(&ps.manifest, name).ok_or_else(|| bad(cmd, format!("drawing `{name}` not found in the project")))?;
 
     let removed = ps.manifest.drawings.remove(idx);
 
@@ -624,10 +600,7 @@ fn run_restore_project(s: &mut Session, p: &Value) -> Result<Value> {
     write_manifest(&m)?;
 
     let info = manifest_json(&m);
-    s.project = Some(ProjectState {
-        manifest: m,
-        active_drawing: None,
-    });
+    s.project = Some(ProjectState { manifest: m, active_drawing: None });
 
     Ok(json!({ "project": info }))
 }
@@ -669,14 +642,19 @@ fn run_standards_list(s: &mut Session, p: &Value) -> Result<Value> {
     let ps = require_project(s)?;
     let domain = str_param(p, "domain");
 
-    let filtered: Vec<Value> = ps.manifest.standards.iter()
+    let filtered: Vec<Value> = ps
+        .manifest
+        .standards
+        .iter()
         .filter(|st| domain.is_none_or(|d| st.domain.eq_ignore_ascii_case(d)))
-        .map(|st| json!({
-            "domain": st.domain,
-            "key": st.key,
-            "value": st.value,
-            "source": st.source,
-        }))
+        .map(|st| {
+            json!({
+                "domain": st.domain,
+                "key": st.key,
+                "value": st.value,
+                "source": st.source,
+            })
+        })
         .collect();
 
     Ok(json!({ "standards": filtered, "total": filtered.len() }))
@@ -697,18 +675,11 @@ fn run_standards_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Upsert.
-    if let Some(st) = ps.manifest.standards.iter_mut().find(|st| {
-        st.domain.eq_ignore_ascii_case(domain) && st.key.eq_ignore_ascii_case(key)
-    }) {
+    if let Some(st) = ps.manifest.standards.iter_mut().find(|st| st.domain.eq_ignore_ascii_case(domain) && st.key.eq_ignore_ascii_case(key)) {
         st.value = value.clone();
         st.source = source.to_string();
     } else {
-        ps.manifest.standards.push(Standard {
-            domain: domain.to_string(),
-            key: key.to_string(),
-            value: value.clone(),
-            source: source.to_string(),
-        });
+        ps.manifest.standards.push(Standard { domain: domain.to_string(), key: key.to_string(), value: value.clone(), source: source.to_string() });
     }
 
     ps.manifest.modified = timestamp();
@@ -726,9 +697,7 @@ fn run_standards_remove(s: &mut Session, p: &Value) -> Result<Value> {
 
     let ps = require_project_mut(s)?;
     let before = ps.manifest.standards.len();
-    ps.manifest.standards.retain(|st| {
-        !(st.domain.eq_ignore_ascii_case(domain) && st.key.eq_ignore_ascii_case(key))
-    });
+    ps.manifest.standards.retain(|st| !(st.domain.eq_ignore_ascii_case(domain) && st.key.eq_ignore_ascii_case(key)));
 
     if ps.manifest.standards.len() == before {
         return Err(bad(cmd, format!("standard `{domain}/{key}` not found")));
@@ -746,9 +715,7 @@ fn run_standards_import(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "project.standards.import";
     let from_path = str_param(p, "from").ok_or_else(|| bad(cmd, "`from` (project path) required"))?;
     let domain_filter = str_param(p, "domain");
-    let keys_filter: Option<Vec<&str>> = p.get("keys")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect());
+    let keys_filter: Option<Vec<&str>> = p.get("keys").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect());
 
     let source = read_manifest(from_path)?;
 
@@ -767,9 +734,9 @@ fn run_standards_import(s: &mut Session, p: &Value) -> Result<Value> {
         }
 
         // Upsert into the target project.
-        if let Some(existing) = ps.manifest.standards.iter_mut().find(|x| {
-            x.domain.eq_ignore_ascii_case(&st.domain) && x.key.eq_ignore_ascii_case(&st.key)
-        }) {
+        if let Some(existing) =
+            ps.manifest.standards.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&st.domain) && x.key.eq_ignore_ascii_case(&st.key))
+        {
             existing.value = st.value.clone();
             existing.source = format!("imported from {}", source.name);
         } else {
@@ -829,8 +796,7 @@ fn validate_manifest_data(data: &[u8]) -> Vec<String> {
             }
             // Validate kind if present.
             if let Some(kind) = f.get("kind").and_then(Value::as_str) {
-                let valid = ["drawing", "sheet", "spec", "submittal", "rfi", "asi",
-                    "addendum", "photo", "markup", "bulletin", "other"];
+                let valid = ["drawing", "sheet", "spec", "submittal", "rfi", "asi", "addendum", "photo", "markup", "bulletin", "other"];
                 if !valid.contains(&kind) {
                     errors.push(format!("files[{i}].kind `{kind}` is not recognized"));
                 }
@@ -846,8 +812,7 @@ fn run_validate_manifest(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
     let _ = s; // keep the signature, don't need session
 
-    let data = std::fs::read(path)
-        .map_err(|e| crate::EngineError::Other(format!("cannot read {path}: {e}")))?;
+    let data = std::fs::read(path).map_err(|e| crate::EngineError::Other(format!("cannot read {path}: {e}")))?;
 
     let errors = validate_manifest_data(&data);
     Ok(json!({
@@ -861,14 +826,9 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
 
     // Read manifest.json from the given path.
-    let manifest_path = if path.ends_with("manifest.json") {
-        path.to_string()
-    } else {
-        format!("{path}/manifest.json")
-    };
+    let manifest_path = if path.ends_with("manifest.json") { path.to_string() } else { format!("{path}/manifest.json") };
 
-    let data = std::fs::read(&manifest_path)
-        .map_err(|e| crate::EngineError::Other(format!("cannot read {manifest_path}: {e}")))?;
+    let data = std::fs::read(&manifest_path).map_err(|e| crate::EngineError::Other(format!("cannot read {manifest_path}: {e}")))?;
 
     let errors = validate_manifest_data(&data);
     if !errors.is_empty() {
@@ -878,21 +838,15 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
         }));
     }
 
-    let v: Value = serde_json::from_slice(&data)
-        .map_err(|e| crate::EngineError::Other(format!("invalid manifest: {e}")))?;
+    let v: Value = serde_json::from_slice(&data).map_err(|e| crate::EngineError::Other(format!("invalid manifest: {e}")))?;
 
-    let source_dir = if path.ends_with("manifest.json") {
-        path.rsplit_once('/').map_or(path, |(d, _)| d).to_string()
-    } else {
-        path.to_string()
-    };
+    let source_dir = if path.ends_with("manifest.json") { path.rsplit_once('/').map_or(path, |(d, _)| d).to_string() } else { path.to_string() };
 
     let files = v.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
 
     // If no project is open, create one from the manifest.
     if s.project.is_none() {
-        let name = v.get("name").and_then(Value::as_str)
-            .unwrap_or_else(|| source_dir.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Imported"));
+        let name = v.get("name").and_then(Value::as_str).unwrap_or_else(|| source_dir.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Imported"));
         let now = timestamp();
         let m = ProjectManifest {
             name: name.to_string(),
@@ -904,10 +858,7 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
             shelved: false,
             disk_bytes: 0,
         };
-        s.project = Some(ProjectState {
-            manifest: m,
-            active_drawing: None,
-        });
+        s.project = Some(ProjectState { manifest: m, active_drawing: None });
     }
 
     let ps = require_project_mut(s)?;
@@ -922,11 +873,7 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
         };
 
         // Check the file exists.
-        let abs = if file_path.starts_with('/') || file_path.contains(':') {
-            file_path.to_string()
-        } else {
-            format!("{source_dir}/{file_path}")
-        };
+        let abs = if file_path.starts_with('/') || file_path.contains(':') { file_path.to_string() } else { format!("{source_dir}/{file_path}") };
 
         if std::fs::metadata(&abs).is_err() {
             import_errors.push(format!("missing file: `{file_path}`"));
@@ -938,8 +885,7 @@ fn run_import_manifest(s: &mut Session, p: &Value) -> Result<Value> {
         let revision = f.get("revision").and_then(Value::as_str).unwrap_or("");
         let date = f.get("date").and_then(Value::as_str).unwrap_or("");
         let status_str = f.get("status").and_then(Value::as_str).unwrap_or("");
-        let title = f.get("title").and_then(Value::as_str)
-            .unwrap_or_else(|| file_path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Untitled"));
+        let title = f.get("title").and_then(Value::as_str).unwrap_or_else(|| file_path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Untitled"));
 
         // Parse links.
         let mut links = BTreeMap::new();
@@ -1237,23 +1183,35 @@ mod tests {
         s.execute("project.create", &json!({"path": &dir})).ok();
 
         // Set standards.
-        s.execute("project.standards.set", &json!({
-            "domain": "electrical",
-            "key": "mounting_height_switch",
-            "value": 48
-        })).ok();
+        s.execute(
+            "project.standards.set",
+            &json!({
+                "domain": "electrical",
+                "key": "mounting_height_switch",
+                "value": 48
+            }),
+        )
+        .ok();
 
-        s.execute("project.standards.set", &json!({
-            "domain": "electrical",
-            "key": "mounting_height_outlet",
-            "value": 18
-        })).ok();
+        s.execute(
+            "project.standards.set",
+            &json!({
+                "domain": "electrical",
+                "key": "mounting_height_outlet",
+                "value": 18
+            }),
+        )
+        .ok();
 
-        s.execute("project.standards.set", &json!({
-            "domain": "mechanical",
-            "key": "duct_insulation",
-            "value": "R-8"
-        })).ok();
+        s.execute(
+            "project.standards.set",
+            &json!({
+                "domain": "mechanical",
+                "key": "duct_insulation",
+                "value": "R-8"
+            }),
+        )
+        .ok();
 
         // List all.
         let r = s.execute("project.standards.list", &json!({}));
@@ -1266,21 +1224,29 @@ mod tests {
         assert_eq!(v["total"], 2);
 
         // Update existing.
-        s.execute("project.standards.set", &json!({
-            "domain": "electrical",
-            "key": "mounting_height_switch",
-            "value": 44
-        })).ok();
+        s.execute(
+            "project.standards.set",
+            &json!({
+                "domain": "electrical",
+                "key": "mounting_height_switch",
+                "value": 44
+            }),
+        )
+        .ok();
 
         let r = s.execute("project.standards.list", &json!({"domain": "electrical"}));
         let v = r.unwrap_or(Value::Null);
         assert_eq!(v["total"], 2); // Still 2, not 3.
 
         // Remove.
-        s.execute("project.standards.remove", &json!({
-            "domain": "electrical",
-            "key": "mounting_height_switch"
-        })).ok();
+        s.execute(
+            "project.standards.remove",
+            &json!({
+                "domain": "electrical",
+                "key": "mounting_height_switch"
+            }),
+        )
+        .ok();
 
         let r = s.execute("project.standards.list", &json!({}));
         let v = r.unwrap_or(Value::Null);
@@ -1407,12 +1373,9 @@ mod tests {
         s.execute("project.standards.set", &json!({"domain": "elec", "key": "voltage", "value": 120})).ok();
 
         // Snapshot the state.
-        let before_drawings: Vec<String> = s.project.as_ref()
-            .map(|p| p.manifest.drawings.iter().map(|d| d.title.clone()).collect())
-            .unwrap_or_default();
-        let before_standards = s.project.as_ref()
-            .map(|p| p.manifest.standards.len())
-            .unwrap_or(0);
+        let before_drawings: Vec<String> =
+            s.project.as_ref().map(|p| p.manifest.drawings.iter().map(|d| d.title.clone()).collect()).unwrap_or_default();
+        let before_standards = s.project.as_ref().map(|p| p.manifest.standards.len()).unwrap_or(0);
 
         // Shelve and restore.
         s.execute("project.shelve_project", &json!({})).ok();
@@ -1420,12 +1383,9 @@ mod tests {
         s.execute("project.restore_project", &json!({"path": &dir})).ok();
 
         // Compare.
-        let after_drawings: Vec<String> = s.project.as_ref()
-            .map(|p| p.manifest.drawings.iter().map(|d| d.title.clone()).collect())
-            .unwrap_or_default();
-        let after_standards = s.project.as_ref()
-            .map(|p| p.manifest.standards.len())
-            .unwrap_or(0);
+        let after_drawings: Vec<String> =
+            s.project.as_ref().map(|p| p.manifest.drawings.iter().map(|d| d.title.clone()).collect()).unwrap_or_default();
+        let after_standards = s.project.as_ref().map(|p| p.manifest.standards.len()).unwrap_or(0);
 
         assert_eq!(before_drawings, after_drawings, "drawings differ after shelve→restore");
         assert_eq!(before_standards, after_standards, "standards differ after shelve→restore");

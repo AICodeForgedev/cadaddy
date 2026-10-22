@@ -738,13 +738,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
         p.rect_filled(proj_rect, 4.0, t.chrome.gamma_multiply(0.8));
         p.rect_stroke(proj_rect, 4.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
         let clip = p.with_clip_rect(proj_rect.shrink(4.0));
-        clip.text(
-            pos2(proj_rect.left() + 8.0, proj_rect.top() + 16.0),
-            egui::Align2::LEFT_CENTER,
-            &proj.manifest.name,
-            crate::theme::body(),
-            t.text,
-        );
+        clip.text(pos2(proj_rect.left() + 8.0, proj_rect.top() + 16.0), egui::Align2::LEFT_CENTER, &proj.manifest.name, crate::theme::body(), t.text);
         clip.text(
             pos2(proj_rect.left() + 8.0, proj_rect.top() + 34.0),
             egui::Align2::LEFT_CENTER,
