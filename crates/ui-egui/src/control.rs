@@ -373,6 +373,12 @@ pub fn all_commands(app: &CadApp) -> Value {
     for (id, label, menu, sc) in crate::menus::UI_COMMANDS {
         v.push(json!({"id": id, "label": label, "menu": menu, "shortcut": sc, "enabled": true, "ui": true}));
     }
+    // Plug-in commands (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    for cmd in app.session.plugins.all_commands() {
+        let plugin_name = app.session.plugins.plugins.get(cmd.plugin_idx).map(|p| p.name.as_str()).unwrap_or("?");
+        v.push(json!({"id": cmd.id, "label": cmd.label, "params": cmd.params_doc, "enabled": true, "plugin": plugin_name}));
+    }
     Value::Array(v)
 }
 

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["examples/plugins/hello-plugin"]
 # default-members
 
 [workspace.package]
