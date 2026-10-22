@@ -42,6 +42,9 @@ pub struct BuildingSpec {
     pub units_per_foot: f64,
     #[serde(default)]
     pub levels: Vec<Level>,
+    /// What each element is from the documents, with sources and open issues (`tags.list`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<crate::tags::ElementTag>,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -1450,6 +1453,7 @@ impl BuildingSpec {
             version: SPEC_VERSION,
             units_per_foot: r.units_per_foot,
             levels: r.levels.clone(),
+            tags: Vec::new(),
             layers,
             wall_types,
             rooms: Vec::new(),

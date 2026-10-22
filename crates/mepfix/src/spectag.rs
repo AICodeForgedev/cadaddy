@@ -20,44 +20,16 @@
 //! Every field records its source: `plan`, `schedule`, `note`, `rule`, `default`. The result
 //! goes into the building spec ([`spec_patch`]) for review (`tags.list`, `tags.set`).
 
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::arch_reader::ReadTable;
 use crate::conduit_reader::ConduitResult;
 use crate::elec_reader::FoundDevice;
 use crate::elecspec;
-use crate::arch_reader::ReadTable;
 use crate::truth::Truth;
 use cadaddy_doc::projrules::{ProjectRules, RuleDomain, builtin_wiring_method};
 
-/// A field's value and where it came from.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Field {
-    pub value: String,
-    /// `plan`, `schedule`, `note`, `rule`, `default`, `user`.
-    pub source: String,
-}
-
-/// One element and what the documents say it is.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ElementTag {
-    /// `device:<level>:<x>,<y>`, `homerun:<label>`, `conduit:<level>:<n>`.
-    pub id: String,
-    /// `luminaire`, `receptacle`, `switch`, `data_outlet`…, `homerun`, `conduit`.
-    pub kind: String,
-    pub level: String,
-    pub at_ft: [f64; 2],
-    pub fields: BTreeMap<String, Field>,
-    /// What's unresolved: `untagged`, `tag_not_in_schedule`, `missing_protection`,
-    /// `double_protection`, `no_conductor_note`, `two_rules_apply`.
-    pub issues: Vec<String>,
-}
-
-impl ElementTag {
-    fn set(&mut self, name: &str, value: impl Into<String>, source: &str) {
-        self.fields.insert(name.to_string(), Field { value: value.into(), source: source.into() });
-    }
-}
+pub use cadaddy_walk3d::tags::{ElementTag, Field};
 
 /// What the schedules say: luminaire types (tag → description) and breaker types by panel
 /// tag and circuit.
@@ -161,7 +133,7 @@ pub fn parse_conductors(note: &str) -> Option<String> {
         return None;
     }
     Some(match raceway {
-        Some(r) => format!("{} in {}", parts.join(" + "), r.replace("\"", "\"")),
+        Some(r) => format!("{} in {r}", parts.join(" + ")),
         None => parts.join(" + "),
     })
 }
@@ -206,7 +178,13 @@ fn split_ref(r: &str) -> Option<(String, String)> {
 
 /// Tag what the readers found. `locations(level, at)` says where a point is
 /// (`concealed`/`exposed`), from the ceilings.
-pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules, rules: &ProjectRules, locations: &dyn Fn(&str, [f64; 2]) -> &'static str) -> Vec<ElementTag> {
+pub fn tag(
+    devices: &[FoundDevice],
+    runs: &ConduitResult,
+    schedules: &Schedules,
+    rules: &ProjectRules,
+    locations: &dyn Fn(&str, [f64; 2]) -> &'static str,
+) -> Vec<ElementTag> {
     let mut out = Vec::new();
     for d in devices {
         let mut e = ElementTag {
@@ -216,7 +194,12 @@ pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules,
             at_ft: d.drawn_ft,
             ..ElementTag::default()
         };
-        let subs: Vec<String> = d.notes.iter().filter(|n| crate::elec_reader::is_subscript_or_circuit(n) && !n.contains('-')).flat_map(|n| n.split_whitespace().map(str::to_string).collect::<Vec<_>>()).collect();
+        let subs: Vec<String> = d
+            .notes
+            .iter()
+            .filter(|n| crate::elec_reader::is_subscript_or_circuit(n) && !n.contains('-'))
+            .flat_map(|n| n.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .collect();
         let circuit = d.notes.iter().find(|n| n.contains('-') && crate::elec_reader::is_subscript_or_circuit(n)).cloned();
         if d.kind == "light_fixture" {
             if d.type_tag.is_empty() {
@@ -243,7 +226,17 @@ pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules,
                 (false, true) => "GFCI device",
                 (false, false) => "none",
             };
-            e.set("protection", protection, if breaker.is_some() { "schedule" } else if device_gfci { "plan" } else { "default" });
+            e.set(
+                "protection",
+                protection,
+                if breaker.is_some() {
+                    "schedule"
+                } else if device_gfci {
+                    "plan"
+                } else {
+                    "default"
+                },
+            );
             if breaker_gf && device_gfci {
                 e.issues.push("double_protection".into());
             }
@@ -256,7 +249,13 @@ pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules,
         out.push(e);
     }
     for h in &runs.homeruns {
-        let mut e = ElementTag { id: format!("homerun:{}:{}", h.level, h.label), kind: "homerun".into(), level: h.level.clone(), at_ft: h.origin_ft, ..ElementTag::default() };
+        let mut e = ElementTag {
+            id: format!("homerun:{}:{}", h.level, h.label),
+            kind: "homerun".into(),
+            level: h.level.clone(),
+            at_ft: h.origin_ft,
+            ..ElementTag::default()
+        };
         e.set("circuit", h.label.clone(), "plan");
         match h.note.as_deref().and_then(parse_conductors) {
             Some(c) => e.set("conductors", c, "note"),
@@ -269,7 +268,13 @@ pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules,
     }
     for (i, c) in runs.conduits.iter().enumerate() {
         let mid = [(c.from_ft[0] + c.to_ft[0]) / 2.0, (c.from_ft[1] + c.to_ft[1]) / 2.0];
-        let mut e = ElementTag { id: format!("conduit:{}:{i}", c.level), kind: "conduit".into(), level: c.level.clone(), at_ft: mid, ..ElementTag::default() };
+        let mut e = ElementTag {
+            id: format!("conduit:{}:{i}", c.level),
+            kind: "conduit".into(),
+            level: c.level.clone(),
+            at_ft: mid,
+            ..ElementTag::default()
+        };
         let loc = locations(&c.level, mid);
         e.set("location", loc, "rule");
         if let Some((m, src)) = wiring_method(rules, loc) {
@@ -289,7 +294,8 @@ pub fn tag(devices: &[FoundDevice], runs: &ConduitResult, schedules: &Schedules,
 pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
     let spec = &t.elec_spec;
     let panel_tag = |id: &str| t.elec_panels.iter().find(|p| p.id == id).map_or_else(|| id.to_string(), |p| p.tag.clone());
-    let scheduled: Vec<String> = t.elec_devices.iter().filter(|d| d.kind == "light_fixture" && !spec.unscheduled.contains(&d.type_tag)).map(|d| d.type_tag.clone()).collect();
+    let scheduled: Vec<String> =
+        t.elec_devices.iter().filter(|d| d.kind == "light_fixture" && !spec.unscheduled.contains(&d.type_tag)).map(|d| d.type_tag.clone()).collect();
     let mut out = Vec::new();
     for d in t.elec_devices.iter().filter(|d| !d.sheet.is_empty()) {
         let mut e = ElementTag {
@@ -336,7 +342,13 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
         out.push(e);
     }
     for c in t.elec_circuits.iter().filter(|c| !c.sheet.is_empty()) {
-        let mut e = ElementTag { id: format!("homerun:{}:{}", c.level, c.label), kind: "homerun".into(), level: c.level.clone(), at_ft: c.homerun_ft, ..ElementTag::default() };
+        let mut e = ElementTag {
+            id: format!("homerun:{}:{}", c.level, c.label),
+            kind: "homerun".into(),
+            level: c.level.clone(),
+            at_ft: c.homerun_ft,
+            ..ElementTag::default()
+        };
         if let Some(note) = spec.conductors.iter().find(|(id, _)| *id == c.id).and_then(|(_, n)| parse_conductors(n)) {
             e.set("conductors", note, "note");
         }
@@ -344,7 +356,8 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
     }
     for c in t.elec_conduits.iter().filter(|c| !c.sheet.is_empty()) {
         let mid = [(c.from_ft[0] + c.to_ft[0]) / 2.0, (c.from_ft[1] + c.to_ft[1]) / 2.0];
-        let mut e = ElementTag { id: format!("conduit:{}", c.id), kind: "conduit".into(), level: c.level.clone(), at_ft: mid, ..ElementTag::default() };
+        let mut e =
+            ElementTag { id: format!("conduit:{}", c.id), kind: "conduit".into(), level: c.level.clone(), at_ft: mid, ..ElementTag::default() };
         let level_rooms: Vec<&crate::truth::Room> = t.building.rooms.iter().filter(|r| r.level == c.level).collect();
         let room = room_at(&level_rooms, mid, &|r| (r.min_ft, r.max_ft)).copied();
         let loc = if room.is_some_and(|r| r.ceiling.is_none()) { "exposed" } else { "concealed" };
@@ -457,7 +470,8 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
         let room = room_at(&level_rooms, p, &|r| (r.min_ft, r.max_ft)).copied();
         // Open only when every ceiling read for the room says so.
         let open = room.is_some_and(|r| {
-            let cs: Vec<&crate::ceiling_reader::FoundCeiling> = ceil.ceilings.iter().filter(|c| c.level == level && c.room_number == r.number).collect();
+            let cs: Vec<&crate::ceiling_reader::FoundCeiling> =
+                ceil.ceilings.iter().filter(|c| c.level == level && c.room_number == r.number).collect();
             !cs.is_empty() && cs.iter().all(|c| c.open_to_structure)
         });
         if open { "exposed" } else { "concealed" }

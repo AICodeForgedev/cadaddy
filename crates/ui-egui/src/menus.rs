@@ -98,6 +98,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.diag", "Report a Problem...", &["Help", "Report a Problem..."], None),
     ("ui.dialog.markups", "Markups", &["Window", "Markups"], None),
     ("rfilist", "RFI List", &["Window", "RFI List"], None),
+    ("elementtags", "Element Tags", &["Window", "Element Tags"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -725,6 +726,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "rfilist" => {
             app.ui.dialog = Some(crate::rfipalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "elementtags" => {
+            app.ui.dialog = Some(crate::tagspalette::DIALOG.into());
             Ok(Value::Null)
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
