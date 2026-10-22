@@ -2198,7 +2198,7 @@ fn transform_text(t: &mut Text, m: &Mat3, s: f64, rot: f64, mirror: bool) {
 #[cfg(test)]
 mod grip_tests {
     use super::*;
-    use cadcraft_geom::PolyVertex;
+    use cadaddy_geom::PolyVertex;
 
     #[test]
     fn polyline_grips_are_vertices_and_midpoints() {
