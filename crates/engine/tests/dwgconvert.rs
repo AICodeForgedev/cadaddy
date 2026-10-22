@@ -33,7 +33,7 @@ fn folder(tag: &str) -> PathBuf {
 /// A made-up drawing with the objects the round-trip tests know, saved at `path`.
 fn drawing(path: &Path, n: usize) {
     let mut s = Session::new();
-    s.execute("layer", &json!({ "option": "new", "name": "WALLS", "color": 3 })).unwrap();
+    s.execute("layer.new", &json!({ "name": "WALLS", "color": 3 })).unwrap();
     s.execute("line", &json!({ "points": [[0, 0], [100, 0], [100, 50]] })).unwrap();
     s.execute("circle", &json!({ "center": [20, 20], "radius": 5 + n })).unwrap();
     s.execute("arc", &json!({ "center": [50, 20], "radius": 8, "start": 0, "end": 90 })).unwrap();

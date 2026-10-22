@@ -862,8 +862,10 @@ pub struct Running {
 }
 
 /// The names a command's parameter documentation mentions (`{center, radius?: …}`): every word
-/// followed by `:`, `?` or a closing `,` `}` — nested ones too, so it errs towards fewer warnings.
-fn documented_params(doc: &str) -> Vec<&str> {
+/// after `{` `,` `|` `(` `:` `;` `/` or `+` and followed by `:` `?` `,` `}` `)` `|` `+` `/` `→` or a
+/// note in brackets (`base | baseHandle+index`, `first?/second?`, `path arrays: method?`) — nested
+/// ones too, so it errs towards accepting.
+pub fn documented_params(doc: &str) -> Vec<&str> {
     let b = doc.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -877,7 +879,9 @@ fn documented_params(doc: &str) -> Vec<&str> {
             let next = doc[i..].trim_start().chars().next();
             // `{name (e.g. …), at: …}`: a name with a note in brackets counts too (models3d.place
             // warned that its own `name` was ignored; tester 0.7.7f).
-            if matches!(prev, Some('{' | ',' | '|')) && matches!(next, Some(':' | '?' | ',' | '}' | '(')) {
+            if matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
+                && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
+            {
                 out.push(&doc[start..i]);
             }
         } else {
@@ -887,15 +891,63 @@ fn documented_params(doc: &str) -> Vec<&str> {
     out
 }
 
-/// A command's JSON result with `warnings` naming parameters it doesn't take (a misspelt
-/// `raduis` was silently ignored; tester 0.7.7e). It still ran: they only warn.
-fn with_unknown_param_warnings(mut v: Value, spec: &CommandSpec, params: &Value) -> Value {
-    let Some(given) = params.as_object() else { return v };
-    let known = documented_params(spec.params);
-    if known.is_empty() {
-        return v;
+/// Parameters every command takes: the objects it works on, and the agent rails' own.
+const ALWAYS_PARAMS: [&str; 2] = ["handle", "handles"];
+
+/// Whether a command's documentation leaves its parameters open: `<style fields or DIM*
+/// variables…>`, `…: any profile variable` or `...the parameters of arrayrect` stand for more
+/// names than it lists.
+fn open_params(doc: &str) -> bool {
+    let Some((_, inner)) = doc.split_once('{') else { return false };
+    let inner = inner.split('→').next().unwrap_or(inner);
+    (inner.contains('<') && inner.contains('>')) || inner.contains('…') || inner.contains("...")
+}
+
+/// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
+fn params_doc(spec: &CommandSpec) -> &'static str {
+    let doc = spec.params;
+    let same = doc.trim().strip_prefix("same as `").or_else(|| doc.trim().strip_prefix("as ")).and_then(|r| r.split(['`', ' ']).next());
+    match same.filter(|id| !id.is_empty()).and_then(find_command) {
+        Some(other) if other.id != spec.id => other.params,
+        _ => doc,
     }
-    let unknown: Vec<&String> = given.keys().filter(|k| !known.contains(&k.as_str()) && !matches!(k.as_str(), "handle" | "handles")).collect();
+}
+
+/// The parameters given that `spec` doesn't take (none when its documentation lists none, or
+/// leaves them open).
+pub fn unknown_params(spec: &CommandSpec, params: &Value) -> Vec<String> {
+    let Some(given) = params.as_object() else { return Vec::new() };
+    let doc = params_doc(spec);
+    let known = documented_params(doc);
+    if known.is_empty() || open_params(doc) {
+        return Vec::new();
+    }
+    given.keys().filter(|k| !known.contains(&k.as_str()) && !ALWAYS_PARAMS.contains(&k.as_str())).cloned().collect()
+}
+
+/// An agent's call with parameters the command doesn't take is refused before it runs (battle
+/// test 0.7.8 #9: `layout.rename {name, to}` ran without its `from` and renamed the current
+/// layout). The error names them and the ones it takes.
+fn refuse_unknown_params(spec: &CommandSpec, params: &Value) -> Result<()> {
+    let unknown = unknown_params(spec, params);
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let mut known: Vec<&str> = documented_params(params_doc(spec));
+    known.dedup();
+    let list = |v: &[&str]| v.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ");
+    let names: Vec<&str> = unknown.iter().map(String::as_str).collect();
+    Err(EngineError::BadParams {
+        cmd: spec.id.into(),
+        msg: format!("{} {} not a parameter of {}; it takes {}", list(&names), if names.len() == 1 { "is" } else { "are" }, spec.id, list(&known)),
+    })
+}
+
+/// A command's JSON result with `warnings` naming parameters it doesn't take (a misspelt
+/// `raduis` was silently ignored; tester 0.7.7e). It still ran: they only warn (the app's own
+/// calls; an agent's are refused, [`refuse_unknown_params`]).
+fn with_unknown_param_warnings(mut v: Value, spec: &CommandSpec, params: &Value) -> Value {
+    let unknown = unknown_params(spec, params);
     if unknown.is_empty() {
         return v;
     }
@@ -1445,7 +1497,14 @@ impl Session {
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         self.poll_background();
-        // An agent's outermost call: a dry run or a confirmation first ([`agent`]).
+        // An agent's outermost call: parameters the command doesn't take are refused (before a
+        // dry run too), then a dry run or a confirmation ([`agent`]).
+        if self.journal.is_outer()
+            && self.agent.from_agent
+            && let Some(spec) = find_command(&cmd::resolve_alias(id))
+        {
+            refuse_unknown_params(spec, params)?;
+        }
         if self.journal.is_outer()
             && let Some(r) = self.guard_call(id, params)
         {

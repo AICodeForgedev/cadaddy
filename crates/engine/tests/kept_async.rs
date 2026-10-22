@@ -127,7 +127,7 @@ fn a_finished_check_reports_on_the_next_command() {
     let mut t = drawing(5_000);
     t.background_checks = true;
     save(&mut t, &dir.join("Closed.dwg"));
-    t.execute("close", &json!({ "save": false })).ok();
+    t.execute("close", &json!({})).ok();
     std::thread::sleep(Duration::from_millis(50));
     t.poll_background();
     let _ = std::fs::remove_dir_all(&dir);

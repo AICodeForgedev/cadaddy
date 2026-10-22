@@ -87,7 +87,7 @@ fn close_during_autosave_write_does_not_lose_the_file() {
     a.perform(jobs);
 
     // Close the drawing while the write is in progress (or just finished).
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
     assert!(s.docs.is_empty(), "drawing is closed");
 
     // The autosaver must not delete the file yet if the write is still running.
@@ -125,7 +125,7 @@ fn rapid_close_during_autosave_never_panics() {
         let jobs = a.plan(&s, (i * 100 + 60) as f64, 1, &dir.to_string_lossy());
         a.perform(jobs);
         // Close immediately: the write is barely started or not yet.
-        s.execute("close", &json!({"save": false})).ok();
+        s.execute("close", &json!({})).ok();
         // Reap what finished and plan deletions.
         a.reap();
         let jobs = a.plan(&s, (i * 100 + 61) as f64, 1, &dir.to_string_lossy());
@@ -197,7 +197,7 @@ fn save_now_then_close_does_not_deadlock_or_lose_data() {
     assert_eq!(n, 1, "one drawing should be written");
 
     // Close immediately.
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
 
     // The write must finish without hanging.
     wait_idle(&mut a, Duration::from_secs(30));
@@ -241,7 +241,7 @@ fn close_during_kept_check_does_not_crash() {
     assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started");
 
     // Close before the check finishes.
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
     assert!(s.docs.is_empty());
 
     // Polling must not crash even after the drawing is gone.
@@ -283,7 +283,7 @@ fn kept_result_does_not_leak_to_another_drawing() {
 
     // Close drawing 1.
     s.execute("document.switch", &json!({ "index": 0 })).unwrap();
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
 
     // Poll: the result must not appear on drawing 2.
     for _ in 0..100 {
@@ -331,7 +331,7 @@ fn autosave_tracks_multiple_drawings_independently() {
 
     // Close the middle drawing.
     s.execute("document.switch", &json!({ "index": 1 })).unwrap();
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
     assert_eq!(s.docs.len(), 2);
 
     a.reap();
@@ -371,7 +371,7 @@ fn hammer_autosave_close_cycle() {
         if i % 3 != 0 {
             std::thread::sleep(Duration::from_millis(2));
         }
-        s.execute("close", &json!({"save": false})).ok();
+        s.execute("close", &json!({})).ok();
         a.reap();
         let jobs = a.plan(&s, t + 1.0, 1, &dir.to_string_lossy());
         a.perform(jobs);
@@ -475,7 +475,7 @@ fn autosave_does_not_confuse_closed_and_reopened_drawings() {
     a.perform(jobs);
 
     // Close the drawing.
-    s.execute("close", &json!({"save": false})).ok();
+    s.execute("close", &json!({})).ok();
 
     // Open a new drawing (gets a new uid).
     s.new_drawing(false);

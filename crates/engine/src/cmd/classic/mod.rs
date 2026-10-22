@@ -88,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Named UCS..."])
             .alias(&["uc", "dducs"])
             .params(
-                "{option?: list (default) | restore | delete | rename, name? (restore, delete: names \"a,b*\"; rename: the old name), \
+                "{option?: list (default) | restore | delete | rename, name? | names? (restore, delete: names \"a,b*\"; rename: the old name), \
                  newName? (rename)} → {current, ucs: [{name, origin, angle}]}",
             )
             .interactive(|_| Ok(Box::new(UcsmanM::default()))),

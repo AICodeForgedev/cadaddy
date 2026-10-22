@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("find", "Find...", super::find::run)
             .menu(&["Edit", "Find..."])
             .params(
-                "{find, replace?, mode?: plain|wildcard|regex (replace may use $0–$9), matchCase?: bool, wholeWord?: bool, \
+                "{find, replace?, mode?: plain|wildcard|regex (replace may use $0–$9), wildcards?: bool (mode wildcard), matchCase?: bool, wholeWord?: bool, \
                  in?: drawing (default: model space and every layout) | space | selection, \
                  include?: [text, attributes, dimensions, tables, mleaders, hyperlinks, names] (default all but names), \
                  handles?: [h] (replace only in these), names?: [layer or block name] (rename only these), select?: bool (default true: the hits in this space selected)} \

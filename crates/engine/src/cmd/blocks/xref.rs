@@ -26,7 +26,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("xattach", "DWG Reference...", run_xattach)
             .menu(&["Insert", "DWG Reference..."])
             .alias(&["xa"])
-            .params("{path: DWG/DXF file (saved as given; a relative path is relative to this drawing's folder), name? (default: the file name), overlay?: bool, at?: [x,y] (default 0,0), scale?: number | [x, y], rotation? (degrees)} → {name, handle, file}")
+            .params("{path: DWG/DXF file (saved as given; a relative path is relative to this drawing's folder), name? (default: the file name), overlay?: bool, type?: attach|overlay (as overlay), at?: [x,y] (default 0,0), scale?: number | [x, y], rotation? (degrees)} → {name, handle, file}")
             .interactive(|_| Ok(Box::new(XrefM::new("XATTACH", XStage::File { overlay: false })))),
         CommandSpec::new("xref", "Reference Manager", run_xref)
             .menu(&["Window", "Reference Manager"])

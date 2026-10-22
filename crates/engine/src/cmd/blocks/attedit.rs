@@ -19,7 +19,7 @@ pub(super) fn attedit_spec() -> CommandSpec {
     CommandSpec::new("attedit", "Single...", run)
         .menu(&["Modify", "Object", "Attribute", "Single..."])
         .alias(&["ate", "eattedit"])
-        .params("{handle, values: {TAG: value} (tags in any case)} → {changed, unknownTags?}")
+        .params("{handle, values: {TAG: value} (tags in any case) | block?, tag?, value? (filters: which attributes)} → {changed, unknownTags?}")
         .interactive(|_| Ok(Box::new(AtteditM::default())))
 }
 

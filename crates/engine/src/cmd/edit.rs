@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pasteclip", "Paste", run_paste)
             .menu(&["Edit", "Paste"])
             .key("Cmd+V")
-            .params("{at?: [x,y]} (where the base point lands; default: the original coordinates)")
+            .params("{at?: [x,y] (where the base point lands; default: the original coordinates), width?: number (text pasted as MTEXT)}")
             .enabled(clipboard::has_paste)
             .interactive(|_| Ok(Box::new(PasteM { mode: PasteMode::Clip }))),
         CommandSpec::new("pastespec", "Paste Special", run_pastespec)

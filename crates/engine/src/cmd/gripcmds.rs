@@ -12,7 +12,7 @@ use crate::{EngineError, Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("grip.move", "Grip Stretch", run_grip_move).params(
-            "{handle?, handles?, index, to} (stretch the grip) | {handles?, index, baseHandle?, to, mode: \"move\", copy?} (move about the grip)",
+            "{handle?, handles?, index, to} (stretch the grip) | {handles?, index, baseHandle?, base?, to, mode: \"move\", copy?} (move about the grip, or about `base`)",
         ),
         CommandSpec::new("grip.stretch", "Grip Stretch", run_grip_stretch).params(
             "{handle?, handles?, index, to} | {grips: [[handle, index], ...] (several hot grips), delta | to (+ base?), handles?, copy?}",

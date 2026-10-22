@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
         CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
-            .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?} (typed: AutoCAD's property prompts)")
+            .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, ...properties.set fields} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
         CommandSpec::new("change", "Change", run_set)
             .alias(&["-ch"])

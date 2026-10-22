@@ -64,7 +64,7 @@ fn the_session_saved_as_a_script_replays_to_the_same_drawing() {
     s.start("circle").unwrap();
     s.input(Input::Point(Vec2::new(3.5, 4.25))).unwrap();
     s.input(Input::Text("2".into())).unwrap();
-    s.execute("layer", &json!({ "action": "new", "name": "NOTES" })).ok();
+    s.execute("layer.new", &json!({ "name": "NOTES" })).ok();
     s.execute("text", &json!({ "at": [0, -5], "height": 1, "text": "Hello world" })).unwrap();
     s.start("line").unwrap();
     s.input(Input::Point(Vec2::new(100.0, 100.0))).unwrap();

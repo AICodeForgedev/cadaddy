@@ -142,7 +142,7 @@ fn the_style_holds_the_leader_type_and_block_content() {
 #[test]
 fn per_object_overrides() {
     let mut s = Session::new();
-    s.execute("linetype", &json!({ "option": "load", "name": "DASHED" })).ok();
+    s.execute("linetype", &json!({ "load": "DASHED" })).ok();
     let h = hd(&s
         .execute("mleader", &json!({ "points": [[0, 0], [5, 5]], "text": "A", "leaderColor": "1", "arrow": "_DOT", "textFrame": true }))
         .unwrap());

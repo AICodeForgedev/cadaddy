@@ -20,8 +20,7 @@ fn install_io() {
 /// A 20' × 10' room of 6" walls (inches) on A-WALL.
 fn room() -> Session {
     let mut s = Session::new();
-    s.execute("layer.set", &json!({"name": "A-WALL", "current": true})).ok();
-    s.execute("layer", &json!({"name": "A-WALL", "make": true})).ok();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).ok();
     for (a, b) in [((0, 0), (240, 120)), ((6, 6), (234, 114))] {
         s.execute("rectang", &json!({"p1": [a.0, a.1], "p2": [b.0, b.1]})).unwrap();
     }

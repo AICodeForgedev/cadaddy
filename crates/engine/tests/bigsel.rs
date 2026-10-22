@@ -28,7 +28,7 @@ fn all(s: &Session) -> Vec<String> {
 /// locked layer and an annotative text with two scales.
 fn mixed(n: u64) -> Session {
     let mut s = Session::new();
-    s.execute("layer", &json!({"name": "LOCKED", "make": true})).ok();
+    s.execute("layer.new", &json!({"name": "LOCKED", "current": true})).ok();
     for i in 0..n {
         let x = (i % 60) as f64 * 4.0;
         let y = (i / 60) as f64 * 4.0;
@@ -45,7 +45,7 @@ fn mixed(n: u64) -> Session {
     // Some on a locked layer (they stay put), and an annotative text with two scales.
     let hs: Vec<String> = all(&s).into_iter().take(40).collect();
     s.execute("properties.set", &json!({"handles": hs, "layer": "LOCKED"})).unwrap();
-    s.execute("layer", &json!({"name": "LOCKED", "lock": true})).ok();
+    s.execute("layer.set", &json!({"name": "LOCKED", "locked": true})).ok();
     let t = s.execute("text", &json!({"at": [500, 500], "text": "ANNO", "height": 0.5})).unwrap()["handle"].as_str().unwrap().to_string();
     s.execute("properties.set", &json!({"handles": [t], "annotative": true})).ok();
     s

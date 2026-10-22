@@ -42,7 +42,7 @@ fn drawn() -> Session {
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [10, 5]]})).unwrap();
     s.execute("circle", &json!({"center": [3, 3], "radius": 1.25})).unwrap();
-    s.execute("layer", &json!({"name": "Walls", "color": 3})).unwrap();
+    s.execute("layer.new", &json!({"name": "Walls", "color": 3})).unwrap();
     s
 }
 

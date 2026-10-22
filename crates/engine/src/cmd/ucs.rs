@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(
                 "{option: world|origin|z|3point|object|view|previous|set|save|restore|delete|list, origin?: [x,y] (origin, 3point, set; world coordinates), \
                  xpoint?: [x,y] (origin, 3point: a point on the new X axis), ypoint?: [x,y] (3point: a point on the +Y side), angle?: degrees (z: turned by; set: the X axis's angle), handle? (object), \
-                 pick?: [x,y] (object: near the end or segment that sets it), name? (save, restore; delete/list take names?: \"a,b*\")} \
+                 pick?: [x,y] (object: near the end or segment that sets it), name? (save, restore), names?: \"a,b*\" (delete, list)} \
                  → {origin, angle, name, message} — a 2D UCS in the plan: origin and rotation",
             )
             .interactive(|_| Ok(Box::new(UcsM::default()))),

@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("-vports", "Viewports", run_vports)
             .params(
-                "{option: single|2|3|4|join|save|restore|delete|list, arrangement?: horizontal|vertical (2) | horizontal|vertical|above|below|left|right (3; default right), applyTo?: current|display (default current: split the current tile), name? (save/restore), names? (delete/list; wildcards), dominant?, join? (tile numbers from 1; dominant defaults to the current tile)} (model space; in a layout: MVIEW)",
+                "{option: single|2|3|4|join|save|restore|delete|list, arrangement?: horizontal|vertical (2) | horizontal|vertical|above|below|left|right (3; default right), applyTo?: current|display (default current: split the current tile), name? (save/restore), names? (delete/list; wildcards), dominant?, join? (tile numbers from 1; dominant defaults to the current tile), layout?: any value (make layout viewports, as MVIEW)} (model space; in a layout: MVIEW)",
             )
             .interactive(vports_factory),
         CommandSpec::new("vports.activate", "Set Current Viewport", run_activate).params("{index: tile number from 1}").noundo(),

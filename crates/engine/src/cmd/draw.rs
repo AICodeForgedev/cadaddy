@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pline", "Polyline", run_pline)
             .menu(&["Draw", "Polyline"])
             .alias(&["pl"])
-            .params("{vertices: [[x,y] | {p:[x,y], bulge, startWidth, endWidth}], closed?, width?}")
+            .params("{vertices: [[x,y] | {p:[x,y], bulge, startWidth, endWidth}] | points: [[x,y]], closed?, width?}")
             .interactive(|_| Ok(Box::new(PlineM::default()))),
         CommandSpec::new("circle", "Circle", run_circle)
             .menu(&["Draw", "Circle", "Center, Radius"])

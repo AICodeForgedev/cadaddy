@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("copytolayer", "Copy Objects to New Layer", run_copytolayer)
             .menu(&["Format", "Layer Tools", "Copy Objects to New Layer"])
             .params(
-                "{handles? (default: selection), layer: destination layer (made when missing, unless create: false), \
+                "{handles? (default: selection), layer: destination layer, create?: bool (default true: a missing layer is made), \
                  delta?: [dx,dy] | from?: [x,y] + to?: [x,y] (default: in place)} → {handles, layer}",
             )
             .interactive(|_| Ok(Box::new(CopyToLayerM::default()))),

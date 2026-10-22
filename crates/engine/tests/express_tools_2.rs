@@ -41,7 +41,7 @@ fn polyline(s: &Session, h: Handle) -> Vec<Vec2> {
 #[test]
 fn breakline_draws_a_zigzag_polyline_on_the_current_layer() {
     let mut s = session();
-    s.execute("layer", &json!({"option": "make", "name": "BREAKS"})).ok();
+    s.execute("layer.new", &json!({"name": "BREAKS", "current": true})).ok();
     let r = s.execute("breakline", &json!({"p1": [0, 0], "p2": [10, 0], "size": 2, "extension": 1})).unwrap();
     let pl = h(&r["handle"]);
     let pts = polyline(&s, pl);
@@ -114,7 +114,7 @@ fn breakline_refuses_bad_input() {
 /// containing a reference to OLD.
 fn blocks() -> (Session, Vec<Handle>) {
     let mut s = session();
-    s.execute("layer", &json!({"option": "make", "name": "0"})).ok();
+    s.execute("layer.new", &json!({"name": "0", "current": true})).ok();
     let c = s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
     let a1 = s.execute("attdef", &json!({"tag": "TAG", "default": "T0", "at": [0, -2]})).unwrap();
     let a2 = s.execute("attdef", &json!({"tag": "NOTE", "default": "N0", "at": [0, -3]})).unwrap();
@@ -126,7 +126,7 @@ fn blocks() -> (Session, Vec<Handle>) {
     let hs: Vec<Value> = [&sq, &b1, &b2].iter().map(|r| r.get("handle").cloned().unwrap_or_else(|| r["handles"][0].clone())).collect();
     s.execute("block", &json!({"name": "NEW", "base": [0, 0], "handles": hs, "keep": "delete"})).unwrap();
     let i1 = s.execute("insert", &json!({"name": "OLD", "at": [10, 10], "attribs": {"TAG": "A-1", "NOTE": "hello"}})).unwrap();
-    s.execute("layer", &json!({"option": "make", "name": "A"})).ok();
+    s.execute("layer.new", &json!({"name": "A", "current": true})).ok();
     let i2 = s.execute("insert", &json!({"name": "OLD", "at": [20, 0], "scale": 2, "rotation": 90, "attribs": {"TAG": "B-2"}})).unwrap();
     let refs = vec![h(&i1["handle"]), h(&i2["handle"])];
     // A block containing a reference to OLD.
