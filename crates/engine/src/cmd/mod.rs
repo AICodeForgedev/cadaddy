@@ -4,6 +4,7 @@
 pub mod adcenter;
 pub(crate) mod annoscale;
 pub(crate) mod annotate;
+mod cam;
 pub mod array;
 pub(crate) mod ask;
 mod attipedit;
@@ -389,6 +390,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plotstamp::specs());
         v.extend(dwgprops::specs());
         v.extend(crate::script_tools::specs());
+        v.extend(cam::specs());
         v.extend(exchange::specs());
         v.extend(rasterout::specs());
         v.extend(props::specs());

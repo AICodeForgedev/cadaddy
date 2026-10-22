@@ -1,0 +1,14 @@
+[package]
+name = "cadaddy-cam"
+description = "CADaddy CAM: 2D toolpath generation, G-code output and CNC DXF export for CNC machining"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadaddy-geom = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -628,6 +628,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadaddy-cam"
+version = "0.7.8"
+dependencies = [
+ "cadaddy-geom",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "cadaddy-cli"
 version = "0.7.8"
 dependencies = [
@@ -693,6 +702,7 @@ dependencies = [
 name = "cadaddy-engine"
 version = "0.7.8"
 dependencies = [
+ "cadaddy-cam",
  "cadaddy-color",
  "cadaddy-constraints",
  "cadaddy-doc",

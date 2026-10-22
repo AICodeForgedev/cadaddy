@@ -21,6 +21,7 @@ cadaddy-doc = { path = "crates/doc" }
 cadaddy-constraints = { path = "crates/constraints" }
 cadaddy-fonts = { path = "crates/fonts" }
 cadaddy-render = { path = "crates/render" }
+cadaddy-cam = { path = "crates/cam" }
 cadaddy-io = { path = "crates/io" }
 cadaddy-engine = { path = "crates/engine" }
 cadaddy-ui-egui = { path = "crates/ui-egui" }
