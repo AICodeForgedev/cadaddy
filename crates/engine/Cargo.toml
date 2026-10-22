@@ -35,6 +35,8 @@ toml = "1"
 rhai = { version = "1.27", default-features = false, features = ["std", "serde", "sync"] }
 # Bridge for Rhai closures to call back into Session (see rhai-bridge crate).
 cadaddy-rhai-bridge = { path = "../rhai-bridge" }
+# MEP print fixtures and print-set pipeline (printset, reader wiring).
+cadaddy-mepfix = { path = "../mepfix" }
 
 # The local time-zone offset on Windows (no /etc/localtime there): FIELD dates and the Drawing
 # Recovery times were UTC. MIT OR Apache-2.0; only its clock.
