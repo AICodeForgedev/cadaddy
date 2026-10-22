@@ -44,14 +44,17 @@ pub struct Sky {
     pub ground: [f32; 3],
 }
 
-/// Fog / depth cue applied after shading: objects fade towards a colour with distance.
+/// Fog / depth cue: surfaces fade towards a colour with their distance from the viewer, in
+/// linear light before the tone curve ([`apply_fog`]; the GPU shader the same). Orthographic
+/// views have no eye, so distances are measured from the front of the scene's box along the view
+/// ([`fog_front`]): zooming, panning or what happens to be visible don't move the fog.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FogParams {
     /// Linear RGB fog colour.
     pub color: [f32; 3],
-    /// Depth where fog begins (as a fraction of the view's depth range, 0..1).
+    /// Distance (drawing units) where fog begins.
     pub near: f32,
-    /// Depth where fog is fully opaque.
+    /// Distance where fog is fully opaque.
     pub far: f32,
 }
 
@@ -88,6 +91,8 @@ pub struct Lighting {
     pub background: Background,
     /// White balance: colour multiplier from temperature/tint (linear RGB).
     pub white_balance: [f32; 3],
+    /// The scene's box (all of it, not what is visible): fog distances start at its front.
+    pub bounds: Option<(Vec3, Vec3)>,
 }
 
 fn lin(c: cadaddy_doc::color::Rgb) -> [f32; 3] {
@@ -173,8 +178,30 @@ impl Lighting {
             fog: None,
             background: Background::Sky,
             white_balance: [1.0, 1.0, 1.0],
+            bounds: None,
         }
     }
+
+    /// Light by an HDR environment map: rays that leave the scene see it (the path tracer), and
+    /// the ambient term (CPU and GPU alike) takes its sky, horizon and ground.
+    pub fn set_env_map(&mut self, env: std::sync::Arc<crate::hdr::HdrImage>) {
+        self.sky = env.sky();
+        self.env_map = Some(env);
+    }
+}
+
+/// Where fog distances start for a view looking along `-dir` (`dir` towards the viewer): the
+/// depth (`p · dir`) of the front of the scene's box; 0 without one.
+pub fn fog_front(lit: &Lighting, dir: Vec3) -> f64 {
+    let Some((lo, hi)) = lit.bounds else { return 0.0 };
+    let corner = |i: u8| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+    let front = (0..8).map(|i| corner(i).dot(dir)).fold(f64::NEG_INFINITY, f64::max);
+    if front.is_finite() { front } else { 0.0 }
+}
+
+/// How much fog covers a surface `dist` from the viewer: 0 before `near`, 1 beyond `far`.
+pub fn fog_amount(dist: f32, fog: &FogParams) -> f32 {
+    ((dist - fog.near) / (fog.far - fog.near).max(1e-6)).clamp(0.0, 1.0)
 }
 
 /// A surface's material as the shading needs it (linear base colour).
@@ -221,11 +248,7 @@ pub fn brdf_cos(n: Vec3, v: Vec3, l: Vec3, s: &Surface) -> [f32; 3] {
 /// the ground below, by how much of each the surface faces; diffuse, plus a rough specular
 /// share for metals.
 pub fn ambient(lit: &Lighting, n: Vec3, s: &Surface) -> [f32; 3] {
-    if let Some(env) = &lit.env_map {
-        // Sample the environment map in the normal's direction for diffuse irradiance.
-        let env_color = env.sample(n);
-        return surround(env_color, s);
-    }
+    // An environment map lights through the sky it set ([`Lighting::set_env_map`]).
     let up = (n.z as f32).clamp(-1.0, 1.0);
     let sky_part = mix3(lit.sky.horizon, lit.sky.zenith, up.max(0.0));
     let env = mix3(lit.sky.ground, sky_part, up * 0.5 + 0.5);
@@ -332,11 +355,10 @@ pub fn tonemap(c: [f32; 3], exposure: f32) -> [u8; 3] {
     })
 }
 
-/// Apply fog to a shaded colour: blend towards the fog colour by the fog factor at `depth`
-/// (0 = at the viewer, 1 = far plane).
-pub fn apply_fog(c: [f32; 3], depth_frac: f32, fog: &FogParams) -> [f32; 3] {
-    let t = ((depth_frac - fog.near) / (fog.far - fog.near).max(1e-6)).clamp(0.0, 1.0);
-    mix3(c, fog.color, t)
+/// Apply fog to a shaded colour (linear, before the tone curve) at `dist` from the viewer: the
+/// one fog the rasterizer, the path tracer and the GPU shader share.
+pub fn apply_fog(c: [f32; 3], dist: f32, fog: &FogParams) -> [f32; 3] {
+    mix3(c, fog.color, fog_amount(dist, fog))
 }
 
 /// Tone map with white balance applied: the balance multiplier scales linear light before the
@@ -359,17 +381,17 @@ pub fn white_balance_rgb(temperature: f64, tint: f64) -> [f32; 3] {
     [r, g, b]
 }
 
-/// The rendered view's background at image fraction `t` (0 bottom … 1 top), respecting the
-/// background setting.
-pub fn view_background(lit: &Lighting, t: f32) -> [f32; 3] {
+/// The rendered view's background at image fraction `u` across (0 left … 1 right) and `t` up
+/// (0 bottom … 1 top), respecting the background setting. An image fills the view, its nearest
+/// pixel (the GPU samples it the same way).
+pub fn view_background(lit: &Lighting, u: f32, t: f32) -> [f32; 3] {
     match &lit.background {
         Background::Sky => background(lit, t),
         Background::Solid(c) => *c,
         Background::Gradient { bottom, top } => mix3(*bottom, *top, t.clamp(0.0, 1.0)),
         Background::Image(raster) => {
-            // Sample the image at this vertical position, horizontally centred.
-            let y = ((1.0 - t) * raster.height as f32).clamp(0.0, (raster.height.saturating_sub(1)) as f32) as u32;
-            let x = raster.width / 2;
+            let at = |f: f32, n: u32| ((f.clamp(0.0, 1.0) * n as f32) as u32).min(n.saturating_sub(1));
+            let (x, y) = (at(u, raster.width), at(1.0 - t, raster.height));
             match raster.pixel(x, y) {
                 Some(p) => {
                     let f = |v: u8| (f32::from(v) / 255.0).powf(2.2);
@@ -379,6 +401,14 @@ pub fn view_background(lit: &Lighting, t: f32) -> [f32; 3] {
             }
         }
     }
+}
+
+/// An image background's own pixel at `u` across and `t` up (nearest), as stored: a picture is
+/// shown as it is, not through the exposure and tone curve. `None` for the other backgrounds.
+pub fn background_image_pixel(lit: &Lighting, u: f32, t: f32) -> Option<[u8; 3]> {
+    let Background::Image(raster) = &lit.background else { return None };
+    let at = |f: f32, n: u32| ((f.clamp(0.0, 1.0) * n as f32) as u32).min(n.saturating_sub(1));
+    raster.pixel(at(u, raster.width), at(1.0 - t, raster.height)).map(|p| [p[0], p[1], p[2]])
 }
 
 /// The sky seen in direction `d` (a rendered view's background), linear.
@@ -478,15 +508,15 @@ mod tests {
 
     #[test]
     fn fog_blends_towards_the_fog_colour() {
-        let fog = FogParams { color: [1.0, 1.0, 1.0], near: 0.2, far: 0.8 };
+        let fog = FogParams { color: [1.0, 1.0, 1.0], near: 20.0, far: 80.0 };
         // Before the fog starts: no fog.
-        let c = apply_fog([0.5, 0.0, 0.0], 0.1, &fog);
+        let c = apply_fog([0.5, 0.0, 0.0], 10.0, &fog);
         assert!((c[0] - 0.5).abs() < 1e-4 && c[1].abs() < 1e-4, "{c:?}");
         // At full fog distance: all fog colour.
-        let c = apply_fog([0.5, 0.0, 0.0], 1.0, &fog);
+        let c = apply_fog([0.5, 0.0, 0.0], 100.0, &fog);
         assert!((c[0] - 1.0).abs() < 1e-4 && (c[1] - 1.0).abs() < 1e-4, "{c:?}");
         // At the midpoint: half blended.
-        let c = apply_fog([0.0, 0.0, 0.0], 0.5, &fog);
+        let c = apply_fog([0.0, 0.0, 0.0], 50.0, &fog);
         assert!((c[0] - 0.5).abs() < 0.01, "{c:?}");
     }
 
@@ -518,18 +548,18 @@ mod tests {
     fn view_background_respects_settings() {
         let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
         // Sky default: the top (zenith) should differ from the bottom (horizon).
-        let sky_top = view_background(&lit, 1.0);
-        let sky_bot = view_background(&lit, 0.0);
+        let sky_top = view_background(&lit, 0.5, 1.0);
+        let sky_bot = view_background(&lit, 0.5, 0.0);
         assert!(sky_top != sky_bot, "sky varies vertically: top {sky_top:?} bot {sky_bot:?}");
         // Solid background.
         lit.background = Background::Solid([0.1, 0.2, 0.3]);
-        let solid = view_background(&lit, 0.5);
+        let solid = view_background(&lit, 0.5, 0.5);
         assert!((solid[0] - 0.1).abs() < 1e-4 && (solid[1] - 0.2).abs() < 1e-4, "{solid:?}");
         // Gradient background.
         lit.background = Background::Gradient { bottom: [0.0, 0.0, 0.0], top: [1.0, 1.0, 1.0] };
-        let mid = view_background(&lit, 0.5);
+        let mid = view_background(&lit, 0.5, 0.5);
         assert!((mid[0] - 0.5).abs() < 0.01, "{mid:?}");
-        let top = view_background(&lit, 1.0);
+        let top = view_background(&lit, 0.5, 1.0);
         assert!((top[0] - 1.0).abs() < 0.01, "{top:?}");
     }
 
@@ -538,7 +568,7 @@ mod tests {
         // A bright red environment map: ambient should be reddish.
         let hdr = crate::hdr::HdrImage { width: 4, height: 2, data: vec![[5.0f32, 0.1, 0.1]; 8].into_iter().flatten().collect() };
         let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
-        lit.env_map = Some(std::sync::Arc::new(hdr));
+        lit.set_env_map(std::sync::Arc::new(hdr));
         let c = ambient(&lit, Vec3::Z, &grey(0.6));
         assert!(c[0] > c[1] * 3.0, "env map makes ambient red: {c:?}");
     }

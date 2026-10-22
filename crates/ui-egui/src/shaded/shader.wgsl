@@ -1,7 +1,8 @@
 // CADaddy shaded model view: lit triangles and lines, orthographic, positions relative to an
 // origin. The Realistic style lights physically (cadaddy_render::light, the same equations): sky
 // and sun (with a shadow map), up to 16 lights, microfacet materials with base colour textures,
-// a filmic tone curve with exposure.
+// a filmic tone curve with exposure; the render environment (RENDERENVIRONMENT): background,
+// fog by distance from the front of the scene in linear light, white balance.
 struct Light {
     // xyz: position (distant: towards the light); w: kind (0 distant, 1 point, 2 spot)
     pos: vec4<f32>,
@@ -38,6 +39,17 @@ struct U {
     // (world units)
     shadow: vec4<f32>,
     lights: array<Light, 16>,
+    // rgb: fog colour (linear); w: 1 when there is fog
+    fog_rgb: vec4<f32>,
+    // x: near, y: far (distances), z: the front of the scene along the view (relative depth)
+    fog_d: vec4<f32>,
+    // rgb: white balance multiplier
+    wb: vec4<f32>,
+    // x: background kind (0 sky, 1 solid or gradient, 2 image)
+    bg_kind: vec4<f32>,
+    // rgb: the background's bottom (solid: its colour) and top, linear
+    bg_bottom: vec4<f32>,
+    bg_top: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d_array<f32>;
@@ -47,6 +59,9 @@ struct U {
 // Baked indirect light (LIGHTBAKE), RGBM: colour × alpha × 8.
 @group(0) @binding(5) var lm_tex: texture_2d<f32>;
 @group(0) @binding(6) var lm_sampler: sampler;
+// The background image (shown as it is), sampled nearest.
+@group(0) @binding(7) var bg_tex: texture_2d<f32>;
+@group(0) @binding(8) var bg_sampler: sampler;
 
 struct VI {
     @location(0) p: vec3<f32>,
@@ -99,7 +114,7 @@ fn enc(c: vec3<f32>) -> vec4<f32> {
 
 // The ACES fitted tone curve, exposure applied, then the sRGB curve.
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-    let x = max(c * u.params.z * 0.8, vec3<f32>(0.0));
+    let x = max(c * u.wb.rgb * u.params.z * 0.8, vec3<f32>(0.0));
     let y = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
     let lo = y * 12.92;
     let hi = 1.055 * pow(y, vec3<f32>(1.0 / 2.4)) - 0.055;
@@ -145,7 +160,8 @@ fn vs_shadow(v: VI, i: II) -> @builtin(position) vec4<f32> {
 // The sky behind a Realistic view: a full-screen triangle, horizon to zenith.
 struct BgO {
     @builtin(position) pos: vec4<f32>,
-    @location(0) t: f32,
+    // x: across (0 left … 1 right), y: up (0 bottom … 1 top)
+    @location(0) at: vec2<f32>,
 };
 @vertex
 fn vs_bg(@builtin(vertex_index) i: u32) -> BgO {
@@ -153,13 +169,32 @@ fn vs_bg(@builtin(vertex_index) i: u32) -> BgO {
     let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
     let y = f32(i & 2u) * 2.0 - 1.0;
     o.pos = vec4<f32>(x, y, 1.0, 1.0);
-    o.t = y * 0.5 + 0.5;
+    o.at = vec2<f32>(x * 0.5 + 0.5, y * 0.5 + 0.5);
     return o;
 }
 @fragment
 fn fs_bg(o: BgO) -> @location(0) vec4<f32> {
-    let c = mix(u.horizon.rgb, u.zenith.rgb, pow(clamp(o.t, 0.0, 1.0), 0.8));
+    let t = clamp(o.at.y, 0.0, 1.0);
+    if (u.bg_kind.x > 1.5) {
+        let size = vec2<f32>(textureDimensions(bg_tex));
+        let px = min(floor(vec2<f32>(clamp(o.at.x, 0.0, 1.0), 1.0 - t) * size), size - vec2<f32>(1.0));
+        return vec4<f32>(textureSampleLevel(bg_tex, bg_sampler, (px + vec2<f32>(0.5)) / size, 0.0).rgb, 1.0);
+    }
+    if (u.bg_kind.x > 0.5) {
+        return vec4<f32>(tonemap(mix(u.bg_bottom.rgb, u.bg_top.rgb, t)), 1.0);
+    }
+    let c = mix(u.horizon.rgb, u.zenith.rgb, pow(t, 0.8));
     return vec4<f32>(tonemap(c), 1.0);
+}
+
+// Fog by the point's distance from the front of the scene (cadaddy_render::light::apply_fog).
+fn fogged(c: vec3<f32>, wp: vec3<f32>) -> vec3<f32> {
+    if (u.fog_rgb.w < 0.5) {
+        return c;
+    }
+    let dist = u.fog_d.z - dot(wp, normalize(u.eye.xyz));
+    let amount = clamp((dist - u.fog_d.x) / max(u.fog_d.y - u.fog_d.x, 1e-6), 0.0, 1.0);
+    return mix(c, u.fog_rgb.rgb, amount);
 }
 
 fn brdf_cos(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, base: vec3<f32>, rough: f32, metal: f32) -> vec3<f32> {
@@ -264,7 +299,7 @@ fn physical(o: VO, n: vec3<f32>, back: bool) -> vec4<f32> {
         }
         col = col + l.rgb.rgb * (fall * cone) * brdf_cos(n, v, ld, base, rough, metal);
     }
-    return vec4<f32>(tonemap(col), o.m.w);
+    return vec4<f32>(tonemap(fogged(col, o.wp)), o.m.w);
 }
 
 @fragment

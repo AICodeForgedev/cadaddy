@@ -148,6 +148,9 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     st.last_frame = Some(now);
     let height = f64::from(xf.rect.height()) / xf.scale.max(1e-300);
     let view = ShadeView::new(xf.proj, xf.center, height, w, h);
+    // The model's lighting with the render environment (RENDERENVIRONMENT) applied: background,
+    // fog, exposure, white balance, the environment map's sky. A file gone since leaves the rest.
+    let lit = environment_lighting(app, &model);
     let mut drawn = false;
     // On the GPU unless it can't (see `gpucaps`): at most the size its limits and memory allow
     // (shown scaled up), with its multisampling.
@@ -167,6 +170,7 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             g.upload(&rs.device, &rs.queue, &model, style, bg);
             st.uploaded = up;
         }
+        g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
         let t0 = web_time::Instant::now();
         let vis = g.render(&rs.device, &rs.queue, &view, style, bg);
         st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -200,10 +204,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
                 f
             }
         };
-        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}", key, view.center, view.height, w, h, view.dir, view.right, (style, bg));
+        let env = app.session.state().ok().map(|st| format!("{:?}", st.render_environment)).unwrap_or_default();
+        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}|{env}", key, view.center, view.height, w, h, view.dir, view.right, (style, bg));
         let fresh = app.canvas.shade.cpu.as_ref().is_some_and(|(k, _)| *k == ck);
         if !fresh {
-            let r = shade::rasterize(&flat, &view, style, bg);
+            let r = shade::rasterize_lit(&flat, &view, style, bg, lit.as_ref().or(flat.lighting.as_ref()));
             let img = egui::ColorImage::from_rgba_unmultiplied([r.width as usize, r.height as usize], &r.rgba);
             let tex = ui.ctx().load_texture("shaded_view", img, egui::TextureOptions::LINEAR);
             app.canvas.shade.cpu = Some((ck, tex));
@@ -231,6 +236,13 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         }
     }
     drawn
+}
+
+/// `model`'s lighting with the session's render environment applied (`None`: not lit physically).
+fn environment_lighting(app: &CadApp, model: &Model3) -> Option<cadaddy_render::light::Lighting> {
+    let mut lit = model.base.lighting.clone()?;
+    let _ = cadaddy_engine::cmd::apply_environment(&app.session, &mut lit);
+    Some(lit)
 }
 
 /// While a model is built, a note in the view's corner with how far it has got.
@@ -346,7 +358,7 @@ const VERTEX_SIZE: u64 = 68;
 /// An instance's placement: three rows of four f32.
 const INSTANCE_SIZE: u64 = 48;
 /// The frame's uniform block (see `shader.wgsl`).
-const UNIFORM_SIZE: u64 = 1328;
+const UNIFORM_SIZE: u64 = 1424;
 /// Texture array layer size and most layers.
 const TEX_PX: u32 = 256;
 const MAX_LAYERS: usize = 64;
@@ -355,6 +367,9 @@ const SHADOW_PX: u32 = 2048;
 
 struct Target {
     size: (u32, u32),
+    /// The resolved frame (what `view` shows; copied out by the tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    frame: wgpu::Texture,
     /// The multisampled colour (none without MSAA: the frame is drawn into directly).
     msaa: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
@@ -401,6 +416,13 @@ struct Gpu {
     origin: Vec3,
     radius: f64,
     lighting: Option<cadaddy_render::light::Lighting>,
+    /// The bind group's textures: the materials', the baked light's and the background image's
+    /// (one white texel without one; `bg_image` the image it holds, by address).
+    tex_view: Option<wgpu::TextureView>,
+    lm_view: Option<wgpu::TextureView>,
+    bg_view: wgpu::TextureView,
+    bg_sampler: wgpu::Sampler,
+    bg_image: usize,
     target: Option<Target>,
     /// Samples per pixel (see [`crate::gpucaps`]).
     samples: u32,
@@ -449,6 +471,15 @@ impl Gpu {
                     },
                 ),
                 entry(6, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    7,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(8, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -606,6 +637,16 @@ impl Gpu {
             origin: Vec3::ZERO,
             radius: 1.0,
             lighting: None,
+            tex_view: None,
+            lm_view: None,
+            bg_view: image_texture(device, None, 1, 1, &[255, 255, 255, 255]).create_view(&wgpu::TextureViewDescriptor::default()),
+            bg_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("shaded_background"),
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            }),
+            bg_image: 0,
             target: None,
             samples,
         }
@@ -744,20 +785,63 @@ impl Gpu {
             );
         }
         self.bytes += lbytes.len();
-        let lm_view = lm_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.lm_view = Some(lm_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.tex_view = Some(tex_view);
+        self.bind(device);
+    }
+
+    /// The bind group, with the textures as they stand.
+    fn bind(&mut self, device: &wgpu::Device) {
+        let (Some(tex_view), Some(lm_view)) = (&self.tex_view, &self.lm_view) else { return };
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shaded"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(tex_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.shadow_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&lm_view) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(lm_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lm_sampler) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.bg_view) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
             ],
         }));
+    }
+
+    /// The frame's lighting (the render environment applied), and its background image on the
+    /// GPU when it changed. Only a physically lit view (Realistic) takes it.
+    fn set_lighting(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, lit: Option<&cadaddy_render::light::Lighting>) {
+        if self.lighting.is_none() {
+            return;
+        }
+        let Some(lit) = lit else { return };
+        let image = match &lit.background {
+            cadaddy_render::light::Background::Image(r) => Some(r),
+            _ => None,
+        };
+        let key = image.map_or(0, |r| Arc::as_ptr(r) as usize);
+        if key != self.bg_image {
+            let max = device.limits().max_texture_dimension_2d.max(1);
+            let texture = match image {
+                Some(r) if r.width <= max && r.height <= max => image_texture(device, Some(queue), r.width, r.height, &r.rgba),
+                Some(r) => {
+                    // Larger than the GPU takes: scaled to fit.
+                    let k = f64::from(max) / f64::from(r.width.max(r.height));
+                    let (w, h) = (((f64::from(r.width) * k) as u32).max(1), ((f64::from(r.height) * k) as u32).max(1));
+                    let px = image::RgbaImage::from_raw(r.width, r.height, r.rgba.clone())
+                        .map(|img| image::imageops::resize(&img, w, h, image::imageops::FilterType::Nearest).into_raw())
+                        .unwrap_or_else(|| vec![255; (w * h * 4) as usize]);
+                    image_texture(device, Some(queue), w, h, &px)
+                }
+                None => image_texture(device, None, 1, 1, &[255, 255, 255, 255]),
+            };
+            self.bg_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.bg_image = key;
+            self.bind(device);
+        }
+        self.lighting = Some(lit.clone());
     }
 
     /// The frame's placements: the identity, then each visible group's instances in order
@@ -908,6 +992,47 @@ impl Gpu {
                 put(x);
             }
         }
+        // The render environment: fog (distances from the front of the scene, relative to the
+        // origin), white balance, background.
+        let fog = lit.and_then(|l| l.fog);
+        let fc = fog.map_or([0.0; 3], |f| f.color);
+        let dir = v.dir.normalized();
+        let front = lit.map_or(0.0, |l| cadaddy_render::light::fog_front(l, dir)) - o.dot(dir);
+        let wb = lit.map_or([1.0; 3], |l| l.white_balance);
+        let (kind, bottom, top) = match lit.map(|l| &l.background) {
+            Some(cadaddy_render::light::Background::Solid(c)) => (1.0, *c, *c),
+            Some(cadaddy_render::light::Background::Gradient { bottom, top }) => (1.0, *bottom, *top),
+            Some(cadaddy_render::light::Background::Image(_)) => (2.0, [0.0; 3], [0.0; 3]),
+            _ => (0.0, [0.0; 3], [0.0; 3]),
+        };
+        for x in [
+            fc[0],
+            fc[1],
+            fc[2],
+            if fog.is_some() { 1.0 } else { 0.0 },
+            fog.map_or(0.0, |f| f.near),
+            fog.map_or(1.0, |f| f.far),
+            front as f32,
+            0.0,
+            wb[0],
+            wb[1],
+            wb[2],
+            0.0,
+            kind,
+            0.0,
+            0.0,
+            0.0,
+            bottom[0],
+            bottom[1],
+            bottom[2],
+            0.0,
+            top[0],
+            top[1],
+            top[2],
+            0.0,
+        ] {
+            put(x);
+        }
         (u, sun.is_some())
     }
 
@@ -1051,6 +1176,31 @@ fn buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> Option<Buffer> {
     Some(Buffer { buffer })
 }
 
+/// An RGBA texture of `w` × `h` (as stored, not sRGB-decoded), written with `px` when a queue
+/// is given (else left white: one texel).
+fn image_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, w: u32, h: u32, px: &[u8]) -> wgpu::Texture {
+    let size = wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 };
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("shaded_background"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    if let Some(q) = queue.filter(|_| px.len() as u64 == u64::from(size.width) * u64::from(size.height) * 4) {
+        q.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            px,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.width * 4), rows_per_image: Some(size.height) },
+            size,
+        );
+    }
+    tex
+}
+
 fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let extent = wgpu::Extent3d { width: size.0.clamp(1, shade::MAX_SIDE), height: size.1.clamp(1, shade::MAX_SIDE), depth_or_array_layers: 1 };
     let tex = |label: &str, format, samples, usage| {
@@ -1067,12 +1217,14 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     };
     let msaa = (samples > 1).then(|| tex("shaded_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
     let depth = tex("shaded_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
-    let resolve = tex("shaded_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
+    let resolve =
+        tex("shaded_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC);
     Target {
         size,
         msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
         depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
         view: resolve.create_view(&wgpu::TextureViewDescriptor::default()),
+        frame: resolve,
     }
 }
 
@@ -1084,5 +1236,100 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    /// The live view on the GPU and on the CPU show the same render environment: the same
+    /// scene and environment come out with a per-channel mean difference of at most 3/255 over
+    /// the background and over fogged and clear surfaces. Two boxes from above (the sun off):
+    /// the tall one's top is the front of the scene, the low one's 9 units behind it.
+    #[test]
+    fn the_gpu_and_the_cpu_show_the_same_environment() {
+        use super::*;
+        use serde_json::json;
+        let mut s = cadaddy_engine::Session::new();
+        s.execute("box", &json!({ "corner": [0, 0, 0], "length": 10, "width": 10, "height": 10 })).unwrap();
+        s.execute("box", &json!({ "corner": [20, 0, 0], "length": 10, "width": 10, "height": 1 })).unwrap();
+        s.doc_mut().unwrap().sun.on = false;
+        let d = s.doc().unwrap().clone();
+        let bg = Rgb(255, 255, 255);
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+        let model = Arc::new(model3::build_clipped(&d, &cadaddy_doc::Space::Model, 0.05, bg, &p, &t, &[]));
+        let flat = model.flatten();
+        let (w, h) = (128u32, 64u32);
+        let view = shade::fit(&flat, None, w, h).unwrap();
+        // Files the environments use: a lighting map and a 2 × 2 picture.
+        let dir = std::env::temp_dir().join(format!("cadaddy-gpuenv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hdr = dir.join("sky.hdr");
+        let mut f = b"#?RADIANCE\n\n-Y 2 +X 4\n".to_vec();
+        f.extend([[200, 180, 120, 129]; 4].concat());
+        f.extend([[60, 80, 40, 129]; 4].concat());
+        std::fs::write(&hdr, f).unwrap();
+        let picture = dir.join("backdrop.png");
+        let px: Vec<u8> = [[200u8, 30, 30, 255], [30, 200, 30, 255], [30, 30, 200, 255], [220, 220, 40, 255]].concat();
+        image::save_buffer(&picture, &px, 2, 2, image::ColorType::Rgba8).unwrap();
+        let envs = [
+            json!({ "background": {"kind": "gradient", "bottom": [0.05, 0.1, 0.2], "top": [0.6, 0.7, 0.9]},
+                    "fog": {"enabled": true, "color": [0.4, 0.45, 0.5], "near": 6, "far": 12},
+                    "ibl": hdr.to_string_lossy(), "exposure": 0.5, "whiteBalance": {"temperature": 4500, "tint": 0.1} }),
+            json!({ "background": {"kind": "image", "path": picture.to_string_lossy()}, "ibl": null, "exposure": 0, "whiteBalance": {"temperature": 6500, "tint": 0},
+                    "fog": {"enabled": true, "color": [0.7, 0.3, 0.2], "near": 1, "far": 2} }),
+        ];
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        for env in envs {
+            s.execute("renderenvironment", &env).unwrap();
+            let mut lit = model.base.lighting.clone().unwrap();
+            cadaddy_engine::cmd::apply_environment(&s, &mut lit).unwrap();
+            let cpu = shade::rasterize_lit(&flat, &view, VisualStyle::Realistic, bg, Some(&lit));
+            let mut g = Gpu::new(device, 1);
+            g.upload(device, queue, &model, VisualStyle::Realistic, bg);
+            g.set_lighting(device, queue, Some(&lit));
+            g.render(device, queue, &view, VisualStyle::Realistic, bg);
+            // The frame, read back (rows of 512 bytes: 256-aligned).
+            let frame = &g.target.as_ref().unwrap().frame;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(w * 4 * h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            enc.copy_texture_to_buffer(
+                frame.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            queue.submit([enc.finish()]);
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) }).unwrap();
+            let gpu = buffer.slice(..).get_mapped_range().unwrap().to_vec();
+            // A 5 × 5 block's mean, per channel.
+            let mean = |img: &[u8], (x0, y0): (u32, u32)| {
+                [0, 1, 2].map(|c| {
+                    (0..5).flat_map(|dy| (0..5).map(move |dx| ((y0 + dy) * w + x0 + dx) as usize * 4 + c)).map(|i| f64::from(img[i])).sum::<f64>()
+                        / 25.0
+                })
+            };
+            // The corners (background), the tall box's top (clear) and the low one's (fogged).
+            let blocks = [
+                ("top left", (1, 1)),
+                ("top right", (122, 1)),
+                ("bottom left", (1, 58)),
+                ("bottom right", (122, 58)),
+                ("clear", (21, 30)),
+                ("fogged", (103, 30)),
+            ];
+            for (what, at) in blocks {
+                let (a, b) = (mean(&cpu.rgba, at), mean(&gpu, at));
+                assert!((0..3).all(|c| (a[c] - b[c]).abs() <= 3.0), "{env}\n{what}: cpu {a:?} gpu {b:?}");
+            }
+            // And the environment shows: the fogged top isn't the clear one.
+            let (clear, fogged) = (mean(&gpu, (21, 30)), mean(&gpu, (103, 30)));
+            assert!((0..3).any(|c| (clear[c] - fogged[c]).abs() > 10.0), "{clear:?} {fogged:?}");
+        }
     }
 }

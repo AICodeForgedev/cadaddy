@@ -391,7 +391,22 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             _ => {}
         }
     }
+    let bounds = scene_box(&out);
+    if let Some(lit) = out.lighting.as_mut() {
+        lit.bounds = bounds;
+    }
     out
+}
+
+/// The box round everything `s` holds (fog distances start at its front); `None` when empty.
+pub fn scene_box(s: &Scene) -> Option<(Vec3, Vec3)> {
+    let (mut lo, mut hi) =
+        (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in s.tris.iter().flat_map(|t| t.p).chain(s.lines.iter().flat_map(|l| [l.a, l.b])) {
+        lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+        hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+    }
+    (lo.x <= hi.x).then_some((lo, hi))
 }
 
 fn push_tri(s: &mut Scene, t: Tri) {
@@ -475,8 +490,14 @@ const BAND: usize = 32;
 /// the background colour for Hidden), then lines and the edges the style shows, those behind a
 /// surface left out (Wireframe shows them all).
 pub fn rasterize(scene: &Scene, v: &ShadeView, style: VisualStyle, bg: Rgb) -> Raster {
+    rasterize_lit(scene, v, style, bg, scene.lighting.as_ref())
+}
+
+/// [`rasterize`] lit by `lit` in place of the scene's own lighting (the live view's, with the
+/// render environment applied).
+pub fn rasterize_lit(scene: &Scene, v: &ShadeView, style: VisualStyle, bg: Rgb, lit: Option<&crate::light::Lighting>) -> Raster {
     if style == VisualStyle::Realistic
-        && let Some(lit) = &scene.lighting
+        && let Some(lit) = lit
     {
         return realistic(scene, v, lit);
     }
@@ -703,15 +724,27 @@ pub(crate) fn sample(r: &Raster, uv: [f32; 2]) -> [f32; 3] {
 /// sky, the sun (with its shadows) and the lights, through its material and texture; glass and
 /// other see-through surfaces over what lies behind; line objects on top; the sky behind.
 fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Raster {
-    use crate::light::{Surface, shade_baked, tonemap_wb, view_background};
+    use crate::light::{Background, Surface, apply_fog, background_image_pixel, fog_front, shade_baked, tonemap_wb, view_background};
     let (w, h) = (v.width_px as usize, v.height_px as usize);
     let wb = lit.white_balance;
-    // The background: sky gradient, solid, gradient or image.
+    // The background: sky gradient, solid, gradient or image (it varies across only as an image).
     let mut color: Vec<[u8; 4]> = Vec::with_capacity(w * h);
+    let across = matches!(lit.background, Background::Image(_));
     for y in 0..h {
-        let c = tonemap_wb(view_background(lit, 1.0 - (y as f32 + 0.5) / h as f32), lit.exposure, wb);
-        color.extend(std::iter::repeat_n([c[0], c[1], c[2], 255], w));
+        let t = 1.0 - (y as f32 + 0.5) / h as f32;
+        if across {
+            color.extend((0..w).map(|x| {
+                let u = (x as f32 + 0.5) / w as f32;
+                let c = background_image_pixel(lit, u, t).unwrap_or_else(|| tonemap_wb(view_background(lit, u, t), lit.exposure, wb));
+                [c[0], c[1], c[2], 255]
+            }));
+        } else {
+            let c = tonemap_wb(view_background(lit, 0.5, t), lit.exposure, wb);
+            color.extend(std::iter::repeat_n([c[0], c[1], c[2], 255], w));
+        }
     }
+    // Fog: by each surface point's distance from the front of the scene, in linear light.
+    let front = fog_front(lit, v.dir.normalized());
     let mut depth = vec![f32::NEG_INFINITY; w * h];
     let shadows = lit.sun.and_then(|(d, _)| ShadowMap::new(scene, d));
     let view_dir = v.dir.normalized();
@@ -767,7 +800,11 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
         // Its back is the side seen when the corners turn clockwise from here.
         let back = (tri.p[1] - tri.p[0]).cross(tri.p[2] - tri.p[0]).dot(n) < 0.0;
         let baked = scene.baked.as_ref().and_then(|bk| bk.at(ti, b[1], b[2], back));
-        (tonemap_wb(shade_baked(lit, p, n, view_dir, &surface, sun, baked), lit.exposure, wb), opacity)
+        let mut c = shade_baked(lit, p, n, view_dir, &surface, sun, baked);
+        if let Some(fog) = &lit.fog {
+            c = apply_fog(c, (front - p.dot(view_dir)) as f32, fog);
+        }
+        (tonemap_wb(c, lit.exposure, wb), opacity)
     };
     let bands = h.div_ceil(BAND).max(1);
     let mut binned: Vec<Vec<usize>> = vec![Vec::new(); bands];
@@ -843,23 +880,6 @@ fn realistic(scene: &Scene, v: &ShadeView, lit: &crate::light::Lighting) -> Rast
     for l in scene.lines.iter().filter(|l| !l.edge) {
         let (a, b) = (v.screen(l.a), v.screen(l.b));
         raster_line(a, b, [l.color.0, l.color.1, l.color.2], &mut color, &depth, w, h, Some(bias));
-    }
-    // Apply fog / depth cue: blend towards the fog colour by distance.
-    if let Some(fog) = &lit.fog {
-        let zmin = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::INFINITY, f32::min);
-        let zmax = depth.iter().copied().filter(|z| z.is_finite() && *z > f32::NEG_INFINITY).fold(f32::NEG_INFINITY, f32::max);
-        let range = (zmax - zmin).max(1e-6);
-        let fog_srgb = crate::light::tonemap_wb(fog.color, lit.exposure, wb);
-        for (i, c) in color.iter_mut().enumerate() {
-            let z = depth.get(i).copied().unwrap_or(f32::NEG_INFINITY);
-            if z > f32::NEG_INFINITY && z.is_finite() {
-                // Depth is towards the viewer (larger = nearer), so invert for fog.
-                let depth_frac = 1.0 - (z - zmin) / range;
-                let t = ((depth_frac - fog.near) / (fog.far - fog.near).max(1e-6)).clamp(0.0, 1.0);
-                let mix = |o: u8, f: u8| ((1.0 - t) * f32::from(o) + t * f32::from(f)).round().clamp(0.0, 255.0) as u8;
-                *c = [mix(c[0], fog_srgb[0]), mix(c[1], fog_srgb[1]), mix(c[2], fog_srgb[2]), 255];
-            }
-        }
     }
     let rgba: Vec<u8> = color.into_iter().flatten().collect();
     Raster::new(v.width_px, v.height_px, rgba).unwrap_or(Raster { width: 1, height: 1, rgba: vec![0, 0, 0, 255] })
@@ -1179,5 +1199,120 @@ mod tests {
         };
         let r = rasterize(&s, &ShadeView::new(None, Vec2::ZERO, 10.0, 32, 32), VisualStyle::ShadedEdges, Rgb(9, 9, 9));
         assert_eq!(r.pixel(0, 0), Some([9, 9, 9, 255]));
+    }
+
+    /// Markers standing on a ground plane at known distances behind the front one (0, 10, 40,
+    /// 80 drawing units), seen square on; fog from 20 to 60.
+    fn fog_bench() -> (Scene, ShadeView) {
+        let grey = Rgb(120, 120, 120);
+        let mut s = Scene::default();
+        let quad = |s: &mut Scene, a: Vec3, b: Vec3, c: Vec3, d: Vec3| {
+            s.tris.push(Tri::plain([a, b, c], grey));
+            s.tris.push(Tri::plain([a, c, d], grey));
+        };
+        // The ground, under them all.
+        quad(&mut s, Vec3::new(-10.0, 0.0, 0.0), Vec3::new(130.0, 0.0, 0.0), Vec3::new(130.0, 100.0, 0.0), Vec3::new(-10.0, 100.0, 0.0));
+        for (k, y) in [0.0, 10.0, 40.0, 80.0].into_iter().enumerate() {
+            let x = 30.0 * k as f64;
+            quad(&mut s, Vec3::new(x, y, 1.0), Vec3::new(x + 20.0, y, 1.0), Vec3::new(x + 20.0, y, 21.0), Vec3::new(x, y, 21.0));
+        }
+        let mut d = Drawing::new_metric();
+        d.sun.on = false;
+        let mut lit = crate::light::Lighting::of(&d, &Space::Model);
+        lit.bounds = scene_box(&s);
+        s.lighting = Some(lit);
+        // Looking along +Y (towards the viewer is −Y): distance = y.
+        let v = ShadeView {
+            dir: Vec3::new(0.0, -1.0, 0.0),
+            right: Vec3::new(1.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 0.0, 1.0),
+            center: Vec2::new(55.0, 11.0),
+            height: 30.0,
+            width_px: 240,
+            height_px: 60,
+        };
+        (s, v)
+    }
+
+    /// The linear value a tone-mapped byte came from (exposure 1, neutral balance).
+    fn untone(b: u8) -> f32 {
+        let (mut lo, mut hi) = (0.0f32, 64.0f32);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if crate::light::tonemap([mid; 3], 1.0)[0] < b { lo = mid } else { hi = mid }
+        }
+        (lo + hi) / 2.0
+    }
+
+    /// One fog, measured from the front of the scene in drawing units, the same on the CPU
+    /// rasterizer and the path tracer: the marker before `near` unchanged (±2/255), the one past
+    /// `far` the fog colour (±2/255), the one at the middle half fogged in linear light (±5%).
+    #[test]
+    fn fog_is_by_distance_the_same_in_the_rasterizer_and_the_tracer() {
+        use crate::light::{FogParams, tonemap};
+        let fog = FogParams { color: [0.5, 0.45, 0.4], near: 20.0, far: 60.0 };
+        let fog_byte = tonemap(fog.color, 1.0);
+        let (s, v) = fog_bench();
+        let images = |s: &Scene| -> [Raster; 2] {
+            let raster = rasterize(s, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+            let lit = s.lighting.clone().unwrap();
+            let opts = crate::trace::TraceOptions { bounces: 1, denoise: false, crop: None, seed: 7 };
+            let mut r = crate::trace::Render::new(s.clone(), v, lit, opts);
+            for _ in 0..4 {
+                r.pass();
+            }
+            [raster, r.image()]
+        };
+        let plain = images(&s);
+        let mut sf = s.clone();
+        sf.lighting.as_mut().unwrap().fog = Some(fog);
+        let fogged = images(&sf);
+        // Each marker's middle (x = 30k + 10, z = 11): the view is 30 units high in 60 px.
+        let at = |k: usize| ((30.0 * k as f64 + 10.0 - 55.0) * 2.0 + 120.0, 30.0);
+        for (path, (a, b)) in ["raster", "tracer"].iter().zip(plain.iter().zip(&fogged)) {
+            let px = |r: &Raster, k: usize| {
+                let (x, y) = at(k);
+                r.pixel(x as u32, y as u32).unwrap()
+            };
+            // 10 from the front: before the fog.
+            for c in 0..3 {
+                assert!((i32::from(px(a, 1)[c]) - i32::from(px(b, 1)[c])).abs() <= 2, "{path}: before near {:?} {:?}", px(a, 1), px(b, 1));
+                assert!((i32::from(px(b, 3)[c]) - i32::from(fog_byte[c])).abs() <= 2, "{path}: past far {:?} vs {fog_byte:?}", px(b, 3));
+            }
+            // 40 from the front: half way between 20 and 60, half fogged in linear light.
+            let t = (untone(px(b, 2)[0]) - untone(px(a, 2)[0])) / (fog.color[0] - untone(px(a, 2)[0]));
+            assert!((t - 0.5).abs() <= 0.05, "{path}: middle {t} ({:?} → {:?})", px(a, 2), px(b, 2));
+            // The front marker is at distance 0: no fog.
+            assert_eq!(px(a, 0), px(b, 0), "{path}: the front");
+        }
+    }
+
+    /// An image background covers the whole view: a 2 × 2 picture's four colours fill the
+    /// view's four quarters (±3/255), on the rasterizer and the path tracer.
+    #[test]
+    fn an_image_background_fills_the_view() {
+        let quads = [[200u8, 30, 30], [30, 200, 30], [30, 30, 200], [220, 220, 40]];
+        let rgba: Vec<u8> = quads.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect();
+        let picture = std::sync::Arc::new(Raster::new(2, 2, rgba).unwrap());
+        let (mut s, _) = fog_bench();
+        let lit = s.lighting.as_mut().unwrap();
+        lit.background = crate::light::Background::Image(picture);
+        // Looking at empty space beside the markers.
+        let v = ShadeView { center: Vec2::new(-500.0, 500.0), ..fog_bench().1 };
+        let raster = rasterize(&s, &v, VisualStyle::Realistic, Rgb(0, 0, 0));
+        let opts = crate::trace::TraceOptions { bounces: 1, denoise: false, crop: None, seed: 3 };
+        let mut r = crate::trace::Render::new(s.clone(), v, s.lighting.clone().unwrap(), opts);
+        r.pass();
+        let traced = r.image();
+        let (w, h) = (v.width_px, v.height_px);
+        for (path, img) in [("raster", &raster), ("tracer", &traced)] {
+            // Top left, top right, bottom left, bottom right: the picture's rows from the top.
+            for (k, (x, y)) in [(w / 4, h / 4), (3 * w / 4, h / 4), (w / 4, 3 * h / 4), (3 * w / 4, 3 * h / 4)].into_iter().enumerate() {
+                let p = img.pixel(x, y).unwrap();
+                for c in 0..3 {
+                    assert!((i32::from(p[c]) - i32::from(quads[k][c])).abs() <= 3, "{path}: quarter {k} at ({x}, {y}): {p:?} vs {:?}", quads[k]);
+                }
+            }
+        }
     }
 }
