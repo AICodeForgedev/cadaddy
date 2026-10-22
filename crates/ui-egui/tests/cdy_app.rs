@@ -13,7 +13,14 @@ use egui_kittest::Harness;
 use serde_json::{Value, json};
 
 fn hooks() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, name| Ok(name.as_bytes().to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Ok(Drawing::new_metric()),
+        write: |_, name| Ok(name.as_bytes().to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
 }
 
 #[test]

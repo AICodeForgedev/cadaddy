@@ -11,19 +11,17 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::PathBuf;
-use cadaddy_engine::plugins::PluginHost;
 use cadaddy_engine::Session;
+use cadaddy_engine::plugins::PluginHost;
 use serde_json::json;
+use std::path::PathBuf;
 
 /// Path to the pre-built example plugin WASM.
 fn hello_wasm() -> PathBuf {
     // Check a few likely locations.
     let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/plugins/hello-plugin/prebuilt/hello_plugin.wasm"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/plugins/hello-plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/hello-plugin/prebuilt/hello_plugin.wasm"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/hello-plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm"),
     ];
     for c in &candidates {
         if c.exists() {
@@ -53,8 +51,9 @@ fn looping_wasm() -> Vec<u8> {
         r#"(module
             (func (export "plugin_init") (loop (br 0)))
             (memory (export "memory") 1)
-        )"#
-    ).expect("WAT parse failed")
+        )"#,
+    )
+    .expect("WAT parse failed")
 }
 
 #[test]
@@ -171,10 +170,7 @@ fn fuel_limit_stops_infinite_loop() {
     // plugin_init loops forever, so it should fail with a fuel error.
     assert!(result.is_err(), "should fail with fuel exhaustion");
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("fuel") || err.contains("Fuel") || err.contains("plugin_init failed"),
-        "error should mention fuel: {err}"
-    );
+    assert!(err.contains("fuel") || err.contains("Fuel") || err.contains("plugin_init failed"), "error should mention fuel: {err}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

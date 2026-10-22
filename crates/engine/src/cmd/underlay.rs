@@ -375,14 +375,8 @@ impl Interactive for AttachM {
 
 /// DWFATTACH: place a page of a DWF or DWFx file as an underlay.
 fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path")
-        .map(|t| t.trim().trim_matches('"').to_string())
-        .ok_or_else(|| bad("dwfattach", "`path` is required"))?;
-    let page = p
-        .get("page")
-        .and_then(Value::as_u64)
-        .map(|n| u32::try_from(n.clamp(1, 100_000)).unwrap_or(1))
-        .unwrap_or(1);
+    let path = str_param(p, "path").map(|t| t.trim().trim_matches('"').to_string()).ok_or_else(|| bad("dwfattach", "`path` is required"))?;
+    let page = p.get("page").and_then(Value::as_u64).map(|n| u32::try_from(n.clamp(1, 100_000)).unwrap_or(1)).unwrap_or(1);
     let at = point_param(p, "at").unwrap_or(Vec2::ZERO);
     let scale = f64_or(p, "scale", 1.0);
     if !(scale.is_finite() && scale > 0.0 && scale < 1e9) {
@@ -453,20 +447,14 @@ fn run_dwfxout(s: &mut Session, p: &Value) -> Result<Value> {
     // Collect spaces to export.
     let spaces: Vec<cadaddy_doc::Space> = match p.get("layouts") {
         Some(v) => {
-            let a = v
-                .as_array()
-                .ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
+            let a = v.as_array().ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
             a.iter()
                 .map(|n| {
-                    let n = n
-                        .as_str()
-                        .ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
+                    let n = n.as_str().ok_or_else(|| bad("dwfxout", "`layouts` must be a list of layout names"))?;
                     if n.eq_ignore_ascii_case("model") {
                         return Ok(cadaddy_doc::Space::Model);
                     }
-                    d.layout(n)
-                        .map(|l| cadaddy_doc::Space::Paper(l.name.clone()))
-                        .ok_or_else(|| bad("dwfxout", format!("no layout `{n}`")))
+                    d.layout(n).map(|l| cadaddy_doc::Space::Paper(l.name.clone())).ok_or_else(|| bad("dwfxout", format!("no layout `{n}`")))
                 })
                 .collect::<Result<_>>()?
         }
@@ -519,9 +507,7 @@ impl Interactive for DwfAttachM {
             (Some(_), None, ..) => Prompt::new("Enter page number", Accept::NUMBER).default("1"),
             (Some(_), Some(_), None, _) => Prompt::new("Specify insertion point", Accept::POINT),
             (_, _, Some(_), None) => Prompt::new("Specify scale factor", Accept::NUMBER).default("1"),
-            (_, _, Some(a), Some(_)) => {
-                Prompt::new("Specify rotation", Accept::POINT_OR_NUMBER).default("0").base(a)
-            }
+            (_, _, Some(a), Some(_)) => Prompt::new("Specify rotation", Accept::POINT_OR_NUMBER).default("0").base(a),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -548,9 +534,7 @@ impl Interactive for DwfAttachM {
         if self.page.is_none() {
             let n = match i {
                 Input::Enter => 1.0,
-                Input::Text(_) => {
-                    number(&i).ok_or_else(|| bad("dwfattach", "Requires a page number of 1 or more."))?
-                }
+                Input::Text(_) => number(&i).ok_or_else(|| bad("dwfattach", "Requires a page number of 1 or more."))?,
                 _ => return Ok(Step::Continue),
             };
             if !(1.0..=100_000.0).contains(&n) {
@@ -568,9 +552,9 @@ impl Interactive for DwfAttachM {
         if self.scale.is_none() {
             let k = match i {
                 Input::Enter => 1.0,
-                Input::Text(_) => number(&i)
-                    .filter(|n| n.is_finite() && *n > 0.0)
-                    .ok_or_else(|| bad("dwfattach", "Requires a positive scale factor."))?,
+                Input::Text(_) => {
+                    number(&i).filter(|n| n.is_finite() && *n > 0.0).ok_or_else(|| bad("dwfattach", "Requires a positive scale factor."))?
+                }
                 _ => return Ok(Step::Continue),
             };
             self.scale = Some(k);
@@ -579,9 +563,7 @@ impl Interactive for DwfAttachM {
         let at = self.at.unwrap_or(Vec2::ZERO);
         let rot = match i {
             Input::Enter => 0.0,
-            Input::Text(_) => {
-                number(&i).filter(|a| a.is_finite()).ok_or_else(|| bad("dwfattach", "Requires an angle."))?
-            }
+            Input::Text(_) => number(&i).filter(|a| a.is_finite()).ok_or_else(|| bad("dwfattach", "Requires an angle."))?,
             Input::Point(q) => (q - at).angle().to_degrees(),
             _ => return Ok(Step::Continue),
         };

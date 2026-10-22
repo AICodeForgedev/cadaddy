@@ -151,7 +151,9 @@ fn another_version_of_the_plan_and_associative_rebuilds() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     std::fs::write(&earlier, cadaddy_io::write(s.doc().unwrap(), "x.dxf").unwrap()).unwrap();
     line(s.doc_mut().unwrap(), (5.0, 0.5), (5.0, 9.5));

@@ -148,10 +148,8 @@ pub(crate) fn zip_read(data: &[u8], part: &str) -> Result<Vec<u8>> {
     let entries = zip_entries(data)?;
     let norm = |s: &str| s.trim_start_matches('/').to_ascii_lowercase();
     let key = norm(part);
-    let (_, off, csize, usize_, method) = entries
-        .iter()
-        .find(|(n, ..)| norm(n) == key)
-        .ok_or_else(|| IoError::Format(format!("part `{part}` not found in the package")))?;
+    let (_, off, csize, usize_, method) =
+        entries.iter().find(|(n, ..)| norm(n) == key).ok_or_else(|| IoError::Format(format!("part `{part}` not found in the package")))?;
     if *usize_ > MAX_PART || *csize > MAX_PART {
         return Err(IoError::Format("a part of the package is too large".into()));
     }
@@ -175,10 +173,7 @@ pub(crate) fn zip_list(data: &[u8]) -> Result<Vec<String>> {
 
 /// Build the XPS FixedPage XML for one space.  Returns `(xml, width_96, height_96)`.
 fn fixed_page(d: &Drawing, space: &Space) -> (String, f64, f64) {
-    let list = cadaddy_render::build(d, space, &cadaddy_render::Options {
-        transparency: true,
-        ..cadaddy_render::Options::default()
-    });
+    let list = cadaddy_render::build(d, space, &cadaddy_render::Options { transparency: true, ..cadaddy_render::Options::default() });
     let b = list.bounds;
 
     // Page size: 96 XPS units = 1 inch.  Layout: its paper; model space: fit on a 24×18 sheet.
@@ -209,11 +204,7 @@ fn fixed_page(d: &Drawing, space: &Space) -> (String, f64, f64) {
 
     let mut xml = String::with_capacity(list.prims.len() * 100 + 2048);
     let _ = writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-    let _ = writeln!(
-        xml,
-        "<FixedPage Width=\"{}\" Height=\"{}\" xmlns=\"{XPS_NS}\" xml:lang=\"en-US\">",
-        n(pw), n(ph)
-    );
+    let _ = writeln!(xml, "<FixedPage Width=\"{}\" Height=\"{}\" xmlns=\"{XPS_NS}\" xml:lang=\"en-US\">", n(pw), n(ph));
 
     for p in &list.prims {
         let c = p.display_rgb(white);
@@ -237,11 +228,7 @@ fn fixed_page(d: &Drawing, space: &Space) -> (String, f64, f64) {
                     }
                 }
                 let lw = (f64::from(p.lw) * scale * 96.0 / 25.4).max(0.5);
-                let _ = writeln!(
-                    xml,
-                    "  <Path Data=\"{d_attr}\" Stroke=\"{color}\" StrokeThickness=\"{}\"{opacity_attr}/>",
-                    n(lw)
-                );
+                let _ = writeln!(xml, "  <Path Data=\"{d_attr}\" Stroke=\"{color}\" StrokeThickness=\"{}\"{opacity_attr}/>", n(lw));
             }
             Kind::Tris | Kind::Mask => {
                 let fc = if p.kind == Kind::Mask { format!("#{:02X}{:02X}{:02X}", 255, 255, 255) } else { color.clone() };
@@ -251,9 +238,12 @@ fn fixed_page(d: &Drawing, space: &Space) -> (String, f64, f64) {
                         let _ = write!(
                             d_attr,
                             "M {},{} L {},{} L {},{} Z ",
-                            n(ox + a.x * scale), n(oy - a.y * scale),
-                            n(ox + b2.x * scale), n(oy - b2.y * scale),
-                            n(ox + cc.x * scale), n(oy - cc.y * scale)
+                            n(ox + a.x * scale),
+                            n(oy - a.y * scale),
+                            n(ox + b2.x * scale),
+                            n(oy - b2.y * scale),
+                            n(ox + cc.x * scale),
+                            n(oy - cc.y * scale)
                         );
                     }
                 }
@@ -269,7 +259,12 @@ fn fixed_page(d: &Drawing, space: &Space) -> (String, f64, f64) {
                     let _ = writeln!(
                         xml,
                         "  <Path Data=\"M {},{} A {r},{r} 0 1 1 {},{} A {r},{r} 0 1 1 {},{}\" Fill=\"{color}\"{opacity_attr}/>",
-                        n(px - r), n(py), n(px + r), n(py), n(px - r), n(py)
+                        n(px - r),
+                        n(py),
+                        n(px + r),
+                        n(py),
+                        n(px - r),
+                        n(py)
                     );
                 }
             }
@@ -297,20 +292,30 @@ pub fn export_sheets(d: &Drawing, spaces: &[Space]) -> Result<Vec<u8>> {
 
     // Content types and root relationships.
     zip_entries.push(("[Content_Types].xml".into(), CONTENT_TYPES.as_bytes().to_vec(), false));
-    zip_entries.push(("_rels/.rels".into(), format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    zip_entries.push((
+        "_rels/.rels".into(),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
          <Relationship Target=\"/FixedDocumentSequence.fdseq\" Id=\"rel0\" Type=\"{FDSEQ_REL}\"/>\
          </Relationships>\n"
-    ).into_bytes(), false));
+        )
+        .into_bytes(),
+        false,
+    ));
 
     // FixedDocumentSequence (ECMA-388 §2.1.1).
-    zip_entries.push(("FixedDocumentSequence.fdseq".into(), format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    zip_entries.push((
+        "FixedDocumentSequence.fdseq".into(),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <FixedDocumentSequence xmlns=\"{XPS_NS}\">\
          <DocumentReference Source=\"/Documents/1/FixedDocument.fdoc\"/>\
          </FixedDocumentSequence>\n"
-    ).into_bytes(), true));
+        )
+        .into_bytes(),
+        true,
+    ));
 
     // Build pages and the FixedDocument.
     let mut page_data: Vec<(String, f64, f64)> = Vec::new();
@@ -343,10 +348,7 @@ pub fn plot(d: &Drawing, space: &Space) -> Result<Vec<u8>> {
 
 /// DWF 6 ePlot export: a zip of a W2D data stream with an XML manifest.
 pub fn export_dwf6(d: &Drawing, space: &Space) -> Result<Vec<u8>> {
-    let list = cadaddy_render::build(d, space, &cadaddy_render::Options {
-        transparency: true,
-        ..cadaddy_render::Options::default()
-    });
+    let list = cadaddy_render::build(d, space, &cadaddy_render::Options { transparency: true, ..cadaddy_render::Options::default() });
     let b = list.bounds;
     let (bw, bh) = if b.is_empty() { (100.0, 100.0) } else { (b.width().max(1e-9), b.height().max(1e-9)) };
 
@@ -408,13 +410,11 @@ pub fn export_dwf6(d: &Drawing, space: &Space) -> Result<Vec<u8>> {
          </Resource>\n\
          </Section>\n\
          </Manifest>\n",
-        w = n(bw), h = n(bh)
+        w = n(bw),
+        h = n(bh)
     );
 
-    zip(&[
-        ("manifest.xml", manifest.as_bytes(), true),
-        ("ePlot/graphics.w2d", &w2d, true),
-    ])
+    zip(&[("manifest.xml", manifest.as_bytes(), true), ("ePlot/graphics.w2d", &w2d, true)])
 }
 
 // ---- DWFx reading (for underlays) ----
@@ -429,12 +429,7 @@ pub fn read_pages(data: &[u8]) -> Result<(Vec<Drawing>, usize)> {
             let xml = zip_read(data, name)?;
             let xml_str = std::str::from_utf8(&xml).map_err(|_| IoError::Format("invalid UTF-8 in FixedPage".into()))?;
             let d = parse_fixed_page(xml_str)?;
-            let num = name
-                .rsplit('/')
-                .next()
-                .and_then(|f| f.strip_suffix(".fpage"))
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(pages.len() + 1);
+            let num = name.rsplit('/').next().and_then(|f| f.strip_suffix(".fpage")).and_then(|s| s.parse::<usize>().ok()).unwrap_or(pages.len() + 1);
             pages.push((num, d));
         }
     }
@@ -530,12 +525,7 @@ mod tests {
 
     fn simple_drawing() -> Drawing {
         let mut d = Drawing::new_metric();
-        d.add(
-            &Space::Model,
-            Common::default(),
-            EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(100.0, 50.0, 0.0) }),
-        )
-        .ok();
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(100.0, 50.0, 0.0) })).ok();
         d
     }
 
@@ -560,19 +550,9 @@ mod tests {
     #[test]
     fn multi_sheet_publish_gives_two_pages() {
         let mut d = Drawing::new_metric();
-        d.add(
-            &Space::Model,
-            Common::default(),
-            EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 5.0, 0.0) }),
-        )
-        .ok();
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 5.0, 0.0) })).ok();
         let layout_name = d.layouts[0].name.clone();
-        d.add(
-            &Space::Paper(layout_name.clone()),
-            Common::default(),
-            EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(20.0, 10.0, 0.0) }),
-        )
-        .ok();
+        d.add(&Space::Paper(layout_name.clone()), Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(20.0, 10.0, 0.0) })).ok();
 
         let bytes = export_sheets(&d, &[Space::Model, Space::Paper(layout_name)]).unwrap();
         let parts = zip_list(&bytes).unwrap();

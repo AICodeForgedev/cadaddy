@@ -37,7 +37,14 @@ fn saveas_without_an_extension_adds_dwg() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
     // The app's "Save new drawings as" format (.cdy unless chosen otherwise): DWG here.
     cadaddy_engine::cmd::file::set_default_ext("dwg");
-    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     let dir = std::env::temp_dir().join(format!("cadaddy-saveas-ext-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = Session::new();
@@ -72,7 +79,14 @@ fn image_commands_list_detach_and_set_transparency() {
 #[test]
 fn recover_of_an_open_file_replaces_it_instead_of_a_second_tab() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     let dir = std::env::temp_dir().join(format!("cadaddy-recover-open-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("plan.dxf");

@@ -19,7 +19,9 @@ fn session() -> Session {
         read: |_, _| Err("no reader in this test".into()),
         write: |_, _| Err("no writer in this test".into()),
         plot: Some(echo_plot),
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     let mut s = Session::new();
     s.cmdline("line 0,0 100,0").unwrap();

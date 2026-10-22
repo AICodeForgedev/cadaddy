@@ -26,7 +26,9 @@ fn install() -> std::sync::MutexGuard<'static, ()> {
         },
         write: |_, _| Ok(b"saved".to_vec()),
         plot: None,
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     guard
 }

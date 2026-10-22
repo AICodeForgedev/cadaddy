@@ -298,7 +298,14 @@ fn lsp_lists_what_lisp_defined_and_lspsurf_reads_a_file() {
 #[test]
 fn revert_goes_back_to_the_saved_drawing() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks { read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()), write: |_, _| Ok(b"saved".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     let mut s = Session::new();
     assert!(s.execute("revert", &json!({})).is_err(), "never saved");
     s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();

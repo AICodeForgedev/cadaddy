@@ -22,7 +22,8 @@ use super::*;
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl", "ifc", "3mf", "dwfx", "dwf"];
+pub const EXPORT_FORMATS: &[&str] =
+    &["cdy", "dxf", "dwg", "svg", "png", "pdf", "eps", "wmf", "glb", "gltf", "obj", "stl", "ifc", "3mf", "dwfx", "dwf"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -99,10 +100,7 @@ fn attach_spec(path: &str) -> Result<&'static CommandSpec> {
         "pdf" => "pdfattach",
         "dwf" | "dwfx" => "dwfattach",
         "dgn" => {
-            return Err(bad(
-                "attach",
-                "DGN underlays need a DGN reader, which CADaddy doesn't have; attach a PDF, DWF, image or drawing instead",
-            ));
+            return Err(bad("attach", "DGN underlays need a DGN reader, which CADaddy doesn't have; attach a PDF, DWF, image or drawing instead"));
         }
         other => {
             return Err(bad("attach", format!("files of type .{other} can't be attached; choose an image (PNG, JPEG) or a drawing (CDY, DWG, DXF)")));
@@ -942,7 +940,9 @@ mod tests {
             read: |_, _| Err("no reader in tests".into()),
             write: |d, name| Ok(if name == "probe.test" { b"exchange".to_vec() } else { format!("{name}:{}", d.model.len()).into_bytes() }),
             plot: Some(fake_plot),
-            read_pdf: None, read_dwf: None, write_dwfx: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
         });
         io().is_some_and(|h| (h.write)(&Drawing::new_imperial(), "probe.test").is_ok_and(|b| b == b"exchange"))
     }

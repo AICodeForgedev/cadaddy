@@ -15,7 +15,9 @@ fn session() -> Session {
         read: |_, _| Err("no reader".into()),
         write: |_, _| Err("no writer".into()),
         plot: Some(|_, _, opts| Ok(format!("%PDF {}", opts["output"]).into_bytes())),
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     set_print(PrintHooks {
         list: || Ok(vec!["Office Laser".into(), "Plotter".into()]),

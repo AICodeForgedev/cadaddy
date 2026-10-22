@@ -16,7 +16,9 @@ fn io_hooks() {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
         plot: None,
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
 }
 

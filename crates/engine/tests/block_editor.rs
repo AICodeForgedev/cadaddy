@@ -206,7 +206,9 @@ fn a_file_save_writes_the_drawing_outside_the_editor() {
         read: |_, _| Err("no reader in this test".into()),
         write: |d, _| Ok(format!("{} {}", d.model.len(), d.block("Door").map_or(0, |b| b.entities.len())).into_bytes()),
         plot: None,
-        read_pdf: None, read_dwf: None, write_dwfx: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
     });
     let mut s = Session::new();
     door(&mut s);

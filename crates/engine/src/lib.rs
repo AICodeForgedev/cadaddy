@@ -1494,9 +1494,7 @@ impl Session {
         let result = plugins::execute_plugin_command(&engine, &module, id, params, self);
         // Create an undo step if the plug-in changed the drawing.
         let changed = match (&before, self.state().ok()) {
-            (Some((doc_before, _, uid_before)), Some(st)) if st.uid == *uid_before => {
-                !Arc::ptr_eq(&st.doc, doc_before)
-            }
+            (Some((doc_before, _, uid_before)), Some(st)) if st.uid == *uid_before => !Arc::ptr_eq(&st.doc, doc_before),
             _ => false,
         };
         if changed {

@@ -5,14 +5,14 @@
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
 pub mod cdy;
+/// DWFx (XML Paper Specification / ECMA-388) and DWF 6 export/reading.
+pub mod dwfx;
 mod dwg_fixup;
 mod dwg_keep;
 pub mod dwg_native;
 pub mod dwg_read;
 pub mod dwg_write;
 mod dxf_raw;
-/// DWFx (XML Paper Specification / ECMA-388) and DWF 6 export/reading.
-pub mod dwfx;
 /// 3D model exchange: glTF/GLB, OBJ+MTL and STL.
 pub mod ifc;
 pub mod mesh3d_io;
