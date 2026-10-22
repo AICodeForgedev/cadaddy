@@ -13,12 +13,12 @@
 
 use crate::clash;
 use crate::conduit_reader::ConduitResult;
-use crate::sheet_reader::{self, RecognisedSheet, SheetMap};
-use crate::tray_reader::TrayResult;
-use crate::truth::{HeightSource, Segment, Truth};
 use crate::draw;
 use crate::layout::{self, Kind};
+use crate::sheet_reader::{self, RecognisedSheet, SheetMap};
 use crate::style::Style;
+use crate::tray_reader::TrayResult;
+use crate::truth::{HeightSource, Segment, Truth};
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, HAlign, Space, Text, VAlign, entity_bounds};
 use cadaddy_geom::{Mat3, Vec2, Vec3};
 
