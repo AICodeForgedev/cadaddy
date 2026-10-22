@@ -3124,3 +3124,7 @@ menu	Modify	Edita
 	Shade plot "Rendered" plots in the Realistic visual style.	Il plottaggio ombreggiato "Rendered" stampa nello stile di visualizzazione Realistico.
 	Options:	Opzioni:
 	Prompt:	Richiesta:
+	Set Estimate Factor	Imposta fattore di stima
+	Record Field Observation	Registra osservazione di cantiere
+	Export Estimate	Esporta stima
+	Estimate Bid Summary	Riepilogo offerta della stima

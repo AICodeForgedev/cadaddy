@@ -2914,3 +2914,7 @@
 	Shade plot "Rendered" plots in the Realistic visual style.	Тонированная печать «Rendered» печатает в визуальном стиле «Реалистичный».
 	Options:	Параметры:
 	Prompt:	Запрос:
+	Set Estimate Factor	Задать коэффициент сметы
+	Record Field Observation	Записать наблюдение с объекта
+	Export Estimate	Экспорт сметы
+	Estimate Bid Summary	Сводка предложения по смете

@@ -2913,3 +2913,7 @@
 	Shade plot "Rendered" plots in the Realistic visual style.	Le tracé ombré « Rendered » trace dans le style visuel Réaliste.
 	Options:	Options :
 	Prompt:	Invite :
+	Set Estimate Factor	Définir le facteur d’estimation
+	Record Field Observation	Enregistrer une observation de chantier
+	Export Estimate	Exporter l’estimation
+	Estimate Bid Summary	Résumé de l’offre de l’estimation

@@ -3105,3 +3105,7 @@ menu	Modify	Modifikace
 	Shade plot "Rendered" plots in the Realistic visual style.	Stínovaný tisk „Rendered“ tiskne ve vizuálním stylu Realistický.
 	Options:	Možnosti:
 	Prompt:	Výzva:
+	Set Estimate Factor	Nastavit faktor odhadu
+	Record Field Observation	Zaznamenat pozorování z terénu
+	Export Estimate	Exportovat odhad
+	Estimate Bid Summary	Souhrn nabídky z odhadu

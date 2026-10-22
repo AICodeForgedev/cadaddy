@@ -3178,3 +3178,7 @@
 	Shade plot "Rendered" plots in the Realistic visual style.	Тонований друк «Rendered» друкує у візуальному стилі «Реалістичний».
 	Options:	Параметри:
 	Prompt:	Запит:
+	Set Estimate Factor	Задати коефіцієнт кошторису
+	Record Field Observation	Записати спостереження з об’єкта
+	Export Estimate	Експортувати кошторис
+	Estimate Bid Summary	Підсумок пропозиції за кошторисом
