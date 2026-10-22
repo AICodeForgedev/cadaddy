@@ -236,15 +236,12 @@ pub(crate) fn run_define_pattern(_s: &mut Session, p: &Value) -> Result<Value> {
         lines,
     };
     if let Some(path) = str_param(p, "save").map(str::trim).filter(|x| !x.is_empty()) {
-        let mut all = match crate::readfile::read(path) {
-            Ok(bytes) => parse_pat(&String::from_utf8_lossy(&bytes)).items,
-            Err(_) => Vec::new(),
+        let new = write_pat(std::slice::from_ref(&up)).map_err(|e| bad("hatch.pattern.define", e))?;
+        // Into a file that is there: only this pattern's lines change.
+        let text = match crate::cmd::props::linfile::existing_text(path, "hatch.pattern.define")? {
+            Some(old) => cadaddy_doc::library::files::put_definition(&old, &up.name, &new),
+            None => new,
         };
-        match all.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&up.name)) {
-            Some(q) => *q = up.clone(),
-            None => all.push(up.clone()),
-        }
-        let text = write_pat(&all).map_err(|e| bad("hatch.pattern.define", e))?;
         crate::writefile::write(path, text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
     }
     let mut user = store();

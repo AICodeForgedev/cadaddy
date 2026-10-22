@@ -115,3 +115,97 @@ fn bad_definitions_are_refused() {
     }
     assert!(s.doc().unwrap().linetype("A").is_none(), "a failed save leaves the drawing as it was");
 }
+
+/// A hand-kept .lin file: comments, a definition the reader rejects (a bad element), a name
+/// defined twice, blank lines, and the one about to be redefined.
+const LIN: &str = ";; Company linetypes, kept by hand\n;; (a second comment)\n\n*BROKEN,Has a bad element\nA,0.5,-0.25,[BAD\n*DASHY,Dashed\nA,0.5,-0.25\n*DASHY,Twice: the reader keeps the first\nA,1,-1\n\n*FENCE,Old fence\nA,1,-0.5\n; a closing note\n";
+
+/// Saving into an existing .lin changes only the redefined linetype's lines; a new one is
+/// added at the end. Everything else stays byte for byte.
+#[test]
+fn saving_into_a_lin_file_keeps_every_other_line() {
+    use cadaddy_engine::doc::library::files::parse_lin;
+    let before = parse_lin(LIN);
+    assert!(!before.items.iter().any(|l| l.name == "BROKEN") && !before.warnings.is_empty(), "the reader skips BROKEN");
+    let lin = dir("keep-lin").join("company.lin");
+    std::fs::write(&lin, LIN).unwrap();
+    let path = lin.display().to_string();
+    let mut s = Session::new();
+    s.execute("linetype.define", &json!({"name": "FENCE", "description": "New fence", "elements": [{"dash": 0.6}, {"gap": 0.2}], "save": path}))
+        .unwrap();
+    let want = LIN.replace("*FENCE,Old fence\nA,1,-0.5\n", "*FENCE,New fence\nA,0.6,-0.2\n");
+    assert_eq!(std::fs::read_to_string(&lin).unwrap(), want);
+    s.execute("linetype.define", &json!({"name": "NEWONE", "elements": [{"dash": 0.3}, {"gap": 0.1}], "save": path})).unwrap();
+    let want = format!("{want}*NEWONE\nA,0.3,-0.1\n");
+    let text = std::fs::read_to_string(&lin).unwrap();
+    assert_eq!(text, want);
+    // Read back: the new definitions, and the first DASHY still the one kept.
+    let back = parse_lin(&text);
+    let get = |n: &str| back.items.iter().find(|l| l.name == n).unwrap_or_else(|| panic!("{n} in {:?}", back.items));
+    assert_eq!(get("FENCE").pattern.iter().map(|e| e.length).collect::<Vec<_>>(), [0.6, -0.2]);
+    assert_eq!(get("NEWONE").pattern.iter().map(|e| e.length).collect::<Vec<_>>(), [0.3, -0.1]);
+    assert_eq!(get("DASHY").description, "Dashed");
+}
+
+const PAT: &str = ";; Office patterns\n*BADPAT,Rejected: no spacing\n0, 0, 0, 0, 0\n\n*GRID,Grid\n0, 0, 0, 0, 1\n90, 0, 0, 0, 1\n*GRID,Twice\n45, 0, 0, 0, 2\n\n*BOND,Old bond\n0, 0, 0, 0, 2\n; the end\n";
+
+/// The same for a .pat file: only the redefined pattern's lines change.
+#[test]
+fn saving_into_a_pat_file_keeps_every_other_line() {
+    use cadaddy_engine::doc::library::files::parse_pat;
+    let before = parse_pat(PAT);
+    assert!(!before.items.iter().any(|p| p.name == "BADPAT") && !before.warnings.is_empty(), "the reader skips BADPAT");
+    let pat = dir("keep-pat").join("office.pat");
+    std::fs::write(&pat, PAT).unwrap();
+    let path = pat.display().to_string();
+    let mut s = Session::new();
+    s.execute("hatch.pattern.define", &json!({"name": "Bond", "description": "New bond", "lines": [{"angle": 0, "dy": 3}], "save": path})).unwrap();
+    let want = PAT.replace("*BOND,Old bond\n0, 0, 0, 0, 2\n", "*BOND,New bond\n0, 0, 0, 0, 3\n");
+    assert_eq!(std::fs::read_to_string(&pat).unwrap(), want);
+    s.execute("hatch.pattern.define", &json!({"name": "Stripe", "lines": [{"angle": 45, "dy": 2}], "save": path})).unwrap();
+    let want = format!("{want}*STRIPE\n45, 0, 0, 0, 2\n");
+    let text = std::fs::read_to_string(&pat).unwrap();
+    assert_eq!(text, want);
+    let back = parse_pat(&text);
+    let get = |n: &str| back.items.iter().find(|p| p.name == n).unwrap_or_else(|| panic!("{n} in {:?}", back.items));
+    assert_eq!(get("BOND").lines[0].delta.1, 3.0);
+    assert_eq!(get("STRIPE").lines[0].angle, 45.0);
+    assert_eq!(get("GRID").lines.len(), 2, "the first GRID still the one kept");
+}
+
+/// A target that is there but can't be read (a folder) or isn't text is refused: nothing is
+/// written, and the drawing (or the patterns offered) stay as they were.
+#[test]
+fn a_target_that_cant_be_read_or_isnt_text_is_refused() {
+    let d = dir("refuse");
+    let folder = d.join("looks-like.lin");
+    std::fs::create_dir_all(&folder).unwrap();
+    let binary = d.join("binary.pat");
+    let bytes = [0xff, 0xfe, 0x00, b'*', 0x80, b'\n'];
+    std::fs::write(&binary, bytes).unwrap();
+    let binary_lin = d.join("binary.lin");
+    std::fs::write(&binary_lin, bytes).unwrap();
+    let mut s = Session::new();
+    for (target, says) in [(&folder, "can't be read"), (&binary_lin, "isn't a text file")] {
+        let e = s
+            .execute("linetype.define", &json!({"name": "NOPE", "elements": [{"dash": 1}, {"gap": 0.5}], "save": target.display().to_string()}))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains(says) && e.contains("isn't written over"), "{e}");
+        assert!(s.doc().unwrap().linetype("NOPE").is_none(), "the drawing as it was");
+    }
+    let folder_pat = d.join("looks-like.pat");
+    std::fs::create_dir_all(&folder_pat).unwrap();
+    for (target, says) in [(&folder_pat, "can't be read"), (&binary, "isn't a text file")] {
+        let e = s
+            .execute("hatch.pattern.define", &json!({"name": "NOPAT", "lines": [{"dy": 1}], "save": target.display().to_string()}))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains(says) && e.contains("isn't written over"), "{e}");
+    }
+    let list = s.execute("hatch.patterns", &json!({})).unwrap();
+    assert!(!list["user"].as_array().unwrap().iter().any(|p| p["name"] == "NOPAT"), "{list}");
+    assert_eq!(std::fs::read(&binary).unwrap(), bytes);
+    assert_eq!(std::fs::read(&binary_lin).unwrap(), bytes);
+    assert!(folder.is_dir() && folder_pat.is_dir());
+}
