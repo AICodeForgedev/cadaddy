@@ -91,7 +91,7 @@ fn objects_drawing() -> Drawing {
         view_height: 30.0,
         ..Viewport::default()
     };
-    d.add(&Space::Paper("Sheet 2".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    d.add(&Space::Paper("Sheet 2".into()), Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     d
 }
 
@@ -390,10 +390,10 @@ fn misc_drawing() -> Drawing {
     let pts = [Vec2::new(0.0, 0.0), Vec2::new(20.0, 0.0), Vec2::new(20.0, 10.0)];
     let mut open = MLine::new(&wall, &pts, false, MLineJust::Zero, 2.0);
     open.vertices[0].cuts.push(MLineCut { element: 0, start: 4.0, end: 6.5 });
-    d.add(&Space::Model, Common::default(), EntityKind::MLine(open)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLine(Box::new(open))).unwrap();
     let closed =
         MLine::new(&MLineStyle::default(), &[Vec2::new(0.0, 30.0), Vec2::new(10.0, 30.0), Vec2::new(5.0, 40.0)], true, MLineJust::Bottom, -1.0);
-    d.add(&Space::Model, Common::default(), EntityKind::MLine(closed)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLine(Box::new(closed))).unwrap();
     let img = Image {
         insert: Vec3::new(1.0, 1.0, 0.0),
         u: Vec3::new(2.0, 0.0, 0.0),
@@ -402,7 +402,7 @@ fn misc_drawing() -> Drawing {
         path: "pictures/site plan.png".into(),
         ..Image::default()
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Image(img)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
     let wipe = Wipeout { boundary: vec![Vec2::new(50.0, 0.0), Vec2::new(60.0, 0.0), Vec2::new(60.0, 5.0), Vec2::new(50.0, 5.0)] };
     d.add(&Space::Model, Common::default(), EntityKind::Wipeout(wipe)).unwrap();
     d

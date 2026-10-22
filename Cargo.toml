@@ -34,6 +34,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 rayon = "1"
+# Small strings kept inline (object layer, linetype and plot style names: no allocation each).
+smol_str = { version = "0.2.2", features = ["serde"] }
 
 # rendering / formats
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }

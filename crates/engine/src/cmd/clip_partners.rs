@@ -161,6 +161,6 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     }
     let d = Arc::make_mut(&mut st.doc);
     for (h, v) in fits {
-        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Viewport(v));
+        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Viewport(Box::new(v)));
     }
 }

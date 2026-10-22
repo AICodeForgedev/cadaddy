@@ -131,7 +131,7 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
             break;
         }
         if !layers.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer)) {
-            layers.push(e.common.layer.clone());
+            layers.push(e.common.layer.to_string());
         }
     }
     let lim = Limits { min_thick: 2.5 * k, max_thick: 20.0 * k, min_len: 12.0 * k };
@@ -236,7 +236,7 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
         if let Some(e) = ents.iter().find(|e| e.handle == h)
             && !room_layers.iter().any(|l| l.eq_ignore_ascii_case(&e.common.layer))
         {
-            room_layers.push(e.common.layer.clone());
+            room_layers.push(e.common.layer.to_string());
         }
         rooms.push(Room { name: room_name, number, level: None, ceiling_ft: ceiling, materials: Default::default() });
         outlines.push(poly);

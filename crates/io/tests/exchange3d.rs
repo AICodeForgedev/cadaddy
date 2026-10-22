@@ -37,7 +37,7 @@ fn drawing() -> Drawing {
     m.color = Rgb(200, 0, 0);
     m.roughness = 0.3;
     d.materials.push(m);
-    let c = Common { material: Some("Red paint".into()), ..Common::default() };
+    let c = Common { material: Some("Red paint".into()).into(), ..Common::default() };
     d.add(&Space::Model, c, EntityKind::Mesh(boxmesh(Vec3::ZERO, Vec3::new(100.0, 100.0, 100.0)))).unwrap();
     let mut b = Block::new("Cube");
     b.entities.push(Entity::new(Handle(0x9000), EntityKind::Mesh(boxmesh(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)))));

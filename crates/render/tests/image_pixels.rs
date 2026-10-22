@@ -55,7 +55,7 @@ fn pixels_land_where_the_image_is_placed() {
     quad_image("mem://quad-placed");
     let mut d = Drawing::new_imperial();
     d.header.set_i64("IMAGEFRAME", 0);
-    d.add(&Space::Model, Common::default(), EntityKind::Image(image("mem://quad-placed", Vec2::new(5.0, 5.0)))).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(image("mem://quad-placed", Vec2::new(5.0, 5.0))))).unwrap();
     let list = build(&d, &Space::Model, &opts());
     assert_eq!(list.prims.iter().filter(|p| matches!(p.kind, Kind::Image(_))).count(), 1);
     assert!(list.prims.iter().all(|p| p.kind != Kind::Polyline), "no frame with IMAGEFRAME 0");
@@ -77,7 +77,7 @@ fn clip_boundary_and_block_references() {
     img.clip = vec![Vec2::new(-0.5, -0.5), Vec2::new(0.5, 1.5)];
     img.clipping = true;
     let mut blk = Block::new("LOGO");
-    blk.entities.push(Entity::new(Handle(1), EntityKind::Image(img)));
+    blk.entities.push(Entity::new(Handle(1), EntityKind::Image(Box::new(img))));
     d.blocks.insert("LOGO".into(), std::sync::Arc::new(blk));
     let ins = Insert {
         block: "LOGO".into(),
@@ -101,7 +101,7 @@ fn clip_boundary_and_block_references() {
 #[test]
 fn a_missing_file_draws_a_crossed_frame() {
     let mut d = Drawing::new_imperial();
-    d.add(&Space::Model, Common::default(), EntityKind::Image(image("/no/such/image.png", Vec2::new(5.0, 5.0)))).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(image("/no/such/image.png", Vec2::new(5.0, 5.0))))).unwrap();
     let list = build(&d, &Space::Model, &opts());
     assert!(list.images.is_empty());
     // two diagonals and the frame
@@ -116,7 +116,7 @@ fn a_black_stencil_shows_white_on_a_dark_screen() {
     d.header.set_i64("IMAGEFRAME", 0);
     let mut img = image("mem://stencil", Vec2::new(5.0, 5.0));
     img.size = Vec2::new(2.0, 1.0);
-    d.add(&Space::Model, Common::default(), EntityKind::Image(img)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
     let list = build(&d, &Space::Model, &opts());
     assert_eq!(color_at(&list, Vec2::new(7.5, 7.5)), [255, 255, 255], "white on the dark background");
     assert_eq!(color_at(&list, Vec2::new(12.5, 7.5)), [0, 0, 0], "the clear part shows the background");
@@ -134,13 +134,13 @@ fn brightness_and_contrast_change_the_pixels_drawn() {
     d.header.set_i64("IMAGEFRAME", 0);
     let mut img = image("mem://quad-adjusted", Vec2::new(5.0, 5.0));
     img.brightness = 100;
-    d.add(&Space::Model, Common::default(), EntityKind::Image(img.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img.clone()))).unwrap();
     // full brightness turns the red pixel white
     assert_eq!(color_at(&build(&d, &Space::Model, &opts()), Vec2::new(7.5, 12.5)), [255, 255, 255]);
     // no contrast: everything mid-grey
     let mut d2 = Drawing::new_imperial();
     d2.header.set_i64("IMAGEFRAME", 0);
-    d2.add(&Space::Model, Common::default(), EntityKind::Image(cadaddy_doc::Image { brightness: 50, contrast: 0, ..img })).unwrap();
+    d2.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(cadaddy_doc::Image { brightness: 50, contrast: 0, ..img }))).unwrap();
     let c = color_at(&build(&d2, &Space::Model, &opts()), Vec2::new(12.5, 12.5));
     assert!(c.iter().all(|v| (120..=136).contains(v)), "{c:?}");
 }

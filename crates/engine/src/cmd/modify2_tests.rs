@@ -376,7 +376,7 @@ fn chspace_json_and_command_line() {
         twist: 0.0,
         anno_scale: None,
     };
-    s.doc_mut().unwrap().add(&Space::Paper("Layout1".into()), Default::default(), EntityKind::Viewport(vp)).unwrap();
+    s.doc_mut().unwrap().add(&Space::Paper("Layout1".into()), Default::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     let r = s.execute("chspace", &json!({"handles": [l]})).unwrap();
     assert_eq!(r["moved"], 1);
     assert_eq!(r["to"], "Layout1");

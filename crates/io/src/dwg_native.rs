@@ -31,7 +31,7 @@ pub(crate) fn tag(g: &Group) -> Tag {
         (Kind::Int16 | Kind::Int32 | Kind::Int64, Value::Real(f)) if f.is_finite() => cadaddy_dxf::Value::Int(*f as i64),
         (Kind::Bool, Value::Int(i)) => cadaddy_dxf::Value::Bool(*i != 0),
         (Kind::Hex, _) => cadaddy_dxf::Value::Hex(text()),
-        _ => cadaddy_dxf::Value::Str(text()),
+        _ => cadaddy_dxf::Value::Str(text().into()),
     };
     Tag::new(g.code, value)
 }

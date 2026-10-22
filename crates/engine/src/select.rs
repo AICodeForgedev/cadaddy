@@ -766,7 +766,7 @@ mod hatch_pattern_pick_tests {
             background: None,
             pattern_lines: Vec::new(),
         };
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch))).unwrap();
         d
     }
 
@@ -804,7 +804,7 @@ mod hatch_pattern_pick_tests {
             background: None,
             pattern_lines: Vec::new(),
         };
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch)).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch))).unwrap();
         d
     }
 

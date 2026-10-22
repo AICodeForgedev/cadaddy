@@ -284,7 +284,7 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         let Some(level) = scene.levels.get(*si) else { continue };
         for (part, m, source, wall_type) in pl.meshes() {
             let xdata = if part == Part::Wall { wall_tag(&level.name, source, wall_type.as_deref()) } else { tag(part, &level.name, source) };
-            let common = Common { layer: layer_of(part).into(), xdata, ..Common::default() };
+            let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
             }
@@ -312,7 +312,7 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         if grp.part == Part::Floor {
             m = slab(&m, g.slab_ft.max(0.0) * upf);
         }
-        let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source), ..Common::default() };
+        let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source).into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             *counts.entry(part_name(grp.part)).or_insert(0) += 1;
         }
@@ -699,7 +699,7 @@ pub(crate) fn fit_families(
                     kind,
                     at: ins.insert.xy(),
                     width: width.unwrap_or(found),
-                    layer: e.common.layer.clone(),
+                    layer: e.common.layer.to_string(),
                     handle: e.handle,
                     swing: None,
                     block: Some(ins.block.clone()),

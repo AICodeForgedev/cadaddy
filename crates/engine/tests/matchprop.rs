@@ -26,7 +26,7 @@ fn setup() -> (Session, Handle, Handle, Handle) {
 
 fn props(s: &Session, h: Handle) -> (String, Color, f64) {
     let e = s.doc().unwrap().entity(h).cloned().unwrap();
-    (e.common.layer.clone(), e.common.color, e.common.ltscale)
+    (e.common.layer.to_string(), e.common.color, e.common.ltscale)
 }
 
 #[test]

@@ -67,7 +67,8 @@ fn group(t: &Tag) -> Group {
         cadaddy_dxf::Value::Real(f) => Value::Real(*f),
         cadaddy_dxf::Value::Int(i) => Value::Int(*i),
         cadaddy_dxf::Value::Bool(b) => Value::Int(i64::from(*b)),
-        cadaddy_dxf::Value::Hex(s) | cadaddy_dxf::Value::Str(s) => Value::Str(s.clone()),
+        cadaddy_dxf::Value::Hex(s) => Value::Str(s.clone()),
+        cadaddy_dxf::Value::Str(s) => Value::Str(s.to_string()),
     };
     Group { code: t.code, value }
 }

@@ -1925,7 +1925,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             return;
         }
         let transparency = if transp > 0 { Transparency::Percent(transp) } else { Transparency::ByLayer };
-        let common = Common { layer, color, lineweight: lw, transparency, ..Common::default() };
+        let common = Common { layer: layer.into(), color, lineweight: lw, transparency, ..Common::default() };
         if d.add(&Space::Model, common, kind).is_ok() {
             added += 1;
         }
@@ -2011,7 +2011,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     background: None,
                     pattern_lines: Vec::new(),
                 };
-                add(&mut d, layer, color, lw, f.pen.transp, EntityKind::Hatch(hatch));
+                add(&mut d, layer, color, lw, f.pen.transp, EntityKind::Hatch(Box::new(hatch)));
                 *stats.entry("solid fills".into()).or_default() += 1;
             }
             2 => {
@@ -2079,7 +2079,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     ..Image::default()
                 };
                 let (layer, color, lw) = place("image", Pen { rgb: [0, 0, 0], lw: 0, transp: im.transp }, &im.layer);
-                add(&mut d, layer, color, lw, im.transp, EntityKind::Image(image));
+                add(&mut d, layer, color, lw, im.transp, EntityKind::Image(Box::new(image)));
                 *stats.entry("images".into()).or_default() += 1;
             }
             _ => {
@@ -2170,7 +2170,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             locked: true,
             ..Viewport::default()
         };
-        if d.add(&Space::Paper(name.clone()), Common { layer: "0".into(), ..Common::default() }, EntityKind::Viewport(vp)).is_ok() {
+        if d.add(&Space::Paper(name.clone()), Common { layer: "0".into(), ..Common::default() }, EntityKind::Viewport(Box::new(vp))).is_ok() {
             stats.insert("layout".into(), 1);
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));

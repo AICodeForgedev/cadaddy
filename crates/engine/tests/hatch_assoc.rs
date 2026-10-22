@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 fn hatch(s: &Session, h: &str) -> Hatch {
     let h = Handle::parse_hex(h).unwrap();
     match &s.doc().unwrap().entity(h).unwrap().kind {
-        EntityKind::Hatch(x) => x.clone(),
+        EntityKind::Hatch(x) => x.as_ref().clone(),
         k => panic!("not a hatch: {k:?}"),
     }
 }
@@ -163,7 +163,7 @@ fn hostile_sources_never_panic() {
     let nan = vec![PolyVertex::new(Vec2::new(f64::NAN, 0.0)); 3];
     let mut sources = vec![Handle(u64::MAX), Handle(0), rh];
     sources.extend((1..10_000).map(Handle));
-    let k = EntityKind::Hatch(Hatch {
+    let k = EntityKind::Hatch(Box::new(Hatch {
         pattern: "ANSI31".into(),
         solid: false,
         loops: vec![
@@ -179,7 +179,7 @@ fn hostile_sources_never_panic() {
         origin: Vec2::ZERO,
         background: None,
         pattern_lines: Vec::new(),
-    });
+    }));
     s.add_entity(k).unwrap();
     s.execute("move", &json!({ "handles": [r], "delta": [1, 1] })).unwrap();
     s.execute("erase", &json!({ "handles": "all" })).ok();

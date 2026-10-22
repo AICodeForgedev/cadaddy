@@ -32,7 +32,7 @@ struct W {
 }
 
 impl W {
-    fn s(&mut self, c: i32, v: impl Into<String>) {
+    fn s(&mut self, c: i32, v: impl Into<cadaddy_dxf::SmolStr>) {
         self.t.push(Tag::s(c, v));
     }
     fn f(&mut self, c: i32, v: f64) {
@@ -610,9 +610,9 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, rea
 /// it replaces something else in `base` (an attribute's definition).
 fn layer_and_props(w: &mut W, c: &Common, base: Option<&Common>) {
     let write = |by_layer: bool, base_by_layer: fn(&Common) -> bool| !by_layer || base.is_some_and(|b| !base_by_layer(b));
-    w.s(8, &c.layer);
+    w.s(8, c.layer.as_str());
     if write(c.linetype.eq_ignore_ascii_case("bylayer"), |b| b.linetype.eq_ignore_ascii_case("bylayer")) {
-        w.s(6, &c.linetype);
+        w.s(6, c.linetype.as_str());
     }
     match c.color {
         Color::ByLayer if write(true, |b| b.color == Color::ByLayer) => w.i(62, 256),
@@ -846,7 +846,7 @@ fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Versi
                 w.s(5, vh);
                 w.s(330, e.handle.hex());
                 w.s(100, "AcDbEntity");
-                w.s(8, &e.common.layer);
+                w.s(8, e.common.layer.as_str());
                 w.s(100, "AcDbVertex");
                 w.s(100, "AcDbPolygonMeshVertex");
                 w.p(10, *v);
@@ -896,7 +896,7 @@ fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Versi
                 w.s(5, vh);
                 w.s(330, e.handle.hex());
                 w.s(100, "AcDbEntity");
-                w.s(8, &e.common.layer);
+                w.s(8, e.common.layer.as_str());
                 w.s(100, "AcDbVertex");
                 w.s(100, "AcDbPolyFaceMeshVertex");
                 w.p(10, *v);
@@ -908,7 +908,7 @@ fn mesh(w: &mut W, e: &Entity, m: &Mesh, owner: &str, paper: bool, target: Versi
                 w.s(5, vh);
                 w.s(330, e.handle.hex());
                 w.s(100, "AcDbEntity");
-                w.s(8, &e.common.layer);
+                w.s(8, e.common.layer.as_str());
                 w.s(100, "AcDbFaceRecord");
                 w.p(10, Vec3::ZERO);
                 w.i(70, 128);
@@ -929,7 +929,7 @@ fn seqend(w: &mut W, e: &Entity) {
     w.s(5, sh);
     w.s(330, e.handle.hex());
     w.s(100, "AcDbEntity");
-    w.s(8, &e.common.layer);
+    w.s(8, e.common.layer.as_str());
 }
 
 fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
@@ -1078,7 +1078,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.s(5, vh);
                 w.s(330, e.handle.hex());
                 w.s(100, "AcDbEntity");
-                w.s(8, &e.common.layer);
+                w.s(8, e.common.layer.as_str());
                 w.s(100, "AcDbVertex");
                 w.s(100, "AcDb3dPolylineVertex");
                 w.p(10, *q);
@@ -1089,7 +1089,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(5, sh);
             w.s(330, e.handle.hex());
             w.s(100, "AcDbEntity");
-            w.s(8, &e.common.layer);
+            w.s(8, e.common.layer.as_str());
         }
         EntityKind::Spline(s) => {
             w.s(0, "SPLINE");
@@ -1292,7 +1292,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.s(5, sh);
                 w.s(330, e.handle.hex());
                 w.s(100, "AcDbEntity");
-                w.s(8, &e.common.layer);
+                w.s(8, e.common.layer.as_str());
             }
         }
         EntityKind::Dimension(dm) => {

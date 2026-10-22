@@ -25,7 +25,7 @@ fn harness(clipped: bool) -> Harness<'static, CadApp> {
     d.add(
         &paper,
         Common::default(),
-        EntityKind::Viewport(Viewport {
+        EntityKind::Viewport(Box::new(Viewport {
             center: Vec3::new(5.0, 4.0, 0.0),
             width: 8.0,
             height: 6.0,
@@ -41,7 +41,7 @@ fn harness(clipped: bool) -> Harness<'static, CadApp> {
             on: true,
             twist: 0.0,
             anno_scale: None,
-        }),
+        })),
     )
     .unwrap();
     let mut session = Session::empty();

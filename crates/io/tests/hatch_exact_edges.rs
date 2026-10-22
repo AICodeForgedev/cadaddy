@@ -24,7 +24,7 @@ fn hatch(loops: Vec<HatchLoop>) -> Hatch {
 }
 
 fn hatches(d: &Drawing) -> Vec<Hatch> {
-    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.as_ref().clone()) } else { None }).collect()
 }
 
 /// An ellipse loop, a half ellipse clockwise closed by its diameter, a spline loop (a cubic
@@ -59,7 +59,7 @@ fn sample() -> Drawing {
         Vec::new(),
     );
     for l in [ellipse, half, spline, square] {
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch(vec![l]))).expect("add");
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(hatch(vec![l])))).expect("add");
     }
     d
 }

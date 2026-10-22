@@ -303,7 +303,7 @@ fn ensure_layer(d: &mut Drawing, name: &str) {
 fn tagged(label: &str) -> Common {
     Common {
         layer: CLOUD_LAYER.into(),
-        xdata: vec![RawTag { code: 1001, value: APP.into() }, RawTag { code: 1000, value: label.into() }],
+        xdata: vec![RawTag { code: 1001, value: APP.into() }, RawTag { code: 1000, value: label.into() }].into(),
         ..Common::default()
     }
 }

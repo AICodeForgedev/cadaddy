@@ -6,11 +6,11 @@ use cadaddy_geom::{FitOptions, KnotParam, Spline, Vec2};
 
 fn roundtrip(sp: &Spline) -> Spline {
     let mut d = Drawing::new_metric();
-    d.add(&Space::Model, Common::default(), EntityKind::Spline(sp.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(sp.clone()))).unwrap();
     let bytes = cadaddy_io::write(&d, "a.dxf").unwrap();
     let back = cadaddy_io::read(&bytes, "a.dxf").unwrap();
     let Some(EntityKind::Spline(r)) = back.model.iter().map(|e| e.kind.clone()).next() else { panic!("no spline") };
-    r
+    *r
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn fit_data_is_written_with_the_documented_groups() {
         FitOptions { start_tangent: Some(Vec2::Y), tolerance: 0.25, ..FitOptions::default() },
     );
     let mut d = Drawing::new_metric();
-    d.add(&Space::Model, Common::default(), EntityKind::Spline(sp)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(sp))).unwrap();
     let text = String::from_utf8(cadaddy_io::write(&d, "a.dxf").unwrap()).unwrap();
     let spline = &text[text.find("AcDbSpline").unwrap()..];
     let spline = &spline[..spline.find("\r\n  0\r\n").unwrap()];

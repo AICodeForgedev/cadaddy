@@ -770,7 +770,7 @@ fn run_textmask(s: &mut Session, p: &Value) -> Result<Value> {
             // MTEXT (and the background type): its own background mask.
             s.doc_mut()?.modify_entity(h, |e| {
                 if let EntityKind::MText(m) = &mut e.kind {
-                    m.background = Some(MTextBackground { color: None, scale: 1.0 + 2.0 * offset, transparency: 0 });
+                    m.background = Some(Box::new(MTextBackground { color: None, scale: 1.0 + 2.0 * offset, transparency: 0 }));
                 }
             })?;
             masks.push(h);
@@ -781,7 +781,7 @@ fn run_textmask(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             EntityKind::Wipeout(Wipeout { boundary: corners.to_vec() })
         };
-        let mut common = Common { layer: e.common.layer.clone(), xdata: mask_tag(h), ..Common::default() };
+        let mut common = Common { layer: e.common.layer.clone(), xdata: mask_tag(h).into(), ..Common::default() };
         if kind == "solid" {
             common.color = cadaddy_doc::color::Color::Index(8);
         }

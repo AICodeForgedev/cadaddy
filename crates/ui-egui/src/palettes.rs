@@ -959,8 +959,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     };
     let color = same(&|e| e.common.color.name());
-    let layer = same(&|e| e.common.layer.clone());
-    let linetype = same(&|e| e.common.linetype.clone());
+    let layer = same(&|e| e.common.layer.to_string());
+    let linetype = same(&|e| e.common.linetype.to_string());
     let lts = same(&|e| format!("{:.4}", e.common.ltscale));
     let lw = same(&|e| e.common.lineweight.name());
     let tr = same(&|e| e.common.transparency.name());

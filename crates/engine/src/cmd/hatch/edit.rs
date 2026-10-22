@@ -128,16 +128,16 @@ fn separate(s: &mut Session, handle: Handle) -> Result<Vec<Handle>> {
     let d = s.doc_mut()?;
     let mut out = Vec::new();
     for loops in rest {
-        let mut nh = Hatch { loops, ..h.clone() };
+        let mut nh = Hatch { loops, ..h.as_ref().clone() };
         nh.associative = h.associative && nh.loops.iter().all(|l| !l.sources.is_empty());
-        let n = d.add(&space, common.clone(), EntityKind::Hatch(nh))?;
+        let n = d.add(&space, common.clone(), EntityKind::Hatch(Box::new(nh)))?;
         if let Some(st) = d.space_mut(&space) {
             st.send_to_back(n);
         }
         out.push(n);
     }
-    let kept = Hatch { loops: first, ..h };
-    d.modify_entity(handle, |e| e.kind = EntityKind::Hatch(kept))?;
+    let kept = Hatch { loops: first, ..*h };
+    d.modify_entity(handle, |e| e.kind = EntityKind::Hatch(Box::new(kept)))?;
     Ok(out)
 }
 
@@ -625,7 +625,7 @@ impl HatchEditM {
     fn first(&self, s: &Session) -> Option<Hatch> {
         let d = s.doc().ok()?;
         self.hatches.iter().find_map(|h| match &d.entity(*h)?.kind {
-            EntityKind::Hatch(x) => Some(x.clone()),
+            EntityKind::Hatch(x) => Some(x.as_ref().clone()),
             _ => None,
         })
     }

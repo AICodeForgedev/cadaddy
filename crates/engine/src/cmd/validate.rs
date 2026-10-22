@@ -625,7 +625,7 @@ fn run_source(s: &mut Session, p: &Value) -> Result<Value> {
     for h in hs.iter().take(100_000) {
         let t = tags.clone();
         if d.modify_entity(*h, |e| {
-            e.common.xdata = strip_app(&e.common.xdata, PROV_APP);
+            e.common.xdata = strip_app(&e.common.xdata, PROV_APP).into();
             e.common.xdata.extend(t);
         })
         .is_ok()

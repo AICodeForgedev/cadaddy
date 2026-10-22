@@ -730,7 +730,7 @@ fn place_view(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
             ..Default::default()
         };
         let vh_ = d
-            .add(&cadaddy_doc::Space::Paper(layout.to_string()), cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Viewport(vp))
+            .add(&cadaddy_doc::Space::Paper(layout.to_string()), cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Viewport(Box::new(vp)))
             .map_err(|e| bad(CMD, e.to_string()))?;
         let under = cadaddy_geom::Vec3::new(at.x - w / 2.0, at.y - vh / 2.0 - h * 0.5, 0.0);
         let lh = add_text(d, layout, under, h, &label_text)?;

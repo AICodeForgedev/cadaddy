@@ -93,7 +93,7 @@ fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let mut by: std::collections::BTreeMap<String, (usize, std::collections::BTreeMap<&'static str, usize>, Bounds2)> =
         std::collections::BTreeMap::new();
     for e in &ents {
-        let entry = by.entry(e.common.layer.clone()).or_insert((0, std::collections::BTreeMap::new(), Bounds2::EMPTY));
+        let entry = by.entry(e.common.layer.to_string()).or_insert((0, std::collections::BTreeMap::new(), Bounds2::EMPTY));
         entry.0 += 1;
         *entry.1.entry(e.kind.type_name()).or_default() += 1;
         entry.2 = entry.2.union(&cadaddy_doc::entity_bounds(d, e, 0));

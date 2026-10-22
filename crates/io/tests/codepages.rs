@@ -48,7 +48,7 @@ fn names(d: &Drawing) -> (String, String, String) {
     let insert = d.model.iter().find_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.block.clone()) } else { None });
     let block = insert.unwrap_or_default();
     assert!(d.block(&block).is_some(), "block `{block}` is defined");
-    (layer, block, text_of(d))
+    (layer.to_string(), block, text_of(d))
 }
 
 /// Text, layer and block names decode from each code page AutoCAD writes pre-2007 files in.

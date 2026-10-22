@@ -12,7 +12,7 @@ fn mlines(d: &Drawing) -> Vec<MLine> {
     d.model
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::MLine(m) => Some(m.clone()),
+            EntityKind::MLine(m) => Some(m.as_ref().clone()),
             _ => None,
         })
         .collect()
@@ -52,8 +52,8 @@ fn mlines_and_styles_survive_save_and_reopen() {
     open.no_end_caps = true;
     let closed =
         MLine::new(&MLineStyle::default(), &[Vec2::new(0.0, 30.0), Vec2::new(10.0, 30.0), Vec2::new(5.0, 40.0)], true, MLineJust::Bottom, -1.0);
-    d.add(&Space::Model, Common { layer: "Walls".into(), ..Common::default() }, EntityKind::MLine(open.clone())).unwrap();
-    d.add(&Space::Model, Common::default(), EntityKind::MLine(closed.clone())).unwrap();
+    d.add(&Space::Model, Common { layer: "Walls".into(), ..Common::default() }, EntityKind::MLine(Box::new(open.clone()))).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLine(Box::new(closed.clone()))).unwrap();
 
     let saved = cadaddy_io::write_dxf(&d);
     let back = cadaddy_io::read_dxf(saved.as_bytes()).unwrap();
@@ -288,7 +288,7 @@ fn mline_survives_dwg_save_and_reopen() {
     d.mline_styles.push(wall());
     let mut m = MLine::new(&wall(), &[Vec2::new(0.0, 0.0), Vec2::new(8.0, 0.0), Vec2::new(8.0, 6.0)], false, MLineJust::Top, 1.5);
     m.vertices[0].cuts.push(MLineCut { element: 1, start: 2.0, end: 3.0 });
-    d.add(&Space::Model, Common::default(), EntityKind::MLine(m.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::MLine(Box::new(m.clone()))).unwrap();
     let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
     let back = cadaddy_io::read(&dwg, "x.dwg").unwrap();
     let [b] = mlines(&back).try_into().unwrap();

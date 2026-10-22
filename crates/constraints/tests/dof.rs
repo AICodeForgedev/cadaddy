@@ -29,7 +29,7 @@ fn ellipse(d: &mut Drawing, c: (f64, f64), major: (f64, f64), ratio: f64, start:
 }
 fn spline(d: &mut Drawing, pts: &[(f64, f64)]) -> Handle {
     let s = GSpline::from_control(pts.iter().map(|p| Vec2::new(p.0, p.1)).collect(), 3);
-    put(d, EntityKind::Spline(s))
+    put(d, EntityKind::Spline(Box::new(s)))
 }
 fn con(kind: K, refs: &[GeomRef]) -> Constraint {
     Constraint { id: 0, kind, refs: refs.to_vec(), name: String::new(), expr: String::new() }
@@ -61,7 +61,7 @@ fn ell(d: &Drawing, h: Handle) -> cadaddy_geom::Ellipse {
 }
 fn spl(d: &Drawing, h: Handle) -> GSpline {
     match &d.entity(h).unwrap().kind {
-        EntityKind::Spline(s) => s.clone(),
+        EntityKind::Spline(s) => s.as_ref().clone(),
         _ => panic!("not a spline"),
     }
 }
@@ -271,7 +271,7 @@ fn spline_tangent_to_circle_and_fit_spline_smooth() {
     assert!(t.dot(p.normalized()).abs() < 1e-4);
     // A fit-point spline keeps its fit points and is rebuilt through them.
     let fit: Vec<Vec2> = [(20.0, 0.0), (23.0, 2.0), (27.0, 1.0), (30.0, 3.0)].iter().map(|p| Vec2::new(p.0, p.1)).collect();
-    let fs = put(&mut d, EntityKind::Spline(GSpline::from_fit_points(&fit)));
+    let fs = put(&mut d, EntityKind::Spline(Box::new(GSpline::from_fit_points(&fit))));
     let l = line(&mut d, (10.0, -1.0), (19.8, 0.2));
     ok(&mut d, con(K::Fix, &[w(l)]));
     ok(&mut d, con(K::Smooth, &[w(fs), w(l)]));
@@ -330,8 +330,11 @@ fn hostile_new_geometry_never_panics() {
     let mut d = Drawing::default();
     let bad_e = ellipse(&mut d, (0.0, 0.0), (0.0, 0.0), f64::NAN, 0.0, 1.0);
     let flat_e = ellipse(&mut d, (0.0, 0.0), (1e300, 0.0), 0.0, 0.0, 1.0);
-    let broken = put(&mut d, EntityKind::Spline(GSpline { degree: 7, knots: vec![f64::NAN; 3], control: vec![Vec2::ZERO; 2], ..Default::default() }));
-    let one = put(&mut d, EntityKind::Spline(GSpline::from_control(vec![Vec2::new(1.0, 1.0); 3], 2)));
+    let broken = put(
+        &mut d,
+        EntityKind::Spline(Box::new(GSpline { degree: 7, knots: vec![f64::NAN; 3], control: vec![Vec2::ZERO; 2], ..Default::default() })),
+    );
+    let one = put(&mut d, EntityKind::Spline(Box::new(GSpline::from_control(vec![Vec2::new(1.0, 1.0); 3], 2))));
     let missing = put(
         &mut d,
         EntityKind::Insert(Insert {

@@ -18,13 +18,13 @@ fn session() -> (Session, Handle) {
         path: "clip-test.png".into(),
         ..Image::default()
     };
-    let h = s.add_entity(EntityKind::Image(img)).unwrap();
+    let h = s.add_entity(EntityKind::Image(Box::new(img))).unwrap();
     (s, h)
 }
 
 fn image(s: &Session, h: Handle) -> Image {
     match &s.doc().unwrap().entity(h).unwrap().kind {
-        EntityKind::Image(i) => i.clone(),
+        EntityKind::Image(i) => i.as_ref().clone(),
         k => panic!("not an image: {k:?}"),
     }
 }
@@ -86,7 +86,7 @@ fn turned_image_takes_a_world_rectangle_as_a_polygon() {
         path: "turned.png".into(),
         ..Image::default()
     };
-    let h = s.add_entity(EntityKind::Image(img)).unwrap();
+    let h = s.add_entity(EntityKind::Image(Box::new(img))).unwrap();
     s.execute("imageclip", &json!({ "handles": [h.hex()], "boundary": [[-40, 10], [-10, 30]] })).unwrap();
     assert_eq!(image(&s, h).clip.len(), 4);
 }
@@ -123,12 +123,12 @@ fn bad_input_is_refused_never_a_panic() {
     assert!(i.clip.is_empty() && (i.brightness, i.contrast, i.fade) == (50, 50, 0), "nothing changed");
     // A degenerate image is skipped, not divided by zero.
     let flat = s
-        .add_entity(EntityKind::Image(Image {
+        .add_entity(EntityKind::Image(Box::new(Image {
             size: Vec2::new(10.0, 10.0),
             u: Vec3::new(1.0, 0.0, 0.0),
             v: Vec3::new(1.0, 0.0, 0.0),
             ..Image::default()
-        }))
+        })))
         .unwrap();
     assert!(s.execute("imageclip", &json!({ "handles": [flat.hex()], "boundary": [[0, 0], [5, 5]] })).is_err());
 }
@@ -174,7 +174,7 @@ fn images(d: &Drawing) -> Vec<Image> {
         .unwrap()
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Image(i) => Some(i.clone()),
+            EntityKind::Image(i) => Some(i.as_ref().clone()),
             _ => None,
         })
         .collect()
@@ -183,7 +183,7 @@ fn images(d: &Drawing) -> Vec<Image> {
 #[test]
 fn clip_and_adjustments_survive_dxf_and_dwg() {
     let (mut s, h) = session();
-    let rect = s.add_entity(EntityKind::Image(image(&s, h))).unwrap();
+    let rect = s.add_entity(EntityKind::Image(Box::new(image(&s, h)))).unwrap();
     s.execute("imageclip", &json!({ "handles": [h.hex()], "boundary": [[10, 10], [90, 10], [50, 40]] })).unwrap();
     s.execute("imageclip", &json!({ "handles": [rect.hex()], "boundary": [[10, 10], [30, 40]] })).unwrap();
     s.execute("imageclip", &json!({ "handles": [rect.hex()], "option": "off" })).unwrap();

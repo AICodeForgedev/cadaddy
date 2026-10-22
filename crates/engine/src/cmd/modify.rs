@@ -756,7 +756,7 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
             let d = if inside { dist } else { -dist };
             let tol = ge.major.len() * 1e-6;
             cadaddy_geom::offset_spline(&cadaddy_geom::CurveRef::Ellipse(full), ge.start, ge.start + ge.sweep(), d, ge.is_full(), tol)
-                .map(EntityKind::Spline)
+                .map(|x| EntityKind::Spline(Box::new(x)))
         }
         EntityKind::LwPolyline(_) => {
             // The longest piece (an offset inward can split a polyline; OFFSET adds them all).
@@ -774,7 +774,7 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
             let b = sp.bounds();
             let tol = b.width().hypot(b.height()) * 1e-6;
             cadaddy_geom::offset_spline(&cadaddy_geom::CurveRef::Spline(sp), lo, hi, if left { dist } else { -dist }, sp.closed, tol)
-                .map(EntityKind::Spline)
+                .map(|x| EntityKind::Spline(Box::new(x)))
         }
         EntityKind::XLine(r) | EntityKind::Ray(r) => {
             let ln = Line::new(r.base.xy(), r.base.xy() + r.dir.xy());
@@ -868,7 +868,7 @@ fn add_offset(s: &mut Session, src: &Entity, k: EntityKind, current_layer: bool,
     let d = s.doc_mut()?;
     let mut common = src.common.clone();
     if current_layer {
-        common.layer = d.header.str("CLAYER", "0");
+        common.layer = d.header.str("CLAYER", "0").into();
     }
     let nh = d.new_handle();
     if let Some(st) = d.space_mut(&space) {
@@ -1482,7 +1482,7 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
             Some(fills.chain(lines).chain(texts).collect())
         }
         // A helix explodes into its spline (seen from above).
-        EntityKind::Helix(h) => Some(vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Spline(h.spline()) }]),
+        EntityKind::Helix(h) => Some(vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Spline(Box::new(h.spline())) }]),
         EntityKind::Polyline3d(p) => Some(
             p.points
                 .windows(2)
@@ -1751,15 +1751,15 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
                         (a, b) => a.or(b),
                     }
                 };
-                vec![EntityKind::Spline(kept.ok_or_else(cant)?)]
+                vec![EntityKind::Spline(Box::new(kept.ok_or_else(cant)?))]
             } else {
                 let (t1, t2) = if t1 > t2 { (t2, t1) } else { (t1, t2) };
                 let mut v = Vec::new();
                 if t1 > lo + 1e-9 {
-                    v.push(EntityKind::Spline(super::curves::sub_spline(sp, lo, t1).ok_or_else(cant)?));
+                    v.push(EntityKind::Spline(Box::new(super::curves::sub_spline(sp, lo, t1).ok_or_else(cant)?)));
                 }
                 if t2 < hi - 1e-9 {
-                    v.push(EntityKind::Spline(super::curves::sub_spline(sp, t2, hi).ok_or_else(cant)?));
+                    v.push(EntityKind::Spline(Box::new(super::curves::sub_spline(sp, t2, hi).ok_or_else(cant)?)));
                 }
                 v
             }

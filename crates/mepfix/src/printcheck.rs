@@ -651,7 +651,7 @@ pub fn plant(m: &mut Model, p: &Prints, kind: &str) -> Option<String> {
             Some(e.id.clone())
         }
         "spec_violation" => {
-            let r = m.runs.iter_mut().next()?;
+            let r = m.runs.first_mut()?;
             r.fields.insert("racewayMaterial".into(), "PVC".into());
             Some(r.id.clone())
         }

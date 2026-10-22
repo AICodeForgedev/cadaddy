@@ -88,7 +88,7 @@ fn meshes(s: &Session) -> Vec<(String, Mesh)> {
         .model
         .iter()
         .filter(|e| made_as(e).as_deref() == Some("mep"))
-        .filter_map(|e| if let EntityKind::Mesh(m) = &e.kind { Some((e.common.layer.clone(), m.clone())) } else { None })
+        .filter_map(|e| if let EntityKind::Mesh(m) = &e.kind { Some((e.common.layer.to_string(), m.clone())) } else { None })
         .collect()
 }
 

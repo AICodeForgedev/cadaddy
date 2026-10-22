@@ -308,8 +308,8 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
         if ents.iter().all(|e| f(e) == v0) { v0 } else { "*VARIES*".into() }
     };
     let color = ents.first().map(|e| e.common.color).filter(|c| ents.iter().all(|e| e.common.color == *c));
-    let layer = same(&|e| e.common.layer.clone());
-    let linetype = same(&|e| e.common.linetype.clone());
+    let layer = same(&|e| e.common.layer.to_string());
+    let linetype = same(&|e| e.common.linetype.to_string());
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     // One object with no list of its own: its full set of rows.

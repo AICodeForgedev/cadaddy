@@ -24,7 +24,8 @@ fn groups(d: &cadaddy_engine::doc::Drawing, e: &Entity) -> (String, Vec<(i32, Va
         .into_iter()
         .map(|t| {
             let v = match t.value {
-                cadaddy_dxf::Value::Str(s) | cadaddy_dxf::Value::Hex(s) => json!(s),
+                cadaddy_dxf::Value::Str(s) => json!(s.as_str()),
+                cadaddy_dxf::Value::Hex(s) => json!(s),
                 cadaddy_dxf::Value::Real(r) => json!(r),
                 cadaddy_dxf::Value::Int(i) => json!(i),
                 cadaddy_dxf::Value::Bool(b) => json!(i32::from(b)),

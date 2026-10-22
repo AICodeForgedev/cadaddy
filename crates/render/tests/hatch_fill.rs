@@ -38,7 +38,7 @@ fn draw(h: Hatch, layer: &str) -> DisplayList {
     let mut d = Drawing::new_imperial();
     d.layers.push(Layer { color: Color::Index(1), ..Layer::new("RED") });
     let common = Common { layer: layer.into(), ..Common::default() };
-    d.add(&Space::Model, common, EntityKind::Hatch(h)).expect("add");
+    d.add(&Space::Model, common, EntityKind::Hatch(Box::new(h))).expect("add");
     build(&d, &Space::Model, &Options::default())
 }
 

@@ -40,7 +40,7 @@ fn viewports(s: &Session) -> Result<Vec<(Handle, Viewport)>> {
             st.iter()
                 .filter_map(|e| match &e.kind {
                     EntityKind::Viewport(v) if v.id != 1 && v.on && v.width > 1e-12 && v.height > 1e-12 && v.view_height > 1e-12 => {
-                        Some((e.handle, v.clone()))
+                        Some((e.handle, v.as_ref().clone()))
                     }
                     _ => None,
                 })

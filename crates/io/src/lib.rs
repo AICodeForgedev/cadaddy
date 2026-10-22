@@ -173,7 +173,11 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
     let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
     // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
-    let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
+    let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));
+    // The text is let go once parsed: the drawing is built from the groups alone.
+    let tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
+    drop(dxf);
+    let mut d = dxf_read::read_tags(tags).map_err(|e| bad(e.to_string()))?;
     d.read_notes = notes;
     Ok(d)
 }
@@ -181,8 +185,7 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
 /// A DXF with the records CADaddy's DWG writers kept in their `CADADDY_KEEP` dictionary put
 /// back: one of our DWGs saved as DXF by another program, which carries the dictionary along.
 fn kept_back(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    let key = dwg_keep::KEY.as_bytes();
-    match bytes.windows(key.len()).any(|w| w == key).then(|| dwg_keep::unstash(bytes)).flatten() {
+    match dwg_keep::has_key(bytes).then(|| dwg_keep::unstash(bytes)).flatten() {
         Some(d) => std::borrow::Cow::Owned(d),
         None => std::borrow::Cow::Borrowed(bytes),
     }

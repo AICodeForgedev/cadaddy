@@ -1136,7 +1136,7 @@ pub(crate) fn anno_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
         .iter()
         .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
         .filter(|e| cadaddy_doc::is_annotative(e))
-        .map(|e| AnnoObject { handle: e.handle.hex(), scales: e.common.anno_scales.clone() })
+        .map(|e| AnnoObject { handle: e.handle.hex(), scales: (*e.common.anno_scales).clone() })
         .collect();
     let viewports: Vec<AnnoViewport> = d
         .layouts
@@ -1191,7 +1191,7 @@ pub(crate) fn apply_anno(d: &mut cadaddy_doc::Drawing, p: AnnoPayload) {
         }
         let _ = d.modify_entity(h, |e| {
             if cadaddy_doc::can_be_annotative(&e.kind) {
-                e.common.anno_scales = scales;
+                e.common.anno_scales = scales.into();
             }
         });
     }

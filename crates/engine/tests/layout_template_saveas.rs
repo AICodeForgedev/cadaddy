@@ -90,7 +90,7 @@ fn template() -> Drawing {
         clip: Some(Handle(0x201)),
         ..Viewport::default()
     };
-    sheet.entities.push(on("0", 0x202, EntityKind::Viewport(vp)));
+    sheet.entities.push(on("0", 0x202, EntityKind::Viewport(Box::new(vp))));
     let mut detail = Layout::new("Detail", 2);
     detail.entities.push(on("TB", 0x210, EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(4.0, 0.0, 0.0) })));
     d.layouts = vec![sheet, detail];

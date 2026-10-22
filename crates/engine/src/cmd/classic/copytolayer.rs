@@ -59,7 +59,7 @@ fn copy_to_layer(s: &mut Session, hs: &[Handle], layer: &str, delta: Vec2, creat
     let copies = super::super::modify::transform_entities(s, hs, &Mat3::translate(delta), true)?;
     let d = s.doc_mut()?;
     for h in &copies {
-        d.modify_entity(*h, |e| e.common.layer = name.clone())?;
+        d.modify_entity(*h, |e| e.common.layer = name.as_str().into())?;
     }
     s.set_selection(Vec::new());
     let n = copies.len();
@@ -151,7 +151,7 @@ impl Interactive for CopyToLayerM {
                 (Input::Point(p), _) => {
                     let h = curves::pick_at(s, *p).ok_or_else(|| EngineError::Other("*Invalid selection*".into()))?;
                     let layer = curves::entity(s, h)?.common.layer;
-                    Ok(self.destination(s, layer))
+                    Ok(self.destination(s, layer.to_string()))
                 }
                 (Input::Enter, _) => {
                     self.stage = Stage::Name;

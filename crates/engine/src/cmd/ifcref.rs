@@ -353,7 +353,7 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
     // In model space, on its own layer (made by `add` when new), whatever space is current.
     let h = s
         .doc_mut()?
-        .add(&cadaddy_doc::Space::Model, Common { layer, ..Common::default() }, EntityKind::Insert(ins))
+        .add(&cadaddy_doc::Space::Model, Common { layer: layer.into(), ..Common::default() }, EntityKind::Insert(ins))
         .map_err(|e| bad("ifc.attach", e.to_string()))?;
     remember(s, &key);
     let spec = spec_levels(s);

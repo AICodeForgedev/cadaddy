@@ -17,7 +17,7 @@ struct W {
 }
 
 impl W {
-    fn s(&mut self, c: i32, v: impl Into<String>) {
+    fn s(&mut self, c: i32, v: impl Into<cadaddy_dxf::SmolStr>) {
         self.t.push(Tag::s(c, v));
     }
     fn f(&mut self, c: i32, v: f64) {

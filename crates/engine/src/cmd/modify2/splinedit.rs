@@ -43,7 +43,7 @@ fn dir_param(p: &Value, key: &str) -> Result<Option<Vec2>> {
 }
 
 fn edit(sp: &Spline, opt: &str, p: &Value) -> Result<EntityKind> {
-    let spline = |s: Spline| Ok(EntityKind::Spline(s));
+    let spline = |s: Spline| Ok(EntityKind::Spline(Box::new(s)));
     match opt {
         "close" => spline(spline_close(sp)),
         "open" => spline(spline_open(sp)),
@@ -449,7 +449,7 @@ fn nearest(pts: &[Vec2], p: Vec2) -> Option<usize> {
 impl SplineditM {
     fn spline(&self, s: &Session) -> Option<Spline> {
         match &s.doc().ok()?.entity(self.h?)?.kind {
-            EntityKind::Spline(sp) => Some(sp.clone()),
+            EntityKind::Spline(sp) => Some(sp.as_ref().clone()),
             _ => None,
         }
     }

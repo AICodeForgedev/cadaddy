@@ -172,7 +172,7 @@ fn edit(s: &mut Session, name: &str, tag: &str, c: &Change) -> Result<String> {
         }
         b.entities.modify(h, |e| {
             if let Some(l) = &layer {
-                e.common.layer = l.clone();
+                e.common.layer = l.as_str().into();
             }
             if let EntityKind::AttDef(a) = &mut e.kind {
                 if let Some(t) = &new_tag {
@@ -319,7 +319,7 @@ fn add(s: &mut Session, name: &str, tag: &str, c: &Change, at: Option<cadaddy_ge
             multiline,
             modes: Default::default(),
         };
-        b.entities.push(Entity { handle, common: Common { layer, ..Common::default() }, kind: EntityKind::AttDef(Box::new(def)) });
+        b.entities.push(Entity { handle, common: Common { layer: layer.into(), ..Common::default() }, kind: EntityKind::AttDef(Box::new(def)) });
         Ok(())
     })?;
     Ok(tag)

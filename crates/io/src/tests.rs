@@ -73,7 +73,12 @@ fn sample() -> Drawing {
     d.add(
         &Space::Model,
         c("0"),
-        EntityKind::Spline(cadaddy_geom::Spline::from_fit_points(&[Vec2::ZERO, Vec2::new(1.0, 2.0), Vec2::new(3.0, 1.0), Vec2::new(4.0, 3.0)])),
+        EntityKind::Spline(Box::new(cadaddy_geom::Spline::from_fit_points(&[
+            Vec2::ZERO,
+            Vec2::new(1.0, 2.0),
+            Vec2::new(3.0, 1.0),
+            Vec2::new(4.0, 3.0),
+        ]))),
     )
     .unwrap();
     d.add(
@@ -102,7 +107,7 @@ fn sample() -> Drawing {
     d.add(
         &Space::Model,
         c("0"),
-        EntityKind::Hatch(Hatch {
+        EntityKind::Hatch(Box::new(Hatch {
             pattern: "ANSI31".into(),
             solid: false,
             loops: vec![HatchLoop {
@@ -120,7 +125,7 @@ fn sample() -> Drawing {
             origin: Vec2::ZERO,
             background: None,
             pattern_lines: Vec::new(),
-        }),
+        })),
     )
     .unwrap();
     let mut b = Block::new("Bolt");
@@ -496,7 +501,7 @@ fn pdf_layout_one_to_one_with_viewport() {
     d.add(
         &paper,
         Common::default(),
-        EntityKind::Viewport(Viewport {
+        EntityKind::Viewport(Box::new(Viewport {
             center: Vec3::new(5.0, 4.0, 0.0),
             width: 8.0,
             height: 6.0,
@@ -512,7 +517,7 @@ fn pdf_layout_one_to_one_with_viewport() {
             on: true,
             twist: 0.0,
             anno_scale: None,
-        }),
+        })),
     )
     .unwrap();
     let bytes = plot(&d, &paper, &serde_json::json!({})).unwrap();
@@ -604,7 +609,7 @@ fn viewport_frozen_layers_roundtrip() {
     let mut d = sample();
     let paper = Space::Paper("Layout1".into());
     let vp = |id: u32, frozen: Vec<String>| {
-        EntityKind::Viewport(Viewport {
+        EntityKind::Viewport(Box::new(Viewport {
             center: Vec3::new(5.0, 4.0, 0.0),
             width: 8.0,
             height: 6.0,
@@ -620,7 +625,7 @@ fn viewport_frozen_layers_roundtrip() {
             on: true,
             twist: 0.0,
             anno_scale: None,
-        })
+        }))
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
     d.add(&paper, Common::default(), vp(3, Vec::new())).unwrap();
@@ -644,7 +649,7 @@ fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
     let mut d = sample();
     d.layers.push(Layer { name: "A B".into(), ..Layer::default() });
     let paper = Space::Paper("Layout1".into());
-    let vp = EntityKind::Viewport(Viewport {
+    let vp = EntityKind::Viewport(Box::new(Viewport {
         center: Vec3::new(5.0, 4.0, 0.0),
         width: 8.0,
         height: 6.0,
@@ -660,7 +665,7 @@ fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
         on: true,
         twist: 0.0,
         anno_scale: None,
-    });
+    }));
     d.add(&paper, Common::default(), vp).unwrap();
     let text = write_dxf(&d);
     let lines: Vec<&str> = text.lines().collect();
@@ -771,7 +776,7 @@ fn viewport_layer_colors_roundtrip() {
     let mut d = sample();
     let paper = Space::Paper("Layout1".into());
     let vp = |id: u32, frozen: Vec<String>, colors: Vec<(String, Color)>| {
-        EntityKind::Viewport(Viewport {
+        EntityKind::Viewport(Box::new(Viewport {
             center: Vec3::new(5.0, 4.0, 0.0),
             width: 8.0,
             height: 6.0,
@@ -787,7 +792,7 @@ fn viewport_layer_colors_roundtrip() {
             on: true,
             twist: 0.0,
             anno_scale: None,
-        })
+        }))
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadaddy_color::Rgb(255, 128, 0)))];
     d.add(&paper, Common::default(), vp(2, Vec::new(), colors.clone())).unwrap();
@@ -1285,7 +1290,7 @@ fn bim_spec_xdata_survives_dxf_roundtrip() {
     ty.set_field("amps", bimspec::SpecField::new("20"));
     d.bim_types.set(ty);
     let xdata = bimspec::type_mark_xdata("A");
-    let c = Common { xdata, ..Common::default() };
+    let c = Common { xdata: xdata.into(), ..Common::default() };
     let h = d.add(&Space::Model, c, EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1.0 })).unwrap();
     let text = write_dxf(&d);
     let back = read_dxf(text.as_bytes()).unwrap();
@@ -1403,7 +1408,7 @@ fn intl_sample() -> Drawing {
     let layer = format!("层 {INTL}");
     let block = format!("块 {INTL}");
     d.layers.push(Layer { name: layer.clone(), color: Color::Index(3), ..Layer::default() });
-    let on = Common { layer: layer.clone(), ..Common::default() };
+    let on = Common { layer: layer.as_str().into(), ..Common::default() };
     d.add(&Space::Model, on.clone(), EntityKind::Text(intl_text(INTL))).unwrap();
     d.add(
         &Space::Model,
@@ -1829,13 +1834,13 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
             background: None,
             pattern_lines: Vec::new(),
         };
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).unwrap();
     }
     (d, gradients)
 }
 
 fn hatches(d: &Drawing) -> Vec<Hatch> {
-    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).collect()
+    d.model.iter().filter_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.as_ref().clone()) } else { None }).collect()
 }
 
 /// Issue #80: a DXF save/reopen keeps each hatch's gradient (name, both colours, angle and
@@ -1947,7 +1952,7 @@ fn long_gradient_name_is_cut_only_in_xdata() {
     if let Some(g) = &mut h.gradient {
         g.name = name.clone();
     }
-    d.add(&Space::Model, Common::default(), EntityKind::Hatch(h)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h))).unwrap();
     let text = write_dxf(&d);
     let lines: Vec<&str> = text.lines().collect();
     // Non-ASCII text is written as \U+ escapes (R2000 files are ANSI).
@@ -2591,7 +2596,7 @@ fn a_large_dxf_reads_every_object_in_order() {
         d.add(&Space::Model, Common::default(), EntityKind::Polyline3d(Polyline3d { points, closed: i % 2 == 0 })).unwrap();
         d.add(
             &Space::Model,
-            Common { layer: format!("L{}", i % 7), ..Common::default() },
+            Common { layer: format!("L{}", i % 7).into(), ..Common::default() },
             EntityKind::Circle(Circle { center: Vec3::new(x, 9.0, 0.0), radius: 1.0 + x }),
         )
         .unwrap();

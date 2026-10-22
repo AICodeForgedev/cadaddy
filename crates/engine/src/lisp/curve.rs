@@ -173,7 +173,7 @@ impl Curve {
                 if !s.is_valid() || s.control.len() > MAX_POINTS {
                     return None;
                 }
-                Curve::Spline { s: s.clone(), z: 0.0 }
+                Curve::Spline { s: s.as_ref().clone(), z: 0.0 }
             }
             EntityKind::Ray(r) => Curve::Ray { base: r.base, u: unit(r.dir)? },
             EntityKind::XLine(r) => Curve::XLine { base: r.base, u: unit(r.dir)? },

@@ -9,7 +9,7 @@ fn closed_fit_spline_roundtrips_as_periodic() {
     let fit = [Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 3.0), Vec2::new(0.0, 3.0)];
     let sp = Spline::from_fit_points_closed(&fit);
     let mut d = Drawing::new_metric();
-    d.add(&Space::Model, Common::default(), EntityKind::Spline(sp.clone())).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(sp.clone()))).unwrap();
     let bytes = cadaddy_io::write(&d, "a.dxf").unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     let spline = &text[text.find("SPLINE").unwrap()..];

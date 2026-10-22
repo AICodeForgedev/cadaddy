@@ -131,7 +131,7 @@ fn place_block(
         row_spacing: 0.0,
         clip: None,
     };
-    let common = Common { layer: d.header.str("CLAYER", "0"), ..Common::default() };
+    let common = Common { layer: d.header.str("CLAYER", "0").into(), ..Common::default() };
     Ok(d.add(space, common, EntityKind::Insert(ins))?)
 }
 
@@ -144,7 +144,7 @@ pub(super) fn line2(a: Vec2, b: Vec2) -> EntityKind {
 fn edge_entities(s: &Session, vis: Vec<[Vec2; 2]>, hid: Vec<[Vec2; 2]>, hidden: bool) -> Vec<(Common, EntityKind)> {
     let dashed = s.doc().ok().and_then(|d| d.linetype("HIDDEN").map(|l| l.name.clone()));
     let hid_common = match dashed {
-        Some(lt) => Common { linetype: lt, ..Common::default() },
+        Some(lt) => Common { linetype: lt.into(), ..Common::default() },
         None => Common { color: Color::Index(8), ..Common::default() },
     };
     let mut out: Vec<(Common, EntityKind)> = vis.into_iter().map(|[a, b]| (Common::default(), line2(a, b))).collect();
@@ -252,7 +252,7 @@ pub(super) fn section_faces(d: &cadaddy_doc::Drawing, loops: &[Vec<Vec2>]) -> (V
     let b = cadaddy_geom::Bounds2::from_points(loops.iter().flatten().copied());
     let size = b.width().max(b.height()).max(1e-9);
     let scale = (size / 40.0 / spacing).max(1e-6);
-    let hatch = EntityKind::Hatch(Hatch {
+    let hatch = EntityKind::Hatch(Box::new(Hatch {
         pattern: "ANSI31".into(),
         solid: false,
         loops: hatch_loops,
@@ -265,7 +265,7 @@ pub(super) fn section_faces(d: &cadaddy_doc::Drawing, loops: &[Vec<Vec2>]) -> (V
         origin: Vec2::ZERO,
         background: None,
         pattern_lines: Vec::new(),
-    });
+    }));
     (outlines, hatch)
 }
 
@@ -473,9 +473,9 @@ fn run_viewsection(s: &mut Session, p: &Value) -> Result<Value> {
     // The cut line on the base view, lettered at its ends, and the view's title.
     let height = 3.5_f64.max(s.doc()?.header.f64("TEXTSIZE", 2.5));
     let d = s.doc_mut()?;
-    let common = Common { layer: d.header.str("CLAYER", "0"), ..Common::default() };
+    let common = Common { layer: d.header.str("CLAYER", "0").into(), ..Common::default() };
     let dash = d.linetype("CENTER").map(|l| l.name.clone());
-    let line_common = Common { linetype: dash.unwrap_or_else(|| "ByLayer".into()), ..common.clone() };
+    let line_common = Common { linetype: dash.unwrap_or_else(|| "ByLayer".into()).into(), ..common.clone() };
     d.add(&space, line_common, line2(a, b))?;
     let text = |at: Vec2, value: String| {
         EntityKind::Text(Text {

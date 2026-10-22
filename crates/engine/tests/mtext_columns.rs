@@ -95,7 +95,7 @@ fn scale_scales_multileader_text_width_and_columns() {
         contents: "hello world".into(),
         line_spacing: 1.0,
         line_spacing_exact: false,
-        columns: Some(MTextColumns {
+        columns: Some(Box::new(MTextColumns {
             kind: MTextColumnType::Static,
             count: 2,
             gutter: 1.0,
@@ -103,7 +103,7 @@ fn scale_scales_multileader_text_width_and_columns() {
             auto_height: true,
             heights: vec![3.0, 4.0],
             flow_reversed: false,
-        }),
+        })),
     };
     let mut s = Session::new();
     let ml = MLeader {

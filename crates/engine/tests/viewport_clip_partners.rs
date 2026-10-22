@@ -14,7 +14,7 @@ fn layout_viewports(s: &Session) -> Vec<(Handle, Viewport)> {
         .entities
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Viewport(v) if v.id != 1 => Some((e.handle, v.clone())),
+            EntityKind::Viewport(v) if v.id != 1 => Some((e.handle, v.as_ref().clone())),
             _ => None,
         })
         .collect()
@@ -22,7 +22,7 @@ fn layout_viewports(s: &Session) -> Vec<(Handle, Viewport)> {
 
 fn viewport(s: &Session, h: Handle) -> Viewport {
     match s.doc().unwrap().entity(h).map(|e| &e.kind) {
-        Some(EntityKind::Viewport(v)) => v.clone(),
+        Some(EntityKind::Viewport(v)) => v.as_ref().clone(),
         _ => panic!("no viewport {}", h.hex()),
     }
 }

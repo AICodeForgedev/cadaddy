@@ -31,7 +31,7 @@ fn picture() -> Raster {
 }
 
 fn images(s: &Session) -> Vec<cadaddy_engine::doc::Image> {
-    s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None }).collect()
+    s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Image(i) = &e.kind { Some(i.as_ref().clone()) } else { None }).collect()
 }
 
 #[test]

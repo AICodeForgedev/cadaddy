@@ -252,7 +252,7 @@ fn pdf(list: &[Rfi], pictures: &[Option<(String, u32, u32)>]) -> std::result::Re
                     name: r.id.clone(),
                     ..Default::default()
                 };
-                let _ = d.add(&Space::Model, Common::default(), EntityKind::Image(image));
+                let _ = d.add(&Space::Model, Common::default(), EntityKind::Image(Box::new(image)));
             }
             line(&mut d, Vec2::new(x, top - 3.45), Vec2::new(ox + 10.5, top - 3.45));
         }

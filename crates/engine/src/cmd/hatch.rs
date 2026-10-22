@@ -102,7 +102,7 @@ pub(crate) fn closed_geom(d: &Drawing, e: &Entity) -> Option<(Vec<PolyVertex>, V
             let ge = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
             ge.is_full().then(|| cadaddy_geom::LoopEdge::full_ellipse(ge.center, ge.major, ge.ratio))
         }
-        EntityKind::Spline(sp) if sp.closed && sp.is_valid() => Some(cadaddy_geom::LoopEdge::Spline(sp.clone())),
+        EntityKind::Spline(sp) if sp.closed && sp.is_valid() => Some(cadaddy_geom::LoopEdge::Spline(sp.as_ref().clone())),
         _ => None,
     };
     if let Some(edge) = exact.filter(cadaddy_geom::LoopEdge::is_valid) {
@@ -433,7 +433,7 @@ fn inherited(s: &Session, p: &Value) -> Result<Option<(Hatch, cadaddy_doc::Commo
     let h = curves::handle_value(v).ok_or_else(|| bad("hatch", "`inherit` is the handle of a hatch"))?;
     match s.doc()?.entity(h) {
         Some(e) => match &e.kind {
-            EntityKind::Hatch(x) => Ok(Some((x.clone(), e.common.clone()))),
+            EntityKind::Hatch(x) => Ok(Some((x.as_ref().clone(), e.common.clone()))),
             _ => Err(bad("hatch", format!("{} is not a hatch", h.hex()))),
         },
         None => Err(bad("hatch", format!("no object {}", h.hex()))),
@@ -535,7 +535,7 @@ impl HatchSettings {
             loops.iter_mut().for_each(|l| l.sources.clear());
         }
         let solid = self.gradient.is_some() || self.pattern == "SOLID";
-        EntityKind::Hatch(Hatch {
+        EntityKind::Hatch(Box::new(Hatch {
             pattern: if self.gradient.is_some() { "SOLID".into() } else { self.pattern.clone() },
             solid,
             origin: self.origin_mode.origin(&loops, self.origin),
@@ -548,7 +548,7 @@ impl HatchSettings {
             gradient: self.gradient.clone(),
             background: None,
             pattern_lines: self.lines.clone().unwrap_or_else(|| patfile::lines_for(&self.pattern)),
-        })
+        }))
     }
 }
 
@@ -1080,7 +1080,7 @@ mod tests {
     /// The drawing's only hatch and its handle (hatches go to the back of the draw order, so not the last entity).
     fn only_hatch(s: &Session) -> (String, Hatch) {
         let d = s.doc().unwrap();
-        d.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some((e.handle.hex(), h.clone())) } else { None }).unwrap()
+        d.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some((e.handle.hex(), h.as_ref().clone())) } else { None }).unwrap()
     }
 
     #[test]

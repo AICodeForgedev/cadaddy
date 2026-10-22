@@ -301,10 +301,21 @@ fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>) -> Option<(Pairs, u
 }
 
 /// The DXF with the records a [`stash`] kept put back, or `None` when it has no kept dictionary.
+/// A DXF without the dictionary's name anywhere is answered without parsing it (every DWG read
+/// through the bridge comes here: parsing a large file into text pairs took several times its
+/// size in memory, for nothing).
 pub fn unstash(dxf: &[u8]) -> Option<Vec<u8>> {
+    if !has_key(dxf) {
+        return None;
+    }
     let pairs = parse(dxf)?;
     let crlf = dxf.windows(2).any(|w| w == b"\r\n");
-    Some(write(&unstash_pairs(&pairs)?, crlf, code_page_text(dxf)))
+    Some(write(&unstash_pairs(pairs)?, crlf, code_page_text(dxf)))
+}
+
+/// Whether the dictionary's name is anywhere in the bytes.
+pub(crate) fn has_key(bytes: &[u8]) -> bool {
+    bytes.windows(KEY.len()).any(|w| w == KEY.as_bytes())
 }
 
 /// [`unstash`] on a DXF's tags (the DWG read natively).
@@ -313,11 +324,10 @@ pub fn unstash_tags(tags: &[cadaddy_dxf::Tag]) -> Option<Vec<cadaddy_dxf::Tag>> 
         return None;
     }
     let pairs: Pairs = tags.iter().map(|t| (t.code, t.str())).collect();
-    Some(unstash_pairs(&pairs)?.into_iter().map(|(c, v)| tag(c, v)).collect())
+    Some(unstash_pairs(pairs)?.into_iter().map(|(c, v)| tag(c, v)).collect())
 }
 
-fn unstash_pairs(pairs: &Pairs) -> Option<Pairs> {
-    let pairs = pairs.clone();
+fn unstash_pairs(pairs: Pairs) -> Option<Pairs> {
     let recs = records(&pairs);
     let places = containers(&pairs, &recs);
     let objects: Vec<usize> = (0..recs.len()).filter(|i| places[*i] == "OBJECTS").collect();
@@ -553,6 +563,18 @@ ACME_WIDGET\n5\n300\n102\n{ACAD_REACTORS\n330\n100\n102\n}\n330\nC\n100\nAcmeWid
         assert!(stash(DXF.as_bytes(), &HashSet::from([0xABCDEF])).is_none());
         assert!(unstash(DXF.as_bytes()).is_none());
         assert!(stash(b"AutoCAD Binary DXF\r\n\x1a\0", &take()).is_none());
+    }
+
+    /// Every DWG read through the bridge asks: a DXF without the dictionary is answered from its
+    /// bytes (it was parsed into text pairs first, several times the file's size, Q250).
+    #[test]
+    fn a_dxf_without_kept_records_is_not_parsed() {
+        assert!(!has_key(DXF.as_bytes()));
+        let (stashed, _) = stash(DXF.as_bytes(), &take()).unwrap();
+        assert!(has_key(&stashed));
+        // A cut-off DXF: no key, no answer (parsing would have failed anyway).
+        assert!(unstash(b"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n999").is_none());
+        assert!(!has_key(b""));
     }
 
     #[test]

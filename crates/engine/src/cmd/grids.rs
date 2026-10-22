@@ -320,7 +320,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             t(1000, Handle(0).hex()),
             t(1000, format!("grid:{}", c.grid)),
         ];
-        if d.add(&Space::Model, Common { layer: "3D-Columns".into(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        if d.add(&Space::Model, Common { layer: "3D-Columns".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             n += 1;
         }
     }

@@ -280,7 +280,7 @@ fn run_spline(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         return Err(bad("spline", "`fit` or `control` points are required"));
     };
-    added(s.add_entity(EntityKind::Spline(sp))?)
+    added(s.add_entity(EntityKind::Spline(Box::new(sp)))?)
 }
 
 fn donut(center: Vec2, inside: f64, outside: f64) -> EntityKind {
@@ -382,7 +382,7 @@ pub(crate) fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"), height)?,
         line_spacing: f64_or(p, "lineSpacing", 1.0),
         line_spacing_exact: bool_or(p, "lineSpacingExact", false),
-        columns: super::mtext_opts::json_columns(p, height, width)?,
+        columns: super::mtext_opts::json_columns(p, height, width)?.map(Box::new),
     });
     added(s.add_entity(k)?)
 }
@@ -1315,7 +1315,7 @@ impl Interactive for SplineM {
                 Outcome::Finish => {
                     self.ask = None;
                     if self.pts.len() >= 2 {
-                        s.add_entity(EntityKind::Spline(self.make(false)))?;
+                        s.add_entity(EntityKind::Spline(Box::new(self.make(false))))?;
                     }
                     Ok(Step::Done)
                 }
@@ -1351,7 +1351,7 @@ impl Interactive for SplineM {
             }
             Input::Keyword(k) if k == "Close" => {
                 // A smooth closed (periodic) curve, not a repeat of the first point.
-                s.add_entity(EntityKind::Spline(self.make(true)))?;
+                s.add_entity(EntityKind::Spline(Box::new(self.make(true))))?;
                 Ok(Step::Done)
             }
             Input::Keyword(k) if k == "Method" => {
@@ -1366,7 +1366,7 @@ impl Interactive for SplineM {
             }
             Input::Enter => {
                 if self.pts.len() >= 2 {
-                    s.add_entity(EntityKind::Spline(self.make(false)))?;
+                    s.add_entity(EntityKind::Spline(Box::new(self.make(false))))?;
                 }
                 Ok(Step::Done)
             }
@@ -1393,7 +1393,7 @@ impl Interactive for SplineM {
         if pts.len() < 2 {
             return Vec::new();
         }
-        vec![EntityKind::Spline(Spline::fit_with(&pts, false, opts))]
+        vec![EntityKind::Spline(Box::new(Spline::fit_with(&pts, false, opts)))]
     }
 }
 

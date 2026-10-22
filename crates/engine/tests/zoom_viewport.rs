@@ -9,7 +9,7 @@ fn viewport(s: &Session, h: &str) -> Viewport {
     let d = s.doc().unwrap();
     let e = d.layout("Layout1").unwrap().entities.iter().find(|e| e.handle.hex() == h).unwrap();
     match &e.kind {
-        EntityKind::Viewport(v) => v.clone(),
+        EntityKind::Viewport(v) => v.as_ref().clone(),
         _ => panic!("not a viewport"),
     }
 }

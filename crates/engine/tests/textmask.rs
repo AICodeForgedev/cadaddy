@@ -83,7 +83,7 @@ fn a_mask_hides_an_image_beneath_it() {
         path: path.clone(),
         ..cadaddy_doc::Image::default()
     };
-    s.add_entity(cadaddy_doc::EntityKind::Image(img)).unwrap();
+    s.add_entity(cadaddy_doc::EntityKind::Image(Box::new(img))).unwrap();
     let t = h(&s.execute("mtext", &json!({"at": [20, 70], "text": "MASKED", "height": 6})).unwrap());
     let before = red_share(&render(&s), 21.0, 65.5, 48.0, 69.0);
     assert!(before > 0.5, "the image shows behind plain text: {before}");

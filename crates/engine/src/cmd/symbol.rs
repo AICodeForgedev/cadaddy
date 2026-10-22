@@ -135,7 +135,7 @@ fn run_symbol(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(layer) = target_layer(s, sym, str_param(p, "layer"))?
         && let Some(h) = r.get("handle").and_then(super::curves::handle_value)
     {
-        s.doc_mut()?.modify_entity(h, |e| e.common.layer = layer.clone())?;
+        s.doc_mut()?.modify_entity(h, |e| e.common.layer = layer.as_str().into())?;
         r["layer"] = json!(layer);
     }
     r["block"] = json!(name);
@@ -247,7 +247,7 @@ impl Interactive for SymbolM {
                 for h in new {
                     s.doc_mut()?.modify_entity(h, |e| {
                         if matches!(e.kind, EntityKind::Insert(_)) {
-                            e.common.layer = layer.clone();
+                            e.common.layer = layer.as_str().into();
                         }
                     })?;
                 }

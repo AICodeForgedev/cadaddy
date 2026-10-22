@@ -51,7 +51,8 @@ fn saveas_without_an_extension_adds_dwg() {
 fn image_commands_list_detach_and_set_transparency() {
     use cadaddy_engine::doc::{EntityKind, Image};
     let mut s = Session::new();
-    let h = s.add_entity(EntityKind::Image(Image { path: "c:/nowhere/logo.png".into(), name: "logo".into(), ..Default::default() })).unwrap();
+    let h =
+        s.add_entity(EntityKind::Image(Box::new(Image { path: "c:/nowhere/logo.png".into(), name: "logo".into(), ..Default::default() }))).unwrap();
     let list = s.execute("image", &json!({})).unwrap();
     assert_eq!(list["images"][0]["name"], json!("logo"), "{list}");
     s.execute("transparency", &json!({"handles": [h.hex()], "on": true})).unwrap();

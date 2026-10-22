@@ -106,7 +106,7 @@ fn images(d: &Drawing) -> Vec<Image> {
     d.model
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Image(i) => Some(i.clone()),
+            EntityKind::Image(i) => Some(i.as_ref().clone()),
             _ => None,
         })
         .collect()

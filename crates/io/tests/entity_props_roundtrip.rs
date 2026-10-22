@@ -90,14 +90,14 @@ fn hatch(pattern: &str, gradient: Option<Gradient>) -> Hatch {
 #[test]
 fn hatch_origin_background_and_elevation_roundtrip() {
     let mut d = Drawing::new_metric();
-    let patterned = add(&mut d, 0.0, EntityKind::Hatch(hatch("ANSI31", None)));
+    let patterned = add(&mut d, 0.0, EntityKind::Hatch(Box::new(hatch("ANSI31", None))));
     let g = Gradient { name: "CYLINDER".into(), color1: Color::Index(1), color2: Color::True(Rgb(10, 20, 30)), angle: 0.5, centered: false };
     let mut with_gradient = hatch("SOLID", Some(g.clone()));
     with_gradient.background = Some(Color::True(Rgb(1, 2, 3)));
-    let graded = add(&mut d, 0.0, EntityKind::Hatch(with_gradient));
+    let graded = add(&mut d, 0.0, EntityKind::Hatch(Box::new(with_gradient)));
     let mut plain = hatch("ANSI31", None);
     (plain.origin, plain.background, plain.elevation) = (Vec2::ZERO, None, 0.0);
-    let plain_h = add(&mut d, 0.0, EntityKind::Hatch(plain));
+    let plain_h = add(&mut d, 0.0, EntityKind::Hatch(Box::new(plain)));
 
     let text = write_dxf(&d);
     let r = read_dxf(text.as_bytes()).expect("reopen");

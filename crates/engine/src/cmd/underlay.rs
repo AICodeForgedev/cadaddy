@@ -123,7 +123,7 @@ pub(crate) fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
         monochrome: false,
         layers_off: Vec::new(),
     };
-    let h = s.add_entity(EntityKind::Underlay(u))?;
+    let h = s.add_entity(EntityKind::Underlay(Box::new(u)))?;
     Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "layers": layers }))
 }
 
@@ -139,13 +139,13 @@ fn underlays(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Handle>> {
 
 fn underlay_of(s: &Session, h: Handle) -> Result<Underlay> {
     match s.doc()?.entity(h).map(|e| &e.kind) {
-        Some(EntityKind::Underlay(u)) => Ok(u.clone()),
+        Some(EntityKind::Underlay(u)) => Ok(u.as_ref().clone()),
         _ => Err(bad("pdf", "not a PDF underlay")),
     }
 }
 
 fn store(s: &mut Session, h: Handle, u: Underlay) -> Result<()> {
-    s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Underlay(u))?;
+    s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Underlay(Box::new(u)))?;
     Ok(())
 }
 

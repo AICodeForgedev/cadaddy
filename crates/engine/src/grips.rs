@@ -202,7 +202,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             } else {
                 let mut fit = sp.fit.clone();
                 *fit.get_mut(index)? = to;
-                *sp = sp.refit(&fit, sp.closed);
+                **sp = sp.refit(&fit, sp.closed);
             }
         }
         // Centre, base radius (and start angle), top radius.

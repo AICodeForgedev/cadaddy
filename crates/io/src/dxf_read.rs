@@ -55,7 +55,11 @@ fn transparency_440(v: i64) -> Transparency {
 }
 
 fn common(t: &T) -> Common {
-    let mut c = Common { layer: t.s(8).unwrap_or_else(|| "0".into()), linetype: t.s(6).unwrap_or_else(|| "ByLayer".into()), ..Common::default() };
+    let mut c = Common {
+        layer: t.s(8).unwrap_or_else(|| "0".into()).into(),
+        linetype: t.s(6).unwrap_or_else(|| "ByLayer".into()).into(),
+        ..Common::default()
+    };
     if let Some(v) = t.i(62) {
         c.color = Color::from_aci(v as i16);
         if v < 0 {
@@ -183,7 +187,7 @@ fn mtext_from(tags: &[Tag], c: &Common) -> MText {
         transparency: own.i(441).unwrap_or(0),
     });
     MText {
-        background,
+        background: background.map(Box::new),
         insert: t.p(10),
         height: t.fd(40, 0.2).max(1e-9),
         width: match &columns {
@@ -196,7 +200,7 @@ fn mtext_from(tags: &[Tag], c: &Common) -> MText {
         contents,
         line_spacing: t.fd(44, 1.0),
         line_spacing_exact: t.i(73) == Some(2),
-        columns: columns.map(|(c, _)| c),
+        columns: columns.map(|(c, _)| c).map(Box::new),
     }
 }
 
@@ -267,6 +271,8 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
 
 /// Records from which a section's objects are parsed on all cores.
 const PARALLEL_RECORDS: usize = 4096;
+/// Records made into objects on all cores at a time ([`parse_entities`]).
+const PARSE_WINDOW: usize = 32_768;
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
 fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
@@ -391,7 +397,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 // DXF keeps the knots, not how they were spaced: recover it for later refits.
                 sp.fit_opts.knots = sp.infer_knot_param();
             }
-            EntityKind::Spline(sp)
+            EntityKind::Spline(Box::new(sp))
         }
         "HELIX" => EntityKind::Helix(helix(tags)),
         "RAY" => EntityKind::Ray(RayLine { base: t.p(10), dir: t.p(11) }),
@@ -498,7 +504,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let corners = corners.map(|p| ocs(&c, p));
             if kind == "SOLID" { EntityKind::Solid(Solid { corners }) } else { EntityKind::Trace(Solid { corners }) }
         }
-        "MLINE" => EntityKind::MLine(crate::dxf_mline::read_entity(tags)),
+        "MLINE" => EntityKind::MLine(Box::new(crate::dxf_mline::read_entity(tags))),
         "MESH" => match crate::dxf_solid::read_solid(tags) {
             Some(so) => EntityKind::Solid3d(Box::new(so)),
             None => EntityKind::Mesh(crate::dxf_mesh::read_subd(tags)?),
@@ -519,7 +525,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             k
         }
         "ACAD_TABLE" => EntityKind::Table(Box::new(acad_table(tags))),
-        "VIEWPORT" => EntityKind::Viewport(Viewport {
+        "VIEWPORT" => EntityKind::Viewport(Box::new(Viewport {
             center: t.p(10),
             width: t.fd(40, 1.0),
             height: t.fd(41, 1.0),
@@ -544,7 +550,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             on: t.i(90).unwrap_or(0) & 131072 == 0,
             twist: viewport_twist(&t),
             anno_scale: None,
-        }),
+        })),
         "WIPEOUT" => {
             let o = t.p(10);
             let u = t.p(11);
@@ -561,10 +567,10 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
-        "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        "IMAGE" => EntityKind::Image(Box::new(crate::dxf_image::read_entity(tags))),
         // The file and page come from the PDFDEFINITION object (`dxf_underlay::resolve`).
         // PDFREFERENCE: the name the ODA's converter writes for it.
-        "PDFUNDERLAY" | "PDFREFERENCE" => EntityKind::Underlay(crate::dxf_underlay::read_entity(tags)),
+        "PDFUNDERLAY" | "PDFREFERENCE" => EntityKind::Underlay(Box::new(crate::dxf_underlay::read_entity(tags))),
         "TOLERANCE" => {
             let dir = t.p(11);
             let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
@@ -896,7 +902,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
     // of some patterns (AR-CONC) only approximate AutoCAD's, and drawing them at the file's scale
     // could be hundreds of times denser than the hatch the author saw.
     let pattern_lines = if solid { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
-    Some(EntityKind::Hatch(Hatch {
+    Some(EntityKind::Hatch(Box::new(Hatch {
         pattern: pattern.to_ascii_uppercase(),
         solid,
         loops,
@@ -910,7 +916,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         origin,
         background,
         pattern_lines,
-    }))
+    })))
 }
 
 /// Upper bound on the source boundary objects of one HATCH loop.
@@ -1246,29 +1252,41 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
 
 /// Parse a run of entity records (ENTITIES section or a block's body) into entities. Records that
 /// can't be placed are counted in `skipped`.
-fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
-    let mut out = Vec::new();
-    // Each record's object on all cores first (most of reading a large file); the records that
-    // belong to another (vertices, attributes) are then merged in order below.
-    let mut pre: Vec<Option<Option<(Common, EntityKind)>>> =
-        if recs.len() >= PARALLEL_RECORDS { crate::par_map(recs, |(kind, tags)| Some(entity(kind, tags))) } else { Vec::new() };
+/// Each object boxed: moved on into the drawing's store one at a time, the whole list never holds
+/// a second copy of every object.
+fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Box<Entity>)> {
+    // At most an object a record (the records are in memory already: no hostile size).
+    let mut out = Vec::with_capacity(recs.len());
+    // Each record's object on all cores first (most of reading a large file), a window of
+    // records at a time (all of a large file's at once held them twice over until the end); the
+    // records that belong to another (vertices, attributes) are then merged in order below.
+    let parallel = recs.len() >= PARALLEL_RECORDS;
+    let mut pre: Vec<Option<Option<(Common, EntityKind)>>> = Vec::new();
+    // Where `pre` starts in `recs`.
+    let mut pre_at = 0usize;
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
         let t = T(tags);
         let owner = crate::dxf_ext::owner(tags);
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
-        let mut kindent = match pre.get_mut(i).and_then(Option::take) {
+        if parallel && i >= pre_at.saturating_add(pre.len()) {
+            drop(std::mem::take(&mut pre));
+            pre_at = i;
+            let window = recs.get(i..i.saturating_add(PARSE_WINDOW).min(recs.len())).unwrap_or_default();
+            pre = crate::par_map(window, |(kind, tags)| Some(entity(kind, tags)));
+        }
+        let mut kindent = match i.checked_sub(pre_at).and_then(|j| pre.get_mut(j)).and_then(Option::take) {
             Some(done) => done,
             None => entity(kind, tags),
         };
         if let Some((c, _)) = kindent.as_mut()
             && let Some(n) = entity_plot_style(tags, rx)
         {
-            c.plot_style = n;
+            c.plot_style = n.into();
         }
         if let Some((c, _)) = kindent.as_mut() {
-            c.material = entity_material(tags, rx);
+            c.material = entity_material(tags, rx).into();
         }
         i += 1;
         match kind.as_str() {
@@ -1370,7 +1388,7 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                 None => d.new_handle(),
             };
             entity_extras(kind, tags, h, &mut k, rx);
-            out.push((owner, paper, Entity { handle: h, common: c, kind: k }));
+            out.push((owner, paper, Box::new(Entity { handle: h, common: c, kind: k })));
         } else if kind == "HATCH" {
             // Without boundary data. The other records `entity` returns nothing for are read
             // elsewhere (the writer's paper viewport, the loops of a region).
@@ -1931,7 +1949,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.materials = materials;
         rx.materials = names;
     }
-    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
+    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Box<Entity>)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup, Option<(Vec2, Vec2)>)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
@@ -1992,7 +2010,13 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             // A damaged file may split its entities over several ENTITIES sections (#865).
             "ENTITIES" => {
                 let mut n = 0;
-                entities.extend(parse_entities(&cadaddy_dxf::record_slices(&s.tags), &mut d, &mut rx, &mut n));
+                let more = parse_entities(&cadaddy_dxf::record_slices(&s.tags), &mut d, &mut rx, &mut n);
+                // The first section's objects as they are (extending an empty list copies them).
+                if entities.is_empty() {
+                    entities = more;
+                } else {
+                    entities.extend(more);
+                }
                 count_skipped(&mut skipped, "ENTITIES", n);
             }
             "OBJECTS" => {
@@ -2061,7 +2085,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         if up == "*MODEL_SPACE" {
             for (_, _, e) in ents {
                 d.ensure_layer(&e.common.layer);
-                d.model.push(e);
+                d.model.push(*e);
             }
             continue;
         }
@@ -2069,7 +2093,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             let lname = paper_block_for.get(&up).cloned().unwrap_or_else(|| first_layout.clone());
             if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
                 for (_, _, e) in ents {
-                    l.entities.push(e);
+                    l.entities.push(*e);
                 }
             }
             continue;
@@ -2090,7 +2114,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             b.xref_overlay = xref & 8 != 0;
         } else {
             for (_, _, e) in ents {
-                b.entities.push(e);
+                b.entities.push(*e);
             }
         }
         // Array parameters, with the block names the items use (other programs may rename
@@ -2109,10 +2133,10 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         if to_paper {
             let lname = owner_name.and_then(|n| paper_block_for.get(&n).cloned()).unwrap_or_else(|| first_layout.clone());
             if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
-                l.entities.push(e);
+                l.entities.push(*e);
             }
         } else {
-            d.model.push(e);
+            d.model.push(*e);
         }
     }
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);

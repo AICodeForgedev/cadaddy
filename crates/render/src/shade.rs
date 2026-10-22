@@ -1009,7 +1009,7 @@ mod tests {
         let mut c = Common::default();
         if let Some(id) = box_material {
             let m = cadaddy_doc::material::recipe(id).unwrap().material(1.0);
-            c.material = Some(m.name.clone());
+            c.material = Some(m.name.clone()).into();
             d.materials.push(m);
         }
         d.add(&Space::Model, c, EntityKind::Mesh(b)).unwrap();

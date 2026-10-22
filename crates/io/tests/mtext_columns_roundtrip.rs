@@ -17,7 +17,7 @@ fn mtext(contents: &str, rotation: f64, columns: Option<MTextColumns>) -> MText 
         contents: contents.into(),
         line_spacing: 1.0,
         line_spacing_exact: false,
-        columns,
+        columns: columns.map(Box::new),
     }
 }
 
@@ -39,7 +39,7 @@ fn round_trip(t: MText) -> (MText, String) {
 fn static_columns_round_trip() {
     let c = MTextColumns { kind: MTextColumnType::Static, count: 3, gutter: 1.25, height: 7.5, ..Default::default() };
     let (t, dxf) = round_trip(mtext("one\\Ntwo", 0.0, Some(c.clone())));
-    assert_eq!(t.columns, Some(c));
+    assert_eq!(t.columns, Some(Box::new(c)));
     assert_eq!(t.width, 6.0);
     // Group 50 after the column type is a column height, not the rotation.
     assert_eq!(t.rotation, 0.0);
@@ -58,10 +58,10 @@ fn dynamic_manual_heights_and_rotation_round_trip() {
         flow_reversed: true,
     };
     let (t, _) = round_trip(mtext("a b c", 0.5, Some(c.clone())));
-    assert_eq!(t.columns, Some(c));
+    assert_eq!(t.columns, Some(Box::new(c)));
     assert!((t.rotation - 0.5).abs() < 1e-9);
     let auto = MTextColumns { kind: MTextColumnType::Dynamic, count: 1, gutter: 0.5, height: 4.0, auto_height: true, ..Default::default() };
-    assert_eq!(round_trip(mtext("x", 0.0, Some(auto.clone()))).0.columns, Some(auto));
+    assert_eq!(round_trip(mtext("x", 0.0, Some(auto.clone()))).0.columns, Some(Box::new(auto)));
 }
 
 #[test]

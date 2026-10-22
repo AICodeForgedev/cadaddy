@@ -67,8 +67,8 @@ pub fn default_palettes() -> Vec<Palette> {
 /// The tool an object of the drawing makes.
 pub fn tool_for(e: &cadaddy_engine::doc::Entity) -> Option<Tool> {
     use cadaddy_engine::doc::EntityKind as K;
-    let layer = Some(e.common.layer.clone()).filter(|l| !l.is_empty());
-    let linetype = Some(e.common.linetype.clone()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("bylayer"));
+    let layer = Some(e.common.layer.to_string()).filter(|l| !l.is_empty());
+    let linetype = Some(e.common.linetype.to_string()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("bylayer"));
     let command = |c: &str| Some(Tool::Command { command: c.into(), layer: layer.clone(), linetype: linetype.clone() });
     match &e.kind {
         K::Insert(i) => Some(Tool::Block { name: i.block.clone(), file: None }),

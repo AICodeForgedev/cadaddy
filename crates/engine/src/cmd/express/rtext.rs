@@ -416,7 +416,7 @@ fn run_rtext(s: &mut Session, p: &Value) -> Result<Value> {
         columns: None,
         background: None,
     };
-    let common = Common { xdata: source_tags(&src), ..s.current_common() };
+    let common = Common { xdata: source_tags(&src).into(), ..s.current_common() };
     let space = s.space();
     let h = s.doc_mut()?.add(&space, common, EntityKind::MText(m))?;
     Ok(json!({ "handle": h.hex() }))

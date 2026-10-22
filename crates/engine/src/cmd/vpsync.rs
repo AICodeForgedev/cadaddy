@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn viewport(s: &Session, h: Handle) -> Option<Viewport> {
     match s.doc().ok()?.entity(h).map(|e| &e.kind) {
-        Some(EntityKind::Viewport(v)) => Some(v.clone()),
+        Some(EntityKind::Viewport(v)) => Some(v.as_ref().clone()),
         _ => None,
     }
 }

@@ -17,7 +17,7 @@ fn kind(s: &Session, h: &str) -> EntityKind {
 
 fn spline(s: &Session, h: &str) -> Spline {
     match kind(s, h) {
-        EntityKind::Spline(sp) => sp,
+        EntityKind::Spline(sp) => *sp,
         k => panic!("not a spline: {k:?}"),
     }
 }

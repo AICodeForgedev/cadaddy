@@ -28,10 +28,14 @@ pub enum DxfError {
 
 pub type Result<T> = std::result::Result<T, DxfError>;
 
+pub use smol_str::SmolStr;
+
 /// A typed group value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    Str(String),
+    /// Text: kept in place up to 23 bytes (names, handles, short text), so a large file's
+    /// millions of groups aren't millions of small allocations.
+    Str(SmolStr),
     Real(f64),
     Int(i64),
     Bool(bool),
@@ -42,7 +46,8 @@ pub enum Value {
 impl Value {
     pub fn as_str(&self) -> String {
         match self {
-            Value::Str(s) | Value::Hex(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
+            Value::Hex(s) => s.clone(),
             Value::Real(r) => format_real(*r),
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => i64::from(*b).to_string(),
@@ -78,7 +83,7 @@ impl Tag {
     pub fn new(code: i32, value: Value) -> Self {
         Tag { code, value }
     }
-    pub fn s(code: i32, v: impl Into<String>) -> Self {
+    pub fn s(code: i32, v: impl Into<SmolStr>) -> Self {
         Tag { code, value: Value::Str(v.into()) }
     }
     pub fn f(code: i32, v: f64) -> Self {
@@ -157,7 +162,7 @@ fn typed(code: i32, text: &str) -> Value {
         }
         Kind::Bool => Value::Bool(t.parse::<i64>().unwrap_or(0) != 0),
         Kind::Hex => Value::Hex(t.to_string()),
-        Kind::Str => Value::Str(text.trim_end_matches(['\r', '\n']).to_string()),
+        Kind::Str => Value::Str(text.trim_end_matches(['\r', '\n']).into()),
     }
 }
 
@@ -176,7 +181,7 @@ pub fn decode_text(bytes: &[u8], code_page: Option<&str>) -> String {
     let text = code_page
         .and_then(|p| decode_code_page(bytes, p))
         .unwrap_or_else(|| encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes).0.into_owned());
-    unescape_unicode(&text)
+    unescape_unicode(&text).into()
 }
 
 /// Parse a DXF file (ASCII or binary).
@@ -196,7 +201,9 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
-    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags)
+    // Room for them at once, but never more than six bytes a group could fill (a file of blank
+    // lines reserves nothing it doesn't hold).
+    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags, tags.min(bytes.len() / 6))
 }
 
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
@@ -233,9 +240,9 @@ fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
 /// page (four hex digits, one UTF-16 code unit; characters above U+FFFF are a surrogate pair of
 /// escapes), and the `\M+nXXXX` sequences for double-byte East Asian characters. Malformed
 /// escapes, unpaired surrogates and unknown `\M+` code pages are kept as literal text.
-fn unescape_unicode(s: &str) -> String {
+fn unescape_unicode(s: &str) -> SmolStr {
     if !s.contains("\\U+") && !s.contains("\\M+") {
-        return s.to_string();
+        return SmolStr::new(s);
     }
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
@@ -264,16 +271,18 @@ fn unescape_unicode(s: &str) -> String {
         out.push(c);
         i += 1;
     }
-    out
+    out.into()
 }
 
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
-    parse_ascii_with_limit(text, MAX_TAGS)
+    parse_ascii_with_limit(text, MAX_TAGS, 0)
 }
 
 #[allow(clippy::while_let_loop)]
-fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
-    let mut tags = Vec::new();
+/// `expected`: the groups the text has, when counted (room for them at once: growing a large
+/// file's list held it twice over while it was copied).
+fn parse_ascii_with_limit(text: &str, max_tags: usize, expected: usize) -> Result<Vec<Tag>> {
+    let mut tags = Vec::with_capacity(expected.min(max_tags));
     let mut lines = text.lines().enumerate();
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
@@ -453,7 +462,7 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
                 out.extend_from_slice(&code_bytes);
                 let s = match &t.value {
                     Value::Str(s) => s.clone(),
-                    v => v.as_str(),
+                    v => v.as_str().into(),
                 };
                 let mut text = String::with_capacity(s.len());
                 if utf8 {
@@ -564,33 +573,48 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
 
 /// [`sections`], taking the tags instead of copying them: a large file's text is then held once,
 /// not twice (reading a 40 MB DXF peaked at four times its loaded size).
-pub fn sections_owned(tags: Vec<Tag>) -> Vec<Section> {
-    let mut out = Vec::new();
-    let mut current: Option<Section> = None;
-    let mut want_name = false;
-    for t in tags {
-        if let Some(sec) = &mut current {
-            // The tag after SECTION is its name (code 2); like `sections`, it is never a tag of
-            // the section even when it isn't one.
-            if want_name {
-                want_name = false;
-                if t.code == 2 {
-                    sec.name = t.str();
-                }
-                continue;
-            }
-            if t.code == 0 && t.str() == "ENDSEC" {
-                out.extend(current.take());
-            } else {
-                sec.tags.push(t);
-            }
-        } else if t.code == 0 && t.str() == "SECTION" {
-            current = Some(Section { name: String::new(), tags: Vec::new() });
-            want_name = true;
+///
+/// The largest section (a large file's ENTITIES) keeps the list's own memory, the others' groups
+/// are moved out of it: the groups are never held twice.
+pub fn sections_owned(mut tags: Vec<Tag>) -> Vec<Section> {
+    let marker = |t: &Tag, m: &str| t.code == 0 && matches!(&t.value, Value::Str(s) if s == m);
+    // Each section: its name, and where its groups start and end.
+    let mut spans: Vec<(String, usize, usize)> = Vec::new();
+    let mut k = 0;
+    while let Some(t) = tags.get(k) {
+        if !marker(t, "SECTION") {
+            k += 1;
+            continue;
         }
+        // The tag after SECTION is its name (code 2); like `sections`, it is never a tag of the
+        // section even when it isn't one.
+        let name = tags.get(k + 1).filter(|n| n.code == 2).map(Tag::str).unwrap_or_default();
+        let start = k.saturating_add(2).min(tags.len());
+        // A file cut off inside a section keeps what it has, as `sections` does.
+        let end = tags.get(start..).and_then(|rest| rest.iter().position(|t| marker(t, "ENDSEC"))).map_or(tags.len(), |p| start + p);
+        spans.push((name, start, end));
+        k = end.saturating_add(1);
     }
-    // A file cut off inside a section keeps what it has, as `sections` does.
-    out.extend(current);
+    let largest = spans.iter().enumerate().max_by_key(|(_, s)| s.2 - s.1).map(|(i, _)| i);
+    let mut out: Vec<Section> = spans
+        .iter()
+        .enumerate()
+        .map(|(i, (name, a, b))| {
+            let tags = match tags.get_mut(*a..*b) {
+                Some(part) if Some(i) != largest => part.iter_mut().map(|t| std::mem::replace(t, Tag::i(0, 0))).collect(),
+                _ => Vec::new(),
+            };
+            Section { name: name.clone(), tags }
+        })
+        .collect();
+    if let Some(i) = largest
+        && let Some(&(_, a, b)) = spans.get(i)
+        && let Some(sec) = out.get_mut(i)
+    {
+        tags.truncate(b);
+        tags.drain(..a);
+        sec.tags = tags;
+    }
     out
 }
 
@@ -733,6 +757,43 @@ mod tests {
         for ((ka, ta), (kb, tb)) in slices.iter().zip(&recs) {
             assert_eq!((ka, *ta), (kb, tb.as_slice()));
         }
+    }
+
+    #[test]
+    fn owned_sections_match_copied_ones_on_odd_files() {
+        // Groups outside sections, a section without a name (its name slot still skipped), an
+        // empty one, ENDSEC in the name slot, and the largest section not the first.
+        let tags = vec![
+            Tag::s(999, "comment"),
+            Tag::s(0, "SECTION"),
+            Tag::s(0, "LINE"),
+            Tag::s(8, "0"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "EMPTY"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(5, "stray"),
+            Tag::s(0, "SECTION"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "POINT"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "ENTITIES"),
+            Tag::s(0, "LINE"),
+            Tag::s(8, "A"),
+            Tag::f(10, 1.0),
+            Tag::s(0, "CIRCLE"),
+            Tag::s(8, "B"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "EOF"),
+        ];
+        let copied = sections(&tags);
+        let owned = sections_owned(tags.clone());
+        assert_eq!(owned.len(), copied.len());
+        for (a, b) in owned.iter().zip(&copied) {
+            assert_eq!((&a.name, &a.tags), (&b.name, &b.tags));
+        }
+        assert!(sections_owned(Vec::new()).is_empty());
     }
 
     #[test]

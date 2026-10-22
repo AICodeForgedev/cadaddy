@@ -8,7 +8,7 @@ use serde_json::json;
 fn vp(s: &Session, h: &str) -> Viewport {
     let h = Handle::parse_hex(h).unwrap();
     match &s.doc().unwrap().entity(h).unwrap().kind {
-        EntityKind::Viewport(v) => v.clone(),
+        EntityKind::Viewport(v) => v.as_ref().clone(),
         _ => panic!("not a viewport"),
     }
 }

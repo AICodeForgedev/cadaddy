@@ -46,7 +46,7 @@ fn lines(d: &Drawing) -> Vec<(f64, f64, f64, f64, String)> {
         .model
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Line(l) => Some((l.a.x, l.a.y, l.b.x, l.b.y, e.common.layer.clone())),
+            EntityKind::Line(l) => Some((l.a.x, l.a.y, l.b.x, l.b.y, e.common.layer.to_string())),
             _ => None,
         })
         .collect();

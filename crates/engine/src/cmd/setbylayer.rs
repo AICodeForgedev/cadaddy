@@ -104,7 +104,7 @@ impl Which {
         }
         let material_by_block = c.material.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("ByBlock"));
         if self.material && self.takes(c.material.is_none(), material_by_block) {
-            c.material = None;
+            c.material = None.into();
             changed = true;
         }
         if self.plot_style && self.takes(c.plot_style.eq_ignore_ascii_case("ByLayer"), c.plot_style.eq_ignore_ascii_case("ByBlock")) {

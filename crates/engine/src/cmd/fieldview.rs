@@ -267,7 +267,7 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
                 };
                 (kind.to_string(), tag_value(&tags, "system").unwrap_or_default().to_string())
             }
-            other => (other.to_string(), e.common.layer.clone()),
+            other => (other.to_string(), e.common.layer.to_string()),
         };
         let Some((lo, hi)) = mesh_box(e) else { continue };
         let trade = match kind.as_str() {

@@ -31,7 +31,7 @@ pub(super) fn extend_spline(sp: &Spline, cut: &[Segment], pick: Vec2) -> Result<
     if !d.is_finite() {
         return Err(other("Object does not intersect an edge."));
     }
-    sp.extended(at_end, d).map(EntityKind::Spline).ok_or_else(|| other("Cannot extend that spline."))
+    sp.extended(at_end, d).map(|x| EntityKind::Spline(Box::new(x))).ok_or_else(|| other("Cannot extend that spline."))
 }
 
 /// TRIM a closed spline at the hits `ts` (sorted parameters) around the pick parameter `tp`:
@@ -57,7 +57,7 @@ pub(super) fn trim_closed_spline(sp: &Spline, ts: &[f64], tp: f64) -> Result<Vec
         // The removed piece crosses the seam.
         sp.sub_between(first, last).ok_or_else(fail)?
     };
-    Ok(vec![EntityKind::Spline(Spline { closed: false, ..kept })])
+    Ok(vec![EntityKind::Spline(Box::new(Spline { closed: false, ..kept }))])
 }
 
 fn too_short() -> crate::EngineError {
@@ -141,7 +141,7 @@ pub(super) fn lengthen_spline(sp: &Spline, pick: Option<Vec2>, mode: LenMode) ->
     } else {
         sp.sub_between(sp.param_at_length(hi, -target), hi).ok_or_else(fail)?
     };
-    Ok(EntityKind::Spline(out))
+    Ok(EntityKind::Spline(Box::new(out)))
 }
 
 /// Parameter offset that maps `b`'s parameters onto `a`'s when both are the same ellipse
@@ -307,7 +307,7 @@ pub(crate) fn join_curves(s: &mut Session, hs: &[Handle]) -> Result<Option<Handl
     let (a, b) = ends(&out);
     out.closed = a.near(b, tol);
     let keep = first_h;
-    set_kind(s, keep, EntityKind::Spline(out))?;
+    set_kind(s, keep, EntityKind::Spline(Box::new(out)))?;
     let doc = s.doc_mut()?;
     for h in used.iter().filter(|h| **h != keep) {
         doc.remove_entity(*h);
@@ -329,7 +329,7 @@ fn tan_curve(k: &EntityKind) -> Option<TanCurve> {
         EntityKind::Arc(a) => Some(TanCurve::Circle(Circle::new(a.center.xy(), a.radius))),
         EntityKind::Circle(c) => Some(TanCurve::Circle(Circle::new(c.center.xy(), c.radius))),
         EntityKind::Ellipse(e) => Some(TanCurve::Ellipse(Ellipse { start: 0.0, end: TAU, ..ellipse_of(e) })),
-        EntityKind::Spline(sp) if sp.is_valid() => Some(TanCurve::Spline(sp.clone())),
+        EntityKind::Spline(sp) if sp.is_valid() => Some(TanCurve::Spline(sp.as_ref().clone())),
         _ => None,
     }
 }
@@ -365,9 +365,9 @@ fn fillet_trim(k: &EntityKind, pick: Vec2, t: f64, at: Vec2) -> Option<(Option<E
             let (lo, hi) = sp.domain();
             let tan = sp.unit_tangent(t);
             Some(if curves::spline_param_of(sp, pick) <= t {
-                (Some(EntityKind::Spline(sp.sub_between(lo, t)?)), Some(tan))
+                (Some(EntityKind::Spline(Box::new(sp.sub_between(lo, t)?))), Some(tan))
             } else {
-                (Some(EntityKind::Spline(sp.sub_between(t, hi)?)), Some(-tan))
+                (Some(EntityKind::Spline(Box::new(sp.sub_between(t, hi)?))), Some(-tan))
             })
         }
         _ => super::trim_for_fillet(k, pick, at),

@@ -188,7 +188,7 @@ fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec
         Change::Add { entity } => {
             let mut e = (**entity).clone();
             e.handle = if d.entity(e.handle).is_none() && e.handle.0 != 0 { e.handle } else { d.new_handle() };
-            e.common.xdata = overrides::mark(&e.common.xdata, id);
+            e.common.xdata = overrides::mark(&e.common.xdata, id).into();
             d.ensure_layer(&e.common.layer);
             let h = e.handle;
             d.model.push(e);
@@ -206,7 +206,7 @@ fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec
             let (h, dl) = (h?, *delta);
             d.modify_entity(h, |e| {
                 translated(e, dl);
-                e.common.xdata = overrides::mark(&e.common.xdata, id);
+                e.common.xdata = overrides::mark(&e.common.xdata, id).into();
             })
             .ok()?;
             touched.push(h);
@@ -216,13 +216,13 @@ fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec
             let h = h?;
             *before = d.entity(h).and_then(|e| bimspec::entity_type_mark(&e.common.xdata).map(str::to_string));
             let m = mark.clone();
-            d.modify_entity(h, |e| e.common.xdata = overrides::mark(&set_mark(&e.common.xdata, Some(&m)), id)).ok()?;
+            d.modify_entity(h, |e| e.common.xdata = overrides::mark(&set_mark(&e.common.xdata, Some(&m)), id).into()).ok()?;
             touched.push(h);
             Some(h)
         }
         Change::Verify => {
             let h = h?;
-            d.modify_entity(h, |e| e.common.xdata = overrides::mark(&e.common.xdata, id)).ok()?;
+            d.modify_entity(h, |e| e.common.xdata = overrides::mark(&e.common.xdata, id).into()).ok()?;
             touched.push(h);
             Some(h)
         }
@@ -269,7 +269,7 @@ fn unapply(d: &mut Drawing, o: &Override, touched: &mut Vec<Handle>) -> Option<H
             let back = [-delta[0], -delta[1], -delta[2]];
             d.modify_entity(h, |e| {
                 translated(e, back);
-                e.common.xdata = overrides::unmark(&e.common.xdata, id);
+                e.common.xdata = overrides::unmark(&e.common.xdata, id).into();
             })
             .ok()?;
             touched.push(h);
@@ -278,13 +278,13 @@ fn unapply(d: &mut Drawing, o: &Override, touched: &mut Vec<Handle>) -> Option<H
         Change::Type { before, .. } => {
             let h = marked(d, o)?;
             let b = before.clone();
-            d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&set_mark(&e.common.xdata, b.as_deref()), id)).ok()?;
+            d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&set_mark(&e.common.xdata, b.as_deref()), id).into()).ok()?;
             touched.push(h);
             Some(h)
         }
         Change::Verify => {
             let h = marked(d, o)?;
-            d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&e.common.xdata, id)).ok()?;
+            d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&e.common.xdata, id).into()).ok()?;
             touched.push(h);
             Some(h)
         }
@@ -497,7 +497,7 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
     o.applied = match &o.change {
         // The hand-drawn object becomes the added item (marked in place, not copied).
         Change::Add { .. } => {
-            d.modify_entity(h, |x| x.common.xdata = overrides::mark(&x.common.xdata, id)).map_err(|e| bad(ADD, e.to_string()))?;
+            d.modify_entity(h, |x| x.common.xdata = overrides::mark(&x.common.xdata, id).into()).map_err(|e| bad(ADD, e.to_string()))?;
             touched.push(h);
             Some(h)
         }

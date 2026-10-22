@@ -248,14 +248,14 @@ fn trace_with(img: &Img, deg: f64, params: serde_json::Value) -> Traced {
     let vv = turn(v(0.0, k));
     let o = centre + turn(-centre_px) * k;
     let mut sess = Session::new();
-    sess.add_entity(EntityKind::Image(Image {
+    sess.add_entity(EntityKind::Image(Box::new(Image {
         insert: Vec3::new(o.x, o.y, 0.0),
         u: Vec3::new(u.x, u.y, 0.0),
         v: Vec3::new(vv.x, vv.y, 0.0),
         size: v(img.w as f64, img.h as f64),
         path: path.clone(),
         ..Image::default()
-    }))
+    })))
     .unwrap();
     sess.execute("imagetrace", &params).unwrap();
     let mut t = Traced::default();

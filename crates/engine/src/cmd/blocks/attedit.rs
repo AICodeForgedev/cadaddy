@@ -182,7 +182,7 @@ fn current_props(s: &Session, (h, k): (Handle, usize)) -> Option<(String, Color)
         .and_then(|b| b.entities.iter().find(|be| matches!(&be.kind, EntityKind::AttDef(ad) if ad.tag.eq_ignore_ascii_case(&a.tag))));
     let c = a.props.over(&def.map(|de| de.common.clone()).unwrap_or_else(Common::default));
     let layer = if c.layer == "0" { e.common.layer.clone() } else { c.layer };
-    Some((layer, c.color))
+    Some((layer.to_string(), c.color))
 }
 
 /// Replace every `find` in `value` with `with`, unless the result would be too long.

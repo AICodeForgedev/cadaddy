@@ -41,7 +41,7 @@ fn images(s: &Session, hs: &[Handle]) -> Result<Vec<(Handle, Image)>> {
     Ok(hs
         .iter()
         .filter_map(|h| match &d.entity(*h)?.kind {
-            EntityKind::Image(i) => Some((*h, i.clone())),
+            EntityKind::Image(i) => Some((*h, i.as_ref().clone())),
             _ => None,
         })
         .collect())

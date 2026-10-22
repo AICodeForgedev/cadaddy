@@ -82,7 +82,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Option<
                         invisible: a.invisible,
                         constant: a.constant,
                         height: a.text.height,
-                        layer: e.common.layer.clone(),
+                        layer: e.common.layer.to_string(),
                     }),
                     _ => None,
                 })

@@ -168,14 +168,14 @@ pub(super) fn plotstyle(s: &mut Session, from: &str, to: &str) -> Result<()> {
     let mut hs = users(&d.model);
     hs.extend(d.layouts.iter().flat_map(|l| users(&l.entities)));
     for h in hs {
-        d.modify_entity(h, |e| e.common.plot_style = to.clone())?;
+        d.modify_entity(h, |e| e.common.plot_style = to.as_str().into())?;
     }
     for block in d.blocks.values_mut() {
         let hs = users(&block.entities);
         if !hs.is_empty() {
             let b = Arc::make_mut(block);
             for h in hs {
-                b.entities.modify(h, |e| e.common.plot_style = to.clone());
+                b.entities.modify(h, |e| e.common.plot_style = to.as_str().into());
             }
         }
     }

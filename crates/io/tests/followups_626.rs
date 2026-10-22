@@ -205,7 +205,7 @@ fn modelled_dictionaries_are_not_kept_twice() {
     d.add(
         &Space::Model,
         Common::default(),
-        EntityKind::MLine(MLine::new(&wall, &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false, MLineJust::Zero, 1.0)),
+        EntityKind::MLine(Box::new(MLine::new(&wall, &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false, MLineJust::Zero, 1.0))),
     )
     .unwrap();
     let first = dxf(&d, Version::R2018);

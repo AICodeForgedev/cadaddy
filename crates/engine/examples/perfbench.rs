@@ -9,7 +9,16 @@
 //! built in 3D, plotted to PDF and closed. Each step's time (milliseconds, the best of three for
 //! sizes up to 10 000) is printed and written as JSON `{"op@size": ms}`, with the process's peak
 //! resident memory while that size ran as `peak_mb@size` (sampled after each step with `ps`;
-//! sizes run smallest first, so each size's peak is its own).
+//! sizes run smallest first, so each size's peak is its own; the working set on Windows).
+//!
+//! Memory (Q250), from 100k objects on, each measured in a fresh process: `--mem-live N` prints
+//! the bytes one object of the N-object drawing holds (alone, opened in a session, and with its
+//! display list too: `mem_bytes_per_object@N`, `mem_session_bytes_per_object@N`), and
+//! `--mem-open FILE` the most memory opening FILE took above its bytes and what the open drawing
+//! holds (for the size's DWG: `mem_open_dwg_peak_mb@N`, `mem_open_dwg_live_mb@N`). Process memory
+//! is private bytes on Windows, anonymous resident memory on Linux, resident memory elsewhere
+//! (sampled for the peak on macOS). `--write FILE [--objects N]` saves the N-object drawing as
+//! FILE, for looking at one size by hand.
 //!
 //! For comparing with other programs (`docs/perf-vs.md`): `--plans DIR` writes the 2D plan of
 //! each size as `plan-<n>.dxf` (the same grid without the 3D faces, which not every program
@@ -45,7 +54,7 @@ fn drawing(n: usize) -> Drawing {
     let side = (n as f64).sqrt().ceil().max(1.0) as usize;
     for i in 0..n {
         let (x, y) = ((i % side) as f64 * 12.0, (i / side) as f64 * 12.0);
-        let c = Common { layer: format!("L{}", i % 10), ..Common::default() };
+        let c = Common { layer: format!("L{}", i % 10).into(), ..Common::default() };
         let kind = match i % 6 {
             0 => EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 10.0, y + 5.0, 0.0) }),
             1 => EntityKind::Circle(Circle { center: Vec3::new(x + 5.0, y + 5.0, 0.0), radius: 4.0 }),
@@ -125,10 +134,121 @@ fn one_file(path: &str) {
     println!("{r}");
 }
 
-/// The process's resident memory now, in MB (`ps`; `None` where it can't be read).
+/// The process's resident memory now, in MB (`ps`; its working set on Windows; `None` where it
+/// can't be read).
 fn rss_mb() -> Option<f64> {
+    if cfg!(windows) {
+        return powershell_process("WorkingSet64");
+    }
     let out = std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output().ok()?;
     String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().ok().map(|kb| kb / 1024.0)
+}
+
+/// This process's memory now, in MB: its private bytes on Windows, anonymous resident memory on
+/// Linux, resident memory elsewhere (`None` where it can't be read).
+fn private_mb() -> Option<f64> {
+    if cfg!(windows) {
+        return powershell_process("PrivateMemorySize64");
+    }
+    if let Some(kb) = proc_status_kb("RssAnon:") {
+        return Some(kb / 1024.0);
+    }
+    rss_mb()
+}
+
+/// The most memory this process has held, in MB: its peak commit (private bytes) on Windows, its
+/// peak resident memory on Linux; `None` elsewhere (macOS has no peak to ask for: the caller
+/// samples).
+fn peak_private_mb() -> Option<f64> {
+    if cfg!(windows) {
+        return powershell_process("PeakPagedMemorySize64");
+    }
+    proc_status_kb("VmHWM:").map(|kb| kb / 1024.0)
+}
+
+fn powershell_process(field: &str) -> Option<f64> {
+    let script = format!("(Get-Process -Id {}).{field}", std::process::id());
+    let out = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().ok().map(|b| b / 1_048_576.0)
+}
+
+fn proc_status_kb(key: &str) -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|l| l.strip_prefix(key))?.trim().trim_end_matches("kB").trim().parse::<f64>().ok()
+}
+
+/// `f` run while a thread samples the resident memory every 20 ms where the system keeps no peak
+/// (macOS): its result and the most memory seen (the system's peak where it keeps one), in MB.
+fn with_peak<R>(f: impl FnOnce() -> R) -> (R, f64) {
+    if peak_private_mb().is_some() {
+        let r = f();
+        return (r, peak_private_mb().unwrap_or(0.0));
+    }
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|sc| {
+        let sampler = sc.spawn(|| {
+            let mut most = 0.0f64;
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                most = most.max(rss_mb().unwrap_or(0.0));
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            most
+        });
+        let r = f();
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let most = sampler.join().unwrap_or(0.0).max(rss_mb().unwrap_or(0.0));
+        (r, most)
+    })
+}
+
+/// `--mem-live N`, in a fresh process: the memory one object of the bench drawing holds, in bytes
+/// (the drawing alone, opened in a session, then with its display list too), printed as JSON
+/// `{"bytes_per_object": b, "opened_bytes_per_object": b, "session_bytes_per_object": b}`.
+fn mem_live(n: usize) {
+    let n = n.max(1);
+    let before = private_mb().unwrap_or(0.0);
+    let d = drawing(n);
+    let doc = private_mb().unwrap_or(0.0);
+    let mut s = Session::new();
+    s.open_drawing(d, "Bench", None);
+    let opened = private_mb().unwrap_or(0.0);
+    let list = s.doc().map(|d| cadaddy_engine::render::build(d, &Space::Model, &Default::default()));
+    let session = private_mb().unwrap_or(0.0);
+    let per = |mb: f64| (mb * 1_048_576.0 / n as f64).round();
+    println!(
+        "{}",
+        json!({ "bytes_per_object": per(doc - before), "opened_bytes_per_object": per(opened - before), "session_bytes_per_object": per(session - before) })
+    );
+    drop(list);
+}
+
+/// `--mem-open FILE`, in a fresh process: the file opened (read into a drawing), printed as JSON
+/// `{"peak_mb": the most memory the open took above the file's bytes, "live_mb": what the drawing
+/// holds once open}`.
+fn mem_open(path: &str) {
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let before = private_mb().unwrap_or(0.0);
+    // The peak so far (start-up, the file read) is not the open's: Windows and Linux keep the
+    // process's peak, so the open's is only seen when it goes above the start.
+    let start_peak = peak_private_mb().unwrap_or(0.0).max(before);
+    let (d, peak) = with_peak(|| cadaddy_io::read(&bytes, path));
+    let live = private_mb().unwrap_or(0.0);
+    let objects = d.as_ref().map_or(0, |d| d.model.len());
+    let peak = if peak > start_peak { peak } else { live };
+    let r = |mb: f64| (mb.max(0.0) * 10.0).round() / 10.0;
+    println!("{}", json!({ "peak_mb": r(peak - before), "live_mb": r(live - before), "objects": objects }));
+    drop(d);
+}
+
+/// The smallest drawing whose memory is measured (`mem_…` results).
+const MEMORY_FROM: usize = 100_000;
+
+/// This program again (a fresh process) with `args`: its JSON answer.
+fn child(args: &[&str]) -> Option<serde_json::Value> {
+    let exe = std::env::current_exe().ok()?;
+    let out = std::process::Command::new(exe).args(args).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().rev().find_map(|l| serde_json::from_str(l.trim()).ok())
 }
 
 /// The best time of `runs` runs of `f`, in milliseconds.
@@ -161,6 +281,25 @@ fn main() {
                 Err(e) => eprintln!("{name}: {e}"),
             }
         }
+        return;
+    }
+    if let Some(n) = arg("--mem-live").and_then(|n| n.parse().ok()) {
+        mem_live(n);
+        return;
+    }
+    // `--write FILE [--objects N]`: the bench drawing of N objects (1000) saved as FILE, its
+    // format by the name.
+    if let Some(path) = arg("--write") {
+        let n = arg("--objects").and_then(|n| n.parse().ok()).unwrap_or(1000);
+        match cadaddy_io::write(&drawing(n), &path).map(|b| std::fs::write(&path, b)) {
+            Ok(Ok(())) => println!("wrote {path}"),
+            Ok(Err(e)) => eprintln!("{path}: {e}"),
+            Err(e) => eprintln!("{path}: {e}"),
+        }
+        return;
+    }
+    if let Some(path) = arg("--mem-open") {
+        mem_open(&path);
         return;
     }
     if let Some(path) = arg("--file") {
@@ -222,10 +361,32 @@ fn main() {
             }),
         );
         drop(s);
+        // Memory, each in a fresh process, from 100k objects on (smaller drawings are within the
+        // process memory's noise): what one object holds, and opening the DWG.
+        let measure = n >= MEMORY_FROM;
+        let dwg = std::env::temp_dir().join(format!("cadaddy-perfbench-{}-{n}.dwg", std::process::id()));
+        let wrote = measure && cadaddy_io::write(&d, "bench.dwg").ok().is_some_and(|b| std::fs::write(&dwg, b).is_ok());
         drop(d);
         let mb = (peak * 10.0).round() / 10.0;
         println!("{:>14} @ {n:>7}: {mb:10.1} MB", "peak memory");
         out.insert(format!("peak_mb@{n}"), mb);
+        if let Some(v) = child(&["--mem-live", &n.to_string()]).filter(|_| measure) {
+            for (key, field) in [("mem_bytes_per_object", "bytes_per_object"), ("mem_session_bytes_per_object", "session_bytes_per_object")] {
+                if let Some(b) = v.get(field).and_then(serde_json::Value::as_f64) {
+                    println!("{key:>30} @ {n:>7}: {b:10.0} bytes");
+                    out.insert(format!("{key}@{n}"), b);
+                }
+            }
+        }
+        if wrote && let Some(v) = child(&["--mem-open", &dwg.to_string_lossy()]) {
+            for (key, field) in [("mem_open_dwg_peak_mb", "peak_mb"), ("mem_open_dwg_live_mb", "live_mb")] {
+                if let Some(mb) = v.get(field).and_then(serde_json::Value::as_f64) {
+                    println!("{key:>30} @ {n:>7}: {mb:10.1} MB");
+                    out.insert(format!("{key}@{n}"), mb);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&dwg);
     }
     if let Some(path) = arg("--out") {
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&out).unwrap_or_default());

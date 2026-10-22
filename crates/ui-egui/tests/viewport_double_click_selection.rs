@@ -22,7 +22,7 @@ fn double_click_viewport_does_not_leave_pending_window() {
         view_height: 500.0,
         ..Default::default()
     };
-    session.doc_mut().unwrap().add(&paper, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    session.doc_mut().unwrap().add(&paper, Common::default(), EntityKind::Viewport(Box::new(vp))).unwrap();
     session.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
 
     let mut app = CadApp::new(session, Services::default());

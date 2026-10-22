@@ -12,7 +12,7 @@ fn last(s: &Session) -> EntityKind {
 
 fn last_spline(s: &Session) -> Spline {
     let EntityKind::Spline(sp) = last(s) else { panic!("no spline") };
-    sp
+    *sp
 }
 
 fn logged(s: &Session, text: &str) -> bool {

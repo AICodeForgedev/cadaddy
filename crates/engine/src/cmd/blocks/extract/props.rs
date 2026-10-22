@@ -87,7 +87,7 @@ pub(crate) fn value(name: &str, s: &Subject) -> Cell {
     match name {
         "Layer" => Cell::Text(s.layer.to_string()),
         "Color" => Cell::Text(s.common.color.name()),
-        "Linetype" => Cell::Text(s.common.linetype.clone()),
+        "Linetype" => Cell::Text(s.common.linetype.to_string()),
         "Lineweight" => Cell::Text(lineweight(s.common.lineweight)),
         "Length" => num(match k {
             EntityKind::Line(_)

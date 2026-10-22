@@ -175,7 +175,13 @@ fn texts(d: &Drawing) -> Vec<Txt> {
             let at = t.align_pt.unwrap_or(t.insert).xy();
             let value: String = t.value.trim().chars().take(MAX_CELL).collect();
             if at.is_finite() && t.height.is_finite() && t.height > 0.0 && !value.is_empty() {
-                out.push(Txt { value, at, h: t.height, rot: if t.rotation.is_finite() { t.rotation } else { 0.0 }, layer: e.common.layer.clone() });
+                out.push(Txt {
+                    value,
+                    at,
+                    h: t.height,
+                    rot: if t.rotation.is_finite() { t.rotation } else { 0.0 },
+                    layer: e.common.layer.to_string(),
+                });
             }
         }
     }
@@ -198,7 +204,7 @@ fn boxes(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
         // Every corner on the bounding box's corners: axis-aligned.
         let on = |q: &Vec2| ((q.x - lo.x).abs() < 1e-6 || (q.x - hi.x).abs() < 1e-6) && ((q.y - lo.y).abs() < 1e-6 || (q.y - hi.y).abs() < 1e-6);
         if pts.iter().all(on) && hi.x - lo.x > 1e-9 && hi.y - lo.y > 1e-9 {
-            out.push((lo, hi, e.common.layer.clone()));
+            out.push((lo, hi, e.common.layer.to_string()));
         }
     }
     out

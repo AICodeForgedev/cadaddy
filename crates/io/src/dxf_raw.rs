@@ -86,7 +86,7 @@ fn tag(r: &RawTag) -> Tag {
         Kind::Hex => Some(Value::Hex(v.to_string())),
         Kind::Str => None,
     };
-    Tag::new(r.code, value.unwrap_or_else(|| Value::Str(r.value.clone())))
+    Tag::new(r.code, value.unwrap_or_else(|| Value::Str(r.value.clone().into())))
 }
 
 /// A handle value we believe: hexadecimal, not null, not absurdly large.
@@ -315,7 +315,7 @@ fn put_xdata(d: &mut Drawing, mut xdata: HashMap<Handle, Vec<RawTag>>) {
         let hs: Vec<Handle> = store.iter().map(|e| e.handle).filter(|h| xdata.contains_key(h)).collect();
         for h in hs {
             if let Some(xd) = xdata.remove(&h) {
-                store.modify(h, |e| e.common.xdata = xd);
+                store.modify(h, |e| e.common.xdata = xd.into());
             }
         }
     };

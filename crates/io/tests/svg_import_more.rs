@@ -25,7 +25,7 @@ fn all<T>(d: &Drawing, f: impl Fn(&Entity) -> Option<T>) -> Vec<T> {
 }
 
 fn hatches(d: &Drawing) -> Vec<(Hatch, Color)> {
-    all(d, |e| if let EntityKind::Hatch(h) = &e.kind { Some((h.clone(), e.common.color)) } else { None })
+    all(d, |e| if let EntityKind::Hatch(h) = &e.kind { Some((h.as_ref().clone(), e.common.color)) } else { None })
 }
 
 fn near(a: Vec2, b: Vec2) -> bool {
@@ -242,7 +242,7 @@ fn base64(b: &[u8]) -> String {
 }
 
 fn images(d: &Drawing) -> Vec<Image> {
-    all(d, |e| if let EntityKind::Image(i) = &e.kind { Some(i.clone()) } else { None })
+    all(d, |e| if let EntityKind::Image(i) = &e.kind { Some(i.as_ref().clone()) } else { None })
 }
 
 #[test]

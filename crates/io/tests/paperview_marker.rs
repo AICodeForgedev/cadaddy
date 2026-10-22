@@ -6,7 +6,7 @@ use cadaddy_doc::*;
 use cadaddy_geom::{Vec2, Vec3};
 
 fn viewport(id: u32, frozen_layers: Vec<String>, layer_colors: Vec<(String, Color)>) -> EntityKind {
-    EntityKind::Viewport(Viewport {
+    EntityKind::Viewport(Box::new(Viewport {
         center: Vec3::new(50.0, 40.0, 0.0),
         width: 80.0,
         height: 60.0,
@@ -22,11 +22,11 @@ fn viewport(id: u32, frozen_layers: Vec<String>, layer_colors: Vec<(String, Colo
         on: true,
         twist: 0.0,
         anno_scale: None,
-    })
+    }))
 }
 
 fn viewports(l: &Layout) -> Vec<Viewport> {
-    l.entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.clone()) } else { None }).collect()
+    l.entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.as_ref().clone()) } else { None }).collect()
 }
 
 #[test]

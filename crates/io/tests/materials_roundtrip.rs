@@ -26,8 +26,8 @@ fn sample() -> Drawing {
     d.layers.push(Layer { name: "Walls".into(), material: Some(brick.name.clone()), ..Layer::default() });
     let line = |a: f64| EntityKind::Line(Line { a: Vec3::new(a, 0.0, 0.0), b: Vec3::new(a, 10.0, 0.0) });
     d.add(&Space::Model, Common { layer: "Walls".into(), ..Common::default() }, line(0.0)).unwrap();
-    d.add(&Space::Model, Common { material: Some(photo.name.clone()), ..Common::default() }, line(1.0)).unwrap();
-    let mut by_block = Common { material: Some("ByBlock".into()), ..Common::default() };
+    d.add(&Space::Model, Common { material: Some(photo.name.clone()).into(), ..Common::default() }, line(1.0)).unwrap();
+    let mut by_block = Common { material: Some("ByBlock".into()).into(), ..Common::default() };
     material::set_object_mapping(
         &mut by_block.xdata,
         Some(&Mapping { projection: Projection::Cylindrical, size_u: 300.0, size_v: 150.0, ..Mapping::default() }),
@@ -37,7 +37,7 @@ fn sample() -> Drawing {
 }
 
 fn materials_of(d: &Drawing) -> Vec<(Option<String>, Option<Mapping>)> {
-    d.model.iter().map(|e| (e.common.material.clone(), material::object_mapping(&e.common.xdata))).collect()
+    d.model.iter().map(|e| ((*e.common.material).clone(), material::object_mapping(&e.common.xdata))).collect()
 }
 
 fn close(a: &Material, b: &Material) {
@@ -104,5 +104,5 @@ fn hostile_material_objects_are_safe() {
     let m = d.material("X").unwrap();
     assert!((0.0..=1.0).contains(&m.roughness) && (0.0..=1.0).contains(&m.opacity) && m.refraction <= 5.0);
     assert_eq!(m.mapping, Mapping::default());
-    assert_eq!(d.model.iter().next().unwrap().common.material, None, "a 347 to nothing is ByLayer");
+    assert_eq!(*d.model.iter().next().unwrap().common.material, None, "a 347 to nothing is ByLayer");
 }

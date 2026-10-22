@@ -416,7 +416,7 @@ impl DocState {
         let h = self.mspace?;
         let e = self.doc.space(&self.space)?.get(h)?;
         match &e.kind {
-            cadaddy_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.clone())),
+            cadaddy_doc::EntityKind::Viewport(v) if v.height > 1e-12 && v.view_height > 1e-12 => Some((h, v.as_ref().clone())),
             _ => None,
         }
     }
@@ -1339,13 +1339,13 @@ impl Session {
         let Ok(d) = self.doc() else { return Common::default() };
         let h = &d.header;
         Common {
-            layer: h.str("CLAYER", "0"),
+            layer: h.str("CLAYER", "0").into(),
             color: cadaddy_color::Color::from_aci(h.i64("CECOLOR", 256) as i16),
-            linetype: h.str("CELTYPE", "ByLayer"),
+            linetype: h.str("CELTYPE", "ByLayer").into(),
             lineweight: cadaddy_doc::Lineweight::from_dxf(h.i64("CELWEIGHT", -1) as i16),
             ltscale: h.f64("CELTSCALE", 1.0),
-            plot_style: h.str("CPLOTSTYLE", "ByLayer"),
-            material: current_material(d),
+            plot_style: h.str("CPLOTSTYLE", "ByLayer").into(),
+            material: current_material(d).into(),
             ..Common::default()
         }
     }
@@ -1363,14 +1363,14 @@ impl Session {
         // annotative, supporting the current annotation scale.
         let d = self.doc()?;
         if d.annotative_by_style(&kind) {
-            common.anno_scales = vec![d.current_anno_scale()];
+            common.anno_scales = vec![d.current_anno_scale()].into();
         }
         // DIMLAYER: new dimensions on their own layer (".": the current one).
         let dim_layer =
             matches!(kind, EntityKind::Dimension(_)).then(|| d.header.str("DIMLAYER", ".")).filter(|l| !l.trim().is_empty() && l.trim() != ".");
         if let Some(l) = dim_layer {
             self.doc_mut()?.ensure_layer(l.trim());
-            common.layer = l.trim().to_string();
+            common.layer = l.trim().into();
         }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)

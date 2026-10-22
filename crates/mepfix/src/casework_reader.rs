@@ -201,10 +201,10 @@ fn collect_text(d: &Drawing) -> Vec<(String, [f64; 2], String)> {
         match &e.kind {
             EntityKind::Text(t) => {
                 let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
-                out.push((t.value.clone(), pt, layer.clone()));
+                out.push((t.value.clone(), pt, layer.to_string()));
             }
             EntityKind::MText(t) => {
-                out.push((t.contents.clone(), [t.insert.x, t.insert.y], layer.clone()));
+                out.push((t.contents.clone(), [t.insert.x, t.insert.y], layer.to_string()));
             }
             _ => {}
         }

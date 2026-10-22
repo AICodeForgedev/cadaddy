@@ -190,7 +190,7 @@ fn revised(rev: u8, path: &Path) -> String {
 }
 
 fn mep_meshes(s: &Session) -> Vec<(Handle, String)> {
-    s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("mep")).map(|e| (e.handle, e.common.layer.clone())).collect()
+    s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("mep")).map(|e| (e.handle, e.common.layer.to_string())).collect()
 }
 
 fn find<'a>(r: &'a Value, change: &str, system: &str) -> &'a Value {

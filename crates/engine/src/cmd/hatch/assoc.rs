@@ -240,7 +240,7 @@ pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> Vec<String> {
     }
     let d = Arc::make_mut(after);
     for (h, nh) in changes {
-        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Hatch(nh));
+        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Hatch(Box::new(nh)));
     }
     notes
 }
