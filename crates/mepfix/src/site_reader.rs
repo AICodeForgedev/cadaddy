@@ -9,6 +9,7 @@
 
 use crate::layout::{SITE_LAYER, UNDERGROUND_LAYER};
 use crate::score::building_from_model;
+use crate::sitework::{FENCE_LAYER, LANDSCAPE_LAYER, FURNISH_LAYER};
 use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
 
@@ -43,7 +44,10 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
 
     for e in d.model.iter() {
         let layer = e.common.layer.as_str();
-        let is_site = layer.eq_ignore_ascii_case(SITE_LAYER);
+        let is_site = layer.eq_ignore_ascii_case(SITE_LAYER)
+            || layer.eq_ignore_ascii_case(FENCE_LAYER)
+            || layer.eq_ignore_ascii_case(LANDSCAPE_LAYER)
+            || layer.eq_ignore_ascii_case(FURNISH_LAYER);
         let is_undr = layer.eq_ignore_ascii_case(UNDERGROUND_LAYER);
         if !is_site && !is_undr {
             continue;
@@ -125,12 +129,38 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let nearby_tag = find_nearest_text(&site_texts, center, radius * 6.0);
 
         let (kind, tag) = if has_cross {
-            ("light_pole".to_string(), nearby_tag.unwrap_or_default())
+            // Check if it's a light pole or tree based on nearby tag and radial lines.
+            let has_radials = has_radial_lines(&site_lines, center, radius);
+            if has_radials {
+                let tag_str = nearby_tag.clone().unwrap_or_default();
+                if tag_str.to_uppercase().starts_with('T') {
+                    ("tree".to_string(), tag_str)
+                } else {
+                    ("light_pole".to_string(), tag_str)
+                }
+            } else {
+                ("light_pole".to_string(), nearby_tag.unwrap_or_default())
+            }
         } else if has_triangle {
-            ("fire_hydrant".to_string(), nearby_tag.unwrap_or_else(|| "FH".to_string()))
+            let tag_str = nearby_tag.clone().unwrap_or_default();
+            let upper = tag_str.to_uppercase();
+            if upper.starts_with("IRR") {
+                ("irrigation_head".to_string(), tag_str)
+            } else {
+                ("fire_hydrant".to_string(), if tag_str.is_empty() { "FH".to_string() } else { tag_str })
+            }
         } else if radius < site_circles.iter().map(|(_, r)| *r).fold(f64::INFINITY, f64::min) * 1.5 {
-            // Very small circle = bollard.
-            ("bollard".to_string(), nearby_tag.unwrap_or_default())
+            let tag_str = nearby_tag.clone().unwrap_or_default();
+            let upper = tag_str.to_uppercase();
+            if upper.starts_with("SH-") {
+                ("shrub".to_string(), tag_str)
+            } else if upper.starts_with("TC-") {
+                ("trash_can".to_string(), tag_str)
+            } else if upper.starts_with("BN-") {
+                ("bench".to_string(), tag_str)
+            } else {
+                ("bollard".to_string(), tag_str)
+            }
         } else {
             ("unknown".to_string(), nearby_tag.unwrap_or_default())
         };
@@ -195,6 +225,28 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
                 ("dumpster_enclosure".to_string(), t.clone())
             } else if upper.contains("ENTRY") || upper.contains("DRIVE") {
                 ("driveway".to_string(), t.clone())
+            } else if upper.contains("BLDG PAD") || upper.contains("BUILDING PAD") {
+                ("building_pad".to_string(), t.clone())
+            } else if upper.contains("ASPHALT") || upper.contains("PARKING LOT ASPHALT") {
+                ("paving_asphalt".to_string(), t.clone())
+            } else if upper.contains("ENTRY WALK") || (upper.contains("CONCRETE") && upper.contains("PAV")) {
+                ("paving_concrete".to_string(), t.clone())
+            } else if upper.starts_with("CURB") {
+                ("curb".to_string(), t.clone())
+            } else if upper.starts_with("SIDEWALK") {
+                ("sidewalk".to_string(), t.clone())
+            } else if upper.starts_with("STR-") || upper.starts_with("HC-") {
+                ("striping".to_string(), t.clone())
+            } else if upper.starts_with("FENCE") {
+                ("fence".to_string(), t.clone())
+            } else if upper.starts_with("GATE") {
+                ("gate".to_string(), t.clone())
+            } else if upper.starts_with("RW-") || upper.contains("RETAINING") {
+                ("retaining_wall".to_string(), t.clone())
+            } else if upper.starts_with("PL-") || upper.contains("PLANTER") {
+                ("planter".to_string(), t.clone())
+            } else if upper.starts_with("BR-") || upper.contains("BIKE") {
+                ("bike_rack".to_string(), t.clone())
             } else if upper.starts_with('P') && upper.len() <= 4 {
                 // Short tag starting with P = parking space (P1, P2, ...).
                 ("parking_space".to_string(), t.clone())
@@ -408,4 +460,202 @@ fn classify_rect_by_size(w: f64, h: f64, tag: String) -> (String, String) {
         return ("parking_space".to_string(), tag);
     }
     ("unknown".to_string(), tag)
+}
+
+/// Check if there are 4 radial lines from the center (tree crown pattern).
+fn has_radial_lines(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64) -> bool {
+    let tol = radius * 0.8;
+    let mut count = 0;
+    for &(a, b) in lines {
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        if len < radius * 0.2 || len > radius * 1.5 {
+            continue;
+        }
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        if (mid[0] - center[0]).abs() < tol && (mid[1] - center[1]).abs() < tol {
+            count += 1;
+        }
+    }
+    count >= 4
+}
+
+/// A site utility structure found by the reader.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadSiteStructure {
+    pub kind: String,
+    pub tag: String,
+    pub at_ft: [f64; 2],
+    pub rim_ft: Option<f64>,
+    pub invert_ft: Option<f64>,
+    pub system: String,
+}
+
+/// Read site utility structures from a drawing (the C-103 utility plan).
+pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
+    let mut result = Vec::new();
+
+    let mut strc_circles: Vec<([f64; 2], f64)> = Vec::new();
+    let mut strc_rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut strc_texts: Vec<(String, [f64; 2])> = Vec::new();
+    let mut strc_polys: Vec<Vec<[f64; 2]>> = Vec::new();
+
+    for e in d.model.iter() {
+        let layer = e.common.layer.as_str();
+        if !layer.eq_ignore_ascii_case(crate::sitework::STRUCTURE_LAYER) {
+            continue;
+        }
+        match &e.kind {
+            EntityKind::Circle(c) => {
+                strc_circles.push(([c.center.x, c.center.y], c.radius));
+            }
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4 => {
+                let xs: Vec<f64> = p.vertices.iter().map(|v| v.p.x).collect();
+                let ys: Vec<f64> = p.vertices.iter().map(|v| v.p.y).collect();
+                let x_min = xs.iter().copied().fold(f64::INFINITY, f64::min);
+                let y_min = ys.iter().copied().fold(f64::INFINITY, f64::min);
+                let x_max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let y_max = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                // Check if it's a rectangle or a diamond.
+                let is_rect = (xs[0] - xs[1]).abs() < 1.0 || (ys[0] - ys[1]).abs() < 1.0;
+                if is_rect {
+                    strc_rects.push(([x_min, y_min], [x_max, y_max]));
+                } else {
+                    strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect());
+                }
+            }
+            EntityKind::LwPolyline(p) if p.closed => {
+                strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect());
+            }
+            EntityKind::Text(t) => {
+                let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
+                strc_texts.push((t.value.clone(), pt));
+            }
+            EntityKind::MText(t) => {
+                strc_texts.push((t.contents.clone(), [t.insert.x, t.insert.y]));
+            }
+            _ => {}
+        }
+    }
+
+    // Circles with cross lines = manholes; plain circles = cleanouts.
+    for &(center, radius) in &strc_circles {
+        let at = building_from_model(sh, center);
+        let nearby_tag = find_nearest_text(&strc_texts, center, radius * 8.0);
+        let tag_str = nearby_tag.clone().unwrap_or_default();
+        let upper = tag_str.to_uppercase();
+
+        let (kind, system) = if upper.starts_with("STMH") || upper.contains("STORM") {
+            ("manhole", "storm")
+        } else if upper.starts_with("SSMH") || upper.contains("SANITARY") {
+            ("manhole", "sanitary")
+        } else if upper.starts_with("CO") {
+            ("cleanout", "sanitary")
+        } else if upper.starts_with("WM") {
+            ("meter", "water")
+        } else if upper.starts_with("BFP") {
+            ("backflow_preventer", "water")
+        } else {
+            ("cleanout", "")
+        };
+
+        let rim = parse_elevation_text(&strc_texts, center, radius * 8.0, "RIM");
+        let inv = parse_elevation_text(&strc_texts, center, radius * 8.0, "INV");
+
+        result.push(ReadSiteStructure {
+            kind: kind.into(),
+            tag: tag_str,
+            at_ft: at,
+            rim_ft: rim,
+            invert_ft: inv,
+            system: system.into(),
+        });
+    }
+
+    // Rectangles with X = catch basins; plain rectangles = junction boxes.
+    for &(mn, mx) in &strc_rects {
+        let cx = (mn[0] + mx[0]) / 2.0;
+        let cy = (mn[1] + mx[1]) / 2.0;
+        let at = building_from_model(sh, [cx, cy]);
+        let nearby_tag = find_nearest_text(&strc_texts, [cx, cy], (mx[0] - mn[0] + mx[1] - mn[1]) * 0.5);
+        let tag_str = nearby_tag.unwrap_or_default();
+        let upper = tag_str.to_uppercase();
+
+        let (kind, system) = if upper.starts_with("CB") {
+            ("catch_basin", "storm")
+        } else if upper.starts_with("JB") {
+            ("junction_box", "electric")
+        } else {
+            ("junction_box", "")
+        };
+
+        let r = (mx[0] - mn[0] + mx[1] - mn[1]) * 0.5;
+        let rim = parse_elevation_text(&strc_texts, [cx, cy], r, "RIM");
+        let inv = parse_elevation_text(&strc_texts, [cx, cy], r, "INV");
+
+        result.push(ReadSiteStructure {
+            kind: kind.into(),
+            tag: tag_str,
+            at_ft: at,
+            rim_ft: rim,
+            invert_ft: inv,
+            system: system.into(),
+        });
+    }
+
+    // Diamonds/polygons = valve boxes; triangles = meters/BFPs.
+    for pts in &strc_polys {
+        if pts.is_empty() {
+            continue;
+        }
+        let cx: f64 = pts.iter().map(|p| p[0]).sum::<f64>() / pts.len() as f64;
+        let cy: f64 = pts.iter().map(|p| p[1]).sum::<f64>() / pts.len() as f64;
+        let at = building_from_model(sh, [cx, cy]);
+        let r = pts.iter().map(|p| ((p[0] - cx).powi(2) + (p[1] - cy).powi(2)).sqrt()).fold(0.0, f64::max);
+        let nearby_tag = find_nearest_text(&strc_texts, [cx, cy], r * 4.0);
+        let tag_str = nearby_tag.unwrap_or_default();
+        let upper = tag_str.to_uppercase();
+
+        let (kind, system) = if upper.starts_with("VB") {
+            ("valve_box", "water")
+        } else if upper.starts_with("WM") {
+            ("meter", "water")
+        } else if upper.starts_with("BFP") {
+            ("backflow_preventer", "water")
+        } else if pts.len() == 4 {
+            ("valve_box", "")
+        } else {
+            ("meter", "")
+        };
+
+        let rim = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "RIM");
+        let inv = parse_elevation_text(&strc_texts, [cx, cy], r * 4.0, "INV");
+
+        result.push(ReadSiteStructure {
+            kind: kind.into(),
+            tag: tag_str,
+            at_ft: at,
+            rim_ft: rim,
+            invert_ft: inv,
+            system: system.into(),
+        });
+    }
+
+    result
+}
+
+/// Parse a RIM or INV elevation from nearby text.
+fn parse_elevation_text(texts: &[(String, [f64; 2])], center: [f64; 2], radius: f64, prefix: &str) -> Option<f64> {
+    for (text, pt) in texts {
+        let dist = ((pt[0] - center[0]).powi(2) + (pt[1] - center[1]).powi(2)).sqrt();
+        if dist < radius {
+            let upper = text.to_uppercase();
+            if upper.starts_with(prefix) {
+                let num_part = upper.trim_start_matches(prefix).trim();
+                if let Ok(v) = num_part.parse::<f64>() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
 }

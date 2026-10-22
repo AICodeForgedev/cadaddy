@@ -3,6 +3,7 @@
 
 use crate::design::width_in;
 use crate::layout::{Kind, PLAN_MARGIN_IN, SITE_LAYER, UNDERGROUND_LAYER, frame, paper_to_model, to_model};
+use crate::sitework::{FENCE_LAYER, FURNISH_LAYER, GRADING_LAYER, LANDSCAPE_LAYER, STRUCTURE_LAYER};
 use crate::style::Style;
 use crate::truth::*;
 use cadaddy_color::Color;
@@ -589,6 +590,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("fire_hydrant", "FIRE HYDRANT"));
             legend.push(item("dumpster", "DUMPSTER ENCLOSURE"));
             legend.push(item("underground", "UNDERGROUND UTILITY (DASHED)"));
+            legend.push(item("tree", "DECIDUOUS TREE"));
+            legend.push(item("shrub", "SHRUB"));
+            legend.push(item("fence", "CHAIN LINK FENCE"));
+            legend.push(item("bench", "SITE BENCH"));
             abbr.extend(
                 [
                     "LP = LIGHT POLE",
@@ -597,9 +602,56 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                     "UG = UNDERGROUND",
                     "PVC = POLYVINYL CHLORIDE",
                     "EV = ELECTRIC VEHICLE",
+                    "RW = RETAINING WALL",
+                    "IRR = IRRIGATION",
+                    "HC = HANDICAP",
                 ]
                 .map(abbrev),
             );
+        }
+        Kind::Grading => {
+            grading_plan(&mut pen, t, st);
+            legend.push(item("existing_contour", "EXISTING CONTOUR (DASHED)"));
+            legend.push(item("proposed_contour", "PROPOSED CONTOUR (SOLID)"));
+            legend.push(item("building_pad", "BUILDING PAD"));
+            legend.push(item("retaining_wall", "RETAINING WALL"));
+            abbr.extend(
+                [
+                    "EX = EXISTING",
+                    "PROP = PROPOSED",
+                    "FFE = FINISHED FLOOR ELEVATION",
+                    "TW = TOP OF WALL",
+                    "BW = BOTTOM OF WALL",
+                    "CY = CUBIC YARD",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::SiteUtility => {
+            site_utility_plan(&mut pen, t, st);
+            legend.push(item("manhole", "MANHOLE"));
+            legend.push(item("catch_basin", "CATCH BASIN"));
+            legend.push(item("cleanout", "CLEANOUT"));
+            legend.push(item("valve_box", "VALVE BOX"));
+            legend.push(item("meter", "WATER METER"));
+            legend.push(item("backflow", "BACKFLOW PREVENTER"));
+            abbr.extend(
+                [
+                    "MH = MANHOLE",
+                    "CB = CATCH BASIN",
+                    "CO = CLEANOUT",
+                    "VB = VALVE BOX",
+                    "WM = WATER METER",
+                    "BFP = BACKFLOW PREVENTER",
+                    "JB = JUNCTION BOX",
+                    "INV = INVERT",
+                    "RIM = RIM ELEVATION",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::SiteSchedules => {
+            site_schedules(&mut pen, t);
         }
     }
     if kind.plan() {
@@ -2261,6 +2313,18 @@ fn site_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
             "sign" => draw_sign(pen, se, layer),
             "driveway" => draw_driveway(pen, se, layer),
             "curb" | "sidewalk" => draw_area_element(pen, se, layer),
+            "paving_asphalt" | "paving_concrete" | "building_pad" => draw_paving(pen, se, layer),
+            "striping" => draw_striping(pen, se, layer),
+            "retaining_wall" => draw_retaining_wall(pen, se, layer),
+            "tree" => draw_tree(pen, se, LANDSCAPE_LAYER),
+            "shrub" => draw_shrub(pen, se, LANDSCAPE_LAYER),
+            "planter" => draw_planter(pen, se, LANDSCAPE_LAYER),
+            "irrigation_head" => draw_irrigation(pen, se, LANDSCAPE_LAYER),
+            "fence" => draw_fence(pen, se, FENCE_LAYER),
+            "gate" => draw_gate(pen, se, FENCE_LAYER),
+            "bench" => draw_bench(pen, se, FURNISH_LAYER),
+            "bike_rack" => draw_bike_rack(pen, se, FURNISH_LAYER),
+            "trash_can" => draw_trash_can(pen, se, FURNISH_LAYER),
             k if k.starts_with("underground_") => draw_underground(pen, se, layer),
             _ => draw_generic_site(pen, se, layer),
         }
@@ -2395,4 +2459,363 @@ fn draw_generic_site(pen: &mut Pen, se: &SiteElement, layer: &str) {
     pen.circle(layer, c, r);
     let label_y = c + Vec2::new(0.0, r * 2.0);
     pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+// ---- Sitework drawing functions (Q339) ----------------------------------------------------------
+
+/// Paving/building pad area: hatched rectangle with label.
+fn draw_paving(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // Cross-hatch interior for paving.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        let step = pen.pl(0.3);
+        let mut x = a.x + step;
+        while x < b.x {
+            pen.line(layer, Vec2::new(x, a.y), Vec2::new(x, b.y));
+            x += step;
+        }
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// Striping: a thin rectangle (paint line).
+fn draw_striping(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.10);
+    if !se.tag.is_empty() {
+        pen.text(layer, c + Vec2::new(off, 0.0), 0.04, &se.tag, 0.0, HAlign::Left, VAlign::Middle);
+    }
+}
+
+/// Retaining wall: thick line with tag and height note.
+fn draw_retaining_wall(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        let a = pen.b(mn);
+        let b = pen.b([mx[0], mn[1]]);
+        let c_mn = pen.b([mn[0], mx[1]]);
+        let c_mx = pen.b(mx);
+        // Draw as a double line (wall thickness).
+        pen.line(layer, a, b);
+        pen.line(layer, c_mn, c_mx);
+        // Hatching between the lines.
+        let dir = (b - a).normalized();
+        let step = pen.pl(0.15);
+        let len = (b - a).len();
+        let mut d = step;
+        while d < len {
+            let p = a + dir * d;
+            let q = c_mn + dir * d;
+            pen.line(layer, p, q);
+            d += step;
+        }
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.15);
+    pen.text(layer, c + Vec2::new(0.0, off), 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+    if let Some(h) = se.height_ft {
+        pen.text(layer, c + Vec2::new(0.0, -off), 0.05, &format!("HT: {h:.0}'"), 0.0, HAlign::Center, VAlign::Top);
+    }
+}
+
+/// Tree: circle with cross inside (crown).
+fn draw_tree(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.12);
+    pen.circle(layer, c, r);
+    // Crown lines: 4 short radial lines.
+    for ang in [0.0, FRAC_PI_2, PI, 3.0 * FRAC_PI_2] {
+        let d = Vec2::new(ang.cos(), ang.sin());
+        pen.line(layer, c + d * r * 0.4, c + d * r * 0.9);
+    }
+    let label_y = c + Vec2::new(0.0, r * 1.8);
+    pen.text(layer, label_y, 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Shrub: small filled circle.
+fn draw_shrub(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.05);
+    pen.circle(layer, c, r);
+    if !se.tag.is_empty() {
+        let label_y = c + Vec2::new(0.0, r * 2.5);
+        pen.text(layer, label_y, 0.04, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+    }
+}
+
+/// Planter: rectangle with diagonal lines and tag.
+fn draw_planter(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
+}
+
+/// Irrigation head: small triangle.
+fn draw_irrigation(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let s = pen.pl(0.05);
+    let top = c + Vec2::new(0.0, s);
+    let bl = c + Vec2::new(-s * 0.7, -s * 0.5);
+    let br = c + Vec2::new(s * 0.7, -s * 0.5);
+    pen.poly(layer, &[top, bl, br], true);
+    if !se.tag.is_empty() {
+        pen.text(layer, c + Vec2::new(0.0, s * 2.0), 0.04, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+    }
+}
+
+/// Fence: line with X marks.
+fn draw_fence(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+        // X marks along the fence.
+        let dir = (b - a).normalized();
+        let perp = Vec2::new(-dir.y, dir.x);
+        let tick = pen.pl(0.04);
+        let step = pen.pl(0.3);
+        let len = (b - a).len();
+        let mut d = step;
+        while d < len {
+            let p = a + dir * d;
+            pen.line(layer, p - perp * tick - dir * tick, p + perp * tick + dir * tick);
+            pen.line(layer, p + perp * tick - dir * tick, p - perp * tick + dir * tick);
+            d += step;
+        }
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.10);
+    pen.text(layer, c + Vec2::new(0.0, off), 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Gate: gap in fence with arc.
+fn draw_gate(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        let mid = (a + b) * 0.5;
+        let half = (b - a).len() * 0.5;
+        // Draw an arc to indicate the gate swing.
+        pen.circle(layer, mid, half * 0.3);
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.10);
+    pen.text(layer, c + Vec2::new(0.0, off), 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Bench: small rectangle with tag.
+fn draw_bench(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let s = pen.pl(0.08);
+    pen.rect(layer, c - Vec2::new(s, s * 0.4), c + Vec2::new(s, s * 0.4));
+    pen.text(layer, c + Vec2::new(0.0, s), 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Bike rack: small rectangle with tag.
+fn draw_bike_rack(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    } else {
+        let c = pen.b(se.at_ft);
+        let s = pen.pl(0.06);
+        pen.rect(layer, c - Vec2::new(s, s), c + Vec2::new(s, s));
+    }
+    let c = pen.b(se.at_ft);
+    let off = pen.pl(0.12);
+    pen.text(layer, c + Vec2::new(0.0, off), 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Trash can: circle with tag.
+fn draw_trash_can(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    let c = pen.b(se.at_ft);
+    let r = pen.pl(0.05);
+    pen.circle(layer, c, r);
+    pen.text(layer, c + Vec2::new(0.0, r * 2.0), 0.05, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+// ---- Grading plan (C-102) -----------------------------------------------------------------------
+
+fn grading_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
+    // Building footprint (for reference).
+    let xs: Vec<f64> = t.building.grid.x.iter().map(|g| g.at_ft).collect();
+    let ys: Vec<f64> = t.building.grid.y.iter().map(|g| g.at_ft).collect();
+    let x_min = xs.first().copied().unwrap_or(0.0);
+    let y_min = ys.first().copied().unwrap_or(0.0);
+    let x_max = xs.last().copied().unwrap_or(100.0);
+    let y_max = ys.last().copied().unwrap_or(60.0);
+    pen.brect(SITE_LAYER, [x_min, y_min], [x_max, y_max]);
+    let bc = pen.b([(x_min + x_max) / 2.0, (y_min + y_max) / 2.0]);
+    pen.text(SITE_LAYER, bc, 0.10, "BUILDING", 0.0, HAlign::Center, VAlign::Middle);
+
+    // Draw grading contours.
+    for gc in &t.grading_contours {
+        if gc.points.len() < 2 {
+            continue;
+        }
+        let layer = GRADING_LAYER;
+        let pts: Vec<Vec2> = gc.points.iter().map(|p| pen.b(*p)).collect();
+        for w in pts.windows(2) {
+            if let [a, b] = w {
+                pen.line(layer, *a, *b);
+            }
+        }
+        // Label at midpoint.
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            let mid = (*first + *last) * 0.5;
+            let label = format!("{:.0}", gc.elevation_ft);
+            let size = if gc.weight == "major" { 0.06 } else { 0.04 };
+            pen.text(layer, mid, size, &label, 0.0, HAlign::Center, VAlign::Middle);
+        }
+    }
+
+    // Draw building pad.
+    for se in &t.site_elements {
+        if se.kind == "building_pad" {
+            draw_paving(pen, se, GRADING_LAYER);
+        }
+    }
+
+    // Draw retaining walls.
+    for se in &t.site_elements {
+        if se.kind == "retaining_wall" {
+            draw_retaining_wall(pen, se, GRADING_LAYER);
+        }
+    }
+}
+
+// ---- Site utility plan (C-103) ------------------------------------------------------------------
+
+fn site_utility_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
+    // Building footprint (for reference).
+    let xs: Vec<f64> = t.building.grid.x.iter().map(|g| g.at_ft).collect();
+    let ys: Vec<f64> = t.building.grid.y.iter().map(|g| g.at_ft).collect();
+    let x_min = xs.first().copied().unwrap_or(0.0);
+    let y_min = ys.first().copied().unwrap_or(0.0);
+    let x_max = xs.last().copied().unwrap_or(100.0);
+    let y_max = ys.last().copied().unwrap_or(60.0);
+    pen.brect(SITE_LAYER, [x_min, y_min], [x_max, y_max]);
+    let bc = pen.b([(x_min + x_max) / 2.0, (y_min + y_max) / 2.0]);
+    pen.text(SITE_LAYER, bc, 0.10, "BUILDING", 0.0, HAlign::Center, VAlign::Middle);
+
+    // Draw underground utility runs.
+    for se in &t.site_elements {
+        if se.kind.starts_with("underground_") {
+            draw_underground(pen, se, UNDERGROUND_LAYER);
+        }
+    }
+
+    // Draw utility structures.
+    for ss in &t.site_structures {
+        draw_site_structure(pen, ss);
+    }
+}
+
+/// Draw a site utility structure.
+fn draw_site_structure(pen: &mut Pen, ss: &SiteStructure) {
+    let c = pen.b(ss.at_ft);
+    let r = pen.pl(0.08);
+    match ss.kind.as_str() {
+        "manhole" => {
+            // Circle with cross.
+            pen.circle(STRUCTURE_LAYER, c, r);
+            pen.line(STRUCTURE_LAYER, c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0));
+            pen.line(STRUCTURE_LAYER, c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r));
+        }
+        "catch_basin" => {
+            // Square with X.
+            pen.rect(STRUCTURE_LAYER, c - Vec2::new(r, r), c + Vec2::new(r, r));
+            pen.line(STRUCTURE_LAYER, c - Vec2::new(r, r), c + Vec2::new(r, r));
+            pen.line(STRUCTURE_LAYER, c + Vec2::new(-r, r), c + Vec2::new(r, -r));
+        }
+        "cleanout" => {
+            // Small circle.
+            pen.circle(STRUCTURE_LAYER, c, r * 0.5);
+        }
+        "valve_box" => {
+            // Diamond.
+            let d = r * 0.7;
+            pen.poly(STRUCTURE_LAYER, &[
+                c + Vec2::new(0.0, d),
+                c + Vec2::new(d, 0.0),
+                c + Vec2::new(0.0, -d),
+                c + Vec2::new(-d, 0.0),
+            ], true);
+        }
+        "junction_box" => {
+            // Square.
+            pen.rect(STRUCTURE_LAYER, c - Vec2::new(r, r), c + Vec2::new(r, r));
+        }
+        "meter" | "backflow_preventer" => {
+            // Triangle.
+            let s = r * 0.8;
+            pen.poly(STRUCTURE_LAYER, &[
+                c + Vec2::new(0.0, s),
+                c + Vec2::new(-s * 0.7, -s * 0.5),
+                c + Vec2::new(s * 0.7, -s * 0.5),
+            ], true);
+        }
+        _ => {
+            pen.circle(STRUCTURE_LAYER, c, r * 0.5);
+        }
+    }
+    // Tag.
+    let off = pen.pl(0.12);
+    pen.text(STRUCTURE_LAYER, c + Vec2::new(off, 0.0), 0.05, &ss.tag, 0.0, HAlign::Left, VAlign::Middle);
+    // Rim/invert notes.
+    let mut y_off = -pen.pl(0.08);
+    if let Some(rim) = ss.rim_ft {
+        pen.text(STRUCTURE_LAYER, c + Vec2::new(off, y_off), 0.04, &format!("RIM {rim:.1}"), 0.0, HAlign::Left, VAlign::Middle);
+        y_off -= pen.pl(0.07);
+    }
+    if let Some(inv) = ss.invert_ft {
+        pen.text(STRUCTURE_LAYER, c + Vec2::new(off, y_off), 0.04, &format!("INV {inv:.1}"), 0.0, HAlign::Left, VAlign::Middle);
+    }
+}
+
+// ---- Site schedules (C-601) ---------------------------------------------------------------------
+
+fn site_schedules(pen: &mut Pen, t: &Truth) {
+    let fr = frame(pen.st);
+    let [[x0, y0], [x1, y1]] = fr.area;
+    let x0 = x0 + 0.3;
+
+    // Quantities table.
+    let mut qty_rows: Vec<Vec<String>> = vec![vec!["CSI".into(), "DESCRIPTION".into(), "QTY".into(), "UNIT".into()]];
+    for sq in &t.site_quantities {
+        qty_rows.push(vec![sq.csi.clone(), sq.description.clone(), format!("{:.0}", sq.quantity), sq.unit.clone()]);
+    }
+    let h = table(pen, [x0, y1 - 0.5], "SITEWORK QUANTITIES", &qty_rows);
+
+    // Utility structures table.
+    if !t.site_structures.is_empty() {
+        let mut ss_rows: Vec<Vec<String>> = vec![vec![
+            "TAG".into(), "TYPE".into(), "SYSTEM".into(), "RIM".into(), "INV".into(), "SIZE".into(),
+        ]];
+        for ss in &t.site_structures {
+            let rim = ss.rim_ft.map_or("-".into(), |v| format!("{v:.1}"));
+            let inv = ss.invert_ft.map_or("-".into(), |v| format!("{v:.1}"));
+            let size = ss.size_in.map_or("-".into(), |v| format!("{v:.0}\""));
+            ss_rows.push(vec![
+                ss.tag.clone(),
+                ss.kind.replace('_', " ").to_uppercase(),
+                ss.system.to_uppercase(),
+                rim,
+                inv,
+                size,
+            ]);
+        }
+        let y_start = y1 - 0.5 - h - 1.0;
+        if y_start > y0 + 3.0 {
+            table(pen, [x0, y_start], "UTILITY STRUCTURES SCHEDULE", &ss_rows);
+        }
+    }
+
+    let _ = (x1, y0);
 }
