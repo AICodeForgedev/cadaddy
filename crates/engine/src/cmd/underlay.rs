@@ -414,7 +414,7 @@ fn run_dwf_attach(s: &mut Session, p: &Value) -> Result<Value> {
         monochrome: false,
         layers_off: Vec::new(),
     };
-    let h = s.add_entity(EntityKind::Underlay(u))?;
+    let h = s.add_entity(EntityKind::Underlay(Box::new(u)))?;
     Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "layers": layers }))
 }
 

@@ -1511,7 +1511,7 @@ pub(crate) fn build(d: &mut cadaddy_doc::Drawing, sp: &BuildingSpec) -> Value {
         if !m.faces.is_empty() {
             let layer = format!("3D-CONC-{lv}");
             super::mep::ensure_layer(d, &layer, 8);
-            if d.add(&Space::Model, Common { layer, xdata: xd("element"), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xd("element").into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 solids += 1;
             }
         }
@@ -1598,7 +1598,7 @@ pub(crate) fn build(d: &mut cadaddy_doc::Drawing, sp: &BuildingSpec) -> Value {
         if !rm.faces.is_empty() {
             let layer = format!("3D-CONC-REBAR-{lv}");
             super::mep::ensure_layer(d, &layer, 1);
-            if d.add(&Space::Model, Common { layer, xdata: xd("rebar"), ..Common::default() }, EntityKind::Mesh(rm)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xd("rebar").into(), ..Common::default() }, EntityKind::Mesh(rm)).is_ok() {
                 bars += n;
             }
         }
@@ -1681,7 +1681,7 @@ pub(crate) fn build(d: &mut cadaddy_doc::Drawing, sp: &BuildingSpec) -> Value {
             if !m.size.is_empty() {
                 xdata.push(t(1000, cap(format!("prop:size={}", m.size))));
             }
-            if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(em)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(em)).is_ok() {
                 embeds += 1;
             }
         }

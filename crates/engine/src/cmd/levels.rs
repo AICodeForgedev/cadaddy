@@ -579,7 +579,10 @@ mod tests {
             let x = 100.0 * i as f64;
             s.execute("line", &json!({ "points": [[x, 0], [x, 10]] })).unwrap();
             let h = s.doc().unwrap().model.last().unwrap().handle;
-            s.doc_mut().unwrap().modify_entity(h, |e| e.common.xdata = crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Wall, lvl, Handle(0))).unwrap();
+            s.doc_mut()
+                .unwrap()
+                .modify_entity(h, |e| e.common.xdata = crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Wall, lvl, Handle(0)).into())
+                .unwrap();
             made.push(h);
         }
         let r = s.execute("levels.isolate", &json!({ "level": "l2" })).unwrap();
@@ -608,7 +611,8 @@ mod tests {
             faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2], hidden: 0 }],
             ..Default::default()
         };
-        let common = cadaddy_doc::Common { xdata: crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Floor, "L1", Handle(0)), ..Default::default() };
+        let common =
+            cadaddy_doc::Common { xdata: crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Floor, "L1", Handle(0)).into(), ..Default::default() };
         s.doc_mut().unwrap().add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Mesh(mesh)).unwrap();
         let text = String::from_utf8(cadaddy_io::ifc::write_ifc(s.doc().unwrap(), "levels.ifc").unwrap()).unwrap();
         let storeys: Vec<&str> = text.lines().filter(|l| l.contains("IFCBUILDINGSTOREY(")).collect();

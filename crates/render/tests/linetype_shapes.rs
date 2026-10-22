@@ -16,7 +16,7 @@ fn drawing(lt: Linetype, pts: &[Vec2]) -> Drawing {
     let mut d = Drawing::new_imperial();
     let name = lt.name.clone();
     d.linetypes.push(lt);
-    let common = Common { linetype: name, ..Default::default() };
+    let common = Common { linetype: name.into(), ..Default::default() };
     let vertices = pts.iter().map(|p| PolyVertex { p: *p, bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
     d.add(&Space::Model, common, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: true }))
         .unwrap();

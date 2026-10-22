@@ -152,7 +152,7 @@ fn place(s: &mut Session, part: &Part, at: Vec2, scale: f64, p: &Value, properti
         cadaddy_doc::dynblock::set_property(s.doc_mut()?, h, k, v).map_err(|e| bad("part", e))?;
     }
     if let Some(layer) = target_layer(s, part, str_param(p, "layer"))? {
-        s.doc_mut()?.modify_entity(h, |e| e.common.layer = layer.clone())?;
+        s.doc_mut()?.modify_entity(h, |e| e.common.layer = layer.clone().into())?;
         r["layer"] = json!(layer);
     }
     r["block"] = json!(name);
@@ -256,7 +256,7 @@ impl Interactive for PartM {
                 for h in new {
                     s.doc_mut()?.modify_entity(h, |e| {
                         if matches!(e.kind, EntityKind::Insert(_)) {
-                            e.common.layer = layer.clone();
+                            e.common.layer = layer.clone().into();
                         }
                     })?;
                 }
@@ -331,7 +331,7 @@ mod tests {
         let d = s.doc().unwrap();
         let e = d.entity(crate::cmd::curves::handle_value(h).unwrap()).unwrap();
         let EntityKind::Insert(i) = &e.kind else { panic!("not an insert") };
-        (i.block.clone(), i.scale.x, e.common.layer.clone())
+        (i.block.clone(), i.scale.x, e.common.layer.to_string())
     }
 
     #[test]

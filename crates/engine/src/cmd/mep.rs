@@ -1055,7 +1055,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     t(1000, "kind:conduit".into()),
                     t(1000, "part:segment".into()),
                 ];
-                if d.add(&Space::Model, Common { layer: layer.clone(), xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+                if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
+                {
                     total_stubs += 1;
                 }
             }
@@ -1083,7 +1084,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 t(1000, format!("part:{}", sanitise(part, 40))),
                 t(1000, format!("tag:{}", tag.chars().take(60).collect::<String>())),
             ];
-            if d.add(&Space::Model, Common { layer, xdata, ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_ground += 1;
             }
         };

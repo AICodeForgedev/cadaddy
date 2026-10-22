@@ -194,7 +194,7 @@ pub fn element_of(e: &Entity) -> Element {
         let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(app))?;
         Some(x.iter().skip(at + 1).take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.clone()).collect())
     };
-    let layer = e.common.layer.clone();
+    let layer = e.common.layer.to_string();
     let mut out =
         Element { handle: e.handle, class: "IfcBuildingElementProxy".into(), level: String::new(), systems: Vec::new(), name: layer.clone(), layer };
     if let Some(t) = tags("CADADDY_WALLGEN") {
@@ -522,7 +522,7 @@ pub fn walk_elements(scene: &Scene, d: &Drawing) -> (Vec<Owner>, Vec<Element>) {
         let z = scene.tris.get(i * 3).map_or(0.0, |v| f64::from(v.p[2]));
         let level =
             scene.levels.iter().rev().find(|l| z >= l.elevation_ft - 0.01).or(scene.levels.first()).map(|l| l.name.clone()).unwrap_or_default();
-        let layer = d.entity(o.handle).map(|e| e.common.layer.clone()).unwrap_or_default();
+        let layer = d.entity(o.handle).map(|e| e.common.layer.to_string()).unwrap_or_default();
         let device = scene.devices.iter().find(|dv| dv.handle == o.handle && dv.src == 0);
         let name = device.map_or_else(|| layer.clone(), |dv| dv.block.clone());
         let class = match part {

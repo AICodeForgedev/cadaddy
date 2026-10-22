@@ -17,9 +17,9 @@ fn inserts(app: &CadApp) -> Vec<(String, f64, f64, String)> {
         .unwrap()
         .model
         .iter()
-        .filter_map(
-            |e| if let EntityKind::Insert(i) = &e.kind { Some((i.block.clone(), i.scale.x, i.rotation, e.common.layer.clone())) } else { None },
-        )
+        .filter_map(|e| {
+            if let EntityKind::Insert(i) = &e.kind { Some((i.block.clone(), i.scale.x, i.rotation, e.common.layer.to_string())) } else { None }
+        })
         .collect()
 }
 

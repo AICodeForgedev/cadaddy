@@ -82,7 +82,7 @@ pub fn staged(d: &Drawing, date: i32, ghost: bool) -> std::result::Result<(Drawi
                 let c = if p == Phase::InProgress { rgb(IN_PROGRESS_RGB) } else { rgb(NOT_YET_RGB) };
                 let _ = out.modify_entity(h, |e| {
                     e.common.color = c;
-                    e.common.material = None;
+                    e.common.material = None.into();
                 });
             }
         }

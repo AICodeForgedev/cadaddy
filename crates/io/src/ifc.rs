@@ -2369,7 +2369,7 @@ mod tests {
         for xdata in cases {
             let e = Entity {
                 handle: cadaddy_doc::Handle(0x2a),
-                common: Common { layer: "M-DUCT".into(), xdata, ..Common::default() },
+                common: Common { layer: "M-DUCT".into(), xdata: xdata.into(), ..Common::default() },
                 kind: EntityKind::Mesh(Mesh::default()),
             };
             let (a, b) = (element_info(&e), cadaddy_walk3d::fourd::element_of(&e));

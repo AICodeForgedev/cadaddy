@@ -29,7 +29,7 @@ fn with_shapes() -> Drawing {
     });
     for (i, n) in ["FENCELINE2", "TRACKS", "BATTING", "FLOW"].iter().enumerate() {
         let y = i as f64;
-        let common = Common { linetype: n.to_string(), ..Default::default() };
+        let common = Common { linetype: (*n).into(), ..Default::default() };
         d.add(&Space::Model, common, EntityKind::Line(Line { a: Vec3::new(0.0, y, 0.0), b: Vec3::new(10.0, y, 0.0) })).unwrap();
     }
     d
