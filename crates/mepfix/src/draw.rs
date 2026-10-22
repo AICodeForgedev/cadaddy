@@ -334,7 +334,6 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             grid(&mut pen, t);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
-            crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
             legend.push(item("base_cabinet", "BASE CABINET"));
             legend.push(item("upper_cabinet", "UPPER CABINET"));
