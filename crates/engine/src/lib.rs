@@ -1234,6 +1234,8 @@ pub struct Session {
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
+    /// The open print-set project (Q310): classification, stages, dashboard.
+    pub printset_project: Option<Box<cadaddy_mepfix::printset::PrintSetProject>>,
     /// Rhai scripting engine state (scope and engine; see [`rhai_engine`]).
     pub rhai: rhai_engine::RhaiState,
     /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
@@ -1350,6 +1352,7 @@ impl Session {
             background_checks: false,
             drywall_viewmode: None,
             project: None,
+            printset_project: None,
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),
