@@ -536,3 +536,29 @@ fn dragging_a_distance_grip_changes_the_distance() {
     assert!(drag_grip(&mut d, h("30"), 2, GripPart::End, Vec2::new(130.0, 0.0)).is_err(), "not a reference");
     assert_eq!(d, before);
 }
+
+/// The DOOR drawing with every handle moved above 2^48: AutoCAD writes such handles (seen in
+/// drawings whose handles start at 0xDAD1…), and the dynamic block's objects must still be kept.
+fn far_handles(src: &str) -> String {
+    const SHIFT: u64 = 0x000D_AD10_0000_0000;
+    let is_handle = |code: i32| matches!(code, 5 | 105 | 320..=369 | 390..=399 | 480 | 481 | 1005);
+    let mut out = String::new();
+    for line in src.lines() {
+        let (code, value) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+        let moved = match (code.parse::<i32>(), u64::from_str_radix(value, 16)) {
+            (Ok(c), Ok(h)) if is_handle(c) && h != 0 => format!("{:X}", h + SHIFT),
+            _ => value.to_string(),
+        };
+        out.push_str(&format!("{code} {moved}\n"));
+    }
+    out
+}
+
+#[test]
+fn a_dynamic_block_with_handles_above_2_pow_48_is_kept() {
+    let src = far_handles(&fixture());
+    let d = read_dxf(dxf(&src).as_bytes()).unwrap();
+    let before = dynamic_block(&d, "Door").expect("the dynamic block with far handles");
+    let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!(by_node(dynamic_block(&again, "Door").unwrap()), by_node(before));
+}
