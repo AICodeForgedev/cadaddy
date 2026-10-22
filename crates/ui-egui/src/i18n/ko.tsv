@@ -2689,3 +2689,9 @@ menu	Modify	수정
 	Active	활성
 	Shelved	보류됨
 	{n} drawings	도면 {n}개
+	Compare Revised Print	개정 도면 비교
+	Revision Log	개정 기록
+	Attach IFC Reference	IFC 참조 부착
+	IFC References	IFC 참조
+	IFC Reference Elements	IFC 참조 요소
+	Reload IFC References	IFC 참조 다시 로드

@@ -2669,3 +2669,9 @@ menu	Modify	Modifikace
 	Active	Aktivní
 	Shelved	Odloženo
 	{n} drawings	Výkresy: {n}
+	Compare Revised Print	Porovnat revidovaný výkres
+	Revision Log	Protokol revizí
+	Attach IFC Reference	Připojit referenci IFC
+	IFC References	Reference IFC
+	IFC Reference Elements	Prvky reference IFC
+	Reload IFC References	Znovu načíst reference IFC
