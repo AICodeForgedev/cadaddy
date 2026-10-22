@@ -229,6 +229,37 @@ fn parts_are_kept_in_cdy_and_dxf() {
     }
 }
 
+/// A call may fail, but never by a panic the session caught (EngineError::Internal).
+fn no_internal(cmd: &str, p: &Value, r: Result<Value, cadaddy_engine::EngineError>) {
+    if let Err(e @ cadaddy_engine::EngineError::Internal(..)) = r {
+        panic!("{cmd} {p}: {e}");
+    }
+}
+
+/// part.new takes its parameters as a set, whatever their order (serde_json keeps keys sorted:
+/// `a` and `depth` come before `thick`), and all or nothing: a set that doesn't evaluate makes no
+/// part, so the same name can be used again.
+#[test]
+fn part_new_takes_its_parameters_all_at_once() {
+    let mut s = Session::new();
+    s.execute("part.new", &json!({"name": "P", "parameters": {"thick": 5, "depth": "2*thick", "a": "depth+1"}})).unwrap();
+    let t = s.execute("part.tree", &json!({"part": "P"})).unwrap();
+    assert_eq!(param(&t, "depth"), json!(10.0), "{t}");
+    assert_eq!(param(&t, "a"), json!(11.0), "{t}");
+    let names = |s: &mut Session| -> Vec<String> {
+        s.execute("part.list", &json!({})).unwrap()["parts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect()
+    };
+    for bad in [json!({"x": "nope*2"}), json!({"x": "y+1", "y": "x+1"}), json!({"ok": 1, "1bad": 2}), json!("thick=5")] {
+        let e = s.execute("part.new", &json!({"name": "Q", "parameters": bad})).unwrap_err().to_string();
+        assert!(!e.is_empty(), "{bad}");
+        assert_eq!(names(&mut s), ["P"], "nothing stored for {bad}");
+    }
+    s.execute("part.new", &json!({"name": "Q", "parameters": {"x": 3, "y": "x*2"}})).unwrap();
+    assert_eq!(names(&mut s), ["P", "Q"]);
+    let t = s.execute("part.tree", &json!({"part": "Q"})).unwrap();
+    assert_eq!(param(&t, "y"), json!(6.0), "{t}");
+}
+
 #[test]
 fn hostile_parameters_never_panic() {
     let mut s = Session::new();
@@ -269,9 +300,45 @@ fn hostile_parameters_never_panic() {
     ];
     for c in cmds {
         for j in &junk {
-            let _ = s.execute(c, j);
+            no_internal(c, j, s.execute(c, j));
         }
     }
+    // The same, and junk geometry, constraints, planes, axes and edges aimed at real features,
+    // on a part with a built body, a fillet and a chamfer.
+    let (mut b, _) = plate(2.0);
+    let features: Vec<Value> = (0..5).map(|i| json!(i)).chain(["Base", "Pad", "Fillet", "Chamfer"].map(|n| json!(n))).collect();
+    let hostile = [
+        json!({"geometry": [{"type": "line", "a": [0, 0], "b": [0, 0]}]}),
+        json!({"geometry": [{"type": "circle", "center": [f64::MAX, 0], "radius": 1e308}]}),
+        json!({"geometry": "x", "constraints": [{"kind": "distance", "refs": [{"geom": -1}, {"geom": 1e9}], "value": "1/0"}]}),
+        json!({"constraints": [{"kind": "coincident", "refs": [{"geom": 0, "sub": "nope"}]}]}),
+        json!({"plane": {"origin": [0, 0, 0], "normal": [0, 0, 0]}}),
+        json!({"plane": {"origin": [1e308, 0, 0], "normal": [1e308, 1e308, 0]}, "offset": -1e308}),
+        json!({"axis": "nope", "angle": 720}),
+        json!({"axis": {"point": [0, 0, 0], "direction": [0, 0, 0]}, "angle": "angle*2"}),
+        json!({"edges": [[1e308, 0, 0]], "radius": -5}),
+        json!({"edges": "all", "distance": 1e300}),
+        json!({"length": "((((", "depth": -1, "through_all": "yes"}),
+        json!({"suppressed": "maybe", "reversed": 3, "symmetric": null, "cut": []}),
+        json!({"to": -1}),
+        json!({"to": 1e9}),
+        json!({"name": "", "radius": "radius"}),
+    ];
+    for c in cmds.iter().chain(&["part.edit", "part.reorder", "part.delete"]) {
+        for j in &junk {
+            no_internal(c, j, b.execute(c, j));
+        }
+    }
+    for c in ["part.edit", "part.reorder", "part.delete"] {
+        for f in &features {
+            for h in &hostile {
+                let mut p = h.clone();
+                p["feature"] = f.clone();
+                no_internal(c, &p, b.execute(c, &p));
+            }
+        }
+    }
+    no_internal("part.tree", &json!({}), b.execute("part.tree", &json!({})));
     // A sketch that is open, then padded: an error state in the tree, not a crash.
     s.execute(
         "part.sketch",
