@@ -835,6 +835,10 @@ pub struct Electrode {
     /// installed (photos, an inspection) — the pour hold point.
     pub pour: String,
     pub documented: bool,
+    /// Concrete-encased: the concrete element it is cast in (a footing, grade beam, pier or pole
+    /// base id in `concrete.elements`), when named; else the one under `at` is taken.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub element: String,
     /// Rods: how many and how long; a ring: its length.
     pub count: u32,
     pub rod_length_ft: f64,
@@ -866,6 +870,7 @@ impl Default for Electrode {
             connection_accessible: true,
             pour: "pending".into(),
             documented: false,
+            element: String::new(),
             count: 1,
             rod_length_ft: 10.0,
             ring_length_ft: 0.0,
