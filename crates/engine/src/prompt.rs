@@ -57,6 +57,10 @@ pub struct Prompt {
     /// prompt (the routine writes all of it).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub raw: bool,
+    /// A free-text prompt with keywords whose text has spaces (a FILTER expression): in a script,
+    /// a line that isn't one of its keywords is taken whole instead of split at the spaces.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub whole_line: bool,
     /// The prompt takes points in space ([`Input::Point3`]): 3D snaps and typed `x,y,z` keep
     /// their height.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -142,6 +146,11 @@ impl Prompt {
     /// Show 3D edit handles (the `gizmo` field).
     pub fn gizmo(mut self, g: Gizmo) -> Self {
         self.gizmo = Some(g);
+        self
+    }
+    /// Take a script line that isn't a keyword whole (the `whole_line` field).
+    pub fn whole_line(mut self) -> Self {
+        self.whole_line = true;
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {

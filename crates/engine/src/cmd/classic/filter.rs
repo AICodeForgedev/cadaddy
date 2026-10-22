@@ -543,7 +543,9 @@ impl Interactive for FilterM {
             (Some("save"), None) => Prompt::new("Enter name to save the filter as", Accept::TEXT),
             (Some("save"), Some(_)) => Prompt::new("Enter filter to save", Accept::TEXT),
             (Some("delete"), _) => Prompt::new("Enter name of saved filter to delete", Accept::TEXT),
-            _ => Prompt::new("Enter filter (e.g. type = Line and layer = Walls)", Accept::TEXT).kw(&["Use saved", "Save", "List", "Delete"]),
+            _ => Prompt::new("Enter filter (e.g. type = Line and layer = Walls)", Accept::TEXT)
+                .kw(&["Use saved", "Save", "List", "Delete"])
+                .whole_line(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

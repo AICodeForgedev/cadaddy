@@ -2322,7 +2322,14 @@ impl Session {
                     }
                     return Ok(());
                 }
-            } else if script && self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number && p.keywords.is_empty()) {
+            } else if script
+                && self.current_prompt().is_some_and(|p| {
+                    p.accept.text
+                        && !p.accept.point
+                        && !p.accept.number
+                        && (p.keywords.is_empty() || (p.whole_line && p.match_keyword(rest.trim()).is_none()))
+                })
+            {
                 return self.typed(rest);
             }
             first = false;
