@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1027,
-    "count": 1027,
+    "callableAsJson": 1028,
+    "count": 1028,
     "ids": [
       "-attedit",
       "-block",
@@ -974,6 +974,7 @@
       "viewbase",
       "viewport.set",
       "viewsection",
+      "visualstyles",
       "vpclip",
       "vplayer",
       "vpmax",
@@ -1031,8 +1032,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 505,
-    "typed": 550
+    "inMenus": 506,
+    "typed": 551
   },
   "features": {
     "ifcExport": true,
