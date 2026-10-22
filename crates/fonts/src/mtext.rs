@@ -587,6 +587,9 @@ struct Line {
     text: String,
     /// Where each character of `text` starts (before the line's alignment shift).
     xs: Vec<f64>,
+    /// Running character count of `text`, kept incrementally so appending a segment need not
+    /// rescan the whole accumulated line (which is multiplicative on a long line) (CWE-407).
+    chars: usize,
     /// Index of the paragraph the line belongs to.
     para: usize,
 }
@@ -666,10 +669,11 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                     finish(&mut lines, &mut line, fmt(last_fmt), para);
                 } else if !line.items.is_empty() || pending_space.is_some() {
                     if let Some(f) = pending_space {
-                        let at = line.text.chars().count();
+                        let at = line.chars;
                         line.items.push(Item { seg: None, fmt: f, x: line.width, w: sw, at });
                         line.text.push(' ');
                         line.xs.push(line.width);
+                        line.chars += 1;
                     }
                     line.width += sw;
                 }
@@ -677,8 +681,10 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                 for (sg, f) in segs {
                     let fw = seg_width(sg, fmt(*f));
                     line.max_h = line.max_h.max(fmt(*f).height);
-                    let at = line.text.chars().count();
-                    line.text.push_str(&seg_plain(sg));
+                    let at = line.chars;
+                    let plain = seg_plain(sg);
+                    line.chars += plain.chars().count();
+                    line.text.push_str(&plain);
                     line.xs.extend(char_starts(sg, fmt(*f), line.width));
                     line.items.push(Item { seg: Some(sg.clone()), fmt: *f, x: line.width, w: fw, at });
                     line.width += fw;
@@ -777,6 +783,15 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_char_offsets_track_incrementally() {
+        // A multi-word line lays out correctly even though the per-line character count is now
+        // maintained incrementally rather than rescanned per segment (CWE-407, row 20).
+        let l = layout_mtext("alpha beta gamma", Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        assert_eq!(l.lines.len(), 1, "no wrap width: one line");
+        assert_eq!(l.lines[0], "alpha beta gamma");
+    }
 
     #[test]
     fn strips_formatting() {
