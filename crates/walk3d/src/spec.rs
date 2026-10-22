@@ -42,6 +42,10 @@ pub struct BuildingSpec {
     pub units_per_foot: f64,
     #[serde(default)]
     pub levels: Vec<Level>,
+    /// The estimate's state (`estimate.*`): the imported baseline and prices, each line's
+    /// assembly and scope with reasons, and the markup settings.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub estimate: serde_json::Value,
     /// Elevations the prints give for levels with no plan here (the roof, a parapet, a penthouse
     /// drawn elsewhere): they top the floor below and become IFC storeys (`levels.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1453,6 +1457,7 @@ impl BuildingSpec {
             version: SPEC_VERSION,
             units_per_foot: r.units_per_foot,
             levels: r.levels.clone(),
+            estimate: serde_json::Value::Null,
             datums: Vec::new(),
             sheets: Vec::new(),
             layers,

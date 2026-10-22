@@ -13,6 +13,7 @@ mod mcptest;
 mod mepfix;
 mod parity;
 mod perf;
+mod pubcost;
 mod release;
 mod release_cmd;
 mod repro;
@@ -88,6 +89,9 @@ commands:
                   what a release built now would be signed with on each platform (Windows Authenticode,
                   macOS Developer ID + notarization, Linux GPG, the updater's SHA256SUMS.sig);
                   --require fails if any would ship unsigned (docs/code-signing.md)
+  fetch-pubcost    validate and package the public MEP cost data (assets/public-cost-data/);
+                  generates the baseline/ folder for estimate.import; enforces source+licence
+                  on every row and refuses any electrical labor
   fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
                   mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
   fuzz [TARGET|all] [seconds]
@@ -145,6 +149,7 @@ fn main() -> ExitCode {
         Some("sign-release") => release::sign_cmd(&root(), &rest),
         Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("soak") => soak::run(&root(), &rest),
+        Some("fetch-pubcost") => pubcost::run(&root()),
         Some("supplychain") => supplychain::run(&root()),
         Some("advisories") => supplychain::advisories(&root()),
         Some("sbom") => supplychain::sbom(&root(), &rest),

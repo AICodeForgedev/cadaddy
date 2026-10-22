@@ -1,0 +1,39 @@
+{
+  "name": "CADaddy Public MEP Cost Data",
+  "version": "2026.1",
+  "generated": "2026-10-21",
+  "description": "Public-domain and openly licensed cost data for MEP estimating. Ships with CADaddy. Every row cites its source, date and licence. ELECTRICAL LABOR IS EXCLUDED (private company pack only).",
+  "sources": {
+    "p405": {
+      "title": "NAVFAC P-405 Seabee Planner's and Estimator's Handbook",
+      "publisher": "US Navy, Naval Facilities Engineering Command",
+      "date": "1996-10",
+      "licence": "US government work (17 USC §105)",
+      "distribution": "Distribution Statement A: Approved for public release; distribution is unlimited.",
+      "note": "Military-crew baseline, 1996. Man-hours reflect Seabee crew experience and conditions — calibrate to commercial crews and current productivity."
+    },
+    "bls_oews": {
+      "title": "Bureau of Labor Statistics, Occupational Employment and Wage Statistics",
+      "publisher": "US Department of Labor",
+      "licence": "US government work (17 USC §105)",
+      "note": "Annual mean wages by metropolitan area and occupation."
+    },
+    "bls_ppi": {
+      "title": "Bureau of Labor Statistics, Producer Price Indexes",
+      "publisher": "US Department of Labor",
+      "licence": "US government work (17 USC §105)",
+      "note": "Price indexes (not prices) for material families; use for escalation only."
+    },
+    "davis_bacon": {
+      "title": "Davis-Bacon Wage Determinations",
+      "publisher": "US Department of Labor via SAM.gov",
+      "licence": "US government work (17 USC §105)",
+      "note": "Prevailing wages for federally funded construction by county and trade."
+    }
+  },
+  "excluded": {
+    "electrical_labor": "Man-hours, labor units, production rates, crew productivity and labor factors for electrical work. Private company pack only.",
+    "commercial_cost_books": "Any source whose terms forbid redistribution (RS Means, Craftsman, etc.).",
+    "commodity_feeds": "Exchange or commodity price feeds with redistribution restrictions."
+  }
+}

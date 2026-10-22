@@ -26,6 +26,7 @@ mod draw2;
 mod draworder;
 mod edit;
 mod edit3d;
+mod estimate;
 mod exact_ends;
 mod exchange;
 mod express;
@@ -356,6 +357,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plotstamp::specs());
         v.extend(dwgprops::specs());
         v.extend(crate::script_tools::specs());
+        v.extend(estimate::specs());
         v.extend(exchange::specs());
         v.extend(rasterout::specs());
         v.extend(props::specs());
