@@ -86,6 +86,10 @@ pub struct BuildingSpec {
     /// status and answers: see [`crate::rfi`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rfis: Vec<crate::rfi::Rfi>,
+    /// What the documents say, for the print validator ([`crate::validate`]): symbols, schedules,
+    /// dimension strings, rooms, the rules file and its gate setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prints: Option<Box<crate::validate::Prints>>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -1430,6 +1434,7 @@ impl BuildingSpec {
             schedule: Schedule::default(),
             walls: Vec::new(),
             rfis: Vec::new(),
+            prints: None,
             ceiling_types: Vec::new(),
             soffit_types: Vec::new(),
             devices: r.devices.clone(),

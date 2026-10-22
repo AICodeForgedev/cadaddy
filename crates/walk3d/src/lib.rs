@@ -24,6 +24,7 @@ mod spec;
 pub mod stairs;
 mod takeoff;
 mod tour;
+pub mod validate;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};

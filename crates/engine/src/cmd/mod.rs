@@ -100,6 +100,7 @@ mod takeoff;
 pub mod tours;
 pub(crate) mod underlay;
 mod unittypes;
+pub mod validate;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
@@ -291,6 +292,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(printset::specs());
+        v.extend(validate::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());
         v.extend(exterior::specs());
