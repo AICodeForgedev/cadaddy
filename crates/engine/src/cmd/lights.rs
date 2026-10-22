@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("visualstyles", "Visual Styles Manager", run_look)
             .menu(&["View", "Visual Styles", "Visual Styles Manager"])
             .alias(&["vsm"])
-            .params("{ambientOcclusion?: 0 … 2 (how much corners and creases darken; 0 off), aoRadius?: drawing units (how far a surface looks for what shades it; 0 by the model's size), softShadows?: degrees 0 … 10 (the sun's apparent size, widening shadow edges away from what casts them; 0 sharp), toneMap?: filmic|reinhard|neutral|linear} → those settings — how the Realistic visual style (and its plots and exports) finishes its image")
+            .params("{ambientOcclusion?: 0 to 2 (how much corners and creases darken; 0 off), aoRadius?: drawing units (how far a surface looks for what shades it; 0 by the model's size), softShadows?: degrees 0 to 10 (the sun's apparent size, widening shadow edges away from what casts them; 0 sharp), toneMap?: filmic|reinhard|neutral|linear} → those settings — how the Realistic visual style (and its plots and exports) finishes its image")
             .interactive(|_| Ok(Box::new(LookM::default()))),
     ]
 }

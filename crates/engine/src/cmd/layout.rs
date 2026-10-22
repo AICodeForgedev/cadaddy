@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.list", "List Layouts", run_list).params("→ [{name, tabOrder, page, viewports}]").noundo(),
         CommandSpec::new("mvsetup", "MVSETUP", mvsetup::run)
             .params(
-                "{option: title|create|scale|align|model|list, size?: ANSI-A…E|ARCH-C…E|ISO-A4…A0 (title, model), rows?, cols?, gap?, p1?, p2? (create; default the printable area), \
+                "{option: title|create|scale|align|model|list, size?: ANSI-A to E|ARCH-C to E|ISO-A4 to A0 (title, model), rows?, cols?, gap?, p1?, p2? (create; default the printable area), \
                  scale? (create, scale: \"1:50\" or paper units per model unit; model: model units per sheet unit), handles? (scale; default every viewport), \
                  base_viewport + base: [x,y] + handle + point: [x,y] + mode?: horizontal|vertical|both (align: model points), layout?}",
             )

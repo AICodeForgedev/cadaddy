@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("camera", "Create Camera", run_camera)
             .menu(&["View", "Create Camera"])
             .alias(&["cam"])
-            .params("{position: [x, y] (CAMERAHEIGHT up) or [x, y, z], target: [x, y] or [x, y, z], lens?: 50 (mm), name?: (default Camera1, Camera2…)} → {name, view}")
+            .params("{position: [x, y] (CAMERAHEIGHT up) or [x, y, z], target: [x, y] or [x, y, z], lens?: 50 (mm), name?: (default Camera1, Camera2 and so on)} → {name, view}")
             .interactive(|_| Ok(Box::new(CameraM::default()))),
         CommandSpec::new("camera.list", "Cameras", run_list).params("{} → {cameras: [{name, position, target, lens, fieldOfView}]}").noundo(),
         CommandSpec::new("camera.set", "Change Camera", run_set).params("{name, position?, target?, lens?, rename?} → {name, view}"),
