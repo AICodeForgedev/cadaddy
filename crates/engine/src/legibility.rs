@@ -1,4 +1,4 @@
-//! New annotation too small to read: a dimension, TEXT or MTEXT whose characters are a speck at
+//! New annotation too small to read: a dimension, TEXT, MTEXT or attribute definition whose characters are a speck at
 //! the drawing's size (the classic first-day surprise: DIMSCALE 1 dimensions in a floor plan
 //! drawn in inches). The command line says so once per drawing and kind, with a scale to try.
 
@@ -70,6 +70,8 @@ fn shown_height(s: &Session, h: Handle) -> Option<(f64, u8)> {
         }
         EntityKind::Text(t) => (!d.text_style(&t.style).is_some_and(|ts| ts.annotative)).then_some((t.height, TEXT)),
         EntityKind::MText(t) => (!d.text_style(&t.style).is_some_and(|ts| ts.annotative)).then_some((t.height, TEXT)),
+        // An attribute definition shows its tag at its height, and its block's references the value.
+        EntityKind::AttDef(a) => (!d.text_style(&a.text.style).is_some_and(|ts| ts.annotative)).then_some((a.text.height, TEXT)),
         _ => None,
     }
 }

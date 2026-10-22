@@ -918,7 +918,8 @@ impl Interactive for AttdefM {
                     if let EntityKind::AttDef(a) = &mut k {
                         a.text.rotation = rotation;
                     }
-                    s.add_entity(k)?;
+                    let added = s.add_entity(k)?;
+                    crate::legibility::check_new(s, added);
                     return Ok(Step::Done);
                 }
                 _ => {}
