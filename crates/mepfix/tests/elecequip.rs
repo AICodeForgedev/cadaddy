@@ -101,3 +101,96 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
         assert!(ifc.contains("'MOUNTING'") || ifc.contains("MOUNTING"), "the schedule row travels as properties");
     }
 }
+
+/// Q335: each panel's directory, made from the model, matches its panel schedule on the prints;
+/// every device on a circuit gets its plate label; a device on a circuit the schedule doesn't have
+/// is flagged.
+#[test]
+fn directories_match_the_panel_schedules_of_a_made_up_set() {
+    use cadaddy_walk3d::{ElecDevice, MepEquipment, PanelCircuit};
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+    let mut equipment = Vec::new();
+    for p in t.elec_panels.iter().filter(|p| !p.schedule.is_empty()) {
+        let circuits = p
+            .schedule
+            .iter()
+            .map(|row| {
+                // The rooms its devices are in.
+                let mut rooms: Vec<String> = t
+                    .elec_circuits
+                    .iter()
+                    .filter(|c| c.panel == p.id && c.number == row.circuit)
+                    .flat_map(|c| c.devices.iter())
+                    .filter_map(|id| t.elec_devices.iter().find(|d| &d.id == id).map(|d| d.room.clone()))
+                    .collect();
+                rooms.sort();
+                rooms.dedup();
+                PanelCircuit {
+                    number: row.circuit.clone(),
+                    description: row.description.clone(),
+                    room: rooms.join(", "),
+                    breaker: row.breaker_amps.clone(),
+                    poles: row.poles.parse().unwrap_or(1),
+                }
+            })
+            .collect();
+        equipment.push(MepEquipment {
+            tag: p.tag.clone(),
+            kind: "panel".into(),
+            level: p.level.clone(),
+            min: [p.min_ft[0] * 12.0, p.min_ft[1] * 12.0],
+            max: [p.max_ft[0] * 12.0, p.max_ft[1] * 12.0],
+            height_ft: 5.0,
+            circuits,
+            ..MepEquipment::default()
+        });
+    }
+    let devices: Vec<ElecDevice> = t
+        .elec_devices
+        .iter()
+        .filter_map(|d| {
+            // (A circuit names its panel by id.)
+            let c = t.elec_circuits.iter().find(|c| c.id == d.circuit)?;
+            let panel = t.elec_panels.iter().find(|p| p.id == c.panel)?;
+            Some(ElecDevice {
+                tag: d.id.clone(),
+                kind: d.kind.clone(),
+                level: d.level.clone(),
+                room: d.room.clone(),
+                panel: panel.tag.clone(),
+                circuit: c.number.clone(),
+            })
+        })
+        .collect();
+    assert!(!devices.is_empty() && !equipment.is_empty());
+    let unscheduled =
+        devices.iter().filter(|d| !t.elec_panels.iter().any(|p| p.tag == d.panel && p.schedule.iter().any(|r| r.circuit == d.circuit))).count();
+    let levels: Vec<serde_json::Value> =
+        t.building.levels.iter().map(|l| json!({"name": l.code, "elevation_ft": l.elevation_ft, "height_ft": 12, "region": [-100000, -100000, 100000, 100000], "base": [0, 0]})).collect();
+    let mut s = cadaddy_engine::Session::new();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {"units_per_foot": 12, "levels": levels, "mep": {"equipment": equipment, "devices": devices}}}),
+    )
+    .unwrap();
+    let l = s.execute("labels.list", &json!({})).unwrap();
+    for p in t.elec_panels.iter().filter(|p| !p.schedule.is_empty()) {
+        let rows = l["directories"][&p.tag].as_array().unwrap_or_else(|| panic!("no directory for {}", p.tag));
+        assert_eq!(rows.len(), p.schedule.len(), "{}", p.tag);
+        for (row, sched) in rows.iter().zip(&p.schedule) {
+            // A multi-pole breaker lists every pole it takes (`17,19`).
+            let poles: Vec<&str> = row["circuit"].as_str().unwrap().split(',').collect();
+            assert_eq!((poles[0], poles.len()), (sched.circuit.as_str(), sched.poles.parse::<usize>().unwrap_or(1)), "{}", p.tag);
+            assert_eq!(row["description"], json!(sched.description.to_uppercase()), "{}", p.tag);
+        }
+        assert!(rows.iter().any(|r| r["room"].as_str().unwrap().starts_with("RM ")), "{}: rooms by the rule", p.tag);
+    }
+    assert_eq!(l["counts"]["devices"].as_u64().unwrap() as usize, devices_count(&l));
+    let flagged = l["problems"].as_array().unwrap().iter().filter(|p| p["message"].as_str().unwrap().contains("schedule doesn't have")).count();
+    assert_eq!(flagged, unscheduled);
+}
+
+fn devices_count(l: &serde_json::Value) -> usize {
+    l["labels"].as_array().unwrap().iter().filter(|x| x["set"] == "devices").count()
+}

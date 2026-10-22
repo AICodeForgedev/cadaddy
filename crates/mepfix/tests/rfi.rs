@@ -40,8 +40,9 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
         assert_eq!(s.recall(), 1.0);
         seen.extend(rfis.iter().filter_map(|r| r.kind));
     }
-    // (The gear review's kinds come from `gear.review`, not the print gaps: engine tests/gear.rs.)
-    for k in RfiKind::ALL.into_iter().filter(|k| !matches!(k, RfiKind::GearLugs | RfiKind::GearInstall)) {
+    // (The gear review's and the labels' kinds come from `gear.review` and `labels.check`, not
+    // the print gaps: engine tests/gear.rs, tests/labels.rs.)
+    for k in RfiKind::ALL.into_iter().filter(|k| !matches!(k, RfiKind::GearLugs | RfiKind::GearInstall | RfiKind::LabelData)) {
         assert!(seen.contains(&k), "{k:?} never found on seeds 1–6");
     }
 }

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 824,
-    "count": 824,
+    "callableAsJson": 829,
+    "count": 829,
     "ids": [
       "-attedit",
       "-block",
@@ -355,6 +355,11 @@
       "join",
       "jpgout",
       "justifytext",
+      "labels.arcflash",
+      "labels.bom",
+      "labels.check",
+      "labels.export",
+      "labels.list",
       "latlong",
       "laycur",
       "laydel",

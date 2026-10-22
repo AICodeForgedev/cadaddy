@@ -67,6 +67,7 @@ pub mod furnish;
 pub mod gear;
 pub mod geo;
 pub mod imagetrace;
+pub mod labels;
 pub(crate) mod layout;
 pub mod lightbake;
 pub mod lights;
@@ -294,6 +295,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grids::specs());
         v.extend(mep::specs());
         v.extend(gear::specs());
+        v.extend(labels::specs());
         v.extend(mepqty::specs());
         v.extend(printset::specs());
         v.extend(validate::specs());

@@ -37,7 +37,7 @@ const MAX_TABLES: usize = 200;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mep.qty", "MEP Quantities", run_qty).params(
-            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], totals, rows, csv, path?, table?}",
+            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits|labels} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], labels: [{item, unit, qty, note}] (what the labels need: labels.bom), totals, rows, csv, path?, table?}",
         ),
         CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).params("{} → {tables}: rebuild every linked takeoff table from the model now"),
     ]
@@ -293,6 +293,8 @@ pub struct Takeoff {
     lug_kits: Vec<Value>,
     /// Gear accepted with review failures, and the factor on its installation.
     labor: Vec<Value>,
+    /// What the labels need (`labels.bom`): the printer, tape, label stock, arc flash labels.
+    labels: Vec<Value>,
 }
 
 /// A run's corner: an elbow (a turn in plan) or a drop (a change of height), with the plan turn
@@ -569,7 +571,7 @@ impl Takeoff {
         };
         json!({
             "ducts": ducts, "pipes": pipes, "fittings": fittings, "terminals": terminals,
-            "equipment": self.equipment, "hangers": hangers, "lug_kits": self.lug_kits, "labor_conditions": self.labor,
+            "equipment": self.equipment, "hangers": hangers, "lug_kits": self.lug_kits, "labor_conditions": self.labor, "labels": self.labels,
             "totals": {
                 "duct_length_ft": r2(self.ducts.values().map(|r| r.length_ft).sum()),
                 "duct_area_sqft": r2(self.ducts.values().map(|r| r.area_sqft).sum()),
@@ -705,6 +707,26 @@ impl Takeoff {
                 line("Belleville washer".into(), &k["belleville_washers"]);
             }
         }
+        if all || part == "labels" {
+            for l in &self.labels {
+                let mut item = l["item"].as_str().unwrap_or("").to_string();
+                if let Some(note) = l["note"].as_str().filter(|n| !n.is_empty()) {
+                    item = format!("{item} ({note})");
+                }
+                out.push(vec![
+                    "Labels".into(),
+                    String::new(),
+                    String::new(),
+                    item,
+                    String::new(),
+                    String::new(),
+                    l["qty"].to_string(),
+                    l["unit"].as_str().unwrap_or("ea").into(),
+                    String::new(),
+                    String::new(),
+                ]);
+            }
+        }
         if all || part == "hangers" {
             for ((l, s, k, size), r) in self.hangers.iter().filter(|(_, r)| r.count > 0) {
                 let item = format!("{k} hanger @ {}' (rod {} ft)", n(r.spacing_ft), n(r.rod_ft));
@@ -748,7 +770,7 @@ fn csv(rows: &[Vec<String>]) -> String {
     out
 }
 
-const PARTS: [&str; 8] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers", "lug_kits"];
+const PARTS: [&str; 9] = ["all", "ducts", "pipes", "fittings", "terminals", "equipment", "hangers", "lug_kits", "labels"];
 
 // ---------------- linked tables ----------------
 
@@ -835,7 +857,11 @@ pub(crate) fn refresh(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     let mut n = 0;
     for (h, p, part, at) in linked {
         let Ok(st) = settings("mep.qty", &p) else { continue };
-        let rows = takeoff(sp, &st).rows(&part);
+        let mut tk = takeoff(sp, &st);
+        if st.system.is_none() {
+            tk.labels = super::labels::bom(sp, d);
+        }
+        let rows = tk.rows(&part);
         let mut t = make(d, at, &rows, &p);
         if let Some(EntityKind::Table(old)) = d.entity(h).map(|e| &e.kind) {
             t.style = old.style.clone();
@@ -862,7 +888,10 @@ fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad("mep.qty", format!("there is no level named {l}")));
     }
-    let t = takeoff(&sp, &st);
+    let mut t = takeoff(&sp, &st);
+    if st.system.is_none() {
+        t.labels = super::labels::bom(&sp, s.doc()?);
+    }
     let rows = t.rows("all");
     let mut out = t.to_json(&st);
     out["rows"] = json!(rows.len().saturating_sub(1));
