@@ -543,7 +543,10 @@ pub fn read_equipment(sheets: &[SheetIn], levels: &[Level]) -> EquipmentRead {
         g.own();
     }
     // Tags on the plans: full plans first, then enlarged ones.
-    let mut plans: Vec<&SheetIn> = sheets.iter().filter(|s| s.sheet.level.is_some()).collect();
+    // Not the architectural roof plans (Q307/Q337): their tags label the curbs, under them, not
+    // where the equipment is.
+    let arch_roof = |s: &SheetIn| s.sheet.discipline == "A" && s.sheet.title.to_ascii_uppercase().contains("ROOF");
+    let mut plans: Vec<&SheetIn> = sheets.iter().filter(|s| s.sheet.level.is_some() && !arch_roof(s)).collect();
     plans.sort_by_key(|s| s.sheet.window_ft.is_some());
     let mut placed: Vec<Placed> = Vec::new();
     for s in &plans {
