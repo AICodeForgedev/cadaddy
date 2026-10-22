@@ -7,8 +7,8 @@
 //! - The [`Inbox`]: files opened while CADaddy already runs. They go to the running window as new
 //!   tabs, as AutoCAD opens a drawing double-clicked in the file manager in the running session.
 //!   On Linux and the BSDs a second start with files passes them over a socket in the settings
-//!   folder ([`instance`]) and exits; the macOS open-documents event is meant to feed the same
-//!   inbox.
+//!   folder ([`instance`]) and exits; on macOS the open-documents Apple Event feeds the same
+//!   inbox (`cadaddy_macos_open`).
 
 use std::ffi::OsStr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -148,7 +148,7 @@ pub struct Inbox {
 
 impl Inbox {
     /// Queue files to open (at most [`MAX_FILES`] waiting) and wake the window.
-    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn push(&self, files: impl IntoIterator<Item = String>) {
         {
             let mut queue = self.files.lock().unwrap_or_else(PoisonError::into_inner);

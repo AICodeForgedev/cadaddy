@@ -474,6 +474,13 @@ fn main() -> eframe::Result {
             _ => None,
         }
     };
+    // macOS: Finder sends the files to open as an Apple Event, to the running app or the one it
+    // starts, rather than on the command line.
+    #[cfg(target_os = "macos")]
+    {
+        let inbox = inbox.clone();
+        cadaddy_macos_open::install(Box::new(move |files| inbox.push(files)));
+    }
     let files = launch.files;
     install_io();
     cadaddy_ui_egui::startup::mark("logging and file formats");
