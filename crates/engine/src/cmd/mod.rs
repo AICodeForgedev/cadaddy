@@ -124,6 +124,7 @@ pub mod stairs;
 pub mod symbol;
 mod takeoff;
 pub mod tours;
+pub mod ugsheets;
 pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
@@ -328,6 +329,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tags::specs());
         v.extend(mep::specs());
         v.extend(concrete::specs());
+    v.extend(ugsheets::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
         v.extend(grounding::specs());

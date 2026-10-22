@@ -49,7 +49,7 @@ pub use spec::{
     Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind, Feeder, GridColumn,
     GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Issue, ItemKind, LayerRole, LayerSide, MAX_ASSEMBLY_LAYERS, Mep,
     MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, PanelCircuit, PointOfEntry, Rcp, Role, Roof, RoofSlope,
-    Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Side, Site, Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, WallFrom,
+    Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, WallFrom,
     WallMark, WallType, feet, inches, level_at, merge, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
