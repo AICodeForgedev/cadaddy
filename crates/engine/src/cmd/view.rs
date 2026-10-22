@@ -9,7 +9,10 @@ use super::machines::{SelectRun, number};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, View};
 
+pub mod camera;
 mod named_views;
+pub mod navwheel;
+pub mod quickview;
 pub mod view3d;
 mod vports;
 
@@ -112,6 +115,9 @@ pub fn specs() -> Vec<CommandSpec> {
     v.extend(named_views::specs());
     v.extend(vports::specs());
     v.extend(view3d::specs());
+    v.extend(navwheel::specs());
+    v.extend(camera::specs());
+    v.extend(quickview::specs());
     v
 }
 

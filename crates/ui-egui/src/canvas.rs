@@ -2080,12 +2080,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     {
         draw_geo(&painter, &xf, rect, g);
     }
-    let cube = app.ui.show_viewcube && sheet.is_none();
+    // Cameras' glyphs (CAMERADISPLAY 1) on the Model tab.
+    if sheet.is_none() {
+        draw_cameras(app, ui, &xf);
+    }
+    // VPMAX: the maximized viewport's border, until VPMIN.
+    if app.session.state().is_ok_and(|st| st.vpmax.is_some()) {
+        draw_vpmax_border(&painter, rect);
+    }
+    let cube = crate::viewcube::shown(app) && sheet.is_none();
     if cube {
         draw_viewcube(app, ui, rect);
     }
-    // The navigation bar, under the ViewCube's WCS menu.
-    crate::workspaces::navbar(app, ui, rect, cube.then(|| crate::viewcube::Layout::new(rect).pill.bottom()));
+    crate::navwheel::show(app, ui, rect, &xf);
+    crate::quickview::show(app, ui, rect);
+    // The navigation bar, under the ViewCube's WCS menu when the cube is at the top right.
+    let cube_top_right = cube && app.session.settings.navvcube_location == 0;
+    crate::workspaces::navbar(app, ui, rect, cube_top_right.then(|| crate::viewcube::layout_for(app, rect).pill.bottom()));
     viewport_controls(app, ui, rect, sheet.is_none());
     // Space while dragging a lasso, Shift+Space for selection cycling and Escape on its list are
     // the drawing area's; typing and Escape reach the command line even when its overlay is hidden.
@@ -2720,13 +2731,73 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
     }
 }
 
+/// The border VPMAX shows round a maximized viewport: dashed, in red.
+fn draw_vpmax_border(p: &egui::Painter, rect: Rect) {
+    let r = rect.shrink(3.0);
+    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+    let stroke = Stroke::new(3.0, Color32::from_rgb(0xd9, 0x3a, 0x3a));
+    p.extend(egui::Shape::dashed_line(&corners, stroke, 10.0, 6.0));
+}
+
+/// The glyphs of the drawing's cameras (while CAMERADISPLAY is 1): a camera body with its lens
+/// towards the target. Hovering names it; a double click looks from it.
+fn draw_cameras(app: &mut CadApp, ui: &mut egui::Ui, xf: &Xf) {
+    let Ok(d) = app.session.doc() else { return };
+    if d.header.i64("CAMERADISPLAY", 0) == 0 || app.session.state().is_ok_and(|st| st.mspace.is_some()) {
+        return;
+    }
+    let at = |q: cadaddy_geom::Vec3| xf.to_screen(xf.proj.map_or(q.xy(), |p| p.project(q)));
+    let cams: Vec<(String, Pos2, Pos2)> = d
+        .views
+        .iter()
+        .filter_map(|v| v.camera.map(|c| (v.name.clone(), at(c.position), at(c.target))))
+        .filter(|(_, p, _)| xf.rect.contains(*p))
+        .take(200)
+        .collect();
+    let p = ui.painter_at(xf.rect);
+    let ink = Color32::from_rgb(0xd8, 0xdc, 0xe2);
+    let mut look = None;
+    for (i, (name, pos, target)) in cams.iter().enumerate() {
+        let d = *target - *pos;
+        let fwd = if d.length() > 1e-3 { d.normalized() } else { vec2(1.0, 0.0) };
+        let side = vec2(-fwd.y, fwd.x);
+        let q = |a: f32, b: f32| *pos + fwd * a + side * b;
+        // The body behind the position, the lens in front of it.
+        let body = vec![q(-14.0, -6.0), q(0.0, -6.0), q(0.0, 6.0), q(-14.0, 6.0)];
+        let lens = vec![q(0.0, -2.5), q(8.0, -6.0), q(8.0, 6.0), q(0.0, 2.5)];
+        let resp = ui.interact(Rect::from_center_size(*pos, vec2(22.0, 22.0)), ui.id().with(("camera-glyph", i)), Sense::click());
+        crate::icons::describe_control(ui, &resp, name, None, false);
+        let col = if resp.hovered() { Color32::from_rgb(0x4d, 0x9c, 0xf5) } else { ink };
+        p.add(Shape::convex_polygon(body, Color32::from_rgba_unmultiplied(0x30, 0x36, 0x40, 220), Stroke::new(1.3, col)));
+        p.add(Shape::convex_polygon(lens, Color32::from_rgba_unmultiplied(0x30, 0x36, 0x40, 220), Stroke::new(1.3, col)));
+        let resp = resp.on_hover_text(format!("{name}: {}", crate::i18n::t("double-click to look from it")));
+        if resp.double_clicked() {
+            look = Some(name.clone());
+        }
+    }
+    if let Some(name) = look
+        && let Err(e) = app.run("camera.view", serde_json::json!({ "name": name }))
+    {
+        app.session.echo(e);
+    }
+}
+
 fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let l = crate::viewcube::Layout::new(rect);
-    let (c, ring) = (l.center, l.ring);
+    let l = crate::viewcube::layout_for(app, rect);
+    // NAVVCUBEOPACITY: faded while the pointer is away from it.
+    let away = !ui.rect_contains_pointer(l.bounds.union(l.pill));
+    let opacity = if away { f32::from(app.session.settings.navvcube_opacity.min(100)) / 100.0 } else { 1.0 };
+    ui.scope(|ui| {
+        ui.multiply_opacity(opacity);
+        draw_viewcube_parts(app, ui, rect, &l);
+    });
+}
+
+fn draw_viewcube_parts(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, l: &crate::viewcube::Layout) {
     let p = ui.painter_at(rect);
-    crate::viewcube::show(app, ui, &l);
+    crate::viewcube::show(app, ui, l);
     // WCS pill.
-    let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
+    let pill = l.pill;
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
     // The current UCS: WCS, its name, or Unnamed.
     let ucs = app.session.ucs();

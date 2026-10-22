@@ -3050,3 +3050,37 @@
 	Adjust DGN Underlay	Налаштувати підкладку DGN
 	DGN Underlay Levels	Рівні підкладки DGN
 	DGN...	DGN...
+	SteeringWheels	Штурвали
+	SteeringWheel	Штурвал
+	Wheel Zoom	Штурвал: масштаб
+	Wheel Pan	Штурвал: панорама
+	Wheel Orbit	Штурвал: орбіта
+	Wheel Look	Штурвал: огляд
+	Wheel Center	Штурвал: центр
+	Wheel Rewind	Штурвал: назад
+	Wheel Walk	Штурвал: прогулянка
+	ViewCube Settings	Параметри ViewCube
+	Create Camera	Створити камеру
+	Cameras	Камери
+	Change Camera	Змінити камеру
+	Delete Camera	Видалити камеру
+	View from Camera	Вигляд з камери
+	Quick View Drawings	Швидкий перегляд креслень
+	Quick View Layouts	Швидкий перегляд аркушів
+	Close Quick View Drawings	Закрити швидкий перегляд креслень
+	Close Quick View Layouts	Закрити швидкий перегляд аркушів
+	MVSETUP	MVSETUP
+	ZOOM	МАСШТАБ
+	ORBIT	ОРБІТА
+	REWIND	НАЗАД
+	PAN	ПАНОРАМА
+	CENTER	ЦЕНТР
+	WALK	ПРОГУЛЯНКА
+	LOOK	ОГЛЯД
+	Zoom: drag up or down	Масштаб: перетягніть угору або вниз
+	Orbit: drag to turn the model	Орбіта: перетягніть, щоб повернути модель
+	Rewind: back to the view before	Назад: до попереднього вигляду
+	Pan: drag the drawing	Панорама: перетягніть креслення
+	Center: click or drag onto a point	Центр: клацніть або перетягніть на точку
+	Look: drag to look around	Огляд: перетягніть, щоб роззирнутися
+	double-click to look from it	двічі клацніть, щоб дивитися з неї

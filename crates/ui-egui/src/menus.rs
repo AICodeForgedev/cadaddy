@@ -198,6 +198,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             None => {}
         }
     }
+    // The steering wheel and the quick views are shown by the app.
+    if let Some(r) = crate::navwheel::route(app, None, id, params) {
+        return Some(r);
+    }
+    if let Some(r) = crate::quickview::route(app, id, params) {
+        return Some(r);
+    }
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
     }

@@ -152,6 +152,8 @@ mod trimextend;
 mod ucs;
 mod utility;
 pub(crate) mod view;
+/// The steering wheel's wedges and the quick views' thumbnails, for the app.
+pub use view::{navwheel, quickview};
 
 pub mod curves;
 pub mod helpers;

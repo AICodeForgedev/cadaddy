@@ -1062,7 +1062,7 @@ fn drawing_version(s: &Session, path: &str) -> Version {
     if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
-fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
     let i = doc_index(s, "document.switch", p)?.ok_or_else(|| bad("document.switch", "`index`, `path` or `title` is required"))?;
     s.cancel();
     s.active = i;

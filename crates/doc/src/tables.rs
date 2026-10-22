@@ -910,6 +910,30 @@ pub struct NamedView {
     /// The render environment saved with the view (RENDERENVIRONMENT).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<crate::lighting::RenderEnvironment>,
+    /// The camera this view looks from (CAMERA): the view is the camera's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ViewCamera>,
+}
+
+/// A placed camera (CAMERA): where it stands, the point it looks at and its lens length (mm, on
+/// a 35 mm frame). Its named view looks along `target − position`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewCamera {
+    pub position: Vec3,
+    pub target: Vec3,
+    pub lens: f64,
+}
+
+impl ViewCamera {
+    /// The horizontal field of view (radians) of the lens on a 36 mm wide frame.
+    pub fn field_of_view(&self) -> f64 {
+        2.0 * (18.0 / self.lens.max(1e-6)).atan()
+    }
+    /// How far the camera is from its target.
+    pub fn distance(&self) -> f64 {
+        (self.position - self.target).len()
+    }
 }
 
 /// A UCS kept with a named view: its origin and axes, and the named UCS it was (empty when it

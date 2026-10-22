@@ -1671,6 +1671,10 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     .then(|| ViewUcs { name: field("UCSNAME").unwrap_or_default(), origin: t.p(110), x_axis: t.p(111), y_axis: t.p(112) })
                     .filter(|u| [u.origin, u.x_axis, u.y_axis].iter().all(|p| p.is_finite()) && u.x_axis.len() > 1e-9 && u.y_axis.len() > 1e-9);
                 let background = field("BACKGROUND").and_then(|c| cadaddy_color::Color::parse(&c));
+                // A camera's view (CADaddy xdata): the target, the camera a full direction away.
+                let camera = field("CAMERA")
+                    .map(|_| cadaddy_doc::ViewCamera { position: t.p(12) + t.p(11), target: t.p(12), lens: t.fd(42, 50.0) })
+                    .filter(|c| c.position.is_finite() && c.target.is_finite() && c.distance() > 1e-9 && c.lens.is_finite() && c.lens > 0.0);
                 let v = NamedView {
                     name: name.clone(),
                     center,
@@ -1683,6 +1687,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     ucs,
                     background,
                     environment: None,
+                    camera,
                 };
                 match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = v,

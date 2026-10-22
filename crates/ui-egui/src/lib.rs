@@ -110,6 +110,7 @@ pub mod matchpropdlg;
 pub mod menus;
 pub mod meppalette;
 pub mod multiprops;
+pub mod navwheel;
 pub mod opening;
 pub mod options;
 pub mod palettes;
@@ -121,6 +122,7 @@ pub mod plotstampdlg;
 pub mod plotstyles;
 pub mod projrulespalette;
 pub mod quick;
+pub mod quickview;
 pub mod renderwin;
 pub mod rfipalette;
 pub mod ribbon;
@@ -509,6 +511,10 @@ pub struct CadApp {
     pub bedit: bedit::State,
     /// Walk mode, while it is open: the drawing in 3D in place of the canvas ([`walk`]).
     pub walk: Option<walk::Walk>,
+    /// The steering wheel, while it is open ([`navwheel`]).
+    pub wheel: Option<navwheel::WheelUi>,
+    /// The quick views' strip, while it is open ([`quickview`]).
+    pub quickview: Option<quickview::QuickView>,
     /// The date the 3D view and Walk show the model at, from the 4D palette ([`fourdpalette`]).
     pub fourd: Option<fourdpalette::Shown>,
     /// The dialog open at the last frame (for `dialog.opened` events).
@@ -601,6 +607,8 @@ impl CadApp {
             layout_tabs: layouttabs::LayoutTabs::default(),
             bedit: bedit::State::default(),
             walk: None,
+            wheel: None,
+            quickview: None,
             fourd: None,
             last_dialog: None,
             walked: std::collections::BTreeSet::new(),

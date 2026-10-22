@@ -262,6 +262,8 @@ pub struct DocState {
     pub oops: Vec<(Space, Arc<Entity>)>,
     /// VPMAX's maximized viewport and what VPMIN puts back.
     pub vpmax: Option<cmd::classic::VpMax>,
+    /// The steering wheel's views to rewind to and its orbit pivot (NAVSWHEEL).
+    pub wheel: cmd::view::navwheel::Wheel,
     /// Model space's visual style (VSCURRENT): how 3D objects show on the Model tab.
     pub visual_style: cadaddy_render::shade::VisualStyle,
     pub uid: u64,
@@ -360,6 +362,7 @@ impl DocState {
             ucs_previous: Vec::new(),
             oops: Vec::new(),
             vpmax: None,
+            wheel: Default::default(),
             visual_style: cadaddy_render::shade::VisualStyle::Wireframe2d,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
@@ -650,6 +653,21 @@ pub struct Settings {
     pub lwdisplay: bool,
     /// TRANSPARENCYDISPLAY: draw objects with their transparency on screen (on by default).
     pub transparency_display: bool,
+    /// NAVVCUBEDISPLAY: where the ViewCube shows (bits: 1 in 2D views, 2 in 3D views; 0 never).
+    pub navvcube_display: u8,
+    /// NAVVCUBELOCATION: the ViewCube's corner: 0 top right, 1 top left, 2 bottom left, 3 bottom
+    /// right.
+    pub navvcube_location: u8,
+    /// NAVVCUBESIZE: 0 small, 1 normal, 2 large, 3 tiny, 4 automatic (by the drawing area's size).
+    pub navvcube_size: u8,
+    /// NAVVCUBEOPACITY: how opaque the ViewCube is while the pointer is away from it (0–100 %).
+    pub navvcube_opacity: u8,
+    /// NAVVCUBEORIENT: the cube shows the directions of 0 the world, 1 the current UCS.
+    pub navvcube_orient: u8,
+    /// NAVSWHEELSIZEBIG: the steering wheel's size: 0 small, 1 normal, 2 large, 3 extra large.
+    pub navswheel_size: u8,
+    /// NAVSWHEELOPACITYBIG: how opaque the steering wheel is (25–90 %).
+    pub navswheel_opacity: u8,
     /// PLOTTRANSPARENCYOVERRIDE: 0 never plots transparency, 1 (default) uses the page setup's or
     /// the Plot dialog's "Plot transparency", 2 always plots it.
     pub plot_transparency_override: u8,
@@ -781,6 +799,13 @@ impl Default for Settings {
             dynprompt: true,
             lwdisplay: false,
             transparency_display: true,
+            navvcube_display: 3,
+            navvcube_location: 0,
+            navvcube_size: 4,
+            navvcube_opacity: 50,
+            navvcube_orient: 0,
+            navswheel_size: 1,
+            navswheel_opacity: 50,
             plot_transparency_override: 1,
             selectioncycling: 2,
             selectsimilarmode: 130,
