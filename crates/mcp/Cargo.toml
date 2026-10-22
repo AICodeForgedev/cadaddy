@@ -14,3 +14,5 @@ cadcraft-render = { workspace = true }
 cadcraft-io = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# Secure randomness for the per-session control token (MIT OR Apache-2.0).
+getrandom = "0.3"

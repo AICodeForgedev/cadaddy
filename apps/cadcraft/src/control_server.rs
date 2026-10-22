@@ -51,8 +51,21 @@ impl Default for Limits {
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => {
-            log::info!("control server listening on 127.0.0.1:{port}");
-            serve_listener(l, Limits::default(), ctx)
+            // Loopback TCP cannot tell local users apart, so issue an unguessable per-session
+            // token in an owner-only file and require it on every request (CWE-306). A client
+            // (the MCP bridge) reads it from the file, which needs the desktop user's filesystem
+            // access; another local account cannot.
+            let token = match cadcraft_mcp::control_token::issue(port) {
+                Ok(t) => Arc::new(t),
+                Err(e) => {
+                    log::error!("control server not started: could not write the control token: {e}");
+                    return sync_channel::<ControlRequest>(0).1;
+                }
+            };
+            if let Ok(path) = cadcraft_mcp::control_token::token_path(port) {
+                log::info!("control server listening on 127.0.0.1:{port} (token in {})", path.display());
+            }
+            serve_listener(l, Limits::default(), ctx, token)
         }
         Err(e) => {
             log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
@@ -72,9 +85,9 @@ fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: imp
 }
 
 /// Accept connections on `listener` under `limits`; requests arrive on the returned receiver.
-fn serve_listener(listener: TcpListener, limits: Limits, ctx: egui::Context) -> Receiver<ControlRequest> {
+fn serve_listener(listener: TcpListener, limits: Limits, ctx: egui::Context, token: Arc<String>) -> Receiver<ControlRequest> {
     let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
-    std::thread::spawn(move || accept_loop(listener, tx, ctx, limits));
+    std::thread::spawn(move || accept_loop(listener, tx, ctx, limits, token));
     rx
 }
 
@@ -88,7 +101,7 @@ impl Drop for Slot {
     }
 }
 
-fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits) {
+fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits, token: Arc<String>) {
     let open = Arc::new(AtomicUsize::new(0));
     for mut stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
         let _ = stream.set_write_timeout(Some(limits.write_timeout));
@@ -100,9 +113,10 @@ fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui:
         let slot = Slot(Arc::clone(&open));
         let tx = tx.clone();
         let ctx = ctx.clone();
+        let token = Arc::clone(&token);
         let _ = std::thread::Builder::new().spawn(move || {
             let _slot = slot;
-            serve(stream, &tx, &ctx, limits);
+            serve(stream, &tx, &ctx, limits, &token);
         });
     }
 }
@@ -141,6 +155,7 @@ enum Line {
         id: Value,
         method: String,
         params: Value,
+        token: Option<String>,
     },
     Blank,
     /// Not a request: reply with this error and close the connection.
@@ -172,6 +187,7 @@ fn parse_line(bytes: &[u8]) -> Line {
         id: obj.get("id").cloned().unwrap_or(Value::Null),
         method: method.to_string(),
         params: obj.get("params").cloned().unwrap_or(json!({})),
+        token: obj.get("token").and_then(Value::as_str).map(str::to_string),
     }
 }
 
@@ -182,7 +198,7 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
-fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: Limits) {
+fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: Limits, token: &str) {
     if stream.set_read_timeout(Some(limits.idle_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
@@ -200,7 +216,18 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
             Ok(true) => match parse_line(&buf) {
                 Line::Blank => continue,
                 Line::Reject(e) => e,
-                Line::Request { id, method, params } => {
+                Line::Request { id, method, params, token: given } => {
+                    // Authenticate the peer before dispatching: loopback TCP does not identify the
+                    // OS user, so only a client holding the owner-only session token may drive the
+                    // desktop user's commands (CWE-306).
+                    if !given.map(|g| cadcraft_mcp::control_token::matches(token, &g)).unwrap_or(false) {
+                        let mut r = json!({"ok": false, "error": "unauthorized: missing or invalid control token", "state": "not-run"});
+                        if let Some(o) = r.as_object_mut() {
+                            o.insert("id".into(), id);
+                        }
+                        let _ = writeln!(out, "{r}");
+                        break;
+                    }
                     let (req, pending) = ControlRequest::new(method, params);
                     let mut r = match tx.try_send(req) {
                         Ok(()) => {
@@ -277,11 +304,14 @@ mod tests {
         }
     }
 
+    /// A fixed token for tests; real tokens are random (see `cadcraft_mcp::control_token`).
+    const TEST_TOKEN: &str = "test-control-token";
+
     /// The control server on a loopback port under `limits`; requests arrive on the receiver.
     fn serve_with(limits: Limits) -> (std::net::SocketAddr, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        (addr, serve_listener(listener, limits, egui::Context::default()))
+        (addr, serve_listener(listener, limits, egui::Context::default(), Arc::new(TEST_TOKEN.to_string())))
     }
 
     /// The control server on a loopback port, with a stand-in UI that echoes each method.
@@ -293,6 +323,11 @@ mod tests {
             }
         });
         addr
+    }
+
+    /// A request line carrying the test token, so it authenticates.
+    fn req_line(id: i64, method: &str) -> String {
+        json!({"id": id, "method": method, "token": TEST_TOKEN}).to_string() + "\n"
     }
 
     /// Send `input` on a new connection and read reply lines until the server closes it.
@@ -354,12 +389,12 @@ mod tests {
     fn a_full_queue_answers_busy() {
         let (addr, rx) = serve_with(short());
         // No UI drains the one-place queue: the first request fills it, the second finds it full.
-        let first = std::thread::spawn(move || exchange(addr, b"{\"id\":1,\"method\":\"m\"}\n"));
+        let first = std::thread::spawn(move || exchange(addr, req_line(1, "m").as_bytes()));
         let deadline = std::time::Instant::now() + Duration::from_secs(4);
         let busy = loop {
             let mut c = TcpStream::connect(addr).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            c.write_all(b"{\"id\":2,\"method\":\"m\"}\n").unwrap();
+            c.write_all(req_line(2, "m").as_bytes()).unwrap();
             let mut line = String::new();
             BufReader::new(c).read_line(&mut line).unwrap();
             let v: Value = serde_json::from_str(&line).unwrap();
@@ -377,7 +412,8 @@ mod tests {
         let addr = serve_echo();
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        c.write_all(b"{\"id\":3,\"method\":\"ping\"}\r\n\n{\"id\":4,\"method\":\"pong\"}\n").unwrap();
+        let input = format!("{}\n{}", req_line(3, "ping").trim_end(), req_line(4, "pong"));
+        c.write_all(input.as_bytes()).unwrap();
         let mut r = BufReader::new(c);
         for (id, method) in [(3, "ping"), (4, "pong")] {
             let mut line = String::new();
@@ -385,6 +421,32 @@ mod tests {
             let v: Value = serde_json::from_str(&line).unwrap();
             assert_eq!((v["id"].as_i64(), v["method"].as_str()), (Some(id), Some(method)), "{line}");
         }
+    }
+
+    #[test]
+    fn a_request_without_the_token_is_unauthorized() {
+        // A local peer that does not hold the session token cannot drive the app (CWE-306).
+        let addr = serve_echo();
+        let replies = exchange(addr, b"{\"id\":9,\"method\":\"ping\"}\n");
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["ok"], false);
+        assert!(replies[0]["error"].as_str().unwrap().contains("unauthorized"), "{replies:?}");
+        // A wrong token is also refused.
+        let wrong = exchange(addr, b"{\"id\":9,\"method\":\"ping\",\"token\":\"nope\"}\n");
+        assert_eq!(wrong[0]["ok"], false);
+        assert!(wrong[0]["error"].as_str().unwrap().contains("unauthorized"), "{wrong:?}");
+    }
+
+    #[test]
+    fn a_request_with_the_token_is_dispatched() {
+        let addr = serve_echo();
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(req_line(10, "ping").as_bytes()).unwrap();
+        let mut line = String::new();
+        BufReader::new(c).read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((v["ok"].as_bool(), v["method"].as_str()), (Some(true), Some("ping")), "{line}");
     }
 
     #[test]
