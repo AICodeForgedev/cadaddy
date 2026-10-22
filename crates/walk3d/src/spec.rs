@@ -100,6 +100,10 @@ pub struct BuildingSpec {
     /// status and answers: see [`crate::rfi`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rfis: Vec<crate::rfi::Rfi>,
+    /// Procurement: releases, the submittal log, lead times, order status (the engine's
+    /// `procure.*`, kept with the model it orders for).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procurement: Option<serde_json::Value>,
     /// What the documents say, for the print validator ([`crate::validate`]): symbols, schedules,
     /// dimension strings, rooms, the rules file and its gate setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1878,6 +1882,7 @@ impl BuildingSpec {
             schedule: Schedule::default(),
             walls: Vec::new(),
             rfis: Vec::new(),
+            procurement: None,
             prints: None,
             ceiling_types: Vec::new(),
             soffit_types: Vec::new(),

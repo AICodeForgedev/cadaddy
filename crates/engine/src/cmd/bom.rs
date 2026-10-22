@@ -423,11 +423,48 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
             },
         );
     }
-    for e in arr("equipment") {
+    // Lugs ordered separately from their gear (`gear.check`'s lug kits): a line per part of the
+    // kit, on the gear's level, so they are bought with it.
+    let equipment = arr("equipment");
+    for k in arr("lug_kits") {
+        let gear = st(&k, "gear");
+        let level = equipment.iter().find(|e| e["tag"].as_str() == Some(gear.as_str())).map(|e| st(e, "level")).unwrap_or_default();
+        let at = format!("{gear} {}", st(&k, "point"));
+        let lug = st(&k, "lug");
+        let bolt = st(&k, "bolt");
+        for (part, qty) in [
+            (lug.as_str(), "lugs"),
+            (bolt.as_str(), "bolts"),
+            ("nut", "nuts"),
+            ("flat washer", "flat_washers"),
+            ("Belleville washer", "belleville_washers"),
+        ] {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "lug kits".into(),
+                    item: format!("Lug kit {at}: {part}"),
+                    unit: "each",
+                    net: num(&k, qty),
+                    status: "rule",
+                    rule: Some("lugs not supplied with the gear (gear.check)".into()),
+                    level: level.clone(),
+                    elements: vec![format!("gear:{gear}")],
+                    ..Line::default()
+                },
+            );
+        }
+    }
+    for e in equipment {
+        let electrical = matches!(
+            st(&e, "kind").to_ascii_lowercase().as_str(),
+            "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
+        );
         add(
             lines,
             Line {
-                trade: "mechanical",
+                trade: if electrical { "electrical" } else { "mechanical" },
                 category: "equipment".into(),
                 item: format!("{} {}", st(&e, "kind"), st(&e, "tag")),
                 size: st(&e, "size"),
