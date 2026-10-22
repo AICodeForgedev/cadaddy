@@ -271,3 +271,69 @@ fn compare_their_files() {
     std::fs::write(dir.join("compare.md"), &report).unwrap();
     println!("{report}");
 }
+
+/// LibreCAD (dxfrw 0.6.3, AC1021) drops some entity types and changes some fields. This test
+/// builds a DXF mimicking LibreCAD's output shape and checks what CADaddy reads back (Q253).
+#[test]
+fn librecad_shaped_dxf_reads_back_correctly() {
+    hooks();
+    // Build a minimal DXF in the shape LibreCAD writes (AC1021, dxfrw header,
+    // lines, circles, polylines, text with %%C uppercase control codes, INSERT with z-scale 0).
+    let mut entities = String::new();
+    // A line on WALLS layer (LibreCAD preserves these).
+    entities.push_str("0\nLINE\n8\nWALLS\n62\n1\n10\n0.0\n20\n0.0\n30\n0.0\n11\n40.0\n21\n0.0\n31\n0.0\n");
+    // A circle.
+    entities.push_str("0\nCIRCLE\n8\nWALLS\n10\n60.0\n20\n10.0\n30\n0.0\n40\n8.0\n");
+    // TEXT with %%C (uppercase, as LibreCAD writes it).
+    entities.push_str("0\nTEXT\n8\nNOTES\n7\nstandard\n10\n0.0\n20\n60.0\n30\n0.0\n40\n2.5\n1\nPLAN %%C25\n");
+    // LWPOLYLINE (LibreCAD drops per-vertex widths).
+    entities.push_str("0\nLWPOLYLINE\n8\nWALLS\n90\n3\n70\n0\n10\n0.0\n20\n20.0\n42\n0.5\n10\n15.0\n20\n20.0\n10\n30.0\n20\n30.0\n");
+    // INSERT with z-scale 0 (LibreCAD's dxfrw bug).
+    entities.push_str("0\nINSERT\n8\nNOTES\n2\nTAG\n10\n100.0\n20\n60.0\n30\n0.0\n41\n1.0\n42\n1.0\n43\n0.0\n50\n0.0\n");
+
+    let bytes = format!(
+        "999\ndxfrw 0.6.3\n0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n0\nENDSEC\n\
+         0\nSECTION\n2\nTABLES\n\
+         0\nTABLE\n2\nLAYER\n70\n3\n\
+         0\nLAYER\n2\nWALLS\n62\n1\n6\nCONTINUOUS\n\
+         0\nLAYER\n2\nNOTES\n62\n3\n6\nCONTINUOUS\n\
+         0\nENDTAB\n\
+         0\nENDSEC\n\
+         0\nSECTION\n2\nBLOCKS\n\
+         0\nBLOCK\n8\n0\n2\nTAG\n10\n0.0\n20\n0.0\n30\n0.0\n70\n0\n\
+         0\nCIRCLE\n8\n0\n10\n0.0\n20\n0.0\n30\n0.0\n40\n2.0\n\
+         0\nENDBLK\n8\n0\n\
+         0\nENDSEC\n\
+         0\nSECTION\n2\nENTITIES\n{entities}\
+         0\nENDSEC\n0\nEOF\n"
+    );
+
+    let d = cadaddy_io::read(bytes.as_bytes(), "librecad-shaped.dxf").unwrap();
+    let c = census(&d);
+
+    // Lines, circles, text, polylines and inserts are preserved.
+    assert_eq!(c.get("Line").copied().unwrap_or(0), 1);
+    assert_eq!(c.get("Circle").copied().unwrap_or(0), 1);
+    assert_eq!(c.get("Text").copied().unwrap_or(0), 1);
+    assert_eq!(c.get("Polyline").copied().unwrap_or(0), 1);
+    assert_eq!(c.get("Block Reference").copied().unwrap_or(0), 1);
+
+    // INSERT z-scale 0 is normalized to 1.0.
+    let ins = d.model.iter().find_map(|e| {
+        if let EntityKind::Insert(i) = &e.kind { Some(i) } else { None }
+    }).expect("INSERT");
+    assert!((ins.scale.z - 1.0).abs() < 1e-9, "z-scale 0 must read as 1.0");
+
+    // TEXT %%C (uppercase) still decodes as the diameter symbol when rendered.
+    let txt = d.model.iter().find_map(|e| {
+        if let EntityKind::Text(t) = &e.kind { Some(t) } else { None }
+    }).expect("TEXT");
+    let plain = cadaddy_fonts::plain_text(&txt.value);
+    assert!(plain.contains('⌀'), "%%C should decode to ⌀, got: {plain}");
+
+    // Polyline bulge is preserved.
+    let pl = d.model.iter().find_map(|e| {
+        if let EntityKind::LwPolyline(p) = &e.kind { Some(p) } else { None }
+    }).expect("LWPOLYLINE");
+    assert!((pl.vertices[0].bulge - 0.5).abs() < 1e-6, "bulge should be 0.5");
+}
