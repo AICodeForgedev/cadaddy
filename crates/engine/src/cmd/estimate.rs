@@ -91,7 +91,7 @@ pub(super) fn obj<'a>(st: &'a mut Map<String, Value>, k: &str) -> Option<&'a mut
 }
 
 /// A BOM line's key: trade|category|item|size.
-fn key_of(l: &Value) -> String {
+pub(super) fn key_of(l: &Value) -> String {
     format!(
         "{}|{}|{}|{}",
         l["trade"].as_str().unwrap_or_default(),
