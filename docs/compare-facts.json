@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 775,
-    "count": 775,
+    "callableAsJson": 777,
+    "count": 777,
     "ids": [
       "-attedit",
       "-block",
@@ -429,6 +429,8 @@
       "measuregeom",
       "mep.edit",
       "mep.list",
+      "mep.qty",
+      "mep.qty.refresh",
       "mep.read",
       "mirror",
       "mleader",

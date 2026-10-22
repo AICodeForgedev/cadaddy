@@ -71,6 +71,7 @@ mod lisp;
 pub mod materials;
 mod measuregeom;
 pub mod mep;
+pub mod mepqty;
 mod mleader_content;
 mod mleader_edit;
 mod models3d;
@@ -284,6 +285,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
+        v.extend(mepqty::specs());
         v.extend(printset::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());

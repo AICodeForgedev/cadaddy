@@ -520,6 +520,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rcp = super::ceilings::build(d, &sp);
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    // Takeoff tables linked to the model count it again.
+    let qty_tables = super::mepqty::refresh(d, &sp);
     // Columns at the grid intersections.
     let grid_columns = super::grids::build(d, &sp);
     // Materials: the room's for its ceiling, else the building's for the part.
@@ -563,6 +565,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     Ok(r)
 }
