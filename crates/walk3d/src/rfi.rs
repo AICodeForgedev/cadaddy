@@ -68,10 +68,14 @@ pub enum RfiKind {
     PourHold,
     /// Rebar, conduits, sleeves and embeds that clash or lack cover in an element.
     EmbedConflict,
+    /// A utility or service entrance the building needs (power, telephone, CATV, fire alarm
+    /// monitoring, gas bonding) that the drawings don't show, or show too unclearly to lay out
+    /// before the slab.
+    ServiceEntrance,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 20] = [
+    pub const ALL: [RfiKind; 21] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -92,6 +96,7 @@ impl RfiKind {
         RfiKind::PadUndecided,
         RfiKind::PourHold,
         RfiKind::EmbedConflict,
+        RfiKind::ServiceEntrance,
     ];
 
     /// The snake_case name (as in JSON).
@@ -117,6 +122,7 @@ impl RfiKind {
             RfiKind::PadUndecided => "pad_undecided",
             RfiKind::PourHold => "pour_hold",
             RfiKind::EmbedConflict => "embed_conflict",
+            RfiKind::ServiceEntrance => "service_entrance",
         }
     }
 
@@ -147,6 +153,7 @@ impl RfiKind {
             RfiKind::PadUndecided => "Equipment pad not decided or not owned",
             RfiKind::PourHold => "Item to cast in not confirmed before the pour",
             RfiKind::EmbedConflict => "Rebar and embeds clash or lack cover",
+            RfiKind::ServiceEntrance => "Service entrance not shown or unclear",
         }
     }
 
@@ -163,7 +170,8 @@ impl RfiKind {
             | RfiKind::Grounding
             | RfiKind::PadUndecided
             | RfiKind::PourHold
-            | RfiKind::EmbedConflict => Severity::High,
+            | RfiKind::EmbedConflict
+            | RfiKind::ServiceEntrance => Severity::High,
             RfiKind::DetailUnused => Severity::Low,
             _ => Severity::Medium,
         }

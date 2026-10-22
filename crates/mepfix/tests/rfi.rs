@@ -40,9 +40,9 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
         assert_eq!(s.recall(), 1.0);
         seen.extend(rfis.iter().filter_map(|r| r.kind));
     }
-    // (The gear, labels, grounding and concrete reviews' kinds come from `gear.review`, `labels.check`,
-    // `grounding.check` and `concrete.review`, not the print gaps: engine tests/gear.rs, tests/labels.rs
-    // and tests/concrete.rs.)
+    // (The gear, labels, grounding, concrete and underground reviews' kinds come from `gear.review`,
+    // `labels.check`, `grounding.check`, `concrete.review` and `ugsheets.review`, not the print gaps: engine
+    // tests/gear.rs, tests/labels.rs, tests/concrete.rs and mepfix tests/ugsheets.rs.)
     for k in RfiKind::ALL.into_iter().filter(|k| {
         !matches!(
             k,
@@ -53,6 +53,7 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
                 | RfiKind::PadUndecided
                 | RfiKind::PourHold
                 | RfiKind::EmbedConflict
+                | RfiKind::ServiceEntrance
         )
     }) {
         assert!(seen.contains(&k), "{k:?} never found on seeds 1–6");

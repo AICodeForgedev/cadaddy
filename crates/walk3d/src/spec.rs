@@ -768,6 +768,14 @@ pub struct Mep {
     /// the notes show them (sizes as drawn: no sizing calculations).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grounding: Option<Grounding>,
+    /// Utility and service entrances (power, telephone, CATV, fire alarm monitoring, gas meter
+    /// bonding): what comes into the building underground and where.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<Service>,
+    /// The service kinds this building must have (empty: power and telephone), each one an
+    /// underground entrance laid out before the slab.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub required_services: Vec<String>,
 }
 
 /// The grounding electrode system, the bonds and the telecom grounding.
@@ -993,6 +1001,60 @@ impl Mep {
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
             && self.grounding.is_none()
+            && self.services.is_empty()
+            && self.required_services.is_empty()
+    }
+}
+
+/// A utility or service entrance: conduits from the property line or the utility's structure
+/// (a transformer pad, a handhole, the pedestal) to where they come up in the building, and the
+/// equipment they feed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Service {
+    /// `power`, `telephone`, `catv`, `fire_alarm`, `gas_bond`, or the project's own word.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    /// Where it starts outside the building and where it comes up inside (sheet units); `at`
+    /// missing: the drawings don't say where it enters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
+    /// The equipment it feeds (an equipment tag: `MSB`, the MDF's backboard, the FACP).
+    pub to: String,
+    pub conduits: u32,
+    pub conduit_in: f64,
+    /// `PVC Sch 40`, `PVC Sch 80`, `RGS`.
+    pub material: String,
+    /// Cover over the conduits, inches; encased in concrete.
+    pub cover_in: f64,
+    pub encased: bool,
+    /// Drawn on the plans as a route; `false`: only named in a note, a detail or the specs (the
+    /// field can't lay it out from the drawings).
+    pub shown: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+impl Default for Service {
+    fn default() -> Self {
+        Service {
+            kind: String::new(),
+            tag: String::new(),
+            level: String::new(),
+            from: None,
+            at: None,
+            to: String::new(),
+            conduits: 1,
+            conduit_in: 0.0,
+            material: String::new(),
+            cover_in: 0.0,
+            encased: false,
+            shown: true,
+            source: String::new(),
+        }
     }
 }
 
