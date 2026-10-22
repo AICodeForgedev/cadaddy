@@ -600,7 +600,7 @@ pub(crate) fn set_solid_props(so: &mut Solid3d, p: &Value) {
             num("taper").into_iter().for_each(|v| *taper = v.to_radians());
         }
         SolidShape::Revolution { angle, .. } => num("angle").into_iter().for_each(|v| *angle = v.to_radians()),
-        SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } => {}
+        SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. } => {}
     }
     if next.is_valid() {
         *so = next;

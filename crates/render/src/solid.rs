@@ -12,7 +12,7 @@ use lyon_tessellation::{FillOptions, FillTessellator, FillVertex, VertexSource};
 /// The solid's surfaces to `tol` as one closed mesh, display curves visible and the
 /// tessellation's own edges hidden.
 pub fn solid_mesh(s: &Solid3d, tol: f64) -> Mesh {
-    if matches!(s.shape, cadaddy_doc::SolidShape::Boolean { .. }) {
+    if matches!(s.shape, cadaddy_doc::SolidShape::Boolean { .. } | cadaddy_doc::SolidShape::Polyhedron { .. }) {
         return composite_mesh(s, tol);
     }
     let r = s.rings(tol);
