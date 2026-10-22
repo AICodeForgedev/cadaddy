@@ -2588,3 +2588,77 @@ menu	Modify	수정
 	Print Set Sheets	도면 세트 시트
 	Re-import Revised Set	개정 세트 다시 가져오기
 	Save Print Set	도면 세트 저장
+	Ahead	앞으로
+	Bottom / top AFF	하단 / 상단 (바닥 기준)
+	Clash	간섭
+	elements	개 요소
+	Field Viewer	현장 뷰어
+	Fit	맞춤
+	Keep	보관
+	New note	새 메모
+	No new notes to send	보낼 새 메모가 없습니다
+	No room matches	일치하는 실 없음
+	Note	메모
+	Note kept	메모 보관됨
+	Notes	메모
+	notes ready to sync	개 메모 동기화 준비됨
+	not typed	유형 없음
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	현장 패키지를 여십시오(CADaddy의 FIELDVIEW.EXPORT) 또는 여기에 놓으십시오
+	Open clashes and RFIs	미해결 간섭 및 RFI
+	RFI	RFI
+	Room number	실 번호
+	Search a room number, or tap a room	실 번호를 검색하거나 실을 탭하십시오
+	Send Notes	메모 보내기
+	Tap two points to measure	측정할 두 점을 탭하십시오
+	Trades	공종
+	Unit	유닛
+	Verified	확인됨
+	Verified point	확인된 점
+	What is there, as built	실제 시공된 상태
+	Plan	평면
+	3D	3D
+	Architectural	건축
+	Structural	구조
+	Mechanical	기계
+	Plumbing	위생배관
+	Fire protection	소방
+	Other	기타
+	stated	명시
+	inferred	추론
+	assumed	가정
+	Field Package	현장 패키지
+	Sync Field Notes	현장 메모 동기화
+	Field Notes	현장 메모
+	Detect Unit Types	유닛 유형 감지
+	List Unit Types	유닛 유형 목록
+	Unit Schedule	유닛 일람표
+	Unit Type Takeoff	유닛 유형별 물량
+	Override Generated Element	생성된 요소 재정의
+	List Overrides	재정의 목록
+	Revert Override	재정의 되돌리기
+	Accept Override After Review	검토 후 재정의 승인
+	Show or Hide Overrides	재정의 표시 또는 숨기기
+	Re-apply Overrides	재정의 다시 적용
+	Overrides	재정의
+	Select generated element (or an object drawn by hand to add)	생성된 요소 선택 (또는 추가할 직접 그린 객체)
+	Enter type mark	유형 기호 입력
+	Enter override to revert	되돌릴 재정의 입력
+	Verify	확인
+	review: the drawing changed here	검토: 이곳에서 도면이 변경됨
+	orphaned: its element is no longer generated	고립됨: 해당 요소가 더 이상 생성되지 않음
+	Project Rules	프로젝트 규칙
+	Domain:	도메인:
+	No project rules set.	프로젝트 규칙이 설정되지 않았습니다.
+	Tier:	계층:
+	Source:	출처:
+	Reason:	이유:
+	Overridden values:	재정의된 값:
+	No drawing open.	열린 도면이 없습니다.
+	List Project Rules	프로젝트 규칙 목록
+	Get Project Rule	프로젝트 규칙 가져오기
+	Set Project Rule	프로젝트 규칙 설정
+	Remove Project Rule	프로젝트 규칙 제거
+	Preview Project Rule Change	프로젝트 규칙 변경 미리 보기
+	Project Rules Label	프로젝트 규칙 레이블
+	Import Project Rules	프로젝트 규칙 불러오기
+	Export Project Rules	프로젝트 규칙 내보내기

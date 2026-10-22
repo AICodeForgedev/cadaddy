@@ -2671,3 +2671,77 @@
 	Accept	Прийняти
 	Cited:	Джерело:
 	Nothing waiting: agents' work is all accepted.	Нічого не очікує: усю роботу агентів прийнято.
+	Ahead	Вперед
+	Bottom / top AFF	Низ / верх від підлоги
+	Clash	Колізія
+	elements	елементів
+	Field Viewer	Переглядач для будмайданчика
+	Fit	Вписати
+	Keep	Зберегти
+	New note	Нова нотатка
+	No new notes to send	Немає нових нотаток для надсилання
+	No room matches	Немає відповідних приміщень
+	Note	Нотатка
+	Note kept	Нотатку збережено
+	Notes	Нотатки
+	notes ready to sync	нотаток готово до синхронізації
+	not typed	без типу
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Відкрийте пакет для будмайданчика (FIELDVIEW.EXPORT у CADaddy) або перетягніть його сюди
+	Open clashes and RFIs	Відкриті колізії та RFI
+	RFI	RFI
+	Room number	Номер приміщення
+	Search a room number, or tap a room	Знайдіть номер приміщення або торкніться приміщення
+	Send Notes	Надіслати нотатки
+	Tap two points to measure	Торкніться двох точок для вимірювання
+	Trades	Розділи
+	Unit	Номер-тип
+	Verified	Перевірено
+	Verified point	Перевірена точка
+	What is there, as built	Що там є, як збудовано
+	Plan	План
+	3D	3D
+	Architectural	Архітектура
+	Structural	Конструкції
+	Mechanical	ОВіК
+	Plumbing	Водопостачання і каналізація
+	Fire protection	Пожежогасіння
+	Other	Інше
+	stated	зазначено
+	inferred	виведено
+	assumed	припущено
+	Field Package	Пакет для будмайданчика
+	Sync Field Notes	Синхронізувати нотатки з будмайданчика
+	Field Notes	Нотатки з будмайданчика
+	Detect Unit Types	Визначити типи номерів
+	List Unit Types	Список типів номерів
+	Unit Schedule	Відомість номерів
+	Unit Type Takeoff	Специфікація за типами номерів
+	Override Generated Element	Перевизначити згенерований елемент
+	List Overrides	Список перевизначень
+	Revert Override	Скасувати перевизначення
+	Accept Override After Review	Прийняти перевизначення після перевірки
+	Show or Hide Overrides	Показати або приховати перевизначення
+	Re-apply Overrides	Застосувати перевизначення знову
+	Overrides	Перевизначення
+	Select generated element (or an object drawn by hand to add)	Виберіть згенерований елемент (або намальований вручну об'єкт для додавання)
+	Enter type mark	Введіть марку типу
+	Enter override to revert	Введіть перевизначення для скасування
+	Verify	Перевірити
+	review: the drawing changed here	перевірити: тут креслення змінилося
+	orphaned: its element is no longer generated	осиротіле: його елемент більше не генерується
+	Project Rules	Правила проекту
+	Domain:	Домен:
+	No project rules set.	Правила проекту не встановлені.
+	Tier:	Рівень:
+	Source:	Джерело:
+	Reason:	Причина:
+	Overridden values:	Перевизначені значення:
+	No drawing open.	Креслення не відкрито.
+	List Project Rules	Список правил проєкту
+	Get Project Rule	Отримати правило проєкту
+	Set Project Rule	Задати правило проєкту
+	Remove Project Rule	Видалити правило проєкту
+	Preview Project Rule Change	Попередній перегляд зміни правила проєкту
+	Project Rules Label	Мітка правил проєкту
+	Import Project Rules	Імпорт правил проєкту
+	Export Project Rules	Експорт правил проєкту

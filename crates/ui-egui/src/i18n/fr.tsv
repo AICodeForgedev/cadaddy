@@ -2375,3 +2375,77 @@
 	Print Set Sheets	Feuilles du jeu de plans
 	Re-import Revised Set	Réimporter le jeu révisé
 	Save Print Set	Enregistrer le jeu de plans
+	Ahead	Avancer
+	Bottom / top AFF	Bas / haut au-dessus du sol fini
+	Clash	Conflit
+	elements	éléments
+	Field Viewer	Visionneuse de chantier
+	Fit	Ajuster
+	Keep	Garder
+	New note	Nouvelle note
+	No new notes to send	Aucune nouvelle note à envoyer
+	No room matches	Aucune pièce ne correspond
+	Note	Note
+	Note kept	Note gardée
+	Notes	Notes
+	notes ready to sync	notes prêtes à synchroniser
+	not typed	sans type
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Ouvrez un paquet de chantier (FIELDVIEW.EXPORT dans CADaddy) ou déposez-le ici
+	Open clashes and RFIs	Conflits et RFI ouverts
+	RFI	RFI
+	Room number	Numéro de pièce
+	Search a room number, or tap a room	Cherchez un numéro de pièce ou touchez une pièce
+	Send Notes	Envoyer les notes
+	Tap two points to measure	Touchez deux points pour mesurer
+	Trades	Corps d'état
+	Unit	Unité
+	Verified	Vérifié
+	Verified point	Point vérifié
+	What is there, as built	Ce qui est là, tel que construit
+	Plan	Plan
+	3D	3D
+	Architectural	Architecture
+	Structural	Structure
+	Mechanical	CVC
+	Plumbing	Plomberie
+	Fire protection	Protection incendie
+	Other	Autres
+	stated	indiqué
+	inferred	déduit
+	assumed	supposé
+	Field Package	Paquet de chantier
+	Sync Field Notes	Synchroniser les notes de chantier
+	Field Notes	Notes de chantier
+	Detect Unit Types	Détecter les types d'unité
+	List Unit Types	Lister les types d'unité
+	Unit Schedule	Tableau des unités
+	Unit Type Takeoff	Métré par type d'unité
+	Override Generated Element	Remplacer l'élément généré
+	List Overrides	Lister les remplacements
+	Revert Override	Annuler le remplacement
+	Accept Override After Review	Accepter le remplacement après vérification
+	Show or Hide Overrides	Afficher ou masquer les remplacements
+	Re-apply Overrides	Réappliquer les remplacements
+	Overrides	Remplacements
+	Select generated element (or an object drawn by hand to add)	Sélectionnez l'élément généré (ou un objet dessiné à la main à ajouter)
+	Enter type mark	Entrez le repère de type
+	Enter override to revert	Entrez le remplacement à annuler
+	Verify	Vérifier
+	review: the drawing changed here	à vérifier : le dessin a changé ici
+	orphaned: its element is no longer generated	orphelin : son élément n'est plus généré
+	Project Rules	Règles du projet
+	Domain:	Domaine :
+	No project rules set.	Aucune règle de projet définie.
+	Tier:	Niveau :
+	Source:	Source :
+	Reason:	Raison :
+	Overridden values:	Valeurs remplacées :
+	No drawing open.	Aucun dessin ouvert.
+	List Project Rules	Lister les règles du projet
+	Get Project Rule	Obtenir une règle du projet
+	Set Project Rule	Définir une règle du projet
+	Remove Project Rule	Supprimer une règle du projet
+	Preview Project Rule Change	Aperçu du changement de règle
+	Project Rules Label	Libellé des règles du projet
+	Import Project Rules	Importer les règles du projet
+	Export Project Rules	Exporter les règles du projet

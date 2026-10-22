@@ -2583,3 +2583,77 @@ menu	View	عرض
 	Print Set Sheets	لوحات مجموعة الطباعة
 	Re-import Revised Set	إعادة استيراد المجموعة المعدّلة
 	Save Print Set	حفظ مجموعة الطباعة
+	Ahead	إلى الأمام
+	Bottom / top AFF	الأسفل / الأعلى فوق الأرضية
+	Clash	تعارض
+	elements	عناصر
+	Field Viewer	عارض الموقع
+	Fit	ملاءمة
+	Keep	احتفظ
+	New note	ملاحظة جديدة
+	No new notes to send	لا ملاحظات جديدة للإرسال
+	No room matches	لا توجد غرفة مطابقة
+	Note	ملاحظة
+	Note kept	تم حفظ الملاحظة
+	Notes	ملاحظات
+	notes ready to sync	ملاحظات جاهزة للمزامنة
+	not typed	بلا نوع
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	افتح حزمة موقع (FIELDVIEW.EXPORT في CADaddy) أو أفلتها هنا
+	Open clashes and RFIs	التعارضات وطلبات المعلومات المفتوحة
+	RFI	RFI
+	Room number	رقم الغرفة
+	Search a room number, or tap a room	ابحث عن رقم غرفة أو انقر على غرفة
+	Send Notes	إرسال الملاحظات
+	Tap two points to measure	انقر على نقطتين للقياس
+	Trades	التخصصات
+	Unit	الوحدة
+	Verified	تم التحقق
+	Verified point	نقطة متحقق منها
+	What is there, as built	ما هو موجود كما نُفذ
+	Plan	مسقط
+	3D	3D
+	Architectural	معماري
+	Structural	إنشائي
+	Mechanical	ميكانيكي
+	Plumbing	سباكة
+	Fire protection	الحماية من الحريق
+	Other	أخرى
+	stated	مذكور
+	inferred	مستنتج
+	assumed	مفترض
+	Field Package	حزمة الموقع
+	Sync Field Notes	مزامنة ملاحظات الموقع
+	Field Notes	ملاحظات الموقع
+	Detect Unit Types	اكتشاف أنواع الوحدات
+	List Unit Types	قائمة أنواع الوحدات
+	Unit Schedule	جدول الوحدات
+	Unit Type Takeoff	حصر الكميات حسب نوع الوحدة
+	Override Generated Element	تجاوز عنصر مُولَّد
+	List Overrides	سرد التجاوزات
+	Revert Override	التراجع عن التجاوز
+	Accept Override After Review	قبول التجاوز بعد المراجعة
+	Show or Hide Overrides	إظهار التجاوزات أو إخفاؤها
+	Re-apply Overrides	إعادة تطبيق التجاوزات
+	Overrides	التجاوزات
+	Select generated element (or an object drawn by hand to add)	حدد عنصرًا مُولَّدًا (أو كائنًا مرسومًا يدويًا لإضافته)
+	Enter type mark	أدخل علامة النوع
+	Enter override to revert	أدخل التجاوز المراد التراجع عنه
+	Verify	تحقق
+	review: the drawing changed here	مراجعة: تغيّر الرسم هنا
+	orphaned: its element is no longer generated	يتيم: لم يعد عنصره يُولَّد
+	Project Rules	قواعد المشروع
+	Domain:	المجال:
+	No project rules set.	لم يتم تعيين قواعد المشروع.
+	Tier:	المستوى:
+	Source:	المصدر:
+	Reason:	السبب:
+	Overridden values:	القيم المتجاوزة:
+	No drawing open.	لا يوجد رسم مفتوح.
+	List Project Rules	عرض قواعد المشروع
+	Get Project Rule	جلب قاعدة مشروع
+	Set Project Rule	تعيين قاعدة مشروع
+	Remove Project Rule	إزالة قاعدة مشروع
+	Preview Project Rule Change	معاينة تغيير قاعدة المشروع
+	Project Rules Label	تسمية قواعد المشروع
+	Import Project Rules	استيراد قواعد المشروع
+	Export Project Rules	تصدير قواعد المشروع

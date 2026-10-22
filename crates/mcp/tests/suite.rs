@@ -62,6 +62,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("mep", json!({ "action": "list" }), json!({ "id": "abc" })),
         ("bim_job", json!({ "action": "briefing" }), json!({ "action": "fly" })),
         ("bim_types", json!({ "action": "list" }), json!({ "action": "set", "fields": 5 })),
+        ("project_rules", json!({ "action": "list" }), json!({ "action": "set", "domain": "mounting_height", "key": 5 })),
         ("select", json!({ "all": true }), json!({ "handles": "1A" })),
         ("get_variable", json!({ "name": "CLAYER" }), json!({})),
         ("set_variable", json!({ "name": "LTSCALE", "value": 2 }), json!({ "name": "LTSCALE" })),

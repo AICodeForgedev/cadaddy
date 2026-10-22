@@ -89,10 +89,10 @@ fn pipe_runs_score_against_truth() {
 
             let s = score::score_runs(t, level_code, "pipe", &runs, 0.5);
 
-            // We expect reasonable recall — the reader should find most pipe runs.
-            // Precision may be lower if runs get split or duplicated.
+            // The reader finds nearly every pipe run (straight runs, not chains: 0.997+ on these
+            // sets since Q265). Precision may be lower if runs get split or duplicated.
             assert!(
-                s.recall > 0.15,
+                s.recall > 0.9,
                 "seed {seed} level {level_code}: recall {:.3} too low (truth {:.1} ft, found {:.1} ft)",
                 s.recall,
                 s.truth_length_ft,

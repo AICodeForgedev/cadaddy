@@ -140,16 +140,33 @@ pub fn read_pipes(d: &Drawing, sh: &Sheet) -> (Vec<FoundRun>, Vec<DetectedRiser>
             continue;
         }
 
-        found.push(FoundRun {
-            level: level.clone(),
-            kind: "pipe".to_string(),
-            system,
-            shape: "pipe".to_string(),
-            size_in: [size, size],
-            from_ft,
-            to_ft,
-            bottom_ft,
-        });
+        // One run per straight stretch: a chain that turns (a branch and its armover, a main's
+        // corner) is several runs, not one line from its first point to its last.
+        let _ = (from_ft, to_ft);
+        let mut start = 0usize;
+        for k in 1..pts.len() {
+            let last = k + 1 == pts.len();
+            let turns = !last
+                && pts.get(k + 1).zip(pts.get(k)).zip(pts.get(start)).is_some_and(|((n, c), s0)| {
+                    let (u, v) = (*c - *s0, *n - *c);
+                    (u.x * v.y - u.y * v.x).abs() > 1e-6 * u.len().max(1.0) * v.len().max(1.0)
+                });
+            if !(turns || last) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (pts.get(start), pts.get(k)) else { break };
+            found.push(FoundRun {
+                level: level.clone(),
+                kind: "pipe".to_string(),
+                system: system.clone(),
+                shape: "pipe".to_string(),
+                size_in: [size, size],
+                from_ft: building_from_model(sh, [a.x, a.y]),
+                to_ft: building_from_model(sh, [b.x, b.y]),
+                bottom_ft,
+            });
+            start = k;
+        }
 
         if found.len() >= MAX_RUNS {
             break;

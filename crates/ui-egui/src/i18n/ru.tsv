@@ -2376,3 +2376,77 @@
 	Print Set Sheets	Листы комплекта чертежей
 	Re-import Revised Set	Повторно импортировать исправленный комплект
 	Save Print Set	Сохранить комплект чертежей
+	Ahead	Вперёд
+	Bottom / top AFF	Низ / верх от пола
+	Clash	Коллизия
+	elements	элементов
+	Field Viewer	Просмотрщик для стройки
+	Fit	Вписать
+	Keep	Сохранить
+	New note	Новая заметка
+	No new notes to send	Нет новых заметок для отправки
+	No room matches	Нет подходящих помещений
+	Note	Заметка
+	Note kept	Заметка сохранена
+	Notes	Заметки
+	notes ready to sync	заметок готово к синхронизации
+	not typed	без типа
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Откройте пакет для стройки (FIELDVIEW.EXPORT в CADaddy) или перетащите его сюда
+	Open clashes and RFIs	Открытые коллизии и RFI
+	RFI	RFI
+	Room number	Номер помещения
+	Search a room number, or tap a room	Найдите номер помещения или коснитесь помещения
+	Send Notes	Отправить заметки
+	Tap two points to measure	Коснитесь двух точек для измерения
+	Trades	Разделы
+	Unit	Номер-тип
+	Verified	Проверено
+	Verified point	Проверенная точка
+	What is there, as built	Что там есть, как построено
+	Plan	План
+	3D	3D
+	Architectural	Архитектура
+	Structural	Конструкции
+	Mechanical	ОВиК
+	Plumbing	Водопровод и канализация
+	Fire protection	Пожаротушение
+	Other	Прочее
+	stated	указано
+	inferred	выведено
+	assumed	предположено
+	Field Package	Пакет для стройки
+	Sync Field Notes	Синхронизировать заметки со стройки
+	Field Notes	Заметки со стройки
+	Detect Unit Types	Определить типы номеров
+	List Unit Types	Список типов номеров
+	Unit Schedule	Ведомость номеров
+	Unit Type Takeoff	Спецификация по типам номеров
+	Override Generated Element	Переопределить созданный элемент
+	List Overrides	Список переопределений
+	Revert Override	Отменить переопределение
+	Accept Override After Review	Принять переопределение после проверки
+	Show or Hide Overrides	Показать или скрыть переопределения
+	Re-apply Overrides	Применить переопределения заново
+	Overrides	Переопределения
+	Select generated element (or an object drawn by hand to add)	Выберите созданный элемент (или нарисованный вручную объект для добавления)
+	Enter type mark	Введите марку типа
+	Enter override to revert	Введите переопределение для отмены
+	Verify	Проверить
+	review: the drawing changed here	проверить: здесь чертёж изменился
+	orphaned: its element is no longer generated	осиротевшее: его элемент больше не создаётся
+	Project Rules	Правила проекта
+	Domain:	Домен:
+	No project rules set.	Правила проекта не установлены.
+	Tier:	Уровень:
+	Source:	Источник:
+	Reason:	Причина:
+	Overridden values:	Переопределённые значения:
+	No drawing open.	Чертёж не открыт.
+	List Project Rules	Список правил проекта
+	Get Project Rule	Получить правило проекта
+	Set Project Rule	Задать правило проекта
+	Remove Project Rule	Удалить правило проекта
+	Preview Project Rule Change	Предпросмотр изменения правила проекта
+	Project Rules Label	Метка правил проекта
+	Import Project Rules	Импорт правил проекта
+	Export Project Rules	Экспорт правил проекта

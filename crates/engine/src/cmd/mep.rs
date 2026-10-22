@@ -709,6 +709,22 @@ fn add_terminal_mesh(m: &mut Mesh, center: Vec2, size_in: [f64; 2], z0: f64, upf
     }
 }
 
+/// A sprinkler head at its deflector height `z0`: a 1" body and a 2" deflector disc, the body
+/// above the deflector for pendent and sidewall heads (they hang from their pipe), below it for
+/// upright heads (they stand on theirs).
+fn add_sprinkler_mesh(m: &mut Mesh, center: Vec2, kind: &str, z0: f64, upf: f64) {
+    let inch = upf / 12.0;
+    let body = 2.5 * inch;
+    let disc = 0.25 * inch;
+    if kind == "sprinkler_upright" {
+        add_upright_cylinder(m, center, 0.5 * inch, z0 - body, z0);
+        add_upright_cylinder(m, center, 1.0 * inch, z0, z0 + disc);
+    } else {
+        add_upright_cylinder(m, center, 0.5 * inch, z0, z0 + body);
+        add_upright_cylinder(m, center, 1.0 * inch, z0 - disc, z0);
+    }
+}
+
 /// An upright 16-sided cylinder (a tank) from z0 to z1.
 fn add_upright_cylinder(m: &mut Mesh, c: Vec2, r: f64, z0: f64, z1: f64) {
     if !(r > 1e-9 && z1 > z0) {
@@ -890,7 +906,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let center = Vec2::new(term.at[0], term.at[1]);
         let z0 = (level.elevation_ft + term.bottom_ft) * upf;
         let mut m = super::wallgen::empty_mesh();
-        add_terminal_mesh(&mut m, center, term.size_in, z0, upf);
+        if term.terminal_kind.starts_with("sprinkler") {
+            add_sprinkler_mesh(&mut m, center, &term.terminal_kind, z0, upf);
+        } else {
+            add_terminal_mesh(&mut m, center, term.size_in, z0, upf);
+        }
 
         if !m.faces.is_empty() {
             let source = term.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);

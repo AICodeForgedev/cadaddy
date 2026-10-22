@@ -71,6 +71,15 @@ fn rect_width(cfm: f64, h: f64, fpm: f64, max_w: f64) -> f64 {
     w.min(max_w.max(8.0))
 }
 
+/// The pipe schedule (light hazard, steel) the fire protection sheets print: the smallest size
+/// that may carry `heads` sprinkler heads.
+pub const PIPE_SCHEDULE: &[(f64, usize)] = &[(1.0, 2), (1.25, 3), (1.5, 5), (2.0, 10), (2.5, 30), (3.0, 60)];
+
+/// Branch pipe size for a number of heads downstream, inches.
+pub fn head_pipe(heads: usize) -> f64 {
+    PIPE_SCHEDULE.iter().find(|(_, n)| heads <= *n).map_or(4.0, |(d, _)| *d)
+}
+
 fn floor_to(v: f64, step: f64) -> f64 {
     (v / step + 1e-9).floor() * step
 }
@@ -527,8 +536,21 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             neck_in: neck,
             cfm,
             node,
+            mount: None,
         });
         id
+    };
+    // Sprinklers draw from a stream of their own, so the rest of each set doesn't move.
+    let mut sprk = Rng::new(seed ^ 0x5350_524B_4C52);
+    // Heads offset from their branch line on armovers; sidewall heads along the corridor.
+    let armovers = sprk.chance(0.5);
+    let sidewall = sprk.chance(0.4);
+    let sprig = 4.0 / 12.0;
+    let set_mount = |t: &mut Truth, id: &str, mount: &str, tag: &str| {
+        if let Some(tm) = t.terminals.iter_mut().find(|x| x.id == id) {
+            tm.mount = Some(mount.into());
+            tm.type_tag = tag.into();
+        }
     };
 
     for f in &floors {
@@ -861,10 +883,21 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
             size_prev = size;
             x_prev = *x;
             if *head {
-                let h = net.node("terminal", "FP", lv, [*x, y_fp, e + f.corr_clg]);
-                net.link(n, h, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
+                // Pendent in the corridor ceiling, or sidewall on its north wall (an arm out to
+                // the wall, the head 4" under the ceiling).
+                let (from, at, mount, tag) = if sidewall {
+                    let wy = y2 - 0.33;
+                    let a = net.node("", "FP", lv, [*x, wy, fz]);
+                    net.link(n, a, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
+                    (a, [*x, wy, e + f.corr_clg - sprig], "sidewall", "SH-3")
+                } else {
+                    (n, [*x, y_fp, e + f.corr_clg], "pendent", "SH-1")
+                };
+                let h = net.node("terminal", "FP", lv, at);
+                net.link(from, h, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
                 let nid = net.nodes.get(h).map(|n| n.id.clone());
-                let tid = add_term(&mut t, "sprinkler_head", "SH-1", "FP", lv, [*x, y_fp, e + f.corr_clg], [0.0, 0.0], 0.5, None, nid);
+                let tid = add_term(&mut t, "sprinkler_head", tag, "FP", lv, at, [0.0, 0.0], 0.5, None, nid);
+                set_mount(&mut t, &tid, mount, tag);
                 if let Some(nd) = net.nodes.get_mut(h) {
                     nd.connects = Some(tid);
                 }
@@ -883,7 +916,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                 } else {
                     &[0.3, 0.75]
                 };
-                let bsize = if fr.len() >= 3 { 1.5 } else { 1.25 };
+                // Pipe schedule sizing (light hazard): each piece by the heads downstream of it.
+                let bsize = head_pipe(fr.len());
                 let mut from = n;
                 let mut bz = fz;
                 if plant_fp_x.is_some_and(|px| (px - x).abs() < 1e-6) && !south {
@@ -898,23 +932,60 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                     planted.extend([s1, s2, s3].iter().filter_map(|i| net.segs.get(*i).map(|s| s.id.clone())));
                     from = c;
                 }
+                // Armovers go toward the nearer side wall of the room, alternating in big rooms.
+                let toward_west = *bx - rm.min_ft[0] <= rm.max_ft[0] - *bx;
                 for (k, fy) in fr.iter().enumerate() {
                     let y = wall + dir * fy * depth;
                     let hn = net.node("", "FP", lv, [*bx, y, bz]);
-                    let s = net.link(from, hn, "FP", "pipe", [bsize, bsize], lv, &fsheet);
+                    let piece = head_pipe(fr.len() - k);
+                    let s = net.link(from, hn, "FP", "pipe", [piece, piece], lv, &fsheet);
                     if bz != fz && k == 0 {
                         planted.extend(net.segs.get(s).map(|s| s.id.clone()));
                     }
-                    let h = net.node("terminal", "FP", lv, [*bx, y, e + clg]);
-                    net.link(hn, h, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
+                    let mut drop_from = hn;
+                    let mut hx = *bx;
+                    if armovers {
+                        let west = if fr.len() > 1 { (k % 2 == 0) == toward_west } else { toward_west };
+                        hx = *bx + if west { -1.5 } else { 1.5 };
+                        let a = net.node("", "FP", lv, [hx, y, bz]);
+                        let s = net.link(hn, a, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
+                        if bz != fz {
+                            planted.extend(net.segs.get(s).map(|s| s.id.clone()));
+                        }
+                        drop_from = a;
+                    }
+                    let h = net.node("terminal", "FP", lv, [hx, y, e + clg]);
+                    net.link(drop_from, h, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
                     let nid = net.nodes.get(h).map(|n| n.id.clone());
-                    let tid = add_term(&mut t, "sprinkler_head", "SH-1", "FP", lv, [*bx, y, e + clg], [0.0, 0.0], 0.5, None, nid);
+                    let tid = add_term(&mut t, "sprinkler_head", "SH-1", "FP", lv, [hx, y, e + clg], [0.0, 0.0], 0.5, None, nid);
+                    set_mount(&mut t, &tid, "pendent", "SH-1");
                     if let Some(nd) = net.nodes.get_mut(h) {
                         nd.connects = Some(tid);
                     }
                     from = hn;
                 }
             }
+        }
+        // The mechanical room is open to structure: a branch off the riser along its south side
+        // with upright heads on 4" sprigs.
+        let y_mb = 0.12 * d_s;
+        let (bn, _) = net.run(fp_tee, &[[x_fr, y_mb, fz]], "FP", "pipe", [1.25, 1.25], lv, &fsheet);
+        let mut from = bn.last().copied().unwrap_or(fp_tee);
+        for (k, hxf) in [0.3, 0.55, 0.8].iter().enumerate() {
+            let hx = hxf * w0;
+            let n = net.node("", "FP", lv, [hx, y_mb, fz]);
+            let size = head_pipe(3 - k);
+            net.link(from, n, "FP", "pipe", [size, size], lv, &fsheet);
+            let at = [hx, y_mb, fz + sprig];
+            let h = net.node("terminal", "FP", lv, at);
+            net.link(n, h, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
+            let nid = net.nodes.get(h).map(|n| n.id.clone());
+            let tid = add_term(&mut t, "sprinkler_head", "SH-2", "FP", lv, at, [0.0, 0.0], 0.5, None, nid);
+            set_mount(&mut t, &tid, "upright", "SH-2");
+            if let Some(nd) = net.nodes.get_mut(h) {
+                nd.connects = Some(tid);
+            }
+            from = n;
         }
         if lv == "1" {
             let svc = net.node("service", "FP", lv, [x_fr, y_fr, 0.5]);

@@ -431,6 +431,7 @@ const ELEMENTS: &[&str] = &[
     "IFCPIPEFITTING",
     "IFCCABLECARRIERFITTING",
     "IFCAIRTERMINAL",
+    "IFCFIRESUPPRESSIONTERMINAL",
 ];
 const SPATIAL: &[&str] = &["IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCSPACE"];
 const OBJECTS: &[&str] = &[
@@ -460,6 +461,7 @@ const OBJECTS: &[&str] = &[
     "IFCPIPEFITTING",
     "IFCCABLECARRIERFITTING",
     "IFCAIRTERMINAL",
+    "IFCFIRESUPPRESSIONTERMINAL",
     "IFCUNITARYEQUIPMENT",
     "IFCAIRTERMINALBOX",
     "IFCFAN",
@@ -610,6 +612,10 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     );
     m.insert("IFCCABLECARRIERFITTING", element(&["BEND", "CROSS", "REDUCER", "TEE", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCAIRTERMINAL", element(&["DIFFUSER", "GRILLE", "LOUVRE", "REGISTER", "USERDEFINED", "NOTDEFINED"]));
+    m.insert(
+        "IFCFIRESUPPRESSIONTERMINAL",
+        element(&["BREECHINGINLET", "FIREHYDRANT", "FIREMONITOR", "HOSEREEL", "SPRINKLER", "SPRINKLERDEFLECTOR", "USERDEFINED", "NOTDEFINED"]),
+    );
     // IFC4's predefined types of the equipment classes.
     m.insert(
         "IFCUNITARYEQUIPMENT",

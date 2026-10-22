@@ -28,3 +28,5 @@ cadaddy-engine = { workspace = true }
 
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
+# Read sprinklers become a 3D model and IFC (sprinkler_reader's end-to-end test).
+cadaddy-engine = { workspace = true }

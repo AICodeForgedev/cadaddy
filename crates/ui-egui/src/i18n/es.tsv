@@ -2594,3 +2594,77 @@
 	Print Set Sheets	Hojas del juego de planos
 	Re-import Revised Set	Reimportar juego revisado
 	Save Print Set	Guardar juego de planos
+	Ahead	Adelante
+	Bottom / top AFF	Inferior / superior sobre piso
+	Clash	Interferencia
+	elements	elementos
+	Field Viewer	Visor de obra
+	Fit	Ajustar
+	Keep	Guardar
+	New note	Nueva nota
+	No new notes to send	No hay notas nuevas para enviar
+	No room matches	Ninguna sala coincide
+	Note	Nota
+	Note kept	Nota guardada
+	Notes	Notas
+	notes ready to sync	notas listas para sincronizar
+	not typed	sin tipo
+	Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here	Abra un paquete de obra (FIELDVIEW.EXPORT en CADaddy) o suéltelo aquí
+	Open clashes and RFIs	Interferencias y RFI abiertas
+	RFI	RFI
+	Room number	Número de sala
+	Search a room number, or tap a room	Busque un número de sala o toque una sala
+	Send Notes	Enviar notas
+	Tap two points to measure	Toque dos puntos para medir
+	Trades	Oficios
+	Unit	Unidad
+	Verified	Verificado
+	Verified point	Punto verificado
+	What is there, as built	Lo que hay, según lo construido
+	Plan	Planta
+	3D	3D
+	Architectural	Arquitectura
+	Structural	Estructura
+	Mechanical	Mecánica
+	Plumbing	Fontanería
+	Fire protection	Protección contra incendios
+	Other	Otros
+	stated	indicado
+	inferred	inferido
+	assumed	supuesto
+	Field Package	Paquete de obra
+	Sync Field Notes	Sincronizar notas de obra
+	Field Notes	Notas de obra
+	Detect Unit Types	Detectar tipos de unidad
+	List Unit Types	Listar tipos de unidad
+	Unit Schedule	Cuadro de unidades
+	Unit Type Takeoff	Mediciones por tipo de unidad
+	Override Generated Element	Anular elemento generado
+	List Overrides	Listar anulaciones
+	Revert Override	Revertir anulación
+	Accept Override After Review	Aceptar anulación tras revisión
+	Show or Hide Overrides	Mostrar u ocultar anulaciones
+	Re-apply Overrides	Volver a aplicar anulaciones
+	Overrides	Anulaciones
+	Select generated element (or an object drawn by hand to add)	Seleccione el elemento generado (o un objeto dibujado a mano para añadir)
+	Enter type mark	Introduzca la marca de tipo
+	Enter override to revert	Introduzca la anulación que desea revertir
+	Verify	Verificar
+	review: the drawing changed here	revisar: el dibujo cambió aquí
+	orphaned: its element is no longer generated	huérfana: su elemento ya no se genera
+	Project Rules	Reglas del proyecto
+	Domain:	Dominio:
+	No project rules set.	No se han establecido reglas del proyecto.
+	Tier:	Nivel:
+	Source:	Fuente:
+	Reason:	Razón:
+	Overridden values:	Valores anulados:
+	No drawing open.	Ningún dibujo abierto.
+	List Project Rules	Listar reglas del proyecto
+	Get Project Rule	Obtener regla del proyecto
+	Set Project Rule	Establecer regla del proyecto
+	Remove Project Rule	Quitar regla del proyecto
+	Preview Project Rule Change	Vista previa del cambio de regla
+	Project Rules Label	Etiqueta de reglas del proyecto
+	Import Project Rules	Importar reglas del proyecto
+	Export Project Rules	Exportar reglas del proyecto
