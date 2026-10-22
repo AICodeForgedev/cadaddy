@@ -352,8 +352,18 @@ fn duct_pairs(segs: &[LineSeg]) -> Vec<DuctPair> {
 
 // ---- Run chaining ----------------------------------------------------------
 
+/// How the reader chains wall pairs into runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DuctOptions {
+    /// Chain every pair, skipping those already in a run (and runs along one already found).
+    /// Off, chaining stops at the first pair an earlier run took, and centrelines supply the
+    /// rest: what the vector sheets (which have centrelines) were tuned on. Scans, whose
+    /// walls come in many pieces and whose centrelines are faint, need it on.
+    pub all_pairs: bool,
+}
+
 /// Chain parallel pairs that share an endpoint into continuous runs.
-fn chain_runs(pairs: &[DuctPair]) -> Vec<DuctRun> {
+fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
     if pairs.is_empty() {
         return Vec::new();
     }
@@ -363,7 +373,15 @@ fn chain_runs(pairs: &[DuctPair]) -> Vec<DuctRun> {
     let mut runs = Vec::new();
 
     for start in 0..pairs.len() {
-        if used[start] || runs.len() >= MAX_RUNS {
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
+        if used[start] {
+            // A pair already chained into an earlier run: skipped, or (as tuned on the vector
+            // sheets) the end of the chaining.
+            if o.all_pairs {
+                continue;
+            }
             break;
         }
         used[start] = true;
@@ -414,6 +432,21 @@ fn chain_runs(pairs: &[DuctPair]) -> Vec<DuctRun> {
 
         let avg_hw = total_hw / count;
         let width = avg_hw * 2.0; // full width in model inches (= drawing inches = actual inches)
+
+        // Pieces of a duct's walls pair up many ways; a run lying along one already found is
+        // the same duct again.
+        let covered = |q: Vec2| {
+            runs.iter().any(|r: &DuctRun| {
+                r.points.windows(2).any(|w| match (w.first(), w.get(1)) {
+                    (Some(a), Some(b)) => seg_dist(q, *a, *b) < r.width_in.max(width) / 2.0,
+                    _ => false,
+                })
+            })
+        };
+        let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { continue };
+        if o.all_pairs && covered(first) && covered(last) && covered((first + last) * 0.5) {
+            continue;
+        }
 
         runs.push(DuctRun {
             points: pts,
@@ -1041,13 +1074,18 @@ fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
 /// `sh` is the truth sheet (for coordinate conversion); the reader only uses its placement
 /// to convert model→building.  In a real pipeline, [`crate::sheet_reader`] would provide
 /// the alignment instead.
-pub fn read_ducts(d: &Drawing, _sh: &Sheet) -> DuctNetwork {
+pub fn read_ducts(d: &Drawing, sh: &Sheet) -> DuctNetwork {
+    read_ducts_with(d, sh, &DuctOptions::default())
+}
+
+/// [`read_ducts`] with options.
+pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork {
     // 1. Find parallel line pairs on DUCT layer.
     let segs = line_segments(d);
     let pairs = duct_pairs(&segs);
 
     // 2. Chain pairs into runs.
-    let mut runs = chain_runs(&pairs);
+    let mut runs = chain_runs(&pairs, o);
 
     // 2b. Add centreline-based runs that aren't covered by pairs.
     add_centreline_runs(&mut runs, &segs);
@@ -1079,7 +1117,12 @@ pub fn read_ducts(d: &Drawing, _sh: &Sheet) -> DuctNetwork {
 
 /// Read ducts and score against truth for a single mechanical sheet.
 pub fn read_and_score(d: &Drawing, t: &Truth, sh: &Sheet) -> score::RunScore {
-    let network = read_ducts(d, sh);
+    read_and_score_with(d, t, sh, &DuctOptions::default())
+}
+
+/// [`read_and_score`] with options.
+pub fn read_and_score_with(d: &Drawing, t: &Truth, sh: &Sheet, o: &DuctOptions) -> score::RunScore {
+    let network = read_ducts_with(d, sh, o);
     let found = network.to_found_runs(sh);
     let level = sh.level.clone().unwrap_or_default();
     score::score_runs(t, &level, "duct", &found, MATCH_TOL_FT)
@@ -1116,6 +1159,20 @@ mod tests {
         assert_eq!(parse_feet_inches("10'-6\""), Some(126.0));
         assert_eq!(parse_feet_inches("9'-0\""), Some(108.0));
         assert_eq!(parse_feet_inches("12'-0\""), Some(144.0));
+    }
+
+    #[test]
+    fn chaining_skips_used_pairs_instead_of_stopping() {
+        // Pair 1 is chained into pair 0's run; pair 2 is another duct and must still be found
+        // (it was lost when the loop stopped at the first used pair). Pair 3 lies along the
+        // first duct again (its walls paired another way) and is not a second run.
+        let p = |a: (f64, f64), b: (f64, f64)| DuctPair { c0: Vec2::new(a.0, a.1), c1: Vec2::new(b.0, b.1), half_w: 6.0 };
+        let pairs = [p((0.0, 0.0), (100.0, 0.0)), p((100.0, 0.0), (200.0, 0.0)), p((0.0, 300.0), (150.0, 300.0)), p((20.0, 1.0), (180.0, 1.0))];
+        let runs = chain_runs(&pairs, &DuctOptions { all_pairs: true });
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert!(runs.iter().any(|r| r.points.iter().all(|q| (q.y - 300.0).abs() < 1e-9)));
+        // As tuned on the vector sheets: the chaining stops at the used pair.
+        assert_eq!(chain_runs(&pairs, &DuctOptions::default()).len(), 1);
     }
 
     #[test]
