@@ -529,7 +529,11 @@ mod native {
         // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
         // runs inside `catch_unwind` so a decode failure is reported rather than crashing.
         if dxf.len() > Limits::DEFAULT.max_dxf_bytes {
-            return Err(format!("DXF: the input is {}, larger than the {} CADCraft converts to DWG", mb(dxf.len() as u64), mb(Limits::DEFAULT.max_dxf_bytes as u64)));
+            return Err(format!(
+                "DXF: the input is {}, larger than the {} CADCraft converts to DWG",
+                mb(dxf.len() as u64),
+                mb(Limits::DEFAULT.max_dxf_bytes as u64)
+            ));
         }
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))

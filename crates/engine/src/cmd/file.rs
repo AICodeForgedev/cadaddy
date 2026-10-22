@@ -337,6 +337,7 @@ fn opened(s: &Session, i: usize, entities: bool) -> Value {
     }
 }
 
+/// Open a drawing from bounded regular-file bytes or base64 data and resolve its external references.
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(_path) = str_param(p, "path") {
         #[cfg(not(target_arch = "wasm32"))]

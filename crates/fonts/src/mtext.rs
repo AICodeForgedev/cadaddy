@@ -685,6 +685,7 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
 mod tests {
     use super::*;
 
+    /// Incremental character accounting preserves the text of a multi-word line without introducing wrapping.
     #[test]
     fn line_char_offsets_track_incrementally() {
         // A multi-word line lays out correctly even though the per-line character count is now

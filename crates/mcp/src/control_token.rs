@@ -23,6 +23,7 @@ pub fn token_path(port: u16) -> io::Result<PathBuf> {
     Ok(private_dir()?.join(format!("cadcraft-control-{port}.token")))
 }
 
+/// Choose the Unix runtime directory, home cache, or temporary directory for an owner-only token file.
 #[cfg(unix)]
 fn private_dir() -> io::Result<PathBuf> {
     if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
@@ -34,11 +35,13 @@ fn private_dir() -> io::Result<PathBuf> {
     Ok(std::env::temp_dir())
 }
 
+/// Require the Windows per-user local app-data directory for session token storage.
 #[cfg(windows)]
 fn private_dir() -> io::Result<PathBuf> {
     windows_private_dir(std::env::var_os("LOCALAPPDATA"))
 }
 
+/// Validate that Windows supplied a nonempty local app-data path instead of using a shared fallback.
 #[cfg(any(windows, test))]
 fn windows_private_dir(local: Option<std::ffi::OsString>) -> io::Result<PathBuf> {
     local
@@ -47,6 +50,7 @@ fn windows_private_dir(local: Option<std::ffi::OsString>) -> io::Result<PathBuf>
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is required for a private control token"))
 }
 
+/// Reject token storage on platforms without a supported private-directory convention.
 #[cfg(not(any(unix, windows)))]
 fn private_dir() -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "no private control token directory on this platform"))
@@ -61,6 +65,7 @@ pub fn issue(port: u16) -> io::Result<String> {
     Ok(token)
 }
 
+/// Create missing parent directories, then write the session token through the platform privacy helper.
 fn issue_at(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -98,6 +103,7 @@ pub fn matches(expected: &str, given: &str) -> bool {
     diff == 0
 }
 
+/// Encode 256 bits of operating-system randomness as lowercase hexadecimal, propagating entropy failures.
 fn random_hex() -> io::Result<String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|e| io::Error::other(format!("no secure randomness: {e}")))?;
@@ -109,6 +115,7 @@ fn random_hex() -> io::Result<String> {
     Ok(s)
 }
 
+/// Replace a stale token with an exclusively created file using Unix mode `0600`, then flush its bytes.
 #[cfg(unix)]
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
@@ -120,6 +127,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     f.flush()
 }
 
+/// Exclusively create and flush a replacement token within the per-user directory selected by the caller.
 #[cfg(not(unix))]
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
@@ -134,6 +142,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// An issued token has the expected size, can be read back, and disappears after revocation.
     #[test]
     fn issue_then_read_round_trips() {
         let port = 50000 + (std::process::id() % 10000) as u16;
@@ -144,6 +153,7 @@ mod tests {
         assert!(read(port).is_err());
     }
 
+    /// Token comparison rejects different bytes and lengths while accepting identical tokens.
     #[test]
     fn matches_is_exact() {
         assert!(matches("abc", "abc"));
@@ -152,6 +162,7 @@ mod tests {
         assert!(!matches("", "x"));
     }
 
+    /// A token issued on Unix grants no file permission bits to group or other users.
     #[cfg(unix)]
     #[test]
     fn token_file_is_owner_only() {
@@ -162,6 +173,7 @@ mod tests {
         assert_eq!(mode & 0o077, 0, "token file is readable by group/other: {:o}", mode);
         revoke(port);
     }
+    /// Windows token storage rejects absent or empty app-data paths and preserves a supplied path.
     #[test]
     fn windows_requires_local_app_data() {
         assert!(windows_private_dir(None).is_err());
@@ -169,6 +181,7 @@ mod tests {
         assert_eq!(windows_private_dir(Some("private-app-data".into())).unwrap(), PathBuf::from("private-app-data"));
     }
 
+    /// Token issuance creates its missing directory hierarchy before writing the credential.
     #[test]
     fn issuance_creates_missing_parent() {
         let dir = std::env::temp_dir().join(format!("cadcraft-token-parent-{}", std::process::id()));
