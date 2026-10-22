@@ -279,8 +279,15 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
             .iter()
             .filter(|(t, _)| {
                 let u = t.trim().to_uppercase();
-                // Short tags: A, B, C, D, E, S, R, FB, ES-1, EM-1, DS-1, JB-1, etc.
-                u.len() <= 6 && !u.contains('@') && !u.contains('\'') && !u.contains('"') && !u.starts_with("DO ") && !u.starts_with("SCALE")
+                // Short tags: A, B, C, D, E, S, R, FB, ES-1, EM-1, DS-1, JB-1, etc.; not a
+                // circuit label (`L1/10`), which says the circuit, not the type.
+                u.len() <= 6
+                    && !u.contains('@')
+                    && !u.contains('\'')
+                    && !u.contains('"')
+                    && !u.contains('/')
+                    && !u.starts_with("DO ")
+                    && !u.starts_with("SCALE")
             })
             .min_by(|(_, a), (_, b)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -420,7 +427,11 @@ fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
                 let dx = (p[0] - cx).abs();
                 let dy = p[1] - cy; // above
                 let u = t.trim().to_uppercase();
-                dx < 80.0 && dy > 0.0 && dy < 120.0 && (u.starts_with('L') || u.starts_with('P') || u.starts_with("TX-")) && u.len() <= 6
+                dx < 80.0
+                    && dy > 0.0
+                    && dy < 120.0
+                    && (u.starts_with('L') || u.starts_with('P') || u.starts_with("TX-") || u.starts_with("MDP") || u.starts_with("DS-"))
+                    && u.len() <= 6
             })
             .min_by(|(_, a), (_, b)| {
                 let da = (a[0] - cx).powi(2) + (a[1] - cy).powi(2);
@@ -430,7 +441,15 @@ fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
             .map(|(t, _)| t.trim().to_string());
 
         if let Some(tag) = tag {
-            let kind = if tag.starts_with("TX") { "transformer" } else { "panel" };
+            let kind = if tag.starts_with("TX") {
+                "transformer"
+            } else if tag.starts_with("MDP") {
+                "switchboard"
+            } else if tag.starts_with("DS-") {
+                "disconnect"
+            } else {
+                "panel"
+            };
             panels.push(DetectedPanel { at_in: [cx, cy], tag, kind: kind.to_string() });
         }
     }
@@ -699,6 +718,9 @@ pub struct FoundDevice {
     /// For zone-placed devices: the zone's allowed range along the wall, building feet
     /// `[min, max]`, if computed from placement rules.
     pub zone_ft: Option<[f64; 2]>,
+    /// Its type's columns in the light fixture schedule (description, mounting, lamp and
+    /// wattage, as text), when the schedule has its type ([`crate::gear_reader::link_fixtures`]).
+    pub properties: BTreeMap<String, String>,
 }
 
 /// A found panel, building coordinates.
@@ -800,6 +822,7 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
                 height_source: rd.height_source.clone(),
                 arch_positioned: placement.arch_positioned,
                 zone_ft: placement.zone_ft,
+                properties: BTreeMap::new(),
             });
         }
 
@@ -1017,6 +1040,7 @@ pub fn perfect_devices(truth: &Truth) -> Vec<FoundDevice> {
             } else {
                 None
             },
+            properties: BTreeMap::new(),
         })
         .collect()
 }

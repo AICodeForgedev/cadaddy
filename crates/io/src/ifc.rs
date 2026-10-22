@@ -85,6 +85,7 @@ enum Class {
     Boiler,
     Condenser,
     FlowMeter,
+    Transformer,
 }
 
 impl Class {
@@ -127,6 +128,7 @@ impl Class {
             Class::Boiler => ("IfcBoiler", "NOTDEFINED"),
             Class::Condenser => ("IfcCondenser", "NOTDEFINED"),
             Class::FlowMeter => ("IfcFlowMeter", "NOTDEFINED"),
+            Class::Transformer => ("IfcTransformer", "VOLTAGE"),
         }
     }
 
@@ -168,6 +170,7 @@ impl Class {
             "Boiler" => Class::Boiler,
             "Condenser" => Class::Condenser,
             "FlowMeter" => Class::FlowMeter,
+            "Transformer" => Class::Transformer,
             _ => return None,
         })
     }
@@ -201,6 +204,11 @@ fn equipment_class(kind: &str) -> (Class, &'static str) {
         "water_heater" => (Class::Boiler, "WATER"),
         "condensing_unit" => (Class::Condenser, "AIRCOOLED"),
         "gas_meter" => (Class::FlowMeter, "GASMETER"),
+        // Electrical gear.
+        "panel" | "panelboard" => (Class::ElectricDistributionBoard, "DISTRIBUTIONBOARD"),
+        "switchboard" | "switchgear" => (Class::ElectricDistributionBoard, "SWITCHBOARD"),
+        "transformer" => (Class::Transformer, "VOLTAGE"),
+        "disconnect" => (Class::SwitchingDevice, "SWITCHDISCONNECTOR"),
         _ => (Class::Proxy, "NOTDEFINED"),
     }
 }
@@ -1803,7 +1811,7 @@ const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUIL
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {
-    const KNOWN: [&str; 40] = [
+    const KNOWN: [&str; 47] = [
         "WallStandardCase",
         "Wall",
         "Slab",
@@ -1844,6 +1852,13 @@ fn class_name(upper: &str) -> String {
         "Boiler",
         "Condenser",
         "FlowMeter",
+        "ElectricDistributionBoard",
+        "Transformer",
+        "SwitchingDevice",
+        "LightFixture",
+        "Outlet",
+        "JunctionBox",
+        "CableSegment",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(

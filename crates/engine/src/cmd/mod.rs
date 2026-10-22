@@ -65,6 +65,7 @@ pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
 pub mod furnish;
+pub mod gear;
 pub mod geo;
 pub mod ifcref;
 pub mod imagetrace;
@@ -295,6 +296,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(mep::specs());
+        v.extend(gear::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());
         v.extend(printset::specs());
