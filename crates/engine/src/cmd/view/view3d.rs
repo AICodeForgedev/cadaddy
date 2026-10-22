@@ -354,16 +354,23 @@ impl crate::Interactive for VsM {
 /// Wireframe (the usual vector output), else the visual style (2D Wireframe in a 3D view: see-
 /// through Wireframe) with the view's direction and twist.
 pub fn shade_options(s: &Session) -> Option<Value> {
+    shade_options_as(s, None)
+}
+
+/// [`shade_options`] in visual style `style` in place of the view's (PLOT's shade plot); the
+/// plan view in (2D) Wireframe keeps the plan's vectors.
+pub fn shade_options_as(s: &Session, style: Option<VisualStyle>) -> Option<Value> {
     let st = s.state().ok()?;
     if st.space != Space::Model || st.mspace.is_some() {
         return None;
     }
     let p = st.projection();
     let three_d = p.is_some_and(|p| !view3::is_plan(p.dir));
-    if st.visual_style == VisualStyle::Wireframe2d && !three_d {
+    let shown = style.unwrap_or(st.visual_style);
+    if matches!(shown, VisualStyle::Wireframe2d | VisualStyle::Wireframe) && !three_d && (style.is_some() || shown == VisualStyle::Wireframe2d) {
         return None;
     }
-    let style = if st.visual_style == VisualStyle::Wireframe2d { VisualStyle::Wireframe } else { st.visual_style };
+    let style = if shown == VisualStyle::Wireframe2d { VisualStyle::Wireframe } else { shown };
     let dir = p.map_or(Vec3::Z, |p| p.dir);
     Some(json!({ "style": style.name(), "dir": [dir.x, dir.y, dir.z], "twist": st.twist() }))
 }

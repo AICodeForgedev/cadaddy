@@ -9,7 +9,7 @@
 //! become irradiance through [`CANDELA`] (so a 1500 cd lamp 1.5 m away lights about like the
 //! sky), with distances in metres from the drawing's units.
 
-use cadaddy_doc::lighting::{Attenuation, LightKind};
+use cadaddy_doc::lighting::{Attenuation, LightKind, ToneMap};
 use cadaddy_doc::{Drawing, EntityKind, Space};
 use cadaddy_geom::Vec3;
 
@@ -88,6 +88,27 @@ pub struct Lighting {
     pub background: Background,
     /// White balance: colour multiplier from temperature/tint (linear RGB).
     pub white_balance: [f32; 3],
+    /// Screen-space ambient occlusion strength (0 off … 2), and its reach in drawing units
+    /// (0: by the model's size, [`ao_reach`]).
+    pub ao: f32,
+    pub ao_radius: f64,
+    /// The sun's apparent size in degrees (0: sharp shadows), widening shadow edges with the
+    /// distance from what casts them.
+    pub sun_size: f32,
+    /// The tone curve.
+    pub tone: ToneMap,
+}
+
+/// The ambient occlusion's reach for a model whose bounding box has diagonal `diag`: an explicit
+/// `radius` when set, else 2% of the diagonal.
+pub fn ao_reach(radius: f64, diag: f64) -> f64 {
+    if radius.is_finite() && radius > 0.0 {
+        radius
+    } else if diag.is_finite() && diag > 0.0 {
+        diag * 0.02
+    } else {
+        1.0
+    }
 }
 
 fn lin(c: cadaddy_doc::color::Rgb) -> [f32; 3] {
@@ -163,6 +184,7 @@ impl Lighting {
             // Sun off: a dim neutral ambient, so lights carry the scene.
             sky = Sky { zenith: [0.03, 0.03, 0.035], horizon: [0.03, 0.03, 0.035], ground: [0.015, 0.015, 0.015] };
         }
+        let look = sun.look.clone().sane();
         Lighting {
             sun: sun_on.then(|| (sun.direction(), scale3(sun_color(el), intensity))),
             sky,
@@ -173,7 +195,17 @@ impl Lighting {
             fog: None,
             background: Background::Sky,
             white_balance: [1.0, 1.0, 1.0],
+            ao: look.ambient_occlusion as f32,
+            ao_radius: look.ao_radius,
+            sun_size: look.soft_shadows as f32,
+            tone: look.tone_map,
         }
+    }
+
+    /// Linear light `c` as display bytes: white balance, exposure and the tone curve.
+    pub fn display(&self, c: [f32; 3]) -> [u8; 3] {
+        let wb = self.white_balance;
+        tonemap_with([c[0] * wb[0], c[1] * wb[1], c[2] * wb[2]], self.exposure, self.tone)
     }
 }
 
@@ -251,10 +283,19 @@ pub fn shade(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow:
 
 /// [`shade`] with the light baked onto the surface (LIGHTBAKE) in place of the sky's ambient.
 pub fn shade_baked(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow: f32, baked: Option<[f32; 3]>) -> [f32; 3] {
+    shade_occluded(lit, p, n, v, s, sun_shadow, baked, 1.0)
+}
+
+/// [`shade_baked`] with the light arriving from all around (sky or baked) scaled by `open`, the
+/// ambient occlusion (0 enclosed … 1 open).
+#[allow(clippy::too_many_arguments)]
+pub fn shade_occluded(lit: &Lighting, p: Vec3, n: Vec3, v: Vec3, s: &Surface, sun_shadow: f32, baked: Option<[f32; 3]>, open: f32) -> [f32; 3] {
+    let open = if open.is_finite() { open.clamp(0.0, 1.0) } else { 1.0 };
     let mut c = match baked {
         Some(env) => surround(env, s),
         None => ambient(lit, n, s),
-    };
+    }
+    .map(|x| x * open);
     let mut add = |rgb: [f32; 3], f: [f32; 3]| {
         for i in 0..3 {
             c[i] += rgb[i] * f[i];
@@ -324,9 +365,44 @@ pub fn sky_only(lit: &Lighting, d: Vec3) -> [f32; 3] {
 
 /// A filmic tone curve (the ACES fitted curve), exposure applied, then sRGB-encoded bytes.
 pub fn tonemap(c: [f32; 3], exposure: f32) -> [u8; 3] {
-    c.map(|x| {
-        let x = (x * exposure * 0.8).max(0.0);
-        let y = ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0);
+    tonemap_with(c, exposure, ToneMap::Filmic)
+}
+
+/// Linear light `c` through exposure and the tone curve `op` (0 … 1, linear). The GPU shader's
+/// `tone_curve` is the same.
+pub fn tone_curve(c: [f32; 3], exposure: f32, op: ToneMap) -> [f32; 3] {
+    let x = c.map(|v| if v.is_finite() { (v * exposure * 0.8).max(0.0) } else { 0.0 });
+    match op {
+        ToneMap::Filmic => x.map(|x| ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0)),
+        // Extended Reinhard, white at 4.
+        ToneMap::Reinhard => x.map(|x| (x * (1.0 + x / 16.0) / (1.0 + x)).clamp(0.0, 1.0)),
+        ToneMap::Neutral => neutral(x),
+        ToneMap::Linear => x.map(|x| x.clamp(0.0, 1.0)),
+    }
+}
+
+/// A neutral curve: colours pass unchanged below a knee; above it the brightest channel is
+/// compressed towards white and the colour desaturates as it does.
+fn neutral(c: [f32; 3]) -> [f32; 3] {
+    const START: f32 = 0.76;
+    const DESATURATE: f32 = 0.15;
+    let lo = c[0].min(c[1]).min(c[2]);
+    let offset = if lo < 0.08 { lo - 6.25 * lo * lo } else { 0.04 };
+    let c = c.map(|v| v - offset);
+    let peak = c[0].max(c[1]).max(c[2]);
+    if peak < START {
+        return c.map(|v| v.clamp(0.0, 1.0));
+    }
+    let d = 1.0 - START;
+    let new_peak = 1.0 - d * d / (peak + d - START);
+    let c = c.map(|v| v * new_peak / peak);
+    let g = 1.0 - 1.0 / (DESATURATE * (peak - new_peak) + 1.0);
+    c.map(|v| (v + (new_peak - v) * g).clamp(0.0, 1.0))
+}
+
+/// [`tone_curve`], then sRGB-encoded bytes.
+pub fn tonemap_with(c: [f32; 3], exposure: f32, op: ToneMap) -> [u8; 3] {
+    tone_curve(c, exposure, op).map(|y| {
         let s = if y <= 0.003_130_8 { y * 12.92 } else { 1.055 * y.powf(1.0 / 2.4) - 0.055 };
         (s * 255.0).round().clamp(0.0, 255.0) as u8
     })
@@ -504,6 +580,48 @@ mod tests {
         // Tint shifts green.
         let tinted = white_balance_rgb(6500.0, 0.5);
         assert!(tinted[1] < 1.0, "tinted: {tinted:?}");
+    }
+
+    #[test]
+    fn tone_curves_run_from_black_to_white_and_differ() {
+        for op in ToneMap::ALL {
+            assert_eq!(tonemap_with([0.0; 3], 1.0, op), [0, 0, 0], "{op:?}");
+            assert_eq!(tonemap_with([1e6; 3], 1.0, op), [255, 255, 255], "{op:?}");
+            assert_eq!(tonemap_with([f32::NAN, f32::INFINITY, -1.0], 1.0, op)[0], 0, "{op:?}");
+            // Rising.
+            let mut last = 0u8;
+            for k in 0..200 {
+                let v = tonemap_with([k as f32 * 0.02; 3], 1.0, op)[0];
+                assert!(v >= last, "{op:?} at {k}");
+                last = v;
+            }
+        }
+        let mid = ToneMap::ALL.map(|op| tonemap_with([0.4, 0.2, 0.1], 1.0, op));
+        for (i, a) in mid.iter().enumerate() {
+            for b in mid.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
+        // The neutral curve keeps a mid colour as it is (bar a small toe offset); linear clips.
+        let n = tone_curve([0.5, 0.3, 0.2], 1.25, ToneMap::Neutral);
+        assert!((n[0] - 0.46).abs() < 0.01 && (n[1] - 0.26).abs() < 0.01, "{n:?}");
+        assert_eq!(tone_curve([2.0, 0.5, 0.0], 1.25, ToneMap::Linear), [1.0, 0.5, 0.0]);
+        // Filmic stays the default and is what `tonemap` gives.
+        assert_eq!(tonemap([0.3, 0.2, 0.1], 1.0), tonemap_with([0.3, 0.2, 0.1], 1.0, ToneMap::Filmic));
+        assert_eq!(ToneMap::default(), ToneMap::Filmic);
+    }
+
+    #[test]
+    fn display_applies_white_balance_exposure_and_curve() {
+        let mut lit = Lighting::of(&Drawing::new_metric(), &Space::Model);
+        assert_eq!(lit.display([0.3; 3]), tonemap([0.3; 3], lit.exposure));
+        lit.tone = ToneMap::Linear;
+        lit.white_balance = [2.0, 1.0, 1.0];
+        let c = lit.display([0.3; 3]);
+        assert!(c[0] > c[1], "{c:?}");
+        assert_eq!(ao_reach(0.0, 100.0), 2.0);
+        assert_eq!(ao_reach(5.0, 100.0), 5.0);
+        assert_eq!(ao_reach(f64::NAN, f64::NAN), 1.0);
     }
 
     #[test]

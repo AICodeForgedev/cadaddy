@@ -10,6 +10,7 @@
 //! names have spaces; their `?` lists the choices.
 
 use cadaddy_geom::Vec2;
+use cadaddy_render::shade::VisualStyle;
 use serde_json::{Value, json};
 
 use super::super::plotters;
@@ -38,6 +39,8 @@ enum Ask {
     StyleTable,
     Lineweights,
     Shade,
+    /// Which visual style (shade plot "Visual styles").
+    ShadeStyle,
     ScaleLineweights,
     PaperSpaceFirst,
     HidePaperSpace,
@@ -50,6 +53,30 @@ enum Ask {
 const MODEL_AREAS: [&str; 5] = ["Display", "Extents", "Limits", "View", "Window"];
 const LAYOUT_AREAS: [&str; 5] = ["Display", "Extents", "Layout", "View", "Window"];
 const SHADES: [&str; 5] = ["As displayed", "legacy Wireframe", "legacy Hidden", "Visual styles", "Rendered"];
+/// The visual styles shade plot "Visual styles" offers, as typed.
+const STYLES: [&str; 5] = ["Wireframe", "Hidden", "Realistic", "Shaded", "shaded with Edges"];
+
+/// The keyword of `STYLES` naming `v`.
+fn style_name(v: VisualStyle) -> &'static str {
+    match v {
+        VisualStyle::Wireframe2d | VisualStyle::Wireframe => "Wireframe",
+        VisualStyle::Hidden => "Hidden",
+        VisualStyle::Shaded => "Shaded",
+        VisualStyle::ShadedEdges => "shaded with Edges",
+        VisualStyle::Realistic => "Realistic",
+    }
+}
+
+/// `v` as PLOT's `shadePlot` takes it.
+fn style_word(v: VisualStyle) -> &'static str {
+    match v {
+        VisualStyle::Wireframe2d | VisualStyle::Wireframe => "wireframe",
+        VisualStyle::Hidden => "hidden",
+        VisualStyle::Shaded => "shaded",
+        VisualStyle::ShadedEdges => "shadedWithEdges",
+        VisualStyle::Realistic => "realistic",
+    }
+}
 
 pub(super) struct DashPlotM {
     ask: Ask,
@@ -75,6 +102,8 @@ pub(super) struct DashPlotM {
     style_table: String,
     lineweights: bool,
     shade: &'static str,
+    /// The visual style of shade plot "Visual styles".
+    shade_style: VisualStyle,
     scale_lineweights: bool,
     paper_space_first: bool,
     hide_paper_space: bool,
@@ -104,6 +133,7 @@ impl Default for DashPlotM {
             style_table: String::new(),
             lineweights: true,
             shade: "As displayed",
+            shade_style: VisualStyle::Realistic,
             scale_lineweights: false,
             paper_space_first: false,
             hide_paper_space: false,
@@ -126,13 +156,19 @@ fn yn(b: bool) -> &'static str {
     if b { "Yes" } else { "No" }
 }
 
-/// The keyword in `list` that `t` names (its whole name or a leading part, any case).
+/// The keyword in `list` that `t` names (its whole name, a leading part or its capitals, as
+/// `E` for "shaded with Edges"; any case).
 fn keyword(list: &[&'static str], t: &str) -> Option<&'static str> {
     let t = t.trim().to_ascii_lowercase();
     if t.is_empty() {
         return None;
     }
-    list.iter().copied().find(|k| k.to_ascii_lowercase() == t).or_else(|| list.iter().copied().find(|k| k.to_ascii_lowercase().starts_with(&t)))
+    let capitals = |k: &str| k.chars().filter(char::is_ascii_uppercase).collect::<String>().to_ascii_lowercase();
+    list.iter()
+        .copied()
+        .find(|k| k.to_ascii_lowercase() == t)
+        .or_else(|| list.iter().copied().find(|k| k.to_ascii_lowercase().starts_with(&t)))
+        .or_else(|| list.iter().copied().find(|k| capitals(k) == t))
 }
 
 /// A typed plot scale, plotted units per drawing unit: `1=48`, `1:50`, `0.25`; `None` when it is
@@ -256,6 +292,18 @@ impl DashPlotM {
             o.insert("fit".into(), json!(self.scale.is_none()));
             o.insert("plotArea".into(), json!("layout"));
         }
+        if self.is_model() {
+            let shade = match self.shade {
+                "legacy Wireframe" => Some("wireframe"),
+                "legacy Hidden" => Some("hidden"),
+                "Visual styles" => Some(style_word(self.shade_style)),
+                "Rendered" => Some("rendered"),
+                _ => None,
+            };
+            if let Some(sp) = shade {
+                o.insert("shadePlot".into(), json!(sp));
+            }
+        }
         if self.save {
             o.insert("savePageSetup".into(), json!(true));
         }
@@ -290,7 +338,8 @@ impl DashPlotM {
             Ask::Lineweights => Ask::ScaleLineweights,
             Ask::ScaleLineweights => Ask::PaperSpaceFirst,
             Ask::PaperSpaceFirst => Ask::HidePaperSpace,
-            Ask::Shade | Ask::HidePaperSpace => self.ask_file(s),
+            Ask::Shade if self.shade == "Visual styles" => Ask::ShadeStyle,
+            Ask::Shade | Ask::ShadeStyle | Ask::HidePaperSpace => self.ask_file(s),
             Ask::File => Ask::SavePageSetup,
             Ask::SavePageSetup => Ask::Proceed,
             Ask::Proceed => Ask::Proceed,
@@ -330,8 +379,8 @@ impl DashPlotM {
             Ok(r) => {
                 let path = r.get("path").and_then(Value::as_str).unwrap_or(&self.path).to_string();
                 s.echo(format!("Plot written to {path}"));
-                if self.shade != "As displayed" && self.shade != "legacy Wireframe" {
-                    s.echo(format!("Shade plot \"{}\" plots as displayed in this version.", self.shade));
+                if self.shade == "Rendered" {
+                    s.echo("Shade plot \"Rendered\" plots in the Realistic visual style.");
                 }
             }
             Err(e) => s.echo(e.to_string()),
@@ -395,6 +444,7 @@ impl Interactive for DashPlotM {
             Ask::StyleTable => Prompt::new("Enter plot style table name or [?] (enter . for none)", Accept::TEXT).default(self.style_table.as_str()),
             Ask::Lineweights => Prompt::new("Plot with lineweights?", Accept::TEXT).kw(&["Yes", "No"]).default(yn(self.lineweights)),
             Ask::Shade => Prompt::new(format!("Enter shade plot setting [{}]", SHADES.join("/")), Accept::TEXT).default(self.shade),
+            Ask::ShadeStyle => Prompt::new(format!("Enter an option [{}]", STYLES.join("/")), Accept::TEXT).default(style_name(self.shade_style)),
             Ask::ScaleLineweights => {
                 Prompt::new("Scale lineweights with plot scale?", Accept::TEXT).kw(&["Yes", "No"]).default(yn(self.scale_lineweights))
             }
@@ -611,6 +661,14 @@ impl Interactive for DashPlotM {
             Ask::Shade => match keyword(&SHADES, &t) {
                 _ if t.is_empty() => {}
                 Some(k) => self.shade = k,
+                None => {
+                    s.echo("Invalid option keyword.");
+                    return Ok(Step::Continue);
+                }
+            },
+            Ask::ShadeStyle => match keyword(&STYLES, &t) {
+                _ if t.is_empty() => {}
+                Some(k) => self.shade_style = VisualStyle::parse(k).unwrap_or(VisualStyle::Realistic),
                 None => {
                     s.echo("Invalid option keyword.");
                     return Ok(Step::Continue);

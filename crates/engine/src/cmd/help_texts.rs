@@ -289,6 +289,11 @@ pub fn lookup(id: &str) -> &'static str {
             "Sets the visual style of the current viewport (2D Wireframe, Conceptual, \
                         Realistic, Shaded, X-Ray and others)."
         }
+        "visualstyles" => {
+            "Sets how the Realistic visual style finishes its image: ambient occlusion in corners and \
+                        creases, soft shadows from the sun's size, and the tone curve. Plots and exports \
+                        of the drawing use the same settings."
+        }
         "ucs" => "Defines or restores a user coordinate system.",
 
         // ── Dimensions ────────────────────────────────────────────────────────────

@@ -1267,6 +1267,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_sun_xrecord_keeps_the_realistic_look() {
+        use cadaddy_doc::lighting::{Look, Sun, ToneMap};
+        // The default sun writes nothing; one with a look of its own comes back with it.
+        assert!(sun_chunks(&Sun::default()).is_none());
+        let sun = Sun { look: Look { ambient_occlusion: 0.25, ao_radius: 12.0, soft_shadows: 4.0, tone_map: ToneMap::Neutral }, ..Sun::default() };
+        let text = sun_chunks(&sun).unwrap().concat();
+        assert_eq!(parse_sun(&text), Some(sun));
+        // Hostile values are made safe on reading.
+        let bad = parse_sun(r#"{"look":{"ambientOcclusion":1e308,"aoRadius":-5,"softShadows":-1,"toneMap":"reinhard"}}"#).unwrap();
+        assert_eq!((bad.look.ambient_occlusion, bad.look.ao_radius, bad.look.soft_shadows), (Look::MAX_AO, 0.0, 0.0));
+        assert!(parse_sun(r#"{"look":{"toneMap":"sepia"}}"#).is_none());
+    }
+
+    #[test]
     fn every_dimvar_has_a_code() {
         for (_, field) in cadaddy_doc::DIMVARS {
             assert!(dim_code(field).is_some(), "{field} has no DXF group code");

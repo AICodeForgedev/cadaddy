@@ -173,11 +173,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         st.stats.tris_drawn = vis.tris;
         st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
         st.stats.chunks_drawn = vis.chunks.len();
-        // Buffers and textures, plus the render targets (4× colour and depth, the resolved image)
-        // and the shadow map.
+        // Buffers and textures, plus the render targets (4× colour and depth, the resolved image,
+        // the pre-pass depth) and the shadow map.
         let (tw, th) = (u64::from(w), u64::from(h));
         st.stats.gpu_bytes =
-            g.bytes + (tw * th * (u64::from(g.samples) * 8 + 4)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
+            g.bytes + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
         if let Some(tv) = g.view() {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -346,7 +346,7 @@ const VERTEX_SIZE: u64 = 68;
 /// An instance's placement: three rows of four f32.
 const INSTANCE_SIZE: u64 = 48;
 /// The frame's uniform block (see `shader.wgsl`).
-const UNIFORM_SIZE: u64 = 1328;
+const UNIFORM_SIZE: u64 = 1392;
 /// Texture array layer size and most layers.
 const TEX_PX: u32 = 256;
 const MAX_LAYERS: usize = 64;
@@ -359,6 +359,8 @@ struct Target {
     msaa: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
     view: wgpu::TextureView,
+    /// The opaque surfaces' depth, one sample a pixel (the ambient occlusion's pre-pass).
+    prepass: wgpu::TextureView,
 }
 
 struct Buffer {
@@ -372,6 +374,8 @@ struct Gpu {
     line_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
+    /// The ambient occlusion's depth pre-pass.
+    depth_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     /// The shadow pass's own group (the uniform only: it writes the shadow map the others read).
     shadow_group: wgpu::BindGroup,
@@ -381,6 +385,10 @@ struct Gpu {
     /// The lightmap's: linear, clamped (cells have borders).
     lm_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
+    /// The model's textures and baked light (bound with the target's pre-pass depth).
+    tex_view: Option<wgpu::TextureView>,
+    lm_view: Option<wgpu::TextureView>,
+    /// Made for the current target and model.
     bind_group: Option<wgpu::BindGroup>,
     tris: Option<Buffer>,
     /// See-through triangles (drawn after the others, blended).
@@ -449,6 +457,14 @@ impl Gpu {
                     },
                 ),
                 entry(6, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    7,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -549,6 +565,23 @@ impl Gpu {
             multiview_mask: None,
             cache: None,
         });
+        let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shaded_depth"),
+            layout: Some(&shadow_pl),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_depth"), buffers: &vb, compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shaded_textures"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -581,6 +614,7 @@ impl Gpu {
             line_pipeline: pipeline("shaded_lines", "vs_line", "fs_line", wgpu::PrimitiveTopology::LineList, false, None),
             bg_pipeline,
             shadow_pipeline,
+            depth_pipeline,
             layout,
             shadow_group,
             uniform,
@@ -593,6 +627,8 @@ impl Gpu {
                 ..Default::default()
             }),
             shadow_view: shadow_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            tex_view: None,
+            lm_view: None,
             bind_group: None,
             tris: None,
             clear_tris: None,
@@ -744,20 +780,29 @@ impl Gpu {
             );
         }
         self.bytes += lbytes.len();
-        let lm_view = lm_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.lm_view = Some(lm_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.tex_view = Some(tex_view);
+        self.bind_group = None;
+    }
+
+    /// The group binding the frame's uniform, the model's textures, the shadow map, the baked
+    /// light and target `t`'s pre-pass depth.
+    fn group(&self, device: &wgpu::Device, t: &Target) -> Option<wgpu::BindGroup> {
+        let (tex_view, lm_view) = (self.tex_view.as_ref()?, self.lm_view.as_ref()?);
+        Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shaded"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(tex_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.shadow_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&lm_view) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(lm_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lm_sampler) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&t.prepass) },
             ],
-        }));
+        }))
     }
 
     /// The frame's placements: the identity, then each visible group's instances in order
@@ -876,6 +921,34 @@ impl Gpu {
         for x in [bias, if sun.is_some() { 1.0 } else { 0.0 }, (texel_world * 1.5) as f32, 0.0] {
             put(x);
         }
+        // Soft shadows, ambient occlusion and the tone curve (cadaddy_render::ao).
+        let tan_half = lit.map_or(0.0, |l| shade::sun_tan_half(l.sun_size));
+        let texels = f64::from(SHADOW_PX) / (2.0 * rr);
+        let search = (tan_half * 2.0 * self.radius * texels).clamp(1.0, cadaddy_render::ao::SOFT_MAX_TEXELS);
+        for x in [tan_half as f32, texels as f32, (2.0 * rr) as f32, search as f32] {
+            put(x);
+        }
+        let px = v.height / f64::from(v.height_px.max(1));
+        let reach = lit.map_or(1.0, |l| cadaddy_render::light::ao_reach(l.ao_radius, 2.0 * self.radius));
+        let strength = lit.map_or(0.0, |l| l.ao);
+        let r_px = cadaddy_render::ao::ao_pixels(reach, px);
+        let tone = lit.map_or(0.0, |l| cadaddy_doc::lighting::ToneMap::ALL.iter().position(|t| *t == l.tone).unwrap_or(0) as f32);
+        for x in [
+            v.right.x as f32,
+            v.right.y as f32,
+            v.right.z as f32,
+            strength,
+            v.up.x as f32,
+            v.up.y as f32,
+            v.up.z as f32,
+            r_px as f32,
+            px as f32,
+            reach as f32,
+            (2.0 * r) as f32,
+            tone,
+        ] {
+            put(x);
+        }
         for i in 0..16 {
             let l = lights.get(i);
             let kind = l.map_or(1.0, |l| match l.kind {
@@ -916,6 +989,10 @@ impl Gpu {
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
             self.target = Some(target(device, size, self.samples));
+            self.bind_group = None;
+        }
+        if self.bind_group.is_none() {
+            self.bind_group = self.target.as_ref().and_then(|t| self.group(device, t));
         }
         let Some(model) = self.model.clone() else { return model3::Visible::default() };
         let vis = model.visible(v);
@@ -955,6 +1032,30 @@ impl Gpu {
             d
         };
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shaded") });
+        // The opaque surfaces' depth, for the ambient occlusion.
+        if physical && self.lighting.as_ref().is_some_and(|l| l.ao > 0.0) {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shaded_depth"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.prepass,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.shadow_group, &[]);
+            if let Some(m) = &self.tris {
+                pass.set_pipeline(&self.depth_pipeline);
+                pass.set_vertex_buffer(0, m.buffer.slice(..));
+                pass.set_vertex_buffer(1, ib.slice(..));
+                for (r, i) in draws(0) {
+                    pass.draw(r, i);
+                }
+            }
+        }
         // The sun's shadow map first (from what the view shows).
         if physical && sun {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1068,11 +1169,13 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let msaa = (samples > 1).then(|| tex("shaded_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
     let depth = tex("shaded_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let resolve = tex("shaded_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
+    let prepass = tex("shaded_prepass", DEPTH, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
     Target {
         size,
         msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
         depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
         view: resolve.create_view(&wgpu::TextureViewDescriptor::default()),
+        prepass: prepass.create_view(&wgpu::TextureViewDescriptor::default()),
     }
 }
 

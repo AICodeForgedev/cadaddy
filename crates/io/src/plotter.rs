@@ -228,6 +228,43 @@ mod tests {
         d
     }
 
+    /// A floor and a box on it (millimetres).
+    fn courtyard() -> Drawing {
+        use cadaddy_doc::{Mesh, MeshFace, MeshKind};
+        let mut d = Drawing::new_metric();
+        let quad = |q: [Vec3; 4]| Mesh { vertices: q.to_vec(), faces: vec![MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }], kind: MeshKind::Polyface };
+        let v = Vec3::new;
+        let faces = [
+            [v(-5000.0, -5000.0, 0.0), v(5000.0, -5000.0, 0.0), v(5000.0, 5000.0, 0.0), v(-5000.0, 5000.0, 0.0)],
+            [v(-1000.0, -1000.0, 2000.0), v(1000.0, -1000.0, 2000.0), v(1000.0, 1000.0, 2000.0), v(-1000.0, 1000.0, 2000.0)],
+            [v(-1000.0, -1000.0, 0.0), v(1000.0, -1000.0, 0.0), v(1000.0, -1000.0, 2000.0), v(-1000.0, -1000.0, 2000.0)],
+            [v(-1000.0, -1000.0, 0.0), v(-1000.0, 1000.0, 0.0), v(-1000.0, 1000.0, 2000.0), v(-1000.0, -1000.0, 2000.0)],
+        ];
+        for q in faces {
+            d.add(&Space::Model, Common::default(), EntityKind::Mesh(quad(q))).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn realistic_shade_plots_follow_the_drawings_look() {
+        let opts = json!({ "output": "png", "resolution": 40, "paper": "A4", "shade": { "style": "Realistic", "dir": [-1, -1, 1] } });
+        let d = courtyard();
+        let a = plot(&d, &Space::Model, &opts).unwrap();
+        assert_eq!(a.get(..4), Some(&b"\x89PNG"[..]));
+        // Deterministic; the look's tone curve and occlusion change it; Shaded is another image.
+        assert_eq!(plot(&d, &Space::Model, &opts).unwrap(), a);
+        let mut linear = courtyard();
+        linear.sun.look.tone_map = cadaddy_doc::lighting::ToneMap::Linear;
+        assert_ne!(plot(&linear, &Space::Model, &opts).unwrap(), a);
+        let mut flat = courtyard();
+        flat.sun.look.ambient_occlusion = 0.0;
+        flat.sun.look.soft_shadows = 0.0;
+        assert_ne!(plot(&flat, &Space::Model, &opts).unwrap(), a);
+        let shaded = json!({ "output": "png", "resolution": 40, "paper": "A4", "shade": { "style": "Shaded", "dir": [-1, -1, 1] } });
+        assert_ne!(plot(&d, &Space::Model, &shaded).unwrap(), a);
+    }
+
     #[test]
     fn png_and_svg_devices() {
         let d = drawing();
