@@ -2430,6 +2430,9 @@ impl Objects {
         if let Some(s) = self.xrecord_text(crate::dxf_ext::SCHEDULE4D_KEY).and_then(|t| crate::dxf_ext::parse_schedule4d(&t)) {
             d.schedule4d = Some(s);
         }
+        if let Some(p) = self.xrecord_text(crate::dxf_ext::PARTS_KEY).and_then(|t| crate::dxf_ext::parse_building_spec(&t)) {
+            d.parts = Some(p);
+        }
         if let Some(o) = self.xrecord_text(crate::dxf_ext::OVERRIDES_KEY).and_then(|t| crate::dxf_ext::parse_overrides(&t)) {
             d.overrides = Some(o);
         }

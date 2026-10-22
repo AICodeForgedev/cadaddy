@@ -111,6 +111,9 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     if let Some(t) = &d.schedule4d {
         out.push(Part::Text(*b"SCH4", t));
     }
+    if let Some(t) = &d.parts {
+        out.push(Part::Text(*b"PRTS", t));
+    }
     if let Some(t) = &d.overrides {
         out.push(Part::Text(*b"OVRD", t));
     }

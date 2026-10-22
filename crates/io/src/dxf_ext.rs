@@ -90,6 +90,8 @@ pub(crate) const TOURS_KEY: &str = "CADADDY_TOURS";
 pub(crate) const BCF_KEY: &str = "CADADDY_BCF";
 /// Named-object-dictionary key of the XRECORD holding the 4D schedule (JSON).
 pub(crate) const SCHEDULE4D_KEY: &str = "CADADDY_4D";
+/// Named-object-dictionary key of the XRECORD holding the parametric parts (JSON).
+pub(crate) const PARTS_KEY: &str = "CADADDY_PARTS";
 /// Named-object-dictionary key of the XRECORD holding the overrides of generated elements (JSON).
 pub(crate) const OVERRIDES_KEY: &str = "CADADDY_OVERRIDES";
 /// Named-object-dictionary key of the XRECORD holding the agent state (notes, review decisions,
@@ -1025,6 +1027,11 @@ pub(crate) fn schedule4d_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>>
 /// The 4D schedule XRECORD's text, when it reads as a schedule (a newer version is left out).
 pub(crate) fn parse_schedule4d(text: &str) -> Option<String> {
     cadaddy_walk3d::fourd::Schedule4d::from_json(Some(text)).ok().and_then(|s| s.to_json())
+}
+
+/// JSON chunks for the parametric parts XRECORD, or `None` without parts.
+pub(crate) fn parts_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    d.parts.as_deref().filter(|s| !s.trim().is_empty()).map(json_chunks)
 }
 
 /// JSON chunks for the overrides XRECORD, or `None` without overrides.

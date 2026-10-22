@@ -102,6 +102,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ifcmodel", "IFC Model", &["Window", "IFC Model"], None),
     ("fourd", "4D Schedule", &["Window", "4D Schedule"], None),
     ("elementtags", "Element Tags", &["Window", "Element Tags"], None),
+    ("parttree", "Model Tree", &["Window", "Model Tree"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -746,6 +747,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ifcmodel" => {
             app.ui.dialog = Some(crate::ifcpalette::DIALOG.into());
+            Ok(Value::Null)
+        }
+        "parttree" => {
+            app.ui.dialog = Some(crate::partpalette::DIALOG.into());
             Ok(Value::Null)
         }
         // From the menu or the palette: the IFC file from the file dialog, then the palette.
