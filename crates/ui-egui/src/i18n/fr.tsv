@@ -2585,3 +2585,54 @@
 	Check Electrical Gear	Vérifier les équipements électriques
 	Submittal Review of Gear	Revue de soumission des équipements
 	Accept Gear as Submitted	Accepter l'équipement tel que soumis
+	4D Schedule	Planning 4D
+	Import 4D Schedule	Importer le planning 4D
+	4D Schedule Tasks	Tâches du planning 4D
+	Link 4D Task	Lier une tâche 4D
+	4D State at a Date	État 4D à une date
+	Export 4D Video	Exporter la vidéo 4D
+	Clear 4D Schedule	Effacer le planning 4D
+	Import Schedule...	Importer un planning...
+	Export Video...	Exporter la vidéo...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV ou Excel : colonnes tâche, début, fin, et niveau, système, classe ou élément
+	No schedule yet. Import one to show the model on a date.	Pas encore de planning. Importez-en un pour afficher le modèle à une date.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} tâches, du {start} au {finish} ; {linked} objets planifiés sur {elements}
+	Show the model on a date	Afficher le modèle à une date
+	Pause	Pause
+	A day earlier	Un jour plus tôt
+	A day later	Un jour plus tard
+	 days/s	 jours/s
+	Show work not started, pale	Afficher en pâle les travaux non commencés
+	Built	Construit
+	In progress	En cours
+	Not yet	Pas encore
+	Add Selected Objects	Ajouter les objets sélectionnés
+	Remove Selected Objects	Retirer les objets sélectionnés
+	Water and Gas Points of Entry	Points d'entrée de l'eau et du gaz
+	Route Grounding	Router la mise à la terre
+	Check Grounding	Vérifier la mise à la terre
+	Alternative Grounding Electrode	Électrode de terre alternative
+	Grounding Takeoff	Métré de mise à la terre
+	Bill of Materials	Nomenclature des matériaux
+	Labels	Étiquettes
+	Print Labels	Imprimer les étiquettes
+	Import Arc Flash Data	Importer les données d'arc électrique
+	Check Labels	Vérifier les étiquettes
+	Label BOM Lines	Lignes de nomenclature des étiquettes
+	List Element Tags	Lister les étiquettes d'éléments
+	Set Element Tag Field	Définir un champ d'étiquette
+	Accept Element Tags	Accepter les étiquettes d'éléments
+	Element Tags	Étiquettes d'éléments
+	Untagged	Sans étiquette
+	Tag not in schedule	Étiquette absente du tableau
+	Missing protection	Protection manquante
+	Double protection	Double protection
+	No conductor note	Pas de note de conducteurs
+	Two rules apply	Deux règles s'appliquent
+	All elements	Tous les éléments
+	{n} elements	{n} éléments
+	No element tags: read the electrical plans first.	Aucune étiquette : lisez d'abord les plans électriques.
+	Field	Champ
+	Set on Picked	Appliquer aux choisis
+	Accept Picked	Accepter les choisis
+	Pick All Shown	Choisir tout l'affiché

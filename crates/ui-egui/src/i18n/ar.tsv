@@ -2792,3 +2792,54 @@ menu	View	عرض
 	Check Electrical Gear	فحص المعدات الكهربائية
 	Submittal Review of Gear	مراجعة تقديم المعدات
 	Accept Gear as Submitted	قبول المعدات كما قُدّمت
+	4D Schedule	الجدول الزمني رباعي الأبعاد
+	Import 4D Schedule	استيراد الجدول الزمني رباعي الأبعاد
+	4D Schedule Tasks	مهام الجدول الزمني رباعي الأبعاد
+	Link 4D Task	ربط مهمة رباعية الأبعاد
+	4D State at a Date	الحالة رباعية الأبعاد في تاريخ
+	Export 4D Video	تصدير فيديو رباعي الأبعاد
+	Clear 4D Schedule	مسح الجدول الزمني رباعي الأبعاد
+	Import Schedule...	استيراد الجدول الزمني...
+	Export Video...	تصدير فيديو...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV أو Excel: أعمدة المهمة والبداية والنهاية، والمستوى أو النظام أو الفئة أو العنصر
+	No schedule yet. Import one to show the model on a date.	لا يوجد جدول زمني بعد. استورد جدولًا لعرض النموذج في تاريخ معين.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} مهام، من {start} إلى {finish}؛ {linked} من {elements} كائنات مجدولة
+	Show the model on a date	عرض النموذج في تاريخ
+	Pause	إيقاف مؤقت
+	A day earlier	يوم أبكر
+	A day later	يوم لاحق
+	 days/s	 يوم/ث
+	Show work not started, pale	عرض الأعمال غير المبدوءة باهتة
+	Built	مُنجز
+	In progress	قيد التنفيذ
+	Not yet	لم يبدأ بعد
+	Add Selected Objects	إضافة الكائنات المحددة
+	Remove Selected Objects	إزالة الكائنات المحددة
+	Water and Gas Points of Entry	نقاط دخول المياه والغاز
+	Route Grounding	توجيه التأريض
+	Check Grounding	فحص التأريض
+	Alternative Grounding Electrode	قطب تأريض بديل
+	Grounding Takeoff	حصر كميات التأريض
+	Bill of Materials	قائمة المواد
+	Labels	الملصقات
+	Print Labels	طباعة الملصقات
+	Import Arc Flash Data	استيراد بيانات وميض القوس
+	Check Labels	فحص الملصقات
+	Label BOM Lines	بنود قائمة المواد للملصقات
+	List Element Tags	سرد وسوم العناصر
+	Set Element Tag Field	تعيين حقل وسم العنصر
+	Accept Element Tags	قبول وسوم العناصر
+	Element Tags	وسوم العناصر
+	Untagged	بلا وسم
+	Tag not in schedule	الوسم غير موجود في الجدول
+	Missing protection	حماية مفقودة
+	Double protection	حماية مزدوجة
+	No conductor note	لا توجد ملاحظة موصلات
+	Two rules apply	تنطبق قاعدتان
+	All elements	كل العناصر
+	{n} elements	{n} عنصرًا
+	No element tags: read the electrical plans first.	لا توجد وسوم عناصر: اقرأ المخططات الكهربائية أولًا.
+	Field	الحقل
+	Set on Picked	تعيين على المحدد
+	Accept Picked	قبول المحدد
+	Pick All Shown	تحديد كل المعروض

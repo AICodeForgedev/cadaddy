@@ -2614,3 +2614,54 @@
 	Check Electrical Gear	Elektrische Verteilungen prüfen
 	Submittal Review of Gear	Prüfung der Geräteeinreichung
 	Accept Gear as Submitted	Gerät wie eingereicht annehmen
+	4D Schedule	4D-Terminplan
+	Import 4D Schedule	4D-Terminplan importieren
+	4D Schedule Tasks	Vorgänge des 4D-Terminplans
+	Link 4D Task	4D-Vorgang verknüpfen
+	4D State at a Date	4D-Stand an einem Datum
+	Export 4D Video	4D-Video exportieren
+	Clear 4D Schedule	4D-Terminplan löschen
+	Import Schedule...	Terminplan importieren...
+	Export Video...	Video exportieren...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV oder Excel: Spalten Vorgang, Beginn, Ende sowie Ebene, System, Klasse oder Element
+	No schedule yet. Import one to show the model on a date.	Noch kein Terminplan. Importieren Sie einen, um das Modell an einem Datum zu zeigen.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} Vorgänge, {start} bis {finish}; {linked} von {elements} Objekten eingeplant
+	Show the model on a date	Modell an einem Datum zeigen
+	Pause	Pause
+	A day earlier	Einen Tag früher
+	A day later	Einen Tag später
+	 days/s	 Tage/s
+	Show work not started, pale	Nicht begonnene Arbeiten blass zeigen
+	Built	Gebaut
+	In progress	In Arbeit
+	Not yet	Noch nicht
+	Add Selected Objects	Ausgewählte Objekte hinzufügen
+	Remove Selected Objects	Ausgewählte Objekte entfernen
+	Water and Gas Points of Entry	Wasser- und Gaseinführungen
+	Route Grounding	Erdung verlegen
+	Check Grounding	Erdung prüfen
+	Alternative Grounding Electrode	Alternativer Erder
+	Grounding Takeoff	Erdungs-Mengenermittlung
+	Bill of Materials	Stückliste
+	Labels	Beschriftungen
+	Print Labels	Beschriftungen drucken
+	Import Arc Flash Data	Störlichtbogendaten importieren
+	Check Labels	Beschriftungen prüfen
+	Label BOM Lines	Stücklistenzeilen für Beschriftungen
+	List Element Tags	Elementkennzeichnungen auflisten
+	Set Element Tag Field	Feld der Elementkennzeichnung setzen
+	Accept Element Tags	Elementkennzeichnungen annehmen
+	Element Tags	Elementkennzeichnungen
+	Untagged	Ohne Kennzeichnung
+	Tag not in schedule	Kennzeichnung nicht in der Liste
+	Missing protection	Schutz fehlt
+	Double protection	Doppelter Schutz
+	No conductor note	Keine Leiterangabe
+	Two rules apply	Zwei Regeln gelten
+	All elements	Alle Elemente
+	{n} elements	{n} Elemente
+	No element tags: read the electrical plans first.	Keine Elementkennzeichnungen: zuerst die Elektropläne lesen.
+	Field	Feld
+	Set on Picked	Bei Ausgewählten setzen
+	Accept Picked	Ausgewählte annehmen
+	Pick All Shown	Alle gezeigten wählen

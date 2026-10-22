@@ -2803,3 +2803,54 @@
 	Check Electrical Gear	Verificar equipamentos elétricos
 	Submittal Review of Gear	Revisão de submissão dos equipamentos
 	Accept Gear as Submitted	Aceitar equipamento conforme submetido
+	4D Schedule	Cronograma 4D
+	Import 4D Schedule	Importar cronograma 4D
+	4D Schedule Tasks	Tarefas do cronograma 4D
+	Link 4D Task	Vincular tarefa 4D
+	4D State at a Date	Estado 4D em uma data
+	Export 4D Video	Exportar vídeo 4D
+	Clear 4D Schedule	Limpar cronograma 4D
+	Import Schedule...	Importar cronograma...
+	Export Video...	Exportar vídeo...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV ou Excel: colunas de tarefa, início, término e nível, sistema, classe ou elemento
+	No schedule yet. Import one to show the model on a date.	Ainda não há cronograma. Importe um para mostrar o modelo em uma data.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} tarefas, de {start} a {finish}; {linked} de {elements} objetos programados
+	Show the model on a date	Mostrar o modelo em uma data
+	Pause	Pausar
+	A day earlier	Um dia antes
+	A day later	Um dia depois
+	 days/s	 dias/s
+	Show work not started, pale	Mostrar em tom claro o trabalho não iniciado
+	Built	Construído
+	In progress	Em andamento
+	Not yet	Ainda não
+	Add Selected Objects	Adicionar objetos selecionados
+	Remove Selected Objects	Remover objetos selecionados
+	Water and Gas Points of Entry	Pontos de entrada de água e gás
+	Route Grounding	Rotear aterramento
+	Check Grounding	Verificar aterramento
+	Alternative Grounding Electrode	Eletrodo de aterramento alternativo
+	Grounding Takeoff	Levantamento de aterramento
+	Bill of Materials	Lista de materiais
+	Labels	Etiquetas
+	Print Labels	Imprimir etiquetas
+	Import Arc Flash Data	Importar dados de arco elétrico
+	Check Labels	Verificar etiquetas
+	Label BOM Lines	Itens da lista de materiais de etiquetas
+	List Element Tags	Listar etiquetas de elementos
+	Set Element Tag Field	Definir campo da etiqueta
+	Accept Element Tags	Aceitar etiquetas de elementos
+	Element Tags	Etiquetas de elementos
+	Untagged	Sem etiqueta
+	Tag not in schedule	Etiqueta fora do quadro
+	Missing protection	Proteção ausente
+	Double protection	Proteção dupla
+	No conductor note	Sem nota de condutores
+	Two rules apply	Aplicam-se duas regras
+	All elements	Todos os elementos
+	{n} elements	{n} elementos
+	No element tags: read the electrical plans first.	Sem etiquetas: leia primeiro as plantas elétricas.
+	Field	Campo
+	Set on Picked	Aplicar aos escolhidos
+	Accept Picked	Aceitar escolhidos
+	Pick All Shown	Escolher todos os mostrados

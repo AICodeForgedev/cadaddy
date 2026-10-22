@@ -2796,3 +2796,54 @@ menu	Modify	Edita
 	Check Electrical Gear	Verifica apparecchiature elettriche
 	Submittal Review of Gear	Revisione della documentazione delle apparecchiature
 	Accept Gear as Submitted	Accetta l'apparecchiatura come presentata
+	4D Schedule	Programma 4D
+	Import 4D Schedule	Importa programma 4D
+	4D Schedule Tasks	Attività del programma 4D
+	Link 4D Task	Collega attività 4D
+	4D State at a Date	Stato 4D a una data
+	Export 4D Video	Esporta video 4D
+	Clear 4D Schedule	Cancella programma 4D
+	Import Schedule...	Importa programma...
+	Export Video...	Esporta video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV o Excel: colonne attività, inizio, fine e livello, sistema, classe o elemento
+	No schedule yet. Import one to show the model on a date.	Nessun programma. Importane uno per mostrare il modello a una data.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} attività, dal {start} al {finish}; {linked} di {elements} oggetti programmati
+	Show the model on a date	Mostra il modello a una data
+	Pause	Pausa
+	A day earlier	Un giorno prima
+	A day later	Un giorno dopo
+	 days/s	 giorni/s
+	Show work not started, pale	Mostra in chiaro il lavoro non iniziato
+	Built	Costruito
+	In progress	In corso
+	Not yet	Non ancora
+	Add Selected Objects	Aggiungi oggetti selezionati
+	Remove Selected Objects	Rimuovi oggetti selezionati
+	Water and Gas Points of Entry	Punti di ingresso acqua e gas
+	Route Grounding	Instrada la messa a terra
+	Check Grounding	Verifica la messa a terra
+	Alternative Grounding Electrode	Dispersore alternativo
+	Grounding Takeoff	Computo della messa a terra
+	Bill of Materials	Distinta materiali
+	Labels	Etichette
+	Print Labels	Stampa etichette
+	Import Arc Flash Data	Importa dati di arco elettrico
+	Check Labels	Verifica etichette
+	Label BOM Lines	Righe distinta base etichette
+	List Element Tags	Elenca etichette elementi
+	Set Element Tag Field	Imposta campo etichetta
+	Accept Element Tags	Accetta etichette elementi
+	Element Tags	Etichette elementi
+	Untagged	Senza etichetta
+	Tag not in schedule	Etichetta non in tabella
+	Missing protection	Protezione mancante
+	Double protection	Doppia protezione
+	No conductor note	Nessuna nota conduttori
+	Two rules apply	Si applicano due regole
+	All elements	Tutti gli elementi
+	{n} elements	{n} elementi
+	No element tags: read the electrical plans first.	Nessuna etichetta: leggi prima le tavole elettriche.
+	Field	Campo
+	Set on Picked	Imposta sui selezionati
+	Accept Picked	Accetta selezionati
+	Pick All Shown	Seleziona tutti i mostrati

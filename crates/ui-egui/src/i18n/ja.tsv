@@ -2243,3 +2243,13 @@
 	Check Electrical Gear	電気機器をチェック
 	Submittal Review of Gear	機器提出書の審査
 	Accept Gear as Submitted	提出どおり機器を承認
+	Water and Gas Points of Entry	水道とガスの引込み点
+	Route Grounding	接地を配線
+	Check Grounding	接地をチェック
+	Alternative Grounding Electrode	代替接地極
+	Grounding Takeoff	接地の拾い出し
+	Labels	ラベル
+	Print Labels	ラベルを印刷
+	Import Arc Flash Data	アークフラッシュデータを読み込み
+	Check Labels	ラベルをチェック
+	Label BOM Lines	ラベルの部品表行

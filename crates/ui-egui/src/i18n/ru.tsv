@@ -2586,3 +2586,54 @@
 	Check Electrical Gear	Проверить электрооборудование
 	Submittal Review of Gear	Проверка подачи оборудования
 	Accept Gear as Submitted	Принять оборудование как подано
+	4D Schedule	4D-график
+	Import 4D Schedule	Импорт 4D-графика
+	4D Schedule Tasks	Задачи 4D-графика
+	Link 4D Task	Связать 4D-задачу
+	4D State at a Date	4D-состояние на дату
+	Export 4D Video	Экспорт 4D-видео
+	Clear 4D Schedule	Очистить 4D-график
+	Import Schedule...	Импорт графика...
+	Export Video...	Экспорт видео...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV или Excel: столбцы задачи, начала, окончания и уровня, системы, класса или элемента
+	No schedule yet. Import one to show the model on a date.	Графика пока нет. Импортируйте его, чтобы показать модель на дату.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	Задач: {tasks}, с {start} по {finish}; в графике {linked} из {elements} объектов
+	Show the model on a date	Показать модель на дату
+	Pause	Пауза
+	A day earlier	На день раньше
+	A day later	На день позже
+	 days/s	 дн./с
+	Show work not started, pale	Показывать неначатые работы бледными
+	Built	Построено
+	In progress	В работе
+	Not yet	Ещё нет
+	Add Selected Objects	Добавить выбранные объекты
+	Remove Selected Objects	Убрать выбранные объекты
+	Water and Gas Points of Entry	Точки ввода воды и газа
+	Route Grounding	Проложить заземление
+	Check Grounding	Проверить заземление
+	Alternative Grounding Electrode	Альтернативный заземлитель
+	Grounding Takeoff	Ведомость заземления
+	Bill of Materials	Ведомость материалов
+	Labels	Этикетки
+	Print Labels	Печать этикеток
+	Import Arc Flash Data	Импорт данных о дуговом разряде
+	Check Labels	Проверить этикетки
+	Label BOM Lines	Строки спецификации для этикеток
+	List Element Tags	Список меток элементов
+	Set Element Tag Field	Задать поле метки элемента
+	Accept Element Tags	Принять метки элементов
+	Element Tags	Метки элементов
+	Untagged	Без метки
+	Tag not in schedule	Метки нет в спецификации
+	Missing protection	Нет защиты
+	Double protection	Двойная защита
+	No conductor note	Нет пометки о проводниках
+	Two rules apply	Применимы два правила
+	All elements	Все элементы
+	{n} elements	Элементов: {n}
+	No element tags: read the electrical plans first.	Меток нет: сначала прочитайте электрические планы.
+	Field	Поле
+	Set on Picked	Задать выбранным
+	Accept Picked	Принять выбранные
+	Pick All Shown	Выбрать все показанные

@@ -2797,3 +2797,54 @@ menu	Modify	수정
 	Check Electrical Gear	전기 설비 검사
 	Submittal Review of Gear	설비 제출 검토
 	Accept Gear as Submitted	제출된 대로 설비 승인
+	4D Schedule	4D 일정
+	Import 4D Schedule	4D 일정 가져오기
+	4D Schedule Tasks	4D 일정 작업
+	Link 4D Task	4D 작업 연결
+	4D State at a Date	특정 날짜의 4D 상태
+	Export 4D Video	4D 동영상 내보내기
+	Clear 4D Schedule	4D 일정 지우기
+	Import Schedule...	일정 가져오기...
+	Export Video...	동영상 내보내기...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV 또는 Excel: 작업, 시작, 종료 열과 레벨, 시스템, 클래스 또는 요소 열
+	No schedule yet. Import one to show the model on a date.	아직 일정이 없습니다. 일정을 가져오면 특정 날짜의 모델을 볼 수 있습니다.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	작업 {tasks}개, {start}~{finish}; 객체 {elements}개 중 {linked}개 일정 지정됨
+	Show the model on a date	특정 날짜의 모델 표시
+	Pause	일시 정지
+	A day earlier	하루 전
+	A day later	하루 후
+	 days/s	 일/초
+	Show work not started, pale	시작 전 작업을 흐리게 표시
+	Built	시공 완료
+	In progress	진행 중
+	Not yet	시작 전
+	Add Selected Objects	선택한 객체 추가
+	Remove Selected Objects	선택한 객체 제거
+	Water and Gas Points of Entry	수도 및 가스 인입점
+	Route Grounding	접지 경로 지정
+	Check Grounding	접지 검사
+	Alternative Grounding Electrode	대체 접지 전극
+	Grounding Takeoff	접지 물량 산출
+	Bill of Materials	자재 명세서
+	Labels	라벨
+	Print Labels	라벨 인쇄
+	Import Arc Flash Data	아크 플래시 데이터 가져오기
+	Check Labels	라벨 검사
+	Label BOM Lines	라벨 자재 명세 행
+	List Element Tags	요소 태그 목록
+	Set Element Tag Field	요소 태그 필드 설정
+	Accept Element Tags	요소 태그 승인
+	Element Tags	요소 태그
+	Untagged	태그 없음
+	Tag not in schedule	일람표에 없는 태그
+	Missing protection	보호 누락
+	Double protection	이중 보호
+	No conductor note	도체 주기 없음
+	Two rules apply	두 규칙 적용
+	All elements	모든 요소
+	{n} elements	요소 {n}개
+	No element tags: read the electrical plans first.	요소 태그 없음: 먼저 전기 도면을 읽으십시오.
+	Field	필드
+	Set on Picked	선택 항목에 설정
+	Accept Picked	선택 항목 승인
+	Pick All Shown	표시된 항목 모두 선택

@@ -2681,3 +2681,54 @@
 	Check Electrical Gear	检查电气设备
 	Submittal Review of Gear	设备提交审查
 	Accept Gear as Submitted	按提交接受设备
+	4D Schedule	4D 进度计划
+	Import 4D Schedule	导入 4D 进度计划
+	4D Schedule Tasks	4D 进度计划任务
+	Link 4D Task	链接 4D 任务
+	4D State at a Date	某日期的 4D 状态
+	Export 4D Video	导出 4D 视频
+	Clear 4D Schedule	清除 4D 进度计划
+	Import Schedule...	导入进度计划...
+	Export Video...	导出视频...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV 或 Excel：任务、开始、完成列，以及标高、系统、类别或构件列
+	No schedule yet. Import one to show the model on a date.	尚无进度计划。导入后可显示某一日期的模型。
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} 个任务，{start} 至 {finish}；{elements} 个对象中 {linked} 个已排程
+	Show the model on a date	显示某日期的模型
+	Pause	暂停
+	A day earlier	提前一天
+	A day later	推后一天
+	 days/s	 天/秒
+	Show work not started, pale	以浅色显示未开始的工作
+	Built	已建成
+	In progress	进行中
+	Not yet	尚未开始
+	Add Selected Objects	添加选定对象
+	Remove Selected Objects	移除选定对象
+	Water and Gas Points of Entry	水和燃气入户点
+	Route Grounding	布置接地
+	Check Grounding	检查接地
+	Alternative Grounding Electrode	替代接地极
+	Grounding Takeoff	接地工程量
+	Bill of Materials	材料清单
+	Labels	标签
+	Print Labels	打印标签
+	Import Arc Flash Data	导入电弧闪络数据
+	Check Labels	检查标签
+	Label BOM Lines	标签物料清单行
+	List Element Tags	列出元素标记
+	Set Element Tag Field	设置元素标记字段
+	Accept Element Tags	接受元素标记
+	Element Tags	元素标记
+	Untagged	未标记
+	Tag not in schedule	标记不在明细表中
+	Missing protection	缺少保护
+	Double protection	重复保护
+	No conductor note	无导线注释
+	Two rules apply	两条规则适用
+	All elements	所有元素
+	{n} elements	{n} 个元素
+	No element tags: read the electrical plans first.	没有元素标记：请先读取电气图纸。
+	Field	字段
+	Set on Picked	设置到所选
+	Accept Picked	接受所选
+	Pick All Shown	选择全部显示项

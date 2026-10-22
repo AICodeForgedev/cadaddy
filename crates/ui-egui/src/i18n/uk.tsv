@@ -2845,3 +2845,44 @@
 	Check Grounding	Перевірити заземлення
 	Alternative Grounding Electrode	Альтернативний заземлювач
 	Grounding Takeoff	Відомість заземлення
+	4D Schedule	4D-графік
+	Import 4D Schedule	Імпорт 4D-графіка
+	4D Schedule Tasks	Завдання 4D-графіка
+	Link 4D Task	Зв’язати 4D-завдання
+	4D State at a Date	4D-стан на дату
+	Export 4D Video	Експорт 4D-відео
+	Clear 4D Schedule	Очистити 4D-графік
+	Import Schedule...	Імпорт графіка...
+	Export Video...	Експорт відео...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV або Excel: стовпці завдання, початку, завершення та рівня, системи, класу або елемента
+	No schedule yet. Import one to show the model on a date.	Графіка ще немає. Імпортуйте його, щоб показати модель на дату.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	Завдань: {tasks}, з {start} по {finish}; у графіку {linked} з {elements} об’єктів
+	Show the model on a date	Показати модель на дату
+	Pause	Пауза
+	A day earlier	На день раніше
+	A day later	На день пізніше
+	 days/s	 дн./с
+	Show work not started, pale	Показувати непочаті роботи блідими
+	Built	Збудовано
+	In progress	Виконується
+	Not yet	Ще ні
+	Add Selected Objects	Додати вибрані об’єкти
+	Remove Selected Objects	Прибрати вибрані об’єкти
+	Bill of Materials	Відомість матеріалів
+	List Element Tags	Список міток елементів
+	Set Element Tag Field	Задати поле мітки елемента
+	Accept Element Tags	Прийняти мітки елементів
+	Element Tags	Мітки елементів
+	Untagged	Без мітки
+	Tag not in schedule	Мітки немає в специфікації
+	Missing protection	Немає захисту
+	Double protection	Подвійний захист
+	No conductor note	Немає позначки про провідники
+	Two rules apply	Застосовні два правила
+	All elements	Усі елементи
+	{n} elements	Елементів: {n}
+	No element tags: read the electrical plans first.	Міток немає: спершу прочитайте електричні плани.
+	Field	Поле
+	Set on Picked	Задати вибраним
+	Accept Picked	Прийняти вибрані
+	Pick All Shown	Вибрати всі показані

@@ -2804,3 +2804,54 @@ menu	Modify	Ändra
 	Check Electrical Gear	Kontrollera elutrustning
 	Submittal Review of Gear	Granskning av utrustningsunderlag
 	Accept Gear as Submitted	Godkänn utrustning som inlämnad
+	4D Schedule	4D-tidplan
+	Import 4D Schedule	Importera 4D-tidplan
+	4D Schedule Tasks	Aktiviteter i 4D-tidplan
+	Link 4D Task	Länka 4D-aktivitet
+	4D State at a Date	4D-läge vid ett datum
+	Export 4D Video	Exportera 4D-video
+	Clear 4D Schedule	Rensa 4D-tidplan
+	Import Schedule...	Importera tidplan...
+	Export Video...	Exportera video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV eller Excel: kolumner för aktivitet, start, slut samt plan, system, klass eller element
+	No schedule yet. Import one to show the model on a date.	Ingen tidplan ännu. Importera en för att visa modellen vid ett datum.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	{tasks} aktiviteter, {start} till {finish}; {linked} av {elements} objekt schemalagda
+	Show the model on a date	Visa modellen vid ett datum
+	Pause	Pausa
+	A day earlier	En dag tidigare
+	A day later	En dag senare
+	 days/s	 dagar/s
+	Show work not started, pale	Visa ej påbörjat arbete blekt
+	Built	Byggt
+	In progress	Pågår
+	Not yet	Inte än
+	Add Selected Objects	Lägg till markerade objekt
+	Remove Selected Objects	Ta bort markerade objekt
+	Water and Gas Points of Entry	Inkommande vatten och gas
+	Route Grounding	Dra jordning
+	Check Grounding	Kontrollera jordning
+	Alternative Grounding Electrode	Alternativ jordelektrod
+	Grounding Takeoff	Mängdavtagning jordning
+	Bill of Materials	Materialförteckning
+	Labels	Etiketter
+	Print Labels	Skriv ut etiketter
+	Import Arc Flash Data	Importera ljusbågsdata
+	Check Labels	Kontrollera etiketter
+	Label BOM Lines	Materialrader för etiketter
+	List Element Tags	Lista elementtaggar
+	Set Element Tag Field	Ange fält i elementtagg
+	Accept Element Tags	Godkänn elementtaggar
+	Element Tags	Elementtaggar
+	Untagged	Utan tagg
+	Tag not in schedule	Taggen saknas i förteckningen
+	Missing protection	Skydd saknas
+	Double protection	Dubbelt skydd
+	No conductor note	Ingen ledaranteckning
+	Two rules apply	Två regler gäller
+	All elements	Alla element
+	{n} elements	{n} element
+	No element tags: read the electrical plans first.	Inga elementtaggar: läs elritningarna först.
+	Field	Fält
+	Set on Picked	Ange för valda
+	Accept Picked	Godkänn valda
+	Pick All Shown	Välj alla visade

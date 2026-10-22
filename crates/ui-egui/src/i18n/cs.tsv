@@ -2777,3 +2777,54 @@ menu	Modify	Modifikace
 	Check Electrical Gear	Zkontrolovat elektrická zařízení
 	Submittal Review of Gear	Kontrola předložení zařízení
 	Accept Gear as Submitted	Přijmout zařízení dle předložení
+	4D Schedule	4D harmonogram
+	Import 4D Schedule	Importovat 4D harmonogram
+	4D Schedule Tasks	Úkoly 4D harmonogramu
+	Link 4D Task	Propojit úkol 4D
+	4D State at a Date	Stav 4D k datu
+	Export 4D Video	Exportovat 4D video
+	Clear 4D Schedule	Vymazat 4D harmonogram
+	Import Schedule...	Importovat harmonogram...
+	Export Video...	Exportovat video...
+	CSV or Excel: task, start, finish, and level, system, class or element columns	CSV nebo Excel: sloupce úkol, začátek, konec a podlaží, systém, třída nebo prvek
+	No schedule yet. Import one to show the model on a date.	Zatím žádný harmonogram. Importujte jej, abyste zobrazili model k datu.
+	{tasks} tasks, {start} to {finish}; {linked} of {elements} objects scheduled	Úkoly: {tasks}, {start} až {finish}; naplánováno {linked} z {elements} objektů
+	Show the model on a date	Zobrazit model k datu
+	Pause	Pozastavit
+	A day earlier	O den dříve
+	A day later	O den později
+	 days/s	 dní/s
+	Show work not started, pale	Nezahájené práce zobrazit světle
+	Built	Postaveno
+	In progress	Probíhá
+	Not yet	Zatím ne
+	Add Selected Objects	Přidat vybrané objekty
+	Remove Selected Objects	Odebrat vybrané objekty
+	Water and Gas Points of Entry	Místa vstupu vody a plynu
+	Route Grounding	Vést uzemnění
+	Check Grounding	Zkontrolovat uzemnění
+	Alternative Grounding Electrode	Náhradní zemnič
+	Grounding Takeoff	Výkaz uzemnění
+	Bill of Materials	Výkaz materiálu
+	Labels	Štítky
+	Print Labels	Tisknout štítky
+	Import Arc Flash Data	Importovat data obloukového zkratu
+	Check Labels	Zkontrolovat štítky
+	Label BOM Lines	Položky kusovníku pro štítky
+	List Element Tags	Seznam štítků prvků
+	Set Element Tag Field	Nastavit pole štítku prvku
+	Accept Element Tags	Přijmout štítky prvků
+	Element Tags	Štítky prvků
+	Untagged	Bez štítku
+	Tag not in schedule	Štítek není v rozpisu
+	Missing protection	Chybí ochrana
+	Double protection	Dvojí ochrana
+	No conductor note	Chybí poznámka vodičů
+	Two rules apply	Platí dvě pravidla
+	All elements	Všechny prvky
+	{n} elements	Prvků: {n}
+	No element tags: read the electrical plans first.	Žádné štítky prvků: nejprve načtěte elektro výkresy.
+	Field	Pole
+	Set on Picked	Nastavit u vybraných
+	Accept Picked	Přijmout vybrané
+	Pick All Shown	Vybrat vše zobrazené
