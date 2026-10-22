@@ -1344,6 +1344,23 @@ fn tables_roundtrip_with_title_header_and_merges() {
 }
 
 #[test]
+fn table_block_is_relative_to_the_insertion_point() {
+    let d = Drawing::new_imperial();
+    let t = table_sample();
+    let ents = crate::dxf_write::table_block_entities(&d, &t, "0");
+    let mut xs = Vec::new();
+    for e in &ents {
+        if let EntityKind::Line(l) = &e.kind {
+            xs.extend([l.a.x, l.b.x]);
+        }
+    }
+    assert!(!xs.is_empty());
+    let (min, max) = xs.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+    // Columns total 8 wide; the block starts at its own origin, not at the insert x of 5.
+    assert!(min.abs() < 1e-9 && (max - 8.0).abs() < 1e-9, "block x range {min}..{max}");
+}
+
+#[test]
 fn text_style_flags_roundtrip() {
     let mut d = Drawing::new_imperial();
     let st = TextStyle {
