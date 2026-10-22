@@ -40,6 +40,14 @@ pub struct RecognisedSheet {
     /// Raw grid bubble data: (label, [model_x, model_y]) for each detected bubble.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bubbles: Vec<(String, [f64; 2])>,
+    /// Every level the sheet (or this view of it) shows, `level` first: a typical-floor plan
+    /// titled `THIRD & FOURTH FLOOR` shows two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+    /// For one plan view of a sheet that prints several ([`recognise_views`]): the sheet number
+    /// as printed. `number` is then `<printed number>/<level>`, so each view is its own sheet.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub printed_number: String,
 }
 
 /// A grid line detected in a DXF drawing.
@@ -294,33 +302,130 @@ fn ordinal(word: &str) -> Option<u32> {
 }
 
 fn detect_level(title: &str) -> Option<String> {
-    let upper = title.to_uppercase();
-    if let Some(rest) = upper.strip_prefix("LEVEL ").or_else(|| upper.find("LEVEL ").map(|i| &upper[i + 6..])) {
-        let code = rest.split_whitespace().next().unwrap_or("").trim_end_matches([',', ':', '-']);
-        if !code.is_empty() {
-            // `LEVEL 02` is level 2.
-            let code = if code.len() > 1 && code.chars().all(|c| c.is_ascii_digit()) { code.trim_start_matches('0') } else { code };
-            return Some(code.to_string());
-        }
+    detect_levels(title).into_iter().next()
+}
+
+/// A level code after `LEVEL`: `2`, `02` (level 2), `B1`, `R`; not a word (`LEVEL MARKS ARE…`).
+fn level_code(word: &str) -> Option<String> {
+    let w = word.trim_end_matches([',', ':', '-']);
+    if w.is_empty() || w.len() > 3 || !w.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
     }
-    // `SECOND FLOOR PLAN`, `2ND FLOOR`, `FLOOR 2`.
-    let words: Vec<&str> = upper.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    for (i, w) in words.iter().enumerate() {
-        if *w != "FLOOR" {
+    if w.chars().all(|c| c.is_ascii_digit()) {
+        let n = w.trim_start_matches('0');
+        return (!n.is_empty()).then(|| n.to_string());
+    }
+    (w.chars().any(|c| c.is_ascii_digit()) || w.len() == 1).then(|| w.to_string())
+}
+
+/// A title's words, upper case, with `&` read as `AND` and a dash kept as `-` (`2ND-4TH`).
+fn level_tokens(title: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in title.chars().take(400) {
+        if c.is_ascii_alphanumeric() {
+            word.push(c.to_ascii_uppercase());
             continue;
         }
-        if let Some(n) = i.checked_sub(1).and_then(|j| words.get(j)).and_then(|p| ordinal(p)) {
-            return Some(n.to_string());
+        if !word.is_empty() {
+            out.push(std::mem::take(&mut word));
         }
-        if let Some(n) = words.get(i + 1).and_then(|n| n.parse::<u32>().ok()).filter(|n| *n > 0 && *n < 200) {
-            return Some(n.to_string());
+        match c {
+            '&' => out.push("AND".into()),
+            '-' | '\u{2013}' | '\u{2014}' => out.push("-".into()),
+            _ => {}
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+fn is_range(t: &str) -> bool {
+    matches!(t, "-" | "THRU" | "THROUGH" | "TO")
+}
+
+/// Levels `lo` up to `hi`, when a range of floors is a plausible one.
+fn level_range(lo: u32, hi: u32) -> Vec<u32> {
+    if hi > lo && hi - lo <= 60 { (lo..=hi).collect() } else { vec![lo, hi] }
+}
+
+/// Every level a title names, lowest first, roof last: `SECOND FLOOR PLAN`, `2ND FLOOR`,
+/// `FLOOR 2`, `LEVEL 02`, and the lists and ranges of a typical-floor or two-view sheet
+/// (`FIRST AND SECOND FLOOR`, `THIRD & FOURTH FLOOR`, `1ST AND 3RD FLOORS`, `2ND-4TH FLOOR`,
+/// `SECOND THRU FOURTH FLOOR`, `LEVELS 2-4`).
+pub fn detect_levels(title: &str) -> Vec<String> {
+    let words = level_tokens(title);
+    let mut found: Vec<String> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        match w.as_str() {
+            "FLOOR" | "FLOORS" => {
+                // Ordinals before it, joined by AND, `&` or a range: `FIRST AND SECOND FLOOR`.
+                let mut before: Vec<u32> = Vec::new();
+                let mut range = false;
+                for p in words.get(..i).unwrap_or_default().iter().rev() {
+                    if let Some(n) = ordinal(p) {
+                        match before.last() {
+                            Some(&hi) if range => before.extend(level_range(n, hi).into_iter().rev().skip(1)),
+                            _ => before.push(n),
+                        }
+                        range = false;
+                    } else if is_range(p) {
+                        range = true;
+                    } else if p != "AND" {
+                        break;
+                    }
+                }
+                if before.is_empty() {
+                    // `FLOOR 2`, `FLOORS 3 AND 4`, `FLOORS 2-4`.
+                    before = numbers_after(words.get(i + 1..).unwrap_or_default());
+                }
+                found.extend(before.iter().map(u32::to_string));
+            }
+            "LEVEL" | "LEVELS" => {
+                let rest = words.get(i + 1..).unwrap_or_default();
+                let numbers = numbers_after(rest);
+                if numbers.is_empty() {
+                    // `LEVEL B1`, `LEVEL R`.
+                    found.extend(rest.first().and_then(|n| level_code(n)));
+                } else {
+                    found.extend(numbers.iter().map(u32::to_string));
+                }
+            }
+            _ => {}
         }
     }
     // A roof plan (framing, drainage…), not a sheet of roof assemblies or details.
-    if upper.contains("ROOF") && upper.contains("PLAN") {
-        return Some("R".to_string());
+    if words.iter().any(|w| w == "ROOF") && words.iter().any(|w| w == "PLAN" || w == "PLANS") {
+        found.push("R".to_string());
     }
-    None
+    let key = |c: &String| (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.clone());
+    found.sort_by_key(key);
+    found.dedup();
+    found
+}
+
+/// Level numbers at the start of `words`: `2`, `02`, `3 AND 4`, `2-4`.
+fn numbers_after(words: &[String]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    let mut range = false;
+    for w in words.iter().take(9) {
+        let n = level_code(w).and_then(|c| c.parse::<u32>().ok()).filter(|n| *n > 0 && *n < 200);
+        match n {
+            Some(n) => {
+                match out.last() {
+                    Some(&lo) if range => out.extend(level_range(lo, n).into_iter().skip(1)),
+                    _ => out.push(n),
+                }
+                range = false;
+            }
+            None if is_range(w) => range = true,
+            None if w == "AND" => {}
+            None => break,
+        }
+    }
+    out
 }
 
 fn detect_title(d: &Drawing, number: &str) -> String {
@@ -348,9 +453,25 @@ fn detect_title(d: &Drawing, number: &str) -> String {
                 .iter()
                 .any(|k| up.contains(k))
         };
-        let best = |block: bool| texts.iter().filter(|(v, _, at, _)| in_title_block(*at) == block && titled(v)).max_by(|a, b| a.1.total_cmp(&b.1));
-        let Some(first) = best(true).or_else(|| best(false)) else { return String::new() };
-        return title_lines(&texts, first);
+        // The largest titled lines, the title block's first; a heading over a block of notes
+        // (`SHEET NOTES - FLOOR PLAN` at the top of the title column) isn't the title.
+        let mut ranked: Vec<&(String, f64, [f64; 2], [f64; 2])> = texts.iter().filter(|(v, _, _, _)| titled(v)).collect();
+        // The title column at the right edge first, then the foot strip, then the views.
+        let rank = |at: [f64; 2]| (in_title_block(at), at[0] > 0.8);
+        ranked.sort_by(|a, b| rank(b.2).cmp(&rank(a.2)).then(b.1.total_cmp(&a.1)));
+        let not_notes = |t: &String| {
+            let up = t.to_uppercase();
+            !["NOTES", "LEGEND", "ABBREVIATIONS"].iter().any(|k| up.contains(k))
+        };
+        let mut first_title = None;
+        for c in ranked.into_iter().take(40) {
+            let t = title_lines(&texts, c);
+            if not_notes(&t) {
+                return t;
+            }
+            first_title.get_or_insert(t);
+        }
+        return first_title.unwrap_or_default();
     }
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, val) in &candidates {
@@ -677,6 +798,52 @@ fn group_grid_lines_simple(bubbles: &[(String, [f64; 2])]) -> (Vec<DetectedGrid>
 ///
 /// Uses the direction of bubble pairs to determine rotation, then computes offset using
 /// grid line intersections or perpendicular projections.
+/// Largest misfit of a grid line, model inches (two feet), for [`alignment_from_lines`].
+const LINE_FIT_TOLERANCE_IN: f64 = 24.0;
+
+/// Most of `misfits` (two thirds, at least two) within [`LINE_FIT_TOLERANCE_IN`]: bubbles
+/// staggered off lines too close together, and a label or two misread, don't spoil a fit.
+fn mostly_fit(misfits: &[f64]) -> bool {
+    let good = misfits.iter().filter(|m| m.abs() <= LINE_FIT_TOLERANCE_IN).count();
+    good >= 2 && good * 3 >= misfits.len() * 2
+}
+
+/// An unrotated sheet's alignment from the grid lines it read: per direction, the offset most
+/// of its lines found in the common grid agree on ([`mostly_fit`]).
+fn alignment_from_lines(sx: &[DetectedGrid], sy: &[DetectedGrid], grid_x: &[GridLine], grid_y: &[GridLine]) -> Option<Alignment> {
+    let fit = |found: &[DetectedGrid], common: &[GridLine]| -> Option<f64> {
+        let mut offsets: Vec<f64> =
+            found.iter().filter_map(|g| common.iter().find(|c| c.label == g.label).map(|c| g.at_in - c.at_ft * 12.0)).collect();
+        offsets.sort_by(f64::total_cmp);
+        let median = *offsets.get(offsets.len() / 2)?;
+        let misfits: Vec<f64> = offsets.iter().map(|o| o - median).collect();
+        if !mostly_fit(&misfits) {
+            return None;
+        }
+        let good: Vec<f64> = offsets.iter().copied().filter(|o| (o - median).abs() <= LINE_FIT_TOLERANCE_IN).collect();
+        Some(good.iter().sum::<f64>() / good.len().max(1) as f64)
+    };
+    let ox = fit(sx, grid_x)?;
+    let oy = fit(sy, grid_y)?;
+    Some(Alignment { rotation_deg: 0.0, offset_in: [ox, oy] })
+}
+
+/// Whether, under `a`, most bubbles of the common grid's labels sit on their lines.
+fn bubbles_on_lines(a: &Alignment, bubbles: &[(String, [f64; 2])], grid_x: &[GridLine], grid_y: &[GridLine]) -> bool {
+    let misfits: Vec<f64> = bubbles
+        .iter()
+        .filter_map(|(label, at)| {
+            let b = building_from_model(a, *at);
+            grid_x
+                .iter()
+                .find(|g| &g.label == label)
+                .map(|g| (b[0] - g.at_ft) * 12.0)
+                .or_else(|| grid_y.iter().find(|g| &g.label == label).map(|g| (b[1] - g.at_ft) * 12.0))
+        })
+        .collect();
+    mostly_fit(&misfits)
+}
+
 fn compute_alignment_from_bubbles(bubbles: &[(String, [f64; 2])], grid_x: &[GridLine], grid_y: &[GridLine]) -> Option<Alignment> {
     let x_map: BTreeMap<&str, f64> = grid_x.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
     let y_map: BTreeMap<&str, f64> = grid_y.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
@@ -823,19 +990,196 @@ pub fn recognise_dxf(d: &Drawing) -> RecognisedSheet {
     let level = detect_level(&title);
     let (scale_text, scale) = detect_scale_text(d).map(|(t, s)| (Some(t), s)).unwrap_or((None, 0.0));
 
-    let bubbles = detect_grid_bubbles(d);
-    let _grid_lines = detect_grid_lines(d);
-    let (mut grid_x, mut grid_y) = group_grid_lines_simple(&bubbles);
-    if grid_x.is_empty() || grid_y.is_empty() {
-        // One bubble per line, or a plan split over two views: each bubble's own line says
-        // which way it runs.
-        let (lx, ly) = grid_by_leaders(d, &bubbles);
-        if !lx.is_empty() && !ly.is_empty() {
-            (grid_x, grid_y) = (lx, ly);
+    let (bubbles, grid_x, grid_y) = detect_grid(d);
+    let mut levels = detect_levels(&title);
+    let mut level = level;
+    if level.is_none() && title.to_uppercase().contains("PLAN") {
+        // A plan whose title block doesn't name a level: the drawing's own view title may
+        // (`SECOND FLOOR PLAN - AREA B` under the plan).
+        if let Some(v) = plan_views(d).into_iter().next() {
+            level = v.levels.first().cloned();
+            levels = v.levels;
         }
     }
 
-    RecognisedSheet { number, title, discipline, level, scale_text, scale, grid_x, grid_y, alignment: None, bubbles }
+    RecognisedSheet {
+        number,
+        title,
+        discipline,
+        level,
+        scale_text,
+        scale,
+        grid_x,
+        grid_y,
+        alignment: None,
+        bubbles,
+        levels,
+        printed_number: String::new(),
+    }
+}
+
+/// The grid bubbles and the grid lines they label.
+fn detect_grid(d: &Drawing) -> (Vec<(String, [f64; 2])>, Vec<DetectedGrid>, Vec<DetectedGrid>) {
+    let bubbles = detect_grid_bubbles(d);
+    let _grid_lines = detect_grid_lines(d);
+    let (mut grid_x, mut grid_y) = group_grid_lines_simple(&bubbles);
+    // One bubble per line, or a plan split over two views: each bubble's own line says which
+    // way it runs. Pairs read off a few stray tags (two `1` keynotes in line) don't make a
+    // grid, so the reading that finds more lines wins.
+    let paired = if grid_x.is_empty() || grid_y.is_empty() { 0 } else { grid_x.len() + grid_y.len() };
+    if paired < bubbles.len() / 3 {
+        let (lx, ly) = grid_by_leaders(d, &bubbles);
+        if !lx.is_empty() && !ly.is_empty() && lx.len() + ly.len() > paired {
+            (grid_x, grid_y) = (lx, ly);
+        }
+    }
+    (bubbles, grid_x, grid_y)
+}
+
+/// A plan view's title printed under it on the sheet (`2ND FLOOR LIGHTING PLAN`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlanView {
+    pub title: String,
+    /// The levels it names, lowest first.
+    pub levels: Vec<String>,
+    /// Where the title is, model units.
+    pub at: [f64; 2],
+    pub height: f64,
+}
+
+/// The plan views' titles on a sheet: lettering well above the sheet's usual size, short, naming
+/// a level, outside the title block's column. Bottom to top, then left to right.
+pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
+    let texts = texts_across(d);
+    let mut heights: Vec<f64> = texts.iter().map(|t| t.1).filter(|h| h.is_finite() && *h > 0.0).collect();
+    if heights.is_empty() {
+        return Vec::new();
+    }
+    heights.sort_by(f64::total_cmp);
+    let median = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    let mut views: Vec<PlanView> = texts
+        .iter()
+        .filter(|(v, h, at, _)| at[0] <= 0.8 && *h >= median * 1.4 && v.len() <= 60 && !v.to_uppercase().contains("NOTE"))
+        .filter_map(|(v, h, _, p)| {
+            let levels = detect_levels(v);
+            (!levels.is_empty()).then(|| PlanView { title: v.clone(), levels, at: *p, height: *h })
+        })
+        .take(16)
+        .collect();
+    // Two titles of one view (`1ST FLOOR LIGHTING PLAN` and `LEVEL 1 LIGHTING PLAN` under the
+    // same plan): the same levels a few lines apart are one view, titled by the larger. Views
+    // side by side (a floor's two halves, or its piping and its ductwork) title on one line and stay apart.
+    views.sort_by(|a, b| b.height.total_cmp(&a.height));
+    let mut kept: Vec<PlanView> = Vec::new();
+    for v in views {
+        let one_view = |k: &PlanView| {
+            let (dy, h) = ((k.at[1] - v.at[1]).abs(), k.height.max(v.height));
+            k.levels == v.levels && dy > h * 0.5 && dy <= h * 8.0
+        };
+        if !kept.iter().any(one_view) {
+            kept.push(v);
+        }
+    }
+    kept.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]).then(a.at[0].total_cmp(&b.at[0])));
+    kept
+}
+
+/// The drawing with only the entities whose middle `keep` accepts.
+fn crop(d: &Drawing, keep: &dyn Fn([f64; 2]) -> bool) -> Drawing {
+    let mut sub = d.clone();
+    sub.model = cadaddy_doc::EntityStore::new();
+    let kept: Vec<cadaddy_doc::Entity> = d
+        .model
+        .iter()
+        .filter(|e| {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            !b.is_empty() && keep([b.center().x, b.center().y])
+        })
+        .map(|e| (**e).clone())
+        .collect();
+    sub.model.push_many(kept);
+    sub
+}
+
+/// Recognise a sheet that may print several plan views, each of its own level (`1ST FLOOR
+/// LIGHTING PLAN` under one plan, `2ND FLOOR LIGHTING PLAN` under the other): one sheet per view,
+/// numbered `<number>/<level>`, with that view's grid, so each aligns and reads on its own. A
+/// sheet with one view (or views of the same levels) is recognised whole.
+pub fn recognise_views(d: &Drawing) -> Vec<RecognisedSheet> {
+    split_views(d).into_iter().map(|(s, _)| s).collect()
+}
+
+/// [`recognise_views`], each view with its part of the drawing (`None`: the whole sheet).
+pub fn split_views(d: &Drawing) -> Vec<(RecognisedSheet, Option<Drawing>)> {
+    let sheet = recognise_dxf(d);
+    let views = plan_views(d);
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|v| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return vec![(sheet, None)];
+    }
+    // Each view's cell: the views stand in columns (titles at about the same x, a tenth of the
+    // sheet or less apart), a column's views one above another. A title sits under its view:
+    // a view starts just below its title and ends where the next one up starts; a column ends
+    // halfway to the next column's titles.
+    let width = texts_across(d).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(t.3[0]), hi.max(t.3[0])));
+    let gap = ((width.1 - width.0) * 0.1).max(1e-9);
+    let mut views = views;
+    views.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
+    let mut columns: Vec<Vec<PlanView>> = Vec::new();
+    for v in views {
+        match columns.last_mut() {
+            Some(c) if c.last().is_some_and(|l| v.at[0] - l.at[0] <= gap) => c.push(v),
+            _ => columns.push(vec![v]),
+        }
+    }
+    let centre = |c: &Vec<PlanView>| c.iter().map(|v| v.at[0]).sum::<f64>() / c.len().max(1) as f64;
+    let mut cells: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for (ci, col) in columns.iter().enumerate() {
+        let x0 = if ci == 0 { f64::NEG_INFINITY } else { columns.get(ci - 1).map_or(f64::NEG_INFINITY, |p| (centre(p) + centre(col)) / 2.0) };
+        let x1 = columns.get(ci + 1).map_or(f64::INFINITY, |n| (centre(col) + centre(n)) / 2.0);
+        let mut col = col.clone();
+        col.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]));
+        for (i, v) in col.iter().enumerate() {
+            let y0 = if i == 0 { f64::NEG_INFINITY } else { v.at[1] - v.height };
+            let y1 = col.get(i + 1).map_or(f64::INFINITY, |n| n.at[1] - n.height);
+            cells.push((v.clone(), [x0, y0, x1, y1]));
+        }
+    }
+    let mut out: Vec<(RecognisedSheet, Option<Drawing>)> = Vec::new();
+    for (v, [x0, y0, x1, y1]) in cells {
+        let sub = crop(d, &|p: [f64; 2]| p[0] >= x0 && p[0] < x1 && p[1] >= y0 && p[1] < y1);
+        let (bubbles, grid_x, grid_y) = detect_grid(&sub);
+        let level = v.levels.first().cloned();
+        let mut number = match (&level, sheet.number.is_empty()) {
+            (Some(l), false) => format!("{}/{l}", sheet.number),
+            _ => sheet.number.clone(),
+        };
+        // Two views of one level (its piping and its ductwork): `/1`, `/1.2`.
+        let base = number.clone();
+        let mut k = 1;
+        while out.iter().any(|(r, _)| r.number == number) && k < 64 {
+            k += 1;
+            number = format!("{base}.{k}");
+        }
+        let rec = RecognisedSheet {
+            number,
+            title: v.title.clone(),
+            discipline: sheet.discipline.clone(),
+            level,
+            scale_text: sheet.scale_text.clone(),
+            scale: sheet.scale,
+            grid_x,
+            grid_y,
+            alignment: None,
+            bubbles,
+            levels: v.levels.clone(),
+            printed_number: sheet.number.clone(),
+        };
+        out.push((rec, Some(sub)));
+    }
+    out
 }
 
 /// Build a sheet map from a set of DXF drawings: recognise each sheet, assemble the common
@@ -865,8 +1209,12 @@ pub fn sheet_map_from(mut sheets: Vec<RecognisedSheet>) -> SheetMap {
         if sh.bubbles.is_empty() {
             continue;
         }
-        // Try bubble-based alignment (works for rotated and unrotated plans).
-        sh.alignment = compute_alignment_from_bubbles(&sh.bubbles, &grid_x, &grid_y);
+        // An unrotated plan: the lines it read fit the common grid square (this also aligns
+        // one view of a two-view sheet, with one bubble per line and so no pairs to turn by).
+        // Else bubble-based alignment (rotated plans), kept when the bubbles then sit on their
+        // lines (a detail or an elevation with a few bubbles gives nonsense).
+        sh.alignment = alignment_from_lines(&sh.grid_x, &sh.grid_y, &grid_x, &grid_y)
+            .or_else(|| compute_alignment_from_bubbles(&sh.bubbles, &grid_x, &grid_y).filter(|a| bubbles_on_lines(a, &sh.bubbles, &grid_x, &grid_y)));
     }
 
     SheetMap { sheets, grid_x, grid_y }

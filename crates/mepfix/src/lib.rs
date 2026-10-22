@@ -47,6 +47,7 @@ pub mod layout;
 pub mod ocr;
 pub mod pipe_reader;
 pub mod printcheck;
+pub mod printed;
 pub mod printset;
 pub mod revision;
 pub mod rfi;
@@ -249,8 +250,9 @@ pub fn hotel_truth_for(seed: u64, size: hotel::HotelSize) -> Truth {
     t
 }
 
-/// The hotel fixture set for a seed.
-pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, String> {
+/// The hotel's truth with its sheets planned, and the set's style, for a seed: what
+/// [`generate_hotel`] draws, for drawing single sheets ([`printed::two_view_sheet`]).
+pub fn hotel_planned(seed: u64, size: hotel::HotelSize) -> (Truth, style::Style) {
     let mut r = Rng::new(seed);
     let st = style::Style::new(&mut r.fork(1));
     let d = hotel::hotel_design(seed, &st, size, &mut r.fork(10));
@@ -259,6 +261,12 @@ pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, S
     layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(12));
     layout::plan_hotel_callouts(&mut t, &mut r.fork(13));
     t.clashes = clash::clashes(&t, &d.planted);
+    (t, st)
+}
+
+/// The hotel fixture set for a seed.
+pub fn generate_hotel(seed: u64, size: hotel::HotelSize) -> Result<FixtureSet, String> {
+    let (mut t, st) = hotel_planned(seed, size);
     let kinds: Vec<(String, layout::Kind)> = layout::hotel_sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     let mut files = Vec::new();
     let mut set = Vec::new();
