@@ -82,6 +82,7 @@ mod perceive;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
+pub mod projrules;
 mod props;
 pub mod redline;
 pub mod revise3d;
@@ -309,6 +310,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
+        v.extend(projrules::specs());
         v.extend(underlay::specs());
         v.extend(takeoff::specs());
         v.extend(imageattach::specs());

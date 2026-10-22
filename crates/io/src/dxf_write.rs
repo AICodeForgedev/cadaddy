@@ -2585,6 +2585,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     if let Some(chunks) = dxf_ext::bim_types_chunks(d) {
         xrecords.push((dxf_ext::BIM_TYPES_KEY, w.h(), chunks));
     }
+    if let Some(chunks) = dxf_ext::proj_rules_chunks(d) {
+        xrecords.push((dxf_ext::PROJ_RULES_KEY, w.h(), chunks));
+    }
     if let Some(chunks) = dxf_ext::plot_stamp_chunks(d) {
         xrecords.push((dxf_ext::PLOT_STAMP_KEY, w.h(), chunks));
     }

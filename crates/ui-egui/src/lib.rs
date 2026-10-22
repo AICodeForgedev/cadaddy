@@ -79,6 +79,7 @@ pub mod clashpalette;
 pub mod convertdlg;
 pub mod countpalette;
 pub mod customui;
+pub mod projrulespalette;
 pub mod dwgpropsdlg;
 pub mod dyngrips;
 pub mod dyninput;

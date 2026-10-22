@@ -48,6 +48,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "project_rules", "description": "Project rules: mounting heights, wiring methods, clearances, tolerances, naming and stud/joist layout per device/room type, each with a source (spec section, RFI #) and a tier (field_verified > rfi > submittal > drawing_revision > spec > project_rule > built_in). The highest tier wins. action \"list\" returns all rules (filter by domain); \"get\" resolves one rule (which tier won, what it overrode); \"set\" adds/updates a value with source, tier and reason (shows what changes); \"remove\" deletes a rule or tier; \"preview\" shows what setting would change without modifying; \"label\" gets/sets the project name; \"import\" reads a TOML/JSON file; \"export\" writes one.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "set", "remove", "preview", "label", "import", "export"]},
+                "domain": {"type": "string", "enum": ["mounting_height", "wiring_method", "stud_layout", "joist_layout", "clearance", "tolerance", "naming", "custom"]},
+                "key": {"type": "string"}, "value": {"type": "string"},
+                "tier": {"type": "string", "enum": ["field_verified", "rfi", "submittal", "drawing_revision", "spec", "project_rule", "built_in"]},
+                "source": {"type": "string"}, "set_by": {"type": "string"}, "reason": {"type": "string"},
+                "label": {"type": "string"}, "path": {"type": "string"}, "merge": {"type": "boolean"}},
+                "required": ["action"]}}),
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
@@ -226,6 +234,23 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("set_spec") => "bim.set_spec",
                 Some("unset_spec") => "bim.unset_spec",
                 _ => "bim.types",
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
+        }
+        "project_rules" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("get") => "project.rules.get",
+                Some("set") => "project.rules.set",
+                Some("remove") => "project.rules.remove",
+                Some("preview") => "project.rules.preview",
+                Some("label") => "project.rules.label",
+                Some("import") => "project.rules.import",
+                Some("export") => "project.rules.export",
+                _ => "project.rules.list",
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
