@@ -2707,3 +2707,90 @@
 	Coordination Mode	Modo de coordenação
 	Coordination Views	Vistas de coordenação
 	Isolate Trade	Isolar disciplina
+	Project Briefing	Resumo do projeto
+	Project Note	Nota do projeto
+	Review Queue	Fila de revisão
+	Next Review Item	Próximo item de revisão
+	Resolve Review Item	Resolver item de revisão
+	Defer Review Item	Adiar item de revisão
+	Draft RFI	Rascunho de RFI
+	Batch Resolve	Resolver em lote
+	Approve Agent Work	Aprovar o trabalho do agente
+	Agent Work	Trabalho dos agentes
+	Build BIM Model	Gerar modelo BIM
+	to accept	a aceitar
+	Accept all	Aceitar tudo
+	Accept	Aceitar
+	Cited:	Fonte:
+	Nothing waiting: agents' work is all accepted.	Nada pendente: todo o trabalho dos agentes foi aceito.
+	Read Levels	Ler níveis
+	List Levels	Listar níveis
+	Edit Level	Editar nível
+	Attach Sheets to Levels	Associar folhas aos níveis
+	Check Shafts Through Levels	Verificar shafts entre níveis
+	Isolate Level	Isolar nível
+	Read from Prints	Ler das plantas
+	Level names and elevations from the sections, elevations and level markers	Nomes e cotas dos níveis a partir de cortes, elevações e marcas de nível
+	Attach Sheets	Associar folhas
+	Check Shafts	Verificar shafts
+	Shafts, chases and risers must carry on through the levels between their ends	Shafts, rasgos e prumadas devem continuar pelos níveis entre suas extremidades
+	No levels in the building spec.	Não há níveis na especificação do edifício.
+	Level	Nível
+	Floor to floor	Piso a piso
+	Sheets	Folhas
+	Show only this storey in 3D	Mostrar só este pavimento em 3D
+	Datums (no plan on this drawing):	Cotas de referência (sem planta neste desenho):
+	Sheets on no level:	Folhas sem nível:
+	Show All Levels	Mostrar todos os níveis
+	The levels already match the prints.	Os níveis já correspondem às plantas.
+	{sheets} sheets, {loose} on no level	{sheets} folhas, {loose} sem nível
+	{name}: not shown on {levels}	{name}: não aparece em {levels}
+	Every shaft and riser carries on through its levels.	Cada shaft e prumada continua pelos seus níveis.
+	Not a height: {text}	Não é uma altura: {text}
+	Open IFC Model	Abrir modelo IFC
+	Open IFC Model...	Abrir modelo IFC...
+	IFC Model	Modelo IFC
+	IFC Model Tree	Árvore do modelo IFC
+	IFC Object Properties	Propriedades do objeto IFC
+	Filter IFC Objects	Filtrar objetos IFC
+	IFC Section Box	Caixa de corte IFC
+	Measure in 3D	Medir em 3D
+	IFC Camera	Câmera IFC
+	Render IFC Model	Renderizar modelo IFC
+	New BCF Issue	Nova ocorrência BCF
+	BCF Issues	Ocorrências BCF
+	BCF Issues...	Ocorrências BCF...
+	BCF Issue	Ocorrência BCF
+	Update BCF Issue	Atualizar ocorrência BCF
+	Show BCF Issue	Mostrar ocorrência BCF
+	Delete BCF Issue	Excluir ocorrência BCF
+	Import BCF	Importar BCF
+	Export BCF...	Exportar BCF...
+	Import BCF...	Importar BCF...
+	Model tree	Árvore do modelo
+	Section box and measure	Caixa de corte e medição
+	Class	Classe
+	Storey	Pavimento
+	Space	Espaço
+	Systems	Sistemas
+	System	Sistema
+	Box the selection	Caixa na seleção
+	Section box off	Desligar caixa de corte
+	Measure the two selected	Medir os dois selecionados
+	In Progress	Em andamento
+	Resolved	Resolvida
+	Add a comment	Adicionar um comentário
+	New issue from this view	Nova ocorrência desta vista
+	Comment	Comentário
+	Assign to	Atribuir a
+	Create Issue	Criar ocorrência
+	Select one object to see its properties.	Selecione um objeto para ver suas propriedades.
+	No IFC model is open: File ▸ Open IFC Model...	Nenhum modelo IFC aberto: Arquivo ▸ Abrir modelo IFC...
+	More objects: filter to find them	Mais objetos: filtre para encontrá-los
+	Between centres:	Entre centros:
+	gap	folga
+	{n} objects	{n} objetos
+	BCF issues ({n})	Ocorrências BCF ({n})
+	Issue #{n} created	Ocorrência nº {n} criada
+	BCF: {added} added, {updated} updated	BCF: {added} adicionadas, {updated} atualizadas
+	{n} of its objects aren't in this model	{n} de seus objetos não estão neste modelo

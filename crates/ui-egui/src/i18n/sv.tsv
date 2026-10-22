@@ -2708,3 +2708,90 @@ menu	Modify	Ändra
 	Coordination Mode	Samordningsläge
 	Coordination Views	Samordningsvyer
 	Isolate Trade	Isolera fackområde
+	Project Briefing	Projektöversikt
+	Project Note	Projektanteckning
+	Review Queue	Granskningskö
+	Next Review Item	Nästa granskningspunkt
+	Resolve Review Item	Lös granskningspunkt
+	Defer Review Item	Skjut upp granskningspunkt
+	Draft RFI	Utkast till RFI
+	Batch Resolve	Lös i grupp
+	Approve Agent Work	Godkänn agentens arbete
+	Agent Work	Agenternas arbete
+	Build BIM Model	Bygg BIM-modell
+	to accept	att godkänna
+	Accept all	Godkänn alla
+	Accept	Godkänn
+	Cited:	Källa:
+	Nothing waiting: agents' work is all accepted.	Inget väntar: agenternas arbete är godkänt.
+	Read Levels	Läs våningsplan
+	List Levels	Lista våningsplan
+	Edit Level	Redigera våningsplan
+	Attach Sheets to Levels	Koppla ritningsblad till våningsplan
+	Check Shafts Through Levels	Kontrollera schakt genom våningsplan
+	Isolate Level	Isolera våningsplan
+	Read from Prints	Läs från ritningarna
+	Level names and elevations from the sections, elevations and level markers	Våningsnamn och höjder från sektioner, fasader och nivåmarkeringar
+	Attach Sheets	Koppla ritningsblad
+	Check Shafts	Kontrollera schakt
+	Shafts, chases and risers must carry on through the levels between their ends	Schakt, slitsar och stammar måste fortsätta genom våningsplanen mellan sina ändar
+	No levels in the building spec.	Inga våningsplan i byggnadsspecifikationen.
+	Level	Våningsplan
+	Floor to floor	Våningshöjd
+	Sheets	Ritningsblad
+	Show only this storey in 3D	Visa bara detta våningsplan i 3D
+	Datums (no plan on this drawing):	Referensnivåer (ingen plan i denna ritning):
+	Sheets on no level:	Ritningsblad utan våningsplan:
+	Show All Levels	Visa alla våningsplan
+	The levels already match the prints.	Våningsplanen stämmer redan med ritningarna.
+	{sheets} sheets, {loose} on no level	{sheets} ritningsblad, {loose} utan våningsplan
+	{name}: not shown on {levels}	{name}: saknas på {levels}
+	Every shaft and riser carries on through its levels.	Varje schakt och stam fortsätter genom sina våningsplan.
+	Not a height: {text}	Inte en höjd: {text}
+	Open IFC Model	Öppna IFC-modell
+	Open IFC Model...	Öppna IFC-modell...
+	IFC Model	IFC-modell
+	IFC Model Tree	IFC-modellträd
+	IFC Object Properties	IFC-objektegenskaper
+	Filter IFC Objects	Filtrera IFC-objekt
+	IFC Section Box	IFC-snittlåda
+	Measure in 3D	Mät i 3D
+	IFC Camera	IFC-kamera
+	Render IFC Model	Rendera IFC-modell
+	New BCF Issue	Nytt BCF-ärende
+	BCF Issues	BCF-ärenden
+	BCF Issues...	BCF-ärenden...
+	BCF Issue	BCF-ärende
+	Update BCF Issue	Uppdatera BCF-ärende
+	Show BCF Issue	Visa BCF-ärende
+	Delete BCF Issue	Ta bort BCF-ärende
+	Import BCF	Importera BCF
+	Export BCF...	Exportera BCF...
+	Import BCF...	Importera BCF...
+	Model tree	Modellträd
+	Section box and measure	Snittlåda och mätning
+	Class	Klass
+	Storey	Våningsplan
+	Space	Rum
+	Systems	System
+	System	System
+	Box the selection	Låda runt markeringen
+	Section box off	Stäng av snittlåda
+	Measure the two selected	Mät de två markerade
+	In Progress	Pågår
+	Resolved	Löst
+	Add a comment	Lägg till en kommentar
+	New issue from this view	Nytt ärende från den här vyn
+	Comment	Kommentar
+	Assign to	Tilldela
+	Create Issue	Skapa ärende
+	Select one object to see its properties.	Markera ett objekt för att se dess egenskaper.
+	No IFC model is open: File ▸ Open IFC Model...	Ingen IFC-modell är öppen: Arkiv ▸ Öppna IFC-modell...
+	More objects: filter to find them	Fler objekt: filtrera för att hitta dem
+	Between centres:	Mellan centrum:
+	gap	mellanrum
+	{n} objects	{n} objekt
+	BCF issues ({n})	BCF-ärenden ({n})
+	Issue #{n} created	Ärende nr {n} skapat
+	BCF: {added} added, {updated} updated	BCF: {added} tillagda, {updated} uppdaterade
+	{n} of its objects aren't in this model	{n} av dess objekt finns inte i den här modellen

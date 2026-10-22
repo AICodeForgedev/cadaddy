@@ -311,8 +311,9 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let plan = crate::cmd::bspec::room_plan(s)?;
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
+    let mut outline_cache = None;
     for (h, name, at, height) in names.into_iter().take(MAX_ROOMS) {
-        let Ok(loops) = crate::cmd::hatch::loops_at(plan, at) else { continue };
+        let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
         if poly.len() < 3 {

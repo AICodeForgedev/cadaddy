@@ -211,6 +211,7 @@ fn each_issue_kind_from_a_broken_model() {
     // Counts: two window blocks in the plan, one built.
     let c = s.execute("model.counts", &json!({})).unwrap();
     assert_eq!(c["match"], json!(false), "{c}");
+    issues_come_a_page_at_a_time(&mut s);
 }
 
 #[test]
@@ -269,4 +270,31 @@ fn renders_overlay_and_counts() {
     assert_eq!(c["levels"][0]["model"]["windows"], json!(1), "{c}");
     assert_eq!(c["match"], json!(false));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A big model's issues come a page at a time: `total` and `byKind` count them all, `next`
+/// walks the rest, and no issue is skipped or repeated.
+fn issues_come_a_page_at_a_time(s: &mut Session) {
+    let all = s.execute("model.issues", &json!({ "limit": 1000 })).unwrap();
+    let total = all["total"].as_u64().unwrap() as usize;
+    assert!(total >= 2, "{all}");
+    assert!(all.get("next").is_none());
+    let mut seen = Vec::new();
+    let mut cursor = json!(null);
+    for _ in 0..total + 1 {
+        let r = s.execute("model.issues", &json!({ "limit": 1, "cursor": cursor })).unwrap();
+        assert_eq!(r["total"].as_u64(), Some(total as u64));
+        assert_eq!(r["byKind"], all["byKind"]);
+        seen.extend(r["issues"].as_array().unwrap().iter().cloned());
+        match r.get("next") {
+            Some(n) => cursor = n.clone(),
+            None => break,
+        }
+    }
+    assert_eq!(seen.as_slice(), all["issues"].as_array().unwrap().as_slice());
+    // Hostile paging: never a panic, the limit clamped.
+    for p in [json!({ "limit": 0 }), json!({ "limit": u64::MAX }), json!({ "cursor": u64::MAX }), json!({ "limit": -3, "cursor": "x" })] {
+        let r = s.execute("model.issues", &p).unwrap();
+        assert!(r["issues"].as_array().unwrap().len() <= 1000, "{p}");
+    }
 }

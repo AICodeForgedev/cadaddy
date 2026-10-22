@@ -275,12 +275,13 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     let lines: Vec<(Vec2, Vec2)> =
         ents.iter().filter(|e| !is_wall(e)).flat_map(|e| super::perceive::geometry::segments(&[*e]).into_iter().map(|sg| (sg.a, sg.b))).collect();
     let mut ceilings: Vec<(CeilingArea, Vec<Vec2>)> = Vec::new();
+    let mut outline_cache = None;
     for (_, t, at, _) in &notes {
         let Some(h) = height_tag(t) else { continue };
         if in_soffit(*at) {
             continue;
         }
-        let Ok(loops) = super::hatch::loops_at(&walls_only, *at) else { continue };
+        let Ok(loops) = super::hatch::loops_at_lazy(&walls_only, *at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let q = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         if q.len() < 3

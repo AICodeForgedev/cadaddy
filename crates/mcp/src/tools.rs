@@ -102,6 +102,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "from": {"type": "string"},
                 "keys": {"type": "array", "items": {"type": "string"}}
             }, "required": ["action"]}}),
+        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -126,6 +128,58 @@ pub fn tool_definitions(has_ui: bool) -> Value {
 }
 
 /// `engine.execute` of `command` with `params`.
+/// The `bim_job` tool: one job-level action per call (see its description).
+fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
+    let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+    let command = match a.get("action").and_then(Value::as_str) {
+        Some("briefing") => "project.briefing",
+        Some("note") => "project.note",
+        Some("build") => "bim.build",
+        Some("review_next") => "review.next",
+        Some("review_list") => "review.list",
+        Some("resolve") => "review.resolve",
+        Some("defer") => "review.defer",
+        Some("rfi") => "review.rfi_draft",
+        Some("batch") => "review.batch",
+        Some("log") => "review.log",
+        Some("takeoff") => "takeoff",
+        Some("export") => "export",
+        Some("rfis") => {
+            // The RFI list: exported in full with a path, else a compact page.
+            if params.get("path").is_some() {
+                return exec(b, "rfi.export", params);
+            }
+            let v = exec(b, "rfi.list", params)?;
+            let items: Vec<Value> = v["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(20)
+                .map(|i| json!({"id": i["id"], "title": i["title"], "severity": i["severity"], "status": i["status"], "level": i["level"]}))
+                .collect();
+            return Ok(
+                json!({"total": v["total"], "bySeverity": v["bySeverity"], "items": items, "more": "bim_job rfis {path: \"rfis.csv\"} exports the whole list"}),
+            );
+        }
+        Some("import") => {
+            // Open the prints as the project, then classify its sheets.
+            let opened = exec(b, "printset.open", params)?;
+            let classified = exec(b, "printset.classify", json!({}))?;
+            return Ok(
+                json!({"opened": {"name": opened["name"], "sheets": opened["sheets"], "revision": opened["revision"]}, "classified": classified, "next": "bim_job build {}"}),
+            );
+        }
+        Some(other) => {
+            return Err(format!(
+                "bim_job has no action `{}` — use briefing, note, import, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
+                other.chars().take(30).collect::<String>()
+            ));
+        }
+        None => return Err("bim_job needs an action — start with {action: \"briefing\"}".into()),
+    };
+    exec(b, command, params)
+}
+
 fn exec(b: &mut dyn Backend, command: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": command, "params": params}))
 }
@@ -332,6 +386,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             None => Ok(r),
         }),
         "plot" => exec(b, "exportpdf", a),
+        "bim_job" => bim_job(b, &a),
         "mep" => {
             let command = match a.get("action").and_then(Value::as_str) {
                 Some("edit") => "mep.edit",

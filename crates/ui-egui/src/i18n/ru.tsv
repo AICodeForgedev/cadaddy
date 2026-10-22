@@ -2489,3 +2489,91 @@
 	Coordination Mode	Режим координации
 	Coordination Views	Виды координации
 	Isolate Trade	Изолировать раздел
+	Project Briefing	Обзор проекта
+	Project Note	Заметка проекта
+	Review Queue	Очередь проверки
+	Next Review Item	Следующий пункт проверки
+	Resolve Review Item	Решить пункт проверки
+	Defer Review Item	Отложить пункт проверки
+	Draft RFI	Черновик RFI
+	Batch Resolve	Решить пакетом
+	Approve Agent Work	Утвердить работу агента
+	Agent Work	Работа агентов
+	Build BIM Model	Построить BIM-модель
+	to accept	к принятию
+	Accept all	Принять все
+	Accept	Принять
+	Cited:	Источник:
+	Nothing waiting: agents' work is all accepted.	Ничего не ожидает: вся работа агентов принята.
+	Read Levels	Прочитать уровни
+	List Levels	Список уровней
+	Edit Level	Изменить уровень
+	Attach Sheets to Levels	Привязать листы к уровням
+	Check Shafts Through Levels	Проверить шахты по уровням
+	Isolate Level	Изолировать уровень
+	Read from Prints	Прочитать с чертежей
+	Level names and elevations from the sections, elevations and level markers	Имена и отметки уровней из разрезов, фасадов и высотных отметок
+	Attach Sheets	Привязать листы
+	Check Shafts	Проверить шахты
+	Shafts, chases and risers must carry on through the levels between their ends	Шахты, штробы и стояки должны проходить через уровни между своими концами
+	No levels in the building spec.	В спецификации здания нет уровней.
+	Level	Уровень
+	Floor to floor	Высота этажа
+	Sheets	Листы
+	Show only this storey in 3D	Показать в 3D только этот этаж
+	Datums (no plan on this drawing):	Отметки (нет плана в этом чертеже):
+	Sheets on no level:	Листы без уровня:
+	Show All Levels	Показать все уровни
+	The levels already match the prints.	Уровни уже совпадают с чертежами.
+	{sheets} sheets, {loose} on no level	Листов: {sheets}, без уровня: {loose}
+	{name}: not shown on {levels}	{name}: нет на {levels}
+	Every shaft and riser carries on through its levels.	Каждая шахта и стояк проходит через свои уровни.
+	Not a height: {text}	Не высота: {text}
+	Open IFC Model	Открыть модель IFC
+	Open IFC Model...	Открыть модель IFC...
+	IFC Model	Модель IFC
+	IFC Model Tree	Дерево модели IFC
+	IFC Object Properties	Свойства объекта IFC
+	Filter IFC Objects	Фильтр объектов IFC
+	IFC Section Box	Секущий параллелепипед IFC
+	Measure in 3D	Измерить в 3D
+	IFC Camera	Камера IFC
+	Render IFC Model	Визуализировать модель IFC
+	New BCF Issue	Новое замечание BCF
+	BCF Issues	Замечания BCF
+	BCF Issues...	Замечания BCF...
+	BCF Issue	Замечание BCF
+	Update BCF Issue	Обновить замечание BCF
+	Show BCF Issue	Показать замечание BCF
+	Delete BCF Issue	Удалить замечание BCF
+	Import BCF	Импорт BCF
+	Export BCF...	Экспорт BCF...
+	Import BCF...	Импорт BCF...
+	Model tree	Дерево модели
+	Section box and measure	Секущий параллелепипед и измерение
+	Class	Класс
+	Storey	Этаж
+	Space	Помещение
+	Systems	Системы
+	System	Система
+	Box the selection	Охватить выбранное
+	Section box off	Отключить секущий параллелепипед
+	Measure the two selected	Измерить два выбранных
+	Open	Открыто
+	In Progress	В работе
+	Resolved	Решено
+	Add a comment	Добавить комментарий
+	New issue from this view	Новое замечание из этого вида
+	Comment	Комментарий
+	Assign to	Назначить
+	Create Issue	Создать замечание
+	Select one object to see its properties.	Выберите один объект, чтобы увидеть его свойства.
+	No IFC model is open: File ▸ Open IFC Model...	Модель IFC не открыта: Файл ▸ Открыть модель IFC...
+	More objects: filter to find them	Есть ещё объекты: найдите их фильтром
+	Between centres:	Между центрами:
+	gap	зазор
+	{n} objects	Объектов: {n}
+	BCF issues ({n})	Замечания BCF ({n})
+	Issue #{n} created	Замечание № {n} создано
+	BCF: {added} added, {updated} updated	BCF: добавлено {added}, обновлено {updated}
+	{n} of its objects aren't in this model	{n} его объектов нет в этой модели

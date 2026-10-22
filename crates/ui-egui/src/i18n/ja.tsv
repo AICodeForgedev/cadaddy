@@ -2184,3 +2184,53 @@
 	Oops	元に戻す (OOPS)
 	Quick Text	クイック文字
 	Redefine Attributes	属性を再定義
+	Open IFC Model	IFC モデルを開く
+	Open IFC Model...	IFC モデルを開く...
+	IFC Model	IFC モデル
+	IFC Model Tree	IFC モデル ツリー
+	IFC Object Properties	IFC オブジェクトのプロパティ
+	Filter IFC Objects	IFC オブジェクトをフィルタ
+	IFC Section Box	IFC 断面ボックス
+	Measure in 3D	3D で計測
+	IFC Camera	IFC カメラ
+	Render IFC Model	IFC モデルをレンダリング
+	New BCF Issue	新しい BCF 課題
+	BCF Issues	BCF 課題
+	BCF Issues...	BCF 課題...
+	BCF Issue	BCF 課題
+	Update BCF Issue	BCF 課題を更新
+	Show BCF Issue	BCF 課題を表示
+	Delete BCF Issue	BCF 課題を削除
+	Export BCF	BCF を書き出し
+	Import BCF	BCF を読み込み
+	Export BCF...	BCF を書き出し...
+	Import BCF...	BCF を読み込み...
+	Model tree	モデル ツリー
+	Section box and measure	断面ボックスと計測
+	Class	クラス
+	Storey	階
+	Space	スペース
+	Systems	システム
+	System	システム
+	Property	プロパティ
+	Size	サイズ
+	Box the selection	選択を囲む
+	Section box off	断面ボックスをオフ
+	Measure the two selected	選択した 2 つを計測
+	In Progress	進行中
+	Resolved	解決済み
+	Add a comment	コメントを追加
+	New issue from this view	このビューから新しい課題
+	Comment	コメント
+	Assign to	担当者
+	Create Issue	課題を作成
+	Select one object to see its properties.	プロパティを表示するにはオブジェクトを 1 つ選択します。
+	No IFC model is open: File ▸ Open IFC Model...	IFC モデルが開かれていません: ファイル ▸ IFC モデルを開く...
+	More objects: filter to find them	他のオブジェクト: フィルタで探してください
+	Between centres:	中心間:
+	gap	すき間
+	{n} objects	{n} 個のオブジェクト
+	BCF issues ({n})	BCF 課題 ({n})
+	Issue #{n} created	課題 #{n} を作成しました
+	BCF: {added} added, {updated} updated	BCF: {added} 件追加、{updated} 件更新
+	{n} of its objects aren't in this model	そのオブジェクトのうち {n} 個はこのモデルにありません

@@ -317,7 +317,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         None => d.remove::<Editing>(edit_id),
     });
-    let check = |app: &mut CadApp, ui: &egui::Ui| match app.run("model.issues", json!({})) {
+    let check = |app: &mut CadApp, ui: &egui::Ui| match app.run("model.issues", json!({ "limit": 1000 })) {
         Ok(r) => {
             let items = r["issues"].as_array().cloned().unwrap_or_default();
             ui.data_mut(|d| d.insert_temp(issues_id, Issues { key: key(app), items }));

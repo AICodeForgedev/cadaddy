@@ -12,6 +12,15 @@
 //! 100k time grows faster than the drawing: reported, and a failure. Every run is appended to
 //! `target/perf/history.jsonl` (the trend).
 //!
+//! The assembled BIM pipeline runs too (`cadaddy-mepfix`'s `bimbench` example): every stage on
+//! the synthetic hotel's print set — project import, PDF to .cdy, sheet classification, each
+//! print reader, the model build, validation, review, takeoff, IFC and BCF export, rendering,
+//! .cdy save and open, and a revision re-import — as `bim_<stage>@full` (with `--full` also
+//! `@double`, twice the hotel), with the run's peak memory, .cdy and IFC sizes and the largest
+//! command answer an agent reads (`resp_kb`), all budgeted like the rest. Its `cpu_cores` (how
+//! many cores were busy) is reported, not judged. `--bim` runs only the pipeline; with
+//! `--update-budget` it re-baselines only the `bim` keys (see `docs/bim-perf.md`).
+//!
 //! `cargo xtask perf --vs [--sizes 10000,100000,1000000]`: CADaddy's side of the comparison with
 //! other programs (`docs/perf-vs.md`): writes the 2D plans (`target/perf/vs/plan-<n>.dxf`), then
 //! opens each in a fresh process (`perfbench --file`) and prints open, select-all, zoom-extents
@@ -71,6 +80,11 @@ pub fn superlinear(results: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
     out
 }
 
+/// Whether a result has a budget: everything but the cores-busy figure.
+pub fn judged(key: &str) -> bool {
+    !key.starts_with("cpu_cores@")
+}
+
 /// This machine's key in the budget file.
 pub fn platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
@@ -82,21 +96,36 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     }
     let full = rest.contains(&"--full");
     let update = rest.contains(&"--update-budget");
-    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget"].contains(*a)) {
-        return Err(format!("unknown option `{bad}` (perf [--full] [--update-budget] | perf --vs [--sizes N,…])"));
+    let bim_only = rest.contains(&"--bim");
+    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget", "--bim"].contains(*a)) {
+        return Err(format!("unknown option `{bad}` (perf [--full] [--bim] [--update-budget] | perf --vs [--sizes N,…])"));
     }
     let sizes = if full { "1000,10000,100000,500000,1000000" } else { "1000,10000" };
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
     let dir = target.join("perf");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let last = dir.join("last.json");
-    let mut c = crate::cargo();
-    c.args(["run", "-q", "-p", "cadaddy-engine", "--example", "perfbench", "--", "--sizes", sizes, "--out"]).arg(&last);
-    crate::run(c, &format!("perfbench --sizes {sizes}"))?;
-    let results = read_json(&last);
-    if results.is_empty() {
-        return Err("perfbench wrote no results".into());
+    let mut results = BTreeMap::new();
+    if !bim_only {
+        let last = dir.join("last.json");
+        let mut c = crate::cargo();
+        c.args(["run", "-q", "-p", "cadaddy-engine", "--example", "perfbench", "--", "--sizes", sizes, "--out"]).arg(&last);
+        crate::run(c, &format!("perfbench --sizes {sizes}"))?;
+        results = read_json(&last);
+        if results.is_empty() {
+            return Err("perfbench wrote no results".into());
+        }
     }
+    // The assembled BIM pipeline on the synthetic hotel (and twice it with --full).
+    let bim_sizes = if full { "full,double" } else { "full" };
+    let bim = dir.join("bim.json");
+    let mut c = crate::cargo();
+    c.args(["run", "-q", "-p", "cadaddy-mepfix", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
+    crate::run(c, &format!("bimbench --sizes {bim_sizes}"))?;
+    let bim_results = read_json(&bim);
+    if bim_results.is_empty() {
+        return Err("bimbench wrote no results".into());
+    }
+    results.extend(bim_results);
     let budget_path = root.join("perf").join("budget.json");
     let mut all: BTreeMap<String, BTreeMap<String, f64>> =
         std::fs::read_to_string(&budget_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
@@ -106,7 +135,8 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     println!("\nbudget: {here}\n{:<24} {:>10} {:>10}  verdict", "step", "ms", "budget");
     for (k, ms) in &results {
         let b = budget.get(k).copied();
-        let v = verdict(*ms, b);
+        // How many cores were busy: more is not worse.
+        let v = if judged(k) { verdict(*ms, b) } else { Verdict::Ok };
         let mark = match v {
             Verdict::Ok => "ok",
             Verdict::Warn => "OVER BUDGET",
@@ -136,7 +166,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     text.push('\n');
     let _ = std::fs::write(&history, text);
     if update {
-        for (k, ms) in &results {
+        for (k, ms) in results.iter().filter(|(k, _)| judged(k)) {
             budget.insert(k.clone(), (ms * MARGIN * 10.0).round() / 10.0);
         }
         all.insert(here.clone(), budget);
@@ -213,6 +243,12 @@ mod tests {
         let gnu = "\tMaximum resident set size (kbytes): 524288\n";
         assert_eq!(peak_mb(gnu), Some(512.0));
         assert_eq!(peak_mb("nothing"), None);
+    }
+
+    #[test]
+    fn busy_cores_are_reported_not_judged() {
+        assert!(!judged("cpu_cores@bim_full"));
+        assert!(judged("bim_import@bim_full") && judged("peak_mb@bim_full") && judged("resp_kb@bim_full") && judged("regen@1000"));
     }
 
     #[test]
