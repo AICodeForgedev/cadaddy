@@ -65,35 +65,24 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
             // Code editor.
             ui.label(RichText::new(crate::tl!("Script")).strong());
-            egui::ScrollArea::vertical()
-                .id_salt("rhai_code_scroll")
-                .max_height(240.0)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut code)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(12)
-                            .font(egui::TextStyle::Monospace),
-                    );
-                });
+            egui::ScrollArea::vertical().id_salt("rhai_code_scroll").max_height(240.0).show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut code).code_editor().desired_width(f32::INFINITY).desired_rows(12).font(egui::TextStyle::Monospace),
+                );
+            });
 
             ui.separator();
 
             // Output console.
             ui.label(RichText::new(crate::tl!("Output")).strong());
-            egui::ScrollArea::vertical()
-                .id_salt("rhai_output_scroll")
-                .max_height(160.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for line in &output {
-                        ui.label(RichText::new(line).monospace().color(t.text));
-                    }
-                    if output.is_empty() {
-                        ui.label(RichText::new(crate::tl!("(no output)")).color(t.text_dim));
-                    }
-                });
+            egui::ScrollArea::vertical().id_salt("rhai_output_scroll").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
+                for line in &output {
+                    ui.label(RichText::new(line).monospace().color(t.text));
+                }
+                if output.is_empty() {
+                    ui.label(RichText::new(crate::tl!("(no output)")).color(t.text_dim));
+                }
+            });
         });
 
     ctx.data_mut(|d| {

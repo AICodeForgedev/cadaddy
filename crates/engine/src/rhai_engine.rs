@@ -53,13 +53,7 @@ fn with_session<R>(f: impl FnOnce(&mut crate::Session) -> R) -> Result<R, Box<Ev
 
 /// Consume the next input from the pre-answered queue.
 fn next_input(what: &str) -> Result<Value, Box<EvalAltResult>> {
-    INPUTS.with_borrow_mut(|q| {
-        if q.is_empty() {
-            Err(format!("no more inputs for {what}").into())
-        } else {
-            Ok(q.remove(0))
-        }
-    })
+    INPUTS.with_borrow_mut(|q| if q.is_empty() { Err(format!("no more inputs for {what}").into()) } else { Ok(q.remove(0)) })
 }
 
 // ---------------------------------------------------------------------------
@@ -99,11 +93,7 @@ impl crate::Session {
     /// Evaluate Rhai source code with access to the full command API.
     ///
     /// Returns `Ok((value_json, output_lines))` or `Err(error_message)`.
-    pub fn rhai_eval(
-        &mut self,
-        source: &str,
-        inputs: Vec<Value>,
-    ) -> Result<(Value, Vec<String>), String> {
+    pub fn rhai_eval(&mut self, source: &str, inputs: Vec<Value>) -> Result<(Value, Vec<String>), String> {
         if source.len() > MAX_SOURCE_LEN {
             return Err(format!("script too long ({} bytes, limit {MAX_SOURCE_LEN})", source.len()));
         }
@@ -118,9 +108,7 @@ impl crate::Session {
 
         // Install the Session reference into the thread-local slot for the duration of eval.
         // `scoped` clears the slot on drop (even on panic).
-        let result = SESSION.with(|slot| {
-            slot.scoped(self, || rhai.engine.eval_with_scope::<Dynamic>(&mut rhai.scope, source))
-        });
+        let result = SESSION.with(|slot| slot.scoped(self, || rhai.engine.eval_with_scope::<Dynamic>(&mut rhai.scope, source)));
 
         // Clear input queue.
         INPUTS.with_borrow_mut(|q| q.clear());
@@ -166,7 +154,9 @@ fn build_engine() -> Engine {
 
     // ---- print / debug → session log ----
     engine.on_print(|text| {
-        SESSION.with(|slot| { slot.with(|s| s.echo(text.to_string())); });
+        SESSION.with(|slot| {
+            slot.with(|s| s.echo(text.to_string()));
+        });
     });
     engine.on_debug(|text, src, pos| {
         let loc = match (src, pos) {
@@ -175,7 +165,9 @@ fn build_engine() -> Engine {
             (None, pos) if !pos.is_none() => format!("[{pos}] "),
             _ => String::new(),
         };
-        SESSION.with(|slot| { slot.with(|s| s.echo(format!("{loc}{text}"))); });
+        SESSION.with(|slot| {
+            slot.with(|s| s.echo(format!("{loc}{text}")));
+        });
     });
 
     // ---- command(id, params) → result ----
@@ -223,7 +215,9 @@ fn build_engine() -> Engine {
 
     // ---- echo(text) ----
     engine.register_fn("echo", |text: &str| {
-        SESSION.with(|slot| { slot.with(|s| s.echo(text.to_string())); });
+        SESSION.with(|slot| {
+            slot.with(|s| s.echo(text.to_string()));
+        });
     });
 
     // ---- selection() → [handle strings] ----
@@ -263,7 +257,9 @@ fn build_engine() -> Engine {
     // ---- getpoint(prompt) ----
     engine.register_fn("getpoint", |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
         if !prompt.is_empty() {
-            SESSION.with(|slot| { slot.with(|s| s.echo(prompt.to_string())); });
+            SESSION.with(|slot| {
+                slot.with(|s| s.echo(prompt.to_string()));
+            });
         }
         let val = next_input("getpoint")?;
         if let Some(arr) = val.as_array()
@@ -278,7 +274,9 @@ fn build_engine() -> Engine {
     // ---- getreal(prompt) ----
     engine.register_fn("getreal", |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
         if !prompt.is_empty() {
-            SESSION.with(|slot| { slot.with(|s| s.echo(prompt.to_string())); });
+            SESSION.with(|slot| {
+                slot.with(|s| s.echo(prompt.to_string()));
+            });
         }
         let val = next_input("getreal")?;
         val.as_f64().map(Dynamic::from).ok_or_else(|| format!("getreal: expected number, got {val}").into())
@@ -287,7 +285,9 @@ fn build_engine() -> Engine {
     // ---- getstring(prompt) ----
     engine.register_fn("getstring", |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
         if !prompt.is_empty() {
-            SESSION.with(|slot| { slot.with(|s| s.echo(prompt.to_string())); });
+            SESSION.with(|slot| {
+                slot.with(|s| s.echo(prompt.to_string()));
+            });
         }
         let val = next_input("getstring")?;
         match &val {
@@ -299,7 +299,9 @@ fn build_engine() -> Engine {
     // ---- getint(prompt) ----
     engine.register_fn("getint", |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
         if !prompt.is_empty() {
-            SESSION.with(|slot| { slot.with(|s| s.echo(prompt.to_string())); });
+            SESSION.with(|slot| {
+                slot.with(|s| s.echo(prompt.to_string()));
+            });
         }
         let val = next_input("getint")?;
         val.as_i64().map(Dynamic::from).ok_or_else(|| format!("getint: expected integer, got {val}").into())
@@ -356,8 +358,7 @@ pub(crate) fn dynamic_to_json(v: &Dynamic) -> Value {
     if v.is_map()
         && let Some(map) = v.clone().try_cast::<Map>()
     {
-        let obj: serde_json::Map<String, Value> =
-            map.iter().map(|(k, v)| (k.to_string(), dynamic_to_json(v))).collect();
+        let obj: serde_json::Map<String, Value> = map.iter().map(|(k, v)| (k.to_string(), dynamic_to_json(v))).collect();
         return Value::Object(obj);
     }
     Value::String(v.to_string())
@@ -365,8 +366,7 @@ pub(crate) fn dynamic_to_json(v: &Dynamic) -> Value {
 
 /// Convert a Rhai `Map` to a `serde_json::Value`.
 fn map_to_json(m: &Map) -> Value {
-    let obj: serde_json::Map<String, Value> =
-        m.iter().map(|(k, v)| (k.to_string(), dynamic_to_json(v))).collect();
+    let obj: serde_json::Map<String, Value> = m.iter().map(|(k, v)| (k.to_string(), dynamic_to_json(v))).collect();
     Value::Object(obj)
 }
 

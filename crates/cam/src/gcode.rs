@@ -45,13 +45,7 @@ pub struct GcodeOptions {
 
 impl Default for GcodeOptions {
     fn default() -> Self {
-        Self {
-            dialect: Dialect::Generic,
-            metric: true,
-            decimals: 4,
-            blend_tolerance: 0.01,
-            program_number: 0,
-        }
+        Self { dialect: Dialect::Generic, metric: true, decimals: 4, blend_tolerance: 0.01, program_number: 0 }
     }
 }
 
@@ -105,7 +99,11 @@ fn emit_header(out: &mut String, job: &CamJob, opts: &GcodeOptions) -> Result<()
     let _ = writeln!(out, "(Tool diameter: {:.4})", job.tool.diameter);
 
     // Units.
-    if opts.metric { let _ = writeln!(out, "G21"); } else { let _ = writeln!(out, "G20"); }
+    if opts.metric {
+        let _ = writeln!(out, "G21");
+    } else {
+        let _ = writeln!(out, "G20");
+    }
     // Absolute coordinates, XY plane.
     let _ = writeln!(out, "G90");
     let _ = writeln!(out, "G17");
@@ -198,7 +196,7 @@ fn extract_word(line: &str, letter: char) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolpath::{compute, Move};
+    use crate::toolpath::{Move, compute};
     use crate::{CamJob, LeadKind, LeadParams, OffsetSide, TabParams, ToolParams};
     use cadaddy_geom::{PolyVertex, Polyline, Vec2};
 
@@ -290,10 +288,7 @@ mod tests {
     #[test]
     fn empty_toolpath_still_has_header_footer() {
         // Manually construct an empty toolpath result.
-        let result = crate::toolpath::ToolpathResult {
-            paths: Vec::new(),
-            offset_profiles: Vec::new(),
-        };
+        let result = crate::toolpath::ToolpathResult { paths: Vec::new(), offset_profiles: Vec::new() };
         let text = emit(&result, &basic_job(), &GcodeOptions::default()).unwrap_or_default();
         assert!(text.contains("M03"));
         assert!(text.contains("M30"));

@@ -3,7 +3,7 @@
 //! The main entry point is [`compute`], which takes closed profiles and a [`CamJob`] and produces
 //! a sequence of [`Move`]s ready for G-code emission.
 
-use cadaddy_geom::{offset::offset_polyline, Polyline, Segment, Vec2};
+use cadaddy_geom::{Polyline, Segment, Vec2, offset::offset_polyline};
 use serde::{Deserialize, Serialize};
 
 use crate::profile::{centroid, contains, perimeter, signed_area};
@@ -28,10 +28,7 @@ pub enum Move {
 impl Move {
     pub fn end_xy(&self) -> Vec2 {
         match *self {
-            Move::Rapid { x, y, .. }
-            | Move::Feed { x, y, .. }
-            | Move::ArcCw { x, y, .. }
-            | Move::ArcCcw { x, y, .. } => Vec2::new(x, y),
+            Move::Rapid { x, y, .. } | Move::Feed { x, y, .. } | Move::ArcCw { x, y, .. } | Move::ArcCcw { x, y, .. } => Vec2::new(x, y),
         }
     }
     pub fn end_z(&self) -> f64 {
@@ -118,10 +115,18 @@ fn offset_profile(pl: &Polyline, job: &CamJob) -> Result<Vec<Polyline>> {
     let area = signed_area(pl);
     let d = match job.offset {
         OffsetSide::Inside => {
-            if area > 0.0 { radius } else { -radius }
+            if area > 0.0 {
+                radius
+            } else {
+                -radius
+            }
         }
         OffsetSide::Outside => {
-            if area > 0.0 { -radius } else { radius }
+            if area > 0.0 {
+                -radius
+            } else {
+                radius
+            }
         }
         OffsetSide::On => 0.0, // already handled
     };
@@ -134,11 +139,7 @@ fn offset_profile(pl: &Polyline, job: &CamJob) -> Result<Vec<Polyline>> {
 
 // ── Ordering ─────────────────────────────────────────────────────────────────
 
-fn order_profiles(
-    offset: &[(usize, Polyline)],
-    originals: &[Polyline],
-    order: CutOrder,
-) -> Vec<usize> {
+fn order_profiles(offset: &[(usize, Polyline)], originals: &[Polyline], order: CutOrder) -> Vec<usize> {
     let n = offset.len();
     if n == 0 {
         return Vec::new();
@@ -156,9 +157,7 @@ fn nearest_neighbour(offset: &[(usize, Polyline)]) -> Vec<usize> {
     let mut result = Vec::with_capacity(n);
     let mut pos = Vec2::ZERO;
     for _ in 0..n {
-        let best = (0..n)
-            .filter(|i| !used[*i])
-            .min_by(|a, b| pos.dist(centroids[*a]).total_cmp(&pos.dist(centroids[*b])));
+        let best = (0..n).filter(|i| !used[*i]).min_by(|a, b| pos.dist(centroids[*a]).total_cmp(&pos.dist(centroids[*b])));
         let Some(idx) = best else { break };
         used[idx] = true;
         pos = centroids[idx];
@@ -420,8 +419,8 @@ pub fn clean_cnc_polylines(polylines: &[Polyline]) -> Vec<Polyline> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadaddy_geom::PolyVertex;
     use crate::{CamJob, LeadParams, OffsetSide, TabParams, ToolParams};
+    use cadaddy_geom::PolyVertex;
 
     fn square() -> Polyline {
         Polyline {

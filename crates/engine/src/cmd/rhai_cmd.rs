@@ -79,11 +79,7 @@ fn rhai_source(s: &mut Session, p: &Value) -> Result<(String, String)> {
         return Ok((str_param(p, "name").unwrap_or("untitled.rhai").to_string(), text.to_string()));
     }
     let path = str_param(p, "path").ok_or_else(|| bad("rhairun", "`path` or `text` is required"))?;
-    s.check_load(
-        std::path::Path::new(path),
-        "RHAIRUN",
-        Some(("rhairun".into(), json!({ "path": path }))),
-    )?;
+    s.check_load(std::path::Path::new(path), "RHAIRUN", Some(("rhairun".into(), json!({ "path": path }))))?;
     let bytes = crate::readfile::read(path).map_err(|e| bad("rhairun", format!("{path}: {e}")))?;
     Ok((path.to_string(), String::from_utf8_lossy(&bytes).into_owned()))
 }
@@ -167,12 +163,7 @@ mod tests {
     fn rhai_command_call_works() {
         let mut s = Session::new();
         s.execute("new", &json!({})).unwrap();
-        let r = s
-            .execute(
-                "rhai",
-                &json!({"code": r#"let r = command("line", #{ points: [[0.0, 0.0], [10.0, 10.0]] }); r"#}),
-            )
-            .unwrap();
+        let r = s.execute("rhai", &json!({"code": r#"let r = command("line", #{ points: [[0.0, 0.0], [10.0, 10.0]] }); r"#})).unwrap();
         assert!(r.get("error").is_none(), "unexpected error: {r}");
     }
 

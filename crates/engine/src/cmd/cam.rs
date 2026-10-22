@@ -248,11 +248,7 @@ fn parse_cam_job(_cmd: &str, p: &Value) -> Result<CamJob> {
     let lead_out = parse_lead(p, "leadOut");
 
     let tab_count = p.get("tabCount").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let tabs = TabParams {
-        width: f64_or(p, "tabWidth", 3.0),
-        height: f64_or(p, "tabHeight", 1.0),
-        count: tab_count,
-    };
+    let tabs = TabParams { width: f64_or(p, "tabWidth", 3.0), height: f64_or(p, "tabHeight", 1.0), count: tab_count };
 
     let order = match str_param(p, "order") {
         Some("nearest") => CutOrder::Nearest,
@@ -290,11 +286,7 @@ fn parse_gcode_opts(p: &Value) -> GcodeOptions {
         Some("mach3") => Dialect::Mach3,
         _ => Dialect::Generic,
     };
-    GcodeOptions {
-        dialect,
-        metric: bool_or(p, "metric", true),
-        ..GcodeOptions::default()
-    }
+    GcodeOptions { dialect, metric: bool_or(p, "metric", true), ..GcodeOptions::default() }
 }
 
 /// Write an LWPOLYLINE entity as DXF ASCII text.
@@ -396,11 +388,7 @@ mod tests {
     #[test]
     fn polyline_to_dxf_round_trips() {
         let pl = Polyline {
-            vertices: vec![
-                PolyVertex::new(Vec2::new(0.0, 0.0)),
-                PolyVertex::new(Vec2::new(10.0, 0.0)),
-                PolyVertex::new(Vec2::new(10.0, 10.0)),
-            ],
+            vertices: vec![PolyVertex::new(Vec2::new(0.0, 0.0)), PolyVertex::new(Vec2::new(10.0, 0.0)), PolyVertex::new(Vec2::new(10.0, 10.0))],
             closed: true,
         };
         let dxf = polyline_to_dxf(&pl);
@@ -413,10 +401,39 @@ mod tests {
     fn cncdxf_includes_all_geometry_types() {
         let mut doc = Drawing::new_metric();
         let vs = vec![PolyVertex::new(Vec2::new(0.0, 0.0)), PolyVertex::new(Vec2::new(5.0, 0.0))];
-        let h1 = doc.add(&Space::Model, Common::default(), EntityKind::LwPolyline(LwPolyline { vertices: vs, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false })).unwrap_or(Handle(0));
-        let h2 = doc.add(&Space::Model, Common::default(), EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(5.0, 5.0, 0.0), radius: 2.0 })).unwrap_or(Handle(0));
-        let h3 = doc.add(&Space::Model, Common::default(), EntityKind::Arc(cadaddy_doc::Arc { center: cadaddy_geom::Vec3::new(10.0, 10.0, 0.0), radius: 3.0, start: 0.0, end: std::f64::consts::PI })).unwrap_or(Handle(0));
-        let h4 = doc.add(&Space::Model, Common::default(), EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_geom::Vec3::new(20.0, 0.0, 0.0) })).unwrap_or(Handle(0));
+        let h1 = doc
+            .add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::LwPolyline(LwPolyline { vertices: vs, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }),
+            )
+            .unwrap_or(Handle(0));
+        let h2 = doc
+            .add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(5.0, 5.0, 0.0), radius: 2.0 }),
+            )
+            .unwrap_or(Handle(0));
+        let h3 = doc
+            .add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::Arc(cadaddy_doc::Arc {
+                    center: cadaddy_geom::Vec3::new(10.0, 10.0, 0.0),
+                    radius: 3.0,
+                    start: 0.0,
+                    end: std::f64::consts::PI,
+                }),
+            )
+            .unwrap_or(Handle(0));
+        let h4 = doc
+            .add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_geom::Vec3::new(20.0, 0.0, 0.0) }),
+            )
+            .unwrap_or(Handle(0));
         let polys = extract_all_polylines(&doc, &[h1, h2, h3, h4]);
         assert_eq!(polys.len(), 4, "should extract 4 polylines from 4 entity types");
     }
