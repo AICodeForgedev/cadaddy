@@ -49,6 +49,11 @@ pub struct BuildingSpec {
     /// assembly and scope with reasons, and the markup settings.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub estimate: serde_json::Value,
+    /// Field progress (`progress.*`): the plan's driver quantities, installed-work marks and
+    /// timecard hours. Production rates are never kept here: they go to the company's private
+    /// field observations.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub progress: serde_json::Value,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -1459,6 +1464,7 @@ impl BuildingSpec {
             levels: r.levels.clone(),
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
+            progress: serde_json::Value::Null,
             layers,
             wall_types,
             rooms: Vec::new(),

@@ -106,7 +106,7 @@ fn setting(st: &Map<String, Value>, k: &str, default: f64) -> f64 {
 // ---------------- CSV ----------------
 
 /// Parse CSV text (quoted fields, doubled quotes) into header-keyed rows.
-fn csv_rows(text: &str) -> Vec<BTreeMap<String, String>> {
+pub(crate) fn csv_rows(text: &str) -> Vec<BTreeMap<String, String>> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     for line in text.lines().take(MAX_ROWS) {
         let mut cells = Vec::new();
