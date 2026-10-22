@@ -151,3 +151,78 @@ fn fuzz(v: &str) {
         let _ = read(&b);
     }
 }
+
+/// The sequence an R2004-layout file header is XORed with (spec §4.1).
+fn header_mask(n: usize) -> Vec<u8> {
+    let mut seed: u32 = 1;
+    (0..n)
+        .map(|_| {
+            seed = seed.wrapping_mul(0x343FD).wrapping_add(0x269EC3);
+            (seed >> 16) as u8
+        })
+        .collect()
+}
+
+fn le32(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// A file whose page map records its own page larger than what was written, the file ending
+/// inside it (some writers do: the page map's page is last, and the file's closing copy of the
+/// header data follows its data straight away). Read as AutoCAD reads it, objects and all.
+#[test]
+fn a_page_map_page_running_past_the_end_is_read() {
+    use cadaddy_dwgcodec::{crc, lz77};
+    for v in ["AC1018", "AC1024", "AC1032"] {
+        let bytes = common::dwg(v, 40);
+        let expected = read(&bytes).unwrap();
+        let mask = header_mask(0x6C);
+        let mut data: Vec<u8> = bytes[0x80..0x80 + 0x6C].iter().zip(&mask).map(|(a, b)| a ^ b).collect();
+        let map_at = 0x100 + u64::from_le_bytes(data[0x54..0x5C].try_into().unwrap()) as usize;
+        let map_id = le32(&data, 0x50);
+        let (size, csize) = (le32(&bytes, map_at + 4) as usize, le32(&bytes, map_at + 8) as usize);
+        let mut map = lz77::decompress(&bytes[map_at + 20..map_at + 20 + csize], size).unwrap();
+        // Enlarge the page map's own entry (pages are laid out in map order; it must be last).
+        let mut p = 0;
+        let mut last = None;
+        while p + 8 <= map.len() {
+            let id = le32(&map, p) as i32;
+            if id as u32 == map_id {
+                last = Some(p);
+            }
+            p += if id < 0 { 24 } else { 8 };
+        }
+        let entry = last.expect("the page map lists itself");
+        assert_eq!(entry + 8, map.len(), "{v}: the page map's page is the last page");
+        let declared = le32(&map, entry + 4) + 0x5C0;
+        map[entry + 4..entry + 8].copy_from_slice(&declared.to_le_bytes());
+        let c = lz77::compress(&map).unwrap();
+        let mut page = Vec::new();
+        for x in [0x4163_0E3Bu32, map.len() as u32, c.len() as u32, 2, 0] {
+            page.extend_from_slice(&x.to_le_bytes());
+        }
+        let sum = crc::page_checksum(crc::page_checksum(0, &page), &c);
+        page[16..20].copy_from_slice(&sum.to_le_bytes());
+        page.extend_from_slice(&c);
+        // The file: everything before the page map, its unpadded page, 0x14 bytes, the copy.
+        let mut out = bytes[..map_at].to_vec();
+        out.extend_from_slice(&page);
+        out.extend_from_slice(&[0; 0x14]);
+        let copy_at = out.len() as u64;
+        data[0x34..0x3C].copy_from_slice(&copy_at.to_le_bytes());
+        data[0x68..0x6C].copy_from_slice(&[0; 4]);
+        let crc = crc::crc32(0, &data);
+        data[0x68..0x6C].copy_from_slice(&crc.to_le_bytes());
+        let enc: Vec<u8> = data.iter().zip(&mask).map(|(a, b)| a ^ b).collect();
+        out[0x80..0x80 + 0x6C].copy_from_slice(&enc);
+        out.extend_from_slice(&enc);
+        assert!(map_at + declared as usize > out.len(), "{v}: the file ends inside the page map's page");
+
+        let d = read(&out).unwrap_or_else(|e| panic!("{v}: {e}"));
+        assert_eq!(d.objects, expected.objects, "{v}");
+        // Written again, it is a whole file that reads the same.
+        let again = write(&d).unwrap();
+        assert_eq!(read(&again).unwrap_or_else(|e| panic!("{v}: rewritten: {e}")).objects, expected.objects, "{v}");
+        assert_eq!(common::acadrust_handles(&again), common::acadrust_handles(&bytes), "{v}: acadrust reads the rewritten file");
+    }
+}

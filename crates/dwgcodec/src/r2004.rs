@@ -298,12 +298,15 @@ pub(crate) fn read(bytes: &[u8], version: Version, limits: &Limits) -> Result<Dw
         if pages.len() >= MAX_PAGES {
             return Err(Error::TooLarge("the page map"));
         }
-        let extent = bytes.get(at..at.checked_add(size).ok_or_else(|| corrupt("a page size"))?).ok_or(Error::Truncated("a page"))?.to_vec();
+        // Some writers record a last page (the page map) larger than what they wrote, ending the
+        // file inside it: the page is what's there (a page it cuts short fails when it's read).
+        let end = at.checked_add(size).ok_or_else(|| corrupt("a page size"))?;
+        let extent = bytes.get(at..end.min(bytes.len())).filter(|_| at < bytes.len()).ok_or(Error::Truncated("a page"))?.to_vec();
         address_of.insert(id, at);
         pages.push(Page { id, bytes: extent, gap });
-        at += size;
+        at = end;
     }
-    let pages_end = at;
+    let pages_end = at.min(bytes.len());
 
     // The section map.
     let section_map_id = u32_at(&data, 0x5C)? as i32;
