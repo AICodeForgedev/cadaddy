@@ -21,6 +21,7 @@ pub mod clipboard;
 pub mod colorbook;
 pub mod constraints;
 pub mod coordination;
+pub mod copricing;
 mod dash_styles;
 mod draw;
 mod draw2;
@@ -298,6 +299,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(estimate::specs());
+        v.extend(copricing::specs());
         v.extend(bom::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
