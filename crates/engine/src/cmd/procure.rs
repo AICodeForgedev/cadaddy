@@ -48,6 +48,9 @@ pub struct Release {
     pub id: String,
     pub name: String,
     pub level: String,
+    /// The 4D task(s) it was released for (`phase`), when it was.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub phase: String,
     pub need_by: String,
     pub created: String,
     pub lines: Vec<ReleaseLine>,
@@ -249,6 +252,20 @@ fn run_release(s: &mut Session, p: &Value) -> Result<Value> {
         p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_lowercase).collect()).unwrap_or_default()
     };
     let (trades, cats) = (list("trades"), list("categories"));
+    // A phase: the 4D tasks named (wildcards), their floors and systems, their start the need date.
+    let phase = str_param(p, "phase").map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let mut tasks: Vec<fourd::Task> = Vec::new();
+    if let Some(ph) = &phase {
+        let sched = fourd::Schedule4d::from_json(s.doc()?.schedule4d.as_deref()).map_err(|e| bad("procure.release", e))?;
+        if sched.tasks.is_empty() {
+            return Err(bad("procure.release", "there is no 4D schedule to take a phase from (fourd.import)"));
+        }
+        tasks = sched.tasks.iter().filter(|t| fourd::wildcard(ph, &t.name)).cloned().collect();
+        if tasks.is_empty() {
+            let names: Vec<&str> = sched.tasks.iter().map(|t| t.name.as_str()).take(50).collect();
+            return Err(bad("procure.release", format!("no 4D task `{ph}`: the tasks are {}", names.join(", "))));
+        }
+    }
     let lines = bom("procure.release", s)?;
     let sp = spec("procure.release", s)?;
     let mut proc = load(&sp);
@@ -266,10 +283,17 @@ fn run_release(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let d = s.doc()?;
+    // A line a phase's task covers: on its floor (its level filter), and of its system or trade
+    // where it names one (matched against the line's trade, category or item).
+    let in_task = |t: &fourd::Task, l: &Value| {
+        t.filter.level.as_deref().is_none_or(|lv| fourd::wildcard(lv, &st(l, "level")))
+            && t.filter.system.as_deref().is_none_or(|sys| ["trade", "category", "item"].iter().any(|k| fourd::wildcard(sys, &st(l, k))))
+    };
     let wanted = |l: &Value| {
         (level.is_empty() || st(l, "level").eq_ignore_ascii_case(&level))
             && (trades.is_empty() || trades.contains(&st(l, "trade").to_ascii_lowercase()))
             && (cats.is_empty() || cats.contains(&st(l, "category").to_ascii_lowercase()))
+            && (phase.is_none() || tasks.iter().any(|t| in_task(t, l)))
     };
     let mut out_lines = Vec::new();
     for (k, l) in &lines {
@@ -300,7 +324,7 @@ fn run_release(s: &mut Session, p: &Value) -> Result<Value> {
         });
     }
     if out_lines.is_empty() {
-        return Err(bad("procure.release", "nothing left to release for that floor, trade or category"));
+        return Err(bad("procure.release", "nothing left to release for that floor, trade, category or phase"));
     }
     // What must arrive together: every line of a group in this release, or none.
     let mut unlinked = Vec::new();
@@ -335,7 +359,12 @@ fn run_release(s: &mut Session, p: &Value) -> Result<Value> {
         id: id.clone(),
         name,
         level,
-        need_by: str_param(p, "need_by").unwrap_or_default().to_string(),
+        phase: phase.unwrap_or_default(),
+        // Given, else the phase's (its first task's) start.
+        need_by: str_param(p, "need_by")
+            .map(str::to_string)
+            .or_else(|| tasks.iter().filter_map(|t| fourd::day(&t.start)).min().map(fourd::iso))
+            .unwrap_or_default(),
         created,
         lines: out_lines,
         unlinked,
@@ -404,7 +433,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|r| {
             let ls: Vec<Value> = r.lines.iter().map(|l| line_json(d, &proc, r, l, t)).collect();
             let late = ls.iter().filter(|l| l["flags"].as_array().is_some_and(|f| f.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("late"))))).count();
-            json!({"id": r.id, "name": r.name, "level": r.level, "need_by": r.need_by, "created": r.created, "lines": ls, "late": late, "unlinked": r.unlinked})
+            json!({"id": r.id, "name": r.name, "level": r.level, "phase": r.phase, "need_by": r.need_by, "created": r.created, "lines": ls, "late": late, "unlinked": r.unlinked})
         })
         .collect();
     // What no release has taken yet; do the releases sum to the BOM?
@@ -547,8 +576,8 @@ fn run_leadtimes(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"lead_times": table}))
 }
 
-fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("procure.export", "path required"))?.to_string();
+/// A release found by id or name in `procure.list`, and its rows as exported (a header first).
+fn release_rows(s: &mut Session, p: &Value) -> Result<(Value, Vec<Vec<String>>)> {
     let rel = str_param(p, "release").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("procure.export", "release required"))?.to_string();
     let listed = run_list(s, p)?;
     let r = listed["releases"]
@@ -587,7 +616,80 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             l["flags"].as_array().map(|f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default(),
         ]);
     }
+    Ok((r, rows))
+}
+
+/// The PDF's sheet: Letter landscape (inches), the text height and the columns' widths (every
+/// column of the export, Class and Flags included).
+const PDF_PAGE: [f64; 2] = [11.0, 8.5];
+const PDF_TEXT: f64 = 0.08;
+const PDF_ROW: f64 = 0.16;
+const PDF_COLS: [f64; 14] = [2.0, 0.55, 0.45, 0.4, 0.45, 0.45, 0.45, 0.75, 0.55, 0.75, 0.75, 0.8, 0.65, 1.7];
+
+/// A release as PDF pages: a drawing of its sheets (one under another, a page window each), the
+/// plot parameters, and the cells too long for their column (cut with "…", every one listed:
+/// nothing is left out silently). Every line of the release is on a page.
+pub fn release_pdf(s: &mut Session, p: &Value) -> Result<(cadaddy_doc::Drawing, Value, Vec<String>)> {
+    let (r, rows) = release_rows(s, p)?;
+    let mut d = cadaddy_doc::Drawing::new_imperial();
+    let text = |d: &mut cadaddy_doc::Drawing, x: f64, y: f64, h: f64, v: String| {
+        let t = cadaddy_doc::Text {
+            insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+            align_pt: None,
+            height: h,
+            value: v,
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: Default::default(),
+            valign: Default::default(),
+        };
+        let _ = d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t));
+    };
+    let (header, body) = rows.split_first().map_or((&[][..], &[][..]), |(h, b)| (h.as_slice(), b));
+    // Rows a page holds under the title and the header.
+    let per_page = (((PDF_PAGE[1] - 1.4) / PDF_ROW).floor() as usize).max(1);
+    let pages = body.len().div_ceil(per_page).max(1);
+    let mut cut = Vec::new();
+    let mut windows = Vec::new();
+    for page in 0..pages {
+        // Page `page` is the sheet `page` sheets below the first.
+        let y0 = -(page as f64) * (PDF_PAGE[1] + 1.0);
+        windows.push(json!({"window": [[0.0, y0], [PDF_PAGE[0], y0 + PDF_PAGE[1]]], "paper": "Letter", "landscape": true}));
+        text(&mut d, 0.25, y0 + 8.0, 0.18, format!("RELEASE {}: {}   page {} of {pages}", st(&r, "id"), st(&r, "name"), page + 1));
+        // The header, then this page's lines (each with its number in the release).
+        let page_rows: Vec<(Option<usize>, &[String])> = std::iter::once((None, header))
+            .chain(body.iter().enumerate().skip(page * per_page).take(per_page).map(|(i, r)| (Some(i), r.as_slice())))
+            .collect();
+        for (row_i, (line, row)) in page_rows.into_iter().enumerate() {
+            let y = y0 + 7.6 - row_i as f64 * PDF_ROW;
+            let mut x = 0.25;
+            for (c, w) in PDF_COLS.iter().enumerate() {
+                let cell = row.get(c).map_or("", String::as_str);
+                let fits = ((w / (PDF_TEXT * 0.85)).floor() as usize).max(2);
+                let shown = if cell.chars().count() > fits {
+                    if let Some(i) = line {
+                        cut.push(format!("line {}, {}: {cell}", i + 1, header.get(c).map_or("", String::as_str)));
+                    }
+                    format!("{}…", cell.chars().take(fits - 1).collect::<String>())
+                } else {
+                    cell.to_string()
+                };
+                text(&mut d, x, y, PDF_TEXT, shown);
+                x += w;
+            }
+        }
+    }
+    let plot = json!({"pages": windows, "margins": [0.0, 0.0, 0.0, 0.0], "lineweights": false, "stamp": false});
+    Ok((d, plot, cut))
+}
+
+fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("procure.export", "path required"))?.to_string();
     let format = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("xlsx").to_ascii_lowercase();
+    let (r, rows) = release_rows(s, p)?;
+    let mut answer = json!({"path": path, "lines": rows.len().saturating_sub(1)});
     let bytes = match format.as_str() {
         "xlsx" => super::table::xlsx::write(&rows, &format!("Release {}", st(&r, "id"))).map_err(|e| bad("procure.export", e))?,
         "csv" => {
@@ -598,31 +700,11 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             let plot = super::file::io()
                 .and_then(|h| h.plot)
                 .ok_or_else(|| bad("procure.export", "PDF export isn't available in this build (export XLSX or CSV)"))?;
-            let mut d = cadaddy_doc::Drawing::new_imperial();
-            let text = |d: &mut cadaddy_doc::Drawing, y: f64, x: f64, h: f64, v: &str| {
-                let t = cadaddy_doc::Text {
-                    insert: cadaddy_geom::Vec3::new(x, y, 0.0),
-                    align_pt: None,
-                    height: h,
-                    value: v.chars().take(60).collect(),
-                    rotation: 0.0,
-                    width_factor: 1.0,
-                    oblique: 0.0,
-                    style: "Standard".into(),
-                    halign: Default::default(),
-                    valign: Default::default(),
-                };
-                let _ = d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t));
-            };
-            text(&mut d, 8.0, 0.4, 0.2, &format!("RELEASE {}: {}", st(&r, "id"), st(&r, "name")));
-            let cols = [0.4, 3.4, 4.2, 4.8, 5.4, 6.0, 6.6, 7.4, 8.4, 9.4];
-            for (i, row) in rows.iter().take(40).enumerate() {
-                for (c, x) in cols.iter().enumerate() {
-                    text(&mut d, 7.6 - i as f64 * 0.18, *x, 0.09, row.get([0, 1, 2, 4, 5, 6, 8, 10, 11, 12][c]).map_or("", String::as_str));
-                }
-            }
-            plot(&d, &cadaddy_doc::Space::Model, &json!({"pages": [{"window": [[0.0, 0.0], [11.0, 8.5]], "paper": "Letter", "landscape": true}], "margins": [0.0, 0.0, 0.0, 0.0], "lineweights": false, "stamp": false}))
-                .map_err(|e| bad("procure.export", e))?
+            let (d, params, cut) = release_pdf(s, p)?;
+            answer["pages"] = json!(params["pages"].as_array().map_or(0, Vec::len));
+            // What didn't fit its column is said (the XLSX and CSV have it whole).
+            answer["cut"] = json!(cut);
+            plot(&d, &cadaddy_doc::Space::Model, &params).map_err(|e| bad("procure.export", e))?
         }
         _ => return Err(bad("procure.export", "the file is .xlsx, .csv or .pdf")),
     };
@@ -630,13 +712,13 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     crate::writefile::write(&path, &bytes).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
     #[cfg(target_arch = "wasm32")]
     let _ = &bytes;
-    Ok(json!({"path": path, "lines": rows.len().saturating_sub(1)}))
+    Ok(answer)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("procure.release", "New Material Release", run_release)
-            .params("{name, level?: floor, trades?: [trade], categories?: [category], need_by?: date, allow_unlinked?: bool, today?} → {id, lines, unlinked}: what the BOM still needs there, exact need + spares by rule"),
+            .params("{name, level?: floor, phase?: 4D task name (wildcards: its floor and system, its start the need date), trades?: [trade], categories?: [category], need_by?: date, allow_unlinked?: bool, today?} → {id, lines, unlinked}: what the BOM still needs there, exact need + spares by rule"),
         CommandSpec::new("procure.list", "Procurement", run_list)
             .params("{today?: date} → {releases: [{id, name, level, lines: [{item, size, need, spares, qty, class, lead_weeks, need_date, order_by, submittal, status, flags}], late, unlinked}], unreleased, sums_to_bom}")
             .noundo(),

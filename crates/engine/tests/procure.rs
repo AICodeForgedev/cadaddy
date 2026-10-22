@@ -193,3 +193,68 @@ fn bad_requests_are_refused() {
     }
     assert!(Session::new().execute("procure.list", &json!({})).is_err());
 }
+
+/// The spec with 45 more device types on L1: a release of more lines than a page holds.
+fn many_devices() -> Session {
+    let mut s = session();
+    let tags: Vec<Value> = (0..45)
+        .map(|i| json!({"id": format!("D{i}"), "kind": "receptacle", "level": "L1", "at_ft": [i, 1], "fields": {"device_type": {"value": format!("Device type {i:02}"), "source": "plan"}}}))
+        .collect();
+    s.execute("bspec.set", &json!({"spec": {"tags": tags}})).unwrap();
+    s
+}
+
+/// The PDF holds every line of a release longer than a page (the pages the plotter is handed:
+/// every item, the Class and Flags columns, the late flag), over as many pages as it needs.
+#[test]
+fn a_long_release_prints_every_line_on_pdf_pages() {
+    let mut s = many_devices();
+    s.execute("fourd.import", &json!({"rows": [["Task", "Start", "Finish", "Level"], ["L1 rough-in", "2026-12-01", "2027-01-15", "L1"]]})).unwrap();
+    s.execute("procure.release", &json!({"name": "Level 1", "level": "L1"})).unwrap();
+    let list = s.execute("procure.list", &json!({"today": "2026-10-21"})).unwrap();
+    let lines = list["releases"][0]["lines"].as_array().unwrap().clone();
+    assert!(lines.len() > 45, "{}", lines.len());
+    let (d, params, cut) = cadaddy_engine::cmd::procure::release_pdf(&mut s, &json!({"release": "Level 1", "today": "2026-10-21"})).unwrap();
+    let texts: Vec<String> =
+        d.model.iter().filter_map(|e| if let cadaddy_engine::doc::EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect();
+    let pages = params["pages"].as_array().unwrap().len();
+    assert!(pages >= 2, "{pages} pages");
+    assert_eq!(texts.iter().filter(|t| t.starts_with("RELEASE R001")).count(), pages, "a title on each page");
+    for h in ["Class", "Flags"] {
+        assert_eq!(texts.iter().filter(|t| *t == h).count(), pages, "the {h} column on each page");
+    }
+    // Every line's item, whole or cut with its whole text listed in `cut`.
+    for l in &lines {
+        let item = l["item"].as_str().unwrap();
+        let whole = texts.iter().any(|t| t == item);
+        let marked = cut.iter().any(|c| c.ends_with(&format!(": {item}")))
+            && texts.iter().any(|t| t.ends_with('…') && item.starts_with(t.trim_end_matches('…')));
+        assert!(whole || marked, "{item} isn't in the PDF");
+    }
+    // The switchboard's late flag (cut to its column and listed whole).
+    assert!(texts.iter().any(|t| t.starts_with("late")), "{texts:?}");
+    assert!(cut.iter().any(|c| c.contains("Flags: late: order by")), "{cut:?}");
+}
+
+/// A release by phase takes what that 4D task covers (its floor), needed at its start; an
+/// unknown phase is refused with the task names.
+#[test]
+fn a_release_by_phase_takes_its_floor_from_its_start() {
+    let mut s = session();
+    s.execute(
+        "fourd.import",
+        &json!({"rows": [["Task", "Start", "Finish", "Level"], ["L1 electrical rough-in", "2026-12-01", "2027-01-15", "L1"], ["L2 ductwork", "2028-03-01", "2028-04-01", "L2"]]}),
+    )
+    .unwrap();
+    let e = s.execute("procure.release", &json!({"name": "X", "phase": "L3*"})).unwrap_err().to_string();
+    assert!(e.contains("no 4D task `L3*`") && e.contains("L1 electrical rough-in") && e.contains("L2 ductwork"), "{e}");
+    s.execute("procure.release", &json!({"name": "Ductwork", "phase": "l2 duct*"})).unwrap();
+    let l = s.execute("procure.list", &json!({"today": "2026-10-21"})).unwrap();
+    let r = &l["releases"][0];
+    assert_eq!((r["phase"].as_str(), r["need_by"].as_str()), (Some("l2 duct*"), Some("2028-03-01")), "{r}");
+    let took: Vec<&str> = r["lines"].as_array().unwrap().iter().map(|x| x["item"].as_str().unwrap()).collect();
+    let l2: Vec<String> = bom(&mut s).iter().filter(|x| x["level"] == "L2").map(|x| x["item"].as_str().unwrap().to_string()).collect();
+    assert_eq!(took.len(), l2.len(), "{took:?} vs {l2:?}");
+    assert!(r["lines"].as_array().unwrap().iter().all(|x| x["level"] == "L2"), "{r}");
+    assert!(r["lines"].as_array().unwrap().iter().all(|x| x["need_date"] == "2028-03-01"), "{r}");
+}

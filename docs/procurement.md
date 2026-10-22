@@ -1,25 +1,27 @@
 # Procurement from the model
 
-Material is released from the bill of materials (`bim.bom`): floor by floor, area by area or trade
-by trade, each release the exact need of what the BOM still needs there plus spares by rule. Every
+Material is released from the bill of materials (`bim.bom`): floor by floor, phase by phase (a 4D
+task: its floor and system, needed at its start) or trade by trade, each release the exact need of
+what the BOM still needs there plus spares by rule. Releasing by area (a room or zone within a
+floor) isn't done yet: the BOM's lines don't carry the rooms their elements are in. Every
 release takes from what is left, so **the releases always sum to the BOM** (`procure.list` says so,
 and lists what no release has taken yet).
 
 | Command | What it does |
 |---|---|
-| `procure.release {name, level?, trades?, categories?, need_by?, allow_unlinked?}` | A release: exact need + spares (`custom/spares.<category>` percent; defaults: devices 2%, lighting 1%) |
+| `procure.release {name, level?, phase?, trades?, categories?, need_by?, allow_unlinked?}` | A release: exact need + spares (`custom/spares.<category>` percent; defaults: devices 2%, lighting 1%) |
 | `procure.list {today?}` | The releases, each line's lead time, need date, order-by date, submittal status, order status and flags; what's unreleased; whether the releases sum to the BOM |
 | `procure.status {release, item, status, received?}` | Ordered, shipped, received, short |
 | `procure.submittal {item, spec_section?, status?, submitted?, returned?, reviewer?, comment?}`, `procure.submittals` | The submittal log |
 | `procure.leadtimes {set?}` | Lead times per item class (the company's data over the defaults) |
-| `procure.export {release, path}` | A release as XLSX, CSV or PDF |
+| `procure.export {release, path}` | A release as XLSX, CSV or PDF (every line, as many pages as it takes; a cell too long for its column is cut with "…" and listed in the answer's `cut`) |
 
 ## Order-by dates
 
 Order by = the day the material is needed − the item class's longest lead time − the submittal
 review allowance while its submittal isn't approved (`custom/procure.review_days`, default 14).
-The day it is needed is the release's `need_by`, else the 4D schedule's first task on its floor
-(`fourd.import`). A line still planned past its order-by date is flagged **late**; gear, panels,
+The day it is needed is the release's `need_by` (a phase's start when released by phase), else the
+4D schedule's first task on its floor (`fourd.import`). A line still planned past its order-by date is flagged **late**; gear, panels,
 transformers, lighting, equipment and lug kits without an approved submittal are flagged too.
 
 Default lead times (weeks; placeholders for the company's own data): gear 30–60, transformers
