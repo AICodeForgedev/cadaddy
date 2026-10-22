@@ -1,12 +1,12 @@
 //! `bspec.draft`: a first building spec from the plan alone, without any AI, from what the
 //! perception tools see (`plan.layers`, `plan.walls`, `plan.openings`, `plan.rooms`,
 //! `plan.notes`). Layer roles come from standard layer names, in two conventions (the US
-//! National CAD Standard's `A-WALL`, `A-DOOR`, `A-GLAZ`, `E-LITE`â€¦, and plain names such as
+//! National CAD Standard's `A-WALL`, `A-DOOR`, `A-GLAZ`, `E-LITE`…, and plain names such as
 //! `Walls`, `Doors`, `Windows`, `Lighting`), and else from what a layer holds (wall face pairs,
 //! door swings, room names). Wall types take their thickness from the measured face pairs; rooms
 //! are the closed outlines round their name tags, with their numbers and any ceiling note inside;
 //! door and window families are the blocks found as openings. Everything that is a convention or
-//! a default rather than read from the plan is marked in the spec's `guess` (part key â†’ why), so
+//! a default rather than read from the plan is marked in the spec's `guess` (part key → why), so
 //! the Plans to Model palette and agents know what to confirm.
 
 use std::collections::BTreeMap;
@@ -30,7 +30,7 @@ const MAX_ROOMS: usize = 1_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("bspec.draft", "Draft Building Spec", run_draft).params(
-        "{store?: bool (keep it as the drawing's spec; default false)} â†’ {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
+        "{store?: bool (keep it as the drawing's spec; default false)} → {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
     )]
 }
 
@@ -327,7 +327,7 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
     guess.insert("openings".into(), "default door head and window sill and head".into());
     let mut sp = BuildingSpec {
         version: SPEC_VERSION,
-        // Rounded: 12 Ã— 25.4 is 304.79999â€¦ in binary.
+        // Rounded: 12 × 25.4 is 304.79999… in binary.
         units_per_foot: (12.0 * k * 1e6).round() / 1e6,
         levels: vec![level],
         layers: roles,
