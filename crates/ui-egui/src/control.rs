@@ -421,7 +421,10 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
         // `ui.bench3d` orbit's frames per second).
         "perf3d": serde_json::to_value(app.canvas.shade.stats).unwrap_or_default(),
-        "perf": {"frameMs": app.frame_ms, "gpuBytes": crate::gpu::gpu_bytes(), "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len())},
+        "perf": {"frameMs": app.frame_ms, "gpuBytes": crate::gpu::gpu_bytes(), "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len()),
+            // What a long session holds (the soak's leak hunt): the session journal, and the
+            // widget states egui keeps.
+            "journalLines": app.session.journal.lines().len(), "journalBytes": app.session.journal.bytes(), "uiStates": ctx.memory(|m| m.data.len())},
     })
 }
 

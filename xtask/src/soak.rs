@@ -102,6 +102,10 @@ pub struct Sample {
     pub frame_ms: Option<f64>,
     pub rounds: u64,
     pub slowest_call_ms: f64,
+    /// Window only: the session journal's text (MB) and the widget states egui keeps, to tell a
+    /// bounded history from a leak when memory climbs.
+    pub journal_mb: Option<f64>,
+    pub ui_states: Option<u64>,
 }
 
 /// A process's resident memory (MB) and open handles (file descriptors; on Windows its private
@@ -165,6 +169,10 @@ trait Driver {
     fn gpu(&mut self) -> (Option<f64>, Option<f64>) {
         (None, None)
     }
+    /// Window only: the session journal's text (MB) and egui's widget states.
+    fn held(&mut self) -> (Option<f64>, Option<u64>) {
+        (None, None)
+    }
     /// Whether this is the window (Walk, languages and themes exist only there).
     fn is_window(&self) -> bool {
         false
@@ -207,6 +215,10 @@ impl Driver for Window {
     fn gpu(&mut self) -> (Option<f64>, Option<f64>) {
         let perf = self.c.call("ui.inspect", json!({})).map(|v| v["perf"].clone()).unwrap_or(Value::Null);
         (perf["gpuBytes"].as_f64().map(|b| b / 1_048_576.0), perf["frameMs"].as_f64())
+    }
+    fn held(&mut self) -> (Option<f64>, Option<u64>) {
+        let perf = self.c.call("ui.inspect", json!({})).map(|v| v["perf"].clone()).unwrap_or(Value::Null);
+        (perf["journalBytes"].as_f64().map(|b| b / 1_048_576.0), perf["uiStates"].as_u64())
     }
     fn is_window(&self) -> bool {
         true
@@ -532,6 +544,7 @@ fn soak(d: &mut dyn Driver, minutes: f64, dir: &Path) -> (Vec<Sample>, Vec<Strin
         if start.elapsed() >= next {
             let (rss_mb, handles) = process(d.pid());
             let (gpu_mb, frame_ms) = d.gpu();
+            let (journal_mb, ui_states) = d.held();
             if frame_ms.is_some_and(|f| f > STALL.as_secs_f64() * 1000.0) {
                 problems.push(format!("a frame took {:.1} s", frame_ms.unwrap_or_default() / 1000.0));
             }
@@ -543,6 +556,8 @@ fn soak(d: &mut dyn Driver, minutes: f64, dir: &Path) -> (Vec<Sample>, Vec<Strin
                 frame_ms,
                 rounds,
                 slowest_call_ms: slowest.as_secs_f64() * 1000.0,
+                journal_mb,
+                ui_states,
             });
             slowest = Duration::ZERO;
             next += every;
@@ -569,19 +584,21 @@ fn table(name: &str, samples: &[Sample], problems: &[String]) -> String {
     let mut s = format!("## {name}\n\n");
     let rounds = samples.last().map_or(0, |x| x.rounds);
     let _ = writeln!(s, "{rounds} rounds. {}\n", if problems.is_empty() { "PASS".to_string() } else { format!("FAIL: {}", problems.join("; ")) });
-    s.push_str("| minute | rounds | RSS MB | handles | GPU MB | frame ms | slowest call ms |\n|---|---|---|---|---|---|---|\n");
+    s.push_str("| minute | rounds | RSS MB | handles | GPU MB | frame ms | slowest call ms | journal MB | UI states |\n|---|---|---|---|---|---|---|---|---|\n");
     for x in samples {
         let opt = |v: Option<f64>| v.map_or("-".to_string(), |v| format!("{v:.1}"));
         let _ = writeln!(
             s,
-            "| {:.1} | {} | {:.1} | {} | {} | {} | {:.0} |",
+            "| {:.1} | {} | {:.1} | {} | {} | {} | {:.0} | {} | {} |",
             x.minute,
             x.rounds,
             x.rss_mb,
             x.handles,
             opt(x.gpu_mb),
             opt(x.frame_ms),
-            x.slowest_call_ms
+            x.slowest_call_ms,
+            opt(x.journal_mb),
+            x.ui_states.map_or("-".to_string(), |n| n.to_string())
         );
     }
     s.push('\n');
@@ -679,6 +696,7 @@ fn samples_json(samples: &[Sample], problems: &[String]) -> Value {
         "samples": samples.iter().map(|s| json!({
             "minute": s.minute, "rounds": s.rounds, "rssMb": s.rss_mb, "handles": s.handles,
             "gpuMb": s.gpu_mb, "frameMs": s.frame_ms, "slowestCallMs": s.slowest_call_ms,
+            "journalMb": s.journal_mb, "uiStates": s.ui_states,
         })).collect::<Vec<_>>(),
     })
 }

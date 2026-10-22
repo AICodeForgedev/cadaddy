@@ -185,17 +185,31 @@ impl Control {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
+    /// One request. A `rate limited` reply means the app didn't run it, so the request is sent
+    /// again after a pause that doubles each time (a soak's tight loops outrun the allowance).
     pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let mut pause = Duration::from_millis(20);
+        let start = Instant::now();
+        loop {
+            let v = self.request(method, &params)?;
+            if rate_limited(&v) && start.elapsed() < RATE_LIMIT_WAIT {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_secs(1));
+                continue;
+            }
+            if v["ok"] == false || v.get("error").is_some_and(|e| !e.is_null()) {
+                return Err(format!("{method}: {}", v.get("error").unwrap_or(&v)));
+            }
+            return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+    fn request(&mut self, method: &str, params: &Value) -> Result<Value, String> {
         self.id += 1;
         let line = json!({ "id": self.id, "method": method, "params": params }).to_string();
         writeln!(self.writer, "{line}").map_err(|e| format!("{method}: {e}"))?;
         let mut reply = String::new();
         self.reader.read_line(&mut reply).map_err(|e| format!("{method}: {e}"))?;
-        let v: Value = serde_json::from_str(&reply).map_err(|e| format!("{method}: bad reply {reply:?}: {e}"))?;
-        if v["ok"] == false || v.get("error").is_some_and(|e| !e.is_null()) {
-            return Err(format!("{method}: {}", v.get("error").unwrap_or(&v)));
-        }
-        Ok(v.get("result").cloned().unwrap_or(Value::Null))
+        serde_json::from_str(&reply).map_err(|e| format!("{method}: bad reply {reply:?}: {e}"))
     }
     pub(crate) fn exec(&mut self, command: &str, params: Value) -> Result<Value, String> {
         self.call("engine.execute", json!({ "command": command, "params": params }))
@@ -204,6 +218,14 @@ impl Control {
         let r = self.exec("drawing.inspect", json!({ "entities": false }))?;
         r["entityCount"].as_u64().ok_or_else(|| format!("drawing.inspect has no entityCount: {r}"))
     }
+}
+
+/// How long a rate-limited request keeps being retried before the caller sees the error.
+const RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
+
+/// The app answered "rate limited" and did not run the request.
+fn rate_limited(reply: &Value) -> bool {
+    reply["ok"] == false && reply["state"] == "not-run" && reply["error"].as_str().is_some_and(|e| e.starts_with("rate limited"))
 }
 
 /// A free local port.
@@ -627,5 +649,34 @@ mod tests {
         assert!(made(&f, None).is_err());
         assert!(made(&dir.join("none"), None).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A rate-limited request is sent again until the app runs it; other errors are not retried.
+    #[test]
+    fn rate_limited_requests_are_retried() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut out = s.try_clone().unwrap();
+            let mut lines = BufReader::new(s).lines();
+            for n in 0..4 {
+                let req: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+                let reply = match n {
+                    0 | 1 => json!({"id": req["id"], "ok": false, "error": "rate limited: too many requests; slow down", "state": "not-run"}),
+                    2 => json!({"id": req["id"], "ok": true, "result": {"n": 2}}),
+                    _ => json!({"id": req["id"], "ok": false, "error": "unknown command"}),
+                };
+                writeln!(out, "{reply}").unwrap();
+            }
+        });
+        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut c = Control { writer: s.try_clone().unwrap(), reader: BufReader::new(s), id: 0 };
+        assert_eq!(c.call("x", json!({})).unwrap(), json!({"n": 2}));
+        assert_eq!(c.id, 3);
+        assert!(c.call("y", json!({})).unwrap_err().contains("unknown command"));
+        assert_eq!(c.id, 4);
+        server.join().unwrap();
+        assert!(!rate_limited(&json!({"ok": false, "error": "rate limited", "state": "ran"})));
     }
 }
