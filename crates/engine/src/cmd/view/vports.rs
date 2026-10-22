@@ -54,7 +54,13 @@ pub(in crate::cmd) fn model_vports(s: &Session, count: Option<usize>) -> Option<
     if s.layout_space() != Space::Model {
         return None;
     }
-    Some(Box::new(VportsM { count, ..Default::default() }))
+    // 2 and 3 open at the arrangement prompt (what `begin` leaves them at), so their first
+    // prompt reads right before they begin (the help page's options).
+    let stage = match count {
+        Some(n @ 2..=3) => Stage::Arrange(n),
+        _ => Stage::Main,
+    };
+    Some(Box::new(VportsM { stage, count }))
 }
 
 /// The JSON form of VPORTS / View > Viewports > n in the Model tab: `count` tiles (1: single).

@@ -424,6 +424,8 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         "snap": app.canvas.snap.map(|s| json!({"point": [s.point.x, s.point.y], "mode": s.name})),
         "session": app.session.summary(),
         "closePrompt": app.close_prompt(),
+        // The command whose page the Command Reference (F1, HELP) shows, while it is open.
+        "helpPage": crate::dialogs::help_page_shown(app, ctx),
         // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
         // `ui.bench3d` orbit's frames per second).
         "perf3d": serde_json::to_value(app.canvas.shade.stats).unwrap_or_default(),

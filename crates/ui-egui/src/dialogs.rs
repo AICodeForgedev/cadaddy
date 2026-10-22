@@ -454,16 +454,38 @@ fn about(ctx: &egui::Context, open: &mut bool) {
         });
 }
 
+/// Where the Command Reference keeps the command whose page it shows.
+fn help_selected_id() -> egui::Id {
+    egui::Id::new("Command Reference").with("cmdselected")
+}
+
+/// The command whose page the Command Reference shows while it is open (`ui.inspect`'s
+/// `helpPage`): one it was just opened on, else the one picked in its list.
+pub(crate) fn help_page_shown(app: &CadApp, ctx: &egui::Context) -> Option<String> {
+    let dialog = app.ui.dialog.as_deref()?;
+    if let Some(id) = dialog.strip_prefix("commands:") {
+        return Some(id.to_string());
+    }
+    if dialog != "commands" {
+        return None;
+    }
+    let id = ctx.data(|d| d.get_temp::<String>(help_selected_id())).filter(|s| !s.is_empty())?;
+    cadaddy_engine::find_by_id_or_alias(&id).map(|c| c.id.to_string())
+}
+
 fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
     let mut start = None;
     let dialog_id = egui::Id::new("Command Reference");
     let filter_id = dialog_id.with("cmdfilter");
-    let selected_id = dialog_id.with("cmdselected");
+    let selected_id = help_selected_id();
 
     // If the dialog was opened with "commands:<id>", focus on that command.
+    let scroll_id = dialog_id.with("cmdscroll");
     if let Some(focus) = app.ui.dialog.as_deref().and_then(|d| d.strip_prefix("commands:")) {
         ctx.data_mut(|d| d.insert_temp(selected_id, focus.to_string()));
+        // The list scrolls to it once.
+        ctx.data_mut(|d| d.insert_temp(scroll_id, true));
         // Normalise to plain "commands" so this runs only once.
         app.ui.dialog = Some("commands".into());
     }
@@ -506,6 +528,9 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         let is_selected = selected == c.id;
                         let label = format!("{} — {}", c.id.to_ascii_uppercase(), crate::i18n::t(c.label));
                         let response = ui.selectable_label(is_selected, &label);
+                        if is_selected && ui.data_mut(|d| d.remove_temp::<bool>(scroll_id)).unwrap_or(false) {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
                         if response.clicked() {
                             selected = c.id.to_string();
                         }
@@ -522,56 +547,69 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.label(RichText::new(crate::tl!("Command not found.")).color(t.text_dim));
                         return;
                     };
+                    // The engine's page (what HELP gives agents), built once per command shown:
+                    // reading the first prompt starts the command's machine on a scratch drawing.
+                    let page_id = dialog_id.with("cmdpage");
+                    let page = match ui.data(|d| d.get_temp::<(&'static str, cadaddy_engine::HelpPage)>(page_id)) {
+                        Some((id, page)) if id == spec.id => page,
+                        _ => {
+                            let page = spec.help_page();
+                            ui.data_mut(|d| d.insert_temp(page_id, (spec.id, page.clone())));
+                            page
+                        }
+                    };
 
                     // Command title.
-                    ui.heading(RichText::new(spec.id.to_ascii_uppercase()).strong());
-                    ui.label(RichText::new(crate::i18n::t(spec.label)).color(t.text_dim));
+                    ui.heading(RichText::new(&page.id).strong());
+                    ui.label(RichText::new(crate::i18n::t(page.label)).color(t.text_dim));
                     ui.add_space(4.0);
 
-                    // Aliases.
-                    if !spec.aliases.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(crate::tl!("Aliases:")).strong());
-                            ui.label(spec.aliases.iter().map(|a| a.to_ascii_uppercase()).collect::<Vec<_>>().join(", "));
+                    // Each value is named in `ui.elements` (role "text"), so agents and tests read the page.
+                    let row = |ui: &mut egui::Ui, name: &str, value: &str| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(name).strong());
+                            let r = ui.label(value);
+                            crate::control::record_widget(ui, &r, value, "text", None);
                         });
+                    };
+                    if !page.aliases.is_empty() {
+                        row(ui, crate::tl!("Aliases:"), &page.aliases.join(", "));
                     }
-
-                    // Menu path.
-                    if !spec.menu.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(crate::tl!("Menu:")).strong());
-                            ui.label(spec.menu.join(" > "));
-                        });
+                    if !page.menu_path.is_empty() {
+                        row(ui, crate::tl!("Menu:"), &page.menu_path);
                     }
-
-                    // Keyboard shortcut.
-                    if let Some(key) = spec.shortcut {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(crate::tl!("Shortcut:")).strong());
-                            ui.label(key);
-                        });
+                    if !page.shortcut.is_empty() {
+                        row(ui, crate::tl!("Shortcut:"), &page.shortcut);
                     }
-
-                    // Flags.
-                    if spec.transparent {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(crate::tl!("Transparent:")).strong());
-                            ui.label(crate::tl!("Yes (can run inside another command with a leading apostrophe)"));
-                        });
+                    if page.transparent {
+                        row(ui, crate::tl!("Transparent:"), crate::tl!("Yes (can run inside another command with a leading apostrophe)"));
                     }
 
                     ui.add_space(6.0);
 
                     // Help text.
-                    if !spec.help.is_empty() {
-                        ui.label(spec.help);
+                    if !page.help_text.is_empty() {
+                        ui.label(page.help_text);
+                        ui.add_space(6.0);
+                    }
+
+                    // What the command asks first, and the options it offers there.
+                    for prompt in &page.prompts {
+                        ui.label(RichText::new(crate::tl!("Prompt:")).strong());
+                        let r = ui.label(RichText::new(prompt).code());
+                        crate::control::record_widget(ui, &r, prompt, "text", None);
+                    }
+                    if !page.options.is_empty() {
+                        row(ui, crate::tl!("Options:"), &page.options.join(" / "));
+                    }
+                    if !page.prompts.is_empty() || !page.options.is_empty() {
                         ui.add_space(6.0);
                     }
 
                     // JSON parameters.
-                    if !spec.params.is_empty() {
+                    if !page.params.is_empty() {
                         ui.label(RichText::new(crate::tl!("JSON parameters:")).strong());
-                        ui.label(RichText::new(spec.params).code());
+                        ui.label(RichText::new(page.params).code());
                     }
 
                     ui.add_space(8.0);

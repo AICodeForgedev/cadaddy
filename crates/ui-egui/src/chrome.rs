@@ -112,7 +112,9 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                         ui.horizontal(|ui| {
                             for group in TOOLBAR {
                                 for (icon, cmd, tip, _) in *group {
-                                    if icons::button(ui, *icon, size, tip, false).clicked() {
+                                    let resp = icons::button(ui, *icon, size, tip, false);
+                                    crate::menus::note_hover(&resp, cmd);
+                                    if resp.clicked() {
                                         clicked = Some(*cmd);
                                     }
                                 }
@@ -140,6 +142,7 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                         None => crate::i18n::t(label).to_string(),
                     };
                     icons::describe_control(ui, &resp, &tip, None, false);
+                    crate::menus::note_hover(&resp, cmd);
                     if resp.on_hover_text(tip).clicked() {
                         clicked = Some(*cmd);
                     }
@@ -166,6 +169,7 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                         for (_, command, label, _) in *group {
                             let response = ui.button(crate::i18n::t(label));
                             crate::control::record_widget(ui, &response, label, "button", None);
+                            crate::menus::note_hover(&response, command);
                             if response.clicked() {
                                 clicked = Some(*command);
                                 ui.close();

@@ -630,12 +630,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "ui.dialog.commands" => {
-            // F1 / Help: if a command is running, open the help page for it.
-            if let Some(r) = app.session.running.as_ref() {
-                app.ui.dialog = Some(format!("commands:{}", r.id));
-            } else {
-                app.ui.dialog = Some("commands".into());
-            }
+            // F1 / Help: the page of the named command, else of the running one, else the list.
+            let named = params.get("command").and_then(Value::as_str);
+            open_help(app, named);
             Ok(Value::Null)
         }
         "ui.dialog.close" => {
@@ -1146,7 +1143,9 @@ pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String
             if let Some(s) = shortcut {
                 b = b.shortcut_text(shortcut_label(s, ui.ctx().os().is_mac()));
             }
-            if ui.add_enabled(*enabled, b).clicked() {
+            let resp = ui.add_enabled(*enabled, b);
+            note_hover(&resp, id);
+            if resp.clicked() {
                 *clicked = Some(id.clone());
                 ui.close();
             }
@@ -1186,6 +1185,71 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(id) = clicked {
         activate(app, &id);
     }
+}
+
+/// Where the command under the pointer is kept for F1: (frame, command id).
+fn hover_key() -> egui::Id {
+    egui::Id::new("help_hovered_command")
+}
+
+/// Note that the pointer is over the menu item or button of command `id`, so F1 gives its help.
+pub(crate) fn note_hover(resp: &egui::Response, id: &str) {
+    if resp.hovered() {
+        let frame = resp.ctx.cumulative_frame_nr();
+        resp.ctx.data_mut(|d| d.insert_temp(hover_key(), (frame, id.to_string())));
+    }
+}
+
+/// The command whose menu item or button the pointer was over this frame or the last (key
+/// presses are read before the menus are drawn), when it has a help page.
+pub(crate) fn hovered_command(ctx: &egui::Context) -> Option<&'static str> {
+    let (frame, id) = ctx.data(|d| d.get_temp::<(u64, String)>(hover_key()))?;
+    if frame.saturating_add(1) < ctx.cumulative_frame_nr() {
+        return None;
+    }
+    cadaddy_engine::find_command(&id).map(|c| c.id)
+}
+
+/// Open the Command Reference on `named` (an id or alias), else on the running command, else on
+/// the whole list. A name that is no command opens the list and says so.
+pub(crate) fn open_help(app: &mut CadApp, named: Option<&str>) {
+    let named = named.map(str::trim).filter(|n| !n.is_empty());
+    let page = match named {
+        Some(n) => {
+            let found = cadaddy_engine::find_by_id_or_alias(n.trim_start_matches(['\'', '_', '.'])).map(|c| c.id);
+            if found.is_none() {
+                app.session.echo(format!("Unknown command \"{}\".", n.to_ascii_uppercase()));
+            }
+            found.map(str::to_string)
+        }
+        None => app.session.running.as_ref().map(|r| r.id.clone()),
+    };
+    app.ui.dialog = Some(page.map_or_else(|| "commands".to_string(), |id| format!("commands:{id}")));
+}
+
+/// HELP or ? typed at the command line or started from a menu: in the app it opens the Command
+/// Reference (`HELP LINE` on LINE; HELP alone, or 'HELP during a command, on the running
+/// command). The JSON form (`HELP {"command": "LINE"}`) and `engine.execute` stay the engine's
+/// answer for agents. During a command only the transparent 'HELP / '? is help: a bare ? is an
+/// answer to the prompt (-LAYER's list option, say); Help > Help (`typed` false) is help at any
+/// time. Returns whether the line was HELP.
+pub(crate) fn help_line(app: &mut CadApp, line: &str, typed: bool) -> bool {
+    let mut words = line.split_whitespace();
+    let Some(first) = words.next() else { return false };
+    if typed && app.session.prompting() && !first.starts_with('\'') {
+        return false;
+    }
+    let name = first.trim_start_matches(['\'', '_', '.']);
+    if name.is_empty() || cadaddy_engine::cmd::resolve_alias(name) != "help" {
+        return false;
+    }
+    let rest: Vec<&str> = words.collect();
+    if rest.first().is_some_and(|w| w.starts_with('{')) {
+        return false;
+    }
+    app.session.echo(format!("Command: {}", first.to_ascii_uppercase()));
+    open_help(app, rest.first().copied());
+    true
 }
 
 /// Like choosing a menu item: starts the command interactively.
@@ -1253,6 +1317,13 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     });
     for id in fire {
         let id = id.as_str();
+        // F1 over a menu item or toolbar/ribbon button: that command's help page.
+        if id == "ui.dialog.commands"
+            && let Some(hovered) = hovered_command(ctx)
+        {
+            open_help(app, Some(hovered));
+            continue;
+        }
         // ISOPLANE (F5, Ctrl+E) switches the plane without cancelling the active command.
         if id == "isoplane" {
             if let Some(m) = app.session.execute(id, &json!({})).ok().and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string)) {

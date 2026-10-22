@@ -723,6 +723,9 @@ impl CadApp {
 
     /// Start a command as if typed (interactive when it has prompts).
     pub fn start(&mut self, name: &str) {
+        if menus::help_line(self, name, false) {
+            return;
+        }
         clipboard::before_paste(self, name);
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             exchangeloss::take(self, true);
@@ -739,6 +742,9 @@ impl CadApp {
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
     /// also returned.
     pub fn cmdline(&mut self, text: &str) -> Option<String> {
+        if menus::help_line(self, text, true) {
+            return None;
+        }
         if !self.session.prompting() {
             let first = text.split_whitespace().next().unwrap_or("");
             clipboard::before_paste(self, first);
