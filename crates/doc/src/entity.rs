@@ -1455,6 +1455,9 @@ pub enum EntityKind {
     Mesh(Mesh),
     /// A 3D solid (BOX, EXTRUDE, REVOLVE…): our own exact definition, tessellated for display.
     Solid3d(Box<crate::Solid3d>),
+    /// A NURBS surface (PLANESURF, SURFBLEND, SURFPATCH…): our own exact definition, its trims
+    /// and whether its control vertices are shown.
+    Surface(Box<crate::Surface3d>),
     /// A section plane (SECTIONPLANE).
     SectionPlane(crate::SectionPlane),
     Region(Region),
@@ -1522,6 +1525,7 @@ impl EntityKind {
                 MeshKind::Polygon { .. } => "Polygon Mesh",
             },
             EntityKind::Solid3d(_) => "3D Solid",
+            EntityKind::Surface(_) => "NURBS Surface",
             EntityKind::SectionPlane(_) => "Section Plane",
             EntityKind::Region(_) => "Region",
             EntityKind::Viewport(_) => "Viewport",
@@ -1567,6 +1571,8 @@ impl EntityKind {
             },
             // Saved as a mesh other programs can show (see `io::dxf_solid`).
             EntityKind::Solid3d(_) => "MESH",
+            // Saved as a mesh with its definition in xdata (see `io::dxf_solid`).
+            EntityKind::Surface(_) => "MESH",
             // Saved as a line other programs show (see `io::dxf_solid`).
             EntityKind::SectionPlane(_) => "LINE",
             EntityKind::Region(_) => "REGION",
@@ -1689,6 +1695,13 @@ impl EntityKind {
                 segs.into_iter().filter(|(a, b)| !a.near(*b, 1e-12)).map(|(a, b)| Prim::Seg(Segment::Line(GLine::new(a, b)))).collect()
             }
             // Its display curves, seen from above.
+            EntityKind::Surface(sf) => sf
+                .wires(crate::SOLID_PRIM_TOL)
+                .iter()
+                .flat_map(|w| {
+                    w.windows(2).filter_map(|p| Some(Prim::Seg(Segment::Line(GLine::new(p.first()?.xy(), p.get(1)?.xy()))))).collect::<Vec<_>>()
+                })
+                .collect(),
             EntityKind::Solid3d(so) => so
                 .wires(crate::SOLID_PRIM_TOL)
                 .iter()
@@ -1942,6 +1955,11 @@ impl EntityKind {
                 m4.m[2][2] = s;
                 so.transform(&m4);
             }
+            EntityKind::Surface(sf) => {
+                let mut m4 = Mat4::from_mat3(m);
+                m4.m[2][2] = s;
+                **sf = sf.transformed(&m4);
+            }
             EntityKind::Region(r) => {
                 for l in &mut r.loops {
                     l.transform(m, mirror);
@@ -2060,6 +2078,7 @@ impl EntityKind {
             }
             // Its base point and dimension grips.
             EntityKind::Solid3d(so) => so.grip_points().into_iter().map(|c| c.xy()).collect(),
+            EntityKind::Surface(sf) => sf.cv_points().into_iter().map(|c| c.xy()).collect(),
             EntityKind::Region(r) => vec![r.bounds().center()],
             EntityKind::Viewport(v) => {
                 let c = v.center.xy();

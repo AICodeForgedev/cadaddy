@@ -1510,6 +1510,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let m = cadaddy_render::solid_mesh(so, so.mesh_tol());
             mesh(w, e, &m, owner, paper, cx.target, &crate::dxf_solid::solid_xdata(so));
         }
+        EntityKind::Surface(sf) => {
+            let m = sf.mesh(sf.size() / 4000.0);
+            mesh(w, e, &m, owner, paper, cx.target, &crate::dxf_solid::surface_xdata(sf));
+        }
         EntityKind::Face3d(f) => {
             w.s(0, "3DFACE");
             common(w, e, owner, paper, "AcDbFace");

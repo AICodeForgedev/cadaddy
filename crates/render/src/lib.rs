@@ -1133,6 +1133,19 @@ fn top_entity(b: &mut Builder, d: &Drawing, e: &Entity) {
         }
         return;
     }
+    // A surface: its isolines, trims and control net onto the view plane.
+    if let EntityKind::Surface(sf) = &e.kind {
+        let ctx = top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]);
+        for w in sf.wires(b.opts.tolerance) {
+            let vertices = w.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+            let flat = Entity {
+                kind: EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: true }),
+                ..e.clone()
+            };
+            entity(b, &ctx, &flat);
+        }
+        return;
+    }
     if let Some((pts, closed)) = e.kind.points3d() {
         let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex { p: p.project(*q), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
         let flat = Entity {

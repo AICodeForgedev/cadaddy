@@ -90,6 +90,11 @@ impl EntityKind {
                 z(&mut l.position);
                 z(&mut l.target);
             }
+            EntityKind::Surface(sf) => {
+                for p in &mut sf.nurbs.control {
+                    p.z = f(p.z);
+                }
+            }
             EntityKind::Solid3d(_)
             | EntityKind::SectionPlane(_)
             | EntityKind::Region(_)
@@ -131,6 +136,11 @@ impl EntityKind {
             }
             EntityKind::Solid3d(so) => {
                 so.transform(m);
+                return true;
+            }
+            // Control vertices follow any affine map exactly.
+            EntityKind::Surface(sf) => {
+                sf.nurbs.control.iter_mut().for_each(p);
                 return true;
             }
             EntityKind::SectionPlane(sp) => {

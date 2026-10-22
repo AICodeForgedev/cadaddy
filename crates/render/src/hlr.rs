@@ -97,6 +97,7 @@ impl Scene3 {
             match &e.kind {
                 EntityKind::Solid3d(so) => sc.add_solid(so, so.mesh_tol(), view),
                 EntityKind::Mesh(m) => sc.add_mesh(m),
+                EntityKind::Surface(sf) => sc.add_mesh(&sf.mesh(sf.size() / 4000.0)),
                 EntityKind::SectionPlane(_) => {}
                 k => {
                     if let EntityKind::Face3d(f) = k {

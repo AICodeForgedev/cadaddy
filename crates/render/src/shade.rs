@@ -307,6 +307,20 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                     }
                 }
             }
+            EntityKind::Surface(sf) => {
+                native.insert(e.handle);
+                for t in sf.mesh(tol).triangles() {
+                    let tri = material_tri(d, e, t, surface, &mut out, &mut surfaces);
+                    push_tri(&mut out, tri);
+                }
+                for w in sf.wires(tol) {
+                    for seg in w.windows(2) {
+                        if let [a, b] = seg {
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                        }
+                    }
+                }
+            }
             EntityKind::Face3d(f) => {
                 native.insert(e.handle);
                 let [a, b, c, dd] = f.corners;

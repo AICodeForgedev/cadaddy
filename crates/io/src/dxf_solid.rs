@@ -47,3 +47,27 @@ pub(crate) fn read_section(tags: &[Tag]) -> Option<cadaddy_doc::SectionPlane> {
     let sp: cadaddy_doc::SectionPlane = serde_json::from_str(&json).ok()?;
     sp.is_valid().then_some(sp)
 }
+
+/// The xdata marker before a NURBS surface's definition (PLANESURF, SURFBLEND…: other programs
+/// see the mesh of its kept part).
+pub(crate) const SURFACE_MARK: &str = "SURFACE3D";
+const SURFACE_V: u32 = 1;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedSurface {
+    v: u32,
+    surface: cadaddy_doc::Surface3d,
+}
+
+/// The `1000` strings of a surface's xdata, marker first.
+pub(crate) fn surface_xdata(s: &cadaddy_doc::Surface3d) -> Vec<String> {
+    let Ok(json) = serde_json::to_string(&SavedSurface { v: SURFACE_V, surface: s.clone() }) else { return Vec::new() };
+    std::iter::once(SURFACE_MARK.to_string()).chain(crate::dxf_table::chunks(&json)).collect()
+}
+
+/// The surface a mesh record carries in its xdata, if it is one of ours and usable.
+pub(crate) fn read_surface(tags: &[Tag]) -> Option<cadaddy_doc::Surface3d> {
+    let json = crate::dxf_table::payload(tags, SURFACE_MARK)?;
+    let saved: SavedSurface = serde_json::from_str(&json).ok()?;
+    (saved.v == SURFACE_V && saved.surface.is_valid()).then_some(saved.surface)
+}
