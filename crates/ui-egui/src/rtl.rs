@@ -263,6 +263,7 @@ mod tests {
             "pagesetup",
             "csettings",
             "ptype",
+            "qselect",
         ];
         for language in ["ar", "en"] {
             crate::i18n::with_language(language, || {
