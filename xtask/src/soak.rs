@@ -8,8 +8,8 @@
 //!
 //! Every interval (a minute; a tenth of a short run) it records the process's memory (RSS), its open
 //! handles (file descriptors), and in the window the canvas's GPU buffer bytes and the frame time.
-//! It fails on steady growth (a leak: up through the second half of the run, and by more than a
-//! slack) or a stall (a call or a frame over 15 s). The report goes to `--out` (default
+//! It fails on steady growth (a leak: up through the second half of the run, and by more than
+//! 24 MB) or a stall (a call or a frame over 15 s). The report goes to `--out` (default
 //! `target/soak`) as `report.md` and `samples.json`. CI runs the headless mode for 2 minutes; longer
 //! runs and the window are manual.
 //!
@@ -17,7 +17,9 @@
 //! commands, 50 sheets published, and in the window Walk toggled 100 times and every interface
 //! language and theme switched to. After a warm-up the memory is taken as the baseline; after each
 //! phase it is taken again, and at the end it must be back within a margin of the baseline
-//! (`LEAK_MARGIN_MB` or a quarter of the baseline, the larger). On Windows the memory is the
+//! (`LEAK_MARGIN_MB` or a quarter of the baseline, the larger). With `--passes N` (N ≥ 2), it
+//! also fails when any pass after the first grows by more than 16 MB over the previous pass
+//! (the first pass is excluded as allocator warm-up). On Windows the memory is the
 //! process's private bytes (its working set is trimmed by the system and hides growth).
 
 use std::fmt::Write as _;
@@ -312,6 +314,39 @@ fn round(d: &mut dyn Driver, n: u64, dir: &Path, slowest: &mut Duration) -> Resu
 /// Margin a leak run's memory may end above its baseline, in MB (or a quarter of the baseline).
 const LEAK_MARGIN_MB: f64 = 64.0;
 
+/// Absolute memory slack for the timed soak (MB). Steady growth above this over the run is
+/// flagged as a leak. The old value (max(64 MB, 25 % of baseline)) was too loose: a 40 MB creep
+/// in a 30-minute window run was marked PASS.
+const TIMED_SLACK_MB: f64 = 24.0;
+
+/// Per-pass memory budget (MB): in a multi-pass leak run, any pass after the first that grows by
+/// more than this above the previous pass is flagged. The first pass (from the baseline) is not
+/// counted because allocator warm-up can cause a one-time step.
+const PASS_BUDGET_MB: f64 = 16.0;
+
+/// Whether consecutive pass-end memory values show a per-pass leak. `pass_ends[0]` is the
+/// baseline (after warm-up), `pass_ends[1]` is the end of pass 1, etc. Only deltas from pass 1
+/// onward are checked (baseline → pass 1 is excluded as allocator warm-up).
+pub fn pass_delta_leaked(pass_ends: &[f64]) -> Option<String> {
+    // Need at least baseline + pass 1 + pass 2 to check a delta.
+    if pass_ends.len() < 3 {
+        return None;
+    }
+    for i in 2..pass_ends.len() {
+        let delta = pass_ends[i] - pass_ends[i - 1];
+        if delta > PASS_BUDGET_MB {
+            return Some(format!(
+                "pass {} grew {delta:.1} MB over pass {} ({:.1} → {:.1} MB): per-pass budget is {PASS_BUDGET_MB:.0} MB",
+                i,
+                i - 1,
+                pass_ends[i - 1],
+                pass_ends[i]
+            ));
+        }
+    }
+    None
+}
+
 /// One leak phase: what ran, and the memory, handles and GPU bytes after it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Phase {
@@ -481,15 +516,22 @@ fn leak(d: &mut dyn Driver, dir: &Path, passes: u32) -> (Vec<Phase>, Vec<String>
     };
     let mut out = vec![Phase { name: "baseline (after a warm-up of a tenth)".into(), seconds: 0.0, ..base.clone() }];
     let mut problems = Vec::new();
+    // Track the memory at the end of each pass for the per-pass delta check.
+    // pass_ends[0] = baseline, pass_ends[1] = end of pass 1, etc.
+    let mut pass_ends = vec![base.mb];
     for pass in 1..=passes {
         let tag = if passes > 1 { format!("pass {pass}: ") } else { String::new() };
         if let Err(e) = phases(d, dir, &counts(1.0), &tag, &mut out) {
             problems.push(e);
             break;
         }
+        if let Some(last) = out.last() {
+            pass_ends.push(last.mb);
+        }
     }
     if let Some(end) = out.last().filter(|_| out.len() > 1) {
         problems.extend(leaked(base.mb, end.mb));
+        problems.extend(pass_delta_leaked(&pass_ends));
         if end.handles > base.handles + 64 {
             problems.push(format!("open handles ended at {} from {}: a leak", end.handles, base.handles));
         }
@@ -564,9 +606,8 @@ fn soak(d: &mut dyn Driver, minutes: f64, dir: &Path) -> (Vec<Sample>, Vec<Strin
         }
     }
     let rss: Vec<f64> = samples.iter().map(|s| s.rss_mb).collect();
-    // A leak: steady growth by more than 64 MB or a quarter of where it started.
-    let base = rss.first().copied().unwrap_or(0.0);
-    if let Some(g) = grows(&rss, (base * 0.25).max(64.0)) {
+    // A leak: steady growth by more than 24 MB over the run (absolute, not proportional).
+    if let Some(g) = grows(&rss, TIMED_SLACK_MB) {
         problems.push(format!("memory {g} MB: a leak"));
     }
     let fds: Vec<f64> = samples.iter().map(|s| s.handles as f64).collect();
@@ -742,5 +783,34 @@ mod tests {
         assert!(leaked(300.0, 360.0).is_none() && leaked(300.0, 380.0).is_some());
         assert!(leaked(1000.0, 1240.0).is_none() && leaked(1000.0, 1260.0).is_some());
         assert!(leaked(300.0, 200.0).is_none(), "less than the baseline is no leak");
+    }
+
+    #[test]
+    fn per_pass_delta_catches_a_leak_and_passes_a_small_step() {
+        // From the DONE report: baseline 481, pass 1 end 514, pass 2 end 516.3.
+        // The second pass grew only +2.3 MB — well under 16 MB.
+        assert!(pass_delta_leaked(&[481.0, 514.0, 516.3]).is_none(), "a +2 MB second pass is not a leak");
+        // A 20 MB-per-pass leak (100 KB × 200 drawings): baseline 481, pass 1 end 500,
+        // pass 2 end 520. The delta pass 1 → pass 2 is 20 MB > 16 MB budget.
+        assert!(pass_delta_leaked(&[481.0, 500.0, 520.0]).is_some(), "a +20 MB second pass is a per-pass leak");
+        // Fewer than 3 values: no delta to check.
+        assert!(pass_delta_leaked(&[481.0, 514.0]).is_none());
+        assert!(pass_delta_leaked(&[481.0]).is_none());
+        assert!(pass_delta_leaked(&[]).is_none());
+        // Three passes: first delta OK, second delta is a leak.
+        assert!(pass_delta_leaked(&[100.0, 140.0, 145.0, 170.0]).is_some());
+    }
+
+    #[test]
+    fn timed_soak_slack_catches_steady_creep_and_passes_flat_noise() {
+        // The DONE report's preview-leak window run: steady growth from 585 to 625 MB over
+        // 10+ samples. With the new 24 MB slack this must be flagged.
+        let creep: Vec<f64> = (0..12).map(|i| 585.0 + f64::from(i) * (625.0 - 585.0) / 11.0).collect();
+        assert!(grows(&creep, TIMED_SLACK_MB).is_some(), "a 585 → 625 MB steady creep must be flagged with 24 MB slack");
+        // A flat noisy series (589–610 MB with no trend between halves): must not be flagged.
+        // The second half's minimum must not be above the first half's maximum for `grows` to
+        // trigger, and for a flat series with overlapping noise, it won't.
+        let flat = [589.0, 605.0, 610.0, 595.0, 600.0, 608.0, 592.0, 603.0, 607.0, 596.0, 601.0, 598.0];
+        assert!(grows(&flat, TIMED_SLACK_MB).is_none(), "flat noisy 589–610 MB must not be flagged");
     }
 }
