@@ -464,7 +464,15 @@ fn apply(
         if !(v.x.is_finite() && v.y.is_finite()) || (v.x == 0.0 && v.y == 0.0) {
             continue;
         }
+        // Index this action's vertex lists by handle once, and skip handles already handled in
+        // this action's selection, so a selection that repeats a handle does not re-scan the
+        // vertex list and re-clone its index vector per occurrence (CWE-400).
+        let vtx_by_handle: HashMap<Handle, &Vec<i32>> = vertices.iter().rev().map(|(vh, i)| (*vh, i)).collect();
+        let mut handled: HashSet<Handle> = HashSet::new();
         for h in &a.selection {
+            if !handled.insert(*h) {
+                continue;
+            }
             if let Some(node) = param_of.get(h) {
                 // A parameter in the selection is carried along: its points in the frame. Which
                 // points are in it is decided where the dynamic block has them (AutoCAD evaluates
@@ -489,7 +497,7 @@ fn apply(
                 continue;
             }
             let Some(c) = copy_of(h) else { continue };
-            let idx = vertices.iter().find(|(vh, _)| vh == h).map(|(_, i)| i.clone());
+            let idx = vtx_by_handle.get(h).map(|i| (*i).clone());
             moves.entry(c).or_default().push((idx, v));
         }
     }
