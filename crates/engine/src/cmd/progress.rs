@@ -11,7 +11,7 @@
 //!   what is to be installed, per floor and driver (from the BOM, or given), and the book rates.
 //! - `progress.mark {phase, level?, fraction?, count?, driver?, elements?, date?, by?, note?}`.
 //! - `progress.hours {path | rows}`: timecards (date, name or crew, hours, phase or cost code,
-//!   level).
+//!   driver, level).
 //! - `progress.status {date?, crew_rate?}`: per phase and floor: planned and installed quantities,
 //!   budget, earned and actual hours (and dollars at the crew rate), percent complete, CPI, and the
 //!   flags.
@@ -20,8 +20,10 @@
 //!   `field_observations.csv` (outside the project).
 //!
 //! Drivers and their phases: boxes and conduit feet (rough), terminations (makeup), devices and
-//! luminaires (trim), panels (panel), devices tested (test). Book rates are hours per unit:
-//! invented defaults (`basis: assumption`) until the company's production model gives its own.
+//! luminaires (trim), panels (panel), devices tested (test). A driver's budget is the estimate's
+//! labor hours (Q327) for the BOM lines of that driver on that floor; where the estimate has none,
+//! the book rate (hours per unit: invented defaults, an assumption) × the planned quantity, and
+//! status says which (`budget_source`).
 
 use std::collections::BTreeMap;
 
@@ -75,6 +77,9 @@ pub struct Mark {
     pub count: Option<f64>,
     pub driver: String,
     pub elements: Vec<String>,
+    /// Each marked element's units of the driver (resolved against the model); an element counts
+    /// once however often it is marked.
+    pub units: BTreeMap<String, f64>,
     pub date: String,
     pub by: String,
     pub note: String,
@@ -87,6 +92,8 @@ pub struct TimeEntry {
     pub who: String,
     pub hours: f64,
     pub phase: String,
+    /// The driver the hours were coded to (empty: shared by the phase's drivers).
+    pub driver: String,
     pub level: String,
 }
 
@@ -135,12 +142,22 @@ fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
-fn load(sp: &BuildingSpec) -> State {
-    serde_json::from_value(sp.progress.clone()).unwrap_or_default()
+/// The stored progress; a record that can't be read is an error, never an empty one that the
+/// next save would write over the job's history.
+fn load(cmd: &str, sp: &BuildingSpec) -> Result<State> {
+    if sp.progress.is_null() {
+        return Ok(State::default());
+    }
+    serde_json::from_value(sp.progress.clone()).map_err(|e| {
+        bad(
+            cmd,
+            format!("the stored progress record can't be read ({e}); it is left as it is: repair the spec's `progress` (bspec.get / bspec.set) or undo the change that damaged it"),
+        )
+    })
 }
 
 fn save(s: &mut Session, mut sp: BuildingSpec, st: &State) -> Result<()> {
-    sp.progress = serde_json::to_value(st).unwrap_or(Value::Null);
+    sp.progress = serde_json::to_value(st).map_err(|e| crate::EngineError::Other(format!("progress: {e}")))?;
     s.doc_mut()?.building_spec = Some(sp.to_json());
     Ok(())
 }
@@ -163,6 +180,66 @@ pub fn phase_of(text: &str) -> Option<&'static str> {
     }
 }
 
+/// A driver from timecard text: its name (`conduit_ft`), or a word in a cost code
+/// (`EL-ROUGH-BOX`, `Rough conduit`, `Trim luminaires`).
+pub fn driver_of(text: &str) -> Option<&'static (&'static str, &'static str, &'static str, f64)> {
+    let t = text.trim().to_ascii_lowercase();
+    driver(&t).or_else(|| {
+        let name = if t.contains("conduit") {
+            "conduit_ft"
+        } else if t.contains("terminat") {
+            "terminations"
+        } else if t.contains("box") {
+            "boxes"
+        } else if t.contains("luminaire") || t.contains("fixture") || t.contains("lighting") {
+            "luminaires"
+        } else if t.contains("tested") {
+            "devices_tested"
+        } else if t.contains("device") {
+            "devices"
+        } else if t.contains("panel") {
+            "panels"
+        } else {
+            return None;
+        };
+        driver(name)
+    })
+}
+
+/// The drivers a BOM line feeds: its own first, then the ones derived from it (a box's
+/// terminations, a device's or luminaire's test).
+fn line_drivers(category: &str, item: &str, unit: &str) -> &'static [&'static str] {
+    let (cat, item) = (category.to_ascii_lowercase(), item.to_ascii_lowercase());
+    if item.contains("box") && unit == "each" && !item.contains("gang box") {
+        &["boxes", "terminations"]
+    } else if cat.contains("conduit") && unit == "ft" {
+        &["conduit_ft"]
+    } else if cat.contains("luminaire") || cat.contains("lighting") || item.starts_with("luminaire") {
+        &["luminaires", "devices_tested"]
+    } else if cat.contains("device") && !item.contains("plate") && !item.contains("ring") {
+        &["devices", "devices_tested"]
+    } else if cat == "equipment" && (item.starts_with("panel") || item.starts_with("switchboard")) {
+        &["panels"]
+    } else {
+        &[]
+    }
+}
+
+/// Terminations per box (`custom/progress.conductors_per_box`, 3).
+fn per_box(s: &Session) -> Result<f64> {
+    Ok(s.doc()?
+        .project_rules
+        .resolve(RuleDomain::Custom, "progress.conductors_per_box")
+        .and_then(|v| v.value.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0 && *v < 100.0)
+        .unwrap_or(3.0))
+}
+
+/// Units of `d` per unit of a line that feeds it.
+fn per_unit(d: &str, per_box: f64) -> f64 {
+    if d == "terminations" { per_box } else { 1.0 }
+}
+
 fn book_rate(st: &State, d: &str) -> f64 {
     st.rates.get(d).copied().filter(|v| v.is_finite() && *v > 0.0).or_else(|| driver(d).map(|x| x.3)).unwrap_or(0.0)
 }
@@ -170,44 +247,52 @@ fn book_rate(st: &State, d: &str) -> f64 {
 /// Planned quantities from the bill of materials, per floor.
 fn plan_from_bom(s: &mut Session) -> Result<Vec<Planned>> {
     let b = s.execute("bim.bom", &json!({"group_by": "level"})).map_err(|e| bad("progress.plan", format!("the bill of materials: {e}")))?;
-    let per_box = s
-        .doc()?
-        .project_rules
-        .resolve(RuleDomain::Custom, "progress.conductors_per_box")
-        .and_then(|v| v.value.trim().parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v > 0.0 && *v < 100.0)
-        .unwrap_or(3.0);
+    let per_box = per_box(s)?;
     let mut q: BTreeMap<(String, &'static str), f64> = BTreeMap::new();
     for l in b["lines"].as_array().into_iter().flatten().take(MAX_ITEMS) {
-        let (cat, item, unit) = (
-            l["category"].as_str().unwrap_or("").to_ascii_lowercase(),
-            l["item"].as_str().unwrap_or("").to_ascii_lowercase(),
-            l["unit"].as_str().unwrap_or(""),
-        );
         let level = l["level"].as_str().unwrap_or("").to_string();
         let net = l["net"].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
-        let mut add = |d: &'static str, v: f64| *q.entry((level.clone(), d)).or_default() += v;
-        if item.contains("box") && unit == "each" && !item.contains("gang box") {
-            add("boxes", net);
-            add("terminations", net * per_box);
-        } else if cat.contains("conduit") && unit == "ft" {
-            add("conduit_ft", net);
-        } else if cat.contains("luminaire") || cat.contains("lighting") {
-            add("luminaires", net);
-            add("devices_tested", net);
-        } else if cat.contains("device") && !item.contains("plate") && !item.contains("ring") {
-            add("devices", net);
-            add("devices_tested", net);
-        } else if cat == "equipment" && (item.starts_with("panel") || item.starts_with("switchboard")) {
-            add("panels", net);
+        for d in line_drivers(l["category"].as_str().unwrap_or(""), l["item"].as_str().unwrap_or(""), l["unit"].as_str().unwrap_or("")) {
+            *q.entry((level.clone(), d)).or_default() += net * per_unit(d, per_box);
         }
     }
     Ok(q.into_iter().map(|((level, driver), qty)| Planned { level, driver: driver.into(), qty }).collect())
 }
 
+/// Each modelled element's floor and its units per driver, from the BOM's lines (a receptacle:
+/// one box, three terminations, one device, one test; a conduit run: its feet).
+fn element_index(s: &mut Session, sp: &BuildingSpec) -> Result<BTreeMap<String, (String, BTreeMap<&'static str, f64>)>> {
+    let per_box = per_box(s)?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut out: BTreeMap<String, (String, BTreeMap<&'static str, f64>)> = BTreeMap::new();
+    for l in super::bom::model_lines(s)? {
+        let unit = l["unit"].as_str().unwrap_or("");
+        let drivers = line_drivers(l["category"].as_str().unwrap_or(""), l["item"].as_str().unwrap_or(""), unit);
+        let els: Vec<&str> = l["elements"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let net = l["net"].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        if drivers.is_empty() || els.is_empty() {
+            continue;
+        }
+        let n = els.len() as f64;
+        for id in els {
+            // A run's own length; otherwise the line's share per element (one each).
+            let run = id.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()).and_then(|i| sp.mep.runs.get(i));
+            let units = match run {
+                Some(r) if unit == "ft" => super::bom::run_length_ft(&r.points, upf),
+                _ => net / n,
+            };
+            let e = out.entry(id.to_string()).or_insert_with(|| (l["level"].as_str().unwrap_or("").to_string(), BTreeMap::new()));
+            for d in drivers {
+                *e.1.entry(d).or_default() += units * per_unit(d, per_box);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn run_plan(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec("progress.plan", s)?;
-    let mut st = load(&sp);
+    let mut st = load("progress.plan", &sp)?;
     if bool_or(p, "from_bom", false) {
         st.plan = plan_from_bom(s)?;
     }
@@ -241,7 +326,7 @@ fn run_plan(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_mark(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec("progress.mark", s)?;
-    let mut st = load(&sp);
+    let mut st = load("progress.mark", &sp)?;
     let phase = str_param(p, "phase").and_then(phase_of).ok_or_else(|| bad("progress.mark", "phase is rough, makeup, trim, panel or test"))?;
     let fraction = p.get("fraction").and_then(Value::as_f64);
     let count = p.get("count").and_then(Value::as_f64);
@@ -261,32 +346,89 @@ fn run_mark(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad("progress.mark", "count is 0 or more"));
     }
-    if (count.is_some() || !elements.is_empty()) && driver(drv).is_none_or(|d| d.1 != phase) {
-        return Err(bad("progress.mark", format!("a count or elements need the driver they are of, one of the {phase} phase's")));
+    let level = str_param(p, "level").unwrap_or("").trim().to_string();
+    let phase_drivers = || DRIVERS.iter().filter(|d| d.1 == phase).map(|d| d.0).collect::<Vec<_>>().join(", ");
+    if count.is_some() && driver(drv).is_none_or(|d| d.1 != phase) {
+        return Err(bad("progress.mark", format!("a count needs the driver it is of, one of the {phase} phase's: {}", phase_drivers())));
     }
+    if count.is_some() && level.is_empty() {
+        return Err(bad("progress.mark", "a count needs the floor it was installed on (level); for a share of every floor give a fraction"));
+    }
+    if !elements.is_empty() && (count.is_some() || fraction.is_some()) {
+        return Err(bad("progress.mark", "elements are marked on their own: give elements, or a count, or a fraction"));
+    }
+    let named = if drv.is_empty() {
+        None
+    } else {
+        Some(
+            driver(drv)
+                .filter(|d| d.1 == phase)
+                .ok_or_else(|| bad("progress.mark", format!("driver is one of the {phase} phase's: {}", phase_drivers())))?
+                .0,
+        )
+    };
     let date = match str_param(p, "date") {
         Some(d) => iso(parse_day(d).ok_or_else(|| bad("progress.mark", "date is a date (YYYY-MM-DD)"))?),
         None => iso(today_of(p)),
     };
-    let fraction = if fraction.is_none() && count.is_none() && elements.is_empty() { Some(1.0) } else { fraction };
-    let m = Mark {
-        phase: phase.into(),
-        level: str_param(p, "level").unwrap_or("").trim().to_string(),
-        fraction,
-        count: count.or_else(|| (!elements.is_empty()).then_some(elements.len() as f64)),
-        driver: driver(drv).map(|d| d.0.to_string()).unwrap_or_default(),
-        elements,
-        date,
-        by: str_param(p, "by").unwrap_or("").chars().take(100).collect(),
-        note: str_param(p, "note").unwrap_or("").chars().take(500).collect(),
-    };
-    if st.marks.len() >= MAX_ITEMS {
+    let by: String = str_param(p, "by").unwrap_or("").chars().take(100).collect();
+    let note: String = str_param(p, "note").unwrap_or("").chars().take(500).collect();
+    let mut new = Vec::new();
+    let mut fresh = 0usize;
+    if elements.is_empty() {
+        let fraction = if fraction.is_none() && count.is_none() { Some(1.0) } else { fraction };
+        new.push(Mark { phase: phase.into(), level, fraction, count, driver: named.unwrap_or_default().into(), date, by, note, ..Mark::default() });
+    } else {
+        // Each element resolved against the model: its floor and its driver in this phase.
+        let index = element_index(s, &sp)?;
+        let mut groups: BTreeMap<(String, &'static str), BTreeMap<String, f64>> = BTreeMap::new();
+        for id in &elements {
+            let short: String = id.chars().take(60).collect();
+            let (lv, units) =
+                index.get(id).ok_or_else(|| bad("progress.mark", format!("no element {short} in the model (bim.bom lists the elements)")))?;
+            if !level.is_empty() && !lv.eq_ignore_ascii_case(&level) {
+                return Err(bad("progress.mark", format!("element {short} is on level {lv}, not {level}")));
+            }
+            let feeds = || units.keys().copied().collect::<Vec<_>>().join(", ");
+            let here: Vec<&'static str> = units.keys().copied().filter(|d| driver(d).is_some_and(|x| x.1 == phase)).collect();
+            let d = match (named, here.as_slice()) {
+                (Some(n), _) if here.contains(&n) => n,
+                (Some(n), _) => return Err(bad("progress.mark", format!("element {short} isn't {n}: it counts as {}", feeds()))),
+                (None, [one]) => *one,
+                (None, []) => return Err(bad("progress.mark", format!("element {short} has no {phase} work: it counts as {}", feeds()))),
+                (None, _) => return Err(bad("progress.mark", format!("element {short} counts as {} in {phase}: name the driver", here.join(", ")))),
+            };
+            let u = units.get(d).copied().unwrap_or(0.0);
+            let before = st.marks.iter().any(|m| m.phase == phase && m.driver == d && m.units.contains_key(id));
+            if groups.entry((lv.clone(), d)).or_default().insert(id.clone(), u).is_none() && !before {
+                fresh += 1;
+            }
+        }
+        for ((lv, d), units) in groups {
+            new.push(Mark {
+                phase: phase.into(),
+                level: lv,
+                driver: d.into(),
+                elements: units.keys().cloned().collect(),
+                units,
+                date: date.clone(),
+                by: by.clone(),
+                note: note.clone(),
+                ..Mark::default()
+            });
+        }
+    }
+    if st.marks.len() + new.len() > MAX_ITEMS {
         return Err(bad("progress.mark", "too many marks"));
     }
-    st.marks.push(m);
+    st.marks.extend(new);
     let n = st.marks.len();
     save(s, sp, &st)?;
-    Ok(json!({"marks": n}))
+    let mut out = json!({"marks": n});
+    if !elements.is_empty() {
+        out["new_elements"] = json!(fresh);
+    }
+    Ok(out)
 }
 
 fn today_of(p: &Value) -> i32 {
@@ -298,7 +440,7 @@ fn today_of(p: &Value) -> i32 {
 
 fn run_hours(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec("progress.hours", s)?;
-    let mut st = load(&sp);
+    let mut st = load("progress.hours", &sp)?;
     let rows: Vec<BTreeMap<String, String>> = if let Some(a) = p.get("rows").and_then(Value::as_array) {
         a.iter()
             .filter_map(Value::as_object)
@@ -317,15 +459,30 @@ fn run_hours(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut added, mut skipped) = (0usize, Vec::new());
     for (i, r) in rows.iter().enumerate() {
         let hours = get(r, &["hours", "hrs"]).parse::<f64>().ok().filter(|h| h.is_finite() && *h > 0.0 && *h < 1e5);
-        let phase = phase_of(&get(r, &["phase", "cost code", "costcode", "task", "activity"]));
+        let code = get(r, &["phase", "cost code", "costcode", "task", "activity"]);
+        let named = get(r, &["driver"]);
+        let phase = phase_of(&code).or_else(|| driver_of(&named).map(|d| d.1));
+        // The driver: a driver column (it must be of the phase), else one the cost code names.
+        let drv = if named.is_empty() {
+            Some(driver_of(&code).filter(|d| Some(d.1) == phase).map_or("", |d| d.0))
+        } else {
+            driver_of(&named).filter(|d| Some(d.1) == phase).map(|d| d.0)
+        };
         let date = parse_day(&get(r, &["date"]));
-        match (hours, phase, date) {
-            (Some(h), Some(ph), Some(dt)) if st.hours.len() < MAX_ITEMS => {
+        match (hours, phase, date, drv) {
+            (Some(_), Some(ph), Some(_), None) => skipped.push(format!(
+                "row {}: driver {} isn't one of the {ph} phase's ({})",
+                i + 2,
+                named.chars().take(30).collect::<String>(),
+                DRIVERS.iter().filter(|d| d.1 == ph).map(|d| d.0).collect::<Vec<_>>().join(", ")
+            )),
+            (Some(h), Some(ph), Some(dt), Some(d)) if st.hours.len() < MAX_ITEMS => {
                 st.hours.push(TimeEntry {
                     date: iso(dt),
                     who: get(r, &["name", "crew", "employee", "worker"]),
                     hours: h,
                     phase: ph.into(),
+                    driver: d.into(),
                     level: get(r, &["level", "floor"]),
                 });
                 added += 1;
@@ -347,7 +504,13 @@ fn installed(st: &State, day: i32) -> BTreeMap<(String, String), f64> {
         let marks = st.marks.iter().filter(|m| m.phase == d.1 && parse_day(&m.date).is_none_or(|x| x <= day));
         let frac =
             marks.clone().filter(|m| m.level.is_empty() || m.level.eq_ignore_ascii_case(&q.level)).filter_map(|m| m.fraction).fold(0.0f64, f64::max);
-        let counted: f64 = marks.filter(|m| m.level.eq_ignore_ascii_case(&q.level) && m.driver == d.0).filter_map(|m| m.count).sum();
+        let mine: Vec<&Mark> = marks.filter(|m| m.level.eq_ignore_ascii_case(&q.level) && m.driver == d.0).collect();
+        // Counts add up; an element counts once however often it is marked.
+        let mut elements: BTreeMap<&str, f64> = BTreeMap::new();
+        for m in &mine {
+            elements.extend(m.units.iter().map(|(k, v)| (k.as_str(), *v)));
+        }
+        let counted = mine.iter().filter_map(|m| m.count).sum::<f64>() + elements.values().sum::<f64>();
         let v = (frac * q.qty).max(counted).min(q.qty);
         out.insert((q.level.clone(), d.0.to_string()), v);
     }
@@ -365,9 +528,54 @@ struct PhaseRow {
     earned: f64,
     actual: f64,
     drivers: Vec<Value>,
+    sources: Vec<&'static str>,
 }
 
-fn rows(st: &State, day: i32) -> Vec<PhaseRow> {
+/// The estimate's labor hours (Q327) per floor and driver: each in-contract line's labor hours
+/// per unit × its net on that floor, to the driver the line is of (a box line to boxes, conduit
+/// to conduit feet, a device to devices, a luminaire to luminaires, a panel to panels). Labor on
+/// lines of no driver (wire, fittings…) is counted apart.
+struct EstimateHours {
+    by_driver: BTreeMap<(String, String), f64>,
+    outside: f64,
+}
+
+fn estimate_hours(s: &mut Session, sp: &BuildingSpec) -> Result<Option<EstimateHours>> {
+    let Some(est) = sp.estimate.as_object().filter(|o| !o.is_empty()) else { return Ok(None) };
+    let (priced, _) = super::estimate::price_all(s, est).map_err(|e| bad("progress.status", format!("the estimate: {e}")))?;
+    let per_unit: BTreeMap<String, f64> = priced
+        .iter()
+        .filter(|p| p.scope.as_deref() == Some("in_contract"))
+        .filter_map(|p| p.labor_unit_hours.filter(|h| h.is_finite() && *h > 0.0).map(|h| (p.key.clone(), h)))
+        .collect();
+    if per_unit.is_empty() {
+        return Ok(None);
+    }
+    let mut out = EstimateHours { by_driver: BTreeMap::new(), outside: 0.0 };
+    for l in super::bom::model_lines(s)? {
+        let t = |k: &str| l[k].as_str().unwrap_or("").to_string();
+        let Some(h) = per_unit.get(&format!("{}|{}|{}|{}", t("trade"), t("category"), t("item"), t("size"))) else { continue };
+        let hours = h * l["net"].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        match line_drivers(&t("category"), &t("item"), &t("unit")).first() {
+            Some(d) => *out.by_driver.entry((t("level"), (*d).to_string())).or_default() += hours,
+            None => out.outside += hours,
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Where a set of budgets came from: all the estimate, none of it, or both.
+fn source_of(sources: &[&str]) -> &'static str {
+    if sources.iter().all(|x| *x == "estimate") && !sources.is_empty() {
+        "estimate"
+    } else if sources.contains(&"estimate") {
+        "mixed"
+    } else {
+        "book_rate_assumption"
+    }
+}
+
+fn rows(st: &State, day: i32, est: Option<&EstimateHours>) -> Vec<PhaseRow> {
     let inst = installed(st, day);
     let mut out = Vec::new();
     let mut levels: Vec<String> = st.plan.iter().map(|q| q.level.clone()).collect();
@@ -375,13 +583,25 @@ fn rows(st: &State, day: i32) -> Vec<PhaseRow> {
     levels.dedup();
     for ph in PHASES {
         for lv in &levels {
-            let mut r = PhaseRow { phase: ph, level: lv.clone(), budget: 0.0, earned: 0.0, actual: 0.0, drivers: Vec::new() };
+            let mut r = PhaseRow { phase: ph, level: lv.clone(), budget: 0.0, earned: 0.0, actual: 0.0, drivers: Vec::new(), sources: Vec::new() };
             for q in st.plan.iter().filter(|q| &q.level == lv && driver(&q.driver).is_some_and(|d| d.1 == ph)) {
                 let rate = book_rate(st, &q.driver);
                 let done = inst.get(&(lv.clone(), q.driver.clone())).copied().unwrap_or(0.0);
-                r.budget += q.qty * rate;
-                r.earned += done * rate;
-                r.drivers.push(json!({"driver": q.driver, "unit": driver(&q.driver).map_or("", |d| d.2), "planned": r2(q.qty), "installed": r2(done), "book_rate": rate}));
+                // The estimate's hours for this driver on this floor, else planned × book rate.
+                let (budget, source) = match est.and_then(|e| e.by_driver.get(&(lv.clone(), q.driver.clone()))) {
+                    Some(h) => (*h, "estimate"),
+                    None => (q.qty * rate, "book_rate_assumption"),
+                };
+                let earned = if q.qty > 0.0 { budget * done / q.qty } else { 0.0 };
+                r.budget += budget;
+                r.earned += earned;
+                if q.qty > 0.0 {
+                    r.sources.push(source);
+                }
+                r.drivers.push(json!({
+                    "driver": q.driver, "unit": driver(&q.driver).map_or("", |d| d.2), "planned": r2(q.qty), "installed": r2(done), "book_rate": rate,
+                    "budget_hours": r2(budget), "earned_hours": r2(earned), "budget_source": source,
+                }));
             }
             r.actual = st
                 .hours
@@ -419,7 +639,7 @@ fn tolerance(d: &cadaddy_doc::Drawing) -> (f64, f64) {
 
 fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec("progress.status", s)?;
-    let st = load(&sp);
+    let st = load("progress.status", &sp)?;
     if st.plan.is_empty() {
         return Err(bad("progress.status", "no plan yet (progress.plan)"));
     }
@@ -427,7 +647,8 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     let rate = crew_rate(&sp, p);
     let (over, early) = tolerance(s.doc()?);
     let money = |h: f64| rate.map(|r| r2(h * r));
-    let rs = rows(&st, day);
+    let est = estimate_hours(s, &sp)?;
+    let rs = rows(&st, day, est.as_ref());
     let mut phases = Vec::new();
     let mut flags = Vec::new();
     for ph in PHASES {
@@ -454,43 +675,61 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
                 earned
             ));
         }
+        let sources: Vec<&str> = these.iter().flat_map(|r| r.sources.iter().copied()).collect();
         phases.push(json!({
-            "phase": ph, "budget_hours": r2(budget), "earned_hours": r2(earned), "actual_hours": r2(actual), "percent_complete": r2(pct * 100.0),
+            "phase": ph, "budget_source": source_of(&sources), "budget_hours": r2(budget), "earned_hours": r2(earned), "actual_hours": r2(actual), "percent_complete": r2(pct * 100.0),
             "cpi": cpi.map(r2), "projected_hours": projected.map(r2), "budget_cost": money(budget), "earned_value": money(earned), "actual_cost": money(actual),
-            "floors": these.iter().map(|r| json!({"level": r.level, "budget_hours": r2(r.budget), "earned_hours": r2(r.earned), "actual_hours": r2(r.actual), "percent_complete": if r.budget > 0.0 { r2(r.earned / r.budget * 100.0) } else { 0.0 }, "drivers": r.drivers})).collect::<Vec<_>>(),
+            "floors": these.iter().map(|r| json!({"level": r.level, "budget_source": source_of(&r.sources), "budget_hours": r2(r.budget), "earned_hours": r2(r.earned), "actual_hours": r2(r.actual), "percent_complete": if r.budget > 0.0 { r2(r.earned / r.budget * 100.0) } else { 0.0 }, "drivers": r.drivers})).collect::<Vec<_>>(),
         }));
     }
     let (b, e, a) = rs.iter().fold((0.0, 0.0, 0.0), |acc, r| (acc.0 + r.budget, acc.1 + r.earned, acc.2 + r.actual));
     let a = a + PHASES.iter().map(|ph| unplaced_hours(&st, ph, day)).sum::<f64>();
-    Ok(json!({
+    let mut out = json!({
         "date": iso(day), "crew_rate": rate, "phases": phases, "flags": flags,
         "total": {"budget_hours": r2(b), "earned_hours": r2(e), "actual_hours": r2(a), "percent_complete": if b > 0.0 { r2(e / b * 100.0) } else { 0.0 }, "earned_value": money(e), "actual_cost": money(a)},
-    }))
+    });
+    if let Some(x) = &est {
+        // The estimate's labor that no driver carries (wire, fittings…), so the budgets' gap to
+        // the bid is visible.
+        out["estimate_hours_outside_drivers"] = json!(r2(x.outside));
+    }
+    Ok(out)
 }
 
-/// The actual rate per driver: a phase's hours shared across its drivers by their earned hours,
-/// over the units installed.
+/// The actual rate per driver over the units installed. A driver with hours coded to it is
+/// `observed` from those hours. The phase's uncoded hours go to its drivers with none of their
+/// own, shared by their earned hours: `apportioned` (one driver's share of hours nobody split),
+/// unless the phase has only that one driver, when they are its own (`observed`).
 fn actual_rates(st: &State, day: i32) -> Vec<Value> {
     let inst = installed(st, day);
     let mut out = Vec::new();
     for ph in PHASES {
-        let hours: f64 = st.hours.iter().filter(|h| h.phase == ph && parse_day(&h.date).is_none_or(|x| x <= day)).map(|h| h.hours).sum();
+        let entries: Vec<&TimeEntry> = st.hours.iter().filter(|h| h.phase == ph && parse_day(&h.date).is_none_or(|x| x <= day)).collect();
+        let shared: f64 = entries.iter().filter(|h| h.driver.is_empty()).map(|h| h.hours).sum();
+        let mut own: BTreeMap<&str, f64> = BTreeMap::new();
+        for h in entries.iter().filter(|h| !h.driver.is_empty()) {
+            *own.entry(h.driver.as_str()).or_default() += h.hours;
+        }
         let mut done: BTreeMap<String, f64> = BTreeMap::new();
         for ((_, d), v) in &inst {
             if driver(d).is_some_and(|x| x.1 == ph) {
                 *done.entry(d.clone()).or_default() += v;
             }
         }
-        let earned_total: f64 = done.iter().map(|(d, v)| v * book_rate(st, d)).sum();
-        if hours <= 0.0 || earned_total <= 0.0 {
-            continue;
-        }
+        let single = DRIVERS.iter().filter(|d| d.1 == ph).count() == 1;
+        let earned_rest: f64 = done.iter().filter(|(d, _)| !own.contains_key(d.as_str())).map(|(d, v)| v * book_rate(st, d)).sum();
         for (d, units) in done.iter().filter(|(_, v)| **v > 0.0) {
-            let share = units * book_rate(st, d) / earned_total;
-            let h = hours * share;
+            let (h, basis) = match own.get(d.as_str()) {
+                Some(h) => (*h, "observed"),
+                None if shared > 0.0 && earned_rest > 0.0 => {
+                    (shared * units * book_rate(st, d) / earned_rest, if single { "observed" } else { "apportioned" })
+                }
+                None => continue,
+            };
             out.push(json!({
                 "phase": ph, "driver": d, "unit": driver(d).map_or("", |x| x.2), "installed": r2(*units), "hours": r2(h),
                 "actual_rate": (h / units * 10_000.0).round() / 10_000.0, "book_rate": book_rate(st, d), "ratio": r2(h / units / book_rate(st, d)),
+                "basis": basis,
             }));
         }
     }
@@ -498,7 +737,7 @@ fn actual_rates(st: &State, day: i32) -> Vec<Value> {
 }
 
 fn run_rates(s: &mut Session, p: &Value) -> Result<Value> {
-    let st = load(&spec("progress.rates", s)?);
+    let st = load("progress.rates", &spec("progress.rates", s)?)?;
     Ok(
         json!({"rates": actual_rates(&st, today_of(p)), "note": "hours per unit; kept out of the drawing — progress.observe adds them to the private field observations"}),
     )
@@ -510,7 +749,7 @@ fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|t| t.to_ascii_lowercase().ends_with(".csv"))
         .ok_or_else(|| bad("progress.observe", "path required: the private field_observations.csv"))?
         .to_string();
-    let st = load(&spec("progress.observe", s)?);
+    let st = load("progress.observe", &spec("progress.observe", s)?)?;
     let day = today_of(p);
     let rates = actual_rates(&st, day);
     if rates.is_empty() {
@@ -533,7 +772,7 @@ fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
     }
     for r in &rates {
         text += &format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},observed\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             iso(day),
             job,
             r["phase"].as_str().unwrap_or(""),
@@ -545,7 +784,8 @@ fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
             r["book_rate"],
             ctx("building_type"),
             ctx("wiring_method"),
-            ctx("working_height")
+            ctx("working_height"),
+            r["basis"].as_str().unwrap_or("apportioned")
         );
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -558,12 +798,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("progress.plan", "Progress Plan", run_plan)
             .params("{drivers?: [{level, driver: boxes|conduit_ft|terminations|devices|luminaires|panels|devices_tested, qty}], from_bom?: bool, rates?: {driver: hours per unit}} → {plan}"),
         CommandSpec::new("progress.mark", "Mark Installed Work", run_mark)
-            .params("{phase: rough|makeup|trim|panel|test, level?: floor (empty: every floor), fraction?: 0–1 (default 1: complete), count?, driver?, elements?: [id], date?, by?, note?} → {marks}"),
-        CommandSpec::new("progress.hours", "Import Timecards", run_hours).params("{path: CSV (date, name/crew, hours, phase or cost code, level) | rows} → {added, skipped, total_hours}"),
+            .params("{phase: rough|makeup|trim|panel|test, level?: floor (empty: every floor), fraction?: 0–1 (default 1: complete), count?: with driver and level, driver?, elements?: [id] (driver and level from the model; each counts once), date?, by?, note?} → {marks, new_elements?}"),
+        CommandSpec::new("progress.hours", "Import Timecards", run_hours).params("{path: CSV (date, name/crew, hours, phase or cost code, driver?, level) | rows} → {added, skipped, total_hours}"),
         CommandSpec::new("progress.status", "Progress and Earned Value", run_status)
-            .params("{date?, crew_rate?} → {phases: [{phase, budget_hours, earned_hours, actual_hours, percent_complete, cpi, projected_hours, earned_value, actual_cost, floors}], total, flags}")
+            .params("{date?, crew_rate?} → {phases: [{phase, budget_source: estimate|book_rate_assumption|mixed, budget_hours, earned_hours, actual_hours, percent_complete, cpi, projected_hours, earned_value, actual_cost, floors}], total, flags}")
             .noundo(),
-        CommandSpec::new("progress.rates", "Actual Production Rates", run_rates).params("{date?} → {rates: [{phase, driver, unit, installed, hours, actual_rate, book_rate, ratio}]}").noundo(),
+        CommandSpec::new("progress.rates", "Actual Production Rates", run_rates).params("{date?} → {rates: [{phase, driver, unit, installed, hours, actual_rate, book_rate, ratio, basis: observed|apportioned}]}").noundo(),
         CommandSpec::new("progress.observe", "Add Field Observations", run_observe)
             .params("{path: the private field_observations.csv, context?: {building_type, wiring_method, working_height}, date?} → {path, appended}")
             .noundo(),
