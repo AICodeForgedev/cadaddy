@@ -2880,9 +2880,19 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(40, v.height);
         w.p2(10, v.center);
         w.f(41, v.width);
-        w.p(11, v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).unwrap_or(Vec3::Z));
-        w.p(12, Vec3::ZERO);
-        w.f(42, 50.0);
+        // A camera's view: its target, the direction to the camera at full length, its lens.
+        match v.camera {
+            Some(c) => {
+                w.p(11, c.position - c.target);
+                w.p(12, c.target);
+                w.f(42, c.lens);
+            }
+            None => {
+                w.p(11, v.dir.filter(|d| d.is_finite() && d.len() > 1e-12).unwrap_or(Vec3::Z));
+                w.p(12, Vec3::ZERO);
+                w.f(42, 50.0);
+            }
+        }
         w.f(43, 0.0);
         w.f(44, 0.0);
         w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
@@ -2904,6 +2914,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             ("LAYOUT", v.layout.as_deref().filter(|l| !l.is_empty())),
             ("BACKGROUND", background.as_deref()),
             ("UCSNAME", ucs_name),
+            ("CAMERA", v.camera.map(|_| "1")),
         ];
         if xdata.iter().any(|(_, x)| x.is_some()) {
             w.s(1001, dxf_ext::APP);

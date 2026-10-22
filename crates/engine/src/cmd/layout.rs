@@ -13,6 +13,7 @@ use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 use viewports::MviewM;
 
+mod mvsetup;
 mod plotcli;
 mod plotstyle;
 mod prompts;
@@ -34,6 +35,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.copy", "Copy Layout", run_copy).params("{from, to?, before?: layout (the copy's tab goes before it; default: last)}"),
         CommandSpec::new("layout.move", "Move Layout", run_move).params("{name, before?: layout (default: move to the end)} (the layout tabs' Move or Copy)"),
         CommandSpec::new("layout.list", "List Layouts", run_list).params("→ [{name, tabOrder, page, viewports}]").noundo(),
+        CommandSpec::new("mvsetup", "MVSETUP", mvsetup::run)
+            .params(
+                "{option: title|create|scale|align|model|list, size?: ANSI-A…E|ARCH-C…E|ISO-A4…A0 (title, model), rows?, cols?, gap?, p1?, p2? (create; default the printable area), \
+                 scale? (create, scale: \"1:50\" or paper units per model unit; model: model units per sheet unit), handles? (scale; default every viewport), \
+                 base_viewport + base: [x,y] + handle + point: [x,y] + mode?: horizontal|vertical|both (align: model points), layout?}",
+            )
+            .interactive(|_| Ok(Box::<mvsetup::MvsetupM>::default())),
         CommandSpec::new("mview", "Viewports", run_mview)
             .alias(&["mv"])
             .params(

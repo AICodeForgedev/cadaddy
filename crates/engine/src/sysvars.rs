@@ -38,6 +38,13 @@ const SESSION_VARS: &[&str] = &[
     "LWDISPLAY",
     "PLOTTRANSPARENCYOVERRIDE",
     "SELECTSIMILARMODE",
+    "NAVVCUBEDISPLAY",
+    "NAVVCUBELOCATION",
+    "NAVVCUBESIZE",
+    "NAVVCUBEOPACITY",
+    "NAVVCUBEORIENT",
+    "NAVSWHEELSIZEBIG",
+    "NAVSWHEELOPACITYBIG",
     "OBJECTISOLATIONMODE",
     "QPMODE",
     "HIGHLIGHT",
@@ -123,6 +130,13 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
         "PLOTTRANSPARENCYOVERRIDE" => json!(st.plot_transparency_override),
         "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
+        "NAVVCUBEDISPLAY" => json!(st.navvcube_display),
+        "NAVVCUBELOCATION" => json!(st.navvcube_location),
+        "NAVVCUBESIZE" => json!(st.navvcube_size),
+        "NAVVCUBEOPACITY" => json!(st.navvcube_opacity),
+        "NAVVCUBEORIENT" => json!(st.navvcube_orient),
+        "NAVSWHEELSIZEBIG" => json!(st.navswheel_size),
+        "NAVSWHEELOPACITYBIG" => json!(st.navswheel_opacity),
         // Isolation is temporary: hidden objects show again when the drawing is reopened.
         "OBJECTISOLATIONMODE" => json!(st.objectisolationmode),
         "QPMODE" => json!(i32::from(st.qpmode)),
@@ -366,6 +380,11 @@ fn as_bool(v: &Value) -> Option<bool> {
     v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|i| i != 0))
 }
 /// QPMODE is -1/0 (off), 1 or 2 (on) in AutoCAD; booleans work too.
+/// A whole number from `lo` to `hi`, as a small setting.
+fn in_range(v: &Value, lo: i64, hi: i64) -> Option<u8> {
+    as_i(v).filter(|i| (lo..=hi).contains(i)).and_then(|i| u8::try_from(i).ok())
+}
+
 fn as_i(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_bool().map(i64::from)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
 }
@@ -505,6 +524,13 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             st.plot_transparency_override = as_i(v).filter(|i| (0..=2).contains(i)).and_then(|i| u8::try_from(i).ok()).ok_or_else(bad)?
         }
         "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
+        "NAVVCUBEDISPLAY" => st.navvcube_display = in_range(v, 0, 3).ok_or_else(bad)?,
+        "NAVVCUBELOCATION" => st.navvcube_location = in_range(v, 0, 3).ok_or_else(bad)?,
+        "NAVVCUBESIZE" => st.navvcube_size = in_range(v, 0, 4).ok_or_else(bad)?,
+        "NAVVCUBEOPACITY" => st.navvcube_opacity = in_range(v, 0, 100).ok_or_else(bad)?,
+        "NAVVCUBEORIENT" => st.navvcube_orient = in_range(v, 0, 1).ok_or_else(bad)?,
+        "NAVSWHEELSIZEBIG" => st.navswheel_size = in_range(v, 0, 3).ok_or_else(bad)?,
+        "NAVSWHEELOPACITYBIG" => st.navswheel_opacity = in_range(v, 25, 90).ok_or_else(bad)?,
         "OBJECTISOLATIONMODE" => {
             st.objectisolationmode = small(v, 1).ok_or_else(bad)?;
             // The open drawings save their hidden objects from now on (or stop saving them).

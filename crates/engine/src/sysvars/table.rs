@@ -108,6 +108,10 @@ const HEADER: &[(&str, Kind, Def)] = &[
     ("FIELDEVAL", Kind::Int(0, 31), Def::Int(31)),
     // 1: fields show on a grey background on screen (never plotted).
     ("FIELDDISPLAY", Kind::Choice(&[0, 1]), Def::Int(1)),
+    // 1: cameras show their glyphs in model space (CAMERA turns it on).
+    ("CAMERADISPLAY", Kind::Choice(&[0, 1]), Def::Int(0)),
+    // How high above the XY plane CAMERA stands a camera placed at a 2D point.
+    ("CAMERAHEIGHT", Kind::AnyReal, Def::Real(0.0)),
 ];
 
 /// Variables scripts commonly set that CADaddy keeps without the behaviour behind them (yet):

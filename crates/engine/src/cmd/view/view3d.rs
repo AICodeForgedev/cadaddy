@@ -374,7 +374,7 @@ pub fn shaded_png(s: &Session, w: u32, h: u32) -> Option<Vec<u8>> {
     cadaddy_render::shade::render_fitted(&st.doc, proj, style, w, h, cadaddy_color::Rgb(255, 255, 255))?.encode_png()
 }
 
-fn walk_mode(s: &mut Session, fly: bool) -> Result<Value> {
+pub(crate) fn walk_mode(s: &mut Session, fly: bool) -> Result<Value> {
     let d = s.doc()?;
     let size = d.header.f64("STEPSIZE", 6.0);
     let rate = d.header.f64("STEPSPERSEC", 2.0);

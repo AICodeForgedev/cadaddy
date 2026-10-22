@@ -300,13 +300,14 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool, ex
         dir,
         ucs: extra.ucs.clone(),
         background: extra.background,
+        camera: None,
     });
     let msg = if replaced.is_some() { format!("View \"{name}\" replaced.") } else { format!("View \"{name}\" saved.") };
     Ok(json!({ "name": name, "center": [center.x, center.y], "height": height, "width": width, "message": msg }))
 }
 
 /// Restore view `name`: switch to its space, show its area, and restore its layer snapshot.
-fn restore(s: &mut Session, name: &str) -> Result<Value> {
+pub(super) fn restore(s: &mut Session, name: &str) -> Result<Value> {
     let v = find(&s.doc()?.views, name).cloned().ok_or_else(|| EngineError::Other(format!("Could not find view \"{}\".", name.trim())))?;
     if !(v.center.is_finite() && v.height.is_finite() && v.width.is_finite() && v.height > 0.0) {
         return Err(EngineError::Other(format!("View \"{}\" has no area.", v.name)));

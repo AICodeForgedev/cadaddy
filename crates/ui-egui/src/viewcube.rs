@@ -61,11 +61,33 @@ fn axes(proj: Option<Projection>) -> (Vec3, Vec3, Vec3) {
 }
 
 impl Layout {
+    /// The ViewCube at the top right, sized by the drawing area.
     pub fn new(canvas: Rect) -> Self {
-        // Full size on canvases 700 px and up, down to 60% on small windows (at 1024×640 the
-        // full-size cube covered about a quarter of the canvas width).
-        let k = (canvas.width().min(canvas.height()) / 700.0).clamp(0.6, 1.0);
-        let center = pos2(canvas.right() - 92.0 * k, canvas.top() + 82.0 * k);
+        Self::placed(canvas, 0, 4)
+    }
+
+    /// The ViewCube where the settings put it: `location` NAVVCUBELOCATION (0 top right, 1 top
+    /// left, 2 bottom left, 3 bottom right), `size` NAVVCUBESIZE (0 small, 1 normal, 2 large,
+    /// 3 tiny, 4 automatic).
+    pub fn placed(canvas: Rect, location: u8, size: u8) -> Self {
+        // Automatic: full size on canvases 700 px and up, down to 60% on small windows (at
+        // 1024×640 the full-size cube covered about a quarter of the canvas width).
+        let k = match size {
+            0 => 0.7,
+            1 => 0.85,
+            2 => 1.0,
+            3 => 0.55,
+            _ => (canvas.width().min(canvas.height()) / 700.0).clamp(0.6, 1.0),
+        };
+        // The WCS menu hangs under the cube: a bottom corner leaves room for it.
+        let (x, y) = (92.0 * k, 82.0 * k);
+        let bottom = canvas.bottom() - y - 40.0 * k - 28.0;
+        let center = match location {
+            1 => pos2(canvas.left() + x, canvas.top() + y),
+            2 => pos2(canvas.left() + x, bottom),
+            3 => pos2(canvas.right() - x, bottom),
+            _ => pos2(canvas.right() - x, canvas.top() + y),
+        };
         let ring = 58.0 * k;
         let half = HALF * k;
         Layout {
@@ -276,6 +298,19 @@ fn point_in_quad(p: Pos2, q: &[Pos2; 4]) -> bool {
     let side = |a: Pos2, b: Pos2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
     let s = [side(q[0], q[1]), side(q[1], q[2]), side(q[2], q[3]), side(q[3], q[0])];
     s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
+}
+
+/// The ViewCube as the settings place it on the drawing area.
+pub fn layout_for(app: &CadApp, canvas: Rect) -> Layout {
+    let st = &app.session.settings;
+    Layout::placed(canvas, st.navvcube_location, st.navvcube_size)
+}
+
+/// Whether the ViewCube shows in the current view (NAVVCUBEDISPLAY: 1 plan views, 2 3D views).
+pub fn shown(app: &CadApp) -> bool {
+    let plan = app.session.state().ok().and_then(|st| st.projection()).is_none_or(|p| cadaddy_geom::view3::is_plan(p.dir));
+    let bits = app.session.settings.navvcube_display;
+    app.ui.show_viewcube && bits & if plan { 1 } else { 2 } != 0
 }
 
 /// A small house, drawn in code.

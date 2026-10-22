@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 940,
-    "count": 940,
+    "callableAsJson": 959,
+    "count": 959,
     "ids": [
       "-attedit",
       "-block",
@@ -149,6 +149,11 @@
       "calibrate.payroll",
       "calibrate.project",
       "calibrate.topdown",
+      "camera",
+      "camera.delete",
+      "camera.list",
+      "camera.set",
+      "camera.view",
       "centerline",
       "centermark",
       "chamfer",
@@ -550,6 +555,16 @@
       "multiple",
       "mview",
       "mview.polygonal",
+      "mvsetup",
+      "navswheel",
+      "navswheel.center",
+      "navswheel.look",
+      "navswheel.orbit",
+      "navswheel.pan",
+      "navswheel.rewind",
+      "navswheel.walk",
+      "navswheel.zoom",
+      "navvcube",
       "ncopy",
       "new",
       "objectscale",
@@ -681,6 +696,10 @@
       "qselect.info",
       "qtext",
       "quickcalc.pick",
+      "qvdrawing",
+      "qvdrawingclose",
+      "qvlayout",
+      "qvlayoutclose",
       "radius.measure",
       "ray",
       "rcp.colour",
@@ -944,8 +963,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 472,
-    "typed": 496
+    "inMenus": 474,
+    "typed": 504
   },
   "features": {
     "ifcExport": true,

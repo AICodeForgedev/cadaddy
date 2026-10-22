@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (animation effects follow the operating system's setting) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Q162: steering wheel, ViewCube settings, cameras, quick views, MVSETUP) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADaddy's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -162,8 +162,8 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 | Layer Properties Manager (filters, states, VP overrides) | yes | yes |
 | Blocks palette, Content | yes | Blocks window (click to insert, #28) |
 | Status bar toggles | ~25 | most toggles; Annotation Visibility and Workspace do nothing |
-| ViewCube | interactive 3D | clickable for 2D (Top/Home → extents); dragging does nothing (#7) |
-| Navigation bar, SteeringWheels | yes | no |
+| ViewCube | interactive 3D | clickable faces, corners and Home; dragging the compass ring orbits; NAVVCUBE settings (display in 2D/3D views, corner, size, inactive opacity; Q162) |
+| Navigation bar, SteeringWheels | yes | navigation bar; full navigation wheel (NAVSWHEEL: Zoom, Orbit, Pan, Rewind, Center, Walk, Look; size and opacity settings; Q162) — no mini wheels or Up/Down wedge |
 | Workspaces | Drafting & Annotation, 3D Modeling | no |
 | Options / Preferences dialog | many tabs | **no** (issue #23) |
 | Customisation (CUI, aliases editor, tool palettes) | yes | no |
@@ -181,7 +181,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 | Trackpad two-finger pan, pinch zoom (macOS) | yes | yes (#58) |
 | Named views (VIEW) | yes | **no** (VIEW table not read or written) |
 | Tiled model-space viewports (VPORTS) | yes | not confirmed: VPORTS maps to paper-space MVIEW |
-| 3D orbit, ViewCube drag, SteeringWheels | yes | no (M11) |
+| 3D orbit, ViewCube drag, SteeringWheels | yes | ViewCube ring orbit, the steering wheel's Orbit and Look (`navswheel.*`, also on the control channel), cameras (CAMERA: glyphs, views from them; parallel views only) (Q162) |
 
 ## Keyboard and context menus (≈ 25%)
 
@@ -202,6 +202,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Q162: steering wheel (NAVSWHEEL), ViewCube settings (NAVVCUBE), cameras (CAMERA), quick views (QVDRAWING, QVLAYOUT), MVSETUP, VPMAX border |
 | 2026-10-12 | minor | Selected and hovered objects redrawn in the selection colour (text and arrowheads included); Options ▸ Selection laid out as AutoCAD's: Object grouping, Show grips, grip object limit, selection preview, Visual Effect Settings (selection area, preview filter) |
 | 2026-10-12 | minor | Animation effects (dialog and menu fades, smoothed wheel scrolling and ⌘/Ctrl+wheel zoom) follow the operating system's setting; View ▸ Accessibility ▸ Animation Effects chooses System, On or Off |
 | 2026-10-12 | minor | Hatch and Gradient / Hatch Edit dialogs (HATCH, GRADIENT, HATCHEDIT, double-click a hatch; HPDLGMODE) |
