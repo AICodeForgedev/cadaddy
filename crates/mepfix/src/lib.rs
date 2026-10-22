@@ -56,6 +56,7 @@ pub mod scan_reader;
 pub mod score;
 pub mod sheet_reader;
 pub mod site_reader;
+pub mod site_services;
 pub mod sitework;
 pub mod spectag;
 pub mod sprinkler_reader;

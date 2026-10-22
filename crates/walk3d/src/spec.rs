@@ -1040,6 +1040,24 @@ pub struct Service {
     pub shown: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// The route as drawn, from the site end to where it enters (sheet units); empty: `from`
+    /// and `at`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub route: Vec<[f64; 2]>,
+    /// A pipe's size as printed (inches): water, sewer, storm, gas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<f64>,
+    /// Depth below grade and invert elevation as printed (feet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth_ft: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invert_ft: Option<f64>,
+    /// Where a print reader found it: the box on `source`'s drawing (its own coordinates), and
+    /// how sure the reader is (0 … 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found_in: Option<[[f64; 2]; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
 }
 
 impl Default for Service {
@@ -1058,6 +1076,12 @@ impl Default for Service {
             encased: false,
             shown: true,
             source: String::new(),
+            route: Vec::new(),
+            size_in: None,
+            depth_ft: None,
+            invert_ft: None,
+            found_in: None,
+            confidence: None,
         }
     }
 }
