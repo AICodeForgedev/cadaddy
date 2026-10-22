@@ -288,39 +288,188 @@ fn convtosolid_cube_mesh_and_open_box_refused() {
     assert!(e.is_err(), "an open box should be refused");
 }
 
-/// A fillet between two perpendicular planar surfaces has the right radius and tangency.
-#[test]
-fn surffillet_between_perpendicular_planes() {
-    let mut s = Session::new();
-    // Two flat squares: one in XY at z = 0, one in XZ at y = 0 (perpendicular).
-    let a = handle(&s.execute("planesurf", &json!({"corners": [[0, 0, 0], [10, 10, 0]]})).unwrap());
-    let b = handle(&s.execute("planesurf", &json!({"corners": [[0, -10, 0], [10, 0, 10]]})).unwrap());
-    let r = s
-        .execute(
-            "surffillet",
-            &json!({
-                "first": a.hex(), "second": b.hex(), "radius": 2.0,
-                "first_edge": [5, 0, 0], "second_edge": [5, 0, 5]
-            }),
-        )
-        .unwrap();
-    let fh = handle(&r);
-    let fillet = surface(&s, fh);
-    // The fillet surface should exist and be valid.
-    assert!(fillet.is_valid(), "fillet surface should be valid");
-    // Sample some points on the fillet; they should all be at radius 2 from the edge line.
+/// A flat sheet through four corners (PLANESURF `points`, so it can stand at any angle).
+fn sheet(s: &mut Session, pts: [[f64; 3]; 4]) -> Handle {
+    handle(&s.execute("planesurf", &json!({"points": pts})).unwrap())
+}
+
+/// Checks a fillet against the analytic one: every sample at `r` (± 1e-3) from the centre line
+/// (through `centre`, along x), the arc on the corner's side of it, one boundary row on each
+/// plane (within 1e-6) at its contact line, and the surface tangent to each plane there (< 0.5°).
+/// Planes are given by a point on the line where they meet (the origin), their unit normal and
+/// the unit direction from that line into the sheet.
+fn assert_true_fillet(fillet: &Surface3d, r: f64, centre: Vec3, planes: [(Vec3, Vec3); 2], span: (f64, f64)) {
     let n = &fillet.nurbs;
     let (u0, u1) = n.domain_u();
     let (v0, v1) = n.domain_v();
-    for i in 0..=4 {
-        let u = u0 + (u1 - u0) * i as f64 / 4.0;
-        let p = n.point(u, (v0 + v1) / 2.0).unwrap();
-        // The fillet point should be in the region near the intersection edge (the x-axis at y=0, z=0).
-        assert!(p.y.abs() <= 2.5 && p.z.abs() <= 2.5, "fillet point out of range: {p:?}");
+    let off_axis = |p: Vec3| ((p.y - centre.y).powi(2) + (p.z - centre.z).powi(2)).sqrt();
+    let corner_side = Vec3::new(0.0, -centre.y, -centre.z).normalized();
+    for i in 0..=20 {
+        for j in 0..=4 {
+            let p = n.point(u0 + (u1 - u0) * i as f64 / 20.0, v0 + (v1 - v0) * j as f64 / 4.0).unwrap();
+            assert!((off_axis(p) - r).abs() <= 1e-3, "{p:?} is {} from the centre line, not {r}", off_axis(p));
+            assert!((p - Vec3::new(p.x, centre.y, centre.z)).dot(corner_side) >= -1e-9, "{p:?} is on the far side of the ball");
+            assert!(p.x >= span.0 - 1e-9 && p.x <= span.1 + 1e-9, "{p:?} outside x {span:?}");
+        }
     }
+    // Which boundary row touches which plane: the first row is on one of them.
+    let first = n.point(u0, v0).unwrap();
+    let on_plane = |p: Vec3, (nrm, _): (Vec3, Vec3)| p.dot(nrm).abs() <= 1e-6;
+    let (row_a, row_b) = if on_plane(first, planes[0]) { (u0, u1) } else { (u1, u0) };
+    for (u, (nrm, into)) in [(row_a, planes[0]), (row_b, planes[1])] {
+        // The contact line: the centre's foot on the plane.
+        let foot = centre - nrm * centre.dot(nrm);
+        for j in 0..=4 {
+            let v = v0 + (v1 - v0) * j as f64 / 4.0;
+            let p = n.point(u, v).unwrap();
+            assert!(p.dot(nrm).abs() <= 1e-6, "boundary {p:?} is off its plane by {}", p.dot(nrm));
+            assert!(((p - foot).dot(into)).abs() <= 1e-6, "boundary {p:?} is not on the contact line through {foot:?}");
+            let sn = n.normal(u, v).unwrap();
+            let angle = sn.dot(nrm).abs().min(1.0).acos().to_degrees();
+            assert!(angle < 0.5, "not tangent at {p:?}: {angle}° between normals");
+        }
+    }
+}
+
+/// A fillet between two perpendicular sheets sharing the x-axis is a quarter cylinder of the asked
+/// radius about (x, 2, 2), tangent to both sheets along y = 2 and z = 2.
+#[test]
+fn surffillet_between_perpendicular_planes() {
+    let mut s = Session::new();
+    let a = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]);
+    let b = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0]]);
+    let r = s
+        .execute("surffillet", &json!({"first": a.hex(), "second": b.hex(), "radius": 2.0, "first_edge": [5, 0, 0], "second_edge": [5, 0, 0]}))
+        .unwrap();
+    assert!(r.get("trimmed").is_none(), "nothing was trimmed: {r}");
+    let fh = handle(&r);
+    let fillet = surface(&s, fh);
+    assert!(fillet.is_valid());
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let y = Vec3::new(0.0, 1.0, 0.0);
+    assert_true_fillet(&fillet, 2.0, Vec3::new(0.0, 2.0, 2.0), [(z, y), (y, z)], (0.0, 10.0));
+    // The sheets are untouched without TRIM.
+    assert_eq!(surface(&s, a).nurbs.control.len(), 4);
+    assert!(surface(&s, a).nurbs.control.iter().any(|q| near(*q, Vec3::new(0.0, 0.0, 0.0), 1e-12)));
     // Undo removes the fillet.
     s.undo().unwrap();
     assert!(s.doc().unwrap().entity(fh).is_none());
+}
+
+/// Two sheets 120° apart: the arc turns through 60°, radius 2 about (x, 2/√3, 2), tangent to both.
+#[test]
+fn surffillet_between_sheets_at_120_degrees() {
+    let mut s = Session::new();
+    let (c, sn) = ((120.0_f64).to_radians().cos(), (120.0_f64).to_radians().sin());
+    let a = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]);
+    let b = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0 * c, 10.0 * sn], [0.0, 10.0 * c, 10.0 * sn]]);
+    let fh = handle(&s.execute("surffillet", &json!({"first": a.hex(), "second": b.hex(), "radius": 2.0})).unwrap());
+    let fillet = surface(&s, fh);
+    // The centre is on the bisector, r / sin(60°) from the corner.
+    let into_b = Vec3::new(0.0, c, sn);
+    let bisector = (Vec3::new(0.0, 1.0, 0.0) + into_b).normalized();
+    let centre = bisector * (2.0 / (60.0_f64).to_radians().sin());
+    assert!(near(centre, Vec3::new(0.0, 2.0 / 3f64.sqrt(), 2.0), 1e-12));
+    let nb = Vec3::new(0.0, -sn, c); // perpendicular to into_b and x
+    assert_true_fillet(&fillet, 2.0, centre, [(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)), (nb, into_b)], (0.0, 10.0));
+}
+
+/// TRIM cuts both sheets back to the contact lines (y ≥ 2 and z ≥ 2), in the same undo step.
+#[test]
+fn surffillet_trim_cuts_both_sheets_to_the_contact_lines() {
+    let mut s = Session::new();
+    let a = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]);
+    let b = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0]]);
+    let (before_a, before_b) = (surface(&s, a), surface(&s, b));
+    let r = s.execute("surffillet", &json!({"first": a.hex(), "second": b.hex(), "radius": 2.0, "trim": true})).unwrap();
+    assert_eq!(r["trimmed"], json!([a.hex(), b.hex()]), "{r}");
+    // The kept part of each sheet, sampled.
+    let kept = |sf: &Surface3d| -> Vec<Vec3> {
+        let n = &sf.nurbs;
+        let (u0, u1) = n.domain_u();
+        let (v0, v1) = n.domain_v();
+        (0..=20)
+            .flat_map(|i| (0..=20).map(move |j| (u0 + (u1 - u0) * i as f64 / 20.0, v0 + (v1 - v0) * j as f64 / 20.0)))
+            .filter(|(u, v)| sf.kept(*u, *v))
+            .map(|(u, v)| n.point(u, v).unwrap())
+            .collect()
+    };
+    let range = |pts: &[Vec3], f: fn(&Vec3) -> f64| pts.iter().map(f).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
+    let ka = kept(&surface(&s, a));
+    let kb = kept(&surface(&s, b));
+    let (ya, za, xa) = (range(&ka, |p| p.y), range(&ka, |p| p.z), range(&ka, |p| p.x));
+    assert!((ya.0 - 2.0).abs() < 1e-6 && (ya.1 - 10.0).abs() < 1e-6, "first sheet y {ya:?}");
+    assert!(za.0.abs() < 1e-9 && za.1.abs() < 1e-9, "first sheet left its plane: z {za:?}");
+    assert!(xa.0.abs() < 1e-6 && (xa.1 - 10.0).abs() < 1e-6, "first sheet x {xa:?}");
+    let (zb, yb) = (range(&kb, |p| p.z), range(&kb, |p| p.y));
+    assert!((zb.0 - 2.0).abs() < 1e-6 && (zb.1 - 10.0).abs() < 1e-6, "second sheet z {zb:?}");
+    assert!(yb.0.abs() < 1e-9 && yb.1.abs() < 1e-9, "second sheet left its plane: y {yb:?}");
+    // The fillet's edges meet the trimmed sheets' edges.
+    let fillet = surface(&s, handle(&r));
+    let (u0, u1) = fillet.nurbs.domain_u();
+    for u in [u0, u1] {
+        let p = fillet.nurbs.point(u, 0.5).unwrap();
+        assert!(near(p, Vec3::new(5.0, 2.0, 0.0), 1e-9) || near(p, Vec3::new(5.0, 0.0, 2.0), 1e-9), "{p:?}");
+    }
+    // One undo takes back the fillet and both trims.
+    let fh = handle(&r);
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().entity(fh).is_none());
+    assert_eq!(surface(&s, a), before_a);
+    assert_eq!(surface(&s, b), before_b);
+}
+
+/// A radius the sheets can't hold is refused with the largest that fits; curved and parallel
+/// surfaces are refused with what to do instead; nothing is made.
+#[test]
+fn surffillet_refuses_what_it_cant_make() {
+    let mut s = Session::new();
+    let a = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]);
+    let b = sheet(&mut s, [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0], [0.0, 0.0, 10.0]]);
+    let count = |s: &Session| s.doc().unwrap().model.iter().count();
+    let n = count(&s);
+    let e = s.execute("surffillet", &json!({"first": a.hex(), "second": b.hex(), "radius": 12.0, "trim": true})).unwrap_err().to_string();
+    assert!(e.contains("too large") && e.contains("at most 10.0000"), "{e}");
+    let flat = square(&mut s, 20.0, 5.0);
+    let e = s.execute("surffillet", &json!({"first": a.hex(), "second": flat.hex(), "radius": 1.0})).unwrap_err().to_string();
+    assert!(e.contains("parallel"), "{e}");
+    let saddle = handle(&s.execute("surfpatch", &json!({"curves": saddle_edges()})).unwrap());
+    let e = s.execute("surffillet", &json!({"first": saddle.hex(), "second": b.hex(), "radius": 1.0})).unwrap_err().to_string();
+    assert!(e.contains("curved") && e.contains("SURFBLEND"), "{e}");
+    assert_eq!(count(&s), n + 2, "only the two test surfaces were added");
+    assert_eq!(surface(&s, a).nurbs.control.len(), 4);
+}
+
+/// A closed 10-cube whose top face is wound the wrong way is refused, naming the flipped face.
+#[test]
+fn convtosolid_refuses_a_cube_with_a_flipped_face() {
+    use cadaddy_engine::doc::{Mesh, MeshFace, MeshKind};
+    let mut s = Session::new();
+    let v = vec![
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(10.0, 10.0, 0.0),
+        Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(0.0, 0.0, 10.0),
+        Vec3::new(10.0, 0.0, 10.0),
+        Vec3::new(10.0, 10.0, 10.0),
+        Vec3::new(0.0, 10.0, 10.0),
+    ];
+    let quad = |a: u32, b: u32, c: u32, d: u32| MeshFace { v: vec![a, b, c, d], hidden: 0 };
+    let mut faces = vec![quad(0, 3, 2, 1), quad(4, 5, 6, 7), quad(0, 1, 5, 4), quad(2, 3, 7, 6), quad(0, 4, 7, 3), quad(1, 2, 6, 5)];
+    // Consistent: a solid of volume 1000.
+    let good = s.add_entity(EntityKind::Mesh(Mesh { vertices: v.clone(), faces: faces.clone(), kind: MeshKind::Subd })).unwrap();
+    s.execute("convtosolid", &json!({"handles": [good.hex()]})).unwrap();
+    match &s.doc().unwrap().entity(good).unwrap().kind {
+        EntityKind::Solid3d(so) => assert!((so.props(0.01).volume - 1000.0).abs() < 1.0),
+        k => panic!("expected a solid, got {k:?}"),
+    }
+    // The top face turned over: every edge round it now runs the same way in both faces.
+    faces[1] = quad(4, 7, 6, 5);
+    let bad = s.add_entity(EntityKind::Mesh(Mesh { vertices: v, faces, kind: MeshKind::Subd })).unwrap();
+    let e = s.execute("convtosolid", &json!({"handles": [bad.hex()]})).unwrap_err().to_string();
+    assert!(e.contains("4 edges") && e.contains("flipped"), "{e}");
+    assert!(matches!(s.doc().unwrap().entity(bad).unwrap().kind, EntityKind::Mesh(_)), "the mesh stays a mesh");
 }
 
 /// From the menu, SURFOFFSET asks for the surface and the distance (no parameters needed).

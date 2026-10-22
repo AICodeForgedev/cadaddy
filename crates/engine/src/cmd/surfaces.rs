@@ -16,8 +16,12 @@
 //! solid booleans (BSP trees: W. Thibault and B. Naylor, *Set Operations on Polyhedra Using
 //! Binary Space Partitioning Trees*, SIGGRAPH 1987).
 //!
-//! SURFFILLET makes a rolling-ball fillet between two surfaces, and CONVTOSOLID turns a closed
-//! (watertight) mesh or surface into a polyhedron solid.
+//! SURFFILLET makes a constant-radius fillet between two flat surfaces that meet at an angle: the
+//! ball centres are where the two planes, each offset by the radius towards the other surface,
+//! meet; the contact lines are the centres' feet on each plane; every cross-section is an exact
+//! circular arc (a rational quadratic, §7.3) tangent to both. TRIM cuts both surfaces back to
+//! their contact lines in the same step. CONVTOSOLID turns a closed (watertight), consistently
+//! wound mesh or surface into a polyhedron solid.
 
 use cadaddy_doc::{BoolOp, Entity, EntityKind, Handle, Solid3d, Surface3d};
 use cadaddy_geom::{NurbsSurface, Vec3};
@@ -587,93 +591,304 @@ fn run_surfuntrim(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "untrimmed": hs.len() }))
 }
 
+/// A flat surface's plane: a point on it and its unit normal (None when it is curved: some
+/// control vertex is off the plane; with positive weights the surface lies in its vertices' hull).
+fn flat_plane(sf: &Surface3d) -> Option<(Vec3, Vec3)> {
+    let (u0, u1) = sf.nurbs.domain_u();
+    let (v0, v1) = sf.nurbs.domain_v();
+    let (um, vm) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
+    let o = sf.nurbs.point(um, vm)?;
+    let n = sf.nurbs.normal(um, vm)?;
+    let tol = 1e-9 * (1.0 + sf.size());
+    sf.nurbs.control.iter().all(|q| (*q - o).dot(n).abs() <= tol).then_some((o, n))
+}
+
+/// The kept part's boundary in 3D: the outer trim loop, or the edges of the parameter square.
+fn boundary_3d(sf: &Surface3d) -> Option<Vec<Vec3>> {
+    if sf.outer.len() >= 3 {
+        return sf.outer.iter().map(|q| sf.nurbs.point(q[0], q[1])).collect();
+    }
+    let n = &sf.nurbs;
+    let (u0, u1) = n.domain_u();
+    let (v0, v1) = n.domain_v();
+    // A flat patch with straight edges needs only its corners.
+    let steps = if n.degree_u == 1 && n.degree_v == 1 && n.count_u == 2 && n.count_v == 2 { 1 } else { EDGE_SAMPLES - 1 };
+    let lerp = |a: f64, b: f64, k: usize| a + (b - a) * k as f64 / steps as f64;
+    let mut uv = Vec::with_capacity(4 * steps);
+    uv.extend((0..steps).map(|k| (lerp(u0, u1, k), v0)));
+    uv.extend((0..steps).map(|k| (u1, lerp(v0, v1, k))));
+    uv.extend((0..steps).map(|k| (lerp(u1, u0, k), v1)));
+    uv.extend((0..steps).map(|k| (u0, lerp(v1, v0, k))));
+    uv.into_iter().map(|(u, v)| n.point(u, v)).collect()
+}
+
+/// Where the line `start + dir·s` crosses a planar polygon in its plane (`across` is the in-plane
+/// direction perpendicular to the line): the longest inside stretch `(s0, s1)`, by the even–odd rule.
+fn line_inside(poly: &[Vec3], start: Vec3, dir: Vec3, across: Vec3) -> Option<(f64, f64)> {
+    let mut hits: Vec<f64> = Vec::new();
+    for (k, p) in poly.iter().enumerate() {
+        let q = *poly.get((k + 1) % poly.len())?;
+        let (dp, dq) = ((*p - start).dot(across), (q - start).dot(across));
+        if (dp < 0.0) != (dq < 0.0) {
+            let t = dp / (dp - dq);
+            hits.push((*p + (q - *p) * t - start).dot(dir));
+        }
+    }
+    hits.sort_by(f64::total_cmp);
+    hits.chunks_exact(2)
+        .filter_map(|w| match w {
+            [a, b] if b > a => Some((*a, *b)),
+            _ => None,
+        })
+        .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+}
+
+/// A polygon cut by a plane through `at` with normal `keep`: the part on the `keep` side
+/// (Sutherland–Hodgman against one plane).
+fn clip_polygon(poly: &[Vec3], at: Vec3, keep: Vec3) -> Vec<Vec3> {
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    for (k, p) in poly.iter().enumerate() {
+        let Some(q) = poly.get((k + 1) % poly.len()) else { break };
+        let (dp, dq) = ((*p - at).dot(keep), (*q - at).dot(keep));
+        if dp >= 0.0 {
+            out.push(*p);
+        }
+        if (dp < 0.0) != (dq < 0.0) {
+            out.push(*p + (*q - *p) * (dp / (dp - dq)));
+        }
+    }
+    // Drop repeated points the cut can leave where it passes through a corner.
+    out.dedup_by(|a, b| (*a - *b).len() < 1e-12);
+    if out.len() > 1 && out.first().zip(out.last()).is_some_and(|(a, b)| (*a - *b).len() < 1e-12) {
+        out.pop();
+    }
+    out
+}
+
+/// One side of a fillet: a flat sheet, its plane, its boundary and the direction from the line
+/// where the planes meet into the sheet.
+struct Side {
+    sf: Surface3d,
+    normal: Vec3,
+    boundary: Vec<Vec3>,
+    into: Vec3,
+}
+
+/// The direction (perpendicular to the line `on + d·s`, in the plane with normal `n`) from the
+/// line into the sheet: towards the picked point when it is off the line, else the sheet's middle.
+fn side_into(boundary: &[Vec3], n: Vec3, on: Vec3, d: Vec3, pick: Option<Vec3>, scale: f64) -> Option<Vec3> {
+    let across = |q: Vec3| {
+        let w = q - on;
+        let w = w - n * w.dot(n);
+        w - d * w.dot(d)
+    };
+    let eps = 1e-6 * scale;
+    let from_pick = pick.map(across).filter(|w| w.len() > eps);
+    let mid = boundary.iter().fold(Vec3::ZERO, |acc, q| acc + *q) * (1.0 / boundary.len().max(1) as f64);
+    let w = from_pick.or_else(|| Some(across(mid)).filter(|w| w.len() > eps))?;
+    Some(w.normalized())
+}
+
 fn run_surffillet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "surffillet";
-    let (_, a) = named_surface(s, cmd, p, "first")?;
-    let (_, b) = named_surface(s, cmd, p, "second")?;
+    let (ha, a) = named_surface(s, cmd, p, "first")?;
+    let (hb, b) = named_surface(s, cmd, p, "second")?;
+    if ha == hb {
+        return Err(bad(cmd, "`first` and `second` must be two different surfaces"));
+    }
     let radius = num(cmd, p, "radius")?;
     if radius <= 0.0 {
         return Err(bad(cmd, "`radius` must be positive"));
     }
     let trim = bool_or(p, "trim", false);
-    // Pick the edge nearest the user's hint, or edge 0 (u = start).
-    let wa = p.get("first_edge").and_then(point3_value).and_then(|pick| edge_near(&a.nurbs, pick)).unwrap_or(0);
-    let wb = p.get("second_edge").and_then(point3_value).and_then(|pick| edge_near(&b.nurbs, pick)).unwrap_or(0);
-    let (ea_pts, ea_tan) = edge(&a.nurbs, wa, EDGE_SAMPLES).ok_or_else(|| other("The first surface's edge is degenerate."))?;
-    let (mut eb_pts, mut eb_tan) = edge(&b.nurbs, wb, EDGE_SAMPLES).ok_or_else(|| other("The second surface's edge is degenerate."))?;
-    // Align edge directions.
-    let (fa, la, fb, lb) = (ea_pts[0], ea_pts[EDGE_SAMPLES - 1], eb_pts[0], eb_pts[EDGE_SAMPLES - 1]);
-    if (fa - lb).len() + (la - fb).len() < (fa - fb).len() + (la - lb).len() {
-        eb_pts.reverse();
-        eb_tan.reverse();
+    let curved = |which: &str| {
+        other(format!("SURFFILLET fillets flat (planar) surfaces; the {which} surface is curved. Use SURFBLEND to join curved surfaces."))
+    };
+    let (oa, na) = flat_plane(&a).ok_or_else(|| curved("first"))?;
+    let (ob, nb) = flat_plane(&b).ok_or_else(|| curved("second"))?;
+    let axis = na.cross(nb);
+    if axis.len() < 1e-9 {
+        return Err(other("The surfaces are parallel: a fillet needs two surfaces that meet at an angle."));
     }
-    // Build the fillet surface: for each pair of edge points, a quarter-arc of the given radius
-    // that is tangent to both surfaces.
-    let mut rows: Vec<Vec<Vec3>> = Vec::new();
-    let fillet_steps = 5usize; // number of intermediate rows for the fillet arc
-    for step in 0..=fillet_steps {
-        let t = step as f64 / fillet_steps as f64;
-        let angle = t * std::f64::consts::FRAC_PI_2;
-        let (sa, ca) = angle.sin_cos();
-        let mut row = Vec::with_capacity(EDGE_SAMPLES);
-        for k in 0..EDGE_SAMPLES {
-            let pa = ea_pts[k];
-            let pb = eb_pts[k];
-            let na = ea_tan[k]; // outward tangent from surface a
-            let nb = eb_tan[k]; // outward tangent from surface b
-            // The fillet point traces a circular arc from pa offset along na to pb offset along nb.
-            let center = pa + na * radius;
-            // Direction from center towards surface b's edge.
-            let to_b = pb + nb * radius - center;
-            let to_b_len = to_b.len();
-            let dir_b = if to_b_len > 1e-12 { to_b * (1.0 / to_b_len) } else { nb };
-            let dir_a = (na * -1.0).normalized();
-            // Interpolate on the arc from dir_a towards dir_b.
-            let pt = center + (dir_a * ca + dir_b * sa) * radius;
-            row.push(pt);
+    let d = axis.normalized();
+    // A point on the line where the two planes (or their extensions) meet: on both planes, nearest oa.
+    let on = {
+        let (ka, kb) = (oa.dot(na), ob.dot(nb));
+        let c = na.dot(nb);
+        let det = 1.0 - c * c;
+        let (x, y) = ((ka - kb * c) / det, (kb - ka * c) / det);
+        let base = na * x + nb * y;
+        base + d * (oa - base).dot(d)
+    };
+    let scale = a.size().max(b.size()).max(radius);
+    let side = |sf: Surface3d, n: Vec3, key: &str, which: &str| -> Result<Side> {
+        let boundary = boundary_3d(&sf).ok_or_else(|| other(format!("The {which} surface is degenerate.")))?;
+        let pick = p.get(key).and_then(point3_value);
+        let into = side_into(&boundary, n, on, d, pick, scale).ok_or_else(|| {
+            other(format!("The {which} surface lies across the line where the surfaces meet: pick a point (`{key}`) on the part to fillet."))
+        })?;
+        Ok(Side { sf, normal: n, boundary, into })
+    };
+    let sa = side(a, na, "first_edge", "first")?;
+    let sb = side(b, nb, "second_edge", "second")?;
+    // Each sheet's normal turned towards the other sheet: the ball sits on that (concave) side.
+    let ma = if sb.into.dot(sa.normal) >= 0.0 { sa.normal } else { sa.normal * -1.0 };
+    let mb = if sa.into.dot(sb.normal) >= 0.0 { sb.normal } else { sb.normal * -1.0 };
+    // The arc turns through the angle between the two normals (π minus the angle between the sheets).
+    let cos_turn = ma.dot(mb).clamp(-1.0, 1.0);
+    let turn = cos_turn.acos();
+    if turn > 179.0_f64.to_radians() {
+        return Err(other("The surfaces fold back onto each other (almost no angle between them); there is no room for a fillet."));
+    }
+    // Ball centres: on both planes offset by the radius towards the concave side,
+    // centre = on + (ma + mb)·r/(1 + cos), perpendicular to the line.
+    let centre0 = on + (ma + mb) * (radius / (1.0 + cos_turn));
+    let (foot_a, foot_b) = (centre0 - ma * radius, centre0 - mb * radius);
+    // How far from the line each contact line is, and the largest radius each sheet allows.
+    let reach = |sd: &Side| sd.boundary.iter().map(|q| (*q - on).dot(sd.into)).fold(f64::NEG_INFINITY, f64::max);
+    let near_edge = |sd: &Side| sd.boundary.iter().map(|q| (*q - on).dot(sd.into)).fold(f64::INFINITY, f64::min);
+    let per_radius = (foot_a - on).dot(sa.into) / radius; // = cot(half the angle between the sheets)
+    let fits = |sd: &Side, foot: Vec3, which: &str| -> Result<(f64, f64)> {
+        if let Some(span) = line_inside(&sd.boundary, foot, d, sd.into) {
+            return Ok(span);
         }
-        rows.push(row);
+        let (far, near) = (reach(sd), near_edge(sd));
+        let at = (foot - on).dot(sd.into);
+        if at > far {
+            Err(other(format!(
+                "Radius {radius} is too large: the fillet would touch the {which} surface {at:.4} from where the surfaces meet, but the surface reaches only {far:.4}. Use a radius of at most {:.4}.",
+                (far / per_radius).max(0.0)
+            )))
+        } else if at < near {
+            Err(other(format!(
+                "Radius {radius} is too small: the fillet would touch the {which} surface {at:.4} from where the surfaces meet, but the surface starts {near:.4} away. Use a radius of at least {:.4}.",
+                near / per_radius
+            )))
+        } else {
+            Err(other(format!("The fillet's contact line misses the {which} surface.")))
+        }
+    };
+    let (a0, a1) = fits(&sa, foot_a, "first")?;
+    let (b0, b1) = fits(&sb, foot_b, "second")?;
+    // The contact lines run parallel to the line where the planes meet: the fillet covers where
+    // both lie on their sheets.
+    let base_a = (foot_a - on).dot(d);
+    let base_b = (foot_b - on).dot(d);
+    let (s0, s1) = ((a0 + base_a).max(b0 + base_b), (a1 + base_a).min(b1 + base_b));
+    if s1 - s0 <= 1e-9 * scale {
+        return Err(other("The two surfaces don't overlap along the line where they meet; there is nothing to fillet."));
     }
-    let nurbs = NurbsSurface::skin(&rows, 3, 3)
-        .ok_or_else(|| other("The fillet surface can't be made (the surfaces may not be close enough for that radius)."))?;
+    // Each cross-section is an exact circular arc: a rational quadratic from foot_a to foot_b
+    // whose middle control vertex is where the tangents meet (on the line), weight cos(turn/2)
+    // (Piegl and Tiller §7.3). The arc runs straight along the line: a piece of a cylinder.
+    let at = |q: Vec3, s: f64| q - d * (q - on).dot(d) + d * s;
+    let w = (turn / 2.0).cos();
+    let mut control = Vec::with_capacity(6);
+    for q in [foot_a, on, foot_b] {
+        control.push(at(q, s0));
+        control.push(at(q, s1));
+    }
+    let nurbs = NurbsSurface {
+        degree_u: 2,
+        degree_v: 1,
+        count_u: 3,
+        count_v: 2,
+        control,
+        weights: vec![1.0, 1.0, w, w, 1.0, 1.0],
+        knots_u: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        knots_v: vec![0.0, 0.0, 1.0, 1.0],
+    };
+    // Trim each sheet back to its contact line (keep the part away from the corner); worked out
+    // before anything changes, so a failure leaves the drawing as it was.
+    let trimmed_sheets = if trim {
+        let cut = |sd: &Side, foot: Vec3, which: &str| -> Result<Surface3d> {
+            let kept = clip_polygon(&sd.boundary, foot, sd.into);
+            let mut sf = planar_over(&kept).map_err(|_| other(format!("The {which} surface can't be trimmed to the fillet.")))?;
+            // Holes keep their place in the drawing, on the new surface's parameters.
+            sf.holes = sd
+                .sf
+                .holes
+                .iter()
+                .map(|l| l.iter().filter_map(|q| sd.sf.nurbs.point(q[0], q[1])).collect::<Vec<_>>())
+                .map(|pts| sf.to_params(&pts))
+                .filter(|l| l.len() >= 3)
+                .collect();
+            sf.cvs_shown = sd.sf.cvs_shown;
+            if !sf.is_valid() {
+                return Err(other(format!("The {which} surface can't be trimmed to the fillet.")));
+            }
+            Ok(sf)
+        };
+        Some((cut(&sa, foot_a, "first")?, cut(&sb, foot_b, "second")?))
+    } else {
+        None
+    };
     let h = add(s, Surface3d::new(nurbs))?;
-    let mut result = json!({ "handle": h.hex() });
-    if trim {
-        // Trim the originals to the fillet edges (approximation: trim to the first/last row).
-        // This is a simplified trim — full trim would project the fillet boundary onto each surface.
-        result["trimmed"] = json!(true);
+    let mut result = json!({ "handle": h.hex(), "radius": radius });
+    if let Some((ta, tb)) = trimmed_sheets {
+        store(s, ha, ta)?;
+        store(s, hb, tb)?;
+        result["trimmed"] = json!([ha.hex(), hb.hex()]);
     }
     Ok(result)
 }
 
-/// Whether a mesh is closed (watertight): every edge is shared by exactly two faces.
-fn mesh_is_closed(vertices: &[Vec3], faces: &[Vec<u32>]) -> bool {
+/// Why a mesh can't close a volume (None: it is closed and consistently wound). Closed: every
+/// edge is shared by exactly two faces; consistent: those two faces run it in opposite directions
+/// (each directed edge `(a, b)` once and `(b, a)` once), so the faces all face the same way.
+fn mesh_not_closed(vertices: &[Vec3], faces: &[Vec<u32>]) -> Option<String> {
     use std::collections::HashMap;
     if faces.len() < 4 || vertices.len() < 4 {
-        return false;
+        return Some("it has fewer than four faces".into());
     }
-    let mut edge_count: HashMap<(u32, u32), u32> = HashMap::new();
+    if faces.iter().any(|f| f.len() < 3 || f.iter().enumerate().any(|(i, a)| f.get((i + 1) % f.len()) == Some(a))) {
+        return Some("a face has fewer than three distinct corners".into());
+    }
+    let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
     for face in faces {
-        let n = face.len();
-        for i in 0..n {
-            let (a, b) = (face[i], face[(i + 1) % n]);
-            let key = if a < b { (a, b) } else { (b, a) };
-            *edge_count.entry(key).or_insert(0) += 1;
+        for (i, a) in face.iter().enumerate() {
+            let b = face.get((i + 1) % face.len()).copied().unwrap_or(*a);
+            *directed.entry((*a, b)).or_insert(0) += 1;
         }
     }
-    edge_count.values().all(|&c| c == 2)
+    let (mut open, mut flipped, mut shared) = (0usize, 0usize, 0usize);
+    for (&(a, b), &n) in &directed {
+        let back = directed.get(&(b, a)).copied().unwrap_or(0);
+        // Count each undirected edge once.
+        if (a, b) > (b, a) && back > 0 {
+            continue;
+        }
+        match (n, back) {
+            (1, 1) => {}
+            (1, 0) => open += 1,
+            (2, 0) => flipped += 1,
+            _ => shared += 1,
+        }
+    }
+    if open > 0 {
+        Some(format!("{open} edges are open (used by one face only); close or cap the mesh first"))
+    } else if flipped > 0 {
+        Some(format!("{flipped} edges join faces wound the same way (a face is flipped); make the faces' windings consistent first"))
+    } else if shared > 0 {
+        Some(format!("{shared} edges are shared by more than two faces"))
+    } else {
+        None
+    }
 }
 
 fn run_convtosolid(s: &mut Session, p: &Value) -> Result<Value> {
     let hs: Vec<Handle> = targets(s, p)?.into_iter().take(MAX_OBJECTS).collect();
     let (mut converted, mut skipped) = (Vec::new(), 0usize);
+    // Why the first shape that wasn't closed was refused, for the error.
+    let mut why: Option<String> = None;
     for h in hs {
         let Some(e) = s.doc()?.entity(h).cloned() else { continue };
         let poly = match &e.kind {
             EntityKind::Mesh(m) => {
                 // Check the mesh is watertight.
                 let face_indices: Vec<Vec<u32>> = m.faces.iter().map(|f| f.v.clone()).collect();
-                if !mesh_is_closed(&m.vertices, &face_indices) {
+                if let Some(reason) = mesh_not_closed(&m.vertices, &face_indices) {
+                    why.get_or_insert(format!("{}: {reason}", h.hex()));
                     skipped += 1;
                     continue;
                 }
@@ -683,7 +898,8 @@ fn run_convtosolid(s: &mut Session, p: &Value) -> Result<Value> {
                 // Tessellate the surface to a mesh, then check closedness.
                 let mesh = sf.mesh(0.01);
                 let face_indices: Vec<Vec<u32>> = mesh.faces.iter().map(|f| f.v.clone()).collect();
-                if !mesh_is_closed(&mesh.vertices, &face_indices) {
+                if let Some(reason) = mesh_not_closed(&mesh.vertices, &face_indices) {
+                    why.get_or_insert(format!("{}: {reason}", h.hex()));
                     skipped += 1;
                     continue;
                 }
@@ -708,7 +924,11 @@ fn run_convtosolid(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if converted.is_empty() && skipped > 0 {
-        return Err(other("No closed (watertight) mesh or surface was selected. Only closed shapes can become solids."));
+        let mut msg = String::from("No closed (watertight) mesh or surface was selected. Only closed shapes can become solids.");
+        if let Some(why) = why {
+            msg.push_str(&format!(" Refused {why}."));
+        }
+        return Err(other(msg));
     }
     Ok(json!({ "converted": converted, "skipped": skipped }))
 }
