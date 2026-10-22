@@ -1746,6 +1746,29 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
     Ok(d)
 }
 
+/// What an object is as a building element: the IFC class it is written as (`IfcDuctSegment`,
+/// `IfcBuildingElementProxy` for plain linework), its storey, its name (a run's system, a piece of
+/// equipment's tag, a room's name, else its layer) and the systems it belongs to (4D schedules
+/// link tasks to elements by these).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElementInfo {
+    pub class: String,
+    pub level: Option<String>,
+    pub name: String,
+    pub systems: Vec<String>,
+}
+
+pub fn element_info(e: &Entity) -> ElementInfo {
+    let k = class_of(e);
+    let mut systems = k.systems;
+    if let Some(s) = k.system_name
+        && !systems.contains(&s)
+    {
+        systems.insert(0, s);
+    }
+    ElementInfo { class: k.class.ifc().0.to_string(), level: k.level, name: k.name, systems }
+}
+
 /// The IFC class and GlobalId of an object read from IFC.
 pub fn ifc_tag(e: &Entity) -> Option<(String, String)> {
     let t = tag_strings(e, APP)?;
@@ -1822,5 +1845,84 @@ mod tests {
         let ifc = b"ISO-10303-21;\nDATA;\n#1=IFCREPRESENTATIONMAP($,#2);\n#2=IFCSHAPEREPRESENTATION($,'Body','M',(#3));\n\
             #3=IFCMAPPEDITEM(#1,$);\n#5=IFCPRODUCTDEFINITIONSHAPE($,$,(#2));\n#6=IFCWALL('w',$,$,$,$,$,#5,$,$);\nENDSEC;\n";
         assert!(read_ifc(ifc).is_err(), "no faces");
+    }
+
+    #[test]
+    fn four_d_elements_are_classed_as_ifc_export_writes_them() {
+        // 4D (`cadaddy-walk3d`'s `fourd::element_of`) keeps its own copy of this table; they agree.
+        let wg = |strings: &[&str]| {
+            let mut x = vec![RawTag { code: 1001, value: "CADADDY_WALLGEN".into() }];
+            x.extend(strings.iter().map(|v| RawTag { code: 1000, value: (*v).into() }));
+            x
+        };
+        let mut cases: Vec<Vec<RawTag>> = Vec::new();
+        for part in [
+            "wall",
+            "parapet",
+            "floor",
+            "ceiling",
+            "soffit",
+            "door",
+            "window",
+            "stair",
+            "column",
+            "curtainwall",
+            "railing",
+            "ramp",
+            "roof",
+            "ground",
+            "beam?",
+        ] {
+            cases.push(wg(&[part, "Level 1", "2A"]));
+        }
+        for kind in [
+            "duct",
+            "pipe",
+            "conduit",
+            "tray",
+            "light_fixture",
+            "outlet",
+            "receptacle",
+            "data_outlet",
+            "floor_box",
+            "switch",
+            "disconnect",
+            "junction_box",
+            "panel",
+            "transformer",
+            "other",
+        ] {
+            for part in ["part:segment", "part:fitting:elbow", "part:terminal:diffuser", "part:terminal:sprinkler_pendent"] {
+                cases.push(wg(&["mep", "Level 2", "0", "system:Supply A", &format!("kind:{kind}"), part]));
+            }
+        }
+        for ek in ["ahu", "rtu", "vav", "exhaust_fan", "fan", "pump", "water_heater", "condensing_unit", "gas_meter", "mystery"] {
+            cases.push(wg(&[
+                "mep",
+                "Roof",
+                "0",
+                "kind:equipment",
+                &format!("part:equipment:{ek}"),
+                "tag:EQ-1",
+                "system:Supply A",
+                "system:Return A",
+            ]));
+        }
+        cases.push(vec![
+            RawTag { code: 1001, value: "CADADDY_ROOM".into() },
+            RawTag { code: 1000, value: "Office".into() },
+            RawTag { code: 1000, value: "101".into() },
+        ]);
+        cases.push(Vec::new());
+        for xdata in cases {
+            let e = Entity {
+                handle: cadaddy_doc::Handle(0x2a),
+                common: Common { layer: "M-DUCT".into(), xdata, ..Common::default() },
+                kind: EntityKind::Mesh(Mesh::default()),
+            };
+            let (a, b) = (element_info(&e), cadaddy_walk3d::fourd::element_of(&e));
+            assert_eq!((a.class.as_str(), a.name.as_str(), &a.systems), (b.class.as_str(), b.name.as_str(), &b.systems), "{:?}", e.common.xdata);
+            assert_eq!(a.level.unwrap_or_default(), b.level, "{:?}", e.common.xdata);
+        }
     }
 }

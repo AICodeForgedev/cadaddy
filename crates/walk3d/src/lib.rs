@@ -12,6 +12,7 @@
 mod derive;
 mod doors;
 pub mod field;
+pub mod fourd;
 mod ground;
 mod math;
 mod measure;
@@ -25,6 +26,7 @@ pub mod stairs;
 mod takeoff;
 mod tour;
 pub mod validate;
+pub mod video;
 mod walker;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};

@@ -17,6 +17,10 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     }
     crate::agentdlg::confirm_prompt(app, ctx);
     crate::lispdlg::show(app, ctx);
+    // The 4D date shows only while its palette is open.
+    if app.ui.dialog.as_deref() != Some(crate::fourdpalette::DIALOG) {
+        app.fourd = None;
+    }
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {
@@ -60,6 +64,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "diag" => crate::diag::dialog(app, ctx, &mut open),
         "markups" => crate::markuppalette::dialog(app, ctx, &mut open),
         crate::rfipalette::DIALOG => crate::rfipalette::dialog(app, ctx, &mut open),
+        crate::fourdpalette::DIALOG => crate::fourdpalette::dialog(app, ctx, &mut open),
         "undohistory" => crate::historypalettes::undo_dialog(app, ctx, &mut open),
         "commandhistory" => crate::historypalettes::commands_dialog(app, ctx, &mut open),
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),

@@ -63,6 +63,7 @@ pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
+pub mod fourd;
 pub mod furnish;
 pub mod geo;
 pub mod imagetrace;
@@ -306,6 +307,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(dimmodes::specs());
         v.extend(redline::specs());
         v.extend(tours::specs());
+        v.extend(fourd::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
