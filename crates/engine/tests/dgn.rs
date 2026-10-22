@@ -102,6 +102,10 @@ fn a_design_file_as_an_underlay() {
     assert!(r["layers"].as_array().unwrap().iter().any(|l| l["on"] == false));
     assert!(prims(&s) < all);
     s.execute("dgnclip", &json!({"handle": h, "rect": [[0, 0], [60, 40]]})).unwrap();
+    // DGNOSNAP (on unless 0) is a drawing variable SETVAR takes.
+    s.execute("setvar", &json!({"name": "DGNOSNAP", "value": 0})).unwrap();
+    assert_eq!(s.execute("getvar", &json!({"name": "DGNOSNAP"})).unwrap()["value"], 0);
+    s.execute("setvar", &json!({"name": "DGNOSNAP", "value": 1})).unwrap();
     let r = s.execute("dgnadjust", &json!({"handles": [h], "fade": 60})).unwrap();
     assert_eq!(r["fade"], 60);
     // Kept in DXF as a DGNUNDERLAY with its DGNDEFINITION, and back as a DGN underlay.

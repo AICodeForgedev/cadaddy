@@ -260,6 +260,7 @@ const READ_HEADER_VARS: &[&str] = &[
     "CMLSTYLE",
     "CPLOTSTYLE",
     "CTABLESTYLE",
+    "DGNOSNAP",
     "DIMASSOC",
     "DIMCLRD",
     "DIMDSEP",
