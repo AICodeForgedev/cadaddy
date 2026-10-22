@@ -25,6 +25,9 @@ const MAX_ROUTE: usize = 1_000;
 const TICK_SHARE: f64 = 0.3;
 /// Two routes the same within this (feet) are one service seen on two sheets.
 const SAME_FT: f64 = 1.0;
+/// A route's building end must be within this many drawing units of the BUILDING box to count as
+/// entering. Civil sheets are typically in inches, so 120 = 10 ft.
+const BUILDING_TOLERANCE: f64 = 120.0;
 
 /// An underground service read from a sheet.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -127,7 +130,8 @@ pub fn read_services(d: &Drawing, sh: &Sheet) -> Vec<ReadService> {
                 if gap(run.first()) < gap(run.last()) {
                     run.reverse();
                 }
-                s.enters = true;
+                // Only mark "enters" when the building end is actually near the building.
+                s.enters = gap(run.last()) <= BUILDING_TOLERANCE;
             }
             let (mut mn, mut mx) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
             for p in &run {
@@ -181,18 +185,19 @@ pub fn spec_patch(services: &[ReadService], level: &str, to_plan: &dyn Fn(&str, 
             let route: Vec<[f64; 2]> = s.route_ft.iter().map(|p| to_plan(level, *p)).collect::<Option<_>>()?;
             let n = tags.entry(s.kind.clone()).or_default();
             *n += 1;
+            let is_unknown = s.kind == "unknown";
             let mut v = json!({
                 "kind": s.kind,
                 "tag": format!("SVC-{}{}", s.kind.to_ascii_uppercase(), if *n > 1 { format!("-{n}") } else { String::new() }),
                 "level": level,
                 "from": route.first(),
                 "route": route,
-                "shown": true,
+                "shown": !is_unknown,
                 "source": s.sheet,
                 "found_in": s.found_in,
                 "confidence": (s.confidence * 100.0).round() / 100.0,
             });
-            if s.enters {
+            if s.enters && !is_unknown {
                 v["at"] = json!(route.last());
             }
             if let Some(size) = s.size_in {
@@ -277,12 +282,40 @@ fn conduits_of(words: &str) -> Option<u32> {
     (size_of(rest).is_some() && (1..=64).contains(&count)).then_some(count)
 }
 
-/// `3' DEEP`, `4 FT DEEP`, `DEPTH 3'`.
+/// `3' DEEP`, `4 FT DEEP`, `DEPTH 3'`, `36" COVER` (→ 3.0 ft), `COVER 30 IN` (→ 2.5 ft).
+/// Returns feet: a number before DEEP/DEPTH/COVER, or right after, with its unit (`'`/FT = feet,
+/// `"`/IN = inches → feet; bare = feet).
 fn depth_of(words: &str) -> Option<f64> {
-    if !words.contains("DEEP") && !words.contains("DEPTH") && !words.contains("COVER") {
-        return None;
+    let kw_pos = ["DEEP", "DEPTH", "COVER"]
+        .iter()
+        .filter_map(|k| {
+            let mut from = 0;
+            while let Some(i) = words.get(from..).and_then(|w| w.find(k)) {
+                let i = from + i;
+                let before = words.get(..i).and_then(|w| w.chars().last());
+                if before.is_none_or(|c| !c.is_ascii_alphanumeric()) {
+                    return Some((i, k.len()));
+                }
+                from = i + k.len();
+            }
+            None
+        })
+        .next()?;
+    let (kw_start, kw_len) = kw_pos;
+    // Look for a number right after the keyword first, then before it.
+    let after = words.get(kw_start + kw_len..).and_then(|rest| {
+        numbers(rest).into_iter().next().filter(|(n, _)| *n > 0.0 && *n < 100.0)
+    });
+    let before = || {
+        numbers(words.get(..kw_start)?).into_iter().next_back().filter(|(n, _)| *n > 0.0 && *n < 100.0)
+    };
+    let (n, rest) = after.or_else(before)?;
+    // Unit: inches → feet; feet or bare → feet.
+    if rest.starts_with('"') || rest.starts_with(" IN") || rest.starts_with("IN") {
+        Some(n / 12.0)
+    } else {
+        Some(n)
     }
-    numbers(words).into_iter().map(|(n, _)| n).find(|n| *n > 0.0 && *n < 100.0)
 }
 
 /// `INV 95.50`, `INV. EL. 95.5`, `IE=95.5`, `INVERT 95.5`.
@@ -389,6 +422,9 @@ mod tests {
         assert_eq!(size_of("3' DEEP"), None);
         assert_eq!(conduits_of("4-4\" PVC ELECTRIC"), Some(4));
         assert_eq!(depth_of("3' DEEP"), Some(3.0));
+        assert_eq!(depth_of("4-4\" PVC ELECTRIC 3' DEEP"), Some(3.0));
+        assert_eq!(depth_of("36\" COVER"), Some(3.0));
+        assert_eq!(depth_of("COVER 30 IN"), Some(2.5));
         assert_eq!(depth_of("WATER"), None);
         assert_eq!(invert_of("INV 95.50"), Some(95.5));
         assert_eq!(invert_of("IE=94.2"), Some(94.2));
