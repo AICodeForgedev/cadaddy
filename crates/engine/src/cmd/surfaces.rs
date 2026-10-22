@@ -597,16 +597,10 @@ fn run_surffillet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let trim = bool_or(p, "trim", false);
     // Pick the edge nearest the user's hint, or edge 0 (u = start).
-    let wa = p.get("first_edge").and_then(point3_value)
-        .and_then(|pick| edge_near(&a.nurbs, pick))
-        .unwrap_or(0);
-    let wb = p.get("second_edge").and_then(point3_value)
-        .and_then(|pick| edge_near(&b.nurbs, pick))
-        .unwrap_or(0);
-    let (ea_pts, ea_tan) = edge(&a.nurbs, wa, EDGE_SAMPLES)
-        .ok_or_else(|| other("The first surface's edge is degenerate."))?;
-    let (mut eb_pts, mut eb_tan) = edge(&b.nurbs, wb, EDGE_SAMPLES)
-        .ok_or_else(|| other("The second surface's edge is degenerate."))?;
+    let wa = p.get("first_edge").and_then(point3_value).and_then(|pick| edge_near(&a.nurbs, pick)).unwrap_or(0);
+    let wb = p.get("second_edge").and_then(point3_value).and_then(|pick| edge_near(&b.nurbs, pick)).unwrap_or(0);
+    let (ea_pts, ea_tan) = edge(&a.nurbs, wa, EDGE_SAMPLES).ok_or_else(|| other("The first surface's edge is degenerate."))?;
+    let (mut eb_pts, mut eb_tan) = edge(&b.nurbs, wb, EDGE_SAMPLES).ok_or_else(|| other("The second surface's edge is degenerate."))?;
     // Align edge directions.
     let (fa, la, fb, lb) = (ea_pts[0], ea_pts[EDGE_SAMPLES - 1], eb_pts[0], eb_pts[EDGE_SAMPLES - 1]);
     if (fa - lb).len() + (la - fb).len() < (fa - fb).len() + (la - lb).len() {
@@ -678,32 +672,22 @@ fn run_convtosolid(s: &mut Session, p: &Value) -> Result<Value> {
         let poly = match &e.kind {
             EntityKind::Mesh(m) => {
                 // Check the mesh is watertight.
-                let face_indices: Vec<Vec<u32>> = m.faces.iter()
-                    .map(|f| f.v.clone())
-                    .collect();
+                let face_indices: Vec<Vec<u32>> = m.faces.iter().map(|f| f.v.clone()).collect();
                 if !mesh_is_closed(&m.vertices, &face_indices) {
                     skipped += 1;
                     continue;
                 }
-                Some(cadaddy_doc::SolidShape::Polyhedron {
-                    vertices: m.vertices.clone(),
-                    faces: face_indices,
-                })
+                Some(cadaddy_doc::SolidShape::Polyhedron { vertices: m.vertices.clone(), faces: face_indices })
             }
             EntityKind::Surface(sf) => {
                 // Tessellate the surface to a mesh, then check closedness.
                 let mesh = sf.mesh(0.01);
-                let face_indices: Vec<Vec<u32>> = mesh.faces.iter()
-                    .map(|f| f.v.clone())
-                    .collect();
+                let face_indices: Vec<Vec<u32>> = mesh.faces.iter().map(|f| f.v.clone()).collect();
                 if !mesh_is_closed(&mesh.vertices, &face_indices) {
                     skipped += 1;
                     continue;
                 }
-                Some(cadaddy_doc::SolidShape::Polyhedron {
-                    vertices: mesh.vertices,
-                    faces: face_indices,
-                })
+                Some(cadaddy_doc::SolidShape::Polyhedron { vertices: mesh.vertices, faces: face_indices })
             }
             _ => None,
         };

@@ -598,11 +598,13 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
             // Groups of only "big" blobs (no confirmed ordinary-sized letter) need at least 2
             // members AND a minimum fill ratio — text fills its bounding box more densely than
             // thin geometric outlines (circles, symbol borders) of the same size.
-            if !small && (*count < 2 || {
-                let area = (b[2] - b[0]) * (b[3] - b[1]);
-                let ink: usize = comps.iter().map(|c| c.len()).sum();
-                (ink as f64 / area) < 0.10
-            }) {
+            if !small
+                && (*count < 2 || {
+                    let area = (b[2] - b[0]) * (b[3] - b[1]);
+                    let ink: usize = comps.iter().map(|c| c.len()).sum();
+                    (ink as f64 / area) < 0.10
+                })
+            {
                 continue;
             }
             for i in comps.iter().flatten() {

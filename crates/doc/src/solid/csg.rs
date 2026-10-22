@@ -130,10 +130,7 @@ impl Solid3d {
         if let SolidShape::Polyhedron { vertices, faces } = &self.shape {
             let mut out = Vec::new();
             for (fi, face) in faces.iter().enumerate() {
-                let pts: Vec<Vec3> = face.iter()
-                    .filter_map(|&i| vertices.get(i as usize).copied())
-                    .map(|v| self.xf.apply(v))
-                    .collect();
+                let pts: Vec<Vec3> = face.iter().filter_map(|&i| vertices.get(i as usize).copied()).map(|v| self.xf.apply(v)).collect();
                 if pts.len() >= 3 {
                     out.extend(Poly::new(pts, tag(leaf, fi as u32)));
                 }

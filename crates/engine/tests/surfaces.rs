@@ -223,25 +223,35 @@ fn convtosolid_cube_mesh_and_open_box_refused() {
     let mut s = Session::new();
     // Build a 10 × 10 × 10 cube mesh (8 vertices, 12 triangular faces).
     let v = vec![
-        Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0),
-        Vec3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 10.0, 0.0),
-        Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 10.0),
-        Vec3::new(10.0, 10.0, 10.0), Vec3::new(0.0, 10.0, 10.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(10.0, 10.0, 0.0),
+        Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(0.0, 0.0, 10.0),
+        Vec3::new(10.0, 0.0, 10.0),
+        Vec3::new(10.0, 10.0, 10.0),
+        Vec3::new(0.0, 10.0, 10.0),
     ];
     let tri = |a: u32, b: u32, c: u32| MeshFace { v: vec![a, b, c], hidden: 0 };
     let faces = vec![
         // Bottom (z = 0)
-        tri(0, 2, 1), tri(0, 3, 2),
+        tri(0, 2, 1),
+        tri(0, 3, 2),
         // Top (z = 10)
-        tri(4, 5, 6), tri(4, 6, 7),
+        tri(4, 5, 6),
+        tri(4, 6, 7),
         // Front (y = 0)
-        tri(0, 1, 5), tri(0, 5, 4),
+        tri(0, 1, 5),
+        tri(0, 5, 4),
         // Back (y = 10)
-        tri(2, 3, 7), tri(2, 7, 6),
+        tri(2, 3, 7),
+        tri(2, 7, 6),
         // Left (x = 0)
-        tri(0, 4, 7), tri(0, 7, 3),
+        tri(0, 4, 7),
+        tri(0, 7, 3),
         // Right (x = 10)
-        tri(1, 2, 6), tri(1, 6, 5),
+        tri(1, 2, 6),
+        tri(1, 6, 5),
     ];
     let cube = Mesh { vertices: v.clone(), faces, kind: MeshKind::Subd };
     let h = s.add_entity(EntityKind::Mesh(cube)).unwrap();
@@ -260,12 +270,17 @@ fn convtosolid_cube_mesh_and_open_box_refused() {
 
     // An open box (missing the top face) is refused.
     let open_faces = vec![
-        tri(0, 2, 1), tri(0, 3, 2),       // bottom
-        tri(0, 1, 5), tri(0, 5, 4),       // front
-        tri(2, 3, 7), tri(2, 7, 6),       // back
-        tri(0, 4, 7), tri(0, 7, 3),       // left
-        tri(1, 2, 6), tri(1, 6, 5),       // right
-        // top is missing
+        tri(0, 2, 1),
+        tri(0, 3, 2), // bottom
+        tri(0, 1, 5),
+        tri(0, 5, 4), // front
+        tri(2, 3, 7),
+        tri(2, 7, 6), // back
+        tri(0, 4, 7),
+        tri(0, 7, 3), // left
+        tri(1, 2, 6),
+        tri(1, 6, 5), // right
+                      // top is missing
     ];
     let open = Mesh { vertices: v, faces: open_faces, kind: MeshKind::Subd };
     let h2 = s.add_entity(EntityKind::Mesh(open)).unwrap();
@@ -280,10 +295,15 @@ fn surffillet_between_perpendicular_planes() {
     // Two flat squares: one in XY at z = 0, one in XZ at y = 0 (perpendicular).
     let a = handle(&s.execute("planesurf", &json!({"corners": [[0, 0, 0], [10, 10, 0]]})).unwrap());
     let b = handle(&s.execute("planesurf", &json!({"corners": [[0, -10, 0], [10, 0, 10]]})).unwrap());
-    let r = s.execute("surffillet", &json!({
-        "first": a.hex(), "second": b.hex(), "radius": 2.0,
-        "first_edge": [5, 0, 0], "second_edge": [5, 0, 5]
-    })).unwrap();
+    let r = s
+        .execute(
+            "surffillet",
+            &json!({
+                "first": a.hex(), "second": b.hex(), "radius": 2.0,
+                "first_edge": [5, 0, 0], "second_edge": [5, 0, 5]
+            }),
+        )
+        .unwrap();
     let fh = handle(&r);
     let fillet = surface(&s, fh);
     // The fillet surface should exist and be valid.

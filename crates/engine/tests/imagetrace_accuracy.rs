@@ -339,7 +339,9 @@ fn matched_traced_length(src: (Vec2, Vec2), traced: &[(Vec2, Vec2)], tol: f64) -
         // Clip traced segment to the projection along the source, within tol.
         let ab = src.1 - src.0;
         let l2 = ab.dot(ab);
-        if l2 < 1e-12 { continue; }
+        if l2 < 1e-12 {
+            continue;
+        }
         let project = |p: Vec2| (p - src.0).dot(ab) / l2;
         let (t0, t1) = (project(t.0), project(t.1));
         // The traced segment's endpoints must be within tol of the source line.
@@ -382,9 +384,7 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
             || p.arcs.iter().any(|a| (q.dist(a.0) - a.1).abs() <= tol)
             || p.texts.iter().any(|x| Bounds2::new(x.0, x.0 + v(x.1 * x.2.len() as f64, x.1)).expand(tol).contains(q))
     };
-    s.extra_lines = t.lines.iter().filter(|l| {
-        !on_source(l.0) && !on_source(l.1) && !on_source((l.0 + l.1) * 0.5)
-    }).count();
+    s.extra_lines = t.lines.iter().filter(|l| !on_source(l.0) && !on_source(l.1) && !on_source((l.0 + l.1) * 0.5)).count();
     // Circles and arcs: centre and radius within the tolerance.
     let mut cerr = Vec::new();
     // A circle broken by a speck may come back as an arc of most of it (three quarters or more).
@@ -392,7 +392,9 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
     let whole: Vec<(Vec2, f64)> = whole.collect();
     let mut matched_circles: Vec<bool> = vec![false; whole.len()];
     for c in &p.circles {
-        if let Some((idx, e)) = whole.iter().enumerate()
+        if let Some((idx, e)) = whole
+            .iter()
+            .enumerate()
             .map(|(i, q)| (i, q.0.dist(c.0).max((q.1 - c.1).abs())))
             .filter(|(_, e)| *e <= tol)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -406,7 +408,9 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
     s.circle_err = if cerr.is_empty() { f64::NAN } else { mean(&cerr) * px_per_unit };
     // Extra circles: traced "whole" items (circles + big arcs) not matching any source circle
     // or source arc.
-    s.extra_circles = whole.iter().enumerate()
+    s.extra_circles = whole
+        .iter()
+        .enumerate()
         .filter(|(i, _)| !matched_circles[*i])
         .filter(|(_, c)| !p.arcs.iter().any(|a| c.0.dist(a.0) <= tol * 2.0 && (c.1 - a.1).abs() <= tol * 2.0))
         .count();
@@ -421,13 +425,19 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
     // Extra arcs: traced arcs (not already counted as whole circles) that match no source arc
     // and are not fragments of a source circle.
     let big_arc_sweep = 1.5 * std::f64::consts::PI;
-    s.extra_arcs = t.arcs.iter().filter(|ta| {
-        // Skip arcs that count as whole circles (already checked above).
-        if ta.2 >= big_arc_sweep { return false; }
-        let near_src_arc = p.arcs.iter().any(|a| ta.0.dist(a.0) <= tol * 2.0 && (ta.1 - a.1).abs() <= tol * 2.0);
-        let near_src_circle = p.circles.iter().any(|c| ta.0.dist(c.0) <= tol * 2.0 && (ta.1 - c.1).abs() <= tol * 2.0);
-        !near_src_arc && !near_src_circle
-    }).count();
+    s.extra_arcs = t
+        .arcs
+        .iter()
+        .filter(|ta| {
+            // Skip arcs that count as whole circles (already checked above).
+            if ta.2 >= big_arc_sweep {
+                return false;
+            }
+            let near_src_arc = p.arcs.iter().any(|a| ta.0.dist(a.0) <= tol * 2.0 && (ta.1 - a.1).abs() <= tol * 2.0);
+            let near_src_circle = p.circles.iter().any(|c| ta.0.dist(c.0) <= tol * 2.0 && (ta.1 - c.1).abs() <= tol * 2.0);
+            !near_src_arc && !near_src_circle
+        })
+        .count();
     // Walls: both faces (half the thickness each side) traced along 80% of the wall.
     let mut werr = Vec::new();
     let mut all_src_faces: Vec<(Vec2, Vec2)> = Vec::new();
@@ -449,18 +459,20 @@ fn score(p: &Plan, t: &Traced, px_per_unit: f64) -> Score {
     // Extra wall faces: traced wall faces whose midpoint is far from every source wall's centre
     // line (midpoint-only: corner fragments at T-joints are near a source wall even if their
     // endpoints overshoot).
-    s.extra_walls = t.wall_faces.iter().filter(|wf| {
-        let mid = (wf.0 + wf.1) * 0.5;
-        !p.walls.iter().any(|(a, b, th)| seg_dist(mid, *a, *b) <= th / 2.0 + tol)
-    }).count();
+    s.extra_walls = t
+        .wall_faces
+        .iter()
+        .filter(|wf| {
+            let mid = (wf.0 + wf.1) * 0.5;
+            !p.walls.iter().any(|(a, b, th)| seg_dist(mid, *a, *b) <= th / 2.0 + tol)
+        })
+        .count();
     // Text: a traced box overlapping the text's own box by at least a third.
     let mut matched_texts: Vec<bool> = vec![false; t.boxes.len()];
     for (at, h, text) in &p.texts {
         let src = Bounds2::new(*at, *at + v(h * 0.9 * text.len() as f64, *h));
-        if let Some(idx) = t.boxes.iter().enumerate()
-            .filter(|(_, b)| iou(&src, b) >= 0.33)
-            .max_by(|a, b| iou(&src, a.1).total_cmp(&iou(&src, b.1)))
-            .map(|(i, _)| i)
+        if let Some(idx) =
+            t.boxes.iter().enumerate().filter(|(_, b)| iou(&src, b) >= 0.33).max_by(|a, b| iou(&src, a.1).total_cmp(&iou(&src, b.1))).map(|(i, _)| i)
         {
             s.texts.0 += 1;
             matched_texts[idx] = true;
@@ -688,16 +700,8 @@ fn fixture_symbols_on_a_full_size_sheet_are_not_text() {
     let d = sess.doc().unwrap();
     let frame = Bounds2::new(v(0.0, 0.0), v(strip_w as f64, strip_h as f64));
     let view = cadaddy_render::raster::View::fit(&frame, strip_w as u32, strip_h as u32, 0.0);
-    let list = cadaddy_render::build(d, &Space::Model, &cadaddy_render::Options {
-        tolerance: 0.25 / view.scale,
-        ..Default::default()
-    });
-    let o = cadaddy_render::raster::RasterOptions {
-        background: cadaddy_color::Rgb(255, 255, 255),
-        hairline: 1.5,
-        px_per_mm: 0.0,
-        antialias: true,
-    };
+    let list = cadaddy_render::build(d, &Space::Model, &cadaddy_render::Options { tolerance: 0.25 / view.scale, ..Default::default() });
+    let o = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.5, px_per_mm: 0.0, antialias: true };
     let png = cadaddy_render::raster::render_png(&list, &view, &o).unwrap();
     let r_img = cadaddy_render::images::decode(&png).unwrap();
     let img = Img { w: r_img.width as usize, h: r_img.height as usize, px: r_img.rgba.clone() };

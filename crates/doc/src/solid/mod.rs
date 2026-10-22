@@ -359,7 +359,9 @@ impl Solid3d {
                         && vertices.len() <= MAX_POLY_VERTICES
                         && faces.len() >= 4
                         && faces.len() <= MAX_POLY_FACES
-                        && vertices.iter().all(|v| v.is_finite() && v.x.abs() <= MAX_SOLID_SIZE && v.y.abs() <= MAX_SOLID_SIZE && v.z.abs() <= MAX_SOLID_SIZE)
+                        && vertices
+                            .iter()
+                            .all(|v| v.is_finite() && v.x.abs() <= MAX_SOLID_SIZE && v.y.abs() <= MAX_SOLID_SIZE && v.z.abs() <= MAX_SOLID_SIZE)
                         && faces.iter().all(|f| f.len() >= 3 && f.iter().all(|&i| (i as usize) < vertices.len()))
                 }
             }
@@ -749,7 +751,11 @@ impl Solid3d {
                 let p = loops.first().and_then(|l| l.first()).map_or(Vec2::ZERO, |v| v.p);
                 g.push((Vec3::new(p.x, p.y, *height), z, Dim::Height));
             }
-            SolidShape::Revolution { .. } | SolidShape::Sweep { .. } | SolidShape::Loft { .. } | SolidShape::Boolean { .. } | SolidShape::Polyhedron { .. } => {}
+            SolidShape::Revolution { .. }
+            | SolidShape::Sweep { .. }
+            | SolidShape::Loft { .. }
+            | SolidShape::Boolean { .. }
+            | SolidShape::Polyhedron { .. } => {}
         }
         g
     }
