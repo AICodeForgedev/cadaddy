@@ -68,6 +68,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         crate::rfipalette::DIALOG => crate::rfipalette::dialog(app, ctx, &mut open),
         crate::levelspalette::DIALOG => crate::levelspalette::dialog(app, ctx, &mut open),
         crate::fourdpalette::DIALOG => crate::fourdpalette::dialog(app, ctx, &mut open),
+        crate::tagspalette::DIALOG => crate::tagspalette::dialog(app, ctx, &mut open),
         "undohistory" => crate::historypalettes::undo_dialog(app, ctx, &mut open),
         "commandhistory" => crate::historypalettes::commands_dialog(app, ctx, &mut open),
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),

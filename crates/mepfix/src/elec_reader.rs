@@ -185,7 +185,16 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
                 let n = p.vertices.len() as f64;
                 // Corners: a closed triangle (data outlet) or rectangle (troffer, box).
                 let corners = if p.closed { p.vertices.len() } else { p.vertices.len().saturating_sub(1) };
-                centres.push(([sx / n, sy / n], if corners == 3 { "poly3" } else if corners == 4 { "poly4" } else { "poly" }));
+                centres.push((
+                    [sx / n, sy / n],
+                    if corners == 3 {
+                        "poly3"
+                    } else if corners == 4 {
+                        "poly4"
+                    } else {
+                        "poly"
+                    },
+                ));
             }
             EntityKind::Arc(a) => {
                 centres.push(([a.center.x, a.center.y], "arc"));
@@ -335,7 +344,8 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
         };
 
         // Look for exit sign shapes (rectangle with X crossing lines).
-        let kind = if crossed || (text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 && diag.len() >= 2) { "exit_sign" } else { kind };
+        let kind =
+            if crossed || (text_up.is_empty() && !has_circle && !has_poly && !has_arc && count >= 3 && diag.len() >= 2) { "exit_sign" } else { kind };
 
         // Junction box: small filled rectangle.
         let kind = if text_up.iter().any(|t| t.starts_with("JB")) { "junction_box" } else { kind };

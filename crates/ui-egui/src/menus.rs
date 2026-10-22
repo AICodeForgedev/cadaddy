@@ -101,6 +101,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("levels", "Levels", &["Window", "Levels"], None),
     ("ifcmodel", "IFC Model", &["Window", "IFC Model"], None),
     ("fourd", "4D Schedule", &["Window", "4D Schedule"], None),
+    ("elementtags", "Element Tags", &["Window", "Element Tags"], None),
     ("ui.dialog.commandhistory", "Command History Palette", &["Window", "Command History Palette"], None),
     ("ui.savescript", "Save Session as Script...", &["Tools", "Save Session as Script..."], None),
     ("ui.dialog.aliases", "Edit Aliases and Shortcuts...", &["Tools", "Customize", "Edit Aliases and Shortcuts..."], None),
@@ -797,6 +798,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                     Err(msg)
                 }
             }
+        }
+        "elementtags" => {
+            app.ui.dialog = Some(crate::tagspalette::DIALOG.into());
+            Ok(Value::Null)
         }
         // From the menu or typed: the reviewed PDF from the file dialog.
         // From the menu: pick the reviewed PDF, then its markups go on a layer per reviewer.

@@ -25,6 +25,7 @@ pub mod rfi;
 mod rules;
 mod spec;
 pub mod stairs;
+pub mod tags;
 mod takeoff;
 mod tour;
 pub mod validate;

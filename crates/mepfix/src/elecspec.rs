@@ -112,11 +112,8 @@ pub fn design(t: &mut Truth) {
     // Each circuit with a wet room's receptacles is protected at the breaker or at the device.
     let mut device_protected: Vec<String> = Vec::new();
     for c in &t.elec_circuits {
-        let wet: Vec<&crate::truth::ElecDevice> = t
-            .elec_devices
-            .iter()
-            .filter(|d| d.kind == "receptacle" && c.devices.contains(&d.id) && device_wet(t, d))
-            .collect();
+        let wet: Vec<&crate::truth::ElecDevice> =
+            t.elec_devices.iter().filter(|d| d.kind == "receptacle" && c.devices.contains(&d.id) && device_wet(t, d)).collect();
         if wet.is_empty() {
             continue;
         }
@@ -127,12 +124,8 @@ pub fn design(t: &mut Truth) {
         }
     }
     // The other subscripts, on ordinary receptacles.
-    let receptacles: Vec<(String, String, String)> = t
-        .elec_devices
-        .iter()
-        .filter(|d| d.kind == "receptacle")
-        .map(|d| (d.id.clone(), d.panel.clone(), d.circuit.clone()))
-        .collect();
+    let receptacles: Vec<(String, String, String)> =
+        t.elec_devices.iter().filter(|d| d.kind == "receptacle").map(|d| (d.id.clone(), d.panel.clone(), d.circuit.clone())).collect();
     let mut extra_done = [false; 3];
     for (id, panel, circuit) in &receptacles {
         let mut subs: Vec<String> = Vec::new();
@@ -180,7 +173,8 @@ pub fn design(t: &mut Truth) {
         spec.conductors.push((c.id.clone(), note));
     }
     // Planted luminaires: one of a type the schedule doesn't list, one with no tag.
-    let lights: Vec<usize> = t.elec_devices.iter().enumerate().filter(|(_, d)| d.kind == "light_fixture" && !d.type_tag.is_empty()).map(|(i, _)| i).collect();
+    let lights: Vec<usize> =
+        t.elec_devices.iter().enumerate().filter(|(_, d)| d.kind == "light_fixture" && !d.type_tag.is_empty()).map(|(i, _)| i).collect();
     if lights.len() >= 2 {
         let a = lights.get(r.below(lights.len())).copied().unwrap_or(0);
         let b = lights.iter().copied().find(|i| *i != a).unwrap_or(a);

@@ -124,6 +124,7 @@ pub mod rfipalette;
 pub mod ribbon;
 pub mod shortcut_menus;
 pub mod spelldlg;
+pub mod tagspalette;
 pub mod tearoff;
 pub mod theme;
 pub mod toldlg;

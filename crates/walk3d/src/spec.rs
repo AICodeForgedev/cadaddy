@@ -49,6 +49,9 @@ pub struct BuildingSpec {
     /// The sheets of the set and the level each shows (`levels.sheets`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<crate::levels::SheetLink>,
+    /// What each element is from the documents, with sources and open issues (`tags.list`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<crate::tags::ElementTag>,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -1608,6 +1611,7 @@ impl BuildingSpec {
             levels: r.levels.clone(),
             datums: Vec::new(),
             sheets: Vec::new(),
+            tags: Vec::new(),
             layers,
             wall_types,
             rooms: Vec::new(),

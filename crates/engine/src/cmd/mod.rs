@@ -55,6 +55,7 @@ pub mod rfi;
 pub mod schedules;
 mod setbylayer;
 pub mod spec_import;
+pub mod tags;
 mod vpsync;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
@@ -302,6 +303,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pdfplans::specs());
         v.extend(grids::specs());
         v.extend(levels::specs());
+        v.extend(tags::specs());
         v.extend(mep::specs());
         v.extend(gear::specs());
         v.extend(mepqty::specs());
