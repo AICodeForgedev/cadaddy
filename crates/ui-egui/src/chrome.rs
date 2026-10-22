@@ -628,11 +628,25 @@ fn fit(r: Rect, size: egui::Vec2) -> Rect {
     Rect::from_center_size(r.center(), size * k)
 }
 
-/// A recent file's preview (from the host's thumbnail service), loaded once and kept for the
-/// session; `None` when the file has none.
+/// Recent files' previews by path, each loaded once (`None`: the file has none).
+#[derive(Clone, Default)]
+struct RecentThumbs(std::collections::HashMap<String, Option<egui::TextureHandle>>);
+
+fn recent_thumbs_id() -> egui::Id {
+    egui::Id::new("cc_recent_thumbs")
+}
+
+/// Let go of the previews of files no longer on the Recent list. Kept per path for the whole
+/// session, every drawing saved under a new name held its texture after it dropped off the list
+/// (Q240: a long session grew by about 100 KB a drawing).
+fn prune_recent_thumbnails(ctx: &egui::Context, recent: &[String]) {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<RecentThumbs>(recent_thumbs_id()).0.retain(|path, _| recent.contains(path)));
+}
+
+/// A recent file's preview (from the host's thumbnail service), loaded once and kept while the
+/// file is on the Recent list; `None` when the file has none.
 fn recent_thumbnail(app: &CadApp, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(("cc_recent_thumb", path));
-    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+    if let Some(cached) = ctx.data_mut(|d| d.get_temp_mut_or_default::<RecentThumbs>(recent_thumbs_id()).0.get(path).cloned()) {
         return cached;
     }
     let tex = app.services.thumbnail.as_ref().and_then(|f| f(path)).and_then(|png| {
@@ -641,7 +655,7 @@ fn recent_thumbnail(app: &CadApp, ctx: &egui::Context, path: &str) -> Option<egu
         let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
         Some(ctx.load_texture(format!("recent-thumb:{path}"), color, egui::TextureOptions::LINEAR))
     });
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<RecentThumbs>(recent_thumbs_id()).0.insert(path.to_string(), tex.clone()));
     tex
 }
 
@@ -685,6 +699,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     p.text(main.min, egui::Align2::LEFT_TOP, crate::tl!("Recent"), egui::FontId::proportional(22.0), t.text);
     let mut recent = None;
     let mut y = main.top() + 44.0;
+    prune_recent_thumbnails(ui.ctx(), &app.ui.recent_files);
     for (i, path) in app.ui.recent_files.iter().enumerate() {
         let row = Rect::from_min_size(pos2(main.left(), y), vec2((r.right() - main.left() - 36.0).clamp(0.0, 640.0), 42.0));
         let resp = ui.interact(row, ui.id().with(("recent", i)), Sense::click());
@@ -808,5 +823,25 @@ mod tests {
         assert_eq!(visible_tabs(&w, Some(3), 0.0), 3..4);
         assert_eq!(visible_tabs(&w, Some(9), f32::NAN), 0..0);
         assert_eq!(visible_tabs(&[], Some(0), 100.0), 0..0);
+    }
+
+    /// Previews of files that dropped off the Recent list are let go (Q240), with their textures.
+    #[test]
+    fn recent_previews_follow_the_recent_list() {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::filled([4, 3], egui::Color32::WHITE);
+        let cached = |ctx: &egui::Context| ctx.data_mut(|d| d.get_temp_mut_or_default::<RecentThumbs>(recent_thumbs_id()).0.len());
+        let base = ctx.tex_manager().read().num_allocated();
+        let paths: Vec<String> = (0..200).map(|i| format!("drawings/Sample {i}.cdy")).collect();
+        for (i, p) in paths.iter().enumerate() {
+            let tex = (i % 2 == 0).then(|| ctx.load_texture(format!("recent-thumb:{p}"), image.clone(), egui::TextureOptions::LINEAR));
+            ctx.data_mut(|d| d.get_temp_mut_or_default::<RecentThumbs>(recent_thumbs_id()).0.insert(p.clone(), tex));
+            // The Start page shows the last few saved, as the Recent list keeps them.
+            prune_recent_thumbnails(&ctx, &paths[i.saturating_sub(9)..=i]);
+        }
+        assert_eq!(cached(&ctx), 10);
+        assert!(ctx.tex_manager().read().num_allocated() <= base + 5);
+        prune_recent_thumbnails(&ctx, &[]);
+        assert_eq!((cached(&ctx), ctx.tex_manager().read().num_allocated()), (0, base));
     }
 }
