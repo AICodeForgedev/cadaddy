@@ -8,9 +8,13 @@ use e2e_common::E2e;
 use egui::{Event, Key, Modifiers};
 use serde_json::{Value, json};
 
-/// The text fields of the Quick Properties window: those left of the docked Properties palette.
+/// The text fields of the Quick Properties window: those left of the docked Properties palette
+/// (the command line is a text box for screen magnifiers too, so it's left out).
 fn quick_fields(e: &mut E2e, palette_left: f64) -> Vec<Value> {
-    e.elements().into_iter().filter(|x| x["role"] == "textedit" && x["rect"][0].as_f64().is_some_and(|l| l < palette_left)).collect()
+    e.elements()
+        .into_iter()
+        .filter(|x| x["role"] == "textedit" && x["label"] != "Command line" && x["rect"][0].as_f64().is_some_and(|l| l < palette_left))
+        .collect()
 }
 
 fn key(e: &mut E2e, k: Key, modifiers: Modifiers) {
