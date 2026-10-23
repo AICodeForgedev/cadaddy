@@ -226,11 +226,9 @@ fn tag_caps() -> (usize, usize) {
     if let Some(c) = tests::TAG_CAPS.get() {
         return c;
     }
-    (MAX_DXF_TAGS, MAX_DWG_TAGS)
+    (cadaddy_dxf::max_tags(), MAX_DWG_TAGS)
 }
 
-/// Most group codes the DXF reader takes from a file (`cadaddy_dxf::MAX_TAGS`).
-const MAX_DXF_TAGS: usize = cadaddy_dxf::MAX_TAGS;
 /// Most group codes of the DXF a DWG converts to that are read: the DWG is compressed, so its
 /// DXF rendition runs to about 0.6 group codes per byte of DWG (a 98 MB DWG of 1.13 M objects
 /// converts to 60 M), past the cap that guards DXF files. The converter's own byte limit
