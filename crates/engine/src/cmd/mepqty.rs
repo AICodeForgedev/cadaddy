@@ -250,7 +250,9 @@ fn kind_str(kind: MepKind) -> &'static str {
 }
 
 fn r2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    let r = (v * 100.0).round() / 100.0;
+    // + 0.0 turns -0.0 (a tiny negative sum) into 0.0, so reports never say "-0.0 ft".
+    r + 0.0
 }
 
 // ---------------- the takeoff ----------------

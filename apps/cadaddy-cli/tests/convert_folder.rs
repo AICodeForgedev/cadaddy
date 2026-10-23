@@ -188,3 +188,20 @@ fn bad_folders_are_refused() {
     assert!(!dir.join("o").exists(), "nothing made");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A folder holding only PDFs converts them too (the same import as `convert IN.pdf OUT`), each
+/// under its own name in its own subfolder.
+#[test]
+fn pdfs_in_a_folder_convert() {
+    let dir = folder("pdfs");
+    let (input, out) = (dir.join("in"), dir.join("out"));
+    std::fs::create_dir_all(input.join("Sheets")).unwrap();
+    let dxf = dir.join("plan.dxf");
+    assert!(cli(&["sample", "floorplan", &s(&dxf)]).status.success());
+    let pdf = input.join("Sheets").join("Plan A.pdf");
+    let made = cli(&["convert", &s(&dxf), &s(&pdf)]);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let o = cli(&["convert", &s(&input), &s(&out), "--to", "cdy", "--recurse"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.join("Sheets").join("Plan A.cdy").is_file());
+}
