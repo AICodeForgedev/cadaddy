@@ -724,6 +724,11 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                     if let Err(error) = u.docking.validate() {
                         return err(error);
                     }
+                    // The control channel is an agent: the same user-only rail as `options`.
+                    let check_for_updates = p.get("checkForUpdates").and_then(Value::as_bool);
+                    if let Err(error) = crate::options::user_only_fields(app, true, Some(u.control_token), Some(u.agent_control), check_for_updates) {
+                        return err(error);
+                    }
                     app.ui = u;
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }
