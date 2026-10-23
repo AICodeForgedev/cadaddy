@@ -125,6 +125,32 @@ impl Source {
     fn github() -> Source {
         Source { api: API.into(), downloads: DOWNLOADS.into(), keys: crate::relsig::trusted_keys() }
     }
+
+    /// When `CADADDY_UPDATE_GATE` is set (a non-empty token), `CADADDY_UPDATE_API`,
+    /// `CADADDY_UPDATE_DOWNLOADS` and `CADADDY_UPDATE_KEY` override the compiled-in GitHub
+    /// defaults. This lets `cargo xtask update-gate` point an installed app at a local fake
+    /// release server signed with a test key, so the gate exercises the real updater end-to-end.
+    /// The gate token prevents accidental activation by normal users.
+    fn from_gate_env() -> Option<Source> {
+        let _gate = std::env::var("CADADDY_UPDATE_GATE").ok().filter(|t| !t.is_empty())?;
+        let api = std::env::var("CADADDY_UPDATE_API").ok().filter(|s| !s.is_empty())?;
+        let downloads = std::env::var("CADADDY_UPDATE_DOWNLOADS").ok().filter(|s| !s.is_empty())?;
+        let key_hex = std::env::var("CADADDY_UPDATE_KEY").ok().filter(|s| s.len() == 64)?;
+        let key = parse_hex_key(&key_hex)?;
+        log::info!("update-gate: using override source api={api} downloads={downloads}");
+        Some(Source { api, downloads, keys: vec![key] })
+    }
+}
+
+fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(key)
 }
 
 /// The latest release at `src`: its version, page, and this platform's installer.
@@ -287,7 +313,8 @@ pub struct DesktopUpdater {
 
 impl Default for DesktopUpdater {
     fn default() -> Self {
-        DesktopUpdater::new(Source::github(), install_target())
+        let source = Source::from_gate_env().unwrap_or_else(Source::github);
+        DesktopUpdater::new(source, install_target())
     }
 }
 
