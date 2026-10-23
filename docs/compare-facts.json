@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1052,
-    "count": 1052,
+    "callableAsJson": 1053,
+    "count": 1053,
     "ids": [
       "-attedit",
       "-block",
@@ -106,6 +106,7 @@
       "bedit",
       "bim.bom",
       "bim.build",
+      "bim.colour",
       "bim.get_spec",
       "bim.prints",
       "bim.remove_type",
