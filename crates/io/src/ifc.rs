@@ -696,6 +696,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let mut mep_sizes: Vec<(usize, Vec<[f64; 2]>, u64)> = Vec::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
+    // All products that have a BIM spec: (product instance number, entity handle).
+    let mut bim_products: Vec<(usize, u64)> = Vec::new();
     // Walls by their spec wall type (its index), for their materials and properties.
     let mut typed: Vec<(usize, usize)> = Vec::new();
     // Ceilings and soffits by their spec type: (soffit, type index, covering product).
@@ -748,6 +750,10 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             }
         };
         let product = o.add(line);
+        // Track products with BIM spec marks for pset writing.
+        if cadaddy_doc::bimspec::entity_type_mark(&it.e.common.xdata).is_some() {
+            bim_products.push((product, it.e.handle.0));
+        }
         if kd.class == Class::Wall
             && let Some(sp) = &spec
             && let Some(i) = wall_type_of(it.e).and_then(|n| sp.wall_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n)))
@@ -911,8 +917,9 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     }
     // BIM spec property sets (CaDaddy_Spec): entities with a type mark → IfcPropertySet with the
     // type's fields as IfcPropertySingleValue (all text). Attached via IfcRelDefinesByProperties.
-    for p in &placed {
-        let ent = d.entity(cadaddy_doc::Handle(p.handle));
+    // Also: Pset_ManufacturerTypeInformation (standard IFC pset) and CaDaddy_SpecSource (provenance).
+    for &(product, handle) in &bim_products {
+        let ent = d.entity(cadaddy_doc::Handle(handle));
         let mark = ent.and_then(|e| cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata));
         let ty = mark.and_then(|m| d.bim_types.get(m));
         if let (Some(mark), Some(ty)) = (mark, ty) {
@@ -928,8 +935,55 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
                 let prop = o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)", step_str(key), step_str(&field.value)));
                 prop_ids.push(prop);
             }
-            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_Spec',$,{})", id(p.handle, 20), refs(&prop_ids)));
-            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{}),#{pset})", id(p.handle, 21), p.product));
+            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_Spec',$,{})", id(handle, 20), refs(&prop_ids)));
+            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{pset})", id(handle, 21)));
+
+            // Pset_ManufacturerTypeInformation (IFC4 standard pset): Manufacturer + ModelReference.
+            let mfr = ty.get_field(cadaddy_doc::bimspec::keys::MANUFACTURER);
+            let model_ref = ty.get_field(cadaddy_doc::bimspec::keys::CATALOG_NUMBER);
+            if mfr.is_some() || model_ref.is_some() {
+                let mut mfr_ids = Vec::new();
+                if let Some(f) = mfr {
+                    mfr_ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('Manufacturer',$,IFCLABEL({}),$)", step_str(&f.value))));
+                }
+                if let Some(f) = model_ref {
+                    mfr_ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('ModelReference',$,IFCLABEL({}),$)", step_str(&f.value))));
+                }
+                let mfr_pset = o.add(format!(
+                    "IFCPROPERTYSET('{}',$,'Pset_ManufacturerTypeInformation',$,{})",
+                    id(handle, 24),
+                    refs(&mfr_ids)
+                ));
+                o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{mfr_pset})", id(handle, 25)));
+            }
+
+            // CaDaddy_SpecSource: source and confidence per field for provenance.
+            let source_fields: Vec<_> = ty.fields.iter().filter(|(_, f)| !f.source.is_empty() || f.confidence != cadaddy_doc::bimspec::Confidence::Stated).take(200).collect();
+            if !source_fields.is_empty() {
+                let mut src_ids = Vec::new();
+                for (key, field) in &source_fields {
+                    if !field.source.is_empty() {
+                        src_ids.push(o.add(format!(
+                            "IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)",
+                            step_str(&format!("{key}.source")),
+                            step_str(&field.source)
+                        )));
+                    }
+                    if field.confidence != cadaddy_doc::bimspec::Confidence::Stated {
+                        src_ids.push(o.add(format!(
+                            "IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)",
+                            step_str(&format!("{key}.confidence")),
+                            step_str(field.confidence.as_str())
+                        )));
+                    }
+                }
+                let src_pset = o.add(format!(
+                    "IFCPROPERTYSET('{}',$,'CaDaddy_SpecSource',$,{})",
+                    id(handle, 26),
+                    refs(&src_ids)
+                ));
+                o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{src_pset})", id(handle, 27)));
+            }
         }
     }
     for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {

@@ -2679,3 +2679,99 @@ fn project_rules_roundtrip_in_dxf() {
     assert_eq!(rt.project_rules.rules.len(), 3);
     assert_eq!(rt.project_rules.label, "Sample Tower");
 }
+
+/// MUST 4: IFC export writes CaDaddy_Spec, Pset_ManufacturerTypeInformation and source/confidence.
+#[test]
+fn bim_spec_ifc_psets() {
+    use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
+    let mut d = Drawing::new_imperial();
+    // Set building spec so IFC export can write.
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"Level 1","elevation":0}]}"#.into());
+    // Create a type with manufacturer + catalog + sourced field.
+    let mut h = BimType::new("H");
+    h.category = "luminaire".into();
+    h.set_field("manufacturer", SpecField::new("Lithonia").with_source("spec 26 51 13 p.4"));
+    h.set_field("catalogNumber", SpecField::new("2GTL4 4400LM").with_source("submittal p.2").with_confidence(Confidence::Stated));
+    h.set_field("volts", SpecField::new("120/277").with_confidence(Confidence::Inferred));
+    d.bim_types.set(h);
+    // Create two simple box meshes and assign them BIM type H.
+    let box_mesh = |x: f64| Mesh {
+        vertices: vec![
+            Vec3::new(x, 0.0, 0.0), Vec3::new(x + 2.0, 0.0, 0.0),
+            Vec3::new(x + 2.0, 2.0, 0.0), Vec3::new(x, 2.0, 0.0),
+            Vec3::new(x, 0.0, 2.0), Vec3::new(x + 2.0, 0.0, 2.0),
+            Vec3::new(x + 2.0, 2.0, 2.0), Vec3::new(x, 2.0, 2.0),
+        ],
+        faces: vec![
+            MeshFace { v: vec![0, 1, 2, 3], hidden: 0 },
+            MeshFace { v: vec![4, 5, 6, 7], hidden: 0 },
+            MeshFace { v: vec![0, 1, 5, 4], hidden: 0 },
+            MeshFace { v: vec![2, 3, 7, 6], hidden: 0 },
+            MeshFace { v: vec![0, 3, 7, 4], hidden: 0 },
+            MeshFace { v: vec![1, 2, 6, 5], hidden: 0 },
+        ],
+        kind: MeshKind::default(),
+    };
+    let xdata = bimspec::type_mark_xdata("H");
+    let c1 = Common { xdata: xdata.clone().into(), ..Common::default() };
+    let c2 = Common { xdata: xdata.into(), ..Common::default() };
+    d.add(&Space::Model, c1, EntityKind::Mesh(box_mesh(0.0))).unwrap();
+    d.add(&Space::Model, c2, EntityKind::Mesh(box_mesh(10.0))).unwrap();
+    // Write IFC.
+    let ifc_bytes = crate::ifc::write_ifc(&d, "test").unwrap();
+    let ifc_text = std::str::from_utf8(&ifc_bytes).unwrap();
+    // Exactly 2 CaDaddy_Spec psets.
+    let spec_count = ifc_text.matches("'CaDaddy_Spec'").count();
+    assert_eq!(spec_count, 2, "expected 2 CaDaddy_Spec psets, got {spec_count}");
+    // Pset_ManufacturerTypeInformation present (at least 2 — one per entity with the type).
+    let mfr_count = ifc_text.matches("'Pset_ManufacturerTypeInformation'").count();
+    assert_eq!(mfr_count, 2, "expected 2 Pset_ManufacturerTypeInformation psets, got {mfr_count}");
+    // Manufacturer value appears.
+    assert!(ifc_text.contains("'Manufacturer'"), "Manufacturer property missing");
+    assert!(ifc_text.contains("'Lithonia'"), "Lithonia value missing");
+    // ModelReference from catalogNumber.
+    assert!(ifc_text.contains("'ModelReference'"), "ModelReference property missing");
+    assert!(ifc_text.contains("'2GTL4 4400LM'"), "catalog number value missing");
+    // CaDaddy_SpecSource with source and confidence info.
+    let src_count = ifc_text.matches("'CaDaddy_SpecSource'").count();
+    assert_eq!(src_count, 2, "expected 2 CaDaddy_SpecSource psets, got {src_count}");
+    assert!(ifc_text.contains("'manufacturer.source'"), "manufacturer.source property missing");
+    assert!(ifc_text.contains("'spec 26 51 13 p.4'"), "manufacturer source value missing");
+    assert!(ifc_text.contains("'volts.confidence'"), "volts.confidence property missing");
+    assert!(ifc_text.contains("'inferred'"), "inferred confidence value missing");
+}
+
+/// MUST 5: BIM types and entity marks survive DWG round-trip.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bim_types_roundtrip_in_dwg() {
+    use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
+    let mut d = Drawing::new_imperial();
+    let mut h = BimType::new("H");
+    h.category = "luminaire".into();
+    h.set_field("description", SpecField::new("recessed 2x4 LED troffer").with_source("E-1 schedule row 3"));
+    h.set_field("manufacturer", SpecField::new("Lithonia"));
+    h.set_field("volts", SpecField::new("120/277").with_confidence(Confidence::Inferred));
+    d.bim_types.set(h);
+    let mut c1 = BimType::new("C1");
+    c1.category = "conduit".into();
+    c1.set_field("racewayMaterial", SpecField::new("PVC Sch 40"));
+    d.bim_types.set(c1);
+    // Add an entity with a BIM mark.
+    let xdata = bimspec::type_mark_xdata("H");
+    let common = Common { xdata: xdata.into(), ..Common::default() };
+    let entity_h = d.add(&Space::Model, common, EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1.0 })).unwrap();
+    // DWG round-trip.
+    let back = read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
+    assert_eq!(back.bim_types.len(), 2, "both BIM types survive DWG round-trip");
+    let ht = back.bim_types.get("H").unwrap();
+    assert_eq!(ht.category, "luminaire");
+    assert_eq!(ht.get_field("description").map(|f| f.value.as_str()), Some("recessed 2x4 LED troffer"));
+    assert_eq!(ht.get_field("description").map(|f| f.source.as_str()), Some("E-1 schedule row 3"));
+    assert_eq!(ht.get_field("volts").map(|f| f.confidence), Some(Confidence::Inferred));
+    let ct = back.bim_types.get("C1").unwrap();
+    assert_eq!(ct.get_field("racewayMaterial").map(|f| f.value.as_str()), Some("PVC Sch 40"));
+    // Entity mark survives.
+    let ent = back.entity(entity_h).unwrap();
+    assert_eq!(bimspec::entity_type_mark(&ent.common.xdata), Some("H"));
+}
