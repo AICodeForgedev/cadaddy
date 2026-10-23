@@ -636,11 +636,13 @@ pub fn shows_hangul(language: &str) -> bool {
 
 /// Whether the interface can show `language` without missing-glyph boxes: Chinese needs a font
 /// with its glyphs (installed, or the CJK face this build embedded from craft-fonts), Korean a
-/// font with Hangul, العربية an installed Arabic font or the embedded Arabic face.
+/// font with Hangul, العربية an installed Arabic font or the embedded Arabic face, ქართული the
+/// embedded Georgian face.
 pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
         "ar" => arabic_font().is_some() || embedded_script("Arab"),
+        "ka" => embedded_script("Geor"),
         l if l.starts_with("zh") => cjk_font().is_some() || embedded_script("Hans") || embedded_script("Hant"),
         _ => true,
     }

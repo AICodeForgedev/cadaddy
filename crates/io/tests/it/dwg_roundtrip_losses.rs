@@ -1,6 +1,5 @@
 //! Data that used to be lost only when a drawing is saved as DWG and reopened (the DWG bridge
 //! converts our DXF with acadrust), and the paper-space viewport the DXF writer adds for it.
-#![cfg(not(target_arch = "wasm32"))]
 
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::*;

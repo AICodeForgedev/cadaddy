@@ -1,5 +1,5 @@
 //! The app's control channel answers `cmdline.input` and `app.open` with the same reply shape as
-//! the headless MCP backend (`cadcraft_mcp::Headless`, tested in `crates/mcp/tests/cmdline_parity.rs`).
+//! the headless MCP backend (`cadcraft_mcp::Headless`, tested in `crates/mcp/tests/it/cmdline_parity.rs`).
 
 use cadcraft_engine::Session;
 use cadcraft_ui_egui::control::{ControlRequest, Outcome, handle};

@@ -1,5 +1,5 @@
 //! The headless backend's `control.methods` lists the methods it answers, all of them documented
-//! in `docs/control-protocol.md` (the app's list is tested in `crates/ui-egui/tests/control_methods.rs`).
+//! in `docs/control-protocol.md` (the app's list is tested in `crates/ui-egui/tests/it/control_methods.rs`).
 
 use std::collections::BTreeSet;
 
@@ -7,7 +7,7 @@ use cadcraft_mcp::{Backend, Headless};
 use serde_json::json;
 
 fn documented() -> BTreeSet<String> {
-    let doc = include_str!("../../../docs/control-protocol.md");
+    let doc = include_str!("../../../../docs/control-protocol.md");
     let table = doc.lines().skip_while(|l| !l.starts_with("| Method |")).skip(2).take_while(|l| l.starts_with('|'));
     table.filter_map(|l| l.split('|').nth(1)).flat_map(|cell| cell.split('`').skip(1).step_by(2).map(str::to_string).collect::<Vec<_>>()).collect()
 }

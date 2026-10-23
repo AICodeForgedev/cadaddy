@@ -29,7 +29,7 @@ fn session() -> (Session, Handle) {
 /// As [`session`], with the fixture's text changed by `edit` first.
 fn session_with(edit: impl Fn(String) -> String) -> (Session, Handle) {
     let grip = "0 BLOCKLINEARGRIP\n5 68\n330 61\n100 AcDbEvalExpr\n90 9\n98 33\n99 232\n100 AcDbBlockElement\n300 End Grip\n98 33\n99 232\n1071 0\n";
-    let src = include_str!("../../io/tests/data/dynblock_door.txt")
+    let src = include_str!("../../../io/tests/data/dynblock_door.txt")
         .replace("\r\n", "\n")
         .replace("170 4\n91 0\n91 0\n", "170 4\n91 8\n91 9\n")
         .replace("1030 0\n93 0\n170 0\n171 0\n100 AcDbBlockVisibilityParameter", "1030 0\n93 10\n170 0\n171 0\n100 AcDbBlockVisibilityParameter")

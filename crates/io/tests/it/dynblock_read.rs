@@ -22,7 +22,7 @@ fn dxf(src: &str) -> String {
 /// The DOOR drawing as `code value` lines (shared with the engine's dynamic grip tests), with
 /// LF line ends whatever a checkout gave the file.
 fn fixture() -> String {
-    include_str!("data/dynblock_door.txt").replace("\r\n", "\n")
+    include_str!("../data/dynblock_door.txt").replace("\r\n", "\n")
 }
 
 fn h(hex: &str) -> Handle {

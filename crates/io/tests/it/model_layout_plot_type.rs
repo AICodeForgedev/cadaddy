@@ -2,7 +2,6 @@
 //! fitted to the paper. Plot type 5 ("Layout information", DXF Reference, PLOTSETTINGS group 74)
 //! means nothing for model space; another program's Plot dialog then showed no plot area and no
 //! scale for Model.
-#![cfg(not(target_arch = "wasm32"))]
 
 use cadcraft_doc::*;
 use cadcraft_geom::Vec3;

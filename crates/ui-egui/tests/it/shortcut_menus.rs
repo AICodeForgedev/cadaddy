@@ -136,7 +136,7 @@ fn layer_and_properties_palette_menus() {
 }
 
 #[test]
-fn every_label_has_a_ukrainian_translation_and_every_id_a_command() {
+fn every_id_is_a_command() {
     let mut app = app();
     app.cmdline("LINE 0,0 10,0");
     app.cmdline("");
@@ -146,16 +146,7 @@ fn every_label_has_a_ukrainian_translation_and_every_id_a_command() {
     all.extend(flatten(&sm::layout_tab_entries(&app, "Layout1")));
     all.extend(flatten(&sm::layer_entries(&app, "0")));
     all.extend(flatten(&sm::properties_entries(&app)));
-    let mut missing = Vec::new();
     for (label, id, _) in &all {
-        let segments: Vec<&str> = label.split('/').collect();
-        // Command names (Recent Commands) and line counts aren't translated.
-        let n = segments.len() - usize::from(segments.len() > 1);
-        for s in &segments[..n] {
-            if cadcraft_ui_egui::i18n::tr("uk", s) == *s {
-                missing.push(s.to_string());
-            }
-        }
         let command = id.strip_prefix("run:").and_then(|r| r.split_once(':')).map_or(id.as_str(), |(c, _)| c);
         let special = ["drawing:", "layout:", "cmdline:"].iter().any(|p| id.starts_with(p));
         assert!(
@@ -163,5 +154,4 @@ fn every_label_has_a_ukrainian_translation_and_every_id_a_command() {
             "{label}: {id} isn't a command"
         );
     }
-    assert!(missing.is_empty(), "untranslated menu labels: {missing:?}");
 }

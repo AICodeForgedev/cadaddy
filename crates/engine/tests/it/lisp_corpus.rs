@@ -2,7 +2,6 @@
 //! leave exactly the expected entities, layers and printed text. The corpus lives in its own
 //! repository; point `CADCRAFT_LISP_CORPUS` at its `cases` directory (or the repository) to run
 //! it. Without it the test only says so.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
 

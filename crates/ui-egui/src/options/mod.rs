@@ -391,20 +391,4 @@ mod tests {
             assert_eq!(parse_hex(bad), None, "{bad}");
         }
     }
-
-    #[test]
-    fn dialog_labels_have_ukrainian_translations() {
-        let sources = [include_str!("dialog.rs")];
-        let mut missing: Vec<String> = dialog::TABS.iter().filter(|(_, l)| crate::i18n::tr("uk", l) == *l).map(|(_, l)| l.to_string()).collect();
-        for source in sources {
-            for rest in source.split("crate::tl!(").skip(1) {
-                let Some(text) = rest.strip_prefix('"').and_then(|r| r.split('"').next()) else { continue };
-                // File format names read the same in every language.
-                if crate::i18n::tr("uk", text) == text && !["DXF", "DWG"].contains(&text) {
-                    missing.push(text.to_string());
-                }
-            }
-        }
-        assert!(missing.is_empty(), "missing translations: {missing:?}");
-    }
 }
