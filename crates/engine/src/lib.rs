@@ -1232,6 +1232,10 @@ pub struct Session {
     pub background_checks: bool,
     /// Drywall view mode: walls coloured by type, fire rating, board layers or height rule.
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
+    /// Pre-computed handle→colour map for the drywall view mode (for the renderer).
+    pub drywall_color_overrides: std::collections::BTreeMap<cadaddy_doc::Handle, [u8; 3]>,
+    /// Layer boundary lines for the renderer: each entry is two 3D points forming a line segment.
+    pub drywall_layer_lines: Vec<([f64; 3], [f64; 3])>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
     /// The open print-set project (Q310): classification, stages, dashboard.
@@ -1351,6 +1355,8 @@ impl Session {
             events: events::EventLog::default(),
             background_checks: false,
             drywall_viewmode: None,
+            drywall_color_overrides: std::collections::BTreeMap::new(),
+            drywall_layer_lines: Vec::new(),
             project: None,
             printset_project: None,
             rhai: rhai_engine::RhaiState::new(),
