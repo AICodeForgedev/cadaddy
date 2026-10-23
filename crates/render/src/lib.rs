@@ -330,6 +330,11 @@ pub struct Options {
     pub projection: Option<cadaddy_geom::view3::Projection>,
     /// Shade field values with a grey box (FIELDDISPLAY, on screen only).
     pub field_shading: bool,
+    /// Per-entity colour overrides (e.g. from drywall view modes): handle → [R, G, B].
+    pub color_overrides: std::collections::BTreeMap<Handle, [u8; 3]>,
+    /// Layer boundary lines for wall meshes: each entry is two 3D points forming a line segment.
+    /// These are drawn as thin grey lines over wall entities to show the assembly layer stack.
+    pub layer_lines: Vec<([f64; 3], [f64; 3])>,
 }
 
 impl Options {
@@ -355,6 +360,8 @@ impl Default for Options {
             cancel: None,
             projection: None,
             field_shading: false,
+            color_overrides: std::collections::BTreeMap::new(),
+            layer_lines: Vec::new(),
         }
     }
 }
@@ -690,6 +697,29 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
                 continue;
             }
             top_entity(&mut b, d, e);
+        }
+    }
+    // Drywall layer boundary lines: thin grey lines overlaid on wall entities.
+    if !opts.layer_lines.is_empty() {
+        let grey = Rgb(160, 160, 160);
+        for &([x0, y0, _z0], [x1, y1, _z1]) in &opts.layer_lines {
+            let start = b.list.verts.len() as u32;
+            let a = Vec2::new(x0, y0);
+            let c = Vec2::new(x1, y1);
+            b.list.bounds.add(a);
+            b.list.bounds.add(c);
+            b.list.verts.push(a);
+            b.list.verts.push(c);
+            b.list.prims.push(DPrim {
+                handle: Handle(0),
+                color: grey,
+                aci7: false,
+                lw: 0.0,
+                transparency: 0,
+                kind: Kind::Polyline,
+                start,
+                len: 2,
+            });
         }
     }
     // A layout is drawn in paper units, so its pens become geometry now.
@@ -1357,6 +1387,16 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     if !visible {
         return;
     }
+    // Apply colour overrides (e.g. drywall view modes) for the top-level entity.
+    let rgb = if ctx.depth == 0 {
+        if let Some(&[r, g, b_]) = b.opts.color_overrides.get(&ctx.top) {
+            Ink { rgb: Rgb(r, g, b_), aci7: false, aci: 0 }
+        } else {
+            rgb
+        }
+    } else {
+        rgb
+    };
     if b.opts.transparency {
         b.transparency = transparency(e.common.transparency, layer_transparency, ctx.block_transparency);
     }
