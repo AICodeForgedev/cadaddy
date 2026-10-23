@@ -338,6 +338,8 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
+            // True device positions on the A-sheet (small crosses).
+            draw_devices_arch(&mut pen, t, l);
             legend.push(item("base_cabinet", "BASE CABINET"));
             legend.push(item("upper_cabinet", "UPPER CABINET"));
             legend.push(item("counter", "COUNTERTOP"));
@@ -999,13 +1001,16 @@ fn plan_title(pen: &mut Pen, t: &Truth, sh: &Sheet) {
     let _ = t;
 }
 
-/// Electrical devices (receptacles, switches) as small symbols on the architectural background.
+/// Electrical devices (receptacles, switches) as small symbols on the E-sheet.
+/// Symbols are drawn at the diagrammatic position (`diag_ft`), offset from the true
+/// architectural position for readability.
 fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
     let th = pen.st.text_in;
     for dev in t.devices.iter().filter(|d| d.level == level) {
-        let c = pen.b(dev.at_ft);
-        let r = pen.bl(0.25); // symbol radius in model units
-        // Receptacle: small circle with two parallel lines; switch: circle with S.
+        // Use the diagrammatic position for E-sheet drawing.
+        let pos = if dev.diag_ft != [0.0, 0.0] { dev.diag_ft } else { dev.at_ft };
+        let c = pen.b(pos);
+        let r = pen.bl(0.25);
         match dev.kind.as_str() {
             "receptacle" => {
                 pen.circle("ELEC", c, r);
@@ -1020,8 +1025,21 @@ fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
                 pen.circle("ELEC", c, r * 0.7);
             }
         }
-        // Tag text beside the symbol.
         pen.text("ELEC-TEXT", Vec2::new(c.x + r * 1.5, c.y), th * 0.7, &dev.tag, 0.0, HAlign::Left, VAlign::Middle);
+    }
+}
+
+/// Electrical devices drawn at their true architectural positions on A-sheets (small X marks
+/// showing where the device actually goes on the wall).
+fn draw_devices_arch(pen: &mut Pen, t: &Truth, level: &str) {
+    let th = pen.st.text_in;
+    for dev in t.devices.iter().filter(|d| d.level == level) {
+        let c = pen.b(dev.at_ft);
+        let r = pen.bl(0.12);
+        // Small cross at the true position.
+        pen.line("ELEC-ARCH", Vec2::new(c.x - r, c.y - r), Vec2::new(c.x + r, c.y + r));
+        pen.line("ELEC-ARCH", Vec2::new(c.x - r, c.y + r), Vec2::new(c.x + r, c.y - r));
+        pen.text("ELEC-ARCH", Vec2::new(c.x + r * 1.5, c.y), th * 0.5, &dev.tag, 0.0, HAlign::Left, VAlign::Middle);
     }
 }
 

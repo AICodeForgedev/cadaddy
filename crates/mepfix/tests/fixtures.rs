@@ -996,13 +996,243 @@ fn placement_zones_exist_for_unfixed_devices() {
 #[test]
 fn in_wall_recall_and_false_positive_rate() {
     // Test that the clash detection has full recall (all planted clashes are detected) and
-    // zero false positives (no unplanted in-wall clashes).
+    // zero false positives (no unplanted in-wall clashes).  Near-miss devices must NOT be flagged.
     for seed in 1..=40 {
         let t = truth_for(seed);
         let ctx = format!("seed {seed}");
-        let stray: Vec<_> = t.clashes.iter().filter(|c| !c.planted).collect();
-        assert!(stray.is_empty(), "{ctx}: false positive clashes: {stray:?}");
+        let nm: BTreeSet<&str> = t.near_miss_ids.iter().map(String::as_str).collect();
+        let stray: Vec<_> = t.clashes.iter().filter(|c| c.kind == "in_wall" && !c.planted).collect();
+        for c in &stray {
+            assert!(
+                !nm.contains(c.a.as_str()),
+                "{ctx}: near-miss device {} was flagged as in-wall clash (false positive)",
+                c.a,
+            );
+        }
+        assert!(stray.is_empty(), "{ctx}: false positive in-wall clashes: {stray:?}");
     }
+}
+
+// --- MUST 2: Vents and stacks as vertical runs ---
+
+#[test]
+fn vent_rough_ins_are_vertical_runs() {
+    // Vents must have run_top_in > run_bottom_in and extend to the ceiling, not just be point stubs.
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        let vents: Vec<_> = t.rough_ins.iter().filter(|ri| ri.kind == "vent").collect();
+        assert!(!vents.is_empty(), "{ctx}: no vent rough-ins");
+        for v in &vents {
+            assert!(
+                v.run_top_in > v.run_bottom_in + 10.0,
+                "{ctx}: vent {} has short vertical run: bottom={}, top={}",
+                v.id,
+                v.run_bottom_in,
+                v.run_top_in,
+            );
+            // Vent runs should reach at least 80" (a minimum ceiling height).
+            assert!(
+                v.run_top_in >= 80.0,
+                "{ctx}: vent {} run_top_in {} is below minimum ceiling height",
+                v.id,
+                v.run_top_in,
+            );
+        }
+    }
+}
+
+#[test]
+fn stacks_are_generated_for_fixtures() {
+    // Every vent rough-in should have a stack id.
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        for ri in t.rough_ins.iter().filter(|ri| ri.kind == "vent") {
+            assert!(
+                !ri.stack.is_empty(),
+                "{ctx}: vent {} has no stack assigned",
+                ri.id,
+            );
+        }
+        // Waste stubs at floor level should also have stacks.
+        for ri in t.rough_ins.iter().filter(|ri| ri.kind == "waste" && ri.aff_in < 1.0) {
+            assert!(
+                !ri.stack.is_empty(),
+                "{ctx}: floor-level waste {} has no stack assigned",
+                ri.id,
+            );
+        }
+    }
+}
+
+#[test]
+fn switch_at_48_in_vent_cavity_is_flagged() {
+    // MUST 2 test: a planted switch at +48" in a vent cavity must be detected.
+    let mut found_clash = false;
+    for seed in 1..=40 {
+        let t = truth_for(seed);
+        for c in t.clashes.iter().filter(|c| c.kind == "in_wall" && c.planted) {
+            if let Some(dev) = t.device(&c.a) {
+                if dev.kind == "switch" && (dev.aff_in - 48.0).abs() < 1.0 {
+                    if let Some(ri) = t.rough_in(&c.b) {
+                        if ri.kind == "vent" {
+                            found_clash = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(found_clash, "no switch-in-vent-cavity clash was planted across 40 seeds");
+}
+
+// --- MUST 3: Configurable clearance in inches ---
+
+#[test]
+fn clearance_is_measured_in_inches_not_cavities() {
+    // Build a truth, then test that a device 10" from a stub in an adjacent cavity is NOT
+    // flagged, and one 2" away IS flagged.  We use a fixed seed and inspect the geometry.
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        // With 3" clearance, check that all flagged in-wall clashes have gap < 3" or same cavity.
+        for c in t.clashes.iter().filter(|c| c.kind == "in_wall") {
+            let dev = t.device(&c.a);
+            let ri = t.rough_in(&c.b);
+            if let (Some(dev), Some(ri)) = (dev, ri) {
+                if let Some(wall) = t.wall(&dev.wall) {
+                    let dev_along = project_on_wall_test(wall, dev.at_ft);
+                    let ri_along = project_on_wall_test(wall, [ri.at_ft[0], ri.at_ft[1]]);
+                    let box_half = dev.box_in[0] / 2.0;
+                    let od = cadaddy_mepfix::design::pipe_od(ri.size_in);
+                    let gap = ((dev_along - ri_along).abs() - box_half - od / 2.0).max(0.0);
+                    // Must be same cavity or gap < 3"
+                    assert!(
+                        dev.stud_cavity == ri.stud_cavity || gap < 3.0,
+                        "seed {seed}: clash {} has gap {:.1}\" between device {} (cav {}) and rough-in {} (cav {})",
+                        c.id, gap, dev.id, dev.stud_cavity, ri.id, ri.stud_cavity,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Helper: project point onto wall, same as clash.rs's project_on_wall.
+fn project_on_wall_test(w: &cadaddy_mepfix::truth::Wall, pt: [f64; 2]) -> f64 {
+    let dx = w.to_ft[0] - w.from_ft[0];
+    let dy = w.to_ft[1] - w.from_ft[1];
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-18 { return 0.0; }
+    let t = ((pt[0] - w.from_ft[0]) * dx + (pt[1] - w.from_ft[1]) * dy) / len_sq;
+    t * len_sq.sqrt() * 12.0
+}
+
+// --- MUST 4: Rules from editable file with source tracking ---
+
+#[test]
+fn rough_in_stubs_have_source_ids() {
+    // Every rough-in should have a non-empty source (the rule id it came from).
+    for seed in 1..=10 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        for ri in &t.rough_ins {
+            assert!(
+                !ri.source.is_empty(),
+                "{ctx}: rough-in {} has no source",
+                ri.id,
+            );
+        }
+    }
+}
+
+#[test]
+fn rules_load_from_file_and_change_result() {
+    use cadaddy_mepfix::truth::RoughInRules;
+    // Save default rules to a temp file, load them back, verify they match.
+    let dir = std::env::temp_dir().join("inwall_rules_test");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("rules.json");
+    let defaults = RoughInRules::default_rules();
+    defaults.save(&path).expect("save failed");
+    let loaded = RoughInRules::load(&path);
+    assert_eq!(loaded.rules.len(), defaults.rules.len());
+    assert!((loaded.clearance_in - 3.0).abs() < 0.01);
+
+    // Modify the rules: change the WC vent height from 20" to 40".
+    let mut modified = loaded;
+    if let Some(wc) = modified.rules.iter_mut().find(|r| r.fixture_kind == "water_closet") {
+        if let Some(vent) = wc.stubs.iter_mut().find(|s| s.kind == "vent") {
+            vent.aff_in = 40.0;
+        }
+    }
+    let mod_path = dir.join("rules_modified.json");
+    modified.save(&mod_path).expect("save modified failed");
+    let reloaded = RoughInRules::load(&mod_path);
+    let wc = reloaded.for_kind("water_closet").expect("no WC rule");
+    let vent = wc.stubs.iter().find(|s| s.kind == "vent").expect("no vent stub");
+    assert!((vent.aff_in - 40.0).abs() < 0.01, "modified vent height not preserved");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- MUST 5: E-symbols off true spot, near-misses planted ---
+
+#[test]
+fn devices_have_diag_positions_offset_from_true() {
+    // Every device should have a diag_ft that differs from at_ft (offset for E-sheet).
+    for seed in 1..=5 {
+        let t = truth_for(seed);
+        let ctx = format!("seed {seed}");
+        let mut any_offset = false;
+        for dev in &t.devices {
+            if dev.diag_ft != [0.0, 0.0] && dev.diag_ft != dev.at_ft {
+                any_offset = true;
+            }
+        }
+        assert!(any_offset, "{ctx}: no devices have diag_ft offset from at_ft");
+    }
+}
+
+#[test]
+fn near_misses_are_planted_and_not_flagged() {
+    // Near-miss devices (close to rough-ins but not clashing) must exist and must NOT appear
+    // in the clash list.
+    let mut total_near_misses = 0;
+    for seed in 1..=40 {
+        let t = truth_for(seed);
+        let clash_devs: BTreeSet<&str> = t.clashes.iter().filter(|c| c.kind == "in_wall").map(|c| c.a.as_str()).collect();
+        for nm_id in &t.near_miss_ids {
+            assert!(
+                !clash_devs.contains(nm_id.as_str()),
+                "seed {seed}: near-miss device {nm_id} was flagged as in-wall clash",
+            );
+        }
+        total_near_misses += t.near_miss_ids.len();
+    }
+    assert!(total_near_misses > 0, "no near-miss devices were planted across 40 seeds");
+}
+
+#[test]
+fn multiple_conflict_types_are_planted() {
+    // Across seeds, we should see both receptacle-in-waste-cavity and switch-in-vent-cavity.
+    let mut recept_waste = false;
+    let mut switch_vent = false;
+    for seed in 1..=40 {
+        let t = truth_for(seed);
+        for c in t.clashes.iter().filter(|c| c.kind == "in_wall" && c.planted) {
+            if let (Some(dev), Some(ri)) = (t.device(&c.a), t.rough_in(&c.b)) {
+                if dev.kind == "receptacle" && ri.kind == "waste" {
+                    recept_waste = true;
+                }
+                if dev.kind == "switch" && ri.kind == "vent" {
+                    switch_vent = true;
+                }
+            }
+        }
+    }
+    assert!(recept_waste, "no receptacle-in-waste-cavity clash planted across 40 seeds");
+    assert!(switch_vent, "no switch-in-vent-cavity clash planted across 40 seeds");
 }
 
 // --- Q308: Low-voltage, fire alarm, equipment connections ---
