@@ -249,6 +249,11 @@ pub fn derive(d: &Drawing, rules: &Rules) -> Scene {
 /// with, then one per [`Rules::sheets`] entry. A level whose sheet is missing from the set is
 /// empty.
 pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
+    derive_set_lod(sources, rules, Lod::Detailed)
+}
+
+/// Build the scene with a chosen LOD for fixture geometry (`Lod::Detailed`/`Simple`/`Symbol`/`Box`).
+pub fn derive_set_lod(sources: &[&Drawing], rules: &Rules, lod: Lod) -> Scene {
     let upf = if rules.units_per_foot.is_finite() && rules.units_per_foot > 0.0 { rules.units_per_foot } else { 12.0 };
     let empty = Drawing::default();
     let src_of: Vec<usize> = (0..rules.levels.len()).map(|i| rules.level_source(i)).collect();
@@ -476,38 +481,45 @@ pub fn derive_set(sources: &[&Drawing], rules: &Rules) -> Scene {
             let p = to_world(at, place.base, upf);
             let c = entity_rgb(d, e);
             let [w, dp, h] = mount.size_ft.map(|v| if v.is_finite() { v.clamp(0.01, 20.0) } else { 0.5 });
-            let (pos, aff, dir) = if mount.ceiling && aff_override.is_none() {
+            // pos = centre, dir = wall tangent, normal = outward from wall (for panel facing).
+            let (pos, aff, dir, normal) = if mount.ceiling && aff_override.is_none() {
                 let aff = level.ceiling_ft - h / 2.0;
-                (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 })
+                let d = Vec2 { x: 1.0, y: 0.0 };
+                (v3(p.x, p.y, level.elevation_ft + aff), aff, d, d)
             } else {
                 let aff = aff_override.map(|i| i / 12.0).unwrap_or(mount.aff_ft);
                 // Snap onto the nearest wall face of this level, facing out of it.
-                let mut best: Option<(f64, Vec2, Vec2)> = None;
+                let mut best: Option<(f64, Vec2, Vec2, Vec2)> = None;
                 for sg in s.walls.iter().filter(|sg| sg.level == lv) {
                     let (q, dist) = closest(sg.a, sg.b, p);
-                    if dist < SNAP_FT && best.is_none_or(|(bd, _, _)| dist < bd) {
+                    if dist < SNAP_FT && best.is_none_or(|(bd, _, _, _)| dist < bd) {
                         let t = (sg.b - sg.a) * (1.0 / (sg.b - sg.a).len().max(1e-12));
                         let mut nrm = Vec2 { x: -t.y, y: t.x };
                         if (p - q).x * nrm.x + (p - q).y * nrm.y < 0.0 {
                             nrm = nrm * -1.0;
                         }
-                        best = Some((dist, q + nrm * (dp / 2.0), t));
+                        best = Some((dist, q + nrm * (dp / 2.0), t, nrm));
                     }
                 }
                 match best {
-                    Some((_, q, t)) => (v3(q.x, q.y, level.elevation_ft + aff), aff, t),
-                    None => (v3(p.x, p.y, level.elevation_ft + aff), aff, Vec2 { x: 1.0, y: 0.0 }),
+                    Some((_, q, t, n)) => (v3(q.x, q.y, level.elevation_ft + aff), aff, t, n),
+                    None => {
+                        let d = Vec2 { x: 1.0, y: 0.0 };
+                        (v3(p.x, p.y, level.elevation_ft + aff), aff, d, d)
+                    }
                 }
             };
             let across = if mount.ceiling { w } else { dp };
             let src16 = u16::try_from(src).unwrap_or(u16::MAX);
             let own = Owner { src: src16, handle: e.handle };
+            // Parse schedule sizes from attributes, preferring them over mount sizes.
+            let sched = fixtures::ScheduleSize::from_attrs(&attrs);
+            let clamped_sched = sched.resolve_ft(mount.size_ft);
+            let [sw, sdp, sh] = clamped_sched.map(|v| if v.is_finite() { v.clamp(0.01, 20.0) } else { 0.5 });
             // Try real fixture geometry; fall back to a box if unrecognised.
-            // Pass the clamped dimensions so hostile input stays finite.
             let block_lower = ins.block.to_ascii_lowercase();
-            let clamped = [w, dp, h];
-            let used_fixture = fixtures::classify(&block_lower, ty, clamped)
-                .is_some_and(|family| fixtures::generate(&mut s, &family, pos, dir, c, own, Lod::Detailed));
+            let used_fixture = fixtures::classify_with_schedule(&block_lower, ty, [sw, sdp, sh], &sched)
+                .is_some_and(|family| fixtures::generate(&mut s, &family, pos, dir, normal, c, own, lod));
             if !used_fixture {
                 boxed(&mut s, pos, dir, w, across, h, c, own);
             }
