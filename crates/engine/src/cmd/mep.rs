@@ -316,6 +316,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 height_source: if has_height_tag { "tag" } else { "default" }.to_string(),
                 reviewed: false,
                 edited_by: String::new(),
+                top_ft: None,
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -1307,6 +1308,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .collect();
     let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
     for (i, s) in shown.iter().enumerate() {
+        // Vertical runs (risers) have one plan point and meet nothing in plan.
+        if s.run.top_ft.is_some() {
+            continue;
+        }
         groups.entry((s.sy.name.as_str(), s.level.as_str())).or_default().push(i);
     }
     let mut all_joints: Vec<Joint> = Vec::new();
@@ -1369,9 +1374,29 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let (r, sy) = (s.run, s.sy);
         let layer = mep_layer_name(&sy.name, &s.level);
         ensure_layer(d, &layer, sy.aci_color());
-        let (ps, counts) = pieces(r, s.base_z, upf, skip_at.get(i).map(Vec::as_slice).unwrap_or_default());
         let source = source_of(&r.objects);
         let base = run_base(r);
+        // Vertical runs (risers): an upright cylinder from bottoms_ft[0] to top_ft.
+        if let Some(top) = r.top_ft {
+            let Some(&pt) = r.points.first() else { continue };
+            let bot = r.bottoms_ft.first().copied().unwrap_or(0.0);
+            if !(top > bot) {
+                continue;
+            }
+            let (z0, z1) = (s.base_z + bot * upf, s.base_z + top * upf);
+            let radius = r.size_in[0] / 2.0 / 12.0 * upf;
+            let mut seg_mesh = super::wallgen::empty_mesh();
+            add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
+            if !seg_mesh.faces.is_empty() {
+                let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
+                {
+                    total_runs += 1;
+                }
+            }
+            continue;
+        }
+        let (ps, counts) = pieces(r, s.base_z, upf, skip_at.get(i).map(Vec::as_slice).unwrap_or_default());
         let mut seg_mesh = super::wallgen::empty_mesh();
         for p in ps.iter().filter(|p| !p.is_fitting()) {
             piece_mesh(&mut seg_mesh, p, upf);
@@ -1695,8 +1720,19 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
-        let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
         let w = r.size_in[0] / 12.0 * upf;
+        // Vertical runs (risers): a single-point piece spanning bottom to top.
+        if let Some(top) = r.top_ft {
+            if let Some(&pt) = r.points.first() {
+                let bot = r.bottoms_ft.first().copied().unwrap_or(0.0);
+                let z0 = (level.elevation_ft + bot) * upf;
+                let z1 = (level.elevation_ft + top) * upf;
+                let at = Vec2::new(pt[0], pt[1]);
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w });
+            }
+            continue;
+        }
+        let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
         items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();

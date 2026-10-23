@@ -1489,6 +1489,10 @@ pub struct MepRun {
     /// Who last edited this run (empty if not edited).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub edited_by: String,
+    /// A vertical run (riser) from `bottoms_ft[0]` up to this elevation (feet above the floor of
+    /// the level it starts on). When set, the run has a single plan point and goes straight up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_ft: Option<f64>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -2454,13 +2458,17 @@ impl BuildingSpec {
             if self.level(&r.level).is_none() {
                 out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
             }
-            if r.points.len() < 2
-                || r.bottoms_ft.len() + 1 != r.points.len()
+            let vertical = r.top_ft.is_some();
+            let min_pts = if vertical { 1 } else { 2 };
+            let btm_ok = if vertical { r.bottoms_ft.len() == 1 && r.points.len() == 1 } else { r.bottoms_ft.len() + 1 == r.points.len() };
+            if r.points.len() < min_pts
+                || !btm_ok
                 || !r.points.iter().flatten().chain(r.bottoms_ft.iter()).chain(r.size_in.iter()).all(|v| fin(*v))
                 || r.size_in[0].is_nan()
                 || r.size_in[0] <= 0.0
+                || r.top_ft.is_some_and(|t| !fin(t) || t <= r.bottoms_ft.first().copied().unwrap_or(0.0))
             {
-                out.push(Issue::error(at, "a run needs 2 points or more, a size and one bottom height per segment"));
+                out.push(Issue::error(at, "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment"));
             }
         }
         for (i, e) in self.mep.equipment.iter().enumerate().take(MAX_ITEMS) {
