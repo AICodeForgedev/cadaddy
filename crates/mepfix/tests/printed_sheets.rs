@@ -51,6 +51,47 @@ fn the_fixture_sets_printed_sheets_are_recognised_like_its_dxf() {
     assert_eq!(map.grid_x.len(), set.truth.building.grid.x.len(), "grid lines across");
     assert_eq!(map.grid_y.len(), set.truth.building.grid.y.len(), "grid lines up");
     assert!(map.sheets.iter().filter(|s| s.alignment.is_some()).count() >= plans, "printed plans aligned");
+    // ... and align right: every printed plan aligned, measured against the truth.
+    let aligned = assert_printed_alignment(&map, &set.truth, &|s| s.title.contains("PLAN") && s.window_ft.is_none());
+    assert_eq!(aligned, plans, "printed plans aligned within {PRINTED_GRID_TOLERANCE_FT} ft");
+}
+
+/// Largest alignment error allowed at a grid intersection of a printed page, feet.
+const PRINTED_GRID_TOLERANCE_FT: f64 = 0.1;
+
+/// The truth sheet as its print imports: a page comes in drawn full size at the sheet's scale,
+/// its lower-left corner at the origin, so the drawing is the sheet's shifted by the paper origin.
+fn as_printed(ts: &cadaddy_mepfix::truth::Sheet) -> cadaddy_mepfix::truth::Sheet {
+    let mut p = ts.clone();
+    for (o, origin) in p.model_from_building.offset_in.iter_mut().zip(ts.paper_from_model.origin_in) {
+        *o -= origin;
+    }
+    p
+}
+
+/// Score `map` against the truth ([`sheet_reader::score_sheet_map`], the truth sheets as printed)
+/// and assert every aligned page among the plan pages (`plan`, of the truth sheets with a level)
+/// puts every grid intersection within [`PRINTED_GRID_TOLERANCE_FT`]; returns how many aligned.
+fn assert_printed_alignment(
+    map: &sheet_reader::SheetMap,
+    t: &cadaddy_mepfix::truth::Truth,
+    plan: &dyn Fn(&cadaddy_mepfix::truth::Sheet) -> bool,
+) -> usize {
+    let printed: Vec<_> = t.sheets.iter().map(as_printed).collect();
+    let scores = sheet_reader::score_sheet_map(map, &printed, &t.building.grid.x, &t.building.grid.y);
+    let mut aligned = 0;
+    let mut worst = 0.0f64;
+    for (ts, sc) in t.sheets.iter().zip(&scores) {
+        if ts.level.is_none() || !plan(ts) {
+            continue;
+        }
+        let Some(err) = sc.grid_max_error_ft else { continue };
+        assert!(err < PRINTED_GRID_TOLERANCE_FT, "{}: printed alignment worst grid error {err:.4} ft", ts.number);
+        aligned += 1;
+        worst = worst.max(err);
+    }
+    println!("{aligned} printed plan pages aligned, worst grid error {worst:.4} ft");
+    aligned
 }
 
 // ---- A hand-made sheet on layer 0 ------------------------------------------------------------
@@ -228,8 +269,10 @@ fn the_hotels_merged_set_pdf_is_recognised_page_by_page() {
     assert!(scales >= 43, "scales read right: {scales}");
     let grids = p.pages.iter().filter(|r| !r.grid_x.is_empty() && !r.grid_y.is_empty()).count();
     assert!(grids >= 40, "grids found: {grids}");
-    let aligned = p.map.sheets.iter().filter(|s| s.alignment.is_some()).count();
-    assert!(aligned >= 40, "sheets aligned to the common grid: {aligned}");
+    // Aligned to the common grid, and measured against the truth: every aligned plan page within
+    // a tenth of a foot at every grid intersection.
+    let aligned = assert_printed_alignment(&p.map, t, &|s| s.window_ft.is_none());
+    assert!(aligned >= 40, "plan pages aligned to the common grid within {PRINTED_GRID_TOLERANCE_FT} ft: {aligned}");
     assert_eq!(p.map.grid_x.len(), t.building.grid.x.len(), "grid lines across");
     assert_eq!(p.map.grid_y.len(), t.building.grid.y.len(), "grid lines up");
 }
