@@ -361,8 +361,9 @@ fn dash_text(area: &[u8], at: i16, wide: bool) -> String {
 /// STYLE (spec §20.4.53).
 fn style(o: &mut Obj, g: &mut G) -> Result<()> {
     let (name, mut flags) = table_entry(o)?;
-    let vertical = o.d.b()?;
+    // Shape file, then vertical (the order other programs write; see `encode_kinds` STYLE).
     let shape_file = o.d.b()?;
+    let vertical = o.d.b()?;
     let fixed = o.d.bd()?;
     let width = o.d.bd()?;
     let oblique = o.d.bd()?;
