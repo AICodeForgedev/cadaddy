@@ -11,6 +11,9 @@
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
+//! - **Grounding** from `grounding.takeoff` (Q329): conductor by size, clamps, rods, busbars,
+//!   lugs, welds or connectors and their tools, each line naming its rule; a crimper the
+//!   grounding takeoff carries is not required a second time.
 //! - **Concrete** from the concrete takeoff (Q328): each element in our scope (the concrete
 //!   rules' `our_scope`) gives its concrete (cubic yards, with the takeoff's waste), forms, rebar
 //!   by bar size, welded wire, anchor bolts, embeds and stub-ups by size, finish and curing, each
@@ -519,6 +522,41 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
     }
 }
 
+/// Grounding and bonding from `grounding.takeoff` (Q329): each item a "grounding" line with the
+/// rule that produced it; conductor feet are as routed (`model`), the rest the takeoff's rules.
+fn grounding(s: &Session, lines: &mut Vec<Line>) {
+    let (Ok((sp, _)), Ok(d)) = (current(s, "bim.bom"), s.doc()) else { return };
+    for i in super::grounding::takeoff(&sp, d) {
+        let item = i["item"].as_str().unwrap_or_default().to_string();
+        let note = i["note"].as_str().unwrap_or_default();
+        let unit = if i["unit"].as_str() == Some("ft") { "ft" } else { "each" };
+        // A conductor's size, as drawn: "Grounding conductor, 3/0 copper" → 3/0.
+        let size = item
+            .strip_prefix("Grounding conductor, ")
+            .map(|r| r.trim_end_matches(" copper").trim_end_matches(" bare").to_string())
+            .unwrap_or_default();
+        let source = if size.is_empty() {
+            "grounding.takeoff (mep.grounding, project rules)"
+        } else {
+            "grounding.takeoff: routed GEC and bonds (mep.grounding)"
+        };
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: "grounding".into(),
+                item,
+                size,
+                unit,
+                net: i["qty"].as_f64().unwrap_or(0.0),
+                status: if unit == "ft" { "model" } else { "rule" },
+                rule: Some(if note.is_empty() { source.to_string() } else { format!("{source}; {note}") }),
+                ..Line::default()
+            },
+        );
+    }
+}
+
 /// Drywall from `drywall.takeoff`, where walls have assemblies.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
     let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else { return };
@@ -661,8 +699,13 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
         }
         out.push(("Wire pulling lube".into(), (wire_ft / 5_000.0).ceil().max(1.0), "purchase", "one quart per 5,000 ft pulled".into()));
     }
-    if lines.iter().any(|l| l.category == "wire" && large_conductor(l.size.trim_start_matches('#'))) {
-        out.push(("Crimper with dies".into(), 1.0, "rental", "#4 AWG and larger conductors need lugs".into()));
+    let lugged = lines.iter().any(|l| matches!(l.category.as_str(), "wire" | "grounding") && large_conductor(l.size.trim_start_matches('#')))
+        || lines.iter().any(|l| l.category == "grounding" && l.item.to_ascii_lowercase().contains("compression lug"));
+    if lugged {
+        // The grounding takeoff's own crimper (compression connections) is the one tool.
+        if !lines.iter().any(|l| l.category == "grounding" && l.item.to_ascii_lowercase().contains("crimper")) {
+            out.push(("Crimper with dies".into(), 1.0, "rental", "#4 AWG and larger conductors need lugs".into()));
+        }
         out.push(("Torque wrench".into(), 1.0, "owned", "lugs are torqued to the listing".into()));
     }
     if has("devices") || has("fixtures") {
@@ -700,6 +743,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     electrical(s, &mut lines)?;
     mechanical(s, &mut lines);
     drywall(s, &mut lines);
+    grounding(s, &mut lines);
     let by_others = concrete(s, &mut lines);
     // Waivers: recorded in the project rules, with the reason.
     if let Some(ws) = p.get("waive").and_then(Value::as_array) {

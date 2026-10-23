@@ -279,3 +279,61 @@ fn hostile_grounding_never_panics() {
     let c = s.execute("grounding.check", &json!({})).unwrap();
     assert!(errors(&c).iter().any(|(k, a)| k == "unknown" && a == "Y"), "{c}");
 }
+
+#[test]
+fn the_grounding_takeoff_is_in_the_job_bom_without_doubling_its_tools() {
+    let mut s = session();
+    set_grounding(&mut s, |g| {
+        g["bonds"].as_array_mut().unwrap().push(json!({"tag": "TBB-2", "kind": "telecom", "from": "TMGB", "to": "TGB-2", "size": "#6"}));
+    });
+    s.execute("grounding.route", &json!({})).unwrap();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    let grounding: Vec<&Value> = bom["lines"].as_array().unwrap().iter().filter(|l| l["category"] == "grounding").collect();
+    let line = |item: &str| {
+        let found: Vec<&&Value> = grounding.iter().filter(|l| l["item"] == item).collect();
+        assert_eq!(found.len(), 1, "one line for {item}: {bom}");
+        *found[0]
+    };
+    let qty = |item: &str| line(item)["total"].as_f64().unwrap();
+    assert_eq!(qty("Water pipe ground clamp"), 1.0);
+    assert_eq!(qty("Gas pipe bonding clamp"), 1.0);
+    let ufer = line("Grounding conductor, #4 bare copper");
+    assert_eq!((ufer["total"].as_f64(), ufer["unit"].as_str(), ufer["size"].as_str()), (Some(20.0), Some("ft"), Some("#4")), "{ufer}");
+    assert_eq!(qty("Grounding busbar (TMGB), 1/4\" x 4\" x 12\""), 1.0);
+    assert_eq!(qty("Grounding busbar (TGB), 1/4\" x 2\" x 12\""), 1.0);
+    assert_eq!(qty("Two-hole compression lug on busbar"), 3.0);
+    assert_eq!(qty("Exothermic weld, cable to steel"), 1.0);
+    // Every grounding.takeoff item is a line, each naming the rule that produced it.
+    let takeoff = s.execute("grounding.takeoff", &json!({})).unwrap();
+    for i in takeoff["items"].as_array().unwrap() {
+        let l = line(i["item"].as_str().unwrap());
+        assert_eq!(l["net"].as_f64(), i["qty"].as_f64(), "{i} vs {l}");
+        assert_eq!(l["trade"], "electrical");
+        assert!(l["rule"].as_str().unwrap().contains("grounding.takeoff"), "{l}");
+    }
+    assert_eq!(grounding.len(), takeoff["items"].as_array().unwrap().len());
+    let crimpers = |b: &Value| {
+        let in_lines = b["lines"].as_array().unwrap().iter().filter(|l| l["item"].as_str().unwrap().to_ascii_lowercase().contains("crimper")).count();
+        let in_required =
+            b["required"].as_array().unwrap().iter().filter(|r| r["item"].as_str().unwrap().to_ascii_lowercase().contains("crimper")).count();
+        in_lines + in_required
+    };
+    let moulds =
+        |b: &Value| b["lines"].as_array().unwrap().iter().filter(|l| l["item"].as_str().unwrap().to_ascii_lowercase().contains("mould")).count();
+    // Exothermic: two weld moulds and the mould handle on the BOM; the lugs at the busbars still
+    // need the one crimper (required).
+    assert_eq!((crimpers(&bom), moulds(&bom)), (1, 3), "{bom}");
+    assert!(bom["required"].as_array().unwrap().iter().any(|r| r["item"] == "Crimper with dies"), "{bom}");
+    // Compression: the grounding takeoff's crimper is the only one, and no moulds.
+    s.execute("project.rules.set", &json!({"domain": "custom", "key": "ground_connection", "value": "compression"})).unwrap();
+    let bom = s.execute("bim.bom", &json!({})).unwrap();
+    assert_eq!((crimpers(&bom), moulds(&bom)), (1, 0), "{bom}");
+    assert!(!bom["required"].as_array().unwrap().iter().any(|r| r["item"] == "Crimper with dies"), "not required twice: {bom}");
+    assert!(
+        bom["lines"].as_array().unwrap().iter().any(|l| l["category"] == "grounding" && l["item"] == "Compression crimper with dies (tool)"),
+        "{bom}"
+    );
+    // It reaches the estimate.
+    let est = s.execute("estimate.query", &json!({"category": "grounding", "limit": 500})).unwrap();
+    assert!(est["lines"].as_array().unwrap().iter().any(|l| l["item"] == "Water pipe ground clamp"), "{est}");
+}
