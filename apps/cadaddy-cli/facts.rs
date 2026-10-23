@@ -37,46 +37,74 @@ fn sample() -> cadaddy_engine::doc::Drawing {
     s.doc().cloned().unwrap_or_default()
 }
 
-/// Formats written and read back from the same bytes (each proved here, not listed).
+/// Formats written and read back, derived from `cadaddy_io::SAVE_EXTENSIONS` (not hand-typed).
+/// A format counts as "open" only when the read-back drawing has entities.
 fn formats(d: &cadaddy_engine::doc::Drawing) -> (BTreeSet<String>, BTreeSet<String>) {
-    let candidates = ["cdy", "dwg", "dxf", "pdf", "svg", "png", "glb", "gltf", "obj", "stl", "ifc", "3mf", "eps", "wmf"];
     let (mut save, mut open) = (BTreeSet::new(), BTreeSet::new());
-    for ext in candidates {
+    for &ext in cadaddy_io::SAVE_EXTENSIONS {
         let name = format!("facts.{ext}");
         let Ok(bytes) = cadaddy_io::write(d, &name) else { continue };
         if bytes.is_empty() {
             continue;
         }
         save.insert(ext.to_string());
-        let back = if ext == "pdf" {
-            cadaddy_io::pdf_read::read(&bytes, &cadaddy_io::pdf_read::PdfOptions::default()).map(|_| ()).map_err(|e| e.to_string())
-        } else {
-            cadaddy_io::read(&bytes, &name).map(|_| ()).map_err(|e| e.to_string())
-        };
-        if back.is_ok() {
+        if cadaddy_io::read(&bytes, &name).is_ok_and(|back| back.entity_count() > 0) {
             open.insert(ext.to_string());
         }
     }
     (save, open)
 }
 
-/// DWG and DXF versions written and read back.
+/// DWG and DXF versions written and read back. DWG is probed per engine (native, bridge)
+/// without fallback and without environment variables, so the output is deterministic.
 fn versions(d: &cadaddy_engine::doc::Drawing) -> Value {
-    use cadaddy_io::{SaveOptions, Version};
+    use cadaddy_io::{DwgEngine, SaveOptions, Version};
     let all = [Version::R12, Version::R2000, Version::R2004, Version::R2007, Version::R2010, Version::R2013, Version::R2018];
     let mut out = Map::new();
-    for (ext, binary) in [("dwg", false), ("dxf", false), ("dxfBinary", true)] {
-        let file = if ext == "dwg" { "facts.dwg" } else { "facts.dxf" };
+    // DXF (ASCII and binary).
+    for (key, binary) in [("dxf", false), ("dxfBinary", true)] {
         let mut ok = Vec::new();
         for v in all {
             let opts = SaveOptions { version: Some(v), binary };
-            let Ok(bytes) = cadaddy_io::write_with(d, file, &opts) else { continue };
-            if cadaddy_io::read(&bytes, file).is_ok_and(|back| back.entity_count() > 0) {
+            let Ok(bytes) = cadaddy_io::write_with(d, "facts.dxf", &opts) else { continue };
+            if cadaddy_io::read(&bytes, "facts.dxf").is_ok_and(|back| back.entity_count() > 0) {
                 ok.push(format!("{v:?}"));
             }
         }
-        out.insert(ext.into(), json!(ok));
+        out.insert(key.into(), json!(ok));
     }
+    // DWG per engine: each probed explicitly so CADADDY_DWG* env vars have no effect.
+    let mut dwg = Map::new();
+    for (name, engine) in [("bridge", DwgEngine::Bridge), ("native", DwgEngine::Native)] {
+        let mut write_ok = Vec::new();
+        let mut read_ok = Vec::new();
+        for v in all {
+            // Native write: dwg_write::write only (no bridge fallback).
+            // Bridge write: write_dwg with Bridge (bridge path only).
+            let bytes = if engine == DwgEngine::Native {
+                cadaddy_io::dwg_write::write(d, v.code()).ok().map(|(b, _)| b)
+            } else {
+                cadaddy_io::write_dwg(d, v, engine).ok()
+            };
+            let Some(bytes) = bytes else { continue };
+            if bytes.is_empty() {
+                continue;
+            }
+            write_ok.push(format!("{v:?}"));
+            // Native read: dwg_read::read only (no bridge fallback).
+            // Bridge read: read_dwg with Bridge (bridge path only).
+            let reading = if engine == DwgEngine::Native {
+                cadaddy_io::dwg_read::read(&bytes).ok().map(|(d, _)| d)
+            } else {
+                cadaddy_io::read_dwg(&bytes, engine).ok()
+            };
+            if reading.is_some_and(|back| back.entity_count() > 0) {
+                read_ok.push(format!("{v:?}"));
+            }
+        }
+        dwg.insert(name.into(), json!({ "write": write_ok, "read": read_ok }));
+    }
+    out.insert("dwg".into(), Value::Object(dwg));
     Value::Object(out)
 }
 
@@ -243,7 +271,15 @@ pub fn llms_lines(f: &Value) -> String {
     ));
     out.push_str(&format!("- Opens: {}\n", list(&f["formats"]["open"])));
     out.push_str(&format!("- Saves: {}\n", list(&f["formats"]["save"])));
-    out.push_str(&format!("- DWG versions written and read back: {}\n", list(&f["versions"]["dwg"])));
+    // DWG versions per engine (bridge is the default today).
+    let dwg = &f["versions"]["dwg"];
+    for engine in ["bridge", "native"] {
+        let w = list(&dwg[engine]["write"]);
+        let r = list(&dwg[engine]["read"]);
+        if !w.is_empty() || !r.is_empty() {
+            out.push_str(&format!("- DWG versions ({engine}): written {w}, read back {r}\n"));
+        }
+    }
     out.push_str(&format!("- DXF versions written and read back: {}\n", list(&f["versions"]["dxf"])));
     out.push_str(&format!("- MCP tools ({}): {}\n", f["mcp"]["count"], list(&f["mcp"]["tools"])));
     out.push_str(&format!("- Interface languages: {}\n", f["languages"]["count"]));
