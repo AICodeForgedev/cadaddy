@@ -185,7 +185,7 @@ fn is_read_only(method: &str) -> bool {
 }
 
 impl Backend for Remote {
-    /// Send an authenticated control request, refreshing the token for a safe retry.
+    /// Send a control request with the token when available, refreshing it before a safe retry.
     /// A mutation that may have reached the server is never resent automatically.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;

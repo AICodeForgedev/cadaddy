@@ -412,7 +412,7 @@ mod budget_tests {
         assert!(g.fills.is_empty() && g.texts.is_empty());
     }
 
-    /// A split table clips merge spans using the rendered column count when source columns exceed the limit.
+    /// A split table within the displayed-cell budget clips a merge to contiguous selected rows.
     #[test]
     fn part_clips_merges_using_displayed_column_count() {
         let t = Table {

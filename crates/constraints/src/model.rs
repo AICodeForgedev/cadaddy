@@ -623,7 +623,7 @@ mod budget_tests {
     use cadcraft_geom::Vec3;
     use std::sync::Arc;
 
-    /// Writing a model back preserves partial rational weights and the spline they describe.
+    /// Writing an unchanged model back leaves partial rational weights and the original spline geometry intact.
     #[test]
     fn write_back_keeps_partial_rational_weights() {
         let mut drawing = Drawing::default();
