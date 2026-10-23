@@ -22,7 +22,7 @@ impl Rgb {
     }
     pub fn parse_hex(s: &str) -> Option<Rgb> {
         let s = s.trim().trim_start_matches('#');
-        if s.len() != 6 || !s.is_ascii() {
+        if s.len() != 6 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
         u32::from_str_radix(s, 16).ok().map(Rgb::from_u32)
@@ -224,6 +224,14 @@ pub fn display_rgb(c: Rgb, aci7: bool, background: Rgb) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_hex_rejects_non_hex_digits() {
+        assert_eq!(Rgb::parse_hex("+12345"), None);
+        assert_eq!(Rgb::parse_hex("-12345"), None);
+        assert_eq!(Color::parse("#+12345"), None);
+        assert_eq!(Rgb::parse_hex("#012345"), Some(Rgb(1, 35, 69)));
+    }
 
     #[test]
     fn palette_known_entries() {

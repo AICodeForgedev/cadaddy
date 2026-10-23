@@ -324,12 +324,24 @@ fn components<'a>(cons: &[&'a Constraint]) -> Vec<Vec<&'a Constraint>> {
 
 /// Build the component systems. Constraints that cannot be interpreted are returned as skipped.
 pub(crate) fn build(d: &Drawing, cons: &[&Constraint], opts: &SolveOptions) -> Result<(Vec<Comp>, Vec<(u32, String)>), SolveError> {
+    let mut members_left = model::MAX_RIGID_WORK;
+    build_budgeted(d, cons, opts, &mut members_left)
+}
+
+/// Build constraint components with one caller-owned rigid-member sampling budget shared by every model.
+/// Return constraints that cannot be interpreted as skipped entries.
+pub(crate) fn build_budgeted(
+    d: &Drawing,
+    cons: &[&Constraint],
+    opts: &SolveOptions,
+    members_left: &mut usize,
+) -> Result<(Vec<Comp>, Vec<(u32, String)>), SolveError> {
     let mut e = env(d);
     let mut skipped = Vec::new();
     let mut comps = Vec::new();
     for group in components(cons) {
         let handles: Vec<Handle> = group.iter().flat_map(|c| c.refs.iter().map(|r| r.handle)).collect();
-        let mut model = Model::build(d, &handles);
+        let mut model = Model::build_budgeted(d, &handles, members_left);
         let mut built = Vec::new();
         for c in group {
             let target = if c.kind.is_dimensional() { constraint_value(&mut e, c)? } else { 0.0 };
@@ -426,6 +438,46 @@ pub fn residuals(d: &Drawing) -> Vec<(u32, Option<f64>)> {
             (c.id, r)
         })
         .collect()
+}
+
+/// Put back what each Fix locks where `before` had it, and report whether anything moved.
+///
+/// A Fix keeps no position of its own: the solver locks the parameters at their current values.
+/// Without this, an edit that moves a fixed point (a grip drag) would carry the lock along with
+/// it. Only Fixes that already existed in `before`, on objects of the same shape, are restored.
+pub fn restore_fixed(d: &mut Drawing, before: &Drawing) -> bool {
+    let refs: Vec<GeomRef> = d
+        .constraints
+        .iter()
+        .filter(|c| c.kind == ConstraintKind::Fix && before.constraints.contains(c))
+        .flat_map(|c| c.refs.iter().copied())
+        .collect();
+    if refs.is_empty() {
+        return false;
+    }
+    let handles: Vec<Handle> = refs.iter().map(|r| r.handle).collect();
+    let (now, old) = (Model::build(d, &handles), Model::build(before, &handles));
+    let mut x = now.x0.clone();
+    let mut changed = false;
+    for r in &refs {
+        let same_shape = matches!((now.slot(r.handle), old.slot(r.handle)), (Some(a), Some(b)) if a.shape == b.shape);
+        let (Some(i), Some(j)) = (now.lock_indices(r), old.lock_indices(r)) else { continue };
+        if !same_shape {
+            continue;
+        }
+        for (i, j) in i.into_iter().zip(j) {
+            if let (Some(slot), Some(&v)) = (x.get_mut(i), old.x0.get(j))
+                && *slot != v
+            {
+                *slot = v;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        now.write_back(d, &x);
+    }
+    changed
 }
 
 /// True when every interpretable constraint holds at the current geometry.
@@ -657,6 +709,33 @@ pub fn set_parameter(d: &mut Drawing, name: &str, expr_text: &str, opts: &SolveO
     }
     *d = trial;
     Ok(report)
+}
+
+/// Rename a parameter (dimensional constraint name or user parameter) and every expression that
+/// uses it. Geometry doesn't change. On error the drawing is unchanged.
+pub fn rename_parameter(d: &mut Drawing, old: &str, new: &str) -> Result<(), SolveError> {
+    if !name_in_use(d, old) {
+        return Err(SolveError::Other(format!("no parameter `{old}`")));
+    }
+    if !expr::valid_name(new) {
+        return Err(SolveError::Other(format!("invalid parameter name `{new}`")));
+    }
+    if new != old && name_in_use(d, new) {
+        return Err(SolveError::Other(format!("`{new}` is already in use")));
+    }
+    for c in d.constraints.iter_mut().filter(|c| c.kind.is_dimensional()) {
+        if c.name == old {
+            c.name = new.to_string();
+        }
+        c.expr = expr::rename(&c.expr, old, new);
+    }
+    for p in &mut d.parametric.parameters {
+        if p.name == old {
+            p.name = new.to_string();
+        }
+        p.expr = expr::rename(&p.expr, old, new);
+    }
+    Ok(())
 }
 
 /// Where to draw a constraint's glyphs (one anchor per reference).

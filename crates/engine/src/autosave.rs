@@ -339,9 +339,9 @@ mod native {
         if let Some(dir) = Path::new(path).parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = format!("{path}.tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+        // Create a fresh temporary file exclusively and rename it into place, so a planted
+        // `<path>.tmp` symlink in a shared autosave directory cannot redirect the write (CWE-59).
+        crate::atomic_write::write_atomic(Path::new(path), &bytes).map_err(|e| e.to_string())
     }
 
     impl Autosaver {

@@ -755,9 +755,12 @@ impl Interactive for CircleM {
         let last_r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
         match (self.mode, n) {
             (0, 0) => Prompt::new("Specify center point for circle", Accept::POINT).kw(&["3P", "2P", "Ttr (tan tan radius)"]),
-            (0, _) if self.diameter => Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()),
+            (0, _) if self.diameter => {
+                Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()).distance()
+            }
             (0, _) => {
-                let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied());
+                let p =
+                    Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied()).distance();
                 if last_r > 0.0 { p.default(format!("{last_r:.4}")) } else { p }
             }
             (1, k) => Prompt::new(
@@ -890,7 +893,7 @@ impl Interactive for PolygonM {
             (Some(_), false, Some(_), None) => Prompt::new("Enter an option", Accept::TEXT)
                 .kw(&["Inscribed in circle", "Circumscribed about circle"])
                 .default(if s.last_used.polygon_circumscribed { "C" } else { "I" }),
-            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c),
+            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c).distance(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

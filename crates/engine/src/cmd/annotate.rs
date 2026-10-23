@@ -260,18 +260,16 @@ fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
         dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
     };
     let k = match at {
-        Some(at) => text_inside(k, c, c.dist(pt), at),
+        Some(at) => text_at(k, at),
         None => k,
     };
     Ok(json!({ "handle": add_dim(s, k)?.hex() }))
 }
 
-/// A radius/diameter dimension line location picked inside the circle puts the text there, on
-/// the dimension line (outside, the text keeps its default place beyond the arrowhead).
-fn text_inside(mut k: EntityKind, c: Vec2, r: f64, at: Vec2) -> EntityKind {
-    if let EntityKind::Dimension(d) = &mut k
-        && at.dist(c) < r
-    {
+/// The dimension line location of a radius/diameter dimension puts the text there, inside or
+/// outside the circle, as a user-positioned text (DXF flag 70 bit 128), like AutoCAD.
+fn text_at(mut k: EntityKind, at: Vec2) -> EntityKind {
+    if let EntityKind::Dimension(d) = &mut k {
         d.text_mid = v3(at);
         d.user_text_pos = true;
     }
@@ -429,13 +427,13 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     let d = s.doc().ok()?;
     let cur = d.header.str("CMLEADERSTYLE", "Standard");
     let st = d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&cur)).or(d.mleader_styles.first()).cloned().unwrap_or_default();
-    // An annotative style's sizes are paper sizes: the annotation scale applies when drawn.
-    let k = if st.annotative { 1.0 } else { d.header.f64("DIMSCALE", 1.0) };
-    let th = st.text_height * k;
+    // The style's sizes are the drawn sizes: a multileader style has no scale of its own and
+    // DIMSCALE (a dimension-style setting) does not apply, as in AutoCAD.
+    let th = st.text_height;
     let dir = if arrow_pts.first().is_some_and(|a| a.x > landing_pt.x) { -1.0 } else { 1.0 };
     let attach = if dir > 0.0 { 4 } else { 6 };
-    let dogleg = if landing { st.dogleg * k } else { 0.0 };
-    let tpos = *landing_pt + Vec2::new((dogleg + st.landing_gap * k) * dir, 0.0);
+    let dogleg = if landing { st.dogleg } else { 0.0 };
+    let tpos = *landing_pt + Vec2::new((dogleg + st.landing_gap) * dir, 0.0);
     Some(EntityKind::MLeader(MLeader {
         leaders: vec![arrow_pts.iter().map(|p| v3(*p)).collect()],
         landing: v3(*landing_pt),
@@ -453,7 +451,7 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
             columns: None,
         }),
         style: st.name.clone(),
-        arrow_size: st.arrow_size * k,
+        arrow_size: st.arrow_size,
         spline: false,
         block: None,
     }))
@@ -1106,7 +1104,7 @@ impl RadialM {
         } else {
             dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
         });
-        text_inside(k, c, r, at)
+        text_at(k, at)
     }
 }
 

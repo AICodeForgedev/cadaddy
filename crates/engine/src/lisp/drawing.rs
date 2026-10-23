@@ -4,7 +4,8 @@
 //! `angtof`).
 //!
 //! Entity lists use the DXF groups the file reader and writer use (through
-//! [`crate::cmd::file::entity_codec`]), so what `entget` shows is what a DXF file holds.
+//! [`crate::cmd::file::entity_codec`]), so what `entget` shows is what a DXF file holds, except
+//! for angles, which are radians in a list and degrees in a file.
 
 use std::sync::{Arc, Mutex};
 
@@ -150,16 +151,34 @@ pub fn from_json(v: &serde_json::Value) -> Value {
     }
 }
 
-/// A LISP value as JSON (for `setvar`).
-pub fn to_json(v: &Value) -> serde_json::Value {
-    match v {
+/// A LISP value as JSON (for `setvar`), bounded so a shared cons structure cannot expand into
+/// exponentially many owned array elements before the setter can reject it (CWE-400).
+///
+/// Largest number of elements it may expand, and the deepest nesting it follows.
+const TO_JSON_BUDGET: u64 = 2_000_000;
+const TO_JSON_MAX_DEPTH: usize = 256;
+
+/// Convert a LISP value to owned JSON within element and nesting limits.
+/// Return `None` before a shared cons structure can expand beyond the remaining budget.
+fn to_json_bounded(v: &Value, depth: usize, budget: &mut u64) -> Option<serde_json::Value> {
+    if depth > TO_JSON_MAX_DEPTH || *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    Some(match v {
         Value::Nil => serde_json::Value::Null,
         Value::Int(i) => serde_json::json!(i),
         Value::Real(r) => serde_json::json!(r),
         Value::Str(s) => serde_json::json!(&**s),
-        Value::Cons(_) => serde_json::Value::Array(v.iter().map(|x| to_json(&x)).collect()),
+        Value::Cons(_) => {
+            let mut arr = Vec::new();
+            for x in v.iter() {
+                arr.push(to_json_bounded(&x, depth + 1, budget)?);
+            }
+            serde_json::Value::Array(arr)
+        }
         other => serde_json::json!(to_text(other, false)),
-    }
+    })
 }
 
 pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
@@ -168,10 +187,15 @@ pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     Ok(Flow::Value(crate::sysvars::get(ctx.s, &name).map(|v| from_json(&v)).unwrap_or_default()))
 }
 
+/// Set a system variable after bounded JSON conversion, reporting invalid or oversized values as LISP errors.
 pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 2, 2)?;
     let name = string(&a[0])?;
-    match crate::sysvars::set(ctx.s, &name, &to_json(&a[1])) {
+    let mut budget: u64 = TO_JSON_BUDGET;
+    let Some(json) = to_json_bounded(&a[1], 0, &mut budget) else {
+        return Err(LispError::new(format!("AutoCAD variable setting rejected: {} value too large", to_text(&a[0], true))));
+    };
+    match crate::sysvars::set(ctx.s, &name, &json) {
         Ok(()) => Ok(Flow::Value(a[1].clone())),
         Err(_) => Err(LispError::new(format!("AutoCAD variable setting rejected: {} {}", to_text(&a[0], true), to_text(&a[1], true)))),
     }
@@ -183,6 +207,27 @@ pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 /// higher.
 fn point_group(code: i32) -> bool {
     (10..=18).contains(&code) || (110..=112).contains(&code) || code == 210 || (1010..=1013).contains(&code)
+}
+
+/// Groups 50–58 are angles: degrees in a DXF file, radians in entity lists (DXF Reference,
+/// group code value types). `f` converts each one; an MTEXT's 50 after its column type (75) is
+/// a column height.
+fn convert_angles(kind: &str, tags: &mut [Tag], f: fn(f64) -> f64) {
+    let mtext = kind.eq_ignore_ascii_case("MTEXT");
+    for t in tags {
+        if mtext && t.code == 75 {
+            break;
+        }
+        if !(50..=58).contains(&t.code) {
+            continue;
+        }
+        let v = match t.value {
+            cadcraft_dxf::Value::Real(r) => r,
+            cadcraft_dxf::Value::Int(i) => i as f64,
+            _ => continue,
+        };
+        t.value = cadcraft_dxf::Value::Real(f(v));
+    }
 }
 
 fn tag_value(t: &Tag) -> Value {
@@ -274,7 +319,8 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let h = ename(&a[0])?;
     let Ok(d) = ctx.s.doc() else { return Ok(Flow::Value(Value::Nil)) };
     let Some(e) = d.entity(h) else { return Ok(Flow::Value(Value::Nil)) };
-    let (kind, tags) = (codec()?.groups)(d, e);
+    let (kind, mut tags) = (codec()?.groups)(d, e);
+    convert_angles(&kind, &mut tags, f64::to_radians);
     let layout = match space_of(d, h) {
         Some(Space::Paper(name)) => name,
         _ => "Model".into(),
@@ -296,6 +342,7 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 /// The entity a list describes, as the reader makes it; a missing layer (8) is the current one.
 fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadcraft_doc::Common, cadcraft_doc::EntityKind), LispError> {
     let (kind, mut tags) = list_to_groups(list)?;
+    convert_angles(&kind, &mut tags, f64::to_degrees);
     if !tags.iter().any(|t| t.code == 8) {
         let layer = crate::sysvars::get(ctx.s, "CLAYER").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "0".into());
         tags.insert(0, Tag::s(8, layer));
@@ -616,7 +663,8 @@ fn parse_filter_item(items: &[Value], i: &mut usize, depth: usize) -> Result<Fil
 fn matches_filter(d: &cadcraft_doc::Drawing, e: &Entity, f: &Filter) -> bool {
     let groups = || match crate::cmd::file::entity_codec() {
         Some(c) => {
-            let (kind, tags) = (c.groups)(d, e);
+            let (kind, mut tags) = (c.groups)(d, e);
+            convert_angles(&kind, &mut tags, f64::to_radians);
             let mut l = vec![Value::cons(Value::Int(0), Value::str(&kind))];
             l.extend(groups_to_list(&tags));
             l

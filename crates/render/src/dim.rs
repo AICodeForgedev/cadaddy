@@ -413,18 +413,59 @@ fn tol_height_code(st: &DimStyle) -> String {
     format!("{}x", format_decimal(f / 0.7, 4, 8, "."))
 }
 
+/// Apply measurement placeholders or append a dimension suffix, bounding the resulting UTF-8 text.
 fn post(template: &str, meas: &str) -> String {
-    if template.contains("<>") { template.replace("<>", meas) } else { format!("{meas}{template}") }
+    if template.contains("<>") {
+        bounded_replace(template, meas)
+    } else {
+        let mut out = String::new();
+        append_dim_text(&mut out, meas);
+        append_dim_text(&mut out, template);
+        out
+    }
 }
 
+/// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
 fn apply_override(base: &str, d: &Dimension) -> String {
     if d.text.is_empty() {
         base.to_string()
     } else if d.text.trim().is_empty() {
         String::new()
     } else {
-        d.text.replace("<>", base)
+        bounded_replace(&d.text, base)
     }
+}
+
+/// Largest dimension text produced by substituting the measurement into style/override text. Two
+/// modest strings can otherwise expand into gigabytes when the template holds many `<>` markers
+/// (CWE-789); past this the output is truncated rather than allocated unbounded.
+const MAX_DIM_TEXT: usize = 64 * 1024;
+
+/// Replace every `<>` in `template` with `value`, with the expanded length checked against
+/// [`MAX_DIM_TEXT`] before allocating so a many-placeholder template cannot blow up memory.
+fn bounded_replace(template: &str, value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find("<>") {
+        if !append_dim_text(&mut out, &rest[..i]) || !append_dim_text(&mut out, value) {
+            return out;
+        }
+        rest = &rest[i + 2..];
+    }
+    append_dim_text(&mut out, rest);
+    out
+}
+
+// Returns false when truncation consumed the remaining UTF-8-safe space.
+/// Append within the remaining dimension-text byte allowance without splitting a UTF-8 character.
+/// Return false if any input text had to be truncated.
+fn append_dim_text(out: &mut String, text: &str) -> bool {
+    let mut end = text.len().min(MAX_DIM_TEXT.saturating_sub(out.len()));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    out.push_str(&text[..end]);
+    end == text.len()
 }
 
 fn ext_line(origin: Vec2, foot: Vec2, st: &DimStyle, k: f64) -> Option<Vec<Vec2>> {
@@ -777,7 +818,16 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                         end(&mut g, blk1, start, -u);
                     }
                 }
-                g.dim(vec![tip, tpos]);
+                // Text the user placed: the leader stops short of it by the offset the default
+                // placement leaves between leader end and text.
+                let lead = if !d.user_text_pos {
+                    tpos
+                } else if horizontal {
+                    text_mid - Vec2::new(tw / 2.0 + gap, 0.0) * if u.x >= 0.0 { 1.0 } else { -1.0 }
+                } else {
+                    text_mid - u * (tw / 2.0 + gap)
+                };
+                g.dim(vec![tip, lead]);
             }
             end(&mut g, blk2, tip, u);
             if horizontal {
@@ -1311,5 +1361,25 @@ mod tests {
         d.p15 = Vec3::new(f64::NAN, 0.0, 0.0);
         let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
         assert!(g.lines.is_empty() && g.fills.is_empty(), "{:?}", g.lines);
+    }
+}
+
+#[cfg(test)]
+mod text_budget_tests {
+    use super::*;
+    /// A dimension suffix without placeholders still obeys the total text limit.
+    #[test]
+    fn bounds_post_without_markers() {
+        let text = post(&"x".repeat(MAX_DIM_TEXT * 2), "12");
+        assert_eq!(text.len(), MAX_DIM_TEXT);
+        assert!(text.starts_with("12x"));
+    }
+    /// Oversized substituted text retains its prefix and ends at a valid UTF-8 boundary.
+    #[test]
+    fn oversized_value_is_substituted_and_truncated_at_a_character_boundary() {
+        let text = bounded_replace("prefix <> mm", &"é".repeat(MAX_DIM_TEXT));
+        assert!(text.starts_with("prefix é"));
+        assert!(!text.contains("<>"));
+        assert!(text.len() <= MAX_DIM_TEXT && text.len() >= MAX_DIM_TEXT - 1);
     }
 }

@@ -10,9 +10,10 @@
 //! Not read (each is a follow-up): CSS class rules (`<style>`), `use` references, fills,
 //! gradients and hatch patterns, text, embedded raster images, rounded rectangle corners
 //! (`rx`/`ry`), and elliptical arcs under non-uniform transforms (those are flattened into
-//! line segments instead of losing the shape).
+//! line segments instead of losing the shape). What the drawing shows of those (all but fills,
+//! gradients and patterns) is named in a read note, so it is never left out silently.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use cadcraft_color::Color;
 use cadcraft_doc::*;
@@ -37,6 +38,9 @@ const MAX_LAYERS: usize = 256;
 const MAX_TRANSFORM_DEPTH: usize = 64;
 /// Flattened chords per elliptical arc under a non-uniform transform.
 const MAX_ARC_CHORDS: usize = 10_000;
+/// Generated vertices retained across the whole document (all paths and shapes), so repeated
+/// arc/curve flattening cannot amplify a compact input into unbounded geometry.
+const MAX_TOTAL_VERTS: usize = 8_000_000;
 
 /// Elements whose whole subtree is skipped (paint servers, text, raster images, metadata).
 const SKIP: &[&[u8]] = &[
@@ -125,11 +129,50 @@ struct Parser {
     layers: HashSet<String>,
     layer_color: u8,
     elements: usize,
+    /// Generated vertices still allowed across the whole document. Arc/curve flattening can turn
+    /// a compact path into many samples, and each flushed run is retained, so without a shared
+    /// budget repeated arcs amplify a small input into gigabytes of geometry (CWE-400).
+    verts_left: usize,
     /// > 0 while inside a skipped subtree; counts the starts seen there.
     skip: usize,
+    /// What was left out, by kind ([`LeftOut`]).
+    left_out: BTreeMap<LeftOut, usize>,
+}
+
+/// Drawn content the reader leaves out, named in the drawing's read note.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LeftOut {
+    Text,
+    Image,
+    Use,
+    Style,
+    RoundedCorners,
+}
+
+impl LeftOut {
+    /// The kind of a skipped element ([`SKIP`]) that the drawing shows.
+    fn of(name: &[u8]) -> Option<Self> {
+        match name {
+            b"text" => Some(Self::Text),
+            b"image" => Some(Self::Image),
+            _ => None,
+        }
+    }
+
+    fn describe(self, n: usize) -> String {
+        let (one, many) = match self {
+            Self::Text => ("text", "texts"),
+            Self::Image => ("raster image", "raster images"),
+            Self::Use => ("`<use>` copy", "`<use>` copies"),
+            Self::Style => ("`<style>` sheet (its class rules aren't applied)", "`<style>` sheets (their class rules aren't applied)"),
+            Self::RoundedCorners => ("rectangle with rounded corners (drawn square)", "rectangles with rounded corners (drawn square)"),
+        };
+        format!("{n} {}", if n == 1 { one } else { many })
+    }
 }
 
 impl Parser {
+    /// Initialize a metric SVG drawing with one document-wide generated-vertex allowance.
     fn new() -> Self {
         Parser {
             drawing: Drawing::new_metric(),
@@ -138,8 +181,23 @@ impl Parser {
             layers: HashSet::from(["0".to_string()]),
             layer_color: 1,
             elements: 0,
+            verts_left: MAX_TOTAL_VERTS,
             skip: 0,
+            left_out: BTreeMap::new(),
         }
+    }
+
+    fn left_out(&mut self, kind: LeftOut) {
+        *self.left_out.entry(kind).or_default() += 1;
+    }
+
+    /// The read note on what was left out, if anything was.
+    fn note(&self) -> Option<String> {
+        if self.left_out.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self.left_out.iter().map(|(k, n)| k.describe(*n)).collect();
+        Some(format!("SVG: CADCraft doesn't read these yet, so they were left out: {}", list.join(", ")))
     }
 
     fn parse(&mut self, text: &str) -> Result<()> {
@@ -149,35 +207,43 @@ impl Parser {
             match reader.read_event().map_err(parse_err)? {
                 Event::Start(e) => {
                     let name = e.name();
-                    self.on_start(name.as_ref(), &e)?;
+                    self.on_start(name.into_inner().as_bytes(), &e)?;
                 }
                 Event::Empty(e) => {
                     let name = e.name();
-                    self.on_element(name.as_ref(), &e)?;
+                    self.on_element(name.into_inner().as_bytes(), &e)?;
                 }
                 Event::End(e) => {
                     let name = e.name();
-                    self.on_end(name.as_ref());
+                    self.on_end(name.into_inner().as_bytes());
                 }
                 Event::Eof => break,
                 _ => {}
             }
         }
+        self.drawing.read_notes.extend(self.note());
         Ok(())
     }
 
     /// A start tag: open a transform frame, descend into a skipped subtree, or treat a
     /// shape written as start+end the same as a self-closed one.
     fn on_start(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
+        // A style sheet applies wherever it is (Inkscape keeps it in `<defs>`).
+        if name == b"style" {
+            self.left_out(LeftOut::Style);
+        }
         if self.skip > 0 {
             self.skip += 1;
             return Ok(());
         }
-        if SKIP.contains(&name) {
+        if hidden(e) {
             self.skip = 1;
             return Ok(());
         }
-        if hidden(e) {
+        if SKIP.contains(&name) {
+            if let Some(kind) = LeftOut::of(name) {
+                self.left_out(kind);
+            }
             self.skip = 1;
             return Ok(());
         }
@@ -189,9 +255,18 @@ impl Parser {
             return Ok(());
         }
         if SKIP.contains(&name) || hidden(e) {
+            if !hidden(e)
+                && let Some(kind) = LeftOut::of(name)
+            {
+                self.left_out(kind);
+            }
             return Ok(());
         }
         match name {
+            b"use" => {
+                self.left_out(LeftOut::Use);
+                Ok(())
+            }
             b"rect" => self.rect(e),
             b"circle" => self.circle(e),
             b"ellipse" => self.ellipse(e),
@@ -260,11 +335,20 @@ impl Parser {
         self.cur().apply_vec(v)
     }
 
+    /// Charge an entity against element and retained-vertex limits before adding it to model space.
     fn add(&mut self, kind: EntityKind) -> Result<()> {
         self.elements += 1;
         if self.elements > MAX_ELEMENTS {
             return Err(IoError::Format(format!("SVG: more than {MAX_ELEMENTS} elements")));
         }
+        // Charge the vertices this entity retains against the shared document budget, so repeated
+        // flattened arcs/curves cannot amplify a compact path into unbounded geometry (CWE-400).
+        let verts = match &kind {
+            EntityKind::LwPolyline(p) => p.vertices.len(),
+            EntityKind::Spline(s) => s.control.len(),
+            _ => 1,
+        };
+        self.verts_left = self.verts_left.checked_sub(verts).ok_or_else(|| IoError::Format("SVG: too much generated geometry".into()))?;
         let common = Common { layer: self.layer.clone(), ..Common::default() };
         self.drawing.add(&Space::Model, common, kind).map(|_| ()).map_err(parse_err)
     }
@@ -278,6 +362,9 @@ impl Parser {
         let h = num(e, b"height", 0.0);
         if w <= 0.0 || h <= 0.0 {
             return Ok(());
+        }
+        if num(e, b"rx", 0.0) > 0.0 || num(e, b"ry", 0.0) > 0.0 {
+            self.left_out(LeftOut::RoundedCorners);
         }
         let pts = [Vec2::new(x, y), Vec2::new(x + w, y), Vec2::new(x + w, y + h), Vec2::new(x, y + h)];
         self.add_polyline(&pts.map(|p| self.map(p)), true)
@@ -491,7 +578,7 @@ fn hidden(e: &BytesStart) -> bool {
 
 fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
     for a in e.attributes().flatten() {
-        if a.key.as_ref() == name {
+        if a.key.into_inner().as_bytes() == name {
             return a.normalized_value(XmlVersion::Explicit1_0).ok().map(|v| v.into_owned());
         }
     }

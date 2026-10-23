@@ -31,6 +31,19 @@ fn ok(s: &mut Session, code: &str) -> String {
 }
 
 #[test]
+fn real_print_subnormal_and_rounding() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "1e-310"), "1.0e-310");
+    assert_eq!(ok(&mut s, "5e-324"), "4.94066e-324");
+    assert_eq!(ok(&mut s, "9.9999996e10"), "1.0e+011");
+    assert_eq!(ok(&mut s, "9.9999996e-7"), "1.0e-006");
+    assert_eq!(super::value::real_text(-1e-310), "-1.0e-310");
+    assert_eq!(super::value::real_text(1e308), "1.0e+308");
+    assert_eq!(super::value::real_text(999999.5), "1.0e+006");
+    assert_eq!(super::value::real_text(0.000009999996), "0.00001");
+}
+
+#[test]
 fn arithmetic_follows_autolisp() {
     let mut s = session();
     assert_eq!(ok(&mut s, "(+ 1 2 3)"), "6");
@@ -55,6 +68,39 @@ fn arithmetic_follows_autolisp() {
     assert_eq!(ok(&mut s, "(= \"a\" \"a\")"), "T");
     assert_eq!(eval(&mut s, "(/ 1 0)"), Err("divide by zero".into()));
     assert_eq!(eval(&mut s, "(+ 1 nil)"), Err("bad argument type: numberp: nil".into()));
+}
+
+/// `=` answers for the symbols `type` returns, which is how AutoLISP routines test a type:
+/// `(= (type x) 'INT)`. Coercing the symbol to a number failed the whole routine with "bad
+/// argument type" instead, so a routine written for AutoLISP stopped at its first type test
+/// (#1597). The ordering comparisons are still numbers and strings, as AutoLISP has them.
+#[test]
+fn equality_compares_symbols_as_autolisp_does() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(= (type 1) 'INT)"), "T");
+    assert_eq!(ok(&mut s, "(= (type 1.0) 'INT)"), "nil");
+    assert_eq!(ok(&mut s, "(= (type '(1 2)) 'LIST)"), "T");
+    assert_eq!(ok(&mut s, "(= (type \"a\") 'STR)"), "T");
+    assert_eq!(ok(&mut s, "(/= (type 1) 'REAL)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'a 'a)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'b)"), "nil");
+
+    // The routine from the report runs.
+    ok(&mut s, "(defun isint (a) (if (= (type a) 'INT) T nil))");
+    assert_eq!(ok(&mut s, "(isint 3)"), "T");
+    assert_eq!(ok(&mut s, "(isint 3.0)"), "nil");
+    assert_eq!(ok(&mut s, "(isint \"3\")"), "nil");
+
+    // A mismatch of kinds is nil, not an error; numbers and strings are unchanged.
+    assert_eq!(ok(&mut s, "(= 1 \"1\")"), "nil");
+    assert_eq!(ok(&mut s, "(= '(1) '(1))"), "nil", "`=` is not `equal`");
+    assert_eq!(ok(&mut s, "(= nil nil)"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1.0)"), "T");
+    assert_eq!(ok(&mut s, "(= \"a\" \"a\" \"a\")"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1 2)"), "nil");
+
+    // Ordering still refuses what AutoLISP refuses.
+    assert_eq!(eval(&mut s, "(< 'a 'b)"), Err("bad argument type: numberp: A".into()));
 }
 
 #[test]
@@ -175,6 +221,69 @@ fn runaway_routines_are_errors_not_crashes() {
     assert_eq!(r, Ok("3000000".into()));
 }
 
+/// An infinite comparator stops at its callback cap, and a later finite comparator still succeeds.
+#[test]
+fn synchronous_callback_loop_is_an_error_not_a_hang() {
+    // A comparator with an infinite loop used to run with u64::MAX fuel and hang the thread; it
+    // now terminates at the synchronous-callback step cap (CWE-400, finding row 2).
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    assert!(eval(&mut s, "(vl-sort '(1 2) (function (lambda (a b) (while t))))").is_err());
+    // A well-behaved comparator still works afterwards.
+    assert_eq!(ok(&mut s, "(vl-sort '(3 1 2) '<)"), "(1 2 3)");
+}
+
+/// A zero-step callback limit prevents even the first callback side effect.
+#[test]
+fn a_zero_callback_budget_does_not_run_the_callback() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 0;
+    ok(&mut s, "(setq callback-ran nil)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (setq callback-ran t)) '(1))");
+    assert_eq!(result, Err("callback stopped after 0 steps".into()));
+    assert_eq!(ok(&mut s, "callback-ran"), "nil");
+}
+
+/// A callback stops at a cap smaller than one scheduling slice without completing all its assignments.
+#[test]
+fn a_callback_must_fit_within_a_partial_slice() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    ok(&mut s, "(setq callback-count 0)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (repeat 1000 (setq callback-count (1+ callback-count)))) '(1))");
+    assert_eq!(result, Err("callback stopped after 1000 steps".into()));
+    assert_eq!(ok(&mut s, "(and (> callback-count 0) (< callback-count 1000))"), "T");
+}
+
+/// Crossing a scheduling boundary grants only the additional configured step, rather than another slice.
+#[test]
+fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
+    let counts: Vec<u64> = [399_999, 400_000]
+        .into_iter()
+        .map(|cap| {
+            let mut s = session();
+            s.lisp.limits.callback_steps = cap;
+            ok(&mut s, "(setq callback-count 0)");
+            let result = eval(&mut s, "(vl-remove-if '(lambda (x) (while t (setq callback-count (1+ callback-count)))) '(1))");
+            assert_eq!(result, Err(format!("callback stopped after {cap} steps")));
+            ok(&mut s, "callback-count").parse().unwrap()
+        })
+        .collect();
+    // One additional VM step can perform at most one assignment, even at SYNC_SLICE's boundary.
+    assert!(counts[0] > 0);
+    assert!(counts[1] >= counts[0] && counts[1] - counts[0] <= 1, "{counts:?}");
+}
+
+/// System-variable conversion rejects a shared list whose owned JSON expansion would exceed its budget.
+#[test]
+fn setvar_rejects_an_oversized_shared_structure() {
+    // A list repeatedly sharing its own contents expands exponentially; setvar's bounded JSON
+    // conversion rejects it instead of allocating gigabytes (CWE-400, finding row 39).
+    let mut s = session();
+    let build = "(setq x '(1)) (repeat 40 (setq x (list x x))) (setvar \"GRIDUNIT\" x)";
+    assert!(eval(&mut s, build).is_err());
+}
+
 #[test]
 fn printing() {
     let mut s = session();
@@ -242,6 +351,61 @@ fn entity_lists_round_trip() {
     assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget e)))"), "\"LINE\"");
     assert_eq!(ok(&mut s, "(entmake '((0 . \"NOSUCHTHING\")))"), "nil");
     assert_eq!(ok(&mut s, "(handent \"ZZZZZZ\")"), "nil");
+}
+
+#[test]
+fn entity_lists_hold_angles_in_radians() {
+    let mut s = session();
+    let near = |s: &mut Session, expr: &str, want: &str| {
+        let code = format!("(equal {expr} {want} 1e-9)");
+        assert_eq!(ok(s, &code), "T", "{expr} is {}, not {want}", ok(s, expr));
+    };
+    // A DXF file holds an ARC's 50 and 51 in degrees; entget gives radians (#1165).
+    s.script("ARC\nC\n0,0\n10,0\n0,10\n").unwrap();
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "(/ pi 2)");
+    // ssget filters compare against the values entget shows.
+    assert_eq!(ok(&mut s, "(sslength (ssget \"X\" '((0 . \"ARC\") (-4 . \"<\") (51 . 2.0))))"), "1");
+    // entmod takes radians.
+    ok(&mut s, "(setq d (entget (entlast))) (entmod (subst (cons 51 pi) (assoc 51 d) d))");
+    let end = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::Arc(a) => Some(a.end),
+        _ => None,
+    });
+    assert!(end.is_some_and(|a| (a - std::f64::consts::PI).abs() < 1e-9), "{end:?}");
+
+    // TEXT rotation (50) and oblique angle (51), through entmake.
+    ok(&mut s, "(entmake (list '(0 . \"TEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(1 . \"abc\") (cons 50 (/ pi 6)) '(51 . 0.25)))");
+    let text = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::Text(t) => Some((t.rotation, t.oblique)),
+        _ => None,
+    });
+    assert!(text.is_some_and(|(r, o)| (r - std::f64::consts::FRAC_PI_6).abs() < 1e-9 && (o - 0.25).abs() < 1e-9), "{text:?}");
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 6)");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "0.25");
+
+    // HATCH pattern angle (52) and pattern line angle (53): ANSI31 at 0 has its lines at 45°.
+    s.script("CIRCLE\n0,0\n10\n-HATCH\nP\nANSI31\n1\n0\n0,0\n\n").unwrap();
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"HATCH\"");
+    near(&mut s, "(cdr (assoc 52 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 53 (entget (entlast))))", "(/ pi 4)");
+
+    // MTEXT: 50 before the column type (75) is the rotation, after it a column height.
+    ok(
+        &mut s,
+        "(entmake (list '(0 . \"MTEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(41 . 10.0) '(1 . \"abc\") (cons 50 (/ pi 3)) '(75 . 2) '(76 . 2) '(79 . 0) '(48 . 10.0) '(49 . 1.0) '(50 . 30.0) '(50 . 20.0)))",
+    );
+    let mtext = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadcraft_doc::EntityKind::MText(t) => Some((t.rotation, t.columns.as_ref().map(|c| c.heights.clone()))),
+        _ => None,
+    });
+    assert!(
+        mtext.as_ref().is_some_and(|(r, h)| (r - std::f64::consts::FRAC_PI_3).abs() < 1e-9 && h.as_deref() == Some(&[30.0, 20.0][..])),
+        "{mtext:?}"
+    );
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 3)");
+    let d = ok(&mut s, "(entget (entlast))");
+    assert!(d.contains("(50 . 30.0) (50 . 20.0)"), "{d}");
 }
 
 #[test]
@@ -382,6 +546,37 @@ fn hostile_lisp_never_panics() {
         let _ = eval(&mut s, code);
     }
     assert!(!s.lisp_running());
+}
+
+/// `entsel` and `nentsel` pick one object, so the cursor shows the pick box at their prompt. It
+/// was read off the message's first word, and a routine's own message begins with a newline -- so
+/// the same call showed the pick box without a message and lost it with one (#1598).
+#[test]
+fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
+    let mut s = session();
+    // No message: the default "Select object: ".
+    s.cmdline("(nentsel)").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // The reported case: the routine's own message, starting with a newline.
+    s.cmdline("(nentsel \"\nSelect second line or polyline: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // Wording that never says "select" picks an object just the same.
+    s.cmdline("(entsel \"\nPick a line: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // A point prompt is not a pick, and keeps its point modifiers -- including one whose own
+    // message happens to begin with the word the built-in commands are read by. `picks_one` says
+    // which calls pick, so the wording is only ever read where the engine wrote it (#1635 review).
+    for point in ["(getpoint \"\nSpecify a point: \")", "(getpoint \"\nSelect a point: \")", "(getpoint \"Select a point: \")"] {
+        s.cmdline(point).unwrap();
+        assert!(!s.current_prompt().unwrap().picks_objects(), "{point}: {}", s.prompt_text());
+        s.cancel();
+    }
 }
 
 #[test]

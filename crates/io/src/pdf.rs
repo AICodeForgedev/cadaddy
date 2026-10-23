@@ -394,7 +394,7 @@ struct SheetPage {
 /// Plot one space.
 fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String)]) -> Result<SheetPage> {
     let page = page_for(d, space, o)?;
-    let unit_mm = paper::paper_unit_mm(d);
+    let unit_mm = paper::page_unit_mm(d, &page);
     let sheet = Sheet::from_page(&page, unit_mm);
     let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
@@ -511,9 +511,12 @@ fn links(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, link
     if links.is_empty() {
         return Vec::new();
     }
+    // Membership by handle, built once, so scanning primitives is O(primitives) rather than
+    // O(primitives × links): otherwise the two counts multiply into excessive work (CWE-407).
+    let linked: std::collections::HashSet<Handle> = links.iter().map(|(h, _)| *h).collect();
     let mut areas: std::collections::HashMap<Handle, Bounds2> = std::collections::HashMap::new();
     for p in &list.prims {
-        if matches!(p.kind, Kind::Infinite { .. }) || !links.iter().any(|(h, _)| *h == p.handle) {
+        if matches!(p.kind, Kind::Infinite { .. }) || !linked.contains(&p.handle) {
             continue;
         }
         let b = areas.entry(p.handle).or_insert(Bounds2::EMPTY);

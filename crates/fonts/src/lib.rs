@@ -334,7 +334,11 @@ pub struct TextGlyph {
 
 impl Shaped {
     /// Add a glyph outline and, when it is a font glyph, its [`TextGlyph`].
+    /// An empty outline is retained only when text metadata needs its slot.
     pub(crate) fn push_glyph(&mut self, contours: Vec<Vec<Vec2>>, text: Option<TextGlyph>) {
+        if contours.is_empty() && text.is_none() {
+            return;
+        }
         if let Some(t) = text {
             self.text.push(TextGlyph { outline: self.glyphs.len(), ..t });
         }
@@ -488,6 +492,45 @@ impl TextParams {
     pub fn centered(p: Vec2, height: f64, rotation: f64) -> Self {
         TextParams { align_pt: Some(p), rotation, h: Align::Middle, v: VAlign::Middle, ..TextParams::new(p, height) }
     }
+}
+
+/// Where a single-line TEXT's baseline starts (the left end of its first character's baseline),
+/// in world coordinates: what DXF/DWG store as a justified text's insertion point (group 10),
+/// computed from its alignment point (group 11) and its width in `font`.
+pub fn baseline_start(font: &TextFont, s: &str, p: &TextParams) -> Vec2 {
+    let (origin, local, rot, mirror) = frame(font, s, p);
+    origin + Vec2::new(local.x * mirror.x, local.y * mirror.y).rotate(rot)
+}
+
+/// How [`place`] puts a line in the world: the point it is placed by, the offset of its baseline
+/// start from that point (along the text), its rotation and its mirroring (backwards, upside
+/// down). Aligned and fit text are placed by their insertion point.
+fn frame(font: &TextFont, s: &str, p: &TextParams) -> (Vec2, Vec2, f64, Vec2) {
+    let height = if p.height > 0.0 && p.height.is_finite() { p.height } else { 1.0 };
+    let rot = if p.rotation.is_finite() { p.rotation } else { 0.0 };
+    if matches!(p.h, Align::Aligned | Align::Fit) {
+        let rot = p.align_pt.map_or(rot, |p2| p.insert.angle_to(p2));
+        return (p.insert, Vec2::ZERO, rot, Vec2::new(1.0, 1.0));
+    }
+    let width = shape_line(font, s, height, p.width_factor, p.oblique).width;
+    let origin = match (p.h, p.v) {
+        (Align::Left, VAlign::Baseline) => p.insert,
+        _ => p.align_pt.unwrap_or(p.insert),
+    };
+    let dx = match p.h {
+        Align::Left | Align::Aligned | Align::Fit => 0.0,
+        Align::Center | Align::Middle => -width / 2.0,
+        Align::Right => -width,
+    };
+    let dy = match (p.h, p.v) {
+        (Align::Middle, _) => -height / 2.0,
+        (_, VAlign::Baseline) => 0.0,
+        (_, VAlign::Bottom) => height / 3.0,
+        (_, VAlign::Middle) => -height / 2.0,
+        (_, VAlign::Top) => -height,
+    };
+    let mirror = Vec2::new(if p.backwards { -1.0 } else { 1.0 }, if p.upside_down { -1.0 } else { 1.0 });
+    (origin, Vec2::new(dx, dy), rot, mirror)
 }
 
 /// Place a single-line TEXT in world coordinates with any font. Returns the shaped text and its

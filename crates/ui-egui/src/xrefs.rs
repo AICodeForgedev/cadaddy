@@ -24,7 +24,13 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
             if let Err(e) = app.session.start("xattach") {
                 return Some(Err(e.to_string()));
             }
-            app.cmdline(&path);
+            // Submit the picked filename as literal text, not through the command line: a path is
+            // attacker-controlled (the file picker returns whatever the user selected), and
+            // `cmdline` interprets command syntax, so a name like `'closeall` would run an engine
+            // command instead of naming the file (CWE-74).
+            if let Err(e) = app.session.input(cadcraft_engine::Input::Text(path)) {
+                return Some(Err(e.to_string()));
+            }
             Some(Ok(Value::Null))
         }
         _ => None,

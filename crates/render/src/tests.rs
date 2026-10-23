@@ -924,3 +924,78 @@ fn cancelled_build_stops_early() {
     assert!(!crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, None).is_empty());
     assert!(crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, set.as_deref()).is_empty());
 }
+
+/// #1434: a closed polyline with a global width narrower than a pixel loses whole sides at
+/// some zooms, while the same polyline with width 0 always shows every side.
+#[test]
+fn thin_wide_polyline_keeps_every_side_at_every_zoom() {
+    let square = |const_width: f64| {
+        let mut d = Drawing::new_imperial();
+        let vertices = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)].map(|(x, y)| PolyVertex::new(Vec2::new(x, y))).to_vec();
+        let p = cadcraft_doc::LwPolyline { vertices, closed: true, const_width, elevation: 0.0, plinegen: false };
+        d.add(&Space::Model, Common::default(), EntityKind::LwPolyline(p)).unwrap();
+        d
+    };
+    // Side midpoints and the direction across each side.
+    let sides = [("bottom", Vec2::new(5.0, 0.0)), ("right", Vec2::new(10.0, 5.0)), ("top", Vec2::new(5.0, 10.0)), ("left", Vec2::new(0.0, 5.0))];
+    let mut missing = Vec::new();
+    for const_width in [0.0, 0.01, 0.05] {
+        let d = square(const_width);
+        for step in 0..40 {
+            let scale = 20.0 + f64::from(step) * 0.37;
+            let px = 1.0 / scale;
+            let l = build(&d, &Space::Model, &screen(px, None));
+            let v = View { center: Vec2::new(5.17, 4.62), scale, width: 400, height: 400 };
+            // No anti-aliasing: pixel-centre coverage, as the GPU canvas rasterises (no MSAA).
+            let pm = render(&l, &v, &RasterOptions { background: Rgb(0, 0, 0), antialias: false, ..Default::default() }).unwrap();
+            for (name, mid) in sides {
+                let (sx, sy) = v.to_screen(mid);
+                let lit = (-2i32..=2)
+                    .flat_map(|dy| (-2i32..=2).map(move |dx| (dx, dy)))
+                    .any(|(dx, dy)| pm.pixel((sx as i32 + dx) as u32, (sy as i32 + dy) as u32).is_some_and(|c| c.red() > 0));
+                if !lit {
+                    missing.push(format!("width {const_width} scale {scale:.2} ({:.2} px wide): {name} side missing", const_width * scale));
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{} misses:\n{}", missing.len(), missing.join("\n"));
+}
+
+/// #1434: on screen a wide polyline also draws its centre line (a hairline in its colour, solid and
+/// dashed alike); plots and exports (`min_dash` 0) draw the band alone.
+#[test]
+fn wide_polyline_centre_line_is_drawn_on_screen_only() {
+    for lt in ["Continuous", "DASHED"] {
+        let drawing = |transparency: u8| {
+            let mut d = Drawing::new_imperial();
+            d.linetypes.extend(cadcraft_doc::library::standard_linetypes().into_iter().filter(|l| l.name == "DASHED"));
+            let vertices = [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0)].map(|(x, y)| PolyVertex::new(Vec2::new(x, y))).to_vec();
+            let p = cadcraft_doc::LwPolyline { vertices, closed: false, const_width: 0.2, elevation: 0.0, plinegen: false };
+            let common = Common {
+                color: Color::Index(1),
+                linetype: lt.into(),
+                lineweight: cadcraft_doc::Lineweight::Mm100(50),
+                transparency: cadcraft_doc::Transparency::Percent(transparency),
+                ..Default::default()
+            };
+            d.add(&Space::Model, common, EntityKind::LwPolyline(p)).unwrap();
+            d
+        };
+        let d = drawing(0);
+        let opts = Options { lineweights: true, transparency: true, ..screen(0.01, None) };
+        let lines = |l: &DisplayList| l.prims.iter().filter(|p| p.kind == Kind::Polyline).count();
+        let on_screen = build(&d, &Space::Model, &opts);
+        assert!(on_screen.prims.iter().any(|p| p.kind == Kind::Tris), "{lt}: the band");
+        let hair: Vec<&DPrim> = on_screen.prims.iter().filter(|p| p.kind == Kind::Polyline).collect();
+        assert!(!hair.is_empty(), "{lt}: the centre line on screen");
+        assert!(hair.iter().all(|p| p.color == Rgb(255, 0, 0) && p.lw == 0.0), "{lt}: hairline in the polyline's colour");
+        assert!(on_screen.points(hair[0]).iter().all(|q| q.y.abs() < 1e-9 || (q.x - 3.0).abs() < 1e-9), "{lt}: on the centre line");
+        assert_eq!(lines(&build(&d, &Space::Model, &Options { min_dash: 0.0, ..opts.clone() })), 0, "{lt}: exports draw the band alone");
+        assert_eq!(lines(&build_plot(&d, &Space::Model, &opts)), 0, "{lt}: plots draw the band alone");
+        // Its alpha would add up along the centre: a transparent band gets no hairline.
+        let see_through = build(&drawing(50), &Space::Model, &opts);
+        assert!(see_through.prims.iter().any(|p| p.kind == Kind::Tris && p.transparency == 50), "{lt}: the transparent band");
+        assert_eq!(lines(&see_through), 0, "{lt}: a transparent band gets no hairline");
+    }
+}

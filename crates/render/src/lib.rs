@@ -343,6 +343,18 @@ impl Builder<'_> {
         }
         self.note_pen(color);
         let (color, lw) = self.styled(color, lw);
+        self.push_polyline(ctx, color, lw, pts);
+    }
+    /// A one-pixel line in `color` as the plot style prints it, without the style's lineweight
+    /// or pen: the centre line drawn on screen over a thin wide polyline.
+    fn hairline(&mut self, ctx: &Ctx, color: Ink, pts: &[Vec2]) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (color, _) = self.styled(color, 0.0);
+        self.push_polyline(ctx, color, 0.0, pts);
+    }
+    fn push_polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
@@ -642,11 +654,12 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     if b.opts.skip_viewport == Some(e.handle) {
         return;
     }
+    let unit_mm = paper::unit_mm_of(d, e.handle);
     match &poly {
-        Some(p) => contents(b, d, vp, p.bounds(), &Clip::Poly(p)),
+        Some(p) => contents(b, d, vp, p.bounds(), &Clip::Poly(p), unit_mm),
         None => {
             if let Some(rect) = viewport_rect(vp) {
-                contents(b, d, vp, rect, &Clip::Rect(rect));
+                contents(b, d, vp, rect, &Clip::Rect(rect), unit_mm);
             }
         }
     }
@@ -684,13 +697,13 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
     let styler = style_table(d, space, opts, false).map(|t| plotstyle::Styler::new(d, t));
     let mut b =
         Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
-    contents(&mut b, d, vp, area, &Clip::Rect(area));
+    contents(&mut b, d, vp, area, &Clip::Rect(area), paper::unit_mm_of(d, handle));
     b.list
 }
 
 /// Model space seen through `vp`, in paper units, appended to `b`'s list clipped to `clip`;
 /// `area` (the clip's bounds on paper) picks the model objects to draw.
-fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip) {
+fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bounds2, clip: &Clip, unit_mm: f64) {
     if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
@@ -722,13 +735,17 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         let eb = cadcraft_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
+    // One expansion budget for the whole build: seed it with what the enclosing list has already
+    // spent so a viewport's contents cannot start over with a fresh allowance and exceed the
+    // documented limit (CWE-400). Both the serial sub-builder and the parallel chunks share it.
+    let budget = std::sync::atomic::AtomicUsize::new(b.list.expanded);
     let mut sub = Builder {
         list: DisplayList::default(),
         opts: b.opts,
         plotting: b.plotting,
         styles: b.styles,
         named: None,
-        shared_budget: None,
+        shared_budget: Some(&budget),
         transparency: 0,
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -741,7 +758,6 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
             // As `build_parallel`: chunks built side by side, joined in drawing order.
             use rayon::prelude::*;
             let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
-            let budget = std::sync::atomic::AtomicUsize::new(0);
             let opts = b.opts;
             let parts: Vec<DisplayList> = ents
                 .par_chunks(PARALLEL_CHUNK)
@@ -784,7 +800,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         }
     }
     // The contents are in paper units now: draw their pens before clipping.
-    pen::apply(&mut sub.list, paper::paper_unit_mm(d));
+    pen::apply(&mut sub.list, unit_mm);
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     append_clipped(&mut b.list, &sub.list, clip);
 }
@@ -1123,12 +1139,24 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                // The GPU canvas has no MSAA: a band narrower than a pixel lights only where it
+                // covers pixel centres, so whole sides vanish at some zooms (#1434). On screen the
+                // centre line is drawn too, as a hairline (wide bands are drawn without lineweight),
+                // so a thin band still shows as a one-pixel line. Always, not below a threshold:
+                // the list serves a whole band of zooms. Plots and exports draw the band alone, and
+                // a transparent band gets none (its alpha would add up along the centre).
+                let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
                 match &lt {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
-                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        let (tris, ticks, centres) = wide::dashed(p, tol, lt, ltscale, min);
                         b.tris(ctx, rgb, &tris);
+                        if hairline {
+                            for c in &centres {
+                                b.hairline(ctx, rgb, c);
+                            }
+                        }
                         for t in &ticks {
                             match t.as_slice() {
                                 [q] => b.point(ctx, rgb, *q),
@@ -1136,7 +1164,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                             }
                         }
                     }
-                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                    None => {
+                        b.tris(ctx, rgb, &fill::wide_polyline(p, tol));
+                        if hairline {
+                            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                            b.hairline(ctx, rgb, &pl.tessellate(tol));
+                        }
+                    }
                 }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -1443,6 +1477,11 @@ pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, ta
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
+}
+
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {
+    align(h, v)
 }
 
 fn align(h: cadcraft_doc::HAlign, v: cadcraft_doc::VAlign) -> (cadcraft_fonts::Align, cadcraft_fonts::VAlign) {

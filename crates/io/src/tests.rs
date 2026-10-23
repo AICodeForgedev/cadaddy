@@ -1086,9 +1086,115 @@ fn dimension_associativity_roundtrips() {
     assert_eq!(assoc_of(&foreign, hl), lin.assoc);
     let fa = assoc_of(&foreign, ha);
     assert_eq!(fa.len(), 2);
-    assert_eq!(fa[1], ali.assoc[1]);
+    assert_eq!(fa[1], ali.assoc[1], "the polyline vertex, named by its segment (#1049)");
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
     assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADCraft-only");
+}
+
+/// #1049: a polyline vertex is referenced as AutoCAD does: an end of one of its segments,
+/// numbered from 1 (subentity type 73 = 2, segment in 91, osnap 1 end / 13 start, parameter 1 /
+/// 0), preferring a straight segment. The cases are the ones observed in AutoCAD 2026 (black box)
+/// in the PR review.
+#[test]
+fn polyline_vertex_references_name_the_segment() {
+    let poly = |pts: &[(f64, f64)], closed: bool, bulges: &[(usize, f64)]| LwPolyline {
+        vertices: pts
+            .iter()
+            .enumerate()
+            .map(|(i, (x, y))| {
+                let b = bulges.iter().find(|(j, _)| *j == i).map_or(0.0, |(_, b)| *b);
+                PolyVertex::with_bulge(Vec2::new(*x, *y), b)
+            })
+            .collect(),
+        closed,
+        const_width: 0.0,
+        elevation: 0.0,
+        plinegen: false,
+    };
+    let refs = |p: &LwPolyline| (0..p.vertices.len()).map(|i| crate::dxf_write::polyline_vertex_ref(p, i)).collect::<Vec<_>>();
+    // Open: vertex 0 is the start of segment 1, vertex k the end of segment k.
+    let open = poly(&[(0.0, 0.0), (100.0, 0.0), (100.0, 60.0), (40.0, 60.0)], false, &[]);
+    assert_eq!(refs(&open), [Some((13, 0.0, 1)), Some((1, 1.0, 1)), Some((1, 1.0, 2)), Some((1, 1.0, 3))]);
+    // Closed (clockwise): the same; the closing segment is the 4th.
+    let closed = poly(&[(0.0, 0.0), (0.0, 60.0), (100.0, 60.0), (100.0, 0.0)], true, &[]);
+    assert_eq!(refs(&closed), [Some((13, 0.0, 1)), Some((1, 1.0, 1)), Some((1, 1.0, 2)), Some((1, 1.0, 3))]);
+    // An arc as segment 3: its end, vertex 3, is the start of the straight segment 4 instead.
+    let arc = poly(&[(0.0, 0.0), (100.0, 0.0), (100.0, 60.0), (40.0, 60.0), (0.0, 30.0)], true, &[(2, 0.5)]);
+    assert_eq!(refs(&arc)[3], Some((13, 0.0, 4)));
+    assert_eq!(refs(&arc)[2], Some((1, 1.0, 2)));
+    // Between two arcs there is no straight segment: no reference.
+    let arcs = poly(&[(0.0, 0.0), (100.0, 0.0), (100.0, 60.0)], false, &[(0, 0.5), (1, 0.5)]);
+    assert_eq!(refs(&arcs)[1], None);
+}
+
+/// #1049: dimensions on the vertices of a polyline are written with segment references, and a
+/// file with only those (another writer's, whose reference points AutoCAD leaves at 0,0) is read
+/// back to the same vertices.
+#[test]
+fn polyline_vertex_dimensions_round_trip_by_segment() {
+    let mut d = Drawing::new_metric();
+    let c = Common::default;
+    let pts = [(0.0, 0.0), (160.0, 0.0), (160.0, 210.0), (0.0, 210.0)];
+    let pl = d
+        .add(
+            &Space::Model,
+            c(),
+            EntityKind::LwPolyline(LwPolyline {
+                vertices: pts.iter().map(|(x, y)| PolyVertex::new(Vec2::new(*x, *y))).collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            }),
+        )
+        .unwrap();
+    let mut on_pl = dim(DimKind::Linear { rotation: std::f64::consts::FRAC_PI_2 }, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 210.0, 0.0));
+    on_pl.assoc = vec![
+        DimAssoc { point: "p13".into(), handle: pl, snap: AssocSnap::Vertex { index: 0 } },
+        DimAssoc { point: "p14".into(), handle: pl, snap: AssocSnap::Vertex { index: 3 } },
+    ];
+    let hp = d.add(&Space::Model, c(), EntityKind::Dimension(on_pl.clone())).unwrap();
+    let text = write_dxf(&d);
+    let tags = cadcraft_dxf::parse(text.as_bytes()).unwrap();
+    // Each reference to the polyline: (72, 73, 91).
+    let refs: Vec<(i64, i64, i64)> = tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.code == 331 && t.str() == pl.hex())
+        .map(|(i, _)| {
+            let back = |code: i32| tags[..i].iter().rev().find(|t| t.code == code).and_then(|t| t.str().parse().ok()).unwrap_or(-1);
+            let fwd = |code: i32| tags[i..].iter().find(|t| t.code == code).and_then(|t| t.str().parse().ok()).unwrap_or(-1);
+            (back(72), fwd(73), fwd(91))
+        })
+        .collect();
+    assert_eq!(refs, [(13, 2, 1), (1, 2, 3)]);
+
+    // Without CADCraft's xdata and with the reference points at 0,0 (as AutoCAD writes them),
+    // the segments still give the vertices.
+    let mut stripped = Vec::new();
+    let mut skipping = false;
+    let mut in_ref = false;
+    for mut t in tags {
+        if t.code == 1001 {
+            skipping = t.str() == "CADCRAFT";
+        } else if t.code < 1000 {
+            skipping = false;
+        }
+        if t.code == 1 {
+            in_ref = t.str() == "AcDbOsnapPointRef";
+        }
+        if in_ref && matches!(t.code, 10 | 20) {
+            t = cadcraft_dxf::Tag::new(t.code, cadcraft_dxf::Value::Real(0.0));
+        }
+        if !skipping {
+            stripped.push(t);
+        }
+    }
+    let foreign = read_dxf(cadcraft_dxf::write_ascii(&stripped).as_bytes()).unwrap();
+    match &foreign.entity(hp).unwrap().kind {
+        EntityKind::Dimension(x) => assert_eq!(x.assoc, on_pl.assoc),
+        _ => panic!(),
+    }
 }
 
 fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {
@@ -1235,6 +1341,23 @@ fn tables_roundtrip_with_title_header_and_merges() {
     let again = roundtrip(&back);
     assert_eq!(first(&again, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None }), t);
     assert_eq!(again.blocks.len(), back.blocks.len());
+}
+
+#[test]
+fn table_block_is_relative_to_the_insertion_point() {
+    let d = Drawing::new_imperial();
+    let t = table_sample();
+    let ents = crate::dxf_write::table_block_entities(&d, &t, "0");
+    let mut xs = Vec::new();
+    for e in &ents {
+        if let EntityKind::Line(l) = &e.kind {
+            xs.extend([l.a.x, l.b.x]);
+        }
+    }
+    assert!(!xs.is_empty());
+    let (min, max) = xs.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+    // Columns total 8 wide; the block starts at its own origin, not at the insert x of 5.
+    assert!(min.abs() < 1e-9 && (max - 8.0).abs() < 1e-9, "block x range {min}..{max}");
 }
 
 #[test]
@@ -1880,8 +2003,9 @@ fn autocad_header_dim_variables_are_not_overrides() {
     assert_eq!(back.header.str("DIMDSEP", ""), ",");
     assert!(back.header.get("DIMTXT").is_some() && back.header.get("DIMCLRD").is_some());
     assert_eq!(back.dim_overrides(), serde_json::Map::new());
-    // A variable that really differs from the style is an override.
-    let text = text.replacen("$DIMDEC\r\n70\r\n3\r\n", "$DIMDEC\r\n70\r\n5\r\n", 1);
+    // A variable that really differs from the style is an override. CADCraft writes the current
+    // style's variables in the header too (#1051), so both copies change.
+    let text = text.replacen("$DIMDEC\r\n70\r\n3\r\n", "$DIMDEC\r\n70\r\n5\r\n", 1).replacen("$DIMDEC\r\n 70\r\n3\r\n", "$DIMDEC\r\n 70\r\n5\r\n", 1);
     assert_eq!(read_dxf(text.as_bytes()).unwrap().dim_overrides().get("decimals"), Some(&serde_json::json!(5)));
 }
 
@@ -2118,6 +2242,28 @@ fn svg_hidden_and_defs_subtrees_are_skipped() {
     );
     let d = read(svg.as_bytes(), "skip.svg").unwrap();
     assert_eq!(kinds(&d), ["Polyline"]);
+}
+
+/// #627: what the reader doesn't read yet (text, raster images, `<use>` copies, style sheets,
+/// rounded corners) is named in a read note instead of being left out silently; what isn't drawn
+/// (in `<defs>` or hidden) isn't counted.
+#[test]
+fn svg_left_out_content_is_noted() {
+    let svg = format!(
+        "{SVG_PAGE}<defs><style>.a {{ stroke: red }}</style><text>in defs</text><rect id=\"r\" width=\"1\" height=\"1\"/></defs>\
+         <text x=\"0\" y=\"5\">one</text><text x=\"0\" y=\"8\"><tspan>two</tspan></text><text display=\"none\">hidden</text>\
+         <image href=\"a.png\" width=\"2\" height=\"2\"/><use href=\"#r\"/><use href=\"#r\" x=\"3\"></use>\
+         <rect x=\"1\" y=\"1\" width=\"4\" height=\"3\" rx=\"1\"/><rect x=\"6\" y=\"1\" width=\"4\" height=\"3\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "left-out.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Polyline"]);
+    assert_eq!(
+        d.read_notes,
+        ["SVG: CADCraft doesn't read these yet, so they were left out: 2 texts, 1 raster image, 2 `<use>` copies, \
+          1 `<style>` sheet (its class rules aren't applied), 1 rectangle with rounded corners (drawn square)"]
+    );
+    let plain = read(format!("{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/></svg>").as_bytes(), "a.svg").unwrap();
+    assert!(plain.read_notes.is_empty(), "{:?}", plain.read_notes);
 }
 
 #[test]
@@ -2372,4 +2518,24 @@ fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
     let t2 = first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
     assert_eq!(t2.cells[0][0].text_height, Some(150.0));
     assert_eq!(t2.cells[0][1].text_height, None);
+}
+
+/// Issue #1209: a file that declares no units ($INSUNITS absent or 0) stays unitless when written
+/// again; only a new drawing takes its template's units.
+#[test]
+fn drawing_without_insunits_stays_unitless() {
+    let r12 = |extra: &str| {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n{extra}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n"
+        )
+    };
+    let insunits = |text: &str| {
+        text.lines().map(str::trim).collect::<Vec<_>>().windows(3).find(|w| w[0] == "$INSUNITS" && w[1] == "70").map(|w| w[2].to_string())
+    };
+    let rewritten = |extra: &str| insunits(&write_dxf(&read_dxf(r12(extra).as_bytes()).unwrap()));
+    assert_eq!(rewritten(""), Some("0".into()), "absent");
+    assert_eq!(rewritten("9\n$INSUNITS\n70\n0\n"), Some("0".into()), "declared unitless");
+    assert_eq!(rewritten("9\n$INSUNITS\n70\n6\n"), Some("6".into()), "declared metres");
+    assert_eq!(insunits(&write_dxf(&Drawing::new_metric())), Some("4".into()));
+    assert_eq!(insunits(&write_dxf(&Drawing::new_imperial())), Some("1".into()));
 }

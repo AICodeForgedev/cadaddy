@@ -1177,7 +1177,7 @@
 	Viewports	Viewports
 	Volume	Volume
 	W	O
-	WCS ⌄	SCM ⌄
+	WCS	SCM
 	White	Branco
 	Width factor	Fator de largura
 	Window	Janela
@@ -1242,5 +1242,8 @@
 	Hatch Pattern	Padrão de hachura
 	Search for pattern	Pesquisar padrão
 	Query Texts	Consultar textos
+	Analyze Shapes	Analisar formas
 	Run Script...	Executar script...
 	Not a number or distance: {text}	Não é um número nem uma distância: {text}
+	Select using two clicks only	Selecionar apenas com dois cliques
+	Define each corner of the selection window with a separate click.	Defina cada canto da janela de seleção com um clique separado.

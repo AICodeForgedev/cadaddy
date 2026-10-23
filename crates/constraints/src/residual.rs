@@ -40,6 +40,11 @@ pub(crate) enum Form {
     C1,
     /// Arc sweep (angular on an arc).
     ArcSweep,
+    /// Two lines measured along the rays from their intersection to each line's far end, the
+    /// angle the dimension draws; `rev` marks a line whose far end is its start point.
+    Rays {
+        rev: [bool; 2],
+    },
     /// Fix of a derived point (residual to an anchor).
     Anchor(Vec2),
     /// Fix handled by locking parameters (no rows).
@@ -92,6 +97,10 @@ fn dir_n(a: Vec2, b: Vec2) -> Vec2 {
     if l > 1e-12 { d * (1.0 / l) } else { d }
 }
 
+fn ray(a: Vec2, b: Vec2, rev: bool) -> Vec2 {
+    if rev { dir_n(b, a) } else { dir_n(a, b) }
+}
+
 fn sgn(v: f64) -> f64 {
     if v < 0.0 { -1.0 } else { 1.0 }
 }
@@ -107,6 +116,16 @@ fn r_at(c: &Constraint, i: usize) -> Option<&GeomRef> {
 }
 
 impl Built {
+    /// Estimate spline reconstruction work for endpoint and join residuals; other residual forms add no such cost.
+    pub(crate) fn spline_reconstruct_cost(&self, m: &Model) -> f64 {
+        let cost = |i: usize| self.refs.get(i).map_or(0.0, |r| m.spline_reconstruct_cost(r.handle));
+        match self.form {
+            Form::EndOn { spline, .. } => cost(spline),
+            Form::Join { .. } => cost(0) + cost(1),
+            _ => 0.0,
+        }
+    }
+
     /// Interpret a constraint against the model at `x`. `target` is the evaluated value for
     /// dimensional constraints (degrees for angular). Errors explain what references are needed.
     pub fn new(c: &Constraint, m: &Model, x: &[f64], target: f64) -> Result<Built, String> {
@@ -284,10 +303,15 @@ impl Built {
             }
             K::Angular => {
                 b.rows = 1;
-                if n == 2 && ln(0).is_some() && ln(1).is_some() {
-                    b.form = Form::LL;
-                    let (Some((a1, b1)), Some((a2, b2))) = (ln(0), ln(1)) else { return need("two lines") };
-                    let (d1, d2) = (dir_n(a1, b1), dir_n(a2, b2));
+                if let (2, Some((a1, b1)), Some((a2, b2))) = (n, ln(0), ln(1)) {
+                    // Start-to-end directions would measure the supplement when a line is drawn
+                    // towards the vertex, so use the rays the dimension draws.
+                    let rev = match cadcraft_geom::line_line_infinite(a1, b1, a2, b2) {
+                        Some((_, t, u)) => [t > 0.5, u > 0.5],
+                        None => [false, false],
+                    };
+                    b.form = Form::Rays { rev };
+                    let (d1, d2) = (ray(a1, b1, rev[0]), ray(a2, b2, rev[1]));
                     b.sign = sgn(d1.cross(d2).atan2(d1.dot(d2)));
                 } else if n == 1 && m.arc_sweep(x, r_at(c, 0).ok_or_else(|| "Angular needs references".to_string())?).is_some() {
                     b.form = Form::ArcSweep;
@@ -297,7 +321,7 @@ impl Built {
                 b.target = target.to_radians();
                 // Two lines measure a signed angle in [-180, 180] and the sign is re-read from the geometry, so a larger
                 // target would flip the sign once solved and never be satisfied; only an arc sweep can reach a full turn.
-                let max = if b.form == Form::LL { std::f64::consts::PI } else { std::f64::consts::TAU };
+                let max = if matches!(b.form, Form::Rays { .. }) { std::f64::consts::PI } else { std::f64::consts::TAU };
                 if !b.target.is_finite() || b.target.abs() > max {
                     return Err("angle out of range".into());
                 }
@@ -461,9 +485,9 @@ impl Built {
             (K::Angular, Form::ArcSweep) => {
                 out.push(m.arc_sweep(x, r(0)?)? - self.target);
             }
-            (K::Angular, _) => {
+            (K::Angular, Form::Rays { rev }) => {
                 let ((a1, b1), (a2, b2)) = (ln(0)?, ln(1)?);
-                let (d1, d2) = (dir_n(a1, b1), dir_n(a2, b2));
+                let (d1, d2) = (ray(a1, b1, rev[0]), ray(a2, b2, rev[1]));
                 out.push(wrap(d1.cross(d2).atan2(d1.dot(d2)) - self.sign * self.target));
             }
             (K::Radius, _) => out.push(ci(0)?.1 - self.target),

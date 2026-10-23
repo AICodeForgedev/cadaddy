@@ -78,10 +78,12 @@ reached", malformed source is a reader error, and every built-in checks its argu
 - **No-ops:** `vl-load-com gc redraw`; `ver`
 
 Entity lists use the DXF group codes of CADCraft's DXF files: what `entget` returns is what a
-DXF file holds for the object, plus `-1` (its name) and `410` (its layout).
+DXF file holds for the object, plus `-1` (its name) and `410` (its layout). Angles (groups 50–58)
+are in radians, as in AutoCAD, where the file holds degrees; `entmake`, `entmod` and `ssget`
+filters take radians too.
 
 ## Testing against the corpus
 
 The AutoLISP conformance corpus (#648) lives in its own repository. Point `CADCRAFT_LISP_CORPUS`
-at it and run `cargo test -p cadcraft-engine --test lisp_corpus`; without the variable the test
+at it and run `cargo test -p cadcraft-engine --test it lisp_corpus::`; without the variable the test
 says it was skipped.

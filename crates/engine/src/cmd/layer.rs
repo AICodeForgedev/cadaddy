@@ -40,7 +40,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layoff", "Layer Off", |s, p| set_obj_layers(s, p, |l| l.on = false))
             .menu(&["Format", "Layer Tools", "Layer Off"])
             .params("{handles?}")
-            .interactive(|_| Ok(Box::new(SelectRun::single("layoff", "LAYOFF", "Select an object on the layer to be turned off")))),
+            // Layer Off stays active until Enter or Esc, as in AutoCAD (#1418): one object per
+            // pick and the prompt comes straight back.
+            .interactive(|_| Ok(Box::new(SelectRun::repeat("layoff", "LAYOFF", "Select an object on the layer to be turned off")))),
         CommandSpec::new("laylck", "Lock Layer", |s, p| set_obj_layers(s, p, |l| l.locked = true))
             .menu(&["Format", "Layer Tools", "Lock Layer"])
             .params("{handles?}")

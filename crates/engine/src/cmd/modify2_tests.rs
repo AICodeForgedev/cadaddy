@@ -215,6 +215,39 @@ fn lengthen_json() {
 }
 
 #[test]
+fn lengthen_keeps_elevation() {
+    let mut s = Session::new();
+    let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap());
+    let a = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 1, "start": 0, "end": 90})).unwrap());
+    let doc = s.doc_mut().unwrap();
+    doc.modify_entity(Handle::parse_hex(&l).unwrap(), |e| {
+        if let EntityKind::Line(x) = &mut e.kind {
+            x.a.z = 5.0;
+            x.b.z = 5.0;
+        }
+    })
+    .unwrap();
+    doc.modify_entity(Handle::parse_hex(&a).unwrap(), |e| {
+        if let EntityKind::Arc(x) = &mut e.kind {
+            x.center.z = 3.0;
+        }
+    })
+    .unwrap();
+    s.execute("lengthen", &json!({"handle": l, "delta": 2})).unwrap();
+    let EntityKind::Line(x) = kind(&s, &l) else { panic!("not a line") };
+    assert_eq!((x.a.x, x.a.y, x.a.z), (0.0, 0.0, 5.0));
+    assert_eq!((x.b.x, x.b.y, x.b.z), (12.0, 0.0, 5.0));
+    s.execute("lengthen", &json!({"handle": l, "delta": 1, "pick": [0, 0]})).unwrap();
+    let EntityKind::Line(x) = kind(&s, &l) else { panic!("not a line") };
+    assert_eq!((x.a.x, x.a.y, x.a.z), (-1.0, 0.0, 5.0));
+    assert_eq!((x.b.x, x.b.y, x.b.z), (12.0, 0.0, 5.0));
+    s.execute("lengthen", &json!({"handle": a, "deltaAngle": 10})).unwrap();
+    let EntityKind::Arc(x) = kind(&s, &a) else { panic!("not an arc") };
+    assert_eq!(x.center.z, 3.0);
+    assert!((arc_of(&kind(&s, &a)).sweep() - 100f64.to_radians()).abs() < 1e-9);
+}
+
+#[test]
 fn lengthen_command_line() {
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
@@ -720,4 +753,19 @@ fn offset_polyline_arc_bulge_follows_joined_endpoints() {
     assert!(ccw);
     assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
     assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
+}
+
+#[test]
+fn offset_elliptical_arc_follows_picked_side() {
+    let max_x = |side: Value| {
+        let mut s = Session::new();
+        let e = h(&s.execute("ellipse", &json!({"center": [0, 0], "major": [10, 0], "ratio": 0.5, "start": 0, "end": 90})).unwrap());
+        s.execute("offset", &json!({"handle": e, "distance": 1, "side": side})).unwrap();
+        let p = poly(&last(&s));
+        p.vertices.iter().map(|v| v.p.x).fold(f64::MIN, f64::max)
+    };
+    let centre = max_x(json!([0, 0]));
+    assert!((centre - 9.0).abs() < 0.05, "centre side went outward: max x = {centre}");
+    let outer = max_x(json!([20, 20]));
+    assert!((outer - 11.0).abs() < 0.05, "outer side went inward: max x = {outer}");
 }

@@ -363,3 +363,22 @@ fn hostile_new_geometry_never_panics() {
     let _ = dof(&d, &hs);
     let _ = dof(&d, &[Handle(0), Handle(u64::MAX)]);
 }
+
+/// Fit-point vertex constraints retain a known freedom count because they do not reconstruct the spline.
+#[test]
+fn vertex_constraints_on_large_fit_spline_do_not_charge_reconstruction() {
+    let mut d = Drawing::default();
+    let pts: Vec<_> = (0..500).map(|i| Vec2::new(i as f64, (i % 3) as f64)).collect();
+    let mut sp = GSpline::from_control(pts.clone(), 3);
+    sp.fit = pts;
+    let h = put(&mut d, EntityKind::Spline(sp));
+    for i in 0..5 {
+        let p = point(&mut d, (i as f64, (i % 3) as f64));
+        let mut c = con(K::Coincident, &[s(h, Sub::Vertex(i)), w(p)]);
+        c.id = i + 1;
+        d.constraints.push(c);
+    }
+    let report = dof(&d, &[]).unwrap();
+    assert_eq!(report.status, DofStatus::Under);
+    assert_eq!(report.dof, Some(1000));
+}

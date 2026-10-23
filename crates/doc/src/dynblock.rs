@@ -334,7 +334,11 @@ fn graph_members<'a>(objects: &HashMap<Handle, &'a ForeignObject>, xdict: Handle
     }
     let graph = objects.get(&graph?).filter(|o| o.kind.eq_ignore_ascii_case("ACAD_EVALUATION_GRAPH"))?;
     let members = section(&sections(&graph.tags), "AcDbEvalGraph").iter().filter(|t| t.code == 360).filter_map(|t| Handle::parse_hex(&t.value));
-    Some(members.take(MAX_NODES).filter_map(|h| objects.get(&h).copied()).collect())
+    // Deduplicate member handles before resolving them: a graph can list the same member many
+    // times, and parsing each occurrence into its own owned parameter multiplies a single large
+    // record into gigabytes of retained allocations (CWE-400).
+    let mut seen = std::collections::HashSet::new();
+    Some(members.take(MAX_NODES).filter(|h| seen.insert(*h)).filter_map(|h| objects.get(&h).copied()).collect())
 }
 
 /// The dynamic block data of block `name` (any case; `*Model_Space` for a drawing that is a
