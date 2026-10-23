@@ -2048,6 +2048,315 @@ fn recover_shx_fallback(
 }
 
 // ---------------------------------------------------------------------------------------------
+// SHX OCR: recognise stroked (SHX-style) lettering by matching individual glyph clusters
+// against clean-room stroke templates.  Used when no hidden text is available.
+//
+// Source: CADaddy's own single-stroke font definitions (crates/fonts/src/stroke.rs), which are
+// original (CC0).  Templates are normalised to a unit cell so matching is size/aspect/slant
+// tolerant.
+//
+// Algorithm:
+//   1. Find all short open strokes that could be SHX glyph strokes.
+//   2. Cluster them into individual character-sized groups using fine-grained overlap: strokes
+//      whose bounding boxes overlap or nearly touch (within a tight margin) and share the same
+//      pen belong to the same glyph.
+//   3. Match each glyph cluster against normalised stroke templates by chamfer distance.
+//   4. Group matched glyphs into words by baseline alignment and horizontal proximity.
+//   5. Emit TEXT entities for recognised words.
+// ---------------------------------------------------------------------------------------------
+
+/// Normalised stroke template for one character: sampled points along the template strokes,
+/// each in the [0,1]×[0,1] unit cell (bottom-left origin).
+struct ShxTemplate {
+    ch: char,
+    /// Evenly sampled points along all strokes, normalised to [0,1]².
+    samples: Vec<(f64, f64)>,
+    /// Width/height aspect ratio of this character's bounding box in the source font.
+    aspect: f64,
+    /// Expected number of strokes.
+    n_strokes: usize,
+}
+
+/// Number of sample points per template stroke polyline.
+const TPL_SAMPLES_PER_STROKE: usize = 8;
+
+/// Build the template library from our stroke font for the characters the task requires.
+fn shx_templates() -> Vec<ShxTemplate> {
+    let chars: Vec<char> = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./\\'\"()#&".chars().collect();
+    let mut templates = Vec::with_capacity(chars.len());
+    for ch in &chars {
+        let Some((_width, spec)) = cadaddy_fonts::stroke::glyph(*ch) else { continue };
+        let raw_strokes = cadaddy_fonts::stroke::strokes(spec);
+        if raw_strokes.is_empty() {
+            continue;
+        }
+        let (mut xmin, mut ymin, mut xmax, mut ymax) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for s in &raw_strokes {
+            for &(x, y) in s {
+                xmin = xmin.min(x); ymin = ymin.min(y);
+                xmax = xmax.max(x); ymax = ymax.max(y);
+            }
+        }
+        let w = (xmax - xmin).max(0.01);
+        let h = (ymax - ymin).max(0.01);
+        let mut samples = Vec::new();
+        for s in &raw_strokes {
+            sample_polyline_norm(s, xmin, ymin, w, h, TPL_SAMPLES_PER_STROKE, &mut samples);
+        }
+        templates.push(ShxTemplate { ch: *ch, samples, aspect: w / h, n_strokes: raw_strokes.len() });
+    }
+    templates
+}
+
+/// Sample a polyline into `n` evenly spaced points, normalised by the given bbox.
+fn sample_polyline_norm(pts: &[(f64, f64)], x0: f64, y0: f64, w: f64, h: f64, n: usize, out: &mut Vec<(f64, f64)>) {
+    if pts.len() < 2 {
+        if let Some(&(x, y)) = pts.first() {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+        return;
+    }
+    let total: f64 = pts.windows(2).map(|s| (s[1].0 - s[0].0).hypot(s[1].1 - s[0].1)).sum();
+    if total < 1e-9 {
+        if let Some(&(x, y)) = pts.first() {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+        return;
+    }
+    let n = n.max(2);
+    for si in 0..n {
+        let target = total * si as f64 / (n - 1) as f64;
+        let mut acc = 0.0;
+        let mut found = false;
+        for seg in pts.windows(2) {
+            let sl = (seg[1].0 - seg[0].0).hypot(seg[1].1 - seg[0].1);
+            if acc + sl >= target - 1e-12 {
+                let t = if sl > 1e-12 { (target - acc) / sl } else { 0.0 };
+                let px = seg[0].0 + t * (seg[1].0 - seg[0].0);
+                let py = seg[0].1 + t * (seg[1].1 - seg[0].1);
+                out.push(((px - x0) / w, (py - y0) / h));
+                found = true;
+                break;
+            }
+            acc += sl;
+        }
+        if !found
+            && let Some(&(x, y)) = pts.last()
+        {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+    }
+}
+
+/// Compute the directed chamfer distance from `a` to `b`.
+fn chamfer(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    if a.is_empty() || b.is_empty() { return f64::MAX; }
+    let s: f64 = a.iter().map(|&(ax, ay)| {
+        b.iter().map(|&(bx, by)| (ax - bx).hypot(ay - by)).fold(f64::MAX, f64::min)
+    }).sum();
+    s / a.len() as f64
+}
+
+fn chamfer_sym(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    chamfer(a, b).max(chamfer(b, a))
+}
+
+/// Max chamfer distance for a template match to be accepted.
+const MATCH_THRESHOLD: f64 = 0.25;
+
+/// Match a candidate glyph against all templates.  Returns `(char, distance)` for the best.
+fn match_glyph(
+    candidate: &[(f64, f64)],
+    candidate_aspect: f64,
+    candidate_n_strokes: usize,
+    templates: &[ShxTemplate],
+) -> Option<(char, f64)> {
+    if candidate.is_empty() { return None; }
+    let mut best: Option<(char, f64)> = None;
+    for tpl in templates {
+        // loose aspect ratio filter
+        let ar = candidate_aspect / tpl.aspect;
+        if ar < 0.25 || ar > 4.0 { continue; }
+        // loose stroke count filter: allow ±50% since PDF merging/splitting changes count
+        let (lo, hi) = (tpl.n_strokes / 2, tpl.n_strokes * 2 + 2);
+        if candidate_n_strokes < lo || candidate_n_strokes > hi { continue; }
+        let dist = chamfer_sym(candidate, &tpl.samples);
+        if dist < MATCH_THRESHOLD && !best.is_some_and(|(_, d)| dist >= d) {
+            best = Some((tpl.ch, dist));
+        }
+    }
+    best
+}
+
+/// Recover SHX-stroked text by OCR: cluster short strokes into individual glyph-sized groups,
+/// match each against stroke templates, and assemble matched glyphs into word-level TEXT
+/// entities.
+fn recover_shx_ocr(
+    strokes: &[Stroke],
+    sheet: (f64, f64),
+    already_used: &HashSet<usize>,
+) -> Vec<RecoveredText> {
+    let templates = shx_templates();
+    if templates.is_empty() { return Vec::new(); }
+
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let max_seg = (sw.min(sh) * 0.025).clamp(2.0, 40.0);
+
+    // ---- phase 1: find candidate SHX strokes ----
+    struct Cand { idx: usize, bb: [f64; 4], pen: Pen }
+    let mut cands: Vec<Cand> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if already_used.contains(&i) || s.closed || s.pts.len() > 10 { continue; }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.05 { continue; }
+        let Some(b) = bbox(std::slice::from_ref(&s.pts)) else { continue };
+        if (b[2] - b[0]) > max_seg * 2.0 || (b[3] - b[1]) > max_seg * 2.0 { continue; }
+        cands.push(Cand { idx: i, bb: b, pen: s.pen });
+    }
+    if cands.is_empty() { return Vec::new(); }
+
+    // ---- phase 2: cluster into individual glyphs ----
+    // Two strokes belong to the same glyph if: same pen, bounding boxes overlap or are within
+    // a tight margin (half the smaller bbox's height — strokes within one character overlap,
+    // while inter-character gap is wider).
+    let fine_cell = max_seg * 0.8;
+    let mut fgrid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    for (ci, c) in cands.iter().enumerate() {
+        let mx = (c.bb[0] + c.bb[2]) / 2.0;
+        let my = (c.bb[1] + c.bb[3]) / 2.0;
+        let gx = (mx / fine_cell).floor() as i64;
+        let gy = (my / fine_cell).floor() as i64;
+        for dx in -1_i64..=1 { for dy in -1_i64..=1 {
+            fgrid.entry((gx + dx, gy + dy, c.pen)).or_default().push(ci);
+        }}
+    }
+    let mut visited = vec![false; cands.len()];
+    struct GlyphCluster { bb: [f64; 4], members: Vec<usize>, pen: Pen }
+    let mut glyphs: Vec<GlyphCluster> = Vec::new();
+    for ci in 0..cands.len() {
+        if visited[ci] { continue; }
+        visited[ci] = true;
+        let mut members = vec![ci];
+        let mut queue = vec![ci];
+        let mut gbb = cands[ci].bb;
+        while let Some(cur) = queue.pop() {
+            let cc = &cands[cur];
+            let mx = (cc.bb[0] + cc.bb[2]) / 2.0;
+            let my = (cc.bb[1] + cc.bb[3]) / 2.0;
+            let gx = (mx / fine_cell).floor() as i64;
+            let gy = (my / fine_cell).floor() as i64;
+            if let Some(ns) = fgrid.get(&(gx, gy, cc.pen)) {
+                for &ni in ns {
+                    if visited[ni] { continue; }
+                    let n = &cands[ni];
+                    // margin: half the minimum height of the two bboxes, but at least 0.5 pt
+                    let mh = ((gbb[3] - gbb[1]).min(n.bb[3] - n.bb[1]) * 0.5).max(0.5);
+                    // check overlap with margin
+                    let x_ok = n.bb[2] + mh >= gbb[0] && n.bb[0] - mh <= gbb[2];
+                    let y_ok = n.bb[3] + mh >= gbb[1] && n.bb[1] - mh <= gbb[3];
+                    if x_ok && y_ok {
+                        visited[ni] = true;
+                        members.push(ni);
+                        queue.push(ni);
+                        gbb = [gbb[0].min(n.bb[0]), gbb[1].min(n.bb[1]),
+                               gbb[2].max(n.bb[2]), gbb[3].max(n.bb[3])];
+                    }
+                }
+            }
+        }
+        let h = gbb[3] - gbb[1];
+        // a glyph must have reasonable height: tall enough to be lettering, not too tall
+        if h > 0.5 && h < max_seg * 4.0 && members.len() <= 12 {
+            glyphs.push(GlyphCluster { bb: gbb, members, pen: cands[ci].pen });
+        }
+    }
+
+    // ---- phase 3: match each glyph cluster against templates ----
+    struct MatchedGlyph { ch: char, bb: [f64; 4], indices: HashSet<usize>, pen: Pen }
+    let mut matched: Vec<MatchedGlyph> = Vec::new();
+    for g in &glyphs {
+        let w = (g.bb[2] - g.bb[0]).max(0.01);
+        let h = (g.bb[3] - g.bb[1]).max(0.01);
+        let aspect = w / h;
+        let mut samples = Vec::new();
+        for &ci in &g.members {
+            let pts = &strokes[cands[ci].idx].pts;
+            sample_polyline_norm(pts, g.bb[0], g.bb[1], w, h, TPL_SAMPLES_PER_STROKE, &mut samples);
+        }
+        if let Some((ch, _dist)) = match_glyph(&samples, aspect, g.members.len(), &templates) {
+            let indices: HashSet<usize> = g.members.iter().map(|&ci| cands[ci].idx).collect();
+            matched.push(MatchedGlyph { ch, bb: g.bb, indices, pen: g.pen });
+        }
+    }
+
+    if matched.is_empty() { return Vec::new(); }
+
+    // ---- phase 4: group matched glyphs into words ----
+    // Sort by vertical band (baseline) then horizontal position.
+    matched.sort_by(|a, b| {
+        let ay = ((a.bb[1] + a.bb[3]) / 2.0 * 10.0).round() as i64;
+        let by = ((b.bb[1] + b.bb[3]) / 2.0 * 10.0).round() as i64;
+        ay.cmp(&by).then_with(|| a.bb[0].partial_cmp(&b.bb[0]).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // group into words: consecutive glyphs on the same baseline with small horizontal gap
+    let mut result: Vec<RecoveredText> = Vec::new();
+    let mut i = 0;
+    while i < matched.len() {
+        let first = &matched[i];
+        let h = first.bb[3] - first.bb[1];
+        let base_y = (first.bb[1] + first.bb[3]) / 2.0;
+        let max_gap = h * 1.2; // inter-word gap threshold
+        let max_y_diff = h * 0.6; // baseline tolerance
+
+        let mut word = String::new();
+        word.push(first.ch);
+        let mut all_indices: HashSet<usize> = first.indices.clone();
+        let word_x = first.bb[0];
+        let word_y = first.bb[1];
+        let mut prev_end = first.bb[2];
+        let mut word_h = h;
+        let pen = first.pen;
+        let layer = strokes.get(first.indices.iter().next().copied().unwrap_or(0))
+            .and_then(|s| s.layer.clone());
+
+        let mut j = i + 1;
+        while j < matched.len() {
+            let next = &matched[j];
+            let ny = (next.bb[1] + next.bb[3]) / 2.0;
+            let gap = next.bb[0] - prev_end;
+            if next.pen != pen || (ny - base_y).abs() > max_y_diff || gap > max_gap || gap < -h * 0.3 {
+                break;
+            }
+            // check for a space: gap > ~0.5× char height → insert space
+            if gap > h * 0.4 {
+                word.push(' ');
+            }
+            word.push(next.ch);
+            all_indices.extend(&next.indices);
+            prev_end = next.bb[2];
+            word_h = word_h.max(next.bb[3] - next.bb[1]);
+            j += 1;
+        }
+
+        // emit the word (or single character)
+        if !word.trim().is_empty() {
+            result.push(RecoveredText {
+                at: (word_x, word_y),
+                height: word_h,
+                value: word,
+                stroke_indices: all_indices,
+                pen,
+                layer: layer.clone(),
+            });
+        }
+        i = j;
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
 // Fix 4: Filter opaque fills that the PDF render doesn't show
 // ---------------------------------------------------------------------------------------------
 
@@ -2666,11 +2975,26 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Fix 3: recover SHX-stroked text.  Primary: match invisible text (rendering mode 3) to
     // nearby stroke clusters — 100% accuracy.  Fallback: cluster short strokes and match to
     // overlapping visible text — lower accuracy but catches sheets without hidden text.
+    // OCR: when the above paths recover too few texts, use template-based stroke recognition
+    // to identify individual characters from their geometry.
     let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
     if recovered_texts.is_empty() {
         recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
         if !recovered_texts.is_empty() {
             stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+        }
+    }
+    // OCR pass: supplement with template-based glyph recognition for strokes not yet claimed.
+    // This recovers text on sheets with no hidden text layer and few/no visible text anchors.
+    {
+        let mut used_so_far: HashSet<usize> = HashSet::new();
+        for rt in &recovered_texts {
+            used_so_far.extend(&rt.stroke_indices);
+        }
+        let ocr_texts = recover_shx_ocr(&strokes, sheet, &used_so_far);
+        if !ocr_texts.is_empty() {
+            stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
+            recovered_texts.extend(ocr_texts);
         }
     }
     let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
@@ -2753,8 +3077,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         LayerMode::Pdf
     } else if opts.layers == LayerMode::Object {
         LayerMode::Object
-    } else {
+    } else if opts.layers == LayerMode::Pen {
         LayerMode::Pen
+    } else {
+        // Pdf mode without OCGs: fall back to Content (classifies strokes into E-GRID,
+        // A-WALL, TEXT, E-DEVICE, TITLEBLOCK, HATCH, ANNO, PDF-GEOMETRY) — more useful
+        // than pen-based layers for construction-drawing PDFs.
+        LayerMode::Content
     };
     let mut layer_set: BTreeMap<String, (Color, Lineweight)> = BTreeMap::new();
     // black and near-black greys (up to about 15%) are colour 7: white on a dark screen, black on

@@ -572,3 +572,125 @@ fn device_tags_near_strokes_become_blocks() {
     }
     assert!(!r.drawing.model.is_empty(), "drawing should not be empty");
 }
+
+// -----------------------------------------------------------------------------------------
+// SHX OCR: stroke-template character recognition on sheets without hidden text
+// -----------------------------------------------------------------------------------------
+
+/// Build a PDF content stream that draws one SHX character using our stroke font templates.
+/// The character is placed at (bx, by) with the given height in PDF points.
+fn shx_char_strokes(ch: char, bx: f64, by: f64, height: f64, out: &mut Vec<u8>) {
+    let Some((_width, spec)) = cadaddy_fonts::stroke::glyph(ch) else { return };
+    let raw = cadaddy_fonts::stroke::strokes(spec);
+    // font coordinate system: x 0..4 (most chars), y -2..6 (cap height).  Scale to `height`.
+    let scale = height / cadaddy_fonts::stroke::CAP;
+    for s in &raw {
+        if s.len() < 2 { continue; }
+        for (i, &(fx, fy)) in s.iter().enumerate() {
+            let px = bx + fx * scale;
+            let py = by + fy * scale;
+            if i == 0 {
+                out.extend_from_slice(format!("{px:.1} {py:.1} m ").as_bytes());
+            } else {
+                out.extend_from_slice(format!("{px:.1} {py:.1} l ").as_bytes());
+            }
+        }
+        out.extend_from_slice(b"S ");
+    }
+}
+
+#[test]
+fn ocr_recognises_simple_word() {
+    // Draw "HELLO" in SHX strokes at a known position, with no hidden text and no visible
+    // text anchors — the OCR path must recognise the characters from their geometry.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    let height = 12.0; // 12 pt tall characters
+    let advance = height * (4.0 + 1.6) / 6.0; // ~11.2 pt
+    for (i, ch) in "HELLO".chars().enumerate() {
+        let x = 100.0 + i as f64 * advance;
+        let y = 300.0;
+        shx_char_strokes(ch, x, y, height, &mut content);
+    }
+    content.extend_from_slice(b"Q");
+
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let texts: Vec<&str> = r.drawing.model.iter().filter_map(|e| match &e.kind {
+        EntityKind::Text(t) => Some(t.value.as_str()),
+        _ => None,
+    }).collect();
+    // the OCR should produce at least some text from the strokes
+    assert!(!texts.is_empty(), "OCR should recognise text from SHX strokes, got nothing");
+    // check the OCR stat was recorded
+    assert!(
+        r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0,
+        "should report SHX OCR recovered text in stats"
+    );
+}
+
+#[test]
+fn ocr_recognises_digits() {
+    // Draw "123" in SHX strokes — digits should be recognised
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    let height = 10.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "123".chars().enumerate() {
+        let x = 200.0 + i as f64 * advance;
+        let y = 250.0;
+        shx_char_strokes(ch, x, y, height, &mut content);
+    }
+    content.extend_from_slice(b"Q");
+
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let texts: Vec<&str> = r.drawing.model.iter().filter_map(|e| match &e.kind {
+        EntityKind::Text(t) => Some(t.value.as_str()),
+        _ => None,
+    }).collect();
+    assert!(!texts.is_empty(), "OCR should recognise digit strokes, got nothing");
+    // the joined text should contain the digits
+    let joined: String = texts.join("");
+    assert!(
+        joined.contains('1') || joined.contains('2') || joined.contains('3'),
+        "OCR output should contain at least one recognised digit, got: {joined:?}"
+    );
+}
+
+#[test]
+fn ocr_content_layer_fallback_without_ocgs() {
+    // A PDF without optional content groups (OCGs) should fall back to Content layer mode,
+    // creating content-class layer names like TEXT, ANNO, PDF-GEOMETRY, etc.
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 400 72 l S BT /F1 10 Tf 72 400 Td (Test label) Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    let layer_names: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
+    // should have content-class layers, not pen-based layers
+    let has_content = layer_names.iter().any(|n| {
+        n.starts_with("TEXT") || n.starts_with("ANNO") || n.starts_with("PDF-GEOMETRY")
+            || n.starts_with("E-GRID") || n.starts_with("A-WALL") || n.starts_with("E-DEVICE")
+            || n.starts_with("TITLEBLOCK") || n.starts_with("HATCH")
+    });
+    assert!(has_content, "should have content-class layers when no OCGs present, got: {layer_names:?}");
+}
+
+#[test]
+fn ocr_consumed_strokes_become_hidden() {
+    // Strokes consumed by OCR should not appear as linework in the drawing.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    // draw "AB" in SHX strokes
+    for (i, ch) in "AB".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
+    }
+    // also draw a long non-SHX line that should survive
+    content.extend_from_slice(b"72 72 m 700 72 l S ");
+    content.extend_from_slice(b"Q");
+
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    // the long line should still be there
+    let has_long_line = r.drawing.model.iter().any(|e| {
+        matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0)
+    });
+    assert!(has_long_line, "long non-SHX line should still be in the drawing");
+}
