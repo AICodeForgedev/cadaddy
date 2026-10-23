@@ -42,7 +42,12 @@ pub fn specs() -> Vec<CommandSpec> {
 // ── bim.spec_import ────────────────────────────────────────────────────────
 
 fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
-    let text = if let Some(t) = p.get("text").and_then(Value::as_str) {
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("auto");
+
+    let text = if format == "sheet" {
+        // Sheet mode reads from the drawing, not from text/file input.
+        String::new()
+    } else if let Some(t) = p.get("text").and_then(Value::as_str) {
         t.to_string()
     } else if let Some(path) = p.get("file").and_then(Value::as_str) {
         // Read file — PDF or text.
@@ -60,23 +65,29 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             String::from_utf8(bytes).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?
         }
     } else {
-        return Err(bad(CMD_IMPORT, "either `file` (path) or `text` (string) is required"));
+        return Err(bad(CMD_IMPORT, "either `file` (path), `text` (string), or `format: \"sheet\"` is required"));
     };
 
-    if text.trim().is_empty() {
+    if format != "sheet" && text.trim().is_empty() {
         return Err(bad(CMD_IMPORT, "the file or text is empty (no extractable text)"));
     }
 
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("auto");
+    let sheet_id = p.get("sheet").and_then(Value::as_str).unwrap_or_default();
 
     // Check the drawing for existing types (to detect disagreements).
     let existing_types = s.doc().ok().map(|d| &d.bim_types).cloned().unwrap_or_default();
 
-    let result = match format {
-        "spec" => parse_spec_text(&text, &existing_types),
-        "schedule" => parse_schedule_text(&text, &existing_types),
-        "submittal" => parse_submittal_text(&text, &existing_types),
-        _ => auto_detect_and_parse(&text, &existing_types),
+    let result = if format == "sheet" {
+        // Read schedules from positioned TEXT entities in the current drawing.
+        let drawing = s.doc().map_err(|_| bad(CMD_IMPORT, "no drawing open; `format: \"sheet\"` reads from the current drawing"))?;
+        parse_schedule_from_drawing(drawing, sheet_id, &existing_types)
+    } else {
+        match format {
+            "spec" => parse_spec_text(&text, &existing_types),
+            "schedule" => parse_schedule_text(&text, &existing_types),
+            "submittal" => parse_submittal_text(&text, &existing_types),
+            _ => auto_detect_and_parse(&text, &existing_types),
+        }
     };
 
     Ok(result_to_json(&result))
@@ -192,6 +203,173 @@ fn collect_texts(drawing: &cadaddy_doc::Drawing, out: &mut String) {
         out.push_str(&text);
         out.push('\n');
     }
+}
+
+// ── sheet schedule reading (MUST 5) ───────────────────────────────────────
+
+/// Read schedule tables from positioned TEXT/MTEXT entities in a drawing.
+///
+/// Groups text by Y position into rows, detects a header row matching known
+/// schedule column names, and parses data rows into proposals.  The `sheet_id`
+/// is recorded in each proposal's `file_source`.
+fn parse_schedule_from_drawing(
+    drawing: &cadaddy_doc::Drawing,
+    sheet_id: &str,
+    existing: &bimspec::BimTypes,
+) -> SpecImportResult {
+    let mut result = SpecImportResult::default();
+    let mut rfi_counter = 0u32;
+
+    // Collect text entities with their positions.
+    struct PosTxt {
+        x: f64,
+        y: f64,
+        h: f64,
+        value: String,
+    }
+    let mut items: Vec<PosTxt> = Vec::new();
+    for ent in drawing.model.iter().take(50_000) {
+        match &ent.kind {
+            cadaddy_doc::EntityKind::Text(t) => {
+                let pt = t.justify_point();
+                let v: String = t.value.trim().chars().take(500).collect();
+                if pt.is_finite() && t.height.is_finite() && t.height > 0.0 && !v.is_empty() {
+                    items.push(PosTxt { x: pt.x, y: pt.y, h: t.height, value: v });
+                }
+            }
+            cadaddy_doc::EntityKind::MText(t) => {
+                let plain = strip_mtext_formatting(&t.contents);
+                let v: String = plain.trim().chars().take(500).collect();
+                if t.insert.x.is_finite() && t.insert.y.is_finite() && t.height.is_finite() && t.height > 0.0 && !v.is_empty() {
+                    items.push(PosTxt { x: t.insert.x, y: t.insert.y, h: t.height, value: v });
+                }
+            }
+            _ => {}
+        }
+    }
+    if items.is_empty() {
+        return result;
+    }
+
+    // Determine row tolerance from the median text height.
+    let mut heights: Vec<f64> = items.iter().map(|t| t.h).collect();
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0);
+    let row_eps = median_h * 0.5;
+
+    // Sort by Y descending (top first), then X ascending.
+    items.sort_by(|a, b| b.y.partial_cmp(&a.y).unwrap_or(std::cmp::Ordering::Equal).then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)));
+
+    // Group into rows by Y tolerance.
+    let mut rows: Vec<Vec<&PosTxt>> = Vec::new();
+    for item in &items {
+        let placed = rows.iter_mut().find(|r| {
+            r.first().is_some_and(|f| (f.y - item.y).abs() < row_eps)
+        });
+        if let Some(row) = placed {
+            row.push(item);
+        } else {
+            rows.push(vec![item]);
+        }
+    }
+    // Sort items within each row by X.
+    for row in &mut rows {
+        row.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // Find the header row: the first row where items match known schedule columns.
+    let mut header_idx = None;
+    let mut col_map: Vec<(f64, String)> = Vec::new(); // (x_pos, field_key)
+    for (ri, row) in rows.iter().enumerate() {
+        let mut matches: Vec<(f64, String)> = Vec::new();
+        let mut has_mark = false;
+        for item in row {
+            let lower = item.value.to_ascii_lowercase();
+            let lower = lower.trim();
+            for &(header, field_key) in SCHEDULE_COLUMNS {
+                if lower == header || lower.contains(header) {
+                    if field_key == "mark" {
+                        has_mark = true;
+                    }
+                    matches.push((item.x, field_key.to_string()));
+                    break;
+                }
+            }
+        }
+        if has_mark && matches.len() >= 2 {
+            header_idx = Some(ri);
+            col_map = matches;
+            break;
+        }
+    }
+
+    let Some(hi) = header_idx else {
+        return result;
+    };
+
+    // Determine schedule type from the title (row above the header, if any).
+    let schedule_type = if hi > 0 {
+        let title_text: String = rows.get(hi - 1).map(|r| r.iter().map(|t| t.value.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        guess_schedule_type(&title_text)
+    } else {
+        "unknown".into()
+    };
+
+    let source = if sheet_id.is_empty() { "sheet".to_string() } else { format!("sheet {sheet_id}") };
+
+    // Column X tolerance: use half the minimum horizontal gap between header columns.
+    let col_eps = if col_map.len() >= 2 {
+        let mut gaps: Vec<f64> = col_map.windows(2).map(|w| (w[1].0 - w[0].0).abs()).filter(|g| *g > 0.001).collect();
+        gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        gaps.first().copied().unwrap_or(median_h * 5.0) * 0.4
+    } else {
+        median_h * 5.0
+    };
+
+    // Parse data rows (below the header).
+    for row in rows.iter().skip(hi + 1) {
+        let mut mark = String::new();
+        let mut fields: BTreeMap<String, SpecField> = BTreeMap::new();
+
+        for item in row {
+            // Find the closest column header by X position.
+            let closest = col_map.iter().min_by(|a, b| {
+                (a.0 - item.x).abs().partial_cmp(&(b.0 - item.x).abs()).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some((cx, field_key)) = closest {
+                if (cx - item.x).abs() > col_eps {
+                    continue;
+                }
+                if field_key == "mark" {
+                    mark = item.value.clone();
+                } else {
+                    let val = item.value.trim();
+                    if !val.is_empty() && val != "-" && val != "\u{2014}" {
+                        fields.insert(field_key.clone(), SpecField::new(val).with_source(&source));
+                    }
+                }
+            }
+        }
+
+        if mark.is_empty() || fields.is_empty() {
+            continue;
+        }
+
+        let mut ty = BimType::new(&mark);
+        ty.category = schedule_type.clone();
+        ty.fields = fields;
+
+        // Check for disagreements with existing types.
+        if let Some(existing_ty) = existing.get(&mark) {
+            check_disagreements(&mark, existing_ty, &ty, "schedule", &source, &mut result.rfis, &mut rfi_counter);
+        }
+
+        if result.proposals.len() < MAX_PROPOSALS {
+            result.proposals.push(SpecProposal { bim_type: ty, origin: "schedule".into(), file_source: source.clone(), ..Default::default() });
+        }
+    }
+
+    result
 }
 
 /// Strip MTEXT formatting codes (\P, \f..., {\..}, etc.) to get plain text.
@@ -779,6 +957,8 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     let mut current_page = String::new();
     let mut current_submittal: Option<SubmittalRecord> = None;
     let mut current_types: Vec<SpecProposal> = Vec::new();
+    // Per-type review stamps, parallel to current_types.
+    let mut type_stamps: Vec<String> = Vec::new();
 
     let mut i = 0;
     while i < lines.len() {
@@ -793,34 +973,43 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
             continue;
         }
 
-        // Detect review stamps: "APPROVED", "APPROVED AS NOTED", "REVISE", "REJECTED".
+        // Detect review stamps — apply to the LAST type in the current block.
         let upper = line.to_ascii_uppercase();
         if (upper.contains("APPROVED AS NOTED") || upper.contains("APPROVED-AS-NOTED"))
-            && let Some(ref mut sub) = current_submittal
+            && current_submittal.is_some()
         {
-            sub.review_status = "approved_as_noted".into();
+            if let Some(stamp) = type_stamps.last_mut() {
+                *stamp = "approved_as_noted".into();
+            }
             i += 1;
             continue;
         }
         if (upper == "APPROVED" || upper.starts_with("APPROVED ") || upper.contains("STAMP: APPROVED"))
-            && let Some(ref mut sub) = current_submittal
-            && sub.review_status.is_empty()
+            && current_submittal.is_some()
         {
-            sub.review_status = "approved".into();
+            if let Some(stamp) = type_stamps.last_mut()
+                && stamp.is_empty()
+            {
+                *stamp = "approved".into();
+            }
             i += 1;
             continue;
         }
         if (upper.contains("REVISE AND RESUBMIT") || upper == "REVISE")
-            && let Some(ref mut sub) = current_submittal
+            && current_submittal.is_some()
         {
-            sub.review_status = "revise".into();
+            if let Some(stamp) = type_stamps.last_mut() {
+                *stamp = "revise".into();
+            }
             i += 1;
             continue;
         }
         if (upper == "REJECTED" || upper.contains("STAMP: REJECTED"))
-            && let Some(ref mut sub) = current_submittal
+            && current_submittal.is_some()
         {
-            sub.review_status = "rejected".into();
+            if let Some(stamp) = type_stamps.last_mut() {
+                *stamp = "rejected".into();
+            }
             i += 1;
             continue;
         }
@@ -829,8 +1018,9 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
         if upper.starts_with("SECTION ") || is_csi_section(line).is_some() {
             // Save any pending submittal.
             if let Some(sub) = current_submittal.take() {
-                finalize_submittal(sub, &current_types, existing, &mut result, &mut rfi_counter);
+                finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
                 current_types.clear();
+                type_stamps.clear();
             }
 
             let section = is_csi_section(line).unwrap_or("").to_string();
@@ -841,7 +1031,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
 
         // If we're in a submittal, look for product details.
         if let Some(ref mut sub) = current_submittal {
-            parse_submittal_detail(line, sub, &mut current_types, &current_page);
+            parse_submittal_detail(line, sub, &mut current_types, &mut type_stamps, &current_page);
         } else {
             // No section yet — try to start one from product data lines.
             if let Some((mark, desc)) = extract_type_definition(line) {
@@ -854,6 +1044,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
                     file_source: current_page.clone(),
                     ..Default::default()
                 });
+                type_stamps.push(String::new());
                 if let Some(ref mut sub) = current_submittal {
                     sub.type_marks.push(mark);
                 }
@@ -865,16 +1056,22 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
 
     // Finalize last submittal.
     if let Some(sub) = current_submittal.take() {
-        finalize_submittal(sub, &current_types, existing, &mut result, &mut rfi_counter);
+        finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
     }
 
     result
 }
 
-fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, page: &str) {
+fn parse_submittal_detail(
+    line: &str,
+    sub: &mut SubmittalRecord,
+    types: &mut Vec<SpecProposal>,
+    stamps: &mut Vec<String>,
+    page: &str,
+) {
     let lower = line.to_ascii_lowercase();
 
-    // Type mark references.
+    // Type mark references — starts a new product block.
     if let Some((mark, desc)) = extract_type_definition(line) {
         if !sub.type_marks.contains(&mark) {
             sub.type_marks.push(mark.clone());
@@ -884,8 +1081,11 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
             ty.set_field(bimspec::keys::DESCRIPTION, SpecField::new(&desc).with_source(page));
         }
         types.push(SpecProposal { bim_type: ty, origin: "submittal".into(), file_source: page.to_string(), ..Default::default() });
+        stamps.push(String::new());
         return;
     }
+
+    // All detail fields apply to the LAST type only (the current product block).
 
     // Manufacturer.
     for prefix in &["manufacturer:", "mfr:", "mfg:", "manufactured by:"] {
@@ -893,7 +1093,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
             let val = line[prefix.len()..].trim();
             if !val.is_empty() {
                 sub.manufacturer = val.to_string();
-                for ty in types.iter_mut() {
+                if let Some(ty) = types.last_mut() {
                     ty.bim_type.set_field(bimspec::keys::MANUFACTURER, SpecField::new(val).with_source(page));
                 }
             }
@@ -907,7 +1107,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
             let val = line[prefix.len()..].trim();
             if !val.is_empty() {
                 sub.catalog_number = val.to_string();
-                for ty in types.iter_mut() {
+                if let Some(ty) = types.last_mut() {
                     ty.bim_type.set_field(bimspec::keys::CATALOG_NUMBER, SpecField::new(val).with_source(page));
                 }
             }
@@ -921,7 +1121,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
         let val = line[idx..].trim();
         if !val.is_empty() {
             sub.dimensions = val.to_string();
-            for ty in types.iter_mut() {
+            if let Some(ty) = types.last_mut() {
                 ty.bim_type.set_field(bimspec::keys::DIMENSIONS, SpecField::new(val).with_source(page));
             }
         }
@@ -934,7 +1134,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
         let val = line[idx..].trim();
         if !val.is_empty() {
             sub.mounting = val.to_string();
-            for ty in types.iter_mut() {
+            if let Some(ty) = types.last_mut() {
                 ty.bim_type.set_field(bimspec::keys::MOUNTING, SpecField::new(val).with_source(page));
             }
         }
@@ -947,7 +1147,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
         let val = line[idx..].trim();
         if !val.is_empty() {
             sub.finish = val.to_string();
-            for ty in types.iter_mut() {
+            if let Some(ty) = types.last_mut() {
                 ty.bim_type.set_field(bimspec::keys::FINISH, SpecField::new(val).with_source(page));
             }
         }
@@ -963,7 +1163,7 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
                 sub.ratings.push_str("; ");
             }
             sub.ratings.push_str(val);
-            for ty in types.iter_mut() {
+            if let Some(ty) = types.last_mut() {
                 ty.bim_type.set_field(bimspec::keys::VOLTS, SpecField::new(val).with_source(page));
             }
         }
@@ -971,15 +1171,26 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
 }
 
 fn finalize_submittal(
-    sub: SubmittalRecord,
+    mut sub: SubmittalRecord,
     types: &[SpecProposal],
+    per_type_stamps: &[String],
     existing: &bimspec::BimTypes,
     result: &mut SpecImportResult,
     rfi_counter: &mut u32,
 ) {
-    let is_approved = sub.review_status == "approved" || sub.review_status == "approved_as_noted";
+    // Set the SubmittalRecord's overall review_status from the per-type stamps
+    // (most restrictive wins: rejected > revise > approved_as_noted > approved > unreviewed).
+    for stamp in per_type_stamps {
+        if !stamp.is_empty() && (sub.review_status.is_empty() || stamp == "rejected" || (stamp == "revise" && sub.review_status != "rejected")) {
+            sub.review_status.clone_from(stamp);
+        }
+    }
 
-    for proposal in types {
+    for (idx, proposal) in types.iter().enumerate() {
+        let stamp = per_type_stamps.get(idx).map(|s| s.as_str()).unwrap_or("");
+        let is_approved = stamp == "approved" || stamp == "approved_as_noted";
+        let is_revise_or_rejected = stamp == "revise" || stamp == "rejected";
+
         let mut p = proposal.clone();
 
         // Mark submittal source on all fields.
@@ -991,12 +1202,17 @@ fn finalize_submittal(
         if is_approved {
             for field in p.bim_type.fields.values_mut() {
                 if field.source.is_empty() {
-                    field.source = format!("submittal ({})", sub.review_status);
+                    field.source = format!("submittal ({stamp})");
                 }
             }
-            // Record review status on the type.
-            p.bim_type.set_field(bimspec::keys::REVIEW_STATUS, SpecField::new(&sub.review_status).with_source(&sub.file_source));
+            p.bim_type.set_field(bimspec::keys::REVIEW_STATUS, SpecField::new(stamp).with_source(&sub.file_source));
             p.bim_type.set_field(bimspec::keys::SUBMITTAL_SOURCE, SpecField::new(&sub.file_source));
+        } else if !stamp.is_empty() {
+            // Record the stamp even for non-approved types.
+            p.bim_type.set_field(bimspec::keys::REVIEW_STATUS, SpecField::new(stamp).with_source(&sub.file_source));
+        } else {
+            // Unstamped: mark as unreviewed, not approved.
+            p.bim_type.set_field(bimspec::keys::REVIEW_STATUS, SpecField::new("unreviewed").with_source(&sub.file_source));
         }
 
         // Check for mismatches between submittal and existing type.
@@ -1005,8 +1221,8 @@ fn finalize_submittal(
         }
 
         if result.proposals.len() < MAX_PROPOSALS {
-            // Only propose approved submittals for merging; revise/rejected are recorded.
-            if is_approved || sub.review_status.is_empty() {
+            // Only propose approved or unreviewed submittals for merging; revise/rejected are recorded only.
+            if !is_revise_or_rejected {
                 result.proposals.push(p);
             }
         }
@@ -1809,5 +2025,517 @@ Mounting: Surface
         let spec = s.execute("bim.get_spec", &json!({"handles": [&handle]})).unwrap_or_default();
         assert_eq!(spec["specs"][0]["mark"], "H");
         assert_eq!(spec["specs"][0]["fields"]["manufacturer"]["value"], "Pinnacle Lighting");
+    }
+
+    // ── MUST 1: per-block submittal application ───────────────────────────
+
+    #[test]
+    fn submittal_per_block_no_cross_contamination() {
+        let mut s = session();
+        // Two types in one section.  H gets catalog A-1 and APPROVED,
+        // J gets catalog B-2 and REVISE AND RESUBMIT.
+        let submittal = "\
+SECTION 26 51 13 - INTERIOR LUMINAIRES
+
+Type H: Recessed 2x4 LED troffer
+Manufacturer: Apex Lighting
+Catalog No: A-1
+Voltage: 120/277V
+Mounting: Recessed
+Finish: White
+
+APPROVED
+
+Type J: Surface LED strip
+Manufacturer: Beacon Fixtures
+Catalog No: B-2
+Voltage: 120V
+Mounting: Surface
+Finish: Silver
+
+REVISE AND RESUBMIT
+";
+        let r = s
+            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
+            .unwrap_or_default();
+
+        let proposals = arr(&r["proposals"]);
+
+        // H should be proposed (approved) with its OWN catalog number.
+        let h = proposals.iter().find(|p| p["mark"] == "H");
+        assert!(h.is_some(), "H should be proposed (approved)");
+        let h = h.unwrap();
+        assert_eq!(
+            h["fields"]["catalogNumber"]["value"], "A-1",
+            "H must keep its own catalog number, not J's"
+        );
+        assert_eq!(h["fields"]["manufacturer"]["value"], "Apex Lighting");
+        assert_eq!(h["fields"]["reviewStatus"]["value"], "approved");
+
+        // J should NOT be proposed (revise), but its data should still be
+        // recorded on the submittal record.
+        let j_proposed = proposals.iter().find(|p| p["mark"] == "J");
+        assert!(j_proposed.is_none(), "J (revise) must not be proposed for merging");
+
+        let submittals = arr(&r["submittals"]);
+        assert!(!submittals.is_empty());
+        let sub = &submittals[0];
+        // The submittal record covers both marks.
+        let marks = sub["typeMarks"].as_array().unwrap();
+        assert!(marks.iter().any(|m| m == "H"), "submittal should list H");
+        assert!(marks.iter().any(|m| m == "J"), "submittal should list J");
+    }
+
+    #[test]
+    fn unstamped_submittal_proposed_as_unreviewed() {
+        let mut s = session();
+        let submittal = "\
+SECTION 26 51 13
+
+Type K: Pendant LED fixture
+Manufacturer: Nova Electric
+Catalog No: PD-300
+";
+        let r = s
+            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
+            .unwrap_or_default();
+
+        let proposals = arr(&r["proposals"]);
+        let k = proposals.iter().find(|p| p["mark"] == "K");
+        assert!(k.is_some(), "unstamped should be proposed");
+        assert_eq!(
+            k.unwrap()["fields"]["reviewStatus"]["value"], "unreviewed",
+            "unstamped must be 'unreviewed', not approved"
+        );
+    }
+
+    // ── MUST 5: sheet schedule from positioned TEXT entities ───────────────
+
+    #[test]
+    fn sheet_schedule_from_text_entities() {
+        let mut s = session();
+
+        // Create TEXT entities arranged in a grid to simulate a luminaire
+        // schedule drawn on a sheet.  Y decreases for each row (header at
+        // top).  Use made-up names only.
+        //
+        // Header row (y = 100):
+        //   x=0: "Mark"  x=40: "Description"  x=120: "Manufacturer"  x=200: "Catalog No"  x=280: "Volts"  x=330: "Mounting"
+        // Data row 1 (y = 90):
+        //   x=0: "H"     x=40: "Recessed 2x4 LED troffer"  x=120: "Apex Lighting"  x=200: "RT-2400"  x=280: "120/277"  x=330: "Recessed"
+        // Data row 2 (y = 80):
+        //   x=0: "J"     x=40: "Surface LED strip"  x=120: "Beacon Fixtures"  x=200: "SL-4800"  x=280: "120"  x=330: "Surface"
+
+        // Title row (y = 110).
+        s.execute("text", &json!({"at": [60, 110], "height": 4, "text": "LUMINAIRE SCHEDULE"})).ok();
+
+        // Header row.
+        s.execute("text", &json!({"at": [0, 100], "height": 3, "text": "Mark"})).ok();
+        s.execute("text", &json!({"at": [40, 100], "height": 3, "text": "Description"})).ok();
+        s.execute("text", &json!({"at": [120, 100], "height": 3, "text": "Manufacturer"})).ok();
+        s.execute("text", &json!({"at": [200, 100], "height": 3, "text": "Catalog No"})).ok();
+        s.execute("text", &json!({"at": [280, 100], "height": 3, "text": "Volts"})).ok();
+        s.execute("text", &json!({"at": [330, 100], "height": 3, "text": "Mounting"})).ok();
+
+        // Data row 1: type H.
+        s.execute("text", &json!({"at": [0, 90], "height": 3, "text": "H"})).ok();
+        s.execute("text", &json!({"at": [40, 90], "height": 3, "text": "Recessed 2x4 LED troffer"})).ok();
+        s.execute("text", &json!({"at": [120, 90], "height": 3, "text": "Apex Lighting"})).ok();
+        s.execute("text", &json!({"at": [200, 90], "height": 3, "text": "RT-2400"})).ok();
+        s.execute("text", &json!({"at": [280, 90], "height": 3, "text": "120/277"})).ok();
+        s.execute("text", &json!({"at": [330, 90], "height": 3, "text": "Recessed"})).ok();
+
+        // Data row 2: type J.
+        s.execute("text", &json!({"at": [0, 80], "height": 3, "text": "J"})).ok();
+        s.execute("text", &json!({"at": [40, 80], "height": 3, "text": "Surface LED strip"})).ok();
+        s.execute("text", &json!({"at": [120, 80], "height": 3, "text": "Beacon Fixtures"})).ok();
+        s.execute("text", &json!({"at": [200, 80], "height": 3, "text": "SL-4800"})).ok();
+        s.execute("text", &json!({"at": [280, 80], "height": 3, "text": "120"})).ok();
+        s.execute("text", &json!({"at": [330, 80], "height": 3, "text": "Surface"})).ok();
+
+        // Import with format "sheet".
+        let r = s
+            .execute("bim.spec_import", &json!({"format": "sheet", "sheet": "E-1"}))
+            .unwrap_or_default();
+
+        let proposals = arr(&r["proposals"]);
+        assert_eq!(proposals.len(), 2, "should find 2 schedule rows, got {}", proposals.len());
+
+        // Verify type H fields.
+        let h = proposals.iter().find(|p| p["mark"] == "H");
+        assert!(h.is_some(), "should find type H");
+        let h = h.unwrap();
+        assert_eq!(h["fields"]["description"]["value"], "Recessed 2x4 LED troffer");
+        assert_eq!(h["fields"]["manufacturer"]["value"], "Apex Lighting");
+        assert_eq!(h["fields"]["catalogNumber"]["value"], "RT-2400");
+        assert_eq!(h["fields"]["volts"]["value"], "120/277");
+        assert_eq!(h["fields"]["mounting"]["value"], "Recessed");
+        // Sheet id in source.
+        assert!(
+            h["fileSource"].as_str().unwrap_or("").contains("E-1"),
+            "source should contain the sheet id"
+        );
+        assert_eq!(h["category"], "luminaire");
+
+        // Verify type J fields.
+        let j = proposals.iter().find(|p| p["mark"] == "J");
+        assert!(j.is_some(), "should find type J");
+        let j = j.unwrap();
+        assert_eq!(j["fields"]["manufacturer"]["value"], "Beacon Fixtures");
+        assert_eq!(j["fields"]["catalogNumber"]["value"], "SL-4800");
+    }
+
+    // ── MUST 7: truth-scored precision/recall tests ───────────────────────
+
+    /// Compute field-level precision and recall of proposals against a truth map.
+    /// Returns (precision, recall, found_conflicts, extra_conflicts).
+    fn score_proposals(
+        proposals: &[Value],
+        rfis: &[Value],
+        truth: &serde_json::Map<String, Value>,
+        expected_conflicts: &[(/*mark*/ &str, /*field*/ &str)],
+    ) -> (f64, f64, Vec<String>, Vec<String>) {
+        let mut tp = 0u64; // true positive fields
+        let mut fp = 0u64; // false positive (extracted but wrong)
+        let mut fn_ = 0u64; // false negative (in truth but not extracted)
+
+        for (mark, truth_fields) in truth {
+            let truth_obj = truth_fields.as_object().unwrap();
+            let proposal = proposals.iter().find(|p| p["mark"].as_str() == Some(mark.as_str()));
+            match proposal {
+                Some(p) => {
+                    for (key, expected_val) in truth_obj {
+                        let expected = expected_val.as_str().unwrap_or_default();
+                        let got = p["fields"][key]["value"].as_str().unwrap_or_default();
+                        if got.eq_ignore_ascii_case(expected) {
+                            tp += 1;
+                        } else if got.is_empty() {
+                            fn_ += 1;
+                        } else {
+                            fp += 1;
+                        }
+                    }
+                    // Count extra fields not in truth as false positives.
+                    // Exclude metadata fields the parser adds automatically.
+                    if let Some(fields) = p["fields"].as_object() {
+                        for key in fields.keys() {
+                            if !truth_obj.contains_key(key)
+                                && !matches!(key.as_str(), "specSection" | "reviewStatus" | "submittalSource")
+                            {
+                                fp += 1;
+                            }
+                        }
+                    }
+                }
+                None => {
+                    fn_ += truth_obj.len() as u64;
+                }
+            }
+        }
+
+        let precision = if tp + fp > 0 { tp as f64 / (tp + fp) as f64 } else { 0.0 };
+        let recall = if tp + fn_ > 0 { tp as f64 / (tp + fn_) as f64 } else { 0.0 };
+
+        // Check conflicts.
+        let mut found = Vec::new();
+        let mut extra = Vec::new();
+        for rfi in rfis {
+            let mark = rfi["mark"].as_str().unwrap_or_default();
+            let field = rfi["field"].as_str().unwrap_or_default();
+            let key = format!("{mark}:{field}");
+            if expected_conflicts.iter().any(|(m, f)| *m == mark && *f == field) {
+                found.push(key);
+            } else {
+                extra.push(key);
+            }
+        }
+
+        (precision, recall, found, extra)
+    }
+
+    #[test]
+    fn truth_scored_spec_and_schedule() {
+        let mut s = session();
+
+        // ── Truth: what the spec book SHOULD produce ─────────────────────
+        // Note: the spec parser strips trailing alphabetic chars from voltage
+        // values ("120/277V" → "120/277"), so truth matches that behaviour.
+        let truth: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "H": {
+                "description": "Recessed 2x4 LED troffer",
+                "manufacturer": "Apex Lighting",
+                "catalogNumber": "RT-2400-LED",
+                "volts": "120/277",
+                "cct": "3500K",
+                "mounting": "Recessed",
+                "finish": "White"
+            },
+            "J": {
+                "description": "Surface LED strip",
+                "manufacturer": "Beacon Fixtures",
+                "catalogNumber": "SL-4800-DIM",
+                "volts": "120",
+                "cct": "5000K",
+                "mounting": "Surface",
+                "finish": "Silver"
+            },
+            "A": {
+                "description": "Duplex receptacle",
+                "manufacturer": "Meridian Electric",
+                "catalogNumber": "ME-5362",
+                "volts": "125",
+                "amps": "20"
+            },
+            "P1": {
+                "description": "Lighting panel",
+                "manufacturer": "Grid Controls",
+                "volts": "120/208"
+            }
+        }))
+        .unwrap();
+
+        // ── Spec book text ───────────────────────────────────────────────
+        let spec_text = "\
+SECTION 26 51 13 - INTERIOR LUMINAIRES
+
+Type H: Recessed 2x4 LED troffer
+Manufacturer: Apex Lighting
+Catalog No: RT-2400-LED
+Voltage: 120/277V
+CCT: 3500K
+Mounting: Recessed
+Finish: White
+
+Type J: Surface LED strip
+Manufacturer: Beacon Fixtures
+Catalog No: SL-4800-DIM
+Voltage: 120V
+CCT: 5000K
+Mounting: Surface
+Finish: Silver
+
+SECTION 26 27 26 - WIRING DEVICES
+
+Type A: Duplex receptacle
+Manufacturer: Meridian Electric
+Catalog No: ME-5362
+Voltage: 125V
+Amps: 20
+
+SECTION 26 24 16 - PANELBOARDS
+
+Type P1: Lighting panel
+Manufacturer: Grid Controls
+Voltage: 120/208V
+";
+
+        let r = s
+            .execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"}))
+            .unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let rfis = arr(&r["rfis"]);
+
+        let (precision, recall, _, extra) = score_proposals(proposals, rfis, &truth, &[]);
+        assert!(
+            precision >= 0.95,
+            "spec precision {precision:.3} < 0.95; proposals: {proposals:?}"
+        );
+        assert!(
+            recall >= 0.95,
+            "spec recall {recall:.3} < 0.95; proposals: {proposals:?}"
+        );
+        assert!(extra.is_empty(), "no unplanted conflicts expected, got: {extra:?}");
+    }
+
+    #[test]
+    fn truth_scored_with_planted_conflicts() {
+        let mut s = session();
+
+        // Pre-load existing types so spec import can detect disagreements.
+        // Planted conflicts:
+        //   H: CCT mismatch (existing 4000K, spec says 3500K)
+        //   J: volts mismatch (existing 277V, spec says 120V)
+        s.execute(
+            "bim.set_type",
+            &json!({
+                "mark": "H",
+                "category": "luminaire",
+                "fields": {
+                    "cct": {"value": "4000K", "source": "schedule E-1"},
+                    "manufacturer": "Apex Lighting"
+                }
+            }),
+        )
+        .ok();
+        s.execute(
+            "bim.set_type",
+            &json!({
+                "mark": "J",
+                "category": "luminaire",
+                "fields": {
+                    "volts": {"value": "277V", "source": "schedule E-1"},
+                    "manufacturer": "Beacon Fixtures"
+                }
+            }),
+        )
+        .ok();
+
+        let spec_text = "\
+SECTION 26 51 13 - INTERIOR LUMINAIRES
+
+Type H: Recessed 2x4 LED troffer
+Manufacturer: Apex Lighting
+Catalog No: RT-2400-LED
+Voltage: 120/277V
+CCT: 3500K
+Mounting: Recessed
+Finish: White
+
+Type J: Surface LED strip
+Manufacturer: Beacon Fixtures
+Catalog No: SL-4800-DIM
+Voltage: 120V
+CCT: 5000K
+Mounting: Surface
+Finish: Silver
+";
+
+        let r = s
+            .execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"}))
+            .unwrap_or_default();
+
+        let proposals = arr(&r["proposals"]);
+        let rfis = arr(&r["rfis"]);
+
+        // Truth for the spec fields (voltage alpha suffix stripped by parser).
+        let truth: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "H": {
+                "description": "Recessed 2x4 LED troffer",
+                "manufacturer": "Apex Lighting",
+                "catalogNumber": "RT-2400-LED",
+                "volts": "120/277",
+                "cct": "3500K",
+                "mounting": "Recessed",
+                "finish": "White"
+            },
+            "J": {
+                "description": "Surface LED strip",
+                "manufacturer": "Beacon Fixtures",
+                "catalogNumber": "SL-4800-DIM",
+                "volts": "120",
+                "cct": "5000K",
+                "mounting": "Surface",
+                "finish": "Silver"
+            }
+        }))
+        .unwrap();
+
+        let expected_conflicts: &[(&str, &str)] = &[("H", "cct"), ("J", "volts")];
+
+        let (precision, recall, found, extra) = score_proposals(proposals, rfis, &truth, expected_conflicts);
+
+        assert!(precision >= 0.95, "precision {precision:.3} < 0.95");
+        assert!(recall >= 0.95, "recall {recall:.3} < 0.95");
+
+        // Every planted conflict must be found.
+        for &(mark, field) in expected_conflicts {
+            let key = format!("{mark}:{field}");
+            assert!(
+                found.contains(&key),
+                "planted conflict {key} not found in RFIs; rfis: {rfis:?}"
+            );
+        }
+        // No unplanted conflicts.
+        assert!(extra.is_empty(), "unplanted conflicts found: {extra:?}; rfis: {rfis:?}");
+    }
+
+    #[test]
+    fn truth_scored_submittal_with_two_types() {
+        let mut s = session();
+
+        // Two submittals with per-block catalog numbers.  Planted conflict:
+        // submittal H has voltage 120V but existing says 120/277V.
+        s.execute(
+            "bim.set_type",
+            &json!({
+                "mark": "H",
+                "category": "luminaire",
+                "fields": {
+                    "volts": {"value": "120/277V", "source": "spec 26 51 13"},
+                    "manufacturer": "Apex Lighting"
+                }
+            }),
+        )
+        .ok();
+
+        let submittal = "\
+SECTION 26 51 13
+
+Type H: Recessed 2x4 LED troffer
+Manufacturer: Apex Lighting
+Catalog No: A-1
+Voltage: 120V
+Mounting: Recessed
+Finish: White
+
+APPROVED
+
+Type J: Surface LED strip
+Manufacturer: Beacon Fixtures
+Catalog No: B-2
+Voltage: 120V
+Mounting: Surface
+Finish: Silver
+
+APPROVED
+";
+
+        let r = s
+            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
+            .unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let rfis = arr(&r["rfis"]);
+
+        // Truth for approved submittal fields.  The submittal parser keeps
+        // raw voltage text (no alpha suffix stripping unlike the spec parser).
+        let truth: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "H": {
+                "description": "Recessed 2x4 LED troffer",
+                "manufacturer": "Apex Lighting",
+                "catalogNumber": "A-1",
+                "volts": "120V",
+                "mounting": "Recessed",
+                "finish": "White"
+            },
+            "J": {
+                "description": "Surface LED strip",
+                "manufacturer": "Beacon Fixtures",
+                "catalogNumber": "B-2",
+                "volts": "120V",
+                "mounting": "Surface",
+                "finish": "Silver"
+            }
+        }))
+        .unwrap();
+
+        let expected_conflicts: &[(&str, &str)] = &[("H", "volts")];
+
+        let (precision, recall, found, extra) = score_proposals(proposals, rfis, &truth, expected_conflicts);
+
+        assert!(precision >= 0.95, "submittal precision {precision:.3} < 0.95; proposals: {proposals:?}");
+        assert!(recall >= 0.95, "submittal recall {recall:.3} < 0.95; proposals: {proposals:?}");
+
+        // H's catalog must be A-1, J's must be B-2 (no cross-contamination).
+        let h = proposals.iter().find(|p| p["mark"] == "H").expect("H proposed");
+        let j = proposals.iter().find(|p| p["mark"] == "J").expect("J proposed");
+        assert_eq!(h["fields"]["catalogNumber"]["value"], "A-1");
+        assert_eq!(j["fields"]["catalogNumber"]["value"], "B-2");
+
+        // Planted voltage conflict on H.
+        for &(mark, field) in expected_conflicts {
+            let key = format!("{mark}:{field}");
+            assert!(found.contains(&key), "planted conflict {key} not found; rfis: {rfis:?}");
+        }
+        assert!(extra.is_empty(), "unplanted conflicts: {extra:?}");
     }
 }
