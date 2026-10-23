@@ -358,7 +358,7 @@ pub fn entries_for(app: &CadApp, choices: Choices, who: &Identity) -> Vec<(Strin
     let host = host();
     let redact = Redact::new(app, choices.names, who);
     let mut out: Vec<(String, String)> = Vec::new();
-    let made = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let made = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     out.push((
         "README.txt".into(),
         format!(

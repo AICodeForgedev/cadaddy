@@ -88,7 +88,7 @@ fn properties(ui: &mut egui::Ui, salt: &str, props: &Value, key: &mut String, va
         for (k, v) in props.as_object().into_iter().flatten() {
             ui.label(k);
             ui.label(v.as_str().map_or_else(|| v.to_string(), str::to_string));
-            if ui.small_button("✕").on_hover_text(crate::tl!("Remove Property")).clicked() {
+            if crate::icons::button(ui, crate::icons::Icon::Close, 16.0, "Remove Property", false).clicked() {
                 change = Some(json!({ k: null }));
             }
             ui.end_row();

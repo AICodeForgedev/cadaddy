@@ -27,6 +27,8 @@ cadaddy-fonts = { workspace = true }
 image = { workspace = true }
 # The RFI list's items (shared with the building spec) and the print validator's inputs.
 cadaddy-walk3d = { path = "../walk3d" }
+# Stage timings: std::time::Instant panics in the web build.
+web-time = "1.1"
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
 # Read trays become 3D runs, clash with other trades and export to IFC (tray_reader test).

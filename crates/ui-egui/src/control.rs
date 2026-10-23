@@ -83,9 +83,9 @@ impl PendingReply {
     /// the request then waited for the next timed repaint, about 0.3 s (one call in every few;
     /// UI review 0.7.7c, measured as "stalls" after edits).
     pub fn wait_nudging(self, timeout: Duration, nudge: impl Fn()) -> ControlResponse {
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = web_time::Instant::now() + timeout;
         loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let left = deadline.saturating_duration_since(web_time::Instant::now());
             if left.is_zero() {
                 break;
             }

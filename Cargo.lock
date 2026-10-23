@@ -818,6 +818,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
