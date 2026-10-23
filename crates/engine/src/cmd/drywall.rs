@@ -62,12 +62,7 @@ fn run_info(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The wall info for one WALLGEN wall entity.
-fn wall_info_json(
-    e: &Entity,
-    sp: &Option<BuildingSpec>,
-    k: f64,
-    room_map: Option<&Vec<RoomPoint>>,
-) -> Value {
+fn wall_info_json(e: &Entity, sp: &Option<BuildingSpec>, k: f64, room_map: Option<&Vec<RoomPoint>>) -> Value {
     let tags = wallgen_tags(e);
     let level = tags.get(1).cloned().unwrap_or_default();
     let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:")).map(str::to_string);
@@ -202,17 +197,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Apply filters.
-    let handle_filter: Option<Vec<Handle>> = str_array_param(p, "handles")
-        .map(|v| v.iter().filter_map(|s| Handle::parse_hex(s)).collect());
+    let handle_filter: Option<Vec<Handle>> = str_array_param(p, "handles").map(|v| v.iter().filter_map(|s| Handle::parse_hex(s)).collect());
     let level_filter = str_array_param(p, "levels");
     let type_filter = str_array_param(p, "wallTypes");
     let room_filter = str_array_param(p, "rooms");
 
-    let room_map = if group_by == "room" || room_filter.is_some() {
-        Some(build_room_map(d, &sp))
-    } else {
-        None
-    };
+    let room_map = if group_by == "room" || room_filter.is_some() { Some(build_room_map(d, &sp)) } else { None };
 
     let filtered: Vec<&WallData> = wall_entities
         .iter()
@@ -334,8 +324,14 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
                 // at the two ends of each wall.
                 corner_bead_length += wall_height_ft * 2.0;
                 // Trim: board edges at floor and ceiling on each side with boards.
-                let has_s1 = asm.layers.iter().any(|l| l.side == LayerSide::Side1 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
-                let has_s2 = asm.layers.iter().any(|l| l.side == LayerSide::Side2 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
+                let has_s1 = asm
+                    .layers
+                    .iter()
+                    .any(|l| l.side == LayerSide::Side1 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
+                let has_s2 = asm
+                    .layers
+                    .iter()
+                    .any(|l| l.side == LayerSide::Side2 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
                 let side_count = has_s1 as usize + has_s2 as usize;
                 trim_length += wall_length_ft * 2.0 * side_count as f64;
             } else {
@@ -577,34 +573,20 @@ fn run_finishfaces(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 /// Compute finish faces for one wall, returning JSON values.
-fn finish_faces_for_wall(
-    handle: Handle,
-    mesh: &Mesh,
-    asm: &Assembly,
-    k: f64,
-    room_map: Option<&Vec<RoomPoint>>,
-) -> Vec<Value> {
+fn finish_faces_for_wall(handle: Handle, mesh: &Mesh, asm: &Assembly, k: f64, room_map: Option<&Vec<RoomPoint>>) -> Vec<Value> {
     let mut faces = Vec::new();
     let centreline = mesh_centreline(mesh, k);
 
     // Find the outermost board on each side:
     // Side 1: the FIRST non-cavity board/sheathing layer on side 1 (the outermost face).
     // Layers run from side 1's face to side 2's face, so the first side1 layer is the face layer.
-    let side1_board = asm.layers.iter().find(|l| {
-        l.side == LayerSide::Side1
-            && !l.in_cavity
-            && matches!(l.category.as_str(), "board" | "sheathing" | "")
-    });
+    let side1_board =
+        asm.layers.iter().find(|l| l.side == LayerSide::Side1 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
     // Side 2: the LAST non-cavity board/sheathing layer on side 2.
-    let side2_board = asm.layers.iter().rfind(|l| {
-        l.side == LayerSide::Side2
-            && !l.in_cavity
-            && matches!(l.category.as_str(), "board" | "sheathing" | "")
-    });
+    let side2_board =
+        asm.layers.iter().rfind(|l| l.side == LayerSide::Side2 && !l.in_cavity && matches!(l.category.as_str(), "board" | "sheathing" | ""));
 
-    let (room1, room2) = room_map
-        .map(|rm| wall_rooms(&centreline, rm))
-        .unwrap_or((None, None));
+    let (room1, room2) = room_map.map(|rm| wall_rooms(&centreline, rm)).unwrap_or((None, None));
 
     if let Some(board) = side1_board {
         let room = room1.clone().unwrap_or_default();
@@ -805,10 +787,18 @@ fn mesh_mid_xy(mesh: &Mesh) -> [f64; 2] {
     let (mut minx, mut miny) = (first.x, first.y);
     let (mut maxx, mut maxy) = (first.x, first.y);
     for v in &mesh.vertices {
-        if v.x < minx { minx = v.x; }
-        if v.y < miny { miny = v.y; }
-        if v.x > maxx { maxx = v.x; }
-        if v.y > maxy { maxy = v.y; }
+        if v.x < minx {
+            minx = v.x;
+        }
+        if v.y < miny {
+            miny = v.y;
+        }
+        if v.x > maxx {
+            maxx = v.x;
+        }
+        if v.y > maxy {
+            maxy = v.y;
+        }
     }
     [(minx + maxx) * 0.5, (miny + maxy) * 0.5]
 }
@@ -822,10 +812,18 @@ fn mesh_centreline(mesh: &Mesh, k: f64) -> WallCentreline {
     let (mut minx, mut miny) = (first.x, first.y);
     let (mut maxx, mut maxy) = (first.x, first.y);
     for v in &mesh.vertices {
-        if v.x < minx { minx = v.x; }
-        if v.y < miny { miny = v.y; }
-        if v.x > maxx { maxx = v.x; }
-        if v.y > maxy { maxy = v.y; }
+        if v.x < minx {
+            minx = v.x;
+        }
+        if v.y < miny {
+            miny = v.y;
+        }
+        if v.x > maxx {
+            maxx = v.x;
+        }
+        if v.y > maxy {
+            maxy = v.y;
+        }
     }
     let dx = maxx - minx;
     let dy = maxy - miny;
@@ -860,12 +858,24 @@ fn mesh_wall_dims(mesh: &Mesh, units_per_ft: f64) -> (f64, f64) {
     let mut min = first;
     let mut max = first;
     for v in &mesh.vertices {
-        if v.x < min.x { min.x = v.x; }
-        if v.y < min.y { min.y = v.y; }
-        if v.z < min.z { min.z = v.z; }
-        if v.x > max.x { max.x = v.x; }
-        if v.y > max.y { max.y = v.y; }
-        if v.z > max.z { max.z = v.z; }
+        if v.x < min.x {
+            min.x = v.x;
+        }
+        if v.y < min.y {
+            min.y = v.y;
+        }
+        if v.z < min.z {
+            min.z = v.z;
+        }
+        if v.x > max.x {
+            max.x = v.x;
+        }
+        if v.y > max.y {
+            max.y = v.y;
+        }
+        if v.z > max.z {
+            max.z = v.z;
+        }
     }
     let dx = (max.x - min.x) / units_per_ft;
     let dy = (max.y - min.y) / units_per_ft;
@@ -895,8 +905,7 @@ fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
                     .as_array()
                     .map(|a| format!("{}x{}", a.first().and_then(Value::as_f64).unwrap_or(4.0), a.get(1).and_then(Value::as_f64).unwrap_or(8.0)))
                     .unwrap_or_default();
-                writeln!(f, "{},{},{thick:.3},{side},{area:.2},{sheets},{ss},,,,,{waste:.1}",
-                    csv_escape(group), csv_escape(mat))
+                writeln!(f, "{},{},{thick:.3},{side},{area:.2},{sheets},{ss},,,,,{waste:.1}", csv_escape(group), csv_escape(mat))
                     .map_err(|e| bad("drywall.takeoff", e.to_string()))?;
             }
         }
@@ -915,18 +924,12 @@ fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
 /// Properly escape a CSV field: if it contains commas, quotes or newlines, wrap in quotes
 /// and double any embedded quotes.
 fn csv_escape(s: &str) -> String {
-    if s.contains('"') || s.contains(',') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
+    if s.contains('"') || s.contains(',') || s.contains('\n') || s.contains('\r') { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
 }
 
 /// Parse an optional JSON array of strings.
 fn str_array_param(p: &Value, key: &str) -> Option<Vec<String>> {
-    p.get(key).and_then(Value::as_array).map(|a| {
-        a.iter().filter_map(Value::as_str).map(str::to_string).collect()
-    })
+    p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -959,11 +962,7 @@ fn build_room_map(d: &Drawing, sp: &BuildingSpec) -> Vec<RoomPoint> {
         let text = text.trim();
         for &(name, finish) in &room_names {
             if text.eq_ignore_ascii_case(name) {
-                out.push(RoomPoint {
-                    name: name.to_string(),
-                    pos: [insert.x / k, insert.y / k],
-                    finish: finish.map(str::to_string),
-                });
+                out.push(RoomPoint { name: name.to_string(), pos: [insert.x / k, insert.y / k], finish: finish.map(str::to_string) });
             }
         }
     }
@@ -1023,12 +1022,24 @@ fn compute_layer_lines(d: &Drawing, sp: &BuildingSpec) -> Vec<([f64; 3], [f64; 3
         let (mut minx, mut miny, mut minz) = (first.x, first.y, first.z);
         let (mut maxx, mut maxy, mut maxz) = (first.x, first.y, first.z);
         for v in &mesh.vertices {
-            if v.x < minx { minx = v.x; }
-            if v.y < miny { miny = v.y; }
-            if v.z < minz { minz = v.z; }
-            if v.x > maxx { maxx = v.x; }
-            if v.y > maxy { maxy = v.y; }
-            if v.z > maxz { maxz = v.z; }
+            if v.x < minx {
+                minx = v.x;
+            }
+            if v.y < miny {
+                miny = v.y;
+            }
+            if v.z < minz {
+                minz = v.z;
+            }
+            if v.x > maxx {
+                maxx = v.x;
+            }
+            if v.y > maxy {
+                maxy = v.y;
+            }
+            if v.z > maxz {
+                maxz = v.z;
+            }
         }
         let dx = maxx - minx;
         let dy = maxy - miny;

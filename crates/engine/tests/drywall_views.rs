@@ -96,13 +96,7 @@ fn select_walls(s: &mut Session) -> Vec<String> {
 
 /// Get walls of a specific type from wall.info.
 fn walls_of_type(r: &Value, type_name: &str) -> Vec<Value> {
-    r["walls"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|w| w["wallType"].as_str() == Some(type_name))
-        .cloned()
-        .collect()
+    r["walls"].as_array().into_iter().flatten().filter(|w| w["wallType"].as_str() == Some(type_name)).cloned().collect()
 }
 
 // --------------------------------------------------------------------------
@@ -201,17 +195,20 @@ fn viewmode_by_rating_colors_match_legend() {
     assert!(!s.drywall_color_overrides.is_empty(), "color overrides should be populated");
 
     // Now check that P1 walls get the "1 HR" colour and X1 walls get "Not rated".
-    let hr_color: Vec<u8> = legend.iter().find(|l| l["label"] == "1 HR").unwrap()["color"]
-        .as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
-    let nr_color: Vec<u8> = legend.iter().find(|l| l["label"] == "Not rated").unwrap()["color"]
-        .as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
+    let hr_color: Vec<u8> =
+        legend.iter().find(|l| l["label"] == "1 HR").unwrap()["color"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
+    let nr_color: Vec<u8> =
+        legend.iter().find(|l| l["label"] == "Not rated").unwrap()["color"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
 
     let d = s.doc().unwrap();
     for e in d.model.iter() {
         if cadaddy_engine::cmd::wallgen::made_as(e).as_deref() != Some("wall") {
             continue;
         }
-        let tags: Vec<String> = e.common.xdata.iter()
+        let tags: Vec<String> = e
+            .common
+            .xdata
+            .iter()
             .skip_while(|t| !(t.code == 1001 && t.value.trim().eq_ignore_ascii_case("CADADDY_WALLGEN")))
             .skip(1)
             .take_while(|t| t.code != 1001)
@@ -223,12 +220,10 @@ fn viewmode_by_rating_colors_match_legend() {
         if let Some(override_color) = s.drywall_color_overrides.get(&e.handle) {
             match type_name.as_deref() {
                 Some("P1") => {
-                    assert_eq!(*override_color, [hr_color[0], hr_color[1], hr_color[2]],
-                        "P1 wall should get '1 HR' colour");
+                    assert_eq!(*override_color, [hr_color[0], hr_color[1], hr_color[2]], "P1 wall should get '1 HR' colour");
                 }
                 Some("X1") => {
-                    assert_eq!(*override_color, [nr_color[0], nr_color[1], nr_color[2]],
-                        "X1 wall should get 'Not rated' colour");
+                    assert_eq!(*override_color, [nr_color[0], nr_color[1], nr_color[2]], "X1 wall should get 'Not rated' colour");
                 }
                 _ => {}
             }
@@ -283,10 +278,7 @@ fn viewmode_color_override_in_render() {
     s.execute("drywall.viewmode", &json!({"mode": "rating"})).unwrap();
     let d = s.doc().unwrap();
     let overrides = &s.drywall_color_overrides;
-    let opts = cadaddy_render::Options {
-        color_overrides: overrides.iter().map(|(&h, &c)| (h, c)).collect(),
-        ..Default::default()
-    };
+    let opts = cadaddy_render::Options { color_overrides: overrides.iter().map(|(&h, &c)| (h, c)).collect(), ..Default::default() };
     let list = cadaddy_render::build(d, &cadaddy_doc::Space::Model, &opts);
     // The list should have prims, and wall prims should have override colours.
     assert!(!list.prims.is_empty(), "display list should have prims");
@@ -331,12 +323,8 @@ fn finishfaces_correct_board_and_room() {
     assert!(side2["board"].as_str().unwrap().contains("gypsum"), "side2 board should be gypsum, got {}", side2["board"]);
 
     // Rooms: one should be OFFICE and the other CORRIDOR.
-    let rooms: Vec<&str> = vec![
-        side1["room"].as_str().unwrap_or(""),
-        side2["room"].as_str().unwrap_or(""),
-    ];
-    assert!(rooms.contains(&"OFFICE") || rooms.contains(&"CORRIDOR"),
-        "rooms should include OFFICE or CORRIDOR, got {:?}", rooms);
+    let rooms: Vec<&str> = vec![side1["room"].as_str().unwrap_or(""), side2["room"].as_str().unwrap_or("")];
+    assert!(rooms.contains(&"OFFICE") || rooms.contains(&"CORRIDOR"), "rooms should include OFFICE or CORRIDOR, got {:?}", rooms);
 
     // Check finishes: OFFICE → latex paint, CORRIDOR → epoxy paint.
     for face in &p1_faces {
@@ -383,15 +371,13 @@ fn finishfaces_two_layer_side_picks_face_layer() {
     let side1_faces: Vec<_> = faces.iter().filter(|f| f["side"].as_str() == Some("side1")).collect();
     assert!(!side1_faces.is_empty(), "should have side1 faces");
     for f in &side1_faces {
-        assert_eq!(f["board"].as_str().unwrap(), "1/2\" regular gypsum board",
-            "side1 should be the first (outermost) board, got {}", f["board"]);
+        assert_eq!(f["board"].as_str().unwrap(), "1/2\" regular gypsum board", "side1 should be the first (outermost) board, got {}", f["board"]);
     }
 
     // Side 2 should be "5/8\" Type X gypsum board".
     let side2_faces: Vec<_> = faces.iter().filter(|f| f["side"].as_str() == Some("side2")).collect();
     for f in &side2_faces {
-        assert!(f["board"].as_str().unwrap().contains("Type X"),
-            "side2 should be Type X gypsum, got {}", f["board"]);
+        assert!(f["board"].as_str().unwrap().contains("Type X"), "side2 should be Type X gypsum, got {}", f["board"]);
     }
 }
 
@@ -454,8 +440,7 @@ fn viewmode_populates_layer_lines() {
     let mut s = building();
     assert!(s.drywall_layer_lines.is_empty(), "no layer lines before viewmode");
     s.execute("drywall.viewmode", &json!({"mode": "type"})).unwrap();
-    assert!(!s.drywall_layer_lines.is_empty(),
-        "viewmode should populate layer lines for the renderer");
+    assert!(!s.drywall_layer_lines.is_empty(), "viewmode should populate layer lines for the renderer");
     // Each wall with an assembly should get lines at the internal layer boundaries.
     // P1 has 4 layers (3 non-cavity boundaries at offsets 0.625, 4.25, 4.875) → 3 internal
     // boundaries × 2 (plan + top) = 6 lines per wall. The offsets 0 and 4.875 (faces) are
@@ -470,17 +455,17 @@ fn layer_lines_appear_in_display_list() {
     let mut s = building();
     s.execute("drywall.viewmode", &json!({"mode": "type"})).unwrap();
     let d = s.doc().unwrap();
-    let opts = cadaddy_render::Options {
-        layer_lines: s.drywall_layer_lines.clone(),
-        ..Default::default()
-    };
+    let opts = cadaddy_render::Options { layer_lines: s.drywall_layer_lines.clone(), ..Default::default() };
     let list = cadaddy_render::build(d, &cadaddy_doc::Space::Model, &opts);
     // The display list should have more prims than without layer lines.
     let opts_no = cadaddy_render::Options::default();
     let list_no = cadaddy_render::build(d, &cadaddy_doc::Space::Model, &opts_no);
-    assert!(list.prims.len() > list_no.prims.len(),
+    assert!(
+        list.prims.len() > list_no.prims.len(),
         "display list with layer lines ({}) should have more prims than without ({})",
-        list.prims.len(), list_no.prims.len());
+        list.prims.len(),
+        list_no.prims.len()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -495,8 +480,7 @@ fn group_by_room_works() {
     assert!(!rows.is_empty(), "room grouping should produce rows");
     // Group names should contain room names.
     let groups: Vec<&str> = rows.iter().filter_map(|r| r["group"].as_str()).collect();
-    assert!(groups.iter().any(|g| g.contains("OFFICE") || g.contains("CORRIDOR")),
-        "room groups should mention room names, got {:?}", groups);
+    assert!(groups.iter().any(|g| g.contains("OFFICE") || g.contains("CORRIDOR")), "room groups should mention room names, got {:?}", groups);
 }
 
 #[test]
@@ -528,8 +512,7 @@ fn bad_group_by_returns_error() {
     let r = s.execute("drywall.takeoff", &json!({"groupBy": "badvalue"}));
     assert!(r.is_err(), "bad groupBy value should error");
     let e = r.unwrap_err().to_string();
-    assert!(e.contains("level") && e.contains("room") && e.contains("wallType"),
-        "error should list supported values, got: {e}");
+    assert!(e.contains("level") && e.contains("room") && e.contains("wallType"), "error should list supported values, got: {e}");
 }
 
 #[test]
@@ -561,8 +544,7 @@ fn bad_viewmode_returns_error_listing_options() {
     let r = s.execute("drywall.viewmode", &json!({"mode": "badmode"}));
     assert!(r.is_err());
     let e = r.unwrap_err().to_string();
-    assert!(e.contains("type") && e.contains("rating") && e.contains("off"),
-        "error should list modes, got: {e}");
+    assert!(e.contains("type") && e.contains("rating") && e.contains("off"), "error should list modes, got: {e}");
 }
 
 // --------------------------------------------------------------------------
@@ -616,8 +598,7 @@ fn p1_sheets_computed_correctly() {
         let sheets = board["sheets"].as_u64().unwrap_or(0);
         let area = board["areaSqFt"].as_f64().unwrap_or(0.0);
         let expected_sheets = ((area * 1.10) / 32.0).ceil() as u64;
-        assert_eq!(sheets, expected_sheets,
-            "sheets should be ceil({area}*1.10/32)={expected_sheets}, got {sheets}");
+        assert_eq!(sheets, expected_sheets, "sheets should be ceil({area}*1.10/32)={expected_sheets}, got {sheets}");
     }
 }
 
@@ -834,8 +815,7 @@ fn metric_drawing_gives_correct_area() {
     // The exact value may differ from the inch drawing due to wallgen joining geometry,
     // but it should be a reasonable sq ft value for a ~24ft wall.
     let area = p1_walls[0]["grossAreaSqFt"].as_f64().unwrap_or(0.0);
-    assert!(area > 100.0 && area < 1000.0,
-        "metric drawing area should be in a reasonable range (sq ft), got {area}");
+    assert!(area > 100.0 && area < 1000.0, "metric drawing area should be in a reasonable range (sq ft), got {area}");
 }
 
 // --------------------------------------------------------------------------

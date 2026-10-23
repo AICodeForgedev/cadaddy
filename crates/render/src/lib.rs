@@ -710,16 +710,7 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
             b.list.bounds.add(c);
             b.list.verts.push(a);
             b.list.verts.push(c);
-            b.list.prims.push(DPrim {
-                handle: Handle(0),
-                color: grey,
-                aci7: false,
-                lw: 0.0,
-                transparency: 0,
-                kind: Kind::Polyline,
-                start,
-                len: 2,
-            });
+            b.list.prims.push(DPrim { handle: Handle(0), color: grey, aci7: false, lw: 0.0, transparency: 0, kind: Kind::Polyline, start, len: 2 });
         }
     }
     // A layout is drawn in paper units, so its pens become geometry now.
@@ -1389,11 +1380,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     }
     // Apply colour overrides (e.g. drywall view modes) for the top-level entity.
     let rgb = if ctx.depth == 0 {
-        if let Some(&[r, g, b_]) = b.opts.color_overrides.get(&ctx.top) {
-            Ink { rgb: Rgb(r, g, b_), aci7: false, aci: 0 }
-        } else {
-            rgb
-        }
+        if let Some(&[r, g, b_]) = b.opts.color_overrides.get(&ctx.top) { Ink { rgb: Rgb(r, g, b_), aci7: false, aci: 0 } } else { rgb }
     } else {
         rgb
     };
