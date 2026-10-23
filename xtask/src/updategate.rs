@@ -744,7 +744,7 @@ fn linux_gate(work: &Path, old_appimage: &Path, new_appimage: &Path, report: &mu
             if !showing {
                 return Err("update available but card not showing".into());
             }
-            Ok(format!("update card showing, scripted=false"))
+            Ok("update card showing, scripted=false".to_string())
         });
 
         report.step("download", || {
