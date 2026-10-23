@@ -442,10 +442,8 @@ fn detect_act_grid(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_
                 if dx >= min_span(room_w) {
                     h_ys.push((a[1] + b[1]) / 2.0);
                 }
-            } else if dy > 1.0 && dx < 0.3 {
-                if dy >= min_span(room_h) {
-                    v_xs.push((a[0] + b[0]) / 2.0);
-                }
+            } else if dy > 1.0 && dx < 0.3 && dy >= min_span(room_h) {
+                v_xs.push((a[0] + b[0]) / 2.0);
             }
         }
     }
@@ -940,7 +938,7 @@ fn detect_ceiling_items(d: &Drawing, alignment: &Alignment, level: &str, rooms: 
 
     // Step 4: Sprinkler heads are circles on the DEVICE layer (small radius, < 0.5 ft).
     for &(centre, r) in &dev_circles {
-        if r > 0.5 || r < 0.01 {
+        if !(0.01..=0.5).contains(&r) {
             continue;
         }
         if let Some(room) = room_containing(rooms, centre) {
