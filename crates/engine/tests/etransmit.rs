@@ -187,3 +187,67 @@ fn an_unsaved_drawing_is_packed_under_its_title() {
     assert_eq!(files.len(), 1);
     assert!(files[0]["target"].as_str().unwrap().ends_with(".dwg"), "{}", files[0]);
 }
+
+fn underlay(d: &mut Drawing, path: &str) {
+    let u = serde_json::from_value(
+        json!({ "insert": {"x":0,"y":0,"z":0}, "u": {"x":1,"y":0,"z":0}, "v": {"x":0,"y":1,"z":0}, "size": {"x":17,"y":11}, "path": path }),
+    )
+    .unwrap();
+    let h = d.new_handle();
+    d.model.push(Entity::new(h, EntityKind::Underlay(Box::new(u))));
+}
+
+/// Security suite (Q207 rework, packages): IMAGE, underlay and xref paths on another computer
+/// are never read into a package; each is listed in `left` with the reason, and the package of
+/// the rest is still made.
+#[test]
+fn paths_on_other_computers_are_left_out_of_the_package() {
+    hooks();
+    let dir = folder("network");
+    let remote = [
+        ("image", r"\\192.0.2.1\share\remote-photo.png"),
+        ("image", "file://192.0.2.1/share/remote-scan.png"),
+        ("underlay", r"\\192.0.2.1\share\remote-sheet.pdf"),
+        ("underlay", "file://192.0.2.1/share/remote-specs.pdf"),
+        ("xref", r"\\192.0.2.1\share\remote-base.dxf"),
+        ("xref", "file://192.0.2.1/share/remote-site.dxf"),
+    ];
+    let mut host = Drawing::new_metric();
+    line(&mut host, 0.0);
+    for (i, (kind, path)) in remote.iter().enumerate() {
+        match *kind {
+            "image" => image(&mut host, path),
+            "underlay" => underlay(&mut host, path),
+            _ => xref(&mut host, &format!("net{i}"), path),
+        }
+    }
+    // A local file beside them is still packed.
+    image(&mut host, "img/photo.png");
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    std::fs::write(dir.join("img/photo.png"), b"photo bytes").unwrap();
+    save(&host, &dir.join("host.dxf"));
+    let mut s = Session::new();
+    s.execute("open", &json!({ "path": dir.join("host.dxf").to_string_lossy() })).unwrap();
+    let out = dir.join("out.zip");
+    let r = s.execute("etransmit", &json!({ "path": out.to_string_lossy() })).unwrap();
+    let mut left: Vec<(String, String, String)> = r["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        // The built-in font is listed in every package; the rest is what was left out.
+        .filter(|l| l["kind"] != "font")
+        .map(|l| (l["kind"].as_str().unwrap().to_string(), l["name"].as_str().unwrap().to_string(), l["note"].as_str().unwrap().to_string()))
+        .collect();
+    left.sort();
+    let mut want: Vec<(String, String, String)> =
+        remote.iter().map(|(k, p)| (k.to_string(), p.to_string(), "not packed: the path is on another computer".to_string())).collect();
+    want.sort();
+    assert_eq!(left, want, "{}", r["left"]);
+    // Nothing was read from them: the package holds the host, the local image and the report.
+    let mut names: Vec<String> = entries(&out).into_iter().map(|(n, _)| n).collect();
+    names.sort();
+    assert_eq!(names, ["Images/photo.png", "host.dxf", "transmittal.html", "transmittal.txt"]);
+    let sources: Vec<&str> = r["files"].as_array().unwrap().iter().filter_map(|f| f["source"].as_str()).collect();
+    assert!(sources.iter().all(|s| !s.contains("192.0.2.1")), "{sources:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
