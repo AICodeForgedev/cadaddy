@@ -126,6 +126,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
             "rebuild": {"type": "boolean"}
         }}}),
+        json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
+            "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
     ];
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
@@ -525,6 +527,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         "ui_inspect" => b.call("ui.inspect", json!({})),
         "ui_click" => b.call("ui.pointer", a),
         "ui_elements" => b.call("ui.elements", a),
+        "import_check" => exec(b, "import.check", a),
         "render" => {
             return Ok(match b.call("ui.render", a) {
                 Ok(v) => match v.get("pngBase64").and_then(Value::as_str) {

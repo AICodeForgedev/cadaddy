@@ -440,6 +440,18 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
             s.echo(format!("  {n}"));
         }
     }
+    // Auto-run import accuracy check after every PDF import.
+    if let Ok(d) = s.doc() {
+        let check = super::import_check::check_drawing(d);
+        report["importCheck"] = json!(check);
+        if let Ok(d) = s.doc_mut() {
+            super::import_check::store_result(d, &check);
+        }
+        if !check.pass {
+            let fails: Vec<&str> = check.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
+            s.echo(format!("Import check FAIL (score {}/100): {}", check.score, fails.join(", ")));
+        }
+    }
     Ok(report)
 }
 

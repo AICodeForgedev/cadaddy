@@ -5,6 +5,7 @@
 //! cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|pdf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
 //! cadaddy-cli verify FILE.cdy                     check every chunk's checksum, the index and the drawing (exit 1 if damaged)
+//! cadaddy-cli check-import FILE.(cdy|dwg|dxf)     import accuracy check (exit 1 on fail)
 //! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]   batch plot: one PDF per drawing
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
@@ -63,6 +64,7 @@ const USAGE: &str = "usage:
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
   cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
   cadaddy-cli verify FILE.cdy
+  cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
@@ -400,6 +402,47 @@ fn verify(path: &str) -> Result<(), String> {
         let bad = check["chunks"].as_array().map_or(0, |c| c.iter().filter(|c| c.get("damage").is_some() && c["live"] == json!(true)).count());
         Err(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
     }
+}
+
+/// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
+/// Exit 1 on fail.
+fn check_import(args: &[String]) -> Result<(), String> {
+    let mut json_output = false;
+    let mut file = None;
+    for a in args {
+        match a.as_str() {
+            "--json" => json_output = true,
+            o if o.starts_with('-') => return Err(format!("check-import: unknown option {o}")),
+            f => {
+                if file.is_some() {
+                    return Err("check-import takes one file".into());
+                }
+                file = Some(f);
+            }
+        }
+    }
+    let path = file.ok_or("check-import FILE.cdy [--json]")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let d = cadaddy_io::read(&bytes, name).map_err(|e| format!("{path}: {e}"))?;
+    let result = cadaddy_engine::cmd::import_check::check_drawing(&d);
+    if json_output {
+        outln!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    } else {
+        outln!(
+            "{} (score {}/100)",
+            if result.pass { "PASS" } else { "FAIL" },
+            result.score
+        );
+        for c in &result.checks {
+            let mark = if c.pass { "ok" } else { "FAIL" };
+            outln!("  [{mark}] {}: {}", c.id, c.found);
+            if !c.pass && !c.hint.is_empty() {
+                outln!("       hint: {}", c.hint);
+            }
+        }
+    }
+    if result.pass { Ok(()) } else { Err(format!("{path}: import check failed (score {}/100)", result.score)) }
 }
 
 /// `plot IN_FOLDER OUT_FOLDER`: every drawing in a folder plotted to one PDF each (PUBLISH's batch
@@ -935,6 +978,7 @@ fn cli() -> ExitCode {
                 .collect();
             outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
+        Some("check-import") => check_import(&rest),
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {
             outln!("cadaddy-cli {}", env!("CARGO_PKG_VERSION"));

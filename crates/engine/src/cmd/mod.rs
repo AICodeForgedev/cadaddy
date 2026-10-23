@@ -34,6 +34,7 @@ pub mod estimate;
 mod exact_ends;
 mod exchange;
 mod express;
+pub mod import_check;
 mod express4;
 pub mod exterior;
 mod field;
@@ -572,6 +573,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::script_tools::specs());
         v.extend(cam::specs());
         v.extend(exchange::specs());
+        v.extend(import_check::specs());
         v.extend(rasterout::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());

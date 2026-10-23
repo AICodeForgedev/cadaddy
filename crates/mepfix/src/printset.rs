@@ -1090,9 +1090,17 @@ pub fn run_stages(
             processed += 1;
         }
 
+        let status = if cancel.load(Ordering::Relaxed) {
+            StageStatus::Failed
+        } else if processed == 0 {
+            // 0 sheets processed ⟹ skipped/failed, never completed.
+            if total == 0 { StageStatus::Skipped } else { StageStatus::Failed }
+        } else {
+            StageStatus::Completed
+        };
         let rec = StageRecord {
             stage: stage_name.into(),
-            status: if cancel.load(Ordering::Relaxed) { StageStatus::Failed } else { StageStatus::Completed },
+            status,
             sheets_processed: processed,
             sheets_total: total,
             items_found: total_items,
