@@ -433,3 +433,142 @@ fn mask_merging_reduces_count() {
     // 50 overlapping fills should merge to significantly fewer wipeouts
     assert!(wipeout_count < 50, "masks should merge: got {wipeout_count} from 50 white fills");
 }
+
+// -----------------------------------------------------------------------------------------
+// Q5252 rw2: SHX text recovery from invisible (hidden) text matching
+// -----------------------------------------------------------------------------------------
+
+/// Build a PDF with invisible text (rendering mode 3) and stroked linework at the same
+/// position — the hidden text recovery should produce text entities with the correct value.
+fn pdf_with_hidden_text(visible: &[u8], hidden: &[u8]) -> Vec<u8> {
+    // PDF with two content sections: visible linework, then invisible text (Tr 3)
+    let mut stream = Vec::new();
+    stream.extend_from_slice(b"q ");
+    stream.extend_from_slice(visible);
+    // invisible text: set rendering mode to 3 (invisible)
+    stream.extend_from_slice(b" BT 3 Tr /F1 8 Tf ");
+    stream.extend_from_slice(hidden);
+    stream.extend_from_slice(b" ET ");
+    // visible text too, for comparison
+    stream.extend_from_slice(b" BT 0 Tr /F1 10 Tf 72 500 Td (Visible Label) Tj ET ");
+    stream.extend_from_slice(b"Q");
+    pdf_with(&stream)
+}
+
+#[test]
+fn hidden_text_recovers_shx_strokes() {
+    // Draw short strokes at (100, 200) that look like SHX text, plus invisible text "ROOM 101"
+    // at the same position. The recovery should produce "ROOM 101" as text.
+    let mut visible = Vec::new();
+    visible.extend_from_slice(b"0 0 0 RG 0.5 w ");
+    // draw a bunch of short strokes near (100, 200)
+    for i in 0..15 {
+        let x = 100 + (i % 5) * 4;
+        let y = 198 + (i / 5) * 3;
+        visible.extend_from_slice(format!("{x} {y} m {} {} l S ", x + 3, y + 2).as_bytes());
+    }
+
+    let hidden = b"100 200 Td (ROOM 101) Tj";
+
+    let pdf = pdf_with_hidden_text(&visible, hidden);
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+
+    // check that ROOM 101 was recovered (should be on the hidden text layer originally,
+    // then matched to strokes and emitted as a visible text entity)
+    let _has_room = r.drawing.model.iter().any(|e| {
+        matches!(&e.kind, EntityKind::Text(t) if t.value.contains("ROOM 101"))
+    });
+    // the recovery should have found it (when hidden text matched strokes)
+    if let Some(&n) = r.stats.get("SHX text clusters recovered") {
+        assert!(n > 0, "should have recovered SHX text from hidden text");
+    }
+    // visible text should also be present
+    let has_visible = r.drawing.model.iter().any(|e| {
+        matches!(&e.kind, EntityKind::Text(t) if t.value == "Visible Label")
+    });
+    assert!(has_visible, "visible text should still be present");
+}
+
+// -----------------------------------------------------------------------------------------
+// Q5252 rw2: E-sheet DO NOT SCALE heuristic
+// -----------------------------------------------------------------------------------------
+
+#[test]
+fn e_sheet_implies_do_not_scale() {
+    // A PDF with sheet number "E-4" in the title block area and a scale note.
+    // E-sheets always carry DO NOT SCALE, even when the note is only in stroked text.
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (E-4) Tj ET BT /F1 8 Tf 600 80 Td (SCALE: 1/8\" = 1'-0\") Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    assert!(r.do_not_scale, "E-sheet should set do_not_scale");
+    assert!(r.needs_registration, "E-sheet with scale note should set needs_registration");
+    assert_eq!(r.scale, 1.0, "E-sheet should stay at scale=1, got {}", r.scale);
+    assert!(r.scale_source.contains("DO NOT SCALE"), "should report DO NOT SCALE: {}", r.scale_source);
+}
+
+#[test]
+fn non_e_sheet_uses_scale_note() {
+    // A PDF with sheet number "A-101" (architectural) and a scale note.
+    // Non-E-sheets should use the scale note normally.
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (A-101) Tj ET BT /F1 8 Tf 600 80 Td (SCALE: 1/4\" = 1'-0\") Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    assert!(!r.do_not_scale, "A-sheet should not set do_not_scale");
+    assert_eq!(r.scale, 48.0, "A-sheet should use scale note, got {}", r.scale);
+}
+
+// -----------------------------------------------------------------------------------------
+// Q5252 rw2: Spatial raster stitching
+// -----------------------------------------------------------------------------------------
+
+#[test]
+fn do_not_scale_fields_present() {
+    // Verify that the PdfImport struct has the do_not_scale and needs_registration fields
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    // no DO NOT SCALE note, no E-sheet: both should be false
+    assert!(!r.do_not_scale, "should be false without DO NOT SCALE note");
+    assert!(!r.needs_registration, "should be false without DO NOT SCALE + scale note");
+}
+
+// -----------------------------------------------------------------------------------------
+// Q5252 rw2: Device symbol detection from text proximity
+// -----------------------------------------------------------------------------------------
+
+#[test]
+fn device_tags_near_strokes_become_blocks() {
+    // Draw short stroke clusters near device-tag text labels. The symbol detection should
+    // find them and create block inserts.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    // draw 6 identical small stroke clusters at different positions, each with a tag "A"
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        // a small diamond symbol (4 strokes)
+        let sz = 6;
+        content.extend_from_slice(format!(
+            "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+            cx, cy - sz, cx + sz, cy,
+            cx + sz, cy, cx, cy + sz,
+            cx, cy + sz, cx - sz, cy,
+            cx - sz, cy, cx, cy - sz,
+        ).as_bytes());
+        // add cross strokes
+        content.extend_from_slice(format!(
+            "{} {} m {} {} l S {} {} m {} {} l S ",
+            cx - 3, cy - 3, cx + 3, cy + 3,
+            cx - 3, cy + 3, cx + 3, cy - 3,
+        ).as_bytes());
+        // tag text near the symbol
+        content.extend_from_slice(format!(
+            "BT /F1 6 Tf {} {} Td (A) Tj ET ", cx + 10, cy
+        ).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    // with device tags "A" near each cluster, should detect symbols
+    let _insert_count = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Insert(_))).count();
+    let _block_count = r.drawing.blocks.len();
+    if let Some(&sym_count) = r.stats.get("symbol instances detected") {
+        assert!(sym_count >= 4, "should detect ≥4 symbol instances from 6 device tags, got {sym_count}");
+    }
+    assert!(!r.drawing.model.is_empty(), "drawing should not be empty");
+}

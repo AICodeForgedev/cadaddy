@@ -65,6 +65,8 @@ pub fn run(_root: &Path, args: &[&str]) -> Result<(), String> {
         println!("    Other:     {other}");
         println!();
         println!("  Scale: {} ({})", r.scale, r.scale_source);
+        println!("  DO NOT SCALE: {}", r.do_not_scale);
+        println!("  Needs registration: {}", r.needs_registration);
         println!("  Sheet: {:.1} x {:.1} in", r.sheet.0, r.sheet.1);
         println!("  Layers ({}):", layers.len());
         for l in &layers {
