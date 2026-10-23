@@ -22,6 +22,9 @@ pub struct ClashItem {
     pub at: [f64; 2],
     pub by_in: f64,
     pub handles: Vec<String>,
+    /// The level the clash is on (part of the key a re-run matches it by).
+    #[serde(default)]
+    pub level: String,
     pub status: ClashStatus,
     pub trade: String,
     pub notes: String,
@@ -86,9 +89,15 @@ fn detect(app: &mut CadApp, tolerance_in: f64) -> Vec<ClashItem> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let raw = data.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default();
+    items_from(data.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default(), 0)
+}
+
+/// The engine's clashes as palette items; a clash without an id (a new one) is numbered after
+/// `last_id`. Status, trade and notes the engine carried over from a previous run are kept.
+fn items_from(raw: Vec<Value>, last_id: usize) -> Vec<ClashItem> {
+    let mut next_id = last_id;
     let mut items = Vec::new();
-    for (i, c) in raw.into_iter().enumerate() {
+    for c in raw {
         let kind = c.get("kind").and_then(Value::as_str).unwrap_or("unknown").to_string();
         let message = c.get("message").and_then(Value::as_str).unwrap_or("").to_string();
         let systems: Vec<String> =
@@ -100,17 +109,33 @@ fn detect(app: &mut CadApp, tolerance_in: f64) -> Vec<ClashItem> {
             c.get("handles").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         // Group key: for column/structure clashes, use the last handle (the structural element).
         let group_key = if kind == "column" || kind == "into_structure" { handles.last().cloned().unwrap_or_default() } else { String::new() };
+        let level =
+            c.get("level").and_then(Value::as_str).or_else(|| c.pointer("/reference/level").and_then(Value::as_str)).unwrap_or("").to_string();
+        let id = match c.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            Some(id) => id.to_string(),
+            None => {
+                next_id += 1;
+                format!("C{next_id:04}")
+            }
+        };
+        let status = match c.get("status").and_then(Value::as_str) {
+            Some("Active") => ClashStatus::Active,
+            Some("Resolved") => ClashStatus::Resolved,
+            _ => ClashStatus::New,
+        };
+        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         items.push(ClashItem {
-            id: format!("C{:04}", i + 1),
+            id,
             kind,
             message,
             systems,
             at,
             by_in,
             handles,
-            status: ClashStatus::New,
-            trade: String::new(),
-            notes: String::new(),
+            level,
+            status,
+            trade: text("trade"),
+            notes: text("notes"),
             group_key,
         });
     }
@@ -182,24 +207,43 @@ fn group_clashes(clashes: &[ClashItem]) -> Vec<ClashGroup> {
     groups
 }
 
-/// Re-run detection preserving statuses, notes, and trades from previous results.
+/// The number in a palette id (`C0042` → 42).
+fn id_number(id: &str) -> usize {
+    id.trim_start_matches('C').parse().unwrap_or(0)
+}
+
+/// Re-run detection keeping statuses, trades and notes: the engine matches each clash to the
+/// previous run's by kind, level, systems and plan position (not by handles, which rebuilding the
+/// model changes), and a matched clash keeps its id. A clash someone had triaged that is no
+/// longer found stays in the list as resolved; untouched ones that went away are dropped.
 fn rerun(app: &mut CadApp, state: &mut State) {
-    let old: BTreeMap<String, (ClashStatus, String, String)> = state
+    let previous: Vec<Value> = state
         .clashes
         .iter()
         .map(|c| {
-            // Key by kind + handles to match re-detected clashes.
-            let key = format!("{}:{}", c.kind, c.handles.join(","));
-            (key, (c.status, c.trade.clone(), c.notes.clone()))
+            json!({
+                "id": c.id, "kind": c.kind, "level": c.level, "systems": c.systems, "at": c.at,
+                "status": c.status.label(), "trade": c.trade, "notes": c.notes,
+            })
         })
         .collect();
-    let mut new_clashes = detect(app, state.tolerance_in);
-    for c in &mut new_clashes {
-        let key = format!("{}:{}", c.kind, c.handles.join(","));
-        if let Some((status, trade, notes)) = old.get(&key) {
-            c.status = *status;
-            c.trade.clone_from(trade);
-            c.notes.clone_from(notes);
+    let triaged: BTreeMap<String, ClashItem> = state
+        .clashes
+        .iter()
+        .filter(|c| c.status != ClashStatus::New || !c.trade.is_empty() || !c.notes.is_empty())
+        .map(|c| (c.id.clone(), c.clone()))
+        .collect();
+    let last_id = state.clashes.iter().map(|c| id_number(&c.id)).max().unwrap_or(0);
+    let Ok(data) = app.session.execute("model.clashes", &json!({ "tolerance_in": state.tolerance_in, "previous": previous })) else {
+        state.status = crate::tl!("Clash detection failed.").to_string();
+        return;
+    };
+    let mut new_clashes = items_from(data.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default(), last_id);
+    let gone = data.get("gone").and_then(Value::as_array).into_iter().flatten().filter_map(|g| g.get("id").and_then(Value::as_str));
+    for id in gone {
+        if let Some(mut c) = triaged.get(id).cloned() {
+            c.status = ClashStatus::Resolved;
+            new_clashes.push(c);
         }
     }
     state.clashes = new_clashes;
@@ -276,6 +320,35 @@ pub fn export_csv(clashes: &[ClashItem]) -> String {
         ));
     }
     out
+}
+
+/// The clashes as the engine's report command takes them: each with its palette group's label.
+fn report_clashes(clashes: &[ClashItem]) -> Vec<Value> {
+    let mut group_of: Vec<String> = vec![String::new(); clashes.len()];
+    for g in group_clashes(clashes) {
+        if g.clash_ids.len() > 1 {
+            for &i in &g.clash_ids {
+                if let Some(slot) = group_of.get_mut(i) {
+                    slot.clone_from(&g.label);
+                }
+            }
+        }
+    }
+    clashes
+        .iter()
+        .zip(group_of)
+        .map(|(c, group)| {
+            json!({
+                "id": c.id, "kind": c.kind, "level": c.level, "systems": c.systems, "message": c.message,
+                "status": c.status.label(), "trade": c.trade, "notes": c.notes, "group": group,
+            })
+        })
+        .collect()
+}
+
+/// Export the grouped clash report to PDF through `model.clashes.report`.
+fn export_pdf(app: &mut CadApp, clashes: &[ClashItem], path: &str) -> Result<(), String> {
+    app.session.execute("model.clashes.report", &json!({ "path": path, "clashes": report_clashes(clashes) })).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// The directory beside the current drawing (or the current directory if unsaved).
@@ -475,6 +548,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 if ui.button(crate::tl!("Export CSV")).on_hover_text(crate::tl!("Export clash report to CSV")).clicked() {
                     action = Some(Action::ExportCsv);
                 }
+                if ui.button(crate::tl!("Export PDF")).on_hover_text(crate::tl!("Export the grouped clash report to PDF")).clicked() {
+                    action = Some(Action::ExportPdf);
+                }
             });
 
             if !st.status.is_empty() {
@@ -518,6 +594,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 Err(e) => st.status = format!("CSV export failed: {e}"),
             }
         }
+        Some(Action::ExportPdf) => {
+            let path = doc_dir(app).join("clashes.pdf");
+            st.status = match export_pdf(app, &st.clashes, &path.display().to_string()) {
+                Ok(()) => crate::tf!("PDF exported to {path}.", path = path.display()),
+                Err(e) => e,
+            };
+        }
         None => {}
     }
 
@@ -530,6 +613,7 @@ enum Action {
     Goto(usize),
     ExportBcf,
     ExportCsv,
+    ExportPdf,
 }
 
 /// BCF 2.1 export: a minimal ZIP containing the required XML files.
@@ -721,6 +805,7 @@ mod tests {
             at: [12.5, 34.75],
             by_in: 3.0,
             handles: vec!["1A".into()],
+            level: String::new(),
             status: ClashStatus::New,
             trade: "Mechanical".into(),
             notes: "Check with engineer".into(),
@@ -746,6 +831,7 @@ mod tests {
                 at: [10.0, 20.0],
                 by_in: 2.0,
                 handles: vec![],
+                level: String::new(),
                 status: ClashStatus::Active,
                 trade: "HVAC".into(),
                 notes: String::new(),
@@ -759,6 +845,7 @@ mod tests {
                 at: [5.0, 5.0],
                 by_in: 0.0,
                 handles: vec![],
+                level: String::new(),
                 status: ClashStatus::Resolved,
                 trade: "Plumbing".into(),
                 notes: "Rerouted".into(),
@@ -790,6 +877,7 @@ mod tests {
             at,
             by_in: 1.0,
             handles: vec![],
+            level: String::new(),
             status: ClashStatus::New,
             trade: String::new(),
             notes: String::new(),
@@ -815,58 +903,78 @@ mod tests {
         assert!(solo.is_some(), "Expected C6 as a solo group");
     }
 
+    /// A session with two made-up systems on one level: a supply duct crossing a water pipe at
+    /// the same height (a crossing clash), above a 9 ft ceiling.
+    fn crossing_session() -> Session {
+        let mut s = Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {
+                "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 13, "ceiling_ft": 9, "region": [-1000, -1000, 1000, 1000], "base": [0, 0]}],
+                "mep": {
+                    "systems": [
+                        {"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 10},
+                        {"name": "P-DCW", "layer": "P-DCW", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 10}
+                    ],
+                    "runs": [
+                        {"system": "M-DUCT-SUPP", "level": "L1", "points": [[0, 120], [480, 120]], "size_in": [12, 12], "bottoms_ft": [10]},
+                        {"system": "P-DCW", "level": "L1", "points": [[240, 0], [240, 240]], "size_in": [2, 0], "bottoms_ft": [10.3]}
+                    ]
+                }
+            }}),
+        )
+        .unwrap();
+        s
+    }
+
+    /// The palette's Re-run (the shipped `rerun`): a triaged clash keeps its id, status, trade and
+    /// notes; after an edit that fixes it, it stays in the list as resolved; a clash the edit makes
+    /// is new, with an id of its own.
     #[test]
-    fn rerun_preserves_statuses() {
-        let st = State {
-            clashes: vec![ClashItem {
-                id: "C0001".into(),
-                kind: "crossing".into(),
-                message: "A crosses B".into(),
-                systems: vec!["A".into(), "B".into()],
-                at: [0.0, 0.0],
-                by_in: 1.0,
-                handles: vec!["AA".into(), "BB".into()],
-                status: ClashStatus::Active,
-                trade: "Mechanical".into(),
-                notes: "Reviewed".into(),
-                group_key: String::new(),
-            }],
-            ..State::default()
-        };
-        // Simulate re-run: same key should match.
-        let old: BTreeMap<String, (ClashStatus, String, String)> = st
-            .clashes
-            .iter()
-            .map(|c| {
-                let key = format!("{}:{}", c.kind, c.handles.join(","));
-                (key, (c.status, c.trade.clone(), c.notes.clone()))
-            })
-            .collect();
-        // New detection with same handles.
-        let mut new_clashes = vec![ClashItem {
-            id: "C0001".into(),
-            kind: "crossing".into(),
-            message: "A crosses B (updated)".into(),
-            systems: vec!["A".into(), "B".into()],
-            at: [0.0, 0.0],
-            by_in: 1.5,
-            handles: vec!["AA".into(), "BB".into()],
-            status: ClashStatus::New,
-            trade: String::new(),
-            notes: String::new(),
-            group_key: String::new(),
-        }];
-        for c in &mut new_clashes {
-            let key = format!("{}:{}", c.kind, c.handles.join(","));
-            if let Some((status, trade, notes)) = old.get(&key) {
-                c.status = *status;
-                c.trade.clone_from(trade);
-                c.notes.clone_from(notes);
-            }
+    fn rerun_keeps_triage_and_marks_fixed_clashes_resolved() {
+        let mut app = crate::CadApp::new(crossing_session(), crate::Services::default());
+        let mut st = State::default();
+        rerun(&mut app, &mut st);
+        let crossing = st.clashes.iter().position(|c| c.kind == "crossing").unwrap();
+        assert_eq!(st.clashes[crossing].level, "L1");
+        let id = st.clashes[crossing].id.clone();
+        st.clashes[crossing].status = ClashStatus::Active;
+        st.clashes[crossing].trade = "Plumbing".into();
+        st.clashes[crossing].notes = "Drop the pipe under the duct".into();
+        // Nothing changed: the same clash, same id, same triage.
+        rerun(&mut app, &mut st);
+        let c = st.clashes.iter().find(|c| c.kind == "crossing").unwrap();
+        assert_eq!(
+            (c.id.as_str(), c.status, c.trade.as_str(), c.notes.as_str()),
+            (id.as_str(), ClashStatus::Active, "Plumbing", "Drop the pipe under the duct")
+        );
+        // The pipe drops to 7 ft: the crossing is fixed and it now hangs below the ceiling.
+        app.session.execute("mep.edit", &json!({"id": 1, "bottom_ft": 7.0})).unwrap();
+        rerun(&mut app, &mut st);
+        let fixed = st.clashes.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(fixed.status, ClashStatus::Resolved, "{:?}", st.clashes);
+        assert_eq!(fixed.notes, "Drop the pipe under the duct");
+        let below = st.clashes.iter().find(|c| c.kind == "below_ceiling" && c.systems == ["P-DCW"]).unwrap();
+        assert_eq!(below.status, ClashStatus::New);
+        assert_ne!(below.id, id);
+    }
+
+    /// The palette's PDF export goes through the engine's report command (a build without a
+    /// plotter says so instead of writing nothing silently).
+    #[test]
+    fn pdf_export_uses_the_report_command() {
+        let mut app = crate::CadApp::new(crossing_session(), crate::Services::default());
+        let mut st = State::default();
+        rerun(&mut app, &mut st);
+        let rows = report_clashes(&st.clashes);
+        assert_eq!(rows.len(), st.clashes.len());
+        assert!(rows.iter().all(|r| r["id"].as_str().is_some_and(|i| i.starts_with('C')) && r["status"] == "New"));
+        let out = cadaddy_engine::cmd::clashreport::report_pdf(&mut app.session, &json!({"clashes": rows})).unwrap();
+        assert_eq!(out.clashes, st.clashes.len());
+        if cadaddy_engine::cmd::file::io().and_then(|h| h.plot).is_none() {
+            let e = export_pdf(&mut app, &st.clashes, "clashes.pdf").unwrap_err();
+            assert!(e.contains("PDF export isn't available"), "{e}");
         }
-        assert_eq!(new_clashes[0].status, ClashStatus::Active);
-        assert_eq!(new_clashes[0].trade, "Mechanical");
-        assert_eq!(new_clashes[0].notes, "Reviewed");
     }
 
     #[test]

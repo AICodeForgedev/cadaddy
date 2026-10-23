@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference, message, systems, at, by_in, handles, reference?: {ref, class, guid, name, level}}], total}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference, message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total, gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed}], systems: [...]}")
@@ -1576,7 +1576,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
 
 // ---------------- clashes ----------------
 
-fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "model.clashes")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let tol = p.get("tolerance_in").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(0.0) / 12.0 * upf;
@@ -1620,7 +1620,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         let ceiling = if ceiling.is_finite() { ceiling } else { (level.elevation_ft + level.ceiling_ft) * upf };
         if it.piece.z0 < ceiling - tol {
             out.push(json!({
-                "kind": "below_ceiling", "systems": [it.run.system],
+                "kind": "below_ceiling", "systems": [it.run.system], "level": it.run.level,
                 "message": format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches((ceiling - it.piece.z0) / upf * 12.0)),
                 "at": [r6(mid.x), r6(mid.y)], "by_in": r6((ceiling - it.piece.z0) / upf * 12.0), "handles": handles(it.run),
             }));
@@ -1630,7 +1630,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             let structure = (above - SLAB_FT) * upf;
             if it.piece.z1 > structure + tol {
                 out.push(json!({
-                    "kind": "into_structure", "systems": [it.run.system],
+                    "kind": "into_structure", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} reaches {} into the floor structure above", it.run.system, cadaddy_walk3d::inches((it.piece.z1 - structure) / upf * 12.0)),
                     "at": [r6(mid.x), r6(mid.y)], "by_in": r6((it.piece.z1 - structure) / upf * 12.0), "handles": handles(it.run),
                 }));
@@ -1654,7 +1654,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             if dist + tol < clear {
                 let at = closest_mid(a.piece.a, a.piece.b, b.piece.a, b.piece.b);
                 out.push(json!({
-                    "kind": "crossing", "systems": [a.run.system, b.run.system],
+                    "kind": "crossing", "systems": [a.run.system, b.run.system], "level": a.run.level,
                     "message": format!("{} crosses {} ({} overlap in height)", a.run.system, b.run.system, cadaddy_walk3d::inches(zo / upf * 12.0)),
                     "at": [r6(at.x), r6(at.y)], "by_in": r6(zo / upf * 12.0),
                     "handles": handles(a.run).into_iter().chain(handles(b.run)).collect::<Vec<_>>(),
@@ -1679,7 +1679,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             let hits = (0..=20).any(|k| inside.contains(it.piece.a + (it.piece.b - it.piece.a) * (f64::from(k) / 20.0)));
             if hits && it.piece.z0 < *z1 && it.piece.z1 > *z0 {
                 out.push(json!({
-                    "kind": "column", "systems": [it.run.system],
+                    "kind": "column", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} runs through a column", it.run.system),
                     "at": [r6(b.center().x), r6(b.center().y)], "by_in": 0.0,
                     "handles": handles(it.run).into_iter().chain([h.hex()]).collect::<Vec<_>>(),
@@ -1720,7 +1720,84 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         out.extend(super::ifcref::clashes(d, &pieces_ref, tol, upf, ignore.as_deref()));
     }
     out.truncate(5_000);
+    // A re-run: what was decided about each clash last time carries over to the same clash now.
+    if let Some(prev) = p.get("previous").and_then(Value::as_array) {
+        let radius = p.get("match_ft").and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0).unwrap_or(2.0).min(100.0) * upf;
+        let prev: Vec<&Value> = prev.iter().take(MAX_PREVIOUS).collect();
+        let gone = carry_previous(&mut out, &prev, radius);
+        return Ok(json!({ "total": out.len(), "clashes": out, "gone": gone }));
+    }
     Ok(json!({ "total": out.len(), "clashes": out }))
+}
+
+/// The most earlier clashes a re-run matches against (the detector's own cap).
+const MAX_PREVIOUS: usize = 5_000;
+/// What a person decided about a clash, carried from one run to the next.
+const TRIAGE_FIELDS: [&str; 5] = ["id", "status", "trade", "notes", "author"];
+
+/// The key a clash keeps from one run to the next: what kind it is, the level, the systems
+/// involved (in any order) and the attached model's element for a reference clash, never the
+/// objects' handles (rebuilding the model or re-reading the prints gives them new ones).
+pub fn clash_match_key(c: &Value) -> String {
+    let kind = c.get("kind").and_then(Value::as_str).unwrap_or("");
+    let level = c.get("level").and_then(Value::as_str).or_else(|| c.pointer("/reference/level").and_then(Value::as_str)).unwrap_or("");
+    let mut systems: Vec<String> =
+        c.get("systems").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_ascii_uppercase).collect();
+    systems.sort();
+    let guid = c.pointer("/reference/guid").and_then(Value::as_str).unwrap_or("");
+    format!("{kind}|{}|{}|{guid}", level.to_ascii_uppercase(), systems.join("+"))
+}
+
+fn clash_at(c: &Value) -> Option<Vec2> {
+    let a = c.get("at").and_then(Value::as_array)?;
+    let v = Vec2::new(a.first().and_then(Value::as_f64)?, a.get(1).and_then(Value::as_f64)?);
+    v.is_finite().then_some(v)
+}
+
+/// Match a run's clashes with the previous run's: the same key ([`clash_match_key`]) and within
+/// `radius` drawing units on the plan, the closest pairs first. A matched clash takes the earlier
+/// one's id, status, trade, notes and author; the earlier clashes nothing matched (fixed, or
+/// moved further than `radius`) are returned.
+fn carry_previous(out: &mut [Value], prev: &[&Value], radius: f64) -> Vec<Value> {
+    let keys: Vec<String> = out.iter().map(clash_match_key).collect();
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (pi, pc) in prev.iter().enumerate() {
+        let (pk, Some(pa)) = (clash_match_key(pc), clash_at(pc)) else { continue };
+        for (ni, nc) in out.iter().enumerate() {
+            if keys.get(ni) != Some(&pk) {
+                continue;
+            }
+            if let Some(na) = clash_at(nc) {
+                let d = pa.dist(na);
+                if d <= radius {
+                    pairs.push((d, pi, ni));
+                }
+            }
+            if pairs.len() >= MAX_PREVIOUS * 20 {
+                break;
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut prev_used = vec![false; prev.len()];
+    let mut new_used = vec![false; out.len()];
+    for (_, pi, ni) in pairs {
+        if prev_used.get(pi).copied().unwrap_or(true) || new_used.get(ni).copied().unwrap_or(true) {
+            continue;
+        }
+        if let (Some(pu), Some(nu), Some(pc), Some(nc)) = (prev_used.get_mut(pi), new_used.get_mut(ni), prev.get(pi), out.get_mut(ni)) {
+            *pu = true;
+            *nu = true;
+            if let Some(obj) = nc.as_object_mut() {
+                for f in TRIAGE_FIELDS {
+                    if let Some(v) = pc.get(f).filter(|v| !v.is_null()) {
+                        obj.insert(f.to_string(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+    prev.iter().zip(&prev_used).filter(|(_, used)| !**used).map(|(c, _)| (*c).clone()).collect()
 }
 
 /// The convex hull of points (a ceiling's outline from its mesh), counterclockwise.
