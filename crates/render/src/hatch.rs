@@ -79,6 +79,8 @@ fn same_polygon(a: &[Vec2], b: &[Vec2]) -> bool {
     (0..n).any(|k| (0..n).all(|i| near(a[i], b[(i + k) % n]))) || (0..n).any(|k| (0..n).all(|i| near(a[i], b[(k + n - (i % n)) % n])))
 }
 
+/// Remove degenerate and duplicate boundary loops within a shared comparison budget.
+/// Retain remaining loops without further comparisons once the budget is exhausted.
 fn dedup_polygons(loops: &mut Vec<Vec<Vec2>>) {
     // `same_polygon` is O(n²) in a polygon's vertex count (every cyclic alignment, both windings),
     // and each loop is compared against every unique one kept so far, so adversarial boundary
@@ -463,6 +465,7 @@ impl Family<'_> {
         self.origin + p.rotate(self.ang)
     }
 
+    /// Intersect a pattern family with boundary loops, respecting view, output, cancellation, and shared dash-work limits.
     fn sweep(&self, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>, cancel: Option<&AtomicBool>, out: &mut Vec<Vec<Vec2>>, work: &mut u64) {
         let local: Vec<Vec<Vec2>> = loops.iter().map(|l| l.iter().map(|p| self.to_local(*p)).collect()).collect();
         let bb = Bounds2::from_points(local.iter().flatten().copied());
@@ -606,6 +609,7 @@ mod tests {
 #[cfg(test)]
 mod dedup_budget_tests {
     use super::*;
+    /// Loops with different vertex counts leave enough comparison fuel to remove a later duplicate.
     #[test]
     fn unequal_loops_do_not_spend_the_comparison_budget() {
         // The old estimate exhausted the budget on this unequal pair before seeing the triangle.

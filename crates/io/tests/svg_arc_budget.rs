@@ -17,6 +17,7 @@ fn arc_bomb(arcs: usize) -> Vec<u8> {
     svg.into_bytes()
 }
 
+/// A small transformed-arc input remains accepted within the generated-geometry budget.
 #[test]
 fn a_modest_arc_svg_still_reads() {
     // A handful of arcs is well within budget and parses fine.
@@ -24,6 +25,7 @@ fn a_modest_arc_svg_still_reads() {
     assert!(d.model.iter().count() >= 1, "expected some geometry");
 }
 
+/// Repeated flattened arcs fail with a geometry-budget error before retaining excessive vertices.
 #[test]
 fn an_arc_heavy_svg_is_rejected_by_the_vertex_budget() {
     // ~1000 arcs x up to 10_000 chords each would far exceed the 8M vertex budget.

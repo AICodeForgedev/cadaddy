@@ -413,6 +413,7 @@ fn tol_height_code(st: &DimStyle) -> String {
     format!("{}x", format_decimal(f / 0.7, 4, 8, "."))
 }
 
+/// Apply measurement placeholders or append a dimension suffix, bounding the resulting UTF-8 text.
 fn post(template: &str, meas: &str) -> String {
     if template.contains("<>") {
         bounded_replace(template, meas)
@@ -424,6 +425,7 @@ fn post(template: &str, meas: &str) -> String {
     }
 }
 
+/// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
 fn apply_override(base: &str, d: &Dimension) -> String {
     if d.text.is_empty() {
         base.to_string()
@@ -455,6 +457,8 @@ fn bounded_replace(template: &str, value: &str) -> String {
 }
 
 // Returns false when truncation consumed the remaining UTF-8-safe space.
+/// Append within the remaining dimension-text byte allowance without splitting a UTF-8 character.
+/// Return false if any input text had to be truncated.
 fn append_dim_text(out: &mut String, text: &str) -> bool {
     let mut end = text.len().min(MAX_DIM_TEXT.saturating_sub(out.len()));
     while !text.is_char_boundary(end) {
@@ -1363,12 +1367,14 @@ mod tests {
 #[cfg(test)]
 mod text_budget_tests {
     use super::*;
+    /// A dimension suffix without placeholders still obeys the total text limit.
     #[test]
     fn bounds_post_without_markers() {
         let text = post(&"x".repeat(MAX_DIM_TEXT * 2), "12");
         assert_eq!(text.len(), MAX_DIM_TEXT);
         assert!(text.starts_with("12x"));
     }
+    /// Oversized substituted text retains its prefix and ends at a valid UTF-8 boundary.
     #[test]
     fn oversized_value_is_substituted_and_truncated_at_a_character_boundary() {
         let text = bounded_replace("prefix <> mm", &"é".repeat(MAX_DIM_TEXT));

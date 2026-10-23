@@ -48,6 +48,8 @@ impl Default for Limits {
     }
 }
 
+/// Start the loopback server with a fresh session token and a bounded request queue.
+/// Binding or token-issuance failure returns a disconnected receiver.
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => {
@@ -101,6 +103,7 @@ impl Drop for Slot {
     }
 }
 
+/// Accept clients within the connection limit and give each worker the same session token.
 fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits, token: Arc<String>) {
     let open = Arc::new(AtomicUsize::new(0));
     for mut stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
@@ -162,6 +165,7 @@ enum Line {
     Reject(String),
 }
 
+/// Parse a UTF-8 JSON request and its optional token, distinguishing blank lines from rejected input.
 fn parse_line(bytes: &[u8]) -> Line {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Line::Reject("not a control request (invalid UTF-8); closing the connection".into());
@@ -198,6 +202,8 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
+/// Serve bounded JSON lines, authenticating each request before enqueueing it for the UI.
+/// Invalid credentials close the connection; queue and reply limits report whether a request ran.
 fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: Limits, token: &str) {
     if stream.set_read_timeout(Some(limits.idle_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
@@ -385,6 +391,7 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(4));
     }
 
+    /// Authenticated requests rejected by a full queue retain their IDs and report that they did not run.
     #[test]
     fn a_full_queue_answers_busy() {
         let (addr, rx) = serve_with(short());
@@ -407,6 +414,7 @@ mod tests {
         drop(rx);
     }
 
+    /// Replies on one authenticated connection preserve the ID of each request.
     #[test]
     fn requests_are_answered_with_their_ids() {
         let addr = serve_echo();
@@ -423,6 +431,7 @@ mod tests {
         }
     }
 
+    /// Missing and incorrect session tokens are rejected before dispatch.
     #[test]
     fn a_request_without_the_token_is_unauthorized() {
         // A local peer that does not hold the session token cannot drive the app (CWE-306).
@@ -437,6 +446,7 @@ mod tests {
         assert!(wrong[0]["error"].as_str().unwrap().contains("unauthorized"), "{wrong:?}");
     }
 
+    /// A request carrying the session token reaches the control dispatcher.
     #[test]
     fn a_request_with_the_token_is_dispatched() {
         let addr = serve_echo();

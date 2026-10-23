@@ -116,6 +116,7 @@ fn r_at(c: &Constraint, i: usize) -> Option<&GeomRef> {
 }
 
 impl Built {
+    /// Estimate spline reconstruction work for endpoint and join residuals; other residual forms add no such cost.
     pub(crate) fn spline_reconstruct_cost(&self, m: &Model) -> f64 {
         let cost = |i: usize| self.refs.get(i).map_or(0.0, |r| m.spline_reconstruct_cost(r.handle));
         match self.form {

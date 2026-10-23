@@ -4,6 +4,25 @@
 //! converted to DXF bytes, which CADCraft's own DXF reader maps to its document model; saving
 //! goes the other way. Keeping the dependency behind this byte-level API isolates it: nothing
 //! else in CADCraft depends on its types. Native targets only (it memory-maps files).
+//!
+//! # Guardrails around the third-party decoder
+//!
+//! The decoder allocates tables and section buffers from sizes a (possibly damaged or hostile)
+//! file declares, and once it starts it cannot be interrupted (an allocation failure aborts the
+//! process, which `catch_unwind` cannot recover). Because the dependency is used unmodified, this
+//! crate guards it from the outside:
+//!
+//! - Both directions reject oversized input *before* the decoder runs ([`Limits::max_dwg_bytes`]
+//!   for DWG→DXF, [`Limits::max_dxf_bytes`] for DXF→DWG), and the DWG→DXF output is capped while
+//!   it is written (`CappedWriter`).
+//! - The reader and writer run inside `catch_unwind`, so a decode failure is reported instead of
+//!   crashing.
+//!
+//! These bound the input- and output-size variants. A small file that declares a huge internal
+//! table or section can still make the dependency allocate before any size is known; fully fixing
+//! that requires an upstream fix in `acadrust` (validate declared sizes against a decoded-memory
+//! budget) or running the decode in a separate worker with an OS memory limit. The limits here
+//! keep the blast radius bounded in the meantime.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -505,6 +524,17 @@ mod native {
     }
 
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
+        // Reject a pathologically large DXF before handing it to the third-party decoder, which
+        // allocates tables and section buffers from the input's declared sizes and cannot be
+        // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
+        // runs inside `catch_unwind` so a decode failure is reported rather than crashing.
+        if dxf.len() > Limits::DEFAULT.max_dxf_bytes {
+            return Err(format!(
+                "DXF: the input is {}, larger than the {} CADCraft converts to DWG",
+                mb(dxf.len() as u64),
+                mb(Limits::DEFAULT.max_dxf_bytes as u64)
+            ));
+        }
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
@@ -616,6 +646,15 @@ mod tests {
     fn garbage_is_an_error_not_a_crash() {
         assert!(dwg_to_dxf(b"AC1032 this is not a dwg file at all").is_err());
         assert!(dwg_to_dxf(b"").is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dxf_to_dwg_rejects_garbage_without_crashing() {
+        // The DXF→DWG path runs the third-party reader inside catch_unwind and reports failures
+        // rather than crashing (and rejects oversized input before decoding).
+        assert!(dxf_to_dwg(b"not a dxf file").is_err());
+        assert!(dxf_to_dwg(b"").is_err());
     }
 
     /// A DXF with one DIMENSION per (text, group 70, subclass, points) row.

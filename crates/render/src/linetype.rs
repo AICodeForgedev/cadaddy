@@ -118,6 +118,7 @@ pub fn ranges(len: f64, lt: &Linetype, scale: f64, min_pattern: f64) -> Option<V
 mod tests {
     use super::*;
 
+    /// This gap-only pattern draws nothing, and `ranges` returns before cycling through its repeats.
     #[test]
     fn an_all_gap_pattern_draws_nothing_without_spinning() {
         let lt = Linetype::simple("GAPS", "", &[-0.001, -0.002]);

@@ -158,6 +158,8 @@ pub fn from_json(v: &serde_json::Value) -> Value {
 const TO_JSON_BUDGET: u64 = 2_000_000;
 const TO_JSON_MAX_DEPTH: usize = 256;
 
+/// Convert a LISP value to owned JSON within element and nesting limits.
+/// Return `None` before a shared cons structure can expand beyond the remaining budget.
 fn to_json_bounded(v: &Value, depth: usize, budget: &mut u64) -> Option<serde_json::Value> {
     if depth > TO_JSON_MAX_DEPTH || *budget == 0 {
         return None;
@@ -185,6 +187,7 @@ pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     Ok(Flow::Value(crate::sysvars::get(ctx.s, &name).map(|v| from_json(&v)).unwrap_or_default()))
 }
 
+/// Set a system variable after bounded JSON conversion, reporting invalid or oversized values as LISP errors.
 pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 2, 2)?;
     let name = string(&a[0])?;

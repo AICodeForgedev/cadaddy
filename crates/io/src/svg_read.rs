@@ -172,6 +172,7 @@ impl LeftOut {
 }
 
 impl Parser {
+    /// Initialize a metric SVG drawing with one document-wide generated-vertex allowance.
     fn new() -> Self {
         Parser {
             drawing: Drawing::new_metric(),
@@ -334,6 +335,7 @@ impl Parser {
         self.cur().apply_vec(v)
     }
 
+    /// Charge an entity against element and retained-vertex limits before adding it to model space.
     fn add(&mut self, kind: EntityKind) -> Result<()> {
         self.elements += 1;
         if self.elements > MAX_ELEMENTS {
