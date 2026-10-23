@@ -1203,7 +1203,7 @@ fn georgian_locales_preferences_and_single_count_form() {
         assert_eq!(t("Open"), "გახსნა");
         assert_eq!(menu("Dimension"), "ზომების დატანა");
         assert_eq!(t("Dimension"), "ზომა");
-        assert_eq!(menu("Draw"), "ხაზვა");
+        assert_eq!(menu("Draw"), "ხატვა");
         assert_eq!(menu("File"), "ფაილი");
     });
     assert_eq!(t("Open"), "Open", "language must not leak outside a render scope");
@@ -1237,7 +1237,7 @@ fn georgian_live_switch_keeps_drawing_and_falls_back_without_font() {
     assert_eq!(app.fonts_language, Some(app.language()));
     let text = render(&mut app, &ctx);
     if supported {
-        for label in ["თვისებები", "ფაილი", "ხედი", "ხაზვა", "ზომების დატანა", "მიუთითეთ პირველი წერტილი"]
+        for label in ["თვისებები", "ფაილი", "ხედი", "ხატვა", "ზომების დატანა", "მიუთითეთ პირველი წერტილი"]
         {
             assert!(text.contains(label), "missing {label}: {text}");
         }

@@ -16,7 +16,7 @@
 
 	Apply	გამოყენება
 	Attach DWG...	DWG-ის მიმაგრება...
-	Bind	ჩაშენება
+	Bind	მიბმა
 	Detach	მოხსნა
 	Loaded	ჩატვირთულია
 	Make it a block of this drawing, keeping its layer names	ამ ნახაზის ბლოკად ქცევა, შრეების სახელების შენარჩუნებით
@@ -94,12 +94,12 @@
 	Auto Constrain	ავტომატური შეზღუდვა
 	AutoConstrain	ავტოშეზღუდვა
 	Axis, End	ღერძი, ბოლო
-	Base	საბაზო წერტილი
+	Base	ბაზა
 	Baseline	საბაზისო ხაზი
 	Batch Publish	პაკეტური გამოქვეყნება
 	Binary assets added	დამატებული ბინარული ფაილები
 	Binary assets removed	წაშლილი ბინარული ფაილები
-	Bind...	ჩაშენება...
+	Bind...	მიბმა...
 	Blend	გადასვლა
 	Block	ბლოკი
 	Block Attribute Manager...	ბლოკის ატრიბუტების მენეჯერი...
@@ -256,8 +256,8 @@
 	Drafting	ხაზვა
 	Drafting Settings	ხაზვის პარამეტრები
 	Drafting Settings...	ხაზვის პარამეტრები...
-	Draw	ხაზვა
-	Draw Order	ხაზვის რიგი
+	Draw	ხატვა
+	Draw Order	ხატვის რიგი
 	Drawing (DWG)	ნახაზი (DWG)
 	Drawing (DXF)	ნახაზი (DXF)
 	Drawing Limits	ნახაზის ზღვრები
@@ -269,12 +269,12 @@
 	Dynamic Dimensions	დინამიკური ზომები
 	Dynamic Input	დინამიკური შეყვანა
 	Dynamic Input (F12)	დინამიკური შეყვანა (F12)
-	E	ა
+	E	E
 	Edit	რედაქტირება
 	Edit Attributes...	ატრიბუტების რედაქტირება...
 	Edit Text...	ტექსტის რედაქტირება...
 	Edit Table Cell	ცხრილის უჯრის რედაქტირება
-	Elevation	ნიშნული
+	Elevation	დონე
 	Ellipse	ელიფსი
 	Elliptical Arc	ელიფსური რკალი
 	Enable Dynamic Input (F12)	დინამიკური შეყვანის ჩართვა (F12)
@@ -340,7 +340,7 @@
 	Export Table	ცხრილის ექსპორტი
 	Export to PDF...	PDF-ად ექსპორტი...
 	Express Tools	Express Tools
-	Expression	ექსპრესია
+	Expression	გამოსახულება
 	Extend	გაგრძელება
 	Extension	გაგრძელება
 	Extents	საზღვრები
@@ -358,7 +358,7 @@
 	First commit	პირველი კომიტი
 	Fit Points	მისადაგების წერტილები
 	Fix	ფიქსაცია
-	Flatten Objects	ობიექტების გაბრტყელება
+	Flatten Objects	ობიექტების სიბრტყეზე დაგეგმილება
 	Format	ფორმატი
 	Freehand	ხელით ხაზვა
 	Freeze	გაყინვა
@@ -367,7 +367,7 @@
 	Freeze/Thaw	გაყინვა/გალღობა
 	Freeze/Thaw in all viewports	გაყინვა/გალღობა ყველა ხედვის არეში
 	Freeze/Thaw in the current viewport	გაყინვა/გალღობა მიმდინარე ხედვის არეში
-	From	ათვლის წერტილიდან
+	From	წერტილიდან
 	From Template...	შაბლონიდან...
 	General	ზოგადი
 	Geometric Center	გეომეტრიული ცენტრი
@@ -423,14 +423,14 @@
 	Collect	შეგროვება
 	Collect Multileaders	მულტიმიმთითებლების შეგროვება
 	Edit Multileader	მულტიმიმთითებლის რედაქტირება
-	In	გადიდება
+	In	მოახლოება
 	In-window Menu Bar	მენიუს ზოლი ფანჯარაში
 	Include in new selection set	ახალ მონიშნულ ნაკრებში ჩართვა
 	Increment angle	კუთხის ბიჯი
 	Index Color	ინდექსური ფერი
 	Index color: {index}	ინდექსური ფერი: {index}
 	Infer Constraints	შეზღუდვების ავტომატური დადგენა
-	Inquiry	ინფორმაცია
+	Inquiry	მოთხოვნა
 	Insert	ჩასმა
 	Insert Block	ბლოკის ჩასმა
 	Insert Column	სვეტის ჩასმა
@@ -510,7 +510,7 @@
 	List Groups	ჯგუფების სია
 	List Layer States	შრის მდგომარეობების სია
 	List Layouts	განლაგებების სია
-	List System Variables	სისტემური ცვლადების სია
+	List System Variables	სისტემის ცვლადების სია
 	List Text Styles	ტექსტის სტილების სია
 	Load all	ყველას ჩატვირთვა
 	Load...	ჩატვირთვა...
@@ -525,7 +525,7 @@
 	MODEL	მოდელი
 	MText	MText
 	Magenta	მეწამული
-	Major line every	მთავარი ხაზის ბიჯი
+	Major line every	ყოველი N-ე ხაზი მთავარია
 	Make Current	მიმდინარედ დაყენება
 	Make Object's Layer Current	ობიექტის შრის მიმდინარედ დაყენება
 	Make...	შექმნა...
@@ -556,7 +556,7 @@
 	Multiple Point	რამდენიმე წერტილი
 	My	ჩემი
 	My properties: not available yet	ჩემი თვისებები: ჯერ ხელმისაწვდომი არ არის
-	N	ჩ
+	N	N
 	Name	სახელი
 	Name (A–Z)	სახელი (ა–ჰ)
 	Named Views...	დასახელებული ხედები...
@@ -616,7 +616,7 @@
 	Ortho Mode	ორთო რეჟიმი
 	Ortho Mode (F8)	ორთო რეჟიმი (F8)
 	Osnap Settings...	ობიექტზე მიბმის პარამეტრები...
-	Out	დაპატარავება
+	Out	დაშორება
 	Over-constrained	ზედმეტად შეზღუდული
 	Override	გადაფარვა
 	PAPER	ფურცელი
@@ -646,7 +646,7 @@
 	Plot Preview	ნახვა ამობეჭდვამდე
 	Plot Window	ბეჭდვის ფანჯარა
 	Plot style	ბეჭდვის სტილი
-	Plot style attached to	მიმაგრებული ბეჭდვის სტილი
+	Plot style attached to	ბეჭდვის სტილი მიმაგრებულია
 	Plot style table	ბეჭდვის სტილების ცხრილი
 	Plot Style...	ბეჭდვის სტილი...
 	Plot Style Manager	ბეჭდვის სტილების მენეჯერი
@@ -710,7 +710,7 @@
 	Purge	გაწმენდა
 	Pyramid	პირამიდა
 	Quadrant	კვადრანტი
-	Query Entities	ობიექტების მოთხოვნა
+	Query Entities	ობიექტების გამოთხოვნა
 	Quick	სწრაფი
 	Quick Dimension	სწრაფი ზომა
 	Quick Properties	სწრაფი თვისებები
@@ -726,7 +726,7 @@
 	Read-only	მხოლოდ წასაკითხი
 	Real name	ნამდვილი სახელი
 	Realtime	რეალურ დროში
-	Reassociate Dimensions	ზომების ხელახლა მიბმა
+	Reassociate Dimensions	ზომების ხელახლა ასოცირება
 	Recent	ბოლოდროინდელი
 	Recent Commands	ბოლოდროინდელი ბრძანებები
 	Recent Input	ბოლოდროინდელი შეყვანა
@@ -767,7 +767,7 @@
 	Right	მარჯვნივ
 	Rotate	შემობრუნება
 	Rotation	შემობრუნება
-	S	ს
+	S	S
 	Save	შენახვა
 	Save (⌘S)	შენახვა (⌘S)
 	Save As	შენახვა როგორც
@@ -878,7 +878,7 @@
 	Single Line Text	ერთსტრიქონიანი ტექსტი
 	Single Point	ერთი წერტილი
 	Single...	ცალკეული...
-	Smooth	გლუვი შეერთება
+	Smooth	დაგლუვება
 	Snap	მიბმა
 	Snap Mode	მიბმის რეჟიმი
 	Snap Mode (F9)	მიბმის რეჟიმი (F9)
@@ -969,7 +969,7 @@
 	Indicate selection area	მიუთითეთ მონიშვნის არე
 	Interface language	ინტერფეისის ენა
 	Interface theme	ინტერფეისის თემა
-	Keep the system cursor visible over the drawing area	სისტემური კურსორი ნახაზის არეზე ხილული დარჩეს
+	Keep the system cursor visible over the drawing area	სისტემის კურსორი ნახაზის არეზე ხილული დარჩეს
 	Largest array	ყველაზე დიდი მასივი
 	Layout paper	განლაგების ფურცელი
 	Model background	მოდელის ფონი
@@ -988,7 +988,7 @@
 	Reset keeps the interface language.	ჩამოყრის შემდეგ ინტერფეისის ენა უცვლელი რჩება.
 	Reset to Defaults	ნაგულისხმევზე დაბრუნება
 	Save new drawings as	ახალი ნახაზების შენახვა როგორც
-	Screen magnifiers, screen readers and recorders follow the system cursor.	ეკრანის გამადიდებლები, ეკრანის წამკითხველები და ჩამწერები სისტემურ კურსორს მიჰყვება.
+	Screen magnifiers, screen readers and recorders follow the system cursor.	ეკრანის გამადიდებლები, ეკრანის წამკითხველები და ჩამწერები სისტემის კურსორს მიჰყვება.
 	Select objects first, then choose a command	ჯერ მონიშნეთ ობიექტები, შემდეგ აირჩიეთ ბრძანება
 	Selection	მონიშვნა
 	Selection Area Effect	მონიშვნის არის ეფექტი
@@ -1079,7 +1079,7 @@
 	Sphere	სფერო
 	Spline	სპლაინი
 	Spline Edit	სპლაინის რედაქტირება
-	Stack (type 1/2 then select)	წილადი (აკრიფეთ 1/2 და მონიშნეთ)
+	Stack (type 1/2 then select)	დასტად დალაგება (აკრიფეთ 1/2 და მონიშნეთ)
 	Standard	სტანდარტული
 	Start	დასაწყისი
 	Start Width	საწყისი სიგანე
@@ -1191,12 +1191,12 @@
 	Viewport scale	ხედვის არის მასშტაბი
 	Viewport {id}	ხედვის არე {id}
 	Viewports	ხედვის არეები
-	W	დ
+	W	W
 	WCS	WCS
 	White	თეთრი
 	Width factor	სიგანის კოეფიციენტი
 	Window	ფანჯარა
-	Wipeout	დამფარავი არე
+	Wipeout	მასკირება
 	Workspace Switching	სამუშაო სივრცის გადართვა
 	Write Block	ბლოკის ჩაწერა
 	Xline	დამხმარე ხაზი
@@ -1206,9 +1206,9 @@
 	Zoom All	მასშტაბი: ყველაფერი
 	Zoom Dynamic	მასშტაბი: დინამიკური
 	Zoom Extents	მასშტაბი: საზღვრები
-	Zoom In	გადიდება
+	Zoom In	მოახლოება
 	Zoom Object	მასშტაბი: ობიექტი
-	Zoom Out	დაპატარავება
+	Zoom Out	დაშორება
 	Zoom Previous	მასშტაბი: წინა
 	Zoom Realtime	მასშტაბი: რეალურ დროში
 	Zoom Window	მასშტაბი: ფანჯარა
@@ -1229,7 +1229,7 @@
 	Hide CADCraft	CADCraft-ის დამალვა
 	Hide Others	სხვების დამალვა
 	Accessibility	ხელმისაწვდომობა
-	Show System Cursor	სისტემური კურსორის ჩვენება
+	Show System Cursor	სისტემის კურსორის ჩვენება
 	Animation Effects	ანიმაციის ეფექტები
 	Animation effects	ანიმაციის ეფექტები
 	Interface scale	ინტერფეისის მასშტაბი
@@ -1242,7 +1242,7 @@
 	Delete Current Scale	მიმდინარე მასშტაბის წაშლა
 	Add/Delete Scales...	მასშტაბების დამატება/წაშლა...
 	Synchronize Multiple-scale Positions	მრავალმასშტაბიანი პოზიციების სინქრონიზაცია
-	Annotative Update	ანოტაციურის განახლება
+	Annotative Update	ანოტაციური განახლება
 	Show Annotative Objects	ანოტაციური ობიექტების ჩვენება
 	Current Scale Only	მხოლოდ მიმდინარე მასშტაბი
 	All Scales	ყველა მასშტაბი
@@ -1287,7 +1287,7 @@
 	Hatch Pattern	დაშტრიხვის ნიმუში
 	Search for pattern	ნიმუშის ძიება
 	Run Script...	სკრიპტის გაშვება...
-	Query Texts	ტექსტების მოთხოვნა
+	Query Texts	ტექსტების გამოთხოვნა
 	Analyze Shapes	ფიგურების ანალიზი
 	Hatch Pick	დაშტრიხვის არჩევა
 	Hatch and Gradient	დაშტრიხვა და გრადიენტი
@@ -1369,7 +1369,7 @@
 	X	X
 	Y	Y
 menu	Dimension	ზომების დატანა
-menu	Draw	ხაზვა
+menu	Draw	ხატვა
 menu	Modify	შეცვლა
 menu	View	ხედი
 	Arrow size	ისრის ზომა

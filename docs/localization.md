@@ -118,16 +118,16 @@ follow-up work.
 ## Georgian (`ka`) interface
 
 Georgian has **1,383 rows**: 1,377 ordinary labels, four contextual menu headings (**ზომების
-დატანა** for the Dimension menu, **ზომა** for the object; **ხაზვა** for Draw) and two single-form
+დატანა** for the Dimension menu, **ზომა** for the object; **ხატვა** for Draw) and two single-form
 count templates, since a Georgian noun stays singular after a numeral ("5 კომიტი"). It covers the
 union of the existing catalogs, and no marked UI literal falls back to English. Commands are verbal
 nouns (**შენახვა**, **შემობრუნება**); prompts read "მიუთითეთ …" for Specify, "შეიყვანეთ …" for
 Enter and "მონიშნეთ …" for Select, and clickable keywords keep the spelling the engine accepts.
 Georgian has no letter case, so nothing is capitalised, and Mtavruli (a display style, not upper
-case) never appears; a test checks that. The translation is original, AI-assisted work written from
-the English strings with Georgian technical-drawing vocabulary (შრე, დაშტრიხვა, მომრგვალება, ფასკა,
-წანაცვლება, ობიექტზე მიბმა, ხედვის არე); no other product's localization was consulted. Native
-proofreading of the running app is still to do.
+case) never appears; a test checks that. The translation is original: written with Claude Code from
+the meaning of each English string, with Georgian technical-drawing vocabulary (შრე, დაშტრიხვა,
+მომრგვალება, ფასკა, წანაცვლება, ობიექტზე მიბმა, ხედვის არე); terminology and doubtful strings
+were decided by a native Georgian speaker (@devius). No other product's localization was consulted.
 
 ## Adding translations
 
