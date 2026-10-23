@@ -17,6 +17,22 @@ use cadaddy_engine::Session;
 use cadaddy_engine::doc::{Drawing, EntityKind, Handle};
 use serde_json::{Value, json};
 
+/// A synthetic xref DXF written to a temp directory for the xref operations in the fuzz.
+fn xref_path() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("undofuzz_xref");
+    let path = dir.join("Fixture.dxf");
+    if !path.exists() {
+        std::fs::create_dir_all(&dir).ok();
+        // Build a small made-up drawing via the engine, then write it as DXF.
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 8] })).unwrap();
+        s.execute("text", &json!({ "at": [2, 3], "text": "Ref Drawing", "height": 1 })).unwrap();
+        let dxf = cadaddy_io::write_dxf(s.doc().unwrap());
+        std::fs::write(&path, dxf).expect("write xref fixture");
+    }
+    path
+}
+
 /// A small, fast, seeded generator (SplitMix64).
 struct Rng(u64);
 
@@ -96,6 +112,11 @@ const KINDS: &[&str] = &[
     "UNDO BEgin",
     "UNDO End",
     "UNDO Mark",
+    "xattach",
+    "-xref detach",
+    "-xref reload",
+    "-xref unload",
+    "-xref bind",
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -268,11 +289,23 @@ fn command(s: &Session, op: Op) -> (&'static str, Value) {
         }
         "purge" => json!({ "type": one(&mut r, &["all", "blocks", "layers", "textstyles"]) }),
         "dimstyle" => json!({ "name": format!("Dims {}", r.below(3)), "DIMASZ": 0.5 + r.below(3) as f64, "current": r.below(2) == 0 }),
+        "xattach" => {
+            let path = xref_path();
+            json!({ "path": path.to_str().unwrap_or(""), "name": format!("Ref{}", r.below(3)) })
+        }
+        "-xref detach" | "-xref reload" | "-xref unload" | "-xref bind" => {
+            let option = kind.strip_prefix("-xref ").unwrap_or("detach");
+            json!({ "option": option, "names": format!("Ref{}", r.below(3)) })
+        }
         "UNDO BEgin" => json!({ "mode": "begin" }),
         "UNDO End" => json!({ "mode": "end" }),
         _ => json!({ "mode": "mark" }),
     };
-    let cmd = if kind.starts_with("UNDO") { "undo" } else { kind };
+    let cmd = match kind {
+        k if k.starts_with("UNDO") => "undo",
+        k if k.starts_with("-xref") => "-xref",
+        _ => kind,
+    };
     (cmd, p)
 }
 
@@ -498,16 +531,23 @@ fn undo_and_redo_are_exact_under_random_edits() {
     });
     let mut found = found.into_inner().unwrap();
     found.sort();
+    let ran = RAN.load(std::sync::atomic::Ordering::Relaxed);
+    let refused = REFUSED.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
-        "undofuzz: {seqs} sequences of 20–{max} operations, seed {seed}: {} commands ({} refused) in {:.1} s",
-        RAN.load(std::sync::atomic::Ordering::Relaxed),
-        REFUSED.load(std::sync::atomic::Ordering::Relaxed),
+        "undofuzz: {seqs} sequences of 20–{max} operations, seed {seed}: {ran} commands ({refused} refused) in {:.1} s",
         started.elapsed().as_secs_f64()
     );
     assert!(found.is_empty(), "{} failing sequence(s):\n  {}", found.len(), found.join("\n  "));
+    // A mix that is mostly refused would pass trivially; guard the ratio so a parameter
+    // rename can't silently turn the fuzz into a no-op.
+    assert!(
+        ran > 0 && refused * 2 < ran,
+        "too many commands were refused ({refused} refused / {ran} ran); the mix may not be exercising commands"
+    );
 }
 
-/// Sequences the fuzzer found, shrunk: each must hold now.
+/// Sequences the fuzzer found, shrunk: each must hold now. These replay through the generator
+/// for compatibility, but each bug also has an explicit-parameter test below.
 #[test]
 fn sequences_that_failed_hold() {
     let k = |name: &str| KINDS.iter().position(|n| *n == name).unwrap();
@@ -523,4 +563,126 @@ fn sequences_that_failed_hold() {
         let ops: Vec<Op> = case.iter().map(|(n, seed)| Op { kind: k(n), seed: *seed }).collect();
         assert_eq!(check(&ops), None, "{case:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Explicit-parameter regression tests for the three bugs the fuzzer found.
+// These do not go through the generator, so they survive parameter changes.
+// ---------------------------------------------------------------------------
+
+/// Bug 1: A refused command (layer.delete of layer "0") left an empty undo step; the next
+/// U then did nothing. Fixed: a refused command whose drawing equals the one before gets the
+/// original `Arc<Drawing>` back, so no step is created.
+#[test]
+fn refused_layer_delete_leaves_no_undo_step() {
+    let mut s = start();
+    let steps_before = undo_len(&s);
+    // layer "0" can never be deleted — the command is refused.
+    let r = s.execute("layer.delete", &json!({ "name": "0" }));
+    assert!(r.is_err(), "deleting layer 0 should be refused");
+    assert_eq!(
+        undo_len(&s),
+        steps_before,
+        "a refused layer.delete must not add an undo step"
+    );
+    // Also: U after the refusal should undo the previous real command, not a phantom step.
+    let doc_now = doc(&s);
+    s.execute("undo", &json!({})).unwrap();
+    assert_ne!(doc(&s), doc_now, "U should undo the previous real command");
+}
+
+/// Bug 2: UNDO Mark inside an open BEgin group was dropped when the group ended; UNDO Back
+/// then found no mark and undid everything. Fixed: Mark ends the open group first.
+#[test]
+fn undo_mark_inside_begin_group_survives() {
+    let mut s = start();
+    // Draw something so there is an undo step to go back past.
+    s.execute("line", &json!({ "points": [[0, 0], [5, 5]] })).unwrap();
+    s.execute("undo", &json!({ "mode": "mark" })).unwrap();
+    // Open a group, do work inside it, then mark inside the group.
+    s.execute("undo", &json!({ "mode": "begin" })).unwrap();
+    s.execute("circle", &json!({ "center": [10, 10], "radius": 3 })).unwrap();
+    let mid_drawing = doc(&s);
+    // Mark inside the open group should end the group and set the mark.
+    s.execute("undo", &json!({ "mode": "mark" })).unwrap();
+    s.execute("line", &json!({ "points": [[20, 20], [25, 25]] })).unwrap();
+    // UNDO Back should go to the second mark (after the circle), not undo everything.
+    s.execute("undo", &json!({ "mode": "back" })).unwrap();
+    assert_eq!(
+        doc(&s),
+        mid_drawing,
+        "UNDO Back should return to the mark set inside the group"
+    );
+}
+
+/// Bug 3: Redo dropped an associative dimension's links. The after-command follow-ups
+/// (associative dimensions) ran on the restored drawing, taking restored objects for moved
+/// ones. Fixed: undo/redo commands skip the follow-ups.
+#[test]
+fn redo_keeps_associative_dimension_links() {
+    let mut s = Session::new();
+    // A polyline, fillet it to round a corner, place a dimension.
+    s.execute("pline", &json!({ "vertices": [[0, 0], [10, 0], [10, 10]], "closed": false })).unwrap();
+    let pline = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("fillet", &json!({ "handle": pline.hex(), "polyline": true, "radius": 0.5 })).unwrap();
+    s.execute("move", &json!({ "handles": [pline.hex()], "delta": [5, 0] })).unwrap();
+    s.execute("dimlinear", &json!({ "p1": [5, 0], "p2": [15, 0], "at": [10, -3] })).unwrap();
+    let final_doc = doc(&s);
+    // Undo everything, then redo everything: the drawing must match exactly.
+    while undo_len(&s) > 0 {
+        if s.execute("undo", &json!({})).is_err() {
+            break;
+        }
+    }
+    s.execute("mredo", &json!({ "all": true })).unwrap();
+    assert_eq!(doc(&s), final_doc, "redo should preserve the drawing exactly (including assoc dim links)");
+}
+
+// ---------------------------------------------------------------------------
+// MUST 1: UNDOHISTORY {action:"to"} must skip follow-ups (assoc dims, groups, tables…)
+// on the restored drawing, just as plain undo/redo does.
+// ---------------------------------------------------------------------------
+
+/// `undohistory to N` must give exact drawings and keep associative-dimension links intact.
+/// This tests the full round trip (to 0 and back) AND partial jumps.
+/// Without the `CommandSpec::restores_history` flag on `undohistory`, the after-command
+/// follow-ups would corrupt the drawing when jumping between steps where objects moved.
+#[test]
+fn undohistory_to_keeps_assoc_dims() {
+    let mut s = Session::new();
+    let empty_doc = doc(&s);
+    // Step 1: a polyline and an associative dimlinear on it.
+    s.execute("pline", &json!({ "vertices": [[0, 0], [20, 0], [20, 10]], "closed": false })).unwrap();
+    let pline_h = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [20, 0], "at": [10, -3] })).unwrap();
+    let before_move = doc(&s);
+    let step_before_move = undo_len(&s);
+    // Step 2: move the polyline (the dimension follows via assoc).
+    s.execute("move", &json!({ "handles": [pline_h.hex()], "delta": [5, 0] })).unwrap();
+    let after_move = doc(&s);
+    let total = {
+        let st = s.state().unwrap();
+        st.undo.len() + st.redo.len()
+    };
+    // Full round trip: jump to 0 then back.
+    s.execute("undohistory", &json!({ "action": "to", "step": 0 })).unwrap();
+    assert_eq!(doc(&s), empty_doc, "undohistory to 0 should restore the empty drawing exactly");
+    s.execute("undohistory", &json!({ "action": "to", "step": total })).unwrap();
+    assert_eq!(doc(&s), after_move, "undohistory to <total> should restore the final drawing exactly");
+    // Partial jump: from step 3 (after move) back to step 2 (before move). This is the
+    // critical case: the polyline moved between before and after, so assoc::after_command
+    // would see it as "moved" and try to recompute the dimension.
+    s.execute("undohistory", &json!({ "action": "to", "step": step_before_move })).unwrap();
+    assert_eq!(
+        doc(&s),
+        before_move,
+        "undohistory to step before move should restore the drawing exactly (no assoc fixup)"
+    );
+    // And back to the final step.
+    s.execute("undohistory", &json!({ "action": "to", "step": total })).unwrap();
+    assert_eq!(
+        doc(&s),
+        after_move,
+        "undohistory back to final should restore the drawing exactly (assoc dims intact)"
+    );
 }

@@ -12,15 +12,16 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // U undoes the last operation at once (Edit > Undo, Cmd+Z); UNDO asks how many.
-        CommandSpec::new("u", "Undo", run_u).menu(&["Edit", "Undo"]).key("Cmd+Z").params("{}").noundo(),
+        CommandSpec::new("u", "Undo", run_u).menu(&["Edit", "Undo"]).key("Cmd+Z").params("{}").noundo().restores_history(),
         CommandSpec::new("undo", "Undo", run_undo)
             .params(
                 "{count?: n} | {mode: mark|begin|end} | {mode: back, confirm?: bool (no mark: undo everything; default true)} | {mode: auto, on: bool} | {mode: control, control: all|none|one|combine|layer, on?: bool (combine/layer)}",
             )
             .noundo()
+            .restores_history()
             .interactive(|_| Ok(Box::new(UndoM::default()))),
-        CommandSpec::new("redo", "Redo", run_redo).menu(&["Edit", "Redo"]).key("Cmd+Shift+Z").params("{count?: n}").noundo(),
-        CommandSpec::new("mredo", "Redo", run_mredo).params("{count?: n} | {all: true}").noundo().interactive(|_| Ok(Box::new(MredoM))),
+        CommandSpec::new("redo", "Redo", run_redo).menu(&["Edit", "Redo"]).key("Cmd+Shift+Z").params("{count?: n}").noundo().restores_history(),
+        CommandSpec::new("mredo", "Redo", run_mredo).params("{count?: n} | {all: true}").noundo().restores_history().interactive(|_| Ok(Box::new(MredoM))),
         CommandSpec::new("cutclip", "Cut", run_cut)
             .menu(&["Edit", "Cut"])
             .key("Cmd+X")

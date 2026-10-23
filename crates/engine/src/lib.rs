@@ -2935,9 +2935,10 @@ impl Session {
     }
 }
 
-/// The commands that move through the undo history (they restore drawings as they were).
+/// Whether `id` restores a drawing from the undo/redo history (the after-command follow-ups
+/// must not run on the restored drawing). Uses the [`CommandSpec::restores_history`] flag.
 fn moves_through_history(id: &str) -> bool {
-    matches!(id, "undo" | "u" | "redo" | "mredo")
+    find_command(id).is_some_and(|c| c.restores_history)
 }
 
 /// Typed text that is LISP: `(expression)` or `!variable`.
