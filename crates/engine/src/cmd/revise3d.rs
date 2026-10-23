@@ -268,12 +268,26 @@ fn source_of(e: &Entity) -> Option<Handle> {
     x.get(at + 3).filter(|t| t.code == 1000).and_then(|t| Handle::parse_hex(&t.value))
 }
 
-/// A generated object's (part, level, source) tag: what the rebuilt counterpart shares.
+/// A generated object's (part, level, source) tag: what the rebuilt counterpart shares. One plan
+/// object makes many MEP objects (a run's segments, each fitting, terminals read from nothing),
+/// so theirs adds the object's own id (`mepid:`) to the source: `<source>#<id>`.
 pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone());
-    Some((v(1)?, v(2).unwrap_or_default(), v(3).unwrap_or_default()))
+    let part = v(1)?;
+    let mut source = v(3).unwrap_or_default();
+    if part == "mep"
+        && let Some(id) = x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix("mepid:"))
+    {
+        source = format!("{source}#{id}");
+    }
+    Some((part, v(2).unwrap_or_default(), source))
+}
+
+/// The plan object a tag key's source names (before an MEP object's `#<id>`).
+fn key_source(source: &str) -> Option<Handle> {
+    Handle::parse_hex(source.split('#').next().unwrap_or_default())
 }
 
 /// What a rebuild kept of the hand edits: (kept handles, conflicts).
@@ -320,9 +334,9 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     }
     // Deleted by hand: stays deleted unless its plan object changed (then it conflicts).
     for key in deleted {
-        let src = Handle::parse_hex(&key.2);
+        let src = key_source(&key.2);
         if src.is_some_and(|h| changed.contains(&h)) {
-            kept.conflicts.push(json!({ "part": key.0, "source": key.2, "change": "deleted" }));
+            kept.conflicts.push(json!({ "part": key.0, "source": key.2.split('#').next().unwrap_or_default(), "change": "deleted" }));
             continue;
         }
         let d = s.doc_mut()?;

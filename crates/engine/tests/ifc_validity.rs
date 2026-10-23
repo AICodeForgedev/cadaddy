@@ -397,10 +397,10 @@ enum A {
     Points3,
     Index,
     Derived,
-    /// A typed value of one of these types, holding a string.
-    Label {
+    /// An IfcValue (IFC4's select of typed values): a string as one of the string types, or a
+    /// length (IfcLengthMeasure; IfcPositiveLengthMeasure above zero).
+    Value {
         opt: bool,
-        of: &'static [&'static str],
     },
 }
 
@@ -678,12 +678,7 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     m.insert("IFCPROPERTYSET", pset);
     m.insert(
         "IFCPROPERTYSINGLEVALUE",
-        vec![
-            A::Text { opt: false },
-            A::Text { opt: true },
-            A::Label { opt: true, of: &["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"] },
-            A::Ref { opt: true, to: &["IFCSIUNIT"] },
-        ],
+        vec![A::Text { opt: false }, A::Text { opt: true }, A::Value { opt: true }, A::Ref { opt: true, to: &["IFCSIUNIT"] }],
     );
     // IfcDistributionSystem: IfcRoot (4) + ObjectType + LongName + PredefinedType.
     {
@@ -1017,8 +1012,10 @@ fn matches(p: &P, a: A, types: &BTreeMap<u64, (String, Vec<P>)>) -> Result<(), S
         }
         (A::Index, P::List(v)) if v.len() >= 3 && v.iter().all(|x| matches!(x, P::Int(i) if *i > 0)) => Ok(()),
         (A::Derived, P::Derived) => Ok(()),
-        (A::Label { opt: true, .. }, P::Null) => Ok(()),
-        (A::Label { of, .. }, P::Typed(t, v)) if of.contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
+        (A::Value { opt: true }, P::Null) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if ["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"].contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCLENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite()) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCPOSITIVELENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite() && r > 0.0) => Ok(()),
         _ => Err(format!("{p:?} where the schema has {}", describe(a))),
     }
 }
@@ -1037,7 +1034,7 @@ fn describe(a: A) -> &'static str {
         A::Points3 => "a list of 3D points",
         A::Index => "a list of at least 3 positive indices",
         A::Derived => "a derived attribute (*)",
-        A::Label { .. } => "a typed string value",
+        A::Value { .. } => "a typed value (a string, or a length)",
     }
 }
 
@@ -1526,6 +1523,10 @@ fn quantities_match_the_drawing() {
         let product = refs(&p[4])[0];
         let (class, pa) = get(product);
         let set = get(refs(&p[5])[0]);
+        // Quantity sets only (MEP objects also carry their sizes as a property set).
+        if set.0 != "IFCELEMENTQUANTITY" {
+            continue;
+        }
         let q: BTreeMap<String, f64> = refs(&set.1[5])
             .into_iter()
             .map(|r| {
@@ -1742,8 +1743,9 @@ fn scheduled_equipment_exports_as_its_distribution_element_class() {
     let n = |t: &str| c.get(t).copied().unwrap_or(0);
     assert_eq!((n("IFCUNITARYEQUIPMENT"), n("IFCAIRTERMINALBOX"), n("IFCFAN"), n("IFCPUMP")), (2, 1, 1, 1));
     assert_eq!((n("IFCBOILER"), n("IFCCONDENSER"), n("IFCFLOWMETER")), (1, 1, 1));
-    assert_eq!(n("IFCPROPERTYSET"), 5, "one schedule row per item that has one");
     let f = read_step(&text).unwrap();
+    let schedules = f.data.values().filter(|(t, a)| t == "IFCPROPERTYSET" && a.get(2) == Some(&P::Str("CADaddy_EquipmentSchedule".into()))).count();
+    assert_eq!(schedules, 5, "one schedule row per item that has one");
     let find = |name: &str| f.data.values().find(|(_, p)| p.get(2) == Some(&P::Str(name.into()))).cloned().unwrap();
     let (t, ahu) = find("AHU-1");
     assert_eq!((t.as_str(), &ahu[8], &ahu[3]), ("IFCUNITARYEQUIPMENT", &P::Enum("AIRHANDLER".into()), &P::Str("AIR HANDLING UNIT SCHEDULE".into())));
@@ -1829,4 +1831,95 @@ fn bad_equipment_is_an_issue_not_a_crash() {
     assert!(text.contains("mep.equipment"), "{text}");
     // Whatever was stored, building skips what it can't make.
     let _ = s.execute("model.build", &json!({}));
+}
+
+/// The value of property `name` in the CADaddy_MepSize set of product `product`.
+fn mep_size(f: &File, product: u64, name: &str) -> Option<P> {
+    let get = |n: u64| f.data.get(&n);
+    f.data.values().filter(|(t, _)| t == "IFCRELDEFINESBYPROPERTIES").find_map(|(_, a)| {
+        if !refs(&a[4]).contains(&product) {
+            return None;
+        }
+        let (t, set) = match &a[5] {
+            P::Ref(r) => get(*r)?,
+            _ => return None,
+        };
+        if t != "IFCPROPERTYSET" || set[2] != P::Str("CADaddy_MepSize".into()) {
+            return None;
+        }
+        refs(&set[4]).into_iter().filter_map(get).find(|(_, v)| v[0] == P::Str(name.into())).map(|(_, v)| v[2].clone())
+    })
+}
+
+fn measure(p: Option<P>) -> Option<f64> {
+    match p? {
+        P::Typed(t, v) if t == "IFCPOSITIVELENGTHMEASURE" => match *v {
+            P::Real(r) => Some(r),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[test]
+fn duct_fittings_export_one_each_and_duct_sizes_are_properties() {
+    hooks();
+    let mut s = Session::new();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-1000, -1000, 3000, 3000], "base": [0, 0]}],
+            "mep": {
+                "systems": [
+                    {"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [24, 12], "bottom_ft": 10},
+                    {"name": "M-DUCT-RND", "layer": "M-DUCT-RND", "kind": "duct", "size_in": [10, 0], "bottom_ft": 10}
+                ],
+                "runs": [
+                    // An elbow, a drop from 10' to 8', another elbow.
+                    {"system": "M-DUCT-SUPP", "level": "Level 1", "points": [[0, 0], [240, 0], [240, 240], [480, 240], [480, 480]], "size_in": [24, 12], "bottoms_ft": [10, 10, 8, 8]},
+                    {"system": "M-DUCT-RND", "level": "Level 1", "points": [[0, 600], [480, 600]], "size_in": [10, 0], "bottoms_ft": [10]}
+                ],
+                "terminals": [{"system": "M-DUCT-RND", "level": "Level 1", "at": [240, 700], "size_in": [24, 24], "bottom_ft": 9, "terminal_kind": "diffuser"}]
+            }
+        }}),
+    )
+    .unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let text = export(&mut s, "Sample Ducts.ifc");
+    let p = problems(&text);
+    assert!(p.is_empty(), "{}", p.join("\n"));
+    let f = read_step(&text).unwrap();
+    let of = |t: &str| f.data.iter().filter(|(_, (n, _))| n == t).map(|(k, (_, a))| (*k, a.clone())).collect::<Vec<_>>();
+    // One IfcDuctFitting per fitting: two bends and the drop (user defined, ObjectType DROP).
+    let fittings = of("IFCDUCTFITTING");
+    assert_eq!(fittings.len(), 3, "{fittings:?}");
+    let pre = |a: &Vec<P>| match a.get(8) {
+        Some(P::Enum(e)) => e.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(fittings.iter().filter(|(_, a)| pre(a) == "BEND").count(), 2);
+    let drop: Vec<_> = fittings.iter().filter(|(_, a)| pre(a) == "USERDEFINED").collect();
+    assert_eq!(drop.len(), 1);
+    assert_eq!(drop[0].1[4], P::Str("DROP".into()), "the drop's ObjectType");
+    // The 24x12 segment: width 24" and height 12" in the export's length unit (metres).
+    let segs = of("IFCDUCTSEGMENT");
+    assert_eq!(segs.len(), 2);
+    let rect = segs.iter().find(|(k, _)| mep_size(&f, *k, "NominalWidth").is_some()).expect("the rectangular segment");
+    let w = measure(mep_size(&f, rect.0, "NominalWidth")).unwrap();
+    let h = measure(mep_size(&f, rect.0, "NominalHeight")).unwrap();
+    assert!((w - 24.0 * 0.0254).abs() < 1e-6 && (h - 12.0 * 0.0254).abs() < 1e-6, "{w} {h}");
+    assert!((w / 0.0254 - 24.0).abs() < 1e-4 && (h / 0.0254 - 12.0).abs() < 1e-4, "24 and 12 inches");
+    assert_eq!(mep_size(&f, rect.0, "Size"), Some(P::Typed("IFCLABEL".into(), Box::new(P::Str("24\"x12\"".into())))));
+    // The round segment: its diameter.
+    let round = segs.iter().find(|(k, _)| *k != rect.0).unwrap();
+    let d = measure(mep_size(&f, round.0, "NominalDiameter")).unwrap();
+    assert!((d - 10.0 * 0.0254).abs() < 1e-6, "{d}");
+    // Fittings and the terminal carry their sizes too.
+    for (k, _) in &fittings {
+        let w = measure(mep_size(&f, *k, "NominalWidth")).unwrap();
+        assert!((w - 24.0 * 0.0254).abs() < 1e-6, "fitting #{k}: {w}");
+    }
+    let terminal = of("IFCAIRTERMINAL");
+    assert_eq!(terminal.len(), 1);
+    assert!((measure(mep_size(&f, terminal[0].0, "NominalWidth")).unwrap() - 24.0 * 0.0254).abs() < 1e-6);
 }

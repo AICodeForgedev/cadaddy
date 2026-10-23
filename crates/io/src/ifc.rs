@@ -211,6 +211,11 @@ struct Kind {
     systems: Vec<String>,
     description: String,
     properties: Vec<(String, String)>,
+    /// MEP segments, fittings and terminals: their size tags (`size:24x12`, `size:10` round;
+    /// `size2:` a tee's branch or a transition's other end), inches.
+    sizes: Vec<[f64; 2]>,
+    /// For a `USERDEFINED` predefined type: what it is (IFC's ObjectType).
+    object_type: &'static str,
 }
 
 /// The IFC4 class and predefined type a scheduled equipment kind is written as.
@@ -240,6 +245,24 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
     Some(x.iter().skip(at + 1).take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.clone()).collect())
 }
 
+/// An MEP size tag, inches: `24x12` → [24, 12]; `10` (round) → [10, 0].
+fn parse_size_tag(v: &str) -> Option<[f64; 2]> {
+    let ok = |x: f64| x.is_finite() && x > 0.0 && x < 10_000.0;
+    match v.split_once('x') {
+        Some((w, h)) => Some([w.trim().parse().ok().filter(|x| ok(*x))?, h.trim().parse().ok().filter(|x| ok(*x))?]),
+        None => Some([v.trim().parse().ok().filter(|x| ok(*x))?, 0.0]),
+    }
+}
+
+/// A size as printed: `24"x12"`, `10"Ø`.
+fn size_label_in(s: [f64; 2]) -> String {
+    let n = |v: f64| {
+        let t = format!("{v:.3}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    if s[1] > 0.0 { format!("{}\"x{}\"", n(s[0]), n(s[1])) } else { format!("{}\"Ø", n(s[0])) }
+}
+
 fn class_of(e: &Entity) -> Kind {
     let kind = |class: Class, level: Option<String>, name: String, long: String| Kind {
         class,
@@ -252,6 +275,8 @@ fn class_of(e: &Entity) -> Kind {
         systems: Vec::new(),
         description: String::new(),
         properties: Vec::new(),
+        sizes: Vec::new(),
+        object_type: "",
     };
     if let Some(t) = tag_strings(e, "CADADDY_WALLGEN") {
         let part = t.first().map(String::as_str).unwrap_or_default();
@@ -365,10 +390,18 @@ fn class_of(e: &Entity) -> Kind {
         {
             k.predefined = match sub {
                 "elbow" => "BEND",
-                "tee" => "JUNCTION",
+                "tee" | "cross" => "JUNCTION",
                 "transition" | "reducer" => "TRANSITION",
+                // A riser between two heights: none of IFC's own kinds.
+                "drop" => "USERDEFINED",
                 _ => "NOTDEFINED",
             };
+            if sub == "drop" {
+                k.object_type = "DROP";
+            }
+        }
+        if part == "mep" {
+            k.sizes = ["size:", "size2:"].iter().filter_map(|key| extra(key).and_then(|v| parse_size_tag(&v))).collect();
         }
         return k;
     }
@@ -660,6 +693,7 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     // MEP products grouped by system name for IfcDistributionSystem.
     let mut system_products: HashMap<String, Vec<usize>> = HashMap::new();
     let mut schedules: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
+    let mut mep_sizes: Vec<(usize, Vec<[f64; 2]>, u64)> = Vec::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
     // Walls by their spec wall type (its index), for their materials and properties.
@@ -709,7 +743,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             ),
             _ => {
                 let desc = if kd.description.is_empty() { "$".to_string() } else { step_str(&kd.description) };
-                format!("{upper}('{g}',$,{nm},{desc},$,#{place},#{pds},{tag},.{pre}.)")
+                let object_type = if kd.object_type.is_empty() { "$".to_string() } else { step_str(kd.object_type) };
+                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},.{pre}.)")
             }
         };
         let product = o.add(line);
@@ -756,6 +791,9 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         // Scheduled equipment: its schedule row as a property set (our own set, so not `Pset_`).
         if !kd.properties.is_empty() {
             schedules.push((product, kd.properties.clone(), it.e.handle.0));
+        }
+        if !kd.sizes.is_empty() {
+            mep_sizes.push((product, kd.sizes.clone(), it.e.handle.0));
         }
         // Base quantities (IFC4's Qto_…BaseQuantities): lengths in the length unit, areas in m², volumes in m³.
         let m = measures(it.mesh);
@@ -848,6 +886,28 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             props.iter().map(|(k, v)| o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCLABEL({}),$)", step_str(k), step_str(v)))).collect();
         let set = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_EquipmentSchedule',$,{})", id(handle, 13), refs(&ids)));
         o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 14)));
+    }
+    // MEP sizes (our own set): the nominal width and height of a rectangular section, or the
+    // diameter of a round one, in the length unit; the size as printed; for a tee or a transition
+    // the other size too.
+    let per_inch = if mm { 25.4 } else { 0.0254 };
+    for (product, sizes, handle) in mep_sizes {
+        let mut ids = Vec::new();
+        for (k, sz) in sizes.iter().enumerate().take(2) {
+            let pre = if k == 0 { "" } else { "Other" };
+            let mut len = |name: &str, v: f64| {
+                ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('{pre}{name}',$,IFCPOSITIVELENGTHMEASURE({}),$)", real(v * per_inch))))
+            };
+            if sz[1] > 0.0 {
+                len("NominalWidth", sz[0]);
+                len("NominalHeight", sz[1]);
+            } else {
+                len("NominalDiameter", sz[0]);
+            }
+            ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('{pre}Size',$,IFCLABEL({}),$)", step_str(&size_label_in(*sz)))));
+        }
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_MepSize',$,{})", id(handle, 22), refs(&ids)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 23)));
     }
     // BIM spec property sets (CaDaddy_Spec): entities with a type mark → IfcPropertySet with the
     // type's fields as IfcPropertySingleValue (all text). Attached via IfcRelDefinesByProperties.
