@@ -1138,10 +1138,10 @@ mod tests {
         let truth = crate::truth_for(42);
         let mut rule_count = 0;
         for s in &truth.segments {
-            if let Some(h) = &s.height {
-                if h.source == HeightSource::Rule {
-                    rule_count += 1;
-                }
+            if let Some(h) = &s.height
+                && h.source == HeightSource::Rule
+            {
+                rule_count += 1;
             }
         }
         assert!(rule_count > 0, "should have rule-sourced heights");

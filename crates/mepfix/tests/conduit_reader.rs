@@ -215,6 +215,8 @@ fn conduit_stacks_below_duct() {
         size_in: [12.0, 12.0],
         level: "1".into(),
         midpoint_ft: mid,
+        from_ft: mid,
+        to_ft: mid,
         height_note: None,
         vertical: false,
     };
@@ -226,6 +228,8 @@ fn conduit_stacks_below_duct() {
         size_in: [0.75, 0.0],
         level: "1".into(),
         midpoint_ft: mid,
+        from_ft: mid,
+        to_ft: mid,
         height_note: None,
         vertical: false,
     };
