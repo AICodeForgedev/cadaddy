@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn upward_dependency_flagged() {
         let v = check(&[c("cadaddy-doc", &[("cadaddy-engine", Normal, true)])]);
-        assert!(matches!(v[..], [Violation::Upward { from: 1, to: 4, .. }]));
+        assert!(matches!(v[..], [Violation::Upward { from: 1, to: 5, .. }]));
     }
 
     #[test]
