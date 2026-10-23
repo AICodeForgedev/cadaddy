@@ -208,7 +208,7 @@ impl SpatialIndex {
         let pad = (b.width() + b.height()) * 1e-9 + (b.min.x.abs() + b.min.y.abs() + b.max.x.abs() + b.max.y.abs()) * 1e-12 + 1e-300;
         let env = AABB::from_corners([b.min.x - pad, b.min.y - pad], [b.max.x + pad, b.max.y + pad]);
         let mut out: Vec<u32> =
-            self.tree.locate_in_envelope_intersecting(&env).filter_map(|it| self.offsets.get(&it.data.0).map(|off| off + it.data.1)).collect();
+            self.tree.locate_in_envelope_intersecting(env).filter_map(|it| self.offsets.get(&it.data.0).map(|off| off + it.data.1)).collect();
         if with_infinite {
             out.extend_from_slice(&self.infinite);
         }
