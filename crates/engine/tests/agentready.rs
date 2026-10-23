@@ -255,6 +255,96 @@ fn hostile_params_are_refusals_not_crashes() {
     assert!(e.contains("documents outrank code knowledge"), "{e}");
 }
 
+/// MUST 1: an agent can never claim to be the user, and can never approve its own decisions.
+#[test]
+fn agent_identity_cannot_be_spoofed() {
+    let mut s = building(3);
+    s.execute("bim.build", &json!({})).unwrap();
+    let open = ids(&s.execute("review.list", &json!({})).unwrap());
+    let id = &open[0];
+    let cite = json!({"kind": "drawing", "document": "M-101"});
+
+    // Via execute_agent: author:"user" is refused with a guiding error.
+    let e = err(s.execute_agent("review.resolve", &json!({"id": id, "answer": {"size_in": [14, 10]}, "citation": cite, "author": "user"})));
+    assert!(e.contains("agent") && e.contains("person"), "spoofed author refused: {e}");
+
+    // Via execute_agent: author:"agent" or absent is accepted.
+    let r = s.execute_agent("review.resolve", &json!({"id": id, "answer": {"size_in": [14, 10]}, "citation": cite})).unwrap();
+    assert_eq!(r["changed"], true);
+
+    // The decision is logged as "agent", unapproved.
+    let log = s.execute("review.log", &json!({"author": "agent", "approved": false})).unwrap();
+    assert!(log["total"].as_u64().unwrap() >= 1, "logged as agent, unapproved: {log}");
+
+    // review.approve is refused for agents.
+    let e = err(s.execute_agent("review.approve", &json!({"all": true})));
+    assert!(e.contains("person") && e.contains("approve"), "agent approve refused: {e}");
+
+    // project.note also enforces agent identity.
+    let e = err(s.execute_agent("project.note", &json!({"text": "test note", "author": "user"})));
+    assert!(e.contains("agent"), "note author spoofing refused: {e}");
+
+    // The same calls via execute (a person) still work: person can approve.
+    let ap = s.execute("review.approve", &json!({"all": true})).unwrap();
+    assert!(ap["approved"].as_u64().unwrap() >= 1, "person approve works: {ap}");
+}
+
+/// MUST 2: resolved answers survive `mep.read {apply:true}` and orphan when the run is gone.
+#[test]
+fn cited_answers_survive_reread_and_orphan_when_gone() {
+    let mut s = building(3);
+    s.execute("bim.build", &json!({})).unwrap();
+    let open = ids(&s.execute("review.list", &json!({})).unwrap());
+    let id = open[0].clone();
+
+    // Resolve a guessed run citing a drawing.
+    let cite = json!({"kind": "drawing", "document": "M-101", "ref": "tag at grid B-2"});
+    s.execute("review.resolve", &json!({"id": id, "answer": {"size_in": [16, 10], "bottom_ft": 10.5}, "citation": cite})).unwrap();
+
+    // Verify it took effect.
+    let list = s.execute("mep.list", &json!({})).unwrap();
+    assert!(list["items"].as_array().unwrap().iter().any(|i| i["size_in"] == json!([16.0, 10.0]) && i["reviewed"] == true), "before re-read: {list}");
+
+    // Re-read the plans (the same plan, so the run's objects are the same).
+    s.execute("mep.read", &json!({"apply": true})).unwrap();
+
+    // The cited size and height must still be on the run.
+    let after = s.execute("mep.list", &json!({})).unwrap();
+    assert!(
+        after["items"].as_array().unwrap().iter().any(|i| i["size_in"] == json!([16.0, 10.0]) && i["reviewed"] == true),
+        "after re-read the cited answer survives: {after}"
+    );
+
+    // The decision log still carries the citation.
+    let log = s.execute("review.log", &json!({"limit": 50})).unwrap();
+    assert!(
+        log["entries"].as_array().unwrap().iter().any(|e| e["action"] == "resolve" && e["citation"].as_str().is_some_and(|c| c.contains("M-101"))),
+        "citation in log: {log}"
+    );
+
+    // Now remove the run's plan lines and re-read: the decision must orphan.
+    // Select all entities on M-DUCT-SUPP and erase them by handle.
+    let sel = s.execute("qselect", &json!({"layer": "M-DUCT-SUPP"})).unwrap();
+    let handles: Vec<String> = sel["handles"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_string).collect();
+    assert!(!handles.is_empty(), "found MEP entities to erase");
+    s.execute("erase", &json!({"handles": handles})).unwrap();
+    // Re-read: no MEP lines in the drawing → no runs found → the resolved run is gone.
+    s.execute("mep.read", &json!({"apply": true})).unwrap();
+
+    // The decision should now be orphaned.
+    let briefing = s.execute("project.briefing", &json!({})).unwrap();
+    let orphaned = briefing["review"]["orphaned"].as_u64().unwrap_or(0);
+    assert!(orphaned >= 1, "orphaned count in briefing: {briefing}");
+
+    // review.list with status=orphaned shows the orphaned decision.
+    let orphan_list = s.execute("review.list", &json!({"status": "orphaned"})).unwrap();
+    assert!(orphan_list["total"].as_u64().unwrap() >= 1, "orphaned in review.list: {orphan_list}");
+    assert!(
+        orphan_list["items"].as_array().unwrap().iter().any(|i| i["status"] == "orphaned"),
+        "item has orphaned status: {orphan_list}"
+    );
+}
+
 /// Q320's weak agent found these; each is fixed and kept fixed here.
 #[test]
 fn what_the_weak_agent_tripped_on() {

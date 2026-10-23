@@ -343,6 +343,8 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.mep.runs.retain(|r| !levels.iter().any(|l| l.eq_ignore_ascii_case(&r.level)));
         sp.mep.runs.extend(runs);
         s.doc_mut()?.building_spec = Some(sp.to_json());
+        // Re-apply resolved review decisions so that cited answers survive the re-read.
+        super::agentready::reapply_decisions(s);
     }
     Ok(out)
 }
