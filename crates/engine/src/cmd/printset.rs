@@ -25,15 +25,11 @@ use crate::{EngineError, Result, Session};
 // ─── Per-session project access ─────────────────────────────────────────────
 
 fn get_project(s: &Session) -> Result<&PrintSetProject> {
-    s.printset_project
-        .as_deref()
-        .ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
+    s.printset_project.as_deref().ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
 }
 
 fn get_project_mut(s: &mut Session) -> Result<&mut PrintSetProject> {
-    s.printset_project
-        .as_deref_mut()
-        .ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
+    s.printset_project.as_deref_mut().ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
 }
 
 /// Access the current printset project from other modules (readers).
@@ -64,11 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{stages?: [name], resume?: bool} → {stages_run, total_items, elapsed_ms}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard)
-            .files()
-            .params("{} → {dashboard}")
-            .enabled(always)
-            .noundo(),
+        CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
             .files()
             .params("{discipline?, level?} → {sheets, total}")
@@ -79,11 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{path: folder, revision?: label, full_set?: bool} → {delta, sheets}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.save", "Save Print Set", run_save)
-            .files()
-            .params("{path?} → {saved}")
-            .enabled(always)
-            .noundo(),
+        CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
     ]
 }
 
@@ -134,10 +122,7 @@ fn run_stages(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Parse optional stage filter.
     let stage_filter: Option<Vec<mep_printset::Stage>> = p.get("stages").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(|v| v.as_str())
-            .filter_map(|name| mep_printset::Stage::all().iter().find(|s| s.name() == name).copied())
-            .collect()
+        arr.iter().filter_map(|v| v.as_str()).filter_map(|name| mep_printset::Stage::all().iter().find(|s| s.name() == name).copied()).collect()
     });
 
     let stages = stage_filter.as_deref().unwrap_or(&mep_printset::Stage::all()[1..]);

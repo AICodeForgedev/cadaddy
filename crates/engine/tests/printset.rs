@@ -10,22 +10,10 @@ use serde_json::json;
 
 #[test]
 fn printset_run_command_is_registered() {
-    assert!(
-        cadaddy_engine::cmd::find_by_id_or_alias("printset.run").is_some(),
-        "printset.run command should be registered"
-    );
-    assert!(
-        cadaddy_engine::cmd::find_by_id_or_alias("printset.open").is_some(),
-        "printset.open command should be registered"
-    );
-    assert!(
-        cadaddy_engine::cmd::find_by_id_or_alias("printset.classify").is_some(),
-        "printset.classify command should be registered"
-    );
-    assert!(
-        cadaddy_engine::cmd::find_by_id_or_alias("printset.dashboard").is_some(),
-        "printset.dashboard command should be registered"
-    );
+    assert!(cadaddy_engine::cmd::find_by_id_or_alias("printset.run").is_some(), "printset.run command should be registered");
+    assert!(cadaddy_engine::cmd::find_by_id_or_alias("printset.open").is_some(), "printset.open command should be registered");
+    assert!(cadaddy_engine::cmd::find_by_id_or_alias("printset.classify").is_some(), "printset.classify command should be registered");
+    assert!(cadaddy_engine::cmd::find_by_id_or_alias("printset.dashboard").is_some(), "printset.dashboard command should be registered");
 }
 
 #[test]
@@ -34,10 +22,7 @@ fn printset_run_without_project_gives_error() {
     let result = s.execute("printset.run", &json!({}));
     assert!(result.is_err(), "printset.run without a project should error");
     let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("printset.open"),
-        "error should mention printset.open: {err}"
-    );
+    assert!(err.contains("printset.open"), "error should mention printset.open: {err}");
 }
 
 // ─── Verify MUST 6: two sessions, independent projects ──────────────────────
@@ -98,11 +83,7 @@ fn full_hotel_through_command_path() {
 
     // printset.classify
     let classify_result = s.execute("printset.classify", &json!({})).expect("classify");
-    assert_eq!(
-        classify_result["classified"].as_u64().unwrap_or(0),
-        sheet_count,
-        "all sheets should be classified"
-    );
+    assert_eq!(classify_result["classified"].as_u64().unwrap_or(0), sheet_count, "all sheets should be classified");
 
     // printset.run (runs all stages; readers are stubs so items=0, but the command should work)
     let run_result = s.execute("printset.run", &json!({})).expect("run");

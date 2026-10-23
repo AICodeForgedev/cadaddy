@@ -346,13 +346,7 @@ pub type StageRunnerFn<'a> = dyn FnMut(Stage, &SheetEntry) -> SheetStageResult +
 
 /// A null stage runner that returns Completed with 0 items (for when readers are stubs).
 pub fn null_stage_runner(_stage: Stage, _sheet: &SheetEntry) -> SheetStageResult {
-    SheetStageResult {
-        stage: _stage.name().into(),
-        status: StageStatus::Completed,
-        items_found: 0,
-        confidence: 0.0,
-        ..SheetStageResult::default()
-    }
+    SheetStageResult { stage: _stage.name().into(), status: StageStatus::Completed, items_found: 0, confidence: 0.0, ..SheetStageResult::default() }
 }
 
 // ─── Content hashing (streaming FNV-1a) ─────────────────────────────────────
@@ -1098,11 +1092,7 @@ pub fn run_stages(
 
         let rec = StageRecord {
             stage: stage_name.into(),
-            status: if cancel.load(Ordering::Relaxed) {
-                StageStatus::Failed
-            } else {
-                StageStatus::Completed
-            },
+            status: if cancel.load(Ordering::Relaxed) { StageStatus::Failed } else { StageStatus::Completed },
             sheets_processed: processed,
             sheets_total: total,
             items_found: total_items,
@@ -1216,7 +1206,12 @@ pub fn count_truth_items(truth: &crate::truth::Truth, stage: Stage, level: &str,
 }
 
 /// Run the full pipeline (all stages in order) against truth data (test helper).
-pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &crate::truth::Truth, cancel: &AtomicBool, progress: &mut ProgressFn<'_>) -> Vec<StageRecord> {
+pub fn run_all_from_truth(
+    project: &mut PrintSetProject,
+    truth: &crate::truth::Truth,
+    cancel: &AtomicBool,
+    progress: &mut ProgressFn<'_>,
+) -> Vec<StageRecord> {
     let mut records = Vec::new();
 
     // Classify first (uses truth data directly since project was created from truth).
@@ -1299,10 +1294,8 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
                 // Level items.
                 if !sheet.level.is_empty() {
-                    let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary {
-                        level: sheet.level.clone(),
-                        ..LevelSummary::default()
-                    });
+                    let ls =
+                        levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary { level: sheet.level.clone(), ..LevelSummary::default() });
                     ls.items += result.items_found;
                     let (sum, cnt) = level_conf.entry(sheet.level.clone()).or_insert((0.0, 0));
                     *sum += result.confidence;
@@ -1311,10 +1304,9 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
                 // Discipline items.
                 if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
-                    let ds = disciplines.entry(sheet.discipline.clone()).or_insert_with(|| DisciplineSummary {
-                        discipline: sheet.discipline.clone(),
-                        ..DisciplineSummary::default()
-                    });
+                    let ds = disciplines
+                        .entry(sheet.discipline.clone())
+                        .or_insert_with(|| DisciplineSummary { discipline: sheet.discipline.clone(), ..DisciplineSummary::default() });
                     ds.items += result.items_found;
                     let (sum, cnt) = disc_conf.entry(sheet.discipline.clone()).or_insert((0.0, 0));
                     *sum += result.confidence;
@@ -1422,8 +1414,7 @@ pub fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)])
             // New file — could be a reissue under a different name. Check by hash among
             // all sheets to see if content matches but name differs.
             let reissue = project.sheets.iter().find(|s| {
-                s.content_hash != new_hash && s.file != *name
-                    && name.contains(&s.number) // heuristic: new name contains old number
+                s.content_hash != new_hash && s.file != *name && name.contains(&s.number) // heuristic: new name contains old number
             });
             if let Some(existing) = reissue {
                 delta.changed.push(existing.number_or_file());
@@ -1504,7 +1495,11 @@ pub fn apply_reimport(
             // the one it replaces as superseded.
             let up = name.to_ascii_uppercase();
             let reissue_idx = project.sheets.iter().position(|s| {
-                !s.number.is_empty() && s.page <= 1 && s.file != *name && folder(&s.file) == folder(name) && up.contains(&s.number.to_ascii_uppercase())
+                !s.number.is_empty()
+                    && s.page <= 1
+                    && s.file != *name
+                    && folder(&s.file) == folder(name)
+                    && up.contains(&s.number.to_ascii_uppercase())
             });
             if let Some(e) = reissue_idx.and_then(|i| project.sheets.get_mut(i)) {
                 // Reissue under a new file name = "changed".
