@@ -210,7 +210,12 @@ pub struct Design {
 }
 
 pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
-    let mut t = Truth { schema: SCHEMA.into(), seed, ..Truth::default() };
+    design_scheduled(seed, st, r, 4.0, 4.0)
+}
+
+/// Like [`design`] but with custom sprinkler head schedule values (inches).
+pub fn design_scheduled(seed: u64, st: &Style, r: &mut Rng, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Design {
+    let mut t = Truth { schema: SCHEMA.into(), seed, fp_sprig_in: Some(fp_sprig_in), fp_sidewall_below_in: Some(fp_sidewall_below_in), ..Truth::default() };
     let names = ["HARBOR POINT", "MAPLE CROSSING", "CEDAR HOLLOW", "BLUE HERON", "RIVERSTONE", "OAK MEADOW", "IRON BRIDGE", "WILLOW BEND"];
     let kinds = ["OFFICE BUILDING", "COMMONS", "BUSINESS CENTER", "OFFICE PAVILION"];
     t.project = format!("{} {}", r.pick(&names), r.pick(&kinds));
@@ -624,7 +629,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     // Heads offset from their branch line on armovers; sidewall heads along the corridor.
     let armovers = sprk.chance(0.5);
     let sidewall = sprk.chance(0.4);
-    let sprig = 4.0 / 12.0;
+    let sprig = t.fp_sprig_in.unwrap_or(4.0) / 12.0;
+    let sw_offset = t.fp_sidewall_below_in.unwrap_or(4.0) / 12.0;
     let set_mount = |t: &mut Truth, id: &str, mount: &str, tag: &str| {
         if let Some(tm) = t.terminals.iter_mut().find(|x| x.id == id) {
             tm.mount = Some(mount.into());
@@ -968,7 +974,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                     let wy = y2 - 0.33;
                     let a = net.node("", "FP", lv, [*x, wy, fz]);
                     net.link(n, a, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
-                    (a, [*x, wy, e + f.corr_clg - sprig], "sidewall", "SH-3")
+                    (a, [*x, wy, e + f.corr_clg - sw_offset], "sidewall", "SH-3")
                 } else {
                     (n, [*x, y_fp, e + f.corr_clg], "pendent", "SH-1")
                 };

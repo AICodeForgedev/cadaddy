@@ -523,9 +523,9 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("pipe_fp_main", "SPRINKLER MAIN"));
             legend.push(item("pipe_fp", "SPRINKLER BRANCH LINE"));
             legend.push(item("sprinkler_head", "PENDENT SPRINKLER HEAD (SH-1)"));
-            legend.push(item("sprinkler_upright", "UPRIGHT SPRINKLER HEAD ON 4\" SPRIG (SH-2)"));
+            legend.push(item("sprinkler_upright", &format!("UPRIGHT SPRINKLER HEAD ON {}\" SPRIG (SH-2)", t.fp_sprig_in.unwrap_or(4.0) as u32)));
             if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
-                legend.push(item("sprinkler_sidewall", "SIDEWALL SPRINKLER HEAD, 4\" BELOW CEILING (SH-3)"));
+                legend.push(item("sprinkler_sidewall", &format!("SIDEWALL SPRINKLER HEAD, {}\" BELOW CEILING (SH-3)", t.fp_sidewall_below_in.unwrap_or(4.0) as u32)));
             }
             legend.push(item("riser_up", "RISER UP"));
             legend.push(item("riser_down", "RISER DOWN"));
@@ -2173,10 +2173,10 @@ fn fp_schedules(pen: &mut Pen, t: &Truth) {
     let mut heads = vec![
         s(&["TAG", "TYPE", "K", "TEMP", "FINISH", "WHERE"]),
         s(&["SH-1", "PENDENT", "5.6", "155F", "CHROME", "IN CEILINGS"]),
-        s(&["SH-2", "UPRIGHT", "5.6", "155F", "BRASS", "OPEN TO STRUCTURE, 4\" SPRIG"]),
+        s(&["SH-2", "UPRIGHT", "5.6", "155F", "BRASS", &format!("OPEN TO STRUCTURE, {}\" SPRIG", t.fp_sprig_in.unwrap_or(4.0) as u32)]),
     ];
     if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
-        heads.push(s(&["SH-3", "HORIZ SIDEWALL", "5.6", "155F", "WHITE", "4\" BELOW CEILING"]));
+        heads.push(s(&["SH-3", "HORIZ SIDEWALL", "5.6", "155F", "WHITE", &format!("{}\" BELOW CEILING", t.fp_sidewall_below_in.unwrap_or(4.0) as u32)]));
     }
     let mut pipes = vec![s(&["PIPE", "MAX HEADS"])];
     for (d, n) in crate::design::PIPE_SCHEDULE {

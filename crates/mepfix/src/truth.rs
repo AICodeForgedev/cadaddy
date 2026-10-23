@@ -92,6 +92,12 @@ pub struct Truth {
     /// Planted gaps and conflicts for the RFI helper (Q296).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
+    /// Fire protection head schedule: sprig length (inches) for upright heads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp_sprig_in: Option<f64>,
+    /// Fire protection head schedule: sidewall offset below ceiling (inches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp_sidewall_below_in: Option<f64>,
     // --- Unit types (Q305) ---
     /// Typical unit types: room templates that repeat across floors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

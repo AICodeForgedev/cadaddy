@@ -154,6 +154,13 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     generate_set(seed, false)
 }
 
+/// The fixture set for a seed with custom fire protection head schedule values (inches).
+pub fn generate_with_fp_schedule(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Result<FixtureSet, String> {
+    let (mut t, st, kinds) = designed_set_scheduled(seed, fp_sprig_in, fp_sidewall_below_in);
+    let files = draw_set(&mut t, &st, &kinds)?;
+    Ok(FixtureSet { truth: t, files })
+}
+
 /// The fixture set for a seed with gaps and conflicts planted in its prints ([`gaps`]): the
 /// same set plus the planted gaps, sleeve notes and an enlarged architectural plan (`A-401`).
 pub fn generate_with_gaps(seed: u64) -> Result<FixtureSet, String> {
@@ -199,6 +206,27 @@ pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, 
             kinds.push((gaps::ENLARGED_SHEET.into(), layout::Kind::EnlargedFloor("1".into(), "TOILET".into())));
         }
     }
+    (t, st, kinds)
+}
+
+/// Like [`designed_set`] but with custom fire protection head schedule values.
+fn designed_set_scheduled(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
+    let mut r = Rng::new(seed);
+    let mut st = style::Style::new(&mut r.fork(1));
+    let d = design::design_scheduled(seed, &st, &mut r.fork(2), fp_sprig_in, fp_sidewall_below_in);
+    let mut t = d.truth;
+    layout::plan_sheets(&mut t, &st, &mut r.fork(3));
+    layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
+    layout::tag_trays(&mut t, &st);
+    layout::plan_callouts(&mut t, &mut r.fork(5));
+    t.clashes = clash::clashes(&t, &d.planted);
+    t.placement_zones = clash::placement_zones(&t);
+    add_walls(&mut t, &mut st);
+    add_ceilings(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
+    add_envelope(&mut t, &mut st);
+    elecspec::design(&mut t);
+    let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     (t, st, kinds)
 }
 
