@@ -178,6 +178,37 @@ mod tests {
         s.doc().unwrap().model.iter().count()
     }
 
+    /// MUST 4a: a guarded command that panics via Session::execute writes exactly one crash
+    /// report naming that command, with a `panicked at` location from the hook.
+    #[test]
+    fn a_guarded_panic_writes_a_crash_report() {
+        let dir = std::env::temp_dir()
+            .join(format!("cadaddy-crash-guard-{}", std::process::id()));
+        crate::crash_report::set_store_dir(Some(dir.clone()));
+        crate::crash_report::install_hook();
+
+        let mut s = Session::new();
+        // A panic in `begin`: the guard catches it and calls crash_report::record.
+        let e = start(&mut s, "begin").unwrap_err();
+        assert!(matches!(&e, EngineError::Internal(..)));
+
+        let reports = crate::crash_report::list();
+        assert_eq!(reports.len(), 1, "exactly one crash report: {reports:?}");
+        let text = &reports[0].1;
+        let lower = text.to_ascii_lowercase();
+        assert!(
+            lower.contains("command: panictest"),
+            "report names the command: {text}"
+        );
+        assert!(
+            text.contains("panicked at"),
+            "report has a panic location: {text}"
+        );
+
+        crate::crash_report::set_store_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn panics_in_a_command_machine_end_the_command_not_the_app() {
         // Factory and begin: an internal error, nothing running, the drawing as it was.
