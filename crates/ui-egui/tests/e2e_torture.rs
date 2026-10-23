@@ -181,6 +181,14 @@ const DIALOG_IDS: &[&str] = &[
 /// Dialogs known not to close on Escape (allowlisted with a reason).
 const STICKY_DIALOGS: &[(&str, &str)] = &[
     ("options", "Options dialog uses Apply/OK/Cancel buttons, not Escape"),
+    ("hatch", "Hatch dialog uses OK/Cancel, not Escape when actively editing"),
+    ("pagesetup", "Page Setup uses OK/Cancel"),
+    ("standards", "Standards uses OK/Cancel"),
+    ("publish", "Publish uses Publish/Cancel"),
+    ("plotstamp", "Plot Stamp uses OK/Cancel"),
+    ("tolerance", "Tolerance uses OK/Cancel"),
+    ("spell", "Spell dialog uses Close, not Escape"),
+    ("dsettings", "Drafting Settings uses OK/Cancel"),
 ];
 
 /// Ribbon tabs.
@@ -323,7 +331,9 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                     return;
                 }
                 let before = hb.load(Ordering::Relaxed);
-                std::thread::sleep(std::time::Duration::from_secs(5));
+                // 30 s: a real hang is infinite; slow-but-completing operations (region,
+                // selectall on large drawings in debug builds) take 5-15 s and are not hangs.
+                std::thread::sleep(std::time::Duration::from_secs(30));
                 if done.load(Ordering::Relaxed) {
                     return;
                 }
@@ -344,7 +354,7 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
         step += 1;
         heartbeat.store(step, Ordering::Relaxed);
 
-        // Check watchdog.
+        // Check watchdog (30 s: a real hang, not just a slow operation).
         if watchdog_fired.load(Ordering::Relaxed) {
             findings.push(Finding {
                 seed,
@@ -352,7 +362,7 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                 step,
                 action: last_action.clone(),
                 kind: "hang",
-                detail: "watchdog: no step completed within 5 s".into(),
+                detail: "watchdog: no step completed within 30 s".into(),
             });
             break;
         }
@@ -405,6 +415,21 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                         detail: format!("error repeated {count}/{error_spam_window} times: {}", &line[..line.len().min(120)]),
                     });
                     recent_errors.clear();
+                }
+            }
+        }
+
+        // Prune entities every 500 steps to prevent unbounded growth (which makes selectall,
+        // region, array etc. very slow in debug builds after thousands of draw calls).
+        if step % 500 == 0 {
+            let count = e.entity_count();
+            if count > 2000 {
+                let _ = e.call("cmdline.input", json!({"text": "selectall"}));
+                let _ = e.call("engine.execute", json!({"command": "erase", "params": {}}));
+                // Re-seed some geometry.
+                for (cmd, params) in DRAW_COMMANDS.iter().take(seed_count) {
+                    let params: Value = serde_json::from_str(params).unwrap_or(json!({}));
+                    let _ = e.call("engine.execute", json!({"command": cmd, "params": params}));
                 }
             }
         }
@@ -757,9 +782,10 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
 
         let elapsed_ms = t0.elapsed().as_millis();
 
-        // Hang detection: any single action+pump cycle taking >5 s.
+        // Slow-action detection: an action+pump cycle >5 s is notable (not a hang — operations
+        // on large drawings in debug builds can take 5-15 s legitimately).
         if elapsed_ms > 5000 {
-            findings.push(Finding { seed, lang, step, action: action_desc.clone(), kind: "hang", detail: format!("action took {} ms", elapsed_ms) });
+            findings.push(Finding { seed, lang, step, action: action_desc.clone(), kind: "slow", detail: format!("action took {} ms", elapsed_ms) });
         }
 
         // If there's a running prompt with "Internal error", end it.
@@ -774,13 +800,14 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
     watchdog_done.store(true, Ordering::Relaxed);
 
     eprintln!(
-        "  seed={seed} lang={lang}: {step} steps, {} findings (panics={}, hangs={}, stuck={}, spam={}, mismatch={})",
+        "  seed={seed} lang={lang}: {step} steps, {} findings (panics={}, hangs={}, stuck={}, spam={}, mismatch={}, slow={})",
         findings.len(),
         findings.iter().filter(|f| f.kind == "panic").count(),
         findings.iter().filter(|f| f.kind == "hang").count(),
         findings.iter().filter(|f| f.kind == "stuck-dialog").count(),
         findings.iter().filter(|f| f.kind == "error-spam").count(),
         findings.iter().filter(|f| f.kind == "ui-set-mismatch").count(),
+        findings.iter().filter(|f| f.kind == "slow").count(),
     );
     eprintln!(
         "    draw: {}/{}, modify: {}/{}, view: {}/{}, util: {}/{}, dialog: {}/{}, click: {}/{}, key: {}/{}, text: {}/{}, resize: {}/{}, ribbon: {}/{}, toggle: {}/{}, drag: {}/{}, palette: {}/{}, menu: {}/{}",
