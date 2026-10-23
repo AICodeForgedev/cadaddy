@@ -137,6 +137,10 @@ pub struct BuildingSpec {
     /// agent should confirm.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub guess: BTreeMap<String, String>,
+    /// Hashed signatures of the sheet's print objects at the time of the first revision compare,
+    /// so later compares keep user markup (objects not in this set).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub print_baseline: Vec<u64>,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -2049,6 +2053,7 @@ impl BuildingSpec {
             openings: r.openings.clone(),
             approved: Vec::new(),
             guess: BTreeMap::new(),
+            print_baseline: Vec::new(),
         }
     }
 
