@@ -189,6 +189,9 @@ pub struct CommandSpec {
     pub enabled: Enabled,
     pub run: Run,
     pub undoable: bool,
+    /// The command restores a drawing from the undo/redo history: the follow-ups (associative
+    /// dimensions, groups, tables, fields…) must not run on the restored drawing.
+    pub restores_history: bool,
     pub interactive: Option<Factory>,
     /// Can run inside another command with a leading apostrophe.
     pub transparent: bool,
@@ -261,6 +264,7 @@ impl CommandSpec {
             enabled: has_doc,
             run,
             undoable: true,
+            restores_history: false,
             interactive: None,
             transparent: false,
             help: "",
@@ -316,6 +320,12 @@ impl CommandSpec {
     }
     pub const fn noundo(mut self) -> Self {
         self.undoable = false;
+        self
+    }
+    /// It restores a drawing from the undo/redo history: the after-command follow-ups must not
+    /// run on the restored drawing (they would take restored objects for moved ones).
+    pub const fn restores_history(mut self) -> Self {
+        self.restores_history = true;
         self
     }
     pub const fn interactive(mut self, f: Factory) -> Self {
