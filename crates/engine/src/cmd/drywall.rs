@@ -8,11 +8,11 @@
 //! an `assembly` of layers), `walls` (marks on the plans giving each wall a type and height), and
 //! WALLGEN's `type:<name>` xdata tag on 3D wall meshes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle, Mesh};
 use cadaddy_geom::Vec3;
-use cadaddy_walk3d::{Assembly, AssemblyLayer, BuildingSpec, HeightRule, LayerSide};
+use cadaddy_walk3d::{Assembly, AssemblyLayer, BuildingSpec, Head, HeadTo, HeadTrack, HeightRule, LayerSide};
 use serde_json::{Value, json};
 
 use super::wallgen;
@@ -25,10 +25,10 @@ const MAX_WALLS: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("wall.info", "Wall Info", run_info)
-            .params("{handle? | handles? (default: selection)} → {walls: [{handle, level, wallType, assembly?: {tag, description, layers: [{material, thickness, side, category, inCavity}], height?, fireRating?, acousticRating?, external, thickness}, grossAreaSqFt?, finishFaces?: [{side, room, board, finish}]}, ...], count}")
+            .params("{handle? | handles? (default: selection)} → {walls: [{handle, level, wallType, assembly?: {tag, description, layers: [{material, thickness, side, category, inCavity}], height?, fireRating?, acousticRating?, external, thickness, head?: {track, trackKind, to (deck|ceiling), deflectionIn?, bottomTrack, detail?, text}}, grossAreaSqFt?, finishFaces?: [{side, room, board, finish}]}, ...], count}")
             .noundo(),
         CommandSpec::new("drywall.takeoff", "Drywall Takeoff", run_takeoff)
-            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv), groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\")} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt}, insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], totals, waste}")
+            .params("{handles? | levels?: [name, ...] | wallTypes?: [name, ...] | rooms?: [name, ...], waste?: percent (default 10), sheetSize?: [w,h] feet (default [4,8]), file?: path (.csv), groupBy?: \"level\" | \"room\" | \"wallType\" (default \"wallType\"), ceilings?: bool (default true; off when handles, wallTypes or rooms are given)} → {rows: [{group, boards: [{material, thicknessIn, side, areaSqFt, sheets, sheetSize}], studs: {lengthFt, count, material, spacingIn}, track: {lengthFt} (plain top and bottom track), headTrack: [{part: top track|bottom track, wallType, material, lengthFt}] (walls marked on the plans whose type has a head of wall, by kind; a double track or angles count both runs), insulation: {areaSqFt, material}, cornerBead: {lengthFt}, trim: {lengthFt}}], ceilings: [{level, part: ceiling|ceiling framing|soffit bottom|soffit sides|soffit framing, assembly, material, layer, quantity, unit: sf|lf, sheets?}] (the spec's ceiling and soffit types, as rcp.takeoff), totals (boardAreaSqFt and sheets: walls; ceilingBoardAreaSqFt, soffitBoardAreaSqFt, ceilingSheets, ceilingFramingLengthFt; trackLengthFt = plain + head + bottom track, each wall once), waste}")
             .noundo(),
         CommandSpec::new("drywall.viewmode", "Drywall View Mode", run_viewmode)
             .params("{mode: \"type\" | \"rating\" | \"boardLayers\" | \"heightRule\" | \"off\"} → {mode, legend: [{label, color}]}")
@@ -144,7 +144,40 @@ fn assembly_json(asm: &Assembly) -> Value {
     if !asm.notes.is_empty() {
         v["notes"] = json!(asm.notes);
     }
+    if let Some(h) = &asm.head {
+        v["head"] = head_json(h);
+    }
     v
+}
+
+/// A wall type's head of wall: its track, what it goes up to, the deflection it takes, the bottom
+/// track and the detail.
+fn head_json(h: &Head) -> Value {
+    let (track, kind) = head_track_names(h.track);
+    let mut v = json!({
+        "track": track,
+        "trackKind": kind,
+        "to": match h.to { HeadTo::Deck => "deck", HeadTo::Ceiling => "ceiling" },
+        "bottomTrack": h.bottom_track,
+        "text": h.text(),
+    });
+    if let Some(d) = h.deflection_in.filter(|d| d.is_finite()) {
+        v["deflectionIn"] = json!(d);
+    }
+    if let Some(d) = &h.detail {
+        v["detail"] = json!(d);
+    }
+    v
+}
+
+/// A head track's name as the wall inspector shows it, and its kind as the spec writes it.
+fn head_track_names(t: HeadTrack) -> (&'static str, &'static str) {
+    match t {
+        HeadTrack::Single => ("top track", "single"),
+        HeadTrack::Deflection => ("slotted deflection track", "deflection"),
+        HeadTrack::Double => ("double (nested) track", "double"),
+        HeadTrack::Angle => ("steel angles each side", "angle"),
+    }
 }
 
 fn side_str(s: LayerSide) -> &'static str {
@@ -192,7 +225,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Collect all WALLGEN wall meshes.
     let wall_entities = collect_walls(d, &sp);
-    if wall_entities.is_empty() {
+    if wall_entities.is_empty() && sp.rcp.ceilings.is_empty() && sp.rcp.soffits.is_empty() {
         return Ok(json!({ "rows": [], "totals": {}, "waste": waste_pct }));
     }
 
@@ -203,6 +236,9 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     let room_filter = str_array_param(p, "rooms");
 
     let room_map = if group_by == "room" || room_filter.is_some() { Some(build_room_map(d, &sp)) } else { None };
+    // Ceilings and soffits have no wall handle, type or room side: only the level filter applies.
+    let with_ceilings =
+        p.get("ceilings").and_then(Value::as_bool).unwrap_or(true) && handle_filter.is_none() && type_filter.is_none() && room_filter.is_none();
 
     let filtered: Vec<&WallData> = wall_entities
         .iter()
@@ -265,6 +301,8 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     let mut total_insulation_area = 0.0_f64;
     let mut total_trim_ft = 0.0_f64;
     let mut total_corner_bead_ft = 0.0_f64;
+    let mut total_head_ft = 0.0_f64;
+    let mut total_bottom_ft = 0.0_f64;
 
     for (group_name, walls) in &groups {
         let mut board_rows: Vec<Value> = Vec::new();
@@ -280,9 +318,15 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 
         // Accumulate per board type (material + thickness + side).
         let mut board_totals: BTreeMap<(String, String, String), f64> = BTreeMap::new();
+        // The plan's wall marks whose head of wall these walls take their track from.
+        let mut head_marks: BTreeSet<usize> = BTreeSet::new();
 
         for wd in walls {
             let net = wd.net_area_sqft();
+            let head_mark = head_mark(&sp, wd);
+            if let Some(i) = head_mark {
+                head_marks.insert(i);
+            }
             let wall_height_ft = wd.height_ft;
             let wall_length_ft = wd.length_ft;
 
@@ -303,7 +347,10 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
                                 stud_material = layer.material.clone();
                                 stud_spacing = spacing;
                             }
-                            track_length += wall_length_ft * 2.0; // top and bottom track
+                            // Top and bottom track; a wall with a head of wall has its track by kind below.
+                            if head_mark.is_none() {
+                                track_length += wall_length_ft * 2.0;
+                            }
                         }
                         _ if layer.in_cavity => {
                             insul_area += net;
@@ -365,6 +412,19 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         total_trim_ft += trim_length;
         total_corner_bead_ft += corner_bead_length;
 
+        let head_rows = head_track(&sp, &head_marks);
+        for r in &head_rows {
+            if r.part == "bottom track" {
+                total_bottom_ft += r.quantity;
+            } else {
+                total_head_ft += r.quantity;
+            }
+        }
+        let head_json: Vec<Value> = head_rows
+            .iter()
+            .map(|r| json!({"part": r.part, "wallType": r.assembly, "material": r.material, "lengthFt": (r.quantity * 100.0).round() / 100.0}))
+            .collect();
+
         let mut studs_json = json!({ "lengthFt": (stud_length * 100.0).round() / 100.0, "material": stud_material });
         if stud_count_total > 0 {
             studs_json["count"] = json!(stud_count_total);
@@ -376,30 +436,113 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             "boards": board_rows,
             "studs": studs_json,
             "track": { "lengthFt": (track_length * 100.0).round() / 100.0 },
+            "headTrack": head_json,
             "insulation": { "areaSqFt": (insul_area * 100.0).round() / 100.0, "material": insul_material },
             "cornerBead": { "lengthFt": (corner_bead_length * 100.0).round() / 100.0 },
             "trim": { "lengthFt": (trim_length * 100.0).round() / 100.0 },
         }));
     }
 
-    // Write CSV if requested.
-    if let Some(path) = str_param(p, "file") {
-        write_takeoff_csv(path, &rows, waste_pct)?;
+    // Ceilings and soffits: board by type and layer, framing (the wall track is in the rows).
+    let mut ceilings = Vec::new();
+    let (mut ceiling_sf, mut soffit_sf, mut ceiling_framing_ft) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let mut ceiling_sheets = 0_u64;
+    if with_ceilings {
+        let sheet_area = sheet_w * sheet_h;
+        for r in cadaddy_walk3d::takeoff(&sp).rows {
+            if matches!(r.part.as_str(), "top track" | "bottom track")
+                || level_filter.as_ref().is_some_and(|ls| !ls.iter().any(|l| l.eq_ignore_ascii_case(&r.level)))
+            {
+                continue;
+            }
+            match r.part.as_str() {
+                "ceiling" => ceiling_sf += r.quantity,
+                "soffit bottom" | "soffit sides" => soffit_sf += r.quantity,
+                _ => ceiling_framing_ft += r.quantity,
+            }
+            let mut v = json!({"level": r.level, "part": r.part, "assembly": r.assembly, "material": r.material, "layer": r.layer,
+                "quantity": (r.quantity * 100.0).round() / 100.0, "unit": r.unit});
+            if r.unit == "sf" && !r.material.to_ascii_lowercase().contains("tile") {
+                let sheets = (r.quantity * (1.0 + waste_pct / 100.0) / sheet_area).ceil() as u64;
+                ceiling_sheets += sheets;
+                v["sheets"] = json!(sheets);
+            }
+            ceilings.push(v);
+        }
     }
 
+    // Write CSV if requested.
+    if let Some(path) = str_param(p, "file") {
+        write_takeoff_csv(path, &rows, &ceilings, waste_pct)?;
+    }
+
+    let r2 = |x: f64| (x * 100.0).round() / 100.0;
     Ok(json!({
         "rows": rows,
+        "ceilings": ceilings,
         "totals": {
             "boardAreaSqFt": (total_board_area * 100.0).round() / 100.0,
             "sheets": total_sheets,
             "studLengthFt": (total_stud_ft * 100.0).round() / 100.0,
-            "trackLengthFt": (total_track_ft * 100.0).round() / 100.0,
+            "trackLengthFt": r2(total_track_ft + total_head_ft + total_bottom_ft),
+            "headTrackLengthFt": r2(total_head_ft),
+            "bottomTrackLengthFt": r2(total_bottom_ft),
+            "ceilingBoardAreaSqFt": r2(ceiling_sf),
+            "soffitBoardAreaSqFt": r2(soffit_sf),
+            "ceilingFramingLengthFt": r2(ceiling_framing_ft),
+            "ceilingSheets": ceiling_sheets,
             "insulationAreaSqFt": (total_insulation_area * 100.0).round() / 100.0,
             "cornerBeadLengthFt": (total_corner_bead_ft * 100.0).round() / 100.0,
             "trimLengthFt": (total_trim_ft * 100.0).round() / 100.0,
         },
         "waste": waste_pct,
     }))
+}
+
+/// The plan wall mark a WALLGEN wall stands on, when its type has a head of wall: same level and
+/// type, the wall's middle within half its thickness (and 6") of the mark, running along it.
+fn head_mark(sp: &BuildingSpec, wd: &WallData) -> Option<usize> {
+    let asm = wd.assembly.as_ref()?;
+    asm.head.as_ref()?;
+    let tn = wd.type_name.as_deref()?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let t = asm.thickness_in();
+    let tol = if t.is_finite() { (t / 24.0).clamp(0.0, 10.0) + 0.5 } else { 0.5 };
+    let m = wd.centreline.mid;
+    sp.walls.iter().enumerate().take(MAX_WALLS).find_map(|(i, w)| {
+        if !w.level.eq_ignore_ascii_case(&wd.level) || !w.wall_type.eq_ignore_ascii_case(tn) {
+            return None;
+        }
+        let (a, b) = ([w.a[0] / upf, w.a[1] / upf], [w.b[0] / upf, w.b[1] / upf]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = dx.hypot(dy);
+        if !(len.is_finite() && len > 1e-9) {
+            return None;
+        }
+        // A wall across the mark (a corner) isn't on it.
+        let n = wd.centreline.normal;
+        if ((dx * n[0] + dy * n[1]) / len).abs() > 0.75 {
+            return None;
+        }
+        let u = (((m[0] - a[0]) * dx + (m[1] - a[1]) * dy) / (len * len)).clamp(0.0, 1.0);
+        let dist = (m[0] - a[0] - u * dx).hypot(m[1] - a[1] - u * dy);
+        (dist <= tol).then_some(i)
+    })
+}
+
+/// The top and bottom track of the plan's wall marks `marks` by kind, by the same rules as
+/// `rcp.takeoff` (a double track and head angles count both runs).
+fn head_track(sp: &BuildingSpec, marks: &BTreeSet<usize>) -> Vec<cadaddy_walk3d::TakeoffRow> {
+    if marks.is_empty() {
+        return Vec::new();
+    }
+    let only = BuildingSpec {
+        units_per_foot: sp.units_per_foot,
+        wall_types: sp.wall_types.clone(),
+        walls: marks.iter().filter_map(|i| sp.walls.get(*i).cloned()).collect(),
+        ..BuildingSpec::default()
+    };
+    cadaddy_walk3d::takeoff(&only).rows
 }
 
 /// Extract spacing in inches from a layer's material description or its `spacing_in` field.
@@ -887,7 +1030,7 @@ fn mesh_wall_dims(mesh: &Mesh, units_per_ft: f64) -> (f64, f64) {
 }
 
 /// Write takeoff data to a CSV file with properly escaped fields.
-fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
+fn write_takeoff_csv(path: &str, rows: &[Value], ceilings: &[Value], waste: f64) -> Result<()> {
     use std::io::Write;
     let mut f = std::fs::File::create(path).map_err(|e| bad("drywall.takeoff", format!("cannot write {path}: {e}")))?;
     writeln!(f, "Group,Material,Thickness (in),Side,Area (sq ft),Sheets,Sheet Size,Stud Length (ft),Track Length (ft),Insulation Area (sq ft),Trim Length (ft),Waste %")
@@ -917,6 +1060,24 @@ fn write_takeoff_csv(path: &str, rows: &[Value], waste: f64) -> Result<()> {
             writeln!(f, "{},,,,,,,{stud_ft:.2},{track_ft:.2},{insul:.2},{trim:.2},", csv_escape(group))
                 .map_err(|e| bad("drywall.takeoff", e.to_string()))?;
         }
+        for h in row["headTrack"].as_array().into_iter().flatten() {
+            let mat = h["material"].as_str().unwrap_or("");
+            let len = h["lengthFt"].as_f64().unwrap_or(0.0);
+            writeln!(f, "{},{},,,,,,,{len:.2},,,", csv_escape(group), csv_escape(mat)).map_err(|e| bad("drywall.takeoff", e.to_string()))?;
+        }
+    }
+    // Ceilings and soffits: board in the area column, framing in the stud length column.
+    for c in ceilings {
+        let group = format!("{} {} ({})", c["part"].as_str().unwrap_or(""), c["assembly"].as_str().unwrap_or(""), c["level"].as_str().unwrap_or(""));
+        let mat = c["material"].as_str().unwrap_or("");
+        let q = c["quantity"].as_f64().unwrap_or(0.0);
+        let line = if c["unit"] == "sf" {
+            let sheets = c["sheets"].as_u64().map(|n| n.to_string()).unwrap_or_default();
+            format!("{},{},,,{q:.2},{sheets},,,,,,{waste:.1}", csv_escape(&group), csv_escape(mat))
+        } else {
+            format!("{},{},,,,,,{q:.2},,,,", csv_escape(&group), csv_escape(mat))
+        };
+        writeln!(f, "{line}").map_err(|e| bad("drywall.takeoff", e.to_string()))?;
     }
     Ok(())
 }

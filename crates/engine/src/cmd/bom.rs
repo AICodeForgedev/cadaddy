@@ -603,7 +603,65 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 ..Line::default()
             },
         );
+        // Head of wall and bottom track by kind (these walls' track is here, not in "Track").
+        for h in r["headTrack"].as_array().into_iter().flatten() {
+            add(
+                lines,
+                Line {
+                    trade: "drywall",
+                    category: "drywall".into(),
+                    item: capitalised(h["material"].as_str().unwrap_or("track")),
+                    unit: "ft",
+                    net: h["lengthFt"].as_f64().unwrap_or(0.0),
+                    status: "model",
+                    rule: Some(format!(
+                        "{} at the head of wall type {}",
+                        h["part"].as_str().unwrap_or("track"),
+                        h["wallType"].as_str().unwrap_or_default()
+                    )),
+                    ..Line::default()
+                },
+            );
+        }
     }
+    // Ceilings and soffits: board by type and layer, framing by type.
+    for c in q["ceilings"].as_array().into_iter().flatten() {
+        let part = c["part"].as_str().unwrap_or_default();
+        let what = match part {
+            "ceiling" => "Ceiling board",
+            "soffit bottom" => "Soffit bottom board",
+            "soffit sides" => "Soffit side board",
+            "ceiling framing" => "Ceiling framing",
+            "soffit framing" => "Soffit framing",
+            _ => continue,
+        };
+        let assembly = c["assembly"].as_str().unwrap_or_default();
+        let sf = c["unit"] == "sf";
+        let size = match c["layer"].as_u64().filter(|_| sf) {
+            Some(n) => format!("type {assembly}, layer {n}"),
+            None => format!("type {assembly}"),
+        };
+        add(
+            lines,
+            Line {
+                trade: "drywall",
+                category: "drywall".into(),
+                item: format!("{what} {}", c["material"].as_str().unwrap_or_default()),
+                size,
+                unit: if sf { "sq ft" } else { "ft" },
+                net: c["quantity"].as_f64().unwrap_or(0.0),
+                status: "model",
+                level: c["level"].as_str().unwrap_or_default().to_string(),
+                ..Line::default()
+            },
+        );
+    }
+}
+
+/// `s` with its first letter upper case.
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 /// Concrete from the concrete takeoff: the elements in our scope as lines; the rest listed by
