@@ -18,6 +18,7 @@ use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, R
 use cadaddy_geom::{Vec2, Vec3};
 use cadaddy_walk3d::{BuildingSpec, DuctType, MepKind, MepRun, MepSystem, level_at};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::bspec::{current, plan_objects};
@@ -475,12 +476,20 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- in 3D ----------------
 
-/// What kind of piece a segment of a run is (straight duct or a fitting).
+/// What kind of piece of a run it is: a straight segment, or a fitting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FittingKind {
     Segment,
     Elbow,
     Drop,
+    /// Where a run meets another's side, or three runs meet end to end.
+    Tee,
+    /// Four or more runs at one point.
+    Cross,
+    /// A change of size between two runs meeting end to end (rectangular on either side).
+    Transition,
+    /// A change of size between two round runs.
+    Reducer,
 }
 
 /// A run's pieces, sheet units: straight segments and fittings, each `(a, b, z0)` along the
@@ -494,7 +503,8 @@ struct Piece {
     kind: FittingKind,
     /// The size, inches `[w, h]`.
     size_a: [f64; 2],
-    /// For elbows: the incoming and outgoing directions (unit vectors) at the turn.
+    /// For elbows: the incoming and outgoing directions (unit vectors) at the turn; drops: the
+    /// direction the duct comes in.
     dir_in: Vec2,
     dir_out: Vec2,
 }
@@ -515,32 +525,81 @@ impl Piece {
     }
 }
 
-/// The run as pieces: its segments (and, at a drop, the riser between their heights; at each
-/// turn or drop a fitting the size of the section). Returns `(pieces, counts)`.
-fn pieces(run: &MepRun, base_z: f64, upf: f64) -> (Vec<Piece>, PieceCounts) {
-    let h = if run.size_in[1] > 0.0 { run.size_in[1] } else { run.size_in[0] } / 12.0 * upf;
-    let pts: Vec<Vec2> = run.points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+/// The depth of a section, inches: a rectangle's height, a round one's diameter.
+fn depth_in(size: [f64; 2]) -> f64 {
+    if size[1] > 0.0 { size[1] } else { size[0] }
+}
+
+/// A unit vector from `a` to `b`, if they differ.
+fn unit(a: Vec2, b: Vec2) -> Option<Vec2> {
+    let l = a.dist(b);
+    (l > 1e-9).then(|| (b - a) * (1.0 / l))
+}
+
+/// Turning enough to be an elbow (about 5° or more).
+fn turns(u: Vec2, v: Vec2) -> bool {
+    u.cross(v).abs() > 0.09 || u.dot(v) < 0.0
+}
+
+/// The run as pieces: its segments, and at each corner a fitting the size of the section: an
+/// elbow where it turns in plan, a drop where its height changes by 1/16" or more (a zero-length segment is a
+/// vertical one: a riser between the heights around it). No elbow at `skip` (a tee is there).
+/// Returns `(pieces, counts)`.
+fn pieces(run: &MepRun, base_z: f64, upf: f64, skip: &[Vec2]) -> (Vec<Piece>, PieceCounts) {
+    let h = depth_in(run.size_in) / 12.0 * upf;
+    let pts: Vec<Vec2> = run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect();
+    let nseg = pts.len().saturating_sub(1);
+    let bottom = |i: usize| base_z + run.bottoms_ft.get(i).copied().unwrap_or(0.0) * upf;
+    let at = |i: usize| pts.get(i).copied().unwrap_or(Vec2::ZERO);
+    let dir = |i: usize| unit(at(i), at(i + 1));
+    let skipped = |p: Vec2| skip.iter().any(|q| q.dist(p) <= 1e-6 * upf.max(1.0));
     let mut out = Vec::new();
     let mut counts = PieceCounts::default();
-    for (i, w2) in pts.windows(2).enumerate() {
-        let [a, b] = [w2[0], w2[1]];
-        let z = base_z + run.bottoms_ft.get(i).copied().unwrap_or(0.0) * upf;
-        out.push(Piece::segment(a, b, z, z + h, run.size_in));
-        // The corner to the next segment.
-        if let Some(c) = pts.get(i + 2) {
-            let (u, v) = (b - a, *c - b);
-            let turn = u.len() > 1e-9 && v.len() > 1e-9 && (u.cross(v) / (u.len() * v.len())).abs() > 0.09;
-            let z2 = base_z + run.bottoms_ft.get(i + 1).copied().unwrap_or(0.0) * upf;
-            let dir_in = if u.len() > 1e-9 { u * (1.0 / u.len()) } else { Vec2::new(1.0, 0.0) };
-            let dir_out = if v.len() > 1e-9 { v * (1.0 / v.len()) } else { Vec2::new(1.0, 0.0) };
-            if (z2 - z).abs() > 1e-9 {
-                counts.drops += 1;
-                out.push(Piece::fitting(b, z.min(z2), z.max(z2) + h, FittingKind::Drop, run.size_in, dir_in, dir_out));
-            } else if turn {
-                counts.elbows += 1;
-                out.push(Piece::fitting(b, z, z + h, FittingKind::Elbow, run.size_in, dir_in, dir_out));
-            }
+    for i in 0..nseg {
+        if dir(i).is_some() {
+            let z = bottom(i);
+            out.push(Piece::segment(at(i), at(i + 1), z, z + h, run.size_in));
         }
+    }
+    let mut corner = |out: &mut Vec<Piece>, p: Vec2, zs: &[f64], din: Option<Vec2>, dout: Option<Vec2>| {
+        let lo = zs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = zs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (u, v) = match (din, dout) {
+            (Some(u), Some(v)) => (u, v),
+            (Some(u), None) => (u, u),
+            (None, Some(v)) => (v, v),
+            (None, None) => (Vec2::X, Vec2::X),
+        };
+        // Under a sixteenth of an inch is the same height (the numbers' rounding).
+        if hi - lo > upf / 192.0 {
+            counts.drops += 1;
+            out.push(Piece::fitting(p, lo, hi + h, FittingKind::Drop, run.size_in, u, v));
+        } else if din.is_some() && dout.is_some() && turns(u, v) && !skipped(p) {
+            counts.elbows += 1;
+            out.push(Piece::fitting(p, lo, lo + h, FittingKind::Elbow, run.size_in, u, v));
+        }
+    };
+    let mut i = 0;
+    while i < nseg {
+        if dir(i).is_none() {
+            // Vertical: the zero-length segments i..j, between the segments around them.
+            let mut j = i;
+            while j < nseg && dir(j).is_none() {
+                j += 1;
+            }
+            let mut zs: Vec<f64> = (i..j).map(bottom).collect();
+            let before = i.checked_sub(1);
+            let after = (j < nseg).then_some(j);
+            zs.extend(before.map(bottom));
+            zs.extend(after.map(bottom));
+            corner(&mut out, at(i), &zs, before.and_then(dir), after.and_then(dir));
+            i = j;
+            continue;
+        }
+        if i + 1 < nseg && dir(i + 1).is_some() {
+            corner(&mut out, at(i + 1), &[bottom(i), bottom(i + 1)], dir(i), dir(i + 1));
+        }
+        i += 1;
     }
     (out, counts)
 }
@@ -551,19 +610,237 @@ struct PieceCounts {
     drops: usize,
 }
 
+// ---- where runs meet ----
+
+/// One end of a run where it joins others: its plan point, height span (sheet units), size and
+/// the direction into the run (none for a vertical end).
+#[derive(Clone, Copy, Debug)]
+struct RunEnd {
+    run: usize,
+    at: Vec2,
+    z0: f64,
+    z1: f64,
+    size: [f64; 2],
+    into: Option<Vec2>,
+}
+
+/// A fitting where runs meet: a tee, cross, transition or reducer, with the ends it joins.
+#[derive(Clone, Debug)]
+struct Joint {
+    kind: FittingKind,
+    at: Vec2,
+    /// The run it is drawn with (its system's layer and source): the main run of a tee.
+    owner: usize,
+    ends: Vec<RunEnd>,
+}
+
+/// A run's geometry for finding its joints: the run (its sizes and bottoms), its plan points and
+/// its level's floor (sheet units).
+struct RunGeo<'a> {
+    run: &'a MepRun,
+    pts: Vec<Vec2>,
+    base_z: f64,
+}
+
+impl RunGeo<'_> {
+    fn bottom(&self, i: usize, upf: f64) -> f64 {
+        self.base_z + self.run.bottoms_ft.get(i).copied().unwrap_or(0.0) * upf
+    }
+    fn h(&self, upf: f64) -> f64 {
+        depth_in(self.run.size_in) / 12.0 * upf
+    }
+    /// The run's two ends (one for a single point).
+    fn ends(&self, idx: usize, upf: f64) -> Vec<RunEnd> {
+        let n = self.pts.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let nseg = n - 1;
+        let first_dir = (0..nseg).find_map(|i| unit(self.pts.get(i).copied()?, self.pts.get(i + 1).copied()?));
+        let last_dir = (0..nseg).rev().find_map(|i| unit(self.pts.get(i + 1).copied()?, self.pts.get(i).copied()?));
+        let h = self.h(upf);
+        let (b0, b1) = (self.bottom(0, upf), self.bottom(nseg - 1, upf));
+        let mut out = Vec::new();
+        // Each end at its own segment's height; a vertical end (zero-length segments) has no
+        // direction.
+        if let Some(p) = self.pts.first() {
+            out.push(RunEnd {
+                run: idx,
+                at: *p,
+                z0: b0,
+                z1: b0 + h,
+                size: self.run.size_in,
+                into: first_dir.filter(|_| self.pts.get(1).is_some_and(|q| unit(*p, *q).is_some())),
+            });
+        }
+        // A vertical run that stays within its own height: one end, not two at the same place.
+        let stub = first_dir.is_none() && overlaps(b0, b0 + h, b1, b1 + h, 0.0);
+        if let Some(p) = self.pts.last().filter(|_| !stub) {
+            let into = last_dir.filter(|_| self.pts.get(nseg - 1).is_some_and(|q| unit(*p, *q).is_some()));
+            out.push(RunEnd { run: idx, at: *p, z0: b1, z1: b1 + h, size: self.run.size_in, into });
+        }
+        out
+    }
+}
+
+/// Height spans overlapping (an inch of slack).
+fn overlaps(a0: f64, a1: f64, b0: f64, b1: f64, upf: f64) -> bool {
+    a0 <= b1 + upf / 12.0 && b0 <= a1 + upf / 12.0
+}
+
+fn seg_near(p: Vec2, a: Vec2, b: Vec2) -> (f64, Vec2) {
+    let ab = b - a;
+    let l2 = ab.dot(ab);
+    let t = if l2 > 1e-18 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    let q = a + ab * t;
+    (p.dist(q), q)
+}
+
+/// The joints of one system's runs on one level: a run ending on another's side (a tee; two
+/// ending at the same point there, a cross), and runs ending at the same point: two of
+/// different sizes a transition (a reducer when both are round), two at an angle an elbow, three
+/// a tee, four or more a cross. Ends must also meet in height. Also, per run, the points where a
+/// tee sits on it (no elbow is drawn there).
+fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
+    let inch = upf / 12.0;
+    let half = |s: [f64; 2]| s[0] / 2.0 * inch;
+    let ends: Vec<RunEnd> = geo.iter().enumerate().flat_map(|(i, g)| g.ends(i, upf)).collect();
+    // Segments in a grid of 10' cells, so ends look only near them.
+    let cell = (10.0 * upf).max(1e-6);
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, usize)>> = std::collections::HashMap::new();
+    for (ri, g) in geo.iter().enumerate() {
+        for (si, w) in g.pts.windows(2).enumerate() {
+            let (a, b) = (w[0], w[1]);
+            if a.dist(b) <= 1e-9 {
+                continue;
+            }
+            let pad = half(g.run.size_in) + inch;
+            let (k0, k1) = (key(Vec2::new(a.x.min(b.x) - pad, a.y.min(b.y) - pad)), key(Vec2::new(a.x.max(b.x) + pad, a.y.max(b.y) + pad)));
+            let cells = (k1.0 - k0.0 + 1).saturating_mul(k1.1 - k0.1 + 1);
+            if !(1..=4096).contains(&cells) {
+                continue;
+            }
+            for x in k0.0..=k1.0 {
+                for y in k0.1..=k1.1 {
+                    grid.entry((x, y)).or_default().push((ri, si));
+                }
+            }
+        }
+    }
+    let mut used = vec![false; ends.len()];
+    let mut joints: Vec<Joint> = Vec::new();
+    let mut skip: Vec<Vec<Vec2>> = vec![Vec::new(); geo.len()];
+    // On another run's side.
+    let mut side: Vec<(usize, Vec2, Vec<usize>)> = Vec::new();
+    for (ei, e) in ends.iter().enumerate() {
+        let own = half(e.size) + inch;
+        let mut best: Option<(f64, usize, Vec2)> = None;
+        for &(ri, si) in grid.get(&key(e.at)).map(Vec::as_slice).unwrap_or_default() {
+            let Some(g) = geo.get(ri).filter(|_| ri != e.run) else { continue };
+            let (Some(a), Some(b)) = (g.pts.get(si), g.pts.get(si + 1)) else { continue };
+            let (dist, q) = seg_near(e.at, *a, *b);
+            let z = g.bottom(si, upf);
+            if dist > half(g.run.size_in) + inch || !overlaps(e.z0, e.z1, z, z + g.h(upf), upf) {
+                continue;
+            }
+            // At (or beyond) the other's end, the runs meet end to end, not on its side.
+            let at_end = [g.pts.first(), g.pts.last()].into_iter().flatten().any(|p| p.dist(e.at) <= own || p.dist(q) <= own);
+            if at_end {
+                continue;
+            }
+            if best.is_none_or(|(d, _, _)| dist < d) {
+                best = Some((dist, ri, q));
+            }
+        }
+        let Some((_, main, q)) = best else { continue };
+        if let Some(u) = used.get_mut(ei) {
+            *u = true;
+        }
+        match side.iter_mut().find(|(m, p, _)| *m == main && p.dist(q) <= own) {
+            Some((_, _, list)) => list.push(ei),
+            None => side.push((main, q, vec![ei])),
+        }
+    }
+    for (main, q, list) in side {
+        let Some(g) = geo.get(main) else { continue };
+        // The main run on both sides of the point.
+        let Some(si) = g.pts.windows(2).position(|w| w[0].dist(w[1]) > 1e-9 && seg_near(q, w[0], w[1]).0 <= 1e-6 * upf.max(1.0)) else { continue };
+        let (a, b) = (g.pts.get(si).copied().unwrap_or(q), g.pts.get(si + 1).copied().unwrap_or(q));
+        let z = g.bottom(si, upf);
+        let mut je: Vec<RunEnd> = Vec::new();
+        for d in [unit(q, b).or_else(|| unit(a, b)), unit(q, a).or_else(|| unit(b, a))] {
+            je.push(RunEnd { run: main, at: q, z0: z, z1: z + g.h(upf), size: g.run.size_in, into: d });
+        }
+        je.extend(list.iter().filter_map(|e| ends.get(*e)).map(|e| RunEnd { at: q, ..*e }));
+        if let Some(s) = skip.get_mut(main) {
+            s.push(q);
+            // A tee on a corner of the main run: the vertex itself.
+            if let Some(v) = g.pts.iter().find(|p| p.dist(q) <= half(g.run.size_in)) {
+                s.push(*v);
+            }
+        }
+        let kind = if list.len() >= 2 { FittingKind::Cross } else { FittingKind::Tee };
+        joints.push(Joint { kind, at: q, owner: main, ends: je });
+    }
+    // End to end.
+    for ei in 0..ends.len() {
+        if used.get(ei).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(e) = ends.get(ei).copied() else { continue };
+        let mut at = vec![ei];
+        for (ej, f) in ends.iter().enumerate().skip(ei + 1) {
+            let tol = half(e.size).min(half(f.size)) + inch;
+            if f.run == e.run || used.get(ej).copied().unwrap_or(true) || f.at.dist(e.at) > tol || !overlaps(e.z0, e.z1, f.z0, f.z1, upf) {
+                continue;
+            }
+            // One end of each run: the one nearest in height (a riser's two ends are at one point).
+            match at.iter_mut().find(|k| ends.get(**k).is_some_and(|g| g.run == f.run)) {
+                Some(k) => {
+                    if ends.get(*k).is_some_and(|g| (g.z0 - e.z0).abs() > (f.z0 - e.z0).abs()) {
+                        *k = ej;
+                    }
+                }
+                None => at.push(ej),
+            }
+        }
+        if at.len() < 2 {
+            continue;
+        }
+        for k in &at {
+            if let Some(u) = used.get_mut(*k) {
+                *u = true;
+            }
+        }
+        let je: Vec<RunEnd> = at.iter().filter_map(|k| ends.get(*k)).copied().collect();
+        let kind = match je.as_slice() {
+            // A riser's end: the drop is its fitting.
+            [a, b] if a.into.is_none() || b.into.is_none() => continue,
+            [a, b] => {
+                let turn = matches!((a.into, b.into), (Some(u), Some(v)) if turns(u, v * -1.0));
+                if turn {
+                    FittingKind::Elbow
+                } else if (a.size[0] - b.size[0]).abs() > 1e-6 || (a.size[1] - b.size[1]).abs() > 1e-6 {
+                    if a.size[1] > 0.0 || b.size[1] > 0.0 { FittingKind::Transition } else { FittingKind::Reducer }
+                } else {
+                    continue;
+                }
+            }
+            [_, _, _] => FittingKind::Tee,
+            _ => FittingKind::Cross,
+        };
+        // Drawn with the largest run.
+        let owner = je.iter().max_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0)))).map_or(e.run, |x| x.run);
+        joints.push(Joint { kind, at: e.at, owner, ends: je });
+    }
+    (joints, skip)
+}
+
 // ---- mesh generation for pieces ----
 
 /// The number of subdivisions for round duct cross-sections.
 const ROUND_SIDES: u32 = 12;
-
-/// Add a straight rectangular duct segment to the mesh. `w` is the section width in sheet
-/// units (the perpendicular spread of the box); `z0→z1` span the section height.
-fn add_rect_segment(m: &mut Mesh, a: Vec2, b: Vec2, w: f64, _h_in: f64, z0: f64, z1: f64, _upf: f64) {
-    if a.dist(b) <= 1e-9 {
-        return;
-    }
-    super::wallgen::add_box(m, a, b, w, z0, z1);
-}
 
 /// Add a straight round duct/pipe segment to the mesh (n-sided tube).
 fn add_round_segment(m: &mut Mesh, a: Vec2, b: Vec2, radius: f64, z0: f64, z1: f64) {
@@ -594,122 +871,188 @@ fn add_round_segment(m: &mut Mesh, a: Vec2, b: Vec2, radius: f64, z0: f64, z1: f
     }
 }
 
-/// Add an elbow fitting: a curved bend at the corner with `n_arc` subdivisions along the
-/// turn radius (the duct's width, clamped to a reasonable range).
-fn add_elbow(m: &mut Mesh, center: Vec2, w: f64, h_in: f64, z0: f64, z1: f64, upf: f64, dir_in: Vec2, dir_out: Vec2, round: bool) {
-    let n_arc: u32 = 6;
+/// The centreline of an elbow at `corner` turning from `dir_in` to `dir_out`: an arc of radius
+/// `radius` tangent to both segments, as `n + 1` points with their tangents. None when it
+/// hardly turns or turns right back.
+fn elbow_arc(corner: Vec2, dir_in: Vec2, dir_out: Vec2, radius: f64, n: u32) -> Option<Vec<(Vec2, Vec2)>> {
+    let angle = dir_in.cross(dir_out).atan2(dir_in.dot(dir_out));
+    if angle.abs() < 0.01 || angle.abs() > std::f64::consts::PI - 0.01 || radius <= 1e-9 {
+        return None;
+    }
+    let sign = angle.signum();
+    let t = radius * (angle.abs() / 2.0).tan();
+    let start = corner - dir_in * t;
+    let centre = start + dir_in.perp() * (sign * radius);
+    Some(
+        (0..=n)
+            .map(|k| {
+                let phi = angle * f64::from(k) / f64::from(n);
+                (centre + (start - centre).rotate(phi), dir_in.rotate(phi))
+            })
+            .collect(),
+    )
+}
+
+/// An elbow fitting: the bend at the corner, its centreline an arc of radius half the duct's
+/// width joining the two segments. Rectangular: boxes as wide as the duct along the arc; round:
+/// a bent tube. Turning right back: a post.
+fn add_elbow(m: &mut Mesh, center: Vec2, w: f64, z0: f64, z1: f64, dir_in: Vec2, dir_out: Vec2, round: bool) {
+    const N_ARC: u32 = 6;
     let half_w = w / 2.0;
-    let half_t = if h_in > 0.0 { h_in / 12.0 * upf / 2.0 } else { half_w };
-    // The turn radius: half-width for tight elbows, more natural geometry.
-    let _radius = half_w;
-    // Find the angle of the turn.
-    let cross = dir_in.cross(dir_out);
-    let dot = dir_in.dot(dir_out);
-    let angle = cross.atan2(dot);
-    if angle.abs() < 0.01 {
-        return; // nearly straight, no elbow needed
-    }
-    // The centre of the arc is offset from the corner towards the inside.
-    let bisector = dir_in + dir_out;
-    let blen = bisector.len();
-    if blen < 1e-9 {
-        // 180 degree turn: just a post
-        let half = Vec2::new(half_w, 0.0);
-        super::wallgen::add_box(m, center - half, center + half, half_w * 2.0, z0, z1);
-        return;
-    }
-    if round {
-        add_elbow_round(m, center, half_w, z0, z1, dir_in, dir_out, angle, n_arc);
-    } else {
-        add_elbow_rect(m, center, half_w, half_t, z0, z1, dir_in, dir_out, angle, n_arc);
+    match elbow_arc(center, dir_in, dir_out, half_w, N_ARC) {
+        Some(arc) if round => add_elbow_round(m, &arc, half_w, z0, z1),
+        Some(arc) => {
+            let last = arc.len().saturating_sub(2);
+            for (k, w2) in arc.windows(2).enumerate() {
+                let [(p0, t0), (p1, _)] = [w2[0], w2[1]];
+                // Lengthened a little where boxes meet, so the outside of the bend has no notches.
+                let Some(u) = unit(p0, p1) else { continue };
+                let ext = half_w * (t0.cross(u).abs().asin()).tan();
+                let (e0, e1) = (if k == 0 { 0.0 } else { ext }, if k == last { 0.0 } else { ext });
+                super::wallgen::add_box(m, p0 - u * e0, p1 + u * e1, w, z0, z1);
+            }
+        }
+        None if dir_in.dot(dir_out) < 0.0 => super::wallgen::add_box(m, center - dir_in * half_w, center + dir_in * half_w, w, z0, z1),
+        None => {}
     }
 }
 
-/// A rectangular elbow: a sequence of short boxes along the arc.
-fn add_elbow_rect(m: &mut Mesh, center: Vec2, half_w: f64, half_t: f64, z0: f64, z1: f64, dir_in: Vec2, _dir_out: Vec2, angle: f64, n_arc: u32) {
-    let sign = if angle > 0.0 { 1.0 } else { -1.0 };
-    let perp_in = Vec2::new(-dir_in.y, dir_in.x) * sign;
-    let arc_center = center + perp_in * half_w;
-    let start_angle = dir_in.y.atan2(dir_in.x);
-    for k in 0..n_arc {
-        let t0 = f64::from(k) / f64::from(n_arc);
-        let t1 = f64::from(k + 1) / f64::from(n_arc);
-        let a0 = start_angle + angle * t0;
-        let a1 = start_angle + angle * t1;
-        let d0 = Vec2::new(a0.cos(), a0.sin());
-        let d1 = Vec2::new(a1.cos(), a1.sin());
-        let p0 = arc_center - Vec2::new(-d0.y, d0.x) * sign * half_w;
-        let p1 = arc_center - Vec2::new(-d1.y, d1.x) * sign * half_w;
-        super::wallgen::add_box(m, p0, p1, half_t * 2.0, z0, z1);
-    }
-}
-
-/// A round elbow: a torus section using ring cross-sections.
-fn add_elbow_round(m: &mut Mesh, center: Vec2, radius: f64, z0: f64, z1: f64, dir_in: Vec2, _dir_out: Vec2, angle: f64, n_arc: u32) {
-    let sign = if angle > 0.0 { 1.0 } else { -1.0 };
-    let perp_in = Vec2::new(-dir_in.y, dir_in.x) * sign;
-    let arc_center = center + perp_in * radius;
-    let start_angle = dir_in.y.atan2(dir_in.x);
+/// A round elbow: rings across the arc's tangent, joined by quads.
+fn add_elbow_round(m: &mut Mesh, arc: &[(Vec2, Vec2)], radius: f64, z0: f64, z1: f64) {
     let zc = (z0 + z1) / 2.0;
     let sides = ROUND_SIDES;
-    let rings = n_arc + 1;
+    let Ok(rings) = u32::try_from(arc.len()) else { return };
+    if rings < 2 {
+        return;
+    }
     let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
-
-    // Generate ring vertices along the arc.
-    for r in 0..rings {
-        let t = f64::from(r) / f64::from(n_arc);
-        let a = start_angle + angle * t;
-        let d = Vec2::new(a.cos(), a.sin());
-        let ring_center = arc_center - Vec2::new(-d.y, d.x) * sign * radius;
-        let n = Vec2::new(-d.y, d.x);
+    for (c, tangent) in arc {
+        let n = tangent.perp();
         for k in 0..sides {
             let theta = f64::from(k) * std::f64::consts::TAU / f64::from(sides);
-            let q = ring_center + n * (radius * theta.cos());
+            let q = *c + n * (radius * theta.cos());
             m.vertices.push(Vec3::new(q.x, q.y, zc + radius * theta.sin()));
         }
     }
-
-    // Connect rings with quads.
-    for r in 0..n_arc {
+    for r in 0..rings - 1 {
         for k in 0..sides {
             let j = (k + 1) % sides;
-            let r0 = base + r * sides;
-            let r1 = base + (r + 1) * sides;
+            let (r0, r1) = (base + r * sides, base + (r + 1) * sides);
             m.faces.push(MeshFace { v: vec![r0 + k, r0 + j, r1 + j, r1 + k], hidden: 0 });
         }
     }
-
-    // End caps.
+    let last = base + (rings - 1) * sides;
     for k in 1..sides.saturating_sub(1) {
         m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        let last_ring = base + n_arc * sides;
-        m.faces.push(MeshFace { v: vec![last_ring, last_ring + k, last_ring + k + 1], hidden: 0 });
+        m.faces.push(MeshFace { v: vec![last, last + k, last + k + 1], hidden: 0 });
     }
 }
 
-/// Add a drop/riser fitting: a vertical transition between two heights.
-fn add_drop_fitting(m: &mut Mesh, center: Vec2, w: f64, h_in: f64, z0: f64, z1: f64, upf: f64, round: bool) {
+/// A drop (riser) fitting: vertical from z0 to z1. Round: an upright tube of the duct's
+/// diameter; rectangular: a box as wide as the duct across the way it comes in and as deep as
+/// it along it.
+fn add_drop_fitting(m: &mut Mesh, center: Vec2, w: f64, depth: f64, z0: f64, z1: f64, dir_in: Vec2, round: bool) {
     if round {
-        let r = w / 2.0;
-        let half = Vec2::new(r, 0.0);
-        add_round_segment(m, center - half * 0.01, center + half * 0.01, r, z0, z1);
+        add_upright_cylinder(m, center, w / 2.0, z0, z1);
     } else {
-        let half = Vec2::new(w / 2.0, 0.0);
-        let t = if h_in > 0.0 { h_in / 12.0 * upf } else { w };
-        super::wallgen::add_box(m, center - half, center + half, t, z0, z1);
+        let u = if dir_in.len() > 1e-9 { dir_in.normalized() } else { Vec2::X };
+        super::wallgen::add_box(m, center - u * (depth / 2.0), center + u * (depth / 2.0), w, z0, z1);
     }
 }
 
-/// Add a terminal or box as a simple shape: rectangular box or squat cylinder.
+/// A short straight piece of a section, from `a` to `b` (a stub of a tee).
+fn add_section(m: &mut Mesh, a: Vec2, b: Vec2, size_in: [f64; 2], z0: f64, upf: f64) {
+    let w = size_in[0] / 12.0 * upf;
+    if size_in[1] <= 0.0 {
+        add_round_segment(m, a, b, w / 2.0, z0, z0 + w);
+    } else {
+        super::wallgen::add_box(m, a, b, w, z0, z0 + size_in[1] / 12.0 * upf);
+    }
+}
+
+/// A loft from one section at `a` to another at `b` (a transition or reducer): rings of the
+/// same count, round sections as polygons, rectangles as four corners repeated.
+fn add_loft(m: &mut Mesh, a: Vec2, b: Vec2, (sa, za): ([f64; 2], f64), (sb, zb): ([f64; 2], f64), upf: f64) {
+    let Some(u) = unit(a, b) else { return };
+    let n = u.perp();
+    let ring = |c: Vec2, s: [f64; 2], z0: f64| -> Vec<Vec3> {
+        let w = s[0] / 12.0 * upf;
+        if s[1] <= 0.0 {
+            let r = w / 2.0;
+            (0..ROUND_SIDES)
+                .map(|k| {
+                    let t = f64::from(k) * std::f64::consts::TAU / f64::from(ROUND_SIDES);
+                    let q = c + n * (r * t.cos());
+                    Vec3::new(q.x, q.y, z0 + r + r * t.sin())
+                })
+                .collect()
+        } else {
+            let (hw, h) = (w / 2.0, s[1] / 12.0 * upf);
+            // Corners in the same turning order as the round ring, spread over its points.
+            let corners = [(hw, h / 2.0), (-hw, h / 2.0), (-hw, -h / 2.0), (hw, -h / 2.0)];
+            (0..ROUND_SIDES)
+                .map(|k| {
+                    let (x, y) = corners.get((k * 4 / ROUND_SIDES) as usize).copied().unwrap_or((hw, h / 2.0));
+                    let q = c + n * x;
+                    Vec3::new(q.x, q.y, z0 + h / 2.0 + y)
+                })
+                .collect()
+        }
+    };
+    let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+    m.vertices.extend(ring(a, sa, za));
+    m.vertices.extend(ring(b, sb, zb));
+    let s = ROUND_SIDES;
+    for k in 0..s {
+        let j = (k + 1) % s;
+        m.faces.push(MeshFace { v: vec![base + k, base + j, base + s + j, base + s + k], hidden: 0 });
+    }
+    for k in 1..s.saturating_sub(1) {
+        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
+        m.faces.push(MeshFace { v: vec![base + s, base + s + k, base + s + k + 1], hidden: 0 });
+    }
+}
+
+/// A joint's mesh. A tee or cross: a stub of each run from the point, each as long as the widest
+/// other run's half-width and 2" more (vertical ends are their risers' own). A transition or
+/// reducer: a foot-long loft between the two sections centred on the point. An end-to-end elbow:
+/// the bend between the two.
+fn joint_mesh(m: &mut Mesh, j: &Joint, upf: f64) {
+    let inch = upf / 12.0;
+    match j.kind {
+        FittingKind::Transition | FittingKind::Reducer => {
+            let [a, b] = [j.ends.first(), j.ends.get(1)];
+            let (Some(a), Some(b)) = (a, b) else { return };
+            let half = upf / 2.0;
+            let da = a.into.or_else(|| b.into.map(|v| v * -1.0)).unwrap_or(Vec2::X);
+            let db = b.into.unwrap_or(da * -1.0);
+            add_loft(m, j.at + da * half, j.at + db * half, (a.size, a.z0), (b.size, b.z0), upf);
+        }
+        FittingKind::Elbow => {
+            let [a, b] = [j.ends.first(), j.ends.get(1)];
+            let (Some(a), Some(b)) = (a, b) else { return };
+            let (Some(u), Some(v)) = (a.into, b.into) else { return };
+            add_elbow(m, j.at, a.size[0] * inch, a.z0, a.z1, u * -1.0, v, a.size[1] <= 0.0);
+        }
+        _ => {
+            for e in &j.ends {
+                let Some(d) = e.into else { continue };
+                let reach = j.ends.iter().filter(|o| !std::ptr::eq(*o, e)).map(|o| o.size[0] / 2.0).fold(0.0_f64, f64::max) + 2.0;
+                add_section(m, j.at, j.at + d * (reach * inch), e.size, e.z0, upf);
+            }
+        }
+    }
+}
+
+/// Add a terminal or box as a simple shape, 6" tall: a box (rectangular) or an upright squat
+/// cylinder (round).
 fn add_terminal_mesh(m: &mut Mesh, center: Vec2, size_in: [f64; 2], z0: f64, upf: f64) {
     let w = size_in[0] / 12.0 * upf;
-    let round = size_in[1] <= 0.0;
-    // Terminal height: 6 inches (a small box or disk).
     let h = 6.0 / 12.0 * upf;
-    if round {
-        add_round_segment(m, center - Vec2::new(0.01, 0.0), center + Vec2::new(0.01, 0.0), w / 2.0, z0, z0 + h);
+    if size_in[1] <= 0.0 {
+        add_upright_cylinder(m, center, w / 2.0, z0, z0 + h);
     } else {
-        let d = if size_in[1] > 0.0 { size_in[1] / 12.0 * upf } else { w };
+        let d = size_in[1] / 12.0 * upf;
         let half = Vec2::new(w / 2.0, 0.0);
         super::wallgen::add_box(m, center - half, center + half, d, z0, z0 + h);
     }
@@ -753,23 +1096,15 @@ pub(crate) fn add_upright_cylinder(m: &mut Mesh, c: Vec2, r: f64, z0: f64, z1: f
     }
 }
 
-/// A piece as a mesh: a box (rectangular), an octagonal tube (round), or a fitting.
+/// A run's piece as a mesh: a box (rectangular) or a tube (round) segment, an elbow or a drop.
 fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
     let w = p.size_a[0] / 12.0 * upf;
     match p.kind {
-        FittingKind::Segment => {
-            if p.is_round() {
-                add_round_segment(m, p.a, p.b, w / 2.0, p.z0, p.z1);
-            } else {
-                add_rect_segment(m, p.a, p.b, w, p.size_a[1], p.z0, p.z1, upf);
-            }
-        }
-        FittingKind::Elbow => {
-            add_elbow(m, p.a, w, p.size_a[1], p.z0, p.z1, upf, p.dir_in, p.dir_out, p.is_round());
-        }
-        FittingKind::Drop => {
-            add_drop_fitting(m, p.a, w, p.size_a[1], p.z0, p.z1, upf, p.is_round());
-        }
+        FittingKind::Segment if p.is_round() => add_round_segment(m, p.a, p.b, w / 2.0, p.z0, p.z1),
+        FittingKind::Segment => super::wallgen::add_box(m, p.a, p.b, w, p.z0, p.z1),
+        FittingKind::Elbow => add_elbow(m, p.a, w, p.z0, p.z1, p.dir_in, p.dir_out, p.is_round()),
+        FittingKind::Drop => add_drop_fitting(m, p.a, w, depth_in(p.size_a) / 12.0 * upf, p.z0, p.z1, p.dir_in, p.is_round()),
+        FittingKind::Tee | FittingKind::Cross | FittingKind::Transition | FittingKind::Reducer => {}
     }
 }
 
@@ -803,7 +1138,28 @@ fn fitting_kind_str(fk: FittingKind) -> &'static str {
         FittingKind::Segment => "segment",
         FittingKind::Elbow => "elbow",
         FittingKind::Drop => "drop",
+        FittingKind::Tee => "tee",
+        FittingKind::Cross => "cross",
+        FittingKind::Transition => "transition",
+        FittingKind::Reducer => "reducer",
     }
+}
+
+/// A size in inches as tagged: `24x12` rectangular, `10` round.
+fn size_text(s: [f64; 2]) -> String {
+    let n = |v: f64| {
+        let t = format!("{v:.3}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    if s[1] > 0.0 { format!("{}x{}", n(s[0]), n(s[1])) } else { n(s[0]) }
+}
+
+/// What a run's generated objects are known by from one build to the next: the plan object it
+/// was read from (else its revision id) and where it starts.
+fn run_base(r: &MepRun) -> String {
+    let src = r.objects.iter().find(|o| o.as_str() != "reviewed").map_or(r.id.as_str(), String::as_str);
+    let at = r.points.first().map_or(String::new(), |p| format!("{:.2},{:.2}", p[0], p[1]));
+    format!("{src}@{at}")
 }
 
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
@@ -822,90 +1178,157 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut total_drops = 0usize;
     let mut total_fittings = 0usize;
     let mut total_terminals = 0usize;
+    let (mut total_tees, mut total_crosses, mut total_transitions, mut total_reducers) = (0usize, 0usize, 0usize, 0usize);
     let t = |code: i32, v: String| RawTag { code, value: v };
 
-    // -- Runs --
-    for r in sp.mep.runs.iter().take(MAX_RUNS) {
-        let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show) else { continue };
-        let Some(level) = sp.level(&r.level) else { continue };
-        let layer = mep_layer_name(&sy.name, &level.name);
-        ensure_layer(d, &layer, sy.aci_color());
-        let (ps, counts) = pieces(r, level.elevation_ft * upf, upf);
-
-        // Separate segment meshes and fitting meshes for distinct IFC mapping.
-        let mut seg_mesh = super::wallgen::empty_mesh();
-        let mut fit_mesh = super::wallgen::empty_mesh();
-        let mut fit_kinds: Vec<FittingKind> = Vec::new();
-        for p in &ps {
-            if p.is_fitting() {
-                piece_mesh(&mut fit_mesh, p, upf);
-                fit_kinds.push(p.kind);
-            } else {
-                piece_mesh(&mut seg_mesh, p, upf);
+    // -- Runs: per system and level, first where they meet (tees, crosses, transitions,
+    // reducers), then each run's segments and every fitting as an object of its own. --
+    struct Shown<'a> {
+        run: &'a MepRun,
+        sy: &'a MepSystem,
+        level: String,
+        base_z: f64,
+    }
+    let shown: Vec<Shown> = sp
+        .mep
+        .runs
+        .iter()
+        .take(MAX_RUNS)
+        .filter_map(|r| {
+            let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
+            let level = sp.level(&r.level)?;
+            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
+        })
+        .collect();
+    let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    for (i, s) in shown.iter().enumerate() {
+        groups.entry((s.sy.name.as_str(), s.level.as_str())).or_default().push(i);
+    }
+    let mut all_joints: Vec<Joint> = Vec::new();
+    let mut skip_at: Vec<Vec<Vec2>> = vec![Vec::new(); shown.len()];
+    for members in groups.values() {
+        let geo: Vec<RunGeo> = members
+            .iter()
+            .filter_map(|i| shown.get(*i))
+            .map(|s| RunGeo { run: s.run, pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(), base_z: s.base_z })
+            .collect();
+        let (js, sk) = joints(&geo, upf);
+        let global = |k: usize| members.get(k).copied().unwrap_or(usize::MAX);
+        for (k, pts) in sk.into_iter().enumerate() {
+            if let Some(s) = skip_at.get_mut(global(k)) {
+                *s = pts;
             }
         }
-
-        let source = r.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
-        let duct_type_str = sy.duct_type.map(|dt| match dt {
+        all_joints.extend(js.into_iter().map(|mut j| {
+            j.owner = global(j.owner);
+            for e in &mut j.ends {
+                e.run = global(e.run);
+            }
+            j
+        }));
+    }
+    let source_of = |objects: &[String]| objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
+    let duct_type_str = |sy: &MepSystem| {
+        sy.duct_type.map(|dt| match dt {
             DuctType::Supply => "supply",
             DuctType::Return => "return",
             DuctType::Exhaust => "exhaust",
             DuctType::OutsideAir => "outside_air",
             DuctType::Other => "other",
-        });
-
-        // Add segment mesh.
-        if !seg_mesh.faces.is_empty() {
-            let mut xdata = vec![
-                t(1001, super::wallgen::APP.into()),
-                t(1000, "mep".into()),
-                t(1000, level.name.clone()),
-                t(1000, source.hex()),
-                t(1000, format!("system:{}", sy.name)),
-                t(1000, format!("kind:{}", kind_str(sy.kind))),
-                t(1000, "part:segment".into()),
-            ];
-            if let Some(dt) = duct_type_str {
-                xdata.push(t(1000, format!("duct_type:{dt}")));
+        })
+    };
+    // The tags of a generated MEP object: its level, source, system, kind, part, sizes and an
+    // id of its own (`model.revise` keeps hand edits by it).
+    let tags = |level: &str, source: Handle, sy: &MepSystem, part: String, sizes: &[[f64; 2]], id: String| -> Vec<RawTag> {
+        let mut x = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, level.to_string()),
+            t(1000, source.hex()),
+            t(1000, format!("system:{}", sy.name)),
+            t(1000, format!("kind:{}", kind_str(sy.kind))),
+            t(1000, part),
+        ];
+        if let Some(dt) = duct_type_str(sy) {
+            x.push(t(1000, format!("duct_type:{dt}")));
+        }
+        for (k, s) in sizes.iter().enumerate().take(2) {
+            if s[0] > 0.0 && s[0].is_finite() {
+                x.push(t(1000, format!("{}:{}", if k == 0 { "size" } else { "size2" }, size_text(*s))));
             }
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
-                .is_ok()
+        }
+        x.push(t(1000, format!("mepid:{}", id.chars().take(200).collect::<String>())));
+        x
+    };
+    for (i, s) in shown.iter().enumerate() {
+        let (r, sy) = (s.run, s.sy);
+        let layer = mep_layer_name(&sy.name, &s.level);
+        ensure_layer(d, &layer, sy.aci_color());
+        let (ps, counts) = pieces(r, s.base_z, upf, skip_at.get(i).map(Vec::as_slice).unwrap_or_default());
+        let source = source_of(&r.objects);
+        let base = run_base(r);
+        let mut seg_mesh = super::wallgen::empty_mesh();
+        for p in ps.iter().filter(|p| !p.is_fitting()) {
+            piece_mesh(&mut seg_mesh, p, upf);
+        }
+        if !seg_mesh.faces.is_empty() {
+            let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
             {
                 total_runs += 1;
             }
         }
-
-        // Add fitting mesh (one combined mesh per run's fittings, tagged distinctly).
-        if !fit_mesh.faces.is_empty() {
-            // Use the most common fitting kind for the tag; elbows dominate.
-            let dominant_fitting = if counts.elbows > 0 {
-                FittingKind::Elbow
-            } else if counts.drops > 0 {
-                FittingKind::Drop
-            } else {
-                fit_kinds.first().copied().unwrap_or(FittingKind::Elbow)
-            };
-            let mut xdata = vec![
-                t(1001, super::wallgen::APP.into()),
-                t(1000, "mep".into()),
-                t(1000, level.name.clone()),
-                t(1000, source.hex()),
-                t(1000, format!("system:{}", sy.name)),
-                t(1000, format!("kind:{}", kind_str(sy.kind))),
-                t(1000, format!("part:fitting:{}", fitting_kind_str(dominant_fitting))),
-            ];
-            if let Some(dt) = duct_type_str {
-                xdata.push(t(1000, format!("duct_type:{dt}")));
+        // Each fitting its own object, tagged with its kind.
+        let mut nth: BTreeMap<&str, usize> = BTreeMap::new();
+        for p in ps.iter().filter(|p| p.is_fitting()) {
+            let mut m = super::wallgen::empty_mesh();
+            piece_mesh(&mut m, p, upf);
+            if m.faces.is_empty() {
+                continue;
             }
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(fit_mesh))
-                .is_ok()
-            {
+            let ks = fitting_kind_str(p.kind);
+            let n = nth.entry(ks).or_default();
+            *n += 1;
+            let x = tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}"));
+            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_fittings += 1;
             }
         }
-
         total_elbows += counts.elbows;
         total_drops += counts.drops;
+    }
+    // Where runs meet.
+    for j in all_joints.iter().take(MAX_SEGS) {
+        let Some(s) = shown.get(j.owner) else { continue };
+        let mut m = super::wallgen::empty_mesh();
+        joint_mesh(&mut m, j, upf);
+        if m.faces.is_empty() {
+            continue;
+        }
+        let layer = mep_layer_name(&s.sy.name, &s.level);
+        ensure_layer(d, &layer, s.sy.aci_color());
+        let ks = fitting_kind_str(j.kind);
+        // The main size, then the smallest other one (a tee's branch, a transition's other end).
+        let main = j.ends.iter().find(|e| e.run == j.owner).map_or(s.run.size_in, |e| e.size);
+        let other = j
+            .ends
+            .iter()
+            .filter(|e| e.size != main)
+            .min_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0))))
+            .map(|e| e.size);
+        let sizes: Vec<[f64; 2]> = std::iter::once(main).chain(other).collect();
+        let x = tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y));
+        if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            total_fittings += 1;
+            match j.kind {
+                FittingKind::Tee => total_tees += 1,
+                FittingKind::Cross => total_crosses += 1,
+                FittingKind::Transition => total_transitions += 1,
+                FittingKind::Reducer => total_reducers += 1,
+                FittingKind::Elbow => total_elbows += 1,
+                _ => {}
+            }
+        }
     }
 
     // -- Terminals --
@@ -925,17 +1348,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
 
         if !m.faces.is_empty() {
-            let source = term.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
-            let xdata = vec![
-                t(1001, super::wallgen::APP.into()),
-                t(1000, "mep".into()),
-                t(1000, level.name.clone()),
-                t(1000, source.hex()),
-                t(1000, format!("system:{}", sy.name)),
-                t(1000, format!("kind:{}", kind_str(sy.kind))),
-                t(1000, format!("part:terminal:{}", term.terminal_kind)),
-            ];
-            if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            let source = source_of(&term.objects);
+            // A terminal read from no plan object is known by where it is.
+            let id = format!("{}/terminal@{:.2},{:.2}", term.objects.first().map_or("", String::as_str), term.at[0], term.at[1]);
+            let x = tags(&level.name, source, sy, format!("part:terminal:{}", term.terminal_kind), &[term.size_in], id);
+            if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_terminals += 1;
             }
         }
@@ -1149,8 +1566,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
 
     json!({
-        "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops,
-        "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
+        "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops, "tees": total_tees, "crosses": total_crosses,
+        "transitions": total_transitions, "reducers": total_reducers, "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
         "grounding": total_ground,
     })
 }
@@ -1173,7 +1590,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
-        let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
+        let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
         let w = r.size_in[0] / 12.0 * upf;
         items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
     }
@@ -1279,7 +1696,7 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             let Some(level) = sp.level(&r.level) else { continue };
             let base = bases.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level.name)).map_or(Vec2::ZERO, |(_, b)| *b);
             let base = if base.is_finite() { base } else { Vec2::ZERO };
-            let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
+            let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
             let w = r.size_in[0] / 12.0 * upf;
             for pc in ps.into_iter().filter(|p| !p.is_fitting()) {
                 if pieces_ref.len() >= MAX_SEGS {
