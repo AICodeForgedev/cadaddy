@@ -476,6 +476,45 @@ fn stairs_tool_detects_lists_and_confirms() {
 }
 
 #[test]
+fn rooms_list_comes_a_page_at_a_time_without_outlines() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    // 60 rooms, 10 a row: a closed outline round each name and number.
+    let mut cmds = Vec::new();
+    for k in 0..60 {
+        let (x, y) = (f64::from(k % 10) * 200.0, f64::from(k / 10) * 200.0);
+        cmds.push(
+            json!({"command": "pline", "params": {"vertices": [[x, y], [x + 180.0, y], [x + 180.0, y + 180.0], [x, y + 180.0]], "closed": true}}),
+        );
+        cmds.push(json!({"command": "text", "params": {"at": [x + 40.0, y + 100.0], "text": format!("GUEST ROOM {k}"), "height": 6}}));
+        cmds.push(json!({"command": "text", "params": {"at": [x + 40.0, y + 80.0], "text": format!("{}", 100 + k), "height": 6}}));
+    }
+    tool(&mut s, "execute_many", json!({"commands": cmds}));
+    let first = tool(&mut s, "rooms", json!({"action": "list"}));
+    assert_eq!(first["count"], 60, "{first}");
+    let page = first["rooms"].as_array().unwrap();
+    assert_eq!(page.len(), 50);
+    assert_eq!(first["next"], 50);
+    assert!(page.iter().all(|r| r["outline"].is_null()), "no outlines unless asked");
+    assert!(first.to_string().len() <= cadaddy_engine::cmd::agentready::ANSWER_MAX);
+    let rest = tool(&mut s, "rooms", json!({"action": "list", "offset": 50}));
+    assert_eq!(rest["rooms"].as_array().unwrap().len(), 10);
+    assert!(rest["next"].is_null(), "{rest}");
+    // Every room once over the pages.
+    let mut seen: Vec<String> = page.iter().chain(rest["rooms"].as_array().unwrap()).map(|r| r["number"].to_string()).collect();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 60);
+    let shaped = tool(&mut s, "rooms", json!({"action": "list", "outline": true, "limit": 3}));
+    assert_eq!(shaped["rooms"].as_array().unwrap().len(), 3);
+    assert!(shaped["rooms"][0]["outline"].is_array(), "{shaped}");
+    // Past the end: an empty page, still the count.
+    let past = tool(&mut s, "rooms", json!({"action": "list", "offset": 1000}));
+    assert_eq!(past["rooms"], json!([]));
+    assert_eq!(past["count"], 60);
+}
+
+#[test]
 fn rooms_tool_lists_gets_and_builds() {
     let mut s = Server::new(Box::new(Headless::default()));
     call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));

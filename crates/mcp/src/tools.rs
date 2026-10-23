@@ -4,6 +4,10 @@ use serde_json::{Value, json};
 
 use crate::backend::Backend;
 
+/// Rooms per `rooms` list page: by default, and at most.
+const ROOMS_PAGE: usize = 50;
+const ROOMS_PAGE_MAX: usize = 500;
+
 pub fn tool_definitions(has_ui: bool) -> Value {
     let mut tools = vec![
         json!({"name": "command_line", "description": "Type one line at the CADaddy command line, exactly as a user would at an AutoCAD-style prompt. Starts commands by name or alias (LINE, L, CIRCLE, C, PLINE, RECTANG, MOVE, TRIM, OFFSET, ZOOM…) and answers the active prompt: points `x,y`, relative `@dx,dy`, polar `@dist<angle`, distances, keywords (e.g. `c` for Close), empty text = Enter. Spaces act as Enter, so `circle 0,0 5` works in one call. Returns the new prompt and command-line output, and `error` when the line was refused. In the running app some commands typed alone open a dialog, as in AutoCAD (LAYER, UNITS, DSETTINGS, HATCH, PURGE, FIND, COLOR…): type the dash form (-PURGE, -LAYER), add the input on the same line (`color 1`), or use execute; ui_elements shows an open dialog's controls.",
@@ -40,8 +44,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "stairs", "description": "Stairs and ramps of the building spec. action \"detect\" finds them in the plan (tread rows between stringers, UP/DN notes, landings, ramp outlines) and with store: true puts them in the spec (confirmed ones stay); \"list\" gives the spec's stairs with risers, riser and tread sizes and code warnings (risers 4\"–7¾\", treads ≥ 10\", ramps ≤ 1:12); \"confirm\" marks names (or all) as checked. model.build then builds them and Walk climbs them.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["detect", "list", "confirm"]}, "store": {"type": "boolean"},
                 "names": {"type": "array", "items": {"type": "string"}}, "all": {"type": "boolean"}, "confirmed": {"type": "boolean"}}, "required": ["action"]}}),
-        json!({"name": "rooms", "description": "The plan's rooms as 3D spaces (found from room name labels inside closed outlines, with their numbers): action \"list\" gives each room's name, number, area (drawing units, sq ft, m²), ceiling height (the building spec's, a ceiling note in the room, the level's, else 9'), volume, finishes (codes written in the room, spec materials) and outline; \"get\" one room by name or number; \"goto\" zooms the view to it; \"build\" puts a see-through volume per room on layer 3D-Rooms (clear: true removes them).",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "goto", "build"]}, "name": {"type": "string"}, "number": {"type": "string"}, "outline": {"type": "boolean"}, "clear": {"type": "boolean"}}, "required": ["action"]}}),
+        json!({"name": "rooms", "description": "The plan's rooms as 3D spaces (found from room name labels inside closed outlines, with their numbers): action \"list\" gives each room's name, number, area (drawing units, sq ft, m²), ceiling height (the building spec's, a ceiling note in the room, the level's, else 9'), volume, finishes (codes written in the room, spec materials) and, with outline: true, its outline, a page at a time (limit, default 50; offset; `next` is the next page's offset; `count` is every room); \"get\" one room by name or number; \"goto\" zooms the view to it; \"build\" puts a see-through volume per room on layer 3D-Rooms (clear: true removes them).",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "goto", "build"]}, "name": {"type": "string"}, "number": {"type": "string"}, "outline": {"type": "boolean"}, "clear": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0}}, "required": ["action"]}}),
         json!({"name": "bim_types", "description": "BIM element types in the drawing: shared spec records (type mark, description, manufacturer, catalog number, spec section, material, ratings, mounting, raceway/cable make-up). action \"list\" returns all types (filter by mark or category); \"set\" creates or updates one (fields: {key: {value, source?, confidence?} or string}); \"remove\" deletes one; \"get_spec\" reads the spec of entities (resolved through their type mark); \"set_spec\" assigns a type mark to entities; \"unset_spec\" removes the assignment.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "set", "remove", "get_spec", "set_spec", "unset_spec"]},
                 "mark": {"type": "string"}, "category": {"type": "string"},
@@ -213,6 +217,30 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
     exec(b, command, params)
 }
 
+/// Rooms listed a page at a time (`limit`, default [`ROOMS_PAGE`]; `offset`), within the agent
+/// answer cap: `count` stays every room, `next` is the next page's offset.
+fn rooms_page(mut v: Value, a: &Value) -> Value {
+    let offset = a.get("offset").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let limit = a.get("limit").and_then(Value::as_u64).map_or(ROOMS_PAGE, |n| usize::try_from(n).unwrap_or(ROOMS_PAGE).clamp(1, ROOMS_PAGE_MAX));
+    let Some(all) = v.get_mut("rooms").and_then(Value::as_array_mut) else { return v };
+    let total = all.len();
+    let mut page: Vec<Value> = std::mem::take(all).into_iter().skip(offset).take(limit).collect();
+    let mut shown = page.len();
+    loop {
+        let mut out = v.clone();
+        out["rooms"] = json!(page);
+        out["offset"] = json!(offset);
+        if offset.saturating_add(shown) < total {
+            out["next"] = json!(offset + shown);
+        }
+        if out.to_string().len() <= cadaddy_engine::cmd::agentready::ANSWER_MAX || page.len() <= 1 {
+            return out;
+        }
+        page.pop();
+        shown = page.len();
+    }
+}
+
 fn exec(b: &mut dyn Backend, command: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": command, "params": params}))
 }
@@ -327,8 +355,16 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
                 o.remove("action");
+                o.remove("limit");
+                o.remove("offset");
+                // A list leaves the outlines out unless asked: a whole building's would flood
+                // an agent's context.
+                if command == "rooms.list" && !o.contains_key("outline") {
+                    o.insert("outline".into(), json!(false));
+                }
             }
-            b.call("engine.execute", json!({"command": command, "params": params}))
+            let r = b.call("engine.execute", json!({"command": command, "params": params}));
+            if command == "rooms.list" { r.map(|v| rooms_page(v, &a)) } else { r }
         }
         "bim_types" => {
             let command = match a.get("action").and_then(Value::as_str) {
