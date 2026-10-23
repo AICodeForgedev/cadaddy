@@ -245,7 +245,7 @@ fn main() {
 
     let stage = |name: &str, t: Instant| println!("  {name}: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
     let t = Instant::now();
-    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None);
     stage("ceilings", t);
     println!("ceilings: {} rooms, {} ceilings", ceil.rooms.len(), ceil.ceilings.len());
     // Structure, ducts and pipes read parsed drawings: the S, M and P sheets only.

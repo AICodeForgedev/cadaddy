@@ -221,7 +221,7 @@ fn run_size(size_name: &str, size: HotelSize, seed: u64, only: &[String], scratc
     }
     if let Some(map) = map {
         let refs: Vec<(String, &cadaddy_engine::doc::Drawing)> = parsed.iter().map(|(n, d)| (n.clone(), d)).collect();
-        let ceil = b.stage("read_ceilings", |_| cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map));
+        let ceil = b.stage("read_ceilings", |_| cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None));
         let st = b.stage("read_struct", |_| cadaddy_mepfix::struct_reader::read_structure(&map, &refs));
         let walls = b.stage("read_walls", |_| cadaddy_mepfix::wall_reader::read_walls(&dxf, &map, &ceil, &st));
         let arch_r = b.stage("read_arch", |_| cadaddy_mepfix::arch_reader::read_arch(&dxf, &map, &ceil));

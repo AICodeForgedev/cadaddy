@@ -165,7 +165,7 @@ fn hostile_sheets_never_panic() {
     let set = generate(2).unwrap();
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = cadaddy_mepfix::sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None);
     let junk = |s: &str| {
         s.replace("3'-0\"", "99999999999999999999'-1/0\"")
             .replace("7'-0\"", "-/-'")
