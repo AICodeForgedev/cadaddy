@@ -217,6 +217,32 @@ fn mesh(tris: &[[[f32; 3]; 3]], to_sheet: &dyn Fn([f32; 3]) -> Vec3) -> Option<M
     (!faces.is_empty()).then_some(Mesh { vertices, faces, kind: MeshKind::Polyface })
 }
 
+/// A flat polygon mesh from an outline at height `z` (counterclockwise face points up).
+fn polygon_mesh(outline: &[Vec2], z: f64) -> Option<Mesh> {
+    let mut pts = outline.to_vec();
+    if pts.len() > 1 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-9) {
+        pts.pop();
+    }
+    let n = pts.len();
+    if !(3..=10_000).contains(&n) {
+        return None;
+    }
+    if cadaddy_geom::shoelace(&pts) < 0.0 {
+        pts.reverse();
+    }
+    let vertices: Vec<Vec3> = pts.iter().map(|p| Vec3::new(p.x, p.y, z)).collect();
+    let n32 = u32::try_from(n).ok()?;
+    let faces = vec![MeshFace { v: (0..n32).collect(), hidden: 0 }];
+    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+}
+
+/// A floor/ceiling tag that includes the room name.
+fn room_tag(part: Part, level: &str, source: Handle, room_name: &str) -> Vec<RawTag> {
+    let mut t = tag(part, level, source);
+    t.push(RawTag { code: 1000, value: format!("room:{}", room_name.chars().take(250).collect::<String>()) });
+    t
+}
+
 /// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides.
 fn slab(top: &Mesh, t: f64) -> Mesh {
     let n = top.vertices.len() as u32;
@@ -264,6 +290,27 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
             notes.push("Nothing to build.".into());
         }
     }
+    // Get rooms before mutating the drawing — rooms per level for per-room slabs.
+    let all_rooms = super::rooms3d::rooms(s).unwrap_or_default();
+    let level_names: Vec<&str> = planned.iter().filter_map(|(si, _)| scene.levels.get(*si).map(|l| l.name.as_str())).collect();
+    let rooms_by_level: HashMap<&str, Vec<&super::rooms3d::Room3>> = {
+        let mut map: HashMap<&str, Vec<&super::rooms3d::Room3>> = HashMap::new();
+        for r in &all_rooms {
+            let lv = r.level.as_deref()
+                .filter(|n| level_names.contains(n))
+                .or_else(|| if level_names.len() == 1 { level_names.first().copied() } else { None });
+            if let Some(name) = lv {
+                map.entry(name).or_default().push(r);
+            }
+        }
+        map
+    };
+    // Which planned scene-level indices have rooms (they get per-room slabs, not level-extent).
+    let levels_with_rooms: std::collections::HashSet<usize> = planned
+        .iter()
+        .filter(|(si, _)| scene.levels.get(*si).is_some_and(|l| rooms_by_level.contains_key(l.name.as_str())))
+        .map(|(si, _)| *si)
+        .collect();
     let d = s.doc_mut()?;
     let removed = remove_made(d);
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -289,10 +336,51 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
             }
         }
+        // Per-room floor slabs and ceilings from room boundaries.
+        if levels_with_rooms.contains(si) {
+            let level_rooms = rooms_by_level.get(level.name.as_str()).map(|v| v.as_slice()).unwrap_or_default();
+            let slab_t = g.slab_ft.max(0.0) * upf;
+            for r in level_rooms {
+                let room_label = if let Some(ref num) = r.number {
+                    format!("{} ({})", r.name, num)
+                } else {
+                    r.name.clone()
+                };
+                // Floor slab: a polygon at the floor elevation, thickened downward.
+                if let Some(top) = polygon_mesh(&r.outline, pl.z0) {
+                    let m = slab(&top, slab_t);
+                    let xdata = room_tag(Part::Floor, &level.name, r.label, &room_label);
+                    let common = Common { layer: layer_of(Part::Floor).into(), xdata: xdata.into(), ..Common::default() };
+                    if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+                        *counts.entry(part_name(Part::Floor)).or_insert(0) += 1;
+                    }
+                }
+                // Ceiling: a flat polygon at the ceiling height.
+                if let Some(m) = polygon_mesh(&r.outline, pl.z0 + r.ceiling) {
+                    let xdata = room_tag(Part::Ceiling, &level.name, r.label, &room_label);
+                    let common = Common { layer: layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
+                    if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+                        *counts.entry(part_name(Part::Ceiling)).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    // For planned levels without rooms, note the fallback.
+    for (si, _) in &planned {
+        if !levels_with_rooms.contains(si) {
+            if let Some(level) = scene.levels.get(*si) {
+                notes.push(format!("{}: floors/ceilings from level extents (no rooms found).", level.name));
+            }
+        }
     }
     for grp in gs.iter().take(MAX_OBJECTS) {
         // Levels built from the plan's pairs keep only Walk mode's floors and ceilings.
         if matches!(grp.part, Part::Wall | Part::Door | Part::Glass) && planned.iter().any(|(si, _)| *si == grp.level) {
+            continue;
+        }
+        // Levels with rooms: skip Walk mode's floors/ceilings (per-room slabs built above).
+        if matches!(grp.part, Part::Floor | Part::Ceiling) && levels_with_rooms.contains(&grp.level) {
             continue;
         }
         let Some(level) = scene.levels.get(grp.level) else { continue };

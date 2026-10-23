@@ -454,3 +454,140 @@ fn door_blocks_sit_in_their_openings() {
     let ceiling = made(&s, "ceiling");
     assert!(near(plan_box(ceiling.first().unwrap()), (0.0, 0.0, 480.0, 360.0)));
 }
+
+// ---------- per-room slabs from room boundaries (rework bim1-rw1) ----------
+
+fn rect(s: &mut Session, a: [f64; 2], b: [f64; 2]) {
+    s.execute("pline", &json!({"vertices": [a, [b[0], a[1]], b, [a[0], b[1]]], "closed": true})).unwrap();
+}
+
+fn label(s: &mut Session, at: [f64; 2], t: &str) {
+    s.execute("text", &json!({"at": at, "text": t, "height": 6})).unwrap();
+}
+
+/// An L-shaped plan with 3 rooms: LOBBY (20'×19', lower left), OFFICE (19'×9', upper left),
+/// STORAGE (19'×9', upper right). The L's notch is the empty area (240–480, 0–240).
+///
+/// ```text
+///       0"     240"    480"
+/// 360"  +-------+------+
+///       |OFFICE |STORAG|
+/// 240"  +-------+------+
+///       |LOBBY  |
+///       |       | NOTCH
+///   0"  +-------+
+///       0"     240"
+/// ```
+fn l_shaped_plan() -> Session {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    // Outer L-shaped boundary.
+    s.execute("pline", &json!({
+        "vertices": [[0,0], [240,0], [240,240], [480,240], [480,360], [0,360]],
+        "closed": true
+    })).unwrap();
+    // Inner room boundaries (6" walls).
+    // Room A (LOBBY): (6,6)–(234,234) → 228 × 228 = 51984 sq in.
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    // Room C (OFFICE): (6,246)–(234,354) → 228 × 108 = 24624 sq in.
+    rect(&mut s, [6.0, 246.0], [234.0, 354.0]);
+    // Room B (STORAGE): (246,246)–(474,354) → 228 × 108 = 24624 sq in.
+    rect(&mut s, [246.0, 246.0], [474.0, 354.0]);
+    // Room labels.
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    label(&mut s, [120.0, 120.0], "LOBBY");
+    label(&mut s, [120.0, 300.0], "OFFICE");
+    label(&mut s, [360.0, 300.0], "STORAGE");
+    s
+}
+
+/// MUST 1: an L-shaped plan with 3 rooms gets 3 floors + 3 ceilings, each area matching the
+/// room's true area within 0.5 in², and no slab vertex inside the L's notch (x > 240, y < 240).
+#[test]
+fn l_shaped_rooms_get_per_room_slabs() {
+    let mut s = l_shaped_plan();
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!(r["floors"], json!(3), "one floor per room: {r}");
+    assert_eq!(r["ceilings"], json!(3), "one ceiling per room: {r}");
+    let floors = made(&s, "floor");
+    assert_eq!(floors.len(), 3);
+    // Sort floors by area (largest first) for stable matching.
+    let mut areas: Vec<f64> = floors.iter().map(|f| flat_area(f, 0.0)).collect();
+    areas.sort_by(|a, b| b.total_cmp(a));
+    // LOBBY = 228 × 228 = 51984, OFFICE = STORAGE = 228 × 108 = 24624.
+    assert!((areas[0] - 51984.0).abs() < 0.5, "LOBBY area: {}", areas[0]);
+    assert!((areas[1] - 24624.0).abs() < 0.5, "OFFICE/STORAGE area: {}", areas[1]);
+    assert!((areas[2] - 24624.0).abs() < 0.5, "OFFICE/STORAGE area: {}", areas[2]);
+    // No slab vertex inside the L's notch (x > 240, y < 240).
+    for f in &floors {
+        for v in &f.vertices {
+            assert!(!(v.x > 240.0 + 1e-3 && v.y < 240.0 - 1e-3), "slab vertex in notch: ({}, {})", v.x, v.y);
+        }
+    }
+    let ceilings = made(&s, "ceiling");
+    assert_eq!(ceilings.len(), 3);
+    for c in &ceilings {
+        for v in &c.vertices {
+            assert!(!(v.x > 240.0 + 1e-3 && v.y < 240.0 - 1e-3), "ceiling vertex in notch: ({}, {})", v.x, v.y);
+        }
+    }
+}
+
+/// MUST 2: two levels at different elevations get walls, slabs and ceilings each at their own z.
+#[test]
+fn two_levels_at_different_elevations() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    // Level 1 plan at the origin: a 20' × 10' room.
+    rect(&mut s, [0.0, 0.0], [240.0, 120.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 114.0]);
+    // Level 2 plan offset 600" to the right (on the same sheet).
+    rect(&mut s, [600.0, 0.0], [840.0, 120.0]);
+    rect(&mut s, [606.0, 6.0], [834.0, 114.0]);
+    // Room labels.
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    label(&mut s, [120.0, 60.0], "GROUND");
+    label(&mut s, [720.0, 60.0], "UPPER");
+    let two_level_rules = json!({
+        "units_per_foot": 12,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [600, 0]}
+        ],
+        "layers": [{"layer": "A-WALL", "kind": "wall", "skip_curves": true}]
+    });
+    s.doc_mut().unwrap().building_spec = Some(json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9,
+             "region": [0, 0, 480, 240]},
+            {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9,
+             "region": [480, 0, 960, 240]}
+        ]
+    }).to_string());
+    let r = s.execute("wallgen", &json!({"rules": two_level_rules})).unwrap();
+    let floor_count = r["floors"].as_u64().unwrap_or(0);
+    let ceil_count = r["ceilings"].as_u64().unwrap_or(0);
+    assert!(floor_count >= 2, "at least one floor per level: {r}");
+    assert!(ceil_count >= 2, "at least one ceiling per level: {r}");
+    // Level 1 floor at z = 0 (elevation 0'), Level 2 floor at z = 120 (elevation 10').
+    let floors = made(&s, "floor");
+    let mut floor_zs: Vec<f64> = floors.iter().map(|f| {
+        f.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max)
+    }).collect();
+    floor_zs.sort_by(|a, b| a.total_cmp(b));
+    floor_zs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    assert!(floor_zs.len() >= 2, "floors at different z: {floor_zs:?}");
+    assert!(floor_zs.iter().any(|z| z.abs() < 1.0), "L1 floor near z=0: {floor_zs:?}");
+    assert!(floor_zs.iter().any(|z| (z - 120.0).abs() < 1.0), "L2 floor near z=120: {floor_zs:?}");
+    // Level 1 ceiling at z = 108 (9'), Level 2 ceiling at z = 228 (10' + 9').
+    let ceilings = made(&s, "ceiling");
+    let mut ceil_zs: Vec<f64> = ceilings.iter().map(|c| {
+        c.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max)
+    }).collect();
+    ceil_zs.sort_by(|a, b| a.total_cmp(b));
+    ceil_zs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    assert!(ceil_zs.len() >= 2, "ceilings at different z: {ceil_zs:?}");
+    assert!(ceil_zs.iter().any(|z| (z - 108.0).abs() < 1.0), "L1 ceiling near z=108: {ceil_zs:?}");
+    assert!(ceil_zs.iter().any(|z| (z - 228.0).abs() < 1.0), "L2 ceiling near z=228: {ceil_zs:?}");
+}
