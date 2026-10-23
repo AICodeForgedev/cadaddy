@@ -419,11 +419,11 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
             }
         }
 
-        // Prune entities every 500 steps to prevent unbounded growth (which makes selectall,
-        // region, array etc. very slow in debug builds after thousands of draw calls).
-        if step % 500 == 0 {
+        // Prune entities every 200 steps to prevent unbounded growth (which makes selectall,
+        // region, array etc. very slow in debug builds after hundreds of draw calls).
+        if step % 200 == 0 {
             let count = e.entity_count();
-            if count > 2000 {
+            if count > 500 {
                 let _ = e.call("cmdline.input", json!({"text": "selectall"}));
                 let _ = e.call("engine.execute", json!({"command": "erase", "params": {}}));
                 // Re-seed some geometry.
