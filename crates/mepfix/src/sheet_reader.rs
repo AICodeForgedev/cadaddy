@@ -844,6 +844,74 @@ fn bubbles_on_lines(a: &Alignment, bubbles: &[(String, [f64; 2])], grid_x: &[Gri
     mostly_fit(&misfits)
 }
 
+/// Grid labels in their natural order: numbers by value (`2` before `10`, `1.5` between), else
+/// shorter first (`Z` before `AA`), then alphabetically. Grids are labelled so these ascend
+/// along building +x and +y.
+fn label_key(label: &str) -> (u8, f64, usize, String) {
+    let t = label.trim().to_uppercase();
+    match t.parse::<f64>() {
+        Ok(v) if v.is_finite() => (0, v, 0, t),
+        _ => (1, 0.0, t.chars().count(), t),
+    }
+}
+
+/// Whether lines read in model order (`at_in` ascending) carry their labels in natural order:
+/// more neighbours ascend than descend ([`label_key`]). A sheet plotted turned 180° reads its
+/// lines in reverse.
+fn ascends(grids: &[DetectedGrid]) -> bool {
+    let mut sorted: Vec<&DetectedGrid> = grids.iter().collect();
+    sorted.sort_by(|a, b| a.at_in.total_cmp(&b.at_in));
+    let (mut up, mut down) = (0usize, 0usize);
+    for w in sorted.windows(2) {
+        if let [a, b] = w {
+            match label_key(&a.label).partial_cmp(&label_key(&b.label)) {
+                Some(std::cmp::Ordering::Less) => up += 1,
+                Some(std::cmp::Ordering::Greater) => down += 1,
+                _ => {}
+            }
+        }
+    }
+    up > down
+}
+
+/// Largest turn off square, degrees, a sheet's bubble pairs may show and its read lines still
+/// be taken as square (pair ends a print's 0.01" off show a few hundredths of a degree).
+const SQUARE_DEG: f64 = 0.25;
+
+/// How far a sheet's bubble pairs turn it off square, degrees in (-45, 45]: the circular mean
+/// of each pair's direction taken modulo 90° (four times the angle, as unit vectors). `None`
+/// with no pairs, or when the pairs don't agree on a turn.
+fn pair_turn_deg(bubbles: &[(String, [f64; 2])]) -> Option<f64> {
+    let (mut c, mut s, mut n) = (0.0, 0.0, 0usize);
+    for d in pair_directions(bubbles) {
+        let a = d[1].atan2(d[0]) * 4.0;
+        c += a.cos();
+        s += a.sin();
+        n += 1;
+    }
+    if n == 0 || c.hypot(s) < 0.5 * n as f64 {
+        return None;
+    }
+    Some(s.atan2(c).to_degrees() / 4.0)
+}
+
+/// The unit direction from a label's first bubble to its second, for every label with two.
+fn pair_directions(bubbles: &[(String, [f64; 2])]) -> Vec<[f64; 2]> {
+    let mut by_label: BTreeMap<&str, Vec<[f64; 2]>> = BTreeMap::new();
+    for (label, pos) in bubbles {
+        by_label.entry(label.as_str()).or_default().push(*pos);
+    }
+    by_label
+        .values()
+        .filter_map(|p| {
+            let (a, b) = (p.first()?, p.get(1)?);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let l = d[0].hypot(d[1]);
+            (l > 1e-9 && l.is_finite()).then(|| [d[0] / l, d[1] / l])
+        })
+        .collect()
+}
+
 fn compute_alignment_from_bubbles(bubbles: &[(String, [f64; 2])], grid_x: &[GridLine], grid_y: &[GridLine]) -> Option<Alignment> {
     let x_map: BTreeMap<&str, f64> = grid_x.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
     let y_map: BTreeMap<&str, f64> = grid_y.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
@@ -853,62 +921,72 @@ fn compute_alignment_from_bubbles(bubbles: &[(String, [f64; 2])], grid_x: &[Grid
         by_label.entry(label.as_str()).or_default().push(*pos);
     }
 
-    // Step 1: determine rotation from bubble pair directions.
-    // x-grid labels (constant x, runs along building y): direction = rotated [0, 1] = [-sin θ, cos θ]
-    // y-grid labels (constant y, runs along building x): direction = rotated [1, 0] = [cos θ, sin θ]
-    let mut rotation_estimates = Vec::new();
-
+    // Step 1: the rotation from bubble pair directions. A pair's direction gives the turn only
+    // up to a half turn (which bubble is "first" is arbitrary), so the estimates are averaged
+    // as axes: the mean of (cos 2θ, sin 2θ), halved. A plain mean of angles put in [0, π)
+    // breaks at the seam: a square sheet whose pairs are a hair off either way (±ε, read as ε
+    // and π − ε) averaged to 90°.
+    // x-grid labels (constant x, runs along building y): direction = ±[-sin θ, cos θ]
+    // y-grid labels (constant y, runs along building x): direction = ±[cos θ, sin θ]
+    let (mut c2, mut s2, mut n) = (0.0, 0.0, 0usize);
     for (label, positions) in &by_label {
-        if positions.len() < 2 {
-            continue;
-        }
-        let (a, b) = (positions[0], positions[1]);
+        let (Some(a), Some(b)) = (positions.first(), positions.get(1)) else { continue };
         let d = [b[0] - a[0], b[1] - a[1]];
-        let l = (d[0].powi(2) + d[1].powi(2)).sqrt();
-        if l < 1e-9 {
+        let l = d[0].hypot(d[1]);
+        if l < 1e-9 || !l.is_finite() {
             continue;
         }
         let dir = [d[0] / l, d[1] / l];
-
-        if x_map.contains_key(label) {
-            // x-grid line direction in model = [-sin θ, cos θ] (or flipped)
-            // θ = atan2(-dir[0], dir[1]) or atan2(dir[0], -dir[1])
-            // Use both signs since the bubble order is arbitrary.
-            rotation_estimates.push((-dir[0]).atan2(dir[1]));
+        let estimate = if x_map.contains_key(label) {
+            (-dir[0]).atan2(dir[1])
         } else if y_map.contains_key(label) {
-            // y-grid line direction in model = [cos θ, sin θ] (or flipped)
-            rotation_estimates.push(dir[1].atan2(dir[0]));
-        }
+            dir[1].atan2(dir[0])
+        } else {
+            continue;
+        };
+        c2 += (2.0 * estimate).cos();
+        s2 += (2.0 * estimate).sin();
+        n += 1;
     }
-
-    if rotation_estimates.is_empty() {
+    // Pairs that don't agree on an axis (a detail's few bubbles) give no rotation.
+    if n == 0 || c2.hypot(s2) < 0.5 * n as f64 {
         return None;
     }
+    let axis = s2.atan2(c2) / 2.0;
 
-    // Normalise angles to a consistent range and average.
-    // Angles might be off by π due to bubble order. Normalise to [0, π).
-    let normalise = |a: f64| {
-        let mut a = a % std::f64::consts::PI;
-        if a < 0.0 {
-            a += std::f64::consts::PI;
+    // Which way along the axis: the grid's labels ascend along building +x and +y (the common
+    // grid is built so, [`assemble_grid`]), so turned the right way each line's position across
+    // the sheet rises with its place in the common grid; turned a half turn wrong, it falls.
+    // This tells 0° from 180° (and 90° from 270°).
+    let order = |theta: f64| -> f64 {
+        let (sin_t, cos_t) = theta.sin_cos();
+        let mut along: Vec<(f64, f64)> = Vec::new(); // (position across the sheet, common-grid feet)
+        let mut across: Vec<(f64, f64)> = Vec::new();
+        for (label, positions) in &by_label {
+            let (Some(a), Some(b)) = (positions.first(), positions.get(1)) else { continue };
+            let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            if let Some(&ft) = x_map.get(label) {
+                along.push((mid[0] * cos_t + mid[1] * sin_t, ft));
+            } else if let Some(&ft) = y_map.get(label) {
+                across.push((-mid[0] * sin_t + mid[1] * cos_t, ft));
+            }
         }
-        a
+        let cov = |v: &[(f64, f64)]| -> f64 {
+            if v.is_empty() {
+                return 0.0;
+            }
+            let k = v.len() as f64;
+            let (mp, mf) = (v.iter().map(|p| p.0).sum::<f64>() / k, v.iter().map(|p| p.1).sum::<f64>() / k);
+            v.iter().map(|(p, f)| (p - mp) * (f - mf)).sum()
+        };
+        cov(&along) + cov(&across)
     };
-    let norm: Vec<f64> = rotation_estimates.iter().map(|a| normalise(*a)).collect();
-    let avg_norm = norm.iter().sum::<f64>() / norm.len() as f64;
-
-    // Pick the candidate (avg_norm or avg_norm - π) closest to the original estimates.
-    let candidates = [avg_norm, avg_norm - std::f64::consts::PI];
-    let theta = *candidates
-        .iter()
-        .min_by(|a, b| {
-            let da: f64 = rotation_estimates.iter().map(|r| (r - *a).abs()).sum();
-            let db: f64 = rotation_estimates.iter().map(|r| (r - *b).abs()).sum();
-            da.total_cmp(&db)
-        })
-        .unwrap_or(&avg_norm);
-
-    let rotation_deg = theta.to_degrees();
+    let theta = if order(axis) < 0.0 { axis + std::f64::consts::PI } else { axis };
+    // In (-180°, 180°].
+    let mut rotation_deg = theta.to_degrees();
+    if rotation_deg > 180.0 {
+        rotation_deg -= 360.0;
+    }
 
     // Step 2: compute offset using grid line midpoints.
     // For an x-grid bubble pair with label L:
@@ -1276,8 +1354,12 @@ pub fn sheet_map_from(mut sheets: Vec<RecognisedSheet>) -> SheetMap {
         // An unrotated plan: the lines it read fit the common grid square (this also aligns
         // one view of a two-view sheet, with one bubble per line and so no pairs to turn by).
         // Else bubble-based alignment (rotated plans), kept when the bubbles then sit on their
-        // lines (a detail or an elevation with a few bubbles gives nonsense).
-        sh.alignment = alignment_from_lines(&sh.grid_x, &sh.grid_y, &grid_x, &grid_y)
+        // lines (a detail or an elevation with a few bubbles gives nonsense). A sheet whose
+        // bubble pairs show it turned a little off square isn't read square: its lines fit
+        // within the tolerance yet 2.5° puts the far end of a long building feet out.
+        let turned = pair_turn_deg(&sh.bubbles).is_some_and(|t| t.abs() > SQUARE_DEG);
+        let square = if turned { None } else { alignment_from_lines(&sh.grid_x, &sh.grid_y, &grid_x, &grid_y) };
+        sh.alignment = square
             .or_else(|| compute_alignment_from_bubbles(&sh.bubbles, &grid_x, &grid_y).filter(|a| bubbles_on_lines(a, &sh.bubbles, &grid_x, &grid_y)));
     }
 
@@ -1313,22 +1395,64 @@ fn assemble_grid(sheets: &[RecognisedSheet]) -> (Vec<GridLine>, Vec<GridLine>) {
         return (Vec::new(), Vec::new());
     };
 
-    // Pick the best sheet matching the majority classification.
-    let best = valid.iter().filter(|s| grid_x_labels(s) == majority_x).max_by_key(|s| s.grid_x.len() + s.grid_y.len());
+    // Pick the best sheet matching the majority classification: one plotted square and the
+    // right way up (its lines in label order along +x and +y, [`ascends`]) if there is one, as
+    // its lines become the building frame; then the one reading most lines.
+    let upright_square = |s: &RecognisedSheet| -> (bool, bool) {
+        let square = pair_turn_deg(&s.bubbles).is_none_or(|t| t.abs() <= SQUARE_DEG);
+        (ascends(&s.grid_x) && ascends(&s.grid_y) && square, square)
+    };
+    let best = valid.iter().filter(|s| grid_x_labels(s) == majority_x).max_by_key(|s| {
+        let (upright, square) = upright_square(s);
+        (upright, square, s.grid_x.len() + s.grid_y.len())
+    });
 
     let Some(ref_sheet) = best else {
         return (Vec::new(), Vec::new());
     };
+    // Every sheet read the same way up as the reference adds its reading of each line, shifted
+    // onto the reference: one sheet's bubbles a little off don't set the building frame alone.
+    let (ref_upright, ref_square) = upright_square(ref_sheet);
+    let agree: Vec<&RecognisedSheet> =
+        valid.iter().copied().filter(|s| grid_x_labels(s) == majority_x && upright_square(s) == (ref_upright, ref_square)).collect();
+    let consensus = |pick: &dyn Fn(&RecognisedSheet) -> &[DetectedGrid]| -> Vec<DetectedGrid> {
+        let reference = pick(ref_sheet);
+        let mut sums: BTreeMap<&str, (f64, usize)> = BTreeMap::new();
+        for s in &agree {
+            let pairs: Vec<(&str, f64)> =
+                pick(s).iter().filter_map(|g| reference.iter().find(|r| r.label == g.label).map(|r| (r.label.as_str(), g.at_in - r.at_in))).collect();
+            let mut shifts: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+            shifts.sort_by(f64::total_cmp);
+            let Some(&median) = shifts.get(shifts.len() / 2) else { continue };
+            let misfits: Vec<f64> = shifts.iter().map(|d| d - median).collect();
+            if !mostly_fit(&misfits) {
+                continue;
+            }
+            let fits: Vec<(&str, f64)> = pairs.into_iter().filter(|p| (p.1 - median).abs() <= LINE_FIT_TOLERANCE_IN).collect();
+            let shift = fits.iter().map(|p| p.1).sum::<f64>() / fits.len().max(1) as f64;
+            for (label, d) in fits {
+                let e = sums.entry(label).or_default();
+                e.0 += d - shift;
+                e.1 += 1;
+            }
+        }
+        reference
+            .iter()
+            .map(|r| {
+                let mean = sums.get(r.label.as_str()).map_or(0.0, |(sum, n)| sum / (*n).max(1) as f64);
+                DetectedGrid { label: r.label.clone(), at_in: r.at_in + mean }
+            })
+            .collect()
+    };
 
     let to_ft = |grids: &[DetectedGrid]| -> Vec<GridLine> {
-        if grids.is_empty() {
-            return Vec::new();
-        }
-        let origin = grids[0].at_in;
+        // Building coordinates start at the reference sheet's first line each way (the lowest
+        // label of an upright sheet) at 0.
+        let Some(origin) = grids.first().map(|g| g.at_in) else { return Vec::new() };
         grids.iter().map(|g| GridLine { label: g.label.clone(), at_ft: (g.at_in - origin) / 12.0 }).collect()
     };
 
-    (to_ft(&ref_sheet.grid_x), to_ft(&ref_sheet.grid_y))
+    (to_ft(&consensus(&|s| &s.grid_x)), to_ft(&consensus(&|s| &s.grid_y)))
 }
 
 /// Convert model inches to building feet using a sheet's alignment.
@@ -1462,6 +1586,8 @@ pub struct SheetScore {
     pub scale_correct: bool,
     /// Grid alignment error in feet (mean absolute error of grid intersection positions).
     pub grid_error_ft: Option<f64>,
+    /// The largest of those errors, feet: the worst grid intersection.
+    pub grid_max_error_ft: Option<f64>,
 }
 
 /// Score the recognised sheet map against the truth.
@@ -1491,6 +1617,7 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
                 }
                 if !errors.is_empty() {
                     sc.grid_error_ft = Some(errors.iter().sum::<f64>() / errors.len() as f64);
+                    sc.grid_max_error_ft = Some(errors.iter().copied().fold(0.0, f64::max));
                 }
             }
         }
@@ -1520,10 +1647,79 @@ mod tests {
         let gx = vec![GridLine { label: "1".into(), at_ft: 0.0 }, GridLine { label: "2".into(), at_ft: 24.0 }];
         let gy = vec![GridLine { label: "A".into(), at_ft: 0.0 }, GridLine { label: "B".into(), at_ft: 30.0 }];
         let b = detail_bubbles();
-        // The pairs alone turn the sheet (the nonsense rotations seen on details) ...
-        let a = compute_alignment_from_bubbles(&b, &gx, &gy).expect("pairs give an alignment");
-        assert!(a.rotation_deg.abs() > 5.0, "rotation {}", a.rotation_deg);
-        // ... which the bubbles then sitting off their lines rejects.
-        assert!(!bubbles_on_lines(&a, &b, &gx, &gy));
+        // The pairs alone would turn the sheet (the nonsense rotations seen on details): either
+        // they don't agree on an axis and give none, or the bubbles then sitting off their
+        // lines reject the rotation they give.
+        if let Some(a) = compute_alignment_from_bubbles(&b, &gx, &gy) {
+            assert!(a.rotation_deg.abs() > 5.0, "rotation {}", a.rotation_deg);
+            assert!(!bubbles_on_lines(&a, &b, &gx, &gy));
+        }
+        // Each pair alone turns it.
+        let one = |label: &str| b.iter().filter(|(l, _)| l == label).cloned().collect::<Vec<_>>();
+        for label in ["1", "A"] {
+            let a = compute_alignment_from_bubbles(&one(label), &gx, &gy);
+            assert!(a.as_ref().is_none_or(|a| a.rotation_deg.abs() > 5.0), "{label}: {a:?}");
+        }
+    }
+
+    fn square_grid() -> (Vec<GridLine>, Vec<GridLine>) {
+        let gx = (0..4).map(|i| GridLine { label: (i + 1).to_string(), at_ft: f64::from(i) * 24.0 }).collect();
+        let gy = ["A", "B", "C"].iter().enumerate().map(|(i, l)| GridLine { label: (*l).into(), at_ft: i as f64 * 30.0 }).collect();
+        (gx, gy)
+    }
+
+    /// Both bubbles of every line of `square_grid`, drawn turned `deg` and shifted, each moved by
+    /// `jitter` (model inches) one way or the other.
+    fn turned_bubbles(deg: f64, jitter: f64) -> Vec<(String, [f64; 2])> {
+        let (gx, gy) = square_grid();
+        let mut b = Vec::new();
+        let mut k = 0usize;
+        let mut push = |label: &str, p: [f64; 2]| {
+            let r = layout::rotate([p[0] * 12.0, p[1] * 12.0], deg);
+            let sign = |n: usize| if n.is_multiple_of(2) { 1.0 } else { -1.0 };
+            b.push((label.to_string(), [r[0] + 500.0 + sign(k) * jitter, r[1] - 300.0 + sign(k / 2) * jitter]));
+            k += 1;
+        };
+        for g in &gx {
+            push(&g.label, [g.at_ft, -10.0]);
+            push(&g.label, [g.at_ft, 70.0]);
+        }
+        for g in &gy {
+            push(&g.label, [-10.0, g.at_ft]);
+            push(&g.label, [82.0, g.at_ft]);
+        }
+        b
+    }
+
+    #[test]
+    fn rotation_is_an_axial_mean_turned_by_label_order() {
+        let (gx, gy) = square_grid();
+        // 0.01" at 1/8" = 1'-0" is 0.96 model inches.
+        for deg in [0.0, 90.0, 180.0, -90.0, 2.5, -2.5, 177.5] {
+            for jitter in [0.0, 0.96] {
+                let a = compute_alignment_from_bubbles(&turned_bubbles(deg, jitter), &gx, &gy).expect("aligned");
+                let mut off = (a.rotation_deg - deg) % 360.0;
+                if off > 180.0 {
+                    off -= 360.0;
+                } else if off < -180.0 {
+                    off += 360.0;
+                }
+                assert!(off.abs() < 0.1, "{deg}° jitter {jitter}: read {}", a.rotation_deg);
+            }
+        }
+        // The pairs of a square sheet a hair off read square, not turned.
+        assert!(pair_turn_deg(&turned_bubbles(0.0, 0.96)).is_some_and(|t| t.abs() < SQUARE_DEG));
+        assert!(pair_turn_deg(&turned_bubbles(90.0, 0.96)).is_some_and(|t| t.abs() < SQUARE_DEG));
+        assert!(pair_turn_deg(&turned_bubbles(2.5, 0.96)).is_some_and(|t| (t - 2.5).abs() < 0.1));
+    }
+
+    #[test]
+    fn labels_ascend_in_natural_order() {
+        let g = |labels: &[&str]| labels.iter().enumerate().map(|(i, l)| DetectedGrid { label: (*l).into(), at_in: i as f64 }).collect::<Vec<_>>();
+        assert!(ascends(&g(&["1", "2", "10", "11"])));
+        assert!(ascends(&g(&["A", "B", "Z", "AA"])));
+        assert!(ascends(&g(&["1", "1.5", "2"])));
+        assert!(!ascends(&g(&["C", "B", "A"])));
+        assert!(!ascends(&g(&["4", "3", "2", "1"])));
     }
 }
