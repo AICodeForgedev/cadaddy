@@ -834,6 +834,8 @@ pub fn run_pipeline_on_scan(scan: &ScanRead, sh: &Sheet, truth: &crate::truth::T
             size_in: r.size_in,
             level: level_code.to_string(),
             midpoint_ft: mid,
+            from_ft: r.from_ft,
+            to_ft: r.to_ft,
             height_note: r.bottom_ft.map(|h| format!("BOD @ {h}")),
             vertical: false,
         });
