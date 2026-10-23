@@ -732,11 +732,7 @@ pub fn read_scan(s: &Scan, sh: &Sheet, grid: &Grid) -> Result<ScanRead, String> 
             _ => ("rule", base_conf),
         };
         for _ in 0..count {
-            out.sources.push(ScanSource {
-                sheet: sheet_label.to_string(),
-                status: status.to_string(),
-                confidence: conf.min(1.0),
-            });
+            out.sources.push(ScanSource { sheet: sheet_label.to_string(), status: status.to_string(), confidence: conf.min(1.0) });
         }
     }
     out.title_block_number = tb_number;
@@ -753,14 +749,7 @@ pub fn read_scan(s: &Scan, sh: &Sheet, grid: &Grid) -> Result<ScanRead, String> 
 /// typically the largest text in the lower-right area, matching patterns like `M-101`, `P-201`,
 /// `FP-101`, `E-301`. The discipline prefix (`M`, `P`, `FP`, `E`, `A`, `S`, `G`) is extracted
 /// from the number.
-fn identify_title_block(
-    text: &[TextLine],
-    strip_y: f64,
-    _top_y: f64,
-    left: f64,
-    right: f64,
-    dpi: f64,
-) -> (Option<String>, Option<String>) {
+fn identify_title_block(text: &[TextLine], strip_y: f64, _top_y: f64, left: f64, right: f64, dpi: f64) -> (Option<String>, Option<String>) {
     // Title-strip text: below the plan area, in the right portion (where the sheet number is).
     let title_right = left + 0.62 * (right - left);
     let mut candidates: Vec<(&str, f64)> = Vec::new();
@@ -787,10 +776,7 @@ fn identify_title_block(
     };
     // Among matches, prefer the largest text (most prominent in the title block).
     let min_height = 0.08 * dpi; // ~0.08" = typical sheet number text
-    let best = candidates
-        .iter()
-        .filter(|(label, h)| sheet_re(label) && *h >= min_height)
-        .max_by(|a, b| a.1.total_cmp(&b.1));
+    let best = candidates.iter().filter(|(label, h)| sheet_re(label) && *h >= min_height).max_by(|a, b| a.1.total_cmp(&b.1));
     if let Some(&(number, _)) = best {
         let disc = number.split('-').next().unwrap_or_default();
         (Some(number.to_string()), Some(disc.to_string()))
@@ -821,11 +807,7 @@ pub struct ScanPipelineResult {
 /// - Heights: the runs from ducts/pipes on the scan are fed to `resolve_heights`.
 /// - Equipment: the scan drawing is passed to `read_equipment` as a `SheetIn`.
 /// - Clashes: deferred — requires full 3D placement which needs duct3d (Q258).
-pub fn run_pipeline_on_scan(
-    scan: &ScanRead,
-    sh: &Sheet,
-    truth: &crate::truth::Truth,
-) -> ScanPipelineResult {
+pub fn run_pipeline_on_scan(scan: &ScanRead, sh: &Sheet, truth: &crate::truth::Truth) -> ScanPipelineResult {
     let mut result = ScanPipelineResult {
         heights: Vec::new(),
         equipment: crate::equip_reader::EquipmentRead::default(),
@@ -858,10 +840,8 @@ pub fn run_pipeline_on_scan(
     }
 
     if let Some(level) = truth.level(level_code) {
-        let rooms: Vec<crate::truth::Room> =
-            truth.building.rooms.iter().filter(|rm| rm.level == level_code).cloned().collect();
-        let beams: Vec<crate::truth::Beam> =
-            truth.building.beams.iter().filter(|b| b.level == level_code).cloned().collect();
+        let rooms: Vec<crate::truth::Room> = truth.building.rooms.iter().filter(|rm| rm.level == level_code).cloned().collect();
+        let beams: Vec<crate::truth::Beam> = truth.building.beams.iter().filter(|b| b.level == level_code).cloned().collect();
         // Floor-to-floor: next level's elevation minus this one's, or a default of 13 ft.
         let ftf = truth
             .building
@@ -874,11 +854,7 @@ pub fn run_pipeline_on_scan(
         let ctx = crate::heights::LevelContext {
             level_code: level_code.to_string(),
             elevation_ft: level.elevation_ft,
-            structure_underside_ft: beams
-                .iter()
-                .map(|b| b.tos_ft - level.elevation_ft)
-                .fold(f64::INFINITY, f64::min)
-                .min(ftf),
+            structure_underside_ft: beams.iter().map(|b| b.tos_ft - level.elevation_ft).fold(f64::INFINITY, f64::min).min(ftf),
             rooms,
             beams,
         };

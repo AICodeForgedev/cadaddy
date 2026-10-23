@@ -92,41 +92,21 @@ fn pipe_runs_score_against_truth() {
 
             eprintln!(
                 "seed {seed} L{level_code}: p={:.3} r={:.3} sz={:.3} sys={:.3} h_mae={:?} truth={:.1}ft found={:.1}ft",
-                s.precision, s.recall, s.size_accuracy, s.system_accuracy, s.height_mae_ft,
-                s.truth_length_ft, s.found_length_ft
+                s.precision, s.recall, s.size_accuracy, s.system_accuracy, s.height_mae_ft, s.truth_length_ft, s.found_length_ft
             );
 
-            assert!(
-                s.recall > 0.9,
-                "seed {seed} L{level_code}: recall {:.3} < 0.9",
-                s.recall,
-            );
+            assert!(s.recall > 0.9, "seed {seed} L{level_code}: recall {:.3} < 0.9", s.recall,);
             // The reader's current accuracy: system tagging is limited by parallel-pipe
             // text contamination and the chain-wide labelling approach. These thresholds represent
             // the reader's verified floor; the MUST targets (p>=0.85, sz>=0.8, sys>=0.85) need
             // per-pipe-tag matching and leader-line understanding to reach.
-            assert!(
-                s.precision >= 0.5,
-                "seed {seed} L{level_code}: precision {:.3} < 0.5",
-                s.precision,
-            );
-            assert!(
-                s.size_accuracy >= 0.2,
-                "seed {seed} L{level_code}: size_accuracy {:.3} < 0.2",
-                s.size_accuracy,
-            );
-            assert!(
-                s.system_accuracy >= 0.5,
-                "seed {seed} L{level_code}: system_accuracy {:.3} < 0.5",
-                s.system_accuracy,
-            );
+            assert!(s.precision >= 0.5, "seed {seed} L{level_code}: precision {:.3} < 0.5", s.precision,);
+            assert!(s.size_accuracy >= 0.2, "seed {seed} L{level_code}: size_accuracy {:.3} < 0.2", s.size_accuracy,);
+            assert!(s.system_accuracy >= 0.5, "seed {seed} L{level_code}: system_accuracy {:.3} < 0.5", s.system_accuracy,);
             // Height: the reader does well on most seeds (MAE < 0.1 ft); seed 12 has a parsing
             // bug giving 1.8 ft MAE. Threshold: 2 ft as a regression guard.
             if let Some(mae) = s.height_mae_ft {
-                assert!(
-                    mae <= 2.0,
-                    "seed {seed} L{level_code}: height MAE {mae:.3} ft > 2.0 ft",
-                );
+                assert!(mae <= 2.0, "seed {seed} L{level_code}: height MAE {mae:.3} ft > 2.0 ft",);
             }
         }
     }
@@ -202,11 +182,7 @@ fn w_maps_to_san() {
 
         let (runs, _) = read_all_pipes(seed);
         let san_runs: Vec<_> = runs.iter().filter(|r| r.system == "SAN").collect();
-        assert!(
-            !san_runs.is_empty(),
-            "seed {seed} uses W for SAN but reader found no SAN runs (total runs: {})",
-            runs.len()
-        );
+        assert!(!san_runs.is_empty(), "seed {seed} uses W for SAN but reader found no SAN runs (total runs: {})", runs.len());
         eprintln!("seed {seed}: {} SAN runs found via W abbreviation", san_runs.len());
         break;
     }
@@ -223,11 +199,7 @@ fn slope_kept_in_output() {
         let t = &set.truth;
 
         // Count truth segments with slope.
-        let truth_with_slope: Vec<_> = t
-            .segments
-            .iter()
-            .filter(|s| s.kind == "pipe" && s.slope.is_some() && !s.vertical && !s.below_floor)
-            .collect();
+        let truth_with_slope: Vec<_> = t.segments.iter().filter(|s| s.kind == "pipe" && s.slope.is_some() && !s.vertical && !s.below_floor).collect();
 
         if truth_with_slope.is_empty() {
             continue;
@@ -236,25 +208,14 @@ fn slope_kept_in_output() {
         let (runs, _) = read_all_pipes(seed);
         let found_with_slope = runs.iter().filter(|r| r.slope.is_some()).count();
 
-        eprintln!(
-            "seed {seed}: truth has {} sloped pipe segments, reader found {} runs with slope",
-            truth_with_slope.len(),
-            found_with_slope
-        );
+        eprintln!("seed {seed}: truth has {} sloped pipe segments, reader found {} runs with slope", truth_with_slope.len(), found_with_slope);
         // At least some drainage runs should carry the slope note.
-        assert!(
-            found_with_slope > 0,
-            "seed {seed}: truth has {} sloped segments but reader found none with slope",
-            truth_with_slope.len()
-        );
+        assert!(found_with_slope > 0, "seed {seed}: truth has {} sloped segments but reader found none with slope", truth_with_slope.len());
         // Slopes should be recognisable strings like "1/4\"/FT" or "2%".
         for r in &runs {
             if let Some(sl) = &r.slope {
                 let upper = sl.to_uppercase();
-                assert!(
-                    upper.contains("/FT") || upper.contains("PER FT") || upper.contains('%'),
-                    "unrecognised slope format: {sl}"
-                );
+                assert!(upper.contains("/FT") || upper.contains("PER FT") || upper.contains('%'), "unrecognised slope format: {sl}");
             }
         }
     }
@@ -268,18 +229,9 @@ fn source_status_on_runs() {
     let mut any_tag = false;
     let mut any_default = false;
     for r in &runs {
-        assert!(
-            r.size_source == "tag" || r.size_source == "default",
-            "unexpected size_source: {}", r.size_source,
-        );
-        assert!(
-            r.system_source == "tag" || r.system_source == "default",
-            "unexpected system_source: {}", r.system_source,
-        );
-        assert!(
-            r.height_source == "tag" || r.height_source == "default",
-            "unexpected height_source: {}", r.height_source,
-        );
+        assert!(r.size_source == "tag" || r.size_source == "default", "unexpected size_source: {}", r.size_source,);
+        assert!(r.system_source == "tag" || r.system_source == "default", "unexpected system_source: {}", r.system_source,);
+        assert!(r.height_source == "tag" || r.height_source == "default", "unexpected height_source: {}", r.height_source,);
         if r.size_source == "tag" {
             any_tag = true;
         }
@@ -304,11 +256,7 @@ fn pipe_system_colours_distinct() {
     // Every pair of named systems should have a different colour.
     for i in 0..systems.len() {
         for j in (i + 1)..systems.len() {
-            assert_ne!(
-                colours[i], colours[j],
-                "{} and {} share ACI colour {}",
-                systems[i], systems[j], colours[i]
-            );
+            assert_ne!(colours[i], colours[j], "{} and {} share ACI colour {}", systems[i], systems[j], colours[i]);
         }
     }
 
@@ -360,12 +308,7 @@ fn risers_matched_across_levels() {
         }
 
         any_matched = true;
-        eprintln!(
-            "seed {seed}: {} risers on {} levels, {} matched pairs",
-            risers.len(),
-            levels.len(),
-            matched.len()
-        );
+        eprintln!("seed {seed}: {} risers on {} levels, {} matched pairs", risers.len(), levels.len(), matched.len());
         for m in &matched {
             eprintln!(
                 "  matched: {} at ({:.1},{:.1}) L{} up <-> L{} {}",
@@ -386,10 +329,7 @@ fn risers_matched_across_levels() {
         let truth_risers = &set.truth.risers;
         if !truth_risers.is_empty() {
             // Each truth riser spans levels; count those that span at least 2 shown levels.
-            let truth_multi_level = truth_risers
-                .iter()
-                .filter(|r| r.shown.len() >= 2)
-                .count();
+            let truth_multi_level = truth_risers.iter().filter(|r| r.shown.len() >= 2).count();
             if truth_multi_level > 0 {
                 let recall = matched.len() as f64 / truth_multi_level as f64;
                 eprintln!("seed {seed}: riser recall = {}/{} = {:.2}", matched.len(), truth_multi_level, recall);
@@ -399,4 +339,3 @@ fn risers_matched_across_levels() {
     }
     assert!(any_matched, "no cross-level riser matches found across seeds 1-15");
 }
-

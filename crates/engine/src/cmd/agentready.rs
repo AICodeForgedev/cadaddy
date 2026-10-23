@@ -199,10 +199,7 @@ fn author(s: &Session, p: &Value) -> Result<String> {
     let requested = str_param(p, "author").unwrap_or("agent");
     if s.agent.from_agent {
         if requested == "user" {
-            return Err(bad(
-                "review",
-                "an agent's work is tagged \"agent\" — only a person's call uses author: \"user\"",
-            ));
+            return Err(bad("review", "an agent's work is tagged \"agent\" — only a person's call uses author: \"user\""));
         }
         return Ok("agent".to_string());
     }
@@ -590,11 +587,8 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
         let pass = v["pass"].as_bool().unwrap_or(false);
         let score = v["score"].as_f64().unwrap_or(0.0);
         let total = v["total"].as_u64().unwrap_or(0);
-        text += &format!(
-            "Validation: {} (score {score}, {total} failure{}). ",
-            if pass { "PASS" } else { "FAIL" },
-            if total == 1 { "" } else { "s" }
-        );
+        text +=
+            &format!("Validation: {} (score {score}, {total} failure{}). ", if pass { "PASS" } else { "FAIL" }, if total == 1 { "" } else { "s" });
     }
     text += &format!("Next: {} — {}.", next["call"].as_str().unwrap_or_default(), next["why"].as_str().unwrap_or_default());
     let mut v = json!({
@@ -1018,10 +1012,7 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_approve(s: &mut Session, p: &Value) -> Result<Value> {
     if s.agent.from_agent {
-        return Err(bad(
-            "review.approve",
-            "only a person can approve agent decisions — ask the user to open Tools \u{25b8} Agent Work",
-        ));
+        return Err(bad("review.approve", "only a person can approve agent decisions — ask the user to open Tools \u{25b8} Agent Work"));
     }
     let mut st = load(s.doc()?);
     let all = bool_or(p, "all", false);

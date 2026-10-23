@@ -49,21 +49,11 @@ fn hotel_session_with_truth() -> (Session, Vec<(String, RunTruth)>) {
                           "objects": [&handle]}));
         // Truth for guessed (even-indexed) runs.
         if k % 2 == 0 {
-            truth_map.push((
-                handle,
-                RunTruth {
-                    size_in: seg.size_in,
-                    bottom_ft: seg.height.as_ref().map_or(9.0, |h| h.bottom_ft),
-                },
-            ));
+            truth_map.push((handle, RunTruth { size_in: seg.size_in, bottom_ft: seg.height.as_ref().map_or(9.0, |h| h.bottom_ft) }));
         }
     }
     let mut s = Session::new();
-    s.execute(
-        "bspec.set",
-        &json!({"replace": true, "spec": {"levels": levels, "mep": {"systems": systems, "runs": runs}}}),
-    )
-    .unwrap();
+    s.execute("bspec.set", &json!({"replace": true, "spec": {"levels": levels, "mep": {"systems": systems, "runs": runs}}})).unwrap();
     (s, truth_map)
 }
 
@@ -153,11 +143,8 @@ fn the_hotel_agent_scores_against_truth() {
         let sys = item["detail"]["system"].as_str().unwrap_or("MEP");
         if let Some(t) = find_truth(&objects, &truth) {
             let cite = json!({"kind": "schedule", "document": format!("{} schedule", sys), "ref": "truth fixture"});
-            s.execute_agent(
-                "review.resolve",
-                &json!({"id": id, "answer": {"size_in": t.size_in, "bottom_ft": t.bottom_ft}, "citation": cite}),
-            )
-            .unwrap();
+            s.execute_agent("review.resolve", &json!({"id": id, "answer": {"size_in": t.size_in, "bottom_ft": t.bottom_ft}, "citation": cite}))
+                .unwrap();
             auto_resolved += 1;
         } else {
             s.execute_agent("review.defer", &json!({"id": id, "reason": "no truth entry for this run"})).unwrap();
@@ -177,11 +164,7 @@ fn the_hotel_agent_scores_against_truth() {
         if kind == "clash" {
             s.execute_agent("review.defer", &json!({"id": id, "reason": "coordination decision for a person"})).unwrap();
         } else {
-            s.execute_agent(
-                "review.rfi_draft",
-                &json!({"id": id, "question": format!("Clarify item {id}")}),
-            )
-            .unwrap();
+            s.execute_agent("review.rfi_draft", &json!({"id": id, "question": format!("Clarify item {id}")})).unwrap();
         }
         left_for_person += 1;
     }
@@ -223,12 +206,7 @@ fn the_hotel_agent_scores_against_truth() {
 
     // The log carries citations for the resolved items.
     let log = s.execute("review.log", &json!({"author": "agent", "approved": false, "limit": 50})).unwrap();
-    let resolve_entries: Vec<&Value> = log["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e["action"] == "resolve")
-        .collect();
+    let resolve_entries: Vec<&Value> = log["entries"].as_array().unwrap().iter().filter(|e| e["action"] == "resolve").collect();
     assert!(resolve_entries.len() as u64 >= auto_resolved, "log has resolve entries: {} >= {auto_resolved}", resolve_entries.len());
     assert!(
         resolve_entries.iter().all(|e| e["citation"].as_str().is_some_and(|c| c.contains("schedule"))),

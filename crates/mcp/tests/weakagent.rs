@@ -446,7 +446,11 @@ fn validation_failures_appear_in_the_briefing_and_review_queue() {
     // Build the model.
     let _ = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"build": {}} }));
     // Set up prints (fromPlan + gate warn).
-    let _ = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"execute": {"command": "bim.prints", "params": {"fromPlan": true, "gate": "warn"}}} }));
+    let _ = rpc(
+        &mut s,
+        "tools/call",
+        json!({ "name": "bim_job", "arguments": {"execute": {"command": "bim.prints", "params": {"fromPlan": true, "gate": "warn"}}} }),
+    );
     // Run bim.validate through the MCP tool.
     let vr = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"execute": {"command": "bim.validate", "params": {}}} }));
     let vtext = vr["result"]["content"][0]["text"].as_str().unwrap_or("{}");

@@ -51,12 +51,7 @@ pub struct ViewState {
 
 impl Clone for ViewState {
     fn clone(&self) -> Self {
-        Self {
-            section: self.section,
-            section_hidden: self.section_hidden.clone(),
-            camera: self.camera,
-            element_cache: self.element_cache.clone(),
-        }
+        Self { section: self.section, section_hidden: self.section_hidden.clone(), camera: self.camera, element_cache: self.element_cache.clone() }
     }
 }
 
@@ -70,7 +65,6 @@ impl std::fmt::Debug for ViewState {
             .finish()
     }
 }
-
 
 impl PartialEq for ViewState {
     fn eq(&self, other: &Self) -> bool {

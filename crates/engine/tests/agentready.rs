@@ -339,10 +339,7 @@ fn cited_answers_survive_reread_and_orphan_when_gone() {
     // review.list with status=orphaned shows the orphaned decision.
     let orphan_list = s.execute("review.list", &json!({"status": "orphaned"})).unwrap();
     assert!(orphan_list["total"].as_u64().unwrap() >= 1, "orphaned in review.list: {orphan_list}");
-    assert!(
-        orphan_list["items"].as_array().unwrap().iter().any(|i| i["status"] == "orphaned"),
-        "item has orphaned status: {orphan_list}"
-    );
+    assert!(orphan_list["items"].as_array().unwrap().iter().any(|i| i["status"] == "orphaned"), "item has orphaned status: {orphan_list}");
 }
 
 /// Q320's weak agent found these; each is fixed and kept fixed here.
@@ -394,14 +391,18 @@ fn validation_failures_appear_in_the_queue_and_briefing() {
     // Use the existing building helper (has levels, spec, runs), then add prints.
     let mut s = building(0);
     // Add prints with symbols that expect devices we don't have: missing_in_model.
-    s.execute("bim.prints", &json!({"prints": {
+    s.execute(
+        "bim.prints",
+        &json!({"prints": {
         "symbols": [
             {"sheet": "E-101", "level": "L1", "kind": "receptacle", "mark": "REC-A", "at": [5.0, 5.0]},
             {"sheet": "E-101", "level": "L1", "kind": "receptacle", "mark": "REC-A", "at": [15.0, 5.0]}
         ],
         "rooms": [{"level": "L1", "number": "101", "name": "OFFICE", "outline": [[-1, -1], [201, -1], [201, 31], [-1, 31]], "sheet": "A-101"}],
         "schedule": [{"sheet": "E-601", "schedule": "device", "mark": "REC-A", "qty": 2}]
-    }, "gate": "warn"})).unwrap();
+    }, "gate": "warn"}),
+    )
+    .unwrap();
     // bim.validate should have failures (missing_in_model since no receptacles exist).
     let val = s.execute("bim.validate", &json!({})).unwrap();
     assert!(val["total"].as_u64().unwrap_or(0) > 0, "should have validation failures: {val:#}");

@@ -241,11 +241,7 @@ pub fn read_conduits(dxf_data: &[(String, Vec<u8>)], map: &SheetMap) -> ConduitR
 fn build_route(h: &mut FoundHomerun) {
     let Some(panel) = h.panel_ft else { return };
     let turn = [panel[0], h.origin_ft[1]];
-    h.route_ft = if dist(turn, h.origin_ft) < 0.1 || dist(turn, panel) < 0.1 {
-        vec![h.origin_ft, panel]
-    } else {
-        vec![h.origin_ft, turn, panel]
-    };
+    h.route_ft = if dist(turn, h.origin_ft) < 0.1 || dist(turn, panel) < 0.1 { vec![h.origin_ft, panel] } else { vec![h.origin_ft, turn, panel] };
 }
 
 /// A device's position for anchoring homeruns (from Q288's placed devices).
@@ -278,11 +274,7 @@ pub struct UnroutedHomerun {
 /// (from Q288's device reader); the endpoint is snapped to the panel's equipment position.
 /// Where no matching device or equipment is found, the E-sheet position is kept and the source
 /// is flagged as `"E-sheet position, not placed"`.
-pub fn anchor_homeruns(
-    res: &mut ConduitResult,
-    devices: &[DeviceAnchor],
-    equipment: &[EquipmentAnchor],
-) -> Vec<UnroutedHomerun> {
+pub fn anchor_homeruns(res: &mut ConduitResult, devices: &[DeviceAnchor], equipment: &[EquipmentAnchor]) -> Vec<UnroutedHomerun> {
     let mut unrouted = Vec::new();
     for h in &mut res.homeruns {
         // Anchor origin to the nearest device on this circuit, same level.
@@ -298,9 +290,7 @@ pub fn anchor_homeruns(
             h.origin_source = "E-sheet position, not placed".into();
         }
         // Anchor panel endpoint to equipment position.
-        let eq = equipment
-            .iter()
-            .find(|e| e.level == h.level && e.tag.eq_ignore_ascii_case(&h.panel));
+        let eq = equipment.iter().find(|e| e.level == h.level && e.tag.eq_ignore_ascii_case(&h.panel));
         if let Some(eq) = eq {
             h.panel_ft = Some(eq.at_ft);
             h.panel_source = "equipment".into();
@@ -564,22 +554,14 @@ pub fn device_anchors_from_truth(t: &Truth) -> Vec<DeviceAnchor> {
         .filter(|d| !d.panel.is_empty())
         .map(|d| {
             let panel_tag = t.elec_panels.iter().find(|p| p.id == d.panel).map(|p| p.tag.as_str()).unwrap_or(&d.panel);
-            DeviceAnchor {
-                level: d.level.clone(),
-                panel: panel_tag.to_string(),
-                circuit: d.circuit.clone(),
-                at_ft: [d.at_ft[0], d.at_ft[1]],
-            }
+            DeviceAnchor { level: d.level.clone(), panel: panel_tag.to_string(), circuit: d.circuit.clone(), at_ft: [d.at_ft[0], d.at_ft[1]] }
         })
         .collect()
 }
 
 /// Build equipment anchors from the truth's panels (their architectural position).
 pub fn equipment_anchors_from_truth(t: &Truth) -> Vec<EquipmentAnchor> {
-    t.elec_panels
-        .iter()
-        .map(|p| EquipmentAnchor { level: p.level.clone(), tag: p.tag.clone(), at_ft: [p.at_ft[0], p.at_ft[1]] })
-        .collect()
+    t.elec_panels.iter().map(|p| EquipmentAnchor { level: p.level.clone(), tag: p.tag.clone(), at_ft: [p.at_ft[0], p.at_ft[1]] }).collect()
 }
 
 /// Generate a seed's set and read its conduit and homeruns, heights from the ceiling reader

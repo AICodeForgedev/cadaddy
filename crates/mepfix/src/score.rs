@@ -259,11 +259,9 @@ pub fn perfect(t: &Truth, level: &str, kind: &str) -> Vec<FoundRun> {
             slope: s.slope.clone(),
             size_source: if s.tag.is_some() { "tag".into() } else { "default".into() },
             system_source: if s.tag.is_some() { "tag".into() } else { "default".into() },
-            height_source: s.height.as_ref().map_or("default".into(), |h| {
-                match h.source {
-                    crate::truth::HeightSource::Note => "tag".into(),
-                    _ => "default".into(),
-                }
+            height_source: s.height.as_ref().map_or("default".into(), |h| match h.source {
+                crate::truth::HeightSource::Note => "tag".into(),
+                _ => "default".into(),
             }),
         })
         .collect()

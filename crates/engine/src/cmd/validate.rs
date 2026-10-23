@@ -632,10 +632,7 @@ fn run_source(s: &mut Session, p: &Value) -> Result<Value> {
     // MUST 1: an agent may not stamp elements as field_verified or override — those statuses
     // exempt an element from misplaced, not_on_print and type checks.
     if from_agent && matches!(status, Status::FieldVerified | Status::Override) {
-        return Err(bad(CMD, format!(
-            "an agent may not set status {} (only a person can certify field verification or overrides)",
-            status.name()
-        )));
+        return Err(bad(CMD, format!("an agent may not set status {} (only a person can certify field verification or overrides)", status.name())));
     }
     let clip = |s: &str| s.chars().filter(|c| !c.is_control()).take(MAX_VALUE).collect::<String>();
     let mut tags = vec![RawTag { code: 1001, value: PROV_APP.into() }, RawTag { code: 1000, value: format!("status={}", status.name()) }];
@@ -697,10 +694,7 @@ pub(crate) struct Gate {
 /// Whether an agent's call of `id` is gated, and the state to compare with after it.
 /// Commands that are read-only or handled by their own agent guards (not the gate).
 fn gate_exempt(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "bim.validate" | "bim.validate.overlay" | "bim.build" | "bim.prints"
-    ) || cmd.starts_with("agent.")
+    matches!(cmd, "bim.validate" | "bim.validate.overlay" | "bim.build" | "bim.prints") || cmd.starts_with("agent.")
 }
 
 pub(crate) fn gate_before(s: &Session, id: &str) -> Option<Gate> {

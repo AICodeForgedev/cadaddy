@@ -174,18 +174,10 @@ fn check(rows: &[Row], text_min: f64, precision_share: f64, recall_share: f64) {
         );
         // Absolute recall floor: the scan must find at least this much truth, regardless of
         // the vector reader's performance.
-        assert!(
-            r.scanned.recall >= absolute_recall_floor,
-            "{name}: absolute recall {:.2} < {absolute_recall_floor}",
-            r.scanned.recall,
-        );
+        assert!(r.scanned.recall >= absolute_recall_floor, "{name}: absolute recall {:.2} < {absolute_recall_floor}", r.scanned.recall,);
         // Size accuracy floor: a regression to near-zero must fail.
         if r.scanned.found_length_ft > 0.0 {
-            assert!(
-                r.scanned.size_accuracy >= size_floor,
-                "{name}: size accuracy {:.3} < {size_floor}",
-                r.scanned.size_accuracy,
-            );
+            assert!(r.scanned.size_accuracy >= size_floor, "{name}: size accuracy {:.3} < {size_floor}", r.scanned.size_accuracy,);
         }
     }
 }
@@ -202,17 +194,11 @@ fn check_duct_accuracy(rows: &[Row], expect_system: bool) {
     }
     // Duct-sheet size accuracy: at least 0.05 on average.
     let avg_size: f64 = duct_rows.iter().map(|r| r.scanned.size_accuracy).sum::<f64>() / duct_rows.len() as f64;
-    assert!(
-        avg_size >= 0.05,
-        "duct sheets average size accuracy {avg_size:.3} < 0.05 — size reading regressed",
-    );
+    assert!(avg_size >= 0.05, "duct sheets average size accuracy {avg_size:.3} < 0.05 — size reading regressed",);
     // Duct-sheet system accuracy: when expected, at least one row must show system > 0.
     if expect_system {
         let any_system = duct_rows.iter().any(|r| r.scanned.system_accuracy > 0.0);
-        assert!(
-            any_system,
-            "no duct sheet has system accuracy > 0 — system identification completely regressed",
-        );
+        assert!(any_system, "no duct sheet has system accuracy > 0 — system identification completely regressed",);
     }
 }
 
@@ -259,17 +245,9 @@ fn scan_items_carry_source_status_confidence() {
         // Sheet field must be non-empty.
         assert!(!src.sheet.is_empty(), "source.sheet is empty");
         // Status must be one of the known values.
-        assert!(
-            ["rule", "ocr", "grid"].contains(&src.status.as_str()),
-            "unexpected status: {}",
-            src.status,
-        );
+        assert!(["rule", "ocr", "grid"].contains(&src.status.as_str()), "unexpected status: {}", src.status,);
         // Confidence must be in [0, 1].
-        assert!(
-            src.confidence >= 0.0 && src.confidence <= 1.0,
-            "confidence out of range: {}",
-            src.confidence,
-        );
+        assert!(src.confidence >= 0.0 && src.confidence <= 1.0, "confidence out of range: {}", src.confidence,);
     }
     // The sheet label in the sources must match the sheet number (either from title-block
     // OCR or the fallback from the Sheet struct).
@@ -296,11 +274,7 @@ fn title_block_identified_from_scan() {
     // At least one sheet's title block should be identified (the 200 dpi clean scan should
     // read the large title-block text).
     let found = results.iter().any(|(_, read, _)| read.title_block_number.is_some());
-    eprintln!(
-        "title-block found on {}/{} sheets",
-        results.iter().filter(|(_, read, _)| read.title_block_number.is_some()).count(),
-        results.len()
-    );
+    eprintln!("title-block found on {}/{} sheets", results.iter().filter(|(_, read, _)| read.title_block_number.is_some()).count(), results.len());
     // This is a soft assertion: title-block OCR on printed fixtures is best-effort.
     if !found {
         eprintln!("WARNING: title-block not identified on any sheet — OCR may need tuning");
@@ -325,15 +299,9 @@ fn pipeline_heights_run_on_scan() {
     eprintln!("equipment tables: {}", result.equipment.tables.len());
     eprintln!("equipment placed: {}", result.equipment.placed.len());
     // Clashes: deferred (needs duct3d).
-    assert!(
-        result.deferred.iter().any(|(name, _)| name == "clashes"),
-        "clashes should be deferred with a reason"
-    );
+    assert!(result.deferred.iter().any(|(name, _)| name == "clashes"), "clashes should be deferred with a reason");
     let clash_reason = result.deferred.iter().find(|(n, _)| n == "clashes").map(|(_, r)| r.as_str()).unwrap_or("");
-    assert!(
-        clash_reason.contains("duct3d") || clash_reason.contains("Q258"),
-        "clash deferral should name the follow-up (duct3d/Q258)"
-    );
+    assert!(clash_reason.contains("duct3d") || clash_reason.contains("Q258"), "clash deferral should name the follow-up (duct3d/Q258)");
 }
 
 #[test]

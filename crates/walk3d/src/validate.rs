@@ -1237,10 +1237,7 @@ fn overlay(cx: &mut Ctx) {
                         format!("in {found_loc}"),
                         sym_source(s),
                         Severity::Medium,
-                        format!(
-                            "Move it to {expected_loc} as {} shows.",
-                            s.sheet,
-                        ),
+                        format!("Move it to {expected_loc} as {} shows.", s.sheet,),
                     ));
                 }
             }

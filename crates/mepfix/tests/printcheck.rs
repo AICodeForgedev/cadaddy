@@ -163,10 +163,13 @@ fn reader_built_prints_validate_a_true_model() {
     let r = validate(&reader_prints, &m, &Scope::all());
     // Allow a small number of false alarms (pass_per_mille threshold).
     let threshold = reader_prints.symbols.len() / 10; // 10% tolerance for reader-vs-truth differences
-    assert!(r.failures.len() <= threshold,
+    assert!(
+        r.failures.len() <= threshold,
         "reader-built prints should validate a true model with at most {} failures, got {}: {:?}",
-        threshold, r.failures.len(),
-        r.failures.iter().take(5).map(|f| format!("{}: {}", f.rule, f.expected)).collect::<Vec<_>>());
+        threshold,
+        r.failures.len(),
+        r.failures.iter().take(5).map(|f| format!("{}: {}", f.rule, f.expected)).collect::<Vec<_>>()
+    );
     // Symbols should be non-trivial.
     assert!(reader_prints.symbols.len() > 100, "reader prints should have >100 symbols, got {}", reader_prints.symbols.len());
     assert!(reader_prints.rooms.len() > 5, "reader prints should have >5 rooms, got {}", reader_prints.rooms.len());

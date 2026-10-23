@@ -546,7 +546,15 @@ fn detect_risers(circles: &[(Vec2, f64, String)], texts: &[TextItem], sh: &Sheet
 
         let at_ft = building_from_model(sh, [center.x, center.y]);
 
-        out.push(DetectedRiser { at_model: *center, at_ft, system, size_in: size, direction: direction.to_string(), note: note.text.clone(), level: level.clone() });
+        out.push(DetectedRiser {
+            at_model: *center,
+            at_ft,
+            system,
+            size_in: size,
+            direction: direction.to_string(),
+            note: note.text.clone(),
+            level: level.clone(),
+        });
     }
 
     out

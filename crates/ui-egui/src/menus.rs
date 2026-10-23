@@ -659,9 +659,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 crate::update::Phase::Failed(_) => "failed",
             };
             let version = match &app.update.phase {
-                crate::update::Phase::Available(r)
-                | crate::update::Phase::Downloading(r)
-                | crate::update::Phase::Ready(r) => Some(r.version.as_str()),
+                crate::update::Phase::Available(r) | crate::update::Phase::Downloading(r) | crate::update::Phase::Ready(r) => {
+                    Some(r.version.as_str())
+                }
                 _ => None,
             };
             let mut v = json!({ "phase": phase, "showing": app.update.showing, "scripted": app.has_control_channel() });

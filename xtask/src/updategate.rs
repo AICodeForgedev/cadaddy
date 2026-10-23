@@ -254,11 +254,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<(), String> {
 const AGENT_PORT: u16 = 47_820;
 
 /// Poll `ui.update.status` until a condition holds, up to `timeout`.
-fn wait_for_update_phase(
-    ctrl: &mut smoke::Control,
-    want: &str,
-    timeout: Duration,
-) -> Result<serde_json::Value, String> {
+fn wait_for_update_phase(ctrl: &mut smoke::Control, want: &str, timeout: Duration) -> Result<serde_json::Value, String> {
     let start = Instant::now();
     loop {
         let status = ctrl.exec("ui.update.status", serde_json::json!({}))?;
@@ -266,10 +262,7 @@ fn wait_for_update_phase(
             return Ok(status);
         }
         if start.elapsed() > timeout {
-            return Err(format!(
-                "timed out waiting for update phase '{want}' after {}s (last: {status})",
-                timeout.as_secs()
-            ));
+            return Err(format!("timed out waiting for update phase '{want}' after {}s (last: {status})", timeout.as_secs()));
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -411,10 +404,7 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
         // 11. Verify the new version runs.
         report.step("new version runs", || {
             let new_exe = bundle_exe(&old_app)?;
-            let out = Command::new(&new_exe)
-                .arg("--version")
-                .output()
-                .map_err(|e| format!("{}: {e}", new_exe.display()))?;
+            let out = Command::new(&new_exe).arg("--version").output().map_err(|e| format!("{}: {e}", new_exe.display()))?;
             let version_out = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if version_out.contains(&new_version) {
                 Ok(format!("--version: {version_out}"))
@@ -426,11 +416,7 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
         // 12. Settings survived.
         report.step("settings kept", || {
             let content = std::fs::read_to_string(&settings_marker).map_err(|e| format!("marker: {e}"))?;
-            if content.trim() == "settings-survive" {
-                Ok("settings folder intact".into())
-            } else {
-                Err(format!("marker contents: {content:?}"))
-            }
+            if content.trim() == "settings-survive" { Ok("settings folder intact".into()) } else { Err(format!("marker contents: {content:?}")) }
         });
 
         // 13. Temp clean.
@@ -460,11 +446,7 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
             if old_backup.exists() {
                 leftovers.push(format!("{}", old_backup.display()));
             }
-            if leftovers.is_empty() {
-                Ok("no .updating or .old bundles left".into())
-            } else {
-                Err(format!("leftovers: {}", leftovers.join(", ")))
-            }
+            if leftovers.is_empty() { Ok("no .updating or .old bundles left".into()) } else { Err(format!("leftovers: {}", leftovers.join(", "))) }
         });
 
         // Kill the relaunched app if it's on the agent port (best effort).
@@ -515,19 +497,11 @@ fn windows_gate(work: &Path, old_msi: &Path, new_msi: &Path, report: &mut Report
             .arg(&install_dir)
             .status()
             .map_err(|e| format!("msiexec: {e}"))?;
-        if status.success() {
-            Ok(format!("MSI installed to {}", install_dir.display()))
-        } else {
-            Err(format!("msiexec failed: {status}"))
-        }
+        if status.success() { Ok(format!("MSI installed to {}", install_dir.display())) } else { Err(format!("msiexec failed: {status}")) }
     });
 
     let exe = install_dir.join("CADaddy").join("cadaddy.exe");
-    let old_version = Command::new(&exe)
-        .arg("--version")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let old_version = Command::new(&exe).arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
 
     let cfg_dir = work.join("config");
     std::fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
@@ -695,10 +669,7 @@ fn linux_gate(work: &Path, old_appimage: &Path, new_appimage: &Path, report: &mu
 
     println!("  new version: {new_version}");
 
-    let asset_name = new_appimage
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "CADaddy-Linux.AppImage".into());
+    let asset_name = new_appimage.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "CADaddy-Linux.AppImage".into());
     let (fake, test_pk) = FakeRelease::start(&new_version, &asset_name, new_bytes)?;
     let test_pk_hex = relsig::hex(&test_pk);
     println!("  fake server: {}", fake.base);
@@ -773,17 +744,9 @@ fn linux_gate(work: &Path, old_appimage: &Path, new_appimage: &Path, report: &mu
 
         // The AppImage is replaced in-place.
         report.step("install update", || {
-            let out = Command::new(&old_copy)
-                .arg("--version")
-                .env("APPIMAGE", &old_copy)
-                .output()
-                .map_err(|e| e.to_string())?;
+            let out = Command::new(&old_copy).arg("--version").env("APPIMAGE", &old_copy).output().map_err(|e| e.to_string())?;
             let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if v.contains(&new_version) {
-                Ok(format!("AppImage replaced: {v}"))
-            } else {
-                Err(format!("expected {new_version}, got {v}"))
-            }
+            if v.contains(&new_version) { Ok(format!("AppImage replaced: {v}")) } else { Err(format!("expected {new_version}, got {v}")) }
         });
 
         report.step("settings kept", || {
@@ -870,11 +833,7 @@ pub fn run(_root: &Path, rest: &[&str]) -> Result<(), String> {
     let failed = report.failed();
     println!("\nupdate-gate: {} steps, {failed} failed; report: {}", report.steps.len(), report_path.display());
 
-    if failed > 0 {
-        Err(format!("{failed} update-gate step(s) failed"))
-    } else {
-        Ok(())
-    }
+    if failed > 0 { Err(format!("{failed} update-gate step(s) failed")) } else { Ok(()) }
 }
 
 // ---------------------------------------------------------------------------

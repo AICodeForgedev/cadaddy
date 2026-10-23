@@ -715,12 +715,7 @@ pub fn prints_from_readers(t: &Truth) -> Prints {
 
     // Sheets from the truth (the classification stage would produce these).
     for s in &t.sheets {
-        p.sheets.push(PrintSheet {
-            number: s.number.clone(),
-            title: s.title.clone(),
-            level: s.level.clone(),
-            kinds: Vec::new(),
-        });
+        p.sheets.push(PrintSheet { number: s.number.clone(), title: s.title.clone(), level: s.level.clone(), kinds: Vec::new() });
     }
 
     // Symbols from the devices (the elec_reader would produce FoundDevice for each).
@@ -816,11 +811,7 @@ pub fn prints_from_readers(t: &Truth) -> Prints {
         let category = fields.get("category").map(String::as_str).unwrap_or("");
         if category.contains("luminaire") || category.contains("light") {
             let section = fields.get("specSection").cloned().unwrap_or_default();
-            p.submittals.push(Submittal {
-                mark: mark.clone(),
-                section,
-                fields: fields.clone(),
-            });
+            p.submittals.push(Submittal { mark: mark.clone(), section, fields: fields.clone() });
         }
     }
 

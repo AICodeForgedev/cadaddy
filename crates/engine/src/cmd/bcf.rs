@@ -258,12 +258,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     let upm = super::ifcref::units_per_metre(s.doc()?);
     // The objects: given (handles or GlobalIds), else the selection. Map-based lookup.
     let picked_indices: Vec<usize> = match p.get("selection").and_then(Value::as_array) {
-        Some(a) => a
-            .iter()
-            .filter_map(Value::as_str)
-            .take(MAX_SELECTED)
-            .filter_map(|q| idx.by_guid_or_handle(q.trim()))
-            .collect(),
+        Some(a) => a.iter().filter_map(Value::as_str).take(MAX_SELECTED).filter_map(|q| idx.by_guid_or_handle(q.trim())).collect(),
         None => {
             let sel = s.selection();
             sel.iter().filter_map(|h| idx.by_handle(*h)).take(MAX_SELECTED).collect()
@@ -491,12 +486,11 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             // Selection: target = centre of selected objects' bounds.
             let pts: Vec<Vec3> = sel_els.iter().flat_map(|e| [e.min, e.max]).collect();
-            let lo = pts.iter().fold(Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), |a, b| {
-                Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z))
-            });
-            let hi = pts.iter().fold(Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| {
-                Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z))
-            });
+            let lo =
+                pts.iter().fold(Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), |a, b| Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)));
+            let hi = pts
+                .iter()
+                .fold(Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z)));
             let centre = (lo + hi) * 0.5;
             let reach = (centre - eye).dot(dir).max(upm);
             eye + dir * reach

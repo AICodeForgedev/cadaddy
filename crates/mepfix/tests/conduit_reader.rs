@@ -84,8 +84,7 @@ fn per_run_objects_and_source_in_spec_runs() {
     // Per-run source: conduits know tag vs default, homeruns know origin/panel source.
     for c in &r.conduits {
         // size_from_tag is the per-run source for size.
-        assert!(c.size_from_tag || (c.size_in - conduit_reader::DEFAULT_SIZE_IN).abs() < 1e-9,
-            "untagged conduit should use default size");
+        assert!(c.size_from_tag || (c.size_in - conduit_reader::DEFAULT_SIZE_IN).abs() < 1e-9, "untagged conduit should use default size");
     }
     for h in r.homeruns.iter().filter(|h| h.panel_ft.is_some()) {
         assert!(!h.origin_source.is_empty(), "origin_source should be set: {}", h.label);
@@ -160,12 +159,8 @@ fn boc_note_sets_exact_height() {
                     // Parse the BOC note to get the expected bottom.
                     if let Some(expected) = cadaddy_mepfix::conduit_reader::parse_boc(note) {
                         let actual = c.bottom_ft.unwrap();
-                        assert!(
-                            (actual - expected).abs() < 1e-3,
-                            "BOC note '{note}' should give bottom {expected}, got {actual}"
-                        );
-                        assert_eq!(c.height_source.as_ref().map(|s| format!("{s:?}")), Some("Note".to_string()),
-                            "BOC source should be Note");
+                        assert!((actual - expected).abs() < 1e-3, "BOC note '{note}' should give bottom {expected}, got {actual}");
+                        assert_eq!(c.height_source.as_ref().map(|s| format!("{s:?}")), Some("Note".to_string()), "BOC source should be Note");
                     }
                 }
                 return;
@@ -178,12 +173,8 @@ fn boc_note_sets_exact_height() {
             let note = c.height_note.as_ref().unwrap();
             if let Some(expected) = cadaddy_mepfix::conduit_reader::parse_boc(note) {
                 let actual = c.bottom_ft.unwrap();
-                assert!(
-                    (actual - expected).abs() < 1e-3,
-                    "BOC note '{note}' should give bottom {expected}, got {actual}"
-                );
-                assert_eq!(c.height_source.as_ref().map(|s| format!("{s:?}")), Some("Note".to_string()),
-                    "BOC source should be Note");
+                assert!((actual - expected).abs() < 1e-3, "BOC note '{note}' should give bottom {expected}, got {actual}");
+                assert_eq!(c.height_source.as_ref().map(|s| format!("{s:?}")), Some("Note".to_string()), "BOC source should be Note");
             }
         }
     }
@@ -198,8 +189,7 @@ fn conduit_stacks_below_duct() {
 
     let (t, r, _) = conduit_reader::read_fixture_conduits(3).unwrap();
     // Pick a level-1 corridor conduit.
-    let c = r.conduits.iter().find(|c| c.level == "1" && (c.from_ft[1] - c.to_ft[1]).abs() < 1e-6)
-        .expect("need a horizontal conduit on level 1");
+    let c = r.conduits.iter().find(|c| c.level == "1" && (c.from_ft[1] - c.to_ft[1]).abs() < 1e-6).expect("need a horizontal conduit on level 1");
     let mid = [(c.from_ft[0] + c.to_ft[0]) / 2.0, c.from_ft[1]];
     // Build a height context with a duct at the same midpoint.
     let ceil = {
@@ -244,10 +234,7 @@ fn conduit_stacks_below_duct() {
     let cond_h = resolved.iter().find(|r| r.segment_id == "conduit-test").expect("conduit resolved");
     println!("duct bottom: {}, conduit bottom: {}", duct_h.bottom_ft, cond_h.bottom_ft);
     // Conduit (unlisted lowest trade) should be below the duct.
-    assert!(
-        cond_h.bottom_ft < duct_h.bottom_ft,
-        "conduit ({}) should be below duct ({})", cond_h.bottom_ft, duct_h.bottom_ft,
-    );
+    assert!(cond_h.bottom_ft < duct_h.bottom_ft, "conduit ({}) should be below duct ({})", cond_h.bottom_ft, duct_h.bottom_ft,);
 }
 
 /// MUST 4 (Q5050): unrouted homeruns for a cross-level panel are reported.
@@ -269,10 +256,7 @@ fn cross_level_homerun_is_reported_unrouted() {
         // Any homerun targeting this panel on its original level should now be unrouted.
         let for_panel: Vec<_> = unrouted.iter().filter(|u| u.panel.eq_ignore_ascii_case(&original_tag) && u.level == original_level).collect();
         println!("unrouted for moved panel {original_tag}: {for_panel:?}");
-        assert!(
-            for_panel.iter().all(|u| u.reason.contains("level")),
-            "cross-level homeruns should mention the level in the reason"
-        );
+        assert!(for_panel.iter().all(|u| u.reason.contains("level")), "cross-level homeruns should mention the level in the reason");
     }
 }
 

@@ -176,13 +176,20 @@ fn a_model_true_to_its_prints_passes_and_errors_are_caught() {
     let h = p.receptacles[0].clone();
     p.s.execute("move", &json!({"handles": [h], "from": [0, 0], "to": [0, 132]})).unwrap();
     let r = p.s.execute("bim.validate", &json!({})).unwrap();
-    let misplaced_or_not = r["failures"].as_array().unwrap().iter().find(|f| {
-        f["rule"] == "misplaced" || f["rule"] == "not_on_print"
-    }).unwrap_or_else(|| panic!("should find misplaced or not_on_print: {r:#}"));
+    let misplaced_or_not = r["failures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["rule"] == "misplaced" || f["rule"] == "not_on_print")
+        .unwrap_or_else(|| panic!("should find misplaced or not_on_print: {r:#}"));
     assert_eq!(misplaced_or_not["source"]["sheet"], json!("E-101"));
-    assert!(misplaced_or_not["fix"].as_str().unwrap().contains("room") || misplaced_or_not["fix"].as_str().unwrap().contains("wall")
-        || misplaced_or_not["fix"].as_str().unwrap().starts_with("Move") || misplaced_or_not["fix"].as_str().unwrap().starts_with("Delete"),
-        "fix should be actionable: {misplaced_or_not}");
+    assert!(
+        misplaced_or_not["fix"].as_str().unwrap().contains("room")
+            || misplaced_or_not["fix"].as_str().unwrap().contains("wall")
+            || misplaced_or_not["fix"].as_str().unwrap().starts_with("Move")
+            || misplaced_or_not["fix"].as_str().unwrap().starts_with("Delete"),
+        "fix should be actionable: {misplaced_or_not}"
+    );
     assert!(misplaced_or_not["sheetAt"].is_array() || misplaced_or_not["rule"] == "not_on_print");
     assert_eq!(r["pass"], json!(false));
     assert!(r["score"].as_f64().unwrap() < 100.0);
@@ -423,11 +430,14 @@ fn a_device_on_the_correct_wall_passes_misplaced() {
     // Move a receptacle 2 feet along the same wall (south wall, y = 0 area).
     // The receptacle starts at its symbol's location. Move it 2' along the wall.
     let h = Handle::parse_hex(&p.receptacles[0]).unwrap();
-    p.s.doc_mut().unwrap().modify_entity(h, |e| {
-        if let EntityKind::Insert(ins) = &mut e.kind {
-            ins.insert.x += 2.0 * 12.0; // 2 feet in drawing units (inches)
-        }
-    }).unwrap();
+    p.s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::Insert(ins) = &mut e.kind {
+                ins.insert.x += 2.0 * 12.0; // 2 feet in drawing units (inches)
+            }
+        })
+        .unwrap();
     let r = p.s.execute("bim.validate", &json!({"checks": ["overlay"]})).unwrap();
     let failures: Vec<&Value> = r["failures"].as_array().unwrap().iter().filter(|f| f["rule"] == "misplaced").collect();
     // Should NOT be misplaced since it's on the same wall, same room, within along-wall tolerance.
@@ -440,22 +450,29 @@ fn a_device_on_the_opposite_wall_fails_misplaced() {
     with_prints(&mut p, "off");
     // Move a receptacle to the opposite wall (north wall, far side of the room).
     let h = Handle::parse_hex(&p.receptacles[0]).unwrap();
-    p.s.doc_mut().unwrap().modify_entity(h, |e| {
-        if let EntityKind::Insert(ins) = &mut e.kind {
-            ins.insert.y += 12.0 * 12.0; // 12 feet across to the opposite wall
-        }
-    }).unwrap();
+    p.s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::Insert(ins) = &mut e.kind {
+                ins.insert.y += 12.0 * 12.0; // 12 feet across to the opposite wall
+            }
+        })
+        .unwrap();
     let r = p.s.execute("bim.validate", &json!({"checks": ["overlay"]})).unwrap();
     let rules: Vec<String> = r["failures"].as_array().unwrap().iter().map(|f| f["rule"].as_str().unwrap_or("").to_string()).collect();
     // Should be misplaced: different wall (or different room).
-    assert!(rules.contains(&"misplaced".to_string()) || rules.contains(&"not_on_print".to_string()),
-        "device on opposite wall should be flagged: {rules:?}");
+    assert!(
+        rules.contains(&"misplaced".to_string()) || rules.contains(&"not_on_print".to_string()),
+        "device on opposite wall should be flagged: {rules:?}"
+    );
     // The fix should NOT contain symbol coordinates.
     for f in r["failures"].as_array().unwrap() {
         if f["rule"] == "misplaced" {
             let fix = f["fix"].as_str().unwrap_or("");
-            assert!(!fix.contains("Move it") || fix.contains("room") || fix.contains("wall"),
-                "fix should name room/wall, not point coordinates: {fix}");
+            assert!(
+                !fix.contains("Move it") || fix.contains("room") || fix.contains("wall"),
+                "fix should name room/wall, not point coordinates: {fix}"
+            );
         }
     }
 }

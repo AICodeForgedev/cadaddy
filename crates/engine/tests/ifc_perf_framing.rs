@@ -1,9 +1,9 @@
 //! Tests for the ifcviewer-rw1 rework (Q5054): MUST 1 (no per-frame full-model scans, cached
 //! lookups) and MUST 2 (BCF snapshots and ifc.render frame on the selection, not the whole model).
 
-use cadaddy_engine::cmd::ifcmodel;
 use cadaddy_engine::Session;
-use serde_json::{json, Value};
+use cadaddy_engine::cmd::ifcmodel;
+use serde_json::{Value, json};
 use std::time::Instant;
 
 fn hooks() {
@@ -182,10 +182,13 @@ fn cached_index_avoids_full_model_scan_on_repeated_commands() {
 
     // Create 200 BCF topics with snapshots disabled (they'd be slow on a 50k model).
     for i in 0..200 {
-        s.execute("bcf.create", &json!({
-            "title": format!("Topic {i}"),
-            "snapshot": false
-        }))
+        s.execute(
+            "bcf.create",
+            &json!({
+                "title": format!("Topic {i}"),
+                "snapshot": false
+            }),
+        )
         .unwrap();
     }
     let topics = s.execute("bcf.list", &json!({})).unwrap();
@@ -250,11 +253,14 @@ fn snapshot_frames_on_the_selection_not_the_whole_building() {
 
     // Create a BCF topic on the duct with a snapshot.
     let t = s
-        .execute("bcf.create", &json!({
-            "title": "Duct clearance question",
-            "width": 640,
-            "height": 480
-        }))
+        .execute(
+            "bcf.create",
+            &json!({
+                "title": "Duct clearance question",
+                "width": 640,
+                "height": 480
+            }),
+        )
         .unwrap();
     assert!(t["snapshot"].as_bool().unwrap_or(false), "snapshot must be present");
     let guid = t["guid"].as_str().unwrap().to_string();
@@ -267,21 +273,21 @@ fn snapshot_frames_on_the_selection_not_the_whole_building() {
     let total = pixels.len();
     let orange = pixels.iter().filter(|p| is_orange(**p)).count();
     let pct = (orange as f64 / total as f64) * 100.0;
-    assert!(
-        pct >= 3.0,
-        "the duct's snapshot should have >= 3% orange (SELECTED) pixels, got {pct:.1}% ({orange}/{total}, image {w}x{h})"
-    );
+    assert!(pct >= 3.0, "the duct's snapshot should have >= 3% orange (SELECTED) pixels, got {pct:.1}% ({orange}/{total}, image {w}x{h})");
 
     // Also test ifc.render with a selection: orange pixels should dominate.
     let png_path = d.join("render-sel.png");
     let r = s
-        .execute("ifc.render", &json!({
-            "path": png_path.display().to_string(),
-            "width": 640,
-            "height": 480,
-            "eye": [1, 7, 1.7],
-            "target": [5, 3, 2.6]
-        }))
+        .execute(
+            "ifc.render",
+            &json!({
+                "path": png_path.display().to_string(),
+                "width": 640,
+                "height": 480,
+                "eye": [1, 7, 1.7],
+                "target": [5, 3, 2.6]
+            }),
+        )
         .unwrap();
     assert!(r["triangles"].as_u64().unwrap() > 0);
     let render_bytes = std::fs::read(&png_path).unwrap();
@@ -303,12 +309,15 @@ fn section_box_render_excludes_outside_objects() {
 
     let png_path = d.join("section-render.png");
     let r = s
-        .execute("ifc.render", &json!({
-            "path": png_path.display().to_string(),
-            "width": 640,
-            "height": 480,
-            "highlight": false
-        }))
+        .execute(
+            "ifc.render",
+            &json!({
+                "path": png_path.display().to_string(),
+                "width": 640,
+                "height": 480,
+                "highlight": false
+            }),
+        )
         .unwrap();
     assert!(r["triangles"].as_u64().unwrap() > 0);
 
@@ -325,8 +334,5 @@ fn section_box_render_excludes_outside_objects() {
         px[2] > px[0].saturating_add(20) && px[2] > px[1] && px[2] > 150
     };
     let duct_px = pixels.iter().filter(|p| is_duct_blue(**p)).count();
-    assert_eq!(
-        duct_px, 0,
-        "section-box render around the column should have no duct-coloured (blue) pixels, got {duct_px} in {w}x{h}"
-    );
+    assert_eq!(duct_px, 0, "section-box render around the column should have no duct-coloured (blue) pixels, got {duct_px} in {w}x{h}");
 }

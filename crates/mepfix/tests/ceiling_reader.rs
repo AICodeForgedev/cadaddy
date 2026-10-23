@@ -24,7 +24,10 @@ fn rooms_are_detected_on_rcp_sheets() {
         assert!(
             rate >= 0.95,
             "seed {seed}: rooms found {}/{} = {rate:.2} (need >= 0.95); detected {} rooms vs {} truth",
-            score.rooms_found, score.rooms_total, result.rooms.len(), rcp_rooms.len()
+            score.rooms_found,
+            score.rooms_total,
+            result.rooms.len(),
+            rcp_rooms.len()
         );
     }
 }
@@ -39,11 +42,7 @@ fn ceiling_kinds_have_high_accuracy() {
         let rooms_with_ceilings = truth.building.rooms.iter().filter(|r| r.ceiling.is_some()).count();
         assert!(score.rooms_found > 0, "seed {seed}: found no ceilings (truth has {rooms_with_ceilings})");
         let kind_rate = score.kind_correct as f64 / score.rooms_found.max(1) as f64;
-        assert!(
-            kind_rate >= 0.9,
-            "seed {seed}: kind accuracy {kind_rate:.2} ({}/{}) — need >= 0.9",
-            score.kind_correct, score.rooms_found
-        );
+        assert!(kind_rate >= 0.9, "seed {seed}: kind accuracy {kind_rate:.2} ({}/{}) — need >= 0.9", score.kind_correct, score.rooms_found);
     }
 }
 
@@ -56,11 +55,7 @@ fn act_ceilings_have_correct_grid() {
         let (_, _, score) = scored(seed);
         if score.grid_total >= 2 {
             let grid_rate = score.grid_correct as f64 / score.grid_total as f64;
-            assert!(
-                grid_rate >= 0.85,
-                "seed {seed}: grid correct {}/{} = {grid_rate:.2} — need >= 0.85",
-                score.grid_correct, score.grid_total
-            );
+            assert!(grid_rate >= 0.85, "seed {seed}: grid correct {}/{} = {grid_rate:.2} — need >= 0.85", score.grid_correct, score.grid_total);
         }
     }
 }
@@ -76,11 +71,7 @@ fn ceiling_heights_are_accurate() {
         let (_, _, score) = scored(seed);
         if score.rooms_found >= 3 {
             let h_rate = score.height_correct as f64 / score.rooms_found.max(1) as f64;
-            assert!(
-                h_rate >= 0.75,
-                "seed {seed}: height correct {}/{} = {h_rate:.2} — need >= 0.75",
-                score.height_correct, score.rooms_found
-            );
+            assert!(h_rate >= 0.75, "seed {seed}: height correct {}/{} = {h_rate:.2} — need >= 0.75", score.height_correct, score.rooms_found);
         }
     }
 }
@@ -159,13 +150,11 @@ fn ceiling_items_are_detected_per_seed() {
         let mut room_correct = 0;
         for tt in &truth_terms {
             // Only compare with items on the same level.
-            let nearest = result.items.iter()
-                .filter(|i| i.level == tt.level)
-                .min_by(|a, b| {
-                    let da = (a.at_ft[0] - tt.at_ft[0]).powi(2) + (a.at_ft[1] - tt.at_ft[1]).powi(2);
-                    let db = (b.at_ft[0] - tt.at_ft[0]).powi(2) + (b.at_ft[1] - tt.at_ft[1]).powi(2);
-                    da.total_cmp(&db)
-                });
+            let nearest = result.items.iter().filter(|i| i.level == tt.level).min_by(|a, b| {
+                let da = (a.at_ft[0] - tt.at_ft[0]).powi(2) + (a.at_ft[1] - tt.at_ft[1]).powi(2);
+                let db = (b.at_ft[0] - tt.at_ft[0]).powi(2) + (b.at_ft[1] - tt.at_ft[1]).powi(2);
+                da.total_cmp(&db)
+            });
             if let Some(fi) = nearest {
                 let dist = ((fi.at_ft[0] - tt.at_ft[0]).powi(2) + (fi.at_ft[1] - tt.at_ft[1]).powi(2)).sqrt();
                 if dist < 2.0 {
@@ -183,24 +172,13 @@ fn ceiling_items_are_detected_per_seed() {
         let recall = matched as f64 / truth_terms.len() as f64;
         let kind_acc = if matched > 0 { kind_correct as f64 / matched as f64 } else { 0.0 };
 
-        assert!(
-            !result.items.is_empty(),
-            "seed {seed}: 0 items found ({} truth terminals)",
-            truth_terms.len()
-        );
+        assert!(!result.items.is_empty(), "seed {seed}: 0 items found ({} truth terminals)", truth_terms.len());
         eprintln!(
             "seed {seed}: items recall={matched}/{} = {recall:.2}, kind_acc={kind_correct}/{matched} = {kind_acc:.2}, room={room_correct}/{matched}",
             truth_terms.len()
         );
-        assert!(
-            recall >= 0.9,
-            "seed {seed}: item recall {recall:.2} ({matched}/{}) — need >= 0.9",
-            truth_terms.len()
-        );
-        assert!(
-            kind_acc >= 0.9,
-            "seed {seed}: item kind accuracy {kind_acc:.2} ({kind_correct}/{matched}) — need >= 0.9",
-        );
+        assert!(recall >= 0.9, "seed {seed}: item recall {recall:.2} ({matched}/{}) — need >= 0.9", truth_terms.len());
+        assert!(kind_acc >= 0.9, "seed {seed}: item kind accuracy {kind_acc:.2} ({kind_correct}/{matched}) — need >= 0.9",);
     }
 }
 
@@ -237,24 +215,12 @@ fn plenum_depth_from_reader() {
         }
 
         let rate = within_tol as f64 / total_scored.max(1) as f64;
-        assert!(
-            !result.plenums.is_empty(),
-            "seed {seed}: no plenum values found ({} rooms with truth plenum)",
-            rooms_with_plenum.len()
-        );
-        eprintln!(
-            "seed {seed}: plenum within 0.25 ft: {within_tol}/{total_scored} = {rate:.2} ({total_missing} rooms missing structure data)",
-        );
+        assert!(!result.plenums.is_empty(), "seed {seed}: no plenum values found ({} rooms with truth plenum)", rooms_with_plenum.len());
+        eprintln!("seed {seed}: plenum within 0.25 ft: {within_tol}/{total_scored} = {rate:.2} ({total_missing} rooms missing structure data)",);
         // At least 90% of rooms where we HAVE data should be within tolerance.
-        assert!(
-            rate >= 0.9,
-            "seed {seed}: plenum accuracy {rate:.2} ({within_tol}/{total_scored}) — need >= 0.9"
-        );
+        assert!(rate >= 0.9, "seed {seed}: plenum accuracy {rate:.2} ({within_tol}/{total_scored}) — need >= 0.9");
         // And plenum_ft should exist on the reader output.
-        assert!(
-            !result.plenums.is_empty(),
-            "seed {seed}: plenum_ft not present on reader output"
-        );
+        assert!(!result.plenums.is_empty(), "seed {seed}: plenum_ft not present on reader output");
     }
 }
 
@@ -292,7 +258,9 @@ fn shafts_are_detected_from_floor_plans() {
             assert!(
                 matched,
                 "seed {seed}: truth shaft {} (level={}) not found in reader output ({} shafts found)",
-                ts.id, ts.level, result.shafts.len()
+                ts.id,
+                ts.level,
+                result.shafts.len()
             );
         }
     }
@@ -308,13 +276,21 @@ fn overall_score_is_reasonable() {
         eprintln!(
             "seed {seed}: rooms={}/{}, kind={}/{}, height={}/{}, grid={}/{}, open={}/{}, \
              soffits={}/{}, items={}, plenums={}, shafts={}",
-            score.rooms_found, score.rooms_total,
-            score.kind_correct, score.rooms_found,
-            score.height_correct, score.rooms_found,
-            score.grid_correct, score.grid_total,
-            score.open_found, score.open_total,
-            score.soffits_found, score.soffits_total,
-            result.items.len(), result.plenums.len(), result.shafts.len()
+            score.rooms_found,
+            score.rooms_total,
+            score.kind_correct,
+            score.rooms_found,
+            score.height_correct,
+            score.rooms_found,
+            score.grid_correct,
+            score.grid_total,
+            score.open_found,
+            score.open_total,
+            score.soffits_found,
+            score.soffits_total,
+            result.items.len(),
+            result.plenums.len(),
+            result.shafts.len()
         );
         let _ = rooms_with_ceilings;
     }

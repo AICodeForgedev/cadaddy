@@ -417,9 +417,7 @@ fn detect_act_grid(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_
     // Lines must span a reasonable portion of the room dimension, but for very
     // long/narrow rooms (corridors), the short dimension lines still count if they
     // span at least 2 ft (a tile height) and 40% of that dimension.
-    let min_span = |room_dim: f64| -> f64 {
-        (room_dim * 0.4).max(2.0).min(room_dim - 0.5)
-    };
+    let min_span = |room_dim: f64| -> f64 { (room_dim * 0.4).max(2.0).min(room_dim - 0.5) };
 
     let mut h_ys: Vec<f64> = Vec::new(); // horizontal grid lines (constant y)
     let mut v_xs: Vec<f64> = Vec::new(); // vertical grid lines (constant x)
@@ -561,7 +559,9 @@ fn detect_ceiling_tag(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], ro
         if let Some((kind, height)) = parse_ceiling_tag(&item.text) {
             // If kind is empty, look for a nearby kind-only entity at similar x.
             let kind = if kind.is_empty() {
-                texts.iter().enumerate()
+                texts
+                    .iter()
+                    .enumerate()
                     .filter(|(j, other)| {
                         *j != idx
                         && (other.pos[0] - item.pos[0]).abs() < 3.0 // same x region
@@ -781,7 +781,8 @@ fn detect_ceiling_items(d: &Drawing, alignment: &Alignment, level: &str, rooms: 
                 for w in pts.windows(2) {
                     dev_lines.push((w[0], w[1]));
                 }
-                if p.closed && pts.len() >= 2
+                if p.closed
+                    && pts.len() >= 2
                     && let (Some(first), Some(last)) = (pts.first(), pts.last())
                 {
                     dev_lines.push((*last, *first));
@@ -887,23 +888,29 @@ fn detect_ceiling_items(d: &Drawing, alignment: &Alignment, level: &str, rooms: 
         let pad = 0.1;
 
         // Count horizontal lines inside the rect (excluding the border lines).
-        let interior_h = h_lines.iter().filter(|l| {
-            let lx_min = l.0[0].min(l.1[0]);
-            let lx_max = l.0[0].max(l.1[0]);
-            let ly = (l.0[1] + l.1[1]) / 2.0;
-            lx_min >= rmin[0] - pad
-                && lx_max <= rmax[0] + pad
-                && ly > rmin[1] + pad
-                && ly < rmax[1] - pad
-                && (ly - rmin[1]).abs() > pad
-                && (ly - rmax[1]).abs() > pad
-        }).count();
+        let interior_h = h_lines
+            .iter()
+            .filter(|l| {
+                let lx_min = l.0[0].min(l.1[0]);
+                let lx_max = l.0[0].max(l.1[0]);
+                let ly = (l.0[1] + l.1[1]) / 2.0;
+                lx_min >= rmin[0] - pad
+                    && lx_max <= rmax[0] + pad
+                    && ly > rmin[1] + pad
+                    && ly < rmax[1] - pad
+                    && (ly - rmin[1]).abs() > pad
+                    && (ly - rmax[1]).abs() > pad
+            })
+            .count();
 
         // Count diagonal lines touching the rect area.
-        let interior_diag = diag_lines.iter().filter(|l| {
-            let mid = [(l.0[0] + l.1[0]) / 2.0, (l.0[1] + l.1[1]) / 2.0];
-            mid[0] >= rmin[0] - pad && mid[0] <= rmax[0] + pad && mid[1] >= rmin[1] - pad && mid[1] <= rmax[1] + pad
-        }).count();
+        let interior_diag = diag_lines
+            .iter()
+            .filter(|l| {
+                let mid = [(l.0[0] + l.1[0]) / 2.0, (l.0[1] + l.1[1]) / 2.0];
+                mid[0] >= rmin[0] - pad && mid[0] <= rmax[0] + pad && mid[1] >= rmin[1] - pad && mid[1] <= rmax[1] + pad
+            })
+            .count();
 
         // Check for an inner rectangle (supply diffuser has one).
         let has_inner_rect = device_rects.iter().any(|ir| {
@@ -1217,15 +1224,11 @@ fn structure_bottom_per_level(s: &StructuralModel) -> BTreeMap<String, f64> {
 
         // Top of steel: explicit TOS, or derive from slab, or estimate from the
         // level below's slab top + a standard storey height for the roof.
-        let tos = s.tos_ft.get(lv).copied().or_else(|| {
-            slab.map(|sl| sl.top_ft - (sl.concrete_in + sl.deck_in) / 12.0)
-        });
+        let tos = s.tos_ft.get(lv).copied().or_else(|| slab.map(|sl| sl.top_ft - (sl.concrete_in + sl.deck_in) / 12.0));
         let Some(tos) = tos else { continue };
 
         // Max beam/girder depth on this level.
-        let max_beam_depth_in = s.beams.get(lv).map_or(0.0, |beams| {
-            beams.iter().map(|b| parse_beam_depth(&b.size)).fold(0.0_f64, f64::max)
-        });
+        let max_beam_depth_in = s.beams.get(lv).map_or(0.0, |beams| beams.iter().map(|b| parse_beam_depth(&b.size)).fold(0.0_f64, f64::max));
 
         let bot = tos - max_beam_depth_in / 12.0;
 
@@ -1235,10 +1238,7 @@ fn structure_bottom_per_level(s: &StructuralModel) -> BTreeMap<String, f64> {
             "3" => Some("2"),
             "R" | "ROOF" => {
                 // Roof is above the highest numeric level. Find it.
-                let max_num = above_levels.iter()
-                    .filter_map(|l| l.parse::<u32>().ok())
-                    .max()
-                    .unwrap_or(2);
+                let max_num = above_levels.iter().filter_map(|l| l.parse::<u32>().ok()).max().unwrap_or(2);
                 Some(if max_num == 2 { "2" } else { "1" })
             }
             _ => lv.parse::<u32>().ok().and_then(|n| if n > 1 { Some("") } else { None }).and(None),
@@ -1276,10 +1276,8 @@ pub fn read_fixture_ceilings(seed: u64) -> Result<(Truth, CeilingResult), String
 
     // Read structure for plenum depth calculation.
     // Drawing names must match sheet numbers (no .dxf extension).
-    let drawings: Vec<(String, Drawing)> = dxf_data
-        .iter()
-        .filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d)))
-        .collect();
+    let drawings: Vec<(String, Drawing)> =
+        dxf_data.iter().filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d))).collect();
     let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
     let structure = crate::struct_reader::read_structure(&sheet_map, &refs);
 
