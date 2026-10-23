@@ -379,11 +379,7 @@ pub fn spec_runs(res: &TrayResult, levels: &[LevelInfo<'_>]) -> (Vec<serde_json:
         let Some(above) = above else { continue };
         // A matching "down" bank on the level above.
         let dn = res.risers.iter().enumerate().find(|(j, d)| {
-            !used[*j]
-                && d.direction == "down"
-                && d.level == above.code
-                && d.conduits == up.conduits
-                && (d.size_in - up.size_in).abs() < 0.01
+            !used[*j] && d.direction == "down" && d.level == above.code && d.conduits == up.conduits && (d.size_in - up.size_in).abs() < 0.01
         });
         let Some((j, dn)) = dn else { continue };
         used[i] = true;

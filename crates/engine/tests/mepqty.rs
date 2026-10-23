@@ -232,9 +232,7 @@ fn a_takeoff_table_follows_edits_of_the_model() {
     assert_eq!(before.len(), 2 + 3, "title, header and the three duct sizes");
     // The branch (12x8) becomes 14x10; the rebuild counts again.
     let list = s.execute("mep.list", &json!({})).unwrap();
-    let branch = list["items"].as_array().unwrap().iter()
-        .find(|it| it["size_in"] == json!([12.0, 8.0]))
-        .expect("should find the 12x8 branch");
+    let branch = list["items"].as_array().unwrap().iter().find(|it| it["size_in"] == json!([12.0, 8.0])).expect("should find the 12x8 branch");
     let run_id = branch["id"].as_str().unwrap().to_string();
     let e = s.execute("mep.edit", &json!({"id": &run_id, "size_in": [14, 10], "rebuild": true})).unwrap();
     assert_eq!(e["rebuilt"], true);

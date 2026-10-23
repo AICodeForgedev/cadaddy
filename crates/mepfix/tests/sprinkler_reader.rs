@@ -2,7 +2,9 @@
 //! (Q265), scored against the truth, and built into the 3D model and IFC.
 
 use cadaddy_engine::Session;
-use cadaddy_mepfix::sprinkler_reader::{SprinklerScore, parse_pipe_size, read_fixture_sprinklers, read_fixture_sprinklers_with_schedule, score_sprinklers, spec_terminals};
+use cadaddy_mepfix::sprinkler_reader::{
+    SprinklerScore, parse_pipe_size, read_fixture_sprinklers, read_fixture_sprinklers_with_schedule, score_sprinklers, spec_terminals,
+};
 use serde_json::json;
 
 fn ratio(a: usize, b: usize) -> f64 {
@@ -174,10 +176,7 @@ fn schedule_values_are_read_not_defaulted() {
             .terminals
             .iter()
             .find(|x| {
-                x.kind == "sprinkler_head"
-                    && x.level == h.level
-                    && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5
-                    && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
+                x.kind == "sprinkler_head" && x.level == h.level && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5 && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
             })
             .unwrap_or_else(|| panic!("no truth head near upright {:?}", h.at_ft));
         let truth_ht = truth.at_ft[2] - floor(&h.level);
@@ -194,10 +193,7 @@ fn schedule_values_are_read_not_defaulted() {
             .terminals
             .iter()
             .find(|x| {
-                x.kind == "sprinkler_head"
-                    && x.level == h.level
-                    && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5
-                    && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
+                x.kind == "sprinkler_head" && x.level == h.level && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5 && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
             })
             .unwrap_or_else(|| panic!("no truth head near sidewall {:?}", h.at_ft));
         let truth_ht = truth.at_ft[2] - floor(&h.level);
@@ -213,10 +209,7 @@ fn schedule_values_are_read_not_defaulted() {
     assert_eq!(r4.sprig_in, Some(4.0));
     assert_eq!(r4.sidewall_below_in, Some(4.0));
     // A sidewall head at 6" below ceiling should be 2" lower than at 4" below ceiling.
-    if let (Some(sw6), Some(sw4)) = (
-        r.heads.iter().find(|h| h.mount == "sidewall"),
-        r4.heads.iter().find(|h| h.mount == "sidewall"),
-    ) {
+    if let (Some(sw6), Some(sw4)) = (r.heads.iter().find(|h| h.mount == "sidewall"), r4.heads.iter().find(|h| h.mount == "sidewall")) {
         let diff = (sw4.height_ft.unwrap_or(0.0) - sw6.height_ft.unwrap_or(0.0)).abs();
         assert!(diff > 1.0 / 12.0, "6\" vs 4\" sidewall offset should differ by ~2\", got {:.2}\"", diff * 12.0);
     }

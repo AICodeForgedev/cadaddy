@@ -537,8 +537,7 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Apply mutations: find run by stable id.
     {
-        let run = sp.mep.runs.iter_mut().find(|r| r.id == id_str)
-            .ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
+        let run = sp.mep.runs.iter_mut().find(|r| r.id == id_str).ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
         if let Some(sys) = &new_system {
             run.system = sys.clone();
         }
@@ -562,8 +561,7 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     // Build the item JSON from the (now immutable) spec.
-    let run = sp.mep.runs.iter().find(|r| r.id == id_str)
-        .ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
+    let run = sp.mep.runs.iter().find(|r| r.id == id_str).ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
     let sy = sp.mep.systems.iter().find(|sy| sy.name == run.system);
     let item = item_json(run, sy, &sp);
 
@@ -1389,7 +1387,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
                 let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
-                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
+                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
+                    .is_ok()
                 {
                     total_runs += 1;
                 }

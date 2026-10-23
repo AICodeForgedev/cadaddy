@@ -42,18 +42,14 @@ fn edited_size_reports_override_not_tag() {
     let mut s = mep_session();
     let list = s.execute("mep.list", &json!({})).unwrap();
     // The second run (SA-1 tagged) has size_source = "tag".
-    let tagged = list["items"].as_array().unwrap().iter()
-        .find(|it| it["size_source"].as_str() == Some("tag"))
-        .expect("there should be a tagged run");
+    let tagged = list["items"].as_array().unwrap().iter().find(|it| it["size_source"].as_str() == Some("tag")).expect("there should be a tagged run");
     let id = tagged["id"].as_str().unwrap().to_string();
     assert_eq!(tagged["size_source"].as_str(), Some("tag"));
 
     // Edit its size.
     s.execute("mep.edit", &json!({"id": &id, "size_in": [30.0, 14.0]})).unwrap();
     let list2 = s.execute("mep.list", &json!({})).unwrap();
-    let edited = list2["items"].as_array().unwrap().iter()
-        .find(|it| it["id"].as_str() == Some(id.as_str()))
-        .unwrap();
+    let edited = list2["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id.as_str())).unwrap();
     assert_eq!(edited["size_source"].as_str(), Some("override"), "an edit sets source to override, not tag");
     assert_eq!(edited["size_in"], json!([30.0, 14.0]));
 }
@@ -63,9 +59,7 @@ fn tagged_run_matching_system_default_stays_tag() {
     let mut s = mep_session();
     let list = s.execute("mep.list", &json!({})).unwrap();
     // The tagged run (SA-1 18x10) is not the system default (24x12).
-    let tagged = list["items"].as_array().unwrap().iter()
-        .find(|it| it["size_source"].as_str() == Some("tag"))
-        .unwrap();
+    let tagged = list["items"].as_array().unwrap().iter().find(|it| it["size_source"].as_str() == Some("tag")).unwrap();
     assert_eq!(tagged["size_source"].as_str(), Some("tag"), "a tagged run stays tag");
 }
 
@@ -88,9 +82,7 @@ fn reviewed_is_a_bool_field_not_sentinel() {
     // Mark reviewed.
     s.execute("mep.edit", &json!({"id": &id, "reviewed": true})).unwrap();
     let list2 = s.execute("mep.list", &json!({})).unwrap();
-    let item = list2["items"].as_array().unwrap().iter()
-        .find(|it| it["id"].as_str() == Some(id.as_str()))
-        .unwrap();
+    let item = list2["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id.as_str())).unwrap();
     assert_eq!(item["reviewed"].as_bool(), Some(true));
     // The objects list must not contain "reviewed".
     let objects = item["objects"].as_array().unwrap();
@@ -124,9 +116,7 @@ fn edited_by_is_recorded() {
     let id = list["items"][0]["id"].as_str().unwrap().to_string();
     s.execute("mep.edit", &json!({"id": &id, "size_in": [30.0, 14.0], "edited_by": "tester"})).unwrap();
     let list2 = s.execute("mep.list", &json!({})).unwrap();
-    let item = list2["items"].as_array().unwrap().iter()
-        .find(|it| it["id"].as_str() == Some(id.as_str()))
-        .unwrap();
+    let item = list2["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id.as_str())).unwrap();
     assert_eq!(item["edited_by"].as_str(), Some("tester"));
 }
 
@@ -171,9 +161,7 @@ fn edit_by_stable_id_after_reread() {
 
     // Re-list — the same id still works.
     let list2 = s.execute("mep.list", &json!({})).unwrap();
-    let item = list2["items"].as_array().unwrap().iter()
-        .find(|it| it["id"].as_str() == Some(id.as_str()))
-        .unwrap();
+    let item = list2["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id.as_str())).unwrap();
     assert_eq!(item["size_in"], json!([30.0, 14.0]), "edit by stable id persists");
 }
 
@@ -216,8 +204,10 @@ fn edit_survives_mep_read_apply() {
     // by verifying the override was set properly before.
     let list2 = s.execute("mep.list", &json!({})).unwrap();
     // The id should still exist.
-    assert!(list2["items"].as_array().unwrap().iter().any(|it| it["id"].as_str() == Some(id.as_str())),
-        "run with id {id} still exists after spec update");
+    assert!(
+        list2["items"].as_array().unwrap().iter().any(|it| it["id"].as_str() == Some(id.as_str())),
+        "run with id {id} still exists after spec update"
+    );
 }
 
 #[test]
@@ -234,9 +224,7 @@ fn rebuild_error_is_returned() {
     }
     // The edit itself should have been applied regardless.
     let list2 = s.execute("mep.list", &json!({})).unwrap();
-    let item = list2["items"].as_array().unwrap().iter()
-        .find(|it| it["id"].as_str() == Some(id.as_str()))
-        .unwrap();
+    let item = list2["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id.as_str())).unwrap();
     assert_eq!(item["size_in"], json!([30.0, 14.0]));
 }
 
@@ -275,10 +263,8 @@ fn paging_no_overlap() {
     let cursor = page1["next_cursor"].as_u64().unwrap();
     let page2 = s.execute("mep.list", &json!({"cursor": cursor, "limit": 2})).unwrap();
 
-    let ids1: Vec<&str> = page1["items"].as_array().unwrap().iter()
-        .filter_map(|it| it["id"].as_str()).collect();
-    let ids2: Vec<&str> = page2["items"].as_array().unwrap().iter()
-        .filter_map(|it| it["id"].as_str()).collect();
+    let ids1: Vec<&str> = page1["items"].as_array().unwrap().iter().filter_map(|it| it["id"].as_str()).collect();
+    let ids2: Vec<&str> = page2["items"].as_array().unwrap().iter().filter_map(|it| it["id"].as_str()).collect();
 
     for id in &ids1 {
         assert!(!ids2.contains(id), "id {id} appears on both pages");

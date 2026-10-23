@@ -2468,7 +2468,10 @@ impl BuildingSpec {
                 || r.size_in[0] <= 0.0
                 || r.top_ft.is_some_and(|t| !fin(t) || t <= r.bottoms_ft.first().copied().unwrap_or(0.0))
             {
-                out.push(Issue::error(at, "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment"));
+                out.push(Issue::error(
+                    at,
+                    "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment",
+                ));
             }
         }
         for (i, e) in self.mep.equipment.iter().enumerate().take(MAX_ITEMS) {

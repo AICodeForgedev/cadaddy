@@ -215,7 +215,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
 
 /// Like [`design`] but with custom sprinkler head schedule values (inches).
 pub fn design_scheduled(seed: u64, st: &Style, r: &mut Rng, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Design {
-    let mut t = Truth { schema: SCHEMA.into(), seed, fp_sprig_in: Some(fp_sprig_in), fp_sidewall_below_in: Some(fp_sidewall_below_in), ..Truth::default() };
+    let mut t =
+        Truth { schema: SCHEMA.into(), seed, fp_sprig_in: Some(fp_sprig_in), fp_sidewall_below_in: Some(fp_sidewall_below_in), ..Truth::default() };
     let names = ["HARBOR POINT", "MAPLE CROSSING", "CEDAR HOLLOW", "BLUE HERON", "RIVERSTONE", "OAK MEADOW", "IRON BRIDGE", "WILLOW BEND"];
     let kinds = ["OFFICE BUILDING", "COMMONS", "BUSINESS CENTER", "OFFICE PAVILION"];
     t.project = format!("{} {}", r.pick(&names), r.pick(&kinds));

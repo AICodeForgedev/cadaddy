@@ -59,8 +59,7 @@ pub fn folder(tag: &str) -> std::path::PathBuf {
 impl E2e {
     pub fn new() -> E2e {
         io_hooks();
-        let mut e =
-            E2e { app: CadApp::new(Session::new(), Services::default()), ctx: egui::Context::default(), events: Vec::new(), size: (W, H) };
+        let mut e = E2e { app: CadApp::new(Session::new(), Services::default()), ctx: egui::Context::default(), events: Vec::new(), size: (W, H) };
         e.pump();
         e
     }

@@ -3,7 +3,7 @@
 
 use cadaddy_engine::Session;
 use cadaddy_mepfix::score;
-use cadaddy_mepfix::tray_reader::{read_fixture_trays, spec_runs, LevelInfo};
+use cadaddy_mepfix::tray_reader::{LevelInfo, read_fixture_trays, spec_runs};
 use serde_json::json;
 
 #[test]
@@ -46,7 +46,8 @@ fn read_trays_build_clash_and_export() {
         write_dwfx: None,
     });
     let (t, r) = read_fixture_trays(3).unwrap();
-    let lvls: Vec<LevelInfo<'_>> = t.building.levels.iter().map(|l| LevelInfo { code: &l.code, name: &l.name, elevation_ft: l.elevation_ft }).collect();
+    let lvls: Vec<LevelInfo<'_>> =
+        t.building.levels.iter().map(|l| LevelInfo { code: &l.code, name: &l.name, elevation_ft: l.elevation_ft }).collect();
     let (mut systems, mut runs) = spec_runs(&r, &lvls);
     // Horizontal runs + vertical riser conduits.
     let horizontal = r.runs.len();
@@ -101,7 +102,8 @@ fn riser_banks_build_clash_and_export() {
         write_dwfx: None,
     });
     let (t, r) = read_fixture_trays(3).unwrap();
-    let lvls: Vec<LevelInfo<'_>> = t.building.levels.iter().map(|l| LevelInfo { code: &l.code, name: &l.name, elevation_ft: l.elevation_ft }).collect();
+    let lvls: Vec<LevelInfo<'_>> =
+        t.building.levels.iter().map(|l| LevelInfo { code: &l.code, name: &l.name, elevation_ft: l.elevation_ft }).collect();
     let (mut systems, mut runs) = spec_runs(&r, &lvls);
 
     // The riser bank: (4) 2" conduits from L1 up to L2.

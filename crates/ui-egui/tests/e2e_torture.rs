@@ -9,8 +9,8 @@
 
 mod e2e_common;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use e2e_common::E2e;
@@ -229,17 +229,8 @@ const KEYS: &[&str] = &[
 const SIZES: &[(f32, f32)] = &[(1280.0, 800.0), (1024.0, 640.0), (1920.0, 1080.0), (800.0, 600.0), (1600.0, 900.0), (2560.0, 1440.0)];
 
 /// camelCase UiState toggle keys (matching the `#[serde(rename_all = "camelCase")]` struct).
-const UI_TOGGLES: &[&str] = &[
-    "showPalettes",
-    "showToolbar",
-    "showFileTabs",
-    "showStatusBar",
-    "showCommandLine",
-    "showViewcube",
-    "showUcsIcon",
-    "ribbon",
-    "showToolsets",
-];
+const UI_TOGGLES: &[&str] =
+    &["showPalettes", "showToolbar", "showFileTabs", "showStatusBar", "showCommandLine", "showViewcube", "showUcsIcon", "ribbon", "showToolsets"];
 
 // ---------------------------------------------------------------------------
 // Findings tracker
@@ -810,20 +801,34 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
     );
     eprintln!(
         "    draw: {}/{}, modify: {}/{}, view: {}/{}, util: {}/{}, dialog: {}/{}, click: {}/{}, key: {}/{}, text: {}/{}, resize: {}/{}, ribbon: {}/{}, toggle: {}/{}, drag: {}/{}, palette: {}/{}, menu: {}/{}",
-        stats.draw.succeeded, stats.draw.attempted,
-        stats.modify.succeeded, stats.modify.attempted,
-        stats.view.succeeded, stats.view.attempted,
-        stats.util.succeeded, stats.util.attempted,
-        stats.dialog.succeeded, stats.dialog.attempted,
-        stats.click.succeeded, stats.click.attempted,
-        stats.key.succeeded, stats.key.attempted,
-        stats.text.succeeded, stats.text.attempted,
-        stats.resize.succeeded, stats.resize.attempted,
-        stats.ribbon.succeeded, stats.ribbon.attempted,
-        stats.toggle.succeeded, stats.toggle.attempted,
-        stats.drag.succeeded, stats.drag.attempted,
-        stats.palette_drag.succeeded, stats.palette_drag.attempted,
-        stats.menu.succeeded, stats.menu.attempted,
+        stats.draw.succeeded,
+        stats.draw.attempted,
+        stats.modify.succeeded,
+        stats.modify.attempted,
+        stats.view.succeeded,
+        stats.view.attempted,
+        stats.util.succeeded,
+        stats.util.attempted,
+        stats.dialog.succeeded,
+        stats.dialog.attempted,
+        stats.click.succeeded,
+        stats.click.attempted,
+        stats.key.succeeded,
+        stats.key.attempted,
+        stats.text.succeeded,
+        stats.text.attempted,
+        stats.resize.succeeded,
+        stats.resize.attempted,
+        stats.ribbon.succeeded,
+        stats.ribbon.attempted,
+        stats.toggle.succeeded,
+        stats.toggle.attempted,
+        stats.drag.succeeded,
+        stats.drag.attempted,
+        stats.palette_drag.succeeded,
+        stats.palette_drag.attempted,
+        stats.menu.succeeded,
+        stats.menu.attempted,
     );
 
     // Assert entity count after seeding is >= number of seed commands (proof that seeding works).
@@ -835,7 +840,15 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
     (findings, stats)
 }
 
-fn check_error(err: &str, findings: &mut Vec<Finding>, seen: &mut std::collections::HashSet<String>, seed: u64, lang: &'static str, step: usize, action: &str) {
+fn check_error(
+    err: &str,
+    findings: &mut Vec<Finding>,
+    seen: &mut std::collections::HashSet<String>,
+    seed: u64,
+    lang: &'static str,
+    step: usize,
+    action: &str,
+) {
     let lower = err.to_ascii_lowercase();
     // Guard-reported panics.
     if (lower.contains("internal error") || lower.contains("panicked") || lower.contains("panic")) && seen.insert(err.to_string()) {
@@ -843,7 +856,15 @@ fn check_error(err: &str, findings: &mut Vec<Finding>, seen: &mut std::collectio
     }
 }
 
-fn check_cmdline_error(v: &Value, findings: &mut Vec<Finding>, seen: &mut std::collections::HashSet<String>, seed: u64, lang: &'static str, step: usize, action: &str) {
+fn check_cmdline_error(
+    v: &Value,
+    findings: &mut Vec<Finding>,
+    seen: &mut std::collections::HashSet<String>,
+    seed: u64,
+    lang: &'static str,
+    step: usize,
+    action: &str,
+) {
     if let Some(err) = v.get("error").and_then(Value::as_str) {
         let lower = err.to_ascii_lowercase();
         if (lower.contains("internal error") || lower.contains("panicked")) && seen.insert(err.to_string()) {
