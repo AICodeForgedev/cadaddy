@@ -949,7 +949,10 @@ mod tests {
             (id.as_str(), ClashStatus::Active, "Plumbing", "Drop the pipe under the duct")
         );
         // The pipe drops to 7 ft: the crossing is fixed and it now hangs below the ceiling.
-        app.session.execute("mep.edit", &json!({"id": 1, "bottom_ft": 7.0})).unwrap();
+        // `mep.edit` takes the run's stable id (`R1`…): the pipe's.
+        let list = app.session.execute("mep.list", &json!({})).unwrap();
+        let pipe = list["items"].as_array().unwrap().iter().find(|r| r["system"] == "P-DCW").unwrap()["id"].as_str().unwrap().to_string();
+        app.session.execute("mep.edit", &json!({"id": pipe, "bottom_ft": 7.0})).unwrap();
         rerun(&mut app, &mut st);
         let fixed = st.clashes.iter().find(|c| c.id == id).unwrap();
         assert_eq!(fixed.status, ClashStatus::Resolved, "{:?}", st.clashes);

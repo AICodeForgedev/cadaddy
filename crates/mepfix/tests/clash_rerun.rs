@@ -79,10 +79,28 @@ fn rerun_after_an_edit_keeps_statuses_on_a_fixture() {
         let fixed_ids: Vec<&str> =
             triaged.iter().filter(|c| c["kind"] == "below_ceiling" && runs_of(c).contains(&fixed_run)).map(|c| c["id"].as_str().unwrap()).collect();
         // New: a run with no clash drops to 6 ft.
-        let n_runs = s.execute("mep.list", &json!({})).unwrap()["items"].as_array().unwrap().len();
-        let quiet_run = (0..n_runs).find(|r| !first.iter().any(|c| runs_of(c).contains(r))).expect("a run with no clash");
-        s.execute("mep.edit", &json!({"id": fixed_run, "bottom_ft": 9.5})).unwrap();
-        s.execute("mep.edit", &json!({"id": quiet_run, "bottom_ft": 6.0, "rebuild": true})).unwrap();
+        // `mep.edit` takes the run's stable id (`R1`…); `mep.list` (a page at a time, grouped by
+        // system and level) pairs it with the run's objects, `A<i>` for run i.
+        let mut run_ids: Vec<String> = Vec::new();
+        let mut cursor = 0;
+        loop {
+            let page = s.execute("mep.list", &json!({"cursor": cursor, "limit": 200})).unwrap();
+            for r in page["items"].as_array().unwrap() {
+                cursor += 1;
+                let i = runs_of(&json!({"handles": r["objects"]}))[0];
+                if run_ids.len() <= i {
+                    run_ids.resize(i + 1, String::new());
+                }
+                run_ids[i] = r["id"].as_str().unwrap().to_string();
+            }
+            if page["next_cursor"].is_null() {
+                assert_eq!(cursor as u64, page["total"].as_u64().unwrap(), "seed {seed}: every run listed");
+                break;
+            }
+        }
+        let quiet_run = (0..run_ids.len()).find(|r| !first.iter().any(|c| runs_of(c).contains(r))).expect("a run with no clash");
+        s.execute("mep.edit", &json!({"id": run_ids[fixed_run], "bottom_ft": 9.5})).unwrap();
+        s.execute("mep.edit", &json!({"id": run_ids[quiet_run], "bottom_ft": 6.0, "rebuild": true})).unwrap();
         new_handles(&mut s);
         let again = s.execute("model.clashes", &json!({"previous": triaged})).unwrap();
         let now = again["clashes"].as_array().unwrap();
