@@ -309,6 +309,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 objects: handles.iter().map(|h| h.hex()).collect(),
                 id: String::new(),
                 encased: false,
+                status: String::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;

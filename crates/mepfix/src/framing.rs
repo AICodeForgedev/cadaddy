@@ -1019,6 +1019,46 @@ impl Framing {
     }
 }
 
+/// The walls' framing as the building spec's takeoff rows (what the job's bill of materials
+/// counts): members by level, kind, section and length, with the doctrine's status (fixed, rule —
+/// a one-layout or agreed rule member —, field verified; a shop drawing's member is fixed). A wall
+/// whose layout is still open orders its larger layout's rule members.
+pub fn spec_rows(fr: &Framing) -> Vec<cadaddy_walk3d::FramingRow> {
+    let mut rows: std::collections::BTreeMap<(String, String, String, i64, &'static str), u32> = std::collections::BTreeMap::new();
+    for wf in &fr.walls {
+        let open = wf.members.iter().any(|m| m.layout.is_some());
+        let end = if open && wf.resolved(End::B).count() > wf.resolved(End::A).count() { End::B } else { End::A };
+        let depth = wf.wall.stud_in.map_or_else(|| "solid".to_string(), inch);
+        for m in wf.resolved(end) {
+            let status = match m.status {
+                Status::Fixed | Status::ShopDrawing => "fixed",
+                Status::Agreed | Status::Rule => "rule",
+                Status::FieldVerified => "field_verified",
+            };
+            let (section, length_in) = match m.kind {
+                Kind::Header | Kind::Backing | Kind::Rim => (format!("{depth} {}", m.kind.words()), m.width_in),
+                Kind::Post => ("post".to_string(), m.z_in[1] - m.z_in[0]),
+                _ => (format!("{depth} stud"), m.z_in[1] - m.z_in[0]),
+            };
+            if !length_in.is_finite() || length_in <= 0.0 {
+                continue;
+            }
+            let key = (wf.wall.level.clone(), m.kind.words().to_string(), section, (length_in * 8.0).round() as i64, status);
+            *rows.entry(key).or_default() += 1;
+        }
+    }
+    rows.into_iter()
+        .map(|((level, member, section, eighths, status), count)| cadaddy_walk3d::FramingRow {
+            level,
+            member,
+            section,
+            length_in: eighths as f64 / 8.0,
+            count,
+            status: status.into(),
+        })
+        .collect()
+}
+
 fn heads_of(wf: &WallFrame) -> Vec<([f64; 2], f64)> {
     let f = wf.wall.flange_in;
     wf.members

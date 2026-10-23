@@ -32,6 +32,10 @@ pub struct ElementTag {
     /// A person (or an agent) has checked it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reviewed: bool,
+    /// How sure its place and type are (`fixed`, `rule`, `zone`, `field_verified`, `override`,
+    /// `agent`); empty: from its fields' sources.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 impl ElementTag {

@@ -510,6 +510,33 @@ fn wall_face_area_sqft(mesh: &Mesh) -> f64 {
     total / 144.0
 }
 
+/// The area of one of a wall's faces, square feet: its faces square to the wall (a vertical
+/// face whose normal is the wall's main horizontal normal, either way), halved — the ends, top,
+/// bottom and the reveals of openings left out. Each board layer covers one face.
+fn one_face_area_sqft(mesh: &Mesh) -> f64 {
+    let faces: Vec<(f64, [f64; 3])> = mesh
+        .faces
+        .iter()
+        .filter_map(|face| {
+            let v: Vec<Vec3> = face.v.iter().filter_map(|&i| mesh.vertices.get(i as usize).copied()).collect();
+            let (a, b, c) = (*v.first()?, *v.get(1)?, *v.get(2)?);
+            let n = [
+                (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y),
+                (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z),
+                (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x),
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            (len > 1e-12).then(|| (polygon_area_3d(&v), [n[0] / len, n[1] / len, n[2] / len]))
+        })
+        .collect();
+    // The main face direction: the horizontal normal carrying the most area.
+    let Some(main) = faces.iter().filter(|(_, n)| n[2].abs() < 0.1).max_by(|a, b| a.0.total_cmp(&b.0)).map(|f| f.1) else {
+        return wall_face_area_sqft(mesh) / 2.0;
+    };
+    let both: f64 = faces.iter().filter(|(_, n)| (n[0] * main[0] + n[1] * main[1]).abs() > 0.99).map(|f| f.0).sum();
+    both / 2.0 / 144.0
+}
+
 /// Area of a 3D polygon (triangle or quad) by summing cross products.
 fn polygon_area_3d(pts: &[Vec3]) -> f64 {
     if pts.len() < 3 {
@@ -567,7 +594,8 @@ fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
             type_name.as_ref().and_then(|tn| sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(tn)).and_then(|wt| wt.assembly.clone()));
 
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
-        let gross = wall_face_area_sqft(mesh);
+        // One face: each board layer covers one side.
+        let gross = one_face_area_sqft(mesh);
         let (height_ft, length_ft) = mesh_wall_dims(mesh, k);
 
         // Opening area: estimated from WALLGEN cut entities on this wall. For now, use the

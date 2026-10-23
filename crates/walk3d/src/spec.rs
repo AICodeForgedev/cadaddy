@@ -52,6 +52,10 @@ pub struct BuildingSpec {
     /// What each element is from the documents, with sources and open issues (`tags.list`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<crate::tags::ElementTag>,
+    /// The framing members the prints imply (Q303's takeoff), as rows to order: what the job's
+    /// bill of materials counts as framing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub framing: Vec<FramingRow>,
     /// The estimate's state (`estimate.*`): the imported baseline and prices, each line's
     /// assembly and scope with reasons, and the markup settings.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -1246,6 +1250,10 @@ pub struct MepEquipment {
     /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
+    /// How sure it is (`fixed`, `rule`, `zone`, `field_verified`, `override`, `agent`); empty:
+    /// unstated (scheduled equipment is fixed).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status: String,
     pub confidence: f64,
     /// Electrical gear: where conductors land and what its lugs take.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1260,6 +1268,22 @@ pub struct MepEquipment {
     /// A panel's schedule: its circuits, what each feeds and where (its directory).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub circuits: Vec<PanelCircuit>,
+}
+
+/// A row of the framing takeoff: members of one kind, section and length on a level, by how sure
+/// they are.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FramingRow {
+    pub level: String,
+    /// `end stud`, `field stud`, `king stud`, `header`, `cripple`, `backing`, `joist`…
+    pub member: String,
+    /// As ordered: `3-5/8" 20 ga stud`, `2x6`.
+    pub section: String,
+    pub length_in: f64,
+    pub count: u32,
+    /// `fixed`, `rule`, `zone`, `field_verified`, `override` or `agent`.
+    pub status: String,
 }
 
 /// One circuit in a panel schedule.
@@ -1428,6 +1452,10 @@ pub struct MepRun {
     /// Buried in a concrete encasement (a duct bank), as the drawings say.
     #[serde(default, skip_serializing_if = "is_false")]
     pub encased: bool,
+    /// How sure its route is: `fixed` (drawn), `rule` (assumed), `zone`, `field_verified`,
+    /// `override`, `agent`; empty: unstated.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -1977,6 +2005,7 @@ impl BuildingSpec {
             datums: Vec::new(),
             sheets: Vec::new(),
             tags: Vec::new(),
+            framing: Vec::new(),
             estimate: serde_json::Value::Null,
             wholejob: serde_json::Value::Null,
             progress: serde_json::Value::Null,
