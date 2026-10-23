@@ -949,7 +949,7 @@ pub fn read_fixture_arch(seed: u64) -> Result<(Truth, ArchResult), String> {
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     Ok((set.truth, read_arch(&dxf, &map, &ceilings)))
 }
 

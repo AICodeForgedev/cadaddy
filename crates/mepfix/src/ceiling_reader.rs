@@ -15,7 +15,10 @@
 //! - Plenum depth estimated as structure-bottom minus ceiling height (when structure height is
 //!   known from framing notes or a provided value)
 
+use std::collections::BTreeMap;
+
 use crate::sheet_reader::{self, Alignment, SheetMap};
+use crate::struct_reader::StructuralModel;
 use crate::truth::Truth;
 use cadaddy_doc::{Drawing, EntityKind};
 
@@ -71,6 +74,25 @@ pub struct FoundCeilingItem {
     pub at_ft: [f64; 2],
 }
 
+/// A shaft or chase detected on an architectural plan.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FoundShaft {
+    pub level: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub label: Option<String>,
+}
+
+/// Plenum depth for a room (space between ceiling and structure above).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FoundPlenum {
+    pub level: String,
+    pub room_number: String,
+    pub plenum_ft: f64,
+    pub ceiling_height_ft: f64,
+    pub structure_bottom_ft: f64,
+}
+
 /// Complete result of reading ceiling data from a set of DXF sheets.
 #[derive(Clone, Debug, Default)]
 pub struct CeilingResult {
@@ -78,6 +100,8 @@ pub struct CeilingResult {
     pub ceilings: Vec<FoundCeiling>,
     pub soffits: Vec<FoundSoffit>,
     pub items: Vec<FoundCeilingItem>,
+    pub shafts: Vec<FoundShaft>,
+    pub plenums: Vec<FoundPlenum>,
 }
 
 /// Score comparing found ceilings against truth.
@@ -383,8 +407,20 @@ fn detect_rooms(d: &Drawing, alignment: &Alignment, level: &str) -> Vec<FoundRoo
 // ---- Ceiling detection --------------------------------------------------------------
 
 /// Detect ACT grid lines on the LIGHT layer inside a room, and measure tile spacing.
+///
+/// Grid lines must span most of the room (at least 60% of its width or height) to be
+/// counted, preventing bleed-in from neighbouring ACT rooms through shared walls.
 fn detect_act_grid(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_max: [f64; 2]) -> Option<[f64; 2]> {
     let tol = 0.3;
+    let room_w = room_max[0] - room_min[0];
+    let room_h = room_max[1] - room_min[1];
+    // Lines must span a reasonable portion of the room dimension, but for very
+    // long/narrow rooms (corridors), the short dimension lines still count if they
+    // span at least 2 ft (a tile height) and 40% of that dimension.
+    let min_span = |room_dim: f64| -> f64 {
+        (room_dim * 0.4).max(2.0).min(room_dim - 0.5)
+    };
+
     let mut h_ys: Vec<f64> = Vec::new(); // horizontal grid lines (constant y)
     let mut v_xs: Vec<f64> = Vec::new(); // vertical grid lines (constant x)
 
@@ -396,18 +432,20 @@ fn detect_act_grid(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_
             let a = to_building(alignment, [l.a.x, l.a.y]);
             let b = to_building(alignment, [l.b.x, l.b.y]);
             let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-            // Is the midpoint inside the room?
+            // Midpoint must be inside the room.
             if mid[0] < room_min[0] - tol || mid[0] > room_max[0] + tol || mid[1] < room_min[1] - tol || mid[1] > room_max[1] + tol {
                 continue;
             }
             let dx = (b[0] - a[0]).abs();
             let dy = (b[1] - a[1]).abs();
             if dx > 1.0 && dy < 0.3 {
-                // Horizontal line
-                h_ys.push((a[1] + b[1]) / 2.0);
+                if dx >= min_span(room_w) {
+                    h_ys.push((a[1] + b[1]) / 2.0);
+                }
             } else if dy > 1.0 && dx < 0.3 {
-                // Vertical line
-                v_xs.push((a[0] + b[0]) / 2.0);
+                if dy >= min_span(room_h) {
+                    v_xs.push((a[0] + b[0]) / 2.0);
+                }
             }
         }
     }
@@ -463,8 +501,26 @@ fn detect_act_grid(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_
 }
 
 /// Detect ceiling tags on the TEXT layer inside a room.
-fn detect_ceiling_tag(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_max: [f64; 2]) -> Option<(String, f64, String)> {
-    let tol = 1.5; // tags can be offset from the room centre
+///
+/// `pen.block()` creates individual Text entities for each line of a ceiling tag, so
+/// a two-line tag like `"CLG @ 9'-0"\nACT"` appears as two nearby Text entities:
+/// one with the height, one with the kind.  We collect all TEXT entities near the room,
+/// then try to combine height + kind from entities at the same x-position.
+///
+/// Returns `(kind, height_ft_option, raw_text)`.
+fn detect_ceiling_tag(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], room_max: [f64; 2]) -> Option<(String, Option<f64>, String)> {
+    let cx = (room_min[0] + room_max[0]) / 2.0;
+    let cy = (room_min[1] + room_max[1]) / 2.0;
+    let tol = 3.0;
+
+    // Step 1: Collect all TEXT-layer entities near the room.
+    struct TextItem {
+        text: String,
+        pos: [f64; 2],
+        dist: f64,
+    }
+    let mut texts: Vec<TextItem> = Vec::new();
+
     for e in d.model.iter() {
         if !e.common.layer.eq_ignore_ascii_case("TEXT") {
             continue;
@@ -478,11 +534,69 @@ fn detect_ceiling_tag(d: &Drawing, alignment: &Alignment, room_min: [f64; 2], ro
         if b[0] < room_min[0] - tol || b[0] > room_max[0] + tol || b[1] < room_min[1] - tol || b[1] > room_max[1] + tol {
             continue;
         }
-        if let Some((kind, height)) = parse_ceiling_tag(&text) {
-            return Some((kind, height, text));
+        let dist = ((b[0] - cx).powi(2) + (b[1] - cy).powi(2)).sqrt();
+        texts.push(TextItem { text, pos: b, dist });
+    }
+
+    // Step 2: Try to find a full ceiling tag (kind + height in one entity).
+    let mut full_candidates: Vec<(String, Option<f64>, String, f64)> = Vec::new();
+
+    for item in &texts {
+        if let Some((kind, height)) = parse_ceiling_tag(&item.text)
+            && !kind.is_empty()
+        {
+            full_candidates.push((kind, Some(height), item.text.clone(), item.dist));
         }
     }
-    None
+    if !full_candidates.is_empty() {
+        full_candidates.sort_by(|a, b| a.3.total_cmp(&b.3));
+        return full_candidates.into_iter().next().map(|(k, h, t, _)| (k, h, t));
+    }
+
+    // Step 3: Combine separate height and kind entities.
+    // pen.block() places lines at the same x, spaced vertically by ~1.5-3 ft in building coords.
+    // Find height-bearing entities and look for a kind entity nearby.
+    let mut combined: Vec<(String, Option<f64>, String, f64)> = Vec::new();
+
+    for (idx, item) in texts.iter().enumerate() {
+        // Try to extract height from this entity.
+        if let Some((kind, height)) = parse_ceiling_tag(&item.text) {
+            // If kind is empty, look for a nearby kind-only entity at similar x.
+            let kind = if kind.is_empty() {
+                texts.iter().enumerate()
+                    .filter(|(j, other)| {
+                        *j != idx
+                        && (other.pos[0] - item.pos[0]).abs() < 3.0 // same x region
+                        && (other.pos[1] - item.pos[1]).abs() < 5.0 // within a few feet vertically
+                    })
+                    .find_map(|(_, other)| {
+                        let trimmed = other.text.trim().to_uppercase();
+                        let k = normalise_kind(&trimmed);
+                        if (k == "ACT" || k == "GYP") && trimmed.len() <= 4 { Some(k) } else { None }
+                    })
+                    .unwrap_or_default()
+            } else {
+                kind
+            };
+            combined.push((kind, Some(height), item.text.clone(), item.dist));
+        }
+    }
+    if !combined.is_empty() {
+        combined.sort_by(|a, b| a.3.total_cmp(&b.3));
+        return combined.into_iter().next().map(|(k, h, t, _)| (k, h, t));
+    }
+
+    // Step 4: Kind-only tag (height_hidden rooms just print the kind).
+    let mut kind_only: Vec<(String, Option<f64>, String, f64)> = Vec::new();
+    for item in &texts {
+        let trimmed = item.text.trim().to_uppercase();
+        let k = normalise_kind(&trimmed);
+        if (k == "ACT" || k == "GYP") && trimmed.len() <= 4 {
+            kind_only.push((k, None, item.text.clone(), item.dist));
+        }
+    }
+    kind_only.sort_by(|a, b| a.3.total_cmp(&b.3));
+    kind_only.into_iter().next().map(|(k, h, t, _)| (k, h, t))
 }
 
 /// Check for "OPEN TO STRUCTURE" text inside a room.
@@ -635,55 +749,330 @@ fn detect_soffits(d: &Drawing, alignment: &Alignment, level: &str, rooms: &[Foun
 
 // ---- Ceiling-mounted items ----------------------------------------------------------
 
-/// Device symbols on RCP sheets: circles (diffusers/grilles) and heads (sprinkler symbols).
+/// Detect ceiling-mounted items on the DEVICE layer by shape analysis.
+///
+/// The RCP draws terminals as geometric symbols on the `DEVICE` layer:
+/// - **Supply diffuser**: outer rectangle with X-cross diagonals + inner rectangle
+///   (draw.rs `brect` + 2 diagonal lines + inner `brect`)
+/// - **Return grille**: rectangle with 3 horizontal bars inside
+/// - **Exhaust grille**: rectangle with 2+ diagonal/partial lines
+/// - **Sprinkler head**: circle (pendent) or double circle (upright)
+///
+/// We identify these by collecting DEVICE-layer lines and circles, assembling small
+/// rectangles from line groups, then counting interior lines to classify the kind.
 fn detect_ceiling_items(d: &Drawing, alignment: &Alignment, level: &str, rooms: &[FoundRoom]) -> Vec<FoundCeilingItem> {
     let mut items = Vec::new();
-    // The draw code places device symbols on specific layers.
-    // Supply diffusers: a rectangle on the layer corresponding to SA system.
-    // Return grilles: a rectangle on RA layer.
-    // Sprinkler heads: a circle with cross on FP layer.
-    // We look for small symbols (circles, crosses) on known system layers.
+
+    // Step 1: Collect all DEVICE-layer line segments and circles in building coords.
+    let mut dev_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut dev_circles: Vec<([f64; 2], f64)> = Vec::new(); // (centre, radius_ft)
+
     for e in d.model.iter() {
-        let layer = e.common.layer.to_uppercase();
-        let kind = if layer.contains("SA") || layer.contains("SUPPLY") || layer == "DUCT-SA" {
-            "supply_diffuser"
-        } else if layer.contains("RA") || layer.contains("RETURN") || layer == "DUCT-RA" {
-            "return_grille"
-        } else if layer.contains("EA") || layer.contains("EXHAUST") || layer == "DUCT-EA" {
-            "exhaust_grille"
-        } else if layer.contains("FP") || layer.contains("FIRE") || layer == "PIPE-FP" {
-            "sprinkler_head"
-        } else {
+        if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
             continue;
-        };
-
-        let center = match &e.kind {
-            EntityKind::Circle(c) => Some([c.center.x, c.center.y]),
-            EntityKind::Solid(s) => {
-                let mid = [(s.corners[0].x + s.corners[2].x) / 2.0, (s.corners[0].y + s.corners[2].y) / 2.0];
-                Some(mid)
+        }
+        match &e.kind {
+            EntityKind::Line(l) => {
+                let a = to_building(alignment, [l.a.x, l.a.y]);
+                let b = to_building(alignment, [l.b.x, l.b.y]);
+                dev_lines.push((a, b));
             }
-            EntityKind::LwPolyline(p) if !p.vertices.is_empty() => {
-                let sum_x: f64 = p.vertices.iter().map(|v| v.p.x).sum::<f64>();
-                let sum_y: f64 = p.vertices.iter().map(|v| v.p.y).sum::<f64>();
-                let n = p.vertices.len() as f64;
-                Some([sum_x / n, sum_y / n])
+            EntityKind::LwPolyline(p) => {
+                // Convert polyline segments to individual lines.
+                let pts: Vec<[f64; 2]> = p.vertices.iter().map(|v| to_building(alignment, [v.p.x, v.p.y])).collect();
+                for w in pts.windows(2) {
+                    dev_lines.push((w[0], w[1]));
+                }
+                if p.closed && pts.len() >= 2
+                    && let (Some(first), Some(last)) = (pts.first(), pts.last())
+                {
+                    dev_lines.push((*last, *first));
+                }
             }
-            _ => None,
-        };
+            EntityKind::Circle(c) => {
+                let centre = to_building(alignment, [c.center.x, c.center.y]);
+                let r_ft = c.radius / 12.0; // model coords are inches
+                dev_circles.push((centre, r_ft));
+            }
+            _ => {}
+        }
+    }
 
-        if let Some(pt) = center {
-            let b = to_building(alignment, pt);
-            // Find the room containing this point
-            if let Some(room) = rooms
-                .iter()
-                .find(|r| b[0] >= r.min_ft[0] - 0.1 && b[0] <= r.max_ft[0] + 0.1 && b[1] >= r.min_ft[1] - 0.1 && b[1] <= r.max_ft[1] + 0.1)
-            {
-                items.push(FoundCeilingItem { level: level.to_string(), room_number: room.number.clone(), kind: kind.to_string(), at_ft: b });
+    // Step 2: Find small axis-aligned rectangles from DEVICE lines.
+    // brect produces 4 lines forming a rectangle. Look for groups of H and V lines
+    // that form a closed rectangle of "device size" (roughly 0.5–4 ft each side).
+    let mut h_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut v_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut diag_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+
+    for &(a, b) in &dev_lines {
+        let dx = (b[0] - a[0]).abs();
+        let dy = (b[1] - a[1]).abs();
+        if dx > 0.1 && dy < 0.1 {
+            h_lines.push((a, b));
+        } else if dy > 0.1 && dx < 0.1 {
+            v_lines.push((a, b));
+        } else if dx > 0.1 && dy > 0.1 {
+            diag_lines.push((a, b));
+        }
+    }
+
+    // Assemble rectangles from pairs of horizontals + matching verticals.
+    let tol = 0.15;
+    let max_device_size = 4.0; // max ft for a device symbol
+    let min_device_size = 0.2; // min ft
+    let mut device_rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
+
+    for (i, ha) in h_lines.iter().enumerate() {
+        let (ha_xmin, ha_xmax) = (ha.0[0].min(ha.1[0]), ha.0[0].max(ha.1[0]));
+        let ha_y = (ha.0[1] + ha.1[1]) / 2.0;
+        let width = ha_xmax - ha_xmin;
+        if width < min_device_size || width > max_device_size {
+            continue;
+        }
+        for hb in h_lines.iter().skip(i + 1) {
+            let (hb_xmin, hb_xmax) = (hb.0[0].min(hb.1[0]), hb.0[0].max(hb.1[0]));
+            let hb_y = (hb.0[1] + hb.1[1]) / 2.0;
+            let height = (ha_y - hb_y).abs();
+            if height < min_device_size || height > max_device_size {
+                continue;
+            }
+            if (ha_xmin - hb_xmin).abs() > tol || (ha_xmax - hb_xmax).abs() > tol {
+                continue;
+            }
+            let x_left = ha_xmin.min(hb_xmin);
+            let x_right = ha_xmax.max(hb_xmax);
+            let y_low = ha_y.min(hb_y);
+            let y_high = ha_y.max(hb_y);
+            let has_left = v_lines.iter().any(|v| {
+                let (vy_min, vy_max) = (v.0[1].min(v.1[1]), v.0[1].max(v.1[1]));
+                let vx = (v.0[0] + v.1[0]) / 2.0;
+                (vx - x_left).abs() < tol && vy_min < y_low + tol && vy_max > y_high - tol
+            });
+            let has_right = v_lines.iter().any(|v| {
+                let (vy_min, vy_max) = (v.0[1].min(v.1[1]), v.0[1].max(v.1[1]));
+                let vx = (v.0[0] + v.1[0]) / 2.0;
+                (vx - x_right).abs() < tol && vy_min < y_low + tol && vy_max > y_high - tol
+            });
+            if has_left && has_right {
+                device_rects.push(([x_left, y_low], [x_right, y_high]));
             }
         }
     }
+
+    // Deduplicate rects that are within tolerance of each other (same device drawn
+    // with brect produces one set of 4 lines; inner rects of supply diffusers make a
+    // second, smaller rect at the same centre — keep only the larger).
+    device_rects.sort_by(|a, b| {
+        let area_a = (a.1[0] - a.0[0]) * (a.1[1] - a.0[1]);
+        let area_b = (b.1[0] - b.0[0]) * (b.1[1] - b.0[1]);
+        area_b.total_cmp(&area_a) // largest first
+    });
+    let mut kept_rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    for r in &device_rects {
+        let cx = (r.0[0] + r.1[0]) / 2.0;
+        let cy = (r.0[1] + r.1[1]) / 2.0;
+        let already = kept_rects.iter().any(|k| {
+            let kcx = (k.0[0] + k.1[0]) / 2.0;
+            let kcy = (k.0[1] + k.1[1]) / 2.0;
+            (cx - kcx).abs() < 0.5 && (cy - kcy).abs() < 0.5
+        });
+        if !already {
+            kept_rects.push(*r);
+        }
+    }
+
+    // Step 3: Classify each device rectangle by its interior lines.
+    for &(rmin, rmax) in &kept_rects {
+        let cx = (rmin[0] + rmax[0]) / 2.0;
+        let cy = (rmin[1] + rmax[1]) / 2.0;
+        let pad = 0.1;
+
+        // Count horizontal lines inside the rect (excluding the border lines).
+        let interior_h = h_lines.iter().filter(|l| {
+            let lx_min = l.0[0].min(l.1[0]);
+            let lx_max = l.0[0].max(l.1[0]);
+            let ly = (l.0[1] + l.1[1]) / 2.0;
+            lx_min >= rmin[0] - pad
+                && lx_max <= rmax[0] + pad
+                && ly > rmin[1] + pad
+                && ly < rmax[1] - pad
+                && (ly - rmin[1]).abs() > pad
+                && (ly - rmax[1]).abs() > pad
+        }).count();
+
+        // Count diagonal lines touching the rect area.
+        let interior_diag = diag_lines.iter().filter(|l| {
+            let mid = [(l.0[0] + l.1[0]) / 2.0, (l.0[1] + l.1[1]) / 2.0];
+            mid[0] >= rmin[0] - pad && mid[0] <= rmax[0] + pad && mid[1] >= rmin[1] - pad && mid[1] <= rmax[1] + pad
+        }).count();
+
+        // Check for an inner rectangle (supply diffuser has one).
+        let has_inner_rect = device_rects.iter().any(|ir| {
+            let icx = (ir.0[0] + ir.1[0]) / 2.0;
+            let icy = (ir.0[1] + ir.1[1]) / 2.0;
+            (icx - cx).abs() < 0.3
+                && (icy - cy).abs() < 0.3
+                && (ir.1[0] - ir.0[0]) < (rmax[0] - rmin[0]) - 0.1
+                && (ir.1[1] - ir.0[1]) < (rmax[1] - rmin[1]) - 0.1
+        });
+
+        // Classify:
+        // Supply diffuser: X-cross (2 diagonals) + inner rect
+        // Return grille: 3 horizontal bars inside
+        // Exhaust grille: diagonal lines but no inner rect
+        let kind = if interior_diag >= 2 && has_inner_rect {
+            "supply_diffuser"
+        } else if interior_h >= 2 {
+            "return_grille"
+        } else if interior_diag >= 2 {
+            "exhaust_grille"
+        } else {
+            // Unknown device rect — skip
+            continue;
+        };
+
+        let b = [cx, cy];
+        if let Some(room) = room_containing(rooms, b) {
+            items.push(FoundCeilingItem { level: level.to_string(), room_number: room.number.clone(), kind: kind.to_string(), at_ft: b });
+        }
+    }
+
+    // Step 4: Sprinkler heads are circles on the DEVICE layer (small radius, < 0.5 ft).
+    for &(centre, r) in &dev_circles {
+        if r > 0.5 || r < 0.01 {
+            continue;
+        }
+        if let Some(room) = room_containing(rooms, centre) {
+            items.push(FoundCeilingItem {
+                level: level.to_string(),
+                room_number: room.number.clone(),
+                kind: "sprinkler_head".to_string(),
+                at_ft: centre,
+            });
+        }
+    }
+
+    // Deduplicate sprinkler heads at the same position (upright has 2 concentric circles).
+    items.sort_by(|a, b| a.at_ft[0].total_cmp(&b.at_ft[0]).then_with(|| a.at_ft[1].total_cmp(&b.at_ft[1])));
+    items.dedup_by(|a, b| a.kind == b.kind && (a.at_ft[0] - b.at_ft[0]).abs() < 0.1 && (a.at_ft[1] - b.at_ft[1]).abs() < 0.1);
+
     items
+}
+
+/// Find the room whose bounding box contains `pt`.
+fn room_containing(rooms: &[FoundRoom], pt: [f64; 2]) -> Option<&FoundRoom> {
+    rooms.iter().find(|r| pt[0] >= r.min_ft[0] - 0.3 && pt[0] <= r.max_ft[0] + 0.3 && pt[1] >= r.min_ft[1] - 0.3 && pt[1] <= r.max_ft[1] + 0.3)
+}
+
+// ---- Shaft / chase detection --------------------------------------------------------
+
+/// Detect shafts and chases on architectural floor plan sheets.
+///
+/// On A-discipline floor plans, shafts are drawn as DASHED-layer rectangles with a TEXT
+/// label (e.g. `"PLUMBING CHASE"`) — the same as `draw.rs:1972-1980`.
+fn detect_shafts(d: &Drawing, alignment: &Alignment, level: &str) -> Vec<FoundShaft> {
+    // Collect DASHED-layer rectangles (from LwPolyline and line-assembled).
+    let mut rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut h_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut v_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+
+    for e in d.model.iter() {
+        if !e.common.layer.eq_ignore_ascii_case("DASHED") {
+            continue;
+        }
+        match &e.kind {
+            EntityKind::LwPolyline(p) if p.vertices.len() >= 4 => {
+                let pts: Vec<[f64; 2]> = p.vertices.iter().map(|v| to_building(alignment, [v.p.x, v.p.y])).collect();
+                let (mut xmin, mut ymin) = (f64::INFINITY, f64::INFINITY);
+                let (mut xmax, mut ymax) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+                for pt in &pts {
+                    xmin = xmin.min(pt[0]);
+                    ymin = ymin.min(pt[1]);
+                    xmax = xmax.max(pt[0]);
+                    ymax = ymax.max(pt[1]);
+                }
+                if (xmax - xmin) > 0.5 && (ymax - ymin) > 0.5 {
+                    rects.push(([xmin, ymin], [xmax, ymax]));
+                }
+            }
+            EntityKind::Line(l) => {
+                let a = to_building(alignment, [l.a.x, l.a.y]);
+                let b = to_building(alignment, [l.b.x, l.b.y]);
+                let dx = (b[0] - a[0]).abs();
+                let dy = (b[1] - a[1]).abs();
+                if dx > 0.5 && dy < 0.2 {
+                    h_lines.push((a, b));
+                } else if dy > 0.5 && dx < 0.2 {
+                    v_lines.push((a, b));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Assemble rectangles from line pairs.
+    let tol = 0.15;
+    for (i, ha) in h_lines.iter().enumerate() {
+        let (ha_xmin, ha_xmax) = (ha.0[0].min(ha.1[0]), ha.0[0].max(ha.1[0]));
+        let ha_y = (ha.0[1] + ha.1[1]) / 2.0;
+        for hb in h_lines.iter().skip(i + 1) {
+            let (hb_xmin, hb_xmax) = (hb.0[0].min(hb.1[0]), hb.0[0].max(hb.1[0]));
+            let hb_y = (hb.0[1] + hb.1[1]) / 2.0;
+            if (ha_y - hb_y).abs() < tol {
+                continue;
+            }
+            if (ha_xmin - hb_xmin).abs() > tol || (ha_xmax - hb_xmax).abs() > tol {
+                continue;
+            }
+            let x_left = ha_xmin.min(hb_xmin);
+            let x_right = ha_xmax.max(hb_xmax);
+            let y_low = ha_y.min(hb_y);
+            let y_high = ha_y.max(hb_y);
+            let has_left = v_lines.iter().any(|v| {
+                let (vy_min, vy_max) = (v.0[1].min(v.1[1]), v.0[1].max(v.1[1]));
+                let vx = (v.0[0] + v.1[0]) / 2.0;
+                (vx - x_left).abs() < tol && vy_min < y_low + tol && vy_max > y_high - tol
+            });
+            let has_right = v_lines.iter().any(|v| {
+                let (vy_min, vy_max) = (v.0[1].min(v.1[1]), v.0[1].max(v.1[1]));
+                let vx = (v.0[0] + v.1[0]) / 2.0;
+                (vx - x_right).abs() < tol && vy_min < y_low + tol && vy_max > y_high - tol
+            });
+            if has_left && has_right {
+                rects.push(([x_left, y_low], [x_right, y_high]));
+            }
+        }
+    }
+
+    // For each DASHED rect, look for a TEXT label inside it containing shaft/chase keywords.
+    let mut shafts = Vec::new();
+    for (rmin, rmax) in &rects {
+        let mut label = None;
+        for e in d.model.iter() {
+            if !e.common.layer.eq_ignore_ascii_case("TEXT") {
+                continue;
+            }
+            let (text, pt) = match &e.kind {
+                EntityKind::Text(t) => (t.value.clone(), t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y])),
+                EntityKind::MText(t) => (t.contents.clone(), [t.insert.x, t.insert.y]),
+                _ => continue,
+            };
+            let b = to_building(alignment, pt);
+            if b[0] >= rmin[0] - 0.5 && b[0] <= rmax[0] + 0.5 && b[1] >= rmin[1] - 0.5 && b[1] <= rmax[1] + 0.5 {
+                let upper = text.to_uppercase();
+                if upper.contains("SHAFT") || upper.contains("CHASE") || upper.contains("OPENING") {
+                    label = Some(text);
+                    break;
+                }
+            }
+        }
+        // Only keep DASHED rects that have a shaft/chase label.
+        if let Some(lbl) = label {
+            shafts.push(FoundShaft { level: level.to_string(), min_ft: *rmin, max_ft: *rmax, label: Some(lbl) });
+        }
+    }
+    shafts
 }
 
 // ---- Coordinate transform -----------------------------------------------------------
@@ -695,8 +1084,14 @@ fn to_building(alignment: &Alignment, model: [f64; 2]) -> [f64; 2] {
 // ---- Public API ---------------------------------------------------------------------
 
 /// Read ceiling data from a set of DXF files, using the sheet map for alignment.
-pub fn read_ceilings(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap) -> CeilingResult {
+///
+/// When `structure` is provided, plenum depth is computed per room by combining the
+/// reader's ceiling height with the structural model's bottom-of-structure.
+pub fn read_ceilings(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, structure: Option<&StructuralModel>) -> CeilingResult {
     let mut result = CeilingResult::default();
+
+    // Pre-compute structure bottom above floor per level from the structural model.
+    let struct_bob = structure.map(structure_bottom_per_level).unwrap_or_default();
 
     for (name, bytes) in dxf_data {
         let d = match cadaddy_io::read_dxf(bytes) {
@@ -709,81 +1104,188 @@ pub fn read_ceilings(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap) -> Ce
         let sheet = sheet_map.sheets.iter().find(|s| s.number == file_stem || name.starts_with(&s.number));
         let Some(sheet) = sheet else { continue };
 
-        // Only process RCP sheets (discipline A, title contains "CEILING")
-        let is_rcp = sheet.discipline == "A" && sheet.title.to_uppercase().contains("CEILING");
-        if !is_rcp {
-            continue;
-        }
-
         let Some(level) = &sheet.level else { continue };
         let Some(alignment) = &sheet.alignment else { continue };
 
-        // Step 1: Detect rooms
-        let rooms = detect_rooms(&d, alignment, level);
-        result.rooms.extend(rooms.clone());
+        let is_rcp = sheet.discipline == "A" && sheet.title.to_uppercase().contains("CEILING");
+        let is_floor_plan = sheet.discipline == "A" && !is_rcp;
 
-        // Step 2: For each room, detect ceilings
-        for room in &rooms {
-            let is_open = detect_open_to_structure(&d, alignment, room.min_ft, room.max_ft);
-            if is_open {
-                result.ceilings.push(FoundCeiling {
-                    level: level.clone(),
-                    room_number: room.number.clone(),
-                    kind: String::new(),
-                    height_ft: None,
-                    tag_text: None,
-                    grid_ft: None,
-                    open_to_structure: true,
-                });
-                continue;
+        // RCP sheets: rooms, ceilings, soffits, items
+        if is_rcp {
+            let rooms = detect_rooms(&d, alignment, level);
+            result.rooms.extend(rooms.clone());
+
+            for room in &rooms {
+                let is_open = detect_open_to_structure(&d, alignment, room.min_ft, room.max_ft);
+                if is_open {
+                    result.ceilings.push(FoundCeiling {
+                        level: level.clone(),
+                        room_number: room.number.clone(),
+                        kind: String::new(),
+                        height_ft: None,
+                        tag_text: None,
+                        grid_ft: None,
+                        open_to_structure: true,
+                    });
+                    continue;
+                }
+
+                let grid = detect_act_grid(&d, alignment, room.min_ft, room.max_ft);
+                let tag = detect_ceiling_tag(&d, alignment, room.min_ft, room.max_ft);
+
+                if let Some((kind, height_opt, text)) = tag {
+                    let kind = if grid.is_some() && kind.is_empty() { "ACT".to_string() } else { kind };
+                    result.ceilings.push(FoundCeiling {
+                        level: level.clone(),
+                        room_number: room.number.clone(),
+                        kind,
+                        height_ft: height_opt,
+                        tag_text: Some(text),
+                        grid_ft: grid,
+                        open_to_structure: false,
+                    });
+                } else if grid.is_some() {
+                    result.ceilings.push(FoundCeiling {
+                        level: level.clone(),
+                        room_number: room.number.clone(),
+                        kind: "ACT".to_string(),
+                        height_ft: None,
+                        tag_text: None,
+                        grid_ft: grid,
+                        open_to_structure: false,
+                    });
+                }
             }
 
-            let grid = detect_act_grid(&d, alignment, room.min_ft, room.max_ft);
-            let tag = detect_ceiling_tag(&d, alignment, room.min_ft, room.max_ft);
+            let soffits = detect_soffits(&d, alignment, level, &rooms);
+            result.soffits.extend(soffits);
 
-            if let Some((kind, height, text)) = tag {
-                let kind = if grid.is_some() && kind.is_empty() { "ACT".to_string() } else { kind };
-                result.ceilings.push(FoundCeiling {
-                    level: level.clone(),
-                    room_number: room.number.clone(),
-                    kind,
-                    height_ft: Some(height),
-                    tag_text: Some(text),
-                    grid_ft: grid,
-                    open_to_structure: false,
-                });
-            } else if grid.is_some() {
-                result.ceilings.push(FoundCeiling {
-                    level: level.clone(),
-                    room_number: room.number.clone(),
-                    kind: "ACT".to_string(),
-                    height_ft: None,
-                    tag_text: None,
-                    grid_ft: grid,
-                    open_to_structure: false,
+            let items = detect_ceiling_items(&d, alignment, level, &rooms);
+            result.items.extend(items);
+        }
+
+        // A-floor plan sheets and S-framing sheets: shafts/chases
+        // Openings are drawn on S-discipline framing sheets (draw.rs:1972-1980).
+        let is_framing = sheet.discipline == "S";
+        if is_floor_plan || is_framing {
+            let shafts = detect_shafts(&d, alignment, level);
+            result.shafts.extend(shafts);
+        }
+    }
+
+    // Compute plenum depths from ceiling heights + structure bottom.
+    for ceiling in &result.ceilings {
+        if let Some(ch) = ceiling.height_ft
+            && let Some(&bob) = struct_bob.get(&ceiling.level)
+        {
+            let plenum = bob - ch;
+            if plenum > 0.01 {
+                result.plenums.push(FoundPlenum {
+                    level: ceiling.level.clone(),
+                    room_number: ceiling.room_number.clone(),
+                    plenum_ft: plenum,
+                    ceiling_height_ft: ch,
+                    structure_bottom_ft: bob,
                 });
             }
         }
-
-        // Step 3: Detect soffits
-        let soffits = detect_soffits(&d, alignment, level, &rooms);
-        result.soffits.extend(soffits);
-
-        // Step 4: Detect ceiling-mounted items
-        let items = detect_ceiling_items(&d, alignment, level, &rooms);
-        result.items.extend(items);
     }
 
     result
 }
 
-/// Convenience: generate fixture set, recognise sheets, read ceilings.
+/// Compute the bottom-of-structure height above the floor for each level.
+///
+/// For rooms on level L, the structure above is the slab/roof of level L+1.
+/// Bottom of structure = TOS_above - beam_depth - floor_elevation_of_L.
+fn structure_bottom_per_level(s: &StructuralModel) -> BTreeMap<String, f64> {
+    let mut result = BTreeMap::new();
+
+    // Collect all "above" levels that have either a slab or beams.
+    let mut above_levels: Vec<String> = Vec::new();
+    for lv in s.beams.keys() {
+        if !above_levels.contains(lv) {
+            above_levels.push(lv.clone());
+        }
+    }
+    for slab in &s.slabs {
+        if !above_levels.contains(&slab.level) {
+            above_levels.push(slab.level.clone());
+        }
+    }
+
+    for lv in &above_levels {
+        let slab = s.slabs.iter().find(|sl| sl.level == *lv);
+
+        // Top of steel: explicit TOS, or derive from slab, or estimate from the
+        // level below's slab top + a standard storey height for the roof.
+        let tos = s.tos_ft.get(lv).copied().or_else(|| {
+            slab.map(|sl| sl.top_ft - (sl.concrete_in + sl.deck_in) / 12.0)
+        });
+        let Some(tos) = tos else { continue };
+
+        // Max beam/girder depth on this level.
+        let max_beam_depth_in = s.beams.get(lv).map_or(0.0, |beams| {
+            beams.iter().map(|b| parse_beam_depth(&b.size)).fold(0.0_f64, f64::max)
+        });
+
+        let bot = tos - max_beam_depth_in / 12.0;
+
+        // The level below gets this as its ceiling (structure bottom above floor).
+        let below = match lv.as_str() {
+            "2" => Some("1"),
+            "3" => Some("2"),
+            "R" | "ROOF" => {
+                // Roof is above the highest numeric level. Find it.
+                let max_num = above_levels.iter()
+                    .filter_map(|l| l.parse::<u32>().ok())
+                    .max()
+                    .unwrap_or(2);
+                Some(if max_num == 2 { "2" } else { "1" })
+            }
+            _ => lv.parse::<u32>().ok().and_then(|n| if n > 1 { Some("") } else { None }).and(None),
+        };
+
+        if let Some(below_lv) = below {
+            // Floor elevation for the level below: slab top_ft, or 0 for level 1.
+            let floor_elev = if below_lv == "1" {
+                s.slabs.iter().find(|sl| sl.level == "1").map_or(0.0, |sl| sl.top_ft)
+            } else {
+                s.slabs.iter().find(|sl| sl.level == below_lv).map_or(0.0, |sl| sl.top_ft)
+            };
+            let bob_above_floor = bot - floor_elev;
+            if bob_above_floor > 0.0 {
+                result.insert(below_lv.to_string(), bob_above_floor);
+            }
+        }
+    }
+
+    result
+}
+
+/// Parse beam depth from a W-shape size like "W16x31" → 16.0.
+fn parse_beam_depth(size: &str) -> f64 {
+    let s = size.trim().strip_prefix('W').or_else(|| size.trim().strip_prefix('w')).unwrap_or(size);
+    s.split(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse::<f64>().ok()).unwrap_or(0.0)
+}
+
+/// Convenience: generate fixture set, recognise sheets, read ceilings with structure.
 /// Returns `Err` if the fixture generator fails.
 pub fn read_fixture_ceilings(seed: u64) -> Result<(Truth, CeilingResult), String> {
     let set = crate::generate(seed)?;
     let dxf_data: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let sheet_map = sheet_reader::recognise_fixture_set(&dxf_data);
-    let result = read_ceilings(&dxf_data, &sheet_map);
+
+    // Read structure for plenum depth calculation.
+    // Drawing names must match sheet numbers (no .dxf extension).
+    let drawings: Vec<(String, Drawing)> = dxf_data
+        .iter()
+        .filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d)))
+        .collect();
+    let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
+    let structure = crate::struct_reader::read_structure(&sheet_map, &refs);
+
+    let result = read_ceilings(&dxf_data, &sheet_map, Some(&structure));
     Ok((set.truth, result))
 }
 
@@ -812,12 +1314,17 @@ pub fn score_ceilings(truth: &Truth, result: &CeilingResult) -> CeilingScore {
                 if fc.kind == tc.kind {
                     sc.kind_correct += 1;
                 }
-                if let Some(fh) = fc.height_ft {
-                    let err = (fh - tc.height_ft).abs();
-                    height_errors.push(err);
-                    if err < 0.5 {
-                        sc.height_correct += 1;
+                if !tc.height_hidden {
+                    if let Some(fh) = fc.height_ft {
+                        let err = (fh - tc.height_ft).abs();
+                        height_errors.push(err);
+                        if err < 0.5 {
+                            sc.height_correct += 1;
+                        }
                     }
+                } else {
+                    // height_hidden: no height expected, count as correct if kind matches
+                    sc.height_correct += 1;
                 }
                 // Grid scoring for ACT
                 if tc.kind == "ACT" {

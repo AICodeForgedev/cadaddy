@@ -270,7 +270,7 @@ fn conduit_runs_and_height_notes_read_from_merged_prints() {
         let set = cadaddy_mepfix::generate(seed).unwrap_or_else(|e| panic!("generate: {e}"));
         let p = merged(&set);
         let mut branch = conduit_reader::read_conduits(&p.dxf, &p.map);
-        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map);
+        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map, None);
         conduit_reader::assign_heights(&mut branch, &|level| Some(conduit_reader::context_from_ceilings(&ceilings, level, 0.0, 12.0)));
         let trays = cadaddy_mepfix::tray_reader::read_trays(&p.dxf, &p.map);
         let runs = printed::conduit_runs(&branch, &trays);
@@ -313,7 +313,7 @@ fn walls_read_from_merged_prints() {
     for seed in 1..=3 {
         let set = cadaddy_mepfix::generate(seed).unwrap_or_else(|e| panic!("generate: {e}"));
         let p = merged(&set);
-        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map);
+        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map, None);
         let walls = cadaddy_mepfix::wall_reader::read_walls(&p.dxf, &p.map, &ceilings, &Default::default());
         // Where along the truth wall (feet from a) a wall read on its centreline runs, if it does.
         let on = |w: &cadaddy_mepfix::wall_reader::FoundWall, t: &cadaddy_mepfix::truth::PlanWall| -> Option<(f64, f64)> {

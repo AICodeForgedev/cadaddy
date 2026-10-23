@@ -237,7 +237,7 @@ fn sheet_where(map: &SheetMap, f: impl Fn(&str, &str, Option<&str>) -> bool) -> 
 /// enlarged plans and sleeve notes.
 pub fn read_set(dxf: &[(String, Vec<u8>)]) -> PrintRead {
     let map = sheet_reader::recognise_fixture_set(dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(dxf, &map);
+    let ceilings = crate::ceiling_reader::read_ceilings(dxf, &map, None);
     let drawings: Vec<(String, Drawing)> =
         dxf.iter().filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d))).collect();
     let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();

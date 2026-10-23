@@ -444,7 +444,7 @@ pub fn read_fixture_conduits(seed: u64) -> Result<(Truth, ConduitResult), String
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = crate::sheet_reader::recognise_fixture_set(&dxf);
     let mut res = read_conduits(&dxf, &map);
-    let ceil = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceil = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     let t = set.truth;
     let levels = t.building.levels.clone();
     assign_heights(&mut res, &|code| {

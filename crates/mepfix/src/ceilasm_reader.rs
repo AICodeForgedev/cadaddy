@@ -683,7 +683,7 @@ pub fn read_fixture_assemblies(seed: u64) -> Result<(Truth, WallResult, AsmResul
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     let drawings: Vec<(String, Drawing)> =
         dxf.iter().filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d))).collect();
     let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
