@@ -1,23 +1,30 @@
 //! Site element reader: recognises site elements (parking spaces, light poles, transformer pads,
-//! fire hydrants, dumpster enclosures, underground utilities, driveways, bollards, signs) drawn
-//! on civil/site sheets.
+//! fire hydrants, dumpster enclosures, underground utilities, driveways, pull boxes, pole bases,
+//! EV chargers, monument signs, bollards, signs) drawn on civil/site sheets.
 //!
 //! Detection is layer- and geometry-driven: elements on `C-SITE` are above-grade, elements on
 //! `C-UNDR` are underground utilities. Shape classification uses the same conventions as
 //! [`crate::draw`]: circles with crosses = light poles, circles with triangles = fire hydrants,
 //! rectangles with diagonal crosses = transformer pads, and so on.
+//!
+//! Underground parsing reuses the shared helpers from [`crate::site_services`] (conduit spec
+//! parsing, route joining, depth/size extraction) so there is one C-UNDR reader.
 
 use crate::layout::{SITE_LAYER, UNDERGROUND_LAYER};
 use crate::score::building_from_model;
+use crate::site_services::{
+    conduits_of, depth_of, join, kind_of, length, size_of, MAX_PIECES, MAX_ROUTE, TICK_SHARE,
+};
 use crate::sitework::{FENCE_LAYER, FURNISH_LAYER, LANDSCAPE_LAYER};
 use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
 
 /// A site element found by the reader.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct ReadSiteElement {
     /// Kind: `parking_space`, `light_pole`, `transformer_pad`, `fire_hydrant`,
-    /// `dumpster_enclosure`, `driveway`, `underground_*`, `bollard`, `sign`, or `unknown`.
+    /// `dumpster_enclosure`, `driveway`, `underground_*`, `pull_box`, `pole_base`,
+    /// `ev_charger`, `monument_sign`, `bollard`, `sign`, or `unknown`.
     pub kind: String,
     /// Tag text found near the element.
     pub tag: String,
@@ -26,8 +33,20 @@ pub struct ReadSiteElement {
     /// For area elements: bounding box in building feet.
     pub min_ft: Option<[f64; 2]>,
     pub max_ft: Option<[f64; 2]>,
-    /// For underground: depth below grade, feet (parsed from nearby text).
+    /// For underground: depth below grade, feet.
     pub depth_ft: Option<f64>,
+    /// Sheet number where detected.
+    pub sheet: String,
+    /// Confidence score 0.0–1.0.
+    pub confidence: f64,
+    /// Pipe/conduit size in inches (underground runs).
+    pub size_in: Option<f64>,
+    /// Conduit type string, e.g. `"PVC SCH 40"` (underground runs).
+    pub conduit_type: String,
+    /// Number of conduits in a ductbank (underground runs).
+    pub conduit_count: Option<u32>,
+    /// Joined polyline route in building feet (underground runs).
+    pub route_ft: Vec<[f64; 2]>,
 }
 
 /// Read site elements from a single DXF drawing (a C-sheet).
@@ -39,10 +58,10 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
     let mut site_rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
     let mut site_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
     let mut site_texts: Vec<(String, [f64; 2])> = Vec::new();
-    let mut undr_lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut undr_pieces: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut undr_texts: Vec<(String, [f64; 2])> = Vec::new();
 
-    for e in d.model.iter() {
+    for e in d.model.iter().take(MAX_PIECES) {
         let layer = e.common.layer.as_str();
         let is_site = layer.eq_ignore_ascii_case(SITE_LAYER)
             || layer.eq_ignore_ascii_case(FENCE_LAYER)
@@ -65,30 +84,32 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
                 if is_site {
                     site_lines.push((a, b));
                 } else {
-                    undr_lines.push((a, b));
+                    undr_pieces.push(vec![a, b]);
                 }
             }
             EntityKind::LwPolyline(p) => {
-                if p.closed && p.vertices.len() == 4 {
-                    // Closed 4-vertex polyline = rectangle.
+                if is_undr && !p.closed {
+                    // Open polyline on C-UNDR: part of an underground route.
+                    undr_pieces.push(p.vertices.iter().take(MAX_ROUTE).map(|v| [v.p.x, v.p.y]).collect());
+                } else if p.closed && p.vertices.len() == 4 && is_site {
+                    // Closed 4-vertex polyline on C-SITE = rectangle.
+                    // DEBUG: check what layer pole_base poly is on
                     let xs: Vec<f64> = p.vertices.iter().map(|v| v.p.x).collect();
                     let ys: Vec<f64> = p.vertices.iter().map(|v| v.p.y).collect();
                     let x_min = xs.iter().copied().fold(f64::INFINITY, f64::min);
                     let y_min = ys.iter().copied().fold(f64::INFINITY, f64::min);
                     let x_max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                     let y_max = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    if is_site {
-                        site_rects.push(([x_min, y_min], [x_max, y_max]));
-                    }
+                    site_rects.push(([x_min, y_min], [x_max, y_max]));
                 } else if !p.closed && is_site {
-                    // Open polyline: treat as connected lines.
+                    // Open polyline on site: treat as connected lines.
                     for i in 0..p.vertices.len().saturating_sub(1) {
                         if let (Some(a), Some(b)) = (p.vertices.get(i), p.vertices.get(i + 1)) {
                             site_lines.push(([a.p.x, a.p.y], [b.p.x, b.p.y]));
                         }
                     }
                 } else if p.closed && is_site {
-                    // Closed polyline with != 4 vertices (triangle, etc.): record as lines.
+                    // Closed polyline with != 4 vertices: record as lines.
                     let n = p.vertices.len();
                     for i in 0..n {
                         if let (Some(a), Some(b)) = (p.vertices.get(i), p.vertices.get((i + 1) % n)) {
@@ -123,17 +144,20 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
 
         // Check for cross inside (light pole): two perpendicular lines through center.
         let has_cross = has_cross_lines(&site_lines, center, radius);
-        // Check for triangle inside (fire hydrant): three connected short lines inside circle.
-        let has_triangle = has_triangle_inside(&site_lines, center, radius);
+        // Check for triangle inside (fire hydrant): exactly 3 connected lines forming a triangle.
+        let has_triangle = !has_cross && has_triangle_inside(&site_lines, center, radius);
 
         let nearby_tag = find_nearest_text(&site_texts, center, radius * 6.0);
 
         let (kind, tag) = if has_cross {
-            // Check if it's a light pole or tree based on nearby tag and radial lines.
             let has_radials = has_radial_lines(&site_lines, center, radius);
             if has_radials {
                 let tag_str = nearby_tag.clone().unwrap_or_default();
-                if tag_str.to_uppercase().starts_with('T') { ("tree".to_string(), tag_str) } else { ("light_pole".to_string(), tag_str) }
+                if tag_str.to_uppercase().starts_with('T') {
+                    ("tree".to_string(), tag_str)
+                } else {
+                    ("light_pole".to_string(), tag_str)
+                }
             } else {
                 ("light_pole".to_string(), nearby_tag.unwrap_or_default())
             }
@@ -161,24 +185,35 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
             ("unknown".to_string(), nearby_tag.unwrap_or_default())
         };
 
-        result.push(ReadSiteElement { kind, tag, at_ft: at, min_ft: None, max_ft: None, depth_ft: None });
+        let confidence = if kind == "unknown" { 0.3 } else { 0.9 };
+        result.push(ReadSiteElement {
+            kind,
+            tag,
+            at_ft: at,
+            min_ft: None,
+            max_ft: None,
+            depth_ft: None,
+            sheet: sh.number.clone(),
+            confidence,
+            ..ReadSiteElement::default()
+        });
     }
 
     // 2. Classify rectangles on C-SITE layer.
-    // First, find the building footprint rectangle (largest) and exclude it.
+    // The building footprint is the largest rectangle with "BUILDING" text inside.
     let mut rects_sorted: Vec<_> = site_rects.clone();
     rects_sorted.sort_by(|a, b| {
         let area_a = (a.1[0] - a.0[0]) * (a.1[1] - a.0[1]);
         let area_b = (b.1[0] - b.0[0]) * (b.1[1] - b.0[1]);
         area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
     });
-
-    // The building footprint is the largest rectangle with "BUILDING" text inside.
     let building_rect = rects_sorted.first().and_then(|r| {
         let cx = (r.0[0] + r.1[0]) / 2.0;
         let cy = (r.0[1] + r.1[1]) / 2.0;
         let has_bldg_text = site_texts.iter().any(|(t, pt)| {
-            t.to_uppercase().contains("BUILDING") && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0 && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
+            t.to_uppercase().contains("BUILDING")
+                && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0
+                && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
         });
         if has_bldg_text { Some(*r) } else { None }
     });
@@ -205,93 +240,244 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let w = mx[0] - mn[0];
         let h = mx[1] - mn[1];
 
-        let nearby_tag = find_text_inside(&site_texts, mn, mx).or_else(|| find_nearest_text(&site_texts, [cx, cy], (w + h) / 2.0));
-
-        // Check for diagonal cross (transformer pad).
+        // Search for tag: inside the rect first, then ALL texts in range (sorted by distance),
+        // picking the first that classifies to a known kind. This handles co-located elements
+        // (e.g. pole_base at the same position as a light_pole) where the nearest text may
+        // belong to the other element.
+        // Use a generous radius: at least the sum of w and h (accounts for text drawn
+        // above/beside the rect at scaled paper offsets).
+        let search_r = (w + h).max(w.max(h) * 2.0);
         let has_diag = has_diagonal_cross(&site_lines, mn, mx);
 
-        let (kind, tag) = if has_diag {
-            ("transformer_pad".to_string(), nearby_tag.unwrap_or_else(|| "XFMR-PAD".to_string()))
-        } else if let Some(ref t) = nearby_tag {
-            let upper = t.to_uppercase();
-            if upper.contains("DUMPSTER") {
-                ("dumpster_enclosure".to_string(), t.clone())
-            } else if upper.contains("ENTRY") || upper.contains("DRIVE") {
-                ("driveway".to_string(), t.clone())
-            } else if upper.contains("BLDG PAD") || upper.contains("BUILDING PAD") {
-                ("building_pad".to_string(), t.clone())
-            } else if upper.contains("ASPHALT") || upper.contains("PARKING LOT ASPHALT") {
-                ("paving_asphalt".to_string(), t.clone())
-            } else if upper.contains("ENTRY WALK") || (upper.contains("CONCRETE") && upper.contains("PAV")) {
-                ("paving_concrete".to_string(), t.clone())
-            } else if upper.starts_with("CURB") {
-                ("curb".to_string(), t.clone())
-            } else if upper.starts_with("SIDEWALK") {
-                ("sidewalk".to_string(), t.clone())
-            } else if upper.starts_with("STR-") || upper.starts_with("HC-") {
-                ("striping".to_string(), t.clone())
-            } else if upper.starts_with("FENCE") {
-                ("fence".to_string(), t.clone())
-            } else if upper.starts_with("GATE") {
-                ("gate".to_string(), t.clone())
-            } else if upper.starts_with("RW-") || upper.contains("RETAINING") {
-                ("retaining_wall".to_string(), t.clone())
-            } else if upper.starts_with("PL-") || upper.contains("PLANTER") {
-                ("planter".to_string(), t.clone())
-            } else if upper.starts_with("BR-") || upper.contains("BIKE") {
-                ("bike_rack".to_string(), t.clone())
-            } else if upper.starts_with('P') && upper.len() <= 4 {
-                // Short tag starting with P = parking space (P1, P2, ...).
-                ("parking_space".to_string(), t.clone())
+        // Try ALL texts near the rect (inside and nearby), sorted by distance, and use the
+        // first that classifies to a known kind. This handles co-located elements where the
+        // nearest text may belong to a different element at the same position.
+        let mut nearby = find_all_texts_in_range(&site_texts, [cx, cy], search_r);
+        nearby.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut best = ("unknown".to_string(), String::new());
+        for (_, text) in &nearby {
+            let (k, t) = if has_diag && is_xfmr_tag(text) {
+                ("transformer_pad".to_string(), text.clone())
             } else {
-                classify_rect_by_size(w, h, t.clone())
+                classify_rect_by_tag(text, w, h)
+            };
+            if k != "unknown" {
+                best = (k, t);
+                break;
             }
+        }
+        let (kind, tag) = if best.0 == "unknown" && has_diag {
+            ("transformer_pad".to_string(), "XFMR-PAD".to_string())
+        } else if best.0 == "unknown" {
+            classify_rect_by_size(w, h, nearby.first().map_or(String::new(), |(_, t)| t.clone()))
         } else {
-            classify_rect_by_size(w, h, String::new())
+            best
         };
 
-        result.push(ReadSiteElement { kind, tag, at_ft: at, min_ft: Some(min_ft), max_ft: Some(max_ft), depth_ft: None });
+        let confidence = if kind == "unknown" { 0.3 } else { 0.85 };
+        result.push(ReadSiteElement {
+            kind,
+            tag,
+            at_ft: at,
+            min_ft: Some(min_ft),
+            max_ft: Some(max_ft),
+            depth_ft: None,
+            sheet: sh.number.clone(),
+            confidence,
+            ..ReadSiteElement::default()
+        });
     }
 
-    // 3. Classify small rectangles on C-SITE that aren't polylines but two-line rects (signs).
-    // Already handled above via LwPolyline rects.
+    // 3. Underground utilities on C-UNDR layer.
+    // Use the shared route-joining logic from site_services.
+    let undr_pieces: Vec<Vec<[f64; 2]>> = undr_pieces
+        .into_iter()
+        .filter(|p| p.len() >= 2 && p.iter().all(|q| q[0].is_finite() && q[1].is_finite()))
+        .collect();
+    if !undr_pieces.is_empty() {
+        let avg_len = undr_pieces.iter().map(|p| length(p)).sum::<f64>() / undr_pieces.len() as f64;
+        let runs = join(
+            undr_pieces
+                .into_iter()
+                .filter(|p| length(p) >= avg_len * TICK_SHARE)
+                .collect(),
+        );
 
-    // 4. Underground utilities on C-UNDR layer.
-    // Group lines and their nearby texts.
-    let mut used_lines = vec![false; undr_lines.len()];
-    for (i, &(a, b)) in undr_lines.iter().enumerate() {
-        if used_lines[i] {
-            continue;
+        // Assign text labels to nearest run.
+        let mut by_run: Vec<Vec<&str>> = vec![Vec::new(); runs.len()];
+        for (text, at) in &undr_texts {
+            let best = runs
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (i, point_to_route_dist(*at, r)))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((i, dist)) = best
+                && runs.get(i).is_some_and(|r| dist <= length(r) * 0.5)
+                && let Some(v) = by_run.get_mut(i)
+            {
+                v.push(text.as_str());
+            }
         }
-        // Check if this is a main run line (longer than tick marks).
-        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-        // Tick marks are short; run lines are longer.
-        let avg_len: f64 =
-            undr_lines.iter().map(|(a, b)| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()).sum::<f64>() / undr_lines.len().max(1) as f64;
-        if len < avg_len * 0.3 {
-            continue; // Skip tick marks.
+
+        for (run, texts) in runs.iter().zip(by_run) {
+            // Parse all associated text labels.
+            let mut utility_kind: Option<&str> = None;
+            let mut pipe_size: Option<f64> = None;
+            let mut conduit_count: Option<u32> = None;
+            let mut depth: Option<f64> = None;
+            let mut conduit_type = String::new();
+            let mut all_labels = Vec::new();
+
+            for t in &texts {
+                let words = t.to_ascii_uppercase();
+                if utility_kind.is_none() {
+                    utility_kind = kind_of(&words);
+                }
+                if pipe_size.is_none() {
+                    pipe_size = size_of(&words);
+                }
+                if conduit_count.is_none() {
+                    conduit_count = conduits_of(&words);
+                }
+                if depth.is_none() {
+                    depth = depth_of(&words);
+                }
+                // Extract conduit type: look for PVC SCH 40/80 patterns.
+                if conduit_type.is_empty()
+                    && let Some(ct) = extract_conduit_type(&words)
+                {
+                    conduit_type = ct;
+                }
+                all_labels.push(t.trim().to_string());
+            }
+
+            // MUST 1: If no depth from label association, find the nearest depth text to the run.
+            if depth.is_none() {
+                depth = find_nearest_depth(&undr_texts, run);
+            }
+
+            // MUST 6: Use kind_of for classification; unrecognised = "unknown".
+            let kind = match utility_kind {
+                Some("water") => "underground_water",
+                Some("sewer") => "underground_sewer",
+                Some("storm") => "underground_storm",
+                Some("gas") => "underground_gas",
+                Some("power") => "underground_electric",
+                Some("telephone") | Some("catv") => "underground_telecom",
+                _ => "unknown",
+            };
+
+            let tag = all_labels.first().cloned().unwrap_or_default();
+
+            // Convert route to building feet.
+            let route_ft: Vec<[f64; 2]> = run.iter().map(|p| building_from_model(sh, *p)).collect();
+
+            // Bounding box.
+            let (mut mn, mut mx) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+            for p in &route_ft {
+                mn = [mn[0].min(p[0]), mn[1].min(p[1])];
+                mx = [mx[0].max(p[0]), mx[1].max(p[1])];
+            }
+            let mid = [(mn[0] + mx[0]) / 2.0, (mn[1] + mx[1]) / 2.0];
+
+            let confidence = if kind == "unknown" {
+                0.3
+            } else {
+                0.7 + [pipe_size.is_some(), depth.is_some()].iter().filter(|b| **b).count() as f64 * 0.1
+            };
+
+            result.push(ReadSiteElement {
+                kind: kind.into(),
+                tag,
+                at_ft: mid,
+                min_ft: Some(mn),
+                max_ft: Some(mx),
+                depth_ft: depth,
+                sheet: sh.number.clone(),
+                confidence,
+                size_in: pipe_size,
+                conduit_type,
+                conduit_count,
+                route_ft,
+            });
         }
-        used_lines[i] = true;
-
-        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-        let at = building_from_model(sh, mid);
-        let a_ft = building_from_model(sh, a);
-        let b_ft = building_from_model(sh, b);
-        let min_ft = [a_ft[0].min(b_ft[0]), a_ft[1].min(b_ft[1])];
-        let max_ft = [a_ft[0].max(b_ft[0]), a_ft[1].max(b_ft[1])];
-
-        // Find nearby text for utility type and depth.
-        let search_r = len * 0.5;
-        let nearby = find_nearest_text(&undr_texts, mid, search_r);
-        let depth = find_depth_text(&undr_texts, mid, search_r);
-
-        let tag = nearby.clone().unwrap_or_default();
-        let kind = classify_underground(&tag);
-
-        result.push(ReadSiteElement { kind, tag, at_ft: at, min_ft: Some(min_ft), max_ft: Some(max_ft), depth_ft: depth });
     }
 
     result
+}
+
+/// Extract conduit/pipe type from text, e.g. "PVC SCH 40", "DIP", "RCP", "HDPE".
+fn extract_conduit_type(words: &str) -> Option<String> {
+    let upper = words.to_uppercase();
+    if upper.contains("PVC") {
+        if upper.contains("SCH 80") || upper.contains("SCHEDULE 80") {
+            return Some("PVC SCH 80".into());
+        }
+        if upper.contains("SCH 40") || upper.contains("SCHEDULE 40") {
+            return Some("PVC SCH 40".into());
+        }
+        // Plain PVC (e.g. sewer).
+        return Some("PVC".into());
+    }
+    // Ductile iron pipe.
+    if upper.contains("DIP") || upper.contains("DUCTILE") {
+        return Some("DIP".into());
+    }
+    // Reinforced concrete pipe.
+    if upper.contains("RCP") {
+        return Some("RCP".into());
+    }
+    if upper.contains("HDPE") {
+        return Some("HDPE".into());
+    }
+    None
+}
+
+/// Classify a rectangle by its nearby tag text.
+fn classify_rect_by_tag(t: &str, w: f64, h: f64) -> (String, String) {
+    let upper = t.to_uppercase();
+    if upper.contains("DUMPSTER") {
+        ("dumpster_enclosure".to_string(), t.to_string())
+    } else if upper.contains("BLDG PAD") || upper.contains("BUILDING PAD") {
+        ("building_pad".to_string(), t.to_string())
+    } else if upper.contains("ASPHALT") || upper.contains("PARKING LOT ASPHALT") {
+        ("paving_asphalt".to_string(), t.to_string())
+    } else if upper.contains("ENTRY WALK") || (upper.contains("CONCRETE") && upper.contains("PAV")) {
+        ("paving_concrete".to_string(), t.to_string())
+    } else if upper.contains("DRIVEWAY")
+        || (upper.contains("ENTRY") && !upper.contains("WALK"))
+        || (upper.contains("DRIVE") && !upper.contains("DRIVER") && !upper.contains("DRIVEN"))
+    {
+        ("driveway".to_string(), t.to_string())
+    } else if upper.starts_with("CURB") {
+        ("curb".to_string(), t.to_string())
+    } else if upper.starts_with("SIDEWALK") {
+        ("sidewalk".to_string(), t.to_string())
+    } else if upper.starts_with("STR-") || upper.starts_with("HC-") {
+        ("striping".to_string(), t.to_string())
+    } else if upper.starts_with("FENCE") {
+        ("fence".to_string(), t.to_string())
+    } else if upper.starts_with("GATE") {
+        ("gate".to_string(), t.to_string())
+    } else if upper.starts_with("RW-") || upper.contains("RETAINING") {
+        ("retaining_wall".to_string(), t.to_string())
+    } else if upper.starts_with("PL-") || upper.contains("PLANTER") {
+        ("planter".to_string(), t.to_string())
+    } else if upper.starts_with("BR-") || upper.contains("BIKE") {
+        ("bike_rack".to_string(), t.to_string())
+    } else if upper.starts_with("PB-") || upper.contains("PULL BOX") || upper.contains("HANDHOLE") || upper.starts_with("HH") {
+        ("pull_box".to_string(), t.to_string())
+    } else if upper.starts_with("PLB-") || upper.contains("POLE BASE") {
+        ("pole_base".to_string(), t.to_string())
+    } else if upper.starts_with("EV") || upper.contains("CHARGER") {
+        ("ev_charger".to_string(), t.to_string())
+    } else if upper.contains("MONUMENT") {
+        ("monument_sign".to_string(), t.to_string())
+    } else if upper.starts_with('P') && upper.len() <= 4 {
+        ("parking_space".to_string(), t.to_string())
+    } else {
+        classify_rect_by_size(w, h, t.to_string())
+    }
 }
 
 /// Check if two lines form a cross through the circle center.
@@ -320,47 +506,89 @@ fn has_cross_lines(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64
     horiz && vert
 }
 
-/// Check if there's a triangle (3 connected short lines) inside the circle.
+/// Check if there's a triangle (3 connected lines) inside the circle.
+/// Requires exactly 3 interior lines that form a closed triangle shape, verified by checking
+/// that endpoints connect (each endpoint is shared with another line).
 fn has_triangle_inside(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64) -> bool {
     let inside = |p: [f64; 2]| ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2)).sqrt() < radius * 1.2;
-    let tri_lines = lines
+    let tri_lines: Vec<_> = lines
         .iter()
         .filter(|&&(a, b)| {
             inside(a) && inside(b) && {
                 let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-                len > radius * 0.2 && len < radius * 2.0
+                len > radius * 0.3 && len < radius * 2.5
             }
         })
-        .count();
-    // A triangle = 3 lines forming a closed shape inside the circle.
-    // But we also have the circle + triangle, so look for exactly 3 interior lines.
-    tri_lines >= 3
+        .collect();
+    // Require exactly 3 lines that form a connected triangle (endpoints match within tolerance).
+    if tri_lines.len() != 3 {
+        return false;
+    }
+    let eps = radius * 0.3;
+    let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < eps;
+    // Check connectivity: each line shares an endpoint with each of the other two.
+    let pts: Vec<([f64; 2], [f64; 2])> = tri_lines.iter().map(|&&(a, b)| (a, b)).collect();
+    let connected = |i: usize, j: usize| {
+        close(pts[i].0, pts[j].0)
+            || close(pts[i].0, pts[j].1)
+            || close(pts[i].1, pts[j].0)
+            || close(pts[i].1, pts[j].1)
+    };
+    connected(0, 1) && connected(1, 2) && connected(0, 2)
 }
 
 /// Check if there are diagonal cross lines inside a rectangle.
+/// Both diagonals must be present and their lengths must approximate the rectangle's diagonal.
 fn has_diagonal_cross(lines: &[([f64; 2], [f64; 2])], mn: [f64; 2], mx: [f64; 2]) -> bool {
     let w = mx[0] - mn[0];
     let h = mx[1] - mn[1];
+    let diag_len = (w * w + h * h).sqrt();
     let tol = (w + h) * 0.15;
+    let len_tol = diag_len * 0.3;
     let mut diag1 = false;
     let mut diag2 = false;
     for &(a, b) in lines {
-        // Diagonal 1: bottom-left to top-right.
-        if (a[0] - mn[0]).abs() < tol && (a[1] - mn[1]).abs() < tol && (b[0] - mx[0]).abs() < tol && (b[1] - mx[1]).abs() < tol {
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        // The line must be approximately the length of the diagonal.
+        if (len - diag_len).abs() > len_tol {
+            continue;
+        }
+        // Diagonal 1: bottom-left to top-right (either direction).
+        if ((a[0] - mn[0]).abs() < tol && (a[1] - mn[1]).abs() < tol && (b[0] - mx[0]).abs() < tol && (b[1] - mx[1]).abs() < tol)
+            || ((b[0] - mn[0]).abs() < tol && (b[1] - mn[1]).abs() < tol && (a[0] - mx[0]).abs() < tol && (a[1] - mx[1]).abs() < tol)
+        {
             diag1 = true;
         }
-        if (b[0] - mn[0]).abs() < tol && (b[1] - mn[1]).abs() < tol && (a[0] - mx[0]).abs() < tol && (a[1] - mx[1]).abs() < tol {
-            diag1 = true;
-        }
-        // Diagonal 2: top-left to bottom-right.
-        if (a[0] - mn[0]).abs() < tol && (a[1] - mx[1]).abs() < tol && (b[0] - mx[0]).abs() < tol && (b[1] - mn[1]).abs() < tol {
-            diag2 = true;
-        }
-        if (b[0] - mn[0]).abs() < tol && (b[1] - mx[1]).abs() < tol && (a[0] - mx[0]).abs() < tol && (a[1] - mn[1]).abs() < tol {
+        // Diagonal 2: top-left to bottom-right (either direction).
+        if ((a[0] - mn[0]).abs() < tol && (a[1] - mx[1]).abs() < tol && (b[0] - mx[0]).abs() < tol && (b[1] - mn[1]).abs() < tol)
+            || ((b[0] - mn[0]).abs() < tol && (b[1] - mx[1]).abs() < tol && (a[0] - mx[0]).abs() < tol && (a[1] - mn[1]).abs() < tol)
+        {
             diag2 = true;
         }
     }
     diag1 && diag2
+}
+
+/// Check if a tag looks like a transformer pad label.
+fn is_xfmr_tag(t: &str) -> bool {
+    let u = t.to_uppercase();
+    (u.contains("XFMR") || u.contains("TRANSFORMER") || u.contains("PAD"))
+        && !u.starts_with("PB")
+        && !u.starts_with("PLB")
+        && !u.starts_with("BLDG")
+        && !u.starts_with("BUILDING")
+}
+
+/// Find all texts within a radius, returned with their distances.
+fn find_all_texts_in_range(texts: &[(String, [f64; 2])], center: [f64; 2], radius: f64) -> Vec<(f64, String)> {
+    let mut result = Vec::new();
+    for (text, pt) in texts {
+        let dist = ((pt[0] - center[0]).powi(2) + (pt[1] - center[1]).powi(2)).sqrt();
+        if dist < radius {
+            result.push((dist, text.clone()));
+        }
+    }
+    result
 }
 
 /// Find the nearest text entity within a radius.
@@ -381,72 +609,70 @@ fn find_nearest_text(texts: &[(String, [f64; 2])], center: [f64; 2], radius: f64
     best.map(|(_, t)| t.to_string())
 }
 
-/// Find text inside a rectangle.
-fn find_text_inside(texts: &[(String, [f64; 2])], mn: [f64; 2], mx: [f64; 2]) -> Option<String> {
+/// MUST 1: Find the nearest depth text to a route, using the shared depth_of parser.
+/// Searches all underground texts and returns the depth from the text closest to the route.
+fn find_nearest_depth(texts: &[(String, [f64; 2])], route: &[[f64; 2]]) -> Option<f64> {
+    let mut best: Option<(f64, f64)> = None; // (distance, depth)
     for (text, pt) in texts {
-        if pt[0] >= mn[0] && pt[0] <= mx[0] && pt[1] >= mn[1] && pt[1] <= mx[1] {
-            return Some(text.clone());
-        }
-    }
-    None
-}
-
-/// Parse a depth value from nearby text (e.g., "3' DEEP" or "3 DEEP").
-fn find_depth_text(texts: &[(String, [f64; 2])], center: [f64; 2], radius: f64) -> Option<f64> {
-    for (text, pt) in texts {
-        let dist = ((pt[0] - center[0]).powi(2) + (pt[1] - center[1]).powi(2)).sqrt();
-        if dist < radius {
-            let upper = text.to_uppercase();
-            if upper.contains("DEEP") {
-                // Parse "N' DEEP" or "N DEEP".
-                let num_str: String = upper.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '\'').collect();
-                let num_str = num_str.trim_end_matches('\'');
-                if let Ok(v) = num_str.parse::<f64>() {
-                    return Some(v);
+        let words = text.to_ascii_uppercase();
+        if let Some(d) = depth_of(&words) {
+            let dist = point_to_route_dist(*pt, route);
+            if let Some((bd, _)) = best {
+                if dist < bd {
+                    best = Some((dist, d));
                 }
+            } else {
+                best = Some((dist, d));
             }
         }
     }
-    None
+    best.map(|(_, d)| d)
 }
 
-/// Classify an underground utility by its tag text.
-fn classify_underground(tag: &str) -> String {
-    let upper = tag.to_uppercase();
-    if upper.contains("WATER") || upper == "CW" || upper == "WATER" {
-        "underground_water".into()
-    } else if upper.contains("SEWER") || upper == "SAN" || upper == "SEWER" {
-        "underground_sewer".into()
-    } else if upper.contains("ELECTRIC") || upper == "ELECTRIC" {
-        "underground_electric".into()
-    } else if upper.contains("GAS") || upper == "GAS" {
-        "underground_gas".into()
-    } else if upper.contains("STORM") || upper == "STORM" {
-        "underground_storm".into()
-    } else if upper.contains("TELECOM") || upper == "TELECOM" {
-        "underground_telecom".into()
-    } else {
-        format!("underground_{}", upper.to_lowercase())
+/// Minimum distance from a point to a polyline route.
+fn point_to_route_dist(p: [f64; 2], route: &[[f64; 2]]) -> f64 {
+    if route.is_empty() {
+        return f64::INFINITY;
     }
+    let mut min_d = f64::INFINITY;
+    for w in route.windows(2) {
+        let d = point_to_segment_dist(p, w[0], w[1]);
+        if d < min_d {
+            min_d = d;
+        }
+    }
+    // Also check distance to endpoints for single-point routes.
+    for q in route {
+        let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+        if d < min_d {
+            min_d = d;
+        }
+    }
+    min_d
+}
+
+/// Distance from point p to line segment a–b.
+fn point_to_segment_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-12 {
+        return (p[0] - a[0]).hypot(p[1] - a[1]);
+    }
+    let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    let proj = [a[0] + t * dx, a[1] + t * dy];
+    (p[0] - proj[0]).hypot(p[1] - proj[1])
 }
 
 /// Classify a rectangle by its size when the text doesn't give a clear signal.
-fn classify_rect_by_size(w: f64, h: f64, tag: String) -> (String, String) {
-    let area = w * h;
-    // Very small rectangles are signs.
-    if area < 100.0 {
-        return ("sign".to_string(), tag);
-    }
-    // Parking-space-sized rectangles (roughly 9x18 ft at scale).
-    // The scale varies, but parking spaces are small thin rectangles.
-    let ratio = w.max(h) / w.min(h).max(1e-9);
-    if ratio > 1.5 && ratio < 3.0 {
-        return ("parking_space".to_string(), tag);
-    }
+/// Without a tag, only very small rectangles are classified (as signs); everything else is unknown.
+fn classify_rect_by_size(_w: f64, _h: f64, tag: String) -> (String, String) {
+    // Without a clear tag, don't guess — it causes false positives.
     ("unknown".to_string(), tag)
 }
 
-/// Check if there are 4 radial lines from the center (tree crown pattern).
+/// Check if there are 4+ radial lines from the center (tree crown pattern).
 fn has_radial_lines(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius: f64) -> bool {
     let tol = radius * 0.8;
     let mut count = 0;
@@ -496,7 +722,9 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         match &e.kind {
             EntityKind::Circle(c) => strc_circles.push(([c.center.x, c.center.y], c.radius)),
             EntityKind::Line(l) => strc_lines.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
-            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() >= 3 => strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect()),
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() >= 3 => {
+                strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect())
+            }
             EntityKind::Text(t) => {
                 let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
                 strc_texts.push((t.value.clone(), pt));
@@ -506,16 +734,22 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         }
     }
     let dist = |a: [f64; 2], b: [f64; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
-    // Lines through the symbol's centre about `span` long: a cross or an X inside it.
     let through = |c: [f64; 2], span: f64| -> Vec<[f64; 2]> {
         strc_lines
             .iter()
-            .filter(|(a, b)| dist([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], c) < span * 0.1 && (dist(*a, *b) - span).abs() < span * 0.2)
+            .filter(|(a, b)| {
+                dist([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], c) < span * 0.1
+                    && (dist(*a, *b) - span).abs() < span * 0.2
+            })
             .map(|(a, b)| [b[0] - a[0], b[1] - a[1]])
             .collect()
     };
-    let crossed =
-        |dirs: &[[f64; 2]]| dirs.iter().any(|u| dirs.iter().any(|v| (u[0] * v[0] + u[1] * v[1]).abs() < 0.2 * (u[0].hypot(u[1]) * v[0].hypot(v[1]))));
+    let crossed = |dirs: &[[f64; 2]]| {
+        dirs.iter().any(|u| {
+            dirs.iter()
+                .any(|v| (u[0] * v[0] + u[1] * v[1]).abs() < 0.2 * (u[0].hypot(u[1]) * v[0].hypot(v[1])))
+        })
+    };
     let tag_system = |upper: &str| -> &'static str {
         if upper.starts_with("STMH") || upper.starts_with("SDMH") || upper.contains("STORM") {
             "storm"
@@ -529,7 +763,8 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
             ""
         }
     };
-    let tag_texts: Vec<(String, [f64; 2])> = strc_texts.iter().filter(|(t, _)| !t.starts_with("RIM") && !t.starts_with("INV")).cloned().collect();
+    let tag_texts: Vec<(String, [f64; 2])> =
+        strc_texts.iter().filter(|(t, _)| !t.starts_with("RIM") && !t.starts_with("INV")).cloned().collect();
     let mut push = |center: [f64; 2], reach: f64, shape: &str| {
         let tag_str = find_nearest_text(&tag_texts, center, reach).unwrap_or_default();
         let upper = tag_str.to_uppercase();
@@ -571,7 +806,6 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         let shape = match pts.as_slice() {
             [_, _, _] => "triangle",
             [a, b, _, _] => {
-                // An outline with sides along the axes is a square; turned 45° a diamond.
                 let axis = (a[0] - b[0]).abs() < r * 0.05 || (a[1] - b[1]).abs() < r * 0.05;
                 if !axis {
                     "diamond"

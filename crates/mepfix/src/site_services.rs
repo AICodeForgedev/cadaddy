@@ -18,11 +18,11 @@ use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
 
 /// Pieces of a sheet looked at, at most (hostile drawings).
-const MAX_PIECES: usize = 20_000;
+pub(crate) const MAX_PIECES: usize = 20_000;
 /// Points of one route, at most.
-const MAX_ROUTE: usize = 1_000;
+pub(crate) const MAX_ROUTE: usize = 1_000;
 /// A piece shorter than this share of the layer's average is a tick, not a run.
-const TICK_SHARE: f64 = 0.3;
+pub(crate) const TICK_SHARE: f64 = 0.3;
 /// Two routes the same within this (feet) are one service seen on two sheets.
 const SAME_FT: f64 = 1.0;
 /// A route's building end must be within this many drawing units of the BUILDING box to count as
@@ -223,7 +223,7 @@ pub fn spec_patch(services: &[ReadService], level: &str, to_plan: &dyn Fn(&str, 
 }
 
 /// The service a label names, by its words; none when it names none.
-fn kind_of(words: &str) -> Option<&'static str> {
+pub(crate) fn kind_of(words: &str) -> Option<&'static str> {
     let tokens: Vec<&str> = words.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let has = |w: &[&str]| tokens.iter().any(|t| w.contains(t));
     if has(&["WATER", "CW", "DW", "DOMESTIC"]) {
@@ -268,7 +268,7 @@ fn numbers(words: &str) -> Vec<(f64, &str)> {
 }
 
 /// `4" WATER`, `8 IN SAN`, `6"Ø`: the first number marked as inches.
-fn size_of(words: &str) -> Option<f64> {
+pub(crate) fn size_of(words: &str) -> Option<f64> {
     numbers(words)
         .into_iter()
         .find(|(n, rest)| *n > 0.0 && (rest.starts_with(['"', 'Ø']) || rest.starts_with(" IN") || rest.starts_with("IN")))
@@ -276,7 +276,7 @@ fn size_of(words: &str) -> Option<f64> {
 }
 
 /// `4-4" PVC`: conduits before a dash and a size.
-fn conduits_of(words: &str) -> Option<u32> {
+pub(crate) fn conduits_of(words: &str) -> Option<u32> {
     let (count, rest) = words.split_once('-')?;
     let count = count.trim().rsplit(' ').next()?.parse::<u32>().ok()?;
     (size_of(rest).is_some() && (1..=64).contains(&count)).then_some(count)
@@ -285,7 +285,7 @@ fn conduits_of(words: &str) -> Option<u32> {
 /// `3' DEEP`, `4 FT DEEP`, `DEPTH 3'`, `36" COVER` (→ 3.0 ft), `COVER 30 IN` (→ 2.5 ft).
 /// Returns feet: a number before DEEP/DEPTH/COVER, or right after, with its unit (`'`/FT = feet,
 /// `"`/IN = inches → feet; bare = feet).
-fn depth_of(words: &str) -> Option<f64> {
+pub(crate) fn depth_of(words: &str) -> Option<f64> {
     let kw_pos = ["DEEP", "DEPTH", "COVER"]
         .iter()
         .filter_map(|k| {
@@ -328,7 +328,7 @@ fn invert_of(words: &str) -> Option<f64> {
 }
 
 /// Pieces joined where one ends at another's end (in order, either way round).
-fn join(mut pieces: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
+pub(crate) fn join(mut pieces: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
     let close = |a: &[f64; 2], b: &[f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-6 * (1.0 + a[0].abs().max(a[1].abs()));
     let mut out: Vec<Vec<[f64; 2]>> = Vec::new();
     while let Some(mut run) = pieces.pop() {
@@ -363,7 +363,7 @@ fn join(mut pieces: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
     out
 }
 
-fn length(p: &[[f64; 2]]) -> f64 {
+pub(crate) fn length(p: &[[f64; 2]]) -> f64 {
     p.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum()
 }
 

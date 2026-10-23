@@ -2838,14 +2838,16 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
     });
     se_id += 1;
 
-    // Underground utilities
-    for (kind, depth, x_off) in [
-        ("underground_water", 4.0, -5.0),
-        ("underground_sewer", 8.0, -10.0),
-        ("underground_electric", 3.0, 5.0),
-        ("underground_gas", 3.0, 10.0),
-        ("underground_storm", 6.0, -15.0),
-        ("underground_telecom", 3.0, 15.0),
+    // Underground utilities — with conduit type, size, and count for electrical/telecom.
+    for (kind, depth, x_off, mat, size, count) in [
+        // Water/sewer/storm get size+material overwritten by design_utility_piping; set
+        // initial values that won't conflict (size is replaced, material is replaced).
+        ("underground_water", 4.0, -5.0, "", None, None),
+        ("underground_sewer", 8.0, -10.0, "", None, None),
+        ("underground_electric", 3.0, 5.0, "PVC SCH 40", Some(4.0), Some(2u32)),
+        ("underground_gas", 3.0, 10.0, "", None, None),
+        ("underground_storm", 6.0, -15.0, "", None, None),
+        ("underground_telecom", 3.0, 15.0, "PVC SCH 40", Some(4.0), Some(4u32)),
     ] {
         t.site_elements.push(SiteElement {
             id: format!("se-{se_id}"),
@@ -2855,10 +2857,61 @@ fn hotel_site(t: &mut Truth, bldg_w: f64, bldg_d: f64, _r: &mut Rng) {
             min_ft: Some([bldg_w / 2.0 + x_off - 0.5, -setback - 60.0]),
             max_ft: Some([bldg_w / 2.0 + x_off + 0.5, -5.0]),
             depth_ft: Some(depth),
+            material: mat.into(),
+            size_in: size,
+            conduit_count: count,
             ..SiteElement::default()
         });
         se_id += 1;
     }
+
+    // Pull box / handhole — small square near an underground electric run.
+    t.site_elements.push(SiteElement {
+        id: format!("se-{se_id}"),
+        kind: "pull_box".into(),
+        tag: "PB-1".into(),
+        at_ft: [bldg_w / 2.0 + 5.0, -setback - 15.0],
+        min_ft: Some([bldg_w / 2.0 + 3.0, -setback - 17.0]),
+        max_ft: Some([bldg_w / 2.0 + 7.0, -setback - 13.0]),
+        ..SiteElement::default()
+    });
+    se_id += 1;
+
+    // Pole base — at the base of the first parking lot light pole.
+    t.site_elements.push(SiteElement {
+        id: format!("se-{se_id}"),
+        kind: "pole_base".into(),
+        tag: "PLB-1".into(),
+        at_ft: [parking_min[0] + 20.0, parking_min[1] + 30.0],
+        min_ft: Some([parking_min[0] + 18.0, parking_min[1] + 28.0]),
+        max_ft: Some([parking_min[0] + 22.0, parking_min[1] + 32.0]),
+        ..SiteElement::default()
+    });
+    se_id += 1;
+
+    // EV charger station.
+    t.site_elements.push(SiteElement {
+        id: format!("se-{se_id}"),
+        kind: "ev_charger".into(),
+        tag: "EV-1".into(),
+        at_ft: [parking_min[0] + 10.0, parking_min[1] + 10.0],
+        min_ft: Some([parking_min[0] + 8.0, parking_min[1] + 8.0]),
+        max_ft: Some([parking_min[0] + 12.0, parking_min[1] + 12.0]),
+        ..SiteElement::default()
+    });
+    se_id += 1;
+
+    // Monument sign at the property entrance.
+    t.site_elements.push(SiteElement {
+        id: format!("se-{se_id}"),
+        kind: "monument_sign".into(),
+        tag: "MONUMENT SIGN".into(),
+        at_ft: [bldg_w / 2.0, parking_min[1] - 10.0],
+        min_ft: Some([bldg_w / 2.0 - 5.0, parking_min[1] - 14.0]),
+        max_ft: Some([bldg_w / 2.0 + 5.0, parking_min[1] - 6.0]),
+        ..SiteElement::default()
+    });
+    se_id += 1;
 
     let _ = se_id;
 }
