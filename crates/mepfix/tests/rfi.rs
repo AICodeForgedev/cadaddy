@@ -228,6 +228,8 @@ fn hostile_reads_never_panic() {
         "2".into(),
         vec![cadaddy_mepfix::struct_reader::DetectedBeam {
             size: "W99X999".into(),
+            depth_in: 0.0,
+            flange_in: 0.0,
             from_ft: [f64::NAN, 0.0],
             to_ft: [1e308, 1e308],
             grid: String::new(),

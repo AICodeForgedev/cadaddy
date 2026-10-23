@@ -36,6 +36,7 @@ fn layer_def(name: &str, st: &Style) -> (u8, u16, &'static str) {
         "HIDDEN" => (7, st.lw_run, "HIDDEN"),
         "DASHED" => (7, st.lw_run, "DASHED"),
         "HEAVY" => (7, st.lw_run + 20, "Continuous"),
+        "JOIST" => (7, st.lw_background, "Continuous"),
         "LIGHT" => (7, st.lw_background, "Continuous"),
         "CALLOUT" => (7, st.lw_text, "Continuous"),
         "A-SLAB-EDGE" => (8, st.lw_background, "DASHED"),
@@ -412,6 +413,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             framing(&mut pen, t, l);
             legend.push(item("column", "STEEL COLUMN"));
             legend.push(item("beam", "STEEL BEAM / GIRDER, SIZE AT MIDSPAN"));
+            legend.push(item("joist", "OPEN-WEB STEEL JOIST"));
             legend.push(item("opening", "FLOOR OPENING / SHAFT"));
             abbr.extend(["T.O.S. = TOP OF STEEL", "U.N.O. = UNLESS NOTED OTHERWISE", "CONC = CONCRETE", "EL = ELEVATION"].map(abbrev));
         }
@@ -854,6 +856,7 @@ fn symbol(pen: &mut Pen, st: &Style, kind: &str, c: [f64; 2]) {
             pen.fill("STRUCT", [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]);
         }
         "beam" => pen.pline("HEAVY", [x - 0.3, y], [x + 0.3, y]),
+        "joist" => pen.pline("JOIST", [x - 0.3, y], [x + 0.3, y]),
         "opening" => pen.prect("DASHED", [x - 0.15, y - 0.1], [x + 0.15, y + 0.1]),
         "act" => {
             pen.prect("LIGHT", [x - 0.3, y - 0.1], [x + 0.3, y + 0.1]);
@@ -1976,6 +1979,28 @@ fn framing(pen: &mut Pen, t: &Truth, level: &str) {
             let mid = [(op.min_ft[0] + op.max_ft[0]) / 2.0, (op.min_ft[1] + op.max_ft[1]) / 2.0];
             let p = pen.b(mid);
             pen.text("TEXT", p, st.text_in, lbl, rot, HAlign::Center, VAlign::Middle);
+        }
+    }
+    // Joists on this level.
+    for j in t.building.joists.iter().filter(|j| j.level == level) {
+        let (a, c) = (pen.b(j.from_ft), pen.b(j.to_ft));
+        pen.line("JOIST", a, c);
+    }
+    // One joist designation note per bay (at the first joist of each bay).
+    {
+        let mut seen_bays: std::collections::BTreeSet<(i64, i64)> = std::collections::BTreeSet::new();
+        for j in t.building.joists.iter().filter(|j| j.level == level) {
+            let bay = ((j.from_ft[0] * 10.0) as i64, (j.from_ft[1] * 10.0) as i64);
+            if seen_bays.insert(bay) {
+                let mid = [(j.from_ft[0] + j.to_ft[0]) / 2.0, j.from_ft[1]];
+                let p = pen.b([mid[0], mid[1] + th * 0.5]);
+                let label = if j.spacing_in > 0.0 {
+                    format!("{} @ {}\" O.C.", j.size, j.spacing_in as i64)
+                } else {
+                    j.size.clone()
+                };
+                pen.text("TEXT", p, st.text_in * 0.8, &label, rot, HAlign::Center, VAlign::Middle);
+            }
         }
     }
     // General notes under the plan's corner.

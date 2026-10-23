@@ -89,6 +89,8 @@ enum Class {
     Condenser,
     FlowMeter,
     Transformer,
+    // Joists / secondary members.
+    Member,
     // Concrete.
     Footing,
     Pile,
@@ -114,6 +116,7 @@ impl Class {
             Class::Ramp => ("IfcRamp", "NOTDEFINED"),
             Class::Roof => ("IfcRoof", "NOTDEFINED"),
             Class::Beam => ("IfcBeam", "BEAM"),
+            Class::Member => ("IfcMember", "NOTDEFINED"),
             Class::Terrain => ("IfcGeographicElement", "TERRAIN"),
             Class::Duct => ("IfcDuctSegment", "RIGIDSEGMENT"),
             Class::Pipe => ("IfcPipeSegment", "RIGIDSEGMENT"),
@@ -163,6 +166,7 @@ impl Class {
             "Ramp" => Class::Ramp,
             "Roof" => Class::Roof,
             "Beam" => Class::Beam,
+            "Member" => Class::Member,
             "GeographicElement" => Class::Terrain,
             "DuctSegment" => Class::Duct,
             "PipeSegment" => Class::Pipe,
@@ -267,6 +271,8 @@ fn class_of(e: &Entity) -> Kind {
             "window" => Class::Window,
             "stair" => Class::Stair,
             "column" => Class::Column,
+            "beam" => Class::Beam,
+            "member" | "joist" => Class::Member,
             "curtainwall" => Class::CurtainWall,
             "railing" => Class::Railing,
             "ramp" => Class::Ramp,

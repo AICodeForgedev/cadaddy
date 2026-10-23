@@ -33,12 +33,31 @@ pub struct DetectedColumn {
 pub struct DetectedBeam {
     /// Size designation as read from the plan (`W16x31`, `W12x19`).
     pub size: String,
+    /// Depth of the section, inches (from the steel shape table; 0 if unknown).
+    pub depth_in: f64,
+    /// Flange width, inches (from the steel shape table; 0 if unknown).
+    pub flange_in: f64,
     /// Start point, building feet.
     pub from_ft: [f64; 2],
     /// End point, building feet.
     pub to_ft: [f64; 2],
     /// The grid line it is nearest to.
     pub grid: String,
+}
+
+/// A joist detected on a structural sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DetectedJoist {
+    /// Joist designation (`18K4`, `22K7`).
+    pub size: String,
+    /// Nominal depth, inches.
+    pub depth_in: f64,
+    /// Centre-to-centre spacing, inches.
+    pub spacing_in: f64,
+    /// Start point, building feet.
+    pub from_ft: [f64; 2],
+    /// End point, building feet.
+    pub to_ft: [f64; 2],
 }
 
 /// Slab information extracted from general notes.
@@ -73,12 +92,71 @@ pub struct StructuralModel {
     pub columns: Vec<DetectedColumn>,
     /// Beams per level code.
     pub beams: BTreeMap<String, Vec<DetectedBeam>>,
+    /// Joists per level code.
+    pub joists: BTreeMap<String, Vec<DetectedJoist>>,
     pub slabs: Vec<DetectedSlab>,
     pub openings: BTreeMap<String, Vec<DetectedOpening>>,
     /// Top of steel per level, feet (from general notes).
     pub tos_ft: BTreeMap<String, f64>,
     /// Column size from general notes.
     pub column_size: Option<String>,
+}
+
+// ---- Steel shape table ------------------------------------------------------------------
+
+/// Look up (depth_in, flange_in) for a steel designation.
+pub fn steel_shape(designation: &str) -> (f64, f64) {
+    let d = designation.to_ascii_uppercase();
+    // W-shapes: the first number is the nominal depth, the second is weight per foot.
+    if let Some(rest) = d.strip_prefix('W')
+        && let Some((depth_s, _)) = rest.split_once('X')
+        && let Ok(depth) = depth_s.trim().parse::<f64>()
+    {
+        let flange = match depth as u32 {
+            8 => 8.0,
+            10 => 8.0,
+            12 => 4.0,
+            14 => 5.0,
+            16 => 5.5,
+            18 => 6.0,
+            21 => 6.5,
+            24 => 7.0,
+            _ => depth * 0.4,
+        };
+        let actual = match d.as_str() {
+            "W8X31" => 8.0,
+            "W10X33" => 9.7,
+            "W10X49" => 10.0,
+            "W12X19" => 12.2,
+            "W14X22" => 13.7,
+            "W16X26" => 15.7,
+            "W16X31" => 15.9,
+            "W18X35" => 17.7,
+            "W21X44" => 20.7,
+            "W24X55" => 23.6,
+            _ => depth,
+        };
+        return (actual, flange);
+    }
+    // HSS: square/rectangular tubes.
+    if let Some(rest) = d.strip_prefix("HSS")
+        && let Some(first) = rest.split('X').next()
+        && let Ok(dim) = first.trim().parse::<f64>()
+    {
+        return (dim, dim);
+    }
+    (0.0, 0.0)
+}
+
+/// Look up nominal depth for a joist designation like `18K4`.
+fn joist_depth(designation: &str) -> f64 {
+    let d = designation.to_ascii_uppercase();
+    if let Some(pos) = d.find('K').or_else(|| d.find("LH"))
+        && let Ok(depth) = d[..pos].parse::<f64>()
+    {
+        return depth;
+    }
+    0.0
 }
 
 // ---- Reading ---------------------------------------------------------------------------
@@ -104,6 +182,11 @@ pub fn read_structure(sheet_map: &SheetMap, drawings: &[(String, &Drawing)]) -> 
         let beams = detect_beams(d, alignment, &sheet_map.grid_x, &sheet_map.grid_y);
         if !beams.is_empty() {
             model.beams.entry(level.clone()).or_default().extend(beams);
+        }
+
+        let joists = detect_joists(d, alignment);
+        if !joists.is_empty() {
+            model.joists.entry(level.clone()).or_default().extend(joists);
         }
 
         let openings = detect_openings(d, alignment);
@@ -257,7 +340,8 @@ fn detect_beams(d: &Drawing, alignment: &Alignment, grid_x: &[GridLine], grid_y:
             .filter(|(d, _)| *d < max_dist)
             .min_by(|a, b| a.0.total_cmp(&b.0));
 
-        let size = nearest.map(|(_, v)| v.clone()).unwrap_or_default();
+        let size = nearest.map(|(_, v)| steel_designation(v)).unwrap_or_default();
+        let (depth_in, flange_in) = steel_shape(&size);
 
         let from = building_from_model(alignment, *a);
         let to = building_from_model(alignment, *b);
@@ -265,26 +349,50 @@ fn detect_beams(d: &Drawing, alignment: &Alignment, grid_x: &[GridLine], grid_y:
         // Find nearest grid line.
         let grid = nearest_grid_line([from, to], grid_x, grid_y);
 
-        beams.push(DetectedBeam { size, from_ft: [r6(from[0]), r6(from[1])], to_ft: [r6(to[0]), r6(to[1])], grid });
+        beams.push(DetectedBeam { size, depth_in, flange_in, from_ft: [r6(from[0]), r6(from[1])], to_ft: [r6(to[0]), r6(to[1])], grid });
     }
 
     beams
 }
 
 /// Check if text looks like a steel section designation.
+/// Accepts `W16x31`, `W16X31`, `HSS6x6x3/8`, `L4x4x1/4`, and with suffixes like `W16x31 (C=3/4")`.
 fn is_steel_size(s: &str) -> bool {
-    let s = s.trim();
-    // W-shapes: W10x33, W24x55
-    if s.starts_with('W') || s.starts_with('w') {
-        let rest = &s[1..];
-        return rest.contains('x') && rest.split('x').all(|p| p.trim().parse::<f64>().is_ok());
+    let tok = s.split_whitespace().next().unwrap_or("");
+    let tok_upper = tok.to_ascii_uppercase();
+    if let Some(rest) = tok_upper.strip_prefix('W') {
+        return rest.contains('X') && rest.split('X').next().is_some_and(|p| p.parse::<f64>().is_ok());
     }
-    // HSS: HSS6x6, HSS8x8
-    if s.starts_with("HSS") || s.starts_with("hss") {
-        let rest = &s[3..];
-        return rest.contains('x') && rest.split('x').all(|p| p.trim().parse::<f64>().is_ok());
+    if let Some(rest) = tok_upper.strip_prefix("HSS") {
+        return rest.contains('X') && rest.split('X').next().is_some_and(|p| p.parse::<f64>().is_ok());
+    }
+    if let Some(rest) = tok_upper.strip_prefix('L') {
+        return rest.contains('X') && rest.split('X').next().is_some_and(|p| p.parse::<f64>().is_ok());
     }
     false
+}
+
+/// Check if text looks like a joist designation (e.g. `18K4`, `22K7`, `24LH06`).
+fn is_joist_size(s: &str) -> bool {
+    let tok = s.split_whitespace().next().unwrap_or("");
+    let tok_upper = tok.to_ascii_uppercase();
+    // K-series: digits + 'K' + digits (e.g. "18K4").
+    // LH-series: digits + 'LH' + digits (e.g. "24LH06").
+    if let Some(k_pos) = tok_upper.find('K').or_else(|| tok_upper.find("LH")) {
+        let prefix = &tok_upper[..k_pos];
+        let suffix_start = if tok_upper[k_pos..].starts_with("LH") { k_pos + 2 } else { k_pos + 1 };
+        let suffix = tok_upper.get(suffix_start..).unwrap_or("");
+        return !prefix.is_empty()
+            && prefix.chars().all(|c| c.is_ascii_digit())
+            && !suffix.is_empty()
+            && suffix.chars().all(|c| c.is_ascii_digit());
+    }
+    false
+}
+
+/// Extract the steel designation from text, trimming suffixes.
+fn steel_designation(s: &str) -> String {
+    s.split_whitespace().next().unwrap_or("").to_string()
 }
 
 /// Find the grid line nearest to a beam segment.
@@ -382,6 +490,95 @@ fn detect_openings(d: &Drawing, alignment: &Alignment) -> Vec<DetectedOpening> {
     openings
 }
 
+// ---- Joist detection -------------------------------------------------------------------
+
+/// Find joist lines on the JOIST layer and match with joist designation text on TEXT.
+/// Joists are parallel lines at regular spacing, with a designation like `18K4 @ 30" O.C.`.
+fn detect_joists(d: &Drawing, alignment: &Alignment) -> Vec<DetectedJoist> {
+    // Collect lines on JOIST layer.
+    let mut lines: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    for e in d.model.iter() {
+        if !e.common.layer.eq_ignore_ascii_case("JOIST") {
+            continue;
+        }
+        if let EntityKind::Line(l) = &e.kind {
+            lines.push(([l.a.x, l.a.y], [l.b.x, l.b.y]));
+        }
+    }
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect joist designation text on TEXT layer: "18K4 @ 30\" O.C." or just "18K4".
+    let mut texts: Vec<(String, [f64; 2])> = Vec::new();
+    for e in d.model.iter() {
+        if !e.common.layer.eq_ignore_ascii_case("TEXT") {
+            continue;
+        }
+        let (val, pos) = match &e.kind {
+            EntityKind::Text(t) => {
+                let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
+                (t.value.clone(), pt)
+            }
+            EntityKind::MText(t) => (t.contents.clone(), [t.insert.x, t.insert.y]),
+            _ => continue,
+        };
+        if is_joist_size(&val) {
+            texts.push((val, pos));
+        }
+    }
+
+    // Parse spacing from joist text: "18K4 @ 30\" O.C." → spacing = 30.0.
+    let parse_joist_text = |s: &str| -> (String, f64) {
+        let size = s.split_whitespace().next().unwrap_or("").to_string();
+        let spacing = s.find('@')
+            .and_then(|idx| {
+                let after = &s[idx + 1..];
+                let tok = after.trim().split('"').next().map(str::trim).unwrap_or("");
+                tok.parse::<f64>().ok()
+            })
+            .unwrap_or(0.0);
+        (size, spacing)
+    };
+
+    let mut joists = Vec::new();
+    for (a, b) in &lines {
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        if len < 1.0 {
+            continue;
+        }
+
+        // Find nearest joist text.
+        let max_dist = len * 1.5;
+        let nearest = texts.iter()
+            .map(|(val, pos)| {
+                let d = ((pos[0] - mid[0]).powi(2) + (pos[1] - mid[1]).powi(2)).sqrt();
+                (d, val)
+            })
+            .filter(|(d, _)| *d < max_dist)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+
+        let (size, spacing_in) = match nearest {
+            Some((_, val)) => parse_joist_text(val),
+            None => continue, // skip joist lines without a designation
+        };
+        let depth_in = joist_depth(&size);
+
+        let from = building_from_model(alignment, *a);
+        let to = building_from_model(alignment, *b);
+        joists.push(DetectedJoist {
+            size,
+            depth_in,
+            spacing_in,
+            from_ft: [r6(from[0]), r6(from[1])],
+            to_ft: [r6(to[0]), r6(to[1])],
+        });
+    }
+
+    joists
+}
+
 // ---- General notes parsing -------------------------------------------------------------
 
 struct NotesResult {
@@ -398,7 +595,7 @@ struct SlabNote {
 }
 
 /// Parse general notes from text entities on the structural sheet.
-fn read_general_notes(d: &Drawing, sh: &RecognisedSheet) -> NotesResult {
+fn read_general_notes(d: &Drawing, _sh: &RecognisedSheet) -> NotesResult {
     let mut result = NotesResult { tos_ft: None, slab: None, column_size: None };
 
     for e in d.model.iter() {
@@ -431,26 +628,36 @@ fn read_general_notes(d: &Drawing, sh: &RecognisedSheet) -> NotesResult {
 
         // Slab note: '3. 5" CONC SLAB ON 1-1/2" COMPOSITE DECK; TOP OF SLAB = EL 13'-0".'
         if upper.contains("CONC SLAB") || upper.contains("CONC. SLAB") {
-            // The concrete thickness is the number immediately before "CONC".
             let concrete = parse_inches_before(&upper, "CONC");
-            let deck = 1.5; // standard composite metal deck depth
+            // Read the deck depth from the note (e.g. "1-1/2" COMPOSITE DECK") or default.
+            let deck = upper.find("COMPOSITE DECK").or_else(|| upper.find("METAL DECK"))
+                .and_then(|idx| parse_inches_before(&upper[..idx + 5], "COMPOSITE").or_else(|| parse_inches_before(&upper[..idx + 5], "METAL")))
+                .or_else(|| parse_inches_before(&upper, "DECK"))
+                .unwrap_or(1.5);
             let top = if let Some(idx) = upper.find("TOP OF SLAB") { parse_elevation(&upper[idx..]) } else { None };
             if let Some(top_ft) = top {
                 result.slab = Some(SlabNote { kind: "composite".into(), concrete_in: concrete.unwrap_or(0.0), deck_in: deck, top_ft });
             }
         }
 
-        // Roof deck note: "1-1/2" METAL ROOF DECK."
-        if upper.contains("METAL ROOF DECK")
-            && result.slab.is_none()
-            && let Some(tos) = result.tos_ft
-        {
-            let deck = 1.5; // standard metal roof deck depth
-            result.slab = Some(SlabNote { kind: "roof".into(), concrete_in: 0.0, deck_in: deck, top_ft: tos + deck / 12.0 });
+        // Roof deck note: "1-1/2" METAL ROOF DECK." — record the deck depth; the slab is
+        // created after the loop once TOS is known (entity order is not guaranteed).
+        if upper.contains("METAL ROOF DECK") && result.slab.is_none() {
+            let deck = parse_inches_before(&upper, "METAL").unwrap_or(1.5);
+            // Stash the deck depth in a temporary; we'll create the slab below.
+            result.slab = Some(SlabNote { kind: "roof".into(), concrete_in: 0.0, deck_in: deck, top_ft: 0.0 });
         }
     }
 
-    let _ = sh; // reserved for future scale-aware parsing
+    // Deferred roof slab: fill in the top elevation from TOS (which may have been parsed after
+    // the roof deck note in entity iteration order).
+    if let Some(slab) = &mut result.slab
+        && slab.kind == "roof" && slab.top_ft == 0.0
+        && let Some(tos) = result.tos_ft
+    {
+        slab.top_ft = tos + slab.deck_in / 12.0;
+    }
+
     result
 }
 
@@ -462,31 +669,56 @@ fn parse_elevation(s: &str) -> Option<f64> {
     parse_feet_inches(rest)
 }
 
-/// Parse a feet-inches string like `12'-6"`, `13'-0"`, `0'-0"`.
-fn parse_feet_inches(s: &str) -> Option<f64> {
+/// Parse a number that may be whole, fractional (`1/2`), or mixed (`4 1/2`).
+fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();
-    let neg = s.starts_with('-');
-    let s = s.trim_start_matches('-');
-    let parts: Vec<&str> = s.split('\'').collect();
-    if parts.len() < 2 {
+    if s.is_empty() {
         return None;
     }
-    let feet: f64 = parts[0].trim().parse().ok()?;
-    let inches_str = parts[1].trim().trim_end_matches('"').trim().trim_end_matches('.').trim();
-    let inches = if inches_str.contains(' ') {
-        // e.g. "7 1/2"
-        let parts: Vec<&str> = inches_str.splitn(2, ' ').collect();
-        let whole: f64 = parts[0].parse().ok()?;
-        let frac: f64 = if let Some((n, d)) = parts.get(1).and_then(|p| p.split_once('/')) {
-            let n: f64 = n.parse().ok()?;
-            let d: f64 = d.parse().ok()?;
-            if d.abs() > 1e-12 { n / d } else { 0.0 }
-        } else {
-            0.0
-        };
-        whole + frac
+    // Mixed number with space first: "4 1/2" (must check before pure fraction).
+    if let Some((whole, frac)) = s.split_once(' ')
+        && let Ok(w) = whole.trim().parse::<f64>()
+        && let Some((n, d)) = frac.trim().split_once('/')
+        && let Ok(n) = n.trim().parse::<f64>()
+        && let Ok(d) = d.trim().parse::<f64>()
+        && d.abs() > 1e-12
+    {
+        return Some(w + n / d);
+    }
+    // Pure fraction: "1/2".
+    if let Some((n, d)) = s.split_once('/')
+        && let Ok(n) = n.trim().parse::<f64>()
+        && let Ok(d) = d.trim().parse::<f64>()
+        && d.abs() > 1e-12
+    {
+        return Some(n / d);
+    }
+    // Plain number.
+    s.parse().ok()
+}
+
+/// Parse a feet-inches string like `12'-6"`, `13'-4 1/2"`, `-2'-0"`.
+///
+/// The `'-` between feet and inches is treated as a separator, not a minus sign.
+/// Stops at the inch mark `"` and ignores trailing text (e.g. `U.N.O.`).
+/// Shared by struct_reader and wall_reader.
+pub fn parse_feet_inches(s: &str) -> Option<f64> {
+    let s = s.trim();
+    // A leading minus means a negative elevation (e.g. "-2'-0"").
+    let (neg, s) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest.trim_start())
     } else {
-        inches_str.parse().unwrap_or(0.0)
+        (false, s)
+    };
+    let (feet_str, rest) = s.split_once('\'')?;
+    let feet: f64 = feet_str.trim().parse().ok()?;
+    // The dash after the foot mark is a separator, not minus. Strip it and whitespace.
+    let rest = rest.trim_start_matches('-').trim();
+    // Take only up to the first inch mark `"`, ignoring trailing text.
+    let inch_str = rest.split('"').next().map(str::trim).filter(|x| !x.is_empty());
+    let inches = match inch_str {
+        Some(s) => parse_number(s)?,
+        None => 0.0,
     };
     let total = feet + inches / 12.0;
     Some(if neg { -total } else { total })
@@ -535,6 +767,13 @@ pub struct StructuralScore {
     pub beams_total: usize,
     /// Of found beams: how many have the right size label.
     pub beam_size_correct: usize,
+    /// Of found beams: how many have the right depth (within 0.5 in).
+    pub beam_depth_correct: usize,
+    /// Joists: how many truth joists were found (centreline overlap).
+    pub joists_found: usize,
+    pub joists_total: usize,
+    /// Of found joists: how many have the correct size.
+    pub joist_size_correct: usize,
     /// TOS: how many levels had the right top-of-steel (within 0.1 ft).
     pub tos_correct: usize,
     pub tos_total: usize,
@@ -549,8 +788,8 @@ pub struct StructuralScore {
 impl StructuralScore {
     /// Overall recall: fraction of truth items found.
     pub fn recall(&self) -> f64 {
-        let found = self.columns_found + self.beams_found + self.tos_correct + self.slabs_found + self.openings_found;
-        let total = self.columns_total + self.beams_total + self.tos_total + self.slabs_total + self.openings_total;
+        let found = self.columns_found + self.beams_found + self.joists_found + self.tos_correct + self.slabs_found + self.openings_found;
+        let total = self.columns_total + self.beams_total + self.joists_total + self.tos_total + self.slabs_total + self.openings_total;
         if total == 0 { 1.0 } else { found as f64 / total as f64 }
     }
 }
@@ -577,14 +816,33 @@ pub fn score_structure(model: &StructuralModel, truth: &truth::Truth) -> Structu
         let detected = model.beams.get(&level.code);
         if let Some(det_beams) = detected {
             for tb in &truth_beams {
-                // Find a detected beam that overlaps this truth beam.
                 let found = det_beams.iter().any(|db| beam_overlaps(tb, db));
                 if found {
                     sc.beams_found += 1;
-                    // Check size.
-                    let size_match = det_beams.iter().filter(|db| beam_overlaps(tb, db)).any(|db| db.size.eq_ignore_ascii_case(&tb.size));
-                    if size_match {
+                    let matched: Vec<&DetectedBeam> = det_beams.iter().filter(|db| beam_overlaps(tb, db)).collect();
+                    if matched.iter().any(|db| db.size.eq_ignore_ascii_case(&tb.size)) {
                         sc.beam_size_correct += 1;
+                    }
+                    if matched.iter().any(|db| db.depth_in > 0.0 && (db.depth_in - tb.depth_in).abs() < 0.5) {
+                        sc.beam_depth_correct += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Joists ----
+    for level in truth.building.levels.iter().filter(|l| l.code != "1") {
+        let truth_joists: Vec<&truth::Joist> = truth.building.joists.iter().filter(|j| j.level == level.code).collect();
+        sc.joists_total += truth_joists.len();
+        if let Some(det_joists) = model.joists.get(&level.code) {
+            for tj in &truth_joists {
+                let found = det_joists.iter().any(|dj| joist_overlaps(tj, dj));
+                if found {
+                    sc.joists_found += 1;
+                    let matched: Vec<&DetectedJoist> = det_joists.iter().filter(|dj| joist_overlaps(tj, dj)).collect();
+                    if matched.iter().any(|dj| dj.size.eq_ignore_ascii_case(&tj.size)) {
+                        sc.joist_size_correct += 1;
                     }
                 }
             }
@@ -673,4 +931,122 @@ fn beam_overlaps(truth: &truth::Beam, det: &DetectedBeam) -> bool {
     let n = [-t_dir[1] / t_len, t_dir[0] / t_len];
     let perp = ((d_mid[0] - t_mid[0]) * n[0] + (d_mid[1] - t_mid[1]) * n[1]).abs();
     perp < tol
+}
+
+/// Check if a detected joist overlaps a truth joist (midpoints close and parallel).
+fn joist_overlaps(truth: &truth::Joist, det: &DetectedJoist) -> bool {
+    let tol = 1.0; // feet: joists are closer together than beams
+    let t_mid = [(truth.from_ft[0] + truth.to_ft[0]) / 2.0, (truth.from_ft[1] + truth.to_ft[1]) / 2.0];
+    let d_mid = [(det.from_ft[0] + det.to_ft[0]) / 2.0, (det.from_ft[1] + det.to_ft[1]) / 2.0];
+    let dist = ((t_mid[0] - d_mid[0]).powi(2) + (t_mid[1] - d_mid[1]).powi(2)).sqrt();
+    dist < tol
+}
+
+// ---- 3D structural model builder -------------------------------------------------------
+
+/// Build a [`Drawing`] containing 3D mesh entities for each structural element, tagged for
+/// the IFC writer. Columns, beams, slabs and joists become meshes with `CADADDY_WALLGEN` xdata.
+pub fn build_3d(_model: &StructuralModel, truth: &truth::Truth) -> Drawing {
+    use cadaddy_doc::{Entity, EntityKind, Handle, Mesh, MeshFace, RawTag};
+    use cadaddy_geom::Vec3;
+
+    let mut d = Drawing::default();
+    // Coordinates are in feet (INSUNITS=2).
+    d.header.set_i64("INSUNITS", 2);
+    let mut h: u64 = 100;
+    let mut next_handle = || { h += 1; Handle(h) };
+
+    let tag = |part: &str, level: &str, name: &str| -> Vec<RawTag> {
+        vec![
+            RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+            RawTag { code: 1000, value: part.into() },
+            RawTag { code: 1000, value: level.into() },
+            RawTag { code: 1000, value: name.into() },
+        ]
+    };
+
+    let box_mesh = |x0: f64, y0: f64, z0: f64, x1: f64, y1: f64, z1: f64| -> Mesh {
+        let v = vec![
+            Vec3::new(x0, y0, z0), Vec3::new(x1, y0, z0), Vec3::new(x1, y1, z0), Vec3::new(x0, y1, z0),
+            Vec3::new(x0, y0, z1), Vec3::new(x1, y0, z1), Vec3::new(x1, y1, z1), Vec3::new(x0, y1, z1),
+        ];
+        let f = |a: u32, b: u32, c: u32, d: u32| MeshFace { v: vec![a, b, c, d], hidden: 0 };
+        Mesh { vertices: v, faces: vec![f(0,1,2,3), f(4,7,6,5), f(0,4,5,1), f(2,6,7,3), f(0,3,7,4), f(1,5,6,2)], ..Mesh::default() }
+    };
+
+    let add = |d: &mut Drawing, handle: Handle, layer: &str, mesh: Mesh, xdata: Vec<RawTag>| {
+        let mut e = Entity::new(handle, EntityKind::Mesh(mesh));
+        e.common.layer = layer.into();
+        *e.common.xdata = xdata;
+        d.model.push(e);
+    };
+
+    // --- Columns: rectangular extrusion from base to top of steel ---
+    for tc in &truth.building.columns {
+        let half_x = tc.footprint_in[0] / 24.0; // inches to half-feet
+        let half_y = tc.footprint_in[1] / 24.0;
+        let z0 = tc.bottom_ft;
+        let z1 = tc.top_ft;
+        let mesh = box_mesh(
+            tc.at_ft[0] - half_x, tc.at_ft[1] - half_y, z0,
+            tc.at_ft[0] + half_x, tc.at_ft[1] + half_y, z1,
+        );
+        add(&mut d, next_handle(), "S-COLS", mesh, tag("column", "1", &tc.id));
+    }
+
+    // --- Beams: box at TOS with depth, for each level ---
+    for tb in &truth.building.beams {
+        let depth_ft = tb.depth_in / 12.0;
+        let half_w = tb.flange_in / 24.0; // half flange width in feet
+        let z_top = tb.tos_ft;
+        let z_bot = z_top - depth_ft;
+        // Beam from from_ft to to_ft: a box along the beam's axis.
+        let dx = tb.to_ft[0] - tb.from_ft[0];
+        let dy = tb.to_ft[1] - tb.from_ft[1];
+        let (nx, ny) = if dx.abs() > dy.abs() {
+            // Runs east-west: width is in the y direction.
+            (0.0, half_w)
+        } else {
+            // Runs north-south: width is in the x direction.
+            (half_w, 0.0)
+        };
+        let mesh = box_mesh(
+            tb.from_ft[0].min(tb.to_ft[0]) - nx, tb.from_ft[1].min(tb.to_ft[1]) - ny, z_bot,
+            tb.from_ft[0].max(tb.to_ft[0]) + nx, tb.from_ft[1].max(tb.to_ft[1]) + ny, z_top,
+        );
+        add(&mut d, next_handle(), "S-BEAM", mesh, tag("beam", &tb.level, &tb.id));
+    }
+
+    // --- Slabs: thin plate at top_ft ---
+    for ts in &truth.building.slabs {
+        let thickness_ft = (ts.concrete_in + ts.deck_in) / 12.0;
+        // Use the building outline from the grid extents.
+        let grid = &truth.building.grid;
+        let x0 = grid.x.first().map_or(0.0, |g| g.at_ft);
+        let x1 = grid.x.last().map_or(100.0, |g| g.at_ft);
+        let y0 = grid.y.first().map_or(0.0, |g| g.at_ft);
+        let y1 = grid.y.last().map_or(50.0, |g| g.at_ft);
+        let z_top = ts.top_ft;
+        let z_bot = z_top - thickness_ft;
+        let mesh = box_mesh(x0, y0, z_bot, x1, y1, z_top);
+        add(&mut d, next_handle(), "S-SLAB", mesh, tag("floor", &ts.level, &ts.id));
+    }
+
+    // --- Joists: thin box members ---
+    for tj in &truth.building.joists {
+        let depth_ft = tj.depth_in / 12.0;
+        let half_w = 1.5 / 12.0; // joist chord width ~1.5 inches
+        let z_top = tj.tos_ft;
+        let z_bot = z_top - depth_ft;
+        let dx = tj.to_ft[0] - tj.from_ft[0];
+        let dy = tj.to_ft[1] - tj.from_ft[1];
+        let (nx, ny) = if dx.abs() > dy.abs() { (0.0, half_w) } else { (half_w, 0.0) };
+        let mesh = box_mesh(
+            tj.from_ft[0].min(tj.to_ft[0]) - nx, tj.from_ft[1].min(tj.to_ft[1]) - ny, z_bot,
+            tj.from_ft[0].max(tj.to_ft[0]) + nx, tj.from_ft[1].max(tj.to_ft[1]) + ny, z_top,
+        );
+        add(&mut d, next_handle(), "S-JOIST", mesh, tag("member", &tj.level, &tj.id));
+    }
+
+    d
 }

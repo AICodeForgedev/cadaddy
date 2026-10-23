@@ -181,6 +181,9 @@ pub struct Building {
     /// Openings and shafts through the floor.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openings: Vec<Opening>,
+    /// Open-web steel joists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joists: Vec<Joist>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -523,6 +526,21 @@ pub struct Opening {
     /// Size label as printed on the plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// A joist in the framing plan truth.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Joist {
+    pub id: String,
+    pub level: String,
+    pub size: String,
+    /// Nominal depth, inches.
+    pub depth_in: f64,
+    /// Centre-to-centre spacing, inches.
+    pub spacing_in: f64,
+    pub from_ft: [f64; 2],
+    pub to_ft: [f64; 2],
+    pub tos_ft: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

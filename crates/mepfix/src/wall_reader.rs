@@ -766,14 +766,9 @@ fn rooms_beside(w: &FoundWall, cl: &CeilingResult) -> Vec<String> {
     out
 }
 
-/// `13'-6 1/2"` → feet.
-pub(crate) fn feet_inches(s: &str) -> Option<f64> {
-    let (f, rest) = s.split_once('\'')?;
-    let f: f64 = f.trim().parse().ok()?;
-    let rest = rest.trim_start_matches('-').trim();
-    let i = rest.split('"').next().map(str::trim).filter(|x| !x.is_empty()).map_or(Some(0.0), number)?;
-    let v = if f < 0.0 { f - i / 12.0 } else { f + i / 12.0 };
-    v.is_finite().then_some(v)
+/// `13'-6 1/2"` → feet. Delegates to the shared parser in struct_reader.
+pub fn feet_inches(s: &str) -> Option<f64> {
+    crate::struct_reader::parse_feet_inches(s)
 }
 
 /// What a framing plan's notes say: its level's top of steel and top of slab (elevations, feet).

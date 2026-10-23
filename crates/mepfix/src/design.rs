@@ -342,6 +342,43 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
         });
     }
 
+    // ---- Joists ---------------------------------------------------------------------------
+    // Open-web steel joists span between y-grid beams (east-west), one per bay per level.
+    let joist_options = [("18K4", 18.0), ("20K5", 20.0), ("22K7", 22.0), ("24K9", 24.0)];
+    let spacing_options = [24.0, 30.0, 36.0];
+    for lv in ["2", "R"] {
+        let jst = joist_options[r.below(joist_options.len())];
+        let spacing = spacing_options[r.below(spacing_options.len())];
+        let (_, _, tos) = framing.get(lv).copied().unwrap_or_default();
+        let mut jn = 0;
+        // Joists run east-west in each bay (between x-grid lines), along each y-grid span.
+        for i in 0..nb {
+            let x0 = xs.get(i).copied().unwrap_or(0.0);
+            let x1 = xs.get(i + 1).copied().unwrap_or(x0 + 20.0);
+            for j in 0..3 {
+                let y0 = ys[j];
+                let y1 = ys[j + 1];
+                // Place joists at `spacing` inches apart.
+                let span_ft = y1 - y0;
+                let n_joists = ((span_ft * 12.0) / spacing).floor() as usize;
+                for k in 1..n_joists {
+                    jn += 1;
+                    let y = y0 + (k as f64) * spacing / 12.0;
+                    t.building.joists.push(Joist {
+                        id: format!("J-{lv}-{jn:03}"),
+                        level: lv.into(),
+                        size: jst.0.into(),
+                        depth_in: jst.1,
+                        spacing_in: spacing,
+                        from_ft: [r6(x0), r6(y)],
+                        to_ft: [r6(x1), r6(y)],
+                        tos_ft: r6(tos),
+                    });
+                }
+            }
+        }
+    }
+
     // ---- Loads and duct sizes (they set the bands) ---------------------------------------
     let cfm_sf = r.pick::<f64>(&[0.9, 1.0, 1.1, 1.2]);
     let h_main = r.pick::<f64>(&[12.0, 14.0]);
