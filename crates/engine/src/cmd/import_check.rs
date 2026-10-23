@@ -161,11 +161,7 @@ pub fn check_drawing(d: &Drawing) -> ImportCheckResult {
     let score = if total_weight > 0 { (earned * 100) / total_weight } else { 100 };
 
     // Hard-fail: SCALE, FILLS, SYMBOLS each fail the import on their own.
-    let hard_fails: Vec<String> = checks
-        .iter()
-        .filter(|c| c.hard_fail && !c.pass)
-        .map(|c| c.id.clone())
-        .collect();
+    let hard_fails: Vec<String> = checks.iter().filter(|c| c.hard_fail && !c.pass).map(|c| c.id.clone()).collect();
 
     let pass = hard_fails.is_empty() && score >= PASS_SCORE;
 
@@ -185,9 +181,9 @@ fn add(checks: &mut Vec<CheckResult>, check: &CheckResult, weight: u32, total: &
 /// Convert a length in drawing units to inches, based on the INSUNITS header.
 fn units_to_inches(insunits: i64) -> f64 {
     match insunits {
-        0 => 1.0,  // unitless — assume inches
-        1 => 1.0,  // inches
-        2 => 12.0, // feet
+        0 => 1.0,        // unitless — assume inches
+        1 => 1.0,        // inches
+        2 => 12.0,       // feet
         3 => 0.03937008, // millimetres
         4 => 0.3937008,  // centimetres
         5 => 39.37008,   // metres
@@ -287,7 +283,7 @@ fn detect_scale_note(d: &Drawing) -> Option<(String, f64)> {
             seen.entry(note.to_string()).or_insert((k, 0)).1 += 1;
         }
     }
-    seen.into_iter().max_by(|a, b| a.1 .1.cmp(&b.1 .1).then(b.0.cmp(&a.0))).map(|(t, (k, _))| (t, k))
+    seen.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0))).map(|(t, (k, _))| (t, k))
 }
 
 // ─── DO NOT SCALE / discipline detection ────────────────────────────────────
@@ -353,10 +349,8 @@ fn detect_discipline(d: &Drawing) -> Option<String> {
         }
     }
     // Fallback: title keywords.
-    let keywords = [
-        ("ELECTRICAL", "E"), ("MECHANICAL", "M"), ("PLUMBING", "P"),
-        ("FIRE PROTECTION", "FP"), ("STRUCTURAL", "S"), ("ARCHITECTURAL", "A"),
-    ];
+    let keywords =
+        [("ELECTRICAL", "E"), ("MECHANICAL", "M"), ("PLUMBING", "P"), ("FIRE PROTECTION", "FP"), ("STRUCTURAL", "S"), ("ARCHITECTURAL", "A")];
     for e in d.model.iter() {
         let val = match &e.kind {
             EntityKind::Text(t) => &t.value,
@@ -380,11 +374,7 @@ fn detect_discipline(d: &Drawing) -> Option<String> {
 /// without an architectural reference sheet).
 fn check_scale(d: &Drawing, do_not_scale: Option<&str>) -> CheckResult {
     let ext = d.extents(&Space::Model);
-    let (w, h) = if ext.is_empty() {
-        (0.0, 0.0)
-    } else {
-        ((ext.max.x - ext.min.x).abs(), (ext.max.y - ext.min.y).abs())
-    };
+    let (w, h) = if ext.is_empty() { (0.0, 0.0) } else { ((ext.max.x - ext.min.x).abs(), (ext.max.y - ext.min.y).abs()) };
 
     // Empty drawing: pass.
     if w < 1e-9 && h < 1e-9 {
@@ -409,10 +399,7 @@ fn check_scale(d: &Drawing, do_not_scale: Option<&str>) -> CheckResult {
             id: "SCALE".into(),
             pass: true, // Cannot fail without an architectural reference to register against
             expected: "sheet registered to architectural plan (do-not-scale note found)".into(),
-            found: format!(
-                "do-not-scale note: \"{}\"; extents {w:.1} x {h:.1}, INSUNITS={insunits}",
-                truncate(note, 80)
-            ),
+            found: format!("do-not-scale note: \"{}\"; extents {w:.1} x {h:.1}, INSUNITS={insunits}", truncate(note, 80)),
             severity: 0,
             hint: String::new(),
             hard_fail: true,
@@ -448,8 +435,7 @@ fn check_scale(d: &Drawing, do_not_scale: Option<&str>) -> CheckResult {
 
         // Disagree if model is way too small (< 90% of minimum expected)
         // or way too large (> 110% of maximum expected).
-        model_max_ft < expected_ft_min * (1.0 - SCALE_DISAGREE_FRACTION)
-            || model_max_ft > expected_ft_max * (1.0 + SCALE_DISAGREE_FRACTION)
+        model_max_ft < expected_ft_min * (1.0 - SCALE_DISAGREE_FRACTION) || model_max_ft > expected_ft_max * (1.0 + SCALE_DISAGREE_FRACTION)
     } else {
         false
     };
@@ -559,10 +545,7 @@ fn count_stroke_glyph_clusters(d: &Drawing) -> usize {
             EntityKind::Line(l) => {
                 let len = ((l.b.x - l.a.x).powi(2) + (l.b.y - l.a.y).powi(2)).sqrt();
                 if len > 1e-9 && len <= STROKE_GLYPH_MAX_LEN {
-                    segments.push(StrokeSegment {
-                        mid_x: (l.a.x + l.b.x) * 0.5,
-                        mid_y: (l.a.y + l.b.y) * 0.5,
-                    });
+                    segments.push(StrokeSegment { mid_x: (l.a.x + l.b.x) * 0.5, mid_y: (l.a.y + l.b.y) * 0.5 });
                 }
             }
             EntityKind::LwPolyline(pl) => {
@@ -571,10 +554,7 @@ fn count_stroke_glyph_clusters(d: &Drawing) -> usize {
                     let dy = w[1].p.y - w[0].p.y;
                     let len = (dx * dx + dy * dy).sqrt();
                     if len > 1e-9 && len <= STROKE_GLYPH_MAX_LEN {
-                        segments.push(StrokeSegment {
-                            mid_x: (w[0].p.x + w[1].p.x) * 0.5,
-                            mid_y: (w[0].p.y + w[1].p.y) * 0.5,
-                        });
+                        segments.push(StrokeSegment { mid_x: (w[0].p.x + w[1].p.x) * 0.5, mid_y: (w[0].p.y + w[1].p.y) * 0.5 });
                     }
                 }
             }
@@ -872,20 +852,21 @@ pub fn failed_checks(d: &Drawing) -> Vec<(String, String)> {
 // ─── Command spec ────────────────────────────────────────────────────────────
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("import.check", "Check Import Accuracy", run_check)
-        .params("{path? | current} → {pass, score: 0-100, hard_fails, checks: [{id, pass, expected, found, severity, hint, hard_fail, evidence}]}")
-        .enabled(always)
-        .noundo()]
+    vec![
+        CommandSpec::new("import.check", "Check Import Accuracy", run_check)
+            .params(
+                "{path? | current} → {pass, score: 0-100, hard_fails, checks: [{id, pass, expected, found, severity, hint, hard_fail, evidence}]}",
+            )
+            .enabled(always)
+            .noundo(),
+    ]
 }
 
 fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(path) = str_param(p, "path") {
         let hooks = super::file::io().ok_or_else(|| EngineError::Other("file formats are not available in this build".into()))?;
         let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
+        let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let d = (hooks.read)(&bytes, name).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         let result = check_drawing(&d);
         Ok(json!(result))
@@ -900,19 +881,10 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
             String::new()
         } else {
             let fails: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
-            let hf = if result.hard_fails.is_empty() {
-                String::new()
-            } else {
-                format!(" [hard-fail: {}]", result.hard_fails.join(", "))
-            };
+            let hf = if result.hard_fails.is_empty() { String::new() } else { format!(" [hard-fail: {}]", result.hard_fails.join(", ")) };
             format!("; failed: {}{hf}", fails.join(", "))
         };
-        s.echo(format!(
-            "Import check: {} (score {}/100){}",
-            if result.pass { "PASS" } else { "FAIL" },
-            result.score,
-            fail_info,
-        ));
+        s.echo(format!("Import check: {} (score {}/100){}", if result.pass { "PASS" } else { "FAIL" }, result.score, fail_info,));
 
         // Notify UI with per-check details for zoom-to panel.
         for c in &result.checks {

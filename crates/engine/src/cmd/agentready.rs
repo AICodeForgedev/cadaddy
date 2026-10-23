@@ -1084,10 +1084,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
                 let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
                 return Err(bad(
                     "bim.build",
-                    format!(
-                        "import check failed ({}); fix the import or pass `force: true` to override",
-                        names.join(", ")
-                    ),
+                    format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", ")),
                 ));
             }
         }

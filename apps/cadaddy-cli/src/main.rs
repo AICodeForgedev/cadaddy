@@ -429,11 +429,7 @@ fn check_import(args: &[String]) -> Result<(), String> {
     if json_output {
         outln!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
     } else {
-        outln!(
-            "{} (score {}/100)",
-            if result.pass { "PASS" } else { "FAIL" },
-            result.score
-        );
+        outln!("{} (score {}/100)", if result.pass { "PASS" } else { "FAIL" }, result.score);
         for c in &result.checks {
             let mark = if c.pass { "ok" } else { "FAIL" };
             outln!("  [{mark}] {}: {}", c.id, c.found);

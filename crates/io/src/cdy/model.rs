@@ -40,8 +40,10 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 17] =
-    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"IMCK", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 17] = [
+    b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"IMCK", b"EMBD",
+    b"THMB",
+];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
