@@ -394,24 +394,24 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
             for line in &recent_errors {
                 *counts.entry(line.as_str()).or_default() += 1;
             }
-            if let Some((line, count)) = counts.iter().max_by_key(|(_, c)| **c) {
-                if *count > error_spam_window / 2 {
-                    findings.push(Finding {
-                        seed,
-                        lang,
-                        step,
-                        action: last_action.clone(),
-                        kind: "error-spam",
-                        detail: format!("error repeated {count}/{error_spam_window} times: {}", &line[..line.len().min(120)]),
-                    });
-                    recent_errors.clear();
-                }
+            if let Some((line, count)) = counts.iter().max_by_key(|(_, c)| **c)
+                && *count > error_spam_window / 2
+            {
+                findings.push(Finding {
+                    seed,
+                    lang,
+                    step,
+                    action: last_action.clone(),
+                    kind: "error-spam",
+                    detail: format!("error repeated {count}/{error_spam_window} times: {}", &line[..line.len().min(120)]),
+                });
+                recent_errors.clear();
             }
         }
 
         // Prune entities every 200 steps to prevent unbounded growth (which makes selectall,
         // region, array etc. very slow in debug builds after hundreds of draw calls).
-        if step % 200 == 0 {
+        if step.is_multiple_of(200) {
             let count = e.entity_count();
             if count > 500 {
                 let _ = e.call("cmdline.input", json!({"text": "selectall"}));
@@ -425,28 +425,28 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
         }
 
         // Periodically check for stuck dialogs (open for >50 actions without intentional open).
-        if step % 50 == 0 {
-            if let Some(d) = e.dialog() {
-                // Try to close it.
-                let _ = e.call("ui.key", json!({"key": "escape"}));
-                e.pump();
-                if e.dialog().as_deref() == Some(d.as_str()) {
-                    // Check if it's in the sticky allowlist.
-                    let allowlisted = sticky_dialog(d.as_str());
-                    if !allowlisted {
-                        findings.push(Finding {
-                            seed,
-                            lang,
-                            step,
-                            action: last_action.clone(),
-                            kind: "stuck-dialog",
-                            detail: format!("dialog '{}' stayed open after Escape", d),
-                        });
-                    }
-                    // Force close.
-                    let _ = e.call("ui.set", json!({"dialog": null}));
-                    e.pump();
+        if step.is_multiple_of(50)
+            && let Some(d) = e.dialog()
+        {
+            // Try to close it.
+            let _ = e.call("ui.key", json!({"key": "escape"}));
+            e.pump();
+            if e.dialog().as_deref() == Some(d.as_str()) {
+                // Check if it's in the sticky allowlist.
+                let allowlisted = sticky_dialog(d.as_str());
+                if !allowlisted {
+                    findings.push(Finding {
+                        seed,
+                        lang,
+                        step,
+                        action: last_action.clone(),
+                        kind: "stuck-dialog",
+                        detail: format!("dialog '{}' stayed open after Escape", d),
+                    });
                 }
+                // Force close.
+                let _ = e.call("ui.set", json!({"dialog": null}));
+                e.pump();
             }
         }
 
@@ -492,12 +492,11 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                     let mut params: Value = serde_json::from_str(params_str).unwrap_or(json!({}));
                     // Pick a handle from the drawing.
                     let insp = e.call("drawing.inspect", json!({"entities": true, "limit": 1}));
-                    if let Ok(v) = insp {
-                        if let Some(h) = v["entities"].as_array().and_then(|a| a.first()).and_then(|e| e["handle"].as_str()) {
-                            if let Some(obj) = params.as_object_mut() {
-                                obj.insert("handle".into(), json!(h));
-                            }
-                        }
+                    if let Ok(v) = insp
+                        && let Some(h) = v["entities"].as_array().and_then(|a| a.first()).and_then(|e| e["handle"].as_str())
+                        && let Some(obj) = params.as_object_mut()
+                    {
+                        obj.insert("handle".into(), json!(h));
                     }
                     stats.modify.attempted += 1;
                     match e.call("engine.execute", json!({"command": cmd, "params": params})) {
@@ -713,19 +712,19 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                             })
                     })
                     .collect();
-                if let Some(elem) = palette_elems.first() {
-                    if let Some(rect) = elem["rect"].as_array() {
-                        let x = rect.first().and_then(Value::as_f64).unwrap_or(100.0);
-                        let y = rect.get(1).and_then(Value::as_f64).unwrap_or(100.0);
-                        let rw = rect.get(2).and_then(Value::as_f64).unwrap_or(50.0);
-                        let rh = rect.get(3).and_then(Value::as_f64).unwrap_or(20.0);
-                        let cx = x + rw / 2.0;
-                        let cy = y + rh / 2.0;
-                        // Drag by a small offset.
-                        let dx = (rng.gen_f32() - 0.5) * 60.0;
-                        let dy = (rng.gen_f32() - 0.5) * 40.0;
-                        let _ = e.call("ui.drag", json!({"x": cx, "y": cy, "to": [cx + dx as f64, cy + dy as f64]}));
-                    }
+                if let Some(elem) = palette_elems.first()
+                    && let Some(rect) = elem["rect"].as_array()
+                {
+                    let x = rect.first().and_then(Value::as_f64).unwrap_or(100.0);
+                    let y = rect.get(1).and_then(Value::as_f64).unwrap_or(100.0);
+                    let rw = rect.get(2).and_then(Value::as_f64).unwrap_or(50.0);
+                    let rh = rect.get(3).and_then(Value::as_f64).unwrap_or(20.0);
+                    let cx = x + rw / 2.0;
+                    let cy = y + rh / 2.0;
+                    // Drag by a small offset.
+                    let dx = (rng.gen_f32() - 0.5) * 60.0;
+                    let dy = (rng.gen_f32() - 0.5) * 40.0;
+                    let _ = e.call("ui.drag", json!({"x": cx, "y": cy, "to": [cx + dx as f64, cy + dy as f64]}));
                 }
                 // Validate docking is still sane.
                 let ui_state = e.call("ui.inspect", json!({}));
@@ -922,16 +921,16 @@ fn torture_actions_valid() {
     // Offset needs a specific handle — create a line and use its handle.
     let _ = e.call("engine.execute", json!({"command": "line", "params": {"points": [[0,0],[10,0]]}}));
     let insp = e.call("drawing.inspect", json!({"entities": true, "limit": 1}));
-    if let Ok(v) = insp {
-        if let Some(h) = v["entities"].as_array().and_then(|a| a.first()).and_then(|ent| ent["handle"].as_str()) {
-            let (cmd, params_str) = OFFSET_COMMAND;
-            let mut params: Value = serde_json::from_str(params_str).unwrap_or(json!({}));
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("handle".into(), json!(h));
-            }
-            if let Err(err) = e.call("engine.execute", json!({"command": cmd, "params": params})) {
-                failures.push(format!("MODIFY {cmd}: {err}"));
-            }
+    if let Ok(v) = insp
+        && let Some(h) = v["entities"].as_array().and_then(|a| a.first()).and_then(|ent| ent["handle"].as_str())
+    {
+        let (cmd, params_str) = OFFSET_COMMAND;
+        let mut params: Value = serde_json::from_str(params_str).unwrap_or(json!({}));
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("handle".into(), json!(h));
+        }
+        if let Err(err) = e.call("engine.execute", json!({"command": cmd, "params": params})) {
+            failures.push(format!("MODIFY {cmd}: {err}"));
         }
     }
 
