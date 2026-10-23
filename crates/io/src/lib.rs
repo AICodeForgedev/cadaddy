@@ -117,6 +117,20 @@ pub(crate) fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync 
     }
 }
 
+/// File extensions the write dispatch ([`write_framed`]) handles — the file formats CADaddy
+/// can save to, sorted. Internal/redirect extensions (empty, `bundle`, `cdywalk`, `dwt`,
+/// `dws`) are omitted: `dwt`/`dws` are DWG content, `cdywalk` is an internal package.
+pub const SAVE_EXTENSIONS: &[&str] = &[
+    "3mf", "cdy", "dgn", "dwf", "dwfx", "dwg", "dxf", "eps", "glb", "gltf", "ifc", "obj", "pdf",
+    "png", "stl", "svg", "wmf",
+];
+
+/// File extensions the read dispatch ([`read`]) handles — the file formats CADaddy can open,
+/// sorted. Content-based detection (`.cdy`, `.dwg`) also works without the correct extension.
+pub const READ_EXTENSIONS: &[&str] = &[
+    "cdy", "dgn", "dwg", "dxf", "glb", "gltf", "ifc", "obj", "pdf", "stl", "svg", "svgz",
+];
+
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }

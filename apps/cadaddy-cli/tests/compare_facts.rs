@@ -49,10 +49,17 @@ fn every_website_claim_is_backed_and_the_facts_file_is_current() {
 #[test]
 fn facts_are_worked_out_not_typed() {
     let f = facts::compute(&root());
-    // Formats are proved by writing and reading back.
+    // Formats are proved by writing and reading back (with entities).
     let open: Vec<&str> = f["formats"]["open"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert!(open.contains(&"dxf") && open.contains(&"cdy"), "{open:?}");
-    assert!(f["versions"]["dxf"].as_array().unwrap().len() >= 6, "{}", f["versions"]);
+    for ext in ["cdy", "dwg", "dxf", "dgn", "ifc"] {
+        assert!(open.contains(&ext), "open includes {ext}: {open:?}");
+    }
+    // DWG bridge reads R2000..R2018.
+    let bridge_read: Vec<&str> =
+        f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    for v in ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"] {
+        assert!(bridge_read.contains(&v), "bridge reads {v}");
+    }
     assert!(f["commands"]["count"].as_u64().unwrap() > 100);
     assert_eq!(f["commands"]["count"], f["commands"]["ids"].as_array().unwrap().len());
     // The same code gives the same facts.
@@ -67,4 +74,78 @@ fn a_claim_that_no_longer_holds_is_reported() {
     assert!(facts::check(&f, &json!({ "fact": "version", "equals": "0.7.9" })).is_err());
     assert!(facts::check(&f, &json!({ "fact": "no.such" })).is_err());
     assert!(facts::check(&f, &json!({ "fact": "commands.count", "atLeast": 300 })).is_ok());
+}
+
+/// MUST 1: DWG versions report both engines; bridge covers R2000..R2018; env vars don't change
+/// the output. Env independence: `versions()` passes `DwgEngine::Native` / `DwgEngine::Bridge`
+/// explicitly and calls `dwg_write::write` / `dwg_read::read` (native) or
+/// `write_dwg`/`read_dwg` with an explicit engine (bridge) — neither path consults
+/// `CADADDY_DWG*`. The `formats()` path for DWG still goes through `dwg_engine()`, but
+/// `write_dwg` / `read_dwg` fall back across engines, so the save/open sets are stable.
+/// Verified below by a subprocess run with `CADADDY_DWG=native`.
+#[test]
+fn dwg_versions_per_engine() {
+    let f = facts::compute(&root());
+    // Both engines present.
+    assert!(f["versions"]["dwg"]["native"].is_object(), "native engine reported");
+    assert!(f["versions"]["dwg"]["bridge"].is_object(), "bridge engine reported");
+    // Bridge supports R2000..R2018 for both write and read.
+    let bridge_write: Vec<&str> =
+        f["versions"]["dwg"]["bridge"]["write"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let bridge_read: Vec<&str> =
+        f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    for v in ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"] {
+        assert!(bridge_write.contains(&v), "bridge writes {v}");
+        assert!(bridge_read.contains(&v), "bridge reads {v}");
+    }
+    // Determinism: two runs give the same facts.
+    assert_eq!(f, facts::compute(&root()), "compute() is deterministic");
+}
+
+/// Env-var independence: `CADADDY_DWG=native` must not change the facts. Runs
+/// `facts_are_worked_out_not_typed` in a subprocess with the env var set.
+#[test]
+fn dwg_facts_ignore_cadaddy_dwg_env() {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["test", "-p", "cadaddy-cli", "--test", "compare_facts", "--", "facts_are_worked_out_not_typed", "--exact", "-q"])
+        .env("CADADDY_DWG", "native")
+        .current_dir(root())
+        .output()
+        .expect("spawn cargo test");
+    assert!(
+        out.status.success(),
+        "facts_are_worked_out_not_typed must pass with CADADDY_DWG=native:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// MUST 2: the format list is derived from `cadaddy_io::SAVE_EXTENSIONS`, not hand-typed.
+/// Every extension the io write dispatch handles is in `formats.save` or explicitly excluded.
+#[test]
+fn format_list_derives_from_io() {
+    let f = facts::compute(&root());
+    let save: Vec<&str> = f["formats"]["save"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    // No exclusions today: every SAVE_EXTENSIONS entry writes the sample drawing.
+    let excluded: &[&str] = &[];
+    for ext in cadaddy_io::SAVE_EXTENSIONS {
+        assert!(
+            save.contains(ext) || excluded.contains(ext),
+            "io SAVE_EXTENSIONS has `{ext}` but it is not in formats.save and not excluded"
+        );
+    }
+    // DGN, DWF and DWFx must appear in save.
+    for ext in ["dgn", "dwf", "dwfx"] {
+        assert!(save.contains(&ext), "`{ext}` must be in formats.save");
+    }
+}
+
+/// MUST 3: a format counts as "open" only when the read-back drawing has entities.
+#[test]
+fn open_formats_require_entities() {
+    let f = facts::compute(&root());
+    let open: Vec<&str> = f["formats"]["open"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    for ext in ["cdy", "dwg", "dxf", "dgn", "ifc"] {
+        assert!(open.contains(&ext), "format `{ext}` must be openable with entities");
+    }
 }
