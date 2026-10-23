@@ -1860,7 +1860,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         masked = gpu && f.outline.is_some();
     }
     if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {
-        // The Model tab in a 3D visual style: the shaded view stands for the display list.
+        // The Model tab in a 3D visual style: the shaded view stands for the display list, with
+        // the section box's face handles over it.
+        crate::shaded::section_box_handles(app, ui, &painter, &xf);
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {

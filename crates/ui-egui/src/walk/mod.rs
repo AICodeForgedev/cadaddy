@@ -403,7 +403,7 @@ impl Walk {
         types.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
         self.types = types;
         let level = self.only_level.then_some(self.walker.level);
-        self.view = visible(b, &self.hidden_types, self.walls_on, level.and_then(|i| level_band(&b.scene, i)));
+        self.view = boxed(b, visible(b, &self.hidden_types, self.walls_on, level.and_then(|i| level_band(&b.scene, i))));
         self.view_level = level;
         if let Some(f) = self.fourd
             && let Some(d) = b.drawings.first()
@@ -475,6 +475,16 @@ fn visible(b: &Building, hidden: &BTreeSet<String>, walls_on: bool, band: Option
         };
     }
     v
+}
+
+/// `view` cut by the open drawing's coordination section box (when it is on), as the 3D view is.
+fn boxed(b: &Building, view: Scene) -> Scene {
+    let Some(d) = b.drawings.first() else { return view };
+    let crs = cadaddy_engine::cmd::coordination::coord_render_state(d);
+    if !crs.sbox_on {
+        return view;
+    }
+    view.inside_box_of(&b.scene.levels, b.scene.units_per_foot, crs.sbox_min, crs.sbox_max)
 }
 
 /// Open walk mode on the active drawing.
@@ -1259,6 +1269,42 @@ mod tests {
         assert_eq!((tris_of(&l2, 1), tris_of(&l2, 2)), (0, tris_of(&all, 2)));
         assert!(l2.edges.len() < all.edges.len() && l2.edges.len().is_multiple_of(2));
         assert_eq!(level_band(&b.scene, 9), None);
+    }
+
+    /// The coordination section box: Walk shows only what stands inside it (level 2's wall,
+    /// on its own part of the sheet), and everything again with the box off.
+    #[test]
+    fn section_box_cuts_the_walk_view() {
+        let rules = Rules::from_json(
+            r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10,"region":[-10,-10,500,500]},
+                          {"name":"L2","elevation_ft":10,"height_ft":10,"region":[990,-10,1500,500],"base":[1000,0]}],
+                "layers":[{"layer":"A-WALL","kind":"wall"}]}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut d = Drawing::default();
+        let v = |x: f64, y: f64| cadaddy_geom::Vec3 { x, y, z: 0.0 };
+        for (h, x0) in [(1u64, 0.0), (2, 1000.0)] {
+            let mut e = cadaddy_doc::Entity::new(Handle(h), EntityKind::Line(cadaddy_doc::Line { a: v(x0, 0.0), b: v(x0 + 240.0, 0.0) }));
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        }
+        let scene = derive_set(&[&d], &rules);
+        let tris_of = |s: &Scene, h: u64| s.owners.iter().filter(|o| o.handle == Handle(h)).count();
+        let with_box = |on: bool| {
+            let mut d = d.clone();
+            d.building_spec =
+                Some(serde_json::json!({"coord_sectionbox": {"on": on, "min": [900, -100, -1000], "max": [1500, 100, 100000]}}).to_string());
+            Building { drawings: vec![Arc::new(d)], rules: rules.clone(), rules_from: String::new(), scene: scene.clone(), problems: Vec::new() }
+        };
+        let b = with_box(true);
+        let all = visible(&b, &BTreeSet::new(), true, None);
+        assert!(tris_of(&all, 1) > 0 && tris_of(&all, 2) > 0);
+        let cut = boxed(&b, all.clone());
+        assert_eq!((tris_of(&cut, 1), tris_of(&cut, 2)), (0, tris_of(&all, 2)), "only level 2's wall is inside the box");
+        assert!(cut.edges.len() < all.edges.len());
+        let off = with_box(false);
+        let shown = boxed(&off, visible(&off, &BTreeSet::new(), true, None));
+        assert_eq!(shown.tris.len(), all.tris.len(), "box off: everything");
     }
 
     /// A building file in the drawing's folder that lists it as a sheet is found, and the open

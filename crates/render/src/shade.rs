@@ -409,14 +409,14 @@ pub fn scene_box(s: &Scene) -> Option<(Vec3, Vec3)> {
     (lo.x <= hi.x).then_some((lo, hi))
 }
 
-fn push_tri(s: &mut Scene, t: Tri) {
+pub(crate) fn push_tri(s: &mut Scene, t: Tri) {
     if s.tris.len() < MAX_SCENE && t.p.iter().all(|p| p.is_finite()) {
         s.tris.push(t);
         s.owners.push(s.owner_now);
     }
 }
 
-fn push_line(s: &mut Scene, l: Line3) {
+pub(crate) fn push_line(s: &mut Scene, l: Line3) {
     if s.lines.len() < MAX_SCENE && l.a.is_finite() && l.b.is_finite() {
         s.lines.push(l);
     }
