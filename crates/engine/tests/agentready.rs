@@ -386,3 +386,39 @@ fn what_the_weak_agent_tripped_on() {
     let b = s.execute("project.briefing", &json!({})).unwrap();
     assert!(b["next"]["call"].as_str().unwrap().starts_with("takeoff"), "{b}");
 }
+
+// ---- MUST 3: Validation failures in the review queue and briefing ----
+
+#[test]
+fn validation_failures_appear_in_the_queue_and_briefing() {
+    // Use the existing building helper (has levels, spec, runs), then add prints.
+    let mut s = building(0);
+    // Add prints with symbols that expect devices we don't have: missing_in_model.
+    s.execute("bim.prints", &json!({"prints": {
+        "symbols": [
+            {"sheet": "E-101", "level": "L1", "kind": "receptacle", "mark": "REC-A", "at": [5.0, 5.0]},
+            {"sheet": "E-101", "level": "L1", "kind": "receptacle", "mark": "REC-A", "at": [15.0, 5.0]}
+        ],
+        "rooms": [{"level": "L1", "number": "101", "name": "OFFICE", "outline": [[-1, -1], [201, -1], [201, 31], [-1, 31]], "sheet": "A-101"}],
+        "schedule": [{"sheet": "E-601", "schedule": "device", "mark": "REC-A", "qty": 2}]
+    }, "gate": "warn"})).unwrap();
+    // bim.validate should have failures (missing_in_model since no receptacles exist).
+    let val = s.execute("bim.validate", &json!({})).unwrap();
+    assert!(val["total"].as_u64().unwrap_or(0) > 0, "should have validation failures: {val:#}");
+    // The review queue should include validation items.
+    let queue = s.execute("review.list", &json!({"limit": 50})).unwrap();
+    let items = queue["items"].as_array().unwrap();
+    let val_items: Vec<&Value> = items.iter().filter(|i| i["kind"] == "validation").collect();
+    assert!(!val_items.is_empty(), "review queue should include validation failures: {queue:#}");
+    // Validation items should have id starting with RV-V and be ranked above low-severity.
+    for item in &val_items {
+        assert!(item["id"].as_str().unwrap().starts_with("RV-V"), "id should start with RV-V: {item}");
+    }
+    // The briefing should show validation score < 100.
+    let brief = s.execute("project.briefing", &json!({})).unwrap();
+    assert!(brief.get("validation").is_some(), "briefing should include validation: {brief:#}");
+    let val_brief = &brief["validation"];
+    assert!(val_brief["score"].as_f64().is_some(), "validation should have a score: {val_brief}");
+    assert!(val_brief["total"].as_u64().unwrap_or(0) > 0, "validation should show failure count: {val_brief}");
+    assert!(val_brief["score"].as_f64().unwrap_or(100.0) < 100.0, "score should be < 100 with failures: {val_brief}");
+}
