@@ -254,6 +254,9 @@ pub struct Assembly {
     /// How its head meets what is above, and its bottom track (head of wall details).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<Head>,
+    /// Where it was read from: the legend sheet and tag (`A-501 wall type legend, tag 1B`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A wall type's head and bottom, as its head of wall detail gives them.
@@ -456,6 +459,33 @@ pub struct WallMark {
     /// Why the type is a guess (no tag on the wall), when it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guess: Option<String>,
+    /// The plan sheet it was read from (`A-101`, `A-101 (no tag)`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// Its type read from a tag on the drawing, or guessed; none = not said (older specs: a mark
+    /// with a `guess` is a guess).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<MarkStatus>,
+    /// Where its height came from (`ceiling`, `deck`, `no ceiling beside it: deck`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub height_source: String,
+}
+
+/// Whether a wall mark's type is from the drawing or a guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkStatus {
+    /// A tag on the plan names it.
+    Drawing,
+    /// No tag: the likeliest type (`guess` says why).
+    Guess,
+}
+
+impl WallMark {
+    /// Its status as written, else a guess when it says why.
+    pub fn status(&self) -> MarkStatus {
+        self.status.unwrap_or(if self.guess.is_some() { MarkStatus::Guess } else { MarkStatus::Drawing })
+    }
 }
 
 fn is_six(v: &f64) -> bool {
@@ -1770,12 +1800,20 @@ impl BuildingSpec {
                 if let Some(h) = &a.head {
                     let _ = write!(text, "; {}", h.text());
                 }
+                if !a.source.is_empty() {
+                    let _ = write!(text, "; from {}", a.source);
+                }
             }
             put("wall_types", format!("wall_types/{}", t.name), text);
         }
         if !self.walls.is_empty() {
-            let guessed = self.walls.iter().filter(|w| w.guess.is_some()).count();
-            put("walls", "walls".into(), format!("{} walls typed from their tags on the plans, {guessed} guessed (no tag)", self.walls.len()));
+            let guessed = self.walls.iter().filter(|w| w.status() == MarkStatus::Guess).count();
+            let drawing = self.walls.len() - guessed;
+            put(
+                "walls",
+                "walls".into(),
+                format!("{} walls: {drawing} typed from their tags on the plans (drawing), {guessed} guessed (no tag)", self.walls.len()),
+            );
         }
         for r in &self.rooms {
             let name = if r.name.trim().is_empty() { r.number.clone().unwrap_or_default() } else { r.name.clone() };
@@ -2795,7 +2833,17 @@ mod tests {
         assert!((a.thickness_in() - 4.875).abs() < 1e-12);
         s.wall_types.push(WallType { name: "1B".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs, assembly: Some(a) });
         let level = s.levels[0].name.clone();
-        s.walls.push(WallMark { level: level.clone(), a: [0.0, 0.0], b: [120.0, 0.0], wall_type: "1b".into(), height_ft: Some(9.5), guess: None });
+        s.walls.push(WallMark {
+            level: level.clone(),
+            a: [0.0, 0.0],
+            b: [120.0, 0.0],
+            wall_type: "1b".into(),
+            height_ft: Some(9.5),
+            guess: None,
+            source: String::new(),
+            status: None,
+            height_source: String::new(),
+        });
         assert!(s.check().iter().all(|i| !i.error), "{:?}", s.check());
         assert_eq!(BuildingSpec::from_json(&s.to_json()), Ok(s.clone()));
         let d = s.describe();
@@ -2803,7 +2851,17 @@ mod tests {
         assert!(t.contains("6\" above the ceiling") && t.contains("1 HR") && t.contains("STC 45"), "{t}");
         // A thickness the layers don't make, a mark on no type, a bad layer: said.
         s.wall_types[0].thickness_in = 6.0;
-        s.walls.push(WallMark { level, a: [0.0, 0.0], b: [0.0, 0.0], wall_type: "nope".into(), height_ft: Some(f64::NAN), guess: None });
+        s.walls.push(WallMark {
+            level,
+            a: [0.0, 0.0],
+            b: [0.0, 0.0],
+            wall_type: "nope".into(),
+            height_ft: Some(f64::NAN),
+            guess: None,
+            source: String::new(),
+            status: None,
+            height_source: String::new(),
+        });
         if let Some(a) = s.wall_types[0].assembly.as_mut() {
             a.layers[0].thickness_in = -1.0;
         }
