@@ -117,6 +117,8 @@ pub fn rigid_points(d: &Drawing, ins: &Insert) -> Vec<Vec2> {
     rigid_points_budgeted(d, ins, &mut members_left)
 }
 
+/// Sample finite block points within per-insert and caller-shared member limits.
+/// Members that contribute no points still consume traversal work; nested blocks are not entered.
 fn rigid_points_budgeted(d: &Drawing, ins: &Insert, members_left: &mut usize) -> Vec<Vec2> {
     let Some(block) = d.block(&ins.block) else { return Vec::new() };
     let m = ins.transform(block.base.xy());
@@ -187,6 +189,7 @@ impl Model {
         Self::build_budgeted(d, handles, &mut members_left)
     }
 
+    /// Build solver parameters for supported entities while sharing rigid-member sampling work with other models.
     pub(crate) fn build_budgeted(d: &Drawing, handles: &[Handle], members_left: &mut usize) -> Model {
         let mut m = Model::default();
         for &h in handles {
@@ -620,6 +623,7 @@ mod budget_tests {
     use cadcraft_geom::Vec3;
     use std::sync::Arc;
 
+    /// Writing an unchanged model back leaves partial rational weights and the original spline geometry intact.
     #[test]
     fn write_back_keeps_partial_rational_weights() {
         let mut drawing = Drawing::default();
@@ -635,6 +639,7 @@ mod budget_tests {
         }
     }
 
+    /// A second model receives no sampled block points after the first model spends the shared member budget.
     #[test]
     fn rigid_sampling_budget_is_shared_between_models() {
         let mut d = Drawing::default();

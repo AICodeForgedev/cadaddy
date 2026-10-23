@@ -89,6 +89,8 @@ struct CompDof {
     objects: Vec<Option<usize>>,
 }
 
+/// Compute component and object freedom only when rank and residual-evaluation work fit their budgets.
+/// Return unknown freedom before building the Jacobian when either work limit is exceeded.
 fn analyse(comp: &Comp) -> CompDof {
     let free = comp.free(None);
     let rows = comp.rows(None);
@@ -213,6 +215,7 @@ mod budget_tests {
     use cadcraft_doc::{Common, ConstraintKind, EntityKind, GeomRef, Space};
     use cadcraft_geom::{Spline, Vec2};
 
+    /// An expensive fit-spline endpoint residual produces unknown freedom before numerical differentiation.
     #[test]
     fn endpoint_analysis_rejects_cubic_fit_work_before_differentiation() {
         let mut d = Drawing::default();

@@ -57,6 +57,8 @@ pub fn table_covered(t: &Table) -> Vec<Vec<bool>> {
 }
 
 // No partial coverage may reach owner assignment: it would revisit unbounded merge rectangles.
+/// Mark cells covered by merges under grid-size and marking-work limits.
+/// Return partial coverage as an error so layout can use its outline fallback instead of assigning owners.
 fn coverage(t: &Table) -> Result<Vec<Vec<bool>>, Vec<Vec<bool>>> {
     let rows = t.row_heights.len().min(10_000);
     let cols = t.col_widths.len().min(10_000);
@@ -395,6 +397,7 @@ mod budget_tests {
     use super::*;
     use cadcraft_doc::TableCell;
 
+    /// Excessive overlapping merges draw only the table outline after coverage work is exhausted.
     #[test]
     fn overlapping_merges_use_outline_fallback() {
         let t = Table {
@@ -409,6 +412,7 @@ mod budget_tests {
         assert!(g.fills.is_empty() && g.texts.is_empty());
     }
 
+    /// A split table within the displayed-cell budget clips a merge to contiguous selected rows.
     #[test]
     fn part_clips_merges_using_displayed_column_count() {
         let t = Table {

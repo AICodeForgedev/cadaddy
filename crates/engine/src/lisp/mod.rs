@@ -131,6 +131,7 @@ pub(crate) struct Limits {
 }
 
 impl Default for Limits {
+    /// Provide finite cons-cell, string-byte, and synchronous-callback limits for a LISP run.
     fn default() -> Self {
         Limits { cells: value::MAX_CELLS, string_bytes: value::STRING_BUDGET, callback_steps: 500_000_000 }
     }

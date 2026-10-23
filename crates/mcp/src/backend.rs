@@ -10,9 +10,11 @@ use serde_json::{Value, json};
 /// Something that answers control-channel methods (`engine.execute`, `cmdline.input`,
 /// `drawing.inspect`, `ui.render`…). See `cadcraft_ui_egui::control` for the full list.
 pub trait Backend {
+    /// Invoke a control method and return its result or a descriptive error.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
     /// True when a real UI is attached (`ui.screenshot` works).
     fn has_ui(&self) -> bool;
+    /// Describe the backend connection for client-facing status.
     fn describe(&self) -> String;
 }
 
@@ -37,6 +39,7 @@ fn port_of(addr: &str) -> Option<u16> {
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 
 impl Remote {
+    /// Connect to a running control server; its session token is read lazily when the first request is sent.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
         let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false, token: None };
         r.reconnect()?;
@@ -182,6 +185,8 @@ fn is_read_only(method: &str) -> bool {
 }
 
 impl Backend for Remote {
+    /// Send a control request with the token when available, refreshing it before a safe retry.
+    /// A mutation that may have reached the server is never resent automatically.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -447,6 +452,7 @@ mod tests {
             server.join().unwrap();
         }
     }
+    /// Retrying a read after a lost reply reloads the replacement server session token.
     #[test]
     fn safe_retry_rereads_a_rotated_token_after_a_lost_reply() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -473,6 +479,7 @@ mod tests {
         assert_eq!(remote.call("ping", json!({})).unwrap(), json!("pong"));
         server.join().unwrap();
     }
+    /// A failed mutation write reports uncertain delivery and does not open a retry connection.
     #[test]
     fn failed_mutation_write_is_not_resent() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

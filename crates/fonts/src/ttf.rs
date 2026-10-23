@@ -624,6 +624,7 @@ struct GlyphCache {
     points: usize,
 }
 
+/// Return the process-wide outline cache whose retained glyph and point counts are bounded during insertion.
 fn glyph_cache() -> &'static RwLock<GlyphCache> {
     static C: OnceLock<RwLock<GlyphCache>> = OnceLock::new();
     C.get_or_init(|| RwLock::new(GlyphCache::default()))
@@ -643,6 +644,7 @@ struct Pen {
 const MAX_OUTLINE_POINTS: usize = 65_536;
 
 impl Pen {
+    /// Append one flattened outline point, discarding all contours if the per-glyph point limit is exceeded.
     fn push(&mut self, point: Vec2) {
         if self.truncated {
             return;
@@ -661,6 +663,7 @@ impl Pen {
     fn pt(x: f32, y: f32) -> Vec2 {
         Vec2::new(f64::from(x), f64::from(y))
     }
+    /// Close and retain a nondegenerate contour only if its closing point also fits the outline budget.
     fn flush(&mut self) {
         if self.cur.len() > 2 {
             if let (Some(f), Some(l)) = (self.cur.first().copied(), self.cur.last().copied())
@@ -678,13 +681,16 @@ impl Pen {
 }
 
 impl OutlinePen for Pen {
+    /// Finish the preceding contour and begin a new one through the budgeted point writer.
     fn move_to(&mut self, x: f32, y: f32) {
         self.flush();
         self.push(Self::pt(x, y));
     }
+    /// Append a line endpoint through the budgeted point writer.
     fn line_to(&mut self, x: f32, y: f32) {
         self.push(Self::pt(x, y));
     }
+    /// Flatten a quadratic segment into six samples, charging each retained point to the glyph budget.
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
         let a = self.cur.last().copied().unwrap_or_default();
         let c = Self::pt(cx0, cy0);
@@ -695,6 +701,7 @@ impl OutlinePen for Pen {
             self.push(a * (u * u) + c * (2.0 * u * t) + b * (t * t));
         }
     }
+    /// Flatten a cubic segment into eight samples, charging each retained point to the glyph budget.
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
         let a = self.cur.last().copied().unwrap_or_default();
         let c0 = Self::pt(cx0, cy0);
@@ -742,6 +749,8 @@ pub fn glyph_contours(face: &Face, gid: u16) -> Arc<[Vec<Vec2>]> {
     glyph_by_id(face, u32::from(gid)).contours.clone()
 }
 
+/// Load or build a glyph outline with bounded flattening, retaining its advance even when contours are discarded.
+/// Cache insertion clears existing entries when the glyph-count or aggregate point allowance would be exceeded.
 fn outline(face: &Face, k: GlyphKey) -> Arc<GlyphOutline> {
     let key = (face.bytes.as_ptr() as usize, face.bytes.len(), face.index, k);
     if let Some(g) = glyph_cache().read().unwrap_or_else(PoisonError::into_inner).glyphs.get(&key) {
@@ -812,6 +821,8 @@ pub(crate) fn text_glyph_at(g: &GlyphOutline, c: char, origin: Vec2, scale: f64,
     })
 }
 
+/// Charge source outline points before copying and transforming a glyph.
+/// Return `None` without spending fuel when it cannot fit; empty outlines remain valid at zero budget.
 pub(crate) fn place_glyph_budgeted(g: &GlyphOutline, x: f64, h: f64, wf: f64, shear: f64, points_left: &mut usize) -> Option<Vec<Vec<Vec2>>> {
     *points_left = points_left.checked_sub(g.points)?;
     Some(place_glyph(g, x, h, wf, shear))
@@ -926,6 +937,7 @@ mod family_tests {
 #[cfg(test)]
 mod geometry_budget_tests {
     use super::*;
+    /// Placement checks the source point cost before copying and accepts empty outlines without spending points.
     #[test]
     fn placement_checks_source_size_and_accepts_empty_glyphs() {
         let glyph = GlyphOutline { contours: vec![vec![Vec2::ZERO; 4]].into(), points: 4, cap: 1.0, ..Default::default() };
@@ -939,6 +951,7 @@ mod geometry_budget_tests {
         assert_eq!(budget, 0);
         assert!(place_glyph_budgeted(&glyph, 0.0, 1.0, 1.0, 0.0, &mut budget).is_none());
     }
+    /// Exceeding the per-glyph flattening limit discards all contour geometry before it reaches the cache.
     #[test]
     fn flattened_outlines_are_bounded_before_caching() {
         let mut pen = Pen::default();
@@ -951,6 +964,7 @@ mod geometry_budget_tests {
         assert!(pen.contours.is_empty() && pen.cur.is_empty());
         assert_eq!(pen.points, MAX_OUTLINE_POINTS);
     }
+    /// A mapped empty glyph retains text metadata referring to an existing empty outline slot.
     #[test]
     fn mapped_empty_glyph_keeps_text_and_a_valid_outline_slot() {
         // Metadata placement does not parse the face; an empty face suffices to check the index contract.
@@ -963,6 +977,7 @@ mod geometry_budget_tests {
         assert!(shaped.glyphs[shaped.text[0].outline].is_empty());
     }
 
+    /// An empty glyph with no text mapping leaves the shaped result empty.
     #[test]
     fn unmapped_empty_glyph_does_not_make_the_shape_nonempty() {
         let glyph = GlyphOutline { cap: 1.0, ..Default::default() };
@@ -973,6 +988,7 @@ mod geometry_budget_tests {
         assert!(shaped.text.is_empty());
     }
 
+    /// Missing text metadata does not discard a glyph that has drawable contours.
     #[test]
     fn an_unmapped_glyph_with_contours_still_draws() {
         let mut shaped = Shaped::default();

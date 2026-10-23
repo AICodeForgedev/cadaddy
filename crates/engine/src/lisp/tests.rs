@@ -221,6 +221,7 @@ fn runaway_routines_are_errors_not_crashes() {
     assert_eq!(r, Ok("3000000".into()));
 }
 
+/// An infinite comparator stops at its callback cap, and a later finite comparator still succeeds.
 #[test]
 fn synchronous_callback_loop_is_an_error_not_a_hang() {
     // A comparator with an infinite loop used to run with u64::MAX fuel and hang the thread; it
@@ -232,6 +233,7 @@ fn synchronous_callback_loop_is_an_error_not_a_hang() {
     assert_eq!(ok(&mut s, "(vl-sort '(3 1 2) '<)"), "(1 2 3)");
 }
 
+/// A zero-step callback limit prevents even the first callback side effect.
 #[test]
 fn a_zero_callback_budget_does_not_run_the_callback() {
     let mut s = session();
@@ -242,6 +244,7 @@ fn a_zero_callback_budget_does_not_run_the_callback() {
     assert_eq!(ok(&mut s, "callback-ran"), "nil");
 }
 
+/// A callback stops at a cap smaller than one scheduling slice without completing all its assignments.
 #[test]
 fn a_callback_must_fit_within_a_partial_slice() {
     let mut s = session();
@@ -252,6 +255,7 @@ fn a_callback_must_fit_within_a_partial_slice() {
     assert_eq!(ok(&mut s, "(and (> callback-count 0) (< callback-count 1000))"), "T");
 }
 
+/// Crossing a scheduling boundary grants only the additional configured step, rather than another slice.
 #[test]
 fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
     let counts: Vec<u64> = [399_999, 400_000]
@@ -270,6 +274,7 @@ fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
     assert!(counts[1] >= counts[0] && counts[1] - counts[0] <= 1, "{counts:?}");
 }
 
+/// System-variable conversion rejects a shared list whose owned JSON expansion would exceed its budget.
 #[test]
 fn setvar_rejects_an_oversized_shared_structure() {
     // A list repeatedly sharing its own contents expands exponentially; setvar's bounded JSON
