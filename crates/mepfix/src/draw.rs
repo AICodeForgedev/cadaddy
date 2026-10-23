@@ -1754,6 +1754,19 @@ pub fn frac_in(v: f64) -> String {
     }
 }
 
+/// A light fixture type's row in the made-up light fixture schedule: description, mounting,
+/// lamp/wattage (the answer key for what a fixture of that type carries).
+pub fn light_fixture_row(type_tag: &str) -> (&'static str, &'static str, &'static str) {
+    match type_tag {
+        "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
+        "B" => ("2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
+        "C" => ("RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
+        "D" => ("WALL SCONCE", "WALL MOUNT", "LED 9W"),
+        "E" => ("PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
+        _ => ("LIGHT FIXTURE", "SURFACE", "LED"),
+    }
+}
+
 /// The gear's schedules as printed: equipment (type, voltage, rating, size, mounting, entry
 /// plates, gutter), lugs (one row per termination point) and feeders.
 pub fn gear_tables(t: &Truth) -> Vec<(&'static str, Vec<Vec<String>>)> {
@@ -2106,14 +2119,7 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
                 continue;
             }
             seen_lt.push(d.type_tag.clone());
-            let (desc, mount, watt) = match d.type_tag.as_str() {
-                "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
-                "B" => ("2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
-                "C" => ("RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
-                "D" => ("WALL SCONCE", "WALL MOUNT", "LED 9W"),
-                "E" => ("PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
-                _ => ("LIGHT FIXTURE", "SURFACE", "LED"),
-            };
+            let (desc, mount, watt) = light_fixture_row(&d.type_tag);
             lt_rows.push(vec![d.type_tag.clone(), desc.into(), mount.into(), watt.into()]);
         }
         let h1 = table(pen, [x, y], "LIGHT FIXTURE SCHEDULE", &lt_rows);

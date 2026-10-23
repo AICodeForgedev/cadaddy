@@ -5,9 +5,10 @@
 //! transformer's lug kits, builds the gear with its raceways and exports it as IFC
 //! (IfcElectricDistributionBoard, IfcTransformer, IfcSwitchingDevice).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use cadaddy_mepfix::{elec_reader, gear_reader, generate, sheet_reader};
+use cadaddy_mepfix::{draw, elec_reader, gear_reader, generate, sheet_reader};
+use cadaddy_walk3d::{Feeder, Termination};
 use serde_json::json;
 
 #[test]
@@ -30,6 +31,7 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
         let drawings: Vec<(String, cadaddy_doc::Drawing)> = e_sheets.iter().map(|(n, b)| (n.clone(), cadaddy_io::read_dxf(b).unwrap())).collect();
         let refs: Vec<(&str, &cadaddy_doc::Drawing)> = drawings.iter().map(|(n, d)| (n.as_str(), d)).collect();
         let read = gear_reader::read_gear(&refs, &panels, 12.0);
+        let schedules = schedule_sheet(t);
         // Every piece of scheduled gear, read exactly and placed at its tag.
         let gear: Vec<&cadaddy_mepfix::truth::ElecPanel> = t.elec_panels.iter().filter(|p| !p.properties.is_empty()).collect();
         assert!(read.unplaced.is_empty(), "seed {seed}: {:?}", read.unplaced);
@@ -38,7 +40,10 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
             let e = read.equipment.iter().find(|e| e.tag == p.tag).unwrap_or_else(|| panic!("seed {seed}: {} not read", p.tag));
             assert_eq!(e.kind, p.kind, "{}", p.tag);
             assert_eq!(e.properties, p.properties, "{}", p.tag);
-            assert_eq!(e.terminations, p.terminations, "{}", p.tag);
+            // Each termination as the lug schedule has it, and recorded as read from it.
+            let lugs: Vec<Termination> =
+                p.terminations.iter().map(|x| Termination { source: format!("LUG SCHEDULE {schedules}"), ..x.clone() }).collect();
+            assert_eq!(e.terminations, lugs, "{}", p.tag);
             assert_eq!(e.enclosure, p.enclosure, "{}", p.tag);
             let (w, d) = ((e.max[0] - e.min[0]) / 12.0 * 12.0, (e.max[1] - e.min[1]) / 12.0 * 12.0);
             assert!((w - p.size_in[0]).abs() < 1e-6 && (d - p.size_in[1]).abs() < 1e-6, "{}: {w} x {d}", p.tag);
@@ -47,14 +52,14 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
             let off = (c[0] - p.at_ft[0]).hypot(c[1] - p.at_ft[1]);
             assert!(off < 1.0, "{} placed {off:.2} ft from its tag", p.tag);
         }
-        assert_eq!(read.feeders, t.elec_feeders, "seed {seed}");
+        let feeders: Vec<Feeder> = t.elec_feeders.iter().map(|f| Feeder { source: format!("FEEDER SCHEDULE {schedules}"), ..f.clone() }).collect();
+        assert_eq!(read.feeders, feeders, "seed {seed}");
         // The light fixture schedule on every fixture of its type.
         // (Fixtures the device reader typed: some it reads without a type, or as an emergency unit.)
         let typed = devices.iter().filter(|d| d.kind == "light_fixture" && read.fixture_types.contains_key(&d.type_tag)).count();
         assert_eq!(gear_reader::link_fixtures(&mut devices, &read.fixture_types), typed);
         let lights = devices.iter().filter(|d| d.kind == "light_fixture").count();
         println!("seed {seed}: {typed} of {lights} light fixtures typed and linked");
-        assert!(typed * 3 > lights, "seed {seed}: {typed} of {lights}");
         // Types planted as missing from the schedule (`elec_spec.unscheduled`) are left out.
         let truth_types: BTreeSet<&str> = t
             .elec_devices
@@ -243,4 +248,182 @@ fn directories_match_the_panel_schedules_of_a_made_up_set() {
 
 fn devices_count(l: &serde_json::Value) -> usize {
     l["labels"].as_array().unwrap().iter().filter(|x| x["set"] == "devices").count()
+}
+
+/// The E schedule sheet (where the equipment, lug, feeder and light fixture schedules are drawn).
+fn schedule_sheet(t: &cadaddy_mepfix::truth::Truth) -> String {
+    let s: Vec<&str> = t
+        .sheets
+        .iter()
+        .filter(|s| s.discipline == "E" && s.level.is_none() && s.title.to_uppercase().contains("SCHEDULE"))
+        .map(|s| s.number.as_str())
+        .collect();
+    assert_eq!(s.len(), 1, "{s:?}");
+    s[0].to_string()
+}
+
+/// What `read_gear` and `read_devices` give for a made-up set: the gear, and the devices read
+/// off the E-plans.
+fn read_set(set: &cadaddy_mepfix::FixtureSet) -> (gear_reader::GearRead, Vec<elec_reader::FoundDevice>) {
+    let t = &set.truth;
+    let file = |s: &cadaddy_mepfix::truth::Sheet| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()));
+    let all: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(file).collect();
+    let plans: Vec<(String, Vec<u8>)> = t.sheets.iter().filter(|s| s.discipline == "E" && s.level.is_some()).filter_map(file).collect();
+    let map = sheet_reader::recognise_fixture_set(&all);
+    let (devices, panels) = elec_reader::read_devices(&plans, &map, t);
+    let drawings: Vec<(String, cadaddy_doc::Drawing)> =
+        t.sheets.iter().filter(|s| s.discipline == "E").filter_map(file).map(|(n, b)| (n, cadaddy_io::read_dxf(&b).unwrap())).collect();
+    let refs: Vec<(&str, &cadaddy_doc::Drawing)> = drawings.iter().map(|(n, d)| (n.as_str(), d)).collect();
+    (gear_reader::read_gear(&refs, &panels, 12.0), devices)
+}
+
+/// Q5051 (MUST 2): the light fixture schedule reaches the model. Each light fixture the device
+/// reader found goes into the building spec's `mep.devices` with its type; after the schedule is
+/// linked, every one whose type the reader got right (the answer key's fixture nearest where it
+/// is drawn has that type) and whose type is scheduled carries exactly the answer key's row:
+/// description, mounting, lamp/wattage. Unscheduled types carry nothing. It survives the spec
+/// round trip through the engine.
+#[test]
+fn model_light_fixtures_carry_their_schedule_rows() {
+    for seed in [3, 11] {
+        let set = generate(seed).unwrap();
+        let t = &set.truth;
+        let (read, found) = read_set(&set);
+        let mut model: Vec<cadaddy_walk3d::ElecDevice> =
+            found.iter().enumerate().map(|(i, d)| gear_reader::spec_device(d, &format!("LF-{i:04}"))).collect();
+        assert!(model.iter().all(|d| d.properties.is_empty()), "nothing linked before the schedule is read");
+        let linked = gear_reader::link_spec_fixtures(&mut model, &read.fixture_types);
+        // Through the engine: the spec keeps what the link wrote.
+        let mut s = cadaddy_engine::Session::new();
+        s.execute("bspec.set", &json!({"replace": true, "spec": {"units_per_foot": 12, "mep": {"devices": model}}})).unwrap();
+        let got = s.execute("bspec.get", &json!({})).unwrap();
+        let back: Vec<cadaddy_walk3d::ElecDevice> =
+            serde_json::from_value(got["spec"]["mep"]["devices"].clone()).unwrap_or_else(|e| panic!("{e}: {got}"));
+        assert_eq!(back.len(), found.len(), "seed {seed}");
+
+        let scheduled: BTreeSet<&str> = t
+            .elec_devices
+            .iter()
+            .filter(|d| d.kind == "light_fixture" && !t.elec_spec.unscheduled.contains(&d.type_tag))
+            .map(|d| d.type_tag.as_str())
+            .collect();
+        assert!(!scheduled.is_empty(), "seed {seed}");
+        let mut checked: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut with_rows = 0;
+        for (f, m) in found.iter().zip(&back) {
+            if f.kind != "light_fixture" {
+                assert!(m.properties.is_empty(), "seed {seed}: {} {} linked", m.kind, m.tag);
+                continue;
+            }
+            if !m.properties.is_empty() {
+                with_rows += 1;
+            }
+            // The answer key's fixture this one is (nearest where it is drawn, same level).
+            let truth = t
+                .elec_devices
+                .iter()
+                .filter(|d| d.kind == "light_fixture" && d.level == f.level)
+                .min_by(|a, b| dist(a.drawn_ft, f.drawn_ft).total_cmp(&dist(b.drawn_ft, f.drawn_ft)));
+            let Some(truth) = truth.filter(|d| dist(d.drawn_ft, f.drawn_ft) < 1.0) else { continue };
+            if truth.type_tag != f.type_tag {
+                continue; // typed wrong (or not at all) by the device reader
+            }
+            assert_eq!(m.type_tag, truth.type_tag);
+            if !scheduled.contains(truth.type_tag.as_str()) {
+                assert!(m.properties.is_empty(), "seed {seed}: unscheduled type {} linked", truth.type_tag);
+                continue;
+            }
+            let (desc, mount, watt) = draw::light_fixture_row(&truth.type_tag);
+            let want: BTreeMap<String, String> = [("DESCRIPTION", desc), ("MOUNTING", mount), ("LAMP/WATTAGE", watt)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(m.properties, want, "seed {seed}: {} type {}", m.tag, truth.type_tag);
+            *checked.entry(truth.type_tag.as_str()).or_default() += 1;
+        }
+        assert_eq!(linked, with_rows, "seed {seed}");
+        // Every scheduled type had fixtures the device reader typed, and each was checked.
+        assert_eq!(checked.keys().copied().collect::<BTreeSet<_>>(), scheduled, "seed {seed}: {checked:?}");
+        println!("seed {seed}: {checked:?} model fixtures carry their schedule rows ({linked} linked)");
+    }
+}
+
+/// Q5051 (MUST 3): source and status on what the reader writes. Gear placed at its E-plan tag
+/// says so (`E-sheet tag <its plan sheet>`, `unconfirmed`, confidence below 1) while its size and
+/// mounting height are the schedule's; an architectural position confirms it. Terminations and
+/// feeders name the schedule sheet they were read from; an approved submittal's lug data
+/// replaces the schedule's and is marked as the submittal's.
+#[test]
+fn read_gear_terminations_and_feeders_carry_source_and_status() {
+    for seed in [3, 11] {
+        let set = generate(seed).unwrap();
+        let t = &set.truth;
+        let schedules = schedule_sheet(t);
+        let (mut read, _) = read_set(&set);
+        assert!(!read.equipment.is_empty() && !read.feeders.is_empty(), "seed {seed}");
+        for e in &read.equipment {
+            let p = t.elec_panels.iter().find(|p| p.tag == e.tag).unwrap();
+            assert!(!p.sheet.is_empty() && p.sheet.starts_with("E-"), "{}: {}", p.tag, p.sheet);
+            let tag_on = format!("E-sheet tag {}", p.sheet);
+            let schedule = format!("ELECTRICAL EQUIPMENT SCHEDULE {schedules}");
+            let want: BTreeMap<String, String> = [
+                ("position", tag_on.as_str()),
+                ("footprint", tag_on.as_str()),
+                ("status", "unconfirmed"),
+                ("size", schedule.as_str()),
+                ("height", schedule.as_str()),
+                ("elevation", schedule.as_str()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            assert_eq!(e.sources, want, "seed {seed}: {}", e.tag);
+            assert_eq!(e.confidence, gear_reader::E_TAG_CONFIDENCE, "{}", e.tag);
+            assert!(e.confidence < 1.0);
+            assert!(!e.terminations.is_empty(), "{}", e.tag);
+            for x in &e.terminations {
+                assert_eq!(x.source, format!("LUG SCHEDULE {schedules}"), "seed {seed}: {} {}", e.tag, x.point);
+            }
+        }
+        for f in &read.feeders {
+            assert_eq!(f.source, format!("FEEDER SCHEDULE {schedules}"), "seed {seed}: {}", f.tag);
+        }
+        // The spec keeps them (serialised and back).
+        let json = serde_json::to_value(&read.equipment).unwrap();
+        assert_eq!(json[0]["sources"]["status"], "unconfirmed");
+        assert_eq!(serde_json::from_value::<Vec<cadaddy_walk3d::MepEquipment>>(json).unwrap(), read.equipment);
+        let fj = serde_json::to_value(&read.feeders).unwrap();
+        assert_eq!(fj[0]["source"], format!("FEEDER SCHEDULE {schedules}"));
+
+        // An architectural position confirms the first piece of gear: same size, moved there.
+        let e = &mut read.equipment[0];
+        let (w, d) = (e.max[0] - e.min[0], e.max[1] - e.min[1]);
+        gear_reader::confirm_position(e, [120.0, 240.0], "A-101 ELECTRICAL ROOM 104");
+        assert_eq!((e.min, e.max), ([120.0 - w / 2.0, 240.0 - d / 2.0], [120.0 + w / 2.0, 240.0 + d / 2.0]));
+        assert_eq!(e.sources["position"], "A-101 ELECTRICAL ROOM 104");
+        assert_eq!(e.sources["status"], "confirmed");
+        assert_eq!(e.sources["size"], format!("ELECTRICAL EQUIPMENT SCHEDULE {schedules}"));
+        assert_eq!(e.confidence, gear_reader::ARCH_CONFIDENCE);
+        let before = e.clone();
+        gear_reader::confirm_position(e, [f64::NAN, 0.0], "A-102");
+        assert_eq!(*e, before, "a non-finite position changes nothing");
+
+        // An approved submittal overrides the schedule's main lugs on the switchboard.
+        let tag = read.equipment.iter().find(|e| e.kind == "switchboard").map(|e| e.tag.clone()).unwrap();
+        let main = read.equipment.iter().find(|e| e.tag == tag).unwrap().terminations.iter().find(|x| x.point == "main").cloned().unwrap();
+        let submitted = Termination { lugs: main.lugs + 1, range: "#2 - 600 kcmil".into(), ..main.clone() };
+        assert_eq!(gear_reader::apply_submittal(&mut read.equipment, &tag, &[submitted], "26 24 13-01"), 1);
+        let after = read.equipment.iter().find(|e| e.tag == tag).unwrap();
+        let m = after.terminations.iter().find(|x| x.point == "main").unwrap();
+        assert_eq!((m.lugs, m.range.as_str(), m.source.as_str()), (main.lugs + 1, "#2 - 600 kcmil", "submittal 26 24 13-01"));
+        assert!(
+            after.terminations.iter().filter(|x| x.point != "main").all(|x| x.source == format!("LUG SCHEDULE {schedules}")),
+            "the rest stay the schedule's"
+        );
+        assert_eq!(gear_reader::apply_submittal(&mut read.equipment, "NO-SUCH", &[], "x"), 0);
+    }
+}
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
 }

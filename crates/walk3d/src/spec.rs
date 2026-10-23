@@ -979,6 +979,13 @@ pub struct ElecDevice {
     /// The sheet its circuit was read from (`E-101`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// A light fixture's type (`A`, `B`) as the plan tags it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub type_tag: String,
+    /// Its type's row in the light fixture schedule (column → value as printed: description,
+    /// mounting, lamp and wattage).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
 }
 
 /// One piece of gear's arc flash study result.
@@ -1124,6 +1131,10 @@ pub struct Termination {
     /// enter or leave the enclosure through the wall opposite it.
     pub bending_in: f64,
     pub opposite: bool,
+    /// Where these provisions came from: `LUG SCHEDULE E-601`, `one-line E-501`,
+    /// `submittal 26 24 16-01` (an approved submittal overrides the schedule). Empty: by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 impl Default for Termination {
@@ -1141,6 +1152,7 @@ impl Default for Termination {
             stack_in: 0.75,
             bending_in: 0.0,
             opposite: true,
+            source: String::new(),
         }
     }
 }
@@ -1192,6 +1204,9 @@ pub struct Feeder {
     pub entry: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub from_entry: String,
+    /// Where it was read from: `FEEDER SCHEDULE E-601`, `one-line E-501`. Empty: by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 impl Default for Feeder {
@@ -1215,6 +1230,7 @@ impl Default for Feeder {
             conduit_in: 0.0,
             entry: "top".into(),
             from_entry: String::new(),
+            source: String::new(),
         }
     }
 }
@@ -1246,7 +1262,9 @@ pub struct MepEquipment {
     pub title: String,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, String>,
-    /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…).
+    /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…);
+    /// gear read off the E-sheets also has `position` (`E-sheet tag E-101` until an
+    /// architectural position confirms it) and `status` (`unconfirmed` / `confirmed`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
     pub confidence: f64,
