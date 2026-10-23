@@ -310,8 +310,13 @@ mod tests {
         assert_eq!(gids.len(), 2, "{gids:?}");
         assert!(gids.first() != Some(&ka) && gids.last() == Some(&ka), "vowel sign before ka: {gids:?}");
         assert!(gs.iter().all(|g| g.cluster == 2), "{:?}", gs.iter().map(|g| g.cluster).collect::<Vec<_>>());
-        // Advances come out at 1000 units per em, whatever the font's own em.
-        let hmtx = face.font().and_then(|f| f.glyph_metrics(Size::new(1000.0), LocationRef::default()).advance_width(skrifa::GlyphId::new(ka)));
+        // Advances come out at 1000 units per em, whatever the font's own em. A font that is
+        // already at 1000 per em could not tell a missing scale apart, so it checks nothing here.
+        let Some(font) = face.font() else { return };
+        if font.metrics(Size::unscaled(), LocationRef::default()).units_per_em == 1000 {
+            return;
+        }
+        let hmtx = font.glyph_metrics(Size::new(1000.0), LocationRef::default()).advance_width(skrifa::GlyphId::new(ka));
         let adv = gs.last().map(|g| g.advance);
         assert!(matches!((adv, hmtx), (Some(a), Some(h)) if (a - f64::from(h)).abs() < 1e-3), "{adv:?} vs {hmtx:?}");
     }
