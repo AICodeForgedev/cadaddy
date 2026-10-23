@@ -164,8 +164,65 @@ fn the_legend_wording_varies_and_parses() {
     );
     assert_eq!(b.layers.iter().filter(|l| l.material == "gyp_mr").count(), 2);
     assert_eq!((b.height.as_deref(), b.fire_rating.as_ref(), b.thickness_in()), (Some("deck"), None, 7.25));
+    // Sawn lumber: the nominal size gives the depth, the spacing stays the spacing.
+    for (line, depth) in [("2X4 WOOD STUDS @ 16\" O.C.", 3.5), ("2X6 WOOD STUDS @ 16\" O.C.", 5.5), ("2x8 WOOD STUDS @ 16\" O.C.", 7.25)] {
+        let w = wall_reader::parse_type("W1", &lines(&["WOOD STUD PARTITION", "(1) LAYER 5/8\" GYP. BD. EACH SIDE", line]));
+        let studs: Vec<(f64, Option<f64>, Option<u32>)> =
+            w.layers.iter().filter(|l| l.material == "stud").map(|l| (l.thickness_in, l.spacing_in, l.gauge)).collect();
+        assert_eq!(studs, vec![(depth, Some(16.0), None)], "{line}");
+        assert!(w.wood_studs, "{line}");
+        assert!(w.notes.is_empty(), "{line}: {:?}", w.notes);
+        assert_eq!(w.thickness_in(), depth + 1.25, "{line}");
+    }
+    // Spacing written before `O.C.` without `@` is never the depth either.
+    let oc = wall_reader::parse_type("S1", &lines(&["PARTITION", "6\" 20 GA. STUDS 24\" O.C."]));
+    assert_eq!(oc.layers.first().map(|l| (l.thickness_in, l.spacing_in, l.gauge)), Some((6.0, Some(24.0), Some(20))));
+    assert!(!oc.wood_studs);
+    // Inches as `IN.`, `INCH` and `″` read like `"`.
+    for (line, th) in [
+        ("SIDE 1: 1 LAYER 5/8 IN. TYPE X GYP. BD.", 0.625),
+        ("SIDE 1: 1 LAYER 5/8 INCH TYPE X GYP. BD.", 0.625),
+        ("SIDE 1: 1 LAYER 5/8\u{2033} TYPE X GYP. BD.", 0.625),
+        ("SIDE 1: 1 LAYER 1/2 INCHES TYPE X GYP. BD.", 0.5),
+        ("SIDE 1: 1 LAYER 5/8IN. TYPE X GYP. BD.", 0.625),
+    ] {
+        let x = wall_reader::parse_type("X1", &lines(&["PARTITION", line, "3 5/8 IN. 20 GA. STUDS @ 16 INCH O.C."]));
+        let m: Vec<(&str, f64, &str, Option<f64>)> =
+            x.layers.iter().map(|l| (l.material.as_str(), l.thickness_in, l.side.as_str(), l.spacing_in)).collect();
+        assert_eq!(m, vec![("gyp_x", th, "1", None), ("stud", 3.625, "core", Some(16.0))], "{line}");
+        assert!(x.notes.is_empty(), "{line}: {:?}", x.notes);
+    }
+    let batt = wall_reader::parse_type("X2", &lines(&["PARTITION", "3-5/8 INCH STUDS @ 16\" O.C.", "5 1/2\u{2033} BATT INSULATION"]));
+    assert_eq!(batt.layers.iter().map(|l| (l.material.as_str(), l.thickness_in)).collect::<Vec<_>>(), vec![("stud", 3.625), ("insulation", 5.5)]);
+    // A stud or batt line with no size: the default is said in a note.
+    let bare = wall_reader::parse_type("X3", &lines(&["PARTITION", "METAL STUDS @ 16\" O.C.", "ACOUSTIC BATT INSULATION"]));
+    assert_eq!(
+        bare.layers.iter().map(|l| (l.material.as_str(), l.thickness_in, l.spacing_in)).collect::<Vec<_>>(),
+        vec![("stud", 3.625, Some(16.0)), ("insulation", 3.5, None)]
+    );
+    assert_eq!(bare.notes, vec!["stud size not given: 3-5/8\" assumed".to_string(), "insulation thickness not given: 3-1/2\" assumed".to_string()]);
+    // Words that only start like an inch mark are not one.
+    assert!(
+        wall_reader::parse_type("X4", &lines(&["PARTITION", "3 5/8\" STUDS", "SEE 2 INCHWORM NOTE"])).notes
+            == vec!["SEE 2 INCHWORM NOTE".to_string()]
+    );
     // Hostile text never panics.
-    for junk in ["\"\"\"", "1/0\"", "99999999999999999999\" STUD", "-/-\" CMU", "(999) LAYERS 5/8\" GYP", "SIDE 1: ,,,,", "STC 1e309"] {
+    for junk in [
+        "\"\"\"",
+        "1/0\"",
+        "99999999999999999999\" STUD",
+        "-/-\" CMU",
+        "(999) LAYERS 5/8\" GYP",
+        "SIDE 1: ,,,,",
+        "STC 1e309",
+        "99X99 STUDS",
+        "2X STUDS",
+        "X6 STUDS @",
+        "\u{2033}\u{2033}",
+        "IN. INCH",
+        "5/8 IN",
+        "@@@ 16\" O.C. O.C.",
+    ] {
         let _ = wall_reader::parse_type("A", &lines(&["X", junk]));
     }
 }
@@ -214,4 +271,86 @@ fn overall_scores() {
             s.height_mae_ft
         );
     }
+}
+
+#[test]
+fn what_it_writes_says_where_it_came_from() {
+    // Seed 3: every mark names its plan sheet, tagged marks are `drawing`, untagged `guess` with
+    // a reason; every type names the legend sheet and its tag.
+    let set = cadaddy_mepfix::generate(3).unwrap();
+    let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+    let map = cadaddy_mepfix::sheet_reader::recognise_fixture_set(&dxf);
+    let legend: Vec<&str> = map
+        .sheets
+        .iter()
+        .filter(|s| s.title.to_ascii_uppercase().contains("WALL TYPE") || s.title.to_ascii_uppercase().contains("PARTITION"))
+        .map(|s| s.number.as_str())
+        .collect();
+    let plans: Vec<(&str, &str)> = map
+        .sheets
+        .iter()
+        .filter(|s| s.discipline == "A" && s.title.to_ascii_uppercase().contains("FLOOR PLAN"))
+        .filter_map(|s| Some((s.level.as_deref()?, s.number.as_str())))
+        .collect();
+    assert_eq!(legend.len(), 1, "{legend:?}");
+    let legend = legend[0];
+    let (_, r) = read_fixture_walls(3).unwrap();
+    assert!(r.types.iter().all(|t| t.sheet == legend), "{:?}", r.types.iter().map(|t| &t.sheet).collect::<Vec<_>>());
+    let patch = wall_reader::spec_patch(&r, &|_, p| Some([p[0] * 12.0, p[1] * 12.0]));
+    for wt in patch["wall_types"].as_array().unwrap() {
+        let tag = wt["assembly"]["tag"].as_str().unwrap();
+        assert_eq!(wt["assembly"]["source"].as_str(), Some(format!("{legend} wall type legend, tag {tag}").as_str()), "{wt}");
+    }
+    let marks = patch["walls"].as_array().unwrap();
+    assert_eq!(marks.len(), r.walls.iter().filter(|w| w.wall_type.is_some()).count());
+    let typed = r.walls.iter().filter(|w| w.wall_type.is_some());
+    let (mut drawing, mut guessed) = (0, 0);
+    for (m, w) in marks.iter().zip(typed) {
+        let sheet = plans.iter().find(|(lv, _)| *lv == w.level).map(|(_, n)| *n).unwrap_or_else(|| panic!("no plan for level {}", w.level));
+        assert_eq!(w.sheet, sheet);
+        let source = m["source"].as_str().unwrap();
+        assert!(source.starts_with(sheet), "{m}");
+        assert_eq!(m["height_source"].as_str(), Some(w.height_source.as_str()), "{m}");
+        assert!(!w.height_source.is_empty() && w.height_source != "unknown", "{m}");
+        if w.tagged {
+            drawing += 1;
+            assert_eq!((m["status"].as_str(), source), (Some("drawing"), sheet), "{m}");
+            assert!(m.get("guess").is_none(), "{m}");
+        } else {
+            guessed += 1;
+            assert_eq!(m["status"].as_str(), Some("guess"), "{m}");
+            assert!(m["guess"].as_str().is_some_and(|g| g.starts_with("no tag")), "{m}");
+            assert!(source == format!("{sheet} (no tag)") || source.starts_with(&format!("{sheet} (tag ")), "{m}");
+        }
+    }
+    assert!(drawing > 0 && guessed > 0, "{drawing} {guessed}");
+    // Into a spec: the fields read back, and describe() counts by status.
+    let mut spec = serde_json::json!({"version": 1, "levels": [{"name": "1", "elevation_ft": 0.0, "height_ft": 14.0, "ceiling_ft": 9.0}]});
+    let one =
+        serde_json::json!({"wall_types": patch["wall_types"], "walls": marks.iter().filter(|m| m["level"] == "1").cloned().collect::<Vec<_>>()});
+    cadaddy_walk3d::merge(&mut spec, &one);
+    let sp = cadaddy_walk3d::BuildingSpec::from_json(&spec.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sp.wall_types.iter().all(|t| t.assembly.as_ref().is_some_and(|a| a.source.starts_with(legend))));
+    let n_guess = sp.walls.iter().filter(|w| w.status == Some(cadaddy_walk3d::MarkStatus::Guess)).count();
+    let n_drawing = sp.walls.iter().filter(|w| w.status == Some(cadaddy_walk3d::MarkStatus::Drawing)).count();
+    assert_eq!(n_guess + n_drawing, sp.walls.len());
+    assert!(sp.walls.iter().all(|w| !w.source.is_empty() && !w.height_source.is_empty()));
+    let d = sp.describe();
+    let walls = d.iter().find(|x| x.key == "walls").map(|x| x.text.clone()).unwrap_or_default();
+    assert_eq!(walls, format!("{} walls: {n_drawing} typed from their tags on the plans (drawing), {n_guess} guessed (no tag)", sp.walls.len()));
+    let first = sp.wall_types.first().map(|t| t.name.clone()).unwrap_or_default();
+    assert!(d.iter().any(|x| x.key == format!("wall_types/{first}") && x.text.contains(&format!("from {legend} wall type legend"))));
+    // An older spec (no source/status) reads unchanged: a mark with a guess counts as a guess.
+    let old = cadaddy_walk3d::BuildingSpec::from_json(
+        &serde_json::json!({"version": 1, "levels": [{"name": "1", "elevation_ft": 0.0, "height_ft": 14.0, "ceiling_ft": 9.0}],
+            "wall_types": [{"name": "A", "thickness_in": 4.875}],
+            "walls": [{"level": "1", "a": [0, 0], "b": [120, 0], "wall_type": "A"}, {"level": "1", "a": [0, 0], "b": [0, 120], "wall_type": "A", "guess": "no tag"}]})
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        old.walls.iter().map(|w| (w.status, w.status(), w.source.as_str())).collect::<Vec<_>>(),
+        vec![(None, cadaddy_walk3d::MarkStatus::Drawing, ""), (None, cadaddy_walk3d::MarkStatus::Guess, "")]
+    );
+    assert!(!old.to_json().contains("status") && !old.to_json().contains("source"));
 }

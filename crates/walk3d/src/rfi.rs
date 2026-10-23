@@ -586,7 +586,17 @@ mod tests {
     }
 
     fn mark(t: &str, a: [f64; 2], b: [f64; 2], guess: Option<&str>) -> WallMark {
-        WallMark { level: "1".into(), a, b, wall_type: t.into(), height_ft: None, guess: guess.map(String::from) }
+        WallMark {
+            level: "1".into(),
+            a,
+            b,
+            wall_type: t.into(),
+            height_ft: None,
+            guess: guess.map(String::from),
+            source: String::new(),
+            status: None,
+            height_source: String::new(),
+        }
     }
 
     #[test]
