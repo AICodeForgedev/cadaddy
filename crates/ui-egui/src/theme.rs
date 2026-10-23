@@ -307,7 +307,8 @@ pub fn mono() -> FontId {
 /// language: file, layout and layer names can be Japanese or Chinese whatever the interface
 /// shows (#513). In a Chinese interface (`language` "zh…") the Chinese font comes first, else a
 /// Japanese one, so names take their own glyph forms; in an Arabic interface an installed
-/// Arabic font follows. A font embedded from craft-fonts comes
+/// Arabic font follows. The embedded Georgian face loads in every language, so the language
+/// picker can show ქართული. A font embedded from craft-fonts comes
 /// last, for systems without any (and the web build, which has no system fonts). A Korean
 /// interface adds a Hangul font only when the CJK font found doesn't cover Hangul
 /// ([`korean_font`]).
@@ -391,7 +392,8 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
 /// shows (#513), with the interface's own face leading. A sans-serif face reads best, and a
 /// Chinese interface takes the face with its own glyphs ahead of a Japanese one — a Japanese face
 /// shares most ideographs but lacks the simplified-only ones (图 园 测), which would be tofu.
-/// العربية adds its Arabic face after those, egui's bundled faces carrying no Arabic glyphs.
+/// The Georgian face follows in every language (egui's bundled faces carry no Georgian glyphs, and
+/// the picker names the language ქართული); العربية adds its Arabic face after those.
 fn embedded_ui_faces<'a>(faces: &[&'a cadcraft_fonts::CraftFont], language: &str) -> Vec<&'a cadcraft_fonts::CraftFont> {
     let cjk = |f: &&cadcraft_fonts::CraftFont| f.style == "Regular" && f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant"));
     let mut out: Vec<_> = faces.iter().copied().filter(cjk).collect();
@@ -399,6 +401,7 @@ fn embedded_ui_faces<'a>(faces: &[&'a cadcraft_fonts::CraftFont], language: &str
     if language.starts_with("zh") {
         out.sort_by_key(|f| !f.scripts.contains(&"Hans"));
     }
+    out.extend(faces.iter().copied().filter(|f| f.style == "Regular" && f.scripts.contains(&"Geor")));
     if language == "ar" {
         out.extend(faces.iter().copied().filter(|f| f.style == "Regular" && f.scripts.contains(&"Arab")));
     }
