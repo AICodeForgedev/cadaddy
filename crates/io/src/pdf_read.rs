@@ -2785,6 +2785,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
 
+    // save original mask orders for the stitch function before reducing (the reduced masks have
+    // different orders which would break the "between" check in stitching)
+    let original_white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
+
     // Reduce masks: merge overlapping/adjacent wipeouts into larger ones, and drop masks that
     // do not overlap any visible non-white content (they mask nothing the viewer can see).
     let masks_before = masks.len();
@@ -2794,44 +2798,12 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         stats.insert("masks merged/dropped".into(), masks_merged);
     }
 
-    // page clip images and pre-convert blank-paper rasters to masks (they get merged by
-    // reduce_masks above, reducing the wipeout+raster total significantly)
-    let mut real_images: Vec<ImageOut> = Vec::new();
-    for im in out.images {
+    // page clip images: discard raster pieces entirely outside the page box
+    let clipped_images: Vec<ImageOut> = out.images.into_iter().filter(|im| {
         let b = image_box(&im.ctm);
-        if b[2] < page_box[0] || b[0] > page_box[2] || b[3] < page_box[1] || b[1] > page_box[3] {
-            continue; // outside page
-        }
-        if im.clip.is_none() && blank_paper(&im.raster.rgba) {
-            // blank paper tile → white mask (will be merged with other masks)
-            let pts = vec![
-                (b[0], b[1]),
-                (b[2], b[1]),
-                (b[2], b[3]),
-                (b[0], b[3]),
-            ];
-            masks.push(Fill {
-                loops: vec![pts],
-                pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 },
-                order: im.order,
-                layer: im.layer.clone(),
-            });
-            *stats.entry("blank rasters to masks".into()).or_default() += 1;
-            continue;
-        }
-        real_images.push(im);
-    }
-    // re-reduce masks with the newly added blank-paper masks
-    if *stats.get("blank rasters to masks").unwrap_or(&0) > 0 {
-        let masks_before2 = masks.len();
-        masks = reduce_masks(masks, &strokes, &fills, &texts, sheet);
-        let masks_merged2 = masks_before2.saturating_sub(masks.len());
-        if masks_merged2 > 0 {
-            *stats.entry("masks merged/dropped".into()).or_default() += masks_merged2;
-        }
-    }
-    let white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
-    let (images, stitched) = stitch(real_images, &white);
+        b[2] >= page_box[0] && b[0] <= page_box[2] && b[3] >= page_box[1] && b[1] <= page_box[3]
+    }).collect();
+    let (images, stitched) = stitch(clipped_images, &original_white);
     if stitched > 0 {
         stats.insert("image pieces stitched".into(), stitched);
     }
@@ -3423,11 +3395,7 @@ fn stitch(images: Vec<ImageOut>, white_fills: &HashSet<usize>) -> (Vec<ImageOut>
         // orthogonal frames only (no skew)
         ((ux * vx + uy * vy).abs() < 1e-6).then_some(((ux, uy), (vx, vy), lu, lv))
     };
-    // a "tile" small enough to be a piece of a tiled image (PDF renderers tile large rasters
-    // into strips or cells); relaxed from the original 4px/4096px to catch more tiling patterns
-    let small = |r: &cadaddy_render::images::Raster| {
-        r.width.min(r.height) <= 64 || u64::from(r.width) * u64::from(r.height) <= 262_144
-    };
+    let small = |r: &cadaddy_render::images::Raster| r.width.min(r.height) <= 4 || u64::from(r.width) * u64::from(r.height) <= 4096;
     let mut out: Vec<ImageOut> = Vec::with_capacity(images.len());
     let mut run: Vec<ImageOut> = Vec::new();
     // the run's sheet-point box
