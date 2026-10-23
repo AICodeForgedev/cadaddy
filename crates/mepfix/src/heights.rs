@@ -103,7 +103,7 @@ pub fn parse_feet_inches(s: &str) -> Option<f64> {
     let s = s.trim().trim_end_matches("AFF").trim_end_matches("A.F.F.").trim();
     let value = parse_feet_inches_raw(s)?;
     // Reject non-finite (inf, nan) and out-of-range values.
-    if !value.is_finite() || value < 0.0 || value > MAX_NOTE_FT {
+    if !value.is_finite() || !(0.0..=MAX_NOTE_FT).contains(&value) {
         return None;
     }
     Some(value)
