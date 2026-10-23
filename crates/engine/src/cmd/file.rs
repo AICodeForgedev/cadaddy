@@ -580,11 +580,25 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
         return Ok(switch_to_open(s, i));
     }
+    let is_pdf = name.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
     let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
     mark_walkthrough(s, i, walkthrough);
     super::blocks::xref::after_open(s, i);
     crate::activity::after_open(s, i);
     s.rhai_drawing_opened(i);
+    // Auto-run import accuracy check when opening a PDF file.
+    if is_pdf {
+        if let Ok(d) = s.doc() {
+            let check = super::import_check::check_drawing(d);
+            if let Ok(d) = s.doc_mut() {
+                super::import_check::store_result(d, &check);
+            }
+            if !check.pass {
+                let fails: Vec<&str> = check.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
+                s.echo(format!("Import check FAIL (score {}/100): {}", check.score, fails.join(", ")));
+            }
+        }
+    }
     Ok(opened(s, i, true))
 }
 

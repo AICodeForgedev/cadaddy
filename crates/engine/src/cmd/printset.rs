@@ -118,6 +118,20 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
 // ─── printset.run ────────────────────────────────────────────────────────────
 
 fn run_stages(s: &mut Session, p: &Value) -> Result<Value> {
+    // Gate: refuse to run stages if the current drawing's import check failed, unless force.
+    let force = bool_or(p, "force", false);
+    if !force {
+        if let Ok(d) = s.doc() {
+            if !super::import_check::passes(d) {
+                let fails = super::import_check::failed_checks(d);
+                let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+                return Err(EngineError::Other(format!(
+                    "printset.run: import check failed ({}); fix the import or pass `force: true` to override",
+                    names.join(", ")
+                )));
+            }
+        }
+    }
     let resume = bool_or(p, "resume", false);
 
     // Parse optional stage filter.
