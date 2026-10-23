@@ -207,15 +207,15 @@ impl Parser {
             match reader.read_event().map_err(parse_err)? {
                 Event::Start(e) => {
                     let name = e.name();
-                    self.on_start(name.as_ref(), &e)?;
+                    self.on_start(name.into_inner().as_bytes(), &e)?;
                 }
                 Event::Empty(e) => {
                     let name = e.name();
-                    self.on_element(name.as_ref(), &e)?;
+                    self.on_element(name.into_inner().as_bytes(), &e)?;
                 }
                 Event::End(e) => {
                     let name = e.name();
-                    self.on_end(name.as_ref());
+                    self.on_end(name.into_inner().as_bytes());
                 }
                 Event::Eof => break,
                 _ => {}
@@ -578,7 +578,7 @@ fn hidden(e: &BytesStart) -> bool {
 
 fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
     for a in e.attributes().flatten() {
-        if a.key.as_ref() == name {
+        if a.key.into_inner().as_bytes() == name {
             return a.normalized_value(XmlVersion::Explicit1_0).ok().map(|v| v.into_owned());
         }
     }
