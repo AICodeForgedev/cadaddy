@@ -398,6 +398,9 @@ pub struct GuidedJob {
     /// Global finding counter.
     #[serde(default)]
     finding_seq: u32,
+    /// True once plan-sheet PDFs have been imported into the session's drawing(s).
+    #[serde(default)]
+    sheets_loaded: bool,
 }
 
 impl GuidedJob {
@@ -430,6 +433,7 @@ impl GuidedJob {
             sheets: None,
             question_seq: 0,
             finding_seq: 0,
+            sheets_loaded: false,
         }
     }
 
@@ -438,6 +442,10 @@ impl GuidedJob {
         self.stages.iter().find(|s| {
             !matches!(s.status, StageStatus::Done | StageStatus::Skipped)
         })
+    }
+
+    pub fn stage(&self, name: StageName) -> Option<&StageState> {
+        self.stages.iter().find(|s| s.name == name)
     }
 
     pub fn stage_mut(&mut self, name: StageName) -> Option<&mut StageState> {
@@ -718,7 +726,7 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             tiled_crops: None,
                             leftovers: Vec::new(),
                         }),
-                        default: None,
+                        default: Some("Other".into()),
                         answer_schema: Some(json!({"type": "string"})),
                         answer: None,
                         answered_by: None,
@@ -829,7 +837,7 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             why: "No level notes found in the plans and no floor names in titles".into(),
             choices: Vec::new(),
             evidence: None,
-            default: None,
+            default: Some("1".into()),
             answer_schema: Some(json!({"type": "string"})),
             answer: None,
             answered_by: None,
@@ -1123,10 +1131,140 @@ pub fn extract_levels_from_title(title: &str) -> Vec<String> {
     levels
 }
 
+/// Import the print set's plan-sheet PDFs into the session's drawing so that
+/// stage commands (`rooms.list`, `bspec.draft`, `bim.build`, …) find entities.
+///
+/// `printset.open` only creates metadata; this bridges to actual drawing content.
+/// Each plan-type sheet (plan / enlarged_plan) is imported via `pdfimport`.
+fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
+    if job.sheets_loaded {
+        return Ok(());
+    }
+    let sheets_val = match &job.sheets {
+        Some(v) => v.clone(),
+        None => return Err(bad("guided", "no sheets cached — classify must run first")),
+    };
+    let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
+    let plan_sheets: Vec<&Value> = sheet_arr.iter().filter(|sh| {
+        let st = sh.get("sheet_type").and_then(Value::as_str).unwrap_or("");
+        st == "plan" || st == "enlarged_plan"
+    }).collect();
+    if plan_sheets.is_empty() {
+        // Fall back to all sheets if no plans classified yet.
+        for sh in &sheet_arr {
+            import_one_sheet(s, &job.pdfs_path, sh)?;
+        }
+    } else {
+        for sh in &plan_sheets {
+            import_one_sheet(s, &job.pdfs_path, sh)?;
+        }
+    }
+    job.sheets_loaded = true;
+    job.audit("sheets_loaded", "pipeline", None, None,
+        Some(json!({"plan_sheets": plan_sheets.len(), "total_sheets": sheet_arr.len()})));
+    Ok(())
+}
+
+/// Import a single sheet's file into the current drawing via `pdfimport`.
+///
+/// First imports at default scale (sheet size) to detect the architectural scale note,
+/// then re-imports at full scale if needed so that geometry is at building dimensions
+/// (walls are 6" thick, not 0.06" at sheet scale).
+fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value) -> Result<()> {
+    let file = match sheet.get("file").and_then(Value::as_str) {
+        Some(f) if !f.is_empty() => f,
+        _ => return Ok(()),
+    };
+    let abs_path = if std::path::Path::new(file).is_absolute() {
+        file.to_string()
+    } else {
+        format!("{}/{}", base_dir, file)
+    };
+    let page = sheet.get("page").and_then(Value::as_u64).unwrap_or(1);
+    // Use the sheet's known scale if available; otherwise let pdfimport detect it.
+    // Passing "scale": "auto" lets the reader use the detected architectural scale
+    // and override the DO NOT SCALE note (guided runs always need real dimensions).
+    let scale_val = sheet.get("scale").and_then(Value::as_f64)
+        .filter(|k| k.is_finite() && *k > 1.0);
+    let params = if let Some(k) = scale_val {
+        json!({"path": abs_path, "page": page, "scale": k})
+    } else {
+        json!({"path": abs_path, "page": page})
+    };
+    match s.execute("pdfimport", &params) {
+        Ok(report) => {
+            // If the import was at sheet scale (DO NOT SCALE) and a scale was detected,
+            // re-import at full scale so wall/room detection works at building dimensions.
+            let needs_reg = report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false);
+            if needs_reg && scale_val.is_none() {
+                // Extract the detected scale factor from the scaleSource string
+                // e.g. "DO NOT SCALE (detected 1/8" = 1'-0", scale 96x — sheet kept at sheet size)"
+                let detected = report.get("scaleSource").and_then(Value::as_str)
+                    .and_then(|src| {
+                        // Look for "scale NNx" pattern
+                        src.find("scale ").and_then(|i| {
+                            let rest = &src[i + 6..];
+                            let end = rest.find('x').unwrap_or(rest.len());
+                            rest[..end].trim().parse::<f64>().ok()
+                        })
+                    });
+                if let Some(k) = detected.filter(|k| *k > 1.5) {
+                    // Undo the sheet-scale import and redo at full scale.
+                    let _ = s.execute("u", &json!({}));
+                    let full_params = json!({"path": abs_path, "page": page, "scale": k});
+                    match s.execute("pdfimport", &full_params) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            s.echo(format!("guided: full-scale re-import of {file} failed: {e}"));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Non-fatal: log the error but continue with other sheets.
+            s.echo(format!("guided: could not import sheet {file}: {e}"));
+            Ok(())
+        }
+    }
+}
+
+/// Count device symbols detected by pdfnative's symbol-cluster detection (PDF-SYM-N blocks).
+/// Returns a map of device-tag → count.
+fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let Ok(d) = s.doc() else { return counts };
+    let space = s.space();
+    let store = match d.space(&space) {
+        Some(st) => st,
+        None => return counts,
+    };
+    for e in store.iter() {
+        if let cadaddy_doc::EntityKind::Insert(ins) = &e.kind {
+            if ins.block.starts_with("PDF-SYM-") {
+                // The TAG attribute holds the device mark text.
+                let tag = ins.attribs.iter()
+                    .find(|a| a.tag == "TAG")
+                    .map(|a| a.text.value.trim().to_string())
+                    .unwrap_or_default();
+                if !tag.is_empty() {
+                    *counts.entry(tag).or_default() += 1;
+                } else {
+                    // Symbol without a tag — count as "unknown".
+                    *counts.entry("unknown_symbol".to_string()).or_default() += 1;
+                }
+            }
+        }
+    }
+    counts
+}
+
 /// Run the rooms stage: detect rooms from labels (MUST 1, 4).
 /// Uses the same readers (rooms.list) that work directly on the job's sheets.
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    // MUST 4: Pass the job's sheets so the reader works on this print set's data.
+    // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
+    ensure_sheets_loaded(s, job)?;
     let rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
 
     let rooms = rooms_result.get("rooms").and_then(Value::as_array);
@@ -1155,7 +1293,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 "No room tags on these sheets".into(),
             ],
             evidence: None,
-            default: None,
+            default: Some("No room tags on these sheets".into()),
             answer_schema: Some(json!({"type": "string"})),
             answer: None,
             answered_by: None,
@@ -1200,7 +1338,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         tiled_crops: None,
                         leftovers: Vec::new(),
                     }),
-                    default: None,
+                    default: Some(format!("Keep '{name}' as room name")),
                     answer_schema: None,
                     answer: None,
                     answered_by: None,
@@ -1257,13 +1395,49 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// MUST 9: count then "anything not counted?" with leftover clusters.
 /// MUST 10: learn foreign symbols. MUST 11: recount after learning.
 fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    // MUST 4: Run readers on the job's own sheets (same readers that work directly).
+    // Load sheets so the drawing has PDF-SYM block inserts from pdfnative symbol detection.
+    ensure_sheets_loaded(s, job)?;
+
     let mut results = json!({});
     let mut total_items = 0usize;
     let mut reader_errors = Vec::new();
 
+    // ── Primary source: PDF-SYM block inserts (pdfnative-rw2 symbol detection) ──
+    // After pdfimport, repeated symbol clusters become block inserts named PDF-SYM-N
+    // with a TAG attribute holding the nearby device-mark text.
+    let sym_devices = count_symbol_block_devices(s);
+    let sym_count: usize = sym_devices.values().sum();
+    if sym_count > 0 {
+        total_items += sym_count;
+        let items: Vec<Value> = sym_devices.iter().map(|(tag, &count)| {
+            json!({"tag": tag, "type": tag, "count": count, "source": "pdf_symbol"})
+        }).collect();
+        let by_type: serde_json::Map<String, Value> = sym_devices.iter()
+            .map(|(k, v)| (k.clone(), json!(*v))).collect();
+        results["devices"] = json!({
+            "items": items,
+            "count": sym_count,
+            "by_type": by_type,
+            "source": "pdf_symbol_blocks",
+        });
+    }
+
+    // ── Secondary: schedules.read for device marks in schedule tables ──
+    match s.execute("schedules.read", &json!({})) {
+        Ok(v) => {
+            if let Some(items) = v.get("items").and_then(Value::as_array) {
+                total_items += items.len();
+            }
+            results["schedules"] = v;
+        }
+        Err(e) => {
+            reader_errors.push(format!("schedules.read: {e}"));
+        }
+    }
+
+    // ── Tertiary: existing readers (may be stubs but call them for completeness) ──
     for (cmd, key) in [
-        ("mep.read_devices", "devices"),
+        ("mep.read_devices", "mep_devices"),
         ("conduit.read", "conduit"),
         ("gear.read", "gear"),
     ] {
@@ -1272,7 +1446,9 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if let Some(items) = v.get("items").and_then(Value::as_array) {
                     total_items += items.len();
                 }
-                results[key] = v;
+                if results.get(key).is_none() {
+                    results[key] = v;
+                }
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -1309,7 +1485,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 "No devices on these sheets".into(),
             ],
             evidence: None,
-            default: None,
+            default: Some("No devices on these sheets".into()),
             answer_schema: Some(json!({"type": "string"})),
             answer: None,
             answered_by: None,
@@ -1416,7 +1592,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         tiled_crops: None,
                         leftovers: Vec::new(),
                     }),
-                    default: None,
+                    default: Some("skip".into()),
                     answer_schema: Some(json!({"type": "object", "properties": {"device_type": {"type": "string"}, "symbol_name": {"type": "string"}}})),
                     answer: None,
                     answered_by: None,
@@ -1478,6 +1654,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 /// Run the BIM build stage (MUST 1).
 /// Must draft/store the building spec itself (bspec.draft store) before building.
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    // Ensure sheet content is in the drawing so bspec.draft can read geometry.
+    ensure_sheets_loaded(s, job)?;
     // MUST 1: Draft the spec first — bim.build needs it. Without the spec, it errors.
     let draft_result = s.execute("bspec.draft", &json!({"store": true}));
     match &draft_result {
@@ -1530,8 +1708,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
-    // Now build the model.
-    let result = s.execute("bim.build", &json!({}))?;
+    // Use model.build directly — it returns walls/doors/rooms/levels counts.
+    // (bim.build wraps model.build but constructs its own result without those counts.)
+    let result = s.execute("model.build", &json!({}))?;
 
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
@@ -1622,8 +1801,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Run takeoff stage.
 fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    ensure_sheets_loaded(s, job)?;
     let result = s.execute("takeoff", &json!({}))?;
-    job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), None);
+
+    // MUST 4: takeoff with 0 lines is a finding, never silently Done.
+    let line_count = result.get("lines").and_then(Value::as_array).map_or(0, Vec::len)
+        .max(result.get("count").and_then(Value::as_u64).unwrap_or(0) as usize);
+    if line_count == 0 {
+        job.add_finding(StageName::Takeoff,
+            "Takeoff produced 0 line items",
+            "A takeoff with no line items indicates that earlier stages (rooms, devices, BIM) \
+             may not have detected enough data to generate quantities",
+            4,
+            vec![
+                "Review rooms and devices stages for 0-count findings".into(),
+                "Check that BIM build produced elements".into(),
+            ],
+            None, false);
+    }
+
+    job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff),
+        Some(json!({"line_count": line_count})));
     Ok(result)
 }
 
@@ -1651,17 +1849,42 @@ fn run_clash(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 }
 
+/// Auto-answer questions that have a default value, so the pipeline keeps moving.
+/// Questions are still recorded (for the agent to review later) but don't block.
+fn auto_answer_defaults(stage: &mut StageState) -> usize {
+    let mut answered = 0usize;
+    for q in stage.questions.iter_mut()
+        .chain(stage.verify.iter_mut())
+        .chain(stage.completeness.iter_mut())
+    {
+        if q.answer.is_none()
+            && let Some(ref def) = q.default
+        {
+            q.answer = Some(Value::String(def.clone()));
+            q.answered_by = Some("default".into());
+            answered += 1;
+        }
+    }
+    answered
+}
+
 /// Advance the pipeline: run the current stage and generate questions.
 fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     loop {
         let stage_name = match job.current_stage() {
             Some(st) if st.status == StageStatus::Paused => {
-                // Still have unanswered questions — don't advance.
-                if !st.unanswered().is_empty() {
-                    return Ok(());
+                let name = st.name;
+                // Auto-answer defaulted questions so the pipeline can proceed.
+                if let Some(st) = job.stage_mut(name) {
+                    auto_answer_defaults(st);
+                }
+                // Still have unanswered questions with no default — pause.
+                if let Some(st) = job.stage(name) {
+                    if !st.unanswered().is_empty() {
+                        return Ok(());
+                    }
                 }
                 // All questions answered — mark done, move to next.
-                let name = st.name;
                 if let Some(st) = job.stage_mut(name) {
                     st.status = StageStatus::Done;
                     job.audit("stage_done", "pipeline", None, Some(name), None);
@@ -1698,11 +1921,13 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             Ok(v) => {
                 // Check for blocking findings before marking done.
                 let has_blocking = job.findings.iter().any(|f| f.stage == stage_name && f.blocking);
+                // Store result and auto-answer defaults so the pipeline keeps moving.
                 let (all_answered, unanswered_count) = {
                     let st = match job.stage_mut(stage_name) {
                         Some(st) => { st.result = Some(v); st }
                         None => continue,
                     };
+                    auto_answer_defaults(st);
                     let ua = st.unanswered().len();
                     (ua == 0, ua)
                 };
