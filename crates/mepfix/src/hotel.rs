@@ -344,6 +344,12 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         }
     }
 
+    // --- Wall types (for floor plan drawing) ---
+    t.wall_types = wall_type_defs();
+
+    // --- Plan walls (for floor plan drawing): one PlanWall per WallInstance ---
+    hotel_plan_walls(&mut t);
+
     // --- Ceiling assemblies ---
     t.ceiling_assemblies = ceiling_assemblies();
 
@@ -732,9 +738,20 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
             hx += head_spacing;
         }
 
-        // Plumbing fixtures in guest rooms (water closets + lavatories)
+        // Plumbing fixtures in guest rooms (water closets + lavatories).
+        // North-side rooms ("N" in the id) are mirrored: wet wall and fixtures at the
+        // opposite (high-x) side of the room.
         for rm in &level_rooms {
             if rm.name.contains("KING") || rm.name.contains("QUEEN") || rm.name.contains("SUITE") || rm.name.contains("ADA") {
+                let is_north = rm.id.contains("-N");
+                let fx = |offset: f64| {
+                    if is_north {
+                        rm.max_ft[0] - offset
+                    } else {
+                        rm.min_ft[0] + offset
+                    }
+                };
+                let fy = rm.min_ft[1] + 1.0;
                 // WC near wet wall
                 t.fixtures.push(Fixture {
                     id: format!("fix-{fix_id}"),
@@ -742,7 +759,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     kind: "water_closet".into(),
                     level: lv.into(),
                     room: rm.id.clone(),
-                    at_ft: [rm.min_ft[0] + 2.5, rm.min_ft[1] + 1.0, elev],
+                    at_ft: [fx(2.5), fy, elev],
                     nodes: vec![],
                     wall: None,
                 });
@@ -754,7 +771,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     kind: "lavatory".into(),
                     level: lv.into(),
                     room: rm.id.clone(),
-                    at_ft: [rm.min_ft[0] + 1.5, rm.min_ft[1] + 1.0, elev + 2.83],
+                    at_ft: [fx(1.5), fy, elev + 2.83],
                     nodes: vec![],
                     wall: None,
                 });
@@ -766,7 +783,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
                     kind: "bathtub".into(),
                     level: lv.into(),
                     room: rm.id.clone(),
-                    at_ft: [rm.min_ft[0] + 4.5, rm.min_ft[1] + 1.0, elev],
+                    at_ft: [fx(4.5), fy, elev],
                     nodes: vec![],
                     wall: None,
                 });
@@ -1036,26 +1053,26 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
         id: "elev-int-bath".into(),
         name: "TYPICAL BATH INTERIOR ELEVATIONS".into(),
         direction: "interior".into(),
-        sheet: String::new(),
+        sheet: "A-511".into(),
         room: Some("rm-2-S1".into()),
     });
 
     t.sections = vec![
         SectionView {
-            id: "sect-1".into(),
+            id: "sec-ew".into(),
             name: "BUILDING SECTION A".into(),
             cut_from_ft: [building_width_ft / 3.0, 0.0],
             cut_to_ft: [building_width_ft / 3.0, building_depth_ft],
             looking: "west".into(),
-            sheet: String::new(),
+            sheet: "A-521".into(),
         },
         SectionView {
-            id: "sect-2".into(),
+            id: "sec-ns".into(),
             name: "BUILDING SECTION B".into(),
             cut_from_ft: [0.0, building_depth_ft / 2.0],
             cut_to_ft: [building_width_ft, building_depth_ft / 2.0],
             looking: "north".into(),
-            sheet: String::new(),
+            sheet: "A-522".into(),
         },
     ];
 
@@ -1074,7 +1091,7 @@ pub fn hotel_design(seed: u64, st: &Style, size: HotelSize, r: &mut Rng) -> Hote
     );
 
     // --- Gaps for Q296 ---
-    t.gaps = plant_gaps(&t, r);
+    t.gaps = plant_gaps(&mut t, r);
 
     let _ = (seg_id, node_id, term_id, equip_id, fix_id, riser_id); // suppress unused
 
@@ -1121,8 +1138,8 @@ fn guest_room_sequence(count: usize, r: &mut Rng) -> Vec<RoomType> {
     for i in 0..count {
         let rt = if i == 0 {
             RoomType::AdaKing // first room is always ADA
-        } else if i == count - 1 {
-            RoomType::Suite // last room is a suite
+        } else if i == 1 && count >= 3 {
+            RoomType::Suite // suite goes second so it fits before running out of space
         } else if r.chance(0.4) {
             RoomType::DoubleQueen
         } else {
@@ -1422,6 +1439,134 @@ fn wall_assemblies() -> Vec<WallAssembly> {
             stc: None,
         },
     ]
+}
+
+/// Wall types for the floor plan (mapping assembly IDs to plan tags and thicknesses).
+fn wall_type_defs() -> Vec<WallType> {
+    let l = |mat: &str, thick: f64, side: &str| WallTypeLayer {
+        material: mat.into(),
+        thickness_in: thick,
+        side: side.into(),
+        gauge: None,
+        spacing_in: None,
+        in_cavity: false,
+    };
+    vec![
+        WallType {
+            tag: "WT-1".into(),
+            name: "GUEST ROOM DEMISING (1-HR)".into(),
+            layers: vec![l("gyp", 0.625, "1"), l("stud", 3.625, "core"), l("gyp", 0.625, "2")],
+            thickness_in: 4.875,
+            height: "deck".into(),
+            fire_rating: Some("1 HR".into()),
+            stc: Some(50),
+            ..WallType::default()
+        },
+        WallType {
+            tag: "WT-2".into(),
+            name: "CORRIDOR WALL (1-HR)".into(),
+            layers: vec![l("gyp_x", 1.25, "1"), l("stud", 3.625, "core"), l("gyp_x", 1.25, "2")],
+            thickness_in: 6.125,
+            height: "deck".into(),
+            fire_rating: Some("1 HR".into()),
+            stc: Some(55),
+            ..WallType::default()
+        },
+        WallType {
+            tag: "WT-3".into(),
+            name: "WET WALL".into(),
+            layers: vec![l("gyp_mr", 0.625, "1"), l("stud", 3.625, "core"), l("gyp_mr", 0.625, "2")],
+            thickness_in: 4.875,
+            height: "ceiling".into(),
+            ..WallType::default()
+        },
+        WallType {
+            tag: "WT-4".into(),
+            name: "SHAFT WALL (2-HR)".into(),
+            layers: vec![l("gyp_x", 1.25, "1"), l("shaftliner", 2.5, "core"), l("gyp_x", 0.625, "2")],
+            thickness_in: 4.375,
+            height: "full".into(),
+            fire_rating: Some("2 HR".into()),
+            stc: Some(60),
+            ..WallType::default()
+        },
+        WallType {
+            tag: "WT-5".into(),
+            name: "EXTERIOR WALL".into(),
+            layers: vec![l("cmu", 3.625, "1"), l("insulation", 2.0, "core"), l("stud", 6.0, "core"), l("gyp", 0.625, "2")],
+            thickness_in: 12.25,
+            height: "full".into(),
+            external: true,
+            ..WallType::default()
+        },
+        WallType {
+            tag: "WT-6".into(),
+            name: "BATHROOM PARTITION".into(),
+            layers: vec![l("gyp_mr", 0.625, "1"), l("stud", 3.625, "core"), l("gyp_mr", 0.625, "2")],
+            thickness_in: 4.875,
+            height: "ceiling".into(),
+            ..WallType::default()
+        },
+    ]
+}
+
+/// Populate `plan_walls` from the hotel's wall instances for floor plan drawing.
+fn hotel_plan_walls(t: &mut Truth) {
+    // Map assembly IDs to their type tags.
+    let asm_to_tag: BTreeMap<String, String> = t.wall_assemblies.iter().map(|a| (a.id.clone(), a.type_tag.clone())).collect();
+
+    for (pw_id, wi) in t.walls.iter().enumerate() {
+        let tag = asm_to_tag.get(&wi.assembly).cloned().unwrap_or_else(|| wi.assembly.clone());
+        let rooms: Vec<String> = t
+            .building
+            .rooms
+            .iter()
+            .filter(|rm| {
+                rm.level == wi.level
+                    && rm.min_ft[0] <= wi.from_ft[0].max(wi.to_ft[0]) + 0.5
+                    && rm.max_ft[0] >= wi.from_ft[0].min(wi.to_ft[0]) - 0.5
+                    && rm.min_ft[1] <= wi.from_ft[1].max(wi.to_ft[1]) + 0.5
+                    && rm.max_ft[1] >= wi.from_ft[1].min(wi.to_ft[1]) - 0.5
+            })
+            .map(|rm| rm.number.clone())
+            .collect();
+
+        // Add a door opening for guest room walls that face the corridor.
+        let mut openings = Vec::new();
+        let is_guest = tag == "WT-1" || tag == "WT-2";
+        let wall_len = ((wi.to_ft[0] - wi.from_ft[0]).powi(2) + (wi.to_ft[1] - wi.from_ft[1]).powi(2)).sqrt();
+        if is_guest && wall_len > 4.0 {
+            // Horizontal walls at corridor boundary get a 3-ft door opening.
+            let is_corridor_edge = (wi.from_ft[1] - wi.to_ft[1]).abs() < 0.1
+                && !rooms.is_empty();
+            if is_corridor_edge {
+                let door_start = 2.0_f64.min(wall_len - 3.5);
+                if door_start >= 0.0 && door_start + 3.0 <= wall_len + 0.1 {
+                    openings.push([door_start, door_start + 3.0]);
+                }
+            }
+        }
+
+        // Wall tag position: midpoint of the wall.
+        let mid_s = wall_len / 2.0;
+        let tags = vec![WallTag { s_ft: mid_s, on_wall: true, side: 1.0, shift_ft: 0.0, gap_ft: 0.0 }];
+
+        t.plan_walls.push(PlanWall {
+            id: format!("pw-{pw_id}"),
+            level: wi.level.clone(),
+            a_ft: wi.from_ft,
+            b_ft: wi.to_ft,
+            wall_type: tag,
+            tagged: true,
+            height_ft: wi.height_ft,
+            rooms,
+            openings,
+            tags,
+            layout_from: Some("a".into()),
+            plan_tag: None,
+            enlarged_tag: None,
+        });
+    }
 }
 
 fn wall_for_room(name: &str, level: &str) -> &'static str {
@@ -2882,8 +3027,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "09".into(),
             section: "09 29 00".into(),
             title: "GYPSUM BOARD".into(),
-            manufacturer: "National Gypsum".into(),
-            model: "Gold Bond XP".into(),
+            manufacturer: "Ridgewall Building Products".into(),
+            model: "RW-500 Moisture Guard".into(),
             or_equal: true,
             referenced_by: vec!["wa-1".into(), "wa-2".into()],
         },
@@ -2892,8 +3037,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "09".into(),
             section: "09 51 13".into(),
             title: "ACOUSTICAL PANEL CEILINGS".into(),
-            manufacturer: "Armstrong Ceiling Solutions".into(),
-            model: "Cortega 770".into(),
+            manufacturer: "Skyline Acoustics".into(),
+            model: "SA-770 Quiet Tile".into(),
             or_equal: true,
             referenced_by: vec!["CA-1".into()],
         },
@@ -2902,8 +3047,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "22".into(),
             section: "22 11 16".into(),
             title: "DOMESTIC WATER PIPING".into(),
-            manufacturer: "Viega".into(),
-            model: "ProPress CTS".into(),
+            manufacturer: "Streamline Pipe Works".into(),
+            model: "SPW PressJoint CTS".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -2912,8 +3057,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "22".into(),
             section: "22 42 00".into(),
             title: "COMMERCIAL PLUMBING FIXTURES".into(),
-            manufacturer: "Kohler".into(),
-            model: "Highline K-25224".into(),
+            manufacturer: "Pinnacle Plumbing Co".into(),
+            model: "Summit SX-224".into(),
             or_equal: true,
             referenced_by: vec!["WC".into(), "LAV".into()],
         },
@@ -2922,8 +3067,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "23".into(),
             section: "23 05 93".into(),
             title: "TESTING, ADJUSTING AND BALANCING FOR HVAC".into(),
-            manufacturer: "N/A".into(),
-            model: "N/A".into(),
+            manufacturer: "Airpoint Balancing Services".into(),
+            model: "APB Certified Method".into(),
             or_equal: false,
             referenced_by: vec![],
         },
@@ -2932,8 +3077,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "23".into(),
             section: "23 31 13".into(),
             title: "METAL DUCTS".into(),
-            manufacturer: "Lindab".into(),
-            model: "Safe Click".into(),
+            manufacturer: "DuctPro Industries".into(),
+            model: "DP SnapLock Series".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -2942,8 +3087,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "23".into(),
             section: "23 74 13".into(),
             title: "PACKAGED ROOFTOP UNITS".into(),
-            manufacturer: "Trane".into(),
-            model: "Voyager YCD120".into(),
+            manufacturer: "NorthStar Climate Systems".into(),
+            model: "Explorer RTU-120".into(),
             or_equal: true,
             referenced_by: vec!["RTU-1".into(), "RTU-2".into()],
         },
@@ -2952,8 +3097,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "26".into(),
             section: "26 24 16".into(),
             title: "PANELBOARDS".into(),
-            manufacturer: "Eaton".into(),
-            model: "PRL1A".into(),
+            manufacturer: "Volterra Electric".into(),
+            model: "VE-PB100A".into(),
             or_equal: true,
             referenced_by: vec!["L1".into(), "L2".into(), "P1".into(), "P2".into()],
         },
@@ -2962,8 +3107,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "26".into(),
             section: "26 51 13".into(),
             title: "INTERIOR LIGHTING".into(),
-            manufacturer: "Lithonia Lighting".into(),
-            model: "BLT4 Series".into(),
+            manufacturer: "Brightvale Lighting".into(),
+            model: "BV-T4 Recessed Series".into(),
             or_equal: true,
             referenced_by: vec!["A".into(), "B".into()],
         },
@@ -2972,8 +3117,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "21".into(),
             section: "21 13 13".into(),
             title: "WET-PIPE SPRINKLER SYSTEMS".into(),
-            manufacturer: "Viking".into(),
-            model: "VK302 Pendent".into(),
+            manufacturer: "GuardFlow Fire Products".into(),
+            model: "GF-302 Pendent".into(),
             or_equal: true,
             referenced_by: vec!["SH-1".into()],
         },
@@ -2982,8 +3127,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "28".into(),
             section: "28 31 11".into(),
             title: "DIGITAL ADDRESSABLE FIRE ALARM SYSTEM".into(),
-            manufacturer: "Notifier by Honeywell".into(),
-            model: "NFS2-3030".into(),
+            manufacturer: "AlertWorks Safety".into(),
+            model: "AW-3030 DAFCP".into(),
             or_equal: true,
             referenced_by: vec!["FACP".into()],
         },
@@ -2992,8 +3137,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "27".into(),
             section: "27 15 13".into(),
             title: "COMMUNICATIONS COPPER HORIZONTAL CABLING".into(),
-            manufacturer: "Belden".into(),
-            model: "CAT6A 10GXS13".into(),
+            manufacturer: "CableCraft Telecom".into(),
+            model: "CC-6A UltraLink".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3002,8 +3147,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "11".into(),
             section: "11 40 00".into(),
             title: "FOODSERVICE EQUIPMENT".into(),
-            manufacturer: "Hobart".into(),
-            model: "AM16 Series".into(),
+            manufacturer: "ChefLine Commercial".into(),
+            model: "CL-16 Warewash Series".into(),
             or_equal: true,
             referenced_by: vec!["BC-1".into()],
         },
@@ -3012,8 +3157,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "10".into(),
             section: "10 28 13".into(),
             title: "TOILET ACCESSORIES".into(),
-            manufacturer: "Bobrick".into(),
-            model: "B-Series".into(),
+            manufacturer: "CleanEdge Products".into(),
+            model: "CE-800 Series".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3023,8 +3168,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "27".into(),
             section: "27 11 00".into(),
             title: "COMMUNICATIONS EQUIPMENT ROOM FITTINGS".into(),
-            manufacturer: "Panduit".into(),
-            model: "WMP1E Horizontal Cable Manager".into(),
+            manufacturer: "RackPro Infrastructure".into(),
+            model: "RP-1E Cable Manager".into(),
             or_equal: true,
             referenced_by: vec!["MDF".into(), "IDF-2".into(), "IDF-3".into(), "IDF-4".into()],
         },
@@ -3033,8 +3178,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "27".into(),
             section: "27 13 23".into(),
             title: "COMMUNICATIONS OPTICAL FIBER BACKBONE CABLING".into(),
-            manufacturer: "Corning".into(),
-            model: "ALTOS Gel-Free Single-Mode".into(),
+            manufacturer: "FiberPath Optics".into(),
+            model: "FP GelFree SM-12".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3043,8 +3188,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "27".into(),
             section: "27 41 16".into(),
             title: "INTEGRATED AUDIO-VIDEO SYSTEMS".into(),
-            manufacturer: "Atlas Sound".into(),
-            model: "FAP42T Ceiling Speaker".into(),
+            manufacturer: "SoundVault AV".into(),
+            model: "SV-42T Ceiling Speaker".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3054,8 +3199,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "28".into(),
             section: "28 31 43".into(),
             title: "FIRE DETECTION AND ALARM NOTIFICATION APPLIANCES".into(),
-            manufacturer: "System Sensor".into(),
-            model: "P2RH Horn/Strobe, P2R Strobe".into(),
+            manufacturer: "AlertWorks Safety".into(),
+            model: "AW-2RH Horn/Strobe, AW-2R Strobe".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3064,8 +3209,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "28".into(),
             section: "28 31 46".into(),
             title: "SMOKE DETECTION SENSORS".into(),
-            manufacturer: "System Sensor".into(),
-            model: "2WTA-B Photoelectric Smoke Detector".into(),
+            manufacturer: "AlertWorks Safety".into(),
+            model: "AW-SD2 Photoelectric Smoke Detector".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3074,8 +3219,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "28".into(),
             section: "28 13 00".into(),
             title: "ACCESS CONTROL".into(),
-            manufacturer: "HID Global".into(),
-            model: "iCLASS SE R10".into(),
+            manufacturer: "SecureGate Systems".into(),
+            model: "SG-SE R10 Reader".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3084,8 +3229,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "28".into(),
             section: "28 23 00".into(),
             title: "VIDEO SURVEILLANCE".into(),
-            manufacturer: "Axis Communications".into(),
-            model: "M3075-V".into(),
+            manufacturer: "VisionPoint Security".into(),
+            model: "VP-3075 Dome".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3094,8 +3239,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "27".into(),
             section: "27 52 23".into(),
             title: "NURSE CALL AND CODE BLUE SYSTEMS".into(),
-            manufacturer: "Rauland-Borg".into(),
-            model: "Responder 5".into(),
+            manufacturer: "MedLink Communications".into(),
+            model: "ML Responder 5".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3105,8 +3250,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "26".into(),
             section: "26 28 16".into(),
             title: "ENCLOSED SWITCHES AND CIRCUIT BREAKERS".into(),
-            manufacturer: "Eaton".into(),
-            model: "DH Series Safety Switch".into(),
+            manufacturer: "Volterra Electric".into(),
+            model: "VE-DH Safety Switch".into(),
             or_equal: true,
             referenced_by: vec!["DS-WH1".into(), "DS-RTU1".into()],
         },
@@ -3115,8 +3260,8 @@ fn spec_book() -> Vec<SpecItem> {
             division: "26".into(),
             section: "26 27 26".into(),
             title: "WIRING DEVICES".into(),
-            manufacturer: "Leviton".into(),
-            model: "5362 Duplex Receptacle".into(),
+            manufacturer: "WireStar Devices".into(),
+            model: "WS-5362 Duplex Receptacle".into(),
             or_equal: true,
             referenced_by: vec![],
         },
@@ -3125,64 +3270,92 @@ fn spec_book() -> Vec<SpecItem> {
 
 // --- Planted gaps for Q296 ---
 
-fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
+fn plant_gaps(t: &mut Truth, _r: &mut Rng) -> Vec<Gap> {
     let mut gaps = Vec::new();
     let mut gid = 0;
 
-    // 1. A wall with no type tag: pick a wall on level 2 and leave its assembly blank
+    // 1. wall_no_tag: a wall on level 2 drawn without a type tag.
+    // Find the corresponding plan_wall and mark it untagged.
     if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-1") {
+        let wid = w.id.clone();
+        let at = w.from_ft;
+        // Mark the corresponding plan_wall as untagged.
+        if let Some(pw) = t.plan_walls.iter_mut().find(|pw| pw.level == "2" && pw.a_ft == at) {
+            pw.tagged = false;
+            pw.tags.clear();
+        }
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_no_tag".into(),
             description: "Guest room demising wall has no wall type tag on the plan".into(),
-            elements: vec![w.id.clone()],
+            elements: vec![wid],
             level: "2".into(),
-            at_ft: w.from_ft,
+            at_ft: at,
         });
         gid += 1;
     }
 
-    // 2. A wall tag not in the legend: reference a non-existent assembly
+    // 2. wall_tag_not_in_legend: a wall on level 3 printed with tag "WT-7" which
+    //    doesn't exist in the wall type legend.
     if let Some(w) = t.walls.iter().find(|w| w.level == "3" && w.assembly == "wa-1") {
+        let wid = w.id.clone();
+        let at = w.from_ft;
+        // Override the plan_wall's printed tag to WT-7 (the legend has WT-1..WT-6).
+        if let Some(pw) = t.plan_walls.iter_mut().find(|pw| pw.level == "3" && pw.a_ft == at) {
+            pw.plan_tag = Some("WT-7".into());
+        }
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_tag_not_in_legend".into(),
             description: "Wall references type WT-7 which is not in the wall type legend".into(),
-            elements: vec![w.id.clone()],
+            elements: vec![wid],
             level: "3".into(),
-            at_ft: w.from_ft,
+            at_ft: at,
         });
         gid += 1;
     }
 
-    // 3. Same wall shown with different types on two sheets
-    if t.walls.len() > 20 {
-        let w = &t.walls[10];
+    // 3. wall_type_conflict: a corridor wall shown as WT-2 on A-102 and WT-1 on A-202
+    //    (floor plan vs RCP for the same level).
+    if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-2") {
+        let wid = w.id.clone();
+        let at = w.from_ft;
+        // The floor plan (A-102) shows WT-2 (correct). Set the enlarged_tag to WT-1 so
+        // the enlarged plan prints a different tag, creating a conflict.
+        if let Some(pw) = t.plan_walls.iter_mut().find(|pw| pw.level == "2" && pw.wall_type == "WT-2" && pw.a_ft == at) {
+            pw.enlarged_tag = Some("WT-1".into());
+        }
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "wall_type_conflict".into(),
-            description: "Corridor wall shown as WT-2 on A-201 and WT-1 on A-301".into(),
-            elements: vec![w.id.clone()],
-            level: w.level.clone(),
-            at_ft: w.from_ft,
+            description: "Corridor wall shown as WT-2 on A-102 and WT-1 on A-202".into(),
+            elements: vec![wid],
+            level: "2".into(),
+            at_ft: at,
         });
         gid += 1;
     }
 
-    // 4. Ceiling with no height
-    if let Some(rm) = t.building.rooms.iter().find(|r| r.level == "3" && r.name == "CORRIDOR") {
+    // 4. ceiling_no_height: the level 3 corridor ceiling has height_hidden = true,
+    //    so the RCP draws the type symbol but no height note.
+    if let Some(rm) = t.building.rooms.iter_mut().find(|r| r.level == "3" && r.name == "CORRIDOR") {
+        let rm_id = rm.id.clone();
+        let at = rm.min_ft;
+        if let Some(c) = rm.ceiling.as_mut() {
+            c.height_hidden = true;
+        }
         gaps.push(Gap {
             id: format!("gap-{gid}"),
             kind: "ceiling_no_height".into(),
             description: "Level 3 corridor RCP shows ceiling type but no height note".into(),
-            elements: vec![rm.id.clone()],
+            elements: vec![rm_id],
             level: "3".into(),
-            at_ft: rm.min_ft,
+            at_ft: at,
         });
         gid += 1;
     }
 
-    // 5. Rated wall stops at ceiling (should go slab to slab)
+    // 5. rated_wall_stops_at_ceiling
     if let Some(w) = t.walls.iter().find(|w| w.level == "2" && w.assembly == "wa-2") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
@@ -3195,7 +3368,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
         gid += 1;
     }
 
-    // 6. Soffit shown on RCP but missing from section
+    // 6. soffit_missing_from_section
     if let Some(s) = t.soffits.first() {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
@@ -3208,7 +3381,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
         gid += 1;
     }
 
-    // 7. Head condition not specified at rated wall / ceiling intersection
+    // 7. head_not_specified
     if let Some(w) = t.walls.iter().find(|w| w.assembly == "wa-4") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),
@@ -3221,7 +3394,7 @@ fn plant_gaps(t: &Truth, _r: &mut Rng) -> Vec<Gap> {
         gid += 1;
     }
 
-    // 8. Height/assembly conflict: wall height rule says SLAB TO SLAB but drawn to ceiling
+    // 8. height_assembly_conflict
     if let Some(w) = t.walls.iter().find(|w| w.level == "4" && w.assembly == "wa-1") {
         gaps.push(Gap {
             id: format!("gap-{gid}"),

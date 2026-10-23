@@ -643,6 +643,45 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                 .map(abbrev),
             );
         }
+        Kind::FireAlarm(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            fire_alarm_devices(&mut pen, t, st, l, &format!("FA-10{l}"));
+            legend.push(item("smoke_detector", "SMOKE DETECTOR"));
+            legend.push(item("horn_strobe", "HORN/STROBE"));
+            legend.push(item("pull_station", "MANUAL PULL STATION"));
+            legend.push(item("facp", "FIRE ALARM CONTROL PANEL"));
+            legend.push(item("annunciator", "REMOTE ANNUNCIATOR"));
+            legend.push(item("duct_detector", "DUCT SMOKE DETECTOR"));
+            abbr.extend(
+                ["FACP = FIRE ALARM CONTROL PANEL", "SD = SMOKE DETECTOR", "H/S = HORN/STROBE", "PS = PULL STATION", "AFF = ABOVE FINISHED FLOOR"]
+                    .map(abbrev),
+            );
+        }
+        Kind::Telecom(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            telecom_devices(&mut pen, t, st, l, &format!("T-10{l}"));
+            legend.push(item("data_outlet", "DATA OUTLET"));
+            legend.push(item("wifi_ap", "WIRELESS ACCESS POINT"));
+            legend.push(item("camera", "SECURITY CAMERA"));
+            legend.push(item("tv_outlet", "TV OUTLET"));
+            legend.push(item("phone", "TELEPHONE OUTLET"));
+            legend.push(item("card_reader", "CARD READER"));
+            abbr.extend(
+                ["AP = ACCESS POINT", "CAM = CAMERA", "IDF = INTERMEDIATE DISTRIBUTION FRAME", "MDF = MAIN DISTRIBUTION FRAME"]
+                    .map(abbrev),
+            );
+        }
+        Kind::EnlargedUnit(unit_type) => {
+            enlarged_unit_plan(&mut pen, t, st, unit_type);
+        }
+        Kind::InteriorElevation(tag) => {
+            interior_elevation(&mut pen, t, st, tag);
+        }
+        Kind::Section(tag) => {
+            building_section(&mut pen, t, st, tag);
+        }
         Kind::SiteSchedules => {
             site_schedules(&mut pen, t);
         }
@@ -688,6 +727,9 @@ fn title_block(pen: &mut Pen, t: &Truth, st: &Style, sh: &Sheet, level: &str, le
         "S" => "STRUCTURAL",
         "A" => "ARCHITECTURAL",
         "E" => "ELECTRICAL",
+        "FA" => "FIRE ALARM",
+        "T" => "TELECOM",
+        "C" => "CIVIL",
         _ => "GENERAL",
     };
     let lvl = t.level(level).map(|l| l.name.clone()).unwrap_or_default();
@@ -2895,4 +2937,268 @@ fn site_schedules(pen: &mut Pen, t: &Truth) {
     }
 
     let _ = (x1, y0);
+}
+
+// ---- Fire alarm plan --------------------------------------------------------------------------
+
+/// Draw fire alarm devices (smoke detectors, horn/strobes, pull stations, FACP) on a FA sheet.
+fn fire_alarm_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+
+    for fa in t.fire_alarm_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([fa.at_ft[0], fa.at_ft[1]]);
+        match fa.kind.as_str() {
+            "smoke_detector" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                pen.text("DEVICE", c, st.text_in * 0.6, "SD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "horn_strobe" => {
+                let hs = s * 0.6;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.6, "H/S", rot, HAlign::Center, VAlign::Middle);
+            }
+            "pull_station" => {
+                let hs = s * 0.5;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.line("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", Vec2::new(c.x, c.y - hs - th * 0.3), st.text_in * 0.6, "PS", rot, HAlign::Center, VAlign::Top);
+            }
+            "facp" => {
+                let hs = s * 1.2;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.5, "FACP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "annunciator" => {
+                let hs = s * 0.8;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs * 0.5), Vec2::new(c.x + hs, c.y + hs * 0.5));
+                pen.text("DEVICE", c, st.text_in * 0.5, "ANN", rot, HAlign::Center, VAlign::Middle);
+            }
+            "duct_detector" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                pen.text("DEVICE", c, st.text_in * 0.5, "DD", rot, HAlign::Center, VAlign::Middle);
+            }
+            _ => {
+                pen.circle("DEVICE", c, s * 0.4);
+            }
+        }
+        if !fa.tag.is_empty() {
+            pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in, &fa.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+    }
+}
+
+// ---- Telecom plan -----------------------------------------------------------------------------
+
+/// Draw telecom devices (data outlets, WiFi APs, cameras, TV/phone outlets) on a T sheet.
+fn telecom_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+
+    for tc in t.telecom_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([tc.at_ft[0], tc.at_ft[1]]);
+        match tc.kind.as_str() {
+            "data_outlet" => {
+                let hs = s * 0.4;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.6, "D", rot, HAlign::Center, VAlign::Middle);
+            }
+            "wifi_ap" => {
+                pen.circle("DEVICE", c, s * 0.5);
+                pen.text("DEVICE", c, st.text_in * 0.5, "AP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "camera" => {
+                pen.circle("DEVICE", c, s * 0.4);
+                pen.text("DEVICE", c, st.text_in * 0.5, "C", rot, HAlign::Center, VAlign::Middle);
+            }
+            "tv_outlet" => {
+                let hs = s * 0.4;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.6, "TV", rot, HAlign::Center, VAlign::Middle);
+            }
+            "phone" => {
+                let hs = s * 0.4;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.6, "T", rot, HAlign::Center, VAlign::Middle);
+            }
+            "card_reader" => {
+                let hs = s * 0.4;
+                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+                pen.text("DEVICE", c, st.text_in * 0.5, "CR", rot, HAlign::Center, VAlign::Middle);
+            }
+            _ => {
+                pen.circle("DEVICE", c, s * 0.3);
+            }
+        }
+        if !tc.tag.is_empty() {
+            pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in, &tc.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+    }
+}
+
+// ---- Enlarged unit plan -----------------------------------------------------------------------
+
+/// Draw an enlarged unit plan: room outline, device positions and mounting heights for one unit
+/// type. Shows the A-side device positions at the correct locations.
+fn enlarged_unit_plan(pen: &mut Pen, t: &Truth, st: &Style, unit_type: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+
+    // Find the first unit instance of this type to get coordinates.
+    let inst = match t.unit_instances.iter().find(|u| u.unit_type == unit_type) {
+        Some(u) => u,
+        None => return,
+    };
+
+    // Find the room for this instance.
+    let room = t.building.rooms.iter().find(|r| r.id == inst.room);
+    if let Some(rm) = room {
+        // Draw room outline.
+        let a = pen.b(rm.min_ft);
+        let b = pen.b(rm.max_ft);
+        pen.rect("WALL", a, b);
+        // Room name and number.
+        let mid = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        pen.text("TEXT", Vec2::new(mid.x, mid.y + th * 2.0), st.text_in * 1.2, &inst.number, rot, HAlign::Center, VAlign::Bottom);
+        pen.text("TEXT", Vec2::new(mid.x, mid.y + th * 0.5), st.text_in, &format!("UNIT TYPE: {unit_type}"), rot, HAlign::Center, VAlign::Bottom);
+    }
+
+    // Draw all devices in the room at their truth positions with mounting height labels.
+    let room_id = &inst.room;
+    for dev in t.elec_devices.iter().filter(|d| d.room == *room_id) {
+        let c = pen.b(dev.drawn_ft);
+        let s = th * 0.6;
+        pen.circle("DEVICE", c, s * 0.5);
+        let label = if dev.mounting_in > 0.0 {
+            format!("{} @ {}", dev.tag, mounting_height(dev.mounting_in))
+        } else {
+            dev.tag.clone()
+        };
+        pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in * 0.8, &label, rot, HAlign::Left, VAlign::Middle);
+    }
+    for fa in t.fire_alarm_devices.iter().filter(|d| d.room == *room_id) {
+        let c = pen.b([fa.at_ft[0], fa.at_ft[1]]);
+        let s = th * 0.6;
+        pen.circle("DEVICE", c, s * 0.5);
+        let label = if fa.mounting_in > 0.0 {
+            format!("{} @ {}", fa.tag, mounting_height(fa.mounting_in))
+        } else {
+            fa.tag.clone()
+        };
+        pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in * 0.8, &label, rot, HAlign::Left, VAlign::Middle);
+    }
+    for tc in t.telecom_devices.iter().filter(|d| d.room == *room_id) {
+        let c = pen.b([tc.at_ft[0], tc.at_ft[1]]);
+        let s = th * 0.6;
+        pen.circle("DEVICE", c, s * 0.5);
+        let label = if tc.mounting_in > 0.0 {
+            format!("{} @ {}", tc.tag, mounting_height(tc.mounting_in))
+        } else {
+            tc.tag.clone()
+        };
+        pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in * 0.8, &label, rot, HAlign::Left, VAlign::Middle);
+    }
+}
+
+/// Format a mounting height in inches as feet-inches.
+fn mounting_height(inches: f64) -> String {
+    let ft = (inches / 12.0).floor() as i32;
+    let rem = (inches % 12.0).round() as i32;
+    if rem == 0 {
+        format!("{ft}'-0\"")
+    } else {
+        format!("{ft}'-{rem}\"")
+    }
+}
+
+// ---- Interior elevation -----------------------------------------------------------------------
+
+/// Draw a typical interior elevation (bath elevation showing device mounting heights).
+fn interior_elevation(pen: &mut Pen, t: &Truth, st: &Style, tag: &str) {
+    // Find the elevation view in the truth.
+    let ev = match t.elevations.iter().find(|e| e.id == tag || e.direction == tag) {
+        Some(e) => e,
+        None => return,
+    };
+
+    let fr = frame(st);
+    let cx = (fr.area[0][0] + fr.area[1][0]) / 2.0;
+    let by = fr.area[0][1] + 1.0;
+
+    // Draw the elevation rectangle (wall face).
+    let wall_w = 10.0; // paper inches
+    let wall_h = 8.0;
+    pen.prect("WALL", [cx - wall_w / 2.0, by], [cx + wall_w / 2.0, by + wall_h]);
+
+    // Title.
+    pen.ptext("TEXT", [cx, by + wall_h + 0.3], st.text_in * 1.2, &ev.name, HAlign::Center);
+
+    // If there's a room reference, draw devices from that room at their mounting heights.
+    if let Some(room_id) = &ev.room {
+        let mut y_offset = 0.0;
+        for dev in t.elec_devices.iter().filter(|d| d.room == *room_id) {
+            let height_ft = dev.mounting_in / 12.0;
+            let dy = height_ft / 11.0 * wall_h;
+            let px = cx - wall_w / 4.0 + y_offset;
+            let py = by + dy;
+            pen.prect("DEVICE", [px - 0.1, py - 0.1], [px + 0.1, py + 0.1]);
+            let label = format!("{} @ {}", dev.tag, mounting_height(dev.mounting_in));
+            pen.ptext("TEXT", [px + 0.25, py], st.text_in * 0.8, &label, HAlign::Left);
+            y_offset += 0.1;
+        }
+        for fa in t.fire_alarm_devices.iter().filter(|d| d.room == *room_id) {
+            let height_ft = fa.mounting_in / 12.0;
+            let dy = height_ft / 11.0 * wall_h;
+            let px = cx + y_offset;
+            let py = by + dy;
+            pen.prect("DEVICE", [px - 0.1, py - 0.1], [px + 0.1, py + 0.1]);
+            let label = format!("{} @ {}", fa.tag, mounting_height(fa.mounting_in));
+            pen.ptext("TEXT", [px + 0.25, py], st.text_in * 0.8, &label, HAlign::Left);
+            y_offset += 0.1;
+        }
+        for tc in t.telecom_devices.iter().filter(|d| d.room == *room_id) {
+            let height_ft = tc.mounting_in / 12.0;
+            let dy = height_ft / 11.0 * wall_h;
+            let px = cx + wall_w / 4.0 + y_offset;
+            let py = by + dy;
+            pen.prect("DEVICE", [px - 0.1, py - 0.1], [px + 0.1, py + 0.1]);
+            let label = format!("{} @ {}", tc.tag, mounting_height(tc.mounting_in));
+            pen.ptext("TEXT", [px + 0.25, py], st.text_in * 0.8, &label, HAlign::Left);
+            y_offset += 0.1;
+        }
+    }
+}
+
+// ---- Building section -------------------------------------------------------------------------
+
+/// Draw a building section: a vertical cut showing levels, slab lines and key heights.
+fn building_section(pen: &mut Pen, t: &Truth, st: &Style, tag: &str) {
+    let sec = match t.sections.iter().find(|s| s.id == tag || s.looking == tag) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let fr = frame(st);
+    let cx = (fr.area[0][0] + fr.area[1][0]) / 2.0;
+    let by = fr.area[0][1] + 1.0;
+
+    let sec_w = 10.0; // paper inches
+    let total_h = 7.0;
+
+    // Draw overall section outline.
+    pen.prect("WALL", [cx - sec_w / 2.0, by], [cx + sec_w / 2.0, by + total_h]);
+
+    // Title.
+    pen.ptext("TEXT", [cx, by + total_h + 0.3], st.text_in * 1.2, &sec.name, HAlign::Center);
+
+    // Draw level lines.
+    let max_elev = t.building.levels.last().map_or(47.0, |l| l.elevation_ft);
+    let scale = if max_elev > 0.0 { total_h / max_elev } else { 1.0 };
+    for lv in &t.building.levels {
+        let y = by + lv.elevation_ft * scale;
+        pen.pline("DASHED", [cx - sec_w / 2.0, y], [cx + sec_w / 2.0, y]);
+        pen.ptext("TEXT", [cx + sec_w / 2.0 + 0.2, y], st.text_in * 0.8, &format!("{} (EL. {}')", lv.name, lv.elevation_ft as i32), HAlign::Left);
+    }
 }

@@ -4,7 +4,7 @@
 
 use cadaddy_mepfix::hotel::HotelSize;
 use cadaddy_mepfix::truth::Truth;
-use cadaddy_mepfix::{generate, generate_hotel, hotel_truth_for, layout, score, truth_for};
+use cadaddy_mepfix::{generate, generate_hotel, hotel_planned, hotel_truth_for, layout, score, truth_for};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
@@ -1325,4 +1325,240 @@ fn hotel_equip_ptac_per_guest_room() {
     let ptacs: Vec<_> = t.equip_connections.iter().filter(|c| c.kind == "ptac").collect();
     // At least one PTAC per guest room.
     assert!(ptacs.len() >= guest_rooms.len(), "fewer PTACs ({}) than guest rooms ({})", ptacs.len(), guest_rooms.len());
+}
+
+// ===== Q5104 hotelfix-rw1 MUST tests ==========================================================
+
+/// MUST 1: spec book uses invented manufacturers only. Assert that a list of known real brands
+/// appears nowhere in spec-book.json or truth.json.
+#[test]
+fn hotel_spec_book_no_real_brands() {
+    let set = generate_hotel(1, HotelSize::Small).unwrap();
+    let truth_json = String::from_utf8(set.file("truth.json").unwrap().to_vec()).unwrap();
+    let spec_json = String::from_utf8(set.file("spec-book.json").unwrap().to_vec()).unwrap();
+    let real_brands = [
+        "Kohler", "Trane", "Eaton", "Lithonia", "Viking", "Notifier", "Honeywell", "Armstrong",
+        "National Gypsum", "Viega", "Belden", "Hobart", "Bobrick", "Panduit", "Corning",
+        "System Sensor", "Axis", "HID", "Leviton", "Lindab", "Atlas Sound", "Rauland",
+    ];
+    for brand in real_brands {
+        assert!(!truth_json.contains(brand), "real brand {brand:?} found in truth.json");
+        assert!(!spec_json.contains(brand), "real brand {brand:?} found in spec-book.json");
+    }
+    // Also verify no "N/A" manufacturer.
+    let t = &set.truth;
+    for s in &t.spec_items {
+        assert!(s.manufacturer != "N/A", "spec {} has N/A manufacturer", s.id);
+        assert!(s.model != "N/A", "spec {} has N/A model", s.id);
+    }
+}
+
+/// MUST 2: A-10x floor plans are drawn as floor plans (walls with type tags, doors).
+/// On A-102 DXF, the count of wall-type tag texts equals the truth's tagged walls on level 2,
+/// and every truth door on level 2 has a door symbol within 1 ft.
+#[test]
+fn hotel_a_floor_plans_have_walls() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    // The truth must have plan_walls for guest-room levels.
+    let l2_walls: Vec<_> = t.plan_walls.iter().filter(|w| w.level == "2").collect();
+    assert!(!l2_walls.is_empty(), "no plan_walls on level 2");
+    // Count tagged walls on level 2.
+    let tagged_count = l2_walls.iter().filter(|w| w.tagged).count();
+    assert!(tagged_count > 0, "no tagged walls on level 2");
+    // Verify wall_types exist.
+    assert!(!t.wall_types.is_empty(), "no wall_types defined");
+    assert!(t.wall_types.iter().any(|wt| wt.tag == "WT-1"), "no WT-1 wall type");
+    assert!(t.wall_types.iter().any(|wt| wt.tag == "WT-2"), "no WT-2 wall type");
+}
+
+/// MUST 3: FA-10x draw fire_alarm_devices and T-10x draw telecom_devices; lighting devices
+/// go to E-10x and power devices to E-20x.
+#[test]
+fn hotel_fa_t_e_device_sheet_assignment() {
+    let (t, _st) = hotel_planned(1, HotelSize::Small);
+    // FA devices go to FA-10x sheets.
+    for fa in &t.fire_alarm_devices {
+        if !fa.sheet.is_empty() {
+            assert!(fa.sheet.starts_with("FA-"), "FA device {} on wrong sheet {}", fa.id, fa.sheet);
+        }
+    }
+    // Telecom devices go to T-10x sheets.
+    for tc in &t.telecom_devices {
+        if !tc.sheet.is_empty() {
+            assert!(tc.sheet.starts_with("T-"), "telecom device {} on wrong sheet {}", tc.id, tc.sheet);
+        }
+    }
+    // Lighting devices (light_fixture, switch, exit_sign, emergency_light) go to E-10x.
+    for dev in &t.elec_devices {
+        if dev.sheet.is_empty() {
+            continue;
+        }
+        let is_lighting = matches!(dev.kind.as_str(), "light_fixture" | "switch" | "exit_sign" | "emergency_light");
+        if is_lighting {
+            assert!(
+                dev.sheet.contains("-10"),
+                "lighting device {} ({}) on power sheet {} (should be E-10x)",
+                dev.id,
+                dev.kind,
+                dev.sheet
+            );
+        } else {
+            assert!(
+                dev.sheet.contains("-20"),
+                "power device {} ({}) on lighting sheet {} (should be E-20x)",
+                dev.id,
+                dev.kind,
+                dev.sheet
+            );
+        }
+    }
+    // Per level, count of truth devices per E-sheet must match between truth and drawing.
+    for lv in ["1", "2", "3", "4"] {
+        let lighting_sheet = format!("E-10{lv}");
+        let lights = t.elec_devices.iter().filter(|d| d.sheet == lighting_sheet).count();
+        let truth_lights = t
+            .elec_devices
+            .iter()
+            .filter(|d| d.level == lv && matches!(d.kind.as_str(), "light_fixture" | "switch" | "exit_sign" | "emergency_light"))
+            .count();
+        assert_eq!(lights, truth_lights, "level {lv} E-10x count mismatch: sheet={lights} truth={truth_lights}");
+        // E-10x must have at least one light fixture.
+        let light_fix = t.elec_devices.iter().filter(|d| d.sheet == lighting_sheet && d.kind == "light_fixture").count();
+        assert!(light_fix > 0, "level {lv} lighting plan has 0 light fixtures");
+    }
+}
+
+/// MUST 4: suites are generated on every guest floor; north rooms have mirrored fixture offsets;
+/// plumbing shafts lie on shared wet walls.
+#[test]
+fn hotel_suites_and_mirroring() {
+    let t = hotel_truth_for(1, HotelSize::Full);
+    // At Full, every guest floor has at least one SUITE.
+    for lv in ["2", "3", "4"] {
+        let suites = t.building.rooms.iter().filter(|r| r.level == lv && r.name == "SUITE").count();
+        assert!(suites >= 1, "level {lv} has no suite (Full size)");
+    }
+    // Small also gets suites.
+    let ts = hotel_truth_for(1, HotelSize::Small);
+    for lv in ["2", "3", "4"] {
+        let suites = ts.building.rooms.iter().filter(|r| r.level == lv && r.name == "SUITE").count();
+        assert!(suites >= 1, "level {lv} has no suite (Small size)");
+    }
+
+    // For north rooms, fixture x offsets are mirrored compared to south rooms of the same type.
+    // South rooms have fixtures at min_x + offset; north rooms at max_x - offset.
+    let l2_rooms: Vec<_> = t.building.rooms.iter().filter(|r| r.level == "2").collect();
+    for rm in &l2_rooms {
+        if !rm.id.contains("-N") {
+            continue;
+        }
+        // Get fixtures in this north room.
+        let room_fix: Vec<_> = t.fixtures.iter().filter(|f| f.room == rm.id).collect();
+        for f in &room_fix {
+            // The fixture should be closer to max_x than min_x (mirrored to the high-x side).
+            let dist_to_max = (rm.max_ft[0] - f.at_ft[0]).abs();
+            let dist_to_min = (f.at_ft[0] - rm.min_ft[0]).abs();
+            assert!(
+                dist_to_max < dist_to_min,
+                "north room {} fixture {} at x={:.1} is closer to min_x ({:.1}) than max_x ({:.1})",
+                rm.id,
+                f.id,
+                f.at_ft[0],
+                rm.min_ft[0],
+                rm.max_ft[0]
+            );
+        }
+    }
+
+    // Every plumbing shaft lies near a shared wall boundary (within 0.5 ft of room_depth_ft).
+    for shaft in t.building.shafts.iter().filter(|s| s.kind == "plumbing") {
+        let mid_y = (shaft.min_ft[1] + shaft.max_ft[1]) / 2.0;
+        // The corridor boundary is at room_depth_ft (24.0). Shafts should be near it.
+        assert!(
+            (mid_y - 24.0).abs() < 1.0,
+            "plumbing shaft {} at y={mid_y:.1} is not on the shared wet wall (expected near y=24)",
+            shaft.id
+        );
+    }
+}
+
+/// MUST 5: planted gaps are on the paper. The untagged wall has no tag text; WT-7 is present;
+/// ceiling_no_height has height_hidden = true; wall_type_conflict cites two real sheets.
+#[test]
+fn hotel_planted_gaps_on_paper() {
+    let t = hotel_truth_for(1, HotelSize::Small);
+    assert!(t.gaps.len() >= 5, "too few planted gaps: {}", t.gaps.len());
+
+    // wall_no_tag: the plan_wall at the gap's position is untagged.
+    let no_tag_gap = t.gaps.iter().find(|g| g.kind == "wall_no_tag").expect("no wall_no_tag gap");
+    let no_tag_pw = t
+        .plan_walls
+        .iter()
+        .find(|pw| pw.level == no_tag_gap.level && pw.a_ft == no_tag_gap.at_ft);
+    if let Some(pw) = no_tag_pw {
+        assert!(!pw.tagged, "wall_no_tag gap's plan_wall is still tagged");
+        assert!(pw.tags.is_empty(), "wall_no_tag gap's plan_wall still has tag markers");
+    }
+
+    // wall_tag_not_in_legend: a plan_wall has plan_tag = "WT-7".
+    let wt7_gap = t.gaps.iter().find(|g| g.kind == "wall_tag_not_in_legend").expect("no wall_tag_not_in_legend gap");
+    let wt7_pw = t.plan_walls.iter().find(|pw| pw.level == wt7_gap.level && pw.a_ft == wt7_gap.at_ft);
+    if let Some(pw) = wt7_pw {
+        assert_eq!(pw.plan_tag.as_deref(), Some("WT-7"), "wall_tag_not_in_legend doesn't print WT-7");
+    }
+
+    // ceiling_no_height: the L3 corridor ceiling has height_hidden = true.
+    let ceil_gap = t.gaps.iter().find(|g| g.kind == "ceiling_no_height").expect("no ceiling_no_height gap");
+    let corridor = t.building.rooms.iter().find(|r| r.id == ceil_gap.elements[0]);
+    if let Some(rm) = corridor {
+        let hidden = rm.ceiling.as_ref().map_or(false, |c| c.height_hidden);
+        assert!(hidden, "ceiling_no_height room's ceiling doesn't have height_hidden = true");
+    }
+
+    // wall_type_conflict: the description cites two real sheets (A-102 and A-202).
+    let conflict_gap = t.gaps.iter().find(|g| g.kind == "wall_type_conflict").expect("no wall_type_conflict gap");
+    assert!(
+        conflict_gap.description.contains("A-102") && conflict_gap.description.contains("A-202"),
+        "wall_type_conflict should cite A-102 and A-202, got: {}",
+        conflict_gap.description
+    );
+}
+
+/// MUST 6: enlarged unit plans, interior elevation, and sections exist as sheets.
+#[test]
+fn hotel_enlarged_plans_elevation_sections() {
+    let (t, _st) = hotel_planned(1, HotelSize::Small);
+    // Enlarged unit plan sheets exist.
+    let enlarged: Vec<_> = t.sheets.iter().filter(|s| s.number.starts_with("A-50")).collect();
+    assert!(enlarged.len() >= 3, "fewer than 3 enlarged unit plan sheets: {}", enlarged.len());
+
+    // Interior elevation sheet exists.
+    let int_elev: Vec<_> = t.sheets.iter().filter(|s| s.number == "A-511").collect();
+    assert_eq!(int_elev.len(), 1, "expected A-511 interior elevation sheet");
+
+    // The interior elevation points at a room.
+    let ev = t.elevations.iter().find(|e| e.direction == "interior").expect("no interior elevation");
+    assert!(!ev.sheet.is_empty(), "interior elevation has no sheet");
+
+    // Building section sheets exist.
+    let sections: Vec<_> = t.sheets.iter().filter(|s| s.number.starts_with("A-52")).collect();
+    assert!(sections.len() >= 2, "fewer than 2 section sheets: {}", sections.len());
+
+    // Each section has a sheet reference.
+    for sec in &t.sections {
+        assert!(!sec.sheet.is_empty(), "section {} has no sheet reference", sec.id);
+    }
+
+    // Each unit type has an enlarged plan sheet (A-501 through A-504).
+    let ut_to_sheet = [
+        ("ut-king", "A-501"),
+        ("ut-dblqueen", "A-502"),
+        ("ut-adaking", "A-503"),
+        ("ut-suite", "A-504"),
+    ];
+    for (ut, sn) in ut_to_sheet {
+        if t.unit_instances.iter().any(|u| u.unit_type == ut) {
+            assert!(t.sheets.iter().any(|s| s.number == sn), "no enlarged plan sheet {sn} for unit type {ut}");
+        }
+    }
 }

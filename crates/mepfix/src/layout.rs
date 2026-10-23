@@ -52,6 +52,16 @@ pub enum Kind {
     ArchFinishes,
     /// The roof drainage and flashing plan (Q337).
     RoofDrainage,
+    /// Fire alarm plan for a level: smoke detectors, horn/strobes, pull stations, FACP.
+    FireAlarm(String),
+    /// Telecom plan for a level: data outlets, WiFi APs, cameras.
+    Telecom(String),
+    /// An enlarged unit plan for a hotel guest room type.
+    EnlargedUnit(String),
+    /// An interior elevation (typical guest room bath, etc.).
+    InteriorElevation(String),
+    /// A building section.
+    Section(String),
     /// The roof and exterior wall assemblies, wall section and detail index (Q337).
     Assemblies,
     /// The civil site plan: parking, light poles, transformer pad, underground utilities.
@@ -77,6 +87,8 @@ impl Kind {
                 | Kind::ArchFinishes
                 | Kind::Assemblies
                 | Kind::SiteSchedules
+                | Kind::InteriorElevation(_)
+                | Kind::Section(_)
         )
     }
 }
@@ -396,9 +408,9 @@ fn runs(t: &Truth) -> Vec<Vec<usize>> {
 /// The hotel's sheet list: all disciplines.
 pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     let mut v = vec![("G-001".to_string(), "COVER SHEET AND SHEET INDEX".to_string(), "G".to_string(), Kind::Cover)];
-    // Architectural plans
+    // Architectural floor plans (walls, doors, room names, wall type tags)
     for l in ["1", "2", "3", "4"] {
-        v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Rcp(l.into()))); // reuse Rcp kind for arch plans
+        v.push((format!("A-10{l}"), format!("LEVEL {l} FLOOR PLAN"), "A".into(), Kind::Floor(l.into())));
     }
     // Reflected ceiling plans
     for l in ["1", "2", "3", "4"] {
@@ -435,12 +447,22 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     }
     // Fire alarm
     for l in ["1", "2", "3", "4"] {
-        v.push((format!("FA-10{l}"), format!("LEVEL {l} FIRE ALARM PLAN"), "FA".into(), Kind::Fire(l.into())));
+        v.push((format!("FA-10{l}"), format!("LEVEL {l} FIRE ALARM PLAN"), "FA".into(), Kind::FireAlarm(l.into())));
     }
     // Telecom
     for l in ["1", "2", "3", "4"] {
-        v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Mech(l.into()))); // reuse Mech kind for layout
+        v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Telecom(l.into())));
     }
+    // Enlarged unit plans (one per unit type)
+    v.push(("A-501".into(), "ENLARGED UNIT PLAN - KING".into(), "A".into(), Kind::EnlargedUnit("ut-king".into())));
+    v.push(("A-502".into(), "ENLARGED UNIT PLAN - DOUBLE QUEEN".into(), "A".into(), Kind::EnlargedUnit("ut-dblqueen".into())));
+    v.push(("A-503".into(), "ENLARGED UNIT PLAN - ADA KING".into(), "A".into(), Kind::EnlargedUnit("ut-adaking".into())));
+    v.push(("A-504".into(), "ENLARGED UNIT PLAN - SUITE".into(), "A".into(), Kind::EnlargedUnit("ut-suite".into())));
+    // Interior elevation
+    v.push(("A-511".into(), "TYPICAL INTERIOR ELEVATION - GUEST BATH".into(), "A".into(), Kind::InteriorElevation("interior".into())));
+    // Building sections
+    v.push(("A-521".into(), "BUILDING SECTION - EAST-WEST".into(), "A".into(), Kind::Section("sec-ew".into())));
+    v.push(("A-522".into(), "BUILDING SECTION - NORTH-SOUTH".into(), "A".into(), Kind::Section("sec-ns".into())));
     // Civil
     v.push(("C-101".into(), "SITE PLAN".into(), "C".into(), Kind::Site));
     v.push(("C-102".into(), "GRADING AND EARTHWORK PLAN".into(), "C".into(), Kind::Grading));
@@ -472,12 +494,15 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
         let level = match &kind {
             Kind::Framing(l)
             | Kind::Rcp(l)
+            | Kind::Floor(l)
             | Kind::Mech(l)
             | Kind::Plumb(l)
             | Kind::Fire(l)
             | Kind::Enlarged(l, _)
             | Kind::Lighting(l)
-            | Kind::Power(l) => Some(l.clone()),
+            | Kind::Power(l)
+            | Kind::FireAlarm(l)
+            | Kind::Telecom(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();
@@ -553,40 +578,69 @@ fn assign_segments_to_hotel_sheets(t: &mut Truth) {
     }
 }
 
+/// Whether an electrical device kind belongs on the lighting plan (E-10x).
+fn is_lighting_device(kind: &str) -> bool {
+    matches!(kind, "light_fixture" | "switch" | "exit_sign" | "emergency_light")
+}
+
 /// Assign electrical and fire alarm devices to their sheets.
 fn assign_devices_to_hotel_sheets(t: &mut Truth) {
-    let sheet_map: BTreeMap<(String, String), String> =
-        t.sheets.iter().filter_map(|sh| sh.level.as_ref().map(|lv| ((sh.discipline.clone(), lv.clone()), sh.number.clone()))).collect();
+    // Build separate maps for lighting (E-10x) and power (E-20x).
+    let mut lighting_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut power_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut other_map: BTreeMap<(String, String), String> = BTreeMap::new();
+    for sh in &t.sheets {
+        let Some(lv) = sh.level.as_ref() else { continue };
+        match sh.discipline.as_str() {
+            "E" => {
+                if sh.number.contains("-10") {
+                    lighting_map.insert(lv.clone(), sh.number.clone());
+                } else if sh.number.contains("-20") {
+                    power_map.insert(lv.clone(), sh.number.clone());
+                }
+            }
+            d => {
+                other_map.insert((d.to_string(), lv.clone()), sh.number.clone());
+            }
+        }
+    }
 
     for dev in &mut t.elec_devices {
         if !dev.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("E".to_string(), dev.level.clone())) {
+        if is_lighting_device(&dev.kind) {
+            if let Some(num) = lighting_map.get(&dev.level) {
+                dev.sheet = num.clone();
+            }
+        } else if let Some(num) = power_map.get(&dev.level) {
             dev.sheet = num.clone();
         }
     }
+    // Panels go on the power plan (E-20x).
     for panel in &mut t.elec_panels {
         if !panel.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("E".to_string(), panel.level.clone())) {
+        if let Some(num) = power_map.get(&panel.level) {
             panel.sheet = num.clone();
         }
     }
+    // Circuits go on the lighting plan if all devices on them are lighting, else power.
     for ckt in &mut t.elec_circuits {
         if !ckt.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("E".to_string(), ckt.level.clone())) {
+        if let Some(num) = power_map.get(&ckt.level) {
             ckt.sheet = num.clone();
         }
     }
+    // Conduits go on the power plan by default.
     for cond in &mut t.elec_conduits {
         if !cond.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("E".to_string(), cond.level.clone())) {
+        if let Some(num) = power_map.get(&cond.level) {
             cond.sheet = num.clone();
         }
     }
@@ -594,7 +648,7 @@ fn assign_devices_to_hotel_sheets(t: &mut Truth) {
         if !fa.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("FA".to_string(), fa.level.clone())) {
+        if let Some(num) = other_map.get(&("FA".to_string(), fa.level.clone())) {
             fa.sheet = num.clone();
         }
     }
@@ -602,7 +656,7 @@ fn assign_devices_to_hotel_sheets(t: &mut Truth) {
         if !tc.sheet.is_empty() {
             continue;
         }
-        if let Some(num) = sheet_map.get(&("T".to_string(), tc.level.clone())) {
+        if let Some(num) = other_map.get(&("T".to_string(), tc.level.clone())) {
             tc.sheet = num.clone();
         }
     }
