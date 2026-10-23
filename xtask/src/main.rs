@@ -106,9 +106,12 @@ commands:
   repro FILE [--save OUT]
                   replay a recorded journal (.scr) or action macro (.actm) headless through
                   cadaddy-cli, to reproduce a crash or verify a workflow
-  release <version> [--dry-run] [--skip-build] [--skip-smoke] [--skip-sign]
-                  one-command release: version bump, platform build, .mcpb, sign, smoke, release
-                  notes, human checklist; stops at first failure; no network writes
+  release <version> [--dry-run] [--step STEP]... [--update-from OLD] [--dist DIR]
+          [--skip-build] [--skip-smoke] [--skip-sign]
+                  one-command release: bump (committed), build (from a git archive export),
+                  mcpb, smoke, update-gate, sign, notes, checklist; --step runs single steps
+                  (per machine; sign once over a --dist folder gathered from all machines);
+                  stops at the first failure; no network writes
   release-key --out FILE
                   make a release signing key: the secret to FILE (keep it off the repository), the
                   public key line for apps/cadaddy/src/release_keys.txt printed
