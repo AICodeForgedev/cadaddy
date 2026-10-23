@@ -1769,11 +1769,9 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
                     let mut along = 6.0;
                     let mut cavity = stud_cavity_at(along, sw_wall.stud_spacing_in);
                     let actually_plant = want_plant_sw && vent_wall.is_some();
-                    if actually_plant {
-                        if let Some(vc) = vent_cavity_on_wall(t, &sw_wall.id) {
-                            cavity = vc;
-                            along = (vc as f64 + 0.5) * sw_wall.stud_spacing_in;
-                        }
+                    if actually_plant && let Some(vc) = vent_cavity_on_wall(t, &sw_wall.id) {
+                        cavity = vc;
+                        along = (vc as f64 + 0.5) * sw_wall.stud_spacing_in;
                     }
                     let frac = along / sw_len.max(1.0);
                     let dx = sw_wall.to_ft[0] - sw_wall.from_ft[0];

@@ -1056,14 +1056,13 @@ fn switch_at_48_in_vent_cavity_is_flagged() {
     for seed in 1..=40 {
         let t = truth_for(seed);
         for c in t.clashes.iter().filter(|c| c.kind == "in_wall" && c.planted) {
-            if let Some(dev) = t.device(&c.a) {
-                if dev.kind == "switch" && (dev.aff_in - 48.0).abs() < 1.0 {
-                    if let Some(ri) = t.rough_in(&c.b) {
-                        if ri.kind == "vent" {
-                            found_clash = true;
-                        }
-                    }
-                }
+            if let Some(dev) = t.device(&c.a)
+                && dev.kind == "switch"
+                && (dev.aff_in - 48.0).abs() < 1.0
+                && let Some(ri) = t.rough_in(&c.b)
+                && ri.kind == "vent"
+            {
+                found_clash = true;
             }
         }
     }
@@ -1082,25 +1081,25 @@ fn clearance_is_measured_in_inches_not_cavities() {
         for c in t.clashes.iter().filter(|c| c.kind == "in_wall") {
             let dev = t.device(&c.a);
             let ri = t.rough_in(&c.b);
-            if let (Some(dev), Some(ri)) = (dev, ri) {
-                if let Some(wall) = t.wall(&dev.wall) {
-                    let dev_along = project_on_wall_test(wall, dev.at_ft);
-                    let ri_along = project_on_wall_test(wall, [ri.at_ft[0], ri.at_ft[1]]);
-                    let box_half = dev.box_in[0] / 2.0;
-                    let od = cadaddy_mepfix::design::pipe_od(ri.size_in);
-                    let gap = ((dev_along - ri_along).abs() - box_half - od / 2.0).max(0.0);
-                    // Must be same cavity or gap < 3"
-                    assert!(
-                        dev.stud_cavity == ri.stud_cavity || gap < 3.0,
-                        "seed {seed}: clash {} has gap {:.1}\" between device {} (cav {}) and rough-in {} (cav {})",
-                        c.id,
-                        gap,
-                        dev.id,
-                        dev.stud_cavity,
-                        ri.id,
-                        ri.stud_cavity,
-                    );
-                }
+            if let (Some(dev), Some(ri)) = (dev, ri)
+                && let Some(wall) = t.wall(&dev.wall)
+            {
+                let dev_along = project_on_wall_test(wall, dev.at_ft);
+                let ri_along = project_on_wall_test(wall, [ri.at_ft[0], ri.at_ft[1]]);
+                let box_half = dev.box_in[0] / 2.0;
+                let od = cadaddy_mepfix::design::pipe_od(ri.size_in);
+                let gap = ((dev_along - ri_along).abs() - box_half - od / 2.0).max(0.0);
+                // Must be same cavity or gap < 3"
+                assert!(
+                    dev.stud_cavity == ri.stud_cavity || gap < 3.0,
+                    "seed {seed}: clash {} has gap {:.1}\" between device {} (cav {}) and rough-in {} (cav {})",
+                    c.id,
+                    gap,
+                    dev.id,
+                    dev.stud_cavity,
+                    ri.id,
+                    ri.stud_cavity,
+                );
             }
         }
     }
@@ -1147,10 +1146,10 @@ fn rules_load_from_file_and_change_result() {
 
     // Modify the rules: change the WC vent height from 20" to 40".
     let mut modified = loaded;
-    if let Some(wc) = modified.rules.iter_mut().find(|r| r.fixture_kind == "water_closet") {
-        if let Some(vent) = wc.stubs.iter_mut().find(|s| s.kind == "vent") {
-            vent.aff_in = 40.0;
-        }
+    if let Some(wc) = modified.rules.iter_mut().find(|r| r.fixture_kind == "water_closet")
+        && let Some(vent) = wc.stubs.iter_mut().find(|s| s.kind == "vent")
+    {
+        vent.aff_in = 40.0;
     }
     let mod_path = dir.join("rules_modified.json");
     modified.save(&mod_path).expect("save modified failed");
