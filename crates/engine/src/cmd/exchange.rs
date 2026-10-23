@@ -824,11 +824,18 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(r);
     }
+    // Aggregate blank-sheet warnings from each plot into the publish result.
+    let all_warnings: Vec<Value> = out
+        .iter()
+        .filter_map(|r| r.get("warnings").and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect();
     let message = match &base {
         Some(_) => format!("Published {} sheet(s): {}", out.len(), out.iter().filter_map(|r| r["path"].as_str()).collect::<Vec<_>>().join(", ")),
         None => format!("Published {} sheet(s)", out.len()),
     };
-    Ok(json!({ "sheets": out, "message": message }))
+    Ok(json!({ "sheets": out, "warnings": all_warnings, "message": message }))
 }
 
 // ---------- PDFBOOK ----------

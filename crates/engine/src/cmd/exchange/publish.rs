@@ -243,15 +243,22 @@ pub(super) fn publish(s: &mut Session, list: &[Sheet], path: Option<&str>, singl
             }
             Some(file) => {
                 if cache.as_ref().is_none_or(|(f, _)| f != file) {
-                    cache = Some((file.clone(), read_drawing(cmd, file)?));
+                    let mut d = read_drawing(cmd, file)?;
+                    crate::cmd::layout::mark_bare_layouts(&mut d);
+                    cache = Some((file.clone(), d));
                 }
-                let Some((_, d)) = &cache else { continue };
-                let space = if sh.layout.eq_ignore_ascii_case("model") {
-                    cadaddy_doc::Space::Model
+                let Some((_, d)) = &mut cache else { continue };
+                let layout_name = if sh.layout.eq_ignore_ascii_case("model") {
+                    None
                 } else {
-                    cadaddy_doc::Space::Paper(
-                        d.layout(&sh.layout).map(|l| l.name.clone()).ok_or_else(|| bad(cmd, format!("{file}: no layout `{}`", sh.layout)))?,
-                    )
+                    Some(d.layout(&sh.layout).map(|l| l.name.clone()).ok_or_else(|| bad(cmd, format!("{file}: no layout `{}`", sh.layout)))?)
+                };
+                if let Some(ln) = &layout_name {
+                    crate::cmd::layout::set_up_layout(d, ln);
+                }
+                let space = match &layout_name {
+                    None => cadaddy_doc::Space::Model,
+                    Some(n) => cadaddy_doc::Space::Paper(n.clone()),
                 };
                 let mut opts = Value::Object(sh.page.clone());
                 if let Some(v) = opts.get("scale").cloned()
