@@ -28,7 +28,9 @@
 //! `cargo xtask perf --vs [--sizes 10000,100000,1000000]`: CADaddy's side of the comparison with
 //! other programs (`docs/perf-vs.md`): writes the 2D plans (`target/perf/vs/plan-<n>.dxf`), then
 //! opens each in a fresh process (`perfbench --file`) and prints open, select-all, zoom-extents
-//! and save times with the process's peak memory, as the table's rows.
+//! and save times with the process's peak memory, as the table's rows; then measures pan frame
+//! time per size (`perfbench --pan`, 100 steps rasterised on the CPU at 1600 x 900).
+//! The competitor scripts are in `tools/perf-vs/` (QCAD, FreeCAD).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -220,6 +222,7 @@ fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
     crate::run(c, "perfbench --plans")?;
     let flag = if cfg!(target_os = "linux") { "-v" } else { "-l" };
     println!("\n| objects | open (ms) | select all (ms) | zoom extents (ms) | save DXF (ms) | peak MB |\n|---|---|---|---|---|---|");
+    let mut pan_rows = Vec::new();
     for n in sizes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let plan = dir.join(format!("plan-{n}.dxf"));
         let out = std::process::Command::new("/usr/bin/time")
@@ -233,7 +236,24 @@ fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
         let ms = |k: &str| r[k].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));
         let peak = peak_mb(&String::from_utf8_lossy(&out.stderr)).map_or_else(|| "-".into(), |m| format!("{m:.0}"));
         println!("| {n} | {} | {} | {} | {} | {peak} |", ms("open"), ms("select_all"), ms("zoom_extents"), ms("save_dxf"));
+        // Pan frame time: rasterise 100 pan steps on the CPU (conservative upper bound; GPU is
+        // faster since it only changes a uniform).
+        let pan_out = std::process::Command::new(&bench)
+            .arg("--pan")
+            .arg(&plan)
+            .output()
+            .map_err(|e| format!("perfbench --pan: {e}"))?;
+        let pr: Value = serde_json::from_slice(String::from_utf8_lossy(&pan_out.stdout).trim().as_bytes()).unwrap_or(Value::Null);
+        let frame = pr["pan_frame_ms"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.2}"));
+        let fps = pr["pan_fps"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));
+        pan_rows.push((n.to_string(), frame, fps));
     }
+    println!("\n| objects | program | pan frame (ms) | pan FPS |\n|---|---|---|---|");
+    for (n, frame, fps) in &pan_rows {
+        println!("| {n} | **CADaddy** | {frame} | {fps} |");
+    }
+    println!("| any | QCAD | not measured (by hand) | |");
+    println!("| any | FreeCAD | not measured (by hand) | |");
     Ok(())
 }
 
