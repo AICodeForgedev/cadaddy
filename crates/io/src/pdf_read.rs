@@ -54,6 +54,9 @@ pub enum LayerMode {
     Pen,
     /// AutoCAD's PDFIMPORT object layers: PDF_Geometry, PDF_Solid Fills, PDF_Text.
     Object,
+    /// Content-class layers: PDF-GRID, PDF-WALL, PDF-TEXT, PDF-SYMBOLS, PDF-TITLEBLOCK,
+    /// PDF-HATCH, PDF-GEOMETRY — assigned by detecting what each element is.
+    Content,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +126,11 @@ pub struct PdfImport {
     /// The scale used, and where it came from ("scale note 1/8" = 1'-0"", "option", "none").
     pub scale: f64,
     pub scale_source: String,
+    /// Whether a "DO NOT SCALE" note was detected (visible or recovered from SHX text).
+    pub do_not_scale: bool,
+    /// Whether the sheet needs registration (it carries a scale note but is kept at sheet size
+    /// because of a DO NOT SCALE note).
+    pub needs_registration: bool,
     pub pages: u32,
     pub stats: BTreeMap<String, usize>,
     pub notes: Vec<String>,
@@ -1643,6 +1651,776 @@ pub fn parse_scale(text: &str) -> Option<f64> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Fix 1: Enhanced scale detection — per-viewport/drawing-title scale notes
+// ---------------------------------------------------------------------------------------------
+
+/// Check whether the sheet carries a "DO NOT SCALE" / "NTS" / "refer to architectural" note.
+/// Checks both visible and hidden text.
+fn has_do_not_scale_note(texts: &[TextOut]) -> bool {
+    for t in texts {
+        let up = t.value.trim().to_ascii_uppercase();
+        if up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
+            || up == "NTS" || up == "N.T.S."
+            || (up.contains("REFER") && up.contains("ARCHITECTURAL"))
+            || up.contains("DO NOT SCALE THIS DRAWING")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Detect scale notes in text entities, with preference for those on TITLE/BORDER layers or
+/// near the bottom/right of the sheet (the title block area). Returns the best scale factor and
+/// the source text.
+fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, String)> {
+    struct Candidate {
+        scale: f64,
+        text: String,
+        count: usize,
+        priority: u8, // 0 = best (title block layer), 1 = bottom-right, 2 = anywhere
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for t in texts {
+        let v = t.value.trim();
+        let up = v.to_ascii_uppercase();
+        if !(up.contains('=') || up.starts_with("SCALE")) || !(up.contains('\'') || up.contains('"') || up.contains(':')) {
+            continue;
+        }
+        let Some(k) = parse_scale(v) else { continue };
+        let key = v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
+        let layer_up = t.layer.as_deref().unwrap_or("").to_ascii_uppercase();
+        let on_title = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
+        // sheet position: the title block is typically in the bottom-right quadrant
+        let (sx, sy) = (t.at.0 / 72.0, t.at.1 / 72.0);
+        let in_title_area = sx > sheet.0 * 0.6 && sy < sheet.1 * 0.3;
+        let priority = if on_title { 0 } else if in_title_area { 1 } else { 2 };
+        if let Some(idx) = seen.get(&key) {
+            if let Some(c) = candidates.get_mut(*idx) {
+                c.count += 1;
+                if priority < c.priority {
+                    c.priority = priority;
+                }
+            }
+        } else {
+            seen.insert(key.clone(), candidates.len());
+            candidates.push(Candidate { scale: k, text: key, count: 1, priority });
+        }
+    }
+    // best = lowest priority, then most occurrences
+    candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
+    candidates.into_iter().next().map(|c| (c.scale, c.text))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 2: Content-class layer assignment
+// ---------------------------------------------------------------------------------------------
+
+/// Content class for a PDF entity, used to assign layers by content type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ContentClass {
+    /// Gray dashed long lines — structural grid
+    Grid,
+    /// Wall linework (heavy black lines forming closed regions)
+    Wall,
+    /// Text entities
+    Text,
+    /// Symbols (repeated small clusters, devices, fixtures)
+    Symbol,
+    /// Title block elements (near sheet border, in title block area)
+    TitleBlock,
+    /// Solid fills / hatches
+    Hatch,
+    /// Annotation / dimensions / leaders
+    Anno,
+    /// Everything else
+    Geometry,
+}
+
+/// Classify a stroke by its visual characteristics and position on the sheet.
+fn classify_stroke(s: &Stroke, sheet: (f64, f64), grid_lines: &HashSet<usize>) -> ContentClass {
+    if grid_lines.contains(&s.order) {
+        return ContentClass::Grid;
+    }
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    // title block: near the border of the sheet
+    if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+        let near_right = b[2] > sw * 0.95;
+        let near_bottom = b[1] < sh * 0.05;
+        let near_border = near_right || near_bottom || b[0] < sw * 0.02 || b[3] > sh * 0.98;
+        if near_border && (b[2] - b[0] < sw * 0.4 || b[3] - b[1] < sh * 0.4) {
+            return ContentClass::TitleBlock;
+        }
+    }
+    // heavy black lines are likely walls
+    let is_black = s.pen.rgb.iter().all(|c| *c <= 38);
+    if is_black && s.pen.lw >= 35 {
+        return ContentClass::Wall;
+    }
+    // thin lines with arrowhead-like short segments: annotation (dims, leaders)
+    if s.pen.lw <= 15 && s.pts.len() <= 4 {
+        let total_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if total_len < sw.min(sh) * 0.15 && total_len > 1.0 {
+            return ContentClass::Anno;
+        }
+    }
+    ContentClass::Geometry
+}
+
+/// Detect grid lines: long, same-color, evenly spaced horizontal or vertical lines that span
+/// most of the sheet — typically the structural grid on construction documents.
+fn detect_grid_lines(strokes: &[Stroke], sheet: (f64, f64)) -> HashSet<usize> {
+    let mut grid_orders = HashSet::new();
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let min_span = sw.min(sh) * 0.5;
+    // collect long horizontal and vertical lines
+    struct GridCandidate {
+        order: usize,
+        horizontal: bool,
+        pos: f64, // the fixed coordinate (y for horizontal, x for vertical)
+        pen: Pen,
+    }
+    let mut candidates: Vec<GridCandidate> = Vec::new();
+    for s in strokes {
+        if s.pts.len() < 2 || s.closed {
+            continue;
+        }
+        let b = match bbox(std::slice::from_ref(&s.pts)) {
+            Some(b) => b,
+            None => continue,
+        };
+        let dx = b[2] - b[0];
+        let dy = b[3] - b[1];
+        // horizontal: spans most of the sheet width, thin vertically
+        if dx > min_span && dy < 2.0 {
+            candidates.push(GridCandidate { order: s.order, horizontal: true, pos: (b[1] + b[3]) / 2.0, pen: s.pen });
+        }
+        // vertical: spans most of the sheet height, thin horizontally
+        if dy > min_span && dx < 2.0 {
+            candidates.push(GridCandidate { order: s.order, horizontal: false, pos: (b[0] + b[2]) / 2.0, pen: s.pen });
+        }
+    }
+    // group by direction and pen: ≥4 same-pen lines in one direction = grid
+    let mut groups: HashMap<(bool, Pen), Vec<&GridCandidate>> = HashMap::new();
+    for c in &candidates {
+        groups.entry((c.horizontal, c.pen)).or_default().push(c);
+    }
+    for ((_, _), members) in &groups {
+        if members.len() >= 4 {
+            // check roughly even spacing
+            let mut positions: Vec<f64> = members.iter().map(|c| c.pos).collect();
+            positions.sort_by(f64::total_cmp);
+            let spacings: Vec<f64> = positions.windows(2).map(|w| w[1] - w[0]).collect();
+            if !spacings.is_empty() {
+                let mean = spacings.iter().sum::<f64>() / spacings.len() as f64;
+                let even = spacings.iter().all(|s| (*s - mean).abs() < mean * 0.3 + 5.0);
+                if even {
+                    for m in members {
+                        grid_orders.insert(m.order);
+                    }
+                }
+            }
+        }
+    }
+    grid_orders
+}
+
+/// The content-class layer name for the given class.
+fn content_class_layer(class: ContentClass) -> &'static str {
+    match class {
+        ContentClass::Grid => "E-GRID",
+        ContentClass::Wall => "A-WALL",
+        ContentClass::Text => "TEXT",
+        ContentClass::Symbol => "E-DEVICE",
+        ContentClass::TitleBlock => "TITLEBLOCK",
+        ContentClass::Hatch => "HATCH",
+        ContentClass::Geometry => "PDF-GEOMETRY",
+        ContentClass::Anno => "ANNO",
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 3: SHX text recovery — use invisible text (rendering mode 3) as the ground truth for
+// stroked lettering, then fall back to feature-based glyph matching for any remainders.
+// AutoCAD draws SHX text twice: once as linework (strokes) and once as invisible searchable
+// text at the same position.  Matching hidden text to stroke clusters gives perfect accuracy.
+// ---------------------------------------------------------------------------------------------
+
+/// A text entity recovered from SHX stroke clusters.
+struct RecoveredText {
+    at: (f64, f64),
+    height: f64,
+    value: String,
+    stroke_indices: HashSet<usize>,
+    pen: Pen,
+    layer: Option<String>,
+}
+
+/// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
+/// clusters.  Each hidden text entity that sits near a group of short strokes at the same
+/// position and height is adopted: the strokes are consumed and the hidden text's value is
+/// used.  Returns the recovered texts and the set of consumed stroke indices.
+fn recover_shx_from_hidden(
+    strokes: &[Stroke],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+) -> Vec<RecoveredText> {
+    // separate hidden from visible texts
+    let hidden: Vec<&TextOut> = texts.iter().filter(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER)).collect();
+    if hidden.is_empty() {
+        return Vec::new();
+    }
+
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    // SHX strokes are short segments (2% of sheet) around each hidden text position
+    let max_seg = (sw.min(sh) * 0.025).clamp(2.0, 40.0);
+
+    // build a spatial grid of short strokes
+    let cell = max_seg * 4.0;
+    struct SI { idx: usize, cx: f64, cy: f64 }
+    let mut short: Vec<SI> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if s.pts.len() > 8 { continue; }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.05 { continue; }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0 });
+        }
+    }
+    let mut sgrid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (si, s) in short.iter().enumerate() {
+        let gx = (s.cx / cell).floor() as i64;
+        let gy = (s.cy / cell).floor() as i64;
+        sgrid.entry((gx, gy)).or_default().push(si);
+    }
+
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut result: Vec<RecoveredText> = Vec::new();
+
+    for ht in &hidden {
+        if ht.value.trim().is_empty() { continue; }
+        let h = ht.height.max(1.0);
+        // approximate the text's bounding box from its position, height and character count
+        let est_w = h * 0.6 * ht.value.len().max(1) as f64;
+        let (tx0, ty0) = (ht.at.0 - h * 0.2, ht.at.1 - h * 0.3);
+        let (tx1, ty1) = (ht.at.0 + est_w + h * 0.2, ht.at.1 + h * 1.3);
+        // find short strokes inside this box
+        let gx0 = ((tx0 / cell).floor() as i64) - 1;
+        let gx1 = ((tx1 / cell).floor() as i64) + 1;
+        let gy0 = ((ty0 / cell).floor() as i64) - 1;
+        let gy1 = ((ty1 / cell).floor() as i64) + 1;
+        let mut matched: Vec<usize> = Vec::new();
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                if let Some(members) = sgrid.get(&(gx, gy)) {
+                    for &si in members {
+                        let s = &short[si];
+                        if used.contains(&s.idx) { continue; }
+                        if s.cx >= tx0 && s.cx <= tx1 && s.cy >= ty0 && s.cy <= ty1 {
+                            matched.push(s.idx);
+                        }
+                    }
+                }
+            }
+        }
+        // need at least 1 stroke per character (SHX glyphs typically have 2-6 strokes each)
+        if matched.len() < ht.value.len().max(1) {
+            continue;
+        }
+        for &si in &matched { used.insert(si); }
+        let pen = strokes.get(matched[0]).map(|s| s.pen).unwrap_or(Pen { rgb: [0, 0, 0], lw: 0, transp: 0 });
+        let layer = strokes.get(matched[0]).and_then(|s| s.layer.clone());
+        result.push(RecoveredText {
+            at: ht.at,
+            height: ht.height,
+            value: ht.value.clone(),
+            stroke_indices: matched.into_iter().collect(),
+            pen,
+            layer,
+        });
+    }
+    result
+}
+
+/// Fallback SHX text recovery: when no hidden text is available, detect clusters of short
+/// strokes that form glyph-like patterns and match them to nearby visible text.  This is less
+/// accurate than hidden-text matching but recovers more text than leaving it as linework.
+fn recover_shx_fallback(
+    strokes: &[Stroke],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+) -> Vec<RecoveredText> {
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let max_seg = (sw.min(sh) * 0.02).clamp(2.0, 25.0);
+    let cell = max_seg * 3.0;
+
+    // find short strokes (SHX candidates)
+    struct SI { idx: usize, cx: f64, cy: f64, pen: Pen }
+    let mut short: Vec<SI> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if s.closed || s.pts.len() > 6 { continue; }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.1 { continue; }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0, pen: s.pen });
+        }
+    }
+    if short.is_empty() { return Vec::new(); }
+
+    // cluster short strokes by proximity and same pen
+    let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    for (si, s) in short.iter().enumerate() {
+        let gx = (s.cx / cell).floor() as i64;
+        let gy = (s.cy / cell).floor() as i64;
+        for dx in -1..=1 { for dy in -1..=1 {
+            grid.entry((gx + dx, gy + dy, s.pen)).or_default().push(si);
+        }}
+    }
+    let mut visited = vec![false; short.len()];
+    let mut clusters: Vec<([f64; 4], Vec<usize>, f64, Pen)> = Vec::new(); // bounds, indices, height, pen
+    for si in 0..short.len() {
+        if visited[si] { continue; }
+        visited[si] = true;
+        let s = &short[si];
+        let mut members = vec![si];
+        let mut queue = vec![si];
+        let mut bounds = [s.cx, s.cy, s.cx, s.cy];
+        while let Some(cur) = queue.pop() {
+            let c = &short[cur];
+            let gx = (c.cx / cell).floor() as i64;
+            let gy = (c.cy / cell).floor() as i64;
+            if let Some(neighbors) = grid.get(&(gx, gy, c.pen)) {
+                for &ni in neighbors {
+                    if visited[ni] { continue; }
+                    let n = &short[ni];
+                    if (n.cx - c.cx).abs() < cell && (n.cy - c.cy).abs() < cell {
+                        visited[ni] = true;
+                        members.push(ni);
+                        queue.push(ni);
+                        bounds = [bounds[0].min(n.cx), bounds[1].min(n.cy), bounds[2].max(n.cx), bounds[3].max(n.cy)];
+                    }
+                }
+            }
+        }
+        let h = bounds[3] - bounds[1];
+        let w = bounds[2] - bounds[0];
+        if members.len() >= 2 && h > 0.5 && h < max_seg * 12.0 && w > 0.5 && w < max_seg * 100.0 {
+            clusters.push((bounds, members.iter().map(|&mi| short[mi].idx).collect(), h, s.pen));
+        }
+    }
+
+    // for each cluster, try to find a visible text entity that overlaps it
+    let mut result: Vec<RecoveredText> = Vec::new();
+    let mut used_texts: HashSet<usize> = HashSet::new();
+    for (bounds, indices, height, pen) in &clusters {
+        let pad = height * 0.5;
+        let cb = [bounds[0] - pad, bounds[1] - pad, bounds[2] + pad, bounds[3] + pad];
+        // find visible text that overlaps this cluster
+        let mut best: Option<(usize, f64)> = None;
+        for (ti, t) in texts.iter().enumerate() {
+            if used_texts.contains(&ti) { continue; }
+            if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) { continue; }
+            let th = t.height.max(1.0);
+            let tw = th * 0.6 * t.value.len().max(1) as f64;
+            let tb = [t.at.0 - 1.0, t.at.1 - 1.0, t.at.0 + tw + 1.0, t.at.1 + th + 1.0];
+            if tb[0] < cb[2] && tb[2] > cb[0] && tb[1] < cb[3] && tb[3] > cb[1] {
+                let dist = ((t.at.0 - bounds[0]).hypot(t.at.1 - bounds[1])).abs();
+                if !best.is_some_and(|(_, d)| dist >= d) {
+                    best = Some((ti, dist));
+                }
+            }
+        }
+        if let Some((ti, _)) = best {
+            used_texts.insert(ti);
+            let t = &texts[ti];
+            result.push(RecoveredText {
+                at: (bounds[0], bounds[1]),
+                height: *height,
+                value: t.value.clone(),
+                stroke_indices: indices.iter().copied().collect(),
+                pen: *pen,
+                layer: t.layer.clone(),
+            });
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 4: Filter opaque fills that the PDF render doesn't show
+// ---------------------------------------------------------------------------------------------
+
+/// Check if a fill is likely a false opaque fill (artifact) rather than real content visible
+/// in the PDF. False fills are typically:
+/// - Large solid fills covering significant portions of the sheet (yellow/white boxes)
+/// - Fills whose color doesn't match nearby content (e.g., bright yellow on a line drawing)
+/// - Fills behind text that are not wipeouts
+fn is_artifact_fill(f: &Fill, sheet: (f64, f64), texts: &[TextOut], strokes: &[Stroke]) -> bool {
+    let b = match bbox(&f.loops) {
+        Some(b) => b,
+        None => return false,
+    };
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let fill_area = (b[2] - b[0]) * (b[3] - b[1]);
+    let sheet_area = sw * sh;
+    if sheet_area < 1.0 {
+        return false;
+    }
+    // fills covering >50% of the sheet are almost certainly artifacts
+    if fill_area > sheet_area * 0.5 {
+        return true;
+    }
+    // bright yellow, orange, or other non-standard fills on construction docs that cover large areas
+    // are typically "highlighted" artifacts from PDF redline tools, not original drawing content
+    let [r, g, _b] = f.pen.rgb;
+    let is_bright_yellow = r > 200 && g > 200 && _b < 100;
+    let is_bright_orange = r > 200 && g > 100 && g < 200 && _b < 100;
+    let is_artifact_color = is_bright_yellow || is_bright_orange;
+    if is_artifact_color && fill_area > sheet_area * 0.01 {
+        // large bright colored fills without nearby matching-color content are artifacts
+        let has_matching_content = strokes.iter().any(|s| s.pen.rgb == f.pen.rgb) || texts.iter().any(|t| t.pen.rgb == f.pen.rgb);
+        if !has_matching_content {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------------------------
+// Mask reduction: merge overlapping/adjacent wipeouts, drop those that mask nothing visible
+// ---------------------------------------------------------------------------------------------
+
+/// Reduce the mask count by merging spatially overlapping masks into combined bounding-box
+/// masks, and by dropping masks that do not overlap any visible non-white content.
+fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[TextOut], sheet: (f64, f64)) -> Vec<Fill> {
+    if masks.is_empty() {
+        return masks;
+    }
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+
+    // compute a bounding box for each mask
+    struct MaskInfo {
+        bb: [f64; 4],
+        order: usize,
+    }
+    let mut infos: Vec<MaskInfo> = Vec::new();
+    for m in &masks {
+        if let Some(bb) = bbox(&m.loops) {
+            infos.push(MaskInfo { bb, order: m.order });
+        }
+    }
+    if infos.is_empty() {
+        return Vec::new();
+    }
+
+    // grid-based spatial grouping: merge masks whose bounding boxes overlap or are close
+    let cell_size = sw.min(sh) * 0.05; // 5% of sheet for grouping
+    let cell_size = cell_size.max(20.0);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, info) in infos.iter().enumerate() {
+        let gx0 = (info.bb[0] / cell_size).floor() as i64;
+        let gx1 = (info.bb[2] / cell_size).floor() as i64;
+        let gy0 = (info.bb[1] / cell_size).floor() as i64;
+        let gy1 = (info.bb[3] / cell_size).floor() as i64;
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                grid.entry((gx, gy)).or_default().push(i);
+            }
+        }
+    }
+
+    // union-find to group overlapping masks
+    let mut parent: Vec<usize> = (0..infos.len()).collect();
+    let find = |parent: &mut [usize], mut x: usize| -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    };
+    let pad = cell_size * 0.5; // generous tolerance for adjacency (masks behind nearby tags)
+    for members in grid.values() {
+        for (mi, &a) in members.iter().enumerate() {
+            for &b in &members[mi + 1..] {
+                let (ba, bb_) = (&infos[a].bb, &infos[b].bb);
+                // overlapping or adjacent (with padding)
+                if ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad {
+                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                    if ra != rb {
+                        parent[rb] = ra;
+                    }
+                }
+            }
+        }
+    }
+
+    // collect groups and merge each into a single bounding-box mask
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..infos.len() {
+        groups.entry(find(&mut parent, i)).or_default().push(i);
+    }
+
+    // determine which areas have visible non-white content (strokes, fills, texts)
+    // to decide whether a merged mask is worth keeping
+    let mut content_bbs: Vec<[f64; 4]> = Vec::new();
+    for s in strokes {
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            content_bbs.push(b);
+        }
+    }
+    for f in fills {
+        if let Some(b) = bbox(&f.loops) {
+            content_bbs.push(b);
+        }
+    }
+    for t in texts {
+        let h = t.height.max(1.0);
+        let w = h * t.value.len().max(1) as f64 * 0.6;
+        content_bbs.push([t.at.0, t.at.1, t.at.0 + w, t.at.1 + h]);
+    }
+
+    // generous proximity check: a mask near visible content is worth keeping (it may mask
+    // behind text or tags that are adjacent, not exactly overlapping)
+    let content_pad = sw.min(sh) * 0.05; // 5% of sheet size
+    let overlaps_content = |bb: &[f64; 4]| -> bool {
+        let expanded = [bb[0] - content_pad, bb[1] - content_pad, bb[2] + content_pad, bb[3] + content_pad];
+        content_bbs.iter().any(|cb| cb[0] < expanded[2] && cb[2] > expanded[0] && cb[1] < expanded[3] && cb[3] > expanded[1])
+    };
+
+    let mut result: Vec<Fill> = Vec::new();
+    for (_, members) in groups {
+        let mut merged_bb = infos[members[0]].bb;
+        let mut max_order = infos[members[0]].order;
+        for &mi in &members[1..] {
+            let b = &infos[mi].bb;
+            merged_bb = [merged_bb[0].min(b[0]), merged_bb[1].min(b[1]), merged_bb[2].max(b[2]), merged_bb[3].max(b[3])];
+            max_order = max_order.max(infos[mi].order);
+        }
+
+        // drop only large merged groups of masks that don't overlap any visible content:
+        // a cluster of 10+ tiny masks far from anything useful is an artefact.
+        // Singleton or small groups are kept (a single white fill behind a tag is legitimate).
+        if members.len() >= 10 && !overlaps_content(&merged_bb) {
+            continue;
+        }
+
+        // emit one merged mask for the group
+        let loop_pts = vec![
+            (merged_bb[0], merged_bb[1]),
+            (merged_bb[2], merged_bb[1]),
+            (merged_bb[2], merged_bb[3]),
+            (merged_bb[0], merged_bb[3]),
+        ];
+        result.push(Fill {
+            loops: vec![loop_pts],
+            pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 },
+            order: max_order,
+            layer: None,
+        });
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 5: Detect repeated symbol clusters and create blocks with attributes
+// ---------------------------------------------------------------------------------------------
+
+/// A group of entities at one location that appears multiple times on the sheet.
+struct SymbolInstance {
+    /// Center point.
+    center: (f64, f64),
+    /// Stroke indices that form this symbol.
+    stroke_indices: Vec<usize>,
+    /// Fill indices.
+    fill_indices: Vec<usize>,
+    /// Nearby text (potential attribute tag).
+    nearby_text: Option<String>,
+    nearby_text_idx: Option<usize>,
+    /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
+    device_type: Option<String>,
+}
+
+/// Detect device symbols by finding compact stroke clusters near device-tag text.
+///
+/// Strategy: hidden text entities that look like device tags (short, uppercase letters/numbers,
+/// near visible geometry) mark the positions of electrical devices.  For each tag, the nearby
+/// compact stroke group is the symbol.  Groups of ≥2 instances with the same normalized shape
+/// and similar tag patterns become blocks.
+///
+/// When no hidden text is available, falls back to the flood-fill + signature approach.
+fn detect_symbol_clusters(
+    strokes: &[Stroke],
+    fills: &[Fill],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+    shx_stroke_indices: &HashSet<usize>,
+) -> Vec<Vec<SymbolInstance>> {
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let min_size = sw.min(sh) * 0.002;
+    let max_size = sw.min(sh) * 0.06;
+
+    // Build a spatial grid of non-consumed short strokes (not already used by SHX recovery)
+    let cell = max_size * 1.5;
+    let mut stroke_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if shx_stroke_indices.contains(&i) { continue; }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_size * 3.0 { continue; }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            let gx = ((b[0] + b[2]) / 2.0 / cell).floor() as i64;
+            let gy = ((b[1] + b[3]) / 2.0 / cell).floor() as i64;
+            stroke_grid.entry((gx, gy)).or_default().push(i);
+        }
+    }
+    // Fill grid
+    let mut fill_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, f) in fills.iter().enumerate() {
+        if let Some(b) = bbox(&f.loops) {
+            let gx = ((b[0] + b[2]) / 2.0 / cell).floor() as i64;
+            let gy = ((b[1] + b[3]) / 2.0 / cell).floor() as i64;
+            fill_grid.entry((gx, gy)).or_default().push(i);
+        }
+    }
+
+    // Gather device-tag candidates: short text entities (1–4 chars, uppercase) that look like
+    // device tags (common on E-sheets: A, C, DH, E, EF, G, J, L4, OS, REC, XA, etc.)
+    // Include both hidden and visible text — tags might be in either.
+    let is_device_tag = |v: &str| -> bool {
+        let t = v.trim();
+        (1..=6).contains(&t.len())
+            && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && t.chars().any(|c| c.is_ascii_alphabetic())
+            // not a scale note or sheet number
+            && !t.contains('=') && !t.contains('"') && !t.contains('\'')
+    };
+
+    let mut used_strokes: HashSet<usize> = HashSet::new();
+    let mut instances: Vec<SymbolInstance> = Vec::new();
+
+    // For each device-tag text, find the compact stroke cluster around it
+    for (ti, t) in texts.iter().enumerate() {
+        let v = t.value.trim();
+        if !is_device_tag(v) { continue; }
+        if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) {
+            // skip hidden text that was already matched to SHX recovery
+        }
+
+        let tx = t.at.0;
+        let ty = t.at.1;
+        let search_r = t.height.max(5.0) * 4.0; // search radius: ~4× the text height
+
+        // find short strokes near this tag
+        let gx0 = (((tx - search_r) / cell).floor() as i64) - 1;
+        let gx1 = (((tx + search_r) / cell).floor() as i64) + 1;
+        let gy0 = (((ty - search_r) / cell).floor() as i64) - 1;
+        let gy1 = (((ty + search_r) / cell).floor() as i64) + 1;
+
+        let mut nearby: Vec<usize> = Vec::new();
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                if let Some(members) = stroke_grid.get(&(gx, gy)) {
+                    for &si in members {
+                        if used_strokes.contains(&si) || shx_stroke_indices.contains(&si) { continue; }
+                        let s = &strokes[si];
+                        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+                            let sc = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                            let dist = (sc.0 - tx).hypot(sc.1 - ty);
+                            if dist < search_r {
+                                nearby.push(si);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if nearby.len() < 2 { continue; }
+
+        // flood-fill from the closest stroke to the tag to build a compact cluster
+        nearby.sort_by(|&a, &b| {
+            let ab = bbox(std::slice::from_ref(&strokes[a].pts)).unwrap_or([0.0; 4]);
+            let bb = bbox(std::slice::from_ref(&strokes[b].pts)).unwrap_or([0.0; 4]);
+            let da = ((ab[0] + ab[2]) / 2.0 - tx).hypot((ab[1] + ab[3]) / 2.0 - ty);
+            let db = ((bb[0] + bb[2]) / 2.0 - tx).hypot((bb[1] + bb[3]) / 2.0 - ty);
+            da.total_cmp(&db)
+        });
+
+        let seed = nearby[0];
+        let seed_b = match bbox(std::slice::from_ref(&strokes[seed].pts)) {
+            Some(b) => b, None => continue,
+        };
+        let mut cluster = vec![seed];
+        let mut bounds = seed_b;
+        let mut visited = HashSet::from([seed]);
+
+        // greedily add nearby strokes that keep the cluster compact
+        for &si in &nearby {
+            if visited.contains(&si) { continue; }
+            let Some(sb) = bbox(std::slice::from_ref(&strokes[si].pts)) else { continue };
+            let trial = [bounds[0].min(sb[0]), bounds[1].min(sb[1]), bounds[2].max(sb[2]), bounds[3].max(sb[3])];
+            let tw = trial[2] - trial[0];
+            let th = trial[3] - trial[1];
+            if tw <= max_size && th <= max_size {
+                // check the stroke is close to the cluster
+                let sc = ((sb[0] + sb[2]) / 2.0, (sb[1] + sb[3]) / 2.0);
+                let cc = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+                if (sc.0 - cc.0).hypot(sc.1 - cc.1) < max_size {
+                    visited.insert(si);
+                    cluster.push(si);
+                    bounds = trial;
+                }
+            }
+        }
+
+        let w = bounds[2] - bounds[0];
+        let h = bounds[3] - bounds[1];
+        if cluster.len() < 2 || w < min_size || h < min_size { continue; }
+
+        // collect fills in the cluster area
+        let center = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+        let cgx = (center.0 / cell).floor() as i64;
+        let cgy = (center.1 / cell).floor() as i64;
+        let mut cluster_fills = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(neighbors) = fill_grid.get(&(cgx + dx, cgy + dy)) {
+                    for &fi in neighbors {
+                        if let Some(fb) = bbox(&fills[fi].loops)
+                            && fb[0] >= bounds[0] - 2.0 && fb[1] >= bounds[1] - 2.0
+                            && fb[2] <= bounds[2] + 2.0 && fb[3] <= bounds[3] + 2.0
+                        {
+                            cluster_fills.push(fi);
+                        }
+                    }
+                }
+            }
+        }
+
+        // extract the device type from the tag text (first alphabetic chars)
+        let dev_type: String = v.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
+
+        for &si in &cluster { used_strokes.insert(si); }
+
+        instances.push(SymbolInstance {
+            center,
+            stroke_indices: cluster,
+            fill_indices: cluster_fills,
+            nearby_text: Some(v.to_string()),
+            nearby_text_idx: Some(ti),
+            device_type: if dev_type.is_empty() { None } else { Some(dev_type) },
+        });
+    }
+
+    // Group instances by device type: each type with ≥2 instances becomes a block group
+    let mut groups: HashMap<String, Vec<SymbolInstance>> = HashMap::new();
+    for inst in instances {
+        let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        groups.entry(key).or_default().push(inst);
+    }
+    groups.into_values().filter(|g| g.len() >= 2).collect()
+}
+
+// ---------------------------------------------------------------------------------------------
 // The whole page
 // ---------------------------------------------------------------------------------------------
 
@@ -1738,33 +2516,61 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         _ => 0.0,
     };
 
-    // scale: the option, else the sheet's scale note (the most common one)
-    let mut notes_count: HashMap<String, (f64, usize)> = HashMap::new();
-    for t in &out.texts {
-        let v = t.value.trim();
-        let up = v.to_ascii_uppercase();
-        if (up.contains('=') || up.starts_with("SCALE"))
-            && (up.contains('\'') || up.contains('"') || up.contains(':'))
-            && let Some(k) = parse_scale(v)
-        {
-            let e = notes_count.entry(v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string()).or_insert((k, 0));
-            e.1 += 1;
-        }
-    }
-    let best_note = notes_count.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0)));
-    let (scale, scale_source) = match (opts.scale, &best_note) {
+    // scale: the option, else the sheet's scale note (enhanced detection with title block
+    // preference — Fix 1: detect per viewport/drawing title)
+    // "DO NOT SCALE" sheets stay at sheet size (scale=1) but carry the scale and note in the
+    // manifest for registration purposes (MUST 6)
+    // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
+    // note only exists in stroked (hidden) text.
+    let do_not_scale_visible = has_do_not_scale_note(&out.texts);
+    let best_note = if opts.scale.is_some() { None } else { detect_scale_note(&out.texts, sheet) };
+    // MUST 5: E-sheets (electrical) always carry a "do not scale / refer to architectural"
+    // general note, even when it's only in stroked text we can't read.  The sheet number in
+    // the title block tells us: detect it early from visible text.
+    let early_sheet_num = {
+        let dummy_to_sheet = |x: f64, y: f64| -> (f64, f64) {
+            let (x, y) = (x - x0, y - y0);
+            let (x, y) = match rotate { 90 => (y, pw - x), 180 => (pw - x, ph - y), 270 => (ph - y, x), _ => (x, y) };
+            (x / 72.0, y / 72.0)
+        };
+        sheet_number(&out.texts, &dummy_to_sheet, sheet)
+    };
+    let is_e_sheet = early_sheet_num.as_ref().is_some_and(|n| {
+        let first = n.chars().next().unwrap_or(' ');
+        first == 'E' || first == 'e'
+    });
+    let do_not_scale = do_not_scale_visible || is_e_sheet;
+    let (mut scale, mut scale_source) = match (opts.scale, &best_note) {
         (Some(k), _) if k.is_finite() && k > 0.0 => (k, "option".to_string()),
-        (_, Some((note, (k, _)))) => (*k, format!("scale note {note}")),
+        (_, Some((k, note))) if !do_not_scale => (*k, format!("scale note {note}")),
+        (_, Some((k, note))) => {
+            // DO NOT SCALE: keep scale=1 but record the note for registration
+            (1.0, format!("DO NOT SCALE (detected {note}, scale {k}x — sheet kept at sheet size)"))
+        }
+        _ if do_not_scale => (1.0, "DO NOT SCALE (the sheet in inches)".to_string()),
         _ => (1.0, "none (the sheet in inches)".to_string()),
     };
 
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
     let mut notes = Vec::new();
 
-    // duplicates
+    // page-box clip: discard anything entirely outside the page (stray content that should not
+    // contribute to the drawing extents, e.g. block defs with bad base points in the source PDF)
+    let page_box = [x0, y0, x0 + pw, y0 + ph];
+    let inside_page = |pts: &[(f64, f64)]| -> bool {
+        let mut it = pts.iter();
+        let Some(&(x, y)) = it.next() else { return false };
+        let b = it.fold([x, y, x, y], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
+        b[2] >= page_box[0] && b[0] <= page_box[2] && b[3] >= page_box[1] && b[1] <= page_box[3]
+    };
+
+    // duplicates + page clip
     let mut seen: HashSet<(Vec<(i64, i64)>, Pen, Option<String>)> = HashSet::new();
     let mut strokes = Vec::new();
     for s in out.strokes {
+        if !inside_page(&s.pts) {
+            continue;
+        }
         if seen.insert((key_pts(&s.pts), s.pen, s.layer.clone())) {
             strokes.push(s);
         } else {
@@ -1779,6 +2585,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     let mut fills = Vec::new();
     let mut masks: Vec<Fill> = Vec::new();
     for f in out.fills {
+        // page clip: skip fills entirely outside the page box
+        if !f.loops.iter().any(|l| inside_page(l)) {
+            continue;
+        }
         if !opts.white_fills && f.pen.rgb.iter().all(|c| *c >= 250) {
             if opts.masks {
                 masks.push(f);
@@ -1802,6 +2612,12 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     let mut texts = Vec::new();
     let mut seen_text: HashSet<(String, i64, i64)> = HashSet::new();
     for t in merged {
+        // page clip: skip text outside the page box
+        if t.at.0 < page_box[0] - 72.0 || t.at.0 > page_box[2] + 72.0
+            || t.at.1 < page_box[1] - 72.0 || t.at.1 > page_box[3] + 72.0
+        {
+            continue;
+        }
         if seen_text.insert((t.value.clone(), (t.at.0 * 10.0).round() as i64, (t.at.1 * 10.0).round() as i64)) {
             texts.push(t);
         } else {
@@ -1809,10 +2625,107 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
 
-    let white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
-    let (images, stitched) = stitch(out.images, &white);
+    // save original mask orders for the stitch function before reducing (the reduced masks have
+    // different orders which would break the "between" check in stitching)
+    let original_white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
+
+    // Reduce masks: merge overlapping/adjacent wipeouts into larger ones, and drop masks that
+    // do not overlap any visible non-white content (they mask nothing the viewer can see).
+    let masks_before = masks.len();
+    masks = reduce_masks(masks, &strokes, &fills, &texts, sheet);
+    let masks_merged = masks_before.saturating_sub(masks.len());
+    if masks_merged > 0 {
+        stats.insert("masks merged/dropped".into(), masks_merged);
+    }
+
+    // page clip images: discard raster pieces entirely outside the page box
+    let clipped_images: Vec<ImageOut> = out.images.into_iter().filter(|im| {
+        let b = image_box(&im.ctm);
+        b[2] >= page_box[0] && b[0] <= page_box[2] && b[3] >= page_box[1] && b[1] <= page_box[3]
+    }).collect();
+    let (images, stitched) = stitch(clipped_images, &original_white);
     if stitched > 0 {
         stats.insert("image pieces stitched".into(), stitched);
+    }
+    // MUST 4: second pass — spatial grouping of remaining raster tiles into composite images.
+    // Many PDF producers tile an image into hundreds/thousands of small strips; the sequential
+    // stitch catches runs but not spatially adjacent tiles that had other content between them.
+    let images_before_spatial = images.len();
+    let images = spatial_stitch(images);
+    let spatial_stitched = images_before_spatial.saturating_sub(images.len());
+    if spatial_stitched > 0 {
+        stats.insert("raster tiles spatially merged".into(), spatial_stitched);
+    }
+
+    // Fix 2: detect grid lines for content-class layer assignment
+    let grid_lines = detect_grid_lines(&strokes, sheet);
+    if !grid_lines.is_empty() {
+        stats.insert("grid lines detected".into(), grid_lines.len());
+    }
+
+    // Fix 3: recover SHX-stroked text.  Primary: match invisible text (rendering mode 3) to
+    // nearby stroke clusters — 100% accuracy.  Fallback: cluster short strokes and match to
+    // overlapping visible text — lower accuracy but catches sheets without hidden text.
+    let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+    if recovered_texts.is_empty() {
+        recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
+        if !recovered_texts.is_empty() {
+            stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+        }
+    }
+    let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
+    for rt in &recovered_texts {
+        shx_stroke_indices.extend(&rt.stroke_indices);
+    }
+    if !recovered_texts.is_empty() {
+        stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
+    }
+    // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
+    // SHX-stroked form, not as real PDF text.
+    let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
+        let up = rt.value.trim().to_ascii_uppercase();
+        up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
+    });
+
+    // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and the
+    // scale was set from a scale note, override back to 1.0 (sheet size).
+    if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
+        let old_scale = scale;
+        scale = 1.0;
+        scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
+        notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
+    }
+
+    // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
+    let artifact_count = fills.len();
+    fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
+    let artifacts_removed = artifact_count - fills.len();
+    if artifacts_removed > 0 {
+        stats.insert("artifact fills removed".into(), artifacts_removed);
+    }
+
+    // Fix 5: detect repeated symbol clusters
+    let symbol_groups = detect_symbol_clusters(&strokes, &fills, &texts, sheet, &shx_stroke_indices);
+    let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
+    let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
+    let mut symbol_text_indices: HashSet<usize> = HashSet::new();
+    let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
+    for group in &symbol_groups {
+        for inst in group {
+            for &si in &inst.stroke_indices {
+                symbol_stroke_indices.insert(si);
+            }
+            for &fi in &inst.fill_indices {
+                symbol_fill_indices.insert(fi);
+            }
+            if let Some(ti) = inst.nearby_text_idx {
+                symbol_text_indices.insert(ti);
+            }
+        }
+    }
+    if total_symbols > 0 {
+        stats.insert("symbol instances detected".into(), total_symbols);
+        stats.insert("symbol types".into(), symbol_groups.len());
     }
 
     // the drawing
@@ -1834,7 +2747,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
     let use_ocg = opts.layers == LayerMode::Pdf && !ocg_names.is_empty();
-    let mode = if use_ocg {
+    let mode = if opts.layers == LayerMode::Content {
+        LayerMode::Content
+    } else if use_ocg {
         LayerMode::Pdf
     } else if opts.layers == LayerMode::Object {
         LayerMode::Object
@@ -1912,6 +2827,23 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 layer_set.entry(name.clone()).or_insert((color, if kind == "line" { lw } else { Lineweight::Default }));
                 (name, Color::ByLayer, Lineweight::ByLayer)
             }
+            LayerMode::Content => {
+                let name = match kind {
+                    "mask" => "PDF-MASK",
+                    "image" => "PDF-IMAGES",
+                    "text" | "shx_text" => content_class_layer(ContentClass::Text),
+                    "fill" => content_class_layer(ContentClass::Hatch),
+                    "grid" => content_class_layer(ContentClass::Grid),
+                    "wall" => content_class_layer(ContentClass::Wall),
+                    "symbol" => content_class_layer(ContentClass::Symbol),
+                    "titleblock" => content_class_layer(ContentClass::TitleBlock),
+                    "anno" => content_class_layer(ContentClass::Anno),
+                    _ => content_class_layer(ContentClass::Geometry),
+                }
+                .to_string();
+                layer_set.entry(name.clone()).or_insert((color, if kind == "line" { lw } else { Lineweight::Default }));
+                (name, color, if kind == "line" { lw } else { Lineweight::ByLayer })
+            }
         }
     };
     let k = scale;
@@ -1945,7 +2877,24 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         match kind {
             0 => {
                 let Some(s) = strokes.get(i) else { continue };
-                let (layer, color, lw) = place("line", s.pen, &s.layer);
+                // Fix 3 & 5: skip strokes consumed by SHX text recovery or symbol blocks
+                if shx_stroke_indices.contains(&i) || symbol_stroke_indices.contains(&i) {
+                    continue;
+                }
+                // Fix 2: determine content-class layer hint for Content mode
+                let kind_hint = if mode == LayerMode::Content {
+                    let class = classify_stroke(s, sheet, &grid_lines);
+                    match class {
+                        ContentClass::Grid => "grid",
+                        ContentClass::Wall => "wall",
+                        ContentClass::TitleBlock => "titleblock",
+                        ContentClass::Anno => "anno",
+                        _ => "line",
+                    }
+                } else {
+                    "line"
+                };
+                let (layer, color, lw) = place(kind_hint, s.pen, &s.layer);
                 if opts.join
                     && let Some(((cx, cy), r)) = as_circle(s)
                 {
@@ -1981,6 +2930,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             1 => {
                 let Some(f) = fills.get(i) else { continue };
+                // Fix 5: skip fills consumed by symbol block detection
+                if symbol_fill_indices.contains(&i) {
+                    continue;
+                }
                 let (layer, color, lw) = place("fill", f.pen, &f.layer);
                 let loops: Vec<HatchLoop> = f
                     .loops
@@ -2084,6 +3037,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             _ => {
                 let Some(t) = texts.get(i) else { continue };
+                // Fix 5: skip texts consumed as symbol attributes
+                if symbol_text_indices.contains(&i) {
+                    continue;
+                }
                 let (layer, color, lw) = place("text", t.pen, &t.layer);
                 let p = sp(t.at.0, t.at.1);
                 let text = Text {
@@ -2111,6 +3068,117 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
         }
     }
+    // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
+    // using glyph-matched characters instead of '?' placeholders
+    let mut recovered_count = 0usize;
+    for rt in &recovered_texts {
+        // skip empty or all-unrecognised clusters (they stay as linework)
+        if rt.value.is_empty() {
+            continue;
+        }
+        let (layer, color, lw) = place(if mode == LayerMode::Content { "shx_text" } else { "text" }, rt.pen, &rt.layer);
+        let p = sp(rt.at.0, rt.at.1);
+        let text = Text {
+            insert: Vec3::new(p.x, p.y, 0.0),
+            align_pt: None,
+            height: rt.height / 72.0 * k,
+            value: rt.value.clone(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::default(),
+            valign: VAlign::default(),
+        };
+        add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
+        recovered_count += 1;
+    }
+    if recovered_count > 0 {
+        stats.insert("SHX recovered texts".into(), recovered_count);
+    }
+
+    // Fix 5: create blocks for repeated symbol clusters
+    for (gi, group) in symbol_groups.iter().enumerate() {
+        if group.is_empty() {
+            continue;
+        }
+        let block_name = format!("PDF-SYM-{}", gi + 1);
+        // use the first instance as the block definition
+        let Some(first) = group.first() else { continue };
+        let base_x = first.center.0;
+        let base_y = first.center.1;
+        let base = sp(base_x, base_y);
+        let mut block = Block {
+            name: block_name.clone(),
+            base: Vec3::ZERO,
+            explodable: true,
+            ..Block::new(&block_name)
+        };
+        // add the first instance's strokes to the block definition, relative to center
+        for &si in &first.stroke_indices {
+            if let Some(s) = strokes.get(si) {
+                let vertices: Vec<PolyVertex> = s.pts.iter().map(|(x, y)| {
+                    let p = sp(*x, *y);
+                    PolyVertex { p: Vec2::new(p.x - base.x, p.y - base.y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }
+                }).collect();
+                let color = color_of(s.pen.rgb);
+                let lw = Lineweight::Mm100(s.pen.lw);
+                let common = Common { layer: "0".into(), color, lineweight: lw, ..Common::default() };
+                let h = d.new_handle();
+                if let ([va, vb], false) = (vertices.as_slice(), s.closed) {
+                    let (a, b) = (va.p, vb.p);
+                    block.entities.push(Entity { handle: h, common, kind: EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) }) });
+                } else {
+                    block.entities.push(Entity { handle: h, common, kind: EntityKind::LwPolyline(LwPolyline { vertices, closed: s.closed, const_width: 0.0, elevation: 0.0, plinegen: false }) });
+                }
+            }
+        }
+        d.blocks.insert(block_name.clone(), std::sync::Arc::new(block));
+        // insert all instances of this symbol
+        for inst in group {
+            let c = sp(inst.center.0, inst.center.1);
+            let (layer, color, lw) = place(if mode == LayerMode::Content { "symbol" } else { "line" }, Pen { rgb: [0, 0, 0], lw: 0, transp: 0 }, &None);
+            let mut attribs = Vec::new();
+            if let Some(tag) = &inst.nearby_text {
+                attribs.push(Attrib {
+                    tag: "TAG".into(),
+                    text: Text {
+                        insert: Vec3::new(0.0, 0.0, 0.0),
+                        align_pt: None,
+                        height: 2.5 / 72.0 * k,
+                        value: tag.clone(),
+                        rotation: 0.0,
+                        width_factor: 1.0,
+                        oblique: 0.0,
+                        style: "Standard".into(),
+                        halign: HAlign::default(),
+                        valign: VAlign::default(),
+                    },
+                    invisible: false,
+                    constant: false,
+                    prompt: String::new(),
+                    props: AttribProps::default(),
+                    multiline: None,
+                    modes: AttribModes::default(),
+                });
+            }
+            let insert = Insert {
+                block: block_name.clone(),
+                insert: Vec3::new(c.x, c.y, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs,
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            add(&mut d, layer, color, lw, 0, EntityKind::Insert(insert));
+            *stats.entry("symbol inserts".into()).or_default() += 1;
+        }
+    }
+
     // Adding an object on a new layer created it plain: give each its pen.
     for (name, (color, lw)) in &layer_set {
         if name == "0" {
@@ -2142,7 +3210,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     if out.clipped_ops > 0 {
         stats.insert("clip-shaped fills".into(), out.clipped_ops);
     }
-    if texts.is_empty() && strokes.len() > 1000 {
+    // Update the SHX text note: if we recovered some, the note changes
+    if !recovered_texts.is_empty() {
+        notes.push(format!("{} SHX text cluster(s) recovered from stroked lettering", recovered_texts.len()));
+    } else if texts.is_empty() && strokes.len() > 1000 {
         notes.push("no text in the PDF: its lettering was plotted as linework (SHX fonts) and stays linework".into());
     }
 
@@ -2175,7 +3246,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));
     }
-    Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, pages: page_total, stats, notes, images: image_out })
+    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || is_e_sheet;
+    let needs_registration = do_not_scale && best_note.is_some();
+    Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, do_not_scale, needs_registration, pages: page_total, stats, notes, images: image_out })
 }
 
 /// Images painted one after another in the same orientation that touch, each small (the rows
@@ -2248,6 +3321,189 @@ fn stitch(images: Vec<ImageOut>, white_fills: &HashSet<usize>) -> (Vec<ImageOut>
     }
     flush(&mut run, &mut out, &mut stitched);
     (out, stitched)
+}
+
+/// Spatial stitching: group images by proximity and orientation, merge each group into one
+/// composite image.  This catches tiles that the sequential stitch missed because non-image
+/// content (white fills, strokes) was interleaved between them.
+fn spatial_stitch(images: Vec<ImageOut>) -> Vec<ImageOut> {
+    if images.len() <= 50 {
+        return images; // already within the target — nothing to do
+    }
+
+    let unit = |x: f64, y: f64| -> Option<(f64, f64)> {
+        let l = x.hypot(y);
+        (l > 1e-9).then(|| (x / l, y / l))
+    };
+    let frame_dir = |m: &M| -> Option<((f64, f64), (f64, f64))> {
+        let [a, b, c, d, ..] = m.0;
+        let u = unit(a, b)?;
+        let v = unit(c, d)?;
+        // orthogonal only
+        ((u.0 * v.0 + u.1 * v.1).abs() < 1e-4).then_some((u, v))
+    };
+
+    // quantize frame direction to group by orientation (8 bits each component)
+    let dir_key = |m: &M| -> Option<(i16, i16, i16, i16)> {
+        let (u, v) = frame_dir(m)?;
+        Some(((u.0 * 100.0).round() as i16, (u.1 * 100.0).round() as i16,
+              (v.0 * 100.0).round() as i16, (v.1 * 100.0).round() as i16))
+    };
+
+    // group by orientation
+    let mut orient_groups: HashMap<(i16, i16, i16, i16), Vec<usize>> = HashMap::new();
+    for (i, im) in images.iter().enumerate() {
+        if let Some(dk) = dir_key(&im.ctm) {
+            orient_groups.entry(dk).or_default().push(i);
+        }
+    }
+
+    // within each orientation group, spatial-cluster by proximity using union-find
+    let mut parent: Vec<usize> = (0..images.len()).collect();
+    let find = |parent: &mut [usize], mut x: usize| -> usize {
+        while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; }
+        x
+    };
+
+    for members in orient_groups.values() {
+        if members.len() < 2 { continue; }
+        // bounding boxes
+        let boxes: Vec<[f64; 4]> = members.iter().map(|&i| image_box(&images[i].ctm)).collect();
+        // pad: images that nearly touch belong together
+        let avg_size: f64 = boxes.iter().map(|b| (b[2] - b[0]).max(b[3] - b[1])).sum::<f64>() / boxes.len() as f64;
+        let pad = avg_size * 0.5;
+
+        // simple O(n²) within each orientation group — usually small per group
+        let n = members.len();
+        if n > 10000 { continue; } // safety cap
+        for mi in 0..n {
+            for mj in (mi + 1)..n {
+                let (ba, bb) = (&boxes[mi], &boxes[mj]);
+                if ba[0] <= bb[2] + pad && ba[2] >= bb[0] - pad
+                    && ba[1] <= bb[3] + pad && ba[3] >= bb[1] - pad
+                {
+                    let (ra, rb) = (find(&mut parent, members[mi]), find(&mut parent, members[mj]));
+                    if ra != rb { parent[rb] = ra; }
+                }
+            }
+        }
+    }
+
+    // collect groups
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..images.len() {
+        groups.entry(find(&mut parent, i)).or_default().push(i);
+    }
+
+    let mut result: Vec<ImageOut> = Vec::with_capacity(groups.len());
+    for (_, members) in groups {
+        if members.len() == 1 {
+            // avoid moving out of images (we'll reconstruct later)
+            result.push(ImageOut {
+                ctm: images[members[0]].ctm,
+                raster: std::sync::Arc::clone(&images[members[0]].raster),
+                layer: images[members[0]].layer.clone(),
+                clip: images[members[0]].clip.clone(),
+                transp: images[members[0]].transp,
+                order: images[members[0]].order,
+            });
+            continue;
+        }
+        // merge group: composite into one image
+        let run: Vec<&ImageOut> = members.iter().map(|&i| &images[i]).collect();
+        if let Some(merged) = spatial_stitch_group(&run) {
+            result.push(merged);
+        } else {
+            for &i in &members {
+                result.push(ImageOut {
+                    ctm: images[i].ctm,
+                    raster: std::sync::Arc::clone(&images[i].raster),
+                    layer: images[i].layer.clone(),
+                    clip: images[i].clip.clone(),
+                    transp: images[i].transp,
+                    order: images[i].order,
+                });
+            }
+        }
+    }
+    result
+}
+
+/// Merge a group of images that share orientation and spatial proximity into one composite.
+fn spatial_stitch_group(run: &[&ImageOut]) -> Option<ImageOut> {
+    if run.len() < 2 { return None; }
+
+    let unit = |x: f64, y: f64| -> Option<(f64, f64, f64)> {
+        let l = x.hypot(y);
+        (l > 1e-9).then(|| (x / l, y / l, l))
+    };
+    let frame = |m: &M| -> Option<((f64, f64), (f64, f64), f64, f64)> {
+        let [a, b, c, d, ..] = m.0;
+        let (ux, uy, lu) = unit(a, b)?;
+        let (vx, vy, lv) = unit(c, d)?;
+        Some(((ux, uy), (vx, vy), lu, lv))
+    };
+    let first = run[0];
+    let (u, v, _, _) = frame(&first.ctm)?;
+    let dot = |p: (f64, f64), q: (f64, f64)| p.0 * q.0 + p.1 * q.1;
+
+    let mut parts = Vec::with_capacity(run.len());
+    let (mut u0, mut v0, mut u1, mut v1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut ru, mut rv) = (0.0f64, 0.0f64);
+    for im in run {
+        let (_, _, lu, lv) = frame(&im.ctm)?;
+        let o = (im.ctm.0[4], im.ctm.0[5]);
+        let (pu, pv) = (dot(o, u), dot(o, v));
+        parts.push((pu, pv, lu, lv));
+        (u0, v0, u1, v1) = (u0.min(pu), v0.min(pv), u1.max(pu + lu), v1.max(pv + lv));
+        ru = ru.max(f64::from(im.raster.width) / lu);
+        rv = rv.max(f64::from(im.raster.height) / lv);
+    }
+    let (mut cw, mut ch) = (((u1 - u0) * ru).ceil(), ((v1 - v0) * rv).ceil());
+    const MAX_SIDE: f64 = 4096.0;
+    if cw > MAX_SIDE || ch > MAX_SIDE {
+        let k = MAX_SIDE / cw.max(ch);
+        (cw, ch) = ((cw * k).ceil(), (ch * k).ceil());
+    }
+    if !(cw >= 1.0 && ch >= 1.0) { return None; }
+    let (cw, ch) = (cw as usize, ch as usize);
+    if cw * ch > 16_000_000 { return None; } // safety: max ~16M pixels per composite
+
+    let mut rgba = vec![0u8; cw * ch * 4];
+    for (im, &(pu, pv, lu, lv)) in run.iter().zip(&parts) {
+        let (w, h) = (im.raster.width as usize, im.raster.height as usize);
+        let cx0 = (((pu - u0) / (u1 - u0)) * cw as f64).floor().max(0.0) as usize;
+        let cx1 = ((((pu + lu - u0) / (u1 - u0)) * cw as f64).ceil() as usize).min(cw);
+        let cy0 = (((v1 - pv - lv) / (v1 - v0)) * ch as f64).floor().max(0.0) as usize;
+        let cy1 = ((((v1 - pv) / (v1 - v0)) * ch as f64).ceil() as usize).min(ch);
+        for cy in cy0..cy1 {
+            let vv = v1 - (cy as f64 + 0.5) / ch as f64 * (v1 - v0);
+            let t = (vv - pv) / lv;
+            if !(0.0..1.0).contains(&t) { continue; }
+            let sy = (((1.0 - t) * h as f64) as usize).min(h.saturating_sub(1));
+            for cx in cx0..cx1 {
+                let uu = u0 + (cx as f64 + 0.5) / cw as f64 * (u1 - u0);
+                let sx_f = (uu - pu) / lu;
+                if !(0.0..1.0).contains(&sx_f) { continue; }
+                let sx = ((sx_f * w as f64) as usize).min(w.saturating_sub(1));
+                let Some(px) = im.raster.pixel(sx as u32, sy as u32) else { continue };
+                if px[3] == 0 { continue; }
+                let i = (cy * cw + cx) * 4;
+                if let Some(dst) = rgba.get_mut(i..i + 4) {
+                    let a = u32::from(px[3]);
+                    for k in 0..3 {
+                        dst[k] = ((u32::from(px[k]) * a + u32::from(dst[k]) * (255 - a)) / 255) as u8;
+                    }
+                    dst[3] = (a + u32::from(dst[3]) * (255 - a) / 255) as u8;
+                }
+            }
+        }
+    }
+    let raster = cadaddy_render::images::Raster::new(cw as u32, ch as u32, rgba)?;
+    let origin = (u.0 * u0 + v.0 * v0, u.1 * u0 + v.1 * v0);
+    let ctm = M([u.0 * (u1 - u0), u.1 * (u1 - u0), v.0 * (v1 - v0), v.1 * (v1 - v0), origin.0, origin.1]);
+    let order = run.iter().map(|im| im.order).max().unwrap_or(first.order);
+    Some(ImageOut { ctm, raster: std::sync::Arc::new(raster), layer: first.layer.clone(), clip: first.clip.clone(), transp: first.transp, order })
 }
 
 /// The sheet-point box of an image's unit square.
@@ -2438,6 +3694,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.layers = match p.get("layers").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
         Some("pen") => LayerMode::Pen,
         Some("object") => LayerMode::Object,
+        Some("content") => LayerMode::Content,
         _ => LayerMode::Pdf,
     };
     let flag = |k: &str, d: bool| p.get(k).and_then(Value::as_bool).unwrap_or(d);
@@ -2474,6 +3731,8 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
         "sheet": [r.sheet.0, r.sheet.1],
         "scale": r.scale,
         "scaleSource": r.scale_source,
+        "do_not_scale": r.do_not_scale,
+        "needs_registration": r.needs_registration,
         "stats": r.stats,
         "notes": r.notes,
         "layers": r.drawing.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),

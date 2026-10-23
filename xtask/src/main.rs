@@ -12,6 +12,7 @@ mod layers;
 mod mcptest;
 mod mepfix;
 mod parity;
+mod pdfstats;
 mod perf;
 mod pubcost;
 mod release;
@@ -45,6 +46,8 @@ commands:
                   made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
                   and .cdy: exact differences and save/open/regen times against budgets (warnings);
                   report in target/corpus/report.md
+  pdfstats FILE.pdf [FILE2.pdf ...]
+                  print PDF import statistics: entity counts, scale, layers, quality metrics
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
@@ -160,6 +163,7 @@ fn main() -> ExitCode {
         Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("soak") => soak::run(&root(), &rest),
         Some("fetch-pubcost") => pubcost::run(&root(), &args),
+        Some("pdfstats") => pdfstats::run(&root(), &rest),
         Some("supplychain") => supplychain::run(&root()),
         Some("advisories") => supplychain::advisories(&root()),
         Some("sbom") => supplychain::sbom(&root(), &rest),

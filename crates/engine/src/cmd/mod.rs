@@ -90,6 +90,7 @@ pub mod furnish;
 pub mod gear;
 pub mod geo;
 pub mod grounding;
+pub mod guided;
 pub mod ifcmodel;
 pub mod ifcref;
 pub mod imagetrace;
@@ -607,6 +608,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(attipedit::specs());
         v.extend(frames::specs());
         v.extend(coordination::specs());
+        v.extend(guided::specs());
         v.extend(project::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
