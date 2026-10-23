@@ -711,6 +711,6 @@ mod limit_tests {
         assert_eq!(max_tags_from(Some("abc")), MAX_TAGS);
         assert_eq!(max_tags_from(Some(" 400_000_000 ")), 400_000_000);
         // Issue #1948: the default must admit a DXF rendition well above 50 million group codes.
-        assert!(MAX_TAGS >= 100_000_000);
+        const { assert!(MAX_TAGS >= 100_000_000) };
     }
 }
