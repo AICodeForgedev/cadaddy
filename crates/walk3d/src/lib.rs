@@ -24,6 +24,7 @@ pub mod package;
 mod pick;
 pub mod rfi;
 mod rules;
+mod sbox;
 mod spec;
 pub mod stairs;
 pub mod tags;

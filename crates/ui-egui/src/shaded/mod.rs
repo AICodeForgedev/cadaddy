@@ -100,6 +100,8 @@ pub struct State {
     pub stats: Stats,
     last_frame: Option<web_time::Instant>,
     bench: Option<Bench>,
+    /// The section box while one of its faces is dragged (min, max), set when let go.
+    sbox_drag: Option<([f64; 3], [f64; 3])>,
 }
 
 impl State {
@@ -236,6 +238,76 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         }
     }
     drawn
+}
+
+/// The box's 12 edges, as pairs of corner numbers (bit 0: max x, bit 1: max y, bit 2: max z).
+const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
+
+/// The coordination section box over the shaded view: its outline and a handle on each face.
+/// Dragging a handle moves that face along its axis; letting go sets the box
+/// (`coordination.sectionbox {min, max}`), which rebuilds the clipped model.
+pub fn section_box_handles(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf) {
+    use cadaddy_engine::cmd::coordination::{self as coord, BoxFace};
+    let Ok(st) = app.session.state() else { return };
+    let crs = coord::coord_render_state(&st.doc);
+    if !crs.sbox_on {
+        app.canvas.shade.sbox_drag = None;
+        return;
+    }
+    let (mut lo, mut hi) = app.canvas.shade.sbox_drag.unwrap_or((crs.sbox_min, crs.sbox_max));
+    if !lo.iter().chain(hi.iter()).all(|v| v.is_finite()) {
+        return;
+    }
+    let to_screen = |p: [f64; 3]| {
+        let v = Vec3::new(p[0], p[1], p[2]);
+        match xf.proj {
+            Some(pr) => xf.to_screen(pr.project(v)),
+            None => xf.to_screen(cadaddy_geom::Vec2::new(v.x, v.y)),
+        }
+    };
+    let t = crate::theme::Tokens::get();
+    {
+        let corner =
+            |i: usize| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+        let stroke = egui::Stroke::new(1.5, t.accent);
+        for (a, b) in BOX_EDGES {
+            painter.line_segment([to_screen(corner(a)), to_screen(corner(b))], stroke);
+        }
+    }
+    let mut set = None;
+    for (k, face) in BoxFace::ALL.into_iter().enumerate() {
+        let centre = coord::sbox_face_centre(lo, hi, face);
+        let at = to_screen(centre);
+        let r = egui::Rect::from_center_size(at, egui::vec2(12.0, 12.0));
+        let resp = ui.interact(r, ui.id().with(("sbox-face", k)), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+        if resp.dragged() {
+            // One box length along the face's axis, on screen.
+            let a = face.axis();
+            let step = hi.get(a).zip(lo.get(a)).map_or(1.0, |(h, l)| (h - l).abs().max(1.0));
+            let mut ahead = centre;
+            if let Some(v) = ahead.get_mut(a) {
+                *v += step;
+            }
+            let axis = to_screen(ahead) - at;
+            let drag = resp.drag_delta();
+            if let Some(d) = coord::sbox_drag_delta([f64::from(axis.x), f64::from(axis.y)], step, [f64::from(drag.x), f64::from(drag.y)]) {
+                (lo, hi) = coord::sbox_drag_face(lo, hi, face, d);
+                app.canvas.shade.sbox_drag = Some((lo, hi));
+            }
+        }
+        if resp.drag_stopped() {
+            set = Some((lo, hi));
+        }
+        let fill = if resp.dragged() || resp.hovered() { t.grip_hot } else { t.grip };
+        painter.rect_filled(r.shrink(2.0), 2.0, fill);
+        painter.rect_stroke(r.shrink(2.0), 2.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Middle);
+    }
+    if let Some((lo, hi)) = set {
+        app.canvas.shade.sbox_drag = None;
+        if let Err(e) = app.run("coordination.sectionbox", serde_json::json!({ "on": true, "min": lo, "max": hi })) {
+            app.set_status(format!("Section box: {e}"));
+        }
+    }
 }
 
 /// `model`'s lighting with the session's render environment applied (`None`: not lit physically).

@@ -201,6 +201,12 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             let params = if st.level_filter.is_empty() { json!({}) } else { json!({ "level": st.level_filter }) };
             st.trades_data = app.session.execute("coordination.trades", &params).ok();
         }
+        // Hide the MEP objects of the other levels (undo or Show All brings them back).
+        if ui.add_enabled(!st.level_filter.trim().is_empty(), egui::Button::new(crate::i18n::t("Isolate Level"))).clicked()
+            && let Err(e) = app.session.execute("coordination.isolate", &json!({ "level": st.level_filter.trim() }))
+        {
+            app.set_status(e.to_string());
+        }
     });
 
     let Some(data) = &st.trades_data.clone() else {
@@ -218,6 +224,7 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::t("Show All")).clicked() {
             let sets: Vec<Value> = trades.iter().map(|tr| json!({ "system": tr.get("system"), "visible": true })).collect();
+            let _ = app.session.execute("coordination.isolate", &json!({ "reset": true }));
             st.trades_data = app.session.execute("coordination.trades", &json!({ "set": sets })).ok();
         }
         if ui.button(crate::i18n::t("Hide All")).clicked() {
@@ -242,8 +249,13 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
                 let color = if visible { t.text } else { t.text_faint };
                 ui.label(RichText::new(format!("{system} ({kind}, {count} runs)")).color(color));
                 // Isolate button.
+                // Isolate button: this system (on the level typed above, if any).
                 if ui.small_button(crate::i18n::t("Isolate")).clicked() {
-                    let _ = app.session.execute("coordination.isolate", &json!({ "system": system }));
+                    let level = st.level_filter.trim();
+                    let params = if level.is_empty() { json!({ "system": system }) } else { json!({ "system": system, "level": level }) };
+                    if let Err(e) = app.session.execute("coordination.isolate", &params) {
+                        app.set_status(e.to_string());
+                    }
                     st.trades_data = app.session.execute("coordination.trades", &json!({})).ok();
                 }
             });
@@ -361,7 +373,21 @@ fn views_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
 
             ui.horizontal(|ui| {
                 if ui.button(name).clicked() {
-                    st.views_data = app.session.execute("coordination.views", &json!({ "restore": name })).ok();
+                    match app.session.execute("coordination.views", &json!({ "restore": name })) {
+                        Ok(r) => {
+                            let warnings: Vec<&str> =
+                                r.get("warnings").and_then(Value::as_array).map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                            if !warnings.is_empty() {
+                                app.set_status(warnings.join("; "));
+                            }
+                        }
+                        Err(e) => app.set_status(e.to_string()),
+                    }
+                    // The list again (restoring answers with what it did, not the views).
+                    st.views_data = None;
+                    st.coord_mode = None;
+                    st.sectionbox = None;
+                    st.trades_data = None;
                 }
                 let t = Tokens::get();
                 ui.label(RichText::new(detail).color(t.text_dim));
