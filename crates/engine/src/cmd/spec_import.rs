@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD_IMPORT, "Import Specifications", run_import)
             .params(
-                "{file: string (path to PDF or text file), format?: \"spec\"|\"schedule\"|\"submittal\"|\"auto\" (default auto), text?: string (inline text instead of file)} → {proposals: [{mark, category, fields, origin, fileSource, locationRules?}], rfis: [{id, mark, field, specValue, scheduleValue, description, sources, severity}], locationRules: [{rule, location, material, source}], submittals: [{specSection, typeMarks, manufacturer, catalogNumber, dimensions, mounting, finish, ratings, reviewStatus, notes, fileSource}], notes: [string]}"
+                "{file: string (path to PDF or text file), format?: \"spec\"|\"schedule\"|\"submittal\"|\"sheet\"|\"auto\" (default auto), text?: string (inline text instead of file), sheet?: string (sheet id the schedule is read from, with format \"sheet\")} → {proposals: [{mark, category, fields, origin, fileSource, locationRules?}], rfis: [{id, mark, field, specValue, scheduleValue, description, sources, severity}], locationRules: [{rule, location, material, source}], submittals: [{specSection, typeMarks, manufacturer, catalogNumber, dimensions, mounting, finish, ratings, reviewStatus, notes, fileSource}], notes: [string]}"
             )
             .noundo(),
         CommandSpec::new(CMD_ACCEPT, "Accept Specifications", run_accept)
