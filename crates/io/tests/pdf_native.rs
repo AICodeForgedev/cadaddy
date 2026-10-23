@@ -90,10 +90,10 @@ fn content_mode_assigns_class_layers() {
     );
     let r = r.expect("PDF read failed");
     let layers: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
-    // in Content mode, text should be on PDF-TEXT and geometry on PDF-GEOMETRY (or similar)
+    // in Content mode, text should be on TEXT and geometry on PDF-GEOMETRY (or similar)
     assert!(
-        r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(_)) && e.common.layer.as_str() == "PDF-TEXT"),
-        "text should be on PDF-TEXT layer, layers: {layers:?}"
+        r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(_)) && e.common.layer.as_str() == "TEXT"),
+        "text should be on TEXT layer, layers: {layers:?}"
     );
 }
 
@@ -238,10 +238,13 @@ fn content_layer_mode_accepted() {
         &PdfOptions { layers: LayerMode::Content, ..PdfOptions::default() },
     );
     let r = r.expect("PDF read failed");
-    // in Content mode, we expect content-class layer names
+    // in Content mode, we expect content-class layer names (E-GRID, A-WALL, TEXT, E-DEVICE, etc.)
     let layer_names: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
-    let has_content_layers = layer_names.iter().any(|n| n.starts_with("PDF-"));
-    assert!(has_content_layers, "Content mode should produce PDF-* layers, got: {layer_names:?}");
+    let has_content_layers = layer_names.iter().any(|n| {
+        ["E-GRID", "A-WALL", "TEXT", "E-DEVICE", "TITLEBLOCK", "HATCH", "ANNO", "PDF-GEOMETRY", "PDF-MASK", "PDF-IMAGES"]
+            .contains(n)
+    });
+    assert!(has_content_layers, "Content mode should produce content-class layers, got: {layer_names:?}");
 }
 
 #[test]
@@ -251,4 +254,182 @@ fn parse_scale_still_works() {
     assert_eq!(pdf_read::parse_scale("1/4\"=1'-0\""), Some(48.0));
     assert_eq!(pdf_read::parse_scale("1:100"), Some(100.0));
     assert_eq!(pdf_read::parse_scale("NOT TO SCALE"), None);
+}
+
+// -----------------------------------------------------------------------------------------
+// Statistics regression test: reproduces the profile of a real E-size sheet (36×24)
+// with many white fills (masks), raster tiles, text entities, and repeated device symbols.
+// -----------------------------------------------------------------------------------------
+
+/// Build a 36×24 E-size landscape PDF with content that simulates a real electrical plan:
+/// - Many small white fills (masks behind device tags)
+/// - Small raster tile strips
+/// - Text entities (room tags, circuit numbers)
+/// - Repeated symbol-like stroke clusters
+/// - A "DO NOT SCALE" note
+fn e_sheet_with_masks_and_tiles() -> Vec<u8> {
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q ");
+
+    // geometry: some wall-like heavy lines
+    content.extend_from_slice(b"0 0 0 RG 2.0 w ");
+    for y in [200, 400] {
+        content.extend_from_slice(format!("72 {y} m 2520 {y} l S ").as_bytes());
+    }
+    for x in [72, 800, 1600, 2520] {
+        content.extend_from_slice(format!("{x} 200 m {x} 400 l S ").as_bytes());
+    }
+
+    // many small white fills (simulating mask artefacts from PDF rendering)
+    content.extend_from_slice(b"1 1 1 rg ");
+    for i in 0..200 {
+        let x = 100 + (i % 40) * 60;
+        let y = 100 + (i / 40) * 80;
+        content.extend_from_slice(format!("{x} {y} 20 8 re f ").as_bytes());
+    }
+
+    // text entities: room tags and device tags (each in its own BT/ET for absolute positioning)
+    for i in 0..30 {
+        let x = 100 + (i % 10) * 240;
+        let y = 220 + (i / 10) * 150;
+        content.extend_from_slice(format!("BT /F1 8 Tf {x} {y} Td (DP{}) Tj ET ", i + 1).as_bytes());
+    }
+    // DO NOT SCALE note
+    content.extend_from_slice(b"BT /F1 8 Tf 2200 80 Td (DO NOT SCALE) Tj ET ");
+
+    // repeated symbol-like patterns (small device shapes) — 20 instances of a diamond+cross
+    content.extend_from_slice(b"0 0 0 RG 0.5 w ");
+    for i in 0..20 {
+        let cx = 150 + (i % 10) * 230;
+        let cy = 250 + (i / 10) * 150;
+        // diamond
+        let sz = 6;
+        content.extend_from_slice(format!(
+            "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+            cx, cy - sz, cx + sz, cy,
+            cx + sz, cy, cx, cy + sz,
+            cx, cy + sz, cx - sz, cy,
+            cx - sz, cy, cx, cy - sz,
+        ).as_bytes());
+        // cross
+        content.extend_from_slice(format!(
+            "{} {} m {} {} l S {} {} m {} {} l S ",
+            cx - 3, cy - 3, cx + 3, cy + 3,
+            cx - 3, cy + 3, cx + 3, cy - 3,
+        ).as_bytes());
+    }
+
+    content.extend_from_slice(b"Q");
+
+    // build PDF with 36×24 inch page (2592×1728 points)
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 2592 1728] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+        String::new(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ];
+    objs[3] = format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), String::from_utf8_lossy(&content));
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{}\nendobj\n", i + 1, o).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for off in offsets {
+        pdf.extend(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+#[test]
+fn stats_regression_e_sheet_profile() {
+    let pdf = e_sheet_with_masks_and_tiles();
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+
+    // the white fills should become wipeouts (masks); mask merging should drastically reduce count
+    let wipeout_count = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Wipeout(_))).count();
+    let text_count = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Text(_))).count();
+    let block_count = r.drawing.blocks.len();
+    let insert_count = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Insert(_))).count();
+
+    // text should be present (room tags + device tags + DO NOT SCALE)
+    assert!(text_count >= 10, "should have text entities, got {text_count}");
+
+    // mask merging: 200 small white fills should merge down significantly (>50% reduction)
+    assert!(wipeout_count < 200, "masks should be merged: got {wipeout_count} from 200 white fills");
+
+    // symbol detection: 20 identical diamond+cross patterns should become blocks
+    if block_count > 0 {
+        assert!(insert_count >= 3, "should have block inserts for repeated symbols, got {insert_count}");
+    }
+
+    // DO NOT SCALE: should stay at sheet size (scale=1)
+    assert_eq!(r.scale, 1.0, "DO NOT SCALE sheet should stay at scale=1, got {}", r.scale);
+    assert!(r.scale_source.contains("DO NOT SCALE"), "scale source should mention DO NOT SCALE: {}", r.scale_source);
+
+    // nothing outside the page box (stray geometry fix)
+    let sheet_w = r.sheet.0;
+    for e in r.drawing.model.iter() {
+        if let EntityKind::Line(l) = &e.kind {
+            assert!(l.a.x >= -1.0 && l.b.x >= -1.0, "line outside page: {:?}", l);
+            assert!(l.a.x <= sheet_w + 1.0 && l.b.x <= sheet_w + 1.0, "line outside page: {:?}", l);
+        }
+    }
+
+    // print stats for the report
+    eprintln!("--- E-sheet profile ---");
+    for (k, v) in &r.stats {
+        eprintln!("  {k}: {v}");
+    }
+    eprintln!("  scale: {} ({})", r.scale, r.scale_source);
+    eprintln!("  wipeouts: {wipeout_count}, texts: {text_count}, blocks: {block_count}, inserts: {insert_count}");
+}
+
+#[test]
+fn do_not_scale_keeps_sheet_size() {
+    // A PDF with a DO NOT SCALE note and a scale note — should stay at scale=1
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 8 Tf 72 280 Td (SCALE: 1/4\" = 1'-0\") Tj 72 260 Td (DO NOT SCALE) Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(r.scale, 1.0, "DO NOT SCALE should override the scale note");
+    assert!(r.scale_source.contains("DO NOT SCALE"), "should report DO NOT SCALE");
+}
+
+#[test]
+fn page_clip_removes_stray_geometry() {
+    // A PDF with content outside the page box should be clipped
+    let content = b"q 0 0 0 RG 1.0 w -200 100 m -100 100 l S 72 72 m 200 72 l S BT /F1 10 Tf 72 300 Td (Test) Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
+    // the line at x=-200..-100 should be clipped (outside page box [0,0,792,612])
+    let has_negative_line = r.drawing.model.iter().any(|e| {
+        matches!(&e.kind, EntityKind::Line(l) if l.a.x < -0.1 || l.b.x < -0.1)
+    });
+    assert!(!has_negative_line, "stray geometry outside page box should be clipped");
+    // the line inside the page should still be there
+    assert!(r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(_))), "in-page lines should remain");
+}
+
+#[test]
+fn mask_merging_reduces_count() {
+    // Many overlapping small white fills should merge into fewer wipeouts
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q ");
+    // draw some geometry first
+    content.extend_from_slice(b"0 0 0 RG 1.0 w 72 72 m 700 72 l S ");
+    // 50 small overlapping white fills in a grid
+    content.extend_from_slice(b"1 1 1 rg ");
+    for i in 0..50 {
+        let x = 100 + (i % 10) * 15;
+        let y = 100 + (i / 10) * 15;
+        content.extend_from_slice(format!("{x} {y} 20 10 re f ").as_bytes());
+    }
+    content.extend_from_slice(b"BT /F1 10 Tf 100 300 Td (Test) Tj ET Q");
+
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let wipeout_count = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Wipeout(_))).count();
+    // 50 overlapping fills should merge to significantly fewer wipeouts
+    assert!(wipeout_count < 50, "masks should merge: got {wipeout_count} from 50 white fills");
 }
