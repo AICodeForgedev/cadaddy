@@ -114,8 +114,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "units_per_foot": {"type": "number"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1},
             "elements": {"type": "boolean", "description": "list each line's objects (default true)"}
         }}}),
-        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and pauses with questions when it needs the agent: confirm a scale, name a room, identify an unknown symbol, spot-check a count. Answers become project rules for future runs. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\"} — create a job.\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes.\n- status {} — job progress and open questions.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and pauses with questions when it needs the agent: confirm a scale, name a room, identify an unknown symbol, spot-check a count. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\"} — create a job.\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -467,9 +467,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("explain") => "job.explain",
                 Some("rules") => "job.rules",
                 Some("report") => "job.report",
+                Some("worklist") => "job.worklist",
+                Some("undo") => "job.undo",
                 Some(other) => {
                     return Err(format!(
-                        "guided_job has no action `{}` — use start, next, answer, status, explain, rules or report",
+                        "guided_job has no action `{}` — use start, next, answer, status, explain, rules, report, worklist or undo",
                         other.chars().take(30).collect::<String>()
                     ));
                 }
