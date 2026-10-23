@@ -10,7 +10,7 @@ use serde_json::json;
 fn the_bom_of_a_read_set_matches_the_truth() {
     let rules = ProjectRules::new();
     let (t, tags) = spectag::read_fixture_tags(3, &rules).unwrap();
-    let (_, mut runs) = conduit_reader::read_fixture_conduits(3).unwrap();
+    let (_, mut runs, _) = conduit_reader::read_fixture_conduits(3).unwrap();
     // Every run gets a height so the BOM counts it (heights don't change quantities).
     for c in &mut runs.conduits {
         c.bottom_ft.get_or_insert(9.0);

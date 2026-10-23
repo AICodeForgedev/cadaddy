@@ -61,6 +61,8 @@ pub struct FoundConduit {
     /// Bottom above the floor, feet, once [`assign_heights`] has run.
     pub bottom_ft: Option<f64>,
     pub height_source: Option<HeightSource>,
+    /// The plan entity handles this run was read from (hex).
+    pub objects: Vec<String>,
 }
 
 /// A homerun arrow and its assumed route to the panel.
@@ -72,8 +74,10 @@ pub struct FoundHomerun {
     pub label: String,
     /// The panel's tag (the label before `/`).
     pub panel: String,
-    /// Where the arrow leaves the last device, building feet.
+    /// Where the route starts, building feet (device position after anchoring, else E-sheet).
     pub origin_ft: [f64; 2],
+    /// The original E-sheet position of the arrow (before anchoring), for scoring.
+    pub drawn_origin_ft: [f64; 2],
     /// The panel, when one with that tag is drawn on the level's electrical plans.
     pub panel_ft: Option<[f64; 2]>,
     /// The assumed route: origin, the turn, the panel (empty without a panel).
@@ -82,6 +86,12 @@ pub struct FoundHomerun {
     pub bottoms_ft: Vec<f64>,
     /// The conductor note under the label (`2#12, 1#12G`), as printed.
     pub note: Option<String>,
+    /// The plan entity handles this homerun was read from (hex): arrow line and label text.
+    pub objects: Vec<String>,
+    /// Where the origin came from: `"device"` (architecturally placed) or `"E-sheet"`.
+    pub origin_source: String,
+    /// Where the panel position came from: `"equipment"` (architecturally placed) or `"E-sheet"`.
+    pub panel_source: String,
 }
 
 /// A panel drawn on an electrical plan.
@@ -151,7 +161,7 @@ pub fn parse_conduit_tag(s: &str) -> Option<f64> {
 }
 
 /// A `BOC @ 9'-8"` note: the conduit's bottom above the floor, feet.
-fn parse_boc(s: &str) -> Option<f64> {
+pub fn parse_boc(s: &str) -> Option<f64> {
     let u = s.trim().to_ascii_uppercase();
     let rest = u.strip_prefix("BOC")?.trim_start().trim_start_matches('@').trim();
     let (ft, inch) = rest.split_once('\'')?;
@@ -177,6 +187,7 @@ pub fn parse_circuit_label(s: &str) -> Option<(String, String)> {
 struct Line2 {
     a: [f64; 2],
     b: [f64; 2],
+    handle: u64,
 }
 
 impl Line2 {
@@ -220,11 +231,104 @@ pub fn read_conduits(dxf_data: &[(String, Vec<u8>)], map: &SheetMap) -> ConduitR
     for h in &mut res.homeruns {
         let Some(p) = res.panels.iter().find(|p| p.level == h.level && p.tag.eq_ignore_ascii_case(&h.panel)) else { continue };
         h.panel_ft = Some(p.at_ft);
-        let turn = [p.at_ft[0], h.origin_ft[1]];
-        h.route_ft =
-            if dist(turn, h.origin_ft) < 0.1 || dist(turn, p.at_ft) < 0.1 { vec![h.origin_ft, p.at_ft] } else { vec![h.origin_ft, turn, p.at_ft] };
+        h.panel_source = "E-sheet".into();
+        build_route(h);
     }
     res
+}
+
+/// Build the assumed L-shaped route from origin to panel.
+fn build_route(h: &mut FoundHomerun) {
+    let Some(panel) = h.panel_ft else { return };
+    let turn = [panel[0], h.origin_ft[1]];
+    h.route_ft = if dist(turn, h.origin_ft) < 0.1 || dist(turn, panel) < 0.1 {
+        vec![h.origin_ft, panel]
+    } else {
+        vec![h.origin_ft, turn, panel]
+    };
+}
+
+/// A device's position for anchoring homeruns (from Q288's placed devices).
+pub struct DeviceAnchor {
+    pub level: String,
+    pub panel: String,
+    pub circuit: String,
+    pub at_ft: [f64; 2],
+}
+
+/// A panel / equipment position for anchoring homeruns (from the gear reader or mep.equipment).
+pub struct EquipmentAnchor {
+    pub level: String,
+    pub tag: String,
+    pub at_ft: [f64; 2],
+}
+
+/// An unrouted homerun that could not reach its panel (e.g. panel on another level).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnroutedHomerun {
+    pub label: String,
+    pub level: String,
+    pub panel: String,
+    pub reason: String,
+}
+
+/// Anchor homerun origins and endpoints to architecturally placed devices and equipment.
+///
+/// For each homerun, the origin is snapped to the nearest device on the same circuit and level
+/// (from Q288's device reader); the endpoint is snapped to the panel's equipment position.
+/// Where no matching device or equipment is found, the E-sheet position is kept and the source
+/// is flagged as `"E-sheet position, not placed"`.
+pub fn anchor_homeruns(
+    res: &mut ConduitResult,
+    devices: &[DeviceAnchor],
+    equipment: &[EquipmentAnchor],
+) -> Vec<UnroutedHomerun> {
+    let mut unrouted = Vec::new();
+    for h in &mut res.homeruns {
+        // Anchor origin to the nearest device on this circuit, same level.
+        let label_panel = &h.panel;
+        let nearest_device = devices
+            .iter()
+            .filter(|d| d.level == h.level && d.panel.eq_ignore_ascii_case(label_panel))
+            .min_by(|a, b| dist(a.at_ft, h.origin_ft).total_cmp(&dist(b.at_ft, h.origin_ft)));
+        if let Some(dev) = nearest_device {
+            h.origin_ft = dev.at_ft;
+            h.origin_source = "device".into();
+        } else {
+            h.origin_source = "E-sheet position, not placed".into();
+        }
+        // Anchor panel endpoint to equipment position.
+        let eq = equipment
+            .iter()
+            .find(|e| e.level == h.level && e.tag.eq_ignore_ascii_case(&h.panel));
+        if let Some(eq) = eq {
+            h.panel_ft = Some(eq.at_ft);
+            h.panel_source = "equipment".into();
+            build_route(h);
+        } else if h.panel_ft.is_none() {
+            // No E-sheet panel and no equipment: check other levels for the panel.
+            let cross = equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&h.panel));
+            if let Some(cl) = cross {
+                // Panel on another level: unrouted.
+                unrouted.push(UnroutedHomerun {
+                    label: h.label.clone(),
+                    level: h.level.clone(),
+                    panel: h.panel.clone(),
+                    reason: format!("panel {} on level {}, not this level", cl.tag, cl.level),
+                });
+            } else {
+                unrouted.push(UnroutedHomerun {
+                    label: h.label.clone(),
+                    level: h.level.clone(),
+                    panel: h.panel.clone(),
+                    reason: format!("panel {} not found in equipment or on the plans", h.panel),
+                });
+            }
+        } else if h.panel_source != "equipment" {
+            h.panel_source = "E-sheet position, not placed".into();
+        }
+    }
+    unrouted
 }
 
 /// The structural grid's extents with a margin (none without a grid: everything is in).
@@ -260,27 +364,27 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
     let within = |p: [f64; 2]| inside.is_none_or(|(lo, hi)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]);
     let to_b = |x: f64, y: f64| building_from_model(al, [x, y]);
     let mut lines: Vec<Line2> = Vec::new();
-    let mut texts: Vec<(String, [f64; 2])> = Vec::new();
+    let mut texts: Vec<(String, [f64; 2], u64)> = Vec::new();
     // A drawing with the device layer reads its lines; a print (no such layer) its drawn pens.
     let layered = d.layers.iter().any(|l| l.name.eq_ignore_ascii_case("DEVICE"));
     for e in d.model.iter().take(MAX_ITEMS) {
         match &e.kind {
             EntityKind::Line(l) if layered && e.common.layer.eq_ignore_ascii_case("DEVICE") => {
-                let ln = Line2 { a: to_b(l.a.x, l.a.y), b: to_b(l.b.x, l.b.y) };
+                let ln = Line2 { a: to_b(l.a.x, l.a.y), b: to_b(l.b.x, l.b.y), handle: e.handle.0 };
                 if within(ln.a) && within(ln.b) {
                     lines.push(ln);
                 }
             }
             EntityKind::Text(t) => {
                 let p = t.align_pt.unwrap_or(t.insert);
-                texts.push((t.value.clone(), to_b(p.x, p.y)));
+                texts.push((t.value.clone(), to_b(p.x, p.y), e.handle.0));
             }
             _ => {}
         }
     }
     if !layered {
         for [a, b] in crate::sheet_reader::drawn_segments(d, false).into_iter().take(MAX_ITEMS) {
-            let ln = Line2 { a: to_b(a[0], a[1]), b: to_b(b[0], b[1]) };
+            let ln = Line2 { a: to_b(a[0], a[1]), b: to_b(b[0], b[1]), handle: 0 };
             if within(ln.a) && within(ln.b) {
                 lines.push(ln);
             }
@@ -292,17 +396,21 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
     for l in long.iter().filter(|l| layered || !banked(l, &long)) {
         let tag = texts
             .iter()
-            .filter_map(|(t, p)| parse_conduit_tag(t).map(|s| (t, s, p)))
+            .filter_map(|(t, p, _h)| parse_conduit_tag(t).map(|s| (t, s, p)))
             .map(|(t, s, p)| (t, s, p, beside(l, *p)))
             .filter(|(_, _, _, (dd, at))| *dd <= 1.5 && *at > 0.0 && *at < 1.0)
             .min_by(|a, b| a.3.0.total_cmp(&b.3.0));
         let height_note = tag.and_then(|(_, _, p, _)| {
             texts
                 .iter()
-                .filter(|(t, q)| parse_boc(t).is_some() && dist(*q, *p) < 2.0)
+                .filter(|(t, q, _)| parse_boc(t).is_some() && dist(*q, *p) < 2.0)
                 .min_by(|a, b| dist(a.1, *p).total_cmp(&dist(b.1, *p)))
                 .map(|x| x.0.clone())
         });
+        let mut objects = Vec::new();
+        if l.handle != 0 {
+            objects.push(format!("{:X}", l.handle));
+        }
         res.conduits.push(FoundConduit {
             level: level.to_string(),
             sheet: sh.number.clone(),
@@ -314,10 +422,11 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
             height_note,
             bottom_ft: None,
             height_source: None,
+            objects,
         });
     }
     // Homeruns: a short diagonal device line whose tip is at a circuit label.
-    for (t, p) in &texts {
+    for (t, p, text_handle) in &texts {
         let Some((panel, _)) = parse_circuit_label(t) else { continue };
         let arrow = lines
             .iter()
@@ -329,23 +438,34 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
             .filter_map(|l| {
                 let (ta, tb) = (dist(l.a, *p), dist(l.b, *p));
                 // The tip is the end at the label; the origin the other end.
-                if ta <= tb { (ta <= 1.0).then_some((ta, l.b)) } else { (tb <= 1.0).then_some((tb, l.a)) }
+                if ta <= tb { (ta <= 1.0).then_some((ta, l.b, l.handle)) } else { (tb <= 1.0).then_some((tb, l.a, l.handle)) }
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let Some((_, origin)) = arrow else { continue };
+        let Some((_, origin, arrow_handle)) = arrow else { continue };
         // The conductors noted just under the label.
         let note = texts
             .iter()
-            .filter(|(n, q)| n.contains('#') && dist(*q, *p) < 1.5)
+            .filter(|(n, q, _)| n.contains('#') && dist(*q, *p) < 1.5)
             .min_by(|a, b| dist(a.1, *p).total_cmp(&dist(b.1, *p)))
-            .map(|(n, _)| n.trim().to_string());
+            .map(|(n, _, _)| n.trim().to_string());
+        let mut objects = Vec::new();
+        if arrow_handle != 0 {
+            objects.push(format!("{:X}", arrow_handle));
+        }
+        if *text_handle != 0 {
+            objects.push(format!("{:X}", text_handle));
+        }
         res.homeruns.push(FoundHomerun {
             level: level.to_string(),
             sheet: sh.number.clone(),
             label: t.trim().to_string(),
             panel,
             origin_ft: origin,
+            drawn_origin_ft: origin,
             note,
+            objects,
+            origin_source: "E-sheet".into(),
+            panel_source: String::new(),
             ..FoundHomerun::default()
         });
     }
@@ -357,7 +477,7 @@ fn read_sheet(res: &mut ConduitResult, sh: &RecognisedSheet, d: &Drawing, level:
     }
 }
 
-/// Heights for every conduit and homeron leg by Q257's rules, from each level's context
+/// Heights for every conduit and homerun leg by Q257's rules, from each level's context
 /// (`ctx(level)`: its rooms and ceilings, structure; none leaves the level's heights unset).
 pub fn assign_heights(res: &mut ConduitResult, ctx: &dyn Fn(&str) -> Option<LevelContext>) {
     let rules = TradeRules::standard();
@@ -437,13 +557,43 @@ pub fn context_from_ceilings(
     LevelContext { level_code: level.to_string(), elevation_ft, structure_underside_ft, rooms, beams: Vec::new() }
 }
 
+/// Build device anchors from the truth's devices (each device knows its panel tag and level).
+pub fn device_anchors_from_truth(t: &Truth) -> Vec<DeviceAnchor> {
+    t.elec_devices
+        .iter()
+        .filter(|d| !d.panel.is_empty())
+        .map(|d| {
+            let panel_tag = t.elec_panels.iter().find(|p| p.id == d.panel).map(|p| p.tag.as_str()).unwrap_or(&d.panel);
+            DeviceAnchor {
+                level: d.level.clone(),
+                panel: panel_tag.to_string(),
+                circuit: d.circuit.clone(),
+                at_ft: [d.at_ft[0], d.at_ft[1]],
+            }
+        })
+        .collect()
+}
+
+/// Build equipment anchors from the truth's panels (their architectural position).
+pub fn equipment_anchors_from_truth(t: &Truth) -> Vec<EquipmentAnchor> {
+    t.elec_panels
+        .iter()
+        .map(|p| EquipmentAnchor { level: p.level.clone(), tag: p.tag.clone(), at_ft: [p.at_ft[0], p.at_ft[1]] })
+        .collect()
+}
+
 /// Generate a seed's set and read its conduit and homeruns, heights from the ceiling reader
 /// (and, for the structure above each floor, the truth's levels: floor to floor less 2').
-pub fn read_fixture_conduits(seed: u64) -> Result<(Truth, ConduitResult), String> {
+/// Also anchors homeruns to architecturally placed devices and equipment from the truth.
+pub fn read_fixture_conduits(seed: u64) -> Result<(Truth, ConduitResult, Vec<UnroutedHomerun>), String> {
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = crate::sheet_reader::recognise_fixture_set(&dxf);
     let mut res = read_conduits(&dxf, &map);
+    // Anchor homeruns to placed devices and equipment.
+    let dev_anchors = device_anchors_from_truth(&set.truth);
+    let eq_anchors = equipment_anchors_from_truth(&set.truth);
+    let unrouted = anchor_homeruns(&mut res, &dev_anchors, &eq_anchors);
     let ceil = crate::ceiling_reader::read_ceilings(&dxf, &map);
     let t = set.truth;
     let levels = t.building.levels.clone();
@@ -453,7 +603,7 @@ pub fn read_fixture_conduits(seed: u64) -> Result<(Truth, ConduitResult), String
         let next = levels.get(i + 1).map_or(e + 13.0, |l| l.elevation_ft);
         Some(context_from_ceilings(&ceil, code, e, next - e - 2.0))
     });
-    Ok((t, res))
+    Ok((t, res, unrouted))
 }
 
 /// How the reader did against the truth.
@@ -501,7 +651,7 @@ pub fn score(t: &Truth, res: &ConduitResult) -> ConduitScore {
     let circuits: Vec<&crate::truth::ElecCircuit> = t.elec_circuits.iter().filter(|c| !c.sheet.is_empty()).collect();
     let panel_tag = |id: &str| t.elec_panels.iter().find(|p| p.id == id).map(|p| p.tag.clone()).unwrap_or_else(|| id.to_string());
     let matches =
-        |h: &FoundHomerun, c: &crate::truth::ElecCircuit| h.level == c.level && h.label == c.label && dist(h.origin_ft, c.homerun_ft) <= tol;
+        |h: &FoundHomerun, c: &crate::truth::ElecCircuit| h.level == c.level && h.label == c.label && dist(h.drawn_origin_ft, c.homerun_ft) <= tol;
     let found_h = circuits.iter().filter(|c| res.homeruns.iter().any(|h| matches(h, c))).count();
     let true_h: Vec<(&FoundHomerun, &&crate::truth::ElecCircuit)> =
         res.homeruns.iter().filter_map(|h| circuits.iter().find(|c| matches(h, c)).map(|c| (h, c))).collect();
@@ -526,6 +676,10 @@ pub fn score(t: &Truth, res: &ConduitResult) -> ConduitScore {
 /// drawing inches, building feet × 12; `level_names` maps level codes to the spec's names),
 /// and the guesses to record (`guess`): every homerun route, and every height or size a rule
 /// chose, is an assumption. Runs without a height are left out.
+///
+/// Each run carries its plan `objects` (hex handles) and a per-run `source` describing where
+/// its size and height came from (`"tag"` / `"default"` for size, `"Note"` / `"CeilingRule"` /
+/// `"StackRule"` for height, `"assumed route"` for homeruns).
 pub fn spec_runs(res: &ConduitResult, level_names: &[(&str, &str)]) -> (Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<(String, String)>) {
     let systems = vec![
         serde_json::json!({"name": CONDUIT_SYSTEM, "layer": CONDUIT_SYSTEM, "kind": "conduit", "size_in": [DEFAULT_SIZE_IN, 0], "bottom_ft": 9}),
@@ -533,13 +687,29 @@ pub fn spec_runs(res: &ConduitResult, level_names: &[(&str, &str)]) -> (Vec<serd
     ];
     let level_of = |code: &str| level_names.iter().find(|(c, _)| *c == code).map(|x| x.1);
     let pt = |p: [f64; 2]| serde_json::json!([p[0] * 12.0, p[1] * 12.0]);
+    let height_src = |s: &Option<HeightSource>| match s {
+        Some(HeightSource::Note) => "Note",
+        Some(HeightSource::Ceiling) => "CeilingRule",
+        Some(HeightSource::Structure) => "Structure",
+        _ => "StackRule",
+    };
     let mut runs = Vec::new();
     let (mut ruled, mut untagged) = (0, 0);
     for c in &res.conduits {
         let (Some(level), Some(b)) = (level_of(&c.level), c.bottom_ft) else { continue };
         ruled += usize::from(c.height_source != Some(HeightSource::Note));
         untagged += usize::from(!c.size_from_tag);
-        runs.push(serde_json::json!({ "system": CONDUIT_SYSTEM, "level": level, "points": [pt(c.from_ft), pt(c.to_ft)], "size_in": [c.size_in, 0], "bottoms_ft": [b] }));
+        let size_src = if c.size_from_tag { "tag" } else { "default" };
+        let mut run = serde_json::json!({
+            "system": CONDUIT_SYSTEM, "level": level,
+            "points": [pt(c.from_ft), pt(c.to_ft)],
+            "size_in": [c.size_in, 0], "bottoms_ft": [b],
+            "source": format!("size {size_src}, height {}", height_src(&c.height_source)),
+        });
+        if !c.objects.is_empty() {
+            run["objects"] = serde_json::json!(c.objects);
+        }
+        runs.push(run);
     }
     let mut homeruns = 0;
     for h in &res.homeruns {
@@ -548,7 +718,20 @@ pub fn spec_runs(res: &ConduitResult, level_names: &[(&str, &str)]) -> (Vec<serd
             continue;
         }
         homeruns += 1;
-        runs.push(serde_json::json!({ "system": HOMERUN_SYSTEM, "level": level, "points": h.route_ft.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "size_in": [0.5, 0], "bottoms_ft": h.bottoms_ft }));
+        let mut run = serde_json::json!({
+            "system": HOMERUN_SYSTEM, "level": level,
+            "points": h.route_ft.iter().map(|p| pt(*p)).collect::<Vec<_>>(),
+            "size_in": [0.5, 0], "bottoms_ft": h.bottoms_ft,
+            "source": format!(
+                "assumed route, origin {}, panel {}",
+                if h.origin_source.is_empty() { "E-sheet" } else { &h.origin_source },
+                if h.panel_source.is_empty() { "E-sheet" } else { &h.panel_source },
+            ),
+        });
+        if !h.objects.is_empty() {
+            run["objects"] = serde_json::json!(h.objects);
+        }
+        runs.push(run);
     }
     let mut guesses = Vec::new();
     if homeruns > 0 {
