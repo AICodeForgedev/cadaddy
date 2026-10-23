@@ -970,8 +970,11 @@ pub fn run_graph(d: &Drawing, sh: &Sheet) -> RunGraph {
     let txt = texts(d);
     match sh.discipline.as_str() {
         "M" => {
-            let net = duct_reader::read_ducts(d, sh);
-            for r in net.to_found_runs(sh).into_iter().take(MAX_PIECES) {
+            let net = duct_reader::read_ducts(d);
+            // This graph is placed with the sheet it is given (as everything else here is).
+            let al =
+                crate::sheet_reader::Alignment { rotation_deg: sh.model_from_building.rotation_deg, offset_in: sh.model_from_building.offset_in };
+            for r in net.to_found_runs(sh.level.as_deref().unwrap_or_default(), &al).into_iter().take(MAX_PIECES) {
                 let half = r.size_in[0].max(0.0) / 24.0;
                 g.pieces.push(Piece {
                     kind: "duct".into(),

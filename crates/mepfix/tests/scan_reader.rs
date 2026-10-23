@@ -46,7 +46,16 @@ struct Row {
 fn runs(d: &Drawing, t: &Truth, sh: &Sheet, scanned: bool) -> score::RunScore {
     if sh.discipline == "M" {
         let o = if scanned { scan_reader::DUCT_OPTIONS } else { duct_reader::DuctOptions::default() };
-        duct_reader::read_and_score_with(d, t, sh, &o)
+        // Placed as the truth places the sheet: this compares scans with vectors, not alignment.
+        let rec = cadaddy_mepfix::sheet_reader::RecognisedSheet {
+            level: sh.level.clone(),
+            alignment: Some(cadaddy_mepfix::sheet_reader::Alignment {
+                rotation_deg: sh.model_from_building.rotation_deg,
+                offset_in: sh.model_from_building.offset_in,
+            }),
+            ..Default::default()
+        };
+        duct_reader::read_and_score_with(d, t, &rec, &o)
     } else {
         let (found, _) = pipe_reader::read_pipes(d, sh);
         score::score_runs(t, sh.level.as_deref().unwrap_or_default(), "pipe", &found, 0.5)

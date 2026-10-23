@@ -318,7 +318,7 @@ fn main() {
         let disc = map.sheets.iter().find(|s| &s.number == n).map(|s| s.discipline.clone()).unwrap_or_default();
         let sh = cadaddy_mepfix::truth::Sheet { number: n.clone(), discipline: disc.clone(), ..Default::default() };
         if disc == "M" {
-            let net = cadaddy_mepfix::duct_reader::read_ducts(d, &sh);
+            let net = cadaddy_mepfix::duct_reader::read_ducts(d);
             duct_runs += net.runs.len();
             terminals += net.terminals.len();
         } else if disc == "P" {

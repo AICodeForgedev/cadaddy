@@ -230,8 +230,8 @@ fn run_size(size_name: &str, size: HotelSize, seed: u64, only: &[String], scratc
         let (runs, terminals) = b.stage("read_ducts", |_| {
             let (mut runs, mut terms) = (0, 0);
             for (n, d) in &parsed {
-                if let (true, Some(sh)) = (n.starts_with("M-1"), sheet_of(n)) {
-                    let net = cadaddy_mepfix::duct_reader::read_ducts(d, sh);
+                if n.starts_with("M-1") && sheet_of(n).is_some() {
+                    let net = cadaddy_mepfix::duct_reader::read_ducts(d);
                     runs += net.runs.len();
                     terms += net.terminals.len();
                 }
