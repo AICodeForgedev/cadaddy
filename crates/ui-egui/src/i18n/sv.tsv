@@ -3138,3 +3138,8 @@ menu	Modify	Ändra
 	Estimate Bid Summary	Anbudssammanfattning för kalkyl
 	Read Panel Schedules	Läs centralscheman
 	Site Takeoff	Mängdavtagning mark
+	Clash Report	Kollisionsrapport
+	Export PDF	Exportera PDF
+	Export the grouped clash report to PDF	Exportera den grupperade kollisionsrapporten till PDF
+	PDF exported to {path}.	PDF exporterad till {path}.
+	Clash detection failed.	Kollisionskontrollen misslyckades.

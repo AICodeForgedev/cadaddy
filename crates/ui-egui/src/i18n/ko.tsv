@@ -3131,3 +3131,8 @@ menu	Modify	수정
 	Estimate Bid Summary	견적 입찰 요약
 	Read Panel Schedules	분전반 일람표 읽기
 	Site Takeoff	대지 공사 물량 산출
+	Clash Report	충돌 보고서
+	Export PDF	PDF 내보내기
+	Export the grouped clash report to PDF	그룹화된 충돌 보고서를 PDF로 내보내기
+	PDF exported to {path}.	PDF를 {path}(으)로 내보냈습니다.
+	Clash detection failed.	충돌 감지에 실패했습니다.

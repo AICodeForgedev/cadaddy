@@ -3130,3 +3130,8 @@ menu	Modify	Edita
 	Estimate Bid Summary	Riepilogo offerta della stima
 	Read Panel Schedules	Leggi gli schemi dei quadri
 	Site Takeoff	Computo opere esterne
+	Clash Report	Rapporto interferenze
+	Export PDF	Esporta PDF
+	Export the grouped clash report to PDF	Esporta il rapporto interferenze raggruppato in PDF
+	PDF exported to {path}.	PDF esportato in {path}.
+	Clash detection failed.	Rilevamento interferenze non riuscito.

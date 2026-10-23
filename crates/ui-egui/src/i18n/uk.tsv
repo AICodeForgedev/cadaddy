@@ -3202,3 +3202,8 @@
 	Read Wall Types from Plans	Зчитати типи стін з планів
 	Resolve MEP Heights	Визначити висоти інженерних мереж
 	Run Print Set Stages	Виконати етапи комплекту креслень
+	Clash Report	Звіт про колізії
+	Export PDF	Експорт у PDF
+	Export the grouped clash report to PDF	Експортувати згрупований звіт про колізії у PDF
+	PDF exported to {path}.	PDF експортовано до {path}.
+	Clash detection failed.	Не вдалося виконати пошук колізій.

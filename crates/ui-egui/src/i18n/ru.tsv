@@ -2920,3 +2920,8 @@
 	Estimate Bid Summary	Сводка предложения по смете
 	Read Panel Schedules	Прочитать таблицы щитов
 	Site Takeoff	Подсчёт объёмов работ по участку
+	Clash Report	Отчёт о коллизиях
+	Export PDF	Экспорт в PDF
+	Export the grouped clash report to PDF	Экспортировать сгруппированный отчёт о коллизиях в PDF
+	PDF exported to {path}.	PDF экспортирован в {path}.
+	Clash detection failed.	Не удалось выполнить поиск коллизий.

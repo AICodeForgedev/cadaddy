@@ -3111,3 +3111,8 @@ menu	Modify	Modifikace
 	Estimate Bid Summary	Souhrn nabídky z odhadu
 	Read Panel Schedules	Načíst rozpisy rozváděčů
 	Site Takeoff	Výkaz výměr terénních úprav
+	Clash Report	Zpráva o kolizích
+	Export PDF	Exportovat PDF
+	Export the grouped clash report to PDF	Exportovat seskupenou zprávu o kolizích do PDF
+	PDF exported to {path}.	PDF exportováno do {path}.
+	Clash detection failed.	Detekce kolizí selhala.

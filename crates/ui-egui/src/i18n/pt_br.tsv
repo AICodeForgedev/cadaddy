@@ -3137,3 +3137,8 @@
 	Estimate Bid Summary	Resumo da proposta do orçamento
 	Read Panel Schedules	Ler quadros de painéis
 	Site Takeoff	Levantamento de quantitativos do terreno
+	Clash Report	Relatório de interferências
+	Export PDF	Exportar PDF
+	Export the grouped clash report to PDF	Exportar o relatório de interferências agrupado para PDF
+	PDF exported to {path}.	PDF exportado para {path}.
+	Clash detection failed.	A detecção de interferências falhou.

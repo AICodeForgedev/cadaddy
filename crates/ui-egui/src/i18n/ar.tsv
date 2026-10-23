@@ -3126,3 +3126,8 @@ menu	View	عرض
 	Estimate Bid Summary	ملخص العطاء للتقدير
 	Read Panel Schedules	قراءة جداول اللوحات
 	Site Takeoff	حصر أعمال الموقع
+	Clash Report	تقرير التعارضات
+	Export PDF	تصدير PDF
+	Export the grouped clash report to PDF	تصدير تقرير التعارضات المجمّع إلى PDF
+	PDF exported to {path}.	تم تصدير PDF إلى {path}.
+	Clash detection failed.	فشل اكتشاف التعارضات.

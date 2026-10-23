@@ -3137,3 +3137,8 @@
 	Estimate Bid Summary	Resumen de oferta del presupuesto
 	Read Panel Schedules	Leer cuadros de tableros
 	Site Takeoff	Cubicación de obras exteriores
+	Clash Report	Informe de interferencias
+	Export PDF	Exportar PDF
+	Export the grouped clash report to PDF	Exportar el informe de interferencias agrupado a PDF
+	PDF exported to {path}.	PDF exportado a {path}.
+	Clash detection failed.	La detección de interferencias falló.
