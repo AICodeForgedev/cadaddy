@@ -68,80 +68,117 @@ Add to your project's `.mcp.json` or global MCP settings:
 
 ## Available MCP tools
 
-CADaddy exposes these tools over MCP:
+CADaddy exposes these tools over MCP. Start with the job-level tools
+(`drawing_summary`, `bim_job`) when working on a project; fall back to
+low-level `execute` only when needed.
+
+### Start here (job-level)
+
+| Tool | Description |
+|:-----|:------------|
+| `drawing_summary` | What a drawing holds without its geometry: units, extents, layouts, layers with counts, blocks, texts, title block attributes, xrefs, dim styles. Capped and paged for huge drawings. |
+| `bim_job` | One call per BIM step: briefing, import prints, build model, review items, resolve with citations, takeoff, RFIs, export IFC. The project keeps state across sessions. |
+| `project` | Manage projects (groups of drawings sharing rules, types and standards): create, open, add/remove drawings, standards, shelve/restore. |
+| `project_rules` | Project rules with source and tier (field-verified > RFI > submittal > spec > built-in): mounting heights, wiring methods, clearances, tolerances, naming, stud/joist layout. |
+
+### BIM and building
+
+| Tool | Description |
+|:-----|:------------|
+| `bim_types` | BIM element types: list, create, assign and query type marks (description, manufacturer, catalog, spec section, material, ratings). |
+| `bim_spec_import` | Read a spec book, schedule or submittal into proposed BIM types. Import returns proposals with citations; accept merges them. Nothing applied silently. |
+| `rooms` | Plan rooms as 3D spaces: list rooms with area/volume/finishes, zoom to a room, build see-through volumes. |
+| `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |
+| `mep` | MEP review: list runs/fittings by system and level with confidence, edit size/height/system, mark reviewed, rebuild. |
+| `site_takeoff` | Sitework quantities from civil sheets: earthwork cut/fill, paving, curbs, utilities with trench excavation and backfill. |
 
 ### Drawing commands
 
 | Tool | Description |
 |:-----|:------------|
-| `command_line` | Type at the command line (spaces separate tokens, like a user typing) |
-| `script` | Run a multi-line script |
-| `execute` | Run a command with JSON parameters (no dialogs) |
-| `list_commands` | List available commands with optional filter |
+| `command_line` | Type at the command line, exactly as a user at an AutoCAD-style prompt. |
+| `script` | Run a multi-line script (like an AutoCAD `.scr` file). |
+| `execute` | Run any command with JSON parameters (no prompts or dialogs). |
+| `execute_many` | Run many commands in one call and one undo step (up to 10,000). |
+| `list_commands` | List commands with ids, labels, menu paths, aliases and parameter docs. |
 
 ### Drawing inspection
 
 | Tool | Description |
 |:-----|:------------|
-| `inspect_drawing` | Counts, extents, layers, styles, blocks, selection, undo stack |
-| `query_entities` | Filter and retrieve entities with geometry (paginated) |
-| `find_text` | Search TEXT, MTEXT, attributes and multileaders by content |
-| `get_variable` | Read a system variable |
-| `set_variable` | Set a system variable |
-| `get_prompt` | Current command-line prompt state |
-| `wait_until_idle` | Block until no command is active |
+| `drawing_query` | Find objects across model space and layouts by type, layer, space, window, text or block. Paginated. |
+| `inspect_drawing` | Summary of the active drawing: entity counts, extents, layers, styles, blocks, selection, undo history. |
+| `query_entities` | Entities filtered by type, layer and/or window, with geometry. Paginated. |
+| `find_text` | Texts (TEXT, MTEXT, attributes, multileaders) with content, position, layer and handle. Filter by contains, layer, window. |
+| `watch_events` | Subscribe to live events: drawing changed, selection changed, command run, prompt changed, dialog opened. |
+| `get_variable` | Read a system variable (CLAYER, LTSCALE, DIMSCALE, INSUNITS, etc.). |
+| `set_variable` | Set a system variable. |
+| `get_prompt` | Current command-line prompt state: running command, keywords, accepted inputs. |
+| `wait_until_idle` | Block until no command is active, up to a timeout. |
 
 ### File operations
 
 | Tool | Description |
 |:-----|:------------|
-| `new_drawing` | Create a blank drawing |
-| `open` | Open a file |
-| `save` | Save the active drawing |
-| `close_drawing` | Close a drawing (with save/discard option) |
-| `close_all` | Close all drawings |
-| `list_drawings` | List open drawings |
-| `switch_drawing` | Switch to another open drawing |
+| `new_drawing` | Create a blank drawing (imperial or metric). |
+| `open` | Open a file (.cdy, .dwg, .dxf, .dwt, .svg, .pdf). |
+| `save` | Save the active drawing (format by extension). |
+| `close_drawing` | Close a drawing (with save/discard option). |
+| `close_all` | Close every drawing. |
+| `list_drawings` | List open drawings with index, title, path and modified state. |
+| `switch_drawing` | Switch to another open drawing by index, path or title. |
 
 ### Visual feedback
 
 | Tool | Description |
 |:-----|:------------|
-| `render` | Export the current view as PNG (returns the image) |
-| `screenshot` | Screenshot of the application window |
-| `ui_inspect` | Inspect the UI state (panels, dialogs) |
-| `ui_elements` | List visible UI elements |
-| `ui_click` | Click a UI element by label or position |
+| `render` | Render the current view as PNG (returns the image). Optional window for a specific area. |
+| `screenshot` | Screenshot of the application window (requires desktop mode). |
+| `ui_inspect` | UI state: panels, canvas rect, view, cursor and snap, performance. |
+| `ui_elements` | Visible controls: label, role, rectangle, enabled, selected, focused. |
+| `ui_click` | Click at world or screen coordinates. |
 
 ### Editing
 
 | Tool | Description |
 |:-----|:------------|
-| `select` | Select entities by handles, window, or all |
-| `undo` | Undo the last command |
-| `redo` | Redo |
-| `cancel` | Cancel the active command |
-| `plot` | Export to PDF |
+| `select` | Select entities by handles, window, all, or clear. |
+| `undo` | Undo the last N commands (default 1). |
+| `redo` | Redo N undone commands (default 1). |
+| `cancel` | Press Escape: cancel the running command. |
+| `plot` | Plot a layout to PDF with its page setup. |
 
 ### AutoLISP
 
 | Tool | Description |
 |:-----|:------------|
-| `run_lisp` | Evaluate an AutoLISP expression |
+| `run_lisp` | Evaluate AutoLISP in the current drawing. |
 
-### Application control
+### Application control (desktop mode)
 
 | Tool | Description |
 |:-----|:------------|
-| `answer_close_prompt` | Respond to a "save changes?" prompt |
-| `quit_app` | Quit the application |
+| `answer_close_prompt` | Respond to a "save changes?" prompt (save, discard or cancel). |
+| `quit_app` | Quit the application. |
 
 ## MCP resources
 
 | URI | Description |
 |:----|:------------|
-| `cadaddy://drawing` | The current drawing as JSON |
-| `cadaddy://commands` | Full command catalog |
+| `cadaddy://drawing` | Active drawing summary (counts, layers, extents, selection, entities) |
+| `cadaddy://layers` | The active drawing's layers and their states |
+| `cadaddy://blocks` | The active drawing's block definitions |
+| `cadaddy://layouts` | The active drawing's layouts and viewports |
+| `cadaddy://commands` | Full command catalog with parameters |
+| `cadaddy://drawing/{index}` | Summary of an open drawing by number |
+
+## MCP prompts
+
+| Prompt | Description |
+|:-------|:------------|
+| `floor_plan_from_sketch` | Turn a described or sketched room layout into a clean 2D floor plan. |
+| `schedule_blocks` | Count block references and insert a schedule table. |
+| `audit_report` | Check a drawing for problems and report them. |
 
 ## Example agent session
 
@@ -193,8 +230,6 @@ CADaddy enforces safety limits on the control channel and MCP:
   UNC paths or `file://` programs prompt the user before opening.
 - **AutoLISP sandboxing.** Scripts outside trusted locations do not run
   automatically.
-- **Read-only by default.** MCP tools that modify the drawing require explicit
-  tool-use approval from the agent framework.
 
 ## CLI for batch scripting
 
@@ -204,5 +239,5 @@ CADaddy enforces safety limits on the control channel and MCP:
 cadaddy-cli run --script 'RECTANG 0,0 100,60\nCIRCLE 50,30 10\n' --export out.png
 cadaddy-cli run --sample --export sample.pdf
 cadaddy-cli info drawing.dxf
-cadaddy-cli convert --input folder/ --output out/ --format cdy
+cadaddy-cli convert folder/ out/ --to cdy --recurse
 ```

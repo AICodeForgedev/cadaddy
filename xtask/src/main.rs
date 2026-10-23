@@ -84,7 +84,9 @@ commands:
   supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
                   (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
   advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
-  command-docs    generate docs/guide/command-reference.md from the live command registry
+  command-docs [--check]
+                  generate docs/guide/command-reference.md from the live command registry;
+                  --check regenerates and fails on any diff (used by `cargo xtask ci`)
   sbom [--out FILE]
                   CycloneDX 1.5 SBOM of the shipped crates (default target/sbom/cadaddy-<version>.cdx.json),
                   to attach to the release
@@ -136,7 +138,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
-        Some("command-docs") => commanddocs::run(&root()),
+        Some("command-docs") => commanddocs::run(&root(), rest.contains(&"--check")),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
@@ -334,6 +336,7 @@ fn cmd_ci() -> Result<(), String> {
         ("web", Box::new(|| webtest::run(&root(), &[]))),
         // Two minutes of the headless app under a mixed workload: a leak or a stall fails.
         ("soak", Box::new(|| soak::run(&root(), &["--minutes", "2", "--profile", "dev"]))),
+        ("command-docs", Box::new(|| commanddocs::run(&root(), true))),
         ("supplychain", Box::new(|| supplychain::run(&root()))),
         ("advisories", Box::new(|| supplychain::advisories(&root()))),
     ];
