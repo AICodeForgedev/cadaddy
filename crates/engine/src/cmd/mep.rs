@@ -41,10 +41,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference, message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total, gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
-            .params("{level?: name, system?: name, guessed_only?: bool} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed}], systems: [...]}")
+            .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
             .noundo(),
         CommandSpec::new("mep.edit", "Edit MEP Item", run_edit)
-            .params("{id: index, system?: name, size_in?: [w,h], bottom_ft?: feet, reviewed?: bool, rebuild?: bool} → {item, rebuilt?}"),
+            .params("{id: run id (e.g. \"R1\"), system?: name, size_in?: [w,h], bottom_ft?: feet, reviewed?: bool, edited_by?: author (default \"agent\"), rebuild?: bool} → {item, rebuilt?, rebuild_error?}"),
     ]
 }
 
@@ -282,9 +282,11 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                     *slot = Some((0.0, t.clone()));
                 }
             }
+            let size_from_tag = size.is_some();
             let size = size.unwrap_or(sy.size_in);
             let section_ft = if size[1] > 0.0 { size[1] } else { size[0] } / 12.0;
             let mut bottoms: Vec<Option<f64>> = heights.iter().map(|h| h.as_ref().and_then(|(_, t)| height_tag(t, section_ft))).collect();
+            let has_height_tag = bottoms.iter().any(|b| b.is_some());
             // Untagged segments take their neighbour's height (forward, then back), else the system's.
             let mut last = None;
             for b in bottoms.iter_mut() {
@@ -310,6 +312,10 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 objects: handles.iter().map(|h| h.hex()).collect(),
                 id: String::new(),
                 encased: false,
+                size_source: if size_from_tag { "tag" } else { "default" }.to_string(),
+                height_source: if has_height_tag { "tag" } else { "default" }.to_string(),
+                reviewed: false,
+                edited_by: String::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -325,7 +331,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(l) = only.as_deref().filter(|l| sp.level(l).is_none()) {
         return Err(bad("mep.read", format!("there is no level named {l}")));
     }
-    let (systems, runs) = read(s, &sp, only.as_deref())?;
+    let (systems, mut runs) = read(s, &sp, only.as_deref())?;
     let apply = bool_or(p, "apply", false);
     let out = json!({
         "systems": serde_json::to_value(&systems).unwrap_or(Value::Null),
@@ -340,7 +346,56 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
             Some(l) => vec![l.clone()],
             None => sp.levels.iter().map(|l| l.name.clone()).collect(),
         };
+        // Collect override/reviewed state from runs being replaced, keyed by source objects.
+        struct Preserved {
+            size_in: [f64; 2],
+            size_source: String,
+            bottoms_ft: Vec<f64>,
+            height_source: String,
+            reviewed: bool,
+            edited_by: String,
+            id: String,
+        }
+        let preserved: Vec<(Vec<String>, Preserved)> = sp
+            .mep
+            .runs
+            .iter()
+            .filter(|r| levels.iter().any(|l| l.eq_ignore_ascii_case(&r.level)))
+            .filter(|r| r.size_source == "override" || r.height_source == "override" || r.reviewed)
+            .map(|r| {
+                (
+                    r.objects.clone(),
+                    Preserved {
+                        size_in: r.size_in,
+                        size_source: r.size_source.clone(),
+                        bottoms_ft: r.bottoms_ft.clone(),
+                        height_source: r.height_source.clone(),
+                        reviewed: r.reviewed,
+                        edited_by: r.edited_by.clone(),
+                        id: r.id.clone(),
+                    },
+                )
+            })
+            .collect();
         sp.mep.runs.retain(|r| !levels.iter().any(|l| l.eq_ignore_ascii_case(&r.level)));
+        // Carry overrides forward to matching new runs (same source objects).
+        for r in &mut runs {
+            if let Some((_, p)) = preserved.iter().find(|(objs, _)| !r.objects.is_empty() && !objs.is_empty() && *objs == r.objects) {
+                if p.size_source == "override" {
+                    r.size_in = p.size_in;
+                    r.size_source = "override".to_string();
+                }
+                if p.height_source == "override" {
+                    r.bottoms_ft.clone_from(&p.bottoms_ft);
+                    r.height_source = "override".to_string();
+                }
+                r.reviewed = p.reviewed;
+                r.edited_by.clone_from(&p.edited_by);
+                if !p.id.is_empty() {
+                    r.id.clone_from(&p.id);
+                }
+            }
+        }
         sp.mep.runs.extend(runs);
         s.doc_mut()?.building_spec = Some(sp.to_json());
         // Re-apply resolved review decisions so that cited answers survive the re-read.
@@ -352,21 +407,16 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------- list and edit for the review palette ----------------
 
 /// An item in the MEP review list: one run, with the confidence and source of its size and
-/// height, and whether it has been reviewed. `id` is its index in `sp.mep.runs`.
-fn item_json(i: usize, r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
+/// height, and whether it has been reviewed.  `id` is the run's stable id (`R1`, `R2`…).
+fn item_json(r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
     let segments = r.points.len().saturating_sub(1);
-    // Confidence: "tag" (size or height came from a tag in the drawing) or "default" (the
-    // system's defaults or the auto-drafted ones). A run whose size differs from the system's
-    // had a tag; a run whose bottoms differ from the system's had a height tag.
-    let size_from_tag = sy.is_some_and(|s| r.size_in != s.size_in);
-    let height_from_tag = sy.is_some_and(|s| r.bottoms_ft.iter().any(|b| (*b - s.bottom_ft).abs() > 1e-6));
-    let confidence = match (size_from_tag, height_from_tag) {
+    let size_source = if r.size_source.is_empty() { "default" } else { r.size_source.as_str() };
+    let height_source = if r.height_source.is_empty() { "default" } else { r.height_source.as_str() };
+    let confidence = match (size_source != "default", height_source != "default") {
         (true, true) => "high",
         (true, false) | (false, true) => "medium",
         (false, false) => "low",
     };
-    let size_source = if size_from_tag { "tag" } else { "default" };
-    let height_source = if height_from_tag { "tag" } else { "default" };
     let kind = sy.map_or("unknown", |s| match s.kind {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
@@ -374,35 +424,53 @@ fn item_json(i: usize, r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) ->
         MepKind::Tray => "tray",
         MepKind::Cable => "cable",
     });
-    // `reviewed` is stored in xdata on the run's source objects if present, else in
-    // a simple check against a list we keep in memory.  For now we use the building spec's
-    // state: a run is reviewed if it has an `"reviewed": true` marker in its `objects` list
-    // (the last entry being "reviewed" is the convention).
-    let reviewed = r.objects.last().is_some_and(|s| s == "reviewed");
     let level_elev = sp.level(&r.level).map_or(0.0, |l| l.elevation_ft);
     json!({
-        "id": i,
+        "id": r.id,
         "system": r.system,
         "level": r.level,
         "kind": kind,
         "segments": segments,
         "size_in": r.size_in,
         "bottoms_ft": r.bottoms_ft,
-        "objects": r.objects.iter().filter(|s| s.as_str() != "reviewed").collect::<Vec<_>>(),
+        "objects": &r.objects,
         "confidence": confidence,
         "size_source": size_source,
         "height_source": height_source,
-        "reviewed": reviewed,
+        "reviewed": r.reviewed,
+        "edited_by": &r.edited_by,
         "level_elevation_ft": level_elev,
     })
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
-    let (sp, _) = current(s, "mep.list")?;
+    let (mut sp, _) = current(s, "mep.list")?;
+    // Ensure every run has a stable id (assigned once, persisted).
+    let mut id_n = sp.mep.runs.iter().filter_map(|r| r.id.strip_prefix('R').and_then(|s| s.parse::<usize>().ok())).max().unwrap_or(0);
+    let mut assigned_ids = false;
+    for r in &mut sp.mep.runs {
+        if r.id.is_empty() {
+            id_n += 1;
+            r.id = format!("R{id_n}");
+            assigned_ids = true;
+        }
+        // Migrate legacy "reviewed" sentinel from objects list to the bool field.
+        if r.objects.last().is_some_and(|o| o == "reviewed") {
+            r.objects.retain(|o| o != "reviewed");
+            r.reviewed = true;
+            assigned_ids = true; // need to persist
+        }
+    }
+    if assigned_ids {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+
     let only_level = str_param(p, "level").map(str::to_string);
     let only_system = str_param(p, "system").map(str::to_string);
     let guessed_only = bool_or(p, "guessed_only", false);
-    let mut items = Vec::new();
+
+    // Collect matching runs as (system, level, id, index) for sorting.
+    let mut matching: Vec<(usize, &str, &str, &str)> = Vec::new();
     for (i, r) in sp.mep.runs.iter().enumerate() {
         if only_level.as_deref().is_some_and(|l| !l.eq_ignore_ascii_case(&r.level)) {
             continue;
@@ -410,23 +478,51 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         if only_system.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case(&r.system)) {
             continue;
         }
-        let sy = sp.mep.systems.iter().find(|s| s.name == r.system);
-        if guessed_only {
-            let size_from_tag = sy.is_some_and(|s| r.size_in != s.size_in);
-            let height_from_tag = sy.is_some_and(|s| r.bottoms_ft.iter().any(|b| (*b - s.bottom_ft).abs() > 1e-6));
-            if size_from_tag || height_from_tag {
-                continue;
-            }
+        let src = if r.size_source.is_empty() { "default" } else { r.size_source.as_str() };
+        let hsrc = if r.height_source.is_empty() { "default" } else { r.height_source.as_str() };
+        if guessed_only && (src != "default" || hsrc != "default") {
+            continue;
         }
-        items.push(item_json(i, r, sy, &sp));
+        matching.push((i, &r.system, &r.level, &r.id));
     }
+    // Sort by (system, level, id) for stable grouping.
+    matching.sort_by(|a, b| a.1.cmp(b.1).then_with(|| a.2.cmp(b.2)).then_with(|| a.3.cmp(b.3)));
+
+    let total = matching.len();
+
+    // Paging: cursor (0-based offset) and limit (default 50, cap 200).
+    let cursor = p.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let limit = p.get("limit").and_then(Value::as_u64).map(|l| (l as usize).min(200)).unwrap_or(50);
+    let page = &matching[cursor.min(matching.len())..];
+    let page_len = page.len().min(limit);
+    let page = &page[..page_len];
+    let next_cursor = if cursor + page_len < total { Some(cursor + page_len) } else { None };
+
+    let items: Vec<Value> = page
+        .iter()
+        .filter_map(|(i, ..)| {
+            let r = sp.mep.runs.get(*i)?;
+            let sy = sp.mep.systems.iter().find(|s| s.name == r.system);
+            Some(item_json(r, sy, &sp))
+        })
+        .collect();
+
     let systems = serde_json::to_value(&sp.mep.systems).unwrap_or(Value::Null);
-    Ok(json!({ "items": items, "systems": systems, "total": items.len() }))
+    let mut result = json!({ "items": items, "systems": systems, "total": total });
+    if let Some(nc) = next_cursor {
+        result["next_cursor"] = json!(nc);
+    }
+    Ok(result)
 }
 
 fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "mep.edit")?;
-    let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("mep.edit", "id is required"))? as usize;
+    let id_str = str_param(p, "id")
+        .or_else(|| p.get("id").and_then(Value::as_u64).map(|_| ""))
+        .ok_or_else(|| bad("mep.edit", "id is required (the run's stable id, e.g. \"R1\")"))?;
+    if id_str.is_empty() {
+        return Err(bad("mep.edit", "id must be a string run id (e.g. \"R1\"), not an index"));
+    }
 
     // Validate system name before mutating.
     let new_system = str_param(p, "system").map(str::to_string);
@@ -436,9 +532,12 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("mep.edit", format!("unknown system {sys}")));
     }
 
-    // Apply mutations via get_mut (no panics).
+    let edited_by = str_param(p, "edited_by").unwrap_or("agent").to_string();
+
+    // Apply mutations: find run by stable id.
     {
-        let run = sp.mep.runs.get_mut(id).ok_or_else(|| bad("mep.edit", format!("no run at index {id}")))?;
+        let run = sp.mep.runs.iter_mut().find(|r| r.id == id_str)
+            .ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
         if let Some(sys) = &new_system {
             run.system = sys.clone();
         }
@@ -447,30 +546,34 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
             let h = sz.get(1).and_then(Value::as_f64).unwrap_or(0.0);
             if w > 0.0 {
                 run.size_in = [w, h];
+                run.size_source = "override".to_string();
+                run.edited_by.clone_from(&edited_by);
             }
         }
         if let Some(b) = p.get("bottom_ft").and_then(Value::as_f64).filter(|v| v.is_finite()) {
             run.bottoms_ft.fill(b);
+            run.height_source = "override".to_string();
+            run.edited_by.clone_from(&edited_by);
         }
         if let Some(reviewed) = p.get("reviewed").and_then(Value::as_bool) {
-            run.objects.retain(|s| s.as_str() != "reviewed");
-            if reviewed {
-                run.objects.push("reviewed".to_string());
-            }
+            run.reviewed = reviewed;
         }
     }
 
     // Build the item JSON from the (now immutable) spec.
-    let run = sp.mep.runs.get(id).ok_or_else(|| bad("mep.edit", format!("no run at index {id}")))?;
+    let run = sp.mep.runs.iter().find(|r| r.id == id_str)
+        .ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
     let sy = sp.mep.systems.iter().find(|sy| sy.name == run.system);
-    let item = item_json(id, run, sy, &sp);
+    let item = item_json(run, sy, &sp);
 
     let do_rebuild = bool_or(p, "rebuild", false);
     s.doc_mut()?.building_spec = Some(sp.to_json());
 
     if do_rebuild {
-        let _ = s.execute("model.build", &json!({}));
-        Ok(json!({ "item": item, "rebuilt": true }))
+        match s.execute("model.build", &json!({})) {
+            Ok(_) => Ok(json!({ "item": item, "rebuilt": true })),
+            Err(e) => Ok(json!({ "item": item, "rebuilt": false, "rebuild_error": format!("{e}") })),
+        }
     } else {
         Ok(json!({ "item": item }))
     }

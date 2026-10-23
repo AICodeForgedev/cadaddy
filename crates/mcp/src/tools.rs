@@ -114,13 +114,17 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "units_per_foot": {"type": "number"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1},
             "elements": {"type": "boolean", "description": "list each line's objects (default true)"}
         }}}),
-        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\").",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
             "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
-            "id": {"type": "integer", "minimum": 0},
+            "cursor": {"type": "integer", "minimum": 0, "description": "offset for paging (list action)"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "items per page (default 50, max 200)"},
+            "id": {"type": "string", "description": "stable run id (e.g. \"R1\")"},
             "size_in": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-            "bottom_ft": {"type": "number"}, "reviewed": {"type": "boolean"}, "rebuild": {"type": "boolean"}
+            "bottom_ft": {"type": "number"}, "reviewed": {"type": "boolean"},
+            "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
+            "rebuild": {"type": "boolean"}
         }}}),
     ];
     if has_ui {

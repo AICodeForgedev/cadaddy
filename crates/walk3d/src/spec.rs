@@ -1473,6 +1473,18 @@ pub struct MepRun {
     /// Buried in a concrete encasement (a duct bank), as the drawings say.
     #[serde(default, skip_serializing_if = "is_false")]
     pub encased: bool,
+    /// Where the size came from: tag, note, ceiling, rule, default, override.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub size_source: String,
+    /// Where the height came from: tag, note, ceiling, rule, default, override.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub height_source: String,
+    /// Whether this run has been reviewed by a person or agent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reviewed: bool,
+    /// Who last edited this run (empty if not edited).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub edited_by: String,
 }
 
 fn is_false(v: &bool) -> bool {
