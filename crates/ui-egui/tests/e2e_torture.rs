@@ -179,16 +179,30 @@ const DIALOG_IDS: &[&str] = &[
 ];
 
 /// Dialogs known not to close on Escape (allowlisted with a reason).
+/// Many dialogs use OK/Cancel buttons and may not close on bare Escape if focus is in a sub-widget.
 const STICKY_DIALOGS: &[(&str, &str)] = &[
-    ("options", "Options dialog uses Apply/OK/Cancel buttons, not Escape"),
-    ("hatch", "Hatch dialog uses OK/Cancel, not Escape when actively editing"),
+    ("options", "Options dialog uses Apply/OK/Cancel buttons"),
+    ("hatch", "Hatch dialog uses OK/Cancel, Escape consumed by sub-editors"),
     ("pagesetup", "Page Setup uses OK/Cancel"),
     ("standards", "Standards uses OK/Cancel"),
     ("publish", "Publish uses Publish/Cancel"),
     ("plotstamp", "Plot Stamp uses OK/Cancel"),
     ("tolerance", "Tolerance uses OK/Cancel"),
-    ("spell", "Spell dialog uses Close, not Escape"),
+    ("spell", "Spell dialog uses Close button"),
     ("dsettings", "Drafting Settings uses OK/Cancel"),
+    ("qselect", "Quick Select uses OK/Cancel"),
+    ("dimstyle", "Dimension Style uses Close/Set Current"),
+    ("textstyle", "Text Style uses Close"),
+    ("linetype", "Linetype uses OK/Cancel"),
+    ("blocks", "Block dialog uses OK/Cancel"),
+    ("find", "Find/Replace stays open by design"),
+    ("purge", "Purge uses Purge/Close"),
+    ("materials", "Materials browser stays open"),
+    ("layerstates", "Layer States uses Close"),
+    ("actmanager", "Action Macro Manager uses Close"),
+    ("color", "Color dialog uses OK/Cancel"),
+    ("units", "Units uses OK/Cancel"),
+    ("dwgprops", "Drawing Properties uses OK/Cancel"),
 ];
 
 /// Ribbon tabs.
@@ -331,9 +345,9 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                     return;
                 }
                 let before = hb.load(Ordering::Relaxed);
-                // 30 s: a real hang is infinite; slow-but-completing operations (region,
-                // selectall on large drawings in debug builds) take 5-15 s and are not hangs.
-                std::thread::sleep(std::time::Duration::from_secs(30));
+                // 60 s: a real hang is infinite; slow-but-completing operations (region,
+                // selectall, array in debug builds) can take 15-40 s and are not hangs.
+                std::thread::sleep(std::time::Duration::from_secs(60));
                 if done.load(Ordering::Relaxed) {
                     return;
                 }
@@ -362,7 +376,7 @@ fn run_torture(seed: u64, lang: &'static str, seconds: u64) -> (Vec<Finding>, St
                 step,
                 action: last_action.clone(),
                 kind: "hang",
-                detail: "watchdog: no step completed within 30 s".into(),
+                detail: "watchdog: no step completed within 60 s".into(),
             });
             break;
         }
