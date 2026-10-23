@@ -2467,6 +2467,15 @@ impl BuildingSpec {
             if e.tag.trim().is_empty() || !corners || !(fin(e.bottom_ft) && fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
                 out.push(Issue::error(at.clone(), "equipment needs a tag, a plan box and a height from 0 to 100 feet"));
             }
+            // A system that isn't one of mep.systems: its runs (if any) are grouped apart from it.
+            for (k, sy) in e.systems.iter().enumerate().take(MAX_ITEMS) {
+                if !self.mep.systems.iter().any(|s| s.name == *sy) {
+                    out.push(Issue::warning(
+                        format!("{at}.systems[{k}]"),
+                        format!("{} joins {sy}, which isn't a system in mep.systems: it won't be grouped with that system's runs", e.tag),
+                    ));
+                }
+            }
             for (k, t) in e.terminations.iter().enumerate().take(MAX_ITEMS) {
                 if t.point.trim().is_empty() || t.lugs == 0 || t.lugs > 1000 || t.wires_per_lug == 0 || t.wires_per_lug > 10 {
                     out.push(Issue::error(
