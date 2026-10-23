@@ -13,7 +13,7 @@ mod backend;
 mod prompts;
 mod resources;
 mod server;
-mod tools;
+pub mod tools;
 
 pub use backend::{Auto, Backend, Headless, Remote};
 pub use server::{PROTOCOL_VERSION, Server, event_notifications};
