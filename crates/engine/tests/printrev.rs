@@ -294,36 +294,16 @@ fn copricing_clouds_survive_a_revision_compare() {
     // simulating what co.price does.
     layer(&mut s, "CO-CLOUD");
     let d = s.doc_mut().unwrap();
-    let coprice_xdata = vec![
-        RawTag { code: 1001, value: "CADADDY_COPRICING".into() },
-        RawTag { code: 1000, value: "CO-01".into() },
-    ];
-    let common = cadaddy_engine::doc::Common {
-        layer: "CO-CLOUD".into(),
-        xdata: coprice_xdata.into(),
-        ..Default::default()
-    };
-    let circle = EntityKind::Circle(cadaddy_engine::doc::Circle {
-        center: cadaddy_engine::geom::Vec3::new(200.0, 200.0, 0.0),
-        radius: 30.0,
-    });
+    let coprice_xdata = vec![RawTag { code: 1001, value: "CADADDY_COPRICING".into() }, RawTag { code: 1000, value: "CO-01".into() }];
+    let common = cadaddy_engine::doc::Common { layer: "CO-CLOUD".into(), xdata: coprice_xdata.into(), ..Default::default() };
+    let circle = EntityKind::Circle(cadaddy_engine::doc::Circle { center: cadaddy_engine::geom::Vec3::new(200.0, 200.0, 0.0), radius: 30.0 });
     let _co_handle = d.add(&Space::Model, common, circle).unwrap();
 
     // Record all CO-CLOUD handles before the compare.
-    let co_handles_before: Vec<Handle> = d
-        .model
-        .iter()
-        .filter(|e| e.common.layer == "CO-CLOUD")
-        .map(|e| e.handle)
-        .collect();
+    let co_handles_before: Vec<Handle> = d.model.iter().filter(|e| e.common.layer == "CO-CLOUD").map(|e| e.handle).collect();
     assert!(!co_handles_before.is_empty());
 
-    let r = s
-        .execute(
-            "printrev.compare",
-            &json!({"against": revised(1, &out.join("rev1.dxf")), "label": "ASI-01"}),
-        )
-        .unwrap();
+    let r = s.execute("printrev.compare", &json!({"against": revised(1, &out.join("rev1.dxf")), "label": "ASI-01"})).unwrap();
 
     // The CO-CLOUD objects are all still there with the same handles.
     let d = s.doc().unwrap();
@@ -334,12 +314,7 @@ fn copricing_clouds_survive_a_revision_compare() {
     }
     // None counted in `removed`.
     assert_eq!(
-        r["changes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|c| c["kind"] == "removed" && c["layer"] == "CO-CLOUD")
-            .count(),
+        r["changes"].as_array().unwrap().iter().filter(|c| c["kind"] == "removed" && c["layer"] == "CO-CLOUD").count(),
         0,
         "CO-CLOUD objects must not appear as removed: {r}"
     );
@@ -351,7 +326,10 @@ fn copricing_clouds_survive_a_revision_compare() {
         assert!(!covers_circle, "a revision cloud was drawn around the CO-CLOUD circle: {region}");
     }
     // The real changes are still detected.
-    assert!(r["added"].as_u64().unwrap_or(0) > 0 || r["removed"].as_u64().unwrap_or(0) > 0 || r["retexted"].as_u64().unwrap_or(0) > 0, "real changes should still be detected: {r}");
+    assert!(
+        r["added"].as_u64().unwrap_or(0) > 0 || r["removed"].as_u64().unwrap_or(0) > 0 || r["retexted"].as_u64().unwrap_or(0) > 0,
+        "real changes should still be detected: {r}"
+    );
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -363,12 +341,7 @@ fn user_markup_survives_a_second_revision_compare() {
     let out = dir("markup");
     let mut s = floor(0);
     // First compare: sets the baseline.
-    let r1 = s
-        .execute(
-            "printrev.compare",
-            &json!({"against": revised(1, &out.join("rev1.dxf")), "label": "ASI-01"}),
-        )
-        .unwrap();
+    let r1 = s.execute("printrev.compare", &json!({"against": revised(1, &out.join("rev1.dxf")), "label": "ASI-01"})).unwrap();
     assert!(r1["applied"].as_bool() == Some(true));
 
     // User adds a TEXT and a LINE on a markup layer.
@@ -376,21 +349,11 @@ fn user_markup_survives_a_second_revision_compare() {
     text(&mut s, [240.0, 240.0], "my note");
     s.execute("line", &json!({"points": [[10, 350], [100, 350]]})).unwrap();
     let d = s.doc().unwrap();
-    let markup_handles: Vec<Handle> = d
-        .model
-        .iter()
-        .filter(|e| e.common.layer == "MARKUP")
-        .map(|e| e.handle)
-        .collect();
+    let markup_handles: Vec<Handle> = d.model.iter().filter(|e| e.common.layer == "MARKUP").map(|e| e.handle).collect();
     assert_eq!(markup_handles.len(), 2, "expected a TEXT and a LINE on MARKUP");
 
     // Second compare with ASI-02.
-    let r2 = s
-        .execute(
-            "printrev.compare",
-            &json!({"against": revised(2, &out.join("rev2.dxf")), "label": "ASI-02"}),
-        )
-        .unwrap();
+    let r2 = s.execute("printrev.compare", &json!({"against": revised(2, &out.join("rev2.dxf")), "label": "ASI-02"})).unwrap();
 
     // Both markup objects are still present with their original handles.
     let d = s.doc().unwrap();
@@ -401,12 +364,7 @@ fn user_markup_survives_a_second_revision_compare() {
     }
     // They are not in `removed`.
     assert_eq!(
-        r2["changes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|c| c["kind"] == "removed" && c["layer"] == "MARKUP")
-            .count(),
+        r2["changes"].as_array().unwrap().iter().filter(|c| c["kind"] == "removed" && c["layer"] == "MARKUP").count(),
         0,
         "markup objects must not appear as removed: {r2}"
     );
@@ -424,12 +382,7 @@ fn user_markup_survives_a_second_revision_compare() {
     assert!(real_changes > 0, "real changes should still be detected: {r2}");
     assert!(!r2["regions"].as_array().unwrap().is_empty(), "changes should be clouded: {r2}");
     // The existing fixture test's final assertion: applying twice finds 0 changes.
-    let r3 = s
-        .execute(
-            "printrev.compare",
-            &json!({"against": out.join("rev2.dxf").display().to_string(), "label": "check"}),
-        )
-        .unwrap();
+    let r3 = s.execute("printrev.compare", &json!({"against": out.join("rev2.dxf").display().to_string(), "label": "check"})).unwrap();
     assert_eq!(
         (r3["added"].as_u64(), r3["removed"].as_u64(), r3["retexted"].as_u64()),
         (Some(0), Some(0), Some(0)),

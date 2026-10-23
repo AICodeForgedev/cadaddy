@@ -4,8 +4,8 @@
 //! reducer), terminals, the equipment list and hangers — grouped by level and system, exported
 //! as CSV and XLSX, and a takeoff table in the drawing that follows an edit of the model.
 
-use cadaddy_engine::{EngineError, Session};
 use cadaddy_engine::doc::EntityKind;
+use cadaddy_engine::{EngineError, Session};
 use serde_json::{Value, json};
 
 fn model() -> Session {

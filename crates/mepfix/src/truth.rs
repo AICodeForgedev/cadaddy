@@ -1631,10 +1631,7 @@ impl RoughInRules {
     /// Load rules from a JSON file.  Falls back to [`default_rules`](Self::default_rules) on any
     /// error so the generator never fails.
     pub fn load(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(Self::default_rules)
+        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(Self::default_rules)
     }
 
     /// Save the rules to a JSON file.

@@ -1003,11 +1003,7 @@ fn in_wall_recall_and_false_positive_rate() {
         let nm: BTreeSet<&str> = t.near_miss_ids.iter().map(String::as_str).collect();
         let stray: Vec<_> = t.clashes.iter().filter(|c| c.kind == "in_wall" && !c.planted).collect();
         for c in &stray {
-            assert!(
-                !nm.contains(c.a.as_str()),
-                "{ctx}: near-miss device {} was flagged as in-wall clash (false positive)",
-                c.a,
-            );
+            assert!(!nm.contains(c.a.as_str()), "{ctx}: near-miss device {} was flagged as in-wall clash (false positive)", c.a,);
         }
         assert!(stray.is_empty(), "{ctx}: false positive in-wall clashes: {stray:?}");
     }
@@ -1032,12 +1028,7 @@ fn vent_rough_ins_are_vertical_runs() {
                 v.run_top_in,
             );
             // Vent runs should reach at least 80" (a minimum ceiling height).
-            assert!(
-                v.run_top_in >= 80.0,
-                "{ctx}: vent {} run_top_in {} is below minimum ceiling height",
-                v.id,
-                v.run_top_in,
-            );
+            assert!(v.run_top_in >= 80.0, "{ctx}: vent {} run_top_in {} is below minimum ceiling height", v.id, v.run_top_in,);
         }
     }
 }
@@ -1049,19 +1040,11 @@ fn stacks_are_generated_for_fixtures() {
         let t = truth_for(seed);
         let ctx = format!("seed {seed}");
         for ri in t.rough_ins.iter().filter(|ri| ri.kind == "vent") {
-            assert!(
-                !ri.stack.is_empty(),
-                "{ctx}: vent {} has no stack assigned",
-                ri.id,
-            );
+            assert!(!ri.stack.is_empty(), "{ctx}: vent {} has no stack assigned", ri.id,);
         }
         // Waste stubs at floor level should also have stacks.
         for ri in t.rough_ins.iter().filter(|ri| ri.kind == "waste" && ri.aff_in < 1.0) {
-            assert!(
-                !ri.stack.is_empty(),
-                "{ctx}: floor-level waste {} has no stack assigned",
-                ri.id,
-            );
+            assert!(!ri.stack.is_empty(), "{ctx}: floor-level waste {} has no stack assigned", ri.id,);
         }
     }
 }
@@ -1110,7 +1093,12 @@ fn clearance_is_measured_in_inches_not_cavities() {
                     assert!(
                         dev.stud_cavity == ri.stud_cavity || gap < 3.0,
                         "seed {seed}: clash {} has gap {:.1}\" between device {} (cav {}) and rough-in {} (cav {})",
-                        c.id, gap, dev.id, dev.stud_cavity, ri.id, ri.stud_cavity,
+                        c.id,
+                        gap,
+                        dev.id,
+                        dev.stud_cavity,
+                        ri.id,
+                        ri.stud_cavity,
                     );
                 }
             }
@@ -1123,7 +1111,9 @@ fn project_on_wall_test(w: &cadaddy_mepfix::truth::Wall, pt: [f64; 2]) -> f64 {
     let dx = w.to_ft[0] - w.from_ft[0];
     let dy = w.to_ft[1] - w.from_ft[1];
     let len_sq = dx * dx + dy * dy;
-    if len_sq < 1e-18 { return 0.0; }
+    if len_sq < 1e-18 {
+        return 0.0;
+    }
     let t = ((pt[0] - w.from_ft[0]) * dx + (pt[1] - w.from_ft[1]) * dy) / len_sq;
     t * len_sq.sqrt() * 12.0
 }
@@ -1137,11 +1127,7 @@ fn rough_in_stubs_have_source_ids() {
         let t = truth_for(seed);
         let ctx = format!("seed {seed}");
         for ri in &t.rough_ins {
-            assert!(
-                !ri.source.is_empty(),
-                "{ctx}: rough-in {} has no source",
-                ri.id,
-            );
+            assert!(!ri.source.is_empty(), "{ctx}: rough-in {} has no source", ri.id,);
         }
     }
 }
@@ -1203,10 +1189,7 @@ fn near_misses_are_planted_and_not_flagged() {
         let t = truth_for(seed);
         let clash_devs: BTreeSet<&str> = t.clashes.iter().filter(|c| c.kind == "in_wall").map(|c| c.a.as_str()).collect();
         for nm_id in &t.near_miss_ids {
-            assert!(
-                !clash_devs.contains(nm_id.as_str()),
-                "seed {seed}: near-miss device {nm_id} was flagged as in-wall clash",
-            );
+            assert!(!clash_devs.contains(nm_id.as_str()), "seed {seed}: near-miss device {nm_id} was flagged as in-wall clash",);
         }
         total_near_misses += t.near_miss_ids.len();
     }

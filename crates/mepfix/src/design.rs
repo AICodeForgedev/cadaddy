@@ -1734,14 +1734,7 @@ fn generate_rough_ins(t: &mut Truth, rules: &RoughInRules) {
 /// When `plant_inwall` is true, several devices are planted in conflict with rough-in stubs
 /// (receptacle in waste cavity, switch in vent cavity).  Near-misses (close but not clashing)
 /// are also planted to verify the detector does not over-flag.
-fn generate_devices(
-    t: &mut Truth,
-    planted: &mut Vec<String>,
-    plant_inwall: bool,
-    plant_level: &str,
-    rules: &RoughInRules,
-    r: &mut Rng,
-) {
+fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool, plant_level: &str, rules: &RoughInRules, r: &mut Rng) {
     let walls = t.building.walls.clone();
     let clearance = rules.clearance_in;
     let mut devices = Vec::new();
@@ -1768,15 +1761,8 @@ fn generate_devices(
                 // Default switch wall: first interior wall.
                 let default_sw = room_walls.iter().find(|w| w.sides[0] != "EXT" && w.sides[1] != "EXT");
                 // For planting: find any room wall that has a vent rough-in.
-                let want_plant_sw = plant_inwall
-                    && !planted_switch_vent
-                    && lv_code == plant_level
-                    && is_toilet_room(&rm.name);
-                let vent_wall = if want_plant_sw {
-                    room_walls.iter().find(|w| vent_cavity_on_wall(t, &w.id).is_some())
-                } else {
-                    None
-                };
+                let want_plant_sw = plant_inwall && !planted_switch_vent && lv_code == plant_level && is_toilet_room(&rm.name);
+                let vent_wall = if want_plant_sw { room_walls.iter().find(|w| vent_cavity_on_wall(t, &w.id).is_some()) } else { None };
                 let sw_wall = vent_wall.or(default_sw);
                 if let Some(sw_wall) = sw_wall {
                     let sw_len = wall_length_in(sw_wall);
@@ -1845,9 +1831,13 @@ fn generate_devices(
                             if !near_miss_ids.is_empty() || !r.chance(0.3) {
                                 // Already planted a near-miss or random skip: shift to a clear spot.
                                 let shifted = find_clear_cavity(t, &wall.id, cavity, wall.stud_spacing_in, len);
-                                if shifted == cavity { continue; }
+                                if shifted == cavity {
+                                    continue;
+                                }
                                 let new_along = (shifted as f64 + 0.5) * wall.stud_spacing_in;
-                                if new_along > len || new_along < 0.0 { continue; }
+                                if new_along > len || new_along < 0.0 {
+                                    continue;
+                                }
                                 let frac = new_along / len;
                                 let dx = wall.to_ft[0] - wall.from_ft[0];
                                 let dy = wall.to_ft[1] - wall.from_ft[1];
@@ -1899,9 +1889,13 @@ fn generate_devices(
                         }
                         // No near-miss opportunity: shift to clear.
                         let shifted = find_clear_cavity(t, &wall.id, cavity, wall.stud_spacing_in, len);
-                        if shifted == cavity { continue; }
+                        if shifted == cavity {
+                            continue;
+                        }
                         let new_along = (shifted as f64 + 0.5) * wall.stud_spacing_in;
-                        if new_along > len || new_along < 0.0 { continue; }
+                        if new_along > len || new_along < 0.0 {
+                            continue;
+                        }
                         let frac = new_along / len;
                         let dx = wall.to_ft[0] - wall.from_ft[0];
                         let dy = wall.to_ft[1] - wall.from_ft[1];
@@ -2013,22 +2007,12 @@ fn find_clear_cavity(t: &Truth, wall_id: &str, start: usize, spacing: f64, wall_
 
 /// Find a cavity on `wall_id` that contains a vent rough-in (for planting a switch clash).
 fn vent_cavity_on_wall(t: &Truth, wall_id: &str) -> Option<usize> {
-    t.rough_ins
-        .iter()
-        .find(|ri| ri.wall == wall_id && ri.kind == "vent")
-        .map(|ri| ri.stud_cavity)
+    t.rough_ins.iter().find(|ri| ri.wall == wall_id && ri.kind == "vent").map(|ri| ri.stud_cavity)
 }
 
 /// Find a near-miss position: a cavity adjacent to a rough-in stub but with a gap > clearance.
 /// Returns `(cavity, along_in)` or `None`.
-fn find_near_miss_cavity(
-    t: &Truth,
-    wall_id: &str,
-    _start: usize,
-    spacing: f64,
-    wall_len: f64,
-    clearance_in: f64,
-) -> Option<(usize, f64)> {
+fn find_near_miss_cavity(t: &Truth, wall_id: &str, _start: usize, spacing: f64, wall_len: f64, clearance_in: f64) -> Option<(usize, f64)> {
     let max_cavity = (wall_len / spacing) as usize;
     let box_half = 2.75 / 2.0;
     // Look for a cavity that is adjacent to a rough-in but where the gap in inches exceeds
@@ -2039,11 +2023,17 @@ fn find_near_miss_cavity(
         // Try 2 cavities away (gap ≈ 32" - margins, well above 3")
         for delta in [2isize, -2] {
             let cav = ri.stud_cavity as isize + delta;
-            if cav < 0 || cav as usize > max_cavity { continue; }
+            if cav < 0 || cav as usize > max_cavity {
+                continue;
+            }
             let cav = cav as usize;
-            if has_roughin_in_cavity(t, wall_id, cav) { continue; }
+            if has_roughin_in_cavity(t, wall_id, cav) {
+                continue;
+            }
             let along = (cav as f64 + 0.5) * spacing;
-            if along < 0.0 || along > wall_len { continue; }
+            if along < 0.0 || along > wall_len {
+                continue;
+            }
             let ri_along = (ri.stud_cavity as f64 + 0.5) * spacing;
             let gap = (along - ri_along).abs() - box_half - od / 2.0;
             if gap > clearance_in + 1.0 {

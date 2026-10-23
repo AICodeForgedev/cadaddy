@@ -842,12 +842,7 @@ fn link_params(xdata: &[RawTag]) -> Option<(Value, String)> {
     let at = xdata.iter().position(|t| t.code == 1001 && t.value == APP)?;
     let mut p = json!({});
     let mut part = "all".to_string();
-    let tags: Vec<(&str, &str)> = xdata
-        .iter()
-        .skip(at + 1)
-        .take_while(|t| t.code != 1001)
-        .filter_map(|t| t.value.split_once(':'))
-        .collect();
+    let tags: Vec<(&str, &str)> = xdata.iter().skip(at + 1).take_while(|t| t.code != 1001).filter_map(|t| t.value.split_once(':')).collect();
     for &(k, v) in &tags {
         match k {
             "part" => part = v.to_string(),

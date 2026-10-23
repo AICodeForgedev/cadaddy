@@ -733,19 +733,9 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     let filtered_removed_set: HashSet<Handle> = filtered_removed.iter().copied().collect();
 
     // Filter retexted: only pairs whose old object is in the baseline.
-    let filtered_retexted: Vec<(Handle, usize)> = diff
-        .retexted
-        .iter()
-        .copied()
-        .filter(|(h, _)| filtered_removed_set.contains(h))
-        .collect();
+    let filtered_retexted: Vec<(Handle, usize)> = diff.retexted.iter().copied().filter(|(h, _)| filtered_removed_set.contains(h)).collect();
     // Added entries paired with non-baseline retexts: skip them (user markup, not a real addition).
-    let skip_added: HashSet<usize> = diff
-        .retexted
-        .iter()
-        .filter(|(h, _)| !filtered_removed_set.contains(h))
-        .map(|(_, i)| *i)
-        .collect();
+    let skip_added: HashSet<usize> = diff.retexted.iter().filter(|(h, _)| !filtered_removed_set.contains(h)).map(|(_, i)| *i).collect();
 
     let retexted_old: HashSet<Handle> = filtered_retexted.iter().map(|(h, _)| *h).collect();
     let retexted_new: HashSet<usize> = filtered_retexted.iter().map(|(_, i)| *i).collect();
@@ -829,14 +819,8 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         region_json.push(json!({"min": [b.min.x, b.min.y], "max": [b.max.x, b.max.y], "changes": n, "cloud": h.map(|h| h.hex())}));
     }
     // Update baseline: all current sheet objects except user-kept markup.
-    if apply
-        && let Some(ref mut sp_inner) = sp
-    {
-        sp_inner.print_baseline = sheet_objects(d)
-            .iter()
-            .map(|e| sig_hash(&signature(e, q)))
-            .filter(|sh| !user_kept_sigs.contains(sh))
-            .collect();
+    if apply && let Some(ref mut sp_inner) = sp {
+        sp_inner.print_baseline = sheet_objects(d).iter().map(|e| sig_hash(&signature(e, q))).filter(|sh| !user_kept_sigs.contains(sh)).collect();
     }
     let runs = match (before, sp) {
         (Some(before), Some(sp)) => Some(update_runs(s, sp, before, &label, q)?),
