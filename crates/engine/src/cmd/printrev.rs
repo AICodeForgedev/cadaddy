@@ -110,14 +110,15 @@ fn read_file(cmd: &str, path: &str) -> Result<Vec<u8>> {
 
 // ---------------- alignment ----------------
 
-/// A revision cloud or label this command drew.
-fn ours(e: &Entity) -> bool {
-    e.common.xdata.iter().any(|t| t.code == 1001 && t.value == APP)
+/// Whether the entity carries any CADaddy tool's xdata (`CADADDY_*` app names).
+fn has_cadaddy_xdata(e: &Entity) -> bool {
+    e.common.xdata.iter().any(|t| t.code == 1001 && t.value.starts_with("CADADDY_"))
 }
 
-/// The sheet's objects a comparison looks at: not the 3D model, not the revision clouds.
+/// The sheet's objects a comparison looks at: not the 3D model, not any CADaddy tool's tagged
+/// objects (revision clouds, copricing clouds, placed items).
 fn sheet_objects(d: &Drawing) -> Vec<&std::sync::Arc<Entity>> {
-    super::bspec::plan_objects(d).into_iter().filter(|e| !ours(e)).take(MAX_OBJECTS).collect()
+    super::bspec::plan_objects(d).into_iter().filter(|e| !has_cadaddy_xdata(e)).take(MAX_OBJECTS).collect()
 }
 
 /// The notes and tags of a sheet: text and where it sits.
@@ -199,6 +200,14 @@ fn rounded(s: &str, q: f64) -> String {
 /// An object as a comparison sees it: its layer, colour and geometry, rounded.
 fn signature(e: &Entity, q: f64) -> String {
     format!("{}|{:?}|{}", e.common.layer, e.common.color, rounded(&format!("{:?}", e.kind), q))
+}
+
+/// A stable hash of a signature, for baseline storage.
+fn sig_hash(sig: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    sig.hash(&mut h);
+    h.finish()
 }
 
 fn text_of(e: &Entity) -> Option<(String, Vec2, f64)> {
@@ -657,7 +666,7 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
     let bytes = read_file(cmd, path)?;
     let other = (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-    let (has_spec, sp) = match super::bspec::current(s, cmd) {
+    let (has_spec, mut sp) = match super::bspec::current(s, cmd) {
         Ok((sp, stored)) => (stored, Some(sp)),
         Err(_) => (false, None),
     };
@@ -687,13 +696,65 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let diff = compare(d, &moved, q);
-    let retexted_old: HashSet<Handle> = diff.retexted.iter().map(|(h, _)| *h).collect();
-    let retexted_new: HashSet<usize> = diff.retexted.iter().map(|(_, i)| *i).collect();
-    // The changes, listed and boxed.
+
+    // --- Baseline: the print's object signatures at the first compare. ---
+    // Objects not in the baseline are user markup added after the print came in; they survive.
+    let baseline: HashSet<u64> = {
+        let stored = sp.as_ref().filter(|s| !s.print_baseline.is_empty());
+        match stored {
+            Some(s) => s.print_baseline.iter().copied().collect(),
+            None => {
+                // First compare (or no spec yet): every current sheet object is the baseline.
+                sheet_objects(d).iter().map(|e| sig_hash(&signature(e, q))).collect()
+            }
+        }
+    };
+
+    // Split diff.removed into baseline (print) objects and user-kept objects.
+    let mut filtered_removed: Vec<Handle> = Vec::new();
+    let mut user_kept: Vec<Value> = Vec::new();
+    let mut user_kept_sigs: HashSet<u64> = HashSet::new();
+    for h in &diff.removed {
+        let Some(e) = d.model.get(*h) else {
+            filtered_removed.push(*h);
+            continue;
+        };
+        let sh = sig_hash(&signature(e, q));
+        if baseline.contains(&sh) {
+            filtered_removed.push(*h);
+        } else if apply {
+            user_kept_sigs.insert(sh);
+            let layer = e.common.layer.to_string();
+            if user_kept.len() < MAX_LISTED {
+                user_kept.push(json!({"handle": h.hex(), "layer": layer}));
+            }
+        }
+    }
+    let filtered_removed_set: HashSet<Handle> = filtered_removed.iter().copied().collect();
+
+    // Filter retexted: only pairs whose old object is in the baseline.
+    let filtered_retexted: Vec<(Handle, usize)> = diff
+        .retexted
+        .iter()
+        .copied()
+        .filter(|(h, _)| filtered_removed_set.contains(h))
+        .collect();
+    // Added entries paired with non-baseline retexts: skip them (user markup, not a real addition).
+    let skip_added: HashSet<usize> = diff
+        .retexted
+        .iter()
+        .filter(|(h, _)| !filtered_removed_set.contains(h))
+        .map(|(_, i)| *i)
+        .collect();
+
+    let retexted_old: HashSet<Handle> = filtered_retexted.iter().map(|(h, _)| *h).collect();
+    let retexted_new: HashSet<usize> = filtered_retexted.iter().map(|(_, i)| *i).collect();
+
+    // The changes, listed and boxed — only baseline objects.
     let mut changes = Vec::new();
     let mut boxes = Vec::new();
     let at = |b: &Bounds2| json!([b.center().x, b.center().y]);
-    for (h, i) in &diff.retexted {
+    for (h, i) in &filtered_retexted {
         let (Some(old_e), Some(new_e)) = (d.model.get(*h), diff.added.get(*i)) else { continue };
         let b = cadaddy_doc::entity_bounds(d, old_e, 0).union(&cadaddy_doc::entity_bounds(&other, new_e, 0));
         if changes.len() < MAX_LISTED {
@@ -701,7 +762,7 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         }
         boxes.push((b, 1));
     }
-    for h in diff.removed.iter().filter(|h| !retexted_old.contains(h)) {
+    for h in filtered_removed.iter().filter(|h| !retexted_old.contains(h)) {
         let Some(e) = d.model.get(*h) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         if b.is_empty() {
@@ -712,7 +773,7 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         }
         boxes.push((b, 1));
     }
-    for (_, e) in diff.added.iter().enumerate().filter(|(i, _)| !retexted_new.contains(i)) {
+    for (_, e) in diff.added.iter().enumerate().filter(|(i, _)| !retexted_new.contains(i) && !skip_added.contains(i)) {
         let b = cadaddy_doc::entity_bounds(&other, e, 0);
         if b.is_empty() {
             continue;
@@ -722,7 +783,9 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         }
         boxes.push((b, 1));
     }
-    let (n_added, n_removed, n_retexted) = (diff.added.len() - diff.retexted.len(), diff.removed.len() - diff.retexted.len(), diff.retexted.len());
+    let n_retexted = filtered_retexted.len();
+    let n_removed = filtered_removed.len() - n_retexted;
+    let n_added = diff.added.len() - n_retexted - skip_added.len();
     let found = regions(boxes, gap);
     // The runs as read before the drawing takes the revision.
     let before = match (&sp, has_spec, apply) {
@@ -746,10 +809,14 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
             }
             d.blocks.insert(to.clone(), std::sync::Arc::new(nb));
         }
-        for h in &diff.removed {
+        // Only delete objects that were part of the baseline (print objects); user markup stays.
+        for h in &filtered_removed {
             d.model.remove(*h);
         }
-        for e in &diff.added {
+        for (i, e) in diff.added.iter().enumerate() {
+            if skip_added.contains(&i) {
+                continue;
+            }
             let e = super::exchange::adopt(d, e, &renames);
             d.model.push(e);
         }
@@ -761,8 +828,24 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         let h = if clouds { cloud(d, b, (gap / 4.0).max(q), &label) } else { None };
         region_json.push(json!({"min": [b.min.x, b.min.y], "max": [b.max.x, b.max.y], "changes": n, "cloud": h.map(|h| h.hex())}));
     }
+    // Update baseline: all current sheet objects except user-kept markup.
+    if apply
+        && let Some(ref mut sp_inner) = sp
+    {
+        sp_inner.print_baseline = sheet_objects(d)
+            .iter()
+            .map(|e| sig_hash(&signature(e, q)))
+            .filter(|sh| !user_kept_sigs.contains(sh))
+            .collect();
+    }
     let runs = match (before, sp) {
         (Some(before), Some(sp)) => Some(update_runs(s, sp, before, &label, q)?),
+        (_, Some(sp)) if apply => {
+            // No MEP runs to update, but save the baseline.
+            let d = s.doc_mut()?;
+            d.building_spec = Some(sp.to_json());
+            None
+        }
         _ => None,
     };
     let mut out = json!({
@@ -776,6 +859,9 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         "regions": region_json,
         "applied": apply,
     });
+    if !user_kept.is_empty() {
+        out["kept_objects"] = json!({"count": user_kept.len(), "list": user_kept});
+    }
     if let Some(r) = runs {
         out["runs"] = json!(r.report);
         out["kept"] = json!(r.kept);
