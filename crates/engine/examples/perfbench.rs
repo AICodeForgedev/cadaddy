@@ -34,6 +34,7 @@ use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use cadaddy_engine::doc::color::Rgb;
 use cadaddy_engine::doc::geom::{PolyVertex, Vec2, Vec3};
 use cadaddy_engine::doc::{Arc, Circle, Common, Drawing, EntityKind, Face3d, Layer, Line, LwPolyline, Space, Text};
+use cadaddy_engine::render::raster;
 use serde_json::json;
 
 fn hooks() {
@@ -242,6 +243,49 @@ fn mem_open(path: &str) {
     drop(d);
 }
 
+/// Measure pan frame time: the display list is built once, then rasterised at shifted views.
+/// This measures the CPU cost of drawing one frame after a pan (the GPU path is faster: it only
+/// changes a view-matrix uniform).  Printed as JSON `{"pan_frame_ms": avg, "pan_fps": fps,
+/// "objects": n, "steps": steps}`.
+fn pan_file(path: &str) {
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let d = match cadaddy_io::read(&bytes, path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            return;
+        }
+    };
+    let list = cadaddy_engine::render::build(&d, &Space::Model, &Default::default());
+    let bounds = list.bounds;
+    if bounds.is_empty() {
+        println!("{}", json!({"pan_frame_ms": 0, "pan_fps": 0, "objects": 0, "steps": 0}));
+        return;
+    }
+    let objects = d.model.len();
+    let steps: usize = 100;
+    let w: u32 = 1600;
+    let h: u32 = 900;
+    let opts = raster::RasterOptions::default();
+    // Start fitted to the drawing, pan rightward by 1% of the drawing width each step.
+    let start_view = raster::View::fit(&bounds, w, h, 0.02);
+    let dx = bounds.width() * 0.01;
+    let mut total_ms = 0.0;
+    for i in 0..steps {
+        let view = raster::View {
+            center: Vec2::new(start_view.center.x + dx * i as f64, start_view.center.y),
+            ..start_view
+        };
+        let t = Instant::now();
+        drop(raster::render(&list, &view, &opts));
+        total_ms += t.elapsed().as_secs_f64() * 1000.0;
+    }
+    let avg = total_ms / steps as f64;
+    let fps = if avg > 0.0 { 1000.0 / avg } else { 0.0 };
+    let r = json!({"pan_frame_ms": (avg * 100.0).round() / 100.0, "pan_fps": (fps * 10.0).round() / 10.0, "objects": objects, "steps": steps});
+    println!("{r}");
+}
+
 /// The smallest drawing whose memory is measured (`mem_…` results).
 const MEMORY_FROM: usize = 100_000;
 
@@ -302,6 +346,10 @@ fn main() {
     }
     if let Some(path) = arg("--mem-open") {
         mem_open(&path);
+        return;
+    }
+    if let Some(path) = arg("--pan") {
+        pan_file(&path);
         return;
     }
     if let Some(path) = arg("--file") {

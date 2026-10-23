@@ -10,8 +10,9 @@ Machine: Apple M5, 16 GB, macOS 26.7. Programs: CADaddy (this tree, release buil
 
 ## Results
 
-Times are in milliseconds, measured inside each program (CADaddy: `perfbench --file`; QCAD: a
-script using its documented `RDocumentInterface` API; FreeCAD: `freecadcmd` with `importDXF`).
+Times are in milliseconds, measured inside each program (CADaddy: `perfbench --file`; QCAD:
+`tools/perf-vs/qcad-bench.js` using its documented `RDocumentInterface` API; FreeCAD:
+`tools/perf-vs/freecad-bench.py` with `freecadcmd` and `importDXF`).
 Peak memory is the whole process's maximum resident size from `/usr/bin/time -l`, startup
 included. CADaddy's numbers are the range of three runs, the others' the best of one or two. Every
 FreeCAD run was stopped after 10 minutes.
@@ -34,14 +35,21 @@ FreeCAD has no headless select-all. Its save time is for the objects it had made
 
 ## Panning
 
-CADaddy pans on the GPU without rebuilding anything. At a million objects (2.3 million display
-primitives, 225 MB of GPU buffers), each pan step costs about 0.4 ms of CPU, and the display
-list is not rebuilt. The GPU's own draw time per frame is not reported yet, so this isn't a
-frames-per-second figure.
+`cargo xtask perf --vs` measures CADaddy's pan frame time: the display list is built once, then
+100 pan steps are rasterised (CPU, 1600 x 900 pixels) at shifted views, measuring the average
+frame time per step. In the real app the GPU draws the already-uploaded geometry at a new view
+offset without rebuilding, so this CPU rasterisation is a conservative upper bound.
 
-QCAD and FreeCAD can only be panned by hand, in their windows. That part of the comparison
-(frames per second with a stopwatch, by eye) has not been done. LibreCAD wasn't measured: its
-Homebrew cask fails the macOS Gatekeeper check.
+| objects | program | pan frame (ms) | pan FPS |
+|---|---|---|---|
+| 10 000 | **CADaddy** | (run `cargo xtask perf --vs`) | |
+| 100 000 | **CADaddy** | | |
+| 1 000 000 | **CADaddy** | | |
+| any | QCAD | not measured (by hand) | |
+| any | FreeCAD | not measured (by hand) | |
+
+QCAD and FreeCAD can only be panned interactively in their windows; scripted pan timing is not
+available. LibreCAD was not measured (its Homebrew cask fails the macOS Gatekeeper check).
 
 ## Where the memory goes
 
@@ -57,7 +65,10 @@ available.
 
 ## Running it
 
-- `cargo xtask perf --vs [--sizes 10000,100000,1000000]` writes the plans to `target/perf/vs/`
-  and prints CADaddy's rows.
-- The other programs are timed with their own tools, as above. Use the same files and one fresh
-  process per file.
+- `cargo xtask perf --vs [--sizes 10000,100000,1000000]` writes the plans to `target/perf/vs/`,
+  prints CADaddy's open/select/save/peak rows, and measures pan frame time per size.
+- The competitor scripts are in `tools/perf-vs/` (see `tools/perf-vs/README.md`):
+  - QCAD: `qcad -exec tools/perf-vs/qcad-bench.js -- target/perf/vs/plan-10000.dxf`
+  - FreeCAD: `freecadcmd tools/perf-vs/freecad-bench.py target/perf/vs/plan-10000.dxf`
+- Use the same plan files and one fresh process per file; wrap with `/usr/bin/time -l` for peak
+  memory.
