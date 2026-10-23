@@ -443,7 +443,7 @@ fn next_id(runs: &[MepRun], n: &mut usize) -> String {
 /// the one on the same path.
 fn spec_index(spec: &[MepRun], read: &MepRun, q: f64) -> Option<usize> {
     spec.iter()
-        .position(|r| !read.objects.is_empty() && r.objects.iter().filter(|o| o.as_str() != "reviewed").eq(read.objects.iter()))
+        .position(|r| !read.objects.is_empty() && r.objects.iter().eq(read.objects.iter()))
         .or_else(|| spec.iter().position(|r| r.system == read.system && r.level.eq_ignore_ascii_case(&read.level) && same_path(r, read, q)))
 }
 
@@ -557,8 +557,20 @@ fn update_runs(s: &mut Session, mut sp: BuildingSpec, before: Vec<MepRun>, label
                     }
                 }
             }
-            if sr.objects.last().is_some_and(|o| o == "reviewed") && !(resized || raised || rerouted) {
-                run.objects.push("reviewed".into());
+            // Carry reviewed status forward when the run was not changed by the revision.
+            if sr.reviewed && !(resized || raised || rerouted) {
+                run.reviewed = true;
+            }
+            // Carry override provenance forward for unchanged fields.
+            if !resized && sr.size_source == "override" {
+                run.size_in = sr.size_in;
+                run.size_source = sr.size_source.clone();
+                run.edited_by.clone_from(&sr.edited_by);
+            }
+            if !raised && sr.height_source == "override" {
+                run.bottoms_ft.clone_from(&sr.bottoms_ft);
+                run.height_source = sr.height_source.clone();
+                run.edited_by.clone_from(&sr.edited_by);
             }
             if let Some(src) = sr.objects.first() {
                 stale.insert(src.clone());

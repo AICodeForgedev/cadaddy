@@ -211,8 +211,8 @@ fn changed_runs_are_updated_rebuilt_alone_and_logged() {
     assert!(!retn.is_empty(), "{before:?}");
     // Someone lowers the supply duct by hand (the print said 10').
     let list = s.execute("mep.list", &json!({"system": "M-DUCT-SUPP"})).unwrap();
-    let supply = list["items"][0]["id"].as_u64().unwrap();
-    s.execute("mep.edit", &json!({"id": supply, "bottom_ft": 9.5})).unwrap();
+    let supply = list["items"][0]["id"].as_str().unwrap().to_string();
+    s.execute("mep.edit", &json!({"id": &supply, "bottom_ft": 9.5})).unwrap();
 
     let r = s.execute("printrev.compare", &json!({"against": revised(1, &out.join("rev1.dxf")), "label": "ASI-01"})).unwrap();
     assert_eq!(r["offset"], json!([100.0, 50.0]), "{r}");
