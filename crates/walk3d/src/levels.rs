@@ -51,6 +51,9 @@ pub struct Datum {
     pub elevation_ft: f64,
     #[serde(default, skip_serializing_if = "DatumKind::is_floor")]
     pub kind: DatumKind,
+    /// Where its elevation came from: `model: <note>`, `layout:<name>: <note>`, `levels.set`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A sheet of the set and the level it shows.
@@ -79,6 +82,8 @@ pub struct LevelNote {
     pub name: String,
     pub kind: DatumKind,
     pub elevation_ft: f64,
+    /// Where it was read: `model: <note text>`, `layout:<name>: <note text>`; empty when unknown.
+    pub source: String,
 }
 
 fn words(s: &str) -> Vec<String> {
@@ -314,7 +319,7 @@ pub fn parse_level_note(text: &str) -> Option<LevelNote> {
     if stray.count() > 0 {
         return None;
     }
-    Some(LevelNote { name, kind, elevation_ft })
+    Some(LevelNote { name, kind, elevation_ft, source: String::new() })
 }
 
 /// The level a sheet's title names (`LEVEL 2 MECHANICAL PLAN`, `SECOND FLOOR PLAN - PLUMBING`,
@@ -352,7 +357,8 @@ pub fn parse_sheet_number(text: &str) -> Option<(String, String)> {
 /// elevation the most common value wins (the first read on a tie) and the disagreement is
 /// reported.
 pub fn stack(notes: &[LevelNote]) -> (Vec<LevelNote>, Vec<String>) {
-    let mut by_name: Vec<(String, DatumKind, Vec<(f64, usize)>)> = Vec::new();
+    // Per name: each value read, how often, and the first note that gave it.
+    let mut by_name: Vec<(String, DatumKind, Vec<(f64, usize, String)>)> = Vec::new();
     for n in notes.iter().take(MAX_NOTES) {
         let entry = match by_name.iter_mut().find(|(m, _, _)| *m == n.name) {
             Some(e) => e,
@@ -362,26 +368,26 @@ pub fn stack(notes: &[LevelNote]) -> (Vec<LevelNote>, Vec<String>) {
                 e
             }
         };
-        match entry.2.iter_mut().find(|(v, _)| (v - n.elevation_ft).abs() < 1.0 / 96.0) {
+        match entry.2.iter_mut().find(|(v, _, _)| (v - n.elevation_ft).abs() < 1.0 / 96.0) {
             Some(v) => v.1 += 1,
-            None => entry.2.push((n.elevation_ft, 1)),
+            None => entry.2.push((n.elevation_ft, 1, n.source.clone())),
         }
     }
     let mut out = Vec::new();
     let mut conflicts = Vec::new();
     for (name, kind, values) in by_name {
-        let mut best: Option<(f64, usize)> = None;
-        for (v, c) in &values {
-            if best.is_none_or(|(_, bc)| *c > bc) {
-                best = Some((*v, *c));
+        let mut best: Option<(f64, usize, &str)> = None;
+        for (v, c, src) in &values {
+            if best.is_none_or(|(_, bc, _)| *c > bc) {
+                best = Some((*v, *c, src.as_str()));
             }
         }
-        let Some((elevation_ft, _)) = best else { continue };
+        let Some((elevation_ft, _, source)) = best else { continue };
         if values.len() > 1 {
-            let all: Vec<String> = values.iter().map(|(v, c)| format!("{} ({c}×)", crate::spec::feet(*v))).collect();
+            let all: Vec<String> = values.iter().map(|(v, c, _)| format!("{} ({c}×)", crate::spec::feet(*v))).collect();
             conflicts.push(format!("{name}: the prints disagree ({}); took {}", all.join(", "), crate::spec::feet(elevation_ft)));
         }
-        out.push(LevelNote { name, kind, elevation_ft });
+        out.push(LevelNote { name, kind, elevation_ft, source: source.to_string() });
     }
     out.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
     (out, conflicts)
@@ -488,36 +494,96 @@ impl BuildingSpec {
 
     /// Stacked level notes into the spec: a level it has takes the elevation; the others become
     /// (or update) datums. Then every level's height reaches the next level or storey datum up.
-    /// Returns what changed, in words.
+    /// Returns what changed, in words, then the approved values it kept (see
+    /// [`BuildingSpec::apply_levels_keeping`]).
     pub fn apply_levels(&mut self, stacked: &[LevelNote]) -> Vec<String> {
+        let (mut changes, kept) = self.apply_levels_keeping(stacked);
+        changes.extend(kept);
+        changes
+    }
+
+    /// Whether a person approved the level or datum `name` (`levels/<name>`, any case).
+    pub fn level_approved(&self, name: &str) -> bool {
+        let key = format!("levels/{name}");
+        self.approved.iter().any(|a| a.eq_ignore_ascii_case(&key))
+    }
+
+    /// Record where a level's or datum's value came from (`sources["levels/<name>"]`); it is no
+    /// longer a guess.
+    pub fn set_level_source(&mut self, name: &str, source: &str) {
+        let key = format!("levels/{name}");
+        self.sources.retain(|k, _| !k.eq_ignore_ascii_case(&key));
+        self.guess.retain(|k, _| !k.eq_ignore_ascii_case(&key));
+        if !source.is_empty() {
+            self.sources.insert(key, source.chars().take(200).collect());
+        }
+    }
+
+    /// Where a level's or datum's value came from, when it is known.
+    pub fn level_source(&self, name: &str) -> Option<&str> {
+        let key = format!("levels/{name}");
+        self.sources.iter().find(|(k, _)| k.eq_ignore_ascii_case(&key)).map(|(_, v)| v.as_str())
+    }
+
+    /// [`BuildingSpec::apply_levels`], with the approved levels and datums kept apart: their
+    /// elevations never change, and each one the prints disagree with is reported (`Level 2:
+    /// kept 10'-0" (approved); prints say 14'-0"`). Every value applied records its note as its
+    /// source, and stops being a guess. Returns (changes, kept).
+    pub fn apply_levels_keeping(&mut self, stacked: &[LevelNote]) -> (Vec<String>, Vec<String>) {
         let mut changes = Vec::new();
+        let mut kept = Vec::new();
+        let differs = |a: f64, b: f64| (a - b).abs() > 1e-6;
+        let kept_line =
+            |name: &str, have: f64, says: f64| format!("{name}: kept {} (approved); prints say {}", crate::spec::feet(have), crate::spec::feet(says));
         for n in stacked.iter().take(MAX_NOTES) {
             if let Some(i) = self.level_matching(&n.name) {
+                let Some((name, have)) = self.levels.get(i).map(|l| (l.name.clone(), l.elevation_ft)) else { continue };
+                if self.level_approved(&name) {
+                    if differs(have, n.elevation_ft) {
+                        kept.push(kept_line(&name, have, n.elevation_ft));
+                    }
+                    continue;
+                }
                 if let Some(l) = self.levels.get_mut(i)
-                    && (l.elevation_ft - n.elevation_ft).abs() > 1e-6
+                    && differs(have, n.elevation_ft)
                 {
-                    changes.push(format!("{}: elevation {} → {}", l.name, crate::spec::feet(l.elevation_ft), crate::spec::feet(n.elevation_ft)));
+                    changes.push(format!("{name}: elevation {} → {}", crate::spec::feet(have), crate::spec::feet(n.elevation_ft)));
                     l.elevation_ft = n.elevation_ft;
                 }
+                self.set_level_source(&name, &n.source);
                 continue;
             }
+            let approved = self.datums.iter().find(|d| d.name.eq_ignore_ascii_case(&n.name)).is_some_and(|d| self.level_approved(&d.name));
             match self.datums.iter_mut().find(|d| d.name.eq_ignore_ascii_case(&n.name)) {
+                Some(d) if approved => {
+                    if differs(d.elevation_ft, n.elevation_ft) {
+                        kept.push(kept_line(&d.name, d.elevation_ft, n.elevation_ft));
+                    }
+                }
                 Some(d) => {
-                    if (d.elevation_ft - n.elevation_ft).abs() > 1e-6 {
+                    if differs(d.elevation_ft, n.elevation_ft) {
                         changes.push(format!("{}: elevation {} → {}", d.name, crate::spec::feet(d.elevation_ft), crate::spec::feet(n.elevation_ft)));
                         d.elevation_ft = n.elevation_ft;
                     }
                     d.kind = n.kind;
+                    if !n.source.is_empty() {
+                        d.source = n.source.chars().take(200).collect();
+                    }
                 }
                 None => {
                     changes.push(format!("{}: {} (no plan on this drawing)", n.name, crate::spec::feet(n.elevation_ft)));
-                    self.datums.push(Datum { name: n.name.clone(), elevation_ft: n.elevation_ft, kind: n.kind });
+                    self.datums.push(Datum {
+                        name: n.name.clone(),
+                        elevation_ft: n.elevation_ft,
+                        kind: n.kind,
+                        source: n.source.chars().take(200).collect(),
+                    });
                 }
             }
         }
         self.datums.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
         changes.extend(self.restack_heights());
-        changes
+        (changes, kept)
     }
 
     /// Every level reaches the next level or storey datum above it (floor to floor); the top
@@ -584,6 +650,11 @@ impl BuildingSpec {
                 }
             }
         }
+        if let Some(m) = v.get_mut("sources").and_then(|g| g.as_object_mut())
+            && let Some(src) = m.remove(&key)
+        {
+            m.insert(format!("levels/{new}"), src);
+        }
         if let Some(g) = v.get_mut("guess").and_then(|g| g.as_object_mut())
             && let Some(why) = g.remove(&key)
         {
@@ -626,6 +697,47 @@ mod tests {
 
     fn note(t: &str) -> Option<(String, f64)> {
         parse_level_note(t).map(|n| (n.name, (n.elevation_ft * 1e6).round() / 1e6))
+    }
+
+    #[test]
+    fn approved_levels_and_datums_are_kept_and_read_values_carry_their_source() {
+        let lvl = |name: &str, e: f64| crate::rules::Level {
+            name: name.into(),
+            elevation_ft: e,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec {
+            levels: vec![lvl("Level 1", 0.0), lvl("Level 2", 10.0)],
+            datums: vec![Datum { name: "ROOF".into(), elevation_ft: 30.0, kind: DatumKind::Roof, source: String::new() }],
+            approved: vec!["LEVELS/Level 2".into(), "levels/roof".into()],
+            ..BuildingSpec::default()
+        };
+        sp.guess.insert("levels/Level 1".into(), "drafted".into());
+        let note = |name: &str, kind, e: f64| LevelNote { name: name.into(), kind, elevation_ft: e, source: format!("layout:A-301: {name} = {e}") };
+        let (changes, kept) = sp.apply_levels_keeping(&[
+            note("LEVEL 1", DatumKind::Floor, 1.0),
+            note("LEVEL 2", DatumKind::Floor, 14.0),
+            note("ROOF", DatumKind::Roof, 42.5),
+            note("PARAPET", DatumKind::Parapet, 46.0),
+        ]);
+        assert_eq!(kept, ["Level 2: kept 10'-0\" (approved); prints say 14'-0\"", "ROOF: kept 30'-0\" (approved); prints say 42'-6\""]);
+        assert_eq!(sp.levels[1].elevation_ft, 10.0);
+        assert_eq!(sp.datums.iter().find(|d| d.name == "ROOF").map(|d| d.elevation_ft), Some(30.0));
+        assert_eq!(sp.levels[0].elevation_ft, 1.0);
+        assert!(changes.contains(&"Level 1: elevation 0'-0\" → 1'-0\"".to_string()), "{changes:?}");
+        assert_eq!(sp.level_source("level 1"), Some("layout:A-301: LEVEL 1 = 1"));
+        assert_eq!(sp.level_source("Level 2"), None);
+        assert!(sp.guess.is_empty());
+        assert_eq!(sp.datums.iter().find(|d| d.name == "PARAPET").map(|d| d.source.as_str()), Some("layout:A-301: PARAPET = 46"));
+        // The source follows a rename.
+        sp.rename_level("Level 1", "Ground").unwrap();
+        assert_eq!(sp.level_source("Ground"), Some("layout:A-301: LEVEL 1 = 1"));
+        assert_eq!(sp.level_source("Level 1"), None);
     }
 
     #[test]
@@ -704,7 +816,7 @@ mod tests {
 
     #[test]
     fn stacking_takes_the_common_value_and_reports_the_odd_one() {
-        let n = |name: &str, e: f64| LevelNote { name: name.into(), kind: DatumKind::Floor, elevation_ft: e };
+        let n = |name: &str, e: f64| LevelNote { name: name.into(), kind: DatumKind::Floor, elevation_ft: e, source: String::new() };
         let (s, c) = stack(&[n("LEVEL 2", 14.0), n("LEVEL 1", 0.0), n("LEVEL 2", 14.0), n("LEVEL 2", 14.5), n("ROOF", 28.0)]);
         let got: Vec<(&str, f64)> = s.iter().map(|x| (x.name.as_str(), x.elevation_ft)).collect();
         assert_eq!(got, [("LEVEL 1", 0.0), ("LEVEL 2", 14.0), ("ROOF", 28.0)]);
@@ -721,10 +833,10 @@ mod tests {
         )
         .unwrap();
         let notes = [
-            LevelNote { name: "LEVEL 1".into(), kind: DatumKind::Floor, elevation_ft: 0.0 },
-            LevelNote { name: "LEVEL 2".into(), kind: DatumKind::Floor, elevation_ft: 14.0 },
-            LevelNote { name: "ROOF".into(), kind: DatumKind::Roof, elevation_ft: 27.5 },
-            LevelNote { name: "PARAPET".into(), kind: DatumKind::Parapet, elevation_ft: 31.0 },
+            LevelNote { name: "LEVEL 1".into(), kind: DatumKind::Floor, elevation_ft: 0.0, source: String::new() },
+            LevelNote { name: "LEVEL 2".into(), kind: DatumKind::Floor, elevation_ft: 14.0, source: String::new() },
+            LevelNote { name: "ROOF".into(), kind: DatumKind::Roof, elevation_ft: 27.5, source: String::new() },
+            LevelNote { name: "PARAPET".into(), kind: DatumKind::Parapet, elevation_ft: 31.0, source: String::new() },
         ];
         let changes = sp.apply_levels(&notes);
         assert!(!changes.is_empty());

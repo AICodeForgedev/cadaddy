@@ -42,10 +42,10 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("levels.read", "Read Levels", run_read)
             .files().params(
-            "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, matches?}], conflicts, datum_ft, changes?, applied}",
+            "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, source, matches?, approved?}], conflicts (incl. approved values kept), datum_ft, changes?, kept?, applied}; approved levels (`levels/<name>`) keep their elevation",
         ),
         CommandSpec::new("levels.list", "List Levels", run_list)
-            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, built}], datums: [{name, elevation_ft, kind}], storeys, unattached}")
+            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, built, source, approved}], datums: [{name, elevation_ft, kind, source?}], storeys, unattached}")
             .noundo(),
         CommandSpec::new("levels.set", "Edit Level", run_set).params(
             "{name: level or datum, rename?: new name, elevation_ft?: feet, height_ft?: floor to floor, ceiling_ft?: feet, shift_above?: bool (move the levels above by the same change)} → {level, renamed_refs?, changes}",
@@ -82,8 +82,9 @@ fn notes_of(d: &Drawing) -> Vec<LevelNote> {
     let all = all_texts(d);
     let mut out = Vec::new();
     let mut used: Vec<Handle> = Vec::new();
-    for (h, t, _, _, _) in &all {
-        if let Some(n) = levels::parse_level_note(t) {
+    for (h, t, _, _, sp) in &all {
+        if let Some(mut n) = levels::parse_level_note(t) {
+            n.source = source_of(sp, t);
             out.push(n);
             used.push(*h);
         }
@@ -111,18 +112,31 @@ fn notes_of(d: &Drawing) -> Vec<LevelNote> {
         }
         let reach = 3.0 * ht.max(1e-9);
         let best = lone.iter().filter(|(_, _, q, _, s2)| *s2 == sp && q.dist(*p) <= reach).min_by(|a, b| a.2.dist(*p).total_cmp(&b.2.dist(*p)));
-        if let Some((_, v, _, _, _)) = best {
-            out.push(LevelNote { name, kind, elevation_ft: *v });
+        if let Some((eh, v, _, _, _)) = best {
+            let el = all.iter().find(|x| x.0 == **eh).map(|x| x.1.as_str()).unwrap_or_default();
+            out.push(LevelNote { name, kind, elevation_ft: *v, source: source_of(sp, &format!("{t} / {el}")) });
         }
     }
     out
 }
 
+/// Where a note was read: `model: <text>` or `layout:<name>: <text>`.
+fn source_of(layout: &Option<String>, text: &str) -> String {
+    let text: String = text.chars().take(120).collect();
+    match layout {
+        Some(l) => format!("layout:{l}: {text}"),
+        None => format!("model: {text}"),
+    }
+}
+
 fn note_json(n: &LevelNote, sp: &BuildingSpec) -> Value {
     let kind = serde_json::to_value(n.kind).unwrap_or(Value::Null);
-    let mut v = json!({ "name": n.name, "kind": kind, "elevation_ft": round(n.elevation_ft) });
+    let mut v = json!({ "name": n.name, "kind": kind, "elevation_ft": round(n.elevation_ft), "source": n.source });
     if let Some(l) = sp.level_matching(&n.name).and_then(|i| sp.levels.get(i)) {
         v["matches"] = json!(l.name);
+        if sp.level_approved(&l.name) {
+            v["approved"] = json!(true);
+        }
     }
     v
 }
@@ -134,7 +148,7 @@ fn round(v: f64) -> f64 {
 fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "levels.read")?;
     let notes = notes_of(s.doc()?);
-    let (mut stacked, conflicts) = levels::stack(&notes);
+    let (mut stacked, mut conflicts) = levels::stack(&notes);
     let datum = match p.get("datum_ft") {
         None | Some(Value::Null) => levels::auto_datum(&stacked),
         Some(v) => v.as_f64().filter(|x| x.is_finite() && x.abs() <= 1e5).ok_or_else(|| bad("levels.read", "`datum_ft` must be a number of feet"))?,
@@ -144,22 +158,29 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let apply = bool_or(p, "apply", false);
     let rows: Vec<Value> = stacked.iter().map(|n| note_json(n, &sp)).collect();
-    let mut out = json!({ "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": apply });
     if stacked.is_empty() {
+        let mut out = json!({ "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": apply });
         out["message"] = json!("No level notes (LEVEL 2 = 14'-0\", ROOF EL. 42'-6\") found in the drawing or its layouts.");
         return Ok(out);
     }
-    if apply {
-        let changes = sp.apply_levels(&stacked);
-        if let Some(e) = sp.check().into_iter().find(|i| i.error) {
-            return Err(bad("levels.read", format!("{}: {}", e.path, e.message)));
-        }
-        out["changes"] = json!(changes);
-        if !changes.is_empty() {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
-        }
+    if !apply {
+        // What applying would keep: approved values the prints disagree with.
+        let mut trial = sp.clone();
+        conflicts.extend(trial.apply_levels_keeping(&stacked).1);
+        return Ok(json!({ "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": false }));
     }
-    Ok(out)
+    let before = sp.clone();
+    let (mut changes, kept) = sp.apply_levels_keeping(&stacked);
+    if let Some(e) = sp.check().into_iter().find(|i| i.error) {
+        return Err(bad("levels.read", format!("{}: {}", e.path, e.message)));
+    }
+    changes.extend(kept.iter().cloned());
+    conflicts.extend(kept.iter().cloned());
+    // Sources and cleared guesses are stored even when no elevation moved.
+    if sp != before {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok(json!({ "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": true, "changes": changes, "kept": kept }))
 }
 
 /// The level a model.build object was made on.
@@ -195,6 +216,8 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
                 "sheet": l.sheet,
                 "sheets": sheets,
                 "built": built.get(&l.name.to_ascii_uppercase()).copied().unwrap_or(0),
+                "source": sp.level_source(&l.name),
+                "approved": sp.level_approved(&l.name),
             })
         })
         .collect();
@@ -230,6 +253,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(e) = elevation {
             changes.push(format!("{}: elevation {} → {}", dt.name, cadaddy_walk3d::feet(dt.elevation_ft), cadaddy_walk3d::feet(e)));
             dt.elevation_ft = e;
+            dt.source = "levels.set".into();
         }
         if let Some(r) = str_param(p, "rename").map(str::trim).filter(|r| !r.is_empty()) {
             dt.name = r.chars().take(64).collect();
@@ -264,6 +288,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             changes.push(format!("{}: elevation {} → {}", l.name, cadaddy_walk3d::feet(old), cadaddy_walk3d::feet(e)));
             l.elevation_ft = e;
         }
+        sp.set_level_source(&current_name, "levels.set");
         // The floor below now reaches this one; this one the next up (unless a height is given).
         changes.extend(sp.restack_heights());
     }
@@ -447,7 +472,12 @@ mod tests {
     }
 
     fn two_levels(s: &mut Session) {
-        let spec = json!({
+        two_levels_with(s, json!({}));
+    }
+
+    /// The three-level spec with `extra` top-level keys (`approved`, `guess`) merged in.
+    fn two_levels_with(s: &mut Session, extra: Value) {
+        let mut spec = json!({
             "version": 1, "units_per_foot": 12,
             "levels": [
                 {"name": "L1", "elevation_ft": 0, "height_ft": 10, "region": [0, 0, 1000, 1000]},
@@ -455,13 +485,21 @@ mod tests {
                 {"name": "Level 3", "elevation_ft": 20, "height_ft": 10, "region": [4000, 0, 5000, 1000]}
             ]
         });
+        for (k, v) in extra.as_object().unwrap() {
+            spec[k] = v.clone();
+        }
         s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+    }
+
+    fn stored_spec(s: &Session) -> BuildingSpec {
+        current(s, "test").unwrap().0
     }
 
     #[test]
     fn levels_are_read_from_section_notes_and_markers() {
         let mut s = Session::new();
-        two_levels(&mut s);
+        two_levels_with(&mut s, json!({ "guess": { "levels/Level 2": "drafted: no level note found" } }));
+        assert_eq!(stored_spec(&s).guess.get("levels/Level 2").map(String::as_str), Some("drafted: no level note found"));
         // A section: one-text notes, and a marker drawn as a name over its elevation.
         text(&mut s, "LEVEL 1 = 0'-0\"", [-500.0, 0.0]);
         text(&mut s, "LEVEL 2 = 14'-0\"", [-500.0, 168.0]);
@@ -484,10 +522,63 @@ mod tests {
         assert_eq!(rows, [("L1".into(), 0.0, 14.0), ("Level 2".into(), 14.0, 14.0), ("Level 3".into(), 28.0, 14.5)]);
         let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
         assert_eq!(storeys, ["L1", "Level 2", "Level 3", "ROOF"]);
+        // Every applied value names the note it came from, in levels.read and levels.list.
+        let read_src: Vec<&str> = r["levels"].as_array().unwrap().iter().filter_map(|x| x["source"].as_str()).collect();
+        assert_eq!(
+            read_src,
+            [
+                "model: LEVEL 1 = 0'-0\"",
+                "model: LEVEL 2 = 14'-0\"",
+                "model: LEVEL 3 / 28'-0\"",
+                "model: T.O. ROOF EL. 42'-6\"",
+                "model: TOP OF PARAPET 46'-0\""
+            ],
+            "{r}"
+        );
+        let list_src: Vec<&str> = l["levels"].as_array().unwrap().iter().map(|x| x["source"].as_str().unwrap()).collect();
+        assert_eq!(list_src, ["model: LEVEL 1 = 0'-0\"", "model: LEVEL 2 = 14'-0\"", "model: LEVEL 3 / 28'-0\""], "{l}");
+        assert!(list_src[1].contains("LEVEL 2 = 14'-0\""));
+        let roof = l["datums"].as_array().unwrap().iter().find(|d| d["name"] == json!("ROOF")).unwrap();
+        assert_eq!(roof["source"], json!("model: T.O. ROOF EL. 42'-6\""), "{l}");
+        // The level read from the prints is no longer a guess.
+        let sp = stored_spec(&s);
+        assert_eq!(sp.guess.get("levels/Level 2"), None);
+        assert_eq!(sp.level_source("Level 2"), Some("model: LEVEL 2 = 14'-0\""));
         // Undo takes it all back.
         s.execute("undo", &json!({})).unwrap();
         let l = s.execute("levels.list", &json!({})).unwrap();
         assert_eq!(l["levels"][1]["elevation_ft"], json!(10.0));
+    }
+
+    #[test]
+    fn an_approved_level_keeps_its_elevation_when_the_prints_are_read() {
+        let mut s = Session::new();
+        two_levels_with(&mut s, json!({ "approved": ["levels/level 2"] }));
+        text(&mut s, "LEVEL 2 = 14'-0\"", [-500.0, 168.0]);
+        text(&mut s, "LEVEL 3 = 28'-0\"", [-500.0, 336.0]);
+        // The preview already says what applying keeps.
+        let r = s.execute("levels.read", &json!({})).unwrap();
+        assert_eq!(r["conflicts"], json!(["Level 2: kept 10'-0\" (approved); prints say 14'-0\""]), "{r}");
+        assert_eq!(r["levels"][0]["approved"], json!(true));
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let kept = "Level 2: kept 10'-0\" (approved); prints say 14'-0\"";
+        assert_eq!(r["kept"], json!([kept]), "{r}");
+        assert_eq!(r["conflicts"], json!([kept]), "{r}");
+        assert!(r["changes"].as_array().unwrap().iter().any(|c| c == kept), "{r}");
+        let l = s.execute("levels.list", &json!({})).unwrap();
+        assert_eq!(l["levels"][1]["name"], json!("Level 2"));
+        assert_eq!(l["levels"][1]["elevation_ft"], json!(10.0), "{l}");
+        assert_eq!(l["levels"][1]["approved"], json!(true));
+        assert_eq!(l["levels"][1]["source"], Value::Null);
+        // The unapproved level took the print's value.
+        assert_eq!(l["levels"][2]["elevation_ft"], json!(28.0));
+        assert_eq!(l["levels"][2]["source"], json!("model: LEVEL 3 = 28'-0\""));
+        let sp = stored_spec(&s);
+        assert_eq!(sp.levels[1].elevation_ft, 10.0);
+        // Re-reading again keeps it again and moves nothing.
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        assert_eq!(r["kept"], json!([kept]));
+        assert_eq!(stored_spec(&s).levels[1].elevation_ft, 10.0);
     }
 
     #[test]
