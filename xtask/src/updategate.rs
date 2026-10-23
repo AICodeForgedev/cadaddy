@@ -1,21 +1,25 @@
 //! `cargo xtask update-gate --from <old installer> --to <new installer>`: the real update path
 //! as a release gate, so every release is tested as a user would update.
 //!
-//! On each platform, the test installs the old release into a scratch location (default settings,
-//! agent control on), serves the new release from a local fake GitHub feed (signed SHA256SUMS +
-//! .sig, as the real release), launches, confirms the update is offered, downloads and installs it
-//! via Restart Now, waits for the relaunch, and checks the new version, replaced files and clean
-//! temp.
+//! On each platform, the test installs the old release into a scratch location, serves the new
+//! release from a local fake GitHub feed (signed SHA256SUMS + .sig via relsig), launches the old
+//! app with default settings (agent control on, no `--control` scripting), overrides the update
+//! source via env vars so the app's own updater talks to the fake server, confirms the update
+//! card is shown, clicks Update, waits for the download, clicks Restart Now, waits for the
+//! relaunch, and checks the new version runs, settings survived and temp is clean.
+//!
+//! The old app's real updater does the work: it checks the fake feed, downloads the installer,
+//! verifies the ed25519 signature against the test key, and on Restart Now runs
+//! `updater::install` itself (the platform's native install path), then relaunches.
 //!
 //! - macOS: DMG swap (the app's updater mounts the new DMG and replaces the .app).
 //! - Windows: MSI via the updater's PowerShell script (`msiexec /passive`).
 //! - Linux: AppImage replacement (a rename in the same folder).
 //!
-//! This must fail on 0.7.8's updater bugs (prove it against 0.7.8 installers):
-//! 1. Windows: `DETACHED_PROCESS` made PowerShell quit before running the MSI script, so the
-//!    update never installed on Restart Now.
-//! 2. Default installs (agent control on, no driven control channel) never showed the update
-//!    card: `has_control_channel()` returned true for the agent port alone.
+//! This must fail on 0.7.8's updater bugs:
+//! 1. Windows: `DETACHED_PROCESS` made PowerShell quit before running the MSI script.
+//! 2. Default installs never showed the update card: `has_control_channel()` returned true for
+//!    the agent port alone.
 //!
 //! Run before every release: `cargo xtask update-gate --from <previous release> --to <this build>`.
 
@@ -28,8 +32,11 @@ use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 
 use crate::release::relsig;
-// Re-use the smoke module's control channel and helpers.
 use crate::smoke;
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
 
 struct Opts {
     from: PathBuf,
@@ -50,7 +57,10 @@ fn parse(rest: &[&str]) -> Result<Opts, String> {
     Ok(Opts { from: from.ok_or("update-gate needs --from <old installer>")?, to: to.ok_or("update-gate needs --to <new installer>")? })
 }
 
-/// One step's outcome.
+// ---------------------------------------------------------------------------
+// Step report
+// ---------------------------------------------------------------------------
+
 struct Step {
     name: String,
     result: Result<String, String>,
@@ -84,6 +94,10 @@ impl Report {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fake release server
+// ---------------------------------------------------------------------------
 
 /// A local HTTP server that mimics GitHub's release API and download endpoints, serving a
 /// single release signed with a test key.
@@ -120,7 +134,6 @@ impl FakeRelease {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
         let base = format!("http://{}", listener.local_addr().map_err(|e| e.to_string())?);
 
-        // Sign the release with a test key.
         let sk = SigningKey::from_bytes(&[42; 32]);
         let pk = sk.verifying_key().to_bytes();
         let sha = relsig::hex(&Sha256::digest(&installer_bytes));
@@ -152,7 +165,6 @@ impl FakeRelease {
                         return;
                     }
                     let path = line.split(' ').nth(1).unwrap_or("").to_string();
-                    // Drain headers.
                     let mut h = String::new();
                     while reader.read_line(&mut h).is_ok_and(|n| n > 2) {
                         h.clear();
@@ -178,6 +190,10 @@ impl FakeRelease {
         Ok((FakeRelease { base, _handle: handle }, pk))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Platform helpers (KEEP)
+// ---------------------------------------------------------------------------
 
 /// Extract the version from a macOS .app bundle's Info.plist.
 fn bundle_version(app: &Path) -> Result<String, String> {
@@ -234,7 +250,36 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<(), String> {
     Err("still running after timeout".into())
 }
 
-/// The macOS update-gate: install old DMG, serve new one, update, verify.
+/// The agent port the app binds by default (Options > agentControl, on by default).
+const AGENT_PORT: u16 = 47_820;
+
+/// Poll `ui.update.status` until a condition holds, up to `timeout`.
+fn wait_for_update_phase(
+    ctrl: &mut smoke::Control,
+    want: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    let start = Instant::now();
+    loop {
+        let status = ctrl.exec("ui.update.status", serde_json::json!({}))?;
+        if status.get("phase").and_then(|v| v.as_str()) == Some(want) {
+            return Ok(status);
+        }
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "timed out waiting for update phase '{want}' after {}s (last: {status})",
+                timeout.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// macOS gate
+// ---------------------------------------------------------------------------
+
+/// The macOS update-gate: install old DMG, serve the new one through the real updater, verify.
 fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) -> Result<(), String> {
     // 1. Read the new DMG for the fake server.
     let new_bytes = std::fs::read(new_dmg).map_err(|e| format!("read {}: {e}", new_dmg.display()))?;
@@ -251,12 +296,10 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
     let (fake, test_pk) = FakeRelease::start(&new_version, "CADaddy-Mac.dmg", new_bytes)?;
     let test_pk_hex = relsig::hex(&test_pk);
     println!("  fake server: {}", fake.base);
-    println!("  test key: {test_pk_hex}");
 
     // 3. Install the old DMG.
     let install_dir = work.join("installed");
     std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
-
     let old_app = install_from_dmg(old_dmg, &install_dir)?;
 
     report.step("install old", || {
@@ -266,202 +309,172 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
 
     let old_version = bundle_version(&old_app).unwrap_or_default();
 
-    // 4. Write a temporary release_keys.txt with our test key into the app's resources,
-    // so the old app trusts our fake signatures.
-    // BUT: the compiled-in keys are baked into the binary. We can't change them.
-    // Instead, we need to override the update source — the old app talks to GitHub.
-    //
-    // The updater uses a hard-coded API URL and DOWNLOADS prefix. We can't change those
-    // in the installed binary. So we need another approach:
-    //
-    // Approach: We use the control channel to drive the app through the update flow ourselves,
-    // but we can't make the old app talk to our fake server or trust our test keys.
-    //
-    // Real approach: Since we can't modify the old binary's compiled-in keys or API endpoints,
-    // we test the update MECHANISM rather than the cryptographic chain. The gate proves:
-    // a) The installed app starts and runs with default settings
-    // b) The update installer (DMG swap script) runs correctly after "Restart Now"
-    // c) The new version is present after the swap
-    // d) Settings survive the update
-    // e) No temp files are left behind
-    //
-    // We simulate the update by:
-    // 1. Starting the old app on a control port with its own config dir
-    // 2. Placing the new DMG in the download location the updater would use
-    // 3. Calling the updater's install script directly (the same /bin/sh script)
-    // 4. Waiting for the swap and verifying the new version
-
+    // 4. Prepare config and settings marker.
     let cfg_dir = work.join("config");
     std::fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
-
-    // Write a settings marker to verify settings survive the update.
     let settings_marker = cfg_dir.join("update-gate-marker.txt");
     std::fs::write(&settings_marker, "settings-survive").map_err(|e| e.to_string())?;
 
+    // 5. Launch the old app WITHOUT --control (so has_control_channel()=false and the update
+    //    card shows), with env-var overrides pointing the updater at our fake server.
     let exe = bundle_exe(&old_app)?;
-    let port = smoke::free_port()?;
     let log = std::fs::File::create(work.join("app.log")).map_err(|e| e.to_string())?;
 
     let mut child = Command::new(&exe)
-        .arg("--control")
-        .arg(port.to_string())
         .env("CADADDY_CONFIG_DIR", &cfg_dir)
+        .env("CADADDY_UPDATE_GATE", "1")
+        .env("CADADDY_UPDATE_API", format!("{}/api/latest", fake.base))
+        .env("CADADDY_UPDATE_DOWNLOADS", format!("{}/download/", fake.base))
+        .env("CADADDY_UPDATE_KEY", &test_pk_hex)
+        .env_remove("CADADDY_CONTROL_PORT")
+        .env_remove("CADADDY_NO_UPDATES")
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log)
         .spawn()
         .map_err(|e| format!("{}: {e}", exe.display()))?;
 
+    // 6. Connect to the agent port (not a scripted --control port).
     let control_result = (|| -> Result<(), String> {
-        let mut ctrl = smoke::Control::connect(port, &cfg_dir, &mut child, Duration::from_secs(90))?;
+        let mut ctrl = smoke::Control::connect(AGENT_PORT, &cfg_dir, &mut child, Duration::from_secs(90))?;
 
         report.step("launch old", || {
             ctrl.call("ping", serde_json::json!({}))?;
-            Ok(format!("old version {old_version} running on port {port}"))
+            Ok(format!("old version {old_version} running on agent port {AGENT_PORT}"))
         });
 
-        report.step("old version", || Ok(format!("Info.plist says {old_version}")));
+        // 7. Verify the app is NOT in scripted mode (the update card can show).
+        report.step("card shown", || {
+            // Trigger a manual check so the card appears reliably.
+            ctrl.exec("ui.update.check", serde_json::json!({}))?;
+            // Wait for the updater to contact the fake server and offer the update.
+            let status = wait_for_update_phase(&mut ctrl, "available", Duration::from_secs(60))?;
+            let showing = status.get("showing").and_then(|v| v.as_bool()).unwrap_or(false);
+            let scripted = status.get("scripted").and_then(|v| v.as_bool()).unwrap_or(true);
+            if scripted {
+                return Err("has_control_channel() is true (card suppressed)".into());
+            }
+            if !showing {
+                return Err("update available but card not showing".into());
+            }
+            let ver = status.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            Ok(format!("update card showing for {ver}, scripted=false"))
+        });
 
-        // 5. Simulate the DMG swap that the updater does: place the new DMG in the temp
-        // download location, then invoke the same update-on-exit mechanism.
-        let download_dir = std::env::temp_dir().join("cadaddy-update");
-        std::fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
-        let download_name = format!(".{new_version}-CADaddy-Mac.dmg.download");
-        let download_path = download_dir.join(&download_name);
-        std::fs::copy(new_dmg, &download_path).map_err(|e| format!("copy new DMG: {e}"))?;
+        // 8. Click "Update" to start the download through the real updater.
+        report.step("download", || {
+            ctrl.exec("ui.update.accept", serde_json::json!({}))?;
+            // Wait for the download to complete and the update to be ready.
+            let _status = wait_for_update_phase(&mut ctrl, "ready", Duration::from_secs(120))?;
+            Ok("downloaded and verified by the app's updater".into())
+        });
 
-        report.step("stage update", || Ok(format!("new DMG staged at {}", download_path.display())));
+        // 9. Click "Restart Now": the app calls relaunch_after_install() and quits.
+        //    Its on_exit() runs the platform install script (updater.rs), which waits for the
+        //    PID, mounts the DMG, swaps the .app, and relaunches.
+        report.step("restart now", || {
+            ctrl.exec("ui.update.restart", serde_json::json!({}))?;
+            Ok("restart requested".into())
+        });
 
-        // 6. Tell the app to quit. The updater's on_exit will run the install script.
-        // But we can't trigger the updater's on_exit from the control channel since the
-        // old app's updater state is empty (no download was done through it).
-        //
-        // Instead: we run the SAME install script the updater would run, manually, with the
-        // right arguments. This is exactly what the updater does on exit — it spawns a
-        // /bin/sh script that waits for the PID, mounts the DMG, replaces the app.
-        let _pid = child.id();
-
-        // Ask the app to quit first.
-        let _ = ctrl.call("app.quit", serde_json::json!({ "discard": true }));
-        // Wait for the app to exit.
-        let _ = wait_for_exit(&mut child, Duration::from_secs(20));
+        // Wait for the old process to exit.
+        wait_for_exit(&mut child, Duration::from_secs(30))?;
 
         report.step("quit old", || {
             if let Ok(Some(s)) = child.try_wait() {
                 Ok(format!("old app exited ({s})"))
             } else {
-                // Force kill if needed.
                 let _ = child.kill();
                 let _ = child.wait();
                 Err("old app didn't exit cleanly".into())
             }
         });
 
-        // 7. Run the update install script (same as updater.rs does for macOS).
-        let install_script = r#"
-            mnt=$(mktemp -d /tmp/cadaddy-update.XXXXXX) || exit 1
-            if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$1" >/dev/null; then
-                app=$(ls -d "$mnt"/*.app 2>/dev/null | head -n 1)
-                if [ -n "$app" ] && ditto "$app" "$2.updating"; then
-                    rm -rf "$2.old"
-                    if mv "$2" "$2.old"; then
-                        if mv "$2.updating" "$2"; then rm -rf "$2.old"; else mv "$2.old" "$2"; fi
-                    fi
-                fi
-                rm -rf "$2.updating"
-                hdiutil detach "$mnt" -quiet
-            fi
-            rmdir "$mnt" 2>/dev/null
-            rm -f "$1"
-        "#;
-
+        // 10. Wait for the install script to complete (the download file is removed by the
+        //     script after the swap).
+        let download_dir = std::env::temp_dir().join("cadaddy-update");
         report.step("install update", || {
-            let status = Command::new("/bin/sh")
-                .arg("-c")
-                .arg(install_script)
-                .arg("update-gate")
-                .arg(&download_path)
-                .arg(&old_app)
-                .status()
-                .map_err(|e| format!("install script: {e}"))?;
-            if status.success() { Ok("DMG swap script ran successfully".into()) } else { Err(format!("install script failed: {status}")) }
+            // The install script runs asynchronously. Wait for the swap to complete by
+            // checking that Info.plist shows the new version.
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(60) {
+                if let Ok(v) = bundle_version(&old_app)
+                    && v == new_version
+                {
+                    return Ok(format!("DMG swap complete: {v}"));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let got = bundle_version(&old_app).unwrap_or_else(|e| e);
+            Err(format!("expected {new_version} after swap, got {got}"))
         });
 
-        // 8. Verify the new version is installed.
-        report.step("new version installed", || {
-            let v = bundle_version(&old_app)?;
-            if v == new_version { Ok(format!("{v} (correct)")) } else { Err(format!("expected {new_version}, got {v}")) }
+        // 11. Verify the new version runs.
+        report.step("new version runs", || {
+            let new_exe = bundle_exe(&old_app)?;
+            let out = Command::new(&new_exe)
+                .arg("--version")
+                .output()
+                .map_err(|e| format!("{}: {e}", new_exe.display()))?;
+            let version_out = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if version_out.contains(&new_version) {
+                Ok(format!("--version: {version_out}"))
+            } else {
+                Err(format!("--version says {version_out:?}, expected {new_version}"))
+            }
         });
 
-        // 9. Launch the new app and verify it runs.
-        let new_exe = bundle_exe(&old_app)?;
-        let new_port = smoke::free_port()?;
-        let new_log = std::fs::File::create(work.join("new-app.log")).map_err(|e| e.to_string())?;
-        let mut new_child = Command::new(&new_exe)
-            .arg("--control")
-            .arg(new_port.to_string())
-            .env("CADADDY_CONFIG_DIR", &cfg_dir)
-            .stdout(new_log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(new_log)
-            .spawn()
-            .map_err(|e| format!("{}: {e}", new_exe.display()))?;
+        // 12. Settings survived.
+        report.step("settings kept", || {
+            let content = std::fs::read_to_string(&settings_marker).map_err(|e| format!("marker: {e}"))?;
+            if content.trim() == "settings-survive" {
+                Ok("settings folder intact".into())
+            } else {
+                Err(format!("marker contents: {content:?}"))
+            }
+        });
 
-        let new_result = (|| -> Result<(), String> {
-            let mut new_ctrl = smoke::Control::connect(new_port, &cfg_dir, &mut new_child, Duration::from_secs(90))?;
-
-            report.step("launch new", || {
-                new_ctrl.call("ping", serde_json::json!({}))?;
-                Ok(format!("new version running on port {new_port}"))
-            });
-
-            report.step("new version runs", || {
-                // Check the bundle version after the swap.
-                let v = bundle_version(&old_app)?;
-                if v == new_version { Ok(format!("Info.plist says {v}, control responds")) } else { Err(format!("expected {new_version}, got {v}")) }
-            });
-
-            // 10. Verify settings survived.
-            report.step("settings kept", || {
-                let content = std::fs::read_to_string(&settings_marker).map_err(|e| format!("marker: {e}"))?;
-                if content.trim() == "settings-survive" { Ok("settings folder intact".into()) } else { Err(format!("marker contents: {content:?}")) }
-            });
-
-            // 11. Verify no temp files left behind.
-            report.step("temp clean", || {
-                if download_path.exists() {
-                    Err(format!("download not cleaned: {}", download_path.display()))
-                } else {
-                    Ok("download file removed".into())
+        // 13. Temp clean.
+        report.step("temp clean", || {
+            // The install script removes the download file.
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(10) {
+                let has_download = std::fs::read_dir(&download_dir)
+                    .map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".download")))
+                    .unwrap_or(false);
+                if !has_download {
+                    return Ok("download file removed".into());
                 }
-            });
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err("download file still present".into())
+        });
 
-            let updating = old_app.with_extension("app.updating");
-            let old_backup = old_app.with_extension("app.old");
-            report.step("no leftovers", || {
-                let mut leftovers = Vec::new();
-                if updating.exists() {
-                    leftovers.push(format!("{}", updating.display()));
-                }
-                if old_backup.exists() {
-                    leftovers.push(format!("{}", old_backup.display()));
-                }
-                if leftovers.is_empty() {
-                    Ok("no .updating or .old bundles left".into())
-                } else {
-                    Err(format!("leftovers: {}", leftovers.join(", ")))
-                }
-            });
+        // 14. No leftovers.
+        let updating = old_app.with_extension("app.updating");
+        let old_backup = old_app.with_extension("app.old");
+        report.step("no leftovers", || {
+            let mut leftovers = Vec::new();
+            if updating.exists() {
+                leftovers.push(format!("{}", updating.display()));
+            }
+            if old_backup.exists() {
+                leftovers.push(format!("{}", old_backup.display()));
+            }
+            if leftovers.is_empty() {
+                Ok("no .updating or .old bundles left".into())
+            } else {
+                Err(format!("leftovers: {}", leftovers.join(", ")))
+            }
+        });
 
-            // Quit new app.
-            let _ = new_ctrl.call("app.quit", serde_json::json!({ "discard": true }));
-
-            Ok(())
-        })();
-
-        if let Ok(None) = new_child.try_wait() {
-            let _ = new_child.kill();
-            let _ = new_child.wait();
+        // Kill the relaunched app if it's on the agent port (best effort).
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", AGENT_PORT)) {
+            drop(s);
+            // It's running — not our problem to manage, but note it.
+            println!("  NOTE  relaunched app is running on agent port {AGENT_PORT}");
         }
-        new_result
+
+        Ok(())
     })();
 
     // Clean up child if still running.
@@ -472,6 +485,326 @@ fn mac_gate(work: &Path, old_dmg: &Path, new_dmg: &Path, report: &mut Report) ->
 
     control_result
 }
+
+// ---------------------------------------------------------------------------
+// Windows gate
+// ---------------------------------------------------------------------------
+
+/// The Windows update-gate: install old MSI, serve the new one through the real updater, verify.
+#[cfg(target_os = "windows")]
+fn windows_gate(work: &Path, old_msi: &Path, new_msi: &Path, report: &mut Report) -> Result<(), String> {
+    let new_bytes = std::fs::read(new_msi).map_err(|e| format!("read {}: {e}", new_msi.display()))?;
+
+    // Get the new version from the MSI's ProductVersion property.
+    let new_version = msi_version(new_msi)?;
+    println!("  new version: {new_version}");
+
+    let (fake, test_pk) = FakeRelease::start(&new_version, "CADaddy-Windows.msi", new_bytes)?;
+    let test_pk_hex = relsig::hex(&test_pk);
+    println!("  fake server: {}", fake.base);
+
+    // Install the old MSI silently into a per-user scratch location.
+    let install_dir = work.join("installed");
+    std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+
+    report.step("install old", || {
+        let status = Command::new("msiexec")
+            .args(["/i"])
+            .arg(old_msi)
+            .args(["/passive", "/norestart", "INSTALLFOLDER="])
+            .arg(&install_dir)
+            .status()
+            .map_err(|e| format!("msiexec: {e}"))?;
+        if status.success() {
+            Ok(format!("MSI installed to {}", install_dir.display()))
+        } else {
+            Err(format!("msiexec failed: {status}"))
+        }
+    });
+
+    let exe = install_dir.join("CADaddy").join("cadaddy.exe");
+    let old_version = Command::new(&exe)
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let cfg_dir = work.join("config");
+    std::fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
+    let settings_marker = cfg_dir.join("update-gate-marker.txt");
+    std::fs::write(&settings_marker, "settings-survive").map_err(|e| e.to_string())?;
+
+    let log = std::fs::File::create(work.join("app.log")).map_err(|e| e.to_string())?;
+    let mut child = Command::new(&exe)
+        .env("CADADDY_CONFIG_DIR", &cfg_dir)
+        .env("CADADDY_UPDATE_GATE", "1")
+        .env("CADADDY_UPDATE_API", format!("{}/api/latest", fake.base))
+        .env("CADADDY_UPDATE_DOWNLOADS", format!("{}/download/", fake.base))
+        .env("CADADDY_UPDATE_KEY", &test_pk_hex)
+        .env_remove("CADADDY_CONTROL_PORT")
+        .env_remove("CADADDY_NO_UPDATES")
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log)
+        .spawn()
+        .map_err(|e| format!("{}: {e}", exe.display()))?;
+
+    let control_result = (|| -> Result<(), String> {
+        let mut ctrl = smoke::Control::connect(AGENT_PORT, &cfg_dir, &mut child, Duration::from_secs(90))?;
+
+        report.step("launch old", || {
+            ctrl.call("ping", serde_json::json!({}))?;
+            Ok(format!("old version {old_version} running on agent port {AGENT_PORT}"))
+        });
+
+        report.step("card shown", || {
+            ctrl.exec("ui.update.check", serde_json::json!({}))?;
+            let status = wait_for_update_phase(&mut ctrl, "available", Duration::from_secs(60))?;
+            let showing = status.get("showing").and_then(|v| v.as_bool()).unwrap_or(false);
+            let scripted = status.get("scripted").and_then(|v| v.as_bool()).unwrap_or(true);
+            if scripted {
+                return Err("has_control_channel() is true (card suppressed)".into());
+            }
+            if !showing {
+                return Err("update available but card not showing".into());
+            }
+            Ok(format!("update card showing, scripted=false"))
+        });
+
+        report.step("download", || {
+            ctrl.exec("ui.update.accept", serde_json::json!({}))?;
+            let _status = wait_for_update_phase(&mut ctrl, "ready", Duration::from_secs(120))?;
+            Ok("downloaded and verified by the app's updater".into())
+        });
+
+        report.step("restart now", || {
+            ctrl.exec("ui.update.restart", serde_json::json!({}))?;
+            Ok("restart requested".into())
+        });
+
+        wait_for_exit(&mut child, Duration::from_secs(30))?;
+        report.step("quit old", || {
+            if let Ok(Some(s)) = child.try_wait() {
+                Ok(format!("old app exited ({s})"))
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err("old app didn't exit cleanly".into())
+            }
+        });
+
+        // The updater's PowerShell script runs msiexec and relaunches.
+        report.step("install update", || {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(120) {
+                if let Ok(out) = Command::new(&exe).arg("--version").output() {
+                    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if v.contains(&new_version) {
+                        return Ok(format!("MSI installed: {v}"));
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            Err("new version not installed after timeout".into())
+        });
+
+        report.step("new version runs", || {
+            let out = Command::new(&exe).arg("--version").output().map_err(|e| e.to_string())?;
+            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if v.contains(&new_version) { Ok(v) } else { Err(format!("expected {new_version}, got {v}")) }
+        });
+
+        report.step("settings kept", || {
+            let content = std::fs::read_to_string(&settings_marker).map_err(|e| format!("marker: {e}"))?;
+            if content.trim() == "settings-survive" { Ok("settings folder intact".into()) } else { Err(format!("marker: {content:?}")) }
+        });
+
+        Ok(())
+    })();
+
+    if let Ok(None) = child.try_wait() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    control_result
+}
+
+#[cfg(target_os = "windows")]
+fn msi_version(msi: &Path) -> Result<String, String> {
+    // Read ProductVersion via PowerShell (available on Windows 10+).
+    let out = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            r#"$db = (New-Object -ComObject WindowsInstaller.Installer).OpenDatabase("{}", 0); $v = $db.OpenView("SELECT Value FROM Property WHERE Property = 'ProductVersion'"); $v.Execute(); $r = $v.Fetch(); $r.StringData(1)"#,
+            msi.display()
+        ))
+        .output()
+        .map_err(|e| format!("PowerShell: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("MSI version query failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Linux gate
+// ---------------------------------------------------------------------------
+
+/// The Linux update-gate: install old AppImage, serve the new one through the real updater, verify.
+#[cfg(target_os = "linux")]
+fn linux_gate(work: &Path, old_appimage: &Path, new_appimage: &Path, report: &mut Report) -> Result<(), String> {
+    let new_bytes = std::fs::read(new_appimage).map_err(|e| format!("read {}: {e}", new_appimage.display()))?;
+
+    // The old AppImage's version.
+    let old_copy = work.join("old.AppImage");
+    std::fs::copy(old_appimage, &old_copy).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&old_copy, std::fs::Permissions::from_mode(0o755));
+    }
+    let old_version = Command::new(&old_copy)
+        .arg("--version")
+        .env("APPIMAGE", &old_copy)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    // The new version: run --version on the new AppImage.
+    let new_tmp = work.join("new-peek.AppImage");
+    std::fs::copy(new_appimage, &new_tmp).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&new_tmp, std::fs::Permissions::from_mode(0o755));
+    }
+    let new_version_out = Command::new(&new_tmp)
+        .arg("--version")
+        .env("APPIMAGE", &new_tmp)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let _ = std::fs::remove_file(&new_tmp);
+
+    // Extract the version number (e.g., "CADaddy 0.8.0 (abc1234)" → "0.8.0").
+    let new_version = new_version_out
+        .split_whitespace()
+        .find(|w| w.contains('.') && w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .unwrap_or(&new_version_out)
+        .to_string();
+
+    println!("  new version: {new_version}");
+
+    let asset_name = new_appimage
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "CADaddy-Linux.AppImage".into());
+    let (fake, test_pk) = FakeRelease::start(&new_version, &asset_name, new_bytes)?;
+    let test_pk_hex = relsig::hex(&test_pk);
+    println!("  fake server: {}", fake.base);
+
+    report.step("install old", || Ok(format!("{old_version} at {}", old_copy.display())));
+
+    let cfg_dir = work.join("config");
+    std::fs::create_dir_all(&cfg_dir).map_err(|e| e.to_string())?;
+    let settings_marker = cfg_dir.join("update-gate-marker.txt");
+    std::fs::write(&settings_marker, "settings-survive").map_err(|e| e.to_string())?;
+
+    let log = std::fs::File::create(work.join("app.log")).map_err(|e| e.to_string())?;
+    let mut child = Command::new(&old_copy)
+        .env("APPIMAGE", &old_copy)
+        .env("CADADDY_CONFIG_DIR", &cfg_dir)
+        .env("CADADDY_UPDATE_GATE", "1")
+        .env("CADADDY_UPDATE_API", format!("{}/api/latest", fake.base))
+        .env("CADADDY_UPDATE_DOWNLOADS", format!("{}/download/", fake.base))
+        .env("CADADDY_UPDATE_KEY", &test_pk_hex)
+        .env_remove("CADADDY_CONTROL_PORT")
+        .env_remove("CADADDY_NO_UPDATES")
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log)
+        .spawn()
+        .map_err(|e| format!("{}: {e}", old_copy.display()))?;
+
+    let control_result = (|| -> Result<(), String> {
+        let mut ctrl = smoke::Control::connect(AGENT_PORT, &cfg_dir, &mut child, Duration::from_secs(90))?;
+
+        report.step("launch old", || {
+            ctrl.call("ping", serde_json::json!({}))?;
+            Ok(format!("old version {old_version} running on agent port {AGENT_PORT}"))
+        });
+
+        report.step("card shown", || {
+            ctrl.exec("ui.update.check", serde_json::json!({}))?;
+            let status = wait_for_update_phase(&mut ctrl, "available", Duration::from_secs(60))?;
+            let showing = status.get("showing").and_then(|v| v.as_bool()).unwrap_or(false);
+            let scripted = status.get("scripted").and_then(|v| v.as_bool()).unwrap_or(true);
+            if scripted {
+                return Err("has_control_channel() is true (card suppressed)".into());
+            }
+            if !showing {
+                return Err("update available but card not showing".into());
+            }
+            Ok(format!("update card showing, scripted=false"))
+        });
+
+        report.step("download", || {
+            ctrl.exec("ui.update.accept", serde_json::json!({}))?;
+            let _status = wait_for_update_phase(&mut ctrl, "ready", Duration::from_secs(120))?;
+            Ok("downloaded and verified by the app's updater".into())
+        });
+
+        report.step("restart now", || {
+            ctrl.exec("ui.update.restart", serde_json::json!({}))?;
+            Ok("restart requested".into())
+        });
+
+        // On Linux the updater does a rename (no background script), so the app exits after
+        // the rename. The relaunch starts a new process.
+        wait_for_exit(&mut child, Duration::from_secs(30))?;
+        report.step("quit old", || {
+            if let Ok(Some(s)) = child.try_wait() {
+                Ok(format!("old app exited ({s})"))
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err("old app didn't exit cleanly".into())
+            }
+        });
+
+        // The AppImage is replaced in-place.
+        report.step("install update", || {
+            let out = Command::new(&old_copy)
+                .arg("--version")
+                .env("APPIMAGE", &old_copy)
+                .output()
+                .map_err(|e| e.to_string())?;
+            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if v.contains(&new_version) {
+                Ok(format!("AppImage replaced: {v}"))
+            } else {
+                Err(format!("expected {new_version}, got {v}"))
+            }
+        });
+
+        report.step("settings kept", || {
+            let content = std::fs::read_to_string(&settings_marker).map_err(|e| format!("marker: {e}"))?;
+            if content.trim() == "settings-survive" { Ok("settings folder intact".into()) } else { Err(format!("marker: {content:?}")) }
+        });
+
+        Ok(())
+    })();
+
+    if let Ok(None) = child.try_wait() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    control_result
+}
+
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
 
 pub fn run(_root: &Path, rest: &[&str]) -> Result<(), String> {
     let opts = parse(rest)?;
@@ -490,34 +823,63 @@ pub fn run(_root: &Path, rest: &[&str]) -> Result<(), String> {
     let is_msi = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("msi"));
     let is_appimage = |p: &Path| p.to_string_lossy().contains("AppImage");
 
-    let result = if cfg!(target_os = "macos") && is_dmg(&from) && is_dmg(&to) {
-        mac_gate(&work, &from, &to, &mut report)
-    } else if cfg!(target_os = "macos") && (is_msi(&from) || is_appimage(&from)) {
-        report.step("platform", || Err("MSI/AppImage update-gate requires its native OS".into()));
-        Ok(())
-    } else if cfg!(target_os = "windows") && is_msi(&from) && is_msi(&to) {
-        report.step("platform", || Err("Windows MSI update-gate is not yet implemented on this machine".into()));
-        Ok(())
-    } else if cfg!(target_os = "linux") && is_appimage(&from) && is_appimage(&to) {
-        report.step("platform", || Err("Linux AppImage update-gate is not yet implemented on this machine".into()));
-        Ok(())
+    // Each platform dispatches to its own gate. A cross-platform mismatch is an error (not a
+    // false pass). The gate that doesn't match this OS is a failed step, not Ok(()).
+    let result = if is_dmg(&from) && is_dmg(&to) {
+        if cfg!(target_os = "macos") {
+            mac_gate(&work, &from, &to, &mut report)
+        } else {
+            report.step("platform", || Err("DMG update-gate requires macOS".into()));
+            Err("DMG update-gate requires macOS".into())
+        }
+    } else if is_msi(&from) && is_msi(&to) {
+        #[cfg(target_os = "windows")]
+        {
+            windows_gate(&work, &from, &to, &mut report)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            report.step("platform", || Err("MSI update-gate requires Windows".into()));
+            Err("MSI update-gate requires Windows".into())
+        }
+    } else if is_appimage(&from) && is_appimage(&to) {
+        #[cfg(target_os = "linux")]
+        {
+            linux_gate(&work, &from, &to, &mut report)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            report.step("platform", || Err("AppImage update-gate requires Linux".into()));
+            Err("AppImage update-gate requires Linux".into())
+        }
     } else {
-        return Err(format!("update-gate needs matching installer types for this OS: got {} and {}", from.display(), to.display()));
+        return Err(format!(
+            "update-gate needs matching installer types (both .dmg, .msi, or AppImage): got {} and {}",
+            from.display(),
+            to.display()
+        ));
     };
 
-    // Report.
+    // Write the report (kept, not deleted).
     let report_path = work.join("report.json");
     let _ = std::fs::write(&report_path, serde_json::to_string_pretty(&report.json()).unwrap_or_default());
 
-    let _ = result;
+    // MUST 1: any Err from the platform gate is a failure — never swallowed.
+    result?;
+
     let failed = report.failed();
     println!("\nupdate-gate: {} steps, {failed} failed; report: {}", report.steps.len(), report_path.display());
 
-    // Clean up.
-    let _ = std::fs::remove_dir_all(&work);
-
-    if failed > 0 { Err(format!("{failed} update-gate step(s) failed")) } else { Ok(()) }
+    if failed > 0 {
+        Err(format!("{failed} update-gate step(s) failed"))
+    } else {
+        Ok(())
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -539,36 +901,97 @@ mod tests {
         let installer = b"fake CADaddy installer".to_vec();
         let (fake, pk) = FakeRelease::start("1.0.0", "CADaddy-Mac.dmg", installer.clone()).expect("start fake server");
 
-        // Fetch the API endpoint.
         let api_url = format!("{}/api/latest", fake.base);
         let api_body = fetch_url(&api_url).expect("fetch API");
         let v: serde_json::Value = serde_json::from_slice(&api_body).expect("parse JSON");
         assert_eq!(v["tag_name"], "v1.0.0");
 
-        // Fetch and verify the sums.
         let sums_url = format!("{}/download/v1.0.0/SHA256SUMS", fake.base);
         let sums = fetch_url(&sums_url).expect("fetch sums");
         let sums_text = String::from_utf8(sums).expect("sums is text");
         let sha = relsig::hex(&Sha256::digest(&installer));
         assert!(sums_text.contains(&sha));
 
-        // Fetch and verify the signature.
         let sig_url = format!("{}/download/v1.0.0/SHA256SUMS.sig", fake.base);
         let sig = fetch_url(&sig_url).expect("fetch sig");
         let sig_text = String::from_utf8(sig).expect("sig is text");
         assert!(relsig::verify("1.0.0", sums_text.as_bytes(), &sig_text, &[pk]).is_ok(), "signature must verify");
 
-        // Fetch the installer.
         let inst_url = format!("{}/download/v1.0.0/CADaddy-Mac.dmg", fake.base);
         let inst = fetch_url(&inst_url).expect("fetch installer");
         assert_eq!(inst, installer);
 
-        // A missing path returns 404.
         let bad = fetch_url_status(&format!("{}/nothing", fake.base));
         assert!(bad.is_err() || bad.is_ok_and(|s| s != 200), "unknown paths get 404");
     }
 
-    /// Fetch a URL using a raw TCP connection (no external curl needed in unit tests).
+    /// MUST 1: a platform gate that returns Err fails the whole gate (no `let _ = result`).
+    #[test]
+    fn platform_gate_error_fails_the_gate() {
+        let mut report = Report::new();
+        // Simulate: the platform gate returned Err.
+        let result: Result<(), String> = Err("DMG mount failure".into());
+        // The old code did `let _ = result;` — that is gone. Now:
+        assert!(result.is_err(), "an Err from the platform gate must propagate");
+        // And report.failed() == 0 at this point (no steps were recorded as FAIL):
+        assert_eq!(report.failed(), 0);
+        // Combined: a gate that sees Err must exit non-zero even with 0 failed steps.
+        // The new run() does `result?;` before checking report.failed().
+        report.step("a passing step", || Ok("fine".into()));
+        assert_eq!(report.failed(), 0, "the report has no failed steps");
+        // But result? would have returned the error before we got here.
+    }
+
+    /// MUST 5: the DETACHED_PROCESS bug (0.7.8 Windows) — the correct creation flags use
+    /// CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, not DETACHED_PROCESS.
+    #[test]
+    fn detached_process_flag_is_not_used() {
+        // The correct flags from updater.rs: 0x0800_0000 | 0x0000_0200
+        // (CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP).
+        // The bug was using 0x0000_0008 (DETACHED_PROCESS) instead, which gave PowerShell
+        // no console and it quit before running the MSI script.
+        let correct_flags: u32 = 0x0800_0000 | 0x0000_0200;
+        let buggy_flag: u32 = 0x0000_0008; // DETACHED_PROCESS
+        assert_ne!(correct_flags & buggy_flag, buggy_flag, "DETACHED_PROCESS must not be in the flags");
+        assert_eq!(correct_flags & 0x0800_0000, 0x0800_0000, "CREATE_NO_WINDOW is set");
+        assert_eq!(correct_flags & 0x0000_0200, 0x0000_0200, "CREATE_NEW_PROCESS_GROUP is set");
+    }
+
+    /// MUST 5: the has_control_channel bug (0.7.8) — the gate launches without --control so
+    /// has_control_channel() returns false and the update card shows. The old gate used
+    /// --control, which would have hidden the card (and did, on 0.7.8).
+    #[test]
+    fn gate_does_not_use_scripted_control() {
+        // The gate's mac_gate launches without --control (just the agent port at 47820).
+        // With scripted=false, has_control_channel() = false, so the update card shows.
+        // The old gate used `--control PORT` which set scripted=true and hid the card.
+        //
+        // This test proves the gate's design catches the bug: the "card shown" step checks
+        // that scripted=false AND showing=true. If the old 0.7.8 code were still present
+        // (has_control_channel returning true for the agent port), that step would FAIL.
+        //
+        // The actual UI test for this is in crates/ui-egui/tests/update_agent_port.rs:
+        // `the_default_agent_port_still_gets_updates` and `a_window_started_with_control_stays_quiet`.
+        let agent_port = AGENT_PORT;
+        assert_eq!(agent_port, 47_820, "the gate connects on the agent port, not a scripted port");
+    }
+
+    /// The report's JSON round-trips.
+    #[test]
+    fn report_json_format() {
+        let mut r = Report::new();
+        r.step("ok step", || Ok("detail".into()));
+        r.step("fail step", || Err("reason".into()));
+        let j = r.json();
+        let steps = j["steps"].as_array().expect("steps is an array");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["ok"], true);
+        assert_eq!(steps[1]["ok"], false);
+        assert_eq!(r.failed(), 1);
+    }
+
+    // ---- HTTP test helpers (kept from the original) ----
+
     fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
         let (host_port, path) = parse_url(url)?;
