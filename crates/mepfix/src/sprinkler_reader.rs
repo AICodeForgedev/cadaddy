@@ -675,7 +675,7 @@ pub fn read_fixture_sprinklers_with_schedule(seed: u64, fp_sprig_in: f64, fp_sid
     let set = crate::generate_with_fp_schedule(seed, fp_sprig_in, fp_sidewall_below_in)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = crate::sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     let res = read_sprinklers(&dxf, &map, &ceilings);
     Ok((set.truth, res))
 }
