@@ -722,7 +722,7 @@ pub fn run_classify(
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
 ) -> StageRecord {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let mut classified = 0usize;
     let total = project.sheets.len();
 
@@ -858,7 +858,7 @@ pub fn run_classify_prints(
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
 ) -> StageRecord {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let total = project.sheets.len();
     let mut out: Vec<SheetEntry> = Vec::with_capacity(total);
     let mut classified = 0usize;
@@ -1008,7 +1008,7 @@ pub fn run_stages(
             break;
         }
 
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         let stage_name = stage.name();
         let disciplines = stage.disciplines();
 

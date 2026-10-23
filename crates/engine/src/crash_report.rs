@@ -96,7 +96,7 @@ pub fn write(info: &CrashInfo<'_>) -> Option<PathBuf> {
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let name = format!("crash-{now}-{n}.txt");
     let path = dir.join(&name);

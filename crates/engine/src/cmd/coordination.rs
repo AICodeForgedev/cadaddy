@@ -423,7 +423,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 fn iso_date() -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let days = now / 86400;
     let secs = now % 86400;
     let (mut y, mut m, mut day) = (1970u64, 1u64, 1u64);

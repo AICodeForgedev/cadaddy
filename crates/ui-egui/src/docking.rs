@@ -764,3 +764,26 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }
+
+#[cfg(test)]
+mod height_tests {
+    use super::*;
+
+    /// UI review 0.7.7b #3: Properties, the palette used most, keeps most of the right-hand
+    /// column at every window height; Layers keeps its icon row and list; External References
+    /// below them takes a bounded slice, not half.
+    #[test]
+    fn properties_keeps_most_of_the_column_and_layers_its_minimum() {
+        for stack in [260.0_f32, 300.0, 400.0, 480.0, 640.0, 900.0, 1400.0] {
+            let w = properties_weight(stack);
+            let properties = stack * w / (w + LAYERS_HEIGHT);
+            let layers = stack - properties;
+            assert!(layers >= LAYERS_MIN - 0.5, "{stack}: Layers {layers}");
+            assert!(properties >= layers - 0.5, "{stack}: Properties {properties} vs Layers {layers}");
+        }
+        for column in [300.0_f32, 520.0, 800.0, 1400.0] {
+            let below = below_properties(column);
+            assert!((80.0..=240.0).contains(&below) && below <= column * 0.3, "{column}: {below}");
+        }
+    }
+}
