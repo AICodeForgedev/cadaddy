@@ -35,7 +35,7 @@
 	Unload	განტვირთვა
 	Unloaded	განტვირთულია
 	Unreferenced	მიმართვის გარეშე
-	Unresolved	დაუდგენელი
+	Unresolved	გადაუჭრელი
 	  Cancel  	  გაუქმება  
 	  OK  	  OK  
 	 or [	 ან [
@@ -238,7 +238,7 @@
 	Dimension	ზომა
 	Dimension Objects Only	მხოლოდ ზომის ობიექტები
 	Dimension Space	ზომების დაშორება
-	Dimension Style Override	ზომის სტილის გადაფარვა
+	Dimension Style Override	ზომის სტილის ლოკალური ცვლილება
 	Dimension Style...	ზომის სტილი...
 	Dimension Text Edit	ზომის ტექსტის რედაქტირება
 	Dimension style	ზომის სტილი
@@ -413,7 +413,7 @@
 	Hide Objects	ობიექტების დამალვა
 	Hide Palettes	პალიტრების დამალვა
 	History	ისტორია
-	Home	საწყისი პოზიცია
+	Home	საწყისი ხედი
 	Horizontal	ჰორიზონტალური
 	HorizontalDistance	ჰორიზონტალური მანძილი
 	How to apply:	გამოყენების წესი:
@@ -611,7 +611,7 @@
 	Clear Recent Files	ბოლოს გახსნილი ფაილების სიის გასუფთავება
 	Operator:	ოპერატორი:
 	Orbit	ორბიტა
-	Ordinate	კოორდინატული
+	Ordinate	ორდინატა
 	Ortho (F8)	ორთო (F8)
 	Ortho Mode	ორთო რეჟიმი
 	Ortho Mode (F8)	ორთო რეჟიმი (F8)
@@ -668,7 +668,7 @@
 	Keep an editable copy of this table in the drawing	ამ ცხრილის რედაქტირებადი ასლის ნახაზში შენახვა
 	Layout {name}: {table}	განლაგება {name}: {table}
 	Grayscale	ნაცრისფერი ტონები
-	Screening	ფერის ინტენსივობა
+	Screening	ტონირება
 	Use object linetype	ობიექტის ხაზის ტიპის გამოყენება
 	Use object lineweight	ობიექტის ხაზის სისქის გამოყენება
 	Remove	წაშლა
