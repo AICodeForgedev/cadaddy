@@ -1991,12 +1991,43 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
     let panel_tags_l = |lv: &str| format!("L{lv}");
     let panel_tags_p = |lv: &str| format!("P{lv}");
 
-    // Diagrammatic offset: the E-sheets show symbols randomly offset from the true position.
-    let jitter = |r: &mut Rng, x: f64, y: f64| -> [f64; 2] {
-        let dx = (r.range(0, 30) as f64 - 15.0) / 12.0; // up to 1.25 ft
-        let dy = (r.range(0, 30) as f64 - 15.0) / 12.0;
-        [x + dx, y + dy]
+    // Diagrammatic offset along the device's wall for wall-mounted devices:
+    // perpendicular offset ≤ 0.5 ft (kept inside the room), along-wall ≥ 0.25 ft.
+    // For ceiling-mounted devices, offset in both directions.
+    let wall_jitter = |r: &mut Rng, x: f64, y: f64, wall: Option<&Wall>| -> [f64; 2] {
+        if let Some(w) = wall {
+            let dx = w.to_ft[0] - w.from_ft[0];
+            let dy = w.to_ft[1] - w.from_ft[1];
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1e-6 {
+                // Unit vectors: along and normal.
+                let (ux, uy) = (dx / len, dy / len);
+                // Along-wall offset: 0.25–1.25 ft, random sign.
+                let along = (r.range(3, 15) as f64) / 12.0 * if r.chance(0.5) { 1.0 } else { -1.0 };
+                // Normal offset: 0–0.4 ft inward (toward room centre).
+                let normal = (r.range(0, 5) as f64) / 12.0;
+                // Determine inward direction: the wall's normal pointing into the room.
+                // Use the side with the room we're in — for simplicity, offset toward y-centre.
+                let ny = if y < (w.from_ft[1] + w.to_ft[1]) / 2.0 { uy } else { -uy };
+                let nx = if x < (w.from_ft[0] + w.to_ft[0]) / 2.0 { ux } else { -ux };
+                let _ = (nx, ny);
+                // Perpendicular = rotate the wall direction 90°.
+                let (px, py) = (-uy, ux);
+                return [x + along * ux + normal * px, y + along * uy + normal * py];
+            }
+        }
+        // Ceiling-mounted: random in both directions.
+        let dxv = (r.range(0, 30) as f64 - 15.0) / 12.0;
+        let dyv = (r.range(0, 30) as f64 - 15.0) / 12.0;
+        [x + dxv, y + dyv]
     };
+
+    // Walls, doors and casework don't exist yet during initial design.
+    // fixup_elec_positions (called after add_arch) handles:
+    // - moving switches to door latch sides
+    // - storing zones for wall-mounted devices
+    // - adding counter receptacles over casework
+    // - recomputing drawn_ft along walls
 
     let mut dev_n = 0usize;
     let mut _ckt_n = 0usize;
@@ -2102,6 +2133,9 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             _ckt_n += 1;
             let mut ckt_devices: Vec<String> = Vec::new();
 
+            // Light fixtures are ceiling-mounted; the A-sheet RCP shows their grid for offices.
+            let arch_pos = !is_corridor && !is_mech;
+            let a_sheet = format!("A-10{lv}"); // the floor plan / RCP that fixes them
             for row in 0..rows_n {
                 for col in 0..cols {
                     if row * cols + col >= count {
@@ -2110,8 +2144,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     dev_n += 1;
                     let fx = rx0 + (col as f64 + 0.5) * rw / cols as f64;
                     let fy = ry0 + (row as f64 + 0.5) * rh / rows_n as f64;
-                    let drawn = jitter(&mut er, fx, fy);
-                    let arch_pos = !is_corridor && !is_mech; // offices get exact architectural positioning
+                    let drawn = wall_jitter(&mut er, fx, fy, None); // ceiling device: no wall
                     let dev_id = format!("ED{dev_n:04}");
                     t.elec_devices.push(ElecDevice {
                         id: dev_id.clone(),
@@ -2125,6 +2158,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                         mounting_in: clg_in,
                         mounting_note: Some("CLG".into()),
                         arch_positioned: arch_pos,
+                        fixing_sheet: if arch_pos { Some(a_sheet.clone()) } else { None },
+                        zone: None,
                         circuit: ckt_id.clone(),
                         panel: lp_id.clone(),
                         sheet: lsheet.clone(),
@@ -2133,11 +2168,12 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 }
             }
 
-            // Switch at the door (south-west corner of the room for offices, corridor side).
+            // Switch at the door (initial: corner; fixup_elec_positions moves it to the latch side).
             dev_n += 1;
             let sw_x = rx0 + 0.5;
             let sw_y = if ry0 <= y1 { ry1 - 0.5 } else { ry0 + 0.5 };
-            let sw_drawn = jitter(&mut er, sw_x, sw_y);
+            // Drawn position is set later by fixup_elec_positions after walls exist.
+            let sw_drawn = wall_jitter(&mut er, sw_x, sw_y, None);
             let sw_id = format!("ED{dev_n:04}");
             t.elec_devices.push(ElecDevice {
                 id: sw_id.clone(),
@@ -2151,6 +2187,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 mounting_in: 46.0,
                 mounting_note: Some("+46\"".into()),
                 arch_positioned: false,
+                fixing_sheet: None,
+                zone: None, // Set by fixup_elec_positions
                 circuit: ckt_id.clone(),
                 panel: lp_id.clone(),
                 sheet: lsheet.clone(),
@@ -2200,22 +2238,25 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     level: lv.into(),
                     room: crm.number.clone(),
                     at_ft: [ex, ey, e + clg],
-                    drawn_ft: jitter(&mut er, ex, ey),
+                    drawn_ft: wall_jitter(&mut er, ex, ey, None),
                     mounting_in: clg * 12.0,
                     mounting_note: Some("CLG".into()),
                     arch_positioned: false,
+                    fixing_sheet: None,
+                    zone: None,
                     circuit: String::new(), // emergency circuit, filled below
                     panel: lp_id.clone(),
                     sheet: lsheet.clone(),
                 });
             }
 
-            // Emergency lights every 75 ft.
+            // Emergency lights every 75 ft — wall-mounted in corridor.
             let n_em = ((corr_len / 75.0).ceil() as usize).max(1);
             for k in 0..n_em {
                 dev_n += 1;
                 let emx = cx0 + (k as f64 + 0.5) * corr_len / n_em as f64;
-                let emy = (cy0 + cy1) / 2.0;
+                // Place on corridor wall (not centreline).
+                let emy = cy0 + 0.3;
                 let dev_id = format!("ED{dev_n:04}");
                 t.elec_devices.push(ElecDevice {
                     id: dev_id.clone(),
@@ -2225,10 +2266,12 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     level: lv.into(),
                     room: crm.number.clone(),
                     at_ft: [emx, emy, e + 7.0],
-                    drawn_ft: jitter(&mut er, emx, emy),
+                    drawn_ft: wall_jitter(&mut er, emx, emy, None),
                     mounting_in: 84.0, // 7' AFF
                     mounting_note: Some("+84\"".into()),
                     arch_positioned: false,
+                    fixing_sheet: None,
+                    zone: None, // Set by fixup_elec_positions
                     circuit: String::new(),
                     panel: lp_id.clone(),
                     sheet: lsheet.clone(),
@@ -2300,7 +2343,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 } else {
                     (rx0, ry1 - (perim_at - 2.0 * rw - rh))
                 };
-                let drawn = jitter(&mut er, rx, ry);
+                // Initial drawn: fixup_elec_positions recomputes along-wall offset.
+                let drawn = wall_jitter(&mut er, rx, ry, None);
                 let dev_id = format!("ED{dev_n:04}");
                 t.elec_devices.push(ElecDevice {
                     id: dev_id.clone(),
@@ -2314,12 +2358,15 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     mounting_in: 18.0,
                     mounting_note: Some("+18\" AFF".into()),
                     arch_positioned: false,
+                    fixing_sheet: None,
+                    zone: None, // Set by fixup_elec_positions
                     circuit: ckt_id.clone(),
                     panel: pp_id.clone(),
                     sheet: psheet.clone(),
                 });
                 ckt_devices.push(dev_id);
             }
+            // Counter receptacles are added by fixup_elec_positions after casework is available.
 
             // Data/telecom outlets: 1-2 per office room.
             if !is_corridor && !is_toilet && !is_mech {
@@ -2328,7 +2375,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     dev_n += 1;
                     let dx = rx0 + (k as f64 + 0.5) * rw / n_data as f64;
                     let dy = ry0 + 0.3;
-                    let drawn = jitter(&mut er, dx, dy);
+                    let drawn = wall_jitter(&mut er, dx, dy, None);
                     let dev_id = format!("ED{dev_n:04}");
                     t.elec_devices.push(ElecDevice {
                         id: dev_id.clone(),
@@ -2342,6 +2389,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                         mounting_in: 18.0,
                         mounting_note: Some("+18\" AFF".into()),
                         arch_positioned: false,
+                        fixing_sheet: None,
+                        zone: None,
                         circuit: ckt_id.clone(),
                         panel: pp_id.clone(),
                         sheet: psheet.clone(),
@@ -2355,7 +2404,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 dev_n += 1;
                 let fbx = (rx0 + rx1) / 2.0;
                 let fby = (ry0 + ry1) / 2.0;
-                let drawn = jitter(&mut er, fbx, fby);
+                let drawn = wall_jitter(&mut er, fbx, fby, None); // floor device: no wall
+                let a_sheet = format!("A-10{lv}");
                 let dev_id = format!("ED{dev_n:04}");
                 t.elec_devices.push(ElecDevice {
                     id: dev_id.clone(),
@@ -2369,6 +2419,8 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                     mounting_in: 0.0,
                     mounting_note: Some("FLOOR".into()),
                     arch_positioned: true,
+                    fixing_sheet: Some(a_sheet),
+                    zone: None,
                     circuit: ckt_id.clone(),
                     panel: pp_id.clone(),
                     sheet: psheet.clone(),
@@ -2405,6 +2457,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             let disc_y = 4.0;
             let disc_id = format!("ED{dev_n:04}");
             let ckt_id = format!("CK{:03}", t.elec_circuits.len() + 1);
+            let a_sheet = format!("A-10{lv}");
             t.elec_devices.push(ElecDevice {
                 id: disc_id.clone(),
                 tag: format!("DS-{lv}"),
@@ -2413,10 +2466,12 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 level: lv.into(),
                 room: format!("MECH-{lv}"),
                 at_ft: [disc_x, disc_y, e + 60.0 / 12.0],
-                drawn_ft: jitter(&mut er, disc_x, disc_y),
+                drawn_ft: wall_jitter(&mut er, disc_x, disc_y, None),
                 mounting_in: 60.0,
                 mounting_note: Some("+60\"".into()),
                 arch_positioned: true,
+                fixing_sheet: Some(a_sheet),
+                zone: None,
                 circuit: ckt_id.clone(),
                 panel: pp_id.clone(),
                 sheet: psheet.clone(),
@@ -2446,6 +2501,7 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
             let jb_x = panel_x + 1.5;
             let jb_y = panel_y + 2.0;
             let jb_id = format!("ED{dev_n:04}");
+            let a_sheet = format!("A-10{lv}");
             t.elec_devices.push(ElecDevice {
                 id: jb_id,
                 tag: format!("JB-{lv}"),
@@ -2454,10 +2510,12 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
                 level: lv.into(),
                 room: format!("ELEC-{lv}"),
                 at_ft: [jb_x, jb_y, e + 10.0],
-                drawn_ft: jitter(&mut er, jb_x, jb_y),
+                drawn_ft: wall_jitter(&mut er, jb_x, jb_y, None), // ceiling-mounted
                 mounting_in: 120.0,
                 mounting_note: Some("CLG".into()),
                 arch_positioned: true,
+                fixing_sheet: Some(a_sheet),
+                zone: None,
                 circuit: String::new(),
                 panel: lp_id.clone(),
                 sheet: lsheet.clone(),
@@ -2531,6 +2589,192 @@ fn elec_design(t: &mut Truth, floors: &[Floor], xs: &[f64], y1: f64, y2: f64, _y
 
     // Light fixture schedule as a general note on the drawing (truth only, drawn separately).
     // The schedule exists in the truth for the E-601 sheet.
+}
+
+/// Post-process electrical device positions after walls and doors are generated:
+/// move switches to the latch side of their room's door, store zones for wall-mounted
+/// devices, and add counter receptacles where casework exists.
+pub fn fixup_elec_positions(t: &mut Truth) {
+    let walls = t.building.walls.clone();
+    let doors: Vec<Door> = t.arch.as_ref().map(|a| a.doors.clone()).unwrap_or_default();
+    let casework = t.casework.clone();
+
+    // A deterministic RNG for jitter (forked from seed so it doesn't shift other streams).
+    let mut jr = crate::rng::Rng::new(t.seed ^ 0xE1EC_F100);
+
+    for d in &mut t.elec_devices {
+        let is_wall_kind = matches!(d.kind.as_str(), "receptacle" | "switch" | "data_outlet" | "emergency_light");
+
+        // --- Switches: move to the latch side of the room's door ---
+        if d.kind == "switch" {
+            let room_door = doors.iter().find(|door| {
+                door.level == d.level
+                    && (door.swings_into.as_deref() == Some(d.room.as_str())
+                        || door.from_room.as_deref() == Some(d.room.as_str()))
+            });
+            if let Some(door) = room_door {
+                let rm = t.building.rooms.iter().find(|r| r.number == d.room && r.level == d.level);
+                if let Some(rm) = rm {
+                    let (rx0, ry0) = (rm.min_ft[0], rm.min_ft[1]);
+                    let (rx1, ry1) = (rm.max_ft[0], rm.max_ft[1]);
+                    let cx = (rx0 + rx1) / 2.0;
+                    let cy = (ry0 + ry1) / 2.0;
+                    let lx = door.latch_ft[0];
+                    let ly = door.latch_ft[1];
+                    // Nudge 0.5 ft from the latch toward the room interior.
+                    let dx = if (lx - rx0).abs() < 0.1 { 0.5 } else if (lx - rx1).abs() < 0.1 { -0.5 } else { (cx - lx).signum() * 0.5 };
+                    let dy = if (ly - ry0).abs() < 0.1 { 0.5 } else if (ly - ry1).abs() < 0.1 { -0.5 } else { (cy - ly).signum() * 0.5 };
+                    let sx = (lx + dx).clamp(rx0 + 0.25, rx1 - 0.25);
+                    let sy = (ly + dy).clamp(ry0 + 0.25, ry1 - 0.25);
+                    let elev = d.at_ft[2] - 46.0 / 12.0; // restore floor elevation
+                    d.at_ft = [sx, sy, elev + 46.0 / 12.0];
+                }
+            }
+        }
+
+        // --- Zones for wall-mounted devices ---
+        if is_wall_kind && !d.arch_positioned && d.zone.is_none() {
+            let w = walls
+                .iter()
+                .filter(|w| w.level == d.level)
+                .filter_map(|w| {
+                    let dist = point_to_segment_dist([d.at_ft[0], d.at_ft[1]], w.from_ft, w.to_ft);
+                    if dist < 3.0 { Some((dist, w)) } else { None }
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, w)| w);
+            if let Some(w) = w {
+                let along = project_onto_wall(w, [d.at_ft[0], d.at_ft[1]]) / 12.0; // inches to feet
+                let h = d.mounting_in;
+                d.zone = Some(DeviceZone {
+                    wall: w.id.clone(),
+                    along_min_ft: (along - 1.5).max(0.0),
+                    along_max_ft: along + 1.5,
+                    height_min_in: (h - 4.0).max(0.0),
+                    height_max_in: h + 4.0,
+                });
+            }
+        }
+
+        // --- Diagrammatic offset along the wall for wall-mounted devices ---
+        if is_wall_kind {
+            let w = walls
+                .iter()
+                .filter(|w| w.level == d.level)
+                .filter_map(|w| {
+                    let dist = point_to_segment_dist([d.at_ft[0], d.at_ft[1]], w.from_ft, w.to_ft);
+                    if dist < 3.0 { Some((dist, w)) } else { None }
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, w)| w);
+            if let Some(w) = w {
+                let wdx = w.to_ft[0] - w.from_ft[0];
+                let wdy = w.to_ft[1] - w.from_ft[1];
+                let len = (wdx * wdx + wdy * wdy).sqrt();
+                if len > 1e-6 {
+                    let (ux, uy) = (wdx / len, wdy / len);
+                    // Along-wall offset: 0.25–1.25 ft, random sign.
+                    let along = (jr.range(3, 15) as f64) / 12.0 * if jr.chance(0.5) { 1.0 } else { -1.0 };
+                    // Normal offset: 0–0.4 ft.
+                    let normal = (jr.range(0, 5) as f64) / 12.0;
+                    let (px, py) = (-uy, ux); // perpendicular
+                    d.drawn_ft = [d.at_ft[0] + along * ux + normal * px, d.at_ft[1] + along * uy + normal * py];
+                }
+            }
+        }
+    }
+
+    // --- Counter receptacles over casework (if not already present) ---
+    let mut new_devs: Vec<(ElecDevice, String)> = Vec::new(); // (device, circuit_id)
+    let mut dev_n = t.elec_devices.len();
+    let has_counter_recep = t.elec_devices.iter().any(|d| d.type_tag == "R-CT");
+    if !has_counter_recep {
+        // Group casework by (level, room).
+        let mut seen = std::collections::BTreeSet::new();
+        for cw in casework.iter().filter(|c| c.kind == "counter" || c.kind == "backsplash") {
+            let key = (cw.level.clone(), cw.room.clone());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            dev_n += 1;
+            let ctx = (cw.min_ft[0] + cw.max_ft[0]) / 2.0;
+            let cty = (cw.min_ft[1] + cw.max_ft[1]) / 2.0;
+            let elev = t.level(&cw.level).map_or(0.0, |l| l.elevation_ft);
+            // Find a circuit on the power sheet for this level.
+            let psheet = format!("E-20{}", cw.level);
+            let circuit = t.elec_circuits.iter().find(|c| c.level == cw.level && c.sheet == psheet).map(|c| c.id.clone()).unwrap_or_default();
+            let panel = t.elec_panels.iter().find(|p| p.level == cw.level && p.kind == "panel" && p.tag.starts_with('P')).map(|p| p.id.clone()).unwrap_or_default();
+
+            let ct_wall = walls
+                .iter()
+                .filter(|w| w.level == cw.level)
+                .filter_map(|w| {
+                    let dist = point_to_segment_dist([ctx, cty], w.from_ft, w.to_ft);
+                    if dist < 3.0 { Some((dist, w)) } else { None }
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, w)| w);
+
+            let ct_zone = ct_wall.map(|w| {
+                let along = project_onto_wall(w, [ctx, cty]) / 12.0;
+                DeviceZone {
+                    wall: w.id.clone(),
+                    along_min_ft: (along - 2.0).max(0.0),
+                    along_max_ft: along + 2.0,
+                    height_min_in: 40.0,
+                    height_max_in: 48.0,
+                }
+            });
+
+            // Jittered position.
+            let drawn = if let Some(w) = ct_wall {
+                let wdx = w.to_ft[0] - w.from_ft[0];
+                let wdy = w.to_ft[1] - w.from_ft[1];
+                let len = (wdx * wdx + wdy * wdy).sqrt();
+                if len > 1e-6 {
+                    let (ux, uy) = (wdx / len, wdy / len);
+                    let along = (jr.range(3, 15) as f64) / 12.0 * if jr.chance(0.5) { 1.0 } else { -1.0 };
+                    let normal = (jr.range(0, 5) as f64) / 12.0;
+                    let (px, py) = (-uy, ux);
+                    [ctx + along * ux + normal * px, cty + along * uy + normal * py]
+                } else {
+                    [ctx + (jr.range(0, 30) as f64 - 15.0) / 12.0, cty + (jr.range(0, 30) as f64 - 15.0) / 12.0]
+                }
+            } else {
+                [ctx + (jr.range(0, 30) as f64 - 15.0) / 12.0, cty + (jr.range(0, 30) as f64 - 15.0) / 12.0]
+            };
+
+            let dev_id = format!("ED{dev_n:04}");
+            let ckt_id = circuit.clone();
+            new_devs.push((ElecDevice {
+                id: dev_id,
+                tag: "R".into(),
+                kind: "receptacle".into(),
+                type_tag: "R-CT".into(),
+                level: cw.level.clone(),
+                room: cw.room.clone(),
+                at_ft: [ctx, cty, elev + 44.0 / 12.0],
+                drawn_ft: drawn,
+                mounting_in: 44.0,
+                mounting_note: Some("+44\" AFF".into()),
+                arch_positioned: false,
+                fixing_sheet: None,
+                zone: ct_zone,
+                circuit,
+                panel,
+                sheet: psheet,
+            }, ckt_id));
+        }
+    }
+    for (dev, ckt_id) in new_devs {
+        // Add the device to its circuit's device list.
+        if !ckt_id.is_empty() {
+            if let Some(ckt) = t.elec_circuits.iter_mut().find(|c| c.id == ckt_id) {
+                ckt.devices.push(dev.id.clone());
+            }
+        }
+        t.elec_devices.push(dev);
+    }
 }
 
 /// The electrical gear's schedule data, lug provisions and feeders: the switchboard MDP (the

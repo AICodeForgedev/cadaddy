@@ -110,6 +110,7 @@ pub fn truth_for(seed: u64) -> Truth {
     add_walls(&mut t, &mut st);
     add_ceilings(&mut t, &mut st);
     add_arch(&mut t, &mut st);
+    design::fixup_elec_positions(&mut t);
     add_envelope(&mut t, &mut st);
     elecspec::design(&mut t);
     t
@@ -189,6 +190,7 @@ pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, 
     add_walls(&mut t, &mut st);
     add_ceilings(&mut t, &mut st);
     add_arch(&mut t, &mut st);
+    design::fixup_elec_positions(&mut t);
     add_envelope(&mut t, &mut st);
     elecspec::design(&mut t);
     let mut kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();

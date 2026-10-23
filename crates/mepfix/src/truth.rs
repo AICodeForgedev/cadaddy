@@ -708,12 +708,32 @@ pub struct ElecDevice {
     /// `true`: the A-sheets (architectural plans with dimensions) fix the exact position.
     /// `false`: the position is a zone / field decision.
     pub arch_positioned: bool,
+    /// The A-sheet that dimensions this device's position (only when `arch_positioned`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixing_sheet: Option<String>,
+    /// For non-`arch_positioned` devices: the zone the device sits in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<DeviceZone>,
     /// The circuit this device is on.
     pub circuit: String,
     /// The panel this device is fed from.
     pub panel: String,
     /// The sheet it is drawn on.
     pub sheet: String,
+}
+
+/// The zone a non-arch-positioned device occupies: which wall segment it is on, the along-wall
+/// range (feet from the wall start), and the height band (inches AFF).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceZone {
+    /// The wall id this device is on.
+    pub wall: String,
+    /// Along-wall range, feet from the wall's `from_ft`.
+    pub along_min_ft: f64,
+    pub along_max_ft: f64,
+    /// Height band above finished floor, inches.
+    pub height_min_in: f64,
+    pub height_max_in: f64,
 }
 
 /// An electrical panel, transformer, switchboard or disconnect.

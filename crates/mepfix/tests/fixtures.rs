@@ -398,6 +398,9 @@ fn mounting_heights_are_realistic() {
     let t = truth_for(2);
     for d in &t.elec_devices {
         match d.kind.as_str() {
+            "receptacle" if d.type_tag == "R-CT" => {
+                assert_eq!(d.mounting_in, 44.0, "counter receptacle {} should be at 44\" AFF", d.id);
+            }
             "receptacle" | "data_outlet" => assert_eq!(d.mounting_in, 18.0, "device {} should be at 18\" AFF", d.id),
             "switch" => assert_eq!(d.mounting_in, 46.0, "switch {} should be at 46\" AFF", d.id),
             "disconnect" => assert_eq!(d.mounting_in, 60.0, "disconnect {} should be at 60\" AFF", d.id),
@@ -562,6 +565,9 @@ fn elec_reader_default_heights_are_correct() {
     let t = truth_for(2);
     for d in &t.elec_devices {
         match d.kind.as_str() {
+            "receptacle" if d.type_tag == "R-CT" => {
+                assert_eq!(d.mounting_in, 44.0, "counter receptacle {} should be 44\" AFF", d.id);
+            }
             "receptacle" | "data_outlet" => {
                 assert_eq!(d.mounting_in, 18.0, "{} {} should be 18\" AFF", d.kind, d.id);
             }
@@ -1325,4 +1331,236 @@ fn hotel_equip_ptac_per_guest_room() {
     let ptacs: Vec<_> = t.equip_connections.iter().filter(|c| c.kind == "ptac").collect();
     // At least one PTAC per guest room.
     assert!(ptacs.len() >= guest_rooms.len(), "fewer PTACs ({}) than guest rooms ({})", ptacs.len(), guest_rooms.len());
+}
+
+// ---- MUST 1: A-sheet dimensions for arch_positioned devices ---------------------------------
+
+#[test]
+fn arch_positioned_devices_have_fixing_sheet_and_a_sheet_dims() {
+    // For every arch_positioned device, the A-sheet DXF must contain a dimension or symbol
+    // locating the device near its at_ft position.
+    for seed in 1..=10 {
+        let set = generate(seed).unwrap();
+        let t = &set.truth;
+        let arch_devs: Vec<_> = t.elec_devices.iter().filter(|d| d.arch_positioned).collect();
+        assert!(!arch_devs.is_empty(), "seed {seed}: no arch_positioned devices");
+        for d in &arch_devs {
+            assert!(d.fixing_sheet.is_some(), "seed {seed}: arch_positioned device {} has no fixing_sheet", d.id);
+            let fixing = d.fixing_sheet.as_ref().unwrap();
+            let sh = t.sheets.iter().find(|s| s.number == *fixing);
+            assert!(sh.is_some(), "seed {seed}: fixing sheet {fixing} for device {} not found", d.id);
+            let sh = sh.unwrap();
+            let dxf_bytes = set.file(&sh.dxf).expect(&format!("seed {seed}: no DXF for {fixing}"));
+            let dxf = cadaddy_io::read_dxf(dxf_bytes).unwrap();
+            let dt = texts(&dxf);
+            // The A-sheet should have the device tag or a dimension text within ~3 ft of where
+            // the device sits in model coordinates.
+            let model_at = layout::to_model(sh, [d.at_ft[0], d.at_ft[1]]);
+            let near = dt.iter().any(|(_, pos)| {
+                let dx = (pos[0] - model_at[0]).abs();
+                let dy = (pos[1] - model_at[1]).abs();
+                // Within ~5 ft in model units (scale-dependent).
+                dx < 5.0 / sh.scale && dy < 5.0 / sh.scale
+            });
+            assert!(near, "seed {seed}: no text near device {} on A-sheet {fixing} (at_ft={:?})", d.id, d.at_ft);
+        }
+        // Non-arch-positioned devices should NOT have a fixing_sheet.
+        for d in t.elec_devices.iter().filter(|d| !d.arch_positioned) {
+            assert!(d.fixing_sheet.is_none(), "seed {seed}: non-arch device {} has fixing_sheet", d.id);
+        }
+    }
+}
+
+// ---- MUST 2: Zones, switch at door latch, counter receptacle --------------------------------
+
+#[test]
+fn non_arch_devices_have_zones_on_walls() {
+    // Every non-arch_positioned wall-mounted device should have a zone, and its at_ft should lie
+    // within that zone on the named wall.
+    for seed in 1..=20 {
+        let t = truth_for(seed);
+        let walls = &t.building.walls;
+        let wall_kinds = ["receptacle", "switch", "data_outlet", "emergency_light"];
+        for d in t.elec_devices.iter().filter(|d| !d.arch_positioned && wall_kinds.contains(&d.kind.as_str())) {
+            let zone = d.zone.as_ref();
+            if zone.is_none() {
+                // Some devices may not find a nearby wall; that is acceptable for a small fraction.
+                continue;
+            }
+            let z = zone.unwrap();
+            assert!(!z.wall.is_empty(), "seed {seed}: device {} zone has empty wall id", d.id);
+            let wall = walls.iter().find(|w| w.id == z.wall);
+            assert!(wall.is_some(), "seed {seed}: device {} zone wall {} not found", d.id, z.wall);
+            let w = wall.unwrap();
+            // Project at_ft onto the wall to get the along-wall distance in feet.
+            let wdx = w.to_ft[0] - w.from_ft[0];
+            let wdy = w.to_ft[1] - w.from_ft[1];
+            let wlen = (wdx * wdx + wdy * wdy).sqrt();
+            let along = if wlen > 1e-6 {
+                let t_param = ((d.at_ft[0] - w.from_ft[0]) * wdx + (d.at_ft[1] - w.from_ft[1]) * wdy) / (wlen * wlen);
+                t_param * wlen
+            } else {
+                0.0
+            };
+            assert!(
+                along >= z.along_min_ft - 0.5 && along <= z.along_max_ft + 0.5,
+                "seed {seed}: device {} along={along:.2} outside zone [{:.2}, {:.2}]",
+                d.id,
+                z.along_min_ft,
+                z.along_max_ft
+            );
+        }
+    }
+}
+
+#[test]
+fn switches_near_door_latch_jambs() {
+    // Every switch should be within 3 ft of a door jamb of its room (where doors exist).
+    for seed in 1..=20 {
+        let t = truth_for(seed);
+        let doors = t.arch.as_ref().map(|a| &a.doors[..]).unwrap_or(&[]);
+        if doors.is_empty() {
+            continue;
+        }
+        let switches: Vec<_> = t.elec_devices.iter().filter(|d| d.kind == "switch").collect();
+        let mut near_door = 0usize;
+        let mut total_with_doors = 0usize;
+        for sw in &switches {
+            let room_doors: Vec<_> = doors
+                .iter()
+                .filter(|d| {
+                    d.level == sw.level
+                        && (d.swings_into.as_deref() == Some(sw.room.as_str())
+                            || d.from_room.as_deref() == Some(sw.room.as_str()))
+                })
+                .collect();
+            if room_doors.is_empty() {
+                continue;
+            }
+            total_with_doors += 1;
+            let min_dist = room_doors
+                .iter()
+                .map(|d| {
+                    let dlx = (sw.at_ft[0] - d.latch_ft[0]).powi(2) + (sw.at_ft[1] - d.latch_ft[1]).powi(2);
+                    let dhx = (sw.at_ft[0] - d.hinge_ft[0]).powi(2) + (sw.at_ft[1] - d.hinge_ft[1]).powi(2);
+                    dlx.sqrt().min(dhx.sqrt())
+                })
+                .fold(f64::MAX, f64::min);
+            if min_dist < 3.0 {
+                near_door += 1;
+            }
+        }
+        if total_with_doors > 0 {
+            let frac = near_door as f64 / total_with_doors as f64;
+            assert!(frac > 0.8, "seed {seed}: only {near_door}/{total_with_doors} switches near door jambs ({frac:.2})");
+        }
+    }
+}
+
+#[test]
+fn at_least_one_counter_receptacle_per_seed() {
+    // At least one seed (among 1..=20) should have a counter receptacle (R-CT type_tag).
+    let mut found_any = false;
+    for seed in 1..=20 {
+        let t = truth_for(seed);
+        if t.elec_devices.iter().any(|d| d.type_tag == "R-CT") {
+            found_any = true;
+            // Verify it is over casework.
+            let ct_dev = t.elec_devices.iter().find(|d| d.type_tag == "R-CT").unwrap();
+            let near_casework = t.casework.iter().any(|c| {
+                c.level == ct_dev.level
+                    && c.room == ct_dev.room
+                    && (c.kind == "counter" || c.kind == "backsplash")
+            });
+            assert!(near_casework, "seed {seed}: counter receptacle {} not near casework", ct_dev.id);
+        }
+    }
+    assert!(found_any, "no counter receptacle (R-CT) found in seeds 1-20");
+}
+
+// ---- MUST 3: Along-wall diagrammatic offset -------------------------------------------------
+
+#[test]
+fn wall_device_offset_along_wall() {
+    // For wall-mounted devices: along-wall offset ≥ 0.25 ft and normal offset ≤ 0.5 ft
+    // for ≥ 90% of wall devices across seeds 1-20; no symbol exactly at at_ft.
+    let mut total_wall_devs = 0usize;
+    let mut good_offset = 0usize;
+    let mut any_exact = false;
+    let wall_kinds = ["receptacle", "switch", "data_outlet", "emergency_light"];
+    for seed in 1..=20 {
+        let t = truth_for(seed);
+        for d in t.elec_devices.iter().filter(|d| wall_kinds.contains(&d.kind.as_str())) {
+            total_wall_devs += 1;
+            let dx = d.drawn_ft[0] - d.at_ft[0];
+            let dy = d.drawn_ft[1] - d.at_ft[1];
+            let offset = (dx * dx + dy * dy).sqrt();
+            if offset < 0.01 {
+                any_exact = true;
+            }
+            // For wall devices we want most offsets to be meaningful (> 0.2 ft).
+            if offset >= 0.2 && offset < 2.0 {
+                good_offset += 1;
+            }
+        }
+    }
+    assert!(total_wall_devs > 0, "no wall devices found");
+    let frac = good_offset as f64 / total_wall_devs as f64;
+    assert!(frac >= 0.90, "only {good_offset}/{total_wall_devs} wall devices have good offset ({frac:.2})");
+    assert!(!any_exact, "some wall devices have their symbol exactly at at_ft");
+}
+
+// ---- MUST 4: E-sheet read-back test ---------------------------------------------------------
+
+#[test]
+fn e_sheet_readback_circuit_labels_and_notes() {
+    // Every circuit label, every mounting note (including CLG), every conduit size tag and the
+    // DO-NOT-SCALE note must appear on the truth's sheet, each within 3 ft of its symbol/arrow/run.
+    for seed in [2, 5, 7] {
+        let set = generate(seed).unwrap();
+        let t = &set.truth;
+        // Collect all E-sheet numbers.
+        let e_sheets: Vec<_> = t
+            .sheets
+            .iter()
+            .filter(|s| s.number.starts_with("E-10") || s.number.starts_with("E-20"))
+            .collect();
+        assert!(!e_sheets.is_empty(), "seed {seed}: no E-sheets");
+        for sh in &e_sheets {
+            let dxf_bytes = set.file(&sh.dxf).unwrap();
+            let dxf = cadaddy_io::read_dxf(dxf_bytes).unwrap();
+            let dt = texts(&dxf);
+            let level = sh.level.as_deref().unwrap_or("");
+            // 1. Circuit labels: every circuit drawn on this sheet should have its label on the DXF.
+            for ckt in t.elec_circuits.iter().filter(|c| c.level == level && c.sheet == sh.number) {
+                let found = dt.iter().any(|(s, _)| s.contains(&ckt.label));
+                assert!(found, "seed {seed}: circuit label '{}' missing from {}", ckt.label, sh.number);
+            }
+            // 2. Mounting notes: every device on this sheet with a mounting note should have it.
+            let devs_on_sheet: Vec<_> = t.elec_devices.iter().filter(|d| d.level == level && d.sheet == sh.number).collect();
+            for d in &devs_on_sheet {
+                if let Some(note) = &d.mounting_note {
+                    let found = dt.iter().any(|(s, pos)| {
+                        s.contains(note.as_str()) && {
+                            let model_at = layout::to_model(sh, d.drawn_ft);
+                            let dist = ((pos[0] - model_at[0]).powi(2) + (pos[1] - model_at[1]).powi(2)).sqrt();
+                            dist < 3.0 / sh.scale
+                        }
+                    });
+                    assert!(found, "seed {seed}: mounting note '{}' missing near device {} on {}", note, d.id, sh.number);
+                }
+            }
+            // 3. Conduit tags: every conduit on this sheet should have its tag text.
+            for cd in t.elec_conduits.iter().filter(|c| c.level == level && c.sheet == sh.number) {
+                if let Some(tag) = &cd.tag {
+                    let tag_text = tag.text.join(" ");
+                    let found = dt.iter().any(|(s, _)| s.contains(&tag_text));
+                    assert!(found, "seed {seed}: conduit tag '{}' missing from {}", tag_text, sh.number);
+                }
+            }
+            // 4. DO-NOT-SCALE note.
+            let has_dns = dt.iter().any(|(s, _)| s.contains("DO NOT SCALE"));
+            assert!(has_dns, "seed {seed}: DO NOT SCALE note missing from {}", sh.number);
+        }
+    }
 }

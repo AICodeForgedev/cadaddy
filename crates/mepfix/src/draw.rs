@@ -338,6 +338,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
+            elec_device_dims(&mut pen, t, st, l);
             legend.push(item("base_cabinet", "BASE CABINET"));
             legend.push(item("upper_cabinet", "UPPER CABINET"));
             legend.push(item("counter", "COUNTERTOP"));
@@ -419,6 +420,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
             rcp(&mut pen, t, st, l);
+            rcp_light_grid(&mut pen, t, st, l);
             crate::ceilings::draw_callouts(&mut pen, t, &st.ceilings, l);
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
@@ -1077,6 +1079,102 @@ fn casework_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         let height_text = format!("{:.0}\" AFF", cw.height_in);
         let p2 = pen.b([cx, cy - 0.6]);
         pen.text("TEXT", p2, st.text_in * 0.6, &height_text, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// Draw dimension strings from grid lines to arch_positioned electrical devices on the A-sheet.
+fn elec_device_dims(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
+    let rot = readable(pen.rot());
+    let devs: Vec<&crate::truth::ElecDevice> = t
+        .elec_devices
+        .iter()
+        .filter(|d| d.level == level && d.arch_positioned && d.fixing_sheet.is_some())
+        .collect();
+    if devs.is_empty() {
+        return;
+    }
+    // Find the nearest grid lines for dimensioning.
+    let gx = &t.building.grid.x;
+    let gy = &t.building.grid.y;
+    for d in &devs {
+        let (x, y) = (d.at_ft[0], d.at_ft[1]);
+        // Draw a small symbol at the device position ('+' crosshair for floor devices,
+        // filled circle for ceiling, small rectangle for wall-mounted).
+        let c = pen.b([x, y]);
+        let r = st.text_in / pen.sh.scale * 0.4;
+        match d.kind.as_str() {
+            "floor_box" => {
+                pen.line("DIM", Vec2::new(c.x - r, c.y), Vec2::new(c.x + r, c.y));
+                pen.line("DIM", Vec2::new(c.x, c.y - r), Vec2::new(c.x, c.y + r));
+            }
+            "light_fixture" => {
+                pen.circle("DIM", c, r * 0.5);
+            }
+            _ => {
+                let hs = r * 0.4;
+                pen.rect("DIM", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
+            }
+        }
+        // Dimension from the nearest X grid line.
+        if let Some(nearest_gx) = gx.iter().min_by(|a, b| (a.at_ft - x).abs().total_cmp(&(b.at_ft - x).abs())) {
+            let dist_ft = (x - nearest_gx.at_ft).abs();
+            if dist_ft > 0.5 {
+                let dim_text = crate::truth::feet_inches(dist_ft);
+                // Line from grid to device at a slight offset above/below.
+                let off_y = y + 1.5;
+                let a = pen.b([nearest_gx.at_ft, off_y]);
+                let b = pen.b([x, off_y]);
+                pen.line("DIM", a, b);
+                // Tick marks at endpoints.
+                let tick = st.text_in / pen.sh.scale * 0.3;
+                pen.line("DIM", Vec2::new(a.x, a.y - tick), Vec2::new(a.x, a.y + tick));
+                pen.line("DIM", Vec2::new(b.x, b.y - tick), Vec2::new(b.x, b.y + tick));
+                // Dimension text above the line.
+                let mid = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0 + tick);
+                pen.text("DIM", mid, st.text_in * 0.7, &dim_text, rot, HAlign::Center, VAlign::Bottom);
+            }
+        }
+        // Dimension from the nearest Y grid line.
+        if let Some(nearest_gy) = gy.iter().min_by(|a, b| (a.at_ft - y).abs().total_cmp(&(b.at_ft - y).abs())) {
+            let dist_ft = (y - nearest_gy.at_ft).abs();
+            if dist_ft > 0.5 {
+                let dim_text = crate::truth::feet_inches(dist_ft);
+                let off_x = x - 1.5;
+                let a = pen.b([off_x, nearest_gy.at_ft]);
+                let b = pen.b([off_x, y]);
+                pen.line("DIM", a, b);
+                let tick = st.text_in / pen.sh.scale * 0.3;
+                pen.line("DIM", Vec2::new(a.x - tick, a.y), Vec2::new(a.x + tick, a.y));
+                pen.line("DIM", Vec2::new(b.x - tick, b.y), Vec2::new(b.x + tick, b.y));
+                let mid = Vec2::new((a.x + b.x) / 2.0 - tick, (a.y + b.y) / 2.0);
+                pen.text("DIM", mid, st.text_in * 0.7, &dim_text, rot, HAlign::Right, VAlign::Middle);
+            }
+        }
+        // Device tag near the symbol.
+        let tag_pos = pen.b([x + 0.5, y - 0.5]);
+        pen.text("DIM", tag_pos, st.text_in * 0.7, &d.tag, rot, HAlign::Left, VAlign::Top);
+    }
+}
+
+/// Draw the light fixture grid on the RCP for arch_positioned lights.
+fn rcp_light_grid(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
+    let rot = readable(pen.rot());
+    for d in t.elec_devices.iter().filter(|d| d.level == level && d.kind == "light_fixture" && d.arch_positioned) {
+        let (x, y) = (d.at_ft[0], d.at_ft[1]);
+        let c = pen.b([x, y]);
+        let r = st.text_in / pen.sh.scale * 0.6;
+        match d.type_tag.as_str() {
+            "A" => {
+                let (hw, hh) = (r * 2.0, r);
+                pen.rect("LIGHT", Vec2::new(c.x - hw, c.y - hh), Vec2::new(c.x + hw, c.y + hh));
+            }
+            "B" => pen.rect("LIGHT", Vec2::new(c.x - r, c.y - r), Vec2::new(c.x + r, c.y + r)),
+            "C" => pen.circle("LIGHT", c, r * 0.7),
+            _ => pen.circle("LIGHT", c, r * 0.6),
+        }
+        if !t.elec_spec.untagged.contains(&d.id) {
+            pen.text("LIGHT", Vec2::new(c.x, c.y - r * 1.5), st.text_in * 0.7, &d.tag, rot, HAlign::Center, VAlign::Top);
+        }
     }
 }
 
@@ -1918,10 +2016,8 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
             _ => pen.circle("DEVICE", c, s * 0.5),
         }
 
-        // Mounting note beside the device (for non-ceiling mountings).
-        if let Some(note) = &d.mounting_note
-            && note != "CLG"
-        {
+        // Mounting note beside the device.
+        if let Some(note) = &d.mounting_note {
             pen.text("TEXT", v(s * 2.0, 0.0), st.text_in * 0.8, note, rot, HAlign::Left, VAlign::Middle);
         }
         // Subscripts (GFCI, USB…) above the symbol and the circuit (P1-5) below it.
