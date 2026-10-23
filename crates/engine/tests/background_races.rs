@@ -57,6 +57,16 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+/// The entity count of the drawing in autosave file `path`, read back through the file
+/// formats (the file holds a .cdy, DWG or DXF; the format comes from the content).
+fn autosaved_count(path: &str) -> usize {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("autosave file {path} unreadable: {e}"));
+    cadaddy_io::read(&bytes, path).unwrap_or_else(|e| panic!("autosave file {path} is not a drawing: {e}")).entity_count()
+}
+
+/// `save_now` reads the process-wide SAVEFILEPATH, so the tests that use it take turns.
+static SAVE_NOW: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn wait_idle(a: &mut Autosaver, limit: Duration) {
     let t = Instant::now();
     while !a.idle() {
@@ -84,6 +94,8 @@ fn close_during_autosave_write_does_not_lose_the_file() {
     let jobs = a.plan(&s, 60.0, 1, &dir.to_string_lossy());
     assert_eq!(writes(&jobs).len(), 1);
     let path = writes(&jobs)[0].clone();
+    let expected = s.doc().unwrap().entity_count();
+    assert_eq!(expected, 1, "one circle");
     a.perform(jobs);
 
     // Close the drawing while the write is in progress (or just finished).
@@ -100,10 +112,14 @@ fn close_during_autosave_write_does_not_lose_the_file() {
     // Wait for the write to finish and reap.
     wait_idle(&mut a, Duration::from_secs(30));
 
+    // The finished file holds the closed drawing, whole.
+    assert_eq!(autosaved_count(&path), expected, "autosave file {path} holds the drawing");
+
     // Now plan again: the drawing is closed and the write is done, so the file is deleted.
     let jobs = a.plan(&s, 62.0, 1, &dir.to_string_lossy());
     assert_eq!(deletes(&jobs), vec![path.clone()]);
     a.perform(jobs);
+    assert!(!std::path::Path::new(&path).exists(), "deleted after the write finished");
 
     a.shutdown();
     let _ = std::fs::remove_dir_all(&dir);
@@ -184,12 +200,16 @@ fn shutdown_during_autosave_joins_all_threads() {
 #[test]
 fn save_now_then_close_does_not_deadlock_or_lose_data() {
     hooks();
+    let _turn = SAVE_NOW.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir("savenow-close");
     // save_now reads the process-wide SAVEFILEPATH and SAVETIME.
     autosave::set_savefilepath(&dir.to_string_lossy());
     autosave::set_savetime(1);
     let mut s = Session::new();
     draw(&mut s);
+    draw(&mut s);
+    let expected = s.doc().unwrap().entity_count();
+    assert_eq!(expected, 2, "two circles");
 
     let mut a = Autosaver::new(autosave::instance_id());
     a.plan(&s, 0.0, 1, &dir.to_string_lossy());
@@ -202,10 +222,17 @@ fn save_now_then_close_does_not_deadlock_or_lose_data() {
     // The write must finish without hanging.
     wait_idle(&mut a, Duration::from_secs(30));
 
-    // Clean up.
+    // The urgent autosave holds the closed drawing, whole, until its delete.
+    let files = a.files();
+    assert_eq!(files.len(), 1, "one autosave file: {files:?}");
+    assert_eq!(autosaved_count(&files[0]), expected, "autosave file {} holds the drawing", files[0]);
+
+    // The drawing is closed: the next plan deletes exactly that file.
     a.reap();
     let jobs = a.plan(&s, 100.0, 1, &dir.to_string_lossy());
+    assert_eq!(deletes(&jobs), files);
     a.perform(jobs);
+    assert!(!std::path::Path::new(&files[0]).exists());
     a.shutdown();
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -253,16 +280,11 @@ fn close_during_kept_check_does_not_crash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Close and then keep polling: the kept_job result must not appear on a different
-/// drawing.
-#[test]
-fn kept_result_does_not_leak_to_another_drawing() {
-    hooks();
-    let dir = temp_dir("kept-leak");
+/// Drawing 1 has a property DWG 2000 can't keep (50% transparency) and is saved to DWG with
+/// background checks; a second drawing is opened after it.
+fn lossy_save_then_second_drawing(dir: &std::path::Path, name: &str) -> Session {
     let mut s = Session::new();
     s.background_checks = true;
-
-    // Drawing 1: save to DWG with a lossy property.
     let d = s.doc_mut().unwrap();
     let h = d.new_handle();
     let mut e = cadaddy_engine::doc::Entity::new(
@@ -274,19 +296,45 @@ fn kept_result_does_not_leak_to_another_drawing() {
     );
     e.common.transparency = cadaddy_engine::doc::Transparency::Percent(50);
     d.model.push(e);
-    let path = dir.join("First.dwg");
-    s.execute("saveas", &json!({ "path": &path, "version": "2000" })).unwrap();
-
-    // Open a second drawing.
+    let r = s.execute("saveas", &json!({ "path": dir.join(name), "version": "2000" })).unwrap();
+    assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started");
     s.new_drawing(false);
-    assert!(s.docs.len() >= 2);
+    assert_eq!(s.docs.len(), 2);
+    s
+}
 
-    // Close drawing 1.
+/// Close and then keep polling: the kept_job result must not appear on a different
+/// drawing.  Positive control first: the same save without the close puts the notice on
+/// drawing 1 (and only there), so the negative half can't pass just because no notice
+/// would ever come.
+#[test]
+fn kept_result_does_not_leak_to_another_drawing() {
+    hooks();
+    let dir = temp_dir("kept-leak");
+
+    // Positive control: drawing 1 stays open and gets its notice.
+    let mut s = lossy_save_then_second_drawing(&dir, "Control.dwg");
+    let uid1 = s.docs[0].uid;
+    let t = Instant::now();
+    while s.docs[0].exchange_notice.is_none() {
+        assert!(t.elapsed() < Duration::from_secs(30), "drawing 1 never got its notice");
+        s.poll_background();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let took = t.elapsed();
+    assert_eq!(s.docs[0].uid, uid1);
+    assert!(s.docs[1].exchange_notice.is_none(), "the notice went to drawing 1 only");
+
+    // The race: drawing 1 is closed while its check runs.
+    let mut s = lossy_save_then_second_drawing(&dir, "First.dwg");
     s.execute("document.switch", &json!({ "index": 0 })).unwrap();
     s.execute("close", &json!({})).ok();
+    assert_eq!(s.docs.len(), 1);
 
-    // Poll: the result must not appear on drawing 2.
-    for _ in 0..100 {
+    // Poll well past the time the control took: the result must not appear on drawing 2.
+    let wait = (took * 3).max(Duration::from_secs(1));
+    let t = Instant::now();
+    while t.elapsed() < wait {
         s.poll_background();
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -354,19 +402,42 @@ fn autosave_tracks_multiple_drawings_independently() {
 // ─── hammer: many concurrent autosave + close + save_now cycles ────────────
 
 /// 50 iterations of: create drawing, dirty it, plan an autosave, save_now, close, reap.
-/// No panics, no deadlocks, no thread leaks.
+/// No panics, no deadlocks, no thread leaks; every autosave file is read back before its
+/// delete and holds its own drawing's exact entity count (drawing i has i % 4 + 1 circles).
 #[test]
 fn hammer_autosave_close_cycle() {
     hooks();
+    let _turn = SAVE_NOW.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir("hammer");
+    autosave::set_savefilepath(&dir.to_string_lossy());
+    autosave::set_savetime(1);
     let mut a = Autosaver::new(autosave::instance_id());
+    // Each drawing's uid → its entity count, and the files read back.
+    let mut expected = std::collections::HashMap::new();
+    let mut checked = std::collections::HashSet::new();
+    let mut check = |jobs: &[Job], expected: &std::collections::HashMap<u64, usize>| {
+        for p in deletes(jobs) {
+            let name = std::path::Path::new(&p).file_name().unwrap().to_string_lossy().to_string();
+            let (_, _, uid) = autosave::parse_file_name(&name).unwrap_or_else(|| panic!("not an autosave name: {name}"));
+            assert_eq!(autosaved_count(&p), expected[&uid], "autosave file {p} holds drawing {uid}");
+            assert!(checked.insert(p.clone()), "{p} deleted twice");
+        }
+    };
 
     for i in 0..50 {
         let mut s = Session::new();
-        draw(&mut s);
+        for _ in 0..i % 4 + 1 {
+            draw(&mut s);
+        }
+        expected.insert(s.state().unwrap().uid, s.doc().unwrap().entity_count());
         let t = (i * 200) as f64;
-        a.plan(&s, t, 1, &dir.to_string_lossy());
-        a.save_now(&s);
+        // The last drawing's write (closed mid-write) finishes; its delete comes now, so it is
+        // checked here rather than inside save_now.
+        wait_idle(&mut a, Duration::from_secs(30));
+        let jobs = a.plan(&s, t, 1, &dir.to_string_lossy());
+        check(&jobs, &expected);
+        a.perform(jobs);
+        assert_eq!(a.save_now(&s), 1, "iteration {i}: one drawing written");
         // Sometimes close immediately, sometimes wait a bit.
         if i % 3 != 0 {
             std::thread::sleep(Duration::from_millis(2));
@@ -374,10 +445,16 @@ fn hammer_autosave_close_cycle() {
         s.execute("close", &json!({})).ok();
         a.reap();
         let jobs = a.plan(&s, t + 1.0, 1, &dir.to_string_lossy());
+        check(&jobs, &expected);
         a.perform(jobs);
     }
 
+    // The writes still running finish; their files are read back before their deletes too.
     wait_idle(&mut a, Duration::from_secs(60));
+    let jobs = a.plan(&Session::empty(), 50.0 * 200.0, 1, &dir.to_string_lossy());
+    check(&jobs, &expected);
+    a.perform(jobs);
+    assert_eq!(checked.len(), 50, "every drawing's autosave file was read back");
     a.shutdown();
     assert!(a.files().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -395,8 +472,11 @@ fn commands_during_background_check_do_not_corrupt() {
     s.background_checks = true;
 
     draw(&mut s);
+    let base = s.doc().unwrap().entity_count();
+    assert_eq!(base, 1, "one circle");
     let path = dir.join("Agent Test.dwg");
-    s.execute("saveas", &json!({ "path": &path, "version": "2000" })).unwrap();
+    let r = s.execute("saveas", &json!({ "path": &path, "version": "2000" })).unwrap();
+    assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started");
 
     // While the check runs, execute many drawing commands.
     let start = Instant::now();
@@ -410,15 +490,18 @@ fn commands_during_background_check_do_not_corrupt() {
         }
     }
 
-    // The drawing must have all the lines we added.
-    let entities = s.doc().unwrap().model.len();
-    // Original circle + the lines.
-    assert!(entities >= commands_run, "expected at least {commands_run} entities, got {entities}");
+    // The check was pending when the loop began, so at least one line ran during it.
+    assert!(commands_run >= 1);
+    // The drawing has the circle and exactly the lines we added.
+    let entities = s.doc().unwrap().entity_count();
+    assert_eq!(entities, commands_run + 1, "circle + {commands_run} lines");
 
-    // Undo must work: the state is not corrupted.
-    for _ in 0..commands_run.min(10) {
+    // Undo works and takes off exactly one line each: the state is not corrupted.
+    let undos = commands_run.min(10);
+    for _ in 0..undos {
         s.undo().unwrap();
     }
+    assert_eq!(s.doc().unwrap().entity_count(), commands_run + 1 - undos, "after {undos} undos");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
