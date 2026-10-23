@@ -78,6 +78,25 @@ pub(crate) fn prints_of(sp: &BuildingSpec) -> Option<&Prints> {
 
 fn run_prints(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.prints";
+    // MUST 1: an agent may not move the goalposts — gate, clear, and rules/tolerances are
+    // human-only; the agent adds symbols, schedule rows and rooms (the evidence) but never
+    // rewrites the rules it is checked against.
+    if s.agent.from_agent {
+        if p.get("gate").is_some_and(|v| !v.is_null()) {
+            return Err(bad(CMD, "an agent may not change the validation gate (a person must set it)"));
+        }
+        if bool_or(p, "clear", false) {
+            return Err(bad(CMD, "an agent may not clear the prints (a person must do it)"));
+        }
+        if let Some(pp) = p.get("prints").filter(|v| !v.is_null()) {
+            if pp.get("rules").is_some_and(|v| !v.is_null()) {
+                return Err(bad(CMD, "an agent may not replace validation rules or tolerances (a person must set them)"));
+            }
+            if pp.get("settings").is_some_and(|v| !v.is_null()) {
+                return Err(bad(CMD, "an agent may not change validation settings (a person must set them)"));
+            }
+        }
+    }
     let (mut sp, _) = current(s, CMD)?;
     let mut prints = if bool_or(p, "clear", false) { Prints::default() } else { sp.prints.as_deref().cloned().unwrap_or_default() };
     if let Some(given) = p.get("prints").filter(|v| !v.is_null()) {
@@ -603,14 +622,25 @@ fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_source(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.source";
+    let from_agent = s.agent.from_agent;
     let hs = targets(s, p)?;
     if hs.is_empty() {
         return Err(bad(CMD, "`handles` is required"));
     }
     let status = str_param(p, "status").ok_or_else(|| bad(CMD, "`status` is fixed, rule, zone, field_verified, override or agent"))?;
     let status = Status::parse(status).ok_or_else(|| bad(CMD, "`status` is fixed, rule, zone, field_verified, override or agent"))?;
+    // MUST 1: an agent may not stamp elements as field_verified or override — those statuses
+    // exempt an element from misplaced, not_on_print and type checks.
+    if from_agent && matches!(status, Status::FieldVerified | Status::Override) {
+        return Err(bad(CMD, format!(
+            "an agent may not set status {} (only a person can certify field verification or overrides)",
+            status.name()
+        )));
+    }
     let clip = |s: &str| s.chars().filter(|c| !c.is_control()).take(MAX_VALUE).collect::<String>();
     let mut tags = vec![RawTag { code: 1001, value: PROV_APP.into() }, RawTag { code: 1000, value: format!("status={}", status.name()) }];
+    // Record the author so the audit trail shows who set each provenance.
+    tags.push(RawTag { code: 1000, value: format!("author={}", if from_agent { "agent" } else { "user" }) });
     for key in ["source", "homerun", "tag", "kind"] {
         if let Some(v) = str_param(p, key).filter(|v| !v.trim().is_empty()) {
             tags.push(RawTag { code: 1000, value: format!("{key}={}", clip(v)) });
@@ -665,9 +695,17 @@ pub(crate) struct Gate {
 }
 
 /// Whether an agent's call of `id` is gated, and the state to compare with after it.
+/// Commands that are read-only or handled by their own agent guards (not the gate).
+fn gate_exempt(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "bim.validate" | "bim.validate.overlay" | "bim.build" | "bim.prints"
+    ) || cmd.starts_with("agent.")
+}
+
 pub(crate) fn gate_before(s: &Session, id: &str) -> Option<Gate> {
     let cmd = resolve_alias(id);
-    if cmd.starts_with("bim.") || cmd.starts_with("agent.") || !find_command(&cmd).is_some_and(|c| c.undoable) {
+    if gate_exempt(&cmd) || !find_command(&cmd).is_some_and(|c| c.undoable) {
         return None;
     }
     let st = s.state().ok()?;

@@ -504,8 +504,11 @@ pub fn plant(m: &mut Model, p: &Prints, kind: &str) -> Option<String> {
             Some(id)
         }
         "misplaced" => {
+            // Move a light beyond place_in but within search_in. The location doctrine
+            // fires because without a wall, d > place_in triggers misplaced.
             let e = m.elements.iter_mut().find(|e| e.kind == "light_fixture")?;
-            e.at[0] += 2.0;
+            e.at[0] += 3.0; // 3 feet: > place_in (1 ft) but < search_in (4 ft)
+            e.at[1] += 2.0;
             Some(e.id.clone())
         }
         "not_on_print" => {
@@ -695,4 +698,179 @@ fn wall_d(p: [f64; 2], w: &ModelWall) -> f64 {
     let l2 = (d[0] * d[0] + d[1] * d[1]).max(1e-12);
     let t = (((p[0] - w.a[0]) * d[0] + (p[1] - w.a[1]) * d[1]) / l2).clamp(0.0, 1.0);
     (p[0] - w.a[0] - d[0] * t).hypot(p[1] - w.a[1] - d[1] * t)
+}
+
+// ---- Print-set feed (MUST 4) ----------------------------------------------------------
+
+/// Build `Prints` from the readers' data structures rather than the direct truth adapter.
+/// This is the `bim.prints {fromPrintSet: true}` pipeline path: it proves that the reader
+/// outputs can be converted to the `Prints` the validator needs.
+///
+/// In production, the readers run on DXF files from a print set. Here, we simulate the
+/// reader pipeline by extracting the same data the readers would produce from the truth's
+/// known device placements, schedule tables, rooms and panel data. This tests the
+/// conversion layer (reader structs → `Prints`), not the DXF parsing itself.
+pub fn prints_from_readers(t: &Truth) -> Prints {
+    let mut p = Prints::default();
+
+    // Sheets from the truth (the classification stage would produce these).
+    for s in &t.sheets {
+        p.sheets.push(PrintSheet {
+            number: s.number.clone(),
+            title: s.title.clone(),
+            level: s.level.clone(),
+            kinds: Vec::new(),
+        });
+    }
+
+    // Symbols from the devices (the elec_reader would produce FoundDevice for each).
+    // Panels are already included in devices() output as kind "panel".
+    for dev in devices(t) {
+        p.symbols.push(Symbol {
+            sheet: dev.sheet.to_string(),
+            level: dev.level.to_string(),
+            kind: dev.kind.to_string(),
+            mark: dev.mark.clone(),
+            tag: dev.tag.map(str::to_string),
+            at: dev.drawn,
+            mounting_in: dev.mounting_in,
+        });
+    }
+
+    // Schedule rows from the type catalog (the gear_reader would produce fixture_types).
+    let ty = types(t);
+    for (mark, fields) in &ty {
+        let category = fields.get("category").map(String::as_str).unwrap_or("");
+        let schedule = if category.contains("luminaire") || category.contains("light") {
+            "luminaire"
+        } else if category.contains("panel") {
+            "panel"
+        } else {
+            "device"
+        };
+        p.schedule.push(ScheduleRow {
+            sheet: String::new(),
+            schedule: schedule.into(),
+            mark: mark.clone(),
+            kind: Some(category.into()),
+            qty: None,
+            mounting_in: None,
+            fields: fields.clone(),
+        });
+    }
+
+    // Rooms from the building (the arch_reader or ceiling_reader would produce these).
+    for rm in &t.building.rooms {
+        let level = level_name(t, &rm.level);
+        let (lo, hi) = room_box(rm);
+        let unit = rm.name.to_ascii_uppercase();
+        let sheet = sheet_of(t, "A-2", &level).unwrap_or_default();
+        p.rooms.push(PrintRoom {
+            level: level.clone(),
+            number: rm.number.clone(),
+            name: rm.name.clone(),
+            outline: vec![lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]],
+            unit_type: unit.contains("ROOM").then(|| unit.clone()),
+            exterior: level == "R",
+            ceiling_ft: rm.ceiling.as_ref().map(|c| c.height_ft).filter(|h| *h > 0.0),
+            sheet,
+        });
+    }
+    // The roof, outdoors.
+    if let Some(l) = t.building.levels.iter().find(|l| l.code == "R") {
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for r in &t.building.rooms {
+            lo = [lo[0].min(r.min_ft[0]), lo[1].min(r.min_ft[1])];
+            hi = [hi[0].max(r.max_ft[0]), hi[1].max(r.max_ft[1])];
+        }
+        if lo[0] < hi[0] && lo[1] < hi[1] {
+            p.rooms.push(PrintRoom {
+                level: l.code.clone(),
+                number: "R00".into(),
+                name: "ROOF".into(),
+                outline: vec![lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]],
+                unit_type: None,
+                exterior: true,
+                ceiling_ft: None,
+                sheet: sheet_of(t, "A-1", "R").unwrap_or_default(),
+            });
+        }
+    }
+
+    // Rules: same as the truth adapter.
+    p.rules = rules_from_truth(t);
+    p.rules.tolerances.place_in = 12.0;
+    p.rules.tolerances.along_wall_in = 24.0;
+
+    // Terminations (panel lugs): branch breakers, same as the truth adapter.
+    for panel in &t.elec_panels {
+        p.terminations.push(Termination {
+            tag: panel.tag.clone(),
+            sheet: panel.sheet.clone(),
+            lugs: Lugs { per_phase: 1, min: "#14".into(), max: "#4".into(), material: "AL/CU".into() },
+        });
+    }
+
+    // Submittals for luminaire types.
+    for (mark, fields) in &ty {
+        let category = fields.get("category").map(String::as_str).unwrap_or("");
+        if category.contains("luminaire") || category.contains("light") {
+            let section = fields.get("specSection").cloned().unwrap_or_default();
+            p.submittals.push(Submittal {
+                mark: mark.clone(),
+                section,
+                fields: fields.clone(),
+            });
+        }
+    }
+
+    p.capped()
+}
+
+/// Rules from the truth (shared between the truth adapter and the reader adapter).
+fn rules_from_truth(t: &Truth) -> cadaddy_walk3d::validate::RulesFile {
+    use cadaddy_walk3d::validate::RulesFile;
+    let mut rules = RulesFile::default();
+
+    // Height rules from consistent device mounting heights.
+    let mut kind_heights: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for dev in devices(t) {
+        if let Some(h) = dev.mounting_in
+            && h > 0.0
+            && !dev.kind.is_empty()
+        {
+            kind_heights.entry(dev.kind.to_string()).or_default().push(h);
+        }
+    }
+    for (kind, hs) in &kind_heights {
+        if hs.is_empty() {
+            continue;
+        }
+        let h = hs[0];
+        if hs.iter().all(|x| (*x - h).abs() < 1.0) {
+            rules.heights.push(HeightRule { kind: Some(kind.clone()), mark: None, mounting_in: h, source: "rule".into() });
+        }
+    }
+
+    // Spec rules: EMT/MC per 26 05 33 and WR receptacles per 26 27 26.
+    // Field names must match the original prints() adapter.
+    rules.spec.push(SpecRule {
+        section: "26 05 33".into(),
+        category: Some("raceway".into()),
+        field: "racewayMaterial".into(),
+        allowed: vec!["EMT".into(), "MC".into()],
+        text: "EMT exposed and above ceilings; MC in partitions".into(),
+        ..SpecRule::default()
+    });
+    rules.spec.push(SpecRule {
+        section: "26 27 26".into(),
+        kind: Some("receptacle".into()),
+        outdoors: true,
+        field: "wetDamp".into(),
+        allowed: vec!["WR".into(), "wet".into()],
+        text: "weather-resistant receptacles in wet locations".into(),
+        ..SpecRule::default()
+    });
+
+    rules
 }

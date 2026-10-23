@@ -372,9 +372,57 @@ fn status_of(st: &State, id: &str) -> &'static str {
     }
 }
 
+/// Validation failures as review items (MUST 3: Q319/Q320 wiring).
+fn validation_items(s: &mut Session) -> Vec<Item> {
+    let report = match s.execute("bim.validate", &json!({})) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for f in report["failures"].as_array().into_iter().flatten().take(200) {
+        let fid = f["id"].as_str().unwrap_or_default();
+        let rule = f["rule"].as_str().unwrap_or_default();
+        let level = f["level"].as_str().unwrap_or_default().to_string();
+        let severity = f["severity"].as_str().unwrap_or("medium");
+        let fix = f["fix"].as_str().unwrap_or_default();
+        let element = f["element"].as_str().unwrap_or_default();
+        let id = format!("RV-V{}", hash(&format!("validation|{fid}")));
+        let rank = match severity {
+            "high" => 0.5,
+            "medium" => 1.5,
+            _ => 2.5,
+        };
+        out.push(Item {
+            id,
+            kind: "validation",
+            level,
+            title: cut(&format!("{rule}: {}", f["expected"].as_str().unwrap_or_default()), 120),
+            detail: json!({
+                "failure_id": fid, "rule": rule, "element": element,
+                "expected": f["expected"], "found": f["found"],
+                "severity": severity, "fix": fix,
+            }),
+            candidates: vec![
+                json!({"answer": fix, "from": "the validator's suggestion"}),
+                json!({"answer": "override: the model is correct as-is", "from": "mark as override"}),
+            ],
+            documents: {
+                let sheet = f.get("source").and_then(|s| s["sheet"].as_str()).unwrap_or_default();
+                if sheet.is_empty() { vec![] } else { vec![sheet.to_string()] }
+            },
+            documented: true,
+            rank,
+            key: json!({"failure_id": fid, "element": element}),
+            system: String::new(),
+        });
+    }
+    out
+}
+
 fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     let mut v = items(s);
     v.extend(concern_items(st));
+    v.extend(validation_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -515,6 +563,26 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     if let Some(e) = &estimate {
         text += &format!("Estimate: ${} total, {} open finding(s). ", e["total"], e["open_findings"]);
     }
+    // MUST 3: validation score in the briefing.
+    let validation = s.execute("bim.validate", &json!({})).ok().map(|r| {
+        let by_check = r.get("byCheck").cloned().unwrap_or(Value::Null);
+        json!({
+            "pass": r["pass"],
+            "score": r["score"],
+            "total": r["total"],
+            "byCheck": by_check,
+        })
+    });
+    if let Some(v) = &validation {
+        let pass = v["pass"].as_bool().unwrap_or(false);
+        let score = v["score"].as_f64().unwrap_or(0.0);
+        let total = v["total"].as_u64().unwrap_or(0);
+        text += &format!(
+            "Validation: {} (score {score}, {total} failure{}). ",
+            if pass { "PASS" } else { "FAIL" },
+            if total == 1 { "" } else { "s" }
+        );
+    }
     text += &format!("Next: {} — {}.", next["call"].as_str().unwrap_or_default(), next["why"].as_str().unwrap_or_default());
     let mut v = json!({
         "revision": st.revision,
@@ -527,6 +595,9 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     });
     if let Some(e) = estimate {
         v["estimate"] = e;
+    }
+    if let Some(val) = validation {
+        v["validation"] = val;
     }
     // Within the page: trim the lists, longest first.
     let mut v = capped(v, "recent", BRIEFING_MAX);
