@@ -16,7 +16,7 @@
 //! 100k time grows faster than the drawing: reported, and a failure. Every run is appended to
 //! `target/perf/history.jsonl` (the trend).
 //!
-//! The assembled BIM pipeline runs too (`cadaddy-mepfix`'s `bimbench` example): every stage on
+//! The assembled BIM pipeline runs too (`cadaddy-mcp`'s `bimbench` example): every stage on
 //! the synthetic hotel's print set — project import, PDF to .cdy, sheet classification, each
 //! print reader, the whole job's model build, validation, review, takeoff, IFC and BCF export,
 //! rendering, .cdy save and open, spec intake, the viewer, an agent-session soak, the MCP tools
@@ -158,7 +158,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let bim = dir.join("bim.json");
     let _ = std::fs::remove_file(&bim);
     let mut c = crate::cargo();
-    c.args(["run", "-q", "-p", "cadaddy-mepfix", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
+    c.args(["run", "-q", "-p", "cadaddy-mcp", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
     let ran = crate::run(c, &format!("bimbench --sizes {bim_sizes}"));
     let bim_results = read_json(&bim);
     bim_outcome(ran, &bim_results)?;

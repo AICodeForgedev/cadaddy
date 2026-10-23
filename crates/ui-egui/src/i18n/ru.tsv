@@ -2338,6 +2338,7 @@
 	List MEP Items	Список элементов MEP
 	Section Box	Секущий параллелепипед
 	Trade Visibility	Видимость разделов
+	Colour by BIM Property	Цвет по свойству BIM
 	BIM Types	Типы BIM
 	Get BIM Spec	Получить спецификацию BIM
 	Remove BIM Spec from Entities	Удалить спецификацию BIM у объектов

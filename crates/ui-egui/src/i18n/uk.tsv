@@ -2617,6 +2617,7 @@
 	List MEP Items	Список елементів MEP
 	Section Box	Січний паралелепіпед
 	Trade Visibility	Видимість розділів
+	Colour by BIM Property	Колір за властивістю BIM
 	BIM Types	Типи BIM
 	Get BIM Spec	Отримати специфікацію BIM
 	Remove BIM Spec from Entities	Вилучити специфікацію BIM з об'єктів

@@ -2433,6 +2433,7 @@
 	List MEP Items	列出 MEP 项目
 	Section Box	剖切框
 	Trade Visibility	专业可见性
+	Colour by BIM Property	按 BIM 属性着色
 	BIM Types	BIM 类型
 	Get BIM Spec	获取 BIM 规格
 	Remove BIM Spec from Entities	从对象移除 BIM 规格
