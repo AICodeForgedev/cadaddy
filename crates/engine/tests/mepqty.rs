@@ -297,8 +297,12 @@ fn linked_table_keeps_custom_settings() {
     // Hangers at 10': 20' → 2, 10' → 1 = 3 (not the default-8' count of 5).
     assert_eq!(row(&q["hangers"], |r| r["size"] == "24x12")["count"], 3);
 
-    // Edit the branch run (id 1) to 14x10 and rebuild; the table must still use gauge 20.
-    let e = s.execute("mep.edit", &json!({"id": 1, "size_in": [14, 10], "rebuild": true})).unwrap();
+    // Edit the branch run (12x8, found by its stable id) to 14x10 and rebuild; the table must
+    // still use gauge 20.
+    let list = s.execute("mep.list", &json!({})).unwrap();
+    let branch = list["items"].as_array().unwrap().iter().find(|it| it["size_in"] == json!([12.0, 8.0])).expect("should find the 12x8 branch");
+    let run_id = branch["id"].as_str().unwrap().to_string();
+    let e = s.execute("mep.edit", &json!({"id": &run_id, "size_in": [14, 10], "rebuild": true})).unwrap();
     assert_eq!(e["rebuilt"], true);
     let after = cells(&s, &h);
     // The 24x12 row must still show gauge 20 and 360 lb weight.
