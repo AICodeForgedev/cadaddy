@@ -1374,13 +1374,34 @@ impl MepSystem {
         if let Some(dt) = self.duct_type {
             return dt.default_color();
         }
+        if self.kind == MepKind::Pipe {
+            return pipe_system_default_color(&self.name);
+        }
         match self.kind {
             MepKind::Duct => 4,    // cyan (generic duct, no type set)
-            MepKind::Pipe => 3,    // green
+            MepKind::Pipe => 3,    // green (unreachable due to the check above)
             MepKind::Conduit => 6, // magenta
             MepKind::Tray => 30,   // orange
             MepKind::Cable => 210, // pink: an assumed homerun route
         }
+    }
+}
+
+/// Default ACI colour for a pipe system by name. Each major plumbing / fire-protection system
+/// gets a distinct colour so runs are visually separable in the 3D model.
+pub fn pipe_system_default_color(system: &str) -> i16 {
+    match system {
+        "CW" => 5,     // blue — cold water
+        "HW" => 1,     // red — hot water
+        "HWR" => 14,   // dark red — hot water return
+        "SAN" => 30,   // orange — sanitary
+        "V" => 3,      // green — vent
+        "G" => 50,     // yellow — gas
+        "FP" => 6,     // magenta — fire protection
+        "CHW" => 4,    // cyan — chilled water
+        "CHWR" => 140, // light blue — chilled water return
+        "ST" => 8,     // dark grey — steam
+        _ => 3,        // green — generic pipe
     }
 }
 

@@ -44,6 +44,19 @@ pub struct DetectedRiser {
     pub size_in: f64,
     pub direction: String, // "up", "down", "through"
     pub note: String,
+    pub level: String,
+}
+
+/// A pair of risers matched across two levels (e.g. up on L1, down/through on L2).
+#[derive(Clone, Debug)]
+pub struct MatchedRiser {
+    pub system: String,
+    pub at_ft: [f64; 2],
+    pub size_in: f64,
+    pub lower_level: String,
+    pub upper_level: String,
+    pub lower_direction: String,
+    pub upper_direction: String,
 }
 
 /// Read piping runs from a DXF drawing using the sheet's coordinate transform.
@@ -106,43 +119,42 @@ pub fn read_pipes(d: &Drawing, sh: &Sheet) -> (Vec<FoundRun>, Vec<DetectedRiser>
         }
         let Some(level) = &sh.level else { continue };
 
-        // Run centreline in building feet.
-        let from_ft = building_from_model(sh, [pts[0].x, pts[0].y]);
-        let to_ft = building_from_model(sh, [pts[pts.len() - 1].x, pts[pts.len() - 1].y]);
-
         let total_len = run_length(pts);
         if total_len < 1e-9 {
             continue;
         }
 
-        // Collect texts near the run: 4 building feet in model inches.
-        let reach = 4.0 * 12.0; // 4 feet × 12 inches/foot = 48 model inches
-        let near_texts: Vec<&TextItem> = texts.iter().filter(|t| seg_point_dist(&run_segments(pts), t.at) < reach).collect();
-
-        // Identify system from inline text breaks or tags.
-        let system = identify_system(&near_texts, layer);
-        let (size_in, tag_system) = parse_size_from_texts(&near_texts);
-        let system = tag_system.unwrap_or(system);
-        let size = size_in.unwrap_or(default_size(&system));
-
-        // Parse height.
-        let section_ft = size / 12.0;
-        let bottom_ft = parse_height_from_texts(&near_texts, section_ft);
-
-        // Parse slope (for drains).
-        let _slope = parse_slope_from_texts(&near_texts);
-
         // Determine if below floor (HIDDEN layer).
         let below_floor = layer.eq_ignore_ascii_case("HIDDEN");
-
-        // Skip below-floor segments (the scorer's expected() excludes them).
         if below_floor {
             continue;
         }
 
-        // One run per straight stretch: a chain that turns (a branch and its armover, a main's
-        // corner) is several runs, not one line from its first point to its last.
-        let _ = (from_ft, to_ft);
+        // Chain-wide identification: find system, size, height, slope from text near
+        // the whole chain, then apply to all straight stretches.
+        let run_segs = run_segments(pts);
+        let reach = 4.0 * 12.0; // 4 feet in model inches
+        let near_texts: Vec<&TextItem> = texts.iter().filter(|t| seg_point_dist(&run_segs, t.at) < reach).collect();
+
+        let inline_system = identify_system(&near_texts, layer);
+        let (size_in, tag_system) = parse_size_from_texts(&near_texts);
+        let system_from_tag = tag_system.is_some();
+        let mut system = tag_system.unwrap_or(inline_system);
+        // Fall back to the sheet discipline for FP sheets.
+        if system.is_empty() && sh.discipline == "FP" {
+            system = "FP".to_string();
+        }
+        let size_from_tag = size_in.is_some();
+        let size = size_in.unwrap_or(default_size(&system));
+        let sys_src = if system_from_tag || !system.is_empty() { "tag" } else { "default" };
+        let sz_src = if size_from_tag { "tag" } else { "default" };
+
+        let section_ft = size / 12.0;
+        let bottom_ft = parse_height_from_texts(&near_texts, section_ft);
+        let h_src = if bottom_ft.is_some() { "tag" } else { "default" };
+        let slope = parse_slope_from_texts(&near_texts);
+
+        // One run per straight stretch.
         let mut start = 0usize;
         for k in 1..pts.len() {
             let last = k + 1 == pts.len();
@@ -164,6 +176,10 @@ pub fn read_pipes(d: &Drawing, sh: &Sheet) -> (Vec<FoundRun>, Vec<DetectedRiser>
                 from_ft: building_from_model(sh, [a.x, a.y]),
                 to_ft: building_from_model(sh, [b.x, b.y]),
                 bottom_ft,
+                slope: slope.clone(),
+                size_source: sz_src.to_string(),
+                system_source: sys_src.to_string(),
+                height_source: h_src.to_string(),
             });
             start = k;
         }
@@ -250,7 +266,7 @@ fn identify_system(texts: &[&TextItem], layer: &str) -> String {
             return code.to_string();
         }
     }
-    // Infer from layer: DASHED = vent, HEAVY with no system text might be SAN.
+    // Layer-based inference is a weak signal; only use DASHED → V when plausible.
     match layer.to_uppercase().as_str() {
         "DASHED" => "V".to_string(),
         _ => String::new(),
@@ -425,6 +441,7 @@ const SYS_ABBR: &[(&str, &str)] = &[
     ("HRW", "HWR"),
     ("SAN", "SAN"),
     ("SS", "SAN"),
+    ("W", "SAN"),
     ("V", "V"),
     ("G", "G"),
     ("GAS", "G"),
@@ -473,9 +490,9 @@ fn default_size(system: &str) -> f64 {
 
 /// Detect riser symbols: circles on PIPE layer, with annotation text nearby.
 fn detect_risers(circles: &[(Vec2, f64, String)], texts: &[TextItem], sh: &Sheet) -> Vec<DetectedRiser> {
-    if sh.level.is_none() {
+    let Some(level) = &sh.level else {
         return Vec::new();
-    }
+    };
     let mut out = Vec::new();
 
     // Riser circles are annotation-scale dependent. The generator draws them at
@@ -529,7 +546,7 @@ fn detect_risers(circles: &[(Vec2, f64, String)], texts: &[TextItem], sh: &Sheet
 
         let at_ft = building_from_model(sh, [center.x, center.y]);
 
-        out.push(DetectedRiser { at_model: *center, at_ft, system, size_in: size, direction: direction.to_string(), note: note.text.clone() });
+        out.push(DetectedRiser { at_model: *center, at_ft, system, size_in: size, direction: direction.to_string(), note: note.text.clone(), level: level.clone() });
     }
 
     out
@@ -555,6 +572,54 @@ fn parse_riser_size(s: &str) -> f64 {
         }
     }
     1.0 // default
+}
+
+/// Match risers across aligned levels by building-feet position and system.
+///
+/// An "up" riser on a lower level should pair with a "down" or "through" riser at approximately
+/// the same building-feet position on the level above, with the same system. Returns pairs.
+pub fn match_risers_across_levels(risers: &[DetectedRiser]) -> Vec<MatchedRiser> {
+    let tol_ft = 1.0; // within 1 building foot
+    let mut matched = Vec::new();
+    let mut used = vec![false; risers.len()];
+
+    for (i, lower) in risers.iter().enumerate() {
+        if lower.direction != "up" || lower.system.is_empty() {
+            continue;
+        }
+        // Find a partner on a different (higher) level.
+        let mut best_dist = f64::MAX;
+        let mut best_j = None;
+        for (j, upper) in risers.iter().enumerate() {
+            if i == j || used[j] || upper.level == lower.level || upper.system != lower.system {
+                continue;
+            }
+            if upper.direction != "down" && upper.direction != "through" {
+                continue;
+            }
+            let dx = lower.at_ft[0] - upper.at_ft[0];
+            let dy = lower.at_ft[1] - upper.at_ft[1];
+            let d = (dx * dx + dy * dy).sqrt();
+            if d < tol_ft && d < best_dist {
+                best_dist = d;
+                best_j = Some(j);
+            }
+        }
+        if let Some(j) = best_j {
+            used[i] = true;
+            used[j] = true;
+            matched.push(MatchedRiser {
+                system: lower.system.clone(),
+                at_ft: lower.at_ft,
+                size_in: lower.size_in,
+                lower_level: lower.level.clone(),
+                upper_level: risers[j].level.clone(),
+                lower_direction: lower.direction.clone(),
+                upper_direction: risers[j].direction.clone(),
+            });
+        }
+    }
+    matched
 }
 
 #[cfg(test)]

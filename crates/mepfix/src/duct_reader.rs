@@ -148,6 +148,7 @@ impl DuctNetwork {
                     from_ft: af,
                     to_ft: bf,
                     bottom_ft: run.bottom_ft,
+                    ..Default::default()
                 });
             }
         }

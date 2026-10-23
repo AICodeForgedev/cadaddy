@@ -50,7 +50,7 @@ pub use spec::{
     GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Issue, ItemKind, LayerRole, LayerSide, MAX_ASSEMBLY_LAYERS, Mep,
     MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, PanelCircuit, PointOfEntry, Rcp, Role, Roof, RoofSlope,
     Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, WallFrom,
-    WallMark, WallType, feet, inches, level_at, merge, pitch_text,
+    WallMark, WallType, feet, inches, level_at, merge, pipe_system_default_color, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};

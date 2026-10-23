@@ -21,6 +21,14 @@ pub struct FoundRun {
     pub to_ft: [f64; 2],
     /// Bottom above the floor, feet, if the reader worked it out.
     pub bottom_ft: Option<f64>,
+    /// Drainage slope as printed (`1/4"/FT`), if any.
+    pub slope: Option<String>,
+    /// Where the size came from: `"tag"` or `"default"`.
+    pub size_source: String,
+    /// Where the system came from: `"tag"` or `"default"`.
+    pub system_source: String,
+    /// Where the height came from: `"tag"` or `"default"`.
+    pub height_source: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -248,6 +256,15 @@ pub fn perfect(t: &Truth, level: &str, kind: &str) -> Vec<FoundRun> {
             from_ft: [s.path_ft[0][0], s.path_ft[0][1]],
             to_ft: [s.path_ft[1][0], s.path_ft[1][1]],
             bottom_ft: s.height.as_ref().map(|h| h.bottom_ft),
+            slope: s.slope.clone(),
+            size_source: if s.tag.is_some() { "tag".into() } else { "default".into() },
+            system_source: if s.tag.is_some() { "tag".into() } else { "default".into() },
+            height_source: s.height.as_ref().map_or("default".into(), |h| {
+                match h.source {
+                    crate::truth::HeightSource::Note => "tag".into(),
+                    _ => "default".into(),
+                }
+            }),
         })
         .collect()
 }
