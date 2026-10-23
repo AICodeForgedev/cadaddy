@@ -354,10 +354,25 @@ fn convert_folder(i: &str, o: &str, to: &str, recurse: bool, framing: Framing) -
     }
     check_framed_output(framing, Some(&format!("x.{to}")))?;
     let inputs = convert::folder_inputs(std::path::Path::new(i), recurse)?;
-    if inputs.is_empty() {
-        return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy) in this folder"));
+    // PDFs import through the same path as `convert IN.pdf OUT` (the batch job reads drawings only).
+    let pdfs = convert::folder_inputs_of(std::path::Path::new(i), recurse, &["pdf"])?;
+    if inputs.is_empty() && pdfs.is_empty() {
+        return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy, .pdf) in this folder"));
     }
     std::fs::create_dir_all(o).map_err(|e| format!("{o}: {e}"))?;
+    let mut pdf_failed = 0usize;
+    for p in &pdfs {
+        let stem = p.path.file_stem().map(std::path::PathBuf::from).unwrap_or_default();
+        let out = std::path::Path::new(o).join(&p.sub).join(stem).with_extension(to);
+        let made = out.parent().map_or(Ok(()), std::fs::create_dir_all).map_err(|e| e.to_string());
+        if let Err(e) = made.and_then(|()| convert_file(&p.path.to_string_lossy(), &out.to_string_lossy(), framing)) {
+            eprintln!("{}: {e}", p.path.display());
+            pdf_failed += 1;
+        }
+    }
+    if inputs.is_empty() {
+        return if pdf_failed == 0 { Ok(()) } else { Err(format!("{pdf_failed} of {} PDFs could not be converted", pdfs.len())) };
+    }
     let job =
         convert::Job { inputs, to: to.to_string(), out: Some(o.into()), exists: convert::Exists::Overwrite, bak: false, ..convert::Job::default() };
     let image = |from: &std::path::Path, out: &std::path::Path, _: &convert::Job| {
@@ -370,8 +385,8 @@ fn convert_folder(i: &str, o: &str, to: &str, recurse: bool, framing: Framing) -
         }
     });
     outln!("{}", serde_json::to_string_pretty(&sum.to_json()).unwrap_or_default());
-    let failed = sum.count(convert::Status::Failed);
-    if failed == 0 { Ok(()) } else { Err(format!("{failed} of {} drawings could not be converted", sum.total)) }
+    let failed = sum.count(convert::Status::Failed) + pdf_failed;
+    if failed == 0 { Ok(()) } else { Err(format!("{failed} of {} drawings could not be converted", sum.total + pdfs.len())) }
 }
 
 /// `verify FILE.cdy`: the check as JSON; an error (exit status 1) when the file is damaged.
