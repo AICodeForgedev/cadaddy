@@ -304,6 +304,167 @@ fn a_rooftop_unit_fans_and_pumps_from_hand_made_sheets() {
     assert_eq!(unplaced, ["SF-1", "HWP-1"]);
 }
 
+/// A schedule as most offices draw one: grid lines on an annotation layer (each rule one long
+/// line, the column rules stopping under a merged title row), body text on another layer, some
+/// cells empty, columns of different widths.
+fn grid_table(d: &mut Drawing, layer: &str, at: [f64; 2], title: &str, widths: &[f64], rows: &[&[&str]]) {
+    let row_h = 3.0;
+    let right = at[0] + widths.iter().sum::<f64>();
+    let bottom = at[1] - row_h * rows.len() as f64;
+    // The title row above the header, one merged cell.
+    line(d, layer, [at[0], at[1] + row_h], [right, at[1] + row_h]);
+    text(d, "M-ANNO-TEXT", [at[0] + 10.0, at[1] + 1.0], 1.3, title);
+    for k in 0..=rows.len() {
+        let y = at[1] - row_h * k as f64;
+        line(d, layer, [at[0], y], [right, y]);
+    }
+    let mut x = at[0];
+    for (c, w) in widths.iter().enumerate() {
+        // The outer rules run up through the title row; the others stop at the header's top.
+        line(d, layer, [x, bottom], [x, if c == 0 { at[1] + row_h } else { at[1] }]);
+        for (i, r) in rows.iter().enumerate() {
+            if let Some(s) = r.get(c).filter(|s| !s.is_empty()) {
+                text(d, "M-ANNO-TEXT", [x + 0.5, at[1] - row_h * (i + 1) as f64 + 1.0], 1.0, s);
+            }
+        }
+        x += w;
+    }
+    line(d, layer, [right, bottom], [right, at[1] + row_h]);
+}
+
+#[test]
+fn line_grid_schedules_and_outlines_on_any_layer() {
+    let mut sch = Drawing::default();
+    let header: &[&str] = &["MARK", "SERVES", "CFM", "SIZE (L x W x H)", "WEIGHT (LB)"];
+    let rows: &[&[&str]] =
+        &[header, &["AHU-1", "LEVEL 1 WEST", "3,200", "9'-0\" x 5'-6\" x 6'-0\"", "1450"], &["AHU-2", "", "2,000", "7'-0\" x 4'-0\" x 5'-0\"", ""]];
+    grid_table(&mut sch, "M-ANNO-SCHD", [0.0, 100.0], "AIR HANDLING UNIT SCHEDULE", &[8.0, 16.0, 7.0, 24.0, 10.0], rows);
+    // A second grid table beside it whose rules are drawn cell by cell (short pieces).
+    let pump_rows: &[&[&str]] = &[&["TAG", "TYPE", "GPM"], &["P-1", "BASE MOUNTED", "40"]];
+    let (x0, y0, w, rh) = (90.0, 100.0, 12.0, 3.0);
+    for k in 0..=2 {
+        for c in 0..3 {
+            let x = x0 + w * c as f64;
+            line(&mut sch, "G-ANNO-TABL", [x, y0 - rh * k as f64], [x + w, y0 - rh * k as f64]);
+        }
+    }
+    for c in 0..=3 {
+        for k in 0..2 {
+            let x = x0 + w * c as f64;
+            line(&mut sch, "G-ANNO-TABL", [x, y0 - rh * k as f64], [x, y0 - rh * (k + 1) as f64]);
+        }
+    }
+    text(&mut sch, "G-ANNO-TEXT", [x0, y0 + 1.0], 1.3, "PUMP SCHEDULE");
+    for (k, r) in pump_rows.iter().enumerate() {
+        for (c, s) in r.iter().enumerate() {
+            text(&mut sch, "G-ANNO-TEXT", [x0 + w * c as f64 + 0.5, y0 - rh * (k + 1) as f64 + 1.0], 1.0, s);
+        }
+    }
+    // A sheet border and title block lines around it all: not tables.
+    rect(&mut sch, "G-ANNO-TTLB", [-20.0, -20.0], [200.0, 140.0]);
+    line(&mut sch, "G-ANNO-TTLB", [160.0, -20.0], [160.0, 140.0]);
+    text(&mut sch, "G-ANNO-TTLB", [165.0, 0.0], 2.0, "M-601");
+
+    let tables = read_tables(&sch, "M-601");
+    assert_eq!(tables.len(), 2, "{tables:#?}");
+    let ahu = &tables[0];
+    assert_eq!(ahu.title, "AIR HANDLING UNIT SCHEDULE");
+    assert_eq!(ahu.columns, header);
+    assert_eq!(ahu.rows.len(), 2, "{ahu:#?}");
+    // Cell for cell, empty cells left out.
+    for (row, want) in ahu.rows.iter().zip(&rows[1..]) {
+        let want: std::collections::BTreeMap<String, String> =
+            header.iter().zip(want.iter()).filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        assert_eq!(row, &want);
+    }
+    let pumps = &tables[1];
+    assert_eq!((pumps.title.as_str(), pumps.columns.len(), pumps.rows.len()), ("PUMP SCHEDULE", 3, 1), "{pumps:#?}");
+    assert_eq!(pumps.rows[0].get("TYPE").map(String::as_str), Some("BASE MOUNTED"));
+    let items = scheduled(&tables);
+    let tags: Vec<(&str, &str)> = items.iter().map(|s| (s.tag.as_str(), s.kind.as_str())).collect();
+    assert_eq!(tags, [("AHU-1", "ahu"), ("AHU-2", "ahu"), ("P-1", "pump")]);
+    assert_eq!(items[0].size_ft, Some([9.0, 5.5, 6.0]));
+    assert_eq!(items[0].cfm, Some(3200.0));
+
+    // The plan: AHU-1's outline on M-EQPM with its tag beside it; AHU-2's outline on a layer that
+    // says nothing (A-FLOR-OVHD), its printed 7' x 4' — taken, flagged; a 3' x 3' box on that layer
+    // by P-1's tag isn't its (it has no printed size and the tag is outside it).
+    let mut plan = Drawing::default();
+    rect(&mut plan, "M-EQPM", [120.0, 120.0], [228.0, 186.0]); // 9' x 5'-6"
+    text(&mut plan, "M-ANNO-TEXT", [240.0, 150.0], 9.0, "AHU-1");
+    rect(&mut plan, "A-FLOR-OVHD", [600.0, 120.0], [648.0, 204.0]); // 4' x 7'
+    text(&mut plan, "M-ANNO-TEXT", [660.0, 150.0], 9.0, "AHU-2");
+    rect(&mut plan, "A-FLOR-OVHD", [900.0, 120.0], [936.0, 156.0]);
+    text(&mut plan, "P-ANNO-TEXT", [960.0, 130.0], 9.0, "P-1");
+    let sh_sched = sheet("M-601", "M", None);
+    let sh_plan = sheet("M-101", "M", Some("1"));
+    let levels = [Level { name: "LEVEL 1".into(), code: "1".into(), elevation_ft: 0.0 }];
+    let r = equip_reader::read_equipment(&[SheetIn { sheet: &sh_sched, drawing: &sch }, SheetIn { sheet: &sh_plan, drawing: &plan }], &levels);
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    let p = r.placed.iter().find(|p| p.tag == "AHU-1").unwrap();
+    assert_eq!((p.footprint_from.as_str(), p.height_from.as_str()), ("outline", "schedule"));
+    assert!(
+        (p.min_ft[0] - 10.0).abs() < 1e-9 && (p.max_ft[0] - 19.0).abs() < 1e-9 && (p.max_ft[1] - 15.5).abs() < 1e-9,
+        "{:?} {:?}",
+        p.min_ft,
+        p.max_ft
+    );
+    assert!((p.max_ft[2] - 6.0).abs() < 1e-9 && p.flags.is_empty(), "{p:?}");
+    let q = r.placed.iter().find(|p| p.tag == "AHU-2").unwrap();
+    assert_eq!(q.footprint_from, "outline");
+    assert!((q.min_ft[0] - 50.0).abs() < 1e-9 && (q.max_ft[1] - 17.0).abs() < 1e-9, "{:?} {:?}", q.min_ft, q.max_ft);
+    assert!(q.flags.iter().any(|f| f.contains("A-FLOR-OVHD") && f.contains("printed size")), "{:?}", q.flags);
+    assert!(q.confidence < p.confidence);
+    let pump = r.placed.iter().find(|p| p.tag == "P-1").unwrap();
+    assert_ne!(pump.footprint_from, "outline", "a box that isn't its size isn't its outline: {pump:?}");
+
+    // No schedule on a sheet: said, not silent.
+    let mut blank = Drawing::default();
+    text(&mut blank, "G-ANNO-TEXT", [0.0, 0.0], 1.0, "GENERAL NOTES");
+    let none = equip_reader::read_equipment(&[SheetIn { sheet: &sh_sched, drawing: &blank }], &levels);
+    assert!(none.tables.is_empty() && none.notes.iter().any(|n| n.contains("no schedule found") && n.contains("TAG")), "{:?}", none.notes);
+}
+
+/// The spec form names levels and systems as the building spec does, not with the reader's codes.
+#[test]
+fn spec_form_uses_the_specs_level_and_system_names() {
+    use equip_reader::spec_system_name;
+    let systems =
+        [("M-DUCT-SUPP", "duct"), ("M-DUCT-RETN", "duct"), ("P-DOMW-HW", "pipe"), ("P-DOMW-HWR", "pipe"), ("P-DOMW-CW", "pipe"), ("Gas", "pipe")];
+    assert_eq!(spec_system_name("SA", "duct", &systems).as_deref(), Some("M-DUCT-SUPP"));
+    assert_eq!(spec_system_name("RA", "duct", &systems).as_deref(), Some("M-DUCT-RETN"));
+    assert_eq!(spec_system_name("HW", "pipe", &systems).as_deref(), Some("P-DOMW-HW"));
+    assert_eq!(spec_system_name("HWR", "pipe", &systems).as_deref(), Some("P-DOMW-HWR"));
+    assert_eq!(spec_system_name("CW", "pipe", &systems).as_deref(), Some("P-DOMW-CW"));
+    assert_eq!(spec_system_name("G", "pipe", &systems).as_deref(), Some("Gas"));
+    assert_eq!(spec_system_name("SA", "pipe", &systems), None, "a duct code isn't a pipe system");
+    assert_eq!(spec_system_name("EA", "duct", &systems), None);
+    // A spec system already named with the code is that one.
+    assert_eq!(spec_system_name("sa", "duct", &[("SA", "duct"), ("M-DUCT-SUPP", "duct")]).as_deref(), Some("SA"));
+
+    let (t, r) = read(1);
+    let names: Vec<(String, String)> = t.building.levels.iter().map(|l| (l.code.clone(), format!("Level {}", l.code))).collect();
+    let level_names: Vec<(&str, &str)> = names.iter().map(|(c, n)| (c.as_str(), n.as_str())).collect();
+    let (items, notes) = equip_reader::spec_equipment(&r, &t.building.levels, &level_names, &systems);
+    assert_eq!(items.len(), r.placed.len());
+    for (v, p) in items.iter().zip(&r.placed) {
+        assert_eq!(v["level"], format!("Level {}", p.level));
+        for sy in v["systems"].as_array().unwrap() {
+            assert!(systems.iter().any(|(n, _)| sy == n) || notes.iter().any(|n| n.contains(&format!("{} joins", p.tag))), "{} {sy}", p.tag);
+        }
+    }
+    let ahu = items.iter().find(|v| v["kind"] == "ahu").unwrap();
+    assert!(ahu["systems"].as_array().unwrap().iter().any(|s| s == "M-DUCT-SUPP"), "{ahu}");
+    // A system the spec lacks keeps its code and says so; a level it lacks leaves the item out.
+    let _ = notes;
+    let (items, notes) = equip_reader::spec_equipment(&r, &t.building.levels, &level_names, &systems[1..]);
+    let ahu = items.iter().find(|v| v["kind"] == "ahu").unwrap();
+    assert!(ahu["systems"].as_array().unwrap().iter().any(|s| s == "SA"), "{ahu}");
+    assert!(notes.iter().any(|n| n.contains("joins duct SA") && n.contains("isn't a system of the building spec")), "{notes:?}");
+    let (some, notes) = equip_reader::spec_equipment(&r, &t.building.levels, &[], &systems);
+    assert!(some.is_empty() && notes.iter().any(|n| n.contains("left out")));
+}
+
 #[test]
 fn hostile_drawings_dont_panic() {
     let mut d = Drawing::default();

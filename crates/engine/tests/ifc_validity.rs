@@ -1733,7 +1733,11 @@ fn scheduled_equipment_exports_as_its_distribution_element_class() {
         {"tag": "X-1", "kind": "humidifier", "level": "L2", "min": [2700, 100], "max": [2712, 112], "bottom_ft": 0, "height_ft": 1}
     ]);
     let issues = s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": equipment}}})).unwrap();
-    assert!(!issues.to_string().contains("mep.equipment"), "{issues}");
+    assert!(!issues["errors"].to_string().contains("mep.equipment"), "{issues}");
+    // The drawing has no hot-water pipes, so P-DOMW-HW isn't one of its systems: the one warning.
+    let warned: Vec<&str> =
+        issues["warnings"].as_array().unwrap().iter().filter_map(|w| w["path"].as_str()).filter(|p| p.starts_with("mep.equipment")).collect();
+    assert_eq!(warned, ["mep.equipment[2].systems[1]"], "{issues}");
     let built = s.execute("model.build", &json!({})).unwrap();
     assert_eq!(built["mepEquipment"].as_u64().or_else(|| find_count(&built)), Some(9), "{built}");
     let text = export(&mut s, "Sample Equipment.ifc");
@@ -1831,6 +1835,183 @@ fn bad_equipment_is_an_issue_not_a_crash() {
     assert!(text.contains("mep.equipment"), "{text}");
     // Whatever was stored, building skips what it can't make.
     let _ = s.execute("model.build", &json!({}));
+}
+
+/// An equipment entry whose systems aren't in `mep.systems` is warned about (it would sit in an
+/// IFC group of its own, apart from the runs it joins); a known system and no systems aren't.
+#[test]
+fn equipment_on_an_unknown_system_is_warned_about() {
+    hooks();
+    let mut s = Session::new();
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9}],
+        "mep": {
+            "systems": [{"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9}],
+            "equipment": [
+                {"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [0, 0], "max": [96, 60], "bottom_ft": 0, "height_ft": 6, "systems": ["M-DUCT-SUPP", "SA"]},
+                {"tag": "CU-1", "kind": "condensing_unit", "level": "L1", "min": [200, 0], "max": [236, 36], "bottom_ft": 0, "height_ft": 3}
+            ]
+        }
+    });
+    let r = s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let warned: Vec<(&str, &str)> = r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| Some((w["path"].as_str()?, w["message"].as_str()?)))
+        .filter(|(p, _)| p.starts_with("mep.equipment"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{r}");
+    let (path, message) = warned[0];
+    assert_eq!(path, "mep.equipment[0].systems[1]");
+    assert!(message.contains("AHU-1") && message.contains("SA") && message.contains("mep.systems"), "{message}");
+    // bspec.validate says the same; with the system added, nothing.
+    let v = s.execute("bspec.validate", &json!({})).unwrap();
+    assert!(v["warnings"].to_string().contains("mep.equipment[0].systems[1]"), "{v}");
+    let fixed = json!({"mep": {"systems": [
+        {"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9},
+        {"name": "SA", "layer": "SA", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9}
+    ]}});
+    let r = s.execute("bspec.set", &json!({"spec": fixed})).unwrap();
+    assert!(!r["warnings"].to_string().contains("mep.equipment"), "{r}");
+}
+
+/// Equipment read off a generated print set (Q262 reader, Q254 fixtures) into the building spec
+/// with the spec's level and system names, built and exported: every placeable item, each as
+/// its kind's IFC class, each in the same IfcDistributionSystem group as runs of every system it
+/// joins. The runs are the set's own (truth), named as an office layer standard names them; the
+/// equipment's system names come from the reader's codes (`SA`, `HW`) through
+/// `equip_reader::spec_system_name`, not from that table.
+#[test]
+fn equipment_read_from_prints_builds_into_ifc_with_its_runs() {
+    use cadaddy_mepfix::equip_reader;
+    hooks();
+    const NAMES: &[(&str, &str, &str)] = &[
+        ("SA", "M-DUCT-SUPP", "duct"),
+        ("RA", "M-DUCT-RETN", "duct"),
+        ("EA", "M-DUCT-EXHS", "duct"),
+        ("OA", "M-DUCT-OA", "duct"),
+        ("CW", "P-DOMW-CW", "pipe"),
+        ("HW", "P-DOMW-HW", "pipe"),
+        ("HWR", "P-DOMW-HWR", "pipe"),
+        ("SAN", "P-SANR", "pipe"),
+        ("V", "P-VENT", "pipe"),
+        ("G", "P-GAS", "pipe"),
+        ("FP", "F-SPRK-PIPE", "pipe"),
+        ("ST", "P-STRM", "pipe"),
+        ("CHW", "M-HYDR-CHWS", "pipe"),
+        ("CHWR", "M-HYDR-CHWR", "pipe"),
+    ];
+    let class_of = |kind: &str| match kind {
+        "ahu" | "rtu" => "IFCUNITARYEQUIPMENT",
+        "vav" => "IFCAIRTERMINALBOX",
+        "exhaust_fan" | "fan" => "IFCFAN",
+        "pump" => "IFCPUMP",
+        "water_heater" => "IFCBOILER",
+        "condensing_unit" => "IFCCONDENSER",
+        "gas_meter" => "IFCFLOWMETER",
+        _ => "IFCBUILDINGELEMENTPROXY",
+    };
+    for seed in [1u64, 2] {
+        let set = cadaddy_mepfix::generate(seed).unwrap();
+        let t = &set.truth;
+        let read = equip_reader::read_fixture_set(&set);
+        let sc = equip_reader::score(&read, t);
+        assert_eq!(sc.placed, sc.expected_placed, "seed {seed}: the reader places every placeable item");
+        // The spec's levels are named, not coded: `1` → `L1`.
+        let names: Vec<(String, String)> = t.building.levels.iter().map(|l| (l.code.clone(), format!("L{}", l.code))).collect();
+        let level_names: Vec<(&str, &str)> = names.iter().map(|(c, n)| (c.as_str(), n.as_str())).collect();
+        let mut levels = Vec::new();
+        for (i, l) in t.building.levels.iter().enumerate() {
+            let next = t.building.levels.get(i + 1).map_or(l.elevation_ft + 14.0, |n| n.elevation_ft);
+            levels.push(json!({"name": format!("L{}", l.code), "elevation_ft": l.elevation_ft, "height_ft": (next - l.elevation_ft).max(8.0), "ceiling_ft": 9}));
+        }
+        let elevation = |code: &str| t.building.levels.iter().find(|l| l.code == code).map_or(0.0, |l| l.elevation_ft);
+        // The set's horizontal runs near the equipment, as spec runs of the named systems.
+        let near_equipment = |seg: &cadaddy_mepfix::truth::Segment| {
+            t.equipment.iter().filter(|e| e.level == seg.level).any(|e| {
+                seg.path_ft
+                    .iter()
+                    .any(|p| p[0] > e.min_ft[0] - 40.0 && p[0] < e.max_ft[0] + 40.0 && p[1] > e.min_ft[1] - 40.0 && p[1] < e.max_ft[1] + 40.0)
+            })
+        };
+        let mut runs = Vec::new();
+        let mut used: BTreeSet<&str> = BTreeSet::new();
+        for seg in t.segments.iter().filter(|s| !s.vertical && !s.below_floor && near_equipment(s)) {
+            let Some((_, name, _)) = NAMES.iter().find(|(c, _, _)| *c == seg.system) else { continue };
+            let [a, b] = seg.path_ft;
+            if (a[0] - b[0]).hypot(a[1] - b[1]) < 0.1 {
+                continue;
+            }
+            let size = if seg.shape == "rect" { seg.size_in } else { [seg.size_in[0], 0.0] };
+            let depth = if seg.shape == "rect" { seg.size_in[1] } else { seg.size_in[0] };
+            let bottom = (a[2] - elevation(&seg.level) - depth / 24.0).max(0.0);
+            runs.push(json!({"system": name, "level": format!("L{}", seg.level), "points": [[a[0] * 12.0, a[1] * 12.0], [b[0] * 12.0, b[1] * 12.0]],
+                "size_in": size, "bottoms_ft": [bottom]}));
+            used.insert(name);
+        }
+        let systems: Vec<serde_json::Value> = NAMES
+            .iter()
+            .filter(|(_, n, _)| used.contains(n))
+            .map(|(_, n, k)| json!({"name": n, "layer": n, "kind": k, "size_in": if *k == "duct" { [12.0, 12.0] } else { [2.0, 0.0] }, "bottom_ft": 9}))
+            .collect();
+        let spec_systems: Vec<(&str, &str)> = NAMES.iter().filter(|(_, n, _)| used.contains(n)).map(|(_, n, k)| (*n, *k)).collect();
+        let (equipment, notes) = equip_reader::spec_equipment(&read, &t.building.levels, &level_names, &spec_systems);
+        assert!(notes.is_empty(), "seed {seed}: every level and system named: {notes:?}");
+        assert_eq!(equipment.len(), read.placed.len(), "seed {seed}");
+        for e in &equipment {
+            assert!(e["level"].as_str().unwrap().starts_with('L'), "seed {seed}: {e}");
+            for sy in e["systems"].as_array().unwrap() {
+                assert!(NAMES.iter().any(|(_, n, _)| sy == n), "seed {seed}: {} joins {sy}, not a spec name", e["tag"]);
+            }
+        }
+        let mut s = Session::new();
+        let spec = json!({"version": 1, "units_per_foot": 12, "levels": levels, "mep": {"systems": systems, "runs": runs, "equipment": equipment}});
+        let r = s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+        assert!(r["errors"].as_array().unwrap().is_empty(), "seed {seed}: {}", r["errors"]);
+        assert!(!r["warnings"].to_string().contains("mep.equipment"), "seed {seed}: {}", r["warnings"]);
+        let built = s.execute("model.build", &json!({})).unwrap();
+        assert_eq!(built["mepEquipment"].as_u64(), Some(sc.expected_placed as u64), "seed {seed}: {built}");
+        let text = export(&mut s, "Sample Print Set.ifc");
+        let p = problems(&text);
+        assert!(p.is_empty(), "seed {seed}: {}", p.join("\n"));
+        let f = read_step(&text).unwrap();
+        let groups: Vec<(String, Vec<u64>)> = f
+            .data
+            .values()
+            .filter(|(t, _)| t == "IFCRELASSIGNSTOGROUP")
+            .filter_map(|(_, p)| {
+                let g = refs(&p[6]).first().copied()?;
+                let name = match f.data.get(&g)?.1.get(2)? {
+                    P::Str(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, refs(&p[4])))
+            })
+            .collect();
+        let class = |id: u64| f.data.get(&id).map_or("", |(t, _)| t.as_str());
+        let mut joined = 0;
+        for e in &equipment {
+            let tag = e["tag"].as_str().unwrap();
+            let (id, (cls, _)) = f
+                .data
+                .iter()
+                .find(|(_, (_, p))| p.get(2) == Some(&P::Str(tag.into())))
+                .unwrap_or_else(|| panic!("seed {seed}: {tag} not in the IFC"));
+            assert_eq!(cls, class_of(e["kind"].as_str().unwrap()), "seed {seed}: {tag}");
+            for sy in e["systems"].as_array().unwrap().iter().filter_map(|v| v.as_str()) {
+                joined += 1;
+                let with_runs = groups
+                    .iter()
+                    .filter(|(n, m)| n == sy && m.contains(id))
+                    .any(|(_, m)| m.iter().any(|x| ["IFCDUCTSEGMENT", "IFCPIPESEGMENT"].contains(&class(*x))));
+                assert!(with_runs, "seed {seed}: {tag} isn't in a {sy} group with that system's runs");
+            }
+        }
+        assert!(joined >= equipment.len(), "seed {seed}: the equipment joins its runs ({joined} joins for {} items)", equipment.len());
+    }
 }
 
 /// The value of property `name` in the CADaddy_MepSize set of product `product`.
