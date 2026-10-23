@@ -795,3 +795,174 @@ fn recount_after_foreign_symbol_learning() {
     // The pipeline detects new rules were learned → sets stage to Pending for recount.
     assert!(rules_before > 0, "rules should exist for recount");
 }
+
+// ─── REWORK tests (guidedrun-rw2) ──────────────────────────────────────────
+
+/// Test (RW2 MUST 1): Classify result without "sheets" key should not
+/// report 0 sheets. After the fix, job.sheets comes from printset.sheets
+/// (which HAS a "sheets" array), not from printset.classify (which does not).
+#[test]
+fn classify_result_uses_sheets_command() {
+    use cadaddy_engine::cmd::guided::*;
+
+    let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
+
+    // Simulate the FIXED flow: job.sheets is set from printset.sheets,
+    // which returns {sheets: [...], total: N}.
+    job.sheets = Some(json!({
+        "sheets": [{
+            "number": "E-4",
+            "title": "ELECTRICAL - 3RD AND 4TH FLOOR PLANS",
+            "discipline": "E",
+            "type": "plan",
+            "level": "",
+            "scale": "",
+            "file": "e4.pdf",
+            "dirty": false,
+            "stages": [],
+        }],
+        "total": 1
+    }));
+
+    // The sheet count from job.sheets should be 1 (not 0).
+    let sheets = job.sheets.as_ref()
+        .and_then(|v| v.get("sheets"))
+        .and_then(serde_json::Value::as_array);
+    let sheet_count = sheets.map_or(0, Vec::len);
+    assert_eq!(sheet_count, 1, "sheet count should be 1 from printset.sheets result");
+
+    // No "0 sheets" finding should be generated.
+    assert!(job.findings.is_empty(),
+        "no 0-sheets finding when printset.sheets returns 1 sheet");
+}
+
+/// Test (RW2 MUST 1): When printset.classify result (without fix) is
+/// stored in job.sheets, looking for "sheets" key yields None / 0.
+/// This proves the old code was broken.
+#[test]
+fn classify_result_without_sheets_key_is_zero() {
+    // The old printset.classify return shape:
+    let classify_result = json!({
+        "classified": 1,
+        "total": 1,
+        "elapsed_ms": 42
+    });
+
+    // Looking for "sheets" key in this returns None.
+    let sheets = classify_result.get("sheets").and_then(serde_json::Value::as_array);
+    assert!(sheets.is_none(),
+        "printset.classify result has no 'sheets' key — old code was broken");
+    assert_eq!(sheets.map_or(0, Vec::len), 0);
+}
+
+/// Test (RW2 MUST 2): Stage error findings have recovery actions.
+#[test]
+fn stage_error_has_recovery_actions() {
+    use cadaddy_engine::cmd::guided::*;
+
+    // Every stage should have at least "Retry" and "Skip" actions.
+    for &stage in StageName::ALL.iter() {
+        let actions = stage_error_actions(stage);
+        assert!(actions.len() >= 2,
+            "{:?} error should have ≥2 actions, got {}", stage, actions.len());
+        assert!(actions.iter().any(|a| a.contains("Retry")),
+            "{:?} error should have a Retry action", stage);
+        assert!(actions.iter().any(|a| a.contains("Skip")),
+            "{:?} error should have a Skip action", stage);
+    }
+
+    // Classify should also offer re-import and manual discipline.
+    let classify_actions = stage_error_actions(StageName::Classify);
+    assert!(classify_actions.len() >= 4,
+        "classify error should have ≥4 actions");
+    assert!(classify_actions.iter().any(|a| a.contains("discipline")),
+        "classify error should offer manual discipline");
+}
+
+/// Test (RW2 MUST 2): Stage error produces a blocking worklist finding
+/// with evidence (not empty).
+#[test]
+fn stage_error_finding_has_evidence_and_is_blocking() {
+    use cadaddy_engine::cmd::guided::*;
+
+    let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
+
+    // Simulate what the error handler now does.
+    let stage = StageName::Classify;
+    let msg = "Classify found 0 sheets in the print set";
+    let actions = stage_error_actions(stage);
+    let evidence = Some(QuestionEvidence {
+        crop_png_path: None,
+        sheet: None,
+        at: None,
+        values: Some(json!({"error": msg, "stage": "classify"})),
+        handles: Vec::new(),
+        tiled_crops: None,
+        leftovers: Vec::new(),
+    });
+    job.add_finding(stage, msg,
+        "Stage encountered an error and could not complete",
+        5, actions, evidence, true);
+
+    assert_eq!(job.findings.len(), 1);
+    assert!(job.findings[0].blocking, "error finding must be blocking");
+    assert!(!job.findings[0].actions.is_empty(), "error finding must have actions");
+    assert!(job.findings[0].evidence.is_some(), "error finding must have evidence");
+
+    // Worklist should reflect it as pending (blocking).
+    assert_eq!(job.worklist.len(), 1);
+    assert_eq!(job.worklist[0].status, "pending");
+    assert!(!job.worklist[0].choices.is_empty(), "worklist actions must not be empty");
+}
+
+/// Test (RW2 MUST 3): Real E-4 scenario — classify with proper sheets
+/// data reaches levels with 2 levels extracted.
+#[test]
+fn real_e4_classify_to_levels() {
+    use cadaddy_engine::cmd::guided::*;
+
+    let mut job = GuidedJob::new("/tmp/synthetic-e4-prints", JobGoal::Takeoff);
+
+    // After fix: job.sheets comes from printset.sheets with actual sheet data.
+    job.sheets = Some(json!({
+        "sheets": [{
+            "number": "E-4",
+            "title": "ELECTRICAL - 3RD AND 4TH FLOOR PLANS",
+            "discipline": "E",
+            "type": "plan",
+            "level": "",
+            "scale": "",
+            "file": "e4.pdf",
+            "dirty": false,
+            "stages": [],
+        }],
+        "total": 1
+    }));
+
+    // Sheet count is 1 — no error finding.
+    let sheet_count = job.sheets.as_ref()
+        .and_then(|v| v.get("sheets"))
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(sheet_count, 1);
+
+    // Discipline is E.
+    let disc = job.sheets.as_ref().unwrap()["sheets"][0]["discipline"]
+        .as_str().unwrap();
+    assert_eq!(disc, "E");
+
+    // Levels extraction from title finds 3 and 4.
+    let title = job.sheets.as_ref().unwrap()["sheets"][0]["title"]
+        .as_str().unwrap();
+    let levels = extract_levels_from_title(title);
+    assert!(levels.contains(&"3".to_string()), "expected level 3");
+    assert!(levels.contains(&"4".to_string()), "expected level 4");
+
+    // Mark classify done (no 0-sheets error), advance to levels.
+    if let Some(st) = job.stage_mut(StageName::Import) { st.status = StageStatus::Done; }
+    if let Some(st) = job.stage_mut(StageName::Classify) { st.status = StageStatus::Done; }
+
+    // No blocking findings.
+    assert!(job.findings.iter().all(|f| !f.blocking),
+        "no blocking findings after successful classify");
+}

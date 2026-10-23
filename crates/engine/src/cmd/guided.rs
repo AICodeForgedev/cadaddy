@@ -617,12 +617,21 @@ fn run_import(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let classified = s.execute("printset.classify", &json!({}))?;
 
+    // Fetch the actual sheet list (printset.classify returns {classified, total,
+    // elapsed_ms} — no "sheets" array). printset.sheets returns {sheets: [...], total}.
+    let sheets_result = s.execute("printset.sheets", &json!({}))?;
+
     // Cache the sheet list for later stages (MUST 4).
-    job.sheets = Some(classified.clone());
+    job.sheets = Some(sheets_result);
 
     // MUST 1: Check for empty results.
-    let sheets = classified.get("sheets").and_then(Value::as_array);
-    let sheet_count = sheets.map_or(0, Vec::len);
+    // Clone the sheets array out of job.sheets so we don't hold an immutable
+    // borrow on `job` while later code needs `&mut job`.
+    let sheets_vec: Option<Vec<Value>> = job.sheets.as_ref()
+        .and_then(|v| v.get("sheets"))
+        .and_then(Value::as_array)
+        .cloned();
+    let sheet_count = sheets_vec.as_ref().map_or(0, Vec::len);
     if sheet_count == 0 {
         job.add_finding(StageName::Classify,
             "Classify found 0 sheets in the print set",
@@ -633,7 +642,7 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 
     // MUST 2: Check each sheet's discipline; ask when unknown.
-    if let Some(sheets) = sheets {
+    if let Some(ref sheets) = sheets_vec {
         let mut unknown_count = 0usize;
         for sheet in sheets.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
@@ -1722,11 +1731,22 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             }
             Err(e) => {
                 let msg = e.to_string();
-                // MUST 1: Error is a finding, not silent.
+                // RW2 MUST 2: Error → worklist finding with evidence + actions
+                // so the job never just stops silently.
+                let actions = stage_error_actions(stage_name);
+                let evidence = Some(QuestionEvidence {
+                    crop_png_path: None,
+                    sheet: None,
+                    at: None,
+                    values: Some(json!({"error": &msg, "stage": stage_name.label()})),
+                    handles: Vec::new(),
+                    tiled_crops: None,
+                    leftovers: Vec::new(),
+                });
                 job.add_finding(stage_name,
                     &format!("{} error: {msg}", stage_name.label()),
                     "Stage encountered an error and could not complete",
-                    5, Vec::new(), None, false);
+                    5, actions, evidence, true);
                 if let Some(st) = job.stage_mut(stage_name) {
                     st.status = StageStatus::Error;
                     st.error = Some(msg.clone());
@@ -1737,6 +1757,31 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             }
         }
     }
+}
+
+/// Recovery actions for a stage error (RW2 MUST 2).
+pub fn stage_error_actions(stage: StageName) -> Vec<String> {
+    let mut actions = vec![
+        "Retry this stage".into(),
+        "Skip this stage and continue".into(),
+    ];
+    match stage {
+        StageName::Classify => {
+            actions.push("Re-import with a different path".into());
+            actions.push("Set discipline manually".into());
+        }
+        StageName::Levels => {
+            actions.push("Set levels manually".into());
+        }
+        StageName::Rooms => {
+            actions.push("Re-classify sheets and retry".into());
+        }
+        StageName::Devices => {
+            actions.push("Re-classify sheets and retry".into());
+        }
+        _ => {}
+    }
+    actions
 }
 
 /// Apply learned rules (from previous answers) before running a stage.
