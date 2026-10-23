@@ -972,6 +972,9 @@ pub struct SiteElement {
     /// Pipe size for utility runs, nominal inches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_in: Option<f64>,
+    /// Conduit count for ductbanks (e.g. 4 conduits in a ductbank).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conduit_count: Option<u32>,
 }
 
 /// A grading contour on the civil grading plan.

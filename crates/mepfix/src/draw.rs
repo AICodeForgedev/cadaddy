@@ -2419,6 +2419,10 @@ fn site_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
             "bench" => draw_bench(pen, se, FURNISH_LAYER),
             "bike_rack" => draw_bike_rack(pen, se, FURNISH_LAYER),
             "trash_can" => draw_trash_can(pen, se, FURNISH_LAYER),
+            "pull_box" => draw_pull_box(pen, se, layer),
+            "pole_base" => draw_pole_base(pen, se, layer),
+            "ev_charger" => draw_ev_charger(pen, se, layer),
+            "monument_sign" => draw_monument_sign(pen, se, layer),
             k if k.starts_with("underground_") => draw_underground(pen, se, layer),
             _ => draw_generic_site(pen, se, layer),
         }
@@ -2544,11 +2548,67 @@ fn draw_underground(pen: &mut Pen, se: &SiteElement, layer: &str) {
         let depth_str = format!("{depth:.0}' DEEP");
         pen.text(layer, c + Vec2::new(off, -pen.pl(0.10)), 0.05, &depth_str, 0.0, HAlign::Left, VAlign::Middle);
     }
-    // Pipe size and material.
+    // Pipe size and material (with conduit count for ductbanks).
     if let Some(size) = se.size_in {
-        let pipe = format!("{size:.0}\" {}", se.material).trim_end().to_string();
+        let pipe = if let Some(count) = se.conduit_count {
+            format!("{count}-{size:.0}\" {}", se.material).trim_end().to_string()
+        } else {
+            format!("{size:.0}\" {}", se.material).trim_end().to_string()
+        };
         pen.text(layer, c + Vec2::new(off, pen.pl(0.10)), 0.05, &pipe, 0.0, HAlign::Left, VAlign::Middle);
     }
+}
+
+/// Pull box / handhole: a small square with an X inside and a tag.
+fn draw_pull_box(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // X inside.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+        pen.line(layer, Vec2::new(a.x, b.y), Vec2::new(b.x, a.y));
+    }
+    let c = pen.b(se.at_ft);
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Pole base: a filled square at the base of a light pole, with tag.
+fn draw_pole_base(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // Diagonal hatching inside.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+    }
+    let c = pen.b(se.at_ft);
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// EV charger: a small rectangle with a lightning bolt symbol (two lines) and tag.
+fn draw_ev_charger(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    // A simple lightning-bolt shape: two diagonal lines.
+    let s = pen.pl(0.06);
+    pen.line(layer, c + Vec2::new(-s * 0.3, s), c + Vec2::new(s * 0.3, 0.0));
+    pen.line(layer, c + Vec2::new(s * 0.3, 0.0), c + Vec2::new(-s * 0.3, -s));
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Monument sign: a larger rectangle with label inside.
+fn draw_monument_sign(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
 }
 
 /// Generic site element: a point marker with tag.
