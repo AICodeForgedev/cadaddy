@@ -783,8 +783,7 @@ mod tests {
     /// MUST 4b: diag::entries includes `diagnostics/crash-…txt` when a crash report exists.
     #[test]
     fn crash_reports_appear_in_the_bundle() {
-        let dir = std::env::temp_dir()
-            .join(format!("cadaddy-diag-crash-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cadaddy-diag-crash-{}", std::process::id()));
         cadaddy_engine::crash_report::set_store_dir(Some(dir.clone()));
 
         // Write a crash report into the isolated store.
@@ -799,29 +798,13 @@ mod tests {
 
         let app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
         let all = entries(&app, Choices::default());
-        let diag_files: Vec<&str> = all
-            .iter()
-            .map(|(n, _)| n.as_str())
-            .filter(|n| n.starts_with("diagnostics/"))
-            .collect();
-        assert!(
-            !diag_files.is_empty(),
-            "crash reports are in the bundle: {diag_files:?}"
-        );
-        assert!(
-            diag_files[0].starts_with("diagnostics/crash-"),
-            "file is a crash report: {diag_files:?}"
-        );
+        let diag_files: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).filter(|n| n.starts_with("diagnostics/")).collect();
+        assert!(!diag_files.is_empty(), "crash reports are in the bundle: {diag_files:?}");
+        assert!(diag_files[0].starts_with("diagnostics/crash-"), "file is a crash report: {diag_files:?}");
         // The report's content is included.
-        let content = all
-            .iter()
-            .find(|(n, _)| n.starts_with("diagnostics/crash-"))
-            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default();
-        assert!(
-            content.contains("command: testcmd"),
-            "crash report content: {content}"
-        );
+        let content =
+            all.iter().find(|(n, _)| n.starts_with("diagnostics/crash-")).map(|(_, b)| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        assert!(content.contains("command: testcmd"), "crash report content: {content}");
 
         cadaddy_engine::crash_report::set_store_dir(None);
         let _ = std::fs::remove_dir_all(&dir);

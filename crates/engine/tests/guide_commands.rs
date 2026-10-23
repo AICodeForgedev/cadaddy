@@ -42,10 +42,7 @@ fn extract_backtick_commands(text: &str) -> Vec<(usize, String)> {
                 // Must be all uppercase ASCII + dots/hyphens, at least 2 chars,
                 // and at least 2 ASCII letters
                 let alpha_count = inside.chars().filter(|c| c.is_ascii_uppercase()).count();
-                if alpha_count >= 2
-                    && inside.len() >= 2
-                    && inside.chars().all(|c| c.is_ascii_uppercase() || c == '.' || c == '-' || c == '_')
-                {
+                if alpha_count >= 2 && inside.len() >= 2 && inside.chars().all(|c| c.is_ascii_uppercase() || c == '.' || c == '-' || c == '_') {
                     results.push((line_no + 1, inside.to_string()));
                 }
             } else {
@@ -64,15 +61,37 @@ fn allowed_non_commands() -> HashSet<&'static str> {
         // Mode keywords for MEASUREGEOM
         "AREA",
         // File extensions / format names mentioned in tables
-        "DWG", "DXF", "DWT", "PDF", "SVG", "PNG", "CDY", "IFC",
-        "GLB", "GLTF", "OBJ", "STL",
+        "DWG",
+        "DXF",
+        "DWT",
+        "PDF",
+        "SVG",
+        "PNG",
+        "CDY",
+        "IFC",
+        "GLB",
+        "GLTF",
+        "OBJ",
+        "STL",
         // Layer name patterns
-        "E-POWER", "A-WALL", "A-DOOR", "A-GLAZ", "A-ANNO", "A-DIMS",
+        "E-POWER",
+        "A-WALL",
+        "A-DOOR",
+        "A-GLAZ",
+        "A-ANNO",
+        "A-DIMS",
         // System variable names
-        "INSUNITS", "DIMSCALE", "LTSCALE", "FILEDIA", "CLAYER",
-        "STEPSIZE", "STEPSPERSEC", "CADADDY_TAKEOFF_WASTE",
+        "INSUNITS",
+        "DIMSCALE",
+        "LTSCALE",
+        "FILEDIA",
+        "CLAYER",
+        "STEPSIZE",
+        "STEPSPERSEC",
+        "CADADDY_TAKEOFF_WASTE",
         // Keyboard keys
-        "CTRL", "ENTER",
+        "CTRL",
+        "ENTER",
     ]
     .into_iter()
     .collect()
@@ -113,10 +132,6 @@ fn guide_commands_exist_in_registry() {
         unknown.is_empty(),
         "Guide files reference commands that are not registered ids or aliases \
          (add them to the registry, fix the guide, or add to allowed_non_commands):\n{}",
-        unknown
-            .iter()
-            .map(|(f, l, c)| format!("  {f}:{l}: `{c}`"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        unknown.iter().map(|(f, l, c)| format!("  {f}:{l}: `{c}`")).collect::<Vec<_>>().join("\n")
     );
 }

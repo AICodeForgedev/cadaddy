@@ -311,11 +311,7 @@ pub fn resolve_heights(segments: &[SegmentInput], ctx: &LevelContext, rules: &Tr
 /// When the real depth is zero or too small, returns a default assumed depth.
 fn effective_depth_ft(seg: &SegmentInput) -> (f64, bool) {
     let d_in = depth_in(&seg.shape, seg.size_in);
-    if d_in < 1e-9 {
-        (DEFAULT_ASSUMED_DEPTH_IN / 12.0, true)
-    } else {
-        (d_in / 12.0, false)
-    }
+    if d_in < 1e-9 { (DEFAULT_ASSUMED_DEPTH_IN / 12.0, true) } else { (d_in / 12.0, false) }
 }
 
 fn resolve_from_note(parsed: &ParsedHeight, seg: &SegmentInput, depth_ft: f64, assumed: bool, ctx: &LevelContext) -> Option<ResolvedHeight> {
@@ -359,12 +355,7 @@ fn resolve_from_note(parsed: &ParsedHeight, seg: &SegmentInput, depth_ft: f64, a
 /// Unified stacking: all non-note runs are placed by trade order from the structure down.
 /// Within each trade layer, runs that overlap in plan are pushed apart by depth + gap.
 /// The source is `Ceiling` when the run sits in a room with a ceiling, otherwise `Rule`.
-fn resolve_stacked(
-    stacking_segments: &[(usize, usize)],
-    segments: &[SegmentInput],
-    ctx: &LevelContext,
-    rules: &TradeRules,
-) -> Vec<ResolvedHeight> {
+fn resolve_stacked(stacking_segments: &[(usize, usize)], segments: &[SegmentInput], ctx: &LevelContext, rules: &TradeRules) -> Vec<ResolvedHeight> {
     if stacking_segments.is_empty() {
         return Vec::new();
     }
@@ -418,10 +409,7 @@ fn resolve_stacked(
             }
 
             // Source: Ceiling if the segment is in a room with a ceiling, else Rule.
-            let source = if find_room(seg.midpoint_ft, &seg.level, &ctx.rooms)
-                .and_then(|r| r.ceiling.as_ref())
-                .is_some()
-            {
+            let source = if find_room(seg.midpoint_ft, &seg.level, &ctx.rooms).and_then(|r| r.ceiling.as_ref()).is_some() {
                 HeightSource::Ceiling
             } else {
                 HeightSource::Rule
@@ -459,11 +447,7 @@ fn segments_overlap_plan(a_from: [f64; 2], a_to: [f64; 2], b_from: [f64; 2], b_t
     let b_max_y = b_from[1].max(b_to[1]);
 
     // Quick reject: bounding boxes don't overlap.
-    if a_max_x + tol < b_min_x
-        || b_max_x + tol < a_min_x
-        || a_max_y + tol < b_min_y
-        || b_max_y + tol < a_min_y
-    {
+    if a_max_x + tol < b_min_x || b_max_x + tol < a_min_x || a_max_y + tol < b_min_y || b_max_y + tol < a_min_y {
         return false;
     }
 
@@ -492,16 +476,22 @@ fn segments_intersect(a1: [f64; 2], a2: [f64; 2], b1: [f64; 2], b2: [f64; 2]) ->
     let d3 = cross_2d(b1, b2, a1);
     let d4 = cross_2d(b1, b2, a2);
 
-    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
-        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
-    {
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0)) {
         return true;
     }
     // Collinear cases: check if any endpoint lies on the other segment.
-    if d1.abs() < 1e-12 && on_segment(a1, b1, a2) { return true; }
-    if d2.abs() < 1e-12 && on_segment(a1, b2, a2) { return true; }
-    if d3.abs() < 1e-12 && on_segment(b1, a1, b2) { return true; }
-    if d4.abs() < 1e-12 && on_segment(b1, a2, b2) { return true; }
+    if d1.abs() < 1e-12 && on_segment(a1, b1, a2) {
+        return true;
+    }
+    if d2.abs() < 1e-12 && on_segment(a1, b2, a2) {
+        return true;
+    }
+    if d3.abs() < 1e-12 && on_segment(b1, a1, b2) {
+        return true;
+    }
+    if d4.abs() < 1e-12 && on_segment(b1, a2, b2) {
+        return true;
+    }
     false
 }
 
@@ -510,10 +500,7 @@ fn cross_2d(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 fn on_segment(p: [f64; 2], q: [f64; 2], r: [f64; 2]) -> bool {
-    q[0] <= p[0].max(r[0]) + 1e-12
-        && q[0] >= p[0].min(r[0]) - 1e-12
-        && q[1] <= p[1].max(r[1]) + 1e-12
-        && q[1] >= p[1].min(r[1]) - 1e-12
+    q[0] <= p[0].max(r[0]) + 1e-12 && q[0] >= p[0].min(r[0]) - 1e-12 && q[1] <= p[1].max(r[1]) + 1e-12 && q[1] >= p[1].min(r[1]) - 1e-12
 }
 
 /// Perpendicular distance from point `p` to the line segment `a`-`b`.
@@ -1022,13 +1009,7 @@ mod tests {
 
     #[test]
     fn zero_depth_run_gets_assumed_depth() {
-        let ctx = LevelContext {
-            level_code: "1".into(),
-            elevation_ft: 0.0,
-            structure_underside_ft: 12.0,
-            rooms: vec![],
-            beams: vec![],
-        };
+        let ctx = LevelContext { level_code: "1".into(), elevation_ft: 0.0, structure_underside_ft: 12.0, rooms: vec![], beams: vec![] };
         let seg = SegmentInput {
             id: "zd1".into(),
             system: "SA".into(),
@@ -1054,13 +1035,7 @@ mod tests {
     #[test]
     fn nonfinite_note_falls_through_to_rule() {
         // A note with "INF" should be rejected and the run should resolve via rules.
-        let ctx = LevelContext {
-            level_code: "1".into(),
-            elevation_ft: 0.0,
-            structure_underside_ft: 12.0,
-            rooms: vec![],
-            beams: vec![],
-        };
+        let ctx = LevelContext { level_code: "1".into(), elevation_ft: 0.0, structure_underside_ft: 12.0, rooms: vec![], beams: vec![] };
         let seg = SegmentInput {
             id: "inf1".into(),
             system: "SA".into(),
@@ -1108,13 +1083,7 @@ mod tests {
 
             let resolved = resolve_heights(&level_inputs, &ctx, &rules);
             let horizontal = level_inputs.iter().filter(|s| !s.vertical).count();
-            assert_eq!(
-                resolved.len(),
-                horizontal,
-                "level {lv}: all {} horizontal segments should resolve, got {}",
-                horizontal,
-                resolved.len()
-            );
+            assert_eq!(resolved.len(), horizontal, "level {lv}: all {} horizontal segments should resolve, got {}", horizontal, resolved.len());
         }
     }
 

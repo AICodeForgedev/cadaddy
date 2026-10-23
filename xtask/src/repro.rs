@@ -6,9 +6,9 @@
 
 use std::path::Path;
 
-use cadaddy_engine::cmd::actions::{EXTENSION, Macro};
 #[cfg(test)]
 use cadaddy_engine::cmd::actions::MacroStep;
+use cadaddy_engine::cmd::actions::{EXTENSION, Macro};
 
 use crate::{cargo, root, run};
 
@@ -38,9 +38,7 @@ pub fn run_repro(args: &[&str]) -> Result<(), String> {
     let save_ref = save_abs.as_ref().map(|p| p.to_string_lossy().into_owned());
     match ext.as_str() {
         "scr" => run_script(&file_abs, save_ref.as_deref()),
-        ext if ext == EXTENSION || ext == "actm" => {
-            run_action_macro(&path, save_ref.as_deref())
-        }
+        ext if ext == EXTENSION || ext == "actm" => run_action_macro(&path, save_ref.as_deref()),
         _ => {
             // Try as a script (text lines).
             run_script(&file_abs, save_ref.as_deref())
@@ -82,8 +80,7 @@ pub fn macro_to_script(m: &Macro) -> String {
 fn run_action_macro(path: &Path, save: Option<&str>) -> Result<(), String> {
     let display = path.display();
     let text = std::fs::read_to_string(path).map_err(|e| format!("{display}: {e}"))?;
-    let m: Macro =
-        serde_json::from_str(&text).map_err(|e| format!("{display}: not an action macro ({e})"))?;
+    let m: Macro = serde_json::from_str(&text).map_err(|e| format!("{display}: not an action macro ({e})"))?;
     if m.format != "cadaddy-action-macro" {
         return Err(format!("{display}: not a CADaddy action macro"));
     }
@@ -110,51 +107,18 @@ mod tests {
             name: "TestMacro".into(),
             description: String::new(),
             steps: vec![
-                MacroStep {
-                    input: Some("line".into()),
-                    ask: false,
-                    prompt: String::new(),
-                    message: None,
-                    basepoint: None,
-                },
-                MacroStep {
-                    input: Some("*0,0".into()),
-                    ask: false,
-                    prompt: String::new(),
-                    message: None,
-                    basepoint: None,
-                },
-                MacroStep {
-                    input: None,
-                    ask: false,
-                    prompt: String::new(),
-                    message: Some("Drawing a line to (10,0)".into()),
-                    basepoint: None,
-                },
-                MacroStep {
-                    input: Some("*10,0".into()),
-                    ask: false,
-                    prompt: String::new(),
-                    message: None,
-                    basepoint: None,
-                },
+                MacroStep { input: Some("line".into()), ask: false, prompt: String::new(), message: None, basepoint: None },
+                MacroStep { input: Some("*0,0".into()), ask: false, prompt: String::new(), message: None, basepoint: None },
+                MacroStep { input: None, ask: false, prompt: String::new(), message: Some("Drawing a line to (10,0)".into()), basepoint: None },
+                MacroStep { input: Some("*10,0".into()), ask: false, prompt: String::new(), message: None, basepoint: None },
                 // An `ask` step: headless replay uses the recorded value.
-                MacroStep {
-                    input: Some("".into()),
-                    ask: true,
-                    prompt: "Specify next point".into(),
-                    message: None,
-                    basepoint: None,
-                },
+                MacroStep { input: Some("".into()), ask: true, prompt: "Specify next point".into(), message: None, basepoint: None },
             ],
         };
         let script = macro_to_script(&m);
         assert!(script.contains("line\n"), "command name: {script}");
         assert!(script.contains("*0,0\n"), "first point: {script}");
-        assert!(
-            script.contains("; Drawing a line to (10,0)\n"),
-            "message as comment: {script}"
-        );
+        assert!(script.contains("; Drawing a line to (10,0)\n"), "message as comment: {script}");
         assert!(script.contains("*10,0\n"), "second point: {script}");
         // The ask step's recorded value (empty = Enter) appears as an empty line.
         assert!(script.contains("\n\n"), "ask step uses recorded value: {script}");
@@ -173,13 +137,7 @@ mod tests {
             version: 1,
             name: "Ext".into(),
             description: String::new(),
-            steps: vec![MacroStep {
-                input: Some("line".into()),
-                ask: false,
-                prompt: String::new(),
-                message: None,
-                basepoint: None,
-            }],
+            steps: vec![MacroStep { input: Some("line".into()), ask: false, prompt: String::new(), message: None, basepoint: None }],
         };
         let json = serde_json::to_string(&m).unwrap();
         let cdyact = dir.join("test.cdyact");

@@ -15,11 +15,7 @@ fn workspace_root() -> std::path::PathBuf {
 fn tool_names() -> Vec<String> {
     let defs = cadaddy_mcp::tools::tool_definitions(true);
     let tools = defs.get("tools").and_then(Value::as_array).expect("tools array");
-    tools
-        .iter()
-        .filter_map(|t| t.get("name").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
+    tools.iter().filter_map(|t| t.get("name").and_then(Value::as_str)).map(str::to_string).collect()
 }
 
 #[test]
@@ -40,9 +36,5 @@ fn guide_lists_every_mcp_tool() {
         }
     }
 
-    assert!(
-        missing.is_empty(),
-        "MCP tools not mentioned in for-ai-agents.md (add them to the guide):\n  {}",
-        missing.join(", ")
-    );
+    assert!(missing.is_empty(), "MCP tools not mentioned in for-ai-agents.md (add them to the guide):\n  {}", missing.join(", "));
 }

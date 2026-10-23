@@ -280,9 +280,6 @@ mod tests {
         write_table(&mut md, &[&entry]);
         // The full param text (with pipes escaped) must be present
         let escaped = long_params.replace('|', "\\|");
-        assert!(
-            md.contains(&escaped),
-            "write_table must include the full param text, not truncate it:\n{md}"
-        );
+        assert!(md.contains(&escaped), "write_table must include the full param text, not truncate it:\n{md}");
     }
 }

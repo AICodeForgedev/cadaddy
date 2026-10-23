@@ -108,36 +108,28 @@ fn is_absolute_path(s: &str) -> bool {
     if b.first() == Some(&b'/') && b.len() > 1 {
         return true;
     }
-    b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'\\' || b[2] == b'/')
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 /// The file-name part of a path, handling both `/` and `\` regardless of platform.
 fn path_file_name(s: &str) -> &str {
-    s.rsplit(['/', '\\'])
-        .next()
-        .filter(|n| !n.is_empty())
-        .unwrap_or(s)
+    s.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(s)
 }
 
 /// Redact absolute file paths in a panic message to just their file name, so no user name or
 /// home directory leaks into the crash report.
 fn redact_paths(msg: &str) -> String {
-    msg.split_whitespace()
-        .enumerate()
-        .fold(String::with_capacity(msg.len()), |mut out, (i, token)| {
-            if i > 0 {
-                out.push(' ');
-            }
-            if is_absolute_path(token) {
-                out.push_str(path_file_name(token));
-            } else {
-                out.push_str(token);
-            }
-            out
-        })
+    msg.split_whitespace().enumerate().fold(String::with_capacity(msg.len()), |mut out, (i, token)| {
+        if i > 0 {
+            out.push(' ');
+        }
+        if is_absolute_path(token) {
+            out.push_str(path_file_name(token));
+        } else {
+            out.push_str(token);
+        }
+        out
+    })
 }
 
 /// Extract command names from journal lines for the crash report's recent-commands section.
@@ -158,9 +150,7 @@ fn journal_command_names(lines: &[String]) -> Vec<String> {
             }
             let first = line.split_whitespace().next()?;
             // Skip numeric values and coordinates (e.g. "5", "0,0,0").
-            if first
-                .starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+')
-            {
+            if first.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+') {
                 return None;
             }
             // Skip anything that looks like a path.
@@ -229,14 +219,8 @@ pub fn record(session: &crate::Session, command: &str, panic_msg: &str) {
     let title = session.docs.get(session.active).map(|d| d.title.as_str());
     // Command names from the journal (not the echo log, which can hold paths and typed text).
     let history = journal_command_names(session.journal.lines());
-    let _ = write(&CrashInfo {
-        command,
-        message: panic_msg,
-        prompt: running_info.as_deref(),
-        backtrace: &bt,
-        history: &history,
-        drawing_title: title,
-    });
+    let _ =
+        write(&CrashInfo { command, message: panic_msg, prompt: running_info.as_deref(), backtrace: &bt, history: &history, drawing_title: title });
 }
 
 /// Remove the oldest reports past [`MAX_REPORTS`].
@@ -344,8 +328,7 @@ mod tests {
     /// not from the echo log (which can hold paths and typed text).
     #[test]
     fn recent_commands_come_from_the_journal_not_the_log() {
-        let dir =
-            std::env::temp_dir().join(format!("cadaddy-crash-journal-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cadaddy-crash-journal-{}", std::process::id()));
         set_store_dir(Some(dir.clone()));
 
         let mut session = crate::Session::new();
@@ -364,15 +347,9 @@ mod tests {
         assert_eq!(reports.len(), 1, "one report written");
         let text = &reports[0].1;
         assert!(text.contains("\nline\n"), "journal command 'line' in report: {text}");
-        assert!(
-            text.contains("\ncircle\n"),
-            "journal command 'circle' in report: {text}"
-        );
+        assert!(text.contains("\ncircle\n"), "journal command 'circle' in report: {text}");
         assert!(!text.contains("someone"), "no private path from the log: {text}");
-        assert!(
-            !text.contains("SECRETKEYWORD"),
-            "no typed text from the log: {text}"
-        );
+        assert!(!text.contains("SECRETKEYWORD"), "no typed text from the log: {text}");
 
         set_store_dir(None);
         let _ = std::fs::remove_dir_all(&dir);
@@ -381,29 +358,18 @@ mod tests {
     /// MUST 3: absolute paths in the panic message are reduced to their file name.
     #[test]
     fn panic_message_paths_are_redacted() {
-        let dir =
-            std::env::temp_dir().join(format!("cadaddy-crash-redact-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cadaddy-crash-redact-{}", std::process::id()));
         set_store_dir(Some(dir.clone()));
 
         let msg = "file not found: /Users/someone/proj/a.dwg and also C:\\Users\\someone\\b.dwg";
-        let info = CrashInfo {
-            command: "open",
-            message: msg,
-            prompt: None,
-            backtrace: "",
-            history: &[],
-            drawing_title: None,
-        };
+        let info = CrashInfo { command: "open", message: msg, prompt: None, backtrace: "", history: &[], drawing_title: None };
         let path = write(&info).expect("report written");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("a.dwg"), "file name kept: {text}");
         assert!(text.contains("b.dwg"), "file name kept: {text}");
         assert!(!text.contains("someone"), "user name redacted: {text}");
         assert!(!text.contains("/Users/"), "Unix path prefix redacted: {text}");
-        assert!(
-            !text.contains("C:\\Users\\"),
-            "Windows path prefix redacted: {text}"
-        );
+        assert!(!text.contains("C:\\Users\\"), "Windows path prefix redacted: {text}");
 
         set_store_dir(None);
         let _ = std::fs::remove_dir_all(&dir);
