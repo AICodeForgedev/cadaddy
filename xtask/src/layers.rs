@@ -12,7 +12,7 @@ pub enum Class {
     Layer(u8),
     /// Layer 0, and additionally may depend on no workspace crate at all.
     Standalone,
-    /// Test tooling: may depend on anything up to L5 (it sits at L6 for rule
+    /// Test tooling: may depend on anything up to L6 (it sits at L7 for rule
     /// purposes); other crates may use it only as a dev-dependency.
     Testkit,
     /// Binaries and build tooling: exempt from the rules.
@@ -24,7 +24,7 @@ impl Class {
         match self {
             Class::Layer(l) => Some(l),
             Class::Standalone => Some(0),
-            Class::Testkit => Some(6),
+            Class::Testkit => Some(7),
             Class::Exempt => None,
         }
     }
@@ -49,12 +49,13 @@ pub const TABLE: &[(&str, Class)] = &[
     ("walk3d", Class::Layer(2)),
     ("cam", Class::Layer(3)),
     ("io", Class::Layer(3)),
-    ("engine", Class::Layer(4)),
-    ("ui-egui", Class::Layer(5)),
-    ("mcp", Class::Layer(5)),
+    ("engine", Class::Layer(5)),
+    ("ui-egui", Class::Layer(6)),
+    ("mcp", Class::Layer(6)),
     ("testkit", Class::Testkit),
-    // MEP print fixtures (made-up sheets + ground truth) that print-reader tests score against.
-    ("mepfix", Class::Testkit),
+    // The print readers and the print-set pipeline the engine's printset.* commands run (since Q5128 readerwire),
+    // plus the made-up sheets + ground truth their tests score against: the readers layer between io and engine.
+    ("mepfix", Class::Layer(4)),
     // apps and tooling
     ("cadaddy", Class::Exempt),
     ("cli", Class::Exempt),
@@ -82,7 +83,7 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 pub const UI_CRATES: &[&str] = &["craft-ui", "egui", "eframe", "egui-wgpu", "wgpu", "winit", "egui_kittest", "rfd", "bevy*"];
 
 /// First layer allowed to use UI crates.
-pub const UI_MIN_LAYER: u8 = 5;
+pub const UI_MIN_LAYER: u8 = 6;
 
 pub fn short_name(pkg: &str) -> &str {
     pkg.strip_prefix("cadaddy-").unwrap_or(pkg)
@@ -189,7 +190,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                                 krate: c.name.clone(),
                                 dep: d.name.clone(),
                                 from: layer,
-                                to: if to == u8::MAX { 7 } else { to },
+                                to: if to == u8::MAX { 8 } else { to },
                                 kind: d.kind,
                             });
                         }
@@ -263,7 +264,7 @@ mod tests {
     #[test]
     fn upward_dependency_flagged() {
         let v = check(&[c("cadaddy-doc", &[("cadaddy-engine", Normal, true)])]);
-        assert!(matches!(v[..], [Violation::Upward { from: 1, to: 4, .. }]));
+        assert!(matches!(v[..], [Violation::Upward { from: 1, to: 5, .. }]));
     }
 
     #[test]
@@ -294,7 +295,7 @@ mod tests {
     fn ui_crates_below_l6_flagged() {
         for dep in ["craft-ui", "egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy"] {
             let v = check(&[c("cadaddy-engine", &[(dep, Normal, false)])]);
-            assert!(matches!(v[..], [Violation::UiBelowL6 { layer: 4, .. }]), "{dep}");
+            assert!(matches!(v[..], [Violation::UiBelowL6 { layer: 5, .. }]), "{dep}");
         }
         assert!(check(&[c("cadaddy-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
         assert!(check(&[c("cadaddy-mcp", &[("winit", Normal, false)])]).is_empty());

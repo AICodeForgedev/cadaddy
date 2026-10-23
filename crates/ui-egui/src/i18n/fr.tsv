@@ -2337,6 +2337,7 @@
 	List MEP Items	Lister les éléments MEP
 	Section Box	Boîte de coupe
 	Trade Visibility	Visibilité des corps d'état
+	Colour by BIM Property	Colorer par propriété BIM
 	BIM Types	Types BIM
 	Get BIM Spec	Obtenir la spécification BIM
 	Remove BIM Spec from Entities	Retirer la spécification BIM des entités

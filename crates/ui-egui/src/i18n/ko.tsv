@@ -2550,6 +2550,7 @@ menu	Modify	수정
 	List MEP Items	MEP 항목 나열
 	Section Box	단면 상자
 	Trade Visibility	공종 표시
+	Colour by BIM Property	BIM 속성별 색상
 	BIM Types	BIM 유형
 	Get BIM Spec	BIM 사양 가져오기
 	Remove BIM Spec from Entities	객체에서 BIM 사양 제거

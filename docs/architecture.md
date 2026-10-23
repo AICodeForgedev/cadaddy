@@ -21,15 +21,16 @@ About 57,000 lines of Rust in 12 library crates, 3 apps and `xtask` (counted 202
 | L2 | `constraints` | 2,504 | Own parametric solver: damped Gauss–Newton / Levenberg–Marquardt (`lm.rs`), 12 geometric and the dimensional constraints, expressions and parameters, AutoConstrain inference |
 | L3 | `io` | 5,124 | DXF ⇄ document mapping (`dxf_read.rs`, `dxf_write.rs`, CADaddy xdata in `dxf_ext.rs`), PDF plotting, SVG and PNG export |
 | L3 | `dwg` | 149 | DWG through a DXF bridge: the `acadrust` crate (MPL-2.0, unmodified) converts DWG ⇄ DXF bytes; nothing else sees its types. Native only |
-| L4 | `engine` | 25,090 | `Session`, the command registry (`cmd/*`), command-line parser and prompt machines, object snaps and polar/ortho (`snap.rs`), selection (`select.rs`), grips (`grips.rs`), associativity (`assoc.rs`), system variables, units, undo, R-tree spatial index (`spatial.rs`) |
-| L5 | `ui-egui` | 9,849 | The swappable egui front end: GPU canvas (`gpu.rs`, wgpu), menus and shortcuts (`menus.rs`), command line, palettes, Layer Properties Manager and other dialogs, ViewCube, icons drawn in code, themes, the interface string catalog (`i18n/`, English, Ukrainian and German), JSON control channel (`control.rs`) |
-| L5 | `mcp` | 559 | MCP server (JSON-RPC 2.0 over stdio) on a headless session or bridged to a running app |
+| L4 | `mepfix` | 49,000 | The print readers (sheets, arch, structure, ceilings, ducts, pipes, sprinklers, electrical, site…) and the print-set pipeline (`printset.rs`) that the engine's `printset.*` commands and MCP `bim_job import` run, plus the made-up MEP print fixtures and ground truth their tests score against |
+| L5 | `engine` | 25,090 | `Session`, the command registry (`cmd/*`), command-line parser and prompt machines, object snaps and polar/ortho (`snap.rs`), selection (`select.rs`), grips (`grips.rs`), associativity (`assoc.rs`), system variables, units, undo, R-tree spatial index (`spatial.rs`) |
+| L6 | `ui-egui` | 9,849 | The swappable egui front end: GPU canvas (`gpu.rs`, wgpu), menus and shortcuts (`menus.rs`), command line, palettes, Layer Properties Manager and other dialogs, ViewCube, icons drawn in code, themes, the interface string catalog (`i18n/`, English, Ukrainian and German), JSON control channel (`control.rs`) |
+| L6 | `mcp` | 559 | MCP server (JSON-RPC 2.0 over stdio) on a headless session or bridged to a running app |
 | app | `cadaddy` | 1,102 | Desktop app (eframe/wgpu; DirectX 12 by default on Windows) |
 | app | `cadaddy-cli` | 823 | `info`, `convert`, `run` (scripts), `commands`, `sample`, `mcp` |
 | app | `cadaddy-web` | 88 | WASM build of the same UI (no DWG) |
 | tool | `xtask` | 1,064 | `ci`, `layers`, `assets`, `wasm`, `parity`, `version`, `stats`, icon generation |
 
-`cargo xtask layers` enforces the layering: nothing below L5 depends on egui, eframe, winit,
+`cargo xtask layers` enforces the layering: nothing below L6 depends on egui, eframe, winit,
 wgpu or rfd.
 
 ## Data model

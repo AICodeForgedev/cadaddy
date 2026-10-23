@@ -2530,6 +2530,7 @@ menu	Modify	Modifikace
 	List MEP Items	Vypsat prvky MEP
 	Section Box	Řezový kvádr
 	Trade Visibility	Viditelnost profesí
+	Colour by BIM Property	Obarvit podle vlastnosti BIM
 	BIM Types	Typy BIM
 	Get BIM Spec	Zobrazit specifikaci BIM
 	Remove BIM Spec from Entities	Odebrat specifikaci BIM z objektů

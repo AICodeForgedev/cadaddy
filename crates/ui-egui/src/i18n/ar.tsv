@@ -2545,6 +2545,7 @@ menu	View	عرض
 	List MEP Items	سرد عناصر MEP
 	Section Box	صندوق المقطع
 	Trade Visibility	إظهار التخصصات
+	Colour by BIM Property	التلوين حسب خاصية BIM
 	BIM Types	أنواع BIM
 	Get BIM Spec	عرض مواصفات BIM
 	Remove BIM Spec from Entities	إزالة مواصفات BIM من الكائنات

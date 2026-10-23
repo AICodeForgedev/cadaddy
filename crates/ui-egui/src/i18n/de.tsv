@@ -2366,6 +2366,7 @@
 	List MEP Items	MEP-Elemente auflisten
 	Section Box	Schnittbox
 	Trade Visibility	Gewerkesichtbarkeit
+	Colour by BIM Property	Nach BIM-Eigenschaft einfärben
 	BIM Types	BIM-Typen
 	Get BIM Spec	BIM-Spezifikation abrufen
 	Remove BIM Spec from Entities	BIM-Spezifikation von Objekten entfernen
