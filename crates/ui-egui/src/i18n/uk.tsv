@@ -3184,3 +3184,21 @@
 	Export Estimate	Експортувати кошторис
 	Estimate Bid Summary	Підсумок пропозиції за кошторисом
 	Site Takeoff	Підрахунок обсягів робіт на ділянці
+	Read Cable Trays from Prints	Зчитати кабельні лотки з креслень
+	Read Ceiling Assemblies	Зчитати конструкції стель
+	Read Ceiling Plans	Зчитати плани стель
+	Read Conduit from Prints	Зчитати кабелепроводи з креслень
+	Read Ductwork from Prints	Зчитати повітроводи з креслень
+	Read Electrical Devices	Зчитати електричні пристрої
+	Read Electrical Equipment	Зчитати електрообладнання
+	Read Element Tags from Prints	Зчитати позначки елементів з креслень
+	Read MEP Equipment	Зчитати інженерне обладнання
+	Read Piping from Prints	Зчитати трубопроводи з креслень
+	Read RFIs from Prints	Зчитати запити RFI з креслень
+	Read Scanned Print	Зчитати скановане креслення
+	Read Site Plans	Зчитати генплани
+	Read Sprinkler Plans	Зчитати плани спринклерів
+	Read Structural Plans	Зчитати конструктивні плани
+	Read Wall Types from Plans	Зчитати типи стін з планів
+	Resolve MEP Heights	Визначити висоти інженерних мереж
+	Run Print Set Stages	Виконати етапи комплекту креслень
