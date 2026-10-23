@@ -1414,7 +1414,7 @@ pub fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)])
             // New file — could be a reissue under a different name. Check by hash among
             // all sheets to see if content matches but name differs.
             let reissue = project.sheets.iter().find(|s| {
-                s.content_hash != new_hash && s.file != *name && name.contains(&s.number) // heuristic: new name contains old number
+                !s.number.is_empty() && s.content_hash != new_hash && s.file != *name && name.contains(&s.number) // heuristic: new name contains old number
             });
             if let Some(existing) = reissue {
                 delta.changed.push(existing.number_or_file());
