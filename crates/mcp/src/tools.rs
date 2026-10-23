@@ -114,6 +114,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "units_per_foot": {"type": "number"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1},
             "elements": {"type": "boolean", "description": "list each line's objects (default true)"}
         }}}),
+        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and pauses with questions when it needs the agent: confirm a scale, name a room, identify an unknown symbol, spot-check a count. Answers become project rules for future runs. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\"} — create a job.\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes.\n- status {} — job progress and open questions.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items, \"edit\" changes one item.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -456,6 +458,26 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         }),
         "plot" => exec(b, "exportpdf", a),
         "bim_job" => bim_job(b, &a),
+        "guided_job" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("start") => "job.start",
+                Some("next") => "job.next",
+                Some("answer") => "job.answer",
+                Some("status") => "job.status",
+                Some("explain") => "job.explain",
+                Some("rules") => "job.rules",
+                Some("report") => "job.report",
+                Some(other) => {
+                    return Err(format!(
+                        "guided_job has no action `{}` — use start, next, answer, status, explain, rules or report",
+                        other.chars().take(30).collect::<String>()
+                    ));
+                }
+                None => return Err("guided_job needs an action — start with {action: \"start\", params: {pdfs: \"...\", goal: \"estimate\"}}".into()),
+            };
+            let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+            exec(b, command, params)
+        }
         "site_takeoff" => exec(b, "site.takeoff", a),
         "mep" => {
             let command = match a.get("action").and_then(Value::as_str) {
