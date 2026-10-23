@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1050,
-    "count": 1050,
+    "callableAsJson": 1051,
+    "count": 1051,
     "ids": [
       "-attedit",
       "-block",
@@ -705,6 +705,7 @@
       "printset.dashboard",
       "printset.open",
       "printset.reimport",
+      "printset.run",
       "printset.save",
       "printset.sheets",
       "procure.export",
