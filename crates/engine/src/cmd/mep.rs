@@ -309,6 +309,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 objects: handles.iter().map(|h| h.hex()).collect(),
                 id: String::new(),
                 encased: false,
+                top_ft: None,
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -830,6 +831,39 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let Some(level) = sp.level(&r.level) else { continue };
         let layer = mep_layer_name(&sy.name, &level.name);
         ensure_layer(d, &layer, sy.aci_color());
+
+        // Vertical runs (risers): an upright cylinder from bottoms_ft[0] to top_ft.
+        if let Some(top) = r.top_ft {
+            let Some(&pt) = r.points.first() else { continue };
+            let bot = r.bottoms_ft.first().copied().unwrap_or(0.0);
+            if !(top > bot) {
+                continue;
+            }
+            let z0 = (level.elevation_ft + bot) * upf;
+            let z1 = (level.elevation_ft + top) * upf;
+            let radius = r.size_in[0] / 2.0 / 12.0 * upf;
+            let mut seg_mesh = super::wallgen::empty_mesh();
+            add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
+            if !seg_mesh.faces.is_empty() {
+                let source = r.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
+                let xdata = vec![
+                    t(1001, super::wallgen::APP.into()),
+                    t(1000, "mep".into()),
+                    t(1000, level.name.clone()),
+                    t(1000, source.hex()),
+                    t(1000, format!("system:{}", sy.name)),
+                    t(1000, format!("kind:{}", kind_str(sy.kind))),
+                    t(1000, "part:segment".into()),
+                ];
+                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
+                    .is_ok()
+                {
+                    total_runs += 1;
+                }
+            }
+            continue;
+        }
+
         let (ps, counts) = pieces(r, level.elevation_ft * upf, upf);
 
         // Separate segment meshes and fitting meshes for distinct IFC mapping.
@@ -1173,8 +1207,19 @@ fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
-        let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
         let w = r.size_in[0] / 12.0 * upf;
+        // Vertical runs (risers): a single-point piece spanning bottom to top.
+        if let Some(top) = r.top_ft {
+            if let Some(&pt) = r.points.first() {
+                let bot = r.bottoms_ft.first().copied().unwrap_or(0.0);
+                let z0 = (level.elevation_ft + bot) * upf;
+                let z1 = (level.elevation_ft + top) * upf;
+                let at = Vec2::new(pt[0], pt[1]);
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w });
+            }
+            continue;
+        }
+        let (ps, _) = pieces(r, level.elevation_ft * upf, upf);
         items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();

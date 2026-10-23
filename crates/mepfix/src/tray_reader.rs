@@ -330,19 +330,28 @@ pub fn read_fixture_trays(seed: u64) -> Result<(Truth, TrayResult), String> {
     Ok((set.truth, read_trays(&dxf, &map)))
 }
 
+/// A level's code, spec name and floor elevation (feet).
+pub struct LevelInfo<'a> {
+    pub code: &'a str,
+    pub name: &'a str,
+    pub elevation_ft: f64,
+}
+
 /// The runs as building spec MEP runs and their systems (`mep.systems` / `mep.runs` for
-/// `bspec.set`): drawing inches (building feet × 12); `level_names` maps level codes to the spec's
-/// names. Runs whose height wasn't found are left out.
-pub fn spec_runs(res: &TrayResult, level_names: &[(&str, &str)]) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+/// `bspec.set`): drawing inches (building feet × 12). Runs whose height wasn't found are left
+/// out. Riser banks matched across levels become vertical conduit runs.
+pub fn spec_runs(res: &TrayResult, levels: &[LevelInfo<'_>]) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
     let systems = vec![
         serde_json::json!({"name": "E-CABL-TRAY", "layer": "E-CABL-TRAY", "kind": "tray", "size_in": [12, 4], "bottom_ft": 9}),
         serde_json::json!({"name": "E-FDR-COND", "layer": "E-FDR-COND", "kind": "conduit", "size_in": [2, 0], "bottom_ft": 9}),
     ];
-    let runs = res
+    let level_name = |code: &str| levels.iter().find(|l| l.code == code).map(|l| l.name);
+    let level_elev = |code: &str| levels.iter().find(|l| l.code == code).map(|l| l.elevation_ft);
+    let mut runs: Vec<serde_json::Value> = res
         .runs
         .iter()
         .filter_map(|r| {
-            let level = level_names.iter().find(|(c, _)| *c == r.level)?.1;
+            let level = level_name(&r.level)?;
             let b = r.bottom_ft?;
             let (system, size) = if r.kind == "tray" { ("E-CABL-TRAY", r.size_in) } else { ("E-FDR-COND", [r.size_in[0], 0.0]) };
             Some(serde_json::json!({
@@ -354,6 +363,53 @@ pub fn spec_runs(res: &TrayResult, level_names: &[(&str, &str)]) -> (Vec<serde_j
             }))
         })
         .collect();
+    // Match riser banks across levels: an "up" bank on one level paired with a "down" bank on
+    // the level above (same conduit count and size, within 2 ft in plan).
+    let mut used = vec![false; res.risers.len()];
+    for (i, up) in res.risers.iter().enumerate() {
+        if up.direction != "up" || used[i] {
+            continue;
+        }
+        let Some(up_elev) = level_elev(&up.level) else { continue };
+        let Some(up_name) = level_name(&up.level) else { continue };
+        // The level above: the one with the smallest elevation > up_elev.
+        let above = levels.iter().filter(|l| l.elevation_ft > up_elev).min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+        let Some(above) = above else { continue };
+        // A matching "down" bank on the level above.
+        let dn = res.risers.iter().enumerate().find(|(j, d)| {
+            !used[*j]
+                && d.direction == "down"
+                && d.level == above.code
+                && d.conduits == up.conduits
+                && (d.size_in - up.size_in).abs() < 0.01
+        });
+        let Some((j, dn)) = dn else { continue };
+        used[i] = true;
+        used[j] = true;
+        // Average the plan positions from both levels.
+        let avg = |pts: &[[f64; 2]]| {
+            let n = pts.len().max(1) as f64;
+            [pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n]
+        };
+        let up_centre = avg(&up.at_ft);
+        let dn_centre = avg(&dn.at_ft);
+        let centre = [(up_centre[0] + dn_centre[0]) / 2.0, (up_centre[1] + dn_centre[1]) / 2.0];
+        let pt = [centre[0] * 12.0, centre[1] * 12.0];
+        // Each conduit in the bank: a vertical run from just above the lower level's floor to just
+        // above the upper level's floor (the conduit passes through the slab).
+        let bottom_ft = 0.5; // just above the slab on the lower level
+        let top_ft = above.elevation_ft - up_elev + 0.5;
+        for _ in 0..up.conduits {
+            runs.push(serde_json::json!({
+                "system": "E-FDR-COND",
+                "level": up_name,
+                "points": [pt],
+                "size_in": [up.size_in, 0],
+                "bottoms_ft": [bottom_ft],
+                "top_ft": top_ft,
+            }));
+        }
+    }
     (systems, runs)
 }
 
