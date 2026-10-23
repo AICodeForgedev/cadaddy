@@ -669,6 +669,17 @@ pub fn read_fixture_sprinklers(seed: u64) -> Result<(Truth, SprinklerResult), St
     Ok((set.truth, res))
 }
 
+/// Like [`read_fixture_sprinklers`] but with custom fire protection head schedule values
+/// (sprig and sidewall offset, inches).
+pub fn read_fixture_sprinklers_with_schedule(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Result<(Truth, SprinklerResult), String> {
+    let set = crate::generate_with_fp_schedule(seed, fp_sprig_in, fp_sidewall_below_in)?;
+    let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+    let map = crate::sheet_reader::recognise_fixture_set(&dxf);
+    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let res = read_sprinklers(&dxf, &map, &ceilings);
+    Ok((set.truth, res))
+}
+
 /// The heads as building spec terminals (`mep.terminals` for `bspec.set`): plan position in
 /// drawing inches (building feet × 12), deflector height above the floor, kind
 /// `sprinkler_<mount>`. `level_names` maps level codes to the spec's level names; heads whose

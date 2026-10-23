@@ -2,7 +2,7 @@
 //! (Q265), scored against the truth, and built into the 3D model and IFC.
 
 use cadaddy_engine::Session;
-use cadaddy_mepfix::sprinkler_reader::{SprinklerScore, parse_pipe_size, read_fixture_sprinklers, score_sprinklers, spec_terminals};
+use cadaddy_mepfix::sprinkler_reader::{SprinklerScore, parse_pipe_size, read_fixture_sprinklers, read_fixture_sprinklers_with_schedule, score_sprinklers, spec_terminals};
 use serde_json::json;
 
 fn ratio(a: usize, b: usize) -> f64 {
@@ -62,6 +62,8 @@ fn heads_lines_sizes_and_heights_score_over_many_sets() {
 fn every_head_kind_gets_its_height_from_its_own_rule() {
     // Seed 5 has sidewall heads in the corridors, every set has uprights in the mech rooms.
     let (t, r) = read_fixture_sprinklers(5).unwrap();
+    // The sidewall offset is read from the schedule (not defaulted).
+    assert_eq!(r.sidewall_below_in, Some(4.0), "sidewall_below_in read from schedule");
     for mount in ["pendent", "upright", "sidewall"] {
         let h = r.heads.iter().find(|h| h.mount == mount).unwrap_or_else(|| panic!("no {mount} head"));
         let want = match mount {
@@ -156,4 +158,66 @@ fn read_heads_build_in_3d_and_export_as_fire_suppression_terminals() {
     let back = cadaddy_io::read(text.as_bytes(), "Sprinklers.ifc").unwrap();
     assert!(back.layers.iter().any(|l| l.name == "IFC-FireSuppressionTerminal"), "read back as its class");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn schedule_values_are_read_not_defaulted() {
+    // Seed 5 has sidewall heads. Generate with 6" sprig and 6" below ceiling instead of the
+    // default 4": the reader must pick up the printed schedule, not fall back to 4".
+    let (t, r) = read_fixture_sprinklers_with_schedule(5, 6.0, 6.0).unwrap();
+    assert_eq!(r.sprig_in, Some(6.0), "sprig_in should be 6 from the schedule");
+    assert_eq!(r.sidewall_below_in, Some(6.0), "sidewall_below_in should be 6 from the schedule");
+    let floor = |lv: &str| t.level(lv).map_or(0.0, |x| x.elevation_ft);
+    // Every upright head's read height should be within 1" of the truth (which used 6" sprig).
+    for h in r.heads.iter().filter(|h| h.mount == "upright") {
+        let truth = t
+            .terminals
+            .iter()
+            .find(|x| {
+                x.kind == "sprinkler_head"
+                    && x.level == h.level
+                    && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5
+                    && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
+            })
+            .unwrap_or_else(|| panic!("no truth head near upright {:?}", h.at_ft));
+        let truth_ht = truth.at_ft[2] - floor(&h.level);
+        let read_ht = h.height_ft.unwrap_or(0.0);
+        assert!(
+            (read_ht - truth_ht).abs() < 1.0 / 12.0,
+            "upright height: read {read_ht:.4} vs truth {truth_ht:.4} (diff {:.2}\")",
+            (read_ht - truth_ht).abs() * 12.0
+        );
+    }
+    // Every sidewall head's read height should be within 1" of the truth (6" below ceiling).
+    for h in r.heads.iter().filter(|h| h.mount == "sidewall") {
+        let truth = t
+            .terminals
+            .iter()
+            .find(|x| {
+                x.kind == "sprinkler_head"
+                    && x.level == h.level
+                    && (x.at_ft[0] - h.at_ft[0]).abs() < 0.5
+                    && (x.at_ft[1] - h.at_ft[1]).abs() < 0.5
+            })
+            .unwrap_or_else(|| panic!("no truth head near sidewall {:?}", h.at_ft));
+        let truth_ht = truth.at_ft[2] - floor(&h.level);
+        let read_ht = h.height_ft.unwrap_or(0.0);
+        assert!(
+            (read_ht - truth_ht).abs() < 1.0 / 12.0,
+            "sidewall height: read {read_ht:.4} vs truth {truth_ht:.4} (diff {:.2}\")",
+            (read_ht - truth_ht).abs() * 12.0
+        );
+    }
+    // Confirm the 6" variant actually differs from 4": read the default 4" set too and compare.
+    let (_, r4) = read_fixture_sprinklers(5).unwrap();
+    assert_eq!(r4.sprig_in, Some(4.0));
+    assert_eq!(r4.sidewall_below_in, Some(4.0));
+    // A sidewall head at 6" below ceiling should be 2" lower than at 4" below ceiling.
+    if let (Some(sw6), Some(sw4)) = (
+        r.heads.iter().find(|h| h.mount == "sidewall"),
+        r4.heads.iter().find(|h| h.mount == "sidewall"),
+    ) {
+        let diff = (sw4.height_ft.unwrap_or(0.0) - sw6.height_ft.unwrap_or(0.0)).abs();
+        assert!(diff > 1.0 / 12.0, "6\" vs 4\" sidewall offset should differ by ~2\", got {:.2}\"", diff * 12.0);
+    }
 }
