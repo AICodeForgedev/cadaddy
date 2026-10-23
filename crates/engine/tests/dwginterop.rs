@@ -9,7 +9,9 @@
 //! - `interop_compare`: each file read back into CADaddy and compared with what CADaddy reads from
 //!   its own file (counts by type, layers, blocks, text, dimensions), written to `matrix.md`.
 //!
-//! The always-run tests below hold what the matrix found.
+//! `scripts/dwg-interop.sh` runs all three steps. The last run is archived in
+//! `docs/dwg-interop-matrix.md`, and the always-run tests in `crates/io/tests/dwg_interop.rs` hold
+//! the fixes it found.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
