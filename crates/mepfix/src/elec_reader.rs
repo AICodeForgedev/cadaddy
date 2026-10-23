@@ -816,6 +816,8 @@ pub struct FoundPanel {
     pub tag: String,
     pub kind: String,
     pub at_ft: [f64; 2],
+    /// The plan sheet its tag was read from (`E-101`).
+    pub sheet: String,
 }
 
 // ---- Read E-sheets and produce found devices -------------------------------------------
@@ -916,7 +918,13 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
 
         for rp in &raw_panels {
             let b = building_from_model(alignment, rp.at_in);
-            found_panels.push(FoundPanel { level: level.clone(), tag: rp.tag.clone(), kind: rp.kind.clone(), at_ft: b });
+            found_panels.push(FoundPanel {
+                level: level.clone(),
+                tag: rp.tag.clone(),
+                kind: rp.kind.clone(),
+                at_ft: b,
+                sheet: sheet_num.to_string(),
+            });
         }
     }
 

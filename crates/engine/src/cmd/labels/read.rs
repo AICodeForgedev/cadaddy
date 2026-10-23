@@ -303,6 +303,7 @@ pub(super) fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
                 panel,
                 circuit,
                 source: sh.name.clone(),
+                ..ElecDevice::default()
             });
             if devices.len() >= super::MAX_LABELS {
                 break;
