@@ -273,9 +273,22 @@ fn items(s: &mut Session) -> Vec<Item> {
         }
     }
     // Runs whose size or height is the system's default, not read from a tag.
-    if let Ok(v) = s.execute("mep.list", &json!({})) {
-        let systems: Vec<Value> = v["systems"].as_array().cloned().unwrap_or_default();
-        for r in v["items"].as_array().into_iter().flatten() {
+    // `mep.list` answers a page at a time: walk every page (capped like the run list itself).
+    let mut mep_items: Vec<Value> = Vec::new();
+    let mut mep_systems: Option<Vec<Value>> = None;
+    let mut cursor = 0u64;
+    while let Ok(v) = s.execute("mep.list", &json!({"cursor": cursor, "limit": 200})) {
+        if mep_systems.is_none() {
+            mep_systems = Some(v["systems"].as_array().cloned().unwrap_or_default());
+        }
+        mep_items.extend(v["items"].as_array().into_iter().flatten().cloned());
+        match v["next_cursor"].as_u64() {
+            Some(n) if n > cursor && mep_items.len() < 100_000 => cursor = n,
+            _ => break,
+        }
+    }
+    if let Some(systems) = mep_systems {
+        for r in &mep_items {
             let conf = r["confidence"].as_str().unwrap_or("low");
             if conf == "high" || r["reviewed"].as_bool() == Some(true) {
                 continue;
@@ -299,7 +312,7 @@ fn items(s: &mut Session) -> Vec<Item> {
             ];
             // Sizes and heights tagged on other runs of the system.
             let mut seen = Vec::new();
-            for o in v["items"].as_array().into_iter().flatten().filter(|o| o["system"] == r["system"] && o["confidence"] == "high") {
+            for o in mep_items.iter().filter(|o| o["system"] == r["system"] && o["confidence"] == "high") {
                 let c = json!({"size_in": o["size_in"], "bottom_ft": o["bottoms_ft"].get(0)});
                 if !seen.contains(&c) && seen.len() < 3 {
                     seen.push(c.clone());
