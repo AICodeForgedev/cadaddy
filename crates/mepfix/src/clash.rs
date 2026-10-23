@@ -1,7 +1,7 @@
 //! Clashes computed from the truth's geometry: every pair of modelled elements that overlap (hard
 //! clashes; runs or equipment reaching into a beam or column), runs or equipment hanging below
-//! the ceiling of the room they are in, and in-wall clashes where electrical devices share a
-//! stud cavity (or are within clearance) with plumbing rough-in stubs or risers.
+//! the ceiling of the room they are in, and in-wall clashes where electrical devices are within
+//! a configurable clearance (inches) of plumbing rough-in stubs or vertical risers.
 
 use crate::design::{depth_in, pipe_od, width_in};
 use crate::truth::{Clash, ClearRange, PlacementZone, Truth};
@@ -86,7 +86,13 @@ fn overlap(a: &Item, b: &Item) -> Option<([f64; 3], [f64; 3])> {
 }
 
 /// Every clash, `planted` set for those involving an element in `planted`.
+/// Uses the default 3" in-wall clearance.
 pub fn clashes(t: &Truth, planted: &[String]) -> Vec<Clash> {
+    clashes_with_clearance(t, planted, 3.0)
+}
+
+/// Like [`clashes`] but with a configurable in-wall clearance (inches).
+pub fn clashes_with_clearance(t: &Truth, planted: &[String], clearance_in: f64) -> Vec<Clash> {
     let all = items(t);
     let planted: BTreeSet<&str> = planted.iter().map(String::as_str).collect();
     let mut out = Vec::new();
@@ -143,50 +149,61 @@ pub fn clashes(t: &Truth, planted: &[String]) -> Vec<Clash> {
             }
         }
     }
-    // In-wall clashes: devices sharing a stud cavity with rough-in stubs or within clearance.
-    let clearance_in = 3.0;
-    let clearance_cavities = (clearance_in / 16.0_f64).ceil() as usize;
+    // In-wall clashes: devices vs rough-in stubs/risers.
+    // Clearance is measured in inches from the device box edge to the pipe OD.
+    // Same stud cavity = always a clash regardless of distance.
     for dev in &t.devices {
         let Some(wall) = t.wall(&dev.wall) else { continue };
         for ri in t.rough_ins.iter().filter(|ri| ri.wall == dev.wall) {
-            // Same stud cavity or within clearance_cavities.
             let dev_cav = dev.stud_cavity;
             let ri_cav = ri.stud_cavity;
-            let cav_dist = dev_cav.abs_diff(ri_cav);
-            if cav_dist > clearance_cavities {
-                continue;
-            }
-            // They must overlap vertically (device box vs stub height).
-            let dev_bot = dev.aff_in - dev.box_in[1] / 2.0;
-            let dev_top = dev.aff_in + dev.box_in[1] / 2.0;
-            let stub_od = pipe_od(ri.size_in);
-            let ri_bot = ri.aff_in - stub_od / 2.0;
-            let ri_top = ri.aff_in + stub_od / 2.0;
-            // Overlap with clearance buffer.
-            if dev_top + clearance_in < ri_bot || ri_top + clearance_in < dev_bot {
-                continue;
-            }
-            let elev = t.level(&dev.level).map_or(0.0, |l| l.elevation_ft);
-            let z_mid = elev + (dev.aff_in + ri.aff_in) / 2.0 / 12.0;
-            let x_mid = (dev.at_ft[0] + ri.at_ft[0]) / 2.0;
-            let y_mid = (dev.at_ft[1] + ri.at_ft[1]) / 2.0;
 
-            // Distance in inches along the wall between their centres.
+            // Horizontal distance: box edge to pipe edge, inches.
             let dev_along = project_on_wall(wall, dev.at_ft);
             let ri_along = project_on_wall(wall, [ri.at_ft[0], ri.at_ft[1]]);
-            let horiz_dist = (dev_along - ri_along).abs();
+            let box_half = dev.box_in[0] / 2.0;
+            let od = pipe_od(ri.size_in);
+            let centre_dist = (dev_along - ri_along).abs();
+            let gap_in = (centre_dist - box_half - od / 2.0).max(0.0);
+
+            // Same cavity always clashes; otherwise check gap < clearance.
+            let horiz_clash = dev_cav == ri_cav || gap_in < clearance_in;
+            if !horiz_clash {
+                continue;
+            }
+
+            // Vertical overlap: use the rough-in's run extent (vents/stacks run floor-to-ceiling).
+            let dev_bot = dev.aff_in - dev.box_in[1] / 2.0;
+            let dev_top = dev.aff_in + dev.box_in[1] / 2.0;
+            let ri_bot = ri.run_bottom_in;
+            let ri_top = ri.run_top_in;
+            // For legacy data where run extents are both 0, fall back to point stub.
+            let (rb, rt) = if ri_bot == 0.0 && ri_top == 0.0 {
+                let h = od / 2.0;
+                (ri.aff_in - h, ri.aff_in + h)
+            } else {
+                (ri_bot, ri_top)
+            };
+            if dev_top + clearance_in < rb || rt + clearance_in < dev_bot {
+                continue;
+            }
+
+            let lev_elev = t.level(&dev.level).map_or(0.0, |l| l.elevation_ft);
+            let z_mid = lev_elev + (dev.aff_in + ri.aff_in) / 2.0 / 12.0;
+            let x_mid = (dev.at_ft[0] + ri.at_ft[0]) / 2.0;
+            let y_mid = (dev.at_ft[1] + ri.at_ft[1]) / 2.0;
 
             let fixture = t.fixtures.iter().find(|f| f.id == ri.fixture);
             let room = fixture.map_or("", |f| f.room.as_str());
             let fix_kind = fixture.map_or("fixture", |f| f.kind.as_str());
             let desc = format!(
-                "{} {} +{}\" AFF in the wall behind {} ({}): {:.0}\" from the {} stub",
+                "{} {} +{}\" AFF in the wall behind {} ({}): {:.1}\" from the {} stub",
                 if dev.kind == "receptacle" { "Receptacle" } else { "Switch" },
                 dev.tag,
                 dev.aff_in as i64,
                 fix_kind,
                 room,
-                horiz_dist,
+                gap_in,
                 ri.kind,
             );
 
@@ -196,7 +213,7 @@ pub fn clashes(t: &Truth, planted: &[String]) -> Vec<Clash> {
                 a: dev.id.clone(),
                 b: ri.id.clone(),
                 at_ft: [r4(x_mid), r4(y_mid), r4(z_mid)],
-                depth_in: r2((clearance_in - horiz_dist).max(stub_od).min(clearance_in + stub_od)),
+                depth_in: r2(gap_in.min(clearance_in)),
                 planted: planted.contains(dev.id.as_str()) || planted.contains(ri.id.as_str()),
                 description: Some(desc),
                 wall: Some(dev.wall.clone()),
@@ -233,7 +250,11 @@ fn project_on_wall(w: &crate::truth::Wall, pt: [f64; 2]) -> f64 {
 /// Compute placement zones for devices that are not fixed, analyzing which positions along
 /// their wall are clear of in-wall conflicts.
 pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
-    let clearance_in = 3.0;
+    placement_zones_with_clearance(t, 3.0)
+}
+
+/// Like [`placement_zones`] but with a configurable clearance.
+pub fn placement_zones_with_clearance(t: &Truth, clearance_in: f64) -> Vec<PlacementZone> {
     let mut zones = Vec::new();
 
     for dev in t.devices.iter().filter(|d| !d.fixed) {
@@ -243,22 +264,24 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
             continue;
         }
 
-        // The zone is the wall segment within the room (we use the full wall for simplicity
-        // and clip to a reasonable range around the device's nominal position).
         let dev_along = project_on_wall(wall, dev.at_ft);
-        // Zone: ±3 ft (36") from the device's nominal position, clamped to the wall.
         let zone_start = (dev_along - 36.0).max(0.0);
         let zone_end = (dev_along + 36.0).min(wall_len);
 
-        // Collect all rough-in stubs in this wall with their along-wall positions and height ranges.
-        let stubs: Vec<(f64, f64, f64, String)> = t
+        // Collect stubs with their along-wall positions and vertical run extents.
+        let stubs: Vec<(f64, f64, f64, f64, String)> = t
             .rough_ins
             .iter()
             .filter(|ri| ri.wall == dev.wall)
             .map(|ri| {
                 let along = project_on_wall(wall, [ri.at_ft[0], ri.at_ft[1]]);
                 let od = pipe_od(ri.size_in);
-                (along, ri.aff_in - od / 2.0, ri.aff_in + od / 2.0, ri.id.clone())
+                let (rb, rt) = if ri.run_bottom_in == 0.0 && ri.run_top_in == 0.0 {
+                    (ri.aff_in - od / 2.0, ri.aff_in + od / 2.0)
+                } else {
+                    (ri.run_bottom_in, ri.run_top_in)
+                };
+                (along, rb, rt, od, ri.id.clone())
             })
             .collect();
 
@@ -266,20 +289,15 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
         let dev_top = dev.aff_in + dev.box_in[1] / 2.0;
         let box_half_w = dev.box_in[0] / 2.0;
 
-        // For each position in the zone, check if the device box (centred there) would conflict.
-        // We check at 1" resolution.
-        let mut blocked = Vec::new(); // (start_in, end_in) blocked ranges
-        for &(stub_along, stub_bot, stub_top, ref _rid) in &stubs {
-            // Vertical overlap check.
+        let mut blocked = Vec::new();
+        for &(stub_along, stub_bot, stub_top, od, ref _rid) in &stubs {
             if dev_top + clearance_in < stub_bot || stub_top + clearance_in < dev_bot {
                 continue;
             }
-            // The device box at position p conflicts if |p - stub_along| < box_half_w + clearance.
-            let excl_half = box_half_w + clearance_in + pipe_od(0.5); // conservative
+            let excl_half = box_half_w + clearance_in + od / 2.0;
             blocked.push((stub_along - excl_half, stub_along + excl_half));
         }
 
-        // Merge blocked ranges.
         blocked.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut merged: Vec<(f64, f64)> = Vec::new();
         for (s, e) in &blocked {
@@ -292,7 +310,6 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
             merged.push((*s, *e));
         }
 
-        // Find clear ranges within the zone.
         let mut clear_ranges = Vec::new();
         let mut cursor = zone_start;
         for (bs, be) in &merged {
@@ -303,7 +320,7 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
                     clear_ranges.push(ClearRange {
                         from_in: r2(cs),
                         to_in: r2(ce),
-                        description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, ce,),
+                        description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, ce),
                     });
                 }
             }
@@ -315,19 +332,19 @@ pub fn placement_zones(t: &Truth) -> Vec<PlacementZone> {
                 clear_ranges.push(ClearRange {
                     from_in: r2(cs),
                     to_in: r2(zone_end),
-                    description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, zone_end,),
+                    description: format!("keep {} between {:.0}\" and {:.0}\" from the wall start", dev.tag, cs, zone_end),
                 });
             }
         }
 
         let conflicts: Vec<String> = stubs
             .iter()
-            .filter(|(along, bot, top, _)| {
+            .filter(|(along, bot, top, od, _)| {
                 (dev_top + clearance_in >= *bot && *top + clearance_in >= dev_bot)
-                    && *along >= zone_start - box_half_w - clearance_in
-                    && *along <= zone_end + box_half_w + clearance_in
+                    && *along >= zone_start - box_half_w - clearance_in - od / 2.0
+                    && *along <= zone_end + box_half_w + clearance_in + od / 2.0
             })
-            .map(|(_, _, _, id)| id.clone())
+            .map(|(_, _, _, _, id)| id.clone())
             .collect();
 
         let status = if clear_ranges.is_empty() && !conflicts.is_empty() {

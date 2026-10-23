@@ -116,6 +116,10 @@ pub struct Truth {
     /// occur).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub placement_zones: Vec<PlacementZone>,
+    /// Device ids that are near-misses (close to rough-ins but not clashing).  The detector must
+    /// NOT flag these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub near_miss_ids: Vec<String>,
     /// Soffits read from the reflected ceiling plans (office set; the hotel uses `soffits`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rcp_soffits: Vec<Soffit>,
@@ -1482,6 +1486,19 @@ pub struct RoughIn {
     pub stud_cavity: usize,
     /// Whether this rough-in is assumed from rules (true) or explicitly shown on drawings (false).
     pub assumed: bool,
+    /// Bottom of the vertical run through the cavity, inches AFF.
+    #[serde(default)]
+    pub run_bottom_in: f64,
+    /// Top of the vertical run through the cavity, inches AFF.  For vents and stacks this extends
+    /// from the stub to the ceiling or above; for point stubs it equals `aff_in + pipe_od/2`.
+    #[serde(default)]
+    pub run_top_in: f64,
+    /// The stack this stub ties to (empty if none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stack: String,
+    /// Where this stub came from: a rule id (e.g. `"wc-vent"`) or a sheet/riser reference.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// An electrical device placed on a wall.
@@ -1495,8 +1512,11 @@ pub struct Device {
     pub room: String,
     /// The wall the device is mounted on.
     pub wall: String,
-    /// Position on the plan, building feet.
+    /// True position on the plan, building feet (goes on the A-sheet).
     pub at_ft: [f64; 2],
+    /// Diagrammatic E-sheet position, building feet (offset from `at_ft` for readability).
+    #[serde(default)]
+    pub diag_ft: [f64; 2],
     /// Mounting height above finished floor, inches.
     pub aff_in: f64,
     /// Box width × height × depth, inches.
@@ -1513,6 +1533,13 @@ pub struct Device {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RoughInRules {
     pub rules: Vec<RoughInRule>,
+    /// In-wall clearance distance, inches (default 3.0).
+    #[serde(default = "default_clearance")]
+    pub clearance_in: f64,
+}
+
+fn default_clearance() -> f64 {
+    3.0
 }
 
 /// One fixture type's rough-in stub positions.
@@ -1528,7 +1555,8 @@ pub struct RoughInRule {
 impl RoughInRules {
     /// Standard rough-in positions from common plumbing practice (IPC / UPC).
     pub fn default_rules() -> Self {
-        let s = |sys: &str, kind: &str, aff: f64, off: f64, size: f64| StubRule {
+        let s = |id: &str, sys: &str, kind: &str, aff: f64, off: f64, size: f64| StubRule {
+            id: id.into(),
             system: sys.into(),
             kind: kind.into(),
             aff_in: aff,
@@ -1536,58 +1564,59 @@ impl RoughInRules {
             size_in: size,
         };
         Self {
+            clearance_in: 3.0,
             rules: vec![
                 RoughInRule {
                     fixture_kind: "water_closet".into(),
                     stubs: vec![
-                        s("CW", "supply", 6.0, -8.0, 0.5), // left of centre, 6" AFF
-                        s("SAN", "waste", 0.0, 0.0, 3.0),  // centreline, at floor
-                        s("V", "vent", 20.0, -6.0, 2.0),   // left of waste, 20" AFF
+                        s("wc-supply", "CW", "supply", 6.0, -8.0, 0.5),
+                        s("wc-waste", "SAN", "waste", 0.0, 0.0, 3.0),
+                        s("wc-vent", "V", "vent", 20.0, -6.0, 2.0),
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "lavatory".into(),
                     stubs: vec![
-                        s("CW", "supply", 20.0, -4.0, 0.5), // left, 20" AFF
-                        s("HW", "supply", 20.0, 4.0, 0.5),  // right, 20" AFF
-                        s("SAN", "waste", 18.0, 0.0, 1.5),  // centreline, 18" AFF
-                        s("V", "vent", 24.0, 4.0, 1.5),     // right of waste, 24" AFF
+                        s("lav-cw", "CW", "supply", 20.0, -4.0, 0.5),
+                        s("lav-hw", "HW", "supply", 20.0, 4.0, 0.5),
+                        s("lav-waste", "SAN", "waste", 18.0, 0.0, 1.5),
+                        s("lav-vent", "V", "vent", 24.0, 4.0, 1.5),
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "urinal".into(),
                     stubs: vec![
-                        s("CW", "supply", 42.0, 0.0, 0.75), // centreline, 42" AFF
-                        s("SAN", "waste", 0.0, 0.0, 2.0),
-                        s("V", "vent", 24.0, 4.0, 1.5),
+                        s("uri-supply", "CW", "supply", 42.0, 0.0, 0.75),
+                        s("uri-waste", "SAN", "waste", 0.0, 0.0, 2.0),
+                        s("uri-vent", "V", "vent", 24.0, 4.0, 1.5),
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "shower".into(),
                     stubs: vec![
-                        s("CW", "supply", 48.0, -3.0, 0.5),
-                        s("HW", "supply", 48.0, 3.0, 0.5),
-                        s("SAN", "waste", 0.0, 0.0, 2.0),
-                        s("V", "vent", 24.0, 6.0, 1.5),
+                        s("shw-cw", "CW", "supply", 48.0, -3.0, 0.5),
+                        s("shw-hw", "HW", "supply", 48.0, 3.0, 0.5),
+                        s("shw-waste", "SAN", "waste", 0.0, 0.0, 2.0),
+                        s("shw-vent", "V", "vent", 24.0, 6.0, 1.5),
                     ],
                 },
                 RoughInRule {
                     fixture_kind: "mop_sink".into(),
                     stubs: vec![
-                        s("CW", "supply", 24.0, -4.0, 0.75),
-                        s("HW", "supply", 24.0, 4.0, 0.75),
-                        s("SAN", "waste", 0.0, 0.0, 3.0),
-                        s("V", "vent", 30.0, 6.0, 2.0),
+                        s("mop-cw", "CW", "supply", 24.0, -4.0, 0.75),
+                        s("mop-hw", "HW", "supply", 24.0, 4.0, 0.75),
+                        s("mop-waste", "SAN", "waste", 0.0, 0.0, 3.0),
+                        s("mop-vent", "V", "vent", 30.0, 6.0, 2.0),
                     ],
                 },
-                RoughInRule { fixture_kind: "floor_drain".into(), stubs: vec![s("SAN", "waste", 0.0, 0.0, 2.0)] },
+                RoughInRule { fixture_kind: "floor_drain".into(), stubs: vec![s("fd-waste", "SAN", "waste", 0.0, 0.0, 2.0)] },
                 RoughInRule {
                     fixture_kind: "sink".into(),
                     stubs: vec![
-                        s("CW", "supply", 20.0, -4.0, 0.5),
-                        s("HW", "supply", 20.0, 4.0, 0.5),
-                        s("SAN", "waste", 18.0, 0.0, 1.5),
-                        s("V", "vent", 24.0, 4.0, 1.5),
+                        s("sink-cw", "CW", "supply", 20.0, -4.0, 0.5),
+                        s("sink-hw", "HW", "supply", 20.0, 4.0, 0.5),
+                        s("sink-waste", "SAN", "waste", 18.0, 0.0, 1.5),
+                        s("sink-vent", "V", "vent", 24.0, 4.0, 1.5),
                     ],
                 },
             ],
@@ -1598,11 +1627,29 @@ impl RoughInRules {
     pub fn for_kind(&self, kind: &str) -> Option<&RoughInRule> {
         self.rules.iter().find(|r| r.fixture_kind == kind)
     }
+
+    /// Load rules from a JSON file.  Falls back to [`default_rules`](Self::default_rules) on any
+    /// error so the generator never fails.
+    pub fn load(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(Self::default_rules)
+    }
+
+    /// Save the rules to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| e.to_string())
+    }
 }
 
 /// Where one rough-in stub sits relative to the fixture.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StubRule {
+    /// Unique identifier within the rule set (e.g. `"wc-supply"`, `"lav-vent"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     /// `CW`, `HW`, `SAN`, `V`.
     pub system: String,
     /// `supply`, `waste`, `vent`.
