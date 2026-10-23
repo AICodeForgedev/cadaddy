@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use cadaddy_doc::{Drawing, Handle};
+use cadaddy_doc::Drawing;
 use cadaddy_geom::Vec3;
 
 use super::file::{base64_decode, base64_encode};
@@ -250,28 +250,26 @@ fn up_of(dir: Vec3) -> Vec3 {
 
 fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     let title = text(p, "title").filter(|t| !t.is_empty()).ok_or_else(|| bad("bcf.create", "title required"))?;
-    let d = s.doc()?;
-    let mut topics = load(d);
+    let mut topics = load(s.doc()?);
     if topics.topics.len() >= MAX_TOPICS {
         return Err(bad("bcf.create", format!("a drawing keeps at most {MAX_TOPICS} BCF topics")));
     }
-    let els = ifcmodel::elements(d);
-    let upm = super::ifcref::units_per_metre(d);
-    // The objects: given (handles or GlobalIds), else the selection.
-    let picked: Vec<&Element> = match p.get("selection").and_then(Value::as_array) {
+    let idx = ifcmodel::cached_index(s)?;
+    let upm = super::ifcref::units_per_metre(s.doc()?);
+    // The objects: given (handles or GlobalIds), else the selection. Map-based lookup.
+    let picked_indices: Vec<usize> = match p.get("selection").and_then(Value::as_array) {
         Some(a) => a
             .iter()
             .filter_map(Value::as_str)
             .take(MAX_SELECTED)
-            .filter_map(|q| {
-                els.iter().find(|e| e.tag.guid == q.trim()).or_else(|| Handle::parse_hex(q.trim()).and_then(|h| els.iter().find(|e| e.handle == h)))
-            })
+            .filter_map(|q| idx.by_guid_or_handle(q.trim()))
             .collect(),
         None => {
             let sel = s.selection();
-            els.iter().filter(|e| sel.contains(&e.handle)).take(MAX_SELECTED).collect()
+            sel.iter().filter_map(|h| idx.by_handle(*h)).take(MAX_SELECTED).collect()
         }
     };
+    let picked: Vec<&Element> = picked_indices.iter().filter_map(|i| idx.els.get(*i)).collect();
     // The camera: given, the one last set, else along the view at the selection (or everything).
     let (eye, target) = match (vec3_param("bcf.create", p, "eye")?, vec3_param("bcf.create", p, "target")?) {
         (Some(e), Some(t)) if (e - t).len() > 1e-9 => (e, t),
@@ -280,7 +278,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
             Some(c) => c,
             None => {
                 let look: Vec<Vec3> = if picked.is_empty() {
-                    els.iter().flat_map(|e| [e.min, e.max]).collect()
+                    idx.els.iter().flat_map(|e| [e.min, e.max]).collect()
                 } else {
                     picked.iter().flat_map(|e| [e.min, e.max]).collect()
                 };
@@ -298,7 +296,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
     };
-    let snapshot = if bool_or(p, "snapshot", true) && !els.is_empty() {
+    let snapshot = if bool_or(p, "snapshot", true) && !idx.els.is_empty() {
         let dim = |k: &str, def: u32| p.get(k).and_then(Value::as_u64).map_or(def, |v| u32::try_from(v).unwrap_or(2048).clamp(16, 2048));
         let keep = s.selection();
         s.set_selection(picked.iter().map(|e| e.handle).collect());
@@ -462,13 +460,16 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(vp) = t.viewpoints.get(k) else {
         return Ok(json!({ "guid": t.guid, "selected": [], "missing": [], "message": "the topic has no viewpoint" }));
     };
-    let d = s.doc()?;
-    let els = ifcmodel::elements(d);
-    let upm = super::ifcref::units_per_metre(d);
+    let idx = ifcmodel::cached_index(s)?;
+    let upm = super::ifcref::units_per_metre(s.doc()?);
     let (mut selected, mut missing) = (Vec::new(), Vec::new());
     for g in &vp.selection {
-        match els.iter().find(|e| &e.tag.guid == g) {
-            Some(e) => selected.push(e.handle),
+        match idx.by_guid(g) {
+            Some(i) => {
+                if let Some(e) = idx.els.get(i) {
+                    selected.push(e.handle);
+                }
+            }
             None => missing.push(g.clone()),
         }
     }
@@ -476,16 +477,30 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
     let eye = Vec3::new(vp.eye[0] * upm, vp.eye[1] * upm, vp.eye[2] * upm);
     let dir = unit(Vec3::new(vp.dir[0], vp.dir[1], vp.dir[2]));
     if eye.x.is_finite() && eye.y.is_finite() && eye.z.is_finite() && dir.len() > 0.5 {
-        // The target: as far along the view as the selection (or the model) is from the eye.
-        let look: Vec<&Element> =
-            if selected.is_empty() { els.iter().collect() } else { els.iter().filter(|e| selected.contains(&e.handle)).collect() };
-        let centre = if look.is_empty() {
-            eye + dir * upm
+        // Fit to the selection's bounds (padded) along eye→target, not the whole model.
+        let sel_els: Vec<&Element> = selected.iter().filter_map(|h| idx.by_handle(*h).and_then(|i| idx.els.get(i))).collect();
+        let target = if sel_els.is_empty() {
+            // No selection: look as far as the model centre.
+            let centre = if idx.els.is_empty() {
+                eye + dir * upm
+            } else {
+                idx.els.iter().fold(Vec3::ZERO, |a, e| a + (e.min + e.max) * 0.5) * (1.0 / idx.els.len() as f64)
+            };
+            let reach = (centre - eye).dot(dir).max(upm);
+            eye + dir * reach
         } else {
-            look.iter().fold(Vec3::ZERO, |a, e| a + (e.min + e.max) * 0.5) * (1.0 / look.len() as f64)
+            // Selection: target = centre of selected objects' bounds.
+            let pts: Vec<Vec3> = sel_els.iter().flat_map(|e| [e.min, e.max]).collect();
+            let lo = pts.iter().fold(Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), |a, b| {
+                Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z))
+            });
+            let hi = pts.iter().fold(Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| {
+                Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z))
+            });
+            let centre = (lo + hi) * 0.5;
+            let reach = (centre - eye).dot(dir).max(upm);
+            eye + dir * reach
         };
-        let reach = (centre - eye).dot(dir).max(upm);
-        let target = eye + dir * reach;
         ifcmodel::set_camera(s, eye, target)?;
         out["eye"] = json!([eye.x, eye.y, eye.z]);
         out["target"] = json!([target.x, target.y, target.z]);
