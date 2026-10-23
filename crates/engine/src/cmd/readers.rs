@@ -227,7 +227,11 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
     let net = read_mech_from_drawing(s)?;
 
     let total_runs = net.runs.len();
-    let length_ft: f64 = net.runs.iter().map(|r| run_length_ft(&r.points, r.width_in)).sum();
+    // Get units_per_foot from the building spec for correct length conversion.
+    let upf = super::bspec::current(s, "ducts.read").map_or(12.0, |(sp, _)| {
+        if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 }
+    });
+    let length_ft: f64 = net.runs.iter().map(|r| run_length_ft(&r.points, upf)).sum();
     let terminals = net.terminals.len();
     let equipment = net.equipment.len();
     let fittings = net.fittings.len();
@@ -276,20 +280,36 @@ pub(crate) fn read_mech_from_drawing(s: &Session) -> Result<DuctNetwork> {
     Ok(duct_reader::read_ducts_any_layer(d))
 }
 
-/// Length of a duct run in feet (centreline path length, in model inches → feet).
-fn run_length_ft(points: &[cadaddy_geom::Vec2], _width: f64) -> f64 {
+/// Length of a duct run in feet (centreline path length divided by units_per_foot).
+fn run_length_ft(points: &[cadaddy_geom::Vec2], units_per_foot: f64) -> f64 {
     let mut total = 0.0;
     for w in points.windows(2) {
         if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
             total += a.dist(*b);
         }
     }
-    total / 12.0 // model inches to feet
+    total / units_per_foot
 }
 
 /// Convert a DuctNetwork into BuildingSpec types and store in the drawing's spec.
 fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&str>) -> Result<()> {
     let (mut sp, _) = super::bspec::current(s, "ducts.read")?;
+
+    // Detect paper-scale drawings and adjust units_per_foot for correct length computation.
+    // Paper-scale mechanical PDFs have small extents (< 100" diagonal) where the default
+    // units_per_foot=12 would vastly understate duct footage.
+    if let Ok(d) = s.doc() {
+        let scale = cadaddy_mepfix::duct_reader::detect_paper_scale_pub(d);
+        if scale < 0.5 && sp.units_per_foot >= 1.0 {
+            // Estimate units_per_foot from the paper scale.
+            // At 1/8" = 1'-0" scale: 1 paper inch = 96 building inches → upf = 1/8 = 0.125.
+            // General: scale ≈ paper_diag / building_diag_in → upf = scale * 12.
+            let estimated_upf = scale * 12.0;
+            if estimated_upf < sp.units_per_foot && estimated_upf > 0.01 {
+                sp.units_per_foot = estimated_upf;
+            }
+        }
+    }
 
     // Build MepSystems from the detected runs.
     let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
