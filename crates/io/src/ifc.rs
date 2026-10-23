@@ -949,16 +949,17 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
                 if let Some(f) = model_ref {
                     mfr_ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('ModelReference',$,IFCLABEL({}),$)", step_str(&f.value))));
                 }
-                let mfr_pset = o.add(format!(
-                    "IFCPROPERTYSET('{}',$,'Pset_ManufacturerTypeInformation',$,{})",
-                    id(handle, 24),
-                    refs(&mfr_ids)
-                ));
+                let mfr_pset = o.add(format!("IFCPROPERTYSET('{}',$,'Pset_ManufacturerTypeInformation',$,{})", id(handle, 24), refs(&mfr_ids)));
                 o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{mfr_pset})", id(handle, 25)));
             }
 
             // CaDaddy_SpecSource: source and confidence per field for provenance.
-            let source_fields: Vec<_> = ty.fields.iter().filter(|(_, f)| !f.source.is_empty() || f.confidence != cadaddy_doc::bimspec::Confidence::Stated).take(200).collect();
+            let source_fields: Vec<_> = ty
+                .fields
+                .iter()
+                .filter(|(_, f)| !f.source.is_empty() || f.confidence != cadaddy_doc::bimspec::Confidence::Stated)
+                .take(200)
+                .collect();
             if !source_fields.is_empty() {
                 let mut src_ids = Vec::new();
                 for (key, field) in &source_fields {
@@ -977,11 +978,7 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
                         )));
                     }
                 }
-                let src_pset = o.add(format!(
-                    "IFCPROPERTYSET('{}',$,'CaDaddy_SpecSource',$,{})",
-                    id(handle, 26),
-                    refs(&src_ids)
-                ));
+                let src_pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_SpecSource',$,{})", id(handle, 26), refs(&src_ids)));
                 o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{src_pset})", id(handle, 27)));
             }
         }

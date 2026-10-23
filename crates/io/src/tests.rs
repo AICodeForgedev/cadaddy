@@ -2697,10 +2697,14 @@ fn bim_spec_ifc_psets() {
     // Create two simple box meshes and assign them BIM type H.
     let box_mesh = |x: f64| Mesh {
         vertices: vec![
-            Vec3::new(x, 0.0, 0.0), Vec3::new(x + 2.0, 0.0, 0.0),
-            Vec3::new(x + 2.0, 2.0, 0.0), Vec3::new(x, 2.0, 0.0),
-            Vec3::new(x, 0.0, 2.0), Vec3::new(x + 2.0, 0.0, 2.0),
-            Vec3::new(x + 2.0, 2.0, 2.0), Vec3::new(x, 2.0, 2.0),
+            Vec3::new(x, 0.0, 0.0),
+            Vec3::new(x + 2.0, 0.0, 0.0),
+            Vec3::new(x + 2.0, 2.0, 0.0),
+            Vec3::new(x, 2.0, 0.0),
+            Vec3::new(x, 0.0, 2.0),
+            Vec3::new(x + 2.0, 0.0, 2.0),
+            Vec3::new(x + 2.0, 2.0, 2.0),
+            Vec3::new(x, 2.0, 2.0),
         ],
         faces: vec![
             MeshFace { v: vec![0, 1, 2, 3], hidden: 0 },

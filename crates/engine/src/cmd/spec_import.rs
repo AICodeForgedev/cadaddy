@@ -212,11 +212,7 @@ fn collect_texts(drawing: &cadaddy_doc::Drawing, out: &mut String) {
 /// Groups text by Y position into rows, detects a header row matching known
 /// schedule column names, and parses data rows into proposals.  The `sheet_id`
 /// is recorded in each proposal's `file_source`.
-fn parse_schedule_from_drawing(
-    drawing: &cadaddy_doc::Drawing,
-    sheet_id: &str,
-    existing: &bimspec::BimTypes,
-) -> SpecImportResult {
+fn parse_schedule_from_drawing(drawing: &cadaddy_doc::Drawing, sheet_id: &str, existing: &bimspec::BimTypes) -> SpecImportResult {
     let mut result = SpecImportResult::default();
     let mut rfi_counter = 0u32;
 
@@ -263,9 +259,7 @@ fn parse_schedule_from_drawing(
     // Group into rows by Y tolerance.
     let mut rows: Vec<Vec<&PosTxt>> = Vec::new();
     for item in &items {
-        let placed = rows.iter_mut().find(|r| {
-            r.first().is_some_and(|f| (f.y - item.y).abs() < row_eps)
-        });
+        let placed = rows.iter_mut().find(|r| r.first().is_some_and(|f| (f.y - item.y).abs() < row_eps));
         if let Some(row) = placed {
             row.push(item);
         } else {
@@ -333,9 +327,7 @@ fn parse_schedule_from_drawing(
 
         for item in row {
             // Find the closest column header by X position.
-            let closest = col_map.iter().min_by(|a, b| {
-                (a.0 - item.x).abs().partial_cmp(&(b.0 - item.x).abs()).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            let closest = col_map.iter().min_by(|a, b| (a.0 - item.x).abs().partial_cmp(&(b.0 - item.x).abs()).unwrap_or(std::cmp::Ordering::Equal));
             if let Some((cx, field_key)) = closest {
                 if (cx - item.x).abs() > col_eps {
                     continue;
@@ -975,18 +967,14 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
 
         // Detect review stamps — apply to the LAST type in the current block.
         let upper = line.to_ascii_uppercase();
-        if (upper.contains("APPROVED AS NOTED") || upper.contains("APPROVED-AS-NOTED"))
-            && current_submittal.is_some()
-        {
+        if (upper.contains("APPROVED AS NOTED") || upper.contains("APPROVED-AS-NOTED")) && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "approved_as_noted".into();
             }
             i += 1;
             continue;
         }
-        if (upper == "APPROVED" || upper.starts_with("APPROVED ") || upper.contains("STAMP: APPROVED"))
-            && current_submittal.is_some()
-        {
+        if (upper == "APPROVED" || upper.starts_with("APPROVED ") || upper.contains("STAMP: APPROVED")) && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut()
                 && stamp.is_empty()
             {
@@ -995,18 +983,14 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
             i += 1;
             continue;
         }
-        if (upper.contains("REVISE AND RESUBMIT") || upper == "REVISE")
-            && current_submittal.is_some()
-        {
+        if (upper.contains("REVISE AND RESUBMIT") || upper == "REVISE") && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "revise".into();
             }
             i += 1;
             continue;
         }
-        if (upper == "REJECTED" || upper.contains("STAMP: REJECTED"))
-            && current_submittal.is_some()
-        {
+        if (upper == "REJECTED" || upper.contains("STAMP: REJECTED")) && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "rejected".into();
             }
@@ -1062,13 +1046,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     result
 }
 
-fn parse_submittal_detail(
-    line: &str,
-    sub: &mut SubmittalRecord,
-    types: &mut Vec<SpecProposal>,
-    stamps: &mut Vec<String>,
-    page: &str,
-) {
+fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, stamps: &mut Vec<String>, page: &str) {
     let lower = line.to_ascii_lowercase();
 
     // Type mark references — starts a new product block.
@@ -2055,9 +2033,7 @@ Finish: Silver
 
 REVISE AND RESUBMIT
 ";
-        let r = s
-            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
 
@@ -2065,10 +2041,7 @@ REVISE AND RESUBMIT
         let h = proposals.iter().find(|p| p["mark"] == "H");
         assert!(h.is_some(), "H should be proposed (approved)");
         let h = h.unwrap();
-        assert_eq!(
-            h["fields"]["catalogNumber"]["value"], "A-1",
-            "H must keep its own catalog number, not J's"
-        );
+        assert_eq!(h["fields"]["catalogNumber"]["value"], "A-1", "H must keep its own catalog number, not J's");
         assert_eq!(h["fields"]["manufacturer"]["value"], "Apex Lighting");
         assert_eq!(h["fields"]["reviewStatus"]["value"], "approved");
 
@@ -2096,17 +2069,12 @@ Type K: Pendant LED fixture
 Manufacturer: Nova Electric
 Catalog No: PD-300
 ";
-        let r = s
-            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         let k = proposals.iter().find(|p| p["mark"] == "K");
         assert!(k.is_some(), "unstamped should be proposed");
-        assert_eq!(
-            k.unwrap()["fields"]["reviewStatus"]["value"], "unreviewed",
-            "unstamped must be 'unreviewed', not approved"
-        );
+        assert_eq!(k.unwrap()["fields"]["reviewStatus"]["value"], "unreviewed", "unstamped must be 'unreviewed', not approved");
     }
 
     // ── MUST 5: sheet schedule from positioned TEXT entities ───────────────
@@ -2154,9 +2122,7 @@ Catalog No: PD-300
         s.execute("text", &json!({"at": [330, 80], "height": 3, "text": "Surface"})).ok();
 
         // Import with format "sheet".
-        let r = s
-            .execute("bim.spec_import", &json!({"format": "sheet", "sheet": "E-1"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"format": "sheet", "sheet": "E-1"})).unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         assert_eq!(proposals.len(), 2, "should find 2 schedule rows, got {}", proposals.len());
@@ -2171,10 +2137,7 @@ Catalog No: PD-300
         assert_eq!(h["fields"]["volts"]["value"], "120/277");
         assert_eq!(h["fields"]["mounting"]["value"], "Recessed");
         // Sheet id in source.
-        assert!(
-            h["fileSource"].as_str().unwrap_or("").contains("E-1"),
-            "source should contain the sheet id"
-        );
+        assert!(h["fileSource"].as_str().unwrap_or("").contains("E-1"), "source should contain the sheet id");
         assert_eq!(h["category"], "luminaire");
 
         // Verify type J fields.
@@ -2219,9 +2182,7 @@ Catalog No: PD-300
                     // Exclude metadata fields the parser adds automatically.
                     if let Some(fields) = p["fields"].as_object() {
                         for key in fields.keys() {
-                            if !truth_obj.contains_key(key)
-                                && !matches!(key.as_str(), "specSection" | "reviewStatus" | "submittalSource")
-                            {
+                            if !truth_obj.contains_key(key) && !matches!(key.as_str(), "specSection" | "reviewStatus" | "submittalSource") {
                                 fp += 1;
                             }
                         }
@@ -2329,21 +2290,13 @@ Manufacturer: Grid Controls
 Voltage: 120/208V
 ";
 
-        let r = s
-            .execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"})).unwrap_or_default();
         let proposals = arr(&r["proposals"]);
         let rfis = arr(&r["rfis"]);
 
         let (precision, recall, _, extra) = score_proposals(proposals, rfis, &truth, &[]);
-        assert!(
-            precision >= 0.95,
-            "spec precision {precision:.3} < 0.95; proposals: {proposals:?}"
-        );
-        assert!(
-            recall >= 0.95,
-            "spec recall {recall:.3} < 0.95; proposals: {proposals:?}"
-        );
+        assert!(precision >= 0.95, "spec precision {precision:.3} < 0.95; proposals: {proposals:?}");
+        assert!(recall >= 0.95, "spec recall {recall:.3} < 0.95; proposals: {proposals:?}");
         assert!(extra.is_empty(), "no unplanted conflicts expected, got: {extra:?}");
     }
 
@@ -2400,9 +2353,7 @@ Mounting: Surface
 Finish: Silver
 ";
 
-        let r = s
-            .execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"text": spec_text, "format": "spec"})).unwrap_or_default();
 
         let proposals = arr(&r["proposals"]);
         let rfis = arr(&r["rfis"]);
@@ -2440,10 +2391,7 @@ Finish: Silver
         // Every planted conflict must be found.
         for &(mark, field) in expected_conflicts {
             let key = format!("{mark}:{field}");
-            assert!(
-                found.contains(&key),
-                "planted conflict {key} not found in RFIs; rfis: {rfis:?}"
-            );
+            assert!(found.contains(&key), "planted conflict {key} not found in RFIs; rfis: {rfis:?}");
         }
         // No unplanted conflicts.
         assert!(extra.is_empty(), "unplanted conflicts found: {extra:?}; rfis: {rfis:?}");
@@ -2490,9 +2438,7 @@ Finish: Silver
 APPROVED
 ";
 
-        let r = s
-            .execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"}))
-            .unwrap_or_default();
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
         let proposals = arr(&r["proposals"]);
         let rfis = arr(&r["rfis"]);
 

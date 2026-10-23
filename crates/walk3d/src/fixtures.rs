@@ -100,9 +100,7 @@ impl ScheduleSize {
     /// Parse schedule sizes from device attributes. Recognised tags (case-insensitive):
     /// SIZE (WxD or WxDxH, inches), APERTURE, LENGTH, WIDTH, DEPTH, HEIGHT, PENDANT_DROP, DROP.
     pub fn from_attrs(attrs: &[(String, String)]) -> Self {
-        let find = |tag: &str| -> Option<&str> {
-            attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, v)| v.as_str())
-        };
+        let find = |tag: &str| -> Option<&str> { attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, v)| v.as_str()) };
         let parse_in = |s: &str| -> Option<f64> {
             let s = s.trim().trim_end_matches('"').trim_end_matches("in");
             s.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)
@@ -378,9 +376,7 @@ pub fn classify_with_schedule(kind: &str, type_tag: &str, size_ft: [f64; 3], sch
     if has_token(tag, "TV") {
         return Some(FixtureFamily::TvOutlet { width_ft: w, height_ft: h, depth_ft: d });
     }
-    if tag.to_ascii_uppercase().starts_with("LP-") || tag.to_ascii_uppercase().starts_with("PP-")
-        || tag.to_ascii_uppercase().starts_with("DP-")
-    {
+    if tag.to_ascii_uppercase().starts_with("LP-") || tag.to_ascii_uppercase().starts_with("PP-") || tag.to_ascii_uppercase().starts_with("DP-") {
         return Some(FixtureFamily::Panel { width_ft: w, height_ft: h, depth_ft: d });
     }
     if has_token(tag, "DISC") || has_token(tag, "DISCONNECT") {
@@ -415,10 +411,9 @@ pub fn ifc_class(family: &FixtureFamily) -> &'static str {
 
         FixtureFamily::Panel { .. } | FixtureFamily::Disconnect { .. } => "IfcElectricDistributionBoard",
 
-        FixtureFamily::WaterCloset { .. }
-        | FixtureFamily::Lavatory { .. }
-        | FixtureFamily::Urinal { .. }
-        | FixtureFamily::MopSink { .. } => "IfcSanitaryTerminal",
+        FixtureFamily::WaterCloset { .. } | FixtureFamily::Lavatory { .. } | FixtureFamily::Urinal { .. } | FixtureFamily::MopSink { .. } => {
+            "IfcSanitaryTerminal"
+        }
 
         FixtureFamily::Shower { .. } => "IfcSanitaryTerminal",
         FixtureFamily::WaterHeater { .. } => "IfcBoiler",
@@ -473,18 +468,17 @@ pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, no
         | FixtureFamily::ClockHanger { width_ft, height_ft, depth_ft } => {
             receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
         }
-        FixtureFamily::Switch { width_ft, height_ft, depth_ft }
-        | FixtureFamily::Dimmer { width_ft, height_ft, depth_ft } => {
+        FixtureFamily::Switch { width_ft, height_ft, depth_ft } | FixtureFamily::Dimmer { width_ft, height_ft, depth_ft } => {
             switch_device(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
         }
         FixtureFamily::FloorBox { width_ft, depth_ft, height_ft } => floor_box(s, centre, *width_ft, *depth_ft, *height_ft, col, owner, lod),
-        FixtureFamily::DataOutlet { width_ft, height_ft, depth_ft } => {
-            receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
-        }
+        FixtureFamily::DataOutlet { width_ft, height_ft, depth_ft } => receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
 
         // --- Panels / disconnects ---
         FixtureFamily::Panel { width_ft, height_ft, depth_ft } => panel(s, centre, normal, *width_ft, *height_ft, *depth_ft, col, owner, lod),
-        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => disconnect(s, centre, normal, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => {
+            disconnect(s, centre, normal, *width_ft, *height_ft, *depth_ft, col, owner, lod)
+        }
 
         // --- Plumbing ---
         FixtureFamily::WaterCloset { width_ft, depth_ft, height_ft } => {
@@ -516,9 +510,7 @@ pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, no
             // Thin-walled box outline (like a base cabinet without door grooves).
             base_cabinet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
         }
-        FixtureFamily::Drawers { width_ft, depth_ft, height_ft } => {
-            base_cabinet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
-        }
+        FixtureFamily::Drawers { width_ft, depth_ft, height_ft } => base_cabinet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
 
         // --- Pipe/conduit fittings ---
         FixtureFamily::Elbow90 { diameter_ft } => elbow(s, centre, dir, *diameter_ft, 90.0, col, owner, lod),
@@ -547,8 +539,7 @@ pub fn plan_extents(family: &FixtureFamily) -> [f64; 2] {
         | FixtureFamily::UsbOutlet { width_ft, depth_ft, .. }
         | FixtureFamily::TvOutlet { width_ft, depth_ft, .. }
         | FixtureFamily::ClockHanger { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
-        FixtureFamily::Switch { width_ft, depth_ft, .. }
-        | FixtureFamily::Dimmer { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Switch { width_ft, depth_ft, .. } | FixtureFamily::Dimmer { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
         FixtureFamily::FloorBox { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
         FixtureFamily::DataOutlet { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
         FixtureFamily::Panel { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
@@ -584,48 +575,58 @@ fn plan_symbol(s: &mut Scene, family: &FixtureFamily, c: V3, dir: Vec2, col: Rgb
         FixtureFamily::Downlight { aperture_ft, .. } => {
             let n = 6;
             let r = aperture_ft / 2.0;
-            let pts: Vec<V3> = (0..n).map(|i| {
-                let a = 2.0 * PI * (i as f64) / (n as f64);
-                tw(a.cos() * r, a.sin() * r, 0.0)
-            }).collect();
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
             disc(s, c, &pts, col, owner);
         }
         FixtureFamily::WaterHeater { diameter_ft, .. } => {
             let n = 6;
             let r = diameter_ft / 2.0;
-            let pts: Vec<V3> = (0..n).map(|i| {
-                let a = 2.0 * PI * (i as f64) / (n as f64);
-                tw(a.cos() * r, a.sin() * r, 0.0)
-            }).collect();
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
             disc(s, c, &pts, col, owner);
         }
         FixtureFamily::FloorBox { width_ft, depth_ft, .. } => {
             let n = 6;
             let r = width_ft.max(*depth_ft) / 2.0;
-            let pts: Vec<V3> = (0..n).map(|i| {
-                let a = 2.0 * PI * (i as f64) / (n as f64);
-                tw(a.cos() * r, a.sin() * r, 0.0)
-            }).collect();
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
             disc(s, c, &pts, col, owner);
         }
         FixtureFamily::WaterCloset { width_ft, depth_ft, .. } => {
             let n = 8; // Keep fewer tris than Simple's boxed()
             let rx = width_ft / 2.0;
             let ry = depth_ft / 2.0;
-            let pts: Vec<V3> = (0..n).map(|i| {
-                let a = 2.0 * PI * (i as f64) / (n as f64);
-                tw(a.cos() * rx, a.sin() * ry, 0.0)
-            }).collect();
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * rx, a.sin() * ry, 0.0)
+                })
+                .collect();
             disc(s, c, &pts, col, owner);
         }
         FixtureFamily::Lavatory { width_ft, depth_ft, .. } => {
             let n = 8;
             let rx = width_ft / 2.0;
             let ry = depth_ft / 2.0;
-            let pts: Vec<V3> = (0..n).map(|i| {
-                let a = 2.0 * PI * (i as f64) / (n as f64);
-                tw(a.cos() * rx, a.sin() * ry, 0.0)
-            }).collect();
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * rx, a.sin() * ry, 0.0)
+                })
+                .collect();
             disc(s, c, &pts, col, owner);
         }
         _ => {
@@ -1243,16 +1244,36 @@ fn lavatory(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64
     let bowl_rx = hw * 0.85;
     let bowl_ry = hd * 0.85;
 
-    let outer: Vec<V3> = (0..n).map(|i| { let a = 2.0 * PI * (i as f64) / (n as f64); tw(a.cos() * hw, a.sin() * hd, rim_z) }).collect();
-    let inner: Vec<V3> = (0..n).map(|i| { let a = 2.0 * PI * (i as f64) / (n as f64); tw(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z) }).collect();
+    let outer: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            tw(a.cos() * hw, a.sin() * hd, rim_z)
+        })
+        .collect();
+    let inner: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            tw(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z)
+        })
+        .collect();
     let drain_r = 1.0 / 12.0;
-    let bottom: Vec<V3> = (0..n).map(|i| { let a = 2.0 * PI * (i as f64) / (n as f64); tw(a.cos() * drain_r, a.sin() * drain_r, bot_z) }).collect();
+    let bottom: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            tw(a.cos() * drain_r, a.sin() * drain_r, bot_z)
+        })
+        .collect();
 
     for i in 0..n {
         let j = (i + 1) % n;
         quad(s, [outer[i], outer[j], inner[j], inner[i]], porcelain, owner);
     }
-    let outer_bot: Vec<V3> = (0..n).map(|i| { let a = 2.0 * PI * (i as f64) / (n as f64); tw(a.cos() * hw, a.sin() * hd, bot_z) }).collect();
+    let outer_bot: Vec<V3> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * (i as f64) / (n as f64);
+            tw(a.cos() * hw, a.sin() * hd, bot_z)
+        })
+        .collect();
     cylinder_side(s, &outer_bot, &outer, porcelain, owner);
     cylinder_side(s, &bottom, &inner, Rgb(230, 230, 225), owner);
     disc(s, tw(0.0, 0.0, bot_z), &bottom, Rgb(100, 100, 100), owner);
@@ -1572,23 +1593,25 @@ fn coupling(s: &mut Scene, c: V3, dir: Vec2, diameter: f64, length: f64, col: Rg
 // ========================================================================================
 
 fn scale_color(c: Rgb, factor: f64) -> Rgb {
-    Rgb(
-        (c.0 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.1 as f64 * factor).clamp(0.0, 255.0) as u8,
-        (c.2 as f64 * factor).clamp(0.0, 255.0) as u8,
-    )
+    Rgb((c.0 as f64 * factor).clamp(0.0, 255.0) as u8, (c.1 as f64 * factor).clamp(0.0, 255.0) as u8, (c.2 as f64 * factor).clamp(0.0, 255.0) as u8)
 }
 
-fn darken(c: Rgb, factor: f64) -> Rgb { scale_color(c, factor) }
+fn darken(c: Rgb, factor: f64) -> Rgb {
+    scale_color(c, factor)
+}
 
-fn brighten(c: Rgb, factor: f64) -> Rgb { scale_color(c, factor) }
+fn brighten(c: Rgb, factor: f64) -> Rgb {
+    scale_color(c, factor)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::derive::Part;
 
-    fn empty_scene() -> Scene { Scene::default() }
+    fn empty_scene() -> Scene {
+        Scene::default()
+    }
     const DIR: Vec2 = Vec2 { x: 1.0, y: 0.0 };
     const NRM: Vec2 = Vec2 { x: 0.0, y: 1.0 };
     const COL: Rgb = Rgb(200, 200, 200);
@@ -1607,30 +1630,30 @@ mod tests {
         let sz = [1.0, 1.0, 1.0];
         let cases: Vec<(&str, &str, Option<&str>)> = vec![
             // (kind, tag, expected family name or None)
-            ("receptacle", "WP", Some("Receptacle")),           // WP tag on a receptacle kind stays Receptacle
-            ("light_fixture", "A", Some("Troffer")),             // schedule tag A → troffer
-            ("light_fixture", "DL", Some("Downlight")),          // DL tag → downlight (small)
-            ("light_fixture", "2x4", Some("Troffer")),           // NxM → troffer
+            ("receptacle", "WP", Some("Receptacle")),   // WP tag on a receptacle kind stays Receptacle
+            ("light_fixture", "A", Some("Troffer")),    // schedule tag A → troffer
+            ("light_fixture", "DL", Some("Downlight")), // DL tag → downlight (small)
+            ("light_fixture", "2x4", Some("Troffer")),  // NxM → troffer
             ("light_fixture", "pendant", Some("LinearPendant")), // tag pendant
-            ("switch", "", Some("Switch")),                      // kind match
-            ("light_switch", "", Some("Switch")),                // "light_switch" → Switch, not light
-            ("unknown", "SD", None),                             // "SD" alone is NOT a switch
-            ("unknown", "SM", None),                             // "SM" alone is NOT a switch
-            ("gfci", "", Some("Gfci")),                          // GFCI by kind
-            ("unknown", "GFCI", Some("Gfci")),                   // GFCI by tag
+            ("switch", "", Some("Switch")),             // kind match
+            ("light_switch", "", Some("Switch")),       // "light_switch" → Switch, not light
+            ("unknown", "SD", None),                    // "SD" alone is NOT a switch
+            ("unknown", "SM", None),                    // "SM" alone is NOT a switch
+            ("gfci", "", Some("Gfci")),                 // GFCI by kind
+            ("unknown", "GFCI", Some("Gfci")),          // GFCI by tag
             ("usb_outlet", "", Some("UsbOutlet")),
             ("dimmer", "", Some("Dimmer")),
             ("panel", "LP-1", Some("Panel")),
             ("disconnect", "", Some("Disconnect")),
             ("water_closet", "", Some("WaterCloset")),
-            ("unknown", "WC", Some("WaterCloset")),              // whole-token WC
+            ("unknown", "WC", Some("WaterCloset")), // whole-token WC
             ("lavatory", "LAV-1", Some("Lavatory")),
-            ("sink", "", Some("Lavatory")),                      // sink → Lavatory
-            ("unknown_thing", "X99", None),                      // no match
+            ("sink", "", Some("Lavatory")), // sink → Lavatory
+            ("unknown_thing", "X99", None), // no match
             ("floor_box", "", Some("FloorBox")),
             ("tv_outlet", "", Some("TvOutlet")),
             ("data_outlet", "", Some("DataOutlet")),
-            ("unknown", "REC", Some("Receptacle")),              // tag REC
+            ("unknown", "REC", Some("Receptacle")), // tag REC
             ("base_cabinet", "", Some("BaseCabinet")),
         ];
         for (kind, tag, expected) in &cases {
@@ -1652,9 +1675,7 @@ mod tests {
 
     #[test]
     fn schedule_sizes_override_mount() {
-        let attrs = vec![
-            ("SIZE".to_string(), "24x48".to_string()),
-        ];
+        let attrs = vec![("SIZE".to_string(), "24x48".to_string())];
         let sched = ScheduleSize::from_attrs(&attrs);
         assert!(sched.from_schedule);
         // 24x48 inches → 2x4 feet
@@ -1724,10 +1745,18 @@ mod tests {
             let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
             for v in &s.tris {
                 let (x, y) = (v.p[0] as f64, v.p[1] as f64);
-                if x < min_x { min_x = x; }
-                if x > max_x { max_x = x; }
-                if y < min_y { min_y = y; }
-                if y > max_y { max_y = y; }
+                if x < min_x {
+                    min_x = x;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
             }
             let span_x = max_x - min_x;
             let span_y = max_y - min_y;
@@ -1766,16 +1795,21 @@ mod tests {
             let dir = Vec2 { x: angle_deg.to_radians().cos(), y: angle_deg.to_radians().sin() };
             let c = v3(10.0, 10.0, 10.0);
             // Fixture bbox
-            let mut sf = empty_scene(); sf.part = Part::Device;
+            let mut sf = empty_scene();
+            sf.part = Part::Device;
             generate(&mut sf, &family, c, dir, NRM, COL, Owner::default(), Lod::Detailed);
             // Box bbox
-            let mut sb = empty_scene(); sb.part = Part::Device;
+            let mut sb = empty_scene();
+            sb.part = Part::Device;
             boxed(&mut sb, c, dir, 2.0, 4.0, 0.33, COL, Owner::default());
             let bbox = |s: &Scene| -> ([f32; 3], [f32; 3]) {
                 let mut lo = [f32::MAX; 3];
                 let mut hi = [f32::MIN; 3];
                 for v in &s.tris {
-                    for i in 0..3 { lo[i] = lo[i].min(v.p[i]); hi[i] = hi[i].max(v.p[i]); }
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(v.p[i]);
+                        hi[i] = hi[i].max(v.p[i]);
+                    }
                 }
                 (lo, hi)
             };
@@ -1796,7 +1830,8 @@ mod tests {
     fn ceiling_troffer_top_at_centre_z() {
         // A troffer centred at z=10 with depth 0.33: its top should be at ~z=10 (not hanging below).
         let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
-        let mut s = empty_scene(); s.part = Part::Device;
+        let mut s = empty_scene();
+        s.part = Part::Device;
         generate(&mut s, &family, v3(0.0, 0.0, 10.0), DIR, NRM, COL, Owner::default(), Lod::Detailed);
         let max_z = s.tris.iter().map(|v| v.p[2]).fold(f32::MIN, f32::max);
         // Top should be at z=10 (the centre), because derive.rs places ceiling fixtures so centre = ceiling - h/2.
@@ -1870,7 +1905,8 @@ mod tests {
     #[test]
     fn sizes_from_type_params() {
         let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
-        let mut s = empty_scene(); s.part = Part::Device;
+        let mut s = empty_scene();
+        s.part = Part::Device;
         generate(&mut s, &family, v3(0.0, 0.0, 0.0), DIR, NRM, COL, Owner::default(), Lod::Detailed);
         for v in &s.tris {
             assert!(v.p[0].abs() <= 1.1, "troffer vertex x {:.3} out of 2ft-wide range", v.p[0]);

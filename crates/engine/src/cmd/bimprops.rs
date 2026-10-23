@@ -231,9 +231,7 @@ fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
         } else if let Some(mark) = mark {
             match by.as_str() {
                 "mark" => Some(mark.to_string()),
-                "category" => d.bim_types.get(mark).and_then(|t| {
-                    if t.category.is_empty() { None } else { Some(t.category.clone()) }
-                }),
+                "category" => d.bim_types.get(mark).and_then(|t| if t.category.is_empty() { None } else { Some(t.category.clone()) }),
                 field_key => d.bim_types.get(mark).and_then(|t| {
                     t.get_field(field_key)
                         .or_else(|| {
@@ -265,9 +263,7 @@ fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
                             keys.len() - 1
                         }
                     };
-                    cadaddy_doc::color::Color::Index(
-                        COLOUR_PALETTE.get(i % COLOUR_PALETTE.len()).copied().unwrap_or(7),
-                    )
+                    cadaddy_doc::color::Color::Index(COLOUR_PALETTE.get(i % COLOUR_PALETTE.len()).copied().unwrap_or(7))
                 }
                 None => cadaddy_doc::color::Color::Index(8), // grey for no BIM spec
             }
