@@ -129,6 +129,50 @@ pub fn dock_one(app: &mut CadApp, window_id: u64) {
     }
 }
 
+/// The [`egui::ViewportId`] for a torn window.
+pub(crate) fn viewport_id(w: &TornWindow) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("cadaddy-window", w.window_id))
+}
+
+/// Install window `k`'s view and space on its drawing, run `f`, then restore the drawing's
+/// own view and space. The window's (possibly changed) view is written back. Used by
+/// [`show_windows`] for each frame.
+pub(crate) fn with_window_view<R>(
+    app: &mut CadApp,
+    k: usize,
+    f: impl FnOnce(&mut CadApp, usize) -> R,
+) -> Option<R> {
+    let w = app.torn.get_mut(k)?;
+    let uid = w.uid;
+    let wid = w.window_id;
+    let mut win_views = std::mem::take(&mut w.views);
+    let mut win_space = std::mem::take(&mut w.space);
+    let Some(index) = index_of(app, uid) else {
+        // Doc gone — put views/space back.
+        if let Some(w) = app.torn.get_mut(k) {
+            w.views = win_views;
+            w.space = win_space;
+        }
+        return None;
+    };
+    if let Some(doc) = app.session.docs.get_mut(index) {
+        std::mem::swap(&mut doc.views, &mut win_views);
+        std::mem::swap(&mut doc.space, &mut win_space);
+    }
+    let result = f(app, index);
+    if let Some(idx) = index_of(app, uid)
+        && let Some(doc) = app.session.docs.get_mut(idx)
+    {
+        std::mem::swap(&mut doc.views, &mut win_views);
+        std::mem::swap(&mut doc.space, &mut win_space);
+    }
+    if let Some(w) = app.torn.iter_mut().find(|w| w.window_id == wid) {
+        w.views = win_views;
+        w.space = win_space;
+    }
+    Some(result)
+}
+
 /// Run `f` (the main window's canvas) with the main window's drawing current; a drawing that
 /// becomes current meanwhile (a click switched it) stays current.
 pub fn with_main_doc(app: &mut CadApp, ui: &mut egui::Ui, f: impl FnOnce(&mut CadApp, &mut egui::Ui)) {
@@ -160,13 +204,11 @@ pub fn show_windows(app: &mut CadApp, ctx: &egui::Context) {
     let tab_bar_screen = app.tab_bar.zip(main_inner).map(|(t, inner)| t.translate(inner.min.to_vec2()).expand2(vec2(0.0, 12.0)));
     for k in 0..app.torn.len() {
         let Some(w) = app.torn.get_mut(k) else { break };
+        let id = viewport_id(w);
         let (uid, wid, rect, slot) = (w.uid, w.window_id, w.rect, w.slot);
         let mut canvas = std::mem::take(&mut w.canvas);
-        let mut win_views = std::mem::take(&mut w.views);
-        let mut win_space = std::mem::take(&mut w.space);
         let Some(index) = index_of(app, uid) else { continue };
         let title = app.session.docs.get(index).map(|d| format!("{}{} - CADaddy", d.title, if d.is_dirty() { "*" } else { "" })).unwrap_or_default();
-        let id = egui::ViewportId::from_hash_of(("cadaddy-window", wid));
         let builder = egui::ViewportBuilder::default()
             .with_title(title.clone())
             .with_position(egui::pos2(rect[0], rect[1]))
@@ -189,20 +231,12 @@ pub fn show_windows(app: &mut CadApp, ctx: &egui::Context) {
                 // it stays current when this window was clicked or has the keyboard.
                 let before = app.session.active;
                 app.session.active = index;
-                // Install this window's view and space on the drawing (swap pattern like canvas).
-                if let Some(doc) = app.session.docs.get_mut(index) {
-                    std::mem::swap(&mut doc.views, &mut win_views);
-                    std::mem::swap(&mut doc.space, &mut win_space);
-                }
-                std::mem::swap(&mut app.canvas, &mut canvas);
-                crate::gpu::with_canvas_slot(slot, || crate::canvas::show(app, ui));
-                std::mem::swap(&mut app.canvas, &mut canvas);
-                // Restore the drawing's own view and space; save window's (possibly changed by
-                // zoom/pan) back into the locals that will be written to the TornWindow.
-                if let Some(doc) = app.session.docs.get_mut(index) {
-                    std::mem::swap(&mut doc.views, &mut win_views);
-                    std::mem::swap(&mut doc.space, &mut win_space);
-                }
+                // Install this window's view and space, draw, then restore.
+                with_window_view(app, k, |app, _| {
+                    std::mem::swap(&mut app.canvas, &mut canvas);
+                    crate::gpu::with_canvas_slot(slot, || crate::canvas::show(app, ui));
+                    std::mem::swap(&mut app.canvas, &mut canvas);
+                });
                 let engaged = ui.ctx().input(|i| i.pointer.any_pressed() || (i.viewport().focused == Some(true) && !i.events.is_empty()));
                 if engaged {
                     app.ui.start_tab = false;
@@ -236,8 +270,6 @@ pub fn show_windows(app: &mut CadApp, ctx: &egui::Context) {
         });
         if let Some(w) = app.torn.iter_mut().find(|w| w.window_id == wid) {
             w.canvas = canvas;
-            w.views = win_views;
-            w.space = win_space;
             if let Some(r) = moved {
                 w.rect = r;
             }
@@ -321,30 +353,42 @@ mod tests {
     }
 
     /// MUST 1: each window keeps its own view; zoom/pan in one does not affect the others or
-    /// the main tab.
+    /// the main tab. Goes through the same install/restore path that [`show_windows`] uses.
     #[test]
     fn newwindow_views_are_independent() {
         let mut app = app_with_two();
-        let main_view_before = app.session.docs[1].view();
-        // Two NEWWINDOW on the same drawing.
+        // Two NEWWINDOW on docs[1].
         new_window(&mut app, 1).unwrap();
         new_window(&mut app, 1).unwrap();
         assert_eq!(app.torn.len(), 2);
-        // Both windows start with the same view as the drawing.
-        assert_eq!(app.torn[0].views, app.torn[1].views);
-        // Simulate zooming in window A by modifying its stored view directly.
-        let zoomed = cadaddy_engine::View { center: app.torn[0].views[0].1.center, height: app.torn[0].views[0].1.height / 4.0 };
-        app.torn[0].views[0].1 = zoomed;
-        // Window B's view and the main tab's view are unchanged.
-        assert_ne!(app.torn[0].views[0].1, app.torn[1].views[0].1, "window A zoomed, B did not");
+
+        // Snapshot before any zoom.
+        let main_view_before = app.session.docs[1].view();
+        let b_views_before = app.torn[1].views.clone();
+
+        // With window A's view installed (the path show_windows takes), zoom.
+        with_window_view(&mut app, 0, |app, index| {
+            app.session.active = index;
+            app.run("zoom", json!({"factor": 4})).unwrap();
+        }).expect("window A install/restore");
+
+        // Window A's stored view changed.
+        assert_ne!(app.torn[0].views, b_views_before, "window A's view changed after zoom");
+        // Window B's stored views are exactly the same as before.
+        assert_eq!(app.torn[1].views, b_views_before, "window B's view unchanged");
+        // The main tab's view is exactly the same as before.
         assert_eq!(app.session.docs[1].view(), main_view_before, "main tab view unchanged");
-        // Edit made through the drawing is visible in the model.
-        app.run("line", json!({"points": [[1, 1], [2, 2]]})).unwrap();
-        assert_eq!(app.session.docs[1].doc.model.len(), 2, "edit visible in model");
+
+        // With window B installed, add a line; the edit lands in the model.
+        with_window_view(&mut app, 1, |app, index| {
+            app.session.active = index;
+            app.run("line", json!({"points": [[1, 1], [2, 2]]})).unwrap();
+        }).expect("window B install/restore");
+        assert_eq!(app.session.docs[1].doc.model.len(), 2, "edit through window B visible in model");
     }
 
     /// MUST 2: every TornWindow has a unique window_id used for ViewportId and canvas handback;
-    /// two new_window on one drawing plus a tear_off on another all coexist.
+    /// two new_window on one drawing plus a tear_off on another all coexist with distinct state.
     #[test]
     fn window_ids_are_unique_across_windows() {
         let mut app = app_with_two();
@@ -352,15 +396,24 @@ mod tests {
         new_window(&mut app, 1).unwrap();
         tear_off(&mut app, 0, None).unwrap();
         assert_eq!(app.torn.len(), 3);
+
+        // Give each window a distinct rect, views entry and canvas marker.
+        app.torn[0].rect = [100.0, 100.0, 800.0, 600.0];
+        app.torn[1].rect = [200.0, 200.0, 700.0, 500.0];
+        app.torn[2].rect = [300.0, 300.0, 600.0, 400.0];
+        app.torn[0].views[0].1.height = 10.0;
+        app.torn[1].views[0].1.height = 20.0;
+        app.torn[2].views[0].1.height = 30.0;
+        app.torn[0].canvas.mesh_ms = 1.0;
+        app.torn[1].canvas.mesh_ms = 2.0;
+        app.torn[2].canvas.mesh_ms = 3.0;
+
         let ids: Vec<u64> = app.torn.iter().map(|w| w.window_id).collect();
         assert_ne!(ids[0], ids[1], "two NEWWINDOW on the same drawing have distinct ids");
         assert_ne!(ids[1], ids[2]);
         assert_ne!(ids[0], ids[2]);
-        // Each window produces a distinct ViewportId.
-        let vids: Vec<egui::ViewportId> = ids.iter().map(|id| egui::ViewportId::from_hash_of(("cadaddy-window", *id))).collect();
-        assert_ne!(vids[0], vids[1]);
-        assert_ne!(vids[1], vids[2]);
-        // Run show_windows headless for 2 frames; all windows survive with their own canvas.
+
+        // Run show_windows headless for 2 frames.
         let ctx = egui::Context::default();
         for _ in 0..2 {
             ctx.run_ui(egui::RawInput::default(), |ui| show_windows(&mut app, ui.ctx()))
@@ -368,6 +421,31 @@ mod tests {
                 .clear();
         }
         assert_eq!(app.torn.len(), 3, "all three windows survive show_windows");
+
+        // Each window (looked up by window_id) still has exactly its own rect, views and
+        // canvas marker — proves hand-back is keyed by window_id, not uid.
+        for (i, &wid) in ids.iter().enumerate() {
+            let w = app.torn.iter().find(|w| w.window_id == wid)
+                .unwrap_or_else(|| panic!("window {i} missing"));
+            let expected_height = [10.0, 20.0, 30.0][i];
+            assert_eq!(
+                w.views[0].1.height, expected_height,
+                "window {i} views preserved"
+            );
+            let expected_rect = [
+                [100.0_f32, 100.0, 800.0, 600.0],
+                [200.0, 200.0, 700.0, 500.0],
+                [300.0, 300.0, 600.0, 400.0],
+            ][i];
+            assert_eq!(w.rect, expected_rect, "window {i} rect preserved");
+            assert_eq!(w.canvas.mesh_ms, (i + 1) as f64, "window {i} canvas preserved");
+        }
+
+        // ViewportIds taken from the function show_windows uses (not rebuilt in the test).
+        let vids: Vec<egui::ViewportId> = app.torn.iter().map(viewport_id).collect();
+        assert_ne!(vids[0], vids[1], "viewports 0 and 1 distinct");
+        assert_ne!(vids[1], vids[2], "viewports 1 and 2 distinct");
+        assert_ne!(vids[0], vids[2], "viewports 0 and 2 distinct");
     }
 
     /// MUST 3: closing one window removes only that window; the other remains.
