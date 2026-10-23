@@ -1,5 +1,5 @@
 //! The app's control channel answers `cmdline.key` like `cmdline.input` and like the headless MCP
-//! backend (`crates/mcp/tests/cmdline_key.rs`): a refused Enter is echoed and reported in `error`.
+//! backend (`crates/mcp/tests/it/cmdline_key.rs`): a refused Enter is echoed and reported in `error`.
 
 use cadcraft_engine::Session;
 use cadcraft_ui_egui::control::{ControlRequest, Outcome, handle};

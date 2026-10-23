@@ -2,7 +2,6 @@
 //! don't carry it themselves: it lives in the file's data store section (ACDSDATA), one record per
 //! entity bound by a 320 handle. CADCraft doesn't model solids, so it keeps the section as read and
 //! writes it back (and the DWG bridge reads it), without the records of deleted entities.
-#![cfg(not(target_arch = "wasm32"))]
 
 use cadcraft_doc::EntityKind;
 
