@@ -1943,6 +1943,110 @@ fn recover_shx_from_hidden(
     result
 }
 
+/// Fallback SHX text recovery: when no hidden text is available, detect clusters of short
+/// strokes that form glyph-like patterns and match them to nearby visible text.  This is less
+/// accurate than hidden-text matching but recovers more text than leaving it as linework.
+fn recover_shx_fallback(
+    strokes: &[Stroke],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+) -> Vec<RecoveredText> {
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let max_seg = (sw.min(sh) * 0.02).clamp(2.0, 25.0);
+    let cell = max_seg * 3.0;
+
+    // find short strokes (SHX candidates)
+    struct SI { idx: usize, cx: f64, cy: f64, pen: Pen }
+    let mut short: Vec<SI> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if s.closed || s.pts.len() > 6 { continue; }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.1 { continue; }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0, pen: s.pen });
+        }
+    }
+    if short.is_empty() { return Vec::new(); }
+
+    // cluster short strokes by proximity and same pen
+    let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    for (si, s) in short.iter().enumerate() {
+        let gx = (s.cx / cell).floor() as i64;
+        let gy = (s.cy / cell).floor() as i64;
+        for dx in -1..=1 { for dy in -1..=1 {
+            grid.entry((gx + dx, gy + dy, s.pen)).or_default().push(si);
+        }}
+    }
+    let mut visited = vec![false; short.len()];
+    let mut clusters: Vec<([f64; 4], Vec<usize>, f64, Pen)> = Vec::new(); // bounds, indices, height, pen
+    for si in 0..short.len() {
+        if visited[si] { continue; }
+        visited[si] = true;
+        let s = &short[si];
+        let mut members = vec![si];
+        let mut queue = vec![si];
+        let mut bounds = [s.cx, s.cy, s.cx, s.cy];
+        while let Some(cur) = queue.pop() {
+            let c = &short[cur];
+            let gx = (c.cx / cell).floor() as i64;
+            let gy = (c.cy / cell).floor() as i64;
+            if let Some(neighbors) = grid.get(&(gx, gy, c.pen)) {
+                for &ni in neighbors {
+                    if visited[ni] { continue; }
+                    let n = &short[ni];
+                    if (n.cx - c.cx).abs() < cell && (n.cy - c.cy).abs() < cell {
+                        visited[ni] = true;
+                        members.push(ni);
+                        queue.push(ni);
+                        bounds = [bounds[0].min(n.cx), bounds[1].min(n.cy), bounds[2].max(n.cx), bounds[3].max(n.cy)];
+                    }
+                }
+            }
+        }
+        let h = bounds[3] - bounds[1];
+        let w = bounds[2] - bounds[0];
+        if members.len() >= 2 && h > 0.5 && h < max_seg * 12.0 && w > 0.5 && w < max_seg * 100.0 {
+            clusters.push((bounds, members.iter().map(|&mi| short[mi].idx).collect(), h, s.pen));
+        }
+    }
+
+    // for each cluster, try to find a visible text entity that overlaps it
+    let mut result: Vec<RecoveredText> = Vec::new();
+    let mut used_texts: HashSet<usize> = HashSet::new();
+    for (bounds, indices, height, pen) in &clusters {
+        let pad = height * 0.5;
+        let cb = [bounds[0] - pad, bounds[1] - pad, bounds[2] + pad, bounds[3] + pad];
+        // find visible text that overlaps this cluster
+        let mut best: Option<(usize, f64)> = None;
+        for (ti, t) in texts.iter().enumerate() {
+            if used_texts.contains(&ti) { continue; }
+            if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) { continue; }
+            let th = t.height.max(1.0);
+            let tw = th * 0.6 * t.value.len().max(1) as f64;
+            let tb = [t.at.0 - 1.0, t.at.1 - 1.0, t.at.0 + tw + 1.0, t.at.1 + th + 1.0];
+            if tb[0] < cb[2] && tb[2] > cb[0] && tb[1] < cb[3] && tb[3] > cb[1] {
+                let dist = ((t.at.0 - bounds[0]).hypot(t.at.1 - bounds[1])).abs();
+                if !best.is_some_and(|(_, d)| dist >= d) {
+                    best = Some((ti, dist));
+                }
+            }
+        }
+        if let Some((ti, _)) = best {
+            used_texts.insert(ti);
+            let t = &texts[ti];
+            result.push(RecoveredText {
+                at: (bounds[0], bounds[1]),
+                height: *height,
+                value: t.value.clone(),
+                stroke_indices: indices.iter().copied().collect(),
+                pen: *pen,
+                layer: t.layer.clone(),
+            });
+        }
+    }
+    result
+}
+
 // ---------------------------------------------------------------------------------------------
 // Fix 4: Filter opaque fills that the PDF render doesn't show
 // ---------------------------------------------------------------------------------------------
@@ -2559,10 +2663,16 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         stats.insert("grid lines detected".into(), grid_lines.len());
     }
 
-    // Fix 3: recover SHX-stroked text by matching invisible text to nearby stroke clusters.
-    // Hidden text (rendering mode 3) carries the correct characters; the strokes near each
-    // hidden text position are consumed so they don't duplicate in the drawing.
-    let recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+    // Fix 3: recover SHX-stroked text.  Primary: match invisible text (rendering mode 3) to
+    // nearby stroke clusters — 100% accuracy.  Fallback: cluster short strokes and match to
+    // overlapping visible text — lower accuracy but catches sheets without hidden text.
+    let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+    if recovered_texts.is_empty() {
+        recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
+        if !recovered_texts.is_empty() {
+            stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+        }
+    }
     let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
     for rt in &recovered_texts {
         shx_stroke_indices.extend(&rt.stroke_indices);
