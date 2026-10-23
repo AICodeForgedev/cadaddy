@@ -846,6 +846,10 @@ fn korean_dialogs_keep_source_ids() {
 #[test]
 fn korean_ui_fonts_cover_catalog_and_language_picker_in_both_families() {
     if !crate::theme::can_show("ko") {
+        // Say so: a silent return would read as a pass on a machine that cannot show Korean.
+        eprintln!(
+            "skipped korean_ui_fonts_cover_catalog_and_language_picker_in_both_families: no font with Hangul is installed on this machine, so the Korean glyph coverage was not checked"
+        );
         return;
     }
     let letters: BTreeSet<_> = include_str!("ko.tsv")
