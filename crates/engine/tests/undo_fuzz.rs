@@ -540,10 +540,7 @@ fn undo_and_redo_are_exact_under_random_edits() {
     assert!(found.is_empty(), "{} failing sequence(s):\n  {}", found.len(), found.join("\n  "));
     // A mix that is mostly refused would pass trivially; guard the ratio so a parameter
     // rename can't silently turn the fuzz into a no-op.
-    assert!(
-        ran > 0 && refused * 2 < ran,
-        "too many commands were refused ({refused} refused / {ran} ran); the mix may not be exercising commands"
-    );
+    assert!(ran > 0 && refused * 2 < ran, "too many commands were refused ({refused} refused / {ran} ran); the mix may not be exercising commands");
 }
 
 /// Sequences the fuzzer found, shrunk: each must hold now. These replay through the generator
@@ -580,11 +577,7 @@ fn refused_layer_delete_leaves_no_undo_step() {
     // layer "0" can never be deleted — the command is refused.
     let r = s.execute("layer.delete", &json!({ "name": "0" }));
     assert!(r.is_err(), "deleting layer 0 should be refused");
-    assert_eq!(
-        undo_len(&s),
-        steps_before,
-        "a refused layer.delete must not add an undo step"
-    );
+    assert_eq!(undo_len(&s), steps_before, "a refused layer.delete must not add an undo step");
     // Also: U after the refusal should undo the previous real command, not a phantom step.
     let doc_now = doc(&s);
     s.execute("undo", &json!({})).unwrap();
@@ -608,11 +601,7 @@ fn undo_mark_inside_begin_group_survives() {
     s.execute("line", &json!({ "points": [[20, 20], [25, 25]] })).unwrap();
     // UNDO Back should go to the second mark (after the circle), not undo everything.
     s.execute("undo", &json!({ "mode": "back" })).unwrap();
-    assert_eq!(
-        doc(&s),
-        mid_drawing,
-        "UNDO Back should return to the mark set inside the group"
-    );
+    assert_eq!(doc(&s), mid_drawing, "UNDO Back should return to the mark set inside the group");
 }
 
 /// Bug 3: Redo dropped an associative dimension's links. The after-command follow-ups
@@ -673,16 +662,8 @@ fn undohistory_to_keeps_assoc_dims() {
     // critical case: the polyline moved between before and after, so assoc::after_command
     // would see it as "moved" and try to recompute the dimension.
     s.execute("undohistory", &json!({ "action": "to", "step": step_before_move })).unwrap();
-    assert_eq!(
-        doc(&s),
-        before_move,
-        "undohistory to step before move should restore the drawing exactly (no assoc fixup)"
-    );
+    assert_eq!(doc(&s), before_move, "undohistory to step before move should restore the drawing exactly (no assoc fixup)");
     // And back to the final step.
     s.execute("undohistory", &json!({ "action": "to", "step": total })).unwrap();
-    assert_eq!(
-        doc(&s),
-        after_move,
-        "undohistory back to final should restore the drawing exactly (assoc dims intact)"
-    );
+    assert_eq!(doc(&s), after_move, "undohistory back to final should restore the drawing exactly (assoc dims intact)");
 }

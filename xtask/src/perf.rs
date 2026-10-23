@@ -272,11 +272,7 @@ fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
         println!("| {n} | {} | {} | {} | {} | {peak} |", ms("open"), ms("select_all"), ms("zoom_extents"), ms("save_dxf"));
         // Pan frame time: rasterise 100 pan steps on the CPU (conservative upper bound; GPU is
         // faster since it only changes a uniform).
-        let pan_out = std::process::Command::new(&bench)
-            .arg("--pan")
-            .arg(&plan)
-            .output()
-            .map_err(|e| format!("perfbench --pan: {e}"))?;
+        let pan_out = std::process::Command::new(&bench).arg("--pan").arg(&plan).output().map_err(|e| format!("perfbench --pan: {e}"))?;
         let pr: Value = serde_json::from_slice(String::from_utf8_lossy(&pan_out.stdout).trim().as_bytes()).unwrap_or(Value::Null);
         let frame = pr["pan_frame_ms"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.2}"));
         let fps = pr["pan_fps"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));

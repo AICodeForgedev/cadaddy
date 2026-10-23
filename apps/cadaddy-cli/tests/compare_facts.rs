@@ -55,8 +55,7 @@ fn facts_are_worked_out_not_typed() {
         assert!(open.contains(&ext), "open includes {ext}: {open:?}");
     }
     // DWG bridge reads R2000..R2018.
-    let bridge_read: Vec<&str> =
-        f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let bridge_read: Vec<&str> = f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     for v in ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"] {
         assert!(bridge_read.contains(&v), "bridge reads {v}");
     }
@@ -90,10 +89,8 @@ fn dwg_versions_per_engine() {
     assert!(f["versions"]["dwg"]["native"].is_object(), "native engine reported");
     assert!(f["versions"]["dwg"]["bridge"].is_object(), "bridge engine reported");
     // Bridge supports R2000..R2018 for both write and read.
-    let bridge_write: Vec<&str> =
-        f["versions"]["dwg"]["bridge"]["write"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    let bridge_read: Vec<&str> =
-        f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let bridge_write: Vec<&str> = f["versions"]["dwg"]["bridge"]["write"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let bridge_read: Vec<&str> = f["versions"]["dwg"]["bridge"]["read"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     for v in ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"] {
         assert!(bridge_write.contains(&v), "bridge writes {v}");
         assert!(bridge_read.contains(&v), "bridge reads {v}");
@@ -129,10 +126,7 @@ fn format_list_derives_from_io() {
     // No exclusions today: every SAVE_EXTENSIONS entry writes the sample drawing.
     let excluded: &[&str] = &[];
     for ext in cadaddy_io::SAVE_EXTENSIONS {
-        assert!(
-            save.contains(ext) || excluded.contains(ext),
-            "io SAVE_EXTENSIONS has `{ext}` but it is not in formats.save and not excluded"
-        );
+        assert!(save.contains(ext) || excluded.contains(ext), "io SAVE_EXTENSIONS has `{ext}` but it is not in formats.save and not excluded");
     }
     // DGN, DWF and DWFx must appear in save.
     for ext in ["dgn", "dwf", "dwfx"] {

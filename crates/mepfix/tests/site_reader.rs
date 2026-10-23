@@ -32,9 +32,7 @@ fn fixture_full(seed: u64) -> (cadaddy_mepfix::truth::Truth, Vec<site_reader::Re
 
 /// Check that a truth element at `at_ft` has a matching found element within `tol` feet.
 fn matched_point(truth_at: [f64; 2], found: &[site_reader::ReadSiteElement], kind: &str, tol: f64) -> bool {
-    found.iter().any(|f| {
-        f.kind == kind && (f.at_ft[0] - truth_at[0]).hypot(f.at_ft[1] - truth_at[1]) < tol
-    })
+    found.iter().any(|f| f.kind == kind && (f.at_ft[0] - truth_at[0]).hypot(f.at_ft[1] - truth_at[1]) < tol)
 }
 
 /// For underground runs: check bbox overlap between truth and found.
@@ -45,12 +43,7 @@ fn bbox_overlap(t_mn: [f64; 2], t_mx: [f64; 2], f_mn: [f64; 2], f_mx: [f64; 2]) 
 }
 
 /// Compute per-kind precision and recall. Returns (recall, precision).
-fn precision_recall(
-    truth: &cadaddy_mepfix::truth::Truth,
-    found: &[site_reader::ReadSiteElement],
-    kind: &str,
-    tol: f64,
-) -> (f64, f64) {
+fn precision_recall(truth: &cadaddy_mepfix::truth::Truth, found: &[site_reader::ReadSiteElement], kind: &str, tol: f64) -> (f64, f64) {
     let truth_elems: Vec<_> = truth.site_elements.iter().filter(|se| se.kind == kind).collect();
     let found_elems: Vec<_> = found.iter().filter(|se| se.kind == kind).collect();
 
@@ -195,11 +188,7 @@ fn underground_depths_match_truth() {
                     }
             });
             let found_depth = matched.and_then(|f| f.depth_ft);
-            assert!(
-                found_depth.is_some(),
-                "seed {seed} kind {}: truth depth {truth_depth:.1} but no depth found",
-                te.kind
-            );
+            assert!(found_depth.is_some(), "seed {seed} kind {}: truth depth {truth_depth:.1} but no depth found", te.kind);
             let fd = found_depth.unwrap();
             assert!(
                 (fd - truth_depth).abs() < 0.1,
@@ -226,33 +215,16 @@ fn underground_conduit_type_size_count() {
                         false
                     }
             });
-            assert!(
-                matched.is_some(),
-                "seed {seed} kind {}: truth has conduit type {} but no matching found element",
-                te.kind, te.material
-            );
+            assert!(matched.is_some(), "seed {seed} kind {}: truth has conduit type {} but no matching found element", te.kind, te.material);
             let m = matched.unwrap();
             // Check conduit type.
-            assert!(
-                !m.conduit_type.is_empty(),
-                "seed {seed} kind {}: truth conduit type {}, found empty",
-                te.kind, te.material
-            );
-            assert_eq!(
-                m.conduit_type, te.material,
-                "seed {seed} kind {}: conduit type mismatch",
-                te.kind
-            );
+            assert!(!m.conduit_type.is_empty(), "seed {seed} kind {}: truth conduit type {}, found empty", te.kind, te.material);
+            assert_eq!(m.conduit_type, te.material, "seed {seed} kind {}: conduit type mismatch", te.kind);
             // Check size.
-            assert_eq!(
-                m.size_in, te.size_in,
-                "seed {seed} kind {}: size mismatch (truth {:?}, found {:?})",
-                te.kind, te.size_in, m.size_in
-            );
+            assert_eq!(m.size_in, te.size_in, "seed {seed} kind {}: size mismatch (truth {:?}, found {:?})", te.kind, te.size_in, m.size_in);
             // Check conduit count.
             assert_eq!(
-                m.conduit_count,
-                te.conduit_count,
+                m.conduit_count, te.conduit_count,
                 "seed {seed} kind {}: conduit count mismatch (truth {:?}, found {:?})",
                 te.kind, te.conduit_count, m.conduit_count
             );
@@ -282,16 +254,8 @@ fn underground_route_length() {
                     }
             });
             if let Some(m) = matched {
-                assert!(
-                    !m.route_ft.is_empty(),
-                    "seed {seed} kind {}: matched but route_ft is empty",
-                    te.kind
-                );
-                let route_len: f64 = m
-                    .route_ft
-                    .windows(2)
-                    .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
-                    .sum();
+                assert!(!m.route_ft.is_empty(), "seed {seed} kind {}: matched but route_ft is empty", te.kind);
+                let route_len: f64 = m.route_ft.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
                 let ratio = route_len / truth_len;
                 assert!(
                     (ratio - 1.0).abs() < 0.02,
@@ -322,16 +286,10 @@ fn new_kinds_count_and_position() {
                         .filter(|f| (f.at_ft[0] - te.at_ft[0]).hypot(f.at_ft[1] - te.at_ft[1]) < 10.0)
                         .map(|f| format!("{}:{} at({:.1},{:.1})", f.kind, f.tag, f.at_ft[0], f.at_ft[1]))
                         .collect();
-                    eprintln!(
-                        "seed {seed} {kind}: truth at ({:.1},{:.1}), nearby found: {:?}",
-                        te.at_ft[0], te.at_ft[1], nearby
-                    );
+                    eprintln!("seed {seed} {kind}: truth at ({:.1},{:.1}), nearby found: {:?}", te.at_ft[0], te.at_ft[1], nearby);
                 }
             }
-            assert_eq!(
-                found_count, truth_count,
-                "seed {seed} kind {kind}: truth {truth_count}, found {found_count}"
-            );
+            assert_eq!(found_count, truth_count, "seed {seed} kind {kind}: truth {truth_count}, found {found_count}");
             for te in truth.site_elements.iter().filter(|se| se.kind == *kind) {
                 assert!(
                     matched_point(te.at_ft, &found, kind, 3.0),
@@ -352,12 +310,7 @@ fn every_result_has_sheet_and_confidence() {
         let (_truth, found) = fixture(seed);
         for f in &found {
             assert!(!f.sheet.is_empty(), "seed {seed} kind {}: empty sheet", f.kind);
-            assert!(
-                f.confidence > 0.0 && f.confidence <= 1.0,
-                "seed {seed} kind {}: confidence {} out of range",
-                f.kind,
-                f.confidence
-            );
+            assert!(f.confidence > 0.0 && f.confidence <= 1.0, "seed {seed} kind {}: confidence {} out of range", f.kind, f.confidence);
         }
     }
 }
@@ -369,25 +322,25 @@ fn unrecognised_label_gives_unknown() {
 
     let mut d = cadaddy_doc::Drawing::new_imperial();
     // Add a line on C-UNDR.
-    let mut e1 = Entity::new(Handle(9000), EntityKind::Line(Line {
-        a: Vec3::new(0.0, 0.0, 0.0),
-        b: Vec3::new(100.0, 0.0, 0.0),
-    }));
+    let mut e1 = Entity::new(Handle(9000), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(100.0, 0.0, 0.0) }));
     e1.common.layer = "C-UNDR".into();
     d.model.push(e1);
     // Add an unrecognised label near it.
-    let mut e2 = Entity::new(Handle(9001), EntityKind::Text(Text {
-        insert: Vec3::new(50.0, 5.0, 0.0),
-        align_pt: None,
-        height: 1.0,
-        value: "SOMETHING STRANGE".into(),
-        rotation: 0.0,
-        width_factor: 1.0,
-        oblique: 0.0,
-        style: "Standard".into(),
-        halign: cadaddy_doc::HAlign::Left,
-        valign: cadaddy_doc::VAlign::Baseline,
-    }));
+    let mut e2 = Entity::new(
+        Handle(9001),
+        EntityKind::Text(Text {
+            insert: Vec3::new(50.0, 5.0, 0.0),
+            align_pt: None,
+            height: 1.0,
+            value: "SOMETHING STRANGE".into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadaddy_doc::HAlign::Left,
+            valign: cadaddy_doc::VAlign::Baseline,
+        }),
+    );
     e2.common.layer = "C-UNDR".into();
     d.model.push(e2);
     let sheet = cadaddy_mepfix::truth::Sheet::default();

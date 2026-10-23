@@ -1164,9 +1164,7 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     };
     if !paper_layouts.is_empty() {
         let st = s.state_mut()?;
-        let has_work = paper_layouts.iter().any(|n| {
-            st.bare_layouts.contains(n) || st.doc.layout(n).is_some_and(|l| l.pending_setup)
-        });
+        let has_work = paper_layouts.iter().any(|n| st.bare_layouts.contains(n) || st.doc.layout(n).is_some_and(|l| l.pending_setup));
         if has_work {
             let mut doc = (*st.doc).clone();
             for name in &paper_layouts {
@@ -1198,7 +1196,9 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
         (h.print)(name, &bytes, &title).map_err(|e| bad(cmd, format!("printer `{name}`: {e}")))?;
-        return Ok(json!({ "printed": name, "bytes": bytes.len(), "layout": space.tab_name(), "pages": sheets.as_ref().map_or(1, Vec::len), "warnings": warnings }));
+        return Ok(
+            json!({ "printed": name, "bytes": bytes.len(), "layout": space.tab_name(), "pages": sheets.as_ref().map_or(1, Vec::len), "warnings": warnings }),
+        );
     }
     let layout = match &sheets {
         Some(names) => names.first().cloned().unwrap_or_default(),

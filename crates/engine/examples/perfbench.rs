@@ -272,10 +272,7 @@ fn pan_file(path: &str) {
     let dx = bounds.width() * 0.01;
     let mut total_ms = 0.0;
     for i in 0..steps {
-        let view = raster::View {
-            center: Vec2::new(start_view.center.x + dx * i as f64, start_view.center.y),
-            ..start_view
-        };
+        let view = raster::View { center: Vec2::new(start_view.center.x + dx * i as f64, start_view.center.y), ..start_view };
         let t = Instant::now();
         drop(raster::render(&list, &view, &opts));
         total_ms += t.elapsed().as_secs_f64() * 1000.0;

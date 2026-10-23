@@ -12,9 +12,7 @@
 
 use crate::layout::{SITE_LAYER, UNDERGROUND_LAYER};
 use crate::score::building_from_model;
-use crate::site_services::{
-    conduits_of, depth_of, join, kind_of, length, size_of, MAX_PIECES, MAX_ROUTE, TICK_SHARE,
-};
+use crate::site_services::{MAX_PIECES, MAX_ROUTE, TICK_SHARE, conduits_of, depth_of, join, kind_of, length, size_of};
 use crate::sitework::{FENCE_LAYER, FURNISH_LAYER, LANDSCAPE_LAYER};
 use crate::truth::Sheet;
 use cadaddy_doc::{Drawing, EntityKind};
@@ -153,11 +151,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
             let has_radials = has_radial_lines(&site_lines, center, radius);
             if has_radials {
                 let tag_str = nearby_tag.clone().unwrap_or_default();
-                if tag_str.to_uppercase().starts_with('T') {
-                    ("tree".to_string(), tag_str)
-                } else {
-                    ("light_pole".to_string(), tag_str)
-                }
+                if tag_str.to_uppercase().starts_with('T') { ("tree".to_string(), tag_str) } else { ("light_pole".to_string(), tag_str) }
             } else {
                 ("light_pole".to_string(), nearby_tag.unwrap_or_default())
             }
@@ -211,9 +205,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         let cx = (r.0[0] + r.1[0]) / 2.0;
         let cy = (r.0[1] + r.1[1]) / 2.0;
         let has_bldg_text = site_texts.iter().any(|(t, pt)| {
-            t.to_uppercase().contains("BUILDING")
-                && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0
-                && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
+            t.to_uppercase().contains("BUILDING") && (pt[0] - cx).abs() < (r.1[0] - r.0[0]) / 2.0 && (pt[1] - cy).abs() < (r.1[1] - r.0[1]) / 2.0
         });
         if has_bldg_text { Some(*r) } else { None }
     });
@@ -256,11 +248,7 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
         nearby.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let mut best = ("unknown".to_string(), String::new());
         for (_, text) in &nearby {
-            let (k, t) = if has_diag && is_xfmr_tag(text) {
-                ("transformer_pad".to_string(), text.clone())
-            } else {
-                classify_rect_by_tag(text, w, h)
-            };
+            let (k, t) = if has_diag && is_xfmr_tag(text) { ("transformer_pad".to_string(), text.clone()) } else { classify_rect_by_tag(text, w, h) };
             if k != "unknown" {
                 best = (k, t);
                 break;
@@ -290,27 +278,16 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
 
     // 3. Underground utilities on C-UNDR layer.
     // Use the shared route-joining logic from site_services.
-    let undr_pieces: Vec<Vec<[f64; 2]>> = undr_pieces
-        .into_iter()
-        .filter(|p| p.len() >= 2 && p.iter().all(|q| q[0].is_finite() && q[1].is_finite()))
-        .collect();
+    let undr_pieces: Vec<Vec<[f64; 2]>> =
+        undr_pieces.into_iter().filter(|p| p.len() >= 2 && p.iter().all(|q| q[0].is_finite() && q[1].is_finite())).collect();
     if !undr_pieces.is_empty() {
         let avg_len = undr_pieces.iter().map(|p| length(p)).sum::<f64>() / undr_pieces.len() as f64;
-        let runs = join(
-            undr_pieces
-                .into_iter()
-                .filter(|p| length(p) >= avg_len * TICK_SHARE)
-                .collect(),
-        );
+        let runs = join(undr_pieces.into_iter().filter(|p| length(p) >= avg_len * TICK_SHARE).collect());
 
         // Assign text labels to nearest run.
         let mut by_run: Vec<Vec<&str>> = vec![Vec::new(); runs.len()];
         for (text, at) in &undr_texts {
-            let best = runs
-                .iter()
-                .enumerate()
-                .map(|(i, r)| (i, point_to_route_dist(*at, r)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let best = runs.iter().enumerate().map(|(i, r)| (i, point_to_route_dist(*at, r))).min_by(|a, b| a.1.total_cmp(&b.1));
             if let Some((i, dist)) = best
                 && runs.get(i).is_some_and(|r| dist <= length(r) * 0.5)
                 && let Some(v) = by_run.get_mut(i)
@@ -380,11 +357,8 @@ pub fn read_sites(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteElement> {
             }
             let mid = [(mn[0] + mx[0]) / 2.0, (mn[1] + mx[1]) / 2.0];
 
-            let confidence = if kind == "unknown" {
-                0.3
-            } else {
-                0.7 + [pipe_size.is_some(), depth.is_some()].iter().filter(|b| **b).count() as f64 * 0.1
-            };
+            let confidence =
+                if kind == "unknown" { 0.3 } else { 0.7 + [pipe_size.is_some(), depth.is_some()].iter().filter(|b| **b).count() as f64 * 0.1 };
 
             result.push(ReadSiteElement {
                 kind: kind.into(),
@@ -528,12 +502,8 @@ fn has_triangle_inside(lines: &[([f64; 2], [f64; 2])], center: [f64; 2], radius:
     let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < eps;
     // Check connectivity: each line shares an endpoint with each of the other two.
     let pts: Vec<([f64; 2], [f64; 2])> = tri_lines.iter().map(|&&(a, b)| (a, b)).collect();
-    let connected = |i: usize, j: usize| {
-        close(pts[i].0, pts[j].0)
-            || close(pts[i].0, pts[j].1)
-            || close(pts[i].1, pts[j].0)
-            || close(pts[i].1, pts[j].1)
-    };
+    let connected =
+        |i: usize, j: usize| close(pts[i].0, pts[j].0) || close(pts[i].0, pts[j].1) || close(pts[i].1, pts[j].0) || close(pts[i].1, pts[j].1);
     connected(0, 1) && connected(1, 2) && connected(0, 2)
 }
 
@@ -722,9 +692,7 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
         match &e.kind {
             EntityKind::Circle(c) => strc_circles.push(([c.center.x, c.center.y], c.radius)),
             EntityKind::Line(l) => strc_lines.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
-            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() >= 3 => {
-                strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect())
-            }
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() >= 3 => strc_polys.push(p.vertices.iter().map(|v| [v.p.x, v.p.y]).collect()),
             EntityKind::Text(t) => {
                 let pt = t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]);
                 strc_texts.push((t.value.clone(), pt));
@@ -737,19 +705,12 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
     let through = |c: [f64; 2], span: f64| -> Vec<[f64; 2]> {
         strc_lines
             .iter()
-            .filter(|(a, b)| {
-                dist([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], c) < span * 0.1
-                    && (dist(*a, *b) - span).abs() < span * 0.2
-            })
+            .filter(|(a, b)| dist([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], c) < span * 0.1 && (dist(*a, *b) - span).abs() < span * 0.2)
             .map(|(a, b)| [b[0] - a[0], b[1] - a[1]])
             .collect()
     };
-    let crossed = |dirs: &[[f64; 2]]| {
-        dirs.iter().any(|u| {
-            dirs.iter()
-                .any(|v| (u[0] * v[0] + u[1] * v[1]).abs() < 0.2 * (u[0].hypot(u[1]) * v[0].hypot(v[1])))
-        })
-    };
+    let crossed =
+        |dirs: &[[f64; 2]]| dirs.iter().any(|u| dirs.iter().any(|v| (u[0] * v[0] + u[1] * v[1]).abs() < 0.2 * (u[0].hypot(u[1]) * v[0].hypot(v[1]))));
     let tag_system = |upper: &str| -> &'static str {
         if upper.starts_with("STMH") || upper.starts_with("SDMH") || upper.contains("STORM") {
             "storm"
@@ -763,8 +724,7 @@ pub fn read_site_structures(d: &Drawing, sh: &Sheet) -> Vec<ReadSiteStructure> {
             ""
         }
     };
-    let tag_texts: Vec<(String, [f64; 2])> =
-        strc_texts.iter().filter(|(t, _)| !t.starts_with("RIM") && !t.starts_with("INV")).cloned().collect();
+    let tag_texts: Vec<(String, [f64; 2])> = strc_texts.iter().filter(|(t, _)| !t.starts_with("RIM") && !t.starts_with("INV")).cloned().collect();
     let mut push = |center: [f64; 2], reach: f64, shape: &str| {
         let tag_str = find_nearest_text(&tag_texts, center, reach).unwrap_or_default();
         let upper = tag_str.to_uppercase();

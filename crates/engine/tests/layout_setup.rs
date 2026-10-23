@@ -178,9 +178,7 @@ fn publish_sets_up_empty_layouts_of_a_drawing_opened_from_a_file() {
     // A drawing with model content and empty layouts (read from a file via open_drawing).
     let mut d = Drawing::new_imperial();
     let h = d.new_handle();
-    d.space_mut(&Space::Model)
-        .unwrap()
-        .push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(480.0, 360.0, 0.0) })));
+    d.space_mut(&Space::Model).unwrap().push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(480.0, 360.0, 0.0) })));
     assert!(d.layouts.iter().all(|l| l.entities.is_empty()));
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan.dwg", None);
@@ -190,11 +188,7 @@ fn publish_sets_up_empty_layouts_of_a_drawing_opened_from_a_file() {
     // Layout1 now has a viewport showing the model content.
     let vps = viewports(&s, "Layout1");
     assert_eq!(vps.len(), 1, "a viewport was created for Layout1");
-    assert!(
-        shows(&vps[0], Bounds2::new(Vec2::ZERO, Vec2::new(480.0, 360.0))),
-        "viewport shows the drawing: {:?}",
-        seen(&vps[0])
-    );
+    assert!(shows(&vps[0], Bounds2::new(Vec2::ZERO, Vec2::new(480.0, 360.0))), "viewport shows the drawing: {:?}", seen(&vps[0]));
 }
 
 // ---------- blank-sheet warnings (MUST 2) ----------
@@ -210,11 +204,7 @@ fn plot_and_publish_warn_about_blank_sheets() {
     let w = r["warnings"].as_array().unwrap();
     assert_eq!(w.len(), 1, "one blank warning: {r}");
     assert!(w[0].as_str().unwrap().contains("nothing on it"), "{r}");
-    assert!(
-        s.log[log_before..].iter().any(|l| l.starts_with("Warning:") && l.contains("Layout1")),
-        "Warning echoed: {:?}",
-        &s.log[log_before..]
-    );
+    assert!(s.log[log_before..].iter().any(|l| l.starts_with("Warning:") && l.contains("Layout1")), "Warning echoed: {:?}", &s.log[log_before..]);
 
     // Publish all layouts of the empty drawing: one warning per layout.
     let log_before = s.log.len();
@@ -222,11 +212,7 @@ fn plot_and_publish_warn_about_blank_sheets() {
     let w: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     // Layout1 and Layout2 are both blank.
     assert_eq!(w.len(), 2, "one warning per layout: {w:?}");
-    assert!(
-        s.log[log_before..].iter().filter(|l| l.starts_with("Warning:")).count() >= 2,
-        "Warning lines echoed: {:?}",
-        &s.log[log_before..]
-    );
+    assert!(s.log[log_before..].iter().filter(|l| l.starts_with("Warning:")).count() >= 2, "Warning lines echoed: {:?}", &s.log[log_before..]);
 
     // A drawing with content: no warnings.
     let mut s2 = Session::empty();

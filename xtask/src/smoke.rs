@@ -684,18 +684,40 @@ mod tests {
         // The step names used by run_app (the desktop smoke); run_cli uses the same set except
         // walk is skipped. This list mirrors the report.step calls in run_app.
         let app_steps = [
-            "launch", "version", "about", "draw",
-            "save dwg", "save dxf", "save cdy",
-            "reopen dwg", "reopen dxf", "reopen cdy",
-            "plot pdf", "walk", "sheet set", "clipboard", "update check", "quit",
+            "launch",
+            "version",
+            "about",
+            "draw",
+            "save dwg",
+            "save dxf",
+            "save cdy",
+            "reopen dwg",
+            "reopen dxf",
+            "reopen cdy",
+            "plot pdf",
+            "walk",
+            "sheet set",
+            "clipboard",
+            "update check",
+            "quit",
         ];
         assert!(app_steps.contains(&"clipboard"), "run_app must have a clipboard step");
         // run_cli replaces walk with a skip and has no quit.
         let cli_steps = [
-            "launch", "version", "draw",
-            "save dwg", "save dxf", "save cdy",
-            "reopen dwg", "reopen dxf", "reopen cdy",
-            "plot pdf", "walk", "sheet set", "clipboard", "update check",
+            "launch",
+            "version",
+            "draw",
+            "save dwg",
+            "save dxf",
+            "save cdy",
+            "reopen dwg",
+            "reopen dxf",
+            "reopen cdy",
+            "plot pdf",
+            "walk",
+            "sheet set",
+            "clipboard",
+            "update check",
         ];
         assert!(cli_steps.contains(&"clipboard"), "run_cli must have a clipboard step");
     }

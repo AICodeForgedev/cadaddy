@@ -137,11 +137,7 @@ pub(crate) fn viewport_id(w: &TornWindow) -> egui::ViewportId {
 /// Install window `k`'s view and space on its drawing, run `f`, then restore the drawing's
 /// own view and space. The window's (possibly changed) view is written back. Used by
 /// [`show_windows`] for each frame.
-pub(crate) fn with_window_view<R>(
-    app: &mut CadApp,
-    k: usize,
-    f: impl FnOnce(&mut CadApp, usize) -> R,
-) -> Option<R> {
+pub(crate) fn with_window_view<R>(app: &mut CadApp, k: usize, f: impl FnOnce(&mut CadApp, usize) -> R) -> Option<R> {
     let w = app.torn.get_mut(k)?;
     let uid = w.uid;
     let wid = w.window_id;
@@ -370,7 +366,8 @@ mod tests {
         with_window_view(&mut app, 0, |app, index| {
             app.session.active = index;
             app.run("zoom", json!({"factor": 4})).unwrap();
-        }).expect("window A install/restore");
+        })
+        .expect("window A install/restore");
 
         // Window A's stored view changed.
         assert_ne!(app.torn[0].views, b_views_before, "window A's view changed after zoom");
@@ -383,7 +380,8 @@ mod tests {
         with_window_view(&mut app, 1, |app, index| {
             app.session.active = index;
             app.run("line", json!({"points": [[1, 1], [2, 2]]})).unwrap();
-        }).expect("window B install/restore");
+        })
+        .expect("window B install/restore");
         assert_eq!(app.session.docs[1].doc.model.len(), 2, "edit through window B visible in model");
     }
 
@@ -416,27 +414,17 @@ mod tests {
         // Run show_windows headless for 2 frames.
         let ctx = egui::Context::default();
         for _ in 0..2 {
-            ctx.run_ui(egui::RawInput::default(), |ui| show_windows(&mut app, ui.ctx()))
-                .textures_delta
-                .clear();
+            ctx.run_ui(egui::RawInput::default(), |ui| show_windows(&mut app, ui.ctx())).textures_delta.clear();
         }
         assert_eq!(app.torn.len(), 3, "all three windows survive show_windows");
 
         // Each window (looked up by window_id) still has exactly its own rect, views and
         // canvas marker — proves hand-back is keyed by window_id, not uid.
         for (i, &wid) in ids.iter().enumerate() {
-            let w = app.torn.iter().find(|w| w.window_id == wid)
-                .unwrap_or_else(|| panic!("window {i} missing"));
+            let w = app.torn.iter().find(|w| w.window_id == wid).unwrap_or_else(|| panic!("window {i} missing"));
             let expected_height = [10.0, 20.0, 30.0][i];
-            assert_eq!(
-                w.views[0].1.height, expected_height,
-                "window {i} views preserved"
-            );
-            let expected_rect = [
-                [100.0_f32, 100.0, 800.0, 600.0],
-                [200.0, 200.0, 700.0, 500.0],
-                [300.0, 300.0, 600.0, 400.0],
-            ][i];
+            assert_eq!(w.views[0].1.height, expected_height, "window {i} views preserved");
+            let expected_rect = [[100.0_f32, 100.0, 800.0, 600.0], [200.0, 200.0, 700.0, 500.0], [300.0, 300.0, 600.0, 400.0]][i];
             assert_eq!(w.rect, expected_rect, "window {i} rect preserved");
             assert_eq!(w.canvas.mesh_ms, (i + 1) as f64, "window {i} canvas preserved");
         }
