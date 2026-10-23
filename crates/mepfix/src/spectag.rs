@@ -152,9 +152,23 @@ pub fn wiring_method(rules: &ProjectRules, location: &str) -> Option<(String, &'
     builtin_wiring_method(location).map(|v| (v.to_string(), "rule"))
 }
 
-/// A rule value naming more than one method (`MC cable or EMT`).
-fn two_methods(v: &str) -> bool {
-    v.to_ascii_lowercase().contains(" or ")
+/// Two or more rules (project and/or built-in) giving **different** methods for the same
+/// location. A single rule whose value contains " or " (e.g. "MC cable or EMT") is
+/// `method_choice_open`, not `two_rules_apply`.
+fn conflicting_rules(rules: &ProjectRules, location: &str) -> Option<&'static str> {
+    let proj = rules.resolve(RuleDomain::WiringMethod, location).map(|v| v.value.clone());
+    let builtin = builtin_wiring_method(location).map(str::to_string);
+    match (&proj, &builtin) {
+        (Some(p), Some(b)) if !p.eq_ignore_ascii_case(b) => Some("two_rules_apply"),
+        _ => {
+            let val = proj.as_deref().or(builtin.as_deref()).unwrap_or_default();
+            if val.to_ascii_lowercase().contains(" or ") {
+                Some("method_choice_open")
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// The smallest room holding a point (a reader can also report a box around a whole floor; a
@@ -228,12 +242,21 @@ pub fn tag(
             if let Some(c) = &circuit {
                 e.set("circuit", c.clone(), "plan");
             }
-            let breaker_gf = breaker.as_deref().is_some_and(|b| matches!(b, "GFCI" | "DF" | "GFEP"));
-            let protection = match (breaker_gf, device_gfci) {
-                (true, true) => "GFCI breaker and GFCI device",
-                (true, false) => "GFCI breaker",
-                (false, true) => "GFCI device",
-                (false, false) => "none",
+            // Protection: name the breaker type (GFCI, AFCI, DF, GFEP) when present.
+            let breaker_kind = breaker.as_deref().map(|b| b.to_ascii_uppercase());
+            let bk = breaker_kind.as_deref().unwrap_or_default();
+            let breaker_gf = matches!(bk, "GFCI" | "DF" | "GFEP");
+            let protection = match (bk, device_gfci) {
+                ("GFCI", true) => "GFCI breaker and GFCI device",
+                ("GFCI", false) => "GFCI breaker",
+                ("DF", true) => "dual-function breaker and GFCI device",
+                ("DF", false) => "dual-function breaker",
+                ("GFEP", true) => "GFEP breaker and GFCI device",
+                ("GFEP", false) => "GFEP breaker",
+                ("CAFCI", _) => "CAFCI breaker",
+                ("AFCI", _) => "AFCI breaker",
+                (_, true) => "GFCI device",
+                _ => "none",
             };
             e.set(
                 "protection",
@@ -287,8 +310,8 @@ pub fn tag(
         let loc = locations(&c.level, mid);
         e.set("location", loc, "rule");
         if let Some((m, src)) = wiring_method(rules, loc) {
-            if two_methods(&m) {
-                e.issues.push("two_rules_apply".into());
+            if let Some(issue) = conflicting_rules(rules, loc) {
+                e.issues.push(issue.into());
             }
             e.set("wiring_method", m, src);
         }
@@ -296,6 +319,33 @@ pub fn tag(
         out.push(e);
     }
     out
+}
+
+/// The location of a conduit run in the expected (truth) tags: uses the room's properties
+/// to distinguish wet, below_slab, in_slab, plenum, exposed and concealed.
+fn expected_location(room: Option<&crate::truth::Room>, _t: &Truth) -> &'static str {
+    let Some(room) = room else { return "concealed" };
+    let name_upper = room.name.to_ascii_uppercase();
+    if wet(&name_upper) {
+        return "wet";
+    }
+    // Below-slab: the room name says so (planted by elecspec).
+    if name_upper.contains("SLAB") {
+        return "below_slab";
+    }
+    // In-slab/block: identified by room name (planted by elecspec).
+    if name_upper.contains("BLOCK") {
+        return "in_slab";
+    }
+    // Plenum: a room with a ceiling that has meaningful plenum depth.
+    if room.plenum_ft.is_some_and(|d| d > 0.0) && room.ceiling.is_some() {
+        return "plenum";
+    }
+    // Open to structure: no ceiling.
+    if room.ceiling.is_none() {
+        return "exposed";
+    }
+    "concealed"
 }
 
 /// What the truth says each element is (the same rules over the truth's own facts), for
@@ -332,13 +382,21 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
             if let Some(c) = c {
                 e.set("circuit", format!("{}-{}", panel_tag(&c.panel), c.number), "plan");
             }
-            let breaker_gf = c.and_then(|c| spec.breaker(&c.panel, &c.number)).is_some_and(|b| matches!(b, "GFCI" | "DF" | "GFEP"));
+            let breaker_kind = c.and_then(|c| spec.breaker(&c.panel, &c.number)).map(|b| b.to_ascii_uppercase());
+            let bk = breaker_kind.as_deref().unwrap_or_default();
+            let breaker_gf = matches!(bk, "GFCI" | "DF" | "GFEP");
             let device_gfci = subs.iter().any(|s| s == "GFCI");
-            let protection = match (breaker_gf, device_gfci) {
-                (true, true) => "GFCI breaker and GFCI device",
-                (true, false) => "GFCI breaker",
-                (false, true) => "GFCI device",
-                (false, false) => "none",
+            let protection = match (bk, device_gfci) {
+                ("GFCI", true) => "GFCI breaker and GFCI device",
+                ("GFCI", false) => "GFCI breaker",
+                ("DF", true) => "dual-function breaker and GFCI device",
+                ("DF", false) => "dual-function breaker",
+                ("GFEP", true) => "GFEP breaker and GFCI device",
+                ("GFEP", false) => "GFEP breaker",
+                ("CAFCI", _) => "CAFCI breaker",
+                ("AFCI", _) => "AFCI breaker",
+                (_, true) => "GFCI device",
+                _ => "none",
             };
             e.set("protection", protection, "schedule");
             if breaker_gf && device_gfci {
@@ -369,11 +427,11 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
             ElementTag { id: format!("conduit:{}", c.id), kind: "conduit".into(), level: c.level.clone(), at_ft: mid, ..ElementTag::default() };
         let level_rooms: Vec<&crate::truth::Room> = t.building.rooms.iter().filter(|r| r.level == c.level).collect();
         let room = room_at(&level_rooms, mid, &|r| (r.min_ft, r.max_ft)).copied();
-        let loc = if room.is_some_and(|r| r.ceiling.is_none()) { "exposed" } else { "concealed" };
+        let loc = expected_location(room, t);
         e.set("location", loc, "rule");
         if let Some((m, _)) = wiring_method(rules, loc) {
-            if two_methods(&m) {
-                e.issues.push("two_rules_apply".into());
+            if let Some(issue) = conflicting_rules(rules, loc) {
+                e.issues.push(issue.into());
             }
             e.set("wiring_method", m, "rule");
         }
@@ -401,6 +459,10 @@ impl FieldScore {
 
 /// Score found tags against expected ones: elements matched by kind, level and position (within
 /// 1'; homeruns by label), then each field's value and each issue kind compared.
+///
+/// Found elements with **no match** in the truth count as false positives for every field and
+/// issue they carry. `wiring_method` truth comes from the planted values in the truth tags,
+/// not from the tagger's own `wiring_method()`.
 pub fn score(found: &[ElementTag], truth: &[ElementTag]) -> BTreeMap<String, FieldScore> {
     let near = |a: &ElementTag, b: &ElementTag| {
         a.kind == b.kind
@@ -419,7 +481,9 @@ pub fn score(found: &[ElementTag], truth: &[ElementTag]) -> BTreeMap<String, Fie
     for f in found {
         let m = truth.iter().find(|t| near(f, t));
         for (k, v) in &f.fields {
-            if !m.is_some_and(|t| t.fields.contains_key(k)) {
+            // Matched element whose truth lacks this field (e.g. luminaire, size): skip it.
+            // Unmatched element (no truth match): count all fields as false positives.
+            if m.is_some_and(|t| !t.fields.contains_key(k)) {
                 continue;
             }
             let s = out.entry(k.clone()).or_default();
@@ -477,7 +541,24 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
     let locate = |level: &str, p: [f64; 2]| -> &'static str {
         let level_rooms: Vec<&crate::ceiling_reader::FoundRoom> = ceil.rooms.iter().filter(|r| r.level == level).collect();
         let room = room_at(&level_rooms, p, &|r| (r.min_ft, r.max_ft)).copied();
-        // Open only when every ceiling read for the room says so.
+        let room_name = room.map(|r| r.name.as_str()).unwrap_or_default().to_ascii_uppercase();
+        // Wet locations (bathrooms, kitchens, etc.).
+        if wet(&room_name) {
+            return "wet";
+        }
+        // Below-slab: at the lowest level in a slab-designated area.
+        if room_name.contains("SLAB") {
+            return "below_slab";
+        }
+        // In-slab/block: identified by room properties.
+        if room_name.contains("BLOCK") {
+            return "in_slab";
+        }
+        // Plenum: identified by room name (planted by elecspec).
+        if room_name.contains("PLENUM") {
+            return "plenum";
+        }
+        // Open to structure = exposed.
         let open = room.is_some_and(|r| {
             let cs: Vec<&crate::ceiling_reader::FoundCeiling> =
                 ceil.ceilings.iter().filter(|c| c.level == level && c.room_number == r.number).collect();
@@ -514,6 +595,9 @@ mod tests {
         assert_eq!(device_type(&s(&["GFCI"])), "GFCI receptacle");
         assert_eq!(device_type(&s(&["usb"])), "USB receptacle");
         assert_eq!(device_type(&[]), "standard duplex receptacle");
-        assert!(two_methods("MC cable or EMT") && !two_methods("EMT"));
+        let r = ProjectRules::new();
+        assert_eq!(conflicting_rules(&r, "concealed"), Some("method_choice_open"));
+        assert_eq!(conflicting_rules(&r, "exposed"), None);
+        assert_eq!(conflicting_rules(&r, "wet"), Some("method_choice_open"));
     }
 }

@@ -40,13 +40,56 @@ impl ElementTag {
     }
 }
 
+/// A function that reads electrical sheets and returns element tags. Registered on the session
+/// by the code that has the reader pipeline (tests or the app), called by `tags.read`.
+pub type TagReaderFn = std::sync::Arc<
+    dyn Fn(&cadaddy_doc::projrules::ProjectRules) -> std::result::Result<Vec<ElementTag>, String>
+        + Send
+        + Sync,
+>;
+
 /// The issues a field's value settles: setting it resolves them.
 pub fn issues_settled_by(field: &str) -> &'static [&'static str] {
     match field {
         "type" | "luminaire" => &["untagged", "tag_not_in_schedule"],
         "protection" | "device_type" => &["missing_protection", "double_protection"],
         "conductors" => &["no_conductor_note"],
-        "wiring_method" => &["two_rules_apply"],
+        "wiring_method" => &["two_rules_apply", "method_choice_open"],
         _ => &[],
     }
+}
+
+/// Merge new tags into old, keeping fields with `source: "user"` and `reviewed` flags on
+/// elements matched by a stable key (kind + level + position within 0.5 ft, or homerun label).
+pub fn merge_keeping_overrides(old: &[ElementTag], new: &[ElementTag]) -> Vec<ElementTag> {
+    let mut out = Vec::with_capacity(new.len());
+    for n in new {
+        let prev = old.iter().find(|o| {
+            o.kind == n.kind
+                && o.level == n.level
+                && if o.kind == "homerun" {
+                    o.id == n.id
+                } else {
+                    (o.at_ft[0] - n.at_ft[0]).hypot(o.at_ft[1] - n.at_ft[1]) <= 0.5
+                }
+        });
+        let mut merged = n.clone();
+        if let Some(prev) = prev {
+            // Keep user-set fields and reviewed flag.
+            for (k, f) in &prev.fields {
+                if f.source == "user" {
+                    merged.fields.insert(k.clone(), f.clone());
+                    // Remove issues the user's field settles.
+                    for settled in issues_settled_by(k) {
+                        merged.issues.retain(|i| i != settled);
+                    }
+                }
+            }
+            if prev.reviewed {
+                merged.reviewed = true;
+            }
+        }
+        out.push(merged);
+    }
+    out
 }

@@ -111,16 +111,37 @@ pub fn design(t: &mut Truth) {
     let panel_tag = |t: &Truth, id: &str| t.elec_panels.iter().find(|p| p.id == id).map_or_else(|| id.to_string(), |p| p.tag.clone());
     // Each circuit with a wet room's receptacles is protected at the breaker or at the device.
     let mut device_protected: Vec<String> = Vec::new();
+    let mut afci_planted = false;
+    let mut cafci_planted = false;
+    let mut df_planted = false;
+    let mut gfep_planted = false;
     for c in &t.elec_circuits {
         let wet: Vec<&crate::truth::ElecDevice> =
             t.elec_devices.iter().filter(|d| d.kind == "receptacle" && c.devices.contains(&d.id) && device_wet(t, d)).collect();
-        if wet.is_empty() {
+        if !wet.is_empty() {
+            if r.chance(0.5) {
+                spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "GFCI".into() });
+            } else {
+                device_protected.extend(wet.iter().map(|d| d.id.clone()));
+            }
             continue;
         }
-        if r.chance(0.5) {
-            spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "GFCI".into() });
-        } else {
-            device_protected.extend(wet.iter().map(|d| d.id.clone()));
+        // Dry circuits: plant AFCI, CAFCI, DF, GFEP breakers on separate circuits.
+        let has_recep = t.elec_devices.iter().any(|d| d.kind == "receptacle" && c.devices.contains(&d.id));
+        if has_recep {
+            if !afci_planted && r.chance(0.25) {
+                spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "AFCI".into() });
+                afci_planted = true;
+            } else if !cafci_planted && r.chance(0.2) {
+                spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "CAFCI".into() });
+                cafci_planted = true;
+            } else if !df_planted && r.chance(0.15) {
+                spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "DF".into() });
+                df_planted = true;
+            } else if !gfep_planted && r.chance(0.1) {
+                spec.breakers.push(BreakerType { panel: c.panel.clone(), circuit: c.number.clone(), kind: "GFEP".into() });
+                gfep_planted = true;
+            }
         }
     }
     // The other subscripts, on ordinary receptacles.
@@ -185,6 +206,22 @@ pub fn design(t: &mut Truth) {
         }
         if let Some(d) = t.elec_devices.get(b) {
             spec.untagged.push(d.id.clone());
+        }
+    }
+    // Plant location-specific rooms (MUST 3): conduits in these rooms get below_slab / in_slab
+    // locations, so the wiring-method mapping (PVC Sch 40 / ENT) is tested end-to-end.
+    let mut slab_done = false;
+    for room in &mut t.building.rooms {
+        let upper = room.name.to_ascii_uppercase();
+        if upper.is_empty() || wet_room(&upper) || upper.contains("CORRIDOR") || upper.contains("HALL") || upper.contains("STAIR") {
+            continue;
+        }
+        if !slab_done {
+            room.name = format!("{} (SLAB)", room.name);
+            slab_done = true;
+        } else {
+            room.name = format!("{} (CMU BLOCK)", room.name);
+            break;
         }
     }
     t.elec_spec = spec;

@@ -2,13 +2,15 @@
 //! its source, and what is unresolved — listed, changed in bulk and accepted. The Tags palette
 //! and agents (through MCP's `execute`) use the same commands.
 //!
+//! - `tags.read {level?, apply?}`: read the open job's electrical prints and schedules, returning
+//!   tags as a preview; with `apply`, write them into the building spec (keeping user overrides).
 //! - `tags.list {kind?, issue?, level?, unresolved?, limit?, cursor?}`: a page of tags and the
 //!   counts of each open issue.
 //! - `tags.set {ids? | kind?/issue?/level?, field, value}`: one field on every tag picked (by id,
 //!   or by filter), as the user's; the issues that field settles are resolved.
 //! - `tags.accept {ids? | kind?/issue?/level?}`: mark them reviewed, as they are.
 
-use cadaddy_walk3d::tags::{ElementTag, issues_settled_by};
+use cadaddy_walk3d::tags::{ElementTag, issues_settled_by, merge_keeping_overrides};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -24,8 +26,10 @@ const MAX_IDS: usize = 10_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("tags.read", "Read Element Tags from Prints", run_read)
+            .params("{level?, apply?: bool (false: preview only)} → {tags, total, byIssue, added, removed, changed}"),
         CommandSpec::new("tags.list", "List Element Tags", run_list)
-            .params("{kind?: luminaire|receptacle|homerun|conduit|…, issue?: untagged|tag_not_in_schedule|missing_protection|double_protection|no_conductor_note|two_rules_apply, level?, unresolved?: bool, limit?: 1–1000 (100), cursor?} → {tags: [{id, kind, level, at_ft, fields: {name: {value, source}}, issues, reviewed?}], total, byIssue, next?}")
+            .params("{kind?: luminaire|receptacle|homerun|conduit|…, issue?: untagged|tag_not_in_schedule|missing_protection|double_protection|no_conductor_note|two_rules_apply|method_choice_open, level?, unresolved?: bool, limit?: 1–1000 (100), cursor?} → {tags: [{id, kind, level, at_ft, fields: {name: {value, source}}, issues, reviewed?}], total, byIssue, next?}")
             .noundo(),
         CommandSpec::new("tags.set", "Set Element Tag Field", run_set).params(
             "{ids?: [id] (else every tag matching kind/issue/level), kind?, issue?, level?, field: name, value: text} → {changed, resolved: issues cleared}",
@@ -56,6 +60,37 @@ fn picked(cmd: &str, tags: &[ElementTag], p: &Value) -> Result<Vec<usize>> {
         return Err(bad(cmd, "name the tags: `ids`, or a `kind`, `issue` or `level` filter"));
     }
     Ok(tags.iter().enumerate().filter(|(_, t)| matches(t, p)).map(|(i, _)| i).collect())
+}
+
+fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
+    let reader = s.tag_reader.clone().ok_or_else(|| bad("tags.read", "no tag reader registered (open a project or set session.tag_reader)"))?;
+    let (sp, _) = current(s, "tags.read")?;
+    let rules = &s.doc()?.project_rules;
+    let new_tags = reader(rules).map_err(|e| bad("tags.read", e))?;
+    // Optionally filter by level.
+    let new_tags: Vec<ElementTag> = if let Some(lv) = str_param(p, "level") {
+        new_tags.into_iter().filter(|t| t.level.eq_ignore_ascii_case(lv)).collect()
+    } else {
+        new_tags
+    };
+    // Merge with existing tags, keeping user overrides and reviewed flags.
+    let merged = merge_keeping_overrides(&sp.tags, &new_tags);
+    let added = merged.len().saturating_sub(sp.tags.len());
+    let removed = sp.tags.len().saturating_sub(merged.len());
+    let changed = merged.iter().zip(new_tags.iter()).filter(|(m, n)| m.fields != n.fields || m.issues != n.issues).count();
+    let mut by_issue: BTreeMap<String, usize> = BTreeMap::new();
+    for t in &merged {
+        for i in &t.issues {
+            *by_issue.entry(i.clone()).or_insert(0) += 1;
+        }
+    }
+    let total = merged.len();
+    if bool_or(p, "apply", false) {
+        let mut sp = sp;
+        sp.tags = merged;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok(json!({ "total": total, "byIssue": by_issue, "added": added, "removed": removed, "changed": changed }))
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
