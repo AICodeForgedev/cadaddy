@@ -10,3 +10,7 @@ The canonical recipe is craftrules' [`release/playbook.md`](https://github.com/s
 - **File types:** `.dxf` and `.dwg` (macOS document types, Windows "Open with", Linux MIME types).
 - **Local packaging test:** `packaging/macos/package.sh` (ad-hoc signed DMG), `packaging/linux/package.sh`, `packaging/web/package.sh`.
 - **Update-gate (run before every release):** `cargo xtask update-gate --from <previous release installer> --to <new installer>` tests the real update path end-to-end: installs the old release into a scratch location, runs the same DMG-swap/MSI/AppImage-replacement script the updater uses, then launches the new version and verifies it runs, the files were replaced, temp files are cleaned up and settings survived. On macOS pass two `.dmg` files; on Windows two `.msi` files; on Linux two AppImages. This gate catches the two bugs that shipped in 0.7.8: the Windows installer never ran on Restart Now (PowerShell `DETACHED_PROCESS`), and default installs were never shown the update card (`has_control_channel()` returned true for the agent port alone).
+
+## Release notes to include
+
+- **0.7.9:** Windows users of 0.7.7 or 0.7.8: the in-app update (Help > Check for Updates > Restart Now) does not install the new version. Please download and run `CADaddy-Windows.msi` from the release page once; future updates will work normally.
