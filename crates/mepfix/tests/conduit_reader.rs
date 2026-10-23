@@ -125,7 +125,7 @@ fn hotel_conduit_precision_and_homerun_accuracy() {
     let eq_anchors = conduit_reader::equipment_anchors_from_truth(&set.truth);
     let _unrouted = conduit_reader::anchor_homeruns(&mut r, &dev_anchors, &eq_anchors);
     // Assign heights.
-    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None);
     let levels = set.truth.building.levels.clone();
     conduit_reader::assign_heights(&mut r, &|code| {
         let i = levels.iter().position(|l| l.code == code)?;
@@ -208,7 +208,7 @@ fn conduit_stacks_below_duct() {
             set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect()
         };
         let map = cadaddy_mepfix::sheet_reader::recognise_fixture_set(&dxf);
-        cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map)
+        cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None)
     };
     let levels = t.building.levels.clone();
     let i = levels.iter().position(|l| l.code == "1").unwrap();
