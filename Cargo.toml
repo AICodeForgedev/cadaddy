@@ -37,24 +37,24 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 rayon = "1"
 
 # rendering / formats
-tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
 lyon_tessellation = "1.0.22"
-skrifa = "0.47"
+skrifa = "0.48"
 # Text shaping (OpenType GSUB/GPOS, HarfBuzz port on read-fonts; the version egui's epaint uses)
 # and the Unicode Bidirectional Algorithm for right-to-left drawing text.
-harfrust = "0.12"
+harfrust = "0.14"
 unicode-bidi = "0.3.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 encoding_rs = "0.8.35"
 # XML for the SVG reader (streaming parser, no entity expansion beyond the five predefined ones)
-quick-xml = "0.41"
+quick-xml = "0.42"
 
 # ui
 craft-ui = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
-egui = "0.36"
-egui_kittest = "0.36"
-eframe = { version = "0.36", default-features = false }
-egui-wgpu = "0.36"
+egui = "0.37"
+egui_kittest = "0.37"
+eframe = { version = "0.37", default-features = false }
+egui-wgpu = "0.37"
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
 
