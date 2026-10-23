@@ -1566,6 +1566,8 @@ fn hotel_electrical(
             // Light fixture(s)
             let n_lights = ((w / 10.0).ceil() as usize).max(1);
             let mut ckt_devices = Vec::new();
+            // Each homerun leaves from beside the last device on its circuit.
+            let mut light_hr = [cx, cy];
             for i in 0..n_lights {
                 let lx = rm.min_ft[0] + (i as f64 + 0.5) * w / n_lights as f64;
                 let jx = lx + (r.below(3) as f64 - 1.0) * 0.5;
@@ -1579,7 +1581,10 @@ fn hotel_electrical(
                     level: lv.into(),
                     room: rm.id.clone(),
                     at_ft: [lx, cy, elev + rm.ceiling.as_ref().map(|c| c.height_ft).unwrap_or(9.0)],
-                    drawn_ft: [jx, jy],
+                    drawn_ft: {
+                        light_hr = [jx, jy + 1.5];
+                        [jx, jy]
+                    },
                     mounting_in: 0.0,
                     mounting_note: Some("CLG".into()),
                     arch_positioned: false,
@@ -1620,7 +1625,7 @@ fn hotel_electrical(
                 number: format!("{ckt_num}"),
                 level: lv.into(),
                 devices: ckt_devices,
-                homerun_ft: [cx, cy],
+                homerun_ft: light_hr,
                 sheet: String::new(),
             });
             circuit_id += 1;
@@ -1629,6 +1634,7 @@ fn hotel_electrical(
             // Receptacles
             let n_recep = ((w / 12.0).ceil() as usize).max(1);
             let mut pwr_devices = Vec::new();
+            let mut power_hr = [cx, cy];
             for i in 0..n_recep {
                 let rx = rm.min_ft[0] + (i as f64 + 0.5) * w / n_recep as f64;
                 let did = format!("ed-{dev_id}");
@@ -1640,7 +1646,11 @@ fn hotel_electrical(
                     level: lv.into(),
                     room: rm.id.clone(),
                     at_ft: [rx, rm.min_ft[1] + 0.5, elev + 1.5],
-                    drawn_ft: [rx + r.below(2) as f64 * 0.3, rm.min_ft[1] + 0.5],
+                    drawn_ft: {
+                        let at = [rx + r.below(2) as f64 * 0.3, rm.min_ft[1] + 0.5];
+                        power_hr = [at[0], at[1] + 1.5];
+                        at
+                    },
                     mounting_in: 18.0,
                     mounting_note: Some("+18\" AFF".into()),
                     arch_positioned: true,
@@ -1660,7 +1670,7 @@ fn hotel_electrical(
                 number: format!("{ckt_num}"),
                 level: lv.into(),
                 devices: pwr_devices,
-                homerun_ft: [cx, cy],
+                homerun_ft: power_hr,
                 sheet: String::new(),
             });
             circuit_id += 1;

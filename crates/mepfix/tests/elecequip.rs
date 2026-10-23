@@ -26,7 +26,9 @@ fn gear_reads_from_the_prints_and_its_review_finds_the_planted_problems() {
             .collect();
         let all: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
         let map = sheet_reader::recognise_fixture_set(&all);
-        let (mut devices, panels) = elec_reader::read_devices(&plans, &map, t);
+        let inputs = elec_reader::DeviceInputs::read(&all, &map);
+        let read = elec_reader::read_devices(&plans, &map, &inputs);
+        let (mut devices, panels) = (read.devices, read.panels);
         let drawings: Vec<(String, cadaddy_doc::Drawing)> = e_sheets.iter().map(|(n, b)| (n.clone(), cadaddy_io::read_dxf(b).unwrap())).collect();
         let refs: Vec<(&str, &cadaddy_doc::Drawing)> = drawings.iter().map(|(n, d)| (n.as_str(), d)).collect();
         let read = gear_reader::read_gear(&refs, &panels, 12.0);

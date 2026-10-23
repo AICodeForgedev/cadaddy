@@ -436,83 +436,409 @@ fn electrical_schedule_sheet_has_content() {
 
 // ---- Electrical device reader tests ---------------------------------------------------------
 
-use cadaddy_mepfix::elec_reader;
-use cadaddy_mepfix::sheet_reader;
+use cadaddy_doc::EntityKind;
+use cadaddy_mepfix::FixtureSet;
+use cadaddy_mepfix::elec_reader::{self, DeviceInputs, FoundDevice, MountingRules};
+use cadaddy_mepfix::sheet_reader::{self, Alignment, SheetMap};
+
+/// A set's DXF sheets, its sheet map, and the device reader's inputs read from its documents.
+fn elec_docs(set: &FixtureSet) -> (Vec<(String, Vec<u8>)>, SheetMap, DeviceInputs) {
+    let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+    let map = sheet_reader::recognise_fixture_set(&dxf);
+    let inputs = DeviceInputs::read(&dxf, &map);
+    (dxf, map, inputs)
+}
+
+fn alignment(map: &SheetMap, sheet: &str) -> Alignment {
+    map.sheets.iter().find(|s| s.number == sheet).and_then(|s| s.alignment.clone()).unwrap_or_else(|| panic!("{sheet} not aligned"))
+}
+
+/// Building feet → a sheet's model inches.
+fn model_at(al: &Alignment, b: [f64; 2]) -> [f64; 2] {
+    let r = layout::rotate([b[0] * 12.0, b[1] * 12.0], al.rotation_deg);
+    [r[0] + al.offset_in[0], r[1] + al.offset_in[1]]
+}
+
+/// Where an entity sits, model inches.
+fn anchor(k: &EntityKind) -> Option<[f64; 2]> {
+    Some(match k {
+        EntityKind::Circle(c) => [c.center.x, c.center.y],
+        EntityKind::Arc(a) => [a.center.x, a.center.y],
+        EntityKind::Line(l) => [(l.a.x + l.b.x) / 2.0, (l.a.y + l.b.y) / 2.0],
+        EntityKind::Text(t) => t.align_pt.map_or([t.insert.x, t.insert.y], |p| [p.x, p.y]),
+        EntityKind::LwPolyline(p) => {
+            let n = p.vertices.len().max(1) as f64;
+            [p.vertices.iter().map(|v| v.p.x).sum::<f64>() / n, p.vertices.iter().map(|v| v.p.y).sum::<f64>() / n]
+        }
+        _ => return None,
+    })
+}
+
+/// Edit one sheet of the list: `f` returns `None` to delete an entity, or its new kind.
+fn edit_sheet(dxf: &mut [(String, Vec<u8>)], sheet: &str, f: &dyn Fn(&cadaddy_doc::Entity) -> Option<EntityKind>) -> usize {
+    let (_, bytes) = dxf.iter_mut().find(|(n, _)| n.trim_end_matches(".dxf") == sheet).unwrap_or_else(|| panic!("no {sheet}"));
+    let mut d = cadaddy_io::read_dxf(bytes).unwrap();
+    let all: Vec<cadaddy_doc::Entity> = d.model.iter().map(|e| (**e).clone()).collect();
+    let mut changed = 0;
+    for e in all {
+        match f(&e) {
+            None => {
+                d.model.remove(e.handle);
+                changed += 1;
+            }
+            Some(k) if k != e.kind => {
+                let mut e2 = e.clone();
+                e2.kind = k;
+                d.model.replace(e2);
+                changed += 1;
+            }
+            Some(_) => {}
+        }
+    }
+    *bytes = cadaddy_io::write_dxf(&d).into_bytes();
+    changed
+}
+
+/// The found device of a kind drawn nearest a point (building feet), within `tol`.
+fn found_at<'a>(found: &'a [FoundDevice], level: &str, kind: &str, at: [f64; 2], tol: f64) -> Option<&'a FoundDevice> {
+    found
+        .iter()
+        .filter(|f| f.level == level && f.kind == kind)
+        .map(|f| ((f.drawn_ft[0] - at[0]).hypot(f.drawn_ft[1] - at[1]), f))
+        .filter(|(d, _)| *d < tol)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, f)| f)
+}
 
 #[test]
 fn elec_reader_perfect_scorer_round_trips() {
     // A perfect reader should score perfectly.
     let t = truth_for(5);
     let perfect = elec_reader::perfect_devices(&t);
-    let s = elec_reader::score_devices(&t, &perfect, 5.0);
+    let s = elec_reader::score_devices(&t, &perfect, 1.5);
     assert_eq!(s.true_positives, t.elec_devices.len(), "TP should match truth device count");
-    assert_eq!(s.false_positives, 0, "no FP for perfect reader");
-    assert_eq!(s.false_negatives, 0, "no FN for perfect reader");
-    assert!((s.precision - 1.0).abs() < 1e-9, "perfect precision: {}", s.precision);
-    assert!((s.recall - 1.0).abs() < 1e-9, "perfect recall: {}", s.recall);
+    assert_eq!((s.false_positives, s.false_negatives, s.kind_confusions), (0, 0, 0));
+    assert!((s.precision - 1.0).abs() < 1e-9 && (s.recall - 1.0).abs() < 1e-9, "{s:?}");
     assert!(s.height_mae_in < 1e-9, "perfect height MAE: {}", s.height_mae_in);
     assert!((s.kind_accuracy - 1.0).abs() < 1e-9, "perfect kind accuracy: {}", s.kind_accuracy);
+    assert!(s.type_tag_total > 0 && (s.type_tag_accuracy - 1.0).abs() < 1e-9, "{s:?}");
+    assert!(s.circuit_total > 0 && (s.circuit_accuracy - 1.0).abs() < 1e-9, "{s:?}");
+    assert!((s.zone_containment - 1.0).abs() < 1e-9 && s.position_mae_ft < 1e-9, "{s:?}");
 }
 
 #[test]
 fn elec_reader_scores_degraded_input() {
-    // Half the devices missing, the rest offset — precision and recall should reflect this.
+    // Half the devices missing, the rest off by 6" — precision and recall reflect it.
     let t = truth_for(4);
     let mut half: Vec<_> = elec_reader::perfect_devices(&t).into_iter().step_by(2).collect();
-    // Offset their heights.
     for d in &mut half {
         d.mounting_in += 6.0;
     }
-    // Add a ghost device.
+    // A ghost device drawn where nothing is.
     let mut ghost = half[0].clone();
-    ghost.at_ft = [500.0, 500.0, 10.0];
+    ghost.drawn_ft = [500.0, 500.0];
     half.push(ghost);
-
-    let s = elec_reader::score_devices(&t, &half, 5.0);
-    assert!(s.recall < 0.8 && s.recall > 0.2, "degraded recall: {}", s.recall);
-    assert!(s.precision < 1.0, "degraded precision: {}", s.precision);
-    // Height MAE should be at least 6 (some matched pairs are offset, some may not match at all).
-    assert!(s.height_mae_in >= 5.9, "height MAE should be ~6: {}", s.height_mae_in);
+    let s = elec_reader::score_devices(&t, &half, 1.5);
+    assert_eq!(s.true_positives, half.len() - 1);
+    assert_eq!(s.false_positives, 1);
+    assert!(s.recall < 0.6 && s.recall > 0.4, "degraded recall: {}", s.recall);
+    assert!((s.height_mae_in - 6.0).abs() < 1e-9, "height MAE should be 6: {}", s.height_mae_in);
 }
 
 #[test]
-fn elec_reader_reads_fixture_set_dxf() {
-    // Generate a fixture set, read the DXFs through the reader pipeline.
+fn elec_reader_scorer_requires_same_kind_and_tests_zones_along_their_wall() {
+    let t = truth_for(5);
+    let perfect = elec_reader::perfect_devices(&t);
+    let n = t.elec_devices.len();
+    // One device read as the wrong kind: not a match, but a kind confusion (and an FP and FN).
+    let mut wrong = perfect.clone();
+    let i = wrong.iter().position(|d| d.kind == "receptacle").unwrap();
+    wrong[i].kind = "switch".into();
+    let s = elec_reader::score_devices(&t, &wrong, 1.5);
+    assert_eq!((s.true_positives, s.false_positives, s.false_negatives, s.kind_confusions), (n - 1, 1, 1, 1));
+    assert!((s.kind_accuracy - (n - 1) as f64 / n as f64).abs() < 1e-9, "{}", s.kind_accuracy);
+
+    // A zone on a north–south wall whose y range misses the truth is not containing it, even
+    // when the truth's x happens to fall inside that range.
+    let zi = perfect.iter().position(|d| !d.arch_positioned).unwrap();
+    let td = &t.elec_devices[zi];
+    let (x, y) = (td.at_ft[0], td.at_ft[1]);
+    let mut zoned = perfect.clone();
+    zoned[zi].zone_wall_ft = Some([[x, y + 50.0], [x, y + 60.0]]);
+    zoned[zi].zone_ft = Some([x - 1.0, x + 1.0]); // contains x, but the wall runs along y
+    let zones = perfect.iter().filter(|d| !d.arch_positioned).count();
+    let s = elec_reader::score_devices(&t, &zoned, 1.5);
+    assert!((s.zone_containment - (zones - 1) as f64 / zones as f64).abs() < 1e-9, "{}", s.zone_containment);
+    zoned[zi].zone_ft = Some([y - 1.0, y + 1.0]); // along its own axis: contains the truth
+    let s = elec_reader::score_devices(&t, &zoned, 1.5);
+    assert!((s.zone_containment - 1.0).abs() < 1e-9, "{}", s.zone_containment);
+}
+
+#[test]
+fn elec_reader_takes_no_truth_and_has_no_generator_formulas() {
+    let src = include_str!("../src/elec_reader.rs");
+    let start = src.find("pub fn read_devices(").expect("read_devices");
+    let sig = &src[start..start + src[start..].find('{').unwrap()];
+    assert!(!sig.contains("Truth"), "read_devices takes the answer key: {sig}");
+    let body_end = start + src[start..].find("\n}\n").unwrap();
+    assert!(!src[start..body_end].to_ascii_lowercase().contains("truth"), "read_devices looks at the truth");
+    let inputs = src.find("pub fn read(dxf_data").expect("DeviceInputs::read");
+    let isig = &src[inputs..inputs + src[inputs..].find('{').unwrap()];
+    assert!(!isig.contains("Truth"), "{isig}");
+    // The generator's layout formulas are gone as position sources.
+    for f in [
+        "light_grid_for_room",
+        "receptacle_positions_for_room",
+        "exit_sign_positions",
+        "emergency_light_positions",
+        "position_from_rules",
+        "snap_to_nearest",
+    ] {
+        assert!(!src.contains(f), "{f} is back");
+    }
+}
+
+#[test]
+fn elec_reader_reads_devices_from_documents_only() {
+    // Devices read from the DXF sheets with rooms, ceilings and levels from the readers only.
     let set = generate(3).unwrap();
     let t = &set.truth;
+    let (dxf, map, inputs) = elec_docs(&set);
+    // The cover sheet's level list, read exactly.
+    assert_eq!(inputs.levels.len(), t.building.levels.len());
+    for l in &t.building.levels {
+        let got = inputs.levels.iter().find(|x| x.code == l.code).unwrap_or_else(|| panic!("level {}", l.code));
+        assert!((got.elevation_ft - l.elevation_ft).abs() < 1e-6, "level {}: {} vs {}", l.code, got.elevation_ft, l.elevation_ft);
+    }
+    assert!(!inputs.rooms.is_empty() && inputs.rooms.iter().any(|r| r.ceiling_ft.is_some()));
+    let read = elec_reader::read_devices(&dxf, &map, &inputs);
+    assert!(read.devices.len() > 400, "{}", read.devices.len());
+    for d in &read.devices {
+        assert!(d.source_sheet.starts_with("E-"), "{d:?}");
+        assert!(["note", "legend", "rule"].contains(&d.height_source.as_str()), "{d:?}");
+        assert!(d.room.is_empty() || inputs.rooms.iter().any(|r| r.level == d.level && r.number == d.room), "{d:?}");
+        if d.arch_positioned {
+            // Located only where an A-sheet fixes it: exactly on one of the A-sheets' locations.
+            assert_eq!(d.placement, "located");
+            assert!(d.position_source.starts_with("A-") && !d.field_decision, "{d:?}");
+            assert!(
+                inputs.locators.iter().any(|l| l.level == d.level && l.kind == d.kind && l.at_ft == [d.at_ft[0], d.at_ft[1]]),
+                "{d:?} is not on an A-sheet location"
+            );
+        } else {
+            assert_eq!(d.placement, "rule");
+            assert!(d.field_decision && d.zone_ft.is_some() && d.zone_wall_ft.is_some(), "{d:?}");
+        }
+    }
 
-    // Collect E-sheet DXF data.
-    let dxf_data: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E" && s.level.is_some())
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
-    assert!(!dxf_data.is_empty(), "no E-sheet DXFs");
+    // With no rooms and no A-sheet locations, every device is a zone and a finding.
+    let bare = DeviceInputs { rooms: Vec::new(), locators: Vec::new(), ..inputs.clone() };
+    let read = elec_reader::read_devices(&dxf, &map, &bare);
+    let no_room = read.findings.iter().filter(|f| f.contains("is in no room")).count();
+    assert_eq!(no_room, read.devices.len());
+    for d in &read.devices {
+        assert!(d.room.is_empty() && !d.arch_positioned && d.field_decision && d.placement == "rule", "{d:?}");
+        let z = d.zone_ft.unwrap();
+        assert!((z[1] - z[0] - 6.0).abs() < 1e-9 && z[0] <= d.drawn_ft[0] && d.drawn_ft[0] <= z[1], "{d:?}");
+    }
+}
 
-    // Build the sheet map for alignment.
-    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
-    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
+#[test]
+fn elec_reader_meets_thresholds_on_office_and_hotel_sets() {
+    let sets = [
+        ("office 3".to_string(), generate(3).unwrap()),
+        ("office 7".to_string(), generate(7).unwrap()),
+        ("hotel small 7".to_string(), generate_hotel(7, HotelSize::Small).unwrap()),
+    ];
+    for (name, set) in &sets {
+        let t = &set.truth;
+        let (dxf, map, inputs) = elec_docs(set);
+        let read = elec_reader::read_devices(&dxf, &map, &inputs);
+        let s = elec_reader::score_devices(t, &read.devices, 1.5);
+        println!(
+            "{name}: truth {} found {} TP {} FP {} FN {} | P {:.3} R {:.3} kind {:.3} ({} confusions) height MAE {:.3} in | type tag {:.3} of {} | circuit {:.3} of {} | located {}/{} pos MAE {:.4} ft | zone containment {:.3} | sources {:?}",
+            t.elec_devices.len(),
+            read.devices.len(),
+            s.true_positives,
+            s.false_positives,
+            s.false_negatives,
+            s.precision,
+            s.recall,
+            s.kind_accuracy,
+            s.kind_confusions,
+            s.height_mae_in,
+            s.type_tag_accuracy,
+            s.type_tag_total,
+            s.circuit_accuracy,
+            s.circuit_total,
+            s.arch_located,
+            s.arch_total,
+            s.position_mae_ft,
+            s.zone_containment,
+            s.height_sources
+        );
+        assert!(s.recall >= 0.9, "{name}: recall {:.3}", s.recall);
+        assert!(s.precision >= 0.9, "{name}: precision {:.3}", s.precision);
+        assert!(s.kind_accuracy >= 0.95, "{name}: kind accuracy {:.3}", s.kind_accuracy);
+        assert!(s.height_mae_in <= 1.0, "{name}: height MAE {:.3}", s.height_mae_in);
+        assert!(s.type_tag_total > 50 && s.type_tag_accuracy >= 0.9, "{name}: type tags {:.3} of {}", s.type_tag_accuracy, s.type_tag_total);
+        assert!(s.circuit_total > 50 && s.circuit_accuracy >= 0.9, "{name}: circuits {:.3} of {}", s.circuit_accuracy, s.circuit_total);
+        // Every device the A-sheets fix is located there, exactly.
+        assert!(s.arch_total > 50 && s.arch_located == s.arch_total, "{name}: located {} of {}", s.arch_located, s.arch_total);
+        assert!(s.position_mae_ft < 1e-6, "{name}: position error {}", s.position_mae_ft);
+        assert!(s.zone_containment >= 0.85, "{name}: zone containment {:.3}", s.zone_containment);
+    }
+}
 
-    // Read devices.
-    let (found, _found_panels) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
+#[test]
+fn elec_reader_located_device_ignores_its_esheet_symbol_and_without_its_dimension_is_a_zone() {
+    let set = generate_hotel(7, HotelSize::Small).unwrap();
+    let t = &set.truth;
+    let (mut dxf, map, inputs) = elec_docs(&set);
+    let base = elec_reader::read_devices(&dxf, &map, &inputs);
+    // A guest room receptacle the A floor plan dimensions, on its room's south wall.
+    let td = t.elec_devices.iter().find(|d| d.level == "2" && d.kind == "receptacle" && d.arch_positioned).unwrap();
+    let f = found_at(&base.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert!(f.arch_positioned && f.placement == "located", "{f:?}");
+    assert_eq!([f.at_ft[0], f.at_ft[1]], [td.at_ft[0], td.at_ft[1]]);
+    let a_sheet = f.position_source.clone();
+    assert!(a_sheet.starts_with("A-"), "{a_sheet}");
 
-    // We should find some devices (not perfect, but nonzero).
-    assert!(!found.is_empty(), "no devices found from E-sheets");
+    // Move its E-sheet symbol (and its notes) 3 ft along the wall: the model position stays.
+    let al = alignment(&map, &td.sheet);
+    let c = model_at(&al, td.drawn_ft);
+    let shift = layout::rotate([36.0, 0.0], al.rotation_deg);
+    let m = cadaddy_doc::geom::Mat3::translate(cadaddy_doc::geom::Vec2::new(shift[0], shift[1]));
+    let moved = edit_sheet(&mut dxf, &td.sheet, &|e| {
+        let mut k = e.kind.clone();
+        if (e.common.layer == "DEVICE" || e.common.layer == "TEXT") && anchor(&k).is_some_and(|p| (p[0] - c[0]).hypot(p[1] - c[1]) < 14.0) {
+            k.transform(&m);
+        }
+        Some(k)
+    });
+    assert!(moved >= 3, "moved {moved}");
+    let read = elec_reader::read_devices(&dxf, &map, &inputs);
+    let at = [td.drawn_ft[0] + 3.0, td.drawn_ft[1]];
+    let f = found_at(&read.devices, &td.level, &td.kind, at, 0.5).unwrap();
+    assert!(f.arch_positioned, "{f:?}");
+    assert_eq!([f.at_ft[0], f.at_ft[1]], [td.at_ft[0], td.at_ft[1]], "the moved symbol moved the model device");
+    assert_eq!(read.devices.len(), base.devices.len());
 
-    // Score against truth — positions come from placement rules, not E-sheet offsets,
-    // so we can use a tighter tolerance than the old diagrammatic-offset reader.
-    let s = elec_reader::score_devices(t, &found, 5.0);
-    // The reader should find at least some devices (recall > 0).
-    assert!(s.recall > 0.0, "recall is zero: {:?}", s);
-    // Precision should be nonzero.
-    assert!(s.precision > 0.0, "precision is zero: {:?}", s);
+    // Take the dimensions to it off the A floor plan: it becomes a zone on its wall that contains
+    // the truth along the wall (x: the south wall runs east–west).
+    let (mut dxf, _, _) = elec_docs(&set);
+    let aal = alignment(&map, &a_sheet);
+    let mark = model_at(&aal, [td.at_ft[0], td.at_ft[1]]);
+    let removed = edit_sheet(&mut dxf, &a_sheet, &|e| match &e.kind {
+        EntityKind::Line(l)
+            if e.common.layer == elec_reader::LOCATOR_LAYER && [l.a, l.b].iter().any(|p| (p.x - mark[0]).hypot(p.y - mark[1]) < 1.0) =>
+        {
+            None
+        }
+        k => Some(k.clone()),
+    });
+    assert!(removed >= 1, "no dimension removed");
+    let inputs2 = DeviceInputs::read(&dxf, &map);
+    assert_eq!(inputs2.locators.len(), inputs.locators.len() - 1);
+    let read = elec_reader::read_devices(&dxf, &map, &inputs2);
+    let f = found_at(&read.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert!(!f.arch_positioned && f.field_decision && f.placement == "rule" && f.position_source.is_empty(), "{f:?}");
+    let wall = f.zone_wall_ft.unwrap();
+    let zone = f.zone_ft.unwrap();
+    assert!((wall[0][1] - wall[1][1]).abs() < 1e-9, "not an east–west wall: {wall:?}");
+    assert!(zone[0] <= td.at_ft[0] && td.at_ft[0] <= zone[1], "zone {zone:?} misses x {}", td.at_ft[0]);
+    assert!((wall[0][1] - td.at_ft[1]).abs() < 1.0, "wall {wall:?} is not the receptacle's wall (y {})", td.at_ft[1]);
+}
 
-    // Report.
-    eprintln!(
-        "elec_reader seed=3: TP={}, FP={}, FN={}, P={:.2}, R={:.2}, H_MAE={:.1}in, kind={:.2}",
-        s.true_positives, s.false_positives, s.false_negatives, s.precision, s.recall, s.height_mae_in, s.kind_accuracy
-    );
+#[test]
+fn elec_reader_legend_height_is_the_second_source() {
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+    let (mut dxf, map, inputs) = elec_docs(&set);
+    let base = elec_reader::read_devices(&dxf, &map, &inputs);
+    let legend = base.legends.get("E-201").unwrap();
+    let rec = legend.iter().find(|e| e.kind == "receptacle").unwrap();
+    assert_eq!(rec.mounting_in, Some(18.0));
+    assert!(rec.symbol.contains("circle") && rec.description.contains("RECEPTACLE"), "{rec:?}");
+    // A receptacle with its height note printed.
+    let td = t.elec_devices.iter().find(|d| d.sheet == "E-201" && d.kind == "receptacle").unwrap();
+    let f = found_at(&base.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert_eq!((f.height_source.as_str(), f.mounting_in), ("note", 18.0));
+
+    // Without the note (and with the legend saying +20"): the legend's height, source "legend".
+    let al = alignment(&map, "E-201");
+    let c = model_at(&al, td.drawn_ft);
+    edit_sheet(&mut dxf, "E-201", &|e| match &e.kind {
+        EntityKind::Text(x)
+            if e.common.layer == "TEXT" && x.value.starts_with('+') && anchor(&e.kind).is_some_and(|p| (p[0] - c[0]).hypot(p[1] - c[1]) < 14.0) =>
+        {
+            None
+        }
+        EntityKind::Text(x) if e.common.layer == "LEGEND" && x.value.contains("RECEPTACLE") => {
+            let mut x = x.clone();
+            x.value = x.value.replace("+18\"", "+20\"");
+            Some(EntityKind::Text(x))
+        }
+        k => Some(k.clone()),
+    });
+    let read = elec_reader::read_devices(&dxf, &map, &inputs);
+    let f = found_at(&read.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert_eq!((f.height_source.as_str(), f.mounting_in), ("legend", 20.0), "{f:?}");
+    let z = inputs.levels.iter().find(|l| l.code == td.level).unwrap().elevation_ft + 20.0 / 12.0;
+    assert!((f.at_ft[2] - z).abs() < 1e-9);
+}
+
+#[test]
+fn elec_reader_rules_file_sets_rule_heights() {
+    // The shipped rules file parses and holds the defaults.
+    let shipped = MountingRules::from_json(elec_reader::DEFAULT_RULES_JSON).unwrap();
+    assert_eq!(shipped, MountingRules::default());
+    assert_eq!((shipped.height_in("receptacle"), shipped.height_in("switch"), shipped.height_in("disconnect")), (18.0, 46.0, 60.0));
+    assert!(shipped.is_ceiling("light_fixture") && !shipped.is_ceiling("receptacle"));
+    // Hostile or broken files are errors, not panics.
+    for bad in ["not json", r#"{"heights_in":{"receptacle":-4}}"#, r#"{"heights_in":{"receptacle":9000}}"#, r#"{"default_ceiling_ft":0}"#] {
+        assert!(MountingRules::from_json(bad).is_err(), "{bad}");
+    }
+
+    // A receptacle with no note, on a sheet whose legend gives no receptacle height: the rule.
+    let set = generate(3).unwrap();
+    let t = &set.truth;
+    let (mut dxf, map, inputs) = elec_docs(&set);
+    let td = t.elec_devices.iter().find(|d| d.sheet == "E-201" && d.kind == "receptacle").unwrap();
+    let al = alignment(&map, "E-201");
+    let c = model_at(&al, td.drawn_ft);
+    edit_sheet(&mut dxf, "E-201", &|e| match &e.kind {
+        EntityKind::Text(x)
+            if e.common.layer == "TEXT" && x.value.starts_with('+') && anchor(&e.kind).is_some_and(|p| (p[0] - c[0]).hypot(p[1] - c[1]) < 14.0) =>
+        {
+            None
+        }
+        EntityKind::Text(x) if e.common.layer == "LEGEND" && x.value.contains("RECEPTACLE") => {
+            let mut x = x.clone();
+            x.value = "DUPLEX RECEPTACLE".into();
+            Some(EntityKind::Text(x))
+        }
+        k => Some(k.clone()),
+    });
+    let read = elec_reader::read_devices(&dxf, &map, &inputs);
+    let f = found_at(&read.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert_eq!((f.height_source.as_str(), f.mounting_in), ("rule", 18.0), "{f:?}");
+
+    // An edited project rules file moves it; a folder without one keeps the defaults.
+    let dir = std::env::temp_dir().join(format!("elec-rules-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(MountingRules::for_project(&dir).unwrap(), shipped);
+    std::fs::write(dir.join(elec_reader::RULES_FILE_NAME), elec_reader::DEFAULT_RULES_JSON.replace("\"receptacle\": 18", "\"receptacle\": 15"))
+        .unwrap();
+    let edited = MountingRules::for_project(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(edited.height_in("receptacle"), 15.0);
+    let read = elec_reader::read_devices(&dxf, &map, &DeviceInputs { rules: edited, ..inputs.clone() });
+    let f = found_at(&read.devices, &td.level, &td.kind, td.drawn_ft, 0.5).unwrap();
+    assert_eq!((f.height_source.as_str(), f.mounting_in), ("rule", 15.0), "{f:?}");
+    // Devices with their own notes don't move.
+    let noted = read.devices.iter().filter(|d| d.kind == "receptacle" && d.height_source == "note").count();
+    assert!(noted > 50 && read.devices.iter().filter(|d| d.kind == "receptacle" && d.height_source == "note").all(|d| d.mounting_in == 18.0));
 }
 
 #[test]
@@ -532,18 +858,6 @@ fn elec_reader_3d_output_covers_all_kinds() {
 }
 
 #[test]
-fn elec_reader_zone_containment_for_non_arch_devices() {
-    let t = truth_for(5);
-    let perfect = elec_reader::perfect_devices(&t);
-    let s = elec_reader::score_devices(&t, &perfect, 5.0);
-    // For perfect devices, zone containment should be 1.0 (the zone contains the truth).
-    let non_arch = t.elec_devices.iter().filter(|d| !d.arch_positioned).count();
-    if non_arch > 0 {
-        assert!((s.zone_containment - 1.0).abs() < 1e-9, "zone containment should be 1.0 for perfect devices: {}", s.zone_containment);
-    }
-}
-
-#[test]
 fn elec_reader_classify_legend_works() {
     assert_eq!(elec_reader::classify_legend("A", "2X4 RECESSED TROFFER").as_deref(), Some("light_fixture"));
     assert_eq!(elec_reader::classify_legend("S", "LIGHT SWITCH").as_deref(), Some("switch"));
@@ -555,122 +869,6 @@ fn elec_reader_classify_legend_works() {
     assert_eq!(elec_reader::classify_legend("JB", "JUNCTION BOX").as_deref(), Some("junction_box"));
     assert_eq!(elec_reader::classify_legend("DS", "DISCONNECT SWITCH").as_deref(), Some("disconnect"));
 }
-
-#[test]
-fn elec_reader_default_heights_are_correct() {
-    // Verify the default mounting rules match what the fixture generator produces.
-    let t = truth_for(2);
-    for d in &t.elec_devices {
-        match d.kind.as_str() {
-            "receptacle" | "data_outlet" => {
-                assert_eq!(d.mounting_in, 18.0, "{} {} should be 18\" AFF", d.kind, d.id);
-            }
-            "switch" => {
-                assert_eq!(d.mounting_in, 46.0, "switch {} should be 46\"", d.id);
-            }
-            "disconnect" => {
-                assert_eq!(d.mounting_in, 60.0, "disconnect {} should be 60\"", d.id);
-            }
-            _ => {}
-        }
-    }
-}
-
-#[test]
-fn elec_reader_esheet_offsets_do_not_move_model_devices() {
-    // The CORRECTION: positions come from architectural sheets / placement rules, not from
-    // where the symbol sits on the diagrammatic E-sheet. Verify that for arch-positioned
-    // devices, the reader's output position is closer to the truth's true position (at_ft)
-    // than to the truth's diagrammatic drawn position (drawn_ft).
-    let set = generate(3).unwrap();
-    let t = &set.truth;
-
-    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
-    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
-    let dxf_data: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E" && s.level.is_some())
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
-
-    let (found, _) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
-
-    let mut checked = 0usize;
-    for fd in &found {
-        if fd.room.is_empty() || !fd.arch_positioned {
-            continue;
-        }
-        // Find the closest truth device of the same kind and level.
-        let td = t.elec_devices.iter().filter(|d| d.level == fd.level && d.kind == fd.kind && d.arch_positioned).min_by(|a, b| {
-            let da = (a.at_ft[0] - fd.at_ft[0]).powi(2) + (a.at_ft[1] - fd.at_ft[1]).powi(2);
-            let db = (b.at_ft[0] - fd.at_ft[0]).powi(2) + (b.at_ft[1] - fd.at_ft[1]).powi(2);
-            da.total_cmp(&db)
-        });
-        let Some(td) = td else { continue };
-
-        let dist_truth = ((fd.at_ft[0] - td.at_ft[0]).powi(2) + (fd.at_ft[1] - td.at_ft[1]).powi(2)).sqrt();
-
-        // Only verify devices that actually matched (within scoring tolerance).
-        // Devices placed in the wrong room due to alignment/jitter are false positives
-        // handled by the scorer, not a test of whether positions come from rules.
-        if dist_truth > 5.0 {
-            continue;
-        }
-
-        let dist_drawn = ((fd.at_ft[0] - td.drawn_ft[0]).powi(2) + (fd.at_ft[1] - td.drawn_ft[1]).powi(2)).sqrt();
-
-        // The reader's position must be at least as close to the true position as to the
-        // diagrammatic E-sheet position (i.e. it derived position from rules, not E-sheet).
-        assert!(
-            dist_truth <= dist_drawn + 0.01 || dist_truth < 0.5,
-            "arch {} in {} closer to drawn ({:.2} ft) than truth ({:.2} ft)",
-            td.kind,
-            td.room,
-            dist_drawn,
-            dist_truth
-        );
-        checked += 1;
-    }
-    assert!(checked > 0, "no arch-positioned devices to verify");
-    eprintln!("esheet_offsets: verified {checked} arch-positioned devices derive from rules, not E-sheet");
-}
-
-#[test]
-fn elec_reader_zones_contain_truth_positions() {
-    // For zone (field-decision) devices, the reader's zone must contain the truth position.
-    let set = generate(3).unwrap();
-    let t = &set.truth;
-
-    let all_dxf: Vec<(String, Vec<u8>)> = t.sheets.iter().filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec()))).collect();
-    let sheet_map = sheet_reader::recognise_fixture_set(&all_dxf);
-    let dxf_data: Vec<(String, Vec<u8>)> = t
-        .sheets
-        .iter()
-        .filter(|s| s.discipline == "E" && s.level.is_some())
-        .filter_map(|s| set.file(&s.dxf).map(|b| (s.number.clone(), b.to_vec())))
-        .collect();
-
-    let (found, _) = elec_reader::read_devices(&dxf_data, &sheet_map, t);
-    let s = elec_reader::score_devices(t, &found, 5.0);
-
-    // Zone containment for matched zone devices should be high.
-    let non_arch_count = t.elec_devices.iter().filter(|d| !d.arch_positioned).count();
-    if non_arch_count > 0 {
-        assert!(
-            s.zone_containment >= 0.8,
-            "zone containment {:.2} too low (expected >= 0.8); non-arch truth devices: {}",
-            s.zone_containment,
-            non_arch_count
-        );
-    }
-    eprintln!(
-        "zones_contain_truth: containment={:.2}, non-arch={}, TP={}, FP={}, FN={}",
-        s.zone_containment, non_arch_count, s.true_positives, s.false_positives, s.false_negatives
-    );
-}
-
-// ===== Hotel tests (Q304) =====
 
 #[test]
 fn hotel_deterministic_small() {

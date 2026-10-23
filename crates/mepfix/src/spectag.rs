@@ -445,7 +445,8 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = crate::sheet_reader::recognise_fixture_set(&dxf);
-    let (mut devices, _) = crate::elec_reader::read_devices(&dxf, &map, &set.truth);
+    let inputs = crate::elec_reader::DeviceInputs::read(&dxf, &map);
+    let mut devices = crate::elec_reader::read_devices(&dxf, &map, &inputs).devices;
     let runs = crate::conduit_reader::read_conduits(&dxf, &map);
     let mut tables = Vec::new();
     for (n, b) in &dxf {

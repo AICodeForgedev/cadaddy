@@ -541,9 +541,9 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("light_2x4", "2X4 RECESSED TROFFER"));
             legend.push(item("light_2x2", "2X2 RECESSED TROFFER"));
             legend.push(item("light_down", "RECESSED DOWNLIGHT"));
-            legend.push(item("elec_switch", "LIGHT SWITCH"));
+            legend.push(item("elec_switch", "LIGHT SWITCH, +46\" AFF U.N.O."));
             legend.push(item("exit_sign", "EXIT SIGN"));
-            legend.push(item("emergency_light", "EMERGENCY LIGHT"));
+            legend.push(item("emergency_light", "EMERGENCY LIGHT, +84\" AFF U.N.O."));
             legend.push(item("junction_box", "JUNCTION BOX"));
             legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
             legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
@@ -561,10 +561,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("cable_tray", "CABLE TRAY (WIDTH x DEPTH), LADDER"));
             legend.push(item("conduit_bank", "FEEDER CONDUIT BANK ((QTY) SIZE)"));
             legend.push(item("riser_up", "CONDUIT UP / DOWN"));
-            legend.push(item("receptacle", "DUPLEX RECEPTACLE"));
-            legend.push(item("data_outlet", "DATA/TELECOM OUTLET"));
+            legend.push(item("receptacle", "DUPLEX RECEPTACLE, +18\" AFF U.N.O."));
+            legend.push(item("data_outlet", "DATA/TELECOM OUTLET, +18\" AFF U.N.O."));
             legend.push(item("floor_box", "FLOOR BOX"));
-            legend.push(item("disconnect", "DISCONNECT SWITCH"));
+            legend.push(item("disconnect", "DISCONNECT SWITCH, +60\" AFF U.N.O."));
             legend.push(item("homerun", "HOMERUN TO PANEL (CIRCUIT NO.)"));
             legend.push(item("conduit", "CONDUIT RUN (SIZE)"));
             legend.push(item("elec_panel", "PANELBOARD"));
@@ -652,6 +652,16 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
     }
     // Draw callout symbols on plan sheets.
     draw_callouts(&mut pen, t, sh);
+    // Where the A-sheets fix an electrical device: dimensioned on the floor plan, light fixtures
+    // on the reflected ceiling plan.
+    if sh.discipline == "A" && !level.is_empty() {
+        let title = sh.title.to_ascii_uppercase();
+        if title.contains("REFLECTED CEILING") {
+            rcp_light_fixtures(&mut pen, t, &level);
+        } else if title.contains("FLOOR PLAN") && !title.contains("ENLARGED") && device_locators(&mut pen, t, st, &level) {
+            legend.push(item("device_locator", "ELECTRICAL DEVICE LOCATION, DIMENSIONED (TYPE PER E-SHEETS)"));
+        }
+    }
     title_block(&mut pen, t, st, sh, &level, &legend, &abbr);
     (pen.d, legend, abbr)
 }
@@ -1805,6 +1815,81 @@ pub fn gear_tables(t: &Truth) -> Vec<(&'static str, Vec<Vec<String>>)> {
         ]);
     }
     vec![("ELECTRICAL EQUIPMENT SCHEDULE", eq), ("LUG SCHEDULE", lugs), ("FEEDER SCHEDULE", feeders)]
+}
+
+/// The short mark an architect writes beside a dimensioned electrical device.
+pub fn device_mark(kind: &str) -> &'static str {
+    match kind {
+        "receptacle" => "R",
+        "switch" => "S",
+        "data_outlet" => "D",
+        "floor_box" => "FB",
+        "disconnect" => "DS",
+        "junction_box" => "JB",
+        "emergency_light" => "EM",
+        "exit_sign" => "X",
+        _ => "E",
+    }
+}
+
+/// On an A floor plan: every device whose position the architect fixes (the truth's
+/// `arch_positioned`, other than light fixtures, which the RCP locates) as a small circle with its
+/// mark, dimensioned from its room's west and south walls (`E-DEVC-IDEN`). Returns whether any was
+/// drawn.
+fn device_locators(pen: &mut Pen, t: &Truth, st: &Style, level: &str) -> bool {
+    let rot = readable(pen.rot());
+    let mut any = false;
+    for d in t.elec_devices.iter().filter(|d| d.level == level && d.arch_positioned && d.kind != "light_fixture") {
+        let at = [d.at_ft[0], d.at_ft[1]];
+        let c = pen.b(at);
+        pen.circle("E-DEVC-IDEN", c, pen.bl(0.25));
+        let lp = pen.b([at[0] + 0.4, at[1] + 0.4]);
+        pen.text("E-DEVC-IDEN", lp, st.text_in * 0.7, device_mark(&d.kind), rot, HAlign::Left, VAlign::Bottom);
+        any = true;
+        let Some(rm) = t.building.rooms.iter().find(|r| {
+            r.level == level
+                && at[0] >= r.min_ft[0] - 0.01
+                && at[0] <= r.max_ft[0] + 0.01
+                && at[1] >= r.min_ft[1] - 0.01
+                && at[1] <= r.max_ft[1] + 0.01
+        }) else {
+            continue;
+        };
+        // From the west wall to the device, and from the south wall to the device: each a
+        // dimension line ending at the device's centre, with ticks and its length.
+        for (from, horizontal) in [([rm.min_ft[0], at[1]], true), ([at[0], rm.min_ft[1]], false)] {
+            let len = if horizontal { at[0] - from[0] } else { at[1] - from[1] };
+            if len < 0.05 {
+                continue;
+            }
+            let (a, b) = (pen.b(from), c);
+            pen.line("E-DEVC-IDEN", a, b);
+            let tick = pen.bl(0.2);
+            for p in [a, b] {
+                pen.line("E-DEVC-IDEN", Vec2::new(p.x - tick, p.y - tick), Vec2::new(p.x + tick, p.y + tick));
+            }
+            let mid = if horizontal { [(from[0] + at[0]) / 2.0, at[1] + 0.3] } else { [at[0] + 0.3, (from[1] + at[1]) / 2.0] };
+            let mp = pen.b(mid);
+            pen.text("E-DEVC-IDEN", mp, st.text_in * 0.6, &feet_inches(len), rot, HAlign::Center, VAlign::Bottom);
+        }
+    }
+    any
+}
+
+/// On a reflected ceiling plan: the light fixtures the architect locates (the truth's
+/// `arch_positioned` ones), outlined at their true size and place (`E-LITE`).
+fn rcp_light_fixtures(pen: &mut Pen, t: &Truth, level: &str) {
+    for d in t.elec_devices.iter().filter(|d| d.level == level && d.arch_positioned && d.kind == "light_fixture") {
+        let (x, y) = (d.at_ft[0], d.at_ft[1]);
+        match d.type_tag.as_str() {
+            "A" => pen.brect("E-LITE", [x - 1.0, y - 2.0], [x + 1.0, y + 2.0]),
+            "B" => pen.brect("E-LITE", [x - 1.0, y - 1.0], [x + 1.0, y + 1.0]),
+            _ => {
+                let c = pen.b([x, y]);
+                pen.circle("E-LITE", c, pen.bl(0.35));
+            }
+        }
+    }
 }
 
 fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, _lighting: bool) {

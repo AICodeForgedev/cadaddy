@@ -250,7 +250,11 @@ fn run_size(size_name: &str, size: HotelSize, seed: u64, only: &[String], scratc
             (p, r)
         });
         let heads = b.stage("read_sprinklers", |_| cadaddy_mepfix::sprinkler_reader::read_sprinklers(&dxf, &map, &ceil));
-        let (devices, panels) = b.stage("read_devices", |_| cadaddy_mepfix::elec_reader::read_devices(&dxf, &map, &set.truth));
+        let (devices, panels) = b.stage("read_devices", |_| {
+            let inputs = cadaddy_mepfix::elec_reader::DeviceInputs::read(&dxf, &map);
+            let r = cadaddy_mepfix::elec_reader::read_devices(&dxf, &map, &inputs);
+            (r.devices, r.panels)
+        });
         let numbers: Vec<String> = set.truth.sheets.iter().map(|s| s.number.clone()).collect();
         let (resolved, broken) = b.stage("read_callouts", |_| cadaddy_mepfix::callout_reader::resolve_callouts(&dxf, &numbers));
         b.notes.push(format!(

@@ -1,0 +1,14 @@
+{
+  "_about": "Default device mounting heights for the electrical device reader. Used only when a device has no height note on the E-sheet and the sheet legend gives none. Copy this file into a project folder as mounting_heights.json to change it for that project.",
+  "heights_in": {
+    "receptacle": 18,
+    "data_outlet": 18,
+    "switch": 46,
+    "disconnect": 60,
+    "emergency_light": 84,
+    "floor_box": 0
+  },
+  "ceiling": ["light_fixture", "exit_sign", "junction_box"],
+  "other_in": 18,
+  "default_ceiling_ft": 9
+}
