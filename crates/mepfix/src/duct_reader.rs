@@ -253,6 +253,26 @@ fn rectangles(d: &Drawing, layer_filter: &str) -> Vec<(Vec2, Vec2, String)> {
     out
 }
 
+/// Extract rectangles from closed 4-vertex polylines on any layer.
+fn rectangles_all(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if let EntityKind::LwPolyline(p) = &e.kind
+            && p.closed
+            && p.vertices.len() == 4
+        {
+            let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+            if pts.iter().all(|p| p.is_finite()) {
+                let min = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
+                let max =
+                    Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
+                out.push((min, max, e.common.layer.to_string()));
+            }
+        }
+    }
+    out
+}
+
 fn minmax(a: f64, b: f64) -> (f64, f64) {
     if a <= b { (a, b) } else { (b, a) }
 }
@@ -277,11 +297,17 @@ struct DuctPair {
     half_w: f64,
 }
 
-/// Find parallel line pairs on the DUCT layer that represent duct walls.
-fn duct_pairs(segs: &[LineSeg]) -> Vec<DuctPair> {
+/// Find parallel line pairs that represent duct walls.
+/// When `all_layers` is false, only DUCT-layer segments are used (the original behaviour).
+/// When true, segments on any layer are considered.
+fn duct_pairs(segs: &[LineSeg], all_layers: bool) -> Vec<DuctPair> {
     use std::f64::consts::PI;
 
-    let duct_segs: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect();
+    let duct_segs: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     if duct_segs.is_empty() {
         return Vec::new();
     }
@@ -361,6 +387,9 @@ pub struct DuctOptions {
     /// rest: what the vector sheets (which have centrelines) were tuned on. Scans, whose
     /// walls come in many pieces and whose centrelines are faint, need it on.
     pub all_pairs: bool,
+    /// When true, read line segments from ALL layers instead of only the DUCT layer.
+    /// Use for PDF-imported mechanical sheets where entities are on pen/colour layers.
+    pub all_layers: bool,
 }
 
 /// Chain parallel pairs that share an endpoint into continuous runs.
@@ -549,22 +578,42 @@ fn extract_system(text: &str, abbr_map: &BTreeMap<String, String>) -> Option<Str
 
 // ---- Fitting detection -----------------------------------------------------
 
-/// Detect fittings from arcs on the DUCT layer and geometry patterns.
-fn detect_fittings(d: &Drawing, runs: &[DuctRun]) -> Vec<DetectedFitting> {
+/// Detect fittings from arcs and geometry patterns.
+/// When `all_layers` is true, arcs/rectangles on any layer are considered.
+fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<DetectedFitting> {
     let mut fittings = Vec::new();
 
-    // Arcs on DUCT layer → elbows.
+    // Arcs near runs → elbows.
     for (center, _radius, _start, _end, layer) in arcs(d) {
-        if !layer.eq_ignore_ascii_case("DUCT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("DUCT") {
             continue;
+        }
+        // In all_layers mode, only count arcs near a known run.
+        if all_layers {
+            let near_run = runs.iter().any(|r| {
+                r.points.windows(2).any(|w| {
+                    if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
+                        seg_dist(center, *a, *b) < r.width_in.max(6.0)
+                    } else {
+                        false
+                    }
+                })
+            });
+            if !near_run {
+                continue;
+            }
         }
         fittings.push(DetectedFitting { kind: "elbow".into(), at: center, confidence: 0.7 });
     }
 
-    // Turn markers: rectangles on DUCT layer with internal crossing lines (box with X).
-    let duct_rects = rectangles(d, "DUCT");
+    // Turn markers: rectangles with internal crossing lines (box with X).
+    let duct_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DUCT") };
     let segs = line_segments(d);
-    let duct_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect();
+    let duct_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     for (min, max, _) in &duct_rects {
         let center = (*min + *max) * 0.5;
         let w = max.x - min.x;
@@ -621,12 +670,16 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun]) -> Vec<DetectedFitting> {
 
 // ---- Terminal detection ----------------------------------------------------
 
-/// Detect terminals (diffusers, grilles) from DEVICE layer patterns.
-fn detect_terminals(d: &Drawing) -> Vec<DetectedTerminal> {
+/// Detect terminals (diffusers, grilles) from DEVICE layer (or any layer in all_layers mode).
+fn detect_terminals(d: &Drawing, all_layers: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
-    let device_rects = rectangles(d, "DEVICE");
+    let device_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DEVICE") };
     let segs = line_segments(d);
-    let device_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect();
+    let device_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
+    };
 
     for (min, max, _) in &device_rects {
         let center = (*min + *max) * 0.5;
@@ -675,10 +728,10 @@ fn detect_terminals(d: &Drawing) -> Vec<DetectedTerminal> {
 
 // ---- Equipment detection ---------------------------------------------------
 
-/// Detect equipment boxes (AHU, VAV) from EQUIP layer.
-fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
+/// Detect equipment boxes (AHU, VAV, RTU, PTAC, EF) from EQUIP layer or any layer.
+fn detect_equipment(d: &Drawing, all_layers: bool) -> Vec<DetectedEquipment> {
     let mut equipment = Vec::new();
-    let equip_rects = rectangles(d, "EQUIP");
+    let equip_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "EQUIP") };
     let texts = text_entities(d);
 
     for (min, max, _) in &equip_rects {
@@ -701,10 +754,19 @@ fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
                 let up = t.to_ascii_uppercase();
                 let k = if up.contains("AHU") {
                     "ahu"
+                } else if up.contains("RTU") {
+                    "rtu"
+                } else if up.contains("PTAC") {
+                    "ptac"
                 } else if up.contains("VAV") || up.contains("VB") {
                     "vav"
-                } else if up.contains("EF") || up.contains("FAN") {
+                } else if up.contains("EF") || up.contains("FAN") || up.contains("EXHAUST") {
                     "exhaust_fan"
+                } else if up.contains("WH") || up.contains("WATER HEATER") {
+                    "water_heater"
+                } else if all_layers {
+                    // In all_layers mode, accept any tagged rectangle near mechanical text
+                    continue;
                 } else {
                     "unknown"
                 };
@@ -776,14 +838,18 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
 // ---- Tag attachment --------------------------------------------------------
 
 /// Attach size/height/system tags to the nearest duct run.
-fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>) -> Vec<DetectedTag> {
+fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool) -> Vec<DetectedTag> {
     let texts = text_entities(d);
     let segs = line_segments(d);
-    let text_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect();
+    let text_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect()
+    };
     let mut detected_tags = Vec::new();
 
     for (text, at, layer, _h) in &texts {
-        if !layer.eq_ignore_ascii_case("TEXT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("TEXT") {
             continue;
         }
         let size = parse_size(text);
@@ -871,12 +937,12 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
 // ---- System inference from pipe labels in breaks ---------------------------
 
 /// Infer system codes from labels drawn in breaks along runs (pipe-style `SA` labels).
-fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>) {
+fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool) {
     let texts = text_entities(d);
     let reach = 20.0; // model inches — labels sit right on the centreline
 
     for (text, at, layer, _) in &texts {
-        if !layer.eq_ignore_ascii_case("TEXT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("TEXT") {
             continue;
         }
         let up = text.trim().to_ascii_uppercase();
@@ -1034,7 +1100,11 @@ fn infer_systems_from_equipment(runs: &mut [DuctRun], equip: &[DetectedEquipment
 // ---- Centreline fallback ---------------------------------------------------
 
 /// Add runs from CENTRE-layer lines not already covered by a parallel-pair run.
-fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
+/// In all_layers mode, centreline fallback is skipped (pairs already use all layers).
+fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg], all_layers: bool) {
+    if all_layers {
+        return; // pairs already use all layers; centreline fallback would produce noise
+    }
     let centre_segs: Vec<&LineSeg> =
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("CENTRE") || s.layer.eq_ignore_ascii_case("CENTER")).collect();
     if centre_segs.is_empty() {
@@ -1081,32 +1151,34 @@ pub fn read_ducts(d: &Drawing, sh: &Sheet) -> DuctNetwork {
 
 /// [`read_ducts`] with options.
 pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork {
-    // 1. Find parallel line pairs on DUCT layer.
+    let al = o.all_layers;
+
+    // 1. Find parallel line pairs (DUCT layer, or all layers).
     let segs = line_segments(d);
-    let pairs = duct_pairs(&segs);
+    let pairs = duct_pairs(&segs, al);
 
     // 2. Chain pairs into runs.
     let mut runs = chain_runs(&pairs, o);
 
-    // 2b. Add centreline-based runs that aren't covered by pairs.
-    add_centreline_runs(&mut runs, &segs);
+    // 2b. Add centreline-based runs that aren't covered by pairs (skipped in all_layers mode).
+    add_centreline_runs(&mut runs, &segs, al);
 
     // 3. Read legend and abbreviations.
     let (legend, abbr_map) = read_legend(d);
 
     // 4. Attach size/height/system tags.
-    let tags = attach_tags(&mut runs, d, &abbr_map);
+    let tags = attach_tags(&mut runs, d, &abbr_map, al);
 
     // 5. Infer systems from labels in run breaks.
-    infer_systems_from_labels(&mut runs, d, &abbr_map);
+    infer_systems_from_labels(&mut runs, d, &abbr_map, al);
 
     // 6. Snap widths and infer missing depths.
     infer_depths_and_snap(&mut runs);
 
     // 7. Detect fittings, terminals, equipment.
-    let fittings = detect_fittings(d, &runs);
-    let terminals = detect_terminals(d);
-    let equipment = detect_equipment(d);
+    let fittings = detect_fittings(d, &runs, al);
+    let terminals = detect_terminals(d, al);
+    let equipment = detect_equipment(d, al);
 
     // 8. Infer systems from equipment proximity and terminal tags.
     infer_systems_from_equipment(&mut runs, &equipment, &terminals);
@@ -1114,6 +1186,12 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
     let abbreviations = abbr_map;
 
     DuctNetwork { runs, fittings, terminals, equipment, tags, legend, abbreviations }
+}
+
+/// Read ducts from a drawing with all-layers mode (for PDF-imported mechanical sheets).
+pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
+    let sh = Sheet::default();
+    read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true })
 }
 
 /// Read ducts and score against truth for a single mechanical sheet.

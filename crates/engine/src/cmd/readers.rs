@@ -4,8 +4,11 @@
 //!
 //! Q5128: connects every print/MEP reader to import, commands and agent tools.
 
+use cadaddy_mepfix::duct_reader::{self, DuctNetwork};
 use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
+use cadaddy_walk3d::{DuctType, MepEquipment, MepKind, MepRun, MepSystem, MepTerminal};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use super::{CommandSpec, bool_or, str_param};
 use crate::{EngineError, Result, Session};
@@ -215,32 +218,183 @@ fn run_mep_heights(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── ducts.read ──────────────────────────────────────────────────────────────
 
-fn run_duct_read(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _level = str_param(p, "level");
+fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
+    let level_filter = str_param(p, "level").map(str::to_string);
     let apply = bool_or(p, "apply", false);
 
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
-        }
-    };
+    // Read from the current drawing using all-layers mode (handles PDF-imported M sheets
+    // where entities are on pen layers, not standard MEP layer names).
+    let net = read_mech_from_drawing(s)?;
 
-    let m_sheets: Vec<&mep_printset::SheetEntry> =
-        project.sheets.iter().filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
+    let total_runs = net.runs.len();
+    let length_ft: f64 = net.runs.iter().map(|r| run_length_ft(&r.points, r.width_in)).sum();
+    let terminals = net.terminals.len();
+    let equipment = net.equipment.len();
+    let fittings = net.fittings.len();
+
+    // Also check the printset for M sheets (for informational reporting).
+    let m_sheets = project(s).map_or(0, |p| {
+        p.sheets.iter().filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).count()
+    });
+
+    if apply && total_runs > 0 {
+        apply_duct_network(s, &net, level_filter.as_deref())?;
+    }
+
+    let mut warnings = Vec::new();
+    if total_runs == 0 {
+        warnings.push("mechanical sheet produced no duct runs — is this a schedule/detail sheet, or are the duct lines missing?");
+    }
+    if equipment == 0 && total_runs > 0 {
+        warnings.push("duct runs found but no equipment (RTU, AHU, PTAC, EF) — equipment may be on a separate sheet or use non-standard tags");
+    }
 
     Ok(json!({
-        "runs": 0,
-        "length_ft": 0.0,
-        "terminals": 0,
-        "sheets_read": m_sheets.len(),
-        "apply": apply,
-        "message": if m_sheets.is_empty() {
-            "no M-sheet plans found in the project"
-        } else {
-            "duct reader wired; DXF sheet loading integration pending"
-        },
+        "runs": total_runs,
+        "length_ft": (length_ft * 10.0).round() / 10.0,
+        "terminals": terminals,
+        "equipment": equipment,
+        "fittings": fittings,
+        "sheets_in_project": m_sheets,
+        "applied": apply && total_runs > 0,
+        "warnings": warnings,
     }))
+}
+
+/// Read mechanical (duct) data from the current drawing using the geometry-based reader.
+pub(crate) fn read_mech_from_drawing(s: &Session) -> Result<DuctNetwork> {
+    let d = s.doc()?;
+
+    // Try standard layers first (DUCT, DEVICE, EQUIP); if no runs found, fall back to all layers.
+    let sh = cadaddy_mepfix::truth::Sheet::default();
+    let net = duct_reader::read_ducts(d, &sh);
+    if !net.runs.is_empty() {
+        return Ok(net);
+    }
+
+    // Fall back to layer-agnostic mode for PDF imports.
+    Ok(duct_reader::read_ducts_any_layer(d))
+}
+
+/// Length of a duct run in feet (centreline path length, in model inches → feet).
+fn run_length_ft(points: &[cadaddy_geom::Vec2], _width: f64) -> f64 {
+    let mut total = 0.0;
+    for w in points.windows(2) {
+        if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
+            total += a.dist(*b);
+        }
+    }
+    total / 12.0 // model inches to feet
+}
+
+/// Convert a DuctNetwork into BuildingSpec types and store in the drawing's spec.
+fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&str>) -> Result<()> {
+    let (mut sp, _) = super::bspec::current(s, "ducts.read")?;
+
+    // Build MepSystems from the detected runs.
+    let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
+    for run in &net.runs {
+        let sys_name = run.system.clone().unwrap_or_else(|| "M-DUCT".to_string());
+        sys_map.entry(sys_name.clone()).or_insert_with(|| {
+            let duct_type = match sys_name.as_str() {
+                "SA" => Some(DuctType::Supply),
+                "RA" => Some(DuctType::Return),
+                "EA" => Some(DuctType::Exhaust),
+                "OA" => Some(DuctType::OutsideAir),
+                _ => None,
+            };
+            MepSystem {
+                name: sys_name.clone(),
+                layer: format!("M-{sys_name}"),
+                kind: MepKind::Duct,
+                size_in: [run.width_in, run.depth_in],
+                bottom_ft: run.bottom_ft.unwrap_or(10.0),
+                show: true,
+                duct_type,
+                color_index: duct_type.map_or(4, |dt| dt.default_color()),
+            }
+        });
+    }
+
+    // Add systems that don't exist yet.
+    for (name, sys) in &sys_map {
+        if !sp.mep.systems.iter().any(|s| s.name == *name) {
+            sp.mep.systems.push(sys.clone());
+        }
+    }
+
+    // Default level: first level in spec, or create one.
+    let default_level = sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string());
+
+    // Convert runs to MepRun.
+    let mut run_count = sp.mep.runs.len();
+    for dr in &net.runs {
+        let level = default_level.clone();
+        if level_filter.is_some_and(|f| !f.eq_ignore_ascii_case(&level)) {
+            continue;
+        }
+        run_count += 1;
+        let sys_name = dr.system.clone().unwrap_or_else(|| "M-DUCT".to_string());
+        sp.mep.runs.push(MepRun {
+            system: sys_name,
+            level: level.clone(),
+            points: dr.points.iter().map(|p| [p.x, p.y]).collect(),
+            size_in: [dr.width_in, dr.depth_in],
+            bottoms_ft: vec![dr.bottom_ft.unwrap_or(10.0); dr.points.len().saturating_sub(1).max(1)],
+            objects: Vec::new(),
+            id: format!("R{run_count}"),
+            encased: false,
+            size_source: if dr.confidence >= 0.85 { "tag" } else { "default" }.to_string(),
+            height_source: if dr.bottom_ft.is_some() { "tag" } else { "default" }.to_string(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+        });
+    }
+
+    // Convert terminals to MepTerminal.
+    for dt in &net.terminals {
+        let sys_name = match dt.kind.as_str() {
+            "supply_diffuser" => "SA",
+            "return_grille" => "RA",
+            "exhaust_grille" => "EA",
+            _ => "M-DUCT",
+        };
+        sp.mep.terminals.push(MepTerminal {
+            system: sys_name.to_string(),
+            level: default_level.clone(),
+            at: [dt.at.x, dt.at.y],
+            size_in: [12.0, 12.0],
+            bottom_ft: 8.5, // default diffuser height
+            terminal_kind: dt.kind.clone(),
+            objects: Vec::new(),
+        });
+    }
+
+    // Convert equipment to MepEquipment.
+    for de in &net.equipment {
+        sp.mep.equipment.push(MepEquipment {
+            tag: de.tag.clone(),
+            kind: de.kind.clone(),
+            level: default_level.clone(),
+            min: [de.min.x, de.min.y],
+            max: [de.max.x, de.max.y],
+            height_ft: 6.0, // default equipment height
+            systems: vec![
+                match de.kind.as_str() {
+                    "ahu" | "rtu" | "vav" => "SA".to_string(),
+                    "exhaust_fan" => "EA".to_string(),
+                    _ => "M-DUCT".to_string(),
+                },
+            ],
+            confidence: de.confidence,
+            ..MepEquipment::default()
+        });
+    }
+
+    // Store the updated spec.
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(())
 }
 
 // ─── pipes.read ──────────────────────────────────────────────────────────────
