@@ -1378,7 +1378,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if let Some(top) = r.top_ft {
             let Some(&pt) = r.points.first() else { continue };
             let bot = r.bottoms_ft.first().copied().unwrap_or(0.0);
-            if !(top > bot) {
+            if top.partial_cmp(&bot) != Some(std::cmp::Ordering::Greater) {
                 continue;
             }
             let (z0, z1) = (s.base_z + bot * upf, s.base_z + top * upf);
