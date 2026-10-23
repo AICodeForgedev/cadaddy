@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CMD_UNSET_SPEC, "Remove BIM Spec from Entities", run_unset_spec)
             .params("{handles: [string]} → {cleared}"),
         CommandSpec::new(CMD_COLOUR, "Colour by BIM Property", run_colour)
-            .params("{by: mark|category|<fieldKey>|none} → {legend: [{key, color (ACI)}], coloured}"),
+            .params("{by: string (mark | category | none | a BIM field key)} → {legend: [{key, color (ACI)}], coloured}"),
     ]
 }
 
