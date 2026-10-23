@@ -14,6 +14,7 @@
 //! `catch_unwind` returns an `Err`, the caller reads it with [`take_backtrace`].
 
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -25,7 +26,15 @@ pub const MAX_HISTORY: usize = 50;
 /// Counter so two panics in the same second get different file names.
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Override for tests (so they don't write into the real settings folder).
+#[cfg(not(test))]
 static STORE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[cfg(test)]
+thread_local! {
+    /// Unit tests run in parallel and a guarded panic records on the panicking test's own thread,
+    /// so the override is per thread: one test's reports never land in another test's folder.
+    static STORE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
 
 thread_local! {
     /// Backtrace captured by the panic hook, read by `take_backtrace`.
@@ -62,27 +71,30 @@ pub fn take_backtrace() -> Option<String> {
 
 /// Set the diagnostics folder for tests.
 pub fn set_store_dir(dir: Option<PathBuf>) {
+    #[cfg(not(test))]
     if let Ok(mut s) = STORE.lock() {
         *s = dir;
     }
+    #[cfg(test)]
+    STORE.with(|s| *s.borrow_mut() = dir);
 }
 
 /// The diagnostics folder: `STORE` override, else `<config_dir>/diagnostics`.
 /// Under `cfg(test)` the default is `None` so test panics never write into a real settings folder;
 /// tests that need a store call [`set_store_dir`] with an isolated temp directory.
 fn store_dir() -> Option<PathBuf> {
-    let s = STORE.lock().ok()?;
-    if s.is_some() {
-        return s.clone();
-    }
-    drop(s);
     #[cfg(not(test))]
     {
+        let s = STORE.lock().ok()?;
+        if s.is_some() {
+            return s.clone();
+        }
+        drop(s);
         crate::control_auth::config_dir().map(|d| d.join("diagnostics"))
     }
     #[cfg(test)]
     {
-        None
+        STORE.with(|s| s.borrow().clone())
     }
 }
 
