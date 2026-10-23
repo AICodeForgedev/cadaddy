@@ -367,26 +367,28 @@ pub fn assign_heights(res: &mut ConduitResult, ctx: &dyn Fn(&str) -> Option<Leve
     for level in levels {
         let Some(cx) = ctx(&level) else { continue };
         let mid = |a: [f64; 2], b: [f64; 2]| [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-        let seg = |id: String, size: f64, at: [f64; 2], note: Option<String>| SegmentInput {
+        let seg = |id: String, size: f64, from: [f64; 2], to: [f64; 2], note: Option<String>| SegmentInput {
             id,
             system: CONDUIT_SYSTEM.into(),
             kind: "conduit".into(),
             shape: "round".into(),
             size_in: [size, 0.0],
             level: level.clone(),
-            midpoint_ft: at,
+            midpoint_ft: mid(from, to),
+            from_ft: from,
+            to_ft: to,
             height_note: note,
             vertical: false,
         };
         let mut inputs = Vec::new();
         for (i, c) in res.conduits.iter().enumerate().filter(|(_, c)| c.level == level) {
             // A BOC note is a bottom: Q257's note parser reads it as `BOC @ …`.
-            inputs.push(seg(format!("c{i}"), c.size_in, mid(c.from_ft, c.to_ft), c.height_note.clone()));
+            inputs.push(seg(format!("c{i}"), c.size_in, c.from_ft, c.to_ft, c.height_note.clone()));
         }
         for (i, h) in res.homeruns.iter().enumerate().filter(|(_, h)| h.level == level) {
             for (j, w) in h.route_ft.windows(2).enumerate() {
                 if let [a, b] = w {
-                    inputs.push(seg(format!("h{i}-{j}"), 0.5, mid(*a, *b), None));
+                    inputs.push(seg(format!("h{i}-{j}"), 0.5, *a, *b, None));
                 }
             }
         }
