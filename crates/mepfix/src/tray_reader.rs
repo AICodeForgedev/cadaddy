@@ -241,6 +241,7 @@ fn read_sheet(res: &mut TrayResult, sh: &RecognisedSheet, d: &Drawing, level: &s
                     from_ft: c0,
                     to_ft: c1,
                     bottom_ft: bottom_near(*p),
+                    ..Default::default()
                 });
             }
         } else if let Some((n, size)) = parse_bank_tag(t) {
@@ -315,6 +316,7 @@ fn read_sheet(res: &mut TrayResult, sh: &RecognisedSheet, d: &Drawing, level: &s
                         from_ft: a,
                         to_ft: b,
                         bottom_ft: bottom,
+                        ..Default::default()
                     });
                 }
             }
