@@ -633,7 +633,7 @@ pub fn strip(pkg: &mut FieldPackage, title: &str, scrubber: &Scrubber) -> StripR
     }
     pkg.project = title.to_string();
     for n in pkg.notes.drain(..) {
-        r.note(&format!("field note {}", n.id), &format!("{} {}", n.author, n.text).trim().to_string());
+        r.note(&format!("field note {}", n.id), format!("{} {}", n.author, n.text).trim());
     }
     let sc = |s: &mut String, place: &str, r: &mut StripReport| *s = scrubber.scrub(s, place, r);
     for l in &mut pkg.levels {
