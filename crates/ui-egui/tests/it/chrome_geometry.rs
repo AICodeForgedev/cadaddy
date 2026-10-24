@@ -45,34 +45,38 @@ fn visible_text(shape: &Shape, clip: Rect, result: &mut Vec<(String, Rect)>) {
     }
 }
 
+fn check_status_labels_case(width: f32, height: f32, scale: f32, message: bool, overlaps: &mut Vec<String>) {
+    let mut h = harness(width, height, scale, message);
+    if let Ok(directory) = std::env::var("CRAFT_UI_VISUAL_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        h.render().unwrap().save(format!("{directory}/cad-{width}-{scale}-{message}.png")).unwrap();
+    }
+    let mut texts = Vec::new();
+    for shape in &h.output().shapes {
+        visible_text(&shape.shape, shape.clip_rect, &mut texts);
+    }
+    texts.retain(|(_, rect)| rect.center().y > height - 26.0);
+    // The current tab is always drawn; the others move to the layout list when the bar is narrow.
+    assert!(texts.iter().any(|(text, _)| text == "Model"));
+    if width >= 1200.0 {
+        assert!(texts.iter().any(|(text, _)| text == "Layout2"));
+    }
+    for (i, (first, first_rect)) in texts.iter().enumerate() {
+        for (second, second_rect) in texts.iter().skip(i + 1) {
+            if first_rect.intersects(*second_rect) {
+                overlaps.push(format!("{width}px @{scale}: {first:?} {first_rect:?} overlaps {second:?} {second_rect:?}"));
+            }
+        }
+    }
+}
+
 #[test]
 fn status_labels_never_overlap_at_standard_and_compact_sizes() {
     let mut overlaps = Vec::new();
     for (width, height) in [(1200.0, 760.0), (900.0, 560.0)] {
         for scale in [1.0, 2.0] {
             for message in [false, true] {
-                let mut h = harness(width, height, scale, message);
-                if let Ok(directory) = std::env::var("CRAFT_UI_VISUAL_DIR") {
-                    std::fs::create_dir_all(&directory).unwrap();
-                    h.render().unwrap().save(format!("{directory}/cad-{width}-{scale}-{message}.png")).unwrap();
-                }
-                let mut texts = Vec::new();
-                for shape in &h.output().shapes {
-                    visible_text(&shape.shape, shape.clip_rect, &mut texts);
-                }
-                texts.retain(|(_, rect)| rect.center().y > height - 26.0);
-                // The current tab is always drawn; the others move to the layout list when the bar is narrow.
-                assert!(texts.iter().any(|(text, _)| text == "Model"));
-                if width >= 1200.0 {
-                    assert!(texts.iter().any(|(text, _)| text == "Layout2"));
-                }
-                for (i, (first, first_rect)) in texts.iter().enumerate() {
-                    for (second, second_rect) in texts.iter().skip(i + 1) {
-                        if first_rect.intersects(*second_rect) {
-                            overlaps.push(format!("{width}px @{scale}: {first:?} {first_rect:?} overlaps {second:?} {second_rect:?}"));
-                        }
-                    }
-                }
+                check_status_labels_case(width, height, scale, message, &mut overlaps);
             }
         }
     }

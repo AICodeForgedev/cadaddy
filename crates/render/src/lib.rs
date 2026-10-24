@@ -1531,7 +1531,9 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
-        lt_factor: ctx.lt_factor,
+        // The reference's own linetype scale (group 48) multiplies that of the objects inside,
+        // as LTSCALE does for the drawing (tests/block_ltscale.rs).
+        lt_factor: ctx.lt_factor * if e.common.ltscale.is_finite() && e.common.ltscale > 0.0 { e.common.ltscale } else { 1.0 },
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,
