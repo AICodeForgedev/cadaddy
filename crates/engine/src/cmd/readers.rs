@@ -307,10 +307,10 @@ pub(crate) fn read_mech_from_drawing(s: &Session) -> Result<DuctNetwork> {
 
     // Skip notes/schedule/legend sheets that are at paper scale (DO NOT SCALE).
     // These have parallel lines from schedule tables that the reader misidentifies as duct.
-    if let Some(check) = super::import_check::stored_result(d) {
-        if check.do_not_scale.is_some() {
-            return Ok(DuctNetwork::default());
-        }
+    if let Some(check) = super::import_check::stored_result(d)
+        && check.do_not_scale.is_some()
+    {
+        return Ok(DuctNetwork::default());
     }
 
     // Try standard layers first (DUCT, DEVICE, EQUIP); if no runs found, fall back to all layers.
