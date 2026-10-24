@@ -153,6 +153,7 @@ fn tiny_drawing() -> Drawing {
 /// - ~14% wipeouts/rasters
 /// - 0 blocks
 /// - 40 grid circles
+///
 /// Must FAIL with SCALE, TEXT, FILLS, SYMBOLS named.
 fn e4_field_import() -> Drawing {
     let mut d = Drawing::new_imperial();
