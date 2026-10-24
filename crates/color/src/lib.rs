@@ -156,7 +156,7 @@ fn build_palette() -> [Rgb; 256] {
     for (slot, c) in p.iter_mut().zip(base) {
         *slot = c;
     }
-    let values = [255.0, 165.0, 127.0, 76.0, 38.0];
+    let values = [255.0, 204.0, 153.0, 127.0, 76.0];
     for i in 10..250usize {
         let hue = (i - 10) / 10; // 0..24, 15° each
         let sub = i % 10;
@@ -238,8 +238,12 @@ mod tests {
         assert_eq!(aci_rgb(1), Rgb(255, 0, 0));
         assert_eq!(aci_rgb(10), Rgb(255, 0, 0));
         assert_eq!(aci_rgb(11), Rgb(255, 127, 127));
-        assert_eq!(aci_rgb(12), Rgb(165, 0, 0));
-        assert_eq!(aci_rgb(13), Rgb(165, 82, 82));
+        assert_eq!(aci_rgb(12), Rgb(204, 0, 0));
+        assert_eq!(aci_rgb(13), Rgb(204, 102, 102));
+        assert_eq!(aci_rgb(14), Rgb(153, 0, 0));
+        assert_eq!(aci_rgb(15), Rgb(153, 76, 76));
+        assert_eq!(aci_rgb(16), Rgb(127, 0, 0));
+        assert_eq!(aci_rgb(18), Rgb(76, 0, 0));
         assert_eq!(aci_rgb(20), Rgb(255, 63, 0));
         assert_eq!(aci_rgb(30), Rgb(255, 127, 0));
         assert_eq!(aci_rgb(50), Rgb(255, 255, 0));
