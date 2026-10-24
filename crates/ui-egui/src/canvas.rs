@@ -1937,10 +1937,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let gs = app.session.settings.gripsize as f32;
         for h in sel.iter().take(200) {
             if let Some(e) = st.doc.entity(*h) {
-                for (gi, g) in e.kind.grips().into_iter().enumerate() {
+                let grips = e.kind.grips();
+                let count = grips.len();
+                for (gi, g) in grips.into_iter().enumerate() {
                     let sp = xf.to_screen(g);
                     if rect.contains(sp) {
-                        let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
+                        let r = grip_rect(&e.kind, count, gi, sp, gs);
                         let hot = app.canvas.hot_grips.contains(&(*h, gi));
                         let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
                         painter.rect_filled(
@@ -2668,11 +2670,18 @@ fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
     }
 }
 
+/// Polyline segment midpoint grips are rectangular; vertex grips remain square.
+fn grip_rect(kind: &cadcraft_doc::EntityKind, count: usize, index: usize, center: Pos2, size: f32) -> Rect {
+    // The grip list interleaves vertices and available segment midpoints, then any remaining vertices.
+    let midpoint = matches!(kind, cadcraft_doc::EntityKind::LwPolyline(p) if index % 2 == 1 && index / 2 < count.saturating_sub(p.vertices.len()));
+    Rect::from_center_size(center, vec2(size * 2.0, if midpoint { size } else { size * 2.0 }))
+}
+
 /// The grip of a selected object under the cursor, if any: (object, grip index).
 fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)> {
     let hp = hover?;
     let st = app.session.state().ok()?;
-    let gs = app.session.settings.gripsize as f32 + 3.0;
+    let gs = app.session.settings.gripsize as f32;
     let sel = app.session.selection();
     if !app.session.shows_grips(sel.len()) {
         return None;
@@ -2682,9 +2691,11 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
         }
-        for (i, g) in e.kind.grips().into_iter().enumerate() {
+        let grips = e.kind.grips();
+        let count = grips.len();
+        for (i, g) in grips.into_iter().enumerate() {
             let sp = xf.to_screen(g);
-            if (sp.x - hp.x).abs() <= gs && (sp.y - hp.y).abs() <= gs {
+            if grip_rect(&e.kind, count, i, sp, gs).expand(3.0).contains(hp) {
                 return Some((*h, i));
             }
         }
