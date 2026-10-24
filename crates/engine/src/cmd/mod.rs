@@ -124,6 +124,7 @@ pub mod printset;
 pub mod projrules;
 mod props;
 pub mod readers;
+pub mod sheetfacts;
 pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
@@ -517,6 +518,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(cobie::specs());
         v.extend(printset::specs());
         v.extend(readers::specs());
+        v.extend(sheetfacts::specs());
         v.extend(validate::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
