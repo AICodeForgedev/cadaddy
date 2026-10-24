@@ -37,7 +37,6 @@ pub mod elecspec;
 pub mod envelope;
 pub mod envelope_reader;
 pub mod equip_reader;
-pub mod fieldpkg;
 pub mod finishes;
 pub mod framing;
 pub mod gaps;

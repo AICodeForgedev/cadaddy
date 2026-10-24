@@ -10,15 +10,10 @@
 //! `cadaddy-fieldnotes` file that `fieldview.sync` merges into the drawing.
 //!
 //! The web app shows it with `?field` (and `?field=URL` fetches a package).
-//!
-//! A shared project page (Q350) shows it read-only ([`FieldViewer::read_only`]): no notes and no
-//! Open; the model arrives in parts with a progress bar, a section box cuts it, elements are
-//! found by tag, and the view in use travels as a `#view=` link ([`FieldViewer::view_link`]).
 
 use std::collections::BTreeSet;
 
-use cadaddy_walk3d::field::{Camera, FieldElement, FieldNote, FieldNotes, FieldPackage, IssueKind, Measured, NoteKind};
-use cadaddy_walk3d::share::ViewLink;
+use cadaddy_walk3d::field::{Camera, FieldNote, FieldNotes, FieldPackage, IssueKind, Measured, NoteKind};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Vec2, pos2, vec2};
 
 use crate::i18n::t;
@@ -89,30 +84,6 @@ pub struct FieldViewer {
     pub drawn_3d: usize,
     /// Open was pressed: the shell shows its file picker.
     pub open_requested: bool,
-    /// A shared project page: read-only (no notes, no Open), views shared as links.
-    pub read_only: bool,
-    /// The section box: min and max corners, feet. What is wholly outside isn't shown or picked.
-    pub section: Option<([f64; 3], [f64; 3])>,
-    /// How far the orbit's target was panned off the room or level centre, feet.
-    pub target_off: [f64; 3],
-    /// The model loading (0..=1) while its parts arrive; none when it is all in.
-    pub progress: Option<f32>,
-    /// The server refused the model (401/403): the page says access is denied.
-    pub denied: bool,
-    /// A download of the model is offered (a page made with `--allow-download`).
-    pub download_offered: bool,
-    /// Download was pressed: the shell hands the model file over.
-    pub download_requested: bool,
-    /// A view link to hand out (`#view=` text): the shell copies it and shows it in the address bar.
-    pub link_out: Option<String>,
-}
-
-/// One row of an element's properties: what, its value, and where it came from.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Prop {
-    pub key: String,
-    pub value: String,
-    pub note: String,
 }
 
 impl Default for FieldViewer {
@@ -141,14 +112,6 @@ impl Default for FieldViewer {
             heading: 90.0,
             drawn_3d: 0,
             open_requested: false,
-            read_only: false,
-            section: None,
-            target_off: [0.0; 3],
-            progress: None,
-            denied: false,
-            download_offered: false,
-            download_requested: false,
-            link_out: None,
         }
     }
 }
@@ -164,12 +127,7 @@ impl FieldViewer {
 
     /// Opens a package file.
     pub fn open(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.open_package(FieldPackage::from_json(bytes)?);
-        Ok(())
-    }
-
-    /// Opens a package read already (a shared page's base, before its parts arrive).
-    pub fn open_package(&mut self, mut pkg: FieldPackage) {
+        let mut pkg = FieldPackage::from_json(bytes)?;
         pkg.assign_rooms();
         // Notes made here and not sent yet stay when the same project's package is replaced.
         if let Some(old) = &self.pkg
@@ -187,209 +145,8 @@ impl FieldViewer {
         self.measure.clear();
         self.draft = None;
         self.plan = None;
-        self.section = None;
-        self.target_off = [0.0; 3];
-        self.dirty = !self.read_only;
-    }
-
-    /// A part of a shared page's model arrived: its elements join the package (the view stays).
-    pub fn add_elements(&mut self, elements: Vec<FieldElement>) {
-        let Some(p) = self.pkg.as_mut() else { return };
-        let room = cadaddy_walk3d::field::MAX_ELEMENTS.saturating_sub(p.elements.len());
-        p.elements.extend(elements.into_iter().take(room));
-        p.clean();
-        p.assign_rooms();
-        let counts = p.trade_counts();
-        for k in counts.keys() {
-            if !p.trades.iter().any(|t| &t.key == k) {
-                p.trades.push(cadaddy_walk3d::field::trade_info(k));
-            }
-        }
-        self.status = format!("{} — {} {}", p.project, p.elements.len(), t("elements"));
-    }
-
-    /// Whether `e` is in the section box (any part of it), or there is none.
-    pub fn in_section(&self, e: &FieldElement) -> bool {
-        self.section.is_none_or(|(a, b)| e.max.iter().zip(&a).all(|(hi, lo)| hi >= lo) && e.min.iter().zip(&b).all(|(lo, hi)| lo <= hi))
-    }
-
-    /// The section box around the level shown: its plan extent, its floor to the next.
-    pub fn default_section(&self) -> ([f64; 3], [f64; 3]) {
-        let (a, b) = self.level_box();
-        let z = self.floor_z();
-        let h = self.pkg.as_ref().and_then(|p| p.levels.get(self.level)).map_or(10.0, |l| l.height_ft.max(1.0));
-        ([a[0] - 2.0, a[1] - 2.0, z], [b[0] + 2.0, b[1] + 2.0, z + h])
-    }
-
-    /// Elements whose tag (BIM mark), id or kind matches `query`: marks and ids exactly first,
-    /// then marks and ids starting with it, then kinds holding it. At most 12.
-    pub fn search_elements(&self, query: &str) -> Vec<usize> {
-        let q = query.trim().to_lowercase();
-        let Some(p) = &self.pkg else { return Vec::new() };
-        if q.chars().count() < 2 {
-            return Vec::new();
-        }
-        let mut hits: Vec<(u8, usize)> = p
-            .elements
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| !self.hidden.contains(&e.trade))
-            .filter_map(|(i, e)| {
-                let (mark, id) = (e.mark.to_lowercase(), e.id.to_lowercase());
-                let rank = if mark == q || id == q {
-                    0
-                } else if mark.starts_with(&q) || id.starts_with(&q) {
-                    1
-                } else if e.kind.to_lowercase().contains(&q) {
-                    2
-                } else {
-                    return None;
-                };
-                Some((rank, i))
-            })
-            .take(5_000)
-            .collect();
-        hits.sort_unstable();
-        hits.into_iter().map(|(_, i)| i).take(12).collect()
-    }
-
-    /// Goes to an element: its level and room, selected.
-    pub fn go_to_element(&mut self, i: usize) {
-        let Some(p) = &self.pkg else { return };
-        let Some(e) = p.elements.get(i) else { return };
-        let room =
-            p.rooms.iter().position(|r| !e.room.is_empty() && r.number.eq_ignore_ascii_case(&e.room) && r.level.eq_ignore_ascii_case(&e.level));
-        let level = p.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&e.level));
-        let centre = [(e.min[0] + e.max[0]) * 0.5, (e.min[1] + e.max[1]) * 0.5];
-        let inside = self.in_section(e);
-        match room {
-            Some(r) => self.select_room(r),
-            None => {
-                if let Some(l) = level {
-                    self.level = l;
-                }
-                self.room = None;
-                self.walk_at = centre;
-                self.plan = Some((centre, self.plan.map_or(20.0, |(_, s)| s.max(8.0))));
-                self.query.clear();
-            }
-        }
-        if !inside {
-            self.section = None;
-        }
-        self.selected = Some(i);
-    }
-
-    /// The selected element's properties: size, height, room, source, status, its type's spec
-    /// fields (with their source and confidence) and its own properties (with their set).
-    pub fn properties(&self) -> Vec<Prop> {
-        let Some(p) = &self.pkg else { return Vec::new() };
-        let Some(e) = self.selected.and_then(|i| p.elements.get(i)) else { return Vec::new() };
-        let row = |k: &str, v: String, note: String| Prop { key: k.to_string(), value: v, note };
-        let mut out = Vec::new();
-        if let Some(s) = e.size_in {
-            let size = if s[1] > 0.0 { format!("{}x{}\"", s[0], s[1]) } else { format!("{}\"", s[0]) };
-            out.push(row(t("Size"), size, String::new()));
-        }
-        let z = p.levels.iter().find(|l| l.name.eq_ignore_ascii_case(&e.level)).map_or(0.0, |l| l.elevation_ft);
-        out.push(row(
-            t("Bottom / top AFF"),
-            format!("{} / {}", cadaddy_walk3d::feet(e.min[2] - z), cadaddy_walk3d::feet(e.max[2] - z)),
-            String::new(),
-        ));
-        if !e.room.is_empty() {
-            out.push(row(t("Room"), e.room.clone(), String::new()));
-        }
-        if !e.source.is_empty() {
-            out.push(row(t("From"), e.source.clone(), String::new()));
-        }
-        if !e.status.is_empty() {
-            out.push(row(t("Status"), e.status.clone(), String::new()));
-        }
-        match p.type_of(e) {
-            Some(ty) => {
-                out.push(row(t("Type"), format!("{} {}", ty.mark, ty.category).trim().to_string(), String::new()));
-                for f in &ty.fields {
-                    let note = match (f.source.is_empty(), f.confidence.is_empty()) {
-                        (false, false) => format!("({}, {})", f.source, t(&f.confidence)),
-                        (false, true) => format!("({})", f.source),
-                        (true, false) => format!("({})", t(&f.confidence)),
-                        (true, true) => String::new(),
-                    };
-                    out.push(row(&f.key, f.value.clone(), note));
-                }
-            }
-            None if !e.mark.is_empty() => out.push(row(t("Type"), e.mark.clone(), String::new())),
-            None => out.push(row(t("Type"), t("not typed").to_string(), String::new())),
-        }
-        for f in &e.props {
-            out.push(row(&f.key, f.value.clone(), if f.source.is_empty() { String::new() } else { format!("({})", f.source) }));
-        }
-        out
-    }
-
-    /// The view in use as a link ([`ViewLink`]).
-    pub fn view_link(&self) -> ViewLink {
-        let p = self.pkg.as_ref();
-        ViewLink {
-            level: self.level,
-            mode: match self.mode {
-                Mode::Plan => "plan",
-                Mode::Model => "3d",
-                Mode::Walk => "walk",
-            }
-            .into(),
-            orbit: (self.mode == Mode::Model).then_some([self.yaw, self.pitch, self.dist]),
-            target: (self.mode == Mode::Model && self.target_off != [0.0; 3]).then_some(self.target_off),
-            walk: (self.mode == Mode::Walk).then_some([self.walk_at[0], self.walk_at[1], self.heading]),
-            plan: self.plan.filter(|_| self.mode == Mode::Plan).map(|(c, s)| [c[0], c[1], f64::from(s)]),
-            hidden: self.hidden.iter().cloned().collect(),
-            section: self.section.map(|(a, b)| [a[0], a[1], a[2], b[0], b[1], b[2]]),
-            room: self.room.and_then(|i| p?.rooms.get(i)).map(|r| r.number.clone()).unwrap_or_default(),
-            element: self.selected.and_then(|i| p?.elements.get(i)).map(|e| e.id.clone()).unwrap_or_default(),
-        }
-    }
-
-    /// Shows a view from a link; what the model doesn't have (a level, room or element) is skipped.
-    pub fn apply_view(&mut self, v: &ViewLink) {
-        let Some(p) = &self.pkg else { return };
-        let level = v.level.min(p.levels.len().saturating_sub(1));
-        let level_name = p.levels.get(level).map(|l| l.name.clone()).unwrap_or_default();
-        let room = if v.room.is_empty() {
-            None
-        } else {
-            p.rooms
-                .iter()
-                .position(|r| r.number.eq_ignore_ascii_case(&v.room) && r.level.eq_ignore_ascii_case(&level_name))
-                .or_else(|| p.rooms.iter().position(|r| r.number.eq_ignore_ascii_case(&v.room)))
-        };
-        let element = if v.element.is_empty() { None } else { p.elements.iter().position(|e| e.id == v.element) };
-        match room {
-            Some(r) => self.select_room(r),
-            None => {
-                self.level = level;
-                self.room = None;
-                self.plan = None;
-            }
-        }
-        self.mode = match v.mode.as_str() {
-            "3d" => Mode::Model,
-            "walk" => Mode::Walk,
-            _ => Mode::Plan,
-        };
-        if let Some([y, pi, d]) = v.orbit {
-            (self.yaw, self.pitch, self.dist) = (y, pi.clamp(-10.0, 89.0), d.clamp(3.0, 2_000.0));
-        }
-        self.target_off = v.target.unwrap_or([0.0; 3]);
-        if let Some([x, y, h]) = v.walk {
-            (self.walk_at, self.heading) = ([x, y], h);
-        }
-        if let Some([x, y, sc]) = v.plan {
-            self.plan = Some(([x, y], (sc as f32).clamp(0.5, 400.0)));
-        }
-        self.hidden = v.hidden.iter().cloned().collect();
-        self.section = v.section.map(|[a, b, c, d, e, f]| ([a.min(d), b.min(e), c.min(f)], [a.max(d), b.max(e), c.max(f)]));
-        self.selected = element;
+        self.dirty = true;
+        Ok(())
     }
 
     /// What to keep in the device's storage: the package and its notes.
@@ -442,7 +199,7 @@ impl FieldViewer {
         p.elements
             .iter()
             .enumerate()
-            .filter(|(_, e)| !self.hidden.contains(&e.trade) && e.level.eq_ignore_ascii_case(&level) && self.in_section(e))
+            .filter(|(_, e)| !self.hidden.contains(&e.trade) && e.level.eq_ignore_ascii_case(&level))
             .filter(|(_, e)| near.is_none_or(|(a, b)| e.max[0] >= a[0] && e.min[0] <= b[0] && e.max[1] >= a[1] && e.min[1] <= b[1]))
             .map(|(i, _)| i)
             .take(MAX_3D_BOXES)
@@ -456,7 +213,7 @@ impl FieldViewer {
         let Some(pkg) = &self.pkg else { return };
         match self.tool {
             Tool::Select => {
-                self.selected = pkg.pick_plan(&level, p, tol, &self.hidden).filter(|i| pkg.elements.get(*i).is_some_and(|e| self.in_section(e)));
+                self.selected = pkg.pick_plan(&level, p, tol, &self.hidden);
                 if self.selected.is_none()
                     && let Some(r) = pkg.room_at(&level, p)
                 {
@@ -464,8 +221,7 @@ impl FieldViewer {
                 }
             }
             Tool::Measure => self.measure_point([p[0], p[1], z]),
-            Tool::Note if !self.read_only => self.start_note([p[0], p[1], z]),
-            Tool::Note => {}
+            Tool::Note => self.start_note([p[0], p[1], z]),
         }
     }
 
@@ -473,12 +229,12 @@ impl FieldViewer {
     pub fn tap_ray(&mut self, origin: [f64; 3], dir: [f64; 3]) {
         let level = self.level_name();
         let Some(pkg) = &self.pkg else { return };
-        let hit = pkg.pick_ray(origin, dir, Some(&level), &self.hidden).filter(|(i, _)| pkg.elements.get(*i).is_some_and(|e| self.in_section(e)));
+        let hit = pkg.pick_ray(origin, dir, Some(&level), &self.hidden);
         let at = hit.map(|(_, t)| [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t]);
         match (self.tool, hit, at) {
             (Tool::Select, h, _) => self.selected = h.map(|(i, _)| i),
             (Tool::Measure, _, Some(a)) => self.measure_point(a),
-            (Tool::Note, h, Some(a)) if !self.read_only => {
+            (Tool::Note, h, Some(a)) => {
                 self.selected = h.map(|(i, _)| i);
                 self.start_note(a);
             }
@@ -546,25 +302,9 @@ impl FieldViewer {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(tk.canvas)).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(ui.available_height() * 0.4);
-                    if self.denied {
-                        ui.label(egui::RichText::new(t("Access denied")).size(24.0).strong().color(tk.text));
-                        ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new(t("This project page needs a passcode. Ask whoever shared the link for access.")).color(tk.text_dim),
-                        );
-                    } else if let Some(f) = self.progress {
-                        ui.label(egui::RichText::new(t("Loading the model…")).size(18.0).color(tk.text_dim));
-                        ui.add(egui::ProgressBar::new(f).show_percentage().desired_width(320.0));
-                    } else if self.read_only {
-                        let text = if self.status.is_empty() { t("Loading the model…") } else { self.status.as_str() };
-                        ui.label(egui::RichText::new(text).size(18.0).color(tk.text_dim));
-                    } else {
-                        ui.label(
-                            egui::RichText::new(t("Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here"))
-                                .size(18.0)
-                                .color(tk.text_dim),
-                        );
-                    }
+                    ui.label(
+                        egui::RichText::new(t("Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here")).size(18.0).color(tk.text_dim),
+                    );
                 });
             });
             return;
@@ -592,7 +332,7 @@ impl FieldViewer {
         let tk = Tokens::get();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().button_padding = vec2(12.0, 8.0);
-            if !self.read_only && ui.button(t("Open")).clicked() {
+            if ui.button(t("Open")).clicked() {
                 self.open_requested = true;
             }
             let Some(p) = &self.pkg else {
@@ -613,8 +353,7 @@ impl FieldViewer {
                 self.selected = None;
                 self.plan = None;
             }
-            let hint = if self.read_only { t("Room or tag") } else { t("Room number") };
-            ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(hint).desired_width(130.0));
+            ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(t("Room number")).desired_width(130.0));
             for (m, label) in [(Mode::Plan, "Plan"), (Mode::Model, "3D"), (Mode::Walk, "Walk")] {
                 if ui.selectable_label(self.mode == m, t(label)).clicked() {
                     self.mode = m;
@@ -622,36 +361,19 @@ impl FieldViewer {
             }
             ui.separator();
             for (tool, label) in [(Tool::Select, "Select"), (Tool::Measure, "Measure"), (Tool::Note, "Note")] {
-                if self.read_only && tool == Tool::Note {
-                    continue;
-                }
                 if ui.selectable_label(self.tool == tool, t(label)).clicked() {
                     self.tool = tool;
                     self.measure.clear();
                 }
             }
             ui.separator();
-            if self.read_only {
-                if ui.button(t("Copy View Link")).clicked() {
-                    self.link_out = Some(self.view_link().encode());
-                    self.status = t("View link copied").into();
-                }
-                if self.download_offered && ui.button(t("Download Model")).clicked() {
-                    self.download_requested = true;
-                }
-            } else {
-                let unsent = self.pkg.as_ref().map_or(0, |p| p.unsynced().len());
-                if ui.add_enabled(unsent > 0, egui::Button::new(format!("{} ({unsent})", t("Send Notes")))).clicked() {
-                    self.send_notes();
-                }
+            let unsent = self.pkg.as_ref().map_or(0, |p| p.unsynced().len());
+            if ui.add_enabled(unsent > 0, egui::Button::new(format!("{} ({unsent})", t("Send Notes")))).clicked() {
+                self.send_notes();
             }
             if ui.button(t("Fit")).clicked() {
                 self.plan = None;
                 self.room = None;
-                self.target_off = [0.0; 3];
-            }
-            if let Some(f) = self.progress.filter(|_| self.pkg.is_some()) {
-                ui.add(egui::ProgressBar::new(f).show_percentage().desired_width(120.0));
             }
         });
         // Search results under the bar.
@@ -659,21 +381,10 @@ impl FieldViewer {
             && !self.query.trim().is_empty()
         {
             let hits = p.search_rooms(&self.query);
-            let tagged = if hits.len() < 12 { self.search_elements(&self.query) } else { Vec::new() };
             let mut go = None;
-            let mut go_el = None;
             ui.horizontal_wrapped(|ui| {
-                if hits.is_empty() && tagged.is_empty() {
+                if hits.is_empty() {
                     ui.label(egui::RichText::new(t("No room matches")).color(tk.text_dim));
-                }
-                for i in tagged.iter().take(12usize.saturating_sub(hits.len())) {
-                    if let Some(e) = p.elements.get(*i) {
-                        let tag = if e.mark.is_empty() { e.kind.clone() } else { format!("{} {}", e.mark, e.kind) };
-                        let at = if e.room.is_empty() { e.level.clone() } else { format!("{} {}", e.level, e.room) };
-                        if ui.button(format!("{tag} · {at}")).clicked() {
-                            go_el = Some(*i);
-                        }
-                    }
                 }
                 for (i, _) in hits.iter().take(12) {
                     if let Some(r) = p.rooms.get(*i)
@@ -685,10 +396,6 @@ impl FieldViewer {
             });
             if let Some(i) = go {
                 self.select_room(i);
-            }
-            if let Some(i) = go_el {
-                self.go_to_element(i);
-                self.query.clear();
             }
         }
     }
@@ -719,27 +426,6 @@ impl FieldViewer {
             if self.selected.and_then(|i| p.elements.get(i)).is_some_and(|e| self.hidden.contains(&e.trade)) {
                 self.selected = None;
             }
-        }
-        ui.separator();
-        // The section box.
-        let mut on = self.section.is_some();
-        if ui.checkbox(&mut on, t("Section box")).changed() {
-            self.section = on.then(|| self.default_section());
-        }
-        if let Some((a, b)) = &mut self.section {
-            egui::Grid::new("fv_section").num_columns(3).show(ui, |ui| {
-                for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
-                    ui.label(egui::RichText::new(*axis).color(tk.text_dim));
-                    if let (Some(lo), Some(hi)) = (a.get_mut(k), b.get_mut(k)) {
-                        ui.add(egui::DragValue::new(lo).speed(0.25).suffix(" ft"));
-                        ui.add(egui::DragValue::new(hi).speed(0.25).suffix(" ft"));
-                        if *lo > *hi {
-                            std::mem::swap(lo, hi);
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
         }
         ui.separator();
         // The measure.
@@ -773,18 +459,49 @@ impl FieldViewer {
             self.draft = None;
         }
         let Some(p) = self.pkg.as_ref() else { return };
-        // The tapped element: what it is, and what set it.
+        // The tapped element: what it is.
         if let Some(e) = self.selected.and_then(|i| p.elements.get(i)) {
             let trade = p.trade(&e.trade);
             ui.label(egui::RichText::new(format!("{} {}", t(&trade.label), e.kind)).strong().color(rgb(trade.color)));
-            for r in self.properties() {
+            let row = |ui: &mut egui::Ui, k: &str, v: &str| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(&r.key).color(tk.text_dim));
-                    ui.label(egui::RichText::new(&r.value).color(tk.text));
-                    if !r.note.is_empty() {
-                        ui.label(egui::RichText::new(&r.note).color(tk.text_faint).small());
-                    }
+                    ui.label(egui::RichText::new(k).color(tk.text_dim));
+                    ui.label(egui::RichText::new(v).color(tk.text));
                 });
+            };
+            if let Some(s) = e.size_in {
+                let size = if s[1] > 0.0 { format!("{}x{}\"", s[0], s[1]) } else { format!("{}\"", s[0]) };
+                row(ui, t("Size"), &size);
+            }
+            let z = self.floor_z();
+            row(ui, t("Bottom / top AFF"), &format!("{} / {}", cadaddy_walk3d::feet(e.min[2] - z), cadaddy_walk3d::feet(e.max[2] - z)));
+            if !e.room.is_empty() {
+                row(ui, t("Room"), &e.room);
+            }
+            if !e.source.is_empty() {
+                row(ui, t("From"), &e.source);
+            }
+            match p.type_of(e) {
+                Some(ty) => {
+                    row(ui, t("Type"), &format!("{} {}", ty.mark, ty.category));
+                    for f in &ty.fields {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(&f.key).color(tk.text_dim));
+                            ui.label(egui::RichText::new(&f.value).color(tk.text));
+                            let src = match (f.source.is_empty(), f.confidence.is_empty()) {
+                                (false, false) => format!("({}, {})", f.source, t(&f.confidence)),
+                                (false, true) => format!("({})", f.source),
+                                (true, false) => format!("({})", t(&f.confidence)),
+                                (true, true) => String::new(),
+                            };
+                            if !src.is_empty() {
+                                ui.label(egui::RichText::new(src).color(tk.text_faint).small());
+                            }
+                        });
+                    }
+                }
+                None if !e.mark.is_empty() => row(ui, t("Type"), &e.mark),
+                None => row(ui, t("Type"), t("not typed")),
             }
             ui.separator();
         }
@@ -831,13 +548,7 @@ impl FieldViewer {
         let rect = resp.rect;
         let zoom = ui.input(|i| i.zoom_delta());
         let scroll = ui.input(|i| i.smooth_scroll_delta);
-        let pan_drag = resp.dragged_by(egui::PointerButton::Secondary)
-            || resp.dragged_by(egui::PointerButton::Middle)
-            || (resp.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.shift));
-        let two_finger = ui.input(|i| i.multi_touch()).map(|m| m.translation_delta).filter(|_| resp.hovered());
-        let drag = if pan_drag { Vec2::ZERO } else { resp.drag_delta() };
-        let pan_by = if pan_drag { resp.drag_delta() } else { Vec2::ZERO } + two_finger.unwrap_or(Vec2::ZERO);
-        self.keys(ui);
+        let drag = resp.drag_delta();
         match self.mode {
             Mode::Plan => {
                 if self.plan.is_none() {
@@ -847,7 +558,7 @@ impl FieldViewer {
                 if resp.hovered() && (zoom - 1.0).abs() > 1e-4 {
                     s = (s * zoom).clamp(0.5, 400.0);
                 }
-                let pan = drag + pan_by + if resp.hovered() { scroll } else { Vec2::ZERO };
+                let pan = drag + if resp.hovered() { scroll } else { Vec2::ZERO };
                 c[0] -= f64::from(pan.x / s);
                 c[1] += f64::from(pan.y / s);
                 self.plan = Some((c, s));
@@ -860,9 +571,6 @@ impl FieldViewer {
             }
             Mode::Model | Mode::Walk => {
                 if self.mode == Mode::Model {
-                    if pan_by != Vec2::ZERO {
-                        self.pan_orbit(pan_by);
-                    }
                     self.yaw -= f64::from(drag.x) * 0.4;
                     self.pitch = (self.pitch + f64::from(drag.y) * 0.3).clamp(-10.0, 89.0);
                     if resp.hovered() && (zoom - 1.0).abs() > 1e-4 {
@@ -894,15 +602,13 @@ impl FieldViewer {
         match self.mode {
             Mode::Walk => Camera::walk(self.walk_at, z, self.heading),
             _ => {
-                let centre = match self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i)) {
+                let target = match self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i)) {
                     Some(r) => [r.at[0], r.at[1], z + 4.0],
                     None => {
                         let (a, b) = self.level_box();
                         [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, z + 4.0]
                     }
                 };
-                let o = self.target_off;
-                let target = [centre[0] + o[0], centre[1] + o[1], centre[2] + o[2]];
                 let dist = if self.room.is_some() {
                     self.dist
                 } else {
@@ -1010,7 +716,7 @@ impl FieldViewer {
         p.elements
             .iter()
             .enumerate()
-            .filter(|(_, e)| !self.hidden.contains(&e.trade) && e.level.eq_ignore_ascii_case(level) && self.in_section(e))
+            .filter(|(_, e)| !self.hidden.contains(&e.trade) && e.level.eq_ignore_ascii_case(level))
             .map(|(i, _)| i)
             .take(200_000)
             .collect()
@@ -1135,94 +841,8 @@ impl FieldViewer {
         self.draw_marks(painter, &to);
     }
 
-    /// The orbit's target moved by a screen drag (pixels): along the view's right and up.
-    pub fn pan_orbit(&mut self, by: Vec2) {
-        let (y, p) = (self.yaw.to_radians(), self.pitch.clamp(-89.0, 89.0).to_radians());
-        let right = [-y.sin(), y.cos(), 0.0];
-        // Up on screen: the view's up vector (towards the far side when looking down).
-        let up = [-p.sin() * y.cos(), -p.sin() * y.sin(), p.cos()];
-        let k = self.dist.max(3.0) * 0.0018;
-        let (dx, dy) = (f64::from(by.x) * k, f64::from(by.y) * k);
-        for (o, (r, u)) in self.target_off.iter_mut().zip(right.iter().zip(&up)) {
-            *o = (*o - r * dx + u * dy).clamp(-50_000.0, 50_000.0);
-        }
-    }
-
-    /// W A S D (and the arrows) move: walk ahead and turn, slide the orbit, pan the plan; Q and E
-    /// turn. Not while a text box has the keyboard.
-    fn keys(&mut self, ui: &egui::Ui) {
-        if ui.ctx().egui_wants_keyboard_input() {
-            return;
-        }
-        let (ahead, side, turn, run, dt) = ui.input(|i| {
-            let k = |a: egui::Key, b: egui::Key| f64::from(u8::from(i.key_down(a) || i.key_down(b)));
-            (
-                k(egui::Key::W, egui::Key::ArrowUp) - k(egui::Key::S, egui::Key::ArrowDown),
-                k(egui::Key::D, egui::Key::ArrowRight) - k(egui::Key::A, egui::Key::ArrowLeft),
-                k(egui::Key::Q, egui::Key::Q) - k(egui::Key::E, egui::Key::E),
-                i.modifiers.shift,
-                f64::from(i.stable_dt).clamp(0.0, 0.1),
-            )
-        });
-        if ahead == 0.0 && side == 0.0 && turn == 0.0 {
-            return;
-        }
-        let speed = if run { 14.0 } else { 6.0 } * dt;
-        match self.mode {
-            Mode::Walk => {
-                // A and D turn when walking (the stick does the same); Q and E too.
-                self.heading += (turn - side) * 90.0 * dt;
-                let h = self.heading.to_radians();
-                self.walk_at = [self.walk_at[0] + h.cos() * ahead * speed, self.walk_at[1] + h.sin() * ahead * speed];
-            }
-            Mode::Model => {
-                self.yaw += turn * 90.0 * dt;
-                let y = self.yaw.to_radians();
-                let (fwd, right) = ([-y.cos(), -y.sin()], [-y.sin(), y.cos()]);
-                let k = speed * (self.dist / 30.0).clamp(1.0, 20.0);
-                self.target_off[0] += (fwd[0] * ahead + right[0] * side) * k;
-                self.target_off[1] += (fwd[1] * ahead + right[1] * side) * k;
-            }
-            Mode::Plan => {
-                if let Some((c, s)) = &mut self.plan {
-                    let k = 400.0 * dt / f64::from(s.max(0.5));
-                    c[0] += side * k;
-                    c[1] += ahead * k;
-                }
-            }
-        }
-        ui.ctx().request_repaint();
-    }
-
-    /// A stick at the lower right: held up walks ahead, down back, sideways turns.
-    fn walk_stick(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let r = 52.0;
-        let centre = pos2(rect.max.x - 24.0 - r, rect.max.y - 24.0 - r);
-        let area = Rect::from_center_size(centre, vec2(r * 2.0, r * 2.0));
-        let resp = ui.interact(area, ui.id().with("fv_walk_stick"), Sense::drag());
-        let tk = Tokens::get();
-        let painter = ui.painter_at(rect);
-        painter.circle(centre, r, tk.panel.gamma_multiply(0.6), Stroke::new(1.5, tk.text_faint));
-        let knob = match resp.interact_pointer_pos().filter(|_| resp.dragged()) {
-            Some(at) => {
-                let v = at - centre;
-                let v = if v.length() > r { v * (r / v.length()) } else { v };
-                let dt = f64::from(ui.input(|i| i.stable_dt).clamp(0.0, 0.1));
-                let (ahead, turn) = (f64::from(-v.y / r), f64::from(-v.x / r));
-                self.heading += turn * 90.0 * dt;
-                let h = self.heading.to_radians();
-                self.walk_at = [self.walk_at[0] + h.cos() * ahead * 6.0 * dt, self.walk_at[1] + h.sin() * ahead * 6.0 * dt];
-                ui.ctx().request_repaint();
-                centre + v
-            }
-            None => centre,
-        };
-        painter.circle_filled(knob, r * 0.38, tk.accent.gamma_multiply(0.85));
-    }
-
-    /// Walk: buttons to step and turn, and a stick to hold (a phone has no keys).
+    /// Walk: buttons to step and turn (a phone has no keys).
     fn walk_pad(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        self.walk_stick(ui, rect);
         let size = vec2(64.0, 44.0);
         let at = |dx: f32, dy: f32| Rect::from_min_size(pos2(rect.min.x + 16.0 + dx, rect.max.y - 16.0 - 3.0 * size.y + dy), size);
         let mut step = 0.0;

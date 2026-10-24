@@ -13,7 +13,6 @@
 //! cadaddy-cli perf [N]                            timing table on a synthetic N-entity drawing
 //! cadaddy-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadaddy-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
-//! cadaddy-cli sample shareproject OUT.ifc          a made-up IFC project to share (names planted)
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -72,7 +71,6 @@ const USAGE: &str = "usage:
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
   cadaddy-cli perf [N | FILE]
   cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
-  cadaddy-cli sample shareproject OUT.ifc
   cadaddy-cli --version
 
 image framing (png 2400x1600, svg, pdf; always model space):
@@ -280,17 +278,10 @@ fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), 
 
 fn sample(args: &[String]) -> Result<(), String> {
     let (Some(which), Some(out)) = (args.first(), args.get(1)) else { return Err(USAGE.into()) };
-    // A made-up IFC project to share, with names planted for the strip test (Q350).
-    if which == "shareproject" {
-        let text = cadaddy_engine::sample_ifc::share_project_ifc(2, 24);
-        std::fs::write(out, &text).map_err(|e| format!("{out}: {e}"))?;
-        eprintln!("wrote {out} ({} bytes)", text.len());
-        return Ok(());
-    }
     let d = match which.as_str() {
         "bracket" => cadaddy_engine::sample::bracket(),
         "floorplan" | "floor" => cadaddy_engine::sample::floor_plan(),
-        other => return Err(format!("unknown sample `{other}` (bracket, floorplan, shareproject)")),
+        other => return Err(format!("unknown sample `{other}` (bracket, floorplan)")),
     };
     let bytes = cadaddy_io::write(&d, out).map_err(|e| e.to_string())?;
     std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;

@@ -25,7 +25,6 @@ mod pick;
 pub mod rfi;
 mod rules;
 mod sbox;
-pub mod share;
 mod spec;
 pub mod stairs;
 pub mod tags;

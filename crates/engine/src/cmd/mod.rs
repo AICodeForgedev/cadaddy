@@ -129,7 +129,6 @@ pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
-pub mod share;
 pub mod sheetfacts;
 pub mod sitetakeoff;
 pub mod spell;
@@ -564,7 +563,6 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(drywall::specs());
         v.extend(unittypes::specs());
     v.extend(fieldview::specs());
-    v.extend(share::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
         v.extend(modify2::specs());

@@ -17,8 +17,6 @@ path = "src/main.rs"
 cadaddy-engine = { workspace = true }
 cadaddy-ui-egui = { workspace = true }
 cadaddy-io = { workspace = true }
-# The shared project page (Q350): its manifest, parts and view links.
-cadaddy-walk3d = { path = "../../crates/walk3d" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
@@ -31,4 +29,4 @@ web-sys = { version = "0.3", features = ["HtmlInputElement", "FileList", "File"]
 eframe = { workspace = true, features = ["persistence", "default_fonts", "wgpu", "accesskit"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Location", "Navigator", "Blob", "BlobPropertyBag", "Url", "MessageEvent", "UrlSearchParams", "MediaQueryList", "Storage", "Response", "History", "Performance"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Location", "Navigator", "Blob", "BlobPropertyBag", "Url", "MessageEvent", "UrlSearchParams", "MediaQueryList", "Storage", "Response"] }
