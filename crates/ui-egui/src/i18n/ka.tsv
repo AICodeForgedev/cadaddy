@@ -988,6 +988,10 @@
 	Reset keeps the interface language.	ჩამოყრის შემდეგ ინტერფეისის ენა უცვლელი რჩება.
 	Reset to Defaults	ნაგულისხმევზე დაბრუნება
 	Save new drawings as	ახალი ნახაზების შენახვა როგორც
+	Units of new drawings	ახალი ნახაზების ერთეულები
+	Imperial (inches)	იმპერიული (დუიმები)
+	Metric (millimetres)	მეტრული (მილიმეტრები)
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	ახალი ნახაზი და გაშვებისას გახსნილი პირველი ნახაზი ამ ერთეულებს იყენებს, თუ ნაგულისხმევი შაბლონი არ არის მითითებული (QNEWTEMPLATE).
 	Screen magnifiers, screen readers and recorders follow the system cursor.	ეკრანის გამადიდებლები, ეკრანის წამკითხველები და ჩამწერები სისტემის კურსორს მიჰყვება.
 	Select objects first, then choose a command	ჯერ მონიშნეთ ობიექტები, შემდეგ აირჩიეთ ბრძანება
 	Selection	მონიშვნა
@@ -1289,6 +1293,8 @@
 	Run Script...	სკრიპტის გაშვება...
 	Query Texts	ტექსტების გამოთხოვნა
 	Analyze Shapes	ფიგურების ანალიზი
+	Analyze Usage	გამოყენების ანალიზი
+	Implied Loops	არაცხადი შეკრული კონტურები
 	Hatch Pick	დაშტრიხვის არჩევა
 	Hatch and Gradient	დაშტრიხვა და გრადიენტი
 	Color 1	ფერი 1
