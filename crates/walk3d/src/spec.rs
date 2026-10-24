@@ -818,6 +818,11 @@ pub struct Mep {
     /// underground entrance laid out before the slab.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub required_services: Vec<String>,
+    /// Per-trade default elevation bands for MEP elements (configurable; overrides the hard-coded
+    /// defaults when set). Each entry maps a trade to its default bottom-of-duct/pipe/equipment
+    /// height above the floor, in feet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevation_bands: Vec<ElevationBand>,
 }
 
 /// The grounding electrode system, the bonds and the telecom grounding.
@@ -1060,6 +1065,7 @@ impl Mep {
             && self.grounding.is_none()
             && self.services.is_empty()
             && self.required_services.is_empty()
+            && self.elevation_bands.is_empty()
     }
 }
 
@@ -1377,6 +1383,25 @@ pub struct MepRevision {
     pub from: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub to: String,
+}
+
+/// A per-trade default elevation band: the default bottom height (feet above the floor) for
+/// MEP elements of a given trade when no height tag is present on the drawing. The agent or
+/// owner can set these via `bspec.set` to match the project's coordination drawings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ElevationBand {
+    /// Trade identifier: `"duct"`, `"pipe"`, `"conduit"`, `"terminal"`, `"equipment"`.
+    pub trade: String,
+    /// Default bottom-of-element height above the floor, feet.
+    pub bottom_ft: f64,
+}
+
+impl Mep {
+    /// Look up the elevation band for a trade; returns `None` if no band is set (use hard-coded
+    /// default).
+    pub fn band_bottom_ft(&self, trade: &str) -> Option<f64> {
+        self.elevation_bands.iter().find(|b| b.trade == trade).map(|b| b.bottom_ft)
+    }
 }
 
 fn default_terminal_kind() -> String {

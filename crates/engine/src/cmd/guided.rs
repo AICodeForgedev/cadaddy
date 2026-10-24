@@ -1697,8 +1697,8 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
-    // Per-sheet zero-result warnings as guidedrun questions (MUST 3).
-    for w in &warnings {
+    // Per-sheet zero-result warnings as guidedrun questions with evidence (MUST 3).
+    for (i, w) in warnings.iter().enumerate() {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -1706,7 +1706,15 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             question: format!("{w} — is this expected?"),
             why: "zero MEP results on a sheet that should have them".into(),
             choices: vec!["Yes, expected (schedule/detail sheet)".into(), "No, re-check this sheet".into()],
-            evidence: None,
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: Some(format!("M-sheet warning {}", i + 1)),
+                at: None,
+                values: Some(json!({"warning": w, "runs": runs, "equipment": equipment})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
             default: Some("Yes, expected (schedule/detail sheet)".into()),
             answer_schema: None,
             answer: None,

@@ -384,8 +384,33 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
         }
     }
 
-    // Default level: first level in spec, or create one.
-    let default_level = sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string());
+    // Level registration: try the printset's M-sheet level assignment, then fall back to
+    // the first level in the spec.  This is the "register by grids" path: the printset's
+    // classify stage uses grid lines and title-block text to assign each sheet a level.
+    let sheet_level = project(s).ok().and_then(|p| {
+        let m_plans: Vec<_> = p.sheets.iter()
+            .filter(|sh| sh.discipline == "M" && (sh.sheet_type == "plan" || sh.sheet_type == "enlarged_plan") && !sh.level.is_empty())
+            .collect();
+        // If exactly one M plan sheet has a level, use it directly.
+        // With multiple sheets each run carries its own source_sheet — but the reader currently
+        // operates on a single drawing, so one sheet = one level is the common case.
+        if m_plans.len() == 1 {
+            let lvl = &m_plans[0].level;
+            // Verify the level exists in the spec.
+            if sp.levels.iter().any(|l| l.name.eq_ignore_ascii_case(lvl)) {
+                return Some(lvl.clone());
+            }
+        }
+        None
+    });
+    let default_level = sheet_level.unwrap_or_else(||
+        sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string())
+    );
+
+    // Per-trade elevation bands: use the spec's table if set, otherwise hard-coded defaults.
+    let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
+    let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
+    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
 
     // Convert runs to MepRun.
     let mut run_count = sp.mep.runs.len();
@@ -401,7 +426,7 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             level: level.clone(),
             points: dr.points.iter().map(|p| [p.x, p.y]).collect(),
             size_in: [dr.width_in, dr.depth_in],
-            bottoms_ft: vec![dr.bottom_ft.unwrap_or(10.0); dr.points.len().saturating_sub(1).max(1)],
+            bottoms_ft: vec![dr.bottom_ft.unwrap_or(duct_bottom_ft); dr.points.len().saturating_sub(1).max(1)],
             objects: Vec::new(),
             id: format!("R{run_count}"),
             encased: false,
@@ -427,7 +452,7 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             level: default_level.clone(),
             at: [dt.at.x, dt.at.y],
             size_in: [12.0, 12.0],
-            bottom_ft: 8.5, // default diffuser height
+            bottom_ft: terminal_bottom_ft,
             terminal_kind: dt.kind.clone(),
             objects: Vec::new(),
         });
@@ -441,7 +466,7 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             level: default_level.clone(),
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
-            height_ft: 6.0, // default equipment height
+            height_ft: equipment_height_ft,
             systems: vec![
                 match de.kind.as_str() {
                     "ahu" | "rtu" | "vav" => "SA".to_string(),

@@ -1075,9 +1075,11 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
-    // Gate: refuse to build if the import check failed, unless --force.
+    // Gate: refuse to build if the import check failed, unless --force or discipline is mep
+    // (the MEP geometry reader handles paper-scale and pen-layer drawings natively).
     let force = bool_or(p, "force", false);
-    if !force {
+    let disc = str_param(p, "discipline").unwrap_or("all");
+    if !force && disc != "mep" {
         if let Ok(d) = s.doc() {
             if !super::import_check::passes(d) {
                 let fails = super::import_check::failed_checks(d);
