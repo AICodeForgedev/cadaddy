@@ -524,7 +524,7 @@ mod tests {
         let det = v.iter().find(|x| x.number.as_deref() == Some("2")).expect("view 2");
         assert!(det.not_to_scale && det.scale_text.is_none());
         let r2 = det.region.expect("detail region");
-        assert!(r2[0] >= 850.0 && r2[1] >= 590.0, "{r2:?}");
+        assert!(r2[0] >= 850.0 && r2[2] <= 1110.0 && r2[3] >= 800.0 && r2[1] >= 550.0, "{r2:?}");
     }
 
     #[test]
