@@ -113,7 +113,8 @@ fn closed_loop(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
 }
 
 /// Open curves that can make up an island together (a square drawn as four LINEs, two ARCs
-/// forming a circle). Closed objects are islands on their own (see `closed_loop`).
+/// forming a circle, the inner lines of multiline walls around a room). Closed objects are
+/// islands on their own (see `closed_loop`).
 fn island_curve(d: &Drawing, e: &Entity) -> bool {
     matches!(
         e.kind,
@@ -123,6 +124,7 @@ fn island_curve(d: &Drawing, e: &Entity) -> bool {
             | EntityKind::LwPolyline(_)
             | EntityKind::Polyline3d(_)
             | EntityKind::Spline(_)
+            | EntityKind::MLine(_)
     ) && closed_loop(d, e).is_none()
 }
 
