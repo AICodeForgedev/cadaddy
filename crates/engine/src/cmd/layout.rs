@@ -832,7 +832,10 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
             }
             #[cfg(target_arch = "wasm32")]
-            Err(bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))
+            {
+                super::exchange::deliver_file(cmd, _path, &bytes, super::file::deliver())?;
+                Ok(json!({ "path": _path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
+            }
         }
         None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages })),
     }
