@@ -543,6 +543,63 @@ fn appload_and_load() {
 }
 
 #[test]
+fn appload_reads_a_lsp_path_and_reports_its_commands() {
+    let dir = std::env::temp_dir().join(format!("cadcraft-appload-lisp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Tools.LSP");
+    std::fs::write(&path, "(defun c:hi () (princ \"hi\") (princ)) (defun c:bye () (princ))").unwrap();
+    let mut s = session();
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(r["commands"], serde_json::json!(["BYE", "HI"]));
+    assert!(s.log.iter().any(|l| l == "Tools.LSP successfully loaded."));
+    s.cmdline("HI").unwrap();
+    assert_eq!(s.log.last().map(String::as_str), Some("hi"));
+    // Only `.lsp` files are APPLOADed, whatever the case of the extension.
+    let txt = dir.join("notes.txt");
+    std::fs::write(&txt, "(defun c:no () (princ))").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": txt.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains(".lsp"), "{e}");
+    // A missing file and a file that fails to parse are ordinary errors.
+    let missing = dir.join("missing.lsp");
+    let e = s.execute("appload", &serde_json::json!({"path": missing.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("can't read"), "{e}");
+    let broken = dir.join("broken.lsp");
+    std::fs::write(&broken, "(defun c:oops (").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": broken.to_string_lossy()})).unwrap_err().to_string();
+    assert!(!e.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn appload_keeps_the_whitespace_of_a_relative_path() {
+    /// A folder in the test's current directory, removed even when an assertion fails.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    // A JSON call's path is read as it is given: a relative path whose folder starts with a
+    // space names that folder, not the one its trimmed name would.
+    let dir = TempDir(std::path::PathBuf::from(format!(" cadcraft-appload-space-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("tools.lsp");
+    std::fs::write(&path, "(setq space-loaded 1)").unwrap();
+    let mut s = session();
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(ok(&mut s, "space-loaded"), "1");
+    // A path of blanks only is still refused, not read as "".
+    for blank in ["", " ", "\t "] {
+        let e = s.execute("appload", &serde_json::json!({"path": blank})).unwrap_err().to_string();
+        assert!(e.contains("`path`"), "{blank:?}: {e}");
+    }
+}
+
+#[test]
 fn hostile_lisp_never_panics() {
     let mut s = session();
     for code in [

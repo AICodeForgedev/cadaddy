@@ -156,6 +156,29 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        // APPLOAD typed or chosen from a menu: the `.lsp` file picker, starting where the last
+        // one came from. JSON calls carry `path` and never open one. A picked file is loaded as a
+        // typed name is, through the interactive command, so a routine it starts that asks for a
+        // point waits for it; on the web (no file system) it says to drop the file instead.
+        "appload" | "ap" if params.is_null() => {
+            if app.services.no_file_system {
+                let hint = "APPLOAD: there is no file system here; drop a .lsp file on the window to load it";
+                app.session.echo(hint.to_string());
+                app.set_status(hint);
+                return Some(Ok(Value::Null));
+            }
+            let pick = app.services.pick_lisp.as_ref()?;
+            let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
+            let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
+            if let Some(dir) = std::path::Path::new(&path).parent().and_then(|p| p.to_str()).filter(|d| !d.is_empty()) {
+                app.ui.last_lisp_dir = Some(dir.to_string());
+            }
+            if let Err(e) = app.session.start("appload") {
+                return Some(Err(e.to_string()));
+            }
+            app.cmdline(&path);
+            Ok(Value::Null)
+        }
         // Pick a template (.dwt or .dxf) and start a new drawing from it.
         "ui.newtemplate" => {
             if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
@@ -734,6 +757,7 @@ mod tests {
                 log.borrow_mut().push(name.to_string());
                 answer.clone()
             })),
+            ..Services::default()
         };
         (CadApp::new(Session::new(), services), asked)
     }

@@ -90,9 +90,11 @@ mod web {
     }
 
     /// No file picker on the web: Save / Save As from the menu (and the close prompt) download the
-    /// drawing under its current name; `saveas {"path": "name.dxf"}` picks another name.
+    /// drawing under its current name; `saveas {"path": "name.dxf"}` picks another name. There is
+    /// no file system either, so a dropped file is opened from its contents and APPLOAD says to
+    /// drop a `.lsp` file rather than asking for a name it cannot read.
     fn services() -> Services {
-        Services { pick_save: Some(Box::new(|name: &str| Some(name.to_string()))), ..Services::default() }
+        Services { pick_save: Some(Box::new(|name: &str| Some(name.to_string()))), no_file_system: true, ..Services::default() }
     }
 
     pub fn start() {
