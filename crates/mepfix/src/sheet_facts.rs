@@ -433,20 +433,21 @@ mod tests {
     fn line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
         add(d, EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }));
     }
-    /// A plan's worth of linework: a box with a grid of short walls inside.
+    /// A plan's worth of linework: a box with rooms (walls both ways every 40 units) inside.
     fn plan(d: &mut Drawing, x0: f64, y0: f64, w: f64, h: f64) {
         line(d, (x0, y0), (x0 + w, y0));
         line(d, (x0 + w, y0), (x0 + w, y0 + h));
         line(d, (x0 + w, y0 + h), (x0, y0 + h));
         line(d, (x0, y0 + h), (x0, y0));
-        let mut x = x0 + 10.0;
+        let mut x = x0 + 40.0;
         while x < x0 + w {
-            let mut y = y0 + 10.0;
-            while y < y0 + h {
-                line(d, (x, y), (x + 8.0, y));
-                y += 10.0;
-            }
-            x += 10.0;
+            line(d, (x, y0), (x, y0 + h));
+            x += 40.0;
+        }
+        let mut y = y0 + 40.0;
+        while y < y0 + h {
+            line(d, (x0, y), (x0 + w, y));
+            y += 40.0;
         }
     }
 
@@ -465,7 +466,7 @@ mod tests {
         text(&mut d, "PLANS", 1879.0, 106.0, 6.0);
         text(&mut d, "Q-7", 1900.0, 40.0, 18.0);
         // view 1: enlarged plan
-        plan(&mut d, 100.0, 90.0, 600.0, 700.0);
+        plan(&mut d, 100.0, 90.0, 600.0, 420.0);
         text(&mut d, "1", 93.0, 63.0, 7.4);
         text(&mut d, "POWER - LEVEL 1 - LOBBY", 113.0, 71.0, 7.4);
         text(&mut d, "SCALE:  1/4\" = 1'-0\"", 113.0, 62.0, 4.6);
@@ -519,7 +520,7 @@ mod tests {
         assert_eq!(lobby.scale_text.as_deref(), Some("1/4\" = 1'-0\""));
         assert!(!lobby.not_to_scale);
         let r = lobby.region.expect("region");
-        assert!(r[0] <= 100.0 && r[2] >= 700.0 && r[1] <= 90.0 && r[3] >= 790.0 && r[2] < 900.0, "{r:?}");
+        assert!(r[0] <= 100.0 && r[2] >= 700.0 && r[1] <= 90.0 && r[3] >= 510.0 && r[2] < 900.0, "{r:?}");
         let det = v.iter().find(|x| x.number.as_deref() == Some("2")).expect("view 2");
         assert!(det.not_to_scale && det.scale_text.is_none());
         let r2 = det.region.expect("detail region");
