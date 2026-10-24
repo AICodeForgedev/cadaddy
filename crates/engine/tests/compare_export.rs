@@ -290,6 +290,69 @@ fn a_named_block_defined_differently_in_the_other_drawing_shows_the_other_defini
 }
 
 #[test]
+fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition() {
+    use cadcraft_engine::doc::{DimKind, Dimension};
+    // PART holds a dimension with the same parameters in both drawings; the block it draws, `*D1`,
+    // holds a line of another length in the other drawing.
+    let dim = Dimension {
+        kind: DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::new(15.0, 5.0, 0.0),
+        text_mid: Vec3::new(7.0, 5.0, 0.0),
+        p13: Vec3::ZERO,
+        p14: Vec3::new(30.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 30.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: Some("*D1".into()),
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    let blocks = |dim_end: f64, first: u64| {
+        let mut part = Block::new("PART");
+        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(dim.clone())));
+        let mut drawn = Block::new("*D1");
+        drawn.entities.push(Entity::new(Handle(first + 1), line(dim_end)));
+        [part, drawn]
+    };
+    let mut s = Session::new();
+    for b in blocks(1.0, 0x700) {
+        s.doc_mut().unwrap().blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+    let mut other = Drawing::new_imperial();
+    other.handseed = 0x9000;
+    for b in blocks(5.0, 0x8000) {
+        other.blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+    s.open_drawing(other, "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    assert_eq!(ends(&s, "*D1"), vec![1.0], "this drawing's dimension block is kept");
+    let d = s.doc().unwrap();
+    let drawn: Vec<Option<String>> = d
+        .block("PART_2")
+        .map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Dimension(dm) => Some(dm.block.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(drawn, [Some("*D2".to_string())], "the other drawing's PART is copied with its dimension block");
+    assert_eq!(ends(&s, "*D2"), vec![5.0]);
+}
+
+#[test]
 fn block_contents_take_the_comparison_color() {
     let mut s = Session::new();
     let mut part = Block::new("PART");

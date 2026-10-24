@@ -140,8 +140,8 @@ struct Signer<'a> {
     blocks: HashMap<String, u64>,
     work: usize,
     /// When set, a block's signature also covers its base point, units, annotative and overlay
-    /// flags and xref file, with a relative xref path taken from the folder given, and a
-    /// multileader's signature covers its block's.
+    /// flags and xref file, with a relative xref path taken from the folder given, and the
+    /// signatures of a multileader and a dimension cover their blocks'.
     frames: Option<Option<&'a std::path::Path>>,
 }
 
@@ -175,6 +175,12 @@ impl<'a> Signer<'a> {
             && let Some(b) = &m.block
         {
             self.block(&b.block, depth).hash(&mut h);
+        }
+        if self.frames.is_some()
+            && let EntityKind::Dimension(dm) = k
+            && let Some(b) = &dm.block
+        {
+            self.block(b, depth).hash(&mut h);
         }
         h.finish()
     }
