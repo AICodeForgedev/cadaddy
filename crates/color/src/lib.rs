@@ -21,7 +21,8 @@ impl Rgb {
         format!("#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
     }
     pub fn parse_hex(s: &str) -> Option<Rgb> {
-        let s = s.trim().trim_start_matches('#');
+        let s = s.trim();
+        let s = s.strip_prefix('#').unwrap_or(s);
         if s.len() != 6 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
@@ -231,6 +232,15 @@ mod tests {
         assert_eq!(Rgb::parse_hex("-12345"), None);
         assert_eq!(Color::parse("#+12345"), None);
         assert_eq!(Rgb::parse_hex("#012345"), Some(Rgb(1, 35, 69)));
+    }
+
+    #[test]
+    fn parse_hex_rejects_repeated_hash() {
+        assert_eq!(Rgb::parse_hex("##ff0000"), None);
+        assert_eq!(Rgb::parse_hex("###ff0000"), None);
+        assert_eq!(Color::parse("##ff0000"), None);
+        assert_eq!(Rgb::parse_hex("#ff0000"), Some(Rgb(255, 0, 0)));
+        assert_eq!(Rgb::parse_hex("ff0000"), Some(Rgb(255, 0, 0)));
     }
 
     #[test]
