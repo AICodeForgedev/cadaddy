@@ -137,7 +137,56 @@ pub fn page_count(bytes: &[u8]) -> Result<u32> {
 }
 
 fn load(bytes: &[u8]) -> Result<Document> {
-    Document::load_mem(bytes).map_err(|e| IoError::Format(format!("PDF: {e}")))
+    match Document::load_mem(bytes) {
+        Ok(doc) => Ok(doc),
+        Err(first_err) => {
+            // Attempt xref rebuild: find `startxref` candidates by scanning backwards for
+            // earlier xref offsets (incremental saves leave multiple). The last one may be
+            // damaged while an earlier one is still valid.
+            if let Some(repaired) = try_repair_xref(bytes) {
+                return Ok(repaired);
+            }
+            Err(IoError::Format(format!("PDF: {first_err}")))
+        }
+    }
+}
+
+/// Scan `bytes` for `startxref` markers and try loading with each candidate offset (oldest
+/// first), so a PDF with a damaged final xref section can still be read from an earlier save.
+fn try_repair_xref(bytes: &[u8]) -> Option<Document> {
+    // Collect all `startxref` positions (there may be several in an incrementally saved PDF).
+    let needle = b"startxref";
+    let mut positions = Vec::new();
+    for i in 0..bytes.len().saturating_sub(needle.len()) {
+        if bytes.get(i..i + needle.len()) == Some(needle) {
+            positions.push(i);
+        }
+    }
+    if positions.len() < 2 {
+        // Only one (or zero) startxref — nothing earlier to try.
+        return None;
+    }
+    // Try each startxref from the oldest: build patched bytes where %%EOF points at that xref.
+    for &pos in positions.iter().rev().skip(1) {
+        // Read the offset number after this startxref marker.
+        let after = pos + needle.len();
+        let tail = std::str::from_utf8(bytes.get(after..bytes.len().min(after + 30))?).ok()?;
+        let offset_str = tail.trim().lines().next()?.trim();
+        if offset_str.parse::<usize>().is_err() {
+            continue;
+        }
+        // Build a truncated copy up to (and including) this %%EOF.
+        if let Some(eof_pos) = bytes.get(after..).and_then(|b| {
+            let eof = b"%%EOF";
+            (0..b.len().saturating_sub(eof.len())).find(|&i| b.get(i..i + eof.len()) == Some(eof))
+        }) {
+            let end = after + eof_pos + b"%%EOF".len();
+            if let Ok(doc) = Document::load_mem(bytes.get(..end)?) {
+                return Some(doc);
+            }
+        }
+    }
+    None
 }
 
 fn err(m: impl Into<String>) -> IoError {
