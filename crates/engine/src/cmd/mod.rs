@@ -56,7 +56,6 @@ mod layer;
 pub mod levels;
 pub mod markup;
 pub mod paramconv;
-pub mod paramconv;
 pub mod pointcloud;
 pub mod procure;
 pub mod progress;
