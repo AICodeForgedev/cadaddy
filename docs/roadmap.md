@@ -1,6 +1,6 @@
 # CADCraft roadmap detail
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (re-audit against main e707ab4d: alpha-gate evidence, beta checklist states and milestone notes; percentages and hours not re-scored) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (re-audit against main 41d9b5e95: alpha-gate evidence, CI gate, beta checklist states, open-PR and catalog counts; percentages and hours not re-scored; previously: re-audit against main e707ab4d: alpha-gate evidence, beta checklist states and milestone notes; percentages and hours not re-scored) · **Target:** Autodesk AutoCAD 2027
 
 Forward-looking plan: milestones with status, the current focus, and what comes next with
 estimates. The summary is [ROADMAP.md](../ROADMAP.md); the work items behind every line are in
@@ -9,9 +9,9 @@ Opus 5.5 agent-hours.
 
 ## Current focus
 
-1. **Gate and land.** (`cargo fmt` on main is fixed.) Add a PR workflow that runs
-   `cargo xtask ci` (open PR #847), then review and land the 89 open PRs (2026-10-13), most of them community bug fixes
-   (S1–S3). ≈ 15–25 h.
+1. **Gate and land.** (`cargo fmt` on main is fixed, and `ci.yml` runs `cargo xtask ci` on every
+   pull request since #1987.) Review and land the 450 open PRs (2026-10-24), most of them community bug fixes
+   (S3). ≈ 15–25 h.
 2. **Stop losing data on save** (FF1, FF2, FF7) and save DWG/DXF at a chosen version (FF3).
    ≈ 30–45 h.
 3. **A real-file corpus** and a check of our output in AutoCAD (FF5, needs the owner).
@@ -58,7 +58,7 @@ remaining gaps are known bugs and edge features (≈ 75% ready for real work).
 | Plot styles, plot preview, PUBLISH, non-rectangular viewports | partial | 30–45 |
 | Autosave, recovery, AUDIT/RECOVER, Options dialog, templates, SHX, user `.lin`/`.pat` | partial | 40–60 |
 | AutoLISP core subset and SCRIPT | done (AutoLISP #758, SCRIPT #693); Visual LISP, DCL and reactors to come | 30–50 |
-| Catalog plus AutoCAD for Mac's languages | partial (twelve catalogs shipped, six of AutoCAD for Mac's seven other languages; Japanese and the catalog extension not started) | 30–45 |
+| Catalog plus AutoCAD for Mac's languages | partial (fifteen catalogs shipped, six of AutoCAD for Mac's seven other languages; Japanese and the catalog extension not started) | 30–45 |
 | Stability: CI gate, issue backlog, command smoke sweep, geometry fuzzing | partial | 30–50 |
 | Platforms: web open/save, Windows/Linux runtime checks; performance at 1M entities and large DWG | partial | 20–35 |
 | **Total to beta** | | **≈ 600–930** |
@@ -86,7 +86,7 @@ agents that built each milestone, are in the progress log of [ROADMAP.md](../ROA
 | M10 | Performance: 1M entities at 60 fps, large DWG loads | ≈ 60% (internal numbers only) | 20–40 |
 | M11 | 3D: UCS, orbit, visual styles, solids, surfaces, meshes, sections, rendering | ≈ 2% | 300–450 |
 | M12 | Automation: AutoLISP, SCRIPT, action recorder, sheet sets, Express Tools | ≈ 15% (percentage from 2026-10-10 and not re-scored; MCP, CLI, control channel, AutoLISP core #855 and SCRIPT #693 done) | 130–220 |
-| M13 | 1.0 polish: preferences, workspaces, localisation, accessibility, signed packages, docs | ≈ 15% (signed packages for every platform exist; themes done; string catalog with twelve languages, live language switching, #36; percentage from 2026-10-10 and not re-scored) | 110–170 |
+| M13 | 1.0 polish: preferences, workspaces, localisation, accessibility, signed packages, docs | ≈ 15% (signed packages for every platform exist; themes done; string catalog with fifteen languages, live language switching, #36; percentage from 2026-10-10 and not re-scored) | 110–170 |
 | — | Geometry precision (cross-cutting, see [geometry-parity.md](geometry-parity.md)) | ≈ 40% | 70–110 |
 | — | AI features | ≈ 0% in-app | 40–80 |
 | | **Remaining to full parity** | | **≈ 1,300–2,100** |
@@ -103,6 +103,7 @@ AutoLISP surface, AI features with openly licensed local models, and every remai
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Re-audit against main 41d9b5e95: alpha-gate evidence, CI gate (#1987), beta-checklist states, open-PR and catalog counts re-checked against main 41d9b5e95; percentages and hours not re-scored |
 | 2026-10-13 | minor | Re-audit against main e707ab4d: alpha-gate evidence for drafting, annotation, blocks and DWG rows; beta-checklist states for DWG/DXF, blocks and languages; current-focus items 4–7; milestone notes M1, M12, M13; percentages and hours not re-scored |
 | 2026-10-12 | minor | Block Editor for static blocks landed: "Use blocks" evidence updated; status and hours unchanged (REFEDIT and dynamic blocks remain) |
 | 2026-10-11 | minor | Alpha-gate evidence refreshed for merged work (#459, #525, #528, #160, #186, #564); statuses and hours unchanged |

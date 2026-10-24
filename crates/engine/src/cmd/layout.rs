@@ -270,8 +270,12 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = layout_name("layout.rename", s.doc()?, &from)?;
     let to = str_param(p, "to").ok_or_else(|| bad("layout.rename", "`to` is required"))?;
     let to = check_name("layout.rename", s.doc()?, to, Some(&from))?;
-    if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == from) {
+    let d = s.doc_mut()?;
+    if let Some(l) = d.layouts.iter_mut().find(|l| l.name == from) {
         l.name = to.clone();
+    }
+    if d.active_layout.as_ref().is_some_and(|a| a.eq_ignore_ascii_case(&from)) {
+        d.active_layout = Some(to.clone());
     }
     let (old, new) = (Space::Paper(from.clone()), Space::Paper(to.clone()));
     let st = s.state_mut()?;
@@ -826,13 +830,16 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let path = _path;
-                let tmp = format!("{path}.cadcraft-tmp");
-                std::fs::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                // Exclusively create a fresh temporary file and rename it into place so a planted
+                // `<path>.cadcraft-tmp` symlink cannot redirect the plot write (CWE-59).
+                crate::atomic_write::write_atomic(std::path::Path::new(path), &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 Ok(json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
             }
             #[cfg(target_arch = "wasm32")]
-            Err(bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))
+            {
+                super::exchange::deliver_file(cmd, _path, &bytes, super::file::deliver())?;
+                Ok(json!({ "path": _path, "bytes": bytes.len(), "layout": layout, "pages": pages }))
+            }
         }
         None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages })),
     }
@@ -923,6 +930,14 @@ mod tests {
         // Undo removes the layout.
         s.undo().unwrap();
         assert!(s.doc().unwrap().layout("Layout3").is_none());
+    }
+
+    #[test]
+    fn rename_keeps_the_active_layout_whatever_its_case() {
+        let mut s = session_with_model();
+        s.doc_mut().unwrap().active_layout = Some("layout1".into());
+        s.execute("layout.rename", &json!({"from": "Layout1", "to": "Sheet A"})).unwrap();
+        assert_eq!(s.doc().unwrap().active_layout.as_deref(), Some("Sheet A"));
     }
 
     #[test]

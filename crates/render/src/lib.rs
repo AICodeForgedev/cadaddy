@@ -735,13 +735,17 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         let eb = cadcraft_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
+    // One expansion budget for the whole build: seed it with what the enclosing list has already
+    // spent so a viewport's contents cannot start over with a fresh allowance and exceed the
+    // documented limit (CWE-400). Both the serial sub-builder and the parallel chunks share it.
+    let budget = std::sync::atomic::AtomicUsize::new(b.list.expanded);
     let mut sub = Builder {
         list: DisplayList::default(),
         opts: b.opts,
         plotting: b.plotting,
         styles: b.styles,
         named: None,
-        shared_budget: None,
+        shared_budget: Some(&budget),
         transparency: 0,
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -754,7 +758,6 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
             // As `build_parallel`: chunks built side by side, joined in drawing order.
             use rayon::prelude::*;
             let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
-            let budget = std::sync::atomic::AtomicUsize::new(0);
             let opts = b.opts;
             let parts: Vec<DisplayList> = ents
                 .par_chunks(PARALLEL_CHUNK)
@@ -1528,7 +1531,9 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
-        lt_factor: ctx.lt_factor,
+        // The reference's own linetype scale (group 48) multiplies that of the objects inside,
+        // as LTSCALE does for the drawing (tests/block_ltscale.rs).
+        lt_factor: ctx.lt_factor * if e.common.ltscale.is_finite() && e.common.ltscale > 0.0 { e.common.ltscale } else { 1.0 },
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,

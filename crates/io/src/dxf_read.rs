@@ -245,6 +245,11 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
 fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
+    entity_with_table_budget(kind, tags, &mut 4_000_000)
+}
+
+/// Parse one entity while charging materialized table cells to the caller's shared import budget.
+fn entity_with_table_budget(kind: &str, tags: &[Tag], table_cells_left: &mut usize) -> Option<(Common, EntityKind)> {
     // The paper-space viewport our writer adds (dxf_write::paper_view) stays implicit.
     if kind == "VIEWPORT" && crate::dxf_ext::is_paper_view(tags) {
         return None;
@@ -480,7 +485,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }
             k
         }
-        "ACAD_TABLE" => EntityKind::Table(acad_table(tags)),
+        "ACAD_TABLE" => EntityKind::Table(acad_table(tags, table_cells_left)),
         "VIEWPORT" => EntityKind::Viewport(Viewport {
             center: t.p(10),
             width: t.fd(40, 1.0),
@@ -525,7 +530,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
 
 /// An ACAD_TABLE entity: sizes, cell texts and merges (DXF Reference), plus CADCraft's
 /// title/header flags, text height and style name from xdata when present.
-fn acad_table(tags: &[Tag]) -> Table {
+fn acad_table(tags: &[Tag], table_cells_left: &mut usize) -> Table {
     const MAX_CELLS: usize = 1_000_000;
     let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbTable").unwrap_or(0);
     let tail = tags.get(start..).unwrap_or(&[]);
@@ -539,6 +544,12 @@ fn acad_table(tags: &[Tag]) -> Table {
     if declared > MAX_CELLS || (declared > 10_000 && n_cells < declared) {
         rows = 0;
         cols = 0;
+    }
+    // Charge before any cell vector is materialized, including discarded tables.
+    let count = rows.saturating_mul(cols);
+    match table_cells_left.checked_sub(count) {
+        Some(left) => *table_cells_left = left,
+        None => return Table { insert: T(tags).p(10), ..Table::default() },
     }
     let size = |v: f64| if v.is_finite() && v > 0.0 { v } else { 0.27 };
     let mut row_heights: Vec<f64> = head.all_f(141).into_iter().take(rows).map(size).collect();
@@ -1098,7 +1109,13 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
 
 /// Parse a run of entity records (ENTITIES section or a block's body) into entities. Records that
 /// can't be placed are counted in `skipped`.
-fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
+fn parse_entities(
+    recs: &[(String, Vec<Tag>)],
+    d: &mut Drawing,
+    rx: &mut Rx,
+    skipped: &mut usize,
+    table_cells_left: &mut usize,
+) -> Vec<(Option<String>, bool, Entity)> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
@@ -1106,7 +1123,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx, ski
         let owner = crate::dxf_ext::owner(tags);
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
-        let mut kindent = entity(kind, tags);
+        let mut kindent = entity_with_table_budget(kind, tags, table_cells_left);
         if let Some((c, _)) = kindent.as_mut()
             && let Some(n) = entity_plot_style(tags, rx)
         {
@@ -1382,6 +1399,7 @@ fn style_font(tags: &[Tag], file: String) -> String {
     }
 }
 
+/// Load symbol tables and resolve handle references, indexing layer names for case-insensitive updates.
 fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     let recs = records(tags);
     // STYLE handle → name, or the shape file of an unnamed shape style (linetype elements).
@@ -1420,12 +1438,16 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         }
     }
     let mut active_vport = false;
+    // Index of layers already appended, by lower-cased name, so each LAYER record updates or
+    // appends in O(1) instead of scanning the growing layer list — otherwise many distinct layer
+    // names make import quadratic (CWE-407).
+    let mut layer_index: HashMap<String, usize> = d.layers.iter().enumerate().map(|(i, l)| (l.name.to_ascii_lowercase(), i)).collect();
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
             "LAYER" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.layers.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let aci = t.i(62).unwrap_or(7);
@@ -1455,14 +1477,21 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(desc) = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_DESCRIPTION_APP).iter().filter(|x| x.code == 1000).nth(1) {
                     l.description = desc.str();
                 }
-                match d.layer_mut(&name) {
-                    Some(x) => *x = l,
-                    None => d.layers.push(l),
+                match layer_index.get(&name.to_ascii_lowercase()) {
+                    Some(&i) => {
+                        if let Some(x) = d.layers.get_mut(i) {
+                            *x = l;
+                        }
+                    }
+                    None => {
+                        layer_index.insert(name.to_ascii_lowercase(), d.layers.len());
+                        d.layers.push(l);
+                    }
                 }
             }
             "LTYPE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() || d.linetype(&name).is_some() {
+                if name.is_empty() || d.linetype(&name).is_some() || d.linetypes.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let pattern = ltype_pattern(&tg, &ltype_styles);
@@ -1470,7 +1499,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "STYLE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.text_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.
@@ -1552,7 +1581,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "DIMSTYLE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.dim_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // Every variable with a DIMSTYLE group code; values the style can't take are
@@ -1651,6 +1680,11 @@ fn ltype_pattern(tags: &[Tag], styles: &HashMap<String, String>) -> Vec<DashElem
 
 /// Read a DXF file into a drawing.
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
+    read_budgeted(bytes, 4_000_000)
+}
+
+/// Import DXF sections while sharing one materialized-table-cell budget across blocks and entity sections.
+fn read_budgeted(bytes: &[u8], mut table_cells_left: usize) -> Result<Drawing> {
     let tags = cadcraft_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
     let secs = sections(&tags);
     if secs.is_empty() {
@@ -1705,7 +1739,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                             j += 1;
                         }
                         let body = recs.get(i + 1..j).unwrap_or(&[]);
-                        let ents = parse_entities(body, &mut d, &mut rx, &mut n);
+                        let ents = parse_entities(body, &mut d, &mut rx, &mut n, &mut table_cells_left);
                         blocks.push((name, base, description, ents, xref));
                         i = j + 1;
                     } else {
@@ -1721,7 +1755,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             // A damaged file may split its entities over several ENTITIES sections (#865).
             "ENTITIES" => {
                 let mut n = 0;
-                entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx, &mut n));
+                entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx, &mut n, &mut table_cells_left));
                 count_skipped(&mut skipped, "ENTITIES", n);
             }
             "OBJECTS" => {
@@ -1761,7 +1795,12 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         d.layouts.push(Layout::new("Layout1", 1));
         paper_block_for.insert("*PAPER_SPACE".into(), "Layout1".into());
     }
-    let first_layout = d.layouts.first().map(|l| l.name.clone()).unwrap_or_else(|| "Layout1".into());
+    // The layout in `*Paper_Space` is the active one, kept when it isn't the first tab (the first
+    // is active by default); paper-space entities without an owner go there.
+    let active = paper_block_for.get("*PAPER_SPACE").cloned();
+    let first_tab = d.layouts.iter().min_by_key(|l| l.tab_order).map(|l| l.name.clone());
+    d.active_layout = active.clone().filter(|a| Some(a) != first_tab.as_ref());
+    let first_layout = active.or_else(|| d.layouts.first().map(|l| l.name.clone())).unwrap_or_else(|| "Layout1".into());
     // Blocks: model/paper space blocks hold entities in newer files.
     for (name, base, description, ents, xref) in blocks {
         let up = name.to_ascii_uppercase();
@@ -1782,8 +1821,13 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             continue;
         }
         // Generated geometry we rebuild on save: table blocks, and standard arrowhead blocks
-        // nothing inserts.
-        if rx.table_blocks.contains(&up) || (crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up)) {
+        // nothing inserts whose content is the one CADCraft writes. An arrowhead block with other
+        // content (AutoCAD's `_Dot`, a user's redefinition) is kept, so dimensions keep it.
+        let generated_arrow = || {
+            let own: Vec<&Entity> = ents.iter().map(|(_, _, e)| e).collect();
+            crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up) && crate::dxf_write::is_generated_arrow(&name, &own)
+        };
+        if rx.table_blocks.contains(&up) || generated_arrow() {
             continue;
         }
         let mut b = Block::new(&name);
@@ -2109,7 +2153,12 @@ impl Objects {
     }
 }
 
-/// Associativity from a DIMASSOC object (files from other writers).
+/// Associativity from a DIMASSOC object (files from other writers). The dimension kind decides
+/// which definition points the references name, in the order AutoCAD writes them: `p13`/`p14`
+/// for linear, aligned and arc-length dimensions, both ends of both lines (`p13`..`p16`) for
+/// angular dimensions, the three points of an angular-3-point dimension, `p13` for ordinate
+/// dimensions, and for radial or diametric dimensions the single circle reference
+/// ([`radial_links`]). CADCraft's own xdata links, when present, win.
 fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbDimAssoc").unwrap_or(0);
     let tail = tags.get(start..).unwrap_or(&[]);
@@ -2118,10 +2167,25 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     if !dm.assoc.is_empty() {
         return;
     }
+    // A radial or diametric dimension names its circle once, by its centre.
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        let links = radial_links(d, dm, tail);
+        if !links.is_empty() {
+            let _ = d.modify_entity(dim_h, |e| {
+                if let EntityKind::Dimension(dm) = &mut e.kind {
+                    dm.assoc = links;
+                }
+            });
+        }
+        return;
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => return,
+        DimKind::Radius | DimKind::Diameter => return,
     };
     let flags = T(tail).i(90).unwrap_or(0);
     let used: Vec<&str> = slots.iter().enumerate().filter(|(i, _)| flags & (1 << i) != 0).map(|(_, s)| *s).collect();
@@ -2150,9 +2214,51 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     }
 }
 
+/// Associations of a radial or diametric dimension from its one standard reference: the circle
+/// or arc it measures, by its centre (osnap 3). The definition points are then on that circle,
+/// so the dimension follows its radius or diameter.
+fn radial_links(d: &Drawing, dm: &Dimension, tail: &[Tag]) -> Vec<DimAssoc> {
+    let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, x)| x.code == 1 && x.str() == "AcDbOsnapPointRef").map(|(i, _)| i).take(8).collect();
+    for (k, s) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(tail.len());
+        let r = T(tail.get(s + 1..end).unwrap_or(&[]));
+        if !matches!(r.i(72), Some(3 | 4)) {
+            continue;
+        }
+        let Some(handle) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
+        let Some(centre) = circle_centre(d, handle) else { continue };
+        let on = |point: &str, p: Vec3| {
+            let angle = centre.angle_to(p.xy());
+            angle.is_finite().then(|| DimAssoc { point: point.into(), handle, snap: AssocSnap::OnCircle { angle } })
+        };
+        let links = match dm.kind {
+            DimKind::Radius => on("p15", dm.p15).map(|p15| vec![DimAssoc { point: "defpt".into(), handle, snap: AssocSnap::Center }, p15]),
+            DimKind::Diameter => [on("defpt", dm.defpt), on("p15", dm.p15)].into_iter().collect::<Option<Vec<_>>>(),
+            _ => None,
+        };
+        if let Some(links) = links {
+            return links;
+        }
+    }
+    Vec::new()
+}
+
+/// The planar centre of a circle or arc, or `None` for any other entity: the point a radial or
+/// diametric dimension's single DIMASSOC reference names.
+fn circle_centre(d: &Drawing, h: Handle) -> Option<Vec2> {
+    match &d.entity(h)?.kind {
+        EntityKind::Circle(c) => Some(c.center.xy()),
+        EntityKind::Arc(a) => Some(a.center.xy()),
+        _ => None,
+    }
+}
+
 /// A CADCraft snap from a DIMASSOC object snap type and point, and for a polyline the segment
 /// the point is an end of: AutoCAD writes no usable point there (10/20 are 0, #1049), the segment
-/// and the osnap (1 its end, 13 its start) name the vertex.
+/// and the osnap (1 its end, 13 its start) name the vertex. For a line or arc the osnap alone
+/// says which end: 13 is the start and 1 the end, whatever the stored point (the point is
+/// 0,0,0 for curves, and choosing by distance gave the wrong end for arcs). A point entity has
+/// only one position, so both codes mean it.
 fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2, segment: Option<i64>) -> Option<AssocSnap> {
     let e = d.entity(main)?;
     if let (EntityKind::LwPolyline(p), Some(k), 1 | 13) = (&e.kind, segment, osnap) {
@@ -2164,16 +2270,21 @@ fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: 
     }
     Some(match osnap {
         1 | 13 => match &e.kind {
+            // AutoCAD names a curve's start with 13 and its end with 1 (the stored point is 0,0,0).
+            // Other writers use 1 for either end of a line with the point stored: take the nearer.
             EntityKind::Line(l) => {
-                if osnap == 13 || l.a.xy().dist(at) <= l.b.xy().dist(at) {
+                if osnap == 13 || (at != Vec2::ZERO && l.a.xy().dist(at) <= l.b.xy().dist(at)) {
                     AssocSnap::Start
                 } else {
                     AssocSnap::End
                 }
             }
-            EntityKind::Arc(a) => {
-                let g = cadcraft_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end);
-                if osnap == 13 || g.start_point().dist(at) <= g.end_point().dist(at) { AssocSnap::Start } else { AssocSnap::End }
+            EntityKind::Arc(_) => {
+                if osnap == 13 {
+                    AssocSnap::Start
+                } else {
+                    AssocSnap::End
+                }
             }
             EntityKind::LwPolyline(p) => {
                 let index = p.vertices.iter().enumerate().min_by(|x, y| x.1.p.dist(at).total_cmp(&y.1.p.dist(at))).map(|(i, _)| i)?;
@@ -2248,6 +2359,7 @@ fn page_setup(t: &T) -> PageSetup {
         _ => "layout",
     }
     .into();
+    p.plot_window = [t.fd(48, 0.0), t.fd(49, 0.0), t.fd(140, 0.0), t.fd(141, 0.0)].map(|v| if v.is_finite() { v } else { 0.0 });
     p.plot_style_table = t.s(7).unwrap_or_default();
     p
 }
@@ -2308,4 +2420,40 @@ fn helix(tags: &[Tag]) -> Helix {
 /// reader makes it. AutoLISP's `entmake` and `entmod` are built on it.
 pub fn entity_from_groups(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     entity(&kind.to_ascii_uppercase(), tags)
+}
+
+#[cfg(test)]
+mod table_budget_tests {
+    use super::*;
+    /// Build synthetic table tags with a requested row and column count for allocation-budget checks.
+    fn table_tags(rows: i64, cols: i64) -> Vec<Tag> {
+        vec![Tag::s(100, "AcDbTable"), Tag::i(91, rows), Tag::i(92, cols), Tag::i(171, 1), Tag::s(1, "cell")]
+    }
+    /// A table that cannot fit allocates no cell grid, while a smaller table spends only its cell count.
+    #[test]
+    fn exhausted_budget_rejects_before_materializing_cells() {
+        let mut left = 3;
+        let table = acad_table(&table_tags(2, 2), &mut left);
+        assert!(table.cells.is_empty() && table.row_heights.is_empty() && table.col_widths.is_empty());
+        assert_eq!(left, 3);
+        let table = acad_table(&table_tags(1, 2), &mut left);
+        assert_eq!(table.cells[0].len(), 2);
+        assert_eq!(left, 1);
+    }
+    /// Tables in blocks and repeated entity sections consume one document-wide cell allowance.
+    #[test]
+    fn blocks_and_entity_sections_share_one_budget() {
+        let table = "0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n2\n171\n1\n1\ncell\n";
+        let dxf = format!(
+            "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nTEST\n10\n0\n20\n0\n{table}0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{table}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{table}0\nENDSEC\n0\nEOF\n"
+        );
+        let d = read_budgeted(dxf.as_bytes(), 2).unwrap();
+        let block = d.block("TEST").unwrap();
+        let count = |e: &Entity| match &e.kind {
+            EntityKind::Table(t) => t.cells.iter().map(Vec::len).sum::<usize>(),
+            _ => 0,
+        };
+        assert_eq!(block.entities.iter().map(|e| count(e)).sum::<usize>(), 2);
+        assert_eq!(d.model.iter().map(|e| count(e)).sum::<usize>(), 0);
+    }
 }

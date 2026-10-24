@@ -10,7 +10,7 @@ use cadcraft_doc::{DimKind, DimStyle, Dimension};
 use cadcraft_fonts::{MTextParams, TextFont};
 use cadcraft_geom::{Arc, Vec2, ccw_sweep};
 
-use crate::units::{NumFormat, format_angle, format_decimal, format_linear};
+use crate::units::{NumFormat, format_angle_with_separator, format_decimal, format_linear};
 
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
@@ -53,6 +53,22 @@ pub struct DimGeometry {
 }
 
 impl DimGeometry {
+    /// `value` as the contents of a plain MTEXT (the dimension's `*D` block, its EXPLODE
+    /// pieces): the diameter sign as `%%c`, not the decoded ⌀ (U+2300), which no SHX font has,
+    /// so other programs plot nothing for it, while every font draws `%%c` (#1645). A `%`
+    /// that would run into a code is written `%%%`.
+    pub fn mtext_contents(&self) -> String {
+        let mut out = String::with_capacity(self.value.len() + 2);
+        let mut chars = self.value.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '⌀' => out.push_str("%%c"),
+                '%' if matches!(chars.peek(), Some('%' | '⌀')) => out.push_str("%%%"),
+                c => out.push(c),
+            }
+        }
+        out
+    }
     fn dim(&mut self, l: Vec<Vec2>) {
         if l.len() >= 2 {
             self.lines.push(l);
@@ -141,7 +157,7 @@ pub enum Arrowhead {
 impl Arrowhead {
     /// Parse a DIMBLK value ("" / "_DOT" / "Architectural tick" / "closed blank"…).
     pub fn parse(name: &str) -> Arrowhead {
-        let n: String = name.trim().trim_start_matches('_').chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        let n: String = name.trim().trim_start_matches('_').chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
         match n.as_str() {
             "" | "closedfilled" | "filled" => Arrowhead::ClosedFilled,
             "closedblank" | "blank" => Arrowhead::ClosedBlank,
@@ -413,18 +429,59 @@ fn tol_height_code(st: &DimStyle) -> String {
     format!("{}x", format_decimal(f / 0.7, 4, 8, "."))
 }
 
+/// Apply measurement placeholders or append a dimension suffix, bounding the resulting UTF-8 text.
 fn post(template: &str, meas: &str) -> String {
-    if template.contains("<>") { template.replace("<>", meas) } else { format!("{meas}{template}") }
+    if template.contains("<>") {
+        bounded_replace(template, meas)
+    } else {
+        let mut out = String::new();
+        append_dim_text(&mut out, meas);
+        append_dim_text(&mut out, template);
+        out
+    }
 }
 
+/// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
 fn apply_override(base: &str, d: &Dimension) -> String {
     if d.text.is_empty() {
         base.to_string()
     } else if d.text.trim().is_empty() {
         String::new()
     } else {
-        d.text.replace("<>", base)
+        bounded_replace(&d.text, base)
     }
+}
+
+/// Largest dimension text produced by substituting the measurement into style/override text. Two
+/// modest strings can otherwise expand into gigabytes when the template holds many `<>` markers
+/// (CWE-789); past this the output is truncated rather than allocated unbounded.
+const MAX_DIM_TEXT: usize = 64 * 1024;
+
+/// Replace every `<>` in `template` with `value`, with the expanded length checked against
+/// [`MAX_DIM_TEXT`] before allocating so a many-placeholder template cannot blow up memory.
+fn bounded_replace(template: &str, value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find("<>") {
+        if !append_dim_text(&mut out, &rest[..i]) || !append_dim_text(&mut out, value) {
+            return out;
+        }
+        rest = &rest[i + 2..];
+    }
+    append_dim_text(&mut out, rest);
+    out
+}
+
+// Returns false when truncation consumed the remaining UTF-8-safe space.
+/// Append within the remaining dimension-text byte allowance without splitting a UTF-8 character.
+/// Return false if any input text had to be truncated.
+fn append_dim_text(out: &mut String, text: &str) -> bool {
+    let mut end = text.len().min(MAX_DIM_TEXT.saturating_sub(out.len()));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    out.push_str(&text[..end]);
+    end == text.len()
 }
 
 fn ext_line(origin: Vec2, foot: Vec2, st: &DimStyle, k: f64) -> Option<Vec<Vec2>> {
@@ -582,6 +639,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let text_outside = !text_in;
             text_angle = if text_outside { if st.text_outside_horizontal { 0.0 } else { along_ang } } else { inside_ang };
             let half = extent(text_angle);
+            // DIMTMOVE 1 / 2: text that doesn't fit is moved off the dimension line, which stays put.
+            let moved = text_outside && st.text_move != 0;
             // DIMSOXD: arrowheads that don't fit inside are left out.
             let outside_arrows = !arrows_inside && !st.suppress_outside_arrows;
             // Text centre along the dimension line.
@@ -597,7 +656,11 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // Perpendicular offset per DIMTAD.
             let side_out = if (on - p1).dot(n) >= 0.0 { n } else { -n };
             let tr = Vec2::from_angle(text_angle);
-            let off_along = |m: Vec2| gap + (tw * tr.dot(m).abs() + tht * tr.perp().dot(m).abs()) / 2.0;
+            let off_along = |m: Vec2| {
+                let glyph_extent = tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * if st.text_above == 1 { 0.6 } else { 0.5 };
+                // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
+                gap + glyph_extent
+            };
             let above = if text_angle.abs() < 1e-12 && n.y.abs() > 1e-9 {
                 if n.y > 0.0 { n } else { -n }
             } else if text_angle.abs() < 1e-12 {
@@ -621,6 +684,12 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 text_angle = readable(e.angle());
                 let outward = if just == 3 { -u } else { u };
                 text_mid = f + e * (st.ext_extend * k + gap + tw / 2.0) + outward * (gap + tht / 2.0);
+            } else if moved {
+                // Over the middle of the line, clear of the arrowheads, on the side away from the
+                // measured points; with DIMTMOVE 1 it starts there and a leader joins it.
+                let mid = f1.mid(f2);
+                let lift = off_along(side_out) + 2.0 * asz.max(tsz);
+                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + off_along(side_out)) };
             } else if !d.user_text_pos {
                 text_mid = along_c + offset;
             }
@@ -681,7 +750,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 to_text(&mut g, if outside_arrows { f2 + u * stub } else { f2 });
             }
             // DIMTMOVE 1: a leader from the dimension line to text moved off it.
-            if d.user_text_pos && st.text_move == 1 && has_text {
+            if (d.user_text_pos || moved) && st.text_move == 1 && has_text {
                 let base = f1.mid(f2);
                 let off = (text_mid - base).dot(n).abs();
                 if off > tht / 2.0 + gap + 1e-9 {
@@ -834,7 +903,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             g.measurement = sweep;
             // DIMAZIN 1 / 2 suppress leading / trailing zeros (DIMZIN's bits 4 / 8).
             let azin = (st.angular_zero_suppression & 3) * 4;
-            let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, azin);
+            let txt = format_angle_with_separator(sweep, st.angular_unit, st.angular_decimals, azin, &st.decimal_separator);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
             g.mtext = inspected(apply_override(&txt, d), d);
             let mut pts = Vec::new();
@@ -1131,7 +1200,7 @@ mod tests {
         // Centred text breaks the dimension line in two.
         assert_eq!(centred.lines_of(LineRole::Dim).count(), 2);
         let above = dimension_geometry(&d, &st_with(|s| s.text_above = 1), 1.0);
-        assert!((above.text_pos.y - (5.0 + 0.09 + 0.09)).abs() < 1e-6, "{}", above.text_pos.y);
+        assert!((above.text_pos.y - (5.0 + 0.09 + 0.18 * 0.6)).abs() < 1e-6, "{}", above.text_pos.y);
         assert_eq!(above.lines_of(LineRole::Dim).count(), 1);
         let below = dimension_geometry(&d, &st_with(|s| s.text_above = 4), 1.0);
         assert!(below.text_pos.y < 5.0);
@@ -1141,6 +1210,31 @@ mod tests {
         let d2 = lin((0.0, 10.0), (10.0, 10.0), (0.0, 5.0), 0.0);
         let outside2 = dimension_geometry(&d2, &st_with(|s| s.text_above = 2), 1.0);
         assert!(outside2.text_pos.y < 5.0);
+    }
+
+    #[test]
+    fn dimtad_one_uses_autocad_text_clearance() {
+        let d = lin((0.0, 0.10), (0.0, 0.70), (0.30, 0.40), std::f64::consts::FRAC_PI_2);
+        let st = st_with(|s| {
+            s.scale = 50.0;
+            s.text_height = 0.0025;
+            s.text_gap = 0.0008;
+            s.arrow_size = 0.0015;
+            s.text_above = 1;
+            s.text_inside_horizontal = false;
+            s.decimals = 2;
+        });
+        let g = dimension_geometry(&d, &st, 50.0);
+        // Half the text height (0.0625) plus DIMGAP (0.04) put the centre at 0.1025;
+        // AutoCAD 2026 recomputes it at about 0.115 from the line (#2004).
+        assert!(
+            (0.30 - g.text_pos.x - 0.115).abs() < 0.001,
+            "text x={} offset={} angle={} text={}",
+            g.text_pos.x,
+            0.30 - g.text_pos.x,
+            g.text_angle,
+            g.value
+        );
     }
 
     #[test]
@@ -1168,6 +1262,37 @@ mod tests {
         let d = lin((0.0, 0.0), (0.5, 0.0), (0.0, 5.0), 0.0);
         let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
         assert!(g.text_pos.x > 0.5, "text beyond the second extension line: {}", g.text_pos.x);
+    }
+
+    #[test]
+    fn text_that_does_not_fit_follows_dimtmove_2() {
+        // Vertical, measured points left of the line: the text goes over the middle of the
+        // line, on the side away from them, and the line is not carried out to it.
+        let d = lin((0.0, 0.0), (0.0, 0.5), (5.0, 0.0), std::f64::consts::FRAC_PI_2);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 2), 1.0);
+        assert!((g.text_pos.y - 0.25).abs() < 1e-9 && g.text_pos.x > 5.2, "{:?}", g.text_pos);
+        assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.y <= 0.5 + 1e-9 && p.x <= 5.0 + 1e-9), "no leader, no line out to the text");
+        // Horizontal, measured points above the line: below it.
+        let d = lin((0.0, 10.0), (0.5, 10.0), (0.0, 5.0), 0.0);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 2), 1.0);
+        assert!((g.text_pos.x - 0.25).abs() < 1e-9 && g.text_pos.y < 4.8, "{:?}", g.text_pos);
+        assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.x <= 0.5 + 1e-9 && p.y >= 5.0 - 1e-9), "no leader, no line out to the text");
+    }
+
+    #[test]
+    fn text_that_does_not_fit_follows_dimtmove_1() {
+        // Moved off the line with a leader from the middle of the dimension line.
+        let d = lin((0.0, 0.0), (0.5, 0.0), (0.0, 5.0), 0.0);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 1), 1.0);
+        assert!(g.text_pos.y > 5.2, "{:?}", g.text_pos);
+        let mid = Vec2::new(0.25, 5.0);
+        assert!(g.lines_of(LineRole::Dim).any(|l| l.len() == 2 && l[0].dist(mid) < 1e-9 && l[1].y > 5.1), "leader");
+        // Text placed with DIMTEDIT stays where it is.
+        let mut placed = d.clone();
+        placed.user_text_pos = true;
+        placed.text_mid = Vec3::new(3.0, 7.0, 0.0);
+        let g = dimension_geometry(&placed, &st_with(|s| s.text_move = 1), 1.0);
+        assert!(g.text_pos.dist(Vec2::new(3.0, 7.0)) < 1e-9, "{:?}", g.text_pos);
     }
 
     #[test]
@@ -1272,6 +1397,7 @@ mod tests {
         d.defpt = Vec3::new(-3.0, 0.0, 0.0);
         let g = dimension_geometry(&d, &st_with(|s| s.decimals = 1), 1.0);
         assert_eq!(g.value, "⌀6.0");
+        assert_eq!(g.mtext_contents(), "%%c6.0", "the *D block's text (#1645)");
         let mut a = lin((10.0, 0.0), (0.0, 10.0), (3.0, 3.0), 0.0);
         a.kind = DimKind::Angular3P;
         a.p15 = Vec3::ZERO;
@@ -1320,5 +1446,47 @@ mod tests {
         d.p15 = Vec3::new(f64::NAN, 0.0, 0.0);
         let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
         assert!(g.lines.is_empty() && g.fills.is_empty(), "{:?}", g.lines);
+    }
+
+    /// #1645: the MTEXT contents give back the dimension's text when decoded, with the diameter
+    /// sign as `%%c` (no SHX font has U+2300) and a `%` that would start a code escaped.
+    #[test]
+    fn mtext_contents_write_the_diameter_sign_as_a_code() {
+        let with = |v: &str| DimGeometry { value: v.into(), ..DimGeometry::default() };
+        for (value, contents) in [
+            ("⌀60", "%%c60"),
+            ("2x ⌀8.5 THRU", "2x %%c8.5 THRU"),
+            ("R3.0", "R3.0"),
+            ("36.9° ±0.1", "36.9° ±0.1"),
+            ("50%", "50%"),
+            ("5%⌀6", "5%%%%%c6"),
+            ("%%", "%%%%"),
+            ("", ""),
+        ] {
+            let g = with(value);
+            assert_eq!(g.mtext_contents(), contents, "{value:?}");
+            assert_eq!(decode_value(&g.mtext_contents()), value, "{value:?} reads back");
+            assert!(!g.mtext_contents().contains('⌀'));
+        }
+    }
+}
+
+#[cfg(test)]
+mod text_budget_tests {
+    use super::*;
+    /// A dimension suffix without placeholders still obeys the total text limit.
+    #[test]
+    fn bounds_post_without_markers() {
+        let text = post(&"x".repeat(MAX_DIM_TEXT * 2), "12");
+        assert_eq!(text.len(), MAX_DIM_TEXT);
+        assert!(text.starts_with("12x"));
+    }
+    /// Oversized substituted text retains its prefix and ends at a valid UTF-8 boundary.
+    #[test]
+    fn oversized_value_is_substituted_and_truncated_at_a_character_boundary() {
+        let text = bounded_replace("prefix <> mm", &"é".repeat(MAX_DIM_TEXT));
+        assert!(text.starts_with("prefix é"));
+        assert!(!text.contains("<>"));
+        assert!(text.len() <= MAX_DIM_TEXT && text.len() >= MAX_DIM_TEXT - 1);
     }
 }

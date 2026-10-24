@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (stable dash anchors on filled-object highlights) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (re-audit of the evidence text against main 41d9b5e95: point entry, tracking, Dynamic Input, grips, scripts, views; percentages not re-measured; previously: distinct polyline midpoint grips) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -11,7 +11,7 @@ the same points and respond to the same keys. Work items: [gaps.md](gaps.md#uiux
 point filters, typed snap overrides), the common running snaps, polar/ortho, PolarSnap, object snap
 tracking, Dynamic Input (pointer boxes, grip dimensional input, DYNPROMPT), hot-grip options with
 several hot grips, shortcut menus and the palettes are real, and so are the Extension, Parallel and
-Apparent Intersection snaps (#379). Missing: lasso selection, selection cycling, grip hover menus,
+Apparent Intersection snaps (#379). Selection cycling landed (#1143). Missing: lasso selection, grip hover menus,
 multifunctional grips on dimensions and text, workspaces and the navigation bar. The 48% and the area
 percentages below are from 2026-10-11 and were not re-measured. Remaining: **≈ 110–170 Opus 5.5 hours**.
 
@@ -123,7 +123,7 @@ dimensions are edited).
 | Multifunctional grip hover menus (Add Vertex, Remove Vertex, Convert to Arc, Lengthen …) | yes | on right-click only, not on hover (`grips.rs`, #425); none on dimensions, MLEADER, hatches or text |
 | Grip dimensional input (length/angle fields) | yes | yes while one grip is stretched: DYNDIVIS and DYNDIGRIP choose the fields (`grip_dims.rs`) |
 | Dynamic block grips | yes | yes: arrows, squares and list triangles per visibility state, dragged to change the parameter (#883) |
-| Grip appearance (GRIPSIZE, colours, hover) | yes | GRIPSIZE, GRIPS and GRIPOBJLIMIT honoured (Options ▸ Selection); no grip colours |
+| Grip appearance (GRIPSIZE, colours, hover) | yes | GRIPSIZE, GRIPS and GRIPOBJLIMIT honoured (Options ▸ Selection); polyline segment midpoints use rectangles, vertices use squares; no grip colours |
 
 ## Selection (≈ 40%)
 
@@ -207,6 +207,8 @@ dimensions are edited).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Re-audit against main 41d9b5e95: evidence text for TK and typed snap overrides, PolarSnap, Dynamic Input, hot-grip options, dynamic block grips, SCRIPT, ZOOM Realtime/Dynamic, named views and VPORTS; headline no longer lists selection cycling as missing; the 48% and the area percentages are not re-measured |
+| 2026-10-22 | minor | Polyline segment midpoint grips use rectangles, distinct from square vertex grips, with matching hover and pick bounds (#1950) |
 | 2026-10-13 | minor | Filled-region highlight boundaries are traversed in deterministic coordinate order, fixing dash-phase jumps on CPU hover/selection redraws and GPU highlight rebuilds; CPU dash-position, pixel and GPU mesh regressions |
 | 2026-10-14 | minor | Selection cycling (#1143): the list and badge of SELECTIONCYCLING, Shift+Space through overlapping objects (#1145) |
 | 2026-10-14 | minor | Hatch Edit dialog adds boundaries from picked points or closed objects and removes selected loops |

@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~2 points (38% → 40% ready for real work) and ~125–190 Opus 5.5 hours away (the four failing core workflows of the [alpha gate](docs/roadmap.md#alpha-gate))
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (HATCHEDIT boundary add/remove progress) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (re-audit against main 41d9b5e95: language table, CI gate, open-PR count; previously: progress log: proxy objects keep their class through a save, #1812; previously minor: HATCHEDIT boundary add/remove progress) · **Target:** Autodesk AutoCAD 2027
 
 CADCraft targets full parity with AutoCAD (2D drafting first, then annotation, layouts and
 plotting, DWG, parametrics and 3D), plus what AutoCAD doesn't have: agent control over MCP, a
@@ -82,32 +82,32 @@ Hours are Opus 5.5 agent wall-clock hours, calibrated on this repo's own build: 
 
 ## Languages
 
-AutoCAD 2027 for Mac ships 8 interface languages; CADCraft ships English plus twelve partial
-catalogs (Ukrainian, Brazilian Portuguese, German, Spanish, Czech, Russian, French, Simplified Chinese, Italian, Korean, Swedish and Arabic). Detail: [localization-parity.md](docs/localization-parity.md).
+AutoCAD 2027 for Mac ships 8 interface languages; CADCraft ships English plus fifteen catalogs
+(Ukrainian, Brazilian Portuguese, German, Spanish, Czech, Russian, French, Simplified Chinese, Italian, Korean, Swedish, Arabic, Greek, Hungarian and Turkish). Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Status | UI translated |
 |---|---|---:|
 | English | full | 100% |
-| Simplified Chinese | partial | 1,112 catalog rows |
-| Spanish | partial | 1,239 catalog rows |
+| Simplified Chinese | partial | 1,337 catalog rows |
+| Spanish | partial | 1,243 catalog rows |
 | Hindi | none | 0% |
 | Arabic | partial | 1,229 catalog rows |
-| French | partial | 1,003 catalog rows |
-| Portuguese (Brazilian) | partial | 1,240 catalog rows |
+| French | partial | 1,004 catalog rows |
+| Portuguese (Brazilian) | partial | 1,243 catalog rows |
 | Indonesian | none | 0% |
 | Japanese | none | 0% |
-| Greek | complete current catalog | 1,330 current source keys; independent proofreading pending |
-| German | partial | ≈ 100% of the catalog (989 rows) |
-| Korean | none | 0% |
+| Greek | partial | 1,330 catalog rows; independent proofreading pending |
+| German | partial | 1,031 catalog rows |
+| Korean | partial | 1,235 catalog rows |
 | Vietnamese | none | 0% |
 
-Other languages shipped: Ukrainian (1,322 rows, the reference catalog, #36), Czech (1,214), Russian (1,004), Italian (1,231) and Swedish (1,235), counted 2026-10-13; engine messages stay English. Each catalog lags the reference by 86–319 rows added since it landed ([localization-parity.md](docs/localization-parity.md)).
+Other languages shipped: Ukrainian (1,357 rows, the reference catalog, #36), Czech (1,215), Russian (1,005), Italian (1,352), Swedish (1,382), Hungarian (1,326) and Turkish (1,330), counted 2026-10-24; engine messages stay English. Every catalog but Ukrainian's has strings added since it landed that still fall back to English: 6 (Italian, Swedish) to 296 (French) per `cargo xtask i18n` ([localization-parity.md](docs/localization-parity.md)).
 
 ## Upcoming
 
 Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md).
 
-1. Gate and land: run `cargo xtask ci` on every PR (open PR #847; fmt on main is fixed), land the 89 open PRs (15–25 h).
+1. Gate and land: CI runs `cargo xtask ci` on every PR since #1987 (fmt on main is fixed); land the 450 open PRs (2026-10-24) (15–25 h).
 2. Stop losing data on save (DXF done, #528; native MULTILEADER, #459, and the save version, #421, done; through DWG, acadrust still drops some content) (30–45 h).
 3. Real-file DWG/DXF corpus and a black-box check in AutoCAD (10–15 h + owner).
 4. ~~Precision input: object snap tracking, extension/parallel snaps, FROM/M2P/TK, snap overrides,
@@ -121,6 +121,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Entry |
 |---|---|
+| 2026-10-21 | DXF save keeps each proxy object's and proxy entity's class: its class number (group 91) is renumbered to the rewritten CLASSES instead of naming another class, so AutoCAD's visual styles in an R14 file no longer come back as SCALE or MLEADERSTYLE (#1812) |
 | 2026-10-14 | HATCHEDIT adds boundaries from internal points or closed objects and removes selected loops in the dialog, command line and JSON command; associative links and undo are covered by tests. |
 | 2026-10-12 | TRIM: a pick after a closed polyline's last cut keeps only the complementary run instead of an extra circuit of the outline (#726) |
 | 2026-10-12 | HATCHEDIT refuses an explicit bad `scale` or `angle` before it edits anything, so a rejected request leaves the drawing, undo and redo as they were (#724) |
@@ -137,6 +138,8 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Re-audit against main 41d9b5e95: language table, CI gate and open-PR count re-checked against main 41d9b5e95 |
+| 2026-10-21 | trivial | Progress log: proxy objects keep their class through a save (#1812) |
 | 2026-10-14 | minor | Progress log: HATCHEDIT boundary add/remove |
 | 2026-10-12 | trivial | Progress log: closed-polyline TRIM (#726) |
 | 2026-10-12 | trivial | Progress log: HATCHEDIT numeric validation (#724) |

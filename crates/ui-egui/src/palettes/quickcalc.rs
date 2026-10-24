@@ -182,6 +182,17 @@ impl State {
     }
 }
 
+/// Close only QuickCalc when present; otherwise restore it through the normal open path.
+/// Hiding the panel leaves its expression, history and variables intact.
+pub(crate) fn toggle(app: &mut CadApp) -> Result<Value, String> {
+    let panel = crate::docking::Panel::QuickCalc;
+    if app.ui.docking.layout.contains(&panel) {
+        crate::docking::command(app, false, &json!({ "operation": "close", "panel": panel.id() }))
+    } else {
+        open(app)
+    }
+}
+
 /// Open the palette. The first time it floats by the right edge of the drawing; afterwards it
 /// returns where it was closed.
 pub fn open(app: &mut CadApp) -> Result<Value, String> {

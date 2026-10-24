@@ -14,10 +14,13 @@ workspace = true
 cadcraft-engine = { workspace = true }
 cadcraft-ui-egui = { workspace = true }
 cadcraft-io = { workspace = true }
+# For the shared per-session control-token helper (control_server.rs authentication).
+cadcraft-mcp = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links", "persistence"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"

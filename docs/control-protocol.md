@@ -5,9 +5,17 @@ Start the desktop app with `--control PORT` (or `CADCRAFT_CONTROL_PORT=PORT`). I
 `--control` wins over the variable; a bare `--control` keeps the variable's port.
 
 ```json
-{"id": 1, "method": "cmdline.input", "params": {"text": "circle 0,0 5"}}
+{"id": 1, "method": "cmdline.input", "params": {"text": "circle 0,0 5"}, "token": "<session token>"}
 {"id": 1, "ok": true, "result": {"prompt": "Command:", "output": ["Command: CIRCLE"], ...}}
 ```
+
+Every request must carry the session `token`. Because loopback TCP cannot tell local operating
+system users apart, the app writes an unguessable per-session token to an owner-only file when the
+control server starts, and refuses (`unauthorized`) any request without a matching token. The file
+is `cadcraft-control-<port>.token` in the per-user runtime directory (`$XDG_RUNTIME_DIR`, else
+`~/.cache`; `%LOCALAPPDATA%` on Windows); its path is logged at startup. A client reads the token
+from that file — which requires the desktop user's own filesystem access — and includes it on each
+line. The MCP bridge (`cadcraft-cli mcp --connect`) does this automatically.
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. An unknown method's error points
 to `control.methods`, which lists the methods the server answers.
@@ -128,7 +136,13 @@ Panel IDs: `toolSets`, `layers`, `properties`, `externalReferences`. The protect
 
 `ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
 
-The QuickCalc palette (`quickCalc`) is not part of the default arrangement: QUICKCALC (`ui.panel.quickcalc`, Cmd+8) opens it, floating the first time.
+The QuickCalc palette (`quickCalc`) is not part of the default arrangement. Typed `QUICKCALC`/`QC`
+and `ui.panel.quickcalc` explicitly open and activate it: it floats the first time and later
+reopens at its saved location. **Window > QuickCalc** and **Ctrl/Cmd+8** invoke
+`ui.toggle.quickcalc` instead, closing the panel when present and reopening it otherwise.
+The shortcut also works with text-field focus. Toggling preserves the running drawing command
+and pending command-line input. The expression, history and calculator variables survive
+closing/reopening within the same session; they are not saved across application restarts.
 
 Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"layers","rect":[100,100,320,440]}}`.
 

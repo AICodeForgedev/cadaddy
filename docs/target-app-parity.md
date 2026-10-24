@@ -1,6 +1,6 @@
 # Target-app parity: CADCraft vs AutoCAD 2027
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (evidence text re-audited against main e707ab4d; percentages, hours and breadth counts not re-measured) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (re-audit of the evidence text against main 41d9b5e95; percentages, hours and breadth counts not re-measured; previously: RECTANG centre construction mode, #1127; numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
 
 The authoritative assessment of how close CADCraft is to AutoCAD, and how much Opus 5.5 work
 remains. [ROADMAP.md](../ROADMAP.md) summarises it, [gaps.md](gaps.md) lists every shortfall,
@@ -146,7 +146,7 @@ presence: an option that prints "not available yet" doesn't count.
 
 | Area | Weight | Parity | Remaining (Opus 5.5 h) | Evidence and main gaps | Doc |
 |---|---:|---:|---|---|---|
-| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options, REVCLOUD, WIPEOUT, XLINE; PLINE arc options and SPLINE options done (#397, #408); MLINE, REGION and HELIX are objects (#510); isometric drafting (#556) | [gaps](gaps.md#features) |
+| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options plus a centre construction mode (#1127), REVCLOUD, WIPEOUT, XLINE; PLINE arc options and SPLINE options done (#397, #408); MLINE, REGION and HELIX are objects (#510); isometric drafting (#556) | [gaps](gaps.md#features) |
 | Modify | 15% | 50% | 40–60 | TRIM/EXTEND, OFFSET, ROTATE, PEDIT and SPLINEDIT options done (#397, #558, #559); associative arrays with ARRAYEDIT (#448), no array grips; MATCHPROP picker and Settings (#439) | [gaps](gaps.md#features) |
 | Geometry precision | 10% | 40% | 70–110 | exact for lines/arcs/circles; ellipse and spline intersections, offsets, closest points tessellated; absolute tolerances; polyline offset recomputes arc bulges since #825 but has no loop cleanup | [geometry-parity](geometry-parity.md) |
 | Layers and properties | 7% | 70% | 10–15 | Layer Properties Manager with filters, states, VP overrides; QSELECT; Quick Properties; object transparency drawn on screen, in exports and in plots (#764); linetype manager thin; 19 linetypes of ~45 | [gaps](gaps.md#features) |
@@ -169,12 +169,12 @@ presence: an option that prints "not available yet" doesn't count.
 | Features (table above) | 35% | 41% | 735–1,115 | estimated | this file |
 | UI/UX fidelity (point entry, snaps, tracking, dynamic input, grips, selection, command line, chrome) | 15% | 43% | 100–160 | estimated, weighted in the doc | [ui-parity](ui-parity.md) |
 | File formats (DWG/DXF fidelity first) | 20% | 30% | 170–280 | estimated | [file-format-parity](file-format-parity.md) |
-| Stability and correctness | 10% | 35% | 30–50 | estimated: about 60 bug fixes merged on 2026-10-10 alone, 150 open issues (`gh issue list`, 2026-10-13), `cargo fmt` fixed on main, no CI runs the Rust tests on pull requests (PR #847 open) | [gaps](gaps.md#stability) |
+| Stability and correctness | 10% | 35% | 30–50 | estimated: about 60 bug fixes merged on 2026-10-10 alone, 415 open issues (`gh issue list`, 2026-10-24), `cargo fmt` fixed on main, CI runs `cargo xtask ci` on every pull request (#1987) | [gaps](gaps.md#stability) |
 | Performance | 5% | 60% | 20–40 | internal numbers only (200k entities fluent); 1M entities and large DWG loads untested; a 10 MB DWG took ~2 min to fail (#57) | [hardware-parity](hardware-parity.md#performance-on-hardware-internal-numbers-only) |
 | Ecosystem and automation (AutoLISP/Visual LISP, .NET/ObjectARX, CUI, APPLOAD, Express Tools, App Store) | 5% | 10% | 120–200 | estimated; MCP, CLI and the control channel are ahead of AutoCAD; AutoLISP core (#855) and SCRIPT (#693) landed, but no Visual LISP, CUI or plug-ins | [gaps](gaps.md#ecosystem-and-automation) |
 | Hardware | 3% | 45% | 15–25 | estimated | [hardware-parity](hardware-parity.md) |
 | Platforms | 3% | 75% | 15–25 | macOS, Windows (x64/x86/arm64), Linux, FreeBSD, web: more than AutoCAD; but the web build's plot shows raw PDF bytes (#134; open and save fixed, #55, #133) and it has no DWG, and Windows/Linux get little runtime testing | [gaps](gaps.md#platforms) |
-| Localization | 3% | 5% | 60–100 | string catalog with twelve languages (Ukrainian 1,322 rows, #36; six of AutoCAD for Mac's 7 other languages, all but Japanese); the 5% and the hours are from 2026-10-10 and not re-scored | [localization-parity](localization-parity.md) |
+| Localization | 3% | 5% | 60–100 | string catalog with fifteen languages (Ukrainian 1,357 rows, #36; six of AutoCAD for Mac's 7 other languages, all but Japanese); the 5% and the hours are from 2026-10-10 and not re-scored | [localization-parity](localization-parity.md) |
 | AI features (Autodesk Assistant, Smart Blocks, Markup Assist) | 1% | 20% | 40–80 | none of AutoCAD's in-app AI; agent control over MCP is a different strength | [gaps](gaps.md#ai-features) |
 | **Ready for real work** | 100% | **≈ 38%** | **≈ 1,300–2,100** | | |
 
@@ -223,7 +223,8 @@ DWG/DXF corpus (files from people who own them); black-box checks in AutoCAD of 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Re-audit against main e707ab4d: evidence text of the text, leaders, blocks, layouts, ecosystem, stability, platforms, localization and geometry rows refreshed for #633, #764, #792, #816, #818, #825, #838–#883, #855; percentages, hours and breadth counts (245/491, 233/491) not re-measured |
+| 2026-10-24 | minor | Re-audit against main 41d9b5e95: evidence text of the feature, stability, platforms and localization rows refreshed against main 41d9b5e95; percentages, hours and breadth counts (245/491, 233/491) not re-measured |
+| 2026-10-22 | minor | Draw row: RECTANG gained a centre construction mode (`Center` keyword, `center: true`) beside its corner mode (#1127); parity percentages and hours not re-measured |
 | 2026-10-12 | minor | Hatch row evidence: Hatch and Gradient / Hatch Edit dialogs; percentages and hours not re-measured |
 | 2026-10-12 | minor | Blocks row evidence: Block Editor for static blocks (BEDIT, BSAVE, BSAVEAS, BCLOSE); percentages and hours not re-measured |
 | 2026-10-11 | minor | Evidence text of the feature-area rows refreshed for merged work (#397, #406, #408, #417, #420, #433, #448, #451, #453, #459, #468, #507, #510, #525, #534, #546, #547, #558, #563, #564, #567, #571); parity percentages and hours not re-measured |

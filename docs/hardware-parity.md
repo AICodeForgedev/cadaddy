@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (re-audit against main e707ab4d: SpaceMouse 2D navigation, magnifier option, winit PR state, plotter devices; the 45% is not re-measured) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (re-audit against main 41d9b5e95: SpaceMouse 2D navigation, magnifier option, winit PR state, plotter devices; the 45% is not re-measured; previously: re-audit against main e707ab4d: SpaceMouse 2D navigation, magnifier option, winit PR state, plotter devices; the 45% is not re-measured) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -48,6 +48,7 @@ next step.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Re-audit against main 41d9b5e95: SpaceMouse 2D pan/zoom (#650), magnifier option (#187), winit PRs #110–#119 closed in favour of open PR #668, system printers still open (PR #755); re-checked against main 41d9b5e95, percentage and hours not re-measured |
 | 2026-10-13 | minor | Re-audit against main e707ab4d: SpaceMouse 2D pan/zoom (#650), magnifier option (#187), winit PRs #110–#119 closed in favour of open PR #668, system printers still open (PR #755); percentage and hours not re-measured |
 | 2026-10-13 | minor | Zoom and pan regenerate in the background: 2–4.5 s stalls down to 26–64 ms on a hatched DWG |
 | 2026-10-10 | major | First hardware parity doc: GPU backends per platform, input devices, displays, plotters |

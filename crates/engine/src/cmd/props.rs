@@ -16,7 +16,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
@@ -82,6 +82,7 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
         "lineweight": e.common.lineweight.name(),
         "ltscale": e.common.ltscale,
         "transparency": transparency_value(e.common.transparency),
+        "thickness": e.common.thickness,
         "visible": e.common.visible,
     });
     if cadcraft_doc::can_be_annotative(&e.kind)
@@ -185,6 +186,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
+    let thickness = p
+        .get("thickness")
+        .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
+        .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
@@ -228,6 +233,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if let Some(t) = transparency {
                 e.common.transparency = t;
+            }
+            if let Some(th) = thickness {
+                e.common.thickness = th;
             }
             if let Some(v) = p.get("visible").and_then(Value::as_bool) {
                 e.common.visible = v;
@@ -410,7 +418,25 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
-    let d = s.doc_mut()?;
+    set_current_color(s.doc_mut()?, c);
+    ok()
+}
+
+/// `setvar CECOLOR`: the same input as the `color` command, stored the same way.
+pub(crate) fn set_current_color_value(s: &mut Session, v: &Value) -> Option<()> {
+    // An out-of-range index is refused here, where `color` folds it to ByLayer.
+    let c = match v {
+        Value::String(t) => Color::parse(t),
+        Value::Number(n) => n.as_i64().and_then(|i| Color::parse(&i.to_string())),
+        _ => None,
+    }?;
+    set_current_color(s.doc_mut().ok()?, c);
+    Some(())
+}
+
+/// A true colour keeps its RGB in CECOLOR_RGB (which wins for new objects); any other colour must
+/// clear a stale one.
+fn set_current_color(d: &mut cadcraft_doc::Drawing, c: Color) {
     match c {
         Color::True(rgb) => {
             d.header.set_i64("CECOLOR", i64::from(cadcraft_color::nearest_aci(rgb)));
@@ -421,7 +447,6 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.vars.remove("CECOLOR_RGB");
         }
     }
-    ok()
 }
 
 mod linfile;
