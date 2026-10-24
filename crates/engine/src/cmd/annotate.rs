@@ -182,7 +182,7 @@ fn with_assoc(k: EntityKind, assoc: Vec<DimAssoc>) -> EntityKind {
     }
 }
 
-/// Angular dimension between two lines, attached to them (vertex = their intersection).
+/// Two-line angular dimension (type 2) between two lines, attached to them.
 fn angular_from_lines(s: &Session, h1: Handle, h2: Handle, at: Vec2) -> Option<EntityKind> {
     let d = s.doc().ok()?;
     let line = |h: Handle| match &d.entity(h)?.kind {
@@ -200,13 +200,18 @@ fn angular_from_lines(s: &Session, h1: Handle, h2: Handle, at: Vec2) -> Option<E
     };
     let (p1, s1) = pick(a1, a2, AssocSnap::Start, AssocSnap::End);
     let (p2, s2) = pick(b1, b2, AssocSnap::Start, AssocSnap::End);
-    let k = dim(s, DimKind::Angular3P, at, p1, p2, v, Vec2::ZERO, "");
+    // A two-line angular dimension (type 2): line 1 is p13 -> p14, line 2 is defpt -> p15, p16 is on the arc.
+    // The picked leg end goes last in each pair, so the renderer measures between p14 and p15.
+    let (o1, t1) = if s1 == AssocSnap::Start { (a2, AssocSnap::End) } else { (a1, AssocSnap::Start) };
+    let (o2, t2) = if s2 == AssocSnap::Start { (b2, AssocSnap::End) } else { (b1, AssocSnap::Start) };
+    let k = dim(s, DimKind::Angular, o2, o1, p1, p2, at, "");
     let mut assoc = Vec::new();
     if assoc_enabled(s) {
         assoc = vec![
-            DimAssoc { point: "p13".into(), handle: h1, snap: s1 },
-            DimAssoc { point: "p14".into(), handle: h2, snap: s2 },
-            DimAssoc { point: "p15".into(), handle: h1, snap: AssocSnap::Intersection { other: h2 } },
+            DimAssoc { point: "p13".into(), handle: h1, snap: t1 },
+            DimAssoc { point: "p14".into(), handle: h1, snap: s1 },
+            DimAssoc { point: "defpt".into(), handle: h2, snap: t2 },
+            DimAssoc { point: "p15".into(), handle: h2, snap: s2 },
         ];
     }
     Some(with_assoc(k, assoc))

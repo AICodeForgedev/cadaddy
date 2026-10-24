@@ -230,10 +230,15 @@ impl Tokens {
             axis_x: mix(bg, Color32::from_rgb(0xd0, 0x30, 0x30), 0.3),
             axis_y: mix(bg, Color32::from_rgb(0x30, 0xb0, 0x40), 0.3),
             canvas_ink: if light { Color32::from_rgb(0x47, 0x50, 0x5c) } else { Tokens::DARK.canvas_ink },
-            crosshair: if light { Color32::from_rgb(0x20, 0x20, 0x20) } else { Tokens::DARK.crosshair },
+            crosshair: crosshair_color(bg),
             ..self
         }
     }
+}
+
+/// The thin crosshair and pickbox contrast with the surface under their centre.
+pub(crate) fn crosshair_color(background: Color32) -> Color32 {
+    if luminance(background) > 0.5 { Color32::from_rgb(0x20, 0x20, 0x20) } else { Tokens::DARK.crosshair }
 }
 
 /// The user's drawing-area preferences (Options ▸ Display and Drafting); `None` keeps the theme's

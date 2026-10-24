@@ -93,8 +93,12 @@ fn window(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         if let Some((name, current, show)) = &layout {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(crate::tf!("Layout {name}: {table}", name = name, table = if current.is_empty() { "None" } else { current }))
-                        .color(t.text_dim),
+                    RichText::new(crate::tf!(
+                        "Layout {name}: {table}",
+                        name = name,
+                        table = if current.is_empty() { crate::i18n::t("None") } else { current.as_str() }
+                    ))
+                    .color(t.text_dim),
                 );
                 if ui.add_enabled(!current.eq_ignore_ascii_case(&sel), egui::Button::new(crate::tl!("Use for this layout"))).clicked() {
                     action = Some(("pagesetup", json!({ "layout": name, "plotStyleTable": sel })));

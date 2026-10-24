@@ -136,7 +136,13 @@ Panel IDs: `toolSets`, `layers`, `properties`, `externalReferences`. The protect
 
 `ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
 
-The QuickCalc palette (`quickCalc`) is not part of the default arrangement: QUICKCALC (`ui.panel.quickcalc`, Cmd+8) opens it, floating the first time.
+The QuickCalc palette (`quickCalc`) is not part of the default arrangement. Typed `QUICKCALC`/`QC`
+and `ui.panel.quickcalc` explicitly open and activate it: it floats the first time and later
+reopens at its saved location. **Window > QuickCalc** and **Ctrl/Cmd+8** invoke
+`ui.toggle.quickcalc` instead, closing the panel when present and reopening it otherwise.
+The shortcut also works with text-field focus. Toggling preserves the running drawing command
+and pending command-line input. The expression, history and calculator variables survive
+closing/reopening within the same session; they are not saved across application restarts.
 
 Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"layers","rect":[100,100,320,440]}}`.
 

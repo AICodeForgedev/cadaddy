@@ -876,6 +876,62 @@ fn user_block_arrowheads_are_referenced_not_regenerated() {
     assert_eq!(back.blocks.len(), d.blocks.len());
 }
 
+/// Every standard arrowhead CADCraft generates reads back as its own geometry, through DXF and
+/// DWG, so reopening a drawing CADCraft wrote never turns them into user blocks.
+#[test]
+fn generated_arrowhead_blocks_are_not_kept_as_user_blocks() {
+    let mut d = Drawing::new_metric();
+    for (i, (_, name)) in crate::dxf_ext::ARROWS.iter().enumerate() {
+        d.dim_styles.push(DimStyle { name: format!("S{i}"), arrow_block: (*name).into(), ..DimStyle::default() });
+    }
+    let dxf = write_dxf(&d);
+    for (_, name) in crate::dxf_ext::ARROWS.iter().filter(|(k, _)| *k != cadcraft_render::Arrowhead::ClosedFilled) {
+        assert!(dxf.contains(&format!("\r\n{name}\r\n")), "{name} is written");
+    }
+    let dwg = cadcraft_dwg::dxf_to_dwg(dxf.as_bytes()).unwrap();
+    let from_dwg = read_dxf(&cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    for (back, what) in [(read_dxf(dxf.as_bytes()).unwrap(), "DXF"), (from_dwg, "DWG")] {
+        assert!(back.blocks.keys().all(|k| !k.starts_with('_')), "{what}: {:?}", back.blocks.keys().collect::<Vec<_>>());
+        assert!(roundtrip(&back).blocks.keys().all(|k| !k.starts_with('_')), "{what}: second save");
+    }
+}
+
+/// A file's own arrowhead block with a standard name (AutoCAD's `_Dot` is a closed polyline
+/// with width, not CADCraft's disc of solids) is kept when only a dimension style names it, and
+/// saved as it was, through DXF and DWG, instead of being replaced by CADCraft's geometry.
+#[test]
+fn file_arrowhead_blocks_with_standard_names_are_kept() {
+    let mut d = Drawing::new_metric();
+    let donut = LwPolyline {
+        vertices: vec![
+            PolyVertex { p: Vec2::new(-0.25, 0.0), bulge: 1.0, start_width: 0.5, end_width: 0.5 },
+            PolyVertex { p: Vec2::new(0.25, 0.0), bulge: 1.0, start_width: 0.5, end_width: 0.5 },
+        ],
+        closed: true,
+        const_width: 0.0,
+        elevation: 0.0,
+        plinegen: false,
+    };
+    for (name, kind) in [("_Dot", EntityKind::LwPolyline(donut)), ("_DotSmall", EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 0.0625 }))] {
+        let mut b = Block::new(name);
+        b.entities.push(Entity::new(Handle(0), kind));
+        d.blocks.insert(name.into(), std::sync::Arc::new(b));
+    }
+    d.dim_styles.push(DimStyle { name: "Dots".into(), arrow_block1: "_Dot".into(), arrow_block2: "_DotSmall".into(), ..DimStyle::default() });
+    let kinds = |d: &Drawing, name: &str| d.block(name).map(|b| b.entities.iter().map(|e| e.kind.clone()).collect::<Vec<_>>()).unwrap_or_default();
+    let dxf = write_dxf(&d);
+    let dwg = cadcraft_dwg::dxf_to_dwg(dxf.as_bytes()).unwrap();
+    let from_dwg = read_dxf(&cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    for (back, what) in [(read_dxf(dxf.as_bytes()).unwrap(), "DXF"), (from_dwg, "DWG")] {
+        for name in ["_Dot", "_DotSmall"] {
+            assert_eq!(kinds(&back, name), kinds(&d, name), "{what}: {name}");
+        }
+        let again = write_dxf(&back);
+        assert!(!again.contains("\nSOLID\r"), "{what}: no arrowhead geometry of CADCraft's is written");
+        assert_eq!(kinds(&roundtrip(&back), "_Dot"), kinds(&d, "_Dot"), "{what}: a second save keeps it too");
+    }
+}
+
 #[test]
 fn dimension_overrides_roundtrip_as_dstyle_xdata() {
     let mut d = Drawing::new_imperial();
@@ -1017,6 +1073,11 @@ fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
     assert!(partial > 0, "no damaged copy read partially");
 }
 
+/// A dimension's standard DIMASSOC objects carry the same associations as CADCraft's xdata, so
+/// a file from another writer (xdata stripped) still follows its geometry: a linear dimension's
+/// two origins, a polyline's vertex named by its segment (#1049), and since #1651 a radial
+/// dimension's circle, whose centre comes back as a `Center` link and its rim point as
+/// `OnCircle`.
 #[test]
 fn dimension_associativity_roundtrips() {
     let mut d = Drawing::new_imperial();
@@ -1088,7 +1149,10 @@ fn dimension_associativity_roundtrips() {
     assert_eq!(fa.len(), 2);
     assert_eq!(fa[1], ali.assoc[1], "the polyline vertex, named by its segment (#1049)");
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
-    assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADCraft-only");
+    let fr = assoc_of(&foreign, hr);
+    assert_eq!(fr.len(), 2, "a radial dimension's circle comes from the standard DIMASSOC");
+    assert_eq!(fr[0], rad.assoc[0], "the centre");
+    assert!(matches!(fr[1].snap, AssocSnap::OnCircle { angle } if angle.is_finite()));
 }
 
 /// #1049: a polyline vertex is referenced as AutoCAD does: an end of one of its segments,
@@ -2219,6 +2283,18 @@ fn svg_viewbox_scaling_and_mm_units() {
 }
 
 #[test]
+fn svg_viewbox_with_px_or_unitless_root_size_uses_reference_pixel() {
+    for w in ["800", "800px"] {
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="600" viewBox="0 0 400 300"><line x1="0" y1="0" x2="400" y2="0"/></svg>"#
+        );
+        let d = read(svg.as_bytes(), "vb.svg").unwrap();
+        let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+        assert!((l.b.x - 800.0 * 25.4 / 96.0).abs() < 1e-9, "{w}: {l:?}");
+    }
+}
+
+#[test]
 fn svg_inkscape_layers_are_kept() {
     let svg = format!(
         "{SVG_PAGE}<g inkscape:groupmode=\"layer\" inkscape:label=\"Cut\"><rect x=\"0\" y=\"0\" width=\"2\" height=\"2\"/></g>\
@@ -2538,4 +2614,138 @@ fn drawing_without_insunits_stays_unitless() {
     assert_eq!(rewritten("9\n$INSUNITS\n70\n6\n"), Some("6".into()), "declared metres");
     assert_eq!(insunits(&write_dxf(&Drawing::new_metric())), Some("4".into()));
     assert_eq!(insunits(&write_dxf(&Drawing::new_imperial())), Some("1".into()));
+}
+
+/// DXF text as (code, value) pairs.
+fn dxf_pairs(text: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0].trim().to_string(), c[1].trim().to_string())).collect()
+}
+
+/// The records of type `kind` in DXF pairs, each as its groups after the type.
+fn dxf_records<'a>(pairs: &'a [(String, String)], kind: &str) -> Vec<&'a [(String, String)]> {
+    let mut out = Vec::new();
+    for (i, p) in pairs.iter().enumerate() {
+        if p.0 == "0" && p.1 == kind {
+            let rest = &pairs[i + 1..];
+            let end = rest.iter().position(|q| q.0 == "0").unwrap_or(rest.len());
+            out.push(&rest[..end]);
+        }
+    }
+    out
+}
+
+fn group<'a>(rec: &'a [(String, String)], code: &str) -> Option<&'a str> {
+    rec.iter().find(|p| p.0 == code).map(|p| p.1.as_str())
+}
+
+/// #1812: a file whose CLASSES start with VISUALSTYLE (500) and WIDGETX (501), with proxy objects
+/// of both classes and of a number past its last class, and a proxy entity of WIDGETX.
+fn proxy_file() -> Vec<u8> {
+    let text = String::from_utf8(write(&Drawing::new_metric(), "p.dxf").unwrap()).unwrap();
+    let mut pairs = dxf_pairs(&text);
+    let p = |c: &str, v: &str| (c.to_string(), v.to_string());
+    let class = |name: &str, cpp: &str| {
+        vec![p("0", "CLASS"), p("1", name), p("2", cpp), p("3", "ObjectDBX Classes"), p("90", "4095"), p("280", "1"), p("281", "0")]
+    };
+    let classes = pairs.iter().position(|q| q.0 == "2" && q.1 == "CLASSES").unwrap() + 1;
+    let mut injected = class("VISUALSTYLE", "AcDbVisualStyle");
+    injected.extend(class("WIDGETX", "AcDbWidgetX"));
+    pairs.splice(classes..classes, injected);
+    let objects = pairs.iter().position(|q| q.0 == "2" && q.1 == "OBJECTS").unwrap();
+    let nod = objects + 1;
+    let nod_handle = pairs[nod + 1].1.clone();
+    let after = nod + pairs[nod..].iter().position(|q| q.0 == "281").unwrap() + 1;
+    pairs.splice(after..after, [p("3", "ACAD_VISUALSTYLE"), p("350", "AAA0")]);
+    let proxy = |h: &str, class: &str, data: &str| {
+        vec![
+            p("0", "ACAD_PROXY_OBJECT"),
+            p("5", h),
+            // An application's 102 group before the proxy's own groups holds a 91 of its own.
+            p("102", "{MYAPP"),
+            p("91", "7"),
+            p("102", "}"),
+            p("330", "AAA0"),
+            p("100", "AcDbProxyObject"),
+            p("90", "499"),
+            p("91", class),
+            p("95", "0"),
+            p("70", "0"),
+            p("92", "8"),
+            p("310", data),
+            p("94", "0"),
+        ]
+    };
+    let mut objs = vec![
+        p("0", "DICTIONARY"),
+        p("5", "AAA0"),
+        p("330", &nod_handle),
+        p("100", "AcDbDictionary"),
+        p("281", "1"),
+        p("3", "Realistic"),
+        p("350", "AAA1"),
+        p("3", "Widget"),
+        p("350", "AAA2"),
+        p("3", "Stray"),
+        p("350", "AAA3"),
+    ];
+    objs.extend(proxy("AAA1", "500", "AA"));
+    objs.extend(proxy("AAA2", "501", "BB"));
+    objs.extend(proxy("AAA3", "537", "CC"));
+    let end = objects + pairs[objects..].iter().position(|q| q.0 == "0" && q.1 == "ENDSEC").unwrap();
+    pairs.splice(end..end, objs);
+    let ms = {
+        let recs = dxf_records(&pairs, "BLOCK_RECORD");
+        group(recs.iter().find(|r| group(r, "2") == Some("*Model_Space")).unwrap(), "5").unwrap().to_string()
+    };
+    let ents = pairs.iter().position(|q| q.0 == "2" && q.1 == "ENTITIES").unwrap() + 1;
+    pairs.splice(
+        ents..ents,
+        [
+            p("0", "ACAD_PROXY_ENTITY"),
+            p("5", "AAA4"),
+            p("330", &ms),
+            p("100", "AcDbEntity"),
+            p("8", "0"),
+            p("100", "AcDbProxyEntity"),
+            p("90", "498"),
+            p("91", "501"),
+            p("92", "0"),
+            p("93", "0"),
+            p("94", "0"),
+            p("95", "0"),
+            p("70", "0"),
+        ],
+    );
+    pairs.iter().map(|(c, v)| format!("{c}\n{v}\n")).collect::<String>().into_bytes()
+}
+
+#[test]
+fn proxies_keep_their_class_when_classes_are_rewritten() {
+    let d = read(&proxy_file(), "p.dxf").unwrap();
+    let text = String::from_utf8(write(&d, "out.dxf").unwrap()).unwrap();
+    let pairs = dxf_pairs(&text);
+    let classes: Vec<String> = dxf_records(&pairs, "CLASS").iter().map(|r| group(r, "1").unwrap().to_string()).collect();
+    let class_of = |n: &str| classes.get(n.parse::<usize>().unwrap() - 500).cloned();
+    // The proxy's own 91 (after its subclass marker); the application group's stays as it was.
+    let own_91 = |r: &[(String, String)]| r.iter().skip_while(|q| q.1 != "AcDbProxyObject").find(|q| q.0 == "91").map(|q| q.1.clone()).unwrap();
+    let objects: Vec<(String, Option<String>)> =
+        dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| (group(r, "310").unwrap().to_string(), class_of(&own_91(r)))).collect();
+    assert!(dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().all(|r| group(r, "91") == Some("7")), "the application's 91 changed");
+    assert_eq!(
+        objects,
+        [("AA".to_string(), Some("VISUALSTYLE".to_string())), ("BB".to_string(), Some("WIDGETX".to_string()))],
+        "classes {classes:?}"
+    );
+    let entities: Vec<Option<String>> = dxf_records(&pairs, "ACAD_PROXY_ENTITY").iter().map(|r| class_of(group(r, "91").unwrap())).collect();
+    assert_eq!(entities, [Some("WIDGETX".to_string())]);
+    // The proxy whose number named no class is gone, with its dictionary entry.
+    assert!(!text.contains("\nStray\n"));
+    // And it stays so through another save.
+    let again = String::from_utf8(write(&read(text.as_bytes(), "out.dxf").unwrap(), "again.dxf").unwrap()).unwrap();
+    let pairs = dxf_pairs(&again);
+    let classes: Vec<String> = dxf_records(&pairs, "CLASS").iter().map(|r| group(r, "1").unwrap().to_string()).collect();
+    let names: Vec<String> =
+        dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| classes[own_91(r).parse::<usize>().unwrap() - 500].clone()).collect();
+    assert_eq!(names, ["VISUALSTYLE", "WIDGETX"]);
 }

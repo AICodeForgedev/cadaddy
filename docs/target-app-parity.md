@@ -1,6 +1,6 @@
 # Target-app parity: CADCraft vs AutoCAD 2027
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Block Editor for static blocks; blocks evidence updated, numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (RECTANG centre construction mode, #1127; numbers not re-measured) · **Target:** Autodesk AutoCAD 2027
 
 The authoritative assessment of how close CADCraft is to AutoCAD, and how much Opus 5.5 work
 remains. [ROADMAP.md](../ROADMAP.md) summarises it, [gaps.md](gaps.md) lists every shortfall,
@@ -146,7 +146,7 @@ presence: an option that prints "not available yet" doesn't count.
 
 | Area | Weight | Parity | Remaining (Opus 5.5 h) | Evidence and main gaps | Doc |
 |---|---:|---:|---|---|---|
-| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options, REVCLOUD, WIPEOUT, XLINE; PLINE arc options and SPLINE options done (#397, #408); MLINE, REGION and HELIX are objects (#510); isometric drafting (#556) | [gaps](gaps.md#features) |
+| Draw (2D) | 13% | 60% | 15–25 | ARC 11/11 methods, CIRCLE 6/6, RECTANG all options plus a centre construction mode (#1127), REVCLOUD, WIPEOUT, XLINE; PLINE arc options and SPLINE options done (#397, #408); MLINE, REGION and HELIX are objects (#510); isometric drafting (#556) | [gaps](gaps.md#features) |
 | Modify | 15% | 50% | 40–60 | TRIM/EXTEND, OFFSET, ROTATE, PEDIT and SPLINEDIT options done (#397, #558, #559); associative arrays with ARRAYEDIT (#448), no array grips; MATCHPROP picker and Settings (#439) | [gaps](gaps.md#features) |
 | Geometry precision | 10% | 40% | 70–110 | exact for lines/arcs/circles; ellipse and spline intersections, offsets, closest points tessellated; absolute tolerances; polyline offset doesn't recompute bulges | [geometry-parity](geometry-parity.md) |
 | Layers and properties | 7% | 70% | 10–15 | Layer Properties Manager with filters, states, VP overrides; QSELECT; Quick Properties; transparency; linetype manager thin; 19 linetypes of ~45 | [gaps](gaps.md#features) |
@@ -223,6 +223,7 @@ DWG/DXF corpus (files from people who own them); black-box checks in AutoCAD of 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Draw row: RECTANG gained a centre construction mode (`Center` keyword, `center: true`) beside its corner mode (#1127); parity percentages and hours not re-measured |
 | 2026-10-12 | minor | Hatch row evidence: Hatch and Gradient / Hatch Edit dialogs; percentages and hours not re-measured |
 | 2026-10-12 | minor | Blocks row evidence: Block Editor for static blocks (BEDIT, BSAVE, BSAVEAS, BCLOSE); percentages and hours not re-measured |
 | 2026-10-11 | minor | Evidence text of the feature-area rows refreshed for merged work (#397, #406, #408, #417, #420, #433, #448, #451, #453, #459, #468, #507, #510, #525, #534, #546, #547, #558, #563, #564, #567, #571); parity percentages and hours not re-measured |

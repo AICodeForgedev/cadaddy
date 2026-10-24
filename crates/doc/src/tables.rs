@@ -857,7 +857,7 @@ pub struct VportConfig {
 
 impl VportConfig {
     /// The name of the configuration shown.
-    pub const ACTIVE: &'static str = "*Active";
+    pub const ACTIVE: &str = "*Active";
     pub fn is_active(&self) -> bool {
         self.name.eq_ignore_ascii_case(Self::ACTIVE)
     }
