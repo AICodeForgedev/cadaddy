@@ -2,7 +2,7 @@
 //! Block Editor.
 
 pub(crate) mod bedit;
-mod purge;
+pub(in crate::cmd) mod purge;
 
 use std::sync::Arc;
 

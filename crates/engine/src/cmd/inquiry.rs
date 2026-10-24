@@ -13,9 +13,10 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 mod loops;
 mod regions;
 mod shapes;
+mod usage;
 
 /// The inquiry commands: distances, points, listing, area, time and status, the drawing and
-/// entity queries an agent reads, SHAPES, COUNT and the region commands.
+/// entity queries an agent reads, SHAPES, USAGE, LOOPS, COUNT and the region commands.
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
         CommandSpec::new("dist", "Distance", run_dist)
@@ -50,6 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
         CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
+        CommandSpec::new("usage", "Analyze Usage", usage::run).params(usage::PARAMS).noundo(),
         CommandSpec::new("loops", "Implied Loops", loops::run).params(loops::PARAMS).noundo(),
         CommandSpec::new("texts", "Query Texts", run_texts)
             .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
