@@ -260,6 +260,7 @@ fn rectangles(d: &Drawing, layer_filter: &str) -> Vec<(Vec2, Vec2, String)> {
 }
 
 /// Extract rectangles from closed 4-vertex polylines on any layer.
+#[allow(dead_code)]
 fn rectangles_all(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
     let mut out = Vec::new();
     for e in d.model.iter() {
@@ -338,7 +339,9 @@ fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) 
     let duct_segs: Vec<&LineSeg> = if all_layers && pdf_filter {
         segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        segs.iter().collect()
+        // Content-mode imports (no PDF-BLACK layers): exclude architecture and decoration layers
+        // that produce false-positive parallel pairs (wall faces, fills, title-block borders).
+        segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
     };
@@ -444,6 +447,13 @@ impl Default for DuctOptions {
 fn is_pdf_mep_line(layer: &str) -> bool {
     let up = layer.to_uppercase();
     up.starts_with("PDF-BLACK")
+}
+
+/// Returns true if `layer` is known to carry non-MEP geometry on content-mode PDF imports
+/// (architecture walls, fill patterns, text, title-block borders, masks).
+fn is_content_exclude(layer: &str) -> bool {
+    let up = layer.to_ascii_uppercase();
+    matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
 }
 
 /// Chain parallel pairs that share an endpoint into continuous runs.
@@ -648,6 +658,9 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
         if all_layers && pdf_filter && !is_pdf_mep_line(&layer) {
             continue;
         }
+        if all_layers && !pdf_filter && is_content_exclude(&layer) {
+            continue;
+        }
         // In all_layers mode, only count arcs near a known run.
         if all_layers {
             let near_run = runs.iter().any(|r| {
@@ -666,7 +679,7 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
     let duct_rects = if all_layers && pdf_filter {
         rectangles_filtered(d, &is_pdf_mep_line)
     } else if all_layers {
-        rectangles_all(d)
+        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
     } else {
         rectangles(d, "DUCT")
     };
@@ -674,7 +687,7 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
     let duct_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
         segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        segs.iter().collect()
+        segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
     };
@@ -740,7 +753,7 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     let device_rects = if all_layers && pdf_filter {
         rectangles_filtered(d, &is_pdf_mep_line)
     } else if all_layers {
-        rectangles_all(d)
+        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
     } else {
         rectangles(d, "DEVICE")
     };
@@ -748,7 +761,7 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     let device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
         segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        segs.iter().collect()
+        segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
     };
@@ -806,7 +819,7 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     let equip_rects = if all_layers && pdf_filter {
         rectangles_filtered(d, &is_pdf_mep_line)
     } else if all_layers {
-        rectangles_all(d)
+        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
     } else {
         rectangles(d, "EQUIP")
     };
@@ -1482,9 +1495,11 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
     let paper_scale = detect_paper_scale(d);
     let sh = Sheet::default();
 
-    // On PDF imports (recognised by PDF-* layer names), filter to black layers only.
-    // Gray layers carry the architecture background which produces false-positive duct pairs.
-    let pdf_filter = d.layers.iter().any(|l| l.name.starts_with("PDF-"));
+    // On pen-mode PDF imports (recognised by PDF-BLACK-* layer names), filter to black layers
+    // only.  Gray layers carry the architecture background which produces false-positive duct
+    // pairs.  Content-mode imports (PDF-GEOMETRY, A-WALL, etc.) have no PDF-BLACK layers; the
+    // filter must be off so that geometry on content layers is included.
+    let pdf_filter = d.layers.iter().any(|l| l.name.to_ascii_uppercase().starts_with("PDF-BLACK"));
 
     if paper_scale < 0.5 {
         // Paper-scale drawing: scale detection thresholds down to paper units.
@@ -1501,7 +1516,16 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
         }
         net
     } else {
-        read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, pdf_mep_filter: pdf_filter, ..Default::default() })
+        let mut net = read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, pdf_mep_filter: pdf_filter, ..Default::default() });
+        // On content-mode imports (no PDF-BLACK layers), wall pairs that survived the context
+        // filter can still inflate duct footage.  Drop short untagged runs (< 5 ft building).
+        if !pdf_filter {
+            net.runs.retain(|r| r.confidence >= 0.85 || {
+                let len: f64 = r.points.windows(2).map(|w| w[0].dist(w[1])).sum();
+                len >= 60.0 // 5 feet in building inches
+            });
+        }
+        net
     }
 }
 

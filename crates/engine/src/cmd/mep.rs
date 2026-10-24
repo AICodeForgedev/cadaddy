@@ -459,17 +459,36 @@ fn read_pipes_from_tags(
         return (Vec::new(), Vec::new());
     }
 
-    // Step 2: collect all line chains from any layer.
-    let all_chains = chains(&ents.iter().copied().filter(|e| matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).collect::<Vec<_>>());
+    // Step 2: collect line chains, excluding layers that are known to carry non-pipe geometry
+    // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports.
+    let all_chains = chains(&ents.iter().copied().filter(|e| {
+        if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+            return false;
+        }
+        let up = e.common.layer.to_ascii_uppercase();
+        !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+    }).collect::<Vec<_>>());
 
     // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
-    let reach = 6.0 * upf; // 6 feet in drawing units
+    // Content-mode imports (no PDF-BLACK layers) mix pipe geometry with walls and annotation on
+    // generic layers; use a tighter reach to avoid associating walls near pipe tags.
+    let has_pen_layers = ents.iter().any(|e| e.common.layer.to_ascii_uppercase().starts_with("PDF-BLACK"));
+    let reach = if has_pen_layers { 6.0 * upf } else { 2.0 * upf }; // 6 or 2 feet
+    let min_chain_len = if has_pen_layers { 0.0 } else { 2.0 * upf }; // 2 feet minimum on content mode
     let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
     let mut runs = Vec::new();
 
     for (pts, handles) in &all_chains {
         if pts.len() < 2 {
             continue;
+        }
+        // Skip chains shorter than the minimum (filters out annotation/symbol segments on
+        // content-mode imports where pipe and non-pipe geometry share generic layers).
+        if min_chain_len > 0.0 {
+            let chain_len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
+            if chain_len < min_chain_len {
+                continue;
+            }
         }
         let Some(first) = pts.first() else { continue };
         let Some(level) = level_at(&sp.levels, first.x, first.y) else { continue };
