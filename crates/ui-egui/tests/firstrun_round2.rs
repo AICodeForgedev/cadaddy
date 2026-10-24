@@ -103,6 +103,39 @@ fn xattach_from_the_menu_asks_only_where() {
     );
 }
 
+/// With ANGBASE = 90° and ANGDIR = 1 (clockwise, a common site/survey setup), Insert ▸ Attach
+/// must still place the xref at rotation 0 and scale 1/1. Before the fix, the rotation preset
+/// sent `Text("0")` which `direction()` offset by ANGBASE; now it sends `Enter` which
+/// PresetRotation maps to absolute 0.0.
+#[test]
+fn xattach_rotation_is_absolute_zero_regardless_of_angbase_and_angdir() {
+    let dir = folder("round2-xref-angbase");
+    let site = dir.join("survey.dxf");
+    let mut other = app();
+    other.typed("rectang 0,0 @100,50");
+    other.exec("saveas", json!({ "path": site.display().to_string() }));
+    let mut e = app();
+    // Set ANGBASE = 90° and ANGDIR = 1 (clockwise).
+    e.exec("setvar", json!({ "name": "ANGBASE", "value": 90 }));
+    e.exec("setvar", json!({ "name": "ANGDIR", "value": 1 }));
+    let picked = site.display().to_string();
+    e.app.services.pick_open = Some(Box::new(move || Some(picked.clone())));
+    e.menu("xattach");
+    assert_eq!(prompt(&mut e), "XATTACH Specify insertion point or [Basepoint/Scale/Rotate]:");
+    e.ok("ui.pointer", json!({ "x": 200, "y": 0 }));
+    assert_eq!(prompt(&mut e), "Command:", "one pick and it's placed");
+    let d = e.ok("drawing.inspect", json!({ "entities": true }));
+    let x = d["entities"].as_array().unwrap().iter().find(|x| x["type"] == "Block Reference")
+        .expect("the xref").clone();
+    let g = &x["geometry"];
+    assert_eq!(g["block"], "survey");
+    assert_eq!(
+        (g["insert"]["x"].as_f64(), g["scale"]["x"].as_f64(), g["scale"]["y"].as_f64(), g["rotation"].as_f64()),
+        (Some(200.0), Some(1.0), Some(1.0), Some(0.0)),
+        "rotation must be exactly 0.0 even with ANGBASE 90° ANGDIR 1: {g}"
+    );
+}
+
 /// ATTDEF's default height (0.2) on a 40-foot plan makes a tag no one can see: it now gets the
 /// same hint as TEXT and MTEXT.
 #[test]
