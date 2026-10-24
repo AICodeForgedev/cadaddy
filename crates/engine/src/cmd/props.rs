@@ -418,7 +418,25 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
-    let d = s.doc_mut()?;
+    set_current_color(s.doc_mut()?, c);
+    ok()
+}
+
+/// `setvar CECOLOR`: the same input as the `color` command, stored the same way.
+pub(crate) fn set_current_color_value(s: &mut Session, v: &Value) -> Option<()> {
+    // An out-of-range index is refused here, where `color` folds it to ByLayer.
+    let c = match v {
+        Value::String(t) => Color::parse(t),
+        Value::Number(n) => n.as_i64().and_then(|i| Color::parse(&i.to_string())),
+        _ => None,
+    }?;
+    set_current_color(s.doc_mut().ok()?, c);
+    Some(())
+}
+
+/// A true colour keeps its RGB in CECOLOR_RGB (which wins for new objects); any other colour must
+/// clear a stale one.
+fn set_current_color(d: &mut cadcraft_doc::Drawing, c: Color) {
     match c {
         Color::True(rgb) => {
             d.header.set_i64("CECOLOR", i64::from(cadcraft_color::nearest_aci(rgb)));
@@ -429,7 +447,6 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.vars.remove("CECOLOR_RGB");
         }
     }
-    ok()
 }
 
 mod linfile;

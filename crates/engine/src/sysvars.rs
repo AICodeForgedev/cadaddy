@@ -276,6 +276,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let st = &mut s.settings;
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
+        // The `color` command's input: ByLayer, ByBlock, a name, an index or a true colour.
+        "CECOLOR" => crate::cmd::set_current_color_value(s, v).ok_or_else(bad)?,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
         "ANNOAUTOSCALE" => st.annoautoscale = as_i(v).filter(|i| (-4..=4).contains(i)).ok_or_else(bad)? > 0,
         // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.
