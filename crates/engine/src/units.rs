@@ -302,6 +302,9 @@ fn bearing(t: &str) -> Option<f64> {
         None => (rest.strip_suffix('w')?, false),
     };
     let a = parse_dms(ang_s.trim())?;
+    if !(0.0..=90.0).contains(&a) {
+        return None;
+    }
     let deg = match (north, east) {
         (true, true) => 90.0 - a,
         (true, false) => 90.0 + a,
