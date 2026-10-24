@@ -1228,19 +1228,19 @@ fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
         None => return counts,
     };
     for e in store.iter() {
-        if let cadaddy_doc::EntityKind::Insert(ins) = &e.kind {
-            if ins.block.starts_with("PDF-SYM-") {
-                // The TAG attribute holds the device mark text.
-                let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
-                if is_circuit_tag(&tag) {
-                    // A circuit/panel tag (D-1, DP1-13) labels the wiring, not a device type.
-                    *counts.entry(CIRCUIT_TAGS.to_string()).or_default() += 1;
-                } else if !tag.is_empty() {
-                    *counts.entry(tag).or_default() += 1;
-                } else {
-                    // Symbol without a tag — count as "unknown".
-                    *counts.entry("unknown_symbol".to_string()).or_default() += 1;
-                }
+        if let cadaddy_doc::EntityKind::Insert(ins) = &e.kind
+            && ins.block.starts_with("PDF-SYM-")
+        {
+            // The TAG attribute holds the device mark text.
+            let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+            if is_circuit_tag(&tag) {
+                // A circuit/panel tag (D-1, DP1-13) labels the wiring, not a device type.
+                *counts.entry(CIRCUIT_TAGS.to_string()).or_default() += 1;
+            } else if !tag.is_empty() {
+                *counts.entry(tag).or_default() += 1;
+            } else {
+                // Symbol without a tag — count as "unknown".
+                *counts.entry("unknown_symbol".to_string()).or_default() += 1;
             }
         }
     }
@@ -1942,10 +1942,10 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     auto_answer_defaults(st);
                 }
                 // Still have unanswered questions with no default — pause.
-                if let Some(st) = job.stage(name) {
-                    if !st.unanswered().is_empty() {
-                        return Ok(());
-                    }
+                if let Some(st) = job.stage(name)
+                    && !st.unanswered().is_empty()
+                {
+                    return Ok(());
                 }
                 // All questions answered — mark done, move to next.
                 if let Some(st) = job.stage_mut(name) {

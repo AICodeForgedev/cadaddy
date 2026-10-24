@@ -2208,7 +2208,7 @@ fn match_glyph(candidate: &[(f64, f64)], candidate_aspect: f64, candidate_n_stro
     for tpl in templates {
         // loose aspect ratio filter
         let ar = candidate_aspect / tpl.aspect;
-        if ar < 0.25 || ar > 4.0 {
+        if !(0.25..=4.0).contains(&ar) {
             continue;
         }
         // loose stroke count filter: allow ±50% since PDF merging/splitting changes count

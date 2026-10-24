@@ -1892,7 +1892,7 @@ mod tests {
         finding.status = "resolved".into();
         finding.resolution = Some(Resolution { action: "accept".into(), author: "agent".into(), citation: String::new(), save_as_rule: true });
         assert_eq!(finding.status, "resolved");
-        assert!(finding.resolution.as_ref().map_or(false, |r| r.save_as_rule));
+        assert!(finding.resolution.as_ref().is_some_and(|r| r.save_as_rule));
     }
 
     #[test]

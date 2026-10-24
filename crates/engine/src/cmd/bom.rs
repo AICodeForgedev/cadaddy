@@ -599,7 +599,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         let wall_sf_per_room = wall_area_total / room_count as f64;
         // A typical hotel room has ~120-200 LF of wall at 10' = 1200-2000 sf.
         // Plausible bounds: 100 to 10000 sf per room.
-        if wall_sf_per_room > 10_000.0 || wall_sf_per_room < 50.0 {
+        if !(50.0..=10_000.0).contains(&wall_sf_per_room) {
             suspects.push(json!({
                 "category": "walls",
                 "reason": format!("wall area {wall_area_total:.0} sq ft / {room_count} rooms = {wall_sf_per_room:.0} sq ft/room (outside 50-10000 range)"),

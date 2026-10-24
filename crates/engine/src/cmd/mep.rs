@@ -449,10 +449,10 @@ fn read_pipes_from_tags(
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
     for (_, t, at, _) in notes {
-        if let Some((sz, sys)) = parse_pipe_tag(t) {
-            if !sys.is_empty() {
-                pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
-            }
+        if let Some((sz, sys)) = parse_pipe_tag(t)
+            && !sys.is_empty()
+        {
+            pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
         }
     }
     if pipe_tags.is_empty() {
@@ -514,16 +514,13 @@ fn read_pipes_from_tags(
         let mut heights: Vec<Option<f64>> = vec![None; segs.len()];
         for (_, t, at, _) in notes {
             let near = segs.iter().enumerate().map(|(i, (a, b))| (i, seg_dist(*at, *a, *b))).min_by(|x, y| x.1.total_cmp(&y.1));
-            if let Some((i, dist)) = near.filter(|(_, dd)| *dd <= reach) {
-                if heights.get(i).is_some_and(|h| h.is_none()) {
-                    if let Some(h) = height_tag(t, section_ft) {
-                        if let Some(slot) = heights.get_mut(i) {
-                            if dist < reach {
-                                *slot = Some(h);
-                            }
-                        }
-                    }
-                }
+            if let Some((i, dist)) = near.filter(|(_, dd)| *dd <= reach)
+                && heights.get(i).is_some_and(|h| h.is_none())
+                && let Some(h) = height_tag(t, section_ft)
+                && let Some(slot) = heights.get_mut(i)
+                && dist < reach
+            {
+                *slot = Some(h);
             }
         }
         let has_height_tag = heights.iter().any(|h| h.is_some());
@@ -558,6 +555,7 @@ fn read_pipes_from_tags(
             reviewed: false,
             edited_by: String::new(),
             top_ft: None,
+            source_sheet: String::new(),
         });
         if runs.len() >= MAX_RUNS {
             break;
