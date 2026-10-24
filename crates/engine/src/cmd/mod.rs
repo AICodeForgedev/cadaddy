@@ -128,6 +128,7 @@ pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub mod sheetfacts;
 pub mod sitetakeoff;
 pub mod spell;
 pub mod stairs;
@@ -518,6 +519,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(cobie::specs());
         v.extend(printset::specs());
         v.extend(readers::specs());
+        v.extend(sheetfacts::specs());
         v.extend(validate::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
