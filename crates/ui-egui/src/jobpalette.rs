@@ -356,7 +356,7 @@ fn show_rules(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(key).monospace().strong());
-                    ui.label("→");
+                    ui.label("->");
                     ui.label(RichText::new(value).monospace());
                 });
                 ui.colored_label(t.text_dim, RichText::new(format!("from {from}")).small());
