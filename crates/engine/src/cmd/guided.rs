@@ -77,6 +77,7 @@ pub enum StageName {
     Levels,
     Rooms,
     Devices,
+    MepRead,
     BimBuild,
     Takeoff,
     Estimate,
@@ -90,6 +91,7 @@ impl StageName {
         StageName::Levels,
         StageName::Rooms,
         StageName::Devices,
+        StageName::MepRead,
         StageName::BimBuild,
         StageName::Takeoff,
         StageName::Estimate,
@@ -103,6 +105,7 @@ impl StageName {
             Self::Levels => "levels",
             Self::Rooms => "rooms",
             Self::Devices => "devices",
+            Self::MepRead => "mep_read",
             Self::BimBuild => "bim_build",
             Self::Takeoff => "takeoff",
             Self::Estimate => "estimate",
@@ -117,6 +120,7 @@ impl StageName {
             Self::Levels => "Detect levels, scales and elevations",
             Self::Rooms => "Detect rooms, names and areas",
             Self::Devices => "Detect devices, symbols and counts",
+            Self::MepRead => "Read MEP ductwork, piping and equipment",
             Self::BimBuild => "Build 3D BIM model from spec",
             Self::Takeoff => "Quantity takeoff",
             Self::Estimate => "Estimate (prices and labor)",
@@ -1651,6 +1655,80 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(results)
 }
 
+/// Run the MEP read stage: read ductwork/piping from mechanical sheets, generate per-trade
+/// summary and per-sheet zero-result warnings as guidedrun questions.
+fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    // Read ductwork with apply.
+    let duct_result = s.execute("ducts.read", &json!({"apply": true}));
+    let (runs, length_ft, terminals, equipment, fittings, trade_summary, warnings) = match &duct_result {
+        Ok(v) => (
+            v["runs"].as_u64().unwrap_or(0),
+            v["length_ft"].as_f64().unwrap_or(0.0),
+            v["terminals"].as_u64().unwrap_or(0),
+            v["equipment"].as_u64().unwrap_or(0),
+            v["fittings"].as_u64().unwrap_or(0),
+            v["trade_summary"].as_str().unwrap_or("").to_string(),
+            v["warnings"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default(),
+        ),
+        Err(e) => {
+            return Err(crate::EngineError::Other(format!("ducts.read failed: {e}")));
+        }
+    };
+
+    // Per-trade summary question (MUST 6): present the summary and ask if anything was missed.
+    if runs > 0 {
+        let qid = job.next_qid(StageName::MepRead);
+        let q = Question {
+            id: qid,
+            stage: StageName::MepRead,
+            question: format!("{trade_summary} — anything not counted?"),
+            why: "per-trade summary of MEP elements found".into(),
+            choices: vec!["Looks correct".into(), "Missing items".into()],
+            evidence: None,
+            default: Some("Looks correct".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Completeness,
+        };
+        if let Some(st) = job.stage_mut(StageName::MepRead) {
+            st.questions.push(q);
+        }
+    }
+
+    // Per-sheet zero-result warnings as guidedrun questions (MUST 3).
+    for w in &warnings {
+        let qid = job.next_qid(StageName::MepRead);
+        let q = Question {
+            id: qid,
+            stage: StageName::MepRead,
+            question: format!("{w} — is this expected?"),
+            why: "zero MEP results on a sheet that should have them".into(),
+            choices: vec!["Yes, expected (schedule/detail sheet)".into(), "No, re-check this sheet".into()],
+            evidence: None,
+            default: Some("Yes, expected (schedule/detail sheet)".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        if let Some(st) = job.stage_mut(StageName::MepRead) {
+            st.questions.push(q);
+        }
+    }
+
+    Ok(json!({
+        "runs": runs,
+        "length_ft": length_ft,
+        "terminals": terminals,
+        "equipment": equipment,
+        "fittings": fittings,
+        "trade_summary": trade_summary,
+    }))
+}
+
 /// Run the BIM build stage (MUST 1).
 /// Must draft/store the building spec itself (bspec.draft store) before building.
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -1911,6 +1989,7 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Levels => run_levels(s, job),
             StageName::Rooms => run_rooms(s, job),
             StageName::Devices => run_devices(s, job),
+            StageName::MepRead => run_mep_read_stage(s, job),
             StageName::BimBuild => run_bim_build(s, job),
             StageName::Takeoff => run_takeoff(s, job),
             StageName::Estimate => run_estimate(s, job),

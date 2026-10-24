@@ -1527,6 +1527,9 @@ pub struct MepRun {
     /// the level it starts on). When set, the run has a single plan point and goes straight up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_ft: Option<f64>,
+    /// The sheet this run was read from (e.g. `"M-201"`, `"M-301"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_sheet: String,
 }
 
 fn is_false(v: &bool) -> bool {

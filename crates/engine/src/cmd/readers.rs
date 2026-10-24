@@ -245,12 +245,42 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
         apply_duct_network(s, &net, level_filter.as_deref())?;
     }
 
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     if total_runs == 0 {
-        warnings.push("mechanical sheet produced no duct runs — is this a schedule/detail sheet, or are the duct lines missing?");
+        warnings.push("mechanical sheet produced no duct runs — is this a schedule/detail sheet, or are the duct lines missing?".into());
     }
     if equipment == 0 && total_runs > 0 {
-        warnings.push("duct runs found but no equipment (RTU, AHU, PTAC, EF) — equipment may be on a separate sheet or use non-standard tags");
+        warnings.push("duct runs found but no equipment (RTU, AHU, PTAC, EF) — equipment may be on a separate sheet or use non-standard tags".into());
+    }
+    if terminals == 0 && total_runs > 0 {
+        warnings.push("duct runs found but no terminals (diffusers, grilles) — terminals may be on a separate sheet".into());
+    }
+    // Per-sheet zero-result warning: check M sheets in the project.
+    if m_sheets > 0 && total_runs == 0 {
+        warnings.push(format!("{m_sheets} M-sheet(s) in project but zero duct runs detected — check sheet classification and duct layers"));
+    }
+
+    // Trade summary for guidedrun integration.
+    let mut systems_found: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &net.runs {
+        *systems_found.entry(r.system.clone().unwrap_or_else(|| "unassigned".into())).or_default() += 1;
+    }
+    let trade_summary = format!(
+        "Found {} duct run(s), {} terminal(s), {} equipment, {} fitting(s){}",
+        total_runs, terminals, equipment, fittings,
+        if systems_found.is_empty() { String::new() }
+        else {
+            let parts: Vec<String> = systems_found.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+            format!(" — by system: {}", parts.join(", "))
+        }
+    );
+
+    // Run model.clashes if we applied runs and the spec has MEP content.
+    let mut clash_count = 0;
+    if apply && total_runs > 0
+        && let Ok(clashes) = s.execute("model.clashes", &json!({}))
+    {
+        clash_count = clashes["total"].as_u64().unwrap_or(0);
     }
 
     Ok(json!({
@@ -262,6 +292,9 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
         "sheets_in_project": m_sheets,
         "applied": apply && total_runs > 0,
         "warnings": warnings,
+        "trade_summary": trade_summary,
+        "clashes": clash_count,
+        "systems": systems_found,
     }))
 }
 
@@ -274,6 +307,14 @@ pub(crate) fn read_mech_from_drawing(s: &Session) -> Result<DuctNetwork> {
     let net = duct_reader::read_ducts(d, &sh);
     if !net.runs.is_empty() {
         return Ok(net);
+    }
+
+    // Check if the spec already has MEP runs (from mep.read on M-DUCT-SUPP/RETN layers).
+    // If so, skip the all-layers fallback to avoid adding noise.
+    if let Ok((sp, _)) = super::bspec::current(s, "ducts.read")
+        && !sp.mep.runs.is_empty()
+    {
+        return Ok(DuctNetwork::default());
     }
 
     // Fall back to layer-agnostic mode for PDF imports.
@@ -365,10 +406,11 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             id: format!("R{run_count}"),
             encased: false,
             size_source: if dr.confidence >= 0.85 { "tag" } else { "default" }.to_string(),
-            height_source: if dr.bottom_ft.is_some() { "tag" } else { "default" }.to_string(),
+            height_source: dr.height_source.clone(),
             reviewed: false,
             edited_by: String::new(),
             top_ft: None,
+            source_sheet: dr.source_sheet.clone().unwrap_or_default(),
         });
     }
 

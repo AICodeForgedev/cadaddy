@@ -317,6 +317,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 reviewed: false,
                 edited_by: String::new(),
                 top_ft: None,
+                source_sheet: String::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;

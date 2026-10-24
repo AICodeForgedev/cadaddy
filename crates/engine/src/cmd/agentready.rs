@@ -1113,7 +1113,9 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let mut mep_warnings: Vec<String> = Vec::new();
     if disc == "mep" || disc == "all" {
         // First, try standard layer-based reading (mep.read {apply}).
-        let _ = s.execute("mep.read", &json!({"apply": true}));
+        if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
+            mep_warnings.push(format!("mep.read: {e}"));
+        }
         // Then, geometry-based reading (ducts.read {apply}) for PDF-imported sheets.
         match super::readers::read_mech_from_drawing(s) {
             Ok(net) => {

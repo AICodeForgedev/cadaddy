@@ -113,6 +113,12 @@ pub struct DuctRun {
     pub bottom_ft: Option<f64>,
     /// Confidence 0–1.
     pub confidence: f64,
+    /// The sheet this run was read from (set during multi-sheet reading).
+    pub source_sheet: Option<String>,
+    /// True when a size/height/system tag was attached to this run by `attach_tags`.
+    pub has_tag: bool,
+    /// `"tag"`, `"default"`, `"estimated-route"` — where the height came from.
+    pub height_source: String,
 }
 
 /// The full duct network read from a single mechanical sheet.
@@ -495,6 +501,9 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
             system: None,
             bottom_ft: None,
             confidence: 0.7,
+            source_sheet: None,
+            has_tag: false,
+            height_source: "default".into(),
         });
     }
     runs
@@ -771,9 +780,9 @@ fn detect_equipment(d: &Drawing, all_layers: bool) -> Vec<DetectedEquipment> {
                     "vav"
                 } else if up.contains("FCU") || up.contains("FAN COIL") {
                     "fan_coil_unit"
-                } else if up.contains("EF") || up.contains("FAN") || up.contains("EXHAUST") {
+                } else if is_equip_word(&up, "EF") || up.contains("EXHAUST FAN") {
                     "exhaust_fan"
-                } else if up.contains("WH") || up.contains("WATER HEATER") {
+                } else if is_equip_word(&up, "WH") || up.contains("WATER HEATER") {
                     "water_heater"
                 } else if up.contains("ERV") || up.contains("HRV") || up.contains("MAU") {
                     "ventilation_unit"
@@ -886,7 +895,8 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
 // ---- Tag attachment --------------------------------------------------------
 
 /// Attach size/height/system tags to the nearest duct run.
-fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool) -> Vec<DetectedTag> {
+/// `scale` is the paper-scale factor (1.0 for building-scale, < 0.5 for paper-scale).
+fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool, scale: f64) -> Vec<DetectedTag> {
     let texts = text_entities(d);
     let segs = line_segments(d);
     let text_lines: Vec<&LineSeg> = if all_layers {
@@ -944,7 +954,16 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
             }
         }
 
-        let reach = 60.0; // model inches
+        // In paper-scale mode the model units are paper inches; a tag next to a duct is
+        // about 1-3 paper inches away.  At building scale, tags sit within 2-3 feet (24-36").
+        // In all-layers mode, tighten the reach to avoid attaching a tag to a distant wall pair.
+        let reach = if scale < 0.5 {
+            (scale * 120.0).clamp(0.5, 3.0) // paper scale: 0.5-3 paper inches (tighter)
+        } else if all_layers {
+            24.0 // all-layers at building scale: 2 feet (tags sit right next to duct)
+        } else {
+            60.0 // standard layers: 5 feet (more generous since layers already filter)
+        };
         if let Some(ri) = best_run.filter(|_| best_dist < reach) {
             let run = match runs.get_mut(ri) {
                 Some(r) => r,
@@ -963,18 +982,22 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
                     run.shape = "round".into();
                 }
                 run.confidence = run.confidence.max(0.85);
+                run.has_tag = true;
             }
 
             // Apply system.
             if let Some(sys) = &system {
                 run.system = Some(sys.clone());
                 run.confidence = run.confidence.max(0.8);
+                run.has_tag = true;
             }
 
             // Apply height.
             let section_ft = if run.depth_in > 0.0 { run.depth_in } else { run.width_in } / 12.0;
             if let Some(h) = parse_height(text, section_ft) {
                 run.bottom_ft = Some(h);
+                run.has_tag = true;
+                run.height_source = "tag".into();
             }
         }
     }
@@ -1179,9 +1202,134 @@ fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg], all_layers: bo
             system: None,
             bottom_ft: None,
             confidence: 0.5,
+            source_sheet: None,
+            has_tag: false,
+            height_source: "default".into(),
         });
         if runs.len() >= MAX_RUNS {
             break;
+        }
+    }
+}
+
+// ---- Word-boundary equipment tag check -------------------------------------
+
+/// Check if `text` contains `word` as a standalone equipment tag (word-boundary match).
+/// E.g., `is_equip_word("EF-1", "EF")` → true; `is_equip_word("SHELF", "EF")` → false.
+fn is_equip_word(text: &str, word: &str) -> bool {
+    for (i, _) in text.match_indices(word) {
+        // Check left boundary: start of string, or preceding char is not alphanumeric.
+        let left_ok = i == 0 || !text.as_bytes().get(i - 1).is_some_and(|b| b.is_ascii_alphanumeric());
+        // Check right boundary: end of string, or following char is not alphabetic (digits OK: EF1, EF-1).
+        let right = i + word.len();
+        let right_ok = right >= text.len() || !text.as_bytes().get(right).is_some_and(|b| b.is_ascii_alphabetic());
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- Context filter (all-layers mode) --------------------------------------
+
+/// In all-layers mode, remove runs that have no evidence of being real ducts.
+/// A run is "contextual" if it has a tag, has a system, or connects (within `tol`)
+/// to a contextual run.  Non-contextual runs in all-layers mode are false positives
+/// from wall/grid/border lines.
+fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], terms: &[DetectedTerminal], scale: f64) {
+    if runs.is_empty() {
+        return;
+    }
+    let tol = if scale < 0.5 { 2.0 * scale.max(0.001) } else { 5.0 };
+    let equip_reach = if scale < 0.5 { 5.0 * scale.max(0.001) } else { 40.0 };
+
+    // Phase 1: mark directly contextual runs.
+    // A run is contextual if it has a size tag (confidence >= 0.85), or is right next to
+    // equipment/terminal with a tag. System-only or untagged runs are NOT contextual.
+    let mut contextual = vec![false; runs.len()];
+    for (i, run) in runs.iter().enumerate() {
+        if run.has_tag && run.confidence >= 0.85 {
+            contextual[i] = true;
+            continue;
+        }
+        // Near equipment AND has a system tag?
+        if run.has_tag {
+            for eq in equip {
+                let center = (eq.min + eq.max) * 0.5;
+                if run.points.iter().any(|p| p.dist(center) < equip_reach + (eq.max - eq.min).len()) {
+                    contextual[i] = true;
+                    break;
+                }
+            }
+        }
+        if contextual[i] { continue; }
+        // Near terminal AND has a tag?
+        if run.has_tag {
+            for tm in terms {
+                if run.points.iter().any(|p| p.dist(tm.at) < equip_reach) {
+                    contextual[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Phase 2: one level of propagation — untagged runs connecting to a tagged run.
+    // Also include runs near equipment (without requiring tags) for the count floor.
+    for i in 0..runs.len() {
+        if contextual[i] { continue; }
+        let Some(fi) = runs[i].points.first() else { continue };
+        let Some(li) = runs[i].points.last() else { continue };
+        // Check endpoint connection to a tagged run.
+        for j in 0..runs.len() {
+            if !contextual[j] || i == j { continue; }
+            if !runs[j].has_tag { continue; }
+            let near = runs[j].points.first().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol)
+                || runs[j].points.last().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol);
+            let width_compat = (runs[i].width_in - runs[j].width_in).abs() < runs[j].width_in * 0.5 + 2.0;
+            if near && width_compat {
+                contextual[i] = true;
+                break;
+            }
+        }
+        if contextual[i] { continue; }
+        // Also mark runs adjacent to equipment (even without tags) — equipment anchors ducts.
+        for eq in equip {
+            let center = (eq.min + eq.max) * 0.5;
+            if runs[i].points.iter().any(|p| p.dist(center) < equip_reach + (eq.max - eq.min).len() * 0.5) {
+                contextual[i] = true;
+                break;
+            }
+        }
+    }
+
+    // Phase 3: remove non-contextual runs and short untagged runs (noise from wall segments).
+    // Real duct runs are at least a few feet long; short untagged pairs are likely wall fragments.
+    let min_len = if scale < 0.5 { 2.0 } else { 36.0 };
+    let mut keep = Vec::new();
+    for (i, run) in runs.drain(..).enumerate() {
+        if !contextual[i] {
+            continue;
+        }
+        // Compute run length.
+        let len: f64 = run.points.windows(2).map(|w| {
+            if let (Some(a), Some(b)) = (w.first(), w.get(1)) { a.dist(*b) } else { 0.0 }
+        }).sum();
+        if len < min_len && !run.has_tag {
+            continue; // too short and no tag — likely noise
+        }
+        keep.push(run);
+    }
+    *runs = keep;
+}
+
+// ---- Height tag as estimated-route -----------------------------------------
+
+/// Mark runs without height tags as `estimated-route` (their height is a guess).
+fn mark_estimated_routes(runs: &mut [DuctRun]) {
+    for run in runs.iter_mut() {
+        if run.bottom_ft.is_none() {
+            run.height_source = "estimated-route".into();
         }
     }
 }
@@ -1217,8 +1365,8 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
     // 3. Read legend and abbreviations.
     let (legend, abbr_map) = read_legend(d);
 
-    // 4. Attach size/height/system tags.
-    let tags = attach_tags(&mut runs, d, &abbr_map, al);
+    // 4. Attach size/height/system tags (with scale-adjusted reach for paper-scale).
+    let tags = attach_tags(&mut runs, d, &abbr_map, al, scale);
 
     // 5. Infer systems from labels in run breaks.
     infer_systems_from_labels(&mut runs, d, &abbr_map, al);
@@ -1227,12 +1375,22 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
     infer_depths_and_snap(&mut runs);
 
     // 7. Detect fittings, terminals, equipment.
-    let fittings = detect_fittings(d, &runs, al);
     let terminals = detect_terminals(d, al);
     let equipment = detect_equipment(d, al);
 
+    // 7b. In all-layers mode, filter out runs that have no tag/system/equipment evidence.
+    // This removes false positives from wall/grid/border line pairs.
+    if al {
+        filter_runs_by_context(&mut runs, &equipment, &terminals, scale);
+    }
+
+    let fittings = detect_fittings(d, &runs, al);
+
     // 8. Infer systems from equipment proximity and terminal tags.
     infer_systems_from_equipment(&mut runs, &equipment, &terminals);
+
+    // 9. Mark runs without height tags as estimated-route.
+    mark_estimated_routes(&mut runs);
 
     let abbreviations = abbr_map;
 
@@ -1375,7 +1533,7 @@ mod tests {
         // first duct again (its walls paired another way) and is not a second run.
         let p = |a: (f64, f64), b: (f64, f64)| DuctPair { c0: Vec2::new(a.0, a.1), c1: Vec2::new(b.0, b.1), half_w: 6.0 };
         let pairs = [p((0.0, 0.0), (100.0, 0.0)), p((100.0, 0.0), (200.0, 0.0)), p((0.0, 300.0), (150.0, 300.0)), p((20.0, 1.0), (180.0, 1.0))];
-        let runs = chain_runs(&pairs, &DuctOptions { all_pairs: true });
+        let runs = chain_runs(&pairs, &DuctOptions { all_pairs: true, ..Default::default() });
         assert_eq!(runs.len(), 2, "{runs:?}");
         assert!(runs.iter().any(|r| r.points.iter().all(|q| (q.y - 300.0).abs() < 1e-9)));
         // As tuned on the vector sheets: the chaining stops at the used pair.
