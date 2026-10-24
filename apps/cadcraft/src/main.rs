@@ -357,7 +357,9 @@ fn main() -> eframe::Result {
                 app.open_path(f);
             }
             if app.session.docs.is_empty() {
-                app.session.new_drawing(false);
+                // In the units the profile asks for (MEASUREINIT, restored above).
+                let metric = app.session.settings.measureinit;
+                app.session.new_drawing(metric);
             }
             let ctx = cc.egui_ctx.clone();
             let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());

@@ -233,6 +233,18 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        ui.label(crate::tl!("Units of new drawings"));
+        ui.horizontal(|ui| {
+            let metric = app.session.settings.measureinit;
+            if ui.radio(!metric, crate::tl!("Imperial (inches)")).clicked() && metric {
+                changes.insert("MEASUREINIT".into(), json!(0));
+            }
+            if ui.radio(metric, crate::tl!("Metric (millimetres)")).clicked() && !metric {
+                changes.insert("MEASUREINIT".into(), json!(1));
+            }
+        });
+        ui.end_row();
+
         ui.label(crate::tl!("Automatic save every"));
         let mut minutes = cadcraft_engine::autosave::savetime();
         let max = cadcraft_engine::autosave::MAX_SAVETIME;
@@ -258,6 +270,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
     });
+    hint(ui, crate::tl!("New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE)."));
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
     hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
 }

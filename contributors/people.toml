@@ -80,3 +80,7 @@ sync_github_name = true
 real_name = "Rodrigo Gressler"
 display_name = "Rodrigo"
 sync_github_name = false
+
+[people.aussieboer61]
+real_name = "Richard Sauer"
+display_name = "Richard Sauer"
