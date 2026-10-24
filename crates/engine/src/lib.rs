@@ -359,6 +359,9 @@ pub struct Settings {
     pub gridmajor: u32,
     /// ZOOMFACTOR: how far one mouse wheel step zooms (3..=100).
     pub zoomfactor: u32,
+    /// MEASUREINIT: the units of a new drawing made without a template (NEW, QNEW and the first
+    /// drawing at startup): `false` (0, the default) imperial, `true` (1) metric.
+    pub measureinit: bool,
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
     pub dynmode: bool,
@@ -400,6 +403,10 @@ pub struct Settings {
     pub pickfirst: bool,
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
+    /// CMDECHO: kept for routines that switch command echo around their commands; no command reads it yet.
+    pub cmdecho: bool,
+    /// FILEDIA: kept for routines that switch file dialogs off around a script; no command reads it yet.
+    pub filedia: bool,
     pub pickadd: bool,
     /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
     /// Drag-only mode (1) is not supported yet.
@@ -473,6 +480,7 @@ impl Default for Settings {
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             zoomfactor: 60,
+            measureinit: false,
             view_layer_snapshot: true,
             dynmode: true,
             dyndigrip: 31,
@@ -491,6 +499,8 @@ impl Default for Settings {
             aperture: 10.0,
             pickfirst: true,
             acadlspasdoc: false,
+            cmdecho: true,
+            filedia: true,
             pickadd: true,
             pickdrag: true,
             pickstyle: 1,
@@ -819,7 +829,7 @@ impl Session {
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
-        self.state().map(|s| s.edit_space()).unwrap_or_default()
+        self.state().map(DocState::edit_space).unwrap_or_default()
     }
     /// The tab being displayed: Model or a layout, regardless of MSPACE.
     pub fn layout_space(&self) -> Space {
@@ -881,7 +891,7 @@ impl Session {
 
     /// World units per pixel at the current view.
     pub fn pixel_size(&self) -> f64 {
-        let v = self.state().map(|s| s.view()).unwrap_or_default();
+        let v = self.state().map(DocState::view).unwrap_or_default();
         v.height / self.viewport_px.1.max(1.0)
     }
 
@@ -901,8 +911,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the drawing as it was.
                 if let Some((doc, sel, uid)) = &before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)

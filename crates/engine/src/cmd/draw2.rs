@@ -1581,8 +1581,12 @@ fn rect_kind(first: Vec2, w: f64, h: f64, rot: f64, fillet: f64, chamfer: (f64, 
     k
 }
 
+/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
+/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
 pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("rectang", p, "p1")?;
+    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
+    let centered = bool_or(p, "center", false);
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let ch = p
         .get("chamfer")
@@ -1618,12 +1622,14 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         let b = point_req("rectang", p, "p2")?;
         let loc = (b - a).rotate(-rot);
-        (loc.x, loc.y)
+        // In centre mode the picked point is one corner, mirrored across the centre.
+        if centered { (2.0 * loc.x, 2.0 * loc.y) } else { (loc.x, loc.y) }
     };
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }
-    let k = rect_kind(a, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
+    let first = if centered { a - Vec2::new(w / 2.0, h / 2.0).rotate(rot) } else { a };
+    let k = rect_kind(first, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
     let th = f64_or(p, "thickness", 0.0);
     if th != 0.0 {
@@ -1654,6 +1660,8 @@ enum RAsk {
 #[derive(Default)]
 pub(crate) struct RectM2 {
     first: Option<Vec2>,
+    /// The first point is the rectangle's centre (the `Center` option), not a corner.
+    center: bool,
     fillet: f64,
     chamfer: (f64, f64),
     width: f64,
@@ -1666,23 +1674,37 @@ pub(crate) struct RectM2 {
 }
 
 impl RectM2 {
+    /// Adds the rectangle of full size `w` × `h` with the collected options, drawing it from
+    /// the centre when centre mode is on, then applies the requested thickness.
     fn make(&self, s: &mut Session, w: f64, h: f64) -> Result<Step> {
         let Some(a) = self.first else { return Ok(Step::Cancel) };
         if w.abs() < 1e-12 || h.abs() < 1e-12 {
             return Err(other("The rectangle has no area."));
         }
-        let hd = s.add_entity(rect_kind(a, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
+        let first = self.origin(w, h).unwrap_or(a);
+        let hd = s.add_entity(rect_kind(first, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
         if self.thickness != 0.0 {
             let t = self.thickness;
             s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
         }
         Ok(Step::Done)
     }
+    /// The rectangle's local origin (the corner `rect_kind` draws from) for a size: the first
+    /// point itself as a corner, or the first point less half the size around the centre.
+    fn origin(&self, w: f64, h: f64) -> Option<Vec2> {
+        let a = self.first?;
+        Some(if self.center { a - Vec2::new(w / 2.0, h / 2.0).rotate(self.rotation) } else { a })
+    }
+    /// The rectangle's signed full size implied by the picked point `p`: explicit `dims` only
+    /// take their quadrant from `p`, otherwise `p` is a corner, doubled about the centre in
+    /// centre mode.
     fn other_corner(&self, p: Vec2) -> Option<(f64, f64)> {
         let a = self.first?;
         let loc = (p - a).rotate(-self.rotation);
         Some(match self.dims {
             Some((l, w)) => (if loc.x < 0.0 { -l } else { l }, if loc.y < 0.0 { -w } else { w }),
+            // In centre mode the picked point is one corner, mirrored across the centre.
+            None if self.center => (2.0 * loc.x, 2.0 * loc.y),
             None => (loc.x, loc.y),
         })
     }
@@ -1692,6 +1714,8 @@ impl Interactive for RectM2 {
     fn name(&self) -> &'static str {
         "RECTANG"
     }
+    /// Asks for the pending option's value, or for the first and second points; in centre mode
+    /// the first prompt asks for the centre instead of a corner.
     fn prompt(&self, _s: &Session) -> Prompt {
         let num = |m: &str, d: f64| Prompt::new(m, Accept::NUMBER).default(format!("{d:.4}"));
         if let Some(a) = self.asking {
@@ -1717,10 +1741,15 @@ impl Interactive for RectM2 {
             };
         }
         match self.first {
-            None => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Chamfer", "Elevation", "Fillet", "Thickness", "Width"]),
+            None => {
+                let msg = if self.center { "Specify center point for rectangle" } else { "Specify first corner point" };
+                Prompt::new(msg, Accept::POINT).kw(&["Chamfer", "CEnter", "Elevation", "Fillet", "Thickness", "Width"])
+            }
             Some(p) => Prompt::new("Specify other corner point", Accept::POINT).kw(&["Area", "Dimensions", "Rotation"]).corner(p),
         }
     }
+    /// Consumes one input: option keywords (`Center` only switches the first point's meaning
+    /// to the centre and asks nothing), option values, and the points that size the rectangle.
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(a) = self.asking {
             let val = |i: &Input, default: f64| -> Result<f64> {
@@ -1794,6 +1823,11 @@ impl Interactive for RectM2 {
         }
         match i {
             Input::Keyword(k) => {
+                // `Center` only switches the first point's meaning; it asks nothing.
+                if k == "CEnter" {
+                    self.center = true;
+                    return Ok(Step::Continue);
+                }
                 self.asking = Some(match k.as_str() {
                     "Chamfer" => RAsk::Chamfer1,
                     "Elevation" => RAsk::Elevation,
@@ -1820,12 +1854,14 @@ impl Interactive for RectM2 {
             _ => Ok(Step::Continue),
         }
     }
+    /// The rubber-band rectangle for the cursor at `c`, mapped through the same size-and-origin
+    /// rules as the committed entity so centre mode previews where it will land.
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         if self.asking.is_some() {
             return Vec::new();
         }
-        match (self.first, self.other_corner(c)) {
-            (Some(a), Some((w, h))) if w.abs() > 1e-12 && h.abs() > 1e-12 => {
+        match self.other_corner(c).and_then(|(w, h)| self.origin(w, h).map(|a| (a, w, h))) {
+            Some((a, w, h)) if w.abs() > 1e-12 && h.abs() > 1e-12 => {
                 vec![rect_kind(a, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation)]
             }
             _ => Vec::new(),
