@@ -587,6 +587,36 @@ fn says_when_blocks_of_the_other_drawing_were_left_out() {
 }
 
 #[test]
+fn says_when_blocks_both_drawings_define_differently_were_left_out() {
+    // Both drawings define B0 to B10000, each with a line of another length, so past the block
+    // limit the blocks left are ones this drawing defines differently.
+    let blocks = |end: f64, first: u64, d: &mut Drawing| {
+        for i in 0..10_001 {
+            let name = format!("B{i}");
+            let mut b = Block::new(&name);
+            b.entities.push(Entity::new(Handle(first + i), line(end)));
+            d.blocks.insert(name, Arc::new(b));
+        }
+    };
+    let mut other = Drawing::new_imperial();
+    blocks(1.0, 0x10_0000, &mut other);
+    for i in 0..10_001 {
+        other.add(&Space::Model, Common::default(), EntityKind::Insert(insert(&format!("B{i}")))).unwrap();
+    }
+    other.handseed = other.handseed.max(0x20_0000);
+    let mut s = Session::new();
+    let mut mine = s.doc().unwrap().clone();
+    blocks(2.0, 0x30_0000, &mut mine);
+    mine.handseed = mine.handseed.max(0x40_0000);
+    s.open_drawing(mine, "Mine", None);
+    s.open_drawing(other, "Other", None);
+    s.execute("document.switch", &json!({"index": 1})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    let r = s.execute("compareexport", &json!({})).unwrap();
+    assert!(r["message"].as_str().unwrap().contains("some blocks of the other drawing were too many or too large to copy"), "{}", r["message"]);
+}
+
+#[test]
 fn needs_a_comparison_of_the_current_drawing() {
     let mut s = Session::new();
     assert!(s.execute("compareexport", &json!({})).is_err(), "no comparison yet");
