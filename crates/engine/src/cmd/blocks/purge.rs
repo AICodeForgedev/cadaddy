@@ -117,14 +117,35 @@ fn entities(d: &Drawing) -> impl Iterator<Item = &std::sync::Arc<cadcraft_doc::E
     d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).chain(d.blocks.values().flat_map(|b| b.entities.iter())).take(5_000_000)
 }
 
-/// Upper-case names of blocks reachable from model space, the layouts and dimensions.
+/// The arrowhead block names a dimension's overrides set.
+fn override_arrows(dm: &cadcraft_doc::Dimension) -> impl Iterator<Item = String> + '_ {
+    dm.overrides
+        .iter()
+        .filter(|(k, _)| cadcraft_doc::DimStyle::field_name(k).is_some_and(|f| f.starts_with("arrowBlock") || f == "leaderArrowBlock"))
+        .filter_map(|(_, v)| v.as_str().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+}
+
+/// Upper-case names of blocks reachable from model space, the layouts and dimensions, and the
+/// arrowhead blocks dimension styles and dimension overrides name.
 fn used_blocks(d: &Drawing) -> HashSet<String> {
     let mut used = HashSet::new();
     let mut frontier: Vec<String> = Vec::new();
+    for st in &d.dim_styles {
+        frontier.extend(
+            [&st.arrow_block, &st.arrow_block1, &st.arrow_block2, &st.leader_arrow_block]
+                .into_iter()
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty()),
+        );
+    }
     for e in d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())) {
         match &e.kind {
             EntityKind::Insert(i) => frontier.push(i.block.clone()),
-            EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+            EntityKind::Dimension(dm) => {
+                frontier.extend(dm.block.clone());
+                frontier.extend(override_arrows(dm));
+            }
             EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
             _ => {}
         }
@@ -139,7 +160,10 @@ fn used_blocks(d: &Drawing) -> HashSet<String> {
             for e in b.entities.iter() {
                 match &e.kind {
                     EntityKind::Insert(i) => frontier.push(i.block.clone()),
-                    EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+                    EntityKind::Dimension(dm) => {
+                        frontier.extend(dm.block.clone());
+                        frontier.extend(override_arrows(dm));
+                    }
                     EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
                     _ => {}
                 }

@@ -1514,6 +1514,16 @@ fn arrow_block_entities(kind: cadcraft_render::Arrowhead) -> Vec<Entity> {
     out
 }
 
+/// Whether the entities of the block `name` are the arrowhead block CADCraft writes for that
+/// standard arrow name ([`arrow_block_entities`]): the same lines and solids with the same
+/// properties (layer 0, ByBlock). Any other content (AutoCAD's own `_Dot`, a user's
+/// redefinition, an older CADCraft's geometry) is the file's.
+pub(crate) fn is_generated_arrow(name: &str, entities: &[&Entity]) -> bool {
+    let Some((_, kind)) = dxf_ext::arrow_block_name(name) else { return false };
+    let ours = arrow_block_entities(kind);
+    ours.len() == entities.len() && ours.iter().zip(entities).all(|(a, b)| a.kind == b.kind && a.common == b.common)
+}
+
 /// Whether a DIMASSOC point reference to `k` names a point of it without naming a segment:
 /// true for objects made of one curve. Polylines are referenced by segment ([`polyline_vertex_ref`]);
 /// 3D polylines and multilines can't be yet, and references to them are left out, as AutoCAD

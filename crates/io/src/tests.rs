@@ -876,6 +876,62 @@ fn user_block_arrowheads_are_referenced_not_regenerated() {
     assert_eq!(back.blocks.len(), d.blocks.len());
 }
 
+/// Every standard arrowhead CADCraft generates reads back as its own geometry, through DXF and
+/// DWG, so reopening a drawing CADCraft wrote never turns them into user blocks.
+#[test]
+fn generated_arrowhead_blocks_are_not_kept_as_user_blocks() {
+    let mut d = Drawing::new_metric();
+    for (i, (_, name)) in crate::dxf_ext::ARROWS.iter().enumerate() {
+        d.dim_styles.push(DimStyle { name: format!("S{i}"), arrow_block: (*name).into(), ..DimStyle::default() });
+    }
+    let dxf = write_dxf(&d);
+    for (_, name) in crate::dxf_ext::ARROWS.iter().filter(|(k, _)| *k != cadcraft_render::Arrowhead::ClosedFilled) {
+        assert!(dxf.contains(&format!("\r\n{name}\r\n")), "{name} is written");
+    }
+    let dwg = cadcraft_dwg::dxf_to_dwg(dxf.as_bytes()).unwrap();
+    let from_dwg = read_dxf(&cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    for (back, what) in [(read_dxf(dxf.as_bytes()).unwrap(), "DXF"), (from_dwg, "DWG")] {
+        assert!(back.blocks.keys().all(|k| !k.starts_with('_')), "{what}: {:?}", back.blocks.keys().collect::<Vec<_>>());
+        assert!(roundtrip(&back).blocks.keys().all(|k| !k.starts_with('_')), "{what}: second save");
+    }
+}
+
+/// A file's own arrowhead block with a standard name (AutoCAD's `_Dot` is a closed polyline
+/// with width, not CADCraft's disc of solids) is kept when only a dimension style names it, and
+/// saved as it was, through DXF and DWG, instead of being replaced by CADCraft's geometry.
+#[test]
+fn file_arrowhead_blocks_with_standard_names_are_kept() {
+    let mut d = Drawing::new_metric();
+    let donut = LwPolyline {
+        vertices: vec![
+            PolyVertex { p: Vec2::new(-0.25, 0.0), bulge: 1.0, start_width: 0.5, end_width: 0.5 },
+            PolyVertex { p: Vec2::new(0.25, 0.0), bulge: 1.0, start_width: 0.5, end_width: 0.5 },
+        ],
+        closed: true,
+        const_width: 0.0,
+        elevation: 0.0,
+        plinegen: false,
+    };
+    for (name, kind) in [("_Dot", EntityKind::LwPolyline(donut)), ("_DotSmall", EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 0.0625 }))] {
+        let mut b = Block::new(name);
+        b.entities.push(Entity::new(Handle(0), kind));
+        d.blocks.insert(name.into(), std::sync::Arc::new(b));
+    }
+    d.dim_styles.push(DimStyle { name: "Dots".into(), arrow_block1: "_Dot".into(), arrow_block2: "_DotSmall".into(), ..DimStyle::default() });
+    let kinds = |d: &Drawing, name: &str| d.block(name).map(|b| b.entities.iter().map(|e| e.kind.clone()).collect::<Vec<_>>()).unwrap_or_default();
+    let dxf = write_dxf(&d);
+    let dwg = cadcraft_dwg::dxf_to_dwg(dxf.as_bytes()).unwrap();
+    let from_dwg = read_dxf(&cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    for (back, what) in [(read_dxf(dxf.as_bytes()).unwrap(), "DXF"), (from_dwg, "DWG")] {
+        for name in ["_Dot", "_DotSmall"] {
+            assert_eq!(kinds(&back, name), kinds(&d, name), "{what}: {name}");
+        }
+        let again = write_dxf(&back);
+        assert!(!again.contains("\nSOLID\r"), "{what}: no arrowhead geometry of CADCraft's is written");
+        assert_eq!(kinds(&roundtrip(&back), "_Dot"), kinds(&d, "_Dot"), "{what}: a second save keeps it too");
+    }
+}
+
 #[test]
 fn dimension_overrides_roundtrip_as_dstyle_xdata() {
     let mut d = Drawing::new_imperial();
