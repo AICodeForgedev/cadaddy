@@ -1073,6 +1073,11 @@ fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
     assert!(partial > 0, "no damaged copy read partially");
 }
 
+/// A dimension's standard DIMASSOC objects carry the same associations as CADCraft's xdata, so
+/// a file from another writer (xdata stripped) still follows its geometry: a linear dimension's
+/// two origins, a polyline's vertex named by its segment (#1049), and since #1651 a radial
+/// dimension's circle, whose centre comes back as a `Center` link and its rim point as
+/// `OnCircle`.
 #[test]
 fn dimension_associativity_roundtrips() {
     let mut d = Drawing::new_imperial();
@@ -1144,7 +1149,10 @@ fn dimension_associativity_roundtrips() {
     assert_eq!(fa.len(), 2);
     assert_eq!(fa[1], ali.assoc[1], "the polyline vertex, named by its segment (#1049)");
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
-    assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADCraft-only");
+    let fr = assoc_of(&foreign, hr);
+    assert_eq!(fr.len(), 2, "a radial dimension's circle comes from the standard DIMASSOC");
+    assert_eq!(fr[0], rad.assoc[0], "the centre");
+    assert!(matches!(fr[1].snap, AssocSnap::OnCircle { angle } if angle.is_finite()));
 }
 
 /// #1049: a polyline vertex is referenced as AutoCAD does: an end of one of its segments,

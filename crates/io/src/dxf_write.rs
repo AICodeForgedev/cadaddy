@@ -1559,20 +1559,34 @@ pub(crate) fn polyline_vertex_ref(p: &LwPolyline, index: usize) -> Option<(i64, 
 }
 
 /// Standard DIMASSOC point references of an associative dimension: the extension-line
-/// origins of linear/aligned dimensions and the feature point of ordinate dimensions, linked
+/// origins of linear/aligned dimensions, both ends of both lines of an angular dimension, the
+/// feature point of ordinate dimensions and the circle of a radial/diametric dimension, linked
 /// to objects that exist ([`whole_object_ref`]). CADCraft's exact links travel in xdata as well.
 fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        return radial_ref(d, &dm.assoc);
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        // Saved as an aligned dimension (`dim_xdata` marks it): its extension origins are the arc ends.
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => &[],
+        DimKind::Radius | DimKind::Diameter => &[],
     };
     let mut flags = 0;
     let mut refs = Vec::new();
     for (slot, name) in slots.iter().enumerate() {
         let Some(a) = dm.assoc.iter().find(|a| a.point == *name) else { continue };
         let Some(ent) = d.entity(a.handle) else { continue };
-        let point = if *name == "p13" { dm.p13 } else { dm.p14 };
+        let point = match *name {
+            "p13" => dm.p13,
+            "p14" => dm.p14,
+            "p15" => dm.p15,
+            "p16" => dm.p16,
+            _ => continue,
+        };
         if let EntityKind::LwPolyline(p) = &ent.kind {
             let index = match &a.snap {
                 AssocSnap::Vertex { index } => Some(*index),
@@ -1589,7 +1603,10 @@ fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
             continue;
         }
         let (osnap, param, other) = match &a.snap {
-            AssocSnap::Start | AssocSnap::End | AssocSnap::Vertex { .. } => (1, 0.0, None),
+            // AutoCAD marks a curve's start with osnap 13 and its end with osnap 1 (group 72).
+            AssocSnap::Start => (if matches!(ent.kind, EntityKind::Point(_)) { 1 } else { 13 }, 0.0, None),
+            AssocSnap::End => (1, 1.0, None),
+            AssocSnap::Vertex { .. } => (1, 0.0, None),
             AssocSnap::Mid => (2, 0.0, None),
             AssocSnap::Center => (if matches!(ent.kind, EntityKind::Point(_)) { 4 } else { 3 }, 0.0, None),
             AssocSnap::OnCircle { angle } => (10, *angle, None),
@@ -1604,6 +1621,27 @@ fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
         refs.push(OsnapRef { osnap, main: a.handle, segment: 0, param, point, other });
     }
     (flags, refs)
+}
+
+/// The single standard reference of a radial or diametric dimension: the circle or arc it
+/// measures, by its centre, with associativity flag 2. AutoCAD writes radial and diametric
+/// dimensions that way: the one reference names the geometry, whose radius or diameter the
+/// dimension then follows. Returns no flags and no references when the association does not name
+/// a circle or arc, so such a dimension is saved unassociated rather than pointing at nothing.
+fn radial_ref(d: &Drawing, assoc: &[DimAssoc]) -> (i64, Vec<OsnapRef>) {
+    for a in assoc {
+        let Some(ent) = d.entity(a.handle) else { continue };
+        let centre = match &ent.kind {
+            EntityKind::Circle(c) => c.center.xy(),
+            EntityKind::Arc(arc) => arc.center.xy(),
+            _ => continue,
+        };
+        if !centre.is_finite() {
+            continue;
+        }
+        return (2, vec![OsnapRef { osnap: 3, main: a.handle, segment: 0, param: 0.0, point: centre.to3(0.0), other: None }]);
+    }
+    (0, Vec::new())
 }
 
 /// Layouts with viewports but without the paper-space viewport (id 1, the sheet itself), keyed
