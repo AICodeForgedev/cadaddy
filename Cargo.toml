@@ -26,6 +26,9 @@ cadcraft-ui-egui = { path = "crates/ui-egui" }
 cadcraft-mcp = { path = "crates/mcp" }
 # Which paths stored in a drawing (xrefs, data links) may be opened.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+# PDF writing (krilla) for plots, and reading them back in tests. The root patches below pin
+# craft-pdf's patched backends to the same revision (Cargo ignores dependency-local patches).
+craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca", default-features = false }
 
 # foundation
 thiserror = "2"
@@ -57,6 +60,11 @@ eframe = { version = "0.36", default-features = false }
 egui-wgpu = "0.36"
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
+
+[patch.crates-io]
+krilla = { version = "=0.8.2", git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
