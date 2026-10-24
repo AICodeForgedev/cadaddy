@@ -279,6 +279,30 @@ fn rectangles_all(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
     out
 }
 
+/// Extract rectangles from closed 4-vertex polylines, keeping only those on layers where
+/// `pred(layer_name)` returns true.
+fn rectangles_filtered(d: &Drawing, pred: &dyn Fn(&str) -> bool) -> Vec<(Vec2, Vec2, String)> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if !pred(&e.common.layer) {
+            continue;
+        }
+        if let EntityKind::LwPolyline(p) = &e.kind
+            && p.closed
+            && p.vertices.len() == 4
+        {
+            let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+            if pts.iter().all(|p| p.is_finite()) {
+                let min = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
+                let max =
+                    Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
+                out.push((min, max, e.common.layer.to_string()));
+            }
+        }
+    }
+    out
+}
+
 fn minmax(a: f64, b: f64) -> (f64, f64) {
     if a <= b { (a, b) } else { (b, a) }
 }
@@ -306,11 +330,18 @@ struct DuctPair {
 /// Find parallel line pairs that represent duct walls.
 /// When `all_layers` is false, only DUCT-layer segments are used (the original behaviour).
 /// When true, segments on any layer are considered, with auto-scaled thresholds.
-fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64) -> Vec<DuctPair> {
+/// When `pdf_filter` is true and `all_layers` is true, only PDF-BLACK-* layers are used
+/// (filtering out gray architecture background from PDF imports).
+fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) -> Vec<DuctPair> {
     use std::f64::consts::PI;
 
-    let duct_segs: Vec<&LineSeg> =
-        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect() };
+    let duct_segs: Vec<&LineSeg> = if all_layers && pdf_filter {
+        segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
+    } else if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     if duct_segs.is_empty() {
         return Vec::new();
     }
@@ -396,12 +427,23 @@ pub struct DuctOptions {
     /// Scale factor for distance thresholds (1.0 = building-scale, < 1.0 = paper-scale).
     /// Auto-detected when `all_layers` is true.
     pub scale: f64,
+    /// When true, filter to PDF-BLACK-* layers only (exclude gray background architecture
+    /// from PDF imports).  Effective only when `all_layers` is also true.
+    pub pdf_mep_filter: bool,
 }
 
 impl Default for DuctOptions {
     fn default() -> Self {
-        Self { all_pairs: false, all_layers: false, scale: 1.0 }
+        Self { all_pairs: false, all_layers: false, scale: 1.0, pdf_mep_filter: false }
     }
+}
+
+/// Returns true if `layer` is a PDF-BLACK-* layer (the MEP overlay on mechanical plans).
+/// Gray layers (PDF-GRAY*) are the architecture background; fills, masks, and text layers
+/// are excluded from duct/terminal/equipment geometry detection.
+fn is_pdf_mep_line(layer: &str) -> bool {
+    let up = layer.to_uppercase();
+    up.starts_with("PDF-BLACK")
 }
 
 /// Chain parallel pairs that share an endpoint into continuous runs.
@@ -595,12 +637,15 @@ fn extract_system(text: &str, abbr_map: &BTreeMap<String, String>) -> Option<Str
 
 /// Detect fittings from arcs and geometry patterns.
 /// When `all_layers` is true, arcs/rectangles on any layer are considered.
-fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<DetectedFitting> {
+fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: bool) -> Vec<DetectedFitting> {
     let mut fittings = Vec::new();
 
     // Arcs near runs → elbows.
     for (center, _radius, _start, _end, layer) in arcs(d) {
         if !all_layers && !layer.eq_ignore_ascii_case("DUCT") {
+            continue;
+        }
+        if all_layers && pdf_filter && !is_pdf_mep_line(&layer) {
             continue;
         }
         // In all_layers mode, only count arcs near a known run.
@@ -618,10 +663,21 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<Detec
     }
 
     // Turn markers: rectangles with internal crossing lines (box with X).
-    let duct_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DUCT") };
+    let duct_rects = if all_layers && pdf_filter {
+        rectangles_filtered(d, &is_pdf_mep_line)
+    } else if all_layers {
+        rectangles_all(d)
+    } else {
+        rectangles(d, "DUCT")
+    };
     let segs = line_segments(d);
-    let duct_lines: Vec<&LineSeg> =
-        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect() };
+    let duct_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
+        segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
+    } else if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     for (min, max, _) in &duct_rects {
         let center = (*min + *max) * 0.5;
         let w = max.x - min.x;
@@ -679,12 +735,23 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<Detec
 // ---- Terminal detection ----------------------------------------------------
 
 /// Detect terminals (diffusers, grilles) from DEVICE layer (or any layer in all_layers mode).
-fn detect_terminals(d: &Drawing, all_layers: bool) -> Vec<DetectedTerminal> {
+fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
-    let device_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DEVICE") };
+    let device_rects = if all_layers && pdf_filter {
+        rectangles_filtered(d, &is_pdf_mep_line)
+    } else if all_layers {
+        rectangles_all(d)
+    } else {
+        rectangles(d, "DEVICE")
+    };
     let segs = line_segments(d);
-    let device_lines: Vec<&LineSeg> =
-        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect() };
+    let device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
+        segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
+    } else if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
+    };
 
     for (min, max, _) in &device_rects {
         let center = (*min + *max) * 0.5;
@@ -734,9 +801,15 @@ fn detect_terminals(d: &Drawing, all_layers: bool) -> Vec<DetectedTerminal> {
 // ---- Equipment detection ---------------------------------------------------
 
 /// Detect equipment boxes (AHU, VAV, RTU, PTAC, EF) from EQUIP layer or any layer.
-fn detect_equipment(d: &Drawing, all_layers: bool) -> Vec<DetectedEquipment> {
+fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedEquipment> {
     let mut equipment = Vec::new();
-    let equip_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "EQUIP") };
+    let equip_rects = if all_layers && pdf_filter {
+        rectangles_filtered(d, &is_pdf_mep_line)
+    } else if all_layers {
+        rectangles_all(d)
+    } else {
+        rectangles(d, "EQUIP")
+    };
     let texts = text_entities(d);
 
     for (min, max, _) in &equip_rects {
@@ -1349,13 +1422,14 @@ pub fn read_ducts(d: &Drawing, sh: &Sheet) -> DuctNetwork {
 /// [`read_ducts`] with options.
 pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork {
     let al = o.all_layers;
+    let pf = o.pdf_mep_filter;
     let scale = if al && o.scale == 1.0 { detect_paper_scale(d).max(0.001) } else { o.scale };
     let mut opts = *o;
     opts.scale = scale;
 
     // 1. Find parallel line pairs (DUCT layer, or all layers).
     let segs = line_segments(d);
-    let pairs = duct_pairs(&segs, al, scale);
+    let pairs = duct_pairs(&segs, al, scale, pf);
 
     // 2. Chain pairs into runs.
     let mut runs = chain_runs(&pairs, &opts);
@@ -1367,6 +1441,7 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
     let (legend, abbr_map) = read_legend(d);
 
     // 4. Attach size/height/system tags (with scale-adjusted reach for paper-scale).
+    // Tags are read from ALL layers (including text layers) — no PDF filter here.
     let tags = attach_tags(&mut runs, d, &abbr_map, al, scale);
 
     // 5. Infer systems from labels in run breaks.
@@ -1376,8 +1451,8 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
     infer_depths_and_snap(&mut runs);
 
     // 7. Detect fittings, terminals, equipment.
-    let terminals = detect_terminals(d, al);
-    let equipment = detect_equipment(d, al);
+    let terminals = detect_terminals(d, al, pf);
+    let equipment = detect_equipment(d, al, pf);
 
     // 7b. In all-layers mode, filter out runs that have no tag/system/equipment evidence.
     // This removes false positives from wall/grid/border line pairs.
@@ -1385,7 +1460,7 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
         filter_runs_by_context(&mut runs, &equipment, &terminals, scale);
     }
 
-    let fittings = detect_fittings(d, &runs, al);
+    let fittings = detect_fittings(d, &runs, al, pf);
 
     // 8. Infer systems from equipment proximity and terminal tags.
     infer_systems_from_equipment(&mut runs, &equipment, &terminals);
@@ -1406,9 +1481,14 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
 pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
     let paper_scale = detect_paper_scale(d);
     let sh = Sheet::default();
+
+    // On PDF imports (recognised by PDF-* layer names), filter to black layers only.
+    // Gray layers carry the architecture background which produces false-positive duct pairs.
+    let pdf_filter = d.layers.iter().any(|l| l.name.starts_with("PDF-"));
+
     if paper_scale < 0.5 {
         // Paper-scale drawing: scale detection thresholds down to paper units.
-        let opts = DuctOptions { all_pairs: true, all_layers: true, scale: paper_scale.max(0.001) };
+        let opts = DuctOptions { all_pairs: true, all_layers: true, scale: paper_scale.max(0.001), pdf_mep_filter: pdf_filter };
         let mut net = read_ducts_with(d, &sh, &opts);
         // Runs whose sizes came from tags (confidence >= 0.85) are already in building inches.
         // Untagged runs have paper-scale widths — replace with a reasonable building-scale default.
@@ -1421,7 +1501,7 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
         }
         net
     } else {
-        read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, ..Default::default() })
+        read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, pdf_mep_filter: pdf_filter, ..Default::default() })
     }
 }
 
