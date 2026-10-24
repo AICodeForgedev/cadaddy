@@ -498,6 +498,24 @@ fn interactive_routine_waits_for_the_user() {
 }
 
 #[test]
+fn getangle_is_relative_to_angbase() {
+    let mut s = session();
+    s.cmdline("(setvar \"ANGBASE\" 90)").unwrap();
+    // A picked point at 180° in world terms is 90° from ANGBASE.
+    s.cmdline("(setq a (getangle '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadcraft_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("A"), true), "1.5708");
+    // getorient ignores ANGBASE.
+    s.cmdline("(setq o (getorient '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadcraft_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("O"), true), "3.14159");
+    // A typed angle is already measured from ANGBASE.
+    s.cmdline("(setq t2 (getangle))").unwrap();
+    s.cmdline("180").unwrap();
+    assert_eq!(to_text(&s.lisp_var("T2"), true), "3.14159");
+}
+
+#[test]
 fn appload_and_load() {
     let mut s = session();
     let r =
