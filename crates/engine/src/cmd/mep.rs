@@ -241,6 +241,21 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
     }
     let notes = texts(&ents);
     let mut runs = Vec::new();
+
+    // When no MEP-standard layers are found (e.g. a PDF import with generic PDF-* layers),
+    // detect piping from text tags: scan all line entities, find those near pipe-system text
+    // tags (e.g. "2\" CW", "4\" SAN") and create pipe runs from them.
+    if systems.is_empty() {
+        // For PDF imports, the model units are paper inches. Detect this and use the right
+        // units_per_foot for length computation and tag reach.
+        let effective_upf = detect_paper_upf(d, upf);
+        let (tag_systems, tag_runs) = read_pipes_from_tags(&ents, &notes, sp, effective_upf, only);
+        if !tag_systems.is_empty() {
+            systems = tag_systems;
+            runs = tag_runs;
+        }
+    }
+
     for sy in &systems {
         let mine: Vec<&Arc<Entity>> = ents.iter().copied().filter(|e| super::qselect::wildcard(&sy.layer, &e.common.layer)).collect();
         // Tags: texts on the system's layers, else on any layer near its runs.
@@ -326,6 +341,290 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
     Ok((systems, runs))
 }
 
+/// Pipe system abbreviations: (abbreviation, canonical code, full name, default size inches,
+/// default bottom feet).
+const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
+    ("CW", "CW", "Cold Water", 1.0, 10.0),
+    ("HW", "HW", "Hot Water", 0.75, 10.0),
+    ("HWR", "HWR", "Hot Water Return", 0.5, 10.0),
+    ("HWC", "HWR", "Hot Water Return", 0.5, 10.0),
+    ("SAN", "SAN", "Sanitary", 3.0, 0.0),
+    ("SS", "SAN", "Sanitary", 3.0, 0.0),
+    ("W", "SAN", "Sanitary Waste", 3.0, 0.0),
+    ("V", "V", "Vent", 2.0, 10.0),
+    ("G", "G", "Gas", 1.0, 10.0),
+    ("GAS", "G", "Gas", 1.0, 10.0),
+    ("NG", "G", "Natural Gas", 1.0, 10.0),
+    ("FP", "FP", "Fire Protection", 2.0, 10.0),
+    ("SP", "FP", "Fire Protection", 2.0, 10.0),
+    ("ST", "ST", "Storm", 4.0, 0.0),
+    ("SD", "ST", "Storm Drain", 4.0, 0.0),
+    ("RD", "ST", "Roof Drain", 4.0, 0.0),
+    ("CHW", "CHW", "Chilled Water", 2.0, 10.0),
+    ("CHWR", "CHWR", "Chilled Water Return", 2.0, 10.0),
+    ("FCU", "FCU", "Fan Coil Unit", 1.0, 10.0),
+];
+
+/// Abbreviations that require a size prefix (like `1" G`) because they are too short to be
+/// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
+const SHORT_ABBR: &[&str] = &["G", "W", "F", "V"];
+
+/// Parse a pipe system code from a text tag. Returns (size_in, system_code) if found.
+fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
+    let up = t.to_ascii_uppercase().replace('\u{2033}', "\"");
+    let words: Vec<&str> = up.split_whitespace().collect();
+    // Skip texts that are too long to be pipe tags (schedules, notes, titles).
+    if words.len() > 8 {
+        return None;
+    }
+    // Pattern 1: `N" SYS` (e.g. "2\" CW", "4\" SAN", "3/4\" HW")
+    for (i, w) in words.iter().enumerate() {
+        if !w.contains('"') || w.contains('\'') {
+            continue;
+        }
+        let digits: String = w.chars().take_while(|c| c.is_ascii_digit() || *c == '/' || *c == '.').collect();
+        let value = parse_pipe_size_str(&digits);
+        // Check for whole-number prefix: `1 1/2"`
+        let value = match (i > 0 && digits.contains('/'), value) {
+            (true, Some(frac)) => words.get(i.wrapping_sub(1)).and_then(|p| p.parse::<f64>().ok()).map(|w| w + frac).or(Some(frac)),
+            (_, v) => v,
+        };
+        if let Some(v) = value.filter(|v| *v > 0.0 && *v <= 24.0) {
+            // System code after the size: any abbreviation is valid here (even single-letter).
+            if let Some(sys) = words.get(i + 1) {
+                let s = sys.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+                if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
+                    return Some((Some(v), code));
+                }
+            }
+            // Size without a system: skip (could be any dimension on the drawing).
+            return None;
+        }
+    }
+    // Pattern 2: bare system label (e.g. "CW", "SAN", "HW UP"). Only accept multi-char
+    // abbreviations to avoid matching grid labels, room numbers, etc.
+    for w in &words {
+        let s = w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+        if SHORT_ABBR.iter().any(|a| a.eq_ignore_ascii_case(s)) {
+            // Single-letter abbreviations need a size to be valid.
+            continue;
+        }
+        if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
+            return Some((None, code));
+        }
+    }
+    None
+}
+
+fn parse_pipe_size_str(s: &str) -> Option<f64> {
+    let s = s.trim().trim_end_matches('"');
+    if let Some((a, b)) = s.split_once('/') {
+        let (whole, a) = match a.trim().rsplit_once(' ') {
+            Some((w, a)) => (w.trim().parse::<f64>().ok()?, a),
+            None => (0.0, a),
+        };
+        Some(whole + a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok().filter(|b| *b != 0.0)?)
+    } else {
+        s.parse::<f64>().ok()
+    }
+}
+
+/// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
+/// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
+fn read_pipes_from_tags(
+    ents: &[&Arc<Entity>],
+    notes: &[(Handle, String, Vec2, f64)],
+    sp: &BuildingSpec,
+    upf: f64,
+    only: Option<&str>,
+) -> (Vec<MepSystem>, Vec<MepRun>) {
+    // Step 1: find all pipe-system text tags and their positions.
+    struct PipeTag {
+        at: Vec2,
+        system: &'static str,
+        size_in: Option<f64>,
+        #[allow(dead_code)]
+        text: String,
+    }
+    let mut pipe_tags: Vec<PipeTag> = Vec::new();
+    for (_, t, at, _) in notes {
+        if let Some((sz, sys)) = parse_pipe_tag(t) {
+            if !sys.is_empty() {
+                pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
+            }
+        }
+    }
+    if pipe_tags.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // Step 2: collect all line chains from any layer.
+    let all_chains = chains(
+        &ents.iter().copied().filter(|e| {
+            matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))
+        }).collect::<Vec<_>>(),
+    );
+
+    // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
+    let reach = 6.0 * upf; // 6 feet in drawing units
+    let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
+    let mut runs = Vec::new();
+
+    for (pts, handles) in &all_chains {
+        if pts.len() < 2 {
+            continue;
+        }
+        let Some(first) = pts.first() else { continue };
+        let Some(level) = level_at(&sp.levels, first.x, first.y) else { continue };
+        if only.is_some_and(|o| !o.eq_ignore_ascii_case(&level.name)) {
+            continue;
+        }
+
+        let segs: Vec<(Vec2, Vec2)> = pts.windows(2).filter_map(|w| match w {
+            [a, b] => Some((*a, *b)),
+            _ => None,
+        }).collect();
+        if segs.is_empty() {
+            continue;
+        }
+
+        // Find the nearest pipe tag to this chain.
+        let mut best_tag: Option<&PipeTag> = None;
+        let mut best_dist = f64::INFINITY;
+        for tag in &pipe_tags {
+            let d = segs.iter().map(|(a, b)| seg_dist(tag.at, *a, *b)).fold(f64::INFINITY, f64::min);
+            if d < reach && d < best_dist {
+                best_dist = d;
+                best_tag = Some(tag);
+            }
+        }
+        let Some(tag) = best_tag else { continue };
+
+        let sys_code = tag.system;
+        systems_seen.insert(sys_code, true);
+
+        let (_, _, _, default_size, default_bottom) = PIPE_SYSTEMS.iter()
+            .find(|(_, code, ..)| *code == sys_code)
+            .copied()
+            .unwrap_or(("", sys_code, "", 2.0, 10.0));
+
+        let size_in = tag.size_in.unwrap_or(default_size);
+        let size_from_tag = tag.size_in.is_some();
+        let section_ft = size_in / 12.0;
+
+        // Check for height tags near this run.
+        let mut heights: Vec<Option<f64>> = vec![None; segs.len()];
+        for (_, t, at, _) in notes {
+            let near = segs.iter().enumerate().map(|(i, (a, b))| (i, seg_dist(*at, *a, *b))).min_by(|x, y| x.1.total_cmp(&y.1));
+            if let Some((i, dist)) = near.filter(|(_, dd)| *dd <= reach) {
+                if heights.get(i).is_some_and(|h| h.is_none()) {
+                    if let Some(h) = height_tag(t, section_ft) {
+                        if let Some(slot) = heights.get_mut(i) {
+                            if dist < reach {
+                                *slot = Some(h);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let has_height_tag = heights.iter().any(|h| h.is_some());
+        // Fill gaps forward then back.
+        let mut last = None;
+        for b in heights.iter_mut() {
+            match b {
+                Some(v) => last = Some(*v),
+                None => *b = last,
+            }
+        }
+        let mut next = None;
+        for b in heights.iter_mut().rev() {
+            match b {
+                Some(v) => next = Some(*v),
+                None => *b = next,
+            }
+        }
+
+        let round = |v: f64| (v * 9600.0).round() / 9600.0;
+        runs.push(MepRun {
+            system: sys_code.to_string(),
+            level: level.name.clone(),
+            points: pts.iter().map(|p| [p.x, p.y]).collect(),
+            size_in: [size_in, 0.0],
+            bottoms_ft: heights.into_iter().map(|b| round(b.unwrap_or(default_bottom))).collect(),
+            objects: handles.iter().map(|h| h.hex()).collect(),
+            id: String::new(),
+            encased: false,
+            size_source: if size_from_tag { "tag" } else { "default" }.to_string(),
+            height_source: if has_height_tag { "tag" } else { "default" }.to_string(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+        });
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
+    }
+
+    // Build system entries for the seen codes.
+    let systems: Vec<MepSystem> = systems_seen.keys().map(|code| {
+        let (_, _, _name, size, bottom) = PIPE_SYSTEMS.iter()
+            .find(|(_, c, ..)| c == code)
+            .copied()
+            .unwrap_or(("", code, code, 2.0, 10.0));
+        MepSystem {
+            name: code.to_string(),
+            layer: format!("P-{code}"),
+            kind: MepKind::Pipe,
+            size_in: [size, 0.0],
+            bottom_ft: bottom,
+            show: true,
+            duct_type: None,
+            color_index: pipe_system_color(code),
+        }
+    }).collect();
+
+    (systems, runs)
+}
+
+/// Detect if the drawing is at paper scale (a PDF import) and return the effective
+/// units_per_foot. Paper-scale drawings have small extents (typically 36"–48" wide).
+/// At 1/8" = 1' scale, units_per_foot ≈ 0.125.
+fn detect_paper_upf(d: &Drawing, default_upf: f64) -> f64 {
+    let ext = d.extents(&Space::Model);
+    let w = ext.max.x - ext.min.x;
+    let h = ext.max.y - ext.min.y;
+    let diag = (w * w + h * h).sqrt();
+    // Paper-scale: typical sheet is 36"×24" to 48"×36", diagonal ≈ 43–60".
+    // Real-scale DWG: hundreds to thousands of units.
+    if diag < 80.0 && diag > 10.0 {
+        // This is a paper-scale drawing. The most common plumbing plan scales:
+        // 1/8" = 1' → 0.125 model inches per foot → building is diag/0.125 feet
+        // 1/4" = 1' → 0.25 model inches per foot
+        // Estimate using 1/8" = 1' as the most common scale for plumbing.
+        0.125
+    } else {
+        default_upf
+    }
+}
+
+/// ACI colour per pipe system code (matches the trade colour table).
+fn pipe_system_color(code: &str) -> i16 {
+    match code {
+        "CW" => 5,    // blue
+        "HW" => 1,    // red
+        "HWR" => 14,  // dark red
+        "SAN" => 30,  // orange
+        "V" => 3,     // green
+        "G" => 50,    // yellow
+        "FP" => 6,    // magenta
+        "ST" => 150,  // purple
+        "CHW" => 4,   // cyan
+        "CHWR" => 140,
+        _ => 7,       // white
+    }
+}
+
 fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "mep.read")?;
     let only = str_param(p, "level").map(str::to_string);
@@ -340,6 +639,14 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         "applied": apply,
     });
     if apply {
+        // For PDF-imported drawings at paper scale, correct the spec's units_per_foot so
+        // that `mep.qty` computes real pipe lengths (not paper-inch lengths).
+        if let Ok(d) = s.doc() {
+            let corrected = detect_paper_upf(d, sp.units_per_foot);
+            if corrected < sp.units_per_foot {
+                sp.units_per_foot = corrected;
+            }
+        }
         if sp.mep.systems.is_empty() {
             sp.mep.systems = systems;
         }
