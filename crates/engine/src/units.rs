@@ -76,32 +76,35 @@ fn gcd(a: i64, b: i64) -> i64 {
     if b == 0 { a.abs().max(1) } else { gcd(b, a % b) }
 }
 
+/// Degrees (`[0, 360]`) as degrees/minutes/seconds, shown to the AUPREC precision (`12d34'57"`).
+fn format_dms(deg: f64, prec: usize) -> String {
+    // Round at the displayed precision before splitting, carrying through a full turn.
+    let scale = 10i64.pow(prec.saturating_sub(4) as u32);
+    let seconds_per_unit = match prec {
+        0 => 3600,
+        1 | 2 => 60,
+        _ => 1,
+    };
+    let units = (deg * (3600 / seconds_per_unit * scale) as f64).round() as i64;
+    let total = units * seconds_per_unit % (360 * 3600 * scale);
+    let (d, m) = (total / (3600 * scale), (total / (60 * scale)) % 60);
+    match prec {
+        0 => format!("{d}d"),
+        1 | 2 => format!("{d}d{m}'"),
+        _ => {
+            let s = (total % (60 * scale)) as f64 / scale as f64;
+            format!("{d}d{m}'{:.*}\"", prec.saturating_sub(4), s)
+        }
+    }
+}
+
 /// Format an angle (radians) per AUNITS (0 decimal degrees, 1 deg/min/sec, 2 grads, 3 radians,
 /// 4 surveyor's) and AUPREC.
 pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
     let prec = auprec.clamp(0, 8) as usize;
     let deg = cadcraft_geom::norm_angle(a).to_degrees();
     match aunits {
-        1 => {
-            // Round at the displayed precision before splitting, carrying through a full turn.
-            let scale = 10i64.pow(prec.saturating_sub(4) as u32);
-            let seconds_per_unit = match prec {
-                0 => 3600,
-                1 | 2 => 60,
-                _ => 1,
-            };
-            let units = (deg * (3600 / seconds_per_unit * scale) as f64).round() as i64;
-            let total = units * seconds_per_unit % (360 * 3600 * scale);
-            let (d, m) = (total / (3600 * scale), (total / (60 * scale)) % 60);
-            match prec {
-                0 => format!("{d}d"),
-                1 | 2 => format!("{d}d{m}'"),
-                _ => {
-                    let s = (total % (60 * scale)) as f64 / scale as f64;
-                    format!("{d}d{m}'{:.*}\"", prec.saturating_sub(4), s)
-                }
-            }
-        }
+        1 => format_dms(deg, prec),
         2 => format!("{:.*}g", prec, wrap_full_turn(deg / 0.9, 400.0, prec)),
         3 => format!("{:.*}r", prec, wrap_full_turn(cadcraft_geom::norm_angle(a), 2.0 * PI, prec)),
         4 => {
@@ -115,7 +118,7 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
             } else {
                 ("S", "E", deg - 270.0)
             };
-            format!("{ns} {:.*}d {ew}", prec, ang)
+            format!("{ns} {} {ew}", format_dms(ang, prec))
         }
         _ => format!("{:.*}", prec, wrap_full_turn(deg, 360.0, prec)),
     }
@@ -443,5 +446,15 @@ mod tests {
         assert!((parse_angle("1.5r").unwrap() - 1.5).abs() < 1e-12);
         assert_eq!(format_angle(PI / 2.0, 0, 0), "90");
         assert_eq!(format_angle(PI / 4.0, 4, 0), "N 45d E");
+    }
+
+    #[test]
+    fn surveyor_display_is_degrees_minutes_seconds() {
+        // 73.6975 degrees south of east: 73d41'51" (0.6975 deg = 41.85' = 41'51")
+        let angle = (270.0 + 73.6975_f64).to_radians();
+        assert_eq!(format_angle(angle, 4, 4), "S 73d41'51\" E");
+        assert_eq!(format_angle(angle, 4, 2), "S 73d42' E");
+        assert_eq!(format_angle(angle, 4, 0), "S 74d E");
+        assert_eq!(format_angle(angle, 4, 6), "S 73d41'51.00\" E");
     }
 }
