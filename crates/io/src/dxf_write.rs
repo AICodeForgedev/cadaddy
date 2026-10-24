@@ -2124,6 +2124,16 @@ fn arrow_block_entities(kind: cadaddy_render::Arrowhead) -> Vec<Entity> {
     out
 }
 
+/// Whether the entities of the block `name` are the arrowhead block CADaddy writes for that
+/// standard arrow name ([`arrow_block_entities`]): the same lines and solids with the same
+/// properties (layer 0, ByBlock). Any other content (AutoCAD's own `_Dot`, a user's
+/// redefinition, an older CADaddy's geometry) is the file's.
+pub(crate) fn is_generated_arrow(name: &str, entities: &[&Entity]) -> bool {
+    let Some((_, kind)) = dxf_ext::arrow_block_name(name) else { return false };
+    let ours = arrow_block_entities(kind);
+    ours.len() == entities.len() && ours.iter().zip(entities).all(|(a, b)| a.kind == b.kind && a.common == b.common)
+}
+
 /// Standard DIMASSOC point references of an associative dimension: the extension-line
 /// origins of linear/aligned dimensions and the feature point of ordinate dimensions, linked
 /// to objects that exist. CADaddy's exact links travel in xdata as well.

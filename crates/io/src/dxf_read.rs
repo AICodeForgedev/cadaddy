@@ -2194,8 +2194,13 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             continue;
         }
         // Generated geometry we rebuild on save: table blocks, and standard arrowhead blocks
-        // nothing inserts.
-        if rx.table_blocks.contains(&up) || (crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up)) {
+        // nothing inserts whose content is the one CADaddy writes. An arrowhead block with other
+        // content (AutoCAD's `_Dot`, a user's redefinition) is kept, so dimensions keep it.
+        let generated_arrow = || {
+            let own: Vec<&Entity> = ents.iter().map(|(_, _, e)| &**e).collect();
+            crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up) && crate::dxf_write::is_generated_arrow(&name, &own)
+        };
+        if rx.table_blocks.contains(&up) || generated_arrow() {
             continue;
         }
         let mut b = Block::new(&name);
