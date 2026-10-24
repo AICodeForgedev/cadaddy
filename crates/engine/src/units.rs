@@ -193,7 +193,13 @@ fn parse_mixed(s: &str) -> Option<f64> {
     };
     match parts.as_slice() {
         [a] => frac(a),
-        [a, b] => Some(a.parse::<f64>().ok()? + frac(b)?),
+        [a, b] => {
+            let (n, d) = b.split_once('/')?;
+            if n.trim().starts_with(['-', '+']) || d.trim().starts_with(['-', '+']) {
+                return None;
+            }
+            Some(a.parse::<f64>().ok()? + frac(b)?)
+        }
         _ => None,
     }
 }
@@ -349,6 +355,13 @@ pub const DEG: f64 = PI / 180.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_distance_needs_a_positive_fraction_after_the_whole_number() {
+        assert_eq!(parse_distance("6 1/2"), Some(6.5));
+        assert_eq!(parse_distance("5 5"), None);
+        assert_eq!(parse_distance("1 -1/2"), None);
+    }
 
     #[test]
     fn huge_architectural_and_fractional_distances_do_not_saturate() {
