@@ -130,6 +130,8 @@ pub(super) struct ForeignV1 {
     records: Vec<((String, String), ExtraV1)>,
     targets: Vec<(u64, (String, String))>,
     data_store: Vec<RawTag>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    class_order: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -175,6 +177,7 @@ pub(super) fn foreign_v1(f: &Foreign) -> ForeignV1 {
         records: f.records.iter().map(|(k, x)| (k.clone(), x.into())).collect(),
         targets: f.targets.iter().map(|(h, k)| (h.0, k.clone())).collect(),
         data_store: f.data_store.clone(),
+        class_order: f.class_order.clone(),
     }
 }
 
@@ -187,6 +190,7 @@ pub(super) fn foreign_from(v: ForeignV1) -> Foreign {
         records: v.records.into_iter().map(|(k, x)| (k, x.into())).collect::<BTreeMap<_, _>>(),
         targets: v.targets.into_iter().map(|(h, k)| (Handle(h), k)).collect::<BTreeMap<_, _>>(),
         data_store: v.data_store,
+        class_order: v.class_order,
     }
 }
 
