@@ -75,6 +75,56 @@ fn area_of_an_open_elliptical_arc_is_refused_and_a_full_ellipse_is_measured() {
 }
 
 #[test]
+fn tools_inquiry_radius_asks_for_the_object() {
+    // Nothing selected: the menu item asks for the arc or circle.
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 2").unwrap();
+    s.start("radius.measure").unwrap();
+    assert!(s.prompt_text().contains("Select arc or circle"), "{}", s.prompt_text());
+    s.cmdline("2,0").unwrap();
+    assert!(has(&s.log, "Radius = 2.0000"), "{:?}", s.log);
+    assert!(has(&s.log, "Diameter = 4.0000"), "{:?}", s.log);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+
+    // A selected arc is measured at once.
+    let mut s = Session::new();
+    let r = s.execute("arc", &json!({"center": [0, 0], "radius": 3, "start": 0, "end": 90})).unwrap();
+    s.set_selection(vec![cadcraft_doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()]);
+    s.start("radius.measure").unwrap();
+    assert!(has(&s.log, "Radius = 3.0000"), "{:?}", s.log);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+}
+
+#[test]
+fn measuregeom_radius_measures_a_polyline_arc_segment() {
+    // A line from 0,0 to 10,0, then a half circle of radius 5 to 10,10 through 15,5.
+    let pline = json!({"vertices": [[0, 0], {"p": [10, 0], "bulge": 1}, [10, 10]]});
+    let mut s = Session::new();
+    s.execute("pline", &pline).unwrap();
+    s.cmdline("measuregeom").unwrap();
+    s.cmdline("r").unwrap();
+    // A pick on the line segment keeps the prompt.
+    s.cmdline("5,0").unwrap();
+    assert!(has(&s.log, "Select an arc, circle or polyline arc."), "{:?}", s.log);
+    assert!(s.running.is_some());
+    s.cmdline("15,5").unwrap();
+    assert!(has(&s.log, "Radius = 5.0000"), "{:?}", s.log);
+    assert!(has(&s.log, "Diameter = 10.0000"), "{:?}", s.log);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+
+    // The same pick from Tools > Inquiry > Radius, and the JSON form with the point on the arc.
+    let mut s = Session::new();
+    let h = s.execute("pline", &pline).unwrap()["handle"].clone();
+    s.start("radius.measure").unwrap();
+    s.cmdline("15,5").unwrap();
+    assert!(has(&s.log, "Radius = 5.0000"), "{:?}", s.log);
+    let r = s.execute("radius.measure", &json!({"handle": h, "point": [15, 5]})).unwrap();
+    assert_eq!(r["radius"].as_f64(), Some(5.0), "{r}");
+    assert!(s.execute("radius.measure", &json!({"handle": h, "point": [5, 0]})).is_err());
+    assert!(s.execute("radius.measure", &json!({"handle": h})).is_err());
+}
+
+#[test]
 fn measuregeom_typed_asks_for_the_option_then_the_points() {
     // Distance is the default option (#1103: typed, it used to fail asking for `p1`).
     let (s, log) = run(&["measuregeom", "", "0,0", "3,4"]);

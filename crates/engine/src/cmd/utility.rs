@@ -1,7 +1,7 @@
 //! Utilities: CAL (expression calculator), FIND (find and replace text), MASSPROP, MEASUREGEOM.
 
 use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::Vec2;
+use cadcraft_geom::{Segment, Vec2};
 use serde_json::{Value, json};
 
 use super::*;
@@ -30,7 +30,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{mode: distance|radius|angle|area, ...}")
             .noundo()
             .interactive(|_| Ok(Box::<MeasureM>::default())),
-        CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo(),
+        CommandSpec::new("radius.measure", "Radius", run_radius)
+            .menu(&["Tools", "Inquiry", "Radius"])
+            .params("{handle, point?}")
+            .noundo()
+            .interactive(|_| Ok(Box::new(RadiusM))),
         CommandSpec::new("angle.measure", "Angle", run_angle).menu(&["Tools", "Inquiry", "Angle"]).params("{vertex, p1, p2} | {h1, h2}").noundo(),
     ]
 }
@@ -283,9 +287,68 @@ fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
     let r = match s.doc()?.entity(h).map(|e| e.kind.clone()) {
         Some(EntityKind::Circle(c)) => c.radius,
         Some(EntityKind::Arc(a)) => a.radius,
-        _ => return Err(bad("radius.measure", "select an arc or circle")),
+        Some(EntityKind::LwPolyline(_)) => {
+            let at = point_param(p, "point").ok_or_else(|| bad("radius.measure", "`point` on the polyline's arc segment is required"))?;
+            match super::annotate::segment_at(s, h, at) {
+                Some(Segment::Arc { arc, .. }) => arc.radius,
+                _ => return Err(bad("radius.measure", "the polyline segment at `point` is not an arc")),
+            }
+        }
+        _ => return Err(bad("radius.measure", "select an arc, circle or polyline arc")),
     };
     Ok(json!({ "radius": r, "diameter": 2.0 * r, "message": format!("Radius = {r:.4}\nDiameter = {:.4}", 2.0 * r) }))
+}
+
+/// MEASUREGEOM's Radius option and Tools > Inquiry > Radius: the radius and diameter of a picked
+/// arc, circle or polyline arc segment. Tools > Inquiry > Radius measures a selected arc or circle
+/// at once.
+struct RadiusM;
+
+impl RadiusM {
+    /// Measure the arc, circle or polyline arc segment at the picked point; a pick on anything else keeps the prompt.
+    fn pick(s: &mut Session, i: Input) -> Result<Step> {
+        let Input::Point(p) = i else { return Ok(Step::Done) };
+        let Some(h) = super::curves::pick_at(s, p) else { return Ok(Step::Continue) };
+        match run_radius(s, &json!({ "handle": h.0, "point": [p.x, p.y] })) {
+            Ok(r) => {
+                echo_message(s, &r);
+                Ok(Step::Done)
+            }
+            Err(_) => {
+                s.echo("Select an arc, circle or polyline arc.");
+                Ok(Step::Continue)
+            }
+        }
+    }
+}
+
+impl Interactive for RadiusM {
+    fn name(&self) -> &'static str {
+        "MEASUREGEOM"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        Prompt::new("Select arc or circle", Accept::POINT)
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        let Some(h) = s.selection().first().copied() else { return Ok(Step::Continue) };
+        match run_radius(s, &json!({ "handle": h.0 })) {
+            Ok(r) => {
+                echo_message(s, &r);
+                Ok(Step::Done)
+            }
+            Err(_) => Ok(Step::Continue),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        Self::pick(s, i)
+    }
+}
+
+/// Echo each line of a result's `message`.
+fn echo_message(s: &mut Session, r: &Value) {
+    for l in r["message"].as_str().unwrap_or_default().lines() {
+        s.echo(l.to_string());
+    }
 }
 
 fn run_angle(s: &mut Session, p: &Value) -> Result<Value> {
@@ -348,18 +411,7 @@ impl Interactive for MeasureM {
             return m.input(s, i);
         }
         if self.radius {
-            let Input::Point(p) = i else { return Ok(Step::Done) };
-            let Some(h) = super::curves::pick_at(s, p) else { return Ok(Step::Continue) };
-            match run_radius(s, &json!({ "handle": h.0 })) {
-                Ok(r) => {
-                    for l in r["message"].as_str().unwrap_or_default().lines() {
-                        s.echo(l.to_string());
-                    }
-                    return Ok(Step::Done);
-                }
-                Err(_) => s.echo("Select an arc or circle."),
-            }
-            return Ok(Step::Continue);
+            return RadiusM::pick(s, i);
         }
         match i {
             Input::Enter => self.inner = Some(Box::new(super::inquiry::DistM::default())),
