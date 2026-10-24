@@ -1252,7 +1252,10 @@ fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
                     .find(|a| a.tag == "TAG")
                     .map(|a| a.text.value.trim().to_string())
                     .unwrap_or_default();
-                if !tag.is_empty() {
+                if is_circuit_tag(&tag) {
+                    // A circuit/panel tag (D-1, DP1-13) labels the wiring, not a device type.
+                    *counts.entry(CIRCUIT_TAGS.to_string()).or_default() += 1;
+                } else if !tag.is_empty() {
                     *counts.entry(tag).or_default() += 1;
                 } else {
                     // Symbol without a tag — count as "unknown".
@@ -1395,6 +1398,15 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(rooms_result)
 }
 
+/// Bucket for symbols whose tag is a circuit or panel reference rather than a device mark.
+const CIRCUIT_TAGS: &str = "_circuit_tags";
+
+/// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
+/// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
+fn is_circuit_tag(tag: &str) -> bool {
+    tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
 /// MUST 10: learn foreign symbols. MUST 11: recount after learning.
@@ -1409,7 +1421,9 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // ── Primary source: PDF-SYM block inserts (pdfnative-rw2 symbol detection) ──
     // After pdfimport, repeated symbol clusters become block inserts named PDF-SYM-N
     // with a TAG attribute holding the nearby device-mark text.
-    let sym_devices = count_symbol_block_devices(s);
+    let mut sym_devices = count_symbol_block_devices(s);
+    let circuit_tagged = sym_devices.remove(CIRCUIT_TAGS).unwrap_or(0);
+    results["circuit_tagged_symbols"] = json!(circuit_tagged);
     let sym_count: usize = sym_devices.values().sum();
     if sym_count > 0 {
         total_items += sym_count;
@@ -2648,6 +2662,16 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn circuit_tags_are_not_device_types() {
+        for t in ["D-1", "DP1-13", "DP2-4", "B-12", "A-2"] {
+            assert!(super::is_circuit_tag(t), "{t}");
+        }
+        for t in ["A", "OS", "EF", "L4", "XA", "DH", "REC", "-1", "A-", "D-1A"] {
+            assert!(!super::is_circuit_tag(t), "{t}");
+        }
+    }
+
     use super::*;
 
     #[test]
