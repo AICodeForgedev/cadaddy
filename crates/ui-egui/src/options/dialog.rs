@@ -161,6 +161,19 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        ui.label(crate::tl!("Interface scale"));
+        let scale = app.options.interface_scale;
+        let percent = |s: f32| format!("{} %", (s * 100.0).round());
+        egui::ComboBox::from_id_salt("options_interface_scale").selected_text(percent(scale)).show_ui(ui, |ui| {
+            for n in [75u16, 100, 125, 150, 175, 200, 250, 300] {
+                let s = f32::from(n) / 100.0;
+                if ui.selectable_label((scale - s).abs() < 1e-4, format!("{n} %")).clicked() && (scale - s).abs() >= 1e-4 {
+                    changes.insert("interfaceScale".into(), json!(s));
+                }
+            }
+        });
+        ui.end_row();
+
         ui.label(crate::tl!("Model background"));
         color_row(ui, app.options.model_background, Tokens::DARK.canvas, "modelBackground", changes);
         ui.end_row();
@@ -220,6 +233,18 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
 
+        ui.label(crate::tl!("Units of new drawings"));
+        ui.horizontal(|ui| {
+            let metric = app.session.settings.measureinit;
+            if ui.radio(!metric, crate::tl!("Imperial (inches)")).clicked() && metric {
+                changes.insert("MEASUREINIT".into(), json!(0));
+            }
+            if ui.radio(metric, crate::tl!("Metric (millimetres)")).clicked() && !metric {
+                changes.insert("MEASUREINIT".into(), json!(1));
+            }
+        });
+        ui.end_row();
+
         ui.label(crate::tl!("Automatic save every"));
         let mut minutes = cadcraft_engine::autosave::savetime();
         let max = cadcraft_engine::autosave::MAX_SAVETIME;
@@ -245,6 +270,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         ui.end_row();
     });
+    hint(ui, crate::tl!("New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE)."));
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
     hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
 }
@@ -308,6 +334,14 @@ fn selection(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) 
             changes.insert("PICKADD".into(), json!(i32::from(!shift_adds)));
         }
         let mut grouping = st.pickstyle & 1 != 0;
+        let mut two_clicks = !st.pickdrag;
+        if left
+            .checkbox(&mut two_clicks, crate::tl!("Select using two clicks only"))
+            .on_hover_text(crate::tl!("Define each corner of the selection window with a separate click."))
+            .changed()
+        {
+            changes.insert("PICKDRAG".into(), json!(if two_clicks { 0 } else { 2 }));
+        }
         if left.checkbox(&mut grouping, crate::tl!("Object grouping")).changed() {
             changes.insert("PICKSTYLE".into(), json!((st.pickstyle & !1) | u8::from(grouping)));
         }
@@ -446,7 +480,7 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         ui.label(crate::tl!("Interface language"));
         let mut lang = app.ui.interface_language;
         egui::ComboBox::from_id_salt("options_language").selected_text(lang.name()).show_ui(ui, |ui| {
-            for p in crate::i18n::Preference::ALL {
+            for p in crate::i18n::Preference::for_picker() {
                 ui.selectable_value(&mut lang, p, p.name());
             }
         });

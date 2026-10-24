@@ -11,6 +11,8 @@ use super::pline_opts::{Outcome, PlineAsk};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, snap};
 
+/// Every draw command's spec: JSON parameters, menu path, aliases and the interactive prompt
+/// machine each command starts.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("line", "Line", run_line)
@@ -36,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("rectang", "Rectangle", super::draw2::run_rectang2)
             .menu(&["Draw", "Rectangle"])
             .alias(&["rec", "rectangle"])
-            .params("{p1, p2 | dimensions: [l, w] (p2 picks the quadrant) | area + length|breadth, rotation? (deg), fillet?, chamfer?: [d1, d2], width?, elevation?, thickness?}")
+            .params("{p1, p2 | dimensions: [l, w] (p2 picks the quadrant) | area + length|breadth, rotation? (deg), fillet?, chamfer?: [d1, d2], width?, elevation?, thickness?, center?: bool (p1 is the centre, not a corner; the size spans it evenly)}")
             .interactive(|_| Ok(Box::new(super::draw2::RectM2::default()))),
         CommandSpec::new("polygon", "Polygon", run_polygon)
             .menu(&["Draw", "Polygon"])
@@ -755,9 +757,12 @@ impl Interactive for CircleM {
         let last_r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
         match (self.mode, n) {
             (0, 0) => Prompt::new("Specify center point for circle", Accept::POINT).kw(&["3P", "2P", "Ttr (tan tan radius)"]),
-            (0, _) if self.diameter => Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()),
+            (0, _) if self.diameter => {
+                Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()).distance()
+            }
             (0, _) => {
-                let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied());
+                let p =
+                    Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied()).distance();
                 if last_r > 0.0 { p.default(format!("{last_r:.4}")) } else { p }
             }
             (1, k) => Prompt::new(
@@ -890,7 +895,7 @@ impl Interactive for PolygonM {
             (Some(_), false, Some(_), None) => Prompt::new("Enter an option", Accept::TEXT)
                 .kw(&["Inscribed in circle", "Circumscribed about circle"])
                 .default(if s.last_used.polygon_circumscribed { "C" } else { "I" }),
-            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c),
+            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c).distance(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

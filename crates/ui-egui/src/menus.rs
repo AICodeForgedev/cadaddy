@@ -27,7 +27,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
-    ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.toggle.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.panel.quickcalc", "QuickCalc", &[], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -102,7 +103,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
-    // QUICKCALC typed or from a menu opens the palette; with parameters it is CAL.
+    if id == "ui.toggle.quickcalc" {
+        return Some(crate::palettes::quickcalc::toggle(app));
+    }
+    // Explicit opens remain idempotent; typed QUICKCALC with JSON parameters uses the engine's CAL alias.
     if id == "ui.panel.quickcalc" || (matches!(id, "quickcalc" | "qc") && params.is_null()) {
         return Some(crate::palettes::quickcalc::open(app));
     }
@@ -150,6 +154,29 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             if let Some(p) = picked {
                 app.open_path(&p);
             }
+            Ok(Value::Null)
+        }
+        // APPLOAD typed or chosen from a menu: the `.lsp` file picker, starting where the last
+        // one came from. JSON calls carry `path` and never open one. A picked file is loaded as a
+        // typed name is, through the interactive command, so a routine it starts that asks for a
+        // point waits for it; on the web (no file system) it says to drop the file instead.
+        "appload" | "ap" if params.is_null() => {
+            if app.services.no_file_system {
+                let hint = "APPLOAD: there is no file system here; drop a .lsp file on the window to load it";
+                app.session.echo(hint.to_string());
+                app.set_status(hint);
+                return Some(Ok(Value::Null));
+            }
+            let pick = app.services.pick_lisp.as_ref()?;
+            let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
+            let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
+            if let Some(dir) = std::path::Path::new(&path).parent().and_then(|p| p.to_str()).filter(|d| !d.is_empty()) {
+                app.ui.last_lisp_dir = Some(dir.to_string());
+            }
+            if let Err(e) = app.session.start("appload") {
+                return Some(Err(e.to_string()));
+            }
+            app.cmdline(&path);
             Ok(Value::Null)
         }
         // Pick a template (.dwt or .dxf) and start a new drawing from it.
@@ -396,6 +423,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
             Ok(Value::Null)
         }
+        // Typed or from the Tools menu: the Command Aliases dialog. JSON calls keep the JSON form.
+        "aliasedit" if params.is_null() => {
+            crate::aliasdlg::open(app);
+            Ok(Value::Null)
+        }
         "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
             crate::hatchdlg::open_edit(app);
             Ok(Value::Null)
@@ -569,8 +601,11 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::menu(name), |ui| {
+                // Titles first, so a hovered title can take over before any menu is drawn.
+                let titles: Vec<egui::Response> = tree.iter().map(|(name, _)| ui.add(egui::Button::new(crate::i18n::menu(name)))).collect();
+                switch_on_hover(ui.ctx(), &titles);
+                for ((_, entries), title) in tree.iter().zip(&titles) {
+                    egui::Popup::menu(title).show(|ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }
@@ -584,10 +619,42 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Like choosing a menu item: starts the command interactively.
+/// While one menu of the bar is open, pointing at another title opens that menu instead.
+fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
+    let is_open = |title: &egui::Response| egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(title));
+    if !titles.iter().any(is_open) {
+        return;
+    }
+    // A click on a title toggles its menu by itself.
+    if let Some(title) = titles.iter().find(|t| t.hovered() && !t.clicked() && !is_open(t)) {
+        egui::Popup::open_id(ctx, egui::Popup::default_response_id(title));
+    }
+}
+
+/// Activate a menu command. QuickCalc toggles transparently; other items clear pending
+/// command-line text and start their command interactively.
 pub fn activate(app: &mut CadApp, id: &str) {
+    if id == "ui.toggle.quickcalc" {
+        run_transparent(app, id);
+        return;
+    }
     app.cmd.buffer.clear();
     app.start(id);
+}
+
+/// Run `id` with default parameters without cancelling the active command, as the drafting
+/// toggles (F3, F7-F12, the status bar buttons) are in AutoCAD.
+pub fn run_transparent(app: &mut CadApp, id: &str) {
+    match app.session.execute(id, &json!({})) {
+        Ok(v) => {
+            if let Some(m) = v.get("message").and_then(Value::as_str) {
+                app.session.echo(m.to_string());
+            }
+        }
+        Err(_) => {
+            let _ = app.run(id, json!({}));
+        }
+    }
 }
 
 /// Keyboard shortcuts and function keys.
@@ -628,7 +695,14 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
     ];
     crate::clipboard::mirror(app, ctx);
-    if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
+    if app.closing.is_some() {
+        return;
+    }
+    // A palette toggle is global even while its expression field owns keyboard focus.
+    if ctx.input_mut(|i| i.consume_shortcut(&sc(cmd, Key::Num8))) {
+        run_transparent(app, "ui.toggle.quickcalc");
+    }
+    if ctx.egui_wants_keyboard_input() {
         return;
     }
     // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
@@ -651,16 +725,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
         if transparent || id.starts_with("ui.") {
-            match app.session.execute(id, &json!({})) {
-                Ok(v) => {
-                    if let Some(m) = v.get("message").and_then(Value::as_str) {
-                        app.session.echo(m.to_string());
-                    }
-                }
-                Err(_) => {
-                    let _ = app.run(id, json!({}));
-                }
-            }
+            run_transparent(app, id);
         } else {
             activate(app, id);
         }
@@ -692,6 +757,7 @@ mod tests {
                 log.borrow_mut().push(name.to_string());
                 answer.clone()
             })),
+            ..Services::default()
         };
         (CadApp::new(Session::new(), services), asked)
     }

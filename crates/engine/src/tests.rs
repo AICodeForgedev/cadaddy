@@ -511,6 +511,22 @@ fn properties_set_transparency() {
 }
 
 #[test]
+fn properties_set_thickness() {
+    // Issue #1722: `properties.set` used to ignore `thickness` while still reporting a change.
+    let mut s = Session::new();
+    let r = s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    let h = r["handle"].as_str().unwrap().to_string();
+    let hh = cadcraft_doc::Handle::parse_hex(&h).unwrap();
+    let th = |s: &Session| s.doc().unwrap().entity(hh).unwrap().common.thickness;
+    s.execute("properties.set", &json!({"handles": [h], "thickness": 8})).unwrap();
+    assert_eq!(th(&s), 8.0);
+    let p = s.execute("properties", &json!({"handles": [h]})).unwrap();
+    assert_eq!(p["objects"][0]["thickness"], json!(8.0));
+    assert!(s.execute("properties.set", &json!({"handles": [h], "thickness": "thick"})).is_err());
+    assert_eq!(th(&s), 8.0);
+}
+
+#[test]
 fn zoom_extents_fits_drawing() {
     let mut s = Session::new();
     s.viewport_px = (1000.0, 500.0);
@@ -1272,6 +1288,25 @@ fn bare_variable_name_runs_setvar() {
     assert!(s.cmdline("nosuchthing").is_err());
     // A dash or dot prefix never means a variable.
     assert!(s.cmdline("-pickadd").is_err());
+}
+
+#[test]
+fn typed_ltscale_asks_for_the_scale() {
+    let mut s = Session::new();
+    s.execute("setvar", &json!({"name": "LTSCALE", "value": 2.5})).unwrap();
+    s.cmdline("ltscale").unwrap();
+    assert!(s.prompt_text().contains("Enter new linetype scale factor <2.5000>"), "{}", s.prompt_text());
+    // A scale that is not positive is refused and asked again.
+    s.cmdline("0").unwrap();
+    assert!(s.current_prompt().is_some(), "asked again");
+    s.cmdline("0.1").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 0.1);
+    // Enter keeps the current scale.
+    s.cmdline("lts").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("LTSCALE", 0.0), 0.1);
 }
 
 fn setvar_prompt_open(s: &Session) -> bool {

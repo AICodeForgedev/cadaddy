@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod backend;
+pub mod control_token;
 mod server;
 mod tools;
 

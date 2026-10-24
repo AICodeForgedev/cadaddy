@@ -144,7 +144,7 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label(crate::tl!("Value:"));
                 let choices: Vec<String> = match st.property.as_str() {
                     "color" => {
-                        ["ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"].iter().map(|s| s.to_string()).collect()
+                        ["ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"].iter().map(ToString::to_string).collect()
                     }
                     "layer" => app.session.doc().map(|d| d.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default(),
                     "linetype" => app.session.doc().map(|d| d.linetypes.iter().map(|l| l.name.clone()).collect()).unwrap_or_default(),
@@ -295,6 +295,8 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let kind = if ents.len() == 1 { Some(first.kind.clone()) } else { None };
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<(String, Value)> = None;
+    // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
+    let angles = app.session.angle_settings();
     let mut close = false;
     egui::Window::new(title)
         .id(egui::Id::new(("quick_properties", &st.sel)))
@@ -373,7 +375,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                         }
                         ui.end_row();
                         num_row(ui, "Height", id("h"), tx.height, &mut set, "height");
-                        num_row(ui, "Rotation", id("rot"), tx.rotation.to_degrees(), &mut set, "rotation");
+                        num_row(ui, "Rotation", id("rot"), angles.shown(tx.rotation).to_degrees(), &mut set, "rotation");
                     }
                     Some(EntityKind::MText(tx)) => {
                         ui.label(RichText::new(crate::tl!("Contents")).color(Tokens::get().text_dim));
@@ -385,7 +387,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                     }
                     Some(EntityKind::Insert(i)) => {
                         ro_row(ui, "Name", i.block.clone());
-                        num_row(ui, "Rotation", id("rot"), i.rotation.to_degrees(), &mut set, "rotation");
+                        num_row(ui, "Rotation", id("rot"), angles.shown(i.rotation).to_degrees(), &mut set, "rotation");
                         num_row(ui, "Scale", id("sc"), i.scale.x, &mut set, "scale");
                     }
                     Some(EntityKind::Dimension(dm)) => {
@@ -407,7 +409,13 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
             });
         });
     ctx.data_mut(|dd| dd.insert_temp(sid, st));
-    if let Some((k, v)) = set {
+    if let Some((k, mut v)) = set {
+        // A rotation is typed as shown; properties.set takes it from +X counterclockwise.
+        if k == "rotation"
+            && let Some(f) = v.as_f64()
+        {
+            v = json!(angles.unshown(f.to_radians()).to_degrees());
+        }
         let _ = app.run("properties.set", json!({ "handles": ids, k: v }));
     }
     if close {

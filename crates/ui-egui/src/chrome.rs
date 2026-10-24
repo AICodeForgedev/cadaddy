@@ -198,12 +198,15 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             |ui: &mut egui::Ui, label: &str, dirty: bool, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool, egui::Response) {
                 let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
                 let resp = ui.interact(tr, id, Sense::click());
+                // The close button takes the tab's hover, so `resp.hovered()` would make the tab and
+                // its X flicker while the pointer is on the X.
+                let hovered = ui.rect_contains_pointer(tr);
                 ui.painter().rect_filled(
                     tr,
                     0.0,
                     if active {
                         t.tab_active
-                    } else if resp.hovered() {
+                    } else if hovered {
                         t.chrome
                     } else {
                         t.chrome_dark
@@ -223,7 +226,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
                 let resp = if cut { resp.on_hover_text(format!("{label}{mark}")) } else { resp };
                 let mut close = false;
-                if closable && (active || resp.hovered()) {
+                if closable && (active || hovered) {
                     let cr = Rect::from_center_size(pos2(tr.right() - 11.0, tr.center().y), vec2(12.0, 12.0));
                     let cresp = ui.interact(cr, id.with("x"), Sense::click());
                     icons::paint(ui.painter(), cr, Icon::Close, false);
@@ -509,8 +512,11 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             rx += size + 4.0;
         }
-        if let Some(c) = toggle_cmd {
-            app.start(c);
+        // The toggles don't cancel the active command (#1108); the dialog buttons start theirs.
+        match toggle_cmd {
+            Some(c) if c.starts_with("ui.") => app.start(c),
+            Some(c) => crate::menus::run_transparent(app, c),
+            None => {}
         }
     });
 }

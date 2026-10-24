@@ -57,6 +57,42 @@ fn json_geometric_and_dimensional_constraints() {
 }
 
 #[test]
+fn renaming_a_parameter_rewrites_the_expressions_that_use_it() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let b = line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("parameters", &json!({ "name": "user1", "expr": "4" })).unwrap();
+    s.execute("dcaligned", &json!({ "h1": a, "expr": "user1*2" })).unwrap();
+    s.execute("dcaligned", &json!({ "h1": b, "expr": "d1+1" })).unwrap();
+    let names = |s: &Session| -> Vec<(String, String)> {
+        cadcraft_constraints::parameter_table(s.doc().unwrap()).into_iter().map(|r| (r.name, r.expr)).collect()
+    };
+
+    s.execute("parameters", &json!({ "name": "user1", "rename": "width" })).unwrap();
+    assert_eq!(names(&s), vec![("d1".into(), "width*2".into()), ("d2".into(), "d1+1".into()), ("width".into(), "4".into())]);
+    assert!((ends(&s, &a).0.dist(ends(&s, &a).1) - 8.0).abs() < 1e-6);
+
+    // A dimensional constraint's name too, and only the whole name: d1 is not part of d10.
+    s.execute("parameters", &json!({ "name": "d10", "expr": "3" })).unwrap();
+    s.execute("parameters", &json!({ "name": "d2", "expr": "d1+d10" })).unwrap();
+    s.execute("parameters", &json!({ "name": "d1", "rename": "base" })).unwrap();
+    assert_eq!(
+        names(&s),
+        vec![("base".into(), "width*2".into()), ("d2".into(), "base+d10".into()), ("width".into(), "4".into()), ("d10".into(), "3".into())]
+    );
+
+    // Taken and invalid names are refused and change nothing; undo takes a rename back.
+    let before = s.doc().unwrap().clone();
+    for to in ["width", "d10", "1x", "pi", ""] {
+        assert!(s.execute("parameters", &json!({ "name": "base", "rename": to })).is_err(), "{to}");
+    }
+    assert!(s.execute("parameters", &json!({ "name": "nothing", "rename": "x" })).is_err());
+    assert_eq!(*s.doc().unwrap(), before);
+    s.undo().unwrap();
+    assert_eq!(names(&s)[0], ("d1".into(), "width*2".into()));
+}
+
+#[test]
 fn edits_are_resolved_and_erase_purges() {
     let mut s = Session::new();
     let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
@@ -230,4 +266,84 @@ fn delconstraint_rejects_referenced_dimension() {
     let ids: Vec<u32> = s.doc().unwrap().constraints.iter().map(|c| c.id).collect();
     s.execute("delconstraint", &json!({ "ids": ids })).unwrap();
     assert!(s.doc().unwrap().constraints.is_empty());
+}
+
+/// The angle between the two rays from the vertex to the far end of each line: the angle
+/// DCANGULAR draws.
+fn drawn_angle(s: &Session, a: &str, b: &str) -> f64 {
+    let ((a0, a1), (b0, b1)) = (ends(s, a), ends(s, b));
+    let (o, _, _) = cadcraft_geom::line_line_infinite(a0, a1, b0, b1).unwrap();
+    let far = |p: Vec2, q: Vec2| if p.dist(o) > q.dist(o) { p } else { q };
+    let (u, v) = (far(a0, a1) - o, far(b0, b1) - o);
+    u.cross(v).atan2(u.dot(v)).abs().to_degrees()
+}
+
+#[test]
+fn dcangular_constrains_the_drawn_angle_whichever_way_the_lines_run() {
+    // #1134: the second line drawn towards the shared vertex got the supplement of the value.
+    for b_pts in [[[2.0, 10.0], [0.0, 0.0]], [[0.0, 0.0], [2.0, 10.0]]] {
+        let mut s = Session::new();
+        s.viewport_px = (1000.0, 1000.0);
+        let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+        let b = line(&mut s, b_pts[0], b_pts[1]);
+        s.cmdline("dcangular").unwrap();
+        s.input(Input::Point(Vec2::new(3.0, 0.0))).unwrap();
+        s.input(Input::Point(Vec2::new(0.6, 3.0))).unwrap();
+        assert!(s.prompt_text().contains("78.69"), "{b_pts:?}: {}", s.prompt_text());
+        s.cmdline("100").unwrap();
+        assert!(s.running.is_none());
+        let got = drawn_angle(&s, &a, &b);
+        assert!((got - 100.0).abs() < 1e-6, "{b_pts:?}: drawn angle {got}");
+    }
+}
+
+/// Same rule as the overlay in `ui-egui/src/parametric.rs` that draws dynamic constraints.
+fn dim_shown(s: &Session, h: &str) -> bool {
+    let d = s.doc().unwrap();
+    let set = &d.parametric.settings;
+    let c = d.constraints.iter().find(|c| c.refs.iter().any(|r| r.handle.hex() == h)).unwrap();
+    set.dims_visible != c.refs.iter().any(|r| set.dim_exceptions.contains(&r.handle))
+}
+
+#[test]
+fn settings_dims_checkbox_clears_exceptions() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.execute("dclinear", &json!({ "h1": a, "expr": "10" })).unwrap();
+    s.execute("dcdisplay.hideall", &json!({})).unwrap();
+    let b = line(&mut s, [20.0, 0.0], [25.0, 0.0]);
+    s.execute("dclinear", &json!({ "h1": b, "expr": "5" })).unwrap();
+    let r = s.execute("dcdisplay", &json!({ "mode": "show", "handles": [b] })).unwrap();
+    assert_eq!(r["exceptions"], json!([b]));
+    assert!(!dim_shown(&s, &a) && dim_shown(&s, &b));
+    // Re-stating the current value keeps the exceptions.
+    s.execute("constraintsettings", &json!({ "dimsVisible": false })).unwrap();
+    assert_eq!(s.doc().unwrap().parametric.settings.dim_exceptions.len(), 1);
+    // Ticking "Show dynamic constraints" shows all of them, like Show All.
+    s.execute("constraintsettings", &json!({ "dimsVisible": true })).unwrap();
+    assert!(s.doc().unwrap().parametric.settings.dim_exceptions.is_empty());
+    assert!(dim_shown(&s, &a) && dim_shown(&s, &b));
+}
+
+#[test]
+fn settings_bars_checkbox_clears_exceptions() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.execute("gchorizontal", &json!({ "h1": a })).unwrap();
+    s.execute("constraintbar.hideall", &json!({})).unwrap();
+    let b = line(&mut s, [0.0, 5.0], [10.0, 5.0]);
+    s.execute("gchorizontal", &json!({ "h1": b })).unwrap();
+    let r = s.execute("constraintbar", &json!({ "mode": "show", "handles": [b] })).unwrap();
+    assert_eq!(r["exceptions"], json!([b]));
+    // Same rule as the bar overlay in `ui-egui/src/parametric.rs`.
+    let bar = |s: &Session, h: &str| {
+        let set = &s.doc().unwrap().parametric.settings;
+        set.bars_visible != set.bar_exceptions.contains(&Handle::parse_hex(h).unwrap())
+    };
+    assert!(!bar(&s, &a) && bar(&s, &b));
+    s.execute("constraintsettings", &json!({ "barsVisible": false })).unwrap();
+    assert_eq!(s.doc().unwrap().parametric.settings.bar_exceptions.len(), 1);
+    s.execute("constraintsettings", &json!({ "barsVisible": true })).unwrap();
+    assert!(s.doc().unwrap().parametric.settings.bar_exceptions.is_empty());
+    assert!(bar(&s, &a) && bar(&s, &b));
 }

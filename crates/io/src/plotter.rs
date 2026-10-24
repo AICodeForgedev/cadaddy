@@ -53,7 +53,7 @@ pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
 /// The sheet a plot draws on (a model-space plot's printable area inside the device margins).
 fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<(Sheet, cadcraft_doc::PageSetup)> {
     let page = pdf::page_for(d, space, o)?;
-    Ok((Sheet::from_page(&page, paper::paper_unit_mm(d)), page))
+    Ok((Sheet::from_page(&page, paper::page_unit_mm(d, &page)), page))
 }
 
 /// Paper units per drawing unit fitting `b` into the printable area; with `fit: false`, the
