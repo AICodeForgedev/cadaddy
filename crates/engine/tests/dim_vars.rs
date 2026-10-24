@@ -197,6 +197,37 @@ fn text_move_settings() {
 }
 
 #[test]
+fn setvar_refuses_the_values_the_style_refuses() {
+    let mut s = Session::new();
+    set(&mut s, "DIMTMOVE", json!(1));
+    let get = |s: &mut Session, name: &str| s.execute("getvar", &json!({ "name": name })).unwrap()["value"].clone();
+    for (name, v) in [
+        ("DIMTMOVE", json!(3)),
+        ("DIMATFIT", json!(7)),
+        ("DIMLWD", json!(500)),
+        ("DIMJOGANG", json!(120)),
+        ("DIMFXL", json!(-1)),
+        ("DIMTXT", json!(0)),
+        ("DIMDEC", json!(300)),
+        ("DIMCLRT", json!("no such color")),
+    ] {
+        let before = get(&mut s, name);
+        assert!(s.execute("setvar", &json!({ "name": name, "value": v })).is_err(), "{name} {v}");
+        assert_eq!(get(&mut s, name), before, "{name} keeps its value");
+        // DIMSTYLE and DIMOVERRIDE refuse the same value.
+        let mut st = DimStyle::default();
+        assert_eq!(st.apply_fields(&serde_json::Map::from_iter([(name.to_string(), v)])).len(), 1, "{name}");
+    }
+    assert_eq!(s.doc().unwrap().dim_overrides().get("textMove"), Some(&json!(1)));
+    // Values in range still go in, typed as text too.
+    set(&mut s, "DIMTMOVE", json!("2"));
+    set(&mut s, "DIMCLRT", json!(3));
+    let o = s.doc().unwrap().dim_overrides();
+    assert_eq!(o.get("textMove"), Some(&json!(2)));
+    assert_eq!(o.get("textColor"), serde_json::to_value(cadcraft_engine::doc::color::Color::Index(3)).ok().as_ref(), "{o:?}");
+}
+
+#[test]
 fn tolerance_justification_angular_zeros_and_arc_symbol() {
     let mut s = Session::new();
     set(&mut s, "DIMTOL", json!(1));
