@@ -167,6 +167,7 @@ impl GetRequest {
                 let t = if spaces { t } else { t.split(' ').next().unwrap_or("") };
                 Ok(Value::str(t))
             }
+            GetKind::Kword if any => Ok(Value::str(t)),
             GetKind::Kword => Err("Invalid option keyword.".into()),
             GetKind::Int => match t.trim().parse::<i32>() {
                 Ok(i) if (-32768..=32767).contains(&i) => self.check_number(f64::from(i), true),

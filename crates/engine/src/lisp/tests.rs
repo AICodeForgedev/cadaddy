@@ -482,6 +482,13 @@ fn interactive_routine_waits_for_the_user() {
     s.cmdline("(progn (initget 1 \"Yes No\") (setq ans (getkword \"\\nSure? [Yes/No]: \")))").unwrap();
     s.cmdline("n").unwrap();
     assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"No\"");
+    // Bit 128 lets getkword return arbitrary text; a keyword still wins.
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("banana").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"banana\"");
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("cu").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"CUrrent\"");
     s.cmdline("(setq d (getdist '(0 0)))").unwrap();
     s.cmdline("3,4").unwrap();
     assert_eq!(to_text(&s.lisp_var("D"), true), "5.0");
