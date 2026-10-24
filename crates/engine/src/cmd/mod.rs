@@ -143,6 +143,7 @@ pub mod walkpub;
 pub mod wallgen;
 pub use props::MatchProps;
 pub mod actions;
+pub mod rulemodel;
 pub(crate) mod qselect;
 mod render;
 mod sections;
@@ -610,6 +611,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(project::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
+        v.extend(rulemodel::specs());
         // Apply hand-written help texts.
         for spec in &mut v {
             let text = help_texts::lookup(spec.id);
