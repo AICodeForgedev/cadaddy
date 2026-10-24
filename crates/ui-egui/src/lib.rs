@@ -42,6 +42,7 @@ pub(crate) fn dialog_refused() -> bool {
 }
 
 pub mod aliasdlg;
+pub mod annomon;
 pub mod animation;
 pub mod annomon;
 pub mod autosave;

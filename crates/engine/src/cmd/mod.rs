@@ -22,6 +22,7 @@ pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod colorbook;
 pub mod constraints;
+pub mod paramconv;
 pub mod coordination;
 pub mod copricing;
 mod dash_styles;
