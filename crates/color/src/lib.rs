@@ -111,9 +111,9 @@ impl Color {
             _ => {}
         }
         if let Some(rest) = t.strip_prefix("color ") {
-            return rest.trim().parse::<u8>().ok().filter(|i| *i >= 1).map(Color::Index);
+            return parse_digits::<u8>(rest.trim()).filter(|i| *i >= 1).map(Color::Index);
         }
-        if let Ok(i) = t.parse::<u16>() {
+        if let Some(i) = parse_digits::<u16>(&t) {
             return match i {
                 0 => Some(Color::ByBlock),
                 256 => Some(Color::ByLayer),
@@ -124,12 +124,20 @@ impl Color {
         if t.starts_with('#') {
             return Rgb::parse_hex(&t).map(Color::True);
         }
-        let parts: Vec<_> = t.split(',').map(|p| p.trim().parse::<u8>()).collect();
-        if let [Ok(r), Ok(g), Ok(b)] = parts.as_slice() {
+        let parts: Vec<_> = t.split(',').map(|p| parse_digits::<u8>(p.trim())).collect();
+        if let [Some(r), Some(g), Some(b)] = parts.as_slice() {
             return Some(Color::True(Rgb(*r, *g, *b)));
         }
         None
     }
+}
+
+/// Parse an unsigned integer made of ASCII digits only (no sign, unlike `str::parse`).
+fn parse_digits<T: std::str::FromStr>(s: &str) -> Option<T> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// The RGB of ACI `i` (0 and out-of-range map to white/7).
@@ -232,6 +240,19 @@ mod tests {
         assert_eq!(Rgb::parse_hex("-12345"), None);
         assert_eq!(Color::parse("#+12345"), None);
         assert_eq!(Rgb::parse_hex("#012345"), Some(Rgb(1, 35, 69)));
+    }
+
+    #[test]
+    fn parse_rejects_plus_sign() {
+        assert_eq!(Color::parse("+5"), None);
+        assert_eq!(Color::parse(" +256"), None);
+        assert_eq!(Color::parse("color +5"), None);
+        assert_eq!(Color::parse("+1,+2,+3"), None);
+        assert_eq!(Color::parse("1,+2,3"), None);
+        assert_eq!(Color::parse("5"), Some(Color::Index(5)));
+        assert_eq!(Color::parse("256"), Some(Color::ByLayer));
+        assert_eq!(Color::parse("color 5"), Some(Color::Index(5)));
+        assert_eq!(Color::parse("1, 2, 3"), Some(Color::True(Rgb(1, 2, 3))));
     }
 
     #[test]
