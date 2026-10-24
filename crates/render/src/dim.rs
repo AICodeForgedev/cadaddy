@@ -640,7 +640,11 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // Perpendicular offset per DIMTAD.
             let side_out = if (on - p1).dot(n) >= 0.0 { n } else { -n };
             let tr = Vec2::from_angle(text_angle);
-            let off_along = |m: Vec2| gap + (tw * tr.dot(m).abs() + tht * tr.perp().dot(m).abs()) / 2.0;
+            let off_along = |m: Vec2| {
+                let glyph_extent = tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * if st.text_above == 1 { 0.6 } else { 0.5 };
+                // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
+                gap + glyph_extent
+            };
             let above = if text_angle.abs() < 1e-12 && n.y.abs() > 1e-9 {
                 if n.y > 0.0 { n } else { -n }
             } else if text_angle.abs() < 1e-12 {
@@ -1180,7 +1184,7 @@ mod tests {
         // Centred text breaks the dimension line in two.
         assert_eq!(centred.lines_of(LineRole::Dim).count(), 2);
         let above = dimension_geometry(&d, &st_with(|s| s.text_above = 1), 1.0);
-        assert!((above.text_pos.y - (5.0 + 0.09 + 0.09)).abs() < 1e-6, "{}", above.text_pos.y);
+        assert!((above.text_pos.y - (5.0 + 0.09 + 0.18 * 0.6)).abs() < 1e-6, "{}", above.text_pos.y);
         assert_eq!(above.lines_of(LineRole::Dim).count(), 1);
         let below = dimension_geometry(&d, &st_with(|s| s.text_above = 4), 1.0);
         assert!(below.text_pos.y < 5.0);
@@ -1190,6 +1194,31 @@ mod tests {
         let d2 = lin((0.0, 10.0), (10.0, 10.0), (0.0, 5.0), 0.0);
         let outside2 = dimension_geometry(&d2, &st_with(|s| s.text_above = 2), 1.0);
         assert!(outside2.text_pos.y < 5.0);
+    }
+
+    #[test]
+    fn dimtad_one_uses_autocad_text_clearance() {
+        let d = lin((0.0, 0.10), (0.0, 0.70), (0.30, 0.40), std::f64::consts::FRAC_PI_2);
+        let st = st_with(|s| {
+            s.scale = 50.0;
+            s.text_height = 0.0025;
+            s.text_gap = 0.0008;
+            s.arrow_size = 0.0015;
+            s.text_above = 1;
+            s.text_inside_horizontal = false;
+            s.decimals = 2;
+        });
+        let g = dimension_geometry(&d, &st, 50.0);
+        // Half the text height (0.0625) plus DIMGAP (0.04) put the centre at 0.1025;
+        // AutoCAD 2026 recomputes it at about 0.115 from the line (#2004).
+        assert!(
+            (0.30 - g.text_pos.x - 0.115).abs() < 0.001,
+            "text x={} offset={} angle={} text={}",
+            g.text_pos.x,
+            0.30 - g.text_pos.x,
+            g.text_angle,
+            g.value
+        );
     }
 
     #[test]
