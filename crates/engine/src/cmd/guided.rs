@@ -1178,7 +1178,12 @@ fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value) -> Result<()
     // Passing "scale": "auto" lets the reader use the detected architectural scale
     // and override the DO NOT SCALE note (guided runs always need real dimensions).
     let scale_val = sheet.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0);
-    let params = if let Some(k) = scale_val { json!({"path": abs_path, "page": page, "scale": k}) } else { json!({"path": abs_path, "page": page}) };
+    // Images (logos, scans) aren't used by the job, and must not land in the user's print folder.
+    let params = if let Some(k) = scale_val {
+        json!({"path": abs_path, "page": page, "scale": k, "images": false})
+    } else {
+        json!({"path": abs_path, "page": page, "images": false})
+    };
     match s.execute("pdfimport", &params) {
         Ok(report) => {
             // If the import was at sheet scale (DO NOT SCALE) and a scale was detected,
@@ -1198,7 +1203,7 @@ fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value) -> Result<()
                 if let Some(k) = detected.filter(|k| *k > 1.5) {
                     // Undo the sheet-scale import and redo at full scale.
                     let _ = s.execute("u", &json!({}));
-                    let full_params = json!({"path": abs_path, "page": page, "scale": k});
+                    let full_params = json!({"path": abs_path, "page": page, "scale": k, "images": false});
                     match s.execute("pdfimport", &full_params) {
                         Ok(_) => {}
                         Err(e) => {

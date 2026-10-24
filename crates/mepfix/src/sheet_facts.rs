@@ -193,25 +193,66 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
             });
         }
     }
-    // No labelled title block: the largest sheet-number lettering, if it stands out.
+    // A consultant's title block labels the number instead ("SHEET NO.", "DWG NO."): the
+    // sheet-number lettering nearest the label.
+    if let Some(l) = texts.iter().filter(|t| horizontal(t)).find(|t| is_number_label(&t.value)) {
+        let h = l.height;
+        if let Some(n) = texts
+            .iter()
+            .filter(|t| is_sheet_number(&t.value) && t.height >= h && t.at.dist(l.at) <= 25.0 * h)
+            .min_by(|a, b| a.at.dist(l.at).total_cmp(&b.at.dist(l.at)))
+        {
+            return Some(SheetIdent {
+                number: n.value.trim().to_string(),
+                title: String::new(),
+                discipline: discipline_of(&n.value),
+                source: "number_label".into(),
+            });
+        }
+    }
+    // No labelled title block: the largest sheet-number lettering, if it stands out and sits
+    // where title blocks go (the right or bottom edge). Mid-sheet lettering is a note or a tag.
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
-    texts.iter().filter(|t| is_sheet_number(&t.value) && t.height >= 2.0 * median).max_by(|a, b| a.height.total_cmp(&b.height)).map(|n| SheetIdent {
-        number: n.value.trim().to_string(),
-        title: String::new(),
-        discipline: discipline_of(&n.value),
-        source: "largest_number".into(),
-    })
+    let (x0, x1) = texts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t.at.x), b.max(t.at.x)));
+    let (y0, y1) = texts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t.at.y), b.max(t.at.y)));
+    let near_edge = |t: &TextItem| t.at.x >= x1 - 0.2 * (x1 - x0) || t.at.y <= y0 + 0.2 * (y1 - y0);
+    texts
+        .iter()
+        .filter(|t| is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && t.height >= 2.5 * median && near_edge(t))
+        .max_by(|a, b| a.height.total_cmp(&b.height))
+        .map(|n| SheetIdent {
+            number: n.value.trim().to_string(),
+            title: String::new(),
+            discipline: discipline_of(&n.value),
+            source: "largest_number".into(),
+        })
+}
+
+/// A title-block label the sheet number sits beside (`SHEET NO.`, `DWG NO:`, `SHEET NUMBER`).
+fn is_number_label(t: &str) -> bool {
+    let u = t.trim().to_ascii_uppercase();
+    let u = u.trim_end_matches([':', '.', ' ']);
+    ["SHEET NO", "SHEET NUMBER", "DWG NO", "DRAWING NO", "DRAWING NUMBER"].contains(&u)
 }
 
 fn is_scale_line(t: &TextItem) -> bool {
-    t.value.to_ascii_uppercase().starts_with("SCALE")
+    let u = t.value.trim().to_ascii_uppercase();
+    u.starts_with("SCALE") || u == "NTS" || u == "NOT TO SCALE" || is_bare_scale(&u)
+}
+
+/// A scale printed on its own under a view title (`1/8" = 1'-0"`, `1" = 20'`).
+fn is_bare_scale(u: &str) -> bool {
+    u.len() <= 24 && u.chars().next().is_some_and(|c| c.is_ascii_digit()) && u.contains('=') && (u.contains("'-") || u.ends_with('\''))
 }
 
 /// The printed scale after "SCALE:" (`1/4" = 1'-0"`).
 fn scale_text(t: &str) -> String {
     let u = t.trim();
+    if !u.to_ascii_uppercase().starts_with("SCALE") {
+        return u.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
     let after = u.find(':').map_or(u.get(5..).unwrap_or(""), |i| u.get(i + 1..).unwrap_or(""));
     after.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -545,6 +586,42 @@ mod tests {
     }
 
     #[test]
+    fn a_consultant_title_block_names_the_sheet_by_its_number_label() {
+        let mut d = Drawing::default();
+        for i in 0..30 {
+            text(&mut d, "PAVING NOTE", 100.0, 100.0 + f64::from(i) * 10.0, 4.0);
+        }
+        text(&mut d, "SHEET NO.", 1800.0, 60.0, 4.0);
+        text(&mut d, "C-3.1", 1810.0, 30.0, 12.0);
+        let s = identify_sheet(&texts(&d)).expect("number label");
+        assert_eq!((s.number.as_str(), s.discipline.as_str(), s.source.as_str()), ("C-3.1", "C", "number_label"));
+    }
+
+    #[test]
+    fn mid_sheet_lettering_is_not_a_sheet_number() {
+        let mut d = Drawing::default();
+        for i in 0..30 {
+            text(&mut d, "NOTE", f64::from(i) * 60.0, f64::from(i) * 40.0, 4.0);
+        }
+        text(&mut d, "RON22", 900.0, 700.0, 20.0); // big, but in the middle of the sheet
+        assert!(identify_sheet(&texts(&d)).is_none());
+        text(&mut d, "ABC12", 1700.0, 20.0, 20.0); // at the edge, but three letters and no label
+        assert!(identify_sheet(&texts(&d)).is_none());
+    }
+
+    #[test]
+    fn a_bare_scale_line_marks_a_view_title() {
+        let mut d = Drawing::default();
+        plan(&mut d, 100.0, 90.0, 400.0, 300.0);
+        text(&mut d, "3", 93.0, 63.0, 7.4);
+        text(&mut d, "OVERALL LEVEL 2 PLAN", 113.0, 71.0, 7.4);
+        text(&mut d, "1/8\" = 1'-0\"", 113.0, 62.0, 4.6);
+        let v = view_titles(&d, &texts(&d));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v.first().map(|x| (x.number.as_deref(), x.scale_text.as_deref())), Some((Some("3"), Some("1/8\" = 1'-0\""))));
+    }
+
+    #[test]
     fn label_shapes() {
         for s in ["E-6", "A122", "FP-1.1", "M2.01", "L-1"] {
             assert!(is_sheet_number(s), "{s}");
@@ -563,6 +640,15 @@ mod tests {
         }
         for s in ["TYP", "EQ", "A123", "ABCD", "a", "GFCI"] {
             assert!(!is_type_tag(s), "{s}");
+        }
+        for s in ["SHEET NO.", "Sheet No:", "DWG NO", "SHEET NUMBER"] {
+            assert!(is_number_label(s), "{s}");
+        }
+        for s in ["1/8\" = 1'-0\"", "1\" = 20'", "3/16\" = 1'-0\""] {
+            assert!(is_bare_scale(s), "{s}");
+        }
+        for s in ["12'-0\"", "A = B", "1/8 INCH", "=1'-0\""] {
+            assert!(!is_bare_scale(s), "{s}");
         }
     }
 
