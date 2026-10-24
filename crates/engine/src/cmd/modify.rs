@@ -564,6 +564,21 @@ impl Interactive for StretchM {
     }
 }
 
+/// Whether OFFSET can work on this kind of object at all.
+fn offsettable(k: &EntityKind) -> bool {
+    matches!(
+        k,
+        EntityKind::Line(_)
+            | EntityKind::Circle(_)
+            | EntityKind::Arc(_)
+            | EntityKind::Ellipse(_)
+            | EntityKind::LwPolyline(_)
+            | EntityKind::Spline(_)
+            | EntityKind::XLine(_)
+            | EntityKind::Ray(_)
+    )
+}
+
 /// Offset an entity by `dist` towards `side`. Returns the new geometry.
 pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<EntityKind> {
     match k {
@@ -2239,8 +2254,24 @@ impl Interactive for OffsetM {
     fn name(&self) -> &'static str {
         "OFFSET"
     }
+    /// Starts OFFSET, keeping a single preselected offsettable object (issue #1610) so the prompt
+    /// sequence goes distance then side instead of asking for the object again; any other
+    /// selection is cleared and the object loop asks for it. With PICKFIRST off the selection is
+    /// likewise ignored and cleared.
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        s.set_selection(Vec::new());
+        // Exactly one offsettable object selected before the command is taken at once, so only the
+        // side is asked for; the object loop stays for the ones after it (issue #1610). A multiple
+        // selection is left for the select prompt, as AutoCAD does.
+        let pre = s.selection();
+        if s.settings.pickfirst
+            && let [h] = pre[..]
+            && s.doc()?.entity(h).is_some_and(|e| offsettable(&e.kind))
+        {
+            self.picked = Some(h);
+            s.set_selection(vec![h]);
+        } else {
+            s.set_selection(Vec::new());
+        }
         let (erase, current) = offset_options(s);
         s.echo(format!(
             "Current settings: Erase source={}  Layer={}  OFFSETGAPTYPE=0",
