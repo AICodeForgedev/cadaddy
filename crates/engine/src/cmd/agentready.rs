@@ -1103,6 +1103,12 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if !["architecture", "structure", "mep", "all"].contains(&disc) {
         return Err(bad("bim.build", "`discipline` is architecture, structure, mep or all"));
     }
+    // Auto-read MEP runs from the drawing's layers when the spec has none and the discipline
+    // includes MEP.  This lets `bspec.draft` + `bim.build {discipline: mep}` work on a
+    // converted M/P/E sheet without a separate `mep.read {apply}` call.
+    if (disc == "mep" || disc == "all") && sp.mep.runs.is_empty() {
+        let _ = s.execute("mep.read", &json!({"apply": true}));
+    }
     let r = s.execute("model.build", &json!({}))?;
     let counts = built_counts(s.doc()?);
     let mut st = load(s.doc()?);
