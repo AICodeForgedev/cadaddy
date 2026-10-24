@@ -1762,8 +1762,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         reactors: hatch_reactors(d),
     };
     // Pre-allocate handles for block records.
-    let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
-    paper_layouts.sort_by_key(|l| l.tab_order);
+    let paper_layouts = d.paper_space_layouts();
     let ms_br = w.h();
     // Xrefs are saved as references: without their objects and the symbols that came with them.
     let saved_view = crate::dxf_xref::saved_view(d);

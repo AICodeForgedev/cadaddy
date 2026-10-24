@@ -913,8 +913,7 @@ fn plan_unknown(d: &Drawing, recs: &[Rec], tags: &[Tag], roles: &HashMap<Foreign
     };
     let br = |name: &str| roles.get(&("BLOCK_RECORD".to_string(), up(name))).cloned();
     let first_at = |s: &cadcraft_doc::EntityStore| s.iter().find_map(|e| at.get(&e.handle.hex()).copied());
-    let mut layouts: Vec<&cadcraft_doc::Layout> = d.layouts.iter().collect();
-    layouts.sort_by_key(|l| l.tab_order);
+    let layouts = d.paper_space_layouts();
     // (entities, owner, paper space, end of the space, section)
     let mut stores: Vec<(&cadcraft_doc::EntityStore, Option<String>, bool, Option<usize>, &str)> = Vec::new();
     let model_end = layouts.first().and_then(|l| first_at(&l.entities)).or(ents_end);
