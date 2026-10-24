@@ -49,7 +49,7 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn ws(&mut self) {
-        while self.s.get(self.i).is_some_and(|c| c.is_ascii_whitespace()) {
+        while self.s.get(self.i).is_some_and(u8::is_ascii_whitespace) {
             self.i += 1;
         }
     }

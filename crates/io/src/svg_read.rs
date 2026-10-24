@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use cadcraft_color::Color;
-use cadcraft_doc::*;
+use cadcraft_doc::{Circle, Common, Drawing, Ellipse, EntityKind, Layer, Line, LwPolyline, Space};
 use cadcraft_geom::{Mat3, PolyVertex, Spline, Vec2, Vec3};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -527,7 +527,7 @@ impl Parser {
                     } else if *rx > 0.0 && *ry > 0.0 {
                         self.flush_run(&mut run, false)?;
                         self.flush_ctrl(&mut ctrl)?;
-                        for p in flatten_arc(&m, cur_user, *end, *rx, *ry, *rot, *large, *sweep)? {
+                        for p in flatten_arc(&m, cur_user, *end, (*rx, *ry), *rot, *large, *sweep)? {
                             if run.is_empty() {
                                 run.push(PolyVertex::new(cur));
                             }
@@ -1004,7 +1004,7 @@ fn pick_sweep(ccw: f64, large: bool, sweep: bool) -> f64 {
 
 /// Flatten a general elliptical arc (any `rx`/`ry`/rotation) from `p0` to `p1` in user
 /// space, then map every sample through `m`.
-fn flatten_arc(m: &Mat3, p0: Vec2, p1: Vec2, rx: f64, ry: f64, rot_deg: f64, large: bool, sweep: bool) -> Result<Vec<Vec2>> {
+fn flatten_arc(m: &Mat3, p0: Vec2, p1: Vec2, (rx, ry): (f64, f64), rot_deg: f64, large: bool, sweep: bool) -> Result<Vec<Vec2>> {
     let (c, theta, delta) = elliptical_params(p0, p1, rx, ry, rot_deg.to_radians(), large, sweep)
         .ok_or_else(|| IoError::Format("SVG: elliptical arc cannot be converted".into()))?;
     let axes = Mat3::rotate(rot_deg.to_radians());

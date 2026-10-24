@@ -285,7 +285,7 @@ pub(crate) fn arrow_block_name(name: &str) -> Option<(String, Arrowhead)> {
         return None;
     }
     let kind = Arrowhead::parse(n);
-    let norm: String = n.trim_start_matches('_').chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    let norm: String = n.trim_start_matches('_').chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
     if kind == Arrowhead::ClosedFilled && !matches!(norm.as_str(), "closedfilled" | "filled") {
         return None;
     }

@@ -829,7 +829,7 @@ impl Session {
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
-        self.state().map(|s| s.edit_space()).unwrap_or_default()
+        self.state().map(DocState::edit_space).unwrap_or_default()
     }
     /// The tab being displayed: Model or a layout, regardless of MSPACE.
     pub fn layout_space(&self) -> Space {
@@ -891,7 +891,7 @@ impl Session {
 
     /// World units per pixel at the current view.
     pub fn pixel_size(&self) -> f64 {
-        let v = self.state().map(|s| s.view()).unwrap_or_default();
+        let v = self.state().map(DocState::view).unwrap_or_default();
         v.height / self.viewport_px.1.max(1.0)
     }
 
@@ -911,8 +911,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the drawing as it was.
                 if let Some((doc, sel, uid)) = &before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)

@@ -624,7 +624,7 @@ impl Session {
         self.lisp.files.insert(file_key(name), text.to_string());
         let r = self.lisp_eval(text, false, blocking, Vec::new())?;
         if !matches!(r, Some(Err(_))) {
-            let shown = std::path::Path::new(name).file_name().and_then(|n| n.to_str()).unwrap_or(name).to_string();
+            let shown = std::path::Path::new(name).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(name).to_string();
             self.echo(format!("{shown} successfully loaded."));
         }
         Ok(r)
@@ -632,7 +632,7 @@ impl Session {
 }
 
 fn file_key(name: &str) -> String {
-    let base = std::path::Path::new(&name.replace('\\', "/")).file_name().and_then(|n| n.to_str()).unwrap_or(name).to_ascii_lowercase();
+    let base = std::path::Path::new(&name.replace('\\', "/")).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(name).to_ascii_lowercase();
     base.strip_suffix(".lsp").map(str::to_string).unwrap_or(base)
 }
 

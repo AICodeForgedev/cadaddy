@@ -157,7 +157,7 @@ pub enum Arrowhead {
 impl Arrowhead {
     /// Parse a DIMBLK value ("" / "_DOT" / "Architectural tick" / "closed blank"…).
     pub fn parse(name: &str) -> Arrowhead {
-        let n: String = name.trim().trim_start_matches('_').chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        let n: String = name.trim().trim_start_matches('_').chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
         match n.as_str() {
             "" | "closedfilled" | "filled" => Arrowhead::ClosedFilled,
             "closedblank" | "blank" => Arrowhead::ClosedBlank,
