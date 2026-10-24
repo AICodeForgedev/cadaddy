@@ -376,15 +376,15 @@ fn check_scale(d: &Drawing, do_not_scale: Option<&str>) -> CheckResult {
     let ext = d.extents(&Space::Model);
     let (w, h) = if ext.is_empty() { (0.0, 0.0) } else { ((ext.max.x - ext.min.x).abs(), (ext.max.y - ext.min.y).abs()) };
 
-    // Empty drawing: pass.
+    // Empty drawing: fail — 0 inputs means there is nothing to check.
     if w < 1e-9 && h < 1e-9 {
         return CheckResult {
             id: "SCALE".into(),
-            pass: true,
+            pass: false,
             expected: "model at real-world units".into(),
-            found: "empty drawing".into(),
-            severity: 0,
-            hint: String::new(),
+            found: "empty drawing (0 geometry — nothing to check)".into(),
+            severity: 3,
+            hint: "The drawing has no geometry; the PDF may not have been read. Try: import_check or convert again.".into(),
             hard_fail: true,
             evidence: None,
         };
@@ -488,11 +488,11 @@ fn check_layers(d: &Drawing) -> CheckResult {
     if total == 0 {
         return CheckResult {
             id: "LAYERS".into(),
-            pass: true,
+            pass: false,
             expected: "content on multiple layers".into(),
-            found: "no entities".into(),
-            severity: 0,
-            hint: String::new(),
+            found: "0 entities — nothing was read".into(),
+            severity: 2,
+            hint: "The drawing is empty; nothing was imported from the source file.".into(),
             hard_fail: false,
             evidence: None,
         };
@@ -673,11 +673,11 @@ fn check_fills(d: &Drawing) -> CheckResult {
     if total == 0 {
         return CheckResult {
             id: "FILLS".into(),
-            pass: true,
+            pass: false,
             expected: "few wipeouts/rasters".into(),
-            found: "no entities".into(),
-            severity: 0,
-            hint: String::new(),
+            found: "0 entities — nothing was read".into(),
+            severity: 2,
+            hint: "The drawing is empty; nothing was imported from the source file.".into(),
             hard_fail: true,
             evidence: None,
         };
