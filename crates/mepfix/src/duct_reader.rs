@@ -1520,9 +1520,11 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
         // On content-mode imports (no PDF-BLACK layers), wall pairs that survived the context
         // filter can still inflate duct footage.  Drop short untagged runs (< 5 ft building).
         if !pdf_filter {
-            net.runs.retain(|r| r.confidence >= 0.85 || {
-                let len: f64 = r.points.windows(2).map(|w| w[0].dist(w[1])).sum();
-                len >= 60.0 // 5 feet in building inches
+            net.runs.retain(|r| {
+                r.confidence >= 0.85 || {
+                    let len: f64 = r.points.windows(2).map(|w| w[0].dist(w[1])).sum();
+                    len >= 60.0 // 5 feet in building inches
+                }
             });
         }
         net

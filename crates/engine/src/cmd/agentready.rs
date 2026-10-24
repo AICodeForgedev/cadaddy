@@ -1116,19 +1116,25 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // that the readers misidentify as MEP runs.
     let mut mep_warnings: Vec<String> = Vec::new();
     let has_drawing_entities = s.doc().is_ok_and(|d| !d.model.is_empty());
-    let spec_has_mep = current(s, "bim.build")
-        .map(|(sp, _)| !sp.mep.runs.is_empty())
-        .unwrap_or(false);
-    let is_notes_sheet = s.doc().ok().map(|d| {
-        let texts = cadaddy_mepfix::sheet_facts::texts(d);
-        cadaddy_mepfix::sheet_facts::identify_sheet(&texts).is_some_and(|ident| {
-            let up = ident.title.to_ascii_uppercase();
-            // Notes/legend/schedule/section/detail sheets have no plan-view MEP geometry.
-            up.contains("NOTES") || up.contains("LEGEND") || up.contains("ABBREVIATION")
-                || up.contains("SCHEDULE") || up.contains("SYMBOLS")
-                || up.contains("SECTION") || up.contains("DETAIL")
+    let spec_has_mep = current(s, "bim.build").map(|(sp, _)| !sp.mep.runs.is_empty()).unwrap_or(false);
+    let is_notes_sheet = s
+        .doc()
+        .ok()
+        .map(|d| {
+            let texts = cadaddy_mepfix::sheet_facts::texts(d);
+            cadaddy_mepfix::sheet_facts::identify_sheet(&texts).is_some_and(|ident| {
+                let up = ident.title.to_ascii_uppercase();
+                // Notes/legend/schedule/section/detail sheets have no plan-view MEP geometry.
+                up.contains("NOTES")
+                    || up.contains("LEGEND")
+                    || up.contains("ABBREVIATION")
+                    || up.contains("SCHEDULE")
+                    || up.contains("SYMBOLS")
+                    || up.contains("SECTION")
+                    || up.contains("DETAIL")
+            })
         })
-    }).unwrap_or(false);
+        .unwrap_or(false);
     if (disc == "mep" || disc == "all") && has_drawing_entities && !spec_has_mep && !is_notes_sheet {
         // First, try standard layer-based reading (mep.read {apply}).
         if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {

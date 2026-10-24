@@ -2913,16 +2913,11 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 && (up.contains('\'') || up.contains('"') || up.contains(':'))
                 && let Some(k) = parse_scale(v)
             {
-                let e = notes_count
-                    .entry(v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string())
-                    .or_insert((k, 0));
+                let e = notes_count.entry(v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string()).or_insert((k, 0));
                 e.1 += 1;
             }
         }
-        notes_count
-            .into_iter()
-            .max_by(|a, b| a.1 .1.cmp(&b.1 .1).then(b.0.cmp(&a.0)))
-            .map(|(t, (k, _))| (k, t))
+        notes_count.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0))).map(|(t, (k, _))| (k, t))
     };
     // MUST 5: E-sheets (electrical) always carry a "do not scale / refer to architectural"
     // general note, even when it's only in stroked text we can't read.  The sheet number in
@@ -2949,11 +2944,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         false
     };
     // E-sheets without a scale note are assumed DO NOT SCALE; with one, use it
-    let do_not_scale = if opts.recover_text {
-        do_not_scale_visible || (is_e_sheet && best_note.is_none())
-    } else {
-        false
-    };
+    let do_not_scale = if opts.recover_text { do_not_scale_visible || (is_e_sheet && best_note.is_none()) } else { false };
     let (mut scale, mut scale_source) = match (opts.scale, &best_note) {
         (Some(k), _) if k.is_finite() && k > 0.0 => (k, "option".to_string()),
         (_, Some((k, note))) if !do_not_scale => (*k, format!("scale note {note}")),
@@ -3033,10 +3024,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     for t in merged {
         // page clip: skip text outside the page box (only when recover_text is on)
         if opts.recover_text
-            && (t.at.0 < page_box[0] - 72.0
-                || t.at.0 > page_box[2] + 72.0
-                || t.at.1 < page_box[1] - 72.0
-                || t.at.1 > page_box[3] + 72.0)
+            && (t.at.0 < page_box[0] - 72.0 || t.at.0 > page_box[2] + 72.0 || t.at.1 < page_box[1] - 72.0 || t.at.1 > page_box[3] + 72.0)
         {
             continue;
         }
@@ -3095,90 +3083,99 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Fix 3: recover SHX-stroked text, artifact fills, and repeated symbol clusters.
     // All three are text/symbol-oriented post-processing; skip when recover_text is off
     // (downstream geometry analysis that needs every stroke intact).
-    let (recovered_texts, shx_stroke_indices, symbol_groups, symbol_stroke_indices, symbol_fill_indices, symbol_text_indices, recovered_do_not_scale) = if opts.recover_text {
-        // Primary: match invisible text (rendering mode 3) to nearby stroke clusters — 100%
-        // accuracy.  Fallback: cluster short strokes and match to overlapping visible text —
-        // lower accuracy but catches sheets without hidden text.
-        let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
-        if recovered_texts.is_empty() {
-            recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
-            if !recovered_texts.is_empty() {
-                stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+    let (recovered_texts, shx_stroke_indices, symbol_groups, symbol_stroke_indices, symbol_fill_indices, symbol_text_indices, recovered_do_not_scale) =
+        if opts.recover_text {
+            // Primary: match invisible text (rendering mode 3) to nearby stroke clusters — 100%
+            // accuracy.  Fallback: cluster short strokes and match to overlapping visible text —
+            // lower accuracy but catches sheets without hidden text.
+            let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+            if recovered_texts.is_empty() {
+                recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
+                if !recovered_texts.is_empty() {
+                    stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+                }
             }
-        }
-        // OCR pass: supplement with template-based glyph recognition for strokes not yet
-        // claimed.  Only when the sheet has hidden text (the OCR is expensive and only needed
-        // when the PDF carries an invisible-text layer from an SHX-plotting CAD application).
-        let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-        if has_hidden_text {
-            let mut used_so_far: HashSet<usize> = HashSet::new();
+            // OCR pass: supplement with template-based glyph recognition for strokes not yet
+            // claimed.  Only when the sheet has hidden text (the OCR is expensive and only needed
+            // when the PDF carries an invisible-text layer from an SHX-plotting CAD application).
+            let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
+            if has_hidden_text {
+                let mut used_so_far: HashSet<usize> = HashSet::new();
+                for rt in &recovered_texts {
+                    used_so_far.extend(&rt.stroke_indices);
+                }
+                let ocr_texts = recover_shx_ocr(&strokes, sheet, &used_so_far);
+                if !ocr_texts.is_empty() {
+                    stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
+                    recovered_texts.extend(ocr_texts);
+                }
+            }
+            let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
             for rt in &recovered_texts {
-                used_so_far.extend(&rt.stroke_indices);
+                shx_stroke_indices.extend(&rt.stroke_indices);
             }
-            let ocr_texts = recover_shx_ocr(&strokes, sheet, &used_so_far);
-            if !ocr_texts.is_empty() {
-                stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
-                recovered_texts.extend(ocr_texts);
+            if !recovered_texts.is_empty() {
+                stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
             }
-        }
-        let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
-        for rt in &recovered_texts {
-            shx_stroke_indices.extend(&rt.stroke_indices);
-        }
-        if !recovered_texts.is_empty() {
-            stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
-        }
-        // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
-        // SHX-stroked form, not as real PDF text.
-        let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
-            let up = rt.value.trim().to_ascii_uppercase();
-            up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
-        });
+            // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
+            // SHX-stroked form, not as real PDF text.
+            let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
+                let up = rt.value.trim().to_ascii_uppercase();
+                up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
+            });
 
-        // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and
-        // the scale was set from a scale note, override back to 1.0 (sheet size).
-        if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
-            let old_scale = scale;
-            scale = 1.0;
-            scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
-            notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
-        }
+            // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and
+            // the scale was set from a scale note, override back to 1.0 (sheet size).
+            if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
+                let old_scale = scale;
+                scale = 1.0;
+                scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
+                notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
+            }
 
-        // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
-        let artifact_count = fills.len();
-        fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
-        let artifacts_removed = artifact_count - fills.len();
-        if artifacts_removed > 0 {
-            stats.insert("artifact fills removed".into(), artifacts_removed);
-        }
+            // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
+            let artifact_count = fills.len();
+            fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
+            let artifacts_removed = artifact_count - fills.len();
+            if artifacts_removed > 0 {
+                stats.insert("artifact fills removed".into(), artifacts_removed);
+            }
 
-        // Fix 5: detect repeated symbol clusters
-        let symbol_groups = detect_symbol_clusters(&strokes, &fills, &texts, sheet, &shx_stroke_indices);
-        let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
-        let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
-        let mut symbol_text_indices: HashSet<usize> = HashSet::new();
-        let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
-        for group in &symbol_groups {
-            for inst in group {
-                for &si in &inst.stroke_indices {
-                    symbol_stroke_indices.insert(si);
-                }
-                for &fi in &inst.fill_indices {
-                    symbol_fill_indices.insert(fi);
-                }
-                if let Some(ti) = inst.nearby_text_idx {
-                    symbol_text_indices.insert(ti);
+            // Fix 5: detect repeated symbol clusters
+            let symbol_groups = detect_symbol_clusters(&strokes, &fills, &texts, sheet, &shx_stroke_indices);
+            let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
+            let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
+            let mut symbol_text_indices: HashSet<usize> = HashSet::new();
+            let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
+            for group in &symbol_groups {
+                for inst in group {
+                    for &si in &inst.stroke_indices {
+                        symbol_stroke_indices.insert(si);
+                    }
+                    for &fi in &inst.fill_indices {
+                        symbol_fill_indices.insert(fi);
+                    }
+                    if let Some(ti) = inst.nearby_text_idx {
+                        symbol_text_indices.insert(ti);
+                    }
                 }
             }
-        }
-        if total_symbols > 0 {
-            stats.insert("symbol instances detected".into(), total_symbols);
-            stats.insert("symbol types".into(), symbol_groups.len());
-        }
-        (recovered_texts, shx_stroke_indices, symbol_groups, symbol_stroke_indices, symbol_fill_indices, symbol_text_indices, recovered_do_not_scale)
-    } else {
-        (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
-    };
+            if total_symbols > 0 {
+                stats.insert("symbol instances detected".into(), total_symbols);
+                stats.insert("symbol types".into(), symbol_groups.len());
+            }
+            (
+                recovered_texts,
+                shx_stroke_indices,
+                symbol_groups,
+                symbol_stroke_indices,
+                symbol_fill_indices,
+                symbol_text_indices,
+                recovered_do_not_scale,
+            )
+        } else {
+            (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
+        };
 
     // the drawing
     let mut d = Drawing::new_imperial();
@@ -3500,8 +3497,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 // ("A", "B", "1", "2" etc.) that symbol detection may claim erroneously.
                 if symbol_text_indices.contains(&i)
                     && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)
-                    && !(t.value.trim().len() == 1
-                        && t.value.trim().chars().next().is_some_and(|c| c.is_ascii_alphanumeric()))
+                    && !(t.value.trim().len() == 1 && t.value.trim().chars().next().is_some_and(|c| c.is_ascii_alphanumeric()))
                 {
                     continue;
                 }

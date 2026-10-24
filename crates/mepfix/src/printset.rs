@@ -388,9 +388,7 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.contains("COVER") || up.contains("INDEX") {
         return "cover".into();
     }
-    if up.contains("SCHEDULE") || up.contains("NOTES") || up.contains("LEGEND")
-        || up.contains("ABBREVIATION") || up.contains("SYMBOLS")
-    {
+    if up.contains("SCHEDULE") || up.contains("NOTES") || up.contains("LEGEND") || up.contains("ABBREVIATION") || up.contains("SYMBOLS") {
         return "schedule".into();
     }
     if up.contains("DETAIL") {

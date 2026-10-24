@@ -169,9 +169,7 @@ fn detect_sheet_number(d: &Drawing) -> Option<String> {
         // Original DXF layers (TITLE, BORDER) and content-class layer TITLEBLOCK from PDF
         // import. Not TEXT — that layer holds ALL text, so picking the largest there gives the
         // title instead of the number.
-        let on_title = ly.eq_ignore_ascii_case("TITLE")
-            || ly.eq_ignore_ascii_case("BORDER")
-            || ly.eq_ignore_ascii_case("TITLEBLOCK");
+        let on_title = ly.eq_ignore_ascii_case("TITLE") || ly.eq_ignore_ascii_case("BORDER") || ly.eq_ignore_ascii_case("TITLEBLOCK");
         if !on_title {
             continue;
         }

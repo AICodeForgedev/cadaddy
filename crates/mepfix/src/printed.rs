@@ -42,8 +42,12 @@ pub struct PrintedSet {
 /// conduits, grids) — SHX recovery and symbol detection would consume strokes that are not text.
 pub fn import_page(pdf: &[u8], page: u32) -> Result<cadaddy_doc::Drawing, String> {
     let opts = cadaddy_io::pdf_read::PdfOptions {
-        page, images: false, markups: false, layout: false,
-        layers: cadaddy_io::pdf_read::LayerMode::Pen, recover_text: false,
+        page,
+        images: false,
+        markups: false,
+        layout: false,
+        layers: cadaddy_io::pdf_read::LayerMode::Pen,
+        recover_text: false,
         ..Default::default()
     };
     cadaddy_io::pdf_read::read(pdf, &opts).map(|i| i.drawing).map_err(|e| e.to_string())

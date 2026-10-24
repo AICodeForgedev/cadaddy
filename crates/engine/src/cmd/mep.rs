@@ -461,13 +461,19 @@ fn read_pipes_from_tags(
 
     // Step 2: collect line chains, excluding layers that are known to carry non-pipe geometry
     // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports.
-    let all_chains = chains(&ents.iter().copied().filter(|e| {
-        if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
-            return false;
-        }
-        let up = e.common.layer.to_ascii_uppercase();
-        !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
-    }).collect::<Vec<_>>());
+    let all_chains = chains(
+        &ents
+            .iter()
+            .copied()
+            .filter(|e| {
+                if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+                    return false;
+                }
+                let up = e.common.layer.to_ascii_uppercase();
+                !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+            })
+            .collect::<Vec<_>>(),
+    );
 
     // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
     // Content-mode imports (no PDF-BLACK layers) mix pipe geometry with walls and annotation on

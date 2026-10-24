@@ -324,13 +324,8 @@ pub(crate) fn read_mech_from_drawing(s: &Session) -> Result<DuctNetwork> {
     // If so, skip the all-layers fallback to avoid adding noise.  Only duct-kind runs count:
     // pipe runs (from mep.read on P-*/M-PIPE-* layers) must NOT block duct detection.
     if let Ok((sp, _)) = super::bspec::current(s, "ducts.read") {
-        let duct_systems: std::collections::HashSet<&str> = sp
-            .mep
-            .systems
-            .iter()
-            .filter(|sys| sys.kind == MepKind::Duct)
-            .map(|sys| sys.name.as_str())
-            .collect();
+        let duct_systems: std::collections::HashSet<&str> =
+            sp.mep.systems.iter().filter(|sys| sys.kind == MepKind::Duct).map(|sys| sys.name.as_str()).collect();
         if sp.mep.runs.iter().any(|r| duct_systems.contains(r.system.as_str())) {
             return Ok(DuctNetwork::default());
         }
