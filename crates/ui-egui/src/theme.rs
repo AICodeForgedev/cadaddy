@@ -743,13 +743,16 @@ mod tests {
         let japanese = face("BIZ UDPGothic", &["Jpan", "Latn"]);
         let chinese = face("Han Test Face", &["Hans", "Latn"]);
         let arabic = face("Noto Sans Arabic", &["Arab"]);
-        let faces = [&japanese, &chinese, &arabic];
+        let georgian = face("Noto Sans Georgian", &["Geor"]);
+        let faces = [&japanese, &chinese, &arabic, &georgian];
         // Every interface reads CJK names, so both CJK faces load, the sans-serif face first.
-        assert_eq!(families(&super::embedded_ui_faces(&faces, "en")), ["BIZ UDPGothic", "Han Test Face"]);
+        // The Georgian face loads in every interface too, after them: the picker shows ქართული.
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "en")), ["BIZ UDPGothic", "Han Test Face", "Noto Sans Georgian"]);
         // A Chinese interface takes the Han face first: a Japanese face lacks 图 园 测.
-        assert_eq!(families(&super::embedded_ui_faces(&faces, "zh")), ["Han Test Face", "BIZ UDPGothic"]);
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "zh")), ["Han Test Face", "BIZ UDPGothic", "Noto Sans Georgian"]);
         // العربية adds the Arabic face, after the CJK ones egui's bundled faces have no glyphs for.
-        assert_eq!(families(&super::embedded_ui_faces(&faces, "ar")), ["BIZ UDPGothic", "Han Test Face", "Noto Sans Arabic"]);
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "ar")), ["BIZ UDPGothic", "Han Test Face", "Noto Sans Georgian", "Noto Sans Arabic"]);
+        assert_eq!(families(&super::embedded_ui_faces(&faces, "ka")), ["BIZ UDPGothic", "Han Test Face", "Noto Sans Georgian"]);
         // Another weight is a style of a face, not an interface face of its own.
         let bold = CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: &[] };
         assert!(super::embedded_ui_faces(&[&bold], "en").is_empty());
@@ -760,13 +763,39 @@ mod tests {
     /// leaving the installed-font answer the gate had before.
     #[test]
     fn embedded_faces_answer_for_their_scripts() {
-        let faces = [face("BIZ UDPGothic", &["Jpan", "Latn"]), face("Noto Sans Arabic", &["Arab"])];
-        assert!(super::any_script(&faces, "Jpan") && super::any_script(&faces, "Arab"));
+        let faces = [face("BIZ UDPGothic", &["Jpan", "Latn"]), face("Noto Sans Arabic", &["Arab"]), face("Noto Sans Georgian", &["Geor"])];
+        assert!(super::any_script(&faces, "Jpan") && super::any_script(&faces, "Arab") && super::any_script(&faces, "Geor"));
         assert!(!super::any_script(&faces, "Hans") && !super::any_script(&faces, "Hant"));
         // A `Bold`-only face is not the interface's, and a script code is matched whole.
         let bold = CraftFont { family: "Some Han Bold", style: "Bold", scripts: &["Hans"], bytes: &[] };
         assert!(!super::any_script(&[bold], "Hans") && !super::any_script(&faces, "Ara"));
         assert!(!super::embedded_script("Hans") || super::can_show("zh"));
+        // ქართული rides on the embedded Georgian face alone.
+        assert_eq!(super::can_show("ka"), super::embedded_script("Geor"));
         assert!(super::can_show("en") && super::can_show("uk"));
+    }
+
+    /// With the craft-fonts Georgian face (release and web builds), every Mkhedruli letter and the
+    /// picker's ქართული render in both families, in a Georgian and in an English interface.
+    #[test]
+    fn embedded_georgian_face_covers_the_alphabet_in_every_interface() {
+        if !super::embedded_script("Geor") {
+            return;
+        }
+        let letters: Vec<char> = ('ა'..='ჰ').chain("ქართული".chars()).collect();
+        for language in ["ka", "en"] {
+            let ctx = egui::Context::default();
+            super::install_fonts(&ctx, language);
+            let mut output = ctx.run_ui(Default::default(), |_| {});
+            output.textures_delta.clear();
+            ctx.fonts_mut(|view| {
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                    let mut font = view.fonts.font(&family);
+                    for c in &letters {
+                        assert!(font.characters().contains_key(c), "{language}: missing Georgian glyph {c} in {family:?}");
+                    }
+                }
+            });
+        }
     }
 }
