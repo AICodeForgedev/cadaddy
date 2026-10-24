@@ -1,8 +1,8 @@
 //! A malformed `handle` on a table edit command or TABLEEXPORT is an error. It never falls back
 //! to the selected table (#934, follow-up to #330).
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::{EntityKind, Handle};
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::{EntityKind, Handle};
 use serde_json::json;
 
 fn cell_text(s: &Session, h: &str) -> String {

@@ -381,7 +381,7 @@ impl StretchArea {
 /// Add to `hs` the visible multilines in `space` with a control vertex inside `area`. A crossing
 /// selection tests the drawn element lines, which sit away from the control vertices by the
 /// multiline's scale, so a small area around a vertex alone would miss them.
-fn add_mline_vertex_hits(d: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, area: &StretchArea, hs: &mut Vec<Handle>) {
+fn add_mline_vertex_hits(d: &cadaddy_doc::Drawing, space: &cadaddy_doc::Space, area: &StretchArea, hs: &mut Vec<Handle>) {
     let Some(store) = d.space(space) else { return };
     for e in store.iter() {
         if let EntityKind::MLine(m) = &e.kind

@@ -117,19 +117,19 @@ fn layout_tabs_and_add_button_work_with_toolsets_shown_or_hidden() {
         h.run_steps(5);
         h.get_by_role_and_label(egui::accesskit::Role::Tab, "Layout1").click();
         h.run_steps(3);
-        assert_eq!(h.state().session.state().unwrap().space, cadcraft_engine::doc::Space::Paper("Layout1".into()));
+        assert_eq!(h.state().session.state().unwrap().space, cadaddy_engine::doc::Space::Paper("Layout1".into()));
         h.get_by_role_and_label(egui::accesskit::Role::Tab, "Model").click();
         h.run_steps(3);
-        assert_eq!(h.state().session.state().unwrap().space, cadcraft_engine::doc::Space::Model);
+        assert_eq!(h.state().session.state().unwrap().space, cadaddy_engine::doc::Space::Model);
         // There are two add buttons; exercise the one between Model and the paper-layout tabs.
         let model = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Model").rect();
         h.get_all_by_label("New layout").find(|node| node.rect().left() > model.right()).unwrap().click();
         h.run_steps(3);
-        assert_eq!(h.state().session.state().unwrap().space, cadcraft_engine::doc::Space::Paper("Layout3".into()));
+        assert_eq!(h.state().session.state().unwrap().space, cadaddy_engine::doc::Space::Paper("Layout3".into()));
         assert_eq!(h.state().session.doc().unwrap().layouts.len(), 3);
         h.get_by_role_and_label(egui::accesskit::Role::Tab, "Layout2").click();
         h.run_steps(3);
-        assert_eq!(h.state().session.state().unwrap().space, cadcraft_engine::doc::Space::Paper("Layout2".into()));
+        assert_eq!(h.state().session.state().unwrap().space, cadaddy_engine::doc::Space::Paper("Layout2".into()));
     }
 }
 

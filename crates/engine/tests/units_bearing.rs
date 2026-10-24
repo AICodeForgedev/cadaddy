@@ -1,4 +1,4 @@
-use cadcraft_engine::units::parse_angle;
+use cadaddy_engine::units::parse_angle;
 
 #[test]
 fn bearing_rejects_out_of_range_angles() {

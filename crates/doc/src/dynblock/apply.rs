@@ -548,7 +548,7 @@ fn apply(
         let mut c: Entity = (**e).clone();
         c.handle = nh;
         // The copy's own xdata names the copy, not its original (as the kept data below does).
-        for t in &mut c.common.xdata {
+        for t in c.common.xdata.iter_mut() {
             if t.code == 1005 && Handle::parse_hex(&t.value) == Some(e.handle) {
                 t.value = nh.hex();
             }

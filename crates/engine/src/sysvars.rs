@@ -789,7 +789,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             }
             let d = s.doc_mut()?;
             // A dimension variable takes only the values its style field takes, as in DIMSTYLE and DIMOVERRIDE.
-            if let Some((_, field)) = cadcraft_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
+            if let Some((_, field)) = cadaddy_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
                 let mut st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
                 if !st.apply_fields(&serde_json::Map::from_iter([((*field).to_string(), v.clone())])).is_empty() {
                     return Err(bad());

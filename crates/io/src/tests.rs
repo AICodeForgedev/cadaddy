@@ -2255,7 +2255,7 @@ fn hatch_spline_edge_caps_degree_like_spline() {
     let points: String = control.iter().map(|c| format!("10\n{}\n20\n{}\n", c.x, c.y)).collect();
     let close = "72\n1\n10\n12\n20\n0\n11\n0\n21\n0\n";
     // The degree-10 curve over the same controls, which is what the capped edge must produce.
-    let want = cadcraft_geom::Spline::from_control(control, 10).tessellate(1e-3);
+    let want = cadaddy_geom::Spline::from_control(control, 10).tessellate(1e-3);
     let (mut lo, mut hi) = (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN));
     for p in &want {
         (lo, hi) = (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)));

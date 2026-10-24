@@ -224,7 +224,7 @@ fn setvar_refuses_the_values_the_style_refuses() {
     set(&mut s, "DIMCLRT", json!(3));
     let o = s.doc().unwrap().dim_overrides();
     assert_eq!(o.get("textMove"), Some(&json!(2)));
-    assert_eq!(o.get("textColor"), serde_json::to_value(cadcraft_engine::doc::color::Color::Index(3)).ok().as_ref(), "{o:?}");
+    assert_eq!(o.get("textColor"), serde_json::to_value(cadaddy_engine::doc::color::Color::Index(3)).ok().as_ref(), "{o:?}");
 }
 
 #[test]

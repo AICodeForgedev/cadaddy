@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn imported_array_blocks_keep_their_parameters() {
-        use cadcraft_doc::{ArrayKind, ArrayParams, Block, RectArray, ReplacedItem};
+        use cadaddy_doc::{ArrayKind, ArrayParams, Block, RectArray, ReplacedItem};
         let rect = RectArray { cols: 3, rows: 2, col_spacing: 5.0, row_spacing: 4.0, axis_angle: 0.0, row_elevation: 0.0 };
         let params = ArrayParams {
             source: "*U1".into(),
