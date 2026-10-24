@@ -226,7 +226,9 @@ fn a_new_autosave_folder_is_owner_only() {
     for (dir, expected) in [(base.join("new").join("autosave"), 0o700), (picked, 0o755)] {
         let mut s = Session::new();
         draw(&mut s);
-        let mut a = Autosaver::new(autosave::instance_id());
+        // Not instance_id(): a test started in the same millisecond would get the same id, and
+        // shutdown() would then remove its lock from the process-wide SAVEFILEPATH.
+        let mut a = Autosaver::new("41-c");
         a.plan(&s, 0.0, 1, &dir.to_string_lossy());
         let jobs = a.plan(&s, 60.0, 1, &dir.to_string_lossy());
         let path = writes(&jobs).pop().unwrap();
