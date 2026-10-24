@@ -49,11 +49,15 @@ fn pipe_drawing() -> Session {
     text(&mut s, [200.0, 250.0], "2\" FP BOP @ 12'-0\"");
 
     // Building spec with one level.
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-                     "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
-        "layers": [{"layer": "A-WALL", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                         "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
     s
 }
 
@@ -61,12 +65,9 @@ fn pipe_drawing() -> Session {
 fn pipe_systems_read_from_standard_layers() {
     let mut s = pipe_drawing();
     let r = s.execute("mep.read", &json!({})).unwrap();
-    let sys_names: Vec<&str> = r["systems"].as_array().unwrap().iter()
-        .filter_map(|x| x["name"].as_str())
-        .collect();
+    let sys_names: Vec<&str> = r["systems"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
     // Should find pipe systems on P-* layers.
-    assert!(sys_names.iter().any(|n| n.contains("CW") || n.contains("DOMW")),
-        "expected a CW system: {sys_names:?}");
+    assert!(sys_names.iter().any(|n| n.contains("CW") || n.contains("DOMW")), "expected a CW system: {sys_names:?}");
     assert!(r["runs"].as_array().unwrap().len() >= 3, "expected at least 3 pipe runs");
 }
 
@@ -77,7 +78,9 @@ fn pipe_build_creates_3d_elements() {
     let _r = s.execute("model.build", &json!({})).unwrap();
     // Check that MEP elements were built.
     let mep_count: usize = s.execute("bim.build", &json!({"discipline": "mep"})).unwrap()["built"]
-        .as_object().unwrap().values()
+        .as_object()
+        .unwrap()
+        .values()
         .filter_map(|v| v.get("mep").and_then(Value::as_u64))
         .map(|n| n as usize)
         .sum();
@@ -126,11 +129,15 @@ fn pdf_pipe_drawing() -> Session {
     text(&mut s, [200.0, 250.0], "2\" FP");
 
     // Building spec.
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-                     "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
-        "layers": [{"layer": "PDF-BLACK-0.09", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                         "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
+            "layers": [{"layer": "PDF-BLACK-0.09", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
     s
 }
 
@@ -138,9 +145,7 @@ fn pdf_pipe_drawing() -> Session {
 fn text_tag_fallback_detects_pipes_on_pdf_layers() {
     let mut s = pdf_pipe_drawing();
     let r = s.execute("mep.read", &json!({})).unwrap();
-    let sys_names: Vec<&str> = r["systems"].as_array().unwrap().iter()
-        .filter_map(|x| x["name"].as_str())
-        .collect();
+    let sys_names: Vec<&str> = r["systems"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
     // Should find pipe systems from text tags even without standard layer names.
     assert!(sys_names.iter().any(|n| n == &"CW"), "expected CW system from tags: {sys_names:?}");
     assert!(sys_names.iter().any(|n| n == &"SAN"), "expected SAN system from tags: {sys_names:?}");
@@ -154,9 +159,6 @@ fn bim_build_mep_auto_reads_pipes() {
     let mut s = pipe_drawing();
     // bim.build with discipline=mep should auto-call mep.read.
     let r = s.execute("bim.build", &json!({"discipline": "mep"})).unwrap();
-    let mep_count: usize = r["built"].as_object().unwrap().values()
-        .filter_map(|v| v.get("mep").and_then(Value::as_u64))
-        .map(|n| n as usize)
-        .sum();
+    let mep_count: usize = r["built"].as_object().unwrap().values().filter_map(|v| v.get("mep").and_then(Value::as_u64)).map(|n| n as usize).sum();
     assert!(mep_count >= 5, "bim.build mep should auto-read and build pipe runs, got {mep_count}");
 }

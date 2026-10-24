@@ -367,11 +367,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     // ── Walls: LF and area from the spec's wall marks ──
     let mut wall_lf_total = 0.0f64;
     let mut wall_area_total = 0.0f64;
-    let wall_handles: Vec<String> = built
-        .iter()
-        .filter(|((p, _), _)| p == "wall")
-        .flat_map(|(_, (_, h))| h.clone())
-        .collect();
+    let wall_handles: Vec<String> = built.iter().filter(|((p, _), _)| p == "wall").flat_map(|(_, (_, h))| h.clone()).collect();
 
     for w in sp.walls.iter().take(MAX_LINES) {
         let len_ft = (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]) / upf;
@@ -385,9 +381,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         }
         wall_lf_total += len_ft;
         let wt = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(&w.wall_type));
-        let height_ft = w.height_ft.or_else(|| wt.and_then(|t| t.height_ft)).unwrap_or(
-            sp.level(&w.level).map_or(10.0, |l| l.height_ft),
-        );
+        let height_ft = w.height_ft.or_else(|| wt.and_then(|t| t.height_ft)).unwrap_or(sp.level(&w.level).map_or(10.0, |l| l.height_ft));
         let thick_in = wt.map_or(6.0, |t| t.thickness_in);
         wall_area_total += len_ft * height_ft;
         let type_label = if w.wall_type.is_empty() { "untyped" } else { &w.wall_type };
@@ -475,7 +469,10 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             continue;
         }
         // Ceiling area from the spec's RCP ceilings on this level (shoelace).
-        let rcp_area: f64 = sp.rcp.ceilings.iter()
+        let rcp_area: f64 = sp
+            .rcp
+            .ceilings
+            .iter()
             .filter(|c| c.level.eq_ignore_ascii_case(level))
             .map(|c| {
                 let pts = &c.outline;
@@ -517,11 +514,14 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             continue;
         }
         // Estimate from the level's region (sheet rectangle), or a fallback.
-        let area = sp.level(level).and_then(|l| {
-            let r = l.region?;
-            let a = ((r[2] - r[0]) * (r[3] - r[1])).abs() / (upf * upf);
-            (a > 0.0).then_some(a)
-        }).unwrap_or(*n as f64 * 100.0);
+        let area = sp
+            .level(level)
+            .and_then(|l| {
+                let r = l.region?;
+                let a = ((r[2] - r[0]) * (r[3] - r[1])).abs() / (upf * upf);
+                (a > 0.0).then_some(a)
+            })
+            .unwrap_or(*n as f64 * 100.0);
         floor_sf_total += area;
         add(
             lines,
@@ -1522,12 +1522,8 @@ mod tests {
         let lines = r["lines"].as_array().unwrap();
 
         // Helper: find all lines matching an item pattern.
-        let find = |item: &str| -> Vec<&Value> {
-            lines.iter().filter(|l| l["item"].as_str().unwrap_or("").contains(item)).collect()
-        };
-        let sum_net = |item: &str| -> f64 {
-            find(item).iter().map(|l| l["net"].as_f64().unwrap_or(0.0)).sum()
-        };
+        let find = |item: &str| -> Vec<&Value> { lines.iter().filter(|l| l["item"].as_str().unwrap_or("").contains(item)).collect() };
+        let sum_net = |item: &str| -> f64 { find(item).iter().map(|l| l["net"].as_f64().unwrap_or(0.0)).sum() };
 
         // ── MUST 1: Every built category has BOM lines ──
         // Walls: 8 wall marks × 20' = 160 LF total.

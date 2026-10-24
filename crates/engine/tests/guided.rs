@@ -50,8 +50,12 @@ fn job_progress_tracking() {
     assert!(job.progress() < 0.01);
 
     // Mark first two stages done.
-    if let Some(st) = job.stage_mut(StageName::Import) { st.status = StageStatus::Done; }
-    if let Some(st) = job.stage_mut(StageName::Classify) { st.status = StageStatus::Done; }
+    if let Some(st) = job.stage_mut(StageName::Import) {
+        st.status = StageStatus::Done;
+    }
+    if let Some(st) = job.stage_mut(StageName::Classify) {
+        st.status = StageStatus::Done;
+    }
 
     let p = job.progress();
     assert!(p > 0.1 && p < 0.9, "progress should be partial: {p}");
@@ -251,11 +255,7 @@ fn completeness_questions_structure() {
     let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
 
     // Simulate what the device stage would do: add completeness questions.
-    let device_classes = [
-        ("duplex_receptacle", 77),
-        ("gfci", 12),
-        ("ef", 4),
-    ];
+    let device_classes = [("duplex_receptacle", 77), ("gfci", 12), ("ef", 4)];
     for (class, count) in &device_classes {
         let qid = job.next_qid(StageName::Devices);
         if let Some(st) = job.stage_mut(StageName::Devices) {
@@ -415,10 +415,15 @@ fn empty_classify_adds_finding() {
     assert!(job.findings.is_empty());
 
     // Simulate what run_classify does when 0 sheets.
-    job.add_finding(StageName::Classify,
+    job.add_finding(
+        StageName::Classify,
         "Classify found 0 sheets in the print set",
         "A classify stage that yields 0 sheets cannot proceed",
-        5, Vec::new(), None, true);
+        5,
+        Vec::new(),
+        None,
+        true,
+    );
 
     assert_eq!(job.findings.len(), 1);
     assert_eq!(job.findings[0].severity, 5);
@@ -439,10 +444,7 @@ fn empty_rooms_adds_finding_and_question() {
     let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
 
     // Simulate what run_rooms does when 0 rooms.
-    job.add_finding(StageName::Rooms,
-        "Rooms stage found 0 rooms",
-        "No room labels or outlines found",
-        4, Vec::new(), None, false);
+    job.add_finding(StageName::Rooms, "Rooms stage found 0 rooms", "No room labels or outlines found", 4, Vec::new(), None, false);
 
     let qid = job.next_qid(StageName::Rooms);
     let q = Question {
@@ -620,8 +622,7 @@ fn regression_real_sheet_scenario() {
     // The pipeline extracts from titles: "3RD AND 4TH FLOOR"
     let title = sheet["title"].as_str().unwrap();
     let extracted = extract_levels_from_title(title);
-    assert!(extracted.len() >= 2,
-        "expected ≥2 levels from title '{title}', got: {extracted:?}");
+    assert!(extracted.len() >= 2, "expected ≥2 levels from title '{title}', got: {extracted:?}");
     assert!(extracted.contains(&"3".to_string()), "expected level 3");
     assert!(extracted.contains(&"4".to_string()), "expected level 4");
 
@@ -688,31 +689,30 @@ fn regression_real_sheet_scenario() {
     }
 
     // Verify: at least 1 completeness question.
-    let completeness_count = job.stages.iter()
-        .map(|s| s.completeness.len())
-        .sum::<usize>();
-    assert!(completeness_count >= 1,
-        "expected ≥1 completeness question, got {completeness_count}");
+    let completeness_count = job.stages.iter().map(|s| s.completeness.len()).sum::<usize>();
+    assert!(completeness_count >= 1, "expected ≥1 completeness question, got {completeness_count}");
 
     // ── BIM Build: should draft spec first ──
     // If spec drafting fails (no building spec yet), it should be a finding, not a silent error.
     // Simulate: spec draft succeeds.
-    job.add_finding(StageName::BimBuild,
+    job.add_finding(
+        StageName::BimBuild,
         "Building spec drafted with 3 guesses",
         "bspec.draft produced a spec with guessed parts",
-        2, Vec::new(), None, false);
+        2,
+        Vec::new(),
+        None,
+        false,
+    );
 
     // The finding should be present but not blocking.
-    let bim_findings: Vec<_> = job.findings.iter()
-        .filter(|f| f.stage == StageName::BimBuild)
-        .collect();
+    let bim_findings: Vec<_> = job.findings.iter().filter(|f| f.stage == StageName::BimBuild).collect();
     assert!(!bim_findings.is_empty(), "bim_build should have a finding about the spec");
     assert!(!bim_findings[0].blocking, "spec guess finding is non-blocking");
 
     // ── Overall: never a silent Done/Error ──
     // Every finding and question should be on the worklist.
-    assert!(!job.worklist.is_empty(),
-        "worklist must not be empty in this scenario");
+    assert!(!job.worklist.is_empty(), "worklist must not be empty in this scenario");
 
     // Count pending worklist items.
     let pending = job.worklist.iter().filter(|w| w.status == "pending").count();
@@ -725,7 +725,8 @@ fn work_item_serialization() {
     use cadaddy_engine::cmd::guided::*;
 
     let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
-    job.add_finding(StageName::Classify,
+    job.add_finding(
+        StageName::Classify,
         "Test finding",
         "Test reason",
         3,
@@ -739,7 +740,8 @@ fn work_item_serialization() {
             tiled_crops: None,
             leftovers: Vec::new(),
         }),
-        false);
+        false,
+    );
 
     let json_text = serde_json::to_string_pretty(&job).unwrap();
     let restored: GuidedJob = serde_json::from_str(&json_text).unwrap();
@@ -825,15 +827,12 @@ fn classify_result_uses_sheets_command() {
     }));
 
     // The sheet count from job.sheets should be 1 (not 0).
-    let sheets = job.sheets.as_ref()
-        .and_then(|v| v.get("sheets"))
-        .and_then(serde_json::Value::as_array);
+    let sheets = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(serde_json::Value::as_array);
     let sheet_count = sheets.map_or(0, Vec::len);
     assert_eq!(sheet_count, 1, "sheet count should be 1 from printset.sheets result");
 
     // No "0 sheets" finding should be generated.
-    assert!(job.findings.is_empty(),
-        "no 0-sheets finding when printset.sheets returns 1 sheet");
+    assert!(job.findings.is_empty(), "no 0-sheets finding when printset.sheets returns 1 sheet");
 }
 
 /// Test (RW2 MUST 1): When printset.classify result (without fix) is
@@ -850,8 +849,7 @@ fn classify_result_without_sheets_key_is_zero() {
 
     // Looking for "sheets" key in this returns None.
     let sheets = classify_result.get("sheets").and_then(serde_json::Value::as_array);
-    assert!(sheets.is_none(),
-        "printset.classify result has no 'sheets' key — old code was broken");
+    assert!(sheets.is_none(), "printset.classify result has no 'sheets' key — old code was broken");
     assert_eq!(sheets.map_or(0, Vec::len), 0);
 }
 
@@ -863,20 +861,15 @@ fn stage_error_has_recovery_actions() {
     // Every stage should have at least "Retry" and "Skip" actions.
     for &stage in StageName::ALL.iter() {
         let actions = stage_error_actions(stage);
-        assert!(actions.len() >= 2,
-            "{:?} error should have ≥2 actions, got {}", stage, actions.len());
-        assert!(actions.iter().any(|a| a.contains("Retry")),
-            "{:?} error should have a Retry action", stage);
-        assert!(actions.iter().any(|a| a.contains("Skip")),
-            "{:?} error should have a Skip action", stage);
+        assert!(actions.len() >= 2, "{:?} error should have ≥2 actions, got {}", stage, actions.len());
+        assert!(actions.iter().any(|a| a.contains("Retry")), "{:?} error should have a Retry action", stage);
+        assert!(actions.iter().any(|a| a.contains("Skip")), "{:?} error should have a Skip action", stage);
     }
 
     // Classify should also offer re-import and manual discipline.
     let classify_actions = stage_error_actions(StageName::Classify);
-    assert!(classify_actions.len() >= 4,
-        "classify error should have ≥4 actions");
-    assert!(classify_actions.iter().any(|a| a.contains("discipline")),
-        "classify error should offer manual discipline");
+    assert!(classify_actions.len() >= 4, "classify error should have ≥4 actions");
+    assert!(classify_actions.iter().any(|a| a.contains("discipline")), "classify error should offer manual discipline");
 }
 
 /// Test (RW2 MUST 2): Stage error produces a blocking worklist finding
@@ -900,9 +893,7 @@ fn stage_error_finding_has_evidence_and_is_blocking() {
         tiled_crops: None,
         leftovers: Vec::new(),
     });
-    job.add_finding(stage, msg,
-        "Stage encountered an error and could not complete",
-        5, actions, evidence, true);
+    job.add_finding(stage, msg, "Stage encountered an error and could not complete", 5, actions, evidence, true);
 
     assert_eq!(job.findings.len(), 1);
     assert!(job.findings[0].blocking, "error finding must be blocking");
@@ -940,29 +931,27 @@ fn real_e4_classify_to_levels() {
     }));
 
     // Sheet count is 1 — no error finding.
-    let sheet_count = job.sheets.as_ref()
-        .and_then(|v| v.get("sheets"))
-        .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len);
+    let sheet_count = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(serde_json::Value::as_array).map_or(0, Vec::len);
     assert_eq!(sheet_count, 1);
 
     // Discipline is E.
-    let disc = job.sheets.as_ref().unwrap()["sheets"][0]["discipline"]
-        .as_str().unwrap();
+    let disc = job.sheets.as_ref().unwrap()["sheets"][0]["discipline"].as_str().unwrap();
     assert_eq!(disc, "E");
 
     // Levels extraction from title finds 3 and 4.
-    let title = job.sheets.as_ref().unwrap()["sheets"][0]["title"]
-        .as_str().unwrap();
+    let title = job.sheets.as_ref().unwrap()["sheets"][0]["title"].as_str().unwrap();
     let levels = extract_levels_from_title(title);
     assert!(levels.contains(&"3".to_string()), "expected level 3");
     assert!(levels.contains(&"4".to_string()), "expected level 4");
 
     // Mark classify done (no 0-sheets error), advance to levels.
-    if let Some(st) = job.stage_mut(StageName::Import) { st.status = StageStatus::Done; }
-    if let Some(st) = job.stage_mut(StageName::Classify) { st.status = StageStatus::Done; }
+    if let Some(st) = job.stage_mut(StageName::Import) {
+        st.status = StageStatus::Done;
+    }
+    if let Some(st) = job.stage_mut(StageName::Classify) {
+        st.status = StageStatus::Done;
+    }
 
     // No blocking findings.
-    assert!(job.findings.iter().all(|f| !f.blocking),
-        "no blocking findings after successful classify");
+    assert!(job.findings.iter().all(|f| !f.blocking), "no blocking findings after successful classify");
 }

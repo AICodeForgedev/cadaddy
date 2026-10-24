@@ -39,7 +39,8 @@ pub enum Source {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask share-page (<project.cdy|.ifc> | --sample | --hotel) --out DIR [--title TITLE] [--allow-download] [--no-strip] [--debug]".into()
+    "usage: cargo xtask share-page (<project.cdy|.ifc> | --sample | --hotel) --out DIR [--title TITLE] [--allow-download] [--no-strip] [--debug]"
+        .into()
 }
 
 pub fn parse(rest: &[&str]) -> Result<Options, String> {
@@ -200,7 +201,9 @@ fn model(root: &Path, o: &Options) -> Result<String, String> {
             let src = match &o.source {
                 Source::File(f) => f.clone(),
                 _ => {
-                    let f = o.out.with_file_name(format!("{}-sample.ifc", o.out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+                    let f = o
+                        .out
+                        .with_file_name(format!("{}-sample.ifc", o.out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
                     ok(Command::new(&cli).args(["sample", "shareproject"]).arg(&f), "cadaddy-cli sample shareproject")?;
                     f
                 }

@@ -56,18 +56,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     // Tab bar.
     ui.horizontal(|ui| {
-        for (tab, label) in [
-            (Tab::Worklist, "Worklist"),
-            (Tab::Progress, "Progress"),
-            (Tab::Findings, "Findings"),
-            (Tab::Rules, "Rules"),
-        ] {
+        for (tab, label) in [(Tab::Worklist, "Worklist"), (Tab::Progress, "Progress"), (Tab::Findings, "Findings"), (Tab::Rules, "Rules")] {
             let selected = st.tab == tab;
-            let text = if selected {
-                RichText::new(crate::i18n::t(label)).color(t.accent)
-            } else {
-                RichText::new(crate::i18n::t(label)).color(t.text_dim)
-            };
+            let text =
+                if selected { RichText::new(crate::i18n::t(label)).color(t.accent) } else { RichText::new(crate::i18n::t(label)).color(t.text_dim) };
             if ui.selectable_label(selected, text).clicked() {
                 st.tab = tab;
             }
@@ -97,19 +89,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(act) = action
         && let Some(cmd) = act.get("command").and_then(Value::as_str)
     {
-            let params = act.get("params").cloned().unwrap_or(json!({}));
-            match app.session.execute(cmd, &params) {
-                Ok(_) => {
-                    // Invalidate cache after action.
-                    st.status = None;
-                    st.worklist = None;
-                    st.findings = None;
-                    st.error = None;
-                }
-                Err(e) => {
-                    st.error = Some(e.to_string());
-                }
+        let params = act.get("params").cloned().unwrap_or(json!({}));
+        match app.session.execute(cmd, &params) {
+            Ok(_) => {
+                // Invalidate cache after action.
+                st.status = None;
+                st.worklist = None;
+                st.findings = None;
+                st.error = None;
             }
+            Err(e) => {
+                st.error = Some(e.to_string());
+            }
+        }
     }
 
     if let Some(err) = &st.error {
@@ -147,11 +139,7 @@ fn show_worklist(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens
 
     // Items.
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let items = st.worklist.as_ref()
-            .and_then(|w| w.get("items"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let items = st.worklist.as_ref().and_then(|w| w.get("items")).and_then(Value::as_array).cloned().unwrap_or_default();
 
         if items.is_empty() {
             ui.label(crate::i18n::t("No items."));
@@ -191,9 +179,7 @@ fn show_worklist(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens
                 // Evidence (values).
                 if let Some(ev) = item.get("evidence").filter(|v| !v.is_null()) {
                     if let Some(vals) = ev.get("values") {
-                        ui.label(RichText::new(
-                            serde_json::to_string_pretty(vals).unwrap_or_default()
-                        ).monospace().small());
+                        ui.label(RichText::new(serde_json::to_string_pretty(vals).unwrap_or_default()).monospace().small());
                     }
                     if let Some(sheet) = ev.get("sheet").and_then(Value::as_str) {
                         ui.label(RichText::new(format!("Sheet: {sheet}")).small());
@@ -289,8 +275,7 @@ fn show_progress(ui: &mut egui::Ui, st: &State, t: &Tokens) {
                 ui.colored_label(color, RichText::new(st_status).small().monospace());
                 ui.label(name);
                 if unanswered > 0 {
-                    ui.colored_label(egui::Color32::from_rgb(220, 160, 40),
-                        RichText::new(format!("{unanswered} pending")).small());
+                    ui.colored_label(egui::Color32::from_rgb(220, 160, 40), RichText::new(format!("{unanswered} pending")).small());
                 }
             });
         }
@@ -309,22 +294,17 @@ fn show_progress(ui: &mut egui::Ui, st: &State, t: &Tokens) {
 fn show_findings(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
     if st.findings.is_none() {
         // Findings come from job.worklist filtered to kind=finding.
-        st.findings = app.session.execute("job.worklist", &json!({})).ok()
-            .map(|v| {
-                let items = v.get("items").and_then(Value::as_array)
-                    .map(|arr| arr.iter()
-                        .filter(|i| i.get("kind").and_then(Value::as_str) == Some("finding"))
-                        .cloned().collect::<Vec<_>>())
-                    .unwrap_or_default();
-                json!({"items": items})
-            });
+        st.findings = app.session.execute("job.worklist", &json!({})).ok().map(|v| {
+            let items = v
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter(|i| i.get("kind").and_then(Value::as_str) == Some("finding")).cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            json!({"items": items})
+        });
     }
 
-    let items = st.findings.as_ref()
-        .and_then(|f| f.get("items"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let items = st.findings.as_ref().and_then(|f| f.get("items")).and_then(Value::as_array).cloned().unwrap_or_default();
 
     if items.is_empty() {
         ui.label("No findings.");
@@ -342,8 +322,7 @@ fn show_findings(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens
 
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::from_rgb(220, 160, 40),
-                        RichText::new("finding").strong().small());
+                    ui.colored_label(egui::Color32::from_rgb(220, 160, 40), RichText::new("finding").strong().small());
                     ui.colored_label(t.text_dim, RichText::new(stage).small());
                     ui.colored_label(t.text_dim, RichText::new(status).small());
                 });
@@ -358,11 +337,7 @@ fn show_rules(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
         st.rules = app.session.execute("job.rules", &json!({})).ok();
     }
 
-    let rules = st.rules.as_ref()
-        .and_then(|r| r.get("rules"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let rules = st.rules.as_ref().and_then(|r| r.get("rules")).and_then(Value::as_array).cloned().unwrap_or_default();
 
     if rules.is_empty() {
         ui.label("No rules learned yet.");

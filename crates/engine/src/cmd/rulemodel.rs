@@ -459,18 +459,8 @@ pub fn electrical_rules() -> RulePack {
         id: "elec-raceway-emt-exposed".into(),
         description: "EMT for exposed locations".into(),
         priority: RulePriority::Spec,
-        condition: RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Electrical),
-            location: "exposed".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "racewayMaterial".into(),
-            value: "EMT".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), location: "exposed".into(), ..Default::default() },
+        action: RuleAction { kind: "set_property".into(), key: "racewayMaterial".into(), value: "EMT".into(), ..Default::default() },
         source: "Spec 26 05 33".into(),
         confidence: 0.95,
     });
@@ -478,18 +468,8 @@ pub fn electrical_rules() -> RulePack {
         id: "elec-raceway-mc-concealed".into(),
         description: "MC cable for concealed locations".into(),
         priority: RulePriority::Spec,
-        condition: RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Electrical),
-            location: "concealed".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "racewayMaterial".into(),
-            value: "MC cable".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), location: "concealed".into(), ..Default::default() },
+        action: RuleAction { kind: "set_property".into(), key: "racewayMaterial".into(), value: "MC cable".into(), ..Default::default() },
         source: "Spec 26 05 33".into(),
         confidence: 0.95,
     });
@@ -499,12 +479,7 @@ pub fn electrical_rules() -> RulePack {
         id: "elec-support-spacing-emt".into(),
         description: "EMT support spacing: max 10 ft between supports, max 3 ft from boxes".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Electrical),
-            material: "EMT".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), material: "EMT".into(), ..Default::default() },
         action: RuleAction {
             kind: "set_spacing".into(),
             key: "support_spacing_ft".into(),
@@ -519,19 +494,8 @@ pub fn electrical_rules() -> RulePack {
         id: "elec-support-spacing-mc".into(),
         description: "MC cable support spacing: max 6 ft between supports, max 12 in from boxes".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Electrical),
-            material: "MC".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "support_spacing_ft".into(),
-            numeric: Some(6.0),
-            max: Some(1.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), material: "MC".into(), ..Default::default() },
+        action: RuleAction { kind: "set_spacing".into(), key: "support_spacing_ft".into(), numeric: Some(6.0), max: Some(1.0), ..Default::default() },
         source: "NEC 330.30".into(),
         confidence: 1.0,
     });
@@ -542,12 +506,7 @@ pub fn electrical_rules() -> RulePack {
         description: "Conduit fill per NEC Chapter 9: 1 wire 53%, 2 wires 31%, 3+ wires 40%".into(),
         priority: RulePriority::Code,
         condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), ..Default::default() },
-        action: RuleAction {
-            kind: "check".into(),
-            key: "conduit_fill_pct".into(),
-            value: "40".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "check".into(), key: "conduit_fill_pct".into(), value: "40".into(), ..Default::default() },
         source: "NEC Chapter 9 Table 1".into(),
         confidence: 1.0,
     });
@@ -574,12 +533,7 @@ pub fn electrical_rules() -> RulePack {
             properties: [("breaker_amps".into(), "20".into())].into(),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "conductorSize".into(),
-            value: "#12 AWG".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_property".into(), key: "conductorSize".into(), value: "#12 AWG".into(), ..Default::default() },
         source: "NEC 240.4(D)".into(),
         confidence: 1.0,
     });
@@ -593,12 +547,7 @@ pub fn electrical_rules() -> RulePack {
             properties: [("breaker_amps".into(), "15".into())].into(),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "conductorSize".into(),
-            value: "#14 AWG".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_property".into(), key: "conductorSize".into(), value: "#14 AWG".into(), ..Default::default() },
         source: "NEC 240.4(D)".into(),
         confidence: 1.0,
     });
@@ -609,11 +558,7 @@ pub fn electrical_rules() -> RulePack {
         description: "Home-run conductors grouped per circuit tag on the panel schedule".into(),
         priority: RulePriority::PrintFact,
         condition: RuleCondition { category: "homerun".into(), trade: Some(Trade::Electrical), ..Default::default() },
-        action: RuleAction {
-            kind: "route".into(),
-            value: "group_by_circuit".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "route".into(), value: "group_by_circuit".into(), ..Default::default() },
         source: "Panel schedule".into(),
         confidence: 0.9,
     });
@@ -721,13 +666,7 @@ pub fn plumbing_rules() -> RulePack {
             size_range: Some([0.5, 3.0]),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "slope".into(),
-            value: "1/4\"/ft".into(),
-            numeric: Some(0.25),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_property".into(), key: "slope".into(), value: "1/4\"/ft".into(), numeric: Some(0.25), ..Default::default() },
         source: "IPC 704.1".into(),
         confidence: 1.0,
     });
@@ -742,13 +681,7 @@ pub fn plumbing_rules() -> RulePack {
             size_range: Some([4.0, 24.0]),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_property".into(),
-            key: "slope".into(),
-            value: "1/8\"/ft".into(),
-            numeric: Some(0.125),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_property".into(), key: "slope".into(), value: "1/8\"/ft".into(), numeric: Some(0.125), ..Default::default() },
         source: "IPC 704.1".into(),
         confidence: 1.0,
     });
@@ -758,11 +691,7 @@ pub fn plumbing_rules() -> RulePack {
         id: "plumb-vent-required".into(),
         description: "Every fixture trap requires a vent within the developed length".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "fixture".into(),
-            trade: Some(Trade::Plumbing),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "fixture".into(), trade: Some(Trade::Plumbing), ..Default::default() },
         action: RuleAction { kind: "check".into(), key: "vent_required".into(), ..Default::default() },
         source: "IPC 906".into(),
         confidence: 1.0,
@@ -815,12 +744,7 @@ pub fn plumbing_rules() -> RulePack {
             size_range: Some([0.5, 1.5]),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(6.0),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(6.0), ..Default::default() },
         source: "IPC Table 308.5".into(),
         confidence: 1.0,
     });
@@ -835,12 +759,7 @@ pub fn plumbing_rules() -> RulePack {
             size_range: Some([2.0, 12.0]),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(10.0),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(10.0), ..Default::default() },
         source: "IPC Table 308.5".into(),
         confidence: 1.0,
     });
@@ -848,18 +767,8 @@ pub fn plumbing_rules() -> RulePack {
         id: "plumb-hanger-steel".into(),
         description: "Steel pipe hanger spacing 12 ft".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::Plumbing),
-            material: "steel".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(12.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::Plumbing), material: "steel".into(), ..Default::default() },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(12.0), ..Default::default() },
         source: "IPC Table 308.5".into(),
         confidence: 1.0,
     });
@@ -867,18 +776,8 @@ pub fn plumbing_rules() -> RulePack {
         id: "plumb-hanger-pvc".into(),
         description: "PVC pipe hanger spacing 4 ft".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::Plumbing),
-            material: "PVC".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(4.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::Plumbing), material: "PVC".into(), ..Default::default() },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(4.0), ..Default::default() },
         source: "IPC Table 308.5".into(),
         confidence: 1.0,
     });
@@ -903,12 +802,7 @@ pub fn mechanical_rules() -> RulePack {
             properties: [("tagged_size".into(), "*".into())].into(),
             ..Default::default()
         },
-        action: RuleAction {
-            kind: "set_size".into(),
-            key: "size".into(),
-            value: "from_tag".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "set_size".into(), key: "size".into(), value: "from_tag".into(), ..Default::default() },
         source: "Drawing tag".into(),
         confidence: 1.0,
     });
@@ -918,18 +812,8 @@ pub fn mechanical_rules() -> RulePack {
         id: "mech-duct-branch-cfm".into(),
         description: "When untagged, size branch ducts from CFM (round: low-velocity table)".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "duct".into(),
-            trade: Some(Trade::Mechanical),
-            system: "branch_duct".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_size".into(),
-            key: "size".into(),
-            value: "from_cfm".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "duct".into(), trade: Some(Trade::Mechanical), system: "branch_duct".into(), ..Default::default() },
+        action: RuleAction { kind: "set_size".into(), key: "size".into(), value: "from_cfm".into(), ..Default::default() },
         source: "SMACNA low velocity sizing".into(),
         confidence: 0.85,
     });
@@ -939,18 +823,8 @@ pub fn mechanical_rules() -> RulePack {
         id: "mech-flex-to-diffuser".into(),
         description: "Flex duct from branch to diffuser, max 6 ft".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "duct".into(),
-            trade: Some(Trade::Mechanical),
-            system: "flex".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "check".into(),
-            key: "max_length_ft".into(),
-            numeric: Some(6.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "duct".into(), trade: Some(Trade::Mechanical), system: "flex".into(), ..Default::default() },
+        action: RuleAction { kind: "check".into(), key: "max_length_ft".into(), numeric: Some(6.0), ..Default::default() },
         source: "SMACNA / energy code".into(),
         confidence: 0.9,
     });
@@ -961,11 +835,7 @@ pub fn mechanical_rules() -> RulePack {
         description: "Mechanical equipment requires service clearance per manufacturer".into(),
         priority: RulePriority::Code,
         condition: RuleCondition { category: "equipment".into(), trade: Some(Trade::Mechanical), ..Default::default() },
-        action: RuleAction {
-            kind: "check".into(),
-            key: "equipment_clearance".into(),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "check".into(), key: "equipment_clearance".into(), ..Default::default() },
         source: "Manufacturer data / IMC".into(),
         confidence: 0.8,
     });
@@ -975,18 +845,8 @@ pub fn mechanical_rules() -> RulePack {
         id: "mech-hanger-rect-small".into(),
         description: "Rectangular duct ≤30\" wide: hangers every 8 ft".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "duct".into(),
-            trade: Some(Trade::Mechanical),
-            size_range: Some([4.0, 30.0]),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(8.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "duct".into(), trade: Some(Trade::Mechanical), size_range: Some([4.0, 30.0]), ..Default::default() },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(8.0), ..Default::default() },
         source: "SMACNA HVAC Duct Construction Standards".into(),
         confidence: 1.0,
     });
@@ -994,18 +854,8 @@ pub fn mechanical_rules() -> RulePack {
         id: "mech-hanger-rect-large".into(),
         description: "Rectangular duct >30\" wide: hangers every 4 ft".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "duct".into(),
-            trade: Some(Trade::Mechanical),
-            size_range: Some([31.0, 120.0]),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_spacing".into(),
-            key: "hanger_spacing_ft".into(),
-            numeric: Some(4.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "duct".into(), trade: Some(Trade::Mechanical), size_range: Some([31.0, 120.0]), ..Default::default() },
+        action: RuleAction { kind: "set_spacing".into(), key: "hanger_spacing_ft".into(), numeric: Some(4.0), ..Default::default() },
         source: "SMACNA HVAC Duct Construction Standards".into(),
         confidence: 1.0,
     });
@@ -1023,18 +873,8 @@ pub fn fire_protection_rules() -> RulePack {
         id: "fp-branch-from-schedule".into(),
         description: "Branch pipe size from NFPA pipe schedule by head count".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::FireProtection),
-            system: "branch".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_size".into(),
-            key: "size".into(),
-            value: "from_head_count".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::FireProtection), system: "branch".into(), ..Default::default() },
+        action: RuleAction { kind: "set_size".into(), key: "size".into(), value: "from_head_count".into(), ..Default::default() },
         source: "NFPA 13 Table 22.7.5.0.1".into(),
         confidence: 0.95,
     });
@@ -1066,18 +906,8 @@ pub fn fire_protection_rules() -> RulePack {
         id: "fp-main-size".into(),
         description: "FP main pipe sized for total downstream head count".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::FireProtection),
-            system: "main".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "set_size".into(),
-            key: "size".into(),
-            value: "from_head_count".into(),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::FireProtection), system: "main".into(), ..Default::default() },
+        action: RuleAction { kind: "set_size".into(), key: "size".into(), value: "from_head_count".into(), ..Default::default() },
         source: "NFPA 13 pipe schedule".into(),
         confidence: 0.95,
     });
@@ -1101,19 +931,8 @@ pub fn coordination_rules() -> RulePack {
         id: "coord-band-gravity".into(),
         description: "Gravity pipe (sanitary, storm) gets lowest band — it cannot change slope".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::Coordination),
-            system: "gravity".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "yield_to".into(),
-            key: "elevation_band".into(),
-            value: "1".into(),
-            numeric: Some(1.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::Coordination), system: "gravity".into(), ..Default::default() },
+        action: RuleAction { kind: "yield_to".into(), key: "elevation_band".into(), value: "1".into(), numeric: Some(1.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1121,18 +940,8 @@ pub fn coordination_rules() -> RulePack {
         id: "coord-band-duct".into(),
         description: "Ductwork gets second band (above gravity pipe)".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "duct".into(),
-            trade: Some(Trade::Coordination),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "yield_to".into(),
-            key: "elevation_band".into(),
-            value: "2".into(),
-            numeric: Some(2.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "duct".into(), trade: Some(Trade::Coordination), ..Default::default() },
+        action: RuleAction { kind: "yield_to".into(), key: "elevation_band".into(), value: "2".into(), numeric: Some(2.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1140,19 +949,8 @@ pub fn coordination_rules() -> RulePack {
         id: "coord-band-pressure-pipe".into(),
         description: "Pressure pipe gets third band".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "pipe".into(),
-            trade: Some(Trade::Coordination),
-            system: "pressure".into(),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "yield_to".into(),
-            key: "elevation_band".into(),
-            value: "3".into(),
-            numeric: Some(3.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "pipe".into(), trade: Some(Trade::Coordination), system: "pressure".into(), ..Default::default() },
+        action: RuleAction { kind: "yield_to".into(), key: "elevation_band".into(), value: "3".into(), numeric: Some(3.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1160,18 +958,8 @@ pub fn coordination_rules() -> RulePack {
         id: "coord-band-tray".into(),
         description: "Cable tray gets fourth band".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "tray".into(),
-            trade: Some(Trade::Coordination),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "yield_to".into(),
-            key: "elevation_band".into(),
-            value: "4".into(),
-            numeric: Some(4.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "tray".into(), trade: Some(Trade::Coordination), ..Default::default() },
+        action: RuleAction { kind: "yield_to".into(), key: "elevation_band".into(), value: "4".into(), numeric: Some(4.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1179,18 +967,8 @@ pub fn coordination_rules() -> RulePack {
         id: "coord-band-conduit".into(),
         description: "Conduit gets fifth (lowest-priority) band".into(),
         priority: RulePriority::Code,
-        condition: RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Coordination),
-            ..Default::default()
-        },
-        action: RuleAction {
-            kind: "yield_to".into(),
-            key: "elevation_band".into(),
-            value: "5".into(),
-            numeric: Some(5.0),
-            ..Default::default()
-        },
+        condition: RuleCondition { category: "conduit".into(), trade: Some(Trade::Coordination), ..Default::default() },
+        action: RuleAction { kind: "yield_to".into(), key: "elevation_band".into(), value: "5".into(), numeric: Some(5.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1201,12 +979,7 @@ pub fn coordination_rules() -> RulePack {
         description: "Minimum 2\" clearance between MEP and structure".into(),
         priority: RulePriority::Code,
         condition: RuleCondition { trade: Some(Trade::Coordination), ..Default::default() },
-        action: RuleAction {
-            kind: "check".into(),
-            key: "clearance_to_structure_in".into(),
-            numeric: Some(2.0),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "check".into(), key: "clearance_to_structure_in".into(), numeric: Some(2.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1215,12 +988,7 @@ pub fn coordination_rules() -> RulePack {
         description: "Minimum 1\" clearance between MEP and ceiling".into(),
         priority: RulePriority::Code,
         condition: RuleCondition { trade: Some(Trade::Coordination), ..Default::default() },
-        action: RuleAction {
-            kind: "check".into(),
-            key: "clearance_to_ceiling_in".into(),
-            numeric: Some(1.0),
-            ..Default::default()
-        },
+        action: RuleAction { kind: "check".into(), key: "clearance_to_ceiling_in".into(), numeric: Some(1.0), ..Default::default() },
         source: "Coordination practice".into(),
         confidence: 1.0,
     });
@@ -1264,11 +1032,7 @@ fn load_state(d: &cadaddy_doc::Drawing) -> RuleModelState {
             // The agent field may contain both the review state and the rulemodel state.
             // Try to extract the rulemodel portion.
             let v: Value = serde_json::from_str(text).ok()?;
-            if let Some(rm) = v.get("rulemodel") {
-                serde_json::from_value(rm.clone()).ok()
-            } else {
-                None
-            }
+            if let Some(rm) = v.get("rulemodel") { serde_json::from_value(rm.clone()).ok() } else { None }
         })
         .unwrap_or_else(|| RuleModelState { threshold: DEFAULT_THRESHOLD, ..Default::default() })
 }
@@ -1298,7 +1062,16 @@ fn fnv(s: &str) -> String {
 // ── rule evaluation ──────────────────────────────────────────────────────────
 
 /// Check if a rule condition matches an element's properties.
-pub fn condition_matches(cond: &RuleCondition, elem_cat: &str, elem_sys: &str, elem_trade: Trade, elem_loc: &str, elem_mat: &str, elem_size: f64, elem_props: &BTreeMap<String, String>) -> bool {
+pub fn condition_matches(
+    cond: &RuleCondition,
+    elem_cat: &str,
+    elem_sys: &str,
+    elem_trade: Trade,
+    elem_loc: &str,
+    elem_mat: &str,
+    elem_size: f64,
+    elem_props: &BTreeMap<String, String>,
+) -> bool {
     if !cond.category.is_empty() && !cond.category.eq_ignore_ascii_case(elem_cat) {
         return false;
     }
@@ -1383,20 +1156,15 @@ pub fn evaluate_rules(packs: &[RulePack], threshold: f64) -> EvalResult {
                         level: String::new(),
                         severity: if rule.confidence < 0.5 { "high" } else { "medium" }.into(),
                         title: format!("{}: {} (confidence {:.0}%)", trade.label(), rule.description, rule.confidence * 100.0),
-                        detail: format!("Rule {} has confidence {:.2}, below threshold {:.2}. Source: {}", rule.id, rule.confidence, threshold, rule.source),
+                        detail: format!(
+                            "Rule {} has confidence {:.2}, below threshold {:.2}. Source: {}",
+                            rule.id, rule.confidence, threshold, rule.source
+                        ),
                         elements: vec![elem.id.clone()],
                         proposed: rule.action.value.clone(),
                         alternatives: vec![
-                            ActionOption {
-                                label: "Accept rule's proposal".into(),
-                                action: "accept".into(),
-                                params: BTreeMap::new(),
-                            },
-                            ActionOption {
-                                label: "Override with spec value".into(),
-                                action: "override".into(),
-                                params: BTreeMap::new(),
-                            },
+                            ActionOption { label: "Accept rule's proposal".into(), action: "accept".into(), params: BTreeMap::new() },
+                            ActionOption { label: "Override with spec value".into(), action: "override".into(), params: BTreeMap::new() },
                         ],
                         status: "open".into(),
                         resolution: None,
@@ -1582,27 +1350,20 @@ fn apply_action(_s: &mut Session, action: &str, _target: &str, _params: &Value) 
     // Each action validates, executes, is undoable, re-checks affected clashes/quantities,
     // and returns the delta.
     match action {
-        "accept" => {
-            Ok(json!({"status": "accepted", "note": "Rule proposal accepted"}))
-        }
-        "reject" => {
-            Ok(json!({"status": "rejected", "note": "Rule proposal rejected"}))
-        }
+        "accept" => Ok(json!({"status": "accepted", "note": "Rule proposal accepted"})),
+        "reject" => Ok(json!({"status": "rejected", "note": "Rule proposal rejected"})),
         "write_rule" => {
             // Save the agent's decision as a project rule.
             Ok(json!({"status": "saved", "note": "Decision saved as project rule"}))
         }
-        "select" => {
-            Ok(json!({"status": "ok", "note": "Selection applied"}))
-        }
-        "move" | "resize" | "reroute" | "change_elevation" | "split" | "join" | "swap_type" | "add" | "delete" | "assign_circuit" | "rerun_rules" | "teach_symbol" => {
+        "select" => Ok(json!({"status": "ok", "note": "Selection applied"})),
+        "move" | "resize" | "reroute" | "change_elevation" | "split" | "join" | "swap_type" | "add" | "delete" | "assign_circuit" | "rerun_rules"
+        | "teach_symbol" => {
             // In production these would modify the actual drawing/model.
             // For now, return success with the action name.
             Ok(json!({"status": "ok", "action": action, "note": format!("Action '{}' applied", action)}))
         }
-        _ => {
-            Err(bad("rules.action", format!("Unknown action: {action}")))
-        }
+        _ => Err(bad("rules.action", format!("Unknown action: {action}"))),
     }
 }
 
@@ -1634,11 +1395,7 @@ pub fn specs() -> Vec<CommandSpec> {
 fn run_packs(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = load_state(s.doc()?);
 
-    let loaded: Vec<Value> = st
-        .packs
-        .iter()
-        .map(|p| json!({"id": p.id, "label": p.label, "trade": p.trade, "ruleCount": p.rules.len()}))
-        .collect();
+    let loaded: Vec<Value> = st.packs.iter().map(|p| json!({"id": p.id, "label": p.label, "trade": p.trade, "ruleCount": p.rules.len()})).collect();
 
     let builtins = builtin_packs();
     let available: Vec<Value> = builtins
@@ -1926,12 +1683,7 @@ mod tests {
 
     #[test]
     fn condition_matching() {
-        let cond = RuleCondition {
-            category: "conduit".into(),
-            trade: Some(Trade::Electrical),
-            material: "EMT".into(),
-            ..Default::default()
-        };
+        let cond = RuleCondition { category: "conduit".into(), trade: Some(Trade::Electrical), material: "EMT".into(), ..Default::default() };
         let props = BTreeMap::new();
         assert!(condition_matches(&cond, "conduit", "", Trade::Electrical, "", "EMT", 0.0, &props));
         assert!(!condition_matches(&cond, "pipe", "", Trade::Electrical, "", "EMT", 0.0, &props));
@@ -1941,11 +1693,7 @@ mod tests {
 
     #[test]
     fn condition_size_range() {
-        let cond = RuleCondition {
-            category: "pipe".into(),
-            size_range: Some([0.5, 3.0]),
-            ..Default::default()
-        };
+        let cond = RuleCondition { category: "pipe".into(), size_range: Some([0.5, 3.0]), ..Default::default() };
         let props = BTreeMap::new();
         assert!(condition_matches(&cond, "pipe", "", Trade::Plumbing, "", "", 2.0, &props));
         assert!(!condition_matches(&cond, "pipe", "", Trade::Plumbing, "", "", 4.0, &props));
@@ -1955,11 +1703,8 @@ mod tests {
 
     #[test]
     fn condition_property_match() {
-        let cond = RuleCondition {
-            category: "device".into(),
-            properties: [("device_type".into(), "receptacle".into())].into(),
-            ..Default::default()
-        };
+        let cond =
+            RuleCondition { category: "device".into(), properties: [("device_type".into(), "receptacle".into())].into(), ..Default::default() };
         let props: BTreeMap<String, String> = [("device_type".into(), "receptacle".into())].into();
         assert!(condition_matches(&cond, "device", "", Trade::Electrical, "", "", 0.0, &props));
 
@@ -1969,10 +1714,7 @@ mod tests {
 
     #[test]
     fn condition_wildcard_property() {
-        let cond = RuleCondition {
-            properties: [("tagged_size".into(), "*".into())].into(),
-            ..Default::default()
-        };
+        let cond = RuleCondition { properties: [("tagged_size".into(), "*".into())].into(), ..Default::default() };
         let props: BTreeMap<String, String> = [("tagged_size".into(), "24x12".into())].into();
         assert!(condition_matches(&cond, "", "", Trade::Mechanical, "", "", 0.0, &props));
 
@@ -1991,11 +1733,7 @@ mod tests {
 
         // Every trade should be represented.
         for trade in Trade::ALL {
-            assert!(
-                result.summary.contains_key(trade.as_str()),
-                "missing summary for {}",
-                trade.as_str()
-            );
+            assert!(result.summary.contains_key(trade.as_str()), "missing summary for {}", trade.as_str());
         }
     }
 
@@ -2152,12 +1890,7 @@ mod tests {
         assert_eq!(finding.status, "open");
 
         finding.status = "resolved".into();
-        finding.resolution = Some(Resolution {
-            action: "accept".into(),
-            author: "agent".into(),
-            citation: String::new(),
-            save_as_rule: true,
-        });
+        finding.resolution = Some(Resolution { action: "accept".into(), author: "agent".into(), citation: String::new(), save_as_rule: true });
         assert_eq!(finding.status, "resolved");
         assert!(finding.resolution.as_ref().map_or(false, |r| r.save_as_rule));
     }
@@ -2185,13 +1918,7 @@ mod tests {
 
         assert!(total > 0, "synthetic job should produce elements");
         let pct = correct as f64 / total as f64;
-        assert!(
-            pct >= 0.95,
-            "rules alone should place ≥95% of elements correctly, got {:.1}% ({}/{})",
-            pct * 100.0,
-            correct,
-            total
-        );
+        assert!(pct >= 0.95, "rules alone should place ≥95% of elements correctly, got {:.1}% ({}/{})", pct * 100.0, correct, total);
     }
 
     /// Scripted agent session: resolve all findings, verify 0 remaining.
@@ -2204,12 +1931,8 @@ mod tests {
         for finding in &mut result.findings {
             if finding.status == "open" {
                 finding.status = "resolved".into();
-                finding.resolution = Some(Resolution {
-                    action: "accept".into(),
-                    author: "agent".into(),
-                    citation: String::new(),
-                    save_as_rule: false,
-                });
+                finding.resolution =
+                    Some(Resolution { action: "accept".into(), author: "agent".into(), citation: String::new(), save_as_rule: false });
             }
         }
 
@@ -2241,10 +1964,6 @@ mod tests {
         // On re-evaluation with the same packs, the same rules produce the same findings
         // (re-run is safe and deterministic).
         let result2 = evaluate_rules(&packs, DEFAULT_THRESHOLD);
-        assert_eq!(
-            result2.findings.len(),
-            finding_count1,
-            "re-run with same rules should produce same findings"
-        );
+        assert_eq!(result2.findings.len(), finding_count1, "re-run with same rules should produce same findings");
     }
 }

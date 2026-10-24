@@ -201,7 +201,6 @@ pub fn field_package(t: &Truth) -> FieldPackage {
     p
 }
 
-
 /// The hotel as a shared project page's model (Q350), stripped as `share.export` strips: written
 /// into `dir` (`model/`, `thumbs/`). `wings` copies of the building stand side by side (the
 /// second's rooms numbered `B…`, and so on), for a job larger than one hotel. Returns the

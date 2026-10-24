@@ -228,7 +228,11 @@ pub fn start(canvas_id: &'static str, loading_id: &'static str, manifest: String
                     viewer.progress = Some(0.0);
                     // An absolute, same-site manifest path, found from the page's own folder.
                     let path = location().and_then(|l| l.pathname().ok()).unwrap_or_default();
-                    let url = if manifest.contains("://") || manifest.starts_with('/') { manifest } else { format!("{}{manifest}", crate::folder_of(&path)) };
+                    let url = if manifest.contains("://") || manifest.starts_with('/') {
+                        manifest
+                    } else {
+                        format!("{}{manifest}", crate::folder_of(&path))
+                    };
                     let net = Net { inbox: Rc::default(), ctx: cc.egui_ctx.clone() };
                     net.get(url.clone(), Msg::Manifest);
                     let mut shell = ShareShell {
@@ -249,7 +253,9 @@ pub fn start(canvas_id: &'static str, loading_id: &'static str, manifest: String
         if let Some(el) = document.get_element_by_id(loading_id) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>The project page failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => {
+                    el.set_inner_html(&format!("<p>The project page failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
+                }
             }
         }
     });
@@ -332,9 +338,18 @@ impl ShareTest {
         self.record(
             "load",
             p.elements.len() == elements && elements > 0,
-            format!("{} elements, {} rooms, {} levels in {loaded_ms:.0} ms after the page started (from {path})", p.elements.len(), p.rooms.len(), p.levels.len()),
+            format!(
+                "{} elements, {} rooms, {} levels in {loaded_ms:.0} ms after the page started (from {path})",
+                p.elements.len(),
+                p.rooms.len(),
+                p.levels.len()
+            ),
         );
-        self.record("subpath", path.matches('/').count() >= 3 && shell.manifest_url.starts_with(&crate::folder_of(&path)), format!("manifest {}", shell.manifest_url));
+        self.record(
+            "subpath",
+            path.matches('/').count() >= 3 && shell.manifest_url.starts_with(&crate::folder_of(&path)),
+            format!("manifest {}", shell.manifest_url),
+        );
 
         // A level.
         let before = v.level_name();
@@ -403,7 +418,11 @@ impl ShareTest {
         self.done = true;
         let passed = self.results.iter().filter(|r| r["ok"] == true).count();
         let report = json!({ "steps": self.results, "passed": passed, "total": self.results.len(), "loaded_ms": shell.loaded_ms }).to_string();
-        let url = format!("{}selftest/result?data={}", crate::folder_of(&location().and_then(|l| l.pathname().ok()).unwrap_or_default()), js_sys::encode_uri_component(&report));
+        let url = format!(
+            "{}selftest/result?data={}",
+            crate::folder_of(&location().and_then(|l| l.pathname().ok()).unwrap_or_default()),
+            js_sys::encode_uri_component(&report)
+        );
         if let Some(w) = web_sys::window() {
             let _ = w.fetch_with_str(&url);
             if let Some(d) = w.document() {

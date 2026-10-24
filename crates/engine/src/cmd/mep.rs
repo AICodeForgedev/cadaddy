@@ -460,11 +460,7 @@ fn read_pipes_from_tags(
     }
 
     // Step 2: collect all line chains from any layer.
-    let all_chains = chains(
-        &ents.iter().copied().filter(|e| {
-            matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))
-        }).collect::<Vec<_>>(),
-    );
+    let all_chains = chains(&ents.iter().copied().filter(|e| matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).collect::<Vec<_>>());
 
     // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
     let reach = 6.0 * upf; // 6 feet in drawing units
@@ -481,10 +477,13 @@ fn read_pipes_from_tags(
             continue;
         }
 
-        let segs: Vec<(Vec2, Vec2)> = pts.windows(2).filter_map(|w| match w {
-            [a, b] => Some((*a, *b)),
-            _ => None,
-        }).collect();
+        let segs: Vec<(Vec2, Vec2)> = pts
+            .windows(2)
+            .filter_map(|w| match w {
+                [a, b] => Some((*a, *b)),
+                _ => None,
+            })
+            .collect();
         if segs.is_empty() {
             continue;
         }
@@ -504,10 +503,8 @@ fn read_pipes_from_tags(
         let sys_code = tag.system;
         systems_seen.insert(sys_code, true);
 
-        let (_, _, _, default_size, default_bottom) = PIPE_SYSTEMS.iter()
-            .find(|(_, code, ..)| *code == sys_code)
-            .copied()
-            .unwrap_or(("", sys_code, "", 2.0, 10.0));
+        let (_, _, _, default_size, default_bottom) =
+            PIPE_SYSTEMS.iter().find(|(_, code, ..)| *code == sys_code).copied().unwrap_or(("", sys_code, "", 2.0, 10.0));
 
         let size_in = tag.size_in.unwrap_or(default_size);
         let size_from_tag = tag.size_in.is_some();
@@ -568,22 +565,22 @@ fn read_pipes_from_tags(
     }
 
     // Build system entries for the seen codes.
-    let systems: Vec<MepSystem> = systems_seen.keys().map(|code| {
-        let (_, _, _name, size, bottom) = PIPE_SYSTEMS.iter()
-            .find(|(_, c, ..)| c == code)
-            .copied()
-            .unwrap_or(("", code, code, 2.0, 10.0));
-        MepSystem {
-            name: code.to_string(),
-            layer: format!("P-{code}"),
-            kind: MepKind::Pipe,
-            size_in: [size, 0.0],
-            bottom_ft: bottom,
-            show: true,
-            duct_type: None,
-            color_index: pipe_system_color(code),
-        }
-    }).collect();
+    let systems: Vec<MepSystem> = systems_seen
+        .keys()
+        .map(|code| {
+            let (_, _, _name, size, bottom) = PIPE_SYSTEMS.iter().find(|(_, c, ..)| c == code).copied().unwrap_or(("", code, code, 2.0, 10.0));
+            MepSystem {
+                name: code.to_string(),
+                layer: format!("P-{code}"),
+                kind: MepKind::Pipe,
+                size_in: [size, 0.0],
+                bottom_ft: bottom,
+                show: true,
+                duct_type: None,
+                color_index: pipe_system_color(code),
+            }
+        })
+        .collect();
 
     (systems, runs)
 }
@@ -612,17 +609,17 @@ fn detect_paper_upf(d: &Drawing, default_upf: f64) -> f64 {
 /// ACI colour per pipe system code (matches the trade colour table).
 fn pipe_system_color(code: &str) -> i16 {
     match code {
-        "CW" => 5,    // blue
-        "HW" => 1,    // red
-        "HWR" => 14,  // dark red
-        "SAN" => 30,  // orange
-        "V" => 3,     // green
-        "G" => 50,    // yellow
-        "FP" => 6,    // magenta
-        "ST" => 150,  // purple
-        "CHW" => 4,   // cyan
+        "CW" => 5,   // blue
+        "HW" => 1,   // red
+        "HWR" => 14, // dark red
+        "SAN" => 30, // orange
+        "V" => 3,    // green
+        "G" => 50,   // yellow
+        "FP" => 6,   // magenta
+        "ST" => 150, // purple
+        "CHW" => 4,  // cyan
         "CHWR" => 140,
-        _ => 7,       // white
+        _ => 7, // white
     }
 }
 

@@ -81,13 +81,17 @@ fn drawing_with_mep_layers() -> Session {
 
     // Building spec with one level — ceiling at 9' to create a planted clash
     // (the supply duct at BOT 10' is above the 9' ceiling).
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-             "region": [-100, -100, 1000, 1000], "base": [0, 0]},
-        ],
-        "layers": [{"layer": "A-WALL", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                 "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
     s
 }
 
@@ -133,13 +137,17 @@ fn drawing_with_pen_layers() -> Session {
     text(&mut s, [425.0, 175.0], "RTU-1");
 
     // Building spec.
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-             "region": [-100, -100, 1000, 1000], "base": [0, 0]},
-        ],
-        "layers": []
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                 "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            ],
+            "layers": []
+        }}),
+    )
+    .unwrap();
     s
 }
 
@@ -218,10 +226,14 @@ fn bim_build_mep_on_pen_layers_finds_duct() {
 fn zero_mep_produces_warning() {
     let mut s = Session::new();
     // Empty drawing with just a spec.
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-                     "region": [-100, -100, 100, 100], "base": [0, 0]}],
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                         "region": [-100, -100, 100, 100], "base": [0, 0]}],
+        }}),
+    )
+    .unwrap();
 
     let r = s.execute("bim.build", &json!({"discipline": "mep"})).unwrap();
     let warnings = r["warnings"].as_array().map_or(0, |a| a.len());
@@ -324,8 +336,12 @@ fn height_source_and_estimated_route() {
     for r in runs {
         let hs = r["height_source"].as_str().unwrap_or("default");
         eprintln!("run {} height_source: {}", r["id"].as_str().unwrap_or("?"), hs);
-        if hs == "tag" { has_tag = true; }
-        if hs == "estimated-route" || hs == "default" { has_estimated = true; }
+        if hs == "tag" {
+            has_tag = true;
+        }
+        if hs == "estimated-route" || hs == "default" {
+            has_estimated = true;
+        }
     }
     // The supply main has "BOT @ 10'-0"" and return has "BOT @ 10'-6"", so tagged runs exist.
     assert!(has_tag, "at least one run should have height_source=tag");
@@ -378,10 +394,14 @@ fn ef_wh_word_boundary_check() {
     layer(&mut s, "TEXT");
     text(&mut s, [215.0, 20.0], "EF-1");
 
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-                     "region": [-100, -100, 500, 500], "base": [0, 0]}],
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                         "region": [-100, -100, 500, 500], "base": [0, 0]}],
+        }}),
+    )
+    .unwrap();
 
     let r = s.execute("ducts.read", &json!({"apply": true})).unwrap();
     let equipment = r["equipment"].as_u64().unwrap_or(0);
@@ -419,13 +439,17 @@ fn planted_clash_detected() {
     // Override the building spec with a high ceiling (12') so the duct at BOT 10' is
     // below the ceiling line — that's a "hanging below ceiling" clash.
     // (A duct at BOT 10' with ceiling 9' is normal plenum routing, not a clash.)
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 12,
-             "region": [-100, -100, 1000, 1000], "base": [0, 0]},
-        ],
-        "layers": [{"layer": "A-WALL", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 12,
+                 "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
 
     // Build MEP (which also runs ducts.read and model.build).
     let build = s.execute("bim.build", &json!({"discipline": "mep"})).unwrap();
@@ -484,13 +508,17 @@ fn coordination_clashlist_groups_clashes() {
     let mut s = drawing_with_mep_layers();
 
     // Override ceiling to 12' so duct at BOT 10' is a clash (below ceiling).
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 12,
-             "region": [-100, -100, 1000, 1000], "base": [0, 0]},
-        ],
-        "layers": [{"layer": "A-WALL", "role": "wall"}]
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 12,
+                 "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
 
     // Build with MEP.
     s.execute("bim.build", &json!({"discipline": "mep"})).unwrap();
@@ -533,19 +561,23 @@ fn elevation_bands_override_defaults() {
     text(&mut s, [180.0, 280.0], "20x12 RA");
 
     // Set spec with custom elevation bands: duct at 11 ft instead of the default 10 ft.
-    s.execute("bspec.set", &json!({"replace": true, "spec": {
-        "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
-             "region": [-100, -100, 1000, 1000], "base": [0, 0]},
-        ],
-        "mep": {
-            "elevation_bands": [
-                {"trade": "duct", "bottom_ft": 11.0},
-                {"trade": "terminal", "bottom_ft": 9.0},
-                {"trade": "equipment", "bottom_ft": 4.0},
-            ]
-        }
-    }})).unwrap();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                 "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            ],
+            "mep": {
+                "elevation_bands": [
+                    {"trade": "duct", "bottom_ft": 11.0},
+                    {"trade": "terminal", "bottom_ft": 9.0},
+                    {"trade": "equipment", "bottom_ft": 4.0},
+                ]
+            }
+        }}),
+    )
+    .unwrap();
 
     // Apply duct runs.
     let r = s.execute("ducts.read", &json!({"apply": true})).unwrap();

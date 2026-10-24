@@ -26,7 +26,9 @@ fn main() -> ExitCode {
             "--small" => small = true,
             "--share" => share = Some(PathBuf::from(value())),
             "-h" | "--help" => {
-                println!("mep-fixtures [--seed N (1)] [--count K (1)] [--out DIR] [--hotel [--small]] [--share DIR (the hotel as a shared page's model)]");
+                println!(
+                    "mep-fixtures [--seed N (1)] [--count K (1)] [--out DIR] [--hotel [--small]] [--share DIR (the hotel as a shared page's model)]"
+                );
                 return ExitCode::SUCCESS;
             }
             other => {
@@ -40,7 +42,14 @@ fn main() -> ExitCode {
         let t = cadaddy_mepfix::hotel_truth_for(seed, size);
         return match cadaddy_mepfix::fieldpkg::write_share(&t, &dir, "Sample Hotel", 3) {
             Ok((m, r)) => {
-                println!("share: {} elements in {} parts, {} KB, {} removed -> {}", m.elements, m.parts.len(), m.total_bytes() >> 10, r.removed.len(), dir.display());
+                println!(
+                    "share: {} elements in {} parts, {} KB, {} removed -> {}",
+                    m.elements,
+                    m.parts.len(),
+                    m.total_bytes() >> 10,
+                    r.removed.len(),
+                    dir.display()
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => {

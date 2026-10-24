@@ -125,8 +125,7 @@ fn xattach_rotation_is_absolute_zero_regardless_of_angbase_and_angdir() {
     e.ok("ui.pointer", json!({ "x": 200, "y": 0 }));
     assert_eq!(prompt(&mut e), "Command:", "one pick and it's placed");
     let d = e.ok("drawing.inspect", json!({ "entities": true }));
-    let x = d["entities"].as_array().unwrap().iter().find(|x| x["type"] == "Block Reference")
-        .expect("the xref").clone();
+    let x = d["entities"].as_array().unwrap().iter().find(|x| x["type"] == "Block Reference").expect("the xref").clone();
     let g = &x["geometry"];
     assert_eq!(g["block"], "survey");
     assert_eq!(

@@ -1124,7 +1124,10 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 let spec_after = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
                 if spec_after == 0 && spec_before == 0 {
-                    mep_warnings.push("no MEP runs found in the drawing — mechanical sheets may need to be imported first, or duct lines may not be present".to_string());
+                    mep_warnings.push(
+                        "no MEP runs found in the drawing — mechanical sheets may need to be imported first, or duct lines may not be present"
+                            .to_string(),
+                    );
                 }
             }
             Err(_) => {

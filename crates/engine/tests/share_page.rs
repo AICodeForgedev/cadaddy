@@ -185,7 +185,8 @@ fn a_building_model_shares_without_its_title_block_people_or_firms() {
     let src = d.join("model.cdy");
     s.execute("saveas", &json!({"path": src.display().to_string()})).unwrap();
     let page = d.join("page");
-    let r = s.execute("share.export", &json!({"dir": page.display().to_string(), "title": "Sample Rooms", "source": src.display().to_string()})).unwrap();
+    let r =
+        s.execute("share.export", &json!({"dir": page.display().to_string(), "title": "Sample Rooms", "source": src.display().to_string()})).unwrap();
     assert_eq!((r["rooms"].clone(), r["source"].clone(), r["stripped"].clone()), (json!(2), json!("building model"), json!(true)), "{r}");
     assert!(r.get("download").is_none(), "no download unless allowed");
     let planted = ["Marigold", "Quillonby", "Lakeside Example Inn", "Fernhollow", "Bramblewood", "Zephyrine", ".pdf"];

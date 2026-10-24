@@ -103,10 +103,31 @@ pub fn share_project_ifc(floors: usize, rooms: usize) -> String {
         storeys.push(storey);
         let mut contained = Vec::new();
         let mut spaces = Vec::new();
-        contained.push(s.product("IFCSLAB", 'F', &format!("Slab L{}", f + 1), [length * 0.5, 0.0, z - 0.2], [length, room_d * 2.0 + corridor, 0.2], ".FLOOR."));
+        contained.push(s.product(
+            "IFCSLAB",
+            'F',
+            &format!("Slab L{}", f + 1),
+            [length * 0.5, 0.0, z - 0.2],
+            [length, room_d * 2.0 + corridor, 0.2],
+            ".FLOOR.",
+        ));
         for side in [-1.0, 1.0] {
-            contained.push(s.product("IFCWALL", 'W', "Corridor wall", [length * 0.5, side * corridor * 0.5, z], [length, 0.15, height], ".STANDARD."));
-            contained.push(s.product("IFCWALL", 'W', "Exterior wall", [length * 0.5, side * (corridor * 0.5 + room_d), z], [length, 0.3, height], ".STANDARD."));
+            contained.push(s.product(
+                "IFCWALL",
+                'W',
+                "Corridor wall",
+                [length * 0.5, side * corridor * 0.5, z],
+                [length, 0.15, height],
+                ".STANDARD.",
+            ));
+            contained.push(s.product(
+                "IFCWALL",
+                'W',
+                "Exterior wall",
+                [length * 0.5, side * (corridor * 0.5 + room_d), z],
+                [length, 0.3, height],
+                ".STANDARD.",
+            ));
         }
         for r in 0..rooms {
             let side = if r < half { -1.0 } else { 1.0 };
@@ -123,7 +144,8 @@ pub fn share_project_ifc(floors: usize, rooms: usize) -> String {
             let id = s.gid('R');
             s.add(format!("IFCRELDEFINESBYPROPERTIES('{id}',$,$,$,(#{space}),#{ps})"));
             contained.push(s.product("IFCWALL", 'W', "Partition", [i as f64 * room_w, y, z], [0.12, room_d, height], ".STANDARD."));
-            contained.push(s.product("IFCDOOR",
+            contained.push(s.product(
+                "IFCDOOR",
                 'D',
                 &format!("Door {number}"),
                 [x, side * corridor * 0.5, z],
@@ -143,7 +165,14 @@ pub fn share_project_ifc(floors: usize, rooms: usize) -> String {
         for c in 0..=half {
             contained.push(s.product("IFCCOLUMN", 'C', &format!("Column {}", c + 1), [c as f64 * room_w, 0.0, z], [0.4, 0.4, height], ".COLUMN."));
         }
-        let duct = s.product("IFCDUCTSEGMENT", 'M', &format!("Supply Duct L{}", f + 1), [length * 0.5, 0.0, z + height - 0.6], [length, 0.4, 0.3], ".RIGIDSEGMENT.");
+        let duct = s.product(
+            "IFCDUCTSEGMENT",
+            'M',
+            &format!("Supply Duct L{}", f + 1),
+            [length * 0.5, 0.0, z + height - 0.6],
+            [length, 0.4, 0.3],
+            ".RIGIDSEGMENT.",
+        );
         let a = s.add("IFCPROPERTYSINGLEVALUE('Status',$,IFCLABEL('New'),$)");
         let b = s.add("IFCPROPERTYSINGLEVALUE('Comments',$,IFCTEXT('Installed by Fernhollow Design Group LLC, call 555-010-0142'),$)");
         let id = s.gid('Q');

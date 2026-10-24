@@ -369,7 +369,15 @@ fn run_share(root: &Path, release: bool) -> Result<(), String> {
     let wasm = all.iter().find(|(f, _)| f.ends_with(".wasm")).map_or(0, |(_, n)| *n);
     let model: u64 = all.iter().filter(|(f, _)| f.starts_with("model/")).map(|(_, n)| n).sum();
     let ok = total <= budget;
-    println!("  {}  size: {:.1} MB in {} files (wasm {:.1} MB, model {} KB; budget {} MB)", if ok { "PASS" } else { "FAIL" }, total as f64 / 1048576.0, all.len(), wasm as f64 / 1048576.0, model >> 10, budget >> 20);
+    println!(
+        "  {}  size: {:.1} MB in {} files (wasm {:.1} MB, model {} KB; budget {} MB)",
+        if ok { "PASS" } else { "FAIL" },
+        total as f64 / 1048576.0,
+        all.len(),
+        wasm as f64 / 1048576.0,
+        model >> 10,
+        budget >> 20
+    );
     if !ok {
         failed.push("size".into());
     }
@@ -379,7 +387,13 @@ fn run_share(root: &Path, release: bool) -> Result<(), String> {
         let text = String::from_utf8_lossy(&std::fs::read(sample.join(rel)).map_err(|e| e.to_string())?).to_lowercase();
         leaks.extend(names.iter().filter(|n| text.contains(&n.to_lowercase())).map(|n| format!("{n} in {rel}")));
     }
-    println!("  {}  strip: {} planted names, none in the page's {} files {}", if leaks.is_empty() { "PASS" } else { "FAIL" }, names.len(), all.len(), leaks.join(", "));
+    println!(
+        "  {}  strip: {} planted names, none in the page's {} files {}",
+        if leaks.is_empty() { "PASS" } else { "FAIL" },
+        names.len(),
+        all.len(),
+        leaks.join(", ")
+    );
     if !leaks.is_empty() {
         failed.push("strip".into());
     }
@@ -397,7 +411,12 @@ fn run_share(root: &Path, release: bool) -> Result<(), String> {
     let served = serve_site(&site, vec!["/project/locked/model/".into()])?;
     let profile = site.join("chrome-profile");
     let runs = [
-        ("sample", "/project/sample-wing/?sharetest&webgl", "1280,800", vec!["load", "subpath", "level", "trade", "click", "search", "section", "viewlink", "3d"]),
+        (
+            "sample",
+            "/project/sample-wing/?sharetest&webgl",
+            "1280,800",
+            vec!["load", "subpath", "level", "trade", "click", "search", "section", "viewlink", "3d"],
+        ),
         ("phone", "/project/hotel/?sharetest&webgl", "390,844", vec!["load", "3d"]),
         ("laptop", "/project/hotel/?sharetest&webgl", "1440,900", vec!["load", "3d"]),
         ("locked", "/project/locked/?sharetest&webgl", "1280,800", vec!["denied"]),
@@ -409,7 +428,13 @@ fn run_share(root: &Path, release: bool) -> Result<(), String> {
                 let bad = steps(&v);
                 let have: Vec<&str> = v["steps"].as_array().into_iter().flatten().filter_map(|s| s["step"].as_str()).collect();
                 let missing: Vec<&&str> = want.iter().filter(|w| !have.contains(*w)).collect();
-                println!("  {name}: {}/{} passed in {:.1} s{}", v["passed"], v["total"], started.elapsed().as_secs_f64(), if missing.is_empty() { String::new() } else { format!(", missing {missing:?}") });
+                println!(
+                    "  {name}: {}/{} passed in {:.1} s{}",
+                    v["passed"],
+                    v["total"],
+                    started.elapsed().as_secs_f64(),
+                    if missing.is_empty() { String::new() } else { format!(", missing {missing:?}") }
+                );
                 failed.extend(bad.into_iter().map(|b| format!("{name}:{b}")));
                 failed.extend(missing.into_iter().map(|m| format!("{name}:{m} (not run)")));
             }
@@ -418,7 +443,6 @@ fn run_share(root: &Path, release: bool) -> Result<(), String> {
     }
     if failed.is_empty() { Ok(()) } else { Err(format!("shared page: {} failed: {}", failed.len(), failed.join(", "))) }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -176,8 +176,17 @@ fn issue_status(pkg: &mut FieldPackage) {
 /// The quoted strings of an IFC file's people, organisations, addresses and project, site and
 /// building entities, and its header's author and organisation.
 fn ifc_names(text: &str) -> Vec<String> {
-    const WHO: [&str; 9] =
-        ["IFCPERSON(", "IFCORGANIZATION(", "IFCPOSTALADDRESS(", "IFCTELECOMADDRESS(", "IFCPROJECT(", "IFCSITE(", "IFCBUILDING(", "IFCACTOR(", "FILE_NAME("];
+    const WHO: [&str; 9] = [
+        "IFCPERSON(",
+        "IFCORGANIZATION(",
+        "IFCPOSTALADDRESS(",
+        "IFCTELECOMADDRESS(",
+        "IFCPROJECT(",
+        "IFCSITE(",
+        "IFCBUILDING(",
+        "IFCACTOR(",
+        "FILE_NAME(",
+    ];
     let mut out = Vec::new();
     for line in text.lines().take(5_000_000) {
         let up = line.trim_start().to_ascii_uppercase();
@@ -328,7 +337,8 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut report = StripReport::default();
     if strip {
-        let known: Vec<String> = known_names(s.doc()?, source.as_deref(), source_text.as_deref()).into_iter().filter(|n| !ordinary(&pkg, n)).collect();
+        let known: Vec<String> =
+            known_names(s.doc()?, source.as_deref(), source_text.as_deref()).into_iter().filter(|n| !ordinary(&pkg, n)).collect();
         report = share::strip(&mut pkg, &title, &Scrubber::new(known));
     } else {
         pkg.project = title.clone();
@@ -351,8 +361,8 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         None
     };
-    let (manifest, files) = share::write_bundle(&dir, &pkg, &title, chunk, strip, download.as_ref().map(|(n, b)| (n.as_str(), b.as_slice())))
-        .map_err(|e| bad(CMD, e))?;
+    let (manifest, files) =
+        share::write_bundle(&dir, &pkg, &title, chunk, strip, download.as_ref().map(|(n, b)| (n.as_str(), b.as_slice()))).map_err(|e| bad(CMD, e))?;
 
     // The strip report, beside the folder (never in it: it lists what was removed).
     let mut out = json!({

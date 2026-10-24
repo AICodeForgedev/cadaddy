@@ -52,9 +52,8 @@ fn scale_note_produces_real_world_size() {
     // scale = 48 (1/4" = 1'-0" means 48 drawing inches per sheet inch)
     assert_eq!(r.scale, 48.0, "scale should be 48, got {}: {}", r.scale, r.scale_source);
     // the line in model space should be at 48x coordinates
-    let has_scaled_line = r.drawing.model.iter().any(|e| {
-        matches!(&e.kind, EntityKind::Line(l) if (l.a.x - 48.0).abs() < 1.0 && (l.b.x - 96.0).abs() < 1.0)
-    });
+    let has_scaled_line =
+        r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - 48.0).abs() < 1.0 && (l.b.x - 96.0).abs() < 1.0));
     assert!(has_scaled_line, "model-space line should be at real-world coordinates (48..96)");
     // there should be a layout with a viewport
     assert!(
@@ -84,10 +83,7 @@ fn scale_note_on_title_layer_preferred() {
 fn content_mode_assigns_class_layers() {
     // A PDF with text and geometry; in Content mode, text should go on PDF-TEXT layer
     let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 10 Tf 72 300 Td (Room 101) Tj ET Q";
-    let r = pdf_read::read(
-        &pdf_with(content),
-        &PdfOptions { layers: LayerMode::Content, ..PdfOptions::default() },
-    );
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions { layers: LayerMode::Content, ..PdfOptions::default() });
     let r = r.expect("PDF read failed");
     let layers: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
     // in Content mode, text should be on TEXT and geometry on PDF-GEOMETRY (or similar)
@@ -142,10 +138,14 @@ fn large_artifact_fills_are_removed() {
     let r = pdf_read::read(&pdf_with(content), &PdfOptions::default());
     let r = r.expect("PDF read failed");
     // the large yellow fill should have been filtered out
-    let yellow_fills = r.drawing.model.iter().filter(|e| {
-        matches!(&e.kind, EntityKind::Hatch(h) if h.solid)
-            && matches!(e.common.color, Color::True(Rgb(r, g, b)) if r > 200 && g > 200 && b < 100)
-    }).count();
+    let yellow_fills = r
+        .drawing
+        .model
+        .iter()
+        .filter(|e| {
+            matches!(&e.kind, EntityKind::Hatch(h) if h.solid) && matches!(e.common.color, Color::True(Rgb(r, g, b)) if r > 200 && g > 200 && b < 100)
+        })
+        .count();
     assert_eq!(yellow_fills, 0, "large yellow artifact fill should be removed");
     if let Some(n) = r.stats.get("artifact fills removed") {
         assert!(*n > 0, "should report artifact fills removed in stats");
@@ -176,19 +176,32 @@ fn repeated_symbols_become_blocks() {
     for (cx, cy) in [(150, 300), (250, 300), (350, 300), (450, 300)] {
         // a diamond: 4 lines forming a small shape
         let sz = 8;
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
-            cx, cy - sz, cx + sz, cy,      // bottom to right
-            cx + sz, cy, cx, cy + sz,       // right to top
-            cx, cy + sz, cx - sz, cy,       // top to left
-            cx - sz, cy, cx, cy - sz,       // left to bottom
-        ).as_bytes());
+        content.extend_from_slice(
+            format!(
+                "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                cx,
+                cy - sz,
+                cx + sz,
+                cy, // bottom to right
+                cx + sz,
+                cy,
+                cx,
+                cy + sz, // right to top
+                cx,
+                cy + sz,
+                cx - sz,
+                cy, // top to left
+                cx - sz,
+                cy,
+                cx,
+                cy - sz, // left to bottom
+            )
+            .as_bytes(),
+        );
         // add more strokes to meet the 3-stroke minimum per cluster
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S ",
-            cx - 3, cy - 3, cx + 3, cy + 3,
-            cx - 3, cy + 3, cx + 3, cy - 3,
-        ).as_bytes());
+        content.extend_from_slice(
+            format!("{} {} m {} {} l S {} {} m {} {} l S ", cx - 3, cy - 3, cx + 3, cy + 3, cx - 3, cy + 3, cx + 3, cy - 3,).as_bytes(),
+        );
     }
     // add a text label near each symbol
     for (i, (cx, _cy)) in [(150, 320), (250, 320), (350, 320), (450, 320)].iter().enumerate() {
@@ -233,17 +246,13 @@ fn basic_import_still_works() {
 fn content_layer_mode_accepted() {
     // Verify the Content layer mode option is accepted and produces layers
     let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 10 Tf 72 300 Td (Test) Tj ET Q";
-    let r = pdf_read::read(
-        &pdf_with(content),
-        &PdfOptions { layers: LayerMode::Content, ..PdfOptions::default() },
-    );
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions { layers: LayerMode::Content, ..PdfOptions::default() });
     let r = r.expect("PDF read failed");
     // in Content mode, we expect content-class layer names (E-GRID, A-WALL, TEXT, E-DEVICE, etc.)
     let layer_names: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
-    let has_content_layers = layer_names.iter().any(|n| {
-        ["E-GRID", "A-WALL", "TEXT", "E-DEVICE", "TITLEBLOCK", "HATCH", "ANNO", "PDF-GEOMETRY", "PDF-MASK", "PDF-IMAGES"]
-            .contains(n)
-    });
+    let has_content_layers = layer_names
+        .iter()
+        .any(|n| ["E-GRID", "A-WALL", "TEXT", "E-DEVICE", "TITLEBLOCK", "HATCH", "ANNO", "PDF-GEOMETRY", "PDF-MASK", "PDF-IMAGES"].contains(n));
     assert!(has_content_layers, "Content mode should produce content-class layers, got: {layer_names:?}");
 }
 
@@ -304,19 +313,32 @@ fn e_sheet_with_masks_and_tiles() -> Vec<u8> {
         let cy = 250 + (i / 10) * 150;
         // diamond
         let sz = 6;
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
-            cx, cy - sz, cx + sz, cy,
-            cx + sz, cy, cx, cy + sz,
-            cx, cy + sz, cx - sz, cy,
-            cx - sz, cy, cx, cy - sz,
-        ).as_bytes());
+        content.extend_from_slice(
+            format!(
+                "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                cx,
+                cy - sz,
+                cx + sz,
+                cy,
+                cx + sz,
+                cy,
+                cx,
+                cy + sz,
+                cx,
+                cy + sz,
+                cx - sz,
+                cy,
+                cx - sz,
+                cy,
+                cx,
+                cy - sz,
+            )
+            .as_bytes(),
+        );
         // cross
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S ",
-            cx - 3, cy - 3, cx + 3, cy + 3,
-            cx - 3, cy + 3, cx + 3, cy - 3,
-        ).as_bytes());
+        content.extend_from_slice(
+            format!("{} {} m {} {} l S {} {} m {} {} l S ", cx - 3, cy - 3, cx + 3, cy + 3, cx - 3, cy + 3, cx + 3, cy - 3,).as_bytes(),
+        );
     }
 
     content.extend_from_slice(b"Q");
@@ -404,9 +426,7 @@ fn page_clip_removes_stray_geometry() {
     let content = b"q 0 0 0 RG 1.0 w -200 100 m -100 100 l S 72 72 m 200 72 l S BT /F1 10 Tf 72 300 Td (Test) Tj ET Q";
     let r = pdf_read::read(&pdf_with(content), &PdfOptions::default()).expect("PDF read failed");
     // the line at x=-200..-100 should be clipped (outside page box [0,0,792,612])
-    let has_negative_line = r.drawing.model.iter().any(|e| {
-        matches!(&e.kind, EntityKind::Line(l) if l.a.x < -0.1 || l.b.x < -0.1)
-    });
+    let has_negative_line = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(l) if l.a.x < -0.1 || l.b.x < -0.1));
     assert!(!has_negative_line, "stray geometry outside page box should be clipped");
     // the line inside the page should still be there
     assert!(r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(_))), "in-page lines should remain");
@@ -475,17 +495,13 @@ fn hidden_text_recovers_shx_strokes() {
 
     // check that ROOM 101 was recovered (should be on the hidden text layer originally,
     // then matched to strokes and emitted as a visible text entity)
-    let _has_room = r.drawing.model.iter().any(|e| {
-        matches!(&e.kind, EntityKind::Text(t) if t.value.contains("ROOM 101"))
-    });
+    let _has_room = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.contains("ROOM 101")));
     // the recovery should have found it (when hidden text matched strokes)
     if let Some(&n) = r.stats.get("SHX text clusters recovered") {
         assert!(n > 0, "should have recovered SHX text from hidden text");
     }
     // visible text should also be present
-    let has_visible = r.drawing.model.iter().any(|e| {
-        matches!(&e.kind, EntityKind::Text(t) if t.value == "Visible Label")
-    });
+    let has_visible = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "Visible Label"));
     assert!(has_visible, "visible text should still be present");
 }
 
@@ -543,23 +559,34 @@ fn device_tags_near_strokes_become_blocks() {
     for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
         // a small diamond symbol (4 strokes)
         let sz = 6;
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
-            cx, cy - sz, cx + sz, cy,
-            cx + sz, cy, cx, cy + sz,
-            cx, cy + sz, cx - sz, cy,
-            cx - sz, cy, cx, cy - sz,
-        ).as_bytes());
+        content.extend_from_slice(
+            format!(
+                "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                cx,
+                cy - sz,
+                cx + sz,
+                cy,
+                cx + sz,
+                cy,
+                cx,
+                cy + sz,
+                cx,
+                cy + sz,
+                cx - sz,
+                cy,
+                cx - sz,
+                cy,
+                cx,
+                cy - sz,
+            )
+            .as_bytes(),
+        );
         // add cross strokes
-        content.extend_from_slice(format!(
-            "{} {} m {} {} l S {} {} m {} {} l S ",
-            cx - 3, cy - 3, cx + 3, cy + 3,
-            cx - 3, cy + 3, cx + 3, cy - 3,
-        ).as_bytes());
+        content.extend_from_slice(
+            format!("{} {} m {} {} l S {} {} m {} {} l S ", cx - 3, cy - 3, cx + 3, cy + 3, cx - 3, cy + 3, cx + 3, cy - 3,).as_bytes(),
+        );
         // tag text near the symbol
-        content.extend_from_slice(format!(
-            "BT /F1 6 Tf {} {} Td (A) Tj ET ", cx + 10, cy
-        ).as_bytes());
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (A) Tj ET ", cx + 10, cy).as_bytes());
     }
     content.extend_from_slice(b"Q");
 
@@ -585,7 +612,9 @@ fn shx_char_strokes(ch: char, bx: f64, by: f64, height: f64, out: &mut Vec<u8>) 
     // font coordinate system: x 0..4 (most chars), y -2..6 (cap height).  Scale to `height`.
     let scale = height / cadaddy_fonts::stroke::CAP;
     for s in &raw {
-        if s.len() < 2 { continue; }
+        if s.len() < 2 {
+            continue;
+        }
         for (i, &(fx, fy)) in s.iter().enumerate() {
             let px = bx + fx * scale;
             let py = by + fy * scale;
@@ -615,17 +644,19 @@ fn ocr_recognises_simple_word() {
     content.extend_from_slice(b"Q");
 
     let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
-    let texts: Vec<&str> = r.drawing.model.iter().filter_map(|e| match &e.kind {
-        EntityKind::Text(t) => Some(t.value.as_str()),
-        _ => None,
-    }).collect();
+    let texts: Vec<&str> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(t.value.as_str()),
+            _ => None,
+        })
+        .collect();
     // the OCR should produce at least some text from the strokes
     assert!(!texts.is_empty(), "OCR should recognise text from SHX strokes, got nothing");
     // check the OCR stat was recorded
-    assert!(
-        r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0,
-        "should report SHX OCR recovered text in stats"
-    );
+    assert!(r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "should report SHX OCR recovered text in stats");
 }
 
 #[test]
@@ -643,10 +674,15 @@ fn ocr_recognises_digits() {
     content.extend_from_slice(b"Q");
 
     let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
-    let texts: Vec<&str> = r.drawing.model.iter().filter_map(|e| match &e.kind {
-        EntityKind::Text(t) => Some(t.value.as_str()),
-        _ => None,
-    }).collect();
+    let texts: Vec<&str> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(t.value.as_str()),
+            _ => None,
+        })
+        .collect();
     assert!(!texts.is_empty(), "OCR should recognise digit strokes, got nothing");
     // the joined text should contain the digits
     let joined: String = texts.join("");
@@ -665,9 +701,14 @@ fn ocr_content_layer_fallback_without_ocgs() {
     let layer_names: Vec<&str> = r.drawing.layers.iter().map(|l| l.name.as_str()).collect();
     // should have content-class layers, not pen-based layers
     let has_content = layer_names.iter().any(|n| {
-        n.starts_with("TEXT") || n.starts_with("ANNO") || n.starts_with("PDF-GEOMETRY")
-            || n.starts_with("E-GRID") || n.starts_with("A-WALL") || n.starts_with("E-DEVICE")
-            || n.starts_with("TITLEBLOCK") || n.starts_with("HATCH")
+        n.starts_with("TEXT")
+            || n.starts_with("ANNO")
+            || n.starts_with("PDF-GEOMETRY")
+            || n.starts_with("E-GRID")
+            || n.starts_with("A-WALL")
+            || n.starts_with("E-DEVICE")
+            || n.starts_with("TITLEBLOCK")
+            || n.starts_with("HATCH")
     });
     assert!(has_content, "should have content-class layers when no OCGs present, got: {layer_names:?}");
 }
@@ -689,8 +730,6 @@ fn ocr_consumed_strokes_become_hidden() {
 
     let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
     // the long line should still be there
-    let has_long_line = r.drawing.model.iter().any(|e| {
-        matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0)
-    });
+    let has_long_line = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0));
     assert!(has_long_line, "long non-SHX line should still be in the drawing");
 }

@@ -228,18 +228,16 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
 
     let total_runs = net.runs.len();
     // Get units_per_foot from the building spec for correct length conversion.
-    let upf = super::bspec::current(s, "ducts.read").map_or(12.0, |(sp, _)| {
-        if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 }
-    });
+    let upf = super::bspec::current(s, "ducts.read")
+        .map_or(12.0, |(sp, _)| if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 });
     let length_ft: f64 = net.runs.iter().map(|r| run_length_ft(&r.points, upf)).sum();
     let terminals = net.terminals.len();
     let equipment = net.equipment.len();
     let fittings = net.fittings.len();
 
     // Also check the printset for M sheets (for informational reporting).
-    let m_sheets = project(s).map_or(0, |p| {
-        p.sheets.iter().filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).count()
-    });
+    let m_sheets = project(s)
+        .map_or(0, |p| p.sheets.iter().filter(|s| s.discipline == "M" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).count());
 
     if apply && total_runs > 0 {
         apply_duct_network(s, &net, level_filter.as_deref())?;
@@ -267,9 +265,13 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let trade_summary = format!(
         "Found {} duct run(s), {} terminal(s), {} equipment, {} fitting(s){}",
-        total_runs, terminals, equipment, fittings,
-        if systems_found.is_empty() { String::new() }
-        else {
+        total_runs,
+        terminals,
+        equipment,
+        fittings,
+        if systems_found.is_empty() {
+            String::new()
+        } else {
             let parts: Vec<String> = systems_found.iter().map(|(k, v)| format!("{k}: {v}")).collect();
             format!(" — by system: {}", parts.join(", "))
         }
@@ -277,7 +279,8 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Run model.clashes if we applied runs and the spec has MEP content.
     let mut clash_count = 0;
-    if apply && total_runs > 0
+    if apply
+        && total_runs > 0
         && let Ok(clashes) = s.execute("model.clashes", &json!({}))
     {
         clash_count = clashes["total"].as_u64().unwrap_or(0);
@@ -388,7 +391,9 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
     // the first level in the spec.  This is the "register by grids" path: the printset's
     // classify stage uses grid lines and title-block text to assign each sheet a level.
     let sheet_level = project(s).ok().and_then(|p| {
-        let m_plans: Vec<_> = p.sheets.iter()
+        let m_plans: Vec<_> = p
+            .sheets
+            .iter()
             .filter(|sh| sh.discipline == "M" && (sh.sheet_type == "plan" || sh.sheet_type == "enlarged_plan") && !sh.level.is_empty())
             .collect();
         // If exactly one M plan sheet has a level, use it directly.
@@ -403,9 +408,7 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
         }
         None
     });
-    let default_level = sheet_level.unwrap_or_else(||
-        sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string())
-    );
+    let default_level = sheet_level.unwrap_or_else(|| sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string()));
 
     // Per-trade elevation bands: use the spec's table if set, otherwise hard-coded defaults.
     let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
@@ -467,13 +470,11 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
             height_ft: equipment_height_ft,
-            systems: vec![
-                match de.kind.as_str() {
-                    "ahu" | "rtu" | "vav" => "SA".to_string(),
-                    "exhaust_fan" => "EA".to_string(),
-                    _ => "M-DUCT".to_string(),
-                },
-            ],
+            systems: vec![match de.kind.as_str() {
+                "ahu" | "rtu" | "vav" => "SA".to_string(),
+                "exhaust_fan" => "EA".to_string(),
+                _ => "M-DUCT".to_string(),
+            }],
             confidence: de.confidence,
             ..MepEquipment::default()
         });

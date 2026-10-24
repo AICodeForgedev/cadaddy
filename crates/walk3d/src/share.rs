@@ -387,8 +387,32 @@ const COMPANY_WORDS: [&str; 24] = [
 
 /// Words that end a street address.
 const STREET_WORDS: [&str; 26] = [
-    "st", "street", "ave", "avenue", "rd", "road", "blvd", "boulevard", "ln", "lane", "dr", "drive", "way", "ct", "court", "pkwy", "parkway",
-    "hwy", "highway", "pl", "place", "ter", "terrace", "cir", "circle", "trail",
+    "st",
+    "street",
+    "ave",
+    "avenue",
+    "rd",
+    "road",
+    "blvd",
+    "boulevard",
+    "ln",
+    "lane",
+    "dr",
+    "drive",
+    "way",
+    "ct",
+    "court",
+    "pkwy",
+    "parkway",
+    "hwy",
+    "highway",
+    "pl",
+    "place",
+    "ter",
+    "terrace",
+    "cir",
+    "circle",
+    "trail",
 ];
 
 /// Words that mark a title block or a sheet stamp: a text holding one goes whole.
@@ -506,7 +530,9 @@ fn patterns(text: &str, place: &str, report: &mut StripReport) -> String {
         if !b.is_empty() && b.len() <= 6 && b.chars().all(|c| c.is_ascii_digit()) {
             let street = words.iter().enumerate().skip(i + 1).take(5).find(|(_, x)| STREET_WORDS.contains(&bare(x).as_str()));
             if let Some((j, _)) = street
-                && words.get(i + 1..j).is_some_and(|between| !between.is_empty() && between.iter().all(|x| x.chars().next().is_some_and(char::is_uppercase)))
+                && words
+                    .get(i + 1..j)
+                    .is_some_and(|between| !between.is_empty() && between.iter().all(|x| x.chars().next().is_some_and(char::is_uppercase)))
             {
                 flag(i, words.len().saturating_sub(1), &mut drop);
             }
@@ -727,7 +753,8 @@ fn dec(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while let Some(&c) = b.get(i) {
-        let hex = (c == b'%').then(|| b.get(i + 1..i + 3)).flatten().and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        let hex =
+            (c == b'%').then(|| b.get(i + 1..i + 3)).flatten().and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
         match hex {
             Some(v) => {
                 out.push(v);
@@ -898,7 +925,12 @@ mod tests {
             mark: "SD-1".into(),
             category: "duct".into(),
             fields: vec![
-                FieldSpec { key: "material".into(), value: "galvanized steel".into(), source: "Lakeside Example Inn Mech.pdf".into(), confidence: "stated".into() },
+                FieldSpec {
+                    key: "material".into(),
+                    value: "galvanized steel".into(),
+                    source: "Lakeside Example Inn Mech.pdf".into(),
+                    confidence: "stated".into(),
+                },
                 FieldSpec { key: "manufacturer".into(), value: "Northwind Sheet Metal".into(), ..FieldSpec::default() },
                 FieldSpec { key: "note".into(), value: "by Acme Fictional Fabricators LLC, call 555-010-0199".into(), ..FieldSpec::default() },
             ],

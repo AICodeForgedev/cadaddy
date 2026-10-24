@@ -309,11 +309,8 @@ struct DuctPair {
 fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64) -> Vec<DuctPair> {
     use std::f64::consts::PI;
 
-    let duct_segs: Vec<&LineSeg> = if all_layers {
-        segs.iter().collect()
-    } else {
-        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
-    };
+    let duct_segs: Vec<&LineSeg> =
+        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect() };
     if duct_segs.is_empty() {
         return Vec::new();
     }
@@ -609,13 +606,9 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<Detec
         // In all_layers mode, only count arcs near a known run.
         if all_layers {
             let near_run = runs.iter().any(|r| {
-                r.points.windows(2).any(|w| {
-                    if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
-                        seg_dist(center, *a, *b) < r.width_in.max(6.0)
-                    } else {
-                        false
-                    }
-                })
+                r.points
+                    .windows(2)
+                    .any(|w| if let (Some(a), Some(b)) = (w.first(), w.get(1)) { seg_dist(center, *a, *b) < r.width_in.max(6.0) } else { false })
             });
             if !near_run {
                 continue;
@@ -627,11 +620,8 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<Detec
     // Turn markers: rectangles with internal crossing lines (box with X).
     let duct_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DUCT") };
     let segs = line_segments(d);
-    let duct_lines: Vec<&LineSeg> = if all_layers {
-        segs.iter().collect()
-    } else {
-        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
-    };
+    let duct_lines: Vec<&LineSeg> =
+        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect() };
     for (min, max, _) in &duct_rects {
         let center = (*min + *max) * 0.5;
         let w = max.x - min.x;
@@ -693,11 +683,8 @@ fn detect_terminals(d: &Drawing, all_layers: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
     let device_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DEVICE") };
     let segs = line_segments(d);
-    let device_lines: Vec<&LineSeg> = if all_layers {
-        segs.iter().collect()
-    } else {
-        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
-    };
+    let device_lines: Vec<&LineSeg> =
+        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect() };
 
     for (min, max, _) in &device_rects {
         let center = (*min + *max) * 0.5;
@@ -806,14 +793,23 @@ fn detect_equipment(d: &Drawing, all_layers: bool) -> Vec<DetectedEquipment> {
         let equip_re = |t: &str| -> Option<(&str, String)> {
             let up = t.to_ascii_uppercase();
             let tag = t.trim().to_string();
-            if up.starts_with("AHU") || up.starts_with("AH-") { Some(("ahu", tag)) }
-            else if up.starts_with("RTU") || up.starts_with("RT-") { Some(("rtu", tag)) }
-            else if up.starts_with("PTAC") { Some(("ptac", tag)) }
-            else if up.starts_with("VAV") { Some(("vav", tag)) }
-            else if up.starts_with("FCU") || up.starts_with("FC-") { Some(("fan_coil_unit", tag)) }
-            else if up.starts_with("EF-") || up.starts_with("EF ") { Some(("exhaust_fan", tag)) }
-            else if up.starts_with("ERV") || up.starts_with("HRV") || up.starts_with("MAU") { Some(("ventilation_unit", tag)) }
-            else { None }
+            if up.starts_with("AHU") || up.starts_with("AH-") {
+                Some(("ahu", tag))
+            } else if up.starts_with("RTU") || up.starts_with("RT-") {
+                Some(("rtu", tag))
+            } else if up.starts_with("PTAC") {
+                Some(("ptac", tag))
+            } else if up.starts_with("VAV") {
+                Some(("vav", tag))
+            } else if up.starts_with("FCU") || up.starts_with("FC-") {
+                Some(("fan_coil_unit", tag))
+            } else if up.starts_with("EF-") || up.starts_with("EF ") {
+                Some(("exhaust_fan", tag))
+            } else if up.starts_with("ERV") || up.starts_with("HRV") || up.starts_with("MAU") {
+                Some(("ventilation_unit", tag))
+            } else {
+                None
+            }
         };
         for (text, at, _, height) in &texts {
             if let Some((kind, tag)) = equip_re(text) {
@@ -899,11 +895,8 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
 fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool, scale: f64) -> Vec<DetectedTag> {
     let texts = text_entities(d);
     let segs = line_segments(d);
-    let text_lines: Vec<&LineSeg> = if all_layers {
-        segs.iter().collect()
-    } else {
-        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect()
-    };
+    let text_lines: Vec<&LineSeg> =
+        if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect() };
     let mut detected_tags = Vec::new();
 
     for (text, at, layer, _h) in &texts {
@@ -1262,7 +1255,9 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
                 }
             }
         }
-        if contextual[i] { continue; }
+        if contextual[i] {
+            continue;
+        }
         // Near terminal AND has a tag?
         if run.has_tag {
             for tm in terms {
@@ -1277,13 +1272,19 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
     // Phase 2: one level of propagation — untagged runs connecting to a tagged run.
     // Also include runs near equipment (without requiring tags) for the count floor.
     for i in 0..runs.len() {
-        if contextual[i] { continue; }
+        if contextual[i] {
+            continue;
+        }
         let Some(fi) = runs[i].points.first() else { continue };
         let Some(li) = runs[i].points.last() else { continue };
         // Check endpoint connection to a tagged run.
         for j in 0..runs.len() {
-            if !contextual[j] || i == j { continue; }
-            if !runs[j].has_tag { continue; }
+            if !contextual[j] || i == j {
+                continue;
+            }
+            if !runs[j].has_tag {
+                continue;
+            }
             let near = runs[j].points.first().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol)
                 || runs[j].points.last().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol);
             let width_compat = (runs[i].width_in - runs[j].width_in).abs() < runs[j].width_in * 0.5 + 2.0;
@@ -1292,7 +1293,9 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
                 break;
             }
         }
-        if contextual[i] { continue; }
+        if contextual[i] {
+            continue;
+        }
         // Also mark runs adjacent to equipment (even without tags) — equipment anchors ducts.
         for eq in equip {
             let center = (eq.min + eq.max) * 0.5;
@@ -1312,9 +1315,7 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
             continue;
         }
         // Compute run length.
-        let len: f64 = run.points.windows(2).map(|w| {
-            if let (Some(a), Some(b)) = (w.first(), w.get(1)) { a.dist(*b) } else { 0.0 }
-        }).sum();
+        let len: f64 = run.points.windows(2).map(|w| if let (Some(a), Some(b)) = (w.first(), w.get(1)) { a.dist(*b) } else { 0.0 }).sum();
         if len < min_len && !run.has_tag {
             continue; // too short and no tag — likely noise
         }
@@ -1442,8 +1443,10 @@ fn detect_paper_scale(d: &Drawing) -> f64 {
             EntityKind::Line(l) => {
                 for p in [l.a.xy(), l.b.xy()] {
                     if p.is_finite() {
-                        xmin = xmin.min(p.x); xmax = xmax.max(p.x);
-                        ymin = ymin.min(p.y); ymax = ymax.max(p.y);
+                        xmin = xmin.min(p.x);
+                        xmax = xmax.max(p.x);
+                        ymin = ymin.min(p.y);
+                        ymax = ymax.max(p.y);
                         count += 1;
                     }
                 }
@@ -1451,8 +1454,10 @@ fn detect_paper_scale(d: &Drawing) -> f64 {
             EntityKind::LwPolyline(p) => {
                 for v in p.vertices.iter().take(100) {
                     if v.p.is_finite() {
-                        xmin = xmin.min(v.p.x); xmax = xmax.max(v.p.x);
-                        ymin = ymin.min(v.p.y); ymax = ymax.max(v.p.y);
+                        xmin = xmin.min(v.p.x);
+                        xmax = xmax.max(v.p.x);
+                        ymin = ymin.min(v.p.y);
+                        ymax = ymax.max(v.p.y);
                         count += 1;
                     }
                 }

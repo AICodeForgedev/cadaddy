@@ -19,6 +19,7 @@ mod release;
 mod release_cmd;
 mod repro;
 mod secrets;
+mod sharepage;
 mod signing;
 mod smoke;
 mod soak;
@@ -26,7 +27,6 @@ mod stats;
 mod supplychain;
 mod updategate;
 mod version;
-mod sharepage;
 mod webtest;
 
 use std::path::{Path, PathBuf};

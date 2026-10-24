@@ -257,7 +257,8 @@ impl FieldViewer {
     pub fn go_to_element(&mut self, i: usize) {
         let Some(p) = &self.pkg else { return };
         let Some(e) = p.elements.get(i) else { return };
-        let room = p.rooms.iter().position(|r| !e.room.is_empty() && r.number.eq_ignore_ascii_case(&e.room) && r.level.eq_ignore_ascii_case(&e.level));
+        let room =
+            p.rooms.iter().position(|r| !e.room.is_empty() && r.number.eq_ignore_ascii_case(&e.room) && r.level.eq_ignore_ascii_case(&e.level));
         let level = p.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&e.level));
         let centre = [(e.min[0] + e.max[0]) * 0.5, (e.min[1] + e.max[1]) * 0.5];
         let inside = self.in_section(e);
@@ -548,7 +549,9 @@ impl FieldViewer {
                     if self.denied {
                         ui.label(egui::RichText::new(t("Access denied")).size(24.0).strong().color(tk.text));
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new(t("This project page needs a passcode. Ask whoever shared the link for access.")).color(tk.text_dim));
+                        ui.label(
+                            egui::RichText::new(t("This project page needs a passcode. Ask whoever shared the link for access.")).color(tk.text_dim),
+                        );
                     } else if let Some(f) = self.progress {
                         ui.label(egui::RichText::new(t("Loading the model…")).size(18.0).color(tk.text_dim));
                         ui.add(egui::ProgressBar::new(f).show_percentage().desired_width(320.0));
@@ -557,7 +560,9 @@ impl FieldViewer {
                         ui.label(egui::RichText::new(text).size(18.0).color(tk.text_dim));
                     } else {
                         ui.label(
-                            egui::RichText::new(t("Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here")).size(18.0).color(tk.text_dim),
+                            egui::RichText::new(t("Open a field package (FIELDVIEW.EXPORT in CADaddy), or drop one here"))
+                                .size(18.0)
+                                .color(tk.text_dim),
                         );
                     }
                 });
@@ -1214,7 +1219,6 @@ impl FieldViewer {
         };
         painter.circle_filled(knob, r * 0.38, tk.accent.gamma_multiply(0.85));
     }
-
 
     /// Walk: buttons to step and turn, and a stick to hold (a phone has no keys).
     fn walk_pad(&mut self, ui: &mut egui::Ui, rect: Rect) {
