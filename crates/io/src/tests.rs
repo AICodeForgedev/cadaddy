@@ -2607,3 +2607,137 @@ fn drawing_without_insunits_stays_unitless() {
     assert_eq!(insunits(&write_dxf(&Drawing::new_metric())), Some("4".into()));
     assert_eq!(insunits(&write_dxf(&Drawing::new_imperial())), Some("1".into()));
 }
+
+/// DXF text as (code, value) pairs.
+fn dxf_pairs(text: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0].trim().to_string(), c[1].trim().to_string())).collect()
+}
+
+/// The records of type `kind` in DXF pairs, each as its groups after the type.
+fn dxf_records<'a>(pairs: &'a [(String, String)], kind: &str) -> Vec<&'a [(String, String)]> {
+    let mut out = Vec::new();
+    for (i, p) in pairs.iter().enumerate() {
+        if p.0 == "0" && p.1 == kind {
+            let rest = &pairs[i + 1..];
+            let end = rest.iter().position(|q| q.0 == "0").unwrap_or(rest.len());
+            out.push(&rest[..end]);
+        }
+    }
+    out
+}
+
+fn group<'a>(rec: &'a [(String, String)], code: &str) -> Option<&'a str> {
+    rec.iter().find(|p| p.0 == code).map(|p| p.1.as_str())
+}
+
+/// #1812: a file whose CLASSES start with VISUALSTYLE (500) and WIDGETX (501), with proxy objects
+/// of both classes and of a number past its last class, and a proxy entity of WIDGETX.
+fn proxy_file() -> Vec<u8> {
+    let text = String::from_utf8(write(&Drawing::new_metric(), "p.dxf").unwrap()).unwrap();
+    let mut pairs = dxf_pairs(&text);
+    let p = |c: &str, v: &str| (c.to_string(), v.to_string());
+    let class = |name: &str, cpp: &str| {
+        vec![p("0", "CLASS"), p("1", name), p("2", cpp), p("3", "ObjectDBX Classes"), p("90", "4095"), p("280", "1"), p("281", "0")]
+    };
+    let classes = pairs.iter().position(|q| q.0 == "2" && q.1 == "CLASSES").unwrap() + 1;
+    let mut injected = class("VISUALSTYLE", "AcDbVisualStyle");
+    injected.extend(class("WIDGETX", "AcDbWidgetX"));
+    pairs.splice(classes..classes, injected);
+    let objects = pairs.iter().position(|q| q.0 == "2" && q.1 == "OBJECTS").unwrap();
+    let nod = objects + 1;
+    let nod_handle = pairs[nod + 1].1.clone();
+    let after = nod + pairs[nod..].iter().position(|q| q.0 == "281").unwrap() + 1;
+    pairs.splice(after..after, [p("3", "ACAD_VISUALSTYLE"), p("350", "AAA0")]);
+    let proxy = |h: &str, class: &str, data: &str| {
+        vec![
+            p("0", "ACAD_PROXY_OBJECT"),
+            p("5", h),
+            // An application's 102 group before the proxy's own groups holds a 91 of its own.
+            p("102", "{MYAPP"),
+            p("91", "7"),
+            p("102", "}"),
+            p("330", "AAA0"),
+            p("100", "AcDbProxyObject"),
+            p("90", "499"),
+            p("91", class),
+            p("95", "0"),
+            p("70", "0"),
+            p("92", "8"),
+            p("310", data),
+            p("94", "0"),
+        ]
+    };
+    let mut objs = vec![
+        p("0", "DICTIONARY"),
+        p("5", "AAA0"),
+        p("330", &nod_handle),
+        p("100", "AcDbDictionary"),
+        p("281", "1"),
+        p("3", "Realistic"),
+        p("350", "AAA1"),
+        p("3", "Widget"),
+        p("350", "AAA2"),
+        p("3", "Stray"),
+        p("350", "AAA3"),
+    ];
+    objs.extend(proxy("AAA1", "500", "AA"));
+    objs.extend(proxy("AAA2", "501", "BB"));
+    objs.extend(proxy("AAA3", "537", "CC"));
+    let end = objects + pairs[objects..].iter().position(|q| q.0 == "0" && q.1 == "ENDSEC").unwrap();
+    pairs.splice(end..end, objs);
+    let ms = {
+        let recs = dxf_records(&pairs, "BLOCK_RECORD");
+        group(recs.iter().find(|r| group(r, "2") == Some("*Model_Space")).unwrap(), "5").unwrap().to_string()
+    };
+    let ents = pairs.iter().position(|q| q.0 == "2" && q.1 == "ENTITIES").unwrap() + 1;
+    pairs.splice(
+        ents..ents,
+        [
+            p("0", "ACAD_PROXY_ENTITY"),
+            p("5", "AAA4"),
+            p("330", &ms),
+            p("100", "AcDbEntity"),
+            p("8", "0"),
+            p("100", "AcDbProxyEntity"),
+            p("90", "498"),
+            p("91", "501"),
+            p("92", "0"),
+            p("93", "0"),
+            p("94", "0"),
+            p("95", "0"),
+            p("70", "0"),
+        ],
+    );
+    pairs.iter().map(|(c, v)| format!("{c}\n{v}\n")).collect::<String>().into_bytes()
+}
+
+#[test]
+fn proxies_keep_their_class_when_classes_are_rewritten() {
+    let d = read(&proxy_file(), "p.dxf").unwrap();
+    let text = String::from_utf8(write(&d, "out.dxf").unwrap()).unwrap();
+    let pairs = dxf_pairs(&text);
+    let classes: Vec<String> = dxf_records(&pairs, "CLASS").iter().map(|r| group(r, "1").unwrap().to_string()).collect();
+    let class_of = |n: &str| classes.get(n.parse::<usize>().unwrap() - 500).cloned();
+    // The proxy's own 91 (after its subclass marker); the application group's stays as it was.
+    let own_91 = |r: &[(String, String)]| r.iter().skip_while(|q| q.1 != "AcDbProxyObject").find(|q| q.0 == "91").map(|q| q.1.clone()).unwrap();
+    let objects: Vec<(String, Option<String>)> =
+        dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| (group(r, "310").unwrap().to_string(), class_of(&own_91(r)))).collect();
+    assert!(dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().all(|r| group(r, "91") == Some("7")), "the application's 91 changed");
+    assert_eq!(
+        objects,
+        [("AA".to_string(), Some("VISUALSTYLE".to_string())), ("BB".to_string(), Some("WIDGETX".to_string()))],
+        "classes {classes:?}"
+    );
+    let entities: Vec<Option<String>> = dxf_records(&pairs, "ACAD_PROXY_ENTITY").iter().map(|r| class_of(group(r, "91").unwrap())).collect();
+    assert_eq!(entities, [Some("WIDGETX".to_string())]);
+    // The proxy whose number named no class is gone, with its dictionary entry.
+    assert!(!text.contains("\nStray\n"));
+    // And it stays so through another save.
+    let again = String::from_utf8(write(&read(text.as_bytes(), "out.dxf").unwrap(), "again.dxf").unwrap()).unwrap();
+    let pairs = dxf_pairs(&again);
+    let classes: Vec<String> = dxf_records(&pairs, "CLASS").iter().map(|r| group(r, "1").unwrap().to_string()).collect();
+    let names: Vec<String> =
+        dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| classes[own_91(r).parse::<usize>().unwrap() - 500].clone()).collect();
+    assert_eq!(names, ["VISUALSTYLE", "WIDGETX"]);
+}
