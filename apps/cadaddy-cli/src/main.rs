@@ -64,6 +64,7 @@ const USAGE: &str = "usage:
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
   cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
   cadaddy-cli verify FILE.cdy
+  cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]
   cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
@@ -427,6 +428,47 @@ fn verify(path: &str) -> Result<(), String> {
 
 /// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
 /// Exit 1 on fail.
+/// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
+fn bim(args: &[String]) -> Result<(), String> {
+    let mut path: Option<&str> = None;
+    let mut out: Option<String> = None;
+    let mut force = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--out" => out = Some(it.next().ok_or("--out needs a .cdy file path")?.clone()),
+            "--force" => force = true,
+            o if o.starts_with('-') => return Err(format!("bim: unknown option {o}")),
+            f => {
+                if path.is_some() {
+                    return Err("bim takes one file or folder".into());
+                }
+                path = Some(f);
+            }
+        }
+    }
+    let path = path.ok_or("usage: cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]")?;
+    let mut s = Session::for_app();
+    s.new_drawing_with_viewports(false);
+    let p = json!({ "path": path, "force": force });
+    let r = s.execute("bim.from_pdf", &p).map_err(|e| e.to_string())?;
+    // If --out was given, copy the last .cdy to that path.
+    if let Some(out_path) = &out {
+        if let Some(last) = r.get("cdy_paths").and_then(Value::as_array).and_then(|a| a.last()).and_then(Value::as_str) {
+            if last != out_path {
+                std::fs::copy(last, out_path).map_err(|e| format!("{out_path}: {e}"))?;
+            }
+        }
+    }
+    outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);
+    if cdy_paths == 0 {
+        Err("no BIM models were built; see warnings in the output".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn check_import(args: &[String]) -> Result<(), String> {
     let mut json_output = false;
     let mut file = None;
@@ -1029,6 +1071,7 @@ fn cli() -> ExitCode {
                 .collect();
             outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
+        Some("bim") => bim(&rest),
         Some("check-import") => check_import(&rest),
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {

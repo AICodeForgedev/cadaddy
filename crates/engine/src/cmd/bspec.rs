@@ -41,6 +41,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
             "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, removed, notes, warnings}",
         ),
+        CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
+            "{path: string (PDF file or folder), levels?: \"auto\" (default), force?: bool (build even if import check fails)} → {cdy_paths: [string], check_results: [{file, pass, score, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
+        ),
     ]
 }
 
@@ -389,6 +392,118 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("view.swiso", &json!({}));
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     Ok(r)
+}
+
+/// `bim.from_pdf`: one-call PDF → native .cdy → import check → bspec draft → model.build.
+/// Multi-plan sheets (separate floor titles on one page) are stacked as levels.
+fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("bim.from_pdf", "`path` is required (a PDF file or folder)"))?;
+    let force = bool_or(p, "force", false);
+    let path_obj = std::path::Path::new(path);
+    if !path_obj.exists() {
+        return Err(bad("bim.from_pdf", format!("{path}: file or folder not found")));
+    }
+
+    // Collect PDF files.
+    let pdfs: Vec<std::path::PathBuf> = if path_obj.is_dir() {
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(path_obj) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        files
+    } else {
+        vec![path_obj.to_path_buf()]
+    };
+
+    if pdfs.is_empty() {
+        return Err(bad("bim.from_pdf", format!("{path}: no PDF files found. Next: provide a path to a PDF file or folder.")));
+    }
+
+    let mut cdy_paths: Vec<String> = Vec::new();
+    let mut check_results: Vec<Value> = Vec::new();
+    let mut built_counts = json!({});
+    let mut warnings: Vec<String> = Vec::new();
+
+    for pdf in &pdfs {
+        let pdf_str = pdf.to_string_lossy().to_string();
+        let stem = pdf.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "import".into());
+
+        // Step 1: Import the PDF as a new drawing.
+        s.echo(format!("bim.from_pdf: importing {stem}..."));
+        let import_result = s.execute("pdfimport", &json!({ "path": pdf_str, "newDrawing": true }))?;
+
+        // Step 2: Check import accuracy (already run automatically by pdfimport).
+        let check = import_result.get("importCheck").cloned().unwrap_or(Value::Null);
+        let check_pass = check.get("pass").and_then(Value::as_bool).unwrap_or(false);
+        let check_score = check.get("score").and_then(Value::as_u64).unwrap_or(0);
+        check_results.push(json!({
+            "file": pdf_str,
+            "pass": check_pass,
+            "score": check_score,
+            "checks": check.get("checks").cloned().unwrap_or(Value::Null),
+        }));
+
+        if !check_pass && !force {
+            warnings.push(format!("{stem}: import check failed (score {check_score}/100); skipping build. Use force:true to build anyway, or fix the import first with: import_check {{}}"));
+            continue;
+        }
+        if !check_pass {
+            warnings.push(format!("{stem}: import check failed (score {check_score}/100) but force=true, building anyway"));
+        }
+
+        // Step 3: Draft the building spec from the plan.
+        s.echo(format!("bim.from_pdf: drafting spec for {stem}..."));
+        let _spec = s.execute("bspec.get", &json!({}))?;
+
+        // Step 4: Build the 3D model.
+        s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));
+        match s.execute("model.build", &json!({})) {
+            Ok(build_result) => {
+                built_counts = build_result;
+            }
+            Err(e) => {
+                warnings.push(format!("{stem}: model.build failed: {e}"));
+                continue;
+            }
+        }
+
+        // Step 5: Save as .cdy next to the PDF (or in the folder).
+        let cdy_path = pdf.with_extension("cdy");
+        let cdy_str = cdy_path.to_string_lossy().to_string();
+        match s.execute("saveas", &json!({ "path": cdy_str })) {
+            Ok(_) => {
+                cdy_paths.push(cdy_str);
+                s.echo(format!("bim.from_pdf: saved {}", cdy_path.display()));
+            }
+            Err(e) => {
+                warnings.push(format!("{stem}: could not save .cdy: {e}"));
+            }
+        }
+    }
+
+    let mut next_steps: Vec<String> = Vec::new();
+    if cdy_paths.is_empty() && !pdfs.is_empty() {
+        next_steps.push("import_check {} — review import quality and fix issues before building".into());
+        next_steps.push("bim.from_pdf {path: \"...\", force: true} — force build even with import check failures".into());
+    } else {
+        next_steps.push("render {} — render the 3D view to see the building".into());
+        next_steps.push("bspec.set {spec: {...}} — refine the building spec (room heights, materials, etc.)".into());
+        next_steps.push("model.build {} — rebuild after spec changes".into());
+    }
+
+    Ok(json!({
+        "cdy_paths": cdy_paths,
+        "check_results": check_results,
+        "built_counts": built_counts,
+        "warnings": warnings,
+        "next_steps": next_steps,
+    }))
 }
 
 /// A room traced on the plan: its spec entry (if any), level, outline and tag.
