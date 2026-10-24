@@ -1077,17 +1077,13 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // Gate: refuse to build if the import check failed, unless --force.
     let force = bool_or(p, "force", false);
-    if !force {
-        if let Ok(d) = s.doc() {
-            if !super::import_check::passes(d) {
-                let fails = super::import_check::failed_checks(d);
-                let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
-                return Err(bad(
-                    "bim.build",
-                    format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", ")),
-                ));
-            }
-        }
+    if !force
+        && let Ok(d) = s.doc()
+        && !super::import_check::passes(d)
+    {
+        let fails = super::import_check::failed_checks(d);
+        let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+        return Err(bad("bim.build", format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", "))));
     }
     let (sp, stored) = current(s, "bim.build")?;
     if !stored {

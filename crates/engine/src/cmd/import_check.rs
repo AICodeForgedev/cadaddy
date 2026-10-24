@@ -158,7 +158,7 @@ pub fn check_drawing(d: &Drawing) -> ImportCheckResult {
     let grid_check = check_grid(d);
     add(&mut checks, &grid_check, 10, &mut total_weight, &mut earned);
 
-    let score = if total_weight > 0 { (earned * 100) / total_weight } else { 100 };
+    let score = (earned * 100).checked_div(total_weight).unwrap_or(100);
 
     // Hard-fail: SCALE, FILLS, SYMBOLS each fail the import on their own.
     let hard_fails: Vec<String> = checks.iter().filter(|c| c.hard_fail && !c.pass).map(|c| c.id.clone()).collect();
@@ -198,13 +198,13 @@ fn units_to_inches(insunits: i64) -> f64 {
 /// (within 2× of 24-48" × 18-36").
 fn is_sheet_size_inches(w: f64, h: f64) -> bool {
     let (lo, hi) = if w < h { (w, h) } else { (h, w) };
-    lo >= PAPER_HEIGHT_MIN_IN && lo <= PAPER_HEIGHT_MAX_IN && hi >= PAPER_WIDTH_MIN_IN && hi <= PAPER_WIDTH_MAX_IN
+    (PAPER_HEIGHT_MIN_IN..=PAPER_HEIGHT_MAX_IN).contains(&lo) && (PAPER_WIDTH_MIN_IN..=PAPER_WIDTH_MAX_IN).contains(&hi)
 }
 
 /// Whether a pair of dimensions (in PDF points) look like a standard sheet.
 fn is_sheet_size_points(w: f64, h: f64) -> bool {
     let (lo, hi) = if w < h { (w, h) } else { (h, w) };
-    lo >= PAPER_HEIGHT_MIN_PT && lo <= PAPER_HEIGHT_MAX_PT && hi >= PAPER_WIDTH_MIN_PT && hi <= PAPER_WIDTH_MAX_PT
+    (PAPER_HEIGHT_MIN_PT..=PAPER_HEIGHT_MAX_PT).contains(&lo) && (PAPER_WIDTH_MIN_PT..=PAPER_WIDTH_MAX_PT).contains(&hi)
 }
 
 // ─── Scale note parsing ────────────────────────────────────────────────────
@@ -340,12 +340,11 @@ fn detect_discipline(d: &Drawing) -> Option<String> {
         if letters.is_empty() {
             continue;
         }
-        if let Some(next) = trimmed.chars().nth(letters.len()) {
-            if next == '-' || next == '.' || next.is_ascii_digit() {
-                if let Some((_, disc)) = DISCIPLINE_PREFIX.iter().find(|(p, _)| *p == letters.as_str()) {
-                    return Some(disc.to_string());
-                }
-            }
+        if let Some(next) = trimmed.chars().nth(letters.len())
+            && (next == '-' || next == '.' || next.is_ascii_digit())
+            && let Some((_, disc)) = DISCIPLINE_PREFIX.iter().find(|(p, _)| *p == letters.as_str())
+        {
+            return Some(disc.to_string());
         }
     }
     // Fallback: title keywords.
