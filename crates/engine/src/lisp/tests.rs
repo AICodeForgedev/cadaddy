@@ -4,7 +4,7 @@ use super::value::{Value, to_text};
 use crate::Session;
 use crate::cmd::file::{EntityCodec, set_entity_codec};
 
-fn session() -> Session {
+pub(super) fn session() -> Session {
     set_entity_codec(EntityCodec { groups: cadcraft_io::entity_groups, entity: cadcraft_io::entity_from_groups });
     Session::new()
 }

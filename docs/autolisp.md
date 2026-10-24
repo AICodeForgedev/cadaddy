@@ -82,6 +82,14 @@ DXF file holds for the object, plus `-1` (its name) and `410` (its layout). Angl
 are in radians, as in AutoCAD, where the file holds degrees; `entmake`, `entmod` and `ssget`
 filters take radians too.
 
+`entmake` defines blocks: a BLOCK list (2 name, 70 flags, 10 base point, 4 description) begins a
+definition, the entities made after it go into the block instead of the drawing, and an ENDBLK
+list adds the block (redefining one of the same name) and returns its name. Flag 1 with a `*U`
+name makes an anonymous block, named when it ends. A BLOCK while a definition is open, an
+xref (flag 4), an invalid name, a block that inserts itself and a block being edited in place
+(REFEDIT) return nil. A definition stays open across routines until ENDBLK, but a routine that
+fails drops the one it began.
+
 ## Testing against the corpus
 
 The AutoLISP conformance corpus (#648) lives in its own repository. Point `CADCRAFT_LISP_CORPUS`
