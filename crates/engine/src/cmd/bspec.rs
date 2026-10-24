@@ -385,6 +385,9 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
         r["walls"], r["doors"], r["windows"], r["columns"], r["curtainWalls"], r["floors"], r["ceilings"], r["rooms"], r["levels"]
     ));
+    // BIM drawings open in 3D shaded view (SW iso + realistic), not 2D wireframe.
+    let _ = s.execute("view.swiso", &json!({}));
+    let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     Ok(r)
 }
 
