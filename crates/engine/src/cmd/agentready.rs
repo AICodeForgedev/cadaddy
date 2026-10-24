@@ -1075,9 +1075,12 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
-    // Gate: refuse to build if the import check failed, unless --force.
+    // Gate: refuse to build if the import check failed, unless --force or discipline is mep
+    // (the MEP geometry reader handles paper-scale and pen-layer drawings natively).
     let force = bool_or(p, "force", false);
+    let disc = str_param(p, "discipline").unwrap_or("all");
     if !force
+        && disc != "mep"
         && let Ok(d) = s.doc()
         && !super::import_check::passes(d)
     {
@@ -1103,12 +1106,33 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if !["architecture", "structure", "mep", "all"].contains(&disc) {
         return Err(bad("bim.build", "`discipline` is architecture, structure, mep or all"));
     }
-    // Auto-read MEP runs from the drawing's layers when the spec has none and the discipline
-    // includes MEP.  This lets `bspec.draft` + `bim.build {discipline: mep}` work on a
-    // converted M/P/E sheet without a separate `mep.read {apply}` call.
-    if (disc == "mep" || disc == "all") && sp.mep.runs.is_empty() {
-        let _ = s.execute("mep.read", &json!({"apply": true}));
+
+    // Auto-read MEP data: when building with discipline mep or all, populate the spec's
+    // MEP runs/equipment/terminals from the current drawing's geometry before building.
+    let mut mep_warnings: Vec<String> = Vec::new();
+    if disc == "mep" || disc == "all" {
+        // First, try standard layer-based reading (mep.read {apply}).
+        if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
+            mep_warnings.push(format!("mep.read: {e}"));
+        }
+        // Then, geometry-based reading (ducts.read {apply}) for PDF-imported sheets.
+        match super::readers::read_mech_from_drawing(s) {
+            Ok(net) => {
+                let spec_before = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if !net.runs.is_empty() || !net.equipment.is_empty() || !net.terminals.is_empty() {
+                    let _ = s.execute("ducts.read", &json!({"apply": true}));
+                }
+                let spec_after = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if spec_after == 0 && spec_before == 0 {
+                    mep_warnings.push("no MEP runs found in the drawing — mechanical sheets may need to be imported first, or duct lines may not be present".to_string());
+                }
+            }
+            Err(_) => {
+                // mep.read already ran; proceed with whatever it found.
+            }
+        }
     }
+
     let r = s.execute("model.build", &json!({}))?;
     let counts = built_counts(s.doc()?);
     let mut st = load(s.doc()?);
@@ -1126,7 +1150,8 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         Some(l) => pick(&counts.get(l).cloned().unwrap_or_default()),
         None => json!(counts.iter().map(|(l, m)| (l.clone(), pick(m))).collect::<BTreeMap<_, _>>()),
     };
-    let warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
+    let mut warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
+    warnings.extend(mep_warnings.into_iter().map(Value::from));
     Ok(capped(json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings}), "warnings", ANSWER_MAX))
 }
 

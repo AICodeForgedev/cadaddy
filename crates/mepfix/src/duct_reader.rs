@@ -113,6 +113,12 @@ pub struct DuctRun {
     pub bottom_ft: Option<f64>,
     /// Confidence 0–1.
     pub confidence: f64,
+    /// The sheet this run was read from (set during multi-sheet reading).
+    pub source_sheet: Option<String>,
+    /// True when a size/height/system tag was attached to this run by `attach_tags`.
+    pub has_tag: bool,
+    /// `"tag"`, `"default"`, `"estimated-route"` — where the height came from.
+    pub height_source: String,
 }
 
 /// The full duct network read from a single mechanical sheet.
@@ -253,6 +259,26 @@ fn rectangles(d: &Drawing, layer_filter: &str) -> Vec<(Vec2, Vec2, String)> {
     out
 }
 
+/// Extract rectangles from closed 4-vertex polylines on any layer.
+fn rectangles_all(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if let EntityKind::LwPolyline(p) = &e.kind
+            && p.closed
+            && p.vertices.len() == 4
+        {
+            let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+            if pts.iter().all(|p| p.is_finite()) {
+                let min = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
+                let max =
+                    Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
+                out.push((min, max, e.common.layer.to_string()));
+            }
+        }
+    }
+    out
+}
+
 fn minmax(a: f64, b: f64) -> (f64, f64) {
     if a <= b { (a, b) } else { (b, a) }
 }
@@ -277,18 +303,24 @@ struct DuctPair {
     half_w: f64,
 }
 
-/// Find parallel line pairs on the DUCT layer that represent duct walls.
-fn duct_pairs(segs: &[LineSeg]) -> Vec<DuctPair> {
+/// Find parallel line pairs that represent duct walls.
+/// When `all_layers` is false, only DUCT-layer segments are used (the original behaviour).
+/// When true, segments on any layer are considered, with auto-scaled thresholds.
+fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64) -> Vec<DuctPair> {
     use std::f64::consts::PI;
 
-    let duct_segs: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect();
+    let duct_segs: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     if duct_segs.is_empty() {
         return Vec::new();
     }
 
-    // Half-width limits in model units (drawing inches).
-    let min_hw = MIN_HALF_IN;
-    let max_hw = MAX_HALF_IN;
+    // Half-width limits in model units. For paper-scale drawings, scale down.
+    let min_hw = MIN_HALF_IN * scale;
+    let max_hw = MAX_HALF_IN * scale;
 
     // Group segments by direction (1-degree buckets), modulo 180°.
     let mut groups: BTreeMap<i64, Vec<(f64, usize)>> = BTreeMap::new();
@@ -354,13 +386,25 @@ fn duct_pairs(segs: &[LineSeg]) -> Vec<DuctPair> {
 // ---- Run chaining ----------------------------------------------------------
 
 /// How the reader chains wall pairs into runs.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DuctOptions {
     /// Chain every pair, skipping those already in a run (and runs along one already found).
     /// Off, chaining stops at the first pair an earlier run took, and centrelines supply the
     /// rest: what the vector sheets (which have centrelines) were tuned on. Scans, whose
     /// walls come in many pieces and whose centrelines are faint, need it on.
     pub all_pairs: bool,
+    /// When true, read line segments from ALL layers instead of only the DUCT layer.
+    /// Use for PDF-imported mechanical sheets where entities are on pen/colour layers.
+    pub all_layers: bool,
+    /// Scale factor for distance thresholds (1.0 = building-scale, < 1.0 = paper-scale).
+    /// Auto-detected when `all_layers` is true.
+    pub scale: f64,
+}
+
+impl Default for DuctOptions {
+    fn default() -> Self {
+        Self { all_pairs: false, all_layers: false, scale: 1.0 }
+    }
 }
 
 /// Chain parallel pairs that share an endpoint into continuous runs.
@@ -369,7 +413,7 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
         return Vec::new();
     }
 
-    let tol = 2.0; // model inches tolerance for endpoint matching
+    let tol = 2.0 * o.scale; // model inches tolerance for endpoint matching (scaled for paper)
     let mut used = vec![false; pairs.len()];
     let mut runs = Vec::new();
 
@@ -457,6 +501,9 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
             system: None,
             bottom_ft: None,
             confidence: 0.7,
+            source_sheet: None,
+            has_tag: false,
+            height_source: "default".into(),
         });
     }
     runs
@@ -549,22 +596,42 @@ fn extract_system(text: &str, abbr_map: &BTreeMap<String, String>) -> Option<Str
 
 // ---- Fitting detection -----------------------------------------------------
 
-/// Detect fittings from arcs on the DUCT layer and geometry patterns.
-fn detect_fittings(d: &Drawing, runs: &[DuctRun]) -> Vec<DetectedFitting> {
+/// Detect fittings from arcs and geometry patterns.
+/// When `all_layers` is true, arcs/rectangles on any layer are considered.
+fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool) -> Vec<DetectedFitting> {
     let mut fittings = Vec::new();
 
-    // Arcs on DUCT layer → elbows.
+    // Arcs near runs → elbows.
     for (center, _radius, _start, _end, layer) in arcs(d) {
-        if !layer.eq_ignore_ascii_case("DUCT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("DUCT") {
             continue;
+        }
+        // In all_layers mode, only count arcs near a known run.
+        if all_layers {
+            let near_run = runs.iter().any(|r| {
+                r.points.windows(2).any(|w| {
+                    if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
+                        seg_dist(center, *a, *b) < r.width_in.max(6.0)
+                    } else {
+                        false
+                    }
+                })
+            });
+            if !near_run {
+                continue;
+            }
         }
         fittings.push(DetectedFitting { kind: "elbow".into(), at: center, confidence: 0.7 });
     }
 
-    // Turn markers: rectangles on DUCT layer with internal crossing lines (box with X).
-    let duct_rects = rectangles(d, "DUCT");
+    // Turn markers: rectangles with internal crossing lines (box with X).
+    let duct_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DUCT") };
     let segs = line_segments(d);
-    let duct_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect();
+    let duct_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
+    };
     for (min, max, _) in &duct_rects {
         let center = (*min + *max) * 0.5;
         let w = max.x - min.x;
@@ -621,12 +688,16 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun]) -> Vec<DetectedFitting> {
 
 // ---- Terminal detection ----------------------------------------------------
 
-/// Detect terminals (diffusers, grilles) from DEVICE layer patterns.
-fn detect_terminals(d: &Drawing) -> Vec<DetectedTerminal> {
+/// Detect terminals (diffusers, grilles) from DEVICE layer (or any layer in all_layers mode).
+fn detect_terminals(d: &Drawing, all_layers: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
-    let device_rects = rectangles(d, "DEVICE");
+    let device_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "DEVICE") };
     let segs = line_segments(d);
-    let device_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect();
+    let device_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
+    };
 
     for (min, max, _) in &device_rects {
         let center = (*min + *max) * 0.5;
@@ -675,10 +746,10 @@ fn detect_terminals(d: &Drawing) -> Vec<DetectedTerminal> {
 
 // ---- Equipment detection ---------------------------------------------------
 
-/// Detect equipment boxes (AHU, VAV) from EQUIP layer.
-fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
+/// Detect equipment boxes (AHU, VAV, RTU, PTAC, EF) from EQUIP layer or any layer.
+fn detect_equipment(d: &Drawing, all_layers: bool) -> Vec<DetectedEquipment> {
     let mut equipment = Vec::new();
-    let equip_rects = rectangles(d, "EQUIP");
+    let equip_rects = if all_layers { rectangles_all(d) } else { rectangles(d, "EQUIP") };
     let texts = text_entities(d);
 
     for (min, max, _) in &equip_rects {
@@ -701,10 +772,23 @@ fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
                 let up = t.to_ascii_uppercase();
                 let k = if up.contains("AHU") {
                     "ahu"
+                } else if up.contains("RTU") {
+                    "rtu"
+                } else if up.contains("PTAC") {
+                    "ptac"
                 } else if up.contains("VAV") || up.contains("VB") {
                     "vav"
-                } else if up.contains("EF") || up.contains("FAN") {
+                } else if up.contains("FCU") || up.contains("FAN COIL") {
+                    "fan_coil_unit"
+                } else if is_equip_word(&up, "EF") || up.contains("EXHAUST FAN") {
                     "exhaust_fan"
+                } else if is_equip_word(&up, "WH") || up.contains("WATER HEATER") {
+                    "water_heater"
+                } else if up.contains("ERV") || up.contains("HRV") || up.contains("MAU") {
+                    "ventilation_unit"
+                } else if all_layers {
+                    // In all_layers mode, skip rectangles without recognisable equipment tags
+                    continue;
                 } else {
                     "unknown"
                 };
@@ -715,6 +799,41 @@ fn detect_equipment(d: &Drawing) -> Vec<DetectedEquipment> {
 
         equipment.push(DetectedEquipment { kind, tag: tag_text, min: *min, max: *max, confidence: 0.7 });
     }
+
+    // In all_layers mode, also detect equipment from text tags alone (no rectangle required).
+    // Equipment schedules on mechanical drawings list tags like "FCU-1", "RTU-1", "AHU-1".
+    if all_layers {
+        let equip_re = |t: &str| -> Option<(&str, String)> {
+            let up = t.to_ascii_uppercase();
+            let tag = t.trim().to_string();
+            if up.starts_with("AHU") || up.starts_with("AH-") { Some(("ahu", tag)) }
+            else if up.starts_with("RTU") || up.starts_with("RT-") { Some(("rtu", tag)) }
+            else if up.starts_with("PTAC") { Some(("ptac", tag)) }
+            else if up.starts_with("VAV") { Some(("vav", tag)) }
+            else if up.starts_with("FCU") || up.starts_with("FC-") { Some(("fan_coil_unit", tag)) }
+            else if up.starts_with("EF-") || up.starts_with("EF ") { Some(("exhaust_fan", tag)) }
+            else if up.starts_with("ERV") || up.starts_with("HRV") || up.starts_with("MAU") { Some(("ventilation_unit", tag)) }
+            else { None }
+        };
+        for (text, at, _, height) in &texts {
+            if let Some((kind, tag)) = equip_re(text) {
+                // Don't duplicate if we already found this tag from a rectangle.
+                if equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&tag)) {
+                    continue;
+                }
+                // Create a virtual equipment box centred on the text.
+                let half = height.max(0.1) * 5.0; // rough box size from text height
+                equipment.push(DetectedEquipment {
+                    kind: kind.to_string(),
+                    tag,
+                    min: Vec2::new(at.x - half, at.y - half),
+                    max: Vec2::new(at.x + half, at.y + half),
+                    confidence: 0.5,
+                });
+            }
+        }
+    }
+
     equipment
 }
 
@@ -776,14 +895,19 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
 // ---- Tag attachment --------------------------------------------------------
 
 /// Attach size/height/system tags to the nearest duct run.
-fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>) -> Vec<DetectedTag> {
+/// `scale` is the paper-scale factor (1.0 for building-scale, < 0.5 for paper-scale).
+fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool, scale: f64) -> Vec<DetectedTag> {
     let texts = text_entities(d);
     let segs = line_segments(d);
-    let text_lines: Vec<&LineSeg> = segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect();
+    let text_lines: Vec<&LineSeg> = if all_layers {
+        segs.iter().collect()
+    } else {
+        segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect()
+    };
     let mut detected_tags = Vec::new();
 
     for (text, at, layer, _h) in &texts {
-        if !layer.eq_ignore_ascii_case("TEXT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("TEXT") {
             continue;
         }
         let size = parse_size(text);
@@ -830,7 +954,16 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
             }
         }
 
-        let reach = 60.0; // model inches
+        // In paper-scale mode the model units are paper inches; a tag next to a duct is
+        // about 1-3 paper inches away.  At building scale, tags sit within 2-3 feet (24-36").
+        // In all-layers mode, tighten the reach to avoid attaching a tag to a distant wall pair.
+        let reach = if scale < 0.5 {
+            (scale * 120.0).clamp(0.5, 3.0) // paper scale: 0.5-3 paper inches (tighter)
+        } else if all_layers {
+            24.0 // all-layers at building scale: 2 feet (tags sit right next to duct)
+        } else {
+            60.0 // standard layers: 5 feet (more generous since layers already filter)
+        };
         if let Some(ri) = best_run.filter(|_| best_dist < reach) {
             let run = match runs.get_mut(ri) {
                 Some(r) => r,
@@ -849,18 +982,22 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
                     run.shape = "round".into();
                 }
                 run.confidence = run.confidence.max(0.85);
+                run.has_tag = true;
             }
 
             // Apply system.
             if let Some(sys) = &system {
                 run.system = Some(sys.clone());
                 run.confidence = run.confidence.max(0.8);
+                run.has_tag = true;
             }
 
             // Apply height.
             let section_ft = if run.depth_in > 0.0 { run.depth_in } else { run.width_in } / 12.0;
             if let Some(h) = parse_height(text, section_ft) {
                 run.bottom_ft = Some(h);
+                run.has_tag = true;
+                run.height_source = "tag".into();
             }
         }
     }
@@ -871,12 +1008,12 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
 // ---- System inference from pipe labels in breaks ---------------------------
 
 /// Infer system codes from labels drawn in breaks along runs (pipe-style `SA` labels).
-fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>) {
+fn infer_systems_from_labels(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool) {
     let texts = text_entities(d);
     let reach = 20.0; // model inches — labels sit right on the centreline
 
     for (text, at, layer, _) in &texts {
-        if !layer.eq_ignore_ascii_case("TEXT") {
+        if !all_layers && !layer.eq_ignore_ascii_case("TEXT") {
             continue;
         }
         let up = text.trim().to_ascii_uppercase();
@@ -1034,7 +1171,11 @@ fn infer_systems_from_equipment(runs: &mut [DuctRun], equip: &[DetectedEquipment
 // ---- Centreline fallback ---------------------------------------------------
 
 /// Add runs from CENTRE-layer lines not already covered by a parallel-pair run.
-fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
+/// In all_layers mode, centreline fallback is skipped (pairs already use all layers).
+fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg], all_layers: bool) {
+    if all_layers {
+        return; // pairs already use all layers; centreline fallback would produce noise
+    }
     let centre_segs: Vec<&LineSeg> =
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("CENTRE") || s.layer.eq_ignore_ascii_case("CENTER")).collect();
     if centre_segs.is_empty() {
@@ -1061,9 +1202,134 @@ fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg]) {
             system: None,
             bottom_ft: None,
             confidence: 0.5,
+            source_sheet: None,
+            has_tag: false,
+            height_source: "default".into(),
         });
         if runs.len() >= MAX_RUNS {
             break;
+        }
+    }
+}
+
+// ---- Word-boundary equipment tag check -------------------------------------
+
+/// Check if `text` contains `word` as a standalone equipment tag (word-boundary match).
+/// E.g., `is_equip_word("EF-1", "EF")` → true; `is_equip_word("SHELF", "EF")` → false.
+fn is_equip_word(text: &str, word: &str) -> bool {
+    for (i, _) in text.match_indices(word) {
+        // Check left boundary: start of string, or preceding char is not alphanumeric.
+        let left_ok = i == 0 || !text.as_bytes().get(i - 1).is_some_and(|b| b.is_ascii_alphanumeric());
+        // Check right boundary: end of string, or following char is not alphabetic (digits OK: EF1, EF-1).
+        let right = i + word.len();
+        let right_ok = right >= text.len() || !text.as_bytes().get(right).is_some_and(|b| b.is_ascii_alphabetic());
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- Context filter (all-layers mode) --------------------------------------
+
+/// In all-layers mode, remove runs that have no evidence of being real ducts.
+/// A run is "contextual" if it has a tag, has a system, or connects (within `tol`)
+/// to a contextual run.  Non-contextual runs in all-layers mode are false positives
+/// from wall/grid/border lines.
+fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], terms: &[DetectedTerminal], scale: f64) {
+    if runs.is_empty() {
+        return;
+    }
+    let tol = if scale < 0.5 { 2.0 * scale.max(0.001) } else { 5.0 };
+    let equip_reach = if scale < 0.5 { 5.0 * scale.max(0.001) } else { 40.0 };
+
+    // Phase 1: mark directly contextual runs.
+    // A run is contextual if it has a size tag (confidence >= 0.85), or is right next to
+    // equipment/terminal with a tag. System-only or untagged runs are NOT contextual.
+    let mut contextual = vec![false; runs.len()];
+    for (i, run) in runs.iter().enumerate() {
+        if run.has_tag && run.confidence >= 0.85 {
+            contextual[i] = true;
+            continue;
+        }
+        // Near equipment AND has a system tag?
+        if run.has_tag {
+            for eq in equip {
+                let center = (eq.min + eq.max) * 0.5;
+                if run.points.iter().any(|p| p.dist(center) < equip_reach + (eq.max - eq.min).len()) {
+                    contextual[i] = true;
+                    break;
+                }
+            }
+        }
+        if contextual[i] { continue; }
+        // Near terminal AND has a tag?
+        if run.has_tag {
+            for tm in terms {
+                if run.points.iter().any(|p| p.dist(tm.at) < equip_reach) {
+                    contextual[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Phase 2: one level of propagation — untagged runs connecting to a tagged run.
+    // Also include runs near equipment (without requiring tags) for the count floor.
+    for i in 0..runs.len() {
+        if contextual[i] { continue; }
+        let Some(fi) = runs[i].points.first() else { continue };
+        let Some(li) = runs[i].points.last() else { continue };
+        // Check endpoint connection to a tagged run.
+        for j in 0..runs.len() {
+            if !contextual[j] || i == j { continue; }
+            if !runs[j].has_tag { continue; }
+            let near = runs[j].points.first().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol)
+                || runs[j].points.last().is_some_and(|p| p.dist(*fi) < tol || p.dist(*li) < tol);
+            let width_compat = (runs[i].width_in - runs[j].width_in).abs() < runs[j].width_in * 0.5 + 2.0;
+            if near && width_compat {
+                contextual[i] = true;
+                break;
+            }
+        }
+        if contextual[i] { continue; }
+        // Also mark runs adjacent to equipment (even without tags) — equipment anchors ducts.
+        for eq in equip {
+            let center = (eq.min + eq.max) * 0.5;
+            if runs[i].points.iter().any(|p| p.dist(center) < equip_reach + (eq.max - eq.min).len() * 0.5) {
+                contextual[i] = true;
+                break;
+            }
+        }
+    }
+
+    // Phase 3: remove non-contextual runs and short untagged runs (noise from wall segments).
+    // Real duct runs are at least a few feet long; short untagged pairs are likely wall fragments.
+    let min_len = if scale < 0.5 { 2.0 } else { 36.0 };
+    let mut keep = Vec::new();
+    for (i, run) in runs.drain(..).enumerate() {
+        if !contextual[i] {
+            continue;
+        }
+        // Compute run length.
+        let len: f64 = run.points.windows(2).map(|w| {
+            if let (Some(a), Some(b)) = (w.first(), w.get(1)) { a.dist(*b) } else { 0.0 }
+        }).sum();
+        if len < min_len && !run.has_tag {
+            continue; // too short and no tag — likely noise
+        }
+        keep.push(run);
+    }
+    *runs = keep;
+}
+
+// ---- Height tag as estimated-route -----------------------------------------
+
+/// Mark runs without height tags as `estimated-route` (their height is a guess).
+fn mark_estimated_routes(runs: &mut [DuctRun]) {
+    for run in runs.iter_mut() {
+        if run.bottom_ft.is_none() {
+            run.height_source = "estimated-route".into();
         }
     }
 }
@@ -1081,39 +1347,137 @@ pub fn read_ducts(d: &Drawing, sh: &Sheet) -> DuctNetwork {
 
 /// [`read_ducts`] with options.
 pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork {
-    // 1. Find parallel line pairs on DUCT layer.
+    let al = o.all_layers;
+    let scale = if al && o.scale == 1.0 { detect_paper_scale(d).max(0.001) } else { o.scale };
+    let mut opts = *o;
+    opts.scale = scale;
+
+    // 1. Find parallel line pairs (DUCT layer, or all layers).
     let segs = line_segments(d);
-    let pairs = duct_pairs(&segs);
+    let pairs = duct_pairs(&segs, al, scale);
 
     // 2. Chain pairs into runs.
-    let mut runs = chain_runs(&pairs, o);
+    let mut runs = chain_runs(&pairs, &opts);
 
-    // 2b. Add centreline-based runs that aren't covered by pairs.
-    add_centreline_runs(&mut runs, &segs);
+    // 2b. Add centreline-based runs that aren't covered by pairs (skipped in all_layers mode).
+    add_centreline_runs(&mut runs, &segs, al);
 
     // 3. Read legend and abbreviations.
     let (legend, abbr_map) = read_legend(d);
 
-    // 4. Attach size/height/system tags.
-    let tags = attach_tags(&mut runs, d, &abbr_map);
+    // 4. Attach size/height/system tags (with scale-adjusted reach for paper-scale).
+    let tags = attach_tags(&mut runs, d, &abbr_map, al, scale);
 
     // 5. Infer systems from labels in run breaks.
-    infer_systems_from_labels(&mut runs, d, &abbr_map);
+    infer_systems_from_labels(&mut runs, d, &abbr_map, al);
 
     // 6. Snap widths and infer missing depths.
     infer_depths_and_snap(&mut runs);
 
     // 7. Detect fittings, terminals, equipment.
-    let fittings = detect_fittings(d, &runs);
-    let terminals = detect_terminals(d);
-    let equipment = detect_equipment(d);
+    let terminals = detect_terminals(d, al);
+    let equipment = detect_equipment(d, al);
+
+    // 7b. In all-layers mode, filter out runs that have no tag/system/equipment evidence.
+    // This removes false positives from wall/grid/border line pairs.
+    if al {
+        filter_runs_by_context(&mut runs, &equipment, &terminals, scale);
+    }
+
+    let fittings = detect_fittings(d, &runs, al);
 
     // 8. Infer systems from equipment proximity and terminal tags.
     infer_systems_from_equipment(&mut runs, &equipment, &terminals);
 
+    // 9. Mark runs without height tags as estimated-route.
+    mark_estimated_routes(&mut runs);
+
     let abbreviations = abbr_map;
 
     DuctNetwork { runs, fittings, terminals, equipment, tags, legend, abbreviations }
+}
+
+/// Read ducts from a drawing with all-layers mode (for PDF-imported mechanical sheets).
+/// Automatically detects paper-scale drawings and adjusts detection thresholds.
+/// Coordinates stay in the drawing's units (paper inches for PDF imports).
+/// Sizes: tag-sourced sizes are building-scale (correct); measured widths from
+/// paper-scale pairs are replaced with a default if they look unreasonably small.
+pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
+    let paper_scale = detect_paper_scale(d);
+    let sh = Sheet::default();
+    if paper_scale < 0.5 {
+        // Paper-scale drawing: scale detection thresholds down to paper units.
+        let opts = DuctOptions { all_pairs: true, all_layers: true, scale: paper_scale.max(0.001) };
+        let mut net = read_ducts_with(d, &sh, &opts);
+        // Runs whose sizes came from tags (confidence >= 0.85) are already in building inches.
+        // Untagged runs have paper-scale widths — replace with a reasonable building-scale default.
+        for run in &mut net.runs {
+            if run.confidence < 0.85 {
+                // No tag set the size; the measured width is paper-scale → use default.
+                run.width_in = 12.0; // 12" default duct
+                run.depth_in = 12.0;
+            }
+        }
+        net
+    } else {
+        read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, ..Default::default() })
+    }
+}
+
+/// Detect whether this is a paper-scale drawing (small extents, like a PDF import).
+/// Returns a scale factor: 1.0 for building-scale, < 1.0 for paper-scale.
+/// At 1/8" = 1'-0" scale, scale_factor ≈ 0.0104 (1 paper inch = 96 building inches).
+pub fn detect_paper_scale_pub(d: &Drawing) -> f64 {
+    detect_paper_scale(d)
+}
+
+fn detect_paper_scale(d: &Drawing) -> f64 {
+    let mut xmin = f64::INFINITY;
+    let mut xmax = f64::NEG_INFINITY;
+    let mut ymin = f64::INFINITY;
+    let mut ymax = f64::NEG_INFINITY;
+    let mut count = 0usize;
+    for e in d.model.iter().take(5000) {
+        match &e.kind {
+            EntityKind::Line(l) => {
+                for p in [l.a.xy(), l.b.xy()] {
+                    if p.is_finite() {
+                        xmin = xmin.min(p.x); xmax = xmax.max(p.x);
+                        ymin = ymin.min(p.y); ymax = ymax.max(p.y);
+                        count += 1;
+                    }
+                }
+            }
+            EntityKind::LwPolyline(p) => {
+                for v in p.vertices.iter().take(100) {
+                    if v.p.is_finite() {
+                        xmin = xmin.min(v.p.x); xmax = xmax.max(v.p.x);
+                        ymin = ymin.min(v.p.y); ymax = ymax.max(v.p.y);
+                        count += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if count < 10 || xmax <= xmin || ymax <= ymin {
+        return 1.0;
+    }
+    let w = xmax - xmin;
+    let h = ymax - ymin;
+    let diag = (w * w + h * h).sqrt();
+    // A building-scale floor plan would be > 200 inches across (a 17' room).
+    // A paper-scale sheet is typically 24-54 inches across.
+    if diag < 100.0 {
+        // Paper scale: estimate factor from diagonal.
+        // A typical building floor is ~3000-6000 inches across.
+        // A D-size sheet is ~54" x 34" → diagonal ~64".
+        // Factor = paper_diagonal / typical_building_diagonal ≈ 64 / 4000 ≈ 0.016.
+        // But we don't know the exact building size, so use the diag to scale thresholds.
+        diag / 4000.0 // rough estimate
+    } else {
+        1.0
+    }
 }
 
 /// Read ducts and score against truth for a single mechanical sheet.
@@ -1169,7 +1533,7 @@ mod tests {
         // first duct again (its walls paired another way) and is not a second run.
         let p = |a: (f64, f64), b: (f64, f64)| DuctPair { c0: Vec2::new(a.0, a.1), c1: Vec2::new(b.0, b.1), half_w: 6.0 };
         let pairs = [p((0.0, 0.0), (100.0, 0.0)), p((100.0, 0.0), (200.0, 0.0)), p((0.0, 300.0), (150.0, 300.0)), p((20.0, 1.0), (180.0, 1.0))];
-        let runs = chain_runs(&pairs, &DuctOptions { all_pairs: true });
+        let runs = chain_runs(&pairs, &DuctOptions { all_pairs: true, ..Default::default() });
         assert_eq!(runs.len(), 2, "{runs:?}");
         assert!(runs.iter().any(|r| r.points.iter().all(|q| (q.y - 300.0).abs() < 1e-9)));
         // As tuned on the vector sheets: the chaining stops at the used pair.

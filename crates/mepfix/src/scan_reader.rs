@@ -31,7 +31,7 @@ pub const INK: u8 = 90;
 pub const INK_WEAK: u8 = 150;
 /// How [`crate::duct_reader`] reads a scan's drawing: walls come in pieces, so every pair is
 /// chained.
-pub const DUCT_OPTIONS: crate::duct_reader::DuctOptions = crate::duct_reader::DuctOptions { all_pairs: true };
+pub const DUCT_OPTIONS: crate::duct_reader::DuctOptions = crate::duct_reader::DuctOptions { all_pairs: true, all_layers: false, scale: 1.0 };
 /// Most traced lines handled after tracing.
 const MAX_LINES: usize = 200_000;
 /// Largest skew searched, degrees.
