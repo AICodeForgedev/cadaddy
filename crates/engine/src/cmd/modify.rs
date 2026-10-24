@@ -378,6 +378,22 @@ impl StretchArea {
     }
 }
 
+/// Add to `hs` the visible multilines in `space` with a control vertex inside `area`. A crossing
+/// selection tests the drawn element lines, which sit away from the control vertices by the
+/// multiline's scale, so a small area around a vertex alone would miss them.
+fn add_mline_vertex_hits(d: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, area: &StretchArea, hs: &mut Vec<Handle>) {
+    let Some(store) = d.space(space) else { return };
+    for e in store.iter() {
+        if let EntityKind::MLine(m) = &e.kind
+            && d.is_visible(e)
+            && !hs.contains(&e.handle)
+            && m.vertices.iter().any(|v| area.contains(v.p.xy()))
+        {
+            hs.push(e.handle);
+        }
+    }
+}
+
 /// Move the vertices of `e` that lie inside any of the areas `wins` by `d` (STRETCH).
 fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
     let inside = |p: Vec2| wins.iter().any(|a| a.contains(p));
@@ -399,6 +415,7 @@ fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
                 }
             }
         }
+        EntityKind::MLine(m) => m.vertices.iter_mut().for_each(|v| mv(&mut v.p)),
         EntityKind::Arc(a) => {
             // Arcs keep their shape: move when the centre is inside.
             if inside(a.center.xy()) {
@@ -446,6 +463,7 @@ fn run_stretch(s: &mut Session, p: &Value) -> Result<Value> {
         let bx = cadaddy_geom::Bounds2::new(*a, *b);
         (crate::select::select_window(s.doc()?, &space, bx, true), StretchArea::Box(bx))
     };
+    add_mline_vertex_hits(s.doc()?, &space, &area, &mut hs);
     hs.retain(|h| !super::curves::is_locked(s, *h));
     let doc = s.doc_mut()?;
     let areas = [area];
@@ -515,7 +533,12 @@ impl StretchM {
     /// of two) the mode is dropped.
     fn finish_mode(&mut self, s: &mut Session, m: SelectMode) -> Result<()> {
         let space = s.space();
-        let Some(hs) = m.select(s.doc()?, &space) else { return Ok(()) };
+        let Some(mut hs) = m.select(s.doc()?, &space) else { return Ok(()) };
+        let crossing = match (m.kind, m.pts.first().zip(m.pts.get(1))) {
+            (SelectKind::Crossing | SelectKind::CPolygon, _) => true,
+            (SelectKind::Box, Some((a, b))) => b.x < a.x,
+            _ => false,
+        };
         let area = match (m.kind, m.pts.first().zip(m.pts.get(1))) {
             (SelectKind::WPolygon | SelectKind::CPolygon, _) => Some(StretchArea::Polygon(m.pts)),
             (SelectKind::Window | SelectKind::Crossing | SelectKind::Box, Some((a, b))) => Some(StretchArea::Box(cadaddy_geom::Bounds2::new(*a, *b))),
@@ -523,6 +546,9 @@ impl StretchM {
             _ => None,
         };
         let whole = area.is_none();
+        if let (Some(a), true, false) = (&area, crossing, self.removing) {
+            add_mline_vertex_hits(s.doc()?, &space, a, &mut hs);
+        }
         if let (Some(a), false) = (area, self.removing) {
             self.windows.push(a);
         }
@@ -560,8 +586,11 @@ impl StretchM {
                 Some(c) => {
                     let bx = cadaddy_geom::Bounds2::new(c, p);
                     let space = s.space();
-                    let hs = crate::select::select_window(s.doc()?, &space, bx, p.x < c.x);
+                    let mut hs = crate::select::select_window(s.doc()?, &space, bx, p.x < c.x);
                     if !self.removing {
+                        if p.x < c.x {
+                            add_mline_vertex_hits(s.doc()?, &space, &StretchArea::Box(bx), &mut hs);
+                        }
                         self.windows.push(StretchArea::Box(bx));
                     }
                     self.add(s, hs, false);
