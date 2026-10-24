@@ -1112,7 +1112,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // Only re-read when the drawing has entities to read from; otherwise the spec's
     // pre-set runs (e.g. from bspec.set or a previous import) are authoritative.
     let mut mep_warnings: Vec<String> = Vec::new();
-    let has_drawing_entities = s.doc().map_or(false, |d| d.model.len() > 0);
+    let has_drawing_entities = s.doc().is_ok_and(|d| !d.model.is_empty());
     if (disc == "mep" || disc == "all") && has_drawing_entities {
         // First, try standard layer-based reading (mep.read {apply}).
         if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
