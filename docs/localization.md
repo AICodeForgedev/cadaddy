@@ -51,7 +51,10 @@ literal: commands, menus, tool groups and tooltips, object snaps, drafting promp
 Preferences; its gaps are now zero. Its plural rule is `one|other` (0 and 1 are `one`), as CLDR defines
 for `pt`, and the catalog's accented letters (`Á Â Í Ó Ú à á â ã ç é ê í ó ô õ ú`) render in the
 bundled fonts. The original catalog was contributed by @WladmirJunior; the remaining rows were completed
-by @RicSchonfelder with AI assistance and have not yet been proofread by a native speaker.
+by @RicSchonfelder with AI assistance. A native-speaker terminology pass by @ffishman (2026-10-19) fixed
+mistranslations (Thaw Layer, Snap type, Revolve) and made the CAD vocabulary consistent with Brazilian
+usage: *snap* for every snap mode, *viewport*, *grip* and *offset* kept as loanwords (Brazilian university
+AutoCAD handouts keep these names in English), *Ligar/Desligar camada*, *Explodir*, *Multilinha*.
 
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
