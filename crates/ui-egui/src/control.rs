@@ -187,7 +187,7 @@ fn wrap(r: Result<Value, String>) -> Outcome {
 }
 
 /// What `control.methods` replies: method, params, description. Keep in step with `handle` and the
-/// table in `docs/control-protocol.md` (`tests/control_methods.rs` checks the table).
+/// table in `docs/control-protocol.md` (`tests/it/control_methods.rs` checks the table).
 const METHODS: &[(&str, &str, &str)] = &[
     ("cmdline.input", "{text}", "Type a line at the command line exactly like a user (commands, prompts, keywords; empty = Enter)."),
     ("cmdline.script", "{text}", "Run a multi-line script, like a .scr file."),

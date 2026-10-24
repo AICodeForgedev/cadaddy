@@ -51,8 +51,6 @@ const MAX_OBJECTS: usize = 1_000_000;
 const MAX_XDATA_GROUPS: usize = 16_384;
 /// Longest ownership chain followed.
 const MAX_DEPTH: usize = 64;
-/// Handles above this are not believed (hostile files); references to them are dropped.
-const MAX_HANDLE: u64 = 1 << 48;
 
 /// Record types that structure a file: never written as an entity of another type.
 const STRUCTURAL: &[&str] = &["", "SECTION", "ENDSEC", "EOF", "TABLE", "ENDTAB", "BLOCK", "ENDBLK", "SEQEND", "VERTEX", "ATTRIB", "CLASS"];
@@ -85,9 +83,10 @@ fn tag(r: &RawTag) -> Tag {
     Tag::new(r.code, value.unwrap_or_else(|| Value::Str(r.value.clone())))
 }
 
-/// A handle value we believe: hexadecimal, not null, not absurdly large.
+/// A handle value we believe: hexadecimal and not null. DXF handles are up to 16 hex digits and
+/// AutoCAD writes some above 2^48 (e.g. 0xDAD1…), so the whole 64-bit range is believed.
 fn handle(s: &str) -> Option<Handle> {
-    Handle::parse_hex(s).filter(|h| h.0 != 0 && h.0 <= MAX_HANDLE)
+    Handle::parse_hex(s).filter(|h| h.0 != 0)
 }
 
 /// Group codes whose values are handles of other objects (DXF Reference, group code ranges).

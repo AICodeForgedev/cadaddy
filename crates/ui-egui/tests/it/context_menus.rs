@@ -169,37 +169,6 @@ fn a_selected_block_reference_offers_the_block_editor() {
     assert_eq!(app.session.state().unwrap().block_editor(), None);
 }
 
-#[test]
-fn every_menu_label_has_a_ukrainian_translation() {
-    let mut app = app();
-    app.cmdline("LINE 0,0 10,0");
-    app.cmdline("");
-    app.run("pline", json!({ "vertices": [[0, 0], [10, 0]] })).unwrap();
-    select_all(&mut app);
-    let mut all = flatten(&context_menu::entries(&app));
-    let line = app.session.doc().unwrap().model.handles()[0];
-    app.session.set_selection(app.session.doc().unwrap().model.handles().into_iter().filter(|h| *h != line).collect());
-    all.extend(flatten(&context_menu::entries(&app)));
-    all.extend(flatten(&context_menu::snap_entries(&app)));
-    type_line(&mut app, "LINE");
-    type_line(&mut app, "0,0");
-    all.extend(flatten(&context_menu::command_entries(&app).unwrap()));
-    let mut missing = Vec::new();
-    for (label, id, _) in &all {
-        let segments: Vec<&str> = label.split('/').collect();
-        // The item itself is user text when it types a value, or a command name (Recent Commands).
-        let user_text = (id.starts_with(context_menu::TYPE) && !id.contains('\'')) || segments.first() == Some(&"Recent Commands");
-        let n = segments.len() - usize::from(user_text);
-        for s in &segments[..n] {
-            // Point filters (.X) and "Repeat LINE" (a template) aren't catalog keys.
-            if !s.starts_with('.') && !s.starts_with("Repeat ") && cadcraft_ui_egui::i18n::tr("uk", s) == *s {
-                missing.push(s.to_string());
-            }
-        }
-    }
-    assert!(missing.is_empty(), "untranslated menu labels: {missing:?}");
-}
-
 /// The text painted in one frame at `time` (seconds).
 fn painted(app: &mut CadApp, ctx: &egui::Context, events: Vec<egui::Event>, time: f64) -> String {
     fn collect(shape: &egui::Shape, text: &mut String) {

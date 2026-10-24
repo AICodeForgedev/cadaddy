@@ -324,12 +324,24 @@ fn components<'a>(cons: &[&'a Constraint]) -> Vec<Vec<&'a Constraint>> {
 
 /// Build the component systems. Constraints that cannot be interpreted are returned as skipped.
 pub(crate) fn build(d: &Drawing, cons: &[&Constraint], opts: &SolveOptions) -> Result<(Vec<Comp>, Vec<(u32, String)>), SolveError> {
+    let mut members_left = model::MAX_RIGID_WORK;
+    build_budgeted(d, cons, opts, &mut members_left)
+}
+
+/// Build constraint components with one caller-owned rigid-member sampling budget shared by every model.
+/// Return constraints that cannot be interpreted as skipped entries.
+pub(crate) fn build_budgeted(
+    d: &Drawing,
+    cons: &[&Constraint],
+    opts: &SolveOptions,
+    members_left: &mut usize,
+) -> Result<(Vec<Comp>, Vec<(u32, String)>), SolveError> {
     let mut e = env(d);
     let mut skipped = Vec::new();
     let mut comps = Vec::new();
     for group in components(cons) {
         let handles: Vec<Handle> = group.iter().flat_map(|c| c.refs.iter().map(|r| r.handle)).collect();
-        let mut model = Model::build(d, &handles);
+        let mut model = Model::build_budgeted(d, &handles, members_left);
         let mut built = Vec::new();
         for c in group {
             let target = if c.kind.is_dimensional() { constraint_value(&mut e, c)? } else { 0.0 };

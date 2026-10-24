@@ -735,13 +735,17 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
         let eb = cadcraft_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
+    // One expansion budget for the whole build: seed it with what the enclosing list has already
+    // spent so a viewport's contents cannot start over with a fresh allowance and exceed the
+    // documented limit (CWE-400). Both the serial sub-builder and the parallel chunks share it.
+    let budget = std::sync::atomic::AtomicUsize::new(b.list.expanded);
     let mut sub = Builder {
         list: DisplayList::default(),
         opts: b.opts,
         plotting: b.plotting,
         styles: b.styles,
         named: None,
-        shared_budget: None,
+        shared_budget: Some(&budget),
         transparency: 0,
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -754,7 +758,6 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
             // As `build_parallel`: chunks built side by side, joined in drawing order.
             use rayon::prelude::*;
             let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
-            let budget = std::sync::atomic::AtomicUsize::new(0);
             let opts = b.opts;
             let parts: Vec<DisplayList> = ents
                 .par_chunks(PARALLEL_CHUNK)

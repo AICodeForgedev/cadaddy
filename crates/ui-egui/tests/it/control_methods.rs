@@ -22,7 +22,7 @@ fn app() -> CadApp {
 
 /// The method names in the first column of the doc's method table.
 fn documented() -> BTreeSet<String> {
-    let doc = include_str!("../../../docs/control-protocol.md");
+    let doc = include_str!("../../../../docs/control-protocol.md");
     let table = doc.lines().skip_while(|l| !l.starts_with("| Method |")).skip(2).take_while(|l| l.starts_with('|'));
     table.filter_map(|l| l.split('|').nth(1)).flat_map(|cell| cell.split('`').skip(1).step_by(2).map(str::to_string).collect::<Vec<_>>()).collect()
 }

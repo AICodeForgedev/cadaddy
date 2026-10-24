@@ -4,6 +4,25 @@
 //! converted to DXF bytes, which CADCraft's own DXF reader maps to its document model; saving
 //! goes the other way. Keeping the dependency behind this byte-level API isolates it: nothing
 //! else in CADCraft depends on its types. Native targets only (it memory-maps files).
+//!
+//! # Guardrails around the third-party decoder
+//!
+//! The decoder allocates tables and section buffers from sizes a (possibly damaged or hostile)
+//! file declares, and once it starts it cannot be interrupted (an allocation failure aborts the
+//! process, which `catch_unwind` cannot recover). Because the dependency is used unmodified, this
+//! crate guards it from the outside:
+//!
+//! - Both directions reject oversized input *before* the decoder runs ([`Limits::max_dwg_bytes`]
+//!   for DWG→DXF, [`Limits::max_dxf_bytes`] for DXF→DWG), and the DWG→DXF output is capped while
+//!   it is written (`CappedWriter`).
+//! - The reader and writer run inside `catch_unwind`, so a decode failure is reported instead of
+//!   crashing.
+//!
+//! These bound the input- and output-size variants. A small file that declares a huge internal
+//! table or section can still make the dependency allocate before any size is known; fully fixing
+//! that requires an upstream fix in `acadrust` (validate declared sizes against a decoded-memory
+//! budget) or running the decode in a separate worker with an OS memory limit. The limits here
+//! keep the blast radius bounded in the meantime.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -88,7 +107,6 @@ mod native {
         current_style_names(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
-        dimension_flags(&mut doc, false);
         let orphans = drop_orphaned_dgn_components(&mut doc);
         if orphans > 0 {
             let (s, were) = if orphans == 1 { ("", "was") } else { ("s", "were") };
@@ -272,24 +290,14 @@ mod native {
         }
     }
 
-    /// The DWG dimension flags byte. Its bit 0 is the opposite of DXF group 70's bit 128 (set: the
-    /// text is at its default position) and its bit 1 is group 70's bit 32 (ODA DWG
-    /// specification, common dimension data), while acadrust 0.6.4 reads and writes bit 0 as
-    /// `text_user_positioned` itself and keeps no bit 32 from DXF. Without this, every dimension
-    /// of a DWG CADCraft writes is user-positioned for AutoCAD (#1094), and every dimension of an
-    /// AutoCAD DWG is read as user-positioned. `to_dwg` sets the fields up for the writer:
-    /// bit 32 as CADCraft's DXF writer always sets it, and bit 0 through the inverted field;
-    /// otherwise the field is read from bit 0 after a DWG is read.
-    fn dimension_flags(doc: &mut acadrust::CadDocument, to_dwg: bool) {
+    /// The DWG dimension flags byte. Its bit 1 is DXF group 70's bit 32 (ODA DWG specification,
+    /// common dimension data), which acadrust keeps no copy of from DXF: it is set here as
+    /// CADCraft's DXF writer always sets it (#1094). Bit 0, the opposite of group 70's bit 128,
+    /// acadrust 0.6.5 reads and writes itself.
+    fn dimension_flags(doc: &mut acadrust::CadDocument) {
         for e in doc.entities_mut() {
             let acadrust::entities::EntityType::Dimension(d) = e else { continue };
-            let b = d.base_mut();
-            if to_dwg {
-                b.dwg_flags_byte |= 0x02;
-                b.text_user_positioned = !b.text_user_positioned;
-            } else {
-                b.text_user_positioned = b.dwg_flags_byte & 0x01 == 0;
-            }
+            d.base_mut().dwg_flags_byte |= 0x02;
         }
     }
 
@@ -494,7 +502,28 @@ mod native {
         }
     }
 
+    /// The current text style (`$TEXTSTYLE`) by its name, the same way as [`current_dimstyle`]:
+    /// the handle read with the DXF needn't be the style's in the document, in which case the DWG
+    /// writer fell back to Standard and AutoCAD opened the drawing with Standard current (#1650).
+    fn current_text_style(doc: &mut acadrust::CadDocument) {
+        let name = doc.header.current_text_style_name.clone();
+        if let Some(h) = doc.text_styles.iter().find(|ts| ts.name.eq_ignore_ascii_case(&name)).map(|ts| ts.handle) {
+            doc.header.current_text_style_handle = h;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
+        // Reject a pathologically large DXF before handing it to the third-party decoder, which
+        // allocates tables and section buffers from the input's declared sizes and cannot be
+        // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
+        // runs inside `catch_unwind` so a decode failure is reported rather than crashing.
+        if dxf.len() > Limits::DEFAULT.max_dxf_bytes {
+            return Err(format!(
+                "DXF: the input is {}, larger than the {} CADCraft converts to DWG",
+                mb(dxf.len() as u64),
+                mb(Limits::DEFAULT.max_dxf_bytes as u64)
+            ));
+        }
         let data = dxf.to_vec();
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
@@ -509,9 +538,10 @@ mod native {
         }
         other_layout_owners(&mut doc);
         table_style_rows(&mut doc, true);
-        dimension_flags(&mut doc, true);
+        dimension_flags(&mut doc);
         drop_unwritable(&mut doc);
         current_dimstyle(&mut doc);
+        current_text_style(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
@@ -585,10 +615,35 @@ mod tests {
         assert_eq!(version(b"AC1018xxxx").as_deref(), Some("AC1018"));
     }
 
+    /// A DXF with ROMANS as `$TEXTSTYLE` gives a DWG whose current text style is ROMANS, not
+    /// Standard: the DXF names the style, and the handle read with it was Standard's (#1650).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn current_text_style_reaches_the_dwg() {
+        let header = "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  9\n$TEXTSTYLE\n  7\nROMANS\n  0\nENDSEC\n";
+        let style = "  0\nSTYLE\n  5\n1F0\n100\nAcDbSymbolTableRecord\n100\nAcDbTextStyleTableRecord\n  2\nROMANS\n 70\n0\n";
+        let style = format!("{style} 40\n0\n 41\n1\n 50\n0\n 71\n0\n 42\n2.5\n  3\nromans.shx\n  4\n\n");
+        let dxf = format!("{header}  0\nSECTION\n  2\nTABLES\n  0\nTABLE\n  2\nSTYLE\n 70\n1\n{style}  0\nENDTAB\n  0\nENDSEC\n  0\nEOF\n");
+        let dwg = dxf_to_dwg(dxf.as_bytes()).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(&dwg)).read().unwrap();
+        let romans = doc.text_styles.iter().find(|ts| ts.name == "ROMANS").map(|ts| ts.handle);
+        assert!(romans.is_some(), "ROMANS is missing from the DWG");
+        assert_eq!(Some(doc.header.current_text_style_handle), romans);
+    }
+
     #[test]
     fn garbage_is_an_error_not_a_crash() {
         assert!(dwg_to_dxf(b"AC1032 this is not a dwg file at all").is_err());
         assert!(dwg_to_dxf(b"").is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dxf_to_dwg_rejects_garbage_without_crashing() {
+        // The DXF→DWG path runs the third-party reader inside catch_unwind and reports failures
+        // rather than crashing (and rejects oversized input before decoding).
+        assert!(dxf_to_dwg(b"not a dxf file").is_err());
+        assert!(dxf_to_dwg(b"").is_err());
     }
 
     /// A DXF with one DIMENSION per (text, group 70, subclass, points) row.

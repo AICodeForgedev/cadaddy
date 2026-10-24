@@ -114,9 +114,19 @@ fn build(polys: &[Vec<Vec2>], tol: f64) -> Option<Graph> {
     }
     let mut splits: Vec<Vec<f64>> = vec![vec![0.0, 1.0]; n];
     let mut tested = std::collections::HashSet::new();
+    // Count every candidate-pair *visit*, including repeats of a pair that shares several grid
+    // cells, not only the distinct pairs actually tested. A long segment replicated across many
+    // cells makes the same pair reappear in each, so a budget on distinct pairs alone leaves the
+    // repeated hashing unbounded (CWE-407).
+    let mut visits: u64 = 0;
+    const MAX_PAIR_VISITS: u64 = 60_000_000;
     for list in grid.values() {
         for (k, &i) in list.iter().enumerate() {
             for &j in list.iter().skip(k + 1) {
+                visits += 1;
+                if visits > MAX_PAIR_VISITS {
+                    return None;
+                }
                 if i == j || !tested.insert((i.min(j), i.max(j))) {
                     continue;
                 }

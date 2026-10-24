@@ -334,7 +334,11 @@ pub struct TextGlyph {
 
 impl Shaped {
     /// Add a glyph outline and, when it is a font glyph, its [`TextGlyph`].
+    /// An empty outline is retained only when text metadata needs its slot.
     pub(crate) fn push_glyph(&mut self, contours: Vec<Vec<Vec2>>, text: Option<TextGlyph>) {
+        if contours.is_empty() && text.is_none() {
+            return;
+        }
         if let Some(t) = text {
             self.text.push(TextGlyph { outline: self.glyphs.len(), ..t });
         }

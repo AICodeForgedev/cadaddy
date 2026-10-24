@@ -121,3 +121,20 @@ fn json_form_takes_leader_type_and_block() {
         assert!(s.execute("mleader", &bad).is_err(), "{bad}");
     }
 }
+
+/// DIMSCALE belongs to dimension styles: a multileader keeps its style's text height, arrowhead
+/// and dogleg whatever DIMSCALE is (#1648).
+#[test]
+fn mleader_sizes_ignore_dimscale() {
+    let mut s = Session::new();
+    s.execute("mleaderstyle", &json!({"name": "M5", "textHeight": 5, "arrowSize": 5, "current": true})).unwrap();
+    s.execute("setvar", &json!({"name": "DIMSCALE", "value": 20})).unwrap();
+    s.execute("mleader", &json!({"points": [[0, 0], [30, 20]], "text": "CADCRAFT"})).unwrap();
+    let m = last_mleader(&s);
+    assert_eq!(m.arrow_size, 5.0);
+    let st = s.doc().unwrap().mleader_styles.iter().find(|x| x.name == "M5").unwrap().clone();
+    assert_eq!(m.dogleg, st.dogleg);
+    let t = m.text.unwrap();
+    assert_eq!(t.height, 5.0);
+    assert!((t.insert.x - (30.0 + st.dogleg + st.landing_gap)).abs() < 1e-9, "{}", t.insert.x);
+}

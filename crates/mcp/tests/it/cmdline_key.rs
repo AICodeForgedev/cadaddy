@@ -1,5 +1,5 @@
 //! The headless backend answers `cmdline.key` like `cmdline.input` and like the app's control
-//! channel (`crates/ui-egui/tests/control_cmdline_key.rs`): a refused Enter is echoed and reported
+//! channel (`crates/ui-egui/tests/it/control_cmdline_key.rs`): a refused Enter is echoed and reported
 //! in `error`, and the call itself succeeds.
 
 use cadcraft_mcp::{Backend, Headless};

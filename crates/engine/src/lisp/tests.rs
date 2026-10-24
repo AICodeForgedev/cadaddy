@@ -70,6 +70,39 @@ fn arithmetic_follows_autolisp() {
     assert_eq!(eval(&mut s, "(+ 1 nil)"), Err("bad argument type: numberp: nil".into()));
 }
 
+/// `=` answers for the symbols `type` returns, which is how AutoLISP routines test a type:
+/// `(= (type x) 'INT)`. Coercing the symbol to a number failed the whole routine with "bad
+/// argument type" instead, so a routine written for AutoLISP stopped at its first type test
+/// (#1597). The ordering comparisons are still numbers and strings, as AutoLISP has them.
+#[test]
+fn equality_compares_symbols_as_autolisp_does() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(= (type 1) 'INT)"), "T");
+    assert_eq!(ok(&mut s, "(= (type 1.0) 'INT)"), "nil");
+    assert_eq!(ok(&mut s, "(= (type '(1 2)) 'LIST)"), "T");
+    assert_eq!(ok(&mut s, "(= (type \"a\") 'STR)"), "T");
+    assert_eq!(ok(&mut s, "(/= (type 1) 'REAL)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'a 'a)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'b)"), "nil");
+
+    // The routine from the report runs.
+    ok(&mut s, "(defun isint (a) (if (= (type a) 'INT) T nil))");
+    assert_eq!(ok(&mut s, "(isint 3)"), "T");
+    assert_eq!(ok(&mut s, "(isint 3.0)"), "nil");
+    assert_eq!(ok(&mut s, "(isint \"3\")"), "nil");
+
+    // A mismatch of kinds is nil, not an error; numbers and strings are unchanged.
+    assert_eq!(ok(&mut s, "(= 1 \"1\")"), "nil");
+    assert_eq!(ok(&mut s, "(= '(1) '(1))"), "nil", "`=` is not `equal`");
+    assert_eq!(ok(&mut s, "(= nil nil)"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1.0)"), "T");
+    assert_eq!(ok(&mut s, "(= \"a\" \"a\" \"a\")"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1 2)"), "nil");
+
+    // Ordering still refuses what AutoLISP refuses.
+    assert_eq!(eval(&mut s, "(< 'a 'b)"), Err("bad argument type: numberp: A".into()));
+}
+
 #[test]
 fn lists_and_strings() {
     let mut s = session();
@@ -186,6 +219,69 @@ fn runaway_routines_are_errors_not_crashes() {
     // An endless loop in a blocking run stops at the step cap.
     let r = eval(&mut s, "(setq n 0) (while (< n 3000000) (setq n (1+ n))) n");
     assert_eq!(r, Ok("3000000".into()));
+}
+
+/// An infinite comparator stops at its callback cap, and a later finite comparator still succeeds.
+#[test]
+fn synchronous_callback_loop_is_an_error_not_a_hang() {
+    // A comparator with an infinite loop used to run with u64::MAX fuel and hang the thread; it
+    // now terminates at the synchronous-callback step cap (CWE-400, finding row 2).
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    assert!(eval(&mut s, "(vl-sort '(1 2) (function (lambda (a b) (while t))))").is_err());
+    // A well-behaved comparator still works afterwards.
+    assert_eq!(ok(&mut s, "(vl-sort '(3 1 2) '<)"), "(1 2 3)");
+}
+
+/// A zero-step callback limit prevents even the first callback side effect.
+#[test]
+fn a_zero_callback_budget_does_not_run_the_callback() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 0;
+    ok(&mut s, "(setq callback-ran nil)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (setq callback-ran t)) '(1))");
+    assert_eq!(result, Err("callback stopped after 0 steps".into()));
+    assert_eq!(ok(&mut s, "callback-ran"), "nil");
+}
+
+/// A callback stops at a cap smaller than one scheduling slice without completing all its assignments.
+#[test]
+fn a_callback_must_fit_within_a_partial_slice() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    ok(&mut s, "(setq callback-count 0)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (repeat 1000 (setq callback-count (1+ callback-count)))) '(1))");
+    assert_eq!(result, Err("callback stopped after 1000 steps".into()));
+    assert_eq!(ok(&mut s, "(and (> callback-count 0) (< callback-count 1000))"), "T");
+}
+
+/// Crossing a scheduling boundary grants only the additional configured step, rather than another slice.
+#[test]
+fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
+    let counts: Vec<u64> = [399_999, 400_000]
+        .into_iter()
+        .map(|cap| {
+            let mut s = session();
+            s.lisp.limits.callback_steps = cap;
+            ok(&mut s, "(setq callback-count 0)");
+            let result = eval(&mut s, "(vl-remove-if '(lambda (x) (while t (setq callback-count (1+ callback-count)))) '(1))");
+            assert_eq!(result, Err(format!("callback stopped after {cap} steps")));
+            ok(&mut s, "callback-count").parse().unwrap()
+        })
+        .collect();
+    // One additional VM step can perform at most one assignment, even at SYNC_SLICE's boundary.
+    assert!(counts[0] > 0);
+    assert!(counts[1] >= counts[0] && counts[1] - counts[0] <= 1, "{counts:?}");
+}
+
+/// System-variable conversion rejects a shared list whose owned JSON expansion would exceed its budget.
+#[test]
+fn setvar_rejects_an_oversized_shared_structure() {
+    // A list repeatedly sharing its own contents expands exponentially; setvar's bounded JSON
+    // conversion rejects it instead of allocating gigabytes (CWE-400, finding row 39).
+    let mut s = session();
+    let build = "(setq x '(1)) (repeat 40 (setq x (list x x))) (setvar \"GRIDUNIT\" x)";
+    assert!(eval(&mut s, build).is_err());
 }
 
 #[test]
@@ -450,6 +546,37 @@ fn hostile_lisp_never_panics() {
         let _ = eval(&mut s, code);
     }
     assert!(!s.lisp_running());
+}
+
+/// `entsel` and `nentsel` pick one object, so the cursor shows the pick box at their prompt. It
+/// was read off the message's first word, and a routine's own message begins with a newline -- so
+/// the same call showed the pick box without a message and lost it with one (#1598).
+#[test]
+fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
+    let mut s = session();
+    // No message: the default "Select object: ".
+    s.cmdline("(nentsel)").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // The reported case: the routine's own message, starting with a newline.
+    s.cmdline("(nentsel \"\nSelect second line or polyline: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // Wording that never says "select" picks an object just the same.
+    s.cmdline("(entsel \"\nPick a line: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // A point prompt is not a pick, and keeps its point modifiers -- including one whose own
+    // message happens to begin with the word the built-in commands are read by. `picks_one` says
+    // which calls pick, so the wording is only ever read where the engine wrote it (#1635 review).
+    for point in ["(getpoint \"\nSpecify a point: \")", "(getpoint \"\nSelect a point: \")", "(getpoint \"Select a point: \")"] {
+        s.cmdline(point).unwrap();
+        assert!(!s.current_prompt().unwrap().picks_objects(), "{point}: {}", s.prompt_text());
+        s.cancel();
+    }
 }
 
 #[test]

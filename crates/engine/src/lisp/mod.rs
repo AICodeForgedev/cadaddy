@@ -126,11 +126,14 @@ pub(crate) struct Limits {
     pub cells: usize,
     /// Bytes of strings, printed text and files read per run.
     pub string_bytes: u64,
+    /// Maximum interpreter steps per synchronous callback.
+    pub callback_steps: u64,
 }
 
 impl Default for Limits {
+    /// Provide finite cons-cell, string-byte, and synchronous-callback limits for a LISP run.
     fn default() -> Self {
-        Limits { cells: value::MAX_CELLS, string_bytes: value::STRING_BUDGET }
+        Limits { cells: value::MAX_CELLS, string_bytes: value::STRING_BUDGET, callback_steps: 500_000_000 }
     }
 }
 
