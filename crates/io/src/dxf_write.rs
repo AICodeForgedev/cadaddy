@@ -1629,6 +1629,15 @@ fn paper_views(d: &Drawing) -> HashMap<Handle, usize> {
     out
 }
 
+/// A layout's entities with its paper-space viewport (id 1) first. DWG stores no viewport ids and
+/// readers number a layout's viewports in order, so the sheet must lead even when the draw order
+/// (SORTENTS) put it behind a model viewport; otherwise that viewport becomes the sheet.
+fn sheet_first(l: &Layout) -> Vec<&Entity> {
+    let sheet = |e: &&Entity| matches!(&e.kind, EntityKind::Viewport(v) if v.id == 1);
+    let all = || l.entities.iter().map(|e| e.as_ref());
+    all().filter(sheet).chain(all().filter(|e| !sheet(e))).collect()
+}
+
 /// The paper-space viewport (id 1) of the layout whose first viewport is `e`, if it needs one
 /// ([`paper_views`]): the whole sheet, viewed 1:1. Marked with CADCraft xdata so that our reader
 /// leaves it implicit again.
@@ -2340,7 +2349,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         if i == 0 {
             block(&mut w, n, "", h, Vec3::ZERO, 0, &mut std::iter::empty(), true);
         } else {
-            block(&mut w, n, "", h, Vec3::ZERO, 0, &mut l.entities.iter().map(|e| e.as_ref()), true);
+            block(&mut w, n, "", h, Vec3::ZERO, 0, &mut sheet_first(l).into_iter(), true);
         }
     }
     for (n, h, b) in &user_blocks {
@@ -2371,7 +2380,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         entity(&mut w, d, e, &ms_br, false, &cx);
     }
     if let Some((_, h, l)) = ps_brs.first() {
-        for e in l.entities.iter() {
+        for e in sheet_first(l) {
             entity(&mut w, d, e, h, true, &cx);
         }
     }
