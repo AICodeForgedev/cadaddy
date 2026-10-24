@@ -438,6 +438,24 @@ fn tables_and_variables() {
 }
 
 #[test]
+fn getvar_drawing_and_session_variables() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(list (getvar \"DWGPREFIX\") (getvar \"DWGTITLED\"))"), "(\"\" 0)");
+    assert_eq!(ok(&mut s, "(list (getvar \"FILEDIA\") (getvar \"CMDECHO\") (getvar \"TILEMODE\"))"), "(1 1 1)");
+    assert_eq!(ok(&mut s, "(setvar \"FILEDIA\" 0) (setvar \"CMDECHO\" 0) (getvar \"FILEDIA\")"), "0");
+    // Both belong to the session, so they survive a switch to another drawing.
+    s.new_drawing(true);
+    assert_eq!(ok(&mut s, "(list (getvar \"FILEDIA\") (getvar \"CMDECHO\"))"), "(0 0)");
+    assert_eq!(ok(&mut s, "(getvar \"CMDACTIVE\")"), "0");
+    let dir = std::env::temp_dir();
+    let file = dir.join("lisp_getvar_test.dxf");
+    s.state_mut().unwrap().path = Some(file.to_string_lossy().into_owned());
+    let want = format!("{}{}", dir.to_string_lossy().trim_end_matches(std::path::MAIN_SEPARATOR), std::path::MAIN_SEPARATOR);
+    assert_eq!(crate::sysvars::get(&s, "DWGPREFIX"), Some(serde_json::json!(want)));
+    assert_eq!(ok(&mut s, "(getvar \"DWGTITLED\")"), "1");
+}
+
+#[test]
 fn input_functions_take_supplied_answers() {
     let mut s = session();
     let r = eval_with(

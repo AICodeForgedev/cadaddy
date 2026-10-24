@@ -55,6 +55,8 @@ const SESSION_VARS: &[&str] = &[
     "APERTURE",
     "PICKFIRST",
     "ACADLSPASDOC",
+    "CMDECHO",
+    "FILEDIA",
     "PICKADD",
     "PICKDRAG",
     "PICKSTYLE",
@@ -129,6 +131,8 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "ACADLSPASDOC" => json!(i32::from(st.acadlspasdoc)),
+        "CMDECHO" => json!(i32::from(st.cmdecho)),
+        "FILEDIA" => json!(i32::from(st.filedia)),
         "PICKADD" => json!(i32::from(st.pickadd)),
         "PICKDRAG" => json!(i32::from(st.pickdrag) * 2),
         "PICKSTYLE" => json!(st.pickstyle),
@@ -149,6 +153,12 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
+        // The drawing's folder with a trailing separator ("" while it has no file); DWGTITLED is 1 once it has one.
+        "DWGPREFIX" => json!(s.state().ok().and_then(|d| d.path.as_deref()).map(dwg_prefix).unwrap_or_default()),
+        "DWGTITLED" => json!(s.state().map(|d| i32::from(d.path.is_some())).unwrap_or(0)),
+        "CMDACTIVE" => json!(i32::from(s.running.is_some())),
+        "TILEMODE" => json!(i32::from(s.state().is_ok_and(|d| d.space.layout().is_none()))),
+        "PLATFORM" => json!(std::env::consts::OS),
         "BLOCKEDITOR" => json!(i32::from(s.state().is_ok_and(|d| d.block_edit.is_some()))),
         // The template NEW/QNEW start from (a profile setting, like FONTALT; "" = none).
         "QNEWTEMPLATE" => json!(crate::cmd::file::qnew_template()),
@@ -186,6 +196,21 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     Some(v)
 }
 
+/// DWGPREFIX: the folder of the drawing file, made absolute, with a trailing separator.
+fn dwg_prefix(path: &str) -> String {
+    let full = std::path::absolute(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    match full.parent() {
+        Some(dir) => {
+            let mut text = dir.to_string_lossy().into_owned();
+            if !text.ends_with(std::path::MAIN_SEPARATOR) {
+                text.push(std::path::MAIN_SEPARATOR);
+            }
+            text
+        }
+        None => String::new(),
+    }
+}
+
 fn as_bool(v: &Value) -> Option<bool> {
     v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|i| i != 0))
 }
@@ -205,8 +230,25 @@ fn as_pt(v: &Value) -> Option<cadcraft_geom::Vec2> {
 }
 
 /// Variables `get` reports from session or drawing state that `set` can't change.
-const READ_ONLY: &[&str] =
-    &["CMDNAMES", "DWGNAME", "DBMOD", "BLOCKEDITOR", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
+const READ_ONLY: &[&str] = &[
+    "CMDNAMES",
+    "DWGNAME",
+    "DWGPREFIX",
+    "DWGTITLED",
+    "CMDACTIVE",
+    "TILEMODE",
+    "PLATFORM",
+    "DBMOD",
+    "BLOCKEDITOR",
+    "CTAB",
+    "LASTPOINT",
+    "VIEWCTR",
+    "VIEWSIZE",
+    "EXTMIN",
+    "EXTMAX",
+    "UNDOCTL",
+    "UNDOMARKS",
+];
 
 pub fn is_read_only(name: &str) -> bool {
     READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim())) || table::is_read_only(&name.trim().to_ascii_uppercase())
@@ -302,6 +344,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "ACADLSPASDOC" => st.acadlspasdoc = as_bool(v).ok_or_else(bad)?,
+        "CMDECHO" => st.cmdecho = small(v, 1).ok_or_else(bad)? == 1,
+        "FILEDIA" => st.filedia = small(v, 1).ok_or_else(bad)? == 1,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
         "PICKDRAG" => st.pickdrag = as_i(v).filter(|b| matches!(b, 0 | 2)).map(|b| b == 2).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
