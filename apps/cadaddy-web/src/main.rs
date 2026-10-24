@@ -10,7 +10,8 @@
 //! opens it in Walk, so a link is all someone needs to walk a building. `?selftest` runs the
 //! browser self-test (`selftest.rs`, driven by `cargo xtask webtest`). `?field` starts the field
 //! viewer instead (`field.rs`: the model on a tablet or phone, offline), `?field=URL` with that
-//! package.
+//! package. A page whose `<body>` has `data-share="model/share.json"` (or `?share=URL`) is a
+//! shared project page (`share.rs`, written by `cargo xtask share-page`): the model read-only.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -23,6 +24,8 @@ mod field;
 mod host;
 #[cfg(target_arch = "wasm32")]
 mod selftest;
+#[cfg(target_arch = "wasm32")]
+mod share;
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -91,8 +94,16 @@ mod web {
         Services { pick_save: Some(Box::new(|name: &str| Some(name.to_string()))), ..Services::default() }
     }
 
+    /// The shared page's manifest: `?share=URL`, else the page's `<body data-share>`.
+    fn share_manifest() -> Option<String> {
+        query_param("share").or_else(|| web_sys::window()?.document()?.body()?.get_attribute("data-share")).filter(|u| !u.trim().is_empty())
+    }
+
     pub fn start() {
         eframe::WebLogger::init(log::LevelFilter::Info).ok();
+        if let Some(manifest) = share_manifest() {
+            return crate::share::start(CANVAS_ID, LOADING_ID, manifest, query().contains("sharetest"));
+        }
         if crate::wants_field(&query()) {
             return crate::field::start(CANVAS_ID, LOADING_ID, query_param("field").filter(|u| !u.trim().is_empty()));
         }
@@ -233,6 +244,27 @@ fn file_name_of(url: &str) -> String {
     }
 }
 
+/// The page's folder as a path ending in `/`: `/project/a/` for `/project/a`, `/project/a/` and
+/// `/project/a/index.html` alike (a link without the trailing slash still finds its model).
+#[cfg(any(target_arch = "wasm32", test))]
+fn folder_of(path: &str) -> String {
+    let path = if path.is_empty() { "/" } else { path };
+    if path.ends_with('/') {
+        return path.to_string();
+    }
+    let last = path.rsplit('/').next().unwrap_or_default();
+    if last.contains('.') { path.get(..path.len() - last.len()).unwrap_or("/").to_string() } else { format!("{path}/") }
+}
+
+/// `rel` beside `manifest` (`/p/model/share.json`, `part-000.json` → `/p/model/part-000.json`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn beside(manifest: &str, rel: &str) -> String {
+    match manifest.rfind('/') {
+        Some(at) => format!("{}{rel}", manifest.get(..=at).unwrap_or_default()),
+        None => rel.to_string(),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod upload;
 
@@ -248,7 +280,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_name_of, wants_cpu, wants_field};
+    use super::{beside, file_name_of, folder_of, wants_cpu, wants_field};
+
+    #[test]
+    fn a_shared_page_finds_its_model_from_any_sub_path() {
+        assert_eq!(folder_of("/project/sample-wing/"), "/project/sample-wing/");
+        assert_eq!(folder_of("/project/sample-wing"), "/project/sample-wing/");
+        assert_eq!(folder_of("/project/sample-wing/index.html"), "/project/sample-wing/");
+        assert_eq!(folder_of(""), "/");
+        assert_eq!(folder_of("/index.html"), "/");
+        assert_eq!(beside("/project/a/model/share.json", "part-000.json"), "/project/a/model/part-000.json");
+        assert_eq!(beside("share.json", "base.json"), "base.json");
+    }
 
     #[test]
     fn field_flag_is_detected() {

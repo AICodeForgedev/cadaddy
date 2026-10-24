@@ -86,6 +86,7 @@ pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
+pub mod share;
 pub mod fourd;
 pub mod furnish;
 pub mod gear;
@@ -563,6 +564,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(drywall::specs());
         v.extend(unittypes::specs());
     v.extend(fieldview::specs());
+    v.extend(share::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
         v.extend(modify2::specs());

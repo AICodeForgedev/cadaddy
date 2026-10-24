@@ -139,6 +139,13 @@ pub struct FieldElement {
     /// Where the element came from (sheet, layer, system).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// What last set it, when not the plan alone: an override (`override 3 active`), an RFI
+    /// (`RFI-004 open`), or the model file's own status property.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status: String,
+    /// Its own properties (an IFC object's property sets): key, value and the set they came from.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub props: Vec<FieldSpec>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -447,6 +454,7 @@ impl FieldPackage {
             if e.size_in.is_some_and(|s| !s.iter().all(|v| v.is_finite())) {
                 e.size_in = None;
             }
+            e.props.truncate(MAX_FIELDS);
         }
         for i in &mut self.issues {
             finite3(&mut i.at);

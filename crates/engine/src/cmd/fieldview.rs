@@ -240,6 +240,7 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
     // Elements: what model.build made (walls, doors, windows, devices, stairs, MEP terminals and
     // equipment) as boxes, and the MEP runs from the spec as centrelines.
     let kinds: BTreeMap<String, MepKind> = sp.mep.systems.iter().map(|sy| (sy.name.clone(), sy.kind)).collect();
+    let overrides = super::overrides::load(d).unwrap_or_default();
     for e in d.model.iter() {
         if pkg.elements.len() >= MAX_ELEMENTS {
             break;
@@ -287,6 +288,8 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
             size_in: None,
             mark: mark_of(d, e, source),
             source: format!("{}{title}", if system.is_empty() { e.common.layer.as_str() } else { system.as_str() }),
+            status: override_status(&overrides, e),
+            props: Vec::new(),
         });
     }
     // Wall faces as the plan draws them, floor to the level above (feet already).
@@ -312,6 +315,8 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
             size_in: Some([WALL_FACE_IN, r3(h * 12.0)]),
             mark: String::new(),
             source: "walls".into(),
+            status: String::new(),
+            props: Vec::new(),
         });
     }
     for (ri, run) in sp.mep.runs.iter().enumerate().take(MAX_ELEMENTS) {
@@ -353,6 +358,8 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
                 size_in: Some(run.size_in),
                 mark: mark.clone(),
                 source: run.system.clone(),
+                status: String::new(),
+                props: Vec::new(),
             });
         }
     }
@@ -363,6 +370,19 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
         .map(|k| trade_info(k))
         .collect();
     pkg
+}
+
+/// The overrides applied to a generated element: `OV-0003 move (active)`, joined.
+fn override_status(all: &cadaddy_doc::overrides::Overrides, e: &Entity) -> String {
+    cadaddy_doc::overrides::applied_ids(&e.common.xdata)
+        .into_iter()
+        .take(8)
+        .map(|id| match all.get(id) {
+            Some(o) => format!("{} {} ({})", o.label(), o.change.kind(), o.status.as_str()),
+            None => cadaddy_doc::overrides::label(id),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn centre(poly: &[[f64; 2]]) -> [f64; 2] {

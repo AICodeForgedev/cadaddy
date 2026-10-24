@@ -26,6 +26,7 @@ mod stats;
 mod supplychain;
 mod updategate;
 mod version;
+mod sharepage;
 mod webtest;
 
 use std::path::{Path, PathBuf};
@@ -71,8 +72,14 @@ commands:
                   performance budgets (perf/budget.json): open/save DWG/DXF/.cdy, regen, select and
                   move all, zoom extents, 3D build, plot PDF on 1k/10k objects (--full: 100k, 500k
                   too); warns over budget, fails over 2x; trend in target/perf/history.jsonl
-  webtest         the web build in a headless browser (open DXF/DWG, draw, undo, save, recovery,
-                  Walk, autosave); skipped without a Chromium-family browser or a matching wasm-bindgen
+  webtest [--share [--release]]
+                  the web build in a headless browser (open DXF/DWG, draw, undo, save, recovery,
+                  Walk, autosave); skipped without a Chromium-family browser or a matching wasm-bindgen.
+                  --share: the shared project page (sub-path, level, trade, click, properties,
+                  strip, size budget, a 200-room hotel's load time, access denied)
+  share-page (<project.cdy|.ifc> | --sample | --hotel) --out DIR [--title T] [--allow-download] [--no-strip] [--debug]
+                  a shared project page: a folder any web server serves from any sub-path, the
+                  model read-only in a browser or on a phone; names stripped (report beside DIR)
   installtest --new DIR [--old DIR]
                   install, upgrade and uninstall checks of release files: MSI tables (msitools in
                   Docker), the DMG (Mac), the .deb and AppImage (Docker); --old for the upgrade
@@ -156,6 +163,7 @@ fn main() -> ExitCode {
         Some("repro") => repro::run_repro(&rest),
         Some("mep-fixtures") => mepfix::run(&root(), &rest),
         Some("webtest" | "web") => webtest::run(&root(), &rest),
+        Some("share-page") => sharepage::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),
         Some("release") => release_cmd::run(&root(), &rest),
         Some("release-key") => release::key_cmd(&rest),

@@ -898,6 +898,7 @@ dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
  "cadaddy-ui-egui",
+ "cadaddy-walk3d",
  "eframe",
  "egui",
  "log",
