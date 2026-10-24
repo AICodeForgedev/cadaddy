@@ -32,6 +32,10 @@
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="A newer version of CADaddy is already installed." />
+    <!-- REINSTALLMODE=amus: reinstall/repair replaces ALL files (not just older ones), so a
+         same-version reinstall actually works instead of silently exiting with msiexec code 1.
+         Without this, REINSTALLMODE=omus (the default) skips same-version files. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="CadaddyIcon.ico" SourceFile="$(var.IconPath)" />

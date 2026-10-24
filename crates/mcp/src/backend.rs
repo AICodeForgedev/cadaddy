@@ -161,7 +161,7 @@ fn not_open(addr: &str, e: std::io::Error) -> std::io::Error {
     std::io::Error::new(
         e.kind(),
         format!(
-            "CADaddy is not answering at {addr} ({e}). Open CADaddy with its control port (`--control PORT` or CADADDY_CONTROL_PORT), then try again"
+            "CADaddy is not answering at {addr} ({e}). Open CADaddy with its control port (`--control PORT`, CADADDY_CONTROL_PORT or CADCRAFT_CONTROL_PORT), or use `mcp --connect {addr}` (--launch is on by default)"
         ),
     )
 }
