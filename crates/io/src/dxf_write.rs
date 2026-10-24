@@ -2694,8 +2694,6 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     w.t
 }
 
-/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
-/// restores foreign classes and objects so every class gets its actual instance count.
 /// Paper size (groups 44, 45) and plot rotation (group 73) for a LAYOUT object. Page setups
 /// keep a portrait size and a landscape flag. A media whose name makes it wider than tall, such
 /// as `ISO_full_bleed_A3_(420.00_x_297.00_MM)`, gets its size in that order and the rotation
@@ -2723,6 +2721,8 @@ fn media_is_landscape(paper: &str) -> bool {
     matches!((num(sides.next()), num(sides.next())), (Some(w), Some(h)) if w > h)
 }
 
+/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
+/// restores foreign classes and objects so every class gets its actual instance count.
 fn add_class_instance_counts(tags: &mut Vec<Tag>) {
     let mut counts: HashMap<String, i64> = HashMap::new();
     for t in tags.iter().filter(|t| t.code == 0) {
