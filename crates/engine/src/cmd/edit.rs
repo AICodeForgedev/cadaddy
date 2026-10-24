@@ -438,9 +438,11 @@ impl Interactive for MredoM {
     }
 }
 
+/// Copy the objects of `hs` to the clipboard, each once however often `hs` lists it.
 fn copy_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<usize> {
     let d = s.doc()?;
-    let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
+    let mut seen = std::collections::HashSet::new();
+    let ents: Vec<Entity> = hs.iter().filter(|h| seen.insert(**h)).filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     let b = ents.iter().fold(Bounds2::EMPTY, |acc, e| acc.union(&entity_bounds(d, e, 0)));
     let base = base.unwrap_or(if b.min.is_finite() { b.min } else { Vec2::ZERO });
     let n = ents.len();
@@ -455,9 +457,9 @@ fn run_copyclip(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_copybase(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = point_req("copybase", p, "base")?;
     let hs = targets(s, p)?;
-    let base = point_param(p, "base");
-    let n = copy_to_clip(s, &hs, base)?;
+    let n = copy_to_clip(s, &hs, Some(base))?;
     Ok(json!({ "copied": n }))
 }
 
@@ -480,9 +482,9 @@ fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_cutbase(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = point_req("cutbase", p, "base")?;
     let hs = targets(s, p)?;
-    let base = point_param(p, "base");
-    let n = cut_to_clip(s, &hs, base)?;
+    let n = cut_to_clip(s, &hs, Some(base))?;
     Ok(json!({ "cut": n }))
 }
 
