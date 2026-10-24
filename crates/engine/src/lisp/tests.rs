@@ -782,3 +782,12 @@ fn a_panic_inside_a_routine_ends_it_with_an_error() {
     assert!(s.log.iter().any(|l| l.contains("internal error")), "{:?}", s.log);
     assert_eq!(ok(&mut s, "(+ 1 2)"), "3");
 }
+
+#[test]
+fn angtof_reads_the_string_in_the_given_units() {
+    let mut s = Session::new();
+    assert_eq!(ok(&mut s, "(angtof \"1.5\" 3)"), "1.5");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 0)"), "3.14159");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 7)"), "nil");
+    assert_eq!(ok(&mut s, "(angtof \"180\" \"x\")"), "nil");
+}

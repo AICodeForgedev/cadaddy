@@ -1069,7 +1069,14 @@ pub fn distof(_ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 pub fn angtof(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 2)?;
     let s = string(&a[0])?;
-    Ok(Flow::Value(ctx.s.angle_settings().direction(&s).map(Value::Real).unwrap_or_default()))
+    let mut settings = ctx.s.angle_settings();
+    // AUNITS 0..=4; any other units argument is an error in AutoCAD, nil here.
+    match a.get(1) {
+        None | Some(Value::Nil) => {}
+        Some(Value::Int(u)) if (0..=4).contains(u) => settings.aunits = i64::from(*u),
+        Some(_) => return Ok(Flow::Value(Value::Nil)),
+    }
+    Ok(Flow::Value(settings.direction(&s).map(Value::Real).unwrap_or_default()))
 }
 
 /// `(trans pt from to [disp])`: points are in the world system throughout (no UCS yet).
