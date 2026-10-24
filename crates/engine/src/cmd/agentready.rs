@@ -1109,11 +1109,15 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Auto-read MEP data: when building with discipline mep or all, populate the spec's
     // MEP runs/equipment/terminals from the current drawing's geometry before building.
-    // Only re-read when the drawing has entities to read from; otherwise the spec's
-    // pre-set runs (e.g. from bspec.set or a previous import) are authoritative.
+    // Only re-read when (a) the drawing has entities to read from and (b) the spec does
+    // NOT already have MEP runs — pre-set runs (from bspec.set, a previous import or an
+    // agent pipeline) are authoritative and must not be overwritten by a re-read.
     let mut mep_warnings: Vec<String> = Vec::new();
     let has_drawing_entities = s.doc().is_ok_and(|d| !d.model.is_empty());
-    if (disc == "mep" || disc == "all") && has_drawing_entities {
+    let spec_has_mep = current(s, "bim.build")
+        .map(|(sp, _)| !sp.mep.runs.is_empty())
+        .unwrap_or(false);
+    if (disc == "mep" || disc == "all") && has_drawing_entities && !spec_has_mep {
         // First, try standard layer-based reading (mep.read {apply}).
         if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
             mep_warnings.push(format!("mep.read: {e}"));

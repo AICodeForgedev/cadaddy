@@ -165,7 +165,13 @@ fn parse_fraction(s: &str) -> Option<f64> {
 fn detect_sheet_number(d: &Drawing) -> Option<String> {
     let mut best: Option<(f64, String)> = None;
     for e in d.model.iter() {
-        let on_title = e.common.layer.eq_ignore_ascii_case("TITLE") || e.common.layer.eq_ignore_ascii_case("BORDER");
+        let ly = &e.common.layer;
+        // Original DXF layers (TITLE, BORDER) and content-class layer TITLEBLOCK from PDF
+        // import. Not TEXT — that layer holds ALL text, so picking the largest there gives the
+        // title instead of the number.
+        let on_title = ly.eq_ignore_ascii_case("TITLE")
+            || ly.eq_ignore_ascii_case("BORDER")
+            || ly.eq_ignore_ascii_case("TITLEBLOCK");
         if !on_title {
             continue;
         }
@@ -174,7 +180,9 @@ fn detect_sheet_number(d: &Drawing) -> Option<String> {
             EntityKind::MText(t) => (t.height, t.contents.clone()),
             _ => continue,
         };
-        if h > best.as_ref().map_or(0.0, |b| b.0) && !val.is_empty() {
+        // Validate: SHX OCR can put garbled single-letter fragments on the TITLE layer;
+        // reject text that doesn't look like a sheet number to avoid picking up OCR noise.
+        if h > best.as_ref().map_or(0.0, |b| b.0) && looks_like_sheet_number(&val) {
             best = Some((h, val));
         }
     }
@@ -430,8 +438,14 @@ fn numbers_after(words: &[String]) -> Vec<u32> {
 
 fn detect_title(d: &Drawing, number: &str) -> String {
     let mut candidates: Vec<(f64, String)> = Vec::new();
+    let has_title_layer = d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("TITLE"));
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("TITLE") {
+        let ly = &e.common.layer;
+        // TITLE layer (DXF), or when TITLE has text (OCR may garble it), also accept
+        // PDF-HIDDEN-TEXT as an authoritative source.  Without TITLE text, let the
+        // fallback (texts_across) handle it — hidden text heights are unreliable.
+        let ok = ly.eq_ignore_ascii_case("TITLE") || (has_title_layer && ly.eq_ignore_ascii_case("PDF-HIDDEN-TEXT"));
+        if !ok {
             continue;
         }
         let (h, val) = match &e.kind {

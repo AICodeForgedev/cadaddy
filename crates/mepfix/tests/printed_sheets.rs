@@ -13,7 +13,9 @@ use cadaddy_mepfix::sheet_reader::{self, parse_scale, recognise_dxf};
 use cadaddy_mepfix::{conduit_reader, printed};
 
 fn import(pdf: &[u8]) -> Drawing {
-    let opts = cadaddy_io::pdf_read::PdfOptions { images: false, markups: false, layout: false, ..Default::default() };
+    // recover_text off: SHX recovery and symbol detection consume grid-bubble strokes and
+    // labels that the sheet recogniser needs for grid alignment.
+    let opts = cadaddy_io::pdf_read::PdfOptions { images: false, markups: false, layout: false, recover_text: false, ..Default::default() };
     cadaddy_io::pdf_read::read(pdf, &opts).unwrap_or_else(|e| panic!("pdf import: {e}")).drawing
 }
 
@@ -238,10 +240,11 @@ fn merged(set: &cadaddy_mepfix::FixtureSet) -> printed::PrintedSet {
     let pdf = set.files.iter().find(|(n, _)| n == "set.pdf").map(|(_, b)| b).unwrap_or_else(|| panic!("no set.pdf"));
     let p = printed::read_merged(pdf).unwrap_or_else(|e| panic!("read set.pdf: {e}"));
     assert!(p.errors.is_empty(), "{:?}", p.errors);
-    // Nothing on the fixture's own layers: what follows reads a print's pens only.
+    // Nothing on the fixture's own synthetic layers: content-class layers (TEXT, A-WALL) are
+    // expected since the default import now uses content classification for non-OCG PDFs.
     for (n, b) in &p.dxf {
         let d = cadaddy_io::read_dxf(b).unwrap_or_else(|e| panic!("{n}: {e}"));
-        for l in ["DEVICE", "TEXT", "CALLOUT", "ARCH", "A-WALL", "GRID-BUBBLE", "TITLE"] {
+        for l in ["DEVICE", "CALLOUT", "ARCH", "GRID-BUBBLE", "TITLE"] {
             assert!(!d.layers.iter().any(|x| x.name.eq_ignore_ascii_case(l)), "{n} has layer {l}");
         }
     }
