@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
             .files()
-            .params("{stages?: [name], resume?: bool} → {stages_run, total_items, elapsed_ms}")
+            .params("{stages?: [name], resume?: bool, force?: bool (run even when the import check failed)} → {stages_run, total_items, elapsed_ms}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),

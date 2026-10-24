@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
         CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
-            "{level?: name, discipline?: architecture|structure|mep|all} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
+            "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
         ),
     ]
 }

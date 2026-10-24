@@ -1380,7 +1380,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{trade?, status?: open|resolved|deferred|all (open), severity?, cursor?, limit?: 1-100 (20)} → {total, items, next_cursor?}: paged findings worklist")
             .noundo(),
         CommandSpec::new("rules.action", "Rules Action", run_action)
-            .params("{action, target?, params?} → {delta}: agent performs a model operation (move, resize, reroute, change_elevation, split, join, swap_type, add, delete, assign_circuit, rerun_rules, teach_symbol, write_rule, accept, reject)"),
+            .params("{action, target?, params?, finding?: id (the worklist finding this answers), citation?: text (code section, spec page)} → {delta}: agent performs a model operation (move, resize, reroute, change_elevation, split, join, swap_type, add, delete, assign_circuit, rerun_rules, teach_symbol, write_rule, accept, reject)"),
         CommandSpec::new("rules.clashloop", "Clash Resolution Loop", run_clashloop)
             .params("{level?, max_iterations?: 1-10 (3)} → {iterations, auto_resolved, remaining, findings}: build → clashes → auto-resolve → re-check cycle"),
         CommandSpec::new("rules.score", "Accuracy Score", run_score)
