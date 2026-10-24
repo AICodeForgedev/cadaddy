@@ -262,6 +262,69 @@ fn linetypes_and_lineweights_of_dimension_and_extension_lines() {
     assert!(lws.contains(&0.5) && lws.contains(&0.13), "{lws:?}");
 }
 
+fn ignored(r: &Value) -> Vec<&str> {
+    r["ignored"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+}
+
+#[test]
+fn dimstyle_and_dimoverride_refuse_negative_whole_numbers() {
+    let mut s = Session::new();
+    s.execute("dimstyle", &json!({ "name": "Standard", "DIMTMOVE": 2, "DIMLWD": 50 })).unwrap();
+    let r = s
+        .execute(
+            "dimstyle",
+            &json!({
+                "name": "Standard",
+                "DIMDEC": -1,
+                "DIMTMOVE": -1,
+                "DIMLUNIT": "-1",
+                "DIMTDEC": -0.6,
+                "DIMADEC": -2,
+                "DIMALTD": "300",
+                "DIMLWE": "300",
+            }),
+        )
+        .unwrap();
+    let ign = ignored(&r);
+    for k in ["DIMDEC", "DIMTMOVE", "DIMLUNIT", "DIMTDEC", "DIMADEC", "DIMALTD", "DIMLWE"] {
+        assert!(ign.contains(&k), "{k}: {r}");
+    }
+    let st = s.doc().unwrap().dim_style("Standard").unwrap().clone();
+    let def = DimStyle::default();
+    assert_eq!((st.decimals, st.text_move, st.linear_unit, st.tol_decimals), (def.decimals, 2, def.linear_unit, def.tol_decimals));
+    assert_eq!((st.angular_decimals, st.alt_decimals, st.ext_lineweight), (def.angular_decimals, def.alt_decimals, def.ext_lineweight));
+    // DIMADEC -1 is a documented value (stored as 0); ByLayer lineweights stay -1.
+    let r = s.execute("dimstyle", &json!({ "name": "Standard", "DIMADEC": -1, "DIMLWD": "ByLayer" })).unwrap();
+    assert!(r.get("ignored").is_none(), "{r}");
+    assert_eq!(s.doc().unwrap().dim_style("Standard").unwrap().dim_lineweight, -1);
+
+    // DIMOVERRIDE keeps the valid value and leaves the negative one out.
+    linear(&mut s, 10.0);
+    let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("dimoverride", &json!({ "handles": [h], "DIMDEC": -1, "DIMTMOVE": 1 })).unwrap();
+    let (dm, _) = last_dim(&s);
+    assert!(!dm.overrides.contains_key("decimals"), "{:?}", dm.overrides);
+    assert_eq!(dm.overrides.get("textMove"), Some(&json!(1)));
+    assert!(s.execute("dimoverride", &json!({ "handles": [h], "DIMZIN": -3 })).is_err());
+}
+
+#[test]
+fn setvar_negative_whole_numbers_do_not_reach_new_dimensions() {
+    let mut s = Session::new();
+    for (name, v) in [("DIMDEC", json!(-1)), ("DIMLUNIT", json!("-1")), ("DIMTDEC", json!(-0.6))] {
+        // The header may hold the value; new dimensions keep the style's own.
+        let _ = s.execute("setvar", &json!({ "name": name, "value": v }));
+    }
+    let o = s.doc().unwrap().dim_overrides();
+    for f in ["decimals", "linearUnit", "tolDecimals"] {
+        assert!(!o.contains_key(f), "{f}: {o:?}");
+    }
+    linear(&mut s, 10.0);
+    let (dm, g) = last_dim(&s);
+    assert_eq!(g.value, "10.0000");
+    assert!(dm.overrides.is_empty(), "{:?}", dm.overrides);
+}
+
 #[test]
 fn leaders_use_the_leader_arrow() {
     let mut s = Session::new();
