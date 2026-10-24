@@ -414,7 +414,7 @@ fn insert_block(app: &mut CadApp, name: &str) {
 fn language(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     egui::Window::new(crate::tl!("Interface Language")).id(egui::Id::new("interface_language")).open(open).resizable(false).show(ctx, |ui| {
         egui::ComboBox::from_id_salt("interface_language_choice").selected_text(app.ui.interface_language.name()).show_ui(ui, |ui| {
-            for preference in crate::i18n::Preference::ALL {
+            for preference in crate::i18n::Preference::for_picker() {
                 if ui.selectable_label(app.ui.interface_language == preference, preference.name()).clicked() {
                     let _ = app.run("ui.language", serde_json::json!({"lang": preference.code()}));
                     ui.ctx().request_repaint();

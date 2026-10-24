@@ -467,7 +467,7 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         ui.label(crate::tl!("Interface language"));
         let mut lang = app.ui.interface_language;
         egui::ComboBox::from_id_salt("options_language").selected_text(lang.name()).show_ui(ui, |ui| {
-            for p in crate::i18n::Preference::ALL {
+            for p in crate::i18n::Preference::for_picker() {
                 ui.selectable_value(&mut lang, p, p.name());
             }
         });
