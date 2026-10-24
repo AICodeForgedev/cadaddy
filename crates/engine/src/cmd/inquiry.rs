@@ -401,8 +401,17 @@ pub(super) fn area_of(pts: &[Vec2]) -> (f64, f64) {
     (a, per)
 }
 
+/// `points` as given, `None` when it is absent; a `points` that is not a list of points is an
+/// error, never a fall back to the selection.
+fn given_points(p: &Value, cmd: &str) -> Result<Option<Vec<Vec2>>> {
+    match p.get("points") {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => points_param(p, "points").map(Some).ok_or_else(|| bad(cmd, "`points` must be a list of [x, y] points")),
+    }
+}
+
 fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
-    let (a, per) = if let Some(pts) = points_param(p, "points") {
+    let (a, per) = if let Some(pts) = given_points(p, "area")? {
         area_of(&pts)
     } else {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
@@ -415,10 +424,10 @@ fn area_text(s: &Session, a: f64, per: f64) -> String {
     format!("Area = {}, Perimeter = {}", fmt_d(s, a), fmt_d(s, per))
 }
 
-/// MEASUREGEOM's Volume option: the area of a polygon of three or more points, or of a closed 2D
-/// object (as AREA measures it), times the absolute value of a height.
+/// MEASUREGEOM's Volume option: the area of a polygon of three or more points, or of a 2D object
+/// as AREA measures it (an open polyline as if closed), times the absolute value of a height.
 pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
-    let a = if let Some(pts) = points_param(p, "points") {
+    let a = if let Some(pts) = given_points(p, "volume.measure")? {
         if pts.len() < 3 {
             return Err(bad("volume.measure", "`points` needs 3 or more [x,y] points"));
         }
@@ -429,6 +438,9 @@ pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let height = f64_req("volume.measure", p, "height")?;
     let v = a * height.abs();
+    if !v.is_finite() {
+        return Err(bad("volume.measure", "the volume is too large"));
+    }
     Ok(json!({ "volume": v, "area": a, "height": height, "message": volume_text(s, v) }))
 }
 
@@ -940,14 +952,21 @@ impl AreaM {
     fn mode_keywords(&self) -> (&'static str, &'static str) {
         if self.volume { ("Add volume", "Subtract volume") } else { ("Add area", "Subtract area") }
     }
+    /// The running total with `v` added or subtracted; in single mode, the total as it is.
+    fn total_with(&self, v: f64) -> f64 {
+        match self.mode {
+            AreaMode::Single => self.total,
+            AreaMode::Add => self.total + v,
+            AreaMode::Subtract => self.total - v,
+        }
+    }
     /// Report a volume (and the running total in add/subtract mode); ends the command in single mode.
     fn volume_measured(&mut self, s: &mut Session, v: f64) -> Step {
         s.echo(volume_text(s, v));
-        match self.mode {
-            AreaMode::Single => return Step::Done,
-            AreaMode::Add => self.total += v,
-            AreaMode::Subtract => self.total -= v,
+        if self.mode == AreaMode::Single {
+            return Step::Done;
         }
+        self.total = self.total_with(v);
         s.echo(format!("Total volume = {}", fmt_volume(s, self.total)));
         Step::Continue
     }
@@ -1006,10 +1025,13 @@ impl Interactive for AreaM {
         if !self.pending.is_empty() {
             if let Input::Text(t) = i {
                 match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
-                    Some(h) => {
-                        let a = self.pending.remove(0);
-                        return Ok(self.volume_measured(s, a * h.abs()));
-                    }
+                    Some(h) => match self.pending.first().map(|a| a * h.abs()) {
+                        Some(v) if v.is_finite() && self.total_with(v).is_finite() => {
+                            self.pending.remove(0);
+                            return Ok(self.volume_measured(s, v));
+                        }
+                        _ => s.echo("The volume is too large."),
+                    },
                     None => s.echo("Requires a distance."),
                 }
             }
