@@ -103,9 +103,8 @@ pub struct SheetFacts {
 }
 
 /// Words that are short and capitalised but are notes, not type tags.
-const NOT_TAGS: &[&str] = &[
-    "TYP", "EQ", "AFF", "UP", "DN", "NIC", "RR", "GFI", "GFCI", "AND", "OR", "TO", "AT", "ON", "IN", "OF", "THE", "FOR", "NO", "W", "X", "BY",
-];
+const NOT_TAGS: &[&str] =
+    &["TYP", "EQ", "AFF", "UP", "DN", "NIC", "RR", "GFI", "GFCI", "AND", "OR", "TO", "AT", "ON", "IN", "OF", "THE", "FOR", "NO", "W", "X", "BY"];
 
 /// The model-space text of a drawing, one item per line of text.
 pub fn texts(d: &Drawing) -> Vec<TextItem> {
@@ -198,16 +197,12 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
-    texts
-        .iter()
-        .filter(|t| is_sheet_number(&t.value) && t.height >= 2.0 * median)
-        .max_by(|a, b| a.height.total_cmp(&b.height))
-        .map(|n| SheetIdent {
-            number: n.value.trim().to_string(),
-            title: String::new(),
-            discipline: discipline_of(&n.value),
-            source: "largest_number".into(),
-        })
+    texts.iter().filter(|t| is_sheet_number(&t.value) && t.height >= 2.0 * median).max_by(|a, b| a.height.total_cmp(&b.height)).map(|n| SheetIdent {
+        number: n.value.trim().to_string(),
+        title: String::new(),
+        discipline: discipline_of(&n.value),
+        source: "largest_number".into(),
+    })
 }
 
 fn is_scale_line(t: &TextItem) -> bool {
@@ -254,7 +249,7 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
             .min_by(|a, b| (title.at.x - a.at.x).total_cmp(&(title.at.x - b.at.x)))
             .map(|t| t.value.clone());
         let st = scale_text(&s.value);
-        let nts = st.to_ascii_uppercase().contains("NOT TO SCALE") || st.to_ascii_uppercase() == "NTS";
+        let nts = st.to_ascii_uppercase().contains("NOT TO SCALE") || st.eq_ignore_ascii_case("NTS");
         if out.iter().any(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
             continue;
         }
@@ -359,7 +354,9 @@ pub fn is_circuit_label(t: &str) -> bool {
     let first_ok = parts.next().is_some_and(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()));
     (1..=2).contains(&letters)
         && first_ok
-        && parts.all(|p| (!p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit())) || (p.len() == 1 && p.chars().all(|c| c.is_ascii_lowercase())))
+        && parts.all(|p| {
+            (!p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit())) || (p.len() == 1 && p.chars().all(|c| c.is_ascii_lowercase()))
+        })
 }
 
 /// A device/fixture type tag: one to three capital letters and up to two digits (`A`, `A1`,
@@ -495,7 +492,10 @@ mod tests {
     fn title_block_names_the_sheet_and_its_discipline() {
         let d = sheet();
         let s = identify_sheet(&texts(&d)).expect("title block");
-        assert_eq!((s.number.as_str(), s.title.as_str(), s.discipline.as_str(), s.source.as_str()), ("Q-7", "POWER ENLARGED PLANS", "Q", "title_block"));
+        assert_eq!(
+            (s.number.as_str(), s.title.as_str(), s.discipline.as_str(), s.source.as_str()),
+            ("Q-7", "POWER ENLARGED PLANS", "Q", "title_block")
+        );
     }
 
     #[test]
