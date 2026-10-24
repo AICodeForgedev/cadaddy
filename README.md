@@ -141,7 +141,7 @@ offset 0.25                     then pick the circle and a side
 zoom e                          zoom to extents
 ```
 
-The web build: `cd apps/cadcraft-web && trunk serve` (needs [trunk](https://trunkrs.dev)).
+The web build: `cd apps/cadcraft-web && trunk serve` (needs [trunk](https://github.com/trunk-rs/trunk)).
 
 ### Fonts
 
