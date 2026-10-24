@@ -142,6 +142,9 @@ pub fn parse_distance(s: &str) -> Option<f64> {
         Some(r) => (true, r.trim()),
         None => (false, t),
     };
+    if neg && t.starts_with(['-', '+']) {
+        return None;
+    }
     let mut total = 0.0;
     let mut rest = t;
     let mut parsed = false;
@@ -428,6 +431,14 @@ mod tests {
         assert_eq!(parse_distance("1/0"), None);
         assert_eq!(parse_distance("abc"), None);
         assert_eq!(parse_distance(""), None);
+    }
+
+    #[test]
+    fn parse_distance_rejects_doubled_minus() {
+        assert_eq!(parse_distance("--5"), None);
+        assert_eq!(parse_distance("- -3/4"), None);
+        assert_eq!(parse_distance("-5"), Some(-5.0));
+        assert_eq!(parse_distance("-3/4"), Some(-0.75));
     }
 
     #[test]
