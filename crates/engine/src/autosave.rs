@@ -334,10 +334,22 @@ mod native {
 
     type WriteHook = fn(&Drawing, &str) -> std::result::Result<Vec<u8>, String>;
 
+    /// Create the autosave folder `dir` and any missing parents. On Unix the folders made here are
+    /// owner-only (`0o700`): autosave files are unsaved drawings, and with the default mode other
+    /// accounts on the machine could read them. A folder that already exists keeps its mode, since
+    /// SAVEFILEPATH can be any folder the user picked.
+    fn create_folder(dir: &Path) -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)
+    }
+
     fn write_file(write: WriteHook, doc: &Drawing, path: &str) -> std::result::Result<(), String> {
         let bytes = write(doc, "autosave.dxf")?;
         if let Some(dir) = Path::new(path).parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            create_folder(dir).map_err(|e| e.to_string())?;
         }
         // Create a fresh temporary file exclusively and rename it into place, so a planted
         // `<path>.tmp` symlink in a shared autosave directory cannot redirect the write (CWE-59).
@@ -434,7 +446,7 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            let r = create_folder(dir).and_then(|()| std::fs::write(lock_path(dir, &self.instance), std::process::id().to_string()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }
