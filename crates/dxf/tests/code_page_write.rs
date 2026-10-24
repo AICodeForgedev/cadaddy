@@ -59,3 +59,20 @@ fn unknown_ascii_and_utf8_code_pages_are_pure_ascii() {
         assert!(write_binary_in(&tags, cp).iter().all(u8::is_ascii), "{cp} binary");
     }
 }
+
+/// Code page bytes that happen to form valid UTF-8 (`СІ` in ANSI_1251 is D1 B2, which is U+0472
+/// in UTF-8) would be read back as UTF-8 from an ASCII file, so that file is written with
+/// escapes. Binary DXF reads strings by the header's code page and keeps the bytes.
+#[test]
+fn code_page_bytes_that_are_valid_utf8_are_escaped_in_ascii() {
+    let tags = file("ANSI_1251", "СІ");
+    let ascii = write_ascii_in(&tags, "ANSI_1251");
+    assert!(ascii.is_ascii(), "{:?}", String::from_utf8_lossy(&ascii));
+    assert!(contains(&ascii, b"\\U+0421\\U+0406"));
+    assert_eq!(parse(&ascii).unwrap()[10].str(), "СІ");
+    let binary = write_binary_in(&tags, "ANSI_1251");
+    assert!(contains(&binary, b"\xD1\xB2"));
+    assert_eq!(parse(&binary).unwrap()[10].str(), "СІ");
+    // Bytes that are not valid UTF-8 stay as they are.
+    assert!(contains(&write_ascii_in(&file("ANSI_1251", "Слой"), "ANSI_1251"), b"\xD1\xEB\xEE\xE9"));
+}
