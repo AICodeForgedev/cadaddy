@@ -623,6 +623,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let text_outside = !text_in;
             text_angle = if text_outside { if st.text_outside_horizontal { 0.0 } else { along_ang } } else { inside_ang };
             let half = extent(text_angle);
+            // DIMTMOVE 1 / 2: text that doesn't fit is moved off the dimension line, which stays put.
+            let moved = text_outside && st.text_move != 0;
             // DIMSOXD: arrowheads that don't fit inside are left out.
             let outside_arrows = !arrows_inside && !st.suppress_outside_arrows;
             // Text centre along the dimension line.
@@ -662,6 +664,12 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 text_angle = readable(e.angle());
                 let outward = if just == 3 { -u } else { u };
                 text_mid = f + e * (st.ext_extend * k + gap + tw / 2.0) + outward * (gap + tht / 2.0);
+            } else if moved {
+                // Over the middle of the line, clear of the arrowheads, on the side away from the
+                // measured points; with DIMTMOVE 1 it starts there and a leader joins it.
+                let mid = f1.mid(f2);
+                let lift = off_along(side_out) + 2.0 * asz.max(tsz);
+                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + off_along(side_out)) };
             } else if !d.user_text_pos {
                 text_mid = along_c + offset;
             }
@@ -722,7 +730,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 to_text(&mut g, if outside_arrows { f2 + u * stub } else { f2 });
             }
             // DIMTMOVE 1: a leader from the dimension line to text moved off it.
-            if d.user_text_pos && st.text_move == 1 && has_text {
+            if (d.user_text_pos || moved) && st.text_move == 1 && has_text {
                 let base = f1.mid(f2);
                 let off = (text_mid - base).dot(n).abs();
                 if off > tht / 2.0 + gap + 1e-9 {
@@ -1209,6 +1217,37 @@ mod tests {
         let d = lin((0.0, 0.0), (0.5, 0.0), (0.0, 5.0), 0.0);
         let g = dimension_geometry(&d, &DimStyle::default(), 1.0);
         assert!(g.text_pos.x > 0.5, "text beyond the second extension line: {}", g.text_pos.x);
+    }
+
+    #[test]
+    fn text_that_does_not_fit_follows_dimtmove_2() {
+        // Vertical, measured points left of the line: the text goes over the middle of the
+        // line, on the side away from them, and the line is not carried out to it.
+        let d = lin((0.0, 0.0), (0.0, 0.5), (5.0, 0.0), std::f64::consts::FRAC_PI_2);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 2), 1.0);
+        assert!((g.text_pos.y - 0.25).abs() < 1e-9 && g.text_pos.x > 5.2, "{:?}", g.text_pos);
+        assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.y <= 0.5 + 1e-9 && p.x <= 5.0 + 1e-9), "no leader, no line out to the text");
+        // Horizontal, measured points above the line: below it.
+        let d = lin((0.0, 10.0), (0.5, 10.0), (0.0, 5.0), 0.0);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 2), 1.0);
+        assert!((g.text_pos.x - 0.25).abs() < 1e-9 && g.text_pos.y < 4.8, "{:?}", g.text_pos);
+        assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.x <= 0.5 + 1e-9 && p.y >= 5.0 - 1e-9), "no leader, no line out to the text");
+    }
+
+    #[test]
+    fn text_that_does_not_fit_follows_dimtmove_1() {
+        // Moved off the line with a leader from the middle of the dimension line.
+        let d = lin((0.0, 0.0), (0.5, 0.0), (0.0, 5.0), 0.0);
+        let g = dimension_geometry(&d, &st_with(|s| s.text_move = 1), 1.0);
+        assert!(g.text_pos.y > 5.2, "{:?}", g.text_pos);
+        let mid = Vec2::new(0.25, 5.0);
+        assert!(g.lines_of(LineRole::Dim).any(|l| l.len() == 2 && l[0].dist(mid) < 1e-9 && l[1].y > 5.1), "leader");
+        // Text placed with DIMTEDIT stays where it is.
+        let mut placed = d.clone();
+        placed.user_text_pos = true;
+        placed.text_mid = Vec3::new(3.0, 7.0, 0.0);
+        let g = dimension_geometry(&placed, &st_with(|s| s.text_move = 1), 1.0);
+        assert!(g.text_pos.dist(Vec2::new(3.0, 7.0)) < 1e-9, "{:?}", g.text_pos);
     }
 
     #[test]
