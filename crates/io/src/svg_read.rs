@@ -620,8 +620,15 @@ fn viewport(e: &BytesStart) -> Result<Mat3> {
             _ => None,
         }
     });
-    let w_mm = attr(e, b"width").as_deref().and_then(parse_length_mm);
-    let h_mm = attr(e, b"height").as_deref().and_then(parse_length_mm);
+    // A bare or `px` root size is in CSS pixels, not millimetres.
+    let root_mm = |name: &[u8]| {
+        let raw = attr(e, name)?;
+        let mm = parse_length_mm(&raw)?;
+        let unit = raw.trim().trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')).trim();
+        Some(if matches!(unit, "" | "px") { mm * 25.4 / 96.0 } else { mm })
+    };
+    let w_mm = root_mm(b"width");
+    let h_mm = root_mm(b"height");
     let unit = match (vb, w_mm, h_mm) {
         (Some((_, _, vw, _)), Some(w), _) if w > 0.0 => w / vw,
         (Some((_, _, _, vh)), _, Some(h)) if h > 0.0 => h / vh,

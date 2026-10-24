@@ -2275,6 +2275,18 @@ fn svg_viewbox_scaling_and_mm_units() {
 }
 
 #[test]
+fn svg_viewbox_with_px_or_unitless_root_size_uses_reference_pixel() {
+    for w in ["800", "800px"] {
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="600" viewBox="0 0 400 300"><line x1="0" y1="0" x2="400" y2="0"/></svg>"#
+        );
+        let d = read(svg.as_bytes(), "vb.svg").unwrap();
+        let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+        assert!((l.b.x - 800.0 * 25.4 / 96.0).abs() < 1e-9, "{w}: {l:?}");
+    }
+}
+
+#[test]
 fn svg_inkscape_layers_are_kept() {
     let svg = format!(
         "{SVG_PAGE}<g inkscape:groupmode=\"layer\" inkscape:label=\"Cut\"><rect x=\"0\" y=\"0\" width=\"2\" height=\"2\"/></g>\
