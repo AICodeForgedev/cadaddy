@@ -281,11 +281,12 @@ fn region_for(regions: &[([f64; 4], usize)], at: Vec2, h: f64) -> Option<[f64; 4
 }
 
 /// Blocks of linework on the sheet: connected areas of an occupancy grid, with their cell
-/// counts. Borders and title-block rules (objects spanning much of the sheet) are left out.
+/// counts. Borders and title-block rules (objects spanning much of the sheet) are left out, and so
+/// is text: a long title line would join the views on either side of it.
 pub fn view_regions(d: &Drawing) -> Vec<([f64; 4], usize)> {
     let mut boxes = Vec::new();
     for e in d.model.iter().take(MAX_OBJECTS) {
-        if !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_) | EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Text(_)) {
+        if !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_) | EntityKind::Circle(_) | EntityKind::Arc(_)) {
             continue;
         }
         let b = entity_bounds(d, e, 0);
