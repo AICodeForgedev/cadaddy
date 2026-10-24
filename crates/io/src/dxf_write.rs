@@ -1424,7 +1424,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 attach: 5,
                 rotation: g.text_angle,
                 style: style.text_style.clone(),
-                contents: g.value.clone(),
+                contents: g.mtext_contents(),
                 line_spacing: 1.0,
                 line_spacing_exact: false,
                 columns: None,

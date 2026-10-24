@@ -1403,7 +1403,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                         attach: 5,
                         rotation: g.text_angle,
                         style: style.text_style.clone(),
-                        contents: g.value.clone(),
+                        contents: g.mtext_contents(),
                         line_spacing: 1.0,
                         line_spacing_exact: false,
                         columns: None,
