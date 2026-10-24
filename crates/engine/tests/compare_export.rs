@@ -6,7 +6,7 @@ use std::sync::Arc;
 use cadcraft_engine::Session;
 use cadcraft_engine::doc::color::{Color, Rgb};
 use cadcraft_engine::doc::geom::Vec3;
-use cadcraft_engine::doc::{Block, CellStyle, Common, Drawing, Entity, EntityKind, Handle, Insert, Layer, Space};
+use cadcraft_engine::doc::{Block, CellStyle, Common, Drawing, Entity, EntityKind, Handle, Insert, Layer, MLeader, Space};
 use serde_json::json;
 
 fn insert(block: &str) -> Insert {
@@ -192,6 +192,101 @@ fn anonymous_blocks_of_the_other_drawing_keep_their_own_definition() {
     assert_eq!(referenced, vec!["COMPARE_COMPARED_U2".to_string()], "{r}");
     assert_eq!(ends(&s, "COMPARE_COMPARED_U2"), vec![5.0]);
     assert_eq!(ends(&s, "COMPARE_CURRENT_U1"), vec![1.0]);
+}
+
+#[test]
+fn a_named_block_defined_differently_in_the_other_drawing_shows_the_other_definition() {
+    // PART holds a line, a reference to SUB, which holds a line of length 2, and a multileader
+    // whose content is SYMBOL, which holds one line.
+    let blocks = |part_end: f64, part_base: f64, sub_base: f64, symbol_end: f64, first: u64| {
+        let mut part = Block::new("PART");
+        part.base = Vec3::new(part_base, 0.0, 0.0);
+        part.entities.push(Entity::new(Handle(first), line(part_end)));
+        part.entities.push(Entity::new(Handle(first + 1), EntityKind::Insert(insert("SUB"))));
+        let leader = MLeader {
+            leaders: Vec::new(),
+            landing: Vec3::ZERO,
+            dogleg: 0.0,
+            text: None,
+            style: "Standard".into(),
+            arrow_size: 1.0,
+            spline: false,
+            block: Some(insert("SYMBOL")),
+        };
+        part.entities.push(Entity::new(Handle(first + 2), EntityKind::MLeader(leader)));
+        let mut sub = Block::new("SUB");
+        sub.base = Vec3::new(sub_base, 0.0, 0.0);
+        sub.entities.push(Entity::new(Handle(first + 3), line(2.0)));
+        let mut symbol = Block::new("SYMBOL");
+        symbol.entities.push(Entity::new(Handle(first + 4), line(symbol_end)));
+        [part, sub, symbol]
+    };
+    let run = |theirs_end: f64, theirs_base: f64, theirs_sub_base: f64, theirs_symbol_end: f64| {
+        let mut s = Session::new();
+        for b in blocks(1.0, 0.0, 0.0, 3.0, 0x700) {
+            s.doc_mut().unwrap().blocks.insert(b.name.clone(), Arc::new(b));
+        }
+        s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+        let mut other = Drawing::new_imperial();
+        other.handseed = 0x9000;
+        for b in blocks(theirs_end, theirs_base, theirs_sub_base, theirs_symbol_end, 0x8000) {
+            other.blocks.insert(b.name.clone(), Arc::new(b));
+        }
+        // A second reference, so the other drawing has one that differs even when PART does not.
+        other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+        s.open_drawing(other, "Other", None);
+        s.execute("document.switch", &json!({"index": 0})).unwrap();
+        s.execute("compare", &json!({"document": "Other"})).unwrap();
+        let r = s.execute("compareexport", &json!({})).unwrap();
+        let referenced: Vec<String> = members(&s, r["compared"].as_str().unwrap())
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EntityKind::Insert(i) => Some(i.block.clone()),
+                _ => None,
+            })
+            .collect();
+        (s, referenced)
+    };
+    // The other drawing's PART draws a longer line: it is copied as PART_2 and shown in red.
+    let (s, referenced) = run(5.0, 0.0, 0.0, 3.0);
+    assert_eq!(ends(&s, "PART"), vec![1.0], "this drawing's definition is kept");
+    assert_eq!(ends(&s, "PART_2"), vec![5.0]);
+    assert_eq!(referenced, vec!["COMPARE_COMPARED_PART_2".to_string()]);
+    assert_eq!(ends(&s, "COMPARE_COMPARED_PART_2"), vec![5.0]);
+    let d = s.doc().unwrap();
+    assert!(d.block("SUB_2").is_none() && d.block("SYMBOL_2").is_none(), "SUB and SYMBOL are the same in both drawings");
+    // The blocks a copy of PART refers to.
+    let refers = |s: &Session| -> Vec<String> {
+        s.doc()
+            .unwrap()
+            .block("PART_2")
+            .unwrap()
+            .entities
+            .iter()
+            .flat_map(|e| match &e.kind {
+                EntityKind::Insert(i) => vec![i.block.clone()],
+                EntityKind::MLeader(m) => m.block.iter().map(|b| b.block.clone()).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+    // Another base point on PART, another base point on the SUB inside it, or another SYMBOL
+    // in its multileader: PART is copied too, with the blocks that differ.
+    let (s, referenced) = run(1.0, 3.0, 0.0, 3.0);
+    assert_eq!(s.doc().unwrap().block("PART_2").map(|b| b.base.x), Some(3.0));
+    assert_eq!(referenced, vec!["COMPARE_COMPARED_PART_2".to_string()]);
+    assert_eq!(refers(&s), ["SUB", "SYMBOL"]);
+    let (s, _) = run(1.0, 0.0, 4.0, 3.0);
+    assert_eq!(s.doc().unwrap().block("SUB_2").map(|b| b.base.x), Some(4.0));
+    assert_eq!(refers(&s), ["SUB_2", "SYMBOL"]);
+    let (s, _) = run(1.0, 0.0, 0.0, 6.0);
+    assert_eq!(ends(&s, "SYMBOL_2"), vec![6.0]);
+    assert_eq!(refers(&s), ["SUB", "SYMBOL_2"]);
+    // The same definitions in both drawings: the red reference uses this drawing's PART.
+    let (s, referenced) = run(1.0, 0.0, 0.0, 3.0);
+    assert!(s.doc().unwrap().block("PART_2").is_none());
+    assert_eq!(referenced, vec!["COMPARE_COMPARED_PART".to_string()]);
+    assert_eq!(ends(&s, "COMPARE_COMPARED_PART"), vec![1.0]);
 }
 
 #[test]

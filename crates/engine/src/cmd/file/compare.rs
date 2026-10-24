@@ -139,11 +139,19 @@ struct Signer<'a> {
     d: &'a Drawing,
     blocks: HashMap<String, u64>,
     work: usize,
+    /// When set, a block's signature also covers its base point, units, annotative and overlay
+    /// flags and xref file, with a relative xref path taken from the folder given, and a
+    /// multileader's signature covers its block's.
+    frames: Option<Option<&'a std::path::Path>>,
 }
 
 impl<'a> Signer<'a> {
     fn new(d: &'a Drawing) -> Self {
-        Signer { d, blocks: HashMap::new(), work: 0 }
+        Signer { d, blocks: HashMap::new(), work: 0, frames: None }
+    }
+    /// A signer whose block signatures also cover what changes how a reference draws the block.
+    fn with_frames(d: &'a Drawing, folder: Option<&'a std::path::Path>) -> Self {
+        Signer { frames: Some(folder), ..Signer::new(d) }
     }
     fn geometry(&mut self, k: &EntityKind, depth: usize) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -162,6 +170,12 @@ impl<'a> Signer<'a> {
         if let EntityKind::Insert(i) = k {
             self.block(&i.block, depth).hash(&mut h);
         }
+        if self.frames.is_some()
+            && let EntityKind::MLeader(m) = k
+            && let Some(b) = &m.block
+        {
+            self.block(&b.block, depth).hash(&mut h);
+        }
         h.finish()
     }
     fn block(&mut self, name: &str, depth: usize) -> u64 {
@@ -174,6 +188,13 @@ impl<'a> Signer<'a> {
         if depth < MAX_BLOCK_DEPTH
             && let Some(b) = self.d.block(name)
         {
+            if let Some(folder) = self.frames {
+                let mut xref = b.xref_path.clone();
+                if let Some(x) = xref.as_mut() {
+                    export::rebase_path(x, folder);
+                }
+                (format!("{:?}", b.base), b.units, b.annotative, b.xref_overlay, xref).hash(&mut h);
+            }
             for e in b.entities.iter() {
                 if self.work >= MAX_BLOCK_WORK {
                     break;

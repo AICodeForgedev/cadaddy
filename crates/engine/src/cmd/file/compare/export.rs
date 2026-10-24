@@ -119,7 +119,7 @@ fn folder_of(path: Option<&str>) -> Option<PathBuf> {
 }
 
 /// `p` as an absolute path from `folder` when it is relative.
-fn rebase_path(p: &mut String, folder: Option<&Path>) {
+pub(super) fn rebase_path(p: &mut String, folder: Option<&Path>) {
     if let Some(folder) = folder
         && !p.trim().is_empty()
         && Path::new(p.as_str()).is_relative()
@@ -531,8 +531,11 @@ fn tinted_block(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tinted, 
 type Renames = HashMap<String, String>;
 
 /// Copy into `d` the blocks of `other` that `objs` refer to, directly or through other blocks.
-/// A named block `d` already has keeps `d`'s definition. An anonymous block (`*D3`, `*U7`…)
-/// whose name `d` already uses is copied under the next free name with the same prefix. Copied
+/// A named block `d` already has keeps `d`'s definition when it draws the same thing there (the
+/// same objects, base point, units, flags and xref file, in it and in the blocks it refers to);
+/// otherwise the other drawing's block is copied as `PART_2` (or `PART_3`…). An anonymous block
+/// (`*D3`, `*U7`…) whose name `d` already uses is copied under the next free name with the same
+/// prefix. Copied
 /// objects get new handles, and relative file paths are rebased on `folder`. The flag is true
 /// when more than [`MAX_BLOCKS`] blocks or [`MAX_COPIED`] objects were needed and the rest were
 /// left out.
@@ -547,6 +550,8 @@ fn copy_blocks<'a>(
     let mut seen = HashSet::new();
     let mut needed: Vec<Arc<Block>> = Vec::new();
     let mut left_out = false;
+    // `d`'s relative paths were made absolute from its own folder before the copy.
+    let (mut mine, mut theirs) = (super::Signer::with_frames(d, None), super::Signer::with_frames(other, folder));
     while let Some(n) = frontier.pop() {
         let key = n.to_ascii_uppercase();
         if seen.contains(&key) {
@@ -558,7 +563,14 @@ fn copy_blocks<'a>(
         }
         seen.insert(key);
         let Some(b) = other.block(&n) else { continue };
-        if d.block(&n).is_some() && !b.anonymous {
+        // Past the signers' work limit the signatures no longer cover every object, so the block
+        // is copied.
+        if !b.anonymous
+            && d.block(&n).is_some()
+            && mine.block(&n, 0) == theirs.block(&n, 0)
+            && mine.work < super::MAX_BLOCK_WORK
+            && theirs.work < super::MAX_BLOCK_WORK
+        {
             continue;
         }
         if tinted.copied.saturating_add(b.entities.len()) > MAX_COPIED {
@@ -577,8 +589,12 @@ fn copy_blocks<'a>(
         renames.insert(b.name.to_ascii_uppercase(), b.name.clone());
     }
     for b in needed.iter().filter(|b| d.block(&b.name).is_some()) {
-        let prefix: String = b.name.chars().take_while(|c| *c == '*' || c.is_ascii_alphabetic()).collect();
-        let free = (1..=taken.len() + 1).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase()));
+        let free = if b.anonymous {
+            let prefix: String = b.name.chars().take_while(|c| *c == '*' || c.is_ascii_alphabetic()).collect();
+            (1..=taken.len() + 1).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase()))
+        } else {
+            Some(free_name(&b.name, taken.len(), |n| taken.contains(&n.to_ascii_uppercase())))
+        };
         let Some(free) = free else { continue };
         taken.insert(free.to_ascii_uppercase());
         renames.insert(b.name.to_ascii_uppercase(), free);
