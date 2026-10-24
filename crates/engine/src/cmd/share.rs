@@ -68,9 +68,7 @@ fn ifc_trade(class: &str, systems: &[String]) -> &'static str {
         "plumb"
     } else if has(&["cable", "light", "outlet", "switching", "electric", "protectivedevice", "junctionbox", "lamp", "transformer"]) {
         "elec"
-    } else if has(&["column", "beam", "footing", "member", "plate", "pile", "reinforc", "tendon"]) {
-        "struct"
-    } else if has(&["slab"]) {
+    } else if has(&["column", "beam", "footing", "member", "plate", "pile", "reinforc", "tendon", "slab"]) {
         "struct"
     } else if has(&["wall", "door", "window", "stair", "roof", "covering", "railing", "curtainwall", "ramp", "furnish", "furniture"]) {
         "arch"
