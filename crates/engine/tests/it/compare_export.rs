@@ -1,5 +1,6 @@
 //! COMPAREEXPORT: the comparison as a new drawing, with this drawing's objects in one group and
-//! the other drawing's differing objects in another, in the comparison colors.
+//! the other drawing's differing objects in another, in the comparison colors. A compared file's
+//! relative xref paths, which need the file-reading hook, are tested in `tests/compare.rs`.
 
 use std::sync::Arc;
 
@@ -506,55 +507,6 @@ fn relative_xref_paths_become_paths_from_the_source_folder() {
     let images: Vec<String> = images.collect();
     assert_eq!(images.len(), 2);
     assert!(images.iter().all(|p| std::path::Path::new(p) == want), "{images:?}");
-}
-
-#[test]
-fn relative_xref_paths_of_a_compared_file_take_that_files_folder() {
-    // Test file format: any bytes read as a drawing with a reference to xref Y at `y.dwg`.
-    fn read(_bytes: &[u8], _name: &str) -> Result<Drawing, String> {
-        let mut d = Drawing::new_imperial();
-        let mut y = Block::new("Y");
-        y.xref_path = Some("y.dwg".into());
-        d.blocks.insert("Y".into(), Arc::new(y));
-        d.add(&Space::Model, Common::default(), EntityKind::Insert(insert("Y"))).map_err(|e| e.to_string())?;
-        Ok(d)
-    }
-    cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: None });
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("compareexport-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("other.dxf");
-    std::fs::write(&path, "x").unwrap();
-    // Named by its absolute path and by a path relative to the working directory.
-    let mut names = vec![path.to_string_lossy().to_string()];
-    names.extend(relative_to_cwd(&path));
-    for name in names {
-        let mut s = Session::new();
-        s.execute("compare", &json!({"path": name})).unwrap();
-        // The compared file's xref is only there; the copy keeps the file's folder.
-        s.execute("compareexport", &json!({})).unwrap();
-        let got = s.doc().unwrap().block("Y").unwrap().xref_path.clone().unwrap();
-        let got = std::path::Path::new(&got);
-        assert!(got.is_absolute(), "{got:?}, compared as {name}");
-        assert_eq!(got.file_name(), Some(std::ffi::OsStr::new("y.dwg")));
-        assert_eq!(got.parent().unwrap().canonicalize().unwrap(), dir.canonicalize().unwrap(), "compared as {name}");
-    }
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// `p` as a path relative to the working directory (`..` steps up to the shared folder), when
-/// the two share a root.
-fn relative_to_cwd(p: &std::path::Path) -> Option<String> {
-    use std::path::Component;
-    let cwd = std::env::current_dir().ok()?;
-    let (a, b): (Vec<Component>, Vec<Component>) = (cwd.components().collect(), p.components().collect());
-    let shared = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    if shared == 0 {
-        return None;
-    }
-    let mut rel = std::path::PathBuf::new();
-    a[shared..].iter().for_each(|_| rel.push(".."));
-    b[shared..].iter().for_each(|c| rel.push(c));
-    Some(rel.to_string_lossy().to_string())
 }
 
 #[test]

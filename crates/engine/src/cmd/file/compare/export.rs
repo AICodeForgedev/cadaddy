@@ -187,6 +187,9 @@ fn snapshot(cur: &Drawing, c: &Comparison, folders: &Folders) -> Snapshot {
     d.foreign = Arc::default();
     d.groups.clear();
     d.constraints.clear();
+    // The per-object constraint bar and dimension exceptions name objects the copy doesn't have.
+    d.parametric.settings.bar_exceptions.clear();
+    d.parametric.settings.dim_exceptions.clear();
     d.hidden_objects.clear();
     d.read_notes.clear();
     d.refedit = None;
