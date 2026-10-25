@@ -35,6 +35,45 @@ fn area_object_add_and_subtract_keep_a_running_total() {
 }
 
 #[test]
+fn area_too_large_to_hold_is_refused() {
+    // A 2e154 square has an area of 4e308, past f64's range; its perimeter fits.
+    let big = json!([[0, 0], [2e154, 0], [2e154, 2e154], [0, 2e154]]);
+    let mut s = Session::new();
+    let err = s.execute("area", &json!({ "points": big })).unwrap_err();
+    assert!(err.to_string().contains("the area is too large"), "{err}");
+    // Two sides of 1e308: the area fits, the perimeter does not.
+    let long = json!([[0, 0], [1e308, 0], [1e308, 1e-300]]);
+    let err = s.execute("area", &json!({ "points": long })).unwrap_err();
+    assert!(err.to_string().contains("the perimeter is too large"), "{err}");
+
+    // Typed, nothing is reported.
+    let (_, log) = run(&["area", "0,0", "2e154,0", "2e154,2e154", "0,2e154", ""]);
+    assert!(has(&log, "The area is too large."), "{log:?}");
+    assert!(!has(&log, "Area = "), "{log:?}");
+
+    // Areas of 8.1e307 that each fit overflow the running total at the third; the total keeps two.
+    let sq = ["0,0", "9e153,0", "9e153,9e153", "0,9e153", ""];
+    for mode in ["a", "s"] {
+        let mut lines = vec!["area", mode];
+        for _ in 0..3 {
+            lines.extend(sq);
+        }
+        let (s, log) = run(&lines);
+        assert!(has(&log, "The total area is too large."), "{mode}: {log:?}");
+        assert_eq!(log.iter().filter(|l| l.contains("Total area = ")).count(), 2, "{mode}: {log:?}");
+        assert!(s.running.is_some(), "{mode}: the command goes on");
+    }
+
+    // MEASUREGEOM's Volume option does not keep such an area waiting for a height: the next area is measured.
+    let mut lines = vec!["measuregeom", "v", "a", "0,0", "2e154,0", "2e154,2e154", "0,2e154", ""];
+    lines.extend(["0,0", "1,0", "1,1", "0,1", "", "2"]);
+    let (s, log) = run(&lines);
+    assert!(has(&log, "The area is too large."), "{log:?}");
+    assert!(has(&log, "Total volume = 2"), "{log:?}");
+    assert!(s.running.is_some(), "the command goes on");
+}
+
+#[test]
 fn area_object_on_an_open_polyline_closes_the_area_but_not_the_perimeter() {
     // Open, 160 long; the closing side back to 0,0 would add 116.619.
     let (_, log) = run(&["pline", "0,0", "100,0", "100,60", "", "area", "o", "50,0"]);
