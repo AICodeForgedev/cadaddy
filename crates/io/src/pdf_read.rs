@@ -3172,10 +3172,12 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 }
             }
             // OCR pass: supplement with template-based glyph recognition for strokes not yet
-            // claimed.  Only when the sheet has hidden text (the OCR is expensive and only needed
-            // when the PDF carries an invisible-text layer from an SHX-plotting CAD application).
+            // claimed.  Runs when SHX-like text is present: hidden text layer (from an SHX-plotting
+            // CAD application) OR the fallback stage recovered any text (stroked lettering exists
+            // even without a hidden-text layer).
             let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-            if has_hidden_text {
+            let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
+            if has_shx_evidence {
                 let mut used_so_far: HashSet<usize> = HashSet::new();
                 for rt in &recovered_texts {
                     used_so_far.extend(&rt.stroke_indices);

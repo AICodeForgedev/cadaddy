@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
             .files()
-            .params("{} → {classified, total, elapsed_ms}")
+            .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level}: one entry per real sheet (copies in several files merged by number, the newer revision date current), from each page's title block")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
             .files()
-            .params("{discipline?, level?} → {sheets, total}")
+            .params("{discipline?, level?, current?: bool (leave out sheets a later copy supersedes)} → {sheets: [{number, title, discipline, type, level, levels, scale, scale_factor, file, page, dirty, superseded_by, stages}], total}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport)
@@ -102,16 +102,30 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── printset.classify ───────────────────────────────────────────────────────
 
+/// Classify reads every sheet's own print (each page of a merged set): the title block's number,
+/// title and discipline, never the file name. The result is the set's sheet index.
 fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
     let project = get_project_mut(s)?;
     let cancel = AtomicBool::new(false);
     let mut noop = |_: &mep_printset::Progress| {};
-    let rec = mep_printset::run_classify(project, None, &cancel, &mut noop);
-
+    let dir = PathBuf::from(&project.source_dir);
+    let rec = if !project.source_dir.is_empty() && dir.is_dir() {
+        let loader = mep_printset::PrintLoader::new(&dir);
+        mep_printset::run_classify_prints(project, &|e| loader.load(e), &cancel, &mut noop)
+    } else {
+        // A project made without files (from a saved truth): classify what it already holds.
+        mep_printset::run_classify(project, None, &cancel, &mut noop)
+    };
+    let index = mep_printset::sheet_index(project);
     Ok(json!({
         "classified": rec.sheets_processed,
-        "total": rec.sheets_total,
+        "total": index.sheets.len(),
+        "pages": rec.sheets_total,
         "elapsed_ms": rec.elapsed_ms,
+        "sheets": index.sheets,
+        "levels": index.levels,
+        "unidentified": index.unidentified,
+        "plans_without_level": index.plans_without_level,
     }))
 }
 
@@ -179,17 +193,20 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
     let project = get_project(s)?;
     let filter_discipline = str_param(p, "discipline");
     let filter_level = str_param(p, "level");
+    let current = bool_or(p, "current", false);
 
     let sheets: Vec<Value> = project
         .sheets
         .iter()
         .filter(|sh| filter_discipline.is_none_or(|d| sh.discipline == d))
         .filter(|sh| filter_level.is_none_or(|l| sh.level == l))
+        .filter(|sh| !current || sh.superseded_by.is_empty())
         .map(|sh| {
             json!({
                 "number": sh.number, "title": sh.title, "discipline": sh.discipline,
-                "type": sh.sheet_type, "level": sh.level, "scale": sh.scale_text,
-                "file": sh.file, "page": sh.page, "dirty": sh.dirty,
+                "type": sh.sheet_type, "level": sh.level, "levels": sh.levels, "scale": sh.scale_text,
+                "scale_factor": sh.scale, "file": sh.file, "page": sh.page, "dirty": sh.dirty,
+                "superseded_by": sh.superseded_by,
                 "stages": sh.stage_results.keys().collect::<Vec<_>>(),
             })
         })

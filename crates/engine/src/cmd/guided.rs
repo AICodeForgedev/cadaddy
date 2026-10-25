@@ -412,6 +412,29 @@ pub struct GuidedJob {
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
+    /// The set's sheet index from classify: one entry per real sheet, and the levels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<Value>,
+    /// Where each imported plan sheet sits in the drawing (side by side, a level's sheets
+    /// together), so what is read on it carries the sheet's level.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_regions: Vec<SheetRegion>,
+}
+
+/// An imported sheet's rectangle in the job's drawing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetRegion {
+    pub number: String,
+    pub level: String,
+    /// `[x0, y0, x1, y1]`, drawing units.
+    pub rect: [f64; 4],
+}
+
+impl GuidedJob {
+    /// The level of the imported sheet holding `at`.
+    pub fn level_at(&self, at: [f64; 2]) -> Option<&SheetRegion> {
+        self.sheet_regions.iter().find(|r| at[0] >= r.rect[0] && at[0] <= r.rect[2] && at[1] >= r.rect[1] && at[1] <= r.rect[3])
+    }
 }
 
 impl GuidedJob {
@@ -450,6 +473,8 @@ impl GuidedJob {
             sheets_loaded: false,
             checkpoint: None,
             prints_stamp: String::new(),
+            index: None,
+            sheet_regions: Vec::new(),
         }
     }
 
@@ -638,23 +663,26 @@ fn run_import(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(opened)
 }
 
-/// Run the classify stage: classify sheets by discipline (MUST 2).
-/// Discipline comes from: (1) sheet number prefix (E-4 → E), (2) title block text
-/// ("ELECTRICAL PLANS"), (3) keynote headers ("ELECTRICAL KEYNOTES"). Asks when unsure.
+/// Run the classify stage: the set's sheet index (MUST 2). Each page's title block names its
+/// sheet (number, title, discipline — never the file name); the same sheet in several files is one
+/// entry; plans carry the level their titles name. Asks when a discipline or level is unsure.
 fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let classified = s.execute("printset.classify", &json!({}))?;
 
-    // Fetch the actual sheet list (printset.classify returns {classified, total,
-    // elapsed_ms} — no "sheets" array). printset.sheets returns {sheets: [...], total}.
-    let sheets_result = s.execute("printset.sheets", &json!({}))?;
+    // The current copy of every sheet, with its file and page, for the stages that import them.
+    let sheets_result = s.execute("printset.sheets", &json!({"current": true}))?;
 
     // Cache the sheet list for later stages (MUST 4).
     job.sheets = Some(sheets_result);
+    job.index = Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels")}));
 
     // MUST 1: Check for empty results.
-    // Clone the sheets array out of job.sheets so we don't hold an immutable
-    // borrow on `job` while later code needs `&mut job`.
-    let sheets_vec: Option<Vec<Value>> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned();
+    // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
+    let sheets_vec: Option<Vec<Value>> = classified
+        .get("sheets")
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned());
     let sheet_count = sheets_vec.as_ref().map_or(0, Vec::len);
     if sheet_count == 0 {
         job.add_finding(
@@ -766,6 +794,38 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
+        // Every plan gets a level: one whose title names none was given the lowest; confirm it.
+        for sheet in sheets.iter().filter(|sh| sh.get("level_source").and_then(Value::as_str) == Some("default")).take(MAX_QUESTIONS_PER_STAGE) {
+            let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
+            let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
+            let level = sheet.get("level").and_then(Value::as_str).unwrap_or("1");
+            let q = Question {
+                id: job.next_qid(StageName::Classify),
+                stage: StageName::Classify,
+                question: format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
+                why: "Neither the sheet title, its view titles nor its number say which level the plan shows".into(),
+                choices: vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
+                evidence: Some(QuestionEvidence {
+                    crop_png_path: None,
+                    sheet: Some(number.to_string()),
+                    at: None,
+                    values: Some(json!({"number": number, "title": title, "level": level, "sources": sheet.get("sources")})),
+                    handles: Vec::new(),
+                    tiled_crops: None,
+                    leftovers: Vec::new(),
+                }),
+                default: Some(format!("Level {level}")),
+                answer_schema: Some(json!({"type": "string"})),
+                answer: None,
+                answered_by: None,
+                answered_at: None,
+                kind: QuestionKind::Doubt,
+            };
+            job.add_question_to_worklist(&q);
+            if let Some(st) = job.stage_mut(StageName::Classify) {
+                st.questions.push(q);
+            }
+        }
     }
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
@@ -802,9 +862,28 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let levels = levels_result.get("levels").and_then(Value::as_array);
     let level_count = levels.map_or(0, Vec::len);
 
-    // MUST 3: If levels.read found 0 levels, try extracting from sheet titles.
+    // MUST 3: If levels.read found 0 levels, take the sheet index's: the levels the plan titles
+    // name, with elevations where the sections and elevations mark them.
     let mut title_levels: Vec<Value> = Vec::new();
     if level_count == 0
+        && let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array)
+    {
+        for l in index_levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
+            let Some(name) = l.get("name").and_then(Value::as_str) else { continue };
+            let sheets: Vec<&str> =
+                l.get("sheets").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            title_levels.push(json!({
+                "name": name,
+                "sheet": sheets.first().copied().unwrap_or("?"),
+                "sheets": sheets,
+                "source": "title",
+                "elevation_ft": l.get("elevation_ft"),
+                "height_ft": l.get("height_ft"),
+            }));
+        }
+    }
+    if level_count == 0
+        && title_levels.is_empty()
         && let Some(sheets) = &job.sheets
         && let Some(sheet_arr) = sheets.get("sheets").and_then(Value::as_array)
     {
@@ -1090,7 +1169,16 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Some(StageName::Levels),
         Some(json!({"levels_detected": level_count, "levels_from_titles": title_level_count, "effective": effective_count})),
     );
-    Ok(levels_result)
+    let mut out = levels_result;
+    if level_count == 0
+        && effective_count > 0
+        && let Some(o) = out.as_object_mut()
+    {
+        // The levels the job goes on with: the plan titles' (levels.read found no level notes).
+        o.insert("levels_read".into(), json!(0));
+        o.insert("levels".into(), json!(effective_levels));
+    }
+    Ok(out)
 }
 
 /// Extract level names from a sheet title (MUST 3).
@@ -1150,10 +1238,12 @@ pub fn extract_levels_from_title(title: &str) -> Vec<String> {
 /// stage commands (`rooms.list`, `bspec.draft`, `bim.build`, …) find entities.
 ///
 /// `printset.open` only creates metadata; this bridges to actual drawing content.
-/// Each plan-type sheet (plan / enlarged_plan) is imported once, its own page of its file, side
-/// by side (never on top of each other); a page showing the same sheet as one already imported
-/// (the full set and a discipline set) is not imported again. The pages are converted on every
-/// core, each file read once, small fills merged ([`super::exchange::import_pdf_pages`]).
+/// Each current plan-type sheet (plan / enlarged_plan, its own page of its file) is imported
+/// once, side by side (never on top of each other): a level's sheets together, lowest level
+/// first, each in its own rectangle (`job.sheet_regions`), so what is read on a sheet carries the
+/// sheet's level. A page showing the same sheet as one already imported (the full set and a
+/// discipline set) is not imported again. The pages are converted on every core, each file read
+/// once, small fills merged ([`super::exchange::import_pdf_pages`]).
 fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.sheets_loaded {
         return Ok(());
@@ -1163,20 +1253,40 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         None => return Err(bad("guided", "no sheets cached — classify must run first")),
     };
     let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
+    let current = |sh: &&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
     let kind = |sh: &Value| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_string();
-    let plan_sheets: Vec<&Value> = sheet_arr.iter().filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan")).collect();
-    let plan_count = plan_sheets.len();
-    // Fall back to all sheets if no plans classified yet.
-    let mut wanted: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().collect() } else { plan_sheets };
-    // Each page once: several entries naming the same page (the views of a several-view
-    // sheet) are one import.
+    let mut plan_sheets: Vec<&Value> = sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan")).collect();
+    // The index's level (a plan whose title names none was given one) over the page's own.
+    let level_of = |sh: &Value| -> String {
+        let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
+        let base = number.split('/').next().unwrap_or(number);
+        let own = sh.get("level").and_then(Value::as_str).unwrap_or("");
+        if !own.is_empty() && number.contains('/') {
+            return own.to_string();
+        }
+        job.index
+            .as_ref()
+            .and_then(|i| i.get("sheets"))
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|x| x.get("number").and_then(Value::as_str) == Some(base)))
+            .and_then(|x| x.get("level"))
+            .and_then(Value::as_str)
+            .filter(|l| !l.is_empty())
+            .unwrap_or(own)
+            .to_string()
+    };
+    let level_rank = |l: &str| (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
+    plan_sheets.sort_by_key(|sh| level_rank(&level_of(sh)));
+    let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
+    // A several-view sheet (3RD and 4TH FLOOR PLANS) is one entry per view but one page:
+    // import each page once, with its lowest level.
     let page_of = |sh: &Value| sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
     let mut seen = std::collections::HashSet::new();
-    wanted.retain(|sh| match sh.get("file").and_then(Value::as_str) {
+    all.retain(|sh| match sh.get("file").and_then(Value::as_str) {
         Some(f) if !f.is_empty() => seen.insert((f.to_string(), page_of(sh))),
         _ => false,
     });
-    let pages: Vec<super::exchange::PdfPage> = wanted
+    let pages: Vec<super::exchange::PdfPage> = all
         .iter()
         .map(|sh| {
             let file = sh.get("file").and_then(Value::as_str).unwrap_or_default();
@@ -1190,7 +1300,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             super::exchange::PdfPage { path, params, at: None }
         })
         .collect();
-    let names: Vec<String> = wanted
+    let names: Vec<String> = all
         .iter()
         .map(|sh| {
             let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -1217,10 +1327,19 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut imported = 0usize;
     let mut same = 0usize;
     let mut placed = Vec::new();
-    for (r, name) in results.iter().zip(&names) {
+    let mut regions = Vec::new();
+    for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
         match r {
             super::exchange::PageImport::Done(rep) => {
                 imported += 1;
+                let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
+                    let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
+                    <[f64; 4]>::try_from(v).ok()
+                });
+                if let Some(rect) = rect {
+                    let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
+                    regions.push(SheetRegion { number: number.split('/').next().unwrap_or(number).to_string(), level: level_of(sh), rect });
+                }
                 if placed.len() < MAX_QUESTIONS_PER_STAGE {
                     placed.push(json!({"sheet": name, "rect": rep.get("rect")}));
                 }
@@ -1230,6 +1349,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             super::exchange::PageImport::Failed(e) => s.echo(format!("guided: could not import sheet {name}: {e}")),
         }
     }
+    job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
         "sheets_loaded",
@@ -1237,7 +1357,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         None,
         None,
         Some(json!({
-            "plan_sheets": plan_count,
+            "plan_sheets": total,
             "pages": total,
             "imported": imported,
             "same_pages": same,
@@ -1375,7 +1495,21 @@ fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
-    let rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
+    let mut rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
+    // A room carries the level of the sheet it was read on.
+    if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
+        for room in list.iter_mut() {
+            let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+            let Some(region) = at.and_then(|at| job.level_at(at)) else { continue };
+            let has_level = room.get("level").and_then(Value::as_str).is_some_and(|l| !l.is_empty());
+            if let Some(o) = room.as_object_mut() {
+                if !has_level && !region.level.is_empty() {
+                    o.insert("level".into(), json!(region.level));
+                }
+                o.insert("sheet".into(), json!(region.number));
+            }
+        }
+    }
 
     let rooms = rooms_result.get("rooms").and_then(Value::as_array);
     let room_count = rooms.map_or(0, Vec::len);
@@ -2533,8 +2667,21 @@ fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// `job.explain {stage}` — explain what a stage does and its current state.
 fn cmd_explain(s: &mut Session, p: &Value) -> Result<Value> {
-    let job = load_job(s)?.ok_or_else(|| bad("job.explain", "no job running"))?;
     let stage_label = p.get("stage").and_then(Value::as_str).unwrap_or("");
+    // Before a job starts, an agent can still ask what the stages do.
+    let Some(job) = load_job(s)? else {
+        let pick = |n: &StageName| json!({"stage": n.label(), "description": n.description(), "status": "NotStarted"});
+        return Ok(match StageName::ALL.iter().find(|n| n.label() == stage_label) {
+            Some(n) => {
+                let mut v = pick(n);
+                v["note"] = json!("no job running yet — job.start {pdfs} starts one");
+                v
+            }
+            None => {
+                json!({"stages": StageName::ALL.iter().map(pick).collect::<Vec<_>>(), "note": "no job running yet — job.start {pdfs} starts one"})
+            }
+        });
+    };
 
     let stage = job.stages.iter().find(|st| st.name.label() == stage_label);
     match stage {
@@ -2670,7 +2817,14 @@ fn job_status_value(job: &GuidedJob) -> Value {
         "rules_learned": job.rules.len(),
         "elapsed_ms": job.stages.iter().filter_map(|st| st.elapsed_ms).sum::<u64>(),
         "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
+        "sheets": index_count(job, "sheets"),
+        "levels": index_count(job, "levels"),
     })
+}
+
+/// How many sheets or levels the job's sheet index holds (none before classify).
+fn index_count(job: &GuidedJob, key: &str) -> Option<usize> {
+    job.index.as_ref().and_then(|i| i.get(key)).and_then(Value::as_array).map(Vec::len)
 }
 
 fn job_summary(job: &GuidedJob) -> Value {
@@ -2688,6 +2842,8 @@ fn job_summary(job: &GuidedJob) -> Value {
         "stages_completed": job.stages.iter().filter(|s| s.status == StageStatus::Done).count(),
         "total_questions": job.stages.iter().map(|s| s.questions.len() + s.verify.len() + s.completeness.len()).sum::<usize>(),
         "rules_learned": job.rules.len(),
+        "sheets": index_count(job, "sheets"),
+        "levels": index_count(job, "levels"),
         "results": results,
     })
 }
@@ -2877,6 +3033,16 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explain_works_before_a_job_starts() {
+        let mut s = Session::new();
+        let one = cmd_explain(&mut s, &json!({"stage": "classify"})).unwrap();
+        assert_eq!((one["stage"].as_str(), one["status"].as_str()), (Some("classify"), Some("NotStarted")));
+        assert!(one["description"].as_str().is_some_and(|d| !d.is_empty()));
+        let all = cmd_explain(&mut s, &json!({})).unwrap();
+        assert_eq!(all["stages"].as_array().map(Vec::len), Some(StageName::ALL.len()));
+    }
+
     #[test]
     fn junk_tags_are_not_device_types() {
         for (t, want) in [("A", "A"), ("XA", "XA"), ("L4", "L4"), ("EF", "EF"), ("DP2", "DP2"), ("D-1", CIRCUIT_TAGS), ("", "unknown_symbol")] {
