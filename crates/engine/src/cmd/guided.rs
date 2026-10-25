@@ -2133,14 +2133,10 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
-        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
+        let mut level =
+            json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
         if !(read_elevation && read_height) {
-            level["guess"] = json!(format!(
-                "{} plan {}: floor to floor not read from the sections; {}' assumed",
-                name,
-                r.number,
-                DEFAULT_STOREY_FT
-            ));
+            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
         }
         out.push(level);
     }
@@ -3188,5 +3184,72 @@ mod tests {
             kind: QuestionKind::Verify,
         });
         assert!(check_rejected_samples(&stage));
+    }
+
+    fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
+        SheetRegion { number: number.into(), level: level.into(), discipline: discipline.into(), kind: kind.into(), rect: [x, 0.0, x + 100.0, 80.0] }
+    }
+
+    #[test]
+    fn the_building_levels_are_the_architectural_floor_plans() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("E-102", "2", "E", "plan", 0.0),
+            region("A112", "2", "A", "plan", 200.0),
+            region("A111", "1", "A", "plan", 400.0),
+            region("A121", "1", "A", "enlarged_plan", 600.0),
+            region("A111B", "1", "A", "plan", 800.0),
+            region("A113", "3", "A", "plan", 1000.0),
+            region("M-101", "1", "M", "plan", 1200.0),
+        ];
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 12.0},
+            {"name": "2", "elevation_ft": 12.0, "height_ft": 10.5},
+            {"name": "3", "elevation_ft": 22.5}
+        ]}));
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3"], "{levels:?}");
+        // Each level's region is its A plan's rectangle (the first of the level), never E/M.
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [400.0, 200.0, 1000.0]);
+        // Heights from the index; the top level's floor to floor is not read, so it is a guess.
+        assert_eq!((levels[0]["elevation_ft"].as_f64(), levels[0]["height_ft"].as_f64()), (Some(0.0), Some(12.0)));
+        assert_eq!((levels[1]["elevation_ft"].as_f64(), levels[1]["height_ft"].as_f64()), (Some(12.0), Some(10.5)));
+        assert!(levels[0].get("guess").is_none() && levels[1].get("guess").is_none(), "{levels:?}");
+        assert_eq!(levels[2]["elevation_ft"].as_f64(), Some(22.5));
+        assert!(levels[2]["guess"].as_str().is_some_and(|g| g.contains("A113")), "{levels:?}");
+
+        // No index heights: stacked at the default storey, every one a guess.
+        job.index = None;
+        let levels = building_levels(&job);
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        assert_eq!(el, [0.0, DEFAULT_STOREY_FT, 2.0 * DEFAULT_STOREY_FT]);
+        assert!(levels.iter().all(|l| l["guess"].is_string()));
+
+        // Only E/M plans: no building levels (the build reads what was imported, as before).
+        job.sheet_regions = vec![region("E-104", "4", "E", "plan", 0.0)];
+        assert!(building_levels(&job).is_empty());
+    }
+
+    #[test]
+    fn a_room_read_on_several_sheets_of_a_level_is_one_room() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("E-103", "3", "E", "plan", 0.0), region("A113", "3", "A", "plan", 200.0)];
+        let mut rooms = json!({"rooms": [
+            {"name": "KING", "number": "301", "level": "3", "sheet": "E-103", "area": 1.0},
+            {"name": "KING", "number": "301", "level": "3", "sheet": "A113", "area": 2.0},
+            {"name": "KING", "number": "302", "level": "3", "sheet": "A113"},
+            {"name": "KING", "number": "301", "level": "4", "sheet": "A114"},
+            {"name": "CORRIDOR", "level": "3", "sheet": "E-103"},
+            {"name": "CORRIDOR", "level": "3", "sheet": "A113"}
+        ]});
+        assert_eq!(one_room_per_number(&job, &mut rooms), 1);
+        let list = rooms["rooms"].as_array().cloned().unwrap_or_default();
+        assert_eq!(list.len(), 5, "{list:?}");
+        // The architectural sheet's reading is the one kept.
+        let r301: Vec<&Value> = list.iter().filter(|r| r["number"] == "301" && r["level"] == "3").collect();
+        assert_eq!(r301.len(), 1);
+        assert_eq!(r301[0]["sheet"], "A113");
     }
 }

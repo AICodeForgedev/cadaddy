@@ -1199,11 +1199,11 @@ fn one_per_swing(leaves: &mut Vec<Leaf>, tol: f64) -> Option<(usize, usize)> {
     let mut kept: Vec<Leaf> = Vec::with_capacity(leaves.len());
     let mut dropped = false;
     for l in leaves.drain(..) {
-        let same = |o: &Leaf| {
-            o.window == l.window && ((o.a.dist(l.a) <= tol && o.b.dist(l.b) <= tol) || (o.a.dist(l.b) <= tol && o.b.dist(l.a) <= tol))
-        };
+        let same =
+            |o: &Leaf| o.window == l.window && ((o.a.dist(l.a) <= tol && o.b.dist(l.b) <= tol) || (o.a.dist(l.b) <= tol && o.b.dist(l.a) <= tol));
         let (cx, cy) = cell(l.a);
-        let dup = (-1..=1).any(|dx| (-1..=1).any(|dy| seen.get(&(cx + dx, cy + dy)).is_some_and(|ix| ix.iter().any(|&i| kept.get(i).is_some_and(same)))));
+        let dup =
+            (-1..=1).any(|dx| (-1..=1).any(|dy| seen.get(&(cx + dx, cy + dy)).is_some_and(|ix| ix.iter().any(|&i| kept.get(i).is_some_and(same)))));
         if dup {
             dropped = true;
             continue;

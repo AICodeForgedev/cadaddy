@@ -235,7 +235,10 @@ fn hostile_draft_levels_never_panic() {
         let _ = s.execute("bspec.draft", &bad);
     }
     // A region with nothing in it: an empty level, no failure.
-    let r = s.execute("bspec.draft", &json!({"store": true, "levels": [{"name": "A", "elevation_ft": 0, "height_ft": 10, "region": [5e5, 5e5, 6e5, 6e5]}], "stack": true}));
+    let r = s.execute(
+        "bspec.draft",
+        &json!({"store": true, "levels": [{"name": "A", "elevation_ft": 0, "height_ft": 10, "region": [5e5, 5e5, 6e5, 6e5]}], "stack": true}),
+    );
     assert!(r.is_ok(), "{r:?}");
     let _ = s.execute("model.build", &json!({}));
     let _ = s.execute("model.build", &json!({"stack": "yes"}));
