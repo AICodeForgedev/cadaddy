@@ -78,7 +78,7 @@ impl eframe::App for App {
             #[cfg(target_os = "macos")]
             {
                 if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
-                    self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad));
+                    self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad, ctx));
                 }
                 if let Some(m) = &mut self.native_menu {
                     m.poll(&mut self.cad, ctx);
