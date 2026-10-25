@@ -48,6 +48,8 @@ pub mod plotstyles;
 pub mod quick;
 pub mod shortcut_menus;
 pub mod theme;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod updates_ui;
 pub mod viewcube;
 pub mod vpscale;
 
@@ -274,6 +276,9 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
+    /// The startup update check and its prompt (desktop; [`updates_ui`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub updates_rt: updates_ui::Runtime,
 }
 
 impl CadApp {
@@ -319,6 +324,8 @@ impl CadApp {
             alias_dlg: None,
             hatch_dlg: None,
             bedit: bedit::State::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_rt: updates_ui::Runtime::default(),
         }
     }
 
@@ -607,6 +614,8 @@ impl CadApp {
         self.session.lisp_tick();
         // Time-based and idempotent by its own deadline; keeps autosave alive while hidden.
         self.autosave_tick(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::tick(self, ctx);
         if !self.synthetic.is_empty() || self.synthetic_injected {
             request_paint_while_hidden(ctx);
         }
@@ -770,6 +779,8 @@ impl CadApp {
             }
         });
         self.opening.show(ui.ctx());
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::show(self, ui.ctx());
         dialogs::show(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());

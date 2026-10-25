@@ -60,6 +60,7 @@ eframe = { version = "0.37", default-features = false }
 egui-wgpu = "0.37"
 # Monotonic time on native and web (performance.now on wasm).
 web-time = "1.1"
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "5b0f3c572a3b5c1e51bdb90d7ff788e0212ec1cc", features = ["egui"] }
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
 
