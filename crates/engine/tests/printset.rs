@@ -101,3 +101,133 @@ fn full_hotel_through_command_path() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─── Sheet index (Q5262): one entry per real sheet, levels from the plan titles ─────────────
+
+/// A folder like a real job's: the full set as one merged PDF, plus a discipline set that
+/// prints the mechanical sheets again.
+/// `only`: the sheets the full set holds (all when empty).
+fn job_folder(tag: &str, only: &[&str]) -> (cadaddy_mepfix::truth::Truth, std::path::PathBuf) {
+    let mut set = generate_hotel(42, HotelSize::Small).expect("generate hotel");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_sheetindex_{tag}_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Mechanical")).expect("folders");
+    if !only.is_empty() {
+        set.truth.sheets.retain(|s| only.contains(&s.number.as_str()));
+    }
+    let pages: Vec<(Vec<u8>, String, String)> = set
+        .truth
+        .sheets
+        .iter()
+        .map(|sh| (set.file(&sh.pdf).expect("sheet pdf").to_vec(), format!("{} {}", sh.number, sh.title), String::new()))
+        .collect();
+    std::fs::write(dir.join("Full Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).expect("merge")).expect("write set");
+    for sh in set.truth.sheets.iter().filter(|s| s.discipline == "M") {
+        std::fs::write(dir.join("Mechanical").join(&sh.pdf), set.file(&sh.pdf).expect("sheet pdf")).expect("write sheet");
+    }
+    (set.truth, dir)
+}
+
+#[test]
+fn classify_gives_one_entry_per_real_sheet_with_its_level() {
+    let (truth, dir) = job_folder("classify", &[]);
+    let mut s = Session::new();
+    s.execute("printset.open", &json!({"path": dir.display().to_string()})).expect("open");
+    let r = s.execute("printset.classify", &json!({})).expect("classify");
+    let mech = truth.sheets.iter().filter(|s| s.discipline == "M").count();
+    assert!(mech > 0);
+    assert_eq!(r["pages"].as_u64(), Some((truth.sheets.len() + mech) as u64), "every page read");
+    assert_eq!(r["total"].as_u64(), Some(truth.sheets.len() as u64), "the mechanical sheets' second copies are merged");
+    let sheets = r["sheets"].as_array().expect("index");
+    assert_eq!(sheets.len(), truth.sheets.len());
+    for sh in &truth.sheets {
+        let e = sheets.iter().find(|e| e["number"] == sh.number.as_str()).unwrap_or_else(|| panic!("{} in the index", sh.number));
+        let sources = e["sources"].as_array().map_or(0, Vec::len);
+        assert_eq!(sources, if sh.discipline == "M" { 2 } else { 1 }, "{}: {}", sh.number, e["sources"]);
+        if sh.title.contains("PLAN")
+            && let Some(l) = &sh.level
+        {
+            assert_eq!(e["level"].as_str(), Some(l.as_str()), "{} level", sh.number);
+        }
+    }
+    let levels = r["levels"].as_array().map_or(0, Vec::len);
+    let truth_levels: std::collections::BTreeSet<&String> =
+        truth.sheets.iter().filter(|s| s.title.contains("PLAN")).filter_map(|s| s.level.as_ref()).collect();
+    assert!(levels >= truth_levels.len(), "levels {} vs {truth_levels:?}", r["levels"]);
+    // The stages see each sheet once: the current copies only.
+    let current = s.execute("printset.sheets", &json!({"current": true})).expect("sheets");
+    assert_eq!(current["total"].as_u64(), Some(truth.sheets.len() as u64));
+    assert!(current["sheets"].as_array().is_some_and(|a| a.iter().all(|x| x["page"].as_u64().is_some_and(|p| p >= 1))), "pages are listed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_guided_job_reports_the_index_and_rooms_carry_a_level() {
+    // The job imports the plan sheets' pages: the real PDF reader.
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: Some(cadaddy_io::pdf_read::read_json),
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let (truth, dir) = job_folder("job", &["G-001", "A-101", "A-102", "A-103", "M-101", "M-102"]);
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim"})).expect("job.start");
+    assert_eq!(st["done"], json!(true), "{st}");
+    assert_eq!(st["sheets"].as_u64(), Some(truth.sheets.len() as u64), "{st}");
+    assert!(st["levels"].as_u64().is_some_and(|n| n >= 2), "{st}");
+    let classify = s.execute("job.explain", &json!({"stage": "classify"})).expect("explain classify");
+    let index = classify["result"]["sheets"].as_array().expect("job.explain classify lists the sheets");
+    assert_eq!(index.len(), truth.sheets.len());
+    assert!(index.iter().all(|e| e["sources"].as_array().is_some_and(|a| !a.is_empty())));
+    let levels = s.execute("job.explain", &json!({"stage": "levels"})).expect("explain levels");
+    assert!(levels["result"]["levels"].as_array().is_some_and(|a| a.len() >= 2), "{}", levels["result"]);
+    let rooms = s.execute("job.explain", &json!({"stage": "rooms"})).expect("explain rooms");
+    let list = rooms["result"]["rooms"].as_array().cloned().unwrap_or_default();
+    assert!(!list.is_empty(), "rooms read");
+    let with_level = list.iter().filter(|r| r["level"].as_str().is_some_and(|l| !l.is_empty())).count();
+    assert!(with_level > 0, "rooms carry a level: {:?}", list.iter().take(3).collect::<Vec<_>>());
+    // Each plan sheet sits in its own rectangle: rooms on different levels' sheets differ.
+    let distinct: std::collections::BTreeSet<&str> = list.iter().filter_map(|r| r["level"].as_str()).collect();
+    assert!(distinct.len() >= 2, "rooms on several levels: {distinct:?}");
+    for stage in ["import", "classify", "levels", "rooms"] {
+        let e = s.execute("job.explain", &json!({"stage": stage})).expect("explain");
+        assert!(e["error"].is_null(), "{stage}: {}", e["error"]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_two_view_sheet_is_one_entry_and_its_page_is_imported_once() {
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: Some(cadaddy_io::pdf_read::read_json),
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, HotelSize::Small);
+    let two = cadaddy_mepfix::printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    let opts = cadaddy_io::pdf::PdfOptions { fit: Some(true), ..cadaddy_io::pdf::PdfOptions::default() };
+    let pdf = cadaddy_io::pdf::pdf(&two.drawing, &cadaddy_engine::doc::Space::Model, &opts).expect("plot");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_sheetindex_twoview_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("folder");
+    std::fs::write(dir.join("Lighting.pdf"), pdf).expect("write");
+
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim"})).expect("job.start");
+    assert_eq!(st["sheets"].as_u64(), Some(1), "the two views are one sheet: {st}");
+    let classify = s.execute("job.explain", &json!({"stage": "classify"})).expect("explain");
+    let e = &classify["result"]["sheets"][0];
+    assert_eq!(e["number"], "E-1A", "{e}");
+    assert_eq!(e["levels"], json!(["1", "2"]), "{e}");
+    let agent: serde_json::Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
+    let regions = agent["guided_job"]["sheet_regions"].as_array().cloned().unwrap_or_default();
+    assert_eq!(regions.len(), 1, "the page is imported once: {regions:?}");
+    assert_eq!(regions[0]["number"], "E-1A");
+    let _ = std::fs::remove_dir_all(&dir);
+}
