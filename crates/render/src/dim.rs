@@ -4,7 +4,7 @@
 //! fixed-length extension lines (DIMFXL/DIMFXLON), text placement (DIMTAD, DIMTVP, DIMJUST,
 //! DIMTIH/DIMTOH, DIMGAP, DIMTMOVE) and text formatting (DIMLUNIT, DIMDEC, DIMZIN, DIMRND,
 //! DIMPOST, DIMTOL/DIMLIM with DIMTZIN and DIMTOLJ, DIMALT with DIMALTU/DIMALTZ/DIMALTRND,
-//! DIMAZIN, DIMARCSYM).
+//! DIMAZIN, DIMARCSYM) with its background (DIMTFILL).
 
 use cadcraft_doc::{DimKind, DimStyle, Dimension};
 use cadcraft_fonts::{MTextParams, TextFont};
@@ -32,6 +32,12 @@ pub struct DimGeometry {
     pub line_roles: Vec<LineRole>,
     /// Filled triangles (three points each) in the dimension line colour.
     pub fills: Vec<Vec<Vec2>>,
+    /// DIMTFILL 1 or 2: the corners of the text's background, the text box widened by DIMGAP
+    /// on every side (empty without a fill or text).
+    pub text_fill: Vec<Vec2>,
+    /// Indices into `lines` of the marks drawn with the text, over `text_fill`: the arc length
+    /// symbol above the text (DIMARCSYM 1) and the DIMINSPECT frame.
+    pub text_marks: Vec<usize>,
     /// Text strokes (stroke font, fraction bars, underlines).
     pub text: Vec<Vec<Vec2>>,
     /// Text glyph outlines (TrueType), grouped per glyph.
@@ -75,6 +81,13 @@ impl DimGeometry {
             self.line_roles.push(LineRole::Dim);
         }
     }
+    /// A dimension line that marks the text (see `text_marks`).
+    fn text_mark(&mut self, l: Vec<Vec2>) {
+        if l.len() >= 2 {
+            self.text_marks.push(self.lines.len());
+            self.dim(l);
+        }
+    }
     fn ext(&mut self, l: Vec<Vec2>) {
         if l.len() >= 2 {
             self.lines.push(l);
@@ -88,18 +101,21 @@ impl DimGeometry {
         }
         let mut lines = Vec::with_capacity(self.lines.len());
         let mut roles = Vec::with_capacity(self.lines.len());
-        let mut ext2 = Vec::new();
+        let (mut ext2, mut marks) = (Vec::new(), Vec::new());
         for (i, (l, rl)) in self.lines.iter().zip(&self.line_roles).enumerate() {
             let pieces = if role.is_none_or(|x| x == *rl) { cut_polyline(l, c, r) } else { vec![l.clone()] };
             for p in pieces {
                 if self.ext2_lines.contains(&i) {
                     ext2.push(lines.len());
                 }
+                if self.text_marks.contains(&i) {
+                    marks.push(lines.len());
+                }
                 lines.push(p);
                 roles.push(*rl);
             }
         }
-        (self.lines, self.line_roles, self.ext2_lines) = (lines, roles, ext2);
+        (self.lines, self.line_roles, self.ext2_lines, self.text_marks) = (lines, roles, ext2, marks);
     }
     /// Extension line 1 or 2 (`second`).
     fn ext_n(&mut self, l: Option<Vec<Vec2>>, second: bool) {
@@ -987,7 +1003,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                         base + x * (t * half) + y * ((1.0 - t * t).max(0.0).sqrt() * th * 0.35)
                     })
                     .collect();
-                g.dim(sym);
+                g.text_mark(sym);
             }
         }
     }
@@ -1017,23 +1033,30 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
         let mut left = -w / 2.0;
         if !ins.label.is_empty() {
             left += wl;
-            g.dim(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
+            g.text_mark(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
             left += gap2;
         }
         if !ins.rate.is_empty() {
             left += wv;
-            g.dim(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
+            g.text_mark(vec![at(left + gap2 / 2.0, -hh), at(left + gap2 / 2.0, hh)]);
         }
-        g.dim(vec![at(-hw, hh), at(hw, hh)]);
-        g.dim(vec![at(-hw, -hh), at(hw, -hh)]);
+        g.text_mark(vec![at(-hw, hh), at(hw, hh)]);
+        g.text_mark(vec![at(-hw, -hh), at(hw, -hh)]);
         for side in [-1.0, 1.0] {
             let ends: Vec<Vec2> = if ins.shape == 0 {
                 (0..=12).map(|i| f64::from(i) * std::f64::consts::PI / 12.0).map(|a| at(side * (hw + hh * a.sin()), hh * a.cos())).collect()
             } else {
                 vec![at(side * hw, hh), at(side * (hw + hh), 0.0), at(side * hw, -hh)]
             };
-            g.dim(ends);
+            g.text_mark(ends);
         }
+    }
+    // DIMTFILL: a background behind the text, the text box plus DIMGAP on every side.
+    if st.text_fill != 0 && !g.mtext.is_empty() {
+        let (w, h) = measure(&g.mtext);
+        let (x, y) = (Vec2::from_angle(text_angle), Vec2::from_angle(text_angle).perp());
+        let (hw, hh) = (w / 2.0 + gap, h / 2.0 + gap);
+        g.text_fill = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].into_iter().map(|(px, py)| text_mid + x * px + y * py).collect();
     }
     g.value = decode_value(&cadcraft_fonts::plain_mtext(&g.mtext));
     if !g.mtext.is_empty() {

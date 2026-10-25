@@ -26,6 +26,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .key("Cmd+X")
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectRun::new("cutclip", "CUTCLIP")))),
+        CommandSpec::new("cutbase", "Cut with Base Point", run_cutbase)
+            .menu(&["Edit", "Cut with Base Point"])
+            .params("{handles?, base: [x,y]}")
+            .interactive(|_| Ok(Box::new(CopyBaseM { cut: true, ..CopyBaseM::default() }))),
         CommandSpec::new("copyclip", "Copy", run_copyclip)
             .menu(&["Edit", "Copy"])
             .key("Cmd+C")
@@ -434,9 +438,11 @@ impl Interactive for MredoM {
     }
 }
 
+/// Copy the objects of `hs` to the clipboard, each once however often `hs` lists it.
 fn copy_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<usize> {
     let d = s.doc()?;
-    let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
+    let mut seen = std::collections::HashSet::new();
+    let ents: Vec<Entity> = hs.iter().filter(|h| seen.insert(**h)).filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     let b = ents.iter().fold(Bounds2::EMPTY, |acc, e| acc.union(&entity_bounds(d, e, 0)));
     let base = base.unwrap_or(if b.min.is_finite() { b.min } else { Vec2::ZERO });
     let n = ents.len();
@@ -451,21 +457,34 @@ fn run_copyclip(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_copybase(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = point_req("copybase", p, "base")?;
     let hs = targets(s, p)?;
-    let base = point_param(p, "base");
-    let n = copy_to_clip(s, &hs, base)?;
+    let n = copy_to_clip(s, &hs, Some(base))?;
     Ok(json!({ "copied": n }))
 }
 
-fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut hs = targets(s, p)?;
-    hs.retain(|h| !super::curves::is_locked(s, *h));
-    let n = copy_to_clip(s, &hs, None)?;
+/// Copy the objects that are not on locked layers to the clipboard and erase them.
+fn cut_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<usize> {
+    let hs: Vec<Handle> = hs.iter().copied().filter(|h| !super::curves::is_locked(s, *h)).collect();
+    let n = copy_to_clip(s, &hs, base)?;
     let d = s.doc_mut()?;
     for h in &hs {
         d.remove_entity(*h);
     }
     s.set_selection(Vec::new());
+    Ok(n)
+}
+
+fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = targets(s, p)?;
+    let n = cut_to_clip(s, &hs, None)?;
+    Ok(json!({ "cut": n }))
+}
+
+fn run_cutbase(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = point_req("cutbase", p, "base")?;
+    let hs = targets(s, p)?;
+    let n = cut_to_clip(s, &hs, Some(base))?;
     Ok(json!({ "cut": n }))
 }
 
@@ -649,23 +668,29 @@ impl Interactive for SelectM {
     }
 }
 
-/// COPYBASE: base point first, then "Select objects:" (skipped with a pickfirst selection).
+/// COPYBASE and CUTBASE: base point first, then "Select objects:" (skipped with a pickfirst
+/// selection). CUTBASE also erases the objects it copies.
 #[derive(Default)]
 struct CopyBaseM {
     base: Option<Vec2>,
     sel: SelectPhase,
+    cut: bool,
 }
 
 impl CopyBaseM {
     fn copy(&self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
-        copy_to_clip(s, hs, self.base)?;
+        if self.cut {
+            cut_to_clip(s, hs, self.base)?;
+        } else {
+            copy_to_clip(s, hs, self.base)?;
+        }
         Ok(Step::Done)
     }
 }
 
 impl Interactive for CopyBaseM {
     fn name(&self) -> &'static str {
-        "COPYBASE"
+        if self.cut { "CUTBASE" } else { "COPYBASE" }
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         self.sel = SelectPhase::begin(s);

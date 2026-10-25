@@ -143,6 +143,7 @@
 	Close All Other Drawings	Stäng alla andra ritningar
 	Close Array Editing	Avsluta redigering av array
 	Close Comparison	Stäng jämförelse
+	Export Comparison	Exportera jämförelse
 	Closed	Sluten
 	Coincident	Sammanfallande
 	Collapse Palettes	Fäll ihop paletter
@@ -195,6 +196,7 @@
 	Current selection	Aktuell markering
 	Current: {color}	Aktuell: {color}
 	Cut	Klipp ut
+	Cut with Base Point	Klipp ut med baspunkt
 	Cyan	Cyan
 	Cylinder	Cylinder
 	DWG	DWG
@@ -824,6 +826,7 @@
 	Rename Text Style	Byt namn på textstil
 	Rename...	Byt namn...
 	Repeat {command}	Upprepa {command}
+	Replace Block...	Ersätt block...
 	Requires a point (x,y, @dx,dy or @d<a).	Kräver en punkt (x,y, @dx,dy eller @d<a).
 	Reset Palettes	Återställ paletter
 	Restore	Återställ
