@@ -1341,7 +1341,9 @@ fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value, at: [f64; 2]
             // If the import was at sheet scale (DO NOT SCALE) and a scale was detected,
             // re-import at full scale so wall/room detection works at building dimensions.
             let needs_reg = report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false);
-            if needs_reg && scale_val.is_none() {
+            // an E sheet already drawn at its scale note (pdfimport does that) needs no re-import
+            let at_sheet_size = report.get("scale").and_then(Value::as_f64).is_none_or(|k| k <= 1.5);
+            if needs_reg && scale_val.is_none() && at_sheet_size {
                 // Extract the detected scale factor from the scaleSource string
                 // e.g. "DO NOT SCALE (detected 1/8" = 1'-0", scale 96x — sheet kept at sheet size)"
                 let detected = report.get("scaleSource").and_then(Value::as_str).and_then(|src| {
