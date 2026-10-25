@@ -50,6 +50,7 @@ pub mod ocr;
 pub mod pipe_reader;
 pub mod printcheck;
 pub mod printed;
+pub mod printlinks;
 pub mod printset;
 pub mod revision;
 pub mod rfi;
