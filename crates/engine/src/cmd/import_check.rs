@@ -166,10 +166,7 @@ pub fn check_drawing(d: &Drawing) -> ImportCheckResult {
 
     // Only block truly unreadable imports (all fills/images, no usable geometry or text).
     // Empty drawings pass (nothing to check). Individual check failures are warnings.
-    let has_usable_content = d.model.is_empty()
-        || d.model.iter().any(|e| {
-            !matches!(&e.kind, EntityKind::Wipeout(_) | EntityKind::Image(_))
-        });
+    let has_usable_content = d.model.is_empty() || d.model.iter().any(|e| !matches!(&e.kind, EntityKind::Wipeout(_) | EntityKind::Image(_)));
     let pass = has_usable_content;
 
     ImportCheckResult { pass, score, checks, hard_fails, discipline, do_not_scale: do_not_scale_note }
@@ -883,12 +880,7 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
         // Echo result with warnings for failed checks.
         let warns: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
         let warn_info = if warns.is_empty() { String::new() } else { format!("; warnings: {}", warns.join(", ")) };
-        s.echo(format!(
-            "Import check: {} (score {}/100){}",
-            if result.pass { "PASS" } else { "FAIL (empty/unreadable)" },
-            result.score,
-            warn_info,
-        ));
+        s.echo(format!("Import check: {} (score {}/100){}", if result.pass { "PASS" } else { "FAIL (empty/unreadable)" }, result.score, warn_info,));
 
         // Notify UI with per-check details for zoom-to panel.
         for c in &result.checks {
