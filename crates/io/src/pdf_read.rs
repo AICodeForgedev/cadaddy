@@ -1880,9 +1880,14 @@ fn ocr_max_seg(sheet: (f64, f64)) -> f64 {
     (sheet.0.min(sheet.1) * 72.0 * 0.025).clamp(2.0, 40.0)
 }
 
-/// Whether a stroke could be (part of) a stroked glyph: open, a few points, glyph-sized.
+/// Most points a glyph stroke has: a plotted round letter (an 8, an S drawn in one stroke
+/// with its arcs flattened) runs to a few dozen.
+const OCR_MAX_STROKE_POINTS: usize = 64;
+
+/// Whether a stroke could be (part of) a stroked glyph: a few points, glyph-sized, open or a
+/// loop (the importer closes a D's stem and bowl, or an O, into one).
 fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
-    if s.closed || s.pts.len() > 24 {
+    if s.pts.len() > OCR_MAX_STROKE_POINTS || (s.closed && s.pts.len() < 4) {
         return None;
     }
     // one stroke can draw a whole letter (a G, an 8): several times the letter's size
@@ -2203,18 +2208,29 @@ struct ShxTemplate {
     n_strokes: usize,
 }
 
+/// The gap (as a share of the larger stroke's size) under which two strokes join one glyph.
+const OCR_JOIN_TOLERANCE: f64 = 0.05;
+
 /// Sample points per glyph, spread along its strokes by length (so a glyph the PDF drew as
 /// one joined polyline samples like the same glyph drawn as separate strokes).
 const GLYPH_SAMPLES: usize = 32;
 
 /// The characters the OCR reads.
-const OCR_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./'\"()#&";
+const OCR_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./'\"()#&,";
 
-/// Build the template library from our stroke font for the characters the OCR reads.
+/// Other common shapes of single-stroke plot lettering, in the stroke font's notation
+/// (`crates/fonts/src/stroke.rs`: x digit, y letter with `c` the baseline, `i` the cap
+/// line, strokes split by spaces).  Plot fonts differ from ours mostly here: an M whose
+/// middle reaches the baseline, a W whose middle reaches the cap line, a 1 without a foot,
+/// a plain I and a 5 with a round bowl.
+const OCR_VARIANTS: [(char, &str); 5] = [('M', "0c0i2c4i4c"), ('W', "0i1c2i3c4i"), ('1', "1h2i2c"), ('I', "0i0c"), ('5', "4i1i0f1g3g4f4d3c1c0d")];
+
+/// Build the template library from our stroke font for the characters the OCR reads, plus
+/// the [`OCR_VARIANTS`].
 fn shx_templates() -> Vec<ShxTemplate> {
+    let font = OCR_CHARS.chars().filter_map(|ch| cadaddy_fonts::stroke::glyph(ch).map(|(_, spec)| (ch, spec)));
     let mut templates = Vec::new();
-    for ch in OCR_CHARS.chars() {
-        let Some((_width, spec)) = cadaddy_fonts::stroke::glyph(ch) else { continue };
+    for (ch, spec) in font.chain(OCR_VARIANTS) {
         let raw_strokes = cadaddy_fonts::stroke::strokes(spec);
         let refs: Vec<&[(f64, f64)]> = raw_strokes.iter().map(Vec::as_slice).filter(|s| !s.is_empty()).collect();
         let Some((samples, aspect)) = glyph_samples(&refs, 0.0) else { continue };
@@ -2372,21 +2388,26 @@ fn match_glyph(candidate: &[(f64, f64)], candidate_aspect: f64, candidate_n_stro
     // the closest fit; equal fits keep the template order (letters before digits)
     fits.sort_by(|a, b| a.1.total_cmp(&b.1));
     let &(ch, dist) = fits.first()?;
-    let alt = fits.iter().skip(1).find(|&&(c, d)| look_alike(ch, c) && d <= dist * 1.5 + 0.02).map(|&(c, _)| c);
+    let alt = fits.iter().skip(1).find(|&&(c, d)| look_alike(ch, c) && d <= dist * 1.2 + 0.01).map(|&(c, _)| c);
     Some(GlyphRead { ch, dist, alt })
 }
+
+/// A row slant from which the row counts as oblique lettering (about 8.5°).
+const OBLIQUE_ROW: f64 = 0.15;
 
 /// Largest slant the OCR straightens (horizontal shift per unit of height, about 31°).
 const MAX_SLANT: f64 = 0.6;
 
 /// The slant of a glyph: the length-weighted mean lean (dx per dy) of its near-vertical
-/// segments (within 35° of vertical).  About 0 for upright lettering (the legs of an A or a V
+/// full-height segments (within 35° of vertical).  About 0 for upright lettering (the legs of an A or a V
 /// lean both ways and cancel); an oblique style leans all its verticals the same way.  One
-/// glyph's lean is rough (a 7, a slanted A); the row's median is what the OCR uses.
-fn glyph_slant(strokes: &[&[(f64, f64)]]) -> f64 {
-    // only the long strokes (a stem, a side): a curve's short corner segments lean anyhow
+/// glyph's lean is rough (a 7, a slanted A); the row's median is what the OCR uses.  `None`
+/// for a glyph without long near-vertical segments (an O, a dash): it says nothing of the slant.
+fn glyph_slant(strokes: &[&[(f64, f64)]]) -> Option<f64> {
+    // only the strokes about the glyph's full height (a stem, a side): a curve's short corner
+    // segments lean anyhow, and so does an R's or a K's leg
     let (lo, hi) = strokes.iter().flat_map(|s| s.iter()).fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
-    let min_dy = (hi - lo) * 0.4;
+    let min_dy = (hi - lo) * 0.7;
     let (mut sum, mut weight) = (0.0, 0.0);
     for s in strokes {
         for w in s.windows(2) {
@@ -2403,12 +2424,14 @@ fn glyph_slant(strokes: &[&[(f64, f64)]]) -> f64 {
             weight += len;
         }
     }
-    if weight < 1e-9 { 0.0 } else { (sum / weight).clamp(-MAX_SLANT, MAX_SLANT) }
+    (weight >= 1e-9).then(|| (sum / weight).clamp(-MAX_SLANT, MAX_SLANT))
 }
 
 /// Best match for a glyph's strokes, given the slant of its row (straightened at it and a
-/// tenth either side, as the estimate is rough).  An upright reading wins unless a straightened
-/// one fits clearly better (by a fifth), so an upright 7 or / stays itself.
+/// tenth either side, as the estimate is rough).  On a row that leans clearly (oblique
+/// lettering) the straightened reading wins unless the upright one fits clearly better (by a
+/// fifth); on one that barely leans it is the other way round, so an upright 7 or / stays
+/// itself.
 fn read_glyph(strokes: &[&[(f64, f64)]], slant: f64, templates: &[ShxTemplate]) -> Option<GlyphRead> {
     let n = strokes.len();
     let upright = glyph_samples(strokes, 0.0).and_then(|(s, a)| match_glyph(&s, a, n, templates));
@@ -2421,6 +2444,7 @@ fn read_glyph(strokes: &[&[(f64, f64)]], slant: f64, templates: &[ShxTemplate]) 
         .filter_map(|s| glyph_samples(strokes, s).and_then(|(smp, a)| match_glyph(&smp, a, n, templates)))
         .min_by(|a, b| a.dist.total_cmp(&b.dist));
     match (upright, straightened) {
+        (Some(u), Some(s)) if slant.abs() >= OBLIQUE_ROW => Some(if u.dist < s.dist * 0.8 { u } else { s }),
         (Some(u), Some(s)) if s.dist < u.dist * 0.8 => Some(s),
         (None, s) => s,
         (u, _) => u,
@@ -2503,13 +2527,70 @@ struct MatchedGlyph {
     confidence: f64,
     /// One straight stroke (an I, a 1, a dash or a slash): plain linework looks the same.
     straight: bool,
+    /// A single closed loop (an O, a D): alone it is as likely a small circle or box.
+    ring: bool,
     /// The slant of its row.
     slant: f64,
 }
 
-/// Characters that don't set a line's height or baseline (they sit inside the letter band).
+/// Characters that don't set a line's height or baseline: dashes, dots, commas and quotes sit
+/// inside the letter band, and parentheses, slashes and number signs often reach past it.
 fn small_glyph(ch: char) -> bool {
-    matches!(ch, '-' | '.' | '\'' | '"')
+    matches!(ch, '-' | '.' | ',' | '\'' | '"') || tall_glyph(ch)
+}
+
+/// Characters plot fonts often draw taller than a capital (see [`small_glyph`]).
+fn tall_glyph(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '/' | '#')
+}
+
+/// Settle the look-alikes of a word (O/0, B/8, I/1, ...): each takes the kind (letter or
+/// digit) most of the sure characters of its part of the word are (the parts split at
+/// punctuation: "LP" and "1A" in "LP-1A"); a part that doesn't say takes its nearest
+/// neighbour part's kind (the 6 in "2,4,6"), else the whole word's.  A word of look-alikes
+/// only is a number if any of them reads as a digit first (a 5 and a ring: "50").
+fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
+    // the kind most sure characters of `part` are: Some(true) for digits
+    let kind = |part: &[(&MatchedGlyph, char)]| -> Option<bool> {
+        let (letters, digits) = part
+            .iter()
+            .filter(|(g, _)| g.alt.is_none())
+            .fold((0, 0), |(l, d), (_, c)| (l + usize::from(c.is_ascii_alphabetic()), d + usize::from(c.is_ascii_digit())));
+        (letters != digits).then_some(digits > letters)
+    };
+    let all_alike = word.iter().all(|(g, c)| g.alt.is_some() || !c.is_ascii_alphanumeric());
+    let whole = kind(word).or_else(|| (all_alike && word.iter().any(|(_, c)| c.is_ascii_digit())).then_some(true));
+    // the parts: runs of letters and digits
+    let mut parts: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (i, (_, c)) in word.iter().enumerate() {
+        match (c.is_ascii_alphanumeric(), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                parts.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        parts.push((s, word.len()));
+    }
+    let kinds: Vec<Option<bool>> = parts.iter().map(|&(a, b)| word.get(a..b).and_then(kind)).collect();
+    for (pi, &(a, b)) in parts.iter().enumerate() {
+        let near = || {
+            let before = kinds.get(..pi).and_then(|k| k.iter().rev().flatten().next().copied());
+            before.or_else(|| kinds.get(pi + 1..).and_then(|k| k.iter().flatten().next().copied()))
+        };
+        let Some(want_digit) = kinds.get(pi).copied().flatten().or_else(near).or(whole) else { continue };
+        for (g, ch) in word.get_mut(a..b).into_iter().flatten() {
+            if let Some(alt) = g.alt
+                && alt.is_ascii_digit() == want_digit
+            {
+                *ch = alt;
+            }
+        }
+    }
 }
 
 /// Recover SHX-stroked text by OCR: cluster short strokes into individual glyph-sized groups,
@@ -2545,8 +2626,9 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
 
     // ---- phase 2: join touching strokes into glyphs ----
     // Two strokes of the same pen belong to one glyph when they touch: their gap is under a
-    // tenth of the larger one's size (at least 0.3 pt, for rounded coordinates).  Characters
-    // are spaced wider than that.
+    // twentieth of the larger one's size (at least 0.3 pt, for rounded coordinates).  Plot
+    // fonts set their letters close (two letters' feet can be a tenth of the height apart), so
+    // the tolerance stays well under that.
     let cell = max_seg;
     let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
     for (ci, c) in cands.iter().enumerate() {
@@ -2578,7 +2660,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
                             continue;
                         }
                         let Some(n) = cands.get(ni) else { continue };
-                        let tol = (size(&cc.bb).max(size(&n.bb)) * 0.1).max(0.3);
+                        let tol = (size(&cc.bb).max(size(&n.bb)) * OCR_JOIN_TOLERANCE).max(0.3);
                         if n.bb[0] > cc.bb[2] + tol || n.bb[2] < cc.bb[0] - tol || n.bb[1] > cc.bb[3] + tol || n.bb[3] < cc.bb[1] - tol {
                             continue;
                         }
@@ -2597,17 +2679,27 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         }
         let (w, h) = (gbb[2] - gbb[0], gbb[3] - gbb[1]);
         // glyph-sized: not a speck, not taller than lettering gets, a handful of strokes
-        if w.max(h) > 0.5 && h < max_seg * 4.0 && w < max_seg * 4.0 && members.len() <= 12 {
+        if w.max(h) > 0.25 && h < max_seg * 4.0 && w < max_seg * 4.0 && members.len() <= 12 {
             glyphs.push((members, gbb, first.pen));
         }
     }
     report.clusters = glyphs.len();
 
     // ---- phase 3: match each glyph cluster against templates ----
-    let glyph_pts: Vec<Vec<&[(f64, f64)]>> =
-        glyphs.iter().map(|(members, _, _)| members.iter().filter_map(|&i| strokes.get(i)).map(|s| s.pts.as_slice()).collect()).collect();
+    // a loop is sampled all the way round (the importer drops its repeated closing point)
+    let loops: HashMap<usize, Vec<(f64, f64)>> = glyphs
+        .iter()
+        .flat_map(|(members, _, _)| members.iter())
+        .filter_map(|&i| strokes.get(i).filter(|s| s.closed).map(|s| (i, s.pts.iter().chain(s.pts.first()).copied().collect())))
+        .collect();
+    let glyph_pts: Vec<Vec<&[(f64, f64)]>> = glyphs
+        .iter()
+        .map(|(members, _, _)| {
+            members.iter().filter_map(|&i| loops.get(&i).map(Vec::as_slice).or_else(|| strokes.get(i).map(|s| s.pts.as_slice()))).collect()
+        })
+        .collect();
     // the slant of each glyph's row: the median lean of the glyphs of its height beside it
-    let leans: Vec<f64> = glyph_pts.iter().map(|p| glyph_slant(p)).collect();
+    let leans: Vec<Option<f64>> = glyph_pts.iter().map(|p| glyph_slant(p)).collect();
     let mut by_cell: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (gi, (_, bb, _)) in glyphs.iter().enumerate() {
         by_cell.entry((((bb[0] + bb[2]) / 2.0 / cell).floor() as i64, ((bb[1] + bb[3]) / 2.0 / cell).floor() as i64)).or_default().push(gi);
@@ -2617,7 +2709,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         let (cx, cy, h) = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0, (bb[3] - bb[1]).max(0.5));
         let reach = ((h * 4.0 / cell).ceil() as i64).clamp(1, 4);
         let (gx, gy) = ((cx / cell).floor() as i64, (cy / cell).floor() as i64);
-        let mut near: Vec<f64> = Vec::new();
+        // (height, lean) of the glyphs beside it
+        let mut near: Vec<(f64, Option<f64>)> = Vec::new();
         for dx in -reach..=reach {
             for dy in -1..=1 {
                 for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
@@ -2628,19 +2721,72 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
                         && ((b2[0] + b2[2]) / 2.0 - cx).abs() <= h * 4.0
                         && (0.6..=1.6).contains(&(h2 / h))
                     {
-                        near.extend(leans.get(gj));
+                        near.push((h2, leans.get(gj).copied().flatten()));
+                    }
+                }
+            }
+        }
+        // only the glyphs of the row's letter height vote: a slash or a number sign drawn
+        // taller than the letters leans by design
+        let mut heights: Vec<f64> = near.iter().map(|n| n.0).collect();
+        heights.sort_by(f64::total_cmp);
+        let Some(&hm) = heights.get(heights.len() / 2) else { return 0.0 };
+        let mut votes: Vec<f64> = near.iter().filter(|n| (hm * 0.85..=hm * 1.15).contains(&n.0)).filter_map(|n| n.1).collect();
+        votes.sort_by(f64::total_cmp);
+        votes.get(votes.len() / 2).copied().unwrap_or(0.0)
+    };
+    // the letter height of each glyph's row: the median height of the taller glyphs beside it
+    // whose letter band holds its centre (none for a glyph standing alone)
+    let row_height = |gi: usize| -> Option<f64> {
+        let (_, bb, pen) = glyphs.get(gi)?;
+        let (cx, cy, h) = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0, bb[3] - bb[1]);
+        let (gx, gy) = ((cx / cell).floor() as i64, (cy / cell).floor() as i64);
+        let mut near: Vec<f64> = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
+                    let Some((_, b2, p2)) = glyphs.get(gj) else { continue };
+                    let h2 = b2[3] - b2[1];
+                    if gj != gi
+                        && p2 == pen
+                        && h2 >= h * 0.6
+                        && h2 > 0.5
+                        && cy >= b2[1] - h2 * 0.25
+                        && cy <= b2[3] + h2 * 0.25
+                        && ((b2[0] + b2[2]) / 2.0 - cx).abs() <= h2 * 3.0
+                    {
+                        near.push(h2);
                     }
                 }
             }
         }
         near.sort_by(f64::total_cmp);
-        near.get(near.len() / 2).copied().unwrap_or(0.0)
+        near.get(near.len() / 2).copied()
     };
     let mut matched: Vec<MatchedGlyph> = Vec::new();
     for (gi, ((members, bb, pen), pts)) in glyphs.iter().zip(&glyph_pts).enumerate() {
         let slant = row_slant(gi);
-        if let Some(GlyphRead { ch, dist, alt }) = read_glyph(pts, slant, &templates) {
+        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates) {
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
+            let ring = members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed);
+            // a lone upright stroke is an I (or a 1) at full letter height and a dot or an
+            // apostrophe below it; a speck a fraction of the letters' height is a dot whatever
+            // its shape (plot fonts draw a period as a tiny ring or diamond)
+            let (w, h) = (bb[2] - bb[0], bb[3] - bb[1]);
+            if let Some(row_h) = row_height(gi) {
+                // upright, or leaning with its row (an oblique I reads as a slash)
+                let lean = pts.first().and_then(|p| Some((p.first()?, p.last()?))).map_or(f64::MAX, |(a, b)| {
+                    let dy = b.1 - a.1;
+                    if dy.abs() < 1e-9 { f64::MAX } else { (b.0 - a.0) / dy }
+                });
+                let along_row = straight && (lean - slant).abs() <= 0.1;
+                if along_row && matches!(ch, '.' | '\'' | 'I' | '1' | '/') {
+                    (ch, alt) = if h >= row_h * 0.75 { ('I', Some('1')) } else { ('.', None) };
+                } else if w.max(h) <= row_h * 0.3 && ch != '-' {
+                    // a speck with a tail (taller than wide, not one straight tick) is a comma
+                    (ch, alt) = (if !straight && h > w * 1.8 { ',' } else { '.' }, None);
+                }
+            }
             // spacing is measured upright: x with the row's slant taken out about the glyph's
             // bottom (where an oblique letter stands)
             let mut bb = *bb;
@@ -2652,7 +2798,17 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
                     bb[2] = x1;
                 }
             }
-            matched.push(MatchedGlyph { ch, alt, bb, indices: members.clone(), pen: *pen, confidence: match_confidence(dist), straight, slant });
+            matched.push(MatchedGlyph {
+                ch,
+                alt,
+                bb,
+                indices: members.clone(),
+                pen: *pen,
+                confidence: match_confidence(dist),
+                straight,
+                ring,
+                slant,
+            });
         }
     }
     report.glyphs = matched.len();
@@ -2703,12 +2859,21 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         }
     }
     for gi in small {
-        let Some(g) = matched.get_mut(gi) else { continue };
+        let Some(g) = matched.get(gi) else { continue };
         // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
-        if let Some(l) =
-            lines.iter().find(|l| l.pen == g.pen && (g.bb[1] - l.bottom) >= 0.0 && (g.bb[1] - l.bottom) <= l.height * 1.25 && l.slant.abs() >= 0.05)
+        let on_oblique_line = |l: &TextLine| {
+            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+            let rise = g.bb[1] - l.bottom;
+            l.pen == g.pen
+                && l.slant.abs() >= 0.05
+                && (0.0..=l.height * 1.25).contains(&rise)
+                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+        };
+        let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
+        if let Some(shift) = shift
+            && let Some(g) = matched.get_mut(gi)
         {
-            let shift = l.slant * (g.bb[1] - l.bottom);
             g.bb[0] -= shift;
             g.bb[2] -= shift;
         }
@@ -2719,7 +2884,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             l.pen == g.pen
                 && cy >= l.bottom - l.height * 0.25
                 && cy <= l.bottom + l.height * 1.25
-                && (g.bb[3] - g.bb[1]) <= l.height * 1.1
+                && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
                 && g.bb[0] >= x0 - l.height * 1.2
                 && g.bb[2] <= l.x1 + l.height * 1.2
         });
@@ -2733,6 +2898,31 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             }
         }
     }
+
+    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
+    // left a gap between the A and the 12 that only they fill
+    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+    for l in lines {
+        let x0 = line_x0(&l);
+        let into = joined.iter_mut().rev().find(|m| {
+            let gap = x0 - m.x1;
+            m.pen == l.pen
+                && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                && gap <= m.height * 2.0
+                && gap >= -m.height * 0.3
+        });
+        match into {
+            Some(m) => {
+                m.x1 = m.x1.max(l.x1);
+                m.members.extend(l.members);
+            }
+            None => joined.push(l),
+        }
+    }
+    let lines = joined;
 
     let mut result: Vec<RecoveredText> = Vec::new();
     for mut line in lines {
@@ -2748,7 +2938,9 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         // spacing is measured on nominal boxes: a narrow glyph (an I, a 1, a dot) is given
         // a normal letter's width around its centre
         let span = |g: &MatchedGlyph| -> (f64, f64) {
-            let (cx, w) = ((g.bb[0] + g.bb[2]) / 2.0, (g.bb[2] - g.bb[0]).max(cw * 0.9));
+            // a dot, a comma or a quote sits in a narrow cell of its own
+            let nominal = if matches!(g.ch, '.' | ',' | '\'') { cw * 0.3 } else { cw * 0.9 };
+            let (cx, w) = ((g.bb[0] + g.bb[2]) / 2.0, (g.bb[2] - g.bb[0]).max(nominal));
             (cx - w / 2.0, cx + w / 2.0)
         };
         // split the line into texts at wide gaps (about two spaces); a narrower gap is a space
@@ -2768,9 +2960,10 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             let mut prev_end = f64::MIN;
             for &g in &run {
                 let (x0, x1) = span(g);
-                // a tick in the upper half of the letter band is an apostrophe, low a dot
+                // a tick in the upper half of the letter band is an apostrophe, low a dot (or
+                // a comma, read by its tail)
                 let ch = match g.ch {
-                    '.' | '\'' if (g.bb[1] + g.bb[3]) / 2.0 > line.bottom + h * 0.5 => '\'',
+                    '.' | '\'' | ',' if (g.bb[1] + g.bb[3]) / 2.0 > line.bottom + h * 0.5 => '\'',
                     '.' | '\'' => '.',
                     c => c,
                 };
@@ -2782,18 +2975,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             }
             let mut value = String::new();
             for word in &mut words {
-                // a look-alike (O/0, B/8, ...) takes the kind most of its word is
-                let sure = word.iter().filter(|(g, _)| g.alt.is_none());
-                let (letters, digits) =
-                    sure.fold((0, 0), |(l, d), (_, c)| (l + usize::from(c.is_ascii_alphabetic()), d + usize::from(c.is_ascii_digit())));
-                for (g, ch) in word.iter_mut() {
-                    if let Some(alt) = g.alt {
-                        let want_digit = digits > letters;
-                        if (letters != digits) && (alt.is_ascii_digit() == want_digit) {
-                            *ch = alt;
-                        }
-                    }
-                }
+                settle_look_alikes(word);
                 if !value.is_empty() {
                     value.push(' ');
                 }
@@ -2804,8 +2986,9 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             let alnum = value.chars().filter(char::is_ascii_alphanumeric).count();
             let lone = run.len() == 1;
             let confidence = run.iter().map(|g| g.confidence).fold(1.0, f64::min);
-            // linework reads as lone glyphs and runs of straight strokes (hatching: "////")
-            let noise = alnum == 0 || run.iter().all(|g| g.straight) || (lone && run.iter().any(|g| g.confidence < 0.7));
+            // linework reads as lone glyphs and runs of straight strokes (hatching: "////"); a
+            // lone loop is a small circle or box as often as an O
+            let noise = alnum == 0 || run.iter().all(|g| g.straight) || (lone && run.iter().any(|g| g.confidence < 0.7 || g.ring));
             if noise {
                 report.noise_dropped += 1;
                 continue;

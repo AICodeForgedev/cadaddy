@@ -957,3 +957,138 @@ fn ocr_skips_strokes_that_lie_on_real_text() {
     let read: Vec<&str> = r.ocr.words.iter().map(|w| w.value.as_str()).collect();
     assert_eq!(read, ["ROOM 5"], "only the stroked-only word is read: {:?}", r.ocr);
 }
+
+/// One glyph of a round "plot font" (unlike our angular stroke font, as real plot fonts are):
+/// its strokes in a unit cap height, with a closed flag (drawn with `h`), and its width.
+type PlotGlyph = (Vec<(Vec<(f64, f64)>, bool)>, f64);
+
+/// An elliptical arc from `a0` to `a1` degrees (counter-clockwise for a1 > a0).
+fn arc(cx: f64, cy: f64, rx: f64, ry: f64, a0: f64, a1: f64) -> Vec<(f64, f64)> {
+    (0..=16).map(|i| (a0 + (a1 - a0) * f64::from(i) / 16.0).to_radians()).map(|a| (cx + rx * a.cos(), cy + ry * a.sin())).collect()
+}
+
+fn plot_glyph(ch: char) -> Option<PlotGlyph> {
+    let open = |pts: Vec<(f64, f64)>| (pts, false);
+    let line = |pts: &[(f64, f64)]| (pts.to_vec(), false);
+    Some(match ch {
+        'C' => (vec![open(arc(0.35, 0.5, 0.35, 0.5, 45.0, 315.0))], 0.7),
+        'O' | '0' => {
+            let mut o = arc(0.33, 0.5, 0.33, 0.5, 90.0, 450.0);
+            o.pop();
+            (vec![(o, true)], 0.66)
+        }
+        'R' => {
+            let mut bowl = vec![(0.0, 1.0), (0.4, 1.0)];
+            bowl.extend(arc(0.4, 0.76, 0.22, 0.24, 90.0, -90.0));
+            bowl.push((0.0, 0.52));
+            (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), open(bowl), line(&[(0.3, 0.52), (0.62, 0.0)])], 0.62)
+        }
+        'D' => {
+            let mut bowl = vec![(0.0, 1.0), (0.3, 1.0)];
+            bowl.extend(arc(0.3, 0.5, 0.34, 0.5, 90.0, -90.0));
+            bowl.push((0.0, 0.0));
+            (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), open(bowl)], 0.64)
+        }
+        'I' => (vec![line(&[(0.0, 0.0), (0.0, 1.0)])], 0.0),
+        'N' => (vec![line(&[(0.0, 0.0), (0.0, 1.0), (0.62, 0.0), (0.62, 1.0)])], 0.62),
+        'M' => (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), line(&[(0.0, 1.0), (0.38, 0.0), (0.76, 1.0)]), line(&[(0.76, 1.0), (0.76, 0.0)])], 0.76),
+        'E' => (vec![line(&[(0.55, 1.0), (0.0, 1.0), (0.0, 0.0), (0.55, 0.0)]), line(&[(0.0, 0.52), (0.38, 0.52)])], 0.55),
+        'S' => {
+            let mut s = arc(0.3, 0.76, 0.28, 0.24, 20.0, 270.0);
+            s.extend(arc(0.3, 0.26, 0.3, 0.26, 90.0, -160.0));
+            (vec![open(s)], 0.6)
+        }
+        '1' => (vec![line(&[(0.0, 0.8), (0.2, 1.0), (0.2, 0.0)])], 0.2),
+        '2' => {
+            let mut s = arc(0.3, 0.72, 0.3, 0.28, 160.0, -20.0);
+            s.extend([(0.0, 0.0), (0.62, 0.0)]);
+            (vec![open(s)], 0.62)
+        }
+        '5' => {
+            let mut s = vec![(0.55, 1.0), (0.05, 1.0), (0.0, 0.56)];
+            s.extend(arc(0.3, 0.32, 0.32, 0.32, 140.0, -150.0));
+            (vec![open(s)], 0.62)
+        }
+        '-' => (vec![line(&[(0.0, 0.5), (0.5, 0.5)])], 0.5),
+        '.' => {
+            let mut o = arc(0.05, 0.05, 0.05, 0.05, 0.0, 360.0);
+            o.pop();
+            (vec![(o, true)], 0.1)
+        }
+        '/' => (vec![line(&[(0.0, -0.2), (0.55, 1.15)])], 0.55),
+        '(' => (vec![open(arc(0.45, 0.47, 0.45, 0.7, 120.0, 240.0))], 0.25),
+        ')' => (vec![open(arc(-0.2, 0.47, 0.45, 0.7, 60.0, -60.0))], 0.25),
+        '#' => (
+            vec![
+                line(&[(0.3, 1.15), (0.15, -0.2)]),
+                line(&[(0.6, 1.15), (0.45, -0.2)]),
+                line(&[(0.0, 0.72), (0.72, 0.72)]),
+                line(&[(-0.05, 0.3), (0.67, 0.3)]),
+            ],
+            0.72,
+        ),
+        _ => return None,
+    })
+}
+
+/// Draw `text` in the round plot font: cap `height` in points, letters `gap` × height apart.
+fn plot_text(text: &str, x: f64, y: f64, height: f64, gap: f64, out: &mut Vec<u8>) {
+    let mut pen_x = x;
+    for ch in text.chars() {
+        let Some((strokes, width)) = plot_glyph(ch) else {
+            pen_x += height * 0.6;
+            continue;
+        };
+        // a left parenthesis' arc bulges left of its start: shift it into its cell
+        let left = strokes.iter().flat_map(|s| s.0.iter()).map(|p| p.0).fold(f64::MAX, f64::min).min(0.0);
+        for (pts, closed) in strokes {
+            for (i, (fx, fy)) in pts.into_iter().enumerate() {
+                let (px, py) = (pen_x + (fx - left) * height, y + fy * height);
+                out.extend_from_slice(format!("{px:.3} {py:.3} {} ", if i == 0 { "m" } else { "l" }).as_bytes());
+            }
+            out.extend_from_slice(if closed { b"h S " } else { b"S " });
+        }
+        pen_x += (width - left + gap) * height;
+    }
+}
+
+#[test]
+fn ocr_reads_round_plot_lettering() {
+    // a plot font unlike our stroke font: round letters, an I without serifs, a 1 without a
+    // foot, an M whose middle reaches the baseline, tiny rings for periods, tall parentheses,
+    // slashes and number signs, and letters set close (their feet a tenth of the height apart)
+    let lines = ["CORRIDOR", "DOOR 105", "MIN. 1/2", "(E) 2#12", "SIDE 50", "ROOM 1-2"];
+    let pdf = strokes_page(|c| {
+        for (i, l) in lines.iter().enumerate() {
+            plot_text(l, 80.0, 500.0 - i as f64 * 25.0, 9.0, 0.1, c);
+        }
+        // the same at a small size, tighter still
+        for (i, l) in lines.iter().enumerate() {
+            plot_text(l, 400.0, 500.0 - i as f64 * 12.0, 4.5, 0.08, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let mut want: Vec<&str> = lines.to_vec();
+    want.extend(lines);
+    assert_eq!(text_values(&r), sorted(&want), "{:?}", r.ocr);
+    // the rings of the O's and periods are read inside words, never left as linework
+    let visible = r.drawing.model.iter().filter(|e| e.common.layer.as_str() != pdf_read::SHX_SOURCE_LAYER && !matches!(e.kind, EntityKind::Text(_)));
+    assert_eq!(visible.count(), 0, "every stroke was lettering");
+}
+
+#[test]
+fn ocr_leaves_lone_rings_alone() {
+    // small circles and boxes drawn as closed loops (symbols' parts, markers): no lone "O"s
+    let pdf = strokes_page(|c| {
+        for i in 0..6 {
+            let x = 100.0 + f64::from(i) * 40.0;
+            let mut ring = String::new();
+            for (k, (px, py)) in arc(x, 300.0, 3.0, 3.0, 0.0, 345.0).into_iter().enumerate() {
+                ring.push_str(&format!("{px:.2} {py:.2} {} ", if k == 0 { "m" } else { "l" }));
+            }
+            c.extend_from_slice(format!("{ring}h S {x:.1} 200 m {:.1} 200 l {:.1} 207 l {x:.1} 207 l h S ", x + 5.0, x + 5.0).as_bytes());
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), Vec::<String>::new(), "{:?}", r.ocr);
+}
