@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
             .menu(&["Insert", "PDF Import..."])
-            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<drawing name> images\" next to the current drawing once it is saved, else \"<PDF name> images\" next to the PDF), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<drawing name> images\" next to the current drawing once it is saved, else a folder of the session's in the system temp folder that SAVE moves next to the drawing; never the PDF's folder), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
             .interactive(|_| Ok(Box::new(PdfImportM::default()))),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
@@ -412,8 +412,9 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("imagePrefix").is_none() {
         p["imagePrefix"] = json!(format!("{stem}-p{page}"));
     }
-    // Images go with the work: next to the current drawing once it has been saved, else next
-    // to the PDF (where an unsaved drawing can still find them later).
+    // Images go with the work: next to the current drawing once it has been saved, else in this
+    // session's temp folder (SAVE moves them next to the drawing). Never next to the PDF: that
+    // is often the job's print set, which an import must leave as it was.
     if p.get("imageFolder").is_none() {
         let drawing = s
             .state()
@@ -424,7 +425,7 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
             Some(d) => d
                 .parent()
                 .map(|dir| dir.join(format!("{} images", d.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone())))),
-            None => str_param(&p, "path").and_then(|path| std::path::Path::new(path).parent()).map(|dir| dir.join(format!("{stem} images"))),
+            None => super::file::session_image_folder(&stem),
         };
         if let Some(f) = folder {
             p["imageFolder"] = json!(f.to_string_lossy());
@@ -1259,5 +1260,56 @@ mod tests {
         assert!(s.running.is_none(), "{}", s.prompt_text());
         assert_eq!(s.doc().unwrap().entity_count(), before + 2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PDF images of a drawing with no file yet live in the session's temp folder; saving the
+    /// drawing copies them into "<drawing name> images" next to it and points the IMAGE objects
+    /// there, so the saved drawing never refers to a temp file (and never to the PDF's folder).
+    #[test]
+    fn save_moves_session_images_next_to_the_drawing() {
+        let a = super::super::file::session_image_folder("Sheet A").unwrap();
+        let b = super::super::file::session_image_folder("Sheet A").unwrap();
+        assert_ne!(a, b, "each import gets its own folder");
+        assert!(a.starts_with(std::env::temp_dir()) && a.to_string_lossy().contains("Sheet A images"), "{a:?}");
+        if !our_hooks() {
+            return;
+        }
+        std::fs::create_dir_all(&a).unwrap();
+        let png = a.join("Sheet A-p1-1.png");
+        std::fs::write(&png, b"first image").unwrap();
+        let mut s = session();
+        let image = |path: &std::path::Path| {
+            EntityKind::Image(Box::new(cadaddy_doc::Image { path: path.to_string_lossy().to_string(), ..Default::default() }))
+        };
+        let h1 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&png)).unwrap();
+        let h2 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&png)).unwrap();
+        // An image the user attached from elsewhere is left alone.
+        let own = temp("own.png");
+        std::fs::write(&own, b"own").unwrap();
+        let h3 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&own)).unwrap();
+        // A different file of the same name already sits in the target folder.
+        let job = temp("job");
+        let target = job.join("Plan A images");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("Sheet A-p1-1.png"), b"someone else's").unwrap();
+        let drawing = job.join("Plan A.dxf");
+        s.execute("saveas", &json!({ "path": drawing.to_string_lossy() })).unwrap();
+        let path_of = |s: &Session, h| match &s.doc().unwrap().entity(h).unwrap().kind {
+            EntityKind::Image(i) => i.path.clone(),
+            _ => String::new(),
+        };
+        let moved = target.join("Sheet A-p1-1-2.png");
+        assert_eq!(path_of(&s, h1), moved.to_string_lossy(), "the clash gets the next free name");
+        assert_eq!(path_of(&s, h2), moved.to_string_lossy(), "the same file is copied once");
+        assert_eq!(std::fs::read(&moved).unwrap(), b"first image");
+        assert_eq!(std::fs::read(target.join("Sheet A-p1-1.png")).unwrap(), b"someone else's", "the other file is kept");
+        assert_eq!(path_of(&s, h3), own.to_string_lossy());
+        assert!(!s.state().unwrap().is_dirty(), "the saved drawing is the one with the new paths");
+        // Nothing left to move on the next save.
+        s.execute("qsave", &json!({})).unwrap();
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&job);
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_file(&own);
     }
 }
