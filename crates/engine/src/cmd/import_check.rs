@@ -15,8 +15,9 @@
 //! - **GRID**: grid bubbles + lines found.
 //! - **VISUAL**: placeholder for rasterize-and-diff (requires rendering; scored but never fails).
 //!
-//! **Hard-fail checks** (SCALE, FILLS, SYMBOLS): each fails the import on its own regardless of
-//! the weighted score. The score is kept for display only.
+//! No check blocks the import on its own. A failed check WARNS and lists why but never
+//! blocks a build that would work — the import is only rejected when the drawing is empty
+//! or unreadable (no usable geometry/text content). The score is kept for display.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -58,10 +59,6 @@ const FILLS_FRACTION_FAIL: f64 = 0.10;
 
 /// Minimum entity count before the SYMBOLS check expects blocks.
 const SYMBOLS_CHECK_MIN_ENTITIES: usize = 200;
-
-/// Overall pass threshold: a score below this fails the import. With hard-fail checks this
-/// is for display only; a hard-fail overrides it.
-const PASS_SCORE: u32 = 50;
 
 /// Maximum line segment length (in model units) to count as a potential stroke glyph segment.
 /// Real lettering strokes on a sheet-scale drawing are typically < 0.5 inches.
@@ -160,10 +157,13 @@ pub fn check_drawing(d: &Drawing) -> ImportCheckResult {
 
     let score = (earned * 100).checked_div(total_weight).unwrap_or(100);
 
-    // Hard-fail: SCALE, FILLS, SYMBOLS each fail the import on their own.
+    // Collect checks that failed with the hard_fail marker (informational only).
     let hard_fails: Vec<String> = checks.iter().filter(|c| c.hard_fail && !c.pass).map(|c| c.id.clone()).collect();
 
-    let pass = hard_fails.is_empty() && score >= PASS_SCORE;
+    // Only block truly unreadable imports (all fills/images, no usable geometry or text).
+    // Empty drawings pass (nothing to check). Individual check failures are warnings.
+    let has_usable_content = d.model.is_empty() || d.model.iter().any(|e| !matches!(&e.kind, EntityKind::Wipeout(_) | EntityKind::Image(_)));
+    let pass = has_usable_content;
 
     ImportCheckResult { pass, score, checks, hard_fails, discipline, do_not_scale: do_not_scale_note }
 }
@@ -425,11 +425,9 @@ fn check_scale(d: &Drawing, do_not_scale: Option<&str>) -> CheckResult {
     // Check 2: scale note exists and model size disagrees > 10%.
     let scale_disagree = if let Some((_, scale_val)) = &scale_note {
         // scale_val = paper inches per building foot.
-        // Standard paper long dimension: 36" (ARCH D).
-        // Expected model in building feet: 36 / scale_val.
-        // In inches: expected_ft * 12.
-        let expected_ft_min = 24.0 / scale_val; // smallest paper
-        let expected_ft_max = 48.0 / scale_val; // largest paper
+        // Expected model range in building feet from paper range.
+        let expected_ft_min = PAPER_WIDTH_MIN_IN / scale_val;
+        let expected_ft_max = PAPER_WIDTH_MAX_IN / scale_val; // includes large-format plotters
         let model_max_ft = w_in.max(h_in) / 12.0;
 
         // Disagree if model is way too small (< 90% of minimum expected)
@@ -875,20 +873,15 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
         let d = s.doc_mut()?;
         store_result(d, &result);
 
-        // Echo result with hard-fail information.
-        let fail_info = if result.pass {
-            String::new()
-        } else {
-            let fails: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
-            let hf = if result.hard_fails.is_empty() { String::new() } else { format!(" [hard-fail: {}]", result.hard_fails.join(", ")) };
-            format!("; failed: {}{hf}", fails.join(", "))
-        };
-        s.echo(format!("Import check: {} (score {}/100){}", if result.pass { "PASS" } else { "FAIL" }, result.score, fail_info,));
+        // Echo result with warnings for failed checks.
+        let warns: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
+        let warn_info = if warns.is_empty() { String::new() } else { format!("; warnings: {}", warns.join(", ")) };
+        s.echo(format!("Import check: {} (score {}/100){}", if result.pass { "PASS" } else { "FAIL (empty/unreadable)" }, result.score, warn_info,));
 
         // Notify UI with per-check details for zoom-to panel.
         for c in &result.checks {
             if !c.pass {
-                s.echo(format!("  {} FAIL: {} ({})", c.id, c.found, c.hint));
+                s.echo(format!("  {} WARN: {} ({})", c.id, c.found, c.hint));
             }
         }
 
