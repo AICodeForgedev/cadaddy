@@ -29,6 +29,7 @@ pub mod clash;
 pub mod conduit_reader;
 pub mod covercheck;
 pub mod design;
+pub mod device_types;
 pub mod draw;
 pub mod duct_reader;
 pub mod earthwork;
