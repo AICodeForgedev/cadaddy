@@ -365,3 +365,125 @@ fn wall_length_in(w: &crate::truth::Wall) -> f64 {
     let dy = w.to_ft[1] - w.from_ft[1];
     (dx * dx + dy * dy).sqrt() * 12.0
 }
+
+// ---- In-wall clashes behind read casework and fixtures (Q301 → Q292) ---------------------
+
+/// A plumbing item read from an architectural sheet: a sink (in a counter, or a fixture), a
+/// lavatory, water closet, urinal, shower or mop sink (with rough-in stubs in the wall behind
+/// it), or a dishwasher (its box against the wall under the counter). Building feet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadPlumbing {
+    /// The reader's id for it (e.g. `A-101:SK-1#3`).
+    pub id: String,
+    /// A rough-in rule's fixture kind (`sink`, `lavatory`…) or `dishwasher`.
+    pub kind: String,
+    pub tag: String,
+    pub level: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+}
+
+/// The wall of `level` an item at `c` (half extents `half` along x and y, feet) is backed
+/// against: the nearest wall running past it, within its half-depth and a foot and a half.
+pub(crate) fn backing_wall<'a>(walls: &'a [crate::truth::Wall], level: &str, c: [f64; 2], half: [f64; 2]) -> Option<&'a crate::truth::Wall> {
+    walls
+        .iter()
+        .filter(|w| w.level == level)
+        .filter_map(|w| {
+            let len = wall_length_in(w) / 12.0;
+            if len < 1e-6 {
+                return None;
+            }
+            let along = project_on_wall(w, c) / 12.0;
+            if along < -0.5 || along > len + 0.5 {
+                return None;
+            }
+            let u = [(w.to_ft[0] - w.from_ft[0]) / len, (w.to_ft[1] - w.from_ft[1]) / len];
+            let off = ((c[0] - w.from_ft[0]) * -u[1] + (c[1] - w.from_ft[1]) * u[0]).abs();
+            // The item's half-depth across this wall.
+            let depth = if u[0].abs() > u[1].abs() { half[1] } else { half[0] };
+            (off <= depth + 1.5).then_some((off, w))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, w)| w)
+}
+
+/// In-wall clashes between the truth's wall devices and what a reader found on the
+/// architectural sheets: a device within `clearance_in` of a rough-in stub behind a read sink
+/// or fixture (stubs at the rough-in rules' heights and offsets, flagged assumed), or in the
+/// wall behind a read dishwasher's box. Kind `in_wall_casework`; `b` is the read item's id.
+pub fn casework_clashes(t: &Truth, read: &[ReadPlumbing], clearance_in: f64) -> Vec<Clash> {
+    let rules = crate::truth::RoughInRules::default_rules();
+    let mut out = Vec::new();
+    for it in read {
+        let c = [(it.min_ft[0] + it.max_ft[0]) / 2.0, (it.min_ft[1] + it.max_ft[1]) / 2.0];
+        let half = [(it.max_ft[0] - it.min_ft[0]).abs() / 2.0, (it.max_ft[1] - it.min_ft[1]).abs() / 2.0];
+        if !c.iter().chain(half.iter()).all(|v| v.is_finite()) {
+            continue;
+        }
+        let Some(wall) = backing_wall(&t.building.walls, &it.level, c, half) else { continue };
+        let along = project_on_wall(wall, c);
+        // What the item puts in the wall: (along from, along to, bottom, top, what), inches.
+        let mut zones: Vec<(f64, f64, f64, f64, String)> = Vec::new();
+        if it.kind == "dishwasher" {
+            let w = project_on_wall(wall, it.min_ft) - project_on_wall(wall, it.max_ft);
+            zones.push((along - w.abs() / 2.0, along + w.abs() / 2.0, 0.0, 34.0, "dishwasher box".into()));
+        } else if let Some(rule) = rules.for_kind(&it.kind) {
+            for s in &rule.stubs {
+                let od = pipe_od(s.size_in);
+                // Vents run up the wall from their stub; the rest are stubs.
+                let top = if s.kind == "vent" { 108.0 } else { s.aff_in + od / 2.0 };
+                zones.push((
+                    along + s.offset_in - od / 2.0,
+                    along + s.offset_in + od / 2.0,
+                    (s.aff_in - od / 2.0).max(0.0),
+                    top,
+                    format!("{} stub", s.kind),
+                ));
+            }
+        }
+        for dev in t.devices.iter().filter(|d| d.wall == wall.id) {
+            let da = project_on_wall(wall, dev.at_ft);
+            let (bw, bh) = (dev.box_in[0] / 2.0, dev.box_in[1] / 2.0);
+            let (bot, top) = (dev.aff_in - bh, dev.aff_in + bh);
+            // The closest of the item's in-wall parts the device reaches.
+            let hit = zones
+                .iter()
+                .filter(|z| top + clearance_in >= z.2 && z.3 + clearance_in >= bot)
+                .map(|z| ((z.0 - (da + bw)).max((da - bw) - z.1).max(0.0), z))
+                .filter(|(gap, _)| *gap < clearance_in)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((gap, z)) = hit else { continue };
+            let lev = t.level(&dev.level).map_or(0.0, |l| l.elevation_ft);
+            let what = match it.kind.as_str() {
+                "dishwasher" => "dishwasher",
+                "sink" => "sink",
+                k => k,
+            };
+            out.push(Clash {
+                id: String::new(),
+                kind: "in_wall_casework".into(),
+                a: dev.id.clone(),
+                b: it.id.clone(),
+                at_ft: [r4((dev.at_ft[0] + c[0]) / 2.0), r4((dev.at_ft[1] + c[1]) / 2.0), r4(lev + dev.aff_in / 12.0)],
+                depth_in: r2(gap.min(clearance_in)),
+                planted: false,
+                description: Some(format!(
+                    "{} {} +{}\" AFF in the wall behind {} {} (read from the A-sheet): {:.1}\" from the {} (assumed rough-in)",
+                    if dev.kind == "receptacle" { "Receptacle" } else { "Switch" },
+                    dev.tag,
+                    dev.aff_in as i64,
+                    what,
+                    it.tag,
+                    gap,
+                    z.4
+                )),
+                wall: Some(wall.id.clone()),
+            });
+        }
+    }
+    for (k, c) in out.iter_mut().enumerate() {
+        c.id = format!("XC{:03}", k + 1);
+    }
+    out
+}
