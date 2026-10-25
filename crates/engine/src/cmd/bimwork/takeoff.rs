@@ -118,6 +118,8 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     // with the run's id).
     let (sp, _) = crate::cmd::bspec::current(s, CMD)?;
     let mut by_run: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
+    let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for e in d.model.iter().take(super::MAX_ELEMENTS) {
         let tags = crate::cmd::fieldview::wallgen_tags(e);
         if tags.first() == Some(&"mep")
@@ -126,7 +128,17 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             let base = id.rsplit_once('/').map_or(id, |(b, _)| b);
             by_run.entry(base.to_string()).or_default().push(e.handle.hex());
         }
+        if let (Some(&"ceiling"), Some(level)) = (tags.first(), tags.get(1))
+            && e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:"))
+        {
+            let v = room_ceilings.entry((*level).to_string()).or_default();
+            if v.len() < MAX_LINE_ELEMENTS {
+                v.push(e.handle.hex());
+            }
+        }
     }
+    let bom_lines = bom["lines"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
     let resolve = |h: &str| -> Vec<String> {
         match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
             Some(i) => sp.mep.runs.get(i).and_then(|r| by_run.get(&crate::cmd::mep::run_base(r))).cloned().unwrap_or_default(),
@@ -134,7 +146,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         }
     };
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
-    for l in bom["lines"].as_array().map(Vec::as_slice).unwrap_or_default().iter().take(MAX_LINES) {
+    for l in bom_lines.iter().chain(wall_lines.iter()).take(MAX_LINES) {
         let level = l["level"].as_str().unwrap_or_default().to_string();
         let category = l["category"].as_str().unwrap_or_default().to_string();
         let mut elems: Vec<String> =
@@ -148,6 +160,16 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             && let Some(part) = part_of(&category)
         {
             elems = built.get(&(part.to_string(), level.clone())).cloned().unwrap_or_default();
+        }
+        if elems.is_empty() && category == "rooms" {
+            elems = room_ceilings.get(&level).cloned().unwrap_or_default();
+        }
+        // Board and framing are on the walls: the level's walls (every level's, on a line the BOM
+        // gives for the whole job).
+        if elems.is_empty() && matches!(category.as_str(), "drywall" | "framing") {
+            elems =
+                built.iter().filter(|((p, lv), _)| p == "wall" && (level.is_empty() || *lv == level)).flat_map(|(_, h)| h.iter().cloned()).collect();
+            elems.truncate(MAX_LINE_ELEMENTS);
         }
         // MEP lines (duct, pipe, conduit by system and size): the level's runs of that kind, of
         // the system the item names when it names one.
@@ -229,6 +251,49 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             l
         })
         .collect())
+}
+
+/// A built wall's length along the floor and its height, feet: the farthest two of its points in
+/// plan (its box's diagonal for a wall of many points), and its height span.
+fn wall_size(e: &cadaddy_doc::Entity, lo: [f64; 3], hi: [f64; 3], upf: f64) -> (f64, f64) {
+    let height = (hi[2] - lo[2]) / upf;
+    let mut len = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+    if let cadaddy_doc::EntityKind::Mesh(m) = &e.kind
+        && (2..=64).contains(&m.vertices.len())
+    {
+        let pts: Vec<(f64, f64)> = m.vertices.iter().filter(|v| v.x.is_finite() && v.y.is_finite()).map(|v| (v.x, v.y)).collect();
+        len = pts.iter().enumerate().flat_map(|(i, a)| pts.iter().skip(i + 1).map(move |b| (a.0 - b.0).hypot(a.1 - b.1))).fold(0.0, f64::max);
+    }
+    let ok = |v: f64| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+    (ok(len / upf), ok(height))
+}
+
+/// Wall lines for the levels whose built walls the BOM has no wall line for (walls built from the
+/// plan's wall linework, with no wall marks in the spec): length and face area per level, from
+/// the built wall meshes, as BOM lines.
+fn built_wall_lines(d: &cadaddy_doc::Drawing, els: &[super::El], bom: &[Value], upf: f64) -> Vec<Value> {
+    let has_line: BTreeSet<String> =
+        bom.iter().filter(|l| l["category"] == "walls").filter_map(|l| l["level"].as_str()).map(str::to_ascii_lowercase).collect();
+    let mut by_level: BTreeMap<String, (f64, f64, Vec<String>)> = BTreeMap::new();
+    for el in els.iter().filter(|e| e.category == "wall" && !has_line.contains(&e.level.to_ascii_lowercase())) {
+        let Some(e) = d.entity(el.handle) else { continue };
+        let (len, height) = wall_size(e, [el.lo.x, el.lo.y, el.lo.z], [el.hi.x, el.hi.y, el.hi.z], upf);
+        let v = by_level.entry(el.level.clone()).or_default();
+        v.0 += len;
+        v.1 += len * height;
+        if v.2.len() < MAX_LINE_ELEMENTS {
+            v.2.push(el.handle.hex());
+        }
+    }
+    let line = |level: &str, item: &str, unit: &str, net: f64, els: &[String]| {
+        json!({"level": level, "trade": "general", "category": "walls", "item": item, "size": "", "unit": unit, "net": r3(net), "status": "model",
+            "rule": "from the built wall meshes (no wall marks in the spec)", "elements": els})
+    };
+    by_level
+        .iter()
+        .filter(|(_, (len, _, _))| *len > 0.0)
+        .flat_map(|(lv, (len, area, hs))| [line(lv, "Wall", "lf", *len, hs), line(lv, "Wall area", "sq ft", *area, hs)])
+        .collect()
 }
 
 fn qty_map(lines: &[Value]) -> BTreeMap<String, f64> {
@@ -407,8 +472,18 @@ fn cost_rows(cmd: &str, p: &Value) -> Result<Vec<Cost>> {
 fn words(t: &str) -> BTreeSet<String> {
     t.to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| w.len() > 1 && !matches!(*w, "of" | "and" | "the" | "for" | "with" | "per" | "each" | "ea" | "ga" | "gauge"))
-        .map(|w| if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") { w.trim_end_matches('s').to_string() } else { w.to_string() })
+        .filter(|w| w.len() > 1 && !matches!(*w, "of" | "and" | "the" | "for" | "with" | "per" | "each" | "ea" | "ga" | "gauge" | "untyped"))
+        .map(|w| if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") { w.trim_end_matches('s') } else { w })
+        // One word for what cost tables call by several names.
+        .map(|w| match w {
+            "drywall" | "gwb" | "gyp" | "wallboard" | "sheetrock" => "gypsum",
+            "partition" => "wall",
+            "outlet" => "receptacle",
+            "luminaire" | "lighting" => "light",
+            "doorway" => "door",
+            w => w,
+        })
+        .map(str::to_string)
         .collect()
 }
 
@@ -441,7 +516,9 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         // Most of the row's words, and half the item's words in the row (a door hardware set is
         // not a door).
         // The item's own words: not its system's name (`Duct M-SUPPLY`) nor its numbers.
-        let sys = words(l["system"].as_str().unwrap_or_default());
+        // (A line that isn't MEP has its category as its system: those words are its own.)
+        let mep = matches!(l["category"].as_str().unwrap_or_default(), "duct" | "pipe" | "conduit" | "tray" | "cable");
+        let sys = if mep { words(l["system"].as_str().unwrap_or_default()) } else { BTreeSet::new() };
         let iw: BTreeSet<String> = words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
         let covered = if iw.is_empty() { 0.0 } else { iw.iter().filter(|w| want.contains(*w)).count() as f64 / iw.len() as f64 };
         if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
@@ -612,6 +689,17 @@ mod tests {
         assert_eq!(match_row(&rows, &l("Wall untyped", "sq ft", "walls")), None);
         assert_eq!(match_row(&rows, &l("Fan coil", "each", "equipment")), None);
         assert_eq!(match_row(&rows, &l("Door hardware set", "each", "doors")), None, "hardware is not the door");
+        // What cost tables call by other names.
+        let rows =
+            vec![row("Interior partition, metal stud", "lf"), row("Drywall 5/8", "sf"), row("Duplex outlet", "ea"), row("LED luminaire", "ea")];
+        assert_eq!(match_row(&rows, &l("Wall", "lf", "walls")).map(|m| m.0), Some(0));
+        assert_eq!(match_row(&rows, &l("Board gypsum board", "sq ft", "drywall")).map(|m| m.0), Some(1));
+        assert_eq!(match_row(&rows, &l("receptacle", "each", "devices")).map(|m| m.0), Some(2));
+        assert_eq!(match_row(&rows, &l("Light fixture", "each", "devices")).map(|m| m.0), Some(3));
+        // A line that isn't MEP carries its category as its system (`Wall`, system `walls`).
+        let mut w = l("Wall", "lf", "walls");
+        w["system"] = json!("walls");
+        assert_eq!(match_row(&rows, &w).map(|m| m.0), Some(0));
     }
 
     #[test]
