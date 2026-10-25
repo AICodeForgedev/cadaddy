@@ -60,10 +60,6 @@ const FILLS_FRACTION_FAIL: f64 = 0.10;
 /// Minimum entity count before the SYMBOLS check expects blocks.
 const SYMBOLS_CHECK_MIN_ENTITIES: usize = 200;
 
-/// Overall pass threshold: a score below this fails the import. With hard-fail checks this
-/// is for display only; a hard-fail overrides it.
-const PASS_SCORE: u32 = 50;
-
 /// Maximum line segment length (in model units) to count as a potential stroke glyph segment.
 /// Real lettering strokes on a sheet-scale drawing are typically < 0.5 inches.
 const STROKE_GLYPH_MAX_LEN: f64 = 2.0;
