@@ -917,14 +917,16 @@ fn ocr_runs_where_stroked_lettering_outnumbers_real_text() {
 
 #[test]
 fn ocr_does_not_reread_real_text_or_run_on_a_page_lettered_in_text() {
-    // 120 real labels, each also plotted as strokes on top of itself, plus a few stray
-    // glyph-like shapes: the lettering is real text, so the OCR adds nothing
-    let pdf = {
+    // 120 real labels, each also plotted as strokes on top of itself, plus five stroked X's:
+    // the OCR reads the X's and never the plotted copies
+    let page = |copies: bool| {
         let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
         real_labels(120, 100.0, 100.0, |i| format!("E{}", i % 10), &mut c);
-        for i in 0..120 {
-            let (lx, ly) = (100.0 + (i % 20) as f64 * 40.0, 100.0 + (i / 20) as f64 * 20.0);
-            shx_text(&format!("E{}", i % 10), lx, ly, 6.0, 0.6, 0.0, &mut c);
+        if copies {
+            for i in 0..120 {
+                let (lx, ly) = (100.0 + (i % 20) as f64 * 40.0, 100.0 + (i / 20) as f64 * 20.0);
+                shx_text(&format!("E{}", i % 10), lx, ly, 6.0, 0.6, 0.0, &mut c);
+            }
         }
         for i in 0..5 {
             shx_text("X", 100.0 + f64::from(i) * 50.0, 500.0, 8.0, 1.0, 0.0, &mut c);
@@ -932,8 +934,11 @@ fn ocr_does_not_reread_real_text_or_run_on_a_page_lettered_in_text() {
         c.extend_from_slice(b"Q");
         pdf_sized(&c, 2592, 1728)
     };
-    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
-    assert!(r.ocr.words.is_empty(), "nothing read by OCR: {:?}", r.ocr.words);
+    let r = pdf_read::read(&page(true), &PdfOptions::default()).expect("PDF read failed");
+    let read: Vec<&str> = r.ocr.words.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(read, ["X"; 5], "only the stroked-only glyphs are read: {:?}", r.ocr);
+    // without plotted copies the page is lettered in real text: no OCR at all
+    let r = pdf_read::read(&page(false), &PdfOptions::default()).expect("PDF read failed");
     assert_eq!(r.ocr.clusters, 0, "the OCR didn't run: {:?}", r.ocr);
     assert!(!r.stats.contains_key("SHX text (OCR) recovered"));
 }
