@@ -79,6 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
         extract::eattext_spec(),
     ]
     .into_iter()
+    .chain(attribs::attdisp_menu_specs())
     .chain(xref::specs())
     .chain(refedit::specs())
     .chain(bedit::specs())
