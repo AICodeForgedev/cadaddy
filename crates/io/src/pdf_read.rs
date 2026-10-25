@@ -3273,7 +3273,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT;
         let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty() || lettering_is_strokes;
         if has_shx_evidence {
-            let ocr_texts = recover_shx_ocr(&strokes, sheet, &taken);
+            let mut ocr_texts = recover_shx_ocr(&strokes, sheet, &taken);
             if !ocr_texts.is_empty() {
                 stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
                 for rt in &ocr_texts {
@@ -3303,6 +3303,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     stats.insert("symbols tagged by stroked lettering".into(), more.len());
                 }
                 instances.extend(more);
+                // Without hidden text to confirm them, the OCR's words are added but their
+                // strokes stay linework: a misread wall corner, jamb or duct tick must not leave
+                // the plan (walls, duct and pipe chains read those strokes).  The symbols found
+                // above already kept their own lines away from the OCR.
+                if !has_hidden_text {
+                    for t in &mut ocr_texts {
+                        t.stroke_indices.clear();
+                    }
+                }
                 recovered_texts.extend(ocr_texts);
             }
         }
