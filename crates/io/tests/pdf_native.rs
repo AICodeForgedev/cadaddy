@@ -794,6 +794,45 @@ fn ocr_skips_pages_whose_lettering_is_real_text() {
     assert_eq!(texts_of(&r).len(), 120, "the real text is all there");
 }
 
+#[test]
+fn ocr_leaves_lone_straight_strokes_as_linework() {
+    // A plan's short pieces — wall ends, door jambs, duct and pipe ticks — are single straight
+    // strokes the size of a letter. The OCR reads the stroked word but leaves each lone stroke
+    // as linework (not an "I", "1" or "/"), so the wall, duct and pipe readers still see it.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 400.0, height, &mut content);
+    }
+    let mut stubs = 0;
+    for i in 0..30 {
+        let (x, y) = (90 + (i % 15) * 40, 150 + (i / 15) * 60);
+        // upright and leaning stubs, 8 pt long, well apart
+        let (dx, dy) = if i % 2 == 0 { (0, 8) } else { (5, 6) };
+        content.extend_from_slice(format!("{x} {y} m {} {} l S ", x + dx, y + dy).as_bytes());
+        stubs += 1;
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let texts = texts_of(&r);
+    assert!(texts.iter().any(|t| t.contains('H')), "the stroked word is still read: {texts:?}");
+    let bare = texts.iter().filter(|t| t.chars().all(|c| "I1l|-/\\'. ".contains(c))).count();
+    assert_eq!(bare, 0, "no lone stroke becomes a letter: {texts:?}");
+    let short_lines = r
+        .drawing
+        .model
+        .iter()
+        .filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).hypot(l.b.y - l.a.y) < 1.0))
+        .filter(|e| match &e.kind {
+            EntityKind::Line(l) => l.a.y.min(l.b.y) < 300.0 / 72.0,
+            _ => false,
+        })
+        .count();
+    assert_eq!(short_lines, stubs, "every stub stays a line");
+}
+
 const E_SHEET_WITH_NOTE: &[u8] =
     b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (E-4) Tj ET BT /F1 8 Tf 600 80 Td (SCALE: 1/8\" = 1'-0\") Tj ET Q";
 

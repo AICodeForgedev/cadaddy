@@ -2198,6 +2198,16 @@ fn sample_polyline_norm(pts: &[(f64, f64)], x0: f64, y0: f64, w: f64, h: f64, n:
     }
 }
 
+/// Whether a stroke is one straight line: every point within 10% of its length from the chord.
+fn is_straight(pts: &[(f64, f64)]) -> bool {
+    let (Some(&(ax, ay)), Some(&(bx, by))) = (pts.first(), pts.last()) else { return true };
+    let len = (bx - ax).hypot(by - ay);
+    if len < 1e-9 {
+        return false;
+    }
+    pts.iter().all(|&(x, y)| ((x - ax) * (by - ay) - (y - ay) * (bx - ax)).abs() / len <= len * 0.1)
+}
+
 /// Compute the directed chamfer distance from `a` to `b`.
 fn chamfer(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
     if a.is_empty() || b.is_empty() {
@@ -2347,6 +2357,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         bb: [f64; 4],
         indices: HashSet<usize>,
         pen: Pen,
+        /// One straight stroke ("I", "1", "-", "/"): what a wall end, a jamb or a tick also is.
+        bare: bool,
     }
     let mut matched: Vec<MatchedGlyph> = Vec::new();
     for g in &glyphs {
@@ -2360,7 +2372,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         }
         if let Some((ch, _dist)) = match_glyph(&samples, aspect, g.members.len(), &templates) {
             let indices: HashSet<usize> = g.members.iter().map(|&ci| cands[ci].idx).collect();
-            matched.push(MatchedGlyph { ch, bb: g.bb, indices, pen: g.pen });
+            let bare = matches!(g.members.as_slice(), [ci] if cands.get(*ci).and_then(|c| strokes.get(c.idx)).is_some_and(|s| is_straight(&s.pts)));
+            matched.push(MatchedGlyph { ch, bb: g.bb, indices, pen: g.pen, bare });
         }
     }
 
@@ -2389,6 +2402,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         let mut word = String::new();
         word.push(first.ch);
         let mut all_indices: HashSet<usize> = first.indices.clone();
+        let mut all_bare = first.bare;
         let word_x = first.bb[0];
         let word_y = first.bb[1];
         let mut prev_end = first.bb[2];
@@ -2410,13 +2424,16 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
             }
             word.push(next.ch);
             all_indices.extend(&next.indices);
+            all_bare &= next.bare;
             prev_end = next.bb[2];
             word_h = word_h.max(next.bb[3] - next.bb[1]);
             j += 1;
         }
 
-        // emit the word (or single character)
-        if !word.trim().is_empty() {
+        // emit the word (or single character). A "word" of lone straight strokes only (an "I",
+        // "1-1", "//") is linework read as letters — wall ends, jambs, duct and pipe ticks — and
+        // its strokes stay linework for the wall, duct and pipe readers.
+        if !word.trim().is_empty() && !all_bare {
             result.push(RecoveredText { at: (word_x, word_y), height: word_h, value: word, stroke_indices: all_indices, pen, layer: layer.clone() });
         }
         i = j;
