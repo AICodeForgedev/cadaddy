@@ -854,7 +854,7 @@ enum McpTarget {
 /// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
-    let (mut lazy, mut launch, mut headless) = (false, false, false);
+    let (mut lazy, mut headless) = (false, false);
     let mut no_launch = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -872,7 +872,8 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             }
             "--lazy" => lazy = true,
             "--headless" => headless = true,
-            "--launch" => launch = true,
+            // Launch is the default for --connect; the flag stays accepted.
+            "--launch" => {}
             "--no-launch" => no_launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
@@ -885,10 +886,6 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {
                 addr = Some(format!("127.0.0.1:{port}"));
-                // Default to launch when the port comes from an env var.
-                if !no_launch {
-                    launch = true;
-                }
             }
         }
     }
@@ -897,7 +894,7 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
         // `--launch` defaults on for --connect: the app opens at first call if not running.
         // Pass `--no-launch` to turn it off.
         Some(addr) => {
-            let launch = if no_launch { false } else { launch || true };
+            let launch = !no_launch;
             Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch })
         }
         None if lazy => Err("--lazy needs --connect HOST:PORT".into()),

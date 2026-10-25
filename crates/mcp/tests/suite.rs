@@ -66,7 +66,7 @@ fn synthetic_pdf(dir: &str) -> String {
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
     let xref = pdf.len();
     pdf.extend_from_slice(b"xref\n0 5\n");
-    pdf.extend_from_slice(format!("0000000000 65535 f \n").as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
     pdf.extend_from_slice(format!("{o1:010} 00000 n \n").as_bytes());
     pdf.extend_from_slice(format!("{o2:010} 00000 n \n").as_bytes());
     pdf.extend_from_slice(format!("{o3:010} 00000 n \n").as_bytes());
