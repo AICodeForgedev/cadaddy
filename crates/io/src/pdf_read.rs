@@ -1866,8 +1866,79 @@ fn content_class_layer(class: ContentClass) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 
 /// A page with this many real text items or more has its lettering as text: no OCR without
-/// hidden text (Revit and TrueType prints; stroke OCR there only reads symbol ticks).
+/// hidden text (Revit and TrueType prints; stroke OCR there only reads symbol ticks) unless
+/// stroked lettering clearly outnumbers it (see [`OCR_STROKES_PER_CHAR`]).
 const OCR_REAL_TEXT_LIMIT: usize = 100;
+
+/// Loose glyph-sized strokes (outside real text) per real-text character above which a page's
+/// lettering is mostly strokes and the OCR runs anyway: a plotted sheet with a few hundred
+/// real labels and thousands of words of SHX lettering.
+const OCR_STROKES_PER_CHAR: usize = 4;
+
+/// The longest stroke side the OCR takes for lettering, by sheet size (points).
+fn ocr_max_seg(sheet: (f64, f64)) -> f64 {
+    (sheet.0.min(sheet.1) * 72.0 * 0.025).clamp(2.0, 40.0)
+}
+
+/// Whether a stroke could be (part of) a stroked glyph: open, a few points, glyph-sized.
+fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
+    if s.closed || s.pts.len() > 24 {
+        return None;
+    }
+    // one stroke can draw a whole letter (a G, an 8): several times the letter's size
+    let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+    if seg_len > max_seg * 8.0 || seg_len < 0.05 {
+        return None;
+    }
+    let b = bbox(std::slice::from_ref(&s.pts))?;
+    ((b[2] - b[0]) <= max_seg * 2.0 && (b[3] - b[1]) <= max_seg * 2.0).then_some(b)
+}
+
+/// The strokes that lie on a visible real text item: a plotted copy of the text, which the
+/// text already is.  The OCR leaves them alone.  (Strokes under hidden text are the lettering
+/// the hidden text stands for; what its own recovery didn't claim, the OCR may read.)
+fn strokes_under_text(strokes: &[Stroke], texts: &[TextOut]) -> HashSet<usize> {
+    const CELL: f64 = 36.0;
+    let mut boxes: Vec<[f64; 4]> = Vec::new();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
+        let h = t.height.max(0.5);
+        let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
+        let len = dx.hypot(dy);
+        // the text's up direction (perpendicular to its baseline)
+        let (ux, uy) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, 1.0) };
+        let corners = [t.at, t.end, (t.at.0 + ux * h, t.at.1 + uy * h), (t.end.0 + ux * h, t.end.1 + uy * h)];
+        let pad = h * 0.25;
+        let b = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+        let b = [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad];
+        let (gx0, gy0, gx1, gy1) =
+            ((b[0] / CELL).floor() as i64, (b[1] / CELL).floor() as i64, (b[2] / CELL).floor() as i64, (b[3] / CELL).floor() as i64);
+        // a long note spans many cells; a hostile one is capped
+        if (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1) > 2_000 {
+            continue;
+        }
+        let bi = boxes.len();
+        boxes.push(b);
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                grid.entry((gx, gy)).or_default().push(bi);
+            }
+        }
+    }
+    let mut under = HashSet::new();
+    if boxes.is_empty() {
+        return under;
+    }
+    for (i, s) in strokes.iter().enumerate() {
+        let Some(b) = bbox(std::slice::from_ref(&s.pts)) else { continue };
+        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let Some(cands) = grid.get(&((cx / CELL).floor() as i64, (cy / CELL).floor() as i64)) else { continue };
+        if cands.iter().filter_map(|&bi| boxes.get(bi)).any(|t| cx >= t[0] && cx <= t[2] && cy >= t[1] && cy <= t[3]) {
+            under.insert(i);
+        }
+    }
+    under
+}
 
 /// A text entity recovered from SHX stroke clusters.
 struct RecoveredText {
@@ -2451,8 +2522,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         return (Vec::new(), report);
     }
 
-    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
-    let max_seg = (sw.min(sh) * 0.025).clamp(2.0, 40.0);
+    let max_seg = ocr_max_seg(sheet);
 
     // ---- phase 1: find candidate SHX strokes ----
     struct Cand {
@@ -2462,19 +2532,12 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
     }
     let mut cands: Vec<Cand> = Vec::new();
     for (i, s) in strokes.iter().enumerate() {
-        if excluded.contains(&i) || s.closed || s.pts.len() > 24 {
+        if excluded.contains(&i) {
             continue;
         }
-        // one stroke can draw a whole letter (a G, an 8): several times the letter's size
-        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
-        if seg_len > max_seg * 8.0 || seg_len < 0.05 {
-            continue;
+        if let Some(b) = ocr_candidate(s, max_seg) {
+            cands.push(Cand { idx: i, bb: b, pen: s.pen });
         }
-        let Some(b) = bbox(std::slice::from_ref(&s.pts)) else { continue };
-        if (b[2] - b[0]) > max_seg * 2.0 || (b[3] - b[1]) > max_seg * 2.0 {
-            continue;
-        }
-        cands.push(Cand { idx: i, bb: b, pen: s.pen });
     }
     if cands.is_empty() {
         return (Vec::new(), report);
@@ -3478,16 +3541,21 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 stats.insert("symbol types".into(), symbol_groups.len());
             }
 
-            // OCR pass: template-based glyph recognition for the strokes not yet claimed: on a
-            // sheet with hidden text, for the strokes it doesn't cover; without hidden text,
-            // where the lettering is drawn as strokes (little real text on the page).  A page
-            // lettered in real text has nothing to OCR: its short strokes are symbols and
-            // ticks, which the OCR would read as stray letters.
+            // OCR pass: template-based glyph recognition for the strokes not yet claimed and
+            // not lying on real text: on a sheet with hidden text, for the strokes it doesn't
+            // cover; without hidden text, where the lettering is drawn as strokes (little real
+            // text on the page, or far more loose glyph-sized strokes than real characters).
+            // A page lettered in real text has nothing to OCR: its short strokes are symbols
+            // and ticks, which the OCR would read as stray letters.
+            let mut excluded = read_strokes.clone();
+            excluded.extend(&symbol_stroke_indices);
+            excluded.extend(strokes_under_text(&strokes, &texts));
             let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-            let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT;
+            let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
+            let max_seg = ocr_max_seg(sheet);
+            let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
+            let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
             if has_hidden_text || lettering_is_strokes {
-                let mut excluded = read_strokes.clone();
-                excluded.extend(&symbol_stroke_indices);
                 let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
                 if report.clusters > 0 {
                     stats.insert("SHX OCR glyph clusters".into(), report.clusters);

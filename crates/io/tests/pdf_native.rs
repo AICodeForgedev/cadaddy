@@ -887,3 +887,68 @@ fn ocr_reads_a_full_sheet_of_dense_lettering() {
     assert_eq!(text_values(&r), sorted(&want));
     assert_eq!((r.ocr.clusters, r.ocr.glyphs, r.ocr.noise_dropped), (19_114, 19_114, 0));
 }
+
+/// `n` real (Helvetica) text labels in a grid from (x, y), 6 pt.
+fn real_labels(n: usize, x: f64, y: f64, label: impl Fn(usize) -> String, out: &mut Vec<u8>) {
+    for i in 0..n {
+        let (lx, ly) = (x + (i % 20) as f64 * 40.0, y + (i / 20) as f64 * 20.0);
+        out.extend_from_slice(format!("BT /F1 6 Tf {lx:.1} {ly:.1} Td ({}) Tj ET ", label(i)).as_bytes());
+    }
+}
+
+#[test]
+fn ocr_runs_where_stroked_lettering_outnumbers_real_text() {
+    // 100 real one-letter labels, and 80 words of stroked lettering elsewhere on the sheet
+    let pdf = {
+        let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+        real_labels(100, 100.0, 100.0, |_| "A".into(), &mut c);
+        for i in 0..80 {
+            shx_text("ROOM 104", 100.0 + (i % 10) as f64 * 120.0, 600.0 + (i / 10) as f64 * 20.0, 8.0, 1.0, 0.0, &mut c);
+        }
+        c.extend_from_slice(b"Q");
+        pdf_sized(&c, 2592, 1728)
+    };
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let texts = text_values(&r);
+    assert_eq!(texts.iter().filter(|t| *t == "ROOM 104").count(), 80, "{:?}", r.ocr);
+    assert_eq!(texts.iter().filter(|t| *t == "A").count(), 100);
+    assert_eq!(texts.len(), 180);
+}
+
+#[test]
+fn ocr_does_not_reread_real_text_or_run_on_a_page_lettered_in_text() {
+    // 120 real labels, each also plotted as strokes on top of itself, plus a few stray
+    // glyph-like shapes: the lettering is real text, so the OCR adds nothing
+    let pdf = {
+        let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+        real_labels(120, 100.0, 100.0, |i| format!("E{}", i % 10), &mut c);
+        for i in 0..120 {
+            let (lx, ly) = (100.0 + (i % 20) as f64 * 40.0, 100.0 + (i / 20) as f64 * 20.0);
+            shx_text(&format!("E{}", i % 10), lx, ly, 6.0, 0.6, 0.0, &mut c);
+        }
+        for i in 0..5 {
+            shx_text("X", 100.0 + f64::from(i) * 50.0, 500.0, 8.0, 1.0, 0.0, &mut c);
+        }
+        c.extend_from_slice(b"Q");
+        pdf_sized(&c, 2592, 1728)
+    };
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert!(r.ocr.words.is_empty(), "nothing read by OCR: {:?}", r.ocr.words);
+    assert_eq!(r.ocr.clusters, 0, "the OCR didn't run: {:?}", r.ocr);
+    assert!(!r.stats.contains_key("SHX text (OCR) recovered"));
+}
+
+#[test]
+fn ocr_skips_strokes_that_lie_on_real_text() {
+    // a few real labels with a plotted stroke copy on top, and one stroked-only word
+    let pdf = strokes_page(|c| {
+        real_labels(10, 100.0, 100.0, |i| format!("E{i}"), c);
+        for i in 0..10 {
+            shx_text(&format!("E{i}"), 100.0 + i as f64 * 40.0, 100.0, 6.0, 0.6, 0.0, c);
+        }
+        shx_text("ROOM 5", 100.0, 400.0, 10.0, 1.0, 0.0, c);
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let read: Vec<&str> = r.ocr.words.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(read, ["ROOM 5"], "only the stroked-only word is read: {:?}", r.ocr);
+}
