@@ -542,9 +542,16 @@ mod tests {
             let addr = listener.local_addr().unwrap().to_string();
             let server = std::thread::spawn(move || {
                 let (conn, _) = listener.accept().unwrap();
-                let mut line = String::new();
-                BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).unwrap();
+                let mut rd = BufReader::new(conn.try_clone().unwrap());
                 let mut out = conn;
+                // The version handshake comes first: answer it like an older app ("pong").
+                let mut line = String::new();
+                rd.read_line(&mut line).unwrap();
+                if serde_json::from_str::<Value>(&line).is_ok_and(|v| v["method"] == "ping") {
+                    writeln!(out, "{}", json!({"id": -1, "ok": true, "result": "pong"})).unwrap();
+                    line.clear();
+                    rd.read_line(&mut line).unwrap();
+                }
                 writeln!(out, "{}", json!({"id": 1, "ok": false, "error": "timeout", "state": state})).unwrap();
             });
             let mut remote = Remote::connect(&addr).unwrap();

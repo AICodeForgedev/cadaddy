@@ -204,8 +204,15 @@ fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     let app = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
         let (sock, _) = listener.accept().unwrap();
+        let mut rd = std::io::BufReader::new(sock.try_clone().unwrap());
         let mut line = String::new();
-        std::io::BufReader::new(sock.try_clone().unwrap()).read_line(&mut line).unwrap();
+        rd.read_line(&mut line).unwrap();
+        // The version handshake comes first: answer it like an older app ("pong").
+        if serde_json::from_str::<Value>(&line).is_ok_and(|v| v["method"] == "ping") {
+            writeln!(&sock, "{}", json!({"id": -1, "ok": true, "result": "pong"})).unwrap();
+            line.clear();
+            rd.read_line(&mut line).unwrap();
+        }
         let id = serde_json::from_str::<Value>(&line).unwrap()["id"].clone();
         writeln!(&sock, "{}", json!({"id": id, "ok": true, "result": {"prompt": "Command:"}})).unwrap();
     });

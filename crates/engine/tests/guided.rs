@@ -351,9 +351,10 @@ fn equipment_label_detection_patterns() {
 fn job_commands_on_session() {
     let mut s = Session::new();
 
-    // No job should give an error.
-    let r = s.execute("job.status", &json!({}));
-    assert!(r.is_err());
+    // No job: status says so (an agent can ask before starting); next still refuses.
+    let r = s.execute("job.status", &json!({})).expect("status without a job answers");
+    assert_eq!(r["running"], json!(false), "{r}");
+    assert!(r["hint"].as_str().is_some_and(|h| h.contains("job.start")), "{r}");
 
     let r = s.execute("job.next", &json!({}));
     assert!(r.is_err());
