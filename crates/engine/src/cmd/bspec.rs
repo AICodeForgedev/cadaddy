@@ -407,7 +407,9 @@ struct FloorLevel {
 fn detect_floor_levels(s: &Session) -> std::result::Result<Vec<FloorLevel>, ()> {
     let d = s.doc().map_err(|_| ())?;
     let ext = d.extents(&Space::Model);
-    if ext.is_empty() { return Err(()); }
+    if ext.is_empty() {
+        return Err(());
+    }
     let (x_min, y_min, x_max, y_max) = (ext.min.x, ext.min.y, ext.max.x, ext.max.y);
 
     let mut hits: Vec<(u32, f64)> = Vec::new(); // (floor_number, y_position)
@@ -417,14 +419,18 @@ fn detect_floor_levels(s: &Session) -> std::result::Result<Vec<FloorLevel>, ()> 
             EntityKind::MText(t) => (t.contents.as_str(), t.height, t.insert.y),
             _ => continue,
         };
-        if h < 8.0 { continue; } // skip small text — titles are larger
+        if h < 8.0 {
+            continue;
+        } // skip small text — titles are larger
         if let Some(num) = parse_floor_number(text)
             && !hits.iter().any(|(n, _)| *n == num)
         {
             hits.push((num, y));
         }
     }
-    if hits.len() < 2 { return Err(()); }
+    if hits.len() < 2 {
+        return Err(());
+    }
 
     // Sort by Y to assign horizontal bands (lower Y = lower on the sheet).
     hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -433,15 +439,10 @@ fn detect_floor_levels(s: &Session) -> std::result::Result<Vec<FloorLevel>, ()> 
     for (i, (num, _y)) in hits.iter().enumerate() {
         let band_lo = if i == 0 { y_min } else { (hits[i - 1].1 + hits[i].1) / 2.0 };
         let band_hi = if i + 1 == hits.len() { y_max } else { (hits[i].1 + hits[i + 1].1) / 2.0 };
-        levels.push(FloorLevel {
-            name: format!("Level {num}"),
-            region: [x_min, band_lo, x_max, band_hi],
-        });
+        levels.push(FloorLevel { name: format!("Level {num}"), region: [x_min, band_lo, x_max, band_hi] });
     }
     // Sort by floor number for spec ordering.
-    levels.sort_by_key(|l| {
-        l.name.split_whitespace().last().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0)
-    });
+    levels.sort_by_key(|l| l.name.split_whitespace().last().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0));
     Ok(levels)
 }
 
@@ -463,7 +464,8 @@ fn parse_floor_number(text: &str) -> Option<u32> {
     }
     // Pattern: "LEVEL <N>"
     for (i, w) in words.iter().enumerate() {
-        if *w == "LEVEL" && i + 1 < words.len()
+        if *w == "LEVEL"
+            && i + 1 < words.len()
             && let Ok(n) = words[i + 1].parse::<u32>()
         {
             return Some(n);
@@ -537,12 +539,12 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
                     let pass = c.get("pass").and_then(Value::as_bool).unwrap_or(true);
                     let hard = c.get("hard_fail").and_then(Value::as_bool).unwrap_or(false);
                     let id = c.get("id").and_then(Value::as_str).unwrap_or("");
-                    if pass || !hard { return false; }
+                    if pass || !hard {
+                        return false;
+                    }
                     // SCALE with a detected scale note: correctable, not blocking.
                     if id == "SCALE" {
-                        let has_note = c.get("evidence")
-                            .and_then(|e| e.get("scale_note"))
-                            .is_some_and(|n| !n.is_null());
+                        let has_note = c.get("evidence").and_then(|e| e.get("scale_note")).is_some_and(|n| !n.is_null());
                         return !has_note;
                     }
                     true // other hard-fails block

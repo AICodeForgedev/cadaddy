@@ -27,11 +27,7 @@ fn tool(s: &mut Server, name: &str, args: Value) -> Result<Value, String> {
         return Err(format!("JSON-RPC error: {}", e["message"].as_str().unwrap_or("?")));
     }
     let text = r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
-    if r["result"]["isError"] == true {
-        Err(text)
-    } else {
-        serde_json::from_str(&text).map_err(|e| format!("parse: {e}"))
-    }
+    if r["result"]["isError"] == true { Err(text) } else { serde_json::from_str(&text).map_err(|e| format!("parse: {e}")) }
 }
 
 /// Build a synthetic PDF with a rectangle (floor plan outline) and a line (wall).

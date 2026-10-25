@@ -164,15 +164,10 @@ fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream) 
     };
     // The app's ping reply may include "version" when the app supports it (older apps just
     // reply "pong"). Extract the version string if present.
-    let app_version = v
-        .get("result")
-        .and_then(|r| r.as_object())
-        .and_then(|o| o.get("version"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            // Older apps reply with a simple string "pong" — no version info.
-            v.get("result").and_then(Value::as_str).filter(|s| *s != "pong").map(|_| "unknown")
-        });
+    let app_version = v.get("result").and_then(|r| r.as_object()).and_then(|o| o.get("version")).and_then(Value::as_str).or_else(|| {
+        // Older apps reply with a simple string "pong" — no version info.
+        v.get("result").and_then(Value::as_str).filter(|s| *s != "pong").map(|_| "unknown")
+    });
     if let Some(app_ver) = app_version {
         if app_ver != bridge_version {
             eprintln!(
