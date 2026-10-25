@@ -248,6 +248,25 @@ impl EntityStore {
         self.set_index(h, Some(id));
         self.len += 1;
     }
+    /// [`EntityStore::push`] of an object another store holds, shared rather than copied (a view
+    /// made of some of a drawing's objects).
+    pub fn push_shared(&mut self, e: Arc<Entity>) {
+        if self.contains(e.handle) {
+            self.replace((*e).clone());
+            return;
+        }
+        if self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX) {
+            let c = self.new_chunk();
+            self.chunks.push(c);
+        }
+        let h = e.handle;
+        let Some(last) = self.chunks.last_mut() else { return };
+        let chunk = chunk_mut(last);
+        chunk.items.push(e);
+        let id = chunk.id;
+        self.set_index(h, Some(id));
+        self.len += 1;
+    }
     /// Append many new objects on top of the draw order, in order: the same result as
     /// [`EntityStore::push`] one at a time (chunks filled the same way), with the handle index
     /// grown once per shard. An object whose handle is already here makes it fall back to

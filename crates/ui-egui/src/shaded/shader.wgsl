@@ -468,7 +468,8 @@ fn fs_tri(o: VO) -> @location(0) vec4<f32> {
         let h = normalize(normalize(u.light.xyz) + u.eye.xyz);
         col = col + vec3<f32>(pow(max(dot(n, h), 0.0), 24.0) * 0.35);
     }
-    return enc(col);
+    // See-through surfaces (a ghosted shell) blend over what is behind them.
+    return vec4<f32>(enc(col).rgb, o.m.w);
 }
 
 @fragment

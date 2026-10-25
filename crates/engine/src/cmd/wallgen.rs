@@ -25,6 +25,10 @@ pub const APP: &str = "CADADDY_WALLGEN";
 const SLAB_FT: f64 = 0.5;
 /// A door leaf's thickness, inches.
 const LEAF_IN: f64 = 1.75;
+/// A door or window frame: jamb and head width along the opening, and how far its casing
+/// stands proud of each wall face, inches.
+const FRAME_IN: f64 = 2.0;
+const CASING_IN: f64 = 0.75;
 /// Most objects one WALLGEN makes.
 const MAX_OBJECTS: usize = 200_000;
 
@@ -453,6 +457,9 @@ struct Leaf {
     along: Option<Vec2>,
     /// The other leaf of a pair (a double door): one door, two leaves.
     pair: Option<(Vec2, Vec2)>,
+    /// The opening it fills, its ends on the wall's centreline: framed (jambs, head, a window's
+    /// sill). None when another leaf frames it.
+    frame: Option<(Vec2, Vec2)>,
 }
 
 /// One level built from its plan.
@@ -551,18 +558,44 @@ impl PlanLevel {
         }
         for l in &self.leaves {
             let mut m = empty_mesh();
+            let (lo, hi) = if l.window {
+                (self.z0 + l.sill.unwrap_or(self.sill), self.z0 + l.head.unwrap_or(self.head))
+            } else {
+                (self.z0, self.z0 + l.head.unwrap_or(self.door_head))
+            };
             if l.window {
-                let (sill, head) = (l.sill.unwrap_or(self.sill), l.head.unwrap_or(self.head));
-                add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), self.z0 + sill, self.z0 + head);
-                out.push((Part::Glass, m, l.source, None));
+                add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), lo, hi);
             } else {
                 for (a, b) in std::iter::once((l.a, l.b)).chain(l.pair) {
-                    add_box(&mut m, a, b, LEAF_IN * self.k, self.z0, self.z0 + l.head.unwrap_or(self.door_head));
+                    add_box(&mut m, a, b, LEAF_IN * self.k, lo, hi);
                 }
-                out.push((Part::Door, m, l.source, None));
             }
+            if let Some((a, b)) = l.frame {
+                self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window);
+            }
+            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, None));
         }
         out
+    }
+
+    /// The frame of the opening `a`–`b` (on the wall's centreline, wall `t` thick) from `lo` up
+    /// to `hi`: two jambs and a head, a window's sill too, inside the opening, casings proud of
+    /// both faces.
+    #[allow(clippy::too_many_arguments)]
+    fn add_frame(&self, m: &mut Mesh, a: Vec2, b: Vec2, t: f64, lo: f64, hi: f64, window: bool) {
+        let len = a.dist(b);
+        let w = FRAME_IN * self.k;
+        if !(len > 2.0 * w && hi - lo > 2.0 * w && t.is_finite() && t > 0.0) {
+            return;
+        }
+        let u = (b - a) * (1.0 / len);
+        let depth = t + 2.0 * CASING_IN * self.k;
+        add_box(m, a, a + u * w, depth, lo, hi);
+        add_box(m, b - u * w, b, depth, lo, hi);
+        add_box(m, a + u * w, b - u * w, depth, hi - w, hi);
+        if window {
+            add_box(m, a + u * w, b - u * w, depth, lo, lo + w);
+        }
     }
 }
 
@@ -971,6 +1004,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 // The leaf stands open at the jamb, its face on the opening's edge (not in the wall).
                 let inset = u * (LEAF_IN * k / 2.0 * (s_end - s_at).signum());
                 let along = Some(u * (s_end - s_at).signum());
+                let frame = Some((w.a + u * s_at.min(s_end), w.a + u * s_at.max(s_end)));
                 pl.leaves.push(Leaf {
                     a: o.at + inset,
                     b: open + inset,
@@ -981,6 +1015,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     sill: None,
                     along,
                     pair: None,
+                    frame,
                 });
                 doors += 1;
             }
@@ -997,7 +1032,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     doors += 1;
                     (on - u * half, on + u * half)
                 };
-                pl.leaves.push(Leaf { a: leaf.0, b: leaf.1, window, thickness: w.thickness, source: o.handle, head, sill, along: None, pair: None });
+                pl.leaves.push(Leaf { a: leaf.0, b: leaf.1, window, thickness: w.thickness, source: o.handle, head, sill, along: None, pair: None, frame: Some(leaf) });
             }
         }
     }
@@ -1091,13 +1126,13 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         if leaf.is_some() || covered {
             extra.push((g0, g1, z0 + pl.door_head, top));
             if let Some((a, b, h, along)) = leaf.filter(|_| !covered) {
-                pl.leaves.push(Leaf { a, b, window: false, thickness: t, source: h, head: None, sill: None, along: Some(along), pair: None });
+                pl.leaves.push(Leaf { a, b, window: false, thickness: t, source: h, head: None, sill: None, along: Some(along), pair: None, frame: Some((g0, g1)) });
                 doors += 1;
             }
         } else if is_outside {
             extra.push((g0, g1, z0, z0 + pl.sill));
             extra.push((g0, g1, z0 + pl.head, top));
-            pl.leaves.push(Leaf { a: g0, b: g1, window: true, thickness: t, source, head: None, sill: None, along: None, pair: None });
+            pl.leaves.push(Leaf { a: g0, b: g1, window: true, thickness: t, source, head: None, sill: None, along: None, pair: None, frame: Some((g0, g1)) });
             windows += 1;
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));
@@ -1299,11 +1334,28 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
             let (p, q) = (ai.dot(lj.a - li.a), ai.dot(cj - li.a));
             let overlap = wi.min(p.max(q)) - p.min(q).max(0.0);
             let pair = (lj.a, lj.b);
+            // A double door's frame spans both leaves' openings: the two ends farthest apart.
+            let frame = match (li.frame, lj.frame) {
+                (Some((a0, a1)), Some((b0, b1))) => {
+                    let ends = [a0, a1, b0, b1];
+                    let mut best = (a0, a1);
+                    for (n, &p0) in ends.iter().enumerate() {
+                        for &p1 in ends.iter().skip(n + 1) {
+                            if p0.dist(p1) > best.0.dist(best.1) {
+                                best = (p0, p1);
+                            }
+                        }
+                    }
+                    Some(best)
+                }
+                (f, g) => f.or(g),
+            };
             if overlap > 0.5 * wi.min(wj) {
                 // The same leaf again.
             } else if ai.dot(aj) < -0.9 && ci.dist(cj) <= tol {
                 if let Some(l) = leaves.get_mut(i) {
                     l.pair = Some(pair);
+                    l.frame = frame;
                 }
             } else {
                 continue;
