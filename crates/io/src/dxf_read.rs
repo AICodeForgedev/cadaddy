@@ -2371,6 +2371,8 @@ struct Objects {
     layer_filters: Vec<(String, Vec<String>)>,
     /// The first GEODATA object (the drawing's geographic location).
     geodata: Option<Vec<Tag>>,
+    /// WIPEOUTVARIABLES: the drawing's WIPEOUTFRAME (0 = frames hidden, 1 = shown).
+    wipeout_frame: Option<i64>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2429,6 +2431,7 @@ impl Objects {
             "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
                 self.fields.insert(h, tags.to_vec());
             }
+            "WIPEOUTVARIABLES" => self.wipeout_frame = T(tags).i(70).filter(|v| (0..=2).contains(v)),
             "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
                 if let Some(t) = sortents_table(tags) {
                     self.sortents.push(t);
@@ -2462,6 +2465,9 @@ impl Objects {
         // Fields: codes back into their texts, cached values kept.
         crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
         d.geo = self.geodata.as_deref().and_then(crate::dxf_geo::read);
+        if let Some(v) = self.wipeout_frame {
+            d.header.set_i64("WIPEOUTFRAME", v);
+        }
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
