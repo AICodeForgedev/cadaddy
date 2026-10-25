@@ -23,7 +23,7 @@ pub(crate) struct Guarded {
 }
 
 pub(crate) fn message(p: &(dyn Any + Send)) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
+    p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
 }
 
 impl Guarded {
@@ -71,6 +71,15 @@ impl Interactive for Guarded {
             return Vec::new();
         }
         catch_unwind(AssertUnwindSafe(|| self.inner.preview(s, cursor))).unwrap_or_else(|_| {
+            self.broken.set(Some("panic in preview"));
+            Vec::new()
+        })
+    }
+    fn preview_objects(&self, s: &Session, cursor: Vec2) -> Vec<cadcraft_doc::Entity> {
+        if self.broken.get().is_some() {
+            return Vec::new();
+        }
+        catch_unwind(AssertUnwindSafe(|| self.inner.preview_objects(s, cursor))).unwrap_or_else(|_| {
             self.broken.set(Some("panic in preview"));
             Vec::new()
         })

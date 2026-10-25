@@ -137,6 +137,11 @@ pub enum Icon {
     Concentric,
     Equal,
     Fix,
+    Collinear,
+    Smooth,
+    Symmetric,
+    DelConstraint,
+    Parameters,
     Measure,
     Distance,
     Area,
@@ -678,7 +683,9 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
                 LayerFreeze => pen.text(x, y, "❄", 9.0, Color32::from_rgb(0x9f, 0xd4, 0xff)),
                 LayerLock => pen.rect(x - 3.0, y - 1.0, 6.0, 5.0, Color32::from_rgb(0xe6, 0xb4, 0x3c)),
                 LayerMatch => pen.la(x - 4.0, y, x + 4.0, y),
-                MakeCurrent => pen.text(x, y, "✓", 9.0, Color32::from_rgb(0x6f, 0xe0, 0x6f)),
+                // Drawn rather than a "✓" glyph: no bundled font has U+2713, and a missing
+                // glyph panics under epaint's strict policy when no system font supplies one.
+                MakeCurrent => pen.poly(&[(x - 3.0, y), (x - 1.0, y + 2.0), (x + 3.0, y - 2.5)], false, Color32::from_rgb(0x6f, 0xe0, 0x6f)),
                 _ => {
                     pen.arc(x, y, 3.5, 90.0, 360.0, a);
                 }
@@ -824,6 +831,34 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
             pen.fill_rect(7.0, 11.0, 10.0, 9.0, Color32::from_rgb(0xe6, 0xb4, 0x3c));
             pen.arc(12.0, 11.0, 4.0, 0.0, 180.0, Color32::from_rgb(0xe6, 0xb4, 0x3c));
         }
+        Collinear => {
+            pen.l(3.0, 19.0, 9.0, 15.0);
+            pen.la(12.0, 13.0, 21.0, 7.0);
+        }
+        Smooth => {
+            // A line running into an arc without a corner.
+            pen.l(3.0, 18.0, 11.0, 18.0);
+            pen.arc(11.0, 10.0, 8.0, -90.0, 0.0, a);
+            pen.dot(11.0, 18.0);
+        }
+        Symmetric => {
+            pen.poly(&[(9.0, 5.0), (4.0, 12.0), (9.0, 19.0)], false, b);
+            pen.poly(&[(15.0, 5.0), (20.0, 12.0), (15.0, 19.0)], false, b);
+            for y in [3.0, 9.0, 15.0] {
+                pen.la(12.0, y, 12.0, y + 4.0);
+            }
+        }
+        DelConstraint => {
+            let lock = alpha(Color32::from_rgb(0xe6, 0xb4, 0x3c));
+            pen.fill_rect(3.0, 12.0, 9.0, 8.0, lock);
+            pen.arc(7.5, 12.0, 3.5, 0.0, 180.0, lock);
+            pen.l(15.0, 13.0, 21.0, 19.0);
+            pen.l(21.0, 13.0, 15.0, 19.0);
+        }
+        Parameters => {
+            pen.rect(3.0, 4.0, 18.0, 16.0, b);
+            pen.text(12.0, 12.0, "fx", 10.0, a);
+        }
         Coincident => {
             pen.l(3.0, 20.0, 12.0, 12.0);
             pen.l(12.0, 12.0, 21.0, 18.0);
@@ -934,8 +969,8 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, tooltip: &str, selected:
 pub fn describe_control(ui: &egui::Ui, response: &egui::Response, label: &str, selected: Option<bool>, tab: bool) {
     let label = crate::i18n::t(label);
     response.widget_info(|| match selected {
-        Some(selected) => egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), selected, label),
-        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label),
+        Some(selected) => egui::WidgetInfo::selected(egui::Role::Button, response.enabled(), selected, label),
+        None => egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label),
     });
     if tab {
         ui.ctx().accesskit_node_builder(response.id, |node| {

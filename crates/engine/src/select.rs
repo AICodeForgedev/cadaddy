@@ -209,6 +209,21 @@ pub(crate) fn pick_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<S
     best.map(|(_, h)| h)
 }
 
+/// Every entity within `aperture` of `p`, nearest first and topmost among equals (so the first is
+/// what [`pick`] chooses): the objects selection cycling lists.
+pub fn pick_all(d: &Drawing, space: &Space, p: Vec2, aperture: f64) -> Vec<Handle> {
+    let ix = spatial::index(d, space);
+    let probe = Bounds2::new(p, p).expand(aperture);
+    let Some(cands) = candidates(d, space, &ix, &probe.expand(aperture), true, true) else { return Vec::new() };
+    let mut hits: Vec<(f64, Handle)> = cands
+        .filter(|(e, known)| selectable(d, e) && (is_infinite(e) || bounds_of(d, e, *known).expand(aperture).intersects(&probe)))
+        .map(|(e, _)| (entity_distance(d, e, p, aperture / 4.0), e.handle))
+        .filter(|(dist, _)| *dist <= aperture)
+        .collect();
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    hits.into_iter().map(|(_, h)| h).collect()
+}
+
 /// Whether PREVIEWFILTER keeps `e` from being highlighted under the cursor: bits 1 objects on
 /// locked layers, 2 xrefs, 4 tables, 8 multiline text, 16 hatches, 32 objects in groups.
 pub fn preview_filtered(d: &Drawing, e: &Entity, filter: u8) -> bool {
@@ -419,7 +434,7 @@ impl SelectMode {
         };
         match last {
             None => Prompt::new(first, Accept::POINT),
-            Some(p) if self.is_box() => Prompt::new(next, Accept::POINT).base(p),
+            Some(p) if self.is_box() => Prompt::new(next, Accept::POINT).corner(p),
             Some(p) => Prompt::new(next, Accept::POINT).kw(&["Undo"]).base(p),
         }
     }

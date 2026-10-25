@@ -27,6 +27,11 @@ pub const MAX_PARAMS: usize = 4000;
 pub const MAX_SPLINE_POINTS: usize = 500;
 /// Most characteristic points of a block reference used as rigid constraint points.
 pub const MAX_RIGID_POINTS: usize = 256;
+/// Block members examined when sampling rigid points, counting those that contribute none, so a
+/// block padded with point-less entities cannot make sampling (repeated per Insert) unbounded.
+const MAX_RIGID_MEMBERS: usize = 100_000;
+/// Shared across every model built for one analysis request.
+pub(crate) const MAX_RIGID_WORK: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shape {
@@ -74,6 +79,21 @@ pub(crate) struct Model {
     rigid: HashMap<Handle, Vec<Vec2>>,
 }
 
+impl Model {
+    /// Work for a spline that an endpoint residual actually reconstructs. Fit interpolation
+    /// uses dense Gaussian elimination (cubic); control splines clone and evaluate their template.
+    pub(crate) fn spline_reconstruct_cost(&self, handle: Handle) -> f64 {
+        let Some(s) = self.splines.get(&handle) else { return 0.0 };
+        let n = s.fit.len() as f64;
+        if fit_mode(s) {
+            n * n * n
+        } else {
+            let n = s.control.len() as f64;
+            n * n
+        }
+    }
+}
+
 /// Can this entity take part in constraints?
 pub fn supported(kind: &EntityKind) -> bool {
     matches!(
@@ -93,13 +113,26 @@ pub fn supported(kind: &EntityKind) -> bool {
 /// centres, vertices, nested insertion points) of the block's own objects, at most
 /// [`MAX_RIGID_POINTS`]. Nested blocks are not entered.
 pub fn rigid_points(d: &Drawing, ins: &Insert) -> Vec<Vec2> {
+    let mut members_left = MAX_RIGID_MEMBERS;
+    rigid_points_budgeted(d, ins, &mut members_left)
+}
+
+/// Sample finite block points within per-insert and caller-shared member limits.
+/// Members that contribute no points still consume traversal work; nested blocks are not entered.
+fn rigid_points_budgeted(d: &Drawing, ins: &Insert, members_left: &mut usize) -> Vec<Vec2> {
     let Some(block) = d.block(&ins.block) else { return Vec::new() };
     let m = ins.transform(block.base.xy());
     let mut out = Vec::new();
+    // Bound the members examined, not only the points collected: entities that contribute no
+    // points (Text, Ray, …) still cost traversal, so a block full of them — scanned again for
+    // every Insert — would otherwise be unbounded (CWE-407).
+    let mut examined = 0usize;
     for e in block.entities.iter() {
-        if out.len() >= MAX_RIGID_POINTS {
+        examined += 1;
+        if out.len() >= MAX_RIGID_POINTS || examined > MAX_RIGID_MEMBERS || *members_left == 0 {
             break;
         }
+        *members_left -= 1;
         let pts: Vec<Vec2> = match &e.kind {
             EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
             EntityKind::Arc(a) => {
@@ -152,6 +185,12 @@ fn fit_mode(s: &GSpline) -> bool {
 impl Model {
     /// Build a model for the given entities. Unsupported or missing entities are skipped.
     pub fn build(d: &Drawing, handles: &[Handle]) -> Model {
+        let mut members_left = MAX_RIGID_WORK;
+        Self::build_budgeted(d, handles, &mut members_left)
+    }
+
+    /// Build solver parameters for supported entities while sharing rigid-member sampling work with other models.
+    pub(crate) fn build_budgeted(d: &Drawing, handles: &[Handle], members_left: &mut usize) -> Model {
         let mut m = Model::default();
         for &h in handles {
             if m.index.contains_key(&h) {
@@ -208,12 +247,15 @@ impl Model {
                     // fit point; a control polygon's ends are its first and last points when the
                     // knots are clamped.
                     let ends = !sp.closed && (fit || (clamped(sp, false) && clamped(sp, true)));
-                    m.splines.insert(h, sp.clone());
+                    // Missing weights default to 1 in eval; only excess weights are unused.
+                    let mut kept = sp.clone();
+                    kept.weights.truncate(kept.control.len());
+                    m.splines.insert(h, kept);
                     Shape::Spline { n, fit, ends }
                 }
                 EntityKind::Insert(ins) => {
                     let base = Vec2::new(ins.insert.x, ins.insert.y);
-                    let pts: Vec<Vec2> = rigid_points(d, ins).into_iter().map(|p| (p - base).rotate(-ins.rotation)).collect();
+                    let pts: Vec<Vec2> = rigid_points_budgeted(d, ins, members_left).into_iter().map(|p| (p - base).rotate(-ins.rotation)).collect();
                     m.x0.extend([ins.insert.x, ins.insert.y, ins.rotation]);
                     let n = pts.len();
                     m.rigid.insert(h, pts);
@@ -571,5 +613,62 @@ impl Model {
             }
         }
         moved
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use cadcraft_doc::{Block, Common, Entity, Line, Space};
+    use cadcraft_geom::Vec3;
+    use std::sync::Arc;
+
+    /// Writing an unchanged model back leaves partial rational weights and the original spline geometry intact.
+    #[test]
+    fn write_back_keeps_partial_rational_weights() {
+        let mut drawing = Drawing::default();
+        let mut spline = GSpline::from_control(vec![Vec2::ZERO, Vec2::new(1.0, 2.0), Vec2::new(3.0, 0.0)], 2);
+        spline.weights = vec![2.0, 0.5];
+        let h = drawing.add(&Space::Model, Common::default(), EntityKind::Spline(spline.clone())).unwrap();
+        let model = Model::build(&drawing, &[h]);
+        model.write_back(&mut drawing, &model.x0);
+        let EntityKind::Spline(after) = &drawing.entity(h).unwrap().kind else { panic!("spline") };
+        assert_eq!(after.weights, spline.weights);
+        for i in 0..=10 {
+            assert!(after.eval(i as f64 / 10.0).near(spline.eval(i as f64 / 10.0), 1e-12));
+        }
+    }
+
+    /// A second model receives no sampled block points after the first model spends the shared member budget.
+    #[test]
+    fn rigid_sampling_budget_is_shared_between_models() {
+        let mut d = Drawing::default();
+        let mut block = Block::new("BAR");
+        for _ in 0..3 {
+            block.entities.push(Entity {
+                handle: d.new_handle(),
+                common: Common::default(),
+                kind: EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 0.0, 0.0) }),
+            });
+        }
+        d.blocks.insert("BAR".into(), Arc::new(block));
+        let ins = Insert {
+            block: "BAR".into(),
+            insert: Vec3::ZERO,
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        };
+        let h = d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+        let mut budget = 2;
+        let first = Model::build_budgeted(&d, &[h], &mut budget);
+        assert_eq!(first.rigid[&h].len(), 4);
+        assert_eq!(budget, 0);
+        let next = Model::build_budgeted(&d, &[h], &mut budget);
+        assert!(next.rigid[&h].is_empty());
     }
 }

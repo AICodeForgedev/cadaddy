@@ -182,7 +182,7 @@ fn with_assoc(k: EntityKind, assoc: Vec<DimAssoc>) -> EntityKind {
     }
 }
 
-/// Angular dimension between two lines, attached to them (vertex = their intersection).
+/// Two-line angular dimension (type 2) between two lines, attached to them.
 fn angular_from_lines(s: &Session, h1: Handle, h2: Handle, at: Vec2) -> Option<EntityKind> {
     let d = s.doc().ok()?;
     let line = |h: Handle| match &d.entity(h)?.kind {
@@ -200,13 +200,18 @@ fn angular_from_lines(s: &Session, h1: Handle, h2: Handle, at: Vec2) -> Option<E
     };
     let (p1, s1) = pick(a1, a2, AssocSnap::Start, AssocSnap::End);
     let (p2, s2) = pick(b1, b2, AssocSnap::Start, AssocSnap::End);
-    let k = dim(s, DimKind::Angular3P, at, p1, p2, v, Vec2::ZERO, "");
+    // A two-line angular dimension (type 2): line 1 is p13 -> p14, line 2 is defpt -> p15, p16 is on the arc.
+    // The picked leg end goes last in each pair, so the renderer measures between p14 and p15.
+    let (o1, t1) = if s1 == AssocSnap::Start { (a2, AssocSnap::End) } else { (a1, AssocSnap::Start) };
+    let (o2, t2) = if s2 == AssocSnap::Start { (b2, AssocSnap::End) } else { (b1, AssocSnap::Start) };
+    let k = dim(s, DimKind::Angular, o2, o1, p1, p2, at, "");
     let mut assoc = Vec::new();
     if assoc_enabled(s) {
         assoc = vec![
-            DimAssoc { point: "p13".into(), handle: h1, snap: s1 },
-            DimAssoc { point: "p14".into(), handle: h2, snap: s2 },
-            DimAssoc { point: "p15".into(), handle: h1, snap: AssocSnap::Intersection { other: h2 } },
+            DimAssoc { point: "p13".into(), handle: h1, snap: t1 },
+            DimAssoc { point: "p14".into(), handle: h1, snap: s1 },
+            DimAssoc { point: "defpt".into(), handle: h2, snap: t2 },
+            DimAssoc { point: "p15".into(), handle: h2, snap: s2 },
         ];
     }
     Some(with_assoc(k, assoc))
@@ -260,18 +265,16 @@ fn radial(s: &mut Session, p: &Value, diameter: bool) -> Result<Value> {
         dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
     };
     let k = match at {
-        Some(at) => text_inside(k, c, c.dist(pt), at),
+        Some(at) => text_at(k, at),
         None => k,
     };
     Ok(json!({ "handle": add_dim(s, k)?.hex() }))
 }
 
-/// A radius/diameter dimension line location picked inside the circle puts the text there, on
-/// the dimension line (outside, the text keeps its default place beyond the arrowhead).
-fn text_inside(mut k: EntityKind, c: Vec2, r: f64, at: Vec2) -> EntityKind {
-    if let EntityKind::Dimension(d) = &mut k
-        && at.dist(c) < r
-    {
+/// The dimension line location of a radius/diameter dimension puts the text there, inside or
+/// outside the circle, as a user-positioned text (DXF flag 70 bit 128), like AutoCAD.
+fn text_at(mut k: EntityKind, at: Vec2) -> EntityKind {
+    if let EntityKind::Dimension(d) = &mut k {
         d.text_mid = v3(at);
         d.user_text_pos = true;
     }
@@ -429,13 +432,13 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     let d = s.doc().ok()?;
     let cur = d.header.str("CMLEADERSTYLE", "Standard");
     let st = d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&cur)).or(d.mleader_styles.first()).cloned().unwrap_or_default();
-    // An annotative style's sizes are paper sizes: the annotation scale applies when drawn.
-    let k = if st.annotative { 1.0 } else { d.header.f64("DIMSCALE", 1.0) };
-    let th = st.text_height * k;
+    // The style's sizes are the drawn sizes: a multileader style has no scale of its own and
+    // DIMSCALE (a dimension-style setting) does not apply, as in AutoCAD.
+    let th = st.text_height;
     let dir = if arrow_pts.first().is_some_and(|a| a.x > landing_pt.x) { -1.0 } else { 1.0 };
     let attach = if dir > 0.0 { 4 } else { 6 };
-    let dogleg = if landing { st.dogleg * k } else { 0.0 };
-    let tpos = *landing_pt + Vec2::new((dogleg + st.landing_gap * k) * dir, 0.0);
+    let dogleg = if landing { st.dogleg } else { 0.0 };
+    let tpos = *landing_pt + Vec2::new((dogleg + st.landing_gap) * dir, 0.0);
     Some(EntityKind::MLeader(MLeader {
         leaders: vec![arrow_pts.iter().map(|p| v3(*p)).collect()],
         landing: v3(*landing_pt),
@@ -453,7 +456,7 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
             columns: None,
         }),
         style: st.name.clone(),
-        arrow_size: st.arrow_size * k,
+        arrow_size: st.arrow_size,
         spline: false,
         block: None,
     }))
@@ -894,7 +897,7 @@ fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
 }
 
 /// The straight or curved piece of `h` picked at `p`: a line, an arc, or the polyline segment nearest `p`.
-fn segment_at(s: &Session, h: Handle, p: Vec2) -> Option<Segment> {
+pub(super) fn segment_at(s: &Session, h: Handle, p: Vec2) -> Option<Segment> {
     match &s.doc().ok()?.entity(h)?.kind {
         EntityKind::Line(l) => Some(Segment::Line(cadcraft_geom::Line::new(l.a.xy(), l.b.xy()))),
         EntityKind::Arc(a) => Some(Segment::Arc { arc: cadcraft_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end), ccw: true }),
@@ -1106,7 +1109,7 @@ impl RadialM {
         } else {
             dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, pt, Vec2::ZERO, "")
         });
-        text_inside(k, c, r, at)
+        text_at(k, at)
     }
 }
 

@@ -12,6 +12,7 @@ use super::machines::number;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+pub(crate) mod breakline;
 pub(crate) mod mline;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -133,6 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(CenterM { first: None, mark: false }))),
     ];
     v.extend(mline::specs());
+    v.extend(breakline::specs());
     v
 }
 
@@ -217,7 +219,7 @@ impl ArcV {
             ArcV::Sea => &[(S, Ask::Point), (E, Ask::Point), (A, Ask::Angle(0))],
             ArcV::Sed => &[(S, Ask::Point), (E, Ask::Point), ("Specify tangent direction for the start point of arc", Ask::Angle(0))],
             ArcV::Ser => &[(S, Ask::Point), (E, Ask::Point), ("Specify radius of arc", Ask::Dist(1))],
-            ArcV::Cse => &[(C, Ask::Point), (S, Ask::Point), (E, Ask::Point)],
+            ArcV::Cse => &[(C, Ask::Point), (S, Ask::Point), ("Specify end point of arc (hold Ctrl to switch direction)", Ask::Point)],
             ArcV::Csa => &[(C, Ask::Point), (S, Ask::Point), (A, Ask::Sweep(0, 1))],
             ArcV::Csl => &[(C, Ask::Point), (S, Ask::Point), (L, Ask::Dist(1))],
             ArcV::CircleCd => &[("Specify center point for circle", Ask::Point), ("Specify diameter of circle", Ask::Dist(0))],
@@ -231,7 +233,7 @@ impl ArcV {
             ],
         }
     }
-    fn build(self, v: &[Val]) -> Option<EntityKind> {
+    fn build(self, v: &[Val], ctrl: bool) -> Option<EntityKind> {
         let p = |i: usize| v.get(i).and_then(|x| x.p());
         let n = |i: usize| v.get(i).and_then(|x| x.n());
         let a = match self {
@@ -243,7 +245,14 @@ impl ArcV {
             ArcV::Sea => curves::arc_sea(p(0)?, p(1)?, n(2)?),
             ArcV::Sed => curves::arc_sed(p(0)?, p(1)?, Vec2::from_angle(n(2)?)),
             ArcV::Ser => curves::arc_ser(p(0)?, p(1)?, n(2)?),
-            ArcV::Cse => Some(Arc::from_start_center_end(p(1)?, p(0)?, p(2)?)),
+            // Center, Start, End. Ctrl keeps the two endpoints on the circle and walks the
+            // other way around: swapping the start/end angles is the mirror arc through the
+            // same two endpoints. (Continue below flips differently, by negating the start
+            // tangent; both are "reverse", but only here is the chord fixed by the picks.)
+            ArcV::Cse => {
+                let a = Arc::from_start_center_end(p(1)?, p(0)?, p(2)?);
+                Some(if ctrl { Arc::new(a.center, a.radius, a.end, a.start) } else { a })
+            }
             ArcV::Csa => curves::arc_sca(p(1)?, p(0)?, n(2)?),
             ArcV::Csl => curves::arc_scl(p(1)?, p(0)?, n(2)?),
             ArcV::CircleCd => {
@@ -338,6 +347,11 @@ impl Interactive for SeqM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some((st, dir)) = self.cont {
+            // Ctrl flips the arc: negating the start tangent makes `arc_sed` pick the mirror
+            // arc (same two points and center, opposite sweep). `ctrl_down` comes from the
+            // UI's per-frame write on `Session`; the `Input` enum itself stays free of
+            // modifiers so it remains UI-agnostic.
+            let dir = if s.ctrl_down { -dir } else { dir };
             return match i {
                 Input::Point(e) => {
                     let a = curves::arc_sed(st, e, dir).ok_or_else(|| other("Invalid end point."))?;
@@ -380,7 +394,7 @@ impl Interactive for SeqM {
         if self.vals.len() < self.v.steps().len() {
             return Ok(Step::Continue);
         }
-        match self.v.build(&self.vals) {
+        match self.v.build(&self.vals, s.ctrl_down) {
             Some(k) => {
                 if let EntityKind::Circle(c) = &k {
                     let r = c.radius;
@@ -397,8 +411,9 @@ impl Interactive for SeqM {
             }
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
         if let Some((st, d)) = self.cont {
+            let d = if s.ctrl_down { -d } else { d };
             return curves::arc_sed(st, c, d).map(|a| vec![arc(&a)]).unwrap_or_default();
         }
         let Some((_, ask)) = self.ask() else { return Vec::new() };
@@ -407,7 +422,7 @@ impl Interactive for SeqM {
         vals.push(v);
         let mut out: Vec<EntityKind> = self.base().map(|b| vec![line(b, c)]).unwrap_or_default();
         if vals.len() == self.v.steps().len() {
-            out.extend(self.v.build(&vals));
+            out.extend(self.v.build(&vals, s.ctrl_down));
         }
         out
     }
@@ -460,7 +475,10 @@ fn run_arc_continue(s: &mut Session, p: &Value) -> Result<Value> {
         _ => curves::last_curve_end(s).ok_or_else(|| bad("arc.continue", "no line or arc to continue from"))?,
     };
     let a = curves::arc_sed(st, e, dir).ok_or_else(|| bad("arc.continue", "end point is on the tangent line"))?;
-    added(s.add_entity(arc(&a))?)
+    let h = s.add_entity(arc(&a))?;
+    // The next continuation starts where this arc was drawn to, not at its stored CCW end.
+    s.last_point = e;
+    added(h)
 }
 
 #[derive(Default)]
@@ -485,6 +503,8 @@ impl Interactive for ArcContinueM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         let Some((st, dir)) = self.from else { return Ok(Step::Cancel) };
+        // Ctrl flips the direction, exactly as in `SeqM::input`.
+        let dir = if s.ctrl_down { -dir } else { dir };
         match i {
             Input::Point(e) => {
                 let a = curves::arc_sed(st, e, dir).ok_or_else(|| other("Invalid end point."))?;
@@ -495,8 +515,14 @@ impl Interactive for ArcContinueM {
             _ => Err(other("Point required.")),
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        self.from.and_then(|(st, d)| curves::arc_sed(st, c, d)).map(|a| vec![arc(&a)]).unwrap_or_default()
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        self.from
+            .and_then(|(st, dir)| {
+                let dir = if s.ctrl_down { -dir } else { dir };
+                curves::arc_sed(st, c, dir)
+            })
+            .map(|a| vec![arc(&a)])
+            .unwrap_or_default()
     }
 }
 
@@ -575,7 +601,7 @@ impl Interactive for TanCircleM {
                 1 => Prompt::new("Specify point on object for second tangent of circle", Accept::POINT),
                 _ => {
                     let r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
-                    let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base_opt(self.picks.last().map(|x| x.1));
+                    let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base_opt(self.picks.last().map(|x| x.1)).distance();
                     if r > 0.0 { p.default(format!("{r:.4}")) } else { p }
                 }
             }
@@ -1057,7 +1083,9 @@ impl Interactive for RevcloudM {
         let first_kw: &[&str] = &["Arc length", "Object", "Rectangular", "Polygonal", "Freehand", "Style"];
         match (self.kind, self.pts.len()) {
             (CloudKind::Rect, 0) => Prompt::new("Specify first corner point", Accept::POINT).kw(first_kw).default("Object"),
-            (CloudKind::Rect, _) => Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()),
+            (CloudKind::Rect, _) => {
+                Prompt { corner: true, ..Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()) }
+            }
             (CloudKind::Poly, 0) => Prompt::new("Specify start point", Accept::POINT).kw(first_kw).default("Object"),
             (CloudKind::Poly, 1) => Prompt::new("Specify next point", Accept::POINT).base_opt(self.pts.last().copied()),
             (CloudKind::Poly, _) => Prompt::new("Specify next point", Accept::POINT).kw(&["Undo"]).base_opt(self.pts.last().copied()),
@@ -1555,8 +1583,12 @@ fn rect_kind(first: Vec2, w: f64, h: f64, rot: f64, fillet: f64, chamfer: (f64, 
     k
 }
 
+/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
+/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
 pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("rectang", p, "p1")?;
+    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
+    let centered = bool_or(p, "center", false);
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let ch = p
         .get("chamfer")
@@ -1592,17 +1624,18 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         let b = point_req("rectang", p, "p2")?;
         let loc = (b - a).rotate(-rot);
-        (loc.x, loc.y)
+        // In centre mode the picked point is one corner, mirrored across the centre.
+        if centered { (2.0 * loc.x, 2.0 * loc.y) } else { (loc.x, loc.y) }
     };
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }
-    let k = rect_kind(a, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
+    let first = if centered { a - Vec2::new(w / 2.0, h / 2.0).rotate(rot) } else { a };
+    let k = rect_kind(first, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
+    // A rectangle has its own thickness option and does not take THICKNESS.
     let th = f64_or(p, "thickness", 0.0);
-    if th != 0.0 {
-        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
-    }
+    s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
     added(hd)
 }
 
@@ -1628,6 +1661,8 @@ enum RAsk {
 #[derive(Default)]
 pub(crate) struct RectM2 {
     first: Option<Vec2>,
+    /// The first point is the rectangle's centre (the `Center` option), not a corner.
+    center: bool,
     fillet: f64,
     chamfer: (f64, f64),
     width: f64,
@@ -1640,23 +1675,35 @@ pub(crate) struct RectM2 {
 }
 
 impl RectM2 {
+    /// Adds the rectangle of full size `w` × `h` with the collected options, drawing it from
+    /// the centre when centre mode is on, then applies the requested thickness.
     fn make(&self, s: &mut Session, w: f64, h: f64) -> Result<Step> {
         let Some(a) = self.first else { return Ok(Step::Cancel) };
         if w.abs() < 1e-12 || h.abs() < 1e-12 {
             return Err(other("The rectangle has no area."));
         }
-        let hd = s.add_entity(rect_kind(a, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
-        if self.thickness != 0.0 {
-            let t = self.thickness;
-            s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
-        }
+        let first = self.origin(w, h).unwrap_or(a);
+        let hd = s.add_entity(rect_kind(first, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
+        let t = self.thickness;
+        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
         Ok(Step::Done)
     }
+    /// The rectangle's local origin (the corner `rect_kind` draws from) for a size: the first
+    /// point itself as a corner, or the first point less half the size around the centre.
+    fn origin(&self, w: f64, h: f64) -> Option<Vec2> {
+        let a = self.first?;
+        Some(if self.center { a - Vec2::new(w / 2.0, h / 2.0).rotate(self.rotation) } else { a })
+    }
+    /// The rectangle's signed full size implied by the picked point `p`: explicit `dims` only
+    /// take their quadrant from `p`, otherwise `p` is a corner, doubled about the centre in
+    /// centre mode.
     fn other_corner(&self, p: Vec2) -> Option<(f64, f64)> {
         let a = self.first?;
         let loc = (p - a).rotate(-self.rotation);
         Some(match self.dims {
             Some((l, w)) => (if loc.x < 0.0 { -l } else { l }, if loc.y < 0.0 { -w } else { w }),
+            // In centre mode the picked point is one corner, mirrored across the centre.
+            None if self.center => (2.0 * loc.x, 2.0 * loc.y),
             None => (loc.x, loc.y),
         })
     }
@@ -1666,6 +1713,8 @@ impl Interactive for RectM2 {
     fn name(&self) -> &'static str {
         "RECTANG"
     }
+    /// Asks for the pending option's value, or for the first and second points; in centre mode
+    /// the first prompt asks for the centre instead of a corner.
     fn prompt(&self, _s: &Session) -> Prompt {
         let num = |m: &str, d: f64| Prompt::new(m, Accept::NUMBER).default(format!("{d:.4}"));
         if let Some(a) = self.asking {
@@ -1691,10 +1740,15 @@ impl Interactive for RectM2 {
             };
         }
         match self.first {
-            None => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Chamfer", "Elevation", "Fillet", "Thickness", "Width"]),
-            Some(p) => Prompt::new("Specify other corner point", Accept::POINT).kw(&["Area", "Dimensions", "Rotation"]).base(p),
+            None => {
+                let msg = if self.center { "Specify center point for rectangle" } else { "Specify first corner point" };
+                Prompt::new(msg, Accept::POINT).kw(&["Chamfer", "CEnter", "Elevation", "Fillet", "Thickness", "Width"])
+            }
+            Some(p) => Prompt::new("Specify other corner point", Accept::POINT).kw(&["Area", "Dimensions", "Rotation"]).corner(p),
         }
     }
+    /// Consumes one input: option keywords (`Center` only switches the first point's meaning
+    /// to the centre and asks nothing), option values, and the points that size the rectangle.
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(a) = self.asking {
             let val = |i: &Input, default: f64| -> Result<f64> {
@@ -1768,6 +1822,11 @@ impl Interactive for RectM2 {
         }
         match i {
             Input::Keyword(k) => {
+                // `Center` only switches the first point's meaning; it asks nothing.
+                if k == "CEnter" {
+                    self.center = true;
+                    return Ok(Step::Continue);
+                }
                 self.asking = Some(match k.as_str() {
                     "Chamfer" => RAsk::Chamfer1,
                     "Elevation" => RAsk::Elevation,
@@ -1794,12 +1853,14 @@ impl Interactive for RectM2 {
             _ => Ok(Step::Continue),
         }
     }
+    /// The rubber-band rectangle for the cursor at `c`, mapped through the same size-and-origin
+    /// rules as the committed entity so centre mode previews where it will land.
     fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
         if self.asking.is_some() {
             return Vec::new();
         }
-        match (self.first, self.other_corner(c)) {
-            (Some(a), Some((w, h))) if w.abs() > 1e-12 && h.abs() > 1e-12 => {
+        match self.other_corner(c).and_then(|(w, h)| self.origin(w, h).map(|a| (a, w, h))) {
+            Some((a, w, h)) if w.abs() > 1e-12 && h.abs() > 1e-12 => {
                 vec![rect_kind(a, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation)]
             }
             _ => Vec::new(),

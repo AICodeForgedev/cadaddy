@@ -1,4 +1,4 @@
-//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, CHSPACE,
+//! Modify menu depth (M2): PEDIT, LENGTHEN, ALIGN, BLEND, REVERSE, SPLINEDIT, NCOPY, MOCORO, CHSPACE,
 //! FLATTEN, plus the fillet/trim/extend extensions used by modify.rs (arcs, polylines,
 //! ellipses and splines).
 
@@ -16,7 +16,8 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod curve_edits;
 mod fillet_pline;
-pub(crate) use curve_edits::join_curves;
+mod mocoro;
+pub(crate) use curve_edits::{closed_kind, join_close, join_curves};
 pub(crate) use fillet_pline::{ChamferDistances, fillet_pline};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -61,6 +62,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Modify", "Copy Nested Objects"])
             .params("{handle (block reference), pick?: [x,y] (nearest nested object; default all), delta? | from,to}")
             .interactive(|_| Ok(Box::new(NcopyM::default()))),
+        CommandSpec::new("mocoro", "Move/Copy/Rotate", mocoro::run_mocoro)
+            .menu(&["Tools", "Express Tools", "Move/Copy/Rotate"])
+            .params("{handles?, base: [x,y], ops: [{move: [x,y]} | {copy: [x,y]} | {rotate: degrees} | {scale: factor} | {base: [x,y]}]} → {handles (copies)}")
+            .interactive(|_| Ok(Box::new(mocoro::MocoroM::default()))),
         CommandSpec::new("chspace", "Change Space", run_chspace)
             .menu(&["Modify", "Change Space"])
             .params("{handles?, to?: \"model\" | layout name, viewport?: handle}")
@@ -761,7 +766,13 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
                 return Err(too_short());
             }
             let ne = fixed + dir * nl;
-            Ok(if at_b { line(a, ne) } else { line(ne, b) })
+            let mut out = l.clone();
+            if at_b {
+                out.b = ne.to3(l.b.z);
+            } else {
+                out.a = ne.to3(l.a.z);
+            }
+            Ok(EntityKind::Line(out))
         }
         EntityKind::Arc(ar) => {
             let g = Arc::new(ar.center.xy(), ar.radius, ar.start, ar.end);
@@ -782,7 +793,8 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
             if !(ns > 1e-12 && ns < TAU - 1e-9) {
                 return Err(other("The new arc would be zero length or a full circle."));
             }
-            Ok(if at_end { arc(&Arc::new(g.center, g.radius, g.start, g.start + ns)) } else { arc(&Arc::new(g.center, g.radius, g.end - ns, g.end)) })
+            let na = if at_end { Arc::new(g.center, g.radius, g.start, g.start + ns) } else { Arc::new(g.center, g.radius, g.end - ns, g.end) };
+            Ok(EntityKind::Arc(cadcraft_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
         }
         EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 2 => {
             let total = Polyline { vertices: p.vertices.clone(), closed: false }.len();

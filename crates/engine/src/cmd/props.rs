@@ -11,12 +11,12 @@ use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Result, Session};
+use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
@@ -30,8 +30,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
-        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
+        CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}").interactive(|_| Ok(Box::new(LtscaleM))),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
+        CommandSpec::new("thickness", "Thickness", run_thickness)
+            .menu(&["Format", "Thickness"])
+            .params("{thickness} (THICKNESS: the 3D thickness given to new lines, arcs, circles, points and polylines; may be negative) → {thickness}")
+            .transparent()
+            .interactive(|_| Ok(Box::new(ThicknessM))),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}"),
         CommandSpec::new("style", "Text Style...", run_style)
             .menu(&["Format", "Text Style..."])
@@ -82,6 +87,7 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
         "lineweight": e.common.lineweight.name(),
         "ltscale": e.common.ltscale,
         "transparency": transparency_value(e.common.transparency),
+        "thickness": e.common.thickness,
         "visible": e.common.visible,
     });
     if cadcraft_doc::can_be_annotative(&e.kind)
@@ -185,6 +191,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
+    let thickness = p
+        .get("thickness")
+        .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
+        .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
@@ -203,6 +213,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let dim_over = dim_overrides(p)?;
     let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
@@ -227,6 +238,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if let Some(t) = transparency {
                 e.common.transparency = t;
+            }
+            if let Some(th) = thickness {
+                e.common.thickness = th;
             }
             if let Some(v) = p.get("visible").and_then(Value::as_bool) {
                 e.common.visible = v;
@@ -374,6 +388,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         dm.style.clone_from(st);
                         dm.block = None;
                     }
+                    if !dim_over.is_empty() {
+                        dm.overrides.extend(dim_over.clone());
+                        dm.block = None;
+                    }
                 }
                 EntityKind::Hatch(h) => {
                     if let Some(v) = str_param(p, "pattern") {
@@ -405,7 +423,25 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
-    let d = s.doc_mut()?;
+    set_current_color(s.doc_mut()?, c);
+    ok()
+}
+
+/// `setvar CECOLOR`: the same input as the `color` command, stored the same way.
+pub(crate) fn set_current_color_value(s: &mut Session, v: &Value) -> Option<()> {
+    // An out-of-range index is refused here, where `color` folds it to ByLayer.
+    let c = match v {
+        Value::String(t) => Color::parse(t),
+        Value::Number(n) => n.as_i64().and_then(|i| Color::parse(&i.to_string())),
+        _ => None,
+    }?;
+    set_current_color(s.doc_mut().ok()?, c);
+    Some(())
+}
+
+/// A true colour keeps its RGB in CECOLOR_RGB (which wins for new objects); any other colour must
+/// clear a stale one.
+fn set_current_color(d: &mut cadcraft_doc::Drawing, c: Color) {
     match c {
         Color::True(rgb) => {
             d.header.set_i64("CECOLOR", i64::from(cadcraft_color::nearest_aci(rgb)));
@@ -416,7 +452,6 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.vars.remove("CECOLOR_RGB");
         }
     }
-    ok()
 }
 
 mod linfile;
@@ -469,6 +504,89 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set_f64("LTSCALE", v);
     Ok(json!({ "message": "Regenerating model." }))
+}
+
+/// Typed LTSCALE: "Enter new linetype scale factor <1.0000>:".
+struct LtscaleM;
+
+impl Interactive for LtscaleM {
+    fn name(&self) -> &'static str {
+        "LTSCALE"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| d.header.f64("LTSCALE", 1.0)).unwrap_or(1.0);
+        Prompt::new("Enter new linetype scale factor", Accept::NUMBER).default(format!("{cur:.4}"))
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        let scale = text.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        match scale.map(|v| run_ltscale(s, &json!({ "scale": v }))) {
+            Some(Ok(r)) => {
+                if let Some(m) = r.get("message").and_then(Value::as_str) {
+                    s.echo(m.to_string());
+                }
+                Ok(Step::Done)
+            }
+            _ => {
+                s.echo("Requires a positive number.");
+                Ok(Step::Continue)
+            }
+        }
+    }
+}
+
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
+fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
+    let t = f64_req("thickness", p, "thickness")?;
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
+    }
+    s.doc_mut()?.header.set_f64("THICKNESS", t);
+    Ok(json!({ "thickness": t }))
+}
+
+/// Format > Thickness and typed THICKNESS: "Enter new value for THICKNESS <0.0000>:".
+struct ThicknessM;
+
+impl Interactive for ThicknessM {
+    fn name(&self) -> &'static str {
+        "THICKNESS"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| d.header.f64("THICKNESS", 0.0)).unwrap_or(0.0);
+        Prompt::new("Enter new value for THICKNESS", Accept::NUMBER).default(format!("{cur:.4}"))
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        match super::machines::number(&text) {
+            Some(t) if thickness_in_range(t) => {
+                run_thickness(s, &json!({ "thickness": t }))?;
+                Ok(Step::Done)
+            }
+            Some(_) => {
+                s.echo("Requires a value between -1e12 and 1e12.");
+                Ok(Step::Continue)
+            }
+            None => {
+                s.echo("Requires a number.");
+                Ok(Step::Continue)
+            }
+        }
+    }
 }
 
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
@@ -829,6 +947,26 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimstyle.delete", format!("no dimension style `{name}`")));
     }
     Ok(dimstyles_json(d))
+}
+
+/// A dimension's text height, arrow size, overall scale (DIMSCALE) and precision as Properties
+/// sets them: per-dimension overrides, as in AutoCAD's Properties palette.
+fn dim_overrides(p: &Value) -> Result<serde_json::Map<String, Value>> {
+    let mut o = serde_json::Map::new();
+    for (key, field, zero_ok) in [("textHeight", "textHeight", false), ("arrowSize", "arrowSize", true), ("dimScale", "scale", false)] {
+        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
+            let x = v
+                .as_f64()
+                .filter(|x| x.is_finite() && (*x > 0.0 || (zero_ok && *x == 0.0)))
+                .ok_or_else(|| bad("properties.set", format!("`{key}` must be a positive number")))?;
+            o.insert(field.into(), json!(x));
+        }
+    }
+    if let Some(v) = p.get("precision").filter(|v| !v.is_null()) {
+        let n = v.as_u64().filter(|n| *n <= 8).ok_or_else(|| bad("properties.set", "`precision` must be 0 to 8 decimal places"))?;
+        o.insert("decimals".into(), json!(n));
+    }
+    Ok(o)
 }
 
 /// Per-dimension style overrides (DIMOVERRIDE): merge fields, or `clear` them.

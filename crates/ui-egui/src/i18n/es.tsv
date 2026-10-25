@@ -62,6 +62,7 @@
 	Area	Área
 	Arrange Panel	Organizar panel
 	Array	Matriz
+	Arrow size	Tamaño de flecha
 	Attach	Adjuntar
 	Attach DWG...	Adjuntar DWG...
 	Attribute	Atributo
@@ -139,6 +140,7 @@
 	Close All Other Drawings	Cerrar todos los demás dibujos
 	Close Array Editing	Cerrar la edición de matriz
 	Close Comparison	Cerrar comparación
+	Export Comparison	Exportar comparación
 	Closed	Cerrada
 	Coincident	Coincidente
 	Collapse Palettes	Contraer paletas
@@ -191,6 +193,7 @@
 	Current selection	Selección actual
 	Current: {color}	Actual: {color}
 	Cut	Cortar
+	Cut with Base Point	Cortar con punto base
 	Cyan	Cian
 	Cylinder	Cilindro
 	DWG	DWG
@@ -226,6 +229,7 @@
 	Deselect All	Deseleccionar todo
 	Detach	Desenlazar
 	Diameter	Diámetro
+	Dim scale overall	Escala global de cota
 	Dim style	Estilo de cota
 	Dimension	Acotación
 	Dimension Break	Partir cota
@@ -587,6 +591,7 @@
 	No selection	Sin selección
 	Node	Nodo
 	None	Ninguno
+	Normal	Normal
 	Not Found	No encontrada
 	Not available	No disponible
 	Not available yet	Aún no disponible
@@ -769,6 +774,7 @@
 	Position X	Posición X
 	Position Y	Posición Y
 	Position Z	Posición Z
+	Precision	Precisión
 	Previous	Anterior
 	Previous Layer	Capa anterior
 	Primitives	Primitivas
@@ -825,6 +831,7 @@
 	Rename Text Style	Renombrar estilo de texto
 	Rename...	Renombrar...
 	Repeat {command}	Repetir {command}
+	Replace Block...	Reemplazar bloque...
 	Requires a point (x,y, @dx,dy or @d<a).	Se requiere un punto (x,y, @dx,dy o @d<a).
 	Reset Palettes	Restablecer paletas
 	Restore	Restaurar
@@ -1177,7 +1184,7 @@
 	Viewports	Ventanas gráficas
 	Volume	Volumen
 	W	O
-	WCS ⌄	SCU ⌄
+	WCS	SCU
 	White	Blanco
 	Width factor	Factor de anchura
 	Window	Ventana
@@ -1243,3 +1250,4 @@
 	Search for pattern	Buscar patrón
 	Not a number or distance: {text}	No es un número ni una distancia: {text}
 	Query Texts	Consultar textos
+	Analyze Shapes	Analizar formas

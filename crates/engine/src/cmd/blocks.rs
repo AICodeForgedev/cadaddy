@@ -2,7 +2,7 @@
 //! Block Editor.
 
 pub(crate) mod bedit;
-mod purge;
+pub(in crate::cmd) mod purge;
 
 use std::sync::Arc;
 
@@ -16,6 +16,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod burst;
 mod dyngrip;
 mod extract;
 pub(crate) mod refedit;
@@ -72,27 +73,37 @@ pub fn specs() -> Vec<CommandSpec> {
         battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
+        burst::burst_spec(),
+        blockreplace::blockreplace_spec(),
         extract::dataextraction_spec(),
         extract::eattext_spec(),
     ]
     .into_iter()
+    .chain(attribs::attdisp_menu_specs())
     .chain(xref::specs())
     .chain(refedit::specs())
     .chain(bedit::specs())
     .collect()
 }
 
-fn valid_block_name(n: &str) -> bool {
+pub(crate) fn valid_block_name(n: &str) -> bool {
     !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
 }
 
-/// The block an entity references, when it is a block reference.
+/// The block an entity draws, if any: a block reference's block, a dimension's block or a
+/// multileader's block content.
 fn referenced_block(e: &Entity) -> Option<String> {
-    if let EntityKind::Insert(i) = &e.kind { Some(i.block.clone()) } else { None }
+    match &e.kind {
+        EntityKind::Insert(i) => Some(i.block.clone()),
+        EntityKind::Dimension(dm) => dm.block.clone(),
+        EntityKind::MLeader(m) => m.block.as_ref().map(|b| b.block.clone()),
+        _ => None,
+    }
 }
 
-/// Whether any of `ents` refers to block `name`, directly or through nested block references.
-fn references_block(d: &cadcraft_doc::Drawing, ents: &[Entity], name: &str) -> bool {
+/// Whether any of `ents` refers to block `name`, directly or through nested block references,
+/// dimension blocks and multileader block content.
+pub(crate) fn references_block(d: &cadcraft_doc::Drawing, ents: &[Entity], name: &str) -> bool {
     let mut todo: Vec<String> = ents.iter().filter_map(referenced_block).collect();
     let mut seen = std::collections::HashSet::new();
     while let Some(b) = todo.pop() {
@@ -108,8 +119,41 @@ fn references_block(d: &cadcraft_doc::Drawing, ents: &[Entity], name: &str) -> b
     false
 }
 
+/// What BLOCK does with the selected objects once the block is defined (the dialog's Convert to
+/// block, Retain and Delete).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// Replace the objects by a reference to the new block.
+    Convert,
+    /// Leave the objects in the drawing.
+    Retain,
+    /// Erase the objects.
+    Delete,
+}
+
+impl Keep {
+    /// The `keep` parameter's documented values, in any case; `None` for anything else.
+    pub(crate) fn parse(value: &str) -> Option<Keep> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "convert" => Some(Keep::Convert),
+            "retain" => Some(Keep::Retain),
+            "delete" => Some(Keep::Delete),
+            _ => None,
+        }
+    }
+}
+
+/// The `keep` parameter of `cmd`, `default` when absent. A value that is not documented is an
+/// error (issue #935: a misspelt value used to erase the objects without converting them).
+fn keep_param(cmd: &str, p: &Value, default: Keep) -> Result<Keep> {
+    match str_param(p, "keep") {
+        None => Ok(default),
+        Some(v) => Keep::parse(v).ok_or_else(|| bad(cmd, format!("`keep` must be \"convert\", \"retain\" or \"delete\", not {v:?}"))),
+    }
+}
+
 /// Create a block from entities. Returns the insert handle when converting.
-pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: &str, description: &str) -> Result<Option<Handle>> {
+pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: Keep, description: &str) -> Result<Option<Handle>> {
     if !valid_block_name(name) {
         return Err(bad("block", "invalid block name"));
     }
@@ -136,13 +180,13 @@ pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle],
         b.entities.push(e);
     }
     doc.blocks.insert(name.to_string(), Arc::new(b));
-    if keep != "retain" {
+    if keep != Keep::Retain {
         for h in hs {
             doc.remove_entity(*h);
         }
     }
     s.set_selection(Vec::new());
-    if keep == "convert" {
+    if keep == Keep::Convert {
         let h = insert(s, name, base, 1.0, 0.0, &serde_json::Map::new())?;
         return Ok(Some(h));
     }
@@ -219,8 +263,8 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("block", "`name` is required"))?.to_string();
     let base = point_param(p, "base").unwrap_or(Vec2::ZERO);
     let hs = targets(s, p)?;
-    let keep = str_param(p, "keep").unwrap_or("convert").to_string();
-    let r = make_block(s, &name, base, &hs, &keep, str_param(p, "description").unwrap_or(""))?;
+    let keep = keep_param("block", p, Keep::Convert)?;
+    let r = make_block(s, &name, base, &hs, keep, str_param(p, "description").unwrap_or(""))?;
     // An annotative block: its references (the converted selection too) are annotative.
     if bool_or(p, "annotative", false) {
         let d = s.doc_mut()?;
@@ -495,7 +539,7 @@ impl BlockM {
     fn finish(&mut self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
         let (Some(name), Some(base)) = (self.name.clone(), self.base) else { return Ok(Step::Cancel) };
         // A definition that can't be made (e.g. one that would reference itself) ends the command.
-        let keep = if self.dash { "delete" } else { "convert" };
+        let keep = if self.dash { Keep::Delete } else { Keep::Convert };
         if let Err(e) = make_block(s, &name, base, hs, keep, "") {
             s.echo(e.to_string());
             return Ok(Step::Done);
@@ -843,3 +887,4 @@ impl Interactive for AttdefM {
 
 mod attribs;
 mod battman;
+mod blockreplace;
