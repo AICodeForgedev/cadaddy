@@ -1238,15 +1238,7 @@ fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
         {
             // The TAG attribute holds the device mark text.
             let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
-            if is_circuit_tag(&tag) {
-                // A circuit/panel tag (D-1, DP1-13) labels the wiring, not a device type.
-                *counts.entry(CIRCUIT_TAGS.to_string()).or_default() += 1;
-            } else if !tag.is_empty() {
-                *counts.entry(tag).or_default() += 1;
-            } else {
-                // Symbol without a tag — count as "unknown".
-                *counts.entry("unknown_symbol".to_string()).or_default() += 1;
-            }
+            *counts.entry(tag_bucket(&tag)).or_default() += 1;
         }
     }
     counts
@@ -1377,6 +1369,22 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Bucket for symbols whose tag is a circuit or panel reference rather than a device mark.
 const CIRCUIT_TAGS: &str = "_circuit_tags";
+/// Bucket for symbols whose "tag" can't be a device mark: sheet numbers (S2004), lowercase
+/// switch legs, note words (TYP, GFCI). Reported, never counted as devices.
+const NOT_DEVICE_TAGS: &str = "_not_device_tags";
+
+/// Where a symbol's tag is counted: its device type, or one of the buckets above.
+fn tag_bucket(tag: &str) -> String {
+    if tag.is_empty() {
+        "unknown_symbol".into()
+    } else if is_circuit_tag(tag) {
+        CIRCUIT_TAGS.into()
+    } else if cadaddy_mepfix::sheet_facts::is_type_tag(tag) {
+        tag.into()
+    } else {
+        NOT_DEVICE_TAGS.into()
+    }
+}
 
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
@@ -1401,6 +1409,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut sym_devices = count_symbol_block_devices(s);
     let circuit_tagged = sym_devices.remove(CIRCUIT_TAGS).unwrap_or(0);
     results["circuit_tagged_symbols"] = json!(circuit_tagged);
+    let not_devices = sym_devices.remove(NOT_DEVICE_TAGS).unwrap_or(0);
+    results["non_device_tags"] = json!(not_devices);
     let sym_count: usize = sym_devices.values().sum();
     if sym_count > 0 {
         total_items += sym_count;
@@ -2666,6 +2676,16 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn junk_tags_are_not_device_types() {
+        for (t, want) in [("A", "A"), ("XA", "XA"), ("L4", "L4"), ("EF", "EF"), ("DP2", "DP2"), ("D-1", CIRCUIT_TAGS), ("", "unknown_symbol")] {
+            assert_eq!(super::tag_bucket(t), want, "{t}");
+        }
+        for t in ["S2004", "s", "t", "u", "GFCI", "TYP", "a1", "ABCD"] {
+            assert_eq!(super::tag_bucket(t), NOT_DEVICE_TAGS, "{t}");
+        }
+    }
+
     #[test]
     fn circuit_tags_are_not_device_types() {
         for t in ["D-1", "DP1-13", "DP2-4", "B-12", "A-2"] {
