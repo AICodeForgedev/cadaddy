@@ -229,6 +229,14 @@ fn measuregeom_volume_multiplies_an_area_by_a_height() {
     assert!(has(&log, "Requires a distance."), "{log:?}");
     assert!(s.prompt_text().contains("Specify height"), "{}", s.prompt_text());
 
+    // Enter is not a height; two points give the height as their distance.
+    let (mut s, log) = run(&["measuregeom", "v", "0,0", "4,0", "4,3", "", "", "1,1"]);
+    assert!(has(&log, "Requires a height."), "{log:?}");
+    assert!(s.prompt_text().contains("Specify second point"), "{}", s.prompt_text());
+    s.cmdline("7,9").unwrap();
+    assert!(has(&s.log, "Volume = 60.0000"), "{:?}", s.log);
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+
     // The JSON forms, by points and by handle.
     let mut s = Session::new();
     let r = s.execute("measuregeom", &json!({"mode": "volume", "points": [[0, 0], [4, 0], [4, 3]], "height": 10})).unwrap();

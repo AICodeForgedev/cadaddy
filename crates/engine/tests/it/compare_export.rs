@@ -351,13 +351,197 @@ fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition(
         .unwrap_or_default();
     assert_eq!(drawn, [Some("*D2".to_string())], "the other drawing's PART is copied with its dimension block");
     assert_eq!(ends(&s, "*D2"), vec![5.0]);
-    // The colored copies redraw their dimensions instead of keeping colored copies of `*D` blocks.
+    // The colored copies of PART refer to colored copies of the dimension block, which are
+    // anonymous `*D` blocks of their own, not the originals.
     let d = s.doc().unwrap();
-    let dim_copy = |n: &str| {
-        n.starts_with("COMPARE_")
-            && n.rsplit('_').next().is_some_and(|t| t.len() > 1 && t.starts_with('D') && t[1..].bytes().all(|c| c.is_ascii_digit()))
+    let copies: Vec<String> = d
+        .blocks
+        .values()
+        .filter(|b| b.name.starts_with("COMPARE_"))
+        .flat_map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Dimension(dm) => Some(dm.block.clone().unwrap_or_default()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!copies.is_empty(), "PART has colored copies");
+    for n in &copies {
+        assert!(n.starts_with("*D") && !["*D1", "*D2"].contains(&n.as_str()), "{n} in {copies:?}");
+        assert!(d.block(n).is_some_and(|b| b.anonymous), "{n} is an anonymous block");
+    }
+}
+
+#[test]
+fn a_named_block_whose_dimension_block_has_another_generated_name_keeps_this_drawings_definition() {
+    use cadcraft_engine::doc::{DimKind, Dimension};
+    // PART holds the same dimension in both drawings; the block it draws holds the same line but
+    // is named `*D1` here and `*D3` in the other drawing.
+    let blocks = |drawn_name: &str, first: u64| {
+        let dim = Dimension {
+            kind: DimKind::Linear { rotation: 0.0 },
+            defpt: Vec3::new(15.0, 5.0, 0.0),
+            text_mid: Vec3::new(7.0, 5.0, 0.0),
+            p13: Vec3::ZERO,
+            p14: Vec3::new(30.0, 0.0, 0.0),
+            p15: Vec3::ZERO,
+            p16: Vec3::ZERO,
+            text: String::new(),
+            style: "Standard".into(),
+            measurement: 30.0,
+            text_rotation: 0.0,
+            user_text_pos: false,
+            block: Some(drawn_name.into()),
+            overrides: Default::default(),
+            assoc: Vec::new(),
+            marks: Default::default(),
+        };
+        let mut part = Block::new("PART");
+        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(dim)));
+        let mut drawn = Block::new(drawn_name);
+        drawn.entities.push(Entity::new(Handle(first + 1), line(1.0)));
+        [part, drawn]
     };
-    assert!(!d.blocks.keys().any(|n| dim_copy(n)), "{:?}", d.blocks.keys().collect::<Vec<_>>());
+    let mut s = Session::new();
+    for b in blocks("*D1", 0x700) {
+        s.doc_mut().unwrap().blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+    let mut other = Drawing::new_imperial();
+    other.handseed = 0x9000;
+    for b in blocks("*D3", 0x8000) {
+        other.blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+    s.open_drawing(other, "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    assert!(s.doc().unwrap().block("PART_2").is_none(), "PART draws the same thing in both drawings");
+}
+
+#[test]
+fn a_named_block_whose_line_is_hidden_or_thicker_in_the_other_drawing_shows_the_other_definition() {
+    let run = |theirs: Common| {
+        let part = |common: Common, first: u64| {
+            let mut part = Block::new("PART");
+            let mut e = Entity::new(Handle(first), line(1.0));
+            e.common = common;
+            part.entities.push(e);
+            part
+        };
+        let mut s = Session::new();
+        s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part(Common::default(), 0x700)));
+        s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+        let mut other = Drawing::new_imperial();
+        other.handseed = 0x9000;
+        other.blocks.insert("PART".into(), Arc::new(part(theirs, 0x8000)));
+        other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+        s.open_drawing(other, "Other", None);
+        s.execute("document.switch", &json!({"index": 0})).unwrap();
+        s.execute("compare", &json!({"document": "Other"})).unwrap();
+        s.execute("compareexport", &json!({})).unwrap();
+        s.doc().unwrap().block("PART_2").is_some()
+    };
+    assert!(run(Common { visible: false, ..Common::default() }), "a hidden line");
+    assert!(run(Common { thickness: 2.0, ..Common::default() }), "a line with thickness");
+    assert!(!run(Common::default()), "the same line");
+}
+
+#[test]
+fn a_named_block_with_the_same_relative_image_path_from_another_folder_shows_the_other_definition() {
+    // PART holds an image at `a.png` in both drawings; this drawing is unsaved, the other one is
+    // a file in another folder, so its `a.png` is another file.
+    let part = |first: u64| {
+        let at = serde_json::to_value(Vec3::ZERO).unwrap();
+        let image = serde_json::from_value(json!({"insert": at, "u": at, "v": at, "size": [1.0, 1.0], "path": "a.png"})).unwrap();
+        let mut part = Block::new("PART");
+        part.entities.push(Entity::new(Handle(first), EntityKind::Image(image)));
+        part
+    };
+    let dir = std::env::temp_dir().join("compareexport-image-folder");
+    let mut s = Session::new();
+    s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part(0x700)));
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+    let mut other = Drawing::new_imperial();
+    other.handseed = 0x9000;
+    other.blocks.insert("PART".into(), Arc::new(part(0x8000)));
+    other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+    s.open_drawing(other, "Other", Some(dir.join("other.dxf").to_string_lossy().to_string()));
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let paths: Vec<String> = d
+        .block("PART_2")
+        .map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Image(i) => Some(i.path.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(paths.len(), 1, "the other drawing's PART is copied");
+    assert_eq!(std::path::Path::new(&paths[0]).parent(), Some(std::path::absolute(&dir).unwrap().as_path()));
+}
+
+#[test]
+fn a_dimension_block_copy_keeps_its_geometry_when_the_snapshot_is_saved() {
+    use cadcraft_engine::doc::{DimKind, Dimension};
+    // The dimension's block holds a line its parameters would not draw: a block read from a file.
+    let dim = Dimension {
+        kind: DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::new(15.0, 5.0, 0.0),
+        text_mid: Vec3::new(7.0, 5.0, 0.0),
+        p13: Vec3::ZERO,
+        p14: Vec3::new(30.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 30.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: Some("*D1".into()),
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    let mut s = Session::new();
+    let mut drawn = Block::new("*D1");
+    drawn.entities.push(Entity::new(Handle(0x701), line(123.0)));
+    s.doc_mut().unwrap().blocks.insert("*D1".into(), Arc::new(drawn));
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Dimension(dim)).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let read = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let block = read
+        .model
+        .iter()
+        .find_map(|e| match &e.kind {
+            EntityKind::Dimension(dm) => dm.block.clone(),
+            _ => None,
+        })
+        .unwrap();
+    let ends: Vec<f64> = read
+        .block(&block)
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) => Some(l.b.x),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [123.0], "the saved dimension block is the copy's");
 }
 
 #[test]
@@ -446,6 +630,51 @@ fn colors_carried_apart_from_the_object_color_are_replaced() {
     // This drawing's styles are left as they were.
     assert_eq!(d.table_styles[0].cell_style(CellStyle::DATA).text_color, Color::Index(1));
     assert_eq!(d.dim_style("Standard").unwrap().dim_line_color, Color::Index(1));
+}
+
+#[test]
+fn inline_colors_of_multiline_attributes_are_replaced() {
+    use cadcraft_engine::doc::Attrib;
+    let attrib = |contents: &str| -> Attrib {
+        let at = serde_json::to_value(Vec3::ZERO).unwrap();
+        serde_json::from_value(json!({
+            "tag": "T",
+            "text": {"insert": at, "height": 1.0, "value": "x"},
+            "multiline": {"mtext": {"insert": at, "height": 1.0, "contents": contents}, "readAs": "x"},
+        }))
+        .unwrap()
+    };
+    let mut s = Session::new();
+    let mut part = Block::new("PART");
+    part.entities.push(Entity::new(Handle(0x700), EntityKind::AttDef(attrib("\\C1;x"))));
+    s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part));
+    let reference = Insert { attribs: vec![attrib("\\C3;x")], ..insert("PART") };
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(reference)).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    let r = s.execute("compareexport", &json!({})).unwrap();
+    let multiline = |a: &Attrib| a.multiline.as_ref().map(|m| m.mtext.contents.clone());
+    let mut blocks = Vec::new();
+    for e in members(&s, r["current"].as_str().unwrap()) {
+        if let EntityKind::Insert(i) = &e.kind {
+            assert_eq!(i.attribs.iter().map(multiline).collect::<Vec<_>>(), [Some("x".to_string())], "the reference's attribute");
+            blocks.push(i.block.clone());
+        }
+    }
+    assert_eq!(blocks.len(), 1);
+    let d = s.doc().unwrap();
+    let defs: Vec<Option<String>> = d
+        .block(&blocks[0])
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::AttDef(a) => Some(multiline(a)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(defs, [Some("x".to_string())], "the attribute definition in the recolored block");
 }
 
 #[test]
@@ -573,6 +802,64 @@ fn says_when_blocks_both_drawings_define_differently_were_left_out() {
     s.execute("compare", &json!({"document": "Other"})).unwrap();
     let r = s.execute("compareexport", &json!({})).unwrap();
     assert!(r["message"].as_str().unwrap().contains("some blocks of the other drawing were too many or too large to copy"), "{}", r["message"]);
+}
+
+#[test]
+fn a_dimension_whose_block_is_past_the_nesting_limit_is_drawn_again() {
+    use cadcraft_engine::doc::{DimKind, Dimension, MAX_BLOCK_DEPTH};
+    // B1 holds B2, …, and the innermost block holds a dimension: its `*D1` copy would be past
+    // the nesting limit.
+    let mut s = Session::new();
+    let d = s.doc_mut().unwrap();
+    let mut drawn = Block::new("*D1");
+    drawn.entities.push(Entity::new(Handle(0x600), line(30.0)));
+    d.blocks.insert("*D1".into(), Arc::new(drawn));
+    let dim = Dimension {
+        kind: DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::new(15.0, 5.0, 0.0),
+        text_mid: Vec3::new(7.0, 5.0, 0.0),
+        p13: Vec3::ZERO,
+        p14: Vec3::new(30.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 30.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: Some("*D1".into()),
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    for k in 1..=MAX_BLOCK_DEPTH {
+        let mut b = Block::new(&format!("B{k}"));
+        let kind = if k == MAX_BLOCK_DEPTH { EntityKind::Dimension(dim.clone()) } else { EntityKind::Insert(insert(&format!("B{}", k + 1))) };
+        b.entities.push(Entity::new(Handle(0x700 + k as u64), kind));
+        d.blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(insert("B1"))).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let dims: Vec<Option<String>> = d
+        .blocks
+        .values()
+        .filter(|b| b.name.starts_with("COMPARE_"))
+        .flat_map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Dimension(dm) => Some(dm.block.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // The colored copy keeps no block, so it is drawn in the comparison color, not with `*D1`'s.
+    assert_eq!(dims, [None], "{:?}", d.blocks.keys().collect::<Vec<_>>());
 }
 
 #[test]

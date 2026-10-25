@@ -5,8 +5,9 @@
 //! only in this drawing or changed in it are drawn in the overlay's green, objects only in the
 //! other drawing or changed there in its red, and objects in both in gray (color 8). A block
 //! reference, dimension or multileader refers to a copy of its block whose objects all have that
-//! color (`COMPARE_CURRENT_<name>`, `COMPARE_COMPARED_<name>`, `COMPARE_COMMON_<name>`), and a
-//! table or tolerance uses a recolored copy of its style; xrefs keep their own colors. The new
+//! color (`COMPARE_CURRENT_<name>`, `COMPARE_COMPARED_<name>`, `COMPARE_COMMON_<name>`; for a
+//! dimension's `*D` block, another `*D` block), and a table or tolerance uses a recolored copy
+//! of its style; xrefs keep their own colors. The new
 //! drawing has this drawing's layers, styles and blocks, plus the layers and styles of the other
 //! drawing that this one lacks and the blocks its copied objects refer to; an anonymous block of
 //! the other drawing whose name this one uses is copied under a free name. Relative xref, image
@@ -130,7 +131,7 @@ pub(super) fn rebase_path(p: &mut String, folder: Option<&Path>) {
 }
 
 /// Rebase the file an object refers to: an image's file, a table's data link.
-fn rebase(k: &mut EntityKind, folder: Option<&Path>) {
+pub(super) fn rebase(k: &mut EntityKind, folder: Option<&Path>) {
     match k {
         EntityKind::Image(i) => rebase_path(&mut i.path, folder),
         EntityKind::Table(t) => {
@@ -326,6 +327,34 @@ struct Tinted {
     uncolored: bool,
     /// Objects copied into block definitions so far, counted against [`MAX_COPIED`].
     copied: usize,
+    next: NextFree,
+    /// The drawing's block names in upper case, filled on the first block copy. Only
+    /// [`tinted_block`] adds blocks after that, and it adds their names here too.
+    blocks: Option<HashSet<String>>,
+}
+
+/// The next index to try for each name base. Names are only added while a snapshot is built,
+/// so an index found taken stays taken, and each search starts where the last one for the same
+/// base stopped: a name costs O(1) amortised instead of a scan from 1.
+#[derive(Default)]
+struct NextFree(HashMap<(&'static str, String), usize>);
+
+impl NextFree {
+    /// The first of `name(i)` for `i` from 1 that `taken` doesn't hold, skipping the indices
+    /// earlier searches for `base` in namespace `kind` passed. `n` is how many names there are,
+    /// so one of `name(1)`…`name(n + 1)` is free. The caller adds the returned name.
+    fn find(&mut self, kind: &'static str, base: &str, n: usize, name: impl Fn(usize) -> String, taken: impl Fn(&str) -> bool) -> String {
+        let key = (kind, base.to_ascii_uppercase());
+        let start = self.0.get(&key).copied().unwrap_or(1);
+        let i = (start..=n.saturating_add(1)).find(|&i| !taken(&name(i))).unwrap_or_else(|| n.saturating_add(2).max(start));
+        self.0.insert(key, i.saturating_add(1));
+        name(i)
+    }
+}
+
+/// `base` for 1, `base_2`, `base_3`… after it.
+fn suffixed(base: &str, i: usize) -> String {
+    if i == 1 { base.to_string() } else { format!("{base}_{i}") }
 }
 
 /// The word a comparison color adds to the names of its recolored copies.
@@ -341,10 +370,7 @@ fn tag(color: Color) -> &'static str {
 
 /// `base`, or `base_2`, `base_3`… when `taken` holds that name. `n` is how many names there are.
 fn free_name(base: &str, n: usize, taken: impl Fn(&str) -> bool) -> String {
-    (1..=n + 1)
-        .map(|i| if i == 1 { base.to_string() } else { format!("{base}_{i}") })
-        .find(|c| !taken(c))
-        .unwrap_or_else(|| format!("{base}_{}", n + 2))
+    (1..=n + 1).map(|i| suffixed(base, i)).find(|c| !taken(c)).unwrap_or_else(|| suffixed(base, n + 2))
 }
 
 /// Give an object its comparison color: its own color, its attributes' colors, and, through
@@ -358,22 +384,27 @@ fn paint(d: &mut Drawing, e: &mut Entity, color: Color, tinted: &mut Tinted, dep
     };
     for a in attribs.into_iter().flatten() {
         a.props.color = Some(color);
+        if let Some(ml) = a.multiline.as_mut() {
+            ml.mtext.contents = without_color_codes(&ml.mtext.contents);
+        }
     }
-    // Colors an object carries apart from its own: inline MTEXT colors, a dimension style's
-    // DIMCLRD, DIMCLRE and DIMCLRT, gradient colors, multiline element colors, the style colors of
-    // a table or a tolerance (through a recolored copy of the style) and inline cell colors. Hatch
-    // backgrounds, multiline fills and table cell fills are left out.
+    // Colors an object carries apart from its own: inline MTEXT colors (in multiline attributes
+    // too), a dimension style's DIMCLRD, DIMCLRE and DIMCLRT, gradient colors, multiline element
+    // colors, the style colors of a table or a tolerance (through a recolored copy of the style)
+    // and inline cell colors. Hatch backgrounds, multiline fills and table cell fills are left out.
     match &mut e.kind {
         EntityKind::MText(t) => t.contents = without_color_codes(&t.contents),
+        EntityKind::AttDef(a) => {
+            if let Some(ml) = a.multiline.as_mut() {
+                ml.mtext.contents = without_color_codes(&ml.mtext.contents);
+            }
+        }
         EntityKind::MLeader(m) => {
             if let Some(t) = m.text.as_mut() {
                 t.contents = without_color_codes(&t.contents);
             }
         }
         EntityKind::Dimension(dm) => {
-            // Drawn again from its geometry in the object's color; a named copy of its `*D`
-            // block would stay behind in saved files.
-            dm.block = None;
             if let Ok(by_block) = serde_json::to_value(Color::ByBlock) {
                 for var in ["DIMCLRD", "DIMCLRE", "DIMCLRT"] {
                     dm.overrides.retain(|k, _| DimStyle::field_name(k) != DimStyle::field_name(var));
@@ -408,6 +439,12 @@ fn paint(d: &mut Drawing, e: &mut Entity, color: Color, tinted: &mut Tinted, dep
         }
         _ => {}
     }
+    if let EntityKind::Dimension(dm) = &mut e.kind {
+        // A dimension whose block can't be copied (past the limits) is drawn again from its
+        // geometry: its DIMCLR* overrides are ByBlock, so the original block would keep its colors.
+        dm.block = dm.block.take().and_then(|n| tinted_block(d, &n, color, tinted, depth));
+        return;
+    }
     each_ref(&mut e.kind, |n| {
         if let Some(copy) = tinted_block(d, n, color, tinted, depth) {
             *n = copy;
@@ -423,9 +460,14 @@ fn tinted_dim_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tint
         return Some(n.clone());
     }
     let st = d.dim_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), st.name), d.dim_styles.len(), |n| {
-        d.dim_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
-    });
+    let base = format!("COMPARE_{}_{}", tag(color), st.name);
+    let new = tinted.next.find(
+        "dimension style",
+        &base,
+        d.dim_styles.len(),
+        |i| suffixed(&base, i),
+        |n| d.dim_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n)),
+    );
     d.dim_styles.push(DimStyle {
         name: new.clone(),
         dim_line_color: Color::ByBlock,
@@ -445,9 +487,14 @@ fn tinted_table_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Ti
         return Some(n.clone());
     }
     let st = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), st.name), d.table_styles.len(), |n| {
-        d.table_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
-    });
+    let base = format!("COMPARE_{}_{}", tag(color), st.name);
+    let new = tinted.next.find(
+        "table style",
+        &base,
+        d.table_styles.len(),
+        |i| suffixed(&base, i),
+        |n| d.table_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n)),
+    );
     let names =
         [CellStyle::TITLE, CellStyle::HEADER, CellStyle::DATA].into_iter().map(str::to_string).chain(st.cell_styles.iter().map(|c| c.name.clone()));
     let mut cell_styles: Vec<CellStyle> = Vec::new();
@@ -516,11 +563,23 @@ fn tinted_block(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tinted, 
         return None;
     }
     tinted.copied += b.entities.len();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*')), d.blocks.len(), |n| d.block(n).is_some());
+    // A dimension's block copy stays a `*D` block, so saving keeps its geometry instead of
+    // drawing the dimension again.
+    let dim_block = b.anonymous && b.name.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D"));
+    let Tinted { next, blocks, .. } = tinted;
+    let taken = blocks.get_or_insert_with(|| d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect());
+    let is_taken = |n: &str| taken.contains(&n.to_ascii_uppercase());
+    let new = if dim_block {
+        next.find("block", "*D", d.blocks.len(), |i| format!("*D{i}"), is_taken)
+    } else {
+        let base = format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*'));
+        next.find("block", &base, d.blocks.len(), |i| suffixed(&base, i), is_taken)
+    };
+    taken.insert(new.to_ascii_uppercase());
     tinted.names.insert(key, new.clone());
     // Hold the name while the nested copies pick theirs.
     d.blocks.insert(new.clone(), Arc::new(Block::new(&new)));
-    let mut copy = Block { name: new.clone(), anonymous: false, entities: EntityStore::new(), ..(*b).clone() };
+    let mut copy = Block { name: new.clone(), anonymous: dim_block, entities: EntityStore::new(), ..(*b).clone() };
     for e in b.entities.iter() {
         let h = d.new_handle();
         let mut e = Entity { handle: h, ..(**e).clone() };
@@ -592,18 +651,19 @@ fn copy_blocks<'a>(
     // Names `d` does not use stay; the others get free names, avoiding the kept ones.
     let mut renames = Renames::new();
     let mut taken: HashSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
+    let mut next = NextFree::default();
     for b in needed.iter().filter(|b| d.block(&b.name).is_none()) {
         taken.insert(b.name.to_ascii_uppercase());
         renames.insert(b.name.to_ascii_uppercase(), b.name.clone());
     }
     for b in needed.iter().filter(|b| d.block(&b.name).is_some()) {
+        let is_taken = |n: &str| taken.contains(&n.to_ascii_uppercase());
         let free = if b.anonymous {
             let prefix: String = b.name.chars().take_while(|c| *c == '*' || c.is_ascii_alphabetic()).collect();
-            (1..=taken.len() + 1).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase()))
+            next.find("anonymous block", &prefix, taken.len(), |i| format!("{prefix}{i}"), is_taken)
         } else {
-            Some(free_name(&b.name, taken.len(), |n| taken.contains(&n.to_ascii_uppercase())))
+            next.find("block", &b.name, taken.len(), |i| suffixed(&b.name, i), is_taken)
         };
-        let Some(free) = free else { continue };
         taken.insert(free.to_ascii_uppercase());
         renames.insert(b.name.to_ascii_uppercase(), free);
     }

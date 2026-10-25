@@ -1,8 +1,9 @@
 //! BLOCKREPLACE (Express Tools): every reference of one block, in model space, the layouts and
 //! other blocks, becomes a reference of another at the same insertion point, scale and rotation.
 
+use cadcraft_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
 use cadcraft_engine::doc::geom::Vec3;
-use cadcraft_engine::doc::{Block, Common, Entity, EntityKind, Handle, Insert, Space};
+use cadcraft_engine::doc::{Block, Common, Entity, EntityKind, Handle, Insert, RawTag, Space};
 use cadcraft_engine::{Input, Session};
 use serde_json::{Value, json};
 
@@ -183,4 +184,40 @@ fn blockreplace_no_keeps_the_replaced_definition() {
     let d = s.doc().unwrap();
     assert!(d.block("A").is_some());
     assert_eq!(refs(d.model.iter()), ["N", "B"]);
+}
+
+#[test]
+fn blockreplace_refuses_a_block_as_soon_as_its_name_is_given() {
+    let (mut s, _) = drawing();
+    s.cmdline("blockreplace").unwrap();
+    s.cmdline("A").unwrap();
+    // N holds a reference of A: refused at once, and the prompt asks for another name.
+    s.cmdline("N").unwrap();
+    assert!(s.log.iter().any(|l| l.contains("Block \"N\" references \"A\"")), "{:?}", s.log);
+    assert!(s.prompt_text().contains("replacement block for A"), "{}", s.prompt_text());
+    s.cmdline("B").unwrap();
+    assert!(s.prompt_text().contains("Purge the unreferenced block definition A?"), "{}", s.prompt_text());
+    s.input(Input::Cancel).unwrap();
+
+    // A dynamic block is refused as the block to replace.
+    let mut d = s.doc().unwrap().clone();
+    let mut f = Foreign::default();
+    f.records.insert(("BLOCK_RECORD".into(), "A".into()), ForeignExtra { xdict: Some(Handle(0xF00)), ..Default::default() });
+    let tags = |t: &[(i32, &str)]| t.iter().map(|(c, v)| RawTag { code: *c, value: (*v).into() }).collect();
+    f.objects.push(ForeignObject {
+        handle: Handle(0xF00),
+        kind: "DICTIONARY".into(),
+        tags: tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK"), (360, "F01")]),
+    });
+    f.objects.push(ForeignObject { handle: Handle(0xF01), kind: "ACAD_EVALUATION_GRAPH".into(), tags: tags(&[(100, "AcDbEvalGraph")]) });
+    d.foreign = std::sync::Arc::new(f);
+    s.open_drawing(d, "dynamic", None);
+    let e = s.execute("blockreplace", &json!({"block": "A", "with": "B"})).unwrap_err().to_string();
+    assert!(e.contains("dynamic block"), "{e}");
+    s.cmdline("blockreplace").unwrap();
+    s.cmdline("A").unwrap();
+    assert!(s.log.iter().any(|l| l.contains("Block \"A\" is a dynamic block")), "{:?}", s.log);
+    assert!(s.prompt_text().contains("Enter the name of the block to replace"), "{}", s.prompt_text());
+    s.input(Input::Cancel).unwrap();
+    assert_eq!(refs(s.doc().unwrap().model.iter()), ["N", "A"]);
 }

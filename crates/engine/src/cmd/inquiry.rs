@@ -933,6 +933,8 @@ pub(super) struct AreaM {
     volume: bool,
     /// Areas measured in volume mode that still wait for their height, oldest first.
     pending: Vec<f64>,
+    /// The first point of a height given by two points.
+    height_from: Option<Vec2>,
 }
 
 impl AreaM {
@@ -958,6 +960,19 @@ impl AreaM {
             AreaMode::Single => self.total,
             AreaMode::Add => self.total + v,
             AreaMode::Subtract => self.total - v,
+        }
+    }
+    /// Measure the oldest pending area's volume with height `h`.
+    fn height(&mut self, s: &mut Session, h: f64) -> Step {
+        match self.pending.first().map(|a| a * h.abs()) {
+            Some(v) if v.is_finite() && self.total_with(v).is_finite() => {
+                self.pending.remove(0);
+                self.volume_measured(s, v)
+            }
+            _ => {
+                s.echo("The volume is too large.");
+                Step::Continue
+            }
         }
     }
     /// Report a volume (and the running total in add/subtract mode); ends the command in single mode.
@@ -1003,7 +1018,10 @@ impl Interactive for AreaM {
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         if !self.pending.is_empty() {
-            return Prompt::new(format!("{}Specify height", self.mode_prefix()), Accept::NUMBER);
+            return match self.height_from {
+                Some(p) => Prompt::new("Specify second point", Accept::POINT).base(p),
+                None => Prompt::new(format!("{}Specify height", self.mode_prefix()), Accept::POINT_OR_NUMBER),
+            };
         }
         if self.object {
             return Prompt::new(format!("{}Select objects", self.mode_prefix()), Accept::SELECT);
@@ -1023,17 +1041,21 @@ impl Interactive for AreaM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if !self.pending.is_empty() {
-            if let Input::Text(t) = i {
-                match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
-                    Some(h) => match self.pending.first().map(|a| a * h.abs()) {
-                        Some(v) if v.is_finite() && self.total_with(v).is_finite() => {
-                            self.pending.remove(0);
-                            return Ok(self.volume_measured(s, v));
-                        }
-                        _ => s.echo("The volume is too large."),
-                    },
-                    None => s.echo("Requires a distance."),
+            // A height is typed, or given by two points (their distance).
+            match (i, self.height_from) {
+                (Input::Point(p), None) => self.height_from = Some(p),
+                (Input::Point(p), Some(from)) => {
+                    self.height_from = None;
+                    return Ok(self.height(s, p.dist(from)));
                 }
+                (Input::Text(t), None) => match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
+                    Some(h) => return Ok(self.height(s, h)),
+                    None => s.echo("Requires a distance."),
+                },
+                (Input::Enter, None) => s.echo("Requires a height."),
+                (Input::Enter, Some(_)) => s.echo("Requires a second point."),
+                (Input::Text(_), Some(_)) => s.echo("Requires a point."),
+                _ => {}
             }
             return Ok(Step::Continue);
         }

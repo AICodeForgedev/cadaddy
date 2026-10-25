@@ -140,8 +140,12 @@ struct Signer<'a> {
     blocks: HashMap<String, u64>,
     work: usize,
     /// When set, a block's signature also covers its base point, units, annotative and overlay
-    /// flags and xref file, with a relative xref path taken from the folder given, and the
-    /// signatures of a multileader and a dimension cover their blocks'.
+    /// flags and xref file, with relative xref, image and data link paths taken from the folder
+    /// given, and the
+    /// signatures of a multileader and a dimension cover their blocks'. Each object in a block
+    /// then also counts with its visibility, transparency, thickness and extrusion, and an
+    /// anonymous block's signature leaves out its name (a dimension also leaves its block's name
+    /// out of its own geometry; an INSERT or MLEADER keeps it).
     frames: Option<Option<&'a std::path::Path>>,
 }
 
@@ -190,9 +194,15 @@ impl<'a> Signer<'a> {
             return *v;
         }
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut h);
+        let block = self.d.block(name);
+        // With frames, an anonymous block (`*D3`, `*U7`) is signed by its contents only: the
+        // same block can have another generated name in another drawing. Only a dimension's
+        // geometry leaves the name out, so this matches renamed `*D` blocks, not `*U` references.
+        if !(self.frames.is_some() && block.is_some_and(|b| b.anonymous)) {
+            key.hash(&mut h);
+        }
         if depth < MAX_BLOCK_DEPTH
-            && let Some(b) = self.d.block(name)
+            && let Some(b) = block
         {
             if let Some(folder) = self.frames {
                 let mut xref = b.xref_path.clone();
@@ -206,8 +216,20 @@ impl<'a> Signer<'a> {
                     break;
                 }
                 self.work += 1;
-                self.geometry(&e.kind, depth + 1).hash(&mut h);
+                match self.frames {
+                    // An image's file and a table's data link, from the folder given.
+                    Some(folder) if matches!(e.kind, EntityKind::Image(_) | EntityKind::Table(_)) => {
+                        let mut k = e.kind.clone();
+                        export::rebase(&mut k, folder);
+                        self.geometry(&k, depth + 1).hash(&mut h);
+                    }
+                    _ => self.geometry(&e.kind, depth + 1).hash(&mut h),
+                }
                 properties(e).hash(&mut h);
+                if self.frames.is_some() {
+                    let c = &e.common;
+                    format!("{:?}|{}|{}|{:?}", c.transparency, c.visible, (c.thickness * 1e6).round(), c.extrusion).hash(&mut h);
+                }
             }
         }
         let v = h.finish();

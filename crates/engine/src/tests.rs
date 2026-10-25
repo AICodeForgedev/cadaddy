@@ -1317,6 +1317,12 @@ fn format_thickness_asks_for_the_thickness() {
     // After text that is not a number, the prompt asks again.
     s.cmdline("thick").unwrap();
     assert!(s.current_prompt().is_some(), "asked again");
+    assert_eq!(s.log.last().map(String::as_str), Some("Requires a number."));
+    // A value out of range says so, and the prompt asks again.
+    s.cmdline("2e12").unwrap();
+    assert!(s.current_prompt().is_some(), "asked again");
+    assert_eq!(s.log.last().map(String::as_str), Some("Requires a value between -1e12 and 1e12."));
+    assert_eq!(s.doc().unwrap().header.f64("THICKNESS", 0.0), 0.0);
     // A negative thickness is accepted.
     s.cmdline("-1.5").unwrap();
     assert!(s.current_prompt().is_none());

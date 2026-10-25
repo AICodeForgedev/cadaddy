@@ -463,29 +463,53 @@ fn run_copybase(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "copied": n }))
 }
 
-/// Copy the objects that are not on locked layers to the clipboard and erase them.
-fn cut_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<usize> {
-    let hs: Vec<Handle> = hs.iter().copied().filter(|h| !super::curves::is_locked(s, *h)).collect();
+/// Copy the objects that are not on locked layers to the clipboard and erase them. Returns how
+/// many were cut and the message to show: how many were on a locked layer, and that nothing was
+/// cut when that is all of them (the clipboard then keeps what it held).
+fn cut_to_clip(s: &mut Session, hs: &[Handle], base: Option<Vec2>) -> Result<(usize, Option<String>)> {
+    let mut seen = std::collections::HashSet::new();
+    let live: Vec<Handle> = {
+        let d = s.doc()?;
+        hs.iter().copied().filter(|h| seen.insert(*h) && d.entity(*h).is_some()).collect()
+    };
+    let (hs, locked): (Vec<Handle>, Vec<Handle>) = live.into_iter().partition(|h| !super::curves::is_locked(s, *h));
+    let note = match locked.len() {
+        0 => None,
+        1 => Some("1 object was on a locked layer.".to_string()),
+        n => Some(format!("{n} objects were on a locked layer.")),
+    };
+    if hs.is_empty() {
+        let msg = note.map_or_else(|| "Nothing was cut.".to_string(), |m| format!("{m} Nothing was cut."));
+        return Ok((0, Some(msg)));
+    }
     let n = copy_to_clip(s, &hs, base)?;
     let d = s.doc_mut()?;
     for h in &hs {
         d.remove_entity(*h);
     }
     s.set_selection(Vec::new());
-    Ok(n)
+    Ok((n, note))
+}
+
+fn cut_result(n: usize, msg: Option<String>) -> Value {
+    let mut r = json!({ "cut": n });
+    if let Some(m) = msg {
+        r["message"] = json!(m);
+    }
+    r
 }
 
 fn run_cut(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let n = cut_to_clip(s, &hs, None)?;
-    Ok(json!({ "cut": n }))
+    let (n, msg) = cut_to_clip(s, &hs, None)?;
+    Ok(cut_result(n, msg))
 }
 
 fn run_cutbase(s: &mut Session, p: &Value) -> Result<Value> {
     let base = point_req("cutbase", p, "base")?;
     let hs = targets(s, p)?;
-    let n = cut_to_clip(s, &hs, Some(base))?;
-    Ok(json!({ "cut": n }))
+    let (n, msg) = cut_to_clip(s, &hs, Some(base))?;
+    Ok(cut_result(n, msg))
 }
 
 /// Paste the clipboard moved by `offset` (the clipboard brings the layers, styles and blocks its
@@ -680,7 +704,9 @@ struct CopyBaseM {
 impl CopyBaseM {
     fn copy(&self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
         if self.cut {
-            cut_to_clip(s, hs, self.base)?;
+            if let (_, Some(m)) = cut_to_clip(s, hs, self.base)? {
+                s.echo(m);
+            }
         } else {
             copy_to_clip(s, hs, self.base)?;
         }
