@@ -351,13 +351,28 @@ fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition(
         .unwrap_or_default();
     assert_eq!(drawn, [Some("*D2".to_string())], "the other drawing's PART is copied with its dimension block");
     assert_eq!(ends(&s, "*D2"), vec![5.0]);
-    // The colored copies redraw their dimensions instead of keeping colored copies of `*D` blocks.
+    // The colored copies of PART refer to colored copies of the dimension block, which are
+    // anonymous `*D` blocks of their own, not the originals.
     let d = s.doc().unwrap();
-    let dim_copy = |n: &str| {
-        n.starts_with("COMPARE_")
-            && n.rsplit('_').next().is_some_and(|t| t.len() > 1 && t.starts_with('D') && t[1..].bytes().all(|c| c.is_ascii_digit()))
-    };
-    assert!(!d.blocks.keys().any(|n| dim_copy(n)), "{:?}", d.blocks.keys().collect::<Vec<_>>());
+    let copies: Vec<String> = d
+        .blocks
+        .values()
+        .filter(|b| b.name.starts_with("COMPARE_"))
+        .flat_map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Dimension(dm) => Some(dm.block.clone().unwrap_or_default()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!copies.is_empty(), "PART has colored copies");
+    for n in &copies {
+        assert!(n.starts_with("*D") && !["*D1", "*D2"].contains(&n.as_str()), "{n} in {copies:?}");
+        assert!(d.block(n).is_some_and(|b| b.anonymous), "{n} is an anonymous block");
+    }
 }
 
 #[test]
@@ -787,6 +802,64 @@ fn says_when_blocks_both_drawings_define_differently_were_left_out() {
     s.execute("compare", &json!({"document": "Other"})).unwrap();
     let r = s.execute("compareexport", &json!({})).unwrap();
     assert!(r["message"].as_str().unwrap().contains("some blocks of the other drawing were too many or too large to copy"), "{}", r["message"]);
+}
+
+#[test]
+fn a_dimension_whose_block_is_past_the_nesting_limit_is_drawn_again() {
+    use cadcraft_engine::doc::{DimKind, Dimension, MAX_BLOCK_DEPTH};
+    // B1 holds B2, …, and the innermost block holds a dimension: its `*D1` copy would be past
+    // the nesting limit.
+    let mut s = Session::new();
+    let d = s.doc_mut().unwrap();
+    let mut drawn = Block::new("*D1");
+    drawn.entities.push(Entity::new(Handle(0x600), line(30.0)));
+    d.blocks.insert("*D1".into(), Arc::new(drawn));
+    let dim = Dimension {
+        kind: DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::new(15.0, 5.0, 0.0),
+        text_mid: Vec3::new(7.0, 5.0, 0.0),
+        p13: Vec3::ZERO,
+        p14: Vec3::new(30.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 30.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: Some("*D1".into()),
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    for k in 1..=MAX_BLOCK_DEPTH {
+        let mut b = Block::new(&format!("B{k}"));
+        let kind = if k == MAX_BLOCK_DEPTH { EntityKind::Dimension(dim.clone()) } else { EntityKind::Insert(insert(&format!("B{}", k + 1))) };
+        b.entities.push(Entity::new(Handle(0x700 + k as u64), kind));
+        d.blocks.insert(b.name.clone(), Arc::new(b));
+    }
+    d.add(&Space::Model, Common::default(), EntityKind::Insert(insert("B1"))).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let dims: Vec<Option<String>> = d
+        .blocks
+        .values()
+        .filter(|b| b.name.starts_with("COMPARE_"))
+        .flat_map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Dimension(dm) => Some(dm.block.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // The colored copy keeps no block, so it is drawn in the comparison color, not with `*D1`'s.
+    assert_eq!(dims, [None], "{:?}", d.blocks.keys().collect::<Vec<_>>());
 }
 
 #[test]

@@ -144,7 +144,8 @@ struct Signer<'a> {
     /// given, and the
     /// signatures of a multileader and a dimension cover their blocks'. Each object in a block
     /// then also counts with its visibility, transparency, thickness and extrusion, and an
-    /// anonymous block's signature leaves out its name.
+    /// anonymous block's signature leaves out its name (a dimension also leaves its block's name
+    /// out of its own geometry; an INSERT or MLEADER keeps it).
     frames: Option<Option<&'a std::path::Path>>,
 }
 
@@ -195,7 +196,8 @@ impl<'a> Signer<'a> {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         let block = self.d.block(name);
         // With frames, an anonymous block (`*D3`, `*U7`) is signed by its contents only: the
-        // same block can have another generated name in another drawing.
+        // same block can have another generated name in another drawing. Only a dimension's
+        // geometry leaves the name out, so this matches renamed `*D` blocks, not `*U` references.
         if !(self.frames.is_some() && block.is_some_and(|b| b.anonymous)) {
             key.hash(&mut h);
         }

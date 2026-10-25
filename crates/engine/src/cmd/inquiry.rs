@@ -1054,6 +1054,7 @@ impl Interactive for AreaM {
                 },
                 (Input::Enter, None) => s.echo("Requires a height."),
                 (Input::Enter, Some(_)) => s.echo("Requires a second point."),
+                (Input::Text(_), Some(_)) => s.echo("Requires a point."),
                 _ => {}
             }
             return Ok(Step::Continue);
