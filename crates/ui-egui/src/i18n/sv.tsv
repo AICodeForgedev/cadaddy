@@ -3145,3 +3145,53 @@ menu	Modify	Ändra
 	PDF exported to {path}.	PDF exporterad till {path}.
 	Clash detection failed.	Kollisionskontrollen misslyckades.
 	Import Cost Table	Importera kostnadstabell
+	BIM View	BIM-vy
+	Trade Colours	Färger per disciplin
+	Element Properties	Elementegenskaper
+	Tree	Träd
+	Colours	Färger
+	Ghost Architecture	Genomskinlig arkitektur
+	Sheet Lines in 3D	Ritningslinjer i 3D
+	Nothing is built yet. Use Plans to Model first.	Inget är byggt ännu. Använd Ritningar till modell först.
+	Select one element to see its properties.	Välj ett element för att se dess egenskaper.
+	Not part of the built model.	Ingår inte i den byggda modellen.
+	Category	Kategori
+	Trade	Disciplin
+	Circuit	Grupp
+	Source	Källa
+	Issues	Ärenden
+	Show on Sheet	Visa på ritningen
+	Reset Colours	Återställ färger
+	Architecture	Arkitektur
+	Structure	Konstruktion
+	Fire Protection	Brandskydd
+	Doors and Windows	Dörrar och fönster
+	Supply Air Duct	Tilluftskanal
+	Return Air Duct	Returluftskanal
+	Exhaust Air Duct	Frånluftskanal
+	Outside Air Duct	Uteluftskanal
+	Duct	Kanal
+	Air Terminals	Luftdon
+	Equipment	Utrustning
+	Domestic Cold Water	Tappkallvatten
+	Domestic Hot Water	Tappvarmvatten
+	Sanitary	Spillvatten
+	Vent	Avluftning
+	Storm	Dagvatten
+	Gas	Gas
+	Piping	Rör
+	Plumbing Fixtures	Sanitetsporslin
+	Conduit	Elrör
+	Cable Tray	Kabelstegar
+	Electrical Devices	Elapparater
+	Light Fixtures	Armaturer
+	Clash Check	Kollisionskontroll
+	Fix Clash	Åtgärda kollision
+	Model Takeoff	Mängdavtagning från modell
+	Show Takeoff Line	Visa mängdrad
+	Model Estimate	Kostnadskalkyl från modell
+	New Issue	Nytt ärende
+	Update Issue	Uppdatera ärende
+	Show Issue	Visa ärende
+	Issue Marks	Ärendemarkeringar
+	Sheet and 3D Link	Länk mellan ritning och 3D
