@@ -338,6 +338,8 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
+            fixture_plan(&mut pen, t, st, l);
+            casework_schedule(&mut pen, t, l);
             // True device positions on the A-sheet (small crosses).
             draw_devices_arch(&mut pen, t, l);
             legend.push(item("base_cabinet", "BASE CABINET"));
@@ -422,6 +424,13 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             grid(&mut pen, t);
             rcp(&mut pen, t, st, l);
             crate::ceilings::draw_callouts(&mut pen, t, &st.ceilings, l);
+            // The hotel's floor plans are drawn as ceiling plans with the casework, fixtures and
+            // their schedule on them.
+            if sh.number.starts_with("A-10") && sh.title.contains("FLOOR PLAN") && !sh.title.contains("CEILING") {
+                casework_plan(&mut pen, t, st, l);
+                fixture_plan(&mut pen, t, st, l);
+                casework_schedule(&mut pen, t, l);
+            }
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
@@ -1098,6 +1107,147 @@ fn casework_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         let height_text = format!("{:.0}\" AFF", cw.height_in);
         let p2 = pen.b([cx, cy - 0.6]);
         pen.text("TEXT", p2, st.text_in * 0.6, &height_text, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// Plumbing fixtures and water heaters on an architectural floor plan: a symbol centred on each
+/// (on [`crate::casework_reader::FIXTURE_LAYER`]) with its tag on it.
+fn fixture_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
+    use crate::casework_reader::FIXTURE_LAYER as L;
+    let rot = readable(pen.rot());
+    let mut items: Vec<(&str, &str, [f64; 2], f64)> =
+        t.fixtures.iter().filter(|f| f.level == level).map(|f| (f.kind.as_str(), f.tag.as_str(), [f.at_ft[0], f.at_ft[1]], 0.0)).collect();
+    for e in t.equipment.iter().filter(|e| e.level == level && e.kind == "water_heater") {
+        let c = [(e.min_ft[0] + e.max_ft[0]) / 2.0, (e.min_ft[1] + e.max_ft[1]) / 2.0];
+        let r = ((e.max_ft[0] - e.min_ft[0]).min(e.max_ft[1] - e.min_ft[1]) / 2.0).clamp(0.5, 2.0);
+        items.push((e.kind.as_str(), e.tag.as_str(), c, r));
+    }
+    for (kind, tag, at, r) in items {
+        let c = pen.b(at);
+        // Half sizes, inches (along x, along y of the building).
+        let rect = |pen: &mut Pen, hx: f64, hy: f64| pen.brect(L, [at[0] - hx / 12.0, at[1] - hy / 12.0], [at[0] + hx / 12.0, at[1] + hy / 12.0]);
+        match kind {
+            "water_closet" => {
+                rect(pen, 10.0, 14.0);
+                pen.circle(L, c, 7.0);
+            }
+            "lavatory" => {
+                rect(pen, 10.0, 9.0);
+                pen.circle(L, c, 6.0);
+            }
+            "sink" => {
+                rect(pen, 12.0, 11.0);
+                pen.circle(L, c, 7.0);
+            }
+            "urinal" => {
+                rect(pen, 9.0, 7.0);
+                pen.circle(L, c, 4.0);
+            }
+            "shower" | "mop_sink" => {
+                let h = if kind == "shower" { 18.0 } else { 12.0 };
+                rect(pen, h, h);
+                pen.line(L, pen.b([at[0] - h / 12.0, at[1] - h / 12.0]), pen.b([at[0] + h / 12.0, at[1] + h / 12.0]));
+                pen.line(L, pen.b([at[0] - h / 12.0, at[1] + h / 12.0]), pen.b([at[0] + h / 12.0, at[1] - h / 12.0]));
+            }
+            "bathtub" => {
+                rect(pen, 30.0, 15.0);
+                rect(pen, 26.0, 11.0);
+            }
+            "water_heater" => pen.circle(L, c, pen.bl(r)),
+            _ => pen.circle(L, c, 3.0),
+        }
+        pen.text(L, c, st.text_in * 0.6, tag, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// The rows of the casework and plumbing fixture schedule: one per tag (header first).
+pub fn casework_schedule_rows(t: &Truth) -> Vec<Vec<String>> {
+    use crate::casework_reader::description_for;
+    let inch = |v: f64| if (v - v.round()).abs() < 0.05 { format!("{:.0}\"", v) } else { format!("{:.1}\"", v) };
+    let mut rows = vec![["TAG", "DESCRIPTION", "SIZE (W x D)", "HEIGHT", "SPEC SECTION"].map(String::from).to_vec()];
+    let mut seen: Vec<String> = Vec::new();
+    for cw in &t.casework {
+        if seen.contains(&cw.tag) {
+            continue;
+        }
+        seen.push(cw.tag.clone());
+        let widths: Vec<f64> =
+            t.casework.iter().filter(|c| c.tag == cw.tag).map(|c| (c.max_ft[0] - c.min_ft[0]).max(c.max_ft[1] - c.min_ft[1]) * 12.0).collect();
+        let w0 = widths.first().copied().unwrap_or(0.0);
+        let width = if widths.iter().all(|w| (w - w0).abs() < 0.5) { inch(w0) } else { "VARIES".into() };
+        let mut desc = description_for(&cw.kind).to_string();
+        if cw.kind == "counter" && cw.spec_section.as_deref() == Some("22 40 00") {
+            desc.push_str(" WITH SINK");
+        }
+        rows.push(vec![
+            cw.tag.clone(),
+            desc,
+            format!("{width} x {}", inch(cw.depth_in)),
+            format!("{} AFF", inch(cw.height_in)),
+            cw.spec_section.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    let fixtures = t.fixtures.iter().map(|f| (f.tag.as_str(), f.kind.as_str()));
+    let heaters = t.equipment.iter().filter(|e| e.kind == "water_heater").map(|e| (e.tag.as_str(), e.kind.as_str()));
+    for (tag, kind) in fixtures.chain(heaters) {
+        if tag.is_empty() || seen.iter().any(|s| s == tag) {
+            continue;
+        }
+        seen.push(tag.to_string());
+        let spec = if kind == "water_heater" { "22 33 00" } else { "22 40 00" };
+        rows.push(vec![tag.to_string(), description_for(kind).to_string(), "-".into(), "-".into(), spec.into()]);
+    }
+    rows
+}
+
+/// The casework and plumbing fixture schedule on a floor plan, in a corner of the drawing area
+/// the plan leaves free (on [`crate::casework_reader::SCHEDULE_LAYER`]).
+fn casework_schedule(pen: &mut Pen, t: &Truth, level: &str) {
+    use crate::casework_reader::{SCHEDULE_LAYER as L, SCHEDULE_TITLE};
+    let rows = casework_schedule_rows(t);
+    if rows.len() < 2 {
+        return;
+    }
+    let (h, row_h) = (0.09, 0.24);
+    let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<f64> = (0..ncols).map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| text_width(s, h)).fold(0.6, f64::max) + 0.25).collect();
+    let (w, ht) = (widths.iter().sum::<f64>(), row_h * rows.len() as f64 + 0.3);
+    // The plan's extents on paper.
+    let mut lo = [f64::INFINITY; 2];
+    let mut hi = [f64::NEG_INFINITY; 2];
+    for rm in t.building.rooms.iter().filter(|r| r.level == level) {
+        for p in [rm.min_ft, rm.max_ft, [rm.min_ft[0], rm.max_ft[1]], [rm.max_ft[0], rm.min_ft[1]]] {
+            let m = pen.b(p);
+            let q = crate::layout::model_to_paper(pen.sh, [m.x, m.y]);
+            lo = [lo[0].min(q[0]), lo[1].min(q[1])];
+            hi = [hi[0].max(q[0]), hi[1].max(q[1])];
+        }
+    }
+    let fr = frame(pen.st);
+    let [[x0, y0], [x1, y1]] = fr.area;
+    let free = |at: [f64; 2]| {
+        let (a, b) = ([at[0], at[1] - ht], [at[0] + w, at[1] + 0.3]);
+        a[0] >= x0 && b[0] <= x1 && a[1] >= y0 && b[1] <= y1 && (b[0] < lo[0] - 0.5 || a[0] > hi[0] + 0.5 || b[1] < lo[1] - 0.5 || a[1] > hi[1] + 0.5)
+    };
+    // Bottom right, then top right below the north arrow, then top left; kept out of the strips
+    // along the right edge and the foot of the sheet a sheet reader takes for the title block
+    // (its title would read as the sheet's).
+    let [pw, ph] = fr.paper;
+    let right = (x1 - w - 0.2).min(0.7 * pw);
+    let cands = [[right, (y0 + ht + 0.2).max(0.25 * ph)], [right, y1 - 1.6], [x0 + 0.2, y1 - 0.5]];
+    let Some(at) = cands.iter().copied().find(|c| free(*c)).or(cands.first().copied()) else { return };
+    pen.ptext(L, [at[0], at[1] + 0.1], 0.13, SCHEDULE_TITLE, HAlign::Left);
+    let mut y = at[1];
+    for r in &rows {
+        let mut x = at[0];
+        for (c, cw) in widths.iter().enumerate() {
+            pen.prect(L, [x, y - row_h], [x + cw, y]);
+            if let Some(s) = r.get(c) {
+                pen.ptext(L, [x + 0.1, y - row_h + 0.075], h, s, HAlign::Left);
+            }
+            x += cw;
+        }
+        y -= row_h;
     }
 }
 

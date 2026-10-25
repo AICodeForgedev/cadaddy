@@ -211,6 +211,12 @@ pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, 
     (t, st, kinds)
 }
 
+/// The office set's truth with its sheets planned, its style and each sheet's kind: what
+/// [`generate`] draws, for drawing single sheets with [`draw::draw`].
+pub fn office_planned(seed: u64) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
+    designed_set(seed, false)
+}
+
 /// Like [`designed_set`] but with custom fire protection head schedule values.
 fn designed_set_scheduled(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
     let mut r = Rng::new(seed);
