@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
     ]
 }
@@ -363,7 +363,10 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         s.state_mut()?.wallgen = None;
         return Ok(json!({ "removed": n }));
     }
-    let sp = merged(s, "model.build", p.get("spec"), bool_or(p, "replace", false))?;
+    let mut sp = merged(s, "model.build", p.get("spec"), bool_or(p, "replace", false))?;
+    if let Some(stack) = p.get("stack").and_then(Value::as_bool) {
+        sp.stack = stack;
+    }
     let issues = validate(s.doc()?, &sp);
     let errors: Vec<String> = issues.iter().filter(|i| i.error).map(|i| format!("{}: {}", i.path, i.message)).collect();
     if !errors.is_empty() {
@@ -417,7 +420,13 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         if out.len() >= MAX_ROOMS {
             break;
         }
-        let room = sp.rooms.iter().position(|r| names_room(r, &text));
+        // A spec room on a level is looked for on that level's plan only (every floor has its
+        // OFFICE).
+        let here = level_at(&sp.levels, at.x, at.y);
+        let room = sp
+            .rooms
+            .iter()
+            .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
         // Without room tag layers only the spec's rooms are looked for.
         if room.is_none() && !tagged {
             continue;
@@ -632,7 +641,62 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["gridColumns"] = json!(grid_columns);
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
+    // One building: the levels' 3D moved off their plans onto the lowest level's.
+    if sp.stack {
+        r["stacked"] = json!(stack_levels(d, &sp));
+    }
     Ok(r)
+}
+
+/// Where a level's plan sits on the sheet: its base, else the lower-left corner of the walls
+/// built from it, else its region's.
+fn level_anchor(d: &Drawing, level: &Level) -> Option<Vec2> {
+    if let Some([x, y]) = level.base {
+        return Some(Vec2::new(x, y));
+    }
+    let mut b = cadaddy_geom::Bounds2::EMPTY;
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")) {
+        if made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level.name)) {
+            b = b.union(&cadaddy_doc::entity_bounds(d, e, 0));
+        }
+    }
+    if !b.is_empty() && b.min.x.is_finite() && b.min.y.is_finite() {
+        return Some(b.min);
+    }
+    level.region.map(|[x0, y0, x1, y1]| Vec2::new(x0.min(x1), y0.min(y1)))
+}
+
+/// Move each level's built objects (by their level tag) from over its own plan onto the lowest
+/// level's plan, so plans drawn side by side make one stacked building; the plans stay put.
+/// How many levels were moved.
+fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
+    let mut here: Vec<&Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
+    here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    let Some(lowest) = here.first() else { return 0 };
+    let Some(origin) = level_anchor(d, lowest) else { return 0 };
+    let mut moved = 0;
+    for level in here.iter().skip(1) {
+        let Some(at) = level_anchor(d, level) else { continue };
+        let off = origin - at;
+        if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
+            continue;
+        }
+        let m = cadaddy_geom::Mat3::translate(off);
+        let mine: Vec<Handle> = d
+            .model
+            .iter()
+            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level.name)))
+            .map(|e| e.handle)
+            .take(MAX_OBJECTS)
+            .collect();
+        for h in &mine {
+            let _ = d.modify_entity(*h, |e| e.kind.transform(&m));
+        }
+        if !mine.is_empty() {
+            moved += 1;
+        }
+    }
+    moved
 }
 
 /// The level a built object belongs to (its WALLGEN tag).
