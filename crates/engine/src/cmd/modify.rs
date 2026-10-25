@@ -219,6 +219,22 @@ impl StretchArea {
     }
 }
 
+/// Add to `hs` the visible multilines in `space` with a control vertex inside `area`. A crossing
+/// selection tests the drawn element lines, which sit away from the control vertices by the
+/// multiline's scale, so a small area around a vertex alone would miss them.
+fn add_mline_vertex_hits(d: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, area: &StretchArea, hs: &mut Vec<Handle>) {
+    let Some(store) = d.space(space) else { return };
+    for e in store.iter() {
+        if let EntityKind::MLine(m) = &e.kind
+            && d.is_visible(e)
+            && !hs.contains(&e.handle)
+            && m.vertices.iter().any(|v| area.contains(v.p.xy()))
+        {
+            hs.push(e.handle);
+        }
+    }
+}
+
 /// Move the vertices of `e` that lie inside any of the areas `wins` by `d` (STRETCH).
 fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
     let inside = |p: Vec2| wins.iter().any(|a| a.contains(p));
@@ -240,6 +256,7 @@ fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
                 }
             }
         }
+        EntityKind::MLine(m) => m.vertices.iter_mut().for_each(|v| mv(&mut v.p)),
         EntityKind::Arc(a) => {
             // Arcs keep their shape: move when the centre is inside.
             if inside(a.center.xy()) {
@@ -287,6 +304,7 @@ fn run_stretch(s: &mut Session, p: &Value) -> Result<Value> {
         let bx = cadcraft_geom::Bounds2::new(*a, *b);
         (crate::select::select_window(s.doc()?, &space, bx, true), StretchArea::Box(bx))
     };
+    add_mline_vertex_hits(s.doc()?, &space, &area, &mut hs);
     hs.retain(|h| !super::curves::is_locked(s, *h));
     let doc = s.doc_mut()?;
     let areas = [area];
@@ -353,7 +371,12 @@ impl StretchM {
     /// of two) the mode is dropped.
     fn finish_mode(&mut self, s: &mut Session, m: SelectMode) -> Result<()> {
         let space = s.space();
-        let Some(hs) = m.select(s.doc()?, &space) else { return Ok(()) };
+        let Some(mut hs) = m.select(s.doc()?, &space) else { return Ok(()) };
+        let crossing = match (m.kind, m.pts.first().zip(m.pts.get(1))) {
+            (SelectKind::Crossing | SelectKind::CPolygon, _) => true,
+            (SelectKind::Box, Some((a, b))) => b.x < a.x,
+            _ => false,
+        };
         let area = match (m.kind, m.pts.first().zip(m.pts.get(1))) {
             (SelectKind::WPolygon | SelectKind::CPolygon, _) => Some(StretchArea::Polygon(m.pts)),
             (SelectKind::Window | SelectKind::Crossing | SelectKind::Box, Some((a, b))) => {
@@ -363,6 +386,9 @@ impl StretchM {
             _ => None,
         };
         let whole = area.is_none();
+        if let (Some(a), true, false) = (&area, crossing, self.removing) {
+            add_mline_vertex_hits(s.doc()?, &space, a, &mut hs);
+        }
         if let (Some(a), false) = (area, self.removing) {
             self.windows.push(a);
         }
@@ -400,8 +426,11 @@ impl StretchM {
                 Some(c) => {
                     let bx = cadcraft_geom::Bounds2::new(c, p);
                     let space = s.space();
-                    let hs = crate::select::select_window(s.doc()?, &space, bx, p.x < c.x);
+                    let mut hs = crate::select::select_window(s.doc()?, &space, bx, p.x < c.x);
                     if !self.removing {
+                        if p.x < c.x {
+                            add_mline_vertex_hits(s.doc()?, &space, &StretchArea::Box(bx), &mut hs);
+                        }
                         self.windows.push(StretchArea::Box(bx));
                     }
                     self.add(s, hs, false);
@@ -488,7 +517,7 @@ impl Interactive for StretchM {
             return m.prompt();
         }
         match (self.phase, self.corner) {
-            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).base(c),
+            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).corner(c),
             (StretchPhase::Select, None) => Prompt::new(if self.removing { "Remove objects" } else { "Select objects" }, Accept::POINT),
             (StretchPhase::Base, _) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).default("Displacement"),
             (StretchPhase::Displacement, _) => Prompt::new("Specify displacement", Accept::POINT).default("0,0"),
@@ -562,6 +591,21 @@ impl Interactive for StretchM {
             _ => Vec::new(),
         }
     }
+}
+
+/// Whether OFFSET can work on this kind of object at all.
+fn offsettable(k: &EntityKind) -> bool {
+    matches!(
+        k,
+        EntityKind::Line(_)
+            | EntityKind::Circle(_)
+            | EntityKind::Arc(_)
+            | EntityKind::Ellipse(_)
+            | EntityKind::LwPolyline(_)
+            | EntityKind::Spline(_)
+            | EntityKind::XLine(_)
+            | EntityKind::Ray(_)
+    )
 }
 
 /// Offset an entity by `dist` towards `side`. Returns the new geometry.
@@ -1353,21 +1397,17 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
             let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
             let g = cadcraft_render::dimension_in(d, dm);
-            let mut v: Vec<Entity> = g
-                .lines
-                .iter()
-                .filter_map(|l| {
-                    if l.len() == 2 {
-                        Some(Entity { handle: Handle(0), common: e.common.clone(), kind: line(*l.first()?, *l.get(1)?) })
-                    } else {
-                        Some(Entity {
-                            handle: Handle(0),
-                            common: e.common.clone(),
-                            kind: lwpoly(l.iter().map(|p| PolyVertex::new(*p)).collect(), false),
-                        })
-                    }
-                })
-                .collect();
+            let line_entity = |l: &Vec<Vec2>| {
+                if l.len() == 2 {
+                    Some(Entity { handle: Handle(0), common: e.common.clone(), kind: line(*l.first()?, *l.get(1)?) })
+                } else {
+                    Some(Entity { handle: Handle(0), common: e.common.clone(), kind: lwpoly(l.iter().map(|p| PolyVertex::new(*p)).collect(), false) })
+                }
+            };
+            // The text's marks (arc length symbol, DIMINSPECT frame) go after the text background.
+            let text_marks = &g.text_marks;
+            let marks = |want: bool| g.lines.iter().enumerate().filter(move |(i, _)| text_marks.contains(i) == want).map(|(_, l)| l);
+            let mut v: Vec<Entity> = marks(false).filter_map(&line_entity).collect();
             for t in &g.fills {
                 if let [a, b, c] = t.as_slice() {
                     v.push(Entity {
@@ -1377,6 +1417,20 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     });
                 }
             }
+            // DIMTFILL 2: the text background as a SOLID in DIMTFILLCLR, over the lines and
+            // arrowheads, under the text and its marks (SOLID corners go 1, 2, 4, 3).
+            if style.text_fill == 2
+                && let [p0, p1, p2, p3] = g.text_fill.as_slice()
+            {
+                let fill = style.text_fill_color;
+                let color = if fill == cadcraft_doc::color::Color::ByBlock { e.common.color } else { fill };
+                v.push(Entity {
+                    handle: Handle(0),
+                    common: cadcraft_doc::Common { color, ..e.common.clone() },
+                    kind: EntityKind::Solid(cadcraft_doc::Solid { corners: [v3(*p0), v3(*p1), v3(*p3), v3(*p2)] }),
+                });
+            }
+            v.extend(marks(true).filter_map(&line_entity));
             if !g.value.is_empty() {
                 v.push(Entity {
                     handle: Handle(0),
@@ -1388,7 +1442,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                         attach: 5,
                         rotation: g.text_angle,
                         style: style.text_style.clone(),
-                        contents: g.value.clone(),
+                        contents: g.mtext_contents(),
                         line_spacing: 1.0,
                         line_spacing_exact: false,
                         columns: None,
@@ -2239,8 +2293,24 @@ impl Interactive for OffsetM {
     fn name(&self) -> &'static str {
         "OFFSET"
     }
+    /// Starts OFFSET, keeping a single preselected offsettable object (issue #1610) so the prompt
+    /// sequence goes distance then side instead of asking for the object again; any other
+    /// selection is cleared and the object loop asks for it. With PICKFIRST off the selection is
+    /// likewise ignored and cleared.
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
-        s.set_selection(Vec::new());
+        // Exactly one offsettable object selected before the command is taken at once, so only the
+        // side is asked for; the object loop stays for the ones after it (issue #1610). A multiple
+        // selection is left for the select prompt, as AutoCAD does.
+        let pre = s.selection();
+        if s.settings.pickfirst
+            && let [h] = pre[..]
+            && s.doc()?.entity(h).is_some_and(|e| offsettable(&e.kind))
+        {
+            self.picked = Some(h);
+            s.set_selection(vec![h]);
+        } else {
+            s.set_selection(Vec::new());
+        }
         let (erase, current) = offset_options(s);
         s.echo(format!(
             "Current settings: Erase source={}  Layer={}  OFFSETGAPTYPE=0",

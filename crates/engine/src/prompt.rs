@@ -101,7 +101,7 @@ impl Prompt {
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
-        self.keywords = k.iter().map(|s| s.to_string()).collect();
+        self.keywords = k.iter().map(ToString::to_string).collect();
         self
     }
     pub fn base(mut self, p: Vec2) -> Self {

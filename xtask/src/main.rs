@@ -21,7 +21,8 @@ commands:
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
   test            cargo nextest run (cargo test without nextest) plus the doctests
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  i18n            print the strings each interface language shows in English (never fails)
+  ci              fmt --check, clippy -D warnings, test, i18n, assets, layers, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test(),
+        Some("i18n") => cmd_i18n(),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -167,6 +169,18 @@ fn cmd_test() -> Result<(), String> {
     run(c, "cargo test --workspace --doc")
 }
 
+/// The translation gap report (`cadcraft-ui-egui`'s ignored `i18n::tests::translation_gaps`).
+/// A missing translation shows in English and never fails a build, so neither does this step.
+fn cmd_i18n() -> Result<(), String> {
+    let mut c = cargo();
+    // `--workspace` builds the same test binaries as the test step; `-p` alone would rebuild them.
+    c.args(["test", "--workspace", "--lib", "-q", "--", "--ignored", "--exact", "i18n::tests::translation_gaps", "--nocapture"]);
+    if let Err(e) = run(c, "cargo test --workspace --lib -q -- --ignored --exact i18n::tests::translation_gaps --nocapture") {
+        eprintln!("note: the translation gap report did not run: {e}");
+    }
+    Ok(())
+}
+
 fn cmd_ci() -> Result<(), String> {
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
@@ -187,6 +201,7 @@ fn cmd_ci() -> Result<(), String> {
             }),
         ),
         ("test", Box::new(cmd_test)),
+        ("i18n", Box::new(cmd_i18n)),
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),

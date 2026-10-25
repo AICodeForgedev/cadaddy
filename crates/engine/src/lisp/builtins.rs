@@ -5,6 +5,8 @@
 //! Errors use AutoLISP's wording (`bad argument type: numberp: nil`, `too few arguments`,
 //! `divide by zero`), since routines and their `*error*` handlers match on it.
 
+use std::cmp::Ordering;
+use std::ffi::OsStr;
 use std::sync::Arc;
 
 use super::eval::{Ctx, Flow, Special};
@@ -335,16 +337,16 @@ fn num_ne(a: &[Value]) -> R {
     eq_chain(a, false)
 }
 fn lt(a: &[Value]) -> R {
-    chain(a, |o| o.is_lt())
+    chain(a, Ordering::is_lt)
 }
 fn gt(a: &[Value]) -> R {
-    chain(a, |o| o.is_gt())
+    chain(a, Ordering::is_gt)
 }
 fn le(a: &[Value]) -> R {
-    chain(a, |o| o.is_le())
+    chain(a, Ordering::is_le)
 }
 fn ge(a: &[Value]) -> R {
-    chain(a, |o| o.is_ge())
+    chain(a, Ordering::is_ge)
 }
 
 fn zerop(a: &[Value]) -> R {
@@ -658,12 +660,12 @@ fn vl_list_to_string(a: &[Value]) -> R {
 fn vl_filename_base(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
-    Ok(Value::str(std::path::Path::new(&*s.replace('\\', "/")).file_stem().and_then(|x| x.to_str()).unwrap_or("")))
+    Ok(Value::str(std::path::Path::new(&*s.replace('\\', "/")).file_stem().and_then(OsStr::to_str).unwrap_or("")))
 }
 fn vl_filename_extension(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
-    Ok(std::path::Path::new(&*s.replace('\\', "/")).extension().and_then(|x| x.to_str()).map(|e| Value::str(&format!(".{e}"))).unwrap_or_default())
+    Ok(std::path::Path::new(&*s.replace('\\', "/")).extension().and_then(OsStr::to_str).map(|e| Value::str(&format!(".{e}"))).unwrap_or_default())
 }
 fn vl_filename_directory(a: &[Value]) -> R {
     arity(a, 1, 1)?;

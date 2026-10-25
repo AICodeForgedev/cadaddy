@@ -8,7 +8,6 @@
 
 use std::ops::Range;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 use cadcraft_geom::Vec2;
 
@@ -183,9 +182,9 @@ struct Glyph {
 /// Shape characters `r` of `cs` (one direction, one face) into glyphs in display order.
 fn shape_run(face: &Face, cs: &[char], r: Range<usize>, rtl: bool) -> Vec<Glyph> {
     let run = cs.get(r.clone()).unwrap_or_default();
-    // Shares the face's bytes instead of copying them.
-    let bytes: Arc<dyn AsRef<[u8]> + Send + Sync> = face.bytes.clone();
-    let Some(font) = harfrust::Font::new(bytes, face.index) else { return Vec::new() };
+    // Keep the shared font bytes: shaping a run must not clone the entire font file.
+    let source = harfrust::font::Blob::Shared(face.bytes.clone());
+    let Some(font) = harfrust::Font::new(source, face.index) else { return Vec::new() };
     let shaper = harfrust::ShaperFont::new(&font);
     let mut buf = harfrust::Buffer::new();
     let arabic = run.iter().any(|c| matches!(*c, '\u{0600}'..='\u{08FF}'));
@@ -200,11 +199,10 @@ fn shape_run(face: &Face, cs: &[char], r: Range<usize>, rtl: bool) -> Vec<Glyph>
     }
     buf.set_direction(if rtl { harfrust::Direction::RightToLeft } else { harfrust::Direction::LeftToRight });
     buf.guess_segment_properties();
-    // Without a plan, shaping fails only on an already shaped buffer or an unset direction.
     if harfrust::shape(&shaper, &mut buf, harfrust::ShapeOptions::new()).is_err() {
         return Vec::new();
     }
-    let k = 1000.0 / f64::from(font.units_per_em().max(1));
+    let k = 1000.0 / f64::from(shaper.units_per_em().max(1));
     buf.glyph_infos()
         .iter()
         .zip(buf.glyph_positions())
