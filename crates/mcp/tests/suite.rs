@@ -47,6 +47,35 @@ fn tool(s: &mut Server, name: &str, args: Value) -> Result<String, (i64, String)
     if r["result"]["isError"] == true { Err((0, text)) } else { Ok(text) }
 }
 
+/// A minimal synthetic PDF with a rectangle (a "floor plan") in the temp dir.
+fn synthetic_pdf(dir: &str) -> String {
+    let path = format!("{dir}/synthetic.pdf");
+    // Build a valid PDF with correct xref offsets.
+    let stream = b"0.5 w 72 72 468 648 re S 200 400 m 400 400 l S";
+    let mut pdf = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+    let o1 = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
+    let o2 = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
+    let o3 = pdf.len();
+    pdf.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<<>>>>endobj\n");
+    let o4 = pdf.len();
+    pdf.extend_from_slice(format!("4 0 obj<</Length {}>>stream\n", stream.len()).as_bytes());
+    pdf.extend_from_slice(stream);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let xref = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 5\n");
+    pdf.extend_from_slice(format!("0000000000 65535 f \n").as_bytes());
+    pdf.extend_from_slice(format!("{o1:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("{o2:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("{o3:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("{o4:010} 00000 n \n").as_bytes());
+    pdf.extend_from_slice(format!("trailer<</Size 5/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF").as_bytes());
+    std::fs::write(&path, &pdf).unwrap();
+    path
+}
+
 /// Every tool: (name, a normal call, a bad call). Normal calls run in this order on one session.
 fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
     vec![
@@ -78,6 +107,12 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
             json!({ "action": "create", "path": format!("{dir}/suite-project"), "name": "Project A" }),
             json!({ "action": "open", "path": 5 }),
         ),
+        ("import_check", json!({}), json!({ "path": 5 })),
+        // bim_from_pdf with a synthetic PDF — the PDF is minimal, import will produce a mostly
+        // empty drawing, but the pipeline runs through all stages.
+        ("bim_from_pdf", json!({ "path": &synthetic_pdf(dir) }), json!({ "path": 5 })),
+        ("workflows", json!({}), json!("bad")),
+        ("job_status", json!({}), json!({ "id": 5 })),
         ("select", json!({ "all": true }), json!({ "handles": "1A" })),
         ("get_variable", json!({ "name": "CLAYER" }), json!({})),
         ("set_variable", json!({ "name": "LTSCALE", "value": 2 }), json!({ "name": "LTSCALE" })),
