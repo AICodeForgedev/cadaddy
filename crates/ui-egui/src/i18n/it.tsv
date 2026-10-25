@@ -3136,3 +3136,4 @@ menu	Modify	Edita
 	Export the grouped clash report to PDF	Esporta il rapporto interferenze raggruppato in PDF
 	PDF exported to {path}.	PDF esportato in {path}.
 	Clash detection failed.	Rilevamento interferenze non riuscito.
+	Import Cost Table	Importa tabella dei costi

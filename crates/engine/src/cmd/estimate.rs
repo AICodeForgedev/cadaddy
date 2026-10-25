@@ -60,6 +60,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{folder: path (item_labor_units.csv, assemblies.csv, assembly_parts.csv, prices.csv, rates.json, benchmarks.json, pack.json, factors.csv, production_model.json, field_observations.csv, indexes.csv, tool_rules.json, price_history.csv), label?: \"public data\"|\"baseline\" (default: the folder's pack.json label, else baseline)} → {items, assemblies, prices, rates, benchmarks, label, notes}"),
         CommandSpec::new("estimate.import_p405", "Import P-405 Labor Tables", run_import_p405)
             .params("{file: path to p405_labor_units.csv (all 735 rows), private_folder?: path for the private pack (required when any row is electrical or of no known trade: those go here)} → {public_rows, private_rows, skipped, notes}"),
+        CommandSpec::new("estimate.import_costs", "Import Cost Table", run_import_costs).params(
+            "{path: .csv or .xlsx cost table (columns item, unit, material: dollars per unit, labor_hrs or labor_dollars per unit; size and date optional), sheet?: xlsx sheet, date?: YYYY-MM-DD for undated rows (default estimate.settings' today), source? (default the file's name)} → {prices, skipped, source, notes, next_step}: the estimate's prices from a starter cost table",
+        ),
         CommandSpec::new("estimate.set_price", "Set Estimate Price", run_set_price).params(
             "{item, size?, unit: each|ft|lb|sq ft…, material: dollars per unit, labor_hours?: per unit, labor_dollars?: per unit (÷ crew rate), date: YYYY-MM-DD, source, index?: name in indexes.csv (escalates the price to today)} → {price}",
         ),
@@ -934,7 +937,118 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
     out["ok"] = json!(f.is_empty());
     out["summary"] = summary(&job.priced);
     out["findings"] = json!(f);
+    if let Some(n) = load_costs_step(&job.priced) {
+        out["next_step"] = json!(n);
+    }
     Ok(out)
+}
+
+/// The next step when lines have no price: load a cost table.
+fn load_costs_step(priced: &[Priced]) -> Option<String> {
+    let unpriced = priced.iter().filter(|p| p.material_unit.is_none()).count();
+    (unpriced > 0).then(|| {
+        format!(
+            "{unpriced} of {} lines have no price: load a cost table — estimate.import_costs {{path: costs.csv or .xlsx}} (columns item, unit, material, labor_hrs or labor_dollars; size and date optional)",
+            priced.len()
+        )
+    })
+}
+
+/// A cost table's column for `names` (any case; spaces, `$` and `_` aside).
+fn column(header: &[String], names: &[&str]) -> Option<usize> {
+    let norm = |h: &str| h.to_ascii_lowercase().chars().filter(char::is_ascii_alphanumeric).collect::<String>();
+    header.iter().position(|h| names.iter().any(|n| norm(h) == norm(n)))
+}
+
+/// Cost table rows read at most, and the largest file.
+const MAX_COST_ROWS: usize = 50_000;
+const MAX_COST_BYTES: u64 = 64 * 1024 * 1024;
+
+fn run_import_costs(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "estimate.import_costs";
+    let path =
+        str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "`path` (a .csv or .xlsx cost table) is required"))?;
+    let size = std::fs::metadata(path).map_err(|e| bad(C, format!("{path}: {e}")))?.len();
+    if size > MAX_COST_BYTES {
+        return Err(bad(C, format!("{path}: a cost table is at most 64 MB")));
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad(C, format!("{path}: {e}")))?;
+    let table: Vec<Vec<String>> = if path.to_ascii_lowercase().ends_with(".xlsx") {
+        super::table::xlsx::open(&bytes).and_then(|w| w.cells(str_param(p, "sheet"), None)).map_err(|e| bad(C, format!("{path}: {e}")))?
+    } else {
+        let text = String::from_utf8_lossy(&bytes);
+        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default();
+        let header: Vec<String> = first.split(',').map(|h| h.trim().trim_matches('"').to_ascii_lowercase()).collect();
+        let rows = csv_rows(&text);
+        std::iter::once(header.clone()).chain(rows.iter().map(|r| header.iter().map(|h| r.get(h).cloned().unwrap_or_default()).collect())).collect()
+    };
+    let mut rows = table.into_iter().filter(|r| r.iter().any(|c| !c.trim().is_empty()));
+    let header: Vec<String> = rows.next().unwrap_or_default();
+    let item_col = column(&header, &["item", "description", "name"]).ok_or_else(|| bad(C, "the cost table needs an `item` column"))?;
+    let unit_col = column(&header, &["unit", "uom", "units"]);
+    let size_col = column(&header, &["size"]);
+    let mat_col = column(&header, &["material", "material $", "material_cost", "mat", "unit_cost"])
+        .ok_or_else(|| bad(C, "the cost table needs a `material` column (dollars per unit)"))?;
+    let hrs_col = column(&header, &["labor_hrs", "labor_hours", "labour_hrs", "labour_hours", "hours", "hrs"]);
+    let usd_col = column(&header, &["labor_dollars", "labor $", "labor_cost", "labour_dollars", "labour $", "labour_cost"]);
+    let date_col = column(&header, &["date"]);
+    let (sp, mut st) = state(s, C)?;
+    let crew = setting(&st, "crew_rate", 0.0);
+    let date = str_param(p, "date").map(str::to_string).or_else(|| st.get("settings").and_then(|x| x["today"].as_str()).map(str::to_string));
+    let source = str_param(p, "source").map(str::to_string).unwrap_or_else(|| {
+        std::path::Path::new(path).file_name().map_or_else(|| "cost table".into(), |n| n.to_string_lossy().chars().take(120).collect())
+    });
+    let cell = |r: &[String], c: Option<usize>| c.and_then(|i| r.get(i)).map(|v| v.trim().to_string()).unwrap_or_default();
+    let money = |v: &str| v.trim().trim_start_matches('$').replace(',', "").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e9);
+    let (mut skipped, mut dollars_only) = (Vec::<String>::new(), 0usize);
+    let mut new_prices: Vec<Value> = Vec::new();
+    for (n, r) in rows.take(MAX_COST_ROWS).enumerate() {
+        let item = cell(&r, Some(item_col));
+        let Some(material) = money(&cell(&r, Some(mat_col))) else {
+            if skipped.len() < 50 {
+                skipped.push(format!("row {}: {} has no material price", n + 2, if item.is_empty() { "(no item)" } else { item.as_str() }));
+            }
+            continue;
+        };
+        if item.is_empty() {
+            continue;
+        }
+        let labor_dollars = money(&cell(&r, usd_col));
+        let hours = money(&cell(&r, hrs_col)).or_else(|| labor_dollars.filter(|_| crew > 0.0).map(|d| d / crew));
+        if hours.is_none() && labor_dollars.is_some() {
+            dollars_only += 1;
+        }
+        let row_date = Some(cell(&r, date_col)).filter(|d| !d.is_empty()).or_else(|| date.clone()).unwrap_or_default();
+        let unit = Some(cell(&r, unit_col)).filter(|u| !u.is_empty()).unwrap_or_else(|| "each".into());
+        let mut price = json!({
+            "item": item.chars().take(300).collect::<String>(), "size": cell(&r, size_col), "unit": unit,
+            "material": material, "labor_hours": hours, "date": row_date, "source": source,
+        });
+        if let Some(d) = labor_dollars {
+            price["labor_dollars"] = json!(d);
+        }
+        new_prices.push(price);
+    }
+    let added = new_prices.len();
+    if added == 0 {
+        return Err(bad(
+            C,
+            format!("{path}: no rows with an item and a material price{}", skipped.first().map(|x| format!(" ({x})")).unwrap_or_default()),
+        ));
+    }
+    if let Some(a) = obj(&mut st, "baseline").and_then(|base| base.entry("prices").or_insert_with(|| json!([])).as_array_mut()) {
+        let key = |x: &Value| (x["item"].as_str().map(str::to_ascii_lowercase), x["size"].as_str().map(str::to_ascii_lowercase));
+        a.retain(|x| !new_prices.iter().any(|y| key(x) == key(y)));
+        a.extend(new_prices);
+        let over = a.len().saturating_sub(MAX_ROWS);
+        a.drain(..over);
+    }
+    store(s, sp, st)?;
+    let mut notes: Vec<String> = Vec::new();
+    if dollars_only > 0 {
+        notes.push(format!("{dollars_only} row(s) give labour in dollars only: set crew_rate (estimate.settings) to turn them into hours"));
+    }
+    Ok(json!({ "prices": added, "skipped": skipped, "source": source, "notes": notes, "next_step": "estimate.status (priced lines and totals)" }))
 }
 
 fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1112,7 +1226,11 @@ fn run_bid_summary(s: &mut Session, _p: &Value) -> Result<Value> {
     let (_, st) = state(s, "estimate.bid_summary")?;
     let job = price_job(s, &st, "estimate.bid_summary", true)?;
     let f = findings(&st, &job);
-    Ok(outputs::bid_summary(&st, &job, &f))
+    let mut out = outputs::bid_summary(&st, &job, &f);
+    if let Some(n) = load_costs_step(&job.priced) {
+        out["next_step"] = json!(n);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

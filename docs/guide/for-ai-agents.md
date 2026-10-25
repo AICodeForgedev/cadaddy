@@ -78,6 +78,8 @@ low-level `execute` only when needed.
 |:-----|:------------|
 | `drawing_summary` | What a drawing holds without its geometry: units, extents, layouts, layers with counts, blocks, texts, title block attributes, xrefs, dim styles. Capped and paged for huge drawings. |
 | `bim_job` | One call per BIM step: briefing, import prints, build model, review items, resolve with citations, takeoff, RFIs, export IFC. The project keeps state across sessions. |
+| `guided_job` | Prints → model / takeoff / estimate as a guided pipeline: `start` a job on a folder of PDFs, then loop `next` / `answer`; the software runs import → classify → levels → rooms → devices → build → takeoff and pauses with questions it can't settle alone. `status`, `explain`, `worklist`, `undo`, `report`. |
+| `import_check` | How good a PDF import is: scale, layers, text recovery, fills, symbols, grid — pass/fail, a 0-100 score and per-check evidence; check the open drawing or a file by path. |
 | `project` | Manage projects (groups of drawings sharing rules, types and standards): create, open, add/remove drawings, standards, shelve/restore. |
 | `project_rules` | Project rules with source and tier (field-verified > RFI > submittal > spec > built-in): mounting heights, wiring methods, clearances, tolerances, naming, stud/joist layout. |
 

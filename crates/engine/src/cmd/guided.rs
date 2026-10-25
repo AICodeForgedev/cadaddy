@@ -2337,8 +2337,21 @@ fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// `job.explain {stage}` — explain what a stage does and its current state.
 fn cmd_explain(s: &mut Session, p: &Value) -> Result<Value> {
-    let job = load_job(s)?.ok_or_else(|| bad("job.explain", "no job running"))?;
     let stage_label = p.get("stage").and_then(Value::as_str).unwrap_or("");
+    // Before a job starts, an agent can still ask what the stages do.
+    let Some(job) = load_job(s)? else {
+        let pick = |n: &StageName| json!({"stage": n.label(), "description": n.description(), "status": "NotStarted"});
+        return Ok(match StageName::ALL.iter().find(|n| n.label() == stage_label) {
+            Some(n) => {
+                let mut v = pick(n);
+                v["note"] = json!("no job running yet — job.start {pdfs} starts one");
+                v
+            }
+            None => {
+                json!({"stages": StageName::ALL.iter().map(pick).collect::<Vec<_>>(), "note": "no job running yet — job.start {pdfs} starts one"})
+            }
+        });
+    };
 
     let stage = job.stages.iter().find(|st| st.name.label() == stage_label);
     match stage {
@@ -2678,6 +2691,16 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explain_works_before_a_job_starts() {
+        let mut s = Session::new();
+        let one = cmd_explain(&mut s, &json!({"stage": "classify"})).unwrap();
+        assert_eq!((one["stage"].as_str(), one["status"].as_str()), (Some("classify"), Some("NotStarted")));
+        assert!(one["description"].as_str().is_some_and(|d| !d.is_empty()));
+        let all = cmd_explain(&mut s, &json!({})).unwrap();
+        assert_eq!(all["stages"].as_array().map(Vec::len), Some(StageName::ALL.len()));
+    }
+
     #[test]
     fn junk_tags_are_not_device_types() {
         for (t, want) in [("A", "A"), ("XA", "XA"), ("L4", "L4"), ("EF", "EF"), ("DP2", "DP2"), ("D-1", CIRCUIT_TAGS), ("", "unknown_symbol")] {
