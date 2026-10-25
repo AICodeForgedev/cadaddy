@@ -233,6 +233,11 @@ pub(crate) struct Outlines {
     ext: Bounds2,
     /// Each object's bounds, whether it is infinite (in every window), handle and outlines.
     items: Vec<(Bounds2, bool, Handle, Vec<Vec<Vec2>>)>,
+    /// Where the items are (a search near a point looks at the items near it, not all of them).
+    item_grid: BoxGrid,
+    /// Every visible object of the space in drawing order with its bounds (the islands search).
+    objects: Vec<(Bounds2, Handle)>,
+    object_grid: BoxGrid,
     /// Boundaries found so far: the outer outline, the islands' outlines and the loops. A point
     /// inside the outline and outside every island is in the same area (a room's name and its
     /// number), so it has the same loops.
@@ -257,14 +262,32 @@ impl Outlines {
                 items.push((b, infinite, e.handle, object_polys(d, e, tol, ext)));
             }
         }
-        Ok(Outlines { space, ext, items, found: Vec::new() })
+        let mut item_grid = BoxGrid::new(ext, items.len());
+        for (i, (b, infinite, _, _)) in items.iter().enumerate() {
+            item_grid.insert(i, b, *infinite);
+        }
+        let mut objects = Vec::new();
+        if let Some(store) = d.space(&space) {
+            for e in store.iter().filter(|e| d.is_visible(e)) {
+                objects.push((entity_bounds(d, e, 0), e.handle));
+            }
+        }
+        let mut object_grid = BoxGrid::new(ext, objects.len());
+        for (i, (b, _)) in objects.iter().enumerate() {
+            object_grid.insert(i, b, false);
+        }
+        Ok(Outlines { space, ext, items, item_grid, objects, object_grid, found: Vec::new() })
     }
 
     /// As [`outlines`] for this window (none: everything).
     fn window(&self, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
         let mut out = Vec::new();
         let mut owners = Vec::new();
-        for (b, infinite, h, polys) in &self.items {
+        let picked: Vec<usize> = match near {
+            Some(n) => self.item_grid.near(&n),
+            None => (0..self.items.len()).collect(),
+        };
+        for (b, infinite, h, polys) in picked.into_iter().filter_map(|i| self.items.get(i)) {
             if let Some(n) = near
                 && !*infinite
                 && !b.intersects(&n)
@@ -275,6 +298,94 @@ impl Outlines {
             out.extend(polys.iter().cloned());
         }
         (out, owners)
+    }
+
+    /// The visible objects whose bounds meet `b`, in drawing order, with their bounds.
+    fn objects_near(&self, b: &Bounds2) -> Vec<(Bounds2, Handle)> {
+        self.object_grid.near(b).into_iter().filter_map(|i| self.objects.get(i).copied()).filter(|(eb, _)| eb.intersects(b)).collect()
+    }
+}
+
+/// Boxes by the cells of a uniform grid over the drawing: which boxes may meet a window.
+/// Boxes over many cells (and infinite objects) are kept aside and offered for every window.
+struct BoxGrid {
+    origin: Vec2,
+    cell: f64,
+    nx: usize,
+    ny: usize,
+    cells: Vec<Vec<u32>>,
+    everywhere: Vec<u32>,
+}
+
+impl BoxGrid {
+    /// Most cells a side; a box over more than this many cells is offered everywhere.
+    const SIDE: usize = 256;
+    const WIDE: usize = 64;
+
+    fn new(ext: Bounds2, n: usize) -> BoxGrid {
+        let span = if ext.is_empty() { 0.0 } else { ext.width().max(ext.height()) };
+        // About one box per cell, at most SIDE × SIDE cells.
+        let side = ((n as f64).sqrt().ceil() as usize).clamp(1, Self::SIDE);
+        let cell = if span.is_finite() && span > 0.0 { span / side as f64 } else { 1.0 };
+        let (nx, ny) = if ext.is_empty() {
+            (1, 1)
+        } else {
+            (((ext.width() / cell).ceil() as usize).clamp(1, Self::SIDE), ((ext.height() / cell).ceil() as usize).clamp(1, Self::SIDE))
+        };
+        let origin = if ext.is_empty() { Vec2::ZERO } else { ext.min };
+        BoxGrid { origin, cell, nx, ny, cells: vec![Vec::new(); nx * ny], everywhere: Vec::new() }
+    }
+
+    /// The cell range a box covers (clamped to the grid).
+    fn span(&self, b: &Bounds2) -> Option<(usize, usize, usize, usize)> {
+        if b.is_empty() || !b.min.is_finite() || !b.max.is_finite() {
+            return None;
+        }
+        let at = |v: f64, o: f64, n: usize| (((v - o) / self.cell).floor().max(0.0) as usize).min(n - 1);
+        Some((
+            at(b.min.x, self.origin.x, self.nx),
+            at(b.max.x, self.origin.x, self.nx),
+            at(b.min.y, self.origin.y, self.ny),
+            at(b.max.y, self.origin.y, self.ny),
+        ))
+    }
+
+    /// Box `i` (an empty box is in no window, unless `everywhere`).
+    fn insert(&mut self, i: usize, b: &Bounds2, everywhere: bool) {
+        let Ok(i) = u32::try_from(i) else { return };
+        if everywhere {
+            self.everywhere.push(i);
+            return;
+        }
+        let Some((x0, x1, y0, y1)) = self.span(b) else { return };
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > Self::WIDE {
+            self.everywhere.push(i);
+            return;
+        }
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(c) = self.cells.get_mut(y * self.nx + x) {
+                    c.push(i);
+                }
+            }
+        }
+    }
+
+    /// The boxes that may meet `w`, in insertion order, each once.
+    fn near(&self, w: &Bounds2) -> Vec<usize> {
+        let mut out: Vec<u32> = self.everywhere.clone();
+        if let Some((x0, x1, y0, y1)) = self.span(w) {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    if let Some(c) = self.cells.get(y * self.nx + x) {
+                        out.extend_from_slice(c);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out.into_iter().map(|i| i as usize).collect()
     }
 }
 
@@ -384,13 +495,19 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
     // earlier copy again (a dozen picks on the sample made 1,400 polylines and took seconds).
     let mut taken: Vec<(Bounds2, f64, Vec<Vec2>)> = Vec::new();
     let near = |a: f64, b: f64, t: f64| (a - b).abs() <= t;
+    // The objects to look at for islands: with the cache, the ones near the outer loop (with
+    // their bounds), in drawing order; else all of them.
+    let candidates: Vec<(Bounds2, &std::sync::Arc<Entity>)> = match (cache, d.space(&space)) {
+        (Some(c), _) => c.objects_near(&ob).into_iter().filter_map(|(b, h)| d.space(&space)?.get(h).map(|e| (b, e))).collect(),
+        (None, Some(store)) => store.iter().filter(|e| d.is_visible(e)).map(|e| (entity_bounds(d, e, 0), e)).collect(),
+        (None, None) => Vec::new(),
+    };
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
-    if let Some(store) = d.space(&space) {
-        for e in store.iter() {
+    {
+        for &(eb, e) in &candidates {
             if !d.is_visible(e) {
                 continue;
             }
-            let eb = entity_bounds(d, e, 0);
             if !ob.contains_box(&eb) {
                 continue;
             }
@@ -419,15 +536,14 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
     }
     // Text inside the area is an island (normal island detection): the hatch leaves a margin
     // around it, as AutoCAD does, instead of running over the words.
-    if let Some(store) = d.space(&space) {
-        for e in store.iter() {
+    {
+        for &(eb, e) in &candidates {
             if !d.is_visible(e)
                 || !matches!(&e.kind, EntityKind::Text(t) if !t.value.trim().is_empty())
                     && !matches!(&e.kind, EntityKind::MText(m) if !m.contents.trim().is_empty())
             {
                 continue;
             }
-            let eb = entity_bounds(d, e, 0);
             if eb.is_empty() || eb.contains(p) {
                 continue;
             }
@@ -1202,6 +1318,53 @@ mod tests {
         assert!(checked >= 24, "{checked}");
         // Outside everything: both find nothing.
         assert!(loops_at_lazy(&s, Vec2::new(-500.0, -500.0), &mut cache).is_err());
+    }
+
+    /// Sheets of rooms side by side (a print set's job), with text and closed islands in the
+    /// rooms and a line across all of them: the outlines' grid gives the same loops at every point
+    /// as looking at every object.
+    #[test]
+    fn the_outlines_grid_finds_the_same_loops_as_a_full_scan() {
+        let mut s = Session::new();
+        for sheet in 0..4 {
+            let x0 = f64::from(sheet) * 2000.0;
+            for i in 0..6 {
+                for j in 0..4 {
+                    let (x, y) = (x0 + f64::from(i) * 150.0, f64::from(j) * 120.0);
+                    s.execute("rectang", &json!({ "p1": [x, y], "p2": [x + 150.0, y + 120.0] })).unwrap();
+                    if (i + j) % 2 == 0 {
+                        s.execute("text", &json!({ "insert": [x + 20.0, y + 80.0], "height": 8, "value": format!("ROOM {sheet}{i}{j}") })).unwrap();
+                    }
+                    if (i + j) % 3 == 0 {
+                        s.execute("rectang", &json!({ "p1": [x + 90.0, y + 10.0], "p2": [x + 130.0, y + 50.0] })).unwrap();
+                        s.execute("circle", &json!({ "center": [x + 110.0, y + 30.0], "radius": 5.0 })).unwrap();
+                    }
+                }
+            }
+        }
+        s.execute("line", &json!({ "points": [[-100, 600], [8000, 600]] })).unwrap();
+        s.execute("line", &json!({ "points": [[-100, 480], [-100, 600]] })).unwrap();
+        let mut cache = None;
+        let mut checked = 0;
+        for sheet in 0..4 {
+            for i in 0..6 {
+                for j in 0..4 {
+                    let (x, y) = (f64::from(sheet) * 2000.0 + f64::from(i) * 150.0, f64::from(j) * 120.0);
+                    for (dx, dy) in [(10.0, 10.0), (75.0, 100.0), (100.0, 20.0), (110.0, 30.0)] {
+                        let p = Vec2::new(x + dx, y + dy);
+                        let plain = loops_at(&s, p).map_err(|e| e.to_string());
+                        let cached = loops_at_lazy(&s, p, &mut cache).map_err(|e| e.to_string());
+                        assert_eq!(plain, cached, "at {p:?}");
+                        checked += usize::from(plain.is_ok());
+                    }
+                }
+            }
+        }
+        assert!(checked >= 300, "{checked}");
+        // Between the sheets, and above them under the long line.
+        for p in [Vec2::new(1500.0, 200.0), Vec2::new(3000.0, 550.0)] {
+            assert_eq!(loops_at(&s, p).map_err(|e| e.to_string()), loops_at_lazy(&s, p, &mut cache).map_err(|e| e.to_string()), "at {p:?}");
+        }
     }
 
     /// The drawing's only hatch and its handle (hatches go to the back of the draw order, so not the last entity).

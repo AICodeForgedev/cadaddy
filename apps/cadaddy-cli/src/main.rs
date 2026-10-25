@@ -960,6 +960,8 @@ fn main() -> ExitCode {
 
 fn cli() -> ExitCode {
     install_io();
+    // A guided job (job.start) says what it is doing while it runs, one line per stage and sheet.
+    cadaddy_engine::cmd::guided::set_progress_sink(Some(|line| eprintln!("{line}")));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let r = match args.first().map(String::as_str) {

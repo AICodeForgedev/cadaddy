@@ -189,7 +189,7 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
             json!({
                 "number": sh.number, "title": sh.title, "discipline": sh.discipline,
                 "type": sh.sheet_type, "level": sh.level, "scale": sh.scale_text,
-                "file": sh.file, "dirty": sh.dirty,
+                "file": sh.file, "page": sh.page, "dirty": sh.dirty,
                 "stages": sh.stage_results.keys().collect::<Vec<_>>(),
             })
         })
