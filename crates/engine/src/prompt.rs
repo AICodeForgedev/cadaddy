@@ -41,8 +41,8 @@ pub struct Prompt {
     /// prompt (a point with no base yet, e.g. the first point of a line). Elsewhere a deferred
     /// pick arrives as the plain point it was picked at.
     pub deferred: bool,
-    /// The base is a rectangle's first corner (ZOOM Window, RECTANG, ARRAYRECT's unit cell): ortho
-    /// does not bend the opposite corner, so the rectangle keeps its area.
+    /// The base is a rectangle's first corner (ZOOM Window, PLOTWINDOW, RECTANG, ARRAYRECT's unit
+    /// cell): ortho does not bend the opposite corner, so the rectangle keeps its area.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub corner: bool,
     /// The grip this prompt stretches (one hot grip at the STRETCH prompt), as (object, grip
@@ -66,6 +66,10 @@ pub struct Prompt {
     /// pointer boxes.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub distance: bool,
+    /// The prompt picks one object whatever it says: an AutoLISP `entsel`/`nentsel`, whose message
+    /// the routine writes, so it cannot be read for the word "Select" (#1598).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub picks_one: bool,
 }
 
 /// Parse `@distance<angle` (relative polar), returning `(distance, angle in radians)`.
@@ -101,7 +105,7 @@ impl Prompt {
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
-        self.keywords = k.iter().map(|s| s.to_string()).collect();
+        self.keywords = k.iter().map(ToString::to_string).collect();
         self
     }
     pub fn base(mut self, p: Vec2) -> Self {
@@ -148,11 +152,14 @@ impl Prompt {
         self.default = Some(d.into());
         self
     }
-    /// The prompt picks objects: a "Select objects" prompt, or a point prompt whose click selects
-    /// one object ("Select object to offset", "Select first line"…, the commands that pick a
-    /// single object themselves). The UI shows the pick box there.
+    /// The prompt picks objects: a "Select objects" prompt, one that says it picks a single object
+    /// ([`Prompt::picks_one`]), or a point prompt whose click selects one ("Select object to
+    /// offset", "Select first line"…, the commands that pick a single object themselves). The UI
+    /// shows the pick box there. The wording is only read where the engine wrote it: a routine
+    /// writes its own message (`raw`), which may open with "Select" and still ask for a point,
+    /// and says through `picks_one` when it picks instead (#1635 review).
     pub fn picks_objects(&self) -> bool {
-        self.accept.select || (self.accept.point && self.message.starts_with("Select"))
+        self.picks_one || self.accept.select || (self.accept.point && !self.raw && self.message.starts_with("Select"))
     }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {

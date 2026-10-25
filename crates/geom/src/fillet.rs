@@ -158,7 +158,7 @@ fn seg_cross(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> Option<(f64, f64)> {
 }
 
 /// Crossings of two sampled polylines, as parameter seeds, with chunked box culling.
-fn crossings(a: &[(f64, Vec2)], b: &[(f64, Vec2)], out: &mut Vec<(f64, f64)>) {
+fn crossings(a: &[(f64, Vec2)], b: &[(f64, Vec2)], out: &mut Vec<(f64, f64)>, work: &mut usize) {
     const CHUNK: usize = 16;
     let boxes = |s: &[(f64, Vec2)]| -> Vec<(usize, Bounds2)> {
         (0..s.len().saturating_sub(1))
@@ -169,12 +169,16 @@ fn crossings(a: &[(f64, Vec2)], b: &[(f64, Vec2)], out: &mut Vec<(f64, f64)>) {
     let (ba, bb) = (boxes(a), boxes(b));
     for (ia, xa) in &ba {
         for (ib, xb) in &bb {
+            let Some(left) = work.checked_sub(1) else { return };
+            *work = left;
             if !xa.intersects(xb) {
                 continue;
             }
             for i in *ia..(*ia + CHUNK).min(a.len().saturating_sub(1)) {
                 let (Some(&(ta0, a0)), Some(&(ta1, a1))) = (a.get(i), a.get(i + 1)) else { continue };
                 for j in *ib..(*ib + CHUNK).min(b.len().saturating_sub(1)) {
+                    let Some(left) = work.checked_sub(1) else { return };
+                    *work = left;
                     let (Some(&(tb0, b0)), Some(&(tb1, b1))) = (b.get(j), b.get(j + 1)) else { continue };
                     if let Some((u, v)) = seg_cross(a0, a1, b0, b1) {
                         out.push((ta0 + (ta1 - ta0) * u, tb0 + (tb1 - tb0) * v));
@@ -255,24 +259,35 @@ pub fn tangent_circles(c1: &TanCurve, c2: &TanCurve, r: f64, near: &[Vec2]) -> V
     let (Some(r1), Some(r2)) = (c1.range(&win), c2.range(&win)) else { return Vec::new() };
     let signs: &[(f64, f64)] = if r > 0.0 { &[(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] } else { &[(0.0, 0.0)] };
     let mut out: Vec<CornerFit> = Vec::new();
+    let mut work = 16_000_000usize;
     for (s1, s2) in signs {
         let (d1, d2) = (s1 * r, s2 * r);
         let (o1, o2) = (sample(c1, &r1, d1), sample(c2, &r2, d2));
-        let mut seeds = Vec::new();
+        // Refine each pair before visiting the next: raw duplicate seeds in an early run must
+        // not consume all candidate slots. A separate request-wide budget bounds actual work.
         for a in &o1 {
             for b in &o2 {
-                crossings(a, b, &mut seeds);
-            }
-        }
-        for seed in seeds {
-            let Some((t1, t2)) = refine(c1, &r1, d1, c2, &r2, d2, seed, tol) else { continue };
-            let (Some(center), p1, p2) = (c1.offset(t1, d1), c1.point(t1), c2.point(t2)) else { continue };
-            let near_dup = |f: &CornerFit| f.center.near(center, tol * 1e3) && f.p1.near(p1, tol * 1e3) && f.p2.near(p2, tol * 1e3);
-            if !out.iter().any(near_dup) {
-                out.push(CornerFit { t1, t2, p1, p2, center });
-            }
-            if out.len() >= MAX_SOLUTIONS {
-                return out;
+                let mut seeds = Vec::new();
+                crossings(a, b, &mut seeds, &mut work);
+                seeds.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+                seeds.dedup_by(|x, y| (x.0 - y.0).abs() < 1e-9 && (x.1 - y.1).abs() < 1e-9);
+                for seed in seeds {
+                    // Newton refinement has a fixed iteration cap and several curve evaluations.
+                    let Some(left) = work.checked_sub(128) else { return out };
+                    work = left;
+                    let Some((t1, t2)) = refine(c1, &r1, d1, c2, &r2, d2, seed, tol) else { continue };
+                    let (Some(center), p1, p2) = (c1.offset(t1, d1), c1.point(t1), c2.point(t2)) else { continue };
+                    let near_dup = |f: &CornerFit| f.center.near(center, tol * 1e3) && f.p1.near(p1, tol * 1e3) && f.p2.near(p2, tol * 1e3);
+                    if !out.iter().any(near_dup) {
+                        out.push(CornerFit { t1, t2, p1, p2, center });
+                    }
+                    if out.len() >= MAX_SOLUTIONS {
+                        return out;
+                    }
+                }
+                if work == 0 {
+                    return out;
+                }
             }
         }
     }
@@ -351,5 +366,20 @@ mod tests {
         let _ = tangent_circles(&huge, &s, 1e308, &[Vec2::new(f64::INFINITY, 0.0)]);
         let bad = TanCurve::Spline(Spline { degree: 3, knots: vec![0.0, 1.0], control: vec![Vec2::ZERO], ..Spline::default() });
         assert!(tangent_circles(&bad, &s, 1.0, &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod seed_budget_tests {
+    use super::*;
+    #[test]
+    fn crossing_visits_have_an_independent_work_limit() {
+        let a = [(0.0, Vec2::new(0.0, 0.0)), (1.0, Vec2::new(1.0, 1.0))];
+        let b = [(0.0, Vec2::new(0.0, 1.0)), (1.0, Vec2::new(1.0, 0.0))];
+        let mut seeds = Vec::new();
+        crossings(&a, &b, &mut seeds, &mut 0);
+        assert!(seeds.is_empty());
+        crossings(&a, &b, &mut seeds, &mut 10);
+        assert_eq!(seeds, vec![(0.5, 0.5)]);
     }
 }

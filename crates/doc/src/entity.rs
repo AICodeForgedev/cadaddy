@@ -18,7 +18,11 @@ impl Handle {
         format!("{:X}", self.0)
     }
     pub fn parse_hex(s: &str) -> Option<Handle> {
-        u64::from_str_radix(s.trim(), 16).ok().map(Handle)
+        let s = s.trim();
+        if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        u64::from_str_radix(s, 16).ok().map(Handle)
     }
 }
 
@@ -1442,9 +1446,12 @@ impl EntityKind {
             EntityKind::LwPolyline(p) => {
                 let mut g: Vec<Vec2> = Vec::new();
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                // Compute the segments once, not once per vertex: rebuilding the whole segment
+                // vector inside the loop is quadratic in the vertex count (CWE-407).
+                let segs = pl.segments();
                 for (i, v) in p.vertices.iter().enumerate() {
                     g.push(v.p);
-                    if let Some(s) = pl.segments().get(i) {
+                    if let Some(s) = segs.get(i) {
                         g.push(s.mid());
                     }
                 }
@@ -1501,4 +1508,31 @@ fn transform_text(t: &mut Text, m: &Mat3, s: f64, rot: f64, mirror: bool) {
     t.height *= s;
     // MIRRTEXT = 0 (the default): mirrored text keeps reading left to right.
     t.rotation = cadcraft_geom::norm_angle(t.rotation + if mirror { 0.0 } else { rot });
+}
+
+#[cfg(test)]
+mod grip_tests {
+    use super::*;
+    use cadcraft_geom::PolyVertex;
+
+    #[test]
+    fn handle_parse_hex_accepts_only_hex_digits() {
+        assert_eq!(Handle::parse_hex("1a"), Some(Handle(0x1A)));
+        assert_eq!(Handle::parse_hex(" 1A "), Some(Handle(0x1A)));
+        for bad in ["+1A", "-1A", "", "+", "1 A"] {
+            assert_eq!(Handle::parse_hex(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn polyline_grips_are_vertices_and_midpoints() {
+        // Grips are each vertex plus the midpoint of each segment; the segment vector is computed
+        // once rather than rebuilt per vertex (CWE-407, row 35).
+        let verts: Vec<PolyVertex> = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)].iter().map(|&(x, y)| PolyVertex::new(Vec2::new(x, y))).collect();
+        let e = EntityKind::LwPolyline(LwPolyline { vertices: verts, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false });
+        let g = e.grips();
+        // 3 vertices + 2 segment midpoints.
+        assert_eq!(g.len(), 5, "{g:?}");
+        assert!(g.contains(&Vec2::new(0.0, 0.0)) && g.contains(&Vec2::new(5.0, 0.0)));
+    }
 }

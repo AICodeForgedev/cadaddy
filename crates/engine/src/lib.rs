@@ -9,9 +9,13 @@
 #![forbid(unsafe_code)]
 
 pub mod assoc;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod atomic_write;
 pub mod audit;
 pub mod autosave;
 pub mod blockedit;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capped_read;
 pub mod cmd;
 pub mod doc_path;
 mod finite;
@@ -397,6 +401,9 @@ pub struct Settings {
     pub gridmajor: u32,
     /// ZOOMFACTOR: how far one mouse wheel step zooms (3..=100).
     pub zoomfactor: u32,
+    /// MEASUREINIT: the units of a new drawing made without a template (NEW, QNEW and the first
+    /// drawing at startup): `false` (0, the default) imperial, `true` (1) metric.
+    pub measureinit: bool,
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
     pub dynmode: bool,
@@ -438,6 +445,10 @@ pub struct Settings {
     pub pickfirst: bool,
     /// ACADLSPASDOC: acad.lsp loads into every drawing, not once per session.
     pub acadlspasdoc: bool,
+    /// CMDECHO: kept for routines that switch command echo around their commands; no command reads it yet.
+    pub cmdecho: bool,
+    /// FILEDIA: kept for routines that switch file dialogs off around a script; no command reads it yet.
+    pub filedia: bool,
     pub pickadd: bool,
     /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
     /// Drag-only mode (1) is not supported yet.
@@ -511,6 +522,7 @@ impl Default for Settings {
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             zoomfactor: 60,
+            measureinit: false,
             view_layer_snapshot: true,
             dynmode: true,
             dyndigrip: 31,
@@ -529,6 +541,8 @@ impl Default for Settings {
             aperture: 10.0,
             pickfirst: true,
             acadlspasdoc: false,
+            cmdecho: true,
+            filedia: true,
             pickadd: true,
             pickdrag: true,
             pickstyle: 1,
@@ -675,6 +689,9 @@ impl Default for MLeaderOptions {
 pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
+    /// Monotonic count of changes to the open drawings and the active one. A screenshot queued
+    /// across a switch is rejected even when a later switch returns to the same drawing.
+    pub doc_epoch: u64,
     pub settings: Settings,
     pub running: Option<Running>,
     /// A script is running ([`Session::script`]); a SCRIPT command inside it is refused.
@@ -755,6 +772,7 @@ impl Session {
         Session {
             docs: Vec::new(),
             active: 0,
+            doc_epoch: 0,
             settings: Settings::default(),
             running: None,
             in_script: false,
@@ -787,6 +805,7 @@ impl Session {
             hatch_picks: None,
         }
     }
+    /// Append a new untitled drawing (`DrawingN`, metric or imperial default view), end a running command, make it active, bump the document epoch and return its index.
     pub fn new_drawing(&mut self, metric: bool) -> usize {
         self.untitled_counter += 1;
         let d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
@@ -795,8 +814,10 @@ impl Session {
         self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
+        self.bump_doc_epoch();
         self.active
     }
+    /// Append a loaded drawing, fit the view to its model extents (aspect-corrected, minimum height 1e-6) when non-empty, end a running command, make it active, bump the epoch and return its index.
     pub fn open_drawing(&mut self, d: Drawing, title: &str, path: Option<String>) -> usize {
         let mut st = DocState::new(d, title, path);
         let ext = st.doc.extents(&Space::Model);
@@ -813,8 +834,14 @@ impl Session {
         self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
+        self.bump_doc_epoch();
         self.active
     }
+    /// Record that which drawing is open or active changed (screenshot binding).
+    pub fn bump_doc_epoch(&mut self) {
+        self.doc_epoch = self.doc_epoch.wrapping_add(1);
+    }
+
     /// A command still waiting for input belongs to the drawing it started in: end it there
     /// before another drawing becomes current, so its undo step lands in that drawing.
     fn end_running(&mut self) {
@@ -832,6 +859,7 @@ impl Session {
             Err(_) => {
                 self.docs.truncate(n);
                 self.active = self.active.min(self.docs.len().saturating_sub(1));
+                self.bump_doc_epoch();
                 Err(EngineError::Internal("open".into(), "panic".into()))
             }
         }
@@ -861,7 +889,7 @@ impl Session {
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
-        self.state().map(|s| s.edit_space()).unwrap_or_default()
+        self.state().map(DocState::edit_space).unwrap_or_default()
     }
     /// The tab being displayed: Model or a layout, regardless of MSPACE.
     pub fn layout_space(&self) -> Space {
@@ -917,13 +945,26 @@ impl Session {
         if d.annotative_by_style(&kind) {
             common.anno_scales = vec![d.current_anno_scale()];
         }
+        // Lines, arcs, circles, points, polylines and 2D solids take the current 3D thickness
+        // (THICKNESS). RECTANG sets its own, and text never takes it.
+        if matches!(
+            kind,
+            EntityKind::Line(_)
+                | EntityKind::Arc(_)
+                | EntityKind::Circle(_)
+                | EntityKind::Point(_)
+                | EntityKind::LwPolyline(_)
+                | EntityKind::Solid(_)
+        ) {
+            common.thickness = Some(d.header.f64("THICKNESS", 0.0)).filter(|t| t.is_finite()).unwrap_or(0.0);
+        }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
     }
 
     /// World units per pixel at the current view.
     pub fn pixel_size(&self) -> f64 {
-        let v = self.state().map(|s| s.view()).unwrap_or_default();
+        let v = self.state().map(DocState::view).unwrap_or_default();
         v.height / self.viewport_px.1.max(1.0)
     }
 
@@ -943,8 +984,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the drawing as it was.
                 if let Some((doc, sel, uid)) = &before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
