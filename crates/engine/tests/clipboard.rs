@@ -182,7 +182,7 @@ fn cutbase_cuts_with_the_given_base_point() {
     s.active = a;
     let r = s.execute("cutbase", &json!({ "handles": handles(&s), "base": [5, 5] })).unwrap();
     // The wall is on a locked layer, so only the door is cut.
-    assert_eq!(r, json!({ "cut": 1 }));
+    assert_eq!(r, json!({ "cut": 1, "message": "1 object was on a locked layer." }));
     assert_eq!(s.clipboard.len(), 1);
     assert_eq!(s.clipboard_base, Vec2::new(5.0, 5.0));
     let left = model(&s);
@@ -199,6 +199,35 @@ fn cutbase_cuts_with_the_given_base_point() {
     s.active = a;
     s.execute("u", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().model.len(), 2);
+}
+
+#[test]
+fn cutting_only_locked_objects_keeps_the_clipboard() {
+    let mut s = Session::empty();
+    let mut da = drawing_a();
+    for l in &mut da.layers {
+        l.locked = true;
+    }
+    s.open_drawing(da, "A", None);
+    let hs = handles(&s);
+    s.execute("copyclip", &json!({ "handles": [hs[0]] })).unwrap();
+    let held = s.clipboard.clone();
+    let r = s.execute("cutclip", &json!({ "handles": hs })).unwrap();
+    assert_eq!(r, json!({ "cut": 0, "message": "2 objects were on a locked layer. Nothing was cut." }));
+    assert_eq!(model(&s).len(), 2, "nothing was erased");
+    assert_eq!(s.clipboard.len(), 1, "the clipboard keeps what it held");
+    assert_eq!(s.clipboard[0].handle, held[0].handle);
+
+    // CUTBASE at the command line says so too.
+    s.start("cutbase").unwrap();
+    s.input(cadcraft_engine::Input::Point(Vec2::new(3.0, 4.0))).unwrap();
+    let wall = s.doc().unwrap().model.iter().next().unwrap().handle;
+    s.input(cadcraft_engine::Input::Pick(vec![wall])).unwrap();
+    s.input(cadcraft_engine::Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    assert!(s.log.iter().any(|l| l.contains("1 object was on a locked layer. Nothing was cut.")), "{:?}", s.log);
+    assert_eq!(s.clipboard.len(), 1);
+    assert_eq!(model(&s).len(), 2);
 }
 
 #[test]
