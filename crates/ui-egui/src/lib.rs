@@ -156,7 +156,7 @@ impl SaveFormat {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
-            docking: docking::Workspace::default(),
+            docking: docking::default_workspace(),
 
             interface_language: i18n::Preference::default(),
             show_toolsets: true,

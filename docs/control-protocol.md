@@ -134,7 +134,7 @@ Tool Sets, Layers, and Properties can be regrouped, split, floated within the ap
 
 Panel IDs: `toolSets`, `layers`, `properties`, `externalReferences`. The protected center is `canvas`.
 
-`ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
+`ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|tab|left|right|top|bottom|above|below`, default `center`). Center and tab group with the target; side zones split beside it; above and below add a group in a floating window. `open` and `activate` show a hidden panel at its last place and select it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
 
 The QuickCalc palette (`quickCalc`) is not part of the default arrangement. Typed `QUICKCALC`/`QC`
 and `ui.panel.quickcalc` explicitly open and activate it: it floats the first time and later
@@ -150,9 +150,9 @@ Advanced `ui.dock` operations use the same validated transaction as pointer gest
 `moveFloating` updates `rect`, `resizeSplit` accepts a boolean child `path` and
 `size` (`{"Ratio":0.5}`, `{"FixedFirst":280}`, or `{"FixedSecond":280}`),
 `setStackOpen` takes `open`, and `resizeStack` takes a point `height` or null.
-A center `move` can include `before` (panel ID or null to append) for tab order.
+A center or tab `move` can include `before` (panel ID or null to append) for tab order.
 The equivalent `{"action": ...}` form accepts a serialized shared docking action;
-this is also the form emitted by the renderer. Protected-canvas and app-specific panel
+this is also the form emitted by the renderer, and it takes every action of craft-ui's docking, group, column and window moves included. Protected-canvas and app-specific panel
 rules apply equally to both forms.
 
 ## Command-line replies
