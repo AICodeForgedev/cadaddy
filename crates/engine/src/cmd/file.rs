@@ -554,6 +554,107 @@ pub fn sync_image_folder(s: &Session) {
     }
 }
 
+/// This session's own folder in the system temp folder, for image files a drawing with no file
+/// yet needs (PDFIMPORT's). `None` where there is no file system (the web).
+fn session_image_root() -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(std::env::temp_dir().join(format!("cadaddy-images-{}", std::process::id())))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// A new folder name for the image files of one PDFIMPORT into a drawing with no file yet: in
+/// this session's temp folder, never next to the PDF (often the job's print set). Each import gets
+/// its own, so two PDFs of the same name never overwrite each other's images. SAVE moves them next
+/// to the drawing ([`adopt_session_images`]). `None` on the web (the images stay in memory).
+pub fn session_image_folder(stem: &str) -> Option<std::path::PathBuf> {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let clean: String = stem.chars().take(80).map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
+    session_image_root().map(|root| root.join(format!("{n} {} images", clean.trim())))
+}
+
+/// Before the drawing is saved at `path`: the image files PDFIMPORT left in this session's temp
+/// folder ([`session_image_folder`]) are copied into "<drawing name> images" next to it, and the
+/// IMAGE objects point there, so the saved drawing never refers to a temp file. A file that can't
+/// be copied stays where it was; the returned notes say which.
+pub fn adopt_session_images(s: &mut Session, path: &str) -> Vec<String> {
+    let Some(root) = session_image_root() else { return Vec::new() };
+    if !is_drawing_file(path) || !crate::agent::writes_allowed() {
+        return Vec::new();
+    }
+    let Ok(d) = s.doc() else { return Vec::new() };
+    let found: Vec<(cadaddy_doc::Handle, String)> = d
+        .model
+        .iter()
+        .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Image(i) if std::path::Path::new(&i.path).starts_with(&root) => Some((e.handle, i.path.clone())),
+            _ => None,
+        })
+        .collect();
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let full = std::path::absolute(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    let stem = full.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Drawing".into());
+    let dir = full.parent().unwrap_or_else(|| std::path::Path::new(".")).join(format!("{stem} images"));
+    let mut notes = Vec::new();
+    let mut moved: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for (h, old) in found {
+        let new = match moved.get(&old) {
+            Some(n) => n.clone(),
+            None => {
+                let n = match copy_into(std::path::Path::new(&old), &dir) {
+                    Ok(n) => Some(n.to_string_lossy().to_string()),
+                    Err(e) => {
+                        notes.push(format!("{old} couldn't be copied next to the drawing ({e}); the image still points at the temp folder"));
+                        None
+                    }
+                };
+                moved.insert(old.clone(), n.clone());
+                n
+            }
+        };
+        let Some(new) = new else { continue };
+        if let Ok(d) = s.doc_mut() {
+            let _ = d.modify_entity(h, |e| {
+                if let cadaddy_doc::EntityKind::Image(i) = &mut e.kind {
+                    i.path = new.clone();
+                }
+            });
+        }
+    }
+    notes
+}
+
+/// Copy the file `from` into the folder `dir` (made if needed) under its own name, or, when a
+/// different file already has that name there, under the first free "<name>-2", "-3"…; the path
+/// it now has.
+fn copy_into(from: &std::path::Path, dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let bytes = std::fs::read(from)?;
+    crate::writefile::check(dir)?;
+    std::fs::create_dir_all(dir)?;
+    let name = from.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "image".into());
+    let ext = from.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    for k in 1..=999u32 {
+        let to = dir.join(if k == 1 { format!("{name}{ext}") } else { format!("{name}-{k}{ext}") });
+        match std::fs::read(&to) {
+            Ok(have) if have == bytes => return Ok(to),
+            Ok(_) => continue,
+            Err(_) => {
+                crate::writefile::write(&to, &bytes)?;
+                return Ok(to);
+            }
+        }
+    }
+    Err(std::io::Error::other(format!("no free file name for {name}{ext} in {}", dir.display())))
+}
+
 /// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
 pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -859,6 +960,10 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     // The save date, and fields worked out on saving (FIELDEVAL 2).
     if is_drawing_file(path) {
         crate::fields::on_save(s);
+        // PDF images still in the session's temp folder go with the drawing.
+        for note in adopt_session_images(s, path) {
+            s.echo(note);
+        }
     }
     let (n, incremental) = match save_cdy(s, path, opts)? {
         Some(r) => r,
