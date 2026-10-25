@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
             .files()
-            .params("{stages?: [name], resume?: bool} → {stages_run, total_items, elapsed_ms}")
+            .params("{stages?: [name], resume?: bool, force?: bool (run even when the import check failed)} → {stages_run, total_items, elapsed_ms}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
@@ -120,17 +120,16 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
 fn run_stages(s: &mut Session, p: &Value) -> Result<Value> {
     // Gate: refuse to run stages if the current drawing's import check failed, unless force.
     let force = bool_or(p, "force", false);
-    if !force {
-        if let Ok(d) = s.doc() {
-            if !super::import_check::passes(d) {
-                let fails = super::import_check::failed_checks(d);
-                let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
-                return Err(EngineError::Other(format!(
-                    "printset.run: import check failed ({}); fix the import or pass `force: true` to override",
-                    names.join(", ")
-                )));
-            }
-        }
+    if !force
+        && let Ok(d) = s.doc()
+        && !super::import_check::passes(d)
+    {
+        let fails = super::import_check::failed_checks(d);
+        let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+        return Err(EngineError::Other(format!(
+            "printset.run: import check failed ({}); fix the import or pass `force: true` to override",
+            names.join(", ")
+        )));
     }
     let resume = bool_or(p, "resume", false);
 

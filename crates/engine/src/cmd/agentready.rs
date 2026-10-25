@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
         CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
-            "{level?: name, discipline?: architecture|structure|mep|all} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
+            "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
         ),
     ]
 }
@@ -1075,19 +1075,18 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
-    // Gate: refuse to build if the import check failed, unless --force.
+    // Gate: refuse to build if the import check failed, unless --force or discipline is mep
+    // (the MEP geometry reader handles paper-scale and pen-layer drawings natively).
     let force = bool_or(p, "force", false);
-    if !force {
-        if let Ok(d) = s.doc() {
-            if !super::import_check::passes(d) {
-                let fails = super::import_check::failed_checks(d);
-                let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
-                return Err(bad(
-                    "bim.build",
-                    format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", ")),
-                ));
-            }
-        }
+    let disc = str_param(p, "discipline").unwrap_or("all");
+    if !force
+        && disc != "mep"
+        && let Ok(d) = s.doc()
+        && !super::import_check::passes(d)
+    {
+        let fails = super::import_check::failed_checks(d);
+        let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+        return Err(bad("bim.build", format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", "))));
     }
     let (sp, stored) = current(s, "bim.build")?;
     if !stored {
@@ -1107,6 +1106,61 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if !["architecture", "structure", "mep", "all"].contains(&disc) {
         return Err(bad("bim.build", "`discipline` is architecture, structure, mep or all"));
     }
+
+    // Auto-read MEP data: when building with discipline mep or all, populate the spec's
+    // MEP runs/equipment/terminals from the current drawing's geometry before building.
+    // Only re-read when (a) the drawing has entities to read from and (b) the spec does
+    // NOT already have MEP runs — pre-set runs (from bspec.set, a previous import or an
+    // agent pipeline) are authoritative and must not be overwritten by a re-read.
+    // (c) The sheet is not a notes/legend/schedule page — those have schedule-table lines
+    // that the readers misidentify as MEP runs.
+    let mut mep_warnings: Vec<String> = Vec::new();
+    let has_drawing_entities = s.doc().is_ok_and(|d| !d.model.is_empty());
+    let spec_has_mep = current(s, "bim.build").map(|(sp, _)| !sp.mep.runs.is_empty()).unwrap_or(false);
+    let is_notes_sheet = s
+        .doc()
+        .ok()
+        .map(|d| {
+            let texts = cadaddy_mepfix::sheet_facts::texts(d);
+            cadaddy_mepfix::sheet_facts::identify_sheet(&texts).is_some_and(|ident| {
+                let up = ident.title.to_ascii_uppercase();
+                // Notes/legend/schedule/section/detail sheets have no plan-view MEP geometry.
+                up.contains("NOTES")
+                    || up.contains("LEGEND")
+                    || up.contains("ABBREVIATION")
+                    || up.contains("SCHEDULE")
+                    || up.contains("SYMBOLS")
+                    || up.contains("SECTION")
+                    || up.contains("DETAIL")
+            })
+        })
+        .unwrap_or(false);
+    if (disc == "mep" || disc == "all") && has_drawing_entities && !spec_has_mep && !is_notes_sheet {
+        // First, try standard layer-based reading (mep.read {apply}).
+        if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
+            mep_warnings.push(format!("mep.read: {e}"));
+        }
+        // Then, geometry-based reading (ducts.read {apply}) for PDF-imported sheets.
+        match super::readers::read_mech_from_drawing(s) {
+            Ok(net) => {
+                let spec_before = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if !net.runs.is_empty() || !net.equipment.is_empty() || !net.terminals.is_empty() {
+                    let _ = s.execute("ducts.read", &json!({"apply": true}));
+                }
+                let spec_after = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if spec_after == 0 && spec_before == 0 {
+                    mep_warnings.push(
+                        "no MEP runs found in the drawing — mechanical sheets may need to be imported first, or duct lines may not be present"
+                            .to_string(),
+                    );
+                }
+            }
+            Err(_) => {
+                // mep.read already ran; proceed with whatever it found.
+            }
+        }
+    }
+
     let r = s.execute("model.build", &json!({}))?;
     let counts = built_counts(s.doc()?);
     let mut st = load(s.doc()?);
@@ -1124,7 +1178,8 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         Some(l) => pick(&counts.get(l).cloned().unwrap_or_default()),
         None => json!(counts.iter().map(|(l, m)| (l.clone(), pick(m))).collect::<BTreeMap<_, _>>()),
     };
-    let warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
+    let mut warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
+    warnings.extend(mep_warnings.into_iter().map(Value::from));
     Ok(capped(json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings}), "warnings", ANSWER_MAX))
 }
 

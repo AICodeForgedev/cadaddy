@@ -6,7 +6,7 @@
 //! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
 //! cadaddy-cli verify FILE.cdy                     check every chunk's checksum, the index and the drawing (exit 1 if damaged)
 //! cadaddy-cli check-import FILE.(cdy|dwg|dxf)     import accuracy check (exit 1 on fail)
-//! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
+//! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F.jsonl] [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]   batch plot: one PDF per drawing
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
 //! cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (the open app on the agent port, else headless; or bridged to a given app)
@@ -66,7 +66,7 @@ const USAGE: &str = "usage:
   cadaddy-cli verify FILE.cdy
   cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]
   cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
-  cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
+  cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F (one `id {json}` per line)] [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]
@@ -568,6 +568,14 @@ fn run(args: &[String]) -> Result<(), String> {
                 steps.push(("script".into(), std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?));
             }
             "--cmd" => steps.push(("cmd".into(), it.next().ok_or("--cmd needs `id {json}`")?.clone())),
+            // One `id {json}` per line (PowerShell 5 strips the quotes inside a --cmd argument).
+            "--cmd-file" => {
+                let p = it.next().ok_or("--cmd-file needs a path")?;
+                let text = std::fs::read_to_string(p).map_err(|e| format!("--cmd-file {p}: {e}"))?;
+                for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+                    steps.push(("cmd".into(), line.to_string()));
+                }
+            }
             "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
             "--export" => exp = Some(it.next().ok_or("--export needs a path")?.clone()),
             f if !f.starts_with("--") => open(&mut s, f)?,
@@ -1219,6 +1227,21 @@ mod tests {
         let w = export_window(&s, Framing::Auto, Some(&before)).unwrap().unwrap();
         assert!(w.contains(eb.min) && w.contains(eb.max));
         assert!(w.width() < ext.width() && w.height() < ext.height(), "{w:?} vs extents {ext:?}");
+    }
+
+    #[test]
+    fn run_reads_commands_from_a_file() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-cli-cmdfile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmds = dir.join("cmds.jsonl");
+        // A quoted JSON argument PowerShell 5 would mangle, plus a comment and a blank line.
+        std::fs::write(&cmds, "# draw a line\n\nline {\"points\":[[0,0],[10,0]]}\nline {\"points\":[[0,0],[0,5]]}\n").unwrap();
+        let out = dir.join("out.dxf");
+        run(&["--cmd-file".into(), cmds.to_string_lossy().to_string(), "--save".into(), out.to_string_lossy().to_string()]).unwrap();
+        let dxf = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(dxf.matches("\nLINE\n").count() + dxf.matches("\r\nLINE\r\n").count(), 2, "two lines drawn");
+        assert!(run(&["--cmd-file".into(), dir.join("missing.jsonl").to_string_lossy().to_string()]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

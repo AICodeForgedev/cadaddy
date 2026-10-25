@@ -90,6 +90,7 @@ pub mod furnish;
 pub mod gear;
 pub mod geo;
 pub mod grounding;
+pub mod guided;
 pub mod ifcmodel;
 pub mod ifcref;
 pub mod imagetrace;
@@ -128,6 +129,7 @@ pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub mod sheetfacts;
 pub mod sitetakeoff;
 pub mod spell;
 pub mod stairs;
@@ -145,6 +147,7 @@ pub use props::MatchProps;
 pub mod actions;
 pub(crate) mod qselect;
 mod render;
+pub mod rulemodel;
 mod sections;
 mod selecttools;
 mod settings;
@@ -517,6 +520,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(cobie::specs());
         v.extend(printset::specs());
         v.extend(readers::specs());
+        v.extend(sheetfacts::specs());
         v.extend(validate::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
@@ -607,9 +611,11 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(attipedit::specs());
         v.extend(frames::specs());
         v.extend(coordination::specs());
+        v.extend(guided::specs());
         v.extend(project::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
+        v.extend(rulemodel::specs());
         // Apply hand-written help texts.
         for spec in &mut v {
             let text = help_texts::lookup(spec.id);

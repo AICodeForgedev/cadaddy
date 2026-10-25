@@ -587,16 +587,14 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     crate::activity::after_open(s, i);
     s.rhai_drawing_opened(i);
     // Auto-run import accuracy check when opening a PDF file.
-    if is_pdf {
-        if let Ok(d) = s.doc() {
-            let check = super::import_check::check_drawing(d);
-            if let Ok(d) = s.doc_mut() {
-                super::import_check::store_result(d, &check);
-            }
-            if !check.pass {
-                let fails: Vec<&str> = check.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
-                s.echo(format!("Import check FAIL (score {}/100): {}", check.score, fails.join(", ")));
-            }
+    if is_pdf && let Ok(d) = s.doc() {
+        let check = super::import_check::check_drawing(d);
+        if let Ok(d) = s.doc_mut() {
+            super::import_check::store_result(d, &check);
+        }
+        if !check.pass {
+            let fails: Vec<&str> = check.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
+            s.echo(format!("Import check FAIL (score {}/100): {}", check.score, fails.join(", ")));
         }
     }
     Ok(opened(s, i, true))

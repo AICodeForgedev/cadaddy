@@ -140,6 +140,11 @@ const SYMBOL_RADIUS_IN: f64 = 12.0;
 /// A symbol's own texts are within this distance of it (model inches).
 const CLOSE_TEXT_IN: f64 = 12.0;
 
+/// Public entry point for BOM and other callers that need device detection on a drawing.
+pub fn detect_device_symbols_pub(d: &Drawing) -> Vec<DetectedDevice> {
+    detect_device_symbols(d)
+}
+
 /// Detect device symbols on a DEVICE layer in the DXF.
 ///
 /// Strategy: on E-sheets, devices are drawn as circles, rectangles, arcs, polygons on the

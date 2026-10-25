@@ -5,10 +5,10 @@
 //! an x digit `0..=6` and a y letter where `a` = -2, `c` = 0 (baseline), `g` = 4 (x-height),
 //! `i` = 6 (cap height). Strokes are separated by spaces.
 
-pub(crate) const CAP: f64 = 6.0;
-pub(crate) const GAP: f64 = 1.6;
+pub const CAP: f64 = 6.0;
+pub const GAP: f64 = 1.6;
 
-pub(crate) fn glyph(c: char) -> Option<(f64, &'static str)> {
+pub fn glyph(c: char) -> Option<(f64, &'static str)> {
     let g: (f64, &str) = match c {
         ' ' => (2.4, ""),
         'A' => (4.0, "0c2i4c 1f3f"),
@@ -116,7 +116,7 @@ pub(crate) fn glyph(c: char) -> Option<(f64, &'static str)> {
 }
 
 /// Decode one stroke string into point lists in font units.
-pub(crate) fn strokes(spec: &str) -> Vec<Vec<(f64, f64)>> {
+pub fn strokes(spec: &str) -> Vec<Vec<(f64, f64)>> {
     spec.split(' ')
         .filter(|s| !s.is_empty())
         .map(|s| {
