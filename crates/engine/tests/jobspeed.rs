@@ -76,11 +76,12 @@ fn audit<'a>(job: &'a Value, event: &str) -> Option<&'a Value> {
     job["guided_job"]["audit"].as_array()?.iter().find(|a| a["event"] == event)
 }
 
-/// The sheets of a [`FEW`] folder, and how many of them the discipline set prints again.
+/// The plan sheets of a [`FEW`] folder (the job imports plans, not the cover sheet), and how many
+/// sheets the discipline set prints again.
 fn sheet_count(dir: &Path) -> (usize, usize) {
     assert!(dir.join("Full Set.pdf").exists());
     let mech = std::fs::read_dir(dir.join("Mechanical")).map_or(0, |d| d.count());
-    (FEW.len(), mech)
+    (FEW.iter().filter(|n| !n.starts_with("G-")).count(), mech)
 }
 
 #[test]
@@ -99,11 +100,12 @@ fn each_page_is_imported_once_side_by_side() {
     assert_eq!(cadaddy_engine::cmd::wallgen::builds_so_far() - builds, 1);
     let job = job_state(&s);
     let loaded = audit(&job, "sheets_loaded").expect("sheets loaded")["details"].clone();
-    // Every page of the set once, and the discipline set's copies of the mechanical sheets not
-    // again (they show what the set's pages do).
-    assert_eq!(loaded["pages"].as_u64(), Some((sheets + mech) as u64), "{loaded}");
+    // Every sheet of the set once: the discipline set's copies of the mechanical sheets are not
+    // imported again (the sheet index marks them superseded, or the import sees the same page).
+    let pages = loaded["pages"].as_u64().expect("pages");
+    assert!(pages >= sheets as u64 && pages <= (sheets + mech) as u64, "{loaded}");
     assert_eq!(loaded["imported"].as_u64(), Some(sheets as u64), "{loaded}");
-    assert_eq!(loaded["same_pages"].as_u64(), Some(mech as u64), "{loaded}");
+    assert_eq!(loaded["same_pages"].as_u64(), Some(pages - sheets as u64), "{loaded}");
     // Side by side: no two sheets on top of each other.
     let rects: Vec<[f64; 4]> = loaded["sheets"]
         .as_array()
@@ -152,10 +154,14 @@ fn a_running_job_reports_each_stage_and_sheet() {
         assert!(lines.iter().any(|l| l.starts_with(&tag) && !l.contains(" done in ")), "start of {stage}: {lines:?}");
         assert!(lines.iter().any(|l| l.starts_with(&tag) && l.contains(" done in ")), "end of {stage}: {lines:?}");
     }
-    let total = sheets + mech;
-    let sheet_lines: Vec<&String> = lines.iter().filter(|l| l.contains(": sheet ") && l.contains(&format!("/{total} "))).collect();
-    assert_eq!(sheet_lines.len(), total, "a line per page: {sheet_lines:?}");
-    assert!(sheet_lines.iter().any(|l| l.contains("not imported again")), "{sheet_lines:?}");
+    // A line per page the job imports: each sheet once (the discipline copies are dropped by
+    // the sheet index or reported "not imported again").
+    let sheet_lines: Vec<&String> = lines.iter().filter(|l| l.contains(": sheet ")).collect();
+    let total = sheet_lines.len();
+    assert!(total >= sheets && total <= sheets + mech, "a line per page: {sheet_lines:?}");
+    assert!(sheet_lines.iter().all(|l| l.contains(&format!("/{total} "))), "{sheet_lines:?}");
+    let imported = sheet_lines.iter().filter(|l| l.contains(" imported (")).count();
+    assert_eq!(imported, sheets, "{sheet_lines:?}");
     // The same as events, for a control channel or MCP client.
     let ev = s.events_poll(0);
     let progress: Vec<&Value> = ev["events"].as_array().expect("events").iter().filter(|e| e["type"] == "job.progress").collect();

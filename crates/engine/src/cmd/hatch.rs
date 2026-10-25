@@ -1333,7 +1333,7 @@ mod tests {
                     let (x, y) = (x0 + f64::from(i) * 150.0, f64::from(j) * 120.0);
                     s.execute("rectang", &json!({ "p1": [x, y], "p2": [x + 150.0, y + 120.0] })).unwrap();
                     if (i + j) % 2 == 0 {
-                        s.execute("text", &json!({ "insert": [x + 20.0, y + 80.0], "height": 8, "value": format!("ROOM {sheet}{i}{j}") })).unwrap();
+                        s.execute("text", &json!({ "at": [x + 20.0, y + 80.0], "height": 8, "text": format!("ROOM {sheet}{i}{j}") })).unwrap();
                     }
                     if (i + j) % 3 == 0 {
                         s.execute("rectang", &json!({ "p1": [x + 90.0, y + 10.0], "p2": [x + 130.0, y + 50.0] })).unwrap();
