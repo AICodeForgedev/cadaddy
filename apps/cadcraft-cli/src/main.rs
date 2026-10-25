@@ -226,6 +226,12 @@ fn info(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Write `bytes` to `out` through the engine's atomic writer (an exclusively created sibling file
+/// renamed over `out`), so a failed or interrupted write leaves the previous file untouched.
+fn write_atomic(out: &str, bytes: &[u8]) -> std::io::Result<()> {
+    cadcraft_engine::atomic_write::write_atomic(std::path::Path::new(out), bytes)
+}
+
 fn export(s: &Session, out: &str) -> Result<(), String> {
     export_framed(s, out, None)
 }
@@ -233,7 +239,7 @@ fn export(s: &Session, out: &str) -> Result<(), String> {
 fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), String> {
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = cadcraft_io::write_framed(d, out, window).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     if cadcraft_engine::cmd::file::drops_unknown(out) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
@@ -252,7 +258,7 @@ fn sample(args: &[String]) -> Result<(), String> {
         other => return Err(format!("unknown sample `{other}` (bracket, floorplan)")),
     };
     let bytes = cadcraft_io::write(&d, out).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     Ok(())
 }
@@ -861,6 +867,37 @@ fn cli() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cadcraft-cli-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn write_atomic_replaces_file_and_leaves_no_staging_files() {
+        let dir = scratch_dir("replace");
+        let out = dir.join("a.dxf");
+        let out = out.to_str().expect("utf-8 path");
+        write_atomic(out, b"old").expect("create");
+        write_atomic(out, b"new").expect("overwrite");
+        assert_eq!(std::fs::read(out).expect("read"), b"new");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_failure_keeps_destination_and_cleans_up() {
+        let dir = scratch_dir("fail");
+        let out = dir.join("target");
+        std::fs::create_dir(&out).expect("dir as destination");
+        std::fs::write(out.join("keep"), b"x").expect("seed");
+        assert!(write_atomic(out.to_str().expect("utf-8 path"), b"new").is_err());
+        assert_eq!(std::fs::read(out.join("keep")).expect("kept"), b"x");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds2 {
         Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1))
