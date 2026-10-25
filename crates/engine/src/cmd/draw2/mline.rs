@@ -9,8 +9,10 @@ use cadcraft_doc::{
 use cadcraft_geom::{Line, Vec2, line_line_infinite};
 use serde_json::{Value, json};
 
+use super::super::distinct_points;
+use super::super::machines::number;
+use super::super::ok;
 use super::curves::{self, MAX_GEN};
-use super::machines::number;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 

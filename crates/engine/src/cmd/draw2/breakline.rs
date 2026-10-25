@@ -9,9 +9,9 @@ use cadcraft_doc::{Drawing, EntityKind};
 use cadcraft_geom::{PolyVertex, Vec2};
 use serde_json::Value;
 
+use super::super::machines::number;
 use super::added;
 use super::curves::MAX_GEN;
-use super::machines::number;
 use super::*;
 use crate::cmd::modify2::as_lwpoly;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
