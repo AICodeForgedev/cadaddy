@@ -92,6 +92,11 @@ pub struct PdfOptions {
     /// Recover SHX-stroked text and detect repeated symbol clusters (on by default).  Turn off
     /// for downstream geometry analysis (walls, conduits, grids) that needs every stroke intact.
     pub recover_text: bool,
+    /// Draw an E sheet that has a scale note at that scale (off by default: E sheets are
+    /// DO NOT SCALE and stay sheet-size).  Either way the import reports `do_not_scale` and
+    /// `needs_registration`.  For a sheet opened on its own, with no architectural plan to
+    /// register it to, so walls and rooms still read at building size.
+    pub e_sheet_at_note_scale: bool,
 }
 
 /// The layer annotations (markups) are drawn on.
@@ -118,6 +123,7 @@ impl Default for PdfOptions {
             image_folder: None,
             image_prefix: "pdf-image".into(),
             recover_text: true,
+            e_sheet_at_note_scale: false,
         }
     }
 }
@@ -1859,6 +1865,11 @@ fn content_class_layer(class: ContentClass) -> &'static str {
 // text at the same position.  Matching hidden text to stroke clusters gives perfect accuracy.
 // ---------------------------------------------------------------------------------------------
 
+/// A page with this many real text items or more has its lettering as text: without hidden
+/// text or recovered SHX text it gets no OCR (Revit and TrueType prints; stroke OCR there only
+/// reads symbol ticks).
+const OCR_REAL_TEXT_LIMIT: usize = 100;
+
 /// A text entity recovered from SHX stroke clusters.
 struct RecoveredText {
     at: (f64, f64),
@@ -2943,10 +2954,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     } else {
         false
     };
-    // E-sheets without a scale note are assumed DO NOT SCALE; with one, use it
-    let do_not_scale = if opts.recover_text { do_not_scale_visible || (is_e_sheet && best_note.is_none()) } else { false };
+    // E-sheets are DO NOT SCALE (reported either way); they stay sheet-size unless the caller
+    // asked for an E sheet's scale note to be used (a sheet opened on its own).
+    let e_sheet_drawn_to_note = is_e_sheet && !do_not_scale_visible && opts.e_sheet_at_note_scale && best_note.is_some();
+    let do_not_scale = do_not_scale_visible || (is_e_sheet && !e_sheet_drawn_to_note);
     let (mut scale, mut scale_source) = match (opts.scale, &best_note) {
         (Some(k), _) if k.is_finite() && k > 0.0 => (k, "option".to_string()),
+        (_, Some((k, note))) if e_sheet_drawn_to_note => {
+            (*k, format!("scale note {note} (E sheet: DO NOT SCALE, locations approximate; register it to the architectural plans)"))
+        }
         (_, Some((k, note))) if !do_not_scale => (*k, format!("scale note {note}")),
         (_, Some((k, note))) => {
             // DO NOT SCALE: keep scale=1 but record the note for registration
@@ -3098,9 +3114,12 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             // OCR pass: supplement with template-based glyph recognition for strokes not yet
             // claimed.  Runs when SHX-like text is present: hidden text layer (from an SHX-plotting
             // CAD application) OR the fallback stage recovered any text (stroked lettering exists
-            // even without a hidden-text layer).
+            // even without a hidden-text layer) OR the page has little real text, so its lettering
+            // is strokes.  A page lettered in real text with nothing recovered skips it: its short
+            // strokes are symbols and ticks, which the OCR would read as stray letters.
             let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-            let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
+            let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT;
+            let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty() || lettering_is_strokes;
             if has_shx_evidence {
                 let mut used_so_far: HashSet<usize> = HashSet::new();
                 for rt in &recovered_texts {
@@ -3716,7 +3735,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));
     }
-    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || (is_e_sheet && best_note.is_none());
+    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || is_e_sheet;
     let needs_registration = do_not_scale && best_note.is_some();
     Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, do_not_scale, needs_registration, pages: page_total, stats, notes, images: image_out })
 }
@@ -4194,6 +4213,9 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.markups = flag("markups", true);
     o.images = flag("images", true);
     o.recover_text = flag("recoverText", true);
+    // PDFIMPORT brings one sheet in: an E sheet with a scale note comes in at that scale
+    // (still reported do_not_scale + needs_registration) so it reads at building size.
+    o.e_sheet_at_note_scale = true;
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
