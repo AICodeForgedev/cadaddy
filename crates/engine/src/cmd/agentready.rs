@@ -157,7 +157,14 @@ fn load(d: &Drawing) -> State {
 fn save(s: &mut Session, st: &mut State) -> Result<()> {
     st.notes = tail(std::mem::take(&mut st.notes), NOTES_KEPT);
     st.log = tail(std::mem::take(&mut st.log), LOG_KEPT);
-    s.doc_mut()?.agent = serde_json::to_string(st).ok();
+    let doc = s.doc_mut()?;
+    // Other state kept beside ours in the same JSON (the rules engine's `rulemodel`, the
+    // guided job's) stays.
+    let mut root: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if let (Some(o), Ok(Value::Object(ours))) = (root.as_object_mut(), serde_json::to_value(&*st)) {
+        o.extend(ours);
+    }
+    doc.agent = serde_json::to_string(&root).ok();
     Ok(())
 }
 
