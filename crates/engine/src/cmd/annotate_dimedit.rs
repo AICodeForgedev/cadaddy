@@ -283,7 +283,7 @@ fn jogged_kind(s: &Session, c: Vec2, r: f64, center: Vec2, at: Vec2, jog: Option
     }
     let tip = c + dir * r;
     let jog = jog.unwrap_or_else(|| center.mid(tip));
-    let mut k = dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, tip, Vec2::ZERO, text);
+    let mut k = dim(s, DimKind::Radius, c, Vec2::ZERO, Vec2::ZERO, tip, text);
     if let EntityKind::Dimension(dm) = &mut k {
         dm.marks.jogged = Some(JoggedRadius { center: v3(center), jog: v3(jog) });
         if at.dist(c) > r + 1e-9 {
