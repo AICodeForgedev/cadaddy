@@ -381,6 +381,39 @@ fn the_building_shell_is_complete() {
 }
 
 #[test]
+fn doors_and_windows_are_framed() {
+    let s = building();
+    let d = s.doc().unwrap();
+    let meshes = |part: &str| -> Vec<cadaddy_engine::doc::Mesh> {
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some(part))
+            .filter_map(|e| match &e.kind {
+                cadaddy_engine::doc::EntityKind::Mesh(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let span = |m: &cadaddy_engine::doc::Mesh, k: usize| {
+        let v: Vec<f64> = m.vertices.iter().map(|p| [p.x, p.y, p.z][k]).collect();
+        v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let (doors, windows) = (meshes("door"), meshes("window"));
+    assert!(!doors.is_empty() && !windows.is_empty());
+    // The 6" exterior wall: the frame's casings stand proud of both faces (6" + 2 x 3/4"), the
+    // leaf or pane alone is 1 3/4" or 1/2"; leaf + two jambs + head (+ a window's sill).
+    for (part, ms, boxes) in [("door", &doors, 4), ("window", &windows, 5)] {
+        for m in ms {
+            assert!(m.vertices.len() >= 8 * boxes, "a {part} with its frame: {} vertices", m.vertices.len());
+            let across = span(m, 0).min(span(m, 1));
+            assert!(across > 4.0, "a {part}'s frame spans the wall: {across}\"");
+        }
+    }
+    // The window frame runs from its sill (3') to its head (7').
+    assert!(windows.iter().any(|m| (span(m, 2) - 48.0).abs() < 1e-6), "{:?}", windows.iter().map(|m| span(m, 2)).collect::<Vec<_>>());
+}
+
+#[test]
 fn an_element_shows_its_properties_and_its_source() {
     let mut s = building();
     let d = s.doc().unwrap();
