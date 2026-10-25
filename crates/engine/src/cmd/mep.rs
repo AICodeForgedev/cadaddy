@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference, message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total, gone?: [earlier clashes no longer found]}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total, gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
@@ -2184,6 +2184,16 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         out.extend(super::ifcref::clashes(d, &pieces_ref, tol, upf, ignore.as_deref()));
+    }
+    // Same-trade clashes: built walls overlapping each other (model.issues lists them too).
+    if p.get("same_trade").and_then(Value::as_bool).unwrap_or(true) {
+        for o in super::verify::wall_overlaps(d) {
+            out.push(json!({
+                "kind": "walls_overlap", "category": "same_trade", "systems": ["architecture"], "level": o.level,
+                "message": format!("two walls overlap over {:.1} sq ft (model.issues kind walls_overlap)", o.area / (upf * upf)),
+                "at": [r6(o.at.x), r6(o.at.y)], "by_in": 0.0, "handles": o.handles.iter().map(|h| h.hex()).collect::<Vec<_>>(),
+            }));
+        }
     }
     out.truncate(5_000);
     // A re-run: what was decided about each clash last time carries over to the same clash now.

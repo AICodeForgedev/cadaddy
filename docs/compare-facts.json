@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1071,
-    "count": 1071,
+    "callableAsJson": 1072,
+    "count": 1072,
     "ids": [
       "-attedit",
       "-block",
@@ -345,6 +345,7 @@
       "estimate.explain",
       "estimate.export",
       "estimate.import",
+      "estimate.import_costs",
       "estimate.import_p405",
       "estimate.observe",
       "estimate.query",

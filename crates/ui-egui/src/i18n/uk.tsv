@@ -3208,3 +3208,22 @@
 	Export the grouped clash report to PDF	Експортувати згрупований звіт про колізії у PDF
 	PDF exported to {path}.	PDF експортовано до {path}.
 	Clash detection failed.	Не вдалося виконати пошук колізій.
+	Import Cost Table	Імпортувати таблицю витрат
+	Accuracy Score	Оцінка точності
+	Answer Job Question	Відповісти на запитання завдання
+	Check Import Accuracy	Перевірити точність імпорту
+	Clash Resolution Loop	Цикл усунення колізій
+	Evaluate Rules	Оцінити правила
+	Explain Job Stage	Пояснити етап завдання
+	Job Learned Rules	Вивчені правила завдання
+	Job Report	Звіт завдання
+	Job Status	Стан завдання
+	Job Worklist	Список робіт завдання
+	Next Job Question	Наступне запитання завдання
+	Rule Packs	Набори правил
+	Rules Action	Дія правил
+	Rules Report	Звіт правил
+	Rules Worklist	Список робіт правил
+	Sheet Facts	Дані аркуша
+	Start Guided Job	Почати кероване завдання
+	Undo Job Action	Скасувати дію завдання

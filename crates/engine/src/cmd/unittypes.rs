@@ -197,14 +197,100 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         }));
     }
 
+    if type_rows.is_empty() {
+        // No unit types in the spec: the unit-type tags the plan carries (rooms named for them,
+        // else the tags themselves), with the device marks inside those rooms.
+        return plan_takeoff(s, level_filter);
+    }
     Ok(json!({
         "types": type_rows,
         "grand_total": {
             "devices": grand_devices,
             "fixtures": grand_fixtures,
             "casework": grand_casework,
-        }
+        },
+        "source": "spec",
     }))
+}
+
+/// Words that start a unit type's tag (`DOUBLE Q`, `SINGLE Q`, `ADA KING`, `UNIT B`, `TYPE A1`).
+const UNIT_WORDS: &[&str] = &["SINGLE", "DOUBLE", "KING", "QUEEN", "ADA", "SUITE", "STUDIO", "UNIT", "TYPE", "1BR", "2BR", "3BR", "EFFICIENCY"];
+
+/// A unit type a tag names (normalised: upper case, single spaces), if it names one.
+pub(crate) fn unit_type_of(text: &str) -> Option<String> {
+    let t = text.trim().to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let first = t.split(' ').next()?;
+    let words = t.split(' ').count();
+    // Equipment named like a unit (`UNIT HEATER`, `UNIT VENTILATOR`) and notes are no unit type.
+    let equipment =
+        t.split(' ').any(|w| matches!(w, "HEATER" | "HEATERS" | "VENTILATOR" | "VENTILATORS" | "SUBSTATION" | "PRICE" | "PRICES" | "WEIGHT"));
+    (UNIT_WORDS.contains(&first) && words <= 4 && t.len() <= 30 && !equipment && !t.chars().any(|c| matches!(c, '\'' | '"' | ':'))).then_some(t)
+}
+
+/// Unit tags looked at, at most.
+const MAX_UNIT_TAGS: usize = 50_000;
+
+fn plan_takeoff(s: &mut Session, level: Option<&str>) -> Result<Value> {
+    let rooms = super::rooms3d::rooms(s)?;
+    let d = s.doc()?;
+    let plan: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = d
+        .model
+        .iter()
+        .filter(|e| matches!(e.kind, cadaddy_doc::EntityKind::Text(_) | cadaddy_doc::EntityKind::MText(_)))
+        .take(MAX_UNIT_TAGS * 4)
+        .collect();
+    let notes = super::perceive::texts(&plan);
+    let in_level = |l: &Option<String>| level.is_none_or(|f| l.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(f)));
+    // Each unit: a room whose name (or a tag inside it) is a unit type.
+    let boxes: Vec<cadaddy_geom::Bounds2> = rooms.iter().map(|r| cadaddy_geom::Bounds2::from_points(r.outline.iter().copied())).collect();
+    let inside = |i: usize, p: cadaddy_geom::Vec2| {
+        boxes.get(i).is_some_and(|b| b.contains(p)) && rooms.get(i).is_some_and(|r| cadaddy_geom::point_in_polygon(&r.outline, p))
+    };
+    let mut units: Vec<(String, Option<usize>)> = Vec::new();
+    for (i, r) in rooms.iter().enumerate().filter(|(_, r)| in_level(&r.level)) {
+        let ty = unit_type_of(&r.name).or_else(|| notes.iter().filter(|t| inside(i, t.2)).find_map(|t| unit_type_of(&t.1)));
+        if let Some(ty) = ty {
+            units.push((ty, Some(i)));
+        }
+    }
+    // Without rooms holding them: the tags on the plan, one unit each.
+    let by_room = !units.is_empty();
+    if !by_room && level.is_none() {
+        units = notes.iter().filter_map(|t| unit_type_of(&t.1)).take(MAX_UNIT_TAGS).map(|t| (t, None)).collect();
+    }
+    let mut by: BTreeMap<String, (u32, BTreeMap<String, u32>)> = BTreeMap::new();
+    for (ty, room) in &units {
+        let e = by.entry(ty.clone()).or_default();
+        e.0 += 1;
+        if let Some(i) = *room {
+            for t in notes.iter().filter(|t| cadaddy_mepfix::sheet_facts::is_type_tag(&t.1) && inside(i, t.2)) {
+                *e.1.entry(t.1.trim().to_string()).or_default() += 1;
+            }
+        }
+    }
+    let mut grand: BTreeMap<String, u32> = BTreeMap::new();
+    let types: Vec<Value> = by
+        .iter()
+        .map(|(ty, (count, devices))| {
+            for (k, v) in devices {
+                *grand.entry(k.clone()).or_default() += v;
+            }
+            json!({
+                "type": ty, "type_name": ty, "count": count, "devices": devices, "fixtures": {}, "casework": {},
+                "totals": {"devices": devices.values().sum::<u32>(), "fixtures": 0, "casework": 0},
+            })
+        })
+        .collect();
+    let mut out = json!({
+        "types": types,
+        "grand_total": {"devices": grand, "fixtures": {}, "casework": {}},
+        "source": if by_room { "plan rooms" } else { "plan tags" },
+    });
+    if by.is_empty() {
+        out["next_step"] =
+            json!("no unit types in the spec or unit-type tags on the plan: define them (bspec.set unit_types) or run unittypes.detect");
+    }
+    Ok(out)
 }
 
 // --------------- detect ---------------
