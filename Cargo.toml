@@ -28,7 +28,7 @@ cadcraft-mcp = { path = "crates/mcp" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
 # PDF writing (krilla) for plots, and reading them back in tests. The root patches below pin
 # craft-pdf's patched backends to the same revision (Cargo ignores dependency-local patches).
-craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca", default-features = false }
+craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae", default-features = false }
 
 # foundation
 thiserror = "2"
@@ -91,9 +91,9 @@ debug = 0
 # PDF backends for craft-pdf: pinned to the same reviewed craft-libs revision as craft-pdf itself
 # (Cargo ignores dependency-local patches).
 [patch.crates-io]
-krilla = { version = "=0.8.2", git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
-hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
-hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "7895f5ed79da2f1271b10139cb84d61d4cbc50ca" }
+krilla = { version = "=0.8.2", git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae" }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
