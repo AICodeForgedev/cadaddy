@@ -2926,3 +2926,4 @@
 	Export the grouped clash report to PDF	Экспортировать сгруппированный отчёт о коллизиях в PDF
 	PDF exported to {path}.	PDF экспортирован в {path}.
 	Clash detection failed.	Не удалось выполнить поиск коллизий.
+	Import Cost Table	Импортировать таблицу затрат

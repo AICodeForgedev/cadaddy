@@ -228,7 +228,7 @@ fn text_grids(ents: &[&Arc<Entity>]) -> Vec<Found> {
 
 /// Tags: short marks inside a small circle or closed outline (a tag symbol), or attributes of a
 /// block named like a tag.
-fn tags(d: &Drawing, ents: &[&Arc<Entity>], skip: &[Handle]) -> Vec<(String, Vec2, Handle)> {
+pub(crate) fn tags(d: &Drawing, ents: &[&Arc<Entity>], skip: &[Handle]) -> Vec<(String, Vec2, Handle)> {
     let k = units_per_inch(d);
     let shapes: Vec<(Vec2, f64)> = ents
         .iter()

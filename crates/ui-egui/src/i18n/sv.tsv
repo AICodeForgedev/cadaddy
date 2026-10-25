@@ -3144,3 +3144,4 @@ menu	Modify	Ändra
 	Export the grouped clash report to PDF	Exportera den grupperade kollisionsrapporten till PDF
 	PDF exported to {path}.	PDF exporterad till {path}.
 	Clash detection failed.	Kollisionskontrollen misslyckades.
+	Import Cost Table	Importera kostnadstabell

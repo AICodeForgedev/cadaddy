@@ -204,6 +204,31 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     confidence,
                 });
             }
+            // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
+            EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
+                let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
+                let Some((c, r, deg, ends)) = flat_swing(&pts) else { continue };
+                if !(rmin..=rmax).contains(&r) {
+                    continue;
+                }
+                let tol = r * 0.05;
+                let leaf = segs.iter().any(|g| {
+                    let (p, q) = (g.a, g.b);
+                    ends.iter().any(|e| (p.dist(c) < tol && q.dist(*e) < tol) || (q.dist(c) < tol && p.dist(*e) < tol))
+                });
+                let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
+                let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
+                items.push(Opening {
+                    kind: "door",
+                    at: c,
+                    width: r,
+                    layer: e.common.layer.to_string(),
+                    handle: e.handle,
+                    swing: Some((deg, ends)),
+                    block: None,
+                    confidence,
+                });
+            }
             EntityKind::Insert(i) => {
                 let name = i.block.to_ascii_uppercase();
                 let kind = if name.contains("DOOR") || name.starts_with("DR") {
@@ -230,6 +255,33 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
         }
     }
     items
+}
+
+/// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
+/// Its centre (the hinge), radius, sweep in degrees and two ends.
+pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
+    let (first, last) = (*pts.first()?, *pts.last()?);
+    let mid = *pts.get(pts.len() / 2)?;
+    let d = 2.0 * (first.x * (mid.y - last.y) + mid.x * (last.y - first.y) + last.x * (first.y - mid.y));
+    if !d.is_finite() || d.abs() < 1e-12 {
+        return None;
+    }
+    let sq = |p: Vec2| p.x * p.x + p.y * p.y;
+    let (a2, b2, c2) = (sq(first), sq(mid), sq(last));
+    let c = Vec2::new(
+        (a2 * (mid.y - last.y) + b2 * (last.y - first.y) + c2 * (first.y - mid.y)) / d,
+        (a2 * (last.x - mid.x) + b2 * (first.x - last.x) + c2 * (mid.x - first.x)) / d,
+    );
+    let r = first.dist(c);
+    if !c.is_finite() || !r.is_finite() || r <= 0.0 || pts.iter().any(|p| (p.dist(c) - r).abs() > 0.05 * r) {
+        return None;
+    }
+    // The sweep: the turn from the first to the last point, through the middle one.
+    let ang = |p: Vec2| (p.y - c.y).atan2(p.x - c.x);
+    let sweep = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
+    let (s_mid, s_end) = (sweep(ang(first), ang(mid)), sweep(ang(first), ang(last)));
+    let deg = if s_mid <= s_end { s_end } else { std::f64::consts::TAU - s_end }.to_degrees();
+    (60.0..=100.0).contains(&deg).then_some((c, r, deg, [first, last]))
 }
 
 pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
@@ -261,6 +313,155 @@ pub(crate) fn room_number(t: &str) -> bool {
     let digits = t.chars().filter(char::is_ascii_digit).count();
     let letters = t.chars().filter(char::is_ascii_alphabetic).count();
     (2..=4).contains(&digits) && letters <= 2 && t.len() <= 6 && t.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Words of a room's tag: unit types and the rooms a plan names.
+const ROOM_WORDS: &[&str] = &[
+    "SINGLE",
+    "DOUBLE",
+    "QUEEN",
+    "KING",
+    "ADA",
+    "SUITE",
+    "UNIT",
+    "STUDIO",
+    "GUEST",
+    "BEDROOM",
+    "BED",
+    "LIVING",
+    "CORRIDOR",
+    "CORR",
+    "HALL",
+    "HALLWAY",
+    "STAIR",
+    "STAIRS",
+    "LOBBY",
+    "ELEV",
+    "ELEVATOR",
+    "MECH",
+    "MECHANICAL",
+    "ELEC",
+    "ELECTRICAL",
+    "STORAGE",
+    "STOR",
+    "LAUNDRY",
+    "LINEN",
+    "OFFICE",
+    "TOILET",
+    "RESTROOM",
+    "WOMEN",
+    "MEN",
+    "BATH",
+    "BATHROOM",
+    "KITCHEN",
+    "BREAK",
+    "VESTIBULE",
+    "VEST",
+    "CLOSET",
+    "CLO",
+    "JANITOR",
+    "JAN",
+    "FITNESS",
+    "POOL",
+    "LOUNGE",
+    "DINING",
+    "MEETING",
+    "CONFERENCE",
+    "CONF",
+    "ROOM",
+    "UTILITY",
+    "IDF",
+    "MDF",
+    "TRASH",
+    "VENDING",
+    "ICE",
+    "PANTRY",
+    "RECEPTION",
+    "MAINTENANCE",
+    "ENTRY",
+    "WORK",
+    "SHAFT",
+    "CHASE",
+    "SPRINKLER",
+    "RISER",
+    "MARKET",
+    "DESK",
+    "LIBRARY",
+    "CLASSROOM",
+];
+
+/// Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`).
+const EQUIPMENT_WORDS: &[&str] = &[
+    "PNLBD",
+    "PNL",
+    "PANEL",
+    "PANELBOARD",
+    "XFMR",
+    "TRANSFORMER",
+    "DISC",
+    "DISCONNECT",
+    "MCC",
+    "SWBD",
+    "SWITCHBOARD",
+    "RTU",
+    "AHU",
+    "FCU",
+    "VFD",
+    "ATS",
+    "GEN",
+    "GENERATOR",
+    "JBOX",
+    "J-BOX",
+    "CKT",
+    "CIRCUIT",
+    "HOMERUN",
+    "CONDUIT",
+    "TYP",
+    "NIC",
+    "SEE",
+    "NOTE",
+    "NOTES",
+    "DETAIL",
+    "SHEET",
+    "MOUNT",
+    "MTD",
+    "AFF",
+    "EXISTING",
+    "RELOCATE",
+    "PTAC",
+    "EWC",
+    "WH",
+    "EF",
+];
+
+fn tag_words(t: &str) -> Vec<String> {
+    t.to_ascii_uppercase().split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+/// Whether a text is an equipment or device tag, a note or a dimension rather than a room's
+/// name: a panelboard or transformer label, a quoted panel letter (`'D'`), a device mark (`OS`,
+/// `DH`, `J`), a circuit (`A-12`), a sheet reference or a length.
+pub(crate) fn equipment_tag(t: &str) -> bool {
+    let t = t.trim();
+    let words = tag_words(t);
+    let quoted = t.contains('\'') && t.chars().filter(|c| *c == '\'').count() >= 2;
+    let length = t.chars().any(|c| c.is_ascii_digit()) && (t.contains('"') || t.contains("'-") || t.contains("' -"));
+    let device_mark = words.len() == 1 && cadaddy_mepfix::sheet_facts::is_type_tag(t) && !ROOM_WORDS.contains(&t.to_ascii_uppercase().as_str());
+    let circuit =
+        words.len() == 1 && t.rsplit_once('-').is_some_and(|(h, n)| !h.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    quoted || length || device_mark || circuit || words.iter().any(|w| EQUIPMENT_WORDS.contains(&w.as_str()))
+}
+
+/// How well a text names a room: 3 with a room or unit-type word (`DOUBLE Q`, `CORRIDOR`), 1 for
+/// another name, 0 for an equipment or device tag.
+pub(crate) fn room_name_score(t: &str) -> u8 {
+    if equipment_tag(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+        0
+    } else if tag_words(t).iter().any(|w| ROOM_WORDS.contains(&w.as_str())) {
+        3
+    } else {
+        1
+    }
 }
 
 fn polygon(l: &cadaddy_doc::HatchLoop) -> Vec<Vec2> {
@@ -301,12 +502,20 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let all = texts(&on_tags);
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    let names: Vec<_> = all
+    let mut names: Vec<_> = all
         .iter()
-        .filter(|(_, t, _, _)| t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t))
-        .filter(|(_, t, _, _)| spec_rooms.is_none_or(|rs| rs.iter().any(|r| crate::cmd::bspec::names_room(r, t))))
+        .filter(|(_, t, _, _)| t.chars().count() <= 40)
+        .filter(|(_, t, _, _)| match spec_rooms {
+            Some(rs) => {
+                t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !room_number(t) && rs.iter().any(|r| crate::cmd::bspec::names_room(r, t))
+            }
+            // Equipment and device tags (a panelboard label beside a room) never name it.
+            None => room_name_score(t) > 0,
+        })
         .cloned()
         .collect();
+    // A room or unit-type word claims its outline before another label in the same room.
+    names.sort_by_key(|(_, t, _, _)| std::cmp::Reverse(room_name_score(t)));
     let numbers: Vec<_> = all.iter().filter(|(_, t, _, _)| room_number(t)).cloned().collect();
     let plan = crate::cmd::bspec::room_plan(s)?;
     let plan = plan.as_ref().unwrap_or(s);
