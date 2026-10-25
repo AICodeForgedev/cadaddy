@@ -1240,7 +1240,12 @@ fn ocr_leaves_curve_drawn_symbols_alone() {
         }
     });
     let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
-    assert_eq!(text_values(&r), sorted(&["EF"; 6]), "{:?}", r.ocr);
+    // every tag is read, as loose text or as the TAG of the symbol it stands beside (a closed
+    // outline); no symbol is read as a 6 or a 9
+    let mut tags = text_values(&r);
+    tags.extend(symbol_tags(&r.drawing));
+    tags.sort();
+    assert_eq!(tags, sorted(&["EF"; 6]), "{:?} {:?}", r.ocr, r.stats);
 }
 
 #[test]
@@ -1277,4 +1282,86 @@ fn ocr_keeps_free_standing_marks() {
     let pdf = pdf_sized(&c, 2592, 1728);
     let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
     assert_eq!(text_values(&r), sorted(&["1", "1", "2", "3", "7", "A", "C", "EXISTING", "PANEL LP-1"]), "{:?}", r.ocr);
+}
+
+// -----------------------------------------------------------------------------------------
+// Q5265 devicetypes: the OCR never takes a symbol's own lines; stroked marks tag symbols too
+// -----------------------------------------------------------------------------------------
+
+/// A closed 16-pt square centred on (cx, cy), as a symbol's outline.
+fn square(cx: f64, cy: f64, out: &mut Vec<u8>) {
+    out.extend_from_slice(
+        format!(
+            "{:.1} {:.1} m {:.1} {:.1} l {:.1} {:.1} l {:.1} {:.1} l h S ",
+            cx - 8.0,
+            cy - 8.0,
+            cx + 8.0,
+            cy - 8.0,
+            cx + 8.0,
+            cy + 8.0,
+            cx - 8.0,
+            cy + 8.0
+        )
+        .as_bytes(),
+    );
+}
+
+/// The symbol inserts' TAG values, sorted.
+fn symbol_tags(d: &Drawing) -> Vec<String> {
+    let mut tags: Vec<String> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block.starts_with("PDF-SYM-") => {
+                Some(i.attribs.iter().find(|a| a.tag == "TAG").map_or_else(String::new, |a| a.text.value.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    tags.sort();
+    tags
+}
+
+#[test]
+fn ocr_leaves_symbol_lines_to_the_symbol() {
+    // Four squares with a stroked "T" inside, each tagged by a real text "T1"; the page has
+    // hidden text, so the OCR runs.  The T's lines read as a glyph, but they are the symbol's.
+    let mut visible = b"0 0 0 RG 0.5 w ".to_vec();
+    for i in 0..4 {
+        let (cx, cy) = (150.0 + 120.0 * f64::from(i), 300.0);
+        square(cx, cy, &mut visible);
+        shx_text("T", cx - 4.0, cy - 6.0, 12.0, 1.0, 0.0, &mut visible);
+        visible.extend_from_slice(format!("BT 0 Tr /F1 6 Tf {:.1} {:.1} Td (T1) Tj ET ", cx + 10.0, cy - 3.0).as_bytes());
+    }
+    let pdf = pdf_with_hidden_text(&visible, b"600 560 Td (GENERAL NOTES) Tj");
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(symbol_tags(&r.drawing), vec!["T1"; 4], "stats: {:?}", r.stats);
+    let t_texts = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "T")).count();
+    assert_eq!(t_texts, 0, "the symbols' lines must not also become text");
+}
+
+#[test]
+fn stroked_device_marks_tag_symbols() {
+    // Three squares with a smaller closed square inside, tagged only by stroked lettering
+    // "F" (no text object); hidden text elsewhere turns the OCR on.  A lone stroked "O"
+    // beside a fourth symbol is a circle-shaped glyph, never a tag.
+    let mut visible = b"0 0 0 RG 0.5 w ".to_vec();
+    for i in 0..4 {
+        let (cx, cy) = (150.0 + 120.0 * f64::from(i), 300.0);
+        square(cx, cy, &mut visible);
+        visible.extend_from_slice(
+            format!("{:.1} {:.1} m {:.1} {:.1} l {:.1} {:.1} l h S ", cx - 4.0, cy - 4.0, cx + 4.0, cy - 4.0, cx, cy + 4.0).as_bytes(),
+        );
+        let mark = if i < 3 { "F" } else { "O" };
+        for (k, ch) in mark.chars().enumerate() {
+            shx_text(&ch.to_string(), cx + 12.0 + 8.0 * k as f64, cy - 4.0, 8.0, 1.0, 0.0, &mut visible);
+        }
+    }
+    let pdf = pdf_with_hidden_text(&visible, b"600 560 Td (GENERAL NOTES) Tj");
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(symbol_tags(&r.drawing), vec!["F"; 3], "stats: {:?}", r.stats);
+    assert_eq!(r.stats.get("symbols tagged by stroked lettering").copied(), Some(3));
+    // the marks live on as the symbols' TAG, not twice as loose text
+    let f_texts = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "F")).count();
+    assert_eq!(f_texts, 0);
 }

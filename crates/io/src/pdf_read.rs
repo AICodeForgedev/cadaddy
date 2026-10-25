@@ -3383,34 +3383,103 @@ struct SymbolInstance {
     /// Nearby text (potential attribute tag).
     nearby_text: Option<String>,
     nearby_text_idx: Option<usize>,
+    /// The tag is lettering the OCR read from strokes: its index in the recovered texts.
+    ocr_idx: Option<usize>,
     /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
     device_type: Option<String>,
 }
 
-/// Detect device symbols by finding compact stroke clusters near device-tag text.
-///
-/// Strategy: hidden text entities that look like device tags (short, uppercase letters/numbers,
-/// near visible geometry) mark the positions of electrical devices.  For each tag, the nearby
-/// compact stroke group is the symbol.  Groups of ≥2 instances with the same normalized shape
-/// and similar tag patterns become blocks.
-///
-/// When no hidden text is available, falls back to the flood-fill + signature approach.
-fn detect_symbol_clusters(
+/// A short mark that may name the device beside it: real PDF text, or lettering the OCR read
+/// from strokes.
+struct TagAnchor<'a> {
+    value: &'a str,
+    at: (f64, f64),
+    height: f64,
+    /// Index in the page's texts (real text).
+    text_idx: Option<usize>,
+    /// Index in the recovered texts (OCR lettering).
+    ocr_idx: Option<usize>,
+}
+
+/// Device-tag candidates among real texts: short marks (common on E-sheets: A, C, DH, E, EF,
+/// G, J, L4, OS, REC, XA, etc.), hidden or visible.
+fn is_device_tag(v: &str) -> bool {
+    let t = v.trim();
+    (1..=6).contains(&t.len())
+        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && t.chars().any(|c| c.is_ascii_alphabetic())
+        // not a scale note or sheet number
+        && !t.contains('=') && !t.contains('"') && !t.contains('\'')
+}
+
+/// Device marks the OCR read from strokes.  Stricter than real text, since a misread glyph
+/// costs nothing to make: 1-3 capitals and up to 2 digits, never a lone I, O or X (a short
+/// line, a circle or a crossing read as a letter).
+fn is_ocr_device_tag(v: &str) -> bool {
+    let t = v.trim();
+    let letters = t.bytes().take_while(u8::is_ascii_uppercase).count();
+    (1..=3).contains(&letters) && t.len() - letters <= 2 && t.bytes().skip(letters).all(|b| b.is_ascii_digit()) && !matches!(t, "I" | "O" | "X")
+}
+
+/// A closed loop: a symbol's circle, box or triangle.
+fn is_outline(s: &Stroke) -> bool {
+    s.closed
+        || s.pts.len() >= 4
+            && match (s.pts.first(), s.pts.last()) {
+                (Some(a), Some(b)) => (a.0 - b.0).hypot(a.1 - b.1) < 0.05,
+                _ => false,
+            }
+}
+
+/// Where a real text sits, sheet points (rotation ignored: tags and their neighbours read
+/// left to right).
+fn text_box(t: &TextOut) -> [f64; 4] {
+    [t.at.0.min(t.end.0), t.at.1.min(t.end.1), t.at.0.max(t.end.0), t.at.1.max(t.end.1) + t.height]
+}
+
+/// Lettering the OCR read that stands alone, as a device mark does: no other text box within
+/// one letter height of `boxes[i]`.  A letter the OCR split off a word sits right beside the
+/// rest of it.
+fn stands_alone(i: usize, height: f64, boxes: &[[f64; 4]]) -> bool {
+    let Some(b) = boxes.get(i) else { return false };
+    let gap = height.max(1.0);
+    boxes.iter().enumerate().all(|(k, o)| k == i || !(o[0] <= b[2] + gap && o[2] >= b[0] - gap && o[1] <= b[3] + gap && o[3] >= b[1] - gap))
+}
+
+/// Smallest and largest symbol on a sheet, in points.
+fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
+    let short = (sheet.0 * 72.0).min(sheet.1 * 72.0);
+    (short * 0.002, short * 0.06)
+}
+
+/// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
+/// a block.  Within a group, instances keep their order (the first one draws the block).
+fn group_symbols(instances: Vec<SymbolInstance>) -> Vec<Vec<SymbolInstance>> {
+    let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
+    for inst in instances {
+        let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        groups.entry(key).or_default().push(inst);
+    }
+    groups.into_values().filter(|g| g.len() >= 2).collect()
+}
+
+/// Find device symbols: for each tag anchor, the compact cluster of short strokes around it
+/// (none of them in `excluded`: lettering, or symbols already found) is the symbol.
+fn find_symbol_instances(
     strokes: &[Stroke],
     fills: &[Fill],
-    texts: &[TextOut],
+    anchors: &[TagAnchor],
     sheet: (f64, f64),
-    shx_stroke_indices: &HashSet<usize>,
-) -> Vec<Vec<SymbolInstance>> {
-    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
-    let min_size = sw.min(sh) * 0.002;
-    let max_size = sw.min(sh) * 0.06;
+    excluded: &HashSet<usize>,
+    need_outline: bool,
+) -> Vec<SymbolInstance> {
+    let (min_size, max_size) = symbol_size_range(sheet);
 
-    // Build a spatial grid of non-consumed short strokes (not already used by SHX recovery)
+    // Build a spatial grid of short strokes not excluded
     let cell = max_size * 1.5;
     let mut stroke_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (i, s) in strokes.iter().enumerate() {
-        if shx_stroke_indices.contains(&i) {
+        if excluded.contains(&i) {
             continue;
         }
         let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
@@ -3433,31 +3502,12 @@ fn detect_symbol_clusters(
         }
     }
 
-    // Gather device-tag candidates: short text entities (1–4 chars, uppercase) that look like
-    // device tags (common on E-sheets: A, C, DH, E, EF, G, J, L4, OS, REC, XA, etc.)
-    // Include both hidden and visible text — tags might be in either.
-    let is_device_tag = |v: &str| -> bool {
-        let t = v.trim();
-        (1..=6).contains(&t.len())
-            && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-            && t.chars().any(|c| c.is_ascii_alphabetic())
-            // not a scale note or sheet number
-            && !t.contains('=') && !t.contains('"') && !t.contains('\'')
-    };
-
     let mut used_strokes: HashSet<usize> = HashSet::new();
     let mut instances: Vec<SymbolInstance> = Vec::new();
 
-    // For each device-tag text, find the compact stroke cluster around it
-    for (ti, t) in texts.iter().enumerate() {
+    // For each device tag, find the compact stroke cluster around it
+    for t in anchors {
         let v = t.value.trim();
-        if !is_device_tag(v) {
-            continue;
-        }
-        if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) {
-            // skip hidden text that was already matched to SHX recovery
-        }
-
         let tx = t.at.0;
         let ty = t.at.1;
         let search_r = t.height.max(5.0) * 4.0; // search radius: ~4× the text height
@@ -3473,7 +3523,7 @@ fn detect_symbol_clusters(
             for gy in gy0..=gy1 {
                 if let Some(members) = stroke_grid.get(&(gx, gy)) {
                     for &si in members {
-                        if used_strokes.contains(&si) || shx_stroke_indices.contains(&si) {
+                        if used_strokes.contains(&si) {
                             continue;
                         }
                         let s = &strokes[si];
@@ -3536,6 +3586,10 @@ fn detect_symbol_clusters(
         if cluster.len() < 2 || w < min_size || h < min_size {
             continue;
         }
+        // Leftover lettering is open strokes; a symbol drawn round a closed outline is not.
+        if need_outline && !cluster.iter().filter_map(|&si| strokes.get(si)).any(is_outline) {
+            continue;
+        }
 
         // collect fills in the cluster area
         let center = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
@@ -3571,18 +3625,12 @@ fn detect_symbol_clusters(
             stroke_indices: cluster,
             fill_indices: cluster_fills,
             nearby_text: Some(v.to_string()),
-            nearby_text_idx: Some(ti),
+            nearby_text_idx: t.text_idx,
+            ocr_idx: t.ocr_idx,
             device_type: if dev_type.is_empty() { None } else { Some(dev_type) },
         });
     }
-
-    // Group instances by device type: each type with ≥2 instances becomes a block group
-    let mut groups: HashMap<String, Vec<SymbolInstance>> = HashMap::new();
-    for inst in instances {
-        let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
-        groups.entry(key).or_default().push(inst);
-    }
-    groups.into_values().filter(|g| g.len() >= 2).collect()
+    instances
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3873,129 +3921,174 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // All three are text/symbol-oriented post-processing; skip when recover_text is off
     // (downstream geometry analysis that needs every stroke intact).
     let mut ocr_report = OcrReport::default();
-    let (recovered_texts, shx_stroke_indices, symbol_groups, symbol_stroke_indices, symbol_fill_indices, symbol_text_indices, recovered_do_not_scale) =
-        if opts.recover_text {
-            // Primary: match invisible text (rendering mode 3) to nearby stroke clusters — 100%
-            // accuracy.  Fallback: cluster short strokes and match to overlapping visible text —
-            // lower accuracy but catches sheets without hidden text.
-            let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
-            if recovered_texts.is_empty() {
-                recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
-                if !recovered_texts.is_empty() {
-                    stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
-                }
-            }
-            // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
-            let artifact_count = fills.len();
-            fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
-            let artifacts_removed = artifact_count - fills.len();
-            if artifacts_removed > 0 {
-                stats.insert("artifact fills removed".into(), artifacts_removed);
-            }
-
-            // Fix 5: detect repeated symbol clusters, before the OCR: a symbol's circle and
-            // ticks must not be read as letters (that cost device blocks).
-            let mut read_strokes: HashSet<usize> = HashSet::new();
-            for rt in &recovered_texts {
-                read_strokes.extend(&rt.stroke_indices);
-            }
-            let symbol_groups = detect_symbol_clusters(&strokes, &fills, &texts, sheet, &read_strokes);
-            let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
-            let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
-            let mut symbol_text_indices: HashSet<usize> = HashSet::new();
-            let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
-            for group in &symbol_groups {
-                for inst in group {
-                    for &si in &inst.stroke_indices {
-                        symbol_stroke_indices.insert(si);
-                    }
-                    for &fi in &inst.fill_indices {
-                        symbol_fill_indices.insert(fi);
-                    }
-                    if let Some(ti) = inst.nearby_text_idx {
-                        symbol_text_indices.insert(ti);
-                    }
-                }
-            }
-            if total_symbols > 0 {
-                stats.insert("symbol instances detected".into(), total_symbols);
-                stats.insert("symbol types".into(), symbol_groups.len());
-            }
-
-            // OCR pass: template-based glyph recognition for the strokes not yet claimed and
-            // not lying on real text: on a sheet with hidden text, for the strokes it doesn't
-            // cover; without hidden text, where the lettering is drawn as strokes (the fallback
-            // stage recovered some of it, little real text on the page, or far more loose
-            // glyph-sized strokes than real characters).  A page lettered in real text has
-            // nothing to OCR: its short strokes are symbols and ticks, which the OCR would read
-            // as stray letters.
-            let mut excluded = read_strokes.clone();
-            excluded.extend(&symbol_stroke_indices);
-            excluded.extend(strokes_under_text(&strokes, &texts));
-            let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-            let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
-            let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
-            let max_seg = ocr_max_seg(sheet);
-            let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
-            let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
-            if has_shx_evidence || lettering_is_strokes {
-                let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
-                if report.clusters > 0 {
-                    stats.insert("SHX OCR glyph clusters".into(), report.clusters);
-                    stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
-                    stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
-                    if report.turned > 0 {
-                        stats.insert("SHX OCR turned texts".into(), report.turned);
-                    }
-                }
-                if !ocr_texts.is_empty() {
-                    stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
-                    let pct = (report.mean_confidence() * 100.0).round().clamp(0.0, 100.0) as usize;
-                    stats.insert("SHX OCR mean confidence %".into(), pct);
-                    notes.push(format!(
-                        "SHX OCR: {} text(s) read from {} glyph cluster(s) ({} matched a character, mean confidence {pct}%); their strokes are kept on layer {SHX_SOURCE_LAYER} (off)",
-                        ocr_texts.len(),
-                        report.clusters,
-                        report.glyphs
-                    ));
-                    recovered_texts.extend(ocr_texts);
-                }
-                ocr_report = report;
-            }
-            let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
-            for rt in &recovered_texts {
-                shx_stroke_indices.extend(&rt.stroke_indices);
-            }
+    let (
+        recovered_texts,
+        shx_stroke_indices,
+        symbol_groups,
+        symbol_stroke_indices,
+        symbol_fill_indices,
+        symbol_text_indices,
+        symbol_ocr_indices,
+        recovered_do_not_scale,
+    ) = if opts.recover_text {
+        // Primary: match invisible text (rendering mode 3) to nearby stroke clusters — 100%
+        // accuracy.  Fallback: cluster short strokes and match to overlapping visible text —
+        // lower accuracy but catches sheets without hidden text.
+        let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+        if recovered_texts.is_empty() {
+            recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
             if !recovered_texts.is_empty() {
-                stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
+                stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
             }
-            // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
-            // SHX-stroked form, not as real PDF text.
-            let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
-                let up = rt.value.trim().to_ascii_uppercase();
-                up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
-            });
+        }
+        let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
+        for rt in &recovered_texts {
+            shx_stroke_indices.extend(&rt.stroke_indices);
+        }
 
-            // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and
-            // the scale was set from a scale note, override back to 1.0 (sheet size).
-            if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
-                let old_scale = scale;
-                scale = 1.0;
-                scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
-                notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
+        // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
+        let artifact_count = fills.len();
+        fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
+        let artifacts_removed = artifact_count - fills.len();
+        if artifacts_removed > 0 {
+            stats.insert("artifact fills removed".into(), artifacts_removed);
+        }
+
+        // Fix 5: detect repeated symbol clusters, first beside the page's real tag texts.
+        // This runs before the OCR: the OCR reads the short lines inside a symbol (the bars of
+        // a receptacle, the letter in a circle) as glyphs, and a symbol robbed of them is lost.
+        let anchors: Vec<TagAnchor> = texts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| is_device_tag(&t.value))
+            .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
+            .collect();
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false));
+        let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
+        let mut taken: HashSet<usize> = shx_stroke_indices.clone();
+        for inst in &instances {
+            taken.extend(&inst.stroke_indices);
+        }
+
+        // OCR pass: template-based glyph recognition for the strokes not yet claimed (by text
+        // or symbols) and not lying on real text: on a sheet with hidden text, for the strokes
+        // it doesn't cover; without hidden text, where the lettering is drawn as strokes (the
+        // fallback stage recovered some of it, little real text on the page, or far more loose
+        // glyph-sized strokes than real characters).  A page lettered in real text has nothing
+        // to OCR: its short strokes are symbols and ticks, which the OCR would read as stray
+        // letters.
+        let mut excluded = taken.clone();
+        excluded.extend(strokes_under_text(&strokes, &texts));
+        let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
+        let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
+        let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
+        let max_seg = ocr_max_seg(sheet);
+        let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
+        let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
+        if has_shx_evidence || lettering_is_strokes {
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
+            if report.clusters > 0 {
+                stats.insert("SHX OCR glyph clusters".into(), report.clusters);
+                stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
+                stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
+                if report.turned > 0 {
+                    stats.insert("SHX OCR turned texts".into(), report.turned);
+                }
             }
-            (
-                recovered_texts,
-                shx_stroke_indices,
-                symbol_groups,
-                symbol_stroke_indices,
-                symbol_fill_indices,
-                symbol_text_indices,
-                recovered_do_not_scale,
-            )
-        } else {
-            (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
-        };
+            if !ocr_texts.is_empty() {
+                stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
+                let pct = (report.mean_confidence() * 100.0).round().clamp(0.0, 100.0) as usize;
+                stats.insert("SHX OCR mean confidence %".into(), pct);
+                notes.push(format!(
+                    "SHX OCR: {} text(s) read from {} glyph cluster(s) ({} matched a character, mean confidence {pct}%); their strokes are kept on layer {SHX_SOURCE_LAYER} (off)",
+                    ocr_texts.len(),
+                    report.clusters,
+                    report.glyphs
+                ));
+                for rt in &ocr_texts {
+                    taken.extend(&rt.stroke_indices);
+                }
+                // Then beside the device marks that exist only as stroked lettering (no text
+                // object at all): standing alone, away from the symbols already found, and
+                // only round a closed outline.
+                let (_, max_size) = symbol_size_range(sheet);
+                let base = recovered_texts.len();
+                // Every text's box: the page's texts, then the recovered ones, then the OCR's.
+                let mut boxes: Vec<[f64; 4]> = texts.iter().map(text_box).collect();
+                for rt in recovered_texts.iter().chain(&ocr_texts) {
+                    let own: Vec<Vec<(f64, f64)>> = rt.stroke_indices.iter().filter_map(|&si| strokes.get(si)).map(|s| s.pts.clone()).collect();
+                    boxes.push(bbox(&own).unwrap_or([f64::NAN; 4]));
+                }
+                let first_ocr = texts.len() + base;
+                let anchors: Vec<TagAnchor> = ocr_texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, rt)| is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                    .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
+                    .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
+                    .collect();
+                let more = find_symbol_instances(&strokes, &fills, &anchors, sheet, &taken, true);
+                if !more.is_empty() {
+                    stats.insert("symbols tagged by stroked lettering".into(), more.len());
+                }
+                instances.extend(more);
+                recovered_texts.extend(ocr_texts);
+            }
+            ocr_report = report;
+        }
+        for rt in &recovered_texts {
+            shx_stroke_indices.extend(&rt.stroke_indices);
+        }
+        if !recovered_texts.is_empty() {
+            stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
+        }
+        // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
+        // SHX-stroked form, not as real PDF text.
+        let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
+            let up = rt.value.trim().to_ascii_uppercase();
+            up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
+        });
+
+        // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and
+        // the scale was set from a scale note, override back to 1.0 (sheet size).
+        if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
+            let old_scale = scale;
+            scale = 1.0;
+            scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
+            notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
+        }
+
+        let symbol_groups = group_symbols(instances);
+        let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_text_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_ocr_indices: HashSet<usize> = HashSet::new();
+        let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
+        for group in &symbol_groups {
+            for inst in group {
+                symbol_stroke_indices.extend(&inst.stroke_indices);
+                symbol_fill_indices.extend(&inst.fill_indices);
+                symbol_text_indices.extend(inst.nearby_text_idx);
+                symbol_ocr_indices.extend(inst.ocr_idx);
+            }
+        }
+        if total_symbols > 0 {
+            stats.insert("symbol instances detected".into(), total_symbols);
+            stats.insert("symbol types".into(), symbol_groups.len());
+        }
+        (
+            recovered_texts,
+            shx_stroke_indices,
+            symbol_groups,
+            symbol_stroke_indices,
+            symbol_fill_indices,
+            symbol_text_indices,
+            symbol_ocr_indices,
+            recovered_do_not_scale,
+        )
+    } else {
+        (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
+    };
 
     // the drawing
     let mut d = Drawing::new_imperial();
@@ -4368,9 +4461,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
     // using glyph-matched characters instead of '?' placeholders
     let mut recovered_count = 0usize;
-    for rt in &recovered_texts {
-        // skip empty or all-unrecognised clusters (they stay as linework)
-        if rt.value.is_empty() {
+    for (i, rt) in recovered_texts.iter().enumerate() {
+        // skip empty or all-unrecognised clusters (they stay as linework), and device marks
+        // that became a symbol's TAG
+        if rt.value.is_empty() || symbol_ocr_indices.contains(&i) {
             continue;
         }
         let (layer, color, lw) = place(if mode == LayerMode::Content { "shx_text" } else { "text" }, rt.pen, &rt.layer);
@@ -5265,5 +5359,20 @@ mod tests {
     fn hostile_input_is_an_error_not_a_crash() {
         assert!(read(b"%PDF-1.4 garbage", &PdfOptions::default()).is_err());
         assert!(read(&sample_pdf(), &PdfOptions { page: 7, ..PdfOptions::default() }).is_err());
+    }
+
+    #[test]
+    fn stroked_marks_that_can_tag_a_symbol() {
+        for t in ["A", "F", "OS", "EF", "L4", "WAP", "XA12"] {
+            assert!(is_ocr_device_tag(t), "{t}");
+        }
+        for t in ["I", "O", "X", "s", "Ef", "4", "4A", "ABCD", "A123", "A-1", "NO TE", ""] {
+            assert!(!is_ocr_device_tag(t), "{t}");
+        }
+        // a mark alone; a letter split off a word (the rest one gap away); its own box ignored
+        let boxes = [[100.0, 100.0, 106.0, 108.0], [300.0, 100.0, 330.0, 108.0], [331.0, 100.0, 337.0, 108.0], [f64::NAN; 4]];
+        assert!(stands_alone(0, 8.0, &boxes));
+        assert!(!stands_alone(2, 8.0, &boxes));
+        assert!(!stands_alone(9, 8.0, &boxes));
     }
 }
