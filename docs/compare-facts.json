@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1053,
-    "count": 1053,
+    "callableAsJson": 1071,
+    "count": 1071,
     "ids": [
       "-attedit",
       "-block",
@@ -454,12 +454,22 @@
       "imageframe",
       "imagetrace",
       "import",
+      "import.check",
       "insert",
       "interfere",
       "intersect",
       "isodraft",
       "isolateobjects",
       "isoplane",
+      "job.answer",
+      "job.explain",
+      "job.next",
+      "job.report",
+      "job.rules",
+      "job.start",
+      "job.status",
+      "job.undo",
+      "job.worklist",
       "join",
       "jpgout",
       "justifytext",
@@ -830,6 +840,13 @@
       "rscript",
       "rtext",
       "rtext.refresh",
+      "rules.action",
+      "rules.clashloop",
+      "rules.evaluate",
+      "rules.packs",
+      "rules.report",
+      "rules.score",
+      "rules.worklist",
       "saveas",
       "saveimg",
       "scale",
@@ -849,6 +866,7 @@
       "setvar",
       "shape",
       "share",
+      "sheet.facts",
       "sheetset",
       "showurls",
       "site.read",
@@ -1144,7 +1162,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 38,
+    "count": 40,
     "tools": [
       "bim_job",
       "bim_spec_import",
@@ -1160,6 +1178,8 @@
       "find_text",
       "get_prompt",
       "get_variable",
+      "guided_job",
+      "import_check",
       "inspect_drawing",
       "list_commands",
       "list_drawings",
@@ -1192,7 +1212,7 @@
     "registeredCommands": 744
   },
   "signedUpdates": true,
-  "version": "0.7.8",
+  "version": "0.7.10",
   "versions": {
     "dwg": {
       "bridge": {

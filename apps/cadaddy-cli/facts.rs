@@ -245,6 +245,17 @@ pub fn check(facts: &Value, check: &Value) -> Result<(), String> {
             return Err(format!("`{path}` is {v}, the claim needs at least {n}"));
         }
     }
+    // A version the site shows must be one the code has reached: the code may run ahead of the
+    // last published release, never behind it (`0.7.10` reaches `0.7.9`).
+    if let Some(want) = check.get("versionAtLeast").and_then(Value::as_str) {
+        let parse = |s: &str| s.trim().split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<u64>>>();
+        let have = v.as_str().and_then(parse);
+        match (have, parse(want)) {
+            (Some(h), Some(w)) if h >= w => {}
+            (Some(_), Some(_)) => return Err(format!("`{path}` is {v}, below the {want} the claim shows")),
+            _ => return Err(format!("`{path}` is {v}: not comparable with version {want}")),
+        }
+    }
     if let Some(e) = check.get("equals")
         && v != e
     {

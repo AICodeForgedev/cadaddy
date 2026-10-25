@@ -3543,19 +3543,21 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
 
             // OCR pass: template-based glyph recognition for the strokes not yet claimed and
             // not lying on real text: on a sheet with hidden text, for the strokes it doesn't
-            // cover; without hidden text, where the lettering is drawn as strokes (little real
-            // text on the page, or far more loose glyph-sized strokes than real characters).
-            // A page lettered in real text has nothing to OCR: its short strokes are symbols
-            // and ticks, which the OCR would read as stray letters.
+            // cover; without hidden text, where the lettering is drawn as strokes (the fallback
+            // stage recovered some of it, little real text on the page, or far more loose
+            // glyph-sized strokes than real characters).  A page lettered in real text has
+            // nothing to OCR: its short strokes are symbols and ticks, which the OCR would read
+            // as stray letters.
             let mut excluded = read_strokes.clone();
             excluded.extend(&symbol_stroke_indices);
             excluded.extend(strokes_under_text(&strokes, &texts));
             let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
+            let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
             let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
             let max_seg = ocr_max_seg(sheet);
             let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
             let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
-            if has_hidden_text || lettering_is_strokes {
+            if has_shx_evidence || lettering_is_strokes {
                 let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
                 if report.clusters > 0 {
                     stats.insert("SHX OCR glyph clusters".into(), report.clusters);
