@@ -220,7 +220,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
     let near_edge = |t: &TextItem| t.at.x >= x1 - 0.2 * (x1 - x0) || t.at.y <= y0 + 0.2 * (y1 - y0);
     texts
         .iter()
-        .filter(|t| is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && t.height >= 2.5 * median && near_edge(t))
+        .filter(|t| is_sheet_number(&t.value) && discipline_of(&t.value).len() <= 2 && t.height >= 2.0 * median && near_edge(t))
         .max_by(|a, b| a.height.total_cmp(&b.height))
         .map(|n| SheetIdent {
             number: n.value.trim().to_string(),
