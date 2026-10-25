@@ -22,6 +22,8 @@ use crate::{Result, Session};
 const MAX_QUESTIONS_PER_STAGE: usize = 500;
 /// Most verify samples per stage.
 const MAX_VERIFY_SAMPLES: usize = 20;
+/// Most texts read per sheet when looking for its legends and schedules.
+const MAX_SHEET_TEXTS: usize = 200_000;
 /// Most rules a job may learn.
 const MAX_RULES: usize = 5_000;
 /// Most audit entries kept (oldest trimmed).
@@ -401,7 +403,21 @@ pub struct GuidedJob {
     /// together), so what is read on it carries the sheet's level.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_regions: Vec<SheetRegion>,
+    /// The objects each imported sheet added (the sheets overlap in model space, so each
+    /// sheet's legend applies to its own symbols only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_spans: Vec<SheetSpan>,
 }
+
+/// The handles one sheet's import created: `lo..hi`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SheetSpan {
+    /// The sheet's number (`E-4`), or its file when it has none.
+    pub sheet: String,
+    pub lo: u64,
+    pub hi: u64,
+}
+
 
 /// An imported sheet's rectangle in the job's drawing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -455,6 +471,7 @@ impl GuidedJob {
             sheets_loaded: false,
             index: None,
             sheet_regions: Vec::new(),
+            sheet_spans: Vec::new(),
         }
     }
 
@@ -1264,7 +1281,14 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut x = 0.0f64;
     let mut regions = Vec::new();
     for sh in &all {
-        if let Some(rect) = import_one_sheet(s, &job.pdfs_path, sh, [x, 0.0])? {
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        let imported = import_one_sheet(s, &job.pdfs_path, sh, [x, 0.0])?;
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        if hi > lo {
+            let name = [sh.get("number"), sh.get("file")].into_iter().flatten().filter_map(Value::as_str).find(|n| !n.is_empty()).unwrap_or("?");
+            job.sheet_spans.push(SheetSpan { sheet: name.to_string(), lo, hi });
+        }
+        if let Some(rect) = imported {
             let w = (rect[2] - rect[0]).abs();
             x = rect[2].max(x) + 0.05 * w;
             let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -1352,26 +1376,192 @@ fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value, at: [f64; 2]
     }
 }
 
-/// Count device symbols detected by pdfnative's symbol-cluster detection (PDF-SYM-N blocks).
-/// Returns a map of device-tag → count.
-fn count_symbol_block_devices(s: &Session) -> BTreeMap<String, usize> {
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let Ok(d) = s.doc() else { return counts };
-    let space = s.space();
-    let store = match d.space(&space) {
-        Some(st) => st,
-        None => return counts,
+/// An unlisted tag printed by several symbols: a question with a crop.
+#[derive(Clone, Debug, Default)]
+struct UnlistedTag {
+    count: usize,
+    /// The first symbol printing it, and its sheet.
+    at: [f64; 2],
+    sheet: String,
+    /// That sheet's handles (`lo..hi`), where the crop looks.
+    span: (u64, u64),
+    handles: Vec<String>,
+}
+
+/// The job's device symbols (pdfnative's repeated clusters, `PDF-SYM-N` inserts with the
+/// nearby mark in a TAG attribute), sorted by what their tags say.
+#[derive(Clone, Debug, Default)]
+struct DeviceCensus {
+    /// Devices per type tag.
+    by_type: BTreeMap<String, usize>,
+    /// Symbols tagged with a circuit or panel reference (`D-1`): wiring labels, not types.
+    circuit: usize,
+    /// Symbols with no tag beside them.
+    untagged: usize,
+    /// Symbols drawn inside a legend or schedule: samples, not devices.
+    legend_samples: usize,
+    /// Symbols whose "tag" is lettering or a sheet number, by reason.
+    not_device: BTreeMap<&'static str, usize>,
+    /// Tag-shaped marks no legend lists, by tag.
+    unlisted: BTreeMap<String, UnlistedTag>,
+    /// Every type the loaded legends and schedules list, and how many tables listed them.
+    legend_types: std::collections::BTreeSet<String>,
+    legend_tables: usize,
+}
+
+/// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
+const MIN_REPEATED_TAG: usize = 3;
+/// Most crops drawn for unlisted tags.
+const MAX_TAG_CROPS: usize = 12;
+/// Most handles kept per unlisted tag.
+const MAX_TAG_HANDLES: usize = 20;
+
+/// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
+/// which symbols are samples; all of them together say which tags are device types.
+fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
+    use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
+    use cadaddy_mepfix::sheet_facts::{self, TextItem};
+    let mut c = DeviceCensus::default();
+    let Ok(d) = s.doc() else { return c };
+    let Some(store) = d.space(&s.space()) else { return c };
+    // Group objects by the sheet whose import made them; anything else is one more group.
+    let mut spans = job.sheet_spans.clone();
+    spans.sort_by_key(|sp| sp.lo);
+    let group_of = |h: u64| -> usize {
+        let i = spans.partition_point(|sp| sp.lo <= h);
+        match i.checked_sub(1).and_then(|k| spans.get(k).map(|sp| (k, sp))) {
+            Some((k, sp)) if h < sp.hi => k,
+            _ => spans.len(),
+        }
     };
+    let groups = spans.len() + 1;
+    let mut texts: Vec<Vec<TextItem>> = vec![Vec::new(); groups];
+    let mut symbols: Vec<Vec<(String, cadaddy_geom::Vec2, cadaddy_doc::Handle)>> = vec![Vec::new(); groups];
     for e in store.iter() {
-        if let cadaddy_doc::EntityKind::Insert(ins) = &e.kind
-            && ins.block.starts_with("PDF-SYM-")
-        {
-            // The TAG attribute holds the device mark text.
-            let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
-            *counts.entry(tag_bucket(&tag)).or_default() += 1;
+        let g = group_of(e.handle.0);
+        match &e.kind {
+            cadaddy_doc::EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
+                let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                if let Some(v) = symbols.get_mut(g) {
+                    v.push((tag, ins.insert.xy(), e.handle));
+                }
+            }
+            cadaddy_doc::EntityKind::Text(t) => {
+                if let Some(v) = texts.get_mut(g)
+                    && v.len() < MAX_SHEET_TEXTS
+                    && t.height.is_finite()
+                    && t.height > 0.0
+                    && !t.value.trim().is_empty()
+                {
+                    v.push(TextItem { value: t.value.trim().to_string(), at: t.insert.xy(), height: t.height, rotation: t.rotation });
+                }
+            }
+            _ => {}
         }
     }
-    counts
+    // Sheet numbers: the set's, and each loaded sheet's own title block.
+    let mut sheet_numbers = std::collections::BTreeSet::new();
+    let listed = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array);
+    for n in listed.into_iter().flatten().filter_map(|sh| sh.get("number").and_then(Value::as_str)) {
+        sheet_numbers.extend(device_types::sheet_number_forms(n));
+    }
+    let mut legends = Vec::with_capacity(groups);
+    for t in &texts {
+        if let Some(id) = sheet_facts::identify_sheet(t) {
+            sheet_numbers.extend(device_types::sheet_number_forms(&id.number));
+        }
+        let l = device_types::read_legend(t);
+        c.legend_tables += l.regions.len();
+        c.legend_types.extend(l.types.iter().cloned());
+        legends.push(l);
+    }
+    let learned: std::collections::BTreeSet<String> = job
+        .rules
+        .iter()
+        .filter(|r| r.value.starts_with("device:"))
+        .filter_map(|r| r.key.strip_prefix("symbol:"))
+        .map(|t| t.trim().to_string())
+        .collect();
+    let none = Legend::default();
+    for (g, syms) in symbols.iter().enumerate() {
+        let legend = legends.get(g).unwrap_or(&none);
+        let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
+        let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
+        for (tag, at, h) in syms {
+            if legend.covers(*at) {
+                c.legend_samples += 1;
+            } else if tag.is_empty() {
+                c.untagged += 1;
+            } else if is_circuit_tag(tag) {
+                c.circuit += 1;
+            } else {
+                match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
+                    TagVerdict::Device(t) => *c.by_type.entry(t).or_default() += 1,
+                    TagVerdict::NotDevice(why) => *c.not_device.entry(why).or_default() += 1,
+                    TagVerdict::Unlisted(t) => {
+                        let u = c.unlisted.entry(t).or_insert_with(|| UnlistedTag {
+                            at: [at.x, at.y],
+                            sheet: sheet.clone(),
+                            span,
+                            ..UnlistedTag::default()
+                        });
+                        u.count += 1;
+                        if u.handles.len() < MAX_TAG_HANDLES {
+                            u.handles.push(h.hex());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Unlisted marks printed once or twice are stray lettering.
+    let stray: usize = c.unlisted.values().filter(|u| u.count < MIN_REPEATED_TAG).map(|u| u.count).sum();
+    c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
+    if stray > 0 {
+        *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
+    }
+    c
+}
+
+/// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
+/// written into `dir`; its path.
+fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
+    let d = s.doc().ok()?;
+    let store = d.space(&s.space())?;
+    let centre = cadaddy_geom::Vec2::new(at[0], at[1]);
+    // Size the window from the symbol itself: a few symbol widths each way.
+    let sym = handle
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+        .and_then(|h| store.iter().find(|e| e.handle.0 == h))
+        .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
+        .filter(|b| !b.is_empty());
+    let r = sym.map_or(0.0, |b| b.width().max(b.height()));
+    let half = if r.is_finite() && r > 0.0 { 4.0 * r } else { 24.0 };
+    let window = cadaddy_geom::Bounds2::new(centre, centre).expand(half);
+    // The sheets overlap in model space: draw only this sheet's objects.
+    let near: Vec<&cadaddy_doc::Entity> = store
+        .iter()
+        .filter(|e| (span.0..span.1).contains(&e.handle.0) && cadaddy_doc::entity_bounds(d, e, 0).intersects(&window))
+        .map(|e| e.as_ref())
+        .take(20_000)
+        .collect();
+    let list = cadaddy_render::build_entities(d, near, &cadaddy_render::Options::default());
+    let view = cadaddy_render::raster::View::fit(&window, 256, 256, 0.0);
+    let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.0, px_per_mm: 0.0, antialias: true };
+    let png = cadaddy_render::raster::render_png(&list, &view, &ro)?;
+    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).take(24).collect();
+    let path = dir.join(format!("tag-{safe}.png"));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::create_dir_all(dir).ok()?;
+        crate::writefile::write(&path, png).ok()?;
+        Some(path.to_string_lossy().into_owned())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (png, path);
+        None
+    }
 }
 
 /// Run the rooms stage: detect rooms from labels (MUST 1, 4).
@@ -1511,25 +1701,6 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(rooms_result)
 }
 
-/// Bucket for symbols whose tag is a circuit or panel reference rather than a device mark.
-const CIRCUIT_TAGS: &str = "_circuit_tags";
-/// Bucket for symbols whose "tag" can't be a device mark: sheet numbers (S2004), lowercase
-/// switch legs, note words (TYP, GFCI). Reported, never counted as devices.
-const NOT_DEVICE_TAGS: &str = "_not_device_tags";
-
-/// Where a symbol's tag is counted: its device type, or one of the buckets above.
-fn tag_bucket(tag: &str) -> String {
-    if tag.is_empty() {
-        "unknown_symbol".into()
-    } else if is_circuit_tag(tag) {
-        CIRCUIT_TAGS.into()
-    } else if cadaddy_mepfix::sheet_facts::is_type_tag(tag) {
-        tag.into()
-    } else {
-        NOT_DEVICE_TAGS.into()
-    }
-}
-
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
 fn is_circuit_tag(tag: &str) -> bool {
@@ -1550,21 +1721,43 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // ── Primary source: PDF-SYM block inserts (pdfnative-rw2 symbol detection) ──
     // After pdfimport, repeated symbol clusters become block inserts named PDF-SYM-N
     // with a TAG attribute holding the nearby device-mark text.
-    let mut sym_devices = count_symbol_block_devices(s);
-    let circuit_tagged = sym_devices.remove(CIRCUIT_TAGS).unwrap_or(0);
-    results["circuit_tagged_symbols"] = json!(circuit_tagged);
-    let not_devices = sym_devices.remove(NOT_DEVICE_TAGS).unwrap_or(0);
+    // Device types come from the sheets' legends and schedules (plus the marks every set
+    // uses); notes, sheet numbers, keynotes, switch legs and dimensions never count.
+    let census = device_census(s, job);
+    results["circuit_tagged_symbols"] = json!(census.circuit);
+    let not_devices: usize = census.not_device.values().sum();
     results["non_device_tags"] = json!(not_devices);
-    let sym_count: usize = sym_devices.values().sum();
-    if sym_count > 0 {
+    results["device_types"] = json!({
+        "legend_tables": census.legend_tables,
+        "legend_types": census.legend_types,
+        "legend_samples": census.legend_samples,
+        "untagged_symbols": census.untagged,
+        "not_devices": census.not_device,
+        "unlisted_repeated": census.unlisted.iter().map(|(t, u)| (t.clone(), json!(u.count))).collect::<serde_json::Map<String, Value>>(),
+    });
+    let sym_count: usize = census.by_type.values().sum();
+    if sym_count > 0 || !census.unlisted.is_empty() {
         total_items += sym_count;
         let items: Vec<Value> =
-            sym_devices.iter().map(|(tag, &count)| json!({"tag": tag, "type": tag, "count": count, "source": "pdf_symbol"})).collect();
-        let by_type: serde_json::Map<String, Value> = sym_devices.iter().map(|(k, v)| (k.clone(), json!(*v))).collect();
+            census.by_type.iter().map(|(tag, &count)| json!({"tag": tag, "type": tag, "count": count, "source": "pdf_symbol"})).collect();
+        let by_type: serde_json::Map<String, Value> = census.by_type.iter().map(|(k, v)| (k.clone(), json!(*v))).collect();
+        // Unlisted tags printed again and again: ask which device each is, with a crop.
+        let mut unlisted: Vec<(&String, &UnlistedTag)> = census.unlisted.iter().collect();
+        unlisted.sort_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(b.0)));
+        let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("device-tags");
+        let unknowns: Vec<Value> = unlisted
+            .iter()
+            .enumerate()
+            .map(|(i, (tag, u))| {
+                let crop = if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag) } else { None };
+                json!({"description": tag, "tag": tag, "count": u.count, "at": u.at, "sheet": u.sheet, "handles": u.handles, "crop_path": crop})
+            })
+            .collect();
         results["devices"] = json!({
             "items": items,
             "count": sym_count,
             "by_type": by_type,
+            "unknowns": unknowns,
             "source": "pdf_symbol_blocks",
         });
     }
@@ -1708,12 +1901,21 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             for unk in unknowns.iter().take(MAX_QUESTIONS_PER_STAGE) {
                 let desc = unk.get("description").and_then(Value::as_str).unwrap_or("unknown symbol");
                 let count = unk.get("count").and_then(Value::as_u64).unwrap_or(1);
+                let tagged = unk.get("tag").and_then(Value::as_str).is_some();
                 let qid = job.next_qid(StageName::Devices);
                 let q = Question {
                     id: qid,
                     stage: StageName::Devices,
-                    question: format!("Unknown symbol: '{desc}' found {count} time(s) — which device is it?"),
-                    why: "Foreign/unknown symbol not matched to any library entry; learning it adds to future counts".into(),
+                    question: if tagged {
+                        format!("Unknown symbol tag '{desc}' printed by {count} symbols, but no legend or schedule lists it — which device is it?")
+                    } else {
+                        format!("Unknown symbol: '{desc}' found {count} time(s) — which device is it?")
+                    },
+                    why: if tagged {
+                        "Device types come from the legend and schedules; answering adds this tag's symbols to the count".into()
+                    } else {
+                        "Foreign/unknown symbol not matched to any library entry; learning it adds to future counts".into()
+                    },
                     choices: Vec::new(),
                     evidence: Some(QuestionEvidence {
                         crop_png_path: unk.get("crop_path").and_then(Value::as_str).map(String::from),
@@ -1723,7 +1925,11 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             Some([arr.first()?.as_f64()?, arr.get(1)?.as_f64()?])
                         }),
                         values: Some(json!({"description": desc, "count": count})),
-                        handles: Vec::new(),
+                        handles: unk
+                            .get("handles")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                            .unwrap_or_default(),
                         tiled_crops: None,
                         leftovers: Vec::new(),
                     }),
@@ -2854,12 +3060,150 @@ mod tests {
 
     #[test]
     fn junk_tags_are_not_device_types() {
-        for (t, want) in [("A", "A"), ("XA", "XA"), ("L4", "L4"), ("EF", "EF"), ("DP2", "DP2"), ("D-1", CIRCUIT_TAGS), ("", "unknown_symbol")] {
-            assert_eq!(super::tag_bucket(t), want, "{t}");
+        assert!(is_circuit_tag("D-1") && is_circuit_tag("DP1-13"));
+        let (none, sheets) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+        for t in ["A", "XA", "L4", "EF", "DP2"] {
+            assert_eq!(cadaddy_mepfix::device_types::tag_verdict(t, &none, &none, &sheets), TagVerdict::Device(t.into()), "{t}");
         }
         for t in ["S2004", "s", "t", "u", "GFCI", "TYP", "a1", "ABCD"] {
-            assert_eq!(super::tag_bucket(t), NOT_DEVICE_TAGS, "{t}");
+            assert!(matches!(cadaddy_mepfix::device_types::tag_verdict(t, &none, &none, &sheets), TagVerdict::NotDevice(_)), "{t}");
         }
+    }
+
+    use cadaddy_doc::{Attrib, AttribModes, AttribProps, Block, Circle, Common, EntityKind, HAlign, Insert, Space, Text, VAlign};
+    use cadaddy_geom::Vec3;
+    use cadaddy_mepfix::device_types::TagVerdict;
+
+    fn text(v: &str, x: f64, y: f64, h: f64) -> Text {
+        Text {
+            insert: Vec3::new(x, y, 0.0),
+            align_pt: None,
+            height: h,
+            value: v.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::default(),
+            valign: VAlign::default(),
+        }
+    }
+
+    /// One sheet's import: its texts and its device symbols (`PDF-SYM-1` inserts, `tag` in TAG).
+    fn add_sheet(s: &mut crate::Session, texts: &[(&str, f64, f64, f64)], symbols: &[(&str, f64, f64)]) {
+        let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+        let mut b = Block::new("PDF-SYM-1");
+        b.entities.push(cadaddy_doc::Entity {
+            handle: d.new_handle(),
+            common: Common::default(),
+            kind: EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 3.0 }),
+        });
+        d.blocks.insert("PDF-SYM-1".into(), std::sync::Arc::new(b));
+        let common = || Common { layer: "PDF".into(), ..Common::default() };
+        for (v, x, y, h) in texts {
+            d.add(&Space::Model, common(), EntityKind::Text(text(v, *x, *y, *h))).ok();
+        }
+        for (tag, x, y) in symbols {
+            let attribs = if tag.is_empty() {
+                Vec::new()
+            } else {
+                vec![Attrib {
+                    tag: "TAG".into(),
+                    text: text(tag, *x, *y, 2.0),
+                    invisible: false,
+                    constant: false,
+                    prompt: String::new(),
+                    props: AttribProps::default(),
+                    multiline: None,
+                    modes: AttribModes::default(),
+                }]
+            };
+            let ins = Insert {
+                block: "PDF-SYM-1".into(),
+                insert: Vec3::new(*x, *y, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs,
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            d.add(&Space::Model, common(), EntityKind::Insert(ins)).ok();
+        }
+    }
+
+    /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
+    /// sheet Q-2 lies over the same paper area with no legend. Its symbols over Q-1's schedule
+    /// are devices; Q-1's own sample symbol in the schedule isn't.
+    #[test]
+    fn device_types_come_from_the_legend_and_schedules() {
+        let tmp = std::env::temp_dir();
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(
+            json!({"sheets": [{"number": "Q-1", "sheet_type": "plan"}, {"number": "Q-2", "sheet_type": "plan"}, {"number": "E1", "sheet_type": "schedule"}]}),
+        );
+        job.sheets_loaded = true;
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut q1: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // the schedule's sample symbol
+        q1.extend((0..5).map(|i| ("A", 100.0 + 40.0 * f64::from(i), 300.0)));
+        q1.extend((0..3).map(|i| ("B", 100.0 + 40.0 * f64::from(i), 200.0)));
+        q1.extend((0..4).map(|i| ("ZZ", 100.0 + 40.0 * f64::from(i), 100.0))); // unlisted, repeated
+        q1.extend([("QQ", 500.0, 100.0), ("s", 520.0, 100.0), ("s", 540.0, 100.0), ("12", 560.0, 100.0)]); // stray, switch legs, keynote
+        q1.extend([("D-1", 600.0, 100.0), ("E1", 620.0, 100.0), ("", 640.0, 100.0), ("OS", 660.0, 100.0)]); // circuit, sheet number, untagged, known mark
+        for (i, (texts, syms, name)) in
+            [(schedule, q1, "Q-1"), (Vec::new(), vec![("A", 1000.0, 772.0), ("A", 1010.0, 760.0)], "Q-2")].into_iter().enumerate()
+        {
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            assert!(hi > lo, "sheet {i}");
+            job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
+        }
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let dev = &r["devices"];
+        assert_eq!(dev["by_type"], json!({"A": 7, "B": 3, "OS": 1}), "{r:#}");
+        assert_eq!(dev["count"], json!(11));
+        let dt = &r["device_types"];
+        assert_eq!(dt["legend_types"], json!(["A", "B"]));
+        assert_eq!(dt["legend_samples"], json!(1));
+        assert_eq!(dt["untagged_symbols"], json!(1));
+        assert_eq!(dt["not_devices"], json!({"lettering": 3, "sheet number": 1, "unlisted, printed once or twice": 1}), "{dt:#}");
+        assert_eq!(r["circuit_tagged_symbols"], json!(1));
+        // ZZ: a question with a crop of the first symbol printing it.
+        let unk = dev["unknowns"].as_array().cloned().unwrap_or_default();
+        assert_eq!(unk.len(), 1, "{unk:?}");
+        assert_eq!(unk[0]["tag"], json!("ZZ"));
+        assert_eq!(unk[0]["count"], json!(4));
+        assert_eq!(unk[0]["sheet"], json!("Q-1"));
+        let crop = unk[0]["crop_path"].as_str().unwrap_or_else(|| panic!("no crop: {unk:?}"));
+        assert!(std::path::Path::new(crop).starts_with(&tmp), "{crop}");
+        let png = std::fs::read(crop).unwrap_or_else(|e| panic!("{crop}: {e}"));
+        assert!(png.starts_with(b"\x89PNG"), "{crop}");
+        let stage = job.stage_mut(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
+        let q = stage.iter().find(|q| q.question.contains("'ZZ'")).unwrap_or_else(|| panic!("no ZZ question"));
+        assert!(q.question.contains("no legend or schedule lists it"), "{}", q.question);
+        assert_eq!(q.evidence.as_ref().and_then(|e| e.crop_png_path.as_deref()), Some(crop));
+        assert_eq!(q.evidence.as_ref().map_or(0, |e| e.handles.len()), 4);
+        // Answering it makes ZZ a device type on the recount.
+        let mut answered = q.clone();
+        answered.answer = Some(json!({"device_type": "wall_sconce"}));
+        learn_from_answer(&mut job, &answered);
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["by_type"]["ZZ"], json!(4), "{r:#}");
+        assert_eq!(r["devices"]["count"], json!(15));
+        assert_eq!(r["devices"]["unknowns"], json!([]));
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
     #[test]
