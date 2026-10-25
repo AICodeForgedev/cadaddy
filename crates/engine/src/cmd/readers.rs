@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
-            .params("{sheets?: [name], preview?: bool} → {devices: [{tag, kind, level, height_source, placement}], count}")
+            .params("{sheets?: [name], preview?: bool, limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read}: works on any open drawing (the current sheet is the print set)")
             .noundo(),
     ]
 }
@@ -731,26 +731,93 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
-fn run_elec_devices(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _preview = bool_or(p, "preview", true);
+/// What a device mark usually is on an electrical plan (else `device`).
+fn device_kind(tag: &str) -> &'static str {
+    match tag.trim().to_ascii_uppercase().as_str() {
+        "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
+        "DH" | "MH" => "door holder",
+        "J" | "JB" => "junction box",
+        "S" | "S3" | "S4" | "SD" | "DS" | "LV" => "switch",
+        "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
+        "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
+        "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
+        _ => "device",
+    }
+}
 
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+/// Devices listed at most per call, and read at most.
+const DEVICES_LISTED: usize = 500;
+const MAX_DEVICES: usize = 100_000;
+
+/// A device read: its mark, where it is, the object it came from and how it was read.
+type Found = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, &'static str);
+
+/// The electrical devices of the open drawing (the current sheet is the print set when none is
+/// open): symbol blocks carrying a device mark, marks in tag bubbles (the ones no door or window
+/// schedule row claims: `schedules.read`'s tags without a row) and device marks written as text
+/// (`OS`, `DH`, `J`).
+fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(DEVICES_LISTED, |n| usize::try_from(n).unwrap_or(MAX_DEVICES).clamp(1, MAX_DEVICES));
+    let e_sheets = project(s).map(|pr| pr.sheets.iter().filter(|x| x.discipline == "E").count()).ok();
+    let d = s.doc()?;
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    let ents = super::bspec::plan_objects(d);
+    let type_tag = |t: &str| cadaddy_mepfix::sheet_facts::is_type_tag(t) && !super::perceive::geometry::room_number(t);
+    // Door and window schedules claim their marks.
+    let rows: Vec<String> = spec.as_ref().map(|sp| sp.schedule.rows.iter().map(|r| r.mark.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
+    let claimed = |t: &str| rows.contains(&t.trim().to_ascii_uppercase());
+    let mut found: Vec<Found> = Vec::new();
+    for e in &ents {
+        let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { continue };
+        let Some(tag) = ins.attribs.iter().find(|a| a.tag.eq_ignore_ascii_case("TAG")).map(|a| a.text.value.trim().to_string()) else { continue };
+        if type_tag(&tag) && found.len() < MAX_DEVICES {
+            found.push((tag, ins.insert.xy(), e.handle, "symbol"));
         }
+    }
+    // A mark beside a symbol carrying it is that symbol's.
+    let near_symbol = |found: &[Found], t: &str, at: cadaddy_geom::Vec2, h: f64| {
+        found.iter().any(|f| f.3 == "symbol" && f.0.eq_ignore_ascii_case(t) && f.1.dist(at) <= 4.0 * h)
     };
-
-    let e_sheets: Vec<&mep_printset::SheetEntry> = project.sheets.iter().filter(|s| s.discipline == "E").collect();
-
-    Ok(json!({
-        "devices": [],
-        "count": 0,
-        "sheets_read": e_sheets.len(),
-        "message": if e_sheets.is_empty() {
-            "no E-sheets found in the project"
-        } else {
-            "electrical device reader wired; DXF sheet loading integration pending"
-        },
-    }))
+    let k = super::perceive::units_per_inch(d);
+    let mut taken: std::collections::HashSet<cadaddy_doc::Handle> = std::collections::HashSet::new();
+    for (mark, at, h) in super::schedules::tags(d, &ents, &[]) {
+        if type_tag(&mark) && !claimed(&mark) && !near_symbol(&found, &mark, at, 6.0 * k) && found.len() < MAX_DEVICES {
+            taken.insert(h);
+            found.push((mark, at, h, "tag"));
+        }
+    }
+    for (h, t, at, height) in super::perceive::texts(&ents) {
+        if taken.contains(&h) || !type_tag(&t) || claimed(&t) || near_symbol(&found, &t, at, height.max(1e-9)) {
+            continue;
+        }
+        if found.len() >= MAX_DEVICES {
+            break;
+        }
+        found.push((t, at, h, "text"));
+    }
+    let level_of = |at: cadaddy_geom::Vec2| spec.as_ref().and_then(|sp| cadaddy_walk3d::level_at(&sp.levels, at.x, at.y)).map(|l| l.name.clone());
+    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
+    for f in &found {
+        *by_type.entry(f.0.clone()).or_default() += 1;
+    }
+    let devices: Vec<Value> = found
+        .iter()
+        .take(limit)
+        .map(|(tag, at, h, src)| {
+            json!({
+                "tag": tag, "kind": device_kind(tag), "level": level_of(*at), "height_source": "default", "source": src,
+                "placement": {"at": [at.x, at.y]}, "handle": h.hex(),
+            })
+        })
+        .collect();
+    let mut out = json!({
+        "devices": devices, "count": found.len(), "by_type": by_type,
+        "print_set": if e_sheets.is_some() { "project" } else { "current drawing" }, "sheets_read": e_sheets.unwrap_or(1).max(1),
+    });
+    if found.is_empty() {
+        out["message"] = json!("no device marks or tagged device symbols on this drawing");
+    } else if found.len() > limit {
+        out["more"] = json!(found.len() - limit);
+    }
+    Ok(out)
 }
