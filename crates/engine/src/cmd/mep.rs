@@ -1588,7 +1588,7 @@ fn size_text(s: [f64; 2]) -> String {
 
 /// What a run's generated objects are known by from one build to the next: the plan object it
 /// was read from (else its revision id) and where it starts.
-fn run_base(r: &MepRun) -> String {
+pub(crate) fn run_base(r: &MepRun) -> String {
     let src = r.objects.iter().find(|o| o.as_str() != "reviewed").map_or(r.id.as_str(), String::as_str);
     let at = r.points.first().map_or(String::new(), |p| format!("{:.2},{:.2}", p[0], p[1]));
     format!("{src}@{at}")

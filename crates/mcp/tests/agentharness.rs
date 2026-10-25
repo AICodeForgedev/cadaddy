@@ -27,11 +27,7 @@ fn tool(s: &mut Server, name: &str, args: Value) -> Result<Value, String> {
         return Err(format!("JSON-RPC error: {}", e["message"].as_str().unwrap_or("?")));
     }
     let text = r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
-    if r["result"]["isError"] == true {
-        Err(text)
-    } else {
-        serde_json::from_str(&text).map_err(|e| format!("parse: {e}"))
-    }
+    if r["result"]["isError"] == true { Err(text) } else { serde_json::from_str(&text).map_err(|e| format!("parse: {e}")) }
 }
 
 /// Build a synthetic PDF with a rectangle (floor plan outline) and a line (wall).
@@ -52,7 +48,7 @@ fn synthetic_pdf(dir: &str) -> String {
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
     let xref = pdf.len();
     pdf.extend_from_slice(b"xref\n0 5\n");
-    pdf.extend_from_slice(format!("0000000000 65535 f \n").as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
     pdf.extend_from_slice(format!("{o1:010} 00000 n \n").as_bytes());
     pdf.extend_from_slice(format!("{o2:010} 00000 n \n").as_bytes());
     pdf.extend_from_slice(format!("{o3:010} 00000 n \n").as_bytes());
@@ -103,7 +99,7 @@ fn instructions_to_built_model_in_three_calls() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The `workflows` tool returns all four named flows.
+/// The `workflows` tool returns the named flows.
 #[test]
 fn workflows_lists_main_flows() {
     io();
@@ -116,4 +112,55 @@ fn workflows_lists_main_flows() {
     assert!(names.contains(&"view-3d"), "missing view-3d: {names:?}");
     assert!(names.contains(&"plot-set"), "missing plot-set: {names:?}");
     assert!(names.contains(&"convert-folder"), "missing convert-folder: {names:?}");
+    assert!(names.contains(&"bim-work"), "missing bim-work (Q5242): {names:?}");
+}
+
+/// Q5242: a fresh agent does clash, takeoff and estimate end to end through MCP tools, reading
+/// the steps from `workflows` (a synthetic room with a duct, a crossing conduit and a pipe).
+#[test]
+fn bim_work_end_to_end_through_mcp() {
+    io();
+    let mut s = Server::new(Box::new(Headless::default()));
+    rpc(&mut s, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+    let wf = tool(&mut s, "workflows", json!({})).expect("workflows");
+    let flow = wf["workflows"].as_array().unwrap().iter().find(|f| f["name"] == "bim-work").cloned().expect("the bim-work flow");
+    let steps = flow["steps"].to_string();
+    for c in ["bim.clash", "bim.clash.fix", "bim.issue.create", "bim.takeoff", "bim.estimate"] {
+        assert!(steps.contains(c), "{c} in {steps}");
+    }
+    let ex = |s: &mut Server, command: &str, params: Value| tool(s, "execute", json!({"command": command, "params": params}));
+    ex(&mut s, "layer.new", json!({"name": "A-WALL", "current": true})).unwrap();
+    ex(&mut s, "pline", json!({"vertices": [[0, 0], [480, 0], [480, 360], [0, 360]], "closed": true})).unwrap();
+    ex(
+        &mut s,
+        "bspec.set",
+        json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}],
+            "mep": {
+                "systems": [
+                    {"name": "M-SUPPLY", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 8], "bottom_ft": 10},
+                    {"name": "E-COND", "layer": "E-COND", "kind": "conduit", "size_in": [1, 0], "bottom_ft": 10}
+                ],
+                "runs": [
+                    {"system": "M-SUPPLY", "level": "L1", "points": [[24, 60], [264, 60]], "size_in": [12, 8], "bottoms_ft": [10]},
+                    {"system": "E-COND", "level": "L1", "points": [[200, 24], [200, 150]], "size_in": [1, 0], "bottoms_ft": [10.3]}
+                ]
+            }
+        }}),
+    )
+    .unwrap();
+    ex(&mut s, "model.build", json!({})).unwrap();
+    let c = ex(&mut s, "bim.clash", json!({"a": "electrical", "b": "mechanical"})).unwrap();
+    assert_eq!(c["total"], 1, "{c}");
+    let id = c["clashes"][0]["id"].as_str().unwrap().to_string();
+    let f = ex(&mut s, "bim.clash.fix", json!({"id": id, "approve": true})).unwrap();
+    assert_eq!(f["check"]["clear"], true, "{f}");
+    let t = ex(&mut s, "bim.takeoff", json!({"group_by": "level"})).unwrap();
+    assert!(t["lines"].as_array().unwrap().iter().any(|l| l["level"] == "L1" && l["element_count"].as_u64().unwrap_or(0) > 0), "{t}");
+    let e = ex(&mut s, "bim.estimate", json!({"rows": [{"item": "Rectangular duct", "unit": "ft", "material": 12.5, "labor_hrs": 0.2}]})).unwrap();
+    assert!(e["total"].as_f64().unwrap() > 0.0, "{e}");
+    // A mistake names the fix.
+    let err = ex(&mut s, "bim.clash", json!({"a": 7})).unwrap_err();
+    assert!(err.contains("`a` is a trade"), "{err}");
 }
