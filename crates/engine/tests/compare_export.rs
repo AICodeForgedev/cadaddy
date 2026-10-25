@@ -519,6 +519,51 @@ fn colors_carried_apart_from_the_object_color_are_replaced() {
 }
 
 #[test]
+fn inline_colors_of_multiline_attributes_are_replaced() {
+    use cadcraft_engine::doc::Attrib;
+    let attrib = |contents: &str| -> Attrib {
+        let at = serde_json::to_value(Vec3::ZERO).unwrap();
+        serde_json::from_value(json!({
+            "tag": "T",
+            "text": {"insert": at, "height": 1.0, "value": "x"},
+            "multiline": {"mtext": {"insert": at, "height": 1.0, "contents": contents}, "readAs": "x"},
+        }))
+        .unwrap()
+    };
+    let mut s = Session::new();
+    let mut part = Block::new("PART");
+    part.entities.push(Entity::new(Handle(0x700), EntityKind::AttDef(attrib("\\C1;x"))));
+    s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part));
+    let reference = Insert { attribs: vec![attrib("\\C3;x")], ..insert("PART") };
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(reference)).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    let r = s.execute("compareexport", &json!({})).unwrap();
+    let multiline = |a: &Attrib| a.multiline.as_ref().map(|m| m.mtext.contents.clone());
+    let mut blocks = Vec::new();
+    for e in members(&s, r["current"].as_str().unwrap()) {
+        if let EntityKind::Insert(i) = &e.kind {
+            assert_eq!(i.attribs.iter().map(multiline).collect::<Vec<_>>(), [Some("x".to_string())], "the reference's attribute");
+            blocks.push(i.block.clone());
+        }
+    }
+    assert_eq!(blocks.len(), 1);
+    let d = s.doc().unwrap();
+    let defs: Vec<Option<String>> = d
+        .block(&blocks[0])
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::AttDef(a) => Some(multiline(a)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(defs, [Some("x".to_string())], "the attribute definition in the recolored block");
+}
+
+#[test]
 fn edits_after_compare_count_and_objects_keep_their_layers() {
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
