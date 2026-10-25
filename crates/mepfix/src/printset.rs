@@ -104,6 +104,25 @@ pub struct SheetEntry {
     /// Why `superseded_by` replaces this sheet (which order decided it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_reason: String,
+    /// Where `level` came from: `title` (the sheet or a view title names it), `number` (the
+    /// sheet's place in a numbered plan series: A111…A114), empty when there is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level_source: String,
+    /// The latest date printed on the sheet (`YYYY-MM-DD`: issue or revision dates), empty when
+    /// none reads. The same sheet in two files: the later date is the current one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issued: String,
+    /// Level marks a building section or elevation prints (`SECOND FLOOR` over `110'-8"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub level_marks: Vec<LevelMark>,
+}
+
+/// A level's elevation as a section or elevation sheet marks it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LevelMark {
+    /// The level code (`1`, `2`, `R`), as plan titles give levels.
+    pub level: String,
+    pub elevation_ft: f64,
 }
 
 /// What one stage found on one sheet.
@@ -892,19 +911,61 @@ pub fn run_classify_prints(
                 continue;
             }
         };
-        for (rec, _) in sheet_reader::split_views(&drawing) {
+        let facts = PageFacts::read(&drawing);
+        for (mut rec, _) in sheet_reader::split_views(&drawing) {
             let mut e = entry.clone();
+            let view = !rec.printed_number.is_empty();
+            // The title block names the sheet (sheet facts); the sheet reader's own number is the
+            // fallback, and a view of a several-view sheet keeps its `<number>/<level>`.
+            if let Some(id) = &facts.ident {
+                if view {
+                    if rec.printed_number != id.number {
+                        rec.number = rec.number.replacen(&rec.printed_number, &id.number, 1);
+                        rec.printed_number = id.number.clone();
+                    }
+                } else {
+                    rec.number = id.number.clone();
+                }
+                if !id.title.is_empty() && !view {
+                    rec.title = id.title.clone();
+                }
+                if !id.discipline.is_empty() {
+                    rec.discipline = canonical_discipline(&id.discipline);
+                }
+            }
             e.number = if rec.number.is_empty() { format!("{}#{}", entry.file, entry.page) } else { rec.number.clone() };
             e.title = rec.title.clone();
             let printed = if rec.printed_number.is_empty() { rec.number.as_str() } else { rec.printed_number.as_str() };
             e.discipline = if rec.discipline.is_empty() { infer_discipline(printed) } else { rec.discipline.clone() };
-            e.sheet_type = classify_sheet_type(printed, &e.title);
-            if !rec.printed_number.is_empty() && e.sheet_type == "unknown" {
+            // A consultant's title block may carry no title: the view titles say what is drawn.
+            let type_text = if e.title.is_empty() { facts.view_titles.join(" / ") } else { e.title.clone() };
+            e.sheet_type = classify_sheet_type(printed, &type_text);
+            if view && e.sheet_type == "unknown" {
                 // One view of a several-view sheet is a plan of its level.
                 e.sheet_type = "plan".into();
             }
-            e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
-            e.levels = rec.levels.clone();
+            if view {
+                e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
+                e.levels = rec.levels.clone();
+            } else {
+                // The sheet title's levels, else the plan views' titles' (`FIRST FLOOR POWER PLAN`).
+                let mut levels = sheet_reader::detect_levels(&e.title);
+                if levels.is_empty() && is_plan_type(&e.sheet_type) {
+                    for t in &facts.view_titles {
+                        levels.extend(sheet_reader::detect_levels(t));
+                    }
+                    levels.sort_by_key(|c| level_key(c));
+                    levels.dedup();
+                }
+                if levels.is_empty() {
+                    levels = rec.levels.clone();
+                }
+                e.level = levels.first().cloned().or_else(|| rec.level.clone()).unwrap_or_else(|| infer_level(&type_text));
+                e.levels = levels;
+            }
+            e.level_source = if e.level.is_empty() { String::new() } else { "title".into() };
+            e.issued = facts.issued.clone();
+            e.level_marks = if matches!(e.sheet_type.as_str(), "section" | "elevation") { facts.level_marks.clone() } else { Vec::new() };
             e.scale_text = rec.scale_text.clone();
             e.scale = rec.scale;
             e.dirty = false;
@@ -932,10 +993,13 @@ pub fn run_classify_prints(
     // Later files replace earlier sheets of the same number. "Later" is folder order with
     // numbers by value (`Revision 10/` after `Revision 2/`), not the order entries were added
     // (a re-import appends), so the same folder always gives the same current sheets.
+    // A later printed date (an issue or revision date) decides first: the same sheet in a full
+    // set and a discipline set keeps the newer print.
     let mut latest: BTreeMap<String, usize> = BTreeMap::new();
     for (i, e) in out.iter().enumerate() {
         if !e.number.is_empty() && e.recognised.as_ref().is_some_and(|r| !r.number.is_empty()) {
             let later = match latest.get(&e.number).and_then(|&j| out.get(j)) {
+                Some(prev) if by_date(e, prev) => e.issued > prev.issued,
                 Some(prev) => path_order(&e.file, &prev.file).then(e.page.cmp(&prev.page)).is_ge(),
                 None => true,
             };
@@ -944,21 +1008,26 @@ pub fn run_classify_prints(
             }
         }
     }
-    let names: Vec<(String, u32)> = out.iter().map(|e| (e.file.clone(), e.page)).collect();
+    let names: Vec<(String, u32, String)> = out.iter().map(|e| (e.file.clone(), e.page, e.issued.clone())).collect();
     for (i, e) in out.iter_mut().enumerate() {
         (e.superseded_by, e.superseded_reason) = match latest.get(&e.number) {
-            Some(&j) if j != i && names.get(j).is_some_and(|(f, _)| *f != e.file) => {
-                let by = names.get(j).map(|(f, p)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default();
-                let later = names.get(j).map(|(f, _)| f.as_str()).unwrap_or_default();
-                let why = format!(
-                    "path order: {later} comes after {} (folders and files in name order, numbers by value; revision marks are not compared)",
-                    e.file
-                );
+            Some(&j) if j != i && names.get(j).is_some_and(|(f, _, _)| *f != e.file) => {
+                let by = names.get(j).map(|(f, p, _)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default();
+                let (later, issued) = names.get(j).map(|(f, _, d)| (f.as_str(), d.as_str())).unwrap_or_default();
+                let why = if !issued.is_empty() && !e.issued.is_empty() && issued != e.issued {
+                    format!("revision date: {later} is dated {issued}, {} {}", e.file, e.issued)
+                } else {
+                    format!(
+                        "path order: {later} comes after {} (folders and files in name order, numbers by value; revision marks are not compared)",
+                        e.file
+                    )
+                };
                 (by, why)
             }
             _ => (String::new(), String::new()),
         };
     }
+    level_by_number(&mut out);
     project.sheets = out;
     let current: Vec<RecognisedSheet> = project.sheets.iter().filter(|s| s.superseded_by.is_empty()).filter_map(|s| s.recognised.clone()).collect();
     project.grid = sheet_reader::sheet_map_from(current);
@@ -982,6 +1051,381 @@ pub fn run_classify_prints(
     project.stages.push(rec.clone());
     update_dashboard(project);
     rec
+}
+
+// ─── Sheet index ─────────────────────────────────────────────────────────────
+
+/// Reads the project's prints for [`run_classify_prints`]: a page of a PDF (no images, markups
+/// or layout: only what the title block and views say), or a drawing file. The file read last
+/// stays in memory, so a merged set's pages are read from one copy.
+pub struct PrintLoader {
+    dir: PathBuf,
+    last: std::cell::RefCell<Option<(String, std::rc::Rc<Vec<u8>>)>>,
+}
+
+impl PrintLoader {
+    pub fn new(dir: &Path) -> PrintLoader {
+        PrintLoader { dir: dir.to_path_buf(), last: std::cell::RefCell::new(None) }
+    }
+
+    pub fn load(&self, e: &SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
+        if e.file.split(['/', '\\']).any(|part| part == "..") {
+            return Err(format!("{}: outside the project folder", e.file));
+        }
+        let cached = self.last.borrow().as_ref().filter(|(f, _)| *f == e.file).map(|(_, b)| b.clone());
+        let bytes = match cached {
+            Some(b) => b,
+            None => {
+                let path = self.dir.join(&e.file);
+                if path.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
+                    return Err(format!("{}: missing or too large", e.file));
+                }
+                let b = std::rc::Rc::new(std::fs::read(&path).map_err(|err| format!("{}: {err}", e.file))?);
+                *self.last.borrow_mut() = Some((e.file.clone(), b.clone()));
+                b
+            }
+        };
+        if e.file.to_ascii_lowercase().ends_with(".pdf") {
+            let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
+            return cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string());
+        }
+        cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())
+    }
+}
+
+/// Short texts looked at as level marks per page (a guard against hostile files).
+const MAX_MARK_TEXTS: usize = 400;
+
+/// What a page says about itself, read once for all of its entries.
+struct PageFacts {
+    /// The title block's number, title and discipline ([`crate::sheet_facts`]).
+    ident: Option<crate::sheet_facts::SheetIdent>,
+    /// The titles of the views drawn on it.
+    view_titles: Vec<String>,
+    /// The latest date printed on it (`YYYY-MM-DD`).
+    issued: String,
+    level_marks: Vec<LevelMark>,
+}
+
+impl PageFacts {
+    fn read(d: &cadaddy_doc::Drawing) -> PageFacts {
+        let texts = crate::sheet_facts::texts(d);
+        let ident = crate::sheet_facts::identify_sheet(&texts);
+        let view_titles = crate::sheet_facts::view_titles(d, &texts).into_iter().map(|v| v.title).collect();
+        let issued = texts.iter().filter_map(|t| latest_date(&t.value)).max().unwrap_or_default();
+        PageFacts { ident, view_titles, issued, level_marks: level_marks(&texts) }
+    }
+}
+
+/// The discipline code a sheet number's letters stand for (`A` from `A111`, `FP` from `FP-1`).
+fn canonical_discipline(letters: &str) -> String {
+    letters.trim().to_ascii_uppercase()
+}
+
+fn is_plan_type(t: &str) -> bool {
+    matches!(t, "plan" | "enlarged_plan" | "rcp")
+}
+
+/// Level codes in building order: basements, numbered floors, then the roof.
+fn level_key(c: &str) -> (bool, u32, String) {
+    (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.to_string())
+}
+
+/// Whether two copies of a sheet are told apart by their printed dates.
+fn by_date(a: &SheetEntry, b: &SheetEntry) -> bool {
+    !a.issued.is_empty() && !b.issued.is_empty() && a.issued != b.issued
+}
+
+/// The latest date in a text (`10/24/2026`, `10-24-26`, `2026-10-24`, `10.24.2026`) as
+/// `YYYY-MM-DD`.
+pub fn latest_date(text: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    for word in text.split(|c: char| !(c.is_ascii_digit() || matches!(c, '/' | '-' | '.'))).take(200) {
+        let w = word.trim_matches(|c: char| !c.is_ascii_digit());
+        let Some(sep) = w.chars().find(|c| matches!(c, '/' | '-' | '.')) else { continue };
+        let parts: Vec<&str> = w.split(sep).collect();
+        let [a, b, c] = parts.as_slice() else { continue };
+        let num = |s: &str| (!s.is_empty() && s.len() <= 4 && s.chars().all(|c| c.is_ascii_digit())).then(|| s.parse::<u32>().ok()).flatten();
+        let (Some(x), Some(y), Some(z)) = (num(a), num(b), num(c)) else { continue };
+        let (year, month, day) = if a.len() == 4 {
+            (x, y, z)
+        } else if c.len() == 4 || c.len() == 2 {
+            (if c.len() == 2 { 2000 + z } else { z }, x, y)
+        } else {
+            continue;
+        };
+        if !(1980..=2100).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) || (a.len() != 4 && a.len() > 2) || b.len() > 2 {
+            continue;
+        }
+        let d = format!("{year:04}-{month:02}-{day:02}");
+        if best.as_ref().is_none_or(|b| d > *b) {
+            best = Some(d);
+        }
+    }
+    best
+}
+
+/// The level code of a canonical level name (`LEVEL 2` → `2`, `ROOF` → `R`); none for a datum
+/// that is no storey of its own (a parapet, a low roof).
+fn code_of_level(name: &str) -> Option<String> {
+    if let Some(n) = name.strip_prefix("LEVEL ") {
+        return Some(n.to_string());
+    }
+    match name {
+        "ROOF" => Some("R".into()),
+        "BASEMENT" => Some("B1".into()),
+        "MEZZANINE" => Some("M".into()),
+        "PENTHOUSE" => Some("PH".into()),
+        _ => name.strip_prefix("BASEMENT ").map(|n| format!("B{n}")),
+    }
+}
+
+/// Level marks on a section or elevation: a level note in one text (`SECOND FLOOR EL. 110'-8"`)
+/// or a level name with its elevation right beside it (the two lines of a level marker).
+fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
+    use cadaddy_walk3d::levels::{canonical_level, parse_elevation, parse_level_note};
+    let mut out = Vec::new();
+    let short: Vec<&crate::sheet_facts::TextItem> =
+        texts.iter().filter(|t| t.value.len() <= 40 && !t.value.contains('=')).take(MAX_MARK_TEXTS * 50).collect();
+    let mut looked = 0usize;
+    for t in &short {
+        if canonical_level(&t.value).is_none() {
+            continue;
+        }
+        looked += 1;
+        if looked > MAX_MARK_TEXTS {
+            break;
+        }
+        let note = parse_level_note(&t.value).or_else(|| {
+            short
+                .iter()
+                .filter(|u| {
+                    u.at != t.at
+                        && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
+                        && canonical_level(&u.value).is_none()
+                        && parse_elevation(&u.value).is_some()
+                })
+                .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+                .and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value)))
+        });
+        if let Some(n) = note
+            && let Some(level) = code_of_level(&n.name)
+        {
+            out.push(LevelMark { level, elevation_ft: n.elevation_ft });
+        }
+    }
+    out
+}
+
+/// Plan sheets of a numbered series whose titles name no level take it from their number: in a
+/// series of two or more (`A111`…`A114`) the last digit is the level.
+fn level_by_number(sheets: &mut [SheetEntry]) {
+    let series = |e: &SheetEntry| -> Option<(String, u32)> {
+        if !e.level.is_empty() || !e.superseded_by.is_empty() || !is_plan_type(&e.sheet_type) || e.number.contains('/') {
+            return None;
+        }
+        let letters: String = e.number.chars().take_while(char::is_ascii_uppercase).collect();
+        let digits = e.number.get(letters.len()..)?.trim_start_matches('-');
+        let level = digits.chars().nth(2).and_then(|c| c.to_digit(10))?;
+        (!letters.is_empty() && digits.len() == 3 && digits.starts_with('1') && digits.chars().all(|c| c.is_ascii_digit()) && level >= 1)
+            .then(|| (format!("{letters}{}", digits.get(..2).unwrap_or_default()), level))
+    };
+    let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for e in sheets.iter() {
+        if let Some((g, l)) = series(e) {
+            groups.entry(g).or_default().push(l);
+        }
+    }
+    for e in sheets.iter_mut() {
+        let Some((g, l)) = series(e) else { continue };
+        let mut distinct = groups.get(&g).cloned().unwrap_or_default();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() >= 2 {
+            e.level = l.to_string();
+            e.levels = vec![e.level.clone()];
+            e.level_source = "number".into();
+        }
+    }
+}
+
+/// One real sheet of the set: every copy of it (the full set and a discipline set print the same
+/// sheet) is one entry.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct IndexSheet {
+    pub number: String,
+    pub title: String,
+    pub discipline: String,
+    #[serde(rename = "type")]
+    pub sheet_type: String,
+    /// The level the sheet shows (the first when it shows several); empty for a sheet of no one
+    /// level (cover, schedules, details).
+    pub level: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+    /// `title`, `number`, or `default` (a plan whose title names no level: the lowest level,
+    /// to be confirmed).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub level_source: String,
+    /// Every copy as `file#page` (the file alone for a one-sheet file), the current one first.
+    pub sources: Vec<String>,
+    /// Copies an other copy replaces (a later revision date, else a later file).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub superseded: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub issued: String,
+}
+
+/// A building level the plans show.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct IndexLevel {
+    /// Level code: `1`, `2`, `R`.
+    pub name: String,
+    /// The plan sheets of the level.
+    pub sheets: Vec<String>,
+    /// Finished floor elevation from the sections' and elevations' level marks (above the
+    /// first floor when the prints put it at 100'-0").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elevation_ft: Option<f64>,
+    /// Floor to floor: the next level's elevation less this one's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+}
+
+/// The set as sheets: one entry per real sheet, the levels its plans show.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SheetIndex {
+    pub sheets: Vec<IndexSheet>,
+    pub levels: Vec<IndexLevel>,
+    /// Pages and files read.
+    pub pages: usize,
+    /// Entries whose title block gave no sheet number.
+    pub unidentified: usize,
+    /// Plan sheets whose title and number name no level (given the lowest level, to confirm).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plans_without_level: Vec<String>,
+}
+
+fn source_of(e: &SheetEntry) -> String {
+    if e.page == 0 { e.file.clone() } else { format!("{}#{}", e.file, e.page) }
+}
+
+/// The project's sheet index (after [`run_classify_prints`]): copies of a sheet merged by
+/// number, the views of a several-view sheet back into their sheet, each plan with its level,
+/// and the levels with their elevations where sections or elevations mark them.
+pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
+    let base = |e: &SheetEntry| -> String {
+        match e.recognised.as_ref().map(|r| r.printed_number.as_str()).filter(|p| !p.is_empty()) {
+            Some(p) => p.to_string(),
+            None if e.number.is_empty() => source_of(e),
+            None => e.number.clone(),
+        }
+    };
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<&SheetEntry>> = BTreeMap::new();
+    for e in project.sheets.iter().take(MAX_SHEETS) {
+        let k = base(e);
+        if !groups.contains_key(&k) {
+            order.push(k.clone());
+        }
+        groups.entry(k).or_default().push(e);
+    }
+    let mut out = SheetIndex { pages: project.sheets.len(), ..SheetIndex::default() };
+    for k in &order {
+        let Some(members) = groups.get(k) else { continue };
+        let current: Vec<&SheetEntry> = members.iter().copied().filter(|e| e.superseded_by.is_empty()).collect();
+        let Some(first) = current.first().or_else(|| members.first()).copied() else { continue };
+        let views = current.len() > 1 && current.iter().any(|e| e.recognised.as_ref().is_some_and(|r| !r.printed_number.is_empty()));
+        let mut levels: Vec<String> = Vec::new();
+        for e in &current {
+            levels.extend(e.levels.iter().cloned());
+            if !e.level.is_empty() {
+                levels.push(e.level.clone());
+            }
+        }
+        levels.sort_by_key(|c| level_key(c));
+        levels.dedup();
+        let mut sources: Vec<String> = Vec::new();
+        for e in current.iter().copied().chain(members.iter().copied().filter(|e| !e.superseded_by.is_empty())) {
+            let s = source_of(e);
+            if !sources.contains(&s) {
+                sources.push(s);
+            }
+        }
+        let mut superseded: Vec<String> = members.iter().filter(|e| !e.superseded_by.is_empty()).map(|e| source_of(e)).collect();
+        superseded.dedup();
+        if first.recognised.as_ref().is_none_or(|r| r.number.is_empty()) {
+            out.unidentified += 1;
+        }
+        let level = if first.level.is_empty() { levels.first().cloned().unwrap_or_default() } else { first.level.clone() };
+        out.sheets.push(IndexSheet {
+            number: k.clone(),
+            title: first.title.clone(),
+            discipline: first.discipline.clone(),
+            sheet_type: if views { "plan".into() } else { first.sheet_type.clone() },
+            level_source: if level.is_empty() {
+                String::new()
+            } else {
+                current.iter().map(|e| e.level_source.clone()).find(|s| !s.is_empty()).unwrap_or_else(|| "title".into())
+            },
+            level,
+            levels,
+            sources,
+            superseded,
+            issued: first.issued.clone(),
+        });
+    }
+    // The building's levels: what the plans show (the site is no storey).
+    let mut by_level: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for s in out.sheets.iter().filter(|s| is_plan_type(&s.sheet_type)) {
+        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && *l != "SITE") {
+            let v = by_level.entry(l.clone()).or_default();
+            if !v.contains(&s.number) {
+                v.push(s.number.clone());
+            }
+        }
+    }
+    let mut codes: Vec<String> = by_level.keys().cloned().collect();
+    codes.sort_by_key(|c| level_key(c));
+    // Elevations: the value most marks give per level; above the first floor at 100'-0".
+    let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty()) {
+        for m in &e.level_marks {
+            marks.entry(m.level.clone()).or_default().push(m.elevation_ft);
+        }
+    }
+    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
+    for (l, vals) in &marks {
+        let mut best: Option<(f64, usize)> = None;
+        for v in vals {
+            let n = vals.iter().filter(|w| (*w - v).abs() < 1.0 / 96.0).count();
+            if best.is_none_or(|(_, bn)| n > bn) {
+                best = Some((*v, n));
+            }
+        }
+        if let Some((v, _)) = best {
+            elevation.insert(l.clone(), v);
+        }
+    }
+    let datum = if elevation.get("1").is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 };
+    for (i, c) in codes.iter().enumerate() {
+        let el = elevation.get(c).map(|e| e - datum);
+        let next = codes.get(i + 1).and_then(|n| elevation.get(n)).map(|e| e - datum);
+        out.levels.push(IndexLevel {
+            name: c.clone(),
+            sheets: by_level.get(c).cloned().unwrap_or_default(),
+            elevation_ft: el,
+            height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
+        });
+    }
+    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed.
+    let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
+    for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        s.level = lowest.clone();
+        s.level_source = "default".into();
+        out.plans_without_level.push(s.number.clone());
+    }
+    out
 }
 
 // ─── Run stages (production API — no Truth) ──────────────────────────────────
@@ -1627,6 +2071,10 @@ impl PrintSetProject {
                         "scale": s.scale_text,
                         "file": s.file,
                         "dirty": s.dirty,
+                        "page": s.page,
+                        "levels": s.levels,
+                        "level_source": s.level_source,
+                        "issued": s.issued,
                         "superseded_by": s.superseded_by,
                         "superseded_reason": s.superseded_reason,
                         "stages": s.stage_results.keys().collect::<Vec<_>>(),
