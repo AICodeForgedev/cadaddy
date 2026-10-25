@@ -1242,3 +1242,39 @@ fn ocr_leaves_curve_drawn_symbols_alone() {
     let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
     assert_eq!(text_values(&r), sorted(&["EF"; 6]), "{:?}", r.ocr);
 }
+
+#[test]
+fn ocr_keeps_free_standing_marks() {
+    // lone marks (circuit numbers, fixture types) stand free at the page's letter height;
+    // a duct line's ticks and a wall end look like an I or a 1 but touch the lines they end,
+    // and a stroke taller than any lettering on the page is linework too (a 36" x 24" sheet,
+    // where a 50 pt leader is still glyph-sized)
+    let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+    {
+        let c = &mut c;
+        shx_text("PANEL LP-1", 100.0, 500.0, 6.75, 1.0, 0.0, c);
+        shx_text("EXISTING", 100.0, 470.0, 6.75, 1.0, 0.0, c);
+        for (i, mark) in ["1", "A", "3", "7", "C"].iter().enumerate() {
+            shx_text(mark, 100.0 + i as f64 * 40.0, 400.0, 6.75, 1.0, 0.0, c);
+        }
+        // a lone 1 drawn as one upright stroke
+        c.extend_from_slice(b"300 400 m 300 406.75 l S ");
+        // a mark beside a leader much taller than the letters: still a 2, not a dot
+        shx_text("2", 330.0, 400.0, 6.75, 1.0, 0.0, c);
+        c.extend_from_slice(b"345 380 m 375 420 l S ");
+        // a duct line with ticks of the letters' height above and below it
+        c.extend_from_slice(b"100 300 m 400 300 l S ");
+        for i in 0..8 {
+            let x = 110.0 + f64::from(i) * 30.0;
+            c.extend_from_slice(format!("{x:.1} 300 m {x:.1} 306.75 l S {:.1} 293.25 m {:.1} 300 l S ", x + 10.0, x + 10.0).as_bytes());
+        }
+        // a wall end: an upright stroke of the letters' height ending on a wall
+        c.extend_from_slice(b"100 200 m 300 200 l S 300 200 m 300 206.75 l S ");
+        // an upright stroke three times the letters' height, standing free
+        c.extend_from_slice(b"450 400 m 450 420.25 l S ");
+    }
+    c.extend_from_slice(b"Q");
+    let pdf = pdf_sized(&c, 2592, 1728);
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["1", "1", "2", "3", "7", "A", "C", "EXISTING", "PANEL LP-1"]), "{:?}", r.ocr);
+}

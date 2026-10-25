@@ -2829,7 +2829,10 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
                 for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
                     let Some((_, b2, p2)) = glyphs.get(gj) else { continue };
                     let h2 = b2[3] - b2[1];
+                    // (a lone straight stroke beside it may be a leader or a wall end, not a letter)
+                    let line = glyph_pts.get(gj).is_some_and(|p| p.len() == 1 && p.first().is_some_and(|s| s.len() <= 2));
                     if gj != gi
+                        && !line
                         && p2 == pen
                         && h2 >= h * 0.6
                         && h2 > 0.5
@@ -2856,13 +2859,20 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
             // apostrophe below it; a speck a fraction of the letters' height is a dot whatever
             // its shape (plot fonts draw a period as a tiny ring or diamond)
             let (w, h) = (bb[2] - bb[0], bb[3] - bb[1]);
-            if let Some(row_h) = row_height(gi) {
-                // upright, or leaning with its row (an oblique I reads as a slash)
-                let lean = pts.first().and_then(|p| Some((p.first()?, p.last()?))).map_or(f64::MAX, |(a, b)| {
-                    let dy = b.1 - a.1;
-                    if dy.abs() < 1e-9 { f64::MAX } else { (b.0 - a.0) / dy }
-                });
-                let along_row = straight && (lean - slant).abs() <= 0.1;
+            // upright, or leaning with its row (an oblique I reads as a slash)
+            let lean = pts.first().and_then(|p| Some((p.first()?, p.last()?))).map_or(f64::MAX, |(a, b)| {
+                let dy = b.1 - a.1;
+                if dy.abs() < 1e-9 { f64::MAX } else { (b.0 - a.0) / dy }
+            });
+            let along_row = straight && (lean - slant).abs() <= 0.1;
+            let row = row_height(gi);
+            if row.is_none() && straight && lean.abs() <= 0.1 && matches!(ch, '.' | '\'' | '/' | 'I') {
+                // alone, an upright stroke is a 1 (a circuit number) if it is anything (a mark's
+                // letter height and clear space decide, see `keep_lone_marks`); a lone stroke's
+                // "row" slant is its own lean, so a leader would pass as an oblique 1
+                (ch, alt) = ('1', Some('I'));
+            }
+            if let Some(row_h) = row {
                 if along_row && matches!(ch, '.' | '\'' | 'I' | '1' | '/') {
                     (ch, alt) = if h >= row_h * 0.75 { ('I', Some('1')) } else { ('.', None) };
                 } else if w.max(h) <= row_h * 0.3 && ch != '-' {
@@ -3008,6 +3018,7 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
     let lines = joined;
 
     let mut result: Vec<RecoveredText> = Vec::new();
+    let mut marks: Vec<RecoveredText> = Vec::new();
     for mut line in lines {
         line.members.sort_by(|&a, &b| {
             let (ax, bx) = (matched.get(a).map_or(0.0, |g| g.bb[0]), matched.get(b).map_or(0.0, |g| g.bb[0]));
@@ -3074,7 +3085,10 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
             // loops is a row of circles or boxes ("OOO", or "DDD" for boxes read turned)
             let noise =
                 alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7));
-            if noise {
+            // a lone letter or digit can still be a mark (a circuit number, a fixture type):
+            // it is judged once the page's words give its letter heights
+            let mark = noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
+            if noise && !mark {
                 report.noise_dropped += 1;
                 continue;
             }
@@ -3084,19 +3098,109 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
             let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
             let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
             let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
-            result.push(RecoveredText {
-                at: (x0, y0),
-                height: h,
-                value,
-                stroke_indices,
-                pen: line.pen,
-                layer,
-                confidence: Some(confidence),
-                rotation: 0.0,
-            });
+            let text =
+                RecoveredText { at: (x0, y0), height: h, value, stroke_indices, pen: line.pen, layer, confidence: Some(confidence), rotation: 0.0 };
+            if mark { marks.push(text) } else { result.push(text) }
         }
     }
+    let kept = keep_lone_marks(marks, &result, strokes, max_seg);
+    report.noise_dropped += kept.1;
+    result.extend(kept.0);
     (result, report)
+}
+
+/// A lone glyph that may be a mark rather than linework: a letter or digit of a letter's shape
+/// (not a drawn circle, a box as wide as it is tall, or a stroke leaning off the upright).
+fn lone_mark_shape(g: &MatchedGlyph, strokes: &[Stroke]) -> bool {
+    let (w, h) = (g.bb[2] - g.bb[0], g.bb[3] - g.bb[1]);
+    if !g.ch.is_ascii_alphanumeric() || h <= 0.5 || g.confidence < 0.45 {
+        return false;
+    }
+    if g.indices.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop)) {
+        return false;
+    }
+    // a lettering loop (O, D, 0) is narrower than it is tall; a circle or a box is not
+    if g.ring && w > h * 0.8 {
+        return false;
+    }
+    // a lone straight stroke must stand upright (an I or a 1)
+    if g.straight && w > h * 0.12 {
+        return false;
+    }
+    true
+}
+
+/// Which lone marks are lettering (see [`lone_mark_shape`]): one standing at the letter height
+/// of the page's words (in its pen), clear of every other stroke.  A door jamb, a duct tick
+/// or a wall end reads like an I but touches the lines it ends; a circuit number or a fixture
+/// type stands free.  Returns the kept marks and how many were dropped.
+fn keep_lone_marks(marks: Vec<RecoveredText>, words: &[RecoveredText], strokes: &[Stroke], cell: f64) -> (Vec<RecoveredText>, usize) {
+    if marks.is_empty() {
+        return (marks, 0);
+    }
+    let heights: Vec<(Pen, f64)> =
+        words.iter().filter(|w| w.value.chars().filter(char::is_ascii_alphanumeric).count() >= 2).map(|w| (w.pen, w.height)).collect();
+    // the segments of the page near a mark, by grid cell
+    let cell = cell.max(1.0);
+    let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<(usize, (f64, f64), (f64, f64))>> = HashMap::new();
+    for m in &marks {
+        let (k0, k1) = (key(m.at.0 - m.height, m.at.1 - m.height), key(m.at.0 + m.height * 2.0, m.at.1 + m.height * 2.0));
+        for gx in k0.0..=k1.0.min(k0.0 + 8) {
+            for gy in k0.1..=k1.1.min(k0.1 + 8) {
+                grid.entry((gx, gy)).or_default();
+            }
+        }
+    }
+    for (si, s) in strokes.iter().enumerate() {
+        let closing = if s.closed && s.pts.len() > 2 { s.pts.last().zip(s.pts.first()) } else { None };
+        for (&a, &b) in s.pts.iter().zip(s.pts.iter().skip(1)).chain(closing) {
+            let (k0, k1) = (key(a.0.min(b.0), a.1.min(b.1)), key(a.0.max(b.0), a.1.max(b.1)));
+            if (k1.0 - k0.0 + 1).saturating_mul(k1.1 - k0.1 + 1) > 400 {
+                // a long diagonal: only the cells it passes near a mark
+                for (&(gx, gy), segs) in grid.iter_mut() {
+                    let (x0, y0) = (gx as f64 * cell, gy as f64 * cell);
+                    let centre = (x0 + cell / 2.0, y0 + cell / 2.0);
+                    if point_segment_gap(centre, a, b) <= cell {
+                        segs.push((si, a, b));
+                    }
+                }
+                continue;
+            }
+            for gx in k0.0..=k1.0 {
+                for gy in k0.1..=k1.1 {
+                    if let Some(segs) = grid.get_mut(&(gx, gy)) {
+                        segs.push((si, a, b));
+                    }
+                }
+            }
+        }
+    }
+    let mut kept = Vec::new();
+    let mut dropped = 0;
+    for m in marks {
+        let at_letter_height = heights.iter().any(|&(pen, h)| pen == m.pen && (m.height / h.max(1e-6) - 1.0).abs() <= 0.15);
+        let clear = (m.height * 0.15).max(0.3);
+        let free = at_letter_height
+            && m.stroke_indices.iter().filter_map(|&i| strokes.get(i)).all(|s| {
+                s.pts.iter().zip(s.pts.iter().skip(1)).all(|(&p, &q)| {
+                    let (k0, k1) = (key(p.0.min(q.0) - clear, p.1.min(q.1) - clear), key(p.0.max(q.0) + clear, p.1.max(q.1) + clear));
+                    (k0.0..=k1.0).all(|gx| {
+                        (k0.1..=k1.1).all(|gy| {
+                            grid.get(&(gx, gy)).is_none_or(|segs| {
+                                segs.iter().all(|&(si, a, b)| m.stroke_indices.contains(&si) || polyline_gap(&[p, q], &[a, b]) > clear)
+                            })
+                        })
+                    })
+                })
+            });
+        if free {
+            kept.push(m);
+        } else {
+            dropped += 1;
+        }
+    }
+    (kept, dropped)
 }
 
 // ---------------------------------------------------------------------------------------------
