@@ -476,10 +476,19 @@ impl DimStyle {
             let coerced = match (&old, &coerced) {
                 // Lineweights (i16): whole hundredths of a mm or -1/-2/-3.
                 (Value::Number(_), Value::Number(n)) if matches!(field, "dimLineweight" | "extLineweight") && !n.is_i64() => {
-                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(-3.0, 211.0) as i64)
+                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round() as i64)
                 }
+                (Value::Number(_), Value::Number(_)) if matches!(field, "dimLineweight" | "extLineweight") => coerced,
+                // A value below 0 or one that rounds above 255 is refused; DIMADEC -1 reads as 0.
                 (Value::Number(o), Value::Number(n)) if o.is_u64() && !n.is_u64() => {
-                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(0.0, 255.0) as u64)
+                    let min = if field == "angularDecimals" { -1.0 } else { 0.0 };
+                    match n.as_f64().filter(|x| x.is_finite() && *x >= min).map(f64::round).filter(|x| *x <= 255.0) {
+                        Some(x) => serde_json::json!(x.max(0.0) as u64),
+                        None => {
+                            rejected.push(k.clone());
+                            continue;
+                        }
+                    }
                 }
                 _ => coerced,
             };
