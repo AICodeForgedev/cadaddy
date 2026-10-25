@@ -1851,9 +1851,10 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let camera = field("CAMERA")
                     .map(|_| cadaddy_doc::ViewCamera { position: t.p(12) + t.p(11), target: t.p(12), lens: t.fd(42, 50.0) })
                     .filter(|c| c.position.is_finite() && c.target.is_finite() && c.distance() > 1e-9 && c.lens.is_finite() && c.lens > 0.0);
-                // The view centre 10/20 is in display coordinates, whose origin is the target
-                // 12/22/32; CADaddy's camera views keep their target there and the centre as is.
-                let center = if camera.is_some() { center } else { view_center(center, t.p(12).xy()) };
+                // The view centre 10/20 is in display coordinates (turned by the twist), whose
+                // origin is the target 12/22/32; CADaddy's camera views keep their target there and
+                // the centre as is.
+                let center = if camera.is_some() { center } else { view_center(crate::dxf_ext::dcs_center_to_model(center, twist), t.p(12).xy()) };
                 let v = NamedView {
                     name: name.clone(),
                     center,
@@ -1951,8 +1952,12 @@ const MAX_VPORT_TILES: usize = 64;
 /// are fractions of the drawing area; unusable tiles are skipped.
 fn vport_record(d: &mut Drawing, t: &T) {
     let name = t.s(2).map(|n| n.trim().to_string()).unwrap_or_default();
-    // The view centre 12/22 is in display coordinates, whose origin is the view target 17/27/37.
-    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), view_center(t.p(12).xy(), t.p(17).xy()));
+    // View twist (group 51, degrees), within one turn.
+    let twist = t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
+    // The view centre 12/22 is in display coordinates (turned by the twist), whose origin is the
+    // view target 17/27/37.
+    let center = view_center(crate::dxf_ext::dcs_center_to_model(t.p(12).xy(), twist), t.p(17).xy());
+    let (min, max) = (t.p(10).xy(), t.p(11).xy());
     let height = t.fd(40, 0.0);
     let unit = |v: f64| v.is_finite() && (-1e-9..=1.0 + 1e-9).contains(&v);
     let ok = [min.x, min.y, max.x, max.y].into_iter().all(unit)
@@ -1966,8 +1971,6 @@ fn vport_record(d: &mut Drawing, t: &T) {
     }
     let aspect = t.f(41).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.0);
     let clamp = |p: Vec2| Vec2::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
-    // View twist (group 51, degrees), within one turn.
-    let twist = t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
     let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect, twist };
     let name = if name.eq_ignore_ascii_case(VportConfig::ACTIVE) { VportConfig::ACTIVE.to_string() } else { name };
     let room = d.vports.len() < MAX_OBJECTS;
