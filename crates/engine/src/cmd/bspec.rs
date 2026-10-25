@@ -41,6 +41,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
             "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
+        CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
+            "{path: string (PDF file or folder), levels?: \"auto\" (default), force?: bool (build even if import check fails)} → {cdy_paths: [string], check_results: [{file, pass, score, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
+        ),
     ]
 }
 
@@ -388,7 +391,282 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
         r["walls"], r["doors"], r["windows"], r["columns"], r["curtainWalls"], r["floors"], r["ceilings"], r["rooms"], r["levels"]
     ));
+    // BIM drawings open in 3D shaded view (SW iso + realistic), not 2D wireframe.
+    let _ = s.execute("view.swiso", &json!({}));
+    let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     Ok(r)
+}
+
+// ─── Multi-plan detection ───────────────────────────────────────────────────
+
+struct FloorLevel {
+    name: String,
+    region: [f64; 4],
+}
+
+/// Scan text entities for floor-level titles (e.g. "3RD FLOOR", "LEVEL 3") and return detected
+/// levels with spatial regions. The texts are parsed for ordinal floor patterns ("3RD FLOOR")
+/// and "LEVEL N" patterns, then split into horizontal bands.
+fn detect_floor_levels(s: &Session) -> std::result::Result<Vec<FloorLevel>, ()> {
+    let d = s.doc().map_err(|_| ())?;
+    let ext = d.extents(&Space::Model);
+    if ext.is_empty() {
+        return Err(());
+    }
+    let (x_min, y_min, x_max, y_max) = (ext.min.x, ext.min.y, ext.max.x, ext.max.y);
+
+    let mut hits: Vec<(u32, f64)> = Vec::new(); // (floor_number, y_position)
+    for e in d.model.iter() {
+        let (text, h, y) = match &e.kind {
+            EntityKind::Text(t) => (t.value.as_str(), t.height, t.insert.y),
+            EntityKind::MText(t) => (t.contents.as_str(), t.height, t.insert.y),
+            _ => continue,
+        };
+        if h < 8.0 {
+            continue;
+        } // skip small text — titles are larger
+        if let Some(num) = parse_floor_number(text)
+            && !hits.iter().any(|(n, _)| *n == num)
+        {
+            hits.push((num, y));
+        }
+    }
+    if hits.len() < 2 {
+        return Err(());
+    }
+
+    // Sort by Y to assign horizontal bands (lower Y = lower on the sheet).
+    hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut levels: Vec<FloorLevel> = Vec::new();
+    for (i, (num, _y)) in hits.iter().enumerate() {
+        let band_lo = if i == 0 { y_min } else { (hits[i - 1].1 + hits[i].1) / 2.0 };
+        let band_hi = if i + 1 == hits.len() { y_max } else { (hits[i].1 + hits[i + 1].1) / 2.0 };
+        levels.push(FloorLevel { name: format!("Level {num}"), region: [x_min, band_lo, x_max, band_hi] });
+    }
+    // Sort by floor number for spec ordering.
+    levels.sort_by_key(|l| l.name.split_whitespace().last().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0));
+    Ok(levels)
+}
+
+/// Parse a floor number from text like "ELECTRICAL - 3RD FLOOR", "4TH FLOOR PLAN", "LEVEL 3".
+fn parse_floor_number(text: &str) -> Option<u32> {
+    let up = text.to_ascii_uppercase();
+    let words: Vec<&str> = up.split_whitespace().collect();
+    // Pattern: "<N>ST/ND/RD/TH FLOOR"
+    for (i, w) in words.iter().enumerate() {
+        if i + 1 < words.len() && words[i + 1].starts_with("FLOOR") {
+            let num_part = w.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+            let suffix = &w[num_part.len()..];
+            if matches!(suffix, "ST" | "ND" | "RD" | "TH")
+                && let Ok(n) = num_part.parse::<u32>()
+            {
+                return Some(n);
+            }
+        }
+    }
+    // Pattern: "LEVEL <N>"
+    for (i, w) in words.iter().enumerate() {
+        if *w == "LEVEL"
+            && i + 1 < words.len()
+            && let Ok(n) = words[i + 1].parse::<u32>()
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// `bim.from_pdf`: one-call PDF → native .cdy → import check → bspec draft → model.build.
+/// Multi-plan sheets (separate floor titles on one page) are stacked as levels.
+fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("bim.from_pdf", "`path` is required (a PDF file or folder)"))?;
+    let force = bool_or(p, "force", false);
+    let path_obj = std::path::Path::new(path);
+    if !path_obj.exists() {
+        return Err(bad("bim.from_pdf", format!("{path}: file or folder not found")));
+    }
+
+    // Collect PDF files.
+    let pdfs: Vec<std::path::PathBuf> = if path_obj.is_dir() {
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(path_obj) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        files
+    } else {
+        vec![path_obj.to_path_buf()]
+    };
+
+    if pdfs.is_empty() {
+        return Err(bad("bim.from_pdf", format!("{path}: no PDF files found. Next: provide a path to a PDF file or folder.")));
+    }
+
+    let mut cdy_paths: Vec<String> = Vec::new();
+    let mut check_results: Vec<Value> = Vec::new();
+    let mut built_counts = json!({});
+    let mut warnings: Vec<String> = Vec::new();
+
+    for pdf in &pdfs {
+        let pdf_str = pdf.to_string_lossy().to_string();
+        let stem = pdf.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "import".into());
+
+        // Step 1: Import the PDF as a new drawing.
+        s.echo(format!("bim.from_pdf: importing {stem}..."));
+        let import_result = s.execute("pdfimport", &json!({ "path": pdf_str, "newDrawing": true }))?;
+
+        // Step 2: Check import accuracy (already run automatically by pdfimport).
+        let check = import_result.get("importCheck").cloned().unwrap_or(Value::Null);
+        let check_pass = check.get("pass").and_then(Value::as_bool).unwrap_or(false);
+        let check_score = check.get("score").and_then(Value::as_u64).unwrap_or(0);
+        check_results.push(json!({
+            "file": pdf_str,
+            "pass": check_pass,
+            "score": check_score,
+            "checks": check.get("checks").cloned().unwrap_or(Value::Null),
+        }));
+
+        if !check_pass && !force {
+            // Inspect individual checks: if the only hard-fail is SCALE with a scale note
+            // detected, proceed — the drawing has interpretable scale info and multi-plan
+            // sheets often exceed the single-plan size thresholds.
+            let checks = check.get("checks").and_then(Value::as_array);
+            let has_blocking_fail = checks.is_none_or(|cs| {
+                cs.iter().any(|c| {
+                    let pass = c.get("pass").and_then(Value::as_bool).unwrap_or(true);
+                    let hard = c.get("hard_fail").and_then(Value::as_bool).unwrap_or(false);
+                    let id = c.get("id").and_then(Value::as_str).unwrap_or("");
+                    if pass || !hard {
+                        return false;
+                    }
+                    // SCALE with a detected scale note: correctable, not blocking.
+                    if id == "SCALE" {
+                        let has_note = c.get("evidence").and_then(|e| e.get("scale_note")).is_some_and(|n| !n.is_null());
+                        return !has_note;
+                    }
+                    true // other hard-fails block
+                })
+            });
+            if has_blocking_fail {
+                warnings.push(format!("{stem}: import check failed (score {check_score}/100); skipping build. Use force:true to build anyway, or fix the import first with: import_check {{}}"));
+                continue;
+            }
+            warnings.push(format!("{stem}: import check score {check_score}/100 (SCALE mismatch with detected scale note — proceeding)"));
+        } else if !check_pass {
+            warnings.push(format!("{stem}: import check failed (score {check_score}/100) but force=true, building anyway"));
+        }
+
+        // Step 3: Draft and store the building spec from the plan.
+        s.echo(format!("bim.from_pdf: drafting spec for {stem}..."));
+        let _spec = s.execute("bspec.draft", &json!({"store": true}))?;
+
+        // Step 3b: Multi-plan detection — scan text for floor titles and create stacked levels.
+        if let Ok(levels_found) = detect_floor_levels(s)
+            && levels_found.len() >= 2
+        {
+            // Build a spec patch that replaces the single "Level 1" with the detected levels.
+            let levels_json: Vec<Value> = levels_found
+                .iter()
+                .enumerate()
+                .map(|(i, fl)| {
+                    let elevation = i as f64 * 10.0; // 10' floor-to-floor default
+                    json!({
+                        "name": fl.name,
+                        "elevation_ft": elevation,
+                        "height_ft": 10.0,
+                        "ceiling_ft": 8.0,
+                        "region": fl.region,
+                    })
+                })
+                .collect();
+            let _ = s.execute("bspec.set", &json!({"spec": {"levels": levels_json}}));
+            s.echo(format!(
+                "bim.from_pdf: detected {} levels: {}",
+                levels_found.len(),
+                levels_found.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+
+        // Step 4: Build the 3D model (model.build has no import-check gate — it just builds
+        // from the stored spec, so no force flag is needed here).
+        s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));
+        match s.execute("model.build", &json!({})) {
+            Ok(build_result) => {
+                built_counts = build_result;
+            }
+            Err(e) => {
+                warnings.push(format!("{stem}: model.build failed: {e}"));
+                continue;
+            }
+        }
+
+        // Step 5: Save as .cdy next to the PDF (or in the folder).
+        let cdy_path = pdf.with_extension("cdy");
+        let cdy_str = cdy_path.to_string_lossy().to_string();
+        match s.execute("saveas", &json!({ "path": cdy_str })) {
+            Ok(_) => {
+                cdy_paths.push(cdy_str);
+                s.echo(format!("bim.from_pdf: saved {}", cdy_path.display()));
+            }
+            Err(e) => {
+                warnings.push(format!("{stem}: could not save .cdy: {e}"));
+            }
+        }
+    }
+
+    let mut next_steps: Vec<String> = Vec::new();
+    if cdy_paths.is_empty() && !pdfs.is_empty() {
+        next_steps.push("import_check {} — review import quality and fix issues before building".into());
+        next_steps.push("bim.from_pdf {path: \"...\", force: true} — force build even with import check failures".into());
+    } else {
+        next_steps.push("render {} — render the 3D view to see the building".into());
+        next_steps.push("bspec.set {spec: {...}} — refine the building spec (room heights, materials, etc.)".into());
+        next_steps.push("model.build {} — rebuild after spec changes".into());
+    }
+
+    // Build a per-level breakdown from the notes (e.g. "Level 3: 1303 walls ...").
+    let mut built: serde_json::Map<String, Value> = serde_json::Map::new();
+    let levels_count = built_counts.get("levels").and_then(Value::as_u64).unwrap_or(0);
+    if let Some(notes) = built_counts.get("notes").and_then(Value::as_array) {
+        for note in notes {
+            if let Some(text) = note.as_str() {
+                // Parse "Level N: NNNN walls ..."
+                if let Some(rest) = text.strip_prefix("Level ") {
+                    let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        let level_name = format!("Level {}", parts[0].trim());
+                        let desc = parts[1];
+                        let mut walls = 0u64;
+                        // Extract wall count from "NNNN walls"
+                        for w in desc.split_whitespace().collect::<Vec<&str>>().windows(2) {
+                            if w[1].starts_with("wall")
+                                && let Ok(n) = w[0].parse::<u64>()
+                            {
+                                walls = n;
+                            }
+                        }
+                        built.insert(level_name, json!({"walls": walls}));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(json!({
+        "cdy_paths": cdy_paths,
+        "check_results": check_results,
+        "built_counts": built_counts,
+        "levels": if levels_count > 1 { json!(built.keys().collect::<Vec<_>>()) } else { json!(levels_count) },
+        "built": built,
+        "warnings": warnings,
+        "next_steps": next_steps,
+    }))
 }
 
 /// A room traced on the plan: its spec entry (if any), level, outline and tag.
