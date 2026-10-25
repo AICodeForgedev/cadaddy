@@ -888,3 +888,19 @@ mod tests {
         assert!(is_standard_arrow("_dot"));
     }
 }
+
+/// A view centre as a file stores it (VIEWPORT and VPORT group 12, VIEW group 10): in display
+/// coordinates, already turned by the view's `twist` (radians), as the drawing point at the
+/// middle of the view. Turning back keeps a twisted view on its part of the drawing however far
+/// that is from the origin; a non-finite result keeps the stored centre.
+pub(crate) fn dcs_center_to_model(c: cadcraft_geom::Vec2, twist: f64) -> cadcraft_geom::Vec2 {
+    let m = c.rotate(-twist);
+    if m.is_finite() { m } else { c }
+}
+
+/// The display-coordinate view centre a file stores for the drawing point `m` at the middle of
+/// a view with `twist` (the inverse of [`dcs_center_to_model`]).
+pub(crate) fn model_center_to_dcs(m: cadcraft_geom::Vec2, twist: f64) -> cadcraft_geom::Vec2 {
+    let c = m.rotate(twist);
+    if c.is_finite() { c } else { m }
+}

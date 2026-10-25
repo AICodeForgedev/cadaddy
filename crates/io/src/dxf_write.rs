@@ -1160,7 +1160,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // Status 68: a positive value is "on" (the stacking order; 1 is the active viewport), 0 off.
             w.i(68, if v.on { i64::from(v.id.clamp(1, 32767)) } else { 0 });
             w.i(69, i64::from(v.id));
-            w.p2(12, v.view_center);
+            // The view centre in display coordinates (turned by the twist).
+            w.p2(12, dxf_ext::model_center_to_dcs(v.view_center, v.view_twist()));
             w.f(45, v.view_height);
             // View twist (degrees), when the viewport has one.
             if v.view_twist() != 0.0 {
@@ -1673,7 +1674,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.i(70, 0);
         w.p2(10, finite(t.min, Vec2::ZERO));
         w.p2(11, finite(t.max, Vec2::new(1.0, 1.0)));
-        w.p2(12, finite(t.center, Vec2::ZERO));
+        let twist = if t.twist.is_finite() { t.twist } else { 0.0 };
+        w.p2(12, dxf_ext::model_center_to_dcs(finite(t.center, Vec2::ZERO), twist));
         // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
         w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
         w.p2(14, d.header.snap_unit());
@@ -1684,7 +1686,7 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.f(41, if t.aspect.is_finite() && t.aspect > 0.0 { t.aspect } else { 1.0 });
         w.f(42, 50.0);
         w.f(50, d.header.f64("SNAPANG", 0.0));
-        w.f(51, if t.twist.is_finite() { t.twist.to_degrees() } else { 0.0 });
+        w.f(51, twist.to_degrees());
     }
     w.s(0, "ENDTAB");
 }
@@ -2158,14 +2160,15 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.s(2, &v.name);
         w.i(70, i64::from(v.layout.is_some()));
         w.f(40, v.height);
-        w.p2(10, v.center);
+        let twist = if v.twist.is_finite() { v.twist } else { 0.0 };
+        w.p2(10, dxf_ext::model_center_to_dcs(v.center, twist));
         w.f(41, v.width);
         w.p(11, Vec3::Z);
         w.p(12, Vec3::ZERO);
         w.f(42, 50.0);
         w.f(43, 0.0);
         w.f(44, 0.0);
-        w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
+        w.f(50, twist.to_degrees());
         w.i(71, 0);
         w.i(281, 0);
         w.i(72, 0);
