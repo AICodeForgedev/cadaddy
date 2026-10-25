@@ -397,9 +397,7 @@ fn a_named_block_whose_dimension_block_has_another_generated_name_keeps_this_dra
     s.execute("document.switch", &json!({"index": 0})).unwrap();
     s.execute("compare", &json!({"document": "Other"})).unwrap();
     s.execute("compareexport", &json!({})).unwrap();
-    let d = s.doc().unwrap();
-    assert!(d.block("PART_2").is_none(), "PART draws the same thing in both drawings");
-    assert!(d.block("*D3").is_none() && d.block("*D2").is_none(), "the other drawing's dimension block is not copied");
+    assert!(s.doc().unwrap().block("PART_2").is_none(), "PART draws the same thing in both drawings");
 }
 
 #[test]
@@ -428,6 +426,99 @@ fn a_named_block_whose_line_is_hidden_or_thicker_in_the_other_drawing_shows_the_
     assert!(run(Common { visible: false, ..Common::default() }), "a hidden line");
     assert!(run(Common { thickness: 2.0, ..Common::default() }), "a line with thickness");
     assert!(!run(Common::default()), "the same line");
+}
+
+#[test]
+fn a_named_block_with_the_same_relative_image_path_from_another_folder_shows_the_other_definition() {
+    // PART holds an image at `a.png` in both drawings; this drawing is unsaved, the other one is
+    // a file in another folder, so its `a.png` is another file.
+    let part = |first: u64| {
+        let at = serde_json::to_value(Vec3::ZERO).unwrap();
+        let image = serde_json::from_value(json!({"insert": at, "u": at, "v": at, "size": [1.0, 1.0], "path": "a.png"})).unwrap();
+        let mut part = Block::new("PART");
+        part.entities.push(Entity::new(Handle(first), EntityKind::Image(image)));
+        part
+    };
+    let dir = std::env::temp_dir().join("compareexport-image-folder");
+    let mut s = Session::new();
+    s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part(0x700)));
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+    let mut other = Drawing::new_imperial();
+    other.handseed = 0x9000;
+    other.blocks.insert("PART".into(), Arc::new(part(0x8000)));
+    other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+    s.open_drawing(other, "Other", Some(dir.join("other.dxf").to_string_lossy().to_string()));
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let paths: Vec<String> = d
+        .block("PART_2")
+        .map(|b| {
+            b.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::Image(i) => Some(i.path.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(paths.len(), 1, "the other drawing's PART is copied");
+    assert_eq!(std::path::Path::new(&paths[0]).parent(), Some(std::path::absolute(&dir).unwrap().as_path()));
+}
+
+#[test]
+fn a_dimension_block_copy_keeps_its_geometry_when_the_snapshot_is_saved() {
+    use cadcraft_engine::doc::{DimKind, Dimension};
+    // The dimension's block holds a line its parameters would not draw: a block read from a file.
+    let dim = Dimension {
+        kind: DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::new(15.0, 5.0, 0.0),
+        text_mid: Vec3::new(7.0, 5.0, 0.0),
+        p13: Vec3::ZERO,
+        p14: Vec3::new(30.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 30.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: Some("*D1".into()),
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    let mut s = Session::new();
+    let mut drawn = Block::new("*D1");
+    drawn.entities.push(Entity::new(Handle(0x701), line(123.0)));
+    s.doc_mut().unwrap().blocks.insert("*D1".into(), Arc::new(drawn));
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Dimension(dim)).unwrap();
+    s.open_drawing(Drawing::new_imperial(), "Other", None);
+    s.execute("document.switch", &json!({"index": 0})).unwrap();
+    s.execute("compare", &json!({"document": "Other"})).unwrap();
+    s.execute("compareexport", &json!({})).unwrap();
+    let read = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let block = read
+        .model
+        .iter()
+        .find_map(|e| match &e.kind {
+            EntityKind::Dimension(dm) => dm.block.clone(),
+            _ => None,
+        })
+        .unwrap();
+    let ends: Vec<f64> = read
+        .block(&block)
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) => Some(l.b.x),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [123.0], "the saved dimension block is the copy's");
 }
 
 #[test]

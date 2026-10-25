@@ -5,8 +5,9 @@
 //! only in this drawing or changed in it are drawn in the overlay's green, objects only in the
 //! other drawing or changed there in its red, and objects in both in gray (color 8). A block
 //! reference, dimension or multileader refers to a copy of its block whose objects all have that
-//! color (`COMPARE_CURRENT_<name>`, `COMPARE_COMPARED_<name>`, `COMPARE_COMMON_<name>`), and a
-//! table or tolerance uses a recolored copy of its style; xrefs keep their own colors. The new
+//! color (`COMPARE_CURRENT_<name>`, `COMPARE_COMPARED_<name>`, `COMPARE_COMMON_<name>`; for a
+//! dimension's `*D` block, another `*D` block), and a table or tolerance uses a recolored copy
+//! of its style; xrefs keep their own colors. The new
 //! drawing has this drawing's layers, styles and blocks, plus the layers and styles of the other
 //! drawing that this one lacks and the blocks its copied objects refer to; an anonymous block of
 //! the other drawing whose name this one uses is copied under a free name. Relative xref, image
@@ -130,7 +131,7 @@ pub(super) fn rebase_path(p: &mut String, folder: Option<&Path>) {
 }
 
 /// Rebase the file an object refers to: an image's file, a table's data link.
-fn rebase(k: &mut EntityKind, folder: Option<&Path>) {
+pub(super) fn rebase(k: &mut EntityKind, folder: Option<&Path>) {
     match k {
         EntityKind::Image(i) => rebase_path(&mut i.path, folder),
         EntityKind::Table(t) => {
@@ -518,11 +519,18 @@ fn tinted_block(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tinted, 
         return None;
     }
     tinted.copied += b.entities.len();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*')), d.blocks.len(), |n| d.block(n).is_some());
+    // A dimension's block copy stays a `*D` block, so saving keeps its geometry instead of
+    // drawing the dimension again.
+    let dim_block = b.anonymous && b.name.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D"));
+    let new = if dim_block {
+        (1..=d.blocks.len() + 1).map(|i| format!("*D{i}")).find(|n| d.block(n).is_none()).unwrap_or_else(|| format!("*D{}", d.blocks.len() + 2))
+    } else {
+        free_name(&format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*')), d.blocks.len(), |n| d.block(n).is_some())
+    };
     tinted.names.insert(key, new.clone());
     // Hold the name while the nested copies pick theirs.
     d.blocks.insert(new.clone(), Arc::new(Block::new(&new)));
-    let mut copy = Block { name: new.clone(), anonymous: false, entities: EntityStore::new(), ..(*b).clone() };
+    let mut copy = Block { name: new.clone(), anonymous: dim_block, entities: EntityStore::new(), ..(*b).clone() };
     for e in b.entities.iter() {
         let h = d.new_handle();
         let mut e = Entity { handle: h, ..(**e).clone() };

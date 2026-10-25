@@ -140,7 +140,8 @@ struct Signer<'a> {
     blocks: HashMap<String, u64>,
     work: usize,
     /// When set, a block's signature also covers its base point, units, annotative and overlay
-    /// flags and xref file, with a relative xref path taken from the folder given, and the
+    /// flags and xref file, with relative xref, image and data link paths taken from the folder
+    /// given, and the
     /// signatures of a multileader and a dimension cover their blocks'. Each object in a block
     /// then also counts with its visibility, transparency, thickness and extrusion, and an
     /// anonymous block's signature leaves out its name.
@@ -213,7 +214,15 @@ impl<'a> Signer<'a> {
                     break;
                 }
                 self.work += 1;
-                self.geometry(&e.kind, depth + 1).hash(&mut h);
+                match self.frames {
+                    // An image's file and a table's data link, from the folder given.
+                    Some(folder) if matches!(e.kind, EntityKind::Image(_) | EntityKind::Table(_)) => {
+                        let mut k = e.kind.clone();
+                        export::rebase(&mut k, folder);
+                        self.geometry(&k, depth + 1).hash(&mut h);
+                    }
+                    _ => self.geometry(&e.kind, depth + 1).hash(&mut h),
+                }
                 properties(e).hash(&mut h);
                 if self.frames.is_some() {
                     let c = &e.common;
