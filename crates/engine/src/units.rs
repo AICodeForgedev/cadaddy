@@ -22,6 +22,9 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             let rounded = (v.abs() * scale).round() / scale;
             let a = if rounded.is_finite() { rounded } else { v.abs() };
             let ft = (a / 12.0).floor();
+            if ft >= I64_SAFE_MAX {
+                return format!("{:.*}", prec, v);
+            }
             let inch = a - ft * 12.0;
             format!("{}{}'-{:.*}\"", if neg { "-" } else { "" }, ft as i64, prec, inch)
         }
@@ -359,6 +362,12 @@ pub const DEG: f64 = PI / 180.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engineering_huge_distance_falls_back_to_decimal() {
+        assert_eq!(format_distance(1e30, 3, 2), format!("{:.2}", 1e30));
+        assert_eq!(format_distance(-1e300, 3, 8), format!("{:.8}", -1e300));
+    }
 
     #[test]
     fn mixed_distance_needs_a_positive_fraction_after_the_whole_number() {
