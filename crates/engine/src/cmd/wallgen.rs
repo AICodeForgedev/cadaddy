@@ -136,12 +136,16 @@ struct Group {
     tris: Vec<[[f32; 3]; 3]>,
 }
 
-/// The level a scene point (feet) belongs to: the one whose storey holds its height.
+/// The level a scene point (feet) belongs to: the one whose storey holds its height (at a floor
+/// line, the storey above: a level's floor is at the top of the one below).
 fn level_of(scene: &Scene, z: f64) -> usize {
     scene
         .levels
         .iter()
-        .position(|l| z >= l.elevation_ft - 1e-3 && z <= l.elevation_ft + l.height_ft.max(0.0) + 1e-3)
+        .enumerate()
+        .filter(|(_, l)| z >= l.elevation_ft - 1e-3 && z <= l.elevation_ft + l.height_ft.max(0.0) + 1e-3)
+        .max_by(|a, b| a.1.elevation_ft.total_cmp(&b.1.elevation_ft))
+        .map(|(i, _)| i)
         .or_else(|| {
             // Below every level (a slab's underside): the nearest above it.
             scene.levels.iter().enumerate().min_by(|a, b| (a.1.elevation_ft - z).abs().total_cmp(&(b.1.elevation_ft - z).abs())).map(|(i, _)| i)
@@ -832,6 +836,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             break;
         }
     }
+    // A level drawn on a sheet among others (its region): what pairs up outside the building is
+    // no wall (grid lines out to their bubbles, dimension strings, match lines, the border).
+    if let Some(region) = level.region {
+        let before = pl.walls.len();
+        keep_building(&mut pl.walls, region, upf);
+        if pl.walls.len() < before {
+            notes.push(format!("{}: {} line pairs outside the building left out (grids, dimensions, border).", level.name, before - pl.walls.len()));
+        }
+    }
     // The source of each wall: the line it was found on (the nearest wall-layer object).
     for w in &mut pl.walls {
         let mid = (w.a + w.b) * 0.5;
@@ -1061,6 +1074,144 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             w.extra.extend(extra.into_iter().filter(|(_, _, lo, hi)| hi > lo));
         }
     }
+    let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
     notes.push(format!("{}: {} walls from {} face pairs, {} doors, {} windows.", level.name, pl.walls.len(), found.len(), doors, windows));
     pl
+}
+
+/// Walls looked at for the building's outline, at most (a level; hostile drawings).
+const MAX_CLUSTERED: usize = 20_000;
+
+/// The root of `i` in a union-find forest (halving the path on the way).
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    for _ in 0..parent.len() {
+        let Some(&p) = parent.get(i) else { break };
+        if p == i {
+            break;
+        }
+        let gp = parent.get(p).copied().unwrap_or(p);
+        if let Some(x) = parent.get_mut(i) {
+            *x = gp;
+        }
+        i = gp;
+    }
+    i
+}
+
+/// Keep the building on a plan drawn in `region` (sheet units, `upf` per foot). The building is
+/// the walls that touch one another (within 4'), in clusters of at least a tenth of the largest's
+/// length, found among the walls shorter than 40% of the region (a grid line or the border runs
+/// the sheet's length). Every wall reaching more than 2' (and its thickness) out of those
+/// clusters' extents goes: grid lines out to their bubbles, dimension strings and match lines
+/// beside the building, the border and the title block.
+fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
+    let span = (region[2] - region[0]).abs().max((region[3] - region[1]).abs());
+    let link = 4.0 * upf;
+    if !(span.is_finite() && span > 0.0 && link.is_finite() && link > 0.0) || walls.len() < 4 || walls.len() > MAX_CLUSTERED {
+        return;
+    }
+    let short: Vec<usize> = (0..walls.len()).filter(|&i| walls.get(i).is_some_and(|w| w.a.dist(w.b) < 0.4 * span)).collect();
+    if short.len() < 4 {
+        return;
+    }
+    // Cells the link wide; each wall sits in every cell its extents (grown by the link) touch,
+    // so two walls within the link share a cell.
+    let cell = |v: f64| (v / link).floor() as i64;
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, &i) in short.iter().enumerate() {
+        let Some(w) = walls.get(i) else { continue };
+        let (x0, x1) = (cell(w.a.x.min(w.b.x) - link), cell(w.a.x.max(w.b.x) + link));
+        let (y0, y1) = (cell(w.a.y.min(w.b.y) - link), cell(w.a.y.max(w.b.y) + link));
+        if x1.saturating_sub(x0).saturating_mul(y1.saturating_sub(y0)) > 10_000 {
+            continue;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                grid.entry((x, y)).or_default().push(k);
+            }
+        }
+    }
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).cross(r - p);
+    let gap = |a: &PlanWall, b: &PlanWall| {
+        let crossing = side(b.a, b.b, a.a) * side(b.a, b.b, a.b) < 0.0 && side(a.a, a.b, b.a) * side(a.a, a.b, b.b) < 0.0;
+        if crossing { 0.0 } else { seg_dist(a.a, b.a, b.b).min(seg_dist(a.b, b.a, b.b)).min(seg_dist(b.a, a.a, a.b)).min(seg_dist(b.b, a.a, a.b)) }
+    };
+    let mut parent: Vec<usize> = (0..short.len()).collect();
+    let mut compared = 0usize;
+    for members in grid.values() {
+        for (n, &ka) in members.iter().enumerate() {
+            for &kb in members.iter().skip(n + 1) {
+                compared += 1;
+                if compared > 20_000_000 {
+                    return;
+                }
+                let (Some(a), Some(b)) = (short.get(ka).and_then(|&i| walls.get(i)), short.get(kb).and_then(|&i| walls.get(i))) else { continue };
+                if gap(a, b) <= link {
+                    let (ra, rb) = (root(&mut parent, ka), root(&mut parent, kb));
+                    if ra != rb
+                        && let Some(x) = parent.get_mut(ra)
+                    {
+                        *x = rb;
+                    }
+                }
+            }
+        }
+    }
+    let mut length: HashMap<usize, f64> = HashMap::new();
+    let roots: Vec<usize> = (0..short.len()).map(|k| root(&mut parent, k)).collect();
+    for (k, &i) in short.iter().enumerate() {
+        let r = roots.get(k).copied().unwrap_or(k);
+        *length.entry(r).or_insert(0.0) += walls.get(i).map_or(0.0, |w| w.a.dist(w.b));
+    }
+    let largest = length.values().copied().fold(0.0, f64::max);
+    if largest <= 0.0 {
+        return;
+    }
+    let mut b = cadaddy_geom::Bounds2::EMPTY;
+    for (k, &i) in short.iter().enumerate() {
+        let r = roots.get(k).copied().unwrap_or(k);
+        if length.get(&r).copied().unwrap_or(0.0) >= 0.1 * largest
+            && let Some(w) = walls.get(i)
+        {
+            b = b.union(&cadaddy_geom::Bounds2::from_points([w.a, w.b]));
+        }
+    }
+    if b.is_empty() {
+        return;
+    }
+    let inside = |p: Vec2, m: f64| p.x >= b.min.x - m && p.x <= b.max.x + m && p.y >= b.min.y - m && p.y <= b.max.y + m;
+    walls.retain(|w| {
+        let m = 2.0 * upf + w.thickness;
+        inside(w.a, m) && inside(w.b, m)
+    });
+}
+
+/// One door per swing: a swing drawn twice (an arc and its chords, a path stroked twice on the
+/// print), or found both from its swing and at a gap, is one door; the same for window panes.
+/// Leaves are the same when their ends lie within `tol` of each other's. The doors and windows
+/// left, when any were dropped.
+fn one_per_swing(leaves: &mut Vec<Leaf>, tol: f64) -> Option<(usize, usize)> {
+    if !(tol.is_finite() && tol > 0.0) {
+        return None;
+    }
+    let cell = |p: Vec2| ((p.x / tol).floor() as i64, (p.y / tol).floor() as i64);
+    let mut seen: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut kept: Vec<Leaf> = Vec::with_capacity(leaves.len());
+    let mut dropped = false;
+    for l in leaves.drain(..) {
+        let same = |o: &Leaf| {
+            o.window == l.window && ((o.a.dist(l.a) <= tol && o.b.dist(l.b) <= tol) || (o.a.dist(l.b) <= tol && o.b.dist(l.a) <= tol))
+        };
+        let (cx, cy) = cell(l.a);
+        let dup = (-1..=1).any(|dx| (-1..=1).any(|dy| seen.get(&(cx + dx, cy + dy)).is_some_and(|ix| ix.iter().any(|&i| kept.get(i).is_some_and(same)))));
+        if dup {
+            dropped = true;
+            continue;
+        }
+        seen.entry(cell(l.a)).or_default().push(kept.len());
+        seen.entry(cell(l.b)).or_default().push(kept.len());
+        kept.push(l);
+    }
+    *leaves = kept;
+    dropped.then(|| (leaves.iter().filter(|l| !l.window).count(), leaves.iter().filter(|l| l.window).count()))
 }
