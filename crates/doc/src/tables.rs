@@ -177,6 +177,11 @@ pub struct DimStyle {
     pub dim_line_color: Color,
     pub ext_line_color: Color,
     pub text_color: Color,
+    /// DIMTFILL, the background of the text: 0 none, 1 the drawing's background color,
+    /// 2 `text_fill_color`.
+    pub text_fill: u8,
+    /// DIMTFILLCLR: the text background color when `text_fill` is 2.
+    pub text_fill_color: Color,
     pub text_style: String,
     /// DIMPOST prefix/suffix "<>" template.
     pub post: String,
@@ -296,6 +301,8 @@ pub const DIMVARS: &[(&str, &str)] = &[
     ("DIMCLRD", "dimLineColor"),
     ("DIMCLRE", "extLineColor"),
     ("DIMCLRT", "textColor"),
+    ("DIMTFILL", "textFill"),
+    ("DIMTFILLCLR", "textFillColor"),
     ("DIMTXSTY", "textStyle"),
     ("DIMPOST", "post"),
     ("DIMCEN", "centerMark"),
@@ -367,6 +374,8 @@ impl Default for DimStyle {
             dim_line_color: Color::ByBlock,
             ext_line_color: Color::ByBlock,
             text_color: Color::ByBlock,
+            text_fill: 0,
+            text_fill_color: Color::ByBlock,
             text_style: "Standard".into(),
             post: String::new(),
             center_mark: 0.09,
@@ -498,7 +507,7 @@ impl DimStyle {
                 "textHeight" | "tolScale" => x.is_some_and(|x| x <= 0.0),
                 "scale" | "arrowSize" | "tickSize" | "fixedExtLength" => x.is_some_and(|x| x < 0.0),
                 "fit" | "angularZeroSuppression" => x.is_some_and(|x| x > 3.0),
-                "textMove" | "tolJust" | "arcSymbol" => x.is_some_and(|x| x > 2.0),
+                "textMove" | "tolJust" | "arcSymbol" | "textFill" => x.is_some_and(|x| x > 2.0),
                 "dimLineweight" | "extLineweight" => x.is_some_and(|x| !(-3.0..=211.0).contains(&x)),
                 "jogAngle" => x.is_some_and(|x| !(5.0..=90.0).contains(&x)),
                 _ => false,

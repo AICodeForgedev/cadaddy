@@ -101,6 +101,34 @@ fn new_variables_are_style_overrides_and_read_back() {
 }
 
 #[test]
+fn text_fill_variables_are_style_overrides() {
+    let mut s = Session::new();
+    set(&mut s, "DIMTFILL", json!(2));
+    set(&mut s, "DIMTFILLCLR", json!(3));
+    let o = s.doc().unwrap().dim_overrides();
+    assert_eq!(o.get("textFill"), Some(&json!(2)));
+    linear(&mut s, 10.0);
+    let (dm, g) = last_dim(&s);
+    let st = DimStyle::default().with_overrides(&dm.overrides);
+    assert_eq!((st.text_fill, st.text_fill_color), (2, cadcraft_engine::doc::color::Color::Index(3)));
+    assert_eq!(g.text_fill.len(), 4, "the new dimension has a text background");
+    // DIMTFILL takes 0, 1 or 2.
+    let mut st = DimStyle::default();
+    assert_eq!(st.apply_fields(&serde_json::Map::from_iter([("DIMTFILL".to_string(), json!(3))])).len(), 1);
+    // EXPLODE keeps the background as a SOLID in DIMTFILLCLR, before the text.
+    let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+    s.execute("explode", &json!({ "handles": [h] })).unwrap();
+    let d = s.doc().unwrap();
+    let solid = d.model.iter().position(|e| matches!(e.kind, EntityKind::Solid(_)) && e.common.color == cadcraft_engine::doc::color::Color::Index(3));
+    let mtext = d.model.iter().position(|e| matches!(e.kind, EntityKind::MText(_)));
+    assert!(solid.is_some() && solid < mtext, "{solid:?}, {mtext:?}");
+    // The arrowheads (the other SOLIDs) come before the background, as the dimension draws them.
+    let arrows: Vec<usize> =
+        d.model.iter().enumerate().filter(|(i, e)| matches!(e.kind, EntityKind::Solid(_)) && Some(*i) != solid).map(|(i, _)| i).collect();
+    assert!(!arrows.is_empty() && arrows.iter().all(|i| Some(*i) < solid), "{arrows:?} before {solid:?}");
+}
+
+#[test]
 fn fit_moves_text_or_arrows_outside() {
     // 0.5 between the extension lines: the text "0.5000" doesn't fit, the arrows (2 × 0.18) do.
     let mut s = Session::new();
