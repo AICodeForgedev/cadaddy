@@ -27,6 +27,20 @@ fn named_block(d: &Drawing, name: &str) -> Option<String> {
     d.block(name.trim()).filter(|b| !b.anonymous && !b.name.starts_with('*') && !b.name.contains('|')).map(|b| b.name.clone())
 }
 
+/// Why the references of block `old` cannot be replaced: a dynamic block's references keep their
+/// property values in data that names the block.
+fn not_replaceable(d: &Drawing, old: &str) -> Option<String> {
+    cadcraft_doc::dynblock::dynamic_block(d, old).map(|_| format!("Block \"{old}\" is a dynamic block; its references cannot be replaced."))
+}
+
+/// Why block `new` cannot replace block `old`: references of `old` inside `new` would make `new`
+/// reference itself.
+fn cannot_replace_with(d: &Drawing, old: &str, new: &str) -> Option<String> {
+    let blk = d.block(new)?;
+    references_block(d, &blk.entities.iter().map(|e| (**e).clone()).collect::<Vec<_>>(), old)
+        .then(|| format!("Block \"{new}\" references \"{old}\", so it cannot replace it."))
+}
+
 /// Replace every reference of `old` by a reference of `new`; with `purge`, remove `old`'s
 /// definition when nothing references it afterwards. Returns (references replaced, purged).
 fn replace(s: &mut Session, old: &str, new: &str, purge: bool) -> Result<(usize, bool)> {
@@ -46,15 +60,10 @@ fn replace(s: &mut Session, old: &str, new: &str, purge: bool) -> Result<(usize,
     if old.eq_ignore_ascii_case(&new) {
         return Err(bad(cmd, "the replacement block must be a different block"));
     }
-    // A dynamic block's references keep their property values in data that names the block.
-    if cadcraft_doc::dynblock::dynamic_block(d, &old).is_some() {
-        return Err(bad(cmd, format!("Block \"{old}\" is a dynamic block; its references cannot be replaced.")));
+    if let Some(why) = not_replaceable(d, &old).or_else(|| cannot_replace_with(d, &old, &new)) {
+        return Err(bad(cmd, why));
     }
     let blk = d.block(&new).cloned().ok_or_else(|| bad(cmd, format!("Block \"{new}\" not found.")))?;
-    // References of `old` inside `new` would make `new` reference itself.
-    if references_block(d, &blk.entities.iter().map(|e| (**e).clone()).collect::<Vec<_>>(), &old) {
-        return Err(bad(cmd, format!("Block \"{new}\" references \"{old}\", so it cannot replace it.")));
-    }
     let defs = attdefs(&blk);
     let scale = d.current_anno_scale();
     let d = s.doc_mut()?;
@@ -132,16 +141,23 @@ struct BlockreplaceM {
 }
 
 impl BlockreplaceM {
-    /// Take `name` as the answer to the current name prompt.
+    /// Take `name` as the answer to the current name prompt. A block that cannot take part is
+    /// refused here, so the prompt asks again.
     fn take(&mut self, s: &Session, stage: Stage, name: &str) -> Result<()> {
         let d = s.doc()?;
         let name = named_block(d, name).ok_or_else(|| EngineError::Other(format!("Block \"{}\" not found.", name.trim())))?;
         if stage == Stage::Old {
+            if let Some(why) = not_replaceable(d, &name) {
+                return Err(EngineError::Other(why));
+            }
             self.old = name;
             self.stage = Stage::New;
         } else {
             if name.eq_ignore_ascii_case(&self.old) {
                 return Err(EngineError::Other("The replacement block must be a different block.".into()));
+            }
+            if let Some(why) = cannot_replace_with(d, &self.old, &name) {
+                return Err(EngineError::Other(why));
             }
             self.new = name;
             self.stage = Stage::Purge;
