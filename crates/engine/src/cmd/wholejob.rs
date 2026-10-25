@@ -470,13 +470,40 @@ fn estimate(s: &mut Session, w: &WholeJob) -> Result<Value> {
     }))
 }
 
-fn run_estimate(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec("wholejob.estimate", s)?;
-    let w = load(&sp);
-    if w.trades.is_empty() {
-        return Err(bad("wholejob.estimate", "no trade quantities yet (wholejob.quantities)"));
+    let mut w = load(&sp);
+    // No quantities yet: take them from the model's bill of materials (the prerequisite run
+    // here, never a dead end), unless `auto: false`.
+    let mut from = None;
+    if w.trades.is_empty() && bool_or(p, "auto", true) {
+        let q = s.execute("wholejob.quantities", &json!({"from_bom": true})).map_err(|e| {
+            bad(
+                "wholejob.estimate",
+                format!(
+                    "no trade quantities yet and the model's bill of materials gave none ({e}): build the model (bim.build or model.build), or give a trade's quantities (wholejob.quantities {{trade, lines: [{{item, unit, qty}}]}})"
+                ),
+            )
+        })?;
+        from = Some(q);
+        w = load(&spec("wholejob.estimate", s)?);
     }
-    estimate(s, &w)
+    if w.trades.is_empty() {
+        return Err(bad(
+            "wholejob.estimate",
+            "no trade quantities yet: the model's bill of materials has no lines — build the model (bim.build or model.build), or give a trade's quantities (wholejob.quantities {trade, lines: [{item, unit, qty}]})",
+        ));
+    }
+    let mut out = estimate(s, &w)?;
+    if let Some(q) = from {
+        out["quantities_from"] = json!({"command": "wholejob.quantities {from_bom: true}", "trades": q["trades"]});
+    }
+    if out["unpriced_lines"].as_u64().is_some_and(|n| n > 0) {
+        out["next_step"] = json!(
+            "lines without prices: give each trade its unit prices (wholejob.prices {trade, quality: private|public|assumed, source, rows: [{item, unit, unit_cost}]})"
+        );
+    }
+    Ok(out)
 }
 
 fn run_package(s: &mut Session, p: &Value) -> Result<Value> {
@@ -897,8 +924,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("wholejob.settings", "Whole-Job Settings", run_settings)
             .params("{markups?: {trade: percent}, gc?: {weeks, supervision_per_week, temp_facilities_per_week, equipment_per_week, cleanup_per_week, insurance_pct, bond_pct}, electrical_from_estimate?: bool} → {markups, gc, electrical_from_estimate}"),
         CommandSpec::new("wholejob.estimate", "Whole-Job Estimate", run_estimate)
-            .params("{} → {trades: [{trade, division, direct, markup_pct, contract_value, quality, source, priced, unpriced}], by_division, general_conditions, subtotal, total, unpriced_lines}")
-            .noundo(),
+            .params("{auto?: bool (default true: with no trade quantities yet, wholejob.quantities {from_bom: true} runs first)} → {trades: [{trade, division, direct, markup_pct, contract_value, quality, source, priced, unpriced}], by_division, general_conditions, subtotal, total, unpriced_lines, quantities_from?, next_step?}"),
         CommandSpec::new("wholejob.package", "Bid Package", run_package)
             .files().params("{trade, path?: .xlsx|.csv} → {trade, division, spec_sections, scope, quantities}").noundo(),
         CommandSpec::new("wholejob.bid", "Sub Bid", run_bid).params("{trade, bidder, total, lines?: [{item, unit, qty, amount}], exclusions?: [text], alternates?: [text]} → {trade, bidder}"),
