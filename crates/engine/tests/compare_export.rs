@@ -403,6 +403,34 @@ fn a_named_block_whose_dimension_block_has_another_generated_name_keeps_this_dra
 }
 
 #[test]
+fn a_named_block_whose_line_is_hidden_or_thicker_in_the_other_drawing_shows_the_other_definition() {
+    let run = |theirs: Common| {
+        let part = |common: Common, first: u64| {
+            let mut part = Block::new("PART");
+            let mut e = Entity::new(Handle(first), line(1.0));
+            e.common = common;
+            part.entities.push(e);
+            part
+        };
+        let mut s = Session::new();
+        s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part(Common::default(), 0x700)));
+        s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(insert("PART"))).unwrap();
+        let mut other = Drawing::new_imperial();
+        other.handseed = 0x9000;
+        other.blocks.insert("PART".into(), Arc::new(part(theirs, 0x8000)));
+        other.add(&Space::Model, Common::default(), EntityKind::Insert(Insert { insert: Vec3::new(9.0, 9.0, 0.0), ..insert("PART") })).unwrap();
+        s.open_drawing(other, "Other", None);
+        s.execute("document.switch", &json!({"index": 0})).unwrap();
+        s.execute("compare", &json!({"document": "Other"})).unwrap();
+        s.execute("compareexport", &json!({})).unwrap();
+        s.doc().unwrap().block("PART_2").is_some()
+    };
+    assert!(run(Common { visible: false, ..Common::default() }), "a hidden line");
+    assert!(run(Common { thickness: 2.0, ..Common::default() }), "a line with thickness");
+    assert!(!run(Common::default()), "the same line");
+}
+
+#[test]
 fn block_contents_take_the_comparison_color() {
     let mut s = Session::new();
     let mut part = Block::new("PART");

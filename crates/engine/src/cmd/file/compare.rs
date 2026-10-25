@@ -141,8 +141,9 @@ struct Signer<'a> {
     work: usize,
     /// When set, a block's signature also covers its base point, units, annotative and overlay
     /// flags and xref file, with a relative xref path taken from the folder given, and the
-    /// signatures of a multileader and a dimension cover their blocks'. An anonymous block's
-    /// signature then leaves out its name.
+    /// signatures of a multileader and a dimension cover their blocks'. Each object in a block
+    /// then also counts with its visibility, transparency, thickness and extrusion, and an
+    /// anonymous block's signature leaves out its name.
     frames: Option<Option<&'a std::path::Path>>,
 }
 
@@ -214,6 +215,10 @@ impl<'a> Signer<'a> {
                 self.work += 1;
                 self.geometry(&e.kind, depth + 1).hash(&mut h);
                 properties(e).hash(&mut h);
+                if self.frames.is_some() {
+                    let c = &e.common;
+                    format!("{:?}|{}|{}|{:?}", c.transparency, c.visible, (c.thickness * 1e6).round(), c.extrusion).hash(&mut h);
+                }
             }
         }
         let v = h.finish();
