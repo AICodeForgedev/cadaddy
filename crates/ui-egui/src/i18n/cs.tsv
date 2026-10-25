@@ -3117,3 +3117,4 @@ menu	Modify	Modifikace
 	Export the grouped clash report to PDF	Exportovat seskupenou zprávu o kolizích do PDF
 	PDF exported to {path}.	PDF exportováno do {path}.
 	Clash detection failed.	Detekce kolizí selhala.
+	Import Cost Table	Importovat tabulku nákladů

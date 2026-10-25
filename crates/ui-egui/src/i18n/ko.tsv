@@ -3137,3 +3137,4 @@ menu	Modify	수정
 	Export the grouped clash report to PDF	그룹화된 충돌 보고서를 PDF로 내보내기
 	PDF exported to {path}.	PDF를 {path}(으)로 내보냈습니다.
 	Clash detection failed.	충돌 감지에 실패했습니다.
+	Import Cost Table	비용 표 가져오기

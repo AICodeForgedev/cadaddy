@@ -42,8 +42,7 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page)}")
-            .noundo(),
+            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
         CommandSpec::new("model.render", "Render Model View", run_render)
             .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
@@ -173,6 +172,53 @@ fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
     out
 }
 
+/// Two built walls overlapping (more than walls meeting at a corner or a tee share).
+pub(crate) struct Overlap {
+    pub level: String,
+    pub area: f64,
+    pub at: Vec2,
+    pub handles: [Handle; 2],
+}
+
+/// Built walls overlapping each other: their boxes swept along x (each wall meets only the walls
+/// whose boxes reach it), then the common area of their footprints.
+fn overlaps(walls: &[(&Built, Footprint)]) -> Vec<Overlap> {
+    let boxes: Vec<Bounds2> = walls.iter().map(|(_, f)| f.bounds()).collect();
+    let mut order: Vec<usize> = (0..walls.len()).filter(|i| boxes.get(*i).is_some_and(|b| !b.is_empty() && b.min.is_finite())).collect();
+    order.sort_by(|a, b| boxes.get(*a).map_or(0.0, |x| x.min.x).total_cmp(&boxes.get(*b).map_or(0.0, |x| x.min.x)));
+    let mut out = Vec::new();
+    for (k, &i) in order.iter().enumerate() {
+        let (Some((a, fa)), Some(ba)) = (walls.get(i), boxes.get(i)) else { continue };
+        for &j in order.iter().skip(k + 1) {
+            let (Some((b, fb)), Some(bb)) = (walls.get(j), boxes.get(j)) else { continue };
+            if bb.min.x > ba.max.x {
+                break;
+            }
+            if a.level != b.level || !ba.intersects(bb) || fa.z1 <= fb.z0 || fb.z1 <= fa.z0 {
+                continue;
+            }
+            let area: f64 = fa.polys.iter().flat_map(|p| fb.polys.iter().map(move |q| cadaddy_geom::shoelace(&clip_convex(p, q)).abs())).sum();
+            // Walls meeting at a corner or a tee share about one thickness squared.
+            let (ta, tb) = (fa.thickness(), fb.thickness());
+            if ta.is_finite() && tb.is_finite() && area > 1.5 * ta.max(tb) * ta.max(tb) {
+                out.push(Overlap { level: a.level.clone(), area, at: ba.intersection(bb).center(), handles: [a.handle, b.handle] });
+                if out.len() >= MAX_FINDINGS {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The built walls of a drawing that overlap each other (`model.clashes` reports them as
+/// same-trade clashes).
+pub(crate) fn wall_overlaps(d: &Drawing) -> Vec<Overlap> {
+    let made = built(d);
+    let walls: Vec<(&Built, Footprint)> = made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b, footprint(&b.mesh))).collect();
+    overlaps(&walls)
+}
+
 // ---------------- the plan ----------------
 
 /// A session holding the plan alone (nothing a build made), for tracing rooms around their tags
@@ -218,16 +264,19 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let walls = super::bspec::room_plan(plan)?;
     let walls = walls.as_ref().unwrap_or(plan);
     let mut out = Vec::new();
+    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    // The plan's outlines are made once for every tag (not once per tag: 60k objects).
+    let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {
-        let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
-        let named = t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !super::perceive::geometry::room_number(&t);
+        // Equipment and device tags (a panelboard label on a room tag layer) are no rooms.
+        let named = super::perceive::geometry::room_name_score(&t) > 0;
         if !named || (!tagged && !sp.rooms.iter().any(|r| names_room(r, &t))) {
             continue;
         }
         if out.len() >= 2_000 {
             break;
         }
-        let outline = super::hatch::loops_at(walls, at)
+        let outline = super::hatch::loops_at_lazy(walls, at, &mut cache)
             .ok()
             .and_then(|loops| loops.iter().find(|l| l.outer).or(loops.first()).cloned())
             .map(|l| cadaddy_geom::Polyline { vertices: l.vertices, closed: true }.tessellate(1e-3))
@@ -350,26 +399,14 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             });
         }
     }
-    let boxes: Vec<Bounds2> = walls.iter().map(|(_, f)| f.bounds()).collect();
-    for i in 0..walls.len() {
-        for j in i + 1..walls.len() {
-            let (Some((a, fa)), Some((b, fb)), Some(ba), Some(bb)) = (walls.get(i), walls.get(j), boxes.get(i), boxes.get(j)) else { continue };
-            if a.level != b.level || !ba.intersects(bb) || fa.z1 <= fb.z0 || fb.z1 <= fa.z0 {
-                continue;
-            }
-            let area: f64 = fa.polys.iter().flat_map(|p| fb.polys.iter().map(move |q| cadaddy_geom::shoelace(&clip_convex(p, q)).abs())).sum();
-            // Walls meeting at a corner or a tee share about one thickness squared.
-            let (ta, tb) = (fa.thickness(), fb.thickness());
-            if ta.is_finite() && tb.is_finite() && area > 1.5 * ta.max(tb) * ta.max(tb) {
-                push(Finding {
-                    kind: "walls_overlap",
-                    message: format!("two walls overlap over {:.1} sq ft", area / (upf * upf)),
-                    level: Some(a.level.clone()),
-                    at: Some(ba.intersection(bb).center()).filter(|c| c.is_finite()),
-                    handles: vec![a.handle, b.handle],
-                });
-            }
-        }
+    for o in overlaps(&walls) {
+        push(Finding {
+            kind: "walls_overlap",
+            message: format!("two walls overlap over {:.1} sq ft", o.area / (upf * upf)),
+            level: Some(o.level),
+            at: Some(o.at).filter(|c| c.is_finite()),
+            handles: o.handles.to_vec(),
+        });
     }
     // Fixtures above their room's ceiling or below the floor.
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
@@ -500,8 +537,41 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
     }
+    // BCF in the same call: a topic per matching issue (its objects selected), then the file.
+    let path = str_param(p, "bcf_path").map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    if bool_or(p, "bcf", false) || path.is_some() {
+        let picked: Vec<Value> = matching
+            .iter()
+            .take(MAX_BCF)
+            .map(|f| {
+                let mut labels = vec![json!(f.kind)];
+                if let Some(l) = &f.level {
+                    labels.push(json!(format!("level {l}")));
+                }
+                json!({
+                    "title": f.message.chars().take(200).collect::<String>(), "description": f.message, "type": "Issue", "labels": labels,
+                    "selection": f.handles.iter().filter(|h| h.0 != 0).take(MAX_HANDLES).map(|h| h.hex()).collect::<Vec<_>>(), "snapshot": false,
+                })
+            })
+            .collect();
+        let mut topics: Vec<Value> = Vec::new();
+        for t in &picked {
+            let r = s.execute("bcf.create", t).map_err(|e| bad("model.issues", format!("BCF: {e}")))?;
+            topics.push(r["guid"].clone());
+        }
+        let mut bcf = json!({ "created": topics.len(), "topics": topics, "skipped": matching.len().saturating_sub(picked.len()) });
+        if let Some(path) = path {
+            let r =
+                s.execute("bcf.export", &json!({ "path": path, "topics": topics })).map_err(|e| bad("model.issues", format!("BCF export: {e}")))?;
+            bcf["path"] = r["path"].clone();
+        }
+        out["bcf"] = bcf;
+    }
     Ok(out)
 }
+
+/// BCF topics one `model.issues` call makes, at most.
+const MAX_BCF: usize = 500;
 
 /// Issues per `model.issues` answer by default, and at most.
 const ISSUES_PAGE: usize = 100;
@@ -880,10 +950,20 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
     let mut rows: Vec<Value> = Vec::new();
     let ops = plan_openings(pd, &sp, &ents);
+    let plan_handles: std::collections::HashSet<Handle> = ents.iter().map(|e| e.handle).collect();
     let mut all_match = true;
     for (li, l) in sp.levels.iter().enumerate() {
         let here = |p: Vec2| level_at(&sp.levels, p.x, p.y).is_some_and(|x| x.name.eq_ignore_ascii_case(&l.name));
-        let plan_doors = ops.iter().filter(|o| o.kind == "door" && here(o.at)).count();
+        // The plan's doors: the swings and door blocks read here, and the swings the build read
+        // (a built door's source, when it is a plan object) — one door per plan object.
+        let mut door_objects: std::collections::HashSet<Handle> = ops.iter().filter(|o| o.kind == "door" && here(o.at)).map(|o| o.handle).collect();
+        let read_here = door_objects.len();
+        for b in made.iter().filter(|b| b.part == "door" && b.level.eq_ignore_ascii_case(&l.name) && b.source.0 != 0) {
+            if plan_handles.contains(&b.source) {
+                door_objects.insert(b.source);
+            }
+        }
+        let plan_doors = door_objects.len();
         let plan_windows = ops.iter().filter(|o| o.kind == "window" && here(o.at)).count();
         let plan_fixtures = ents
             .iter()
@@ -899,7 +979,7 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
         all_match &= ok;
         rows.push(json!({
             "level": l.name,
-            "plan": {"doors": plan_doors, "windows": plan_windows, "fixtures": plan_fixtures},
+            "plan": {"doors": plan_doors, "windows": plan_windows, "fixtures": plan_fixtures, "door_swings_read": read_here},
             "model": {"doors": on("door"), "windows": on("window"), "fixtures": model_fixtures},
             "match": ok,
         }));
