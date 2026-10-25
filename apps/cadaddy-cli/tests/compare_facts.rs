@@ -71,6 +71,15 @@ fn a_claim_that_no_longer_holds_is_reported() {
     assert!(facts::check(&f, &json!({ "fact": "commands.count", "atLeast": 400 })).unwrap_err().contains("at least 400"));
     assert!(facts::check(&f, &json!({ "fact": "formats.open", "includes": ["dxf", "dwg"] })).unwrap_err().contains("dwg"));
     assert!(facts::check(&f, &json!({ "fact": "version", "equals": "0.7.9" })).is_err());
+    // The site shows the last published release; the code may be ahead of it, never behind.
+    assert!(facts::check(&f, &json!({ "fact": "version", "versionAtLeast": "0.7.8" })).is_ok());
+    assert!(facts::check(&f, &json!({ "fact": "version", "versionAtLeast": "0.7.7" })).is_ok());
+    assert!(facts::check(&f, &json!({ "fact": "version", "versionAtLeast": "0.7.9" })).unwrap_err().contains("below"));
+    assert!(
+        facts::check(&json!({ "version": "0.7.10" }), &json!({ "fact": "version", "versionAtLeast": "0.7.9" })).is_ok(),
+        "numeric, not text, order"
+    );
+    assert!(facts::check(&f, &json!({ "fact": "version", "versionAtLeast": "seven" })).is_err());
     assert!(facts::check(&f, &json!({ "fact": "no.such" })).is_err());
     assert!(facts::check(&f, &json!({ "fact": "commands.count", "atLeast": 300 })).is_ok());
 }

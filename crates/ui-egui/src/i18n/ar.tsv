@@ -3132,3 +3132,4 @@ menu	View	عرض
 	Export the grouped clash report to PDF	تصدير تقرير التعارضات المجمّع إلى PDF
 	PDF exported to {path}.	تم تصدير PDF إلى {path}.
 	Clash detection failed.	فشل اكتشاف التعارضات.
+	Import Cost Table	استيراد جدول التكاليف

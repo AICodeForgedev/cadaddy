@@ -66,8 +66,13 @@ impl Room3 {
     }
 }
 
-/// The plan's rooms as spaces.
+/// The plan's rooms as spaces. A built model's rooms are its room ceilings (one per traced room,
+/// what `model.build` reported): the one list every room command reads. Before a build, the
+/// rooms traced around the plan's name labels.
 pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
+    if let Some(built) = built_rooms(s)? {
+        return Ok(built);
+    }
     let found = rooms_found(s)?;
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
@@ -131,6 +136,124 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
         });
     }
     Ok(out)
+}
+
+/// A built room ceiling: its outline, height, level, source tag and the spec room it was built
+/// for (`room:<name>` in its tag).
+struct BuiltCeiling {
+    outline: Vec<Vec2>,
+    z: f64,
+    level: String,
+    source: Handle,
+    spec_name: String,
+}
+
+/// The room ceilings a build made, if any.
+fn built_ceilings(d: &cadaddy_doc::Drawing) -> Vec<BuiltCeiling> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let x = &e.common.xdata;
+        let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)) else { continue };
+        let Some(spec_name) = x.iter().skip(at + 1).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix("room:")) else { continue };
+        let mut outline: Vec<Vec2> = m.vertices.iter().map(|v| v.xy()).collect();
+        if outline.len() > 1 && outline.first().zip(outline.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-9) {
+            outline.pop();
+        }
+        let Some(z) = m.vertices.first().map(|v| v.z).filter(|z| z.is_finite()) else { continue };
+        if outline.len() < 3 || !outline.iter().all(|p| p.is_finite()) || out.len() >= MAX_BUILT_ROOMS {
+            continue;
+        }
+        let source = x.get(at + 3).and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok()).map_or(Handle(0), Handle);
+        out.push(BuiltCeiling {
+            outline,
+            z,
+            level: super::bspec::made_level(e).unwrap_or_default(),
+            source,
+            spec_name: spec_name.trim().to_string(),
+        });
+    }
+    out
+}
+
+/// Built room ceilings read at most (hostile drawings).
+const MAX_BUILT_ROOMS: usize = 20_000;
+
+/// The rooms of a built model, from its room ceilings; `None` when nothing was built.
+fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
+    let d = s.doc()?;
+    let ceilings = built_ceilings(d);
+    if ceilings.is_empty() {
+        return Ok(None);
+    }
+    let k = units_per_inch(d);
+    let spec = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
+    let upf = spec.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0 * k);
+    // The plan's texts (not what a build made), with their boxes for a quick reject.
+    let plan: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+        d.model.iter().filter(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_)) && super::wallgen::made_as(e).is_none()).collect();
+    let notes = texts(&plan);
+    let mut out = Vec::with_capacity(ceilings.len());
+    for c in &ceilings {
+        let b = Bounds2::from_points(c.outline.iter().copied());
+        let inside: Vec<&(Handle, String, Vec2, f64)> =
+            notes.iter().filter(|(_, _, at, _)| b.contains(*at) && cadaddy_geom::point_in_polygon(&c.outline, *at)).collect();
+        let spec_room = spec
+            .as_ref()
+            .and_then(|sp| sp.rooms.iter().find(|x| !c.spec_name.is_empty() && super::bspec::room_label(x).eq_ignore_ascii_case(&c.spec_name)));
+        let area = cadaddy_geom::shoelace(&c.outline).abs();
+        let centre = c.outline.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / c.outline.len() as f64);
+        // The name: the spec's room, else the best room label inside (a room or unit-type word
+        // first; equipment and device tags never), else the tag it was traced from.
+        let label = inside
+            .iter()
+            .map(|t| (super::perceive::geometry::room_name_score(&t.1), *t))
+            .filter(|(sc, _)| *sc > 0)
+            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| u8::from(a.1.0 == c.source).cmp(&u8::from(b.1.0 == c.source))))
+            .map(|(_, t)| t);
+        let source_text = notes.iter().find(|t| t.0 == c.source);
+        let number = inside
+            .iter()
+            .filter(|t| super::perceive::geometry::room_number(&t.1))
+            .min_by(|a, b| a.2.dist(label.map_or(centre, |l| l.2)).total_cmp(&b.2.dist(label.map_or(centre, |l| l.2))))
+            .map(|t| t.1.clone())
+            .or_else(|| spec_room.and_then(|x| x.number.clone()));
+        let name = match (spec_room, label) {
+            (Some(x), _) if !x.name.trim().is_empty() => x.name.clone(),
+            (_, Some(l)) => l.1.clone(),
+            _ => number.as_ref().map_or_else(|| "Room".to_string(), |n| format!("Room {n}")),
+        };
+        let level = spec.as_ref().and_then(|sp| sp.level(&c.level));
+        let elevation = level.map_or(0.0, |l| l.elevation_ft * upf);
+        let ceiling = Some(c.z - elevation).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(DEFAULT_CEILING_IN * k);
+        let mut finishes: Vec<String> = Vec::new();
+        for t in &inside {
+            for f in finish_codes(&t.1) {
+                if !finishes.contains(&f) {
+                    finishes.push(f);
+                }
+            }
+        }
+        let perimeter: f64 = c.outline.iter().zip(c.outline.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+        out.push(Room3 {
+            name,
+            number,
+            at: label.map(|l| l.2).or_else(|| source_text.map(|t| t.2)).unwrap_or(centre),
+            label: label.map(|l| l.0).unwrap_or(c.source),
+            outline: c.outline.clone(),
+            area,
+            perimeter,
+            elevation,
+            ceiling,
+            finishes,
+            materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
+            level: Some(c.level.clone()).filter(|l| !l.is_empty()),
+        });
+    }
+    Ok(Some(out))
 }
 
 fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {

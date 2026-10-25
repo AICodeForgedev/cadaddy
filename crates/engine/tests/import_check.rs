@@ -1,5 +1,6 @@
-//! Tests for the import accuracy check (`import.check`): each check pass+fail, hard-fail
-//! logic, the auto-run on import, the BIM gate, and "0 sheets processed => not completed".
+//! Tests for the import accuracy check (`import.check`): each check pass+fail, warn-only
+//! logic (failed checks warn, never block a build), the BIM gate (blocks only empty/unreadable
+//! imports), and "0 sheets processed => not completed".
 //!
 //! Synthetic drawings are built in code (made-up names only); no real files or file names.
 
@@ -144,6 +145,20 @@ fn bad_import() -> Drawing {
 fn tiny_drawing() -> Drawing {
     let mut d = Drawing::new_imperial();
     d.model.push(line_ent(0x200, "0", 0.0, 0.0, 100.0, 100.0));
+    d
+}
+
+/// An import that is truly unreadable: only wipeouts, no geometry or text.
+/// This is the only kind of import that should fail (blocks builds).
+fn unreadable_import() -> Drawing {
+    let mut d = Drawing::new_imperial();
+    for i in 0..50 {
+        d.model.push(entity(
+            0x400 + i as u64,
+            "0",
+            EntityKind::Wipeout(Wipeout { boundary: vec![Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)] }),
+        ));
+    }
     d
 }
 
@@ -337,22 +352,24 @@ fn good_import_passes_all_checks() {
 }
 
 #[test]
-fn bad_import_fails() {
+fn bad_import_passes_with_warnings() {
     let d = bad_import();
     let result = import_check::check_drawing(&d);
-    assert!(!result.pass, "bad import should fail: score={}", result.score);
+    // Bad import has usable content (lines) → passes, but individual checks warn.
+    assert!(result.pass, "bad import with usable content should pass: score={}", result.score);
 
     let failed_ids: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
-    assert!(failed_ids.contains(&"SCALE"), "SCALE should fail, failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"LAYERS"), "LAYERS should fail, failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"FILLS"), "FILLS should fail, failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"SYMBOLS"), "SYMBOLS should fail, failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"SCALE"), "SCALE should warn, failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"LAYERS"), "LAYERS should warn, failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"FILLS"), "FILLS should warn, failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"SYMBOLS"), "SYMBOLS should warn, failed: {:?}", failed_ids);
+}
 
-    // Hard-fail: SCALE, FILLS, SYMBOLS should be in hard_fails.
-    assert!(!result.hard_fails.is_empty(), "should have hard failures");
-    assert!(result.hard_fails.contains(&"SCALE".to_string()), "SCALE should be a hard fail");
-    assert!(result.hard_fails.contains(&"FILLS".to_string()), "FILLS should be a hard fail");
-    assert!(result.hard_fails.contains(&"SYMBOLS".to_string()), "SYMBOLS should be a hard fail");
+#[test]
+fn unreadable_import_fails() {
+    let d = unreadable_import();
+    let result = import_check::check_drawing(&d);
+    assert!(!result.pass, "unreadable import (only fills) should fail");
 }
 
 #[test]
@@ -517,11 +534,12 @@ fn symbols_check_fails_when_no_blocks() {
     assert!(syms.is_some_and(|c| c.hard_fail), "SYMBOLS should be a hard-fail check");
 }
 
-// ─── Hard-fail logic ────────────────────────────────────────────────────────
+// ─── Warn-only logic (no check blocks a build) ─────────────────────────────
 
 #[test]
-fn hard_fail_overrides_passing_score() {
-    // A drawing where only FILLS fails (hard-fail) but the score could be >= 50.
+fn check_failures_warn_but_do_not_block() {
+    // A drawing with usable content + excessive wipeouts. FILLS check fails
+    // but the overall import should still PASS (warns, never blocks).
     let mut d = Drawing::new_imperial();
     d.header.set_i64("INSUNITS", 1);
     d.layers.push(Layer { name: "WALLS".into(), ..Layer::default() });
@@ -556,33 +574,34 @@ fn hard_fail_overrides_passing_score() {
         d.model.push(text_ent(next(), "WALLS", label, 0.0, -120.0, 8.0));
     }
 
-    // Now add excessive wipeouts (FILLS hard-fail).
+    // Excessive wipeouts → FILLS check fails.
     let total_so_far = d.model.len();
-    let fill_needed = (total_so_far as f64 * 0.15) as usize; // >10% will trigger FILLS fail
+    let fill_needed = (total_so_far as f64 * 0.15) as usize;
     for _ in 0..fill_needed {
         d.model.push(entity(next(), "0", EntityKind::Wipeout(Wipeout { boundary: vec![Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)] })));
     }
 
     let result = import_check::check_drawing(&d);
-    // Score might be high because most checks pass.
-    // But FILLS hard-fail should make the overall result FAIL.
-    assert!(!result.pass, "should FAIL due to FILLS hard-fail even if score is high (score={})", result.score);
-    assert!(result.hard_fails.contains(&"FILLS".to_string()), "FILLS should be in hard_fails");
+    // Has usable content → PASS even though FILLS check fails.
+    assert!(result.pass, "should PASS: failed checks warn but never block (score={})", result.score);
+    let fills = result.checks.iter().find(|c| c.id == "FILLS");
+    assert!(fills.is_some_and(|c| !c.pass), "FILLS check should still report failure as a warning");
 }
 
 // ─── MUST 4: E-4 field statistics regression test ───────────────────────────
 
 #[test]
-fn e4_field_statistics_must_fail() {
+fn e4_field_statistics_pass_with_warnings() {
     let d = e4_field_import();
     let result = import_check::check_drawing(&d);
-    assert!(!result.pass, "E-4 field import should FAIL: score={}, hard_fails={:?}", result.score, result.hard_fails);
+    // E-4 has usable content (lines, text, circles) → passes, individual checks warn.
+    assert!(result.pass, "E-4 field import should PASS (has usable content): score={}", result.score);
 
     let failed_ids: Vec<&str> = result.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
-    assert!(failed_ids.contains(&"SCALE"), "SCALE should fail on E-4: extents match sheet size. Failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"TEXT"), "TEXT should fail on E-4: many stroke clusters, few text entities. Failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"FILLS"), "FILLS should fail on E-4: 14% wipeouts. Failed: {:?}", failed_ids);
-    assert!(failed_ids.contains(&"SYMBOLS"), "SYMBOLS should fail on E-4: 0 blocks. Failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"SCALE"), "SCALE should warn on E-4: extents match sheet size. Failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"TEXT"), "TEXT should warn on E-4: many stroke clusters, few text entities. Failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"FILLS"), "FILLS should warn on E-4: 14% wipeouts. Failed: {:?}", failed_ids);
+    assert!(failed_ids.contains(&"SYMBOLS"), "SYMBOLS should warn on E-4: 0 blocks. Failed: {:?}", failed_ids);
 }
 
 // ─── ADDENDUM: DO NOT SCALE test ────────────────────────────────────────────
@@ -679,11 +698,11 @@ fn passes_returns_true_for_no_check() {
 }
 
 #[test]
-fn passes_returns_false_for_failing_check() {
-    let mut d = bad_import();
+fn passes_returns_false_for_unreadable_import() {
+    let mut d = unreadable_import();
     let result = import_check::check_drawing(&d);
     import_check::store_result(&mut d, &result);
-    assert!(!import_check::passes(&d));
+    assert!(!import_check::passes(&d), "unreadable import (only fills) should not pass");
 }
 
 // ─── Command registration ────────────────────────────────────────────────────
@@ -712,15 +731,15 @@ fn import_check_command_on_current_drawing() {
 // ─── BIM gate ────────────────────────────────────────────────────────────────
 
 #[test]
-fn bim_build_refuses_failing_import() {
+fn bim_build_refuses_unreadable_import() {
     let mut s = Session::new();
     if let Ok(d) = s.doc_mut() {
-        let bad = bad_import();
+        let bad = unreadable_import();
         let result = import_check::check_drawing(&bad);
         import_check::store_result(d, &result);
     }
     let r = s.execute("bim.build", &json!({}));
-    assert!(r.is_err(), "bim.build should refuse when import check fails");
+    assert!(r.is_err(), "bim.build should refuse when import is unreadable (only fills)");
     let err = format!("{}", r.unwrap_err());
     assert!(err.contains("import check failed"), "error should mention import check: {err}");
 }
@@ -729,7 +748,7 @@ fn bim_build_refuses_failing_import() {
 fn bim_build_allows_force_override() {
     let mut s = Session::new();
     if let Ok(d) = s.doc_mut() {
-        let bad = bad_import();
+        let bad = unreadable_import();
         let result = import_check::check_drawing(&bad);
         import_check::store_result(d, &result);
     }
@@ -772,15 +791,15 @@ fn import_check_in_cdy_manifest() {
 // ─── Printset stage gate ─────────────────────────────────────────────────────
 
 #[test]
-fn printset_run_refuses_failing_import() {
+fn printset_run_refuses_unreadable_import() {
     let mut s = Session::new();
     if let Ok(d) = s.doc_mut() {
-        let bad = bad_import();
+        let bad = unreadable_import();
         let result = import_check::check_drawing(&bad);
         import_check::store_result(d, &result);
     }
     let r = s.execute("printset.run", &json!({}));
-    assert!(r.is_err(), "printset.run should refuse when import check fails");
+    assert!(r.is_err(), "printset.run should refuse when import is unreadable");
     let err = format!("{}", r.unwrap_err());
     assert!(err.contains("import check failed"), "error should mention import check: {err}");
 }
