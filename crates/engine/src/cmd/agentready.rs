@@ -1159,6 +1159,13 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
                 // mep.read already ran; proceed with whatever it found.
             }
         }
+    } else if (disc == "mep" || disc == "all") && !spec_has_mep {
+        // Nothing read and nothing pre-set: the MEP build comes out empty — say why.
+        mep_warnings.push(if !has_drawing_entities {
+            "no MEP runs: the drawing is empty — import the mechanical and plumbing sheets first, or set runs with bspec.set".to_string()
+        } else {
+            "no MEP runs: this sheet is a notes, legend, schedule, section or detail page — MEP is read from the plan sheets".to_string()
+        });
     }
 
     let r = s.execute("model.build", &json!({}))?;
