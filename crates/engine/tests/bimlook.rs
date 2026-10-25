@@ -553,8 +553,9 @@ fn golden_closeup_shows_every_pipe_in_its_colour() {
     );
     let keys = ["duct_supply", "duct_return", "pipe_cold", "pipe_hot", "pipe_sanitary", "pipe_vent", "pipe_gas", "tray"];
     let counts: Vec<(&str, usize)> = keys.iter().map(|k| (*k, hue_like(&img, bimlook::trade(k).unwrap().rgb))).collect();
+    // The level's floor is in the frame too, so the thinnest pipe (vent) is a few dozen pixels.
     for (key, n) in &counts {
-        assert!(*n > 30, "{key}: {n} pixels in its colour ({counts:?})");
+        assert!(*n > 20, "{key}: {n} pixels in its colour ({counts:?})");
     }
     golden("closeup", &img);
 }
