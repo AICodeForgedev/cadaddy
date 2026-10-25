@@ -1032,7 +1032,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     doors += 1;
                     (on - u * half, on + u * half)
                 };
-                pl.leaves.push(Leaf { a: leaf.0, b: leaf.1, window, thickness: w.thickness, source: o.handle, head, sill, along: None, pair: None, frame: Some(leaf) });
+                pl.leaves.push(Leaf {
+                    a: leaf.0,
+                    b: leaf.1,
+                    window,
+                    thickness: w.thickness,
+                    source: o.handle,
+                    head,
+                    sill,
+                    along: None,
+                    pair: None,
+                    frame: Some(leaf),
+                });
             }
         }
     }
@@ -1126,13 +1137,35 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         if leaf.is_some() || covered {
             extra.push((g0, g1, z0 + pl.door_head, top));
             if let Some((a, b, h, along)) = leaf.filter(|_| !covered) {
-                pl.leaves.push(Leaf { a, b, window: false, thickness: t, source: h, head: None, sill: None, along: Some(along), pair: None, frame: Some((g0, g1)) });
+                pl.leaves.push(Leaf {
+                    a,
+                    b,
+                    window: false,
+                    thickness: t,
+                    source: h,
+                    head: None,
+                    sill: None,
+                    along: Some(along),
+                    pair: None,
+                    frame: Some((g0, g1)),
+                });
                 doors += 1;
             }
         } else if is_outside {
             extra.push((g0, g1, z0, z0 + pl.sill));
             extra.push((g0, g1, z0 + pl.head, top));
-            pl.leaves.push(Leaf { a: g0, b: g1, window: true, thickness: t, source, head: None, sill: None, along: None, pair: None, frame: Some((g0, g1)) });
+            pl.leaves.push(Leaf {
+                a: g0,
+                b: g1,
+                window: true,
+                thickness: t,
+                source,
+                head: None,
+                sill: None,
+                along: None,
+                pair: None,
+                frame: Some((g0, g1)),
+            });
             windows += 1;
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));

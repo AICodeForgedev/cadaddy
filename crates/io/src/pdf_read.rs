@@ -3239,8 +3239,7 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
             let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
             let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
             let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
-            let text =
-                RecoveredText {
+            let text = RecoveredText {
                 at: (x0, y0),
                 height: h,
                 value,
