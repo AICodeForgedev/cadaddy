@@ -865,6 +865,18 @@ fn ocr_without_hidden_text_keeps_the_strokes_as_linework() {
     assert!(texts_of(&read).iter().any(|t| t.contains('H')), "the word is read: {:?}", texts_of(&read));
     assert!(linework_near_word(&raw) > 0, "the word is linework without recovery");
     assert_eq!(linework_near_word(&read), linework_near_word(&raw), "every stroke of the word stays linework");
+    // the word is marked as an unconfirmed OCR read, in a style the drawing has
+    let ocr_styles: Vec<&str> = read
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) if t.value.contains('H') => Some(t.style.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(!ocr_styles.is_empty() && ocr_styles.iter().all(|st| *st == pdf_read::OCR_TEXT_STYLE), "{ocr_styles:?}");
+    assert!(read.drawing.text_styles.iter().any(|st| st.name == pdf_read::OCR_TEXT_STYLE), "the style is in the drawing");
 }
 
 const E_SHEET_WITH_NOTE: &[u8] =

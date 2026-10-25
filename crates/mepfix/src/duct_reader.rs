@@ -222,11 +222,16 @@ fn arcs(d: &Drawing) -> Vec<(Vec2, f64, f64, f64, String)> {
     out
 }
 
-/// Extract text entities: (text, position, layer, height).
+/// Extract text entities: (text, position, layer, height).  Words the PDF import's stroke OCR
+/// read without hidden text to confirm them are left out: two ticks beside a stroke read as
+/// `8"`, and a size or height tag is what makes a pair of lines a duct.
 fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
     let mut out = Vec::new();
     for e in d.model.iter() {
         if let EntityKind::Text(t) = &e.kind {
+            if t.style.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_TEXT_STYLE) {
+                continue;
+            }
             let at = t.align_pt.unwrap_or(t.insert).xy();
             if at.is_finite() && !t.value.trim().is_empty() {
                 out.push((t.value.clone(), at, e.common.layer.to_string(), t.height));
@@ -1649,6 +1654,40 @@ mod tests {
         assert!(runs.iter().any(|r| r.points.iter().all(|q| (q.y - 300.0).abs() < 1e-9)));
         // As tuned on the vector sheets: the chaining stops at the used pair.
         assert_eq!(chain_runs(&pairs, &DuctOptions::default()).len(), 1);
+    }
+
+    #[test]
+    fn unconfirmed_ocr_words_are_not_duct_tags() {
+        // A 50 ft pair of lines is a duct when a size tag sits on it. The same tag read by the
+        // PDF import's stroke OCR on a page without hidden text (two ticks beside a stroke read
+        // as a size) is not evidence: the pair stays out, as before that OCR ran.
+        let sheet = |style: &str| {
+            let mut d = Drawing::new_imperial();
+            let mut add = |kind: EntityKind| {
+                d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), kind).expect("add");
+            };
+            for y in [0.0, 12.0] {
+                add(EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(0.0, y, 0.0), b: cadaddy_geom::Vec3::new(600.0, y, 0.0) }));
+            }
+            add(EntityKind::Text(cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(300.0, 16.0, 0.0),
+                align_pt: None,
+                height: 4.0,
+                value: "24x12".into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: style.into(),
+                halign: cadaddy_doc::HAlign::Left,
+                valign: cadaddy_doc::VAlign::Baseline,
+            }));
+            d
+        };
+        let tagged = read_ducts_any_layer(&sheet("Standard"));
+        assert_eq!(tagged.runs.len(), 1, "a tagged pair is a duct: {:?}", tagged.runs);
+        assert_eq!(text_entities(&sheet(cadaddy_io::pdf_read::OCR_TEXT_STYLE)).len(), 0);
+        let ocr = read_ducts_any_layer(&sheet(cadaddy_io::pdf_read::OCR_TEXT_STYLE));
+        assert!(ocr.runs.is_empty() && ocr.tags.is_empty(), "an OCR guess makes no duct: {:?}", ocr.runs);
     }
 
     #[test]

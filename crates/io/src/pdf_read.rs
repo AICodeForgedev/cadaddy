@@ -107,6 +107,12 @@ pub const MARKUP_LAYER: &str = "PDF-MARKUP";
 /// once, and its words can still be searched and listed.
 pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
 
+/// The text style of words the SHX stroke OCR read on a page without hidden text to confirm
+/// them.  They are searchable text, but a guess: two ticks beside a stroke read as `8"`, a
+/// corner and a dash as `EL`.  Readers that take text as evidence (duct sizes and heights) skip
+/// this style.
+pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+
 impl Default for PdfOptions {
     fn default() -> Self {
         PdfOptions {
@@ -1878,6 +1884,8 @@ struct RecoveredText {
     stroke_indices: HashSet<usize>,
     pen: Pen,
     layer: Option<String>,
+    /// Read by the OCR with no hidden text to confirm it (drawn in [`OCR_TEXT_STYLE`]).
+    unconfirmed: bool,
 }
 
 /// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
@@ -1971,6 +1979,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             stroke_indices: matched.into_iter().collect(),
             pen,
             layer,
+            unconfirmed: false,
         });
     }
     result
@@ -2091,6 +2100,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
                 stroke_indices: indices.iter().copied().collect(),
                 pen: *pen,
                 layer: t.layer.clone(),
+                unconfirmed: false,
             });
         }
     }
@@ -2434,7 +2444,15 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         // "1-1", "//") is linework read as letters — wall ends, jambs, duct and pipe ticks — and
         // its strokes stay linework for the wall, duct and pipe readers.
         if !word.trim().is_empty() && !all_bare {
-            result.push(RecoveredText { at: (word_x, word_y), height: word_h, value: word, stroke_indices: all_indices, pen, layer: layer.clone() });
+            result.push(RecoveredText {
+                at: (word_x, word_y),
+                height: word_h,
+                value: word,
+                stroke_indices: all_indices,
+                pen,
+                layer: layer.clone(),
+                unconfirmed: false,
+            });
         }
         i = j;
     }
@@ -3146,9 +3164,11 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 // Without hidden text to confirm them, the OCR's words are added but their
                 // strokes stay linework: a misread wall corner, jamb or duct tick must not leave
                 // the plan (walls, duct and pipe chains, symbol finding all read those strokes).
+                // Their style marks them as unconfirmed, so duct tags don't come from them.
                 if !has_hidden_text {
                     for t in &mut ocr_texts {
                         t.stroke_indices.clear();
+                        t.unconfirmed = true;
                     }
                 }
                 if !ocr_texts.is_empty() {
@@ -3592,10 +3612,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             rotation: 0.0,
             width_factor: 1.0,
             oblique: 0.0,
-            style: "Standard".into(),
+            style: if rt.unconfirmed { OCR_TEXT_STYLE.into() } else { "Standard".into() },
             halign: HAlign::default(),
             valign: VAlign::default(),
         };
+        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(OCR_TEXT_STYLE)) {
+            d.text_styles.push(TextStyle { name: OCR_TEXT_STYLE.into(), ..TextStyle::default() });
+        }
         add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
         recovered_count += 1;
     }
