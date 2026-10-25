@@ -508,9 +508,13 @@ fn run(args: &[String]) -> Result<(), String> {
             // One `id {json}` per line (PowerShell 5 strips the quotes inside a --cmd argument).
             "--cmd-file" => {
                 let p = it.next().ok_or("--cmd-file needs a path")?;
-                let text = std::fs::read_to_string(p).map_err(|e| format!("--cmd-file {p}: {e}"))?;
-                for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-                    steps.push(("cmd".into(), line.to_string()));
+                let bytes = std::fs::read(p).map_err(|e| format!("--cmd-file {p}: {e}"))?;
+                let text = cmd_file_text(&bytes).map_err(|e| format!("--cmd-file {p}: {e}"))?;
+                for (n, line) in text.lines().enumerate() {
+                    let line = line.trim();
+                    if !line.is_empty() && !line.starts_with('#') {
+                        steps.push((format!("cmd {p}:{}", n + 1), line.to_string()));
+                    }
                 }
             }
             "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
@@ -528,9 +532,11 @@ fn run(args: &[String]) -> Result<(), String> {
         match kind.as_str() {
             "script" => s.script(&body).map_err(|e| e.to_string())?,
             _ => {
+                // `cmd FILE:LINE` for a --cmd-file line: errors say where it came from.
+                let at = kind.strip_prefix("cmd ").map(|w| format!("{w}: ")).unwrap_or_default();
                 let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
-                let params: Value = serde_json::from_str(json).map_err(|e| format!("--cmd {id}: {e}"))?;
-                let r = s.execute(id, &params).map_err(|e| e.to_string())?;
+                let params: Value = serde_json::from_str(json).map_err(|e| format!("{at}--cmd {id}: {e}"))?;
+                let r = s.execute(id, &params).map_err(|e| format!("{at}{e}"))?;
                 if !r.is_null() {
                     outln!("{r}");
                 }
@@ -541,6 +547,10 @@ fn run(args: &[String]) -> Result<(), String> {
         eprintln!("{l}");
     }
     if let Some(p) = save {
+        // PDF images an import left in the session's temp folder go next to the saved drawing.
+        for note in cadaddy_engine::cmd::file::adopt_session_images(&mut s, &p) {
+            eprintln!("{note}");
+        }
         export(&s, &p)?;
     }
     if let Some(p) = exp {
@@ -548,6 +558,25 @@ fn run(args: &[String]) -> Result<(), String> {
         export_framed(&s, &p, window)?;
     }
     Ok(())
+}
+
+/// The text of a --cmd-file: UTF-8 (a leading byte-order mark is dropped), or UTF-16 with a
+/// byte-order mark, as Windows PowerShell 5's `>` and `Out-File` write it.
+fn cmd_file_text(bytes: &[u8]) -> Result<String, String> {
+    let utf16 = |big: bool, rest: &[u8]| {
+        let (units, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err("UTF-16 text with an odd number of bytes".to_string());
+        }
+        let units: Vec<u16> = units.iter().map(|b| if big { u16::from_be_bytes(*b) } else { u16::from_le_bytes(*b) }).collect();
+        String::from_utf16(&units).map_err(|e| e.to_string())
+    };
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).map_err(|e| e.to_string()),
+        [0xFF, 0xFE, rest @ ..] => utf16(false, rest),
+        [0xFE, 0xFF, rest @ ..] => utf16(true, rest),
+        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "not UTF-8 or UTF-16 text (save it as UTF-8)".to_string()),
+    }
 }
 
 /// Small deterministic generator (xorshift64*) so perf runs are repeatable without a dependency.
