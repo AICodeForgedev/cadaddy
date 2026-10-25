@@ -604,6 +604,54 @@ fn viewport_frozen_layers_roundtrip() {
     assert!(frozen.contains(&(3, Vec::new())), "{frozen:?}");
 }
 
+/// `Layout1` with viewports 1 (the sheet), 2 and 3, written to DXF and read back with the id (69)
+/// of every viewport `blank` names replaced by -1 (ZWCAD's "unknown"): the ids and widths read.
+fn viewport_ids_read_back(blank: impl Fn(&str) -> bool) -> (Drawing, Vec<(u32, f64)>) {
+    let mut d = sample();
+    let paper = Space::Paper("Layout1".into());
+    for (id, w) in [(1, 420.0), (2, 8.0), (3, 4.0)] {
+        let vp = Viewport {
+            center: Vec3::new(5.0, 4.0, 0.0),
+            width: w,
+            height: 6.0,
+            view_center: Vec2::new(5.0, 4.0),
+            view_height: 6.0,
+            id,
+            ..Viewport::default()
+        };
+        d.add(&paper, Common::default(), EntityKind::Viewport(vp)).unwrap();
+    }
+    let text = write_dxf(&d);
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    for i in (0..lines.len() - 1).step_by(2) {
+        if lines[i].trim() == "69" && blank(lines[i + 1].trim()) {
+            lines[i + 1] = "-1".into();
+        }
+    }
+    let back = read_dxf(lines.join("\n").as_bytes()).unwrap();
+    let ids =
+        back.layouts[0].entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some((v.id, v.width)) } else { None }).collect();
+    (back, ids)
+}
+
+/// ZWCAD writes every VIEWPORT with id (69) -1: they are numbered in file order, the first being
+/// the paper-space viewport, so saving adds no second sheet viewport (#1463).
+#[test]
+fn viewport_ids_unknown_are_numbered_in_order() {
+    let (back, ids) = viewport_ids_read_back(|_| true);
+    assert_eq!(ids, [(1, 420.0), (2, 8.0), (3, 4.0)]);
+    assert!(!write_dxf(&back).contains("PAPERVIEW"), "the layout already has its paper-space viewport");
+}
+
+/// A layout that mixes known ids with -1 is left alone: the known ids stay, the unknown one reads
+/// as 0 (not numbered), as before #1463.
+#[test]
+fn viewport_ids_mixed_are_kept() {
+    let (back, ids) = viewport_ids_read_back(|v| v == "2");
+    assert_eq!(ids, [(1, 420.0), (0, 8.0), (3, 4.0)]);
+    assert!(!write_dxf(&back).contains("PAPERVIEW"), "viewport 1 is still the sheet");
+}
+
 /// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
 /// (code, value) pairs.
 fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {

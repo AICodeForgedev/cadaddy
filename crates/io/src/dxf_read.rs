@@ -492,7 +492,8 @@ fn entity_with_table_budget(kind: &str, tags: &[Tag], table_cells_left: &mut usi
             height: t.fd(41, 1.0),
             view_center: Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)),
             view_height: t.fd(45, 1.0),
-            id: t.i(69).unwrap_or(0) as u32,
+            // ZWCAD writes -1 (unknown): 0 here, numbered in order below.
+            id: t.i(69).filter(|i| *i > 0).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: crate::dxf_ext::read_frozen(tags),
             layer_colors: crate::dxf_ext::read_layer_colors(tags),
@@ -1864,6 +1865,20 @@ fn read_budgeted(bytes: &[u8], mut table_cells_left: usize) -> Result<Drawing> {
             }
         } else {
             d.model.push(e);
+        }
+    }
+    // A layout whose viewports all lack an id (ZWCAD writes 69 = -1) gets them numbered in file
+    // order, as DWG readers do: its first viewport is the paper-space one (id 1), so saving does
+    // not add a second sheet viewport ahead of it (#1463).
+    for l in d.layouts.iter_mut() {
+        let vps: Vec<Entity> = l.entities.iter().filter(|e| matches!(&e.kind, EntityKind::Viewport(_))).map(|e| (**e).clone()).collect();
+        if vps.iter().all(|e| matches!(&e.kind, EntityKind::Viewport(v) if v.id == 0)) {
+            for (i, mut e) in vps.into_iter().enumerate() {
+                if let EntityKind::Viewport(v) = &mut e.kind {
+                    v.id = i as u32 + 1;
+                }
+                l.entities.replace(e);
+            }
         }
     }
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
