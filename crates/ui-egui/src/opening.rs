@@ -77,7 +77,7 @@ impl Opening {
     pub fn show(&self, ctx: &egui::Context) {
         let Some(label) = self.label() else { return };
         let t = Tokens::get();
-        egui::Area::new(egui::Id::new("cc_opening"))
+        egui::Area::new(egui::Id::unique("cc_opening"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .interactable(false)

@@ -213,6 +213,7 @@ pub fn command(app: &mut crate::CadApp, reset: bool, params: &Value) -> Result<V
     Ok(json!({"docking": app.ui.docking}))
 }
 
+/// Validate and repair the stored workspace, sync it with the app, and render the dock panels; a failed restore falls back to the default layout with a status message.
 pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get();
     let mut workspace = app.ui.docking.clone();
@@ -237,7 +238,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     // Panels arrange in a split tree around the drawing; floating title bars only move windows.
     style.new_dock_zones = false;
     style.title_bar_docks = false;
-    let output = DockArea::new(egui::Id::new("cadcraft-docking")).show_with_limits(
+    let output = DockArea::new(egui::Id::unique("cadcraft-docking")).show_with_limits(
         ui,
         &workspace.layout,
         &style,
@@ -273,7 +274,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     let _ = sync(&mut workspace, app);
     let stale = workspace != rendered;
     if stale {
-        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("cadcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::unique("cadcraft-docking"));
     }
     publish_visibility(app, &workspace);
     app.ui.docking = workspace;
