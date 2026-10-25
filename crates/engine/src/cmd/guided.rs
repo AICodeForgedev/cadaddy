@@ -418,7 +418,6 @@ pub struct SheetSpan {
     pub hi: u64,
 }
 
-
 /// An imported sheet's rectangle in the job's drawing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetRegion {
