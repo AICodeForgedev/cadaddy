@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {refs: [{name, path, status, changed, handles, scale, elements, classes, levels: [{name, elevation, elements, spec_level?}]}]}")
             .noundo(),
         CommandSpec::new("ifc.elements", "IFC Reference Elements", run_elements)
-            .params("{name?: reference, or \"model\" (the model built in this drawing), class?: IFC class (Wall, Slab… or IfcWall), level?: storey name, guid?, system?, property?: \"Set.Name\" | \"Set.Name=value\", limit? (default 500)} → {elements: [{ref, handle, class, guid, name, level?, elevation?, type?, systems, properties: {\"Set.Name\": value}, min, max}], total, built (elements of the built model), export?}")
+            .params("{name?: reference, or \"model\" (the model built in this drawing; listed by default only when no reference is attached), class?: IFC class (Wall, Slab… or IfcWall), level?: storey name, guid?, system?, property?: \"Set.Name\" | \"Set.Name=value\", limit? (default 500)} → {elements: [{ref, handle, class, guid, name, level?, elevation?, type?, systems, properties: {\"Set.Name\": value}, min, max}], total, built (elements of the built model), export?}")
             .noundo(),
         CommandSpec::new("ifc.reload", "Reload IFC References", run_reload)
             .files()
@@ -449,7 +449,10 @@ fn run_elements(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The model built here (walls, slabs, doors, runs…) as the IFC elements an export writes.
     let mut built = 0usize;
-    if name.is_none_or(|n| n.eq_ignore_ascii_case(MODEL_REF)) && guid.is_none() && property.is_none() {
+    // With no name: the built model only when no reference is attached (the references stay
+    // the default listing); `name: "model"` always lists it.
+    let model_wanted = name.map_or_else(|| ref_names(d).is_empty(), |n| n.eq_ignore_ascii_case(MODEL_REF));
+    if model_wanted && guid.is_none() && property.is_none() {
         for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()) {
             let EntityKind::Mesh(m) = &e.kind else { continue };
             let info = built_element(e);
