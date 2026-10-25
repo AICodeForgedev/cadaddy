@@ -243,3 +243,53 @@ fn hostile_draft_levels_never_panic() {
     let _ = s.execute("model.build", &json!({}));
     let _ = s.execute("model.build", &json!({"stack": "yes"}));
 }
+
+/// One 40' × 30' floor whose 4" partition has a 6' opening (y 150-222),
+/// swung by `arcs` (centre, start, end).
+fn opening_plan(arcs: &[([f64; 2], f64, f64)]) -> Session {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+    rect(&mut s, 6.0, 6.0, 474.0, 354.0);
+    for x in [238.0, 242.0] {
+        line(&mut s, [x, 6.0], [x, 150.0]);
+        line(&mut s, [x, 222.0], [x, 354.0]);
+    }
+    s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+    for (c, a0, a1) in arcs {
+        s.execute("arc", &json!({"center": c, "radius": 36.0, "start": a0, "end": a1})).unwrap();
+    }
+    s
+}
+
+#[test]
+fn a_double_door_is_one_door_and_connecting_doors_are_two() {
+    // A pair of 3' leaves meeting in the middle of the 6' opening, both swinging east.
+    let mut s = opening_plan(&[([240.0, 150.0], 0.0, 90.0), ([240.0, 222.0], 270.0, 360.0)]);
+    let r = build(&mut s, 1, false);
+    assert_eq!(r["doors"], json!(1), "a double door is one door: {r}");
+    // Its one door object carries both leaves (spans the whole opening).
+    let (n, b, _) = built(&s, "door", "Level 1");
+    assert_eq!(n, 1);
+    assert!(b.height() > 60.0, "both leaves: {b:?}");
+
+    // The same pair drawn twice is still one door.
+    let mut s =
+        opening_plan(&[([240.0, 150.0], 0.0, 90.0), ([240.0, 222.0], 270.0, 360.0), ([240.0, 150.0], 0.0, 90.0), ([240.0, 222.0], 270.0, 360.0)]);
+    let r = build(&mut s, 1, false);
+    assert_eq!(r["doors"], json!(1), "{r}");
+
+    // Back-to-back connecting doors (one leaf swinging into each room) stay two doors.
+    let mut s = opening_plan(&[([240.0, 150.0], 0.0, 90.0), ([240.0, 150.0], 90.0, 180.0)]);
+    let r = build(&mut s, 1, false);
+    assert_eq!(r["doors"], json!(2), "{r}");
+
+    // Two single doors side by side in one wall, both swinging east, hinges apart: two doors.
+    let mut s = opening_plan(&[([240.0, 150.0], 0.0, 90.0)]);
+    for x in [238.0, 242.0] {
+        line(&mut s, [x, 260.0], [x, 300.0]);
+    }
+    s.execute("arc", &json!({"center": [240.0, 300.0], "radius": 36.0, "start": 270.0, "end": 360.0})).unwrap();
+    let r = build(&mut s, 1, false);
+    assert_eq!(r["doors"], json!(2), "{r}");
+}

@@ -1762,6 +1762,7 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
     });
     before - list.len()
 }
+
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
 fn is_circuit_tag(tag: &str) -> bool {
