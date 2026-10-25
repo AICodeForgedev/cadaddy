@@ -2676,10 +2676,12 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-/// `job.status` — current job status.
+/// `job.status` — current job status (returns `{running: false}` when no job exists).
 fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
-    let job = load_job(s)?.ok_or_else(|| bad("job.status", "no job running"))?;
-    Ok(job_status_value(&job))
+    match load_job(s)? {
+        Some(job) => Ok(job_status_value(&job)),
+        None => Ok(json!({"running": false, "hint": "no job running — start one with job.start {pdfs, goal}"})),
+    }
 }
 
 /// `job.explain {stage}` — explain what a stage does and its current state.

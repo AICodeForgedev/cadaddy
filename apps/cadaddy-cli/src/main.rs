@@ -453,12 +453,11 @@ fn bim(args: &[String]) -> Result<(), String> {
     let p = json!({ "path": path, "force": force });
     let r = s.execute("bim.from_pdf", &p).map_err(|e| e.to_string())?;
     // If --out was given, copy the last .cdy to that path.
-    if let Some(out_path) = &out {
-        if let Some(last) = r.get("cdy_paths").and_then(Value::as_array).and_then(|a| a.last()).and_then(Value::as_str) {
-            if last != out_path {
-                std::fs::copy(last, out_path).map_err(|e| format!("{out_path}: {e}"))?;
-            }
-        }
+    if let Some(out_path) = &out
+        && let Some(last) = r.get("cdy_paths").and_then(Value::as_array).and_then(|a| a.last()).and_then(Value::as_str)
+        && last != out_path
+    {
+        std::fs::copy(last, out_path).map_err(|e| format!("{out_path}: {e}"))?;
     }
     outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
     let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);

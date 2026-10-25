@@ -113,6 +113,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("bim_from_pdf", json!({ "path": &synthetic_pdf(dir) }), json!({ "path": 5 })),
         ("workflows", json!({}), json!("bad")),
         ("job_status", json!({}), json!({ "id": 5 })),
+        ("guided_job", json!({ "action": "status" }), json!({ "action": "fly" })),
         ("select", json!({ "all": true }), json!({ "handles": "1A" })),
         ("get_variable", json!({ "name": "CLAYER" }), json!({})),
         ("set_variable", json!({ "name": "LTSCALE", "value": 2 }), json!({ "name": "LTSCALE" })),
@@ -274,8 +275,10 @@ fn fake_app() -> (String, Arc<Mutex<Vec<String>>>) {
                 let v: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
                 let method = v["method"].as_str().unwrap_or_default().to_string();
                 seen.lock().unwrap().push(method.clone());
-                // The first connection dies before answering its second request.
-                if n == 0 && seen.lock().unwrap().len() >= 2 {
+                // The first connection dies before answering its third request (the version
+                // handshake sends an extra ping on each connect, so the first user call that
+                // loses its reply is now the third message on the wire, not the second).
+                if n == 0 && seen.lock().unwrap().len() >= 3 {
                     break;
                 }
                 let _ = writeln!(w, "{}", json!({ "id": v["id"], "ok": true, "result": method }));
@@ -295,7 +298,14 @@ fn the_app_bridge_reconnects_without_running_anything_twice() {
     // Later calls use the new connection.
     assert_eq!(r.call("engine.execute", json!({ "command": "line" })).unwrap(), json!("engine.execute"));
     let calls = got.lock().unwrap().clone();
-    assert_eq!(calls, ["ping", "drawing.inspect", "drawing.inspect", "engine.execute"], "only the read-only call was repeated");
+    // The version handshake sends a ping on each connect, so connections 0 and 1 each start
+    // with a handshake ping before the user call.  The read-only "drawing.inspect" is still the
+    // only user-level call that gets repeated.
+    assert_eq!(
+        calls,
+        ["ping", "ping", "drawing.inspect", "ping", "drawing.inspect", "engine.execute"],
+        "only the read-only call was repeated (handshake pings are expected on each connect)"
+    );
 }
 
 #[test]
