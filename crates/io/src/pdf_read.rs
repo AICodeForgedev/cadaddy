@@ -231,6 +231,9 @@ struct Stroke {
     layer: Option<String>,
     /// From a curve (Bézier) of 4 segments forming a closed loop: a circle candidate.
     curve_loop: bool,
+    /// Drawn with four or more curves that end where they start (closed or not): CAD geometry
+    /// (a circle, a symbol's round outline); plot fonts flatten their arcs into lines.
+    curved_loop: bool,
     /// Painting order on the page.
     order: usize,
 }
@@ -1265,11 +1268,24 @@ impl<'a> Interp<'a> {
                         ring.push(f);
                     }
                     for piece in clip_polyline(&ring, r) {
-                        self.out.strokes.push(Stroke { pts: piece, closed: false, pen, layer: layer.clone(), curve_loop: false, order });
+                        self.out.strokes.push(Stroke {
+                            pts: piece,
+                            closed: false,
+                            pen,
+                            layer: layer.clone(),
+                            curve_loop: false,
+                            curved_loop: false,
+                            order,
+                        });
                     }
                     continue;
                 }
-                self.out.strokes.push(Stroke { pts, closed, pen, layer: layer.clone(), curve_loop: closed && curves == 4, order });
+                let ends_meet = match (pts.first(), pts.last()) {
+                    (Some(a), Some(b)) => (a.0 - b.0).hypot(a.1 - b.1) < 0.01,
+                    _ => false,
+                };
+                let curved_loop = curves >= 4 && (closed || ends_meet);
+                self.out.strokes.push(Stroke { pts, closed, pen, layer: layer.clone(), curve_loop: closed && curves == 4, curved_loop, order });
             }
         }
     }
@@ -1505,6 +1521,7 @@ fn join(strokes: Vec<Stroke>) -> Vec<Stroke> {
                 let Some(j) = cand else { break };
                 let Some(mut next) = open.get_mut(j).and_then(Option::take) else { break };
                 cur.order = cur.order.min(next.order);
+                cur.curved_loop |= next.curved_loop;
                 // orient `next` to continue from `tip`
                 let starts_here = next.pts.first().is_some_and(|p| q(*p) == q(tip));
                 if at_end {
@@ -1955,6 +1972,8 @@ struct RecoveredText {
     layer: Option<String>,
     /// The OCR's confidence in the reading (0..1); `None` when the value came from real text.
     confidence: Option<f64>,
+    /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
+    rotation: f64,
 }
 
 /// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
@@ -2049,6 +2068,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             pen,
             layer,
             confidence: None,
+            rotation: 0.0,
         });
     }
     result
@@ -2170,6 +2190,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
                 pen: *pen,
                 layer: t.layer.clone(),
                 confidence: None,
+                rotation: 0.0,
             });
         }
     }
@@ -2208,7 +2229,8 @@ struct ShxTemplate {
     n_strokes: usize,
 }
 
-/// The gap (as a share of the larger stroke's size) under which two strokes join one glyph.
+/// The gap (as a share of the larger stroke's size, up to twice the smaller's) under which two
+/// strokes join one glyph.
 const OCR_JOIN_TOLERANCE: f64 = 0.05;
 
 /// Sample points per glyph, spread along its strokes by length (so a glyph the PDF drew as
@@ -2494,6 +2516,8 @@ pub struct OcrReport {
     pub glyphs: usize,
     /// Lone matches dropped as linework noise (a single straight stroke, punctuation alone).
     pub noise_dropped: usize,
+    /// Texts read in lettering that runs up or down the sheet.
+    pub turned: usize,
     /// The texts it recovered, with their confidence.
     pub words: Vec<OcrWord>,
 }
@@ -2527,7 +2551,9 @@ struct MatchedGlyph {
     confidence: f64,
     /// One straight stroke (an I, a 1, a dash or a slash): plain linework looks the same.
     straight: bool,
-    /// A single closed loop (an O, a D): alone it is as likely a small circle or box.
+    /// A single closed loop (an O, a D): alone it is as likely a small circle or box.  Also a
+    /// glyph with a curve-drawn loop in it (`Stroke::curved_loop`): alone it is a symbol (a
+    /// circle with a bar through it reads as a 6).
     ring: bool,
     /// The slant of its row.
     slant: f64,
@@ -2596,7 +2622,61 @@ fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
 /// Recover SHX-stroked text by OCR: cluster short strokes into individual glyph-sized groups,
 /// match each against stroke templates, and assemble matched glyphs into TEXT entities.
 /// Strokes in `excluded` (already read or part of a symbol) are left alone.
+/// Read stroked lettering in the three directions a plan uses: across the sheet, and up or down
+/// along a vertical wall.  The upright reading goes first; its words (two or more letters or
+/// digits) stand.  Each turned direction then reads a turned copy of the strokes those words
+/// left, mapped back.  A turned word read upright falls apart into stray single glyphs, so a
+/// turned reading (of two or more letters or digits: a lone turned glyph is as often a tick)
+/// replaces the stray glyphs it shares strokes with.  Where the two turns read the same
+/// strokes (a word read upside down too), the reading with more letters wins, then the surer.
 fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
+    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded);
+    let alnum = |rt: &RecoveredText| rt.value.chars().filter(char::is_ascii_alphanumeric).count();
+    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2);
+    let mut taken: HashSet<usize> = excluded.clone();
+    for rt in &result {
+        taken.extend(&rt.stroke_indices);
+    }
+    let mut turned_readings: Vec<RecoveredText> = Vec::new();
+    // (the turn that lays the lettering flat, the turn back, the lettering's direction)
+    let turns: [(fn((f64, f64)) -> (f64, f64), fn((f64, f64)) -> (f64, f64), f64); 2] =
+        [(|(x, y)| (y, -x), |(u, v)| (-v, u), 90.0), (|(x, y)| (-y, x), |(u, v)| (v, -u), 270.0)];
+    for (flat, back, rotation) in turns {
+        let turned: Vec<Stroke> = strokes
+            .iter()
+            .map(|s| Stroke {
+                pts: s.pts.iter().map(|&p| flat(p)).collect(),
+                closed: s.closed,
+                pen: s.pen,
+                layer: s.layer.clone(),
+                curve_loop: s.curve_loop,
+                curved_loop: s.curved_loop,
+                order: s.order,
+            })
+            .collect();
+        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken);
+        for mut rt in texts.into_iter().filter(|rt| alnum(rt) >= 2) {
+            rt.at = back(rt.at);
+            rt.rotation = rotation;
+            turned_readings.push(rt);
+        }
+    }
+    // most letters first, then the surer reading (a word read upside down fits its letters worse)
+    turned_readings.sort_by(|a, b| alnum(b).cmp(&alnum(a)).then(b.confidence.unwrap_or(0.0).total_cmp(&a.confidence.unwrap_or(0.0))));
+    for rt in turned_readings {
+        if rt.stroke_indices.iter().any(|s| taken.contains(s)) {
+            continue;
+        }
+        taken.extend(&rt.stroke_indices);
+        report.turned += 1;
+        result.push(rt);
+    }
+    result.extend(stray.into_iter().filter(|rt| !rt.stroke_indices.iter().any(|s| taken.contains(s))));
+    (result, report)
+}
+
+/// Read the lettering that runs across the sheet (left to right, upright or slanted).
+fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
     let mut report = OcrReport::default();
     let templates = shx_templates();
     if templates.is_empty() {
@@ -2628,7 +2708,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
     // Two strokes of the same pen belong to one glyph when they touch: their gap is under a
     // twentieth of the larger one's size (at least 0.3 pt, for rounded coordinates).  Plot
     // fonts set their letters close (two letters' feet can be a tenth of the height apart), so
-    // the tolerance stays well under that.
+    // the tolerance stays well under that.  The larger size counts up to twice the smaller: a
+    // box drawn round a tag (one big loop) must not reach the lettering inside it.
     let cell = max_seg;
     let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
     for (ci, c) in cands.iter().enumerate() {
@@ -2660,7 +2741,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
                             continue;
                         }
                         let Some(n) = cands.get(ni) else { continue };
-                        let tol = (size(&cc.bb).max(size(&n.bb)) * OCR_JOIN_TOLERANCE).max(0.3);
+                        let (small, large) = (size(&cc.bb).min(size(&n.bb)), size(&cc.bb).max(size(&n.bb)));
+                        let tol = (large.min(small * 2.0) * OCR_JOIN_TOLERANCE).max(0.3);
                         if n.bb[0] > cc.bb[2] + tol || n.bb[2] < cc.bb[0] - tol || n.bb[1] > cc.bb[3] + tol || n.bb[3] < cc.bb[1] - tol {
                             continue;
                         }
@@ -2768,7 +2850,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
         let slant = row_slant(gi);
         if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates) {
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
-            let ring = members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed);
+            let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
+                || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
             // a lone upright stroke is an I (or a 1) at full letter height and a dot or an
             // apostrophe below it; a speck a fraction of the letters' height is a dot whatever
             // its shape (plot fonts draw a period as a tiny ring or diamond)
@@ -2987,8 +3070,10 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             let lone = run.len() == 1;
             let confidence = run.iter().map(|g| g.confidence).fold(1.0, f64::min);
             // linework reads as lone glyphs and runs of straight strokes (hatching: "////"); a
-            // lone loop is a small circle or box as often as an O
-            let noise = alnum == 0 || run.iter().all(|g| g.straight) || (lone && run.iter().any(|g| g.confidence < 0.7 || g.ring));
+            // lone loop is a small circle or box as often as an O, and a row of nothing but
+            // loops is a row of circles or boxes ("OOO", or "DDD" for boxes read turned)
+            let noise =
+                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7));
             if noise {
                 report.noise_dropped += 1;
                 continue;
@@ -2999,7 +3084,16 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
             let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
             let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
             let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
-            result.push(RecoveredText { at: (x0, y0), height: h, value, stroke_indices, pen: line.pen, layer, confidence: Some(confidence) });
+            result.push(RecoveredText {
+                at: (x0, y0),
+                height: h,
+                value,
+                stroke_indices,
+                pen: line.pen,
+                layer,
+                confidence: Some(confidence),
+                rotation: 0.0,
+            });
         }
     }
     (result, report)
@@ -3746,6 +3840,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     stats.insert("SHX OCR glyph clusters".into(), report.clusters);
                     stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
                     stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
+                    if report.turned > 0 {
+                        stats.insert("SHX OCR turned texts".into(), report.turned);
+                    }
                 }
                 if !ocr_texts.is_empty() {
                     stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
@@ -4179,7 +4276,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             align_pt: None,
             height: rt.height / 72.0 * k,
             value: rt.value.clone(),
-            rotation: 0.0,
+            rotation: rt.rotation.to_radians(),
             width_factor: 1.0,
             oblique: 0.0,
             style: "Standard".into(),
@@ -4950,15 +5047,17 @@ mod tests {
         // a circle drawn as 24 separate chords
         let pts: Vec<(f64, f64)> =
             (0..=24).map(|i| (f64::from(i) * std::f64::consts::TAU / 24.0).sin_cos()).map(|(s, c)| (10.0 + 5.0 * c, 10.0 + 5.0 * s)).collect();
-        let strokes: Vec<Stroke> =
-            pts.windows(2).map(|w| Stroke { pts: w.to_vec(), closed: false, pen, layer: None, curve_loop: false, order: 0 }).collect();
+        let strokes: Vec<Stroke> = pts
+            .windows(2)
+            .map(|w| Stroke { pts: w.to_vec(), closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 })
+            .collect();
         // a faceplate: two arcs of one circle and two short sides is not a circle
         let lens: Vec<(f64, f64)> = (0..=8)
             .map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 + std::f64::consts::FRAC_PI_2).sin_cos())
             .map(|(s, c)| (5.0 * c, 5.0 * s))
             .chain((0..=8).map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 - std::f64::consts::FRAC_PI_2).sin_cos()).map(|(s, c)| (5.0 * c, 5.0 * s)))
             .collect();
-        assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, order: 0 }).is_none());
+        assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 }).is_none());
         let joined = join(strokes);
         assert_eq!(joined.len(), 1);
         let c = joined.first().and_then(as_circle);

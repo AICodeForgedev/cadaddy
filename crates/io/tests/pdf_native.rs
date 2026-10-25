@@ -1092,3 +1092,153 @@ fn ocr_leaves_lone_rings_alone() {
     let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
     assert_eq!(text_values(&r), Vec::<String>::new(), "{:?}", r.ocr);
 }
+
+/// The recovered texts with their direction in whole degrees and their insertion point.
+fn texts_turned(r: &pdf_read::PdfImport) -> Vec<(String, i64, (f64, f64))> {
+    let mut v: Vec<(String, i64, (f64, f64))> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some((t.value.clone(), t.rotation.to_degrees().round() as i64, (t.insert.x, t.insert.y))),
+            _ => None,
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
+#[test]
+fn ocr_reads_lettering_turned_along_walls() {
+    // plans letter along vertical walls too: reading up the sheet (90°) and down it (270°)
+    let pdf = strokes_page(|c| {
+        // upright references, also giving the page-to-drawing mapping
+        shx_text("CORRIDOR", 80.0, 500.0, 9.0, 1.0, 0.0, c);
+        plot_text("DOOR 105", 400.0, 200.0, 9.0, 0.1, c);
+        // turned: the PDF's own transform turns the lettering, which starts at the origin
+        c.extend_from_slice(b"q 0 1 -1 0 300 100 cm ");
+        shx_text("STORAGE", 0.0, 0.0, 9.0, 1.0, 0.0, c);
+        c.extend_from_slice(b"Q q 0 1 -1 0 340 100 cm ");
+        plot_text("ROOM 1-2", 0.0, 0.0, 9.0, 0.1, c);
+        c.extend_from_slice(b"Q q 0 -1 1 0 500 400 cm ");
+        shx_text("EF-2", 0.0, 0.0, 9.0, 1.0, 0.0, c);
+        c.extend_from_slice(b"Q ");
+        // a block of notes stacked two letter heights apart is read along its lines, never
+        // down its columns
+        for (i, l) in ["NOTE 1 SEE E-501", "NOTE 2 PROVIDE GFCI", "NOTE 3 TYP", "NOTE 4 EXISTING"].iter().enumerate() {
+            shx_text(l, 80.0, 400.0 - i as f64 * 18.0, 9.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let got = texts_turned(&r);
+    let found: Vec<(&str, i64)> = got.iter().map(|(v, a, _)| (v.as_str(), *a)).collect();
+    assert_eq!(
+        found,
+        vec![
+            ("CORRIDOR", 0),
+            ("DOOR 105", 0),
+            ("EF-2", 270),
+            ("NOTE 1 SEE E-501", 0),
+            ("NOTE 2 PROVIDE GFCI", 0),
+            ("NOTE 3 TYP", 0),
+            ("NOTE 4 EXISTING", 0),
+            ("ROOM 1-2", 90),
+            ("STORAGE", 90)
+        ],
+        "{:?}",
+        r.ocr
+    );
+    assert_eq!(r.ocr.turned, 3);
+    assert_eq!(r.stats.get("SHX OCR turned texts").copied(), Some(3));
+    // a turned text starts where its lettering starts: map page points to the drawing by the
+    // two upright references (their lettering starts at its drawing point too)
+    let at = |v: &str| got.iter().find(|t| t.0 == v).map(|t| t.2).expect("text");
+    let (a, b) = (at("CORRIDOR"), at("DOOR 105"));
+    let (kx, ky) = ((b.0 - a.0) / 320.0, (b.1 - a.1) / -300.0);
+    let page = |p: (f64, f64)| (80.0 + (p.0 - a.0) / kx, 500.0 + (p.1 - a.1) / ky);
+    for (v, want) in [("STORAGE", (300.0, 100.0)), ("ROOM 1-2", (340.0, 100.0)), ("EF-2", (500.0, 400.0))] {
+        let p = page(at(v));
+        assert!((p.0 - want.0).abs() < 1.5 && (p.1 - want.1).abs() < 1.5, "{v} starts at {p:?}, not {want:?}");
+    }
+}
+
+#[test]
+fn ocr_reads_tags_inside_boxes() {
+    // a room tag in a box drawn round it 2 pt off the lettering: the box's sides join
+    // into one big loop, which must not reach the letters (a wide box made "MECHANICA")
+    // on a 36" x 24" sheet, where a glyph-sized stroke runs to 80 pt: the box is one
+    let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+    {
+        let c = &mut c;
+        for (i, (name, num)) in [("MECHANICAL", "103"), ("ELECTRICAL", "119"), ("CONFERENCE", "129")].iter().enumerate() {
+            let (x, y) = (100.0, 500.0 - i as f64 * 60.0);
+            let end = shx_text(name, x + 2.0, y + 13.0, 6.75, 1.0, 0.0, c);
+            shx_text(num, x + 2.0, y + 2.0, 6.75, 1.0, 0.0, c);
+            let (w, h) = (end - x + 2.0, 13.0 + 6.75 + 2.0);
+            c.extend_from_slice(
+                format!(
+                    "{x} {y} m {} {y} l S {} {y} m {} {} l S {} {} m {x} {} l S {x} {} m {x} {y} l S ",
+                    x + w,
+                    x + w,
+                    x + w,
+                    y + h,
+                    x + w,
+                    y + h,
+                    y + h,
+                    y + h
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    c.extend_from_slice(b"Q");
+    let pdf = pdf_sized(&c, 2592, 1728);
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["103", "119", "129", "CONFERENCE", "ELECTRICAL", "MECHANICAL"]), "{:?}", r.ocr);
+}
+
+#[test]
+fn ocr_leaves_curve_drawn_symbols_alone() {
+    // device symbols: a circle drawn with four curves (closed or not) and a bar through it read
+    // as a "6"; plot fonts flatten their arcs, so a lone glyph with a curve-drawn loop is a
+    // symbol.  The tags beside the symbols are still read.
+    let pdf = strokes_page(|c| {
+        for i in 0..6 {
+            let (x, y, r) = (100.0 + f64::from(i) * 60.0, 300.0, 4.0);
+            let k = 0.5523 * r;
+            let close = if i % 2 == 0 { "h " } else { "" };
+            c.extend_from_slice(
+                format!(
+                    "{} {y} m {} {} {} {} {x} {} c {} {} {} {} {} {y} c {} {} {} {} {x} {} c {} {} {} {} {} {y} c {close}S {} {y} m {} {y} l S ",
+                    x + r,
+                    x + r,
+                    y + k,
+                    x + k,
+                    y + r,
+                    y + r,
+                    x - k,
+                    y + r,
+                    x - r,
+                    y + k,
+                    x - r,
+                    x - r,
+                    y - k,
+                    x - k,
+                    y - r,
+                    y - r,
+                    x + k,
+                    y - r,
+                    x + r,
+                    y - k,
+                    x + r,
+                    x - r,
+                    x + r
+                )
+                .as_bytes(),
+            );
+            shx_text("EF", x + 8.0, y + 2.0, 6.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["EF"; 6]), "{:?}", r.ocr);
+}
