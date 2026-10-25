@@ -261,7 +261,7 @@ fn info(path: &str, full: bool) -> Result<(), String> {
     } else {
         // Short summary: file, format, entities, extents, units, layer/block counts.
         let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
-        let entities = v.get("entities").and_then(Value::as_u64).unwrap_or(0);
+        let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
         let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
         let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
         let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
@@ -274,6 +274,8 @@ fn info(path: &str, full: bool) -> Result<(), String> {
             "blocks": blocks,
             "units": units,
             "extents": extents,
+            // Records a damaged file lost stay visible without --full.
+            "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
         });
         outln!("{}", serde_json::to_string_pretty(&short).unwrap_or_default());
     }

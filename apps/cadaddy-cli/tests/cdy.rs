@@ -29,7 +29,7 @@ fn p(dir: &Path, name: &str) -> String {
 }
 
 fn objects(file: &str) -> u64 {
-    let v: Vec<Value> = serde_json::Deserializer::from_str(&ok(&["info", file])).into_iter::<Value>().map(Result::unwrap).collect();
+    let v: Vec<Value> = serde_json::Deserializer::from_str(&ok(&["info", file, "--full"])).into_iter::<Value>().map(Result::unwrap).collect();
     let inspect = v.last().unwrap();
     inspect["entityCount"].as_u64().unwrap_or_else(|| panic!("{inspect}"))
 }
@@ -102,7 +102,7 @@ fn info_shows_a_cdy_files_manifest_and_chunk_sizes() {
     let dir = folder("info");
     ok(&["sample", "floorplan", &p(&dir, "plan.dxf")]);
     ok(&["convert", &p(&dir, "plan.dxf"), &p(&dir, "plan.cdy")]);
-    let out = ok(&["info", &p(&dir, "plan.cdy")]);
+    let out = ok(&["info", &p(&dir, "plan.cdy"), "--full"]);
     // One JSON document (REPORT-0.7.8-battle #17): the container and the drawing's summary.
     let v: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
     assert!(v["entityCount"].as_u64().unwrap() > 10, "{v}");
