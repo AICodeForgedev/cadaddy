@@ -141,7 +141,8 @@ struct Signer<'a> {
     work: usize,
     /// When set, a block's signature also covers its base point, units, annotative and overlay
     /// flags and xref file, with a relative xref path taken from the folder given, and the
-    /// signatures of a multileader and a dimension cover their blocks'.
+    /// signatures of a multileader and a dimension cover their blocks'. An anonymous block's
+    /// signature then leaves out its name.
     frames: Option<Option<&'a std::path::Path>>,
 }
 
@@ -190,9 +191,14 @@ impl<'a> Signer<'a> {
             return *v;
         }
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut h);
+        let block = self.d.block(name);
+        // With frames, an anonymous block (`*D3`, `*U7`) is signed by its contents only: the
+        // same block can have another generated name in another drawing.
+        if !(self.frames.is_some() && block.is_some_and(|b| b.anonymous)) {
+            key.hash(&mut h);
+        }
         if depth < MAX_BLOCK_DEPTH
-            && let Some(b) = self.d.block(name)
+            && let Some(b) = block
         {
             if let Some(folder) = self.frames {
                 let mut xref = b.xref_path.clone();
