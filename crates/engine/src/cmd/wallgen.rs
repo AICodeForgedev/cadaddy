@@ -248,8 +248,17 @@ pub(crate) fn remove_made(d: &mut Drawing) -> usize {
     hs.len()
 }
 
+/// How many models this process has built (WALLGEN, `model.build` and their rebuilds).
+static BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many models this process has built so far (diagnostics: a rebuild nobody needed shows).
+pub fn builds_so_far() -> usize {
+    BUILDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Build the drawing's 3D building from `g`; the counts.
 pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
+    BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
     let gs = groups(&scene);
@@ -374,6 +383,12 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Ok(st) = s.state() else { return };
     let Some(g) = st.wallgen.clone().filter(|g| g.auto) else { return };
     if Arc::ptr_eq(before, &st.doc) || plan(before, &g) == plan(&st.doc, &g) {
+        return;
+    }
+    // Built during this command (a guided job builds as one of its steps) from the plan as it
+    // is now: the model is current.
+    let built = st.model_record.as_ref().and_then(|r| r.built.as_ref());
+    if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc) || plan(&b.0, &g) == plan(&st.doc, &g)) {
         return;
     }
     // Rebuilt keeping the hand edits whose plan objects didn't change (those did: see
@@ -853,14 +868,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         }
     }
     // The source of each wall: the line it was found on (the nearest wall-layer object).
+    // (Each object's centre worked out once: per wall and comparison it was most of a big plan's build.)
+    let centres: Vec<(Vec2, Handle)> = wall_ents.iter().map(|e| (cadaddy_doc::entity_bounds(d, e, 0).center(), e.handle)).collect();
     for w in &mut pl.walls {
         let mid = (w.a + w.b) * 0.5;
-        if let Some(e) = wall_ents.iter().min_by(|x, y| {
-            let dx = cadaddy_doc::entity_bounds(d, x, 0).center().dist(mid);
-            let dy = cadaddy_doc::entity_bounds(d, y, 0).center().dist(mid);
-            dx.total_cmp(&dy)
-        }) {
-            w.source = e.handle;
+        if let Some((_, h)) = centres.iter().min_by(|x, y| x.0.dist(mid).total_cmp(&y.0.dist(mid))) {
+            w.source = *h;
         }
     }
     for e in &centre_ents {

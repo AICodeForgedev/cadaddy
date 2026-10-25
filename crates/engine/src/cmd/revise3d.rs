@@ -63,6 +63,25 @@ type TagKey = (String, String, String);
 pub struct ModelRecord {
     pub plan: Vec<PlanItem>,
     pub made: HashMap<Handle, (u64, Option<TagKey>)>,
+    /// The drawing as the build left it (shared, not copied): a plan unchanged since then needs
+    /// no rebuild, even when the build was one step of a longer command.
+    pub built: Option<BuiltDrawing>,
+}
+
+/// The drawing a build left; two are equal when they are the same drawing.
+#[derive(Clone)]
+pub struct BuiltDrawing(pub std::sync::Arc<cadaddy_doc::Drawing>);
+
+impl PartialEq for BuiltDrawing {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for BuiltDrawing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BuiltDrawing({} objects)", self.0.model.len())
+    }
 }
 
 fn fnv(s: &str) -> u64 {
@@ -176,7 +195,8 @@ pub(crate) fn record(s: &mut Session, g: &WallGen) {
         d.model.iter().filter(|e| wallgen::made_as(e).is_some()).map(|e| (e.handle, (fingerprint(e), tag_key(e)))).collect();
     plan.extend(room_items(s));
     if let Ok(st) = s.state_mut() {
-        st.model_record = Some(ModelRecord { plan, made });
+        let built = Some(BuiltDrawing(std::sync::Arc::clone(&st.doc)));
+        st.model_record = Some(ModelRecord { plan, made, built });
     }
 }
 

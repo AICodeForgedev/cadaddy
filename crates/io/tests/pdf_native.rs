@@ -815,3 +815,187 @@ fn stroked_device_marks_tag_symbols() {
     let f_texts = r.drawing.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "F")).count();
     assert_eq!(f_texts, 0);
 }
+
+// -----------------------------------------------------------------------------------------
+// Q5261 importfix2: OCR without hidden text, and E sheets keep DO NOT SCALE
+// -----------------------------------------------------------------------------------------
+
+fn texts_of(r: &pdf_read::PdfImport) -> Vec<String> {
+    r.drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(t.value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn ocr_reads_stroked_lettering_on_a_page_without_hidden_text() {
+    // The SHX lettering of a print without its searchable copy (no rendering-mode-3 text) is
+    // read from the strokes; the long line stays linework.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
+    }
+    content.extend_from_slice(b"BT /F1 10 Tf 72 500 Td (Sample Title) Tj ET Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert!(r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "OCR ran: {:?}", r.stats);
+    let texts = texts_of(&r);
+    assert!(texts.iter().any(|t| t.contains('H')), "the stroked H is read: {texts:?}");
+    assert!(texts.iter().any(|t| t == "Sample Title"), "{texts:?}");
+    assert!(r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0)), "long line kept");
+}
+
+#[test]
+fn ocr_skips_pages_whose_lettering_is_real_text() {
+    // A page lettered in real text (a Revit or TrueType print): short strokes there are symbol
+    // linework, not lettering, so the OCR leaves them alone.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
+    }
+    for i in 0..120 {
+        let (x, y) = (60 + (i % 10) * 70, 380 + (i / 10) * 18);
+        content.extend_from_slice(format!("BT /F1 6 Tf {x} {y} Td (Room {i}) Tj ET ").as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(r.stats.get("SHX text (OCR) recovered"), None, "no OCR on a page lettered in real text");
+    assert!(
+        r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).count() > 5,
+        "the strokes stay linework"
+    );
+    assert_eq!(texts_of(&r).len(), 120, "the real text is all there");
+}
+
+#[test]
+fn ocr_leaves_lone_straight_strokes_as_linework() {
+    // A plan's short pieces — wall ends, door jambs, duct and pipe ticks — are single straight
+    // strokes the size of a letter. The OCR reads the stroked word but leaves each lone stroke
+    // as linework (not an "I", "1" or "/"), so the wall, duct and pipe readers still see it.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 400.0, height, &mut content);
+    }
+    let mut stubs = 0;
+    for i in 0..30 {
+        let (x, y) = (90 + (i % 15) * 40, 150 + (i / 15) * 60);
+        // upright and leaning stubs, 8 pt long, well apart
+        let (dx, dy) = if i % 2 == 0 { (0, 8) } else { (5, 6) };
+        content.extend_from_slice(format!("{x} {y} m {} {} l S ", x + dx, y + dy).as_bytes());
+        stubs += 1;
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let texts = texts_of(&r);
+    assert!(texts.iter().any(|t| t.contains('H')), "the stroked word is still read: {texts:?}");
+    let bare = texts.iter().filter(|t| t.chars().all(|c| "I1l|-/\\'. ".contains(c))).count();
+    assert_eq!(bare, 0, "no lone stroke becomes a letter: {texts:?}");
+    let short_lines = r
+        .drawing
+        .model
+        .iter()
+        .filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).hypot(l.b.y - l.a.y) < 1.0))
+        .filter(|e| match &e.kind {
+            EntityKind::Line(l) => l.a.y.min(l.b.y) < 300.0 / 72.0,
+            _ => false,
+        })
+        .count();
+    assert_eq!(short_lines, stubs, "every stub stays a line");
+}
+
+#[test]
+fn ocr_without_hidden_text_keeps_the_strokes_as_linework() {
+    // With no hidden text to confirm it, an OCR word is added as text but its strokes stay in
+    // the plan: on a real sheet a "word" can be a wall corner, a jamb or duct ticks, and the
+    // wall, duct and pipe readers need those lines.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let linework_near_word = |r: &pdf_read::PdfImport| {
+        let near = |y: f64| y > 280.0 / 72.0 && y < 330.0 / 72.0;
+        r.drawing
+            .model
+            .iter()
+            .filter(|e| match &e.kind {
+                EntityKind::Line(l) => near(l.a.y),
+                EntityKind::LwPolyline(p) => p.vertices.first().is_some_and(|v| near(v.p.y)),
+                _ => false,
+            })
+            .count()
+    };
+    let read = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let raw = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    assert!(read.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "OCR ran: {:?}", read.stats);
+    assert!(texts_of(&read).iter().any(|t| t.contains('H')), "the word is read: {:?}", texts_of(&read));
+    assert!(linework_near_word(&raw) > 0, "the word is linework without recovery");
+    assert_eq!(linework_near_word(&read), linework_near_word(&raw), "every stroke of the word stays linework");
+    // the word is marked as an unconfirmed OCR read, in a style the drawing has
+    let ocr_styles: Vec<&str> = read
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) if t.value.contains('H') => Some(t.style.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(!ocr_styles.is_empty() && ocr_styles.iter().all(|st| *st == pdf_read::OCR_TEXT_STYLE), "{ocr_styles:?}");
+    assert!(read.drawing.text_styles.iter().any(|st| st.name == pdf_read::OCR_TEXT_STYLE), "the style is in the drawing");
+}
+
+const E_SHEET_WITH_NOTE: &[u8] =
+    b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (E-4) Tj ET BT /F1 8 Tf 600 80 Td (SCALE: 1/8\" = 1'-0\") Tj ET Q";
+
+#[test]
+fn e_sheet_drawn_at_its_note_when_asked_stays_flagged() {
+    // Opened on its own (nothing to register to), an E sheet comes in at its scale note so
+    // walls and rooms read at building size, and still says DO NOT SCALE.
+    let r =
+        pdf_read::read(&pdf_with(E_SHEET_WITH_NOTE), &PdfOptions { e_sheet_at_note_scale: true, ..PdfOptions::default() }).expect("PDF read failed");
+    assert_eq!(r.scale, 96.0, "drawn at the 1/8\" note");
+    assert!(r.do_not_scale, "still DO NOT SCALE");
+    assert!(r.needs_registration, "still needs registration");
+    assert!(r.scale_source.contains("DO NOT SCALE"), "{}", r.scale_source);
+
+    // the same through PDFIMPORT's JSON and through opening the file
+    let (_, report) = pdf_read::read_json(&pdf_with(E_SHEET_WITH_NOTE), &serde_json::json!({})).expect("pdfimport");
+    assert_eq!(report["scale"].as_f64(), Some(96.0), "{report}");
+    assert_eq!(report["do_not_scale"].as_bool(), Some(true), "{report}");
+    assert_eq!(report["needs_registration"].as_bool(), Some(true), "{report}");
+    let d = cadaddy_io::read(&pdf_with(E_SHEET_WITH_NOTE), "Sample E Sheet.pdf").expect("open");
+    let long = d.model.iter().any(|e| match &e.kind {
+        EntityKind::Line(l) => ((l.b.x - l.a.x).abs() - 128.0 / 72.0 * 96.0).abs() < 0.5,
+        EntityKind::LwPolyline(p) => {
+            p.vertices.len() == 2 && p.vertices.windows(2).any(|w| ((w[1].p.x - w[0].p.x).abs() - 128.0 / 72.0 * 96.0).abs() < 0.5)
+        }
+        _ => false,
+    });
+    assert!(long, "the opened E sheet's line is at 1/8\" scale");
+}
+
+#[test]
+fn e_sheet_without_a_note_stays_sheet_size_even_when_asked() {
+    let content = b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (E-4) Tj ET Q";
+    let r = pdf_read::read(&pdf_with(content), &PdfOptions { e_sheet_at_note_scale: true, ..PdfOptions::default() }).expect("PDF read failed");
+    assert_eq!(r.scale, 1.0);
+    assert!(r.do_not_scale);
+    assert!(!r.needs_registration, "no scale note to register with");
+}

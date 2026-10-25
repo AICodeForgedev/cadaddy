@@ -92,7 +92,22 @@ pub struct PdfOptions {
     /// Recover SHX-stroked text and detect repeated symbol clusters (on by default).  Turn off
     /// for downstream geometry analysis (walls, conduits, grids) that needs every stroke intact.
     pub recover_text: bool,
+    /// Draw an E sheet that has a scale note at that scale (off by default: E sheets are
+    /// DO NOT SCALE and stay sheet-size).  Either way the import reports `do_not_scale` and
+    /// `needs_registration`.  For a sheet opened on its own, with no architectural plan to
+    /// register it to, so walls and rooms still read at building size.
+    pub e_sheet_at_note_scale: bool,
+    /// Fills smaller than [`SMALL_FILL_IN`] on the sheet (pattern dots and dashes, lettering
+    /// painted as fills) become one solid hatch per layer and colour, not one hatch each: the
+    /// sheet looks the same with far fewer objects (off by default; on for print-set jobs).
+    pub merge_small_fills: bool,
 }
+
+/// The largest side (sheet inches) of a fill [`PdfOptions::merge_small_fills`] merges: smaller
+/// than a wall's poché is long, larger than a pattern's dots and dashes.
+pub const SMALL_FILL_IN: f64 = 0.06;
+/// Most outlines one merged fill holds.
+const MAX_MERGED_LOOPS: usize = 4_000;
 
 /// The layer annotations (markups) are drawn on.
 pub const MARKUP_LAYER: &str = "PDF-MARKUP";
@@ -101,6 +116,12 @@ pub const MARKUP_LAYER: &str = "PDF-MARKUP";
 /// linework, as AutoCAD writes SHX text) goes on, turned off: the sheet shows the lettering
 /// once, and its words can still be searched and listed.
 pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
+
+/// The text style of words the SHX stroke OCR read on a page without hidden text to confirm
+/// them.  They are searchable text, but a guess: two ticks beside a stroke read as `8"`, a
+/// corner and a dash as `EL`.  Readers that take text as evidence (duct sizes and heights) skip
+/// this style.
+pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
 
 impl Default for PdfOptions {
     fn default() -> Self {
@@ -118,6 +139,8 @@ impl Default for PdfOptions {
             image_folder: None,
             image_prefix: "pdf-image".into(),
             recover_text: true,
+            e_sheet_at_note_scale: false,
+            merge_small_fills: false,
         }
     }
 }
@@ -144,12 +167,126 @@ pub struct PdfImport {
 
 /// The number of pages.
 pub fn page_count(bytes: &[u8]) -> Result<u32> {
-    let doc = load(bytes)?;
+    let doc = load_cached(bytes)?;
     Ok(u32::try_from(doc.get_pages().len()).unwrap_or(u32::MAX))
 }
 
 fn load(bytes: &[u8]) -> Result<Document> {
-    Document::load_mem(bytes).map_err(|e| IoError::Format(format!("PDF: {e}")))
+    match Document::load_mem(bytes) {
+        Ok(doc) => Ok(doc),
+        Err(first_err) => {
+            // Attempt xref rebuild: find `startxref` candidates by scanning backwards for
+            // earlier xref offsets (incremental saves leave multiple). The last one may be
+            // damaged while an earlier one is still valid.
+            if let Some(repaired) = try_repair_xref(bytes) {
+                return Ok(repaired);
+            }
+            Err(IoError::Format(format!("PDF: {first_err}")))
+        }
+    }
+}
+
+/// Scan `bytes` for `startxref` markers and try loading with each candidate offset (oldest
+/// first), so a PDF with a damaged final xref section can still be read from an earlier save.
+fn try_repair_xref(bytes: &[u8]) -> Option<Document> {
+    // Collect all `startxref` positions (there may be several in an incrementally saved PDF).
+    let needle = b"startxref";
+    let mut positions = Vec::new();
+    for i in 0..bytes.len().saturating_sub(needle.len()) {
+        if bytes.get(i..i + needle.len()) == Some(needle) {
+            positions.push(i);
+        }
+    }
+    if positions.len() < 2 {
+        // Only one (or zero) startxref — nothing earlier to try.
+        return None;
+    }
+    // Try each startxref from the oldest: build patched bytes where %%EOF points at that xref.
+    for &pos in positions.iter().rev().skip(1) {
+        // Read the offset number after this startxref marker.
+        let after = pos + needle.len();
+        let tail = std::str::from_utf8(bytes.get(after..bytes.len().min(after + 30))?).ok()?;
+        let offset_str = tail.trim().lines().next()?.trim();
+        if offset_str.parse::<usize>().is_err() {
+            continue;
+        }
+        // Build a truncated copy up to (and including) this %%EOF.
+        if let Some(eof_pos) = bytes.get(after..).and_then(|b| {
+            let eof = b"%%EOF";
+            (0..b.len().saturating_sub(eof.len())).find(|&i| b.get(i..i + eof.len()) == Some(eof))
+        }) {
+            let end = after + eof_pos + b"%%EOF".len();
+            if let Ok(doc) = Document::load_mem(bytes.get(..end)?) {
+                return Some(doc);
+            }
+        }
+    }
+    None
+}
+
+/// Files at least this big are parsed once and kept for the next pages ([`load_cached`]).
+const CACHE_MIN_BYTES: usize = 256 * 1024;
+/// The parsed files kept: at most this many, and at most [`CACHE_MAX_BYTES`] of PDF between them.
+const CACHE_MAX_DOCS: usize = 6;
+const CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+type DocSlot = std::sync::Arc<std::sync::OnceLock<std::result::Result<std::sync::Arc<Document>, String>>>;
+
+/// The last PDFs parsed, by content: `(fingerprint, length, parsed)`.
+static DOC_CACHE: std::sync::Mutex<Vec<(u64, usize, DocSlot)>> = std::sync::Mutex::new(Vec::new());
+
+/// A fingerprint of a file's bytes (which parsed file a page read can reuse).
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ bytes.len() as u64;
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(c);
+        h = (h ^ u64::from_le_bytes(w)).wrapping_mul(0x0000_0100_0000_01B3).rotate_left(29);
+    }
+    for &b in chunks.remainder() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
+}
+
+/// The parsed document of `bytes`: a big file (a merged print set read page by page, by several
+/// threads at once) is parsed once while it stays among the last few read.
+fn load_cached(bytes: &[u8]) -> Result<std::sync::Arc<Document>> {
+    if bytes.len() < CACHE_MIN_BYTES {
+        return load(bytes).map(std::sync::Arc::new);
+    }
+    let key = fingerprint(bytes);
+    let slot: DocSlot = {
+        let Ok(mut cache) = DOC_CACHE.lock() else { return load(bytes).map(std::sync::Arc::new) };
+        if let Some((_, _, slot)) = cache.iter().find(|(k, n, _)| *k == key && *n == bytes.len()) {
+            std::sync::Arc::clone(slot)
+        } else {
+            let slot: DocSlot = std::sync::Arc::default();
+            cache.push((key, bytes.len(), std::sync::Arc::clone(&slot)));
+            while cache.len() > CACHE_MAX_DOCS || (cache.len() > 1 && cache.iter().map(|(_, n, _)| *n).sum::<usize>() > CACHE_MAX_BYTES) {
+                cache.remove(0);
+            }
+            slot
+        }
+    };
+    // Other threads wanting the same file wait for this parse instead of parsing it again.
+    match slot.get_or_init(|| load(bytes).map(std::sync::Arc::new).map_err(|e| e.to_string())) {
+        Ok(doc) => Ok(std::sync::Arc::clone(doc)),
+        Err(e) => {
+            if let Ok(mut cache) = DOC_CACHE.lock() {
+                cache.retain(|(k, n, _)| !(*k == key && *n == bytes.len()));
+            }
+            Err(IoError::Format(e.clone()))
+        }
+    }
+}
+
+/// Forget the parsed files kept for the next pages (their memory is freed once no read uses them).
+pub fn clear_cache() {
+    if let Ok(mut cache) = DOC_CACHE.lock() {
+        cache.clear();
+    }
 }
 
 fn err(m: impl Into<String>) -> IoError {
@@ -1859,6 +1996,11 @@ fn content_class_layer(class: ContentClass) -> &'static str {
 // text at the same position.  Matching hidden text to stroke clusters gives perfect accuracy.
 // ---------------------------------------------------------------------------------------------
 
+/// A page with this many real text items or more has its lettering as text: without hidden
+/// text or recovered SHX text it gets no OCR (Revit and TrueType prints; stroke OCR there only
+/// reads symbol ticks).
+const OCR_REAL_TEXT_LIMIT: usize = 100;
+
 /// A text entity recovered from SHX stroke clusters.
 struct RecoveredText {
     at: (f64, f64),
@@ -1867,6 +2009,8 @@ struct RecoveredText {
     stroke_indices: HashSet<usize>,
     pen: Pen,
     layer: Option<String>,
+    /// Read by the OCR with no hidden text to confirm it (drawn in [`OCR_TEXT_STYLE`]).
+    unconfirmed: bool,
 }
 
 /// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
@@ -1960,6 +2104,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             stroke_indices: matched.into_iter().collect(),
             pen,
             layer,
+            unconfirmed: false,
         });
     }
     result
@@ -2080,6 +2225,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
                 stroke_indices: indices.iter().copied().collect(),
                 pen: *pen,
                 layer: t.layer.clone(),
+                unconfirmed: false,
             });
         }
     }
@@ -2185,6 +2331,16 @@ fn sample_polyline_norm(pts: &[(f64, f64)], x0: f64, y0: f64, w: f64, h: f64, n:
             out.push(((x - x0) / w, (y - y0) / h));
         }
     }
+}
+
+/// Whether a stroke is one straight line: every point within 10% of its length from the chord.
+fn is_straight(pts: &[(f64, f64)]) -> bool {
+    let (Some(&(ax, ay)), Some(&(bx, by))) = (pts.first(), pts.last()) else { return true };
+    let len = (bx - ax).hypot(by - ay);
+    if len < 1e-9 {
+        return false;
+    }
+    pts.iter().all(|&(x, y)| ((x - ax) * (by - ay) - (y - ay) * (bx - ax)).abs() / len <= len * 0.1)
 }
 
 /// Compute the directed chamfer distance from `a` to `b`.
@@ -2336,6 +2492,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         bb: [f64; 4],
         indices: HashSet<usize>,
         pen: Pen,
+        /// One straight stroke ("I", "1", "-", "/"): what a wall end, a jamb or a tick also is.
+        bare: bool,
     }
     let mut matched: Vec<MatchedGlyph> = Vec::new();
     for g in &glyphs {
@@ -2349,7 +2507,8 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         }
         if let Some((ch, _dist)) = match_glyph(&samples, aspect, g.members.len(), &templates) {
             let indices: HashSet<usize> = g.members.iter().map(|&ci| cands[ci].idx).collect();
-            matched.push(MatchedGlyph { ch, bb: g.bb, indices, pen: g.pen });
+            let bare = matches!(g.members.as_slice(), [ci] if cands.get(*ci).and_then(|c| strokes.get(c.idx)).is_some_and(|s| is_straight(&s.pts)));
+            matched.push(MatchedGlyph { ch, bb: g.bb, indices, pen: g.pen, bare });
         }
     }
 
@@ -2378,6 +2537,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
         let mut word = String::new();
         word.push(first.ch);
         let mut all_indices: HashSet<usize> = first.indices.clone();
+        let mut all_bare = first.bare;
         let word_x = first.bb[0];
         let word_y = first.bb[1];
         let mut prev_end = first.bb[2];
@@ -2399,14 +2559,25 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), already_used: &HashSet
             }
             word.push(next.ch);
             all_indices.extend(&next.indices);
+            all_bare &= next.bare;
             prev_end = next.bb[2];
             word_h = word_h.max(next.bb[3] - next.bb[1]);
             j += 1;
         }
 
-        // emit the word (or single character)
-        if !word.trim().is_empty() {
-            result.push(RecoveredText { at: (word_x, word_y), height: word_h, value: word, stroke_indices: all_indices, pen, layer: layer.clone() });
+        // emit the word (or single character). A "word" of lone straight strokes only (an "I",
+        // "1-1", "//") is linework read as letters — wall ends, jambs, duct and pipe ticks — and
+        // its strokes stay linework for the wall, duct and pipe readers.
+        if !word.trim().is_empty() && !all_bare {
+            result.push(RecoveredText {
+                at: (word_x, word_y),
+                height: word_h,
+                value: word,
+                stroke_indices: all_indices,
+                pen,
+                layer: layer.clone(),
+                unconfirmed: false,
+            });
         }
         i = j;
     }
@@ -2850,7 +3021,7 @@ fn find_symbol_instances(
 
 /// Read page `opts.page` as a drawing.
 pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
-    let doc = load(bytes)?;
+    let doc = load_cached(bytes)?;
     let pages = doc.get_pages();
     let page_total = u32::try_from(pages.len()).unwrap_or(u32::MAX);
     let page_id = *pages.get(&opts.page.max(1)).ok_or_else(|| err(format!("page {} doesn't exist (the file has {page_total})", opts.page)))?;
@@ -2991,10 +3162,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     } else {
         false
     };
-    // E-sheets without a scale note are assumed DO NOT SCALE; with one, use it
-    let do_not_scale = if opts.recover_text { do_not_scale_visible || (is_e_sheet && best_note.is_none()) } else { false };
+    // E-sheets are DO NOT SCALE (reported either way); they stay sheet-size unless the caller
+    // asked for an E sheet's scale note to be used (a sheet opened on its own).
+    let e_sheet_drawn_to_note = is_e_sheet && !do_not_scale_visible && opts.e_sheet_at_note_scale && best_note.is_some();
+    let do_not_scale = do_not_scale_visible || (is_e_sheet && !e_sheet_drawn_to_note);
     let (mut scale, mut scale_source) = match (opts.scale, &best_note) {
         (Some(k), _) if k.is_finite() && k > 0.0 => (k, "option".to_string()),
+        (_, Some((k, note))) if e_sheet_drawn_to_note => {
+            (*k, format!("scale note {note} (E sheet: DO NOT SCALE, locations approximate; register it to the architectural plans)"))
+        }
         (_, Some((k, note))) if !do_not_scale => (*k, format!("scale note {note}")),
         (_, Some((k, note))) => {
             // DO NOT SCALE: keep scale=1 but record the note for registration
@@ -3183,11 +3359,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         // OCR pass: supplement with template-based glyph recognition for strokes not yet
         // claimed (by text or symbols).  Runs when SHX-like text is present: hidden text layer
         // (from an SHX-plotting CAD application) OR the fallback stage recovered any text
-        // (stroked lettering exists even without a hidden-text layer).
+        // (stroked lettering exists even without a hidden-text layer) OR the page has little
+        // real text, so its lettering is strokes.  A page lettered in real text with nothing
+        // recovered skips it: its short strokes are symbols and ticks, which the OCR would read
+        // as stray letters.
         let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
-        let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
+        let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT;
+        let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty() || lettering_is_strokes;
         if has_shx_evidence {
-            let ocr_texts = recover_shx_ocr(&strokes, sheet, &taken);
+            let mut ocr_texts = recover_shx_ocr(&strokes, sheet, &taken);
             if !ocr_texts.is_empty() {
                 stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
                 for rt in &ocr_texts {
@@ -3217,6 +3397,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     stats.insert("symbols tagged by stroked lettering".into(), more.len());
                 }
                 instances.extend(more);
+                // Without hidden text to confirm them, the OCR's words are added but their
+                // strokes stay linework: a misread wall corner, jamb or duct tick must not leave
+                // the plan (walls, duct and pipe chains read those strokes).  The symbols found
+                // above already kept their own lines away from the OCR.  Their style marks them
+                // as unconfirmed, so duct tags don't come from them.
+                if !has_hidden_text {
+                    for t in &mut ocr_texts {
+                        t.stroke_indices.clear();
+                        t.unconfirmed = true;
+                    }
+                }
                 recovered_texts.extend(ocr_texts);
             }
         }
@@ -3421,6 +3612,16 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     paint.extend(texts.iter().enumerate().map(|(i, t)| (t.order, 3, i)));
     paint.extend(images.iter().enumerate().map(|(i, im)| (im.order, 4, i)));
     paint.sort_unstable();
+    // small fills merged: (layer, colour, transparency) → (placed layer, colour, weight, outlines)
+    let mut small_fills: BTreeMap<(String, [u8; 3], u8), (String, Color, Lineweight, Vec<HatchLoop>)> = BTreeMap::new();
+    let small_pt = SMALL_FILL_IN * 72.0;
+    let is_small = |l: &[(f64, f64)]| {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &(x, y) in l {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        x1 - x0 <= small_pt && y1 - y0 <= small_pt
+    };
     // image files by their pixels (a logo on every sheet is one file)
     let mut image_files: HashMap<u64, String> = HashMap::new();
     let mut image_out: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)> = Vec::new();
@@ -3499,6 +3700,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     })
                     .collect();
                 if loops.is_empty() {
+                    continue;
+                }
+                if opts.merge_small_fills && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
+                    let e = small_fills
+                        .entry((f.layer.clone().unwrap_or_default(), f.pen.rgb, f.pen.transp))
+                        .or_insert_with(|| (layer, color, lw, Vec::new()));
+                    e.3.extend(loops.into_iter().map(|mut l| {
+                        l.outer = true;
+                        l
+                    }));
+                    *stats.entry("small fills merged".into()).or_default() += 1;
                     continue;
                 }
                 let hatch = Hatch {
@@ -3625,6 +3837,26 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
         }
     }
+    for ((_, _, transp), (layer, color, lw, loops)) in small_fills {
+        for chunk in loops.chunks(MAX_MERGED_LOOPS) {
+            let hatch = Hatch {
+                pattern: "SOLID".into(),
+                solid: true,
+                loops: chunk.to_vec(),
+                scale: 1.0,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            };
+            add(&mut d, layer.clone(), color, lw, transp, EntityKind::Hatch(Box::new(hatch)));
+            *stats.entry("solid fills".into()).or_default() += 1;
+        }
+    }
     // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
     // using glyph-matched characters instead of '?' placeholders
     let mut recovered_count = 0usize;
@@ -3644,10 +3876,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             rotation: 0.0,
             width_factor: 1.0,
             oblique: 0.0,
-            style: "Standard".into(),
+            style: if rt.unconfirmed { OCR_TEXT_STYLE.into() } else { "Standard".into() },
             halign: HAlign::default(),
             valign: VAlign::default(),
         };
+        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(OCR_TEXT_STYLE)) {
+            d.text_styles.push(TextStyle { name: OCR_TEXT_STYLE.into(), ..TextStyle::default() });
+        }
         add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
         recovered_count += 1;
     }
@@ -3812,7 +4047,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));
     }
-    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || (is_e_sheet && best_note.is_none());
+    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || is_e_sheet;
     let needs_registration = do_not_scale && best_note.is_some();
     Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, do_not_scale, needs_registration, pages: page_total, stats, notes, images: image_out })
 }
@@ -4256,7 +4491,8 @@ fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render
 
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
 /// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
-/// imageFolder?, imagePrefix?}`. Images are written as PNG files in `imageFolder` (created
+/// imageFolder?, imagePrefix?, fills?: "each" | "merge"}` (`merge`: small fills as one hatch per
+/// layer and colour, [`PdfOptions::merge_small_fills`]). Images are written as PNG files in `imageFolder` (created
 /// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
@@ -4290,6 +4526,10 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.markups = flag("markups", true);
     o.images = flag("images", true);
     o.recover_text = flag("recoverText", true);
+    // PDFIMPORT brings one sheet in: an E sheet with a scale note comes in at that scale
+    // (still reported do_not_scale + needs_registration) so it reads at building size.
+    o.e_sheet_at_note_scale = true;
+    o.merge_small_fills = p.get("fills").and_then(Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("merge"));
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();

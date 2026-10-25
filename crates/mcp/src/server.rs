@@ -27,7 +27,8 @@ pub const MAX_BATCH: usize = 1000;
 const INSTRUCTIONS: &str = "CADaddy is a 2D/3D CAD drafting app (an AutoCAD clone). Coordinates are drawing units, \
 y up. Fastest path: command_line with AutoCAD syntax, e.g. `line 0,0 10,0 10,5 c`, `circle 5,2.5 1`, \
 `rectang 0,0 4,3`, `offset 1` then pick, `zoom e`. Or execute with JSON (list_commands shows ids and params). \
-Verify with inspect_drawing / query_entities and look with render.";
+Verify with inspect_drawing / query_entities and look with render. \
+PDF to BIM in one call: bim_from_pdf {path: \"plan.pdf\"}. Call `workflows` for all main flows with examples.";
 
 pub struct Server {
     backend: Box<dyn Backend>,

@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
             .menu(&["Insert", "PDF Import..."])
-            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<drawing name> images\" next to the current drawing once it is saved, else a folder of the session's in the system temp folder that SAVE moves next to the drawing; never the PDF's folder), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), fills?: each|merge (merge: fills under 0.06 in on the sheet (pattern dots and dashes, lettering painted as fills) as one hatch per layer and colour; default each), imageFolder?: folder for the image PNG files (default \"<drawing name> images\" next to the current drawing once it is saved, else a folder of the session's in the system temp folder that SAVE moves next to the drawing; never the PDF's folder), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
             .interactive(|_| Ok(Box::new(PdfImportM::default()))),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
@@ -467,6 +467,147 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     Ok(report)
+}
+
+/// One page for [`import_pdf_pages`]: the file, its PDFIMPORT options (`page`, `scale`, …) and
+/// where its lower left goes (`None`: to the right of the batch's previous page).
+pub(crate) struct PdfPage {
+    pub path: String,
+    pub params: Value,
+    pub at: Option<Vec2>,
+}
+
+/// What [`import_pdf_pages`] did with one page.
+pub(crate) enum PageImport {
+    /// Imported: the PDFIMPORT report, with `rect` ([x0, y0, x1, y1], where the sheet landed).
+    Done(Value),
+    /// The same lettering and object count as an earlier page of the batch (the same sheet
+    /// printed in two files): not imported again.
+    Same(usize),
+    Failed(String),
+}
+
+/// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
+fn detected_scale(report: &Value) -> Option<f64> {
+    let src = report.get("scaleSource").and_then(Value::as_str)?;
+    let rest = src.get(src.find("scale ")? + 6..)?;
+    rest.get(..rest.find('x').unwrap_or(rest.len()))?.trim().parse::<f64>().ok().filter(|k| k.is_finite() && *k > 1.5)
+}
+
+/// What a converted page shows, for telling the same sheet in two files apart from another.
+fn page_fingerprint(d: &Drawing) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.model.len().hash(&mut h);
+    for e in d.model.iter() {
+        if let EntityKind::Text(t) = &e.kind {
+            t.value.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Several PDF pages into the current space, for print-set jobs: each file is read once, its
+/// pages converted on every core (a page per core at a time), then added one after another; the
+/// import check runs once at the end, not after every page. `full_scale`: a DO NOT SCALE sheet with a scale
+/// note (kept at sheet size by PDFIMPORT) is read again at that scale. `skip_same`: a page showing
+/// what an earlier one did is not imported twice. `on_page(session, i, result)` hears about each
+/// page as it is done.
+pub(crate) fn import_pdf_pages(
+    s: &mut Session,
+    pages: &[PdfPage],
+    full_scale: bool,
+    skip_same: bool,
+    on_page: &mut dyn FnMut(&mut Session, usize, &PageImport),
+) -> Result<Vec<PageImport>> {
+    let hooks = io().ok_or_else(|| bad("pdfimport", "file formats are not available in this build"))?;
+    let read_pdf = hooks.read_pdf.ok_or_else(|| bad("pdfimport", "PDF import is not available in this build"))?;
+    let mut files: BTreeMap<String, std::result::Result<Arc<Vec<u8>>, String>> = BTreeMap::new();
+    for pg in pages {
+        if !files.contains_key(&pg.path) {
+            files.insert(pg.path.clone(), read_file(&pg.path).map(Arc::new).map_err(|e| e.to_string()));
+        }
+    }
+    let convert = |pg: &PdfPage| -> std::result::Result<(Drawing, Value), String> {
+        let bytes = match files.get(&pg.path) {
+            Some(Ok(b)) => Arc::clone(b),
+            Some(Err(e)) => return Err(e.clone()),
+            None => return Err(format!("{}: not read", pg.path)),
+        };
+        let (d, report) = read_pdf(&bytes, &pg.params)?;
+        if full_scale
+            && pg.params.get("scale").is_none()
+            && report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false)
+            // an E sheet already drawn at its scale note (the reader does that) needs no re-read
+            && report.get("scale").and_then(Value::as_f64).is_none_or(|k| k <= 1.5)
+            && let Some(k) = detected_scale(&report)
+        {
+            let mut p = pg.params.clone();
+            p["scale"] = json!(k);
+            return read_pdf(&bytes, &p);
+        }
+        Ok((d, report))
+    };
+    // A page per core at a time: the converted pages wait in memory until they are added.
+    #[cfg(not(target_arch = "wasm32"))]
+    let batch = rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    let batch = 1usize;
+    let mut out: Vec<PageImport> = Vec::with_capacity(pages.len());
+    let mut seen: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut x = 0.0f64;
+    for (c, chunk) in pages.chunks(batch).enumerate() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let converted: Vec<std::result::Result<(Drawing, Value), String>> = {
+            use rayon::prelude::*;
+            chunk.par_iter().map(convert).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let converted: Vec<std::result::Result<(Drawing, Value), String>> = chunk.iter().map(convert).collect();
+        for (j, (pg, r)) in chunk.iter().zip(converted).enumerate() {
+            let i = c * batch + j;
+            let result = match r {
+                Err(e) => PageImport::Failed(e),
+                Ok((src, mut report)) => {
+                    let print = page_fingerprint(&src);
+                    match seen.get(&print) {
+                        Some(&first) if skip_same => PageImport::Same(first),
+                        _ => {
+                            seen.insert(print, i);
+                            let at = pg.at.unwrap_or(Vec2::new(x, 0.0));
+                            let file = std::path::Path::new(&pg.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            match import_drawing(s, &src, at, 1.0, &file) {
+                                Ok(_) => {
+                                    let w = report.get("sheet").and_then(|v| v.get(0)).and_then(Value::as_f64).unwrap_or(0.0);
+                                    let h = report.get("sheet").and_then(|v| v.get(1)).and_then(Value::as_f64).unwrap_or(0.0);
+                                    let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0).unwrap_or(1.0);
+                                    let (w, h) = (w * k, h * k);
+                                    if w.is_finite() && h.is_finite() {
+                                        report["rect"] = json!([at.x, at.y, at.x + w, at.y + h]);
+                                        x = x.max(at.x + w + 0.05 * w);
+                                    }
+                                    report["entities"] = json!(src.model.len());
+                                    PageImport::Done(report)
+                                }
+                                Err(e) => PageImport::Failed(e.to_string()),
+                            }
+                        }
+                    }
+                }
+            };
+            on_page(s, i, &result);
+            out.push(result);
+        }
+    }
+    if out.iter().any(|r| matches!(r, PageImport::Done(_)))
+        && let Ok(d) = s.doc()
+    {
+        let check = super::import_check::check_drawing(d);
+        if let Ok(d) = s.doc_mut() {
+            super::import_check::store_result(d, &check);
+        }
+    }
+    Ok(out)
 }
 
 /// Copy `src`'s model space into the current space (scaled about the origin, then moved to

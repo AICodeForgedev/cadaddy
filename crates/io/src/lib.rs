@@ -244,7 +244,8 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         "dgn" => dgn::read(bytes),
         "svg" | "svgz" => svg_read::read(bytes, name),
         "pdf" => {
-            let r = pdf_read::read(bytes, &pdf_read::PdfOptions::default())?;
+            // a sheet opened on its own: an E sheet's scale note is used (nothing to register to)
+            let r = pdf_read::read(bytes, &pdf_read::PdfOptions { e_sheet_at_note_scale: true, ..pdf_read::PdfOptions::default() })?;
             let mut d = r.drawing;
             d.read_notes.extend(r.notes);
             Ok(d)

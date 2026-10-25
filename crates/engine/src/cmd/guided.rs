@@ -164,11 +164,23 @@ pub struct StageState {
     pub result: Option<Value>,
     /// Error message if status is Error.
     pub error: Option<String>,
+    /// How long the stage's work took (ms), once it has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 impl StageState {
     pub fn new(name: StageName) -> Self {
-        Self { name, status: StageStatus::Pending, questions: Vec::new(), verify: Vec::new(), completeness: Vec::new(), result: None, error: None }
+        Self {
+            name,
+            status: StageStatus::Pending,
+            questions: Vec::new(),
+            verify: Vec::new(),
+            completeness: Vec::new(),
+            result: None,
+            error: None,
+            elapsed_ms: None,
+        }
     }
 
     /// All unanswered questions across regular, verify and completeness.
@@ -396,6 +408,12 @@ pub struct GuidedJob {
     /// True once plan-sheet PDFs have been imported into the session's drawing(s).
     #[serde(default)]
     sheets_loaded: bool,
+    /// Where the job's drawing is saved after each stage (none: no checkpoints).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<String>,
+    /// What the print folder held when the job started ([`prints_stamp`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prints_stamp: String,
     /// The set's sheet index from classify: one entry per real sheet, and the levels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<Value>,
@@ -473,6 +491,8 @@ impl GuidedJob {
             question_seq: 0,
             finding_seq: 0,
             sheets_loaded: false,
+            checkpoint: None,
+            prints_stamp: String::new(),
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
@@ -1240,8 +1260,11 @@ pub fn extract_levels_from_title(title: &str) -> Vec<String> {
 ///
 /// `printset.open` only creates metadata; this bridges to actual drawing content.
 /// Each current plan-type sheet (plan / enlarged_plan, its own page of its file) is imported
-/// via `pdfimport`, side by side: a level's sheets together, lowest level first, each in its own
-/// rectangle (`job.sheet_regions`), so what is read on a sheet carries the sheet's level.
+/// once, side by side (never on top of each other): a level's sheets together, lowest level
+/// first, each in its own rectangle (`job.sheet_regions`), so what is read on a sheet carries the
+/// sheet's level. A page showing the same sheet as one already imported (the full set and a
+/// discipline set) is not imported again. The pages are converted on every core, each file read
+/// once, small fills merged ([`super::exchange::import_pdf_pages`]).
 fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.sheets_loaded {
         return Ok(());
@@ -1278,38 +1301,96 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
     // A several-view sheet (3RD and 4TH FLOOR PLANS) is one entry per view but one page:
     // import each page once, with its lowest level.
+    let page_of = |sh: &Value| sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
     let mut seen = std::collections::HashSet::new();
-    all.retain(|sh| {
-        seen.insert((sh.get("file").and_then(Value::as_str).unwrap_or("").to_string(), sh.get("page").and_then(Value::as_u64).unwrap_or(0)))
+    all.retain(|sh| match sh.get("file").and_then(Value::as_str) {
+        Some(f) if !f.is_empty() => seen.insert((f.to_string(), page_of(sh))),
+        _ => false,
     });
-    let mut x = 0.0f64;
-    let mut regions = Vec::new();
-    for sh in &all {
-        let lo = s.doc().map_or(0, |d| d.handseed);
-        let imported = import_one_sheet(s, &job.pdfs_path, sh, [x, 0.0])?;
-        let hi = s.doc().map_or(0, |d| d.handseed);
-        if hi > lo {
-            let name = [sh.get("number"), sh.get("file")].into_iter().flatten().filter_map(Value::as_str).find(|n| !n.is_empty()).unwrap_or("?");
-            job.sheet_spans.push(SheetSpan { sheet: name.to_string(), lo, hi });
-        }
-        if let Some(rect) = imported {
-            let w = (rect[2] - rect[0]).abs();
-            x = rect[2].max(x) + 0.05 * w;
+    let pages: Vec<super::exchange::PdfPage> = all
+        .iter()
+        .map(|sh| {
+            let file = sh.get("file").and_then(Value::as_str).unwrap_or_default();
+            let path = if std::path::Path::new(file).is_absolute() { file.to_string() } else { format!("{}/{}", job.pdfs_path, file) };
+            // Images (logos, scans) aren't used by the job, and must not land in the user's print
+            // folder; pattern-sized fills are merged (they are most of a print set's objects).
+            let mut params = json!({"page": page_of(sh), "images": false, "fills": "merge"});
+            if let Some(k) = sh.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0) {
+                params["scale"] = json!(k);
+            }
+            super::exchange::PdfPage { path, params, at: None }
+        })
+        .collect();
+    let names: Vec<String> = all
+        .iter()
+        .map(|sh| {
             let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
-            let discipline = sh
-                .get("discipline")
-                .and_then(Value::as_str)
-                .filter(|d| !d.is_empty())
-                .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
-            regions.push(SheetRegion {
-                number: number.split('/').next().unwrap_or(number).to_string(),
-                level: level_of(sh),
-                discipline: discipline.to_ascii_uppercase(),
-                kind: kind(sh),
-                rect,
-            });
+            if number.is_empty() { format!("{}#{}", sh.get("file").and_then(Value::as_str).unwrap_or("?"), page_of(sh)) } else { number.to_string() }
+        })
+        .collect();
+    let stage = job.current_stage().map_or(StageName::Rooms, |st| st.name);
+    let tag = progress_tag(job, stage);
+    let total = pages.len();
+    // The objects each sheet's import made (`lo..hi`): each sheet's legend applies to its own
+    // symbols only (pages are added one after another, so their handles don't interleave).
+    let mut spans: Vec<SheetSpan> = Vec::new();
+    let mut last_seed = s.doc().map_or(0, |d| d.handseed);
+    let mut on_page = |s: &mut Session, i: usize, r: &super::exchange::PageImport| {
+        let name = names.get(i).map_or("?", String::as_str);
+        let seed = s.doc().map_or(0, |d| d.handseed);
+        if matches!(r, super::exchange::PageImport::Done(_)) && seed > last_seed {
+            spans.push(SheetSpan { sheet: name.to_string(), lo: last_seed, hi: seed });
+        }
+        last_seed = seed;
+        let what = match r {
+            super::exchange::PageImport::Done(rep) => format!("imported ({} objects)", rep.get("entities").and_then(Value::as_u64).unwrap_or(0)),
+            super::exchange::PageImport::Same(j) => format!("same as {}, not imported again", names.get(*j).map_or("?", String::as_str)),
+            super::exchange::PageImport::Failed(e) => format!("could not import: {e}"),
+        };
+        report_progress(
+            s,
+            json!({"stage": stage.label(), "step": "sheets", "done": i + 1, "total": total, "sheet": name}),
+            &format!("{tag}: sheet {}/{total} {name} {what}", i + 1),
+        );
+    };
+    let results = super::exchange::import_pdf_pages(s, &pages, true, true, &mut on_page)?;
+    let mut imported = 0usize;
+    let mut same = 0usize;
+    let mut placed = Vec::new();
+    let mut regions = Vec::new();
+    for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
+        match r {
+            super::exchange::PageImport::Done(rep) => {
+                imported += 1;
+                let rect = rep.get("rect").and_then(Value::as_array).and_then(|r| {
+                    let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
+                    <[f64; 4]>::try_from(v).ok()
+                });
+                if let Some(rect) = rect {
+                    let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
+                    let discipline = sh
+                        .get("discipline")
+                        .and_then(Value::as_str)
+                        .filter(|d| !d.is_empty())
+                        .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
+                    regions.push(SheetRegion {
+                        number: number.split('/').next().unwrap_or(number).to_string(),
+                        level: level_of(sh),
+                        discipline: discipline.to_ascii_uppercase(),
+                        kind: kind(sh),
+                        rect,
+                    });
+                }
+                if placed.len() < MAX_QUESTIONS_PER_STAGE {
+                    placed.push(json!({"sheet": name, "rect": rep.get("rect")}));
+                }
+            }
+            super::exchange::PageImport::Same(_) => same += 1,
+            // Non-fatal: log the error but continue with other sheets.
+            super::exchange::PageImport::Failed(e) => s.echo(format!("guided: could not import sheet {name}: {e}")),
         }
     }
+    job.sheet_spans.extend(spans);
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -1317,78 +1398,116 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         "pipeline",
         None,
         None,
-        Some(json!({"plan_sheets": all.len(), "imported": job.sheet_regions.len(), "total_sheets": sheet_arr.len()})),
+        Some(json!({
+            "plan_sheets": total,
+            "pages": total,
+            "imported": imported,
+            "same_pages": same,
+            "total_sheets": sheet_arr.len(),
+            "sheets": placed,
+        })),
     );
     Ok(())
 }
 
-/// Import a single sheet's page into the current drawing via `pdfimport`, its lower left at `at`.
-/// Returns the sheet's rectangle in the drawing (none when it could not be imported).
-///
-/// First imports at default scale (sheet size) to detect the architectural scale note,
-/// then re-imports at full scale if needed so that geometry is at building dimensions
-/// (walls are 6" thick, not 0.06" at sheet scale).
-fn import_one_sheet(s: &mut Session, base_dir: &str, sheet: &Value, at: [f64; 2]) -> Result<Option<[f64; 4]>> {
-    let file = match sheet.get("file").and_then(Value::as_str) {
-        Some(f) if !f.is_empty() => f,
-        _ => return Ok(None),
-    };
-    let abs_path = if std::path::Path::new(file).is_absolute() { file.to_string() } else { format!("{}/{}", base_dir, file) };
-    let page = sheet.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
-    // Use the sheet's known scale if available; otherwise let pdfimport detect it.
-    // Passing "scale": "auto" lets the reader use the detected architectural scale
-    // and override the DO NOT SCALE note (guided runs always need real dimensions).
-    let scale_val = sheet.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0);
-    // Images (logos, scans) aren't used by the job, and must not land in the user's print folder.
-    let params = if let Some(k) = scale_val {
-        json!({"path": abs_path, "page": page, "scale": k, "images": false, "at": at})
-    } else {
-        json!({"path": abs_path, "page": page, "images": false, "at": at})
-    };
-    let rect = |report: &Value| -> Option<[f64; 4]> {
-        let w = report.get("sheet").and_then(|v| v.get(0)).and_then(Value::as_f64)?;
-        let h = report.get("sheet").and_then(|v| v.get(1)).and_then(Value::as_f64)?;
-        let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0).unwrap_or(1.0);
-        let r = [at[0], at[1], at[0] + w * k, at[1] + h * k];
-        r.iter().all(|v| v.is_finite()).then_some(r)
-    };
-    match s.execute("pdfimport", &params) {
-        Ok(report) => {
-            // If the import was at sheet scale (DO NOT SCALE) and a scale was detected,
-            // re-import at full scale so wall/room detection works at building dimensions.
-            let needs_reg = report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false);
-            if needs_reg && scale_val.is_none() {
-                // Extract the detected scale factor from the scaleSource string
-                // e.g. "DO NOT SCALE (detected 1/8" = 1'-0", scale 96x — sheet kept at sheet size)"
-                let detected = report.get("scaleSource").and_then(Value::as_str).and_then(|src| {
-                    // Look for "scale NNx" pattern
-                    src.find("scale ").and_then(|i| {
-                        let rest = src.get(i + 6..)?;
-                        let end = rest.find('x').unwrap_or(rest.len());
-                        rest.get(..end)?.trim().parse::<f64>().ok()
-                    })
-                });
-                if let Some(k) = detected.filter(|k| *k > 1.5) {
-                    // Undo the sheet-scale import and redo at full scale.
-                    let _ = s.execute("u", &json!({}));
-                    let full_params = json!({"path": abs_path, "page": page, "scale": k, "images": false, "at": at});
-                    match s.execute("pdfimport", &full_params) {
-                        Ok(full) => return Ok(rect(&full)),
-                        Err(e) => {
-                            s.echo(format!("guided: full-scale re-import of {file} failed: {e}"));
-                            return Ok(None);
-                        }
-                    }
+// ─── Progress and checkpoints ───────────────────────────────────────────────
+
+/// Where a running job's progress lines go besides the `job.progress` events (the CLI prints
+/// them on stderr while the job runs).
+static PROGRESS_SINK: std::sync::RwLock<Option<fn(&str)>> = std::sync::RwLock::new(None);
+
+/// Send a running job's progress lines (one per stage and per sheet imported) to `sink`.
+pub fn set_progress_sink(sink: Option<fn(&str)>) {
+    if let Ok(mut g) = PROGRESS_SINK.write() {
+        *g = sink;
+    }
+}
+
+/// `job 3/8 rooms`: the stage and where it is in the job's pipeline.
+fn progress_tag(job: &GuidedJob, stage: StageName) -> String {
+    let active: Vec<StageName> = job.stages.iter().filter(|st| st.status != StageStatus::Skipped).map(|st| st.name).collect();
+    let at = active.iter().position(|n| *n == stage).map_or(0, |i| i + 1);
+    format!("job {at}/{} {}", active.len(), stage.label())
+}
+
+/// A `job.progress` event, and the line to the progress sink.
+fn report_progress(s: &mut Session, data: Value, line: &str) {
+    s.event("job.progress", data);
+    if let Ok(g) = PROGRESS_SINK.read()
+        && let Some(sink) = *g
+    {
+        sink(line);
+    }
+}
+
+/// The default checkpoint of a job: the job's drawing (with the job's state) after each stage,
+/// in the temporary folder, so a job cut off by a crash picks up where it was (`job.start` with
+/// the same prints and goal). Never in the print folder.
+fn default_checkpoint(job_id: &str) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(std::env::temp_dir().join("cadaddy-jobs").join(format!("{job_id}.cdy")).to_string_lossy().to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = job_id;
+        None
+    }
+}
+
+/// What the print folder holds (names, sizes, change times): a checkpoint of other prints isn't
+/// resumed.
+fn prints_stamp(pdfs: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(files) = cadaddy_mepfix::printset::discover_sheets(std::path::Path::new(pdfs)) {
+        for (name, path) in files {
+            name.hash(&mut h);
+            if let Ok(m) = std::fs::metadata(&path) {
+                m.len().hash(&mut h);
+                if let Ok(t) = m.modified()
+                    && let Ok(d) = t.duration_since(std::time::UNIX_EPOCH)
+                {
+                    d.as_secs().hash(&mut h);
                 }
             }
-            Ok(rect(&report))
-        }
-        Err(e) => {
-            // Non-fatal: log the error but continue with other sheets.
-            s.echo(format!("guided: could not import sheet {file}: {e}"));
-            Ok(None)
         }
     }
+    format!("{:016x}", h.finish())
+}
+
+/// Save the job's drawing (its state inside) to the job's checkpoint; a failure is a note, not
+/// a stop.
+fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
+    let Some(path) = job.checkpoint.clone() else { return };
+    let Some(hooks) = super::file::io() else { return };
+    if save_job(s, job).is_err() {
+        return;
+    }
+    let Ok(d) = s.doc() else { return };
+    let written = (hooks.write)(d, &path).and_then(|bytes| {
+        let p = std::path::Path::new(&path);
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
+        let part = p.with_extension("cdy.part");
+        std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&part, p).map_err(|e| e.to_string())
+    });
+    if let Err(e) = written {
+        s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
+    }
+}
+
+/// The unfinished job a checkpoint holds for these prints and this goal, with its drawing.
+fn read_checkpoint(path: &str, pdfs: &str, goal: &JobGoal, stamp: &str) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
+    let hooks = super::file::io()?;
+    let bytes = std::fs::read(path).ok()?;
+    let d = (hooks.read)(&bytes, path).ok()?;
+    let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
+    let job: GuidedJob = serde_json::from_value(agent.get("guided_job")?.clone()).ok()?;
+    (job.pdfs_path == pdfs && job.goal == *goal && job.prints_stamp == stamp && !job.is_done()).then_some((d, job))
 }
 
 /// An unlisted tag printed by several symbols: a question with a crop.
@@ -2413,8 +2532,19 @@ fn auto_answer_defaults(stage: &mut StageState) -> usize {
     answered
 }
 
-/// Advance the pipeline: run the current stage and generate questions.
+/// Advance the pipeline: run the current stage and generate questions. A finished job's
+/// checkpoint is removed.
 fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
+    let r = advance_stages(s, job);
+    if job.is_done()
+        && let Some(path) = &job.checkpoint
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    r
+}
+
+fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     loop {
         let stage_name = match job.current_stage() {
             Some(st) if st.status == StageStatus::Paused => {
@@ -2450,6 +2580,13 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
 
         // Run the stage.
+        let tag = progress_tag(job, stage_name);
+        report_progress(
+            s,
+            json!({"stage": stage_name.label(), "step": "start", "progress": job.progress()}),
+            &format!("{tag}: {}", stage_name.description()),
+        );
+        let started = web_time::Instant::now();
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -2462,8 +2599,22 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Estimate => run_estimate(s, job),
             StageName::Clash => run_clash(s, job),
         };
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(st) = job.stage_mut(stage_name) {
+            st.elapsed_ms = Some(ms);
+        }
+        let outcome = match &result {
+            Ok(_) => "done".to_string(),
+            Err(e) => format!("error: {e}"),
+        };
+        report_progress(
+            s,
+            json!({"stage": stage_name.label(), "step": "end", "elapsed_ms": ms, "ok": result.is_ok()}),
+            &format!("{tag}: {outcome} in {:.1} s", ms as f64 / 1000.0),
+        );
 
-        match result {
+        // Stop (the job pauses or ends in an error) or go on with the next stage.
+        let stop = match result {
             Ok(v) => {
                 // Check for blocking findings before marking done.
                 let has_blocking = job.findings.iter().any(|f| f.stage == stage_name && f.blocking);
@@ -2485,6 +2636,7 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         st.status = StageStatus::Done;
                     }
                     job.audit("stage_done", "pipeline", None, Some(stage_name), None);
+                    false
                 } else if has_blocking {
                     // MUST 1: blocking finding → Error, not Done.
                     let msg = job
@@ -2499,13 +2651,13 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         st.error = Some(msg.clone());
                     }
                     job.audit("stage_blocked", "pipeline", None, Some(stage_name), Some(json!({"blocking_findings": msg})));
-                    return Ok(());
+                    true
                 } else {
                     if let Some(st) = job.stage_mut(stage_name) {
                         st.status = StageStatus::Paused;
                     }
                     job.audit("stage_paused", "pipeline", None, Some(stage_name), Some(json!({"unanswered": unanswered_count})));
-                    return Ok(());
+                    true
                 }
             }
             Err(e) => {
@@ -2536,8 +2688,15 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     st.error = Some(msg.clone());
                 }
                 job.audit("stage_error", "pipeline", None, Some(stage_name), Some(json!({"error": msg})));
-                return Ok(());
+                true
             }
+        };
+        // A crash from here on loses no more than the next stage.
+        if !job.is_done() {
+            write_checkpoint(s, job);
+        }
+        if stop {
+            return Ok(());
         }
     }
 }
@@ -2620,6 +2779,38 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let mut job = GuidedJob::new(pdfs, goal);
+    // The checkpoint: a path, false (none), else the default in the temporary folder.
+    job.checkpoint = match p.get("checkpoint") {
+        Some(Value::Bool(false)) => None,
+        Some(Value::String(path)) if !path.trim().is_empty() => Some(path.trim().to_string()),
+        _ => default_checkpoint(&job.id),
+    };
+    job.prints_stamp = prints_stamp(pdfs);
+    // A job of these prints cut off before it finished goes on from its last stage.
+    let resume = p.get("resume").and_then(Value::as_bool).unwrap_or(true);
+    if resume
+        && let Some(path) = job.checkpoint.clone()
+        && let Some((d, mut saved)) = read_checkpoint(&path, pdfs, &job.goal, &job.prints_stamp)
+    {
+        *s.doc_mut()? = d;
+        // The print set's project lives in the session, not the drawing.
+        s.execute("printset.open", &json!({"path": pdfs}))?;
+        for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
+            st.status = StageStatus::Pending;
+        }
+        saved.checkpoint = Some(path.clone());
+        let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
+        let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
+        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
+        report_progress(s, data, &line);
+        s.echo(line);
+        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path})));
+        advance_pipeline(s, &mut saved)?;
+        save_job(s, &saved)?;
+        let mut status = job_status_value(&saved);
+        status["resumed"] = json!(true);
+        return Ok(status);
+    }
     job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str})));
 
     // Run the pipeline until it pauses or finishes.
@@ -2794,10 +2985,12 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-/// `job.status` — current job status.
+/// `job.status` — current job status (returns `{running: false}` when no job exists).
 fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
-    let job = load_job(s)?.ok_or_else(|| bad("job.status", "no job running"))?;
-    Ok(job_status_value(&job))
+    match load_job(s)? {
+        Some(job) => Ok(job_status_value(&job)),
+        None => Ok(json!({"running": false, "hint": "no job running — start one with job.start {pdfs, goal}"})),
+    }
 }
 
 /// `job.explain {stage}` — explain what a stage does and its current state.
@@ -2932,6 +3125,7 @@ fn job_status_value(job: &GuidedJob) -> Value {
                 "status": format!("{:?}", st.status),
                 "questions": st.questions.len() + st.verify.len() + st.completeness.len(),
                 "unanswered": st.unanswered().len(),
+                "elapsed_ms": st.elapsed_ms,
             })
         })
         .collect();
@@ -2949,6 +3143,8 @@ fn job_status_value(job: &GuidedJob) -> Value {
         "findings": job.findings.len(),
         "worklist_pending": pending_worklist,
         "rules_learned": job.rules.len(),
+        "elapsed_ms": job.stages.iter().filter_map(|st| st.elapsed_ms).sum::<u64>(),
+        "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
         "sheets": index_count(job, "sheets"),
         "levels": index_count(job, "levels"),
     })
@@ -3135,14 +3331,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"} → {job_id, goal, progress, done, current_stage, stages, open_questions, rules_learned}"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\", resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id, stage, question, why, choices, evidence, default, kind}, done?, progress, stage?}")
             .noundo(),
         CommandSpec::new("job.answer", "Answer Job Question", cmd_answer)
             .params("{id: question id, answer: value} → {answered, next?: question, done?, progress}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)
-            .params("{} → {job_id, goal, progress, done, current_stage, stages, open_questions, findings, worklist_pending, rules_learned}")
+            .params("{} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, checkpoint?, open_questions, findings, worklist_pending, rules_learned}")
             .noundo(),
         CommandSpec::new("job.explain", "Explain Job Stage", cmd_explain)
             .params("{stage?: name} → {stage, description, status, questions_total, questions_answered, result} or {stages}")

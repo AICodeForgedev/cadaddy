@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1072,
-    "count": 1072,
+    "callableAsJson": 1073,
+    "count": 1073,
     "ids": [
       "-attedit",
       "-block",
@@ -107,6 +107,7 @@
       "bim.bom",
       "bim.build",
       "bim.colour",
+      "bim.from_pdf",
       "bim.get_spec",
       "bim.prints",
       "bim.remove_type",
@@ -1163,8 +1164,9 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 40,
+    "count": 43,
     "tools": [
+      "bim_from_pdf",
       "bim_job",
       "bim_spec_import",
       "bim_types",
@@ -1182,6 +1184,7 @@
       "guided_job",
       "import_check",
       "inspect_drawing",
+      "job_status",
       "list_commands",
       "list_drawings",
       "mep",
@@ -1204,7 +1207,8 @@
       "switch_drawing",
       "undo",
       "wait_until_idle",
-      "watch_events"
+      "watch_events",
+      "workflows"
     ]
   },
   "parity": {
