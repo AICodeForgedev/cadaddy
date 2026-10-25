@@ -455,9 +455,13 @@ fn tinted_dim_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tint
     }
     let st = d.dim_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
     let base = format!("COMPARE_{}_{}", tag(color), st.name);
-    let new = tinted.next.find("dimension style", &base, d.dim_styles.len(), |i| suffixed(&base, i), |n| {
-        d.dim_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
-    });
+    let new = tinted.next.find(
+        "dimension style",
+        &base,
+        d.dim_styles.len(),
+        |i| suffixed(&base, i),
+        |n| d.dim_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n)),
+    );
     d.dim_styles.push(DimStyle {
         name: new.clone(),
         dim_line_color: Color::ByBlock,
@@ -478,9 +482,13 @@ fn tinted_table_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Ti
     }
     let st = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
     let base = format!("COMPARE_{}_{}", tag(color), st.name);
-    let new = tinted.next.find("table style", &base, d.table_styles.len(), |i| suffixed(&base, i), |n| {
-        d.table_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
-    });
+    let new = tinted.next.find(
+        "table style",
+        &base,
+        d.table_styles.len(),
+        |i| suffixed(&base, i),
+        |n| d.table_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n)),
+    );
     let names =
         [CellStyle::TITLE, CellStyle::HEADER, CellStyle::DATA].into_iter().map(str::to_string).chain(st.cell_styles.iter().map(|c| c.name.clone()));
     let mut cell_styles: Vec<CellStyle> = Vec::new();
