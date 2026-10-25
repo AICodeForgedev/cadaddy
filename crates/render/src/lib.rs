@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ao;
+pub mod bimview;
 mod cache;
 pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;

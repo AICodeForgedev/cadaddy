@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page)}")
             .noundo(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: realistic|shaded|conceptual|hidden|wireframe, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{path?: PNG file (else base64), width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -547,9 +547,11 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     use cadaddy_render::shade::{VisualStyle, fit, rasterize, scene};
     let (w, h) = size(p, 800, 600);
+    // The BIM view's look unless another style is asked for.
+    let bim = str_param(p, "style").is_none_or(|n| n.trim().eq_ignore_ascii_case("bim"));
     let style = match str_param(p, "style") {
-        Some(n) => VisualStyle::parse(n).ok_or_else(|| bad("model.render", format!("unknown style {n}")))?,
-        None => VisualStyle::Realistic,
+        Some(n) if !bim => VisualStyle::parse(n).ok_or_else(|| bad("model.render", format!("unknown style {n} (bim, realistic, shaded…)")))?,
+        _ => VisualStyle::ShadedEdges,
     };
     let (sp, _) = current(s, "model.render")?;
     let upf = units(&sp);
@@ -582,18 +584,44 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let target = vec3(p, "target")?;
     // Only the built model: a level's or room's objects without their ceilings (to see in).
     let only = level.clone().or_else(|| room.as_ref().map(|r| r.1.clone()));
+    // A level's floor: the slab over it (the next level's floor, tagged with this one) is left
+    // out like its ceilings.
+    let floor_z = only.as_ref().and_then(|l| sp.level(l)).map(|l| l.elevation_ft * upf);
+    let over = |b: &Built| {
+        let z0 = b.mesh.vertices.iter().map(|v| v.z).fold(f64::INFINITY, f64::min);
+        b.part == "floor" && floor_z.is_some_and(|f| z0.is_finite() && z0 > f + upf)
+    };
     let keep: Vec<Handle> = made
         .iter()
-        .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground"))
+        .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground" && !over(b)))
         .map(|b| b.handle)
         .collect();
-    let mut md = Drawing::new_imperial();
-    md.layers = d.layers.clone();
-    for h in &keep {
-        if let Some(e) = d.model.get(*h) {
-            md.model.push((**e).clone());
+    let md = if bim {
+        // Trade colours; the shell ghosted for a view from outside (`ghost`, else as the view
+        // has it), solid for a camera or a room seen from inside.
+        let mut look = super::bimlook::Look::of(d);
+        look.level = None;
+        look.sheet = false;
+        let inside = room.is_some() || eye.is_some();
+        let ghost = match p.get("ghost").and_then(Value::as_bool) {
+            Some(g) => g,
+            None => !inside && super::bimlook::ghosting(d, &look),
+        };
+        // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
+        // are on the sheet's (and the built model's) own coordinates.
+        let stack = only.is_none() && eye.is_none() && p.get("around").is_none_or(Value::is_null) && p.get("mark").is_none_or(Value::is_null);
+        let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
+        super::bimlook::compose(d, &look, ghost, stack, &|e, _| keep.contains(&e.handle))
+    } else {
+        let mut md = Drawing::new_imperial();
+        md.layers = d.layers.clone();
+        for h in &keep {
+            if let Some(e) = d.model.get(*h) {
+                md.model.push((**e).clone());
+            }
         }
-    }
+        md
+    };
     let ext = md.extents(&Space::Model);
     let size = ext.width().max(ext.height());
     let tol = if size.is_finite() && size > 0.0 { size / 1500.0 } else { 1.0 };
@@ -643,7 +671,12 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             let poly = clip_tri(&t.p, &keep_in);
             for k in 1..poly.len().saturating_sub(1) {
                 if let (Some(a), Some(b), Some(c)) = (poly.first(), poly.get(k), poly.get(k + 1)) {
-                    sc.tris.push(cadaddy_render::shade::Tri::plain([*a, *b, *c], t.color));
+                    // The BIM look keeps the material (a ghost stays see-through).
+                    sc.tris.push(if bim {
+                        cadaddy_render::shade::Tri { p: [*a, *b, *c], ..t }
+                    } else {
+                        cadaddy_render::shade::Tri::plain([*a, *b, *c], t.color)
+                    });
                 }
             }
         }
@@ -676,9 +709,14 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(d, top)], red));
     }
     let view = fit(&sc, proj, w, h).ok_or_else(|| bad("model.render", "nothing to fit in the view"))?;
-    let raster = rasterize(&sc, &view, style, bg);
+    let raster = if bim {
+        cadaddy_render::bimview::rasterize_bim(&sc, &view, bg, &cadaddy_render::bimview::BimShade::default())
+    } else {
+        rasterize(&sc, &view, style, bg)
+    };
     let png = raster.encode_png().ok_or_else(|| bad("model.render", "the image couldn't be encoded"))?;
-    let mut out = json!({ "width": view.width_px, "height": view.height_px, "triangles": sc.tris.len() });
+    let mut out =
+        json!({ "width": view.width_px, "height": view.height_px, "triangles": sc.tris.len(), "style": if bim { "bim" } else { style.name() } });
     deliver(png, p, &mut out)?;
     Ok(out)
 }
