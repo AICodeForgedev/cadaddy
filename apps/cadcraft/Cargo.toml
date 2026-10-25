@@ -4,6 +4,7 @@ description = "CADCraft desktop app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version = "1.95"
 publish = false
 default-run = "cadcraft"
 
@@ -16,7 +17,7 @@ cadcraft-ui-egui = { workspace = true }
 cadcraft-io = { workspace = true }
 # For the shared per-session control-token helper (control_server.rs authentication).
 cadcraft-mcp = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links", "persistence"] }
+eframe = { workspace = true, features = ["clipboard", "wgpu", "accesskit", "wayland", "x11", "links", "persistence"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

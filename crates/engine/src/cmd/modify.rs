@@ -517,7 +517,7 @@ impl Interactive for StretchM {
             return m.prompt();
         }
         match (self.phase, self.corner) {
-            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).base(c),
+            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).corner(c),
             (StretchPhase::Select, None) => Prompt::new(if self.removing { "Remove objects" } else { "Select objects" }, Accept::POINT),
             (StretchPhase::Base, _) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).default("Displacement"),
             (StretchPhase::Displacement, _) => Prompt::new("Specify displacement", Accept::POINT).default("0,0"),
@@ -1397,21 +1397,17 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             // The dimension as drawn: its overrides, DIMSCALE (0 = the drawing's) and text font.
             let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
             let g = cadcraft_render::dimension_in(d, dm);
-            let mut v: Vec<Entity> = g
-                .lines
-                .iter()
-                .filter_map(|l| {
-                    if l.len() == 2 {
-                        Some(Entity { handle: Handle(0), common: e.common.clone(), kind: line(*l.first()?, *l.get(1)?) })
-                    } else {
-                        Some(Entity {
-                            handle: Handle(0),
-                            common: e.common.clone(),
-                            kind: lwpoly(l.iter().map(|p| PolyVertex::new(*p)).collect(), false),
-                        })
-                    }
-                })
-                .collect();
+            let line_entity = |l: &Vec<Vec2>| {
+                if l.len() == 2 {
+                    Some(Entity { handle: Handle(0), common: e.common.clone(), kind: line(*l.first()?, *l.get(1)?) })
+                } else {
+                    Some(Entity { handle: Handle(0), common: e.common.clone(), kind: lwpoly(l.iter().map(|p| PolyVertex::new(*p)).collect(), false) })
+                }
+            };
+            // The text's marks (arc length symbol, DIMINSPECT frame) go after the text background.
+            let text_marks = &g.text_marks;
+            let marks = |want: bool| g.lines.iter().enumerate().filter(move |(i, _)| text_marks.contains(i) == want).map(|(_, l)| l);
+            let mut v: Vec<Entity> = marks(false).filter_map(&line_entity).collect();
             for t in &g.fills {
                 if let [a, b, c] = t.as_slice() {
                     v.push(Entity {
@@ -1421,6 +1417,20 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     });
                 }
             }
+            // DIMTFILL 2: the text background as a SOLID in DIMTFILLCLR, over the lines and
+            // arrowheads, under the text and its marks (SOLID corners go 1, 2, 4, 3).
+            if style.text_fill == 2
+                && let [p0, p1, p2, p3] = g.text_fill.as_slice()
+            {
+                let fill = style.text_fill_color;
+                let color = if fill == cadcraft_doc::color::Color::ByBlock { e.common.color } else { fill };
+                v.push(Entity {
+                    handle: Handle(0),
+                    common: cadcraft_doc::Common { color, ..e.common.clone() },
+                    kind: EntityKind::Solid(cadcraft_doc::Solid { corners: [v3(*p0), v3(*p1), v3(*p3), v3(*p2)] }),
+                });
+            }
+            v.extend(marks(true).filter_map(&line_entity));
             if !g.value.is_empty() {
                 v.push(Entity {
                     handle: Handle(0),

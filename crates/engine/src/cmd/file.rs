@@ -362,6 +362,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(opened(s, i, false))
 }
 
+/// `close [index]`: cancel the running command, remove the drawing (default: active), keep the active index valid, and bump the document epoch; an unknown index is an error.
 fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
     let i = p.get("index").and_then(Value::as_u64).map(|i| i as usize).unwrap_or(s.active);
     if i >= s.docs.len() {
@@ -376,13 +377,16 @@ fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active >= s.docs.len() {
         s.active = s.docs.len().saturating_sub(1);
     }
+    s.bump_doc_epoch();
     ok()
 }
 
+/// `closeall`: cancel the running command, remove every drawing, reset the active index to 0 and bump the document epoch.
 fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     s.cancel();
     s.docs.clear();
     s.active = 0;
+    s.bump_doc_epoch();
     ok()
 }
 
@@ -487,6 +491,7 @@ fn drawing_version(s: &Session, path: &str) -> Version {
     if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
+/// `document.switch index`: require the index, cancel the running command, activate that drawing and bump the epoch even if it was already active (screenshot identity).
 fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
     let i = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad("document.switch", "`index` is required"))? as usize;
     if i >= s.docs.len() {
@@ -494,6 +499,11 @@ fn run_switch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.cancel();
     s.active = i;
+    // Bump even when `i` is already active. This is intentionally conservative: the command
+    // cancels the active command, and a screenshot client can only see observed state, not
+    // whether the switch was a no-op. Rejecting an outstanding capture is safer than returning
+    // an image whose queueing identity the client cannot distinguish from a real switch.
+    s.bump_doc_epoch();
     ok()
 }
 

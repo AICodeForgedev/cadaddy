@@ -1393,16 +1393,21 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     // dimension's own colour (#1052).
     let in_color = |color: Color| Common { layer: layer.into(), color, ..Common::default() };
     let (dim_c, ext_c, text_c) = (in_color(style.dim_line_color), in_color(style.ext_line_color), in_color(style.text_color));
-    for (i, l) in g.lines.iter().enumerate() {
+    let line_entities = |i: usize, l: &[Vec2]| -> Vec<Entity> {
         let c = match g.line_roles.get(i) {
             Some(cadcraft_render::LineRole::Ext) => &ext_c,
             _ => &dim_c,
         };
-        for seg in l.windows(2) {
-            if let [a, b] = seg {
-                out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }) });
-            }
-        }
+        l.windows(2)
+            .filter_map(|seg| match seg {
+                [a, b] => Some(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }) }),
+                _ => None,
+            })
+            .collect()
+    };
+    // The text's marks (arc length symbol, DIMINSPECT frame) go after the text background.
+    for (i, l) in g.lines.iter().enumerate().filter(|(i, _)| !g.text_marks.contains(i)) {
+        out.extend(line_entities(i, l));
     }
     for t in &g.fills {
         if let [a, b, cc] = t.as_slice() {
@@ -1412,6 +1417,20 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 kind: EntityKind::Solid(Solid { corners: [a.to3(0.0), b.to3(0.0), cc.to3(0.0), cc.to3(0.0)] }),
             });
         }
+    }
+    // DIMTFILL 2: the text background in DIMTFILLCLR, under the text and its marks (SOLID
+    // corners go 1, 2, 4, 3).
+    if style.text_fill == 2
+        && let [p0, p1, p2, p3] = g.text_fill.as_slice()
+    {
+        out.push(Entity {
+            handle: Handle(0),
+            common: in_color(style.text_fill_color),
+            kind: EntityKind::Solid(Solid { corners: [p0.to3(0.0), p1.to3(0.0), p3.to3(0.0), p2.to3(0.0)] }),
+        });
+    }
+    for (i, l) in g.lines.iter().enumerate().filter(|(i, _)| g.text_marks.contains(i)) {
+        out.extend(line_entities(i, l));
     }
     if !g.value.is_empty() {
         out.push(Entity {
@@ -2290,8 +2309,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
                 w.dimval(*code, enc, false);
                 continue;
             }
-            // Table groups where the file version has them, else xdata.
-            if version >= dxf_ext::NEWER_SINCE {
+            // Table groups where the file version has them, else xdata. DIMTFILL and DIMTFILLCLR
+            // are written only when set, as other writers do, so a style without a text
+            // background has a single 70 (its flags).
+            if version >= dxf_ext::newer_since(*code) {
+                if matches!(*code, 69 | 70) && v.get(*field) == defaults.get(*field) {
+                    continue;
+                }
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) {
                 newer.i(1070, i64::from(*code));

@@ -1083,7 +1083,9 @@ impl Interactive for RevcloudM {
         let first_kw: &[&str] = &["Arc length", "Object", "Rectangular", "Polygonal", "Freehand", "Style"];
         match (self.kind, self.pts.len()) {
             (CloudKind::Rect, 0) => Prompt::new("Specify first corner point", Accept::POINT).kw(first_kw).default("Object"),
-            (CloudKind::Rect, _) => Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()),
+            (CloudKind::Rect, _) => {
+                Prompt { corner: true, ..Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()) }
+            }
             (CloudKind::Poly, 0) => Prompt::new("Specify start point", Accept::POINT).kw(first_kw).default("Object"),
             (CloudKind::Poly, 1) => Prompt::new("Specify next point", Accept::POINT).base_opt(self.pts.last().copied()),
             (CloudKind::Poly, _) => Prompt::new("Specify next point", Accept::POINT).kw(&["Undo"]).base_opt(self.pts.last().copied()),
@@ -1631,10 +1633,9 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
     let first = if centered { a - Vec2::new(w / 2.0, h / 2.0).rotate(rot) } else { a };
     let k = rect_kind(first, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
+    // A rectangle has its own thickness option and does not take THICKNESS.
     let th = f64_or(p, "thickness", 0.0);
-    if th != 0.0 {
-        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
-    }
+    s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
     added(hd)
 }
 
@@ -1683,10 +1684,8 @@ impl RectM2 {
         }
         let first = self.origin(w, h).unwrap_or(a);
         let hd = s.add_entity(rect_kind(first, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
-        if self.thickness != 0.0 {
-            let t = self.thickness;
-            s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
-        }
+        let t = self.thickness;
+        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
         Ok(Step::Done)
     }
     /// The rectangle's local origin (the corner `rect_kind` draws from) for a size: the first
