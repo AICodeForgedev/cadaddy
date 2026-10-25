@@ -2309,8 +2309,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
                 w.dimval(*code, enc, false);
                 continue;
             }
-            // Table groups where the file version has them, else xdata.
+            // Table groups where the file version has them, else xdata. DIMTFILL and DIMTFILLCLR
+            // are written only when set, as other writers do, so a style without a text
+            // background has a single 70 (its flags).
             if version >= dxf_ext::newer_since(*code) {
+                if matches!(*code, 69 | 70) && v.get(*field) == defaults.get(*field) {
+                    continue;
+                }
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) {
                 newer.i(1070, i64::from(*code));

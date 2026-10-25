@@ -351,6 +351,13 @@ fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition(
         .unwrap_or_default();
     assert_eq!(drawn, [Some("*D2".to_string())], "the other drawing's PART is copied with its dimension block");
     assert_eq!(ends(&s, "*D2"), vec![5.0]);
+    // The colored copies redraw their dimensions instead of keeping colored copies of `*D` blocks.
+    let d = s.doc().unwrap();
+    let dim_copy = |n: &str| {
+        n.starts_with("COMPARE_")
+            && n.rsplit('_').next().is_some_and(|t| t.len() > 1 && t.starts_with('D') && t[1..].bytes().all(|c| c.is_ascii_digit()))
+    };
+    assert!(!d.blocks.keys().any(|n| dim_copy(n)), "{:?}", d.blocks.keys().collect::<Vec<_>>());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! DIMTFILL (group 69) and DIMTFILLCLR (group 70) survive DXF: as DIMSTYLE groups from R2007,
-//! after the record's own flags (also 70), and in the style's `CADCRAFT` "DIMVARS" xdata in older
-//! files. The `*D` block of a dimension with DIMTFILL 2 holds the background as a SOLID.
+//! after the record's own flags (also 70) and only when set, and in the style's `CADCRAFT`
+//! "DIMVARS" xdata in older files. The `*D` block of a dimension with DIMTFILL 2 holds the background as a SOLID.
 
 use cadcraft_color::Color;
 use cadcraft_doc::{Common, DimKind, DimStyle, Dimension, Drawing, EntityKind, Space};
@@ -51,6 +51,39 @@ fn text_fill_roundtrips_in_the_dimstyle_table() {
         assert!(rec.windows(4).any(|w| w == ["1070", "70", "1070", "3"]), "{v:?}: DIMTFILLCLR in the xdata");
         let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
         assert_eq!(back.dim_style("Fill").unwrap(), &filled(), "{v:?}");
+    }
+}
+
+#[test]
+fn unset_text_fill_writes_no_groups() {
+    let mut d = Drawing::new_imperial();
+    d.dim_styles.push(DimStyle { name: "Plain".into(), ..DimStyle::default() });
+    d.dim_styles.push(DimStyle { name: "Canvas".into(), text_fill: 1, ..DimStyle::default() });
+    let text = dxf(&d, Version::R2018);
+    let groups = |name| -> Vec<(String, String)> {
+        record(&text, name).chunks(2).filter_map(|p| Some((p.first()?.to_string(), p.get(1)?.to_string()))).collect()
+    };
+    let plain = groups("Plain");
+    // The record's flags are its only 70.
+    assert_eq!(plain.iter().filter(|g| g.0 == "70").count(), 1, "{plain:?}");
+    assert!(!plain.iter().any(|g| g.0 == "69"), "{plain:?}");
+    let canvas = groups("Canvas");
+    assert!(canvas.contains(&("69".into(), "1".into())), "{canvas:?}");
+    assert_eq!(canvas.iter().filter(|g| g.0 == "70").count(), 1, "the default DIMTFILLCLR is not written: {canvas:?}");
+    let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
+    assert_eq!(back.dim_style("Plain").unwrap().text_fill, 0);
+    assert_eq!(back.dim_style("Canvas").unwrap().text_fill, 1);
+}
+
+#[test]
+fn hostile_text_fill_groups_fall_back_to_defaults() {
+    let text = dxf(&drawing(), Version::R2018);
+    for (fill, color) in [("99", "3"), ("-5", "3"), ("2", "40000"), ("2", "-7")] {
+        let edited = text.replacen(" 69\r\n2\r\n 70\r\n3\r\n", &format!(" 69\r\n{fill}\r\n 70\r\n{color}\r\n"), 1);
+        assert_ne!(edited, text, "groups replaced");
+        let back = cadcraft_io::read_dxf(edited.as_bytes()).unwrap();
+        let st = back.dim_style("Fill").unwrap();
+        assert!(st.text_fill <= 2, "{fill}/{color}: {}", st.text_fill);
     }
 }
 

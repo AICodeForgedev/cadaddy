@@ -371,6 +371,9 @@ fn paint(d: &mut Drawing, e: &mut Entity, color: Color, tinted: &mut Tinted, dep
             }
         }
         EntityKind::Dimension(dm) => {
+            // Drawn again from its geometry in the object's color; a named copy of its `*D`
+            // block would stay behind in saved files.
+            dm.block = None;
             if let Ok(by_block) = serde_json::to_value(Color::ByBlock) {
                 for var in ["DIMCLRD", "DIMCLRE", "DIMCLRT"] {
                     dm.overrides.retain(|k, _| DimStyle::field_name(k) != DimStyle::field_name(var));
