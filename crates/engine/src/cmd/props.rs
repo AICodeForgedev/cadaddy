@@ -539,10 +539,17 @@ impl Interactive for LtscaleM {
     }
 }
 
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
 fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
     let t = f64_req("thickness", p, "thickness")?;
-    if !t.is_finite() || t.abs() > 1e12 {
-        return Err(bad("thickness", "thickness is out of range"));
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
     }
     s.doc_mut()?.header.set_f64("THICKNESS", t);
     Ok(json!({ "thickness": t }))
@@ -565,9 +572,16 @@ impl Interactive for ThicknessM {
             Input::Text(t) => t,
             _ => return Ok(Step::Continue),
         };
-        match super::machines::number(&text).map(|t| run_thickness(s, &json!({ "thickness": t }))) {
-            Some(Ok(_)) => Ok(Step::Done),
-            _ => {
+        match super::machines::number(&text) {
+            Some(t) if thickness_in_range(t) => {
+                run_thickness(s, &json!({ "thickness": t }))?;
+                Ok(Step::Done)
+            }
+            Some(_) => {
+                s.echo("Requires a value between -1e12 and 1e12.");
+                Ok(Step::Continue)
+            }
+            None => {
                 s.echo("Requires a number.");
                 Ok(Step::Continue)
             }
