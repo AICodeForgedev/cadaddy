@@ -813,9 +813,8 @@ mod tests {
             output.textures_delta.clear();
             ctx.fonts_mut(|view| {
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    let mut font = view.fonts.font(&family);
                     for c in &letters {
-                        assert!(font.characters().contains_key(c), "{language}: missing Georgian glyph {c} in {family:?}");
+                        assert!(view.has_glyph(&egui::FontId::new(12.0, family.clone()), *c), "{language}: missing Georgian glyph {c} in {family:?}");
                     }
                 }
             });
