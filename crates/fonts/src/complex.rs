@@ -60,6 +60,7 @@ pub(crate) fn shape(primary: Option<&Face>, s: &str, height: f64, width_factor: 
     catch_unwind(AssertUnwindSafe(|| shape_chars(primary, &chars, height, width_factor, oblique))).ok()
 }
 
+/// Lay out decoded directional runs, keeping advances and decoration spans for empty glyphs.
 fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64, width_factor: f64, oblique: f64) -> Shaped {
     let h = if height.is_finite() && height > 0.0 { height } else { 1.0 };
     let wf = if width_factor.is_finite() && width_factor.abs() > 1e-6 { width_factor } else { 1.0 };
@@ -181,28 +182,30 @@ struct Glyph {
 /// Shape characters `r` of `cs` (one direction, one face) into glyphs in display order.
 fn shape_run(face: &Face, cs: &[char], r: Range<usize>, rtl: bool) -> Vec<Glyph> {
     let run = cs.get(r.clone()).unwrap_or_default();
-    let Ok(font) = harfrust::FontRef::from_index(&face.bytes, face.index) else { return Vec::new() };
-    let data = harfrust::ShaperData::new(&font);
-    let shaper = data.shaper(&font).build();
-    let mut buf = harfrust::UnicodeBuffer::new();
+    // Keep the shared font bytes: shaping a run must not clone the entire font file.
+    let source = harfrust::font::Blob::Shared(face.bytes.clone());
+    let Some(font) = harfrust::Font::new(source, face.index) else { return Vec::new() };
+    let shaper = harfrust::ShaperFont::new(&font);
+    let mut buf = harfrust::Buffer::new();
     let arabic = run.iter().any(|c| matches!(*c, '\u{0600}'..='\u{08FF}'));
     if arabic && !face.has_joining_features() {
         for (c, i) in bidi::presentation_forms(run, |p| face.has_glyph(p)) {
-            buf.add(c, u32::try_from(r.start + i).unwrap_or(u32::MAX));
+            buf.push(u32::from(c), u32::try_from(r.start + i).unwrap_or(u32::MAX));
         }
     } else {
         for (i, c) in run.iter().enumerate() {
-            buf.add(*c, u32::try_from(r.start + i).unwrap_or(u32::MAX));
+            buf.push(u32::from(*c), u32::try_from(r.start + i).unwrap_or(u32::MAX));
         }
     }
     buf.set_direction(if rtl { harfrust::Direction::RightToLeft } else { harfrust::Direction::LeftToRight });
     buf.guess_segment_properties();
-    let shaped = shaper.shape(buf, harfrust::ShapeOptions::new());
+    if harfrust::shape(&shaper, &mut buf, harfrust::ShapeOptions::new()).is_err() {
+        return Vec::new();
+    }
     let k = 1000.0 / f64::from(shaper.units_per_em().max(1));
-    shaped
-        .glyph_infos()
+    buf.glyph_infos()
         .iter()
-        .zip(shaped.glyph_positions())
+        .zip(buf.glyph_positions())
         .map(|(gi, gp)| Glyph {
             gid: gi.glyph_id,
             cluster: usize::try_from(gi.cluster).unwrap_or(usize::MAX),
@@ -288,6 +291,32 @@ mod tests {
         let (lo, hi) = (stroke_x.iter().cloned().fold(f64::MAX, f64::min), stroke_x.iter().cloned().fold(f64::MIN, f64::max));
         assert!(lo > 0.2 * sh.width && hi < 0.8 * sh.width, "digits between the words: {lo}..{hi} of {}", sh.width);
         assert!((crate::line_width("قیمت 25 تومان", 1.0, 1.0) - sh.width).abs() < 1e-9);
+    }
+
+    #[test]
+    fn devanagari_run_is_reordered_with_line_clusters_and_advances_per_1000_em() {
+        use skrifa::MetadataProvider;
+        use skrifa::instance::{LocationRef, Size};
+        let Some(face) = ttf::fallback_for('\u{0915}') else { return };
+        let Some(ka) = nominal(&face, '\u{0915}') else { return };
+        // "कि" after two other characters of the line: the vowel sign i is drawn before the
+        // consonant (Indic reordering, which needs the script the shaper guesses from the text),
+        // both glyphs carry the cluster of the consonant's index in the line, not in the run.
+        let cs: Vec<char> = "ab\u{0915}\u{093F}".chars().collect();
+        let gs = shape_run(&face, &cs, 2..4, false);
+        let gids: Vec<u32> = gs.iter().map(|g| g.gid).collect();
+        assert_eq!(gids.len(), 2, "{gids:?}");
+        assert!(gids.first() != Some(&ka) && gids.last() == Some(&ka), "vowel sign before ka: {gids:?}");
+        assert!(gs.iter().all(|g| g.cluster == 2), "{:?}", gs.iter().map(|g| g.cluster).collect::<Vec<_>>());
+        // Advances come out at 1000 units per em, whatever the font's own em. A font that is
+        // already at 1000 per em could not tell a missing scale apart, so it checks nothing here.
+        let Some(font) = face.font() else { return };
+        if font.metrics(Size::unscaled(), LocationRef::default()).units_per_em == 1000 {
+            return;
+        }
+        let hmtx = font.glyph_metrics(Size::new(1000.0), LocationRef::default()).advance_width(skrifa::GlyphId::new(ka));
+        let adv = gs.last().map(|g| g.advance);
+        assert!(matches!((adv, hmtx), (Some(a), Some(h)) if (a - f64::from(h)).abs() < 1e-3), "{adv:?} vs {hmtx:?}");
     }
 
     #[test]

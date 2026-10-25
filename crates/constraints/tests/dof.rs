@@ -364,6 +364,7 @@ fn hostile_new_geometry_never_panics() {
     let _ = dof(&d, &[Handle(0), Handle(u64::MAX)]);
 }
 
+/// Fit-point vertex constraints retain a known freedom count because they do not reconstruct the spline.
 #[test]
 fn vertex_constraints_on_large_fit_spline_do_not_charge_reconstruction() {
     let mut d = Drawing::default();

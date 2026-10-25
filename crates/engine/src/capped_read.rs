@@ -44,6 +44,7 @@ pub fn read_capped(path: &Path, max: usize) -> io::Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// Regular-file reads accept the byte boundary and reject any larger payload.
     #[test]
     fn reads_within_limit_and_rejects_oversize() {
         let dir = std::env::temp_dir().join(format!("cadcraft-cr-{}", std::process::id()));
@@ -57,6 +58,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// An endless device is rejected before its contents can be buffered.
     #[cfg(unix)]
     #[test]
     fn rejects_non_regular_file() {
@@ -66,6 +68,7 @@ mod tests {
             assert!(read_capped(p, 8 << 20).is_err());
         }
     }
+    /// Opening a FIFO without a writer returns an error without waiting for a peer.
     #[cfg(unix)]
     #[test]
     fn rejects_fifo_without_a_writer() {

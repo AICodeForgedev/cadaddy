@@ -328,6 +328,8 @@ pub(crate) fn build(d: &Drawing, cons: &[&Constraint], opts: &SolveOptions) -> R
     build_budgeted(d, cons, opts, &mut members_left)
 }
 
+/// Build constraint components with one caller-owned rigid-member sampling budget shared by every model.
+/// Return constraints that cannot be interpreted as skipped entries.
 pub(crate) fn build_budgeted(
     d: &Drawing,
     cons: &[&Constraint],

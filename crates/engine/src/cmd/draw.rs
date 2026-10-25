@@ -11,6 +11,8 @@ use super::pline_opts::{Outcome, PlineAsk};
 use super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step, snap};
 
+/// Every draw command's spec: JSON parameters, menu path, aliases and the interactive prompt
+/// machine each command starts.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("line", "Line", run_line)
@@ -36,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("rectang", "Rectangle", super::draw2::run_rectang2)
             .menu(&["Draw", "Rectangle"])
             .alias(&["rec", "rectangle"])
-            .params("{p1, p2 | dimensions: [l, w] (p2 picks the quadrant) | area + length|breadth, rotation? (deg), fillet?, chamfer?: [d1, d2], width?, elevation?, thickness?}")
+            .params("{p1, p2 | dimensions: [l, w] (p2 picks the quadrant) | area + length|breadth, rotation? (deg), fillet?, chamfer?: [d1, d2], width?, elevation?, thickness?, center?: bool (p1 is the centre, not a corner; the size spans it evenly)}")
             .interactive(|_| Ok(Box::new(super::draw2::RectM2::default()))),
         CommandSpec::new("polygon", "Polygon", run_polygon)
             .menu(&["Draw", "Polygon"])

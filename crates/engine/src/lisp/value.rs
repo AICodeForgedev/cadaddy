@@ -353,6 +353,7 @@ pub fn equal(a: &Value, b: &Value, fuzz: f64) -> bool {
 /// Largest number of node comparisons one `equal` call may perform.
 const EQUAL_BUDGET: u64 = 50_000_000;
 
+/// Compare nested values within depth and node-work limits, returning false when either limit is reached.
 fn equal_depth(a: &Value, b: &Value, fuzz: f64, depth: usize, budget: &mut u64) -> bool {
     if depth > MAX_DEPTH || *budget == 0 {
         return false;

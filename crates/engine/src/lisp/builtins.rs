@@ -5,6 +5,8 @@
 //! Errors use AutoLISP's wording (`bad argument type: numberp: nil`, `too few arguments`,
 //! `divide by zero`), since routines and their `*error*` handlers match on it.
 
+use std::cmp::Ordering;
+use std::ffi::OsStr;
 use std::sync::Arc;
 
 use super::eval::{Ctx, Flow, Special};
@@ -335,16 +337,16 @@ fn num_ne(a: &[Value]) -> R {
     eq_chain(a, false)
 }
 fn lt(a: &[Value]) -> R {
-    chain(a, |o| o.is_lt())
+    chain(a, Ordering::is_lt)
 }
 fn gt(a: &[Value]) -> R {
-    chain(a, |o| o.is_gt())
+    chain(a, Ordering::is_gt)
 }
 fn le(a: &[Value]) -> R {
-    chain(a, |o| o.is_le())
+    chain(a, Ordering::is_le)
 }
 fn ge(a: &[Value]) -> R {
-    chain(a, |o| o.is_ge())
+    chain(a, Ordering::is_ge)
 }
 
 fn zerop(a: &[Value]) -> R {
@@ -658,12 +660,12 @@ fn vl_list_to_string(a: &[Value]) -> R {
 fn vl_filename_base(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
-    Ok(Value::str(std::path::Path::new(&*s.replace('\\', "/")).file_stem().and_then(|x| x.to_str()).unwrap_or("")))
+    Ok(Value::str(std::path::Path::new(&*s.replace('\\', "/")).file_stem().and_then(OsStr::to_str).unwrap_or("")))
 }
 fn vl_filename_extension(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
-    Ok(std::path::Path::new(&*s.replace('\\', "/")).extension().and_then(|x| x.to_str()).map(|e| Value::str(&format!(".{e}"))).unwrap_or_default())
+    Ok(std::path::Path::new(&*s.replace('\\', "/")).extension().and_then(OsStr::to_str).map(|e| Value::str(&format!(".{e}"))).unwrap_or_default())
 }
 fn vl_filename_directory(a: &[Value]) -> R {
     arity(a, 1, 1)?;
@@ -698,11 +700,14 @@ fn wcmatch(a: &[Value]) -> R {
 /// cover), but finite so truly exponential `*`-heavy patterns are rejected rather than hanging.
 const WCMATCH_BUDGET: u64 = 200_000_000;
 
+/// Spend one wildcard work unit, returning an error when the shared budget is exhausted.
 fn charge_match(budget: &mut u64) -> Result<(), ()> {
     *budget = budget.checked_sub(1).ok_or(())?;
     Ok(())
 }
 
+/// Split comma-separated wildcard alternatives while preserving escapes and bracket sets.
+/// Every consumed character spends from the same budget used for matching.
 fn split_patterns(pat: &str, budget: &mut u64) -> Result<Vec<Vec<char>>, ()> {
     let mut out = vec![Vec::new()];
     let mut chars = pat.chars().peekable();
@@ -742,6 +747,7 @@ fn split_patterns(pat: &str, budget: &mut u64) -> Result<Vec<Vec<char>>, ()> {
     Ok(out)
 }
 
+/// Match one wildcard alternative, including leading `~` negation, within the shared budget.
 fn match_pattern(text: &[char], pat: &[char], budget: &mut u64) -> Result<bool, ()> {
     if let Some(('~', rest)) = pat.split_first().map(|(c, r)| (*c, r))
         && !rest.is_empty()
@@ -757,6 +763,7 @@ fn glob(text: &[char], pat: &[char], depth: usize, budget: &mut u64) -> Result<b
     glob_cached(text, pat, depth, budget, &mut std::collections::HashSet::new())
 }
 
+/// Match suffixes while memoizing failures; both matching work and retained failure entries are bounded.
 fn glob_cached(
     text: &[char],
     pat: &[char],
@@ -778,6 +785,7 @@ fn glob_cached(
     Ok(matched)
 }
 
+/// Evaluate wildcard tokens and backtracking branches under shared work and recursion limits.
 fn glob_inner(
     text: &[char],
     pat: &[char],
@@ -1060,6 +1068,7 @@ fn findfile(a: &[Value]) -> R {
     Ok(if file_exists(&p) { Value::Str(p) } else { Value::Nil })
 }
 
+/// Read a regular text file up to 64 MiB, replacing invalid UTF-8 and returning `None` on read failure.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_text_file(path: &str) -> Option<String> {
     // Read through a byte-limited, regular-file-only reader so a path naming an endless device
@@ -1068,6 +1077,7 @@ pub fn read_text_file(path: &str) -> Option<String> {
     let bytes = crate::capped_read::read_capped(std::path::Path::new(path), MAX).ok()?;
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
+/// Return `None` on the web, where native filesystem paths are unavailable.
 #[cfg(target_arch = "wasm32")]
 pub fn read_text_file(_path: &str) -> Option<String> {
     None
@@ -1588,6 +1598,7 @@ pub fn wild_match(text: &str, pattern: &str) -> bool {
 mod wildcard_budget_tests {
     use super::*;
 
+    /// Pattern splitting, literal matching, and bracket scans all stop when their shared fuel runs out.
     #[test]
     fn all_native_scans_consume_fuel() {
         assert!(split_patterns("abcdefgh", &mut 4).is_err());

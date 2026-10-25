@@ -156,6 +156,8 @@ pub(crate) fn resolve(secs: &[Section], d: &mut Drawing) {
     }
 }
 
+/// Resolve image definitions under a shared copied-string budget.
+/// When strings no longer fit, keep applying pixel-size and resolution metadata.
 fn fill(store: &mut EntityStore, by_image: &HashMap<Handle, &Def>, budget: &mut usize) {
     let hs: Vec<Handle> =
         store.iter().filter(|e| matches!(e.kind, EntityKind::Image(_)) && by_image.contains_key(&e.handle)).map(|e| e.handle).collect();

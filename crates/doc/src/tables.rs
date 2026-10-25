@@ -177,6 +177,11 @@ pub struct DimStyle {
     pub dim_line_color: Color,
     pub ext_line_color: Color,
     pub text_color: Color,
+    /// DIMTFILL, the background of the text: 0 none, 1 the drawing's background color,
+    /// 2 `text_fill_color`.
+    pub text_fill: u8,
+    /// DIMTFILLCLR: the text background color when `text_fill` is 2.
+    pub text_fill_color: Color,
     pub text_style: String,
     /// DIMPOST prefix/suffix "<>" template.
     pub post: String,
@@ -296,6 +301,8 @@ pub const DIMVARS: &[(&str, &str)] = &[
     ("DIMCLRD", "dimLineColor"),
     ("DIMCLRE", "extLineColor"),
     ("DIMCLRT", "textColor"),
+    ("DIMTFILL", "textFill"),
+    ("DIMTFILLCLR", "textFillColor"),
     ("DIMTXSTY", "textStyle"),
     ("DIMPOST", "post"),
     ("DIMCEN", "centerMark"),
@@ -367,6 +374,8 @@ impl Default for DimStyle {
             dim_line_color: Color::ByBlock,
             ext_line_color: Color::ByBlock,
             text_color: Color::ByBlock,
+            text_fill: 0,
+            text_fill_color: Color::ByBlock,
             text_style: "Standard".into(),
             post: String::new(),
             center_mark: 0.09,
@@ -476,10 +485,19 @@ impl DimStyle {
             let coerced = match (&old, &coerced) {
                 // Lineweights (i16): whole hundredths of a mm or -1/-2/-3.
                 (Value::Number(_), Value::Number(n)) if matches!(field, "dimLineweight" | "extLineweight") && !n.is_i64() => {
-                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(-3.0, 211.0) as i64)
+                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round() as i64)
                 }
+                (Value::Number(_), Value::Number(_)) if matches!(field, "dimLineweight" | "extLineweight") => coerced,
+                // A value below 0 or one that rounds above 255 is refused; DIMADEC -1 reads as 0.
                 (Value::Number(o), Value::Number(n)) if o.is_u64() && !n.is_u64() => {
-                    serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round().clamp(0.0, 255.0) as u64)
+                    let min = if field == "angularDecimals" { -1.0 } else { 0.0 };
+                    match n.as_f64().filter(|x| x.is_finite() && *x >= min).map(f64::round).filter(|x| *x <= 255.0) {
+                        Some(x) => serde_json::json!(x.max(0.0) as u64),
+                        None => {
+                            rejected.push(k.clone());
+                            continue;
+                        }
+                    }
                 }
                 _ => coerced,
             };
@@ -489,7 +507,7 @@ impl DimStyle {
                 "textHeight" | "tolScale" => x.is_some_and(|x| x <= 0.0),
                 "scale" | "arrowSize" | "tickSize" | "fixedExtLength" => x.is_some_and(|x| x < 0.0),
                 "fit" | "angularZeroSuppression" => x.is_some_and(|x| x > 3.0),
-                "textMove" | "tolJust" | "arcSymbol" => x.is_some_and(|x| x > 2.0),
+                "textMove" | "tolJust" | "arcSymbol" | "textFill" => x.is_some_and(|x| x > 2.0),
                 "dimLineweight" | "extLineweight" => x.is_some_and(|x| !(-3.0..=211.0).contains(&x)),
                 "jogAngle" => x.is_some_and(|x| !(5.0..=90.0).contains(&x)),
                 _ => false,
@@ -857,7 +875,7 @@ pub struct VportConfig {
 
 impl VportConfig {
     /// The name of the configuration shown.
-    pub const ACTIVE: &'static str = "*Active";
+    pub const ACTIVE: &str = "*Active";
     pub fn is_active(&self) -> bool {
         self.name.eq_ignore_ascii_case(Self::ACTIVE)
     }
