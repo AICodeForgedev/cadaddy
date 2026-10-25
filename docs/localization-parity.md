@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (catalog row counts and English-fallback counts re-measured for all fifteen catalogs; previously: Brazilian Portuguese row updated and terminology reviewed; previously: Swedish catalog completed with the 95 strings added since; previously: Swedish catalog added: complete catalog, menu headings, native-speaker terminology review; previously: complete current Korean catalog with Hangul font coverage) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (the command line enables the OS IME and handles composition/commit, so single-line TEXT edits accept CJK input; previously: catalog row counts and English-fallback counts re-measured for all fifteen catalogs; previously: Brazilian Portuguese row updated and terminology reviewed; previously: Swedish catalog completed with the 95 strings added since; previously: Swedish catalog added: complete catalog, menu headings, native-speaker terminology review; previously: complete current Korean catalog with Hangul font coverage) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -37,9 +37,13 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
   lam-alef, ZWNJ, marks; Hebrew), in TEXT and MTEXT including wrapping (#287). Left-to-right lines
   are still placed one glyph per code point: **no shaping** for Devanagari and other Indic
   scripts, and **no vertical text**. SHX fonts are not read; our stroke font stands in, and wide East Asian characters in it fill the square cells a big font would give them (#861).
-- **Text input:** egui/winit IME. The upstream IME fixes (macOS Korean, emoji picker, Windows
-  caret placement, X11 and Wayland) were proposed as PRs #110–#119, which were closed in favour
-  of the consolidated, still open PR #668, so CJK input is not yet reliable on every platform.
+- **Text input:** egui/winit IME. The command line — which collects single-line TEXT edits and
+  other prompt text — now enables the operating system IME while a prompt asks for text and shows
+  composition (pre-edit) text until it is committed, so Chinese, Japanese and Korean input works
+  there (#1761); egui's own text fields handle IME themselves. The upstream IME fixes (macOS Korean,
+  emoji picker, Windows caret placement, X11 and Wayland) were proposed as PRs #110–#119, which were
+  closed in favour of the consolidated, still open PR #668, so CJK input is not yet reliable on
+  every platform.
 
 ## Languages
 
@@ -89,6 +93,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-24 | minor | Re-audit against main 41d9b5e95: catalog row counts and English-fallback counts re-measured for all fifteen catalogs (main 41d9b5e95) |
+| 2026-10-22 | minor | Command line IME: enabled while a prompt collects text, composition shown but not saved, commit inserted once; single-line TEXT edits accept CJK input (#1761) |
 | 2026-10-19 | minor | Brazilian Portuguese: row brought up to date (it still read 0%); native-speaker terminology pass on 69 rows (Bind as Integrar, prompt keywords and SPDX kept in English, Thaw Layer, Snap type, Revolve fixed; snap, viewport, grip, offset, layer on/off and multiline wording made consistent with Brazilian usage) |
 | 2026-10-15 | minor | Greek (`el`) catalog: 1,330 rows, context/plural/locale/font tests; review pending |
 | 2026-10-14 | minor | Swedish completed: 95 rows for strings added since (Hatch and Gradient dialog, Block Editor, REFEDIT, multileader editing, Options selection settings, MTEXT editor, recent files); 1,330 rows, every key of the Ukrainian reference catalog |

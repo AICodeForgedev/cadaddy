@@ -325,7 +325,7 @@ fn canvas_reset_during_splitter_drag_discards_old_resize_and_ends_gesture() {
         .unwrap();
     h.run_steps(3);
     let drawing = h.state().session.doc().unwrap().clone();
-    let splitter = egui::Id::new("cadcraft-docking").with(("split", Vec::<bool>::new()));
+    let splitter = egui::Id::unique("cadcraft-docking").with(("split", Vec::<bool>::new()));
     let from = h.ctx.read_response(splitter).expect("rendered root divider").rect.center();
     h.event(Event::PointerMoved(from));
     h.run_steps(1);
@@ -392,7 +392,7 @@ fn group_drag_bar_moves_the_whole_group_beside_the_drawing() {
     h.state_mut().run("ui.dock", json!({"operation":"move", "panel":"layers", "target":"toolSets", "zone":"center", "before":null})).unwrap();
     h.run_steps(4);
     let bar = |h: &Harness<'_, CadApp>| {
-        DockArea::<Panel>::hit_rects(&h.ctx, egui::Id::new("cadcraft-docking"))
+        DockArea::<Panel>::hit_rects(&h.ctx, egui::Id::unique("cadcraft-docking"))
             .into_iter()
             .find(|(hit, _)| matches!(hit, Hit::DragBar(panel) if *panel == Panel::ToolSets || *panel == Panel::Layers))
             .map(|(_, rect)| rect)

@@ -1347,3 +1347,6 @@ menu	Dimension	Ölçülendirme
 menu	Draw	Çiz
 menu	Modify	Değiştir
 menu	View	Görünüm
+	Check for Updates…	Güncellemeleri denetle…
+	CADCraft is up to date.	CADCraft güncel.
+	Could not check for updates.	Güncellemeler denetlenemedi.

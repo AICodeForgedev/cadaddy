@@ -86,8 +86,10 @@ const GRAY: Color = Color::Index(8);
 fn exports_both_drawings_as_colored_groups_in_a_new_drawing() {
     let mut s = compared();
     let before = s.docs.len();
+    let before_epoch = s.doc_epoch;
     let source = s.doc().unwrap().clone();
     let r = s.execute("compareexport", &json!({})).unwrap();
+    assert!(s.doc_epoch > before_epoch, "opening the exported drawing invalidates queued captures");
     assert_eq!(s.docs.len(), before + 1, "{r}");
     assert_eq!(r["title"], "compare_B vs Drawing1.dwg", "{r}");
     assert_eq!(s.state().unwrap().title, "compare_B vs Drawing1.dwg");
