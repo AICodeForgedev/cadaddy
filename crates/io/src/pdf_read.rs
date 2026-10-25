@@ -3142,7 +3142,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 for rt in &recovered_texts {
                     used_so_far.extend(&rt.stroke_indices);
                 }
-                let ocr_texts = recover_shx_ocr(&strokes, sheet, &used_so_far);
+                let mut ocr_texts = recover_shx_ocr(&strokes, sheet, &used_so_far);
+                // Without hidden text to confirm them, the OCR's words are added but their
+                // strokes stay linework: a misread wall corner, jamb or duct tick must not leave
+                // the plan (walls, duct and pipe chains, symbol finding all read those strokes).
+                if !has_hidden_text {
+                    for t in &mut ocr_texts {
+                        t.stroke_indices.clear();
+                    }
+                }
                 if !ocr_texts.is_empty() {
                     stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
                     recovered_texts.extend(ocr_texts);

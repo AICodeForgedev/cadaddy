@@ -833,6 +833,40 @@ fn ocr_leaves_lone_straight_strokes_as_linework() {
     assert_eq!(short_lines, stubs, "every stub stays a line");
 }
 
+#[test]
+fn ocr_without_hidden_text_keeps_the_strokes_as_linework() {
+    // With no hidden text to confirm it, an OCR word is added as text but its strokes stay in
+    // the plan: on a real sheet a "word" can be a wall corner, a jamb or duct ticks, and the
+    // wall, duct and pipe readers need those lines.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
+    let height = 12.0;
+    let advance = height * (4.0 + 1.6) / 6.0;
+    for (i, ch) in "HELLO".chars().enumerate() {
+        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let linework_near_word = |r: &pdf_read::PdfImport| {
+        let near = |y: f64| y > 280.0 / 72.0 && y < 330.0 / 72.0;
+        r.drawing
+            .model
+            .iter()
+            .filter(|e| match &e.kind {
+                EntityKind::Line(l) => near(l.a.y),
+                EntityKind::LwPolyline(p) => p.vertices.first().is_some_and(|v| near(v.p.y)),
+                _ => false,
+            })
+            .count()
+    };
+    let read = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let raw = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    assert!(read.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "OCR ran: {:?}", read.stats);
+    assert!(texts_of(&read).iter().any(|t| t.contains('H')), "the word is read: {:?}", texts_of(&read));
+    assert!(linework_near_word(&raw) > 0, "the word is linework without recovery");
+    assert_eq!(linework_near_word(&read), linework_near_word(&raw), "every stroke of the word stays linework");
+}
+
 const E_SHEET_WITH_NOTE: &[u8] =
     b"q 0 0 0 RG 1.0 w 72 72 m 200 72 l S BT /F1 12 Tf 700 50 Td (E-4) Tj ET BT /F1 8 Tf 600 80 Td (SCALE: 1/8\" = 1'-0\") Tj ET Q";
 
