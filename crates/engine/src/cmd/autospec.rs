@@ -30,7 +30,7 @@ const MAX_ROOMS: usize = 1_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("bspec.draft", "Draft Building Spec", run_draft).params(
-        "{store?: bool (keep it as the drawing's spec; default false)} → {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
+        "{store?: bool (keep it as the drawing's spec; default false), levels?: [{name, elevation_ft, height_ft, ceiling_ft?, region?: [x0,y0,x1,y1], base?: [x,y], guess?: why its heights are assumed}] (the plans' levels, side by side on the sheet: only what lies in a level's region is read, and each room takes the level its tag is in; default: a level per plan view when the sheet prints several floors' plans (`3RD FLOOR PLAN`, `4TH FLOOR PLAN`), each over its view, heights assumed; else one level for the whole drawing), stack?: bool (build the levels stacked into one building)} → {spec, guesses: [{key, why}], parts, stored}: a first spec from the plan alone (standard layer names, wall face pairs, door blocks, room tags, ceiling notes, default heights), every guessed part listed in `guesses` and in the spec's `guess`",
     )]
 }
 
@@ -117,9 +117,94 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
     v.get(v.len() / 2).copied()
 }
 
-/// The draft and why each guessed part was guessed.
-pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
-    draft_with(s, true)
+/// Levels given to `bspec.draft` (most; hostile params).
+const MAX_LEVELS: usize = 200;
+
+/// The plans' levels given to `bspec.draft` (`levels`), with why each one's heights are guessed.
+fn given_levels(p: &Value) -> Result<Vec<(Level, Option<String>)>> {
+    let Some(list) = p.get("levels").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let list = list.as_array().ok_or_else(|| bad("bspec.draft", "`levels` is a list of {name, elevation_ft, height_ft, region?}"))?;
+    if list.len() > MAX_LEVELS {
+        return Err(bad("bspec.draft", format!("`levels` holds at most {MAX_LEVELS} levels")));
+    }
+    let mut out: Vec<(Level, Option<String>)> = Vec::new();
+    for (i, v) in list.iter().enumerate() {
+        let guess = v.get("guess").and_then(Value::as_str).map(|g| g.chars().take(240).collect::<String>());
+        let mut v = v.clone();
+        if let Some(o) = v.as_object_mut() {
+            o.remove("guess");
+        }
+        let l: Level = serde_json::from_value(v).map_err(|e| bad("bspec.draft", format!("levels[{i}]: {e}")))?;
+        let finite = [l.elevation_ft, l.height_ft, l.ceiling_ft].iter().all(|x| x.is_finite())
+            && l.region.is_none_or(|r| r.iter().all(|x| x.is_finite()))
+            && l.base.is_none_or(|b| b.iter().all(|x| x.is_finite()));
+        if l.name.trim().is_empty() || !finite || l.height_ft <= 0.0 {
+            return Err(bad("bspec.draft", format!("levels[{i}] needs a name, finite elevation_ft and a height_ft above 0")));
+        }
+        if out.iter().any(|(o, _)| o.name.eq_ignore_ascii_case(&l.name)) {
+            return Err(bad("bspec.draft", format!("levels[{i}]: {} is given twice", l.name)));
+        }
+        out.push((l, guess));
+    }
+    Ok(out)
+}
+
+/// Floor to floor and ceiling heights of a level read off a plan view's title, feet (assumed).
+const VIEW_FLOOR_FT: f64 = 10.0;
+const VIEW_CEILING_FT: f64 = 8.0;
+
+/// One level per plan view of a sheet that prints several, each of its own level (`3RD FLOOR
+/// PLAN` and `4TH FLOOR PLAN` on one sheet): its region the view's cell on the sheet, its
+/// elevation from the floor number, floor to floor assumed. Without them the views would build
+/// side by side as one storey. Empty for a sheet of one view.
+fn view_levels(d: &cadaddy_doc::Drawing) -> Vec<(Level, Option<String>)> {
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    if ext.is_empty() || !(ext.width().is_finite() && ext.height().is_finite()) {
+        return Vec::new();
+    }
+    let pad = 0.01 * ext.width().max(ext.height());
+    let (lo, hi) = ([ext.min.x - pad, ext.min.y - pad], [ext.max.x + pad, ext.max.y + pad]);
+    let mut out: Vec<(Level, Option<String>)> = Vec::new();
+    for (v, [x0, y0, x1, y1]) in cadaddy_mepfix::sheet_reader::view_cells(d) {
+        // A view of one storey: `3`, or a basement `B1` (a typical plan of several levels, a
+        // roof plan, are not one storey's plan).
+        let [code] = v.levels.as_slice() else { continue };
+        let floor: Option<f64> = match code.strip_prefix('B') {
+            Some(b) => b.parse::<u32>().ok().filter(|n| *n >= 1).map(|n| -f64::from(n)),
+            None => code.parse::<u32>().ok().filter(|n| *n >= 1).map(|n| f64::from(n) - 1.0),
+        };
+        let Some(floor) = floor else { continue };
+        let name = format!("Level {code}");
+        if out.iter().any(|(l, _)| l.name == name) {
+            continue;
+        }
+        let region = [x0.max(lo[0]), y0.max(lo[1]), x1.min(hi[0]), y1.min(hi[1])];
+        if !region.iter().all(|x| x.is_finite()) || region[2] <= region[0] || region[3] <= region[1] {
+            continue;
+        }
+        let title: String = v.title.chars().take(80).collect();
+        let why = format!(
+            "plan view \"{title}\" on the sheet; floor to floor {} and ceiling {} assumed",
+            cadaddy_walk3d::feet(VIEW_FLOOR_FT),
+            cadaddy_walk3d::feet(VIEW_CEILING_FT)
+        );
+        let level = Level {
+            name,
+            elevation_ft: floor * VIEW_FLOOR_FT,
+            height_ft: VIEW_FLOOR_FT,
+            ceiling_ft: VIEW_CEILING_FT,
+            region: Some(region),
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        out.push((level, Some(why)));
+    }
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    out.sort_by(|a, b| a.0.elevation_ft.total_cmp(&b.0.elevation_ft));
+    out
 }
 
 /// [`draft`], with layer roles from what a layer holds (`by_content`) or from layer names only.
@@ -127,9 +212,22 @@ pub(crate) fn draft(s: &Session) -> Result<BuildingSpec> {
 /// doors and room names on their own layers: what it left behind (a duct's sides, a stair's
 /// treads) is not walls however many line pairs it holds.
 pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> {
+    draft_levels(s, by_content, Vec::new())
+}
+
+/// [`draft_with`] for the plans' `levels` (none: one level for the whole drawing). With levels
+/// that have regions, only what lies in a region is read (the other sheets on the drawing, an
+/// electrical plan's copy of the walls, add nothing) and each room takes its tag's level.
+fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>)>) -> Result<BuildingSpec> {
     let plan = super::verify::plan_session(s)?;
     let d = plan.doc()?;
-    let ents = plan_objects(d);
+    let given = if given.is_empty() { view_levels(d) } else { given };
+    let mut ents = plan_objects(d);
+    let given_levels: Vec<Level> = given.iter().map(|(l, _)| l.clone()).collect();
+    let regions = !given_levels.is_empty() && given_levels.iter().all(|l| l.region.is_some());
+    if regions {
+        ents.retain(|e| super::bspec::centre(d, e).is_some_and(|c| cadaddy_walk3d::level_at(&given_levels, c.x, c.y).is_some()));
+    }
     let k = units_per_inch(d);
     let mut guess: BTreeMap<String, String> = BTreeMap::new();
     // Layers with objects, in drawing order of their first object.
@@ -229,7 +327,8 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
     let mut outlines: Vec<Vec<Vec2>> = Vec::new();
     let mut named: Vec<(usize, cadaddy_doc::Handle, String, Vec2, f64)> = Vec::new();
     let mut outline_cache = None;
-    for (h, name, at, height) in candidates.into_iter().take(MAX_ROOMS) {
+    let max_rooms = if given_levels.is_empty() { MAX_ROOMS } else { MAX_ROOMS * given_levels.len().min(10) };
+    for (h, name, at, height) in candidates.into_iter().take(max_rooms) {
         let Ok(loops) = super::hatch::loops_at_lazy(trace_on, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = cadaddy_geom::Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
@@ -263,7 +362,18 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
         });
         let title: Vec<String> = title.collect();
         let room_name = title.join(" ");
-        if rooms.iter().any(|r| r.name.eq_ignore_ascii_case(&room_name)) {
+        // On the plans' levels a room is its name, number and level (every guest room is a
+        // KING); on one sheet, its name.
+        let level = if given_levels.is_empty() { None } else { cadaddy_walk3d::level_at(&given_levels, at.x, at.y).map(|l| l.name.clone()) };
+        if !given_levels.is_empty() && level.is_none() {
+            continue;
+        }
+        let same = |r: &Room| {
+            r.name.eq_ignore_ascii_case(&room_name)
+                && (given_levels.is_empty()
+                    || (r.number.as_deref().unwrap_or("").eq_ignore_ascii_case(number.as_deref().unwrap_or("")) && r.level == level))
+        };
+        if rooms.iter().any(same) {
             continue;
         }
         if let Some(e) = ents.iter().find(|e| e.handle == h)
@@ -271,7 +381,7 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
         {
             room_layers.push(e.common.layer.to_string());
         }
-        rooms.push(Room { name: room_name, number, level: None, ceiling_ft: ceiling, materials: Default::default() });
+        rooms.push(Room { name: room_name, number, level, ceiling_ft: ceiling, materials: Default::default() });
     }
     // Names found on a layer with no role make it a room tag layer.
     for l in &room_layers {
@@ -294,13 +404,23 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
         attr: None,
         sheet: None,
     };
-    guess.insert(
-        "levels/Level 1".into(),
-        match note_ceiling {
-            Some(c) => format!("one level; ceiling {} from the notes, floor to floor assumed", cadaddy_walk3d::feet(c)),
-            None => "one level; floor to floor and ceiling heights assumed".into(),
-        },
-    );
+    let levels = if given.is_empty() {
+        guess.insert(
+            "levels/Level 1".into(),
+            match note_ceiling {
+                Some(c) => format!("one level; ceiling {} from the notes, floor to floor assumed", cadaddy_walk3d::feet(c)),
+                None => "one level; floor to floor and ceiling heights assumed".into(),
+            },
+        );
+        vec![level]
+    } else {
+        for (l, why) in &given {
+            if let Some(why) = why {
+                guess.insert(format!("levels/{}", l.name), why.clone());
+            }
+        }
+        given_levels.clone()
+    };
     // Door and window families: the blocks found as openings, one family per block.
     let mut families: Vec<Family> = Vec::new();
     for o in openings(d, &ents, &segments(&ents), k) {
@@ -329,7 +449,7 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
         version: SPEC_VERSION,
         // Rounded: 12 × 25.4 is 304.79999… in binary.
         units_per_foot: (12.0 * k * 1e6).round() / 1e6,
-        levels: vec![level],
+        levels,
         layers: roles,
         wall_types,
         rooms,
@@ -344,7 +464,8 @@ pub(crate) fn draft_with(s: &Session, by_content: bool) -> Result<BuildingSpec> 
 }
 
 fn run_draft(s: &mut Session, p: &Value) -> Result<Value> {
-    let sp = draft(s)?;
+    let mut sp = draft_levels(s, true, given_levels(p)?)?;
+    sp.stack = bool_or(p, "stack", false);
     let store = bool_or(p, "store", false);
     if store {
         s.doc_mut()?.building_spec = Some(sp.to_json());

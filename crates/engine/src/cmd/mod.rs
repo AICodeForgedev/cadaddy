@@ -9,6 +9,7 @@ pub(crate) mod ask;
 mod attipedit;
 mod audit;
 pub mod autospec;
+pub mod bimlook;
 pub mod bimprops;
 pub mod bimwork;
 pub mod blockdetect;
@@ -555,6 +556,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
+        v.extend(bimlook::specs());
         v.extend(projrules::specs());
         v.extend(spec_import::specs());
         v.extend(agentready::specs());

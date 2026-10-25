@@ -423,6 +423,11 @@ pub struct SheetSpan {
 pub struct SheetRegion {
     pub number: String,
     pub level: String,
+    /// The sheet's discipline letter (`A`, `E`, `M`…) and type (`plan`, `enlarged_plan`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub discipline: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
     /// `[x0, y0, x1, y1]`, drawing units.
     pub rect: [f64; 4],
 }
@@ -1291,7 +1296,18 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             let w = (rect[2] - rect[0]).abs();
             x = rect[2].max(x) + 0.05 * w;
             let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
-            regions.push(SheetRegion { number: number.split('/').next().unwrap_or(number).to_string(), level: level_of(sh), rect });
+            let discipline = sh
+                .get("discipline")
+                .and_then(Value::as_str)
+                .filter(|d| !d.is_empty())
+                .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
+            regions.push(SheetRegion {
+                number: number.split('/').next().unwrap_or(number).to_string(),
+                level: level_of(sh),
+                discipline: discipline.to_ascii_uppercase(),
+                kind: kind(sh),
+                rect,
+            });
         }
     }
     job.sheet_regions = regions;
@@ -1585,6 +1601,15 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
     }
+    let duplicates = one_room_per_number(job, &mut rooms_result);
+    if duplicates > 0
+        && let Some(o) = rooms_result.as_object_mut()
+    {
+        o.insert("duplicates_merged".into(), json!(duplicates));
+        if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
+            o.insert("count".into(), json!(n));
+        }
+    }
 
     let rooms = rooms_result.get("rooms").and_then(Value::as_array);
     let room_count = rooms.map_or(0, Vec::len);
@@ -1702,6 +1727,43 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(rooms_result)
 }
 
+/// One room per number and level: the electrical, mechanical and plumbing plans tag the same
+/// rooms as the architectural plan of their level, so a numbered room read on several sheets of
+/// one level is one room (the architectural sheet's reading, else the first). Rooms with no
+/// number or no level are kept as read. How many copies were dropped.
+fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
+    let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return 0 };
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).map(|v| v.trim().to_ascii_uppercase()).unwrap_or_default();
+    let architectural = |r: &Value| {
+        let sheet = text(r, "sheet");
+        job.sheet_regions.iter().any(|g| g.number.eq_ignore_ascii_case(&sheet) && g.discipline == "A")
+    };
+    // The reading kept for each (level, number): its index in the list.
+    let mut best: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (i, r) in list.iter().enumerate() {
+        let (level, number) = (text(r, "level"), text(r, "number"));
+        if level.is_empty() || number.is_empty() {
+            continue;
+        }
+        match best.get(&(level.clone(), number.clone())).copied() {
+            Some(j) if !architectural(r) || list.get(j).is_some_and(architectural) => {}
+            _ => {
+                best.insert((level, number), i);
+            }
+        }
+    }
+    let before = list.len();
+    let mut i = 0;
+    list.retain(|r| {
+        let keep = {
+            let (level, number) = (text(r, "level"), text(r, "number"));
+            level.is_empty() || number.is_empty() || best.get(&(level, number)) == Some(&i)
+        };
+        i += 1;
+        keep
+    });
+    before - list.len()
+}
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
 fn is_circuit_tag(tag: &str) -> bool {
@@ -2088,7 +2150,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     ensure_sheets_loaded(s, job)?;
     // MUST 1: Draft the spec first — bim.build needs it. Without the spec, it errors.
-    let draft_result = s.execute("bspec.draft", &json!({"store": true}));
+    // With architectural floor plans, the building is theirs: one level per plan (its sheet's
+    // rectangle), stacked; the other disciplines' plans add no walls.
+    let levels = building_levels(job);
+    let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
+    let draft_result = s.execute("bspec.draft", &draft_params);
     match &draft_result {
         Ok(spec) => {
             // Check for guesses that should be flagged.
@@ -2230,6 +2296,57 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     Ok(result)
+}
+
+/// Floor to floor when the sections give none, feet.
+const DEFAULT_STOREY_FT: f64 = 10.0;
+
+/// The building's levels for `bspec.draft`: one per level that has an architectural floor plan
+/// (discipline A, type plan; the first such sheet of each level), lowest first, its region the
+/// plan's rectangle on the job's drawing. Elevations and floor-to-floor heights from the sheet
+/// index (read off the sections); else stacked at [`DEFAULT_STOREY_FT`] and marked as guessed,
+/// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
+/// whatever was imported, as for one sheet).
+fn building_levels(job: &GuidedJob) -> Vec<Value> {
+    let rank = |l: &str| (l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
+    let mut plans: Vec<&SheetRegion> =
+        job.sheet_regions.iter().filter(|r| r.discipline == "A" && r.kind == "plan" && !r.level.trim().is_empty()).collect();
+    plans.sort_by_key(|r| rank(&r.level));
+    plans.dedup_by(|a, b| a.level.eq_ignore_ascii_case(&b.level));
+    let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let read = |level: &str, key: &str| {
+        index_levels
+            .iter()
+            .find(|l| l.get("name").and_then(Value::as_str).is_some_and(|n| n.eq_ignore_ascii_case(level)))
+            .and_then(|l| l.get(key))
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+    };
+    let mut out = Vec::new();
+    let mut next_elevation = 0.0f64;
+    for r in plans {
+        let name = match r.level.as_str() {
+            "R" => "Roof".to_string(),
+            l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
+            l => l.to_string(),
+        };
+        let (elevation, read_elevation) = match read(&r.level, "elevation_ft") {
+            Some(e) => (e, true),
+            None => (next_elevation, false),
+        };
+        let (height, read_height) = match read(&r.level, "height_ft").filter(|h| *h > 0.0 && *h <= 100.0) {
+            Some(h) => (h, true),
+            None => (DEFAULT_STOREY_FT, false),
+        };
+        next_elevation = elevation + height;
+        let mut level =
+            json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
+        if !(read_elevation && read_height) {
+            level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
+        }
+        out.push(level);
+    }
+    out
 }
 
 /// Run takeoff stage.
@@ -3413,5 +3530,72 @@ mod tests {
             kind: QuestionKind::Verify,
         });
         assert!(check_rejected_samples(&stage));
+    }
+
+    fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
+        SheetRegion { number: number.into(), level: level.into(), discipline: discipline.into(), kind: kind.into(), rect: [x, 0.0, x + 100.0, 80.0] }
+    }
+
+    #[test]
+    fn the_building_levels_are_the_architectural_floor_plans() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("E-102", "2", "E", "plan", 0.0),
+            region("A112", "2", "A", "plan", 200.0),
+            region("A111", "1", "A", "plan", 400.0),
+            region("A121", "1", "A", "enlarged_plan", 600.0),
+            region("A111B", "1", "A", "plan", 800.0),
+            region("A113", "3", "A", "plan", 1000.0),
+            region("M-101", "1", "M", "plan", 1200.0),
+        ];
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 0.0, "height_ft": 12.0},
+            {"name": "2", "elevation_ft": 12.0, "height_ft": 10.5},
+            {"name": "3", "elevation_ft": 22.5}
+        ]}));
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3"], "{levels:?}");
+        // Each level's region is its A plan's rectangle (the first of the level), never E/M.
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [400.0, 200.0, 1000.0]);
+        // Heights from the index; the top level's floor to floor is not read, so it is a guess.
+        assert_eq!((levels[0]["elevation_ft"].as_f64(), levels[0]["height_ft"].as_f64()), (Some(0.0), Some(12.0)));
+        assert_eq!((levels[1]["elevation_ft"].as_f64(), levels[1]["height_ft"].as_f64()), (Some(12.0), Some(10.5)));
+        assert!(levels[0].get("guess").is_none() && levels[1].get("guess").is_none(), "{levels:?}");
+        assert_eq!(levels[2]["elevation_ft"].as_f64(), Some(22.5));
+        assert!(levels[2]["guess"].as_str().is_some_and(|g| g.contains("A113")), "{levels:?}");
+
+        // No index heights: stacked at the default storey, every one a guess.
+        job.index = None;
+        let levels = building_levels(&job);
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        assert_eq!(el, [0.0, DEFAULT_STOREY_FT, 2.0 * DEFAULT_STOREY_FT]);
+        assert!(levels.iter().all(|l| l["guess"].is_string()));
+
+        // Only E/M plans: no building levels (the build reads what was imported, as before).
+        job.sheet_regions = vec![region("E-104", "4", "E", "plan", 0.0)];
+        assert!(building_levels(&job).is_empty());
+    }
+
+    #[test]
+    fn a_room_read_on_several_sheets_of_a_level_is_one_room() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("E-103", "3", "E", "plan", 0.0), region("A113", "3", "A", "plan", 200.0)];
+        let mut rooms = json!({"rooms": [
+            {"name": "KING", "number": "301", "level": "3", "sheet": "E-103", "area": 1.0},
+            {"name": "KING", "number": "301", "level": "3", "sheet": "A113", "area": 2.0},
+            {"name": "KING", "number": "302", "level": "3", "sheet": "A113"},
+            {"name": "KING", "number": "301", "level": "4", "sheet": "A114"},
+            {"name": "CORRIDOR", "level": "3", "sheet": "E-103"},
+            {"name": "CORRIDOR", "level": "3", "sheet": "A113"}
+        ]});
+        assert_eq!(one_room_per_number(&job, &mut rooms), 1);
+        let list = rooms["rooms"].as_array().cloned().unwrap_or_default();
+        assert_eq!(list.len(), 5, "{list:?}");
+        // The architectural sheet's reading is the one kept.
+        let r301: Vec<&Value> = list.iter().filter(|r| r["number"] == "301" && r["level"] == "3").collect();
+        assert_eq!(r301.len(), 1);
+        assert_eq!(r301[0]["sheet"], "A113");
     }
 }

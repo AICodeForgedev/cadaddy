@@ -1266,40 +1266,9 @@ pub fn recognise_views(d: &Drawing) -> Vec<RecognisedSheet> {
 /// [`recognise_views`], each view with its part of the drawing (`None`: the whole sheet).
 pub fn split_views(d: &Drawing) -> Vec<(RecognisedSheet, Option<Drawing>)> {
     let sheet = recognise_dxf(d);
-    let views = plan_views(d);
-    let mut distinct: Vec<&Vec<String>> = views.iter().map(|v| &v.levels).collect();
-    distinct.sort();
-    distinct.dedup();
-    if distinct.len() < 2 || views.len() > 8 {
+    let cells = view_cells(d);
+    if cells.is_empty() {
         return vec![(sheet, None)];
-    }
-    // Each view's cell: the views stand in columns (titles at about the same x, a tenth of the
-    // sheet or less apart), a column's views one above another. A title sits under its view:
-    // a view starts just below its title and ends where the next one up starts; a column ends
-    // halfway to the next column's titles.
-    let width = texts_across(d).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(t.3[0]), hi.max(t.3[0])));
-    let gap = ((width.1 - width.0) * 0.1).max(1e-9);
-    let mut views = views;
-    views.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
-    let mut columns: Vec<Vec<PlanView>> = Vec::new();
-    for v in views {
-        match columns.last_mut() {
-            Some(c) if c.last().is_some_and(|l| v.at[0] - l.at[0] <= gap) => c.push(v),
-            _ => columns.push(vec![v]),
-        }
-    }
-    let centre = |c: &Vec<PlanView>| c.iter().map(|v| v.at[0]).sum::<f64>() / c.len().max(1) as f64;
-    let mut cells: Vec<(PlanView, [f64; 4])> = Vec::new();
-    for (ci, col) in columns.iter().enumerate() {
-        let x0 = if ci == 0 { f64::NEG_INFINITY } else { columns.get(ci - 1).map_or(f64::NEG_INFINITY, |p| (centre(p) + centre(col)) / 2.0) };
-        let x1 = columns.get(ci + 1).map_or(f64::INFINITY, |n| (centre(col) + centre(n)) / 2.0);
-        let mut col = col.clone();
-        col.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]));
-        for (i, v) in col.iter().enumerate() {
-            let y0 = if i == 0 { f64::NEG_INFINITY } else { v.at[1] - v.height };
-            let y1 = col.get(i + 1).map_or(f64::INFINITY, |n| n.at[1] - n.height);
-            cells.push((v.clone(), [x0, y0, x1, y1]));
-        }
     }
     let mut out: Vec<(RecognisedSheet, Option<Drawing>)> = Vec::new();
     for (v, [x0, y0, x1, y1]) in cells {
@@ -1334,6 +1303,49 @@ pub fn split_views(d: &Drawing) -> Vec<(RecognisedSheet, Option<Drawing>)> {
         out.push((rec, Some(sub)));
     }
     out
+}
+
+/// The plan views of a sheet that prints several, each of its own level (`3RD FLOOR PLAN` under
+/// one plan, `4TH FLOOR PLAN` under the other), each with its cell `[x0, y0, x1, y1]` (model
+/// units; open to infinity at the sheet's outer edges). Empty for a sheet of one view, or of
+/// views of the same levels.
+pub fn view_cells(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
+    let views = plan_views(d);
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|v| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return Vec::new();
+    }
+    // Each view's cell: the views stand in columns (titles at about the same x, a tenth of the
+    // sheet or less apart), a column's views one above another. A title sits under its view:
+    // a view starts just below its title and ends where the next one up starts; a column ends
+    // halfway to the next column's titles.
+    let width = texts_across(d).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(t.3[0]), hi.max(t.3[0])));
+    let gap = ((width.1 - width.0) * 0.1).max(1e-9);
+    let mut views = views;
+    views.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
+    let mut columns: Vec<Vec<PlanView>> = Vec::new();
+    for v in views {
+        match columns.last_mut() {
+            Some(c) if c.last().is_some_and(|l| v.at[0] - l.at[0] <= gap) => c.push(v),
+            _ => columns.push(vec![v]),
+        }
+    }
+    let centre = |c: &Vec<PlanView>| c.iter().map(|v| v.at[0]).sum::<f64>() / c.len().max(1) as f64;
+    let mut cells: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for (ci, col) in columns.iter().enumerate() {
+        let x0 = if ci == 0 { f64::NEG_INFINITY } else { columns.get(ci - 1).map_or(f64::NEG_INFINITY, |p| (centre(p) + centre(col)) / 2.0) };
+        let x1 = columns.get(ci + 1).map_or(f64::INFINITY, |n| (centre(col) + centre(n)) / 2.0);
+        let mut col = col.clone();
+        col.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]));
+        for (i, v) in col.iter().enumerate() {
+            let y0 = if i == 0 { f64::NEG_INFINITY } else { v.at[1] - v.height };
+            let y1 = col.get(i + 1).map_or(f64::INFINITY, |n| n.at[1] - n.height);
+            cells.push((v.clone(), [x0, y0, x1, y1]));
+        }
+    }
+    cells
 }
 
 /// Build a sheet map from a set of DXF drawings: recognise each sheet, assemble the common
