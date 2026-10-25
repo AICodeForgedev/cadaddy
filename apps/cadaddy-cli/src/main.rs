@@ -461,11 +461,7 @@ fn bim(args: &[String]) -> Result<(), String> {
     }
     outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
     let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);
-    if cdy_paths == 0 {
-        Err("no BIM models were built; see warnings in the output".into())
-    } else {
-        Ok(())
-    }
+    if cdy_paths == 0 { Err("no BIM models were built; see warnings in the output".into()) } else { Ok(()) }
 }
 
 fn check_import(args: &[String]) -> Result<(), String> {
@@ -883,10 +879,8 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     }
     // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
     if addr.is_none() && !headless {
-        let port_str = std::env::var("CADADDY_CONTROL_PORT")
-            .or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT"))
-            .ok()
-            .filter(|v| !v.trim().is_empty());
+        let port_str =
+            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
         if let Some(ps) = port_str {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {
