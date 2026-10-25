@@ -32,6 +32,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
         CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}").interactive(|_| Ok(Box::new(LtscaleM))),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
+        CommandSpec::new("thickness", "Thickness", run_thickness)
+            .menu(&["Format", "Thickness"])
+            .params("{thickness} (THICKNESS: the 3D thickness given to new lines, arcs, circles, points and polylines; may be negative) → {thickness}")
+            .transparent()
+            .interactive(|_| Ok(Box::new(ThicknessM))),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}"),
         CommandSpec::new("style", "Text Style...", run_style)
             .menu(&["Format", "Text Style..."])
@@ -528,6 +533,56 @@ impl Interactive for LtscaleM {
             }
             _ => {
                 s.echo("Requires a positive number.");
+                Ok(Step::Continue)
+            }
+        }
+    }
+}
+
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
+fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
+    let t = f64_req("thickness", p, "thickness")?;
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
+    }
+    s.doc_mut()?.header.set_f64("THICKNESS", t);
+    Ok(json!({ "thickness": t }))
+}
+
+/// Format > Thickness and typed THICKNESS: "Enter new value for THICKNESS <0.0000>:".
+struct ThicknessM;
+
+impl Interactive for ThicknessM {
+    fn name(&self) -> &'static str {
+        "THICKNESS"
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        let cur = s.doc().map(|d| d.header.f64("THICKNESS", 0.0)).unwrap_or(0.0);
+        Prompt::new("Enter new value for THICKNESS", Accept::NUMBER).default(format!("{cur:.4}"))
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        let text = match i {
+            Input::Enter | Input::Cancel => return Ok(Step::Done),
+            Input::Text(t) => t,
+            _ => return Ok(Step::Continue),
+        };
+        match super::machines::number(&text) {
+            Some(t) if thickness_in_range(t) => {
+                run_thickness(s, &json!({ "thickness": t }))?;
+                Ok(Step::Done)
+            }
+            Some(_) => {
+                s.echo("Requires a value between -1e12 and 1e12.");
+                Ok(Step::Continue)
+            }
+            None => {
+                s.echo("Requires a number.");
                 Ok(Step::Continue)
             }
         }

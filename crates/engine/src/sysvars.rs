@@ -379,6 +379,13 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                 return r;
             }
             let d = s.doc_mut()?;
+            // A dimension variable takes only the values its style field takes, as in DIMSTYLE and DIMOVERRIDE.
+            if let Some((_, field)) = cadcraft_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
+                let mut st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
+                if !st.apply_fields(&serde_json::Map::from_iter([((*field).to_string(), v.clone())])).is_empty() {
+                    return Err(bad());
+                }
+            }
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadcraft_doc::HVal::Int(x.as_i64().unwrap_or(0)),
                 Value::Number(x) => cadcraft_doc::HVal::Real(x.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)?),
