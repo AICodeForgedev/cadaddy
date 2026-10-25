@@ -11,11 +11,13 @@ use serde_json::{Value, json};
 
 use super::helpers::lwpoly;
 use super::*;
+
 use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 mod assoc;
 mod edit;
 mod pick;
+use super::has_doc;
 pub(crate) use assoc::update as refill_associative;
 pub use pick::{HatchPicks, PickMode};
 

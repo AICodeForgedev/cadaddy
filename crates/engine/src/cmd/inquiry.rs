@@ -6,7 +6,8 @@ use cadcraft_doc::{Entity, EntityKind, Handle};
 use cadcraft_geom::{Polyline, Vec2, Vec3};
 use serde_json::{Value, json};
 
-use super::*;
+use super::{CommandSpec, bad, bool_or, f64_req, point_req, point_value, points_param, targets};
+
 use crate::units::{format_angle, format_distance};
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -1130,6 +1131,8 @@ impl Interactive for AreaM {
 
 #[cfg(test)]
 mod tests {
+    use cadcraft_doc::Handle;
+
     use super::*;
 
     /// #1440 review: a value one ulp past its bound (a border rectangle's shoelace area against
