@@ -3003,6 +3003,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             ),
         }
     }
+
+    // Use model.build directly — it returns walls/doors/rooms/levels counts.
+    // (bim.build wraps model.build but constructs its own result without those counts.)
+    let mut result = s.execute("model.build", &json!({}))?;
+    if let Some(v) = placed {
+        result["devices"] = v;
+    }
     // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
     if !job.circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
@@ -3010,13 +3017,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         super::printcond::store_circuits(&mut sp, &job.circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
         result["circuits"] = json!(job.circuits.len());
-    }
-
-    // Use model.build directly — it returns walls/doors/rooms/levels counts.
-    // (bim.build wraps model.build but constructs its own result without those counts.)
-    let mut result = s.execute("model.build", &json!({}))?;
-    if let Some(v) = placed {
-        result["devices"] = v;
     }
     // The model's rooms are the job's rooms on the levels it built.
     if let Some(by_level) = rooms_from_model(s, job)
