@@ -208,6 +208,26 @@ fn index_levels(job: Option<&Value>) -> Vec<LevelNote> {
     out
 }
 
+/// Whether the sheet index has a roof level code ("R" or anything that canonicalises to ROOF)
+/// without an elevation: the sections and elevations didn't mark it.
+fn index_has_roof_without_elevation(job: Option<&Value>) -> bool {
+    let arr = match job.and_then(|j| j.pointer("/index/levels")).and_then(Value::as_array) {
+        Some(a) => a,
+        None => return false,
+    };
+    for l in arr.iter().take(levels::MAX_NOTES) {
+        let Some(code) = l.get("name").and_then(Value::as_str) else { continue };
+        let c = code.trim().to_ascii_uppercase();
+        let is_roof = c == "R"
+            || levels::canonical_level(if c == "R" { "ROOF" } else { &c })
+                .is_some_and(|(_, k)| k == levels::DatumKind::Roof);
+        if is_roof && l.get("elevation_ft").and_then(Value::as_f64).filter(|e| e.is_finite()).is_none() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Where a note was read: `model: <text>` or `layout:<name>: <text>`.
 fn source_of(layout: &Option<String>, text: &str) -> String {
     let text: String = text.chars().take(120).collect();
@@ -303,6 +323,35 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let before = sp.clone();
     let (mut changes, kept) = sp.apply_levels_keeping(&stacked);
+    // A roof level the sheet index names (code "R") that has no elevation from the notes or the
+    // index: estimate it from the top floor's floor-to-floor height, marked as a guess.
+    if index_has_roof_without_elevation(job.as_ref())
+        && !sp.datums.iter().any(|d| d.kind == levels::DatumKind::Roof)
+        && !stacked.iter().any(|n| n.kind == levels::DatumKind::Roof)
+        && let Some(top) = sp.levels.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+    {
+        let est = top.elevation_ft + top.height_ft;
+        let top_name = top.name.clone();
+        changes.push(format!(
+            "ROOF: {} (estimated from {} + floor-to-floor)",
+            cadaddy_walk3d::feet(est),
+            top_name,
+        ));
+        sp.datums.push(levels::Datum {
+            name: "ROOF".to_string(),
+            elevation_ft: est,
+            kind: levels::DatumKind::Roof,
+            source: format!("estimated from {top_name} + floor-to-floor"),
+        });
+        sp.datums.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+        sp.guess.insert(
+            "levels/ROOF".into(),
+            format!(
+                "the roof's elevation is estimated from {top_name}'s floor-to-floor height; confirm from sections or elevations"
+            ),
+        );
+        changes.extend(sp.restack_heights());
+    }
     if let Some(e) = sp.check().into_iter().find(|i| i.error) {
         return Err(bad("levels.read", format!("{}: {}", e.path, e.message)));
     }
@@ -942,5 +991,70 @@ mod tests {
         for n in ["'L1'", "'Level 2'", "'Level 3'", "'ROOF'"] {
             assert!(storeys.iter().any(|l| l.contains(n)), "{n}: {storeys:?}");
         }
+    }
+
+    #[test]
+    fn a_roof_level_without_elevation_is_estimated_from_the_top_floor() {
+        // The blind hotel test: sheet index has "R" for the roof, but no sections marked its
+        // elevation. It should be estimated from the top floor's floor-to-floor height.
+        let mut s = Session::new();
+        four_levels(&mut s);
+        // Sheet index: floors 1-4 with elevations, and "R" without one.
+        guided_state(
+            &mut s,
+            json!([]),
+            json!([]),
+            json!([
+                {"name": "1", "elevation_ft": 0.0},
+                {"name": "2", "elevation_ft": 12.0},
+                {"name": "3", "elevation_ft": 24.0},
+                {"name": "4", "elevation_ft": 36.0},
+                {"name": "R"}
+            ]),
+        );
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let sp = stored_spec(&s);
+        // A ROOF datum should exist with an estimated elevation = Level 4 (36) + height (12) = 48.
+        let roof = sp.datums.iter().find(|d| d.kind == cadaddy_walk3d::levels::DatumKind::Roof);
+        assert!(roof.is_some(), "no ROOF datum: {r}");
+        let roof = roof.unwrap();
+        assert_eq!(roof.name, "ROOF");
+        assert!((roof.elevation_ft - 48.0).abs() < 0.1, "roof elevation {}: {r}", roof.elevation_ft);
+        assert!(roof.source.contains("estimated"), "roof source: {}", roof.source);
+        // It should be marked as a guess.
+        assert!(sp.guess.contains_key("levels/ROOF"), "guess: {:?}", sp.guess);
+        // The changes should mention it.
+        let empty = vec![];
+        let changes: Vec<&str> = r["changes"].as_array().unwrap_or(&empty).iter().filter_map(Value::as_str).collect();
+        assert!(changes.iter().any(|c| c.contains("ROOF")), "changes: {changes:?}");
+        // The storeys should include it.
+        let l = s.execute("levels.list", &json!({})).unwrap();
+        let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
+        assert!(storeys.contains(&"ROOF"), "storeys: {storeys:?}");
+    }
+
+    #[test]
+    fn a_roof_with_a_section_elevation_is_not_overridden_by_the_estimate() {
+        // When sections DO mark the roof elevation, the sheet index's missing elevation does not
+        // create a second estimate.
+        let mut s = Session::new();
+        four_levels(&mut s);
+        text(&mut s, "T.O. ROOF EL. 50'-0\"", [-500.0, 600.0]);
+        guided_state(
+            &mut s,
+            json!([]),
+            json!([]),
+            json!([
+                {"name": "1", "elevation_ft": 0.0},
+                {"name": "4", "elevation_ft": 36.0},
+                {"name": "R"}
+            ]),
+        );
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let sp = stored_spec(&s);
+        let roof = sp.datums.iter().find(|d| d.kind == cadaddy_walk3d::levels::DatumKind::Roof).unwrap();
+        // The section note's 50' should win, not an estimate.
+        assert!((roof.elevation_ft - 50.0).abs() < 0.1, "roof elevation {}: {r}", roof.elevation_ft);
+        assert!(!sp.guess.contains_key("levels/ROOF"), "should not be a guess");
     }
 }
