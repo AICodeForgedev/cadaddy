@@ -6,6 +6,7 @@
 //! control channel, MCP, CLI and scripts) and interactively through prompts ([`Session::start`],
 //! [`Session::input`], [`Session::cmdline`]) exactly like typing at AutoCAD's command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 pub mod activity;

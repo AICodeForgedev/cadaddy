@@ -3625,12 +3625,109 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // image files by their pixels (a logo on every sheet is one file)
     let mut image_files: HashMap<u64, String> = HashMap::new();
     let mut image_out: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)> = Vec::new();
+    // Pre-compute which SHX-consumed wall-weight strokes should be protected.
+    // A stroke is protected only when it forms a wall face pair with another stroke
+    // AND has no non-consumed counterpart already covering the same line (i.e. it is
+    // isolated geometry that would be lost without protection).  This keeps real wall
+    // faces on prints where SHX recovery consumes wall linework near lettering, while
+    // avoiding duplicate geometry on synthetic tests where the wall strokes survive
+    // independently of OCR.
+    let protected_shx_indices: std::collections::HashSet<usize> = {
+        let min_dim_pts = (sheet.0 * 72.0_f64).min(sheet.1 * 72.0);
+        let face_min_len = min_dim_pts * 0.01;
+        let wall_min_pts = 1.0_f64;
+        let wall_max_pts = (min_dim_pts * 0.025).max(40.0);
+        // Represent a stroke as a directed line segment if it is straight enough.
+        let seg_of = |st: &Stroke| -> Option<((f64, f64), (f64, f64), f64, f64, f64)> {
+            if st.pts.len() < 2 { return None; }
+            let a = st.pts[0];
+            let b = *st.pts.last()?;
+            let dx = b.0 - a.0;
+            let dy = b.1 - a.1;
+            let len = dx.hypot(dy);
+            if len < face_min_len { return None; }
+            // Reject non-straight strokes (multi-point with deviation).
+            if st.pts.len() > 3 {
+                let chord = len;
+                for p in &st.pts[1..st.pts.len() - 1] {
+                    let cross = ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs();
+                    if cross / chord > 2.0 { return None; }
+                }
+            }
+            Some((a, b, dx / len, dy / len, len))
+        };
+        // Collect SHX-consumed wall-weight candidate segments.
+        let mut cands: Vec<(usize, (f64, f64), (f64, f64), f64, f64, f64)> = Vec::new();
+        for &idx in &shx_stroke_indices {
+            if symbol_stroke_indices.contains(&idx) { continue; }
+            let Some(st) = strokes.get(idx) else { continue };
+            if !(st.pen.lw >= 24 && st.pen.rgb.iter().all(|&c| c <= 60)) { continue; }
+            if let Some((a, b, ux, uy, len)) = seg_of(st) {
+                cands.push((idx, a, b, ux, uy, len));
+            }
+        }
+        // Collect non-consumed straight segments (the surviving geometry).
+        let mut survivors: Vec<((f64, f64), (f64, f64), f64, f64, f64)> = Vec::new();
+        for (si, st) in strokes.iter().enumerate() {
+            if shx_stroke_indices.contains(&si) || symbol_stroke_indices.contains(&si) { continue; }
+            if let Some(s) = seg_of(st) { survivors.push(s); }
+        }
+        // Step 1: find which candidates form wall face pairs with each other.
+        let mut in_pair: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for ci in 0..cands.len() {
+            let (_, ai, _, uxi, uyi, leni) = cands[ci];
+            let nxi = -uyi;
+            let nyi = uxi;
+            for (cj, &(_, aj, bj, uxj, uyj, _)) in cands.iter().enumerate().skip(ci + 1) {
+                if (uxi * uxj + uyi * uyj).abs() < 0.996 { continue; }
+                let d0 = (aj.0 - ai.0) * nxi + (aj.1 - ai.1) * nyi;
+                let d1 = (bj.0 - ai.0) * nxi + (bj.1 - ai.1) * nyi;
+                let dist = ((d0 + d1) / 2.0).abs();
+                if dist < wall_min_pts || dist > wall_max_pts { continue; }
+                let proj = |p: (f64, f64)| (p.0 - ai.0) * uxi + (p.1 - ai.1) * uyi;
+                let (pb0, pb1) = { let p0 = proj(aj); let p1 = proj(bj); (p0.min(p1), p0.max(p1)) };
+                let overlap = leni.min(pb1) - 0.0_f64.max(pb0);
+                if overlap > dist.max(face_min_len) {
+                    in_pair.insert(ci);
+                    in_pair.insert(cj);
+                }
+            }
+        }
+        // Step 2: for each paired candidate, check if a non-consumed survivor already
+        // covers it (parallel, collinear within tolerance).  If so it's redundant.
+        let collinear_tol = 3.0_f64; // pts: lateral offset tolerance
+        let overlap_frac = 0.5_f64; // at least half the length overlaps
+        let mut result: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &ci in &in_pair {
+            let (idx, ai, _bi, uxi, uyi, leni) = cands[ci];
+            let nxi = -uyi;
+            let nyi = uxi;
+            let has_survivor = survivors.iter().any(|(sa, sb, sux, suy, slen)| {
+                if (uxi * sux + uyi * suy).abs() < 0.996 { return false; }
+                // Lateral distance: must be nearly collinear.
+                let d = ((sa.0 - ai.0) * nxi + (sa.1 - ai.1) * nyi).abs();
+                if d > collinear_tol { return false; }
+                // Overlap along direction.
+                let proj = |p: (f64, f64)| (p.0 - ai.0) * uxi + (p.1 - ai.1) * uyi;
+                let (pb0, pb1) = { let p0 = proj(*sa); let p1 = proj(*sb); (p0.min(p1), p0.max(p1)) };
+                let ov = leni.min(pb1) - 0.0_f64.max(pb0);
+                ov > leni * overlap_frac || ov > slen * overlap_frac
+            });
+            if !has_survivor {
+                result.insert(idx);
+            }
+        }
+        result
+    };
     for (_, kind, i) in paint {
         match kind {
             0 => {
                 let Some(s) = strokes.get(i) else { continue };
-                // Fix 3 & 5: skip strokes consumed by SHX text recovery or symbol blocks
-                if shx_stroke_indices.contains(&i) || symbol_stroke_indices.contains(&i) {
+                // Fix 3 & 5: skip strokes consumed by SHX text recovery or symbol
+                // blocks, but protect isolated wall face pairs that would be lost.
+                if (shx_stroke_indices.contains(&i) || symbol_stroke_indices.contains(&i))
+                    && !protected_shx_indices.contains(&i)
+                {
                     continue;
                 }
                 // Fix 2: determine content-class layer hint for Content mode
