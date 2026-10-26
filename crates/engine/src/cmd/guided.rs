@@ -425,6 +425,10 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// What the mechanical and plumbing plans read (mep_read), each run on its sheet's level:
+    /// the BIM build puts it into the spec it drafts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mep: Option<cadaddy_walk3d::Mep>,
 }
 
 /// The handles one sheet's import created: `lo..hi`.
@@ -491,6 +495,7 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            mep: None,
         }
     }
 
@@ -641,7 +646,7 @@ impl GuidedJob {
 // ─── Persistence ────────────────────────────────────────────────────────────
 
 /// Job state is stored in `Drawing.agent` under the key `"guided_job"`.
-fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
+pub(crate) fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
     let agent_text = match &s.doc()?.agent {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ => return Ok(None),
@@ -2117,28 +2122,88 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(results)
 }
 
-/// Run the MEP read stage: read ductwork/piping from mechanical sheets, generate per-trade
-/// summary and per-sheet zero-result warnings as guidedrun questions.
-fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    // Read ductwork with apply.
-    let duct_result = s.execute("ducts.read", &json!({"apply": true}));
-    let (runs, length_ft, terminals, equipment, fittings, trade_summary, warnings) = match &duct_result {
-        Ok(v) => (
-            v["runs"].as_u64().unwrap_or(0),
-            v["length_ft"].as_f64().unwrap_or(0.0),
-            v["terminals"].as_u64().unwrap_or(0),
-            v["equipment"].as_u64().unwrap_or(0),
-            v["fittings"].as_u64().unwrap_or(0),
-            v["trade_summary"].as_str().unwrap_or("").to_string(),
-            v["warnings"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default(),
-        ),
-        Err(e) => {
-            return Err(crate::EngineError::Other(format!("ducts.read failed: {e}")));
-        }
-    };
+/// The job's imported sheets for the print-set readers: where each sits, the handles its
+/// import made, and its discipline, type and printed scale from classify.
+pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut used = vec![false; job.sheet_spans.len()];
+    job.sheet_regions
+        .iter()
+        .map(|r| {
+            let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_string();
+            let entry = classified.iter().find(|c| base(&text(c, "number")).eq_ignore_ascii_case(&r.number));
+            let discipline = entry
+                .map(|c| text(c, "discipline"))
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&r.number));
+            let kind = entry.map(|c| {
+                let t = text(c, "type");
+                if t.is_empty() { text(c, "sheet_type") } else { t }
+            });
+            let span = job
+                .sheet_spans
+                .iter()
+                .enumerate()
+                .find(|(i, sp)| !used.get(*i).copied().unwrap_or(true) && base(&sp.sheet).eq_ignore_ascii_case(&r.number));
+            let span = span.map(|(i, sp)| {
+                if let Some(u) = used.get_mut(i) {
+                    *u = true;
+                }
+                (sp.lo, sp.hi)
+            });
+            super::printmep::SheetRef {
+                number: r.number.clone(),
+                level: r.level.clone(),
+                discipline,
+                kind: kind.filter(|k| !k.is_empty()).unwrap_or_else(|| "plan".into()),
+                rect: r.rect,
+                span,
+                scale_text: entry.and_then(|c| c.get("scale")).and_then(Value::as_str).map(str::to_string),
+            }
+        })
+        .collect()
+}
 
-    // Per-trade summary question (MUST 6): present the summary and ask if anything was missed.
-    if runs > 0 {
+/// Drawing units per foot of the job's drawing: the stored spec's, else inches.
+fn job_units_per_foot(s: &Session) -> f64 {
+    match super::bspec::current(s, "mep_read") {
+        Ok((sp, true)) if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 => sp.units_per_foot,
+        _ => 12.0,
+    }
+}
+
+/// Run the MEP read stage: ducts on each mechanical plan and pipes on each plumbing plan of
+/// the set (never on the other sheets), each on its sheet's level; a per-trade summary and a
+/// question for each plan that read nothing.
+fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    ensure_sheets_loaded(s, job)?;
+    let refs = job_sheet_refs(job);
+    let upf = job_units_per_foot(s);
+    let read = super::printmep::read_sheets(s.doc()?, &refs, upf, None);
+    let read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    // A spec already stored (a re-run) takes the reading now; the BIM build puts it into the
+    // spec it drafts in any case.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
+        super::printmep::merge_mep(&mut sp, read.mep.clone(), &read_sheets);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    job.mep = Some(read.mep.clone());
+
+    let duct_ft = read.length_ft("duct");
+    let pipe_ft = read.length_ft("pipe");
+    let (duct_runs, pipe_runs) = (read.runs("duct"), read.runs("pipe"));
+    let terminals = read.mep.terminals.len();
+    let equipment = read.mep.equipment.len();
+    let m_sheets = read.sheets.iter().filter(|r| r.trade == "duct").count();
+    let p_sheets = read.sheets.iter().filter(|r| r.trade == "pipe").count();
+    let trade_summary = format!(
+        "Found {duct_runs} duct run(s), {:.0} ft on {m_sheets} mechanical plan(s); {pipe_runs} pipe run(s), {:.0} ft on {p_sheets} plumbing plan(s); {terminals} terminal(s), {equipment} equipment",
+        duct_ft, pipe_ft
+    );
+
+    // Per-trade summary question: present the summary and ask if anything was missed.
+    if duct_runs + pipe_runs > 0 {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -2146,7 +2211,15 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             question: format!("{trade_summary} — anything not counted?"),
             why: "per-trade summary of MEP elements found".into(),
             choices: vec!["Looks correct".into(), "Missing items".into()],
-            evidence: None,
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(read.to_json()),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
             default: Some("Looks correct".into()),
             answer_schema: None,
             answer: None,
@@ -2158,21 +2231,32 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             st.questions.push(q);
         }
     }
+    if m_sheets + p_sheets == 0 {
+        job.add_finding(
+            StageName::MepRead,
+            "No mechanical or plumbing plans in the set",
+            "ducts are read on M plan sheets and pipes on P plan sheets; classify found none",
+            2,
+            vec!["Check the sheet classification (printset.classify)".into()],
+            None,
+            false,
+        );
+    }
 
-    // Per-sheet zero-result warnings as guidedrun questions with evidence (MUST 3).
-    for (i, w) in warnings.iter().enumerate() {
+    // Each plan that read nothing: a question with the sheet.
+    for r in read.sheets.iter().filter(|r| r.runs == 0).take(MAX_QUESTIONS_PER_STAGE) {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
             stage: StageName::MepRead,
-            question: format!("{w} — is this expected?"),
+            question: format!("{} ({}) read no {} runs — is this expected?", r.sheet, r.level, r.trade),
             why: "zero MEP results on a sheet that should have them".into(),
             choices: vec!["Yes, expected (schedule/detail sheet)".into(), "No, re-check this sheet".into()],
             evidence: Some(QuestionEvidence {
                 crop_png_path: None,
-                sheet: Some(format!("M-sheet warning {}", i + 1)),
+                sheet: Some(r.sheet.clone()),
                 at: None,
-                values: Some(json!({"warning": w, "runs": runs, "equipment": equipment})),
+                values: Some(r.to_json()),
                 handles: Vec::new(),
                 tiled_crops: None,
                 leftovers: Vec::new(),
@@ -2188,15 +2272,20 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             st.questions.push(q);
         }
     }
+    job.audit(
+        "stage_run",
+        "pipeline",
+        None,
+        Some(StageName::MepRead),
+        Some(json!({"duct_runs": duct_runs, "pipe_runs": pipe_runs, "sheets": read_sheets})),
+    );
 
-    Ok(json!({
-        "runs": runs,
-        "length_ft": length_ft,
-        "terminals": terminals,
-        "equipment": equipment,
-        "fittings": fittings,
-        "trade_summary": trade_summary,
-    }))
+    let mut out = read.to_json();
+    out["runs"] = json!(duct_runs + pipe_runs);
+    out["length_ft"] = json!(super::printmep::r1(duct_ft + pipe_ft));
+    out["fittings"] = json!(0);
+    out["trade_summary"] = json!(trade_summary);
+    Ok(out)
 }
 
 /// Run the BIM build stage (MUST 1).
@@ -2242,6 +2331,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
             }
             job.audit("bspec_draft", "pipeline", None, Some(StageName::BimBuild), Some(json!({"stored": true})));
+            // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
+            // its level, so the build makes them.
+            if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
+                let runs = mep.runs.len();
+                super::printmep::merge_mep(&mut sp, mep, &[]);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+                job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
+            }
         }
         Err(e) => {
             // Spec draft failed — this is a finding, not a silent error.
