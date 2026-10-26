@@ -425,6 +425,10 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// The sheet map read off the loaded sheets, in short ([`super::printset::links_summary`]):
+    /// callouts resolved, enlarged plans registered, match lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Value>,
 }
 
 /// The handles one sheet's import created: `lo..hi`.
@@ -496,6 +500,7 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            links: None,
         }
     }
 
@@ -1657,6 +1662,69 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     c
 }
 
+/// The job's sheet map, read off the sheets it loaded: each sheet's own objects (its handles)
+/// as a page, a few pages at a time.
+fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks::SheetLinks> {
+    use cadaddy_mepfix::printlinks::{self, LinkPage, SetSheet};
+    let d = s.doc().ok()?;
+    let store = d.space(&s.space())?;
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let sheets: Vec<SetSheet> = job
+        .index
+        .as_ref()
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)?
+        .iter()
+        .map(|v| SetSheet {
+            number: text(v, "number"),
+            title: text(v, "title"),
+            discipline: text(v, "discipline"),
+            sheet_type: text(v, "type"),
+            level: text(v, "level"),
+        })
+        .collect();
+    let mut spans = job.sheet_spans.clone();
+    spans.sort_by_key(|sp| sp.lo);
+    if spans.is_empty() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let batch = rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    let batch = 1usize;
+    let mut pages: Vec<LinkPage> = Vec::with_capacity(spans.len());
+    for chunk in spans.chunks(batch) {
+        let mut parts: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); chunk.len()];
+        for e in store.iter() {
+            if let Some(i) = chunk.iter().position(|sp| (sp.lo..sp.hi).contains(&e.handle.0))
+                && let Some(v) = parts.get_mut(i)
+            {
+                v.push((**e).clone());
+            }
+        }
+        let read = |(sp, ents): (&SheetSpan, Vec<cadaddy_doc::Entity>)| -> LinkPage {
+            let base = sp.sheet.split('/').next().unwrap_or(&sp.sheet).to_string();
+            let mut sub = cadaddy_doc::Drawing { blocks: d.blocks.clone(), ..cadaddy_doc::Drawing::default() };
+            sub.model.push_many(ents);
+            let k = printlinks::norm_sheet(&base);
+            let sheet = sheets
+                .iter()
+                .find(|x| printlinks::norm_sheet(&x.number) == k)
+                .cloned()
+                .unwrap_or(SetSheet { number: base.clone(), ..SetSheet::default() });
+            LinkPage { read: printlinks::read_page(&sub, &base), sheet }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            pages.extend(chunk.par_iter().zip(parts.into_par_iter()).map(read).collect::<Vec<_>>());
+        }
+        #[cfg(target_arch = "wasm32")]
+        pages.extend(chunk.iter().zip(parts).map(read));
+    }
+    Some(printlinks::link_set(&sheets, &pages))
+}
+
 /// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
 /// written into `dir`; its path.
 fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
@@ -1916,6 +1984,12 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "not_devices": census.not_device,
         "unlisted_repeated": census.unlisted.iter().map(|(t, u)| (t.clone(), json!(u.count))).collect::<serde_json::Map<String, Value>>(),
     });
+    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit.
+    if let Some(links) = job_links(s, job) {
+        let summary = super::printset::links_summary(&links);
+        results["links"] = summary.clone();
+        job.links = Some(summary);
+    }
     let sym_count: usize = census.by_type.values().sum();
     if sym_count > 0 || !census.unlisted.is_empty() {
         total_items += sym_count;
@@ -3147,6 +3221,7 @@ fn job_status_value(job: &GuidedJob) -> Value {
         "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
         "sheets": index_count(job, "sheets"),
         "levels": index_count(job, "levels"),
+        "links": job.links,
     })
 }
 

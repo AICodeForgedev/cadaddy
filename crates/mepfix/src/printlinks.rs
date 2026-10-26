@@ -138,6 +138,9 @@ pub struct PageRead {
     /// The page's scale, paper inches per foot (0 when none was printed).
     pub scale: f64,
     pub key_plan: bool,
+    /// The whole drawing as one view: for an enlarged-plan sheet whose views carry no title
+    /// this reader knows (its biggest block of linework).
+    pub whole: Option<PageView>,
 }
 
 /// An enlarged plan and where it sits on its level's overall plan.
@@ -590,8 +593,12 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     };
     let detail_like = |v: &str| !v.is_empty() && v.len() <= 4 && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.');
     // A bubble naming its own sheet beside a view title numbers that view.
-    let view_mark =
-        |target: &str, c: [f64; 2], r: f64| !own_n.is_empty() && norm_sheet(target) == own_n && views_raw.iter().any(|v| dist(v.at, c) < 12.0 * r);
+    let level_titles = sheet_reader::plan_views(d);
+    let view_mark = |target: &str, c: [f64; 2], r: f64| {
+        !own_n.is_empty()
+            && norm_sheet(target) == own_n
+            && (views_raw.iter().any(|v| dist(v.at, c) < 12.0 * r) || level_titles.iter().any(|v| dist(v.at, c) < 12.0 * r))
+    };
     for &(c, r) in &rounds {
         if out.callouts.len() >= MAX_PAGE_CALLOUTS {
             break;
@@ -769,22 +776,25 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     out.scale = page.scale;
     out.grid_x = page.grid_x.iter().map(|g| (g.label.clone(), g.at_in)).collect();
     out.grid_y = page.grid_y.iter().map(|g| (g.label.clone(), g.at_in)).collect();
-    let blocks = if views_raw.is_empty() { Vec::new() } else { sheet_facts::view_regions(d) };
-    for v in &views_raw {
-        let h = texts.iter().find(|t| t.value == v.title && [t.at.x, t.at.y] == v.at).map_or(median_h, |t| t.height);
-        // The view's number: its own bubble's (a print's lettering may come back in pieces).
-        let mark = view_marks
-            .iter()
-            .filter(|(_, c)| c[0] <= v.at[0] && dist(*c, v.at) < 12.0 * h)
-            .min_by(|a, b| dist(a.1, v.at).total_cmp(&dist(b.1, v.at)));
-        let mut pv = PageView {
-            number: mark.map(|m| m.0.clone()).or_else(|| v.number.clone()).unwrap_or_default(),
-            title: v.title.clone(),
-            scale_text: v.scale_text.clone(),
-            region: view_block(&blocks, v.at, h).or(v.region),
-            ..PageView::default()
-        };
-        if let Some(rg) = pv.region {
+    let blocks = sheet_facts::view_regions(d);
+    // View titles: over a scale line, or a plan view's title naming its level (lettering well
+    // above the sheet's usual size) where no scale line is printed.
+    let mut titles: Vec<(Option<String>, String, Option<String>, [f64; 2], Option<[f64; 4]>)> =
+        views_raw.iter().map(|v| (v.number.clone(), v.title.clone(), v.scale_text.clone(), v.at, v.region)).collect();
+    for v in level_titles {
+        if !titles.iter().any(|t| t.1 == v.title || dist(t.3, v.at) < v.height) {
+            titles.push((None, v.title, None, v.at, None));
+        }
+    }
+    let enlarged_page = texts.iter().any(|t| t.value.to_ascii_uppercase().contains("ENLARGED"));
+    // Grid lines are read for enlarged plans only (they register by them): on a whole set,
+    // cropping every view of every plan costs more than the rest of the reading.
+    let view_of = |region: Option<[f64; 4]>, grids: bool| -> PageView {
+        let mut pv = PageView { region, ..PageView::default() };
+        if let Some(rg) = region {
+            pv.mounting_ft = texts.iter().filter(|t| inside(&rg, [t.at.x, t.at.y])).filter_map(|t| mounting_height(&t.value)).take(16).collect();
+        }
+        if let Some(rg) = region.filter(|_| grids) {
             // Grid bubbles stand outside the walls: look a little past the view for them.
             let m = 0.15 * (rg[2] - rg[0]).max(rg[3] - rg[1]);
             let wide = [rg[0] - m, rg[1] - m, rg[2] + m, rg[3] + m];
@@ -792,9 +802,23 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             let rec = sheet_reader::recognise_dxf(&sub);
             pv.grid_x = rec.grid_x.iter().map(|g| (g.label.clone(), g.at_in)).collect();
             pv.grid_y = rec.grid_y.iter().map(|g| (g.label.clone(), g.at_in)).collect();
-            pv.mounting_ft = texts.iter().filter(|t| inside(&rg, [t.at.x, t.at.y])).filter_map(|t| mounting_height(&t.value)).take(16).collect();
         }
+        pv
+    };
+    for (number, title, scale_text, at, region) in titles.into_iter().take(32) {
+        let h = texts.iter().find(|t| t.value == title && dist([t.at.x, t.at.y], at) < 1e-6).map_or(median_h, |t| t.height);
+        // The view's number: its own bubble's (a print's lettering may come back in pieces).
+        let mark = view_marks.iter().filter(|(_, c)| c[0] <= at[0] && dist(*c, at) < 12.0 * h).min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)));
+        let mut pv = view_of(view_block(&blocks, at, h).or(region), enlarged_page);
+        pv.number = mark.map(|m| m.0.clone()).or(number).unwrap_or_default();
+        pv.title = title;
+        pv.scale_text = scale_text;
         out.views.push(pv);
+    }
+    if enlarged_page && !out.views.iter().any(|v| v.title.to_ascii_uppercase().contains("ENLARGED")) {
+        // Its biggest block of linework is the enlarged plan.
+        let main = blocks.iter().max_by_key(|(_, n)| *n).map(|(r, _)| *r);
+        out.whole = main.map(|r| view_of(Some(r), true));
     }
 
     // Devices: the import's symbols with the mark beside them; legends say which are samples.
@@ -902,7 +926,9 @@ fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)])
         (Some(a), Some(b)) if (a / b - 1.0).abs() < 0.05 => (a + b) / 2.0,
         (Some(a), Some(_)) | (Some(a), None) => a,
         (None, Some(b)) => b,
-        (None, None) => return None,
+        // One line each way: both sheets are imported at their scale notes (building units), so
+        // one to one, if the lines that are shared say so.
+        (None, None) => 1.0,
     };
     let tx = px.iter().map(|(a, b)| b - s * a).sum::<f64>() / px.len().max(1) as f64;
     let ty = py.iter().map(|(a, b)| b - s * a).sum::<f64>() / py.len().max(1) as f64;
@@ -942,11 +968,20 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     }
     let mut enl_views: Vec<EnlView> = Vec::new();
     for p in pages {
+        let before = enl_views.len();
         for v in &p.read.views {
             let t = v.title.to_ascii_uppercase();
             if t.contains("ENLARGED") || (p.sheet.sheet_type == "enlarged_plan" && t.contains("PLAN")) {
                 enl_views.push(EnlView { page: p, view: v });
             }
+        }
+        // An enlarged-plan sheet whose views this reader found no title for: the sheet's
+        // biggest block of linework is its plan.
+        if enl_views.len() == before
+            && (p.sheet.sheet_type == "enlarged_plan" || p.sheet.title.to_ascii_uppercase().contains("ENLARGED"))
+            && let Some(w) = &p.read.whole
+        {
+            enl_views.push(EnlView { page: p, view: w });
         }
     }
 
@@ -1044,17 +1079,31 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 p.read
                     .callouts
                     .iter()
-                    .filter(|c| points_here(c) && matches!(c.kind.as_str(), "enlarged_plan" | "enlarged_ref" | "detail_bubble" | "detail_ref"))
+                    .filter(|c| {
+                        points_here(c) && matches!(c.kind.as_str(), "enlarged_plan" | "enlarged_ref" | "detail_bubble" | "detail_ref" | "sheet_ref")
+                    })
                     .map(move |c| (p, c))
             })
             .max_by_key(|(p, c)| {
                 (c.boundary.is_some(), c.kind == "enlarged_plan", p.sheet.discipline == e.page.sheet.discipline, p.sheet.level == level)
             });
+        // Grid lines the view and a plan both label (the plan of the same part of the building).
+        let shared = |p: &LinkPage| {
+            let n = |a: &[(String, f64)], b: &[(String, f64)]| a.iter().filter(|(l, _)| b.iter().any(|(m, _)| m == l)).count();
+            n(&e.view.grid_x, &p.read.grid_x).min(4) + n(&e.view.grid_y, &p.read.grid_y).min(4)
+        };
         let host = host_callout.map(|(p, _)| p).or_else(|| {
             pages
                 .iter()
                 .filter(|p| p.sheet.number != target && p.sheet.sheet_type == "plan" && !level.is_empty() && p.sheet.level == level)
-                .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, p.read.devices.len()))
+                .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, shared(p), p.read.devices.len()))
+        });
+        // No callout and no level: the plan of the view's discipline sharing the most grid lines.
+        let host = host.or_else(|| {
+            pages
+                .iter()
+                .filter(|p| p.sheet.number != target && p.sheet.sheet_type == "plan" && shared(p) >= 2)
+                .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, shared(p), std::cmp::Reverse(level_key(&p.sheet.level))))
         });
         if let Some(h) = host {
             entry.on_sheet = h.sheet.number.clone();
@@ -1204,6 +1253,11 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
 fn plans_of_one_page(sheets: &[String]) -> bool {
     let base = |s: &String| s.split('/').next().unwrap_or(s).to_string();
     sheets.first().is_some_and(|f| sheets.iter().all(|s| base(s) == base(f)) && sheets.len() > 1 && f.contains('/'))
+}
+
+/// Levels in building order (numbered floors, then the roof; unnamed last).
+fn level_key(l: &str) -> (bool, bool, u32) {
+    (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX))
 }
 
 /// The level an enlarged view shows: its title's, else its sheet's.

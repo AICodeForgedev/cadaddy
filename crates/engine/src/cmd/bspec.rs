@@ -509,6 +509,7 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let mut cdy_paths: Vec<String> = Vec::new();
+    let mut link_pages: Vec<cadaddy_mepfix::printlinks::LinkPage> = Vec::new();
     let mut check_results: Vec<Value> = Vec::new();
     let mut built_counts = json!({});
     let mut warnings: Vec<String> = Vec::new();
@@ -520,6 +521,10 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         // Step 1: Import the PDF as a new drawing.
         s.echo(format!("bim.from_pdf: importing {stem}..."));
         let import_result = s.execute("pdfimport", &json!({ "path": pdf_str, "newDrawing": true }))?;
+        // The page's links (callouts, enlarged-plan boundaries, match lines) for the sheet map.
+        if let Ok(d) = s.doc() {
+            link_pages.push(super::printset::link_page_of(d, &stem));
+        }
 
         // Step 2: Check import accuracy (already run automatically by pdfimport).
         let check = import_result.get("importCheck").cloned().unwrap_or(Value::Null);
@@ -658,8 +663,11 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
 
+    let sheets: Vec<cadaddy_mepfix::printlinks::SetSheet> = link_pages.iter().map(|p| p.sheet.clone()).collect();
+    let links = super::printset::links_summary(&cadaddy_mepfix::printlinks::link_set(&sheets, &link_pages));
     Ok(json!({
         "cdy_paths": cdy_paths,
+        "links": links,
         "check_results": check_results,
         "built_counts": built_counts,
         "levels": if levels_count > 1 { json!(built.keys().collect::<Vec<_>>()) } else { json!(levels_count) },

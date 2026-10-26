@@ -46,6 +46,7 @@ pub mod gear_reader;
 pub mod heights;
 pub mod hotel;
 pub mod layout;
+pub mod linkset;
 pub mod ocr;
 pub mod pipe_reader;
 pub mod printcheck;

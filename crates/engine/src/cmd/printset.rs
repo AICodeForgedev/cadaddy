@@ -13,7 +13,10 @@
 //! - `printset.sheets`: list the project's sheets with their classification.
 //! - `printset.reimport`: re-import a revised set, only reprocessing changed sheets.
 //! - `printset.save`: save the project state to disk.
+//! - `printset.links`: the sheet map: callouts and references resolved, enlarged plans
+//!   registered on their overall plans, match lines, detail facts.
 
+use cadaddy_mepfix::printlinks::{self, LinkPage, SetSheet, SheetLinks};
 use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -72,6 +75,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
+        CommandSpec::new("printset.links", "Link Print Set", run_links)
+            .files()
+            .params("{pdfs?: folder (else the open print set), details?: bool (default true: also read the detail sheets the callouts name)} → {sheets: [{number, title, discipline, type, level}], pages_read, callouts: [{kind, detail?, target_sheet, on_sheet, resolved, detail_found?, at, text?}], resolved, resolved_pct, enlarged: [{on_sheet, target_sheet, sheet, detail, title, level, registered, method?, scale?, boundary?, devices, devices_by_type, overall_ignored}], enlarged_registered, match_lines: [{sheets, level, stitched, offset?}], levels: [{level, sheets, stitched, devices}], facts: [{on_sheet, target_sheet, detail, kind, value_ft, applied_to}], double_counted, unresolved: [{on_sheet, kind, target_sheet, detail?, at}], key_plans, errors?}: callout bubbles, section and elevation marks, enlarged-plan boundaries, match lines and written references (SEE SHEET, SEE DETAIL 3/E-501, REFER TO ARCHITECTURAL) read off every plan page on any layer; each enlarged plan is the authority inside its boundary on the overall plan (double_counted: devices counted from both sheets)")
+            .enabled(always)
+            .noundo(),
     ]
 }
 
@@ -250,4 +258,208 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     mep_printset::save_project(project, &path).map_err(EngineError::Other)?;
     Ok(json!({ "saved": path.display().to_string() }))
+}
+
+// ─── printset.links ──────────────────────────────────────────────────────────
+
+/// Most plan pages `printset.links` reads.
+const MAX_LINK_PAGES: usize = 400;
+/// Most detail pages it reads for the facts their callouts point at.
+const MAX_DETAIL_PAGES: usize = 60;
+
+fn classified(p: &PrintSetProject) -> bool {
+    !p.sheets.is_empty() && p.sheets.iter().all(|e| !e.dirty)
+}
+
+fn same_folder(a: &str, b: &str) -> bool {
+    let canon = |x: &str| std::fs::canonicalize(x).unwrap_or_else(|_| PathBuf::from(x));
+    canon(a) == canon(b)
+}
+
+/// The set's sheets for the sheet map, from the print set's index.
+fn set_sheets(index: &mep_printset::SheetIndex) -> Vec<SetSheet> {
+    index
+        .sheets
+        .iter()
+        .map(|x| SetSheet {
+            number: x.number.clone(),
+            title: x.title.clone(),
+            discipline: x.discipline.clone(),
+            sheet_type: x.sheet_type.clone(),
+            level: x.level.clone(),
+        })
+        .collect()
+}
+
+/// `file#page` (or a one-sheet file) → the file and its page.
+fn source_page(src: &str) -> (String, u32) {
+    match src.rsplit_once('#') {
+        Some((f, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => (f.to_string(), n.parse().unwrap_or(1)),
+        _ => (src.to_string(), 1),
+    }
+}
+
+/// Read pages of the print set (in parallel, each page dropped once read) into link pages.
+fn read_link_pages(dir: &std::path::Path, want: &[(SetSheet, String)], errors: &mut Vec<String>) -> Result<Vec<LinkPage>> {
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("printset.links: file formats are not available in this build".into()))?;
+    let mut files: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>> = std::collections::BTreeMap::new();
+    for (_, src) in want {
+        let (file, _) = source_page(src);
+        if files.contains_key(&file) || file.split(['/', '\\']).any(|part| part == "..") {
+            continue;
+        }
+        let path = dir.join(&file);
+        match crate::readfile::read(&path) {
+            Ok(b) => {
+                files.insert(file, std::sync::Arc::new(b));
+            }
+            Err(e) => errors.push(format!("{file}: {e}")),
+        }
+    }
+    let read_pdf = hooks.read_pdf;
+    let read_any = hooks.read;
+    let convert = |(sheet, src): &(SetSheet, String)| -> std::result::Result<LinkPage, String> {
+        let (file, page) = source_page(src);
+        let bytes = files.get(&file).ok_or_else(|| format!("{file}: not read"))?;
+        let d = if file.to_ascii_lowercase().ends_with(".pdf") {
+            let read_pdf = read_pdf.ok_or_else(|| "PDF import is not available in this build".to_string())?;
+            // As the job imports a sheet: no images, pattern fills merged.
+            read_pdf(bytes, &json!({"page": page.max(1), "images": false, "fills": "merge"}))?.0
+        } else {
+            read_any(bytes, &file)?
+        };
+        Ok(LinkPage { sheet: sheet.clone(), read: printlinks::read_page(&d, &sheet.number) })
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let results: Vec<std::result::Result<LinkPage, String>> = {
+        use rayon::prelude::*;
+        want.par_iter().map(convert).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let results: Vec<std::result::Result<LinkPage, String>> = want.iter().map(convert).collect();
+    let mut pages = Vec::with_capacity(results.len());
+    for (r, (sheet, _)) in results.into_iter().zip(want) {
+        match r {
+            Ok(pg) => pages.push(pg),
+            Err(e) => errors.push(format!("{}: {e}", sheet.number)),
+        }
+    }
+    Ok(pages)
+}
+
+/// The set's sheet map: the plan pages read (and the detail pages their callouts name), linked.
+pub(crate) fn sheet_links(s: &mut Session, pdfs: Option<&str>, details: bool) -> Result<(SheetLinks, Vec<String>)> {
+    match pdfs {
+        Some(folder) => {
+            let ready = s.printset_project.as_deref().is_some_and(|pr| classified(pr) && same_folder(&pr.source_dir, folder));
+            if !ready {
+                s.execute("printset.open", &json!({"path": folder}))?;
+                s.execute("printset.classify", &json!({}))?;
+            }
+        }
+        None => {
+            if !classified(get_project(s)?) {
+                s.execute("printset.classify", &json!({}))?;
+            }
+        }
+    }
+    let project = get_project(s)?;
+    let dir = PathBuf::from(&project.source_dir);
+    let index = mep_printset::sheet_index(project);
+    let sheets = set_sheets(&index);
+    let plan_like = |x: &mep_printset::IndexSheet| {
+        matches!(x.sheet_type.as_str(), "plan" | "enlarged_plan" | "rcp") || x.title.to_ascii_uppercase().contains("ENLARGED")
+    };
+    let want: Vec<(SetSheet, String)> = index
+        .sheets
+        .iter()
+        .zip(&sheets)
+        .filter(|(x, _)| plan_like(x))
+        .filter_map(|(x, sh)| x.sources.first().map(|src| (sh.clone(), src.clone())))
+        .take(MAX_LINK_PAGES)
+        .collect();
+    let mut errors = Vec::new();
+    let mut pages = read_link_pages(&dir, &want, &mut errors)?;
+    if details {
+        // The detail sheets the plans' callouts name, for the facts they print.
+        let read: std::collections::BTreeSet<String> = pages.iter().map(|p| printlinks::norm_sheet(&p.sheet.number)).collect();
+        let mut more: Vec<(SetSheet, String)> = Vec::new();
+        for c in pages.iter().flat_map(|p| p.read.callouts.iter()) {
+            if c.detail.is_empty() || !matches!(c.kind.as_str(), "detail_bubble" | "detail_ref" | "section_mark" | "elevation_tag") {
+                continue;
+            }
+            let k = printlinks::norm_sheet(&c.target_sheet);
+            if read.contains(&k) || more.iter().any(|(sh, _)| printlinks::norm_sheet(&sh.number) == k) || more.len() >= MAX_DETAIL_PAGES {
+                continue;
+            }
+            if let Some((x, sh)) = index.sheets.iter().zip(&sheets).find(|(_, sh)| printlinks::norm_sheet(&sh.number) == k)
+                && let Some(src) = x.sources.first()
+            {
+                more.push((sh.clone(), src.clone()));
+            }
+        }
+        pages.extend(read_link_pages(&dir, &more, &mut errors)?);
+    }
+    Ok((printlinks::link_set(&sheets, &pages), errors))
+}
+
+/// One imported page as a page of the sheet map, named by its title block (else `fallback`),
+/// its type and level from its title.
+pub(crate) fn link_page_of(d: &cadaddy_doc::Drawing, fallback: &str) -> LinkPage {
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let ident = cadaddy_mepfix::sheet_facts::identify_sheet(&texts);
+    let number = ident.as_ref().map(|i| i.number.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| fallback.to_string());
+    let title = ident.as_ref().map(|i| i.title.clone()).unwrap_or_default();
+    let up = title.to_ascii_uppercase();
+    let sheet_type = if up.contains("ENLARGED") {
+        "enlarged_plan"
+    } else if up.contains("DETAIL") {
+        "detail"
+    } else if up.contains("SECTION") {
+        "section"
+    } else if up.contains("SCHEDULE") || up.contains("LEGEND") || up.contains("NOTES") {
+        "schedule"
+    } else {
+        "plan"
+    };
+    let level = cadaddy_mepfix::sheet_reader::detect_levels(&title).into_iter().next().unwrap_or_default();
+    let discipline = ident.as_ref().map(|i| i.discipline.clone()).unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&number));
+    let sheet = SetSheet { number: number.clone(), title, discipline, sheet_type: sheet_type.into(), level };
+    LinkPage { read: printlinks::read_page(d, &number), sheet }
+}
+
+/// The sheet map in short, for the job's and `bim.from_pdf`'s answers.
+pub(crate) fn links_summary(l: &SheetLinks) -> Value {
+    json!({
+        "sheets": l.sheets.len(),
+        "pages_read": l.pages_read,
+        "callouts": l.callouts.len(),
+        "resolved": l.resolved,
+        "resolved_pct": l.resolved_pct,
+        "enlarged": l.enlarged.iter().map(enlarged_value).collect::<Vec<_>>(),
+        "enlarged_registered": l.enlarged_registered,
+        "match_lines": l.match_lines,
+        "double_counted": l.double_counted,
+        "unresolved": l.unresolved.iter().take(20).collect::<Vec<_>>(),
+        "unresolved_total": l.unresolved.len(),
+    })
+}
+
+/// An enlarged plan with its own sheet named outright (`sheet`, the same as `target_sheet`).
+fn enlarged_value(e: &printlinks::Enlarged) -> Value {
+    let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("sheet".into(), json!(e.target_sheet));
+    }
+    v
+}
+
+fn run_links(s: &mut Session, p: &Value) -> Result<Value> {
+    let (links, errors) = sheet_links(s, str_param(p, "pdfs"), bool_or(p, "details", true))?;
+    let mut out = serde_json::to_value(&links).map_err(|e| EngineError::Other(e.to_string()))?;
+    out["enlarged"] = Value::Array(links.enlarged.iter().map(enlarged_value).collect());
+    if !errors.is_empty() {
+        out["errors"] = json!(errors);
+    }
+    Ok(out)
 }

@@ -106,7 +106,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "from": {"type": "string"},
                 "keys": {"type": "array", "items": {"type": "string"}}
             }, "required": ["action"]}}),
-        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
+        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- links {pdfs: \"/jobs/hotel/prints\"} — the sheet map: callouts and references (SEE SHEET, 3/E-501) resolved, enlarged plans placed on their overall plans and counted once, match lines, unresolved references.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "site_takeoff", "description": "Sitework quantities read off a job's civil sheets (grading, site and utility plans, DXF/DWG; none: the open drawing): earthwork cut AND fill between the existing and proposed surfaces (contours and spot grades), paving, curbs, fences, utility structures with RIM/INV, and storm/sanitary/water pipe LF by size and material with trench excavation and backfill. Each line has its status (read, rule, assumed or insufficient data: no number when a surface is missing), source sheets and the objects whose shares add up to it. Paged with offset and limit (default 100); unknown symbols are listed, not guessed. Opens no dialog.",
         "inputSchema": {"type": "object", "properties": {
@@ -224,9 +224,30 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
                 json!({"opened": {"name": opened["name"], "sheets": opened["sheets"], "revision": opened["revision"]}, "classified": classified, "readers": reader_results, "next": "bim_job build {}"}),
             );
         }
+        Some("links") => {
+            // The sheet map, short: callouts counted by kind, the first unresolved ones.
+            let v = exec(b, "printset.links", params)?;
+            let mut by_kind: std::collections::BTreeMap<String, (u64, u64)> = std::collections::BTreeMap::new();
+            for c in v["callouts"].as_array().into_iter().flatten() {
+                let e = by_kind.entry(c["kind"].as_str().unwrap_or("?").to_string()).or_default();
+                e.0 += 1;
+                if c["resolved"] == true {
+                    e.1 += 1;
+                }
+            }
+            let kinds: serde_json::Map<String, Value> = by_kind.into_iter().map(|(k, (n, r))| (k, json!({"count": n, "resolved": r}))).collect();
+            let unresolved: Vec<Value> = v["unresolved"].as_array().into_iter().flatten().take(20).cloned().collect();
+            return Ok(json!({
+                "sheets": v["sheets"].as_array().map_or(0, Vec::len), "pages_read": v["pages_read"],
+                "callouts": v["callouts"].as_array().map_or(0, Vec::len), "resolved_pct": v["resolved_pct"], "by_kind": kinds,
+                "enlarged": v["enlarged"], "match_lines": v["match_lines"], "levels": v["levels"], "double_counted": v["double_counted"],
+                "unresolved": unresolved, "unresolved_total": v["unresolved"].as_array().map_or(0, Vec::len),
+                "more": "execute printset.links {pdfs} for every callout and fact",
+            }));
+        }
         Some(other) => {
             return Err(format!(
-                "bim_job has no action `{}` — use briefing, note, import, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
+                "bim_job has no action `{}` — use briefing, note, import, links, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
                 other.chars().take(30).collect::<String>()
             ));
         }
