@@ -784,6 +784,98 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
     }
 }
 
+// ---- Counter receptacle zones from read casework (Q301 → Q288) ---------------------------
+
+/// A counter receptacle zone from casework read off the architectural sheets: the stretch of
+/// the wall a read backsplash covers, at the heights a receptacle over its counter can take.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CounterZone {
+    pub level: String,
+    /// The wall behind the backsplash.
+    pub wall: String,
+    /// Along the wall from its start, inches.
+    pub along_in: [f64; 2],
+    /// The same stretch in building feet, along the wall's axis (x for a wall running east-west,
+    /// else y), as [`FoundDevice::zone_ft`] holds it.
+    pub zone_ft: [f64; 2],
+    /// Box-centre heights, inches AFF: from 2" over the backsplash (or over the counter when the
+    /// backsplash runs full height, 18" or more) to 20" over the counter top.
+    pub height_in: [f64; 2],
+    /// The read backsplash's and counter's tags.
+    pub backsplash: String,
+    pub counter: String,
+}
+
+/// Counter receptacle zones over every read backsplash that sits on a read counter or vanity
+/// (its height is the counter top) against a wall. Only the reader's items are used.
+pub fn counter_receptacle_zones(walls: &[crate::truth::Wall], read: &[crate::score::FoundCaseworkItem]) -> Vec<CounterZone> {
+    let mut out = Vec::new();
+    for bs in read.iter().filter(|c| c.kind == "backsplash") {
+        let c = [(bs.min_ft[0] + bs.max_ft[0]) / 2.0, (bs.min_ft[1] + bs.max_ft[1]) / 2.0];
+        let half = [(bs.max_ft[0] - bs.min_ft[0]) / 2.0, (bs.max_ft[1] - bs.min_ft[1]) / 2.0];
+        let counter = read
+            .iter()
+            .filter(|k| k.level == bs.level && (k.kind == "counter" || k.kind == "vanity") && k.height_in > 0.0)
+            .filter(|k| c[0] >= k.min_ft[0] - 0.1 && c[0] <= k.max_ft[0] + 0.1 && c[1] >= k.min_ft[1] - 0.1 && c[1] <= k.max_ft[1] + 0.1)
+            .max_by(|a, b| {
+                ((a.max_ft[0] - a.min_ft[0]) * (a.max_ft[1] - a.min_ft[1])).total_cmp(&((b.max_ft[0] - b.min_ft[0]) * (b.max_ft[1] - b.min_ft[1])))
+            });
+        let Some(counter) = counter else { continue };
+        let Some(wall) = crate::clash::backing_wall(walls, &bs.level, c, half) else { continue };
+        let (dx, dy) = (wall.to_ft[0] - wall.from_ft[0], wall.to_ft[1] - wall.from_ft[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            continue;
+        }
+        let along = |p: [f64; 2]| ((p[0] - wall.from_ft[0]) * dx + (p[1] - wall.from_ft[1]) * dy) / len * 12.0;
+        let (a, b) = (along(bs.min_ft), along(bs.max_ft));
+        let x_axis = dx.abs() >= dy.abs();
+        let zone_ft = if x_axis { [bs.min_ft[0], bs.max_ft[0]] } else { [bs.min_ft[1], bs.max_ft[1]] };
+        let top = counter.height_in;
+        let low = if bs.height_in >= 18.0 { top + 2.0 } else { top + bs.height_in.max(0.0) + 2.0 };
+        out.push(CounterZone {
+            level: bs.level.clone(),
+            wall: wall.id.clone(),
+            along_in: [a.min(b), a.max(b)],
+            zone_ft,
+            height_in: [low, (top + 20.0).max(low)],
+            backsplash: bs.tag.clone(),
+            counter: counter.tag.clone(),
+        });
+    }
+    out
+}
+
+/// Gives every found receptacle drawn over a counter zone (within 2 ft of its wall, along its
+/// stretch give or take a foot) that zone: `zone_ft` becomes the backsplash's stretch, the
+/// mounting height is kept inside the zone's band and `height_source` becomes `casework`.
+/// Returns how many devices changed.
+pub fn apply_counter_zones(devices: &mut [FoundDevice], walls: &[crate::truth::Wall], zones: &[CounterZone]) -> usize {
+    let mut n = 0;
+    for d in devices.iter_mut().filter(|d| d.kind == "receptacle") {
+        let at = [d.at_ft[0], d.at_ft[1]];
+        let hit = zones.iter().find(|z| {
+            let Some(w) = walls.iter().find(|w| w.id == z.wall) else { return false };
+            let (dx, dy) = (w.to_ft[0] - w.from_ft[0], w.to_ft[1] - w.from_ft[1]);
+            let len = (dx * dx + dy * dy).sqrt();
+            if z.level != d.level || len < 1e-6 {
+                return false;
+            }
+            let off = ((at[0] - w.from_ft[0]) * -dy + (at[1] - w.from_ft[1]) * dx).abs() / len;
+            let v = if dx.abs() >= dy.abs() { at[0] } else { at[1] };
+            off <= 2.0 && v >= z.zone_ft[0] - 1.0 && v <= z.zone_ft[1] + 1.0
+        });
+        if let Some(z) = hit {
+            d.zone_ft = Some(z.zone_ft);
+            d.arch_positioned = false;
+            d.mounting_in = if d.mounting_in.is_finite() { d.mounting_in.clamp(z.height_in[0], z.height_in[1]) } else { z.height_in[0] };
+            d.height_source = "casework".into();
+            n += 1;
+        }
+    }
+    n
+}
+
 // ---- Found device (building coordinates) for scoring ------------------------------------
 
 /// A device a reader found, in building coordinates, ready for scoring against the truth.

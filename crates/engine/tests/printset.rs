@@ -231,3 +231,38 @@ fn a_two_view_sheet_is_one_entry_and_its_page_is_imported_once() {
     assert_eq!(regions[0]["number"], "E-1A");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Q5271: the devices the guided job's devices stage counts on the E plans are the model's
+/// devices (on their sheets' levels) and the BOM's device units.
+#[test]
+fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+        write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: Some(cadaddy_io::pdf_read::read_json),
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let (_truth, dir) = job_folder("devices", &[]);
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true})).expect("job.start");
+    assert_eq!(st["done"], json!(true), "{st}");
+    let devices = s.execute("job.explain", &json!({"stage": "devices"})).expect("explain devices");
+    let counted = devices["result"]["devices"]["count"].as_u64().unwrap_or(0);
+    eprintln!("devices stage: {:#}", devices["result"]["devices"]["by_type"]);
+    assert!(counted > 0, "the generated E plans have tagged devices: {:#}", devices["result"]);
+    let built = s.execute("job.explain", &json!({"stage": "bim_build"})).expect("explain bim_build");
+    assert_eq!(built["result"]["devices"]["inserted"].as_u64(), Some(counted), "{:#}", built["result"]["devices"]);
+    let next = s.execute("job.next", &json!({})).expect("job.next");
+    assert_eq!(next["summary"]["devices"]["count"].as_u64(), Some(counted), "{:#}", next["summary"]);
+    let by_level = next["summary"]["devices"]["by_level"].as_object().cloned().unwrap_or_default();
+    eprintln!("devices by level: {by_level:?}");
+    assert!(by_level.keys().all(|l| !l.is_empty()), "every device has a level: {by_level:?}");
+    let bom = s.execute("bim.bom", &json!({"group_by": "level"})).expect("bom");
+    let lines: Vec<&serde_json::Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
+    let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
+    assert_eq!(units, counted as f64, "{lines:#?}");
+    assert!(lines.iter().all(|l| l["trade"] == "electrical" && l["level"].as_str().is_some_and(|v| !v.is_empty())));
+    let _ = std::fs::remove_dir_all(&dir);
+}

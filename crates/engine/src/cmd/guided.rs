@@ -430,6 +430,10 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// The devices the devices stage confirmed (type, where, sheet, level, circuit): the
+    /// bim_build stage puts them in the model after it drafts the building spec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<super::readers::ReadDevice>,
     /// Auto mode (`job.start {auto: true}`): every question with a default takes it and the job
     /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
     #[serde(default)]
@@ -518,6 +522,7 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            devices: Vec::new(),
             auto: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
@@ -1568,6 +1573,8 @@ struct DeviceCensus {
     /// Every type the loaded legends and schedules list, and how many tables listed them.
     legend_types: std::collections::BTreeSet<String>,
     legend_tables: usize,
+    /// Each device counted in `by_type`, for the model.
+    placed: Vec<super::readers::ReadDevice>,
 }
 
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
@@ -1648,6 +1655,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     let none = Legend::default();
     for (g, syms) in symbols.iter().enumerate() {
         let legend = legends.get(g).unwrap_or(&none);
+        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| sheet_facts::is_circuit_label(&t.value)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         for (tag, at, h) in syms {
@@ -1661,7 +1669,17 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
                 match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
-                    TagVerdict::Device(t) => *c.by_type.entry(t).or_default() += 1,
+                    TagVerdict::Device(t) => {
+                        c.placed.push(super::readers::ReadDevice {
+                            tag: t.clone(),
+                            at: [at.x, at.y],
+                            sheet: sheet.clone(),
+                            level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
+                            circuit: super::readers::circuit_beside(&circuits, *at),
+                            handle: h.hex(),
+                        });
+                        *c.by_type.entry(t).or_default() += 1;
+                    }
                     TagVerdict::NotDevice(why) => *c.not_device.entry(why).or_default() += 1,
                     TagVerdict::Unlisted(t) => {
                         let u = c.unlisted.entry(t).or_insert_with(|| UnlistedTag {
@@ -1988,7 +2006,7 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
 
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
-fn is_circuit_tag(tag: &str) -> bool {
+pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
@@ -2046,6 +2064,18 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             "source": "pdf_symbol_blocks",
         });
     }
+
+    // Every confirmed device goes in the model on its sheet's level (MUST 1): now when there is
+    // a building model, and again by the bim_build stage after it drafts the spec.
+    job.devices = census.placed.clone();
+    let has_model = s.doc().is_ok_and(|d| d.building_spec.as_deref().is_some_and(|t| !t.trim().is_empty()));
+    results["model"] = if job.devices.is_empty() {
+        json!({"inserted": 0})
+    } else if has_model {
+        super::readers::place_devices(s, &job.devices, "guided job").unwrap_or_else(|e| json!({"inserted": 0, "why_not": e.to_string()}))
+    } else {
+        json!({"inserted": 0, "pending": job.devices.len(), "why_not": "no building model yet: the bim_build stage puts them in after drafting it"})
+    };
 
     // ── Secondary: schedules.read for device marks in schedule tables ──
     match s.execute("schedules.read", &json!({})) {
@@ -2441,7 +2471,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
-    let result = s.execute("model.build", &json!({}))?;
+    let mut result = s.execute("model.build", &json!({}))?;
+    // The devices stage's devices, on their levels (bspec.draft started a new spec).
+    if !job.devices.is_empty() {
+        match super::readers::place_devices(s, &job.devices, "guided job") {
+            Ok(v) => result["devices"] = v,
+            Err(e) => job.add_finding(
+                StageName::BimBuild,
+                &format!("The devices could not be put in the model: {e}"),
+                "the devices stage found devices but the model has none",
+                4,
+                vec!["Run mep.read_devices {preview: false} once the model is built".into()],
+                None,
+                false,
+            ),
+        }
+    }
 
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
@@ -2586,7 +2631,17 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
 /// Run takeoff stage.
 fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
-    let result = s.execute("takeoff", &json!({}))?;
+    let mut result = s.execute("takeoff", &json!({}))?;
+    // The model's devices by type and level, as the BOM lists them (electrical).
+    if let Ok(lines) = super::bom::model_lines(s) {
+        let devices: Vec<Value> = lines
+            .iter()
+            .filter(|l| l["category"] == "devices")
+            .map(|l| json!({"trade": l["trade"], "item": l["item"], "level": l["level"], "count": l["net"]}))
+            .collect();
+        let units: f64 = devices.iter().filter_map(|l| l["count"].as_f64()).sum();
+        result["devices"] = json!({"lines": devices, "units": units});
+    }
 
     // MUST 4: takeoff with 0 lines is a finding, never silently Done.
     let line_count =
@@ -3301,7 +3356,7 @@ fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
         None if job.is_done() => Ok(json!({
             "done": true,
             "progress": 1.0,
-            "summary": job_summary(&job),
+            "summary": job_summary(s, &job),
         })),
         None => Ok(json!({
             "waiting": true,
@@ -3452,7 +3507,7 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
             "answered": qid,
             "done": true,
             "progress": 1.0,
-            "summary": job_summary(&job),
+            "summary": job_summary(s, &job),
         }),
         None => json!({
             "answered": qid,
@@ -3647,7 +3702,7 @@ fn index_count(job: &GuidedJob, key: &str) -> Option<usize> {
     job.index.as_ref().and_then(|i| i.get(key)).and_then(Value::as_array).map(Vec::len)
 }
 
-fn job_summary(job: &GuidedJob) -> Value {
+fn job_summary(s: &Session, job: &GuidedJob) -> Value {
     let mut results = json!({});
     for stage in &job.stages {
         if stage.status != StageStatus::Skipped {
@@ -3665,6 +3720,8 @@ fn job_summary(job: &GuidedJob) -> Value {
         "sheets": index_count(job, "sheets"),
         "levels": index_count(job, "levels"),
         "answers": answers_value(job),
+        // From the saved model, not the stage's own count.
+        "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
         "results": results,
     })
 }
@@ -4010,6 +4067,134 @@ mod tests {
         assert_eq!(r["devices"]["count"], json!(15));
         assert_eq!(r["devices"]["unknowns"], json!([]));
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
+    /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
+    /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn devices_read_reach_the_model_and_the_bom() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets =
+            Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}, {"number": "Q-2", "sheet_type": "plan", "level": "2"}]}));
+        job.sheets_loaded = true;
+        let mut want_by_level = BTreeMap::new();
+        for (i, (name, level, a, b)) in [("Q-1", "1", 5, 3), ("Q-2", "2", 4, 2)].into_iter().enumerate() {
+            let x0 = 3000.0 * i as f64;
+            let texts: Vec<(&str, f64, f64, f64)> = vec![
+                ("LIGHTING FIXTURE SCHEDULE", x0 + 1000.0, 800.0, 8.0),
+                ("TYPE", x0 + 1000.0, 785.0, 5.0),
+                ("DESCRIPTION", x0 + 1030.0, 785.0, 5.0),
+                ("A", x0 + 1000.0, 772.0, 5.0),
+                ("2X4 LED TROFFER", x0 + 1030.0, 772.0, 5.0),
+                ("B", x0 + 1000.0, 760.0, 5.0),
+                ("LED DOWNLIGHT", x0 + 1030.0, 760.0, 5.0),
+                // The circuit printed beside the first A.
+                ("D-7", x0 + 108.0, 296.0, 2.0),
+            ];
+            let mut syms: Vec<(&str, f64, f64)> = vec![("A", x0 + 990.0, 772.0)]; // the schedule's sample
+            syms.extend((0..a).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)));
+            syms.extend((0..b).map(|k| ("B", x0 + 100.0 + 40.0 * f64::from(k), 200.0)));
+            // Junk: a circuit number, the sheet's own number, a switch leg, a keynote, an untagged symbol.
+            syms.extend([
+                ("D-1", x0 + 600.0, 100.0),
+                (name, x0 + 620.0, 100.0),
+                ("s", x0 + 640.0, 100.0),
+                ("12", x0 + 660.0, 100.0),
+                ("", x0 + 680.0, 100.0),
+            ]);
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
+            job.sheet_regions.push(SheetRegion {
+                number: name.into(),
+                level: level.into(),
+                discipline: "E".into(),
+                kind: "plan".into(),
+                rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+            });
+            want_by_level.insert(format!("Level {level}"), a + b);
+        }
+        let n: i32 = want_by_level.values().sum();
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
+        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5}));
+        // No building model yet: the bim_build stage puts them in.
+        assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
+        assert_eq!(job.devices.len(), n as usize);
+        let first = job.devices.iter().find(|d| d.sheet == "Q-1" && d.at == [100.0, 300.0]).unwrap_or_else(|| panic!("{:?}", job.devices));
+        assert_eq!((first.level.as_str(), first.circuit.as_str()), ("1", "D-7"));
+        assert_eq!(job.devices.iter().filter(|d| !d.circuit.is_empty()).count(), 2, "one circuit is printed per sheet");
+
+        let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(built["devices"]["inserted"], json!(n), "{:#}", built["devices"]);
+        assert_eq!(built["devices"]["by_level"], json!(want_by_level));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let devs: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.id.starts_with("device:")).collect();
+        assert_eq!(devs.len(), n as usize);
+        let e = devs.iter().find(|t| t.fields.contains_key("circuit")).unwrap_or_else(|| panic!("no circuit on any device"));
+        assert_eq!((e.fields["circuit"].value.as_str(), e.fields["type"].value.as_str()), ("D-7", "A"));
+        assert!(e.level.starts_with("Level ") && e.fields["sheet"].value.starts_with("Q-"), "{e:?}");
+        assert_eq!(crate::cmd::readers::model_device_counts(d)["count"], json!(n));
+
+        // The BOM: one electrical device line per type and level, with as many units.
+        let bom = s.execute("bim.bom", &json!({"group_by": "level"})).unwrap_or_else(|e| panic!("{e}"));
+        let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
+        let units = |lv: &str| lines.iter().filter(|l| l["level"] == lv).filter_map(|l| l["net"].as_f64()).sum::<f64>();
+        // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
+        assert_eq!((units("Level 1"), units("Level 2")), (8.0, 6.0), "{lines:#?}");
+        assert!(lines.iter().all(|l| l["trade"] == "electrical"));
+        assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
+        // The takeoff stage lists them too.
+        let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(t["devices"]["units"], json!(f64::from(n)), "{:#}", t["devices"]);
+        // Built again: the same devices, not twice as many.
+        let again = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(again["devices"]["inserted"], json!(n));
+        assert_eq!(s.doc().map(crate::cmd::readers::model_device_counts).unwrap_or_default()["count"], json!(n));
+    }
+
+    /// `mep.read_devices` on an open drawing: a preview by default, says why it can't insert
+    /// without a model, and with one inserts the devices but never the junk (Q5271 MUSTS 3, 4).
+    #[test]
+    fn read_devices_inserts_into_the_open_model() {
+        let mut s = crate::Session::new();
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // the schedule's sample
+        syms.extend((0..3).map(|k| ("A", 100.0 + 40.0 * f64::from(k), 300.0)));
+        syms.extend((0..2).map(|k| ("B", 100.0 + 40.0 * f64::from(k), 200.0)));
+        syms.extend([("ZZ", 600.0, 100.0), ("D-1", 620.0, 100.0), ("s", 640.0, 100.0)]);
+        add_sheet(&mut s, &texts, &syms);
+        let read = |s: &mut crate::Session, p: Value| s.execute("mep.read_devices", &p).unwrap_or_else(|e| panic!("{e}"));
+        let r = read(&mut s, json!({}));
+        assert_eq!((&r["model"]["inserted"], &r["model"]["would_insert"]), (&json!(0), &json!(5)), "{:#}", r["model"]);
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!(r["model"]["inserted"], json!(0));
+        let why = r["model"]["why_not"].as_str().unwrap_or_default();
+        assert!(why.contains("no building model") && why.contains("bspec.draft"), "{why}");
+        s.execute("bspec.draft", &json!({"store": true})).unwrap_or_else(|e| panic!("{e}"));
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!(r["model"]["inserted"], json!(5), "{:#}", r["model"]);
+        assert_eq!(r["model"]["by_type"], json!({"A": 3, "B": 2}));
+        assert_eq!(r["model"]["not_inserted"]["legend or schedule sample"], json!(2), "{:#}", r["model"]);
+        assert_eq!(r["model"]["not_inserted"]["not in the legend (the guided job asks about it)"], json!(1));
+        // Read again: the same five, not ten; the BOM has five units.
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!((&r["model"]["inserted"], &r["model"]["replaced"]), (&json!(5), &json!(5)));
+        let bom = s.execute("bim.bom", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let units: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["net"].as_f64()).sum();
+        assert_eq!(units, 5.0, "{:#}", bom["lines"]);
     }
 
     #[test]
