@@ -439,6 +439,9 @@ fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
         let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
         let Some(e) = d.entity(h) else { continue };
         let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { continue };
+        // A slab's top faces up and its underside down (their plan areas are signed by their
+        // winding): count the plate once, not top and underside (Q6023).
+        let (mut up, mut down) = (0.0f64, 0.0f64);
         for face in &m.faces {
             let pts: Vec<cadaddy_geom::Vec2> = face
                 .v
@@ -448,9 +451,11 @@ fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
                 .map(|v| cadaddy_geom::Vec2::new(v.x, v.y))
                 .collect();
             if pts.len() >= 3 {
-                total += cadaddy_geom::shoelace(&pts).abs();
+                let a = cadaddy_geom::shoelace(&pts);
+                if a > 0.0 { up += a } else { down -= a }
             }
         }
+        total += up.max(down);
     }
     total
 }
