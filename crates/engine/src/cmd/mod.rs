@@ -78,6 +78,7 @@ pub use qselect::wildcard;
 pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
+pub mod archread;
 pub mod bcf;
 pub mod callouts;
 pub mod casework;
@@ -795,6 +796,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(models3d::specs());
         v.extend(furnish::specs());
         v.extend(casework::specs());
+        v.extend(archread::specs());
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
