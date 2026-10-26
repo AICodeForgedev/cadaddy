@@ -405,6 +405,11 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::arch::draw_door_schedule(&mut pen, t, &st.arch, fr.area);
             abbr.extend(["HM = HOLLOW METAL", "WD = WOOD", "AL = ALUMINUM", "MIN = MINUTES", "INSUL. = INSULATED"].map(abbrev));
         }
+        Kind::UnitPlans => {
+            let fr = frame(st);
+            crate::units::draw_unit_plans(&mut pen, t, fr.area);
+            abbr.extend(["PTAC = PACKAGED TERMINAL AIR CONDITIONER", "ADA = ACCESSIBLE UNIT", "QTY = QUANTITY"].map(abbrev));
+        }
         Kind::ArchFinishes => {
             let fr = frame(st);
             crate::arch::draw_finish_schedule(&mut pen, t, &st.arch, fr.area);
@@ -422,6 +427,9 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
+            if sh.title.contains("FLOOR PLAN") {
+                crate::units::draw_unit_tags(&mut pen, t, l);
+            }
             rcp(&mut pen, t, st, l);
             crate::ceilings::draw_callouts(&mut pen, t, &st.ceilings, l);
             // The hotel's floor plans are drawn as ceiling plans with the casework, fixtures and
