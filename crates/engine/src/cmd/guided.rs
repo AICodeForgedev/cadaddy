@@ -2891,16 +2891,9 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Collect the trades and levels reported by the model takeoff.
     let lines_arr = result.get("lines").and_then(Value::as_array);
     let line_count = lines_arr.map_or(0, Vec::len);
-    let trades: std::collections::BTreeSet<String> = lines_arr
-        .into_iter()
-        .flat_map(|a| a.iter())
-        .filter_map(|l| l["trade"].as_str().filter(|t| !t.is_empty()).map(str::to_string))
-        .collect();
-    let levels: Vec<Value> = result
-        .get("levels")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let trades: std::collections::BTreeSet<String> =
+        lines_arr.into_iter().flat_map(|a| a.iter()).filter_map(|l| l["trade"].as_str().filter(|t| !t.is_empty()).map(str::to_string)).collect();
+    let levels: Vec<Value> = result.get("levels").and_then(Value::as_array).cloned().unwrap_or_default();
 
     result["summary"] = json!({
         "line_count": line_count,
@@ -2922,13 +2915,7 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         );
     }
 
-    job.audit(
-        "stage_run",
-        "pipeline",
-        None,
-        Some(StageName::Takeoff),
-        Some(json!({"line_count": line_count, "trades": &trades, "levels": &levels})),
-    );
+    job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), Some(json!({"line_count": line_count, "trades": &trades, "levels": &levels})));
     Ok(result)
 }
 
@@ -4484,10 +4471,8 @@ mod tests {
         assert!(summary["trades"].as_array().map_or(false, |a| a.iter().any(|v| v == "electrical")), "trades should include electrical: {summary:#}");
         assert!(summary["levels"].as_array().map_or(false, |a| !a.is_empty()), "levels should be reported: {summary:#}");
         // The device lines in bim.takeoff should account for at least the device count.
-        let device_count: f64 = t["lines"].as_array().into_iter().flatten()
-            .filter(|l| l["category"] == "devices")
-            .filter_map(|l| l["qty"].as_f64())
-            .sum();
+        let device_count: f64 =
+            t["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["qty"].as_f64()).sum();
         assert!(device_count >= f64::from(n), "device count {device_count} should be >= {n}: {:#}", t["lines"]);
         // Built again: the same devices, not twice as many.
         let again = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
