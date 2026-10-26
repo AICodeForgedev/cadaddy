@@ -18,6 +18,7 @@ pub mod library;
 mod plotstyle;
 mod plotter;
 pub mod projrules;
+pub mod props;
 mod rare;
 mod refedit;
 mod section;

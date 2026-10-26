@@ -471,6 +471,18 @@ fn volume_mesh(r: &Room3) -> Option<Mesh> {
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let old: Vec<Handle> = s.doc()?.model.iter().filter(|e| room_of(&e.common).is_some()).map(|e| e.handle).collect();
+    // The properties a person set on them (bim.props.set) go on the rebuilt room of the same
+    // number (or, unnumbered, the same name).
+    let kept: Vec<(String, String, cadaddy_doc::props::Props)> = old
+        .iter()
+        .filter_map(|h| s.doc().ok()?.entity(*h).map(|e| e.common.xdata.to_vec()))
+        .filter_map(|x| {
+            let at = x.iter().position(|t| t.code == 1001 && t.value == ROOM_APP)?;
+            let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone()).unwrap_or_default();
+            let edits = cadaddy_doc::props::read(&x).user_edits();
+            (!edits.is_empty()).then(|| (v(1), v(2), edits))
+        })
+        .collect();
     for h in &old {
         s.doc_mut()?.remove_entity(*h);
     }
@@ -490,6 +502,18 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             RawTag { code: 1000, value: r.name.chars().take(250).collect() },
             RawTag { code: 1000, value: r.number.clone().unwrap_or_default().chars().take(250).collect() },
         ];
+        let number = r.number.clone().unwrap_or_default();
+        let same = |(name, num, _): &&(String, String, cadaddy_doc::props::Props)| {
+            if num.trim().is_empty() && number.trim().is_empty() {
+                name.trim().eq_ignore_ascii_case(r.name.trim())
+            } else {
+                num.trim().eq_ignore_ascii_case(number.trim())
+            }
+        };
+        let tag = match kept.iter().find(same) {
+            Some((_, _, edits)) => cadaddy_doc::props::write(&tag, edits),
+            None => tag,
+        };
         let common =
             Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag.into(), ..Common::default() };
         if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
