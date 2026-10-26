@@ -1912,7 +1912,15 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
-    let mut rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
+    // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
+    // one reading traces: the last floors were left out).
+    let regions: Vec<[f64; 4]> =
+        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
+    let mut params = json!({"outline": false});
+    if !regions.is_empty() {
+        params["regions"] = json!(regions);
+    }
+    let mut rooms_result = s.execute("rooms.list", &params)?;
     // A room carries the level of the sheet it was read on.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
         for room in list.iter_mut() {
@@ -2080,8 +2088,9 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Take out what was read as rooms but is not the building's (MUST 1-3): labels in a sheet's
 /// title block or border (firm names, addresses, review stamps), rooms read on a site, civil or
-/// level-less sheet, the other disciplines' copies of a level the architectural plan shows, and
-/// labels no room is named (notes, dates, view titles). How many went, by why.
+/// level-less sheet, the other disciplines' unnumbered labels on a level the architectural plan
+/// shows (legends, notes), and labels no room is named (notes, dates, view titles). How many
+/// went, by why.
 fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
     let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return json!({}) };
     let a_levels: Vec<String> = job
@@ -2094,7 +2103,7 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
     list.retain(|room| {
         let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
         let name = room.get("name").and_then(Value::as_str).unwrap_or("");
-        if !name.trim().is_empty() && !super::autospec::room_label(name) {
+        if !name.trim().is_empty() && (!super::autospec::room_label(name) || !legible_room_name(name)) {
             not_a_name += 1;
             return false;
         }
@@ -2107,13 +2116,35 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
             site += 1;
             return false;
         }
-        if region.discipline != "A" && a_levels.contains(&region.level.trim().to_ascii_uppercase()) {
+        // Another discipline's copy of a level the architectural plan shows: only a numbered
+        // room (the copy of one the architectural reading missed; one per number is kept
+        // below), never its legends and notes.
+        let numbered = room.get("number").and_then(Value::as_str).is_some_and(|n| n.chars().any(|c| c.is_ascii_digit()));
+        if region.discipline != "A" && !numbered && a_levels.contains(&region.level.trim().to_ascii_uppercase()) {
             other_discipline += 1;
             return false;
         }
         true
     });
     json!({"title_block_or_border": sheet_furniture, "site_or_no_level": site, "other_discipline": other_discipline, "not_a_room_name": not_a_name})
+}
+
+/// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
+/// two-letter code (`WC`, `CL`). Text read from a print in a font the reader can't map comes out
+/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`.
+fn legible_room_name(name: &str) -> bool {
+    let t = name.trim();
+    if t.len() == 2 && t.bytes().all(|b| b.is_ascii_uppercase()) {
+        return true;
+    }
+    let mut run = 0;
+    for c in t.chars() {
+        run = if c.is_alphabetic() { run + 1 } else { 0 };
+        if run >= 3 {
+            return true;
+        }
+    }
+    false
 }
 
 /// The rule key of a room answer: `room:<number>|<name>`, upper case.
@@ -3044,45 +3075,46 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     out
 }
 
-/// The building level a sheet's level code builds (`3` → `Level 3`, `R` → `Roof`).
-fn level_name(code: &str) -> String {
-    match code {
-        "R" => "Roof".to_string(),
-        l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
-        l => l.to_string(),
-    }
-}
-
 /// The job's rooms after the build (MUST 2: a room is a label inside a closed boundary of real
-/// walls): on each level the model built rooms on, the model's rooms (traced inside that level's
-/// architectural plan walls, the title block and border left out); on the other levels the rooms
-/// stage's reading. The rooms stage's result takes them, its reading's count kept as
-/// `read_count`. The model's rooms per level.
+/// walls): the rooms stage's reading (each label traced inside its closed outline on its sheet,
+/// the title block, border and other sheets' notes left out), and the rooms the model traced
+/// inside a level's walls that the reading has not: neither its number (on any level: the
+/// model's tag can be read off another floor's sheet) nor its name on its level. The rooms
+/// stage's result takes them, its reading's count kept as `read_count`. The model's rooms per
+/// level.
 fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
     let model = super::rooms3d::model_rooms(s).ok().flatten().filter(|l| !l.is_empty())?;
-    let level_of = |r: &Value| r.get("level").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
-    let built: BTreeSet<String> = model.iter().map(level_of).filter(|l| !l.is_empty()).collect();
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
     let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
     for r in &model {
         *by_level.entry(r.get("level").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
     }
-    let read: Vec<Value> = job
+    let mut read: Vec<Value> = job
         .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
         .and_then(|r| r.get("rooms"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    // A re-run of the build: the reading is the one before the last build added to it.
+    read.retain(|r| r.get("from_model").and_then(Value::as_bool) != Some(true));
     let read_count = read.len();
-    let kept: Vec<Value> = read
+    let numbers: BTreeSet<String> = read.iter().map(|r| text(r, "number")).filter(|n| !n.is_empty()).collect();
+    let mut names: BTreeSet<(String, String)> = read.iter().map(|r| (level_name(&text(r, "level")).to_ascii_uppercase(), text(r, "name"))).collect();
+    let added: Vec<Value> = model
         .into_iter()
-        .filter(|r| {
-            let code = r.get("level").and_then(Value::as_str).unwrap_or("");
-            !built.contains(&level_name(code.trim()).to_ascii_uppercase())
+        .filter_map(|mut m| {
+            let (number, name) = (text(&m, "number"), m.get("name").and_then(Value::as_str).unwrap_or("").to_string());
+            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM");
+            let new = (number.is_empty() || !numbers.contains(&number)) && names.insert((text(&m, "level"), name.trim().to_ascii_uppercase()));
+            if let Some(o) = m.as_object_mut() {
+                o.insert("from_model".into(), json!(true));
+            }
+            (room && new).then_some(m)
         })
         .collect();
-    let from_model = model.len();
-    let mut rooms = json!({"rooms": model.into_iter().chain(kept).collect::<Vec<_>>()});
+    let from_model = added.len();
+    let mut rooms = json!({"rooms": read.into_iter().chain(added).collect::<Vec<_>>()});
     let (removed, renamed) = apply_room_answers(job, &mut rooms);
     let list = rooms.get_mut("rooms").map(Value::take).unwrap_or_else(|| json!([]));
     let count = list.as_array().map_or(0, Vec::len);
@@ -5245,12 +5277,16 @@ mod tests {
 
     #[test]
     fn the_title_block_border_and_stamp_build_no_walls_or_rooms() {
-        // Without the frame (the whole sheet a level), the title block's boxes are rooms.
+        // Without the frame (the whole sheet a level), the title block's labels are rooms.
         let mut s = furnished_sheet();
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         job.sheet_regions = vec![a_plan(None, None)];
         let r = build_job(&mut s, &job);
-        assert!(r["rooms"].as_u64().is_some_and(|n| n > 2), "the test sheet's title block must close rooms: {r}");
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        assert!(
+            spec.rooms.iter().any(|r| !["OFFICE", "LOBBY"].contains(&r.name.to_ascii_uppercase().as_str())),
+            "the test sheet's title block must name rooms: {r}"
+        );
 
         // With it: only the floor's walls, its door and its two rooms.
         let mut s = furnished_sheet();
@@ -5269,7 +5305,7 @@ mod tests {
     }
 
     #[test]
-    fn the_jobs_rooms_are_the_models_on_the_levels_it_built() {
+    fn the_jobs_rooms_are_the_reading_and_what_only_the_model_traced() {
         // The partition's jambs drawn and its door shut, so OFFICE and LOBBY are two rooms
         // inside the floor's walls.
         let mut s = furnished_sheet();
@@ -5283,24 +5319,40 @@ mod tests {
         job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
         let r = build_job(&mut s, &job);
         assert_eq!(r["rooms"].as_u64(), Some(2), "{r}");
-        // The rooms stage read a title-block box and a room twice on level 1, and level 2 (no
-        // plan built) on its electrical plan.
+        // The rooms stage read OFFICE 101 and LAB 103 (its door not built, so the model traced
+        // no lab) on level 1, and STORAGE on level 2 (no plan built); not the lobby.
         if let Some(st) = job.stage_mut(StageName::Rooms) {
-            st.result = Some(json!({"count": 4, "rooms": [
+            st.result = Some(json!({"count": 3, "rooms": [
                 {"name": "OFFICE", "number": "101", "level": "1"},
-                {"name": "OFFICE", "number": "101", "level": "1"},
-                {"name": "PROJECT NO", "level": "1"},
+                {"name": "LAB", "number": "103", "level": "1"},
                 {"name": "STORAGE", "number": "201", "level": "2"}
             ]}));
         }
         let by_level = rooms_from_model(&mut s, &mut job).expect("the model's rooms");
         assert_eq!(by_level, json!({"Level 1": 2}));
-        let result = job.stage(StageName::Rooms).and_then(|st| st.result.clone()).unwrap_or_default();
-        let mut names: Vec<(&str, &str)> =
-            result["rooms"].as_array().unwrap().iter().map(|r| (r["name"].as_str().unwrap_or(""), r["level"].as_str().unwrap_or(""))).collect();
-        names.sort_unstable();
-        assert_eq!(names, [("Lobby", "Level 1"), ("Office", "Level 1"), ("STORAGE", "2")], "{result}");
-        assert_eq!((result["count"].as_u64(), result["read_count"].as_u64(), result["from_model"].as_u64()), (Some(3), Some(4), Some(2)));
+        let names_of = |job: &GuidedJob| {
+            let result = job.stage(StageName::Rooms).and_then(|st| st.result.clone()).unwrap_or_default();
+            let mut names: Vec<(String, String, String)> = result["rooms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    (r["name"].as_str().unwrap_or("").into(), r["number"].as_str().unwrap_or("").into(), r["level"].as_str().unwrap_or("").into())
+                })
+                .collect();
+            names.sort_unstable();
+            (names, result)
+        };
+        let (names, result) = names_of(&job);
+        // The model's Office is the OFFICE read (its number); its Lobby, not read, is added.
+        let want = [("LAB", "103", "1"), ("Lobby", "102", "Level 1"), ("OFFICE", "101", "1"), ("STORAGE", "201", "2")];
+        assert_eq!(names, want.map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())), "{result}");
+        assert_eq!((result["count"].as_u64(), result["read_count"].as_u64(), result["from_model"].as_u64()), (Some(4), Some(3), Some(1)));
+        // Run again (a re-run of the build): the same rooms, none twice.
+        rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        let (again, result) = names_of(&job);
+        assert_eq!(again, names, "{result}");
+        assert_eq!(result["read_count"].as_u64(), Some(3));
 
         // A model with no rooms leaves the reading as it was.
         let mut empty = crate::Session::new();
@@ -5357,13 +5409,28 @@ mod tests {
             {"name": "STORAGE", "at": [620.0, 40.0]},
             {"name": "FIRST FLOOR PLAN", "at": [30.0, 10.0]},
             {"name": "DRAWN BY: JD", "at": [30.0, 30.0]},
-            {"name": "KING SUITE", "number": "102", "at": [40.0, 40.0]}
+            {"name": "KING SUITE", "number": "102", "at": [40.0, 40.0]},
+            {"name": "KING SUITE", "number": "104", "at": [430.0, 40.0]},
+            {"name": "-4--P- -I--Y-", "number": "135", "at": [440.0, 40.0]},
+            {"name": "22 40 OO", "at": [50.0, 50.0]}
         ]});
         let dropped = rooms_off_the_building(&job, &mut rooms);
         let names: Vec<&str> = rooms["rooms"].as_array().unwrap().iter().filter_map(|r| r["name"].as_str()).collect();
-        // Level 2 has no A plan here: its electrical plan's rooms stay.
-        assert_eq!(names, ["OFFICE", "STORAGE", "KING SUITE"], "{dropped}");
-        assert_eq!(dropped, json!({"title_block_or_border": 2, "site_or_no_level": 1, "other_discipline": 1, "not_a_room_name": 2}));
+        // Level 2 has no A plan here: its electrical plan's rooms stay. On level 1 the
+        // electrical plan's numbered room the A plan's reading missed stays (one per number is
+        // kept later); its unnumbered OFFICE (a legend's, a note's) goes.
+        assert_eq!(names, ["OFFICE", "STORAGE", "KING SUITE", "KING SUITE"], "{dropped}");
+        assert_eq!(dropped, json!({"title_block_or_border": 2, "site_or_no_level": 1, "other_discipline": 1, "not_a_room_name": 4}));
+    }
+
+    #[test]
+    fn a_room_name_reads_as_words() {
+        for good in ["LOBBY", "IDF", "WC", "CORR", "KING ROOM", "Office", "STAIR 2"] {
+            assert!(legible_room_name(good), "{good}");
+        }
+        for bad in ["-4-----P- -I-----Y-", "Xb", "D D", "22 40 OO", "-J--L---", "G L", "", "12"] {
+            assert!(!legible_room_name(bad), "{bad}");
+        }
     }
 
     /// A question for the jobask tests.

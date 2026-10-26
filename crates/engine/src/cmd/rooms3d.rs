@@ -13,7 +13,7 @@ use cadaddy_geom::{Bounds2, Vec2, Vec3};
 use cadaddy_walk3d::BuildingSpec;
 use serde_json::{Value, json};
 
-use super::perceive::geometry::rooms_found;
+use super::perceive::geometry::rooms_found_in;
 use super::perceive::{feet_inches, finish_codes, objects, pt, round, texts, units_per_inch};
 use super::*;
 use crate::{Result, Session};
@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{outline?: bool (default true)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
-            .params("{outline?: bool (default true)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, elevation, volume, volumeCuFt, volumeM3, finishes, materials, level, label, at, outline}], count}")
+            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, elevation, volume, volumeCuFt, volumeM3, finishes, materials, level, label, at, outline}], count}")
             .noundo(),
         CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number?} → the room (as rooms.list's)").noundo(),
         CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number?} → {name, window}: the view shows the room").noundo(),
@@ -70,10 +70,16 @@ impl Room3 {
 /// what `model.build` reported): the one list every room command reads. Before a build, the
 /// rooms traced around the plan's name labels.
 pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
+    rooms_in(s, None)
+}
+
+/// [`rooms`]; before a build, with `regions` (sheet rectangles), the labels are read only inside
+/// them, sheet by sheet (a whole print set's floors, each read in full).
+pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Room3>> {
     if let Some(built) = built_rooms(s)? {
         return Ok(built);
     }
-    let found = rooms_found(s)?;
+    let found = rooms_found_in(s, regions)?;
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let ft = 12.0 * k;
@@ -282,8 +288,21 @@ pub(crate) fn model_rooms(s: &mut Session) -> Result<Option<Vec<Value>>> {
     Ok(Some(rs.iter().map(|r| room_json(d, r, false)).collect()))
 }
 
+/// Sheet rectangles read at most (`rooms.list {regions}`).
+const MAX_REGIONS: usize = 2_000;
+
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
-    let rs = rooms(s)?;
+    let regions: Option<Vec<[f64; 4]>> = p.get("regions").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .take(MAX_REGIONS)
+            .filter_map(|r| {
+                let v: Vec<f64> = r.as_array()?.iter().filter_map(Value::as_f64).collect();
+                let q = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+                q.iter().all(|x| x.is_finite()).then_some(q)
+            })
+            .collect()
+    });
+    let rs = rooms_in(s, regions.as_deref())?;
     let outline = bool_or(p, "outline", true);
     let d = s.doc()?;
     let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();

@@ -158,6 +158,9 @@ const NOT_ROOM_WORDS: &[&str] = &[
     "SEE",
     "PHONE",
     "FAX",
+    "AFF",
+    "UNO",
+    "NTS",
 ];
 
 /// Whether a label could name a room: not an address, a date, a phone number, a web or mail
