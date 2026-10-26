@@ -10,9 +10,7 @@
 //! heights come from adjacent text (`nn" AFF`) or kind defaults.
 
 use crate::layout;
-use crate::truth::{
-    CablePathway, FireAlarmDevice, Room, Sleeve, TelecomDevice, Truth,
-};
+use crate::truth::{CablePathway, FireAlarmDevice, Room, Sleeve, TelecomDevice, Truth};
 use cadaddy_doc::EntityKind;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -176,23 +174,24 @@ fn building_from_model(p: &crate::truth::Placement, m: [f64; 2]) -> [f64; 2] {
 
 // ---- FA reader ------------------------------------------------------------------------------------
 
-pub fn read_fa_devices(
-    dxf_data: &[(String, Vec<u8>)],
-    truth: &Truth,
-) -> (Vec<FoundFaDevice>, Vec<ReviewItem>) {
+pub fn read_fa_devices(dxf_data: &[(String, Vec<u8>)], truth: &Truth) -> (Vec<FoundFaDevice>, Vec<ReviewItem>) {
     let mut found = Vec::new();
     let mut reviews = Vec::new();
     let rooms = room_map(truth);
 
     for (name, bytes) in dxf_data {
         let sheet_num = name.trim_end_matches(".dxf").trim_end_matches(".DXF");
-        if !sheet_num.starts_with("FA-") { continue; }
+        if !sheet_num.starts_with("FA-") {
+            continue;
+        }
         let sh = match truth.sheets.iter().find(|s| s.number == sheet_num) {
             Some(s) => s,
             None => continue,
         };
         let level = sh.level.clone().unwrap_or_default();
-        if level.is_empty() { continue; }
+        if level.is_empty() {
+            continue;
+        }
         let d = match cadaddy_io::read_dxf(bytes) {
             Ok(d) => d,
             Err(_) => continue,
@@ -214,26 +213,31 @@ pub fn read_fa_devices(
             let candela = find_candela_note(&texts, *spos, tol);
             let slc = find_circuit_note(&texts, *spos, tol, "SLC");
             let nac_note = find_circuit_note(&texts, *spos, tol, "NAC");
-            let (final_height, height_source) = find_height_note(&texts, *spos, tol)
-                .unwrap_or((mounting_in, "rule".into()));
+            let (final_height, height_source) = find_height_note(&texts, *spos, tol).unwrap_or((mounting_in, "rule".into()));
             let final_mounting = if final_height == 0.0 { "CLG" } else { "WALL" };
             let tag = find_tag_note(&texts, *spos, tol, classify_fa, classify_tc).unwrap_or_default();
 
             // Review items (MUST 3).
             if matches!(kind, "horn_strobe" | "speaker_strobe" | "strobe" | "speaker") && candela.is_none() {
                 reviews.push(ReviewItem {
-                    kind: "missing_tag".into(), severity: 3,
+                    kind: "missing_tag".into(),
+                    severity: 3,
                     device_id: format!("fa-{}-{}", level, found.len()),
-                    device_kind: kind.into(), level: level.clone(), at_ft: [bpt[0], bpt[1], z_ft],
+                    device_kind: kind.into(),
+                    level: level.clone(),
+                    at_ft: [bpt[0], bpt[1], z_ft],
                     issue: "FA notification appliance missing candela rating".into(),
                     suggested: "Add candela (cd) note to device symbol".into(),
                 });
             }
             if final_mounting != "CLG" && height_source == "rule" {
                 reviews.push(ReviewItem {
-                    kind: "missing_tag".into(), severity: 2,
+                    kind: "missing_tag".into(),
+                    severity: 2,
                     device_id: format!("fa-{}-{}", level, found.len()),
-                    device_kind: kind.into(), level: level.clone(), at_ft: [bpt[0], bpt[1], z_ft],
+                    device_kind: kind.into(),
+                    level: level.clone(),
+                    at_ft: [bpt[0], bpt[1], z_ft],
                     issue: "FA device missing mounting height note".into(),
                     suggested: "Add height AFF note to device".into(),
                 });
@@ -241,11 +245,20 @@ pub fn read_fa_devices(
 
             if found.len() < MAX_FA_DEVICES {
                 found.push(FoundFaDevice {
-                    level: level.clone(), kind: kind.into(), tag, room,
+                    level: level.clone(),
+                    kind: kind.into(),
+                    tag,
+                    room,
                     at_ft: [bpt[0], bpt[1], z_ft],
-                    mounting: final_mounting.into(), mounting_in: final_height,
-                    height_source, candela, slc, nac: nac_note,
-                    sheet: sheet_num.into(), source: sheet_num.into(), status: "read".into(),
+                    mounting: final_mounting.into(),
+                    mounting_in: final_height,
+                    height_source,
+                    candela,
+                    slc,
+                    nac: nac_note,
+                    sheet: sheet_num.into(),
+                    source: sheet_num.into(),
+                    status: "read".into(),
                 });
             }
         }
@@ -259,17 +272,25 @@ fn collect_fa_entities(d: &cadaddy_doc::Drawing) -> (Vec<([f64; 2], String)>, Ve
     for e in d.model.iter().take(MAX_ITEMS) {
         let layer = &e.common.layer;
         let is_fa = layer.contains("FA-") || layer.contains("FIRE") || layer.contains("ALARM") || layer.contains("TEXT");
-        if !is_fa { continue; }
+        if !is_fa {
+            continue;
+        }
         match &e.kind {
             EntityKind::Text(t) => {
                 let txt = t.value.trim().to_string();
-                if !txt.is_empty() { texts.push(([t.insert.x, t.insert.y], txt)); }
+                if !txt.is_empty() {
+                    texts.push(([t.insert.x, t.insert.y], txt));
+                }
             }
             EntityKind::MText(mt) => {
                 let txt = mt.contents.trim().to_string();
-                if !txt.is_empty() { texts.push(([mt.insert.x, mt.insert.y], txt)); }
+                if !txt.is_empty() {
+                    texts.push(([mt.insert.x, mt.insert.y], txt));
+                }
             }
-            EntityKind::Circle(c) => { shapes.push([c.center.x, c.center.y]); }
+            EntityKind::Circle(c) => {
+                shapes.push([c.center.x, c.center.y]);
+            }
             EntityKind::LwPolyline(p) if !p.vertices.is_empty() => {
                 let (sx, sy): (f64, f64) = p.vertices.iter().fold((0.0, 0.0), |(x, y), v| (x + v.p.x, y + v.p.y));
                 let n = p.vertices.len() as f64;
@@ -283,22 +304,23 @@ fn collect_fa_entities(d: &cadaddy_doc::Drawing) -> (Vec<([f64; 2], String)>, Ve
 
 // ---- Telecom reader -------------------------------------------------------------------------------
 
-pub fn read_telecom_devices(
-    dxf_data: &[(String, Vec<u8>)],
-    truth: &Truth,
-) -> Vec<FoundTelecomDevice> {
+pub fn read_telecom_devices(dxf_data: &[(String, Vec<u8>)], truth: &Truth) -> Vec<FoundTelecomDevice> {
     let mut found = Vec::new();
     let rooms = room_map(truth);
 
     for (name, bytes) in dxf_data {
         let sheet_num = name.trim_end_matches(".dxf").trim_end_matches(".DXF");
-        if !sheet_num.starts_with("T-") { continue; }
+        if !sheet_num.starts_with("T-") {
+            continue;
+        }
         let sh = match truth.sheets.iter().find(|s| s.number == sheet_num) {
             Some(s) => s,
             None => continue,
         };
         let level = sh.level.clone().unwrap_or_default();
-        if level.is_empty() { continue; }
+        if level.is_empty() {
+            continue;
+        }
         let d = match cadaddy_io::read_dxf(bytes) {
             Ok(d) => d,
             Err(_) => continue,
@@ -323,11 +345,17 @@ pub fn read_telecom_devices(
 
             if found.len() < MAX_TELECOM_DEVICES {
                 found.push(FoundTelecomDevice {
-                    level: level.clone(), kind: kind.into(), tag, room,
+                    level: level.clone(),
+                    kind: kind.into(),
+                    tag,
+                    room,
                     at_ft: [bpt[0], bpt[1], z_ft],
-                    mounting_in, lv_system: lv_system.into(),
+                    mounting_in,
+                    lv_system: lv_system.into(),
                     cable_spec: cable,
-                    sheet: sheet_num.into(), source: sheet_num.into(), status: "read".into(),
+                    sheet: sheet_num.into(),
+                    source: sheet_num.into(),
+                    status: "read".into(),
                 });
             }
         }
@@ -341,17 +369,25 @@ fn collect_tc_entities(d: &cadaddy_doc::Drawing) -> (Vec<([f64; 2], String)>, Ve
     for e in d.model.iter().take(MAX_ITEMS) {
         let layer = &e.common.layer;
         let is_tc = layer.contains("TC-") || layer.contains("TELECOM") || layer.contains("DATA") || layer.contains("TEXT");
-        if !is_tc { continue; }
+        if !is_tc {
+            continue;
+        }
         match &e.kind {
             EntityKind::Text(t) => {
                 let txt = t.value.trim().to_string();
-                if !txt.is_empty() { texts.push(([t.insert.x, t.insert.y], txt)); }
+                if !txt.is_empty() {
+                    texts.push(([t.insert.x, t.insert.y], txt));
+                }
             }
             EntityKind::MText(mt) => {
                 let txt = mt.contents.trim().to_string();
-                if !txt.is_empty() { texts.push(([mt.insert.x, mt.insert.y], txt)); }
+                if !txt.is_empty() {
+                    texts.push(([mt.insert.x, mt.insert.y], txt));
+                }
             }
-            EntityKind::Circle(c) => { shapes.push([c.center.x, c.center.y]); }
+            EntityKind::Circle(c) => {
+                shapes.push([c.center.x, c.center.y]);
+            }
             EntityKind::LwPolyline(p) if !p.vertices.is_empty() => {
                 let (sx, sy): (f64, f64) = p.vertices.iter().fold((0.0, 0.0), |(x, y), v| (x + v.p.x, y + v.p.y));
                 let n = p.vertices.len() as f64;
@@ -365,14 +401,13 @@ fn collect_tc_entities(d: &cadaddy_doc::Drawing) -> (Vec<([f64; 2], String)>, Ve
 
 // ---- Equipment connection reader ------------------------------------------------------------------
 
-pub fn read_equip_connections(
-    dxf_data: &[(String, Vec<u8>)],
-    truth: &Truth,
-) -> Vec<FoundEquipConnection> {
+pub fn read_equip_connections(dxf_data: &[(String, Vec<u8>)], truth: &Truth) -> Vec<FoundEquipConnection> {
     let mut found = Vec::new();
     for (name, bytes) in dxf_data {
         let sheet_num = name.trim_end_matches(".dxf").trim_end_matches(".DXF");
-        if !sheet_num.contains("E-6") && !sheet_num.contains("E-20") { continue; }
+        if !sheet_num.contains("E-6") && !sheet_num.contains("E-20") {
+            continue;
+        }
         let sh = match truth.sheets.iter().find(|s| s.number == sheet_num) {
             Some(s) => s,
             None => continue,
@@ -386,46 +421,72 @@ pub fn read_equip_connections(
             match &e.kind {
                 EntityKind::Text(t) => {
                     let txt = t.value.trim().to_string();
-                    if !txt.is_empty() { texts.push(([t.insert.x, t.insert.y], txt)); }
+                    if !txt.is_empty() {
+                        texts.push(([t.insert.x, t.insert.y], txt));
+                    }
                 }
                 EntityKind::MText(mt) => {
                     let txt = mt.contents.trim().to_string();
-                    if !txt.is_empty() { texts.push(([mt.insert.x, mt.insert.y], txt)); }
+                    if !txt.is_empty() {
+                        texts.push(([mt.insert.x, mt.insert.y], txt));
+                    }
                 }
                 _ => {}
             }
         }
         for (pos, txt) in &texts {
             let upper = txt.to_uppercase();
-            let kind = if upper.contains("PTAC") { "ptac" }
-                else if upper.contains("VTAC") { "vtac" }
-                else if upper.contains("RTU") { "rtu" }
-                else if upper.contains("WATER HEATER") || upper.starts_with("WH-") { "water_heater" }
-                else if upper.contains("ELEVATOR") { "elevator" }
-                else if upper.contains("FIRE PUMP") { "fire_pump" }
-                else if upper.contains("POOL PUMP") { "pool_pump" }
-                else if upper.contains("POOL HEATER") { "pool_heater" }
-                else if upper.contains("KITCHEN") { "kitchen_equip" }
-                else if upper.contains("WASHER") { "washer" }
-                else if upper.contains("DRYER") { "dryer" }
-                else if upper.contains("SIGNAGE") { "signage" }
-                else { continue };
+            let kind = if upper.contains("PTAC") {
+                "ptac"
+            } else if upper.contains("VTAC") {
+                "vtac"
+            } else if upper.contains("RTU") {
+                "rtu"
+            } else if upper.contains("WATER HEATER") || upper.starts_with("WH-") {
+                "water_heater"
+            } else if upper.contains("ELEVATOR") {
+                "elevator"
+            } else if upper.contains("FIRE PUMP") {
+                "fire_pump"
+            } else if upper.contains("POOL PUMP") {
+                "pool_pump"
+            } else if upper.contains("POOL HEATER") {
+                "pool_heater"
+            } else if upper.contains("KITCHEN") {
+                "kitchen_equip"
+            } else if upper.contains("WASHER") {
+                "washer"
+            } else if upper.contains("DRYER") {
+                "dryer"
+            } else if upper.contains("SIGNAGE") {
+                "signage"
+            } else {
+                continue;
+            };
             let tol = 200.0;
             let circuit = find_nearby_text(&texts, *pos, tol, &["CKT", "CIRCUIT"]);
             let panel = find_nearby_text(&texts, *pos, tol, &["PANEL", "PNL"]);
-            let conn = if find_nearby_text(&texts, *pos, tol, &["DISCONNECT", "DS"]).is_some() { "disconnect" }
-                else if find_nearby_text(&texts, *pos, tol, &["RECEPTACLE"]).is_some() { "receptacle" }
-                else if find_nearby_text(&texts, *pos, tol, &["JB", "JUNCTION"]).is_some() { "junction_box" }
-                else { "whip" };
+            let conn = if find_nearby_text(&texts, *pos, tol, &["DISCONNECT", "DS"]).is_some() {
+                "disconnect"
+            } else if find_nearby_text(&texts, *pos, tol, &["RECEPTACLE"]).is_some() {
+                "receptacle"
+            } else if find_nearby_text(&texts, *pos, tol, &["JB", "JUNCTION"]).is_some() {
+                "junction_box"
+            } else {
+                "whip"
+            };
             if found.len() < MAX_FA_DEVICES {
                 found.push(FoundEquipConnection {
                     level: sh.level.clone().unwrap_or_default(),
-                    kind: kind.into(), tag: String::new(),
+                    kind: kind.into(),
+                    tag: String::new(),
                     circuit: circuit.unwrap_or_default(),
                     panel: panel.unwrap_or_default(),
                     connection_type: conn.into(),
                     schedule: BTreeMap::new(),
-                    sheet: sheet_num.into(), source: sheet_num.into(), status: "read".into(),
+                    sheet: sheet_num.into(),
+                    source: sheet_num.into(),
+                    status: "read".into(),
                 });
             }
         }
@@ -436,7 +497,9 @@ pub fn read_equip_connections(
 // ---- Score against truth --------------------------------------------------------------------------
 
 pub fn score_fa(found: &[FoundFaDevice], truth_devs: &[FireAlarmDevice], tol_ft: f64) -> DeviceScore {
-    if truth_devs.is_empty() { return DeviceScore::default(); }
+    if truth_devs.is_empty() {
+        return DeviceScore::default();
+    }
     let mut matched = 0usize;
     let mut candela_match = 0usize;
     let mut height_match = 0usize;
@@ -445,47 +508,74 @@ pub fn score_fa(found: &[FoundFaDevice], truth_devs: &[FireAlarmDevice], tol_ft:
         let mut best_idx = None;
         let mut best_dist = f64::MAX;
         for (i, t) in truth_devs.iter().enumerate() {
-            if used[i] || t.level != f.level || t.kind != f.kind { continue; }
+            if used[i] || t.level != f.level || t.kind != f.kind {
+                continue;
+            }
             let d = ((f.at_ft[0] - t.at_ft[0]).powi(2) + (f.at_ft[1] - t.at_ft[1]).powi(2)).sqrt();
-            if d <= tol_ft && d < best_dist { best_dist = d; best_idx = Some(i); }
+            if d <= tol_ft && d < best_dist {
+                best_dist = d;
+                best_idx = Some(i);
+            }
         }
         if let Some(i) = best_idx {
             used[i] = true;
             matched += 1;
-            if f.candela == truth_devs[i].candela { candela_match += 1; }
-            if (f.mounting_in - truth_devs[i].mounting_in).abs() < 1.0 { height_match += 1; }
+            if f.candela == truth_devs[i].candela {
+                candela_match += 1;
+            }
+            if (f.mounting_in - truth_devs[i].mounting_in).abs() < 1.0 {
+                height_match += 1;
+            }
         }
     }
     let n = found.len().max(1) as f64;
     let tn = truth_devs.len().max(1) as f64;
     let mn = matched.max(1) as f64;
     DeviceScore {
-        precision: matched as f64 / n, recall: matched as f64 / tn,
-        count_found: found.len(), count_truth: truth_devs.len(), count_matched: matched,
-        candela_exact: candela_match as f64 / mn, height_exact: height_match as f64 / mn,
+        precision: matched as f64 / n,
+        recall: matched as f64 / tn,
+        count_found: found.len(),
+        count_truth: truth_devs.len(),
+        count_matched: matched,
+        candela_exact: candela_match as f64 / mn,
+        height_exact: height_match as f64 / mn,
     }
 }
 
 pub fn score_tc(found: &[FoundTelecomDevice], truth_devs: &[TelecomDevice], tol_ft: f64) -> DeviceScore {
-    if truth_devs.is_empty() { return DeviceScore::default(); }
+    if truth_devs.is_empty() {
+        return DeviceScore::default();
+    }
     let mut matched = 0usize;
     let mut used = vec![false; truth_devs.len()];
     for f in found {
         let mut best_idx = None;
         let mut best_dist = f64::MAX;
         for (i, t) in truth_devs.iter().enumerate() {
-            if used[i] || t.level != f.level || t.kind != f.kind { continue; }
+            if used[i] || t.level != f.level || t.kind != f.kind {
+                continue;
+            }
             let d = ((f.at_ft[0] - t.at_ft[0]).powi(2) + (f.at_ft[1] - t.at_ft[1]).powi(2)).sqrt();
-            if d <= tol_ft && d < best_dist { best_dist = d; best_idx = Some(i); }
+            if d <= tol_ft && d < best_dist {
+                best_dist = d;
+                best_idx = Some(i);
+            }
         }
-        if let Some(i) = best_idx { used[i] = true; matched += 1; }
+        if let Some(i) = best_idx {
+            used[i] = true;
+            matched += 1;
+        }
     }
     let n = found.len().max(1) as f64;
     let tn = truth_devs.len().max(1) as f64;
     DeviceScore {
-        precision: matched as f64 / n, recall: matched as f64 / tn,
-        count_found: found.len(), count_truth: truth_devs.len(), count_matched: matched,
-        candela_exact: 0.0, height_exact: 0.0,
+        precision: matched as f64 / n,
+        recall: matched as f64 / tn,
+        count_found: found.len(),
+        count_truth: truth_devs.len(),
+        count_matched: matched,
+        candela_exact: 0.0,
+        height_exact: 0.0,
     }
 }
 
@@ -493,13 +583,21 @@ pub fn score_tc(found: &[FoundTelecomDevice], truth_devs: &[TelecomDevice], tol_
 
 fn cable_od_in(cable: &str) -> f64 {
     let u = cable.to_uppercase();
-    if u.contains("CAT6A") { 0.30 }
-    else if u.contains("CAT6") { 0.25 }
-    else if u.contains("CAT5") { 0.20 }
-    else if u.contains("RG6") { 0.27 }
-    else if u.contains("FPL") { 0.22 }
-    else if u.contains("FIBER") { 0.15 }
-    else { 0.25 }
+    if u.contains("CAT6A") {
+        0.30
+    } else if u.contains("CAT6") {
+        0.25
+    } else if u.contains("CAT5") {
+        0.20
+    } else if u.contains("RG6") {
+        0.27
+    } else if u.contains("FPL") {
+        0.22
+    } else if u.contains("FIBER") {
+        0.15
+    } else {
+        0.25
+    }
 }
 
 pub fn compute_sleeve_size_in(cables: &[String], spare_pct: f64) -> f64 {
@@ -516,16 +614,14 @@ pub fn compute_sleeve_size_in(cables: &[String], spare_pct: f64) -> f64 {
 
 fn parse_cable_count_and_od(cable: &str) -> (u32, f64) {
     let parts: Vec<&str> = cable.split(&['x', 'X', '\u{00d7}'][..]).collect();
-    if parts.len() >= 2 {
-        (parts[0].trim().parse::<u32>().unwrap_or(1), cable_od_in(parts[1].trim()))
-    } else {
-        (1, cable_od_in(cable))
-    }
+    if parts.len() >= 2 { (parts[0].trim().parse::<u32>().unwrap_or(1), cable_od_in(parts[1].trim())) } else { (1, cable_od_in(cable)) }
 }
 
 fn next_trade_size(dia_in: f64) -> f64 {
     for &s in &[0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0_f64] {
-        if s >= dia_in { return s; }
+        if s >= dia_in {
+            return s;
+        }
     }
     4.0
 }
@@ -534,17 +630,19 @@ pub fn route_sleeves(truth: &Truth) -> (Vec<Sleeve>, Vec<CablePathway>) {
     let mut sleeves = Vec::new();
     let mut pathways = Vec::new();
     let levels: BTreeSet<&str> = truth.building.levels.iter().map(|l| l.code.as_str()).collect();
-    let asm_map: BTreeMap<&str, &crate::truth::WallAssembly> = truth
-        .wall_assemblies.iter().map(|a| (a.type_tag.as_str(), a)).collect();
+    let asm_map: BTreeMap<&str, &crate::truth::WallAssembly> = truth.wall_assemblies.iter().map(|a| (a.type_tag.as_str(), a)).collect();
 
     for level in &levels {
-        let idfs: Vec<&TelecomDevice> = truth.telecom_devices.iter()
-            .filter(|d| d.level == *level && matches!(d.kind.as_str(), "idf" | "mdf" | "patch_panel"))
-            .collect();
-        if idfs.is_empty() { continue; }
+        let idfs: Vec<&TelecomDevice> =
+            truth.telecom_devices.iter().filter(|d| d.level == *level && matches!(d.kind.as_str(), "idf" | "mdf" | "patch_panel")).collect();
+        if idfs.is_empty() {
+            continue;
+        }
         let idf_pos = [idfs[0].at_ft[0], idfs[0].at_ft[1]];
 
-        let rated_walls: Vec<(&crate::truth::WallInstance, &crate::truth::WallAssembly)> = truth.walls.iter()
+        let rated_walls: Vec<(&crate::truth::WallInstance, &crate::truth::WallAssembly)> = truth
+            .walls
+            .iter()
             .filter(|w| w.level == *level)
             .filter_map(|w| asm_map.get(w.assembly.as_str()).filter(|a| !a.fire_rating.is_empty()).map(|a| (w, *a)))
             .collect();
@@ -554,7 +652,9 @@ pub fn route_sleeves(truth: &Truth) -> (Vec<Sleeve>, Vec<CablePathway>) {
             let dev_pos = [fa.at_ft[0], fa.at_ft[1]];
             for (wall, asm) in &rated_walls {
                 if let Some(cp) = seg_intersect(dev_pos, idf_pos, wall.from_ft, wall.to_ft) {
-                    if sleeves.len() >= MAX_SLEEVES { break; }
+                    if sleeves.len() >= MAX_SLEEVES {
+                        break;
+                    }
                     sleeves.push(Sleeve {
                         id: format!("sl-{}-fa-{}", level, sleeves.len()),
                         systems: vec!["fire_alarm".into()],
@@ -573,14 +673,18 @@ pub fn route_sleeves(truth: &Truth) -> (Vec<Sleeve>, Vec<CablePathway>) {
                 }
             }
         }
-        for tc in truth.telecom_devices.iter().filter(|d| {
-            d.level == *level && !matches!(d.kind.as_str(), "idf"|"mdf"|"patch_panel"|"backboard"|"rack")
-        }) {
+        for tc in truth
+            .telecom_devices
+            .iter()
+            .filter(|d| d.level == *level && !matches!(d.kind.as_str(), "idf" | "mdf" | "patch_panel" | "backboard" | "rack"))
+        {
             let cables = tc_cables(tc);
             let dev_pos = [tc.at_ft[0], tc.at_ft[1]];
             for (wall, asm) in &rated_walls {
                 if let Some(cp) = seg_intersect(dev_pos, idf_pos, wall.from_ft, wall.to_ft) {
-                    if sleeves.len() >= MAX_SLEEVES { break; }
+                    if sleeves.len() >= MAX_SLEEVES {
+                        break;
+                    }
                     sleeves.push(Sleeve {
                         id: format!("sl-{}-tc-{}", level, sleeves.len()),
                         systems: vec![tc.lv_system.clone()],
@@ -610,7 +714,9 @@ pub fn route_sleeves(truth: &Truth) -> (Vec<Sleeve>, Vec<CablePathway>) {
                 from_ft: [room.min_ft[0], (room.min_ft[1] + room.max_ft[1]) / 2.0],
                 to_ft: [room.max_ft[0], (room.min_ft[1] + room.max_ft[1]) / 2.0],
                 elevation_ft: 9.0,
-                size_in: None, spacing_in: Some(48.0), tray_size_in: None,
+                size_in: None,
+                spacing_in: Some(48.0),
+                tray_size_in: None,
                 sheet: String::new(),
             });
         }
@@ -621,7 +727,9 @@ pub fn route_sleeves(truth: &Truth) -> (Vec<Sleeve>, Vec<CablePathway>) {
             ("fire_alarm", vec!["2 x FPL".to_string()]),
             ("security", vec!["4 x Cat6".to_string()]),
         ] {
-            if sleeves.len() >= MAX_SLEEVES { break; }
+            if sleeves.len() >= MAX_SLEEVES {
+                break;
+            }
             sleeves.push(Sleeve {
                 id: format!("sl-{}-floor-{}", level, sleeves.len()),
                 systems: vec![sys.to_string()],
@@ -660,15 +768,25 @@ pub fn generate_lv_bom(truth: &Truth, has_lv_docs: bool) -> Vec<LvBomEntry> {
     let mut lines = Vec::new();
     if !has_lv_docs {
         lines.push(LvBomEntry {
-            system: "general".into(), category: "misc".into(),
+            system: "general".into(),
+            category: "misc".into(),
             description: "LV drawings needed - document request".into(),
-            quantity: 1.0, unit: "LOT".into(), assumed: true, scope: "ours".into(), spec_id: None,
+            quantity: 1.0,
+            unit: "LOT".into(),
+            assumed: true,
+            scope: "ours".into(),
+            spec_id: None,
         });
         for sys in &["data", "fire_alarm", "security", "access_control"] {
             lines.push(LvBomEntry {
-                system: sys.to_string(), category: "device".into(),
+                system: sys.to_string(),
+                category: "device".into(),
                 description: format!("{} devices (ASSUMED - no LV docs)", sys.replace('_', " ")),
-                quantity: 1.0, unit: "LOT".into(), assumed: true, scope: "ours".into(), spec_id: None,
+                quantity: 1.0,
+                unit: "LOT".into(),
+                assumed: true,
+                scope: "ours".into(),
+                spec_id: None,
             });
         }
         return lines;
@@ -676,24 +794,38 @@ pub fn generate_lv_bom(truth: &Truth, has_lv_docs: bool) -> Vec<LvBomEntry> {
 
     // FA devices by kind.
     let mut fa_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for fa in &truth.fire_alarm_devices { *fa_counts.entry(fa.kind.clone()).or_insert(0) += 1; }
+    for fa in &truth.fire_alarm_devices {
+        *fa_counts.entry(fa.kind.clone()).or_insert(0) += 1;
+    }
     for (kind, count) in &fa_counts {
         lines.push(LvBomEntry {
-            system: "fire_alarm".into(), category: "device".into(),
-            description: kind.replace('_', " "), quantity: *count as f64,
-            unit: "EA".into(), assumed: false, scope: "ours".into(), spec_id: None,
+            system: "fire_alarm".into(),
+            category: "device".into(),
+            description: kind.replace('_', " "),
+            quantity: *count as f64,
+            unit: "EA".into(),
+            assumed: false,
+            scope: "ours".into(),
+            spec_id: None,
         });
     }
 
     // Telecom devices by system + kind.
     let mut tc_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for tc in &truth.telecom_devices { *tc_counts.entry((tc.lv_system.clone(), tc.kind.clone())).or_insert(0) += 1; }
+    for tc in &truth.telecom_devices {
+        *tc_counts.entry((tc.lv_system.clone(), tc.kind.clone())).or_insert(0) += 1;
+    }
     for ((sys, kind), count) in &tc_counts {
-        let scope = if matches!(kind.as_str(), "idf"|"mdf"|"rack"|"backboard"|"patch_panel") { "lv_vendor" } else { "ours" };
+        let scope = if matches!(kind.as_str(), "idf" | "mdf" | "rack" | "backboard" | "patch_panel") { "lv_vendor" } else { "ours" };
         lines.push(LvBomEntry {
-            system: sys.clone(), category: "device".into(),
-            description: kind.replace('_', " "), quantity: *count as f64,
-            unit: "EA".into(), assumed: false, scope: scope.into(), spec_id: None,
+            system: sys.clone(),
+            category: "device".into(),
+            description: kind.replace('_', " "),
+            quantity: *count as f64,
+            unit: "EA".into(),
+            assumed: false,
+            scope: scope.into(),
+            spec_id: None,
         });
     }
 
@@ -701,42 +833,68 @@ pub fn generate_lv_bom(truth: &Truth, has_lv_docs: bool) -> Vec<LvBomEntry> {
     let mut cable_ft: BTreeMap<(String, String), f64> = BTreeMap::new();
     for fa in &truth.fire_alarm_devices {
         let route = estimate_route_ft(truth, &fa.level, [fa.at_ft[0], fa.at_ft[1]]) + 18.0;
-        for c in fa_cables(fa) { *cable_ft.entry(("fire_alarm".into(), c)).or_insert(0.0) += route; }
+        for c in fa_cables(fa) {
+            *cable_ft.entry(("fire_alarm".into(), c)).or_insert(0.0) += route;
+        }
     }
     for tc in &truth.telecom_devices {
-        if matches!(tc.kind.as_str(), "idf"|"mdf"|"patch_panel"|"backboard"|"rack") { continue; }
+        if matches!(tc.kind.as_str(), "idf" | "mdf" | "patch_panel" | "backboard" | "rack") {
+            continue;
+        }
         let route = estimate_route_ft(truth, &tc.level, [tc.at_ft[0], tc.at_ft[1]]) + 18.0;
-        for c in tc_cables(tc) { *cable_ft.entry((tc.lv_system.clone(), c)).or_insert(0.0) += route; }
+        for c in tc_cables(tc) {
+            *cable_ft.entry((tc.lv_system.clone(), c)).or_insert(0.0) += route;
+        }
     }
     for ((sys, cable), ft) in &cable_ft {
         lines.push(LvBomEntry {
-            system: sys.clone(), category: "cable".into(), description: cable.clone(),
-            quantity: *ft, unit: "LF".into(), assumed: false, scope: "ours".into(), spec_id: None,
+            system: sys.clone(),
+            category: "cable".into(),
+            description: cable.clone(),
+            quantity: *ft,
+            unit: "LF".into(),
+            assumed: false,
+            scope: "ours".into(),
+            spec_id: None,
         });
     }
 
     // Supports.
     for cp in &truth.cable_pathways {
-        if cp.kind != "j_hook" { continue; }
-        let dx = cp.to_ft[0] - cp.from_ft[0]; let dy = cp.to_ft[1] - cp.from_ft[1];
+        if cp.kind != "j_hook" {
+            continue;
+        }
+        let dx = cp.to_ft[0] - cp.from_ft[0];
+        let dy = cp.to_ft[1] - cp.from_ft[1];
         let len = (dx * dx + dy * dy).sqrt();
         let spacing = cp.spacing_in.unwrap_or(48.0) / 12.0;
         lines.push(LvBomEntry {
             system: cp.systems.first().cloned().unwrap_or_default(),
-            category: "support".into(), description: "J-hook support".into(),
-            quantity: (len / spacing).ceil().max(1.0), unit: "EA".into(),
-            assumed: false, scope: "ours".into(), spec_id: None,
+            category: "support".into(),
+            description: "J-hook support".into(),
+            quantity: (len / spacing).ceil().max(1.0),
+            unit: "EA".into(),
+            assumed: false,
+            scope: "ours".into(),
+            spec_id: None,
         });
     }
 
     // Sleeves.
     let mut sl_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for sl in &truth.sleeves { *sl_counts.entry((sl.material.clone(), format!("{}\"", sl.size_in))).or_insert(0) += 1; }
+    for sl in &truth.sleeves {
+        *sl_counts.entry((sl.material.clone(), format!("{}\"", sl.size_in))).or_insert(0) += 1;
+    }
     for ((mat, sz), ct) in &sl_counts {
         lines.push(LvBomEntry {
-            system: "general".into(), category: "sleeve".into(),
-            description: format!("{} sleeve {}", mat, sz), quantity: *ct as f64,
-            unit: "EA".into(), assumed: false, scope: "ours".into(), spec_id: None,
+            system: "general".into(),
+            category: "sleeve".into(),
+            description: format!("{} sleeve {}", mat, sz),
+            quantity: *ct as f64,
+            unit: "EA".into(),
+            assumed: false,
+            scope: "ours".into(),
+            spec_id: None,
         });
     }
 
@@ -744,9 +902,14 @@ pub fn generate_lv_bom(truth: &Truth, has_lv_docs: bool) -> Vec<LvBomEntry> {
     let fs = truth.sleeves.iter().filter(|s| !s.fire_rating.is_empty()).count();
     if fs > 0 {
         lines.push(LvBomEntry {
-            system: "general".into(), category: "firestop".into(),
-            description: "Firestop system".into(), quantity: fs as f64,
-            unit: "EA".into(), assumed: false, scope: "ours".into(), spec_id: None,
+            system: "general".into(),
+            category: "firestop".into(),
+            description: "Firestop system".into(),
+            quantity: fs as f64,
+            unit: "EA".into(),
+            assumed: false,
+            scope: "ours".into(),
+            spec_id: None,
         });
     }
     lines
@@ -757,19 +920,18 @@ pub fn generate_lv_bom(truth: &Truth, has_lv_docs: bool) -> Vec<LvBomEntry> {
 use cadaddy_doc::{HAlign, VAlign};
 use cadaddy_geom::Vec2;
 
-pub fn draw_sleeve_layout(
-    pen: &mut crate::draw::Pen<'_>,
-    t: &Truth,
-    st: &crate::style::Style,
-    level: &str,
-) {
+pub fn draw_sleeve_layout(pen: &mut crate::draw::Pen<'_>, t: &Truth, st: &crate::style::Style, level: &str) {
     let rot = crate::draw::readable(pen.rot());
     let th = st.text_in / pen.sh.scale;
 
     let system_layer = |systems: &[String]| -> &str {
-        if systems.iter().any(|s| s == "fire_alarm") { "SL-FA" }
-        else if systems.iter().any(|s| s == "security" || s == "access_control") { "SL-SEC" }
-        else { "SL-DATA" }
+        if systems.iter().any(|s| s == "fire_alarm") {
+            "SL-FA"
+        } else if systems.iter().any(|s| s == "security" || s == "access_control") {
+            "SL-SEC"
+        } else {
+            "SL-DATA"
+        }
     };
 
     let level_sleeves: Vec<&Sleeve> = t.sleeves.iter().filter(|s| s.level == level).collect();
@@ -780,18 +942,25 @@ pub fn draw_sleeve_layout(
         if sl.penetrates == "floor" {
             pen.circle(layer, c, r);
             let hs = r * 0.7;
-            pen.fill(layer, [
-                Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y - hs),
-                Vec2::new(c.x + hs, c.y + hs), Vec2::new(c.x - hs, c.y + hs),
-            ]);
+            pen.fill(
+                layer,
+                [Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs), Vec2::new(c.x - hs, c.y + hs)],
+            );
         } else {
             pen.circle(layer, c, r);
         }
         let label = format!("{}\" {}", sl.size_in, sl.material);
         pen.text("SL-TEXT", Vec2::new(c.x + r * 1.5, c.y), st.text_in * 0.6, &label, rot, HAlign::Left, VAlign::Middle);
         if !sl.fire_rating.is_empty() {
-            pen.text("SL-TEXT", Vec2::new(c.x + r * 1.5, c.y - th * 0.8), st.text_in * 0.5,
-                &format!("{} RATED + FS", sl.fire_rating), rot, HAlign::Left, VAlign::Top);
+            pen.text(
+                "SL-TEXT",
+                Vec2::new(c.x + r * 1.5, c.y - th * 0.8),
+                st.text_in * 0.5,
+                &format!("{} RATED + FS", sl.fire_rating),
+                rot,
+                HAlign::Left,
+                VAlign::Top,
+            );
         }
         let dim_text = format!("{:.1}', {:.1}'", sl.at_ft[0], sl.at_ft[1]);
         pen.text("SL-DIM", Vec2::new(c.x, c.y + r * 1.5), st.text_in * 0.5, &dim_text, rot, HAlign::Center, VAlign::Bottom);
@@ -828,7 +997,9 @@ pub fn draw_sleeve_layout(
 
 fn room_map(truth: &Truth) -> BTreeMap<String, Vec<&Room>> {
     let mut m: BTreeMap<String, Vec<&Room>> = BTreeMap::new();
-    for r in &truth.building.rooms { m.entry(r.level.clone()).or_default().push(r); }
+    for r in &truth.building.rooms {
+        m.entry(r.level.clone()).or_default().push(r);
+    }
     m
 }
 
@@ -848,8 +1019,12 @@ fn find_classified_text(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64, c
     let mut best_dist = f64::MAX;
     for (tp, txt) in texts {
         let d = ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt();
-        if d < tol && d < best_dist && let Some(k) = classify(txt) {
-            best = Some(k); best_dist = d;
+        if d < tol
+            && d < best_dist
+            && let Some(k) = classify(txt)
+        {
+            best = Some(k);
+            best_dist = d;
         }
     }
     best
@@ -857,11 +1032,15 @@ fn find_classified_text(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64, c
 
 fn find_candela_note(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64) -> Option<u32> {
     for (tp, txt) in texts {
-        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol { continue; }
+        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol {
+            continue;
+        }
         let u = txt.to_uppercase();
         if u.contains("CD") {
             let num: String = u.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(n) = num.parse::<u32>() && [15, 30, 75, 110, 177].contains(&n) {
+            if let Ok(n) = num.parse::<u32>()
+                && [15, 30, 75, 110, 177].contains(&n)
+            {
                 return Some(n);
             }
         }
@@ -871,17 +1050,25 @@ fn find_candela_note(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64) -> O
 
 fn find_circuit_note(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64, prefix: &str) -> String {
     for (tp, txt) in texts {
-        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol { continue; }
-        if txt.to_uppercase().starts_with(prefix) { return txt.clone(); }
+        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol {
+            continue;
+        }
+        if txt.to_uppercase().starts_with(prefix) {
+            return txt.clone();
+        }
     }
     String::new()
 }
 
 fn find_height_note(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64) -> Option<(f64, String)> {
     for (tp, txt) in texts {
-        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol { continue; }
+        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol {
+            continue;
+        }
         let upper = txt.to_uppercase();
-        if upper.contains("AFF") && let Some(h) = parse_height(&upper) {
+        if upper.contains("AFF")
+            && let Some(h) = parse_height(&upper)
+        {
             return Some((h, "note".into()));
         }
     }
@@ -904,70 +1091,91 @@ fn parse_height(text: &str) -> Option<f64> {
 }
 
 fn find_tag_note(
-    texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64,
-    fa_class: fn(&str) -> Option<&'static str>, tc_class: fn(&str) -> Option<&'static str>,
+    texts: &[([f64; 2], String)],
+    pos: [f64; 2],
+    tol: f64,
+    fa_class: fn(&str) -> Option<&'static str>,
+    tc_class: fn(&str) -> Option<&'static str>,
 ) -> Option<String> {
     let mut best = None;
     let mut best_d = f64::MAX;
     for (tp, txt) in texts {
         let d = ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt();
-        if d > tol || d >= best_d { continue; }
+        if d > tol || d >= best_d {
+            continue;
+        }
         let t = txt.trim();
-        if t.len() > 1 && t.len() <= 20
-            && fa_class(t).is_none() && tc_class(t).is_none()
-            && !t.to_uppercase().contains("AFF") && !t.to_uppercase().contains(" CD")
-            && !t.to_uppercase().starts_with("SLC") && !t.to_uppercase().starts_with("NAC")
-        { best = Some(t.to_string()); best_d = d; }
+        if t.len() > 1
+            && t.len() <= 20
+            && fa_class(t).is_none()
+            && tc_class(t).is_none()
+            && !t.to_uppercase().contains("AFF")
+            && !t.to_uppercase().contains(" CD")
+            && !t.to_uppercase().starts_with("SLC")
+            && !t.to_uppercase().starts_with("NAC")
+        {
+            best = Some(t.to_string());
+            best_d = d;
+        }
     }
     best
 }
 
 fn find_cable_note(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64) -> Option<String> {
     for (tp, txt) in texts {
-        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol { continue; }
+        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol {
+            continue;
+        }
         let u = txt.to_uppercase();
-        if u.contains("CAT") || u.contains("RG") || u.contains("FIBER") { return Some(txt.clone()); }
+        if u.contains("CAT") || u.contains("RG") || u.contains("FIBER") {
+            return Some(txt.clone());
+        }
     }
     None
 }
 
 fn find_nearby_text(texts: &[([f64; 2], String)], pos: [f64; 2], tol: f64, kw: &[&str]) -> Option<String> {
     for (tp, txt) in texts {
-        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol { continue; }
+        if ((pos[0] - tp[0]).powi(2) + (pos[1] - tp[1]).powi(2)).sqrt() > tol {
+            continue;
+        }
         let u = txt.to_uppercase();
-        if kw.iter().any(|k| u.contains(k)) { return Some(txt.clone()); }
+        if kw.iter().any(|k| u.contains(k)) {
+            return Some(txt.clone());
+        }
     }
     None
 }
 
 fn lv_system_for(kind: &str) -> &'static str {
     match kind {
-        "data_outlet"|"wifi_ap"|"patch_panel"|"idf"|"mdf"|"backboard"|"rack" => "data",
+        "data_outlet" | "wifi_ap" | "patch_panel" | "idf" | "mdf" | "backboard" | "rack" => "data",
         "tv_outlet" => "tv",
         "telephone" => "telephone",
-        "camera"|"card_reader"|"rex"|"mag_lock"|"door_contact"|"door_ajar" => "security",
-        "nurse_call_station"|"nurse_call_display"|"ada_pull_cord" => "nurse_call",
+        "camera" | "card_reader" | "rex" | "mag_lock" | "door_contact" | "door_ajar" => "security",
+        "nurse_call_station" | "nurse_call_display" | "ada_pull_cord" => "nurse_call",
         "speaker" => "sound",
-        "pool_alarm"|"door_alarm" => "security",
+        "pool_alarm" | "door_alarm" => "security",
         _ => "data",
     }
 }
 
 fn fa_cables(fa: &FireAlarmDevice) -> Vec<String> {
     match fa.kind.as_str() {
-        "smoke_detector"|"heat_detector"|"co_detector"|"duct_detector"
-        |"pull_station"|"monitor_module"|"relay_module"|"elevator_recall"
-        |"door_holder"|"mag_door_holder" => vec!["1 x FPL".into()],
-        "horn_strobe"|"speaker_strobe"|"strobe"|"speaker"|"nac_panel" => vec!["1 x FPL-NAC".into()],
-        "facp"|"annunciator" => vec!["2 x FPL".into()],
+        "smoke_detector" | "heat_detector" | "co_detector" | "duct_detector" | "pull_station" | "monitor_module" | "relay_module"
+        | "elevator_recall" | "door_holder" | "mag_door_holder" => vec!["1 x FPL".into()],
+        "horn_strobe" | "speaker_strobe" | "strobe" | "speaker" | "nac_panel" => vec!["1 x FPL-NAC".into()],
+        "facp" | "annunciator" => vec!["2 x FPL".into()],
         _ => vec!["1 x FPL".into()],
     }
 }
 
 fn tc_cables(tc: &TelecomDevice) -> Vec<String> {
-    if let Some(ref s) = tc.cable_spec { return vec![s.clone()]; }
+    if let Some(ref s) = tc.cable_spec {
+        return vec![s.clone()];
+    }
     match tc.kind.as_str() {
-        "data_outlet"|"wifi_ap" => vec!["2 x Cat6".into()],
+        "data_outlet" | "wifi_ap" => vec!["2 x Cat6".into()],
         "tv_outlet" => vec!["1 x RG6".into()],
         _ => vec!["1 x Cat6".into()],
     }
@@ -977,19 +1185,21 @@ fn seg_intersect(a1: [f64; 2], a2: [f64; 2], b1: [f64; 2], b2: [f64; 2]) -> Opti
     let (dx1, dy1) = (a2[0] - a1[0], a2[1] - a1[1]);
     let (dx2, dy2) = (b2[0] - b1[0], b2[1] - b1[1]);
     let d = dx1 * dy2 - dy1 * dx2;
-    if d.abs() < 1e-10 { return None; }
+    if d.abs() < 1e-10 {
+        return None;
+    }
     let t = ((b1[0] - a1[0]) * dy2 - (b1[1] - a1[1]) * dx2) / d;
     let u = ((b1[0] - a1[0]) * dy1 - (b1[1] - a1[1]) * dx1) / d;
-    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-        Some([a1[0] + t * dx1, a1[1] + t * dy1])
-    } else { None }
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) { Some([a1[0] + t * dx1, a1[1] + t * dy1]) } else { None }
 }
 
 fn level_height_ft(truth: &Truth, level: &str) -> f64 {
     let ls = &truth.building.levels;
     for (i, l) in ls.iter().enumerate() {
         if l.code == level || l.name.contains(level) {
-            if let Some(next) = ls.get(i + 1) { return next.elevation_ft - l.elevation_ft; }
+            if let Some(next) = ls.get(i + 1) {
+                return next.elevation_ft - l.elevation_ft;
+            }
             return 10.0;
         }
     }
@@ -999,9 +1209,13 @@ fn level_height_ft(truth: &Truth, level: &str) -> f64 {
 fn estimate_route_ft(truth: &Truth, level: &str, pos: [f64; 2]) -> f64 {
     let mut min = f64::MAX;
     for tc in &truth.telecom_devices {
-        if tc.level != level || !matches!(tc.kind.as_str(), "idf"|"mdf"|"patch_panel") { continue; }
+        if tc.level != level || !matches!(tc.kind.as_str(), "idf" | "mdf" | "patch_panel") {
+            continue;
+        }
         let d = (pos[0] - tc.at_ft[0]).abs() + (pos[1] - tc.at_ft[1]).abs();
-        if d < min { min = d; }
+        if d < min {
+            min = d;
+        }
     }
     if min < f64::MAX { min } else { 75.0 }
 }
