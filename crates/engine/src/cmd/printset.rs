@@ -20,7 +20,7 @@
 
 use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use super::{CommandSpec, always, bool_or, str_param};
@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("printset.open", "Open Print Set", run_open)
             .files()
-            .params("{path: folder or .printset.json, name?} → {name, sheets, revision, dashboard}")
+            .params("{path: folder, one PDF (its pages only) or .printset.json, name?} → {name, sheets, revision, dashboard}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
@@ -100,8 +100,15 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     } else if path.is_dir() {
         let name = str_param(p, "name").unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set"));
         mep_printset::create_project(name, &path).map_err(EngineError::Other)?
+    } else if path.is_file() && path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        // One PDF (often a merged set): a project of that file alone, not of its whole folder.
+        let file = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Print Set");
+        let name = str_param(p, "name").unwrap_or(stem);
+        mep_printset::create_project_from_files(name, &dir, &[(file, path.clone())])
     } else {
-        return Err(EngineError::Other(format!("{path_str} is not a folder or .json project file")));
+        return Err(EngineError::Other(format!("{path_str} is not a folder, a PDF or a .json project file")));
     };
 
     let result = json!({

@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
-            "{path: string (PDF file or folder), levels?: \"auto\" (default), force?: bool (build even if import check fails)} → {cdy_paths: [string], check_results: [{file, pass, score, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
+            "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (build even if import check fails)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the pages the model was built from: the set's plan sheets, or every page without an index), pages_note, spec_guesses: [{key, why}] (what the spec assumed), check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
         ),
     ]
 }
@@ -477,8 +477,55 @@ fn parse_floor_number(text: &str) -> Option<u32> {
     None
 }
 
-/// `bim.from_pdf`: one-call PDF → native .cdy → import check → bspec draft → model.build.
-/// Multi-plan sheets (separate floor titles on one page) are stacked as levels.
+/// Where `bim.from_pdf` saves a model when no `out` is given: a folder of its own in the
+/// system's temp folder, never next to the PDFs (often the job's print set). `None` on the web.
+fn bim_temp_out(stem: &str) -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let clean: String = stem.chars().take(80).map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
+        let dir = std::env::temp_dir().join(format!("cadaddy-bim-{}-{n}", std::process::id()));
+        Some(dir.join(format!("{}.cdy", clean.trim())))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = stem;
+        None
+    }
+}
+
+/// The import check as the build step reports it: `pass` only when the drawing is usable AND no
+/// hard check failed (the check's own `pass` means only "not empty or unreadable").
+fn build_check(file: &str, check: &super::import_check::ImportCheckResult) -> Value {
+    json!({
+        "file": file,
+        "pass": check.pass && check.hard_fails.is_empty(),
+        "score": check.score,
+        "hard_fails": check.hard_fails,
+        "checks": check.checks,
+    })
+}
+
+/// Whether a hard-failed import check stops the build: every hard fail does, except SCALE when a
+/// scale note was read (correctable: the plan says its scale).
+fn check_blocks_build(check: &super::import_check::ImportCheckResult) -> bool {
+    check.checks.iter().any(|c| {
+        if c.pass || !c.hard_fail {
+            return false;
+        }
+        if c.id == "SCALE" {
+            return c.evidence.as_ref().and_then(|e| e.get("scale_note")).is_none_or(Value::is_null);
+        }
+        true
+    })
+}
+
+/// `bim.from_pdf`: one-call PDF → BIM through the guided job's path: the print set (one PDF of
+/// any number of pages, or a folder) is classified, its plan pages imported (every page when it
+/// has no plans), the import checked, the spec drafted with one stacked level per architectural
+/// floor plan, the model built and saved as .cdy at `out` (default: a temp folder). Nothing is
+/// written next to the PDFs. A one-sheet plan with several floor titles is stacked as levels.
 fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("bim.from_pdf", "`path` is required (a PDF file or folder)"))?;
     let force = bool_or(p, "force", false);
@@ -486,103 +533,78 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     if !path_obj.exists() {
         return Err(bad("bim.from_pdf", format!("{path}: file or folder not found")));
     }
-
-    // Collect PDF files.
-    let pdfs: Vec<std::path::PathBuf> = if path_obj.is_dir() {
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(path_obj) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
-                    files.push(p);
-                }
-            }
-        }
-        files.sort();
-        files
+    let is_pdf = |p: &std::path::Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+    let has_pdfs = if path_obj.is_dir() {
+        std::fs::read_dir(path_obj).is_ok_and(|entries| entries.flatten().any(|e| e.path().is_file() && is_pdf(&e.path())))
     } else {
-        vec![path_obj.to_path_buf()]
+        is_pdf(path_obj)
     };
-
-    if pdfs.is_empty() {
+    if !has_pdfs {
         return Err(bad("bim.from_pdf", format!("{path}: no PDF files found. Next: provide a path to a PDF file or folder.")));
     }
+    let stem = path_obj.file_stem().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Building".into());
+    let out = match str_param(p, "out").filter(|o| !o.trim().is_empty()) {
+        Some(o) => std::path::PathBuf::from(o),
+        None => bim_temp_out(&stem).ok_or_else(|| bad("bim.from_pdf", "`out` is required here (the .cdy file to save)"))?,
+    };
 
     let mut cdy_paths: Vec<String> = Vec::new();
-    let mut check_results: Vec<Value> = Vec::new();
-    let mut built_counts = json!({});
     let mut warnings: Vec<String> = Vec::new();
+    let mut built_counts = json!({});
+    let mut guesses: Vec<Value> = Vec::new();
 
-    for pdf in &pdfs {
-        let pdf_str = pdf.to_string_lossy().to_string();
-        let stem = pdf.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "import".into());
-
-        // Step 1: Import the PDF as a new drawing.
-        s.echo(format!("bim.from_pdf: importing {stem}..."));
-        let import_result = s.execute("pdfimport", &json!({ "path": pdf_str, "newDrawing": true }))?;
-
-        // Step 2: Check import accuracy (already run automatically by pdfimport).
-        let check = import_result.get("importCheck").cloned().unwrap_or(Value::Null);
-        let check_pass = check.get("pass").and_then(Value::as_bool).unwrap_or(false);
-        let check_score = check.get("score").and_then(Value::as_u64).unwrap_or(0);
-        check_results.push(json!({
-            "file": pdf_str,
-            "pass": check_pass,
-            "score": check_score,
-            "checks": check.get("checks").cloned().unwrap_or(Value::Null),
-        }));
-
-        if !check_pass && !force {
-            // Inspect individual checks: if the only hard-fail is SCALE with a scale note
-            // detected, proceed — the drawing has interpretable scale info and multi-plan
-            // sheets often exceed the single-plan size thresholds.
-            let checks = check.get("checks").and_then(Value::as_array);
-            let has_blocking_fail = checks.is_none_or(|cs| {
-                cs.iter().any(|c| {
-                    let pass = c.get("pass").and_then(Value::as_bool).unwrap_or(true);
-                    let hard = c.get("hard_fail").and_then(Value::as_bool).unwrap_or(false);
-                    let id = c.get("id").and_then(Value::as_str).unwrap_or("");
-                    if pass || !hard {
-                        return false;
-                    }
-                    // SCALE with a detected scale note: correctable, not blocking.
-                    if id == "SCALE" {
-                        let has_note = c.get("evidence").and_then(|e| e.get("scale_note")).is_some_and(|n| !n.is_null());
-                        return !has_note;
-                    }
-                    true // other hard-fails block
-                })
-            });
-            if has_blocking_fail {
-                warnings.push(format!("{stem}: import check failed (score {check_score}/100); skipping build. Use force:true to build anyway, or fix the import first with: import_check {{}}"));
-                continue;
+    // Step 1: classify the set and import its plan pages, as the guided job does.
+    s.echo(format!("bim.from_pdf: reading the sheet index of {stem}..."));
+    s.new_drawing_with_viewports(false);
+    let plan = super::guided::load_plan_pages(s, path_obj)?;
+    let names: Vec<String> = plan
+        .pages
+        .iter()
+        .map(|pg| {
+            let sheet = pg.get("sheet").and_then(Value::as_str).filter(|n| !n.is_empty()).unwrap_or("(no number)");
+            match pg.get("level").and_then(Value::as_str).filter(|l| !l.is_empty()) {
+                Some(l) => format!("{sheet} (level {l})"),
+                None => sheet.to_string(),
             }
-            warnings.push(format!("{stem}: import check score {check_score}/100 (SCALE mismatch with detected scale note — proceeding)"));
-        } else if !check_pass {
-            warnings.push(format!("{stem}: import check failed (score {check_score}/100) but force=true, building anyway"));
-        }
+        })
+        .collect();
+    let pages_note = if plan.indexed == 0 {
+        format!("no sheet index read; imported every page ({})", names.len())
+    } else {
+        format!("imported {} of {} sheets: {}", names.len(), plan.indexed, names.join(", "))
+    };
+    s.echo(format!("bim.from_pdf: {pages_note}"));
 
-        // Step 3: Draft and store the building spec from the plan.
+    // Step 2: the import check of everything imported. A hard fail is never a pass.
+    let check = super::import_check::check_drawing(s.doc()?);
+    let check_results = vec![build_check(path, &check)];
+    let hard = check.hard_fails.join(", ");
+    let blocked = !check.hard_fails.is_empty() && check_blocks_build(&check) && !force;
+    if names.is_empty() {
+        warnings.push(format!("{stem}: no page could be imported"));
+    } else if blocked {
+        warnings.push(format!(
+            "{stem}: import check failed ({hard}; score {}/100); skipping build. Use force:true to build anyway, or fix the import first with: import_check {{}}",
+            check.score
+        ));
+    } else if !check.hard_fails.is_empty() {
+        let why = if force { "force=true, building anyway" } else { "SCALE mismatch with a detected scale note — proceeding" };
+        warnings.push(format!("{stem}: import check failed ({hard}; score {}/100); {why}", check.score));
+    }
+
+    if !names.is_empty() && !blocked {
+        // Step 3: the spec — one stacked level per architectural floor plan.
         s.echo(format!("bim.from_pdf: drafting spec for {stem}..."));
-        let _spec = s.execute("bspec.draft", &json!({"store": true}))?;
-
-        // Step 3b: Multi-plan detection — scan text for floor titles and create stacked levels.
-        if let Ok(levels_found) = detect_floor_levels(s)
-            && levels_found.len() >= 2
-        {
-            // Build a spec patch that replaces the single "Level 1" with the detected levels.
+        // One plan level at most, but one sheet showing several floor titles: those are the levels.
+        let floors = if plan.levels.len() <= 1 { detect_floor_levels(s).ok().filter(|f| f.len() >= 2) } else { None };
+        if let Some(levels_found) = floors {
+            s.execute("bspec.draft", &json!({"store": true}))?;
             let levels_json: Vec<Value> = levels_found
                 .iter()
                 .enumerate()
                 .map(|(i, fl)| {
                     let elevation = i as f64 * 10.0; // 10' floor-to-floor default
-                    json!({
-                        "name": fl.name,
-                        "elevation_ft": elevation,
-                        "height_ft": 10.0,
-                        "ceiling_ft": 8.0,
-                        "region": fl.region,
-                    })
+                    json!({"name": fl.name, "elevation_ft": elevation, "height_ft": 10.0, "ceiling_ft": 8.0, "region": fl.region})
                 })
                 .collect();
             let _ = s.execute("bspec.set", &json!({"spec": {"levels": levels_json}}));
@@ -591,37 +613,35 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
                 levels_found.len(),
                 levels_found.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
             ));
+        } else {
+            let draft = if plan.levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": plan.levels, "stack": true}) };
+            let spec = s.execute("bspec.draft", &draft)?;
+            guesses = spec.get("guesses").and_then(Value::as_array).map(|g| g.iter().take(200).cloned().collect()).unwrap_or_default();
         }
 
-        // Step 4: Build the 3D model (model.build has no import-check gate — it just builds
-        // from the stored spec, so no force flag is needed here).
+        // Step 4: build the 3D model.
         s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));
         match s.execute("model.build", &json!({})) {
-            Ok(build_result) => {
-                built_counts = build_result;
-            }
-            Err(e) => {
-                warnings.push(format!("{stem}: model.build failed: {e}"));
-                continue;
-            }
+            Ok(r) => built_counts = r,
+            Err(e) => warnings.push(format!("{stem}: model.build failed: {e}")),
         }
 
-        // Step 5: Save as .cdy next to the PDF (or in the folder).
-        let cdy_path = pdf.with_extension("cdy");
-        let cdy_str = cdy_path.to_string_lossy().to_string();
-        match s.execute("saveas", &json!({ "path": cdy_str })) {
-            Ok(_) => {
-                cdy_paths.push(cdy_str);
-                s.echo(format!("bim.from_pdf: saved {}", cdy_path.display()));
-            }
-            Err(e) => {
-                warnings.push(format!("{stem}: could not save .cdy: {e}"));
+        // Step 5: save at `out` (its images go next to it).
+        if built_counts.as_object().is_some_and(|o| !o.is_empty()) {
+            let cdy_str = out.to_string_lossy().to_string();
+            let made = out.parent().filter(|d| !d.as_os_str().is_empty()).map_or(Ok(()), std::fs::create_dir_all);
+            match made.map_err(|e| e.to_string()).and_then(|()| s.execute("saveas", &json!({ "path": cdy_str })).map_err(|e| e.to_string())) {
+                Ok(_) => {
+                    s.echo(format!("bim.from_pdf: saved {cdy_str}"));
+                    cdy_paths.push(cdy_str);
+                }
+                Err(e) => warnings.push(format!("{stem}: could not save .cdy: {e}")),
             }
         }
     }
 
     let mut next_steps: Vec<String> = Vec::new();
-    if cdy_paths.is_empty() && !pdfs.is_empty() {
+    if cdy_paths.is_empty() {
         next_steps.push("import_check {} — review import quality and fix issues before building".into());
         next_steps.push("bim.from_pdf {path: \"...\", force: true} — force build even with import check failures".into());
     } else {
@@ -660,6 +680,9 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
 
     Ok(json!({
         "cdy_paths": cdy_paths,
+        "pages": plan.pages,
+        "pages_note": pages_note,
+        "spec_guesses": guesses,
         "check_results": check_results,
         "built_counts": built_counts,
         "levels": if levels_count > 1 { json!(built.keys().collect::<Vec<_>>()) } else { json!(levels_count) },
