@@ -2926,3 +2926,54 @@
 	PDF exported to {path}.	PDF exporté vers {path}.
 	Clash detection failed.	La détection des conflits a échoué.
 	Import Cost Table	Importer une table de coûts
+	BIM View	Vue BIM
+	Trade Colours	Couleurs par lot
+	Element Properties	Propriétés de l'élément
+	Tree	Arborescence
+	Colours	Couleurs
+	Ghost Architecture	Architecture transparente
+	Sheet Lines in 3D	Traits de la feuille en 3D
+	Nothing is built yet. Use Plans to Model first.	Rien n'est encore construit. Utilisez d'abord Plans vers modèle.
+	Select one element to see its properties.	Sélectionnez un élément pour voir ses propriétés.
+	Not part of the built model.	Ne fait pas partie du modèle construit.
+	Category	Catégorie
+	Trade	Lot
+	Circuit	Circuit
+	Source	Source
+	Issues	Problèmes
+	Show on Sheet	Afficher sur la feuille
+	Reset Colours	Réinitialiser les couleurs
+	Architecture	Architecture
+	Structure	Structure
+	Fire Protection	Protection incendie
+	Doors and Windows	Portes et fenêtres
+	Supply Air Duct	Gaine de soufflage
+	Return Air Duct	Gaine de reprise
+	Exhaust Air Duct	Gaine d'extraction
+	Outside Air Duct	Gaine d'air neuf
+	Duct	Gaine
+	Air Terminals	Bouches d'air
+	Equipment	Équipements
+	Domestic Cold Water	Eau froide sanitaire
+	Domestic Hot Water	Eau chaude sanitaire
+	Sanitary	Eaux usées
+	Vent	Ventilation
+	Storm	Eaux pluviales
+	Gas	Gaz
+	Piping	Tuyauterie
+	Plumbing Fixtures	Appareils sanitaires
+	Conduit	Conduits
+	Cable Tray	Chemins de câbles
+	Electrical Devices	Appareillage électrique
+	Light Fixtures	Luminaires
+	Clash Check	Contrôle des conflits
+	Fix Clash	Corriger le conflit
+	Model Takeoff	Métré du modèle
+	Show Takeoff Line	Afficher la ligne du métré
+	Model Estimate	Estimation du modèle
+	New Issue	Nouveau problème
+	Update Issue	Mettre à jour le problème
+	Show Issue	Afficher le problème
+	Issue Marks	Repères de problèmes
+	Sheet and 3D Link	Lien entre plan et 3D
+	PDF to BIM	PDF vers BIM

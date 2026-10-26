@@ -3227,3 +3227,55 @@
 	Sheet Facts	Дані аркуша
 	Start Guided Job	Почати кероване завдання
 	Undo Job Action	Скасувати дію завдання
+	BIM View	Вигляд BIM
+	Trade Colours	Кольори розділів
+	Element Properties	Властивості елемента
+	Tree	Дерево
+	Colours	Кольори
+	Systems	Системи
+	Ghost Architecture	Архітектура прозора
+	Sheet Lines in 3D	Лінії аркуша в 3D
+	Nothing is built yet. Use Plans to Model first.	Ще нічого не побудовано. Спершу скористайтеся «З планів у модель».
+	Select one element to see its properties.	Виберіть один елемент, щоб побачити його властивості.
+	Not part of the built model.	Не входить до побудованої моделі.
+	Category	Категорія
+	Trade	Розділ
+	Circuit	Коло
+	Source	Джерело
+	Issues	Зауваження
+	Show on Sheet	Показати на аркуші
+	Reset Colours	Скинути кольори
+	Architecture	Архітектура
+	Structure	Конструкції
+	Fire Protection	Пожежогасіння
+	Doors and Windows	Двері та вікна
+	Supply Air Duct	Припливний повітропровід
+	Return Air Duct	Рециркуляційний повітропровід
+	Exhaust Air Duct	Витяжний повітропровід
+	Outside Air Duct	Повітропровід зовнішнього повітря
+	Duct	Повітропровід
+	Air Terminals	Повітророзподільники
+	Equipment	Обладнання
+	Domestic Cold Water	Холодне водопостачання
+	Domestic Hot Water	Гаряче водопостачання
+	Sanitary	Каналізація
+	Vent	Вентиляційний стояк
+	Storm	Зливова каналізація
+	Gas	Газ
+	Piping	Трубопроводи
+	Plumbing Fixtures	Санітарні прилади
+	Conduit	Кабельні труби
+	Cable Tray	Кабельні лотки
+	Electrical Devices	Електропристрої
+	Light Fixtures	Світильники
+	Clash Check	Перевірка колізій
+	Fix Clash	Усунути колізію
+	Model Takeoff	Відомість обсягів за моделлю
+	Show Takeoff Line	Показати рядок відомості
+	Model Estimate	Кошторис за моделлю
+	New Issue	Нове зауваження
+	Update Issue	Оновити зауваження
+	Show Issue	Показати зауваження
+	Issue Marks	Позначки зауважень
+	Sheet and 3D Link	Зв'язок аркуша і 3D
+	PDF to BIM	PDF у BIM

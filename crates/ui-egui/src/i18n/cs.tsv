@@ -3118,3 +3118,54 @@ menu	Modify	Modifikace
 	PDF exported to {path}.	PDF exportováno do {path}.
 	Clash detection failed.	Detekce kolizí selhala.
 	Import Cost Table	Importovat tabulku nákladů
+	BIM View	Zobrazení BIM
+	Trade Colours	Barvy profesí
+	Element Properties	Vlastnosti prvku
+	Tree	Strom
+	Colours	Barvy
+	Ghost Architecture	Průhledná architektura
+	Sheet Lines in 3D	Čáry výkresu ve 3D
+	Nothing is built yet. Use Plans to Model first.	Zatím nic není vytvořeno. Nejprve použijte Z výkresů do modelu.
+	Select one element to see its properties.	Vyberte jeden prvek a zobrazí se jeho vlastnosti.
+	Not part of the built model.	Není součástí vytvořeného modelu.
+	Category	Kategorie
+	Trade	Profese
+	Circuit	Obvod
+	Source	Zdroj
+	Issues	Problémy
+	Show on Sheet	Zobrazit na výkresu
+	Reset Colours	Obnovit barvy
+	Architecture	Architektura
+	Structure	Konstrukce
+	Fire Protection	Požární ochrana
+	Doors and Windows	Dveře a okna
+	Supply Air Duct	Přívodní potrubí
+	Return Air Duct	Vratné potrubí
+	Exhaust Air Duct	Odtahové potrubí
+	Outside Air Duct	Potrubí venkovního vzduchu
+	Duct	Potrubí
+	Air Terminals	Koncové prvky
+	Equipment	Zařízení
+	Domestic Cold Water	Studená pitná voda
+	Domestic Hot Water	Teplá voda
+	Sanitary	Kanalizace
+	Vent	Odvětrání
+	Storm	Dešťová kanalizace
+	Gas	Plyn
+	Piping	Potrubí
+	Plumbing Fixtures	Zařizovací předměty
+	Conduit	Elektroinstalační trubky
+	Cable Tray	Kabelové žlaby
+	Electrical Devices	Elektrické prvky
+	Light Fixtures	Svítidla
+	Clash Check	Kontrola kolizí
+	Fix Clash	Opravit kolizi
+	Model Takeoff	Výkaz výměr z modelu
+	Show Takeoff Line	Zobrazit položku výkazu
+	Model Estimate	Rozpočet z modelu
+	New Issue	Nový problém
+	Update Issue	Aktualizovat problém
+	Show Issue	Zobrazit problém
+	Issue Marks	Značky problémů
+	Sheet and 3D Link	Propojení výkresu a 3D
+	PDF to BIM	PDF do BIM
