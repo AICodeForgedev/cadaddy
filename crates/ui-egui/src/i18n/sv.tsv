@@ -3212,3 +3212,6 @@ menu	Modify	Ändra
 	Keep Print Set Job	Behåll ritningsuppsättningens jobb
 	Resume Print Set Job	Återuppta ritningsuppsättningens jobb
 	Finish Takeoff from Prints	Ytskiktsmängder från ritningar
+	Layer Quantity Takeoff	Mängdavtagning per lager
+	Read Architecture from Prints	Läs arkitektur från ritningar
+	Read Roof and Wall Envelope	Läs tak- och väggklimatskal

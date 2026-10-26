@@ -3022,3 +3022,6 @@
 	Keep Print Set Job	Plansatz-Auftrag aufbewahren
 	Resume Print Set Job	Plansatz-Auftrag fortsetzen
 	Finish Takeoff from Prints	Ausbau-Mengenermittlung aus Plänen
+	Layer Quantity Takeoff	Mengenermittlung nach Layer
+	Read Architecture from Prints	Architektur aus Plänen lesen
+	Read Roof and Wall Envelope	Dach- und Wandhülle lesen

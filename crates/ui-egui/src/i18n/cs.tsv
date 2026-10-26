@@ -3185,3 +3185,6 @@ menu	Modify	Modifikace
 	Keep Print Set Job	Uchovat úlohu tiskové sady
 	Resume Print Set Job	Obnovit úlohu tiskové sady
 	Finish Takeoff from Prints	Výkaz povrchových úprav z výkresů
+	Layer Quantity Takeoff	Výkaz výměr podle hladin
+	Read Architecture from Prints	Načíst architekturu z výkresů
+	Read Roof and Wall Envelope	Načíst obálku střechy a stěn

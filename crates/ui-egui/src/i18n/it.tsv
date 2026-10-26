@@ -3204,3 +3204,6 @@ menu	Modify	Edita
 	Keep Print Set Job	Conserva lavoro del set di tavole
 	Resume Print Set Job	Riprendi lavoro del set di tavole
 	Finish Takeoff from Prints	Computo delle finiture dalle tavole
+	Layer Quantity Takeoff	Computo quantità per layer
+	Read Architecture from Prints	Leggi l'architettura dalle tavole
+	Read Roof and Wall Envelope	Leggi l'involucro di copertura e pareti

@@ -3200,3 +3200,6 @@ menu	View	عرض
 	Keep Print Set Job	حفظ مهمة مجموعة الطباعة
 	Resume Print Set Job	استئناف مهمة مجموعة الطباعة
 	Finish Takeoff from Prints	حصر التشطيبات من المخططات
+	Layer Quantity Takeoff	حصر الكميات حسب الطبقة
+	Read Architecture from Prints	قراءة المعماري من المخططات
+	Read Roof and Wall Envelope	قراءة غلاف السقف والجدران

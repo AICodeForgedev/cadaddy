@@ -3089,3 +3089,6 @@
 	Keep Print Set Job	保留图纸集作业
 	Resume Print Set Job	恢复图纸集作业
 	Finish Takeoff from Prints	根据图纸统计装修工程量
+	Layer Quantity Takeoff	按图层统计工程量
+	Read Architecture from Prints	从图纸读取建筑
+	Read Roof and Wall Envelope	读取屋面与墙体围护
