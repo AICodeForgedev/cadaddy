@@ -2744,6 +2744,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
     let mut result = s.execute("model.build", &json!({}))?;
+    // The model's rooms are the job's rooms on the levels it built.
+    if let Some(by_level) = rooms_from_model(s, job)
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("rooms_by_level".into(), by_level);
+    }
     // The plans kept out of the building (MUST 3), for the job report.
     let skipped = not_built_sheets(job);
     if !skipped.is_empty()
@@ -2955,11 +2961,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
     for (i, r) in plans.iter().enumerate() {
-        let name = match r.level.as_str() {
-            "R" => "Roof".to_string(),
-            l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
-            l => l.to_string(),
-        };
+        let name = level_name(&r.level);
         let read_el = reads.get(i).copied().flatten();
         let out_of_order = read_el.is_some() && good(i).is_none();
         if i == 0 {
@@ -2992,6 +2994,70 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         out.push(level);
     }
     out
+}
+
+/// The building level a sheet's level code builds (`3` → `Level 3`, `R` → `Roof`).
+fn level_name(code: &str) -> String {
+    match code {
+        "R" => "Roof".to_string(),
+        l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
+        l => l.to_string(),
+    }
+}
+
+/// The job's rooms after the build (MUST 2: a room is a label inside a closed boundary of real
+/// walls): on each level the model built rooms on, the model's rooms (traced inside that level's
+/// architectural plan walls, the title block and border left out); on the other levels the rooms
+/// stage's reading. The rooms stage's result takes them, its reading's count kept as
+/// `read_count`. The model's rooms per level.
+fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
+    let model = super::rooms3d::model_rooms(s).ok().flatten().filter(|l| !l.is_empty())?;
+    let level_of = |r: &Value| r.get("level").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+    let built: BTreeSet<String> = model.iter().map(level_of).filter(|l| !l.is_empty()).collect();
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &model {
+        *by_level.entry(r.get("level").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
+    }
+    let read: Vec<Value> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let read_count = read.len();
+    let kept: Vec<Value> = read
+        .into_iter()
+        .filter(|r| {
+            let code = r.get("level").and_then(Value::as_str).unwrap_or("");
+            !built.contains(&level_name(code.trim()).to_ascii_uppercase())
+        })
+        .collect();
+    let from_model = model.len();
+    let mut rooms = json!({"rooms": model.into_iter().chain(kept).collect::<Vec<_>>()});
+    let (removed, renamed) = apply_room_answers(job, &mut rooms);
+    let list = rooms.get_mut("rooms").map(Value::take).unwrap_or_else(|| json!([]));
+    let count = list.as_array().map_or(0, Vec::len);
+    if let Some(o) = job.stage_mut(StageName::Rooms).and_then(|st| st.result.as_mut()).and_then(Value::as_object_mut) {
+        o.insert("read_count".into(), json!(read_count));
+        o.insert("from_model".into(), json!(from_model));
+        o.insert("rooms".into(), list);
+        o.insert("count".into(), json!(count));
+        if removed > 0 {
+            o.insert("removed_by_answers".into(), json!(removed));
+        }
+        if renamed > 0 {
+            o.insert("renamed_by_answers".into(), json!(renamed));
+        }
+    }
+    job.audit(
+        "rooms_from_model",
+        "pipeline",
+        None,
+        Some(StageName::Rooms),
+        Some(json!({"read": read_count, "from_model": from_model, "rooms": count})),
+    );
+    Some(json!(by_level))
 }
 
 /// The building spec drafted and stored from the open print set, as the job's build stage drafts
@@ -5150,6 +5216,53 @@ mod tests {
         let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
         let names: Vec<String> = spec.rooms.iter().map(|r| r.name.to_ascii_uppercase()).collect();
         assert!(!names.is_empty() && names.iter().all(|n| n == "OFFICE" || n == "LOBBY"), "{names:?}");
+    }
+
+    #[test]
+    fn the_jobs_rooms_are_the_models_on_the_levels_it_built() {
+        // The partition's jambs drawn and its door shut, so OFFICE and LOBBY are two rooms
+        // inside the floor's walls.
+        let mut s = furnished_sheet();
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+        line(&mut s, [238.0, 150.0], [242.0, 150.0]);
+        line(&mut s, [238.0, 186.0], [242.0, 186.0]);
+        s.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+        line(&mut s, [240.0, 150.0], [240.0, 186.0]);
+        let f = sheet_frames(s.doc().unwrap(), &[SHEET]).first().copied().unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
+        let r = build_job(&mut s, &job);
+        assert_eq!(r["rooms"].as_u64(), Some(2), "{r}");
+        // The rooms stage read a title-block box and a room twice on level 1, and level 2 (no
+        // plan built) on its electrical plan.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 4, "rooms": [
+                {"name": "OFFICE", "number": "101", "level": "1"},
+                {"name": "OFFICE", "number": "101", "level": "1"},
+                {"name": "PROJECT NO", "level": "1"},
+                {"name": "STORAGE", "number": "201", "level": "2"}
+            ]}));
+        }
+        let by_level = rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        assert_eq!(by_level, json!({"Level 1": 2}));
+        let result = job.stage(StageName::Rooms).and_then(|st| st.result.clone()).unwrap_or_default();
+        let mut names: Vec<(&str, &str)> =
+            result["rooms"].as_array().unwrap().iter().map(|r| (r["name"].as_str().unwrap_or(""), r["level"].as_str().unwrap_or(""))).collect();
+        names.sort_unstable();
+        assert_eq!(names, [("Lobby", "Level 1"), ("Office", "Level 1"), ("STORAGE", "2")], "{result}");
+        assert_eq!((result["count"].as_u64(), result["read_count"].as_u64(), result["from_model"].as_u64()), (Some(3), Some(4), Some(2)));
+
+        // A model with no rooms leaves the reading as it was.
+        let mut empty = crate::Session::new();
+        let mut job2 = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        if let Some(st) = job2.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}));
+        }
+        assert!(rooms_from_model(&mut empty, &mut job2).is_none());
+        assert_eq!(
+            job2.stage(StageName::Rooms).and_then(|st| st.result.clone()),
+            Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}))
+        );
     }
 
     #[test]

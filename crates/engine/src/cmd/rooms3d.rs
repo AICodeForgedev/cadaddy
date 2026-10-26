@@ -274,6 +274,14 @@ fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
     v
 }
 
+/// The rooms a build made (its room ceilings, traced inside the plans' walls), as `rooms.list`
+/// lists them without outlines; None when the model has none.
+pub(crate) fn model_rooms(s: &mut Session) -> Result<Option<Vec<Value>>> {
+    let Some(rs) = built_rooms(s)? else { return Ok(None) };
+    let d = s.doc()?;
+    Ok(Some(rs.iter().map(|r| room_json(d, r, false)).collect()))
+}
+
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let rs = rooms(s)?;
     let outline = bool_or(p, "outline", true);
