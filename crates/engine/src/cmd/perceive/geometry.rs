@@ -14,6 +14,13 @@ const MAX_SEGS: usize = 200_000;
 const MAX_PAIRS: usize = 50_000;
 /// Rooms traced at most.
 const MAX_ROOMS: usize = 1_000;
+/// A room's least width, inches (a schedule cell, a tag box and a sliver between two lines are
+/// narrower).
+const MIN_ROOM_WIDTH_IN: f64 = 36.0;
+/// Rooms traced at most on one sheet region, when the labels are read sheet by sheet.
+const MAX_ROOMS_PER_REGION: usize = 250;
+/// Rooms traced at most over all the sheet regions (a whole print set).
+const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
 
 /// A straight segment of a line or polyline.
 #[derive(Clone, Debug)]
@@ -226,6 +233,8 @@ pub(crate) struct Opening {
     pub swing: Option<(f64, [Vec2; 2])>,
     pub block: Option<String>,
     pub confidence: f64,
+    /// A swing whose leaf is drawn too (a line from the hinge to an end of the arc).
+    pub leaf: bool,
 }
 
 /// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
@@ -262,6 +271,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
@@ -287,6 +297,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             EntityKind::Insert(i) => {
@@ -309,6 +320,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: None,
                     block: Some(i.block.clone()),
                     confidence: 0.75,
+                    leaf: false,
                 });
             }
             _ => {}
@@ -581,6 +593,36 @@ type Label = (cadaddy_doc::Handle, String, Vec2, f64, bool);
 /// the texts naming its rooms), traced on what bounds rooms ([`crate::cmd::bspec::room_plan`]).
 /// Each outline takes its best name whatever order the labels were drawn in.
 pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
+    rooms_found_in(s, None)
+}
+
+/// The labels to trace, best room names first. With `regions` (sheet rectangles, `[x0, y0, x1,
+/// y1]`): only the labels inside one, each region's best [`MAX_ROOMS_PER_REGION`] in turn, so a
+/// print set's later sheets are read as fully as its first ones; else the drawing's best
+/// [`MAX_ROOMS`].
+fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn(&T) -> u8, regions: Option<&[[f64; 4]]>) -> Vec<T> {
+    // A room or unit-type word claims its outline before another label in the same room.
+    names.sort_by_key(|n| std::cmp::Reverse(score(n)));
+    let Some(regions) = regions else {
+        names.truncate(MAX_ROOMS);
+        return names;
+    };
+    let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+    let mut per: Vec<Vec<T>> = regions.iter().map(|_| Vec::new()).collect();
+    for n in names {
+        let p = at(&n);
+        if let Some(i) = regions.iter().position(|r| inside(r, p))
+            && let Some(list) = per.get_mut(i)
+            && list.len() < MAX_ROOMS_PER_REGION
+        {
+            list.push(n);
+        }
+    }
+    per.into_iter().flatten().take(MAX_ROOMS_ALL_REGIONS).collect()
+}
+
+/// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
+pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let min_area = 16.0 * 144.0 * k * k;
@@ -644,6 +686,8 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     names.sort_by(|a, b| {
         score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
     });
+    // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
+    let names = labels_to_trace(names, |n| n.2, score, regions);
     let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
     numbers.extend(tag_numbers);
     let plan = crate::cmd::bspec::room_plan(s)?;
@@ -662,7 +706,7 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
     let mut outline_cache = None;
-    for (h, name, at, height, _) in names.into_iter().take(MAX_ROOMS) {
+    for (h, name, at, height, _) in names {
         let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
@@ -675,6 +719,11 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
         }
         // One room per outline: a second label in the same room is its number or a note.
         if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+            continue;
+        }
+        // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
+        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        if regions.is_some() && b.width().min(b.height()) < MIN_ROOM_WIDTH_IN * k {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
@@ -711,4 +760,33 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     Ok(page(items, p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_print_sets_last_sheets_are_read_as_fully_as_its_first() {
+        // Four sheets side by side, each with more labels than one reading traces in all; the
+        // labels in drawing order (sheet 1's first), all as good names.
+        let per_sheet = MAX_ROOMS / 2 + 10;
+        let regions: Vec<[f64; 4]> = (0..4).map(|i| [f64::from(i) * 100.0, 0.0, f64::from(i) * 100.0 + 90.0, 90.0]).collect();
+        let names: Vec<(usize, Vec2)> =
+            (0..4).flat_map(|i| (0..per_sheet).map(move |j| (i, Vec2::new(f64::from(i as u32) * 100.0 + 5.0, 5.0 + (j % 80) as f64)))).collect();
+        let by_sheet = |picked: &[(usize, Vec2)]| (0..4).map(|i| picked.iter().filter(|(s, _)| *s == i).count()).collect::<Vec<_>>();
+        // Read over the whole drawing: the last sheets get nothing.
+        let whole = labels_to_trace(names.clone(), |n| n.1, |_| 3, None);
+        assert_eq!(by_sheet(&whole), [per_sheet, MAX_ROOMS - per_sheet, 0, 0]);
+        // Sheet by sheet: each its own share, labels outside every sheet left out.
+        let mut with_stray = names;
+        with_stray.push((9, Vec2::new(-50.0, 5.0)));
+        let picked = labels_to_trace(with_stray, |n| n.1, |_| 3, Some(&regions));
+        let each = per_sheet.min(MAX_ROOMS_PER_REGION);
+        assert_eq!(by_sheet(&picked), [each, each, each, each]);
+        assert!(picked.iter().all(|(s, _)| *s != 9));
+        // The best names first within a sheet.
+        let scored = labels_to_trace(vec![(0, Vec2::new(5.0, 5.0)), (1, Vec2::new(6.0, 5.0))], |n| n.1, |n| u8::from(n.0 == 1), Some(&regions));
+        assert_eq!(scored.first().map(|n| n.0), Some(1));
+    }
 }

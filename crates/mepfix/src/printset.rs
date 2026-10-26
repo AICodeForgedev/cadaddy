@@ -1446,9 +1446,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
         });
     }
-    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed.
+    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed. A
+    // civil, landscape or site plan is on the site (no storey of the building).
     let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
     for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        if crate::sheet_facts::is_site_sheet(&s.discipline, &s.title) {
+            s.level = "SITE".into();
+            s.level_source = "site".into();
+            continue;
+        }
         s.level = lowest.clone();
         s.level_source = "default".into();
         out.plans_without_level.push(s.number.clone());

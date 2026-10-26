@@ -436,6 +436,154 @@ pub fn tag_census(texts: &[TextItem], region: [f64; 4]) -> TagCensus {
     c
 }
 
+/// Long rules gathered per sheet for [`sheet_frame`] (a guard against hostile files).
+const MAX_FRAME_SEGMENTS: usize = 50_000;
+
+/// Where a sheet's drawing is: inside its border and off its title-block strip. Everything
+/// outside `area` (the border, the title block with its firm names, stamps, revisions and key
+/// plan) is sheet furniture, never building.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SheetFrame {
+    /// `[x0, y0, x1, y1]`: the part of the sheet the views are drawn in.
+    pub area: [f64; 4],
+    /// The title-block strip along the right or bottom edge, when one was found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_block: Option<[f64; 4]>,
+    /// A ruled border was found (else the area starts at the sheet's edge, a little inset).
+    pub border: bool,
+}
+
+/// How much of `[lo, hi]` the intervals cover, and whether they reach both ends (within `near`).
+fn coverage(mut spans: Vec<(f64, f64)>, lo: f64, hi: f64, near: f64) -> (f64, bool) {
+    spans.retain(|(a, b)| a.is_finite() && b.is_finite());
+    for s in &mut spans {
+        *s = (s.0.min(s.1).max(lo), s.0.max(s.1).min(hi));
+    }
+    spans.retain(|(a, b)| b > a);
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (mut total, mut cur): (f64, Option<(f64, f64)>) = (0.0, None);
+    let (mut first, mut last) = (f64::INFINITY, f64::NEG_INFINITY);
+    for (a, b) in spans {
+        first = first.min(a);
+        last = last.max(b);
+        cur = match cur {
+            Some((c0, c1)) if a <= c1 => Some((c0, c1.max(b))),
+            Some((c0, c1)) => {
+                total += c1 - c0;
+                Some((a, b))
+            }
+            None => Some((a, b)),
+        };
+    }
+    if let Some((c0, c1)) = cur {
+        total += c1 - c0;
+    }
+    (total, first <= lo + near && last >= hi - near)
+}
+
+/// Rules along one axis: positions (within `tol` of each other) with the intervals drawn there.
+fn rules(segs: &[(Vec2, Vec2)], vertical: bool, tol: f64) -> Vec<(f64, Vec<(f64, f64)>)> {
+    let mut out: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    for (a, b) in segs {
+        let (along, across) = if vertical { ((a.y, b.y), (a.x + b.x) / 2.0) } else { ((a.x, b.x), (a.y + b.y) / 2.0) };
+        let straight = if vertical { (a.x - b.x).abs() <= tol } else { (a.y - b.y).abs() <= tol };
+        if !straight || !across.is_finite() {
+            continue;
+        }
+        match out.iter_mut().find(|(at, _)| (at - across).abs() <= tol) {
+            Some((_, spans)) => spans.push(along),
+            None => out.push((across, vec![along])),
+        }
+    }
+    out
+}
+
+/// The sheet's frame from its straight lines (`segs`, sheet units) on the sheet's rectangle
+/// `rect` (`[x0, y0, x1, y1]`). The border: lines most of the sheet long near its edges. The
+/// title block: a rule the full height of the border (or its full width, along the bottom) in
+/// the outer third of the sheet; the leftmost (topmost) one starts the strip. A plan's walls
+/// never run the full height of the border from edge to edge, so they are never taken for it.
+pub fn sheet_frame(segs: &[(Vec2, Vec2)], rect: [f64; 4]) -> SheetFrame {
+    let (x0, y0, x1, y1) = (rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3]));
+    let (w, h) = (x1 - x0, y1 - y0);
+    let whole = SheetFrame { area: [x0, y0, x1, y1], title_block: None, border: false };
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return whole;
+    }
+    let segs: Vec<(Vec2, Vec2)> = segs.iter().take(MAX_FRAME_SEGMENTS).copied().collect();
+    let tol = 0.002 * w.min(h);
+    let verticals = rules(&segs, true, tol);
+    let horizontals = rules(&segs, false, tol);
+    // The border: the innermost long rule near each edge.
+    let long = |spans: &[(f64, f64)], lo: f64, hi: f64| coverage(spans.to_vec(), lo, hi, 0.05 * (hi - lo)).0 >= 0.7 * (hi - lo);
+    let edge = 0.06;
+    let left = verticals.iter().filter(|(x, s)| *x <= x0 + edge * w && long(s, y0, y1)).map(|(x, _)| *x).fold(f64::NAN, f64::max);
+    let right = verticals.iter().filter(|(x, s)| *x >= x1 - edge * w && long(s, y0, y1)).map(|(x, _)| *x).fold(f64::NAN, f64::min);
+    let bottom = horizontals.iter().filter(|(y, s)| *y <= y0 + edge * h && long(s, x0, x1)).map(|(y, _)| *y).fold(f64::NAN, f64::max);
+    let top = horizontals.iter().filter(|(y, s)| *y >= y1 - edge * h && long(s, x0, x1)).map(|(y, _)| *y).fold(f64::NAN, f64::min);
+    let border = [left, right, bottom, top].iter().any(|v| v.is_finite());
+    let pad = 0.003 * w.min(h);
+    let (l, mut r, mut b, t) =
+        (left.max(x0) + pad, if right.is_finite() { right } else { x1 } - pad, bottom.max(y0) + pad, if top.is_finite() { top } else { y1 } - pad);
+    if !(r > l && t > b) {
+        return whole;
+    }
+    let (iw, ih) = (r - l, t - b);
+    // A title-block rule runs from the border's bottom to its top (or side to side).
+    let full = |spans: &[(f64, f64)], lo: f64, hi: f64| {
+        let (got, ends) = coverage(spans.to_vec(), lo, hi, 0.03 * (hi - lo));
+        ends && got >= 0.85 * (hi - lo)
+    };
+    let strip_x = verticals.iter().filter(|(x, s)| *x > r - 0.35 * iw && *x < r - pad && full(s, b, t)).map(|(x, _)| *x).fold(f64::NAN, f64::min);
+    let strip_y = horizontals
+        .iter()
+        .filter(|(y, s)| *y < b + 0.3 * ih && *y > b + pad && full(s, l, if strip_x.is_finite() { strip_x } else { r }))
+        .map(|(y, _)| *y)
+        .fold(f64::NAN, f64::max);
+    let mut title_block = None;
+    if strip_x.is_finite() {
+        title_block = Some([strip_x, b, r, t]);
+        r = strip_x - pad;
+    }
+    if strip_y.is_finite() && !strip_x.is_finite() {
+        title_block = Some([l, b, r, strip_y]);
+        b = strip_y + pad;
+    }
+    if !(r > l && t > b) || (!border && title_block.is_none()) {
+        return whole;
+    }
+    SheetFrame { area: [l, b, r, t], title_block, border }
+}
+
+/// A site sheet: civil, landscape and site plans (what is outside the building), by the sheet
+/// number's discipline (`C`, `L`, `CS`, `LS`, `V`) or the title's words.
+pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
+    let d = discipline.trim().to_ascii_uppercase();
+    if matches!(d.as_str(), "C" | "CS" | "CG" | "CU" | "L" | "LS" | "LP" | "LI" | "V" | "SV") {
+        return true;
+    }
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    const SITE_WORDS: &[&str] = &[
+        "SITE",
+        "CIVIL",
+        "GRADING",
+        "EARTHWORK",
+        "PAVING",
+        "LANDSCAPE",
+        "LANDSCAPING",
+        "PLANTING",
+        "IRRIGATION",
+        "HARDSCAPE",
+        "EROSION",
+        "SURVEY",
+        "TOPOGRAPHIC",
+        "STORMWATER",
+        "SWPPP",
+    ];
+    words.iter().any(|w| SITE_WORDS.contains(w))
+}
+
 /// The sheet and its views.
 pub fn read_sheet_facts(d: &Drawing) -> SheetFacts {
     let t = texts(d);
