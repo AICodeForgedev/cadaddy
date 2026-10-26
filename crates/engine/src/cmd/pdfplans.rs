@@ -555,7 +555,8 @@ mod tests {
             seed ^= seed << 17;
             (seed % 10_000) as f64 / 10.0
         };
-        let pair = |a: Vec2, b: Vec2, t: f64| Pair { layer: String::new(), c0: a, c1: b, thickness: t, length: a.dist(b), confidence: 1.0 };
+        let pair =
+            |a: Vec2, b: Vec2, t: f64| Pair { layer: String::new(), c0: a, c1: b, thickness: t, length: a.dist(b), confidence: 1.0, faces: [0, 0] };
         let pairs: Vec<Pair> = (0..400).map(|_| pair(Vec2::new(rnd(), rnd()), Vec2::new(rnd(), rnd()), 2.0 + rnd() / 100.0)).collect();
         let slack = 0.25;
         let grid = PairGrid::new(&pairs, slack);
