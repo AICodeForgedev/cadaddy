@@ -273,16 +273,10 @@ fn finish_detail_carries_source() {
     let storage = room(rooms, "STORAGE");
     let detail = storage["finishDetail"].as_array().unwrap();
     // CPT-1 from the in-room text note.
-    assert!(
-        detail.iter().any(|d| d["code"] == "CPT-1" && d["source"] == "note"),
-        "CPT-1 source is note: {detail:?}"
-    );
+    assert!(detail.iter().any(|d| d["code"] == "CPT-1" && d["source"] == "note"), "CPT-1 source is note: {detail:?}");
     // With a schedule, schedule finishes carry source "schedule".
     let mut s2 = plan_with_schedule();
     let office = s2.execute("rooms.get", &json!({"number": "101"})).unwrap();
     let od = office["finishDetail"].as_array().unwrap();
-    assert!(
-        od.iter().any(|d| d["slot"] == "floor" && d["source"] == "schedule"),
-        "schedule finish source: {od:?}"
-    );
+    assert!(od.iter().any(|d| d["slot"] == "floor" && d["source"] == "schedule"), "schedule finish source: {od:?}");
 }

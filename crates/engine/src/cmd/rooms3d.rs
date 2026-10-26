@@ -327,13 +327,13 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
 fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
     let k = units_per_inch(d);
     let (ft, m) = (12.0 * k, k / 0.0254);
-    let detail: Vec<Value> = r.finish_detail.iter().map(|d| {
-        if d.slot.is_empty() {
-            json!({"code": d.code, "source": d.source})
-        } else {
-            json!({"slot": d.slot, "code": d.code, "source": d.source})
-        }
-    }).collect();
+    let detail: Vec<Value> = r
+        .finish_detail
+        .iter()
+        .map(|d| {
+            if d.slot.is_empty() { json!({"code": d.code, "source": d.source}) } else { json!({"slot": d.slot, "code": d.code, "source": d.source}) }
+        })
+        .collect();
     let mut v = json!({
         "name": r.name, "number": r.number, "level": r.level, "label": r.label.hex(), "at": pt(r.at),
         "area": round(r.area), "areaSqFt": round(r.area / (ft * ft)), "areaM2": round(r.area / (m * m)),
@@ -360,11 +360,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The room `p` names (`name`, any case; `number`; or `label` (handle hex)).
 fn named(s: &mut Session, cmd: &str, p: &Value) -> Result<Room3> {
-    let (name, number, label) = (
-        str_param(p, "name").map(str::trim),
-        str_param(p, "number").map(str::trim),
-        str_param(p, "label").map(str::trim),
-    );
+    let (name, number, label) = (str_param(p, "name").map(str::trim), str_param(p, "number").map(str::trim), str_param(p, "label").map(str::trim));
     if name.is_none() && number.is_none() && label.is_none() {
         return Err(bad(cmd, "pass the room's `name`, `number` or `label`"));
     }
@@ -393,25 +389,8 @@ fn named(s: &mut Session, cmd: &str, p: &Value) -> Result<Room3> {
         0 => Err(bad(cmd, format!("no room {n}"))),
         1 => Ok(matches.swap_remove(0)),
         _ => {
-            let list: Vec<String> = matches
-                .iter()
-                .map(|r| {
-                    format!(
-                        "{} (label {})",
-                        r.number.as_deref().unwrap_or("—"),
-                        r.label.hex()
-                    )
-                })
-                .collect();
-            Err(bad(
-                cmd,
-                format!(
-                    "{} rooms match \"{}\": {}; pass `number` or `label` to select one",
-                    matches.len(),
-                    n,
-                    list.join(", ")
-                ),
-            ))
+            let list: Vec<String> = matches.iter().map(|r| format!("{} (label {})", r.number.as_deref().unwrap_or("—"), r.label.hex())).collect();
+            Err(bad(cmd, format!("{} rooms match \"{}\": {}; pass `number` or `label` to select one", matches.len(), n, list.join(", "))))
         }
     }
 }
