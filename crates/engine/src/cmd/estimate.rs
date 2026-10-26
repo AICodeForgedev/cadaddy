@@ -56,10 +56,10 @@ const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 
 /// The starter cost book shipped with CADaddy (Q6012).
 const STARTER_CSV: &str = include_str!("../../../../assets/costbook/starter.csv");
-const STARTER_SOURCE: &str = "starter cost book";
+pub(crate) const STARTER_SOURCE: &str = "starter cost book";
 
 /// Parse the embedded starter cost book CSV into price rows (same shape as baseline prices).
-fn starter_prices() -> Vec<Value> {
+pub(crate) fn starter_prices() -> Vec<Value> {
     let rows = csv_rows(STARTER_CSV);
     rows.iter()
         .filter_map(|r| {
@@ -1848,7 +1848,7 @@ mod tests {
         }
         for r in &rows {
             let m = r["material"].as_f64().unwrap_or(-1.0);
-            assert!(m >= 0.0 && m < 1e6, "bad material in row: {r}");
+            assert!((0.0..1e6).contains(&m), "bad material in row: {r}");
             assert!(r["source"].as_str() == Some(STARTER_SOURCE), "wrong source in row: {r}");
         }
     }

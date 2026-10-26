@@ -559,6 +559,20 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
 
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let rows = cost_rows(CMD_EST, p)?;
+    // Q6012: starter cost book as fallback, same as estimate.status (estimate.rs price_lines).
+    let starter: Vec<Cost> = crate::cmd::estimate::starter_prices()
+        .into_iter()
+        .filter_map(|v| {
+            Some(Cost {
+                item: v["item"].as_str()?.to_string(),
+                unit: v["unit"].as_str().unwrap_or("each").to_string(),
+                material: v["material"].as_f64()?,
+                labor_hrs: v["labor_hours"].as_f64().unwrap_or(0.0),
+                waste: None,
+                labor_rate: None,
+            })
+        })
+        .collect();
     let by_level = bool_or(p, "by_level", false);
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, if by_level { "level" } else { "type" }, &filter)?;
@@ -582,18 +596,24 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out_lines = Vec::new();
     let mut unmatched = Vec::new();
     let mut used = BTreeSet::new();
+    let mut used_starter = BTreeSet::new();
     let (mut mat_total, mut hrs_total) = (0.0f64, 0.0f64);
     for l in &lines {
         let qty = l["qty"].as_f64().unwrap_or(0.0);
         if qty <= 0.0 {
             continue;
         }
-        let Some((i, how)) = match_row(&rows, l) else {
+        // User cost table first, then the starter book, then unmatched.
+        let (r, how, via) = if let Some((i, how)) = match_row(&rows, l) {
+            used.insert(i);
+            (&rows[i], how, None)
+        } else if let Some((i, how)) = match_row(&starter, l) {
+            used_starter.insert(i);
+            (&starter[i], how, Some(crate::cmd::estimate::STARTER_SOURCE))
+        } else {
             unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": "no cost-table row names this item in this unit"}));
             continue;
         };
-        let Some(r) = rows.get(i) else { continue };
-        used.insert(i);
         let w = waste_for(l, r);
         let qt = qty * (1.0 + w / 100.0);
         // Material on the quantity with waste; labor on the net (waste isn't installed).
@@ -601,13 +621,17 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         let (m, h) = (qt * r.material, qty * r.labor_hrs);
         mat_total += m;
         hrs_total += h;
-        out_lines.push(json!({
+        let mut line = json!({
             "key": l["key"], "level": l["level"], "trade": l["trade"], "category": l["category"], "item": l["item"], "size": l["size"], "unit": l["unit"],
             "qty": r3(qty), "waste_pct": r3(w), "qty_total": r3(qt), "cost_item": r.item, "matched_by": how,
             "material_unit": r.material, "labor_hrs_unit": r.labor_hrs,
             "material": r3(m), "labor_hrs": r3(h), "labor": r3(h * rate), "total": r3(m + h * rate),
             "elements": l["element_count"],
-        }));
+        });
+        if let Some(v) = via {
+            line["via"] = json!(v);
+        }
+        out_lines.push(line);
     }
     let unused: Vec<Value> = rows.iter().enumerate().filter(|(i, _)| !used.contains(i)).map(|(_, r)| json!(r.item)).collect();
     let total = mat_total + hrs_total * rate;
@@ -634,6 +658,13 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
             "fix": "add rows to the cost table for each unmatched item, or verify they are not in contract",
         }));
     }
+    if !used_starter.is_empty() {
+        warnings.push(json!({
+            "kind": "starter_cost_book",
+            "message": format!("{} line(s) priced with the starter cost book — generic values, not project-specific", used_starter.len()),
+            "fix": "add rows to the cost table for each starter-priced item, or import your own costs",
+        }));
+    }
     let mut out = json!({
         "lines": out_lines, "unmatched": unmatched, "unused_rows": unused,
         "material_total": r3(mat_total), "labor_hours": r3(hrs_total), "labor_total": r3(hrs_total * rate), "total": r3(total), "labor_rate": rate,
@@ -658,6 +689,10 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                     pv
                 })
                 .collect();
+            // Starter-book prices are NOT stored in the baseline: estimate.status
+            // falls back to starter_prices() independently. The two routes match
+            // differently (grouped takeoff lines vs individual BOM lines), so
+            // storing them would cause price-shadowing.
             b.insert("prices".into(), json!(prices));
         }
         let settings = est.entry(String::from("settings")).or_insert_with(|| json!({}));
