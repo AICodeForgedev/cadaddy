@@ -284,11 +284,19 @@ fn a_double_door_is_one_door_and_connecting_doors_are_two() {
     let r = build(&mut s, 1, false);
     assert_eq!(r["doors"], json!(2), "{r}");
 
-    // Two single doors side by side in one wall, both swinging east, hinges apart: two doors.
-    let mut s = opening_plan(&[([240.0, 150.0], 0.0, 90.0)]);
+    // Two single doors side by side in one wall, both swinging east, hinges apart: two doors
+    // (the wall stops for each: openings 150-186 and 264-300).
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+    rect(&mut s, 6.0, 6.0, 474.0, 354.0);
     for x in [238.0, 242.0] {
-        line(&mut s, [x, 260.0], [x, 300.0]);
+        line(&mut s, [x, 6.0], [x, 150.0]);
+        line(&mut s, [x, 186.0], [x, 264.0]);
+        line(&mut s, [x, 300.0], [x, 354.0]);
     }
+    s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+    s.execute("arc", &json!({"center": [240.0, 150.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
     s.execute("arc", &json!({"center": [240.0, 300.0], "radius": 36.0, "start": 270.0, "end": 360.0})).unwrap();
     let r = build(&mut s, 1, false);
     assert_eq!(r["doors"], json!(2), "{r}");
