@@ -181,6 +181,23 @@ pub struct Enlarged {
     pub devices_by_type: BTreeMap<String, usize>,
     /// The overall plan's devices inside the boundary, left out of the count.
     pub overall_ignored: usize,
+    /// The handles of the devices counted in `devices` (symbols on the enlarged sheet).
+    #[serde(skip)]
+    pub device_handles: Vec<String>,
+    /// The handles of the overall plan's devices inside the boundary.
+    #[serde(skip)]
+    pub ignored_handles: Vec<String>,
+    /// Enlarged sheet to overall plan: `[s, tx, ty]`, a point `p` lands at `s·p + t`.
+    #[serde(skip)]
+    pub fit: Option<[f64; 3]>,
+}
+
+impl Enlarged {
+    /// Where a point of the enlarged sheet lands on the overall plan, once registered.
+    pub fn place(&self, p: [f64; 2]) -> Option<[f64; 2]> {
+        let [s, tx, ty] = self.fit.filter(|_| self.registered)?;
+        Some([s * p[0] + tx, s * p[1] + ty])
+    }
 }
 
 /// Two plan sheets of one level a match line splits.
@@ -1250,6 +1267,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 if let Some(t) = device_type(&dv.tag) {
                     *entry.devices_by_type.entry(t).or_default() += 1;
                     entry.devices += 1;
+                    entry.device_handles.push(dv.handle.clone());
                 }
             }
         }
@@ -1340,6 +1358,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 entry.registered = true;
                 entry.method = how.into();
                 entry.scale = Some((1.0 / f.s * 1000.0).round() / 1000.0);
+                entry.fit = Some([f.s, f.t[0], f.t[1]]);
                 // Placed by the grid, the plan's own outline is the boundary, unless a box drawn
                 // round about the same area says it more exactly.
                 let placed = e.view.region.map(|rg| map_box(&f, &rg));
@@ -1350,7 +1369,9 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 };
                 entry.boundary = b;
                 if let Some(b) = b {
-                    entry.overall_ignored = h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&dv.tag).is_some()).count();
+                    entry.ignored_handles =
+                        h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&dv.tag).is_some()).map(|dv| dv.handle.clone()).collect();
+                    entry.overall_ignored = entry.ignored_handles.len();
                     boundaries.entry(h.sheet.number.clone()).or_default().push(b);
                 }
             }

@@ -1807,6 +1807,42 @@ fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks:
     Some(printlinks::link_set(&sheets, &pages))
 }
 
+/// The enlarged sheets are the authority inside their boundaries (one count per device): each
+/// registered enlarged plan's devices are moved to where they sit on its overall plan (and take
+/// that plan's level), and the overall plan's devices inside the boundary are left out. An
+/// enlarged plan that shows no devices leaves the overall plan's alone. Returns (moved, left out).
+fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::SheetLinks, census: &mut DeviceCensus) -> (usize, usize) {
+    let mut moves: BTreeMap<&str, &cadaddy_mepfix::printlinks::Enlarged> = BTreeMap::new();
+    let mut ignored: BTreeSet<&str> = BTreeSet::new();
+    for e in links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0) {
+        for h in &e.device_handles {
+            moves.insert(h.as_str(), e);
+        }
+        ignored.extend(e.ignored_handles.iter().map(String::as_str));
+    }
+    let (mut moved, mut dropped) = (0usize, 0usize);
+    let mut keep = Vec::with_capacity(census.placed.len());
+    for mut dv in std::mem::take(&mut census.placed) {
+        if let Some(e) = moves.get(dv.handle.as_str()).copied()
+            && let Some(at) = e.place(dv.at)
+        {
+            dv.at = at;
+            dv.level = job.level_at(at).map_or_else(|| e.level.clone(), |r| r.level.clone());
+            moved += 1;
+        } else if ignored.contains(dv.handle.as_str()) {
+            if let Some(n) = census.by_type.get_mut(&dv.tag) {
+                *n = n.saturating_sub(1);
+            }
+            dropped += 1;
+            continue;
+        }
+        keep.push(dv);
+    }
+    census.by_type.retain(|_, n| *n > 0);
+    census.placed = keep;
+    (moved, dropped)
+}
+
 /// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
 /// written into `dir`; its path.
 fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
@@ -2127,7 +2163,19 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // with a TAG attribute holding the nearby device-mark text.
     // Device types come from the sheets' legends and schedules (plus the marks every set
     // uses); notes, sheet numbers, keynotes, switch legs and dimensions never count.
-    let census = device_census(s, job);
+    let mut census = device_census(s, job);
+    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Inside a
+    // registered enlarged plan's boundary its sheet is the authority: its devices move onto the
+    // overall plan there, and the overall plan's own copies there are left out.
+    if let Some(links) = job_links(s, job) {
+        let summary = super::printset::links_summary(&links);
+        results["links"] = summary.clone();
+        job.links = Some(summary);
+        let (moved, dropped) = enlarged_authority(job, &links, &mut census);
+        if moved + dropped > 0 {
+            results["enlarged_devices"] = json!({"moved_onto_overall_plans": moved, "overall_copies_left_out": dropped});
+        }
+    }
     results["circuit_tagged_symbols"] = json!(census.circuit);
     let not_devices: usize = census.not_device.values().sum();
     results["non_device_tags"] = json!(not_devices);
@@ -2139,12 +2187,6 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "not_devices": census.not_device,
         "unlisted_repeated": census.unlisted.iter().map(|(t, u)| (t.clone(), json!(u.count))).collect::<serde_json::Map<String, Value>>(),
     });
-    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit.
-    if let Some(links) = job_links(s, job) {
-        let summary = super::printset::links_summary(&links);
-        results["links"] = summary.clone();
-        job.links = Some(summary);
-    }
     let sym_count: usize = census.by_type.values().sum();
     if sym_count > 0 || !census.unlisted.is_empty() {
         total_items += sym_count;

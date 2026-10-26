@@ -110,7 +110,8 @@ fn the_job_and_bim_from_pdf_report_the_sheet_map() {
     real_pdf_reader();
     let dir = prints("job");
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false})).expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false, "auto": true})).expect("job.start");
     let links = &st["links"];
     assert_eq!(links["enlarged_registered"], json!(1), "{st:#}");
     assert_eq!(links["double_counted"], json!(0));
@@ -163,5 +164,48 @@ fn the_fixture_sets_enlarged_plans_register_on_their_overall_plans() {
     assert_eq!(unresolved, vec!["A-999"], "{:#}", v["unresolved"]);
     assert!(v["callouts"].as_array().map_or(0, Vec::len) >= 30, "{:#}", v["callouts"]);
     assert!(v["resolved_pct"].as_f64().is_some_and(|p| p >= 0.95), "{}", v["resolved_pct"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// MUST 3 in the guided job: inside a registered enlarged plan's boundary the enlarged sheet is
+/// the authority. Its five devices go into the model where they sit on the overall plan (inside
+/// the boundary, on the first floor); E-1's three copies there are left out; every other device
+/// stays where it was.
+#[test]
+fn the_jobs_enlarged_plan_devices_land_in_its_boundary_once() {
+    let _g = serial();
+    real_pdf_reader();
+    let dir = prints("authority");
+    let mut s = Session::new();
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false, "auto": true})).expect("job.start");
+    let devices = s.execute("job.explain", &json!({"stage": "devices"})).expect("explain devices");
+    let r = &devices["result"];
+    assert_eq!(r["enlarged_devices"], json!({"moved_onto_overall_plans": 5, "overall_copies_left_out": 3}), "{r:#}\n{st:#}");
+    // Counted once: the level's 16, as the sheet map counts them.
+    assert_eq!(r["devices"]["count"], json!(16), "{:#}", r["devices"]);
+    let b: Vec<f64> = r["links"]["enlarged"][0]["boundary"].as_array().expect("boundary").iter().filter_map(Value::as_f64).collect();
+    assert_eq!(b.len(), 4);
+    let spec = s.execute("bspec.get", &json!({})).expect("bspec.get");
+    let upf = spec["spec"]["units_per_foot"].as_f64().filter(|v| *v > 0.0).unwrap_or(12.0);
+    let tags: Vec<&Value> = spec["spec"]["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["id"].as_str().is_some_and(|i| i.starts_with("device:")) && t["fields"].get("symbol").is_some())
+        .collect();
+    assert_eq!(tags.len(), 16, "{tags:#?}");
+    let sheet = |t: &Value| t["fields"]["sheet"]["value"].as_str().unwrap_or("").to_string();
+    let inside: Vec<&&Value> = tags
+        .iter()
+        .filter(|t| {
+            let (x, y) = (t["at_ft"][0].as_f64().unwrap_or(f64::NAN) * upf, t["at_ft"][1].as_f64().unwrap_or(f64::NAN) * upf);
+            x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]
+        })
+        .collect();
+    assert_eq!(inside.len(), 5, "{inside:#?}");
+    assert!(inside.iter().all(|t| sheet(t) == "E-3"), "{inside:#?}");
+    let e1_level = tags.iter().find(|t| sheet(t) == "E-1").map(|t| t["level"].clone()).expect("an E-1 device");
+    assert!(inside.iter().all(|t| t["level"] == e1_level), "{inside:#?}");
     std::fs::remove_dir_all(&dir).ok();
 }
