@@ -54,6 +54,33 @@ const PAGE: usize = 50;
 const MAX_PAGE: usize = 1_000;
 const SCOPES: [&str; 4] = ["in_contract", "by_others", "nic", "ofci"];
 
+/// The starter cost book shipped with CADaddy (Q6012).
+const STARTER_CSV: &str = include_str!("../../../../assets/costbook/starter.csv");
+const STARTER_SOURCE: &str = "starter cost book";
+
+/// Parse the embedded starter cost book CSV into price rows (same shape as baseline prices).
+fn starter_prices() -> Vec<Value> {
+    let rows = csv_rows(STARTER_CSV);
+    rows.iter()
+        .filter_map(|r| {
+            let item = r.get("item")?.trim().to_string();
+            let material: f64 = r.get("material")?.trim().parse().ok()?;
+            if item.is_empty() || material < 0.0 || material.is_nan() {
+                return None;
+            }
+            let hours: Option<f64> = r.get("labor_hours").and_then(|v| v.trim().parse().ok()).filter(|v: &f64| v.is_finite() && *v >= 0.0);
+            Some(json!({
+                "item": item,
+                "size": r.get("size").map(|s| s.trim()).unwrap_or_default(),
+                "unit": r.get("unit").map(|u| u.trim()).filter(|u| !u.is_empty()).unwrap_or("each"),
+                "material": material,
+                "labor_hours": hours,
+                "source": STARTER_SOURCE,
+            }))
+        })
+        .collect()
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("estimate.import", "Import Estimating Baseline", run_import)
@@ -632,20 +659,21 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let base = st.get("baseline").cloned().unwrap_or(json!({}));
     let drivers = labor::drivers(st, &base);
     let prices: Vec<Value> = base["prices"].as_array().cloned().unwrap_or_default();
-    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<&Value> {
-        // Exact item+size match, then item-only with empty size (Q327 original).
-        prices
-            .iter()
-            .find(|p| {
+    // Q6012: starter cost book as fallback when no user/baseline price matches.
+    let starter: Vec<Value> = starter_prices();
+    let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<usize> {
+        pool.iter()
+            .position(|p| {
                 p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(size)
             })
             .or_else(|| {
-                prices
-                    .iter()
-                    .find(|p| p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty())
+                pool.iter()
+                    .position(|p| p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty())
             })
-            // Q5294: word-matching fallback (same algorithm as bim.estimate's match_row).
-            .or_else(|| find_price_by_words(&prices, item, unit, category, system))
+            .or_else(|| find_price_by_words(pool, item, unit, category, system).and_then(|v| pool.iter().position(|p| std::ptr::eq(p, v))))
+    };
+    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<&Value> {
+        find_in(&prices, item, size, unit, category, system).map(|i| &prices[i])
     };
     let mut out = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -743,11 +771,22 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                             book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
                         }
                     }
-                    None => pr.issues.push((
-                        "unpriced",
-                        "no assembly and no price".into(),
-                        "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
-                    )),
+                    // Q6012: try the starter cost book before giving up.
+                    None => match find_in(&starter, item, size, &unit, category, system) {
+                        Some(si) => {
+                            let sp = &starter[si];
+                            pr.via = STARTER_SOURCE.to_string();
+                            let m = sp["material"].as_f64().unwrap_or(0.0);
+                            let h = sp["labor_hours"].as_f64();
+                            pr.material_unit = Some(m);
+                            book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                        }
+                        None => pr.issues.push((
+                            "unpriced",
+                            "no assembly and no price".into(),
+                            "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
+                        )),
+                    },
                 }
             }
         }
@@ -1030,6 +1069,21 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
     }
     if all_unpriced {
         out["unpriced"] = json!(format!("all {} lines have no price: estimate.import_costs", job.priced.len()));
+    }
+    // Q6012: report starter cost book usage.
+    let starter_count = job.priced.iter().filter(|p| p.via == STARTER_SOURCE).count();
+    if starter_count > 0 {
+        out["starter_cost_book"] = json!(format!(
+            "priced with the starter cost book: {} of {} lines; replace with estimate.import_costs",
+            starter_count,
+            job.priced.len()
+        ));
+        f.push(json!({
+            "kind": "starter_cost_book",
+            "message": format!("{starter_count} line(s) priced with the starter cost book — generic values, not project-specific"),
+            "fix": "estimate.import_costs {path: your-costs.csv} to replace starter prices with your own",
+        }));
+        out["findings"] = json!(f);
     }
     Ok(out)
 }
@@ -1387,7 +1441,9 @@ mod tests {
         let st = s.execute("estimate.status", &json!({})).unwrap();
         assert_eq!(st["totals"]["total"], json!(0.0));
         let kinds: Vec<&str> = st["findings"].as_array().unwrap().iter().filter_map(|f| f["kind"].as_str()).collect();
-        assert!(kinds.contains(&"undecided_scope") && kinds.contains(&"unpriced") && kinds.contains(&"off_ratio"), "{kinds:?}");
+        // Q6012: the starter book prices lines that have no baseline, so "unpriced" may be
+        // replaced by "starter_cost_book"; either indicates the job needs real prices.
+        assert!(kinds.contains(&"undecided_scope") && (kinds.contains(&"unpriced") || kinds.contains(&"starter_cost_book")) && kinds.contains(&"off_ratio"), "{kinds:?}");
         // The agent maps assemblies and sets scope (with reasons); the software prices.
         s.execute(
             "estimate.set_assembly",
@@ -1772,6 +1828,109 @@ mod tests {
         assert_eq!(b["estimate"]["ok"], json!(false), "{b}");
         assert_eq!(b["estimate"]["open_findings"].as_u64(), Some(st["findings"].as_array().unwrap().len() as u64), "{b}");
         assert!(b["text"].as_str().unwrap().contains("open finding(s)"), "{b}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Q6012: starter cost book ──
+
+    #[test]
+    fn starter_cost_book_csv_parses_and_covers_all_trades() {
+        let rows = starter_prices();
+        assert!(rows.len() >= 50, "starter book has {} rows, need at least 50", rows.len());
+        let trades: BTreeSet<String> = STARTER_CSV
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split(',').nth(5).map(|t| t.trim().to_string()))
+            .filter(|t| !t.is_empty())
+            .collect();
+        for t in ["electrical", "mechanical", "plumbing", "general"] {
+            assert!(trades.contains(t), "starter book missing trade {t}: {trades:?}");
+        }
+        for r in &rows {
+            let m = r["material"].as_f64().unwrap_or(-1.0);
+            assert!(m >= 0.0 && m < 1e6, "bad material in row: {r}");
+            assert!(r["source"].as_str() == Some(STARTER_SOURCE), "wrong source in row: {r}");
+        }
+    }
+
+    #[test]
+    fn starter_book_prices_a_model_with_no_user_costs() {
+        let mut s = Session::new();
+        job(&mut s);
+        // No baseline imported — the starter book should price the lines.
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "in_contract", "reason": "ours" })).unwrap();
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let priced = st["summary"]["priced"].as_u64().unwrap_or(0);
+        assert!(priced > 0, "starter book should price at least some lines: {st}");
+        // The status reports that starter prices were used.
+        let starter_msg = st["starter_cost_book"].as_str().unwrap_or_default();
+        assert!(starter_msg.contains("starter cost book"), "status should mention starter: {st}");
+        // Every starter-priced line should have via = "starter cost book".
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let starter_lines: Vec<&Value> = q["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["via"].as_str() == Some(STARTER_SOURCE))
+            .collect();
+        assert!(!starter_lines.is_empty(), "should have lines via starter cost book: {q}");
+        // A finding about the starter book should exist.
+        let f: Vec<&Value> = st["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["kind"].as_str() == Some("starter_cost_book"))
+            .collect();
+        assert!(!f.is_empty(), "should have a starter_cost_book finding: {st}");
+        // Totals should be > 0 (the estimate is not $0 any more).
+        assert!(st["totals"]["total"].as_f64().unwrap_or(0.0) > 0.0, "total should be > 0: {st}");
+    }
+
+    #[test]
+    fn user_cost_table_overrides_starter_rows() {
+        let mut s = Session::new();
+        job(&mut s);
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "in_contract", "reason": "ours" })).unwrap();
+        // First, get the starter-priced totals.
+        let before = s.execute("estimate.status", &json!({})).unwrap();
+        let before_total = before["totals"]["total"].as_f64().unwrap_or(0.0);
+        assert!(before_total > 0.0, "starter should price the job: {before}");
+        // Now import a user cost table with a different price for receptacles.
+        let dir = std::env::temp_dir().join(format!("cadaddy-costbook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let user_csv = dir.join("my_costs.csv");
+        std::fs::write(&user_csv, "item,unit,material,labor_hours\nReceptacle,each,50.00,1.00\n").unwrap();
+        let r = s.execute("estimate.import_costs", &json!({ "path": user_csv.to_string_lossy() })).unwrap();
+        assert_eq!(r["prices"], json!(1), "should import 1 user price: {r}");
+        // The user price should override the starter for that item.
+        let q = s.execute("estimate.query", &json!({ "category": "devices", "limit": 200 })).unwrap();
+        let recep: Vec<&Value> = q["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| {
+                l["item"].as_str().is_some_and(|i| i.to_ascii_lowercase().contains("receptacle"))
+                    && l["via"].as_str().is_some_and(|v| v.contains("my_costs"))
+            })
+            .collect();
+        assert!(!recep.is_empty(), "user price should override starter for receptacle: {q}");
+        // Other lines still use the starter.
+        let _still_starter: Vec<&Value> = q["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["via"].as_str() == Some(STARTER_SOURCE))
+            .collect();
+        // Some lines might still use starter (boxes, plates, etc).
+        let after = s.execute("estimate.status", &json!({})).unwrap();
+        let after_total = after["totals"]["total"].as_f64().unwrap_or(0.0);
+        // The totals should have changed (user price $50 vs starter $2.50).
+        assert!(
+            (after_total - before_total).abs() > 1.0,
+            "user override should change total: before={before_total}, after={after_total}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
