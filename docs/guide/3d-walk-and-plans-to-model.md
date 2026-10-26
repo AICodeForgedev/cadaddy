@@ -193,7 +193,12 @@ swing's closed leaf across the opening. `rooms.graph` puts every door between
 the rooms on its two sides (`from_room`, `to_room` on the door) and lists the
 connections. An enlarged plan also registers on its overall plan by the door
 and room numbers both print (`printset.links`, method `tags`) when no shared
-grid line places it.
+grid line places it. When neither does, nor a boundary box, it registers where
+its walls lie on the overall plan's (method `lines`, with `line_coverage`, the
+share of its linework that lands on the plan's), at one to one or the printed
+scales' ratio, turned by quarters. A view that fits several places equally (a
+typical room along a corridor, a typical floor's plan on several levels) is
+left unregistered rather than guessed.
 
 ### Quick start
 

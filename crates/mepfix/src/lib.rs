@@ -48,6 +48,7 @@ pub mod gear_reader;
 pub mod heights;
 pub mod hotel;
 pub mod layout;
+pub mod linefit;
 pub mod linkset;
 pub mod lv_reader;
 pub mod ocr;
