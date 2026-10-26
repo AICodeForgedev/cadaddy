@@ -2413,7 +2413,7 @@ impl BuildingSpec {
     }
 
     pub fn level(&self, name: &str) -> Option<&Level> {
-        self.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+        self.level_matching(name).and_then(|i| self.levels.get(i))
     }
 
     /// Problems found in the spec alone (see `bspec.validate` for those against the drawing).

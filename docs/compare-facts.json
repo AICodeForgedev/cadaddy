@@ -123,7 +123,6 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
-      "bim.props.fill",
       "bim.props.find",
       "bim.props.get",
       "bim.props.set",
@@ -501,6 +500,7 @@
       "job.next",
       "job.report",
       "job.rules",
+      "job.set_mode",
       "job.start",
       "job.status",
       "job.undo",
@@ -1121,7 +1121,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 508,
+    "inMenus": 507,
     "typed": 551
   },
   "features": {

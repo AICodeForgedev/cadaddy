@@ -52,8 +52,8 @@ pub const WORKFLOWS: &[Workflow] = &[
             Step { what: "The next question (or done)", mcp: "guided_job {action: \"next\"}", cli: "cadaddy-cli run job.cdy --cmd 'job.next {}'" },
             Step {
                 what: "Answer it with the id from next; the pipeline goes on",
-                mcp: "guided_job {action: \"answer\", params: {id: \"Q1\", answer: \"yes\"}}",
-                cli: "cadaddy-cli run job.cdy --cmd 'job.answer {\"id\":\"Q1\",\"answer\":\"yes\"}' --save job.cdy",
+                mcp: "guided_job {action: \"answer\", params: {id: \"Q-classify-1\", answer: \"Correct\"}}",
+                cli: "cadaddy-cli run job.cdy --cmd 'job.answer {\"id\":\"Q-classify-1\",\"answer\":\"Correct\"}' --save job.cdy",
             },
             Step {
                 what: "Progress, then the final report",

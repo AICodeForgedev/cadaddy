@@ -3211,6 +3211,7 @@
 	Import Cost Table	Імпортувати таблицю витрат
 	Accuracy Score	Оцінка точності
 	Answer Job Question	Відповісти на запитання завдання
+	Set Job Mode	Змінити режим завдання
 	Check Import Accuracy	Перевірити точність імпорту
 	Clash Resolution Loop	Цикл усунення колізій
 	Evaluate Rules	Оцінити правила
@@ -3304,3 +3305,8 @@
 	Element Property Summary	Зведення властивостей елементів
 	BIM Properties	Властивості BIM
 	Kind	Вид
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої
