@@ -270,18 +270,13 @@ fn wall_lines_on_every_level_and_areas_from_geometry() {
     // (from the spec's wall marks or from the built wall meshes) on both levels.
     let wall_lines: Vec<&Value> = lines.iter().filter(|l| l["category"] == "walls").collect();
     assert!(!wall_lines.is_empty(), "the takeoff must have wall lines: {t}");
-    let wall_levels: std::collections::BTreeSet<&str> =
-        wall_lines.iter().filter_map(|l| l["level"].as_str()).filter(|s| !s.is_empty()).collect();
-    assert!(
-        wall_levels.contains("Level 1") && wall_levels.contains("Level 2"),
-        "wall lines on both levels, got {wall_levels:?}: {t}"
-    );
+    let wall_levels: std::collections::BTreeSet<&str> = wall_lines.iter().filter_map(|l| l["level"].as_str()).filter(|s| !s.is_empty()).collect();
+    assert!(wall_levels.contains("Level 1") && wall_levels.contains("Level 2"), "wall lines on both levels, got {wall_levels:?}: {t}");
     // Total wall length must be positive.
     let wall_lf: f64 = wall_lines.iter().filter(|l| l["unit"] == "lf").filter_map(|l| l["qty"].as_f64()).sum();
     assert!(wall_lf > 0.0, "wall LF must be positive, got {wall_lf}");
     // Filter by category "walls" must find them.
-    let filtered =
-        s.execute("bim.takeoff", &json!({"group_by": "level", "filter": {"category": "walls"}, "keep": false})).unwrap();
+    let filtered = s.execute("bim.takeoff", &json!({"group_by": "level", "filter": {"category": "walls"}, "keep": false})).unwrap();
     let filtered_lines = filtered["lines"].as_array().unwrap();
     assert!(!filtered_lines.is_empty(), "filter:{{category:walls}} must find wall lines: {filtered}");
     // Floor area must not equal the sheet rectangle area (which would be 2500×2500 / 144 =

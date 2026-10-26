@@ -658,7 +658,13 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             })
             .sum();
         let mesh_area = mesh_plan_area(d, handles) / (upf * upf);
-        let area = if rcp_area > 0.0 { rcp_area } else if mesh_area > 0.0 { mesh_area } else { *n as f64 * 100.0 };
+        let area = if rcp_area > 0.0 {
+            rcp_area
+        } else if mesh_area > 0.0 {
+            mesh_area
+        } else {
+            *n as f64 * 100.0
+        };
         ceiling_sf_total += area;
         add(
             lines,
