@@ -501,7 +501,7 @@ fn rooms_list_comes_a_page_at_a_time_without_outlines() {
     assert_eq!(first["count"], 60, "{first}");
     let page = first["rooms"].as_array().unwrap();
     let page_len = page.len();
-    assert!(page_len >= 40 && page_len <= 55, "first page fits 40-55 rooms: {page_len}");
+    assert!((40..=55).contains(&page_len), "first page fits 40-55 rooms: {page_len}");
     assert_eq!(first["next"], page_len as u64);
     assert!(page.iter().all(|r| r["outline"].is_null()), "no outlines unless asked");
     assert!(first.to_string().len() <= cadaddy_engine::cmd::agentready::ANSWER_MAX);
