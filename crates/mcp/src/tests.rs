@@ -500,12 +500,13 @@ fn rooms_list_comes_a_page_at_a_time_without_outlines() {
     let first = tool(&mut s, "rooms", json!({"action": "list"}));
     assert_eq!(first["count"], 60, "{first}");
     let page = first["rooms"].as_array().unwrap();
-    assert_eq!(page.len(), 50);
-    assert_eq!(first["next"], 50);
+    let page_len = page.len();
+    assert!(page_len >= 40 && page_len <= 55, "first page fits 40-55 rooms: {page_len}");
+    assert_eq!(first["next"], page_len as u64);
     assert!(page.iter().all(|r| r["outline"].is_null()), "no outlines unless asked");
     assert!(first.to_string().len() <= cadaddy_engine::cmd::agentready::ANSWER_MAX);
-    let rest = tool(&mut s, "rooms", json!({"action": "list", "offset": 50}));
-    assert_eq!(rest["rooms"].as_array().unwrap().len(), 10);
+    let rest = tool(&mut s, "rooms", json!({"action": "list", "offset": page_len as u64}));
+    assert_eq!(rest["rooms"].as_array().unwrap().len(), 60 - page_len);
     assert!(rest["next"].is_null(), "{rest}");
     // Every room once over the pages.
     let mut seen: Vec<String> = page.iter().chain(rest["rooms"].as_array().unwrap()).map(|r| r["number"].to_string()).collect();

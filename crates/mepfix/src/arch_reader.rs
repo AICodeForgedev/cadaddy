@@ -1243,3 +1243,31 @@ pub fn spec_patch(r: &ArchResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
     }
     json!({"rooms": rooms, "schedule": {"rows": rows, "tags": tags}})
 }
+
+// ---- Public finish-schedule API for rooms3d (no third parser) --------------------------------
+
+/// A room finish schedule row: number, name, and the four finish slots + ceiling height.
+#[derive(Clone, Debug)]
+pub struct RoomFinish {
+    pub number: String,
+    pub name: String,
+    pub floor: String,
+    pub base: String,
+    pub wall: String,
+    pub ceiling: String,
+    /// Ceiling height in feet, from the CLG HT / HEIGHT column.
+    pub ceiling_height_ft: Option<f64>,
+}
+
+/// Read room finish schedule rows from a drawing's text entities: the tables titled
+/// "ROOM FINISH" or "FINISH SCHEDULE". Reuses the same `tables` + `finish_rows` parser.
+pub fn find_finish_schedule(d: &cadaddy_doc::Drawing) -> Vec<RoomFinish> {
+    let s = shapes(d, &|p| p, 1.0);
+    let mut out = Vec::new();
+    for t in tables(&s, &["ROOM FINISH", "FINISH SCHEDULE"]) {
+        for (num, name, fl, ba, wa, ce, ht) in finish_rows(&t) {
+            out.push(RoomFinish { number: num, name, floor: fl, base: ba, wall: wa, ceiling: ce, ceiling_height_ft: ht });
+        }
+    }
+    out
+}
