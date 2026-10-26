@@ -52,8 +52,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary"]},
+        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key; \"fill\" {} — put what the readers found on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), a person's values kept. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary", "fill"]},
                 "handle": {"type": "string"}, "handles": {"type": "array", "items": {"type": "string"}},
                 "filter": {"type": "object"}, "kind": {"type": "string"}, "where": {"type": "object"},
                 "key": {"type": "string"}, "value": {}, "unit": {"type": "string"}, "note": {"type": "string"},
@@ -508,7 +508,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("set") => "bim.props.set",
                 Some("find") => "bim.props.find",
                 Some("summary") => "bim.props.summary",
-                _ => return Ok(err_text("bim_props needs an action: get, set, find or summary")),
+                Some("fill") => "bim.props.fill",
+                _ => return Ok(err_text("bim_props needs an action: get, set, find, summary or fill")),
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
