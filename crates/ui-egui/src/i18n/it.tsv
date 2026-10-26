@@ -3207,3 +3207,13 @@ menu	Modify	Edita
 	Layer Quantity Takeoff	Computo quantità per layer
 	Read Architecture from Prints	Leggi l'architettura dalle tavole
 	Read Roof and Wall Envelope	Leggi l'involucro di copertura e pareti
+	Element Properties (BIM)	Proprietà dell’elemento (BIM)
+	Set Element Property (BIM)	Imposta proprietà dell’elemento (BIM)
+	Find Elements by Property	Trova elementi per proprietà
+	Element Property Summary	Riepilogo delle proprietà degli elementi
+	BIM Properties	Proprietà BIM
+	Kind	Genere
+	Check Building Codes	Verifica norme edilizie
+	Code Rules	Regole delle norme
+	Select Building Codes	Seleziona norme edilizie
+	Fill Element Properties	Compila proprietà degli elementi

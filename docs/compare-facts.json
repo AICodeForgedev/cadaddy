@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1112,
-    "count": 1112,
+    "callableAsJson": 1121,
+    "count": 1121,
     "ids": [
       "-attedit",
       "-block",
@@ -123,6 +123,11 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.fill",
+      "bim.props.find",
+      "bim.props.get",
+      "bim.props.set",
+      "bim.props.summary",
       "bim.remove_type",
       "bim.set_spec",
       "bim.set_type",
@@ -205,6 +210,9 @@
       "co.snapshot",
       "cobie.export",
       "cobie.validate",
+      "code.check",
+      "code.rules",
+      "code.select",
       "color",
       "colorbook",
       "commandhistory",
@@ -496,6 +504,7 @@
       "job.next",
       "job.report",
       "job.rules",
+      "job.set_mode",
       "job.start",
       "job.status",
       "job.undo",
@@ -1116,7 +1125,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 507,
+    "inMenus": 508,
     "typed": 551
   },
   "features": {
@@ -1203,17 +1212,19 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 51,
+    "count": 53,
     "tools": [
       "arch_read",
       "bim_from_pdf",
       "bim_job",
+      "bim_props",
       "bim_spec_import",
       "bim_types",
       "callouts",
       "cancel",
       "close_all",
       "close_drawing",
+      "codebook",
       "command_line",
       "drawing_query",
       "drawing_summary",

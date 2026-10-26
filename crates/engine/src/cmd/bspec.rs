@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (build even if import check fails)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the pages the model was built from: the set's plan sheets, or every page without an index), pages_note, spec_guesses: [{key, why}] (what the spec assumed), check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -711,12 +711,17 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// A room traced on the plan: its spec entry (if any), level, outline and tag.
+/// A room traced on the plan: its spec entry (if any), level, outline and tag, and the name and
+/// number its tag texts read.
 struct Traced {
     room: Option<usize>,
     level: String,
     outline: Vec<Vec2>,
     tag: Handle,
+    /// Where the tag text is (a room is traced again from here on the built walls).
+    at: Vec2,
+    name: Option<String>,
+    number: Option<String>,
 }
 
 /// The rooms of the plan: each room tag's closed outline (the boundary search HATCH uses),
@@ -736,7 +741,6 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     let mut outline_cache = None;
-    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
             break;
@@ -748,9 +752,12 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             .rooms
             .iter()
             .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
-        // Without room tag layers only the spec's rooms are looked for; on them, names and
-        // numbers (not a grid bubble's letter, a note's word).
-        if room.is_none() && (!tagged || !room_tag_text(&text)) {
+        // Without room tag layers only the spec's rooms are looked for. On them, a room's name
+        // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
+        // or a title block's line is never a room.
+        let is_number = super::perceive::geometry::room_number(&text);
+        let score = super::perceive::geometry::room_name_score(&text);
+        if room.is_none() && (!tagged || !(room_tag_text(&text) && (is_number || (score > 0 && super::autospec::room_like_name(&text))))) {
             continue;
         }
         let Some(level) =
@@ -764,10 +771,6 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
             continue;
         }
-        // A room no spec room names is 16 sq ft or more (not a grid bubble, a tag's box).
-        if room.is_none() && cadaddy_geom::shoelace(&outline).abs() < 16.0 * upf * upf {
-            continue;
-        }
         // A name and a number in one room: the first traced keeps it (the spec's room wins).
         // The same outline traced from another point may start at another corner: same area and
         // extents.
@@ -779,13 +782,22 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 && b.min.dist(bounds.min) < 1e-6
                 && b.max.dist(bounds.max) < 1e-6
         };
+        let (name, number) = if is_number { (None, Some(text.trim().to_string())) } else { (Some(text.trim().to_string()), None) };
         match out.iter_mut().find(|o| same(o)) {
             Some(o) => {
                 if o.room.is_none() {
                     o.room = room;
                 }
+                // The best room label names it (a room or unit-type word first).
+                let better = |n: &String| {
+                    o.name.as_ref().is_none_or(|x| super::perceive::geometry::room_name_score(x) < super::perceive::geometry::room_name_score(n))
+                };
+                if name.as_ref().is_some_and(better) {
+                    o.name = name;
+                }
+                o.number = o.number.take().or(number);
             }
-            None => out.push(Traced { room, level: level.name.clone(), outline, tag: h }),
+            None => out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number }),
         }
     }
     for (i, r) in sp.rooms.iter().enumerate() {
@@ -796,16 +808,440 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     Ok(out)
 }
 
+/// The layer room elements go on (with `rooms.build`'s volumes).
+const ROOM_LAYER: &str = super::rooms3d::ROOM_LAYER;
+/// The share of a room's outline that must run along its level's built walls, doors and
+/// windows (the rest: openings, gaps the tracing closed).
+const ROOM_WALLED: f64 = 0.5;
+/// Most plan footprints and grid cells looked at per level (hostile drawings).
+const MAX_BOUNDS: usize = 200_000;
+const MAX_CELLS: usize = 4_000_000;
+
+/// The plan footprints of what bounds rooms in the built model (walls, curtain walls, columns,
+/// doors, windows), by level (upper case): each mesh's bottom faces.
+fn room_bounds(d: &Drawing) -> std::collections::BTreeMap<String, Vec<Vec<Vec2>>> {
+    let mut out: std::collections::BTreeMap<String, Vec<Vec<Vec2>>> = std::collections::BTreeMap::new();
+    let mut n = 0usize;
+    for e in d.model.iter() {
+        let Some(part) = wallgen::made_as(e) else { continue };
+        if !matches!(part.as_str(), "wall" | "curtainwall" | "column" | "door" | "window" | "glass") {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let z0 = m.vertices.iter().map(|v| v.z).filter(|z| z.is_finite()).fold(f64::INFINITY, f64::min);
+        if !z0.is_finite() {
+            continue;
+        }
+        let (z1, tol) = (m.vertices.iter().map(|v| v.z).filter(|z| z.is_finite()).fold(z0, f64::max), 1e-6);
+        let tol = ((z1 - z0) * tol).max(1e-9);
+        let level = made_level(e).unwrap_or_default().trim().to_ascii_uppercase();
+        let polys = out.entry(level).or_default();
+        for f in m.faces.iter().take(10_000) {
+            let vs: Vec<Vec2> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize)).filter(|v| (v.z - z0).abs() <= tol).map(|v| v.xy()).collect();
+            if vs.len() >= 3 && vs.len() == f.v.len() && vs.iter().all(|p| p.is_finite()) {
+                polys.push(vs);
+                n += 1;
+            }
+        }
+        if n >= MAX_BOUNDS {
+            break;
+        }
+    }
+    out
+}
+
+/// How much of an outline (0..1, by length) runs along the footprints (within `tol`): sampled
+/// along its edges, the footprints looked up in a grid of cells.
+fn walled_share(outline: &[Vec2], grid: &std::collections::HashMap<(i64, i64), Vec<usize>>, polys: &[Vec<Vec2>], cell: f64, tol: f64) -> f64 {
+    let perimeter: f64 = outline.iter().zip(outline.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+    if !(perimeter.is_finite() && perimeter > 0.0 && cell > 0.0) {
+        return 0.0;
+    }
+    let step = (perimeter / 400.0).max(tol);
+    let near = |p: Vec2| {
+        let key = ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        grid.get(&key).is_some_and(|ids| {
+            ids.iter()
+                .filter_map(|i| polys.get(*i))
+                .any(|q| cadaddy_geom::point_in_polygon(q, p) || q.iter().zip(q.iter().cycle().skip(1)).any(|(a, b)| seg_dist(p, *a, *b) <= tol))
+        })
+    };
+    let (mut on, mut all) = (0.0f64, 0.0f64);
+    for (a, b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+        let len = a.dist(*b);
+        if !(len.is_finite() && len > 0.0) {
+            continue;
+        }
+        let k = ((len / step).ceil() as usize).clamp(1, 400);
+        for i in 0..k {
+            let p = *a + (*b - *a) * ((i as f64 + 0.5) / k as f64);
+            all += len / k as f64;
+            if near(p) {
+                on += len / k as f64;
+            }
+        }
+    }
+    if all > 0.0 { on / all } else { 0.0 }
+}
+
+/// Smallest and largest room no spec room names (square feet): less is a grid bubble, a tag's
+/// box or a piece of furniture (traced again on the built walls), more is the outside of the
+/// building.
+const MIN_ROOM_SF: f64 = 16.0;
+const MAX_ROOM_SF: f64 = 50_000.0;
+/// Most tags traced again on the built walls per build.
+const MAX_RETRACE: usize = 5_000;
+
+/// A drawing of the built footprints' edges (each once), every level's where it was built: the
+/// boundaries a room is traced on when its drawn outline isn't one.
+fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) -> Option<Session> {
+    let mut d = Drawing::default();
+    let mut seen: std::collections::HashSet<[i64; 4]> = std::collections::HashSet::new();
+    let key = |p: Vec2| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64);
+    for q in bounds.values().flatten() {
+        for (a, b) in q.iter().zip(q.iter().cycle().skip(1)) {
+            let (ka, kb) = (key(*a), key(*b));
+            if ka == kb || !seen.insert(if ka < kb { [ka.0, ka.1, kb.0, kb.1] } else { [kb.0, kb.1, ka.0, ka.1] }) {
+                continue;
+            }
+            let line = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+            if d.add(&Space::Model, Common::default(), EntityKind::Line(line)).is_err() || seen.len() >= MAX_BOUNDS * 4 {
+                break;
+            }
+        }
+    }
+    if d.model.is_empty() {
+        return None;
+    }
+    let mut t = Session::empty();
+    t.open_drawing(d, "Built walls", None);
+    Some(t)
+}
+
+/// Add a room, or fold it into the same room already kept on its level (a name and a number
+/// in one room): the best name, the first number, the spec's room.
+fn keep_room(kept: &mut Vec<Traced>, t: Traced) {
+    let lv = t.level.trim().to_ascii_uppercase();
+    let Some(o) = kept.iter_mut().find(|o| o.level.trim().eq_ignore_ascii_case(&lv) && same_outline(&o.outline, &t.outline)) else {
+        kept.push(t);
+        return;
+    };
+    if o.room.is_none() {
+        o.room = t.room;
+    }
+    let score = |n: &str| super::perceive::geometry::room_name_score(n);
+    if t.name.as_deref().is_some_and(|n| o.name.as_deref().is_none_or(|x| score(x) < score(n))) {
+        o.name = t.name;
+    }
+    if o.number.is_none() {
+        o.number = t.number;
+    }
+}
+
+fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let d = b - a;
+    let l2 = d.dot(d);
+    let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + d * t)
+}
+
+/// Keep the rooms of the building (Q5291 MUST 3, 4): on a level with built walls, a room's
+/// outline runs along them (at least [`ROOM_WALLED`] of it); a box of the title block, a note's
+/// frame, an enlarged view (its walls are not built) or a schedule's cell closes no room. A
+/// numbered room traced twice on its level (a floor plan and an enlarged plan of it) is one
+/// room: the smaller outline, the plan's own scale.
+fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<String>) {
+    if rooms.is_empty() {
+        return;
+    }
+    let bounds = room_bounds(d);
+    let tol = 3.0 * upf / 12.0;
+    let cell = 4.0 * upf;
+    let mut grids: std::collections::HashMap<String, std::collections::HashMap<(i64, i64), Vec<usize>>> = std::collections::HashMap::new();
+    for (level, polys) in &bounds {
+        let mut g: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        let mut cells = 0usize;
+        for (i, q) in polys.iter().enumerate() {
+            let b = cadaddy_geom::Bounds2::from_points(q.iter().copied());
+            let (x0, x1) = (((b.min.x - tol) / cell).floor() as i64, ((b.max.x + tol) / cell).floor() as i64);
+            let (y0, y1) = (((b.min.y - tol) / cell).floor() as i64, ((b.max.y + tol) / cell).floor() as i64);
+            let span = x1.saturating_sub(x0).saturating_add(1).saturating_mul(y1.saturating_sub(y0).saturating_add(1));
+            if !(0..=10_000).contains(&span) || cells >= MAX_CELLS {
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    g.entry((x, y)).or_default().push(i);
+                    cells += 1;
+                }
+            }
+        }
+        grids.insert(level.clone(), g);
+    }
+    // A tag whose outline is no room (a box around the tag, a piece of furniture, a gap the
+    // lines leave open) is traced again on the level's built walls, doors and windows.
+    let (min_area, max_area) = (MIN_ROOM_SF * upf * upf, MAX_ROOM_SF * upf * upf);
+    let mut walls_plan: Option<Option<Session>> = None;
+    let mut cache = None;
+    let mut unwalled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut retraced = 0usize;
+    let mut retraced_or_tried = 0usize;
+    let extents: std::collections::HashMap<&String, cadaddy_geom::Bounds2> =
+        bounds.iter().map(|(l, polys)| (l, cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied()))).collect();
+    let mut kept: Vec<Traced> = Vec::new();
+    for mut t in std::mem::take(rooms) {
+        let key = t.level.trim().to_ascii_uppercase();
+        let a = cadaddy_geom::shoelace(&t.outline).abs();
+        let big = a >= min_area || t.room.is_some();
+        let (Some(polys), Some(grid)) = (bounds.get(&key).filter(|p| !p.is_empty()), grids.get(&key)) else {
+            if big {
+                keep_room(&mut kept, t);
+            }
+            continue;
+        };
+        if big && walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED {
+            keep_room(&mut kept, t);
+            continue;
+        }
+        // Only a tag among the level's built walls (a schedule's or a note's text isn't).
+        let inside = extents.get(&key).is_some_and(|b| b.contains(t.at)) && retraced_or_tried < MAX_RETRACE;
+        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds));
+        let outline = plan.as_ref().filter(|_| inside).and_then(|plan| {
+            retraced_or_tried += 1;
+            let loops = super::hatch::loops_at_lazy(plan, t.at, &mut cache).ok()?;
+            let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
+            let o = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+            let a = cadaddy_geom::shoelace(&o).abs();
+            (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, grid, polys, cell, tol) >= ROOM_WALLED).then_some(o)
+        });
+        match outline {
+            Some(o) => {
+                t.outline = o;
+                retraced += 1;
+                keep_room(&mut kept, t);
+            }
+            None => *unwalled.entry(t.level.clone()).or_default() += 1,
+        }
+    }
+    *rooms = kept;
+    if retraced > 0 {
+        notes.push(format!("{retraced} room tag(s) traced again on the built walls (their drawn outline was a tag box or furniture, not the room)."));
+    }
+    for (level, n) in &unwalled {
+        notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
+    }
+    // One room per number and level: the smaller outline.
+    let area = |t: &Traced| cadaddy_geom::shoelace(&t.outline).abs();
+    let mut best: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for (i, t) in rooms.iter().enumerate() {
+        let Some(n) = t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) else { continue };
+        let key = (t.level.trim().to_ascii_uppercase(), n);
+        match best.get(&key).and_then(|j| rooms.get(*j)) {
+            Some(o) if area(o) <= area(t) => {}
+            _ => {
+                best.insert(key, i);
+            }
+        }
+    }
+    let before = rooms.len();
+    let mut i = 0usize;
+    rooms.retain(|t| {
+        let keep = match t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) {
+            Some(n) => best.get(&(t.level.trim().to_ascii_uppercase(), n)) == Some(&i),
+            None => true,
+        };
+        i += 1;
+        keep
+    });
+    if rooms.len() < before {
+        notes.push(format!(
+            "{} room(s) traced twice on their level (an enlarged plan of a room on the floor plan): one room each.",
+            before - rooms.len()
+        ));
+    }
+}
+
+/// A floor face over a polygon at `z`, facing up.
+fn floor_face(poly: &[Vec2], z: f64) -> Option<Mesh> {
+    let mut ring: Vec<Vec2> = poly.to_vec();
+    if ring.len() > 1 && ring.first().zip(ring.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-9) {
+        ring.pop();
+    }
+    if cadaddy_geom::shoelace(&ring) < 0.0 {
+        ring.reverse();
+    }
+    let tris = ear_clip(&ring);
+    if tris.is_empty() || !z.is_finite() {
+        return None;
+    }
+    let vertices = ring.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
+    let id = |i: usize| u32::try_from(i).unwrap_or(0);
+    let faces = tris.iter().map(|t| MeshFace { v: vec![id(t[0]), id(t[1]), id(t[2])], hidden: 0 }).collect();
+    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+}
+
+/// A room element's tag value (`name:`, `number:`, `area_sf:`, `ceiling_ft:`, `finish:`).
+pub(crate) fn room_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
+    let x = &e.common.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
+    x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix(key)).map(str::trim)
+}
+
+/// The rooms built as model elements (part `room`), with their tags.
+#[derive(Clone, Debug)]
+pub(crate) struct RoomElement {
+    pub handle: Handle,
+    pub level: String,
+    pub name: String,
+    pub number: Option<String>,
+    pub area_sf: f64,
+    pub ceiling_ft: f64,
+    pub finish: Option<String>,
+    pub source: Handle,
+    pub outline: Vec<Vec2>,
+    pub z: f64,
+}
+
+/// The model's room elements (at most `MAX_ROOMS` × 10).
+pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if wallgen::made_as(e).as_deref() != Some("room") {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let num = |k: &str| room_tag(e, k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
+        let x = &e.common.xdata;
+        let source = x
+            .iter()
+            .position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))
+            .and_then(|at| x.get(at + 3))
+            .and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok())
+            .map_or(Handle(0), Handle);
+        out.push(RoomElement {
+            handle: e.handle,
+            level: made_level(e).unwrap_or_default(),
+            name: room_tag(e, "name:").filter(|n| !n.is_empty()).unwrap_or("Room").to_string(),
+            number: room_tag(e, "number:").filter(|n| !n.is_empty()).map(str::to_string),
+            area_sf: num("area_sf:").unwrap_or(0.0),
+            ceiling_ft: num("ceiling_ft:").unwrap_or(0.0),
+            finish: room_tag(e, "finish:").filter(|n| !n.is_empty()).map(str::to_string),
+            source,
+            outline: m.vertices.iter().map(|v| v.xy()).collect(),
+            z: m.vertices.first().map_or(0.0, |v| v.z),
+        });
+        if out.len() >= MAX_ROOMS * 10 {
+            break;
+        }
+    }
+    out
+}
+
+/// Add each traced room as a model element of its level: its floor outline (a face at the
+/// level's floor, not drawn: a room is a space), tagged with its name, number, area (sq ft),
+/// ceiling height (ft) and floor finish (the spec room's, else a finish code written inside
+/// it). How many per level.
+/// A room element's key across a rebuild: its level and its number (unnumbered, its name).
+fn room_key(level: &str, name: &str, number: Option<&str>) -> (String, String) {
+    let id = number.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(name.trim());
+    (level.trim().to_ascii_uppercase(), id.to_ascii_uppercase())
+}
+
+/// The user edits on the model's room elements, by [`room_key`] (at most `MAX_ROOMS` × 10).
+fn room_user_edits(d: &Drawing) -> std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("room")).take(MAX_ROOMS * 10) {
+        let edits = cadaddy_doc::props::read(&e.common.xdata).user_edits();
+        if edits.is_empty() {
+            continue;
+        }
+        let level = made_level(e).unwrap_or_default();
+        let name = room_tag(e, "name:").unwrap_or("");
+        out.insert(room_key(&level, name, room_tag(e, "number:")), edits);
+    }
+    out
+}
+
+fn add_room_elements(
+    d: &mut Drawing,
+    sp: &BuildingSpec,
+    rooms: &[&Traced],
+    upf: f64,
+    edits: &std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props>,
+) -> std::collections::BTreeMap<String, usize> {
+    let mut by_level: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    if rooms.is_empty() {
+        return by_level;
+    }
+    if d.layer(ROOM_LAYER).is_none() {
+        d.layers.push(cadaddy_doc::Layer { name: ROOM_LAYER.into(), color: cadaddy_doc::color::Color::Index(151), ..cadaddy_doc::Layer::default() });
+    }
+    // The plan's texts, for the finish codes written inside a room.
+    let notes: Vec<(Vec2, String)> = {
+        let plan = plan_objects(d);
+        let texts: Vec<&Arc<Entity>> =
+            plan.into_iter().filter(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_))).take(MAX_OBJECTS).collect();
+        super::perceive::texts(&texts).into_iter().map(|(_, t, at, _)| (at, t)).filter(|(at, t)| at.is_finite() && !t.is_empty()).collect()
+    };
+    let clip = |v: &str| v.chars().take(240).collect::<String>();
+    for t in rooms {
+        let Some(level) = sp.level(&t.level) else { continue };
+        let room = t.room.and_then(|i| sp.rooms.get(i));
+        let Some(m) = floor_face(&t.outline, level.elevation_ft * upf) else { continue };
+        let name = room.map(|r| r.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| t.name.clone()).unwrap_or_default();
+        let number = room.and_then(|r| r.number.clone()).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| t.number.clone());
+        let name = if name.is_empty() { number.as_ref().map_or_else(|| "Room".to_string(), |n| format!("Room {n}")) } else { name };
+        let area_sf = cadaddy_geom::shoelace(&t.outline).abs() / (upf * upf);
+        let ceiling_ft = room.and_then(|r| r.ceiling_ft).unwrap_or(level.ceiling_ft);
+        let finish = room.and_then(|r| r.materials.get("floor").map(str::to_string)).or_else(|| {
+            let b = cadaddy_geom::Bounds2::from_points(t.outline.iter().copied());
+            notes
+                .iter()
+                .filter(|(at, _)| b.contains(*at) && cadaddy_geom::point_in_polygon(&t.outline, *at))
+                .flat_map(|(_, tx)| super::perceive::finish_codes(tx))
+                .next()
+        });
+        let tg = |code: i32, v: String| RawTag { code, value: v };
+        let mut xdata = vec![
+            tg(1001, wallgen::APP.into()),
+            tg(1000, "room".into()),
+            tg(1000, clip(&level.name)),
+            tg(1000, t.tag.hex()),
+            tg(1000, format!("type:{}", clip(&name))),
+            tg(1000, format!("name:{}", clip(&name))),
+        ];
+        if let Some(n) = &number {
+            xdata.push(tg(1000, format!("number:{}", clip(n))));
+        }
+        xdata.push(tg(1000, format!("area_sf:{:.2}", area_sf)));
+        xdata.push(tg(1000, format!("ceiling_ft:{:.2}", ceiling_ft)));
+        if let Some(f) = &finish {
+            xdata.push(tg(1000, format!("finish:{}", clip(f))));
+        }
+        if let Some(kept) = edits.get(&room_key(&level.name, &name, number.as_deref())) {
+            xdata = cadaddy_doc::props::write(&xdata, kept);
+        }
+        let common = Common { layer: ROOM_LAYER.into(), visible: false, xdata: xdata.into(), ..Common::default() };
+        if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+            *by_level.entry(level.name.clone()).or_default() += 1;
+        }
+    }
+    by_level
+}
+
 /// Build from a spec: WALLGEN's walls, openings, floors and ceilings, then the spec's own parts
 /// and materials.
 pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    // What a person set on a room element (bim.props.set) goes on the rebuilt room.
+    let room_edits = room_user_edits(s.doc()?);
     let removed = wallgen::remove_made(s.doc_mut()?);
     let mut notes: Vec<String> = Vec::new();
-    let rooms = trace_rooms(s, &sp, &mut notes)?;
+    let mut rooms = trace_rooms(s, &sp, &mut notes)?;
     let mut r = wallgen::build(s, g)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let d = s.doc_mut()?;
+    walled_rooms(d, &mut rooms, upf, &mut notes);
     let mut columns = 0;
     let mut curtain = 0;
     // Columns and curtain walls, level by level.
@@ -847,6 +1283,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rooms: Vec<&Traced> = rooms
         .iter()
         .filter(|t| {
+            // A roof plan has no rooms (its title block, a curb's box).
+            if wallgen::roof_level(&sp.levels, &t.level) {
+                return false;
+            }
             let b = cadaddy_geom::Bounds2::from_points(t.outline.iter().copied());
             let inside = walls.iter().find(|(n, _)| n.eq_ignore_ascii_case(&t.level)).is_none_or(|(_, w)| {
                 let w = w.expand(upf);
@@ -892,6 +1332,9 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
+    // Each room as a model element of its level (a space: its floor outline, name, number,
+    // area, ceiling and floor finish), what bim.tree, the takeoff and the room commands list.
+    let room_elements = add_room_elements(d, &sp, &rooms, upf, &room_edits);
     // The ground: the building's extents and the margin, a slab under the site elevation.
     let mut ground = 0;
     if let Some(site) = &sp.site {
@@ -943,6 +1386,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rcp = super::ceilings::build(d, &sp);
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    // The devices the readers found, each an element with what was read about it.
+    let devices = super::propfill::build_devices(d, &sp);
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     // Takeoff tables linked to the model count it again.
@@ -973,7 +1418,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     // RCP ceilings replace those of their levels.
     let replaced = rcp["replacedCeilings"].as_u64().unwrap_or(0);
     r["ceilings"] = json!(ceilings_now.saturating_sub(replaced) + rcp["rcpCeilings"].as_u64().unwrap_or(0));
-    r["rooms"] = json!(rooms.len());
+    r["rooms"] = json!(room_elements.values().sum::<usize>());
+    r["roomsByLevel"] = json!(room_elements);
     r["columns"] = json!(columns);
     r["curtainWalls"] = json!(curtain);
     r["ground"] = json!(ground);
@@ -982,7 +1428,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["railings"] = json!(built_stairs.railings);
     r["guards"] = json!(built_stairs.guards);
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
-        o.extend(x.clone());
+        o.extend(x.iter().filter(|(k, _)| *k != "roofNotes").map(|(k, v)| (k.clone(), v.clone())));
+    }
+    if let (Some(n), Some(x)) = (r["notes"].as_array_mut(), outside["roofNotes"].as_array()) {
+        n.extend(x.iter().cloned());
     }
     if let (Some(o), Some(x)) = (r.as_object_mut(), rcp.as_object()) {
         o.extend(x.clone());
@@ -994,6 +1443,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["deviceElements"] = json!(devices);
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // One building: the levels' 3D moved off their plans onto the lowest level's.
@@ -1029,10 +1479,32 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
     let Some(lowest) = here.first() else { return 0 };
     let Some(origin) = level_anchor(d, lowest) else { return 0 };
-    let mut moved = 0;
+    // Each level's move: its plan's corner onto the lowest's. A roof plan (no walls of its own)
+    // is centred over the walls of the storey under it, wherever that went: a roof edge runs a
+    // slab's overhang past the walls, so the corners don't match.
+    let mut offsets: Vec<(&str, Vec2)> = vec![(lowest.name.as_str(), Vec2::ZERO)];
     for level in here.iter().skip(1) {
-        let Some(at) = level_anchor(d, level) else { continue };
-        let off = origin - at;
+        let roof = (level.base.is_none() && wallgen::roof_level(&sp.levels, &level.name))
+            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet"]))
+            .filter(|b| !b.is_empty());
+        let under = roof.and_then(|r| {
+            offsets.iter().rev().find_map(|(n, off)| {
+                let w = super::exterior::built_bounds(d, n, &["wall"]);
+                (!w.is_empty()).then(|| w.center() + *off - r.center())
+            })
+        });
+        let off = match under {
+            Some(off) => off,
+            None => {
+                let Some(at) = level_anchor(d, level) else { continue };
+                origin - at
+            }
+        };
+        offsets.push((level.name.as_str(), off));
+    }
+    let mut moved = 0;
+    for (name, off) in offsets.iter().skip(1) {
+        let (level, off) = (*name, *off);
         if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
             continue;
         }
@@ -1040,7 +1512,7 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let mine: Vec<Handle> = d
             .model
             .iter()
-            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level.name)))
+            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
             .map(|e| e.handle)
             .take(MAX_OBJECTS)
             .collect();
@@ -1064,7 +1536,7 @@ pub(crate) const STACKED: &str = "stacked";
 
 /// `xdata` with the stacking move `off` recorded (added to one recorded before) at the end of
 /// WALLGEN's tags.
-fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
+pub(crate) fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
     let mut x = xdata.to_vec();
     let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return x };
     let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);
@@ -1092,7 +1564,7 @@ pub(crate) fn stacked_by(e: &Entity) -> Vec2 {
 }
 
 /// The level a built object belongs to (its WALLGEN tag).
-pub(crate) fn made_level(e: &Entity) -> Option<String> {
+pub fn made_level(e: &Entity) -> Option<String> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     x.get(at + 2).filter(|t| t.code == 1000).map(|t| t.value.clone())

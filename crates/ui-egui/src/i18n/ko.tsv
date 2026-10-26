@@ -3208,3 +3208,13 @@ menu	Modify	수정
 	Layer Quantity Takeoff	도면층별 물량 산출
 	Read Architecture from Prints	도면에서 건축 읽기
 	Read Roof and Wall Envelope	지붕 및 벽체 외피 읽기
+	Element Properties (BIM)	요소 속성(BIM)
+	Set Element Property (BIM)	요소 속성 설정(BIM)
+	Find Elements by Property	속성으로 요소 찾기
+	Element Property Summary	요소 속성 요약
+	BIM Properties	BIM 속성
+	Kind	종류
+	Check Building Codes	건축 법규 검사
+	Code Rules	법규 규칙
+	Select Building Codes	건축 법규 선택
+	Fill Element Properties	요소 속성 채우기

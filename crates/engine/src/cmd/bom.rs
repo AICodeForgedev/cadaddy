@@ -40,7 +40,8 @@
 //!   must have a BOM line carrying them; separately sold accessories (plates for devices,
 //!   covers/trims and lug kits for panels) must have their lines.
 //! - `compare_to`: an earlier BOM's `lines` → added, removed and changed quantities.
-//! - `group_by`: `job` (default), `level` or `trade`; `file` writes CSV or XLSX, `columns` renames
+//! - `group_by`: `job` (default), `level`, `trade` or `circuit` (each level's lines per branch
+//!   circuit: its conduit, wire, boxes and fittings); `file` writes CSV or XLSX, `columns` renames
 //!   the columns for another estimating tool.
 
 use cadaddy_doc::projrules::{RuleDomain, RuleValue};
@@ -77,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{group_by?: job|level|trade, all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{group_by?: job|level|trade|circuit (each level's lines per branch circuit), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -97,14 +98,24 @@ struct Line {
     rule: Option<String>,
     level: String,
     elements: Vec<String>,
+    /// The branch circuit it is on (`D-7`), empty when none.
+    circuit: String,
     /// Waste the takeoff already worked out (concrete: by each element's size), in the line's
     /// unit; `None`: the category's percent.
     waste_qty: Option<f64>,
 }
 
 impl Line {
-    fn key(&self, by_level: bool) -> String {
-        format!("{}|{}|{}|{}|{}", self.trade, self.category, self.item, self.size, if by_level { self.level.as_str() } else { "" })
+    fn key(&self, by_level: bool, by_circuit: bool) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}",
+            self.trade,
+            self.category,
+            self.item,
+            self.size,
+            if by_level { self.level.as_str() } else { "" },
+            if by_circuit { self.circuit.as_str() } else { "" }
+        )
     }
 }
 
@@ -113,7 +124,7 @@ fn add(lines: &mut Vec<Line>, l: Line) {
     if l.net <= 0.0 || lines.len() >= MAX_LINES {
         return;
     }
-    match lines.iter_mut().find(|x| x.key(true) == l.key(true) && x.status == l.status && x.rule == l.rule) {
+    match lines.iter_mut().find(|x| x.key(true, true) == l.key(true, true) && x.status == l.status && x.rule == l.rule) {
         Some(x) => merge(x, l),
         None => lines.push(l),
     }
@@ -121,6 +132,10 @@ fn add(lines: &mut Vec<Line>, l: Line) {
 
 /// `l`'s quantities and elements into `x`.
 fn merge(x: &mut Line, l: Line) {
+    // Lines of different circuits merged (not grouped by circuit) are on none in particular.
+    if x.circuit != l.circuit {
+        x.circuit.clear();
+    }
     x.net += l.net;
     x.waste_qty = match (x.waste_qty, l.waste_qty) {
         (None, None) => None,
@@ -166,9 +181,15 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
             described.entry(ty.value.clone()).or_insert_with(|| desc.value.clone());
         }
     }
+    // The job's branch circuits (Q6007): label by tag id; their runs carry the id.
+    let circuits: BTreeMap<&str, &cadaddy_walk3d::tags::ElementTag> =
+        sp.tags.iter().filter(|t| t.kind == "circuit").map(|t| (t.id.as_str(), t)).collect();
+    let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user") { "firm" } else { "rule" };
+        // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
+        let on = f("circuit").map(|c| c.0).filter(|c| super::printcond::parse_circuit(c).is_some()).unwrap_or_default();
         match t.kind.as_str() {
             "luminaire" => {
                 let (ty, src) = f("type").unwrap_or_else(|| ("UNTAGGED".into(), "default".into()));
@@ -187,10 +208,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         level: t.level.clone(),
                         elements: vec![t.id.clone()],
                         waste_qty: None,
+                        circuit: String::new(),
                     },
                 );
             }
-            "homerun" | "conduit" => {}
+            "homerun" | "conduit" | "circuit" => {}
             kind => {
                 let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
                 add(
@@ -207,6 +229,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         level: t.level.clone(),
                         elements: vec![t.id.clone()],
                         waste_qty: None,
+                        circuit: on.clone(),
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
@@ -226,25 +249,57 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
                                 waste_qty: None,
+                                circuit: on.clone(),
                             },
                         );
                     }
+                } else if !on.is_empty() {
+                    // Any other device wired on a circuit: its outlet box.
+                    add(
+                        lines,
+                        Line {
+                            trade: "electrical",
+                            category: "boxes".into(),
+                            item: "Box, 4\" octagon".into(),
+                            size: "1-1/2\" deep".into(),
+                            unit: "each",
+                            net: 1.0,
+                            status: "rule",
+                            rule: Some("one outlet box per device wired on a circuit (company default)".into()),
+                            level: t.level.clone(),
+                            elements: vec![t.id.clone()],
+                            waste_qty: None,
+                            circuit: on.clone(),
+                        },
+                    );
                 }
             }
         }
     }
     // Branch conduit and its implied fittings; homerun wire over its route.
     let kind_of = |sys: &str| sp.mep.systems.iter().find(|x| x.name == sys).map(|x| x.kind);
+    // Each circuit's conduit: feet and pulls (box to box), for its wire.
+    let mut on_circuit: BTreeMap<&str, (f64, usize)> = BTreeMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_LINES) {
-        let len = run_length_ft(&r.points, upf);
+        // A riser (a drop to a wall box) goes straight up from its one plan point.
+        let rise = r.top_ft.zip(r.bottoms_ft.first()).map_or(0.0, |(t, b)| (t - b).abs());
+        let len = run_length_ft(&r.points, upf) + if rise.is_finite() { rise } else { 0.0 };
         if !(len.is_finite() && len > 0.0) {
             continue;
         }
         let id = format!("run:{i}");
+        let circuit = super::printcond::circuit_of_run(r).and_then(|c| circuits.get_key_value(c));
         match kind_of(&r.system) {
             Some(cadaddy_walk3d::MepKind::Conduit) => {
                 let size = format!("{}\"", trade_size(r.size_in[0]));
                 let el = vec![id.clone()];
+                let label = circuit.map_or_else(String::new, |(_, t)| label_of(t));
+                if let Some((c, _)) = circuit {
+                    let e = on_circuit.entry(c).or_default();
+                    e.0 += len;
+                    e.1 += 1;
+                }
+                let estimated = r.height_source == super::printcond::ESTIMATED;
                 add(
                     lines,
                     Line {
@@ -254,16 +309,20 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         size: size.clone(),
                         unit: "ft",
                         net: len,
-                        status: "model",
-                        rule: None,
+                        status: if estimated { "rule" } else { "model" },
+                        rule: estimated.then(|| {
+                            "estimated route: the circuit's devices chained nearest-neighbour, run square just above the ceiling, a drop to each wall box (Q6007)"
+                                .to_string()
+                        }),
                         level: r.level.clone(),
                         elements: el.clone(),
                         waste_qty: None,
+                        circuit: label.clone(),
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
                 let straps = (len / STRAP_SPACING_FT).ceil() + 1.0;
-                let elbows = r.points.len().saturating_sub(2) as f64;
+                let elbows = r.points.len().saturating_sub(2) as f64 + if rise > 0.0 { 1.0 } else { 0.0 };
                 let parts: [(&str, f64, String); 4] = [
                     ("EMT coupling", (sticks - 1.0).max(0.0), format!("one per joint between {STICK_FT}' sticks")),
                     ("EMT connector", 2.0, "one at each conduit end".into()),
@@ -285,6 +344,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                             level: r.level.clone(),
                             elements: el.clone(),
                             waste_qty: None,
+                            circuit: label.clone(),
                         },
                     );
                 }
@@ -316,6 +376,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                             level: r.level.clone(),
                             elements: el,
                             waste_qty: None,
+                            circuit: String::new(),
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -333,12 +394,38 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                                 level: r.level.clone(),
                                 elements: vec![id.clone()],
                                 waste_qty: None,
+                                circuit: String::new(),
                             },
                         );
                     }
                 }
             }
             _ => {}
+        }
+    }
+    // Each circuit's wire: its conductors over all its conduit, with makeup at each box.
+    for (c, (ft, pulls)) in on_circuit {
+        let Some(t) = circuits.get(c) else { continue };
+        let makeup = t.fields.get("conductors").map_or_else(|| super::printcond::DEFAULT_CONDUCTORS.to_string(), |f| f.value.clone());
+        let each = ft + 2.0 * MAKEUP_FT * pulls as f64;
+        for (n, size, ground) in conductor_parts(&makeup) {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "wire".into(),
+                    item: if ground { "Copper ground, green".into() } else { "THHN copper".into() },
+                    size: format!("#{size}"),
+                    unit: "ft",
+                    net: f64::from(n) * each,
+                    status: "rule",
+                    rule: Some(format!("{makeup} over the circuit's conduit plus {MAKEUP_FT}' makeup at each box")),
+                    level: t.level.clone(),
+                    elements: vec![t.id.clone()],
+                    waste_qty: None,
+                    circuit: label_of(t),
+                },
+            );
         }
     }
     Ok(())
@@ -714,13 +801,75 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         missing.push("floors".into());
     }
 
-    // ── Roofs: area from built roof meshes ──
+    // ── Roofs: area, parapets, drains, crickets and what stands on the roof ──
+    // A measure the build put on its elements (`area:`, `lf:`), summed; none when one lacks it.
+    let tagged = |handles: &[String], key: &str| -> Option<f64> {
+        let mut sum = 0.0;
+        for hex in handles {
+            let e = cadaddy_doc::Handle::parse_hex(hex).and_then(|h| d.entity(h))?;
+            sum += super::bimlook::made_tag(e, key)?.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0)?;
+        }
+        Some((sum * 100.0).round() / 100.0)
+    };
+    for ((part, level), (n, handles)) in &built {
+        let (item, unit, net) = match part.as_str() {
+            "parapet" => ("Parapet", "lf", tagged(handles, "lf").unwrap_or(0.0)),
+            "roof-drain" => ("Roof drain", "each", *n as f64),
+            "cricket" => ("Cricket", "each", *n as f64),
+            _ => continue,
+        };
+        if net > 0.0 {
+            add(
+                lines,
+                Line {
+                    trade: "architecture",
+                    category: "roofs".into(),
+                    item: item.into(),
+                    unit,
+                    net,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    ..Line::default()
+                },
+            );
+        }
+    }
+    // Rooftop units and curbs, by name.
+    let mut on_roof: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for e in
+        d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("equipment") && e.common.layer.eq_ignore_ascii_case("3D-Equipment"))
+    {
+        let name = super::bimlook::made_name(e).unwrap_or_default().to_string();
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let hs = on_roof.entry((level, name)).or_default();
+        if hs.len() < 500 {
+            hs.push(e.handle.hex());
+        }
+    }
+    for ((level, name), handles) in &on_roof {
+        add(
+            lines,
+            Line {
+                trade: "architecture",
+                category: "roofs".into(),
+                item: "Rooftop equipment".into(),
+                size: name.clone(),
+                unit: "each",
+                net: handles.len() as f64,
+                status: "model",
+                level: level.clone(),
+                elements: handles.clone(),
+                ..Line::default()
+            },
+        );
+    }
     for ((part, level), (_n, handles)) in &built {
         if part != "roof" {
             continue;
         }
-        // Measure the roof area from the mesh's XY footprint (the horizontal face area).
-        let area = roof_mesh_area(d, handles, upf);
+        // The roof's plan area as built (its outline), else the meshes' XY footprint.
+        let area = tagged(handles, "area").unwrap_or_else(|| roof_mesh_area(d, handles, upf));
         if area > 0.0 {
             add(
                 lines,
@@ -739,38 +888,91 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         }
     }
 
-    // ── Rooms: count from ceiling room tags ──
+    // ── Rooms (Q5291): the room elements by level — count, floor area, floor finish, ceiling
+    // area by ceiling height; else (a model built before rooms were elements) the room ceilings.
     let mut room_count = 0usize;
-    let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
-    for e in d.model.iter() {
-        if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
-            continue;
+    let room_els = super::bspec::room_elements(d);
+    let mut rooms_by_level: BTreeMap<String, Vec<&super::bspec::RoomElement>> = BTreeMap::new();
+    for r in &room_els {
+        rooms_by_level.entry(r.level.clone()).or_default().push(r);
+    }
+    for (level, rs) in &rooms_by_level {
+        room_count += rs.len();
+        let handles = |f: &dyn Fn(&super::bspec::RoomElement) -> bool| -> Vec<String> {
+            rs.iter().filter(|r| f(r)).take(500).map(|r| r.handle.hex()).collect()
+        };
+        let line = |item: String, size: String, unit: &'static str, net: f64, elements: Vec<String>| Line {
+            trade: "general",
+            category: "rooms".into(),
+            item,
+            size,
+            unit,
+            net,
+            status: "model",
+            level: level.clone(),
+            elements,
+            ..Line::default()
+        };
+        add(lines, line("Room".into(), String::new(), "each", rs.len() as f64, handles(&|_| true)));
+        let area: f64 = rs.iter().map(|r| r.area_sf).sum();
+        if area > 0.0 {
+            add(lines, line("Room floor area".into(), String::new(), "sq ft", area, handles(&|_| true)));
         }
-        let level = super::bspec::made_level(e).unwrap_or_default();
-        if e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:")) {
-            let entry = rooms_by_level.entry(level).or_insert((0, Vec::new()));
-            entry.0 += 1;
-            if entry.1.len() < 500 {
-                entry.1.push(e.handle.hex());
+        let mut finishes: BTreeMap<String, f64> = BTreeMap::new();
+        let mut heights: BTreeMap<i64, f64> = BTreeMap::new();
+        for r in rs {
+            *finishes.entry(r.finish.clone().unwrap_or_default()).or_default() += r.area_sf;
+            if r.ceiling_ft > 0.0 {
+                *heights.entry((r.ceiling_ft * 12.0).round() as i64).or_default() += r.area_sf;
             }
         }
+        for (finish, sf) in finishes.iter().filter(|(_, sf)| **sf > 0.0) {
+            let (item, size) = if finish.is_empty() {
+                ("Floor finish (not given)".to_string(), String::new())
+            } else {
+                (format!("Floor finish {finish}"), finish.clone())
+            };
+            let f = finish.clone();
+            add(lines, line(item, size, "sq ft", *sf, handles(&|r| r.finish.clone().unwrap_or_default() == f)));
+        }
+        for (inches, sf) in heights.iter().filter(|(_, sf)| **sf > 0.0) {
+            let size = format!("{}'-{}\" ceiling", inches / 12, inches % 12);
+            let h = *inches;
+            add(lines, line("Room ceiling area".into(), size, "sq ft", *sf, handles(&|r| (r.ceiling_ft * 12.0).round() as i64 == h)));
+        }
     }
-    for (level, (count, handles)) in &rooms_by_level {
-        room_count += count;
-        add(
-            lines,
-            Line {
-                trade: "general",
-                category: "rooms".into(),
-                item: "Room".into(),
-                unit: "each",
-                net: *count as f64,
-                status: "model",
-                level: level.clone(),
-                elements: handles.clone(),
-                ..Line::default()
-            },
-        );
+    if room_els.is_empty() {
+        let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+        for e in d.model.iter() {
+            if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
+                continue;
+            }
+            let level = super::bspec::made_level(e).unwrap_or_default();
+            if e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:")) {
+                let entry = rooms_by_level.entry(level).or_insert((0, Vec::new()));
+                entry.0 += 1;
+                if entry.1.len() < 500 {
+                    entry.1.push(e.handle.hex());
+                }
+            }
+        }
+        for (level, (count, handles)) in &rooms_by_level {
+            room_count += count;
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "rooms".into(),
+                    item: "Room".into(),
+                    unit: "each",
+                    net: *count as f64,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    ..Line::default()
+                },
+            );
+        }
     }
     // Fall back to spec rooms if none found from ceiling tags.
     if room_count == 0 && !sp.rooms.is_empty() {
@@ -1512,6 +1714,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
                     level: e.level.clone(),
                     elements: vec![e.id.clone()],
                     waste_qty,
+                    circuit: String::new(),
                 },
             );
         };
@@ -1600,8 +1803,8 @@ pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let group = str_param(p, "group_by").unwrap_or("job").to_ascii_lowercase();
     let all_elements = p.get("all_elements").and_then(Value::as_bool).unwrap_or(false);
-    if !matches!(group.as_str(), "job" | "level" | "trade") {
-        return Err(bad("bim.bom", "`group_by` is job, level or trade"));
+    if !matches!(group.as_str(), "job" | "level" | "trade" | "circuit") {
+        return Err(bad("bim.bom", "`group_by` is job, level, trade or circuit"));
     }
     let mut lines: Vec<Line> = Vec::new();
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
@@ -1638,13 +1841,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|v| v.is_finite() && (0.0..=200.0).contains(v))
     };
     let (sp, _) = current(s, "bim.bom")?;
-    let by_level = group == "level";
+    // By circuit: each level's lines per branch circuit (Q6007).
+    let by_circuit = group == "circuit";
+    let by_level = group == "level" || by_circuit;
     // Group.  Level is always kept on each line (Q5243 MUST 5) even when group_by != "level";
     // lines from different levels merge into one and the level stays (first encountered, or the
     // common one when all lines share a level).
     let mut grouped: Vec<Line> = Vec::new();
     for l in lines {
-        match grouped.iter_mut().find(|x| x.key(by_level) == l.key(by_level) && x.status == l.status && x.rule == l.rule) {
+        match grouped.iter_mut().find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule) {
             Some(x) => {
                 // When merging, keep the existing level (first wins); mark mixed if they differ.
                 if !by_level && !l.level.is_empty() && x.level.is_empty() {
@@ -1691,6 +1896,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             // Level always included (Q5243 MUST 5).
             v["level"] = json!(l.level);
+            if !l.circuit.is_empty() {
+                v["circuit"] = json!(l.circuit);
+            }
             v
         })
         .collect();

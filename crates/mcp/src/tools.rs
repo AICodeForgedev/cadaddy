@@ -52,6 +52,12 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key; \"fill\" {} — put what the readers found on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), a person's values kept. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary", "fill"]},
+                "handle": {"type": "string"}, "handles": {"type": "array", "items": {"type": "string"}},
+                "filter": {"type": "object"}, "kind": {"type": "string"}, "where": {"type": "object"},
+                "key": {"type": "string"}, "value": {}, "unit": {"type": "string"}, "note": {"type": "string"},
+                "props": {"type": "object"}, "select": {"type": "boolean"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
         json!({"name": "project_rules", "description": "Project rules: mounting heights, wiring methods, clearances, tolerances, naming and stud/joist layout per device/room type, each with a source (spec section, RFI #) and a tier (field_verified > rfi > submittal > drawing_revision > spec > project_rule > built_in). The highest tier wins. action \"list\" returns all rules (filter by domain); \"get\" resolves one rule (which tier won, what it overrode); \"set\" adds/updates a value with source, tier and reason (shows what changes); \"remove\" deletes a rule or tier; \"preview\" shows what setting would change without modifying; \"label\" gets/sets the project name; \"import\" reads a TOML/JSON file; \"export\" writes one.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "set", "remove", "preview", "label", "import", "export"]},
                 "domain": {"type": "string", "enum": ["mounting_height", "wiring_method", "stud_layout", "joist_layout", "clearance", "tolerance", "naming", "custom"]},
@@ -60,6 +66,13 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "set_by": {"type": "string"}, "reason": {"type": "string"},
                 "label": {"type": "string"}, "path": {"type": "string"}, "merge": {"type": "boolean"}},
                 "required": ["action"]}}),
+        json!({"name": "codebook", "description": "Building-code rule book: IBC, IRC, NEC, IPC, IMC, IFC, IECC rules as data (section numbers and values in our own words; starter set — verify with your AHJ). Actions:\n- select {code: \"IRC\", edition?: 2021, jurisdiction?: \"County\"} — choose code editions for this project; no args returns the current selection.\n- rules {topic?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\", code?: \"NEC\", section?: \"210.52\", offset?, limit?} — list matching rules with section citations and values.\n- check {scope?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\"|\"all\", walls?: [{id, wall_type, stud_size?, stud_spacing_in, height_ft, ...}], rooms?: [{id, room_type, receptacle_spacing_in?, has_gfci?, ...}]} — run code checks against model data; returns findings with rule_id, cite, expected, found.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["select", "rules", "check"]},
+                "code": {"type": "string"}, "edition": {"type": "integer"}, "jurisdiction": {"type": "string"},
+                "topic": {"type": "string"}, "section": {"type": "string"}, "scope": {"type": "string"},
+                "level": {"type": "string"}, "walls": {"type": "array"}, "rooms": {"type": "array"},
+                "plumbing": {"type": "array"}, "mechanical": {"type": "array"}, "building": {"type": "array"},
+                "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
         json!({"name": "lv_devices", "description": "List fire alarm and low-voltage devices in the project. Paged: use page/page_size to navigate large lists. Filter by system (fire_alarm, data, security, tv, telephone, nurse_call, sound, all) and/or level.",
             "inputSchema": {"type": "object", "properties": {"system": {"type": "string"}, "level": {"type": "string"}, "page": {"type": "integer"}, "page_size": {"type": "integer"}}}}),
         json!({"name": "lv_sleeves", "description": "List LV/FA sleeves at wall and floor crossings. Filter by level and/or system. Each sleeve shows its size (computed from cables at NEC fill), material, fire rating and firestop.",
@@ -133,8 +146,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "framing", "description": "Studs and framing from the job's prints: every wall's fixed members (ends, corners, tees, posts, kings, jacks, headers), both rule layouts (laid out from either end; agreed where they coincide), the \"next stud\" dimension and flags. Answers are compact and paged; entries are kept in the job and re-applied on every rebuild, and repeating one changes nothing. Actions, each with an example of params:\n- build {dir: \"/jobs/sample/prints\"} — read the DXF sheets and frame every wall (none: the sheets framed last, else the open print set).\n- list {level: \"1\", flagged: true, offset: 0, limit: 50} — walls with their counts by status.\n- wall {wall: \"F1-003\", members: true} — one wall: members by status and kind, both layouts, next stud, flags.\n- next_stud {wall: \"F1-003\"} — the next-stud dimension from each end under each layout.\n- field_point {wall: \"F1-003\", tape: {from: \"a\", to_near_edge_in: 15.25}, author: \"agent\"} — a measured stud (or centre_in, or photo {refs: [[x, y, in] ×3], pick: [x, y]}); its run and stacked walls snap to field verified.\n- shop_drawing {file: \"/jobs/sample/shop/L1-studs.dxf\", level: \"1\"} — STUD, JOIST/TRUSS, TENDON/PT layers replace the rule members where they cover.\n- view {wall: \"F1-003\"} or {level: \"1\", walk: true} — draw the elevation / plan on FRAMING-* layers (fixed solid, rule ghosted, dimensions) and the members as 3D boxes for Walk.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["build", "list", "wall", "next_stud", "field_point", "shop_drawing", "view"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes (reply: effect, rerun, changed).\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id: \"Q-rooms-23\", answer: \"Correct\"} — answer a question (ids come from next: Q-<stage>-<n>); the pipeline resumes (reply: effect, rerun, changed). Many at once: {answers: [{id, answer}, …]} — each stands alone (an unknown or merged id is a warning, the rest are kept) and the stages they change run again once. A level question takes an elevation (\"12'-6\\\"\" or {elevation_ft: 12.5, name: \"Mezzanine\"}). Each question's if_changed says what an answer other than the default runs again and about how long.\n- set_mode {auto: true} — run the job on unattended from here (answers given are kept); auto: false makes it stop at checkpoints again.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "set_mode", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -365,7 +378,8 @@ fn text(v: &Value) -> Value {
 }
 
 fn err_text(e: &str) -> Value {
-    json!({"content": [{"type": "text", "text": e}], "isError": true})
+    let clean: String = e.chars().map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' { '\u{FFFD}' } else { c }).collect();
+    json!({"content": [{"type": "text", "text": clean}], "isError": true})
 }
 
 /// Whether `v` fits the subset of JSON Schema the tool definitions use: `type`, `items`,
@@ -496,6 +510,37 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             }
             b.call("engine.execute", json!({"command": command, "params": params}))
         }
+        "bim_props" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("get") => "bim.props.get",
+                Some("set") => "bim.props.set",
+                Some("find") => "bim.props.find",
+                Some("summary") => "bim.props.summary",
+                Some("fill") => "bim.props.fill",
+                _ => return Ok(err_text("bim_props needs an action: get, set, find, summary or fill")),
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            exec(b, command, params)
+        }
+        "codebook" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("select") => "code.select",
+                Some("rules") => "code.rules",
+                Some("check") => "code.check",
+                Some(other) => return Err(format!(
+                    "codebook has no action `{other}` — use select, rules or check"
+                )),
+                None => return Err("codebook needs an action — start with {action: \"select\"}".into()),
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
+        }
         "project_rules" => {
             let command = match a.get("action").and_then(Value::as_str) {
                 Some("get") => "project.rules.get",
@@ -586,9 +631,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("report") => "job.report",
                 Some("worklist") => "job.worklist",
                 Some("undo") => "job.undo",
+                Some("set_mode") => "job.set_mode",
                 Some(other) => {
                     return Err(format!(
-                        "guided_job has no action `{}` — use start, next, answer, status, explain, rules, report, worklist or undo",
+                        "guided_job has no action `{}` — use start, next, answer, set_mode, status, explain, rules, report, worklist or undo",
                         other.chars().take(30).collect::<String>()
                     ));
                 }
@@ -597,7 +643,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             let resumed = if command == "job.start" { None } else { resume_kept(b) };
             exec(b, command, params).map(|mut out| {
-                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.undo") {
+                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.set_mode" | "job.undo") {
                     keep(b, &mut out);
                 }
                 if let (Some(r), Some(o)) = (resumed, out.as_object_mut()) {

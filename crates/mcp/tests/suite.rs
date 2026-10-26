@@ -98,11 +98,13 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("lv_sleeves", json!({ "page": 1 }), json!({ "page": "one" })),
         ("lv_bom", json!({ "has_lv_docs": true }), json!({ "has_lv_docs": "yes" })),
         ("lv_connections", json!({ "page": 1 }), json!({ "page": "one" })),
+        ("codebook", json!({ "action": "rules", "topic": "framing", "limit": 5 }), json!({ "action": "fly" })),
         ("arch_read", json!({ "limit": 5 }), json!({ "limit": "ten" })),
         ("bim_job", json!({ "action": "briefing" }), json!({ "action": "fly" })),
         ("guided_job", json!({ "action": "explain", "stage": "classify" }), json!({ "action": "fly" })),
         ("import_check", json!({}), json!({ "path": 5 })),
         ("bim_types", json!({ "action": "list" }), json!({ "action": "set", "fields": 5 })),
+        ("bim_props", json!({ "action": "summary" }), json!({ "action": "set", "key": 5 })),
         (
             "bim_spec_import",
             json!({ "action": "import", "text": "LUMINAIRE SCHEDULE\nTYPE A  2X4 LED TROFFER  ACME LT-24  120V" }),
