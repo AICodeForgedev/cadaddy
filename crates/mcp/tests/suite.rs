@@ -92,6 +92,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("rooms", json!({ "action": "list" }), json!({})),
         ("mep", json!({ "action": "list" }), json!({ "cursor": -1 })),
         ("site_takeoff", json!({ "limit": 5 }), json!({ "limit": "ten" })),
+        ("finishes_takeoff", json!({ "trade": "flooring" }), json!({ "page": "one" })),
         ("callouts", json!({ "page": 1 }), json!({ "page": "one" })),
         ("arch_read", json!({ "limit": 5 }), json!({ "limit": "ten" })),
         ("bim_job", json!({ "action": "briefing" }), json!({ "action": "fly" })),
