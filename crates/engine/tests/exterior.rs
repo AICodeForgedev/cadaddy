@@ -1,6 +1,8 @@
 //! The outside from its drawings: a synthetic south elevation gives the levels' heights, the
 //! roof and parapet, window sills and heads, a storefront band and a brick band; a roof plan
 //! gives a sloped roof with a parapet, a cricket and a rooftop unit; `model.build` builds them.
+//! The parapet height survives either reading order, guesses are marked, and north, east and
+//! west elevations put their glass on the right face.
 
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::wallgen::made_as;
@@ -33,6 +35,12 @@ fn text(s: &mut Session, at: [f64; 2], t: &str) {
 const G: f64 = -1800.0;
 
 fn drawing() -> Session {
+    drawing_with(Some("PARAPET 3'-6\""), (354.0, "T.O. PARAPET EL. 129'-6\""))
+}
+
+/// The fixture with the roof plan's parapet note (none: the inner line alone) and the
+/// elevation's parapet line (its height above the ground line and its label) given.
+fn drawing_with(parapet_note: Option<&str>, parapet_line: (f64, &str)) -> Session {
     let mut s = Session::new();
     // The ground floor plan: a 40' × 30' box of 6" walls.
     layer(&mut s, "A-WALL");
@@ -42,9 +50,7 @@ fn drawing() -> Session {
     // storefront with mullions on Level 1, a brick base.
     layer(&mut s, "A-ELEV");
     text(&mut s, [200.0, G - 60.0], "SOUTH ELEVATION");
-    for (dy, label) in
-        [(0.0, "LEVEL 1 EL. 100'-0\""), (168.0, "LEVEL 2 EL. 114'-0\""), (312.0, "T.O. ROOF EL. 126'-0\""), (354.0, "T.O. PARAPET EL. 129'-6\"")]
-    {
+    for (dy, label) in [(0.0, "LEVEL 1 EL. 100'-0\""), (168.0, "LEVEL 2 EL. 114'-0\""), (312.0, "T.O. ROOF EL. 126'-0\""), parapet_line] {
         line(&mut s, [-60.0, G + dy], [540.0, G + dy]);
         text(&mut s, [560.0, G + dy + 6.0], label);
     }
@@ -64,13 +70,15 @@ fn drawing() -> Session {
     layer(&mut s, "A-ROOF");
     rect(&mut s, [2000.0, 0.0], [2480.0, 360.0]);
     rect(&mut s, [2008.0, 8.0], [2472.0, 352.0]);
-    text(&mut s, [2200.0, 320.0], "PARAPET 3'-6\"");
+    if let Some(note) = parapet_note {
+        text(&mut s, [2200.0, 320.0], note);
+    }
     line(&mut s, [2100.0, 180.0], [2400.0, 180.0]);
     line(&mut s, [2400.0, 180.0], [2388.0, 186.0]);
     line(&mut s, [2400.0, 180.0], [2388.0, 174.0]);
     text(&mut s, [2240.0, 190.0], "SLOPE 1/4\" / FT");
     poly(&mut s, &[[2440.0, 150.0], [2470.0, 180.0], [2440.0, 210.0], [2410.0, 180.0]]);
-    text(&mut s, [2430.0, 178.0], "CRICKET");
+    text(&mut s, [2430.0, 178.0], "CRICKET 6\"");
     rect(&mut s, [2100.0, 240.0], [2172.0, 288.0]);
     text(&mut s, [2105.0, 260.0], "RTU-1 H=4'-6\"");
     s.execute(
@@ -187,6 +195,8 @@ fn model_build_makes_the_outside() {
     let glass = &made(&s, "facade-glass")[0];
     assert_eq!(z(glass), (0.0, 120.0));
     assert!(glass.vertices.iter().all(|v| v.y < 0.0));
+    // 10' to 30' from the left as seen from the south: x 120 to 360.
+    assert_near(extent(glass, |v| v.x), (120.0, 360.0));
     // The south walls are named brick.
     let brick = s.doc().unwrap().model.iter().filter(|e| e.common.xdata.iter().any(|t| t.value == "facade:South:BRICK")).count();
     assert!(brick >= 1);
@@ -263,4 +273,204 @@ fn auto_roof_includes_parapet_from_datum() {
     let (_, parapet_hi) = z(&parapets[0]);
     let expected_parapet_z = 15.0 * 12.0; // 180
     assert!((parapet_hi - expected_parapet_z).abs() < 1.0, "parapet top {parapet_hi} should be near {expected_parapet_z}");
+}
+
+fn extent(m: &Mesh, f: impl Fn(&cadaddy_engine::geom::Vec3) -> f64) -> (f64, f64) {
+    m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(f(v)), hi.max(f(v))))
+}
+
+/// Plan coordinates, to rounding.
+#[track_caller]
+fn assert_near(got: (f64, f64), want: (f64, f64)) {
+    assert!((got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9, "{got:?} != {want:?}");
+}
+
+const ELEVATION: [f64; 4] = [-200.0, G - 100.0, 800.0, G + 500.0];
+const ROOF_PLAN: [f64; 4] = [1900.0, -100.0, 3000.0, 1000.0];
+
+/// The parapet's top once built (the roof's high point is 322: 26' + 10").
+fn built_parapet_top(s: &mut Session) -> f64 {
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["parapets"], json!(1), "{r}");
+    z(&made(s, "parapet")[0]).1
+}
+
+fn roof_parapet(sp: &Value) -> (Value, Value, Value) {
+    let r = &sp["exterior"]["roofs"][0];
+    (r["parapet_ft"].clone(), r["parapet_status"].clone(), r["parapet_from"].clone())
+}
+
+#[test]
+fn the_elevation_parapet_beats_the_default_in_either_order() {
+    // The roof plan draws the parapet (its inner line) with no height note; the elevation
+    // gives 3'-6" (T.O. PARAPET 129'-6" over T.O. ROOF 126'-0").
+    let line = (354.0, "T.O. PARAPET EL. 129'-6\"");
+    let read = (json!(3.5), json!("read"), json!("elevation"));
+    // (a) The elevation first: there is no roof yet, the height is kept for the roof level.
+    let mut s = drawing_with(None, line);
+    let e = s.execute("elev.read", &json!({"region": ELEVATION, "apply": true})).unwrap();
+    assert_eq!(e["parapet"], json!({"level": "Roof", "height_ft": 3.5, "applied": true, "roofs": [], "kept": []}), "{e}");
+    assert_eq!(spec(&mut s)["exterior"]["parapets"], json!([{"level": "Roof", "height_ft": 3.5, "facade": "south"}]));
+    let r = s.execute("roof.read", &json!({"region": ROOF_PLAN, "apply": true})).unwrap();
+    assert_eq!(r["roofs"][0]["parapet_ft"], json!(3.5), "{r}");
+    assert_eq!(r["assumed"], json!([]), "the elevation gave the height: nothing assumed");
+    assert_eq!(roof_parapet(&spec(&mut s)), read);
+    let a = built_parapet_top(&mut s);
+    assert!((a - (322.0 + 42.0)).abs() < 1e-9, "{a}");
+    // (b) The roof plan first: a 3'-0" default, marked; the elevation then replaces it.
+    let mut s = drawing_with(None, line);
+    let r = s.execute("roof.read", &json!({"region": ROOF_PLAN, "apply": true})).unwrap();
+    assert_eq!(r["roofs"][0]["parapet_ft"], json!(3.0));
+    assert_eq!(r["assumed"][0]["item"], json!("Roof 1"));
+    assert_eq!(r["assumed"][0]["value"], json!("parapet_ft"));
+    assert_eq!(roof_parapet(&spec(&mut s)), (json!(3.0), json!("default"), json!("default")));
+    let e = s.execute("elev.read", &json!({"region": ELEVATION, "apply": true})).unwrap();
+    assert_eq!(e["parapet"], json!({"level": "Roof", "height_ft": 3.5, "applied": true, "roofs": ["Roof 1"], "kept": []}), "{e}");
+    assert_eq!(e["conflicts"], json!([]));
+    assert_eq!(roof_parapet(&spec(&mut s)), read);
+    let b = built_parapet_top(&mut s);
+    assert!((b - (322.0 + 42.0)).abs() < 1e-9, "{b}");
+    assert_eq!(a, b, "the same either way");
+    // A preview says what it would do and changes nothing.
+    let mut s = drawing_with(None, line);
+    let e = s.execute("elev.read", &json!({"region": ELEVATION})).unwrap();
+    assert_eq!(e["parapet"]["applied"], json!(false));
+    assert!(spec(&mut s)["exterior"]["parapets"].is_null());
+}
+
+#[test]
+fn a_roof_plan_note_is_kept_and_a_disagreement_reported() {
+    // The roof plan notes 3'-6"; the elevation shows 4'-0" (130'-0" over 126'-0").
+    let line = (360.0, "T.O. PARAPET EL. 130'-0\"");
+    let conflict = |c: &Value| (c["roof"].clone(), c["roof_plan_ft"].clone(), c["elevation_ft"].clone(), c["kept_ft"].clone());
+    let want = (json!("Roof 1"), json!(3.5), json!(4.0), json!(3.5));
+    // Roof plan, then elevation: the elevation's answer reports it.
+    let mut s = drawing_with(Some("PARAPET 3'-6\""), line);
+    s.execute("roof.read", &json!({"region": ROOF_PLAN, "apply": true})).unwrap();
+    let e = s.execute("elev.read", &json!({"region": ELEVATION, "apply": true})).unwrap();
+    assert_eq!(e["parapet_ft"], json!(4.0));
+    assert_eq!((e["parapet"]["roofs"].clone(), e["parapet"]["kept"].clone()), (json!([]), json!(["Roof 1"])), "{e}");
+    assert_eq!(e["conflicts"].as_array().unwrap().len(), 1, "{e}");
+    assert_eq!(conflict(&e["conflicts"][0]), want);
+    assert_eq!(roof_parapet(&spec(&mut s)), (json!(3.5), json!("read"), json!("roof plan")));
+    let top = built_parapet_top(&mut s);
+    assert!((top - (322.0 + 42.0)).abs() < 1e-9, "the roof plan's note is kept: {top}");
+    // Elevation, then roof plan: the roof plan's answer reports it.
+    let mut s = drawing_with(Some("PARAPET 3'-6\""), line);
+    let e = s.execute("elev.read", &json!({"region": ELEVATION, "apply": true})).unwrap();
+    assert_eq!(e["conflicts"], json!([]), "no roof yet");
+    let r = s.execute("roof.read", &json!({"region": ROOF_PLAN, "apply": true})).unwrap();
+    assert_eq!(r["conflicts"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(conflict(&r["conflicts"][0]), want);
+    assert_eq!(roof_parapet(&spec(&mut s)), (json!(3.5), json!("read"), json!("roof plan")));
+}
+
+#[test]
+fn defaulted_values_are_marked() {
+    let mut s = drawing();
+    // The existing fixture: every value is on the drawings.
+    let r = s.execute("roof.read", &json!({"region": ROOF_PLAN, "apply": true})).unwrap();
+    assert_eq!(r["assumed"], json!([]), "{r}");
+    let e = s.execute("elev.read", &json!({"region": ELEVATION})).unwrap();
+    assert_eq!(e["assumed"], json!([]), "{e}");
+    let sp = spec(&mut s);
+    let x = &sp["exterior"];
+    assert_eq!((x["roofs"][0]["parapet_status"].clone(), x["roofs"][0]["slope"]["direction_status"].clone()), (json!("read"), json!("read")));
+    assert_eq!((x["crickets"][0]["height_status"].clone(), x["equipment"][0]["height_status"].clone()), (json!("read"), json!("read")));
+    // A second roof plan: a parapet line with no note, a unit without H=, a cricket without a
+    // height, and a slope arrow with no head.
+    layer(&mut s, "A-ROOF");
+    rect(&mut s, [4000.0, 0.0], [4480.0, 360.0]);
+    rect(&mut s, [4008.0, 8.0], [4472.0, 352.0]);
+    line(&mut s, [4100.0, 180.0], [4400.0, 180.0]);
+    text(&mut s, [4240.0, 190.0], "SLOPE 1/4\" / FT");
+    poly(&mut s, &[[4440.0, 150.0], [4470.0, 180.0], [4440.0, 210.0], [4410.0, 180.0]]);
+    text(&mut s, [4430.0, 178.0], "CRICKET");
+    rect(&mut s, [4100.0, 240.0], [4172.0, 288.0]);
+    text(&mut s, [4105.0, 260.0], "RTU-2");
+    let r = s.execute("roof.read", &json!({"region": [3900, -100, 5000, 1000], "apply": true})).unwrap();
+    let mut got: Vec<(String, String)> = r["assumed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["item"].as_str().unwrap().to_string(), a["value"].as_str().unwrap().to_string()))
+        .collect();
+    got.sort();
+    let want: Vec<(String, String)> = [("Cricket 1", "height_ft"), ("RTU-2", "height_ft"), ("Roof 1", "parapet_ft"), ("Roof 1", "slope.down")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    assert_eq!(got, want, "{r}");
+    let value =
+        |item: &str, v: &str| r["assumed"].as_array().unwrap().iter().find(|a| a["item"] == item && a["value"] == v).unwrap()["assumed"].clone();
+    assert_eq!((value("Roof 1", "parapet_ft"), value("RTU-2", "height_ft"), value("Cricket 1", "height_ft")), (json!(3.0), json!(4.0), json!(0.5)));
+    assert_eq!(value("Roof 1", "slope.down"), json!([1.0, 0.0]), "to the end drawn last");
+    // Stored as defaults, and bspec.get shows them.
+    let got = s.execute("bspec.get", &json!({})).unwrap();
+    let x = &got["spec"]["exterior"];
+    assert_eq!(roof_parapet(&got["spec"]), (json!(3.0), json!("default"), json!("default")));
+    assert_eq!(x["roofs"][0]["slope"]["direction_status"], json!("default"));
+    assert_eq!((x["crickets"][0]["height_status"].clone(), x["equipment"][0]["height_status"].clone()), (json!("default"), json!("default")));
+    let part = |key: &str| got["parts"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap()["text"].clone();
+    assert_eq!(part("roofs/Roof 1"), json!("Roof 1: roof on Roof, sloping 1/4\"/ft (direction assumed), 3'-0\" parapet (assumed)"));
+    assert_eq!(part("equipment/RTU-2"), json!("RTU-2: rooftop equipment on Roof, 4'-0\" high (assumed)"));
+}
+
+/// An elevation of the 40' (480) or 30' (360) wide face whose ground line is at `y`, titled
+/// `title`: the level lines and a storefront 10' to 30' from its left end, 10' high.
+fn elevation(s: &mut Session, y: f64, width: f64, title: &str) {
+    layer(s, "A-ELEV");
+    text(s, [100.0, y - 60.0], title);
+    for (dy, label) in [(0.0, "LEVEL 1 EL. 100'-0\""), (168.0, "LEVEL 2 EL. 114'-0\""), (312.0, "T.O. ROOF EL. 126'-0\"")] {
+        line(s, [-60.0, y + dy], [width + 60.0, y + dy]);
+        text(s, [width + 80.0, y + dy + 6.0], label);
+    }
+    rect(s, [0.0, y], [width, y + 312.0]);
+    rect(s, [120.0, y], [360.0, y + 120.0]);
+    for x in [180.0, 240.0, 300.0] {
+        line(s, [x, y], [x, y + 120.0]);
+    }
+}
+
+#[test]
+fn north_east_and_west_glass_lands_on_its_own_face() {
+    let mut s = drawing();
+    let sides = [("North", -3000.0, 480.0), ("East", -4000.0, 360.0), ("West", -5000.0, 360.0)];
+    for (side, y, width) in sides {
+        elevation(&mut s, y, width, &format!("{} ELEVATION", side.to_ascii_uppercase()));
+        let r = s.execute("elev.read", &json!({"region": [-100.0, y - 100.0, 700.0, y + 450.0], "apply": true})).unwrap();
+        assert_eq!(r["facade"], json!(side), "{r}");
+        let glass = r["bands"].as_array().unwrap().iter().find(|b| b["kind"] == "glass").cloned().unwrap();
+        assert_eq!((glass["start_ft"].clone(), glass["end_ft"].clone()), (json!(10.0), json!(30.0)), "{side}: {r}");
+    }
+    // A facade given by name reads the same as one named by its title.
+    let r = s.execute("elev.read", &json!({"region": [-100.0, -5100.0, 700.0, -4550.0], "facade": "west"})).unwrap();
+    assert_eq!(r["facade"], json!("West"));
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["facadeGlass"], json!(3), "{r}");
+    let on = |side: &str| -> Mesh {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("facade-glass") && e.common.xdata.iter().any(|t| t.value == side))
+            .find_map(|e| if let EntityKind::Mesh(m) = &e.kind { Some(m.clone()) } else { None })
+            .unwrap()
+    };
+    // North, seen from the north: its left end is the east end, so 10'-30' is x 360 down to
+    // 120, outside the y = 360 face.
+    let n = on("North");
+    assert_near(extent(&n, |v| v.x), (120.0, 360.0));
+    assert_eq!(z(&n), (0.0, 120.0));
+    assert!(n.vertices.iter().all(|v| v.y >= 360.0) && n.vertices.iter().any(|v| v.y > 360.0), "north glass outside the north face");
+    // East: left end is the south end, so y 120 to 360, outside the x = 480 face.
+    let e = on("East");
+    assert_near(extent(&e, |v| v.y), (120.0, 360.0));
+    assert_eq!(z(&e), (0.0, 120.0));
+    assert!(e.vertices.iter().all(|v| v.x >= 480.0) && e.vertices.iter().any(|v| v.x > 480.0), "east glass outside the east face");
+    // West: left end is the north end, so y 240 down to 0, outside the x = 0 face.
+    let w = on("West");
+    assert_near(extent(&w, |v| v.y), (0.0, 240.0));
+    assert_eq!(z(&w), (0.0, 120.0));
+    assert!(w.vertices.iter().all(|v| v.x <= 0.0) && w.vertices.iter().any(|v| v.x < 0.0), "west glass outside the west face");
 }
