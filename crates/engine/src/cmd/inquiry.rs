@@ -963,6 +963,57 @@ impl AreaM {
             AreaMode::Subtract => self.total - v,
         }
     }
+    /// Input while a height is pending: typed, or given by two points (their distance).
+    fn height_input(&mut self, s: &mut Session, i: Input) -> Step {
+        match (i, self.height_from) {
+            (Input::Point(p), None) => self.height_from = Some(p),
+            (Input::Point(p), Some(from)) => {
+                self.height_from = None;
+                return self.height(s, p.dist(from));
+            }
+            (Input::Text(t), None) => match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
+                Some(h) => return self.height(s, h),
+                None => s.echo("Requires a distance."),
+            },
+            (Input::Enter, None) => s.echo("Requires a height."),
+            (Input::Enter, Some(_)) => s.echo("Requires a second point."),
+            (Input::Text(_), Some(_)) => s.echo("Requires a point."),
+            _ => {}
+        }
+        Step::Continue
+    }
+
+    /// Input while the objects to measure are picked.
+    fn object_input(&mut self, s: &mut Session, i: Input) -> Step {
+        match i {
+            Input::Pick(hs) => {
+                for h in hs {
+                    match object_area(s, h) {
+                        Ok((a, per)) => {
+                            if self.measured(s, a, per) == Step::Done {
+                                return Step::Done;
+                            }
+                            // A single volume takes the first object with an area.
+                            if self.volume && self.mode == AreaMode::Single {
+                                break;
+                            }
+                        }
+                        Err(_) => s.echo("The selected object has no area."),
+                    }
+                }
+            }
+            Input::Enter => {
+                self.object = false;
+                if self.mode == AreaMode::Single {
+                    return Step::Done;
+                }
+            }
+            Input::Text(_) | Input::Keyword(_) => s.echo("*Invalid selection*"),
+            _ => {}
+        }
+        Step::Continue
+    }
+
     /// Measure the oldest pending area's volume with height `h`.
     fn height(&mut self, s: &mut Session, h: f64) -> Step {
         match self.pending.first().map(|a| a * h.abs()) {
@@ -1042,52 +1093,10 @@ impl Interactive for AreaM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if !self.pending.is_empty() {
-            // A height is typed, or given by two points (their distance).
-            match (i, self.height_from) {
-                (Input::Point(p), None) => self.height_from = Some(p),
-                (Input::Point(p), Some(from)) => {
-                    self.height_from = None;
-                    return Ok(self.height(s, p.dist(from)));
-                }
-                (Input::Text(t), None) => match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
-                    Some(h) => return Ok(self.height(s, h)),
-                    None => s.echo("Requires a distance."),
-                },
-                (Input::Enter, None) => s.echo("Requires a height."),
-                (Input::Enter, Some(_)) => s.echo("Requires a second point."),
-                (Input::Text(_), Some(_)) => s.echo("Requires a point."),
-                _ => {}
-            }
-            return Ok(Step::Continue);
+            return Ok(self.height_input(s, i));
         }
         if self.object {
-            match i {
-                Input::Pick(hs) => {
-                    for h in hs {
-                        match object_area(s, h) {
-                            Ok((a, per)) => {
-                                if self.measured(s, a, per) == Step::Done {
-                                    return Ok(Step::Done);
-                                }
-                                // A single volume takes the first object with an area.
-                                if self.volume && self.mode == AreaMode::Single {
-                                    break;
-                                }
-                            }
-                            Err(_) => s.echo("The selected object has no area."),
-                        }
-                    }
-                }
-                Input::Enter => {
-                    self.object = false;
-                    if self.mode == AreaMode::Single {
-                        return Ok(Step::Done);
-                    }
-                }
-                Input::Text(_) | Input::Keyword(_) => s.echo("*Invalid selection*"),
-                _ => {}
-            }
-            return Ok(Step::Continue);
+            return Ok(self.object_input(s, i));
         }
         if self.length {
             if let Some(p) = length_input(&self.pts, i)? {
