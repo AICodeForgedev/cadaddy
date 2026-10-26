@@ -190,7 +190,9 @@ pub struct Language {
 pub static LANGUAGES: [Language; 16] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     // Greek: one for exactly 1; other for zero and all other integer counts.
-    Language { code: "el", name: "Ελληνικά", source: include_str!("i18n/el.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language {
+        code: "el", name: "Ελληνικά", source: include_str!("i18n/el.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new()
+    },
     Language {
         code: "uk", name: "Українська", source: include_str!("i18n/uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
     },
@@ -208,7 +210,9 @@ pub static LANGUAGES: [Language; 16] = [
     Language { code: "es", name: "Español", source: include_str!("i18n/es.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language { code: "cs", name: "Čeština", source: include_str!("i18n/cs.tsv"), plural: plural_cs, plural_forms: 3, catalog: OnceLock::new() },
     // Russian integer plurals follow the Ukrainian rule: one (1, 21), few (2–4), many.
-    Language { code: "ru", name: "Русский", source: include_str!("i18n/ru.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new() },
+    Language {
+        code: "ru", name: "Русский", source: include_str!("i18n/ru.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
+    },
     // French integer plurals (CLDR `fr`): one (0, 1), other, the Portuguese rule.
     Language { code: "fr", name: "Français", source: include_str!("i18n/fr.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
     // Chinese has no grammatical plural: both `@plural` forms read the same. Its glyphs come from
@@ -223,7 +227,9 @@ pub static LANGUAGES: [Language; 16] = [
     // العربية (Arabic) is right-to-left; an installed Arabic font (`theme::arabic_font`)
     // covers its glyphs, and the shell keeps egui's left-to-right run order. Six plural
     // forms: zero, one, two, few, many, other.
-    Language { code: "ar", name: "العربية", source: include_str!("i18n/ar.tsv"), plural: plural_arabic, plural_forms: 6, catalog: OnceLock::new() },
+    Language {
+        code: "ar", name: "العربية", source: include_str!("i18n/ar.tsv"), plural: plural_arabic, plural_forms: 6, catalog: OnceLock::new()
+    },
     // Hungarian uses the singular after a numeral, so one form covers every count (the Korean rule).
     Language { code: "hu", name: "Magyar", source: include_str!("i18n/hu.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
     // Turkish keeps a noun singular after a number ("3 commit"), so like Korean it has one form.
