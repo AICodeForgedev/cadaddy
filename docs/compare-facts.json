@@ -210,6 +210,9 @@
       "co.snapshot",
       "cobie.export",
       "cobie.validate",
+      "code.check",
+      "code.rules",
+      "code.select",
       "color",
       "colorbook",
       "commandhistory",
@@ -1211,7 +1214,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 52,
+    "count": 53,
     "tools": [
       "arch_read",
       "bim_from_pdf",
@@ -1223,6 +1226,7 @@
       "cancel",
       "close_all",
       "close_drawing",
+      "codebook",
       "command_line",
       "drawing_query",
       "drawing_summary",

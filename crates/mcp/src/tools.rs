@@ -66,6 +66,13 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "set_by": {"type": "string"}, "reason": {"type": "string"},
                 "label": {"type": "string"}, "path": {"type": "string"}, "merge": {"type": "boolean"}},
                 "required": ["action"]}}),
+        json!({"name": "codebook", "description": "Building-code rule book: IBC, IRC, NEC, IPC, IMC, IFC, IECC rules as data (section numbers and values in our own words; starter set — verify with your AHJ). Actions:\n- select {code: \"IRC\", edition?: 2021, jurisdiction?: \"County\"} — choose code editions for this project; no args returns the current selection.\n- rules {topic?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\", code?: \"NEC\", section?: \"210.52\", offset?, limit?} — list matching rules with section citations and values.\n- check {scope?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\"|\"all\", walls?: [{id, wall_type, stud_size?, stud_spacing_in, height_ft, ...}], rooms?: [{id, room_type, receptacle_spacing_in?, has_gfci?, ...}]} — run code checks against model data; returns findings with rule_id, cite, expected, found.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["select", "rules", "check"]},
+                "code": {"type": "string"}, "edition": {"type": "integer"}, "jurisdiction": {"type": "string"},
+                "topic": {"type": "string"}, "section": {"type": "string"}, "scope": {"type": "string"},
+                "level": {"type": "string"}, "walls": {"type": "array"}, "rooms": {"type": "array"},
+                "plumbing": {"type": "array"}, "mechanical": {"type": "array"}, "building": {"type": "array"},
+                "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
         json!({"name": "lv_devices", "description": "List fire alarm and low-voltage devices in the project. Paged: use page/page_size to navigate large lists. Filter by system (fire_alarm, data, security, tv, telephone, nurse_call, sound, all) and/or level.",
             "inputSchema": {"type": "object", "properties": {"system": {"type": "string"}, "level": {"type": "string"}, "page": {"type": "integer"}, "page_size": {"type": "integer"}}}}),
         json!({"name": "lv_sleeves", "description": "List LV/FA sleeves at wall and floor crossings. Filter by level and/or system. Each sleeve shows its size (computed from cables at NEC fill), material, fire rating and firestop.",
@@ -392,7 +399,8 @@ fn text(v: &Value) -> Value {
 }
 
 fn err_text(e: &str) -> Value {
-    json!({"content": [{"type": "text", "text": e}], "isError": true})
+    let clean: String = e.chars().map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' { '\u{FFFD}' } else { c }).collect();
+    json!({"content": [{"type": "text", "text": clean}], "isError": true})
 }
 
 /// Whether `v` fits the subset of JSON Schema the tool definitions use: `type`, `items`,
@@ -536,6 +544,22 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 o.remove("action");
             }
             exec(b, command, params)
+        }
+        "codebook" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("select") => "code.select",
+                Some("rules") => "code.rules",
+                Some("check") => "code.check",
+                Some(other) => return Err(format!(
+                    "codebook has no action `{other}` — use select, rules or check"
+                )),
+                None => return Err("codebook needs an action — start with {action: \"select\"}".into()),
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
         }
         "project_rules" => {
             let command = match a.get("action").and_then(Value::as_str) {

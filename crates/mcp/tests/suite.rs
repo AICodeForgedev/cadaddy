@@ -98,6 +98,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("lv_sleeves", json!({ "page": 1 }), json!({ "page": "one" })),
         ("lv_bom", json!({ "has_lv_docs": true }), json!({ "has_lv_docs": "yes" })),
         ("lv_connections", json!({ "page": 1 }), json!({ "page": "one" })),
+        ("codebook", json!({ "action": "rules", "topic": "framing", "limit": 5 }), json!({ "action": "fly" })),
         ("arch_read", json!({ "limit": 5 }), json!({ "limit": "ten" })),
         ("bim_job", json!({ "action": "briefing" }), json!({ "action": "fly" })),
         ("guided_job", json!({ "action": "explain", "stage": "classify" }), json!({ "action": "fly" })),
