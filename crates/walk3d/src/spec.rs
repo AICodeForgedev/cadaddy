@@ -2317,6 +2317,11 @@ impl BuildingSpec {
         self.families.iter().find(|f| layer_match(&f.block, block))
     }
 
+    /// A family whose name matches a schedule row's TYPE (case-insensitive) and kind.
+    pub fn family_by_type(&self, kind: FamilyKind, type_name: &str) -> Option<&Family> {
+        self.families.iter().find(|f| f.kind == kind && f.name.eq_ignore_ascii_case(type_name.trim()))
+    }
+
     pub fn level(&self, name: &str) -> Option<&Level> {
         self.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name))
     }
