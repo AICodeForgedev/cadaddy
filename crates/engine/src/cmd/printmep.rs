@@ -151,7 +151,7 @@ pub(crate) fn sheet_drawing(d: &Drawing, sh: &SheetRef) -> Drawing {
 
 /// Drawing units per building foot of a sheet left at paper size (its printed scale, else
 /// 1/8" = 1'-0"); none when it was imported at its scale.
-fn paper_units_per_foot(d: &Drawing, sh: &SheetRef) -> Option<f64> {
+pub(crate) fn paper_units_per_foot(d: &Drawing, sh: &SheetRef) -> Option<f64> {
     let ext = d.extents(&Space::Model);
     let (w, h) = (ext.max.x - ext.min.x, ext.max.y - ext.min.y);
     let diag = (w * w + h * h).sqrt();
@@ -473,6 +473,15 @@ pub(crate) fn load_project_sheets(
     project: &cadaddy_mepfix::printset::PrintSetProject,
     only: Option<MepKind>,
 ) -> crate::Result<(Session, Vec<SheetRef>)> {
+    load_project_plans(project, &|r| r.trade().is_some_and(|t| only.is_none_or(|o| o == t)))
+}
+
+/// The sheets of a print-set project `keep` takes, imported side by side into a scratch
+/// session: their regions and handle spans, and the session.
+pub(crate) fn load_project_plans(
+    project: &cadaddy_mepfix::printset::PrintSetProject,
+    keep: &dyn Fn(&SheetRef) -> bool,
+) -> crate::Result<(Session, Vec<SheetRef>)> {
     let mut wanted: Vec<SheetRef> = Vec::new();
     let mut pages: Vec<super::exchange::PdfPage> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -487,8 +496,7 @@ pub(crate) fn load_project_sheets(
             scale_text: sh.scale_text.clone(),
             levels: sh.levels.clone(),
         };
-        let Some(t) = r.trade() else { continue };
-        if only.is_some_and(|o| o != t) || sh.file.is_empty() || !seen.insert((sh.file.clone(), sh.page)) || pages.len() >= MAX_SHEETS {
+        if !keep(&r) || sh.file.is_empty() || !seen.insert((sh.file.clone(), sh.page)) || pages.len() >= MAX_SHEETS {
             continue;
         }
         let path = if std::path::Path::new(&sh.file).is_absolute() { sh.file.clone() } else { format!("{}/{}", project.source_dir, sh.file) };

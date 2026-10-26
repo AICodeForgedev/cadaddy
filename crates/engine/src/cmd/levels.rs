@@ -495,7 +495,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let height = feet_param(p, "height_ft")?;
     let ceiling = feet_param(p, "ceiling_ft")?;
     let mut changes: Vec<String> = Vec::new();
-    let Some(i) = sp.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&name)) else {
+    let Some(i) = sp.level_matching(&name) else {
         // A datum: only its elevation (and name) can change.
         let Some(dt) = sp.datums.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) else {
             return Err(bad("levels.set", format!("there is no level or datum named {name}")));
