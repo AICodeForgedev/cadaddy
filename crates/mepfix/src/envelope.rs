@@ -505,12 +505,7 @@ pub fn outline_from_walls(walls: Vec<([f64; 2], [f64; 2], f64)>) -> Vec<[f64; 2]
     let tol = 0.05;
     let outer: Vec<[f64; 2]> = pts
         .into_iter()
-        .filter(|p| {
-            (p[0] - lo[0]).abs() < tol
-                || (p[0] - hi[0]).abs() < tol
-                || (p[1] - lo[1]).abs() < tol
-                || (p[1] - hi[1]).abs() < tol
-        })
+        .filter(|p| (p[0] - lo[0]).abs() < tol || (p[0] - hi[0]).abs() < tol || (p[1] - lo[1]).abs() < tol || (p[1] - hi[1]).abs() < tol)
         .collect();
     if outer.len() < 3 {
         // Fallback: the bounding box as a rectangle.
@@ -542,11 +537,7 @@ pub fn outline_from_walls(walls: Vec<([f64; 2], [f64; 2], f64)>) -> Vec<[f64; 2]
             corners.push(*curr);
         }
     }
-    if corners.len() < 3 {
-        sorted
-    } else {
-        corners
-    }
+    if corners.len() < 3 { sorted } else { corners }
 }
 
 /// The model of what the truth designed.
@@ -998,7 +989,11 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
     // Q262 rooftop units with no curb.
     for (tag, pos) in &m.rooftop_units {
         let has_curb = m.curbs.iter().any(|c| {
-            c.kind == "equipment" && pos[0] >= c.min_ft[0] - 1.0 && pos[0] <= c.max_ft[0] + 1.0 && pos[1] >= c.min_ft[1] - 1.0 && pos[1] <= c.max_ft[1] + 1.0
+            c.kind == "equipment"
+                && pos[0] >= c.min_ft[0] - 1.0
+                && pos[0] <= c.max_ft[0] + 1.0
+                && pos[1] >= c.min_ft[1] - 1.0
+                && pos[1] <= c.max_ft[1] + 1.0
         });
         if !has_curb {
             out.push(EnvFlag {

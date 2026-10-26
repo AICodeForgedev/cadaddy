@@ -1142,15 +1142,11 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
     let pr = match project(s) {
         Ok(p) => p,
         Err(_) => {
-            return Ok(no_project(
-                "envelope",
-                json!({"takeoff": [], "flags": [], "spec_read": false, "notes": []}),
-            ));
+            return Ok(no_project("envelope", json!({"takeoff": [], "flags": [], "spec_read": false, "notes": []})));
         }
     };
 
-    let a_sheets: Vec<&mep_printset::SheetEntry> =
-        pr.sheets.iter().filter(|s| s.discipline == "A").collect();
+    let a_sheets: Vec<&mep_printset::SheetEntry> = pr.sheets.iter().filter(|s| s.discipline == "A").collect();
 
     // The printset DXF loading pipeline is wired through printset.open/classify (Q5128).
     // Until the DXF byte loader lands, report the sheet count and structure.

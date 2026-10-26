@@ -232,17 +232,14 @@ fn membrane_kind(desc: &str) -> (String, String) {
     } else {
         ""
     };
-    let attachment = u
-        .rsplit(", ")
-        .next()
-        .filter(|a| {
-            a.contains("ADHERED")
-                || a.contains("FASTENED")
-                || a.contains("WELDED")
-                || a.contains("APPLIED")
-                || a.contains("NAILED")
-                || a.contains("CLIPPED")
-        });
+    let attachment = u.rsplit(", ").next().filter(|a| {
+        a.contains("ADHERED")
+            || a.contains("FASTENED")
+            || a.contains("WELDED")
+            || a.contains("APPLIED")
+            || a.contains("NAILED")
+            || a.contains("CLIPPED")
+    });
     (kind.into(), attachment.map(|a| a.to_ascii_lowercase()).unwrap_or_default())
 }
 
@@ -491,13 +488,7 @@ pub fn read_envelope(
     // The exterior walls' outer face: the outermost walls of the lowest level as a polygon.
     let lowest = walls.walls.iter().map(|w| w.level.as_str()).min().unwrap_or("1").to_string();
     m.outline = outline_from_walls(
-        walls
-            .walls
-            .iter()
-            .filter(|w| w.level == lowest)
-            .take(MAX_ITEMS)
-            .map(|w| (w.a_ft, w.b_ft, w.thickness_in / 24.0))
-            .collect(),
+        walls.walls.iter().filter(|w| w.level == lowest).take(MAX_ITEMS).map(|w| (w.a_ft, w.b_ft, w.thickness_in / 24.0)).collect(),
     );
     let on_outline = |p: [f64; 2]| {
         if m.outline.is_empty() {
@@ -519,9 +510,7 @@ pub fn read_envelope(
             m.openings.push(EnvOpening { kind: kind.into(), level: w.level.clone(), width_in: wt.width_in, height_in: wt.height_in });
         }
     }
-    let has_assumed_door = exterior_doors.iter().any(|d| {
-        d.row.as_ref().is_none_or(|r| r.width_in.is_none() || r.height_in.is_none())
-    });
+    let has_assumed_door = exterior_doors.iter().any(|d| d.row.as_ref().is_none_or(|r| r.width_in.is_none() || r.height_in.is_none()));
     for d in exterior_doors {
         let (w, h) = d.row.as_ref().map_or((Some(d.width_in), None), |r| (r.width_in.or(Some(d.width_in)), r.height_in));
         m.openings.push(EnvOpening { kind: "door".into(), level: d.level.clone(), width_in: w.unwrap_or(36.0), height_in: h.unwrap_or(84.0) });
@@ -581,9 +570,13 @@ fn annotate_sources(res: &mut EnvelopeResult, has_assumed_door: bool) {
             it.source = "A-504".into();
             it.status = "read".into();
             // Edge items specifically from the drainage plan.
-            if c == "roof.coping" || c == "roof.edge_metal" || c == "roof.parapet.base_flashing"
-                || c == "roof.curbs.base_flashing" || c == "roof.walkway"
-                || c.starts_with("roof.crickets") || c.starts_with("roof.saddles")
+            if c == "roof.coping"
+                || c == "roof.edge_metal"
+                || c == "roof.parapet.base_flashing"
+                || c == "roof.curbs.base_flashing"
+                || c == "roof.walkway"
+                || c.starts_with("roof.crickets")
+                || c.starts_with("roof.saddles")
             {
                 it.source = "A-104".into();
             }

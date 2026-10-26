@@ -49,11 +49,7 @@ fn planted_gaps_are_flagged() {
         }
         // Nothing planted: only natural flags (drain on beam, or r_value on shingle/metal roofs).
         if e.planted.is_empty() {
-            assert!(
-                e.flags.iter().all(|f| f.kind == "drain_structure" || f.kind == "r_value"),
-                "seed {seed}: {:?}",
-                e.flags
-            );
+            assert!(e.flags.iter().all(|f| f.kind == "drain_structure" || f.kind == "r_value"), "seed {seed}: {:?}", e.flags);
         }
     }
     assert_eq!(seen.len(), 4, "{seen:?}");
@@ -69,11 +65,7 @@ fn reader_planted_gaps_are_flagged() {
         let e = t.envelope.as_ref().unwrap();
         for p in &e.planted {
             let kind = if p == "missing_detail" { "no_curb_detail" } else { p.as_str() };
-            assert!(
-                r.flags.iter().any(|f| f.kind == kind),
-                "seed {seed}: reader did not flag planted {p}: {:?}",
-                r.flags
-            );
+            assert!(r.flags.iter().any(|f| f.kind == kind), "seed {seed}: reader did not flag planted {p}: {:?}", r.flags);
             seen.insert(p.clone());
         }
         // With nothing planted, only natural flags from the reader.
@@ -185,8 +177,8 @@ fn takeoff_by_hand() {
     // Q262: a rooftop unit at (80, 25) has no curb → no_curb flag.
     let mut q262 = m.clone();
     q262.rooftop_units = vec![
-        ("AHU-1".into(), [22.0, 37.0]),  // on RTU-1 curb → no flag
-        ("AHU-2".into(), [80.0, 25.0]),  // no curb here → no_curb flag
+        ("AHU-1".into(), [22.0, 37.0]), // on RTU-1 curb → no flag
+        ("AHU-2".into(), [80.0, 25.0]), // no curb here → no_curb flag
     ];
     let f262 = flags(&q262);
     assert!(f262.iter().any(|f| f.kind == "no_curb" && f.subject == "AHU-2"), "Q262 no_curb: {f262:?}");
@@ -206,16 +198,9 @@ fn takeoff_by_hand() {
 /// Area: 100*50 - 40*20 = 5000 - 800 = 4200 SF
 #[test]
 fn l_shaped_building_outline() {
-    use cadaddy_mepfix::envelope::{takeoff, polygon_perimeter};
+    use cadaddy_mepfix::envelope::{polygon_perimeter, takeoff};
     // The L-shaped outline (counterclockwise from bottom-left).
-    let outline = vec![
-        [0.0, 0.0],
-        [100.0, 0.0],
-        [100.0, 30.0],
-        [60.0, 30.0],
-        [60.0, 50.0],
-        [0.0, 50.0],
-    ];
+    let outline = vec![[0.0, 0.0], [100.0, 0.0], [100.0, 30.0], [60.0, 30.0], [60.0, 50.0], [0.0, 50.0]];
     assert!((polygon_perimeter(&outline) - 300.0).abs() < 0.01, "perimeter {}", polygon_perimeter(&outline));
     let area = cadaddy_mepfix::envelope::polygon_area_pub(&outline);
     assert!((area - 4200.0).abs() < 0.01, "area {area}");
@@ -274,7 +259,11 @@ fn fixture_envelope_read_equals_truth() {
     assert_eq!(s.flags_found, s.flags_total, "seed {seed}: flags: {s:?}");
     assert!(r.spec_read, "seed {seed}: spec not read");
     // Source/status: every takeoff item has a source, and at least one is "rule" (wall.sealant).
-    assert!(r.takeoff.iter().all(|i| !i.source.is_empty() || i.status == "rule"), "seed {seed}: missing source: {:?}", r.takeoff.iter().find(|i| i.source.is_empty() && i.status != "rule"));
+    assert!(
+        r.takeoff.iter().all(|i| !i.source.is_empty() || i.status == "rule"),
+        "seed {seed}: missing source: {:?}",
+        r.takeoff.iter().find(|i| i.source.is_empty() && i.status != "rule")
+    );
     assert!(r.takeoff.iter().any(|i| i.status == "rule"), "seed {seed}: no rule-status item");
 }
 
