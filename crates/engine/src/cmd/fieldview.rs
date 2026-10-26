@@ -78,17 +78,17 @@ impl Place {
 
 /// A generated entity's tags after its `CADADDY_WALLGEN` app name: part, level, source, then
 /// `key:value` extras (MEP: `system:`, `kind:`, `part:`).
-fn wallgen_tags(e: &Entity) -> Vec<&str> {
+pub(crate) fn wallgen_tags(e: &Entity) -> Vec<&str> {
     let x = &e.common.xdata;
     let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return Vec::new() };
     x.iter().skip(at + 1).take(64).take_while(|t| t.code == 1000).map(|t| t.value.as_str()).collect()
 }
 
-fn tag_value<'a>(tags: &[&'a str], key: &str) -> Option<&'a str> {
+pub(crate) fn tag_value<'a>(tags: &[&'a str], key: &str) -> Option<&'a str> {
     tags.iter().find_map(|t| t.strip_prefix(key).and_then(|v| v.strip_prefix(':')))
 }
 
-fn mesh_box(e: &Entity) -> Option<([f64; 3], [f64; 3])> {
+pub(crate) fn mesh_box(e: &Entity) -> Option<([f64; 3], [f64; 3])> {
     let EntityKind::Mesh(m) = &e.kind else { return None };
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
