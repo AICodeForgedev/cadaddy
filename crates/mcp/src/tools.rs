@@ -136,7 +136,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "levels": {"type": "string", "description": "\"auto\" (default)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
-        json!({"name": "workflows", "description": "List the main agent workflows with exact example MCP calls. Returns a list of named flows (pdf-to-bim, view-3d, plot-set, convert-folder) each with steps and example tool calls.",
+        json!({"name": "workflows", "description": "List the main agent workflows with exact example MCP calls. Returns a list of named flows (pdf-to-bim, view-3d, plot-set, bim-work, convert-folder) each with steps and example tool calls.",
             "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "job id (omit to see all)"}}}}),
@@ -632,6 +632,19 @@ fn workflows_list() -> Value {
                     "2. plot {folder: \"/drawings\", out: \"/pdfs\"}",
                 ],
                 "example": "plot {folder: \"/path/to/drawings\", out: \"/path/to/output\"}"
+            },
+            {
+                "name": "bim-work",
+                "description": "Coordinate, take off and estimate a built BIM model: clashes with fixes, issues (BCF), quantities, cost",
+                "steps": [
+                    "1. open {path: \"building.cdy\"} (a model built with bim_from_pdf or model.build)",
+                    "2. execute {command: \"bim.clash\", params: {a: \"electrical\", b: \"mechanical\"}} — clashes with ids, status and a viewpoint each",
+                    "3. execute {command: \"bim.clash.fix\", params: {id: \"C-…\", approve: true}} — the lower-priority trade moves; checked again",
+                    "4. execute {command: \"bim.issue.create\", params: {title: \"…\", kind: \"rfi\", elements: [\"1A2\"], assignee: \"…\"}}, then bcf.export {path: \"issues.bcf\", version: \"3.0\"}",
+                    "5. execute {command: \"bim.takeoff\", params: {group_by: \"level\"}} — counts, lengths, areas with element handles; bim.takeoff.show {line: 0} highlights one in 3D",
+                    "6. execute {command: \"bim.estimate\", params: {cost_table: \"costs.csv\", revision: \"A\"}} — CSV/XLSX columns item, unit, material, labor_hrs; compare_to: \"A\" later gives the change order"
+                ],
+                "example": "execute {command: \"bim.takeoff\", params: {group_by: \"level\"}}"
             },
             {
                 "name": "convert-folder",

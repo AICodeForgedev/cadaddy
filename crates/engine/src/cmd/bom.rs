@@ -353,8 +353,10 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     // Q5278: scan ALL model entities, not just MAX_LINES — built entities are appended after
     // the (potentially 800K+) imported PDF entities and the XData check is O(1) per entity.
     let mut built: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
-    for e in d.model.iter() {
-        let Some(part) = super::wallgen::made_as(e) else { continue };
+    // A model built from a print comes after the sheet's own objects (tens of thousands of
+    // them): scan ALL model entities — built entities are appended after the (potentially
+    // 800K+) imported PDF entities and the XData check is O(1) per entity (Q5278).
+    for (e, part) in d.model.iter().filter_map(|e| Some((e, super::wallgen::made_as(e)?))) {
         let level = super::bspec::made_level(e).unwrap_or_default();
         let entry = built.entry((part, level)).or_insert((0, Vec::new()));
         entry.0 += 1;

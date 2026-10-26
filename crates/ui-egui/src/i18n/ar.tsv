@@ -3133,3 +3133,54 @@ menu	View	عرض
 	PDF exported to {path}.	تم تصدير PDF إلى {path}.
 	Clash detection failed.	فشل اكتشاف التعارضات.
 	Import Cost Table	استيراد جدول التكاليف
+	BIM View	عرض BIM
+	Trade Colours	ألوان التخصصات
+	Element Properties	خصائص العنصر
+	Tree	الشجرة
+	Colours	الألوان
+	Ghost Architecture	عمارة شفافة
+	Sheet Lines in 3D	خطوط اللوحة في ثلاثي الأبعاد
+	Nothing is built yet. Use Plans to Model first.	لم يُبنَ شيء بعد. استخدم «من المخططات إلى النموذج» أولاً.
+	Select one element to see its properties.	اختر عنصرًا واحدًا لعرض خصائصه.
+	Not part of the built model.	ليس جزءًا من النموذج المبني.
+	Category	الفئة
+	Trade	التخصص
+	Circuit	الدائرة
+	Source	المصدر
+	Issues	المشكلات
+	Show on Sheet	إظهار على اللوحة
+	Reset Colours	إعادة تعيين الألوان
+	Architecture	العمارة
+	Structure	الإنشاءات
+	Fire Protection	الحماية من الحريق
+	Doors and Windows	الأبواب والنوافذ
+	Supply Air Duct	مجرى هواء التغذية
+	Return Air Duct	مجرى هواء الراجع
+	Exhaust Air Duct	مجرى هواء العادم
+	Outside Air Duct	مجرى الهواء الخارجي
+	Duct	مجرى هواء
+	Air Terminals	مخارج الهواء
+	Equipment	المعدات
+	Domestic Cold Water	المياه الباردة المنزلية
+	Domestic Hot Water	المياه الساخنة المنزلية
+	Sanitary	الصرف الصحي
+	Vent	التهوية
+	Storm	مياه الأمطار
+	Gas	الغاز
+	Piping	الأنابيب
+	Plumbing Fixtures	التجهيزات الصحية
+	Conduit	الأنابيب الكهربائية
+	Cable Tray	حامل الكابلات
+	Electrical Devices	الأجهزة الكهربائية
+	Light Fixtures	وحدات الإنارة
+	Clash Check	فحص التعارضات
+	Fix Clash	إصلاح التعارض
+	Model Takeoff	حصر كميات النموذج
+	Show Takeoff Line	إظهار بند الحصر
+	Model Estimate	تقدير تكلفة النموذج
+	New Issue	مشكلة جديدة
+	Update Issue	تحديث المشكلة
+	Show Issue	إظهار المشكلة
+	Issue Marks	علامات المشكلات
+	Sheet and 3D Link	ربط اللوحة بالعرض الثلاثي الأبعاد
+	PDF to BIM	PDF إلى BIM

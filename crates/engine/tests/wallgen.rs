@@ -390,6 +390,15 @@ fn plan_box(m: &Mesh) -> (f64, f64, f64, f64) {
     m.vertices.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
 }
 
+/// The plan box of a mesh's first box (8 vertices): a door's leaf or a window's glass, without
+/// the frame boxes (jambs, head, sill, casings) drawn after it.
+fn first_box(m: &Mesh) -> (f64, f64, f64, f64) {
+    m.vertices
+        .iter()
+        .take(8)
+        .fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
+}
+
 /// Whether any wall box holds the point (each box is 8 vertices).
 fn wall_at(walls: &[Mesh], x: f64, y: f64, z: f64) -> bool {
     walls.iter().any(|m| {
@@ -426,11 +435,11 @@ fn door_blocks_sit_in_their_openings() {
     assert!(wall_at(&walls, 378.0, 357.0, 12.0) && wall_at(&walls, 378.0, 357.0, 100.0) && !wall_at(&walls, 378.0, 357.0, 50.0));
     let glass = made(&s, "window");
     assert_eq!(glass.len(), 1);
-    let (x0, y0, x1, y1) = plan_box(glass.first().unwrap());
+    let (x0, y0, x1, y1) = first_box(glass.first().unwrap());
     assert!((x0 - 360.0).abs() < 1e-6 && (x1 - 396.0).abs() < 1e-6 && y0 > 354.0 && y1 < 360.0, "{x0} {y0} {x1} {y1}");
     // Each leaf: hinged at its jamb on the inside face, inside its opening, standing open 3' into
     // the room.
-    let mut leaves: Vec<(f64, f64, f64, f64)> = made(&s, "door").iter().map(plan_box).collect();
+    let mut leaves: Vec<(f64, f64, f64, f64)> = made(&s, "door").iter().map(first_box).collect();
     leaves.sort_by(|a, b| a.0.total_cmp(&b.0));
     assert_eq!(leaves.len(), 3, "{leaves:?}");
     let near = |a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {

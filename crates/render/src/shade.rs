@@ -116,6 +116,9 @@ pub struct Line3 {
     pub b: Vec3,
     pub color: Rgb,
     pub edge: bool,
+    /// An edge of a see-through surface (a ghosted wall): the styles that draw edges draw it
+    /// faint.
+    pub faint: bool,
 }
 
 /// What a shaded view draws.
@@ -252,9 +255,9 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             }
         }
     };
-    let line = |out: &mut Scene, a: Vec3, b: Vec3, color: Rgb, edge: bool| {
+    let line = |out: &mut Scene, a: Vec3, b: Vec3, color: Rgb, edge: bool, faint: bool| {
         if let Some((a, b)) = crate::live::clip_segment(a, b, &planes) {
-            push_line(out, Line3 { a, b, color, edge });
+            push_line(out, Line3 { a, b, color, edge, faint: edge && faint });
         }
     };
     for e in store.iter() {
@@ -262,6 +265,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             continue;
         }
         let (color, surface) = colors.get(&e.handle).copied().unwrap_or((ink, Rgb(255, 255, 255)));
+        let faint = d.material_of(e, None).is_some_and(|m| m.opacity < 0.99);
         out.owner_now = e.handle;
         match &e.kind {
             EntityKind::Mesh(m) => {
@@ -272,7 +276,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 }
                 for (a, b) in m.edges() {
                     if let (Some(a), Some(b)) = (m.vertices.get(a as usize), m.vertices.get(b as usize)) {
-                        line(&mut out, *a, *b, color, true);
+                        line(&mut out, *a, *b, color, true, faint);
                     }
                 }
             }
@@ -287,7 +291,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in cut.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
                         }
                     }
                 }
@@ -302,7 +306,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in so.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
                         }
                     }
                 }
@@ -316,7 +320,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in sf.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
                         }
                     }
                 }
@@ -336,7 +340,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                     if f.hidden_edges & (1 << i) == 0
                         && let (Some(p), Some(q)) = (corners.get(i), corners.get((i + 1) % n))
                     {
-                        line(&mut out, *p, *q, color, true);
+                        line(&mut out, *p, *q, color, true, faint);
                     }
                 }
             }
@@ -349,9 +353,9 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                         if let (Some(p), Some(q)) = (pts.get(i), pts.get((i + 1) % n)) {
                             // A section plane's own outline isn't cut.
                             if matches!(k, EntityKind::SectionPlane(_)) {
-                                push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false });
+                                push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false, faint: false });
                             } else {
-                                line(&mut out, *p, *q, color, false);
+                                line(&mut out, *p, *q, color, false, false);
                             }
                         }
                     }
@@ -379,7 +383,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             Kind::Polyline => {
                 for w in pts.windows(2) {
                     if let [a, b] = w {
-                        push_line(&mut out, Line3 { a: lift(a), b: lift(b), color, edge: false });
+                        push_line(&mut out, Line3 { a: lift(a), b: lift(b), color, edge: false, faint: false });
                     }
                 }
             }
@@ -450,7 +454,7 @@ impl ShadeView {
     }
 
     /// A world point on the image: pixel x, y (down) and depth (larger is nearer the viewer).
-    fn screen(&self, p: Vec3) -> (f64, f64, f64) {
+    pub(crate) fn screen(&self, p: Vec3) -> (f64, f64, f64) {
         let px = self.height / f64::from(self.height_px);
         let x = (p.dot(self.right) - self.center.x) / px + f64::from(self.width_px) / 2.0;
         let y = f64::from(self.height_px) / 2.0 - (p.dot(self.up) - self.center.y) / px;
@@ -591,12 +595,22 @@ pub fn rasterize_lit(scene: &Scene, v: &ShadeView, style: VisualStyle, bg: Rgb, 
         if l.edge && !edges {
             continue;
         }
-        let c = if l.edge && style == VisualStyle::ShadedEdges { dark } else { l.color };
+        let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
+            (true, true) => faint_ink(dark, bg),
+            (true, false) => dark,
+            _ => l.color,
+        };
         let (a, b) = (v.screen(l.a), v.screen(l.b));
         raster_line(a, b, [c.0, c.1, c.2], &mut color, &depth, w, h, if faces { Some(bias) } else { None });
     }
     let rgba: Vec<u8> = color.into_iter().flatten().collect();
     Raster::new(v.width_px, v.height_px, rgba).unwrap_or(Raster { width: 1, height: 1, rgba: vec![bg.0, bg.1, bg.2, 255] })
+}
+
+/// The ink of a see-through surface's edges ([`Line3::faint`]): `dark` most of the way to `bg`.
+pub fn faint_ink(dark: Rgb, bg: Rgb) -> Rgb {
+    let mix = |a: u8, b: u8| ((f64::from(a) * 0.3 + f64::from(b) * 0.7).round().clamp(0.0, 255.0)) as u8;
+    Rgb(mix(dark.0, bg.0), mix(dark.1, bg.1), mix(dark.2, bg.2))
 }
 
 /// Shadow map size (texels on a side).
@@ -1346,7 +1360,7 @@ mod tests {
         assert_eq!((v.width_px, v.height_px), (1, MAX_SIDE));
         let s = Scene {
             tris: vec![Tri::plain([Vec3::ZERO; 3], Rgb(1, 2, 3))],
-            lines: vec![Line3 { a: Vec3::ZERO, b: Vec3::new(1e300, 0.0, 0.0), color: Rgb(1, 2, 3), edge: false }],
+            lines: vec![Line3 { a: Vec3::ZERO, b: Vec3::new(1e300, 0.0, 0.0), color: Rgb(1, 2, 3), edge: false, faint: false }],
             ..Scene::default()
         };
         let r = rasterize(&s, &ShadeView::new(None, Vec2::ZERO, 10.0, 32, 32), VisualStyle::ShadedEdges, Rgb(9, 9, 9));

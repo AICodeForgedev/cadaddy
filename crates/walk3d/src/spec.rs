@@ -42,6 +42,11 @@ pub struct BuildingSpec {
     pub units_per_foot: f64,
     #[serde(default)]
     pub levels: Vec<Level>,
+    /// Stack the built levels into one building: `model.build` moves each level's 3D from over
+    /// its own plan (plans drawn side by side on one sheet) onto the lowest level's, by the
+    /// levels' bases (else the lower-left corners of their walls). The plans stay where they are.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stack: bool,
     /// Elevations the prints give for levels with no plan here (the roof, a parapet, a penthouse
     /// drawn elsewhere): they top the floor below and become IFC storeys (`levels.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -65,6 +70,10 @@ pub struct BuildingSpec {
     /// field observations.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub progress: serde_json::Value,
+    /// The BIM view (`bim.look`, `bim.trades`, `bim.tree`): the trade colour table, ghosting,
+    /// trades and tree branches shown, the level isolated.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub bim_view: serde_json::Value,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -2109,11 +2118,13 @@ impl BuildingSpec {
             version: SPEC_VERSION,
             units_per_foot: r.units_per_foot,
             levels: r.levels.clone(),
+            stack: false,
             datums: Vec::new(),
             sheets: Vec::new(),
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
             wholejob: serde_json::Value::Null,
+            bim_view: serde_json::Value::Null,
             progress: serde_json::Value::Null,
             layers,
             wall_types,
