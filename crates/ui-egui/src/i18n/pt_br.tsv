@@ -139,6 +139,7 @@
 	Close All Other Drawings	Fechar todos os outros desenhos
 	Close Array Editing	Fechar edição de matriz
 	Close Comparison	Fechar comparação
+	Export Comparison	Exportar comparação
 	Closed	Fechada
 	Coincident	Coincidente
 	Collapse Palettes	Recolher paletas
@@ -191,6 +192,7 @@
 	Current selection	Seleção atual
 	Current: {color}	Atual: {color}
 	Cut	Recortar
+	Cut with Base Point	Recortar com ponto base
 	Cyan	Ciano
 	Cylinder	Cilindro
 	DWG	DWG
@@ -587,6 +589,7 @@
 	No selection	Nenhuma seleção
 	Node	Nó
 	None	Nenhum
+	Normal	Normal
 	Not Found	Não encontrado
 	Not available	Não disponível
 	Not available yet	Ainda não disponível
@@ -820,6 +823,7 @@
 	Rename Text Style	Renomear estilo de texto
 	Rename...	Renomear...
 	Repeat {command}	Repetir {command}
+	Replace Block...	Substituir bloco...
 	Requires a point (x,y, @dx,dy or @d<a).	Requer um ponto (x,y, @dx,dy ou @d<a).
 	Reset Palettes	Redefinir paletas
 	Restore	Restaurar
@@ -1247,3 +1251,6 @@
 	Not a number or distance: {text}	Não é um número nem uma distância: {text}
 	Select using two clicks only	Selecionar apenas com dois cliques
 	Define each corner of the selection window with a separate click.	Defina cada canto da janela de seleção com um clique separado.
+	Check for Updates…	Verificar atualizações…
+	CADCraft is up to date.	O CADCraft está atualizado.
+	Could not check for updates.	Não foi possível verificar atualizações.

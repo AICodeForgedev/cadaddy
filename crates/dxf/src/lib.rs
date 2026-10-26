@@ -545,11 +545,17 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 /// A string value as `strings` stores it. Line breaks become spaces. Before R2007 the text is
 /// in the `$DWGCODEPAGE` code page: ASCII stays as it is, a character the code page has becomes
 /// its bytes, and every other one `\U+XXXX` (a surrogate pair of escapes above U+FFFF). Without
-/// a code page the result is ASCII, so it is valid in any code page.
+/// a code page the result is ASCII, so it is valid in any code page. In every form a backslash
+/// that would start a `\U+` or `\M+` sequence is written as `\U+005C`, so the reader gives back
+/// the literal text (#2050).
 fn push_string(s: &str, strings: Strings, out: &mut Vec<u8>) {
-    for c in s.chars() {
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
         match (c, strings) {
             ('\r' | '\n', _) => out.push(b' '),
+            ('\\', _) if matches!(chars.get(i + 1), Some('U' | 'M')) && chars.get(i + 2) == Some(&'+') => {
+                out.extend_from_slice(b"\\U+005C");
+            }
             (c, Strings::Utf8) => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
             (c, _) if c.is_ascii() => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
             (c, Strings::Escaped(Some(d))) if codepage::encode_char(c, d, out) => {}
@@ -608,6 +614,19 @@ pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_escape_text_roundtrips() {
+        for utf8 in [false, true] {
+            for text in ["\\U+00E9", "\\M+183A4F", "a\\nb \\P", "\\\\U+00E9", "\\U+005C"] {
+                let tags = vec![Tag::s(8, text)];
+                let back = parse_ascii(&write_ascii_as(&tags, utf8)).unwrap();
+                assert_eq!(back, tags, "utf8={utf8} {text}");
+                let back = parse_binary(&write_binary(&tags, utf8)).unwrap();
+                assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
+            }
+        }
+    }
 
     #[test]
     fn ascii_roundtrip() {

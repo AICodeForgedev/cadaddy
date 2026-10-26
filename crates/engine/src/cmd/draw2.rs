@@ -7,9 +7,11 @@ use cadcraft_geom::{Arc, Circle, Ellipse, Line, PolyVertex, Polyline, Spline, TA
 use serde_json::{Value, json};
 
 use super::curves::{self, Chain, MAX_GEN, TanObj};
-use super::helpers::*;
+use super::helpers::{arc, circle, line, lwpoly, rect_vertices, rect_with_corners, v3};
+
 use super::machines::number;
-use super::*;
+use super::{CommandSpec, bad, bool_or, f64_or, f64_req, point_param, point_req, point_value, points_param, size_param, str_param, targets};
+
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 pub(crate) mod breakline;
@@ -1083,7 +1085,9 @@ impl Interactive for RevcloudM {
         let first_kw: &[&str] = &["Arc length", "Object", "Rectangular", "Polygonal", "Freehand", "Style"];
         match (self.kind, self.pts.len()) {
             (CloudKind::Rect, 0) => Prompt::new("Specify first corner point", Accept::POINT).kw(first_kw).default("Object"),
-            (CloudKind::Rect, _) => Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()),
+            (CloudKind::Rect, _) => {
+                Prompt { corner: true, ..Prompt::new("Specify opposite corner", Accept::POINT).base_opt(self.pts.first().copied()) }
+            }
             (CloudKind::Poly, 0) => Prompt::new("Specify start point", Accept::POINT).kw(first_kw).default("Object"),
             (CloudKind::Poly, 1) => Prompt::new("Specify next point", Accept::POINT).base_opt(self.pts.last().copied()),
             (CloudKind::Poly, _) => Prompt::new("Specify next point", Accept::POINT).kw(&["Undo"]).base_opt(self.pts.last().copied()),
@@ -1570,7 +1574,7 @@ impl Interactive for XlineM2 {
 // RECTANG with Area / Dimensions / Rotation / Width / Elevation / Thickness
 // =====================================================================================
 
-fn rect_kind(first: Vec2, w: f64, h: f64, rot: f64, fillet: f64, chamfer: (f64, f64), width: f64, elevation: f64) -> EntityKind {
+fn rect_kind(first: Vec2, (w, h): (f64, f64), rot: f64, fillet: f64, chamfer: (f64, f64), width: f64, elevation: f64) -> EntityKind {
     let local = rect_with_corners(Vec2::ZERO, Vec2::new(w, h), fillet, chamfer);
     let vs = local.into_iter().map(|v| PolyVertex { p: first + v.p.rotate(rot), ..v }).collect();
     let mut k = lwpoly(vs, true);
@@ -1581,25 +1585,10 @@ fn rect_kind(first: Vec2, w: f64, h: f64, rot: f64, fillet: f64, chamfer: (f64, 
     k
 }
 
-/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
-/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
-pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
-    let a = point_req("rectang", p, "p1")?;
-    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
-    let centered = bool_or(p, "center", false);
-    let rot = f64_or(p, "rotation", 0.0).to_radians();
-    let ch = p
-        .get("chamfer")
-        .and_then(Value::as_array)
-        .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
-        .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
-        .unwrap_or((0.0, 0.0));
-    if ch.0 < 0.0 || ch.1 < 0.0 {
-        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
-    }
-    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
-    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
-    let (w, h) = if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
+/// The width and height of a rectangle from its `dimensions`, its `p2` corner, its `area` with
+/// `length` or `breadth`, or its second corner `p2`, rotated by `rot` about `a`.
+fn rect_size(p: &Value, a: Vec2, rot: f64, centered: bool) -> Result<(f64, f64)> {
+    Ok(if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
         let l = d.first().and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let wd = d.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let (sx, sy) = match point_param(p, "p2") {
@@ -1624,17 +1613,37 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
         let loc = (b - a).rotate(-rot);
         // In centre mode the picked point is one corner, mirrored across the centre.
         if centered { (2.0 * loc.x, 2.0 * loc.y) } else { (loc.x, loc.y) }
-    };
+    })
+}
+
+/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
+/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
+pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
+    let a = point_req("rectang", p, "p1")?;
+    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
+    let centered = bool_or(p, "center", false);
+    let rot = f64_or(p, "rotation", 0.0).to_radians();
+    let ch = p
+        .get("chamfer")
+        .and_then(Value::as_array)
+        .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
+        .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
+        .unwrap_or((0.0, 0.0));
+    if ch.0 < 0.0 || ch.1 < 0.0 {
+        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
+    }
+    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
+    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
+    let (w, h) = rect_size(p, a, rot, centered)?;
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }
     let first = if centered { a - Vec2::new(w / 2.0, h / 2.0).rotate(rot) } else { a };
-    let k = rect_kind(first, w, h, rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
+    let k = rect_kind(first, (w, h), rot, fillet, ch, width, f64_or(p, "elevation", 0.0));
     let hd = s.add_entity(k)?;
+    // A rectangle has its own thickness option and does not take THICKNESS.
     let th = f64_or(p, "thickness", 0.0);
-    if th != 0.0 {
-        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
-    }
+    s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = th)?;
     added(hd)
 }
 
@@ -1682,11 +1691,10 @@ impl RectM2 {
             return Err(other("The rectangle has no area."));
         }
         let first = self.origin(w, h).unwrap_or(a);
-        let hd = s.add_entity(rect_kind(first, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
-        if self.thickness != 0.0 {
-            let t = self.thickness;
-            s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
-        }
+        let hd = s.add_entity(rect_kind(first, (w, h), self.rotation, self.fillet, self.chamfer, self.width, self.elevation))?;
+        // A rectangle has its own thickness option and does not take THICKNESS.
+        let t = self.thickness;
+        s.doc_mut()?.modify_entity(hd, |e| e.common.thickness = t)?;
         Ok(Step::Done)
     }
     /// The rectangle's local origin (the corner `rect_kind` draws from) for a size: the first
@@ -1862,7 +1870,7 @@ impl Interactive for RectM2 {
         }
         match self.other_corner(c).and_then(|(w, h)| self.origin(w, h).map(|a| (a, w, h))) {
             Some((a, w, h)) if w.abs() > 1e-12 && h.abs() > 1e-12 => {
-                vec![rect_kind(a, w, h, self.rotation, self.fillet, self.chamfer, self.width, self.elevation)]
+                vec![rect_kind(a, (w, h), self.rotation, self.fillet, self.chamfer, self.width, self.elevation)]
             }
             _ => Vec::new(),
         }

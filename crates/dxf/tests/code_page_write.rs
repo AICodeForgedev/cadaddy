@@ -76,3 +76,19 @@ fn code_page_bytes_that_are_valid_utf8_are_escaped_in_ascii() {
     // Bytes that are not valid UTF-8 stay as they are.
     assert!(contains(&write_ascii_in(&file("ANSI_1251", "Слой"), "ANSI_1251"), b"\xD1\xEB\xEE\xE9"));
 }
+
+/// A literal `\U+` or `\M+` in the text (#2050) reads back as written alongside code page bytes,
+/// in ASCII and binary, including an ASCII file that falls back to escapes because its bytes
+/// would read as UTF-8.
+#[test]
+fn literal_escapes_survive_code_page_text() {
+    for (cp, text) in
+        [("ANSI_1252", "Ação \\U+00E9 \\M+183A4F"), ("ANSI_1251", "Слой \\U+0041"), ("ANSI_1251", "СІ \\U+0041"), ("ANSI_932", "表 \\M+1")]
+    {
+        let tags = file(cp, text);
+        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp), "binary")] {
+            assert!(contains(&bytes, b"\\U+005C"), "{cp} {what}: {:?}", String::from_utf8_lossy(&bytes));
+            assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
+        }
+    }
+}

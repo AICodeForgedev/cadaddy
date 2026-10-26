@@ -6,7 +6,8 @@ use cadcraft_doc::{Entity, EntityKind, Handle};
 use cadcraft_geom::{Polyline, Vec2, Vec3};
 use serde_json::{Value, json};
 
-use super::*;
+use super::{CommandSpec, bad, bool_or, f64_req, point_req, point_value, points_param, targets};
+
 use crate::units::{format_angle, format_distance};
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -401,8 +402,17 @@ pub(super) fn area_of(pts: &[Vec2]) -> (f64, f64) {
     (a, per)
 }
 
+/// `points` as given, `None` when it is absent; a `points` that is not a list of points is an
+/// error, never a fall back to the selection.
+fn given_points(p: &Value, cmd: &str) -> Result<Option<Vec<Vec2>>> {
+    match p.get("points") {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => points_param(p, "points").map(Some).ok_or_else(|| bad(cmd, "`points` must be a list of [x, y] points")),
+    }
+}
+
 fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
-    let (a, per) = if let Some(pts) = points_param(p, "points") {
+    let (a, per) = if let Some(pts) = given_points(p, "area")? {
         area_of(&pts)
     } else {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
@@ -413,6 +423,37 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn area_text(s: &Session, a: f64, per: f64) -> String {
     format!("Area = {}, Perimeter = {}", fmt_d(s, a), fmt_d(s, per))
+}
+
+/// MEASUREGEOM's Volume option: the area of a polygon of three or more points, or of a 2D object
+/// as AREA measures it (an open polyline as if closed), times the absolute value of a height.
+pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
+    let a = if let Some(pts) = given_points(p, "volume.measure")? {
+        if pts.len() < 3 {
+            return Err(bad("volume.measure", "`points` needs 3 or more [x,y] points"));
+        }
+        area_of(&pts).0
+    } else {
+        let h = targets(s, p)?.first().copied().ok_or_else(|| bad("volume.measure", "`points` or `handle` is required"))?;
+        object_area(s, h)?.0
+    };
+    let height = f64_req("volume.measure", p, "height")?;
+    let v = a * height.abs();
+    if !v.is_finite() {
+        return Err(bad("volume.measure", "the volume is too large"));
+    }
+    Ok(json!({ "volume": v, "area": a, "height": height, "message": volume_text(s, v) }))
+}
+
+fn volume_text(s: &Session, v: f64) -> String {
+    format!("Volume = {}", fmt_volume(s, v))
+}
+
+/// Format a volume as a number in the drawing's `LUPREC`. Engineering and architectural units
+/// show it as a decimal number, not in feet and inches.
+fn fmt_volume(s: &Session, v: f64) -> String {
+    let (u, p) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
+    format_distance(v, if matches!(u, 3 | 4) { 2 } else { u }, p)
 }
 
 /// Area and perimeter of a closed object (AREA's Object option).
@@ -889,9 +930,19 @@ pub(super) struct AreaM {
     object: bool,
     /// Asking for the length of a segment (the Length option).
     length: bool,
+    /// Measuring volumes (MEASUREGEOM's Volume option): each area is multiplied by the absolute value of a height.
+    volume: bool,
+    /// Areas measured in volume mode that still wait for their height, oldest first.
+    pending: Vec<f64>,
+    /// The first point of a height given by two points.
+    height_from: Option<Vec2>,
 }
 
 impl AreaM {
+    /// MEASUREGEOM's Volume option: AREA's prompts, then a height for each area.
+    pub(super) fn volume() -> Self {
+        AreaM { volume: true, ..AreaM::default() }
+    }
     fn mode_prefix(&self) -> &'static str {
         match self.mode {
             AreaMode::Single => "",
@@ -899,8 +950,100 @@ impl AreaM {
             AreaMode::Subtract => "(SUBTRACT mode) ",
         }
     }
+    /// The Add and Subtract keywords: "Add area" and "Subtract area", or "Add volume" and
+    /// "Subtract volume".
+    fn mode_keywords(&self) -> (&'static str, &'static str) {
+        if self.volume { ("Add volume", "Subtract volume") } else { ("Add area", "Subtract area") }
+    }
+    /// The running total with `v` added or subtracted; in single mode, the total as it is.
+    fn total_with(&self, v: f64) -> f64 {
+        match self.mode {
+            AreaMode::Single => self.total,
+            AreaMode::Add => self.total + v,
+            AreaMode::Subtract => self.total - v,
+        }
+    }
+    /// Input while a height is pending: typed, or given by two points (their distance).
+    fn height_input(&mut self, s: &mut Session, i: Input) -> Step {
+        match (i, self.height_from) {
+            (Input::Point(p), None) => self.height_from = Some(p),
+            (Input::Point(p), Some(from)) => {
+                self.height_from = None;
+                return self.height(s, p.dist(from));
+            }
+            (Input::Text(t), None) => match crate::units::parse_distance(&t).filter(|v| v.is_finite()) {
+                Some(h) => return self.height(s, h),
+                None => s.echo("Requires a distance."),
+            },
+            (Input::Enter, None) => s.echo("Requires a height."),
+            (Input::Enter, Some(_)) => s.echo("Requires a second point."),
+            (Input::Text(_), Some(_)) => s.echo("Requires a point."),
+            _ => {}
+        }
+        Step::Continue
+    }
+
+    /// Input while the objects to measure are picked.
+    fn object_input(&mut self, s: &mut Session, i: Input) -> Step {
+        match i {
+            Input::Pick(hs) => {
+                for h in hs {
+                    match object_area(s, h) {
+                        Ok((a, per)) => {
+                            if self.measured(s, a, per) == Step::Done {
+                                return Step::Done;
+                            }
+                            // A single volume takes the first object with an area.
+                            if self.volume && self.mode == AreaMode::Single {
+                                break;
+                            }
+                        }
+                        Err(_) => s.echo("The selected object has no area."),
+                    }
+                }
+            }
+            Input::Enter => {
+                self.object = false;
+                if self.mode == AreaMode::Single {
+                    return Step::Done;
+                }
+            }
+            Input::Text(_) | Input::Keyword(_) => s.echo("*Invalid selection*"),
+            _ => {}
+        }
+        Step::Continue
+    }
+
+    /// Measure the oldest pending area's volume with height `h`.
+    fn height(&mut self, s: &mut Session, h: f64) -> Step {
+        match self.pending.first().map(|a| a * h.abs()) {
+            Some(v) if v.is_finite() && self.total_with(v).is_finite() => {
+                self.pending.remove(0);
+                self.volume_measured(s, v)
+            }
+            _ => {
+                s.echo("The volume is too large.");
+                Step::Continue
+            }
+        }
+    }
+    /// Report a volume (and the running total in add/subtract mode); ends the command in single mode.
+    fn volume_measured(&mut self, s: &mut Session, v: f64) -> Step {
+        s.echo(volume_text(s, v));
+        if self.mode == AreaMode::Single {
+            return Step::Done;
+        }
+        self.total = self.total_with(v);
+        s.echo(format!("Total volume = {}", fmt_volume(s, self.total)));
+        Step::Continue
+    }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
+    /// In volume mode the area waits for its height instead.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
+        if self.volume {
+            self.pending.push(a);
+            return Step::Continue;
+        }
         s.echo(area_text(s, a, per));
         match self.mode {
             AreaMode::Single => return Step::Done,
@@ -923,9 +1066,15 @@ impl AreaM {
 
 impl Interactive for AreaM {
     fn name(&self) -> &'static str {
-        "AREA"
+        if self.volume { "MEASUREGEOM" } else { "AREA" }
     }
     fn prompt(&self, _s: &Session) -> Prompt {
+        if !self.pending.is_empty() {
+            return match self.height_from {
+                Some(p) => Prompt::new("Specify second point", Accept::POINT).base(p),
+                None => Prompt::new(format!("{}Specify height", self.mode_prefix()), Accept::POINT_OR_NUMBER),
+            };
+        }
         if self.object {
             return Prompt::new(format!("{}Select objects", self.mode_prefix()), Accept::SELECT);
         }
@@ -933,41 +1082,21 @@ impl Interactive for AreaM {
             return length_prompt();
         }
         let next = format!("{}Specify next point", self.mode_prefix());
+        let (add, subtract) = self.mode_keywords();
         match (self.pts.len(), self.mode) {
-            (0, AreaMode::Single) => {
-                Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", "Add area", "Subtract area"]).default("Object")
-            }
-            (0, AreaMode::Add) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", "Subtract area"]),
-            (0, AreaMode::Subtract) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", "Add area"]),
+            (0, AreaMode::Single) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", add, subtract]).default("Object"),
+            (0, AreaMode::Add) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", subtract]),
+            (0, AreaMode::Subtract) => Prompt::new("Specify first corner point", Accept::POINT).kw(&["Object", add]),
             (1, _) => Prompt::new(next, Accept::POINT).kw(&["Arc", "Length", "Undo"]).base_opt(self.pts.last().copied()),
             _ => Prompt::new(next, Accept::POINT).kw(&["Arc", "Length", "Undo", "Total"]).default("Total").base_opt(self.pts.last().copied()),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if !self.pending.is_empty() {
+            return Ok(self.height_input(s, i));
+        }
         if self.object {
-            match i {
-                Input::Pick(hs) => {
-                    for h in hs {
-                        match object_area(s, h) {
-                            Ok((a, per)) => {
-                                if self.measured(s, a, per) == Step::Done {
-                                    return Ok(Step::Done);
-                                }
-                            }
-                            Err(_) => s.echo("The selected object has no area."),
-                        }
-                    }
-                }
-                Input::Enter => {
-                    self.object = false;
-                    if self.mode == AreaMode::Single {
-                        return Ok(Step::Done);
-                    }
-                }
-                Input::Text(_) | Input::Keyword(_) => s.echo("*Invalid selection*"),
-                _ => {}
-            }
-            return Ok(Step::Continue);
+            return Ok(self.object_input(s, i));
         }
         if self.length {
             if let Some(p) = length_input(&self.pts, i)? {
@@ -980,8 +1109,8 @@ impl Interactive for AreaM {
             Input::Point(p) => self.pts.push(p),
             Input::Keyword(k) => match k.as_str() {
                 "Object" => self.object = true,
-                "Add area" => self.mode = AreaMode::Add,
-                "Subtract area" => self.mode = AreaMode::Subtract,
+                "Add area" | "Add volume" => self.mode = AreaMode::Add,
+                "Subtract area" | "Subtract volume" => self.mode = AreaMode::Subtract,
                 "Undo" => {
                     self.pts.pop();
                 }
@@ -1011,6 +1140,8 @@ impl Interactive for AreaM {
 
 #[cfg(test)]
 mod tests {
+    use cadcraft_doc::Handle;
+
     use super::*;
 
     /// #1440 review: a value one ulp past its bound (a border rectangle's shoelace area against
