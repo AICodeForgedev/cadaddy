@@ -3307,3 +3307,8 @@
 	Element Identities (BIM)	Ідентифікація елементів (BIM)
 	Room Connections	Зв'язки приміщень
 	Link Print Set	Зв'язати комплект аркушів
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої

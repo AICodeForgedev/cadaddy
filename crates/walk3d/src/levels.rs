@@ -77,6 +77,9 @@ pub struct SheetLink {
     /// side): what lies there is this sheet's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
+    /// Every level this sheet covers (typical-floor plans); empty = only `level`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
 }
 
 /// A level name and elevation read from one note.
