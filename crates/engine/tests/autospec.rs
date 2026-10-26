@@ -233,3 +233,19 @@ fn an_empty_drawing_drafts_a_minimal_spec() {
     assert_eq!(r["spec"]["levels"].as_array().unwrap().len(), 1);
     assert!(guessed(&r, "levels/Level 1"));
 }
+
+/// Face pairs on a layer that is off or frozen aren't walls: what it holds isn't on the sheet (an
+/// imported PDF keeps the lettering strokes its OCR read on such a layer, under the text).
+#[test]
+fn a_layer_that_is_off_is_not_read_for_walls() {
+    let mut s = plain();
+    let sp = s.execute("bspec.draft", &json!({})).unwrap()["spec"].clone();
+    assert_eq!(role(&sp, "P1").unwrap()["role"], "wall", "{sp}");
+    s.execute("layer.set", &json!({"name": "P1", "on": false})).unwrap();
+    let sp = s.execute("bspec.draft", &json!({})).unwrap()["spec"].clone();
+    assert!(role(&sp, "P1").is_none(), "{sp}");
+    assert_eq!(role(&sp, "Walls").unwrap()["role"], "wall", "a named wall layer keeps its role: {sp}");
+    s.execute("layer.set", &json!({"name": "P1", "on": true, "frozen": true})).unwrap();
+    let sp = s.execute("bspec.draft", &json!({})).unwrap()["spec"].clone();
+    assert!(role(&sp, "P1").is_none(), "{sp}");
+}
