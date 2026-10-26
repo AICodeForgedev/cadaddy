@@ -347,6 +347,10 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     // Read section box planes from coordination state for 3D clipping.
     let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
     let sbox_planes = crs.sbox_planes();
+    // The BIM view: only the built model, in trade colours, the shell ghosted.
+    if let Some(bim) = cadaddy_engine::cmd::bimlook::display(&doc) {
+        doc = Arc::new(bim);
+    }
     if let Some(f) = key.fourd
         && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
     {
@@ -798,7 +802,9 @@ impl Gpu {
                             let layer = sm.texture.map(|i| i as usize + offset).filter(|i| *i < layers.len()).map_or(-1.0, |i| i as f32);
                             (Rgb(srgb(sm.base[0]), srgb(sm.base[1]), srgb(sm.base[2])), [sm.roughness, sm.metallic, layer, sm.opacity])
                         }
-                        None => (t.color, [0.6, 0.0, -1.0, 1.0]),
+                        // Unlit styles: its own colour, see-through as its material is (a
+                        // ghosted shell).
+                        None => (t.color, [0.6, 0.0, -1.0, sc.surfaces.get(t.mat as usize).map_or(1.0, |sm| sm.opacity.clamp(0.0, 1.0))]),
                     };
                     let out = if m[3] < 0.99 { &mut clear } else { &mut tris };
                     for ((p, uv), l) in t.p.iter().zip(t.uv).zip(lm) {
@@ -807,7 +813,11 @@ impl Gpu {
                 }
             }
             for l in sc.lines.get(lr).unwrap_or(&[]).iter().filter(|l| !l.edge || edges) {
-                let c = if l.edge && style == VisualStyle::ShadedEdges { dark } else { l.color };
+                let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
+                    (true, true) => cadaddy_render::shade::faint_ink(dark, bg),
+                    (true, false) => dark,
+                    _ => l.color,
+                };
                 push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
                 push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
             }

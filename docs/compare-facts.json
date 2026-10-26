@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1073,
-    "count": 1073,
+    "callableAsJson": 1089,
+    "count": 1089,
     "ids": [
       "-attedit",
       "-block",
@@ -106,9 +106,21 @@
       "bedit",
       "bim.bom",
       "bim.build",
+      "bim.clash",
+      "bim.clash.fix",
+      "bim.clash.status",
       "bim.colour",
+      "bim.element",
+      "bim.estimate",
+      "bim.field.link",
       "bim.from_pdf",
       "bim.get_spec",
+      "bim.issue.create",
+      "bim.issue.list",
+      "bim.issue.marks",
+      "bim.issue.set",
+      "bim.issue.show",
+      "bim.look",
       "bim.prints",
       "bim.remove_type",
       "bim.set_spec",
@@ -116,6 +128,10 @@
       "bim.source",
       "bim.spec_accept",
       "bim.spec_import",
+      "bim.takeoff",
+      "bim.takeoff.show",
+      "bim.trades",
+      "bim.tree",
       "bim.types",
       "bim.unset_spec",
       "bim.validate",
@@ -1077,7 +1093,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 506,
+    "inMenus": 507,
     "typed": 551
   },
   "features": {

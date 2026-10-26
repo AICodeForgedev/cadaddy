@@ -3144,3 +3144,54 @@
 	PDF exported to {path}.	PDF exportado para {path}.
 	Clash detection failed.	A detecção de interferências falhou.
 	Import Cost Table	Importar tabela de custos
+	BIM View	Vista BIM
+	Trade Colours	Cores por disciplina
+	Element Properties	Propriedades do elemento
+	Tree	Árvore
+	Colours	Cores
+	Ghost Architecture	Arquitetura transparente
+	Sheet Lines in 3D	Linhas da prancha em 3D
+	Nothing is built yet. Use Plans to Model first.	Nada foi construído ainda. Use primeiro Plantas para modelo.
+	Select one element to see its properties.	Selecione um elemento para ver suas propriedades.
+	Not part of the built model.	Não faz parte do modelo construído.
+	Category	Categoria
+	Trade	Disciplina
+	Circuit	Circuito
+	Source	Origem
+	Issues	Problemas
+	Show on Sheet	Mostrar na prancha
+	Reset Colours	Redefinir cores
+	Architecture	Arquitetura
+	Structure	Estrutura
+	Fire Protection	Proteção contra incêndio
+	Doors and Windows	Portas e janelas
+	Supply Air Duct	Duto de insuflamento
+	Return Air Duct	Duto de retorno
+	Exhaust Air Duct	Duto de exaustão
+	Outside Air Duct	Duto de ar externo
+	Duct	Duto
+	Air Terminals	Difusores
+	Equipment	Equipamentos
+	Domestic Cold Water	Água fria
+	Domestic Hot Water	Água quente
+	Sanitary	Esgoto
+	Vent	Ventilação
+	Storm	Águas pluviais
+	Gas	Gás
+	Piping	Tubulação
+	Plumbing Fixtures	Aparelhos sanitários
+	Conduit	Eletrodutos
+	Cable Tray	Eletrocalhas
+	Electrical Devices	Dispositivos elétricos
+	Light Fixtures	Luminárias
+	Clash Check	Verificação de interferências
+	Fix Clash	Corrigir interferência
+	Model Takeoff	Levantamento de quantitativos do modelo
+	Show Takeoff Line	Mostrar linha do levantamento
+	Model Estimate	Orçamento do modelo
+	New Issue	Nova ocorrência
+	Update Issue	Atualizar ocorrência
+	Show Issue	Mostrar ocorrência
+	Issue Marks	Marcas de ocorrências
+	Sheet and 3D Link	Vínculo entre folha e 3D
+	PDF to BIM	PDF para BIM
