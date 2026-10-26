@@ -2559,5 +2559,4 @@ impl Interactive for TextEditM {
 }
 
 #[cfg(test)]
-#[path = "modify2_tests.rs"]
 mod tests;
