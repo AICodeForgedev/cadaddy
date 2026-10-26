@@ -3031,6 +3031,9 @@
 	Element Property Summary	Übersicht der Elementeigenschaften
 	BIM Properties	BIM-Eigenschaften
 	Kind	Art
+	Element Identities (BIM)	Elementidentitäten (BIM)
+	Room Connections	Raumverbindungen
+	Link Print Set	Plansatz verknüpfen
 	Check Building Codes	Bauvorschriften prüfen
 	Code Rules	Vorschriftsregeln
 	Select Building Codes	Bauvorschriften auswählen

@@ -3221,6 +3221,9 @@ menu	Modify	Ändra
 	Element Property Summary	Sammanfattning av elementegenskaper
 	BIM Properties	BIM-egenskaper
 	Kind	Sort
+	Element Identities (BIM)	Elementidentiteter (BIM)
+	Room Connections	Rumskopplingar
+	Link Print Set	Länka ritningsuppsättning
 	Check Building Codes	Kontrollera byggregler
 	Code Rules	Regler i byggreglerna
 	Select Building Codes	Välj byggregler
