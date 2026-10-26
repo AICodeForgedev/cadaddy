@@ -345,13 +345,16 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
 
 /// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
-/// with no BOM line is a test failure. Returns (`missing_categories`, `suspects`).
-fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<Value>)> {
+/// with no BOM line is a test failure.
+/// Returns (`missing_categories`, `suspects`, `model_has_elements`).
+fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<Value>, bool)> {
     let (sp, _) = current(s, "bim.bom")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let d = s.doc()?;
 
     // Count built 3D elements by part and level: (part, level) → (count, handles).
+    // Q5278: scan ALL model entities, not just MAX_LINES — built entities are appended after
+    // the (potentially 800K+) imported PDF entities and the XData check is O(1) per entity.
     let mut built: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
     // A model built from a print comes after the sheet's own objects (tens of thousands of
     // them): cap the built elements, not the objects looked at.
@@ -612,7 +615,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         }
     }
 
-    Ok((missing, suspects))
+    Ok((missing, suspects, has_any_built))
 }
 
 /// Devices detected directly from symbol clusters on the drawing (Q5243 MUST 2).
@@ -911,9 +914,53 @@ fn grounding(s: &Session, lines: &mut Vec<Line>) {
     }
 }
 
+/// Q5278: fallback drywall from built ceiling footprint when drywall.takeoff has no assemblies.
+fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
+    let Ok((sp, _)) = current(s, "bim.bom") else { return };
+    let Ok(d) = s.doc() else { return };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut ceiling_sf = 0.0f64;
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).as_deref() == Some("ceiling") {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            if !b.is_empty() {
+                let w = (b.max.x - b.min.x) / upf;
+                let h = (b.max.y - b.min.y) / upf;
+                if w > 0.0 && h > 0.0 {
+                    ceiling_sf += w * h;
+                }
+            }
+        }
+    }
+    if ceiling_sf > 0.0 {
+        add(
+            lines,
+            Line {
+                trade: "drywall",
+                category: "drywall".into(),
+                item: "Board gypsum board".into(),
+                size: "0.625\"".into(),
+                unit: "sq ft",
+                net: ceiling_sf,
+                status: "model",
+                rule: Some("estimated from ceiling area (no wall assemblies)".into()),
+                ..Line::default()
+            },
+        );
+    }
+}
+
 /// Drywall from `drywall.takeoff`, where walls have assemblies.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
-    let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else { return };
+    let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else {
+        // Q5278: fallback — if drywall.takeoff fails but the model has ceiling elements,
+        // produce a rough drywall line from ceiling area (board both sides of partition walls).
+        drywall_from_built_model(s, lines);
+        return;
+    };
+    if q["rows"].as_array().is_none_or(|a| a.is_empty()) {
+        drywall_from_built_model(s, lines);
+    }
     for r in q["rows"].as_array().into_iter().flatten() {
         for b in r["boards"].as_array().into_iter().flatten() {
             let item = format!("Board {}", b["material"].as_str().unwrap_or_default());
@@ -1219,7 +1266,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut lines: Vec<Line> = Vec::new();
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
-    let (built_missing, built_suspects) = built_model(s, &mut lines)?;
+    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
     electrical(s, &mut lines)?;
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
@@ -1365,6 +1412,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if !built_suspects.is_empty() {
         out["suspects"] = json!(built_suspects);
         out["complete"] = json!(false);
+    }
+    // Q5278 MUST 2: complete:false when model has elements but the BOM produced no lines.
+    if model_has_elements && out_lines.is_empty() {
+        out["complete"] = json!(false);
+        out["reason"] = json!("model has built elements but produced no BOM lines");
     }
     // What changed since an earlier BOM.
     if let Some(prev) = p.get("compare_to").and_then(|v| v["lines"].as_array().or_else(|| v.as_array())) {
