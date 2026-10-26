@@ -96,6 +96,7 @@ low-level `execute` only when needed.
 | `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |
 | `mep` | MEP review: list runs/fittings by system and level with confidence, edit size/height/system, mark reviewed, rebuild. |
 | `site_takeoff` | Sitework quantities from civil sheets: earthwork cut/fill, paving, curbs, utilities with trench excavation and backfill. |
+| `framing` | Studs from the prints: `build` frames every wall of a folder of DXF sheets (fixed members, both rule layouts, stacks); `list`, `wall` and `next_stud` give compact, paged answers per wall; `field_point` (tape, centre or photo pick) and `shop_drawing` (DXF) are kept in the job and re-applied on every rebuild; `view` draws the elevation, plan and Walk boxes on `FRAMING-*` layers. The BOM's framing lines and bits come from it. |
 
 ### Drawing commands
 

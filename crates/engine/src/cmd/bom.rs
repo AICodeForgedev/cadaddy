@@ -17,6 +17,9 @@
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
+//! - **Framing** from `framing.build` (Q303 / Q5103) where the job is framed: members by kind and
+//!   status, rule members at the larger layout; they replace the drywall stud length. Raceways
+//!   running inside framed walls give the bits and hole counts among the required tools.
 //! - **Grounding** from `grounding.takeoff` (Q329): conductor by size, clamps, rods, busbars,
 //!   lugs, welds or connectors and their tools, each line naming its rule; a crimper the
 //!   grounding takeoff carries is not required a second time.
@@ -1009,6 +1012,72 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
     }
 }
 
+/// Framing from the job's framed walls (Q303 / Q5103): members by kind and status, the rule
+/// members at the larger layout (`rule_max`). Where the job is framed, these replace the drywall
+/// takeoff's stud length. Returns the holes per bit for the raceways inside the framed walls.
+fn framing(s: &mut Session, lines: &mut Vec<Line>) -> Result<Vec<cadaddy_mepfix::bore::BitLine>> {
+    let Some(f) = super::framing::job_framing(s) else { return Ok(Vec::new()) };
+    let (rows, larger) = super::framing::bom_lines(&f);
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    lines.retain(|l| !(l.category == "drywall" && l.item.starts_with("Studs ")));
+    for (level, kind, status, n, rule) in rows {
+        let (st, why) = match status {
+            cadaddy_mepfix::framing::Status::Fixed => ("firm", "fixed by the prints".to_string()),
+            cadaddy_mepfix::framing::Status::ShopDrawing => ("firm", "from the shop drawing".to_string()),
+            cadaddy_mepfix::framing::Status::FieldVerified => ("firm", "field verified".to_string()),
+            cadaddy_mepfix::framing::Status::Agreed => ("rule", "both stud layouts put it here".to_string()),
+            cadaddy_mepfix::framing::Status::Rule => {
+                let end = larger.map_or("a", cadaddy_mepfix::framing::End::letter);
+                ("rule", format!("layout from the {end} end, the larger of the two (rule max)"))
+            }
+        };
+        add(
+            lines,
+            Line {
+                trade: "general",
+                category: "framing".into(),
+                item: capitalised(kind.words()),
+                size: status.words().into(),
+                unit: "each",
+                net: n as f64,
+                status: st,
+                rule: Some(if rule { why } else { format!("framing member, {why}") }),
+                level,
+                ..Line::default()
+            },
+        );
+    }
+    let (sp, _) = current(s, "bim.bom")?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let runs: Vec<(String, Vec<[f64; 2]>, f64, bool)> = sp
+        .mep
+        .runs
+        .iter()
+        .take(MAX_LINES)
+        .filter_map(|r| {
+            let kind = sp.mep.systems.iter().find(|x| x.name == r.system).map(|x| x.kind)?;
+            let cable = match kind {
+                cadaddy_walk3d::MepKind::Conduit => false,
+                cadaddy_walk3d::MepKind::Cable => true,
+                _ => return None,
+            };
+            Some((r.level.clone(), r.points.iter().map(|p| [p[0] / upf, p[1] / upf]).collect(), r.size_in[0], cable))
+        })
+        .collect();
+    Ok(super::framing::bits(&f, &runs))
+}
+
+fn bit_words(k: cadaddy_mepfix::bore::BitKind) -> &'static str {
+    match k {
+        cadaddy_mepfix::bore::BitKind::HoleSaw => "Hole saw",
+        cadaddy_mepfix::bore::BitKind::Paddle => "Paddle bit",
+        cadaddy_mepfix::bore::BitKind::MetalHoleSaw => "Bimetal hole saw",
+        cadaddy_mepfix::bore::BitKind::Punchout => "Punchout",
+    }
+}
+
 /// `s` with its first letter upper case.
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
@@ -1156,6 +1225,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     electrical(s, &mut lines)?;
     mechanical(s, &mut lines);
     drywall(s, &mut lines);
+    let framing_bits = framing(s, &mut lines)?;
     grounding(s, &mut lines);
     let by_others = concrete(s, &mut lines);
     // Waivers: recorded in the project rules, with the reason.
@@ -1232,6 +1302,14 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut complete = true;
     let req: Vec<Value> = required(&grouped, sp.levels.len())
         .into_iter()
+        .chain(framing_bits.iter().map(|b| {
+            (
+                format!("{} {}", bit_words(b.kind), super::framing::inch_words(b.dia_in)),
+                1.0,
+                "purchase",
+                format!("{} holes through framing members where raceways run inside the framed walls (Q303 framing)", b.holes),
+            )
+        }))
         .map(|(item, qty, supply, rule)| {
             let waived = rules.resolve(RuleDomain::Custom, &format!("bom.waive.{item}")).map(|v| v.value.clone());
             let mut v = json!({ "item": item, "qty": if waived.is_some() { 0.0 } else { qty }, "supply": supply, "rule": rule });
@@ -1273,6 +1351,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // complete = every built category has lines, no line is suspect, reqs OK, spec clean (Q5243 MUST 4).
     let is_complete = complete && req_ok && check.is_empty() && no_suspects && no_missing;
     let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": is_complete });
+    if !framing_bits.is_empty() {
+        out["bits"] =
+            json!(framing_bits.iter().map(|b| json!({"kind": bit_words(b.kind), "dia_in": b.dia_in, "holes": b.holes})).collect::<Vec<_>>());
+    }
     if !built_missing.is_empty() {
         out["missing"] = json!(built_missing);
         out["complete"] = json!(false);
