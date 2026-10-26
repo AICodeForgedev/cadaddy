@@ -1220,9 +1220,12 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut lines: Vec<Line> = Vec::new();
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
     let (built_missing, built_suspects) = built_model(s, &mut lines)?;
-    // Devices from symbol clusters on the drawing (Q5243).
-    devices_from_drawing(s, &mut lines)?;
     electrical(s, &mut lines)?;
+    // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
+    // guided job puts the devices its readers found into the model, and counting both doubled them.
+    if !lines.iter().any(|l| l.category == "devices") {
+        devices_from_drawing(s, &mut lines)?;
+    }
     mechanical(s, &mut lines);
     drywall(s, &mut lines);
     let framing_bits = framing(s, &mut lines)?;
