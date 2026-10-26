@@ -2584,6 +2584,55 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // Q5278: persist devices detected by the Devices stage into sp.tags, AFTER bspec.draft
+    // stored the spec (which would overwrite earlier tag inserts).
+    if let Some(dev_stage) = job.stage(StageName::Devices) {
+        if let Some(devices) = dev_stage.result.as_ref().and_then(|r| r.get("devices")) {
+            if let Some(items) = devices.get("items").and_then(Value::as_array) {
+                let level_name = super::bspec::current(s, "guided")
+                    .ok()
+                    .and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone()))
+                    .unwrap_or_default();
+                let mut new_tags = Vec::new();
+                for item in items.iter().take(50_000) {
+                    let tag = item.get("tag").and_then(Value::as_str).unwrap_or("unknown");
+                    let count = item.get("count").and_then(Value::as_u64).unwrap_or(0);
+                    for i in 0..count {
+                        let id = format!("device:{tag}:{i}");
+                        let kind = if tag.to_ascii_lowercase().contains("light") || tag.to_ascii_lowercase().contains("lum") {
+                            "luminaire"
+                        } else {
+                            "receptacle"
+                        };
+                        new_tags.push(cadaddy_walk3d::tags::ElementTag {
+                            id,
+                            kind: kind.into(),
+                            level: level_name.clone(),
+                            at_ft: [0.0, 0.0],
+                            fields: {
+                                let mut f = std::collections::BTreeMap::new();
+                                f.insert(
+                                    "device_type".into(),
+                                    cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() },
+                                );
+                                f
+                            },
+                            ..Default::default()
+                        });
+                    }
+                }
+                if !new_tags.is_empty() {
+                    if let Ok((mut sp, _)) = super::bspec::current(s, "guided") {
+                        sp.tags.extend(new_tags);
+                        if let Ok(spec_val) = serde_json::to_value(&sp) {
+                            let _ = s.execute("bspec.set", &json!({"replace": true, "spec": spec_val}));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     Ok(result)
 }
@@ -2772,6 +2821,28 @@ fn auto_answer_defaults(stage: &mut StageState) -> usize {
     answered
 }
 
+/// Q5278 MUST 4: sync worklist items with their questions' answer state.
+/// A worklist item whose question has been answered (including by default) becomes "resolved".
+pub fn sync_worklist(job: &mut GuidedJob) {
+    let answered: BTreeMap<String, Value> = job
+        .stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter_map(|q| q.answer.as_ref().map(|a| (q.id.clone(), a.clone())))
+        .collect();
+    for wi in &mut job.worklist {
+        if wi.kind == "question"
+            && wi.status == "pending"
+            && let Some(ans) = answered.get(&wi.id)
+        {
+            wi.status = "resolved".into();
+            if wi.resolution.is_none() {
+                wi.resolution = Some(ans.clone());
+            }
+        }
+    }
+}
+
 /// Advance the pipeline: run the current stage and generate questions. A finished job's
 /// checkpoint is removed.
 fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
@@ -2793,6 +2864,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                 if let Some(st) = job.stage_mut(name) {
                     auto_answer_defaults(st);
                 }
+                sync_worklist(job);
                 // Still have unanswered questions with no default — pause.
                 if let Some(st) = job.stage(name)
                     && !st.unanswered().is_empty()
@@ -2871,6 +2943,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     let ua = st.unanswered().len();
                     (ua == 0, ua)
                 };
+                sync_worklist(job);
                 if all_answered && !has_blocking {
                     if let Some(st) = job.stage_mut(stage_name) {
                         st.status = StageStatus::Done;
@@ -3047,7 +3120,8 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path})));
         advance_pipeline(s, &mut saved)?;
         save_job(s, &saved)?;
-        let mut status = job_status_value(&saved);
+        let stats = model_stats_from_session(s);
+        let mut status = job_status_value(&saved, stats.as_ref());
         status["resumed"] = json!(true);
         return Ok(status);
     }
@@ -3057,7 +3131,8 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     advance_pipeline(s, &mut job)?;
     save_job(s, &job)?;
 
-    let status = job_status_value(&job);
+    let stats = model_stats_from_session(s);
+    let status = job_status_value(&job, stats.as_ref());
     Ok(status)
 }
 
@@ -3087,11 +3162,14 @@ fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
         })),
-        None if job.is_done() => Ok(json!({
-            "done": true,
-            "progress": 1.0,
-            "summary": job_summary(s, &job),
-        })),
+        None if job.is_done() => {
+            let stats = model_stats_from_session(s);
+            Ok(json!({
+                "done": true,
+                "progress": 1.0,
+                "summary": job_summary(s, &job, stats.as_ref()),
+            }))
+        }
         None => Ok(json!({
             "waiting": true,
             "progress": job.progress(),
@@ -3211,12 +3289,15 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
             },
             "progress": job.progress(),
         })),
-        None if job.is_done() => Ok(json!({
-            "answered": qid,
-            "done": true,
-            "progress": 1.0,
-            "summary": job_summary(s, &job),
-        })),
+        None if job.is_done() => {
+            let stats = model_stats_from_session(s);
+            Ok(json!({
+                "answered": qid,
+                "done": true,
+                "progress": 1.0,
+                "summary": job_summary(s, &job, stats.as_ref()),
+            }))
+        }
         None => Ok(json!({
             "answered": qid,
             "progress": job.progress(),
@@ -3228,7 +3309,10 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
 /// `job.status` — current job status (returns `{running: false}` when no job exists).
 fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
     match load_job(s)? {
-        Some(job) => Ok(job_status_value(&job)),
+        Some(job) => {
+            let stats = model_stats_from_session(s);
+            Ok(job_status_value(&job, stats.as_ref()))
+        }
         None => Ok(json!({"running": false, "hint": "no job running — start one with job.start {pdfs, goal}"})),
     }
 }
@@ -3355,7 +3439,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-fn job_status_value(job: &GuidedJob) -> Value {
+fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     let stages: Vec<Value> = job
         .stages
         .iter()
@@ -3372,6 +3456,19 @@ fn job_status_value(job: &GuidedJob) -> Value {
 
     let pending_worklist = job.worklist.iter().filter(|w| w.status == "pending").count();
 
+    // Q5278 MUST 1: levels from the saved model when available.
+    let levels: Value = match stats {
+        Some(ms) => json!(ms.levels),
+        None => index_count(job, "levels").map_or(Value::Null, |n| json!(n)),
+    };
+    let elements: Value = match stats {
+        Some(ms) if !ms.elements_by_kind.is_empty() => {
+            let total: usize = ms.elements_by_kind.values().sum();
+            json!({"total": total, "by_kind": ms.elements_by_kind})
+        }
+        _ => Value::Null,
+    };
+
     json!({
         "job_id": job.id,
         "goal": job.goal,
@@ -3386,7 +3483,8 @@ fn job_status_value(job: &GuidedJob) -> Value {
         "elapsed_ms": job.stages.iter().filter_map(|st| st.elapsed_ms).sum::<u64>(),
         "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
         "sheets": index_count(job, "sheets"),
-        "levels": index_count(job, "levels"),
+        "levels": levels,
+        "elements": elements,
     })
 }
 
@@ -3395,7 +3493,29 @@ fn index_count(job: &GuidedJob, key: &str) -> Option<usize> {
     job.index.as_ref().and_then(|i| i.get(key)).and_then(Value::as_array).map(Vec::len)
 }
 
-fn job_summary(s: &Session, job: &GuidedJob) -> Value {
+/// Model statistics from the saved drawing (Q5278 MUST 1).
+struct ModelStats {
+    levels: usize,
+    elements_by_kind: BTreeMap<String, usize>,
+}
+
+/// Extract model statistics from the session's saved model.
+fn model_stats_from_session(s: &Session) -> Option<ModelStats> {
+    let (sp, stored) = super::bspec::current(s, "job").ok()?;
+    if !stored {
+        return None;
+    }
+    let d = s.doc().ok()?;
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    for e in d.model.iter().take(500_000) {
+        if let Some(part) = super::wallgen::made_as(e) {
+            *by_kind.entry(part).or_default() += 1;
+        }
+    }
+    Some(ModelStats { levels: sp.levels.len(), elements_by_kind: by_kind })
+}
+
+fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     let mut results = json!({});
     for stage in &job.stages {
         if stage.status != StageStatus::Skipped {
@@ -3405,13 +3525,25 @@ fn job_summary(s: &Session, job: &GuidedJob) -> Value {
             });
         }
     }
+    // Q5278 MUST 1: levels and element counts from the saved model, not session-local index.
+    let levels: Value = match stats {
+        Some(ms) => json!(ms.levels),
+        None => index_count(job, "levels").map_or(Value::Null, |n| json!(n)),
+    };
+    let elements: Value = match stats {
+        Some(ms) if !ms.elements_by_kind.is_empty() => {
+            json!(ms.elements_by_kind.iter().map(|(k, v)| json!({"kind": k, "count": v})).collect::<Vec<_>>())
+        }
+        _ => Value::Null,
+    };
     json!({
         "goal": job.goal,
         "stages_completed": job.stages.iter().filter(|s| s.status == StageStatus::Done).count(),
         "total_questions": job.stages.iter().map(|s| s.questions.len() + s.verify.len() + s.completeness.len()).sum::<usize>(),
         "rules_learned": job.rules.len(),
         "sheets": index_count(job, "sheets"),
-        "levels": index_count(job, "levels"),
+        "levels": levels,
+        "elements": elements,
         // From the saved model, not the stage's own count.
         "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
         "results": results,
