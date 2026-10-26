@@ -571,7 +571,9 @@ dependencies = [
  "cadcraft-mcp",
  "cadcraft-ui-egui",
  "chrono",
+ "craft-ui",
  "craft-update",
+ "craft-window",
  "eframe",
  "egui",
  "hidapi",
@@ -740,6 +742,7 @@ dependencies = [
  "chrono",
  "craft-ui",
  "craft-update",
+ "craft-window",
  "egui",
  "egui-wgpu",
  "egui_kittest",
@@ -992,12 +995,12 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "hayro-syntax",
  "krilla",
@@ -1007,7 +1010,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "egui",
  "log",
@@ -1020,7 +1023,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "chrono",
  "dunce",
@@ -1040,6 +1043,17 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip",
+]
+
+[[package]]
+name = "craft-window"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
+dependencies = [
+ "egui",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "wayland-client",
 ]
 
 [[package]]
@@ -1981,7 +1995,7 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "hayro-ccitt",
 ]
@@ -1995,7 +2009,7 @@ checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
 [[package]]
 name = "hayro-syntax"
 version = "0.7.2"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "hayro-jbig2",
  "hayro-jpeg2000",
@@ -2357,7 +2371,7 @@ dependencies = [
 [[package]]
 name = "krilla"
 version = "0.8.2"
-source = "git+https://github.com/storytold/craft-libs?rev=a0916808f7d78bed8c7b90cdf937176015454a7f#a0916808f7d78bed8c7b90cdf937176015454a7f"
+source = "git+https://github.com/storytold/craft-libs?rev=9f89fe8f6d72ab4db4cc06f186381a6a254463ab#9f89fe8f6d72ab4db4cc06f186381a6a254463ab"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
