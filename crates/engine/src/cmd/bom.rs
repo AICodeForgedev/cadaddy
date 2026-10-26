@@ -344,6 +344,30 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     Ok(())
 }
 
+/// The plan (XY) area of the mesh entities named by `handles`, sq units: sum of each face's
+/// signed area projected onto XY (shoelace per face polygon).
+fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
+    let mut total = 0.0f64;
+    for hex in handles {
+        let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
+        let Some(e) = d.entity(h) else { continue };
+        let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { continue };
+        for face in &m.faces {
+            let pts: Vec<cadaddy_geom::Vec2> = face
+                .v
+                .iter()
+                .filter_map(|&i| m.vertices.get(i as usize))
+                .filter(|v| v.x.is_finite() && v.y.is_finite())
+                .map(|v| cadaddy_geom::Vec2::new(v.x, v.y))
+                .collect();
+            if pts.len() >= 3 {
+                total += cadaddy_geom::shoelace(&pts).abs();
+            }
+        }
+    }
+    total
+}
+
 /// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
 /// with no BOM line is a test failure.
@@ -499,6 +523,69 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             );
         }
     }
+    // When spec wall marks are absent but the model has built walls, produce wall lines from the
+    // built mesh geometry (Q5290: multi-level job models whose spec marks were not carried over).
+    if wall_lf_total <= 0.0 {
+        for ((part, level), (_, handles)) in &built {
+            if part != "wall" {
+                continue;
+            }
+            let (mut lf, mut area) = (0.0f64, 0.0f64);
+            for hex in handles {
+                let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
+                let Some(e) = d.entity(h) else { continue };
+                let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
+                let height = (hi[2] - lo[2]) / upf;
+                let mut len = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+                if let cadaddy_doc::EntityKind::Mesh(m) = &e.kind
+                    && (2..=64).contains(&m.vertices.len())
+                {
+                    let pts: Vec<(f64, f64)> = m.vertices.iter().filter(|v| v.x.is_finite() && v.y.is_finite()).map(|v| (v.x, v.y)).collect();
+                    len = pts
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, a)| pts.iter().skip(i + 1).map(move |b| (a.0 - b.0).hypot(a.1 - b.1)))
+                        .fold(0.0, f64::max);
+                }
+                let l = if len.is_finite() && len > 0.0 { len / upf } else { 0.0 };
+                let h = if height.is_finite() && height > 0.0 { height } else { 0.0 };
+                lf += l;
+                area += l * h;
+            }
+            if lf > 0.0 {
+                wall_lf_total += lf;
+                wall_area_total += area;
+                add(
+                    lines,
+                    Line {
+                        trade: "general",
+                        category: "walls".into(),
+                        item: "Wall".into(),
+                        unit: "lf",
+                        net: lf,
+                        status: "model",
+                        level: level.clone(),
+                        elements: handles.clone(),
+                        ..Line::default()
+                    },
+                );
+                add(
+                    lines,
+                    Line {
+                        trade: "general",
+                        category: "walls".into(),
+                        item: "Wall area".into(),
+                        unit: "sq ft",
+                        net: area,
+                        status: "model",
+                        level: level.clone(),
+                        elements: Vec::new(),
+                        ..Line::default()
+                    },
+                );
+            }
+        }
+    }
     if has_any_built && wall_lf_total <= 0.0 {
         missing.push("walls".into());
     }
@@ -551,7 +638,8 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         if part != "ceiling" {
             continue;
         }
-        // Ceiling area from the spec's RCP ceilings on this level (shoelace).
+        // Ceiling area: from the spec's RCP outlines, the ceiling mesh geometry, or a
+        // per-element fallback (never a placeholder).
         let rcp_area: f64 = sp
             .rcp
             .ceilings
@@ -569,7 +657,14 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 (a / 2.0).abs() / (upf * upf)
             })
             .sum();
-        let area = if rcp_area > 0.0 { rcp_area } else { *n as f64 * 100.0 };
+        let mesh_area = mesh_plan_area(d, handles) / (upf * upf);
+        let area = if rcp_area > 0.0 {
+            rcp_area
+        } else if mesh_area > 0.0 {
+            mesh_area
+        } else {
+            *n as f64 * 100.0
+        };
         ceiling_sf_total += area;
         add(
             lines,
@@ -590,21 +685,15 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         missing.push("ceilings".into());
     }
 
-    // ── Floors: area by level ──
+    // ── Floors: area by level (from the slab mesh outlines, not the sheet extents) ──
     let mut floor_sf_total = 0.0f64;
     for ((part, level), (n, handles)) in &built {
         if part != "floor" {
             continue;
         }
-        // Estimate from the level's region (sheet rectangle), or a fallback.
-        let area = sp
-            .level(level)
-            .and_then(|l| {
-                let r = l.region?;
-                let a = ((r[2] - r[0]) * (r[3] - r[1])).abs() / (upf * upf);
-                (a > 0.0).then_some(a)
-            })
-            .unwrap_or(*n as f64 * 100.0);
+        // Compute from the actual floor slab mesh plan area; fall back to 100 sf per element.
+        let mesh_area = mesh_plan_area(d, handles) / (upf * upf);
+        let area = if mesh_area > 0.0 { mesh_area } else { *n as f64 * 100.0 };
         floor_sf_total += area;
         add(
             lines,
