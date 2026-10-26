@@ -1,7 +1,7 @@
 //! `cadaddy-cli`: headless CADaddy.
 //!
 //! ```text
-//! cadaddy-cli info FILE                           summary as JSON (a .cdy file's manifest and chunk sizes first)
+//! cadaddy-cli info FILE [--full]                   short summary (--full for detailed JSON with manifest and chunk sizes)
 //! cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|pdf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
 //! cadaddy-cli verify FILE.cdy                     check every chunk's checksum, the index and the drawing (exit 1 if damaged)
@@ -60,15 +60,16 @@ fn stdout_failed(e: std::io::Error) {
 }
 
 const USAGE: &str = "usage:
-  cadaddy-cli info FILE.(dwg|dxf|cdy)
+  cadaddy-cli info FILE.(dwg|dxf|cdy) [--full]
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
   cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
   cadaddy-cli verify FILE.cdy
+  cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]
   cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F (one `id {json}` per line)] [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
-  cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
+  cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]
   cadaddy-cli perf [N | FILE]
   cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadaddy-cli --version
@@ -241,8 +242,9 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 const NO_OPTIONS: &[OptionSpec] = &[];
 
 /// One JSON document: the drawing's summary, and for a .cdy file its container too (manifest,
-/// what each kind of chunk takes, the bytes earlier saves left behind).
-fn info(path: &str) -> Result<(), String> {
+/// what each kind of chunk takes, the bytes earlier saves left behind). `full` adds entity
+/// details and container internals; the default is a compact summary.
+fn info(path: &str, full: bool) -> Result<(), String> {
     let container = std::fs::read(path).ok().and_then(|bytes| {
         let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
@@ -254,7 +256,29 @@ fn info(path: &str) -> Result<(), String> {
     if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
         obj.extend(c);
     }
-    outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    if full {
+        outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        // Short summary: file, format, entities, extents, units, layer/block counts.
+        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
+        let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
+        let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
+        let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
+        let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
+        let extents = v.get("extents").cloned().unwrap_or(Value::Null);
+        let short = json!({
+            "file": path,
+            "format": ext,
+            "entities": entities,
+            "layers": layers,
+            "blocks": blocks,
+            "units": units,
+            "extents": extents,
+            // Records a damaged file lost stay visible without --full.
+            "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
+        });
+        outln!("{}", serde_json::to_string_pretty(&short).unwrap_or_default());
+    }
     Ok(())
 }
 
@@ -406,6 +430,42 @@ fn verify(path: &str) -> Result<(), String> {
 
 /// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
 /// Exit 1 on fail.
+/// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
+fn bim(args: &[String]) -> Result<(), String> {
+    let mut path: Option<&str> = None;
+    let mut out: Option<String> = None;
+    let mut force = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--out" => out = Some(it.next().ok_or("--out needs a .cdy file path")?.clone()),
+            "--force" => force = true,
+            o if o.starts_with('-') => return Err(format!("bim: unknown option {o}")),
+            f => {
+                if path.is_some() {
+                    return Err("bim takes one file or folder".into());
+                }
+                path = Some(f);
+            }
+        }
+    }
+    let path = path.ok_or("usage: cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]")?;
+    let mut s = Session::for_app();
+    s.new_drawing_with_viewports(false);
+    let p = json!({ "path": path, "force": force });
+    let r = s.execute("bim.from_pdf", &p).map_err(|e| e.to_string())?;
+    // If --out was given, copy the last .cdy to that path.
+    if let Some(out_path) = &out
+        && let Some(last) = r.get("cdy_paths").and_then(Value::as_array).and_then(|a| a.last()).and_then(Value::as_str)
+        && last != out_path
+    {
+        std::fs::copy(last, out_path).map_err(|e| format!("{out_path}: {e}"))?;
+    }
+    outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);
+    if cdy_paths == 0 { Err("no BIM models were built; see warnings in the output".into()) } else { Ok(()) }
+}
+
 fn check_import(args: &[String]) -> Result<(), String> {
     let mut json_output = false;
     let mut file = None;
@@ -821,9 +881,12 @@ enum McpTarget {
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
+/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADCRAFT_CONTROL_PORT` are
+/// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
-    let (mut lazy, mut launch, mut headless) = (false, false, false);
+    let (mut lazy, mut headless) = (false, false);
+    let mut no_launch = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -840,15 +903,32 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             }
             "--lazy" => lazy = true,
             "--headless" => headless = true,
-            "--launch" => launch = true,
+            // Launch is the default for --connect; the flag stays accepted.
+            "--launch" => {}
+            "--no-launch" => no_launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
+        }
+    }
+    // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
+    if addr.is_none() && !headless {
+        let port_str =
+            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+        if let Some(ps) = port_str {
+            let p = ps.trim();
+            if let Ok(port) = p.parse::<u16>() {
+                addr = Some(format!("127.0.0.1:{port}"));
+            }
         }
     }
     match addr {
         Some(_) if headless => Err("--headless and --connect exclude each other".into()),
-        // `--launch` connects at the first call too (the app opens then).
-        Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
-        None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
+        // `--launch` defaults on for --connect: the app opens at first call if not running.
+        // Pass `--no-launch` to turn it off.
+        Some(addr) => {
+            let launch = !no_launch;
+            Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch })
+        }
+        None if lazy => Err("--lazy needs --connect HOST:PORT".into()),
         None if headless => Ok(McpTarget::Headless),
         None => Ok(McpTarget::Auto),
     }
@@ -956,13 +1036,15 @@ mod mcp_args_tests {
     #[test]
     fn mcp_connect_with_address_selects_remote() {
         let to = |addr: &str, lazy, launch| Ok(McpTarget::Connect { addr: addr.into(), lazy, launch });
-        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", false, false));
-        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", false, false));
-        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, false));
+        // --launch defaults ON: --connect alone gets launch=true, lazy=true.
+        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", true, true));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", true, true));
+        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, true));
         assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--launch"])), to("localhost:7979", true, true));
-        // Without an app to reach they mean nothing: never a headless session.
+        // --no-launch turns it off.
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--no-launch"])), to("localhost:7979", false, false));
+        // --lazy without --connect is still an error.
         assert!(parse_mcp_args(&args(&["--lazy"])).is_err());
-        assert!(parse_mcp_args(&args(&["--launch"])).is_err());
     }
 
     #[test]
@@ -989,10 +1071,19 @@ fn main() -> ExitCode {
 
 fn cli() -> ExitCode {
     install_io();
+    // A guided job (job.start) says what it is doing while it runs, one line per stage and sheet.
+    cadaddy_engine::cmd::guided::set_progress_sink(Some(|line| eprintln!("{line}")));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let r = match args.first().map(String::as_str) {
-        Some("info") => validate_options("info", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| info(p)),
+        Some("info") => {
+            const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--full", takes_value: false }];
+            validate_options("info", &rest, INFO_OPTIONS).and_then(|_| {
+                let full = rest.iter().any(|a| a == "--full");
+                let path = rest.iter().find(|a| !a.starts_with("--")).ok_or_else(|| USAGE.to_string())?;
+                info(path, full)
+            })
+        }
         Some("convert") => convert(&rest),
         Some("verify") => {
             validate_options("verify", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| verify(p))
@@ -1011,6 +1102,7 @@ fn cli() -> ExitCode {
                 .collect();
             outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
+        Some("bim") => bim(&rest),
         Some("check-import") => check_import(&rest),
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {

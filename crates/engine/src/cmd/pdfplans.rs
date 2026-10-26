@@ -227,8 +227,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let vectors = segments(&ents).len();
     if images > 0 && vectors < 50 {
         return Ok(json!({
+            "status": "skipped",
             "raster_only": true,
             "message": "This page is a picture (a scan or a rendering), not linework: plans can only be read from vector PDFs.",
+            "applied": false,
+        }));
+    }
+    if ents.is_empty() || vectors == 0 {
+        return Ok(json!({
+            "status": "skipped",
+            "message": "0 vector inputs to classify — the drawing is empty or has no linework. Try: open or convert a PDF first.",
             "applied": false,
         }));
     }

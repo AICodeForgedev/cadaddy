@@ -130,6 +130,16 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
+        json!({"name": "bim_from_pdf", "description": "One-call PDF to BIM: imports PDF(s), checks quality, drafts a building spec and builds the 3D model. Returns .cdy paths, check results, built counts, warnings and exact next steps. Multi-plan sheets become stacked levels.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": {"type": "string", "description": "PDF file or folder of PDFs"},
+                "levels": {"type": "string", "description": "\"auto\" (default)"},
+                "force": {"type": "boolean", "description": "build even if import check fails"}
+            }, "required": ["path"]}}),
+        json!({"name": "workflows", "description": "List the main agent workflows with exact example MCP calls. Returns a list of named flows (pdf-to-bim, view-3d, plot-set, bim-work, convert-folder) each with steps and example tool calls.",
+            "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "job id (omit to see all)"}}}}),
     ];
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
@@ -552,6 +562,25 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         "ui_click" => b.call("ui.pointer", a),
         "ui_elements" => b.call("ui.elements", a),
         "import_check" => exec(b, "import.check", a),
+        "bim_from_pdf" => exec(b, "bim.from_pdf", a),
+        "workflows" => return Ok(text(&workflows_list())),
+        "job_status" => {
+            // Query the backend's command state: busy, running command, prompt.
+            let st = b.call("cmdline.state", json!({}));
+            match st {
+                Ok(v) => {
+                    let busy = v.get("busy").and_then(Value::as_bool).unwrap_or(false);
+                    let running = v.get("running").cloned().unwrap_or(Value::Null);
+                    return Ok(text(&json!({
+                        "busy": busy,
+                        "running": running,
+                        "idle": !busy,
+                        "hint": if busy { "wait_until_idle {} — blocks until done" } else { "ready for the next command" },
+                    })));
+                }
+                Err(e) => return Ok(err_text(&e)),
+            }
+        }
         "render" => {
             return Ok(match b.call("ui.render", a) {
                 Ok(v) => match v.get("pngBase64").and_then(Value::as_str) {
@@ -566,5 +595,68 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
     Ok(match r {
         Ok(v) => text(&v),
         Err(e) => err_text(&e),
+    })
+}
+
+/// The `workflows` tool: main agent flows with exact example calls.
+fn workflows_list() -> Value {
+    json!({
+        "workflows": [
+            {
+                "name": "pdf-to-bim",
+                "description": "Import a PDF floor plan, check quality, build a 3D BIM model",
+                "steps": [
+                    "1. bim_from_pdf {path: \"plan.pdf\"} — one call does everything: import, check, spec, build, save .cdy",
+                    "2. render {} — see the 3D result",
+                    "3. bspec.set {spec: {rooms: [{name: \"Kitchen\", ceiling_height_ft: 9}]}} — refine if needed",
+                    "4. model.build {} — rebuild after spec changes"
+                ],
+                "example": "bim_from_pdf {path: \"/path/to/plans.pdf\"}"
+            },
+            {
+                "name": "view-3d",
+                "description": "View a drawing in 3D with shading and lighting",
+                "steps": [
+                    "1. open {path: \"building.cdy\"}",
+                    "2. execute {command: \"view.swiso\"} — SW isometric view",
+                    "3. execute {command: \"vscurrent\", params: {style: \"realistic\"}}",
+                    "4. render {} — render to PNG"
+                ],
+                "example": "open {path: \"building.cdy\"}"
+            },
+            {
+                "name": "plot-set",
+                "description": "Batch plot drawings to PDF",
+                "steps": [
+                    "1. open {path: \"project.cdy\"}",
+                    "2. plot {folder: \"/drawings\", out: \"/pdfs\"}",
+                ],
+                "example": "plot {folder: \"/path/to/drawings\", out: \"/path/to/output\"}"
+            },
+            {
+                "name": "bim-work",
+                "description": "Coordinate, take off and estimate a built BIM model: clashes with fixes, issues (BCF), quantities, cost",
+                "steps": [
+                    "1. open {path: \"building.cdy\"} (a model built with bim_from_pdf or model.build)",
+                    "2. execute {command: \"bim.clash\", params: {a: \"electrical\", b: \"mechanical\"}} — clashes with ids, status and a viewpoint each",
+                    "3. execute {command: \"bim.clash.fix\", params: {id: \"C-…\", approve: true}} — the lower-priority trade moves; checked again",
+                    "4. execute {command: \"bim.issue.create\", params: {title: \"…\", kind: \"rfi\", elements: [\"1A2\"], assignee: \"…\"}}, then bcf.export {path: \"issues.bcf\", version: \"3.0\"}",
+                    "5. execute {command: \"bim.takeoff\", params: {group_by: \"level\"}} — counts, lengths, areas with element handles; bim.takeoff.show {line: 0} highlights one in 3D",
+                    "6. execute {command: \"bim.estimate\", params: {cost_table: \"costs.csv\", revision: \"A\"}} — CSV/XLSX columns item, unit, material, labor_hrs; compare_to: \"A\" later gives the change order"
+                ],
+                "example": "execute {command: \"bim.takeoff\", params: {group_by: \"level\"}}"
+            },
+            {
+                "name": "convert-folder",
+                "description": "Convert a folder of drawings between formats (DWG, DXF, CDY, PDF)",
+                "steps": [
+                    "1. Use CLI: cadaddy-cli convert INFOLDER OUTFOLDER --to cdy",
+                    "2. Or per file: open {path: \"plan.dwg\"}, then save {path: \"plan.cdy\"}"
+                ],
+                "example": "open {path: \"plan.dwg\"}"
+            }
+        ],
+        "error_recovery": "Every error message names the next call to make. If a tool returns an error, read its message for the exact corrective call.",
+        "quick_start": "For PDF to BIM in one call: bim_from_pdf {path: \"your_plans.pdf\"}"
     })
 }

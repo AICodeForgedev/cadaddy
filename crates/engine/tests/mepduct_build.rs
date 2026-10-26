@@ -241,6 +241,33 @@ fn zero_mep_produces_warning() {
     assert!(warnings > 0, "bim.build mep with no content should produce a warning");
 }
 
+#[test]
+fn a_notes_sheet_mep_build_warns_why_it_is_empty() {
+    // A mechanical notes sheet: schedule-table lines are not runs, so MEP isn't read from it,
+    // and the empty MEP build says so instead of coming back silent.
+    let mut s = Session::new();
+    layer(&mut s, "TEXT");
+    s.execute("text", &json!({"at": [400, 40], "text": "DRAWING TITLE", "height": 2})).unwrap();
+    s.execute("text", &json!({"at": [400, 36], "text": "MECHANICAL NOTES AND SCHEDULES", "height": 2})).unwrap();
+    s.execute("text", &json!({"at": [400, 20], "text": "M-1", "height": 4})).unwrap();
+    layer(&mut s, "TABLE");
+    for y in (60..=200).step_by(10) {
+        s.execute("line", &json!({"points": [[20, y], [300, y]]})).unwrap();
+    }
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9,
+                         "region": [-100, -100, 600, 600], "base": [0, 0]}],
+        }}),
+    )
+    .unwrap();
+    let r = s.execute("bim.build", &json!({"discipline": "mep"})).unwrap();
+    let warnings: Vec<&str> = r["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str()).collect();
+    assert!(warnings.iter().any(|w| w.contains("notes")), "warnings: {warnings:?}");
+    assert_eq!(r["built"]["L1"]["mep"].as_u64().unwrap_or(0), 0, "{r}");
+}
+
 // ---- Tests: exact counts and length tolerance ----
 
 #[test]

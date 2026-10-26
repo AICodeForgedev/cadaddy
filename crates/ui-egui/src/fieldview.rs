@@ -9,6 +9,9 @@
 //! connection comes back as it was; Send Notes hands the notes not yet sent back as a
 //! `cadaddy-fieldnotes` file that `fieldview.sync` merges into the drawing.
 //!
+//! Plan and 3D are linked (Q5242): a double tap on the plan shows that spot in 3D, and a double
+//! tap in 3D shows the spot it hits on the plan.
+//!
 //! The web app shows it with `?field` (and `?field=URL` fetches a package).
 
 use std::collections::BTreeSet;
@@ -84,6 +87,8 @@ pub struct FieldViewer {
     pub drawn_3d: usize,
     /// Open was pressed: the shell shows its file picker.
     pub open_requested: bool,
+    /// The spot the 3D view orbits when a plan point was sent to it (feet).
+    pub focus: Option<[f64; 3]>,
 }
 
 impl Default for FieldViewer {
@@ -112,6 +117,7 @@ impl Default for FieldViewer {
             heading: 90.0,
             drawn_3d: 0,
             open_requested: false,
+            focus: None,
         }
     }
 }
@@ -180,6 +186,7 @@ impl FieldViewer {
         self.walk_at = r.at;
         self.dist = ((max[0] - min[0]).max(max[1] - min[1]) * 2.2).clamp(15.0, 400.0);
         self.room = Some(i);
+        self.focus = None;
         self.selected = None;
         self.query.clear();
         self.plan = None;
@@ -223,6 +230,54 @@ impl FieldViewer {
             Tool::Measure => self.measure_point([p[0], p[1], z]),
             Tool::Note => self.start_note([p[0], p[1], z]),
         }
+    }
+
+    /// A plan point (feet) in 3D: the 3D view orbits it, close up, on this level.
+    pub fn plan_to_3d(&mut self, p: [f64; 2]) {
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            return;
+        }
+        let at = [p[0], p[1], self.floor_z() + 4.0];
+        self.focus = Some(at);
+        self.room = None;
+        self.walk_at = p;
+        self.dist = 25.0;
+        self.mode = Mode::Model;
+        self.status = format!("{} {:.1}, {:.1}", t("3D"), p[0], p[1]);
+    }
+
+    /// A 3D point (feet) on the plan: the plan centred on it, its level shown.
+    pub fn model_to_plan(&mut self, a: [f64; 3]) {
+        if !a.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        if let Some(p) = &self.pkg
+            && let Some(l) = p
+                .levels
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.elevation_ft <= a[2] + 0.05)
+                .max_by(|x, y| x.1.elevation_ft.total_cmp(&y.1.elevation_ft))
+                .map(|(i, _)| i)
+        {
+            self.level = l;
+        }
+        let scale = self.plan.map_or(20.0, |(_, s)| s.max(20.0));
+        self.plan = Some(([a[0], a[1]], scale));
+        self.mode = Mode::Plan;
+        self.status = format!("{} {:.1}, {:.1}", t("Plan"), a[0], a[1]);
+    }
+
+    /// Where a ray from the camera lands: the element it hits, else the floor of this level.
+    pub fn ray_spot(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<[f64; 3]> {
+        let level = self.level_name();
+        let pkg = self.pkg.as_ref()?;
+        let at = |t: f64| [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+        if let Some((_, t)) = pkg.pick_ray(origin, dir, Some(&level), &self.hidden) {
+            return Some(at(t));
+        }
+        let z = self.floor_z();
+        (dir[2].abs() > 1e-9).then(|| (z - origin[2]) / dir[2]).filter(|t| t.is_finite() && *t > 0.0).map(at)
     }
 
     /// A tap in 3D: the ray from the camera through it.
@@ -563,9 +618,13 @@ impl FieldViewer {
                 c[1] += f64::from(pan.y / s);
                 self.plan = Some((c, s));
                 let tap = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
+                let to_plan = |at: Pos2| [c[0] + f64::from((at.x - rect.center().x) / s), c[1] - f64::from((at.y - rect.center().y) / s)];
                 if let Some(at) = tap {
-                    let p = [c[0] + f64::from((at.x - rect.center().x) / s), c[1] - f64::from((at.y - rect.center().y) / s)];
-                    self.tap_plan(p, f64::from(14.0 / s));
+                    self.tap_plan(to_plan(at), f64::from(14.0 / s));
+                }
+                if let Some(at) = resp.double_clicked().then(|| resp.interact_pointer_pos()).flatten() {
+                    self.plan_to_3d(to_plan(at));
+                    return;
                 }
                 self.draw_plan(&painter, rect, c, s);
             }
@@ -587,6 +646,12 @@ impl FieldViewer {
                     let (o, d) =
                         cam.ray(f64::from(at.x - rect.min.x), f64::from(at.y - rect.min.y), f64::from(rect.width()), f64::from(rect.height()));
                     self.tap_ray(o, d);
+                    if resp.double_clicked()
+                        && let Some(spot) = self.ray_spot(o, d)
+                    {
+                        self.model_to_plan(spot);
+                        return;
+                    }
                 }
                 self.draw_3d(&painter, rect, &cam);
                 if self.mode == Mode::Walk {
@@ -602,14 +667,15 @@ impl FieldViewer {
         match self.mode {
             Mode::Walk => Camera::walk(self.walk_at, z, self.heading),
             _ => {
-                let target = match self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i)) {
-                    Some(r) => [r.at[0], r.at[1], z + 4.0],
-                    None => {
+                let target = match (self.focus, self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i))) {
+                    (Some(f), _) => f,
+                    (None, Some(r)) => [r.at[0], r.at[1], z + 4.0],
+                    (None, None) => {
                         let (a, b) = self.level_box();
                         [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, z + 4.0]
                     }
                 };
-                let dist = if self.room.is_some() {
+                let dist = if self.room.is_some() || self.focus.is_some() {
                     self.dist
                 } else {
                     let (a, b) = self.level_box();
@@ -949,6 +1015,41 @@ mod tests {
         assert_eq!(civil(0), (1970, 1, 1));
         assert_eq!(civil(19_723), (2024, 1, 1));
         assert_eq!(civil(20_513), (2026, 3, 1));
+    }
+
+    /// Q5242: a plan point goes to 3D at that spot, and a 3D spot back to the plan on its level.
+    #[test]
+    fn plan_and_3d_are_linked() {
+        use cadaddy_walk3d::field::FieldLevel;
+        let mut v = FieldViewer::new("test");
+        v.pkg = Some(FieldPackage {
+            levels: vec![
+                FieldLevel { name: "Level 1".into(), elevation_ft: 0.0, height_ft: 14.0 },
+                FieldLevel { name: "Level 2".into(), elevation_ft: 14.0, height_ft: 14.0 },
+            ],
+            ..FieldPackage::default()
+        });
+        v.level = 1;
+        v.plan_to_3d([30.0, 12.0]);
+        assert_eq!(v.mode, Mode::Model);
+        let cam = v.camera();
+        let (eye, target) = (cam.eye, [30.0, 12.0, 18.0]);
+        let d = ((eye[0] - target[0]).powi(2) + (eye[1] - target[1]).powi(2) + (eye[2] - target[2]).powi(2)).sqrt();
+        assert!((d - 25.0).abs() < 1e-6, "orbits the spot 25' away: {eye:?}");
+        // A tap straight down onto level 1's floor (no elements): back to the plan there.
+        let spot = v.ray_spot([5.0, 6.0, 40.0], [0.0, 0.0, -1.0]).unwrap();
+        assert_eq!(spot, [5.0, 6.0, 14.0], "this level's floor");
+        v.model_to_plan([5.0, 6.0, 3.0]);
+        assert_eq!((v.mode, v.level), (Mode::Plan, 0));
+        assert_eq!(v.plan.map(|(c, _)| c), Some([5.0, 6.0]));
+        // Hostile points change nothing.
+        v.plan_to_3d([f64::NAN, 0.0]);
+        v.model_to_plan([0.0, f64::INFINITY, 0.0]);
+        assert_eq!(v.mode, Mode::Plan);
+        // Picking a room orbits the room again.
+        v.focus = Some([1.0, 1.0, 1.0]);
+        v.select_room(0);
+        assert!(v.focus.is_some(), "no room 0 in this package: nothing changes");
     }
 
     #[test]

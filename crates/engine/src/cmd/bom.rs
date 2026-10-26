@@ -350,8 +350,9 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
 
     // Count built 3D elements by part and level: (part, level) → (count, handles).
     let mut built: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
-    for e in d.model.iter().take(MAX_LINES) {
-        let Some(part) = super::wallgen::made_as(e) else { continue };
+    // A model built from a print comes after the sheet's own objects (tens of thousands of
+    // them): cap the built elements, not the objects looked at.
+    for (e, part) in d.model.iter().filter_map(|e| Some((e, super::wallgen::made_as(e)?))).take(MAX_LINES) {
         let level = super::bspec::made_level(e).unwrap_or_default();
         let entry = built.entry((part, level)).or_insert((0, Vec::new()));
         entry.0 += 1;

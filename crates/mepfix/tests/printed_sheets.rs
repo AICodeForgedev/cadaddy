@@ -244,7 +244,7 @@ fn merged(set: &cadaddy_mepfix::FixtureSet) -> printed::PrintedSet {
     // expected since the default import now uses content classification for non-OCG PDFs.
     for (n, b) in &p.dxf {
         let d = cadaddy_io::read_dxf(b).unwrap_or_else(|e| panic!("{n}: {e}"));
-        for l in ["DEVICE", "CALLOUT", "ARCH", "GRID-BUBBLE", "TITLE"] {
+        for l in ["DEVICE", "TEXT", "CALLOUT", "ARCH", "A-WALL", "GRID-BUBBLE", "TITLE"] {
             assert!(!d.layers.iter().any(|x| x.name.eq_ignore_ascii_case(l)), "{n} has layer {l}");
         }
     }

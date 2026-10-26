@@ -80,6 +80,9 @@ low-level `execute` only when needed.
 | `bim_job` | One call per BIM step: briefing, import prints, build model, review items, resolve with citations, takeoff, RFIs, export IFC. The project keeps state across sessions. |
 | `guided_job` | Prints → model / takeoff / estimate as a guided pipeline: `start` a job on a folder of PDFs, then loop `next` / `answer`; the software runs import → classify → levels → rooms → devices → build → takeoff and pauses with questions it can't settle alone. `status`, `explain`, `worklist`, `undo`, `report`. |
 | `import_check` | How good a PDF import is: scale, layers, text recovery, fills, symbols, grid — pass/fail, a 0-100 score and per-check evidence; check the open drawing or a file by path. |
+| `bim_from_pdf` | One call from PDF prints to a 3D BIM: imports the PDF(s), checks the import, drafts the building spec and builds the model; returns the .cdy paths, check results, built counts, warnings and the exact next calls. Multi-plan sheets become stacked levels. |
+| `workflows` | The main agent workflows with exact example calls: pdf-to-bim, view-3d, plot-set, convert-folder. Start here when unsure which tools to use. |
+| `job_status` | What CADaddy is busy with (opening files, building models, rendering) and the progress of long commands like `bim_from_pdf` and `model.build`; pair with `wait_until_idle`. |
 | `project` | Manage projects (groups of drawings sharing rules, types and standards): create, open, add/remove drawings, standards, shelve/restore. |
 | `project_rules` | Project rules with source and tier (field-verified > RFI > submittal > spec > built-in): mounting heights, wiring methods, clearances, tolerances, naming, stud/joist layout. |
 
