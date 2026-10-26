@@ -1855,14 +1855,15 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
     let mut rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
-    // A room carries the level of the sheet it was read on.
+    // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
+    // wins over a spec's guess (before the build, the first level took every room off its
+    // regions).
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
         for room in list.iter_mut() {
             let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
             let Some(region) = at.and_then(|at| job.level_at(at)) else { continue };
-            let has_level = room.get("level").and_then(Value::as_str).is_some_and(|l| !l.is_empty());
             if let Some(o) = room.as_object_mut() {
-                if !has_level && !region.level.is_empty() {
+                if !region.level.is_empty() {
                     o.insert("level".into(), json!(region.level));
                 }
                 o.insert("sheet".into(), json!(region.number));
@@ -2018,7 +2019,7 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
     list.retain(|room| {
         let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
         let name = room.get("name").and_then(Value::as_str).unwrap_or("");
-        if !name.trim().is_empty() && !super::autospec::room_label(name) {
+        if !name.trim().is_empty() && !super::autospec::room_like_name(name) {
             not_a_name += 1;
             return false;
         }
@@ -4650,12 +4651,14 @@ mod tests {
 
     #[test]
     fn the_title_block_border_and_stamp_build_no_walls_or_rooms() {
-        // Without the frame (the whole sheet a level), the title block's boxes are rooms.
+        // Without the frame (the whole sheet a level), the title block's boxes are traced around
+        // its texts, but no room is built from them: they run along no built wall (Q5291).
         let mut s = furnished_sheet();
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         job.sheet_regions = vec![a_plan(None, None)];
         let r = build_job(&mut s, &job);
-        assert!(r["rooms"].as_u64().is_some_and(|n| n > 2), "the test sheet's title block must close rooms: {r}");
+        assert!(r["notes"].to_string().contains("not inside built walls"), "the title block's boxes trace: {r}");
+        assert_eq!(r["rooms"].as_u64(), Some(1), "the floor's room only: {r}");
 
         // With it: only the floor's walls, its door and its two rooms.
         let mut s = furnished_sheet();

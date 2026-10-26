@@ -297,6 +297,10 @@ fn class_of(e: &Entity) -> Kind {
             "ramp" => Class::Ramp,
             "roof" => Class::Roof,
             "ground" => Class::Terrain,
+            // A room model.build made (Q5291): a space, named as its tag.
+            "room" => {
+                return kind(Class::Space, t.get(1).cloned(), extra("name:").unwrap_or_else(|| "Room".into()), extra("number:").unwrap_or_default());
+            }
             "concrete" => {
                 // An element by its kind; its rebar and what is cast into it by their part.
                 let ek = extra("kind:").unwrap_or_default();
@@ -587,9 +591,13 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         zmin: f64,
     }
     let mut items: Vec<Item> = Vec::new();
+    // A room model.build made is its floor outline; with room volumes (ROOMS) in the drawing,
+    // those are its space, written once.
+    let volumes = d.model.iter().any(|e| tag_strings(e, "CADADDY_ROOM").is_some());
+    let room_element = |e: &Entity| tag_strings(e, "CADADDY_WALLGEN").is_some_and(|t| t.first().is_some_and(|p| p == "room"));
     for e in d.model.iter() {
         let EntityKind::Mesh(m) = &e.kind else { continue };
-        if m.faces.is_empty() || m.vertices.is_empty() {
+        if m.faces.is_empty() || m.vertices.is_empty() || (volumes && room_element(e)) {
             continue;
         }
         let zmin = m.vertices.iter().map(|v| v.z).fold(f64::MAX, f64::min);
@@ -2438,6 +2446,9 @@ mod tests {
         ] {
             cases.push(wg(&[part, "Level 1", "2A"]));
         }
+        // A room model.build made: a space with its name (Q5291).
+        cases.push(wg(&["room", "Level 1", "2A", "type:Office", "name:Office", "number:101", "area_sf:120.00"]));
+        cases.push(wg(&["room", "Level 1", "2A"]));
         for kind in [
             "duct",
             "pipe",

@@ -513,6 +513,7 @@ fn built_element(e: &Entity) -> BuiltElement {
         "ramp" => "Ramp",
         "roof" => "Roof",
         "ground" => "GeographicElement",
+        "room" => "Space",
         "concrete" => "Footing",
         _ => match (extra("kind:"), extra("part:").unwrap_or("segment")) {
             (Some("equipment"), _) => "FlowTerminal",

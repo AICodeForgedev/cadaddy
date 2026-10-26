@@ -98,7 +98,10 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
                         .is_some_and(|[x0, y0, x1, y1]| r.at.x >= x0.min(x1) && r.at.x <= x0.max(x1) && r.at.y >= y0.min(y1) && r.at.y <= y0.max(y1))
                 })
             };
-            by_name.or_else(in_region).or_else(|| sp.levels.first())
+            // A room on no level's region has no level when the levels have regions (plans
+            // side by side: the first level would take every other sheet's rooms, Q5291).
+            let only = || (sp.levels.len() == 1 || sp.levels.iter().all(|l| l.region.is_none())).then(|| sp.levels.first()).flatten();
+            by_name.or_else(in_region).or_else(only)
         });
         let note = inside.iter().find_map(|t| {
             let up = t.to_ascii_uppercase();
@@ -182,9 +185,45 @@ fn built_ceilings(d: &cadaddy_doc::Drawing) -> Vec<BuiltCeiling> {
 /// Built room ceilings read at most (hostile drawings).
 const MAX_BUILT_ROOMS: usize = 20_000;
 
-/// The rooms of a built model, from its room ceilings; `None` when nothing was built.
+/// The rooms of a built model: its room elements (Q5291), else (a model built before rooms
+/// were elements) its room ceilings; `None` when nothing was built.
 fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
     let d = s.doc()?;
+    let els = super::bspec::room_elements(d);
+    if !els.is_empty() {
+        let spec = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
+        let upf = spec.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0 * units_per_inch(d));
+        let out = els
+            .into_iter()
+            .filter(|r| r.outline.len() >= 3)
+            .map(|r| {
+                let centre = r.outline.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / r.outline.len() as f64);
+                let perimeter: f64 = r.outline.iter().zip(r.outline.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+                let spec_room = spec.as_ref().and_then(|sp| {
+                    sp.rooms.iter().find(|x| {
+                        x.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&r.level))
+                            && ((!x.name.trim().is_empty() && x.name.trim().eq_ignore_ascii_case(&r.name))
+                                || x.number.as_deref().zip(r.number.as_deref()).is_some_and(|(a, b)| a.trim().eq_ignore_ascii_case(b)))
+                    })
+                });
+                Room3 {
+                    name: r.name,
+                    number: r.number,
+                    at: centre,
+                    label: r.source,
+                    area: cadaddy_geom::shoelace(&r.outline).abs(),
+                    perimeter,
+                    elevation: r.z,
+                    ceiling: Some(r.ceiling_ft * upf).filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CEILING_IN * upf / 12.0),
+                    finishes: r.finish.into_iter().collect(),
+                    materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
+                    level: Some(r.level).filter(|l| !l.is_empty()),
+                    outline: r.outline,
+                }
+            })
+            .collect();
+        return Ok(Some(out));
+    }
     let ceilings = built_ceilings(d);
     if ceilings.is_empty() {
         return Ok(None);

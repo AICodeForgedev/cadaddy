@@ -97,10 +97,10 @@ pub(crate) fn role_by_name(layer: &str) -> Option<(Role, &'static str)> {
     role.map(|r| (r, "plain layer name"))
 }
 
-/// A name text (not a number): two letters or more, at most 40 characters, that could name a
-/// room ([`room_label`]).
+/// A name text (not a number) that reads as a room's name ([`room_like_name`]: no note
+/// sentence).
 fn room_name(t: &str) -> bool {
-    t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t) && room_label(t)
+    !room_number(t) && room_like_name(t)
 }
 
 /// Words that put a label in a title block, a stamp or the notes, never on a room: the firm and
@@ -171,6 +171,27 @@ pub(crate) fn room_label(t: &str) -> bool {
         return false;
     }
     !up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| NOT_ROOM_WORDS.contains(&w))
+}
+
+/// Whether a tag text reads as a room's name: [`room_label`], two letters or more, a few words
+/// (at most 5, 40 characters), no sentence (a note: "PROVIDE BLOCKING AT ALL TV MOUNTS.",
+/// "SEE ENLARGED PLAN, TYP."), not a numbered note (`1.`, `(2)`), no length (`12'-0"`).
+pub(crate) fn room_like_name(t: &str) -> bool {
+    let t = t.trim();
+    let words = t.split_whitespace().count();
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    if !(letters >= 2 && t.chars().count() <= 40 && (1..=5).contains(&words)) {
+        return false;
+    }
+    if t.contains([',', ';', '!', '?', '"']) || t.contains(". ") || (t.ends_with('.') && words >= 3) {
+        return false;
+    }
+    let first = t.split_whitespace().next().unwrap_or_default();
+    let numbered = first.trim_start_matches('(').trim_end_matches(['.', ')']);
+    if first != numbered && !numbered.is_empty() && numbered.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    room_label(t) && !t.contains("'-")
 }
 
 /// A ceiling height (feet) from a note (`CLG 9'-0"`, `CEILING AT 8'6"`).
