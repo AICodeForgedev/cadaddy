@@ -1901,7 +1901,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     let none = Legend::default();
     for (g, syms) in symbols.iter().enumerate() {
         let legend = legends.get(g).unwrap_or(&none);
-        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| sheet_facts::is_circuit_label(&t.value)).collect();
+        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         for (tag, at, h) in syms {
@@ -2350,6 +2350,26 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
 
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
+/// Whether a text printed beside a device is its circuit: `G-12`, `LP-3,5` (see
+/// [`cadaddy_mepfix::sheet_facts::is_circuit_label`]) and the panel-and-number forms `LP1-3`, `2LA-12`, `H1/7`
+/// (a panel name with a letter, then one to three digits), never one of the set's sheet numbers.
+pub fn circuit_text(t: &str, sheet_numbers: &BTreeSet<String>) -> bool {
+    let t = t.trim();
+    if sheet_numbers.contains(t) || sheet_numbers.contains(&t.to_ascii_uppercase()) {
+        return false;
+    }
+    if cadaddy_mepfix::sheet_facts::is_circuit_label(t) {
+        return true;
+    }
+    let Some((panel, n)) = t.rsplit_once(['-', '/']) else { return false };
+    (2..=6).contains(&panel.len())
+        && panel.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && panel.chars().any(|c| c.is_ascii_uppercase())
+        && panel.chars().any(|c| c.is_ascii_digit())
+        && (1..=3).contains(&n.len())
+        && n.chars().all(|c| c.is_ascii_digit())
+}
+
 pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -2966,26 +2986,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
-    // Use model.build directly — it returns walls/doors/rooms/levels counts.
-    // (bim.build wraps model.build but constructs its own result without those counts.)
-    let mut result = s.execute("model.build", &json!({}))?;
-    // The model's rooms are the job's rooms on the levels it built.
-    if let Some(by_level) = rooms_from_model(s, job)
-        && let Some(o) = result.as_object_mut()
-    {
-        o.insert("rooms_by_level".into(), by_level);
-    }
-    // The plans kept out of the building (MUST 3), for the job report.
-    let skipped = not_built_sheets(job);
-    if !skipped.is_empty()
-        && let Some(o) = result.as_object_mut()
-    {
-        o.insert("not_built".into(), json!(skipped));
-    }
-    // The devices stage's devices, on their levels (bspec.draft started a new spec).
+    let mut placed: Option<Value> = None;
+    // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
+    // build: it makes each one an element carrying what was read about it (Q6002).
     if !job.devices.is_empty() {
         match super::readers::place_devices(s, &job.devices, "guided job") {
-            Ok(v) => result["devices"] = v,
+            Ok(v) => placed = Some(v),
             Err(e) => job.add_finding(
                 StageName::BimBuild,
                 &format!("The devices could not be put in the model: {e}"),
@@ -3006,6 +3012,42 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["circuits"] = json!(job.circuits.len());
     }
 
+    // Use model.build directly — it returns walls/doors/rooms/levels counts.
+    // (bim.build wraps model.build but constructs its own result without those counts.)
+    let mut result = s.execute("model.build", &json!({}))?;
+    if let Some(v) = placed {
+        result["devices"] = v;
+    }
+    // The model's rooms are the job's rooms on the levels it built.
+    if let Some(by_level) = rooms_from_model(s, job)
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("rooms_by_level".into(), by_level);
+    }
+    // Q6002: the rooms as elements, then what the readers found on every element.
+    match s.execute("rooms.build", &json!({})) {
+        Ok(v) => result["room_volumes"] = v.get("built").cloned().unwrap_or(Value::Null),
+        Err(e) => result["room_volumes_error"] = json!(e.to_string()),
+    }
+    match s.execute("bim.props.fill", &json!({})) {
+        Ok(v) => result["props"] = v,
+        Err(e) => job.add_finding(
+            StageName::BimBuild,
+            &format!("The elements' properties could not be filled: {e}"),
+            "bim.props.fill failed after the build",
+            3,
+            vec!["Run bim.props.fill once the model is built".into()],
+            None,
+            false,
+        ),
+    }
+    // The plans kept out of the building (MUST 3), for the job report.
+    let skipped = not_built_sheets(job);
+    if !skipped.is_empty()
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("not_built".into(), json!(skipped));
+    }
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
