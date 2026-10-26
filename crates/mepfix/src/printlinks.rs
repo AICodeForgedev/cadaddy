@@ -1408,14 +1408,16 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     out.resolved = out.callouts.iter().filter(|c| c.resolved).count();
     out.resolved_pct = if out.callouts.is_empty() { 0.0 } else { (out.resolved as f64 / out.callouts.len() as f64 * 1000.0).round() / 1000.0 };
 
-    // Device types: every legend read, and the set's sheet numbers are never types.
-    let legend: BTreeSet<String> = pages.iter().flat_map(|p| p.read.legend_types.iter().cloned()).collect();
+    // Device types: the page's own legends and schedules (as a job reading that sheet alone
+    // sorts them), and the set's sheet numbers are never types. Every legend in the set
+    // together would not do: a lighting schedule or a fan schedule on another sheet lists its
+    // own types only, and every power device mark it doesn't list would be dropped.
     let mut sheet_forms: BTreeSet<String> = BTreeSet::new();
     for s in sheets {
         sheet_forms.extend(device_types::sheet_number_forms(&s.number));
     }
     let none = BTreeSet::new();
-    let device_type = |tag: &str| match device_types::tag_verdict(tag, &legend, &none, &sheet_forms) {
+    let device_type = |legend: &BTreeSet<String>, tag: &str| match device_types::tag_verdict(tag, legend, &none, &sheet_forms) {
         TagVerdict::Device(t) => Some(t),
         _ => None,
     };
@@ -1442,7 +1444,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 .filter(|r| *r != rg && area(r) < area(&rg))
                 .collect();
             for dv in e.page.read.devices.iter().filter(|dv| inside(&reach, dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
-                if let Some(t) = device_type(&dv.tag) {
+                if let Some(t) = device_type(&e.page.read.legend_types, &dv.tag) {
                     *entry.devices_by_type.entry(t).or_default() += 1;
                     entry.devices += 1;
                     entry.device_handles.push(dv.handle.clone());
@@ -1547,8 +1549,13 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 };
                 entry.boundary = b;
                 if let Some(b) = b {
-                    entry.ignored_handles =
-                        h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&dv.tag).is_some()).map(|dv| dv.handle.clone()).collect();
+                    entry.ignored_handles = h
+                        .read
+                        .devices
+                        .iter()
+                        .filter(|dv| inside(&b, dv.at) && device_type(&h.read.legend_types, &dv.tag).is_some())
+                        .map(|dv| dv.handle.clone())
+                        .collect();
                     entry.overall_ignored = entry.ignored_handles.len();
                     boundaries.entry(h.sheet.number.clone()).or_default().push(b);
                 }
@@ -1566,7 +1573,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         l.sheets.push(p.sheet.number.clone());
         let bounds = boundaries.get(&p.sheet.number).cloned().unwrap_or_default();
         for dv in &p.read.devices {
-            if device_type(&dv.tag).is_none() {
+            if device_type(&p.read.legend_types, &dv.tag).is_none() {
                 continue;
             }
             if bounds.iter().any(|b| inside(b, dv.at)) {
@@ -1587,7 +1594,8 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         {
             let kept = boundaries.get(&h.sheet.number).is_none_or(|bs| !bs.contains(&b));
             if kept {
-                counted_inside += h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&dv.tag).is_some()).count();
+                counted_inside +=
+                    h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&h.read.legend_types, &dv.tag).is_some()).count();
             }
         }
     }
@@ -1635,7 +1643,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             let Some(&h) = v.mounting_ft.first() else { continue };
             let reach = if c.radius > 0.0 { 6.0 * c.radius } else { 12.0 };
             let mut near: Vec<&PageDevice> =
-                p.read.devices.iter().filter(|dv| dist(dv.at, c.at) <= reach && device_type(&dv.tag).is_some()).collect();
+                p.read.devices.iter().filter(|dv| dist(dv.at, c.at) <= reach && device_type(&p.read.legend_types, &dv.tag).is_some()).collect();
             near.sort_by(|a, b| dist(a.at, c.at).total_cmp(&dist(b.at, c.at)));
             let applied: Vec<serde_json::Value> = near.iter().take(1).map(|dv| serde_json::json!({"tag": dv.tag, "handle": dv.handle})).collect();
             if out.facts.len() < MAX_SET_CALLOUTS {

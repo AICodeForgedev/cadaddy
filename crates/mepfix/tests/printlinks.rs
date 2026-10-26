@@ -320,3 +320,29 @@ fn the_printed_main_plan_beside_titled_details_is_view_1() {
     assert_eq!(core.overall_ignored, 3);
     assert_eq!(l.double_counted, 0);
 }
+
+/// A schedule on another sheet lists that sheet's types only: the power marks on the enlarged
+/// plan and the overall plans still count, as each sheet's own legends say.
+#[test]
+fn another_sheets_schedule_does_not_drop_the_enlarged_plans_devices() {
+    let before = links();
+    let (mut sheets, mut pages) = the_set();
+    let e5 = SetSheet {
+        number: "E-5".into(),
+        title: "FIRST FLOOR LIGHTING PLAN".into(),
+        discipline: "E".into(),
+        sheet_type: "plan".into(),
+        level: "1".into(),
+    };
+    sheets.push(e5.clone());
+    let read = printlinks::read_page(&linkset::lighting_sheet(), "E-5");
+    assert!(read.legend_types.contains("L1") && !read.legend_types.contains("A"), "{:?}", read.legend_types);
+    pages.push(LinkPage { sheet: e5, read });
+    let l = printlinks::link_set(&sheets, &pages);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5, "{:#?}", l.enlarged);
+    assert_eq!(l.enlarged[0].overall_ignored, 3);
+    assert_eq!(l.double_counted, 0);
+    // The level: what it was, plus the lighting plan's two fixtures.
+    let level = |l: &SheetLinks| l.levels.iter().find(|v| v.level == "1").map(|v| v.devices);
+    assert_eq!(level(&l), level(&before).map(|n| n + 2));
+}

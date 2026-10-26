@@ -205,6 +205,26 @@ fn e2() -> Drawing {
     s.d
 }
 
+/// E-5: a first-floor lighting plan with its fixture schedule in the margin, listing its own
+/// types only (`L1`, `L2`, `XA`), none of them the power marks the other sheets print.
+pub fn lighting_sheet() -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-5", "FIRST FLOOR LIGHTING PLAN");
+    s.text("LIGHTING FIXTURE SCHEDULE", [24.0, 20.0], 0.2, 0.0);
+    s.text("TYPE", [24.0, 19.6], 0.12, 0.0);
+    s.text("DESCRIPTION", [25.0, 19.6], 0.12, 0.0);
+    for (i, (ty, what)) in [("L1", "2X4 LED TROFFER"), ("L2", "LED DOWNLIGHT"), ("XA", "EXIT SIGN")].iter().enumerate() {
+        let y = 19.3 - 0.3 * i as f64;
+        s.text(ty, [24.0, y], 0.12, 0.0);
+        s.text(what, [25.0, y], 0.12, 0.0);
+    }
+    for p in [[6.0, 6.0], [10.0, 10.0]] {
+        s.device("L1", p);
+    }
+    s.view_title("1", "E-5", "FIRST FLOOR LIGHTING PLAN", "SCALE: 1/8\" = 1'-0\"", [4.0, 18.5]);
+    s.d
+}
+
 /// E-3: the enlarged core plan at twice E-1's scale, its grid spaced 8 where E-1's is 4.
 fn e3() -> Drawing {
     enlarged_sheet(Some(("ENLARGED FIRST FLOOR CORE PLAN", true)))
