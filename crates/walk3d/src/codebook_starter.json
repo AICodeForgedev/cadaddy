@@ -1,0 +1,534 @@
+{
+  "rules": [
+    {
+      "id": "IRC-R602.3(5)-bearing-2x4",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3(5)",
+      "topic": "framing",
+      "summary": "Max stud spacing for bearing walls with 2x4 studs up to 10 ft",
+      "applies": {"wall": "bearing", "stud": "2x4", "height_ft_max": 10.0},
+      "value": {"max_spacing_in": 16.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3(5)-bearing-2x6",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3(5)",
+      "topic": "framing",
+      "summary": "Max stud spacing for bearing walls with 2x6 studs up to 10 ft",
+      "applies": {"wall": "bearing", "stud": "2x6", "height_ft_max": 10.0},
+      "value": {"max_spacing_in": 24.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3(5)-nonbearing-2x4",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3(5)",
+      "topic": "framing",
+      "summary": "Max stud spacing for non-bearing walls with 2x4 studs up to 10 ft",
+      "applies": {"wall": "non-bearing", "stud": "2x4", "height_ft_max": 10.0},
+      "value": {"max_spacing_in": 24.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3(5)-nonbearing-2x6",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3(5)",
+      "topic": "framing",
+      "summary": "Max stud spacing for non-bearing walls with 2x6 studs up to 10 ft",
+      "applies": {"wall": "non-bearing", "stud": "2x6", "height_ft_max": 10.0},
+      "value": {"max_spacing_in": 24.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3-height-bearing-2x4",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3",
+      "topic": "framing",
+      "summary": "Max height for bearing walls with 2x4 studs at 16 in o.c.",
+      "applies": {"wall": "bearing", "stud": "2x4"},
+      "value": {"max_height_ft": 10.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3-height-bearing-2x6",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3",
+      "topic": "framing",
+      "summary": "Max height for bearing walls with 2x6 studs at 24 in o.c.",
+      "applies": {"wall": "bearing", "stud": "2x6"},
+      "value": {"max_height_ft": 10.0},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.7-headers-bearing-2x4",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.7",
+      "topic": "framing",
+      "summary": "Header sizes by span for bearing walls with 2x4 studs (common sizes)",
+      "applies": {"wall": "bearing", "stud": "2x4"},
+      "value": {
+        "table": {
+          "<=3": "2x8",
+          "<=4": "2x8",
+          "<=5": "2x10",
+          "<=6": "2x10",
+          "<=8": "2x12"
+        },
+        "text": "Header size by opening span in feet (starter — verify with load tables)"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.7-headers-bearing-2x6",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.7",
+      "topic": "framing",
+      "summary": "Header sizes by span for bearing walls with 2x6 studs (common sizes)",
+      "applies": {"wall": "bearing", "stud": "2x6"},
+      "value": {
+        "table": {
+          "<=4": "2x8",
+          "<=6": "2x10",
+          "<=8": "2x12",
+          "<=10": "2x12"
+        },
+        "text": "Header size by opening span in feet (starter — verify with load tables)"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.8-fire_block",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.8",
+      "topic": "framing",
+      "summary": "Fire blocking required in concealed wall spaces at ceilings, floors, and at intervals not exceeding 10 ft vertically",
+      "applies": {},
+      "value": {"required": true, "text": "Fire blocking at ceilings, floors, and concealed spaces exceeding 10 ft"},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.3.2-top_plate_splice",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.3.2",
+      "topic": "framing",
+      "summary": "Top plate splices offset at least 24 in from adjacent plate splices and at least 24 in from openings",
+      "applies": {},
+      "value": {"min_spacing_in": 24.0, "text": "Splice offset from other splices and openings"},
+      "source": "starter"
+    },
+    {
+      "id": "IRC-R602.7.3-king_jack",
+      "code": "irc",
+      "edition": 2021,
+      "section": "R602.7.3",
+      "topic": "framing",
+      "summary": "King studs and jack studs required at each side of headers; jack count per Table R602.7(1)",
+      "applies": {},
+      "value": {"min_count": 1, "text": "One king stud and at least one jack stud each side of every header"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-2308.6-fire_rated_assembly",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "2308.6",
+      "topic": "framing",
+      "summary": "Fire-rated wall assemblies must match a listed assembly; materials, spacing and sheathing per the listing",
+      "applies": {},
+      "value": {"required": true, "text": "Rated walls use listed assemblies with matching materials and spacing"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.52(A)(1)-receptacle_spacing",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.52(A)(1)",
+      "topic": "electrical",
+      "summary": "Receptacle spacing: no point along wall space may be more than 6 ft from a receptacle (max 12 ft between receptacles)",
+      "applies": {"location": "dwelling"},
+      "value": {"max_spacing_in": 144.0, "text": "Max 12 ft (144 in) between receptacles along any wall space"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.52(A)(2)-wall_space",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.52(A)(2)",
+      "topic": "electrical",
+      "summary": "Wall spaces 2 ft or wider need a receptacle; no point more than 6 ft from a receptacle",
+      "applies": {"location": "dwelling"},
+      "value": {"min_spacing_in": 24.0, "text": "Any wall space 2 ft (24 in) or wider requires a receptacle"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.52(B)(1)-kitchen_counter",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.52(B)(1)",
+      "topic": "electrical",
+      "summary": "Kitchen countertop receptacles: each counter space 12 in or wider needs a receptacle; max 48 in between",
+      "applies": {"room": "kitchen"},
+      "value": {"max_spacing_in": 48.0, "text": "Max 48 in between countertop receptacles"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.8(A)-gfci_kitchen",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.8(A)",
+      "topic": "electrical",
+      "summary": "GFCI protection required for kitchen receptacles serving countertop surfaces",
+      "applies": {"room": "kitchen"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.8(A)-gfci_bathroom",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.8(A)",
+      "topic": "electrical",
+      "summary": "GFCI protection required for all bathroom receptacles",
+      "applies": {"room": "bathroom"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.8(A)-gfci_garage",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.8(A)",
+      "topic": "electrical",
+      "summary": "GFCI protection required for garage receptacles",
+      "applies": {"room": "garage"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.8(A)-gfci_outdoor",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.8(A)",
+      "topic": "electrical",
+      "summary": "GFCI protection required for outdoor receptacles",
+      "applies": {"location": "outdoor"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.8(A)-gfci_laundry",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.8(A)",
+      "topic": "electrical",
+      "summary": "GFCI protection required for laundry area receptacles",
+      "applies": {"room": "laundry"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.12(A)-afci_dwelling",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.12(A)",
+      "topic": "electrical",
+      "summary": "AFCI protection required for 120V 15A and 20A branch circuits in dwelling units (kitchens, family rooms, dining rooms, living rooms, parlors, libraries, dens, bedrooms, sunrooms, recreation rooms, closets, hallways, laundry areas, and similar rooms)",
+      "applies": {"location": "dwelling"},
+      "value": {"required": true},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-314.16-box_fill",
+      "code": "nec",
+      "edition": 2023,
+      "section": "314.16",
+      "topic": "electrical",
+      "summary": "Box fill: volume per conductor based on wire size; total must not exceed box volume",
+      "applies": {},
+      "value": {
+        "table": {
+          "#14": "2.00",
+          "#12": "2.25",
+          "#10": "2.50",
+          "#8": "3.00",
+          "#6": "5.00"
+        },
+        "text": "Cubic inches per conductor by wire size"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "NEC-310.16-ampacity-copper",
+      "code": "nec",
+      "edition": 2023,
+      "section": "310.16",
+      "topic": "electrical",
+      "summary": "Conductor ampacity: allowable ampacities for insulated copper conductors at 60/75/90 deg C",
+      "applies": {"conductor": "copper"},
+      "value": {
+        "table": {
+          "#14-60C": "15",
+          "#12-60C": "20",
+          "#10-60C": "30",
+          "#8-60C": "40",
+          "#6-60C": "55",
+          "#4-60C": "70",
+          "#3-60C": "85",
+          "#2-60C": "95",
+          "#1-60C": "110"
+        },
+        "text": "Ampacity at 60 deg C for copper (starter — verify for temperature rating)"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "NEC-344.22-conduit_fill",
+      "code": "nec",
+      "edition": 2023,
+      "section": "344.22",
+      "topic": "electrical",
+      "summary": "Conduit fill: 40 pct max for 2+ conductors; 53 pct for 1 conductor",
+      "applies": {},
+      "value": {"max_fill_pct": 40.0, "text": "Max 40% fill for 2 or more conductors in a conduit"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-110.26(A)-working_clearance",
+      "code": "nec",
+      "edition": 2023,
+      "section": "110.26(A)",
+      "topic": "electrical",
+      "summary": "Working clearance at panelboards: 36 in deep, 30 in wide (or panel width), 78 in high minimum",
+      "applies": {},
+      "value": {"min_clearance_in": 36.0, "text": "36 in depth, 30 in width, 78 in height working space at panels"},
+      "source": "starter"
+    },
+    {
+      "id": "NEC-210.19(A)-voltage_drop",
+      "code": "nec",
+      "edition": 2023,
+      "section": "210.19(A)",
+      "topic": "electrical",
+      "summary": "Voltage drop guidance: max 3 pct on branch circuits, 5 pct total (branch + feeder) recommended",
+      "applies": {},
+      "value": {"max_fill_pct": 3.0, "text": "3% max branch circuit voltage drop recommended (5% total)"},
+      "source": "starter"
+    },
+    {
+      "id": "IPC-Table604.3-fixture_units_pipe",
+      "code": "ipc",
+      "edition": 2021,
+      "section": "Table 604.3",
+      "topic": "plumbing",
+      "summary": "Minimum water distribution pipe size by fixture units served",
+      "applies": {},
+      "value": {
+        "min_size_in": 0.5,
+        "table": {
+          "<=1.5": "0.5",
+          "<=4": "0.75",
+          "<=14": "1.0",
+          "<=30": "1.25",
+          "<=60": "1.5",
+          "<=120": "2.0"
+        },
+        "text": "Water supply pipe diameter (inches) by total fixture units"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "IPC-Table704.1-drain_slope",
+      "code": "ipc",
+      "edition": 2021,
+      "section": "Table 704.1",
+      "topic": "plumbing",
+      "summary": "Minimum drainage pipe slope by pipe diameter",
+      "applies": {},
+      "value": {
+        "table": {
+          "<=2.5": "0.25",
+          "<=3": "0.125",
+          "<=6": "0.125",
+          ">6": "0.0625"
+        },
+        "text": "Slope in inches per foot by pipe diameter (inches)"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "IPC-906.1-vent_distance",
+      "code": "ipc",
+      "edition": 2021,
+      "section": "906.1",
+      "topic": "plumbing",
+      "summary": "Maximum distance from trap to vent by fixture drain size",
+      "applies": {},
+      "value": {
+        "table": {
+          "1.25": "30",
+          "1.5": "42",
+          "2": "60",
+          "3": "72",
+          "4": "120"
+        },
+        "text": "Max developed length (inches) from trap to vent by drain diameter"
+      },
+      "source": "starter"
+    },
+    {
+      "id": "IPC-708.1-cleanout_spacing",
+      "code": "ipc",
+      "edition": 2021,
+      "section": "708.1",
+      "topic": "plumbing",
+      "summary": "Cleanouts required every 100 ft in horizontal drains and at every change of direction exceeding 45 degrees",
+      "applies": {},
+      "value": {"max_spacing_in": 1200.0, "text": "Cleanout every 100 ft (1200 in) in horizontal drains"},
+      "source": "starter"
+    },
+    {
+      "id": "IPC-Table501.1-water_heater",
+      "code": "ipc",
+      "edition": 2021,
+      "section": "Table 501.1",
+      "topic": "plumbing",
+      "summary": "Water heater sizing guidance: first-hour rating must meet peak demand",
+      "applies": {},
+      "value": {"text": "First-hour rating must equal or exceed the estimated peak hour demand"},
+      "source": "starter"
+    },
+    {
+      "id": "IMC-607.5-fire_damper",
+      "code": "imc",
+      "edition": 2021,
+      "section": "607.5",
+      "topic": "mechanical",
+      "summary": "Fire dampers required where ducts penetrate fire-rated assemblies",
+      "applies": {},
+      "value": {"required": true, "text": "Fire dampers at every duct penetration of a fire-rated assembly"},
+      "source": "starter"
+    },
+    {
+      "id": "IMC-607.5.5-smoke_damper",
+      "code": "imc",
+      "edition": 2021,
+      "section": "607.5.5",
+      "topic": "mechanical",
+      "summary": "Smoke dampers required where ducts penetrate smoke barriers",
+      "applies": {},
+      "value": {"required": true, "text": "Smoke dampers at every duct penetration of a smoke barrier"},
+      "source": "starter"
+    },
+    {
+      "id": "IMC-306.3-combustible_clearance",
+      "code": "imc",
+      "edition": 2021,
+      "section": "306.3",
+      "topic": "mechanical",
+      "summary": "Clearance to combustibles per equipment listing; unlisted equipment per code tables",
+      "applies": {},
+      "value": {"min_clearance_in": 1.0, "text": "Maintain listed clearance to combustible materials"},
+      "source": "starter"
+    },
+    {
+      "id": "IMC-401.2-outside_air",
+      "code": "imc",
+      "edition": 2021,
+      "section": "401.2",
+      "topic": "mechanical",
+      "summary": "Outside air required per occupancy type; minimum per ASHRAE 62.1 or prescriptive table",
+      "applies": {},
+      "value": {"text": "Outdoor ventilation air per table (5 cfm/person + 0.06 cfm/sf for offices typical)"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-1010.1.1-egress_door_width",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "1010.1.1",
+      "topic": "building",
+      "summary": "Egress doors: min 32 in clear width (34 in nominal leaf, 36 in typical); max 48 in leaf width",
+      "applies": {},
+      "value": {"min_width_in": 32.0, "text": "32 in clear width minimum for egress doors"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-1005.1-egress_capacity",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "1005.1",
+      "topic": "building",
+      "summary": "Egress width: 0.2 in per occupant for stairways, 0.15 in per occupant for other components",
+      "applies": {},
+      "value": {"text": "Egress width = 0.2 in/occupant (stairs) or 0.15 in/occupant (other)"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-1104.2-accessible_clearance",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "1104.2",
+      "topic": "building",
+      "summary": "Accessible route: min 36 in clear width; 60 in x 60 in turning space; 18 in pull-side clearance at doors",
+      "applies": {},
+      "value": {"min_clearance_in": 18.0, "min_width_in": 36.0, "text": "36 in route, 18 in door pull-side clearance"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-716.1-rated_door",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "716.1",
+      "topic": "building",
+      "summary": "Fire-rated walls require rated door assemblies matching the wall rating (3/4 of wall rating for 1-hr, 1-1/2 hr for 2-hr walls)",
+      "applies": {},
+      "value": {"required": true, "text": "Rated doors at rated walls per Table 716.1"},
+      "source": "starter"
+    },
+    {
+      "id": "IBC-1010.1.9.12-hardware_height",
+      "code": "ibc",
+      "edition": 2021,
+      "section": "1010.1.9.12",
+      "topic": "building",
+      "summary": "Door hardware operable between 34 in and 48 in AFF per accessibility requirements",
+      "applies": {},
+      "value": {"text": "Hardware between 34 in and 48 in above finished floor"},
+      "source": "starter"
+    },
+    {
+      "id": "IECC-R402.1-envelope_r_value",
+      "code": "iecc",
+      "edition": 2021,
+      "section": "R402.1",
+      "topic": "building",
+      "summary": "Building envelope insulation: R-values by climate zone and component (wall, ceiling, floor)",
+      "applies": {},
+      "value": {
+        "table": {
+          "zone4-wall": "R-20 or R-13+5ci",
+          "zone4-ceiling": "R-49",
+          "zone4-floor": "R-19",
+          "zone5-wall": "R-20 or R-13+5ci",
+          "zone5-ceiling": "R-49",
+          "zone5-floor": "R-30"
+        },
+        "text": "Prescriptive R-values by climate zone (starter — verify for your zone)"
+      },
+      "source": "starter"
+    }
+  ],
+  "amendments": [],
+  "selection": {}
+}
