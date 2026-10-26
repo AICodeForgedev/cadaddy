@@ -52,6 +52,7 @@ pub(crate) mod hatch;
 pub mod help_texts;
 pub mod history;
 pub mod hyperlink;
+pub mod identity;
 mod imageattach;
 mod imageclip;
 pub mod import_check;
@@ -808,6 +809,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(bimprops::specs());
         v.extend(elemprops::specs());
         v.extend(propfill::specs());
+        v.extend(identity::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
         v.extend(codebook::specs());

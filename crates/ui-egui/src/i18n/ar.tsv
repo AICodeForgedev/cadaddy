@@ -3209,6 +3209,9 @@ menu	View	عرض
 	Element Property Summary	ملخص خصائص العناصر
 	BIM Properties	خصائص BIM
 	Kind	النوع
+	Element Identities (BIM)	هويات العناصر (BIM)
+	Room Connections	اتصالات الغرف
+	Link Print Set	ربط مجموعة الطباعة
 	Check Building Codes	التحقق من أكواد البناء
 	Code Rules	قواعد الكود
 	Select Building Codes	اختيار أكواد البناء
