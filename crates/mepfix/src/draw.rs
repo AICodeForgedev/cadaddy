@@ -781,6 +781,9 @@ fn title_block(pen: &mut Pen, t: &Truth, st: &Style, sh: &Sheet, level: &str, le
         "S" => "STRUCTURAL",
         "A" => "ARCHITECTURAL",
         "E" => "ELECTRICAL",
+        "FA" => "FIRE ALARM",
+        "T" => "TELECOM",
+        "SL" => "SLEEVE LAYOUT",
         _ => "GENERAL",
     };
     let lvl = t.level(level).map(|l| l.name.clone()).unwrap_or_default();

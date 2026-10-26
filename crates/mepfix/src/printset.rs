@@ -66,7 +66,7 @@ pub struct SheetEntry {
     pub title: String,
     /// Source file, relative to `source_dir`.
     pub file: String,
-    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`.
+    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`, `SL`.
     pub discipline: String,
     /// Sheet type: `plan`, `enlarged_plan`, `rcp`, `schedule`, `cover`, `section`, `elevation`,
     /// `detail`, `diagram`, `unknown`.
@@ -447,7 +447,7 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
     for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
+        &[("FP-", "FP"), ("FA-", "FA"), ("SL-", "SL"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
     {
         if up.starts_with(prefix) {
             return code.into();
@@ -493,7 +493,7 @@ pub fn read_sheet_index(drawing: &cadaddy_doc::Drawing) -> Vec<String> {
         }
         let prefix = parts[0];
         let suffix = parts[1];
-        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C");
+        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C" | "SL");
         let valid_suffix = suffix.len() >= 2 && suffix.chars().next().is_some_and(|c| c.is_ascii_digit());
         valid_prefix && valid_suffix
     };

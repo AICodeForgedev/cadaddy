@@ -652,7 +652,7 @@ fn infer_discipline_from_truth(sheet: &cadaddy_mepfix::truth::Sheet) -> String {
     // Use the same logic as printset's infer_discipline.
     let up = sheet.number.to_ascii_uppercase();
     for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
+        &[("FP-", "FP"), ("FA-", "FA"), ("SL-", "SL"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
     {
         if up.starts_with(prefix) {
             return code.into();
