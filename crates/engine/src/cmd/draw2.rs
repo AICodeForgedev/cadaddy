@@ -1585,25 +1585,10 @@ fn rect_kind(first: Vec2, (w, h): (f64, f64), rot: f64, fillet: f64, chamfer: (f
     k
 }
 
-/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
-/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
-pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
-    let a = point_req("rectang", p, "p1")?;
-    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
-    let centered = bool_or(p, "center", false);
-    let rot = f64_or(p, "rotation", 0.0).to_radians();
-    let ch = p
-        .get("chamfer")
-        .and_then(Value::as_array)
-        .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
-        .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
-        .unwrap_or((0.0, 0.0));
-    if ch.0 < 0.0 || ch.1 < 0.0 {
-        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
-    }
-    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
-    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
-    let (w, h) = if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
+/// The width and height of a rectangle from its `dimensions`, its `p2` corner, its `area` with
+/// `length` or `breadth`, or its second corner `p2`, rotated by `rot` about `a`.
+fn rect_size(p: &Value, a: Vec2, rot: f64, centered: bool) -> Result<(f64, f64)> {
+    Ok(if let Some(d) = p.get("dimensions").and_then(Value::as_array) {
         let l = d.first().and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let wd = d.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("rectang", "dimensions: [length, width]"))?;
         let (sx, sy) = match point_param(p, "p2") {
@@ -1628,7 +1613,28 @@ pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
         let loc = (b - a).rotate(-rot);
         // In centre mode the picked point is one corner, mirrored across the centre.
         if centered { (2.0 * loc.x, 2.0 * loc.y) } else { (loc.x, loc.y) }
-    };
+    })
+}
+
+/// Draws a rectangle from the JSON form: `p1` is a corner, or the centre when `center` is
+/// true, and the size comes from `p2`, `dimensions` or `area` plus `length`/`breadth`.
+pub(crate) fn run_rectang2(s: &mut Session, p: &Value) -> Result<Value> {
+    let a = point_req("rectang", p, "p1")?;
+    // Centre mode: `p1` is the rectangle's centre, so the rectangle spans it evenly.
+    let centered = bool_or(p, "center", false);
+    let rot = f64_or(p, "rotation", 0.0).to_radians();
+    let ch = p
+        .get("chamfer")
+        .and_then(Value::as_array)
+        .map(|c| (c.first().and_then(Value::as_f64).unwrap_or(0.0), c.get(1).and_then(Value::as_f64).unwrap_or(0.0)))
+        .map(|(x, y)| (if x.is_finite() { x } else { 0.0 }, if y.is_finite() { y } else { 0.0 }))
+        .unwrap_or((0.0, 0.0));
+    if ch.0 < 0.0 || ch.1 < 0.0 {
+        return Err(bad("rectang", "`chamfer` distances must be zero or positive"));
+    }
+    let fillet = size_param("rectang", p, "fillet", true)?.unwrap_or(0.0);
+    let width = size_param("rectang", p, "width", true)?.unwrap_or(0.0);
+    let (w, h) = rect_size(p, a, rot, centered)?;
     if w.abs() < 1e-12 || h.abs() < 1e-12 || !w.is_finite() || !h.is_finite() {
         return Err(bad("rectang", "rectangle has no area"));
     }

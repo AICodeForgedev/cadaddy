@@ -172,7 +172,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             let pick = app.services.pick_lisp.as_ref()?;
             let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
             let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
-            if let Some(dir) = std::path::Path::new(&path).parent().and_then(|p| p.to_str()).filter(|d| !d.is_empty()) {
+            if let Some(dir) = std::path::Path::new(&path).parent().and_then(std::path::Path::to_str).filter(|d| !d.is_empty()) {
                 app.ui.last_lisp_dir = Some(dir.to_string());
             }
             if let Err(e) = app.session.start("appload") {
