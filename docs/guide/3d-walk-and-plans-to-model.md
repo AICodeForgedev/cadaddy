@@ -164,6 +164,37 @@ Standard keys per kind (other keys are allowed):
 | `light_fixture` | type_mark, model, circuit, mount_height, room, level |
 | `equipment` | type_mark, model, circuit, room, level |
 
+### Tags are identities
+
+A door number, a room number, a wall-type tag at a wall's centreline and a
+device's type and circuit at its spot each name one thing in the building, and a
+print set shows that thing on several sheets. `bim.identity` (run by the guided
+job after the build) keeps one element per thing:
+
+- Every plan sheet is put onto its level's reference plan (the architectural
+  plan with the most door and room numbers) by the numbers both sheets print:
+  scale, rotation and offset, with the fit's error (`residual`). A sheet with
+  no shared numbers is placed by its frame only when it is the same size and the
+  one or two numbers it does share sit where the frame puts them; otherwise it
+  stays unregistered and is never merged with another sheet.
+- Elements of one kind on one level with the same key merge when their places
+  agree (doors within 6", devices within 12", plus the fit's error). The best
+  source is kept (schedule or spec, then the architectural plan, then another
+  discipline's background); it takes the values it lacks from the copies, your
+  own edits always win, and `seen_on` lists every sheet it was found on.
+- The same number far apart on one level is a finding, never a merge. So are
+  door-schedule marks on no plan, door numbers the schedule lacks, a level whose
+  door count is off from the schedule's, and finish-schedule rooms with no room
+  on the plan.
+
+The job's devices stage counts a device once even when several sheets of its
+level show it. A door's swing closes its room: rooms are traced with each
+swing's closed leaf across the opening. `rooms.graph` puts every door between
+the rooms on its two sides (`from_room`, `to_room` on the door) and lists the
+connections. An enlarged plan also registers on its overall plan by the door
+and room numbers both print (`printset.links`, method `tags`) when no shared
+grid line places it.
+
 ### Quick start
 
 Open a floor plan, then:

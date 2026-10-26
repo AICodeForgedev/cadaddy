@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1116,
-    "count": 1116,
+    "callableAsJson": 1119,
+    "count": 1119,
     "ids": [
       "-attedit",
       "-block",
@@ -116,6 +116,7 @@
       "bim.field.link",
       "bim.from_pdf",
       "bim.get_spec",
+      "bim.identity",
       "bim.issue.create",
       "bim.issue.list",
       "bim.issue.marks",
@@ -754,6 +755,7 @@
       "printset.classify",
       "printset.dashboard",
       "printset.keep",
+      "printset.links",
       "printset.open",
       "printset.reimport",
       "printset.resume",
@@ -875,6 +877,7 @@
       "rooms.build",
       "rooms.get",
       "rooms.goto",
+      "rooms.graph",
       "rooms.list",
       "rotate",
       "rscript",

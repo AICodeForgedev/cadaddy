@@ -1943,6 +1943,36 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     (moved, dropped)
 }
 
+/// Leave out the census's devices another sheet already shows (`identity::duplicate_devices`);
+/// how many.
+fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> usize {
+    let Ok(d) = s.doc() else { return 0 };
+    let sheets: Vec<super::identity::SheetBox> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && !r.level.trim().is_empty() && r.not_built.is_empty() && r.rect.iter().all(|v| v.is_finite()))
+        .map(|r| super::identity::SheetBox::new(&r.number, &r.discipline, &r.level, r.rect))
+        .collect();
+    let upf = 12.0 * super::perceive::units_per_inch(d);
+    let (drop, _) = super::identity::duplicate_devices(d, &sheets, upf, &census.placed);
+    if drop.is_empty() {
+        return 0;
+    }
+    let mut keep = Vec::with_capacity(census.placed.len());
+    for (i, dv) in std::mem::take(&mut census.placed).into_iter().enumerate() {
+        if drop.contains(&i) {
+            if let Some(n) = census.by_type.get_mut(&dv.tag) {
+                *n = n.saturating_sub(1);
+            }
+            continue;
+        }
+        keep.push(dv);
+    }
+    census.by_type.retain(|_, n| *n > 0);
+    census.placed = keep;
+    drop.len()
+}
+
 /// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
 /// written into `dir`; its path.
 fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
@@ -2351,6 +2381,13 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if moved + dropped > 0 {
             results["enlarged_devices"] = json!({"moved_onto_overall_plans": moved, "overall_copies_left_out": dropped});
         }
+    }
+    // Tags are identities: a device another sheet of its level shows at the same spot (once the
+    // sheets are put onto the level's plan by the door and room numbers they share) is counted
+    // once.
+    let merged = device_identity(s, job, &mut census);
+    if merged > 0 {
+        results["identity"] = json!({"devices_merged": merged});
     }
     results["circuit_tagged_symbols"] = json!(census.circuit);
     let not_devices: usize = census.not_device.values().sum();
@@ -2928,6 +2965,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // Tags are identities: one element per door, room and device however many sheets show it,
+    // each door between its two rooms, and the schedules checked against the plans. Never stops
+    // the job: a failure is a finding.
+    identity_step(s, job, &mut result);
+
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -3092,6 +3134,79 @@ const MAX_SHEET_LINKS: usize = 2_000;
 
 /// The job's imported sheets into the spec's sheet list, each with where it sits in model space
 /// and its level (a sheet listed already keeps its entry and gains its place).
+/// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
+/// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let numbers: Vec<String> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|r| r.get("number").and_then(Value::as_str)).map(str::to_string).collect())
+        .unwrap_or_default();
+    let run = match super::identity::identity(s, true, (!numbers.is_empty()).then_some(numbers.as_slice())) {
+        Ok(r) => r,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Element identities were not checked: {e}"),
+                "the same door or device may be counted once per sheet that shows it",
+                3,
+                vec!["Run bim.identity once the model is built".into()],
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    // The build's counts are the model's after the merge.
+    for (kind, key) in [("door", "doors"), ("window", "windows"), ("wall", "walls")] {
+        let gone = run.removed.get(kind).copied().unwrap_or(0) as u64;
+        if gone > 0
+            && let Some(n) = result.get(key).and_then(Value::as_u64)
+        {
+            result[key] = json!(n.saturating_sub(gone));
+        }
+    }
+    let graph = super::identity::graph(s, true).ok();
+    let findings: Vec<Value> = run.answer.get("findings").and_then(Value::as_array).cloned().unwrap_or_default();
+    for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let msg = f.get("message").and_then(Value::as_str).unwrap_or("element identity finding");
+        let kind = f.get("kind").and_then(Value::as_str).unwrap_or("");
+        job.add_finding(
+            StageName::BimBuild,
+            msg,
+            match kind {
+                "same_tag_apart" => "one number names one thing: two places on a level is a misread or a print error",
+                "schedule_not_placed" | "not_in_schedule" | "doors_vs_schedule" => "the door schedule and the plans disagree",
+                _ => "the finish schedule names a room the plans do not show",
+            },
+            2,
+            vec!["Check the sheets named in the finding".into()],
+            None,
+            false,
+        );
+    }
+    let sheets = run.answer.get("sheets").and_then(Value::as_array);
+    let registered = sheets.map_or(0, |a| a.iter().filter(|t| t.get("registered").and_then(Value::as_bool) == Some(true)).count());
+    if let Some(o) = result.as_object_mut() {
+        o.insert(
+            "identity".into(),
+            json!({
+                "merged": run.answer.get("merged"),
+                "by_kind": run.answer.get("by_kind"),
+                "numbered_doors": run.answer.get("numbered_doors"),
+                "sheets": sheets.map_or(0, Vec::len),
+                "sheets_registered": registered,
+                "findings": findings.len(),
+                "door_connections": graph.as_ref().and_then(|g| g.get("connected")),
+                "room_edges": graph.as_ref().and_then(|g| g.get("edges")).and_then(Value::as_array).map(Vec::len),
+            }),
+        );
+    }
+    job.audit("identity", "pipeline", None, Some(StageName::BimBuild), Some(json!({"merged": run.answer.get("merged"), "findings": findings.len()})));
+}
+
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
         if !r.rect.iter().all(|v| v.is_finite()) {

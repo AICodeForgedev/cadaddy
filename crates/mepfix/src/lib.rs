@@ -71,6 +71,7 @@ pub mod spectag;
 pub mod sprinkler_reader;
 pub mod struct_reader;
 pub mod style;
+pub mod tagid;
 pub mod tray_reader;
 pub mod truth;
 pub mod unit_reader;
