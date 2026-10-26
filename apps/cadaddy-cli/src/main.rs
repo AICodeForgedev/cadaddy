@@ -1,6 +1,8 @@
 //! `cadaddy-cli`: headless CADaddy.
 //!
 //! ```text
+//! cadaddy-cli help [COMMAND]                     the main workflows, or one command's summary, parameters and example
+//! cadaddy-cli guide                              every workflow step by step (the MCP `workflows` text)
 //! cadaddy-cli info FILE [--full]                   short summary (--full for detailed JSON with manifest and chunk sizes)
 //! cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|pdf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
@@ -60,6 +62,8 @@ fn stdout_failed(e: std::io::Error) {
 }
 
 const USAGE: &str = "usage:
+  cadaddy-cli help [COMMAND]    workflows, or one command's summary, parameters and example
+  cadaddy-cli guide             every workflow with its MCP calls and shell commands
   cadaddy-cli info FILE.(dwg|dxf|cdy) [--full]
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
   cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
@@ -83,6 +87,184 @@ image framing (png 2400x1600, svg, pdf; always model space):
   --view extents           always fit the drawing extents.
   --view current           the current view (as last set by zoom/pan/view.set; a freshly
                            opened drawing's view is its extents plus a 10% margin).";
+
+/// One `cadaddy-cli` subcommand for `cadaddy-cli help`: its usage, what it does, an example.
+struct CliCommand {
+    name: &'static str,
+    usage: &'static str,
+    summary: &'static str,
+    example: &'static str,
+}
+
+/// Every subcommand `cli` dispatches (a test keeps the two in step).
+const CLI_COMMANDS: &[CliCommand] = &[
+    CliCommand {
+        name: "help",
+        usage: "cadaddy-cli help [COMMAND]",
+        summary: "This help: the main workflows, or one command's summary, parameters and an example. COMMAND is a \
+                  cadaddy-cli subcommand (bim, run, convert…) or any drawing command (line, bim.takeoff, job.start…). \
+                  Also --help and -h, and `cadaddy-cli COMMAND --help`.",
+        example: "cadaddy-cli help bim.takeoff",
+    },
+    CliCommand {
+        name: "guide",
+        usage: "cadaddy-cli guide",
+        summary: "Every workflow step by step, each step with its MCP call and its cadaddy-cli command (the same text as the MCP `workflows` tool).",
+        example: "cadaddy-cli guide",
+    },
+    CliCommand {
+        name: "info",
+        usage: "cadaddy-cli info FILE.(dwg|dxf|cdy) [--full]",
+        summary: "A short JSON summary of a drawing: format, entities, layers, blocks, units, extents. --full gives the detailed JSON \
+                  (with a .cdy file's manifest and chunk sizes).",
+        example: "cadaddy-cli info plan.dwg",
+    },
+    CliCommand {
+        name: "convert",
+        usage: "cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]\n  \
+                cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]",
+        summary: "Converts one drawing, or every drawing in a folder, by the output's extension. FRAMING (--window, --view) picks what an image shows.",
+        example: "cadaddy-cli convert drawings converted --to cdy",
+    },
+    CliCommand {
+        name: "verify",
+        usage: "cadaddy-cli verify FILE.cdy",
+        summary: "Checks every chunk's checksum, the index and the drawing of a .cdy file; exit status 1 if it is damaged.",
+        example: "cadaddy-cli verify model.cdy",
+    },
+    CliCommand {
+        name: "bim",
+        usage: "cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]",
+        summary: "PDF prints to a BIM model in one call: imports the prints, checks the import, drafts a building spec, builds the \
+                  model and saves it (--out names the .cdy). A failed import check stops the build unless --force. Prints JSON \
+                  with the saved paths, check results, built counts and the next steps.",
+        example: "cadaddy-cli bim prints --out model.cdy",
+    },
+    CliCommand {
+        name: "check-import",
+        usage: "cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]",
+        summary: "The import accuracy check on an imported drawing; exit status 1 when it fails.",
+        example: "cadaddy-cli check-import model.cdy --json",
+    },
+    CliCommand {
+        name: "run",
+        usage: "cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... \
+                [--cmd-file F] [--save OUT] [--export OUT.(png|svg|pdf)] [FRAMING]",
+        summary: "Opens a drawing (or a new one), runs commands in order and prints each result as JSON, then saves or exports. \
+                  --cmd takes any drawing command with JSON parameters (`cadaddy-cli help COMMAND` shows them); --cmd-file \
+                  reads one `id {json}` per line; --script runs command-line text.",
+        example: "cadaddy-cli run model.cdy --cmd 'bim.takeoff {\"group_by\":\"level\"}'",
+    },
+    CliCommand {
+        name: "plot",
+        usage: "cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]",
+        summary: "Batch plot: one PDF per drawing in a folder.",
+        example: "cadaddy-cli plot drawings pdfs",
+    },
+    CliCommand {
+        name: "commands",
+        usage: "cadaddy-cli commands [FILTER]",
+        summary: "The command catalog as JSON (id, label, menu, params), filtered by id or label.",
+        example: "cadaddy-cli commands takeoff",
+    },
+    CliCommand {
+        name: "mcp",
+        usage: "cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]",
+        summary: "An MCP server on stdio for AI agents: the open app on the agent port, else headless; or bridged to a given app.",
+        example: "cadaddy-cli mcp --headless",
+    },
+    CliCommand {
+        name: "perf",
+        usage: "cadaddy-cli perf [N | FILE]",
+        summary: "A timing table on a synthetic N-entity drawing, or the display-list build of a drawing zoomed in step by step.",
+        example: "cadaddy-cli perf 100000",
+    },
+    CliCommand {
+        name: "sample",
+        usage: "cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)",
+        summary: "Writes a built-in sample drawing.",
+        example: "cadaddy-cli sample floorplan floorplan.dxf",
+    },
+    CliCommand { name: "--version", usage: "cadaddy-cli --version", summary: "The version.", example: "cadaddy-cli --version" },
+];
+
+/// `cadaddy-cli help`: the workflows with copy-paste commands, then where to look next.
+fn help_overview() -> String {
+    let more = [
+        "More:",
+        "  cadaddy-cli guide              every workflow step by step, with the MCP calls",
+        "  cadaddy-cli help COMMAND       a subcommand (bim, run, convert…) or a drawing command (bim.takeoff, job.start,",
+        "                                 line…): its summary, parameters and an example",
+    ]
+    .join("\n");
+    format!(
+        "cadaddy-cli {} — CADaddy without a window.\n\n\
+         Main workflows (copy-paste; `prints` is a PDF or a folder of PDFs, `costs.csv` a cost table):\n{}\n{more}\n  \
+         cadaddy-cli commands [FILTER]  find drawing commands ({} in all)\n\n{USAGE}",
+        env!("CARGO_PKG_VERSION"),
+        cadaddy_engine::workflows::summary_text(),
+        cadaddy_engine::command_specs().len(),
+    )
+}
+
+/// `cadaddy-cli help NAME`: a subcommand's usage, summary and example, and/or a drawing
+/// command's help page (summary, parameters, example).
+fn help_for(name: &str) -> Result<String, String> {
+    let mut out = Vec::new();
+    let bare = name.trim_start_matches("--");
+    if let Some(c) = CLI_COMMANDS.iter().find(|c| c.name == name || c.name.trim_start_matches("--") == bare) {
+        out.push(format!("cadaddy-cli {}\n\n{}\n\nUsage:\n  {}\n\nExample:\n  {}\n", c.name, c.summary, c.usage, c.example));
+    }
+    if let Some(spec) = cadaddy_engine::cmd::find_by_id_or_alias(name) {
+        let page = spec.help_page();
+        let mut t = format!("{} — {}\n\n{}\n", page.id, page.label, page.help_text);
+        let params = if page.params.trim().is_empty() { "{} (none)" } else { page.params };
+        t.push_str(&format!("\nParameters (JSON):\n  {params}\n"));
+        let mut facts = Vec::new();
+        if !page.aliases.is_empty() {
+            facts.push(format!("aliases {}", page.aliases.join(", ")));
+        }
+        if !page.menu_path.is_empty() {
+            facts.push(format!("menu {}", page.menu_path));
+        }
+        if !page.shortcut.is_empty() {
+            facts.push(format!("shortcut {}", page.shortcut));
+        }
+        if !page.prompts.is_empty() {
+            facts.push(format!("asks first: {}", page.prompts.join(" ")));
+        }
+        if !facts.is_empty() {
+            t.push_str(&format!("\n{}\n", facts.join("; ")));
+        }
+        t.push_str(&format!("\nExample:\n  {}\n  MCP: {}\n", page.example, page.mcp_example));
+        if page.generated {
+            t.push_str("  (example values come from the parameter list: replace them with yours)\n");
+        }
+        if !out.is_empty() {
+            t = format!("Drawing command (run it with `cadaddy-cli run … --cmd`):\n\n{t}");
+        }
+        out.push(t);
+    }
+    if out.is_empty() {
+        let l = name.to_ascii_lowercase();
+        let near: Vec<String> =
+            cadaddy_engine::command_specs().iter().filter(|c| c.id.contains(l.as_str())).take(10).map(|c| c.id.to_string()).collect();
+        let hint = if near.is_empty() { String::new() } else { format!(" Did you mean: {}?", near.join(", ")) };
+        return Err(format!(
+            "help: no subcommand or drawing command `{name}`.{hint} `cadaddy-cli help` lists the subcommands; `cadaddy-cli commands FILTER` finds drawing commands."
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
+fn help(args: &[String]) -> Result<(), String> {
+    match args {
+        [] => outln!("{}", help_overview()),
+        [name] => outln!("{}", help_for(name)?),
+        _ => return Err("usage: cadaddy-cli help [COMMAND]".into()),
+    }
+    Ok(())
+}
 
 /// What part of model space an image export shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1064,6 +1246,81 @@ mod mcp_args_tests {
     }
 }
 
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    /// The subcommand names `cli` dispatches, read from its `Some("…")` arms.
+    fn dispatched() -> Vec<String> {
+        let src = include_str!("main.rs");
+        let body = src.split("\nfn cli() -> ExitCode {").nth(1).unwrap();
+        let body = body.split("\n}\n").next().unwrap();
+        let mut names = Vec::new();
+        for arm in body.split("Some(\"").skip(1) {
+            for name in arm.split(')').next().unwrap().split('|') {
+                let name = name.trim().trim_matches('"');
+                if !name.is_empty() && !matches!(name, "-V" | "-h" | "--help") {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn every_subcommand_has_help() {
+        let names = dispatched();
+        assert!(names.len() >= 12, "{names:?}");
+        for name in &names {
+            let c = CLI_COMMANDS.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no CLI_COMMANDS entry for `{name}`"));
+            assert!(!c.summary.is_empty() && c.example.starts_with("cadaddy-cli"), "{name}");
+            let text = help_for(name).unwrap();
+            assert!(text.contains("Usage:") && text.contains("Example:") && text.contains(c.summary), "{name}: {text}");
+        }
+        for c in CLI_COMMANDS {
+            assert!(names.iter().any(|n| n == c.name), "`{}` has help but cli() doesn't run it", c.name);
+        }
+    }
+
+    #[test]
+    fn every_drawing_command_has_help_with_parameters_and_an_example() {
+        for spec in cadaddy_engine::command_specs() {
+            let text = help_for(spec.id).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+            let page = spec.help_page();
+            assert!(!page.help_text.trim().is_empty(), "{}: empty help text", spec.id);
+            assert!(text.contains(&page.help_text), "{}", spec.id);
+            assert!(text.contains("Parameters (JSON):") && text.contains("Example:\n  cadaddy-cli run "), "{}: {text}", spec.id);
+            // The example's JSON parses.
+            let json = page.example.split_once(&format!("--cmd '{} ", spec.id)).unwrap().1.split('\'').next().unwrap();
+            assert!(serde_json::from_str::<Value>(json).unwrap().is_object(), "{}: {json}", spec.id);
+        }
+    }
+
+    #[test]
+    fn overview_lists_prints_to_estimate_with_commands() {
+        let text = help_overview();
+        let bim = text.find("cadaddy-cli bim prints").unwrap();
+        let takeoff = text.find("bim.takeoff").unwrap();
+        let estimate = text.find("bim.estimate").unwrap();
+        assert!(bim < takeoff && takeoff < estimate, "{text}");
+        assert!(text.contains("cadaddy-cli guide") && text.contains("cadaddy-cli help COMMAND"));
+    }
+
+    #[test]
+    fn help_finds_aliases_and_refuses_unknown_names() {
+        assert!(help_for("l").unwrap().starts_with("LINE — "));
+        assert!(help_for("--version").unwrap().contains("cadaddy-cli --version"));
+        let e = help_for("takeof").unwrap_err();
+        assert!(e.contains("bim.takeoff"), "{e}");
+        assert!(help_for("zzzz-nothing").is_err());
+        assert!(help(&args(&["a", "b"])).is_err());
+    }
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+}
+
 fn main() -> ExitCode {
     let code = cli();
     if STDOUT_ERROR.load(Ordering::Relaxed) { ExitCode::FAILURE } else { code }
@@ -1076,6 +1333,10 @@ fn cli() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let r = match args.first().map(String::as_str) {
+        None | Some("help" | "--help" | "-h") => help(&rest),
+        // `cadaddy-cli bim --help`: the subcommand's help instead of running it.
+        Some(sub) if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) => help(&[sub.to_string()]),
+        Some("guide") => validate_options("guide", &rest, NO_OPTIONS).map(|_| outln!("{}", cadaddy_engine::workflows::guide_text())),
         Some("info") => {
             const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--full", takes_value: false }];
             validate_options("info", &rest, INFO_OPTIONS).and_then(|_| {
@@ -1109,7 +1370,7 @@ fn cli() -> ExitCode {
             outln!("cadaddy-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        _ => Err(USAGE.into()),
+        Some(other) => Err(format!("cadaddy-cli: unknown command `{other}` (`cadaddy-cli help` lists the commands and workflows)\n{USAGE}")),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
