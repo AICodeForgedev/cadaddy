@@ -174,7 +174,7 @@ fn the_guided_job_reports_the_index_and_rooms_carry_a_level() {
     });
     let (truth, dir) = job_folder("job", &["G-001", "A-101", "A-102", "A-103", "M-101", "M-102"]);
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim"})).expect("job.start");
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
     assert_eq!(st["sheets"].as_u64(), Some(truth.sheets.len() as u64), "{st}");
     assert!(st["levels"].as_u64().is_some_and(|n| n >= 2), "{st}");
@@ -219,7 +219,7 @@ fn a_two_view_sheet_is_one_entry_and_its_page_is_imported_once() {
     std::fs::write(dir.join("Lighting.pdf"), pdf).expect("write");
 
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim"})).expect("job.start");
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true})).expect("job.start");
     assert_eq!(st["sheets"].as_u64(), Some(1), "the two views are one sheet: {st}");
     let classify = s.execute("job.explain", &json!({"stage": "classify"})).expect("explain");
     let e = &classify["result"]["sheets"][0];
@@ -246,7 +246,7 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     });
     let (_truth, dir) = job_folder("devices", &[]);
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim"})).expect("job.start");
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
     let devices = s.execute("job.explain", &json!({"stage": "devices"})).expect("explain devices");
     let counted = devices["result"]["devices"]["count"].as_u64().unwrap_or(0);
