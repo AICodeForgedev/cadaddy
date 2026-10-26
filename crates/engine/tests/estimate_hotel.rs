@@ -170,3 +170,18 @@ fn a_synthetic_hotel_is_estimated_end_to_end() {
     assert!(a.contains("Height 12-16 ft") && a.contains("30-day duration") && a.contains("company takeoff rules"), "{a}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Q5278 MUST 3: estimate.status reports ok:false when every line is unpriced.
+#[test]
+fn estimate_unpriced_reports_not_ok() {
+    let mut s = Session::new();
+    hotel(&mut s);
+    // Build the BOM (creates lines) but do NOT load any cost table.
+    s.execute("model.build", &json!({})).unwrap();
+    s.execute("bim.bom", &json!({})).unwrap();
+    let st = s.execute("estimate.status", &json!({})).unwrap();
+    // Without costs loaded, all lines are unpriced: ok must be false.
+    assert_eq!(st["ok"], json!(false), "unpriced lines must make ok:false: {st}");
+    assert!(st.get("next_step").is_some() || st.get("unpriced").is_some(),
+        "should suggest estimate.import_costs: {st}");
+}
