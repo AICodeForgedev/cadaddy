@@ -3202,3 +3202,5 @@ menu	Modify	수정
 	Override Unit Instance	유닛 인스턴스 재정의
 	Place Unit Instances	유닛 인스턴스 배치
 	List Callouts	콜아웃 목록
+	Keep Print Set Job	도면 세트 작업 보관
+	Resume Print Set Job	도면 세트 작업 재개
