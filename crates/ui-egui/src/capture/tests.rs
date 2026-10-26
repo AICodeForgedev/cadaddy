@@ -15,14 +15,7 @@ fn app() -> CadApp {
 
 /// A visible, focused, 1-ppp surface of `size` with an 8192-pixel texture side.
 fn surface(size: egui::Vec2) -> SurfaceGeometry {
-    SurfaceGeometry {
-        viewport: Some(size),
-        pixels_per_point: 1.0,
-        max_texture_side: 8192,
-        minimized: false,
-        occluded: false,
-        window_focused: true,
-    }
+    SurfaceGeometry { viewport: Some(size), pixels_per_point: 1.0, max_texture_side: 8192, minimized: false, occluded: false, window_focused: true }
 }
 
 /// Seed the admission snapshot a raw hook would have taken, then bump both epochs as an

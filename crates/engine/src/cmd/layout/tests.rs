@@ -158,12 +158,9 @@ fn viewport_scale_lock_and_layers() {
     // Layer 0 frozen in the viewport: nothing of the model shows.
     let list = cadcraft_render::build(s.doc().unwrap(), &Space::Paper("Layout1".into()), &cadcraft_render::Options::default());
     assert!(list.prims.iter().all(|p| p.handle != cadcraft_render::VIEWPORT_CONTENT));
-    for bad_p in [
-        json!({"handle": h, "scale": "0:0"}),
-        json!({"handle": h, "scale": -1}),
-        json!({"handle": h, "viewHeight": 0}),
-        json!({"handle": "FFFFFF"}),
-    ] {
+    for bad_p in
+        [json!({"handle": h, "scale": "0:0"}), json!({"handle": h, "scale": -1}), json!({"handle": h, "viewHeight": 0}), json!({"handle": "FFFFFF"})]
+    {
         assert!(s.execute("viewport.set", &bad_p).is_err(), "{bad_p}");
     }
 }

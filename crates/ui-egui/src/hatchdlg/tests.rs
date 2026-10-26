@@ -234,8 +234,7 @@ fn picks_merge_into_the_state() {
 fn frames(app: &mut CadApp) -> egui::Context {
     let ctx = egui::Context::default();
     app.logic(&ctx);
-    let input =
-        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
     // Enough frames for a window that grows each frame to show it.
     for _ in 0..30 {
         let mut output = ctx.run_ui(input.clone(), |ui| app.ui(ui));
@@ -375,10 +374,8 @@ fn hatchedit_opens_edit_mode_on_the_selection_or_asks_for_a_hatch() {
 #[test]
 fn edit_mode_on_an_out_of_range_hatch_changes_nothing_by_itself() {
     let (mut app, _) = app_with_rect();
-    let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]], "scale": 5.0e6, "angle": 400 })).unwrap()["handle"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let hx =
+        app.session.execute("hatch", &json!({ "points": [[5, 5]], "scale": 5.0e6, "angle": 400 })).unwrap()["handle"].as_str().unwrap().to_string();
     app.session.set_selection(vec![Handle::parse_hex(&hx).unwrap()]);
     open_edit(&mut app);
     frames(&mut app);
