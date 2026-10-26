@@ -31,6 +31,9 @@ use crate::{IoError, Result};
 
 /// The extended data application tagging objects read from IFC (class, GlobalId, name).
 pub const APP: &str = "CADADDY_IFC";
+/// The extended data application of an as-built model's elements: the element's id (its IFC
+/// name), then `Key=Value` strings written as its `CaDaddy_AsBuilt` property set.
+pub const ASBUILT_APP: &str = "CADADDY_ASBUILT";
 /// Most instances one file holds.
 const MAX_INSTANCES: usize = 5_000_000;
 /// Deepest placement chain, mapped item or boolean followed.
@@ -433,6 +436,10 @@ fn class_of(e: &Entity) -> Kind {
         k.read_id = t.get(1).filter(|g| is_guid(g)).cloned();
         return k;
     }
+    // An as-built model's element: named by its id.
+    if let Some(id) = tag_strings(e, ASBUILT_APP).and_then(|t| t.into_iter().next()).filter(|n| !n.is_empty()) {
+        return kind(Class::Proxy, None, id, String::new());
+    }
     kind(Class::Proxy, None, e.common.layer.to_string(), String::new())
 }
 
@@ -711,6 +718,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     // MEP products grouped by system name for IfcDistributionSystem.
     let mut system_products: HashMap<String, Vec<usize>> = HashMap::new();
     let mut schedules: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
+    // As-built properties (CaDaddy_AsBuilt): (product, key-values, handle).
+    let mut asbuilt: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
     let mut mep_sizes: Vec<(usize, Vec<[f64; 2]>, u64)> = Vec::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
@@ -824,6 +833,13 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         if !kd.properties.is_empty() {
             schedules.push((product, kd.properties.clone(), it.e.handle.0));
         }
+        if let Some(t) = tag_strings(it.e, ASBUILT_APP) {
+            let kv: Vec<(String, String)> =
+                t.iter().skip(1).filter_map(|v| v.split_once('=')).take(64).map(|(a, b)| (a.trim().to_string(), b.to_string())).collect();
+            if !kv.is_empty() {
+                asbuilt.push((product, kv, it.e.handle.0));
+            }
+        }
         if !kd.sizes.is_empty() {
             mep_sizes.push((product, kd.sizes.clone(), it.e.handle.0));
         }
@@ -918,6 +934,12 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             props.iter().map(|(k, v)| o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCLABEL({}),$)", step_str(k), step_str(v)))).collect();
         let set = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_EquipmentSchedule',$,{})", id(handle, 13), refs(&ids)));
         o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 14)));
+    }
+    for (product, props, handle) in asbuilt {
+        let ids: Vec<usize> =
+            props.iter().map(|(k, v)| o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCLABEL({}),$)", step_str(k), step_str(v)))).collect();
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_AsBuilt',$,{})", id(handle, 30), refs(&ids)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 31)));
     }
     // MEP sizes (our own set): the nominal width and height of a rectangular section, or the
     // diameter of a round one, in the length unit; the size as printed; for a tee or a transition
