@@ -135,10 +135,10 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
-        json!({"name": "bim_from_pdf", "description": "One-call PDF to BIM: imports PDF(s), checks quality, drafts a building spec and builds the 3D model. Returns .cdy paths, check results, built counts, warnings and exact next steps. Multi-plan sheets become stacked levels.",
+        json!({"name": "bim_from_pdf", "description": "One-call PDF to BIM: reads the print set's sheet index (one PDF of any number of pages, or a folder), imports its plan pages (every page when it has no index), checks quality, drafts a building spec with one stacked level per floor plan and builds the 3D model, saved at `out` (default a temp folder; nothing is written next to the PDFs). Returns .cdy paths, the pages built from, check results, built counts, warnings and exact next steps.",
             "inputSchema": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "PDF file or folder of PDFs"},
-                "levels": {"type": "string", "description": "\"auto\" (default)"},
+                "out": {"type": "string", "description": ".cdy file to save the model to (default: a temp folder)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
         json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). With no print set imported it returns no items and a hint saying how to import one.",
