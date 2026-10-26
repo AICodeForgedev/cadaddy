@@ -801,7 +801,6 @@ mod tests {
             has_fire_blocking: true,
             header_span_ft: Some(4.0),
             header_size: Some("2x6".into()), // wrong for a 4' span
-            ..Default::default()
         };
         let findings = book.check_framing(&[wall]);
         // Should find a finding about header size (2x6 is wrong for 4' span on bearing wall).
