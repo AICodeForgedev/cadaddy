@@ -446,9 +446,19 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
 /// Infer the discipline from the sheet number prefix.
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
-    for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("SL-", "SL"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
-    {
+    for &(prefix, code) in &[
+        ("FP-", "FP"),
+        ("FA-", "FA"),
+        ("SL-", "SL"),
+        ("M-", "M"),
+        ("P-", "P"),
+        ("S-", "S"),
+        ("A-", "A"),
+        ("G-", "G"),
+        ("E-", "E"),
+        ("T-", "T"),
+        ("C-", "C"),
+    ] {
         if up.starts_with(prefix) {
             return code.into();
         }
