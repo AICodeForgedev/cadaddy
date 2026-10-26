@@ -129,6 +129,8 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("get_prompt", json!({}), json!([1])),
         ("wait_until_idle", json!({ "timeoutMs": 100 }), json!({ "timeoutMs": -5 })),
         ("save", json!({ "path": format!("{dir}/suite.dxf") }), json!({ "path": 7 })),
+        // Frames the walls of the sheet just saved (none: an empty framing, still an answer).
+        ("framing", json!({ "action": "build", "params": { "paths": [format!("{dir}/suite.dxf")] } }), json!({ "action": "frame" })),
         ("plot", json!({ "path": format!("{dir}/suite.pdf") }), json!({})),
         ("open", json!({ "path": format!("{dir}/suite.dxf") }), json!({})),
         ("list_drawings", json!({}), json!("all")),

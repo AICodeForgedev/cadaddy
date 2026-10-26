@@ -86,6 +86,7 @@ pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
 pub mod fourd;
+pub mod framing;
 pub mod furnish;
 pub mod gear;
 pub mod geo;
@@ -511,6 +512,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(gear::specs());
         v.extend(labels::specs());
         v.extend(sitetakeoff::specs());
+        v.extend(framing::specs());
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());
