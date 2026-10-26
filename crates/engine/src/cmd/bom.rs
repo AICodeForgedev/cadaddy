@@ -47,10 +47,10 @@ use cadaddy_doc::projrules::{RuleDomain, RuleValue};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-use cadaddy_doc::EntityKind;
 use super::bspec::current;
 use super::*;
 use crate::{Result, Session};
+use cadaddy_doc::EntityKind;
 
 /// Lines in one BOM, at most (hostile specs).
 const MAX_LINES: usize = 200_000;
@@ -435,13 +435,13 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
             let level = super::bspec::made_level(e).unwrap_or_default();
             let type_name = {
                 let x = &e.common.xdata;
-                x.iter()
-                    .position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))
-                    .and_then(|at| {
-                        x.iter().skip(at + 1).take_while(|t| t.code != 1001)
-                            .filter(|t| t.code == 1000)
-                            .find_map(|t| t.value.strip_prefix("type:").map(str::to_string))
-                    })
+                x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)).and_then(|at| {
+                    x.iter()
+                        .skip(at + 1)
+                        .take_while(|t| t.code != 1001)
+                        .filter(|t| t.code == 1000)
+                        .find_map(|t| t.value.strip_prefix("type:").map(str::to_string))
+                })
             };
             let type_label = type_name.unwrap_or_else(|| "untyped".into());
             // Mesh bounding box: length is the longer plan dimension, height is Z extent.
@@ -661,10 +661,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     // Fall back to spec rooms if none found from ceiling tags.
     if room_count == 0 && !sp.rooms.is_empty() {
         // Use ceiling handles from the built map as element references.
-        let ceiling_handles: Vec<String> = built.iter()
-            .filter(|((p, _), _)| p == "ceiling")
-            .flat_map(|(_, (_, h))| h.clone())
-            .collect();
+        let ceiling_handles: Vec<String> = built.iter().filter(|((p, _), _)| p == "ceiling").flat_map(|(_, (_, h))| h.clone()).collect();
         for lv in &sp.levels {
             let n = sp.rooms.iter().filter(|r| r.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&lv.name))).count();
             if n > 0 {
@@ -716,12 +713,24 @@ fn mesh_wall_dims(mesh: &cadaddy_doc::Mesh, upf: f64) -> (f64, f64) {
     }
     let (mut min, mut max) = (mesh.vertices[0], mesh.vertices[0]);
     for v in &mesh.vertices {
-        if v.x < min.x { min.x = v.x; }
-        if v.y < min.y { min.y = v.y; }
-        if v.z < min.z { min.z = v.z; }
-        if v.x > max.x { max.x = v.x; }
-        if v.y > max.y { max.y = v.y; }
-        if v.z > max.z { max.z = v.z; }
+        if v.x < min.x {
+            min.x = v.x;
+        }
+        if v.y < min.y {
+            min.y = v.y;
+        }
+        if v.z < min.z {
+            min.z = v.z;
+        }
+        if v.x > max.x {
+            max.x = v.x;
+        }
+        if v.y > max.y {
+            max.y = v.y;
+        }
+        if v.z > max.z {
+            max.z = v.z;
+        }
     }
     let dx = (max.x - min.x) / upf;
     let dy = (max.y - min.y) / upf;
@@ -782,7 +791,9 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
         let mut device_count = 0usize;
         let mut device_handles: Vec<String> = Vec::new();
         for i in 0..pts.len() {
-            if visited[i] { continue; }
+            if visited[i] {
+                continue;
+            }
             visited[i] = true;
             device_count += 1;
             if device_handles.len() < 500 {
@@ -790,7 +801,9 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
             }
             // Mark nearby points as part of this cluster.
             for j in (i + 1)..pts.len() {
-                if visited[j] { continue; }
+                if visited[j] {
+                    continue;
+                }
                 let dx = pts[j].0[0] - pts[i].0[0];
                 let dy = pts[j].0[1] - pts[i].0[1];
                 if dx * dx + dy * dy <= cluster_r2 {
