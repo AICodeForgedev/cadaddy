@@ -2909,6 +2909,7 @@
 	Query Estimate	Запит до кошторису
 	Set Estimate Assembly	Задати збірку кошторису
 	Set Estimate Price	Задати ціну кошторису
+	Map Line to Price Row	Зіставити рядок з рядком ціни
 	Set Estimate Scope	Задати обсяг кошторису
 	New Window	Нове вікно
 	Concrete Elements	Бетонні елементи

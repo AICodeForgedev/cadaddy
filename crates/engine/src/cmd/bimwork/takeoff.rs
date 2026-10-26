@@ -569,14 +569,13 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
             continue;
         }
-        // Q5301 NEVER cross: if the row names a system the line must have the same one.
+        // Q5301 NEVER cross: block only when BOTH the row and line name the attribute and they differ.
         let row_sys: BTreeSet<&str> = SYSTEM_WORDS.iter().copied().filter(|s| want.contains(*s)).collect();
-        if !row_sys.is_empty() && row_sys != line_sys {
+        if !row_sys.is_empty() && !line_sys.is_empty() && row_sys != line_sys {
             continue;
         }
-        // Q5301 NEVER cross: if the row names a material the line must have the same one.
         let row_mat: BTreeSet<&str> = MATERIAL_WORDS.iter().copied().filter(|m| want.contains(*m)).collect();
-        if !row_mat.is_empty() && row_mat != line_mat {
+        if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
             continue;
         }
         let score = score + covered;

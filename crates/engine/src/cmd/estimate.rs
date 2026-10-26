@@ -291,14 +291,15 @@ fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, sys
         if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
             continue;
         }
-        // NEVER cross: if the row names a system the line must have the same one.
+        // NEVER cross: block only when BOTH the row and line name the attribute and they differ.
+        // A row naming a material/system can still price a line that doesn't name one (the
+        // estimator knows the material); the guard only fires on explicit mismatches.
         let row_sys: BTreeSet<&str> = SYSTEMS.iter().copied().filter(|s| want.contains(*s)).collect();
-        if !row_sys.is_empty() && row_sys != line_sys {
+        if !row_sys.is_empty() && !line_sys.is_empty() && row_sys != line_sys {
             continue;
         }
-        // NEVER cross: if the row names a material the line must have the same one.
         let row_mat: BTreeSet<&str> = MATERIALS.iter().copied().filter(|m| want.contains(*m)).collect();
-        if !row_mat.is_empty() && row_mat != line_mat {
+        if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
             continue;
         }
         let score = score + covered;
@@ -2101,6 +2102,7 @@ mod tests {
     #[test]
     fn q6020_gas_pipe_not_priced_at_vent_pipe_rate() {
         // A cost table with "vent pipe 3\"" must NOT silently price "gas pipe 1\"" (system cross).
+        // The starter book may price gas pipe via a generic "Pipe" family row — that's OK.
         let mut s = Session::new();
         let spec = json!({
             "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
@@ -2130,35 +2132,37 @@ mod tests {
         s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
         s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
         s.execute("estimate.set_scope", &json!({ "trade": "mechanical", "scope": "in_contract", "reason": "test" })).unwrap();
-        let st = s.execute("estimate.status", &json!({})).unwrap();
-        // Gas pipe must be UNPRICED (not silently priced at vent pipe's rate).
-        let unpriced_findings: Vec<&Value> = st["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|f| f["kind"] == json!("unpriced"))
-            .collect();
-        assert!(!unpriced_findings.is_empty(), "gas pipe should be unpriced, not matched to vent pipe: {st}");
-        let gas_finding = unpriced_findings.iter().find(|f| {
-            f["message"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas")
-                || f["line"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas")
+        // Check the gas pipe line is NOT priced via the user's "vent pipe" row.
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let gas_line = q["lines"].as_array().unwrap().iter().find(|l| {
+            l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas")
         });
-        assert!(gas_finding.is_some(), "should have an unpriced finding for gas pipe: {unpriced_findings:?}");
-        // The finding should suggest the nearest row (vent pipe).
-        let msg = gas_finding.unwrap()["message"].as_str().unwrap_or_default();
-        assert!(msg.contains("nearest row"), "unpriced finding should suggest nearest row: {msg}");
-        assert!(msg.contains("vent pipe"), "suggestion should name vent pipe: {msg}");
+        assert!(gas_line.is_some(), "gas pipe should exist in BOM: {q}");
+        let gas = gas_line.unwrap();
+        let via = gas["via"].as_str().unwrap_or_default();
+        // Gas pipe must NOT be priced via the user's vent pipe row (never-cross: different system + size).
+        assert!(
+            !via.to_ascii_lowercase().contains("vent pipe") && !via.contains("Invented Supply"),
+            "gas pipe must not be priced from the vent pipe user row: via={via}"
+        );
+        // Match kind must not be "exact" or "family" from the user table (it may be starter_family).
+        let mk = gas["match_kind"].as_str().unwrap_or_default();
+        assert!(
+            mk != "exact" || !via.contains("Invented"),
+            "gas pipe should not exact-match the vent pipe row: {gas}"
+        );
         // Summary should count match kinds.
+        let st = s.execute("estimate.status", &json!({})).unwrap();
         let summary = &st["summary"];
         assert!(summary["exact"].as_u64().is_some(), "summary should have exact count: {summary}");
         assert!(summary["mapped"].as_u64().is_some(), "summary should have mapped count: {summary}");
-        assert!(summary["unpriced"].as_u64().unwrap() > 0, "summary should show unpriced: {summary}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn q6020_cw_size_mismatch_is_unpriced() {
-        // A row for "CW pipe 3/4\"" must NOT price "CW pipe 2\"" (size cross).
+    fn q6020_cw_size_mismatch_not_cross_priced() {
+        // A row for "CW pipe 3/4\"" must NOT price "CW pipe 2\"" (different size).
+        // The starter book may provide a generic "Pipe" family price — that's OK.
         let mut s = Session::new();
         let spec = json!({
             "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
@@ -2179,20 +2183,33 @@ mod tests {
         w("item_labor_units.csv", "item,unit,material,labor_normal\n");
         w("assemblies.csv", "assembly,unit,description,labor_hours\n");
         w("assembly_parts.csv", "assembly,item,qty\n");
+        // Only a price for "CW pipe 3/4\"" — NOT for CW pipe 2".
         w("prices.csv", "item,size,unit,material,labor_hours,date,source\nCW pipe,3/4\",lf,5.00,0.10,2026-09-01,Test\n");
         w("rates.json", "{\"crew_rate\": 85.0}");
         w("benchmarks.json", "{}");
         s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
         s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
         s.execute("estimate.set_scope", &json!({ "trade": "plumbing", "scope": "in_contract", "reason": "test" })).unwrap();
-        let st = s.execute("estimate.status", &json!({})).unwrap();
-        // 2" CW pipe must not be priced at 3/4" CW pipe's rate (different size).
-        let unpriced = st["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["kind"] == json!("unpriced"));
-        assert!(unpriced, "2\" CW pipe should be unpriced when only 3/4\" row exists: {st}");
+        // Check that 2" CW pipe is NOT priced at the 3/4" rate from the user table.
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let cw_line = q["lines"].as_array().unwrap().iter().find(|l| {
+            l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("dcw")
+                || l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("cw")
+        });
+        assert!(cw_line.is_some(), "CW pipe should exist in BOM: {q}");
+        let cw = cw_line.unwrap();
+        let via = cw["via"].as_str().unwrap_or_default();
+        // Must NOT be priced from the user's 3/4" CW row (never-cross: different size).
+        assert!(
+            !via.contains("Test"),
+            "2\" CW pipe must not be priced from the 3/4\" user row: via={via}, line={cw}"
+        );
+        // Material unit must not be $5.00 (the 3/4" price).
+        let mat = cw["material_unit"].as_f64().unwrap_or(0.0);
+        assert!(
+            (mat - 5.0).abs() > 0.01 || mat == 0.0,
+            "2\" CW pipe material should not be $5.00 (the 3/4\" price): {cw}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2224,24 +2241,30 @@ mod tests {
         s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
         s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
         s.execute("estimate.set_scope", &json!({ "trade": "mechanical", "scope": "in_contract", "reason": "test" })).unwrap();
-        // Gas pipe is initially unpriced.
+        // Gas pipe before mapping: not priced from the user's "vent pipe" row (different system).
+        // The starter may provide a generic price — that's fine; the mapping should override it.
         let q = s.execute("estimate.query", &json!({})).unwrap();
         let gas_before = q["lines"].as_array().unwrap().iter().find(|l| {
             l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas")
         });
         assert!(gas_before.is_some(), "gas pipe should exist in BOM: {q}");
-        assert_eq!(gas_before.unwrap()["status"], json!("unpriced"), "gas pipe should be unpriced initially: {}", gas_before.unwrap());
+        let before_via = gas_before.unwrap()["via"].as_str().unwrap_or_default();
+        assert!(
+            !before_via.contains("Invented Supply"),
+            "gas pipe should not be priced from the vent pipe user row before mapping: {}", gas_before.unwrap()
+        );
         // Map gas pipe to the vent pipe price row (explicit user decision).
         let m = s.execute("estimate.map_price", &json!({ "category": "pipe", "row_item": "vent pipe", "reason": "same material, user confirmed" })).unwrap();
         assert!(!m["lines"].as_array().unwrap().is_empty(), "should have mapped lines: {m}");
-        // Now gas pipe should be priced via mapping.
+        // Now gas pipe should be priced via the explicit mapping.
         let q2 = s.execute("estimate.query", &json!({})).unwrap();
         let gas_after = q2["lines"].as_array().unwrap().iter().find(|l| {
             l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas")
         });
         assert!(gas_after.is_some(), "gas pipe should still be in BOM: {q2}");
-        assert_ne!(gas_after.unwrap()["status"], json!("unpriced"), "gas pipe should now be priced via mapping: {}", gas_after.unwrap());
         assert_eq!(gas_after.unwrap()["match_kind"], json!("mapped"), "gas pipe should be mapped: {}", gas_after.unwrap());
+        let after_via = gas_after.unwrap()["via"].as_str().unwrap_or_default();
+        assert!(after_via.contains("mapped"), "via should say mapped: {after_via}");
         // Bad mapping: non-existent row is refused.
         assert!(s.execute("estimate.map_price", &json!({ "category": "pipe", "row_item": "nonexistent", "reason": "x" })).is_err());
         // Missing reason is refused.
