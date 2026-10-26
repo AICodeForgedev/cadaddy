@@ -763,6 +763,7 @@ pub(crate) fn fit_families(
                     swing: None,
                     block: Some(ins.block.clone()),
                     confidence: 1.0,
+                    leaf: false,
                 });
             }
         }
@@ -971,7 +972,11 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         }
     }
     let (mut doors, mut windows) = (0, 0);
+    let mut not_doors = 0usize;
     for o in ops.iter().take(MAX_OBJECTS) {
+        // A swing read off the lines (an arc, not a door block) is a door only in a wall it shuts
+        // along, and (a bare arc, no leaf drawn) only where that wall is open (Q5273).
+        let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
         // The wall it is in: the hinge (or the block) on its centreline within its thickness.
         let best = pl
             .walls
@@ -985,10 +990,22 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let u = (w.b - w.a) * (1.0 / len);
                 let off = u.perp().dot(o.at - w.a).abs();
                 let s = u.dot(o.at - w.a);
-                (off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
+                let fits = drawn_swing.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
+                (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
-        let Some((wi, _)) = best else { continue };
+        let Some((wi, _)) = best else {
+            not_doors += usize::from(drawn_swing.is_some());
+            continue;
+        };
+        // A bare arc on a solid wall is no door; one with its leaf drawn is a door symbol on a
+        // wall drawn unbroken (as some drawings do), cut as before.
+        if let Some(ends) = drawn_swing.filter(|_| !o.leaf)
+            && solid_through(&pl.walls, wi, o.at, ends, k)
+        {
+            not_doors += 1;
+            continue;
+        }
         let Some(w) = pl.walls.get_mut(wi) else { continue };
         let len = w.a.dist(w.b);
         let u = (w.b - w.a) * (1.0 / len);
@@ -1177,6 +1194,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
     let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k));
     notes.push(format!("{}: {} walls from {} face pairs, {} doors, {} windows.", level.name, pl.walls.len(), found.len(), doors, windows));
+    if not_doors > 0 {
+        notes.push(format!("{}: {not_doors} arcs not taken for doors (no open wall where they shut: fixtures, equipment, furniture).", level.name));
+    }
     pl
 }
 
@@ -1204,7 +1224,8 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 /// length, found among the walls shorter than 40% of the region (a grid line or the border runs
 /// the sheet's length). Every wall reaching more than 2' (and its thickness) out of those
 /// clusters' extents goes: grid lines out to their bubbles, dimension strings and match lines
-/// beside the building, the border and the title block.
+/// beside the building, the border and the title block. A cluster drawn at a larger scale (its
+/// walls [`ENLARGED_THICKER`] the largest cluster's or more) is an enlarged view and goes too.
 fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
     let span = (region[2] - region[0]).abs().max((region[3] - region[1]).abs());
     let link = 4.0 * upf;
@@ -1268,12 +1289,40 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
     if largest <= 0.0 {
         return;
     }
+    // A view drawn at a larger scale beside the plan (an enlarged unit, stair or toilet plan, a
+    // detail) is no more building: its walls read thicker than the plan's own (Q5273), at
+    // [`ENLARGED_THICKER`] the plan's typical wall or more. The plan is the cluster that covers
+    // the most building: the longest in walls of its own thickness (an enlarged view is long on
+    // the sheet only for its scale).
+    let mut thick: HashMap<usize, Vec<f64>> = HashMap::new();
+    for (k, &i) in short.iter().enumerate() {
+        if let (Some(&r), Some(w)) = (roots.get(k), walls.get(i))
+            && w.thickness.is_finite()
+        {
+            thick.entry(r).or_default().push(w.thickness);
+        }
+    }
+    let median = |r: usize| {
+        let mut v = thick.get(&r).cloned().unwrap_or_default();
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
+    let main =
+        length.iter().filter_map(|(r, l)| median(*r).filter(|t| *t > 0.0).map(|t| (*r, l / t))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(r, _)| r);
+    let main_t = main.and_then(median).filter(|t| *t > 0.0);
+    let enlarged = |r: usize| Some(r) != main && main_t.zip(median(r)).is_some_and(|(m, t)| t >= ENLARGED_THICKER * m);
+    let mut dropped = vec![false; walls.len()];
     let mut b = cadaddy_geom::Bounds2::EMPTY;
     for (k, &i) in short.iter().enumerate() {
         let r = roots.get(k).copied().unwrap_or(k);
-        if length.get(&r).copied().unwrap_or(0.0) >= 0.1 * largest
-            && let Some(w) = walls.get(i)
-        {
+        if length.get(&r).copied().unwrap_or(0.0) < 0.1 * largest {
+            continue;
+        }
+        if enlarged(r) {
+            if let Some(x) = dropped.get_mut(i) {
+                *x = true;
+            }
+        } else if let Some(w) = walls.get(i) {
             b = b.union(&cadaddy_geom::Bounds2::from_points([w.a, w.b]));
         }
     }
@@ -1281,10 +1330,57 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
         return;
     }
     let inside = |p: Vec2, m: f64| p.x >= b.min.x - m && p.x <= b.max.x + m && p.y >= b.min.y - m && p.y <= b.max.y + m;
+    let mut n = 0;
     walls.retain(|w| {
+        let gone = dropped.get(n).copied().unwrap_or(false);
+        n += 1;
         let m = 2.0 * upf + w.thickness;
-        inside(w.a, m) && inside(w.b, m)
+        !gone && inside(w.a, m) && inside(w.b, m)
     });
+}
+
+/// How much thicker than the plan's typical wall a separate cluster's walls read when it is a
+/// view at a larger scale (an enlarged plan at 1/4" beside a 1/8" plan reads twice as thick).
+const ENLARGED_THICKER: f64 = 1.8;
+
+/// Whether a door swing hinged at `at` (radius `width`, arc ends `ends`) shuts along the wall
+/// `w`: one end of its arc lies on the wall's line (within its thickness and 2"), most of a leaf
+/// away from the hinge along it. An arc that touches a wall at its centre but shuts across or
+/// off it (a fixture, a piece of equipment, furniture) is no door in that wall.
+fn swing_shuts_along(w: &PlanWall, at: Vec2, ends: [Vec2; 2], width: f64, k: f64) -> bool {
+    let len = w.a.dist(w.b);
+    if !(len > 1e-9 && width.is_finite() && width > 0.0) {
+        return false;
+    }
+    let u = (w.b - w.a) * (1.0 / len);
+    let line_tol = w.thickness.max(2.0 * k) + 2.0 * k;
+    ends.iter().any(|e| u.perp().dot(*e - w.a).abs() <= line_tol && u.dot(*e - at).abs() >= 0.7 * width)
+}
+
+/// Whether the wall line of `walls[wi]` runs solid through the opening a swing hinged at `at`
+/// shuts across: one piece of that line (parallel, on it within half the thicker one's
+/// thickness) reaches 6" past both the hinge and the shut end. A door is drawn where the wall
+/// stops; an arc drawn on a solid wall (a parapet's equipment, a fixture against a wall) is not
+/// one. A piece only across the opening (a header drawn in plan) is no solid wall.
+fn solid_through(walls: &[PlanWall], wi: usize, at: Vec2, ends: [Vec2; 2], k: f64) -> bool {
+    let Some(w) = walls.get(wi) else { return false };
+    let len = w.a.dist(w.b);
+    if len <= 1e-9 {
+        return false;
+    }
+    let u = (w.b - w.a) * (1.0 / len);
+    // The shut end: the arc's end farthest along the wall from the hinge.
+    let shut = if u.dot(ends[0] - at).abs() >= u.dot(ends[1] - at).abs() { ends[0] } else { ends[1] };
+    let (s0, s1) = (u.dot(at - w.a).min(u.dot(shut - w.a)), u.dot(at - w.a).max(u.dot(shut - w.a)));
+    let past = 6.0 * k;
+    walls.iter().any(|c| {
+        let lc = c.a.dist(c.b);
+        if lc <= 1e-9 || u.cross((c.b - c.a) * (1.0 / lc)).abs() > 0.01 || u.perp().dot(c.a - w.a).abs() > w.thickness.max(c.thickness) / 2.0 {
+            return false;
+        }
+        let (c0, c1) = (u.dot(c.a - w.a).min(u.dot(c.b - w.a)), u.dot(c.a - w.a).max(u.dot(c.b - w.a)));
+        c0 <= s0 - past && c1 >= s1 + past
+    })
 }
 
 /// One door per swing: a swing drawn twice (an arc and its chords, a path stroked twice on the

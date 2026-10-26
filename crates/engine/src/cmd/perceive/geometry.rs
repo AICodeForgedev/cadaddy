@@ -166,6 +166,8 @@ pub(crate) struct Opening {
     pub swing: Option<(f64, [Vec2; 2])>,
     pub block: Option<String>,
     pub confidence: f64,
+    /// A swing whose leaf is drawn too (a line from the hinge to an end of the arc).
+    pub leaf: bool,
 }
 
 /// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
@@ -202,6 +204,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
@@ -227,6 +230,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             EntityKind::Insert(i) => {
@@ -249,6 +253,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: None,
                     block: Some(i.block.clone()),
                     confidence: 0.75,
+                    leaf: false,
                 });
             }
             _ => {}

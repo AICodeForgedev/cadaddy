@@ -2806,7 +2806,8 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
+    let floor_plan =
+        |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
     let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
@@ -2860,8 +2861,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
-        let mut level =
-            json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.area.unwrap_or(r.rect)});
+        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.area.unwrap_or(r.rect)});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
                 "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
@@ -4097,6 +4097,9 @@ mod tests {
                 discipline: "E".into(),
                 kind: "plan".into(),
                 rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+                area: None,
+                title_block: None,
+                not_built: String::new(),
             });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
